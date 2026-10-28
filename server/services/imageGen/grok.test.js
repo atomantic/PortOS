@@ -152,6 +152,14 @@ describe('grok provider — deriveAspectRatio', () => {
 });
 
 describe('grok provider — generateImage', () => {
+  it('refuses unowned reviewed snapshot metadata before spawning', async () => {
+    await mkdir(FAKE_IMAGES_DIR, { recursive: true });
+    await writeFile(join(FAKE_IMAGES_DIR, 'reviewed.png'), 'synthetic image');
+    await expect(grok.generateImage({ prompt: 'edit', referenceImagePaths: ['reviewed.png'], reviewedReferenceSnapshot: { jobId: 'unowned' } }))
+      .rejects.toMatchObject({ code: 'REVIEWED_REFERENCE_CHANGED' });
+    expect(spawnCalls).toHaveLength(0);
+  });
+
   it('spawns grok with headless args and delivers the prompt over stdin', async () => {
     const job = await grok.generateImage({ prompt: 'a small fox' });
     expect(job.mode).toBe('grok');
@@ -258,21 +266,12 @@ describe('grok provider — generateImage', () => {
     await closeChild();
   });
 
-  it('drops a reference path that escapes the gallery (defense-in-depth)', async () => {
-    await grok.generateImage({ prompt: 'a fox', referenceImagePaths: ['/etc/passwd'] });
-    const prompt = promptOf();
-    expect(posixPath(prompt)).not.toContain('/etc/passwd');
-    // Nothing survived, so it falls back to plain text-to-image.
-    expect(prompt).not.toContain('image_edit');
-    await closeChild();
-  });
-
-  it('drops an initImagePath that escapes the gallery (defense-in-depth)', async () => {
-    await grok.generateImage({ prompt: 'cover art', initImagePath: '/etc/passwd', initImageStrength: 0.2 });
-    const prompt = promptOf();
-    expect(prompt).not.toContain('image_edit');
-    expect(posixPath(prompt)).not.toContain('/etc/passwd');
-    await closeChild();
+  it('refuses unavailable input images before spawning', async () => {
+    await expect(grok.generateImage({ prompt: 'a fox', referenceImagePaths: ['/etc/passwd'] }))
+      .rejects.toMatchObject({ code: 'IMAGE_INPUT_UNAVAILABLE' });
+    await expect(grok.generateImage({ prompt: 'cover art', initImagePath: '/etc/passwd' }))
+      .rejects.toMatchObject({ code: 'IMAGE_INPUT_UNAVAILABLE' });
+    expect(spawnCalls).toHaveLength(0);
   });
 
   it('allows an empty prompt when editing an init image', async () => {
@@ -302,7 +301,7 @@ describe('grok provider — directed-path harvest', () => {
     for (const name of ['source.png', 'ref-a.png', 'ref-b.png', 'overflow.png']) await writeFile(join(FAKE_IMAGES_DIR, name), 'fake');
     const job = await grok.generateImage({
       prompt: 'a fox', initImagePath: join(FAKE_IMAGES_DIR, 'source.png'),
-      referenceImagePaths: ['missing.png', 'ref-a.png', 'ref-b.png'],
+      referenceImagePaths: ['ref-a.png', 'ref-b.png'],
     });
     // Grok "writes" the directed staging file before the child exits. The
     // harvest signature-sniffs the bytes, so the fixture needs a real PNG

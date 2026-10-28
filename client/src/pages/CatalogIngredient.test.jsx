@@ -138,6 +138,7 @@ vi.mock('../services/apiImageVideo', () => ({
   // Echo the request as the "sent" prompt, with its declared additions as chips.
   previewImagePrompt: vi.fn(async (body) => ({
     sentPrompt: body.prompt,
+    ...(body.reviewReference ? { reviewedReferenceDigest: 'a'.repeat(64), reviewedReferenceImage: 'data:image/png;base64,eA==' } : {}),
     ...(body.negativePrompt ? { sentNegativePrompt: body.negativePrompt } : {}),
     promptAdditions: body.promptAdditions || [],
   })),
@@ -1772,6 +1773,7 @@ it('adds a card with rendering animation placeholder when editing an image from 
   const input = await within(dialog).findByLabelText('What should change?');
   fireEvent.change(input, { target: { value: 'make the jacket red' } });
   const form = input.closest('form');
+  await waitFor(() => expect(within(form).getByRole('button', { name: 'Edit' })).toBeEnabled());
   await act(async () => { fireEvent.submit(form); });
 
   // generateImage is invoked with catalogIngredientId and reference

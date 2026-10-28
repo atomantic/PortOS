@@ -1,3 +1,4 @@
+import { effectiveJobPrompt } from '../lib/federatedMediaWire.js';
 /**
  * Mood board note render completion hook (#10531).
  *
@@ -21,7 +22,7 @@ const hook = createMediaJobImageHook({
   serializeKey: ({ boardId }) => boardId,
   describe: ({ boardId, itemId }) => `${boardId}/${itemId}`,
   attach: ({ boardId, itemId, jobId, filename, job }) => attachRenderedItem({
-    boardId, itemId, jobId, filename, prompt: job?.params?.prompt,
+    boardId, itemId, jobId, filename, prompt: effectiveJobPrompt(job),
   }),
   onAttached: ({ boardId, itemId }, item) => {
     console.log(`🖼️ Mood board ${boardId}/${itemId} note rendered ← ${item.mediaKey}`);

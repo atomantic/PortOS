@@ -1373,6 +1373,11 @@ function startLaneJob(job, { lane }) {
     // Keep owning the reservation until the actual drain settles; timing out
     // and abandoning it would strand a blocker after a later successful write.
     const settled = await drainMediaJobQueue();
+    const remoteRecoveryUnsettled = isRemoteMediaJob(job) && (job.params?.remoteMedia?.reconcile === true || job.params?.remotePeerReservation === true);
+    if (settled.ok && job.params?.reviewedReferenceSnapshot && ((job.providerInvoked !== true && !remoteRecoveryUnsettled) || lifecycleEvidence?.snapshotProcessSettled === true)) {
+      const { markSnapshotState, withReviewedSnapshotLock } = await import('../imageGen/reviewedReference.js');
+      await withReviewedSnapshotLock(() => markSnapshotState(job.params.reviewedReferenceSnapshot, 'settled')).catch(error => console.error(`❌ Reviewed image settlement retained for ${job.id}: ${error.message}`));
+    }
     recoveringJobs.delete(job.id);
     // Lifecycle evidence certifies recovery only together with this final flush.
     const release = decideOwnershipRelease({
@@ -1411,6 +1416,11 @@ async function settleQueuedJob(job, { status, error }) {
   archive.push(job);
   recomputeQueuePositions();
   await trackTerminalOperation(persistTerminalTransition(job));
+  if (job.params?.reviewedReferenceSnapshot && !job.durabilityPending
+    && !(isRemoteMediaJob(job) && (job.params?.remoteMedia?.reconcile === true || job.params?.remotePeerReservation === true))) {
+    const { markSnapshotState, withReviewedSnapshotLock } = await import('../imageGen/reviewedReference.js');
+    await withReviewedSnapshotLock(() => markSnapshotState(job.params.reviewedReferenceSnapshot, 'settled')).catch(error => console.error(`❌ Reviewed image settlement retained for ${job.id}: ${error.message}`));
+  }
   return true;
 }
 
@@ -1948,6 +1958,12 @@ async function runJobLifecycle(job, markDispatched, permit, finalizeLane) {
   // corrupted path from a hand-edited media-jobs.json. Null it out here if
   // it doesn't resolve under PATHS.uploads so the constraint holds end-to-end.
   const safeParams = { ...job.params };
+  if (job.params?.reviewedReferenceRequest) {
+    const request = job.params.reviewedReferenceRequest;
+    // JSON drops undefined properties. Restore those absences explicitly so
+    // the top-level downgrade placeholders do not override provider defaults.
+    Object.assign(safeParams, request, { prompt: request.prompt, modelId: request.modelId, pythonPath: request.pythonPath });
+  }
   // Freeze only the dispatch copy to the default whose cohort passed the hold
   // check. The retained job's original parameters stay unchanged.
   if (job.videoCohort && (safeParams.modelId === undefined || safeParams.modelId === '')) {
@@ -1980,6 +1996,7 @@ async function runJobLifecycle(job, markDispatched, permit, finalizeLane) {
   // provider terminal event can release that additional wait.
   const observeProviderSettlement = payload => {
     observeProviderTerminal(recovery, job, payload);
+    if (payload.inputProcessSettled === true || (isRemoteMediaJob(job) && payload.remoteInputsDisposable === true)) recovery.snapshotProcessSettled = true;
     resolveProviderSettlement();
   };
   const dispatcher = makeGenDispatcher(emitter, job, {
@@ -2101,6 +2118,25 @@ async function runJobLifecycle(job, markDispatched, permit, finalizeLane) {
         const { assertFableLoomDispatchInputs } = await import('../fableLoom/requestInputs.js');
         await assertFableLoomDispatchInputs(safeParams);
       }
+      if (safeParams.reviewedReferenceRequest && !safeParams.reviewedReferenceSnapshot) {
+        throw new ServerError('Reviewed reference ownership is missing', { status: 409, code: 'REVIEWED_REFERENCE_CHANGED' });
+      }
+      if (safeParams.reviewedReferenceSnapshot) {
+        const { readOwnedSnapshot, markSnapshotState, withReviewedSnapshotLock } = await import('../imageGen/reviewedReference.js');
+        const snapshot = safeParams.reviewedReferenceSnapshot;
+        const { path, record } = await readOwnedSnapshot(snapshot);
+        const remoteMismatch = isRemoteMediaJob(job) && (safeParams.remoteMedia?.wireVersion !== 2
+          || JSON.stringify(safeParams.remoteMedia.reviewedReferenceSnapshot) !== JSON.stringify(snapshot)
+          || safeParams.remoteMedia.inputAssets?.length !== 1 || safeParams.remoteMedia.inputAssets[0]?.role !== 'referenceImages'
+          || safeParams.remoteMedia.inputAssets[0]?.path !== path);
+        if (snapshot.jobId !== job.id || safeParams.initImagePath || safeParams.referenceImagePaths?.length !== 1 || safeParams.referenceImagePaths[0] !== path || remoteMismatch) {
+          throw new ServerError('Reviewed reference ownership does not match the queued job', { status: 409, code: 'REVIEWED_REFERENCE_CHANGED' });
+        }
+        if (record.state === 'reserved') await withReviewedSnapshotLock(() => markSnapshotState(snapshot, 'invoked'));
+        else if (!(record.state === 'invoked' && isRemoteMediaJob(job) && safeParams.remoteMedia?.reconcile === true)) {
+          throw new ServerError('Reviewed reference is not available for dispatch', { status: 409, code: 'REVIEWED_REFERENCE_CHANGED' });
+        }
+      }
       // Remote recovery must still reach its adapter to cancel an existing render.
       // Local cancellation before dispatch owns no provider process to stop.
       if (job.cancelRequested && !isRemoteMediaJob(job)) {
@@ -2220,7 +2256,17 @@ async function assertMusicVideoJobPolicy(kind, params) {
   }
 }
 
-export async function enqueueJob({ kind, params, owner = null }) {
+export async function enqueueJob(job) {
+  const params = job.params || {};
+  const inputs = [params.initImagePath, params.sourceImagePath, params.sourceImageFile, params.lastImagePath, params.lastImageFile,
+    ...(Array.isArray(params.referenceImagePaths) ? params.referenceImagePaths : []),
+    ...(Array.isArray(params.remoteMedia?.inputAssets) ? params.remoteMedia.inputAssets.map(asset => asset?.path) : [])];
+  if (!params.reviewedReferenceDigest && !inputs.some(path => typeof path === 'string' && path.includes('snapshot-'))) return enqueueJobLocked(job);
+  const { withReviewedSnapshotLock } = await import('../imageGen/reviewedReference.js');
+  return withReviewedSnapshotLock(() => enqueueJobLocked(job));
+}
+
+async function enqueueJobLocked({ kind, params, owner = null }) {
   installVideoExecutionRecorder();
   if (kind === 'training') refuseRetiredTraining();
   await assertMusicVideoJobPolicy(kind, params);
@@ -2233,13 +2279,46 @@ export async function enqueueJob({ kind, params, owner = null }) {
   }
   assertMediaQueueRoom(1);
   const id = randomUUID();
+  let preparedParams = params;
+  if (kind === 'image' && params?.reviewedReferenceDigest) {
+    if (persistBlocked) throw new ServerError('Reviewed edits require a writable media queue', { status: 503, code: MEDIA_QUEUE_PERSIST_FAILED });
+    if (params.initImagePath || params.referenceImagePaths?.length !== 1) {
+      throw new ServerError('Reviewed quick edit requires one local reference', { status: 400, code: 'REVIEWED_REFERENCE_UNSUPPORTED' });
+    }
+    const { stageReviewedReference } = await import('../imageGen/reviewedReference.js');
+    const snapshot = await stageReviewedReference(id, params.referenceImagePaths[0], params.reviewedReferenceDigest);
+    const snapshotPath = join(PATHS.imageRefs, snapshot.filename);
+    let remoteMedia = params.remoteMedia;
+    if (isRemoteMediaJob({ kind, params })) {
+      const assets = remoteMedia?.inputAssets;
+      if (!Array.isArray(assets) || assets.length !== 1 || assets[0].role !== 'referenceImages' || assets[0].path !== params.referenceImagePaths[0]) {
+        throw new ServerError('Reviewed reference does not match the remote input', { status: 400, code: 'REVIEWED_REFERENCE_UNSUPPORTED' });
+      }
+      // Marker v2 is a local downgrade gate: older adapters refuse it instead
+      // of replaying the snapshot path without the ownership check. The peer's
+      // independent image wire request remains on its negotiated version.
+      remoteMedia = { ...remoteMedia, wireVersion: 2, reviewedReferenceSnapshot: snapshot, inputAssets: [{ ...assets[0], path: snapshotPath }] };
+    }
+    preparedParams = { ...params, ...(remoteMedia ? { remoteMedia } : {}), reviewedReferenceSnapshot: snapshot, referenceImagePaths: [snapshotPath] };
+    if (!remoteMedia) {
+      // Older queue workers know nothing about snapshot proof. Keep their
+      // top-level request unrenderable, as routed jobs already do, and restore
+      // these fields only in the current verified dispatcher.
+      preparedParams.reviewedReferenceRequest = {
+        prompt: params.prompt, modelId: params.modelId, pythonPath: params.pythonPath,
+        referenceImagePaths: [snapshotPath],
+      };
+      Object.assign(preparedParams, { prompt: '', modelId: null, pythonPath: null, referenceImagePaths: [] });
+    }
+    assertMediaQueueRoom(1);
+  }
   // Every routed job is normalized HERE rather than at each caller (#4683): the
   // downgrade contract only holds if it is unbypassable, and a future enqueue
   // site that forgets the helper would ship a job a rolled-back build renders
   // locally for real. See services/federatedMedia/routedJobParams.js.
-  const safeParams = isRemoteMediaJob({ kind, params })
-    ? routedJobParams({ params })
-    : params;
+  const safeParams = isRemoteMediaJob({ kind, params: preparedParams })
+    ? routedJobParams({ params: preparedParams })
+    : preparedParams;
   const job = {
     id,
     kind,

@@ -244,7 +244,7 @@ export async function prepareGenerateParams({ data, files, referenceImageFields,
   // request or named by an earlier one) plus every reference slot. Every gate
   // below keys off these two, rather than respelling "carries input images"
   // per gate and having to keep the spellings in sync.
-  const localModel = mode === IMAGE_GEN_MODE.LOCAL ? selectLocalImageModelFromSettings(settings, data.modelId, getImageModels(), localModelCandidates) : null;
+  const localModel = !data.mediaProviderPeerId && mode === IMAGE_GEN_MODE.LOCAL ? selectLocalImageModelFromSettings(settings, data.modelId, getImageModels(), localModelCandidates) : null;
   if (data.musicVideo?.sceneId) {
     if (!musicVideoProjectLoaded) musicVideoProject = await getMusicVideoProject(data.musicVideo.projectId).catch(() => null);
     const scene = musicVideoProject?.scenes?.find((entry) => entry.sceneId === data.musicVideo.sceneId);
@@ -298,7 +298,7 @@ export async function prepareGenerateParams({ data, files, referenceImageFields,
   if (!data.modelId && localModel?.id) data.modelId = localModel.id;
   const selectedCloudModel = [IMAGE_GEN_MODE.RUNWAY, IMAGE_GEN_MODE.FAL].includes(mode)
     ? data.cloudModel || resolveCloudProviderConfig(settings, mode)?.modelId : null;
-  const referenceCap = mode === IMAGE_GEN_MODE.RUNWAY ? maxInputImages(mode, selectedCloudModel)
+  const referenceCap = data.mediaProviderPeerId ? IMAGE_REFERENCE_REQUEST_LIMIT : mode === IMAGE_GEN_MODE.RUNWAY ? maxInputImages(mode, selectedCloudModel)
     : localModel?.pipelineClass === 'QwenImage21Pipeline' ? 10
       : data.fableLoom && CLOUD_IMAGE_GEN_MODES.includes(mode)
         ? Math.min(maxInputImages(mode, selectedCloudModel) ?? IMAGE_REFERENCE_REQUEST_LIMIT, IMAGE_REFERENCE_REQUEST_LIMIT) : 4;
@@ -310,7 +310,7 @@ export async function prepareGenerateParams({ data, files, referenceImageFields,
     );
   }
 
-  if (!isEditCapableMode(mode) && inputImageCount) {
+  if (!data.mediaProviderPeerId && !isEditCapableMode(mode) && inputImageCount) {
     cleanupReqFilesTemp();
     throw editIncapableModeError(mode);
   }
@@ -322,7 +322,7 @@ export async function prepareGenerateParams({ data, files, referenceImageFields,
   // 400 forever. Same "reject up-front rather than copy-then-fail" rule the
   // reference gates below follow.
   const cloudConfig = resolveCloudProviderConfig(settings, mode);
-  if (cloudConfig && !cloudConfig.enabled && inputImageCount) {
+  if (!data.mediaProviderPeerId && cloudConfig && !cloudConfig.enabled && inputImageCount) {
     cleanupReqFilesTemp();
     throw cloudConfig.disabledError;
   }
@@ -356,7 +356,7 @@ export async function prepareGenerateParams({ data, files, referenceImageFields,
   // copying the uploads to PATHS.imageRefs and silently dropping them
   // downstream — that would orphan files on disk and produce metadata sidecars
   // that lie about how the render was conditioned.
-  if (referenceImageCount && mode === IMAGE_GEN_MODE.LOCAL) {
+  if (!data.mediaProviderPeerId && referenceImageCount && mode === IMAGE_GEN_MODE.LOCAL) {
     const candidate = localModel;
     if (!isFlux2(candidate) && candidate?.pipelineClass !== 'QwenImage21Pipeline') {
       cleanupReqFilesTemp();
@@ -375,7 +375,7 @@ export async function prepareGenerateParams({ data, files, referenceImageFields,
   // so this only fires for direct API callers — but a silent drop is exactly
   // the failure the sidecar-honesty rule exists to prevent. `resolveInputImages`
   // keeps its own cap as the backstop for in-process callers that skip the route.
-  const inputImageCap = localModel?.pipelineClass === 'QwenImage21Pipeline' ? 10 : maxInputImages(mode, selectedCloudModel);
+  const inputImageCap = data.mediaProviderPeerId ? null : localModel?.pipelineClass === 'QwenImage21Pipeline' ? 10 : maxInputImages(mode, selectedCloudModel);
   if (inputImageCap != null && inputImageCount > inputImageCap) {
     cleanupReqFilesTemp();
     throw new ServerError(
@@ -473,7 +473,7 @@ export async function prepareGenerateParams({ data, files, referenceImageFields,
   // reference upload reaches here having already copied it into
   // PATHS.imageRefs. Unlink before throwing or it is orphaned on disk.
   const hasInputImage = Boolean(initImagePath) || referenceImagePaths.length > 0;
-  if (cloudPromptRequired(mode, hasInputImage) && !data.prompt?.trim()) {
+  if (!data.mediaProviderPeerId && cloudPromptRequired(mode, hasInputImage) && !data.prompt?.trim()) {
     cleanupStagedAndTemp();
     // Naming "text-to-image" would be wrong for the agy-with-input-images case,
     // which is precisely the one that isn't.

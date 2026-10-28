@@ -13,6 +13,8 @@ import { carriedPromptAdditions, sentPromptRecord } from '../../lib/modelInput.j
 import { FAL_IMAGE_DEFAULT_MODEL, falImageFamily } from '../../lib/falImageModels.js';
 import { maxInputImages, resolveCloudProviderConfig } from './cloudProviderConfig.js';
 import { resolveInputImages } from './inputImages.js';
+import { reviewedReferencePreview } from './reviewedReference.js';
+import { ServerError } from '../../lib/errorHandler.js';
 import { prepareGenerateParams, previewUploadLabel, resolveLocalImageModel, selectLocalImageModelFromSettings } from './prepareParams.js';
 import { codexSentPrompt } from './codex.js';
 import { grokSentPrompt } from './grok.js';
@@ -41,7 +43,7 @@ function previewInputImages(mode, params, modelId) {
 
 const jobOutputPath = (prefix) => join(tmpdir(), `${prefix}-<job>`, 'output.png');
 
-export async function previewImagePrompt({ uploadedInitImage = false, uploadedReferenceCount = 0, ...body }) {
+export async function previewImagePrompt({ uploadedInitImage = false, uploadedReferenceCount = 0, reviewReference = false, ...body }) {
   if (body.fableLoom && (uploadedInitImage || uploadedReferenceCount)) throw fableLoomMultipartUnsupported();
   const referenceImageFields = Array.from({ length: uploadedReferenceCount }, (_, index) => `referenceImage${index + 1}`);
   const files = {
@@ -52,8 +54,12 @@ export async function previewImagePrompt({ uploadedInitImage = false, uploadedRe
   await prepareFableLoomImageParams({ params, mode, settings });
   const showsReferenceStrengths = params.fableLoom && mode === IMAGE_GEN_MODE.LOCAL && !params.mediaProviderPeerId
     && selectLocalImageModelFromSettings(settings, params.modelId)?.runner === 'flux2';
+  if (reviewReference && (params.initImagePath || params.referenceImagePaths?.length !== 1 || uploadedInitImage || uploadedReferenceCount || (!params.mediaProviderPeerId && mode === IMAGE_GEN_MODE.EXTERNAL))) {
+    throw new ServerError('Review requires exactly one named reference image', { status: 400, code: 'REVIEWED_REFERENCE_UNSUPPORTED' });
+  }
   const envelope = {
     mode,
+    ...(reviewReference ? await reviewedReferencePreview(params.referenceImagePaths[0]) : {}),
     ...(params.fableLoom ? {
       authoredPrompt: params.authoredPrompt,
       authoredNegativePrompt: params.authoredNegativePrompt,
@@ -80,6 +86,10 @@ export async function previewImagePrompt({ uploadedInitImage = false, uploadedRe
   const cloud = params.mediaProviderPeerId ? null : resolveCloudProviderConfig(settings, mode, { model: params.cloudModel });
   // The same refusal POST /generate gives a disabled provider, text-to-image included.
   if (cloud && !cloud.enabled) throw cloud.disabledError;
+
+  if (params.mediaProviderPeerId) {
+    return { ...envelope, remote: true, ...sentPromptRecord({ sentPrompt: common.prompt, sentNegativePrompt: common.negativePrompt, carried }) };
+  }
 
   if (mode === IMAGE_GEN_MODE.CODEX) {
     return { ...envelope, ...codexSentPrompt({ ...common, inputImages: previewInputImages(mode, params) }).record };

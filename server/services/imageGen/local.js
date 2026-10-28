@@ -620,7 +620,7 @@ export async function localSentPrompt({ model, modelId, prompt = '', negativePro
   return sentPromptRecord({ sentPrompt: meta.sentPrompt, sentNegativePrompt: meta.sentNegativePrompt, carried: meta.promptAdditions || [] });
 }
 
-export async function generateImage({ pythonPath, prompt = '', negativePrompt = '', modelId = LOCAL_IMAGEGEN_DEFAULT_MODEL, width = 1024, height = 1024, steps, guidance, seed, quantize = '8', loraFilenames = [], loraPaths = [], loraScales = [], initImagePath = null, initImageStrength = null, referenceImagePaths = [], referenceImageStrengths = [], visualConditioning = null, jobId: providedJobId = null, cleanC2PA = false, denoise = false, regenOf = null, upscaleTo = null, outputTarget = null, promptAdditions = [] }) {
+export async function generateImage({ pythonPath, prompt = '', negativePrompt = '', modelId = LOCAL_IMAGEGEN_DEFAULT_MODEL, width = 1024, height = 1024, steps, guidance, seed, quantize = '8', loraFilenames = [], loraPaths = [], loraScales = [], initImagePath = null, initImageStrength = null, referenceImagePaths = [], referenceImageStrengths = [], visualConditioning = null, jobId: providedJobId = null, reviewedReferenceSnapshot = null, cleanC2PA = false, denoise = false, regenOf = null, upscaleTo = null, outputTarget = null, promptAdditions = [] }) {
   // The ingestion instant `renderTimingFields` measures from — the queue calls
   // generateImage the moment it picks this job up. See lib/renderTiming.js.
   const renderStartedAtMs = Date.now();
@@ -747,6 +747,12 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
     resolveInputPath: resolveImageInputPath,
     loraExists: existsSync,
   });
+  if ((initImagePath && !validInitImagePath)
+    || (Array.isArray(referenceImagePaths) && referenceImagePaths.length !== validReferenceImagePaths.length)) {
+    throw new ServerError('A requested input image is unavailable or outside the allowed image roots', {
+      status: 400, code: 'IMAGE_INPUT_UNAVAILABLE',
+    });
+  }
   if (usesMossSwift(model)) {
     meta.quantize = null;
     meta.quantization = 'bf16';
@@ -806,6 +812,9 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
       meta.omittedInputImages = omittedInputs.map(input => ({ ...input, reason: 'unsupported-render-path' }));
     }
     meta.inputProvenance = 'provider-inputs';
+    if (reviewedReferenceSnapshot && (providerInputs.referenceImagePaths.length !== 1 || providerInputs.referenceImagePaths[0] !== validReferenceImagePaths[0])) {
+      throw new ServerError('The selected local render path cannot apply the reviewed reference', { status: 400, code: 'REVIEWED_REFERENCE_UNSUPPORTED' });
+    }
     meta.referenceImageFilenames = providerInputs.referenceImagePaths.map(path => basename(path));
     meta.referenceImageStrengths = validReferenceImageStrengths.filter((_, index) => providerInputs.referenceImagePaths.includes(validReferenceImagePaths[index]));
     if (!providerInputs.initImagePath) {
@@ -842,6 +851,11 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
     startedEmitted = true;
     activeJob = { ...meta, generationId: jobId, totalSteps: actualSteps, step: 0, progress: 0, currentImage: null, mode: IMAGE_GEN_MODE.LOCAL };
 
+    if (reviewedReferenceSnapshot || [validInitImagePath, ...validReferenceImagePaths].some(path => path?.startsWith(join(PATHS.imageRefs, 'snapshot-')))) {
+      const { assertSnapshotForAdapter } = await import('./reviewedReference.js');
+      await assertSnapshotForAdapter(reviewedReferenceSnapshot, jobId, validInitImagePath, validReferenceImagePaths);
+      if (preparation.cancelRequested) throw new ServerError('Canceled before the render started', { status: 409, code: 'IMAGE_GEN_CANCELED' });
+    }
     proc = spawn(bin, args, safeChildProcessOptions({ env: childEnv, stdio: ['ignore', 'pipe', 'pipe'] }));
     // Same tick as the spawn, before the claim handoff below awaits file I/O: a
     // child that dies inside that window would otherwise emit 'close' with no
@@ -869,7 +883,7 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
       if (activeProcess === proc) activeProcess = null;
       if (activeJob?.generationId === jobId) activeJob = null;
       if (startedEmitted) {
-        imageGenEvents.emit('failed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, error: err.message });
+        imageGenEvents.emit('failed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, error: err.message, inputProcessSettled: !proc?.pid });
       }
       await releaseHeavyClaim();
       jobs.delete(jobId);
@@ -1128,7 +1142,7 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
           dispatchTerminalEvent(
             jobId,
             () => broadcastSse(job, { type: 'error', error: emptyFrame }),
-            () => imageGenEvents.emit('failed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, error: emptyFrame }),
+            () => imageGenEvents.emit('failed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, inputProcessSettled: true, error: emptyFrame }),
           );
           return;
         }
@@ -1213,7 +1227,7 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
           dispatchTerminalEvent(
             jobId,
             () => broadcastSse(job, { type: 'error', error: errorText, kind: userKind, repo: userRepo }),
-            () => imageGenEvents.emit('failed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, error: job.error }),
+            () => imageGenEvents.emit('failed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, inputProcessSettled: true, error: job.error }),
           );
         } else {
           job.status = 'complete';
@@ -1292,12 +1306,12 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
             () => broadcastSse(job, { type: 'complete', result }),
             () => {
               if (!skipSidecar) {
-                imageGenEvents.emit('completed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, path: publicPath, filename, seed: actualSeed, ...(meta.executionProvenance ? { executionProvenance: meta.executionProvenance } : {}) });
+                imageGenEvents.emit('completed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, inputProcessSettled: true, path: publicPath, filename, seed: actualSeed, ...(meta.executionProvenance ? { executionProvenance: meta.executionProvenance } : {}) });
               } else {
                 // `temp: true` tells the media-asset-index + peer-sync hooks to
                 // ignore this render — there's no gallery file or sidecar to
                 // index/federate.
-                imageGenEvents.emit('completed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, path: null, filename, seed: actualSeed, outputPath, temp: true, ...(meta.executionProvenance ? { executionProvenance: meta.executionProvenance } : {}) });
+                imageGenEvents.emit('completed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, inputProcessSettled: true, path: null, filename, seed: actualSeed, outputPath, temp: true, ...(meta.executionProvenance ? { executionProvenance: meta.executionProvenance } : {}) });
               }
             },
           );
@@ -1325,7 +1339,7 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
           dispatchTerminalEvent(
             jobId,
             () => broadcastSse(job, { type: 'error', error: reason }),
-            () => imageGenEvents.emit('failed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, error: reason }),
+            () => imageGenEvents.emit('failed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, inputProcessSettled: true, error: reason }),
           );
         }
       } finally {
@@ -1347,7 +1361,7 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
       dispatchTerminalEvent(
         jobId,
         () => broadcastSse(job, { type: 'error', error: reason }),
-        () => imageGenEvents.emit('failed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, error: reason }),
+        () => imageGenEvents.emit('failed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, inputProcessSettled: true, error: reason }),
       );
       closeJobAfterDelay(jobs, jobId);
     });

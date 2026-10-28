@@ -29,9 +29,10 @@ import { imageGenEvents } from '../imageGenEvents.js';
 import { provenanceForRender } from '../../lib/assetProvenance.js';
 import { readLoraLicensesByFilename } from '../loras.js';
 import { getImageModels } from '../../lib/mediaModels.js';
+import { assertSnapshotForAdapter } from './reviewedReference.js';
 
 const remoteImageMarkerSchema = z.object({
-  wireVersion: z.literal(FEDERATED_MEDIA_WIRE_VERSION),
+  wireVersion: z.union([z.literal(FEDERATED_MEDIA_WIRE_VERSION), z.literal(2)]),
   peerId: z.string().uuid(),
   reconcile: z.boolean().optional(),
   cancelRequested: z.boolean().optional(),
@@ -60,9 +61,14 @@ const executor = createRemoteMediaExecutor({
   label: 'image',
   events: imageGenEvents,
   markerSchema: remoteImageMarkerSchema,
-  buildRequest: (marker, ctx) => applyRemoteInputAssets(
-    marker.request, marker.inputAssets, ctx, federatedMediaImageJobSubmissionSchema,
-  ),
+  buildRequest: async (marker, ctx) => {
+    const assets = marker.inputAssets || [];
+    const snapshot = marker.wireVersion === 2 ? marker.reviewedReferenceSnapshot : null;
+    if (marker.wireVersion === 2 && !snapshot) throw new Error('Reviewed reference ownership is missing');
+    const bytes = await assertSnapshotForAdapter(snapshot, ctx.jobId, null, assets.map(asset => asset.path));
+    if (snapshot && (assets.length !== 1 || assets[0].role !== 'referenceImages')) throw new Error('Reviewed reference does not match remote inputs');
+    return applyRemoteInputAssets(marker.request, assets, { ...ctx, reviewedReference: snapshot ? { path: assets[0].path, digest: snapshot.digest, bytes } : null }, federatedMediaImageJobSubmissionSchema);
+  },
   // PATHS is read per job (not captured at module load) so a test that swaps
   // the gallery directory still sees its own temp root. The `<jobId>.png`
   // filename is the same shape imageGen/local.js uses, which is what lets the

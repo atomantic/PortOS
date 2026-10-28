@@ -55,6 +55,7 @@ import {
 } from './modes.js';
 import { GROK_ASPECT_RATIOS } from '../../lib/imageGenCapabilities.js';
 import { resolveInputImages } from './inputImages.js';
+import { assertSnapshotForAdapter } from './reviewedReference.js';
 import { cloudPromptRequired } from './cloudProviderConfig.js';
 import { withSpawnCwdEnv } from '../../lib/spawnCwd.js';
 import { agentInstructionsAddition, carriedPromptAdditions, sentPromptRecord } from '../../lib/modelInput.js';
@@ -250,7 +251,7 @@ async function generateImagePrepared({
   grokPath, aspectRatio, prompt = '', width, height, negativePrompt,
   initImagePath, initImageStrength, referenceImagePaths = [],
   visualConditioning = null,
-  jobId: providedJobId = null,
+  jobId: providedJobId = null, reviewedReferenceSnapshot = null,
   cleanC2PA = false,
   denoise = false,
 }) {
@@ -309,6 +310,12 @@ async function generateImagePrepared({
   // The scratch dir is the last fallible step before the job exists, so a
   // refusal above leaves nothing behind; from here on runGrok owns it.
   await mkdir(scratchDir, { recursive: true });
+  try {
+    await assertSnapshotForAdapter(reviewedReferenceSnapshot, jobId, inputImages.initPath, inputImages.referencePaths);
+  } catch (error) {
+    await rmGuarded(scratchDir, { recursive: true, force: true });
+    throw error;
+  }
   const job = { ...meta, clients: [], status: 'running', renderStartedAtMs };
   jobs.set(jobId, job);
 
@@ -480,7 +487,7 @@ function runGrok(job, jobId, bin, baseArgs, {
         dispatchTerminalEvent(
           jobId,
           () => broadcastSse(job, { type: 'complete', result }),
-          () => imageGenEvents.emit('completed', { mode: IMAGE_GEN_MODE.GROK, generationId: jobId, path: `/data/images/${filename}`, filename }),
+          () => imageGenEvents.emit('completed', { mode: IMAGE_GEN_MODE.GROK, generationId: jobId, inputProcessSettled: true, path: `/data/images/${filename}`, filename }),
         );
         closeJobAfterDelay(jobs, jobId);
       } catch (err) {
@@ -542,7 +549,7 @@ const finalizeJobFailure = createJobFailureFinalizer({
   activeSlots: activeProcs,
   label: 'grok image generation',
   events: imageGenEvents,
-  failedPayload: (jobId, reason) => ({ mode: IMAGE_GEN_MODE.GROK, generationId: jobId, error: reason }),
+  failedPayload: (jobId, reason, proc) => ({ mode: IMAGE_GEN_MODE.GROK, generationId: jobId, error: reason, inputProcessSettled: !proc || !proc.pid || typeof proc.exitCode === 'number' || typeof proc.signalCode === 'string' }),
 });
 
 // Poll for the directed output file until it exists non-empty AND carries a

@@ -64,6 +64,13 @@ afterEach(async () => {
 });
 
 describe('Runway image workflow', () => {
+  it('refuses unowned reviewed snapshot metadata before a network request', async () => {
+    await writeFile(join(PATHS.images, 'reviewed.png'), output);
+    await expect(runway.generateImage({ prompt: 'edit', referenceImagePaths: ['reviewed.png'], reviewedReferenceSnapshot: { jobId: 'unowned' } }))
+      .rejects.toMatchObject({ code: 'REVIEWED_REFERENCE_CHANGED' });
+    expect(calls).toHaveLength(0);
+  });
+
   it('reuses the video credential, files a text-only still as PNG and records the exact sent prompt and price', async () => {
     const releaseCut = await acquireBackupSnapshotCut();
     let job;

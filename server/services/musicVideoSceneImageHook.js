@@ -1,3 +1,4 @@
+import { effectiveJobPrompt } from '../lib/federatedMediaWire.js';
 /**
  * Music Video scene reference-frame attach hook (issue #1760, Phase 1b).
  *
@@ -59,7 +60,7 @@ const hook = createMediaJobImageHook({
     source: 'generated',
     provider: 'portos',
     jobId: typeof job.id === 'string' ? job.id : null,
-    prompt: typeof job.params?.prompt === 'string' ? job.params.prompt : null,
+    prompt: effectiveJobPrompt(job),
   }]),
   onAttached: ({ projectId, sceneId, filename }, { scene, appended }) => {
     musicVideoEvents.emit('scene-image', {

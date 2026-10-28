@@ -96,6 +96,14 @@ afterEach(async () => {
 });
 
 describe('imageGen/fal — generateImage', () => {
+  it('refuses unowned reviewed snapshot metadata before a network request', async () => {
+    await writeFile(join(FAKE_IMAGES_DIR, 'reviewed.png'), await noiseImage(16, 16));
+    const { calls } = fakeFal({ endpoint: 'fal-ai/nano-banana-pro/edit' });
+    await expect(fal.generateImage({ prompt: 'edit', referenceImagePaths: ['reviewed.png'], reviewedReferenceSnapshot: { jobId: 'unowned' } }))
+      .rejects.toMatchObject({ code: 'REVIEWED_REFERENCE_CHANGED' });
+    expect(calls).toHaveLength(0);
+  });
+
   it('renders text-only on the family text endpoint, transcodes to PNG, and records model + cost in the sidecar', async () => {
     const started = vi.fn();
     imageGenEvents.on('started', started);

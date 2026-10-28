@@ -24,6 +24,7 @@ import {
 } from '../runwayApi.js';
 import { IMAGE_GEN_MODE, describeFidelity } from './modes.js';
 import { resolveInputImages } from './inputImages.js';
+import { assertSnapshotForAdapter } from './reviewedReference.js';
 import { cloudPromptRequired } from './cloudProviderConfig.js';
 import { rejectDegenerateFrame } from './frameGuard.js';
 import { carriedPromptAdditions, promptAddition, sentPromptRecord } from '../../lib/modelInput.js';
@@ -90,8 +91,8 @@ export function runwayImageSentPrompt({ prompt = '', negativePrompt, inputImages
   return { fullPrompt, references, record: sentPromptRecord({ sentPrompt: fullPrompt, carried: carriedPromptAdditions({ promptAdditions }), added }) };
 }
 
-async function encodeInputImage(path) {
-  const bytes = await readFile(path);
+async function encodeInputImage(path, reviewedBytes = null) {
+  const bytes = reviewedBytes || await readFile(path);
   const mime = detectImageFormat(bytes)?.mime;
   const uri = mime ? `data:${mime};base64,${bytes.toString('base64')}` : null;
   // Runway's 5 MB ceiling applies to the encoded URI, including base64 overhead.
@@ -106,7 +107,7 @@ async function generateImagePrepared({
   model, resolution, ratio, prompt = '', negativePrompt, width, height, seed,
   initImagePath, initImageStrength, referenceImagePaths = [],
   visualConditioning = null,
-  jobId: providedJobId = null,
+  jobId: providedJobId = null, reviewedReferenceSnapshot = null,
   cleanC2PA = false,
   denoise = false,
   apiKey: providedApiKey = null,
@@ -160,6 +161,7 @@ async function generateImagePrepared({
     ...sentRecord,
     createdAt: new Date().toISOString(),
   };
+  const reviewedReferenceBytes = await assertSnapshotForAdapter(reviewedReferenceSnapshot, jobId, inputImages.initPath, inputImages.referencePaths);
   const job = { ...meta, clients: [], status: 'running', renderStartedAtMs };
   jobs.set(jobId, job);
 
@@ -168,7 +170,7 @@ async function generateImagePrepared({
   activeJobs.set(jobId, { ...meta, generationId: jobId, totalSteps: 1, step: 0, progress: 0, currentImage: null });
   broadcastSse(job, { type: 'status', message: 'Submitting to Runway…' });
   runRunway(job, jobId, {
-    apiKey, request, references, family,
+    apiKey, request, references, family, reviewedReferenceBytes,
     outputPath, filename, meta, cleanC2PA, denoise,
   }).catch((err) => {
     console.error(`❌ Runway image run failed [${jobId.slice(0, 8)}]: ${err?.message}`);
@@ -182,7 +184,7 @@ async function generateImagePrepared({
 }
 
 async function runRunway(job, jobId, {
-  apiKey, request, references, family,
+  apiKey, request, references, family, reviewedReferenceBytes,
   outputPath, filename, meta, cleanC2PA = false, denoise = false,
 }) {
   const entry = createRunwayTaskEntry(apiKey);
@@ -192,7 +194,7 @@ async function runRunway(job, jobId, {
   let wroteOutput = false;
   try {
     const referenceImages = [];
-    for (const ref of references) referenceImages.push({ uri: await encodeInputImage(ref.path), ...(family.referenceTags ? { tag: ref.tag } : {}) });
+    for (const ref of references) referenceImages.push({ uri: await encodeInputImage(ref.path, reviewedReferenceBytes), ...(family.referenceTags ? { tag: ref.tag } : {}) });
     if (entry.aborted) return finalizeCanceled(job, jobId);
     entry.taskId = await submitRunwayTask({ apiKey, endpoint: 'text_to_image', body: { ...request.body, ...(referenceImages.length ? { referenceImages } : {}) }, signal: entry.controller.signal });
     // THROTTLED waits on this accepted task. A failed/moderated task is terminal, never resubmitted.
@@ -253,7 +255,7 @@ async function runRunway(job, jobId, {
         dispatchTerminalEvent(
           jobId,
           () => broadcastSse(job, { type: 'complete', result: done }),
-          () => imageGenEvents.emit('completed', { mode: MODE, generationId: jobId, path: done.path, filename }),
+          () => imageGenEvents.emit('completed', { mode: MODE, generationId: jobId, inputProcessSettled: true, path: done.path, filename }),
         );
         closeJobAfterDelay(jobs, jobId);
       } catch (err) {

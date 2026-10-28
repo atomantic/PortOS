@@ -59,7 +59,7 @@ const referenceInputs = (params, routed) => {
     ? (Array.isArray(params?.remoteMedia?.inputAssets) ? params.remoteMedia.inputAssets : [])
     : [
       ...(params?.initImagePath ? [{ role: 'initImage', path: params.initImagePath }] : []),
-      ...(Array.isArray(params?.referenceImagePaths) ? params.referenceImagePaths.map(path => ({ role: 'referenceImages', path })) : []),
+      ...(Array.isArray(params?.reviewedReferenceRequest?.referenceImagePaths || params?.referenceImagePaths) ? (params?.reviewedReferenceRequest?.referenceImagePaths || params.referenceImagePaths).map(path => ({ role: 'referenceImages', path })) : []),
     ];
   return inputs.flatMap(input => {
     if (!['initImage', 'referenceImages'].includes(input?.role) || typeof input?.path !== 'string') return [];
@@ -111,6 +111,10 @@ export function sanitizeJob(job) {
   const routed = isRemoteMediaJob(job);
   const hold = !routed && job.status === 'queued' ? videoHoldSchema.safeParse(job.hold) : null;
   const remoteModelId = job.params?.remoteMedia?.request?.modelId;
+  if (safeParams && !routed && job.params?.reviewedReferenceRequest) {
+    safeParams.prompt = remotePrompt;
+    if (typeof job.params.reviewedReferenceRequest.modelId === 'string') safeParams.modelId = job.params.reviewedReferenceRequest.modelId;
+  }
   if (safeParams && routed) {
     if (remotePrompt) safeParams.prompt = remotePrompt;
     if (typeof remoteModelId === 'string' && remoteModelId) safeParams.modelId = remoteModelId;

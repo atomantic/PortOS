@@ -48,6 +48,7 @@ import {
   nearestAgyAspectRatio, visualReferenceRole,
 } from './modes.js';
 import { resolveInputImages } from './inputImages.js';
+import { assertSnapshotForAdapter } from './reviewedReference.js';
 import { cloudPromptRequired } from './cloudProviderConfig.js';
 import { withSpawnCwdEnv } from '../../lib/spawnCwd.js';
 import { agentInstructionsAddition, carriedPromptAdditions, sentPromptRecord } from '../../lib/modelInput.js';
@@ -296,7 +297,7 @@ async function generateImagePrepared({
   initImageStrength,
   referenceImagePaths = [],
   visualConditioning = null,
-  jobId: providedJobId = null,
+  jobId: providedJobId = null, reviewedReferenceSnapshot = null,
   cleanC2PA = false,
   denoise = false,
 }) {
@@ -358,6 +359,12 @@ async function generateImagePrepared({
   // The scratch dir is the last fallible step before the job exists, so a
   // refusal above leaves nothing behind; from here on runAgy owns it.
   await mkdir(scratchDir, { recursive: true });
+  try {
+    await assertSnapshotForAdapter(reviewedReferenceSnapshot, jobId, inputImages.initPath, inputImages.referencePaths);
+  } catch (error) {
+    await rmGuarded(scratchDir, { recursive: true, force: true });
+    throw error;
+  }
   const job = { ...meta, clients: [], status: 'running', renderStartedAtMs };
   jobs.set(jobId, job);
   activeJobs.set(jobId, {
@@ -520,7 +527,7 @@ function runAgy(job, jobId, bin, args, {
         dispatchTerminalEvent(
           jobId,
           () => broadcastSse(job, { type: 'complete', result }),
-          () => imageGenEvents.emit('completed', { mode: IMAGE_GEN_MODE.AGY, generationId: jobId, path: result.path, filename }),
+          () => imageGenEvents.emit('completed', { mode: IMAGE_GEN_MODE.AGY, generationId: jobId, inputProcessSettled: true, path: result.path, filename }),
         );
         closeJobAfterDelay(jobs, jobId);
       } catch (err) {
@@ -570,7 +577,7 @@ const finalizeJobFailure = createJobFailureFinalizer({
   activeSlots: activeProcs,
   label: 'agy image generation',
   events: imageGenEvents,
-  failedPayload: (jobId, reason) => ({ mode: IMAGE_GEN_MODE.AGY, generationId: jobId, error: reason }),
+  failedPayload: (jobId, reason, proc) => ({ mode: IMAGE_GEN_MODE.AGY, generationId: jobId, error: reason, inputProcessSettled: !proc || !proc.pid || typeof proc.exitCode === 'number' || typeof proc.signalCode === 'string' }),
 });
 
 async function harvestStagedImage(stagingPath, timeoutMs) {
