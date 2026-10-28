@@ -69,6 +69,21 @@ describe('Song step', () => {
     expect(JSON.parse(screen.getByTestId('playthrough').dataset.seek)).toEqual({ t: 61.2, n: 2, play: true });
   });
 
+  it('flags words aligned to vocal silence with a one-tap line re-align, without blocking the confirmation', () => {
+    const onAlignLyrics = vi.fn(async () => {});
+    const project = { id: 'p', trackId: 't', audioAnalysis: {}, productionReview: { draft: { lyricsMode: 'vocal', timingStatus: 'provisional' } }, lyricCues: [
+      { id: 'c', text: 'under neon', startSec: 3, endSec: 4, silentWords: [1],
+        words: [{ w: 'under', startSec: 3, endSec: 3.5, conf: 'matched' }, { w: 'neon', startSec: 3.5, endSec: 4, conf: 'matched' }] },
+    ] };
+    render(<SetupStage board={board(project, { productionReview: review(), onAlignLyrics })} />);
+    const jump = screen.getByRole('button', { name: '0:03.00 — under neon' });
+    expect(within(jump).getByText('neon').className).toContain('underline');
+    expect(within(jump).getByText('under').className).not.toContain('underline');
+    fireEvent.click(screen.getByRole('button', { name: 'Re-align line' }));
+    expect(onAlignLyrics).toHaveBeenCalledWith('c');
+    expect(screen.getByRole('button', { name: 'Timing looks right' })).toBeEnabled();
+  });
+
   it('holds the timing check until the aligned words can be played through', () => {
     const project = { id: 'p', trackId: 't', audioAnalysis: {}, lyricCues: [{ id: 'c', text: 'hi', startSec: 1, endSec: 2 }],
       productionReview: { draft: { lyricsMode: 'vocal', timingStatus: 'provisional' } } };

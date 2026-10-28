@@ -215,6 +215,8 @@ export const musicVideoLyricCueSchema = z.object({
   words: z.array(lyricWordSchema).max(400).optional(),
   matched: z.number().min(0).max(1).optional(),
   suspect: z.boolean().optional(),
+  // Indices into `words` that alignment placed where the vocal stem is silent.
+  silentWords: z.array(z.number().int().min(0).max(399)).max(400).optional(),
 }).strict();
 
 // A musical-phrase annotation: a span of the song with an optional visual

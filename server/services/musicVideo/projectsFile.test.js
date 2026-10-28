@@ -179,31 +179,35 @@ describe('projectsFile federation (#1770)', () => {
       { w: 'home', startSec: 1.55, endSec: 2, conf: 'matched' },
     ];
     await file.updateProject(p.id, {
-      lyricCues: [{ id: 'lc-1', text: 'walking home', startSec: 1, endSec: 2, words: nudged, matched: 0.4, suspect: true }],
+      lyricCues: [{ id: 'lc-1', text: 'walking home', startSec: 1, endSec: 2, words: nudged, matched: 0.4, suspect: true, silentWords: [1, 7] }],
     });
     const saved = await file.getProject(p.id);
     expect(saved.lyricCues[0].words).toEqual(nudged);
     expect(saved.lyricCues[0].text).toBe('walking home');
     expect(saved.lyricCues[0].matched).toBe(0.4);
     expect(saved.lyricCues[0].suspect).toBe(true);
+    // An index past the line's words is dropped; the real flag survives the save.
+    expect(saved.lyricCues[0].silentWords).toEqual([1]);
     expect((await file.cloneProject(p.id)).lyricCues[0].words).toEqual(nudged);
 
     const retitled = await file.updateProject(p.id, {
-      lyricCues: [{ id: 'lc-1', text: 'walking house', startSec: 1, endSec: 2, words: nudged, matched: 0.4, suspect: true }],
+      lyricCues: [{ id: 'lc-1', text: 'walking house', startSec: 1, endSec: 2, words: nudged, matched: 0.4, suspect: true, silentWords: [1, 7] }],
     });
     expect(retitled.lyricCues[0]).toMatchObject({ text: 'walking house', startSec: 1, endSec: 2 });
     expect(retitled.lyricCues[0].words).toBeUndefined();
     expect(retitled.lyricCues[0].matched).toBeUndefined();
     expect(retitled.lyricCues[0].suspect).toBeUndefined();
+    expect(retitled.lyricCues[0].silentWords).toBeUndefined();
 
     await file.updateProject(p.id, {
-      lyricCues: [{ id: 'lc-1', text: 'walking home', startSec: 1, endSec: 2, words: nudged, matched: 0.4, suspect: true }],
+      lyricCues: [{ id: 'lc-1', text: 'walking home', startSec: 1, endSec: 2, words: nudged, matched: 0.4, suspect: true, silentWords: [1, 7] }],
     });
     const swapped = await file.updateProject(p.id, { trackId: 't2' });
     expect(swapped.lyricCues[0].text).toBe('walking home');
     expect(swapped.lyricCues[0].words).toBeUndefined();
     expect(swapped.lyricCues[0].matched).toBeUndefined();
     expect(swapped.lyricCues[0].suspect).toBeUndefined();
+    expect(swapped.lyricCues[0].silentWords).toBeUndefined();
     expect(swapped.lyricCues[0].startSec).toBeNull();
     expect(swapped.lyricCues[0].endSec).toBeNull();
   });

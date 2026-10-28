@@ -370,6 +370,7 @@ export function applyProjectPatch(project, patch) {
       if (previous && previous.text !== cue.text) {
         delete cue.matched;
         delete cue.suspect;
+        delete cue.silentWords;
       }
       return cue;
     }) } : {}),

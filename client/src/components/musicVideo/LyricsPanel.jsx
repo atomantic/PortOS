@@ -174,6 +174,7 @@ export default function LyricsPanel({ project, onEditLocal, onSave, onImport, im
       const next = { ...c, ...patch };
       if (Object.hasOwn(patch, 'text') && patch.text !== c.text) delete next.matched;
       if (Object.hasOwn(patch, 'words') && patch.words == null) delete next.words;
+      if (Object.hasOwn(patch, 'text') || Object.hasOwn(patch, 'words')) delete next.silentWords;
       return next;
     }),
   });
@@ -201,7 +202,13 @@ export default function LyricsPanel({ project, onEditLocal, onSave, onImport, im
     });
   };
   const editWords = (id, words, save) => {
-    const next = cues.map((cue) => (cue.id === id ? { ...cue, words } : cue));
+    // Hand-placed words supersede the alignment's silence flags.
+    const next = cues.map((cue) => {
+      if (cue.id !== id) return cue;
+      const edited = { ...cue, words };
+      delete edited.silentWords;
+      return edited;
+    });
     onEditLocal({ lyricCues: next });
     if (save) onSave({ lyricCues: next });
   };
