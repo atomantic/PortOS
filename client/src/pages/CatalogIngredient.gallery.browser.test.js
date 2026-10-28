@@ -104,6 +104,7 @@ describe.skipIf(!chrome)('Catalog gallery picker touch targets in Chromium', () 
       await page.waitForFunction(bar => getComputedStyle(bar).opacity === '1', await actionBar.elementHandle());
       expect(await actionBar.evaluate(bar => getComputedStyle(bar).opacity)).toBe('1');
       await tile.getByRole('button', { name: 'Attach' }).click();
+      await page.getByPlaceholder('Search gallery…').focus();
       await page.mouse.move(0, 0);
       await page.waitForFunction(bar => getComputedStyle(bar).opacity === '0', await actionBar.elementHandle());
       expect(await actionBar.evaluate(bar => getComputedStyle(bar).opacity)).toBe('0');
