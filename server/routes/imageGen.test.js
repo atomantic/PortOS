@@ -2375,6 +2375,18 @@ describe('Image Gen Routes', () => {
       expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
     });
 
+    it('previews a peer reference independently of a disabled local cloud backend', async () => {
+      await fileUtils.ensureDir(fileUtils.PATHS.images);
+      await writeFile(pathJoin(fileUtils.PATHS.images, 'peer-disabled-local.png'), 'reviewed peer image');
+      getSettings.mockResolvedValueOnce({ imageGen: { mode: 'codex', codex: { enabled: false } } });
+      const response = await request(app).post('/api/image-gen/prompt-preview').send({
+        prompt: 'Edit the scene', modelId: 'dev', mediaProviderPeerId: federatedPeerId,
+        referenceImageFiles: ['peer-disabled-local.png'], reviewReference: true,
+      });
+      expect(response.status).toBe(200);
+      expect(response.body).toMatchObject({ remote: true, sentPrompt: 'Edit the scene', reviewedReferenceDigest: expect.any(String) });
+    });
+
     it('does not substitute the local model for an unnamed peer model', async () => {
       getSettings.mockResolvedValueOnce({ imageGen: { mode: 'local', local: { modelId: 'qwen-image-2.1' } } });
       const response = await request(app).post('/api/image-gen/generate').send({ prompt: 'a lighthouse', mediaProviderPeerId: federatedPeerId });
