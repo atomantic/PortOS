@@ -33,7 +33,7 @@ import { isInvestigationTask } from '../lib/investigationTasks.js';
 import { PAUSED_BLOCKED_CATEGORIES, USER_DECISION_BLOCKED_CATEGORIES } from '../lib/taskBlockCategories.js';
 import { splitTaskPromptFields, TASK_PROMPT_KEY, TASK_CONTEXT_KEY } from '../lib/cosTaskPrompt.js';
 import { normalizeOrchestrationMode, normalizeOrchestrationProfile } from '../lib/orchestrationProfile.js';
-import { loadState, withStateLock } from './cosState.js';
+import { loadState, withStateLock, readAgentsStateForSafetyCheck } from './cosState.js';
 import { activeAgents, runnerAgents, hasActiveTaskOwner } from './agentState.js';
 import { cosEvents } from './cosEvents.js';
 import { CLAIM_METADATA_KEYS } from './cosTaskClaim.js';
@@ -862,6 +862,14 @@ async function writeTaskUpdateLocked(taskId, updates, taskType, { now, suppressD
     return { statusChanged: true, task: current };
   }
   if (recoveryOwner) {
+    if (recoveryOwner.requireInactive) {
+      const owners = await readAgentsStateForSafetyCheck();
+      if (!owners.trusted || Object.values(owners.agents || {}).some(agent => agent.taskId === taskId
+        && ['running', 'paused'].includes(agent.status))
+        || [activeAgents, runnerAgents].some(entries => [...entries.values()].some(agent => (agent.taskId || agent.task?.id) === taskId))) {
+        return { statusChanged: true, task: current };
+      }
+    }
     const state = await loadState();
     const registered = state.agents?.[recoveryOwner.id];
     const competing = Object.values(state.agents || {}).some(agent => agent.id !== recoveryOwner.id
