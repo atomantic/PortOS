@@ -53,6 +53,7 @@ import {
 } from './catalogSheetPrompts.js';
 import { CATALOG_LOOK_VARIANT_ID } from '../lib/catalogValidation.js';
 import { catalogAppearance } from '../lib/catalogAppearance.js';
+import { catalogFamilyRenderContext } from './catalogFamily.js';
 
 const CATALOG_SHEET_VARIANTS = Object.freeze({
   place: Object.freeze([Object.freeze({
@@ -261,6 +262,8 @@ async function buildCatalogSheet(target, options) {
       ? characterSheetReferenceCandidates(payload, await listMediaForIngredient(ingredient.id), options)
       : [],
     sharedIdentity: ingredient.type === 'character' ? payload.visualIdentity : '',
+    family: ingredient.type === 'character' ? await catalogFamilyRenderContext(ingredient.id, ingredient.name) : undefined,
+    selfName: ingredient.name,
   });
   if (direction) result.params.promptAdditions = [...direction.additions, ...(result.params.promptAdditions || [])];
   return { ...result, visualDirection: direction?.status };

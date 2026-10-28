@@ -2,6 +2,7 @@ import { useCallback, useId, useRef, useState } from 'react';
 import { Loader2, SlidersHorizontal, Sparkles } from 'lucide-react';
 import { generateImage } from '../../services/apiSystem';
 import { getUniverse } from '../../services/apiUniverseBuilder';
+import { getCatalogFamilyContext } from '../../services/apiCatalog';
 import { previewImagePrompt } from '../../services/apiImageVideo';
 import { composeStyledPrompt, stylePromptAdditions } from '../../lib/composeStyledPrompt';
 import { universeStylePreset, withUniverseLabel } from '../../lib/universeStylePreset';
@@ -13,12 +14,17 @@ import toast from '../ui/Toast';
 import ModelInputPreview from '../media/ModelInputPreview';
 import MediaJobThumb from '../pipeline/MediaJobThumb';
 
-function buildRequest(prompt, negativePrompt, universe) {
+// A character's family (picked on its record) rides along as labeled blocks
+// after the user's words, plus the relatives' images when they are included.
+function buildRequest(prompt, negativePrompt, universe, family, includeFamilyImages) {
   const preset = universe ? withUniverseLabel(universeStylePreset(universe)) : null;
   const composed = composeStyledPrompt(prompt, negativePrompt, preset);
-  const additions = stylePromptAdditions(preset);
-  return { prompt: composed.prompt, negativePrompt: composed.negativePrompt || undefined,
+  const images = includeFamilyImages ? family?.images || [] : [];
+  const familyAdditions = [...(family?.additions || []), ...(images.length && family?.imagesAddition ? [family.imagesAddition] : [])];
+  const additions = [...stylePromptAdditions(preset), ...familyAdditions];
+  return { prompt: [composed.prompt, ...familyAdditions.map((a) => a.text)].join('\n\n'), negativePrompt: composed.negativePrompt || undefined,
     ...(universe?.id ? { universeRun: { universeId: universe.id, universeName: universe.name || universe.id } } : {}),
+    ...(images.length ? { referenceImageFiles: images.map((image) => image.filename) } : {}),
     ...(additions.length ? { promptAdditions: additions } : {}) };
 }
 
@@ -37,13 +43,19 @@ export default function GenerateImageControl({ ingredientId, name, description, 
   const [prompt, setPrompt] = useState('');
   const [negativePrompt, setNegativePrompt] = useState('');
   const [universe, setUniverse] = useState(null);
+  const [family, setFamily] = useState(null);
+  const [includeFamilyImages, setIncludeFamilyImages] = useState(true);
   const [sourceError, setSourceError] = useState(null);
 
   const prepare = async () => {
     const source = loadSource ? await loadSource() : { name, description, universeId };
-    const world = source.universeId ? await getUniverse(source.universeId, { silent: true }) : null;
+    const [world, kin] = await Promise.all([
+      source.universeId ? getUniverse(source.universeId, { silent: true }) : null,
+      ingredientId ? getCatalogFamilyContext(ingredientId, { silent: true }) : null,
+    ]);
     if (source.universeId && !world) throw new Error('Unable to load the universe style. Retry before generating.');
-    return { seed: source.description ? `${source.name || 'Subject'}: ${source.description}` : source.name || 'Subject', world };
+    if (ingredientId && !kin) throw new Error('Unable to load this character’s family. Retry before generating.');
+    return { seed: source.description ? `${source.name || 'Subject'}: ${source.description}` : source.name || 'Subject', world, kin };
   };
 
   const submit = async (request) => {
@@ -64,10 +76,11 @@ export default function GenerateImageControl({ ingredientId, name, description, 
     setSourceError(null);
     if (direct) setStarting(true);
     else { setEditing(true); setPrefilling(true); }
-    await prepare().then(async ({ seed, world }) => {
+    await prepare().then(async ({ seed, world, kin }) => {
       if (!mounted.current) return;
       setUniverse(world);
-      if (direct) await submit(buildRequest(seed, '', world));
+      setFamily(kin);
+      if (direct) await submit(buildRequest(seed, '', world, kin, includeFamilyImages));
       else if (!promptEdited.current) setPrompt(seed);
     }).catch(error => {
       if (mounted.current) { setSourceError(error.message); toast.error(error.message || 'Could not prepare image generation'); }
@@ -77,7 +90,8 @@ export default function GenerateImageControl({ ingredientId, name, description, 
     });
   };
 
-  const previewBody = buildRequest(prompt, negativePrompt, universe);
+  const previewBody = buildRequest(prompt, negativePrompt, universe, family, includeFamilyImages);
+  const familyImages = family?.images || [];
   const modelInputPreview = useModelInputPreview(previewImagePrompt, previewBody, {
     enabled: editing && !prefilling && !sourceError && prompt.trim().length > 0,
   });
@@ -129,6 +143,10 @@ export default function GenerateImageControl({ ingredientId, name, description, 
       <label htmlFor={`${fieldId}-negative`} className="block text-xs text-gray-400">Negative prompt (optional)</label>
       <AutoSizeTextarea id={`${fieldId}-negative`} value={negativePrompt} onChange={event => setNegativePrompt(event.target.value)} rows={2}
         className="w-full text-xs bg-port-bg border border-port-border rounded px-2 py-1 text-gray-200 min-h-[44px]" />
+      {familyImages.length > 0 && <label htmlFor={`${fieldId}-family`} className="flex items-start gap-2 min-h-[40px] text-xs text-gray-300">
+        <input id={`${fieldId}-family`} type="checkbox" checked={includeFamilyImages} onChange={(event) => setIncludeFamilyImages(event.target.checked)} className="mt-0.5" />
+        <span>Send family images ({familyImages.map((image) => image.source).join(', ')}). Needs a backend that takes reference images.</span>
+      </label>}
       <ModelInputPreview preview={modelInputPreview} prompt={prompt} />
       <div className="flex items-center justify-end gap-2">
         <button type="button" onClick={close} disabled={starting || prefilling} className="text-xs px-3 py-2 rounded border border-port-border text-gray-400 hover:text-white disabled:opacity-50">Cancel</button>

@@ -20,7 +20,7 @@ import { query } from '../lib/db.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { promptAddition } from '../lib/modelInput.js';
 import { CREATIVE_LATITUDE_ADDITION, withCreativeLatitude } from '../lib/creativeLatitude.js';
-import { catalogReferenceRole } from '../lib/catalogTypes.js';
+import { catalogReferenceRole, getRelationKind } from '../lib/catalogTypes.js';
 import { parseStoryDraft, storyDraftInstructions, storyDraftPrompt } from '../lib/catalogStoryDraft.js';
 import { CANONICAL_REFS_CTE, STORYBOARD_PANEL_MEMBERS_SQL } from './catalogDB/shared.js';
 import { getIngredient, listIngredients } from './catalogDB/ingredients.js';
@@ -113,7 +113,7 @@ const memberLine = (item) => {
  * Draft one new member for a story from the user's prompt. Answers with the
  * draft as a preview plus the exact prompt sent and each block PortOS added.
  */
-export async function draftStoryMember({ type, universeId = '', storyKind = '', storyId = '', prompt, providerId = '', model = '', effort = '' }) {
+export async function draftStoryMember({ type, universeId = '', storyKind = '', storyId = '', prompt, providerId = '', model = '', effort = '', relations = [] }) {
   const request = String(prompt || '').trim();
   if (!request) throw refuse('Describe who or what to create first.', 'STORY_DRAFT_EMPTY');
 
@@ -127,6 +127,8 @@ export async function draftStoryMember({ type, universeId = '', storyKind = '', 
   const members = story
     ? (await listIngredients({ refKind: storyKind, refId: storyId, limit: MEMBER_CONTEXT_LIMIT })).items
     : [];
+  const relatives = await Promise.all(relations.map(async (relation) => ({ relation, record: await getIngredient(relation.toId) })));
+  if (relatives.some(({ record }) => !record || record.deleted)) throw refuse('A related record no longer exists.', 'NOT_FOUND', 404);
 
   const { provider, selectedModel } = await deps.resolveProvider({ providerId: providerId || null, model: model || null });
   if (!provider) throw refuse('No AI provider is set up; pick one first.', 'NO_PROVIDER', 503);
@@ -136,10 +138,17 @@ export async function draftStoryMember({ type, universeId = '', storyKind = '', 
   const universeText = universe && [`Name: ${universe.name}`, universe.logline && `Logline: ${universe.logline}`, universe.premise && `Premise: ${universe.premise}`].filter(Boolean).join('\n');
   const storyText = story && [`Name: ${story.name}`, story.logline && `Logline: ${story.logline}`, story.summary && `Summary: ${story.summary}`].filter(Boolean).join('\n');
   const membersText = members.map(memberLine).join('\n');
+  // "The new record is the mother of Nora: <Nora's description>".
+  const familyText = relatives.map(({ relation, record }) => {
+    const kind = getRelationKind(relation.kind);
+    const link = kind?.term ? `the ${kind.term} of` : (kind?.label || relation.kind).toLowerCase();
+    return `- The new ${type} is ${link} ${memberLine(record).slice(2)}`;
+  }).join('\n');
   const blocks = [
     promptAddition('universe', 'Universe', universeText),
     promptAddition('story', 'Story', storyText),
     promptAddition('story-members', 'Already in the story', membersText),
+    promptAddition('family', 'Family', familyText),
   ];
   const sentPrompt = withCreativeLatitude(storyDraftPrompt(instructions, blocks, request));
   const promptAdditions = [CREATIVE_LATITUDE_ADDITION, promptAddition('story-draft-instructions', 'Draft instructions', instructions), ...blocks].filter(Boolean);

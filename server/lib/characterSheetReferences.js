@@ -53,6 +53,7 @@ export function resolveCharacterSheetReferences(candidates, mode, modelId, local
     const status = paths.length >= limit ? 'limit' : !path ? 'missing' : !supported ? 'unsupported' : 'included';
     if (status === 'included') paths.push(path);
     images.push({ filename: safe ? filename : 'Invalid image filename', source: candidate.source, status,
+      ...(candidate.relative ? { relative: candidate.relative } : {}),
       ...(path ? { url: `/data/${relative(PATHS.imageRefs, path) === basename(path) ? 'image-refs' : 'images'}/${encodeURIComponent(filename)}` } : {}),
     });
   }

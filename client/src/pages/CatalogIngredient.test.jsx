@@ -60,6 +60,7 @@ const { detailsOf } = vi.hoisted(() => ({
 }));
 
 vi.mock('../services/apiCatalog', () => ({
+  getCatalogFamilyContext: vi.fn(async () => ({ additions: [], images: [], imagesAddition: null })),
   getCatalogIngredientDetails: vi.fn(async () => detailsOf(CHAR_FIXTURE)),
   getCatalogUniverseContext: vi.fn(async () => ({ ...detailsOf(CHAR_FIXTURE).universeContext, usageComplete: true })),
   listCatalogRelatedImages: vi.fn(async () => ({ items: [], total: 0, limit: 24, offset: 0 })),
@@ -386,6 +387,25 @@ describe('CatalogIngredient — character sheet', () => {
       { silent: true },
     ));
     await waitFor(() => expect(screen.queryByText('Example Place')).toBeNull());
+  });
+
+  it('keeps a character’s family in the Family picker, out of the generic Relations list', async () => {
+    unlinkCatalogIngredientRelation.mockResolvedValue({});
+    getCatalogIngredientDetails.mockImplementation(async () => ({
+      ...detailsOf(CHAR_FIXTURE),
+      relations: {
+        outbound: [{ fromId: CHAR_FIXTURE.id, toId: 'cat-chr-frank', kind: 'wife-of', other: { id: 'cat-chr-frank', name: 'Example Frank', type: 'character' } }],
+        inbound: [{ fromId: 'cat-chr-kid', toId: CHAR_FIXTURE.id, kind: 'daughter-of', other: { id: 'cat-chr-kid', name: 'Example Kid', type: 'character' } }],
+      },
+    }));
+    await renderPage();
+
+    const remove = await screen.findByRole('button', { name: 'Remove Wife of Example Frank' });
+    expect(screen.getByRole('link', { name: 'Example Kid' })).toHaveAttribute('href', '/casting/cat-chr-kid');
+    expect(screen.queryByRole('button', { name: 'Remove relation to Example Frank' })).toBeNull();
+    fireEvent.click(remove);
+    await waitFor(() => expect(unlinkCatalogIngredientRelation).toHaveBeenCalledWith(
+      CHAR_FIXTURE.id, { toId: 'cat-chr-frank', kind: 'wife-of' }, { silent: true }));
   });
 
   describe('unsaved changes', () => {

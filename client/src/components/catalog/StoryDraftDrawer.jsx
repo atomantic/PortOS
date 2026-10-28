@@ -8,6 +8,8 @@ import { createCatalogIngredient, draftCatalogStoryMember, joinCatalogStory } fr
 import { formatCount } from '../../utils/formatters';
 import { safeReadJsonStorage, safeWriteJsonStorage } from '../../lib/safeStorage';
 import { STORY_DRAFT_LIMITS } from '../../../../server/lib/catalogStoryDraft.js';
+import CatalogFamilyPicker from './CatalogFamilyPicker';
+import { addFamilyItem, familyRelations, removeFamilyItem } from '../../lib/catalogFamily';
 
 const actionButton = 'min-h-[44px] inline-flex items-center justify-center gap-1.5 rounded-lg border border-port-border px-3 text-sm text-gray-200 hover:border-port-accent/60 hover:text-white disabled:opacity-40';
 const fieldClass = 'w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm';
@@ -37,6 +39,8 @@ export default function StoryDraftDrawer({ open, onClose, library, typeMeta, uni
   const [running, setRunning] = useState(false);
   const [saving, setSaving] = useState(false);
   const [preview, setPreview] = useState(null);
+  const [family, setFamily] = useState([]);
+  const relations = familyRelations(family);
 
   useEffect(() => {
     if (!open) return;
@@ -58,6 +62,7 @@ export default function StoryDraftDrawer({ open, onClose, library, typeMeta, uni
     const res = await draftCatalogStoryMember({
       type: library.type, universeId, prompt, ...pick,
       ...(story ? { storyKind: story.kind, storyId: story.id } : {}),
+      ...(relations.length ? { relations } : {}),
     }).catch(() => null);
     setRunning(false);
     if (res) setPreview({ ...res, name: res.draft.name, content: res.draft.content });
@@ -70,7 +75,8 @@ export default function StoryDraftDrawer({ open, onClose, library, typeMeta, uni
     const contentKey = typeMeta?.primaryContentKey || 'description';
     setSaving(true);
     const created = await createCatalogIngredient(
-      { type: library.type, name, universeId, payload: content ? { [contentKey]: content } : {}, tags: [] },
+      { type: library.type, name, universeId, payload: content ? { [contentKey]: content } : {}, tags: [],
+        ...(relations.length ? { relations } : {}) },
       { silent: true },
     ).catch((err) => { toast.error(err?.message || `Failed to create ${library.singular}`); return null; });
     const joined = created && story
@@ -82,6 +88,7 @@ export default function StoryDraftDrawer({ open, onClose, library, typeMeta, uni
     if (joined) toast.success(story ? `${name} joined ${story.name}` : `${name} saved`);
     setPreview(null);
     setPrompt('');
+    setFamily([]);
     onSaved(created);
   };
 
@@ -113,6 +120,9 @@ export default function StoryDraftDrawer({ open, onClose, library, typeMeta, uni
             {formatCount(prompt.length)} / {formatCount(STORY_DRAFT_LIMITS.prompt)} characters{over ? ': shorten it to send it' : ''}
           </p>
         </div>
+        {library.type === 'character' && <CatalogFamilyPicker items={family} selfName={preview?.name || ''}
+          onAdd={(kind, record) => setFamily((list) => addFamilyItem(list, kind, record))}
+          onRemove={(item) => setFamily((list) => removeFamilyItem(list, item))} />}
         <MusicVideoLlmPicker idPrefix="story-draft" label="Model" value={pick} onChange={changePick}
           emptyProviderOption="Default (active provider)" fallbackName="The active provider" hint={null} />
         <button type="button" onClick={draft} disabled={running || !prompt.trim() || over || !universeId}

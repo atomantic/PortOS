@@ -83,4 +83,15 @@ describe.skipIf(!ready)('catalog stories', () => {
     expect(res.sentPrompt).toContain('Request:\nA rival skater.');
     expect(runPrompt.mock.calls[0][0]).toMatchObject({ prompt: res.sentPrompt, source: 'catalog-story-draft' });
   });
+
+  it('drafts a relative with the picked family as a visible block', async () => {
+    __setStoryDepsForTests({ resolveProvider: async () => ({ provider: { id: 'example-api', enabled: true }, selectedModel: 'example-model' }),
+      runPrompt: async () => ({ text: '{"name":"Example Mother","description":"Red hair."}' }) });
+    const res = await draftStoryMember({ type: 'character', universeId: ids.universe, prompt: 'Her mother.', relations: [{ toId: ids.lead, kind: 'mother-of' }] });
+    const family = res.promptAdditions.find((a) => a.id === 'family');
+    expect(family.text).toBe('- The new character is the mother of Example Lead (character): Tall, red jacket.');
+    expect(res.sentPrompt).toContain(`Family:\n${family.text}`);
+    await expect(draftStoryMember({ type: 'character', prompt: 'x', relations: [{ toId: 'cat-chr-missing', kind: 'father-of' }] }))
+      .rejects.toMatchObject({ status: 404 });
+  });
 });

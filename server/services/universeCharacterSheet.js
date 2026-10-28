@@ -24,6 +24,7 @@ import { universeAestheticLine } from '../lib/universeVisualStyle.js';
 import { applyImageVisualProfile } from './imageGen/visualProfile.js';
 import { resolveUniverseVisualProfile } from '../lib/universeVisualProfile.js';
 import { promptAddition } from '../lib/modelInput.js';
+import { catalogFamilyRenderContext, familyImagesAddition } from './catalogFamily.js';
 import { characterSheetReferenceCandidates, resolveCharacterSheetReferences } from '../lib/characterSheetReferences.js';
 import { enqueueJob, getJob, mediaJobEvents } from './mediaJobQueue/index.js';
 import { buildUniverseRunTag } from './universeRunTag.js';
@@ -405,6 +406,8 @@ export async function buildSheetRenderParams({
   negativesLabel = 'Character sheet negatives',
   referenceCandidates = [],
   sharedIdentity = '',
+  family = { additions: [], candidates: [] },
+  selfName = '',
 }) {
   const hasPromptOverride = typeof options.overridePrompt === 'string' && !!options.overridePrompt.trim();
   const hasNegativeOverride = typeof options.overrideNegativePrompt === 'string' && !!options.overrideNegativePrompt.trim();
@@ -412,6 +415,8 @@ export async function buildSheetRenderParams({
   const identityAddition = !hasPromptOverride && sharedIdentity && !prompt.includes(sharedIdentity)
     ? promptAddition('shared-character-identity', 'Shared facial identity', sharedIdentity) : null;
   if (identityAddition) prompt += `\n\nShared facial identity: ${sharedIdentity}`;
+  const familyAdditions = hasPromptOverride ? [] : family.additions;
+  for (const addition of familyAdditions) prompt += `\n\n${addition.text}`;
   const negativePrompt = hasNegativeOverride ? options.overrideNegativePrompt : built.negativePrompt;
 
   const settings = await getSettings();
@@ -445,6 +450,7 @@ export async function buildSheetRenderParams({
   // sent-prompt record (#11317). A typed override is sent as written.
   const promptAdditions = [
     identityAddition,
+    ...familyAdditions,
     !hasPromptOverride && styleLine && prompt.includes(styleLine.trim()) ? promptAddition(styleChip.id, styleChip.label, styleLine) : null,
     !hasNegativeOverride ? promptAddition('sheet-negatives', negativesLabel, built.negativePrompt) : null,
   ].filter(Boolean);
@@ -483,21 +489,32 @@ export async function buildSheetRenderParams({
       { status: 400, code: 'UNIVERSE_CHARACTER_SHEET_UNSUPPORTED_MODE' },
     );
   }
-  const references = resolveCharacterSheetReferences(referenceCandidates, activeMode, modelId, localModel);
+  // Relatives' images come after the record's own, so its identity keeps priority.
+  const references = resolveCharacterSheetReferences([...referenceCandidates, ...family.candidates], activeMode, modelId, localModel);
   if (references.paths.length) {
     params.referenceImagePaths = references.paths;
     if (!hasPromptOverride) {
-      const text = 'Use the attached canonical character images as the identity reference. Preserve the character’s facial features, proportions, skin, hair, markings and distinctive likeness across every view. Apply the requested age, wardrobe and visual direction while keeping the same character identity.';
-      prompt += `\n\n${text}`;
+      const included = references.images.filter((image) => image.status === 'included');
+      const added = [];
+      if (included.some((image) => !image.relative)) {
+        added.push(promptAddition('character-identity', 'Canonical character likeness', 'Use the attached canonical character images as the identity reference. Preserve the character’s facial features, proportions, skin, hair, markings and distinctive likeness across every view. Apply the requested age, wardrobe and visual direction while keeping the same character identity.'));
+      }
+      added.push(familyImagesAddition(selfName || built.name || 'this character', included.filter((image) => image.relative).map((image) => image.relative)));
+      for (const addition of added.filter(Boolean)) {
+        prompt += `\n\n${addition.text}`;
+        params.promptAdditions = [...(params.promptAdditions || []), addition];
+      }
       params.prompt = prompt;
-      params.promptAdditions = [...(params.promptAdditions || []), promptAddition('character-identity', 'Canonical character likeness', text)];
     }
   }
   params = applyImageVisualProfile(params, visualProfile);
   return { params, prompt: params.prompt, negativePrompt: params.negativePrompt, modelId, activeMode, referenceImages: references.images };
 }
 
+// Relatives' images are optional likeness hints: an unavailable one is shown
+// as not sent but never blocks the record's own render.
 export function assertSheetReferencesAvailable(referenceImages) {
+  referenceImages = referenceImages.filter((ref) => !ref.relative);
   if (referenceImages.some((ref) => ref.status === 'unsupported')) {
     throw new ServerError('Canonical references need FLUX.2 or Qwen Image 2.1 on the local backend, or a cloud image backend. Select a supported sheet render target before generating.', {
       status: 400, code: 'CHARACTER_SHEET_REFERENCES_UNSUPPORTED',
@@ -541,6 +558,8 @@ async function prepareCharacterSheet(universeId, entryId, options) {
     built, options, styleLine: universeAestheticLine(universe), renderPin: recordRenderPin(universe), visualProfile: options.visualProfileOverride === undefined ? universe.visualProfile : options.visualProfileOverride,
     referenceCandidates: characterSheetReferenceCandidates(character, media),
     sharedIdentity: character.visualIdentity,
+    family: await catalogFamilyRenderContext(character.ingredientId, character.name),
+    selfName: character.name,
   });
   return { variant, variantConfig, universe, character, ...sheet };
 }
