@@ -103,11 +103,18 @@ describe.skipIf(!chrome)('Catalog gallery picker touch targets in Chromium', () 
       await tile.hover();
       await page.waitForFunction(bar => getComputedStyle(bar).opacity === '1', await actionBar.elementHandle());
       expect(await actionBar.evaluate(bar => getComputedStyle(bar).opacity)).toBe('1');
+      await tile.getByRole('button', { name: 'Attach' }).click();
+      await page.mouse.move(0, 0);
+      await page.waitForFunction(bar => getComputedStyle(bar).opacity === '0', await actionBar.elementHandle());
+      expect(await actionBar.evaluate(bar => getComputedStyle(bar).opacity)).toBe('0');
       await tile.getByRole('button', { name: 'Attach' }).focus();
       await page.waitForFunction(bar => getComputedStyle(bar).opacity === '1', await actionBar.elementHandle());
       expect(await actionBar.evaluate(bar => getComputedStyle(bar).opacity)).toBe('1');
       await tile.getByRole('button', { name: 'Portrait' }).click();
-      expect(await page.evaluate(() => window.picks)).toEqual([{ filename: 'synthetic-one.png', portrait: true }]);
+      expect(await page.evaluate(() => window.picks)).toEqual([
+        { filename: 'synthetic-one.png', portrait: false },
+        { filename: 'synthetic-one.png', portrait: true },
+      ]);
     } finally { await page.close(); }
   });
 });
