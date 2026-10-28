@@ -14,7 +14,7 @@ describe('a shot\'s Cast guides picker', () => {
     const { rerender } = render(<SceneCastVariant project={project} scene={{ sceneId: 's1' }} onEditLocal={vi.fn()} onSave={onSave} />);
     const member = screen.getByLabelText('Cast guides');
     expect([...member.options].map((o) => o.textContent)).toEqual(['None', 'Example Lead']);
-    fireEvent.change(member, { target: { value: 'cat-chr-x' } });
+    fireEvent.change(member, { target: { value: 'mvc-1' } });
     expect(onSave).toHaveBeenLastCalledWith('s1', { characterVariant: { ingredientId: 'cat-chr-x' } });
 
     const castMedia = { 'cat-chr-x': [{ mediaKey: 'a.png', kind: 'reference', library: { variant: { wardrobeId: 'look-1' } } }] };
@@ -49,6 +49,21 @@ describe('a shot\'s Cast guides picker', () => {
     expect(onSave).toHaveBeenLastCalledWith('s1', { characterVariant: { ingredientId: 'cat-chr-x', era: 'teen' }, frameReferenceIds: null });
     fireEvent.change(screen.getByLabelText('Cast guides'), { target: { value: '' } });
     expect(onSave).toHaveBeenLastCalledWith('s1', { characterVariant: null, frameReferenceIds: null });
+  });
+
+  // Uniquely catches one record cast at two ages collapsing to one option, or the pick ignoring the linked age.
+  it('offers each age of one cast member and starts at its linked age', () => {
+    const onSave = vi.fn();
+    const ages = { concept: { subjects: [
+      { id: 'mvc-a', kind: 'character', name: 'Example Lead (17)', ingredientId: 'cat-chr-x', castForm: { id: 'teen', label: 'Teen', age: 17 } },
+      { id: 'mvc-b', kind: 'character', name: 'Example Lead (7)', ingredientId: 'cat-chr-x', castForm: { id: 'kid', label: 'Kid', age: 7 } },
+    ] } };
+    render(<SceneCastVariant project={ages} scene={{ sceneId: 's1', characterVariant: { ingredientId: 'cat-chr-x', age: 7 } }} onEditLocal={vi.fn()} onSave={onSave} />);
+    const member = screen.getByLabelText('Cast guides');
+    expect([...member.options].map((o) => o.textContent)).toEqual(['None', 'Example Lead (17)', 'Example Lead (7)']);
+    expect(member.value).toBe('mvc-b');
+    fireEvent.change(member, { target: { value: 'mvc-a' } });
+    expect(onSave).toHaveBeenLastCalledWith('s1', { characterVariant: { ingredientId: 'cat-chr-x', age: 17 } });
   });
 
   it('renders nothing when no subject is saved to Casting', () => {

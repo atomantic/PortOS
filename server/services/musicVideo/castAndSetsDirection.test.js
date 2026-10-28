@@ -272,8 +272,7 @@ describe('Cast & Sets direct edits', () => {
     expect(applyCastAndSetsDirectionEdits(direction, { world: { camera: direction.world.camera } }, { sections }).changed).toEqual([]);
   });
 
-  it('refuses a photographic direction, an unknown set, and an edit that empties the protagonist', () => {
-    expect(() => applyCastAndSetsDirectionEdits({ ...direction, medium: undefined }, { world: { camera: 'x' } })).toThrow(/procedural/);
+  it('refuses an unknown set and an edit that empties the protagonist', () => {
     expect(() => applyCastAndSetsDirectionEdits(direction, { sets: [{ id: 'nowhere', imageRole: 'cutout' }] })).toThrow(/Unknown set/);
     const bare = { ...direction, protagonist: { ...direction.protagonist, description: '' } };
     expect(() => applyCastAndSetsDirectionEdits(bare, { protagonist: { construction: '' } })).toThrow(/protagonist/);

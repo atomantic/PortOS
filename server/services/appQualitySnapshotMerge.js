@@ -126,8 +126,7 @@ export async function retireSnapshotMergeCheckouts(app, pr, deps) {
       admit: async () => await ownership()
         ? { fence: { repoPath: app.repoPath, path: tree.path, branch: null } }
         : { result: { removed: false } },
-      // The snapshot PR is merged, so the checkout's ignored validation output is
-      // disposable; only uncommitted or untracked work keeps it.
+      // The removal boundary also checks ignored local content.
       archive: async () => ({ archive: {
         verify: async holder => {
           if (!holder || holder.head !== tree.head || holder.branch || holder.detached !== true) return 'snapshot-checkout-changed';
@@ -136,7 +135,6 @@ export async function retireSnapshotMergeCheckouts(app, pr, deps) {
         },
       } }),
       finish: async (_admitted, archive) => forceRemoveWorktreeDir(app.repoPath, tree.path, {
-        disposableIgnored: true,
         verifyRemoval: async holder => await ownership() ? archive.verify(holder) : 'snapshot-owner-changed',
       }),
     }).catch(() => ({ removed: false }));

@@ -1758,6 +1758,30 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).not.toMatch(/write the completion sentinel — the run is not done/);
     });
 
+    it.each([
+      { isTui: true, reviewerSource: 'inherited', resumed: false },
+      { isTui: true, reviewerSource: 'explicit', resumed: true },
+      { isTui: false, reviewerSource: 'inherited', resumed: false },
+      { isTui: false, reviewerSource: 'explicit', resumed: true },
+    ])('does not claim a local review for merge-only $reviewerSource reviewers (TUI=$isTui, resumed=$resumed)', ({ isTui, reviewerSource, resumed }) => {
+      const metadata = { openPR: true, prCompletion: 'merge-on-green', reviewLoop: false,
+        ...(reviewerSource === 'explicit' ? { reviewers: ['codex'], usernames: ['alice'] } : {}),
+        ...(resumed ? { resumedFromAgentId: 'agent-prior' } : {}) };
+      const defaults = reviewerSource === 'inherited' ? { reviewers: ['codex'], usernames: ['alice'] } : undefined;
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata }), '/r',
+        { branchName: 'b', worktreePath: '/tmp/wt', baseBranch: 'main', existingBranch: resumed },
+        { isTui, providerId: isTui ? 'codex-tui' : 'codex', providerCommand: 'codex',
+          defaultReviewers: defaults?.reviewers, codeReviewDefaults: defaults });
+      const gate = prompt.slice(prompt.indexOf('## Merge Gate'));
+
+      expect(prompt).not.toContain('### Local Review Before Opening the PR/MR');
+      expect(gate).toContain('No code review was requested for this task');
+      expect(gate).not.toContain('has completed; no PR-side code reviewer');
+      expect(gate).not.toContain('Required local-review merge gate');
+      expect(gate).toContain('gh pr merge "$PR_URL" --merge --match-head-commit <verified-head>');
+    });
+
     it('inlines the slashdo CLI-reviewer recipe into the inline loop, as the follow-up gets', () => {
       // Without it the agent only sees "invoke that CLI" and reverse-engineers
       // the invocation — the failure that had a codex agent burn a dozen

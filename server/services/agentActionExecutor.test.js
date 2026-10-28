@@ -1,9 +1,8 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { mockScheduleEvents, mockMoltbookClient, mockMoltworldClient } = vi.hoisted(() => {
-  const { EventEmitter } = require('events');
+const { executorRegistration, mockMoltbookClient, mockMoltworldClient } = vi.hoisted(() => {
   return {
-    mockScheduleEvents: new EventEmitter(),
+    executorRegistration: { execute: null },
     mockMoltbookClient: {
       heartbeat: vi.fn(),
       createPost: vi.fn(),
@@ -26,7 +25,7 @@ const { mockScheduleEvents, mockMoltbookClient, mockMoltworldClient } = vi.hoist
 });
 
 vi.mock('./automationScheduler.js', () => ({
-  scheduleEvents: mockScheduleEvents
+  registerActionExecutor: (execute) => { executorRegistration.execute = execute; }
 }));
 
 vi.mock('./agentActivity.js', () => ({
@@ -96,7 +95,6 @@ const makeAgent = (overrides = {}) => ({
 describe('agentActionExecutor', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockScheduleEvents.removeAllListeners();
     // clearAllMocks keeps a previous mockRejectedValue. Comment paths must
     // pass the provider check unless a case opts out.
     assertMoltbookCommentProvider.mockResolvedValue(undefined);
@@ -106,18 +104,14 @@ describe('agentActionExecutor', () => {
     init();
   });
 
-  afterEach(() => {
-    mockScheduleEvents.removeAllListeners();
-  });
-
   // ===========================================================================
-  // init() event handler — account/agent validation
+  // Registered executor — account/agent validation
   // ===========================================================================
-  describe('init — execute event handler', () => {
+  describe('registered executor', () => {
     it('should log failure when account not found', async () => {
       platformAccounts.getAccountWithCredentials.mockResolvedValue(null);
 
-      mockScheduleEvents.emit('execute', {
+      await executorRegistration.execute({
         scheduleId: 's1',
         schedule: makeSchedule('heartbeat'),
         timestamp: new Date().toISOString()
@@ -136,7 +130,7 @@ describe('agentActionExecutor', () => {
     it('should skip when account is not active', async () => {
       platformAccounts.getAccountWithCredentials.mockResolvedValue({ ...makeAccount(), status: 'suspended' });
 
-      mockScheduleEvents.emit('execute', {
+      await executorRegistration.execute({
         scheduleId: 's1',
         schedule: makeSchedule('heartbeat'),
         timestamp: new Date().toISOString()
@@ -152,18 +146,20 @@ describe('agentActionExecutor', () => {
       });
     });
 
-    it('should skip when agent not found', async () => {
+    it('should record failure when agent not found', async () => {
       platformAccounts.getAccountWithCredentials.mockResolvedValue(makeAccount());
       agentPersonalities.getAgentById.mockResolvedValue(null);
 
-      mockScheduleEvents.emit('execute', {
+      await executorRegistration.execute({
         scheduleId: 's1',
         schedule: makeSchedule('heartbeat'),
         timestamp: new Date().toISOString()
       });
 
       await vi.waitFor(() => {
-        expect(agentPersonalities.getAgentById).toHaveBeenCalledWith('agent-1');
+        expect(agentActivity.logActivity).toHaveBeenCalledWith(
+          expect.objectContaining({ status: 'failed', error: 'Agent not found' })
+        );
       });
     });
 
@@ -171,7 +167,7 @@ describe('agentActionExecutor', () => {
       platformAccounts.getAccountWithCredentials.mockResolvedValue(makeAccount());
       agentPersonalities.getAgentById.mockResolvedValue(makeAgent({ enabled: false }));
 
-      mockScheduleEvents.emit('execute', {
+      await executorRegistration.execute({
         scheduleId: 's1',
         schedule: makeSchedule('heartbeat'),
         timestamp: new Date().toISOString()
@@ -192,7 +188,7 @@ describe('agentActionExecutor', () => {
       agentPersonalities.getAgentById.mockResolvedValue(makeAgent());
       mockMoltbookClient.heartbeat.mockResolvedValue({ browsed: 5 });
 
-      mockScheduleEvents.emit('execute', {
+      await executorRegistration.execute({
         scheduleId: 's1',
         schedule: makeSchedule('heartbeat', { engageChance: 0.5 }),
         timestamp: new Date().toISOString()
@@ -214,7 +210,7 @@ describe('agentActionExecutor', () => {
       agentPersonalities.getAgentById.mockResolvedValue(makeAgent());
       mockMoltbookClient.heartbeat.mockRejectedValue(new Error('API down'));
 
-      mockScheduleEvents.emit('execute', {
+      await executorRegistration.execute({
         scheduleId: 's1',
         schedule: makeSchedule('heartbeat'),
         timestamp: new Date().toISOString()
@@ -240,7 +236,7 @@ describe('agentActionExecutor', () => {
     it('should call client.heartbeat with params', async () => {
       mockMoltbookClient.heartbeat.mockResolvedValue({ browsed: 3, engaged: 1 });
 
-      mockScheduleEvents.emit('execute', {
+      await executorRegistration.execute({
         scheduleId: 's1',
         schedule: makeSchedule('heartbeat', { engageChance: 0.5, maxEngagements: 2 }),
         timestamp: new Date().toISOString()
@@ -257,7 +253,7 @@ describe('agentActionExecutor', () => {
     it('should use default params when none provided', async () => {
       mockMoltbookClient.heartbeat.mockResolvedValue({ browsed: 1 });
 
-      mockScheduleEvents.emit('execute', {
+      await executorRegistration.execute({
         scheduleId: 's1',
         schedule: makeSchedule('heartbeat', {}),
         timestamp: new Date().toISOString()
@@ -281,7 +277,7 @@ describe('agentActionExecutor', () => {
     it('should create post with provided title and content', async () => {
       mockMoltbookClient.createPost.mockResolvedValue({ post: { id: 'p1' } });
 
-      mockScheduleEvents.emit('execute', {
+      await executorRegistration.execute({
         scheduleId: 's1',
         schedule: makeSchedule('post', { submolt: 'tech', title: 'My Title', content: 'My Content' }),
         timestamp: new Date().toISOString()
@@ -296,7 +292,7 @@ describe('agentActionExecutor', () => {
     it('should AI-generate content when title/content missing', async () => {
       mockMoltbookClient.createPost.mockResolvedValue({ post: { id: 'p2' } });
 
-      mockScheduleEvents.emit('execute', {
+      await executorRegistration.execute({
         scheduleId: 's1',
         schedule: makeSchedule('post', { submolt: 'general' }),
         timestamp: new Date().toISOString()
@@ -309,7 +305,7 @@ describe('agentActionExecutor', () => {
     });
 
     it('should throw when no content and aiGenerate is false', async () => {
-      mockScheduleEvents.emit('execute', {
+      await executorRegistration.execute({
         scheduleId: 's1',
         schedule: makeSchedule('post', { aiGenerate: false }),
         timestamp: new Date().toISOString()
@@ -335,7 +331,7 @@ describe('agentActionExecutor', () => {
     it('should upvote a specific post', async () => {
       mockMoltbookClient.upvote.mockResolvedValue({});
 
-      mockScheduleEvents.emit('execute', {
+      await executorRegistration.execute({
         scheduleId: 's1',
         schedule: makeSchedule('vote', { postId: 'p1', direction: 'up' }),
         timestamp: new Date().toISOString()
@@ -349,7 +345,7 @@ describe('agentActionExecutor', () => {
     it('should downvote when direction is down', async () => {
       mockMoltbookClient.downvote.mockResolvedValue({});
 
-      mockScheduleEvents.emit('execute', {
+      await executorRegistration.execute({
         scheduleId: 's1',
         schedule: makeSchedule('vote', { postId: 'p1', direction: 'down' }),
         timestamp: new Date().toISOString()
@@ -363,7 +359,7 @@ describe('agentActionExecutor', () => {
     it('should upvote comment when commentId provided', async () => {
       mockMoltbookClient.upvoteComment.mockResolvedValue({});
 
-      mockScheduleEvents.emit('execute', {
+      await executorRegistration.execute({
         scheduleId: 's1',
         schedule: makeSchedule('vote', { commentId: 'c1' }),
         timestamp: new Date().toISOString()
@@ -378,7 +374,7 @@ describe('agentActionExecutor', () => {
       mockMoltbookClient.getFeed.mockResolvedValue({ posts: [{ id: 'p1', title: 'Post 1' }] });
       mockMoltbookClient.upvote.mockResolvedValue({});
 
-      mockScheduleEvents.emit('execute', {
+      await executorRegistration.execute({
         scheduleId: 's1',
         schedule: makeSchedule('vote', {}),
         timestamp: new Date().toISOString()
@@ -393,7 +389,7 @@ describe('agentActionExecutor', () => {
     it('should return none when feed is empty', async () => {
       mockMoltbookClient.getFeed.mockResolvedValue({ posts: [] });
 
-      mockScheduleEvents.emit('execute', {
+      await executorRegistration.execute({
         scheduleId: 's1',
         schedule: makeSchedule('vote', {}),
         timestamp: new Date().toISOString()
@@ -422,7 +418,7 @@ describe('agentActionExecutor', () => {
       ]);
       mockMoltbookClient.createComment.mockResolvedValue({ id: 'c1' });
 
-      mockScheduleEvents.emit('execute', {
+      await executorRegistration.execute({
         scheduleId: 's1',
         schedule: makeSchedule('comment', {}),
         timestamp: new Date().toISOString()
@@ -438,7 +434,7 @@ describe('agentActionExecutor', () => {
     it('should return none when no relevant posts found', async () => {
       findReplyOpportunities.mockResolvedValue([]);
 
-      mockScheduleEvents.emit('execute', {
+      await executorRegistration.execute({
         scheduleId: 's1',
         schedule: makeSchedule('comment', {}),
         timestamp: new Date().toISOString()
@@ -459,7 +455,7 @@ describe('agentActionExecutor', () => {
       mockMoltbookClient.getComments.mockResolvedValue({ comments: [{ id: 'parent-1', content: 'Parent' }] });
       mockMoltbookClient.replyToComment.mockResolvedValue({ id: 'c2' });
 
-      mockScheduleEvents.emit('execute', {
+      await executorRegistration.execute({
         scheduleId: 's1',
         schedule: makeSchedule('comment', { postId: 'p1', parentId: 'parent-1' }),
         timestamp: new Date().toISOString()
@@ -478,7 +474,7 @@ describe('agentActionExecutor', () => {
       });
       assertMoltbookCommentProvider.mockRejectedValue(refusal);
 
-      mockScheduleEvents.emit('execute', {
+      await executorRegistration.execute({
         scheduleId: 's1',
         schedule: makeSchedule('comment', {}),
         timestamp: new Date().toISOString()
@@ -511,7 +507,7 @@ describe('agentActionExecutor', () => {
         code: 'untrusted-content-provider-unavailable'
       }));
 
-      mockScheduleEvents.emit('execute', {
+      await executorRegistration.execute({
         scheduleId: 's1',
         schedule: makeSchedule('engage', { maxComments: 1, maxVotes: 3 }),
         timestamp: new Date().toISOString()
@@ -533,7 +529,7 @@ describe('agentActionExecutor', () => {
         code: 'security-guard-classified-malicious'
       }));
 
-      mockScheduleEvents.emit('execute', {
+      await executorRegistration.execute({
         scheduleId: 's1',
         schedule: makeSchedule('monitor', { maxReplies: 2 }),
         timestamp: new Date().toISOString()
@@ -555,7 +551,7 @@ describe('agentActionExecutor', () => {
     it('should fail with unknown action error', async () => {
       platformAccounts.getAccountWithCredentials.mockResolvedValue(makeAccount());
       agentPersonalities.getAgentById.mockResolvedValue(makeAgent());
-      mockScheduleEvents.emit('execute', {
+      await executorRegistration.execute({
         scheduleId: 's1',
         schedule: makeSchedule('invalid_action'),
         timestamp: new Date().toISOString()
@@ -583,7 +579,7 @@ describe('agentActionExecutor', () => {
     it('should execute mw_heartbeat', async () => {
       mockMoltworldClient.joinWorld.mockResolvedValue({ nearby: [{ name: 'bot2' }] });
 
-      mockScheduleEvents.emit('execute', {
+      await executorRegistration.execute({
         scheduleId: 's1',
         schedule: { ...makeSchedule('mw_heartbeat', { x: 10, y: 20 }), accountId: 'acc-1', agentId: 'agent-1' },
         timestamp: new Date().toISOString()
@@ -599,7 +595,7 @@ describe('agentActionExecutor', () => {
     it('should execute mw_build', async () => {
       mockMoltworldClient.build.mockResolvedValue({ built: true });
 
-      mockScheduleEvents.emit('execute', {
+      await executorRegistration.execute({
         scheduleId: 's1',
         schedule: { ...makeSchedule('mw_build', { x: 5, y: 5, z: 1, type: 'wood' }), accountId: 'acc-1', agentId: 'agent-1' },
         timestamp: new Date().toISOString()
@@ -615,7 +611,7 @@ describe('agentActionExecutor', () => {
     it('should execute mw_say', async () => {
       mockMoltworldClient.joinWorld.mockResolvedValue({ nearby: [] });
 
-      mockScheduleEvents.emit('execute', {
+      await executorRegistration.execute({
         scheduleId: 's1',
         schedule: { ...makeSchedule('mw_say', { message: 'Hello world', name: 'Bot' }), accountId: 'acc-1', agentId: 'agent-1' },
         timestamp: new Date().toISOString()
@@ -631,7 +627,7 @@ describe('agentActionExecutor', () => {
     it('should execute mw_think', async () => {
       mockMoltworldClient.think.mockResolvedValue({});
 
-      mockScheduleEvents.emit('execute', {
+      await executorRegistration.execute({
         scheduleId: 's1',
         schedule: { ...makeSchedule('mw_think', { thought: 'Deep thoughts' }), accountId: 'acc-1', agentId: 'agent-1' },
         timestamp: new Date().toISOString()
@@ -645,7 +641,7 @@ describe('agentActionExecutor', () => {
     it('should execute mw_explore with random coords when none provided', async () => {
       mockMoltworldClient.joinWorld.mockResolvedValue({ nearby: [] });
 
-      mockScheduleEvents.emit('execute', {
+      await executorRegistration.execute({
         scheduleId: 's1',
         schedule: { ...makeSchedule('mw_explore', {}), accountId: 'acc-1', agentId: 'agent-1' },
         timestamp: new Date().toISOString()
@@ -662,7 +658,7 @@ describe('agentActionExecutor', () => {
     });
 
     it('should fail for unknown moltworld action', async () => {
-      mockScheduleEvents.emit('execute', {
+      await executorRegistration.execute({
         scheduleId: 's1',
         schedule: { ...makeSchedule('mw_unknown', {}), accountId: 'acc-1', agentId: 'agent-1' },
         timestamp: new Date().toISOString()
@@ -682,7 +678,7 @@ describe('agentActionExecutor', () => {
       mockMoltworldClient.joinWorld.mockResolvedValue({ nearby: [] });
       mockMoltworldClient.build.mockResolvedValue({ built: true });
 
-      mockScheduleEvents.emit('execute', {
+      await executorRegistration.execute({
         scheduleId: 's1',
         schedule: { ...makeSchedule('mw_interact', { x: 1, y: 2, buildType: 'stone', thinking: 'Building...' }), accountId: 'acc-1', agentId: 'agent-1' },
         timestamp: new Date().toISOString()

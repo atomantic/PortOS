@@ -301,7 +301,10 @@ describe.skipIf(!ready)('restore older database schema', { timeout: RESTORE_CASE
   }
 
   it('restores a real pre-FK dump, discards newer rows, and runs schema repair and ordered migrations', async () => {
+    const { CHANGE_TOKEN_DOMAINS, getChangeToken } = await import('./changeToken.js');
+    const beforeTokens = Object.fromEntries(CHANGE_TOKEN_DOMAINS.map((domain) => [domain, getChangeToken(domain)]));
     expectRestoreOk(await restore(), false);
+    for (const domain of CHANGE_TOKEN_DOMAINS) expect(getChangeToken(domain)).toBeGreaterThan(beforeTokens[domain]);
     expect(rewindPostgresSyncCursors).toHaveBeenCalledOnce();
     const feedAfter = await feedSequenceValues();
     for (const [name, value] of Object.entries(feedBefore)) {

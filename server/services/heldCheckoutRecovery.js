@@ -39,9 +39,7 @@ import { listWorktrees, forceRemoveWorktreeDir, deleteCompletedLocalBranch, clas
 import { getDefaultBranch, getStatusPorcelain, hasBranchMergeEvidence } from './git.js';
 import { withClaimOwnershipLock, readClaimOwnershipAgents, retireWithUnlockedArchive } from './cosClaimOwnership.js';
 
-/** Ignored payload must be disposable or match bytes already durably preserved.
- * Only a checkout whose commits are not integrated needs this: a merged or
- * forge-integrated checkout treats ignored build/cache output as disposable. */
+/** Ignored payload must be disposable or match bytes already durably preserved. */
 export async function releaseCheckoutWithoutArchive(context, prepare) {
   const prepared = await prepare();
   await assertNoUniqueIgnoredCheckoutPayload(context.path, execGit, context.ignoredPaths, context.preservedFiles, context.repoPath);
@@ -1124,8 +1122,8 @@ async function listedContentEntry(path, listed, work) {
   }
 }
 
-// `excludeIgnored` is for exact-delivery review: the forge holds the merged
-// work, so ignored build/cache output is disposable and neither hashed nor bound.
+// Exact-delivery review excludes ignored files from its digest; the removal
+// boundary independently checks them before any checkout is deleted.
 async function snapshotContent(path, work = archiveWork(), allowDisposableCache = false, excludeIgnored = false) {
   work.check();
   // These reads are independent and each Git spawn is mostly launch latency, so
@@ -1649,7 +1647,7 @@ async function retireHeldCheckout({ repoPath, release, review }, opts = {}) {
   if (branch === defaultBranch) return { ok: false, reason: 'protected-branch' };
 
   const { retainReleaseSynchronizationReview } = await import('./releaseSynchronization.js');
-  const retainedReview = await retainReleaseSynchronizationReview({ ...release,
+  const retainedReview = await retainReleaseSynchronizationReview({ ...release, repoPath,
     checkoutIdentity: release.checkoutIdentity || await readRetirementCheckoutIdentity(release.path) }).catch(() => false);
   if (!retainedReview) return { ok: false, reason: 'release-sync-local-review-unretained' };
 
@@ -1706,8 +1704,7 @@ async function retireHeldCheckout({ repoPath, release, review }, opts = {}) {
           if (!mergedNow && !review) throw new Error('not-merged-on-recheck');
           return null;
         };
-        if (integratedRetirement(review, reviewed)) await recheck();
-        else await releaseCheckoutWithoutArchive({ repoPath, path: tree.path, branch,
+        await releaseCheckoutWithoutArchive({ repoPath, path: tree.path, branch,
           preservedFiles: preservedSupersession ? reviewed.review.preservedSource.files : [] }, recheck);
         return { archive: { disposable: true } };
       } catch (error) {
@@ -1723,11 +1720,6 @@ async function retireHeldCheckout({ repoPath, release, review }, opts = {}) {
     },
   });
 }
-
-// An unreviewed retirement already required local merge evidence; a reviewed
-// one is integrated only when the forge comparison says so. Supersession keeps
-// its ignored-payload content check: those commits may be the only copy.
-const integratedRetirement = (review, reviewed) => !review || reviewed?.review.comparison.disposition === 'integrated';
 
 /** The merged PR's required CI is the validation record for its exact head. */
 export const forgeValidationEvidence = review => (review && !review.kind && review.comparison?.disposition === 'integrated'
@@ -1784,7 +1776,6 @@ async function finishHeldCheckoutRetirement({ repoPath, release, review, reviewe
   };
   const removal = await forceRemoveWorktreeDir(repoPath, tree.path, {
     label: '🧹 held-checkout recovery: remove checkout', log: 'all', verifyRemoval,
-    disposableIgnored: integratedRetirement(review, reviewed),
     preservedFiles: acceptedPreservedSupersession(review, reviewed?.review) ? reviewed.review.preservedSource.files : [],
     beforeMutation: async () => {
       await opts.beforeMutation?.();

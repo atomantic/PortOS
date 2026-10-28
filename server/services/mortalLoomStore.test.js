@@ -1173,3 +1173,16 @@ describe('overview invalidation from MortalLoom', () => {
     }
   });
 });
+
+
+it('atomically guards dated event edits and deletes after a date move while preserving ordinary ID callers', async () => {
+  let persisted = { alcoholDrinks: [{ id: 'target', date: '2024-06-02', name: 'Example' }] };
+  readFileMock.mockImplementation(async () => JSON.stringify(persisted));
+  writeFileMock.mockImplementation(async (_path, content) => { persisted = JSON.parse(content); });
+  expect(await store.mlPatchById('alcoholDrinks', 'target', { name: 'Wrong' }, { expectedDate: '2024-06-01' })).toBeNull();
+  expect(await store.mlRemoveById('alcoholDrinks', 'target', { expectedDate: '2024-06-01' })).toBeNull();
+  expect(persisted.alcoholDrinks).toEqual([{ id: 'target', date: '2024-06-02', name: 'Example' }]);
+  expect(await store.mlPatchById('alcoholDrinks', 'target', { name: 'Updated' }, { expectedDate: '2024-06-02' })).toMatchObject({ name: 'Updated' });
+  expect(await store.mlRemoveById('alcoholDrinks', 'target')).toMatchObject({ id: 'target', name: 'Updated' });
+  expect(persisted.alcoholDrinks).toEqual([]);
+});

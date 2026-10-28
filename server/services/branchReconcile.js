@@ -1391,8 +1391,7 @@ async function retireBranch(repoPath, b, opts) {
       const prepared = gated.prepare ? await gated.prepare() : null;
       if (prepared?.error) return { result: { ok: false, reason: prepared.error } };
       if (!gated.archiveTree) return { archive: { prepared, preservation: prepared?.preservation || null } };
-      // A merged checkout's ignored build/cache output is disposable; removal
-      // re-proves merge evidence, ownership and a clean tree.
+      // Removal re-proves merge evidence and ownership, and checks ignored content.
       const status = await execGit(['status', '--porcelain'], gated.archiveTree.path).then(r => r.stdout, () => null);
       if (status === null) return { result: { ok: false, reason: 'worktree-status-unavailable' } };
       return { archive: { prepared, preservation: null } };
@@ -1565,8 +1564,8 @@ async function finishBranchRetirement(repoPath, { b, expectedHead, readPolicyHol
       if (mergedRetirement && !await hasBranchMergeEvidence(repoPath, expectedHead, mergeTarget).catch(() => false)) return 'not-merged-on-recheck';
       return preservation ? preservation.verify(holder) : null;
     };
-    // Superseded retirement keeps the ignored-payload check: its commits are not on the default branch.
-    removal = await forceRemoveWorktreeDir(repoPath, b.worktreePath, { label, log: 'all', verifyRemoval, disposableIgnored: mergedRetirement === true });
+    // Merge evidence does not cover ignored local content; removal checks it separately.
+    removal = await forceRemoveWorktreeDir(repoPath, b.worktreePath, { label, log: 'all', verifyRemoval });
     // The branch is still checked out by a surviving worktree: deleting it would
     // fail, and reporting success would mark the branch reconciled while it is held.
     if (!removal.removed) return { ok: false, reason: removal.reason || 'worktree-remove-failed' };
@@ -1779,7 +1778,7 @@ async function reapDetachedWorktrees(repoPath, defaultBranch, detached, { active
         if (initialHold) return { result: { removed: false, reason: initialHold } };
         return { fence: { repoPath, path: tree.path }, current };
       },
-      // Its HEAD is on the default branch, so ignored build/cache output is disposable.
+      // Removal independently checks ignored local content.
       archive: async ({ current }) => ({ archive: {
         verify: async holder => {
           if (!holder || holder.head !== current.head || holder.branch) return 'worktree-holder-changed';
@@ -1791,7 +1790,7 @@ async function reapDetachedWorktrees(repoPath, defaultBranch, detached, { active
       finish: async (_admitted, preservation) => {
         const checkoutIdentity = await readRetirementCheckoutIdentity(tree.path).catch(() => null);
         const removed = await forceRemoveWorktreeDir(repoPath, tree.path, {
-          label: '🔀 branch-reconcile: remove detached worktree', log: 'all', disposableIgnored: true,
+          label: '🔀 branch-reconcile: remove detached worktree', log: 'all',
           verifyRemoval: async holder => await verifyRemoval(holder) || await preservation.verify(holder),
         });
         if (!removed.removed) return removed;

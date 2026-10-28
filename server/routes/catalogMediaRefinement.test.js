@@ -74,6 +74,24 @@ describe('reference image refinement boundary', () => {
       initImageFile: 'source.png', referenceImageFiles: ['teen-guide.png'], promptAdditions: params.promptAdditions })).sentPrompt)
       .toBe(preview.body.sentPrompt);
   });
+  // Catches a form's free-text description (with its everyday outfit) being
+  // sent beside a look's outfit, so the refine fights the requested clothes.
+  it('refines a look image in the look’s outfit only, keeping the form’s age and shared identity', async () => {
+    state.get.mockResolvedValue({ id: 'cast', name: 'Example performer', type: 'character', payload: {
+      age: '27', physicalDescription: 'adult short bob and dark coat', visualIdentity: 'green eyes, freckles, distinctive nose',
+      forms: [{ id: 'teen', label: 'Teen', age: '17', description: 'long waves and a period ringer shirt' }],
+      wardrobes: [{ id: 'wd-gala', name: 'Gala', description: 'floor-length emerald gown' }],
+    } });
+    state.media.mockResolvedValue([{ mediaKey: 'look.png', kind: 'reference', role: 'look:wd-gala', library: { variant: { formId: 'teen' } } }]);
+    const look = { mediaKey: 'look.png', kind: 'reference', feedback: 'Fix the face.' };
+    const preview = await request(app).post('/ingredients/cast/media/refine/compose').send(look);
+    expect(preview.status, JSON.stringify(preview.body)).toBe(200);
+    expect(preview.body.sentPrompt).toContain('floor-length emerald gown');
+    expect(preview.body.sentPrompt).toContain('Age: 17');
+    expect(preview.body.sentPrompt).toContain('green eyes, freckles, distinctive nose');
+    expect(preview.body.sentPrompt).not.toContain('period ringer shirt');
+    expect(preview.body.sentPrompt).not.toContain('dark coat');
+  });
   it('refuses invalid guidance, unattached assets and undescribed ages before enqueueing', async () => {
     for (const feedback of ['', '   ', 'x'.repeat(2001), 'bad\0input']) {
       expect((await request(app).post('/ingredients/cast/media/refine').send({ ...input, feedback })).status).toBe(400);

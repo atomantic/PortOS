@@ -276,9 +276,19 @@ export const catalogIngredientCreateSchema = z.object({
 
 // Casting / Environments / Objects story filters and New from prompt.
 const storyKind = z.enum(['storyboard', 'music-video', 'series']);
-export const catalogStoryListQuerySchema = z.object({ type: z.enum(['character', 'place', 'object']) }).strict();
+export const catalogStoryListQuerySchema = z.object({ type: z.enum(['character', 'place', 'object']).optional() }).strict();
 export const catalogStoryJoinSchema = z.object({ ingredientId: z.string().trim().min(1).max(128) }).strict();
 export const catalogStoryParamsSchema = z.object({ kind: storyKind, id: z.string().trim().min(1).max(120) }).strict();
+export const catalogVideoSubjectsQuerySchema = z.object({ type: z.enum(['character', 'place', 'object']).optional() }).strict();
+export const catalogVideoSubjectLinksSchema = z.object({
+  links: z.array(z.object({
+    subjectId: z.string().trim().min(1).max(64),
+    ingredientId: z.string().trim().min(1).max(128).nullable(),
+    formId: z.string().regex(FORM_ID_PATTERN).optional(),
+    // Replace the subject's description with the catalog's appearance text.
+    useCatalogText: z.boolean().optional(),
+  }).strict()).min(1).max(24),
+}).strict();
 export const catalogStoryDraftSchema = z.object({
   type: z.enum(['character', 'place', 'object']),
   universeId: z.string().trim().max(120).optional().default(''),
@@ -659,6 +669,8 @@ export const catalogMusicVideoImportSchema = z.object({
     subjectId: z.string().min(1).max(64),
     action: z.enum(['create', 'link', 'local']),
     ingredientId: z.string().min(1).max(128).optional(),
+    // The linked record's age or look the subject shows, from the preview.
+    formId: z.string().min(1).max(128).optional(),
   }).strict().refine((s) => s.action !== 'link' || s.ingredientId, { message: 'link needs an ingredientId' })).min(1).max(2000),
 }).strict();
 

@@ -32,14 +32,14 @@
  * get a 403. The default flips in a later release once peers have upgraded.
  *
  * `alwaysEnforce` opts a route OUT of that ramp: a denial is a 403 whatever the
- * setting says. It exists for the PII snapshot categories, which root
- * `AGENTS.md` forbids on the federation layer at all — the ramp protects
- * creative-work sync from breaking mid-upgrade, and no compatibility argument
- * covers shipping an identity record to a host we cannot name.
+ * setting says. Personal snapshot categories, including brain and memory,
+ * always honor the configured peer/category audience. The ramp remains for
+ * creative-work sync between independently upgraded peers.
  */
 import { ServerError } from '../../lib/errorHandler.js';
 import { findPeerById, peerAllowsOutbound, peerOutboundEligible, peerAllowsCategoryPull, peerHasCategory } from './peerSyncShared.js';
 import { getSettings } from '../settings.js';
+import { getPeers } from '../instances.js';
 import { UNKNOWN_INSTANCE_ID } from '../instanceIdentity.js';
 
 // Lower-cased because Node/Express normalize incoming header names. The
@@ -128,11 +128,11 @@ async function strictPullAuthorizationEnabled() {
 
 // Throttle key space is shared by the "served anyway" and "refused" lines, so
 // a caller that trips both still gets one of each (distinct prefixes).
-function logOnce(key, message) {
+function logOnce(key, message, log = console.warn) {
   if (warnedCallers.has(key)) return;
   if (warnedCallers.size >= WARNED_CALLERS_MAX) warnedCallers.clear();
   warnedCallers.add(key);
-  console.warn(message);
+  log(message);
 }
 
 function describeCaller(decision) {
@@ -147,7 +147,7 @@ function warnOnce(decision, route) {
 
 function refuseOnce(decision, route) {
   const key = decision.callerId || PULL_DENY_UNIDENTIFIED;
-  logOnce(`deny:${key}`, `🔒 Refused peer-sync ${route} for ${describeCaller(decision)} (${decision.reason}) — this data only federates to a configured, outbound-allowed peer`);
+  logOnce(`deny:${key}`, `🔒 Refused peer-sync ${route} for ${describeCaller(decision)} (${decision.reason}) — this data only federates to a configured, outbound-allowed peer`, console.log);
 }
 
 // `severity: 'warning'` suppresses `asyncHandler`'s generic `❌ Route error`
@@ -171,10 +171,21 @@ const pullForbidden = (decision) => new ServerError('peer not authorized for thi
  * `federation.strictPullAuthorization` is on; otherwise serves the request and
  * warns at most once per caller per boot.
  *
+ * `allowOperator` preserves local/operator reads on routes adopting enforcement;
+ * scoped credentials always remain subject to their peer sharing settings.
  * Returns the decision so a caller can branch further if it ever needs to.
  */
-export async function authorizePeerPull(req, { recordKind = null, syncCategory = null, route, alwaysEnforce = false } = {}) {
-  const decision = await decidePeerPull({ callerId: readCallerInstanceId(req), recordKind, syncCategory });
+export async function authorizePeerPull(req, { recordKind = null, syncCategory = null, route, alwaysEnforce = false, allowOperator = false } = {}) {
+  if (allowOperator && req?.portosAuthContext && req.portosAuthContext.method !== 'peer') {
+    const { requestHasHostControl } = await import('../authGate.js');
+    if (requestHasHostControl(req)) return { allowed: true, reason: null, peer: null, callerId: null };
+  }
+  // Auth context uses the registry id, while sharing predicates use instanceId.
+  // A removed or unidentified authenticated peer never falls back to the header.
+  const callerId = req?.portosAuthContext?.method === 'peer'
+    ? (await getPeers()).find((peer) => peer.id && peer.id === req.portosAuthContext.peerId)?.instanceId ?? null
+    : readCallerInstanceId(req);
+  const decision = await decidePeerPull({ callerId, recordKind, syncCategory });
   if (decision.allowed) return decision;
   const label = route || 'pull';
   // Both ways of reaching a 403 refuse for the same reason, so both log the same

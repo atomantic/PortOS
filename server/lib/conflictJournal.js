@@ -40,6 +40,7 @@ import { PATHS, atomicWrite, readJSONFileStrict, ensureDir } from './fileUtils.j
 import { createCollectionStore } from './collectionStore.js';
 import { canonicalStringify, isPlainObject } from './objects.js';
 import { sanitizeRecordForWire, stripMusicVideoLocalRenderPins } from './syncWire.js';
+import { SUBMISSION_FIELDS as ARTIST_SUBMISSION_FIELDS } from './artistLimits.js';
 
 const JOURNAL_TYPE_SCHEMA_VERSION = 1;
 const BASE_HASH_FILE = () => join(PATHS.data, 'sharing', 'sync_base_hashes.json');
@@ -132,6 +133,11 @@ const HASH_FIELDS = Object.freeze({
     3: Object.freeze(['chiptuneScore', 'chiptunePrompt']),
     4: Object.freeze(['concept']),
     7: Object.freeze(['waveSketch', 'waveSketchPrompt']),
+  }),
+  // v2: the press & submission profile (credit name, bios, statements, links),
+  // matching PORTOS_SCHEMA_VERSIONS.artists.
+  artist: Object.freeze({
+    2: ARTIST_SUBMISSION_FIELDS,
   }),
 });
 
@@ -499,7 +505,7 @@ export const RESTORABLE_FIELDS = Object.freeze({
   // LWW-overwritten whole (no field-union like mediaCollection's items), so it
   // is hashed in full by contentHashForRecord — no scalar-narrowing branch.
   author: ['name', 'writingStyle', 'bio', 'physicalDescription', 'headshotStyle', 'headshotImageUrl'],
-  artist: ['name', 'genre', 'bio', 'musicalStyle', 'physicalDescription', 'portraitStyle', 'portraitImageUrl'],
+  artist: ['name', 'genre', 'bio', 'musicalStyle', 'physicalDescription', 'portraitStyle', 'portraitImageUrl', ...ARTIST_SUBMISSION_FIELDS],
   album: ['title', 'artistId', 'artist', 'description', 'genre', 'releaseYear', 'coverImageUrl', 'trackIds'],
   // `renders` IS restorable (a conflict restore must bring back the local render
   // history) but is EXCLUDED FROM THE CONTENT HASH — see HASH_EXCLUDED_FIELDS for

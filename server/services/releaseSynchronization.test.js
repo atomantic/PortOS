@@ -1,6 +1,7 @@
 import { afterAll, expect, it, vi } from 'vitest';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { lazyTempDataRoot, makePathsProxy, cleanupTempDataRoots } from '../lib/mockPathsDataRoot.js';
+import { retirementCheckoutIdentityFromPointer } from '../lib/retirementCheckoutObservation.js';
 
 vi.mock('../lib/fileUtils.js', async original => makePathsProxy(await original(), { dataRoot: lazyTempDataRoot('release-sync-workflow-') }));
 vi.mock('./cosState.js', () => ({ loadState: async () => ({ agents: {} }), withStateLock: createFileWriteQueue() }));
@@ -16,9 +17,14 @@ afterAll(cleanupTempDataRoots);
 
 it('registers and rejoins a real task-store continuation with its frozen review policy and evolving execution evidence', async () => {
   const source = await addTask({ description: 'Release an example app', app: 'example-app' });
-  const publication = { status: 'verified', synchronizationHandoffVersion: 1, identity: 'd'.repeat(64), tag: 'v1.2.3', repository: 'example/repo' };
+  const publication = { status: 'verified', synchronizationHandoffVersion: 1, identity: 'd'.repeat(64), tag: 'v1.2.3', repository: 'example/repo',
+    candidateBranch: 'codex/release-publisher', candidateHead: 'a'.repeat(40), promotionPrNumber: 12 };
+  const pointer = { dev: '1', ino: '2', birthtimeNs: '3' };
+  const seed = { version: 1, agentId: 'example-publisher', startedAt: '2026-01-01T00:00:00Z', seededAt: '2026-01-01T00:00:01Z',
+    repoPath: '/example/repository', path: '/example/publisher', branch: publication.candidateBranch, repository: pointer, checkout: pointer,
+    incarnation: { pointer, gitdir: { path: '/example/repository/.git/worktrees/publisher', ...pointer } } };
   const publisher = { id: 'example-publisher', taskId: source.id, startedAt: '2026-01-01T00:00:00Z', status: 'running',
-    metadata: { taskAnalysisType: 'do-release', workspacePath: '/example/repository', releasePublication: publication } };
+    metadata: { taskAnalysisType: 'do-release', workspacePath: '/example/repository', releasePublication: publication, checkoutSeeds: [seed] } };
   const [first, duplicate] = await Promise.all([ensureReleaseSynchronization(publisher), ensureReleaseSynchronization(publisher)]);
   expect(duplicate).toEqual(first);
   const task = await getTaskById(first.taskId);
@@ -45,6 +51,12 @@ it('registers and rejoins a real task-store continuation with its frozen review 
     verifiedAt: '2026-01-01T02:00:00Z', retryAt: null, blocker: null };
   for (const name of Object.keys(entry.obligations)) entry.obligations[name] = {
     status: 'verified', verifiedAt: '2026-01-01T02:00:00Z', evidence: { source: 'test-fixture' } };
+  entry.obligations.retirement.evidence.publisherReview = { branch: seed.branch, path: seed.path, head: publication.candidateHead,
+    checkoutIdentity: retirementCheckoutIdentityFromPointer(pointer), prUrl: 'https://github.com/example/repo/pull/12', receipt: null, models: [] };
+  const target = { agentId: seed.agentId, repoPath: seed.repoPath, branch: seed.branch, path: seed.path, head: publication.candidateHead,
+    checkoutIdentity: retirementCheckoutIdentityFromPointer(pointer), createdAt: seed.seededAt };
+  entry.obligations.retirement.evidence.checkouts = [target];
+  entry.obligations.retirement.evidence.receipts = [{ ...target, branchDeleted: true, archiveDir: null, retiredAt: '2026-01-01T01:00:00Z' }];
   await saveReleaseSynchronization(entry);
   expect(await releaseTaskDispatchDisposition(nextRelease)).toBeNull();
 });

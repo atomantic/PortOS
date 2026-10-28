@@ -87,7 +87,7 @@ router.get('/sync', asyncHandler(async (req, res) => {
   const { since, limit, schemaVersion } = validateRequest(memorySyncQuerySchema, req.query);
   // Peers pull this (PEER_API_SURFACE): honor the per-peer `memory` category.
   const { authorizePeerPull } = await import('../services/sharing/peerPullAuthorization.js');
-  await authorizePeerPull(req, { syncCategory: 'memory', route: 'memory sync' });
+  await authorizePeerPull(req, { syncCategory: 'memory', alwaysEnforce: true, allowOperator: true, route: 'memory sync' });
   const result = schemaVersion === undefined
     ? await memorySync.getChangesSince(since, limit)
     : await memorySync.getChangesSince(since, limit, schemaVersion);

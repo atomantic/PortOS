@@ -162,6 +162,15 @@ export function renderCastAndSetsSheet({
     return figure(images[`set:${s.id}`], s.name, caption, 'set', procedural ? 'No raster image: drawn in code' : undefined);
   }).join('');
 
+  const formFigures = procedural ? '' : (p.forms || []).map((f) => {
+    const caption = `<b>${e(p.name || 'Protagonist')} · ${e(f.label)}</b><span>${e([f.description, f.hair, f.wardrobe && `Wearing ${f.wardrobe}`].filter(Boolean).join(' '))}</span>`;
+    return figure(images[`form:${f.id}`], `${p.name || 'Protagonist'} ${f.label} character reference sheet`, caption, 'set');
+  }).join('');
+  const moods = (p.expressions || []).slice(0, 6);
+  const expressionCaption = moods.length
+    ? `Moods from the story: ${moods.map((m) => e(m)).join(' · ')}`
+    : `Expression range for lip-sync keyframes.${p.gesture ? ` Includes the gesture: ${e(p.gesture)}` : ''}`;
+
   const cast = procedural ? [] : (d.cast || []);
   const castFigures = cast.map((c) => {
     const caption = `<b>${e(c.name)}${c.role ? ` · ${e(c.role)}` : ''}</b><span>${e([c.description, c.face, c.hair, c.wardrobe && `Wearing ${c.wardrobe}`].filter(Boolean).join(' '))}</span>`;
@@ -207,8 +216,9 @@ ${procedural ? `<dl class="facts wide">${facts}</dl></section>
 ${renderDefinitionsSection(d.definitions)}
 ${worldFacts ? `<section><h2><small>World</small>How the environments behave</h2><dl class="facts wide">${worldFacts}</dl></section>` : ''}` : `<div class="grid2">${figure(images.character, 'Character reference sheet: front, three-quarter, profile, back and face', 'Canonical reference sheet. Every later image of the protagonist uses it as a reference.')}<div><dl class="facts">${facts}</dl></div></div>
 ${figure(images.looks, 'Wardrobe looks', looksCaption ? `Wardrobe by chapter: ${looksCaption}` : 'Wardrobe', 'wide')}
-<div class="grid2">${figure(images.expressions, 'Expression sheet', `Expression range for lip-sync keyframes.${p.gesture ? ` Includes the gesture: ${e(p.gesture)}` : ''}`)}${tests[0] ? figure(images['test:1'], 'First in-set test', e(tests[0].caption || tests[0].action)) : ''}</div>
+<div class="grid2">${figure(images.expressions, 'Expression sheet', expressionCaption)}${tests[0] ? figure(images['test:1'], 'First in-set test', e(tests[0].caption || tests[0].action)) : ''}</div>
 </section>
+${formFigures ? `<section><h2><small>Other ages</small>${e(p.name || 'The protagonist')} across the years</h2><p class="sub">Each sheet is the same person at another age the story shows.</p><div class="sets">${formFigures}</div></section>` : ''}
 <section><h2><small>In-set tests</small>The protagonist, in the world</h2><div class="row">${testFigures}</div></section>
 ${castFigures ? `<section><h2><small>Supporting cast</small>${cast.length} recurring ${cast.length === 1 ? 'character' : 'characters'}</h2><p class="sub">Each shot that names one of them uses their sheet as a reference.</p><div class="sets">${castFigures}</div></section>` : ''}`}
 <section><h2><small>Sets</small>${sets.length} sets</h2><p class="sub">Each set has its own light, so a cut says where we are before anything else.</p><div class="sets">${setFigures}</div></section>

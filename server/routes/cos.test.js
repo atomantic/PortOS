@@ -646,8 +646,9 @@ describe('CoS Routes', () => {
 
       const response = await request(app).get('/api/cos/agents');
       expect(response.status).toBe(200);
+      expect(response.body[0].metadata.releasePublication).toMatchObject({ status: 'verified', identity });
       expect(response.body[0].metadata.releaseSynchronization).toMatchObject({
-        status: 'verified',
+        status: 'blocked', blocker: 'publisher-candidate-checkout-unverified',
         identity,
         prUrl: 'https://github.com/example/repo/pull/101',
       });

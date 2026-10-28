@@ -13,10 +13,14 @@ vi.mock('../services/meatspace.js', async (importOriginal) => ({
 vi.mock('../services/meatspaceAlcohol.js', async (importOriginal) => ({
   ...await importOriginal(),
   getDailyAlcohol: vi.fn(),
+  updateDrink: vi.fn(),
+  removeDrink: vi.fn(),
 }));
 vi.mock('../services/meatspaceNicotine.js', async (importOriginal) => ({
   ...await importOriginal(),
   getDailyNicotine: vi.fn(),
+  updateNicotine: vi.fn(),
+  removeNicotine: vi.fn(),
 }));
 
 import * as meatspace from '../services/meatspace.js';
@@ -58,4 +62,20 @@ describe('/api/meatspace (barrel over the per-domain routers)', () => {
     expect((await request(app).get('/api/meatspace/alcohol/daily?from=yesterday')).status).toBe(400);
     expect((await request(app).get('/api/meatspace/nicotine/daily?to=2026-1-5')).status).toBe(400);
   });
+});
+
+
+it.each([
+  ['alcohol', alcohol, 'updateDrink', 'removeDrink'],
+  ['nicotine', nicotine, 'updateNicotine', 'removeNicotine'],
+])('validates and forwards %s event identity, preserving missing-event 404s', async (kind, service, edit, remove) => {
+  service[edit].mockResolvedValue({ id: 'target' });
+  service[remove].mockResolvedValue(null);
+  const path = `/api/meatspace/${kind}/log/2024-06-01/1`;
+  expect((await request(app).put(path).send({ id: 'target' })).status).toBe(200);
+  expect(service[edit]).toHaveBeenCalledWith('2024-06-01', 1, { id: 'target' });
+  expect((await request(app).delete(`${path}?id=target`)).status).toBe(404);
+  expect(service[remove]).toHaveBeenCalledWith('2024-06-01', 1, 'target');
+  expect((await request(app).put(path).send({ id: 123 })).status).toBe(400);
+  expect((await request(app).delete(`${path}?id=`)).status).toBe(400);
 });

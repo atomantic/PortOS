@@ -17,6 +17,7 @@ import { join } from 'path';
 import { checkHealth, ensureSchema, query, close } from '../../lib/db.js';
 import { requireDbOrSkip } from '../../lib/dbTestGate.js';
 import { getSyncBaseHash, __resetBaseHashCacheForTests } from '../../lib/conflictJournal.js';
+import { SUBMISSION_FIELDS } from '../../lib/artistLimits.js';
 
 const testState = vi.hoisted(() => ({ dataRoot: null, writeCounter: { baseHash: 0 } }));
 
@@ -114,6 +115,7 @@ describe.skipIf(!runDb)('artists DB adapter round-trip', () => {
       const remote = {
         id: 'artist-remote-1', name: 'Peer Artist', genre: 'ambient', bio: '',
         musicalStyle: 'lush', physicalDescription: '', portraitStyle: '', portraitImageUrl: '',
+        ...Object.fromEntries(SUBMISSION_FIELDS.map((key) => [key, ''])),
         createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
         deleted: false, deletedAt: null,
       };

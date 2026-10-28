@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { castAndSetsApprovalInputs, castAndSetsApprovalValues, productionReadiness, revertApprovedInput } from './productionReview.js';
+import { castAndSetsApprovalInputs, castAndSetsApprovalValues, castAndSetsStoryInputs, productionReadiness, revertApprovedInput } from './productionReview.js';
 
 const castAndSetsApproval = (project) => productionReadiness(project).castAndSets;
 
@@ -35,7 +35,7 @@ describe('Cast & Sets approval basis', () => {
 
   it('names concept, style, subject and song changes separately', () => {
     const base = approved(project);
-    expect(castAndSetsApproval(base)).toEqual({ approved: true, stale: null });
+    expect(castAndSetsApproval(base)).toEqual({ approved: true, stale: null, storyStale: null });
     const edited = { ...base, trackId: 't2', concept: { ...project.concept, style: 'oil' }, visualSpec: { ...project.visualSpec, references: [] } };
     expect(castAndSetsApproval(edited).stale.changedFields).toEqual(['style', 'subjects', 'song']);
   });
@@ -45,7 +45,27 @@ describe('Cast & Sets approval basis', () => {
     const normalized = { ...base, visualSpec: { ...project.visualSpec, typography: '', references: [{ id: 'r1', imageId: 'a.png', role: 'character', note: '', use: 'reference', condition: false }] } };
     expect(castAndSetsApproval(normalized).stale).toBeNull();
     const legacy = { ...project, concept: { prompt: 'Changed' }, castAndSets: { status: 'approved', approvedAt: '2026-01-01T00:00:00.000Z' } };
-    expect(castAndSetsApproval(legacy)).toEqual({ approved: true, stale: null });
+    expect(castAndSetsApproval(legacy)).toEqual({ approved: true, stale: null, storyStale: null });
+  });
+});
+
+describe('Cast & Sets built before the story', () => {
+  const project = { id: 'p1', concept: { prompt: 'Example concept' }, storySummary: 'Example: a girl grows up by a lake.',
+    productionReview: { draft: { cast: 'June at 8, 17 and 40' } } };
+  const sheet = (p, extra) => ({ ...p, castAndSets: { status: 'review', direction: { protagonist: { name: 'June' } }, ...extra } });
+
+  it('names the story inputs that moved since the direction was written', () => {
+    const built = sheet(project, { directedInputs: castAndSetsStoryInputs(project) });
+    expect(castAndSetsApproval(built).storyStale).toBeNull();
+    const edited = { ...built, storySummary: 'Example: a girl leaves the lake.', productionReview: { draft: { cast: 'June at 8 and 40', environments: 'A lake house' } } };
+    expect(castAndSetsApproval(edited).storyStale).toEqual({ changedFields: ['story', 'cast guide', 'environment guide'] });
+  });
+
+  it('flags a sheet in review that predates recorded story inputs, but not a legacy approval or a skipped sheet', () => {
+    expect(castAndSetsApproval(sheet(project)).storyStale).toEqual({ changedFields: ['story', 'cast guide'] });
+    expect(castAndSetsApproval(sheet({ ...project, storySummary: '', productionReview: { draft: {} } })).storyStale).toBeNull();
+    expect(castAndSetsApproval(sheet(project, { status: 'approved' })).storyStale).toBeNull();
+    expect(castAndSetsApproval(sheet(project, { status: 'skipped' })).storyStale).toBeNull();
   });
 });
 

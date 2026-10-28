@@ -8,19 +8,22 @@ import Field from '../ui/FormField';
 import toast from '../ui/Toast';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 import useMediaJobProgress from '../../hooks/useMediaJobProgress';
+import { countWords } from '../../lib/textUtils';
 
 const byName = (a, b) => (a.name || '').localeCompare(b.name || '');
 
 export default function PersonaMasterDetail({
   basePath, selectedId, title, titleIcon: TitleIcon, intro, singular, plural, fields,
   listSecondaryKey, portrait, listRecords, createRecord, updateRecord, deleteRecord, generateImage,
-  hideTitle = false,
+  hideTitle = false, sections = NO_SECTIONS, detailActions = null,
 }) {
   const navigate = useNavigate();
-  const emptyForm = useMemo(
-    () => Object.fromEntries([...fields.map(({ key }) => key), portrait.imageKey].map((key) => [key, ''])),
-    [fields, portrait.imageKey],
+  // Collapsible groups after the portrait; their keys share one form and one save.
+  const formKeys = useMemo(
+    () => [...fields, ...sections.flatMap((section) => section.fields)].map(({ key }) => key).concat(portrait.imageKey),
+    [fields, sections, portrait.imageKey],
   );
+  const emptyForm = useMemo(() => Object.fromEntries(formKeys.map((key) => [key, ''])), [formKeys]);
   const [records, setRecords] = useState([]);
   const [loading, setLoading] = useState(true);
   const [form, setForm] = useState(emptyForm);
@@ -31,6 +34,9 @@ export default function PersonaMasterDetail({
   const [generationJobId, setGenerationJobId] = useState(null);
   const generationRequestRef = useRef(0);
   const hydratedRef = useRef(null);
+  const preservedCreateRef = useRef(null);
+  const selectionRef = useRef({ id: selectedId });
+  if (selectionRef.current.id !== selectedId) selectionRef.current = { id: selectedId };
 
   const generation = useMediaJobProgress(generationJobId);
   const isGenerating = startingGeneration || !!generationJobId;
@@ -78,13 +84,16 @@ export default function PersonaMasterDetail({
     hydratedRef.current = selectedId;
     cancelDelete();
     clearGeneration();
+    const preserveCreatedForm = preservedCreateRef.current === selectedId;
+    preservedCreateRef.current = null;
     if (isCreate) setForm(emptyForm);
-    else if (selected) {
-      setForm(Object.fromEntries(
-        [...fields.map(({ key }) => key), portrait.imageKey].map((key) => [key, selected[key] || '']),
-      ));
+    else if (selected && !preserveCreatedForm) {
+      setForm(Object.fromEntries(formKeys.map((key) => [key, selected[key] || ''])));
     }
-  }, [selectedId, isCreate, selected, loading, emptyForm, fields, portrait.imageKey]);
+  }, [selectedId, isCreate, selected, loading, emptyForm, formKeys]);
+
+  const dirty = isCreate || (!!selected && formKeys.some((key) => (selected[key] || '') !== form[key]));
+  const setField = (key, value) => setForm((current) => ({ ...current, [key]: value }));
 
   const handleGenerate = async () => {
     if (isGenerating) return;
@@ -132,6 +141,7 @@ export default function PersonaMasterDetail({
       toast.error(`${singular} name is required`);
       return;
     }
+    const selectionAtSave = selectionRef.current;
     setSaving(true);
     const payload = { ...form, name };
     const saved = await (isCreate
@@ -146,8 +156,16 @@ export default function PersonaMasterDetail({
     setRecords((current) => (isCreate
       ? [...current, saved].sort(byName)
       : current.map((record) => (record.id === saved.id ? saved : record)).sort(byName)));
+    if (selectionRef.current === selectionAtSave) {
+      // Adopt server-normalized values without erasing edits made during the save.
+      setForm((current) => Object.fromEntries(formKeys.map((key) => [key, current[key] === form[key] ? (saved[key] || '') : current[key]])));
+      if (isCreate) {
+        // Keep edits made while creating instead of rehydrating over the form.
+        preservedCreateRef.current = saved.id;
+        navigate(`${basePath}/${encodeURIComponent(saved.id)}`);
+      }
+    }
     if (isCreate) {
-      navigate(`${basePath}/${encodeURIComponent(saved.id)}`);
       toast.success(`Created "${saved.name}"`);
     } else {
       toast.success('Saved');
@@ -233,29 +251,7 @@ export default function PersonaMasterDetail({
             </div>
           ) : (
             <div className="space-y-3">
-              {fields.map((field) => (
-                <Field key={field.key} compact label={field.label} hint={field.hint}>
-                  {field.type === 'textarea' ? (
-                    <textarea
-                      value={form[field.key]}
-                      onChange={(event) => setForm((current) => ({ ...current, [field.key]: event.target.value }))}
-                      rows={field.rows}
-                      maxLength={field.maxLength}
-                      placeholder={field.placeholder}
-                      className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm"
-                    />
-                  ) : (
-                    <input
-                      value={form[field.key]}
-                      onChange={(event) => setForm((current) => ({ ...current, [field.key]: event.target.value }))}
-                      placeholder={field.placeholder}
-                      maxLength={field.maxLength}
-                      className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
-                      autoFocus={field.key === 'name'}
-                    />
-                  )}
-                </Field>
-              ))}
+              {fields.map((field) => <PersonaField key={field.key} field={field} value={form[field.key]} onChange={setField} />)}
 
               <Field compact label={portrait.fieldLabel} hint={portrait.hint}>
                 <div className="flex items-start gap-3">
@@ -286,6 +282,22 @@ export default function PersonaMasterDetail({
                 </div>
               </Field>
 
+              {sections.map((section) => {
+                const filled = section.fields.filter(({ key }) => form[key]?.trim()).length;
+                return (
+                  <details key={section.id} className="group rounded-lg border border-port-border bg-port-bg/40">
+                    <summary className="flex items-center justify-between gap-2 px-3 min-h-[44px] cursor-pointer select-none text-sm text-white">
+                      <span>{section.title}</span>
+                      <span className="text-xs text-gray-500">{filled}/{section.fields.length} filled</span>
+                    </summary>
+                    <div className="px-3 pb-3 space-y-3">
+                      {section.hint ? <p className="text-xs text-gray-500">{section.hint}</p> : null}
+                      {section.fields.map((field) => <PersonaField key={field.key} field={field} value={form[field.key]} onChange={setField} />)}
+                    </div>
+                  </details>
+                );
+              })}
+
               <div className="flex items-center gap-2 pt-1 flex-wrap">
                 <button type="button" onClick={handleSave} disabled={saving || !form.name.trim()} className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-port-accent text-white text-sm font-medium disabled:opacity-50">
                   {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} {isCreate ? 'Create' : 'Save'}
@@ -297,6 +309,7 @@ export default function PersonaMasterDetail({
                     <button type="button" onClick={() => requestDelete(selected.id)} className="inline-flex items-center gap-2 px-3 py-2 rounded-lg text-gray-400 hover:text-port-error text-sm"><Trash2 size={14} /> Delete</button>
                   )
                 ) : null}
+                {detailActions && selected && !isCreate ? detailActions({ selected, dirty, saving }) : null}
               </div>
             </div>
           )}
@@ -305,6 +318,39 @@ export default function PersonaMasterDetail({
 
       <GalleryImagePicker open={galleryOpen} onClose={() => setGalleryOpen(false)} onSelect={handleImagePick} allowUpload />
     </div>
+  );
+}
+
+const NO_SECTIONS = [];
+
+function PersonaField({ field, value, onChange }) {
+  const counter = field.counter
+    ? <span className="block text-[11px] text-gray-500 mt-1 tabular-nums">{countWords(value)} words · {value.length}/{field.maxLength} characters</span>
+    : null;
+  return (
+    <Field compact label={field.label} hint={field.hint}>
+      {field.type === 'textarea' ? (
+        <textarea
+          value={value}
+          onChange={(event) => onChange(field.key, event.target.value)}
+          rows={field.rows}
+          maxLength={field.maxLength}
+          placeholder={field.placeholder}
+          className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm"
+        />
+      ) : (
+        <input
+          type={field.inputType || 'text'}
+          value={value}
+          onChange={(event) => onChange(field.key, event.target.value)}
+          placeholder={field.placeholder}
+          maxLength={field.maxLength}
+          className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
+          autoFocus={field.key === 'name'}
+        />
+      )}
+      {counter}
+    </Field>
   );
 }
 
