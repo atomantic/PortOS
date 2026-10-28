@@ -116,7 +116,7 @@ export function resolveCharacterSheetReferences(candidates, mode, modelId, local
     const { path, entry } = viewableImage(filename);
     const status = paths.length >= guideLimit ? 'limit' : !path ? 'missing' : !supported ? 'unsupported' : 'included';
     if (status === 'included') paths.push(path);
-    images.push(entry({ source: candidate.source, status }));
+    images.push(entry({ source: candidate.source, status, ...(candidate.relative ? { relative: candidate.relative } : {}) }));
   }
   return { paths, images, initPath, editBase };
 }

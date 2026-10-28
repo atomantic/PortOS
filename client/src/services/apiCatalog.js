@@ -208,6 +208,10 @@ export const unlinkCatalogIngredient = (id, body, options) =>
 export const listCatalogIngredientsForRef = (refKind, refId, options) =>
   request(`/catalog/refs/${enc(refKind)}/${enc(refId)}/ingredients`, options);
 
+// What a character's family adds to an image render (labeled additions + relatives' images).
+export const getCatalogFamilyContext = (id, options) =>
+  request(`/catalog/ingredients/${enc(id)}/family-context`, options);
+
 export const linkCatalogIngredientRelation = (id, body, options) =>
   request(`/catalog/ingredients/${enc(id)}/relations`, { method: 'POST', body: JSON.stringify(body), ...options });
 

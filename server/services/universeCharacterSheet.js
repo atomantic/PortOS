@@ -24,6 +24,7 @@ import { universeAestheticLine } from '../lib/universeVisualStyle.js';
 import { applyImageVisualProfile } from './imageGen/visualProfile.js';
 import { resolveUniverseVisualProfile } from '../lib/universeVisualProfile.js';
 import { promptAddition } from '../lib/modelInput.js';
+import { catalogFamilyRenderContext, familyImagesAddition } from './catalogFamily.js';
 import { characterSheetEditBase, characterSheetReferenceCandidates, resolveCharacterSheetReferences } from '../lib/characterSheetReferences.js';
 import { runwayImagePreservesSourceFrame } from '../lib/runwayImageModels.js';
 import { enqueueJob, getJob, mediaJobEvents } from './mediaJobQueue/index.js';
@@ -497,6 +498,8 @@ export async function buildSheetRenderParams({
   referenceCandidates = [],
   editBaseCandidate = null,
   sharedIdentity = '',
+  family = { additions: [], candidates: [] },
+  selfName = '',
 }) {
   const settings = await getSettings();
   // Text-template rendering works with any image-gen backend. Route through
@@ -516,7 +519,7 @@ export async function buildSheetRenderParams({
   if (cloud && !cloud.enabled) throw cloud.disabledError;
   const localModel = !cloud && activeMode === IMAGE_GEN_MODE.LOCAL ? selectLocalImageModelFromSettings(settings, options.modelId) : null;
   const modelId = cloud ? cloud.modelId : localModel?.id || null;
-  const references = resolveCharacterSheetReferences(referenceCandidates, activeMode, modelId, localModel, editBaseCandidate);
+  const references = resolveCharacterSheetReferences([...referenceCandidates, ...family.candidates], activeMode, modelId, localModel, editBaseCandidate);
   const editFromPortrait = !!references.initPath;
   if (editFromPortrait && activeMode === IMAGE_GEN_MODE.RUNWAY
     && runwayImagePreservesSourceFrame(modelId, 1 + references.paths.length)) {
@@ -534,6 +537,8 @@ export async function buildSheetRenderParams({
   const identityAddition = !hasPromptOverride && sharedIdentity && !prompt.includes(sharedIdentity)
     ? promptAddition('shared-character-identity', 'Shared facial identity', sharedIdentity) : null;
   if (identityAddition) prompt += `\n\nShared facial identity: ${sharedIdentity}`;
+  const familyAdditions = hasPromptOverride ? [] : family.additions;
+  for (const addition of familyAdditions) prompt += `\n\n${addition.text}`;
   const negativePrompt = hasNegativeOverride ? options.overrideNegativePrompt : built.negativePrompt;
 
   // Sheet renders hard-code cleanC2PA=true (lossless metadata strip — gpt-image
@@ -553,6 +558,7 @@ export async function buildSheetRenderParams({
   // sent-prompt record (#11317). A typed override is sent as written.
   const promptAdditions = [
     identityAddition,
+    ...familyAdditions,
     !hasPromptOverride && styleLine && prompt.includes(styleLine.trim()) ? promptAddition(styleChip.id, styleChip.label, styleLine) : null,
     !hasNegativeOverride ? promptAddition('sheet-negatives', negativesLabel, built.negativePrompt) : null,
   ].filter(Boolean);
@@ -588,21 +594,24 @@ export async function buildSheetRenderParams({
   if (editFromPortrait) {
     params.initImagePath = references.initPath;
     params.initImageStrength = PORTRAIT_EDIT_STRENGTH;
-    if (!hasPromptOverride) {
-      const guides = references.paths.length
-        ? ' The other attached images are identity guides for the same person.' : '';
-      const text = `Edit the FIRST attached image, the character’s canonical portrait, into the image described above. Keep this exact person: the same facial structure, eyes, skin, hair color and distinctive marks. Apply the age, hairstyle, clothing, pose, framing, setting and layout the description asks for, and do not keep the portrait’s own clothing, crop or background unless the description asks for them.${guides}`;
-      prompt += `\n\n${text}`;
-      params.prompt = prompt;
-      params.promptAdditions = [...(params.promptAdditions || []), promptAddition('portrait-edit-base', 'Edit from the canonical portrait', text)];
+  }
+  if (!hasPromptOverride) {
+    const guides = references.images.filter((image) => image.status === 'included' && image.role !== 'edit-base');
+    const ownGuides = guides.some((image) => !image.relative);
+    const added = [];
+    if (editFromPortrait) {
+      const guideLine = ownGuides ? ' The other attached images of this character are identity guides for the same person.' : '';
+      added.push(promptAddition('portrait-edit-base', 'Edit from the canonical portrait', `Edit the FIRST attached image, the character’s canonical portrait, into the image described above. Keep this exact person: the same facial structure, eyes, skin, hair color and distinctive marks. Apply the age, hairstyle, clothing, pose, framing, setting and layout the description asks for, and do not keep the portrait’s own clothing, crop or background unless the description asks for them.${guideLine}`));
+    } else if (ownGuides) {
+      added.push(promptAddition('character-identity', 'Canonical character likeness', 'Use the attached canonical character images as the identity reference. Preserve the character’s facial features, proportions, skin, hair, markings and distinctive likeness across every view. Apply the requested age, wardrobe and visual direction while keeping the same character identity.'));
     }
-  } else if (references.paths.length) {
-    if (!hasPromptOverride) {
-      const text = 'Use the attached canonical character images as the identity reference. Preserve the character’s facial features, proportions, skin, hair, markings and distinctive likeness across every view. Apply the requested age, wardrobe and visual direction while keeping the same character identity.';
-      prompt += `\n\n${text}`;
-      params.prompt = prompt;
-      params.promptAdditions = [...(params.promptAdditions || []), promptAddition('character-identity', 'Canonical character likeness', text)];
+    // Relatives' images come after the record's own, so its identity keeps priority.
+    added.push(familyImagesAddition(selfName || built.name || 'this character', guides.filter((image) => image.relative).map((image) => image.relative)));
+    for (const addition of added.filter(Boolean)) {
+      prompt += `\n\n${addition.text}`;
+      params.promptAdditions = [...(params.promptAdditions || []), addition];
     }
+    params.prompt = prompt;
   }
   params = applyImageVisualProfile(params, visualProfile);
   return {
@@ -611,7 +620,10 @@ export async function buildSheetRenderParams({
   };
 }
 
+// Relatives' images are optional likeness hints: an unavailable one is shown
+// as not sent but never blocks the record's own render.
 export function assertSheetReferencesAvailable(referenceImages) {
+  referenceImages = referenceImages.filter((ref) => !ref.relative);
   if (referenceImages.some((ref) => ref.status === 'unsupported')) {
     throw new ServerError('Canonical references need FLUX.2 or Qwen Image 2.1 on the local backend, or a cloud image backend. Select a supported sheet render target before generating.', {
       status: 400, code: 'CHARACTER_SHEET_REFERENCES_UNSUPPORTED',
@@ -654,6 +666,8 @@ async function prepareCharacterSheet(universeId, entryId, options) {
     referenceCandidates: characterSheetReferenceCandidates(character, media),
     editBaseCandidate: characterSheetEditBase(character, media),
     sharedIdentity: character.visualIdentity,
+    family: await catalogFamilyRenderContext(character.ingredientId, character.name),
+    selfName: character.name,
   });
   return { variant, variantConfig, universe, character, ...sheet };
 }

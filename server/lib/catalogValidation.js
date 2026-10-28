@@ -274,6 +274,17 @@ export const catalogIngredientCreateSchema = z.object({
   operationKey: z.string().uuid().optional(),
 }).strict();
 
+// Relations a new record starts with (Casting's Family picker): `kind` reads
+// "the new record is <kind> <toId>".
+const initialRelations = z.array(z.object({
+  toId: z.string().trim().min(1).max(80),
+  kind: z.enum(RELATION_KIND_IDS),
+}).strict()).max(20);
+
+export const catalogIngredientCreateRouteSchema = catalogIngredientCreateSchema.extend({
+  relations: initialRelations.optional(),
+}).strict();
+
 // Casting / Environments / Objects story filters and New from prompt.
 const storyKind = z.enum(['storyboard', 'music-video', 'series']);
 export const catalogStoryListQuerySchema = z.object({ type: z.enum(['character', 'place', 'object']).optional() }).strict();
@@ -298,6 +309,7 @@ export const catalogStoryDraftSchema = z.object({
   providerId: z.string().trim().max(80).optional().default(''),
   model: z.string().trim().max(200).optional().default(''),
   effort: z.string().trim().max(32).optional().default(''),
+  relations: initialRelations.optional().default([]),
 }).strict()
   .refine((v) => (v.storyKind == null) === (v.storyId == null), { message: 'storyKind and storyId must be supplied together', path: ['storyId'] });
 

@@ -65,6 +65,7 @@ import ObjectAttachmentsEditor from '../components/universe/ObjectAttachmentsEdi
 import CatalogRedesign from '../components/catalog/CatalogRedesign';
 import CatalogUniversePanel from '../components/catalog/CatalogUniversePanel';
 import CatalogFormsEditor from '../components/catalog/CatalogFormsEditor';
+import CatalogFamilyPicker from '../components/catalog/CatalogFamilyPicker';
 import CatalogMergePanel from '../components/catalog/CatalogMergePanel';
 import CatalogIdentityPanel from '../components/catalog/CatalogIdentityPanel';
 import CatalogIdentityNotice from '../components/catalog/CatalogIdentityNotice';
@@ -72,7 +73,7 @@ import CharacterLoraChip from '../components/loraTraining/CharacterLoraChip';
 import TagPicker from '../components/TagPicker';
 import GenericIngredientFields from '../components/GenericIngredientFields';
 import useUnsavedChangesGuard from '../hooks/useUnsavedChangesGuard';
-import { getCatalogType, CATALOG_BADGE_BY_ID, RELATION_KINDS, getRelationKind } from '../lib/catalogTypes';
+import { getCatalogType, CATALOG_BADGE_BY_ID, RELATION_KINDS, getRelationKind, isFamilyRelationKind } from '../lib/catalogTypes';
 import {
   libraryForPathname, ingredientPath, ingredientCoverUrl, resolveDetailTab, detailTabPath,
   isSheetMedia, isPlateMedia, isReferenceTabMedia, lookIdOf,
@@ -971,6 +972,12 @@ function IngredientEditor() {
               </div>}
               storyExtra={<fieldset disabled={identityReadOnly || characterActionBusy}><EditableListFields fields={editableLists.filter(field => field.key === 'aliases')} payload={payload} onChange={updatePayload} /></fieldset>}
             >
+              <div className="bg-port-card border border-port-border rounded-lg p-4">
+                <CatalogFamilyPicker selfName={name} excludeIds={[record.id]} disabled={identityReadOnly || characterActionBusy}
+                  items={relations.outbound.filter((r) => isFamilyRelationKind(r.kind)).map((r) => ({ kind: r.kind, id: r.toId, name: r.other?.name }))}
+                  inbound={relations.inbound.filter((r) => isFamilyRelationKind(r.kind)).map((r) => ({ kind: r.kind, id: r.fromId, name: r.other?.name }))}
+                  onAdd={(kind, target) => handleAddRelation(target, kind)} onRemove={(item) => handleRemoveRelation(item.id, item.kind)} />
+              </div>
               <fieldset disabled={identityReadOnly || characterActionBusy}><CatalogFormsEditor type={record.type} payload={payload} onChange={updatePayload} /></fieldset>
               <RevealTimingField entry={{ ...payload, id: record.id }} editable={!identityReadOnly && !characterActionBusy && payload.locked !== true}
                 onPatch={patch => setPayload(previous => ({ ...previous, ...patch }))} />
@@ -1356,12 +1363,15 @@ function StatListEditor({ field, value, onChange }) {
 // ingredient → other) are user-editable here; inbound edges (other → this
 // ingredient) are read-only because the owning ingredient is the other end.
 function RelationsPanel({ record, relations, evidence, onAdd, onRemove, readOnly = false, retainedSourceId }) {
+  // A character's family ties live in its Family picker.
+  const shown = (r) => record.type !== 'character' || !isFamilyRelationKind(r.kind ?? r.id);
+  const kinds = RELATION_KINDS.filter(shown);
   const [pickerOpen, setPickerOpen] = useState(false);
-  const [kind, setKind] = useState(RELATION_KINDS[0].id);
+  const [kind, setKind] = useState(kinds[0].id);
   const [armedRelation, setArmedRelation] = useState(null);
   const [removingRelation, setRemovingRelation] = useState(null);
-  const outbound = Array.isArray(relations.outbound) ? relations.outbound : [];
-  const inbound = Array.isArray(relations.inbound) ? relations.inbound : [];
+  const outbound = Array.isArray(relations.outbound) ? relations.outbound.filter(shown) : [];
+  const inbound = Array.isArray(relations.inbound) ? relations.inbound.filter(shown) : [];
   const evidenceList = Array.isArray(evidence)
     ? evidence.filter((item) => typeof item === 'string' && item.trim())
     : typeof evidence === 'string' && evidence.trim()
@@ -1391,7 +1401,7 @@ function RelationsPanel({ record, relations, evidence, onAdd, onRemove, readOnly
           <label htmlFor="relation-kind" className="sr-only">Relation kind</label>
           <select id="relation-kind" disabled={readOnly} value={kind} onChange={(e) => setKind(e.target.value)}
             className="px-2 py-1.5 bg-port-bg border border-port-border rounded text-xs text-white focus:outline-none focus:border-port-accent">
-            {RELATION_KINDS.map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
+            {kinds.map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
           </select>
           <button type="button" onClick={() => setPickerOpen(true)} disabled={readOnly}
             className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-port-accent hover:bg-port-accent/90 text-white text-xs font-medium">

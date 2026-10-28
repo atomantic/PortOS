@@ -37,6 +37,7 @@ export * from './bibleLimits.js';
 export * from './characterEvolution.js';
 export * from './characterFramework.js';
 export * from './characterIntegrity.js';
+export * from './catalogFamily.js';
 export * from './catalogForms.js';
 export * from './catalogTypes.js';
 export * from './creativeDirectorPlan.js';

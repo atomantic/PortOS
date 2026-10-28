@@ -18,6 +18,8 @@ import MediaImage from '../components/MediaImage';
 import CharacterCard from '../components/catalog/CharacterCard';
 import CatalogImageAction from '../components/catalog/CatalogImageAction';
 import StoryDraftDrawer from '../components/catalog/StoryDraftDrawer';
+import CatalogFamilyPicker from '../components/catalog/CatalogFamilyPicker';
+import { addFamilyItem, familyRelations, removeFamilyItem } from '../lib/catalogFamily';
 import IngredientPicker from '../components/IngredientPicker';
 import useCatalogCards from '../hooks/useCatalogCards';
 import InfiniteScrollFooter from '../components/ui/InfiniteScrollFooter';
@@ -182,6 +184,7 @@ export default function CreativeLibrary({ libraryId }) {
 
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ name: '', content: '', universeId: '' });
+  const [family, setFamily] = useState([]);
   const [ownerChoices, setOwnerChoices] = useState(null);
   const [ownerLoadError, setOwnerLoadError] = useState(false);
   useEffect(() => {
@@ -225,7 +228,8 @@ export default function CreativeLibrary({ libraryId }) {
     const content = form.content.trim();
     setCreating(true);
     const created = await createCatalogIngredient(
-      { type: library.type, name, universeId: form.universeId, payload: content ? { [contentKey]: content } : {}, tags: [] },
+      { type: library.type, name, universeId: form.universeId, payload: content ? { [contentKey]: content } : {}, tags: [],
+        ...(family.length ? { relations: familyRelations(family) } : {}) },
       { silent: true },
     ).catch((err) => { toast.error(err?.message || `Failed to create ${library.singular}`); return null; });
     if (created && joinStory) {
@@ -358,6 +362,9 @@ export default function CreativeLibrary({ libraryId }) {
                 className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm"
               />
             </div>
+            {library.type === 'character' && <CatalogFamilyPicker items={family} selfName={form.name}
+              onAdd={(kind, record) => setFamily((list) => addFamilyItem(list, kind, record))}
+              onRemove={(item) => setFamily((list) => removeFamilyItem(list, item))} />}
             <div className="flex justify-end gap-2">
               <button type="button" onClick={() => setShowForm(false)} className="px-3 py-2 min-h-[40px] rounded-lg text-gray-400 hover:text-white text-sm">Cancel</button>
               <button

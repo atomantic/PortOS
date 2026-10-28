@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
 const navigateMock = vi.hoisted(() => vi.fn());
@@ -192,6 +192,29 @@ describe('CreativeLibrary', () => {
     await waitFor(() => expect(navigateMock).toHaveBeenCalledWith('/objects/cat-obj-9'));
     expect(createCatalogIngredient).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'object', name: 'Reel can', payload: { description: 'Dented tin.' } }),
+      { silent: true },
+    );
+  });
+
+  it('creates cast with picked family relationships', async () => {
+    listCatalogIngredients.mockResolvedValue({ items: [] });
+    createCatalogIngredient.mockResolvedValue({ id: 'cat-chr-9', type: 'character', name: 'Example Mother' });
+    renderLibrary('casting', '/casting');
+
+    fireEvent.click(await screen.findByRole('button', { name: 'New' }));
+    await screen.findByRole('option', { name: 'Example Universe' });
+    fireEvent.change(screen.getByLabelText(/Owning universe/), { target: { value: 'u-1' } });
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Example Mother' } });
+    fireEvent.change(screen.getByLabelText('Example Mother is the'), { target: { value: 'mother-of' } });
+    listCatalogIngredients.mockResolvedValue({ items: [{ id: 'cat-chr-nora', type: 'character', name: 'Nora', payload: {} }] });
+    fireEvent.click(screen.getByRole('button', { name: 'Pick cast' }));
+    fireEvent.click(await within(await screen.findByRole('dialog')).findByText('Nora'));
+    expect(await screen.findByRole('button', { name: 'Remove Mother of Nora' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+
+    await waitFor(() => expect(navigateMock).toHaveBeenCalledWith('/casting/cat-chr-9'));
+    expect(createCatalogIngredient).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'character', name: 'Example Mother', relations: [{ kind: 'mother-of', toId: 'cat-chr-nora' }] }),
       { silent: true },
     );
   });
