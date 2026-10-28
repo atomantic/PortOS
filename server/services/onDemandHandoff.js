@@ -1,4 +1,4 @@
-/** Durable handoff for asynchronous quota/maintenance requests. A nonce fences
+/** Durable handoff for asynchronous quota, maintenance and swarm refill requests. A nonce fences
  * settlement, while only a proven missing owner PID permits crash reconciliation.
  * Live or ambiguous owners never expire. All transitions share the schedule queue. */
 import { randomUUID } from 'node:crypto';
@@ -28,13 +28,22 @@ export async function claimOnDemandRequest(requestId) {
   });
 }
 
-export async function settleOnDemandRequest(claim, { taskId = null, reason = null } = {}) {
+export async function settleOnDemandRequest(claim, { taskId = null, reason = null, retry = false } = {}) {
   return updateSchedule(async (schedule) => {
     const current = schedule.onDemandHandoffs?.[claim.request.id];
     if (current?.token !== claim.token || current.owner !== owner || current.ownerPid !== ownerPid || current.status !== 'preparing') {
       return { result: false, changed: false };
     }
+    if (retry && current.request.cleanupSourceAgentId) {
+      delete schedule.onDemandHandoffs[claim.request.id];
+      schedule.onDemandRequests ||= [];
+      if (!schedule.onDemandRequests.some(row => row.id === current.request.id)) schedule.onDemandRequests.push(current.request);
+      return { result: true, changed: true };
+    }
     Object.assign(current, { status: taskId ? 'accepted' : 'refused', taskId, reason, settledAt: new Date().toISOString() });
+    const source = current.request.cleanupSourceAgentId;
+    const pending = source && schedule.swarmCleanupRefillPending?.[source];
+    if (pending?.id === current.request.id && pending.sourceMarked) delete schedule.swarmCleanupRefillPending[source];
     return { result: true, changed: true };
   });
 }
@@ -51,6 +60,23 @@ export async function reconcileOnDemandHandoffs() {
     let changed = false;
     for (const claim of Object.values(schedule.onDemandHandoffs || {})) {
       if (claim.status !== 'preparing' || !ownerIsGone(claim)) continue;
+      const source = claim.request.cleanupSourceAgentId;
+      if (source) {
+        const task = tasks.find(entry => entry.id === `sys-swarm-refill-${source}`
+          && entry.metadata?.cleanupRefillSource === source
+          && entry.metadata?.idempotencyKey === `swarm-cleanup-refill:${source}`);
+        if (task) {
+          Object.assign(claim, { status: 'accepted', taskId: task.id, reason: null, settledAt: new Date().toISOString() });
+          const pending = schedule.swarmCleanupRefillPending?.[source];
+          if (pending?.id === claim.request.id && pending.sourceMarked) delete schedule.swarmCleanupRefillPending[source];
+        } else {
+          delete schedule.onDemandHandoffs[claim.request.id];
+          schedule.onDemandRequests ||= [];
+          if (!schedule.onDemandRequests.some(row => row.id === claim.request.id)) schedule.onDemandRequests.push(claim.request);
+        }
+        changed = true;
+        continue;
+      }
       const task = tasks.find(entry => quotaBurnProvenance(entry.metadata).requestId === claim.request.id);
       Object.assign(claim, { status: task ? 'accepted' : 'interrupted', taskId: task?.id ?? null,
         reason: task ? null : 'Server restarted during request preparation; resume explicitly.', settledAt: new Date().toISOString() });

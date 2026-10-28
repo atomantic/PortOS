@@ -45,7 +45,7 @@ import { remainingActionBudget } from '../lib/domainBudgets.js';
 import { getDomainBudgetStatus } from './domainUsage.js';
 import { pendingCosActionReservations } from './cosAdmissionReservations.js';
 import { cosEvents, emitLog } from './cosEvents.js';
-import { addTask, updateTask, getAllTasks, getCosTasks, reconcileLegacyForgeMaintenanceTasks } from './cosTaskStore.js';
+import { addTask, updateTask, getAllTasks, getCosTasks, getTaskById, reconcileLegacyForgeMaintenanceTasks } from './cosTaskStore.js';
 import { PRIORITY_VALUES } from '../lib/taskParser.js';
 import { recordDecision, DECISION_TYPES } from './decisionLog.js';
 import { isAppOnCooldown, markAppReviewCooldown, bindAppReviewAgent, markIdleReviewStarted, getNextAppForReview, loadAppActivity, isAppActivityOnCooldown } from './appActivity.js';
@@ -1167,7 +1167,7 @@ export async function generateIdleReviewTask(state, { ignoreTaskId = null, isApp
  * it). Without it the completing task would make its own app look busy and
  * block the next perpetual run.
  */
-export function buildImprovementDedupSets(existingTasks, { ignoreTaskId = null } = {}) {
+export function buildImprovementDedupSets(existingTasks, { ignoreTaskId = null, cleanupOnlyIds = new Set() } = {}) {
   const existingTaskTypes = new Set();
   // Apps that already have *any* pending/in_progress/failure-blocked improvement
   // task. We cap each app at one queued improvement at a time to avoid a fan-out
@@ -1178,7 +1178,7 @@ export function buildImprovementDedupSets(existingTasks, { ignoreTaskId = null }
   const appsWithBlockedImprovement = new Map();
 
   for (const task of existingTasks) {
-    if (task.id === ignoreTaskId) continue;
+    if (task.id === ignoreTaskId || cleanupOnlyIds.has(task.id)) continue;
     const isActive = task.status === 'pending' || task.status === 'in_progress';
     const isBlocked = task.status === 'blocked';
     const isFailureBlocked = isBlocked && task.metadata?.blockedCategory !== 'user-terminated';
@@ -1266,6 +1266,7 @@ export async function queueDueInstallWideImprovementTasks({
  */
 export async function queueEligibleImprovementTasks(state, cosTaskData, {
   ignoreTaskId = null, wakeAfterRecord = true, perpetualContinuation = null,
+  continuationSourceAgentId = null,
   prepareTask = prepareManagedAppImprovementTask, persistTask = addTask
 } = {}) {
   const taskSchedule = await import('./taskSchedule.js');
@@ -1273,18 +1274,35 @@ export async function queueEligibleImprovementTasks(state, cosTaskData, {
 
   if (!isImprovementEnabled(state)) return;
 
+  // A crash may occur after the exact successor was stored but before the
+  // source receipt was marked. Recognize it even in task history, before its
+  // active row can block the ordinary per-app deduplication below.
+  if (continuationSourceAgentId) {
+    const existing = await getTaskById(`sys-swarm-refill-${continuationSourceAgentId}`);
+    if (existing?.taskType === 'internal' && existing.metadata?.cleanupRefillSource === continuationSourceAgentId
+      && existing.metadata.idempotencyKey === `swarm-cleanup-refill:${continuationSourceAgentId}`
+      && existing.metadata.app === perpetualContinuation?.appId
+      && existing.metadata.analysisType === perpetualContinuation?.taskType) {
+      return { queued: 0, continuationSatisfied: true };
+    }
+  }
+
   // Existing active AND blocked system tasks feed the dedup sets — see
   // buildImprovementDedupSets for the occupancy semantics (#2614). The same
   // `ignoreTaskId` is forwarded to addTask below so its disk-level duplicate
   // scan ignores it too.
   const existingTasks = cosTaskData.tasks || [];
+  const cleanupOnlyIds = await (await import('./swarmCleanupDelivery.js')).verifiedCleanupSwarmTaskIds(existingTasks,
+    { allowSourceAgentId: continuationSourceAgentId })
+    .catch(() => new Set());
   const { existingTaskTypes, appsWithPendingImprovement, blockedTaskTypes, appsWithBlockedImprovement } =
-    buildImprovementDedupSets(existingTasks, { ignoreTaskId });
+    buildImprovementDedupSets(existingTasks, { ignoreTaskId, cleanupOnlyIds });
 
   // One clock for the whole tick: cron eligibility lasts a single minute, and
   // preparing earlier apps can take longer than that (#11755).
   const tickNow = Date.now();
   let queued = 0;
+  let continuationSatisfied = false;
 
   // Install-wide task types have no managed-app target: their cadence is
   // tracked by the global execution record, and one task is the complete run
@@ -1296,7 +1314,7 @@ export async function queueEligibleImprovementTasks(state, cosTaskData, {
   // that is independently due must get its own lane. The dedup key is the bare
   // analysis type, matching buildImprovementDedupSets for globally-scoped tasks
   // and ensuring one pending/blocked task suppresses only its own duplicate.
-  queued += await queueDueInstallWideImprovementTasks({
+  if (!continuationSourceAgentId) queued += await queueDueInstallWideImprovementTasks({
     dueTasks: await getDueTasks(null, { now: tickNow }), state, taskSchedule, existingTaskTypes,
     blockedTaskTypes, ignoreTaskId, wakeAfterRecord
   });
@@ -1311,16 +1329,18 @@ export async function queueEligibleImprovementTasks(state, cosTaskData, {
   const activitySnapshot = await loadAppActivity().catch(() => ({ apps: {} }));
 
   // Queue eligible improvement tasks for all managed apps (including PortOS)
-  const apps = await getActiveApps().catch(() => []);
+  const apps = (await getActiveApps().catch(() => []))
+    .filter(app => !continuationSourceAgentId || app.id === perpetualContinuation?.appId);
   // Snapshot every app's due set against `tickNow` BEFORE any prepareTask runs:
   // prepare does network and git work, so evaluating lazily would judge later
   // apps against a clock that already left the cron minute.
   const appDueSnapshots = [];
   for (const app of apps) {
     const continuingTaskType = perpetualContinuation?.appId === app.id ? perpetualContinuation.taskType : null;
+    const dueTasks = await getDueTasks(app.id, { continuingTaskType, now: tickNow });
     appDueSnapshots.push({
       app, continuingTaskType,
-      dueTasks: await getDueTasks(app.id, { continuingTaskType, now: tickNow })
+      dueTasks: continuationSourceAgentId ? dueTasks.filter(row => row.taskType === continuingTaskType) : dueTasks
     });
   }
 
@@ -1402,14 +1422,22 @@ export async function queueEligibleImprovementTasks(state, cosTaskData, {
       // (which use MEDIUM priority + `app-improve-*` id).
       task.priority = 'LOW';
       task.priorityValue = PRIORITY_VALUES.LOW;
-      task.id = `sys-${app.id.slice(0, 8)}-${nextType}-${Date.now().toString(36)}`;
+      task.id = continuationSourceAgentId ? `sys-swarm-refill-${continuationSourceAgentId}`
+        : `sys-${app.id.slice(0, 8)}-${nextType}-${Date.now().toString(36)}`;
+      if (continuationSourceAgentId) task.metadata = { ...task.metadata, cleanupRefillSource: continuationSourceAgentId };
 
       // Queue path: addTask's raw branch persists the task through COS-TASKS.md,
       // which folds multi-line descriptions to first line + full body in
       // metadata.prompt (#4153). On-demand path: emits unpersisted task on
       // task:ready, renders full description via getTaskPrompt.
-      const newTask = await persistTask(task, 'internal', { raw: true, ignoreTaskId, suppressDequeue: true });
-      if (newTask?.duplicate) continue;
+      const newTask = await persistTask(task, 'internal', { raw: true, ignoreTaskId, suppressDequeue: true,
+        ...(continuationSourceAgentId && { idempotencyKey: `swarm-cleanup-refill:${continuationSourceAgentId}` }) });
+      if (newTask?.duplicate) {
+        if (continuationSourceAgentId && newTask.id === task.id) continuationSatisfied = true;
+        continue;
+      }
+      if (newTask?.error) throw new Error(newTask.error);
+      if (continuationSourceAgentId) continuationSatisfied = true;
       // Recorded from `pendingPerpetualDispatch` — the RECORD prepare returned —
       // never from `task` or `newTask`: addTask hands back a different object
       // whenever the description is multi-line, so recording must not depend on
@@ -1430,6 +1458,7 @@ export async function queueEligibleImprovementTasks(state, cosTaskData, {
   if (queued > 0) {
     emitLog('info', `Queued ${queued} improvement task(s) to system tasks`);
   }
+  if (continuationSourceAgentId) return { queued, continuationSatisfied };
 }
 
 /**

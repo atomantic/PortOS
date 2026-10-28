@@ -361,6 +361,48 @@ export function recordCleanupOutcome(agentId, outcome) {
   return updateCompletionReceipt(agentId, metadata => metadataWithCleanupOutcome(metadata, outcome));
 }
 
+/** Persist independently verified delivery without settling the cleanup task. */
+export async function recordSwarmCleanupDelivery(agentId, expected, proof) {
+  let matched = false;
+  const saved = await updateCompletionReceipt(agentId, async (metadata, agent) => {
+    const [{ getTaskById }, { getInstanceId }, { activeAgents, runnerAgents, getActiveAgentIds }, contract] = await Promise.all([
+      import('./cosTaskStore.js'), import('./instanceIdentity.js'), import('./agentState.js'), import('./swarmCleanupDelivery.js'),
+    ]);
+    const [task, instance] = await Promise.all([getTaskById(agent.taskId), getInstanceId()]);
+    if (!contract.sameSwarmCleanupSnapshot(agent, expected)
+      || !contract.cleanupDeliveryProofMatches(task, { ...agent, metadata: { ...metadata, swarmCleanupDelivery: proof } }, instance)) return metadata;
+    const owners = await readAgentsStateForSafetyCheck();
+    if (!owners.trusted || getActiveAgentIds().includes(agentId) || Object.values(owners.agents).some(owner => owner.id !== agentId
+      && owner.taskId === agent.taskId && ['running', 'queued', 'finalizing', 'paused'].includes(owner.status))) return metadata;
+    for (const map of [activeAgents, runnerAgents]) {
+      if ([...map].some(([id, owner]) => id === agentId || (owner.taskId || owner.task?.id) === agent.taskId)) return metadata;
+    }
+    matched = true;
+    return { ...metadata, swarmCleanupDelivery: { ...proof,
+      ...(metadata.swarmCleanupDelivery?.continuationIssued && { continuationIssued: true }) } };
+  });
+  return saved && matched;
+}
+
+export async function markSwarmCleanupContinuationIssued(agentId, expectedProof) {
+  let matched = false;
+  const saved = await updateCompletionReceipt(agentId, (metadata) => {
+    const proof = metadata.swarmCleanupDelivery;
+    if (proof?.version !== 1 || !isDeepStrictEqual(proof.branches, expectedProof?.branches)) return metadata;
+    matched = true;
+    return proof.continuationIssued ? metadata : { ...metadata, swarmCleanupDelivery: { ...proof, continuationIssued: true } };
+  });
+  return saved && matched;
+}
+
+export async function recordSwarmCleanupContinuationAttempt(agentId) {
+  return updateCompletionReceipt(agentId, metadata => {
+    const proof = metadata.swarmCleanupDelivery;
+    if (proof?.version !== 1 || proof.continuationIssued) return metadata;
+    return { ...metadata, swarmCleanupDelivery: { ...proof, lastAttemptAt: new Date().toISOString() } };
+  });
+}
+
 function metadataWithCleanupOutcome(metadata, outcome) {
   const key = JSON.stringify([outcome.branch || null, outcome.path || null]);
   const prior = { ...metadata.cleanupOutcomes };

@@ -165,6 +165,15 @@ export async function prepareAgentSpawn(task, context = createAgentSpawnContext(
   startExecution(context.toolExecution.id);
 
   const freshTask = await getTaskById(task.id).catch(() => null);
+  if (task.metadata?.cleanupRefillSource || freshTask?.metadata?.cleanupRefillSource) {
+    const source = freshTask?.metadata?.cleanupRefillSource;
+    const { validCleanupRefillSource } = await import('./swarmCleanupDelivery.js');
+    if (!source || !await validCleanupRefillSource(source, freshTask.metadata.analysisType, freshTask.metadata.app).catch(() => false)) {
+      emitLog('warn', 'Swarm continuation held: its cleanup delivery source changed or is unreadable', { taskId: task.id });
+      await context.cleanupOnError('cleanup delivery source unavailable');
+      return null;
+    }
+  }
   if (freshTask) {
     if (isRetryHeld(freshTask.metadata)) {
       console.log(`⏳ Task ${task.id} is held for its retry pointer — not spawning until cleanup releases it`);

@@ -103,7 +103,7 @@ vi.mock('../lib/paths.js', async (importOriginal) => makePathsProxy(await import
   dataRoot: () => lazyTempDataRoot('portos-cos-lifecycle-'),
 }));
 
-import { getAgent, getAgentPrompt, createAgentOutputBatcher, completeAgent, recordCompletionCleanup, recordInheritedCheckoutRetirement, recordSeededCheckoutRetirement, recordSuccessorCheckoutRetirement, settleAbsentTaskCompletion, retryCompletionCheckoutCapture, recordRepoStateVerification, reserveRepoCleanupRecovery, recordRepoCleanupRecovery, recordCleanupOutcome, updateAgent, registerAgent, cleanupZombieAgents, filterLiveAgentIds, readAgentRecordOrUnreadable, deleteAgent, AGENT_RECORD_UNREADABLE, AGENT_OUTPUT_TAIL_LINES } from './cosAgentLifecycle.js';
+import { getAgent, getAgentPrompt, createAgentOutputBatcher, completeAgent, recordCompletionCleanup, recordInheritedCheckoutRetirement, recordSeededCheckoutRetirement, recordSuccessorCheckoutRetirement, settleAbsentTaskCompletion, retryCompletionCheckoutCapture, recordRepoStateVerification, reserveRepoCleanupRecovery, recordRepoCleanupRecovery, recordCleanupOutcome, recordSwarmCleanupDelivery, updateAgent, registerAgent, cleanupZombieAgents, filterLiveAgentIds, readAgentRecordOrUnreadable, deleteAgent, AGENT_RECORD_UNREADABLE, AGENT_OUTPUT_TAIL_LINES } from './cosAgentLifecycle.js';
 import { saveState, loadState, readAgentsStateForSafetyCheck } from './cosState.js';
 import { recordDomainUsage } from './domainUsage.js';
 import { cosEvents } from './cosEvents.js';
@@ -128,6 +128,38 @@ describe('deferred delivery receipt result', () => {
       cleanupOutcome: { status: 'verified', unresolved: 0, committedIntegrationVerified: true },
       completionCleanup: { version: 1, status: 'completed', stages: Object.fromEntries(
         ['sentinel', 'jira', 'notification', 'pipeline', 'creative', 'report', 'worktree'].map(key => [key, { status: 'done' }])) } } });
+
+  it.each(['matching', 'new-dispatch', 'active-owner', 'changed-capture'])(
+    'records swarm delivery proof only for the same released dispatch: %s', async scenario => {
+      const agent = fixture();
+      agent.taskId = 'task-swarm-proof';
+      agent.metadata.repoStateVerification = { status: 'pending' };
+      agent.metadata.cleanupOutcome = { status: 'blocked', unresolved: 1 };
+      const branch = 'claim/issue-42', head = 'a'.repeat(40), start = agent.startedAt;
+      const task = { id: agent.taskId, taskType: 'internal', status: 'in_progress', metadata: {
+        app: 'app', analysisType: 'claim-issue', perpetual: true, claimFlow: true, swarmCount: 2,
+        claimedBy: 'fixture-local', claimedAt: start, lastSpawnedAt: start, totalSpawnCount: 1,
+        deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: agent.id, taskOutcome: agent.result.taskOutcome,
+      } };
+      Object.assign(agent.metadata, { instanceId: 'fixture-local', taskApp: 'app', taskAnalysisType: 'claim-issue', configClaimFlow: true,
+        isWorktree: false, workspacePath: '/repo', claimBranches: [branch], claimReleasedBranches: [],
+        completionTaskDispatch: { taskId: task.id, taskType: 'internal', expected: [
+          ['claimedBy', 'fixture-local'], ['claimedAt', start], ['lastSpawnedAt', start], ['totalSpawnCount', 1],
+        ] }, completedCheckouts: [{ version: 1, agentId: agent.id, startedAt: start, capturedAt: start,
+          repoPath: '/repo', path: '/tree', branch, head, incarnation: { pointer: { dev: '1', ino: '2', birthtimeNs: '3' } } }] });
+      const expected = structuredClone(agent);
+      const proof = { version: 1, branches: [{ branch, head, prUrl: 'https://github.com/a/b/pull/42' }] };
+      if (scenario === 'new-dispatch') task.metadata.totalSpawnCount = 2;
+      if (scenario === 'changed-capture') agent.metadata.completedCheckouts[0].head = 'b'.repeat(40);
+      mockCosState.state = { agents: { [agent.id]: agent } };
+      if (scenario === 'active-owner') mockCosState.state.agents.rival = { id: 'rival', taskId: task.id, status: 'running' };
+      recoveryTasks.set(task.id, task);
+      try {
+        expect(await recordSwarmCleanupDelivery(agent.id, expected, proof)).toBe(scenario === 'matching');
+        expect(Boolean(mockCosState.state.agents[agent.id].metadata.swarmCleanupDelivery)).toBe(scenario === 'matching');
+        expect(task.status).toBe('in_progress');
+      } finally { recoveryTasks.delete(task.id); }
+    });
 
   it('persists settled delivery in live and archived records without re-emitting completion', async () => {
     const agent = fixture();

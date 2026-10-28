@@ -45,7 +45,7 @@ import { resolveRetirementApp } from './retirementAppScope.js';
 
 import { readLocalBranchPresence, readCheckoutPathPresence, inspectOpenDeliveryRepair } from './repoCleanupObservation.js';
 import { join, resolve } from 'path';
-import { emitLog } from './cosEvents.js';
+import { cosEvents, emitLog } from './cosEvents.js';
 import { addTask, updateTask } from './cosTaskStore.js';
 import * as git from './git.js';
 import { listWorktrees } from './worktreeManager.js';
@@ -280,6 +280,25 @@ async function probeRepoState({ sourceWorkspace, branchName, worktreePath, branc
  */
 const verificationRuns = new Map();
 
+async function notifyDeliveredSwarmCleanup(agentId) {
+  const [{ getAgentRecord }, { getTaskById }, { getInstanceId }, contract] = await Promise.all([
+    import('./cosAgentLifecycle.js'), import('./cosTaskStore.js'), import('./instanceIdentity.js'), import('./swarmCleanupDelivery.js'),
+  ]);
+  let agent = await getAgentRecord(agentId);
+  const task = agent && await getTaskById(agent.taskId);
+  const instance = await getInstanceId();
+  if (!contract.cleanupRefillSourceMatches(task, agent, instance)) {
+    const proof = await contract.proveSwarmCleanupDelivery(task, agent, instance);
+    if (!proof) return;
+    const { recordSwarmCleanupDelivery } = await import('./cosAgentLifecycle.js');
+    if (!await recordSwarmCleanupDelivery(agentId, agent, proof)) return;
+    agent = await getAgentRecord(agentId);
+  }
+  if (contract.cleanupRefillSourceMatches(task, agent, instance) && !agent.metadata.swarmCleanupDelivery.continuationIssued) {
+    cosEvents.emit('swarm:cleanup-delivery-verified', { agentId });
+  }
+}
+
 /** A removed task is never recreated. Its immutable replay may only authorize
  * verification of already absent, exactly captured checkouts on this install. */
 async function readAbsentTaskSnapshot(agent) {
@@ -343,6 +362,8 @@ function exhaustedCleanupOwner(task, agent) {
 export async function verifyAgentRepoState(input) {
   if (verificationRuns.has(input.agentId)) return verificationRuns.get(input.agentId);
   const cleanupPending = input.agentState?.result?.cleanupPending === true;
+  const swarmCleanup = cleanupPending && input.agentState?.metadata?.configClaimFlow === true
+    && input.agentState.metadata.isWorktree === false;
   const verify = async () => {
     if (input.agentState?.metadata?.completionSentinel
       && await completionSentinelPresent(input.agentId, input.agentState.metadata.workspacePath)) return skipped('completion-sentinel-generation-pending');
@@ -375,6 +396,11 @@ export async function verifyAgentRepoState(input) {
       ...(cleanupPending ? { cleanupWarnings: [] } : {}) });
   };
   const run = withDeliveryActivity(input.agentId, 'Checking delivery and repository preservation', async () => {
+    if (swarmCleanup) {
+      await notifyDeliveredSwarmCleanup(input.agentId).catch(error => {
+        emitLog('warn', `Swarm delivery verification deferred: ${error.message}`, { agentId: input.agentId });
+      });
+    }
     const result = await verify();
     if (result.skipReason === 'cleanup-owner-changed' || result.skipReason === 'cleanup-task-unavailable') return result;
     if (input.originTaskAbsent) {
@@ -438,6 +464,11 @@ export async function verifyAgentRepoState(input) {
       const { recordRepoStateVerification } = await import('./cosAgentLifecycle.js');
       await recordRepoStateVerification(input.agentId, { status: settled ? 'completed' : 'pending',
         checkedAt: new Date().toISOString(), reasons: [...new Set(outcomes.map(item => item.skipReason).filter(Boolean))] });
+    }
+    if (swarmCleanup && !result.verified) {
+      await notifyDeliveredSwarmCleanup(input.agentId).catch(error => {
+        emitLog('warn', `Swarm delivery verification deferred: ${error.message}`, { agentId: input.agentId });
+      });
     }
     return result;
   }).finally(() => verificationRuns.delete(input.agentId));
@@ -933,6 +964,43 @@ async function resumeCompletionAudits({ onlyAgentIds, skipPrelude = false } = {}
       await recordRepoStateVerification(agent.id || agent.agentId, agent.metadata.repoStateVerification).catch(error => {
         emitLog('warn', `Deferred delivery settlement retained: ${error.code || 'receipt-unavailable'}`);
       });
+    }
+    // A crash can occur after retirement settled the task but before the
+    // verified drain's refill was queued. Its exact source receipt survives in
+    // the agent archive, so replay that continuation without rerunning work.
+    const swarmReplays = agents.filter(row => row.status === 'completed' && row.result?.success === true
+      && row.metadata?.swarmCleanupDelivery?.version === 1
+      && !row.metadata.swarmCleanupDelivery.continuationIssued)
+      .sort((a, b) => (a.metadata.swarmCleanupDelivery.lastAttemptAt || '')
+        .localeCompare(b.metadata.swarmCleanupDelivery.lastAttemptAt || ''))
+      .slice(0, COMPLETION_RECOVERY_BATCH_SIZE);
+    for (const agent of swarmReplays) {
+      const { recordSwarmCleanupContinuationAttempt } = await import('./cosAgentLifecycle.js');
+      await recordSwarmCleanupContinuationAttempt(agent.id || agent.agentId).catch(error => {
+        emitLog('warn', `Swarm continuation attempt could not be recorded: ${error.message}`, { agentId: agent.id || agent.agentId });
+      });
+      await notifyDeliveredSwarmCleanup(agent.id || agent.agentId).catch(error => {
+        emitLog('warn', `Swarm continuation replay deferred: ${error.message}`, { agentId: agent.id || agent.agentId });
+      });
+    }
+    // Mark any durable request whose agent was recorded before a crash. Its
+    // fence remains until admission settles, and then either side can remove it.
+    const issuedAgents = new Set(agents.filter(row => row.metadata?.swarmCleanupDelivery?.continuationIssued === true)
+      .map(row => row.id || row.agentId));
+    if (issuedAgents.size) {
+      const { loadSchedule } = await import('./taskScheduleStore.js');
+      const schedule = await loadSchedule().catch(() => null);
+      const fences = schedule?.swarmCleanupRefillPending || {};
+      const staleFences = Object.keys(fences).filter(id => {
+        const handoff = schedule.onDemandHandoffs?.[fences[id].id];
+        return issuedAgents.has(id) && (!fences[id].sourceMarked || (handoff && handoff.status !== 'preparing'));
+      }).slice(0, COMPLETION_RECOVERY_BATCH_SIZE);
+      if (staleFences.length) {
+        const { acknowledgeSwarmCleanupRefill } = await import('./taskSchedule.js');
+        for (const id of staleFences) await acknowledgeSwarmCleanupRefill(id).catch(error => {
+          emitLog('warn', `Swarm refill receipt cleanup deferred: ${error.message}`, { agentId: id });
+        });
+      }
     }
     // Replay completed handoffs after restart as well as at their event. Only
     // terminal parents with unfinished delivery qualify; ordinary completed
