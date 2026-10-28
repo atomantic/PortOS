@@ -161,6 +161,16 @@ describe('instances.js', () => {
       await vi.dynamicImportSettled();
     });
 
+    it('does not report a committed update as rejected when a subscriber throws', async () => {
+      readJSONFile.mockImplementation(async () => fixture());
+      instanceEvents.emit.mockImplementationOnce(() => { throw new Error('subscriber failed'); });
+      const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+      await expect(updatePeer('p1', { name: 'committed' })).resolves.toMatchObject({ name: 'committed' });
+      expect(atomicWrite).toHaveBeenCalledOnce();
+      expect(log).toHaveBeenCalledWith('❌ Instance post-commit notification failed: subscriber failed');
+      log.mockRestore();
+    });
+
     it('keeps missing-peer and unchanged tailcat port paths silent', async () => {
       readJSONFile.mockImplementation(async () => fixture());
       await updatePeer('missing', {});

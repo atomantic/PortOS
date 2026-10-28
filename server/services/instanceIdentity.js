@@ -78,7 +78,11 @@ export async function withData(fn) {
     const result = await fn(data, notify => notifications.push(notify));
     if (previousAuthority !== authorityProjection(data)) await executionAuthorityGuard?.();
     await saveData(data);
-    for (const notify of notifications) notify();
+    for (const notify of notifications) {
+      await Promise.resolve().then(notify).catch(err => {
+        console.error(`❌ Instance post-commit notification failed: ${err.message}`);
+      });
+    }
     return result;
   });
 }
