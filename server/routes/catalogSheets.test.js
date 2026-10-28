@@ -88,7 +88,13 @@ async function expectBackendPreview(preview, params) {
     const { localSentPrompt } = await import('../services/imageGen/local.js');
     record = await localSentPrompt({ ...params, model: mocks.getImageModels().find(m => m.id === params.modelId) });
   } else {
-    const { [params.mode === 'runway' ? 'runwayImageSentPrompt' : params.mode + 'SentPrompt']: builder } = await import(`../services/imageGen/${params.mode}.js`);
+    const backends = {
+      codex: () => import('../services/imageGen/codex.js'),
+      grok: () => import('../services/imageGen/grok.js'),
+      agy: () => import('../services/imageGen/agy.js'),
+      runway: () => import('../services/imageGen/runway.js'),
+    };
+    const { [params.mode === 'runway' ? 'runwayImageSentPrompt' : params.mode + 'SentPrompt']: builder } = await backends[params.mode]();
     const { join } = await import('node:path');
     const { tmpdir } = await import('node:os');
     record = builder({ ...params, inputImages, modelId: params.model,
