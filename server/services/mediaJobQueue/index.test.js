@@ -315,6 +315,7 @@ describe('mediaJobQueue', () => {
     await waitFor(() => stubs.generateImage.mock.calls.length === 1);
     const request = stubs.generateImage.mock.calls[0][0];
     expect(request.reviewedReferenceSnapshot).toEqual(original);
+    expect(request.modelId).toBeUndefined();
     expect(readFileSync(request.referenceImagePaths[0], 'utf8')).toBe('reviewed bytes');
     imageGenEvents.emit('failed', { generationId: job.jobId, error: 'synthetic', inputProcessSettled: true });
     await waitFor(() => mediaJobQueue.getJob(job.jobId).status === 'failed');

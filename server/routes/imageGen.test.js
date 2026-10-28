@@ -143,10 +143,10 @@ vi.mock('../services/userActions.js', () => ({ recordUserAction }));
 // wiring without standing up a peer registry.
 const federatedPeerId = '00000000-0000-4000-8000-0000000000f1';
 vi.mock('../services/federatedMedia/remoteSubmission.js', () => ({
-  prepareRemoteMediaJob: vi.fn(async ({ peerId, kind, request }) => ({
+  prepareRemoteMediaJob: vi.fn(async ({ peerId, kind, request, inputAssets }) => ({
     peer: { id: peerId },
     capability: { kind, engine: request.engine, modelId: request.modelId },
-    remoteMedia: { wireVersion: 1, peerId, reconcile: false, cancelRequested: false, request },
+    remoteMedia: { wireVersion: 1, peerId, reconcile: false, cancelRequested: false, request, ...(inputAssets?.length ? { inputAssets } : {}) },
   })),
 }));
 
@@ -2302,6 +2302,22 @@ describe('Image Gen Routes', () => {
   });
 
   describe('POST /api/image-gen/generate — federated media provider', () => {
+    it('previews and queues a reviewed peer reference even when the local default is text-only', async () => {
+      await fileUtils.ensureDir(fileUtils.PATHS.images);
+      await writeFile(pathJoin(fileUtils.PATHS.images, 'peer-reviewed.png'), 'reviewed peer image');
+      const body = { prompt: 'Edit the scene', modelId: 'dev', mediaProviderPeerId: federatedPeerId, referenceImageFiles: ['peer-reviewed.png'] };
+      const preview = await request(app).post('/api/image-gen/prompt-preview').send({ ...body, reviewReference: true });
+      expect(preview.status).toBe(200);
+      expect(preview.body.remote).toBe(true);
+      expect(preview.body.sentPrompt).toBe(body.prompt);
+      const response = await request(app).post('/api/image-gen/generate').send({ ...body, reviewedReferenceDigest: preview.body.reviewedReferenceDigest });
+      expect(response.status).toBe(200);
+      expect(mediaJobQueue.enqueueJob).toHaveBeenCalledWith(expect.objectContaining({ params: expect.objectContaining({
+        reviewedReferenceDigest: preview.body.reviewedReferenceDigest,
+        remoteMedia: expect.objectContaining({ inputAssets: [expect.objectContaining({ role: 'referenceImages' })] }),
+      }) }));
+    });
+
     it('submits to the selected peer and keeps the prompt inside the versioned marker', async () => {
       const response = await request(app).post('/api/image-gen/generate').send({
         prompt: 'a lighthouse at dusk',
@@ -2354,6 +2370,14 @@ describe('Image Gen Routes', () => {
         mediaProviderPeerId: federatedPeerId,
       });
 
+      expect(response.status).toBe(400);
+      expect(response.body.code).toBe('MEDIA_PROVIDER_MODEL_REQUIRED');
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+    });
+
+    it('does not substitute the local model for an unnamed peer model', async () => {
+      getSettings.mockResolvedValueOnce({ imageGen: { mode: 'local', local: { modelId: 'qwen-image-2.1' } } });
+      const response = await request(app).post('/api/image-gen/generate').send({ prompt: 'a lighthouse', mediaProviderPeerId: federatedPeerId });
       expect(response.status).toBe(400);
       expect(response.body.code).toBe('MEDIA_PROVIDER_MODEL_REQUIRED');
       expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();

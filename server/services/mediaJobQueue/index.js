@@ -1958,7 +1958,12 @@ async function runJobLifecycle(job, markDispatched, permit, finalizeLane) {
   // corrupted path from a hand-edited media-jobs.json. Null it out here if
   // it doesn't resolve under PATHS.uploads so the constraint holds end-to-end.
   const safeParams = { ...job.params };
-  if (job.params?.reviewedReferenceRequest) Object.assign(safeParams, job.params.reviewedReferenceRequest);
+  if (job.params?.reviewedReferenceRequest) {
+    const request = job.params.reviewedReferenceRequest;
+    // JSON drops undefined properties. Restore those absences explicitly so
+    // the top-level downgrade placeholders do not override provider defaults.
+    Object.assign(safeParams, request, { prompt: request.prompt, modelId: request.modelId, pythonPath: request.pythonPath });
+  }
   // Freeze only the dispatch copy to the default whose cohort passed the hold
   // check. The retained job's original parameters stay unchanged.
   if (job.videoCohort && (safeParams.modelId === undefined || safeParams.modelId === '')) {
