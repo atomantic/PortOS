@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
-import { mkdirSync, writeFileSync, existsSync } from 'fs';
+import { mkdirSync } from 'fs';
 import { join } from 'path';
 import { mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
 
-const { tempRoot, makeProxy, cleanup } = mockPathsDataRoot({ prefix: 'portos-datasync-vtomb-' });
+const { makeProxy, cleanup } = mockPathsDataRoot({ prefix: 'portos-datasync-vtomb-' });
 
 vi.mock('../lib/fileUtils.js', async () => {
   const actual = await vi.importActual('../lib/fileUtils.js');
