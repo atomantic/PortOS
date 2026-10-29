@@ -37,6 +37,9 @@ export const cloneMusicVideoProject = (id, data = {}, options = {}) => request(`
 export const updateMusicVideoProject = (id, patch, options = {}) => request(`/music-video/${encodeURIComponent(id)}`, {
   method: 'PATCH', body: JSON.stringify(patch), ...options,
 });
+export const labelMusicVideoReferencesFromCatalog = (id, options = {}) => request(`/music-video/${encodeURIComponent(id)}/references/catalog-labels`, {
+  method: 'POST', ...options,
+});
 export const getMusicVideoStoryContext = (id, options = {}) => request(`/music-video/${encodeURIComponent(id)}/story/context`, options);
 export const saveMusicVideoStorySummary = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/story/summary`, {
   method: 'PUT', body: JSON.stringify(body), ...options,

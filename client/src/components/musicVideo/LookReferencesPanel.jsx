@@ -4,6 +4,7 @@ import useMounted from '../../hooks/useMounted.js';
 import { isOutsideReference, MAX_CONDITIONING_REFERENCES } from '../../hooks/useMusicVideoSceneMedia.js';
 import { getMoodBoard } from '../../services/apiMoodBoard.js';
 import { getUniverse } from '../../services/apiUniverseBuilder.js';
+import { labelMusicVideoReferencesFromCatalog } from '../../services/apiMusicVideo.js';
 import { uploadGalleryImage } from '../../services/apiSystem.js';
 import { IMAGE_ACCEPT, readFileAsBase64, validateImageFile } from '../../utils/fileUpload.js';
 import { moodBoardItemAnalysisSource } from '../../lib/moodBoardItemSrc.js';
@@ -47,7 +48,7 @@ const optionLabel = (options, value) => options.find(([id]) => id === value)?.[1
  *    through `onSave`, and held pending so generation does not start on a
  *    half-edited set). Uploads do not invoke an AI provider.
  */
-export default function LookReferencesPanel({ project, onSave, onSaveSpec, onAddReference, onPendingChange }) {
+export default function LookReferencesPanel({ project, onSave, onSaveSpec, onAddReference, onReferenceLabels, onPendingChange }) {
   const mounted = useMounted();
   const spec = project.visualSpec || {};
   const references = spec.references || [];
@@ -66,6 +67,18 @@ export default function LookReferencesPanel({ project, onSave, onSaveSpec, onAdd
   useEffect(() => {
     if (!dirty && !busy) setUploads(project.styleReferences || []);
   }, [project.styleReferences, dirty, busy]);
+
+  // References saved before catalog naming existed get their Casting names once
+  // per visit; new additions are named by the save itself.
+  const hasUnlabeled = references.some((r) => r.imageId && !r.label?.trim());
+  const labelsAsked = useRef(false);
+  useEffect(() => {
+    if (!hasUnlabeled || !onReferenceLabels || labelsAsked.current) return;
+    labelsAsked.current = true;
+    labelMusicVideoReferencesFromCatalog(project.id, { silent: true })
+      .then(({ labels } = {}) => { if (mounted.current && labels && Object.keys(labels).length) onReferenceLabels(labels); })
+      .catch(() => {});
+  }, [hasUnlabeled, onReferenceLabels, project.id, mounted]);
 
   // An async import must not clobber an edit made while it was reading: read the
   // base list through a ref that tracks every render, not the click-time closure.
@@ -203,7 +216,8 @@ export default function LookReferencesPanel({ project, onSave, onSaveSpec, onAdd
                     {USES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
                   </select>
                   <label htmlFor={idFor(`label-${ref.id}`)} className="sr-only">Reference label</label>
-                  <input id={idFor(`label-${ref.id}`)} defaultValue={ref.label || ''} maxLength={120} placeholder="Label (e.g. lead singer)"
+                  {/* Keyed on the stored label so a name filled in from the catalog shows up. */}
+                  <input key={ref.label || ''} id={idFor(`label-${ref.id}`)} defaultValue={ref.label || ''} maxLength={120} placeholder="Label (e.g. lead singer)"
                     title={ref.label || 'Label (e.g. lead singer)'}
                     onBlur={(e) => { if (e.target.value !== (ref.label || '')) updateRef(ref.id, { label: e.target.value }); }}
                     className={fieldCls} />

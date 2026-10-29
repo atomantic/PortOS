@@ -3,11 +3,13 @@ import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import { MemoryRouter } from 'react-router';
 import LookReferencesPanel from './LookReferencesPanel.jsx';
 import { getMoodBoard } from '../../services/apiMoodBoard.js';
+import { labelMusicVideoReferencesFromCatalog } from '../../services/apiMusicVideo.js';
 
 vi.mock('../../services/apiMoodBoard.js', () => ({ getMoodBoard: vi.fn() }));
 vi.mock('../../services/api', () => ({
   listMoodBoards: vi.fn(async () => []), getMoodBoard: vi.fn(), createMoodBoard: vi.fn(),
 }));
+vi.mock('../../services/apiMusicVideo.js', () => ({ labelMusicVideoReferencesFromCatalog: vi.fn() }));
 vi.mock('../../services/apiUniverseBuilder.js', () => ({ getUniverse: vi.fn() }));
 vi.mock('../../services/apiSystem.js', () => ({ uploadGalleryImage: vi.fn(async () => ({ filename: 'uploaded.png' })) }));
 vi.mock('../../utils/fileUpload.js', () => ({ IMAGE_ACCEPT: 'image/png,image/jpeg,image/webp', readFileAsBase64: vi.fn(async () => 'encoded'), validateImageFile: vi.fn(() => null) }));
@@ -33,6 +35,24 @@ describe('look references', () => {
     expect(screen.getByLabelText('Style caption 1').value).toBe('Fine grain');
     fireEvent.click(screen.getByLabelText('Condition frames'));
     expect(onSaveSpec).toHaveBeenCalledWith({ references: [{ id: 'r1', imageId: 'face.png', role: 'character', label: 'Singer', condition: true }] });
+  });
+
+  it('asks once for Casting names for unlabeled references and shows a name that lands', async () => {
+    labelMusicVideoReferencesFromCatalog.mockResolvedValue({ labels: { r1: 'Example Lead' } });
+    const onReferenceLabels = vi.fn();
+    const project = { visualSpec: { references: [{ id: 'r1', imageId: 'sheet.png', role: 'character', label: '' }] } };
+    const view = mount(project, { onReferenceLabels });
+    await waitFor(() => expect(onReferenceLabels).toHaveBeenCalledWith({ r1: 'Example Lead' }));
+    expect(labelMusicVideoReferencesFromCatalog).toHaveBeenCalledTimes(1);
+    expect(labelMusicVideoReferencesFromCatalog).toHaveBeenCalledWith('example', { silent: true });
+    view.rerender(
+      <MemoryRouter>
+        <LookReferencesPanel project={{ id: 'example', visualSpec: { references: [{ ...project.visualSpec.references[0], label: 'Example Lead' }] } }}
+          onSave={vi.fn()} onSaveSpec={vi.fn()} onAddReference={vi.fn()} onReferenceLabels={onReferenceLabels} />
+      </MemoryRouter>,
+    );
+    expect(screen.getByLabelText('Reference label').value).toBe('Example Lead');
+    expect(labelMusicVideoReferencesFromCatalog).toHaveBeenCalledTimes(1);
   });
 
   it('offers no condition toggle for a mood board import or a Pinterest pin', () => {

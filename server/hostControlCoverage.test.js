@@ -880,6 +880,7 @@ const REVIEWED_OPEN_MUTATIONS = [
   ['DELETE /api/music-video/:id/publish/drafts/:draftId', REMOVES_RECORD],
   ['DELETE /api/music-video/:id/publish/posts/:target', REMOVES_RECORD],
   ['PUT /api/music-video/:id/publish/posts/:target', RECORDS],
+  ['POST /api/music-video/:id/references/catalog-labels', RECORDS],
   ['POST /api/music-video/:id/render-cleanup', REMOVES_RECORD],
   ['POST /api/music-video/:id/revisions/:revisionId/cancel', REDUCES_EXECUTION],
   ['POST /api/music-video/:id/revisions/:revisionId/release', RECORDS],
