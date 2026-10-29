@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { setupTimeMachine } from '../setup-timemachine.js';
-import { TIME_MACHINE_EXCLUDED_DIRS } from './timeMachineExclude.js';
+import { confirmOnTty, TIME_MACHINE_EXCLUDED_DIRS } from './timeMachineExclude.js';
 
 const root = resolve(tmpdir(), 'portos-time-machine-fixture-not-created');
 const dataPaths = [
@@ -139,6 +139,22 @@ describe('Time Machine setup backup boundary', () => {
       const run = vi.fn((command, args) => ({ status: 0, stdout: `[Excluded] ${args.at(-1)}` }));
       expect(setup({ run, preference: memoryPreference(null), confirm }).status).toBe('present');
       expect(confirm).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('confirmOnTty', () => {
+    const ask = (reply) => confirmOnTty(3, {
+      open: () => 9, write: () => 0, close: () => {},
+      read: (_fd, buf) => (reply === null ? 0 : buf.write(reply)),
+    });
+    it('maps answers, treats Enter as the Y default, and Ctrl-D as undecided', () => {
+      expect(ask('n\n')).toBe('no');
+      expect(ask('\n')).toBe('yes');
+      expect(ask('y\n')).toBe('yes');
+      expect(ask(null)).toBeNull();
+    });
+    it('returns null without a controlling terminal', () => {
+      expect(confirmOnTty(3, { open: () => { throw new Error('ENXIO'); } })).toBeNull();
     });
   });
 
