@@ -51,6 +51,10 @@ export const MIGRATION_OWNED_PATHS = new Set([
   // (LM_STUDIO_URL, CDP_HOST) and cause the service to ignore those env vars.
   'memory-classifier-config.json',
   'browser-config.json',
+  // Migration 450 stamps the origin machine on this install's own video rows
+  // and gallery image sidecars; a seed would be stamped as media made here.
+  'video-history.json',
+  'images',
 ]);
 
 /**
