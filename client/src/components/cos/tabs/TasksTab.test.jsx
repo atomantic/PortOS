@@ -1,13 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen, waitFor, act } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, act, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
-vi.mock('../../../hooks/useAssignableInstances', () => ({ default: () => ({ instances: [], isFederated: false }) }));
+vi.mock('../../../hooks/useAssignableInstances', () => ({ default: () => ({ instances: [{ instanceId: 'self', isSelf: true }], isFederated: false }) }));
 const api = vi.hoisted(() => ({
   getCosTasks: vi.fn(),
   getCosLearningDurations: vi.fn(),
+  recheckCosAgentCleanup: vi.fn(),
+  updateCosTask: vi.fn(),
 }));
-const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
+const toast = vi.hoisted(() => ({ success: vi.fn(), info: vi.fn(), error: vi.fn() }));
 
 vi.mock('../../../services/api', () => api);
 vi.mock('../../ui/Toast', () => ({ default: toast }));
@@ -49,7 +51,7 @@ describe('TasksTab spawning window', () => {
   // registerAgent always stamps it. See server/lib/cosSpawnWindow.js.
   const liveAgent = (id, taskId, ageMs = 0) => ({ id, status: 'running', taskId, startedAt: new Date(Date.now() - ageMs).toISOString() });
 
-  it('keeps incomplete cleanup in the normal task groups without a finalization section', async () => {
+  it('shows idle cleanup as pending for both queues', async () => {
     const heldTask = id => ({ id, description: `Finalize ${id}`, status: 'in_progress',
       metadata: { deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: `agent-${id}` } });
     renderTab({
@@ -60,9 +62,147 @@ describe('TasksTab spawning window', () => {
     expect(await screen.findByText('Finalize task-example')).toBeInTheDocument();
     expect(screen.getByText('Finalize sys-rl-example')).toBeInTheDocument();
     expect(screen.queryByRole('region', { name: /finalizing delivery/i })).toBeNull();
-    expect(screen.getAllByText('Active (1)')).toHaveLength(2);
-    expect(screen.getAllByRole('button', { name: /Status: cleanup incomplete/ })).toHaveLength(2);
+    expect(screen.getAllByText('Pending (1)')).toHaveLength(2);
+    expect(screen.queryByText(/^Active \(/)).toBeNull();
+    expect(screen.getAllByRole('button', { name: /Status: cleanup pending/ })).toHaveLength(2);
 
+  });
+
+  it('moves cleanup to Active only while its owner has live delivery activity', async () => {
+    const task = { id: 'sys-cleanup', description: 'Finish cleanup', status: 'in_progress',
+      metadata: { deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-owner' } };
+    const owner = { id: 'agent-owner', taskId: task.id, status: 'completed' };
+    const view = activity => <MemoryRouter><TasksTab tasks={{ user: { tasks: [] }, cos: { tasks: [task] } }}
+      agents={[{ ...owner, deliveryActivity: activity }]} onRefresh={vi.fn()} providers={[]} apps={[]} /></MemoryRouter>;
+    const { rerender } = render(view(null));
+    expect(await screen.findByText('Pending (1)')).toBeInTheDocument();
+    rerender(view({ label: 'Checking repository preservation' }));
+    expect(await screen.findByText('Active (1)')).toBeInTheDocument();
+    rerender(view(null));
+    expect(await screen.findByText('Pending (1)')).toBeInTheDocument();
+  });
+
+  it.each(['user', 'internal'])('preserves an unsaved %s task edit through cleanup activity changes', async source => {
+    const task = { id: 'held-draft', description: 'Original description', status: 'in_progress',
+      metadata: { deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-owner' } };
+    const owner = { id: 'agent-owner', taskId: task.id, status: 'completed' };
+    const view = activity => <MemoryRouter><TasksTab tasks={{ user: { tasks: source === 'user' ? [task] : [] },
+      cos: { tasks: source === 'internal' ? [task] : [] } }} agents={[{ ...owner, deliveryActivity: activity }]}
+      onRefresh={vi.fn()} providers={[]} apps={[]} /></MemoryRouter>;
+    const { rerender } = render(view(null));
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit task' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Task description' }), { target: { value: 'My unfinished edit' } });
+    rerender(view({ label: 'Checking cleanup' }));
+    expect(await screen.findByText('Active (1)')).toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: 'Task description' })).toHaveValue('My unfinished edit');
+    rerender(view(null));
+    expect(await screen.findByText('Pending (1)')).toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: 'Task description' })).toHaveValue('My unfinished edit');
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.getByRole('group', { name: 'Confirm discard task edits' })).toBeInTheDocument();
+  });
+
+  it('preserves a task block dialog while cleanup moves between sections', async () => {
+    const task = { id: 'held-modal', description: 'Finish delivery', status: 'in_progress',
+      metadata: { deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-owner' } };
+    const owner = { id: 'agent-owner', taskId: task.id, status: 'completed' };
+    const view = activity => <MemoryRouter><TasksTab tasks={{ user: { tasks: [] }, cos: { tasks: [task] } }}
+      agents={[{ ...owner, deliveryActivity: activity }]} onRefresh={vi.fn()} providers={[]} apps={[]} /></MemoryRouter>;
+    const { rerender } = render(view(null));
+    fireEvent.click(await screen.findByRole('button', { name: 'Mark task as blocked' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Reason this task is blocked' }), { target: { value: 'Need a review' } });
+    rerender(view({ label: 'Checking cleanup' }));
+    expect(await screen.findByText('Active (1)')).toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: 'Reason this task is blocked' })).toHaveValue('Need a review');
+  });
+
+  it('keeps only queued user tasks sortable when cleanup is pending', async () => {
+    const queued = { id: 'queued', description: 'Queued task', status: 'pending', metadata: {} };
+    const held = { id: 'held', description: 'Held cleanup', status: 'in_progress',
+      metadata: { deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-owner' } };
+    renderTab({ tasks: { user: { tasks: [queued, held] }, cos: { tasks: [] } },
+      agents: [{ id: 'agent-owner', taskId: held.id, status: 'completed' }] });
+    const queuedRow = await screen.findByText('Queued task');
+    const heldRow = screen.getByText('Held cleanup');
+    expect(within(queuedRow.closest('[data-task-group]')).getByRole('button', { name: 'Drag to reorder' })).toBeInTheDocument();
+    expect(within(heldRow.closest('[data-task-group]')).queryByRole('button', { name: 'Drag to reorder' })).toBeNull();
+  });
+
+  it('shows exact retry-cleanup activity but ignores an unattributed boolean hold', async () => {
+    const held = { id: 'retry-held', description: 'Retry cleanup', status: 'in_progress', metadata: { retryPendingCleanup: 'agent-owner' } };
+    const owner = { id: 'agent-owner', taskId: held.id, status: 'completed', deliveryActivity: { label: 'Saving retry checkout' } };
+    const view = (task, agent) => <MemoryRouter><TasksTab tasks={{ user: { tasks: [] }, cos: { tasks: [task] } }}
+      agents={[agent]} onRefresh={vi.fn()} providers={[]} apps={[]} /></MemoryRouter>;
+    const { rerender } = render(view(held, owner));
+    expect(await screen.findByText('Active (1)')).toBeInTheDocument();
+    expect(screen.getByText('Saving retry checkout')).toBeInTheDocument();
+    rerender(view({ ...held, metadata: { retryPendingCleanup: 'true' } }, { ...owner, id: 'true' }));
+    expect(await screen.findByText('Pending (1)')).toBeInTheDocument();
+    expect(screen.queryByText('Active (1)')).toBeNull();
+  });
+
+  it('prefers the active retry owner when delivery and retry holds name different owners', async () => {
+    const task = { id: 'two-owners', description: 'Delivery and retry cleanup', status: 'in_progress',
+      metadata: { deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-delivery', retryPendingCleanup: 'agent-retry' } };
+    renderTab({ tasks: { user: { tasks: [] }, cos: { tasks: [task] } }, agents: [
+      { id: 'agent-delivery', taskId: task.id, status: 'completed' },
+      { id: 'agent-retry', taskId: task.id, status: 'completed', deliveryActivity: { label: 'Saving the retry checkout' } },
+    ] });
+    expect(await screen.findByText('Active (1)')).toBeInTheDocument();
+    expect(screen.getByText('Saving the retry checkout')).toBeInTheDocument();
+  });
+
+  it.each([
+    ['loading', false, null, {}, /Agent status is loading/],
+    ['failed', true, 'unavailable', {}, /Agent status could not be loaded/],
+    ['peer owner', true, null, { claimedBy: 'peer' }, /different instance claimed this task/],
+  ])('keeps %s activity explicitly unconfirmed', async (_label, agentsLoaded, agentsError, metadata, reason) => {
+    const task = { id: 'unknown', description: 'Activity needs confirmation', status: 'in_progress', metadata };
+    renderTab({ tasks: { user: { tasks: [] }, cos: { tasks: [task] } }, agentsLoaded, agentsError });
+    expect(await screen.findByText('Activity unconfirmed (1)')).toBeInTheDocument();
+    expect(screen.getByText(reason)).toBeInTheDocument();
+    expect(screen.queryByText('Pending (1)')).toBeNull();
+  });
+
+  it('does not show a stale running agent or reset action after the agent read fails', async () => {
+    const task = { id: 'stale', description: 'Stale task', status: 'in_progress', metadata: {} };
+    renderTab({ tasks: { user: { tasks: [] }, cos: { tasks: [task] } }, agentsLoaded: true, agentsError: 'unavailable',
+      agents: [liveAgent('agent-old', task.id)] });
+    expect(await screen.findByText('Activity unconfirmed (1)')).toBeInTheDocument();
+    expect(screen.queryByText('Active agent agent-old')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Reset spawn budget and run' })).toBeNull();
+    expect(screen.getByRole('button', { name: /Status: activity unconfirmed/ })).toBeDisabled();
+  });
+
+  it('still recognizes a locally idle preflight while the agent list is loading', async () => {
+    const task = { id: 'preflight-demand-1', description: 'Queued preparation', status: 'in_progress', preflightActive: false,
+      metadata: { machineLocal: 'true', preflight: { requestId: 'demand-1', phase: 'queued', steps: [{ key: 'prepare', label: 'Preparing', status: 'pending' }] } } };
+    renderTab({ tasks: { user: { tasks: [] }, cos: { tasks: [task] } }, agentsLoaded: false });
+    expect(await screen.findByText('Pending (1)')).toBeInTheDocument();
+    expect(screen.queryByText('Activity unconfirmed (1)')).toBeNull();
+  });
+
+  it('uses live preflight activity instead of a persisted preparing phase', async () => {
+    const task = { id: 'preflight-demand-1', description: 'Preparing a task', status: 'in_progress',
+      metadata: { machineLocal: true, preflight: { requestId: 'demand-1', phase: 'preparing', steps: [{ key: 'prepare', label: 'Preparing', status: 'active' }] } } };
+    const view = active => <MemoryRouter><TasksTab tasks={{ user: { tasks: [] }, cos: { tasks: [{ ...task, preflightActive: active }] } }}
+      onRefresh={vi.fn()} providers={[]} apps={[]} /></MemoryRouter>;
+    const { rerender } = render(view(false));
+    expect(await screen.findByText('Pending (1)')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Reset spawn budget and run' })).toBeNull();
+    rerender(view(true));
+    expect(await screen.findByText('Active (1)')).toBeInTheDocument();
+    expect(screen.getByText('running now — no agent has started yet')).toBeInTheDocument();
+  });
+
+  it('keeps a legacy shared preflight unconfirmed without local activity evidence', async () => {
+    const task = { id: 'preflight-legacy', description: 'Shared preparation', status: 'in_progress', preflightActive: false,
+      metadata: { preflight: { requestId: 'legacy', phase: 'preparing', steps: [{ key: 'prepare', label: 'Preparing', status: 'active' }] } } };
+    renderTab({ tasks: { user: { tasks: [] }, cos: { tasks: [task] } }, agentsLoaded: true });
+    expect(await screen.findByText('Activity unconfirmed (1)')).toBeInTheDocument();
+    expect(screen.getByText(/shared pre-agent card may be running/)).toBeInTheDocument();
+    expect(screen.getByText('activity unconfirmed')).toBeInTheDocument();
+    expect(screen.queryByText('waiting for preparation')).toBeNull();
   });
 
   it('keeps an actual running agent active even if an old cleanup marker remains', async () => {
@@ -102,6 +242,34 @@ describe('TasksTab spawning window', () => {
     rerender(view(null));
     expect(screen.getByText(/Execution ended; delivery or cleanup still needs repair/)).toBeInTheDocument();
     expect(screen.getByLabelText('Delivery activity').querySelector('.animate-spin')).toBeNull();
+  });
+
+  it('rechecks only the selected cleanup owner and reports a remaining hold', async () => {
+    api.recheckCosAgentCleanup.mockResolvedValue({ ok: true, verified: false, reasons: ['release-sync-local-review-unretained'] });
+    const task = { id: 'sys-held', description: 'Finish delivery', status: 'in_progress',
+      metadata: { deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-owner' } };
+    renderTab({ tasks: { user: { tasks: [] }, cos: { tasks: [task] } },
+      agents: [{ id: 'agent-owner', taskId: task.id, status: 'completed', result: { cleanupPending: true } }] });
+    fireEvent.click(await screen.findByRole('button', { name: 'Retry cleanup' }));
+    await waitFor(() => expect(api.recheckCosAgentCleanup).toHaveBeenCalledWith('agent-owner', task.id, { silent: true }));
+    expect(await screen.findByText(/Cleanup still needs attention: Waiting for release review evidence/)).toBeInTheDocument();
+    expect(toast.info).toHaveBeenCalledWith(expect.stringContaining('sys-held: Cleanup still needs attention'));
+  });
+
+  it('announces cleanup results even if activity moves the row between sections', async () => {
+    let resolveCheck;
+    api.recheckCosAgentCleanup.mockImplementation(() => new Promise(resolve => { resolveCheck = resolve; }));
+    const task = { id: 'sys-held', description: 'Finish delivery', status: 'in_progress',
+      metadata: { deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-owner' } };
+    const owner = { id: 'agent-owner', taskId: task.id, status: 'completed', result: { cleanupPending: true } };
+    const view = activity => <MemoryRouter><TasksTab tasks={{ user: { tasks: [] }, cos: { tasks: [task] } }}
+      agents={[{ ...owner, deliveryActivity: activity }]} onRefresh={vi.fn()} providers={[]} apps={[]} /></MemoryRouter>;
+    const { rerender } = render(view(null));
+    fireEvent.click(await screen.findByRole('button', { name: 'Retry cleanup' }));
+    rerender(view({ label: 'Checking cleanup' }));
+    expect(await screen.findByText('Active (1)')).toBeInTheDocument();
+    await act(async () => resolveCheck({ ok: true, verified: false, reasons: ['cleanup-review-required'] }));
+    expect(toast.info).toHaveBeenCalledWith(expect.stringContaining('retained checkout needs a preservation review'));
   });
 
   it('moves a pending task with a live agent out of Pending and into Active', async () => {

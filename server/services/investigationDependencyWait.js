@@ -253,7 +253,7 @@ export function _createInvestigationDependencyWait(deps = {}) {
   };
   const bind = events => {
     const wake = data => {
-      if (data?.task?.status !== 'completed') return;
+      if (data?.suppressCompletionWake || data?.task?.status !== 'completed') return;
       return reconcile().catch(async error => {
         const { emitLog } = await import('./cosEvents.js');
         emitLog('warn', `Investigation dependency verification deferred: ${error.message}`);

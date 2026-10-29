@@ -895,6 +895,23 @@ describe('ChiefOfStaff task unblock freshness', () => {
 describe('ChiefOfStaff stale queue-read guard', () => {
   const getSocketHandler = (event) => socketStub.on.mock.calls.find(([evt]) => evt === event)?.[1];
 
+  it('keeps task activity unconfirmed after an agent-read failure until a retry succeeds', async () => {
+    const task = { id: 'unknown-agent', description: 'Task with unknown activity', status: 'in_progress', metadata: {} };
+    api.getCosTasks.mockResolvedValue({ user: { tasks: [] }, cos: { tasks: [task] } });
+    api.getCosAgents.mockRejectedValueOnce(new Error('offline'));
+    await renderSettledAt('tasks');
+    expect(await screen.findByText('Activity unconfirmed (1)')).toBeInTheDocument();
+    expect(screen.getByText(/Agent status could not be loaded/)).toBeInTheDocument();
+
+    let finishRetry;
+    api.getCosAgents.mockReturnValue(new Promise(resolve => { finishRetry = resolve; }));
+    await act(async () => { getSocketHandler('cos:tasks:changed')({ type: 'internal', action: 'updated' }); });
+    await waitFor(() => expect(finishRetry).toBeTypeOf('function'));
+    expect(screen.getByText(/Agent status could not be loaded/)).toBeInTheDocument();
+    await act(async () => finishRetry([]));
+    expect(await screen.findByText('Pending (1)')).toBeInTheDocument();
+  });
+
   it('does not let a slow full fetch overwrite a fresher queue refresh', async () => {
     const stale = { user: { tasks: [{ id: 'task-1', description: 'STALE pending copy', status: 'pending', metadata: {} }] }, cos: { tasks: [] } };
     const fresh = { user: { tasks: [{ id: 'task-1', description: 'FRESH in-progress copy', status: 'in_progress', metadata: {} }] }, cos: { tasks: [] } };

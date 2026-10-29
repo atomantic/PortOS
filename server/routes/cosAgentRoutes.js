@@ -14,12 +14,22 @@ import { getHealthStatus, runHealthCheck } from '../services/cosHealthMonitor.js
 import * as agentOrchestrator from '../services/agentOrchestrator.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { toAgentListItems } from '../lib/cosAgentListProjection.js';
-import { isDeliveryCleanupHeld } from '../lib/taskRetryHold.js';
+import { isDeliveryCleanupHeld, retryHoldOwnerId } from '../lib/taskRetryHold.js';
 import { getDeliveryActivity } from '../services/agentDeliveryActivity.js';
 import { securityScanRequestSchema } from '../lib/securityScanEvidence.js';
 import { validateRequest, resumeCosAgentSchema, relaunchCosAgentSchema, cosAgentFeedbackBodySchema, cosAgentBtwBodySchema } from '../lib/validation.js';
 
 const router = Router();
+
+router.post('/agents/:id/recheck-cleanup', asyncHandler(async (req, res) => {
+  const { taskId } = validateRequest(z.object({ taskId: z.string().min(1).max(512) }).strict(), req.body ?? {});
+  const { recheckAgentCleanup } = await import('../services/agentRepoStateVerification.js');
+  const result = await recheckAgentCleanup(req.params.id, taskId);
+  if (!result.ok) throw new ServerError(result.reason === 'cleanup-already-running'
+    ? 'Cleanup is already running' : 'The cleanup owner changed; refresh this task before retrying',
+  { status: 409, code: 'CLEANUP_RECHECK_REFUSED', context: { reason: result.reason } });
+  res.json(result);
+}));
 
 router.post('/agents/:id/security-scan', asyncHandler(async (req, res) => {
   const input = validateRequest(securityScanRequestSchema, req.body ?? {});
@@ -167,8 +177,11 @@ router.get('/agents', asyncHandler(async (req, res) => {
   // Execution can finish before delivery does. Follow only the task's exact
   // cleanup owner, including archived records, without loading transcripts or
   // changing the run's terminal status (and therefore scheduler capacity).
-  await Promise.all(tasks.filter(task => task.status === 'in_progress' && isDeliveryCleanupHeld(task.metadata) && !runningTasks.has(task.id)).map(async task => {
-    const id = task.metadata.deliveryRecoveryAgentId;
+  const owners = tasks.filter(task => task.status === 'in_progress' && !runningTasks.has(task.id)).flatMap(task => {
+    const ids = [isDeliveryCleanupHeld(task.metadata) && task.metadata.deliveryRecoveryAgentId, retryHoldOwnerId(task.metadata)].filter(Boolean);
+    return [...new Set(ids)].map(id => ({ task, id }));
+  });
+  await Promise.all(owners.map(async ({ task, id }) => {
     if (visible.has(id)) return;
     const agent = resident.get(id) || await getAgentRecord(id);
     if (agent?.status === 'completed' && agent.taskId === task.id) {

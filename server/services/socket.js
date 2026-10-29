@@ -472,8 +472,14 @@ function broadcastToCos(event, data) {
     if (!socket.connected) { cosSubscribers.delete(socket); continue; }
     const completedChanged = data?.task?.status === 'completed'
       || data?.previousStatus === 'completed' || ['deleted', 'peer-merged'].includes(data?.action);
+    // Activity changes carry only a task ID and an ephemeral boolean. Forward
+    // this bounded patch to compact subscribers so an in-flight preflight can
+    // change sections immediately, without exposing task content.
+    const activity = data?.activityOnly === 'preflight' && typeof data.task?.id === 'string'
+      && typeof data.task?.preflightActive === 'boolean'
+      ? { task: { id: data.task.id, preflightActive: data.task.preflightActive } } : {};
     socket.emit(event, socket.cosTaskLists === 'invalidate'
-      ? { invalidated: true, ...(completedChanged ? { completedChanged: true } : {}) } : data);
+      ? { invalidated: true, ...(completedChanged ? { completedChanged: true } : {}), ...activity } : data);
   }
 }
 

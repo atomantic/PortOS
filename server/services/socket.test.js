@@ -534,6 +534,8 @@ describe('socket.js — initSocket', () => {
     expect(compact.emitted).toContainEqual(['cos:tasks:changed', { invalidated: true, completedChanged: true }]);
     forwardChange({ task: { id: 'live', status: 'in_progress' } });
     expect(compact.emitted.at(-1)).toEqual(['cos:tasks:changed', { invalidated: true }]);
+    forwardChange({ activityOnly: 'preflight', task: { id: 'preflight-1', preflightActive: true, metadata: { prompt: 'private' } } });
+    expect(compact.emitted.at(-1)).toEqual(['cos:tasks:changed', { invalidated: true, task: { id: 'preflight-1', preflightActive: true } }]);
   });
 
   it('composes every per-feature handler registrar for a connected socket', () => {

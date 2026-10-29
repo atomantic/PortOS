@@ -2004,6 +2004,23 @@ describe('CoS scoped collections', () => {
     expect(waiting.body).toEqual([{ ...owner, deliveryPending: true }]);
   });
 
+  it('projects activity for an exact retry-cleanup owner without inventing a legacy owner', async () => {
+    const owner = { id: 'agent-retry-owner', taskId: 'task-held', status: 'completed' };
+    getAgents.mockResolvedValue([owner]);
+    getTaskView.mockResolvedValue({ user: { tasks: [{ id: owner.taskId, status: 'in_progress',
+      metadata: { retryPendingCleanup: owner.id } }, { id: 'legacy-hold', status: 'in_progress',
+      metadata: { retryPendingCleanup: 'true' } }] }, cos: { tasks: [] } });
+    let finish;
+    const recovery = withDeliveryActivity(owner.id, 'Cleaning up before retry', () => new Promise(resolve => { finish = resolve; }));
+    try {
+      const response = await request(app).get('/api/cos/agents?active=1');
+      expect(response.body).toEqual([expect.objectContaining({ ...owner, deliveryPending: true,
+        deliveryActivity: expect.objectContaining({ label: 'Cleaning up before retry' }) })]);
+      expect(getAgentRecord).not.toHaveBeenCalledWith('true');
+    } finally { finish(); await recovery; }
+    expect((await request(app).get('/api/cos/agents?active=1')).body).toEqual([{ ...owner, deliveryPending: true }]);
+  });
+
   it('scopes live agents and validates completed page bounds without changing legacy lists', async () => {
     getAgents.mockResolvedValue([{ id: 'running', status: 'running' }, { id: 'done', status: 'completed' }]);
     expect((await request(app).get('/api/cos/agents?active=1')).body.map(agent => agent.id)).toEqual(['running']);

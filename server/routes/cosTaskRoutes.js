@@ -25,6 +25,7 @@ import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.j
 import { recordUserAction } from '../services/userActions.js';
 import { fileInvestigationTask } from '../services/investigationTaskProducer.js';
 import { reportGoalFidelityFalsePositive } from '../services/goalFidelityCalibration.js';
+import { projectPreflightSource, projectPreflightTask } from '../services/preflightActivity.js';
 import { CLIENT_INVESTIGATION_DELIVERY, clientInvestigationFingerprint } from '../lib/investigationTasks.js';
 import {
   createCosTaskSchema,
@@ -194,8 +195,8 @@ router.get('/tasks', asyncHandler(async (req, res) => {
   const outboxPromise = readReleaseSynchronizationOutbox().catch(() => null);
   const settleView = (view, runningAgents, outbox) => ({
     ...view,
-    user: projectTaskSourceReleaseMilestones(settleTaskSourceSpawnWindow(view?.user, runningAgents), outbox),
-    cos: projectTaskSourceReleaseMilestones(settleTaskSourceSpawnWindow(view?.cos, runningAgents), outbox),
+    user: projectTaskSourceReleaseMilestones(settleTaskSourceSpawnWindow(projectPreflightSource(view?.user), runningAgents), outbox),
+    cos: projectTaskSourceReleaseMilestones(settleTaskSourceSpawnWindow(projectPreflightSource(view?.cos), runningAgents), outbox),
   });
   // The bounded views select inside the store BEFORE cloning, so a queue refresh
   // never copies archived prompt bodies (#9677). Settlement runs on the selection.
@@ -235,8 +236,8 @@ router.get('/tasks', asyncHandler(async (req, res) => {
   const runningAgents = runningAgentsByTaskId(agents);
   const { totals } = view;
   res.json({
-    user: projectTaskSourceReleaseMilestones(settleTaskSourceSpawnWindow(view.user, runningAgents), outbox),
-    cos: projectTaskSourceReleaseMilestones(settleTaskSourceSpawnWindow(view.cos, runningAgents), outbox),
+    user: projectTaskSourceReleaseMilestones(settleTaskSourceSpawnWindow(projectPreflightSource(view.user), runningAgents), outbox),
+    cos: projectTaskSourceReleaseMilestones(settleTaskSourceSpawnWindow(projectPreflightSource(view.cos), runningAgents), outbox),
     pagination: { limit, offset, userTotal: totals.user, cosTotal: totals.cos, total: totals.user + totals.cos }
   });
 }));
@@ -247,7 +248,7 @@ router.get('/tasks/user', asyncHandler(async (req, res) => {
   const { readReleaseSynchronizationOutbox } = await import('../services/releaseSynchronizationStore.js');
   const { projectTaskSourceReleaseMilestones } = await import('../services/releaseSynchronizationProjection.js');
   const [view, outbox] = await Promise.all([getTaskView({ kind: 'bare' }), readReleaseSynchronizationOutbox().catch(() => null)]);
-  res.json(projectTaskSourceReleaseMilestones(view.user, outbox));
+  res.json(projectTaskSourceReleaseMilestones(projectPreflightSource(view.user), outbox));
 }));
 
 // GET /api/cos/tasks/internal - Get CoS internal tasks
@@ -255,7 +256,7 @@ router.get('/tasks/internal', asyncHandler(async (req, res) => {
   const { readReleaseSynchronizationOutbox } = await import('../services/releaseSynchronizationStore.js');
   const { projectTaskSourceReleaseMilestones } = await import('../services/releaseSynchronizationProjection.js');
   const [view, outbox] = await Promise.all([getTaskView({ kind: 'bare' }), readReleaseSynchronizationOutbox().catch(() => null)]);
-  res.json(projectTaskSourceReleaseMilestones(view.cos, outbox));
+  res.json(projectTaskSourceReleaseMilestones(projectPreflightSource(view.cos), outbox));
 }));
 
 // GET /api/cos/tasks/:id - One task with the queue it lives in. The Chief of
@@ -267,7 +268,7 @@ router.get('/tasks/:id', asyncHandler(async (req, res) => {
   if (!found) throw new ServerError('Task not found', { status: 404, code: 'NOT_FOUND' });
   const { getProjectedTask } = await import('../services/releaseSynchronizationProjection.js');
   const task = await getProjectedTask(found.task);
-  res.json({ ...found, task });
+  res.json({ ...found, task: projectPreflightTask(task) });
 }));
 
 // POST /api/cos/tasks/reorder - Reorder tasks

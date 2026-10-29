@@ -18,7 +18,8 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const preflight = vi.hoisted(() => ({ reporter: vi.fn((cardId) => ({ boundTo: cardId })) }));
+const preflight = vi.hoisted(() => ({ reporter: vi.fn((cardId) => ({ boundTo: cardId })),
+  reportStep: vi.fn(async () => {}), finish: vi.fn(async () => {}), finishDispatch: vi.fn(async () => {}) }));
 const pipeline = vi.hoisted(() => ({ securityPreflight: vi.fn(async () => ({ skipped: true, reason: 'no-external-open-prs' })) }));
 const scheduleMocks = vi.hoisted(() => ({
   requests: [],
@@ -28,6 +29,9 @@ const scheduleMocks = vi.hoisted(() => ({
 vi.mock('./preflightTaskCard.js', async (importActual) => ({
   ...(await importActual()),
   preflightReporter: (...args) => preflight.reporter(...args),
+  reportPreflightStep: (...args) => preflight.reportStep(...args),
+  finishPreflightCard: (...args) => preflight.finish(...args),
+  finishPreflightDispatch: (...args) => preflight.finishDispatch(...args),
 }));
 // The security preflight is the deterministic phase whose progress the card
 // renders; skipping it keeps these tests on the wiring rather than on a real
@@ -150,6 +154,71 @@ describe('idle review stealing a queued on-demand request', () => {
     // Closing it belongs to the tier: this produced no task, and a card closed
     // `handed-off` here would name an agent that never started.
     expect(result.task).toBeNull();
+  });
+
+  it('keeps the stolen card active through the caller’s handoff', async () => {
+    const { isPreflightActive } = await import('./preflightActivity.js');
+    const entered = Promise.withResolvers();
+    const release = Promise.withResolvers();
+    let finishActivity;
+    scheduleMocks.requests = [request()];
+    pipeline.securityPreflight.mockImplementation(async () => { entered.resolve(); await release.promise; return { skipped: true }; });
+    const pending = generateIdleReviewTask(STATE, { onPreflightStart: (_id, end) => { finishActivity = end; } });
+    await entered.promise;
+    expect(isPreflightActive('preflight-demand-1')).toBe(true);
+    release.resolve();
+    await pending;
+    expect(isPreflightActive('preflight-demand-1')).toBe(true);
+    expect(preflight.reportStep).toHaveBeenCalledWith('preflight-demand-1', 'prepare');
+    finishActivity();
+    expect(isPreflightActive('preflight-demand-1')).toBe(false);
+  });
+
+  it('keeps activity through idle-tier closure and clears it on failure', async () => {
+    const { isPreflightActive } = await import('./preflightActivity.js');
+    const { admitIdleReviewTask } = await import('./cosDequeue.js');
+    const taskStore = await import('./cosTaskStore.js');
+    const spy = vi.spyOn(taskStore, 'getCosApprovalView').mockResolvedValue({ autoApprovedCount: 0 });
+    const entered = Promise.withResolvers();
+    const release = Promise.withResolvers();
+    scheduleMocks.requests = [request()];
+    preflight.finishDispatch.mockImplementationOnce(async () => { entered.resolve(); await release.promise; throw new Error('synthetic handoff failure'); });
+    try {
+      const pending = admitIdleReviewTask({ state: { ...STATE, config: { ...STATE.config, idleReviewEnabled: true } },
+        alreadySpawned: 0, hasPendingUserTasks: false, cosAutonomyMode: 'execute', autonomousSlotCeiling: 1 },
+      { canSpawn: () => true, emitSpawn: vi.fn(), trackSpawn: vi.fn() });
+      await entered.promise;
+      expect(isPreflightActive('preflight-demand-1')).toBe(true);
+      release.resolve();
+      await expect(pending).rejects.toThrow('synthetic handoff failure');
+      expect(isPreflightActive('preflight-demand-1')).toBe(false);
+      expect(preflight.finish).toHaveBeenCalledWith('preflight-demand-1', expect.objectContaining({ outcome: 'failed' }));
+    } finally { spy.mockRestore(); }
+  });
+
+  it('transfers an admitted stolen card to the periodic evaluator through dispatch', async () => {
+    const { beginPreflightActivity, isPreflightActive } = await import('./preflightActivity.js');
+    const { admitIdleReviewTask } = await import('./cosDequeue.js');
+    const taskStore = await import('./cosTaskStore.js');
+    const generator = await import('./cosTaskGenerator.js');
+    const task = { id: 'stolen-task', metadata: { app: 'example-app' } };
+    const storeSpy = vi.spyOn(taskStore, 'getCosApprovalView').mockResolvedValue({ autoApprovedCount: 0 });
+    const generatorSpy = vi.spyOn(generator, 'generateIdleReviewTask').mockImplementation(async (_state, { onPreflightStart }) => {
+      onPreflightStart('preflight-demand-1', beginPreflightActivity('preflight-demand-1'));
+      return { task, pendingPerpetualDispatch: null, preflightCardId: 'preflight-demand-1' };
+    });
+    let deferred;
+    try {
+      await admitIdleReviewTask({ state: { ...STATE, config: { ...STATE.config, idleReviewEnabled: true } },
+        alreadySpawned: 0, hasPendingUserTasks: false, cosAutonomyMode: 'execute', autonomousSlotCeiling: 1 },
+      { canSpawn: () => true, emitSpawn: vi.fn(), trackSpawn: vi.fn(),
+        deferPreflightDispatch: (taskId, entry) => { deferred = { taskId, ...entry }; } });
+      expect(deferred).toMatchObject({ taskId: task.id, cardId: 'preflight-demand-1', resultTaskId: task.id, persisted: false });
+      expect(isPreflightActive(deferred.cardId)).toBe(true);
+      expect(preflight.finishDispatch).not.toHaveBeenCalled();
+      deferred.endPreflight();
+      expect(isPreflightActive(deferred.cardId)).toBe(false);
+    } finally { generatorSpy.mockRestore(); storeSpy.mockRestore(); }
   });
 
   it('binds the pre-agent progress reporter to that card', async () => {

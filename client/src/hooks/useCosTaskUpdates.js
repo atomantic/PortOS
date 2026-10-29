@@ -16,7 +16,13 @@ export function useCosTaskUpdates(onTaskUpdate) {
     const emitTaskUpdate = task => {
       if (task) onTaskUpdateRef.current?.(task);
     };
-    const handleTaskChanged = event => emitTaskUpdate(event?.task);
+    const handleTaskChanged = event => {
+      const task = event?.task;
+      // Process-local preflight liveness is a partial patch, not a task
+      // lifecycle transition. Consumers here derive action state from status.
+      if (typeof task?.preflightActive === 'boolean' && !Object.hasOwn(task, 'status')) return;
+      emitTaskUpdate(task);
+    };
     const handleAgentSpawned = agent => {
       if (agent?.taskId) emitTaskUpdate({ id: agent.taskId, status: 'in_progress' });
     };

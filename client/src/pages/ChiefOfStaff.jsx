@@ -363,7 +363,6 @@ export default function ChiefOfStaff() {
     if (!needsAgents) return null;
     const request = { updates: new Map() };
     agentReadRef.current = request;
-    setAgentsError(null);
     const data = await api.getCosAgents({ active: true, signal: controller.signal, silent: true }).catch(() => null);
     if (controller.signal.aborted || queryRef.current !== queryKey || agentReadRef.current !== request) return null;
     agentReadRef.current = null;
@@ -373,6 +372,7 @@ export default function ChiefOfStaff() {
       const snapshot = [...merged.values()].filter(agent => agent.status !== 'completed' || agent.deliveryPending);
       setAgents(snapshot);
       setAgentsLoaded(true);
+      setAgentsError(null);
     } else {
       setAgentsError('Could not load active agents.');
     }
@@ -1491,7 +1491,7 @@ export default function ChiefOfStaff() {
           <div role="tabpanel" id="tabpanel-tasks" aria-labelledby="tab-tasks">
             <ActionableInsightsBanner insights={insights} onTaskUnblocked={handleTaskUnblocked} onRefresh={fetchData} />
             <Suspense fallback={<TabLoadFallback label="tasks" />}>
-              <TasksTab completedRevision={taskHistoryRevision} tasks={tasks} agents={agents} liveOutputs={liveOutputs} onRefresh={fetchData} onTaskAdded={handleUserTaskAdded} onTaskUnblocked={handleTaskUnblocked} onTaskDeleted={handleTaskDeleted} providers={providers} providersLoaded={providersLoaded} apps={apps} />
+              <TasksTab completedRevision={taskHistoryRevision} tasks={tasks} agents={agents} agentsLoaded={agentsLoaded} agentsError={agentsError} liveOutputs={liveOutputs} onRefresh={fetchData} onTaskAdded={handleUserTaskAdded} onTaskUnblocked={handleTaskUnblocked} onTaskDeleted={handleTaskDeleted} providers={providers} providersLoaded={providersLoaded} apps={apps} />
             </Suspense>
           </div>
         )}

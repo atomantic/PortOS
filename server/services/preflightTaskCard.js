@@ -29,6 +29,7 @@
 import { applyPreflightStep, createPreflightState, finalizePreflight, preflightHeadline } from '../lib/preflightPlan.js';
 import { addTask, getTaskById, updateTask } from './cosTaskStore.js';
 import { isUserOriginRequest } from './taskScheduleConstants.js';
+import { isPreflightActive } from './preflightActivity.js';
 
 /**
  * How long a card may sit `in_progress` before the orphan sweep calls it
@@ -70,6 +71,9 @@ export async function startPreflightCard({ requestId, taskType, appId = null, ap
       ...(preflight.appId ? { app: preflight.appId } : {}),
       ...(preflight.appName ? { appName: preflight.appName } : {}),
       analysisType: taskType,
+      // A progress card describes work on this process. Peers cannot observe
+      // its process-local activity or safely reap it as an orphan.
+      machineLocal: true,
       ...(targetPullRequest ? { targetPullRequest } : {}),
       preflight,
     },
@@ -137,7 +141,7 @@ export async function finishPreflightCard(cardId, options = {}) {
  * caller that advanced a step first persists the step and the close as one
  * write rather than re-reading the card it just wrote.
  */
-async function closeReadPreflight(cardId, preflight, { outcome, reason = null, note = null, resultTaskId = null } = {}) {
+async function closeReadPreflight(cardId, preflight, { outcome, reason = null, note = null, resultTaskId = null, expectedTask = null } = {}) {
   const next = finalizePreflight(preflight, { outcome, reason, note, resultTaskId });
   // `finalizePreflight` returns the same object for an already-closed card, and
   // a second close is expected: the drain closes generically after a path that
@@ -153,7 +157,7 @@ async function closeReadPreflight(cardId, preflight, { outcome, reason = null, n
       ...(resultTaskId ? { preflightResultTaskId: resultTaskId } : {}),
       completedAt: new Date().toISOString(),
     },
-  }, 'internal', { suppressDequeue: true }).catch((err) => {
+  }, 'internal', { suppressDequeue: true, ...(expectedTask && { expectedStatus: 'in_progress', expectedTask }) }).catch((err) => {
     console.error(`❌ Could not close preflight card ${cardId}: ${err.message}`);
     return null;
   });
@@ -253,4 +257,31 @@ export function isStalePreflightCard(task, now = Date.now()) {
   if (!preflight) return false;
   const stamp = Date.parse(preflight.updatedAt || preflight.startedAt || '');
   return !Number.isFinite(stamp) || (now - stamp) > PREFLIGHT_CARD_STALE_MS;
+}
+
+/** Close only a local card whose queue ownership and activity are both absent.
+ * The schedule queue prevents a queued receipt being claimed during the check.
+ * Historical cards without local ownership evidence are retained on every peer.
+ */
+export async function closeStalePreflightCard(task, now = Date.now()) {
+  if (!task?.id || isPreflightActive(task.id)) return false;
+  const { updateSchedule } = await import('./taskScheduleStore.js');
+  return updateSchedule(async schedule => {
+    const current = await getTaskById(task.id);
+    const preflight = current?.metadata?.preflight;
+    const local = current?.metadata?.machineLocal === true || current?.metadata?.machineLocal === 'true';
+    const requests = schedule.onDemandRequests;
+    const handoffs = schedule.onDemandHandoffs;
+    if (!local || current.status !== 'in_progress' || !preflight?.requestId || !isStalePreflightCard(current, now)
+      || (requests != null && !Array.isArray(requests))
+      || (handoffs != null && (typeof handoffs !== 'object' || Array.isArray(handoffs)))
+      || requests?.some(request => request.id === preflight.requestId)
+      || handoffs?.[preflight.requestId]?.status === 'preparing' || isPreflightActive(task.id)) {
+      return { result: false, changed: false };
+    }
+    const result = await closeReadPreflight(task.id, preflight, { outcome: 'interrupted', expectedTask: {
+      description: current.description, priority: current.priority, metadata: current.metadata,
+    } });
+    return { result: !!result && !result.error && !result.statusChanged, changed: false };
+  });
 }

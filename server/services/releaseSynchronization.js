@@ -311,9 +311,21 @@ async function independentLegacyCheckout(entry, release, agents) {
   const { completedCheckoutReceiptValid } = await import('./completedCheckoutEvidence.js');
   const bindings = [];
   for (const agent of agents) {
+    // A swarm coordinator runs in the primary checkout while the server records
+    // each claimed child checkout on that same agent. Do not discard its exact
+    // seed and completion capture merely because its workspace is the parent.
+    let coordinatorOwnsChild = agent.metadata?.isWorktree === false && agent.metadata?.configClaimFlow === true
+      && samePath(agent.metadata.workspacePath, release.repoPath)
+      && [agent.metadata.claimBranches, agent.metadata.claimReleasedBranches]
+        .some(branches => Array.isArray(branches) && branches.includes(release.branch));
+    if (coordinatorOwnsChild) {
+      const { getInstanceId, UNKNOWN_INSTANCE_ID } = await import('./instanceIdentity.js');
+      const instance = await getInstanceId().catch(() => null);
+      coordinatorOwnsChild = !!instance && instance !== UNKNOWN_INSTANCE_ID && agent.metadata.instanceId === instance;
+    }
     if (agent.status !== 'completed' || agent.id === entry.owner.agentId || !agent.taskId || agent.taskId === entry.owner.taskId
       || !(Date.parse(agent.startedAt) > published) || !(Date.parse(agent.completedAt) >= Date.parse(agent.startedAt))
-      || !samePath(agent.metadata?.workspacePath, release.path)) continue;
+      || (!samePath(agent.metadata?.workspacePath, release.path) && !coordinatorOwnsChild)) continue;
     const seeds = (agent.metadata?.checkoutSeeds || []).filter(seed => checkoutSeedSchema.safeParse(seed).success
       && seed.agentId === agent.id && seed.startedAt === agent.startedAt
       && Date.parse(seed.seededAt) >= Date.parse(agent.startedAt) && Date.parse(seed.seededAt) <= Date.parse(agent.completedAt)

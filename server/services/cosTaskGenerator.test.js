@@ -1706,9 +1706,9 @@ describe('ignoreTaskId reaches the in-flight-counting gates (#3179)', () => {
  */
 describe('ignoreTaskId reaches BOTH completion-continuation generators (#3179)', () => {
   it('the idle-review chain threads ignoreTaskId end to end', () => {
-    expect(GEN_SRC).toMatch(/export async function generateIdleReviewTask\(state, \{ ignoreTaskId = null, isAppEligible = \(\) => true \} = \{\}\)/);
-    expect(GEN_SRC).toContain('generateManagedAppImprovementTask(nextApp, state, { ignoreTaskId })');
-    expect(GEN_SRC).toMatch(/async function generateManagedAppImprovementTask\(app, state, \{ ignoreTaskId = null \} = \{\}\)/);
+    expect(GEN_SRC).toMatch(/export async function generateIdleReviewTask\(state, \{ ignoreTaskId = null, isAppEligible = \(\) => true, onPreflightStart = null \} = \{\}\)/);
+    expect(GEN_SRC).toContain('generateManagedAppImprovementTask(nextApp, state, { ignoreTaskId, onPreflightStart })');
+    expect(GEN_SRC).toMatch(/async function generateManagedAppImprovementTask\(app, state, \{ ignoreTaskId = null, onPreflightStart = null \} = \{\}\)/);
     expect(GEN_SRC).toMatch(/prepareManagedAppImprovementTask\(nextType, app, state, \{[\s\S]*ignoreTaskId[\s\S]*\}\)/);
   });
 

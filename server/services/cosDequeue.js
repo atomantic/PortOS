@@ -267,7 +267,7 @@ export async function admitIdleReviewTask({
   cosAutonomyMode,
   autonomousSlotCeiling,
   ignoreTaskId = null,
-}, { canSpawn, emitSpawn, trackSpawn }) {
+}, { canSpawn, emitSpawn, trackSpawn, deferPreflightDispatch = null }) {
   if (!isIdleTierEligible({
     spawned: alreadySpawned,
     hasPendingUserTasks,
@@ -280,17 +280,40 @@ export async function admitIdleReviewTask({
   const { getCosApprovalView } = await import('./cosTaskStore.js');
   if ((await getCosApprovalView()).autoApprovedCount) return;
   const { generateIdleReviewTask, recordDeferredPerpetualDispatch } = await import('./cosTaskGenerator.js');
-  const { task, pendingPerpetualDispatch, preflightCardId } = await generateIdleReviewTask(state, {
-    ignoreTaskId,
-    isAppEligible: (app) => canSpawn({ metadata: { app: app.id } }, autonomousSlotCeiling),
-  });
-  const admitted = task && canSpawn(task, autonomousSlotCeiling);
-  if (admitted) {
-    await recordDeferredPerpetualDispatch(pendingPerpetualDispatch, await import('./taskSchedule.js'));
-    emitSpawn(task);
-    trackSpawn(task);
+  let preflightCardId = null;
+  let endPreflight = () => {};
+  let handoffAttempted = false;
+  let preflightTransferred = false;
+  try {
+    const generated = await generateIdleReviewTask(state, {
+      ignoreTaskId,
+      isAppEligible: (app) => canSpawn({ metadata: { app: app.id } }, autonomousSlotCeiling),
+      onPreflightStart: (id, end) => { preflightCardId = id; endPreflight = end; },
+    });
+    const { task, pendingPerpetualDispatch } = generated;
+    preflightCardId = generated.preflightCardId;
+    const admitted = task && canSpawn(task, autonomousSlotCeiling);
+    if (admitted) {
+      await recordDeferredPerpetualDispatch(pendingPerpetualDispatch, await import('./taskSchedule.js'));
+      handoffAttempted = true;
+      emitSpawn(task);
+      trackSpawn(task);
+    }
+    if (admitted && preflightCardId && deferPreflightDispatch) {
+      deferPreflightDispatch(task.id, { cardId: preflightCardId, resultTaskId: task.id, endPreflight, persisted: false });
+      preflightTransferred = true;
+    } else await closeStolenIdleReviewCard(preflightCardId, admitted ? task : null);
+  } catch (error) {
+    if (preflightCardId) {
+      const { finishPreflightCard } = await import('./preflightTaskCard.js');
+      await finishPreflightCard(preflightCardId, { outcome: 'failed', reason: 'preparation-failed',
+        note: handoffAttempted ? 'The handoff did not finish. Inspect the task and activity log before trying again.'
+          : 'Preparation failed before the handoff completed. Check the activity log and run again.' });
+    }
+    throw error;
+  } finally {
+    if (!preflightTransferred) endPreflight();
   }
-  await closeStolenIdleReviewCard(preflightCardId, admitted ? task : null);
 }
 
 /**

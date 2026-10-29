@@ -487,6 +487,7 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/cos/tasks/:id/spawn',
   'POST /api/cos/agents/:id/resume',
   'POST /api/cos/agents/:id/relaunch',
+  'POST /api/cos/agents/:id/recheck-cleanup',
   'POST /api/cos/agents/:id/btw',
   'POST /api/cos/agents/:id/security-scan',
   'POST /api/cos/agents/:id/release-publication',

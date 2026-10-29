@@ -3,7 +3,7 @@ import { useSortable } from '@dnd-kit/sortable';
 import { dndTransformToCss } from '../../../lib/dndTransform';
 import TaskItem from './TaskItem';
 
-export default function SortableTaskItem({ task, selected = false, onRefresh, onTaskUnblocked, onTaskDeleted, providers, providersLoaded, durations, apps, instances }) {
+export default function SortableTaskItem({ task, sortable = true, group, hidden = false, agent, liveOutput, spawning, waiting, unconfirmed, retryIdentity, retryIdentityLoading, selected = false, onRefresh, onTaskUnblocked, onTaskDeleted, providers, providersLoaded, durations, apps, instances }) {
   const [isEditing, setIsEditing] = useState(false);
   const {
     attributes,
@@ -12,7 +12,7 @@ export default function SortableTaskItem({ task, selected = false, onRefresh, on
     transform,
     transition,
     isDragging,
-  } = useSortable({ id: task.id, disabled: isEditing });
+  } = useSortable({ id: task.id, disabled: isEditing || !sortable });
 
   const style = {
     transform: dndTransformToCss(transform),
@@ -22,9 +22,16 @@ export default function SortableTaskItem({ task, selected = false, onRefresh, on
   };
 
   return (
-    <div ref={setNodeRef} style={style}>
+    <div ref={setNodeRef} style={style} data-task-group={group} hidden={hidden}>
       <TaskItem
         task={task}
+        agent={agent}
+        liveOutput={liveOutput}
+        spawning={spawning}
+        waiting={waiting}
+        unconfirmed={unconfirmed}
+        retryIdentity={retryIdentity}
+        retryIdentityLoading={retryIdentityLoading}
         selected={selected}
         onRefresh={onRefresh}
         onTaskUnblocked={onTaskUnblocked}
@@ -34,7 +41,7 @@ export default function SortableTaskItem({ task, selected = false, onRefresh, on
         durations={durations}
         apps={apps}
         instances={instances}
-        dragHandleProps={isEditing ? undefined : { ...attributes, ...listeners }}
+        dragHandleProps={isEditing || !sortable ? undefined : { ...attributes, ...listeners }}
         onEditingChange={setIsEditing}
       />
     </div>
