@@ -155,6 +155,80 @@ beforeEach(() => {
   mock.reviewCalls = [];
 });
 
+it('reconciles a stopped stale completion only against its latest episode dispatch, without resuming it', async () => {
+  const { reconcileSpawnBudget } = await import('./spawnBudgetReconciliation.js');
+  const fresh = await addTask({ id: 'sys-proof', description: 'Proof fixture' }, 'internal');
+  const claim = (count, at) => ({ status: 'in_progress', metadata: { totalSpawnCount: count,
+    claimedBy: 'instance-example', claimedAt: at, lastSpawnedAt: at } });
+  mock.state.agents['agent-first'] = { id: 'agent-first', taskId: fresh.id, status: 'running', startedAt: '2026-01-01T00:00:00.000Z' };
+  await updateTask(fresh.id, claim(1, '2026-01-01T00:00:00.000Z'), 'internal',
+    { spawnBudgetOperation: { kind: 'dispatch', agentId: 'agent-first', startedAt: '2026-01-01T00:00:00.000Z' } });
+  await updateTask(fresh.id, { status: 'pending' }, 'internal');
+  mock.state.agents['agent-first'].status = 'completed';
+  mock.state.agents['agent-second'] = { id: 'agent-second', taskId: fresh.id, status: 'running', startedAt: '2026-01-02T00:00:00.000Z' };
+  const latest = await updateTask(fresh.id, claim(2, '2026-01-02T00:00:00.000Z'), 'internal',
+    { spawnBudgetOperation: { kind: 'dispatch', agentId: 'agent-second', startedAt: '2026-01-02T00:00:00.000Z' } });
+  const proof = latest.metadata.spawnBudgetProof;
+  const expected = ['claimedBy', 'claimedAt', 'lastSpawnedAt', 'totalSpawnCount'].map(key => [key, latest.metadata[key]]);
+  mock.state.agents['agent-second'] = { id: 'agent-second', taskId: fresh.id, status: 'running', startedAt: '2026-01-02T00:00:00.000Z',
+    metadata: { completionTaskDispatch: { taskId: fresh.id, taskType: 'internal', expected, spawnBudgetEpoch: proof.epoch,
+      spawnBudgetStartedAt: '2026-01-02T00:00:00.000Z' } } };
+  // Completion of the second run replays the first dispatch's count, through
+  // the same trusted completion operation used by finalization.
+  const blocked = await updateTask(fresh.id, { status: 'blocked', metadata: { totalSpawnCount: 1, failureCount: 3 } }, 'internal',
+    { expectedStatus: 'in_progress', spawnBudgetOperation: { kind: 'completion', agentId: 'agent-second', epoch: proof.epoch } });
+  expect(Number(blocked.metadata.totalSpawnCount)).toBe(1);
+  mock.state.agents['agent-second'].status = 'completed';
+  const corrupted = structuredClone(blocked);
+  corrupted.metadata.spawnBudgetProof.baseline = 1;
+  await seed('internal', [corrupted]);
+  const corruptSnapshot = await getTaskById(fresh.id);
+  expect(await reconcileSpawnBudget(fresh.id)).toEqual({ reconciled: false, reason: 'episode-unverified' });
+  expect(await getTaskById(fresh.id)).toEqual(corruptSnapshot);
+  await seed('internal', [blocked]);
+  const dispatchReceipt = mock.state.agents['agent-second'].metadata.completionTaskDispatch;
+  dispatchReceipt.expected = dispatchReceipt.expected.map(([key, value]) => [key, key === 'totalSpawnCount' ? '3' : value]);
+  expect(await reconcileSpawnBudget(fresh.id)).toEqual({ reconciled: false, reason: 'dispatch-receipt-conflict' });
+  dispatchReceipt.expected = dispatchReceipt.expected.map(([key, value]) => [key, key === 'totalSpawnCount' ? '2' : value]);
+  mock.state.agents['agent-other'] = { id: 'agent-other', taskId: fresh.id, status: 'running' };
+  expect(await reconcileSpawnBudget(fresh.id)).toEqual({ reconciled: false, reason: 'task-or-owner-changed' });
+  delete mock.state.agents['agent-other'];
+  const { readAgentsStateForSafetyCheck } = await import('./cosState.js');
+  vi.mocked(readAgentsStateForSafetyCheck).mockImplementationOnce(async () => {
+    await updateTask(fresh.id, { description: 'Concurrent edit' }, 'internal');
+    return { trusted: true, agents: mock.state.agents };
+  });
+  expect(await reconcileSpawnBudget(fresh.id)).toEqual({ reconciled: false, reason: 'task-or-owner-changed' });
+  expect(Number((await getTaskById(fresh.id)).metadata.totalSpawnCount)).toBe(1);
+  const { retryTasksResolvedByInvestigation } = await import('./investigationRetry.js');
+  expect(await retryTasksResolvedByInvestigation({ id: 'sys-investigation', status: 'completed',
+    metadata: { isInvestigation: true, affectedTasks: [fresh.id] } })).toEqual({ retried: [],
+    skipped: [{ taskId: fresh.id, reason: 'spawn-budget-reconciled-held' }] });
+  expect(await getTaskById(fresh.id)).toMatchObject({ status: 'blocked', metadata: { totalSpawnCount: '2', failureCount: '3' } });
+  expect(await reconcileSpawnBudget(fresh.id)).toEqual({ reconciled: false, reason: 'already-reconciled' });
+  expect(mock.events.filter(event => event.payload?.action === 'unblocked')).toHaveLength(0);
+  const corrected = await getTaskById(fresh.id);
+  await seed('internal', [{ ...corrected, metadata: { ...corrected.metadata, totalSpawnCount: '1' } }]);
+  mock.state.agents['agent-second'].status = 'running';
+  expect(await reconcileSpawnBudget(fresh.id)).toEqual({ reconciled: false, reason: 'dispatch-receipt-unverified' });
+  expect((await getTaskById(fresh.id)).metadata.totalSpawnCount).toBe('1');
+  mock.state.agents['agent-second'].status = 'completed';
+  const reset = await reviveBlockedTask(fresh.id, {}, 'internal');
+  expect(reset.metadata.spawnBudgetProof.epoch).not.toBe(proof.epoch);
+  expect(await reconcileSpawnBudget(fresh.id)).toEqual({ reconciled: false, reason: 'episode-unverified' });
+});
+
+it('holds a legacy stopped task whose episode cannot be proven', async () => {
+  const { reconcileSpawnBudget } = await import('./spawnBudgetReconciliation.js');
+  await addTask({ id: 'sys-legacy-proof', description: 'Legacy example', metadata: {
+    totalSpawnCount: 1, failureCount: 2, lastSpawnedAt: '2026-01-01T00:00:00.000Z',
+  } }, 'internal');
+  await updateTask('sys-legacy-proof', { status: 'blocked' }, 'internal');
+  const before = await getTaskById('sys-legacy-proof');
+  expect(await reconcileSpawnBudget(before.id)).toEqual({ reconciled: false, reason: 'episode-unverified' });
+  expect(await getTaskById(before.id)).toEqual(before);
+});
+
 it('wakes the exact local parent from a persisted completed-follow-up edit', async () => {
   const { cosEvents } = await import('./cosEvents.js');
   const { getAgentRecord } = await import('./cosAgentLifecycle.js');
@@ -1601,10 +1675,11 @@ describe('cosTaskStore.addTask', () => {
     expect(task.metadata.worktreeChangesExpected).toBeUndefined();
   });
 
-  it('raw=true stores a pre-built one-line object verbatim', async () => {
+  it('raw=true preserves supplied task fields while adding server-owned episode proof', async () => {
     const raw = { id: 'sys-raw', description: 'raw task', status: 'pending', metadata: { context: 'ctx' } };
     const task = await addTask(raw, 'internal', { raw: true });
-    expect(task).toBe(raw);
+    expect(task).toMatchObject(raw);
+    expect(task.metadata.spawnBudgetProof).toMatchObject({ version: 1, dispatch: null, epoch: expect.any(String) });
     expect(task.description).toBe('raw task');
   });
 
@@ -1952,11 +2027,25 @@ describe('cosTaskStore.updateTask', () => {
     const { recoverLegacyDeliveryBlocks } = await import('./deliveryRecovery.js');
     const outcome = { status: 'incomplete', reason: 'Remaining delivery validation.' };
     await addTask({ description: 'recover charged delivery', id: 'task-delivery-budget' }, 'user');
+    const dispatch = (count, at, agentId) => {
+      mock.state.agents[agentId] = { id: agentId, taskId: 'task-delivery-budget', status: 'running', startedAt: at };
+      return updateTask('task-delivery-budget', { status: 'in_progress', metadata: {
+        totalSpawnCount: count, claimedBy: 'fixture-instance', claimedAt: at, lastSpawnedAt: at,
+      } }, 'user', { spawnBudgetOperation: { kind: 'dispatch', agentId, startedAt: at } });
+    };
+    await dispatch(1, '2026-10-22T00:00:00.000Z', 'agent-first');
+    mock.state.agents['agent-first'].status = 'completed';
+    await updateTask('task-delivery-budget', { status: 'pending' }, 'user');
+    const latest = await dispatch(2, '2026-10-23T00:00:00.000Z', 'agent-delivery-budget');
     await updateTask('task-delivery-budget', { status: 'blocked', metadata: {
-      blockedCategory: 'task-incomplete', blockedAt: '2026-10-23T00:00:00.000Z', failureCount: 1, totalSpawnCount: 2, taskOutcome: outcome,
+      blockedCategory: 'task-incomplete', blockedAt: '2026-10-23T00:00:00.000Z', failureCount: 1, taskOutcome: outcome,
     } }, 'user');
     const task = await getTaskById('task-delivery-budget');
-    const owner = { id: 'agent-delivery-budget', taskId: task.id, status: 'completed', result: { taskOutcome: outcome }, metadata: {} };
+    const owner = { id: 'agent-delivery-budget', taskId: task.id, status: 'completed', startedAt: '2026-10-23T00:00:00.000Z',
+      result: { taskOutcome: outcome }, metadata: { completionTaskDispatch: { taskId: task.id, taskType: 'user',
+        spawnBudgetEpoch: latest.metadata.spawnBudgetProof.epoch, spawnBudgetStartedAt: latest.metadata.spawnBudgetProof.dispatch.startedAt,
+        expected: ['claimedBy', 'claimedAt', 'lastSpawnedAt', 'totalSpawnCount'].map(key => [key, latest.metadata[key]]) } } };
+    mock.state.agents[owner.id] = owner;
     mock.afterWrite = () => { throw new Error('interrupted after committed recovery transition'); };
     const release = vi.fn();
     await expect(recoverLegacyDeliveryBlocks([owner], { readTasks: async () => [task], update: updateTask, release })).rejects.toThrow('interrupted after committed recovery transition');
@@ -1973,15 +2062,29 @@ describe('cosTaskStore.updateTask', () => {
     const { recoverLegacyDeliveryBlocks } = await import('./deliveryRecovery.js');
     const outcome = { status: 'incomplete', reason: 'Remaining delivery validation.' };
     await addTask({ description: 'recover ownership', id: 'task-delivery-owner' }, 'user');
+    mock.state.agents['agent-delivery-owner'] = { id: 'agent-delivery-owner', taskId: 'task-delivery-owner', status: 'running',
+      startedAt: '2026-10-23T00:00:00.000Z' };
+    const latest = await updateTask('task-delivery-owner', { status: 'in_progress', metadata: {
+      totalSpawnCount: 1, claimedBy: 'fixture-instance', claimedAt: '2026-10-23T00:00:00.000Z',
+      lastSpawnedAt: '2026-10-23T00:00:00.000Z',
+    } }, 'user', { spawnBudgetOperation: { kind: 'dispatch', agentId: 'agent-delivery-owner', startedAt: '2026-10-23T00:00:00.000Z' } });
     await updateTask('task-delivery-owner', { status: 'blocked', metadata: {
       blockedCategory: 'task-incomplete', blockedAt: '2026-10-23T00:00:00.000Z', failureCount: 1, taskOutcome: outcome,
     } }, 'user');
     const task = await getTaskById('task-delivery-owner');
-    const owner = { id: 'agent-delivery-owner', taskId: task.id, status: 'completed', result: { taskOutcome: outcome }, metadata: {} };
+    const owner = { id: 'agent-delivery-owner', taskId: task.id, status: 'completed', startedAt: '2026-10-23T00:00:00.000Z',
+      result: { taskOutcome: outcome }, metadata: { completionTaskDispatch: { taskId: task.id, taskType: 'user',
+        spawnBudgetEpoch: latest.metadata.spawnBudgetProof.epoch, spawnBudgetStartedAt: latest.metadata.spawnBudgetProof.dispatch.startedAt,
+        expected: ['claimedBy', 'claimedAt', 'lastSpawnedAt', 'totalSpawnCount'].map(key => [key, latest.metadata[key]]) } } };
+    mock.state.agents[owner.id] = owner;
     if (race === 'manual-blocker') await updateTask(task.id, { metadata: { blocker: 'Operator hold' } }, 'user');
     else mock.state.agents.newOwner = { id: 'newOwner', taskId: task.id, status: 'running' };
     const release = vi.fn();
-    expect(await recoverLegacyDeliveryBlocks([owner], { readTasks: async () => [task], update: updateTask, release })).toEqual({ recovered: 0 });
+    const fencedUpdate = vi.fn(updateTask);
+    expect(await recoverLegacyDeliveryBlocks([owner], { readTasks: async () => [task], update: fencedUpdate, release })).toEqual({ recovered: 0 });
+    expect(fencedUpdate).toHaveBeenCalledOnce();
+    expect(fencedUpdate.mock.calls[0][3]).toMatchObject({ expectedStatus: 'blocked', expectedTask: { metadata: task.metadata },
+      recoveryOwner: { id: owner.id, startedAt: owner.startedAt } });
     const saved = await getTaskById(task.id);
     expect(saved.status).toBe('blocked');
     if (race === 'manual-blocker') expect(saved.metadata.blocker).toBe('Operator hold');
@@ -2366,11 +2469,43 @@ describe('cosTaskStore.mergePeerTasks', () => {
     await addTask({ description: 'same', priority: 'MEDIUM', id: 'task-same' }, 'user');
     mock.events = [];
     vi.mocked(repository.applyTaskListSave).mockClear();
-    const remote = [{ id: 'task-same', taskType: 'user', status: 'pending', priority: 'MEDIUM', description: 'same', metadata: {} }];
+    const remote = [{ ...(await getTaskById('task-same')), taskType: 'user' }];
     const res = await mergePeerTasks('user', remote, { now: NOW });
     expect(res).toEqual({ changed: false });
     expect(repository.applyTaskListSave).not.toHaveBeenCalled();
     expect(mock.events.some(e => e.name === 'tasks:changed')).toBe(false);
+  });
+
+  it('invalidates proof on an older peer payload even when it retained the opaque metadata', async () => {
+    await addTask({ id: 'task-legacy-peer', description: 'Peer example' }, 'user');
+    mock.state.agents['agent-peer'] = { id: 'agent-peer', taskId: 'task-legacy-peer', status: 'running', startedAt: 'start' };
+    const local = await updateTask('task-legacy-peer', { status: 'in_progress', metadata: {
+      totalSpawnCount: 1, claimedBy: 'fixture', claimedAt: '2026-01-01T00:00:00.000Z', lastSpawnedAt: '2026-01-01T00:00:00.000Z',
+    } }, 'user', { spawnBudgetOperation: { kind: 'dispatch', agentId: 'agent-peer', startedAt: 'start' } });
+    expect(local.metadata.spawnBudgetProof).toBeDefined();
+    await mergePeerTasks('user', [{ ...local, taskType: 'user' }], { now: NOW, legacySpawnBudget: true });
+    const after = await getTaskById(local.id);
+    expect(after.status).toBe(local.status);
+    expect(Number(after.metadata.totalSpawnCount)).toBe(1);
+    expect(after.metadata.spawnBudgetProof).toBeUndefined();
+  });
+
+  it('accepts a known same-episode dispatch ancestor but invalidates a concurrent fork', async () => {
+    await addTask({ id: 'task-chain', description: 'Chain example' }, 'user');
+    const claim = (count, stamp) => ({ status: 'in_progress', metadata: { totalSpawnCount: count,
+      claimedBy: 'fixture', claimedAt: stamp, lastSpawnedAt: stamp } });
+    mock.state.agents['agent-first'] = { id: 'agent-first', taskId: 'task-chain', status: 'running', startedAt: 'first-start' };
+    const first = await updateTask('task-chain', claim(1, 'first'), 'user', { spawnBudgetOperation: { kind: 'dispatch', agentId: 'agent-first', startedAt: 'first-start' } });
+    await updateTask('task-chain', { status: 'pending' }, 'user');
+    mock.state.agents['agent-first'].status = 'completed';
+    mock.state.agents['agent-second'] = { id: 'agent-second', taskId: 'task-chain', status: 'running', startedAt: 'second-start' };
+    const second = await updateTask('task-chain', claim(2, 'second'), 'user', { spawnBudgetOperation: { kind: 'dispatch', agentId: 'agent-second', startedAt: 'second-start' } });
+    await mergePeerTasks('user', [{ ...first, taskType: 'user' }], { now: NOW });
+    expect((await getTaskById('task-chain')).metadata.spawnBudgetProof).toEqual(second.metadata.spawnBudgetProof);
+    const fork = structuredClone(second);
+    fork.metadata.spawnBudgetProof.dispatch.agentId = 'agent-competing';
+    await mergePeerTasks('user', [{ ...fork, taskType: 'user' }], { now: NOW });
+    expect((await getTaskById('task-chain')).metadata.spawnBudgetProof).toBeUndefined();
   });
 
   it("never clobbers the local peer's live claim with a remote pending copy", async () => {

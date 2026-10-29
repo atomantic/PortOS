@@ -175,6 +175,39 @@ import { readHostShutdownMarker, clearHostShutdownMarker } from '../lib/hostShut
 import { committedDuringRun } from '../lib/gitCommitProbe.js';
 import { activeAgents, runnerAgents, completingAgents, spawningTasks, pausedAgents, consumePausedAgentExit } from './agentState.js';
 
+// Build the server-owned task/agent evidence used by a real dispatch. Legacy
+// fixtures deliberately omit this helper when testing fail-closed recovery.
+function bindDispatchFixture(task, agentId, metadata = {}, startedAt = '2026-01-01T00:00:01.000Z') {
+  const epoch = '11111111-1111-4111-8111-111111111111';
+  const at = task.metadata?.lastSpawnedAt || '2026-01-01T00:00:00.000Z';
+  const count = Number(task.metadata?.totalSpawnCount) || 1;
+  const dispatch = { agentId, startedAt, claimedBy: 'fixture-instance', claimedAt: at, lastSpawnedAt: at, totalSpawnCount: count };
+  task.metadata = { ...task.metadata, lastSpawnedAt: at, totalSpawnCount: count, spawnBudgetProof: { version: 1, epoch, baseline: count - 1, dispatch } };
+  const expected = ['claimedBy', 'claimedAt', 'lastSpawnedAt', 'totalSpawnCount'].map(key => [key, dispatch[key]]);
+  return { ...metadata, completionTaskDispatch: { taskId: task.id, taskType: task.taskType || 'user', expected,
+    spawnBudgetEpoch: epoch, spawnBudgetStartedAt: startedAt } };
+}
+
+async function handleProvenOrphan(taskId, agentId, getTask, options = {}) {
+  const task = await getTask(taskId);
+  const startedAt = options.agentStartedAt || '2026-01-01T00:00:01.000Z';
+  const agentMetadata = bindDispatchFixture(task, agentId, options.agentMetadata || {}, startedAt);
+  return handleOrphanedTask(taskId, agentId, vi.fn().mockResolvedValue(task), {
+    ...options, agentMetadata, agentStartedAt: startedAt,
+  });
+}
+
+async function prepareProvenSweep() {
+  const task = await getTaskById('task-1');
+  const agents = (await getAgents()).map(agent => ({ ...agent, metadata: { ...agent.metadata } }));
+  const agent = agents.find(entry => entry.taskId === task?.id);
+  if (!task || !agent) return;
+  agent.startedAt ||= '2026-01-01T00:00:01.000Z';
+  agent.metadata = bindDispatchFixture(task, agent.id, agent.metadata, agent.startedAt);
+  getTaskById.mockResolvedValue(task);
+  getAgents.mockResolvedValue(agents);
+}
+
 /**
  * A direct-mode agent's spawned handle. Its prototype is ChildProcess so it
  * takes killProcessTree's spawned-child branch (Windows `taskkill` tree / POSIX
@@ -625,7 +658,7 @@ describe('handleOrphanedTask — duplicate-investigation guard', () => {
     };
     const getTaskById = vi.fn().mockResolvedValue(inProgressTask);
 
-    await handleOrphanedTask('task-foo', 'agent-orphaned', getTaskById);
+    await handleProvenOrphan('task-foo', 'agent-orphaned', getTaskById);
 
     expect(updateTask).toHaveBeenCalledTimes(1);
     expect(updateTask).toHaveBeenCalledWith(
@@ -637,7 +670,7 @@ describe('handleOrphanedTask — duplicate-investigation guard', () => {
           lastOrphanedAgentId: 'agent-orphaned'
         })
       }),
-      'user'
+      'user', expect.objectContaining({ expectedStatus: 'in_progress', expectedTask: expect.any(Object) })
     );
     expect(addTask).not.toHaveBeenCalled();
   });
@@ -655,7 +688,7 @@ describe('handleOrphanedTask — duplicate-investigation guard', () => {
     const getTaskById = vi.fn().mockResolvedValue(exhaustedTask);
     getAllTasks.mockResolvedValue({ user: { tasks: [] }, cos: { tasks: [] } });
 
-    await handleOrphanedTask('task-foo', 'agent-orphaned', getTaskById);
+    await handleProvenOrphan('task-foo', 'agent-orphaned', getTaskById);
 
     expect(addTask).toHaveBeenCalledTimes(1);
     expect(addTask.mock.calls[0][0]).toMatchObject({
@@ -694,7 +727,7 @@ describe('handleOrphanedTask — duplicate-investigation guard', () => {
       }
     });
 
-    await handleOrphanedTask('task-foo', 'agent-orphaned', vi.fn().mockResolvedValue(exhaustedTask));
+    await handleProvenOrphan('task-foo', 'agent-orphaned', vi.fn().mockResolvedValue(exhaustedTask));
 
     expect(addTask.mock.calls[0][0]).toMatchObject({
       approvalRequired: true,
@@ -727,20 +760,20 @@ describe('handleOrphanedTask — duplicate-investigation guard', () => {
       const exhaustedTask = liTask({ orphanRetryCount: 2, totalSpawnCount: 2 });
       getAllTasks.mockResolvedValue({ user: { tasks: [] }, cos: { tasks: [] } });
 
-      await handleOrphanedTask('task-foo', 'agent-orphaned', vi.fn().mockResolvedValue(exhaustedTask));
+      await handleProvenOrphan('task-foo', 'agent-orphaned', vi.fn().mockResolvedValue(exhaustedTask));
 
       expect(stampLiExecutionVerdict).toHaveBeenCalledWith(
         expect.objectContaining({ status: 'blocked' }),
         exhaustedTask,
         { success: false }
       );
-      expect(updateTask).toHaveBeenCalledWith('task-foo', expect.objectContaining({ status: 'blocked' }), 'user');
+      expect(updateTask).toHaveBeenCalledWith('task-foo', expect.objectContaining({ status: 'blocked' }), 'user', expect.objectContaining({ expectedStatus: 'in_progress', expectedTask: expect.any(Object) }));
     });
 
     it('stamps success:false when the orphan retry is in cooldown (blocked, orphan-cooldown)', async () => {
       const cooldownTask = liTask({ orphanRetryCount: 1, lastOrphanedAt: new Date().toISOString() });
 
-      await handleOrphanedTask('task-foo', 'agent-orphaned', vi.fn().mockResolvedValue(cooldownTask));
+      await handleProvenOrphan('task-foo', 'agent-orphaned', vi.fn().mockResolvedValue(cooldownTask));
 
       expect(stampLiExecutionVerdict).toHaveBeenCalledWith(
         expect.objectContaining({ status: 'blocked' }),
@@ -753,7 +786,7 @@ describe('handleOrphanedTask — duplicate-investigation guard', () => {
       const task = liTask({});
       committedDuringRun.mockResolvedValueOnce(true);
 
-      await handleOrphanedTask('task-foo', 'agent-orphaned', vi.fn().mockResolvedValue(task), {
+      await handleProvenOrphan('task-foo', 'agent-orphaned', vi.fn().mockResolvedValue(task), {
         agentStartedAt: new Date().toISOString(),
       });
 
@@ -762,7 +795,7 @@ describe('handleOrphanedTask — duplicate-investigation guard', () => {
         task,
         { success: true }
       );
-      expect(updateTask).toHaveBeenCalledWith('task-foo', expect.objectContaining({ status: 'completed' }), 'user');
+      expect(updateTask).toHaveBeenCalledWith('task-foo', expect.objectContaining({ status: 'completed' }), 'user', expect.objectContaining({ expectedStatus: 'in_progress', expectedTask: expect.any(Object) }));
     });
 
     it('still calls the stamp (a no-op for it) for a task with no liProposal', async () => {
@@ -770,7 +803,7 @@ describe('handleOrphanedTask — duplicate-investigation guard', () => {
         description: 'Original work', metadata: { orphanRetryCount: 2, totalSpawnCount: 2 } };
       getAllTasks.mockResolvedValue({ user: { tasks: [] }, cos: { tasks: [] } });
 
-      await handleOrphanedTask('task-foo', 'agent-orphaned', vi.fn().mockResolvedValue(task));
+      await handleProvenOrphan('task-foo', 'agent-orphaned', vi.fn().mockResolvedValue(task));
 
       expect(stampLiExecutionVerdict).toHaveBeenCalledWith(expect.anything(), task, { success: false });
     });
@@ -786,8 +819,17 @@ describe('handleOrphanedTask — persisted outcome shapes and guard precedence (
   const MIN = 60 * 1000;
   const taskWith = (metadata, status = 'in_progress') =>
     ({ id: 'task-foo', status, taskType: 'user', description: 'Original work', metadata });
-  const run = (task, options) => handleOrphanedTask('task-foo', 'agent-dead', vi.fn().mockResolvedValue(task), options);
-  const persisted = () => updateTask.mock.calls[0];
+  const run = (task, options) => handleProvenOrphan('task-foo', 'agent-dead', vi.fn().mockResolvedValue(task), options);
+  const persisted = () => {
+    const call = updateTask.mock.calls[0];
+    expect(call[3]).toMatchObject({ expectedStatus: 'in_progress', expectedTask: { metadata: expect.any(Object) },
+      recoveryOwner: { id: 'agent-dead', startedAt: '2026-01-01T00:00:01.000Z' } });
+    expect(call[1].metadata.spawnBudgetProof).toMatchObject({ version: 1, dispatch: { agentId: 'agent-dead' } });
+    const { spawnBudgetProof, lastSpawnedAt, ...outcome } = call[1].metadata;
+    expect(spawnBudgetProof.epoch).toBe('11111111-1111-4111-8111-111111111111');
+    expect(lastSpawnedAt).toBe('2026-01-01T00:00:00.000Z');
+    return [call[0], { ...call[1], metadata: outcome }, call[2]];
+  };
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -804,6 +846,38 @@ describe('handleOrphanedTask — persisted outcome shapes and guard precedence (
     expect(updateTask).not.toHaveBeenCalled();
     expect(committedDuringRun).not.toHaveBeenCalled();
     expect(resolveTaskResumePatch).not.toHaveBeenCalled();
+  });
+
+  it('holds an undercounted dispatch and retains the restart breadcrumb and checkout', async () => {
+    const task = taskWith({ claimedBy: 'fixture', claimedAt: 'claim', lastSpawnedAt: 'spawn', totalSpawnCount: '1' });
+    const agentMetadata = bindDispatchFixture(task, 'agent-dead', { interruptedBy: 'host-shutdown' }, iso(NOW - MIN));
+    task.metadata.spawnBudgetProof.dispatch.totalSpawnCount = 2;
+    task.metadata.spawnBudgetProof.baseline = 1;
+    agentMetadata.completionTaskDispatch.expected = agentMetadata.completionTaskDispatch.expected
+      .map(([key, value]) => [key, key === 'totalSpawnCount' ? 2 : value]);
+    await handleOrphanedTask(task.id, 'agent-dead', vi.fn().mockResolvedValue(task),
+      { agentMetadata, agentStartedAt: iso(NOW - MIN), interrupted: true });
+    expect(updateTask).not.toHaveBeenCalled();
+    expect(updateAgent).not.toHaveBeenCalled();
+    expect(resolveTaskResumePatch).not.toHaveBeenCalled();
+    expect(committedDuringRun).not.toHaveBeenCalled();
+  });
+
+  it('holds an orphan with a missing dispatch receipt even when task proof remains', async () => {
+    const task = taskWith({ totalSpawnCount: 1 });
+    const agentMetadata = bindDispatchFixture(task, 'agent-dead');
+    delete agentMetadata.completionTaskDispatch;
+    await handleOrphanedTask(task.id, 'agent-dead', vi.fn().mockResolvedValue(task),
+      { agentMetadata, agentStartedAt: iso(NOW - MIN) });
+    expect(updateTask).not.toHaveBeenCalled();
+    expect(resolveTaskResumePatch).not.toHaveBeenCalled();
+  });
+
+  it('does not file an investigation when the fenced orphan update loses a race', async () => {
+    updateTask.mockResolvedValueOnce({ statusChanged: true });
+    await run(taskWith({ orphanRetryCount: 2, totalSpawnCount: 3 }));
+    expect(updateTask).toHaveBeenCalledOnce();
+    expect(addTask).not.toHaveBeenCalled();
   });
 
   it('requeues a genuine orphan: charges a retry, stamps the orphan breadcrumb, clears interruptedByRestart', async () => {
@@ -2091,6 +2165,7 @@ describe('orphan retries resume what the dead run left behind', () => {
     getAgents.mockResolvedValue([deadAgent]);
     getTaskById.mockResolvedValue({ id: 'task-1', taskType: 'user', status: 'in_progress', metadata: {} });
     resolveTaskResumePatch.mockResolvedValue({});
+    committedDuringRun.mockReset().mockResolvedValue(false);
     activeAgents.clear();
     runnerAgents.clear();
   });
@@ -2138,12 +2213,13 @@ describe('orphan retries resume what the dead run left behind', () => {
   });
 
   it('hands the dead agent’s worktree metadata from the sweep to the retry handler', async () => {
+    await prepareProvenSweep();
     await cleanupOrphanedAgents();
 
     expect(resolveTaskResumePatch).toHaveBeenCalledWith({
       task: expect.objectContaining({ id: 'task-1' }),
       agentId: 'agent-dead',
-      agentMetadata: deadMetadata
+      agentMetadata: expect.objectContaining(deadMetadata)
     });
   });
 
@@ -2159,6 +2235,7 @@ describe('orphan retries resume what the dead run left behind', () => {
     });
     updateTask.mockImplementation(() => { order.push('requeue'); return Promise.resolve(true); });
 
+    await prepareProvenSweep();
     await cleanupOrphanedAgents();
 
     expect(order).toEqual(['cleanup', 'resolve', 'requeue']);
@@ -2169,7 +2246,7 @@ describe('orphan retries resume what the dead run left behind', () => {
         resumedFromAgentId: 'agent-dead',
         resumeWorktreePath: pointer.worktreePath
       })
-    }, 'user');
+    }, 'user', expect.objectContaining({ expectedStatus: 'in_progress', expectedTask: expect.any(Object) }));
   });
 
   it('skips the resume entirely when the dead agent had no task', async () => {
@@ -2203,28 +2280,27 @@ describe('orphan retries resume what the dead run left behind', () => {
     }));
   });
 
-  // A caller that doesn't know which agent died (resetOrphanedTasks on an archived
-  // agent) still requeues — it just starts clean.
-  it('requeues without a pointer when no agent metadata is available', async () => {
+  // An archived owner with no receipt cannot prove this retry episode.
+  it('holds the task when no agent metadata is available', async () => {
     getTaskById.mockResolvedValue({ id: 'task-1', taskType: 'user', status: 'in_progress', metadata: {} });
 
     await handleOrphanedTask('task-1', 'unknown-reset', getTaskById);
 
-    expect(resolveTaskResumePatch).toHaveBeenCalledWith(expect.objectContaining({ agentMetadata: null }));
-    expect(updateTask).toHaveBeenCalledWith('task-1', expect.objectContaining({ status: 'pending' }), 'user');
+    expect(resolveTaskResumePatch).not.toHaveBeenCalled();
+    expect(updateTask).not.toHaveBeenCalled();
   });
 
   it('checks for completed work in the orphaned agent’s actual workspace', async () => {
     committedDuringRun.mockResolvedValueOnce(true);
     getTaskById.mockResolvedValue({ id: 'task-1', taskType: 'user', status: 'in_progress', metadata: {} });
 
-    await handleOrphanedTask('task-1', 'agent-dead', getTaskById, {
+    await handleProvenOrphan('task-1', 'agent-dead', getTaskById, {
       agentMetadata: { workspacePath: '/example-app' },
       agentStartedAt: '2026-08-09T00:00:00.000Z',
     });
 
     expect(committedDuringRun).toHaveBeenCalledWith('/example-app', Date.parse('2026-08-09T00:00:00.000Z'));
-    expect(updateTask).toHaveBeenCalledWith('task-1', { status: 'completed' }, 'user');
+    expect(updateTask).toHaveBeenCalledWith('task-1', { status: 'completed' }, 'user', expect.objectContaining({ expectedStatus: 'in_progress', expectedTask: expect.any(Object) }));
   });
 
   // `Date.parse(1754696324000)` stringifies its argument and returns NaN, which
@@ -2233,27 +2309,29 @@ describe('orphan retries resume what the dead run left behind', () => {
     committedDuringRun.mockResolvedValueOnce(true);
     getTaskById.mockResolvedValue({ id: 'task-1', taskType: 'user', status: 'in_progress', metadata: {} });
 
-    await handleOrphanedTask('task-1', 'agent-dead', getTaskById, {
+    await handleProvenOrphan('task-1', 'agent-dead', getTaskById, {
       agentMetadata: { workspacePath: '/example-app' },
       agentStartedAt: 1754696324000,
     });
 
     expect(committedDuringRun).toHaveBeenCalledWith('/example-app', 1754696324000);
-    expect(updateTask).toHaveBeenCalledWith('task-1', { status: 'completed' }, 'user');
+    expect(updateTask).toHaveBeenCalledWith('task-1', { status: 'completed' }, 'user', expect.objectContaining({ expectedStatus: 'in_progress', expectedTask: expect.any(Object) }));
   });
 
   // Without a run window there is nothing to attribute a commit to — probing an
   // unbounded `git log` would credit this task with any commit already in the
   // repo, including another agent's, and complete a task that did nothing (#3637).
-  it('skips the commit probe entirely when the dead run has no start time', async () => {
-    getTaskById.mockResolvedValue({ id: 'task-1', taskType: 'user', status: 'in_progress', metadata: {} });
+  it('holds before the commit probe when the dead run has no start time', async () => {
+    const task = { id: 'task-1', taskType: 'user', status: 'in_progress', metadata: {} };
+    const agentMetadata = bindDispatchFixture(task, 'agent-dead', { workspacePath: '/example-app' });
+    getTaskById.mockResolvedValue(task);
 
     await handleOrphanedTask('task-1', 'agent-dead', getTaskById, {
-      agentMetadata: { workspacePath: '/example-app' },
+      agentMetadata,
     });
 
     expect(committedDuringRun).not.toHaveBeenCalled();
-    expect(updateTask).toHaveBeenCalledWith('task-1', expect.objectContaining({ status: 'pending' }), 'user');
+    expect(updateTask).not.toHaveBeenCalled();
   });
 });
 
@@ -2313,7 +2391,7 @@ describe('the orphan sweep finishes an interrupted retry transition (#3373)', ()
     getTaskById.mockResolvedValue(heldTask());
     resolveTaskResumePatch.mockResolvedValue({ existingBranch: 'cos/task-1/agent-dead', resumedFromAgentId: 'agent-dead', resumeWorktreePath: null });
 
-    await handleOrphanedTask('task-1', 'agent-dead', getTaskById, {
+    await handleProvenOrphan('task-1', 'agent-dead', getTaskById, {
       agentMetadata: { isWorktree: true, sourceWorkspace: '/repo', worktreeBranch: 'cos/task-1/agent-dead' },
     });
 
@@ -2326,7 +2404,7 @@ describe('the orphan sweep finishes an interrupted retry transition (#3373)', ()
         retryPendingCleanup: undefined,
         retryPendingSince: undefined,
       },
-    }, 'user', { expectedStatus: 'in_progress', expectedMetadata: { retryPendingCleanup: 'agent-dead' } });
+    }, 'user', expect.objectContaining({ expectedStatus: 'in_progress', expectedMetadata: { retryPendingCleanup: 'agent-dead' }, expectedTask: expect.any(Object) }));
   });
 
   it('recovers extended Deep with an owned hold release and reports rejected writes', async () => {
@@ -2335,10 +2413,10 @@ describe('the orphan sweep finishes an interrupted retry transition (#3373)', ()
     getTaskById.mockResolvedValue(task);
     updateTask.mockResolvedValueOnce({ error: 'Write rejected' });
     const { emitLog } = await import('./cosEvents.js');
-    await handleOrphanedTask(task.id, 'unknown-reset', getTaskById);
-    expect(updateTask).toHaveBeenCalledWith(task.id, expect.objectContaining({ status: 'pending' }), 'user', {
-      expectedStatus: 'in_progress', expectedMetadata: { retryPendingCleanup: 'agent-dead' },
-    });
+    await handleProvenOrphan(task.id, 'agent-dead', getTaskById);
+    expect(updateTask).toHaveBeenCalledWith(task.id, expect.objectContaining({ status: 'pending' }), 'user', expect.objectContaining({
+      expectedStatus: 'in_progress', expectedMetadata: { retryPendingCleanup: 'agent-dead' }, expectedTask: expect.any(Object),
+    }));
     expect(emitLog).toHaveBeenCalledWith('error', expect.stringContaining('Write rejected'), expect.anything());
     expect(emitLog).not.toHaveBeenCalledWith('info', expect.stringContaining('Completed interrupted retry'), expect.anything());
   });
@@ -2348,7 +2426,7 @@ describe('the orphan sweep finishes an interrupted retry transition (#3373)', ()
   it('charges no orphan-retry budget for finishing the transition', async () => {
     getTaskById.mockResolvedValue(heldTask());
 
-    await handleOrphanedTask('task-1', 'agent-dead', getTaskById, { agentMetadata: null });
+    await handleProvenOrphan('task-1', 'agent-dead', getTaskById, { agentMetadata: null });
 
     const [, update] = updateTask.mock.calls[0];
     expect(update.metadata.orphanRetryCount).toBeUndefined();
@@ -2361,20 +2439,19 @@ describe('the orphan sweep finishes an interrupted retry transition (#3373)', ()
     getTaskById.mockResolvedValue(heldTask());
     committedDuringRun.mockResolvedValue(true);
 
-    await handleOrphanedTask('task-1', 'agent-dead', getTaskById, { agentMetadata: null });
+    await handleProvenOrphan('task-1', 'agent-dead', getTaskById, { agentMetadata: null });
 
     expect(committedDuringRun).not.toHaveBeenCalled();
-    expect(updateTask).toHaveBeenCalledWith('task-1', expect.objectContaining({ status: 'pending' }), 'user', { expectedStatus: 'in_progress', expectedMetadata: { retryPendingCleanup: 'agent-dead' } });
+    expect(updateTask).toHaveBeenCalledWith('task-1', expect.objectContaining({ status: 'pending' }), 'user', expect.objectContaining({ expectedStatus: 'in_progress', expectedMetadata: { retryPendingCleanup: 'agent-dead' }, expectedTask: expect.any(Object) }));
   });
 
-  // The sweep is NOT owner-scoped by design — whoever armed the hold is gone by
-  // the time it looks, so a hold from any agent is recoverable.
-  it('finishes a transition armed by an agent it was not told about', async () => {
+  // A retry hold alone cannot identify the dispatch owner after a restart.
+  it('holds a transition when its agent receipt is missing', async () => {
     getTaskById.mockResolvedValue({ ...heldTask(), metadata: { retryPendingCleanup: 'agent-someone-else' } });
 
     await handleOrphanedTask('task-1', 'unknown-reset', getTaskById, { agentMetadata: null });
 
-    expect(updateTask).toHaveBeenCalledWith('task-1', expect.objectContaining({ status: 'pending' }), 'user', { expectedStatus: 'in_progress', expectedMetadata: { retryPendingCleanup: 'agent-someone-else' } });
+    expect(updateTask).not.toHaveBeenCalled();
   });
 
   // A user-terminated (or budget-exhausted) task is blocked and never held, so the
@@ -2419,9 +2496,10 @@ describe('host-restart interruptions are not charged orphan-retry budget (#3202)
     });
     readHostShutdownMarker.mockResolvedValue({ at: new Date().toISOString(), signal: 'SIGTERM', agentIds: ['agent-dead'] });
 
+    await prepareProvenSweep();
     await cleanupOrphanedAgents();
 
-    expect(updateTask).toHaveBeenCalledWith('task-1', expect.objectContaining({ status: 'pending' }), 'user');
+    expect(updateTask).toHaveBeenCalledWith('task-1', expect.objectContaining({ status: 'pending' }), 'user', expect.objectContaining({ expectedStatus: 'in_progress', expectedTask: expect.any(Object) }));
     expect(requeuedMetadata()).toMatchObject({ orphanRetryCount: 1, totalSpawnCount: 1, interruptedByRestart: true });
     expect(retireDeadAgent).toHaveBeenCalledWith(expect.objectContaining({ category: 'interrupted', exitCode: 143 }));
     expect(clearHostShutdownMarker).toHaveBeenCalled();
@@ -2434,9 +2512,10 @@ describe('host-restart interruptions are not charged orphan-retry budget (#3202)
     });
     readHostShutdownMarker.mockResolvedValue({ at: '2026-07-29T00:00:00.000Z', signal: 'SIGTERM', agentIds: ['agent-dead'] });
 
+    await prepareProvenSweep();
     await cleanupOrphanedAgents();
 
-    expect(updateTask).toHaveBeenCalledWith('task-1', expect.objectContaining({ status: 'pending' }), 'user');
+    expect(updateTask).toHaveBeenCalledWith('task-1', expect.objectContaining({ status: 'pending' }), 'user', expect.objectContaining({ expectedStatus: 'in_progress', expectedTask: expect.any(Object) }));
     const metadata = requeuedMetadata();
     // Budget untouched: same count, and the cooldown clock is NOT re-armed —
     // a later genuine orphan still measures its cooldown from the last genuine one.
@@ -2455,9 +2534,10 @@ describe('host-restart interruptions are not charged orphan-retry budget (#3202)
     });
     readHostShutdownMarker.mockResolvedValue({ at: null, signal: 'SIGINT', agentIds: ['agent-dead'] });
 
+    await prepareProvenSweep();
     await cleanupOrphanedAgents();
 
-    expect(updateTask).toHaveBeenCalledWith('task-1', expect.objectContaining({ status: 'pending' }), 'user');
+    expect(updateTask).toHaveBeenCalledWith('task-1', expect.objectContaining({ status: 'pending' }), 'user', expect.objectContaining({ expectedStatus: 'in_progress', expectedTask: expect.any(Object) }));
     expect(addTask).not.toHaveBeenCalled();
   });
 
@@ -2469,9 +2549,10 @@ describe('host-restart interruptions are not charged orphan-retry budget (#3202)
     });
     readHostShutdownMarker.mockResolvedValue({ at: null, signal: 'SIGTERM', agentIds: ['agent-dead'] });
 
+    await prepareProvenSweep();
     await cleanupOrphanedAgents();
 
-    expect(updateTask).toHaveBeenCalledWith('task-1', expect.objectContaining({ status: 'pending' }), 'user');
+    expect(updateTask).toHaveBeenCalledWith('task-1', expect.objectContaining({ status: 'pending' }), 'user', expect.objectContaining({ expectedStatus: 'in_progress', expectedTask: expect.any(Object) }));
     expect(requeuedMetadata().blockedCategory).toBeUndefined();
   });
 
@@ -2483,6 +2564,7 @@ describe('host-restart interruptions are not charged orphan-retry budget (#3202)
     // Marker names a DIFFERENT agent — this one really did die on its own.
     readHostShutdownMarker.mockResolvedValue({ at: null, signal: 'SIGTERM', agentIds: ['agent-other'] });
 
+    await prepareProvenSweep();
     await cleanupOrphanedAgents();
 
     const metadata = requeuedMetadata();
@@ -2499,6 +2581,7 @@ describe('host-restart interruptions are not charged orphan-retry budget (#3202)
       metadata: { interruptedByRestart: true, lastInterruptedAt: '2026-07-29T00:00:00.000Z' },
     });
 
+    await prepareProvenSweep();
     await cleanupOrphanedAgents();
 
     expect(requeuedMetadata().interruptedByRestart).toBe(false);
@@ -2514,7 +2597,7 @@ describe('host-restart interruptions are not charged orphan-retry budget (#3202)
       metadata: { orphanRetryCount: 1 },
     });
 
-    await handleOrphanedTask('task-1', 'agent-dead', getTaskById, {
+    await handleProvenOrphan('task-1', 'agent-dead', getTaskById, {
       agentMetadata: { ...deadMetadata, interruptedBy: 'host-shutdown' },
     });
 
@@ -2538,6 +2621,7 @@ describe('host-restart interruptions are not charged orphan-retry budget (#3202)
     });
     readHostShutdownMarker.mockResolvedValue(null); // marker lost
 
+    await prepareProvenSweep();
     await cleanupOrphanedAgents();
 
     const metadata = requeuedMetadata();
@@ -2552,7 +2636,7 @@ describe('host-restart interruptions are not charged orphan-retry budget (#3202)
   it('clears the breadcrumb once it has been honored', async () => {
     getTaskById.mockResolvedValue({ id: 'task-1', taskType: 'user', status: 'in_progress', metadata: {} });
 
-    await handleOrphanedTask('task-1', 'agent-dead', getTaskById, {
+    await handleProvenOrphan('task-1', 'agent-dead', getTaskById, {
       agentMetadata: { ...deadMetadata, interruptedBy: 'host-shutdown' },
     });
 
@@ -2570,6 +2654,7 @@ describe('host-restart interruptions are not charged orphan-retry budget (#3202)
     });
     readHostShutdownMarker.mockResolvedValue({ at: null, signal: 'SIGTERM', agentIds: ['agent-dead'] });
 
+    await prepareProvenSweep();
     await cleanupOrphanedAgents();
 
     expect(requeuedMetadata().totalSpawnCount).toBe(2);
@@ -2581,6 +2666,7 @@ describe('host-restart interruptions are not charged orphan-retry budget (#3202)
       metadata: { totalSpawnCount: 3 },
     });
 
+    await prepareProvenSweep();
     await cleanupOrphanedAgents();
 
     // Carried through the metadata spread unchanged — a genuine failure keeps

@@ -6,6 +6,8 @@ vi.mock('./cosTaskStore.js', () => ({
   updateTask: vi.fn().mockResolvedValue({ id: 'ok' }),
 }));
 vi.mock('./cosEvents.js', () => ({ emitLog: vi.fn() }));
+const state = vi.hoisted(() => ({ agents: {} }));
+vi.mock('./cosState.js', () => ({ readAgentsStateForSafetyCheck: vi.fn(async () => ({ trusted: true, agents: state.agents })) }));
 
 const { getAllTasks, reviveBlockedTask, updateTask } = await import('./cosTaskStore.js');
 const { retryTasksResolvedByInvestigation } = await import('./investigationRetry.js');
@@ -17,10 +19,20 @@ const investigation = (metadata = {}) => ({
 });
 
 const queues = ({ user = [], cos = [] } = {}) => ({ user: { tasks: user }, cos: { tasks: cos } });
+const provenTask = (id, taskType = 'user', metadata = {}) => {
+  const agentId = `agent-${id}`;
+  const epoch = '11111111-1111-4111-8111-111111111111';
+  const dispatch = { agentId, startedAt: 'start', claimedBy: 'fixture', claimedAt: 'claim', lastSpawnedAt: 'spawn', totalSpawnCount: 1 };
+  const expected = ['claimedBy', 'claimedAt', 'lastSpawnedAt', 'totalSpawnCount'].map(key => [key, dispatch[key]]);
+  state.agents[agentId] = { id: agentId, taskId: id, status: 'completed', startedAt: 'start',
+    metadata: { completionTaskDispatch: { taskId: id, taskType, expected, spawnBudgetEpoch: epoch, spawnBudgetStartedAt: 'start' } } };
+  return { id, status: 'blocked', metadata: { ...metadata, totalSpawnCount: '1', spawnBudgetProof: { version: 1, epoch, dispatch } } };
+};
 
 describe('retryTasksResolvedByInvestigation', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    state.agents = {};
     reviveBlockedTask.mockResolvedValue({ id: 'ok' });
     updateTask.mockResolvedValue({ id: 'ok' });
   });
@@ -32,9 +44,18 @@ describe('retryTasksResolvedByInvestigation', () => {
     expect(reviveBlockedTask).not.toHaveBeenCalled();
   });
 
+  it('holds a legacy blocked task with spawn history instead of resetting its budget', async () => {
+    getAllTasks.mockResolvedValue(queues({ user: [{ id: 'task-1', status: 'blocked', metadata: {
+      totalSpawnCount: '1', failureCount: '2', lastSpawnedAt: '2026-01-01T00:00:00.000Z',
+    } }] }));
+    expect(await retryTasksResolvedByInvestigation(investigation())).toEqual({ retried: [],
+      skipped: [{ taskId: 'task-1', reason: 'spawn-budget-reconciliation-required' }] });
+    expect(reviveBlockedTask).not.toHaveBeenCalled();
+  });
+
   it('revives the blocked task the investigation was diagnosing, stamping the auto-retry budget', async () => {
     getAllTasks.mockResolvedValue(queues({
-      user: [{ id: 'task-1', status: 'blocked', metadata: { blockedCategory: 'test-failure' } }]
+      user: [provenTask('task-1', 'user', { blockedCategory: 'test-failure' })]
     }));
 
     const result = await retryTasksResolvedByInvestigation(investigation(), { now: 1_700_000_000_000 });
@@ -51,13 +72,14 @@ describe('retryTasksResolvedByInvestigation', () => {
       },
       // Written back to the queue the task actually lives in — `getAllTasks`
       // returns raw tasks with no `taskType`, so this must come from the queue.
-      'user'
+      'user', expect.objectContaining({ expectedStatus: 'blocked', expectedTask: expect.objectContaining({ metadata: expect.objectContaining({ blockedCategory: 'test-failure' }) }),
+        recoveryOwner: { id: 'agent-task-1', startedAt: 'start', requireInactive: true } })
     );
   });
 
   it('routes an internal-queue task back to the internal file', async () => {
     getAllTasks.mockResolvedValue(queues({
-      cos: [{ id: 'task-1', status: 'blocked', metadata: {} }]
+      cos: [provenTask('task-1', 'internal')]
     }));
 
     await retryTasksResolvedByInvestigation(investigation());
@@ -108,7 +130,7 @@ describe('retryTasksResolvedByInvestigation', () => {
     expect(updateTask).toHaveBeenCalledWith(
       'task-1',
       { metadata: expect.objectContaining({ blockedCategory: 'auto-retry-exhausted' }) },
-      'user'
+      'user', expect.objectContaining({ expectedStatus: 'blocked', expectedTask: expect.any(Object) })
     );
   });
 
@@ -125,8 +147,8 @@ describe('retryTasksResolvedByInvestigation', () => {
   it('keeps going when one revive fails — the other affected tasks still come back', async () => {
     getAllTasks.mockResolvedValue(queues({
       user: [
-        { id: 'task-1', status: 'blocked', metadata: {} },
-        { id: 'task-2', status: 'blocked', metadata: {} },
+        provenTask('task-1'),
+        provenTask('task-2'),
       ]
     }));
     reviveBlockedTask
@@ -142,7 +164,7 @@ describe('retryTasksResolvedByInvestigation', () => {
 
   it('does not throw when a revive rejects — it runs off an event listener', async () => {
     getAllTasks.mockResolvedValue(queues({
-      user: [{ id: 'task-1', status: 'blocked', metadata: {} }]
+      user: [provenTask('task-1')]
     }));
     reviveBlockedTask.mockRejectedValue(new Error('disk on fire'));
 

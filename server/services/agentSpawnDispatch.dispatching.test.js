@@ -13,7 +13,7 @@ vi.mock('./cos.js', () => ({}));
 vi.mock('./cosState.js', () => ({ getConfig: async () => ({}) }));
 vi.mock('./cosTaskStore.js', () => ({ updateTask: vi.fn(async () => f.updateResult) }));
 vi.mock('./cosAgentLifecycle.js', () => ({
-  registerAgent: vi.fn(() => f.registerGate),
+  registerAgent: vi.fn(async () => { await f.registerGate; return { startedAt: '2026-01-01T00:00:00.000Z' }; }),
   updateAgent: vi.fn(),
 }));
 vi.mock('./cosEvents.js', () => ({ emitLog: vi.fn(), cosEvents: { emit: vi.fn() } }));
@@ -155,12 +155,17 @@ describe('dispatchAgentRun ownership window', () => {
     f.updateResult = result;
     f.prep.cleanupReviewPinConsumed = true;
     const context = newContext();
+    context.claimAcquired = true;
+    context.spawnWorktree = { branchName: 'preserved-branch' };
     context.task = { ...task, metadata: { cleanupReviewTarget: undefined, cleanupReviewLaunchEvidence: { headSha: 'a'.repeat(40) }, totalSpawnCount: '2' } };
     expect(await dispatchAgentRun(context)).toBeNull();
     expect(registerAgent).toHaveBeenCalledOnce();
-    expect(updateTask).toHaveBeenCalledWith(task.id, expect.objectContaining({ metadata: expect.objectContaining({ totalSpawnCount: 3, cleanupReviewTarget: undefined }) }), 'user');
+    expect(updateTask).toHaveBeenCalledWith(task.id, expect.objectContaining({ metadata: expect.objectContaining({ totalSpawnCount: 3, cleanupReviewTarget: undefined }) }), 'user',
+      expect.objectContaining({ expectedTask: { metadata: context.task.metadata }, spawnBudgetOperation: { kind: 'dispatch', agentId: 'agent-x', startedAt: '2026-01-01T00:00:00.000Z' } }));
     expect(spawnDirectly).not.toHaveBeenCalled();
     expect(context.cleanupOnError).toHaveBeenCalledWith(expect.stringContaining('Failed to persist reviewed-head launch admission'));
+    expect(context.claimAcquired).toBe(false);
+    expect(context.spawnWorktree).toBeNull();
     expect(f.publicationActive).toBe(false);
   });
 

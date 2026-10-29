@@ -5,10 +5,10 @@ import { isDeepStrictEqual } from 'node:util';
 import { setImmediate as flushImmediate } from 'node:timers/promises';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const m = vi.hoisted(() => ({ loadState: vi.fn(), owner: vi.fn(), read: vi.fn(), update: vi.fn(),
+const m = vi.hoisted(() => ({ loadState: vi.fn(), safety: vi.fn(), owner: vi.fn(), read: vi.fn(), update: vi.fn(),
   app: vi.fn(), origin: vi.fn(), probe: vi.fn(), lane: vi.fn(), execution: vi.fn(), emit: vi.fn(), releaseMarker: vi.fn() }));
 vi.mock('./cosEvents.js', () => ({ cosEvents: { emit: m.emit }, emitLog: vi.fn() }));
-vi.mock('./cosState.js', () => ({ loadState: m.loadState }));
+vi.mock('./cosState.js', () => ({ loadState: m.loadState, readAgentsStateForSafetyCheck: m.safety }));
 vi.mock('./agentState.js', () => ({ hasActiveTaskOwner: m.owner }));
 vi.mock('./cosTaskStore.js', () => ({ getTaskById: m.read, updateTask: m.update }));
 vi.mock('./apps.js', () => ({ getAppById: m.app }));
@@ -21,11 +21,13 @@ vi.mock('./instanceIdentity.js', () => ({ ensureInstanceId: async () => 'local-i
 vi.mock('./appActivity.js', () => ({ releaseAppReviewMarker: m.releaseMarker }));
 vi.mock('./retirementRecoveryCompletion.js', () => ({ isRetirementOnlyRecovery: () => false, settleRetirementRecoveryBeforeSpawn: vi.fn() }));
 
+const epoch = '11111111-1111-4111-8111-111111111111';
+const dispatch = { agentId: 'agent-original', startedAt: 'start', claimedBy: 'local-instance', claimedAt: 'claim', lastSpawnedAt: 'spawn', totalSpawnCount: 2 };
 const queued = () => ({ id: 'sys-rl-example', taskType: 'internal', status: 'pending', priority: 'MEDIUM',
   description: 'Resolve the assigned PR', metadata: {
     app: 'local-app', reviewLoopFollowUp: 'true', reviewLoopPRBranch: 'fix/example',
     reviewLoopPRUrl: 'https://github.com/example/project/pull/42', prCompletion: 'review-then-merge',
-    totalSpawnCount: '2', retryCount: '1', sourceTaskId: 'watchdog-example',
+    totalSpawnCount: '2', retryCount: '1', sourceTaskId: 'watchdog-example', spawnBudgetProof: { version: 1, epoch, baseline: 1, dispatch },
   } });
 let directory; let file; let beforeWrite;
 const readSaved = () => JSON.parse(readFileSync(file, 'utf8'));
@@ -45,6 +47,9 @@ beforeEach(() => {
     const next = { ...current, ...patch, metadata: { ...current.metadata, ...patch.metadata } }; save(next); return next;
   });
   m.loadState.mockResolvedValue({ agents: {} }); m.owner.mockReturnValue(false); m.releaseMarker.mockResolvedValue();
+  m.safety.mockResolvedValue({ trusted: true, agents: { 'agent-original': { id: 'agent-original', taskId: 'sys-rl-example', status: 'completed', startedAt: 'start',
+    metadata: { completionTaskDispatch: { taskId: 'sys-rl-example', taskType: 'internal', spawnBudgetEpoch: epoch,
+      spawnBudgetStartedAt: 'start', expected: ['claimedBy', 'claimedAt', 'lastSpawnedAt', 'totalSpawnCount'].map(key => [key, dispatch[key]]) } } } } });
   m.app.mockResolvedValue({ id: 'local-app', repoPath: '/synthetic/local-project' });
   m.origin.mockResolvedValue({ host: 'github.com', fullName: 'example/project' });
   m.probe.mockResolvedValue({ readable: true, prState: 'MERGED' });
