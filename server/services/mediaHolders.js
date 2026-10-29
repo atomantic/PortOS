@@ -30,6 +30,7 @@ import { peerFetch, readPeerBody } from '../lib/peerHttpClient.js';
 import { peerBaseUrl } from '../lib/peerUrl.js';
 import { withAbortTimeout } from '../lib/abortTimeout.js';
 import { parseTsMs } from '../lib/lwwTimestamp.js';
+import { isPairedPeer } from '../lib/peerPairing.js';
 import { sanitizeAssetFilename } from './sharing/buckets.js';
 import { loadHistory, mutateVideoHistory, HISTORY_UNCHANGED } from './videoGen/history.js';
 import { readHeldImage, localInstanceId } from './imageGen/imageRecords.js';
@@ -41,13 +42,12 @@ const SCHEMA_VERSION = 1;
 const KINDS = ['video', 'image'];
 const KIND_DIR = { video: () => PATHS.videos, image: () => PATHS.images };
 const KIND_MOUNT = { video: '/data/videos/', image: '/data/images/' };
-export const MEDIA_RELEASE_QUEUE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const MEDIA_RELEASE_QUEUE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const COMMAND_TIMEOUT_MS = 15_000;
 const storeWrite = createFileWriteQueue();
 
-const peerIsPaired = (peer) => typeof peer?.syncSecret === 'string' && peer.syncSecret.length >= 32;
 const peerLabel = (peer) => peer?.name || peer?.id || 'peer';
-const usablePeer = (peer) => Boolean(peer) && peer.enabled !== false && peerIsPaired(peer) && isNonBlankStr(peer.instanceId);
+const usablePeer = (peer) => Boolean(peer) && peer.enabled !== false && isPairedPeer(peer) && isNonBlankStr(peer.instanceId);
 const validName = (filename) => isNonBlankStr(filename) && sanitizeAssetFilename(filename) === filename;
 const fileKey = (kind, filename) => `${kind}:${filename}`;
 const localPath = (kind, filename) => join(KIND_DIR[kind](), filename);
@@ -110,8 +110,7 @@ export async function recordPeerInventory(instanceId, kind, filenames, checked) 
 }
 
 /** A single "I hold / no longer hold" report from `instanceId` (a frame or a command's answer). */
-export async function notePeerHolding(instanceId, kind, filename, held) {
-  if (!isNonBlankStr(instanceId) || !KINDS.includes(kind) || !validName(filename)) return false;
+export function notePeerHolding(instanceId, kind, filename, held) {
   return recordPeerInventory(instanceId, kind, held ? [filename] : [], [filename]);
 }
 
@@ -141,9 +140,8 @@ async function peerHoldsFile(peer, kind, filename) {
  */
 async function setPrimaryOnRow(kind, filename, primaryInstanceId, primaryAt) {
   if (kind === 'image') {
+    // A sidecar-less image has nowhere to record it (setImagePrimary returns null).
     const { setImagePrimary } = await import('./imageGen/local.js');
-    const held = await readHeldImage(filename);
-    if (!held) return false;
     const changed = (await setImagePrimary(filename, { instanceId: primaryInstanceId, at: primaryAt }).catch(() => null)) === true;
     if (changed) emitMediaHistoryChanged({ kind: 'image', op: 'upsert', ids: [filename] });
     return changed;
@@ -279,8 +277,6 @@ export async function listMediaHolders() {
   return { self, items };
 }
 
-const notHolder = () => new ServerError('That machine does not hold this media', { status: 409, code: 'NOT_A_HOLDER' });
-
 /**
  * Keep `instanceId`'s copy of `kind:filename` and release every other holder's.
  * Refused (409) while the chosen holder is unreachable or does not hold the
@@ -293,7 +289,9 @@ export async function makeMediaPrimary({ kind, filename, instanceId }) {
   const { self, registered, remote } = await collectHolders();
   const others = [...(remote.get(fileKey(kind, filename)) ?? [])];
   const selfHolds = holdsHere(kind, filename);
-  if (instanceId === self ? !selfHolds : !others.includes(instanceId)) throw notHolder();
+  if (instanceId === self ? !selfHolds : !others.includes(instanceId)) {
+    throw new ServerError('That machine does not hold this media', { status: 409, code: 'NOT_A_HOLDER' });
+  }
 
   let primary = null;
   if (instanceId !== self) {
@@ -334,31 +332,19 @@ export async function makeMediaPrimary({ kind, filename, instanceId }) {
       result.kept.push({ instanceId: holderId, name, reason: sent.outcome === 'forbidden' ? 'media delete is turned off there' : `refused (${sent.detail}); it may need an update` });
     }
   }
-  if (queued.length > 0) {
-    await updateStore((store) => {
-      const replaced = new Set(queued.map((e) => `${e.peerId}|${e.kind}|${e.filename}`));
-      store.releases = [...store.releases.filter((e) => !replaced.has(`${e.peerId}|${e.kind}|${e.filename}`)), ...queued];
-      return true;
-    });
-  }
+  // This designation supersedes every release queued earlier for the file.
+  await updateStore((store) => {
+    const before = store.releases.length;
+    store.releases = [...store.releases.filter((e) => !(e.kind === kind && e.filename === filename)), ...queued];
+    return queued.length > 0 || store.releases.length !== before;
+  });
   if (primary && selfHolds) {
     await releaseLocalCopy(kind, filename, primary, primaryAt);
     result.released.push({ instanceId: self, name: 'This machine' });
   }
-  // A designation that supersedes an earlier one drops releases queued for it.
-  await dropStaleReleases(kind, filename, instanceId);
   emitMediaHoldersChanged();
   console.log(`🗂️ ${kind} ${filename}: primary is ${primary ? peerLabel(primary) : 'this machine'} (released ${result.released.length}, pending ${result.pending.length}, kept ${result.kept.length})`);
   return result;
-}
-
-function dropStaleReleases(kind, filename, primaryInstanceId) {
-  return updateStore((store) => {
-    const next = store.releases.filter((e) => !(e.kind === kind && e.filename === filename && e.primaryInstanceId !== primaryInstanceId));
-    const changed = next.length !== store.releases.length;
-    store.releases = next;
-    return changed;
-  });
 }
 
 /**
@@ -373,7 +359,7 @@ export async function executePeerMediaRelease(senderPeerId, { kind, filename, pr
   const { getPeers, peerMayDeleteMedia } = await import('./instances.js');
   const peers = await getPeers();
   const sender = peers.find((p) => p.id === senderPeerId) ?? null;
-  if (!sender || sender.enabled === false || !peerIsPaired(sender)) {
+  if (!sender || sender.enabled === false || !isPairedPeer(sender)) {
     throw new ServerError('A paired peer credential is required', { status: 403, code: 'PEER_CREDENTIAL_REQUIRED' });
   }
   if (!peerMayDeleteMedia(sender)) {
