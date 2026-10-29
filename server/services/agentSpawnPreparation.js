@@ -133,16 +133,14 @@ export async function prepareAgentSpawn(task, context = createAgentSpawnContext(
     await context.cleanupOnError('task state unavailable');
     return null;
   }
-  if (checkedTask) {
-    if (await spawnBudgetHoldReason(checkedTask)) {
-      emitLog('warn', `Holding task ${task.id}: inspect its dispatch receipts and explicitly reset its budget only if intended`, { taskId: task.id });
-      await context.cleanupOnError('spawn budget reconciliation required');
-      return null;
-    }
-  }
-
   if (isRetirementOnlyRecovery(task) && await settleRetirementRecoveryBeforeSpawn(task)) {
     await context.cleanupOnError('retirement dispatch settled or changed');
+    return null;
+  }
+
+  if (checkedTask && await spawnBudgetHoldReason(checkedTask)) {
+    emitLog('warn', `Holding task ${task.id}: inspect its dispatch receipts and explicitly reset its budget only if intended`, { taskId: task.id });
+    await context.cleanupOnError('spawn budget reconciliation required');
     return null;
   }
 
