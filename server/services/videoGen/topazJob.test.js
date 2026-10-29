@@ -180,6 +180,15 @@ describe('Topaz job boundary', () => {
     expect(state.fetches.every(([url]) => !url.endsWith('/accept') && !url.includes('/upload'))).toBe(true);
   });
 
+  it('retires the parent recovery offer when restart finds a published result', async () => {
+    const { params } = await queued();
+    state.rows.unshift({ id: jobId, filename: `${jobId}.mp4`, upscaledFrom: sourceId, upscaleMethod: 'topaz' });
+    state.result.topazRecoveryAvailable = true;
+    await runVideoUpscale({ ...params, recoveryParentId: '44444444-4444-4444-8444-444444444444' });
+    expect(state.result.topazRecoveryAvailable).toBe(false);
+    expect(state.fetches).toEqual([['https://api.topazlabs.com/video/', 'POST']]);
+  });
+
   it('does not overwrite a pre-existing output path', async () => {
     const { params } = await queued();
     const collision = join(PATHS.videos, `${jobId}.mp4`);

@@ -88,6 +88,19 @@ describe('VideoUpscaleDrawer', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Start Topaz upscale' }));
     await waitFor(() => expect(startTopazUpscale).toHaveBeenCalledWith('video-1', 'quote-1', { silent: true }));
   });
+
+  it('ignores an estimate that finishes after switching videos', async () => {
+    let resolveQuote;
+    quoteTopazUpscale.mockReturnValue(new Promise(resolve => { resolveQuote = resolve; }));
+    const view = render(<VideoUpscaleDrawer item={ITEM} onClose={vi.fn()} onUpscaled={vi.fn()} />);
+    fireEvent.click(screen.getByLabelText(/Topaz Labs cloud/));
+    fireEvent.click(screen.getByRole('button', { name: 'Get free estimate' }));
+    view.rerender(<VideoUpscaleDrawer item={{ id: 'video-2' }} onClose={vi.fn()} onUpscaled={vi.fn()} />);
+    await act(async () => resolveQuote({ quote: { token: 'old', source: { resolution: { width: 640, height: 480 } }, padding: { width: 864, height: 486 }, target: { width: 1920, height: 1080 }, credits: [8, 9] } }));
+    fireEvent.click(screen.getByLabelText(/Topaz Labs cloud/));
+    expect(screen.queryByText(/Estimated 8–9 credits/)).toBeNull();
+    expect(screen.getByRole('button', { name: 'Start Topaz upscale' })).toBeDisabled();
+  });
   it('downloads the adapter through POST and allows an explicit retry after a dropped stream', async () => {
     getUpscalePlan.mockResolvedValue({ plan: missingAdapterPlan() });
     upscaleAdapterDownloadUrl.mockReturnValue('/api/video-gen/ic-loras/pixel-upscale/download');

@@ -37,6 +37,10 @@ export default function VideoUpscaleDrawer({ item, onClose, onUpscaled }) {
   const [downloadItemId, setDownloadItemId] = useState(null);
   const downloading = open && downloadItemId === itemId;
   const planRequestRef = useRef(0);
+  const quoteIdentityRef = useRef({ itemId, open, generation: 0 });
+  if (quoteIdentityRef.current.itemId !== itemId || quoteIdentityRef.current.open !== open) {
+    quoteIdentityRef.current = { itemId, open, generation: quoteIdentityRef.current.generation + 1 };
+  }
 
   // Fresh state per open (and per item, in case a second card is picked
   // before the drawer fully unmounts) so a stale method/plan never carries
@@ -160,10 +164,12 @@ export default function VideoUpscaleDrawer({ item, onClose, onUpscaled }) {
     setQuote(null);
     setQuoteError(null);
     const requestId = ++planRequestRef.current;
+    const identity = quoteIdentityRef.current.generation;
+    const current = () => requestId === planRequestRef.current && identity === quoteIdentityRef.current.generation;
     await quoteTopazUpscale(itemId, topazModel, { silent: true })
-      .then(result => { if (requestId === planRequestRef.current) setQuote(result.quote); })
-      .catch(error => { if (requestId === planRequestRef.current) setQuoteError(error.message || 'Could not get a Topaz estimate'); });
-    if (requestId === planRequestRef.current) setQuoting(false);
+      .then(result => { if (current()) setQuote(result.quote); })
+      .catch(error => { if (current()) setQuoteError(error.message || 'Could not get a Topaz estimate'); });
+    if (current()) setQuoting(false);
   };
 
   const dlFrame = dl.latest;
