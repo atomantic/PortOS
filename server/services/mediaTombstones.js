@@ -9,11 +9,9 @@ import { PATHS, readJSONFile, atomicWrite } from '../lib/fileUtils.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { isPlainObject } from '../lib/objects.js';
 import {
-  DEFAULT_TOMBSTONE_LIMIT,
   normalizeTombstones,
   recordTombstone,
   mergeTombstones,
-  isTombstoned,
   clearTombstone,
 } from '../lib/tombstones.js';
 
@@ -21,10 +19,12 @@ const FILE = () => join(PATHS.data, 'media-tombstones.json');
 const SCHEMA_VERSION = 1;
 const KEY_FIELD = 'key';
 const KINDS = ['video', 'image'];
-// Gallery images are deleted in batches far larger than videos; a tombstone
-// that falls off the cap lets a peer's copy come back.
-// The image cap matches the library manifest schema (peerSyncValidation.js).
-const KIND_LIMITS = { video: DEFAULT_TOMBSTONE_LIMIT, image: 5000 };
+// A tombstone that falls off the cap lets a peer that still holds the row or
+// file bring it back, so both kinds keep 5000: far more deletes than a peer is
+// likely to miss while offline. The image cap matches the library manifest
+// schema (peerSyncValidation.js); video tombstones ride the uncapped
+// videoHistory snapshot (dataSync.js).
+const KIND_LIMITS = { video: 5000, image: 5000 };
 const queueWrite = createFileWriteQueue();
 
 function assertKind(kind) {
@@ -44,8 +44,13 @@ async function readStore() {
 
 const writeStore = (store) => atomicWrite(FILE(), store);
 
+// A delete that cannot be recorded must fail rather than look recorded: the
+// caller would trash the file with nothing stopping a peer from restoring it.
 export function recordMediaTombstone(kind, key, deletedAt) {
   assertKind(kind);
+  if (typeof key !== 'string' || key === '') {
+    throw new Error(`A ${kind} tombstone needs a non-empty string key`);
+  }
   return queueWrite(async () => {
     const store = await readStore();
     store[kind] = recordTombstone(store[kind], key, { keyField: KEY_FIELD, deletedAt, limit: KIND_LIMITS[kind] });
@@ -93,7 +98,3 @@ export async function mediaTombstoneStamps(kind) {
   return new Map((await readStore())[kind].map((t) => [t[KEY_FIELD], Date.parse(t.deletedAt)]));
 }
 
-export async function isMediaTombstoned(kind, key, liveStamp) {
-  assertKind(kind);
-  return isTombstoned((await readStore())[kind], key, liveStamp, KEY_FIELD);
-}

@@ -9,7 +9,7 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) => (
 ));
 afterAll(() => rmSync(tempRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
 
-const { recordMediaTombstone, listMediaTombstones, mergeMediaTombstones, isMediaTombstoned } =
+const { recordMediaTombstone, listMediaTombstones, mergeMediaTombstones } =
   await import('./mediaTombstones.js');
 
 const FILE = join(tempRoot, 'media-tombstones.json');
@@ -38,12 +38,30 @@ describe('mediaTombstones', () => {
     expect(keys).toEqual(['a.png', 'b.png']);
   });
 
-  it('a row whose createdAt is newer than the tombstone is not tombstoned', async () => {
-    await recordMediaTombstone('video', 'vid-1', '2026-01-01T00:00:00.000Z');
-    expect(await isMediaTombstoned('video', 'vid-1', '2025-12-31T00:00:00.000Z')).toBe(true);
-    expect(await isMediaTombstoned('video', 'vid-1')).toBe(true);
-    expect(await isMediaTombstoned('video', 'vid-1', '2026-02-01T00:00:00.000Z')).toBe(false);
-    expect(await isMediaTombstoned('video', 'other')).toBe(false);
+  // Uniquely catches a cap small enough that deletes fall off and let a
+  // peer's copy come back (videos were once capped at 200).
+  it.each(['video', 'image'])('keeps 5000 %s tombstones, dropping the oldest first', async (kind) => {
+    const base = Date.parse('2026-01-01T00:00:00.000Z');
+    const at = (i) => new Date(base + i * 1000).toISOString();
+    const seeded = Array.from({ length: 5000 }, (_, i) => ({ key: `k-${i}`, deletedAt: at(i) }));
+    await mergeMediaTombstones(kind, seeded);
+    expect(await listMediaTombstones(kind)).toHaveLength(5000);
+
+    await recordMediaTombstone(kind, 'newest', at(10_000));
+    const kept = await listMediaTombstones(kind);
+    expect(kept).toHaveLength(5000);
+    expect(kept[0]).toEqual({ key: 'newest', deletedAt: at(10_000) });
+    const keys = new Set(kept.map((t) => t.key));
+    expect(keys.has('k-0')).toBe(false);
+    expect(keys.has('k-1')).toBe(true);
+    expect(keys.has('k-4999')).toBe(true);
+  });
+
+  it('refuses an empty or non-string key instead of recording nothing', async () => {
+    for (const key of ['', null, undefined, 42]) {
+      expect(() => recordMediaTombstone('video', key), String(key)).toThrow(/non-empty string key/);
+    }
+    expect(await listMediaTombstones('video')).toEqual([]);
   });
 
   it('unreadable file rejects instead of resetting', async () => {
