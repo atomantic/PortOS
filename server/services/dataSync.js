@@ -1013,15 +1013,18 @@ export async function mergeVideoRows(incomingRows, source) {
       'createdAt',
     );
     if (!changed) return HISTORY_UNCHANGED;
-    // Origin is immutable once set. suppliedBy is local-only: kept from the local
-    // row, or set to this sender only when the row is newly added here.
+    // Ownership of a row held here never comes from a sender: its origin and
+    // supplier stay the local values, even when absent (an origin-less row stays
+    // origin-less, or any peer could claim it and then delete it). Only a row
+    // newly added here takes the incoming origin, with this sender as supplier.
     const merged = rawMerged.map((row) => {
       const prev = before.get(row.id);
       if (prev === row) return row;
-      const originInstanceId = prev?.originInstanceId ?? row.originInstanceId;
+      const { originInstanceId: incomingOrigin, ...content } = row;
+      const originInstanceId = prev ? prev.originInstanceId : incomingOrigin;
       const suppliedByInstanceId = prev ? prev.suppliedByInstanceId : source?.peerId;
       return {
-        ...row,
+        ...content,
         ...(originInstanceId ? { originInstanceId } : {}),
         ...(suppliedByInstanceId ? { suppliedByInstanceId } : {}),
       };

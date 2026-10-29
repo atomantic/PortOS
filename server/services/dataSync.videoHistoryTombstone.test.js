@@ -153,6 +153,31 @@ describe('snapshot tombstone authorization', () => {
     expect(await ids()).toEqual([]);
   });
 
+  it('accepts the owner\'s tombstone stamped within clock skew, ignores an unparseable one', async () => {
+    await atomicWrite(HISTORY, [row('v1', undefined, ownedBy('peer-a')), row('v2', undefined, ownedBy('peer-a'))]);
+    const skewed = new Date(Date.now() + 4 * 60 * 1000).toISOString();
+    await dataSync.applyRemote('videoHistory', { videos: [], tombstones: [tomb('v1', skewed), tomb('v2', 'not a time')] }, { peerId: 'peer-a' });
+    expect(await readHistory()).toEqual(['v2']);
+    expect(await ids()).toEqual(['v1']);
+  });
+
+  // Uniquely catches a merge that hands a held origin-less row to the sender,
+  // whose next tombstone would then pass the owner check.
+  it('a newer snapshot row never gives a held origin-less row the sender\'s origin', async () => {
+    await atomicWrite(HISTORY, [row('v1')]);
+    await dataSync.applyRemote('videoHistory', {
+      videos: [row('v1', '2026-07-01T00:00:00.000Z', ownedBy('peer-a')), row('fresh', '2026-07-01T00:00:00.000Z', ownedBy('peer-a'))],
+    }, { peerId: 'peer-a' });
+    const rows = await readJSONFile(HISTORY, []);
+    const held = rows.find((r) => r.id === 'v1');
+    expect(held.createdAt).toBe('2026-07-01T00:00:00.000Z');
+    expect(held).not.toHaveProperty('originInstanceId');
+    expect(rows.find((r) => r.id === 'fresh')).toMatchObject({ originInstanceId: 'peer-a', suppliedByInstanceId: 'peer-a' });
+    await dataSync.applyRemote('videoHistory', { videos: [], tombstones: [tomb('v1', '2026-08-01T00:00:00.000Z')] }, { peerId: 'peer-a' });
+    expect(await readHistory()).toEqual(['fresh', 'v1']);
+    expect(trashFiles).not.toHaveBeenCalled();
+  });
+
   it('does not record a tombstone for a row this machine does not hold', async () => {
     await dataSync.applyRemote('videoHistory', { videos: [], tombstones: [tomb('ghost')] }, { peerId: 'peer-a' });
     expect(await ids()).toEqual([]);

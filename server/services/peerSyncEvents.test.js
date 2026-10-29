@@ -26,6 +26,7 @@ const { deleteHistoryItem } = await import('./videoGen/historyOps.js');
 const { mutateVideoHistory } = await import('./videoGen/history.js');
 const { listMediaTombstones } = await import('./mediaTombstones.js');
 const { forgetDeletedMusicVideoAssets } = await import('./musicVideo/mediaPool.js');
+const { trashFiles } = await import('../lib/trashFiles.js');
 
 const HISTORY = join(PATHS.data, 'video-history.json');
 const PAIR = 's'.repeat(40);
@@ -41,6 +42,7 @@ beforeEach(async () => {
   await atomicWrite(HISTORY, []);
   await atomicWrite(join(PATHS.data, 'media-tombstones.json'), { version: 1, video: [], image: [] });
   registry.peers = [peer('rec-origin', 'peer-o'), peer('rec-other', 'peer-x')];
+  trashFiles.mockClear();
 });
 
 describe('applyPeerSyncEvent', () => {
@@ -107,6 +109,22 @@ describe('applyPeerSyncEvent', () => {
     const frame = { v: 1, category: 'videoHistory', op: 'upsert', id: 'v1', record: row('v1'), originInstanceId: 'peer-x' };
     expect((await applyPeerSyncEvent({ id: 'rec-origin' }, frame)).applied).toBe(false);
     expect(await readRows()).toEqual([]);
+  });
+
+  // Uniquely catches a merge that lets a sender claim an origin-less row and then delete it.
+  it('a newer upsert never gives a held origin-less row the sender\'s origin', async () => {
+    await atomicWrite(HISTORY, [row('v1')]);
+    const upsert = { v: 1, category: 'videoHistory', op: 'upsert', id: 'v1',
+      record: row('v1', { createdAt: '2026-07-01T00:00:00.000Z', prompt: 'example newer' }), originInstanceId: 'peer-o' };
+    expect((await applyPeerSyncEvent({ id: 'rec-origin' }, upsert)).applied).toBe(true);
+    const [stored] = await readRows();
+    expect(stored.prompt).toBe('example newer');
+    expect(stored).not.toHaveProperty('originInstanceId');
+    expect(stored).not.toHaveProperty('suppliedByInstanceId');
+    const frame = { ...deleteFrame('v1'), tombstone: { key: 'v1', deletedAt: '2026-08-01T00:00:00.000Z' } };
+    expect((await applyPeerSyncEvent({ id: 'rec-origin' }, frame)).applied).toBe(false);
+    expect((await readRows()).map((r) => r.id)).toEqual(['v1']);
+    expect(trashFiles).not.toHaveBeenCalled();
   });
 
   it('malformed frame does not throw', async () => {
