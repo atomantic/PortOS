@@ -5,6 +5,18 @@ PortOS backs up two things together, into a single timestamped snapshot:
 1. **Filesystem data** — an rsync mirror of `./data/` (with SHA-256 manifest).
 2. **PostgreSQL** — a `pg_dump` logical dump (`portos-db.sql`) written alongside the snapshot.
 
+Reviewed image-edit inputs use a same-directory hard link as an ownership anchor.
+Queued inputs made before this anchor existed, and restored inputs whose recorded
+filesystem identity or anchor no longer matches, fail closed with a request to
+review again; their files are retained for inspection. Filesystems that cannot
+create the link reject staging rather than enqueueing an unanchored job. A backup
+or restore need not preserve inode numbers or hard links, so do not expect queued
+reviewed edits to replay after restore. Older PortOS versions do not enforce the
+anchor contract; drain these jobs before downgrading. An interrupted collection
+may leave a deletion intent and private quarantine directory for manual inspection;
+the manifest records that directory. A replacement found during collection is
+retained there rather than restored over another file.
+
 Backup configuration, manual runs, snapshot downloads/deletion, and restore/recovery
 require operator authority: a verified human or delegated agent session when auth is
 on, or a genuine local connection when auth is off. A reachable LAN/tailnet caller
