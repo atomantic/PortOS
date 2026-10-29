@@ -10,7 +10,7 @@
  * `data/peer-media-holdings.json` is `file-primary` and machine-local: what
  * each peer last reported, never federated.
  */
-import { stat } from 'fs/promises';
+import { readdir, stat } from 'fs/promises';
 import { join } from 'path';
 import { PATHS, readJSONFile, atomicWrite } from '../lib/fileUtils.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
@@ -80,8 +80,10 @@ async function unattributedFiles(kind) {
     }
     return out;
   }
-  const [{ getHostedMediaInventory }, { readHeldImage }] = await Promise.all([import('./dataSync.js'), import('./imageGen/imageRecords.js')]);
-  const { filenames } = await getHostedMediaInventory('mediaCollections', 'image');
+  const { readHeldImage } = await import('./imageGen/imageRecords.js');
+  // The whole gallery, not only collection-referenced images (#14137).
+  const filenames = (await readdir(PATHS.images, { withFileTypes: true }).catch(() => []))
+    .filter((e) => e.isFile() && e.name.toLowerCase().endsWith('.png')).map((e) => e.name);
   for (const filename of filenames) {
     const record = await readHeldImage(filename);
     if (!record || isNonBlankStr(record.originInstanceId) || isNonBlankStr(record.suppliedByInstanceId) || hosted[hostedKey('image', filename)]) continue;

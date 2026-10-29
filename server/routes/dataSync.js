@@ -141,6 +141,13 @@ router.get('/mediaCollections/image-inventory', asyncHandler(async (req, res) =>
   res.json(await dataSync.getHostedMediaInventory('mediaCollections', 'image'));
 }));
 
+// Every gallery image held here, collection-referenced or not: file times only, so paired
+// peers can settle the origin of a pre-upgrade copy no record attributes (#14137).
+router.get('/mediaCollections/image-library-inventory', asyncHandler(async (req, res) => {
+  await authorizeSyncPull(req, 'mediaCollections');
+  res.json(await dataSync.getImageLibraryInventory());
+}));
+
 // GET /api/sync/:category/manifest — the category's per-slot version map.
 // 404 for a category that doesn't serve one; a puller treats that (and the
 // 404 an older peer returns for the whole route) as "no manifest" and falls
