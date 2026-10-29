@@ -5,9 +5,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 let root;
+let onDeletionIntent;
 vi.mock('../../lib/fileUtils.js', async () => {
   const actual = await vi.importActual('../../lib/fileUtils.js');
-  return { ...actual, PATHS: new Proxy({}, { get: (_, key) => key === 'data' ? root : key === 'imageRefs' ? join(root, 'image-refs') : key === 'images' ? join(root, 'images') : actual.PATHS[key] }) };
+  return { ...actual, atomicWrite: async (path, data) => {
+    await actual.atomicWrite(path, data);
+    if (data?.state === 'deleting') await onDeletionIntent?.();
+  }, PATHS: new Proxy({}, { get: (_, key) => key === 'data' ? root : key === 'imageRefs' ? join(root, 'image-refs') : key === 'images' ? join(root, 'images') : actual.PATHS[key] }) };
 });
 const { stageReviewedReference, markSnapshotState, readOwnedSnapshot } = await import('./reviewedReference.js');
 const { sweepReviewedReferences } = await import('./reviewedReferenceGc.js');
@@ -16,6 +20,7 @@ const future = Date.now() + 8 * 24 * 60 * 60 * 1000;
 let source;
 
 beforeEach(async () => {
+  onDeletionIntent = null;
   root = await mkdtemp(join(tmpdir(), 'reviewed-ref-test-'));
   await mkdir(join(root, 'images'));
   source = join(root, 'images', 'source.png');
@@ -90,6 +95,41 @@ describe('reviewed reference collection', () => {
     expect(await readFile(path, 'utf8')).toBe('reviewed');
     await unlink(anchor);
     await expect(readOwnedSnapshot(id)).rejects.toMatchObject({ code: 'REVIEWED_REFERENCE_CHANGED' });
+  });
+
+  it('quarantines a replacement arriving after deletion intent without deleting it', async () => {
+    const id = await stageReviewedReference(randomUUID(), source, digest);
+    await markSnapshotState(id, 'settled');
+    const path = join(root, 'image-refs', id.filename);
+    onDeletionIntent = async () => {
+      await unlink(path);
+      await writeFile(path, 'reviewed');
+    };
+    expect(await sweepReviewedReferences({ now: future })).toEqual({ deleted: 0 });
+    const manifest = JSON.parse(await readFile(join(root, 'image-refs', `snapshot-${id.snapshotId}.json`), 'utf8'));
+    expect(manifest.state).toBe('deleting');
+    expect(await readFile(join(root, 'image-refs', manifest.quarantine, 'image'), 'utf8')).toBe('reviewed');
+    expect(await readFile(join(root, 'image-refs', manifest.quarantine, 'anchor'), 'utf8')).toBe('reviewed');
+    expect(await sweepReviewedReferences({ now: future })).toEqual({ deleted: 0 });
+  });
+
+  it('pins and retains the original when the anchor changes during collection', async () => {
+    const id = await stageReviewedReference(randomUUID(), source, digest);
+    await markSnapshotState(id, 'settled');
+    const anchor = join(root, 'image-refs', `snapshot-${id.snapshotId}.anchor`);
+    onDeletionIntent = async () => {
+      await unlink(anchor);
+      await writeFile(anchor, 'reviewed');
+    };
+    expect(await sweepReviewedReferences({ now: future })).toEqual({ deleted: 0 });
+    const manifest = JSON.parse(await readFile(join(root, 'image-refs', `snapshot-${id.snapshotId}.json`), 'utf8'));
+    const directory = join(root, 'image-refs', manifest.quarantine);
+    const original = await lstat(join(directory, 'image'), { bigint: true });
+    const replacement = await lstat(join(directory, 'anchor'), { bigint: true });
+    expect({ dev: String(original.dev), ino: String(original.ino) }).toEqual({ dev: id.dev, ino: id.ino });
+    expect({ dev: String(replacement.dev), ino: String(replacement.ino) }).not.toEqual({ dev: id.dev, ino: id.ino });
+    expect(await readFile(join(directory, 'image'), 'utf8')).toBe('reviewed');
+    expect(await readFile(join(directory, 'anchor'), 'utf8')).toBe('reviewed');
   });
 
   it('holds legacy records without an anchor rather than adopting or collecting them', async () => {

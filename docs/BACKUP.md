@@ -13,7 +13,9 @@ create the link reject staging rather than enqueueing an unanchored job. A backu
 or restore need not preserve inode numbers or hard links, so do not expect queued
 reviewed edits to replay after restore. Older PortOS versions do not enforce the
 anchor contract; drain these jobs before downgrading. An interrupted collection
-may leave a deletion intent and anchor for manual inspection.
+may leave a deletion intent and private quarantine directory for manual inspection;
+the manifest records that directory. A replacement found during collection is
+retained there rather than restored over another file.
 
 Backup configuration, manual runs, snapshot downloads/deletion, and restore/recovery
 require operator authority: a verified human or delegated agent session when auth is

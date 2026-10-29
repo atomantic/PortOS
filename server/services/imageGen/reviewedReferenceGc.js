@@ -1,7 +1,8 @@
 /** Collection of job-owned quick-edit snapshots with durable settlement proof. */
-import { lstat, readdir, readFile } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
+import { lstat, mkdir, open, readdir, readFile, rmdir } from 'node:fs/promises';
 import { basename, join } from 'node:path';
-import { PATHS, atomicWrite, unlinkGuarded } from '../../lib/fileUtils.js';
+import { PATHS, atomicWrite, renameGuarded, unlinkGuarded } from '../../lib/fileUtils.js';
 import { readJSONFileStrict, unreadableStoreError } from '../../lib/jsonIo.js';
 import { collectReferencedRefBasenames, ORPHAN_REF_MAX_AGE_MS } from '../imageRefsGc.js';
 import { isSnapshotStaging, readOwnedSnapshot, snapshotAnchorPath, validSnapshotIdentity, withReviewedSnapshotLock } from './reviewedReference.js';
@@ -38,21 +39,44 @@ export function sweepReviewedReferences({ now = Date.now(), maxAgeMs = ORPHAN_RE
       if (jobs.some(job => job?.id === record.jobId && ['queued', 'running'].includes(job.status))) continue;
       if (jobs.some(job => job?.id !== record.jobId && [job?.params?.initImagePath, job?.params?.sourceImagePath, job?.params?.sourceImageFile, job?.params?.lastImagePath, job?.params?.lastImageFile, ...(Array.isArray(job?.params?.remoteMedia?.inputAssets) ? job.params.remoteMedia.inputAssets.map(asset => asset?.path) : []), ...(Array.isArray(job?.params?.reviewedReferenceRequest?.referenceImagePaths) ? job.params.reviewedReferenceRequest.referenceImagePaths : []), ...(Array.isArray(job?.params?.referenceImagePaths) ? job.params.referenceImagePaths : [])]
         .some(input => typeof input === 'string' && basename(input) === record.filename))) continue;
+      // An interrupted or mismatched quarantine is retained for inspection.
+      // Never infer ownership of a lone leftover file after a restart.
+      if (record.state === 'deleting') continue;
       const imagePath = join(PATHS.imageRefs, record.filename);
       const info = await lstat(imagePath).catch(error => error.code === 'ENOENT' ? null : Promise.reject(error));
-      if (!info) {
-        // With the snapshot absent, a lone anchor cannot prove it has not itself
-        // been replaced. Retain the intent and any remaining file for recovery.
-        continue;
-      }
+      if (!info) continue;
       if (now - info.mtimeMs < maxAgeMs) continue;
       const owned = await readOwnedSnapshot(record).catch(() => null);
       if (!owned) continue;
-      if (record.state !== 'deleting') await atomicWrite(path, { ...record, state: 'deleting' });
-      await unlinkGuarded(imagePath);
-      await unlinkGuarded(snapshotAnchorPath(record.snapshotId));
-      await unlinkGuarded(path);
-      deleted += 1;
+      const anchorPath = snapshotAnchorPath(record.snapshotId);
+      const handle = await open(anchorPath, 'r').catch(() => null);
+      if (!handle) continue;
+      try {
+        const pinned = await handle.stat({ bigint: true });
+        if (!pinned.isFile() || String(pinned.dev) !== record.dev || String(pinned.ino) !== record.ino) continue;
+        const quarantine = `snapshot-gc-${randomUUID()}`;
+        const directory = join(PATHS.imageRefs, quarantine);
+        await mkdir(directory, { mode: 0o700 });
+        // Record the location before moving either name. The open handle keeps
+        // the inode allocated until all authorized unlinks have finished.
+        await atomicWrite(path, { ...record, state: 'deleting', quarantine });
+        const movedImage = join(directory, 'image');
+        const movedAnchor = join(directory, 'anchor');
+        await renameGuarded(imagePath, movedImage);
+        await renameGuarded(anchorPath, movedAnchor);
+        const [image, anchor, bytes] = await Promise.all([
+          lstat(movedImage, { bigint: true }), lstat(movedAnchor, { bigint: true }), readFile(movedImage),
+        ]);
+        const matches = stat => stat.isFile() && String(stat.dev) === record.dev && String(stat.ino) === record.ino;
+        if (!matches(image) || !matches(anchor) || createHash('sha256').update(bytes).digest('hex') !== record.digest) continue;
+        await unlinkGuarded(movedImage);
+        await unlinkGuarded(movedAnchor);
+        await rmdir(directory);
+        await unlinkGuarded(path);
+        deleted += 1;
+      } finally {
+        await handle.close();
+      }
     }
     return { deleted };
   });
