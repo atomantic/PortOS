@@ -709,3 +709,10 @@ export const getMusicVideoFestivalPacket = (id, options = {}) => request(`/music
 export const previewMusicVideoFestivalPacket = (id, packet, options = {}) => request(`/music-video/${encodeURIComponent(id)}/festival-packet/preview`, { ...options, method: 'POST', body: JSON.stringify(packet) });
 
 export const saveMusicVideoFestivalPacket = (id, packet, options = {}) => request(`/music-video/${encodeURIComponent(id)}/festival-packet`, { ...options, method: 'PUT', body: JSON.stringify(packet) });
+
+export const inspectMusicVideoDcp = (id, options = {}) => request(`/music-video/${encodeURIComponent(id)}/dcp/readiness`, { method: 'POST', ...options });
+export const buildMusicVideoDcp = (id, input, options = {}) => request(`/music-video/${encodeURIComponent(id)}/dcp/build`, { method: 'POST', body: JSON.stringify(input), ...options });
+export const musicVideoDcpEventsUrl = jobId => `/api/music-video/dcp/${encodeURIComponent(jobId)}/events`;
+export const cancelMusicVideoDcp = (jobId, options = {}) => request(`/music-video/dcp/${encodeURIComponent(jobId)}/cancel`, { method: 'POST', ...options });
+export const getMusicVideoDcpLocation = (id, artifactId, options = {}) => request(`/music-video/${encodeURIComponent(id)}/dcp/${encodeURIComponent(artifactId)}/location`, options);
+export const musicVideoDcpReportUrl = (id, artifactId) => `/api/music-video/${encodeURIComponent(id)}/dcp/${encodeURIComponent(artifactId)}/report`;

@@ -4,7 +4,8 @@ import useMusicVideoPublishKit from './useMusicVideoPublishKit.js';
 import { MockEventSource, lastEventSource } from '../test/mockEventSource';
 import { buildMusicVideoPublishKit, cancelMusicVideoPublishKit } from '../services/apiMusicVideo.js';
 
-vi.mock('../services/apiMusicVideo.js', () => ({
+vi.mock('../services/apiMusicVideo.js', async importOriginal => ({
+  ...await importOriginal(),
   getMusicVideoProject: vi.fn(() => Promise.resolve({ id: 'mv-example' })),
   buildMusicVideoPublishKit: vi.fn(),
   musicVideoPublishKitEventsUrl: id => `/events/${id}`,

@@ -1,3 +1,6 @@
+import { musicVideoDcpRequestSchema } from '../lib/musicVideoValidation.js';
+import { inspectDcpReadiness } from '../services/musicVideo/dcpPreflight.js';
+import { activeDcp, startDcp, attachDcp, cancelDcp, dcpArtifactPaths } from '../services/musicVideo/dcp.js';
 /**
  * Music Video Routes — REST surface for the director scene board (#1760, Phase 1).
  *
@@ -312,7 +315,8 @@ router.get('/:id', asyncHandler(async (req, res) => {
   // Transient (never persisted): lets a reloaded page reattach to a running publishing-kit build.
   const activePublishKitBuild = getActivePublishKitBuild(p.id);
   const presented = await presentProjectForRead(p);
-  res.json(activePublishKitBuild ? { ...presented, activePublishKitBuild } : presented);
+  const activeDcpBuild = activeDcp(p.id);
+  res.json({ ...presented, ...(activePublishKitBuild ? { activePublishKitBuild } : {}), ...(activeDcpBuild ? { activeDcpBuild } : {}) });
 }));
 
 router.post('/', asyncHandler(async (req, res) => {
@@ -1070,6 +1074,27 @@ router.delete('/:id/composition/document', asyncHandler(async (req, res) => {
 router.post('/:id/excerpt', asyncHandler(async (req, res) => {
   const { startSec, endSec, aspect, fade } = validateRequest(musicVideoExcerptRequestSchema, req.body);
   res.json(await startExcerptRender(req.params.id, { startSec, endSec, aspect, fade }));
+}));
+
+// Local cinema package: no upload or external delivery.
+router.post('/:id/dcp/readiness', asyncHandler(async (req, res) => {
+  res.json(await inspectDcpReadiness(req.params.id));
+}));
+router.post('/:id/dcp/build', asyncHandler(async (req, res) => {
+  const input = validateRequest(musicVideoDcpRequestSchema, req.body);
+  res.json(await startDcp(req.params.id, input));
+}));
+router.get('/dcp/:jobId/events', (req, res) => {
+  if (!attachDcp(req.params.jobId, res)) throw new ServerError('Cinema package job not found or expired', { status: 404, code: 'NOT_FOUND' });
+});
+router.post('/dcp/:jobId/cancel', (req, res) => res.json({ ok: cancelDcp(req.params.jobId) }));
+router.get('/:id/dcp/:artifactId/location', asyncHandler(async (req, res) => {
+  const { packagePath } = await dcpArtifactPaths(req.params.id, req.params.artifactId);
+  res.json({ packagePath });
+}));
+router.get('/:id/dcp/:artifactId/report', asyncHandler(async (req, res) => {
+  const { reportPath } = await dcpArtifactPaths(req.params.id, req.params.artifactId);
+  res.download(reportPath, 'dcp-verification.txt');
 }));
 
 // --- Publishing kit (#9281) ---
