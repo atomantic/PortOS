@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdtemp, mkdir, readFile, writeFile, rm, unlink } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, writeFile, rm, unlink, rename, lstat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -51,11 +51,16 @@ describe('reviewed reference collection', () => {
   it('retains a replaced file even with matching bytes and cannot adopt it on replay', async () => {
     const id = await stageReviewedReference(randomUUID(), source, digest);
     const path = join(root, 'image-refs', id.filename);
-    await unlink(path);
+    // Retain the original object so the filesystem cannot recycle its inode.
+    await rename(path, `${path}.original`);
     await writeFile(path, 'reviewed');
+    const replacement = await lstat(path, { bigint: true });
+    expect({ dev: String(replacement.dev), ino: String(replacement.ino) })
+      .not.toEqual({ dev: id.dev, ino: id.ino });
     await expect(readOwnedSnapshot(id)).rejects.toMatchObject({ code: 'REVIEWED_REFERENCE_CHANGED' });
     expect(await sweepReviewedReferences({ now: future })).toEqual({ deleted: 0 });
     expect(await readFile(path, 'utf8')).toBe('reviewed');
+    await expect(readOwnedSnapshot(id)).rejects.toMatchObject({ code: 'REVIEWED_REFERENCE_CHANGED' });
   });
 
   it('finishes an interrupted deletion only with its persisted deletion intent', async () => {
