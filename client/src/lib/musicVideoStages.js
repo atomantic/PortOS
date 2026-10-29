@@ -920,6 +920,37 @@ function lyricAnchorItem(readiness, scenes) {
   };
 }
 
+/**
+ * Plan's shot list: every shot in song order with what the timing check reads —
+ * its span, the lyric it was planned on, its storyboard action and camera (a
+ * director's draft row, else the row derived from the scene) — and each problem
+ * the storyboard readiness names for it (`flags`, one sentence each). Lyric
+ * anchors drop out once the storyboard is approved, as on the checklist.
+ */
+export function planShotRows(project, readiness = project?.productionReadiness) {
+  const storyboard = readiness?.storyboard || {};
+  const flags = new Map();
+  const flag = (sceneId, text) => sceneId && flags.set(sceneId, [...(flags.get(sceneId) || []), text]);
+  for (const c of storyboard.coverage || []) flag(c.sceneId, (COVERAGE_TEXT[c.issue] || (() => c.issue))(c));
+  for (const shot of storyboard.incompleteShots || []) flag(shot.sceneId, `Missing ${shot.missing.join(', ')}`);
+  if (!storyboard.approved) {
+    for (const { sceneId, sung, anchored } of storyboard.lyricAnchors || []) flag(sceneId, `Sung ${quoted(sung)}, anchored to ${quoted(anchored)}`);
+  }
+  const rows = new Map((storyboard.shots || []).map((row) => [row.sceneId, row]));
+  return (project?.scenes || []).filter((scene) => Number.isFinite(scene?.startSec))
+    .sort((a, b) => a.startSec - b.startSec)
+    .map((scene, i) => {
+      const row = rows.get(scene.sceneId);
+      return {
+        scene, number: i + 1,
+        lyric: typeof scene.lyricText === 'string' ? scene.lyricText.trim() : '',
+        action: row?.action || scene.visualIntent || scene.prompt || '',
+        camera: row?.camera || '',
+        flags: flags.get(scene.sceneId) || [],
+      };
+    });
+}
+
 // The art-direction row's detail and action for each Cast & Sets phase, while fields are still unwritten.
 const CAST_DIRECTION_ROWS = {
   absent: ({ stillMissing, write, analyzed }) => ({ detail: `${stillMissing}Build the cast & sets to draft it from your creative direction, song style and mood board.`,

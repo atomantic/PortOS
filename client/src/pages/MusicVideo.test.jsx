@@ -2910,6 +2910,38 @@ describe('MusicVideo stage tabs (#9243)', () => {
     expect(screen.getByRole('complementary', { name: 'Preview' })).toBeInTheDocument();
   });
 
+  // Uniquely catches Plan losing its read-through: shots in song order with their lyric, action and own problems, opening on Shots.
+  it('checks every shot on Plan in song order with its problems on its row, and opens a shot on Shots', async () => {
+    listMusicVideoProjects.mockResolvedValue([{ ...PROJECT_WITH_CLIP,
+      audioAnalysis: { ...PROJECT_ANALYZED.audioAnalysis, durationSec: 12 },
+      scenes: [
+        { sceneId: 's2', order: 1, startSec: 4, endSec: 12, lyricText: 'Second example line', visualIntent: 'Wide on the rink' },
+        { sceneId: 's1', order: 0, startSec: 0, endSec: 4, lyricText: '', visualIntent: 'Close on the skates', panelArt: 'panel-a.png', referenceImageId: 'frame-a.png' },
+      ],
+      productionReadiness: { readyForProduction: false, basis: {}, art: { approved: true, problems: [] }, proof: { approved: false, problems: [] },
+        storyboard: { approved: false, problems: [], coverage: [], incompleteShots: [],
+          shots: [{ sceneId: 's1', action: 'Close on the skates', camera: 'Low dolly' }],
+          lyricAnchors: [{ sceneId: 's2', sung: ['Second example line'], anchored: [] }] } },
+    }]);
+    renderAt('/music-video/mv-1/board');
+    await screen.findByRole('heading', { level: 2, name: PROJECT_WITH_CLIP.name });
+    const list = screen.getByRole('region', { name: 'Shot list' });
+    const rows = within(list).getAllByRole('button', { name: /^Open Shot \d on Shots$/ });
+    expect(rows.map((row) => row.getAttribute('aria-label'))).toEqual(['Open Shot 1 on Shots', 'Open Shot 2 on Shots']);
+    expect(rows[0]).toHaveTextContent('Instrumental');
+    // The storyboard panel, not the shot's frame: Plan checks the board.
+    expect(rows[0].querySelector('img')).toHaveAttribute('src', '/data/images/panel-a.png');
+    expect(rows[0]).toHaveTextContent('Shot 1 · Low dolly · Close on the skates');
+    expect(rows[1]).toHaveTextContent('“Second example line”');
+    expect(rows[1]).toHaveTextContent('Sung “Second example line”, anchored to nothing');
+    expect(within(list).getByText('1 needs a fix')).toBeInTheDocument();
+
+    fireEvent.click(within(list).getByRole('button', { name: 'Needs a fix (1)' }));
+    expect(within(list).getAllByRole('button', { name: /^Open Shot/ })).toHaveLength(1);
+    fireEvent.click(within(list).getByRole('button', { name: 'Open Shot 2 on Shots' }));
+    await waitFor(() => expect(screen.getByTestId('loc')).toHaveTextContent('/music-video/mv-1/produce/scene/s2'));
+  });
+
   it('opens Story without a preview and keeps a rough draft across stage navigation', async () => {
     listMusicVideoProjects.mockResolvedValue([{ ...PROJECT_WITH_CLIP, concept: { prompt: 'Existing direction', style: 'Blue', songStyle: 'Synth' } }]);
     renderAt('/music-video/mv-1/story');
