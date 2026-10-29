@@ -412,6 +412,23 @@ function separatelyDeliveredCheckout(policy, input) {
   return rows?.length === 1 ? rows[0] : null;
 }
 
+/** A merged PR whose rewritten head contains the exact local tip shipped every
+ * local commit. That settles this checkout's obligation only; the owner's
+ * recorded verdict stays unchanged. Bound to the reviewed tip and PR head. */
+function ancestorDeliveredCheckout(policy, input) {
+  const forge = input.retirementForge, agent = policy.agent, target = reviewTarget(policy);
+  if (input.detachedCheckoutIdentity || forge?.scopeProof !== 'ancestor-of-delivered-head' || forge.prUrl !== input.prUrl
+    || !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(input.tip || '') || forge.deliveredAncestorHead !== input.tip
+    || forge.prHead !== input.verifiedPrHead || input.verifiedPrHead === input.tip
+    || agent.status !== 'completed' || !agent.result || agent.result.validationPassed === false
+    || agent.result.taskOutcome?.recovery?.mode === 'approval' || agent.metadata?.blocker
+    || ![PR_COMPLETIONS.REVIEW_THEN_MERGE, PR_COMPLETIONS.MERGE_ON_GREEN].includes(policy.completion)
+    || (retirementPr(policy) && retirementPr(policy) !== input.prUrl)
+    || (policy.tip && ![input.tip, input.verifiedPrHead].includes(policy.tip))
+    || (target && (target.branch !== input.branch || target.url !== input.prUrl))) return null;
+  return { tip: input.tip, prHead: input.verifiedPrHead };
+}
+
 function reviewedIncarnation(input, policies) {
   if (!isAbsolute(input.checkoutPath || '') || samePath(input.checkoutPath, input.repoPath)
     || !input.prUrl || (input.verifiedPrHead !== input.tip && !policies.some(policy => representedOriginalContinuation(policy, input)))
@@ -573,7 +590,7 @@ export function reviewedRetirementPolicy(input) {
   const incarnation = reviewedIncarnation(input, resumed);
   const policies = incarnation?.current || resumed;
   if (policies.some(p => p.completion === PR_COMPLETIONS.LEAVE_OPEN)) return { reason: held };
-  if (policies.some(p => !separatelyDeliveredCheckout(p, input) && (p.agent.status !== 'completed' || (p.agent.result?.success !== true && !completedCleanupForRetirement(p, input)
+  if (policies.some(p => !separatelyDeliveredCheckout(p, input) && !ancestorDeliveredCheckout(p, input) && (p.agent.status !== 'completed' || (p.agent.result?.success !== true && !completedCleanupForRetirement(p, input)
     && !reviewedOrphanCheckout(p, input) && !completedDetachedSibling(p, input) && !continuedDelivery(p, input) && !p.resumedCleanup)
     || (p.completion !== PR_COMPLETIONS.REVIEW_THEN_MERGE
       && !(p.completion === PR_COMPLETIONS.MERGE_ON_GREEN && continuedDelivery(p, input)))
@@ -591,6 +608,7 @@ export function reviewedRetirementPolicy(input) {
     ...(p.resumedCleanup && { resumedCleanup: p.resumedCleanup }),
     ...(separatelyDeliveredCheckout(p, input) && { retainedSiblingObligation: separatelyDeliveredCheckout(p, input) }),
     ...(continuedDelivery(p, input) && { continuedDelivery: continuedDelivery(p, input) }),
+    ...(ancestorDeliveredCheckout(p, input) && { deliveredAncestor: ancestorDeliveredCheckout(p, input) }),
     ...(reviewedOrphanCheckout(p, input) && { orphanedExecution: true }),
     ...(completedDetachedSibling(p, input) && { ...(p.agent.result?.orphaned === true ? { orphanedSibling: true } : { completedSibling: true }), detachedCheckoutIdentity: input.detachedCheckoutIdentity }),
     branch: p.branch, completion: p.completion,

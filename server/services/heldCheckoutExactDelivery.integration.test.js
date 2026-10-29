@@ -31,6 +31,8 @@ vi.mock('./github.js', () => ({ execGh: async args => {
   if (fixture.detail?.privateSourceBase && path.includes('/pulls/42/commits?')) return JSON.stringify([[{
     sha: fixture.pr.headRefOid, parents: [{ sha: fixture.detail.privateSourceBase }] }]]);
   if (path.includes('/git/ref/heads/')) return JSON.stringify({ object: { sha: fixture.refs[decodeURIComponent(path.split('/heads/')[1])] } });
+  // No scenario here has a PR head that contains a different local tip.
+  if (path.includes('/compare/')) return JSON.stringify({ status: 'diverged', behind_by: 1 });
   throw new Error('Historical capped scope must not be enumerated');
 } }));
 vi.mock('./branchCompletionPolicy.js', async original => ({ ...await original(), readBranchCompletionPolicies: async () => fixture.policies }));
