@@ -8,7 +8,8 @@ import { MemoryRouter } from 'react-router';
 
 const { fetchPage, deleteImage, saveAnnotation, getGalleryImages, getVideoHistoryItem, listImageVariants, stitchVideos, toast, socketHandlers } = vi.hoisted(() => ({ stitchVideos: vi.fn(), toast: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }), socketHandlers: new Map(), fetchPage: vi.fn(), deleteImage: vi.fn(), saveAnnotation: vi.fn(), getGalleryImages: vi.fn(), getVideoHistoryItem: vi.fn(), listImageVariants: vi.fn() }));
 vi.mock('../services/apiImageVideo', () => ({ listMediaGalleryPage: fetchPage, getGalleryImages, getVideoHistoryItem, listImageVariants }));
-vi.mock('../services/api', () => ({ listMediaGalleryPage: fetchPage, deleteImage, deleteVideoHistoryItem: vi.fn(), stitchVideos }));
+const deleteApi = vi.hoisted(() => ({ deleteVideoHistoryItem: vi.fn(), cancelVideoPendingDelete: vi.fn(), getInstances: vi.fn() }));
+vi.mock('../services/api', () => ({ listMediaGalleryPage: fetchPage, deleteImage, stitchVideos, ...deleteApi }));
 vi.mock('../services/socket', () => ({ default: { on: (event, fn) => socketHandlers.set(event, fn), off: (event) => socketHandlers.delete(event) } }));
 vi.mock('../components/ui/Toast', () => ({ default: toast }));
 vi.mock('../hooks/useMediaCompletionRefresh', () => ({ useMediaCompletionRefresh: () => {} }));
@@ -16,7 +17,7 @@ vi.mock('../hooks/useMediaAnnotations', () => ({ useMediaAnnotations: () => ({ a
 vi.mock('../hooks/useMediaPreviewActions', () => ({ default: () => ({}) }));
 vi.mock('../components/media/VideoUpscaleDrawer', () => ({ default: () => null }));
 vi.mock('../components/media/MediaPreview', () => ({ default: ({ preview }) => preview ? <div role="dialog">{preview.prompt}{preview.detailError && ' [details unavailable]'}</div> : null }));
-vi.mock('../components/media/MediaCard', () => ({ default: ({ item, onDelete, onToggleStar, onPreview, onClick }) => <div>{onClick && <button type="button" onClick={() => onClick(item)}>Pick {item.filename}</button>}<button type="button" onClick={() => onPreview(item)}>{item.prompt}</button><button type="button" onClick={() => onToggleStar(item)}>Favorite {item.filename}</button><button type="button" onClick={() => onDelete(item)}>Delete {item.filename}</button></div> }));
+vi.mock('../components/media/MediaCard', () => ({ default: ({ item, onDelete, onToggleStar, onPreview, onClick, onCancelPendingDelete, pendingPeerName }) => <div>{onClick && <button type="button" onClick={() => onClick(item)}>Pick {item.filename}</button>}<button type="button" onClick={() => onPreview(item)}>{item.prompt}</button><button type="button" onClick={() => onToggleStar(item)}>Favorite {item.filename}</button><button type="button" onClick={() => onDelete(item)}>Delete {item.filename}</button>{item.pendingDelete && <button type="button" onClick={() => onCancelPendingDelete(item)}>Cancel {item.filename} pending on {pendingPeerName}</button>}</div> }));
 vi.mock('../components/media/MediaHistoryGrid', () => ({ default: ({ items, children }) => <div>{items.map(children)}</div> }));
 import MediaHistory from './MediaHistory';
 
@@ -212,5 +213,48 @@ describe('stitch job', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Stitch 2' }));
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Queue full'));
     expect(toast.success).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('remote video delete', () => {
+  beforeEach(() => {
+    rows = [{ kind: 'video', data: { id: 'v1', filename: 'v1.mp4', prompt: 'Clip one', createdAt: '2026-01-01' } }];
+    deleteApi.getInstances.mockResolvedValue({ peers: [{ id: 'rec-peer', name: 'Example Peer' }] });
+  });
+
+  it('keeps a row whose owner is offline, names the peer, and cancels the pending delete', async () => {
+    deleteApi.deleteVideoHistoryItem.mockResolvedValue({ ok: true, status: 'pending', pendingDelete: { peerId: 'rec-peer', queuedAt: '2026-01-02T00:00:00.000Z' }, peerName: 'Example Peer' });
+    deleteApi.cancelVideoPendingDelete.mockResolvedValue({ ok: true, cancelled: true });
+    open();
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete v1.mp4' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Cancel v1.mp4 pending on Example Peer' }));
+    expect(screen.getByText('Clip one')).toBeInTheDocument();
+    expect(toast).toHaveBeenCalledWith('Delete pending until Example Peer is reachable');
+    await waitFor(() => expect(screen.queryByRole('button', { name: /^Cancel v1\.mp4/ })).toBeNull());
+    expect(deleteApi.cancelVideoPendingDelete).toHaveBeenCalledWith('v1', { silent: true });
+    expect(screen.getByText('Clip one')).toBeInTheDocument();
+  });
+
+  it('resolves a pending row\'s peer name from the registry when the page loads', async () => {
+    rows[0].data.pendingDelete = { peerId: 'rec-peer', queuedAt: '2026-01-02T00:00:00.000Z' };
+    open();
+    expect(await screen.findByRole('button', { name: 'Cancel v1.mp4 pending on Example Peer' })).toBeInTheDocument();
+    expect(deleteApi.getInstances).toHaveBeenCalledTimes(1);
+  });
+
+  it('removes an owner-unknown row with a notice that nothing was deleted', async () => {
+    deleteApi.deleteVideoHistoryItem.mockResolvedValue({ ok: true, status: 'owner-unknown' });
+    open();
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete v1.mp4' }));
+    await waitFor(() => expect(screen.queryByText('Clip one')).toBeNull());
+    expect(toast).toHaveBeenCalledWith('Owner unknown: hidden on this machine only, nothing was deleted');
+  });
+
+  it('surfaces an owner refusal and keeps the row', async () => {
+    deleteApi.deleteVideoHistoryItem.mockRejectedValue(new Error('Example Peer refused the delete'));
+    open();
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete v1.mp4' }));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Example Peer refused the delete'));
+    expect(screen.getByText('Clip one')).toBeInTheDocument();
   });
 });

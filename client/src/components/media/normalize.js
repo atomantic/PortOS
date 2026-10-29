@@ -157,6 +157,8 @@ export function normalizeVideo(v) {
     // Same contract as normalizeImage's renderMs above.
     renderMs: Number.isFinite(v.renderMs) ? v.renderMs : null,
     hidden: !!v.hidden,
+    // Machine-local: a delete sent to (or queued for) the peer that owns this row.
+    pendingDelete: v.pendingDelete && typeof v.pendingDelete === 'object' ? v.pendingDelete : null,
     provenance: v.provenance || null,
     compact: v.compact === true,
     raw: v,

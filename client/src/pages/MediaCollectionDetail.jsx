@@ -201,10 +201,18 @@ export default function MediaCollectionDetail() {
       return null;
     });
     if (!ok) return;
-    page.setItems(rows => rows.filter(row => !(row.kind === item.kind && (row.kind === 'image' ? row.data.filename === item.filename : row.data.id === item.id))));
+    const matches = row => row.kind === item.kind && (row.kind === 'image' ? row.data.filename === item.filename : row.data.id === item.id);
+    // An offline owner keeps the row here, marked, until the delete reaches it.
+    if (ok.status === 'pending') {
+      page.setItems(rows => rows.map(row => (matches(row) ? { ...row, data: { ...row.data, pendingDelete: ok.pendingDelete } } : row)));
+      toast(`Delete pending until ${ok.peerName || 'the owning machine'} is reachable`);
+      return;
+    }
+    page.setItems(rows => rows.filter(row => !matches(row)));
     page.setTotal(total => Math.max(0, total - 1));
     page.refresh();
-    toast.success(`Deleted ${item.kind === 'image' ? item.filename : 'video'}`);
+    if (ok.status === 'owner-unknown') toast('Owner unknown: hidden on this machine only, nothing was deleted');
+    else toast.success(`Deleted ${item.kind === 'image' ? item.filename : 'video'}`);
   }, [page.setItems, page.setTotal, page.refresh]);
 
   const handlePromptSaved = useCallback((item, prompt) => {

@@ -296,7 +296,10 @@ export const uploadGalleryVideo = (base64Data, filename, options = {}) => reques
   body: uploadBody(base64Data, filename),
   ...options,
 });
+// Resolves `{ ok, status }`: `deleted`, `pending` (queued for the owning peer,
+// with `pendingDelete` and `peerName`) or `owner-unknown` (hidden here only).
 export const deleteVideoHistoryItem = (id, options = {}) => request(`/video-gen/history/${encodeURIComponent(id)}`, { method: 'DELETE', ...options });
+export const cancelVideoPendingDelete = (id, options = {}) => request(`/video-gen/history/${encodeURIComponent(id)}/cancel-delete`, { method: 'POST', ...options });
 export const setVideoHidden = (id, hidden, options = {}) => request(`/video-gen/history/${encodeURIComponent(id)}/visibility`, {
   method: 'POST',
   body: JSON.stringify({ hidden }),

@@ -469,11 +469,17 @@ export default function VideoGen() {
 
   const handleDeleteHistory = useCallback(async (item) => {
     const raw = item?.raw || item;
-    const deleted = await deleteVideoHistoryItem(raw.id, { silent: true })
-      .then(() => true)
-      .catch((err) => { toast.error(err.message || 'Delete failed'); return false; });
-    if (!deleted) return;
+    const result = await deleteVideoHistoryItem(raw.id, { silent: true })
+      .catch((err) => { toast.error(err.message || 'Delete failed'); return null; });
+    if (!result) return;
+    // An offline owner keeps the row here, marked, until the delete reaches it.
+    if (result.status === 'pending') {
+      setHistory((h) => h.map((v) => (v.id === raw.id ? { ...v, pendingDelete: result.pendingDelete } : v)));
+      toast(`Delete pending until ${result.peerName || 'the owning machine'} is reachable`);
+      return;
+    }
     setHistory((h) => h.filter((v) => v.id !== raw.id));
+    if (result.status === 'owner-unknown') toast('Owner unknown: hidden on this machine only, nothing was deleted');
   }, []);
   const handlePromptSaved = useCallback((item, prompt) => {
     const id = item?.id || item?.raw?.id;

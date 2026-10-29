@@ -80,6 +80,10 @@ function MediaCard({
   finishTitle = 'Re-render this draft on its delivery model',
   onUpscale,
   onDelete,
+  // A delete waiting on the peer that owns this row (`item.pendingDelete`):
+  // the card says where it waits and offers to withdraw it instead of Delete.
+  onCancelPendingDelete,
+  pendingPeerName = null,
   onToggleHidden,
   selectionLabel = null, // e.g. "1", "2" — shown as the stitch order badge
   selected = false,
@@ -98,6 +102,8 @@ function MediaCard({
   const videoPreviewUrl = isVideo && item.filename ? downloadUrl : undefined;
   const handleTileClick = onClick || (() => onPreview?.(item));
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const pendingDelete = Boolean(item.pendingDelete);
+  const canDelete = Boolean(onDelete) && !pendingDelete;
   // Send actions come before Draw so the image-gen card (no annotate handler)
   // stays a 2×2: Remix, i2i, Video, 3D. Draw wraps under that set when present.
   const createActions = [
@@ -141,7 +147,7 @@ function MediaCard({
     + (showMoodBoardMenu && moodBoardTriggerVisible(item) ? 1 : 0)
     + 1
     + (onToggleHidden ? 1 : 0)
-    + (onDelete ? 1 : 0);
+    + (canDelete ? 1 : 0);
 
   return (
     <div className={`min-w-0 bg-port-card border rounded-xl ${selected ? 'border-port-accent' : 'border-port-border'}`}>
@@ -262,7 +268,23 @@ function MediaCard({
             )}
           </div>
         )}
-        {!hideActions && confirmingDelete && onDelete && (
+        {pendingDelete && (
+          <div role="status" className="flex items-center justify-between gap-2 rounded border border-port-warning/40 bg-port-warning/10 pl-2 text-[11px] text-port-warning">
+            <span className="min-w-0 break-words">Delete pending on {pendingPeerName || 'the owning machine'}</span>
+            {onCancelPendingDelete && !hideActions && (
+              <button
+                type="button"
+                onClick={() => onCancelPendingDelete(item)}
+                className="min-h-[44px] shrink-0 px-2 rounded border border-port-warning/50 hover:bg-port-warning/20 focus:outline-none focus-visible:ring-1 focus-visible:ring-port-warning"
+                aria-label="Cancel pending delete"
+                title="Withdraw the delete waiting on the owning machine"
+              >
+                Cancel
+              </button>
+            )}
+          </div>
+        )}
+        {!hideActions && confirmingDelete && canDelete && (
           <InlineConfirmRow
             question={`Delete this ${isVideo ? 'video' : 'image'}?`}
             confirmText="Delete"
@@ -311,7 +333,7 @@ function MediaCard({
                   {item.hidden ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
                 </button>
               )}
-              {onDelete && (
+              {canDelete && (
                 <button
                   type="button"
                   onClick={() => setConfirmingDelete(true)}
