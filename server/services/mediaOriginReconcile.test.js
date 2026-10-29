@@ -122,6 +122,18 @@ describe('earliest holder of a pre-upgrade video', () => {
     expect(await originOf()).toBe('b'); // a's earlier copy is gone, so b is the earliest holder
   });
 
+  it('waits for a fresh report once a peer says it holds a file its last report called absent', async () => {
+    touch(join(PATHS.videos, 'v1.mp4'), T + 2 * DAY);
+    await report('a', T);
+    await report('b', undefined);
+    const { notePeerHolding } = await import('./mediaHolders.js');
+    await notePeerHolding('b', 'video', 'v1.mp4', true);
+    expect(await reconcileMediaOrigins('video')).toBe(0); // b's copy has no file time yet
+    await report('b', T + DAY);
+    expect(await reconcileMediaOrigins('video')).toBe(1);
+    expect(await originOf()).toBe('a');
+  });
+
   it('lets a newer scope that no longer lists the file override an older one that did', async () => {
     touch(join(PATHS.videos, 'v1.mp4'), T + 2 * DAY);
     await report('a', T);

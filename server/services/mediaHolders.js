@@ -151,10 +151,20 @@ export async function recordPeerInventory(instanceId, kind, filenames, checked, 
       if (!present.has(name) && held[name]) { delete held[name]; changed = true; }
     }
     if (changed) store.holdings[instanceId] = { ...(store.holdings[instanceId] ?? {}), [kind]: held };
-    // A peer that no longer holds a file stops being a holder for origin attribution too.
+    // Origin attribution reads the same evidence: a peer that stops holding a file stops
+    // counting as a holder there, and one that starts holding it (no file time yet)
+    // invalidates every report that called the file absent, until a fresh inventory.
     for (const report of Object.values(store.reports[instanceId]?.[kind] ?? {})) {
       for (const name of absent) {
         if (report.mtimes[name] !== undefined) { delete report.mtimes[name]; changed = true; }
+      }
+      if (!direct) continue;
+      for (const name of present) {
+        if (examined.has(name) && report.mtimes[name] === undefined && (report.complete === true || report.checked.includes(name))) {
+          report.checked = report.checked.filter((n) => n !== name);
+          delete report.complete;
+          changed = true;
+        }
       }
     }
     return changed;
