@@ -168,7 +168,7 @@ async function fetchPeer(peer, path) {
 // Older peers lack the inventory route. A successful HEAD with no remote-media
 // marker proves their static mount served local bytes, rather than proxying a
 // third peer. Failure is inconclusive and never removes an existing host.
-async function fetchHostedInventory(peer, category, kind) {
+async function fetchHostedInventory(peer, category, kind, { probeOlderPeers = true } = {}) {
   const path = `/api/sync/${category}/${kind}-inventory`;
   const response = await withAbortTimeout(FETCH_TIMEOUT_MS, (signal) => peerFetch(`${peerBaseUrl(peer)}${path}`, { signal }, peer)).catch(() => null);
   if (!response) return null;
@@ -176,6 +176,8 @@ async function fetchHostedInventory(peer, category, kind) {
     if (!response.ok) return null;
     return readPeerBody(response, 'json', { maxBytes: PEER_BODY_DEFAULT_MAX_BYTES }).catch(() => null);
   }
+  // An older peer has no file times to report, so only host-mode reconciliation needs the probe.
+  if (!probeOlderPeers) return null;
   const { checked } = await dataSync.getHostedMediaInventory(category, kind);
   // Whole literals so the peer-surface guard (apiAccessPolicy.test.js) can see both routes.
   const mediaRoot = kind === 'image' ? '/data/images/' : '/data/videos/';
@@ -604,10 +606,14 @@ async function syncDataCategoryFromPeer(peer, peerId, category, cachedChecksums,
   if (gap && !schemaGapMayHaveCleared(gap, peer, checksumRes.checksum)) {
     return { totalApplied: 0, checksum: null, blockedBySchema: gap };
   }
-  if ((category === 'videoHistory' || category === 'mediaCollections') && peer.mediaSyncMode === 'host') {
+  if (category === 'videoHistory' || category === 'mediaCollections') {
+    const hostMode = peer.mediaSyncMode === 'host';
     const kinds = category === 'mediaCollections' ? ['video', 'image'] : ['video'];
+    const { hasUnattributedMedia } = await import('./mediaOriginReconcile.js');
     for (const kind of kinds) {
-      const inventory = await fetchHostedInventory(peer, category, kind).catch(() => null);
+      // A copy peer is asked for its file times only while some media here has no recorded origin.
+      if (!hostMode && !await hasUnattributedMedia(kind).catch(() => false)) continue;
+      const inventory = await fetchHostedInventory(peer, category, kind, { probeOlderPeers: hostMode }).catch(() => null);
       if (inventory) await dataSync.applyRemote(category, inventory, { peerId, portosMeta: inventory.portosMeta, inventory: true, inventoryKind: kind });
     }
   }

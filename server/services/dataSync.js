@@ -42,6 +42,7 @@ import { mutateVideoHistory, HISTORY_UNCHANGED, videoRowLiveStamp } from './vide
 import { listHostedEntries, reconcileHostedMedia } from './peerHostedMedia.js';
 import { sanitizeAssetFilename } from './sharing/buckets.js';
 import { authorizeRemoteMediaTombstone } from './mediaTombstoneAuthorization.js';
+import { rowOwnerCandidates } from '../lib/mediaRowOwners.js';
 import { listMediaTombstones, listExportableMediaTombstones, mergeMediaTombstones, clearMediaTombstone } from './mediaTombstones.js';
 import { emitMediaHistoryChanged } from './peerSyncEventBus.js';
 import { referenceCollectionAssetManifest } from './sharing/peerSyncAssets.js';
@@ -956,7 +957,15 @@ export async function getHostedMediaInventory(category = 'videoHistory', kind = 
   const checked = [...new Set(references.filter((name) =>
     typeof name === 'string' && sanitizeAssetFilename(name) === name))];
   const filenames = checked.filter((name) => local.has(name));
-  return { version: 1, filenames, checked, portosMeta: await buildPortosMeta() };
+  // File times let paired peers settle who made an unattributed copy
+  // (mediaOriginReconcile.js); an older peer ignores the extra field.
+  const dir = kind === 'image' ? PATHS.images : PATHS.videos;
+  const mtimes = {};
+  for (const name of filenames) {
+    const info = await stat(join(dir, name)).catch(() => null);
+    if (info) mtimes[name] = info.mtimeMs;
+  }
+  return { version: 1, filenames, checked, mtimes, portosMeta: await buildPortosMeta() };
 }
 
 async function applyVideoHistoryRemote(remoteData, source) {
@@ -999,6 +1008,7 @@ export async function mergeVideoRows(incomingRows, source) {
   // while we wait and re-add the row it just removed (#14123).
   const changedIds = [];
   let tombstones = [];
+  const hostedIndex = await listHostedEntries();
   await mutateVideoHistory(async (local) => {
     tombstones = await listMediaTombstones('video');
     // A row survives a tombstone only when it was (re)created or restored after the delete.
@@ -1011,7 +1021,17 @@ export async function mergeVideoRows(incomingRows, source) {
     // hand-edited or corrupt entry shouldn't clobber a real row at key
     // `undefined`); the snapshot side excludes the same rows so checksums agree.
     const hasId = hasVideoRowId;
-    const keyed = local.filter(hasId);
+    // An origin-less copy takes the origin a sender names, but only a sender
+    // that already holds delete authority over it (an owner candidate): no peer
+    // gains a power it lacked, and the two snapshots' checksums converge.
+    const adoptedIds = new Set();
+    const keyed = local.filter(hasId).map((row) => {
+      if (row.originInstanceId || typeof source?.peerId !== 'string' || !rowOwnerCandidates(row, hostedIndex).includes(source.peerId)) return row;
+      const named = incoming.find((r) => hasId(r) && r.id === row.id && typeof r.originInstanceId === 'string' && r.originInstanceId);
+      if (!named) return row;
+      adoptedIds.add(row.id);
+      return { ...row, originInstanceId: named.originInstanceId };
+    });
     const before = new Map(keyed.map((r) => [r.id, r]));
     const { merged: rawMerged, changed } = mergeArraysByKey(
       keyed,
@@ -1020,7 +1040,7 @@ export async function mergeVideoRows(incomingRows, source) {
       'id',
       'createdAt',
     );
-    if (!changed) return HISTORY_UNCHANGED;
+    if (!changed && adoptedIds.size === 0) return HISTORY_UNCHANGED;
     // Ownership of a row held here never comes from a sender: its origin and
     // supplier stay the local values, even when absent (an origin-less row stays
     // origin-less, or any peer could claim it and then delete it). Only a row
@@ -1044,7 +1064,7 @@ export async function mergeVideoRows(incomingRows, source) {
     // `count` contract.
     for (const row of merged) {
       const prev = before.get(row.id);
-      if (!prev || prev !== row) changedIds.push(row.id);
+      if (!prev || prev !== row || adoptedIds.has(row.id)) changedIds.push(row.id);
     }
 
     // Preserve any local rows that lacked an id (the merge dropped them from its
@@ -1521,11 +1541,16 @@ export async function applyRemote(category, remoteData, options = {}) {
     };
   }
   if ((category === 'videoHistory' || category === 'mediaCollections') && options.inventory === true) {
-    const peer = (await getPeers()).find((p) => p.instanceId === source.peerId && p.enabled !== false && p.mediaSyncMode === 'host');
+    const peer = (await getPeers()).find((p) => p.instanceId === source.peerId && p.enabled !== false);
     if (peer && remoteData?.version === 1 && Array.isArray(remoteData.filenames) && Array.isArray(remoteData.checked)) {
       const kind = options.inventoryKind === 'image' ? 'image' : 'video';
       if (kind === 'video' || category === 'mediaCollections') {
-        await reconcileHostedMedia(peer.instanceId, kind, remoteData.filenames, remoteData.checked);
+        if (peer.mediaSyncMode === 'host') await reconcileHostedMedia(peer.instanceId, kind, remoteData.filenames, remoteData.checked);
+        if (isPlainObject(remoteData.mtimes)) {
+          const { recordPeerHoldings, reconcileMediaOrigins } = await import('./mediaOriginReconcile.js');
+          await recordPeerHoldings(peer.instanceId, kind, category, { mtimes: remoteData.mtimes, checked: remoteData.checked });
+          await reconcileMediaOrigins(kind);
+        }
       }
     }
     return { applied: false, count: 0 };

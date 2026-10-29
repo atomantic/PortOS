@@ -27,6 +27,7 @@ import { peerFetch } from '../../lib/peerHttpClient.js';
 import { withAbortTimeout } from '../../lib/abortTimeout.js';
 import { getPeers } from '../instances.js';
 import { peerBaseUrl } from '../../lib/peerUrl.js';
+import { rowOwnerCandidates } from '../../lib/mediaRowOwners.js';
 import { SIDECAR_MAX_BYTES } from './assetLimits.js';
 
 // Mirror the image-pull timeout (peerSync.js ASSET_PULL_TIMEOUT_MS) so a hung
@@ -69,21 +70,32 @@ async function readBodyCapped(res, maxBytes) {
 }
 
 /**
+ * True when a held image with no origin takes the origin `peer`'s sidecar names:
+ * only a peer that already holds delete authority over the copy (it supplied it,
+ * or hosts its bytes), so adopting gives no peer a power it lacked.
+ */
+export function heldImageAdoptsOrigin(local, peer, imageFilename, hostedIndex) {
+  if (!isPlainObject(local) || isStr(local.originInstanceId) || !isStr(peer?.instanceId)) return false;
+  const copy = { filename: imageFilename, suppliedByInstanceId: local.suppliedByInstanceId };
+  return rowOwnerCandidates(copy, hostedIndex).includes(peer.instanceId);
+}
+
+/**
  * The sidecar to keep when a peer's copy arrives: its gen-params, with this
  * machine's own fields (hide state, pending delete, supplier) left as they are
  * and the peer's ignored. Ownership of an image already held here (its sidecar
  * has gen-params) never comes from a peer: its origin stays the local value,
- * even when absent. An image new here takes the peer's origin, and the peer is
- * recorded as its supplier.
+ * even when absent, unless `adoptOrigin` says the sender may name it. An image
+ * new here takes the peer's origin, and the peer is recorded as its supplier.
  */
-function mergePeerSidecar(incoming, local, peer) {
+function mergePeerSidecar(incoming, local, peer, adoptOrigin = false) {
   const held = isPlainObject(local) && sidecarGenParamsHash(local) !== null;
   const { originInstanceId: incomingOrigin, ...content } = stripImageSidecarLocalFields(incoming);
   const merged = { ...content };
   for (const key of IMAGE_SIDECAR_LOCAL_FIELDS) {
     if (isPlainObject(local) && local[key] !== undefined) merged[key] = local[key];
   }
-  const origin = held ? local.originInstanceId : incomingOrigin;
+  const origin = held && !adoptOrigin ? local.originInstanceId : incomingOrigin;
   if (origin !== undefined) merged.originInstanceId = origin;
   if (!held && merged.suppliedByInstanceId === undefined && isStr(peer?.instanceId)) merged.suppliedByInstanceId = peer.instanceId;
   // The local hash cache describes the local file; keep it over the peer's.
@@ -153,13 +165,15 @@ export async function pullSidecarForImage(peer, base, imageFilename) {
   // edit is merged, not overwritten. An unreadable local sidecar is left intact
   // (it may hold this machine's own fields) rather than replaced.
   const { sidecarEditQueue } = await import('../imageGen/sidecarStore.js');
+  const { listHostedEntries } = await import('../peerHostedMedia.js');
+  const hostedIndex = await listHostedEntries();
   const written = await sidecarEditQueue(safeName, async () => {
     const local = await readJSONFile(sidecarPath, null, { strict: true }).catch((err) => {
       console.warn(`⚠️ peerSync: kept unreadable sidecar ${sidecarName}; not replaced from ${peer.name || peer.instanceId}: ${err.message}`);
       return undefined;
     });
     if (local === undefined) return false;
-    await atomicWrite(sidecarPath, mergePeerSidecar(parsed, local, peer));
+    await atomicWrite(sidecarPath, mergePeerSidecar(parsed, local, peer, heldImageAdoptsOrigin(local, peer, safeName, hostedIndex)));
     return true;
   });
   if (!written) return false;

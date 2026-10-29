@@ -24,7 +24,7 @@ import { generateThumbnail } from '../../lib/ffmpeg.js';
 import { sanitizeRecordForWire } from '../../lib/syncWire.js';
 import { collectAssetReferences } from './exporter.js';
 import { imageSidecarName, sanitizeAssetFilename } from './buckets.js';
-import { pullSidecarForImage, recordImageSupplier } from './sidecarSync.js';
+import { pullSidecarForImage, recordImageSupplier, heldImageAdoptsOrigin } from './sidecarSync.js';
 import { parseKey } from '../../lib/mediaItemKey.js';
 import { headshotImageFilename } from '../authors/index.js';
 import { portraitImageFilename } from '../artists/index.js';
@@ -259,6 +259,7 @@ export async function diffAssetManifestAgainstLocal(manifest, { includeMismatche
   const deletedImages = await deletedImageStamps(manifest);
   const deletedVideos = await deletedVideoIds(manifest);
   const missing = [];
+  let hostedIndex = null;
   for (const entry of manifest) {
     if (!isPlainObject(entry) || !isStr(entry.filename) || !isStr(entry.kind)) continue;
     if (blockedByImageTombstone(deletedImages, entry) || blockedByVideoTombstone(deletedVideos, entry)) continue;
@@ -328,7 +329,10 @@ export async function diffAssetManifestAgainstLocal(manifest, { includeMismatche
       // became unreadable between the existsSync check and the stat).
       const localSidecar = imageHashResult?.sidecar
         ?? await readJSONFile(join(PATHS.images, imageSidecarName(safeName)), null, { logError: false });
-      if (!sidecarMatchesGenParamsHash(localSidecar, entry.sidecarSha256, { originCandidates: [senderInstanceId] })) missing.push(sanitizedEntry);
+      // A copy this sender may name the origin of must pull the sidecar to adopt it.
+      hostedIndex ??= await import('../peerHostedMedia.js').then((m) => m.listHostedEntries());
+      const adopts = heldImageAdoptsOrigin(localSidecar, { instanceId: senderInstanceId }, safeName, hostedIndex);
+      if (!sidecarMatchesGenParamsHash(localSidecar, entry.sidecarSha256, { originCandidates: adopts ? [] : [senderInstanceId] })) missing.push(sanitizedEntry);
     }
   }
   return missing;
