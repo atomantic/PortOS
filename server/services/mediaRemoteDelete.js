@@ -437,7 +437,9 @@ async function drainMediaDeleteQueue(peer) {
           console.log(`🚫 ${peerLabel(current)} refused queued delete of ${entry.kind} ${entry.key}: ${result.outcome}${result.detail ? ` ${result.detail}` : ''}`);
         }
       } catch (err) {
-        console.error(`❌ Queued delete of ${entry.kind} ${entry.key} failed: ${err.message}`);
+        // The row went while its command was out (deleted or retired here): nothing left to hide.
+        if (err?.code === 'NOT_FOUND') console.log(`⏭️ Queued delete of ${entry.kind} ${entry.key}: the row is already gone here`);
+        else console.error(`❌ Queued delete of ${entry.kind} ${entry.key} failed: ${err.message}`);
       }
     }
   } catch (err) {

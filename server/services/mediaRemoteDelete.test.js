@@ -276,6 +276,24 @@ describe('media delete queue upkeep', () => {
     expect(await listMediaDeleteQueue()).toEqual([]);
   });
 
+  it('a drained not-held answer for a row deleted meanwhile is not logged as a failure', async () => {
+    const queuedAt = new Date().toISOString();
+    await atomicWrite(HISTORY, [row('v1', { originInstanceId: 'peer-o', pendingDelete: { peerId: 'rec-owner', queuedAt } })]);
+    await atomicWrite(QUEUE, { version: 1, entries: [queueEntry('v1', queuedAt)] });
+    const dial = deferred();
+    net.fetch = vi.fn(() => dial.promise);
+    const errors = vi.spyOn(console, 'error');
+    disarmQueue = initMediaRemoteDelete();
+    const drained = listenerFor('peer:online')(registry.peers[0]);
+    await vi.waitFor(() => expect(net.fetch).toHaveBeenCalledTimes(1));
+    await atomicWrite(HISTORY, []);
+    dial.resolve(json(404, { error: 'not held', code: 'MEDIA_NOT_HELD' }));
+    await drained;
+    expect(errors).not.toHaveBeenCalled();
+    expect(await listMediaDeleteQueue()).toEqual([]);
+    errors.mockRestore();
+  });
+
   it('prunes a removed peer\'s entries when the registry changes', async () => {
     const queuedAt = new Date().toISOString();
     await atomicWrite(HISTORY, [row('v1', { originInstanceId: 'peer-o' })]);
