@@ -14,7 +14,7 @@ import { isPlainObject } from '../../lib/objects.js';
 import { isNonBlankStr } from '../../lib/textUtils.js';
 import { stripImageSidecarLocalFields, imageLiveStamp } from '../../lib/assetHash.js';
 import { isSafeFilename } from '../../lib/pathSafety.js';
-import { isTombstoned, tombstoneTimestamp } from '../../lib/tombstones.js';
+import { isTombstoned } from '../../lib/tombstones.js';
 import { parseTsMs } from '../../lib/lwwTimestamp.js';
 import { imageGenEvents } from '../imageGenEvents.js';
 import { mergeMediaTombstones, listMediaTombstones } from '../mediaTombstones.js';
@@ -172,8 +172,15 @@ export async function admitPeerImageTombstones(peer, tombstones, { via = 'snapsh
   // A delete already recorded here at the same or a later instant was applied
   // then; a manifest repeats every tombstone on each changed sweep.
   const local = await listMediaTombstones('image');
+  // Newest local delete per key, built once so admission stays linear in the
+  // incoming list rather than rescanning `local` per tombstone.
+  const localDeletedMs = new Map();
+  for (const row of local) {
+    const ms = parseTsMs(row?.deletedAt);
+    if (ms !== null && !(localDeletedMs.get(row.key) >= ms)) localDeletedMs.set(row.key, ms);
+  }
   const alreadyApplied = (t) => {
-    const mine = parseTsMs(tombstoneTimestamp(local, t?.key, 'key'));
+    const mine = localDeletedMs.get(t?.key) ?? null;
     const theirs = parseTsMs(t?.deletedAt);
     return mine !== null && theirs !== null && mine >= theirs;
   };

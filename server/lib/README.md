@@ -175,7 +175,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `musicVideoValidation.js` | Music Video project/scene/reorder + cached audio-analysis schemas. |
 | `musicVideoStoryValidation.js` | Typed Story summary, proposal and selective-apply request schemas. |
 | `notesValidation.js` | Notes route schemas + safe-relative-path guard. |
-| `peerSyncValidation.js` | Federated peer-sync wire/request schemas (push payload, subscribe, sync-now, pull-metadata, the library manifest with its optional image `tombstones` and the `PEER_LIBRARY_TOMBSTONES_HEADER` that requests them). |
+| `peerSyncValidation.js` | Federated peer-sync wire/request schemas (push payload, subscribe, sync-now, pull-metadata, the library manifest with its optional image `tombstones` and the `PEER_LIBRARY_TOMBSTONES_HEADER` that requests them plus the `PEER_LIBRARY_TOMBSTONES_SINCE_HEADER` cursor). |
 | `pipelineValidation.js` | Creative-production pipeline schemas (Writers Room works/folders/live-mode/drafts, story-bible character/place/object, editorial checks, storyboard shots/scenes, prompt-stage config, issue-list query). |
 | `postLlmContracts.js` | Versioned POST LLM generation/scoring schemas, semantic-verdict validation, and secret-free generator/scorer provenance with explicit legacy normalization. |
 | `postRhetoric.js` | Shared rhetoric evaluator rubric, mode/drill ids, structured evaluator prompt/response validation, and the 40-item fictional gold-reference corpus used by POST background reports and local-model performance checks. |

@@ -23,7 +23,7 @@ import { withAbortTimeout } from '../../lib/abortTimeout.js';
 import { sanitizeAssetFilename } from './buckets.js';
 import { PORTOS_SCHEMA_VERSIONS } from '../../lib/schemaVersions.js';
 import { getPeers } from '../instances.js';
-import { peerLibraryManifestSchema, PEER_LIBRARY_TOMBSTONES_HEADER } from '../../lib/validation.js';
+import { peerLibraryManifestSchema, PEER_LIBRARY_TOMBSTONES_HEADER, PEER_LIBRARY_TOMBSTONES_SINCE_HEADER } from '../../lib/validation.js';
 import { listMediaTombstones } from '../mediaTombstones.js';
 import {
   hashSimpleAsset,
@@ -165,7 +165,9 @@ async function hashCachedLibraryAsset(name, kind, dir) {
 // Older receivers validate a closed asset-kind enum. Models are opt-in so their
 // ordinary image/audio/video sweeps remain valid until they upgrade. So are
 // gallery image tombstones (`tombstones`, see PEER_LIBRARY_TOMBSTONES_HEADER).
-export async function buildMediaLibraryManifest({ models = false, tombstones = false } = {}) {
+export async function buildMediaLibraryManifest({ models = false, tombstones = false, tombstonesSince = null } = {}) {
+  // An unparseable cursor falls back to the full list.
+  const sinceMs = Date.parse(tombstonesSince);
   const excluded = await excludedLibraryKinds();
   const localId = tombstones ? await import('../imageGen/imageRecords.js').then((m) => m.localInstanceId()) : null;
   const assets = [];
@@ -204,6 +206,7 @@ export async function buildMediaLibraryManifest({ models = false, tombstones = f
   const deleted = tombstones && !excluded.has('image')
     ? (await listMediaTombstones('image'))
       .filter((t) => !(liveImages.get(t.key) > Date.parse(t.deletedAt)))
+      .filter((t) => Number.isNaN(sinceMs) || Date.parse(t.deletedAt) > sinceMs)
       .sort((a, b) => a.key.localeCompare(b.key))
     : [];
   const hashInput = sorted.map((e) => `${e.kind}:${e.filename}:${e.sha256 || ''}:${e.sidecarSha256 || ''}`).join('\n')
@@ -229,6 +232,10 @@ const libraryIndexRepairPending = new Set(); // peerInstanceId
 // force a full re-diff even though the remote manifest is unchanged, so a local
 // file loss self-heals without waiting for a restart or a remote library change.
 const libraryUnchangedSkips = new Map(); // peerInstanceId → count
+// Newest tombstone `deletedAt` fully admitted per peer, sent back as the
+// tombstone cursor so an unchanged set is not re-shipped. In-memory like the
+// hash above: a restart sends no cursor and gets the full list.
+const libraryTombstoneCursor = new Map(); // peerInstanceId → ISO deletedAt
 // Per-peer re-entrancy guard so a slow sweep (large pull) can't overlap itself
 // when the periodic tick fires again before it finishes.
 const librarySweepInFlight = new Set(); // peerInstanceId
@@ -284,8 +291,10 @@ export async function syncMediaLibraryFromPeer(peer) {
   librarySweepInFlight.add(peer.instanceId);
   try {
     const url = `${peerBaseUrl(peer)}/api/peer-sync/library-manifest?models=1`;
+    const cursor = libraryTombstoneCursor.get(peer.instanceId);
+    const headers = { [PEER_LIBRARY_TOMBSTONES_HEADER]: '1', ...(cursor ? { [PEER_LIBRARY_TOMBSTONES_SINCE_HEADER]: cursor } : {}) };
     const res = await withAbortTimeout(ASSET_PULL_TIMEOUT_MS, (signal) =>
-      peerFetch(url, { signal, maxBytes: MEDIA_LIBRARY_MANIFEST_MAX_BYTES, headers: { [PEER_LIBRARY_TOMBSTONES_HEADER]: '1' } }, peer))
+      peerFetch(url, { signal, maxBytes: MEDIA_LIBRARY_MANIFEST_MAX_BYTES, headers }, peer))
       .catch(() => null);
     if (!res || !res.ok) return { pulled: 0, skipped: 'unreachable' };
     // Enforce the manifest cap before buffering the body. peerFetch's `maxBytes`
@@ -343,6 +352,12 @@ export async function syncMediaLibraryFromPeer(peer) {
       const { removed, refused } = await admitPeerImageTombstones(peer, manifest.tombstones, { via: 'snapshot' });
       if (removed > 0) console.log(`🗑️ peerSync: ${peer.name || peer.instanceId} library deletes removed ${removed} image(s) here`);
       if (refused > 0) console.log(`⏭️ peerSync: ${peer.name || peer.instanceId} library manifest: ignored ${refused} image tombstone(s)`);
+      // Hold the cursor while any entry was refused so it is offered again once
+      // the refusal clears (e.g. media deletes enabled for this peer).
+      if (refused === 0) {
+        const newest = manifest.tombstones.reduce((max, t) => (Date.parse(t.deletedAt) > Date.parse(max) ? t.deletedAt : max), cursor || manifest.tombstones[0].deletedAt);
+        if (Number.isFinite(Date.parse(newest))) libraryTombstoneCursor.set(peer.instanceId, newest);
+      }
     }
     const diffOptions = { senderInstanceId: peer.instanceId };
     const missing = await diffAssetManifestAgainstLocal(manifest.assets, diffOptions);
