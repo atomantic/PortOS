@@ -298,3 +298,26 @@ describe('Cast & Sets direct edits', () => {
     expect(() => applyCastAndSetsDirectionEdits(bare, { protagonist: { construction: '' } })).toThrow(/protagonist/);
   });
 });
+
+describe('fixed supporting cast in the merge (#14069)', () => {
+  const sections = [{ index: 0, label: 'Intro', startSec: 0, endSec: 10 }];
+  const answer = (cast, forms = []) => ({
+    logline: 'A vigil.', protagonist: { name: 'Keeper', face: 'weathered', forms },
+    looks: [{ name: 'Watch', description: 'oilskin' }],
+    sets: ['a', 'b', 'c'].map((id) => ({ id, name: `Set ${id}`, description: 'an empty quay' })),
+    cast,
+  });
+  const person = (name) => ({ name, description: 'as written' });
+
+  it('never casts an age-form subject as supporting cast, and adds a same-named pair of omitted subjects once', () => {
+    const fixedCast = [
+      { id: 'mvc-young', name: 'Young Keeper', description: 'the keeper at seven' },
+      { id: 'mvc-a', name: 'Twin', description: 'first record' },
+      { id: 'mvc-b', name: 'twin', description: 'second record' },
+    ];
+    const forms = [{ id: 'age-7', label: 'Age 7', description: 'small', subjectId: 'mvc-young' }];
+    const { direction } = mergeCastAndSetsDirection(null, answer([person('Young Keeper'), person('Helper')], forms), { sections, fixedCast });
+    expect(direction.cast.map((c) => c.name)).toEqual(['Helper', 'Twin']);
+    expect(direction.protagonist.forms[0].subjectId).toBe('mvc-young');
+  });
+});

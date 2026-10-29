@@ -625,11 +625,14 @@ function normalizeCast(cast, protagonist, { fixed = [], forms = [] } = {}) {
   const seen = new Set();
   const lead = castKey(protagonist?.name);
   const fixedNames = new Set(fixed.map((f) => castKey(f.name)));
-  const placed = new Set();
+  // A fixed subject bound to a protagonist age form is that form, never also supporting cast.
+  const bound = new Set(forms.map((f) => f.subjectId).filter(Boolean));
+  const boundNames = new Set(fixed.filter((f) => bound.has(f.id)).map((f) => castKey(f.name)));
+  const placed = new Set([lead, ...boundNames]);
   let invented = 0;
   const kept = cast.filter((c) => {
     const key = castKey(c.name);
-    if (!key || !(c.face || c.description) || key === lead) return false;
+    if (!key || !(c.face || c.description) || key === lead || boundNames.has(key)) return false;
     if (fixedNames.has(key)) {
       if (placed.has(key)) return false;
       placed.add(key);
@@ -639,10 +642,12 @@ function normalizeCast(cast, protagonist, { fixed = [], forms = [] } = {}) {
     invented += 1;
     return true;
   });
-  const bound = new Set(forms.map((f) => f.subjectId).filter(Boolean));
-  const added = fixed
-    .filter((f) => !placed.has(castKey(f.name)) && castKey(f.name) !== lead && !bound.has(f.id))
-    .map((f) => ({ name: f.name, role: f.role === 'band' ? 'band member' : '', description: trimTo(f.description, TEXT) }));
+  const added = fixed.filter((f) => {
+    const key = castKey(f.name);
+    if (placed.has(key)) return false;
+    placed.add(key);
+    return true;
+  }).map((f) => ({ name: f.name, role: f.role === 'band' ? 'band member' : '', description: trimTo(f.description, TEXT) }));
   return [...kept, ...added].map((c, i) => {
     let id = slug(c.id) || slug(c.name) || `cast-${i + 1}`;
     while (seen.has(id)) id = `${id}-${i + 1}`;
