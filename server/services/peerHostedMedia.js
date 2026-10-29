@@ -276,6 +276,31 @@ async function resolveHostedRequest(mount, filename) {
   return null;
 }
 
+// After a failure the peer is skipped for a short cooldown, so a burst of cards
+// (and browser retries) fails fast instead of each holding a socket for the full
+// stream timeout against a peer that is down.
+const PEER_COOLDOWN_MS = 30000;
+const peerCooldownUntil = new Map();
+export const __resetPeerCooldown = () => { peerCooldownUntil.clear(); failureLog.clear(); };
+const peerCoolingDown = (peer) => (peerCooldownUntil.get(peer.instanceId) ?? 0) > Date.now();
+// An unreachable or slow peer is an expected degraded state, not a defect, and a
+// page of remote video cards fans out one failing request per card. Log it on
+// stdout, once per peer+mount+reason per window, with the count it absorbed.
+const FAILURE_LOG_WINDOW_MS = 60000;
+const failureLog = new Map();
+// A thumbnail's short deadline says little about the peer, so only an original's failure cools it.
+function logStreamFailure(peer, mount, err, isThumbnail) {
+  if (!isThumbnail) peerCooldownUntil.set(peer.instanceId, Date.now() + PEER_COOLDOWN_MS);
+  const reason = err?.name === 'AbortError' || err?.message === 'peer media stream idle timeout' ? 'timeout' : 'transport error';
+  const key = `${peer.instanceId}|${mount}|${reason}`;
+  const now = Date.now();
+  const entry = failureLog.get(key);
+  if (entry && now - entry.at < FAILURE_LOG_WINDOW_MS) { entry.suppressed++; return; }
+  const suppressed = entry?.suppressed ?? 0;
+  failureLog.set(key, { at: now, suppressed: 0 });
+  console.log(`🐢 peerHostedMedia: stream ${mount} from peer failed (${reason})${suppressed ? `; ${suppressed} similar suppressed` : ''}`);
+}
+
 /**
  * Express fallback mounted AFTER a static mount: when the local file is absent
  * and a peer hosts it, stream it from the peer (Range forwarded so video
@@ -293,18 +318,24 @@ export function hostedAssetFallback(mount) {
     const peers = await getPeers().catch(() => []);
     const candidates = target.hosts.map((host) => ({ host, peer: peers.find((p) => p.instanceId === host.peerId && p.enabled !== false) })).filter((candidate) => candidate.peer);
     if (!candidates.length) return next();
+    const clientGone = new AbortController();
+    res.on('close', () => { if (!res.writableFinished) clientGone.abort(); });
     const isThumbnail = mount === '/data/image-thumbnails' || mount === '/data/video-thumbnails';
     const timeoutMs = isThumbnail ? THUMBNAIL_TIMEOUT_MS : STREAM_TIMEOUT_MS;
     for (let i = 0; i < candidates.length; i++) {
       const { peer, host } = candidates[i];
       const last = i === candidates.length - 1;
+      if (peerCoolingDown(peer)) {
+        if (last) { res.status(502).end(); return; }
+        continue;
+      }
       try {
         const drop = target.drop && { ...target.drop, revision: host.revision };
-        if (await streamFromPeer(peer, target.url, req, res, drop, timeoutMs, last)) return;
+        if (await streamFromPeer(peer, target.url, req, res, drop, timeoutMs, last, clientGone.signal)) return;
       } catch (err) {
-        const reason = err?.name === 'AbortError' || err?.message === 'peer media stream idle timeout' ? 'timeout' : 'transport error';
-        if (isThumbnail && reason === 'timeout') console.log(`🐢 peerHostedMedia: stream ${mount} from peer timed out`);
-        else console.warn(`⚠️ peerHostedMedia: stream ${mount} from peer failed (${reason})`);
+        // The viewer navigated away: the abort is theirs, not the peer's fault.
+        if (clientGone.signal.aborted) return;
+        logStreamFailure(peer, mount, err, isThumbnail);
         if (res.headersSent) { res.destroy(); return; }
         if (last) { res.status(502).end(); return; }
       }
@@ -312,11 +343,11 @@ export function hostedAssetFallback(mount) {
   };
 }
 
-async function streamFromPeer(peer, path, req, res, drop, timeoutMs, last) {
+async function streamFromPeer(peer, path, req, res, drop, timeoutMs, last, clientSignal) {
   const headers = {};
   if (isStr(req.headers.range)) headers.Range = req.headers.range;
   const upstream = await withAbortTimeout(timeoutMs, (signal) =>
-    peerStreamRequest(`${peerBaseUrl(peer)}${path}`, { signal, headers }, peer));
+    peerStreamRequest(`${peerBaseUrl(peer)}${path}`, { signal: AbortSignal.any([signal, clientSignal]), headers }, peer));
   if (upstream.status !== 200 && upstream.status !== 206) {
     // The error body is unused; do not keep a socket open for a peer that
     // never finishes it (or sends an unbounded body).

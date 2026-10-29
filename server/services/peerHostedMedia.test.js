@@ -26,7 +26,7 @@ const streamRequest = vi.fn();
 vi.mock('../lib/peerHttpClient.js', () => ({ peerStreamRequest: (...args) => streamRequest(...args) }));
 const { peerStreamRequest: realPeerStreamRequest } = await vi.importActual('../lib/peerHttpClient.js');
 
-const { markHosted, unmarkHosted, takeHostedAssets, resolveMediaLocations } = await import('./peerHostedMedia.js');
+const { markHosted, unmarkHosted, takeHostedAssets, resolveMediaLocations, __resetPeerCooldown } = await import('./peerHostedMedia.js');
 const { mountAssetRoutes } = await import('./assetMounts.js');
 const { saveHistory } = await import('./videoGen/history.js');
 
@@ -41,6 +41,7 @@ beforeAll(() => {
 
 beforeEach(async () => {
   streamRequest.mockReset();
+  __resetPeerCooldown();
   getPeers.mockImplementation(async () => [PEER]);
   rmSync(join(tempRoot, 'peer-hosted-media.json'), { force: true });
   rmSync(join(tempRoot, 'video-history.json'), { force: true });
@@ -308,13 +309,19 @@ describe('static-mount fallback', () => {
 
   it('answers 502 when the host peer is unreachable', async () => {
     await markHosted(PEER.instanceId, [{ kind: 'image', filename: 'offline.png' }]);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     try {
       streamRequest.mockRejectedValue(new Error('ECONNREFUSED peer.example.com'));
-      const res = await request(app).get('/data/images/offline.png');
-      expect(res.status).toBe(502);
-      expect(warn).toHaveBeenCalledWith('⚠️ peerHostedMedia: stream /data/images from peer failed (transport error)');
+      expect((await request(app).get('/data/images/offline.png')).status).toBe(502);
+      expect((await request(app).get('/data/images/offline.png')).status).toBe(502);
+      const lines = log.mock.calls.map((c) => c[0]).filter((l) => l.includes('peerHostedMedia'));
+      expect(lines).toEqual(['🐢 peerHostedMedia: stream /data/images from peer failed (transport error)']);
+      // Cooldown: the second request failed fast without dialing the peer again.
+      expect(streamRequest).toHaveBeenCalledTimes(1);
+      expect(warn).not.toHaveBeenCalled();
     } finally {
+      log.mockRestore();
       warn.mockRestore();
     }
   });
