@@ -31,6 +31,8 @@ import { ackDeletesUpTo } from './peerTombstoneCursors.js';
 import {
   buildAssetManifestWithCollection,
   buildAssetManifestForSeries,
+  stampImageManifestEntries,
+  peerAcceptsAssetStamps,
 } from './peerSyncAssets.js';
 import { RECORD_KINDS } from './recordKinds.js';
 import {
@@ -251,6 +253,9 @@ export async function pushRecordToPeer(sub, options = {}) {
   const payloadSnapshotAtMs = Date.now();
   const payload = await buildPushPayload(sub, ourInstanceId);
   if (!payload) return { pushed: false, reason: 'record-not-found' };
+  if (peerAcceptsAssetStamps(peer) && Array.isArray(payload.assetManifest)) {
+    payload.assetManifest = await stampImageManifestEntries(payload.assetManifest, { localInstanceId: ourInstanceId });
+  }
 
   // No-op short-circuit: don't re-push bytes we already pushed.
   const hash = pushPayloadHash(payload);

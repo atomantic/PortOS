@@ -469,6 +469,8 @@ export async function getSystemHealthSnapshot() {
       version: PORTOS_SCHEMA_VERSIONS.peerAuth,
       accepted: false,
     },
+    // Senders add image `createdAt` to push manifests only once this is advertised (#14067).
+    assetStamps: { version: PORTOS_SCHEMA_VERSIONS.peerAssetStamps },
     warnings,
     system: buildSystemSection({ memStats, disk, dataDisk, sameFilesystem }),
     processes: processStats,

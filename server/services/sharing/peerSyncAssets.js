@@ -205,6 +205,25 @@ export async function hashImageForManifest(filename, { withCreatedAt = false, lo
   return { filename: safeName, kind: 'image', sha256: result.hash, ...(sidecarSha256 ? { sidecarSha256 } : {}), ...(createdAt ? { createdAt } : {}) };
 }
 
+// The receiver advertises the capability in its health details (see
+// PORTOS_SCHEMA_VERSIONS.peerAssetStamps); an older one never does.
+export const peerAcceptsAssetStamps = (peer) => peer?.lastHealth?.assetStamps?.version >= 1;
+
+/**
+ * Add each image entry's live stamp to a per-record push manifest so a receiver
+ * holding a tombstone for a re-used name can tell a re-made image from the
+ * deleted one. Call only for a receiver that advertised it accepts the field
+ * (its strict entry schema refuses it otherwise). An image with no stamp keeps
+ * its entry unchanged and stays blocked there.
+ */
+export async function stampImageManifestEntries(manifest, { localInstanceId = null } = {}) {
+  return mapWithConcurrency(manifest, ASSET_HASH_CONCURRENCY, async (entry) => {
+    if (entry?.kind !== 'image') return entry;
+    const stamped = await hashImageForManifest(entry.filename, { withCreatedAt: true, localInstanceId });
+    return stamped?.createdAt ? { ...entry, createdAt: stamped.createdAt } : entry;
+  });
+}
+
 export async function hashSimpleAsset(filename, kind, sourceDir) {
   if (!isStr(sourceDir)) return null;
   const safeName = sanitizeAssetFilename(filename);
