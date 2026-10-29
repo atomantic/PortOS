@@ -12,9 +12,8 @@ const mocks = vi.hoisted(() => ({
   listLiveRefsForIngredient: vi.fn(),
   getUniverse: vi.fn(),
   updateUniverse: vi.fn(),
-  setIngredientPayloadKey: vi.fn(),
-  listUniverses: vi.fn(),
-  getIngredientIdentityIds: vi.fn(),
+  updateIngredientPayloadKeys: vi.fn(),
+  projectToCanon: vi.fn(),
   getSettings: vi.fn(),
   enqueueJob: vi.fn(),
   getImageModels: vi.fn(),
@@ -28,11 +27,11 @@ vi.mock('../lib/imageCleanDefaults.js', () => ({
 }));
 vi.mock('../services/catalogDB.js', () => ({
   getIngredient: (...args) => mocks.getIngredient(...args),
-  getIngredientIdentityIds: (...args) => mocks.getIngredientIdentityIds(...args),
+  getIngredientIdentityIds: async id => [id],
   listLiveRefsForIngredient: (...args) => mocks.listLiveRefsForIngredient(...args),
   listMediaForIngredient: (...args) => mocks.listMediaForIngredient(...args),
   listRelationsForIngredient: async () => ({ outbound: [], inbound: [] }),
-  setIngredientPayloadKey: (...args) => mocks.setIngredientPayloadKey(...args),
+  updateIngredientPayloadKeys: (...args) => mocks.updateIngredientPayloadKeys(...args),
 }));
 vi.mock('../lib/pathSafety.js', async (importOriginal) => ({
   ...(await importOriginal()),
@@ -42,7 +41,6 @@ vi.mock('../lib/pathSafety.js', async (importOriginal) => ({
 vi.mock('../services/universeBuilder.js', () => ({
   getUniverse: (...args) => mocks.getUniverse(...args),
   updateUniverse: (...args) => mocks.updateUniverse(...args),
-  listUniverses: (...args) => mocks.listUniverses(...args),
 }));
 vi.mock('../services/moodBoard/db.js', () => ({ getBoard: (...args) => mocks.getBoard(...args) }));
 vi.mock('../services/settings.js', () => ({ getSettings: (...args) => mocks.getSettings(...args) }));
@@ -52,6 +50,11 @@ vi.mock('../services/mediaJobQueue/index.js', () => ({
   mediaJobEvents: { on: vi.fn(), off: vi.fn(), emit: vi.fn() },
 }));
 vi.mock('../services/universeRunTag.js', () => ({ buildUniverseRunTag: vi.fn(async () => null) }));
+// Canon follows the catalog row through the normal projection (own suite).
+vi.mock('../services/catalogCanonProjection.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  projectToCanon: (...args) => mocks.projectToCanon(...args),
+}));
 vi.mock('../services/universeCharacterSheetSlot.js', () => ({
   claimPendingSheetSlot: vi.fn(),
   getPendingSheetSlot: vi.fn(),
@@ -121,8 +124,6 @@ beforeEach(() => {
   mocks.enqueueJob.mockReturnValue({ jobId: 'job-1', position: 1 });
   mocks.updateUniverse.mockResolvedValue({});
   mocks.getBoard.mockResolvedValue(null);
-  mocks.getIngredientIdentityIds.mockImplementation(async (id) => [id]);
-  mocks.listUniverses.mockResolvedValue([]);
 });
 
 describe('catalog sheet routes', () => {
@@ -837,79 +838,50 @@ describe('catalog sheet routes', () => {
 
   describe('removing a universe sheet pointer', () => {
     const sheetOwner = { ...character, updatedAt: '2026-01-01T00:00:00.000Z', payload: { ...character.payload,
-      referenceSheetImageRef: 'example-sheet-standard.png', referenceSheets: { profile: 'example-sheet-profile.png' } } };
-    const ownEntry = { id: 'char-entry-1', name: character.name, ingredientId: character.id, referenceSheetImageRef: 'example-sheet-standard.png' };
+      referenceSheetImageRef: 'example-sheet-standard.png', referenceSheets: { profile: 'example-sheet-profile.png', alt: 'example-sheet-standard.png' } } };
     const remove = (query = '') => request(app).delete(`/api/catalog/ingredients/${character.id}/sheets/pointer${query}`);
-    // The row write applies its updater to the stored value, like the locked row.
-    const storeRow = () => {
-      let row = sheetOwner;
-      mocks.setIngredientPayloadKey.mockImplementation(async (id, key, update) => {
-        row = { ...row, updatedAt: '2026-01-02T00:00:00.000Z', payload: { ...row.payload, [key]: update(row.payload[key]) } };
-        return row;
-      });
-    };
-    const applyMutator = (n, universe) => mocks.updateUniverse.mock.calls[n][1](universe);
+    // Runs the updater and guard against `locked` (the row under its lock).
+    const lockedRow = (locked = sheetOwner) => mocks.updateIngredientPayloadKeys.mockImplementation(async (id, update, { guard }) => {
+      guard({ ...locked, payload: locked.payload });
+      const next = { ...locked.payload };
+      for (const [key, value] of Object.entries(update(locked.payload))) {
+        if (value === null) delete next[key]; else next[key] = value;
+      }
+      return { ingredient: { ...locked, updatedAt: '2026-01-03T00:00:00.000Z', payload: next }, priorUpdatedAt: locked.updatedAt };
+    });
 
-    it('clears this record\'s own canon slots and row, keeps the file and another character\'s slot', async () => {
-      const other = { id: 'char-entry-2', name: 'Example Rival', ingredientId: 'cat-chr-2', locked: true, referenceSheetImageRef: 'example-sheet-standard.png' };
-      const sibling = { ...ownEntry, id: 'char-entry-3' };
-      const universe = { id: 'universe-1', characters: [ownEntry, other] };
-      const second = { id: 'universe-2', characters: [sibling] };
+    beforeEach(() => {
       mocks.getIngredient.mockResolvedValue(sheetOwner);
-      mocks.listUniverses.mockResolvedValue([universe, second, { id: 'universe-3', characters: [] }]);
-      storeRow();
+      mocks.projectToCanon.mockResolvedValue({ universes: 1, written: 1, skipped: 0 });
+    });
+
+    it('clears every row slot naming the file in one locked write, then projects it to canon', async () => {
+      // Another view edited the row after the snapshot; its clock is the prior one.
+      lockedRow({ ...sheetOwner, updatedAt: '2026-01-02T00:00:00.000Z' });
       const res = await remove('?filename=example-sheet-standard.png');
       expect(res.status).toBe(200);
-      expect(mocks.updateUniverse.mock.calls.map(([universeId]) => universeId)).toEqual(['universe-1', 'universe-2']);
-      const next = applyMutator(0, universe).characters;
-      expect(next[0].referenceSheetImageRef).toBeNull();
-      expect(next[1]).toBe(other);
-      expect(applyMutator(1, second).characters[0].referenceSheetImageRef).toBeNull();
-      expect(res.body).toMatchObject({ filename: 'example-sheet-standard.png', priorUpdatedAt: sheetOwner.updatedAt, updatedAt: '2026-01-02T00:00:00.000Z',
-        pointers: { referenceSheetImageRef: null, referenceSheets: { profile: 'example-sheet-profile.png' } } });
-    });
-
-    it('refuses before any write when one of the record\'s canon entries is locked, and inside the write', async () => {
-      const universe = { id: 'universe-1', characters: [ownEntry, { ...ownEntry, id: 'char-entry-3', locked: true }] };
-      mocks.getIngredient.mockResolvedValue(sheetOwner);
-      mocks.listUniverses.mockResolvedValue([universe]);
-      expect((await remove()).status).toBe(409);
-      expect(mocks.updateUniverse).not.toHaveBeenCalled();
-      expect(mocks.setIngredientPayloadKey).not.toHaveBeenCalled();
-
-      mocks.listUniverses.mockResolvedValue([{ id: 'universe-1', characters: [ownEntry] }]);
-      mocks.updateUniverse.mockImplementation(async (id, mutator) => mutator(universe));
-      expect((await remove()).status).toBe(409);
-      expect(mocks.setIngredientPayloadKey).not.toHaveBeenCalled();
-    });
-
-    it('clears a slot from the locked current map without dropping one added meanwhile', async () => {
-      mocks.getIngredient.mockResolvedValue(sheetOwner);
-      storeRow();
-      const res = await remove('?variant=profile');
-      expect(res.status).toBe(200);
-      const [, key, update] = mocks.setIngredientPayloadKey.mock.calls.find(([, k]) => k === 'referenceSheets');
-      expect(key).toBe('referenceSheets');
-      expect(update({ profile: 'example-sheet-profile.png', expressions: 'example-sheet-expressions.png' }))
-        .toEqual({ expressions: 'example-sheet-expressions.png' });
-      // A newer render already in the legacy slot is left alone.
-      const [, , legacy] = mocks.setIngredientPayloadKey.mock.calls.find(([, k]) => k === 'referenceSheetImageRef');
-      expect(legacy('example-sheet-newer.png')).toBe('example-sheet-newer.png');
-      expect(res.body).toMatchObject({ filename: 'example-sheet-profile.png', pointers: { referenceSheets: {} } });
+      expect(res.body).toMatchObject({ filename: 'example-sheet-standard.png', priorUpdatedAt: '2026-01-02T00:00:00.000Z',
+        updatedAt: '2026-01-03T00:00:00.000Z', pointers: { referenceSheetImageRef: null, referenceSheets: { profile: 'example-sheet-profile.png' } } });
+      const [projectedId, projected] = mocks.projectToCanon.mock.calls[0];
+      expect(projectedId).toBe(character.id);
+      expect(projected.payload.referenceSheetImageRef).toBeUndefined();
       expect(mocks.updateUniverse).not.toHaveBeenCalled();
     });
 
-    it('refuses a locked record, a changed sheet and a variant with no sheet', async () => {
-      mocks.getIngredient.mockResolvedValue({ ...sheetOwner, payload: { ...sheetOwner.payload, locked: true } });
-      expect((await remove()).status).toBe(409);
-      mocks.getIngredient.mockResolvedValue(sheetOwner);
-      const changed = await remove('?filename=example-sheet-older.png');
+    it('refuses whole, with nothing written or projected, when the slot moved on or the record is locked', async () => {
+      lockedRow({ ...sheetOwner, payload: { ...sheetOwner.payload, referenceSheets: { profile: 'example-sheet-profile-newer.png' } } });
+      const changed = await remove('?variant=profile&filename=example-sheet-profile.png');
       expect(changed.status).toBe(409);
       expect(changed.body.code).toBe('REFERENCE_SHEET_CHANGED');
+      lockedRow({ ...sheetOwner, payload: { ...sheetOwner.payload, locked: true } });
+      expect((await remove()).status).toBe(409);
+      expect(mocks.projectToCanon).not.toHaveBeenCalled();
+    });
+
+    it('answers 404 for a variant with no sheet', async () => {
       mocks.getIngredient.mockResolvedValue(character);
       expect((await remove('?variant=profile')).status).toBe(404);
-      expect(mocks.updateUniverse).not.toHaveBeenCalled();
-      expect(mocks.setIngredientPayloadKey).not.toHaveBeenCalled();
+      expect(mocks.updateIngredientPayloadKeys).not.toHaveBeenCalled();
     });
   });
 });

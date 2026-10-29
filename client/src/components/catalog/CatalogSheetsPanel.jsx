@@ -15,7 +15,7 @@ import { useMediaAnnotations } from '../../hooks/useMediaAnnotations';
 import { LEGACY_SHEET_VARIANT_ID, readSheetPointer, listSheetPointers } from '../../lib/sheetPointers.js';
 import { SHEET_ROLE_PREFIX } from '../../lib/creativeLibraries';
 import { formsOf, splitSheetRole } from '../../lib/catalogForms';
-import { listCatalogSheetVariants, previewCatalogSheet, removeCatalogPointerSheet, renderCatalogSheet, updateCatalogIngredientMediaLibrary } from '../../services/apiCatalog';
+import { listCatalogSheetVariants, previewCatalogSheet, renderCatalogSheet, updateCatalogIngredientMediaLibrary } from '../../services/apiCatalog';
 
 // Universe-canon sheets live on the payload as pointers into /data/image-refs.
 // `[variant, filename]` pairs, with the legacy pointer de-duplicated against a
@@ -160,7 +160,8 @@ function SheetJob({ job, onFilename, onStatus }) {
 // (`sheet:<variant>@<formId>`), which always renders through the catalog path.
 export default function CatalogSheetsPanel({
   ingredientId, payload, universeRef, sheetMedia, missingMedia, onDetach,
-  blockedReason = null, savedStamp = null, onSheetFile, onPointerSheetReady, onMediaChanged, onPointerSheetsChanged,
+  blockedReason = null, savedStamp = null, onSheetFile, onPointerSheetReady, onMediaChanged,
+  onRemovePointerSheet, removingPointerSheet = null,
 }) {
   const mountedRef = useMounted();
   const [variants, setVariants] = useState(null);
@@ -171,7 +172,6 @@ export default function CatalogSheetsPanel({
   const [jobs, setJobs] = useState([]); // [{ jobId, role, delegated, label }]
   const [armedDetach, setArmedDetach] = useState(null);
   const [armedPointer, setArmedPointer] = useState(null);
-  const [removingPointer, setRemovingPointer] = useState(null);
   const { annotations } = useMediaAnnotations();
   const ratedBad = (key) => annotations?.[key]?.rating === 'bad';
 
@@ -216,21 +216,13 @@ export default function CatalogSheetsPanel({
     onMediaChanged?.();
   }, [ingredientId, mountedRef, onMediaChanged]);
 
-  // A universe sheet is removed through the server (it deletes the canon file
-  // when only this record names it). The page owns the record and draft, so it
-  // gets the returned pointers even if this tab unmounted meanwhile.
-  const removePointer = useCallback(async (variant, filename) => {
-    setRemovingPointer(variant);
-    const result = await removeCatalogPointerSheet(ingredientId, variant, filename, { silent: true })
-      .catch((err) => { toast.error(err?.message || 'Could not remove the sheet'); return null; });
-    if (result) {
-      onPointerSheetsChanged?.(result);
-      toast.success('Reference sheet removed');
-    }
-    if (!mountedRef.current) return;
-    setRemovingPointer(null);
+  // The page runs a universe sheet removal (`onRemovePointerSheet`) and holds
+  // its in-flight file (`removingPointerSheet`), since it owns the record and
+  // draft and outlives this tab.
+  const removePointer = useCallback((variant, filename) => {
     setArmedPointer(null);
-  }, [ingredientId, mountedRef, onPointerSheetsChanged]);
+    return onRemovePointerSheet?.(variant, filename);
+  }, [onRemovePointerSheet]);
 
   const dropJob = useCallback((jobId) => setJobs((cur) => cur.filter((j) => j.jobId !== jobId)), []);
   useEffect(() => {
@@ -325,13 +317,13 @@ export default function CatalogSheetsPanel({
       if (!entry) return null;
       const remove = entry.media
         ? (onDetach && !entry.media.readOnly ? () => onDetach(entry.media.mediaKey, entry.media.kind) : null)
-        : (onPointerSheetsChanged ? () => removePointer(entry.variant, entry.filename) : null);
+        : (onRemovePointerSheet ? () => removePointer(entry.variant, entry.filename) : null);
       if (!remove) return null;
-      return <SheetPreviewActions key={key} bad={ratedBad(entry.ratingKey)} busy={!!removingPointer}
+      return <SheetPreviewActions key={key} bad={ratedBad(entry.ratingKey)} busy={!!removingPointerSheet}
         onRemove={async () => { goTo(nextKey ?? prevKey); await remove(); }} />;
     },
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [sequenceKeys, ingredientId, annotations, removingPointer, onDetach, onPointerSheetsChanged, removePointer]);
+  }), [sequenceKeys, ingredientId, annotations, removingPointerSheet, onDetach, onRemovePointerSheet, removePointer]);
   useCatalogPreviewSequence(sequence);
 
   return (
@@ -400,11 +392,11 @@ export default function CatalogSheetsPanel({
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               {group.pointer.map(([v, filename]) => (
                 <PointerSheetFigure key={`ptr:${v}`} variant={v} filename={filename} bad={ratedBad(pointerRatingKey(filename))}
-                  remove={onPointerSheetsChanged ? {
+                  remove={onRemovePointerSheet ? {
                     armed: armedPointer === v,
-                    busy: removingPointer === v,
+                    busy: removingPointerSheet === filename,
                     // One removal at a time, so answers cannot arrive out of order.
-                    disabled: !!removingPointer,
+                    disabled: !!removingPointerSheet,
                     onArm: () => setArmedPointer(v),
                     onConfirm: () => removePointer(v, filename),
                     onCancel: () => setArmedPointer(null),

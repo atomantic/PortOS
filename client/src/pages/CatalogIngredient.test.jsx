@@ -1171,6 +1171,41 @@ describe('CatalogIngredient — tabbed library record pages', () => {
     await waitFor(() => expect(screen.queryByAltText('expressions reference sheet')).toBeNull());
   });
 
+  it('flags another view\'s edit found after a removal instead of dropping it under an unsaved draft', async () => {
+    const api = await import('../services/apiCatalog');
+    const before = { ...HERO, updatedAt: '2026-01-01T00:00:00.000Z' };
+    const latest = { ...before, name: 'Example Hero Elsewhere', updatedAt: '2026-01-03T00:00:00.000Z', payload: { ...HERO.payload, referenceSheets: {} } };
+    getCatalogIngredientDetails.mockImplementation(async () => ({ ...detailsOf(before), media: MEDIA }));
+    let finish;
+    api.removeCatalogPointerSheet.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+    const { router } = await renderPage('/casting/cat-chr-hero/sheets');
+    const sheet = (await screen.findByAltText('expressions reference sheet')).closest('figure');
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Remove expressions sheet' }));
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Remove' }));
+    await act(async () => { await router.navigate('/casting/cat-chr-hero'); });
+    fireEvent.change(await screen.findByLabelText('Name'), { target: { value: 'Example Hero Draft' } });
+    getCatalogIngredientDetails.mockImplementation(async () => ({ ...detailsOf(latest), media: MEDIA }));
+    await act(async () => { finish({ filename: 'hero-expressions.png', priorUpdatedAt: '2026-01-02T00:00:00.000Z', updatedAt: latest.updatedAt,
+      pointers: { referenceSheetImageRef: 'hero-standard.png', referenceSheets: {} } }); });
+    expect(await screen.findByRole('button', { name: 'Discard local edits and load latest' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Name')).toHaveValue('Example Hero Draft');
+  });
+
+  it('keeps one removal in flight across leaving and reopening the Sheets tab', async () => {
+    const api = await import('../services/apiCatalog');
+    api.removeCatalogPointerSheet.mockClear();
+    api.removeCatalogPointerSheet.mockReturnValue(new Promise(() => {}));
+    const { router } = await renderPage('/casting/cat-chr-hero/sheets');
+    const sheet = (await screen.findByAltText('expressions reference sheet')).closest('figure');
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Remove expressions sheet' }));
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Remove' }));
+    await act(async () => { await router.navigate('/casting/cat-chr-hero'); });
+    await act(async () => { await router.navigate('/casting/cat-chr-hero/sheets'); });
+    const standard = (await screen.findByAltText('standard reference sheet')).closest('figure');
+    expect(within(standard).getByRole('button', { name: 'Remove standard sheet' })).toBeDisabled();
+    expect(api.removeCatalogPointerSheet).toHaveBeenCalledTimes(1);
+  });
+
   it('shows the server-selected canonical references beside Generate with full-size links and omissions', async () => {
     const api = await import('../services/apiCatalog');
     api.previewCatalogSheet.mockResolvedValue({ preview: {
