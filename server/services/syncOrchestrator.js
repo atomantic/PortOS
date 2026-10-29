@@ -156,18 +156,18 @@ async function fetchPeer(peer, path) {
 // Older peers lack the inventory route. A successful HEAD with no remote-media
 // marker proves their static mount served local bytes, rather than proxying a
 // third peer. Failure is inconclusive and never removes an existing host.
-async function fetchVideoInventory(peer, category) {
-  const path = `/api/sync/${category}/video-inventory`;
+async function fetchHostedInventory(peer, category, kind) {
+  const path = `/api/sync/${category}/${kind}-inventory`;
   const response = await withAbortTimeout(FETCH_TIMEOUT_MS, (signal) => peerFetch(`${peerBaseUrl(peer)}${path}`, { signal }, peer)).catch(() => null);
   if (!response) return null;
   if (response.status !== 404) {
     if (!response.ok) return null;
     return readPeerBody(response, 'json', { maxBytes: PEER_BODY_DEFAULT_MAX_BYTES }).catch(() => null);
   }
-  const { checked } = await dataSync.getVideoHistoryInventory(category);
+  const { checked } = await dataSync.getHostedMediaInventory(category, kind);
   const found = await mapWithConcurrency(checked, 4, async (filename) => {
     const res = await withAbortTimeout(FETCH_TIMEOUT_MS, (signal) => peerFetch(
-      `${peerBaseUrl(peer)}/data/videos/${encodeURIComponent(filename)}`, { method: 'HEAD', signal }, peer,
+      `${peerBaseUrl(peer)}/data/${kind === 'image' ? 'images' : 'videos'}/${encodeURIComponent(filename)}`, { method: 'HEAD', signal }, peer,
     )).catch(() => null);
     return res?.ok && res.headers?.get('x-portos-media-location') !== 'remote' ? filename : null;
   });
@@ -599,8 +599,11 @@ async function syncDataCategoryFromPeer(peer, peerId, category, cachedChecksums,
     return { totalApplied: 0, checksum: null, blockedBySchema: gap };
   }
   if ((category === 'videoHistory' || category === 'mediaCollections') && peer.mediaSyncMode === 'host') {
-    const inventory = await fetchVideoInventory(peer, category).catch(() => null);
-    if (inventory) await dataSync.applyRemote(category, inventory, { peerId, portosMeta: inventory.portosMeta, inventory: true });
+    const kinds = category === 'mediaCollections' ? ['video', 'image'] : ['video'];
+    for (const kind of kinds) {
+      const inventory = await fetchHostedInventory(peer, category, kind).catch(() => null);
+      if (inventory) await dataSync.applyRemote(category, inventory, { peerId, portosMeta: inventory.portosMeta, inventory: true, inventoryKind: kind });
+    }
   }
   if (!gap && lastChecksum && lastChecksum === checksumRes.checksum) {
     return { totalApplied: 0, checksum: checksumRes.checksum };

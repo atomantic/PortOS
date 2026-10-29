@@ -17,7 +17,7 @@ vi.mock('../services/sharing/tombstoneGc.js', () => ({
 // truth the route's hand-maintained `categoryParam` enum has to match; a stub
 // would make the parity tests below compare the route to a copy of itself.
 vi.mock('../services/dataSync.js', async () => ({
-  getVideoHistoryInventory: vi.fn(),
+  getHostedMediaInventory: vi.fn(),
   getChecksum: vi.fn(),
   getSnapshot: vi.fn(),
   getManifest: vi.fn(),
@@ -48,7 +48,7 @@ vi.mock('../services/settings.js', async () => ({
 }));
 
 import { sweepTombstones, getSweepStatus } from '../services/sharing/tombstoneGc.js';
-import { getVideoHistoryInventory, getChecksum, getSnapshot, getManifest, applyRemote, getSupportedCategories } from '../services/dataSync.js';
+import { getHostedMediaInventory, getChecksum, getSnapshot, getManifest, applyRemote, getSupportedCategories } from '../services/dataSync.js';
 import { PEER_INSTANCE_ID_HEADER, __resetPullWarnThrottleForTests } from '../services/sharing/peerPullAuthorization.js';
 import { MAX_MANIFEST_SLOTS } from '../lib/syncManifest.js';
 import dataSyncRoutes, { categoryParam } from './dataSync.js';
@@ -426,7 +426,18 @@ describe('video history inventory authorization', () => {
     vi.clearAllMocks();
     settings = { federation: { strictPullAuthorization: true } };
     setPeers(allowedPeer());
-    getVideoHistoryInventory.mockResolvedValue({ version: 1, filenames: ['v.mp4'] });
+    getHostedMediaInventory.mockResolvedValue({ version: 1, filenames: ['v.mp4'] });
+  });
+
+  it('gates image ownership with the collection peer/category authorization', async () => {
+    const url = '/api/sync/mediaCollections/image-inventory';
+    expect((await request(buildApp()).get(url).set(PEER_INSTANCE_ID_HEADER, PEER_ID)).status).toBe(200);
+    expect(getHostedMediaInventory).toHaveBeenCalledWith('mediaCollections', 'image');
+    setPeers(allowedPeer({ fullSync: false, syncCategories: { mediaCollections: false } }));
+    expect((await request(buildApp()).get(url).set(PEER_INSTANCE_ID_HEADER, PEER_ID)).status).toBe(403);
+    setPeers(allowedPeer({ enabled: false }));
+    expect((await request(buildApp()).get(url).set(PEER_INSTANCE_ID_HEADER, PEER_ID)).status).toBe(403);
+    expect(getHostedMediaInventory).toHaveBeenCalledTimes(1);
   });
 
   it('uses the same peer/category gate as history snapshots', async () => {
@@ -436,6 +447,6 @@ describe('video history inventory authorization', () => {
     setPeers(allowedPeer({ fullSync: false, syncCategories: { videoHistory: false } }));
     const denied = await request(buildApp()).get('/api/sync/videoHistory/video-inventory').set(PEER_INSTANCE_ID_HEADER, PEER_ID);
     expect(denied.status).toBe(403);
-    expect(getVideoHistoryInventory).toHaveBeenCalledTimes(1);
+    expect(getHostedMediaInventory).toHaveBeenCalledTimes(1);
   });
 });

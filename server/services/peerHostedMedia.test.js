@@ -83,16 +83,16 @@ describe('resolveMediaLocations', () => {
 });
 
 describe('takeHostedAssets', () => {
-  it('does not replace a video host with a digest-less legacy manifest', async () => {
-    await markHosted('owner', [{ kind: 'video', filename: 'legacy.mp4' }]);
-    const missing = [{ kind: 'video', filename: 'legacy.mp4' }];
-    expect(await takeHostedAssets(PEER.instanceId, missing, new Set(['video:legacy.mp4']))).toEqual(missing);
-    expect((await resolveMediaLocations([{ kind: 'video', ref: 'legacy.mp4' }]))[0].hostPeerId).toBe('owner');
+  it.each(['video', 'image'])('does not replace a %s host with a digest-less legacy manifest', async (kind) => {
+    await markHosted('owner', [{ kind, filename: 'legacy.mp4' }]);
+    const missing = [{ kind, filename: 'legacy.mp4' }];
+    expect(await takeHostedAssets(PEER.instanceId, missing, new Set([`${kind}:legacy.mp4`]))).toEqual(missing);
+    expect((await resolveMediaLocations([{ kind, ref: 'legacy.mp4' }]))[0].hostPeerId).toBe('owner');
   });
 
   it('hosts absent collection-owned files and leaves everything else to the copy path', async () => {
     const missing = [
-      { kind: 'image', filename: 'coll-only.png' },
+      { kind: 'image', filename: 'coll-only.png', sha256: 'a'.repeat(64) },
       { kind: 'image', filename: 'universe-art.png' }, // not collection-owned → still copied
       { kind: 'image', filename: 'local.png' },        // exists locally with a different hash → still copied
     ];
