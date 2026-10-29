@@ -40,6 +40,9 @@ describe('credits prefill', () => {
     expect(await getMusicVideoCreditsPrefill({ name: 'Example Song', trackId: 'track-2' })).toMatchObject({ artist: '' });
     store.tracks['track-2'].artist = 'Track Text';
     expect(await getMusicVideoCreditsPrefill({ name: 'Example Song', trackId: 'track-2' })).toMatchObject({ artist: 'Track Text' });
+    // A linked track that is gone is unknown, not artist-less.
+    store.artists = [store.artists[0]];
+    expect(await getMusicVideoCreditsPrefill({ name: 'Example Song', trackId: 'track-deleted' })).toMatchObject({ artist: '' });
     store.failArtist = new Error('database unavailable');
     await expect(getMusicVideoCreditsPrefill({ name: 'Example Song', trackId: 'track-1' })).rejects.toThrow('database unavailable');
   });

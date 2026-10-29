@@ -220,6 +220,15 @@ describe('BoardStage ending', () => {
     expect(editor().disabled).toBe(true);
     await act(async () => { land({ credits: { enabled: true, title: 'Example Song' } }); });
     await waitFor(() => expect(editor().disabled).toBe(false));
+    // A refill left behind by closing the card is dropped, so the reopened editor's edits stand.
+    getMusicVideoCreditsPrefill.mockImplementationOnce(() => new Promise((resolve) => { land = resolve; }));
+    fireEvent.click(screen.getByRole('button', { name: /Refill from song/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Close the credits' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Open the ending: credits' }));
+    expect(editor().disabled).toBe(false);
+    saveProjectFields.mockClear();
+    await act(async () => { land({ credits: { enabled: true, title: 'Stale Refill' } }); });
+    expect(saveProjectFields).not.toHaveBeenCalled();
     canvas.mockRestore();
   });
 });

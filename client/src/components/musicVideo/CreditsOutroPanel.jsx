@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Clapperboard, Plus, RotateCcw, X } from 'lucide-react';
+import useMounted from '../../hooks/useMounted.js';
 import { getMusicVideoCreditsPrefill } from '../../services/apiMusicVideo.js';
 import {
   CREDITS_OUTRO_DEFAULTS, CREDITS_OUTRO_LIMITS, CREDITS_OUTRO_ROLES, normalizeCreditsOutro,
@@ -38,6 +39,9 @@ function TextField({ id, label, value, placeholder = '', list, onCommit, hideLab
  */
 export default function CreditsOutroPanel({ project, onEditLocal, onSave }) {
   const [filling, setFilling] = useState(false);
+  // A refill still in flight when this editor closes is dropped: a reopened
+  // editor is not locked by it, so its answer must not overwrite later edits.
+  const mounted = useMounted();
   const credits = normalizeCreditsOutro(project.creditsOutro);
   const on = !!credits?.enabled;
   const save = (next) => {
@@ -49,10 +53,10 @@ export default function CreditsOutroPanel({ project, onEditLocal, onSave }) {
     setFilling(true);
     // A failed lookup is reported (not silent) and changes nothing.
     return getMusicVideoCreditsPrefill(project.id)
-      .then((res) => save(normalizeCreditsOutro({ ...res.credits, ...keep, enabled: true })))
+      .then((res) => (mounted.current ? save(normalizeCreditsOutro({ ...res.credits, ...keep, enabled: true })) : null))
       // The request and the board's save report their own failures; neither may leave the controls disabled.
       .catch(() => null)
-      .finally(() => setFilling(false));
+      .finally(() => { if (mounted.current) setFilling(false); });
   };
   const toggle = (enabled) => (enabled && !credits ? fill() : commit({ enabled }));
   const lines = credits?.lines || [];
