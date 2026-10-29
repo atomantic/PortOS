@@ -400,7 +400,9 @@ export async function deleteMusicVideoPoolAssets(project, items) {
     try {
       for (const item of items) {
         // The owner deletes first; a peer-owned asset is never tombstoned here ahead of it.
-        const result = await deleteMediaAnywhere(item.kind, item.assetId, { forgetInMusicVideos: false });
+        // A delete that finished since the pool was read already removed the asset.
+        const result = await deleteMediaAnywhere(item.kind, item.assetId, { forgetInMusicVideos: false })
+          .catch((err) => { if (err?.code === 'NOT_FOUND') return { status: 'deleted' }; throw err; });
         results.push({ kind: item.kind, assetId: item.assetId, ...result });
         if (poolCopyGone(result)) forget.push(`${item.kind}:${item.assetId}`);
       }

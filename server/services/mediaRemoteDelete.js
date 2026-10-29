@@ -393,7 +393,9 @@ const unknownMedia = () => new ServerError('Unknown media', { status: 400, code:
 
 export function deleteMediaAnywhere(kind, key, { forgetInMusicVideos = true } = {}) {
   if (!MEDIA[kind]?.validKey(key)) return Promise.reject(unknownMedia());
-  const id = `${kind}:${key}`;
+  // Keyed by the cleanup mode too: a pool batch holds the project mutation
+  // boundary and must not join a delete whose cleanup waits on that boundary.
+  const id = `${kind}:${key}:${forgetInMusicVideos}`;
   if (inFlight.has(id)) return inFlight.get(id);
   const run = deleteAnywhere(kind, key, { forgetInMusicVideos }).finally(() => inFlight.delete(id));
   inFlight.set(id, run);
