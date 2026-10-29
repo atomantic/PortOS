@@ -5,11 +5,23 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { execFile, spawn } from '../lib/childProcess.js';
+import { recordLocalReviewAttribution, localReviewAttributionLabels } from '../lib/localReviewAttribution.js';
 import { buildPrAttributionSection } from '../services/promptSections/prAttribution.js';
 import { buildLocalReviewLoopSection } from '../services/promptSections/reviewLifecycle.js';
 
 const exec = promisify(execFile);
 const script = fileURLToPath(new URL('./local-review-attribution.mjs', import.meta.url));
+
+it('creates the evidence file on demand when no reset ran (#14102)', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'review-attribution-missing-'));
+  try {
+    await exec('git', ['init', '--quiet'], { cwd });
+    await recordLocalReviewAttribution(cwd, { ok: true, verdict: 'clean', findings: 'NO FINDINGS', model: 'gpt-6.1-terra' });
+    expect(await localReviewAttributionLabels(cwd)).toEqual(['reviewer:gpt-6-1-terra']);
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
 
 it('publishes only completed CLI models, dedupes provider variants, and leaves requested forge users unattributed', async () => {
   const cwd = await mkdtemp(join(tmpdir(), 'review-attribution-'));
