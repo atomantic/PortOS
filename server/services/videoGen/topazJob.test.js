@@ -18,8 +18,8 @@ vi.mock('./upscaleVideo.js', () => ({
 vi.mock('../mediaJobQueue/index.js', () => ({
   enqueueJob: vi.fn(async job => { state.enqueued = job; return { jobId: state.jobId, status: 'queued' }; }),
   getJob: () => ({ ...state.job, result: state.result }),
-  listJobs: () => [],
-  updateJobResult: async (_id, patch) => { Object.assign(state.result, patch); return true; },
+  listJobs: () => state.related || [],
+  updateJobResult: async (id, patch) => { state.updates.push({ id, patch }); Object.assign(state.result, patch); return true; },
 }));
 vi.mock('../../lib/backupSnapshotBoundary.js', () => ({ withBackupAssetPublication: async fn => fn() }));
 vi.mock('../../lib/ffmpeg.js', () => ({
@@ -47,7 +47,7 @@ const response = (body, status = 200) => new Response(JSON.stringify(body), { st
 beforeEach(async () => {
   state.videos = PATHS.videos;
   state.jobId = jobId;
-  state.key = 'test-key'; state.rows = [{ id: sourceId, filename: 'source.mp4' }]; state.result = {}; state.job = {}; state.fetches = []; state.audio = true; state.invalid = false; state.failPreparedProbe = false; state.invalidOutput = false;
+  state.key = 'test-key'; state.rows = [{ id: sourceId, filename: 'source.mp4' }]; state.result = {}; state.job = {}; state.related = []; state.updates = []; state.fetches = []; state.audio = true; state.invalid = false; state.failPreparedProbe = false; state.invalidOutput = false;
   await mkdir(PATHS.videos, { recursive: true });
   await unlink(join(PATHS.videos, `${jobId}.mp4`)).catch(() => {});
   await writeFile(join(PATHS.videos, 'source.mp4'), 'source');
@@ -184,8 +184,15 @@ describe('Topaz job boundary', () => {
     const { params } = await queued();
     state.rows.unshift({ id: jobId, filename: `${jobId}.mp4`, upscaledFrom: sourceId, upscaleMethod: 'topaz' });
     state.result.topazRecoveryAvailable = true;
+    state.related = [
+      { id: '44444444-4444-4444-8444-444444444444', params, result: { topazRecoveryAvailable: true } },
+      { id: '55555555-5555-4555-8555-555555555555', params, result: { topazRecoveryAvailable: true } },
+      { id: '66666666-6666-4666-8666-666666666666', params: { ...params, requestId: '77777777-7777-4777-8777-777777777777' }, result: { topazRecoveryAvailable: true } },
+    ];
     await runVideoUpscale({ ...params, recoveryParentId: '44444444-4444-4444-8444-444444444444' });
-    expect(state.result.topazRecoveryAvailable).toBe(false);
+    expect(state.updates.filter(update => update.patch.topazRecoveryAvailable === false).map(update => update.id)).toEqual([
+      '44444444-4444-4444-8444-444444444444', '55555555-5555-4555-8555-555555555555',
+    ]);
     expect(state.fetches).toEqual([['https://api.topazlabs.com/video/', 'POST']]);
   });
 

@@ -145,10 +145,15 @@ export async function runVideoUpscale(params) {
   const downloadPath = UUID_RE.test(preparedId || '') ? topazOutputPath(preparedId) : null;
   const finalPath = UUID_RE.test(preparedId || '') ? topazFinalPath(preparedId) : null;
   const fail = error => videoGenEvents.emit('failed', { generationId: jobId, error, remoteCancellationConfirmed: confirmedCancel });
-  const retireRecoveryParent = async () => {
-    if (UUID_RE.test(params.recoveryParentId || '')) {
-      await updateJobResult(params.recoveryParentId, { topazRecoveryAvailable: false })
-        .catch(() => console.error('❌ Could not update the previous Topaz recovery record; it was retained.'));
+  const retireRecoveryOffers = async () => {
+    const related = listJobs({ kind: 'video-upscale' }).filter(job => job.id !== jobId && job.params?.mode === 'topaz'
+      && job.params?.historyId === historyId && job.params?.requestId === requestId && job.result?.topazRecoveryAvailable === true);
+    for (const job of related) {
+      await updateJobResult(job.id, { topazRecoveryAvailable: false }).catch(() => {
+        maintenance.markCurrentUnsettled();
+        maintenance.markResourceUnsettled('media', jobId);
+        throw safeError('Could not save Topaz recovery settlement; the recovery offer was retained.');
+      });
     }
   };
   try {
@@ -158,7 +163,7 @@ export async function runVideoUpscale(params) {
       || !/^[a-f0-9]{64}$/.test(params.sourceDigest || '') || !/^[a-f0-9]{64}$/.test(params.preparedDigest || '')) throw safeError('Invalid Topaz job record.');
     const history = await loadHistory();
     const existing = history.find(row => row.id === jobId && row.upscaledFrom === historyId && row.upscaleMethod === 'topaz');
-    if (existing) { delivered = true; await retireRecoveryParent(); videoGenEvents.emit('completed', { generationId: jobId, ...existing }); return existing; }
+    if (existing) { delivered = true; await retireRecoveryOffers(); videoGenEvents.emit('completed', { generationId: jobId, ...existing }); return existing; }
     if (!await hasTopazStaging(preparedId)) throw safeError('Topaz staging ownership is missing; the provider request may still need reconciliation.');
     const key = await topazKey();
     if (topazKeyFingerprint(key) !== params.keyFingerprint) throw safeError('The Topaz credential changed since the estimate; check the provider request before retrying.');
@@ -241,7 +246,7 @@ export async function runVideoUpscale(params) {
       return row;
     });
     delivered = true;
-    await retireRecoveryParent();
+    await retireRecoveryOffers();
     videoGenEvents.emit('completed', { generationId: jobId, ...result });
     return result;
   } catch (error) {
