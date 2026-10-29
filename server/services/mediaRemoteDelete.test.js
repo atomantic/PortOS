@@ -59,6 +59,14 @@ const listenerFor = (event) => instanceEvents.listeners(event).at(-1);
 const deleteFrames = [];
 const onFrame = (event) => { if (event.op === 'delete') deleteFrames.push(event); };
 peerSyncBus.on('event', onFrame);
+const historyDeletes = [];
+const onHistory = (change) => { if (change.op === 'delete') historyDeletes.push(...change.ids); };
+peerSyncBus.on('media-history-changed', onHistory);
+// A delete announces on a detached chain after it resolves; a few macrotask
+// turns let that chain run without a wall-clock wait.
+const flushTurns = async () => {
+  for (let turn = 0; turn < 5; turn++) await new Promise((resolve) => setImmediate(resolve));
+};
 
 beforeEach(async () => {
   mkdirSync(PATHS.videos, { recursive: true });
@@ -71,6 +79,7 @@ beforeEach(async () => {
   peerFetch.mockClear();
   trashFiles.mockClear();
   deleteFrames.length = 0;
+  historyDeletes.length = 0;
 });
 
 let disarmQueue = null;
@@ -82,6 +91,7 @@ afterEach(() => {
 
 afterAll(() => {
   peerSyncBus.off('event', onFrame);
+  peerSyncBus.off('media-history-changed', onHistory);
   cleanup();
 });
 
@@ -114,8 +124,10 @@ describe('deleteMediaAnywhere', () => {
     expect(await readRows()).toEqual([]);
     expect((await listMediaTombstones('video')).map((t) => t.key)).toEqual(['v1']);
     expect(trashFiles).toHaveBeenCalledTimes(1);
-    // The owner announces its own delete; the initiator never emits a tombstone frame.
-    await new Promise((r) => setTimeout(r, 20));
+    // The owner announces its own delete; the initiator never emits a tombstone
+    // frame. The local view's delete event comes first on the same chain.
+    await vi.waitFor(() => expect(historyDeletes).toEqual(['v1']));
+    await flushTurns();
     expect(deleteFrames).toEqual([]);
   });
 
@@ -497,7 +509,8 @@ describe('deleteMediaAnywhere for gallery images', () => {
     expect((await pending).peerName).toBe('Example rec-owner');
     expect(trashedImage('theirs.png')).toBe(true);
     expect((await listMediaTombstones('image')).map((t) => t.key)).toEqual(['theirs.png']);
-    for (let turn = 0; turn < 5; turn++) await new Promise((resolve) => setImmediate(resolve));
+    await vi.waitFor(() => expect(historyDeletes).toEqual(['theirs.png']));
+    await flushTurns();
     expect(deleteFrames).toEqual([]);
   });
 
