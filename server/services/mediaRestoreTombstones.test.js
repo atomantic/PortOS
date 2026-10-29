@@ -13,6 +13,7 @@ const tempRoot = createTempDataRoot('portos-media-restore-');
 vi.mock('../lib/fileUtils.js', async (importOriginal) => (
   makePathsProxy(await importOriginal(), { dataRoot: tempRoot })
 ));
+vi.mock('../lib/databaseMaintenanceJournal.js', async (importOriginal) => ({ ...(await importOriginal()), assertDatabaseAdmission: () => {} }));
 vi.mock('./instanceIdentity.js', () => ({ UNKNOWN_INSTANCE_ID: 'unknown', getInstanceId: async () => 'inst-local' }));
 afterAll(() => rmSync(tempRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
 
@@ -73,6 +74,26 @@ describe('clearRestoredMediaTombstones', () => {
     expect(await imageKeys()).toEqual(['later.png']);
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});
     expect((await clearRestoredMediaTombstones()).images).toEqual(['later.png']);
+    log.mockRestore();
+  });
+
+  // A boot pass waiting on the publication lease must not hold up a restore's
+  // pass made under the snapshot cut, or each waits on the other forever.
+  it("a pass waiting on the cut does not block the cut holder's pass", async () => {
+    await recordMediaTombstone('image', 'cut.png', new Date(Date.now() - 60_000).toISOString());
+    putBack('cut.png', 'inst-local');
+    const { acquireBackupSnapshotCut } = await import('../lib/backupSnapshotBoundary.js');
+    const releaseCut = await acquireBackupSnapshotCut();
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    let boot;
+    try {
+      boot = clearRestoredMediaTombstones();
+      await expect(clearRestoredMediaTombstones({ images: false })).resolves.toEqual({ videos: [], images: [] });
+      expect(await imageKeys()).toEqual(['cut.png']);
+    } finally {
+      releaseCut();
+    }
+    expect((await boot).images).toEqual(['cut.png']);
     log.mockRestore();
   });
 

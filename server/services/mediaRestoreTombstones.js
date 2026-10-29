@@ -174,7 +174,16 @@ async function restoredImages(local) {
   return cleared;
 }
 
+// Two queues: the restored-image pass takes the backup publication lease, so a
+// pass waiting on it while a restore holds the snapshot cut must not hold up
+// the restore's own lease-free pass (settling, videos) behind it.
 let tail = Promise.resolve();
+let imageTail = Promise.resolve();
+
+function serialized(queue, work) {
+  const run = queue.then(work);
+  return [run, run.then(() => {}, () => {})];
+}
 
 /**
  * Settle every delete a crash left in flight, then clear the tombstone of
@@ -185,16 +194,16 @@ let tail = Promise.resolve();
  * backup snapshot cut (the image stamp would wait on that cut).
  * Resolves `{ videos, images }`, the restored keys.
  */
-export function clearRestoredMediaTombstones({ images: includeImages = true } = {}) {
-  const run = tail.then(async () => {
+export async function clearRestoredMediaTombstones({ images: includeImages = true } = {}) {
+  let run;
+  [run, tail] = serialized(tail, async () => {
     await resolveInFlightVideos();
     await resolveInFlightImages();
     const local = await localInstanceId();
-    if (!local) return { videos: [], images: [] };
-    const videos = await restoredVideos(local);
-    const images = includeImages ? await restoredImages(local) : [];
-    return { videos, images };
+    return { local, videos: local ? await restoredVideos(local) : [] };
   });
-  tail = run.then(() => {}, () => {});
-  return run;
+  const { local, videos } = await run;
+  if (!local || !includeImages) return { videos, images: [] };
+  [run, imageTail] = serialized(imageTail, () => restoredImages(local));
+  return { videos, images: await run };
 }
