@@ -34,6 +34,16 @@ const loadCollections = () => listMediaCollections({ silent: true });
 function LocationBadge({ entry }) {
   if (entry?.location === 'remote') {
     const host = entry.hostPeerName || 'peer';
+    if (entry.pendingDelete) {
+      return (
+        <span
+          className="absolute top-1.5 left-1.5 z-10 px-1.5 py-0.5 rounded bg-black/70 text-port-warning text-[10px] flex items-center gap-1 pointer-events-none"
+          title={`Delete pending until ${host} is reachable — it still hosts this file`}
+        >
+          <Cloud className="w-3 h-3" /> Delete pending · {host}
+        </span>
+      );
+    }
     return (
       <span
         className="absolute top-1.5 left-1.5 z-10 px-1.5 py-0.5 rounded bg-black/70 text-port-accent text-[10px] flex items-center gap-1 pointer-events-none"
@@ -206,6 +216,13 @@ export default function MediaCollectionDetail() {
     const outcome = mediaDeleteOutcome(ok, item.kind);
     // A delete that waits on, or did not reach, this machine's copy keeps the row.
     if (!outcome.remove) {
+      // A hosted item is annotated from the collection, not the gallery row.
+      setCollection(c => c && ({
+        ...c,
+        items: c.items.map(member => (item.kind === 'image' && member.kind === 'image' && member.ref === item.filename && member.location === 'remote'
+          ? { ...member, pendingDelete: outcome.pendingDelete || undefined }
+          : member)),
+      }));
       page.setItems(rows => rows.map((row) => {
         if (!matches(row)) return row;
         const { pendingDelete: _previous, ...data } = row.data; // eslint-disable-line no-unused-vars
