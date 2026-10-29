@@ -145,6 +145,11 @@ export async function runVideoUpscale(params) {
   const downloadPath = UUID_RE.test(preparedId || '') ? topazOutputPath(preparedId) : null;
   const finalPath = UUID_RE.test(preparedId || '') ? topazFinalPath(preparedId) : null;
   const fail = error => videoGenEvents.emit('failed', { generationId: jobId, error, remoteCancellationConfirmed: confirmedCancel });
+  const cleanupFailed = () => {
+    maintenance.markCurrentUnsettled();
+    maintenance.markResourceUnsettled('media', jobId);
+    console.error('❌ Topaz upscale cleanup failed; owned files were retained for recovery.');
+  };
   const retireRecoveryOffers = async () => {
     const related = listJobs({ kind: 'video-upscale' }).filter(job => job.id !== jobId && job.params?.mode === 'topaz'
       && job.params?.historyId === historyId && job.params?.requestId === requestId && job.result?.topazRecoveryAvailable === true);
@@ -222,8 +227,11 @@ export async function runVideoUpscale(params) {
     // A crash after linking but before recording history leaves two links to
     // the same owned inode. Remove only that proven link before re-finishing.
     if (priorOutput && priorFinal && priorOutput.dev === priorFinal.dev && priorOutput.ino === priorFinal.ino) {
-      if (priorFinal.nlink !== 2 || history.some(row => row.filename === `${jobId}.mp4`)) throw safeError('The existing output is referenced elsewhere.');
-      await unlink(outputPath);
+      await withBackupAssetPublication(() => mutateVideoHistory(async rows => {
+        if (priorFinal.nlink !== 2 || rows.some(row => row.filename === `${jobId}.mp4`)) throw safeError('The existing output is referenced elsewhere.');
+        await unlink(outputPath);
+        return HISTORY_UNCHANGED;
+      }));
     } else if (priorFinal?.nlink > 1) throw safeError('The staged output is referenced elsewhere.');
     const finalized = await finalizeUpscaleOutput(downloadPath, finalPath, { width: target.width, height: target.height, frameCount: source.frameCount, audioSourcePath: path, signal: entry.abort.signal });
     if (!finalized.ok) throw safeError('Could not attach the original audio to the Topaz result.');
@@ -232,18 +240,24 @@ export async function runVideoUpscale(params) {
     if (measured.width !== target.width || measured.height !== target.height || frames !== source.frameCount || !(measured.fps > 0) || Math.abs(measured.fps - source.frameRate) > 0.01 || !(duration > 0) || Math.abs(duration - source.duration) > 1 / source.frameRate + 0.05 || originalAudio !== outputAudio) throw safeError('Topaz result did not preserve the requested dimensions, timeline or audio.');
     if (await hashTopazFile(path) !== params.sourceDigest) throw safeError('The source changed while the result was being finalized.');
     const result = await withBackupAssetPublication(async () => {
-      await link(finalPath, outputPath);
-      ownsOutput = true;
-      const candidate = join(PATHS.videoThumbnails, `${jobId}.jpg`);
-      let thumbnail = null;
-      if (!await statOptional(candidate)) {
-        thumbnailPath = candidate;
-        thumbnail = await generateThumbnail(outputPath, jobId);
-        if (!thumbnail) { await unlink(candidate).catch(error => { if (error.code !== 'ENOENT') throw error; }); thumbnailPath = null; }
+      try {
+        await link(finalPath, outputPath);
+        ownsOutput = true;
+        const candidate = join(PATHS.videoThumbnails, `${jobId}.jpg`);
+        let thumbnail = null;
+        if (!await statOptional(candidate)) {
+          thumbnailPath = candidate;
+          thumbnail = await generateThumbnail(outputPath, jobId);
+          if (!thumbnail) { await unlink(candidate).catch(error => { if (error.code !== 'ENOENT') throw error; }); thumbnailPath = null; }
+        }
+        const row = { ...item, id: jobId, filename: `${jobId}.mp4`, thumbnail, createdAt: new Date().toISOString(), width: measured.width, height: measured.height, fps: measured.fps, numFrames: frames, duration, upscaledFrom: historyId, upscaleMethod: 'topaz', upscaleRuntime: 'topaz', upscaleModel: TOPAZ_MODELS[model], hidden: false };
+        await mutateVideoHistory(rows => { rows.unshift(row); return rows; });
+        return row;
+      } catch (error) {
+        if (ownsOutput) await unlink(outputPath).then(() => { ownsOutput = false; }).catch(error => { if (error.code === 'ENOENT') ownsOutput = false; else cleanupFailed(); });
+        if (thumbnailPath) await unlink(thumbnailPath).then(() => { thumbnailPath = null; }).catch(error => { if (error.code === 'ENOENT') thumbnailPath = null; else cleanupFailed(); });
+        throw error;
       }
-      const row = { ...item, id: jobId, filename: `${jobId}.mp4`, thumbnail, createdAt: new Date().toISOString(), width: measured.width, height: measured.height, fps: measured.fps, numFrames: frames, duration, upscaledFrom: historyId, upscaleMethod: 'topaz', upscaleRuntime: 'topaz', upscaleModel: TOPAZ_MODELS[model], hidden: false };
-      await mutateVideoHistory(rows => { rows.unshift(row); return rows; });
-      return row;
     });
     delivered = true;
     await retireRecoveryOffers();
@@ -267,14 +281,9 @@ export async function runVideoUpscale(params) {
       : (error.safeTopaz || error instanceof ServerError ? error.message : 'Topaz upscale could not be completed.'));
   } finally {
     active.delete(jobId);
-    const cleanupFailed = () => {
-      maintenance.markCurrentUnsettled();
-      maintenance.markResourceUnsettled('media', jobId);
-      console.error('❌ Topaz upscale cleanup failed; owned files were retained for recovery.');
-    };
     let cleanupProven = true;
     if (!delivered && !ownsOutput && finalPath && UUID_RE.test(jobId || '')) {
-      await mutateVideoHistory(async rows => {
+      await withBackupAssetPublication(() => mutateVideoHistory(async rows => {
         const destination = join(PATHS.videos, `${jobId}.mp4`);
         const [finalFile, outputFile] = await Promise.all([statOptional(finalPath), statOptional(destination)]);
         if (finalFile && outputFile && finalFile.dev === outputFile.dev && finalFile.ino === outputFile.ino
@@ -283,12 +292,12 @@ export async function runVideoUpscale(params) {
           await unlink(destination);
         }
         return HISTORY_UNCHANGED;
-      }).catch(() => { cleanupProven = false; });
+      })).catch(() => { cleanupProven = false; });
     }
-    if (!delivered && ownsOutput && outputPath) await unlink(outputPath).catch(error => { if (error.code !== 'ENOENT') cleanupProven = false; });
+    if (!delivered && ownsOutput && outputPath) await withBackupAssetPublication(() => unlink(outputPath)).catch(error => { if (error.code !== 'ENOENT') cleanupProven = false; });
     if (cleanupProven) await cleanupTopazStaging(preparedId).catch(cleanupFailed);
     else cleanupFailed();
-    if (!delivered && thumbnailPath) await unlink(thumbnailPath).catch(error => { if (error.code !== 'ENOENT') cleanupFailed(); });
+    if (!delivered && thumbnailPath) await withBackupAssetPublication(() => unlink(thumbnailPath)).catch(error => { if (error.code !== 'ENOENT') cleanupFailed(); });
   }
   return null;
 }
