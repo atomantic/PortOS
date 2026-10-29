@@ -819,7 +819,7 @@ describe('host-control gate on CoS task queueing (#8716)', () => {
 
   it('refuses a remote password-free caller without queueing or spawning a task', async () => {
     const remote = buildGatedApp('192.0.2.10');
-    for (const [path, body] of [['/api/cos/tasks', { description: 'run a shell command' }], ['/api/cos/tasks/task-1/spawn', {}], ['/api/cos/tasks/task-1/approve', {}]]) {
+    for (const [path, body] of [['/api/cos/tasks', { description: 'run a shell command' }], ['/api/cos/tasks/task-1/spawn', {}], ['/api/cos/tasks/task-1/spawn', { resetSpawnBudget: true }], ['/api/cos/tasks/task-1/approve', {}]]) {
       const res = await request(remote).post(path).send(body);
       expect(res.status).toBe(403);
       expect(res.body.code).toBe('HOST_CONTROL_FORBIDDEN');
@@ -833,6 +833,15 @@ describe('host-control gate on CoS task queueing (#8716)', () => {
     const res = await request(buildGatedApp('127.0.0.1')).post('/api/cos/tasks').send({ description: 'local work' });
     expect(res.status).toBe(200);
     expect(addTask).toHaveBeenCalledTimes(1);
+  });
+
+  it('admits an explicit reset-and-run for a local operator and validates its intent', async () => {
+    forceSpawnTask.mockResolvedValue({ success: true, taskId: 'task-1' });
+    const app = buildGatedApp('127.0.0.1');
+    expect((await request(app).post('/api/cos/tasks/task-1/spawn').send({ resetSpawnBudget: 'true' })).status).toBe(400);
+    expect(forceSpawnTask).not.toHaveBeenCalled();
+    expect((await request(app).post('/api/cos/tasks/task-1/spawn').send({ resetSpawnBudget: true })).status).toBe(200);
+    expect(forceSpawnTask).toHaveBeenCalledWith('task-1', { resetSpawnBudget: true });
   });
 
   it('with a password set, Basic credentials are refused and an operator session is not', async () => {
@@ -851,5 +860,11 @@ describe('host-control gate on CoS task queueing (#8716)', () => {
       .send({ description: 'operator work' });
     expect(session.status).toBe(200);
     expect(addTask).toHaveBeenCalledTimes(1);
+    forceSpawnTask.mockResolvedValue({ success: true, taskId: 'task-1' });
+    const agentSession = await auth.createSession({ label: 'agent' });
+    const agentReset = await request(remote).post('/api/cos/tasks/task-1/spawn')
+      .set('Authorization', `Bearer ${agentSession.token}`).send({ resetSpawnBudget: true });
+    expect(agentReset.status).toBe(200);
+    expect(forceSpawnTask).toHaveBeenCalledWith('task-1', { resetSpawnBudget: true });
   });
 });

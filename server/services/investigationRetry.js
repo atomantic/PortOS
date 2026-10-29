@@ -24,6 +24,7 @@
 
 import { getAllTasks, reviveBlockedTask, updateTask } from './cosTaskStore.js';
 import { emitLog } from './cosEvents.js';
+import { matchesSpawnBudgetProof, spawnBudgetCount, validSpawnBudgetEpisode } from './spawnBudgetProof.js';
 import {
   MAX_AUTO_RETRIES_PER_TASK,
   RETRY_SKIP_REASONS,
@@ -72,17 +73,42 @@ export async function retryTasksResolvedByInvestigation(investigation, { now = D
 
   const retried = [];
   for (const task of targets) {
+    if (task.metadata?.spawnBudgetReconciledHold === 'true') {
+      skipped.push({ taskId: task.id, reason: 'spawn-budget-reconciled-held' });
+      continue;
+    }
+    const { readAgentsStateForSafetyCheck } = await import('./cosState.js');
+    const state = await readAgentsStateForSafetyCheck().catch(() => null);
+    const owner = state?.trusted ? state.agents?.[task.metadata?.spawnBudgetProof?.dispatch?.agentId] : null;
+    const count = spawnBudgetCount(task.metadata?.totalSpawnCount);
+    const charged = spawnBudgetCount(task.metadata?.spawnBudgetProof?.dispatch?.totalSpawnCount);
+    const undispatched = state?.trusted && validSpawnBudgetEpisode(task.metadata?.spawnBudgetProof)
+      && task.metadata.spawnBudgetProof.dispatch === null
+      && spawnBudgetCount(task.metadata.totalSpawnCount ?? 0) === spawnBudgetCount(task.metadata.spawnBudgetProof.baseline ?? 0);
+    if (owner?.status === 'completed' && matchesSpawnBudgetProof(task, owner) && count !== null && charged !== null && count < charged) {
+      const { reconcileSpawnBudget } = await import('./spawnBudgetReconciliation.js');
+      const result = await reconcileSpawnBudget(task.id).catch(() => null);
+      skipped.push({ taskId: task.id, reason: result?.reconciled ? 'spawn-budget-reconciled-held' : 'spawn-budget-reconciliation-required' });
+      continue;
+    }
+    if (!undispatched && (!owner || owner.status !== 'completed' || !owner.startedAt || !matchesSpawnBudgetProof(task, owner)
+      || count === null || count !== charged)) {
+      skipped.push({ taskId: task.id, reason: 'spawn-budget-reconciliation-required' });
+      continue;
+    }
     // `reviveBlockedTask` clears the block + failure/spawn budgets and emits
     // `tasks:changed` action `unblocked`, which wakes the dequeue — so the retry
     // starts on its own without a second signal from here.
     const result = await reviveBlockedTask(
       task.id,
       { metadata: autoRetryMetadata(task, investigation.id, now) },
-      task.taskType
+      task.taskType,
+      { expectedStatus: 'blocked', expectedTask: { description: task.description, priority: task.priority, metadata: task.metadata },
+        recoveryOwner: { id: owner?.id || 'undispatched-investigation-retry', startedAt: owner?.startedAt || null, requireInactive: true } }
     ).catch((err) => ({ error: err.message }));
 
-    if (result?.error) {
-      emitLog('warn', `⚠️ Auto-retry of task ${task.id} after investigation ${investigation.id} failed: ${result.error}`, {
+    if (result?.error || result?.statusChanged) {
+      emitLog('warn', `⚠️ Auto-retry of task ${task.id} after investigation ${investigation.id} failed: ${result.error || 'task or owner changed'}`, {
         taskId: task.id, investigationTaskId: investigation.id
       });
       continue;
@@ -122,7 +148,9 @@ async function markExhaustedTasks(skipped, tasksById, investigationId, now) {
         blockedCategory: RETRY_EXHAUSTED_CATEGORY,
         autoRetryExhaustedAt: new Date(now).toISOString(),
       }
-    }, task?.taskType || 'internal').catch((err) => {
+    }, task?.taskType || 'internal', { expectedStatus: 'blocked',
+      expectedTask: { description: task.description, priority: task.priority, metadata: task.metadata },
+      recoveryOwner: { id: 'unattributed-investigation-retry', startedAt: null, requireInactive: true } }).catch((err) => {
       emitLog('warn', `⚠️ Could not mark task ${taskId} auto-retry-exhausted after investigation ${investigationId}: ${err.message}`, { taskId });
     });
   }

@@ -6,6 +6,7 @@ import { maintenance } from '../lib/maintenanceAdmission.js';
 import { reconcileStaleAgentReservations, releaseAgentReservation } from './agentMaintenanceReservations.js';
 import { reconcileDeadOwnerReservations } from './deadOwnerReservations.js';
 import { MAX_ORPHAN_RETRIES, ORPHAN_GUARDS, buildOrphanOutcome, classifyOrphanGuard, decideOrphanRetry } from './agentOrphanRecovery.js';
+import { matchesSpawnBudgetProof, spawnBudgetCount } from './spawnBudgetProof.js';
 /**
  * Agent Management
  *
@@ -1529,9 +1530,6 @@ export async function handleOrphanedTask(taskId, agentId, getTaskByIdFn, { agent
   // Without this, correctness depended on `cleanupOrphanedAgents` happening to
   // run before `resetOrphanedTasks` in cos.js's boot sequence.
   const wasInterrupted = interrupted ?? (agentMetadata?.interruptedBy === HOST_SHUTDOWN_REASON);
-  await consumeInterruptedBreadcrumb(agentId, agentMetadata, wasInterrupted);
-  if (isPrivateSecurityTask({ metadata: agentMetadata })) await removePrivateSecurityScratch(agentId);
-
   const task = await getTaskByIdFn(taskId).catch(() => null);
   if (!task) {
     emitLog('warn', `Could not find task ${taskId} for orphaned agent ${agentId}`, { taskId, agentId });
@@ -1539,8 +1537,19 @@ export async function handleOrphanedTask(taskId, agentId, getTaskByIdFn, { agent
   }
 
   if (isDeliveryCleanupHeld(task.metadata)) return;
+  if (task.metadata?.spawnBudgetReconciledHold === 'true') return;
   const ctx = { taskId, agentId, task, agentMetadata, agentStartedAt };
   const guard = classifyOrphanGuard(task, agentMetadata);
+  const dispatchAgent = { id: agentId, taskId, startedAt: agentStartedAt, metadata: agentMetadata };
+  if ((!guard || guard === 'retry-held') && (!agentStartedAt || !matchesSpawnBudgetProof(task, dispatchAgent)
+    || spawnBudgetCount(task.metadata?.totalSpawnCount) === null
+    || spawnBudgetCount(task.metadata.totalSpawnCount) !== spawnBudgetCount(task.metadata.spawnBudgetProof.dispatch.totalSpawnCount))) {
+    emitLog('warn', `Holding orphaned task ${taskId}: inspect its dispatch receipts and explicitly reset its budget only if intended`, { taskId, agentId });
+    return;
+  }
+  await consumeInterruptedBreadcrumb(agentId, agentMetadata, wasInterrupted);
+  if (isPrivateSecurityTask({ metadata: agentMetadata })) await removePrivateSecurityScratch(agentId);
+
   if (guard) return ORPHAN_GUARD_HANDLERS[guard](ctx);
   if (await completeIfCommitted(ctx)) return;
 
@@ -1633,7 +1642,7 @@ async function recoverDeepAuditOrphan({ taskId, agentId, task, agentMetadata, ag
  * run that committed is exactly the case the resume pointer exists for, and
  * completing the task on that evidence would discard the retry finalizeAgent granted.
  */
-async function recoverRetryHeldOrphan({ taskId, agentId, task, agentMetadata }) {
+async function recoverRetryHeldOrphan({ taskId, agentId, task, agentMetadata, agentStartedAt }) {
   const resumePatch = await resolveTaskResumePatch({ task, agentId, agentMetadata }).catch(err => {
     emitLog('warn', `Resume pointer for held task ${taskId} could not be resolved: ${err.message}`, { taskId, agentId });
     return {};
@@ -1644,6 +1653,8 @@ async function recoverRetryHeldOrphan({ taskId, agentId, task, agentMetadata }) 
     metadata: { ...resumePatch, ...clearedRetryHoldMetadata() }
   }, task.taskType || 'user', {
     expectedStatus: 'in_progress', expectedMetadata: { [RETRY_HOLD_KEY]: task.metadata[RETRY_HOLD_KEY] },
+    expectedTask: { description: task.description, priority: task.priority, metadata: task.metadata },
+    recoveryOwner: { id: agentId, startedAt: agentStartedAt },
   });
   if (result?.error) {
     emitLog('error', `Interrupted retry transition for task ${taskId} failed: ${result.error}`, { taskId, agentId });
@@ -1684,7 +1695,11 @@ async function completeIfCommitted({ taskId, agentId, task, agentMetadata, agent
   if (!commitFound) return false;
   emitLog('info', `✅ Orphaned agent ${agentId} actually completed work - commit found for task ${taskId}`, { taskId, agentId });
   const taskUpdate = await stampLiExecutionVerdict({ status: 'completed' }, task, { success: true });
-  await updateTask(taskId, taskUpdate, task.taskType || 'user');
+  await updateTask(taskId, taskUpdate, task.taskType || 'user', {
+    expectedStatus: task.status, expectedTask: { description: task.description, priority: task.priority, metadata: task.metadata },
+    recoveryOwner: { id: agentId, startedAt: agentStartedAt },
+  });
+  // A competing owner or edit owns the task; do not fall through to a retry.
   return true;
 }
 
@@ -1704,7 +1719,7 @@ function logOrphanDecision(taskId, decision) {
 }
 
 /** Persist the retry decision: requeue, orphan-cooldown block, or max-retries block + investigation. */
-async function applyOrphanDecision({ taskId, agentId, task, agentMetadata }, decision) {
+async function applyOrphanDecision({ taskId, agentId, task, agentMetadata, agentStartedAt }, decision) {
   logOrphanDecision(taskId, decision);
   const requeue = decision.outcome === 'requeue';
   // Point the retry at whatever the dead run left behind — its branch, or the
@@ -1722,8 +1737,12 @@ async function applyOrphanDecision({ taskId, agentId, task, agentMetadata }, dec
     : {};
   const outcome = buildOrphanOutcome({ decision, task, agentId, now: Date.now(), resumePatch });
   const taskUpdate = requeue ? outcome : await stampLiExecutionVerdict(outcome, task, { success: false });
-  await updateTask(taskId, taskUpdate, task.taskType || 'user');
-  if (decision.outcome === 'blocked') await fileOrphanInvestigation({ taskId, agentId, task, decision });
+  const saved = await updateTask(taskId, taskUpdate, task.taskType || 'user', {
+    expectedStatus: task.status, expectedTask: { description: task.description, priority: task.priority, metadata: task.metadata },
+    recoveryOwner: { id: agentId, startedAt: agentStartedAt },
+    ...(requeue && decision.interrupted ? { spawnBudgetOperation: { kind: 'reset' } } : {}),
+  });
+  if (!saved?.error && !saved?.statusChanged && decision.outcome === 'blocked') await fileOrphanInvestigation({ taskId, agentId, task, decision });
 }
 
 async function fileOrphanInvestigation({ taskId, agentId, task, decision }) {

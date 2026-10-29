@@ -1,4 +1,5 @@
 const reportInfrastructureFailure = vi.hoisted(() => vi.fn(async () => null));
+const proofState = vi.hoisted(() => ({ agents: {}, saved: null }));
 vi.mock('./reviewInfrastructureFailure.js', () => ({ reportReviewInfrastructureFailure: reportInfrastructureFailure }));
 
 /**
@@ -82,6 +83,7 @@ vi.mock('./cosEvents.js', () => ({
 vi.mock('./cosState.js', async importOriginal => ({
   ...(await importOriginal()),
   getConfig: vi.fn().mockResolvedValue({}),
+  readAgentsStateForSafetyCheck: vi.fn(async () => ({ trusted: true, agents: proofState.agents })),
 }));
 vi.mock('./cosTaskStore.js', () => ({
   updateTask: vi.fn().mockResolvedValue(undefined),
@@ -145,7 +147,7 @@ vi.mock('./modelAbuseGuard.js', () => ({
   validatePublicReviewModel: vi.fn().mockResolvedValue({ ok: true }),
 }));
 
-import { spawnAgentForTask } from './agentLifecycle.js';
+import { spawnAgentForTask as runSpawnAgentForTask } from './agentLifecycle.js';
 import { prepareAgentWorkspace } from './agentWorkspacePrep.js';
 import {
   materializePublicReviewInput,
@@ -160,7 +162,7 @@ import { createAgentRun } from './agentRunTracking.js';
 import { buildCliSpawnConfig, isTuiProvider } from './agentCliSpawning.js';
 import { spawnAgentViaRunner } from './cosRunnerClient.js';
 import { getConfig } from './cosState.js';
-import { updateTask } from './cosTaskStore.js';
+import { getTaskById, updateTask } from './cosTaskStore.js';
 import { cosEvents, emitLog } from './cosEvents.js';
 import { releaseAppReviewMarker } from './appActivity.js';
 import { acquire, release } from './executionLanes.js';
@@ -181,6 +183,23 @@ const OPENCODE_TUI = { id: 'opencode-tui', type: 'tui', command: 'opencode', env
 // Every gate case carries `metadata.app`, because the marker release is only
 // observable for a task that bound one (#989).
 const APP = 'example-app';
+
+// The real spawn gate requires persisted provenance before reaching the
+// provider/lane gates covered below. Give each fixture a matching prior run.
+const spawnAgentForTask = task => {
+  const epoch = '11111111-1111-4111-8111-111111111111';
+  const count = task.metadata?.totalSpawnCount;
+  const dispatch = count == null || Number(count) === 0 ? null : { agentId: `agent-${task.id}`, startedAt: 'start', claimedBy: 'fixture', claimedAt: 'claim',
+    lastSpawnedAt: 'spawn', totalSpawnCount: count };
+  const saved = { ...task, taskType: task.taskType || 'user', status: 'pending', metadata: { ...task.metadata,
+    spawnBudgetProof: { version: 1, epoch, baseline: dispatch ? Number(count) - 1 : 0, dispatch } } };
+  proofState.saved = saved;
+  if (dispatch) proofState.agents[dispatch.agentId] = { id: dispatch.agentId, taskId: task.id, status: 'completed', startedAt: 'start',
+    metadata: { completionTaskDispatch: { taskId: task.id, taskType: saved.taskType, spawnBudgetEpoch: epoch,
+      spawnBudgetStartedAt: 'start', expected: ['claimedBy', 'claimedAt', 'lastSpawnedAt', 'totalSpawnCount'].map(key => [key, dispatch[key]]) } } };
+  vi.mocked(getTaskById).mockResolvedValue(saved);
+  return runSpawnAgentForTask(task);
+};
 
 /** A cleared model-abuse scan, so a case can reach a gate PAST the scan gate. */
 const CLEARED_SCAN = { completed: true, status: 'passed', safePrCount: 1 };
@@ -238,6 +257,7 @@ function reachPostPrepGates() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  proofState.agents = {};
   spawningTasks.clear();
   runnerAgents.clear();
   setUseRunner(false);
@@ -246,7 +266,7 @@ beforeEach(() => {
   vi.mocked(spawnAgentViaRunner).mockResolvedValue({ pid: 4242 });
   vi.mocked(validatePublicReviewModel).mockResolvedValue({ ok: true });
   // Truthy: a falsy in_progress write is read as "the claim did not land".
-  vi.mocked(updateTask).mockResolvedValue({ metadata: {} });
+  vi.mocked(updateTask).mockImplementation(async (_id, patch) => ({ metadata: { ...proofState.saved?.metadata, ...patch.metadata } }));
   vi.mocked(getConfig).mockResolvedValue({});
   vi.mocked(resolveAgentProviderAndModel).mockResolvedValue({
     ok: true, provider: CLAUDE_TUI, selectedModel: 'sonnet', modelSelection: {},

@@ -114,6 +114,10 @@ async function runAgentDispatch(context, { spawnViaRunner } = {}) {
   });
   const dispatchUseRunner = (publicReview || hasCredentialBootstrap(provider)) ? false : useRunner;
   let publicReviewPromptData = null;
+  // Workspace preparation may consume a reviewed-head pin in memory. The CAS
+  // must compare the original persisted snapshot, not that intended patch.
+  const expectedDispatchMetadata = structuredClone(task.metadata || {});
+  const expectedDispatchStatus = task.status || null;
 
   return prepareAgentWorkspace({ agentId, task, onPrepared: async prep => {
     if (prep.outcome === 'deferred') {
@@ -240,7 +244,7 @@ async function runAgentDispatch(context, { spawnViaRunner } = {}) {
     const injectedMemories = promptTrace.injectedMemories || [];
     let systemPromptFile = null;
     const agentDir = join(AGENTS_DIR, agentId);
-    const { runId } = await withBackupAssetPublication(async () => {
+    const { runId, registeredAgent } = await withBackupAssetPublication(async () => {
       if (!existsSync(agentDir)) {
         await ensureDir(agentDir);
       }
@@ -259,7 +263,7 @@ async function runAgentDispatch(context, { spawnViaRunner } = {}) {
         injectedMemories,
         executionOptions: executionAttribution,
       });
-      await registerAgent(agentId, task.id, buildAgentRegistration({
+      const registeredAgent = await registerAgent(agentId, task.id, buildAgentRegistration({
         task,
         provider,
         instanceId,
@@ -288,7 +292,7 @@ async function runAgentDispatch(context, { spawnViaRunner } = {}) {
         resolvedAppName,
         injectedMemories,
       }));
-      return { runId };
+      return { runId, registeredAgent };
     });
 
     emitLog('info', `Agent ${agentId} initializing...${worktreeInfo ? ' (worktree)' : ''}${jiraBranchName ? ` (JIRA: ${jiraTicket?.ticketId})` : ''}`, { agentId, taskId: task.id });
@@ -301,7 +305,8 @@ async function runAgentDispatch(context, { spawnViaRunner } = {}) {
         lastSpawnedAt: new Date().toISOString(),
         ...buildClaim(instanceId),
       },
-    }, task.taskType || 'user')
+    }, task.taskType || 'user', { expectedStatus: expectedDispatchStatus,
+      expectedTask: { metadata: expectedDispatchMetadata }, spawnBudgetOperation: { kind: 'dispatch', agentId, startedAt: registeredAgent?.startedAt } })
       .catch(err => {
         console.error(`❌ Failed to mark task ${task.id} as in_progress: ${err.message}`);
         return null;
@@ -309,12 +314,22 @@ async function runAgentDispatch(context, { spawnViaRunner } = {}) {
     if (updateResult?.error) {
       if (!isExpectedUnpersistedMiss(task, updateResult.error)) emitLog('warn', `⚠️ in_progress claim for task ${task.id} returned an error (taskType=${task.taskType}): ${updateResult.error}`, { taskId: task.id, error: updateResult.error });
     }
-    if (prep.cleanupReviewPinConsumed && (updateResult?.error || updateResult?.statusChanged)) {
-      await context.cleanupOnError('Failed to persist reviewed-head launch admission; retained checkout requires revalidation');
+    const holdUnpersistedDispatch = async reason => {
+      // A registered owner and prepared checkout now exist. A failed CAS is
+      // not authority to release a possibly changed claim or discard work.
+      context.claimAcquired = false;
+      context.spawnWorktree = null;
+      await context.cleanupOnError(reason);
+    };
+    if (updateResult?.statusChanged || (updateResult?.error
+      && (prep.cleanupReviewPinConsumed || !isExpectedUnpersistedMiss(task, updateResult.error)))) {
+      await holdUnpersistedDispatch(prep.cleanupReviewPinConsumed
+        ? 'Failed to persist reviewed-head launch admission; retained checkout requires revalidation'
+        : 'Failed to persist task dispatch; task or ownership changed');
       return null;
     }
     if (!updateResult) {
-      await context.cleanupOnError('Failed to update task status');
+      await holdUnpersistedDispatch('Failed to update task status');
       return null;
     }
 

@@ -948,7 +948,10 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // evidence. Older peers may clip that evidence or substitute a smaller model.
   // v10 = executionOptions and execution-selection provider references. Older
   // peers would ignore an explicit Standard/Fast override when claiming a task.
-  cosTasks: 10,
+  // v11 = server-owned retry-episode and latest-dispatch proof. A legacy peer
+  // may reset a counter while retaining unknown metadata, so its payload
+  // invalidates proof on the receiver instead of authorizing reconciliation.
+  cosTasks: 11,
   // v1 = the Eidoverse foundation promote-candidate envelope (#7455, epic
   // #7453) — authorized to cross the federation layer by the federated
   // Eidoverse foundations ADR (docs/decisions/2026-09-18-federated-eidoverse-foundations.md).

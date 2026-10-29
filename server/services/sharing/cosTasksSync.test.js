@@ -187,6 +187,8 @@ describe('syncCosTasksFromPeer', () => {
     const internalCall = calls.find(([type]) => type === 'internal');
     expect(userCall[1].map((t) => t.id)).toEqual(['task-a']);
     expect(internalCall[1].map((t) => t.id)).toEqual(['sys-b']);
+    expect(userCall[2]).toEqual({ legacySpawnBudget: true });
+    expect(internalCall[2]).toEqual({ legacySpawnBudget: true });
   });
 
   it.each(['user', 'internal'])('retries the identical payload immediately after the %s file merge fails', async (failedType) => {

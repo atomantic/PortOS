@@ -6,6 +6,9 @@ image-generation paths below are useful entry points when tracing render jobs.
 
 | Module | Responsibility |
 | --- | --- |
+| `spawnBudgetProof.js` | Server-owned retry-episode and latest-dispatch proof validation, including counter round trips. |
+| `spawnBudgetReconciliation.js` | Ownership-fenced monotone correction of a stopped task from its exact latest dispatch receipt; correction remains held. |
+| `explicitSpawnBudgetReset.js` | Resolves a unique stopped orphan and its retained checkout before an explicit reset-and-run action. |
 | `catalogPrimitives.js` | Explicit creative primitive ownership, safe universe membership, independent forks and durable retry receipts. |
 | `catalogDB/ingredients.js` | Canonical ingredient CRUD/history, atomic flag-only locks and bounded requested-ID card projections with batched cover/ownership/identity context. |
 | `catalogDB/media.js` | Ingredient media associations, metadata-free profile covers (`getIngredientMediaCover`) and integrity checks that can reuse already-read media rows. |

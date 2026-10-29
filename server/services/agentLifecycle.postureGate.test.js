@@ -151,7 +151,7 @@ vi.mock('./modelAbuseGuard.js', () => ({
 }));
 
 import { captureAuditSourceEvidence } from '../lib/auditSourceEvidence.js';
-import { spawnAgentForTask } from './agentLifecycle.js';
+import { spawnAgentForTask as spawnPersistedTask } from './agentLifecycle.js';
 import { prepareAgentWorkspace } from './agentWorkspacePrep.js';
 import { materializePublicReviewInput, materializePublicReviewPatches, readPublicReviewInputSnapshot } from './modelAbuseGuard.js';
 import { removeWorktree } from './worktreeManager.js';
@@ -161,7 +161,8 @@ import { registerAgent } from './cosAgentLifecycle.js';
 import { createAgentRun } from './agentRunTracking.js';
 import { buildCliSpawnConfig, isTuiProvider, spawnDirectly } from './agentCliSpawning.js';
 import { spawnAgentViaRunner } from './cosRunnerClient.js';
-import { updateTask } from './cosTaskStore.js';
+import { getTaskById, updateTask } from './cosTaskStore.js';
+import { newSpawnBudgetEpisode } from './spawnBudgetProof.js';
 import { spawningTasks, runnerAgents, setUseRunner } from './agentState.js';
 
 // The provider every install actually runs its CoS agents on, and the one named
@@ -169,6 +170,18 @@ import { spawningTasks, runnerAgents, setUseRunner } from './agentState.js';
 const CLAUDE_TUI = { id: 'claude-code-tui', type: 'tui', command: 'claude', envVars: {} };
 // A TUI record whose vendor declares no public-review recipe at all.
 const OPENCODE_TUI = { id: 'opencode-tui', type: 'tui', command: 'opencode', envVars: {} };
+
+// Queue intake assigns a server-owned episode to a new task before dispatch.
+// Supply the same persisted snapshot so each case reaches its intended gate.
+function spawnAgentForTask(task) {
+  let persisted = { ...task, status: 'pending', metadata: { ...task.metadata, spawnBudgetProof: newSpawnBudgetEpisode() } };
+  vi.mocked(getTaskById).mockImplementation(async () => structuredClone(persisted));
+  vi.mocked(updateTask).mockImplementation(async (_id, patch) => {
+    persisted = { ...persisted, ...patch, metadata: { ...persisted.metadata, ...patch.metadata } };
+    return structuredClone(persisted);
+  });
+  return spawnPersistedTask(structuredClone(persisted));
+}
 
 /** Every `updateTask` call that wrote a public-review posture block. */
 const postureBlockWrites = () => vi.mocked(updateTask).mock.calls.filter(
