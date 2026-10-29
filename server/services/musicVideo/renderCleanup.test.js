@@ -62,6 +62,26 @@ async function seed(entries) {
 }
 
 describe('derived render retention', () => {
+  it('retains upscaled deliverables while retiring obsolete final renders', async () => {
+    await seed([entry('current'), entry('old'), entry('topaz', { upscaledFrom: 'current', upscaleMethod: 'topaz' }), entry('lanczos', { upscaledFrom: 'current', upscaleMethod: 'lanczos' })]);
+    expect((await getRenderCleanup('example-project')).finals.map(item => item.id)).toEqual(['old']);
+    expect(await cleanupSupersededFinals('example-project', { replacementId: 'current' })).toBe(1);
+    expect((await loadHistory()).map(item => item.id)).toEqual(['current', 'topaz', 'lanczos']);
+    expect(existsSync(join(PATHS.videos, 'topaz.mp4'))).toBe(true);
+    expect(existsSync(join(PATHS.videos, 'lanczos.mp4'))).toBe(true);
+  });
+
+  it('retains and reports an upscale already present in the cleanup journal', async () => {
+    const saved = entry('saved-upscale', { upscaledFrom: 'current', upscaleMethod: 'topaz' });
+    await seed([entry('current'), saved]);
+    await saveHistory([entry('current')]);
+    writeFileSync(join(PATHS.videos, '.music-video-render-cleanup.json'), JSON.stringify({ version: 1, entries: [saved] }));
+    expect((await getRenderCleanup('example-project')).finals).toEqual([expect.objectContaining({ id: 'saved-upscale', pending: true, reason: expect.stringMatching(/Upscaled deliverable retained/) })]);
+    expect(await cleanupSupersededFinals('example-project')).toBe(0);
+    expect(existsSync(join(PATHS.videos, 'saved-upscale.mp4'))).toBe(true);
+    expect(existsSync(join(PATHS.videos, '.music-video-render-cleanup.json'))).toBe(true);
+  });
+
   it('retains FableLoom scene and playback videos until their saved owner is deleted', async () => {
     const protectedIds = ['scene', 'entry', 'hold', 'exit'];
     await seed(['current', ...protectedIds, 'unused'].map(id => entry(id)));

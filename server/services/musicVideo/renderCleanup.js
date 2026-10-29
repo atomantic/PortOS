@@ -73,6 +73,14 @@ async function finalInventory(projectId, history, pending = [], boardOwners = nu
   const finals = [];
   const pendingIds = new Set(pending.map(entry => entry.id));
   for (const entry of retirementEntries(history, pending)) {
+    // Upscales are independent deliverables, even when they inherit their
+    // source master's music-video tags. They are not obsolete final renders.
+    if (entry.upscaledFrom) {
+      if (pendingIds.has(entry.id) && entry.musicVideoProjectId === projectId) {
+        finals.push({ id: entry.id, pending: true, filename: entry.filename, createdAt: entry.createdAt, bytes: (await Promise.all(renderFiles(entry).map(size))).reduce((a, b) => a + b, 0), reason: 'Upscaled deliverable retained; review pending cleanup recovery' });
+      }
+      continue;
+    }
     // Only the full-render pipeline owns this tag. Source clips use musicVideo.projectId.
     if (entry.musicVideoProjectId !== projectId || !['music-video', 'music-video-code', 'music-video-document', 'music-video-eidoverse'].includes(entry.modelId) || entry.id === project.renderHistoryId) continue;
     const ids = new Set([entry.id, `video:${entry.filename}`]);
