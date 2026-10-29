@@ -35,10 +35,17 @@ vi.mock('./cosAgentLifecycle.js', async (importOriginal) => ({
   }),
 }));
 
-vi.mock('./cosTaskStore.js', async (importOriginal) => ({
-  ...(await importOriginal()),
-  getTaskById: vi.fn(async (id) => ({ id, status: 'pending', taskType: 'user', metadata: {} })),
-}));
+// A freshly created task: a known spawn-budget episode with no dispatch yet,
+// so the budget gate (#13948) admits it and only ownership decides.
+vi.mock('./cosTaskStore.js', async (importOriginal) => {
+  const { newSpawnBudgetEpisode } = await import('./spawnBudgetProof.js');
+  return {
+    ...(await importOriginal()),
+    getTaskById: vi.fn(async (id) => ({
+      id, status: 'pending', taskType: 'user', metadata: { spawnBudgetProof: newSpawnBudgetEpisode() },
+    })),
+  };
+});
 vi.mock('./agentProviderResolution.js', () => ({
   resolveAgentProviderAndModel: vi.fn(async () => ({ ok: true, provider: { id: 'cloud-cli', type: 'cli' } })),
 }));
