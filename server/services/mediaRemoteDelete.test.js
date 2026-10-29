@@ -32,6 +32,7 @@ const { instanceEvents } = await import('./instanceEvents.js');
 const { peerSyncBus } = await import('./peerSyncEventBus.js');
 const { listMediaTombstones } = await import('./mediaTombstones.js');
 const dataSync = await import('./dataSync.js');
+const notifications = await import('./notifications.js');
 const {
   deleteMediaAnywhere, cancelPendingDelete, initMediaRemoteDelete, MEDIA_DELETE_QUEUE_TTL_MS,
 } = await import('./mediaRemoteDelete.js');
@@ -324,6 +325,44 @@ describe('media delete queue upkeep', () => {
     expect(errors).not.toHaveBeenCalled();
     expect(await listMediaDeleteQueue()).toEqual([]);
     errors.mockRestore();
+  });
+
+  describe('notifies the user when a queued delete is dropped at drain time', () => {
+    const queued = async (extra = {}) => {
+      const queuedAt = new Date().toISOString();
+      await atomicWrite(HISTORY, [row('v1', { originInstanceId: 'peer-o', prompt: 'a red fox', pendingDelete: { peerId: 'rec-owner', queuedAt }, ...extra })]);
+      await atomicWrite(QUEUE, { version: 1, entries: [queueEntry('v1', queuedAt)] });
+      disarmQueue = initMediaRemoteDelete();
+    };
+    const recorded = async () => (await notifications.getNotifications()).filter((n) => n.type === 'media_delete_failed');
+
+    beforeEach(() => notifications.clearAll());
+
+    it.each([
+      ['refused', json(403, { code: 'MEDIA_DELETE_FORBIDDEN' }), 'refused the delete'],
+      ['not held', json(404, { code: 'MEDIA_NOT_HELD' }), 'does not hold it'],
+      ['unusable reply', json(200, { ok: true, tombstone: { key: 'other', deletedAt: new Date().toISOString() } }), 'without a usable confirmation'],
+    ])('records one notification naming the peer and reason: %s', async (_name, response, phrase) => {
+      await queued();
+      net.fetch = vi.fn(async () => response);
+      await listenerFor('peer:online')(registry.peers[0]);
+      const found = await recorded();
+      expect(found).toHaveLength(1);
+      expect(found[0].description).toContain('Example rec-owner');
+      expect(found[0].description).toContain(phrase);
+      expect(found[0].description).toContain('a red fox');
+    });
+
+    it('records none while the owner is still unreachable or after a successful drain', async () => {
+      await queued();
+      net.fetch = vi.fn(unreachable);
+      await listenerFor('peer:online')(registry.peers[0]);
+      expect(await recorded()).toEqual([]);
+      net.fetch = vi.fn(async () => ownerAck('v1'));
+      await listenerFor('peer:online')(registry.peers[0]);
+      expect(await listMediaDeleteQueue()).toEqual([]);
+      expect(await recorded()).toEqual([]);
+    });
   });
 
   it('prunes a removed peer\'s entries when the registry changes', async () => {

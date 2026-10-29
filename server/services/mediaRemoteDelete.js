@@ -28,6 +28,7 @@ import { readHeldImage, localInstanceId } from './imageGen/imageRecords.js';
 import { isSafeFilename } from '../lib/pathSafety.js';
 import { emitMediaHistoryChanged } from './peerSyncEventBus.js';
 import { instanceEvents } from './instanceEvents.js';
+import { addNotification, NOTIFICATION_TYPES, PRIORITY_LEVELS } from './notifications.js';
 
 const QUEUE_FILE = () => join(PATHS.data, 'media-delete-queue.json');
 const SCHEMA_VERSION = 1;
@@ -458,6 +459,32 @@ async function pruneMediaDeleteQueue(peers, nowMs = Date.now()) {
   return dropped.length;
 }
 
+const FAILURE_REASONS = {
+  refused: 'refused the delete',
+  'not-held': 'does not hold it',
+  unusable: 'replied without a usable confirmation',
+};
+
+// A queued delete outlives the page that asked for it, so a dropped one is
+// told through the notification bell rather than a toast. Never rejects.
+async function notifyQueuedDeleteFailed(entry, peer, reason) {
+  try {
+    const row = await MEDIA[entry.kind].getRow(entry.key).catch(() => null);
+    const prompt = typeof row?.prompt === 'string' ? row.prompt.trim().replace(/\s+/g, ' ') : '';
+    const subject = prompt ? `"${prompt.length > 60 ? `${prompt.slice(0, 60)}...` : prompt}"` : entry.key;
+    await addNotification({
+      type: NOTIFICATION_TYPES.MEDIA_DELETE_FAILED,
+      title: `Queued ${entry.kind} delete did not go through`,
+      description: `${peerLabel(peer)} ${FAILURE_REASONS[reason]}, so ${MEDIA[entry.kind].label.toLowerCase()} ${subject} was not deleted there.`,
+      priority: PRIORITY_LEVELS.MEDIUM,
+      link: '/media/history',
+      metadata: { kind: entry.kind, key: entry.key, peerId: peer.id, reason },
+    });
+  } catch (err) {
+    console.error(`❌ Queued delete notification for ${entry.kind} ${entry.key} failed: ${err.message}`);
+  }
+}
+
 const draining = new Set();
 const sameEntry = (a, b) => a.peerId === b.peerId && a.kind === b.kind && a.key === b.key && a.queuedAt === b.queuedAt;
 const dropEntry = (entry) => updateQueue((entries) => entries.filter((e) => !sameEntry(e, entry)));
@@ -514,12 +541,15 @@ async function drainMediaDeleteQueue(peer) {
         } else if (result.outcome === 'not-held') {
           await setPendingFlag(entry.kind, entry.key, null);
           await hideLocally(entry.kind, entry.key);
+          await notifyQueuedDeleteFailed(entry, current, 'not-held');
           console.log(`⏭️ ${peerLabel(current)} does not hold ${entry.kind} ${entry.key}; hidden on this machine only`);
         } else if (retired || result.outcome === 'invalid-ack') {
           await setPendingFlag(entry.kind, entry.key, null);
+          await notifyQueuedDeleteFailed(entry, current, 'unusable');
           console.warn(`⚠️ ${peerLabel(current)} answered queued delete of ${entry.kind} ${entry.key} without a usable tombstone; nothing deleted here`);
         } else {
           await setPendingFlag(entry.kind, entry.key, null);
+          await notifyQueuedDeleteFailed(entry, current, 'refused');
           console.log(`🚫 ${peerLabel(current)} refused queued delete of ${entry.kind} ${entry.key}: ${result.outcome}${result.detail ? ` ${result.detail}` : ''}`);
         }
       } catch (err) {
