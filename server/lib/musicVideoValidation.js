@@ -1399,6 +1399,7 @@ export const musicVideoCastAndSetsDirectionEditSchema = z.object({
     chapters: castSetsText(300).optional(),
     originalName: castSetsText(120).optional(),
   }).strict()).min(1).max(4).optional(),
+  // Every catalog-linked supporting character (the 24-subject cap) plus 4 invented ones.
   cast: z.array(z.object({
     id: z.string().min(1).max(64),
     remove: z.literal(true).optional(),
@@ -1408,7 +1409,7 @@ export const musicVideoCastAndSetsDirectionEditSchema = z.object({
     face: castSetsText(1000).optional(),
     hair: castSetsText(1000).optional(),
     wardrobe: castSetsText(1000).optional(),
-  }).strict()).max(4).optional(),
+  }).strict()).max(28).optional(),
   tests: z.array(z.object({
     index: z.number().int().min(1).max(4),
     remove: z.literal(true).optional(),

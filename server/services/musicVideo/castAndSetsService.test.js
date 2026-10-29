@@ -1133,6 +1133,125 @@ it('keeps catalog-linked cast and places as fixed casting, conditioned on their 
   expect(refs('set:roof')).toBeUndefined();
 });
 
+// #14069: five catalog-linked supporting characters, more than the invented-cast allowance.
+const FIXED_SUPPORTING = ['Anika', 'Boris', 'Cyrus', 'Delia', 'Elio'];
+const fixedCastProject = (extra = {}) => seed({
+  concept: { prompt: 'a vigil', subjects: [
+    { id: 'mvc-lead', kind: 'character', name: 'Keeper', role: 'protagonist', ingredientId: 'cat-lead' },
+    ...FIXED_SUPPORTING.map((name, i) => ({ id: `mvc-${i}`, kind: 'character', name, role: i === 4 ? 'band' : 'supporting', description: `${name} from the catalog`, ingredientId: `cat-${i}` })),
+    { id: 's-note', kind: 'object', name: 'Brass lantern' },
+  ] },
+  visualSpec: { references: [
+    { id: 'mvr-pull-lead', imageId: 'keeper.png', role: 'character', label: 'Keeper', condition: false },
+    ...FIXED_SUPPORTING.map((name) => ({ id: `mvr-pull-${name}`, imageId: `${name.toLowerCase()}.png`, role: 'character', label: name, condition: false })),
+  ] },
+  ...extra,
+});
+// The answer casts four of them and five invented people, and leaves Elio out.
+const fixedCastAnswer = () => JSON.stringify({ ...DIRECTION, cast: [
+  ...FIXED_SUPPORTING.slice(0, 4).map((name) => ({ name, role: '', description: `${name}, as written`, face: 'calm' })),
+  ...['Gusta', 'Halden', 'Ivory', 'Jolie', 'Kitto'].map((name) => ({ name, role: '', description: 'invented', face: 'plain' })),
+] });
+
+it('keeps a catalog-conditioned sheet for every fixed supporting character through regeneration and approval, with invented cast still bounded (#14069)', async () => {
+  runPrompt.mockResolvedValue({ text: fixedCastAnswer() });
+  const project = await fixedCastProject();
+  await service.startCastAndSets(project.id);
+  await runTo(project.id, 'review');
+  const prompt = runPrompt.mock.calls[0][0].prompt;
+  for (const name of FIXED_SUPPORTING) expect(prompt).toContain(`- character: ${name} — ${name} from the catalog`);
+  expect(prompt).toMatch(/- cast: the RECURRING supporting characters[^\n]*every character FIXED CASTING lists[^\n]*plus at most 4 more/);
+  expect(prompt).not.toMatch(/- cast:[^\n]*, at most 4;/);
+
+  let saved = await current(project.id);
+  // All five fixed (the omitted one from its catalog record), four invented, never the protagonist.
+  expect(saved.castAndSets.direction.cast.map((c) => c.name)).toEqual(['Anika', 'Boris', 'Cyrus', 'Delia', 'Gusta', 'Halden', 'Ivory', 'Jolie', 'Elio']);
+  expect(saved.castAndSets.direction.cast.at(-1)).toMatchObject({ id: 'elio', role: 'band member', description: 'Elio from the catalog' });
+  const job = (key) => jobs.findLast((j) => keyOf(j) === key);
+  const refs = (key) => job(key).params.referenceImagePaths?.map((p) => p.split(/[\\/]/).pop());
+  for (const name of FIXED_SUPPORTING) {
+    const key = `cast:${name.toLowerCase()}`;
+    expect(refs(key)).toEqual([`${name.toLowerCase()}.png`]);
+    expect(job(key).params.prompt).toContain(`ONE consistent person, ${name}`);
+  }
+  expect(refs('cast:gusta')).toBeUndefined();
+  expect(jobs.map(keyOf)).not.toContain('cast:kitto');
+
+  // A revision whose answer clears the cast keeps every fixed character's entry and sheet.
+  runPrompt.mockResolvedValue({ text: JSON.stringify({ ...DIRECTION, cast: [] }) });
+  await request(app).post(`/api/music-video/${project.id}/dev-artifacts/${saved.castAndSets.artifactId}/notes`).send({ text: 'Tighten the story' });
+  expect((await request(app).post(`/api/music-video/${project.id}/cast-and-sets/regenerate`).send({})).status).toBe(202);
+  await until(async () => runPrompt.mock.calls.length === 2, 'the revised direction');
+  await runTo(project.id, 'review');
+  saved = await current(project.id);
+  expect(saved.castAndSets.direction.cast.map((c) => c.name)).toEqual(FIXED_SUPPORTING);
+
+  // A director edit cannot drop one silently, and an unrelated edit keeps them all.
+  const removal = await request(app).patch(`/api/music-video/${project.id}/cast-and-sets/direction`).send({ cast: [{ id: 'elio', remove: true }] });
+  expect(removal.status).toBe(422);
+  expect(removal.body.code).toBe('CAST_SETS_FIXED_CAST');
+  expect((await current(project.id)).castAndSets).toEqual(saved.castAndSets);
+  expect((await request(app).patch(`/api/music-video/${project.id}/cast-and-sets/direction`).send({ protagonist: { gesture: 'a slow wave' } })).status).toBe(202);
+  await runTo(project.id, 'review');
+  saved = await current(project.id);
+  expect(saved.castAndSets.direction.cast.map((c) => c.name)).toEqual(FIXED_SUPPORTING);
+
+  expect((await request(app).post(`/api/music-video/${project.id}/cast-and-sets/approve`).send({})).status).toBe(200);
+  const done = await current(project.id);
+  for (const name of FIXED_SUPPORTING) {
+    expect(done.visualSpec.references.find((r) => r.id === `mvr-cs-cast-${name.toLowerCase()}`)).toMatchObject({ role: 'character', condition: false });
+  }
+  // The director's subjects stay as authored; none is duplicated as a check-in subject.
+  expect(done.concept.subjects.filter((s) => !s.id.startsWith('cs-'))).toEqual(project.concept.subjects);
+  expect(done.concept.subjects.filter((s) => s.id.startsWith('cs-cast-'))).toEqual([]);
+  // The planner is told about all of them, and a shot naming all five stays within the per-shot cap.
+  const { musicVideoDirectionContext } = await import('../../lib/musicVideoCreativeContext.js');
+  const context = musicVideoDirectionContext(done.castAndSets.direction);
+  for (const name of FIXED_SUPPORTING) expect(context).toContain(`Cast ${name}`);
+  const { musicVideoConditioningReferences, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES } = await import('../../lib/musicVideoConditioning.js');
+  const shot = musicVideoConditioningReferences(done, { sectionIndex: 0, prompt: 'Anika, Boris, Cyrus, Delia and Elio on the quay' });
+  expect(shot).toHaveLength(MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES);
+  expect(shot[2].id).toBe('mvr-cs-cast-anika');
+});
+
+it('holds reference room for fixed cast sheets and refuses an approval that cannot fit them (#14069)', async () => {
+  runPrompt.mockResolvedValue({ text: fixedCastAnswer() });
+  const project = await fixedCastProject();
+  await service.startCastAndSets(project.id);
+  await runTo(project.id, 'review');
+  const filler = (n) => Array.from({ length: n }, (_, i) => ({ id: `mvr-own-${i}`, imageId: `own-${i}.png`, role: 'mood', condition: false }));
+  const withOwn = (n) => projects.mutateProjectRecord(project.id, (p) => ({ project: { ...p, visualSpec: { ...p.visualSpec, references: [...project.visualSpec.references, ...filler(n)] } } }));
+  await withOwn(15);
+  const before = await current(project.id);
+  const full = await request(app).post(`/api/music-video/${project.id}/cast-and-sets/approve`).send({});
+  expect(full.status).toBe(409);
+  expect(full.body.code).toBe('CAST_SETS_REFERENCE_LIMIT');
+  expect(full.body.error).toContain('the cast sheets for Cyrus, Delia, Elio cannot be added. Remove 3 of');
+  expect(await current(project.id)).toEqual(before);
+  // Exactly that much room: the character and the fixed cast sheets take it, ahead of plates and invented cast.
+  await withOwn(12);
+  expect((await request(app).post(`/api/music-video/${project.id}/cast-and-sets/approve`).send({})).status).toBe(200);
+  const ours = (await current(project.id)).visualSpec.references.filter((r) => r.id.startsWith('mvr-cs-')).map((r) => r.id);
+  expect(ours).toEqual(['mvr-cs-character', ...FIXED_SUPPORTING.map((name) => `mvr-cs-cast-${name.toLowerCase()}`)]);
+});
+
+it('refuses a budget that cannot cover the fixed cast sheets before queueing anything, naming them (#14069)', async () => {
+  runPrompt.mockResolvedValue({ text: fixedCastAnswer() });
+  const project = await fixedCastProject();
+  const { run } = await projects.mutateProjectRecord(project.id, (p) => production.startProductionOnProject(p, {
+    pool: [{ kind: 'image', mode: 'codex', model: null }],
+    processId: 'example-process', limits: { maxReviewAttempts: 2, maxGenerations: 12 }, pricing: { 'image:codex:': 0.25 },
+  }));
+  await service.startCastAndSets(project.id, { productionRunId: run.id });
+  await until(async () => (await current(project.id)).productionRuns[0].status === 'limit-reached', 'the budget halt');
+  const saved = await current(project.id);
+  expect(jobs).toHaveLength(0);
+  expect(saved.castAndSets.status).toBe('failed');
+  expect(saved.productionRuns[0].stopReason || saved.productionRuns[0].reason || saved.castAndSets.stopReason || saved.castAndSets.reason).toMatch(/needs \d+ images, 9 of them supporting cast sheets/);
+  // The selected identities stay in the direction for a resume with a higher limit.
+  expect(saved.castAndSets.direction.cast.filter((c) => FIXED_SUPPORTING.includes(c.name))).toHaveLength(5);
+});
+
 it('grounds an age form and its test frames on the catalog reference selected for that age', async () => {
   runPrompt.mockResolvedValue({ text: JSON.stringify({ ...DIRECTION,
     protagonist: { ...DIRECTION.protagonist, forms: [

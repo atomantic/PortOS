@@ -6,8 +6,9 @@ import { musicVideoAllowsMedia } from '../../lib/musicVideoMediaPolicy.js';
  * Before any image is made, one provider call reads the song as a story and
  * returns the production's cast and world: a logline, one protagonist (face,
  * hair, signature prop, a recurring gesture tied to a lyric hook, continuity
- * rules), 1–4 wardrobe looks mapped to chapters, up to 4 recurring supporting
- * cast members (photographic only), 3–8 sets (one dominant light
+ * rules), 1–4 wardrobe looks mapped to chapters, every catalog-linked supporting
+ * character the director cast plus up to 4 more the model invents (photographic
+ * only), 3–8 sets (one dominant light
  * each) mapped to song sections, 2–4 in-set test frames, an overlay concept,
  * and the 2–4 mood-board images that best show the look. The prompt is told
  * explicitly that the mood board is look/lighting/texture reference only —
@@ -67,7 +68,11 @@ export const CAST_SETS_LIMITS = Object.freeze({
   expressions: 8,
   questions: 4,
   overlayElements: 4,
+  // Supporting cast the model invents. Catalog-linked supporting characters the
+  // director cast (fixedSupportingCast) never count against it: each one keeps
+  // its sheet, bounded only by the project's own subject cap.
   cast: 4,
+  fixedCast: 24,
   forms: 3,
 });
 export const CAST_SETS_IMAGE_ROLES = Object.freeze(['background', 'texture', 'decoration', 'cutout']);
@@ -182,6 +187,20 @@ export function fixedCasting(project) {
  * record the director chose, never on an identity read out of free text.
  */
 export const formSubjects = (project) => fixedCasting(project).filter((f) => f.kind === 'character');
+
+/**
+ * The fixed-casting characters that must each appear in `direction.cast`: every
+ * catalog-linked character except the protagonist, and except an age form of
+ * the protagonist's own catalog record (that one belongs in protagonist.forms).
+ */
+export function fixedSupportingCast(project) {
+  const subjects = project?.concept?.subjects || [];
+  const leadRecords = new Set(subjects.filter((s) => s?.role === 'protagonist' && s.ingredientId).map((s) => s.ingredientId));
+  const recordOf = new Map(subjects.map((s) => [s?.id, s?.ingredientId]));
+  return formSubjects(project)
+    .filter((f) => f.role !== 'protagonist' && !leadRecords.has(recordOf.get(f.id)))
+    .slice(0, CAST_SETS_LIMITS.fixedCast);
+}
 
 function fixedCastingBlock(project) {
   const fixed = fixedCasting(project);
@@ -364,7 +383,9 @@ export function buildCastAndSetsPrompt(project, { moodImages = [], board = null,
     ? 'Some shots lip-sync, so one may be singing.'
     : 'Nobody sings or mouths the words on camera in this video: no singing, open-mouthed or straight-to-lens performance expressions.'}`,
     `- protagonist.forms: when the story shows the protagonist at OTHER ages (a childhood memory, a teenage flashback), one entry per other age, at most ${CAST_SETS_LIMITS.forms}: its age, a short label ("Age 7"), how they look then, their hair and their outfit. The other protagonist fields describe them at their present-story age. When FIXED CASTING lists a character who is the protagonist at that age, put its subject id in subjectId; otherwise subjectId is empty. [] when they appear at one age only.`,
-    `- cast: the RECURRING supporting characters besides the protagonist that the song, concept or guidance calls for (band members, someone who returns across scenes), at most ${CAST_SETS_LIMITS.cast}; [] when the protagonist is alone. Each gets their own photographic character sheet. Shots that name a cast member by name or role are conditioned on that sheet, so give each a distinct name and a plain role word.`,
+    `- cast: the RECURRING supporting characters besides the protagonist that the song, concept or guidance calls for (band members, someone who returns across scenes)${fixedSupportingCast(project).length
+    ? `: every character FIXED CASTING lists that is not the protagonist or one of their other ages, each as its own entry under its own name, plus at most ${CAST_SETS_LIMITS.cast} more`
+    : `, at most ${CAST_SETS_LIMITS.cast}; [] when the protagonist is alone`}. Each gets their own photographic character sheet. Shots that name a cast member by name or role are conditioned on that sheet, so give each a distinct name and a plain role word.`,
     '- Wet or revealing looks use opaque fabric so the video stays safe to post.',
     '- questions: up to three things you need the director to decide.',
   ].join('\n');
@@ -589,18 +610,41 @@ function normalizeSongMap(entries, sets, sections) {
   return [...out.values()].sort((a, b) => a.section - b.section);
 }
 
+const castKey = (name) => String(name || '').trim().toLowerCase();
+
 // Supporting cast: a named person with something to draw (face or description),
-// unique slug ids, never the protagonist again.
-function normalizeCast(cast, protagonist) {
+// unique slug ids, never the protagonist again. Each `fixed` subject (the
+// director's catalog-linked supporting characters) is kept once by name beyond
+// the invented-cast cap; one the answer left out (or left undrawable) is added
+// from its catalog description, unless it is the protagonist or a bound age form.
+function normalizeCast(cast, protagonist, { fixed = [], forms = [] } = {}) {
   const seen = new Set();
-  const lead = String(protagonist?.name || '').trim().toLowerCase();
-  return cast.filter((c) => c.name && (c.face || c.description) && c.name.trim().toLowerCase() !== lead)
-    .slice(0, CAST_SETS_LIMITS.cast).map((c, i) => {
-      let id = slug(c.id) || slug(c.name) || `cast-${i + 1}`;
-      while (seen.has(id)) id = `${id}-${i + 1}`;
-      seen.add(id);
-      return { id, name: c.name, role: c.role || '', description: c.description || '', face: c.face || '', hair: c.hair || '', wardrobe: c.wardrobe || '' };
-    });
+  const lead = castKey(protagonist?.name);
+  const fixedNames = new Set(fixed.map((f) => castKey(f.name)));
+  const placed = new Set();
+  let invented = 0;
+  const kept = cast.filter((c) => {
+    const key = castKey(c.name);
+    if (!key || !(c.face || c.description) || key === lead) return false;
+    if (fixedNames.has(key)) {
+      if (placed.has(key)) return false;
+      placed.add(key);
+      return true;
+    }
+    if (invented >= CAST_SETS_LIMITS.cast) return false;
+    invented += 1;
+    return true;
+  });
+  const bound = new Set(forms.map((f) => f.subjectId).filter(Boolean));
+  const added = fixed
+    .filter((f) => !placed.has(castKey(f.name)) && castKey(f.name) !== lead && !bound.has(f.id))
+    .map((f) => ({ name: f.name, role: f.role === 'band' ? 'band member' : '', description: trimTo(f.description, TEXT) }));
+  return [...kept, ...added].map((c, i) => {
+    let id = slug(c.id) || slug(c.name) || `cast-${i + 1}`;
+    while (seen.has(id)) id = `${id}-${i + 1}`;
+    seen.add(id);
+    return { id, name: c.name, role: c.role || '', description: c.description || '', face: c.face || '', hair: c.hair || '', wardrobe: c.wardrobe || '' };
+  });
 }
 
 // Other ages of the protagonist: a described form, unique slug ids, capped.
@@ -649,11 +693,12 @@ function testsWithMissingForm(tests, forms) {
 /**
  * Merge a parsed (partial) answer onto the current direction and normalize
  * the result. Absent keys keep `previous`; present keys replace (an empty
- * string/array clears the optional text/list fields). Returns
+ * string/array clears the optional text/list fields). `fixedCast` is the
+ * project's fixedSupportingCast: each stays in the cast (see normalizeCast). Returns
  * `{ direction, missing }` — `missing` lists the required parts still absent,
  * so a first pass with an unusable answer can be refused.
  */
-export function mergeCastAndSetsDirection(previous, parsed, { sections = [], medium = null, minSets = CAST_SETS_LIMITS.sets.min } = {}) {
+export function mergeCastAndSetsDirection(previous, parsed, { sections = [], medium = null, minSets = CAST_SETS_LIMITS.sets.min, fixedCast = [] } = {}) {
   const base = previous || {};
   const procedural = (medium || base.medium) === 'procedural';
   const pick = (key, fallback) => (hasOwn(parsed, key) ? parsed[key] : (hasOwn(base, key) ? base[key] : fallback));
@@ -711,7 +756,7 @@ export function mergeCastAndSetsDirection(previous, parsed, { sections = [], med
     protagonist,
     looks,
     // Photographic only: a procedural cast lives in `definitions`.
-    ...(procedural ? {} : { cast: normalizeCast(pick('cast', []), protagonist) }),
+    ...(procedural ? {} : { cast: normalizeCast(pick('cast', []), protagonist, { fixed: fixedCast, forms }) }),
     sets,
     songMap,
     tests,
@@ -781,10 +826,11 @@ function patchItems(list, patches, { what, keyOf, fields, extra = () => ({}) }) 
  * The result goes through the same merge + normalize as a provider answer, so
  * it can never be shaped differently from one; the director may cut the sets
  * down to one. Returns `{ direction, changed }` (`changed` names what actually
- * changed, for the revision record); throws 422 for an unknown item or an edit
- * that would leave the direction unusable.
+ * changed, for the revision record); throws 422 for an unknown item, an edit
+ * that would leave the direction unusable, or one that removes or renames a
+ * catalog-linked supporting character (`fixedCast`; unlink it in Creative setup).
  */
-export function applyCastAndSetsDirectionEdits(previous, edits, { sections = [] } = {}) {
+export function applyCastAndSetsDirectionEdits(previous, edits, { sections = [], fixedCast = [] } = {}) {
   if (edits?.sets?.length && !edits.protagonist && !edits.world && edits.sets.every((s) => Object.hasOwn(s, 'setReference') && !Object.hasOwn(s, 'imageRole'))) {
     const updates = new Map(edits.sets.map((s) => [s.id, s.setReference]));
     if ([...updates.keys()].some((id) => !previous.sets?.some((s) => s.id === id))) {
@@ -820,6 +866,15 @@ export function applyCastAndSetsDirectionEdits(previous, edits, { sections = [] 
     parsed.tests = (previous.tests || []).map((test) => ({ ...test, look: renames.get(test.look) || test.look }));
   }
   if (!procedural && Array.isArray(edits?.cast) && edits.cast.length) {
+    const fixedNames = new Set(fixedCast.map((f) => castKey(f.name)));
+    const locked = edits.cast.flatMap((patch) => {
+      const member = (previous.cast || []).find((c) => c.id === patch.id);
+      const renamed = typeof patch.name === 'string' && castKey(patch.name) !== castKey(member?.name);
+      return member && fixedNames.has(castKey(member.name)) && (patch.remove || renamed) ? [member.name] : [];
+    });
+    if (locked.length) {
+      throw new ServerError(`${locked.join(', ')} ${locked.length > 1 ? 'are' : 'is'} cast from the catalog in Creative setup. Unlink ${locked.length > 1 ? 'them' : 'it'} there to remove or rename ${locked.length > 1 ? 'them' : 'it'}.`, { status: 422, code: 'CAST_SETS_FIXED_CAST' });
+    }
     parsed.cast = patchItems(previous.cast || [], edits.cast.map((c) => ({ ...c, key: c.id })), { what: 'cast member', keyOf: (c) => c.id, fields: EDITABLE_CAST });
   }
   if (Array.isArray(edits?.sets) && edits.sets.length) {
@@ -859,7 +914,7 @@ export function applyCastAndSetsDirectionEdits(previous, edits, { sections = [] 
       throw new ServerError(`An age that is not on the sheet is shown by test ${orphaned.join(', ')}. Give each another age or remove it first.`, { status: 422, code: 'CAST_SETS_UNKNOWN_FORM' });
     }
   }
-  const { direction, missing } = mergeCastAndSetsDirection(previous, parsed, { sections, medium: procedural ? 'procedural' : 'photographic', minSets: 1 });
+  const { direction, missing } = mergeCastAndSetsDirection(previous, parsed, { sections, medium: procedural ? 'procedural' : 'photographic', minSets: 1, fixedCast });
   if (missing.length) throw new ServerError(`That edit would leave the direction without: ${missing.join(', ')}`, { status: 422, code: 'CAST_SETS_EDIT_INVALID' });
   return { direction: { ...direction, look: previous.look || '' }, changed: describeEdits(previous, direction) };
 }

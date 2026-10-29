@@ -65,6 +65,7 @@ import {
   castAndSetsAllowsImages,
   castAndSetsMedium,
   describeDirectionChanges,
+  fixedSupportingCast,
   formSubjects,
   mergeCastAndSetsDirection,
   moodBoardImageList,
@@ -73,10 +74,12 @@ import {
 } from './castAndSetsDirection.js';
 import {
   CAST_SETS_IMAGE_SIZE,
+  CAST_SETS_REF_PREFIX,
   affectedImageKeys,
   buildCastAndSetsImagePlan,
   castAndSetsReferences,
   castAndSetsSubjects,
+  fixedCastSheetsWithoutReference,
   noteImageKeys,
   plannedTests,
 } from './castAndSetsPlan.js';
@@ -238,7 +241,7 @@ async function runDirection(projectId, { providerId, model, effort, notes = [], 
   const parsed = parseCastAndSetsResponse(text);
   if (!parsed) return fail(projectId, 'The creative direction answer had no usable JSON');
   const sections = songSections(project);
-  const merged = mergeCastAndSetsDirection(notes.length ? previous : null, parsed, { sections, medium });
+  const merged = mergeCastAndSetsDirection(notes.length ? previous : null, parsed, { sections, medium, fixedCast: fixedSupportingCast(project) });
   if (merged.missing.length) return fail(projectId, `The creative direction answer is missing: ${merged.missing.join(', ')}`);
   const direction = withCheckedFormSubjects(project, merged.direction, notes.length ? previous : null);
   // The look every image prompt carries. While the director's sheet feedback
@@ -525,6 +528,13 @@ function advance(projectId) {
   return entry.promise;
 }
 
+// What the check-in asks the budget for, so a refusal names the cast it would cover.
+function checkinPlanSize(stage) {
+  const pending = Object.entries(stage.images || {}).filter(([, image]) => image.status === 'pending').map(([key]) => key);
+  const cast = pending.filter((key) => key.startsWith('cast:')).length;
+  return `The Cast & Sets check-in needs ${pending.length} image${pending.length === 1 ? '' : 's'}${cast ? `, ${cast} of them supporting cast sheets` : ''}`;
+}
+
 async function advanceOnce(projectId) {
   const project = await requireProject(projectId);
   const stage = project.castAndSets;
@@ -539,10 +549,11 @@ async function advanceOnce(projectId) {
     const reserved = await reserveCheckinPlan(projectId).catch((error) => ({ error }));
     if (reserved.error) {
       const limit = ['PRODUCTION_SPEND_LIMIT', 'PRODUCTION_BUDGET_EXHAUSTED'].includes(reserved.error.code);
+      const reason = limit ? `${checkinPlanSize(stage)}: ${reserved.error.message}. Raise the run's limit and resume.` : reserved.error.message;
       const out = await mutateProjectRecord(projectId, (current) => {
-        const failed = setCastAndSetsStatus(refundUnusedCheckinSteps(current), 'failed', { reason: reserved.error.message });
+        const failed = setCastAndSetsStatus(refundUnusedCheckinSteps(current), 'failed', { reason });
         return haltProduction(failed.project, stage.productionRunId, {
-          status: limit ? 'limit-reached' : 'blocked', reason: reserved.error.message,
+          status: limit ? 'limit-reached' : 'blocked', reason,
         });
       });
       musicVideoEvents.emit('production', { projectId, runId: out.run.id, run: out.run, action: { type: 'idle' }, project: out.project });
@@ -650,12 +661,18 @@ function queueCheckinCastToCatalog(projectId) {
  */
 function applyApproval(project, now) {
   const stage = project.castAndSets;
+  const references = castAndSetsReferences(project, stage);
+  const unseated = fixedCastSheetsWithoutReference(project, stage, references);
+  if (unseated.length) {
+    const characterLost = stage.images?.character?.imageId && !references.some((r) => r.id === `${CAST_SETS_REF_PREFIX}character`);
+    throw new ServerError(`The project's reference list is full, so the cast sheet${unseated.length > 1 ? 's' : ''} for ${unseated.join(', ')} cannot be added. Remove ${unseated.length + (characterLost ? 1 : 0)} of the project's own visual references and approve again.`, { status: 409, code: 'CAST_SETS_REFERENCE_LIMIT' });
+  }
   let next = {
     ...project,
     visualSpec: {
       references: [], palette: [], typography: '', cameraRules: '', moodBoardId: null,
       ...(project.visualSpec || {}),
-      references: castAndSetsReferences(project, stage),
+      references,
     },
     concept: { ...(project.concept || {}), subjects: castAndSetsSubjects(project, stage) },
   };
@@ -861,7 +878,7 @@ export async function editCastAndSetsDirection(projectId, edits) {
       }
       direction = { ...direction, tests };
     }
-    const edited = applyCastAndSetsDirectionEdits(direction, edits, { sections });
+    const edited = applyCastAndSetsDirectionEdits(direction, edits, { sections, fixedCast: fixedSupportingCast(current) });
     if (newUnknownFormSubjects(current, edited.direction, direction).length) {
       throw new ServerError('That age is linked to a character this video has not cast from the catalog. Link the character in Creative setup first.', { status: 422, code: 'CAST_SETS_UNKNOWN_SUBJECT' });
     }
