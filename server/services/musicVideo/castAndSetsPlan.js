@@ -481,9 +481,12 @@ const castReferenceId = (c) => `${CAST_SETS_REF_PREFIX}cast-${c.id}`.slice(0, 64
  */
 export function fixedCastSheetsWithoutReference(project, stage, references) {
   const fixed = new Set(fixedSupportingCast(project).map((f) => f.name.toLowerCase()));
-  const ids = new Set((references || []).map((r) => r.id));
   return (stage?.direction?.cast || [])
-    .filter((c) => fixed.has(String(c.name || '').trim().toLowerCase()) && stage.images?.[`cast:${c.id}`]?.imageId && !ids.has(castReferenceId(c)))
+    .filter((c) => {
+      const imageId = stage.images?.[`cast:${c.id}`]?.imageId;
+      return fixed.has(String(c.name || '').trim().toLowerCase()) && imageId
+        && !(references || []).some((r) => r.id === castReferenceId(c) && r.imageId === imageId);
+    })
     .map((c) => c.name);
 }
 
