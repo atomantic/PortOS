@@ -474,6 +474,21 @@ export const hasAudioStream = async (videoPath) => {
   return stdout.length > 0;
 };
 
+// Unlike the permissive helper above, distinguish a silent video from a
+// failed probe when a caller must verify that a soundtrack was preserved.
+export const probeVideoAudioPresence = async (videoPath) => {
+  if (typeof videoPath !== 'string' || !videoPath) return null;
+  const ffprobe = await findFfprobe();
+  if (!ffprobe) return null;
+  const result = await execFileAsync(ffprobe, [
+    '-v', 'error', '-select_streams', 'a:0', '-show_entries', 'stream=index',
+    '-of', 'default=nokey=1:noprint_wrappers=1', videoPath,
+  ], safeChildProcessOptions({ timeout: 5000 })).catch(() => null);
+  if (!result) return null;
+  const output = (result.stdout || '').trim();
+  return output === '' ? false : /^\d+$/.test(output) ? true : null;
+};
+
 // Single-video thumbnail extraction. Seeks to mid-clip rather than frame 0
 // because LTX-2 renders fade IN from black: the first ~0.5s is near-zero
 // brightness, so a frame-0 thumbnail looks like a "broken black" tile
@@ -605,6 +620,24 @@ export const probeVideoStreamInfo = async (videoPath) => {
     fps: parseRate(frameRate),
     frameCount: positiveInt(frames),
   };
+};
+
+// Pixel aspect is distinct from raster dimensions. Null means ffprobe could
+// not establish it; callers that require exact display geometry can refuse.
+export const probeVideoPixelAspect = async (videoPath) => {
+  if (typeof videoPath !== 'string' || !videoPath) return null;
+  const stdout = await runFfprobe(['-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=sample_aspect_ratio', '-of', 'default=nokey=1:noprint_wrappers=1', videoPath]);
+  const match = /^\s*(\d+):(\d+)\s*$/.exec(stdout);
+  if (!match || Number(match[1]) <= 0 || Number(match[2]) <= 0) return null;
+  const numerator = Number(match[1]);
+  const denominator = Number(match[2]);
+  if (!Number.isSafeInteger(numerator) || !Number.isSafeInteger(denominator)) return null;
+  return { numerator, denominator };
+};
+
+export const probeSquareVideoPixels = async videoPath => {
+  const aspect = await probeVideoPixelAspect(videoPath);
+  return aspect ? aspect.numerator === aspect.denominator : null;
 };
 
 // What a stream copy needs two clips to share before their video can be joined

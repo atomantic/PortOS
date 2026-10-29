@@ -101,6 +101,12 @@ export const CREDENTIALS = Object.freeze([
     configurePath: '/ai',
   }),
   Object.freeze({
+    id: 'topaz', label: 'Topaz Labs', privateStore: true,
+    unlocks: 'Optional cloud video enhancement.', tier: 'metered',
+    getUrl: 'https://account.topazlabs.com/manage-api', envVars: Object.freeze(['TOPAZ_API_KEY']),
+    settingsPath: 'videoGen.topaz.apiKey', configurePath: '/settings/credentials',
+  }),
+  Object.freeze({
     id: 'civitai',
     privateStore: true,
     label: 'CivitAI',

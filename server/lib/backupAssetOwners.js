@@ -335,7 +335,7 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
     status: 'admitted',
     modules: [
       'services/videoGen/remote.js',
-      'services/videoGen/stitchVideos.js', 'services/videoGen/upscaleVideo.js', 'services/videoGen/upscaleJob.js',
+      'services/videoGen/stitchVideos.js', 'services/videoGen/upscaleVideo.js', 'services/videoGen/upscaleJob.js', 'services/videoGen/topazJob.js',
       'services/videoGen/trimStart.js',
       'services/videoTimeline/local.js', 'services/htmlComposition/index.js',
     ],
