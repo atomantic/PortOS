@@ -67,6 +67,7 @@ export async function assertNoUniqueIgnoredCheckoutPayload(path, runGit = execGi
     if (rel === `node_modules/${WORKTREE_NODE_MODULES_MARKER}` && info.isFile() && info.size === 0) continue;
     if (info.isFile() && (disposableRuntimeArtifact(rel) || await disposableTestCache(path, rel, ignored, verifiedCaches, work))) continue;
     if (info.isFile() && await npmPayload(rel).catch(cacheInspectionFailure)) continue;
+    if (rel === 'data/media-models.json' && info.isFile() && await isPristineMediaRegistry(join(path, rel))) continue;
     const preserved = preservedFiles.find(file => file.scope === 'content' && file.path === rel);
     if (info.isFile() && typeof preserved?.data === 'string') {
       const bytes = Buffer.from(preserved.data, 'base64');
@@ -77,13 +78,24 @@ export async function assertNoUniqueIgnoredCheckoutPayload(path, runGit = execGi
   }
 }
 
+// A registry file lazily seeded by any process that loaded the media models
+// with the default data dir; identical to the seed means nothing user-owned.
+const isPristineMediaRegistry = async file => {
+  const { isPristineRegistrySeed } = await import('../lib/mediaModels.js');
+  return isPristineRegistrySeed(await readFile(file, 'utf8').catch(() => null));
+};
+
 // Regenerable byproducts of running the repo's own tests. Matched by exact
 // producer shape (CPython's interpreter-tagged .pyc, the test-process
 // diagnostics receipt named by UUID), never by directory, so a stray file in
 // the same folder stays protected.
 const PYCACHE_FILE = /(?:^|\/)__pycache__\/[^/]+\.cpython-\d+\.pyc$/;
 const TEST_DIAGNOSTICS_FILE = /^\.cache\/test-process-diagnostics\/[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\.json$/;
-const disposableRuntimeArtifact = rel => PYCACHE_FILE.test(rel) || TEST_DIAGNOSTICS_FILE.test(rel);
+// The quality-snapshot publisher's own retention receipt (appQualitySnapshotMerge.js).
+// It only records guard output for resuming a deferred merge, so it can never be
+// the sole copy of anything once the checkout is being retired.
+const SNAPSHOT_MERGE_RECEIPT = '.cache/quality-snapshot-merge.json';
+const disposableRuntimeArtifact = rel => PYCACHE_FILE.test(rel) || TEST_DIAGNOSTICS_FILE.test(rel) || rel === SNAPSHOT_MERGE_RECEIPT;
 
 /**
  * Branch name to a filesystem-safe, collision-free directory name. The hash
