@@ -921,7 +921,8 @@ function lyricAnchorItem(readiness, scenes) {
 }
 
 /**
- * Plan's shot list: every shot in song order with what the timing check reads —
+ * Plan's shot list: every shot in song order (untimed ones last, `number` null)
+ * with what the timing check reads —
  * its span, the lyric it was planned on, its storyboard action and camera (a
  * director's draft row, else the row derived from the scene) — and each problem
  * the storyboard readiness names for it (`flags`, one sentence each). Lyric
@@ -937,12 +938,15 @@ export function planShotRows(project, readiness = project?.productionReadiness) 
     for (const { sceneId, sung, anchored } of storyboard.lyricAnchors || []) flag(sceneId, `Sung ${quoted(sung)}, anchored to ${quoted(anchored)}`);
   }
   const rows = new Map((storyboard.shots || []).map((row) => [row.sceneId, row]));
-  return (project?.scenes || []).filter((scene) => Number.isFinite(scene?.startSec))
-    .sort((a, b) => a.startSec - b.startSec)
+  // Untimed shots (a new scene before its timing is set) follow the timed ones, unnumbered, so their problems stay visible.
+  const scenes = project?.scenes || [];
+  const timed = scenes.filter((scene) => Number.isFinite(scene?.startSec)).sort((a, b) => a.startSec - b.startSec);
+  const untimed = scenes.filter((scene) => scene && !Number.isFinite(scene.startSec));
+  return [...timed, ...untimed]
     .map((scene, i) => {
       const row = rows.get(scene.sceneId);
       return {
-        scene, number: i + 1,
+        scene, number: i < timed.length ? i + 1 : null,
         lyric: typeof scene.lyricText === 'string' ? scene.lyricText.trim() : '',
         action: row?.action || scene.visualIntent || scene.prompt || '',
         camera: row?.camera || '',
