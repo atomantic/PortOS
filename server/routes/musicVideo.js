@@ -136,6 +136,7 @@ import {
   refreshSongStyleFromSuno,
 } from '../services/musicVideo/projects.js';
 import { requireProject } from '../services/musicVideo/requireProject.js';
+import { labelProjectReferences } from '../services/musicVideo/referenceLabels.js';
 import { buildHandoffManifest, buildHandoffBundle, matchSceneByFileTag } from '../services/musicVideo/handoff.js';
 import { getHistoryItem } from '../services/videoGen/history.js';
 import {
@@ -372,6 +373,12 @@ router.patch('/:id', asyncHandler(async (req, res) => {
   const data = validateRequest(projectUpdateSchema, req.body);
   const updated = await updateProject(req.params.id, data);
   res.json(updated);
+}));
+
+// Names references saved before catalog naming existed; answers only the labels it filled.
+router.post('/:id/references/catalog-labels', asyncHandler(async (req, res) => {
+  await requireProject(req.params.id);
+  res.json({ labels: (await labelProjectReferences(req.params.id, { backfill: true }))?.labels || {} });
 }));
 
 // Finished outside PortOS: the earlier steps count as done without forging approvals.

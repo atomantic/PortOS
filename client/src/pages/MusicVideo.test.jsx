@@ -55,6 +55,7 @@ vi.mock('../services/apiMusicVideo.js', () => ({
   previewMusicVideoMakingOf: vi.fn(),
   exportMusicVideoMakingOf: vi.fn(),
   listMusicVideoProjects: vi.fn(async () => []),
+  labelMusicVideoReferencesFromCatalog: vi.fn(async () => ({ labels: {} })),
   listMusicVideoProjectSummaries: vi.fn(async (params, options) => {
     const res = await listMusicVideoProjects(params, options);
     return Array.isArray(res) ? { items: res, total: res.length, nextCursor: null } : res;
