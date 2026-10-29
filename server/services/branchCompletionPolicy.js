@@ -447,18 +447,28 @@ function reviewedIncarnation(input, policies) {
   if (!owners.length) return null;
   const firstStarted = Math.min(...owners.map(policy => Date.parse(policy.agent.startedAt)));
   const identity = input.checkoutIdentities?.[input.checkoutPath];
+  const primaryIdentity = input.checkoutIdentities?.[input.repoPath];
+  const superseding = owners.find(owner => exactCleanupHandoff(owner, input));
   const prior = [];
+  const supersededBy = new Map();
   // Explicitly resumed owners are this checkout's history even after a move.
   // A mismatching PR must hold, rather than masquerade as unrelated history.
   const resumedOwners = new Set(policies.map(policy => policy.agent.metadata?.resumedFromAgentId).filter(Boolean));
   const current = policies.filter(policy => {
     const workspace = policy.agent.metadata?.workspacePath;
     const target = reviewTarget(policy);
+    const separateCheckout = !samePath(workspace, input.repoPath)
+      && identity && input.checkoutIdentities?.[workspace] && input.checkoutIdentities[workspace] !== identity
+      && primaryIdentity && input.checkoutIdentities[workspace] !== primaryIdentity;
+    // A coordinator running in the primary checkout (a swarm) has no separate
+    // physical identity. It is history only when a later exact cleanup handoff
+    // for this tip/PR/checkout generation superseded it and it never captured this tip.
+    const supersededCoordinator = !separateCheckout && superseding && samePath(workspace, input.repoPath)
+      && identity && primaryIdentity && identity !== primaryIdentity && !capturedTip(policy, input.tip);
     const unrelated = policy.agent.status === 'completed' && !resumedOwners.has(policy.agent.id)
       && policy.completion !== PR_COMPLETIONS.LEAVE_OPEN
-      && isAbsolute(workspace || '') && !samePath(workspace, input.repoPath) && !samePath(workspace, input.checkoutPath)
-      && identity && input.checkoutIdentities?.[workspace] && input.checkoutIdentities[workspace] !== identity
-      && input.checkoutIdentities[input.repoPath] && input.checkoutIdentities[workspace] !== input.checkoutIdentities[input.repoPath]
+      && isAbsolute(workspace || '') && !samePath(workspace, input.checkoutPath)
+      && (separateCheckout || supersededCoordinator)
       && Number.isFinite(Date.parse(policy.agent.startedAt))
       && Date.parse(policy.agent.completedAt) >= Date.parse(policy.agent.startedAt)
       && Date.parse(policy.agent.completedAt) < firstStarted
@@ -466,10 +476,32 @@ function reviewedIncarnation(input, policies) {
       && (!policy.prUrl || parsePullRequestUrl(policy.prUrl))
       && (!target || (target.branch === input.branch && parsePullRequestUrl(target.url)
         && (!policy.prUrl || policy.prUrl === target.url)));
-    if (unrelated) prior.push(policy);
+    if (unrelated) {
+      prior.push(policy);
+      if (!separateCheckout) supersededBy.set(policy.agent.id, superseding.agent.id);
+    }
     return !unrelated;
   });
-  return { current, prior };
+  return { current, prior, supersededBy };
+}
+
+/** A completed cleanup handoff whose own receipt binds this exact PR, merged
+ * tip and server-captured checkout generation. */
+function exactCleanupHandoff(policy, input) {
+  const agent = policy.agent;
+  return completedCleanupForRetirement(policy, input) && retirementPr(policy) === input.prUrl
+    && (!policy.tip || policy.tip === input.tip)
+    && agent.metadata.completedCheckouts?.some(row => completedCheckoutReceiptValid(agent, row)
+      && samePath(row.repoPath, input.repoPath) && row.branch === input.branch && samePath(row.path, input.checkoutPath)
+      && row.head === input.tip && isDeepStrictEqual(row.incarnation, input.checkoutIncarnation)) === true;
+}
+
+// Unreadable capture history cannot prove the run never held this tip.
+function capturedTip(policy, tip) {
+  const rows = policy.agent.metadata?.completedCheckouts;
+  if (rows !== undefined && !Array.isArray(rows)) return true;
+  return policy.tip === tip || policy.agent.metadata?.branchCompletionPolicy?.tip === tip
+    || (rows || []).some(row => !isPlainObject(row) || row.head === tip);
 }
 
 /** Cleanup handoff is retirement evidence only under fresh merged-head and
@@ -621,6 +653,7 @@ export function reviewedRetirementPolicy(input) {
       status: p.agent.status, success: p.agent.result?.success ?? null, completion: p.completion ?? null,
       workspacePath: p.agent.metadata.workspacePath, prUrl: retirementPr(p) ?? null,
       checkoutIdentity: input.checkoutIdentities[p.agent.metadata.workspacePath],
+      ...(incarnation.supersededBy.has(p.agent.id) && { supersededBy: incarnation.supersededBy.get(p.agent.id) }),
     })).sort((a, b) => String(a.id).localeCompare(String(b.id))),
   }) };
 }
