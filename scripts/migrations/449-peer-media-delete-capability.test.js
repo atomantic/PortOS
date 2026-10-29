@@ -13,11 +13,11 @@ describe('peer media.delete capability migration', () => {
     roots.push(rootDir);
     await mkdir(join(rootDir, 'data'), { recursive: true });
     const path = join(rootDir, 'data', 'instances.json');
-    await writeFile(path, JSON.stringify({ self: { instanceId: 's' }, peers: [{ id: 'a' }, { id: 'b', mediaDeleteAllowed: false }, { id: 'c', mediaDeleteAllowed: true }] }));
+    await writeFile(path, JSON.stringify({ self: { instanceId: 's' }, peers: [{ id: 'a', syncSecret: 's'.repeat(32) }, { id: 'b', syncSecret: 's'.repeat(32), mediaDeleteAllowed: false }, { id: 'c', syncSecret: 's'.repeat(32), mediaDeleteAllowed: true }, { id: 'd' }] }));
     expect(await migration.up({ rootDir })).toEqual({ updated: 1 });
     const after = JSON.parse(await readFile(path, 'utf8'));
     expect(after.self).toEqual({ instanceId: 's' });
-    expect(after.peers.map(p => p.mediaDeleteAllowed)).toEqual([true, false, true]);
+    expect(after.peers.map(p => p.mediaDeleteAllowed)).toEqual([true, false, true, undefined]);
     expect(await migration.up({ rootDir })).toEqual({ updated: 0 });
     expect(JSON.parse(await readFile(path, 'utf8'))).toEqual(after);
   });

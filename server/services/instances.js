@@ -168,7 +168,7 @@ function sameAuth(a, b) {
 // are local-only too, so peers cannot discover or influence our assignments.
 export function redactPeerForWire(peer) {
   if (!peer || typeof peer !== 'object') return peer;
-  if (!('auth' in peer) && !('mediaProvider' in peer) && !('mediaProviderStatus' in peer)
+  if (!('auth' in peer) && !('mediaProvider' in peer) && !('mediaDeleteAllowed' in peer) && !('mediaProviderStatus' in peer)
     && !('tcAddress' in peer) && !('syncSecret' in peer)) {
     return peer;
   }
@@ -176,6 +176,7 @@ export function redactPeerForWire(peer) {
     auth: _auth,
     syncSecret: _syncSecret,
     mediaProvider: _mediaProvider,
+    mediaDeleteAllowed: _mediaDeleteAllowed,
     mediaProviderStatus: _mediaProviderStatus,
     tcAddress: _tcAddress,
     ...rest
@@ -348,7 +349,9 @@ export const peerMediaSyncMode = (peer) => (MEDIA_SYNC_MODES.includes(peer?.medi
 
 // Standing capability: may this paired peer delete media on THIS machine?
 // Peers are trusted; the grant is ON unless the operator explicitly refuses it
-// (an absent field reads as allowed). Machine-local — set per peer in Instances.
+// (an absent field reads as allowed). Announce-created peers store no field: an
+// announcement alone grants nothing, and the delete route separately requires a
+// pair-authenticated caller. Machine-local — set per peer in Instances.
 export const peerMayDeleteMedia = (peer) => peer?.mediaDeleteAllowed !== false;
 
 // Categories that stay on for a peer even when the user's master `syncEnabled`
@@ -1294,7 +1297,6 @@ export async function handleAnnounce({ address, port, instanceId, name, host }) 
       enabled: true,
       syncEnabled: false,
       syncCategories: { ...DEFAULT_SYNC_CATEGORIES },
-      mediaDeleteAllowed: true,
       consecutiveFailures: 0,
       nextProbeAt: null,
       directions: ['inbound']

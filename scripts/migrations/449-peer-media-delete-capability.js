@@ -1,4 +1,4 @@
-/** Grant the standing media.delete capability to already-paired peers. */
+/** Grant the standing media.delete capability to already-paired peers (those holding a syncSecret). */
 import { join } from 'node:path';
 import { readJsonOrNull, writeJsonAtomic } from './_lib.js';
 
@@ -9,8 +9,9 @@ export default {
     if (!data || !Array.isArray(data.peers)) return { updated: 0, reason: 'no-peers' };
     let updated = 0;
     const peers = data.peers.map(peer => {
-      // Only an absent field is filled; an explicit false is the operator's refusal.
-      if (!peer || typeof peer !== 'object' || Object.hasOwn(peer, 'mediaDeleteAllowed')) return peer;
+      // Only paired peers get the grant (announce-only records stay untouched), and only
+      // an absent field is filled; an explicit false is the operator's refusal.
+      if (!peer || typeof peer !== 'object' || !peer.syncSecret || Object.hasOwn(peer, 'mediaDeleteAllowed')) return peer;
       updated++;
       return { ...peer, mediaDeleteAllowed: true };
     });
