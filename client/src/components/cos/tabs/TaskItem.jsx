@@ -817,8 +817,8 @@ export default function TaskItem({ task, agent = null, liveOutput, isSystem, spa
                     <Play size={14} aria-hidden="true" />
                   </button>
                 )}
-                {task.status === 'pending' && !task.approvalRequired
-                  && (!task.metadata?.spawnBudgetProof || task.metadata?.spawnBudgetReconciledHold === 'true' || budgetResetAvailable)
+                {(task.status === 'pending' || (task.status === 'in_progress' && agent?.status !== 'running')) && !task.approvalRequired
+                  && (task.status === 'in_progress' || !task.metadata?.spawnBudgetProof || task.metadata?.spawnBudgetReconciledHold === 'true' || budgetResetAvailable)
                   && (budgetResetConfirm ? (
                     <ConfirmButtonPair prompt="Reset spawn count to zero and run? Failure count stays." confirmText="Reset and run"
                       ariaLabel="Confirm reset spawn budget and run" busy={budgetResetting} tone="warning" largeTouchTargets

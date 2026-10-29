@@ -11,6 +11,7 @@ vi.mock('./cosState.js', () => ({ readAgentsStateForSafetyCheck: vi.fn(async () 
 
 const { getAllTasks, reviveBlockedTask, updateTask } = await import('./cosTaskStore.js');
 const { retryTasksResolvedByInvestigation } = await import('./investigationRetry.js');
+const { newSpawnBudgetEpisode } = await import('./spawnBudgetProof.js');
 
 const investigation = (metadata = {}) => ({
   id: 'sys-inv',
@@ -51,6 +52,16 @@ describe('retryTasksResolvedByInvestigation', () => {
     expect(await retryTasksResolvedByInvestigation(investigation())).toEqual({ retried: [],
       skipped: [{ taskId: 'task-1', reason: 'spawn-budget-reconciliation-required' }] });
     expect(reviveBlockedTask).not.toHaveBeenCalled();
+  });
+
+  it('continues a proven undispatched episode only under the inactive-owner fence', async () => {
+    getAllTasks.mockResolvedValue(queues({ user: [{ id: 'task-1', status: 'blocked', metadata: {
+      spawnBudgetProof: newSpawnBudgetEpisode(),
+    } }] }));
+    expect((await retryTasksResolvedByInvestigation(investigation())).retried).toEqual(['task-1']);
+    expect(reviveBlockedTask).toHaveBeenCalledWith('task-1', expect.anything(), 'user', expect.objectContaining({
+      expectedStatus: 'blocked', recoveryOwner: { id: 'undispatched-investigation-retry', startedAt: null, requireInactive: true },
+    }));
   });
 
   it('revives the blocked task the investigation was diagnosing, stamping the auto-retry budget', async () => {

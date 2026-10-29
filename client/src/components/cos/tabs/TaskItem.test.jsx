@@ -41,6 +41,12 @@ describe('TaskItem task source', () => {
     await waitFor(() => expect(api.resetSpawnBudgetAndRun).toHaveBeenCalledWith(task.id, { silent: true }));
   });
 
+  it('offers the same explicit recovery for a stopped in-progress orphan', () => {
+    render(<TaskItem task={{ ...task, status: 'in_progress' }} isSystem onRefresh={vi.fn()} providers={providers} />);
+    expect(screen.getByRole('button', { name: 'Reset spawn budget and run' })).toBeInTheDocument();
+    expect(api.resetSpawnBudgetAndRun).not.toHaveBeenCalled();
+  });
+
   it('uses the scheduled task learning bucket for its ETA instead of generic task text', () => {
     const scheduled = {
       ...task,

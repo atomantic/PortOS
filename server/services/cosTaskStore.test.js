@@ -190,6 +190,10 @@ it('reconciles a stopped stale completion only against its latest episode dispat
   dispatchReceipt.expected = dispatchReceipt.expected.map(([key, value]) => [key, key === 'totalSpawnCount' ? '3' : value]);
   expect(await reconcileSpawnBudget(fresh.id)).toEqual({ reconciled: false, reason: 'dispatch-receipt-conflict' });
   dispatchReceipt.expected = dispatchReceipt.expected.map(([key, value]) => [key, key === 'totalSpawnCount' ? '2' : value]);
+  mock.writeFailure = new Error('reconciliation interrupted');
+  await expect(reconcileSpawnBudget(fresh.id)).rejects.toThrow('reconciliation interrupted');
+  mock.writeFailure = null;
+  expect(Number((await getTaskById(fresh.id)).metadata.totalSpawnCount)).toBe(1);
   mock.state.agents['agent-other'] = { id: 'agent-other', taskId: fresh.id, status: 'running' };
   expect(await reconcileSpawnBudget(fresh.id)).toEqual({ reconciled: false, reason: 'task-or-owner-changed' });
   delete mock.state.agents['agent-other'];
@@ -256,6 +260,27 @@ it('resets a pending spawn budget only while the captured task and owner remain 
   expect(saved.status).toBe('pending');
   expect(saved.metadata).toMatchObject({ failureCount: '3', spawnBudgetProof: { baseline: 0, dispatch: null } });
   expect(saved.metadata.totalSpawnCount).toBeUndefined();
+});
+
+it('requeues an explicitly reset orphan with its retained checkout and failure count under the owner fence', async () => {
+  await seed('user', [{ id: 'task-reset-orphan', status: 'in_progress', priority: 'MEDIUM', description: 'Interrupted work', metadata: {
+    totalSpawnCount: '2', failureCount: '3', lastSpawnedAt: '2026-01-01T00:00:00.000Z',
+  } }]);
+  const task = await getTaskById('task-reset-orphan');
+  mock.state.agents['agent-original'] = { id: 'agent-original', taskId: task.id, status: 'completed', startedAt: 'start' };
+  const options = { expectedStatus: 'in_progress', expectedTask: { description: task.description, priority: task.priority, metadata: task.metadata },
+    recoveryOwner: { id: 'agent-original', startedAt: 'start', requireInactive: true },
+    spawnBudgetOperation: { kind: 'reset', requireInactive: true }, suppressDequeue: true };
+  mock.state.agents['agent-other'] = { id: 'agent-other', taskId: task.id, status: 'running' };
+  const patch = { status: 'pending', metadata: { totalSpawnCount: undefined, existingBranch: 'fix/example',
+    resumeWorktreePath: '/fixture/worktree', resumedFromAgentId: 'agent-original' } };
+  expect(await updateTask(task.id, patch, 'user', options)).toMatchObject({ statusChanged: true });
+  delete mock.state.agents['agent-other'];
+  const saved = await updateTask(task.id, patch, 'user', options);
+  expect(saved).toMatchObject({ status: 'pending', metadata: { failureCount: '3', existingBranch: 'fix/example',
+    resumeWorktreePath: '/fixture/worktree', resumedFromAgentId: 'agent-original', spawnBudgetProof: { baseline: 0, dispatch: null } } });
+  expect(saved.metadata.totalSpawnCount).toBeUndefined();
+  expect(mock.events.at(-1).payload.suppressDequeue).toBe(true);
 });
 
 it('wakes the exact local parent from a persisted completed-follow-up edit', async () => {

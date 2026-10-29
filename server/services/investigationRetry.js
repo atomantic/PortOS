@@ -24,7 +24,7 @@
 
 import { getAllTasks, reviveBlockedTask, updateTask } from './cosTaskStore.js';
 import { emitLog } from './cosEvents.js';
-import { matchesSpawnBudgetProof, spawnBudgetCount } from './spawnBudgetProof.js';
+import { matchesSpawnBudgetProof, spawnBudgetCount, validSpawnBudgetEpisode } from './spawnBudgetProof.js';
 import {
   MAX_AUTO_RETRIES_PER_TASK,
   RETRY_SKIP_REASONS,
@@ -82,14 +82,17 @@ export async function retryTasksResolvedByInvestigation(investigation, { now = D
     const owner = state?.trusted ? state.agents?.[task.metadata?.spawnBudgetProof?.dispatch?.agentId] : null;
     const count = spawnBudgetCount(task.metadata?.totalSpawnCount);
     const charged = spawnBudgetCount(task.metadata?.spawnBudgetProof?.dispatch?.totalSpawnCount);
+    const undispatched = state?.trusted && validSpawnBudgetEpisode(task.metadata?.spawnBudgetProof)
+      && task.metadata.spawnBudgetProof.dispatch === null
+      && spawnBudgetCount(task.metadata.totalSpawnCount ?? 0) === spawnBudgetCount(task.metadata.spawnBudgetProof.baseline ?? 0);
     if (owner?.status === 'completed' && matchesSpawnBudgetProof(task, owner) && count !== null && charged !== null && count < charged) {
       const { reconcileSpawnBudget } = await import('./spawnBudgetReconciliation.js');
       const result = await reconcileSpawnBudget(task.id).catch(() => null);
       skipped.push({ taskId: task.id, reason: result?.reconciled ? 'spawn-budget-reconciled-held' : 'spawn-budget-reconciliation-required' });
       continue;
     }
-    if (!owner || owner.status !== 'completed' || !owner.startedAt || !matchesSpawnBudgetProof(task, owner)
-      || count === null || count !== charged) {
+    if (!undispatched && (!owner || owner.status !== 'completed' || !owner.startedAt || !matchesSpawnBudgetProof(task, owner)
+      || count === null || count !== charged)) {
       skipped.push({ taskId: task.id, reason: 'spawn-budget-reconciliation-required' });
       continue;
     }
@@ -101,7 +104,7 @@ export async function retryTasksResolvedByInvestigation(investigation, { now = D
       { metadata: autoRetryMetadata(task, investigation.id, now) },
       task.taskType,
       { expectedStatus: 'blocked', expectedTask: { description: task.description, priority: task.priority, metadata: task.metadata },
-        recoveryOwner: { id: owner.id, startedAt: owner.startedAt, requireInactive: true } }
+        recoveryOwner: { id: owner?.id || 'undispatched-investigation-retry', startedAt: owner?.startedAt || null, requireInactive: true } }
     ).catch((err) => ({ error: err.message }));
 
     if (result?.error || result?.statusChanged) {

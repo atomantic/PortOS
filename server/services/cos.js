@@ -739,7 +739,8 @@ export async function forceSpawnTask(taskId, { resetSpawnBudget = false } = {}) 
   maintenance.assertOpen();
   let task = await getTaskById(taskId);
   if (!task) return { error: 'Task not found' };
-  if (task.status !== 'pending') return { error: `Task is ${task.status}, not pending` };
+  const resetOrphan = resetSpawnBudget && task.status === 'in_progress';
+  if (task.status !== 'pending' && !resetOrphan) return { error: `Task is ${task.status}, not pending` };
   if (task.approvalRequired) return { error: 'Task requires approval before it can be spawned' };
 
   if (!isDaemonRunning()) return { error: 'CoS daemon is stopped — start it before force-spawning tasks' };
@@ -772,6 +773,7 @@ export async function forceSpawnTask(taskId, { resetSpawnBudget = false } = {}) 
   // with the refusal behind it.
   const runningAgents = runningAgentsByTaskId(running);
   const holder = runningAgents.get(taskId);
+  if (resetOrphan && holder) return { error: `Agent ${holder.id} still owns this task` };
   if (spawningAgentForTask(taskId, runningAgents)) {
     return { error: `Agent ${holder.id} is already running this task` };
   }
@@ -808,10 +810,14 @@ export async function forceSpawnTask(taskId, { resetSpawnBudget = false } = {}) 
   if (budgetHold && !resetSpawnBudget) return { error: `${budgetHold}. Inspect dispatch history or explicitly reset the spawn budget before running.` };
   if (resetSpawnBudget) {
     if (!budgetHold) return { error: 'Spawn budget is already verified; no reset is needed' };
-    const saved = await updateTask(task.id, { metadata: { totalSpawnCount: undefined } }, task.taskType || 'user', {
-      expectedStatus: 'pending', expectedTask: { description: task.description, priority: task.priority, metadata: task.metadata },
-      recoveryOwner: { id: 'explicit-spawn-budget-reset', startedAt: null, requireInactive: true },
-      spawnBudgetOperation: { kind: 'reset', requireInactive: true },
+    const orphan = resetOrphan ? await import('./explicitSpawnBudgetReset.js')
+      .then(({ prepareExplicitOrphanBudgetReset }) => prepareExplicitOrphanBudgetReset(task)) : null;
+    if (orphan?.error) return { error: orphan.error };
+    const saved = await updateTask(task.id, { ...(resetOrphan ? { status: 'pending' } : {}),
+      metadata: { ...orphan?.pointer, totalSpawnCount: undefined } }, task.taskType || 'user', {
+      expectedStatus: task.status, expectedTask: { description: task.description, priority: task.priority, metadata: task.metadata },
+      recoveryOwner: { id: orphan?.owner?.id || 'explicit-spawn-budget-reset', startedAt: orphan?.owner?.startedAt || null, requireInactive: true },
+      spawnBudgetOperation: { kind: 'reset', requireInactive: true }, suppressDequeue: true,
     });
     if (!saved || saved.error || saved.statusChanged) return { error: 'Task or ownership changed before spawn budget reset' };
     task = { ...saved, taskType: task.taskType || 'user' };
