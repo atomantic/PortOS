@@ -190,6 +190,7 @@ describe('Topaz job boundary', () => {
     await runVideoUpscale(params);
     expect(state.result.topazRecoveryAvailable).toBe(true);
     state.invalidOutput = false;
+    state.key = 'rotated-key-for-same-account';
     state.fetches = [];
     await recoverTopazResult(jobId);
     const recovered = { ...state.enqueued.params, jobId };

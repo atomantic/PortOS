@@ -75,7 +75,9 @@ export async function reconcileTopazStatus(jobId, { cancelRemote = false } = {})
   if (cancelRemote && ['queued', 'running'].includes(job.status)) throw new ServerError('Cancel the active job through the render queue.', { status: 409, code: 'TOPAZ_JOB_ACTIVE' });
   if (cancelRemote && job.result?.topazUncertain !== true) throw new ServerError('This Topaz request is already settled.', { status: 409, code: 'TOPAZ_JOB_SETTLED' });
   const key = await topazKey();
-  if (topazKeyFingerprint(key) !== job.params.keyFingerprint) throw new ServerError('The Topaz credential changed since this request.', { status: 409, code: 'TOPAZ_KEY_CHANGED' });
+  // Topaz authorizes the stored request ID against the current account. A key
+  // may have been rotated since submission; read-only reconciliation and the
+  // explicit cancellation should still work if the replacement has access.
   if (cancelRemote) await topazRequest(`/video/${job.params.requestId}`, { method: 'DELETE', key });
   const status = await topazRequest(`/video/${job.params.requestId}/status`, { key });
   const allowed = ['requested', 'accepted', 'initializing', 'preprocessing', 'processing', 'postprocessing', 'complete', 'canceling', 'canceled', 'failed'];
@@ -94,8 +96,9 @@ export async function recoverTopazResult(jobId) {
   try {
     const status = await reconcileTopazStatus(jobId);
     if (status.status !== 'complete') throw new ServerError('Topaz has not confirmed that this result is complete.', { status: 409, code: 'TOPAZ_RECOVERY_UNAVAILABLE' });
+    const keyFingerprint = topazKeyFingerprint(await topazKey());
     await registerStaging(preparedId).catch(() => { throw new ServerError('Could not prepare Topaz staging.', { status: 500, code: 'TOPAZ_PREPARE_FAILED' }); });
-    const result = await enqueueJob({ kind: 'video-upscale', params: { ...job.params, preparedId, resumeOnly: true, topazRecovery: false, recoveryParentId: jobId } })
+    const result = await enqueueJob({ kind: 'video-upscale', params: { ...job.params, keyFingerprint, preparedId, resumeOnly: true, topazRecovery: false, recoveryParentId: jobId } })
       .catch(async error => { await cleanupTopazStaging(preparedId).catch(() => { throw new ServerError('Could not clean Topaz staging.', { status: 500, code: 'TOPAZ_CLEANUP_FAILED' }); }); throw error; });
     releaseTopazStaging(preparedId);
     return result;
