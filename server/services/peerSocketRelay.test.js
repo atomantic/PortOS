@@ -18,8 +18,9 @@ vi.mock('./instanceIdentity.js', () => ({
 const applyPeerSyncEvent = vi.hoisted(() => vi.fn(async () => ({ applied: false })));
 vi.mock('./peerSyncEvents.js', () => ({ applyPeerSyncEvent }));
 
-const { connectToPeer, disconnectFromPeer } = await import('./peerSocketRelay.js');
+const { connectToPeer, disconnectFromPeer, peerRealtimeSyncSince } = await import('./peerSocketRelay.js');
 const { instanceEvents } = await import('./instanceEvents.js');
+const { peerFetch } = await import('../lib/peerHttpClient.js');
 
 const PEER = { id: 'peer-example', name: 'Example Peer', address: '127.0.0.1' };
 const MALFORMED = [null, undefined, 'agent', 42, [], { agent: null }, {}, { id: '' }, { agent: { id: 7 } }];
@@ -119,5 +120,43 @@ describe('peer socket relay with hostile payloads', () => {
       [PEER.id, 'malformed'],
       [PEER.id, { id: 'second', peerId: 'peer-spoofed' }],
     ]);
+  });
+
+  it('reports a live realtime subscription only for a connection that names this install, until it drops', async () => {
+    const instanceIds = [];
+    httpServer = createServer((req, res) => res.end('{}'));
+    ioServer = new Server(httpServer);
+    ioServer.on('connection', (socket) => {
+      instanceIds.push(socket.handshake.headers['x-portos-instance-id'] ?? null);
+      socket.emit('peer:sync:available', { v: 1 });
+      socket.on('peer:sync:subscribe', () => {
+        socket.emit('peer:sync:subscribed');
+        // Emits are ordered per socket: once this lands, so has the ack.
+        socket.emit('cos:agent:spawned', { agent: { id: 'agent-marker' } });
+      });
+    });
+    const port = await new Promise((resolve) => httpServer.listen(0, '127.0.0.1', () => resolve(httpServer.address().port)));
+    const realtime = () => new Promise((resolve) => instanceEvents.once('peer:sync:realtime', resolve));
+
+    // Unpaired: the socket carries no identity, so the peer would send it nothing.
+    const acknowledged = new Promise((resolve) => instanceEvents.once('peer:agent:spawned', resolve));
+    connectToPeer({ ...PEER, port });
+    await acknowledged;
+    expect(peerRealtimeSyncSince(PEER.id)).toBeNull();
+    disconnectFromPeer(PEER.id);
+
+    // Paired, after a first request resolved this install's identity (as the probe does).
+    const paired = { ...PEER, port, syncSecret: 'example-pair-secret-'.padEnd(48, 'x'), peerAuthAccepted: true };
+    await peerFetch(`http://127.0.0.1:${port}/`, {}, paired).then((res) => res.text());
+    const live = realtime();
+    connectToPeer(paired);
+    expect(await live).toEqual({ peerId: PEER.id, live: true });
+    expect(instanceIds).toEqual([null, 'self-example-instance']);
+    expect(peerRealtimeSyncSince(PEER.id)).toEqual(expect.any(Number));
+
+    const dropped = realtime();
+    for (const socket of ioServer.of('/').sockets.values()) socket.disconnect(true);
+    expect(await dropped).toEqual({ peerId: PEER.id, live: false });
+    expect(peerRealtimeSyncSince(PEER.id)).toBeNull();
   });
 });

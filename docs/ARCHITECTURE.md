@@ -185,6 +185,41 @@ Server Event → Socket.IO → socket.js → React Component State Update
    c. Update usage metrics
 ```
 
+### Peer Sync Flow
+
+Each install pulls from its peers (`server/services/syncOrchestrator.js`).
+
+- **Snapshot loop.** `syncAllPeers` runs every 60s, and `syncWithPeer` runs at
+  once on `peer:online` and on a manual sync. Each enabled snapshot category is
+  a checksum fetch, plus a snapshot fetch when the checksum moved.
+- **Realtime frames.** Video history changes travel as `peer:sync:event` frames
+  (`peerSyncEventBus.js` emits them, `peerSyncEvents.js` applies them). Gallery
+  images send delete frames only. The receiver's relay socket
+  (`peerSocketRelay.js`) subscribes after the peer advertises
+  `peer:sync:available`. Frames go only to a paired relay that names this
+  install, for a category the sender shares with it. A sender announces only
+  rows it created and deletes of its own rows, and a frame applies without
+  waiting for the loop.
+- **Safety net.** From a peer with a live subscription (`peerRealtimeSyncSince`),
+  the 60s tick re-pulls `videoHistory` only every `SAFETY_NET_INTERVAL_MS`
+  (5 min). It pulls sooner when the subscription went live after the last
+  snapshot, since frames sent during that gap were missed. That snapshot repairs
+  missed frames and carries rows the peer holds but did not create. A peer
+  without a live subscription keeps the 60s cadence: an older version that never
+  advertises the channel, an unpaired peer, or a relay that is down. Every other
+  category keeps the 60s cadence, and `peer:online` and a manual sync always pull
+  everything. Gallery images ride the library sweep's own 60s timer
+  (`sharing/index.js`), which is unchanged because it is also how new images
+  arrive.
+- **Tombstones.** A delete records a tombstone (`data/media-tombstones.json`)
+  before the files are trashed. The tombstone rides the frame, the
+  `videoHistory` snapshot and the library manifest, so a peer that was offline
+  during the delete retires its copy on its next sync. No peer can re-offer the
+  row. A peer's tombstone is admitted only from a paired peer with media delete
+  allowed that owns or holds the row (`mediaTombstoneAuthorization.js`).
+  Deleting a row owned elsewhere sends `POST /api/peer-media/delete` to the
+  owner (`mediaRemoteDelete.js`).
+
 ### Browser Automation Flow
 
 ```
