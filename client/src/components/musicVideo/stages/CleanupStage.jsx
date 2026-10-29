@@ -62,6 +62,7 @@ export default function CleanupStage({ board }) {
   };
   const finals = inventory?.finals || [];
   const eligible = finals.filter(file => !file.reason);
+  const recoverable = finals.filter(file => file.recoverable);
   const stale = inventory?.segments.stale || [];
   const looks = inventory?.segments.unusedLooks || [];
   return (
@@ -71,6 +72,7 @@ export default function CleanupStage({ board }) {
           <h3 className="font-semibold">Production cleanup</h3>
           <p className="text-sm text-port-text-muted">Successful rerenders replace superseded final videos and shot segments. Source takes, stills, and cutting-room content stay in Assets.</p>
           <p className="mt-2 text-sm text-port-text-muted">Cleanup permanently removes derived render files. The latest final, current shot renders, and referenced composites stay. Film-look comparisons stay until you remove unused looks below.</p>
+          {recoverable.length > 0 && <p className="mt-2 text-sm text-port-text-muted">Cleanup can restore retained upscales ({formatCount(recoverable.length)}) to video history without removing their files.</p>}
         </div>
         <button type="button" className={ACTION} disabled={busy} onClick={() => refresh.current()}><RefreshCw size={16} />Refresh</button>
       </div>
@@ -84,7 +86,7 @@ export default function CleanupStage({ board }) {
           <InventoryCard title="Unused film-look versions" files={looks} />
         </div>
         <div className="flex flex-wrap gap-2">
-          <button type="button" className={ACTION} disabled={busy || !(eligible.length + stale.length)} onClick={() => clean(false)}><Trash2 size={16} />Remove superseded renders</button>
+          <button type="button" className={ACTION} disabled={busy || !(eligible.length + stale.length + recoverable.length)} onClick={() => clean(false)}><Trash2 size={16} />{recoverable.length ? 'Recover upscales and remove superseded renders' : 'Remove superseded renders'}</button>
           <button type="button" className={ACTION} disabled={busy || !looks.length} onClick={() => clean(true)}><Trash2 size={16} />Remove superseded renders and unused looks</button>
         </div>
         {busy && <p role="status" className="text-sm">Cleaning render files…</p>}
