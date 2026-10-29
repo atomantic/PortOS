@@ -83,14 +83,18 @@ export async function withLocalImageOrigin(meta) {
  * Give an image this machine just wrote without a sidecar (a mood-board copy,
  * a plain external render) one naming this machine as origin with its creation
  * time, so its age and owner travel with it. An existing sidecar is left as it
- * is: origin is set once. Call inside the writer's backup lease.
+ * is: origin is set once, unless `replace` says the bytes were just rewritten
+ * under a reused name, when any sidecar left from the earlier image is stale and
+ * a fresh creation stamp makes the time-aware tombstone check treat it as new.
+ * Call inside the writer's backup lease.
  */
-export async function writeLocalImageSidecarIfMissing(filename) {
+export async function writeLocalImageSidecarIfMissing(filename, { replace = false } = {}) {
   if (!isSafeFilename(filename, ['.png', '.jpg', '.jpeg', '.webp', '.gif', '.avif'])) return false;
   const stem = filename.replace(/\.[^.]+$/, '');
   const paths = [join(PATHS.images, `${stem}.metadata.json`), join(PATHS.images, `${filename}.metadata.json`)];
-  if (paths.some((path) => existsSync(path))) return false;
-  await atomicWrite(paths[0], await withLocalImageOrigin({}));
+  const existing = paths.filter((path) => existsSync(path));
+  if (existing.length && !replace) return false;
+  await atomicWrite(existing[0] || paths[0], await withLocalImageOrigin({}));
   return true;
 }
 

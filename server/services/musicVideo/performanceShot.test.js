@@ -18,6 +18,7 @@ vi.mock('../../lib/fileUtils.js', async (importOriginal) => makePathsProxy(await
 }));
 const getProject = vi.fn();
 vi.mock('./projects.js', () => ({ mutateProjectRecord: async (_id, transform) => { const result = transform(await getProject()); getProject.mockResolvedValue(result.project); return result; }, getProject: (...a) => getProject(...a), listProjects: vi.fn(async () => []), updateProject: vi.fn() }));
+vi.mock('../instanceIdentity.js', () => ({ UNKNOWN_INSTANCE_ID: 'unknown', getInstanceId: async () => 'local-inst' }));
 vi.mock('../settings.js', () => ({ getSettings: vi.fn(async () => ({})) }));
 // A pre-#9266 take's old master is found through the linked track's renders.
 const getTrack = vi.fn(async () => null);
@@ -577,6 +578,9 @@ describe.skipIf(!ffmpeg)('accepted-prefix continuation render (#9348)', () => {
     const { startPerformanceRepair } = await import('./performanceRepair.js');
     const repair = await startPerformanceRepair('mv-1', 'mvs-1', { excerptId: 'draft', sourceAssetId: 'accepted', boundarySec: 14 });
     const [prefix, suffix] = repair.project.scenes;
+    // The boundary frame names this machine as owner, so deleting it reaches peers.
+    const frameSidecar = JSON.parse(await readFile(join(PATHS.images, suffix.referenceImageId.replace(/\.png$/, '.metadata.json')), 'utf8'));
+    expect(frameSidecar.originInstanceId).toBe('local-inst');
     getProject.mockResolvedValue(repair.project);
     const prepared = await preparePerformanceShot({ musicVideo: { projectId: 'mv-1', sceneId: suffix.sceneId, revisionId: repair.revision.id },
       backend: 'fal', sourceImagePath: join(PATHS.images, suffix.referenceImageId), mode: 'image' });
