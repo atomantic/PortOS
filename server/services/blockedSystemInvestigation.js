@@ -5,6 +5,7 @@ import { USER_DECISION_BLOCKED_CATEGORIES, PAUSED_BLOCKED_CATEGORIES } from '../
 import { explicitPrCompletion, PR_COMPLETIONS } from '../lib/prDisposition.js';
 import { isPrivateSecurityTask } from '../lib/privateSecurityPolicy.js';
 import { isTruthyMeta } from '../lib/metadataFlags.js';
+import { hasUndercountedDispatch } from './agentCompletionTaskHandoff.js';
 
 const BACKOFF_MS = 60000;
 const MAX_BACKOFF_MS = 3600000;
@@ -47,9 +48,13 @@ async function localOwner(task) {
   const [agent, instanceId] = await Promise.all([getAgentRecord(agentId), getInstanceId()]);
   return instanceId && instanceId !== UNKNOWN_INSTANCE_ID && agent?.status === 'completed'
     && agent.taskId === task.id && agent.metadata?.instanceId === instanceId
-    ? { agentId, instanceId } : null;
+    ? { agentId, instanceId, agent } : null;
 }
 
+// A receipt belonging to the selected local owner can expose an older
+// completion's stale task snapshot. It cannot prove that no budget reset took
+// place afterwards, so hold rather than raising the counter or starting a new
+// investigator with an apparently larger remaining budget.
 /** Persistence/producer seams let lifecycle tests exercise crash and replay with
  * a real task store adapter, without running providers or touching host tasks. */
 export function _createBlockedSystemInvestigationRecovery(deps = {}) {
@@ -78,6 +83,7 @@ export function _createBlockedSystemInvestigationRecovery(deps = {}) {
     if (!eligible(task)) return { handled: false };
     const owner = await ownerFor(task);
     if (!owner) return { handled: false, reason: 'local-owner-unverified' };
+    if (hasUndercountedDispatch(task, owner.agent)) return { handled: false, reason: 'spawn-budget-reconciliation-required' };
     const analysis = analysisFor(task);
     const fingerprint = buildInvestigationFingerprint(task, analysis);
     const epoch = `${fingerprint}:${task.metadata.blockedAt || task.metadata.lastSpawnedAt || 'legacy'}`;
@@ -117,6 +123,9 @@ export function _createBlockedSystemInvestigationRecovery(deps = {}) {
     // An explicit user/owner transition during preparation wins over recovery.
     const current = flatten(await read()).find(row => row.id === task.id && row.taskType === 'internal');
     if (!eligible(current) || current.metadata.blockedInvestigation?.epoch !== epoch) return { handled: false, reason: 'task-changed' };
+    const currentOwner = await ownerFor(current);
+    if (!currentOwner || currentOwner.agentId !== owner.agentId || currentOwner.instanceId !== owner.instanceId
+      || hasUndercountedDispatch(current, currentOwner.agent)) return { handled: false, reason: 'spawn-budget-reconciliation-required' };
     task = current;
     const created = await create(task, analysis, owner).catch(() => null);
     if (!created?.id) return defer('producer-unavailable');

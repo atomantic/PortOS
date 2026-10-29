@@ -44,4 +44,15 @@ describe('legacy delivery recovery', () => {
     } });
     expect(deps.release).not.toHaveBeenCalled();
   });
+
+  it('does not requeue or release a checkout when the owner receipt exceeds the retained budget', async () => {
+    const deps = setup([{ ...task, metadata: { ...task.metadata, totalSpawnCount: '1' } }]);
+    const chargedOwner = { ...owner, metadata: { ...owner.metadata, completionTaskDispatch: {
+      taskId: task.id, taskType: 'internal', expected: [['claimedBy', 'local'], ['claimedAt', 'claim'],
+        ['lastSpawnedAt', 'spawn'], ['totalSpawnCount', 2]],
+    } } };
+    expect(await recoverLegacyDeliveryBlocks([chargedOwner], deps)).toEqual({ recovered: 0 });
+    expect(deps.update).not.toHaveBeenCalled();
+    expect(deps.release).not.toHaveBeenCalled();
+  });
 });
