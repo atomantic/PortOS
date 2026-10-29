@@ -258,6 +258,34 @@ describe('peer socket relay stays connected through cos:subscribe on a password-
     expect(client.connected).toBe(false);
   });
 
+  it('peer relay socket may subscribe but any other event still disconnects', async () => {
+    await setInstancePassword();
+    instanceRegistry.data.peers = [{ id: 'peer-record', name: 'Example Peer', instanceId: PEER_ID, enabled: true, syncSecret: PAIR_SECRET }];
+    const { derivePeerAuthToken, PEER_AUTH_HEADER, PEER_INSTANCE_HEADER } = await stage('import peerHttpClient.js', import('../lib/peerHttpClient.js'));
+
+    await startServer();
+    const client = connectClient({
+      [PEER_INSTANCE_HEADER]: PEER_ID,
+      [PEER_AUTH_HEADER]: derivePeerAuthToken(PAIR_SECRET, PEER_ID),
+    });
+    const available = waitFor(client, 'peer:sync:available');
+    await waitFor(client, 'connect');
+    expect(await available).toEqual({ v: 1 });
+
+    const subscribed = waitFor(client, 'peer:sync:subscribed');
+    client.emit('peer:sync:subscribe');
+    await subscribed;
+    const [serverSocket] = await ioServer.in('peer-sync').fetchSockets();
+    expect(serverSocket.data.peerSyncInstanceId).toBe(PEER_ID);
+    expect(client.connected).toBe(true);
+
+    // A relay may listen, never push: an inbound sync frame is not on the allowlist.
+    const disconnected = waitFor(client, 'disconnect');
+    client.emit('peer:sync:event', { v: 1 });
+    await disconnected;
+    expect(client.connected).toBe(false);
+  });
+
   it('a peer-token-authenticated socket is disconnected by command:subscribe, so it never joins the command-output audience (#12019)', async () => {
     await setInstancePassword();
     instanceRegistry.data.peers = [{ id: 'peer-record', name: 'Example Peer', instanceId: PEER_ID, enabled: true, syncSecret: PAIR_SECRET }];

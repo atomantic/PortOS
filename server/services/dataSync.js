@@ -41,6 +41,7 @@ import { getPeers } from './instances.js';
 import { mutateVideoHistory, HISTORY_UNCHANGED } from './videoGen/history.js';
 import { markHosted } from './peerHostedMedia.js';
 import { listMediaTombstones, mergeMediaTombstones } from './mediaTombstones.js';
+import { emitMediaHistoryChanged } from './peerSyncEventBus.js';
 import { referenceCollectionAssetManifest } from './sharing/peerSyncAssets.js';
 import { mergeMediaCollectionsFromSync, listCollections, itemKey } from './mediaCollections.js';
 import { listSyncableSessionsForWire, mergeStorySessionsFromSync } from './storyBuilder.js';
@@ -951,13 +952,26 @@ async function applyVideoHistoryRemote(remoteData, source) {
 
   // Tombstones merge first so the row merge below sees the full delete set.
   const removedCount = await applyRemoteVideoTombstones(incomingTombstones);
+  const { count } = await mergeVideoRows(incomingRows, source);
+  const changedCount = count + removedCount;
+  if (changedCount === 0) return { applied: false, count: 0 };
+  console.log(`🔄 VideoHistory sync: merged ${changedCount} video row(s)`);
+  return { applied: true, count: changedCount };
+}
+
+/**
+ * The one video-row merge, shared by the snapshot path and realtime
+ * `peer:sync:event` upserts. `source.peerId` is the SENDER's instance id.
+ * Drops tombstoned rows, indexes a host-mode sender's files as peer-hosted,
+ * then union-merges by id (LWW on `createdAt`) inside the history write queue.
+ * Returns `{ count, ids }` for rows actually added or updated.
+ */
+export async function mergeVideoRows(incomingRows, source) {
   const tombstones = await listMediaTombstones('video');
   // A row survives a tombstone only when it was (re)created after the delete.
   const isDeleted = (r) => isTombstoned(tombstones, r.id, r.createdAt, 'key');
-  const incoming = incomingRows.filter((r) => !(hasVideoRowId(r) && isDeleted(r)));
-  if (incoming.length === 0) {
-    return removedCount > 0 ? { applied: true, count: removedCount } : { applied: false, count: 0 };
-  }
+  const incoming = (Array.isArray(incomingRows) ? incomingRows : []).filter((r) => !(hasVideoRowId(r) && isDeleted(r)));
+  if (incoming.length === 0) return { count: 0, ids: [] };
 
   // `host`-mode peers keep the bytes: index their video rows as peer-hosted so
   // /data/videos and /data/video-thumbnails stream from the peer instead of
@@ -978,7 +992,7 @@ async function applyVideoHistoryRemote(remoteData, source) {
   // overwritten by this merge's stale base. The queue's read is STRICT (#4115):
   // an unreadable file rejects instead of becoming an empty merge base that
   // would delete every local-only row on write-back.
-  let changedCount = 0;
+  const changedIds = [];
   await mutateVideoHistory((local) => {
     // Union by `id`, LWW on `createdAt` when both sides know the same row.
     // Video-history rows are append-mostly and immutable once written, so
@@ -1017,7 +1031,7 @@ async function applyVideoHistoryRemote(remoteData, source) {
     // `count` contract.
     for (const row of merged) {
       const prev = before.get(row.id);
-      if (!prev || prev !== row) changedCount++;
+      if (!prev || prev !== row) changedIds.push(row.id);
     }
 
     // Preserve any local rows that lacked an id (the merge dropped them from its
@@ -1028,10 +1042,8 @@ async function applyVideoHistoryRemote(remoteData, source) {
     return [...merged, ...idless].sort((a, b) =>
       String(b?.createdAt ?? '').localeCompare(String(a?.createdAt ?? '')));
   }, { stampOrigin: false });
-  changedCount += removedCount;
-  if (changedCount === 0) return { applied: false, count: 0 };
-  console.log(`🔄 VideoHistory sync: merged ${changedCount} video row(s)`);
-  return { applied: true, count: changedCount };
+  emitMediaHistoryChanged({ kind: 'video', op: 'upsert', ids: changedIds });
+  return { count: changedIds.length, ids: changedIds };
 }
 
 /**

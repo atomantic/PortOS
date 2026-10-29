@@ -52,6 +52,9 @@ async function readEntries() {
 }
 const readEntriesOrEmpty = () => readEntries().catch(() => ({}));
 
+/** The `{ '<kind>:<filename>': { peerId } }` index, or `{}` when unreadable. */
+export const listHostedEntries = () => readEntriesOrEmpty();
+
 const writeEntries = (entries) => atomicWrite(HOSTED_FILE(), { version: SCHEMA_VERSION, entries });
 
 /**

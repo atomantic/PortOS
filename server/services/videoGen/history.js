@@ -120,22 +120,32 @@ export function mutateVideoHistory(mutator, { stampOrigin = true } = {}) {
     const next = await mutator(base);
     if (next === HISTORY_UNCHANGED) return history;
     const toSave = Array.isArray(next) ? next : history;
+    // Rows this local mutation added (new ids); announced to peers after the save.
+    const added = [];
+    let origin = null;
     if (stampOrigin && Array.isArray(toSave)) {
-      const fresh = [];
       for (const r of toSave) {
-        if (!r || typeof r !== 'object' || r.originInstanceId) continue;
-        if (!priorOrigins.has(r.id)) fresh.push(r);
-        else if (priorOrigins.get(r.id)) r.originInstanceId = priorOrigins.get(r.id);
+        if (!r || typeof r !== 'object') continue;
+        if (!priorOrigins.has(r.id)) added.push(r);
+        else if (!r.originInstanceId && priorOrigins.get(r.id)) r.originInstanceId = priorOrigins.get(r.id);
       }
-      if (fresh.length > 0) {
+      if (added.length > 0) {
         // Lazy: identity pulls in fileUtils at load; a stamping failure must never lose the row.
-        const origin = await import('../instanceIdentity.js')
+        origin = await import('../instanceIdentity.js')
           .then((m) => m.getInstanceId().then((id) => (id === m.UNKNOWN_INSTANCE_ID ? null : id)))
           .catch((err) => { console.log(`⏭️ Video origin stamp skipped: ${err.message}`); return null; });
-        if (origin) for (const r of fresh) r.originInstanceId = origin;
+        if (origin) for (const r of added) if (!r.originInstanceId) r.originInstanceId = origin;
       }
     }
     await saveHistory(toSave);
+    if (added.length > 0) {
+      // After the commit, once per added row; peer merges (stampOrigin:false) never announce.
+      // Copied now: the caller receives `toSave` and may edit it before the import settles.
+      const committed = added.map((r) => ({ ...r }));
+      void import('../peerSyncEventBus.js')
+        .then((m) => m.announceLocalVideoRows(committed, origin))
+        .catch((err) => console.error(`❌ Video row announce failed: ${err.message}`));
+    }
     return toSave;
   });
   // Keep the tail alive even if this mutation rejects, so one failure doesn't

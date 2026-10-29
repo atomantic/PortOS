@@ -51,6 +51,7 @@ export async function deleteHistoryItem(id, { forgetInMusicVideos = true, fromRe
   // derived row removal; per-file admission would leave gaps between stores.
   return withBackupAssetPublication(async () => {
     let item;
+    let tombstone = null;
     // Hold the history writer across its recovery snapshot and the file move,
     // so overlapping prompt edits/deletes cannot retire a different revision.
     await mutateVideoHistory(async history => {
@@ -68,7 +69,7 @@ export async function deleteHistoryItem(id, { forgetInMusicVideos = true, fromRe
       for (let i = 1; i <= 9; i++) files.push(safeUnder(PATHS.videoThumbnails, `${id}-f${i}.jpg`));
       // Record BEFORE trashing: a crash between the two must never leave a
       // deleted row without its tombstone. Undo if the trash itself fails.
-      if (!fromRemoteTombstone) await recordMediaTombstone('video', id);
+      if (!fromRemoteTombstone) tombstone = await recordMediaTombstone('video', id);
       try {
         await trashFiles(files);
       } catch (err) {
@@ -87,6 +88,14 @@ export async function deleteHistoryItem(id, { forgetInMusicVideos = true, fromRe
     // a batch delete from a video's asset manager forgets its whole batch at once.
     if (forgetInMusicVideos) await import('../musicVideo/mediaPool.js').then((m) => m.forgetDeletedMusicVideoAssets([`video:${id}`]));
     console.log(`🗑️ Trashed video: ${item.filename}`);
+    // Announce only the owner's own delete: a remote-tombstone delete was
+    // already announced by the peer that recorded it.
+    void import('../peerSyncEventBus.js')
+      .then(async (m) => {
+        m.emitMediaHistoryChanged({ kind: 'video', op: 'delete', ids: [id] });
+        if (!fromRemoteTombstone) await m.announceLocalVideoDelete(item, tombstone);
+      })
+      .catch((err) => console.error(`❌ Video delete announce failed: ${err.message}`));
     return { ok: true };
   });
 }

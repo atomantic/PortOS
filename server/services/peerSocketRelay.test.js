@@ -15,6 +15,8 @@ vi.mock('./instanceIdentity.js', () => ({
   getInstanceId: async () => 'self-example-instance',
   UNKNOWN_INSTANCE_ID: 'unknown',
 }));
+const applyPeerSyncEvent = vi.hoisted(() => vi.fn(async () => ({ applied: false })));
+vi.mock('./peerSyncEvents.js', () => ({ applyPeerSyncEvent }));
 
 const { connectToPeer, disconnectFromPeer } = await import('./peerSocketRelay.js');
 const { instanceEvents } = await import('./instanceEvents.js');
@@ -92,5 +94,30 @@ describe('peer socket relay with hostile payloads', () => {
     expect(outputs).toContainEqual({ peerId: PEER.id, agentId: 'agent-valid', line: 'example' });
     const snapshotAgents = recorder.seen.filter(([event]) => event === 'peer:agents:updated').flatMap(([, { agents }]) => agents);
     expect(snapshotAgents.every((agent) => typeof agent?.id === 'string' && agent.id)).toBe(true);
+  });
+
+  it('subscribes to sync frames only when the peer advertises them and attributes each frame to this connection', async () => {
+    applyPeerSyncEvent.mockClear();
+    applyPeerSyncEvent.mockRejectedValueOnce(new Error('example apply failure'));
+    let peerSocket;
+    const subscribed = new Promise((resolve) => {
+      httpServer = createServer((req, res) => res.end('{}'));
+      ioServer = new Server(httpServer);
+      ioServer.on('connection', (socket) => {
+        peerSocket = socket;
+        socket.on('peer:sync:subscribe', resolve);
+        socket.on('cos:subscribe', () => socket.emit('peer:sync:available', { v: 1 }));
+      });
+    });
+    const port = await new Promise((resolve) => httpServer.listen(0, '127.0.0.1', () => resolve(httpServer.address().port)));
+    connectToPeer({ ...PEER, port });
+    await subscribed;
+    peerSocket.emit('peer:sync:event', 'malformed');
+    peerSocket.emit('peer:sync:event', { id: 'second', peerId: 'peer-spoofed' });
+    await vi.waitFor(() => expect(applyPeerSyncEvent).toHaveBeenCalledTimes(2));
+    expect(applyPeerSyncEvent.mock.calls.map(([sender, frame]) => [sender.id, frame])).toEqual([
+      [PEER.id, 'malformed'],
+      [PEER.id, { id: 'second', peerId: 'peer-spoofed' }],
+    ]);
   });
 });

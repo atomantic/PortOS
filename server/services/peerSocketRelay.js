@@ -3,6 +3,8 @@
  *
  * Connects as a Socket.IO client to each online peer, subscribes to cos:agent:*
  * events, and re-emits them locally through instanceEvents for the client UI.
+ * Also subscribes to the peer's realtime sync frames (`peer:sync:event`) and
+ * applies them, one at a time per peer, through peerSyncEvents.js.
  */
 
 import { io } from 'socket.io-client';
@@ -47,6 +49,8 @@ export function connectToPeer(peer) {
   const conn = {
     socket,
     agents: new Map(),
+    // Frames apply in arrival order so a delete never races the upsert before it.
+    syncQueue: Promise.resolve(),
     peer: {
       id: peer.id, name: peer.name, address: peer.address, host: peer.host ?? null, port: peer.port, auth: peer.auth ?? null,
       syncSecret: peer.syncSecret ?? null, peerAuthAccepted: peer.peerAuthAccepted === true,
@@ -77,6 +81,19 @@ export function connectToPeer(peer) {
     } catch (err) {
       console.error(`❌ Peer relay ${event} from ${peer.name} failed: ${err.message}`);
     }
+  });
+
+  // Subscribe only when the peer advertises the channel: an older peer with a
+  // password set disconnects a relay socket that sends an event it doesn't allow.
+  socket.on('peer:sync:available', () => socket.emit('peer:sync:subscribe'));
+
+  // The sender is this connection's peer; the frame's own claims are not trusted.
+  // Lazy: the apply side pulls in the sync merge graph only once a frame arrives.
+  socket.on('peer:sync:event', (data) => {
+    conn.syncQueue = conn.syncQueue
+      .then(() => import('./peerSyncEvents.js'))
+      .then((m) => m.applyPeerSyncEvent({ id: peer.id, name: peer.name }, data))
+      .catch((err) => console.error(`❌ Peer relay peer:sync:event from ${peer.name} failed: ${err.message}`));
   });
 
   // Agent spawned

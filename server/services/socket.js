@@ -71,6 +71,9 @@ import { bindSystemActivityIo } from './systemActivityNotify.js';
 import { armSystemActivityWatchers } from './systemActivityWatchers.js';
 import { armReadinessWatchers, registerReadinessSocket } from './readinessNotify.js';
 import { registerGeneratedPreviewHandlers } from './generatedPreview/sessions.js';
+import { peerSyncBus, deliverPeerSyncEvent, PEER_SYNC_ROOM } from './peerSyncEventBus.js';
+import { PEER_SYNC_EVENT_VERSION } from '../lib/peerSyncEventSchema.js';
+import { readCallerInstanceId } from './sharing/peerPullAuthorization.js';
 
 // Store CoS subscribers
 const cosSubscribers = new Set();
@@ -143,11 +146,13 @@ function registerSubscriber(socket, namespace, set) {
 // never a session — so it can never satisfy the per-event re-check below on
 // its own. This is the ONLY carve-out: a minimal, read-only allowlist of the
 // subscribe/unsubscribe events the relay needs to receive `cos:agent:*`
-// broadcasts. Every other event, including any `shell:*`/host-control event,
-// still requires a real operator session and disconnects a peer-authenticated
-// socket exactly as it did before. Keep this list minimal — do not add a
-// mutating or host-affecting event here.
-const PEER_RELAY_ALLOWED_EVENTS = new Set(['cos:subscribe', 'cos:unsubscribe']);
+// broadcasts and realtime `peer:sync:event` frames (room membership only; the
+// frames themselves are filtered per peer and category on the way out). Every
+// other event, including any `shell:*`/host-control event, still requires a
+// real operator session and disconnects a peer-authenticated socket exactly as
+// it did before. Keep this list minimal — do not add a mutating or
+// host-affecting event here.
+const PEER_RELAY_ALLOWED_EVENTS = new Set(['cos:subscribe', 'cos:unsubscribe', 'peer:sync:subscribe', 'peer:sync:unsubscribe']);
 
 // Events that execute on the host — an interactive PTY, keystrokes into the
 // user's live iTerm2 sessions, or git/npm/PM2/deploy runs in a managed app's
@@ -227,6 +232,24 @@ function registerSubscriptionHandlers(socket, _io) {
   registerSubscriber(socket, 'beeper', beeperSubscribers);
   registerSubscriber(socket, 'fableloom', fableLoomSubscribers);
   registerSubscriber(socket, 'command', commandSubscribers);
+  registerPeerSyncSubscriber(socket);
+}
+
+// Realtime peer sync (peerSyncEventBus.js). Advertised on connect so a relay
+// subscribes only to a server that allows it. The subscriber's identity is the
+// handshake's X-PortOS-Instance-Id (verified by the pair token when a password
+// is set); a socket with no known peer joins but is never sent a frame.
+function registerPeerSyncSubscriber(socket) {
+  socket.emit('peer:sync:available', { v: PEER_SYNC_EVENT_VERSION });
+  socket.on('peer:sync:subscribe', () => {
+    if (socket.data) socket.data.peerSyncInstanceId = readCallerInstanceId({ headers: socket.handshake?.headers });
+    socket.join(PEER_SYNC_ROOM);
+    socket.emit('peer:sync:subscribed');
+  });
+  socket.on('peer:sync:unsubscribe', () => {
+    socket.leave(PEER_SYNC_ROOM);
+    socket.emit('peer:sync:unsubscribed');
+  });
 }
 
 function registerErrorHandlers(socket, io) {
@@ -387,6 +410,16 @@ function setupEventForwarding() {
   setupBeeperEventForwarding();
   setupRecordEventForwarding();
   setupFableLoomRunForwarding();
+  setupPeerSyncEventForwarding();
+}
+
+// Sync frames go only to the peer-sync room (filtered per peer + category);
+// the history invalidation goes to every socket EXCEPT that room.
+function setupPeerSyncEventForwarding() {
+  peerSyncBus.on('event', (event) => { void deliverPeerSyncEvent(ioInstance, event); });
+  peerSyncBus.on('media-history-changed', (payload) => {
+    ioInstance?.except(PEER_SYNC_ROOM).emit('media:history:changed', payload);
+  });
 }
 
 // Bounded invalidations only: records remain behind their existing HTTP gates.
