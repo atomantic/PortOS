@@ -115,18 +115,39 @@ describe('CatalogReferenceLibrary', () => {
     expect(screen.getByRole('img')).toHaveAttribute('src', '/data/image-thumbnails/seven.webp');
   });
 
-  it('shows one visual while retaining independently stored portrait and reference metadata', async () => {
+  it('shows one control set for a visual attached as both primary and reference', async () => {
     render(<CatalogReferenceLibrary ingredientId="cat-chr-1" media={[
-      { kind: 'portrait', mediaKey: 'shared.png', library: { tags: ['portrait-tag'] } },
-      { kind: 'reference', mediaKey: 'shared.png', library: { guide: true, variant: { age: 17 }, tags: ['reference-tag'] } },
+      { kind: 'portrait', mediaKey: 'shared.png', library: { tags: ['portrait-tag'], review: { status: 'unreviewed', feedback: 'Too dark' } } },
+      { kind: 'reference', mediaKey: 'shared.png', library: { variant: { age: 17, label: 'Age 17 portrait' }, tags: ['reference-tag'] } },
     ]} />);
     expect(screen.getAllByRole('img')).toHaveLength(1);
-    const reference = screen.getByRole('group', { name: 'reference details for shared.png' });
-    expect(within(reference).getByText(/Age 17/)).toHaveTextContent('reference-tag');
-    expect(screen.getByRole('group', { name: 'portrait details for shared.png' })).toHaveTextContent('portrait-tag');
-    fireEvent.click(within(reference).getByRole('button', { name: 'Guide' }));
+    const details = screen.getByRole('group', { name: 'Details for shared.png' });
+    expect(within(details).getByRole('heading', { name: 'Age 17 portrait' })).toBeInTheDocument();
+    expect(within(details).getByText(/Age 17 · teen/)).toHaveTextContent('reference-tag');
+    expect(within(details).getByText('portrait · reference')).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: 'Make guide' })).toHaveLength(1);
+    expect(screen.getAllByRole('button', { name: 'Good' })).toHaveLength(1);
+    // The guide goes on the reference only; one rating covers both attachments and keeps each one's feedback.
+    fireEvent.click(within(details).getByRole('button', { name: 'Make guide' }));
     await waitFor(() => expect(api.updateCatalogIngredientMediaLibrary).toHaveBeenCalledWith(
-      'cat-chr-1', { mediaKey: 'shared.png', kind: 'reference', guide: false }, { silent: true }));
+      'cat-chr-1', { mediaKey: 'shared.png', kind: 'reference', guide: true }, { silent: true }));
+    fireEvent.click(within(details).getByRole('button', { name: 'Good' }));
+    await waitFor(() => expect(api.updateCatalogIngredientMediaLibrary).toHaveBeenCalledWith(
+      'cat-chr-1', { mediaKey: 'shared.png', kind: 'portrait', review: { status: 'good', feedback: 'Too dark' } }, { silent: true }));
+    expect(api.updateCatalogIngredientMediaLibrary).toHaveBeenCalledWith(
+      'cat-chr-1', { mediaKey: 'shared.png', kind: 'reference', review: { status: 'good' } }, { silent: true });
+    expect(api.updateCatalogIngredientMediaLibrary).toHaveBeenCalledTimes(3);
+  });
+
+  it('clears a guide from every attachment of a visual', async () => {
+    render(<CatalogReferenceLibrary ingredientId="cat-chr-1" media={[
+      { kind: 'portrait', mediaKey: 'shared.png', library: { guide: true } },
+      { kind: 'reference', mediaKey: 'shared.png', library: { guide: true } },
+    ]} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Guide' }));
+    await waitFor(() => expect(api.updateCatalogIngredientMediaLibrary).toHaveBeenCalledTimes(2));
+    for (const kind of ['portrait', 'reference']) expect(api.updateCatalogIngredientMediaLibrary).toHaveBeenCalledWith(
+      'cat-chr-1', { mediaKey: 'shared.png', kind, guide: false }, { silent: true });
   });
 
   it('preserves per-attachment read-only provenance and counts guides outside this tab', () => {
