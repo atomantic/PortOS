@@ -5,12 +5,15 @@
 
 import { characterSheetReferenceCandidates } from '../../lib/characterSheetReferences.js';
 import { pickGuideMedia } from '../../lib/catalogMediaLibrary.js';
+import { resolveGalleryImage, resolveImageRef } from '../../lib/pathSafety.js';
 import { fixedCasting, leadingAge } from './castAndSetsDirection.js';
 
 // The same likeness pick a Casting sheet render makes (guides, else portrait,
 // canon images and references), minus images left out of likeness.
 const likeness = (payload, media, want) => characterSheetReferenceCandidates(payload, media, want)
   .filter((c) => !c.leftOut).map((c) => c.filename);
+
+const onDisk = (filename) => !!(resolveGalleryImage(filename) || resolveImageRef(filename));
 
 // A subject linked at one age shows that age's own images when it has any;
 // the canonical ones only fill in for an age with none.
@@ -25,8 +28,9 @@ function subjectImages(payload, media, formId) {
  * `{ [subjectId]: { images, forms: [{ age, images }] } }` for the project's
  * linked cast and sets. A character's `images` show the age form the subject
  * is linked at (else the record's own); `forms` hold each other age's own
- * images. A record that fails to load is skipped: its subject falls back to
- * the project's references.
+ * images. Only images whose file exists are listed, so a missing one never
+ * takes a reference slot or hides the fallback. A record that fails to load
+ * is skipped: its subject falls back to the project's references.
  */
 export async function loadCastAndSetsCatalogLikeness(project, deps = {}) {
   const fixed = fixedCasting(project);
@@ -43,24 +47,26 @@ export async function loadCastAndSetsCatalogLikeness(project, deps = {}) {
     }
     return records.get(id);
   };
+  const exists = (filename) => (deps.exists || onDisk)(filename);
   const out = {};
   await Promise.all(fixed.map(async (f) => {
     const [record, media] = await load(f.ingredientId);
     if (!record || record.deleted || record.type !== f.kind) return;
-    const rows = Array.isArray(media) ? media : [];
+    const rows = (Array.isArray(media) ? media : []).filter((m) => m && exists(m.mediaKey));
     if (f.kind === 'place') {
       out[f.id] = { images: pickGuideMedia(rows).map((m) => m.mediaKey), forms: [] };
       return;
     }
     const payload = record.payload || {};
     const forms = (Array.isArray(payload.forms) ? payload.forms : []).filter((form) => form?.id);
+    // Canon images come from the payload, not media rows: checked here too.
     out[f.id] = {
-      images: subjectImages(payload, rows, f.castFormId),
+      images: subjectImages(payload, rows, f.castFormId).filter(exists),
       // Only an age's own images: the canonical ones show another age.
       forms: forms.map((form) => ({
         age: leadingAge(form.age),
         images: characterSheetReferenceCandidates(payload, rows, { formId: form.id })
-          .filter((c) => !c.leftOut && c.scope === 'form').map((c) => c.filename),
+          .filter((c) => !c.leftOut && c.scope === 'form' && exists(c.filename)).map((c) => c.filename),
       })).filter((form) => form.age !== null && form.images.length),
     };
   }));

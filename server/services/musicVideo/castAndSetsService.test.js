@@ -1140,10 +1140,12 @@ it('keeps catalog-linked cast and places as fixed casting, conditioned on their 
 });
 
 it('conditions linked cast on their Casting images, not just a reference with their name', async () => {
-  onDisk('frank-portrait.png', 'frank-collage.png', 'nora-portrait.png', 'nora-at-7.png', 'old-frank.png', 'harbor-other.png');
+  onDisk('frank-portrait.png', 'frank-collage.png', 'nora-portrait.png', 'nora-at-7.png', 'old-frank.png', 'harbor-other.png', 'child.png', 'gus-ref.png');
   const records = {
     'cat-chr-frank': { id: 'cat-chr-frank', type: 'character', name: 'Frank', payload: { forms: [] } },
     'cat-chr-nora': { id: 'cat-chr-nora', type: 'character', name: 'Nora', payload: { forms: [{ id: 'form-young', label: 'Age 7', age: '7' }] } },
+    'cat-chr-child': { id: 'cat-chr-child', type: 'character', name: 'Nora', payload: {} },
+    'cat-chr-gus': { id: 'cat-chr-gus', type: 'character', name: 'Gus', payload: {} },
     // Saved from another video's check-in, then linked here.
     'cat-plc-mv-other': { id: 'cat-plc-mv-other', type: 'place', name: 'Harbor', payload: {} },
   };
@@ -1159,6 +1161,9 @@ it('conditions linked cast on their Casting images, not just a reference with th
       { mediaKey: 'nora-at-7.png', kind: 'reference', library: { variant: { formId: 'form-young' } } },
     ],
     'cat-plc-mv-other': [{ mediaKey: 'harbor-other.png', kind: 'reference' }],
+    'cat-chr-child': [{ mediaKey: 'child.png', kind: 'portrait' }],
+    // Every Casting file is gone: the reference labeled with his name stands in.
+    'cat-chr-gus': [1, 2, 3, 4].map((n) => ({ mediaKey: `gus-gone-${n}.png`, kind: 'reference' })),
   };
   service.__setCastAndSetsDepsForTests(testDeps({ catalog: {
     getIngredient: async (id) => records[id] || null,
@@ -1169,7 +1174,10 @@ it('conditions linked cast on their Casting images, not just a reference with th
       { id: 'seven', label: 'Age 7', age: '7', description: 'a small girl', subjectId: 'mvc-nora-7' },
       { id: 'young', label: 'Age 7 again', age: '7', description: 'unbound' },
     ] },
-    cast: [{ id: 'frank', name: 'Frank', role: 'father', description: 'sixties', face: 'lined', hair: 'grey', wardrobe: 'suit' }] }) });
+    cast: [
+      { id: 'frank', name: 'Frank', role: 'father', description: 'sixties', face: 'lined', hair: 'grey', wardrobe: 'suit' },
+      { id: 'gus', name: 'Gus', role: 'uncle', description: 'fifties' },
+    ] }) });
   const project = await seed({
     concept: { prompt: 'a wake', subjects: [
       // Linked in Casting after an earlier check-in had cast its own Nora.
@@ -1177,8 +1185,14 @@ it('conditions linked cast on their Casting images, not just a reference with th
       { id: 'mvc-frank', kind: 'character', name: 'Frank', role: 'supporting', ingredientId: 'cat-chr-frank' },
       { id: 'mvc-nora-7', kind: 'character', name: 'Nora (7)', ingredientId: 'cat-chr-nora', castForm: { id: 'form-young', label: 'Age 7', age: 7 } },
       { id: 'cs-set-harbor', kind: 'place', name: 'Harbor', ingredientId: 'cat-plc-mv-other' },
+      // Shares the protagonist's name exactly, but is not the protagonist.
+      { id: 'mvc-child', kind: 'character', name: 'Nora', role: 'supporting', ingredientId: 'cat-chr-child' },
+      { id: 'mvc-gus', kind: 'character', name: 'Gus', role: 'supporting', ingredientId: 'cat-chr-gus' },
     ] },
-    visualSpec: { references: [{ id: 'mvr-pull-1', imageId: 'old-frank.png', role: 'character', label: 'Frank', condition: false }] },
+    visualSpec: { references: [
+      { id: 'mvr-pull-1', imageId: 'old-frank.png', role: 'character', label: 'Frank', condition: false },
+      { id: 'mvr-pull-2', imageId: 'gus-ref.png', role: 'character', label: 'Gus', condition: false },
+    ] },
   });
   await service.startCastAndSets(project.id);
   await runTo(project.id, 'review');
@@ -1188,6 +1202,7 @@ it('conditions linked cast on their Casting images, not just a reference with th
   expect(refs('character')).toEqual(['nora-portrait.png']);
   expect(refs('cast:frank')).toEqual(['frank-portrait.png']);
   expect(refs('set:harbor')).toEqual(['harbor-other.png']);
+  expect(refs('cast:gus')).toEqual(['gus-ref.png']);
   // An age sheet: the canonical sheet first, then that age's own Casting image,
   // whether a subject linked at that age is bound to it or not.
   expect(refs('form:seven')).toEqual([`${job('character').id}.png`, 'nora-at-7.png']);

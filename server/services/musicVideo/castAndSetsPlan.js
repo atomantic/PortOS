@@ -209,9 +209,13 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
     const key = String(name || '').trim().toLowerCase();
     const ofKind = fixed.filter((f) => f.kind === kind);
     const exact = ofKind.find((f) => f.name.toLowerCase() === key);
-    if (exact) return exact;
     const based = ofKind.filter((f) => baseName(f.name) === baseName(key));
-    return (protagonist && (based.find((f) => f.role === 'protagonist') || based.find((f) => !boundSubjects.has(f.id)))) || based[0] || null;
+    if (!protagonist) return exact || based[0] || null;
+    // The designated protagonist wins a name another subject shares (a
+    // supporting child "Nora" beside "Nora (17)"); never an age-bound subject.
+    return based.find((f) => f.role === 'protagonist')
+      || (exact && !boundSubjects.has(exact.id) ? exact : null)
+      || based.find((f) => !boundSubjects.has(f.id)) || null;
   };
   const fixedImages = (f) => {
     const catalog = f && catalogLikeness[f.id]?.images;
