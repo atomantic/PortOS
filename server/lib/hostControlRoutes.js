@@ -766,6 +766,8 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/music-video/:id/dcp/readiness',
   'POST /api/music-video/:id/dcp/build',
   'POST /api/music-video/dcp/:jobId/cancel',
+  'GET /api/music-video/dcp/:jobId/events',
+  'GET /api/music-video/:id/dcp/:artifactId/report',
   'GET /api/music-video/:id/dcp/:artifactId/location',
   'POST /api/sprites/:id/reference/generate',
   // Fork creates a record and immediately queues reference generation too.

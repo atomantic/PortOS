@@ -183,7 +183,7 @@ export async function startDcp(projectId, { grade, renderHistoryId, sourceSha256
     }).catch(err => {
       const canceled = job.abort.signal.aborted;
       job.status = canceled ? 'canceled' : 'error'; active.delete(projectId);
-      if (!canceled) console.error(`Cinema package export failed [${jobId.slice(0, 14)}]: ${err.code || 'EXPORT_FAILED'}`);
+      if (!canceled) console.error(`❌ Cinema package export failed [${jobId.slice(0, 14)}]: ${err.code || 'EXPORT_FAILED'}`);
       broadcastSse(job, { type: canceled ? 'canceled' : 'error', error: canceled ? 'Cinema package export cancelled' : err.message }); closeJobAfterDelay(jobs, jobId);
     });
   return { jobId };

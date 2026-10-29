@@ -16,7 +16,7 @@ describe('cinema package panel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Inspect final render and tools' }));
     const create = await screen.findByRole('button', { name: 'Create cinema package' });
     expect(create.disabled).toBe(true);
-    expect(screen.getByText(/1280 × 720 pixels/)).toBeTruthy();
+    expect(screen.getByText(/1,280 × 720 pixels/)).toBeTruthy();
     expect(screen.getByText(/Verification failed · Older render/)).toBeTruthy();
     fireEvent.change(screen.getByLabelText('Source grading conversion'), { target: { value: 'rec1886' } });
     fireEvent.click(create);

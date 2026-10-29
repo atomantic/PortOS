@@ -114,4 +114,8 @@ realToolTest('cinema package real-tool integration', () => {
     expect(await readdir(dir)).toEqual(names);
   }, 240000);
 });
-afterAll(async () => { process.env.PATH = originalPath; process.env.TMPDIR = originalTmp; await cleanupTempDataRoots(); });
+afterAll(async () => {
+  if (originalPath === undefined) delete process.env.PATH; else process.env.PATH = originalPath;
+  if (originalTmp === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = originalTmp;
+  await cleanupTempDataRoots();
+});
