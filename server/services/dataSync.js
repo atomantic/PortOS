@@ -968,6 +968,22 @@ export async function getHostedMediaInventory(category = 'videoHistory', kind = 
   return { version: 1, filenames, checked, mtimes, portosMeta: await buildPortosMeta() };
 }
 
+// Unlike the collection inventory, this lists every gallery image on disk, so a name
+// absent from it is genuinely not held (`complete`). Older peers 404 it.
+export async function getImageLibraryInventory() {
+  const entries = await readdir(PATHS.images, { withFileTypes: true }).catch((err) => {
+    if (err.code === 'ENOENT') return [];
+    throw err;
+  });
+  const filenames = entries.filter((e) => e.isFile() && e.name.toLowerCase().endsWith('.png') && sanitizeAssetFilename(e.name) === e.name).map((e) => e.name).sort();
+  const mtimes = {};
+  for (const name of filenames) {
+    const info = await stat(join(PATHS.images, name)).catch(() => null);
+    if (info) mtimes[name] = info.mtimeMs;
+  }
+  return { version: 1, filenames, checked: filenames, complete: true, mtimes, portosMeta: await buildPortosMeta() };
+}
+
 async function applyVideoHistoryRemote(remoteData, source) {
   if (!remoteData) return { applied: false, count: 0 };
   const incomingRows = Array.isArray(remoteData.videos) ? remoteData.videos : [];
@@ -1544,7 +1560,14 @@ export async function applyRemote(category, remoteData, options = {}) {
     const peer = (await getPeers()).find((p) => p.instanceId === source.peerId && p.enabled !== false);
     if (peer && remoteData?.version === 1 && Array.isArray(remoteData.filenames) && Array.isArray(remoteData.checked)) {
       const kind = options.inventoryKind === 'image' ? 'image' : 'video';
-      if (kind === 'video' || category === 'mediaCollections') {
+      if (options.inventoryScope === 'library') {
+        // File times only: a whole-library listing must not drive host-mode reconciliation.
+        if (kind === 'image' && category === 'mediaCollections' && isPlainObject(remoteData.mtimes)) {
+          const { recordPeerHoldings, reconcileMediaOrigins } = await import('./mediaOriginReconcile.js');
+          await recordPeerHoldings(peer.instanceId, 'image', 'imageLibrary', { mtimes: remoteData.mtimes, checked: remoteData.checked, complete: remoteData.complete === true });
+          await reconcileMediaOrigins('image');
+        }
+      } else if (kind === 'video' || category === 'mediaCollections') {
         if (peer.mediaSyncMode === 'host') await reconcileHostedMedia(peer.instanceId, kind, remoteData.filenames, remoteData.checked);
         if (isPlainObject(remoteData.mtimes)) {
           const { recordPeerHoldings, reconcileMediaOrigins } = await import('./mediaOriginReconcile.js');

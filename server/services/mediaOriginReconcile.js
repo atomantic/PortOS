@@ -10,7 +10,7 @@
  * `data/peer-media-holdings.json` is `file-primary` and machine-local: what
  * each peer last reported, never federated.
  */
-import { stat } from 'fs/promises';
+import { readdir, stat } from 'fs/promises';
 import { join } from 'path';
 import { PATHS, readJSONFile, atomicWrite } from '../lib/fileUtils.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
@@ -44,9 +44,10 @@ async function readHoldings() {
  * Remember what `peerId` reported for one inventory scope (`category`): the
  * modify times of the files it holds (`{ filename: mtimeMs }`) and the
  * filenames it examined. Scopes differ (history rows vs collection assets), so
- * a report speaks only for the names it `checked`, never for the whole kind.
+ * a report speaks only for the names it `checked`, never for the whole kind,
+ * unless it is `complete` (a full listing of the folder: absence means not held).
  */
-export function recordPeerHoldings(peerId, kind, category, { mtimes, checked }) {
+export function recordPeerHoldings(peerId, kind, category, { mtimes, checked, complete = false }) {
   if (!KINDS[kind] || !isNonBlankStr(peerId) || !isNonBlankStr(category) || !isPlainObject(mtimes) || !Array.isArray(checked)) return Promise.resolve(false);
   const valid = (name) => typeof name === 'string' && sanitizeAssetFilename(name) === name;
   const clean = {};
@@ -57,7 +58,7 @@ export function recordPeerHoldings(peerId, kind, category, { mtimes, checked }) 
     const peers = await readHoldings();
     const entry = isPlainObject(peers[peerId]) ? peers[peerId] : {};
     const scopes = isPlainObject(entry[kind]) ? entry[kind] : {};
-    peers[peerId] = { ...entry, [kind]: { ...scopes, [category]: { at: new Date().toISOString(), mtimes: clean, checked: checked.filter(valid) } } };
+    peers[peerId] = { ...entry, [kind]: { ...scopes, [category]: { at: new Date().toISOString(), mtimes: clean, checked: checked.filter(valid), ...(complete === true && { complete: true }) } } };
     await atomicWrite(HOLDINGS_FILE(), { version: SCHEMA_VERSION, peers });
     return true;
   });
@@ -80,8 +81,10 @@ async function unattributedFiles(kind) {
     }
     return out;
   }
-  const [{ getHostedMediaInventory }, { readHeldImage }] = await Promise.all([import('./dataSync.js'), import('./imageGen/imageRecords.js')]);
-  const { filenames } = await getHostedMediaInventory('mediaCollections', 'image');
+  const { readHeldImage } = await import('./imageGen/imageRecords.js');
+  // The whole gallery, not only collection-referenced images (#14137).
+  const filenames = (await readdir(PATHS.images, { withFileTypes: true }).catch(() => []))
+    .filter((e) => e.isFile() && e.name.toLowerCase().endsWith('.png')).map((e) => e.name);
   for (const filename of filenames) {
     const record = await readHeldImage(filename);
     if (!record || isNonBlankStr(record.originInstanceId) || isNonBlankStr(record.suppliedByInstanceId) || hosted[hostedKey('image', filename)]) continue;
@@ -151,7 +154,7 @@ export async function reconcileMediaOrigins(kind, { nowMs = Date.now() } = {}) {
     const holders = [];
     let covered = true;
     for (const peer of peers) {
-      const scopes = scopesOf(peer).filter((scope) => scope.checked.includes(file.filename) || scope.mtimes[file.filename] !== undefined);
+      const scopes = scopesOf(peer).filter((scope) => scope.complete === true || scope.checked.includes(file.filename) || scope.mtimes[file.filename] !== undefined);
       // A peer that did not examine the file is unreported for it: nobody claims.
       if (scopes.length === 0) { covered = false; break; }
       // Overlapping scopes: the newest report that covers the name is the peer's current answer.

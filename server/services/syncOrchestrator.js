@@ -191,6 +191,13 @@ async function fetchHostedInventory(peer, category, kind, { probeOlderPeers = tr
   return { version: 1, filenames, checked: filenames };
 }
 
+// File times of every gallery image the peer holds; an older peer 404s and reports nothing.
+async function fetchImageLibraryInventory(peer) {
+  const response = await withAbortTimeout(FETCH_TIMEOUT_MS, (signal) => peerFetch(`${peerBaseUrl(peer)}/api/sync/mediaCollections/image-library-inventory`, { signal }, peer)).catch(() => null);
+  if (!response?.ok) return null;
+  return readPeerBody(response, 'json', { maxBytes: PEER_BODY_DEFAULT_MAX_BYTES }).catch(() => null);
+}
+
 /**
  * Fetch an image from a peer if we don't have it locally.
  * avatarPath is like "/data/images/uuid.png"
@@ -612,9 +619,14 @@ async function syncDataCategoryFromPeer(peer, peerId, category, cachedChecksums,
     const { hasUnattributedMedia } = await import('./mediaOriginReconcile.js');
     for (const kind of kinds) {
       // A copy peer is asked for its file times only while some media here has no recorded origin.
-      if (!hostMode && !await hasUnattributedMedia(kind).catch(() => false)) continue;
+      const unattributed = await hasUnattributedMedia(kind).catch(() => false);
+      if (!hostMode && !unattributed) continue;
       const inventory = await fetchHostedInventory(peer, category, kind, { probeOlderPeers: hostMode }).catch(() => null);
       if (inventory) await dataSync.applyRemote(category, inventory, { peerId, portosMeta: inventory.portosMeta, inventory: true, inventoryKind: kind });
+      if (kind === 'image' && unattributed) {
+        const library = await fetchImageLibraryInventory(peer);
+        if (library) await dataSync.applyRemote(category, library, { peerId, portosMeta: library.portosMeta, inventory: true, inventoryKind: kind, inventoryScope: 'library' });
+      }
     }
   }
   if (!gap && lastChecksum && lastChecksum === checksumRes.checksum) {

@@ -140,12 +140,25 @@ describe('earliest holder of a pre-upgrade collection image', () => {
     writeFileSync(join(PATHS.images, 'i1.png'), 'png');
     writeFileSync(join(PATHS.images, 'i1.metadata.json'), JSON.stringify({ prompt: 'p' }));
     touch(join(PATHS.images, 'i1.png'), T);
-    vi.spyOn(dataSync, 'getHostedMediaInventory').mockResolvedValue({ filenames: ['i1.png'] });
     await recordPeerHoldings('a', 'image', 'mediaCollections', { mtimes: { 'i1.png': T + DAY }, checked: ['i1.png'] });
     await recordPeerHoldings('b', 'image', 'mediaCollections', { mtimes: { 'i1.png': T + 2 * DAY }, checked: ['i1.png'] });
     expect(await reconcileMediaOrigins('image')).toBe(1);
     expect(JSON.parse(await readFile(join(PATHS.images, 'i1.metadata.json'), 'utf8')).originInstanceId).toBe('me');
     await editImageSidecar('i1.png', (m) => { delete m.originInstanceId; m.suppliedByInstanceId = 'a'; return true; });
     expect(await reconcileMediaOrigins('image')).toBe(0);
+  });
+
+  it('settles a gallery image no collection references from the library inventory', async () => {
+    writeFileSync(join(PATHS.images, 'lib1.png'), 'png');
+    writeFileSync(join(PATHS.images, 'lib1.metadata.json'), JSON.stringify({ prompt: 'p' }));
+    touch(join(PATHS.images, 'lib1.png'), T);
+    expect((await dataSync.getImageLibraryInventory()).mtimes).toEqual({ 'lib1.png': T, 'i1.png': expect.any(Number) });
+    await recordPeerHoldings('a', 'image', 'imageLibrary', { mtimes: { 'lib1.png': T + DAY }, checked: ['lib1.png'] });
+    expect(await reconcileMediaOrigins('image')).toBe(0); // b has not reported
+    await recordPeerHoldings('b', 'image', 'imageLibrary', { mtimes: { 'lib1.png': T }, checked: ['lib1.png'] });
+    expect(await reconcileMediaOrigins('image')).toBe(0); // tie
+    await recordPeerHoldings('b', 'image', 'imageLibrary', { mtimes: {}, checked: [], complete: true }); // b lists its whole library and lacks the image
+    expect(await reconcileMediaOrigins('image')).toBe(1);
+    expect(JSON.parse(await readFile(join(PATHS.images, 'lib1.metadata.json'), 'utf8')).originInstanceId).toBe('me');
   });
 });
