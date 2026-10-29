@@ -15,8 +15,6 @@ import { getHistoryItem } from './videoGen/history.js';
 import { listHostedEntries } from './peerHostedMedia.js';
 import { stripMachineLocalFields } from './peerSyncEventBus.js';
 
-export { emitPeerSyncEvent } from './peerSyncEventBus.js';
-
 const ignored = (label, reason) => {
   console.log(`⏭️ Peer sync event from ${label} ignored: ${reason}`);
   return { applied: false, reason };

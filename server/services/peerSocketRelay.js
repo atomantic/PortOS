@@ -165,6 +165,8 @@ export function connectToPeer(peer) {
 function setRealtime(conn, peerId, since) {
   if (conn.realtimeSince === since) return;
   conn.realtimeSince = since;
+  // No production listener: a test seam the two-machine harness
+  // (server/test/peerMachine.js) waits on instead of polling.
   instanceEvents.emit('peer:sync:realtime', { peerId, live: since !== null });
 }
 

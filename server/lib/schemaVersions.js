@@ -1068,8 +1068,11 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // videoHistory is intentionally left ungated: `tombstones` is additive, so an
   // older peer loses no data — it only fails to learn deletes. The field is
   // omitted when empty; once a newer peer holds tombstones its checksum differs
-  // from an older peer's, so that pair re-syncs this category each cycle until
-  // the older one upgrades.
+  // from an older peer's, so the pair never converges until the older one
+  // upgrades. That costs no extra pulls: a pull follows only a change in the
+  // sender's own checksum (syncOrchestrator.js compares it with the one cached
+  // for that peer), so each side re-applies the other's snapshot once per real
+  // change, not every cycle.
   //
   // The gate is now PER-CATEGORY (see `scopeVersionDiff` below + its three
   // call sites: dataSync `applyRemote`, peerSync push, sharing importer), so
