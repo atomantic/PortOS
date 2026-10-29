@@ -1,7 +1,7 @@
 /** Capped forge scope must not strand an exact delivered clean checkout. */
 import { afterAll, afterEach, beforeEach, describe, expect, it as vitestIt, vi } from 'vitest';
-import { lstat, mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { cp, lstat, mkdtemp, mkdir, readdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { join, relative, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { materializeGitRepo } from '../lib/gitTestRepo.js';
@@ -73,24 +73,59 @@ afterEach(({ task, signal }) => {
 });
 afterAll(() => owned.finish(cleanupTempDataRoots));
 
+// Each describe's scenario-independent history (real repository, bare origin,
+// delivered commits) is built once per variant and copied per case, the way
+// heldCheckoutRecovery.test.js copies its pristine repository. Every case still
+// owns its repository, origin and worktree registrations: the copy's worktrees
+// are re-registered at their new paths and origin is re-pointed at the copy.
+const seeds = new Map();
+async function seededScratch(prefix, key, build) {
+  const id = `${prefix}${key}`;
+  if (!seeds.has(id)) {
+    seeds.set(id, (async () => {
+      const seed = join(await realpath(lazyTempDataRoot('exact-delivery-seeds-')), createHash('sha256').update(id).digest('hex').slice(0, 16));
+      await mkdir(seed);
+      const repo = join(seed, 'repo'); await materializeGitRepo(repo);
+      const remote = join(seed, 'origin.git'); await execGit(['init', '--bare', remote], seed);
+      await execGit(['remote', 'add', 'origin', remote], repo);
+      return { seed, values: await build({ scratch: seed, repo, remote }) };
+    })());
+  }
+  const { seed, values } = await seeds.get(id);
+  scratch = await realpath(await mkdtemp(join(tmpdir(), prefix)));
+  await cp(seed, scratch, { recursive: true });
+  const repo = join(scratch, 'repo'); const remote = join(scratch, 'origin.git');
+  // Re-link both halves of each worktree registration to the copy; `git worktree
+  // repair` would follow the copied pointer and rewrite the seed instead.
+  const admin = join(repo, '.git', 'worktrees');
+  await Promise.all((await readdir(admin).catch(() => [])).map(async name => {
+    const dotGit = resolve(scratch, relative(seed, (await readFile(join(admin, name, 'gitdir'), 'utf8')).trim()));
+    await writeFile(join(admin, name, 'gitdir'), `${dotGit}\n`);
+    await writeFile(dotGit, `gitdir: ${join(admin, name)}\n`);
+  }));
+  await execGit(['remote', 'set-url', 'origin', remote], repo);
+  fixture.remote = remote;
+  return { repo, remote, ...values };
+}
+
 describe('exact delivered head retirement with capped historical API (real Git)', () => {
   it.each(['exact', 'exact-initialized', 'named-sibling', 'named-sibling-unrelated', 'same-task-seeded', 'precreation', 'precreation-dirty', 'precreation-untracked', 'precreation-active', 'precreation-uncertain', 'precreation-late', 'wrong-head', 'unpublished', 'wrong-base', 'wrong-target', 'wrong-merge-proof', 'missing-object', 'remote-change', 'dirty', 'active', 'supersession'])(
     'retains all existing retirement gates: %s', async scenario => {
-      scratch = await realpath(await mkdtemp(join(tmpdir(), 'exact-delivery-')));
-      const repo = join(scratch, 'repo'); await materializeGitRepo(repo);
-      const remote = fixture.remote = join(scratch, 'origin.git'); await execGit(['init', '--bare', remote], scratch);
-      await execGit(['remote', 'add', 'origin', remote], repo);
       const branch = scenario.startsWith('precreation') ? 'claim/issue-42' : 'delivery/candidate';
+      const { repo, remote, head, merge, main } = await seededScratch('exact-delivery-', branch, async ({ repo }) => {
+        const path = join(repo, '.claude', 'worktrees', 'candidate');
+        await execGit(['worktree', 'add', '-b', branch, path, 'main'], repo);
+        await writeFile(join(path, 'feature.txt'), 'delivered feature\n');
+        await execGit(['add', 'feature.txt'], path); await execGit(['commit', '-m', 'delivered feature'], path);
+        const head = (await execGit(['rev-parse', 'HEAD'], path)).stdout.trim();
+        await execGit(['checkout', '-b', 'release', 'main'], repo);
+        await execGit(['merge', '--no-ff', branch, '-m', 'merge delivered candidate'], repo);
+        await execGit(['push', 'origin', 'main', 'release', branch], repo);
+        const [merge, main] = (await execGit(['rev-parse', 'release', 'main'], repo)).stdout.trim().split(/\r?\n/);
+        return { head, merge, main };
+      });
       const path = join(repo, '.claude', 'worktrees', 'candidate');
-      await execGit(['worktree', 'add', '-b', branch, path, 'main'], repo);
-      await writeFile(join(path, 'feature.txt'), 'delivered feature\n');
-      await execGit(['add', 'feature.txt'], path); await execGit(['commit', '-m', 'delivered feature'], path);
-      const head = (await execGit(['rev-parse', 'HEAD'], path)).stdout.trim();
-      await execGit(['checkout', '-b', 'release', 'main'], repo);
-      await execGit(['merge', '--no-ff', branch, '-m', 'merge delivered candidate'], repo);
-      await execGit(['push', 'origin', 'main', 'release', branch], repo);
-      const merge = (await execGit(['rev-parse', 'release'], repo)).stdout.trim();
-      fixture.refs = { main: (await execGit(['rev-parse', 'main'], repo)).stdout.trim(), release: merge };
+      fixture.refs = { main, release: merge };
       fixture.pr = { url: 'https://github.com/example/repo/pull/42', state: 'MERGED', headRefName: branch,
         headRefOid: head, isCrossRepository: false, baseRefName: 'release', mergeCommit: { oid: merge } };
       fixture.detail = { head: { sha: head }, base: { ref: 'release' }, merged: true, merge_commit_sha: merge, commits: 401, changed_files: 501 };
@@ -260,21 +295,21 @@ describe('rewritten detached original retirement (real Git)', () => {
   it.each(['represented', 'unique-work', 'reverted', 'dirty', 'active', 'custom-driver', 'changed-after-review',
     'original-owner', 'original-wrong-generation', 'original-undelivered', 'original-active', 'original-approval', 'original-validation'])(
     'requires current complete delivery and preserves every existing gate: %s', async scenario => {
-      scratch = await realpath(await mkdtemp(join(tmpdir(), 'detached-delivery-')));
-      const repo = join(scratch, 'repo'); await materializeGitRepo(repo);
-      const remote = fixture.remote = join(scratch, 'origin.git'); await execGit(['init', '--bare', remote], scratch);
-      await execGit(['remote', 'add', 'origin', remote], repo);
-      const branch = 'delivery/candidate'; const path = join(repo, '.claude', 'worktrees', 'original');
-      await execGit(['worktree', 'add', '-b', 'original', path, 'main'], repo);
-      await writeFile(join(path, 'feature.txt'), 'delivered feature\n');
-      await execGit(['add', 'feature.txt'], path); await execGit(['commit', '-m', 'original feature'], path);
-      const original = (await execGit(['rev-parse', 'HEAD'], path)).stdout.trim();
-      await execGit(['switch', '--detach', original], path);
-      const originalOwner = scenario.startsWith('original-');
-      await execGit(['switch', '-c', branch, originalOwner ? original : 'main'], repo);
-      await writeFile(join(repo, 'unrelated.txt'), 'later delivery context\n');
-      await execGit(['add', 'unrelated.txt'], repo); await execGit(['commit', '-m', 'delivery context'], repo);
-      if (!originalOwner) await execGit(['cherry-pick', original], repo);
+      const branch = 'delivery/candidate'; const originalOwner = scenario.startsWith('original-');
+      const { repo, original } = await seededScratch('detached-delivery-', originalOwner ? 'owner' : 'cherry-picked', async ({ repo }) => {
+        const path = join(repo, '.claude', 'worktrees', 'original');
+        await execGit(['worktree', 'add', '-b', 'original', path, 'main'], repo);
+        await writeFile(join(path, 'feature.txt'), 'delivered feature\n');
+        await execGit(['add', 'feature.txt'], path); await execGit(['commit', '-m', 'original feature'], path);
+        const original = (await execGit(['rev-parse', 'HEAD'], path)).stdout.trim();
+        await execGit(['switch', '--detach', original], path);
+        await execGit(['switch', '-c', branch, originalOwner ? original : 'main'], repo);
+        await writeFile(join(repo, 'unrelated.txt'), 'later delivery context\n');
+        await execGit(['add', 'unrelated.txt'], repo); await execGit(['commit', '-m', 'delivery context'], repo);
+        if (!originalOwner) await execGit(['cherry-pick', original], repo);
+        return { original };
+      });
+      const path = join(repo, '.claude', 'worktrees', 'original');
       if (scenario === 'reverted') await execGit(['revert', '--no-edit', 'HEAD'], repo);
       const delivered = (await execGit(['rev-parse', 'HEAD'], repo)).stdout.trim();
       expect(delivered).not.toBe(original);
@@ -392,13 +427,11 @@ describe('bounded source preservation retirement (real Git)', () => {
     'private-active', 'private-content-over-budget', 'private-extra-root', 'private-extra-ref-change', 'private-missing-source-object',
     'private-noncommit-root', 'private-ancestor-history'])(
     'binds exact retained source and existing safety gates: %s', async scenario => {
-      scratch = await realpath(await mkdtemp(join(tmpdir(), 'retained-source-')));
-      const repo = join(scratch, 'repo'); await materializeGitRepo(repo);
-      const remote = fixture.remote = join(scratch, 'origin.git'); await execGit(['init', '--bare', remote], scratch);
-      await execGit(['remote', 'add', 'origin', remote], repo);
-      await writeFile(join(repo, 'options.txt'), 'base\n');
-      await execGit(['add', 'options.txt'], repo); await execGit(['commit', '-m', 'shared base'], repo);
-      const base = (await execGit(['rev-parse', 'HEAD'], repo)).stdout.trim();
+      const { repo, base } = await seededScratch('retained-source-', 'base', async ({ repo }) => {
+        await writeFile(join(repo, 'options.txt'), 'base\n');
+        await execGit(['add', 'options.txt'], repo); await execGit(['commit', '-m', 'shared base'], repo);
+        return { base: (await execGit(['rev-parse', 'HEAD'], repo)).stdout.trim() };
+      });
       const branch = 'delivery/candidate', originalPath = join(scratch, 'original'), path = join(scratch, 'resumed');
       await execGit(['worktree', 'add', '-b', branch, originalPath, 'main'], repo);
       const originalBytes = ['over-budget', 'private-large-source'].includes(scenario) ? `${'bounded draft evidence '.repeat(4000)}\n`
