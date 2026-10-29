@@ -167,10 +167,8 @@ async function fetchPeer(peer, path) {
 
 // Older peers lack the inventory route. For a host-mode peer, a successful HEAD
 // with no remote-media marker proves its static mount served local bytes, rather
-// than proxying a third peer; a copy-mode peer gets no per-file probe (that
-// evidence only feeds the holders list). Failure is inconclusive and never
-// removes an existing host.
-async function fetchHostedInventory(peer, category, kind) {
+// than proxying a third peer. Failure is inconclusive and never removes an existing host.
+async function fetchHostedInventory(peer, category, kind, { probeOlderPeers = true } = {}) {
   const path = `/api/sync/${category}/${kind}-inventory`;
   const response = await withAbortTimeout(FETCH_TIMEOUT_MS, (signal) => peerFetch(`${peerBaseUrl(peer)}${path}`, { signal }, peer)).catch(() => null);
   if (!response) return null;
@@ -178,7 +176,9 @@ async function fetchHostedInventory(peer, category, kind) {
     if (!response.ok) return null;
     return readPeerBody(response, 'json', { maxBytes: PEER_BODY_DEFAULT_MAX_BYTES }).catch(() => null);
   }
-  if (peer.mediaSyncMode !== 'host') return null;
+  // An older peer reports no inventory; only host-mode reconciliation needs the
+  // per-file probe (the holders list and file times take the route's answer only).
+  if (!probeOlderPeers) return null;
   const { checked } = await dataSync.getHostedMediaInventory(category, kind);
   // Whole literals so the peer-surface guard (apiAccessPolicy.test.js) can see both routes.
   const mediaRoot = kind === 'image' ? '/data/images/' : '/data/videos/';
@@ -190,6 +190,13 @@ async function fetchHostedInventory(peer, category, kind) {
   });
   const filenames = found.filter(Boolean);
   return { version: 1, filenames, checked: filenames };
+}
+
+// File times of every gallery image the peer holds; an older peer 404s and reports nothing.
+async function fetchImageLibraryInventory(peer) {
+  const response = await withAbortTimeout(FETCH_TIMEOUT_MS, (signal) => peerFetch(`${peerBaseUrl(peer)}/api/sync/mediaCollections/image-library-inventory`, { signal }, peer)).catch(() => null);
+  if (!response?.ok) return null;
+  return readPeerBody(response, 'json', { maxBytes: PEER_BODY_DEFAULT_MAX_BYTES }).catch(() => null);
 }
 
 /**
@@ -610,10 +617,18 @@ async function syncDataCategoryFromPeer(peer, peerId, category, cachedChecksums,
   // Every peer's byte inventory feeds the holders list (services/mediaHolders.js);
   // a host-mode peer's also maintains where this machine streams from.
   if (category === 'videoHistory' || category === 'mediaCollections') {
+    const hostMode = peer.mediaSyncMode === 'host';
     const kinds = category === 'mediaCollections' ? ['video', 'image'] : ['video'];
+    const { hasUnattributedMedia } = await import('./mediaOriginReconcile.js');
     for (const kind of kinds) {
-      const inventory = await fetchHostedInventory(peer, category, kind).catch(() => null);
+      // The gallery-wide image library is asked for only while some media here has no recorded origin.
+      const unattributed = await hasUnattributedMedia(kind).catch(() => false);
+      const inventory = await fetchHostedInventory(peer, category, kind, { probeOlderPeers: hostMode }).catch(() => null);
       if (inventory) await dataSync.applyRemote(category, inventory, { peerId, portosMeta: inventory.portosMeta, inventory: true, inventoryKind: kind });
+      if (kind === 'image' && unattributed) {
+        const library = await fetchImageLibraryInventory(peer);
+        if (library) await dataSync.applyRemote(category, library, { peerId, portosMeta: library.portosMeta, inventory: true, inventoryKind: kind, inventoryScope: 'library' });
+      }
     }
   }
   if (!gap && lastChecksum && lastChecksum === checksumRes.checksum) {

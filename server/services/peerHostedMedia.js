@@ -197,9 +197,11 @@ function forgetHosted(kind, filename, peerId, revision) {
 
 /**
  * Forget `peerInstanceId` as a host of these files, any revision: it reported
- * (or was verified) not to hold them. Resolves true when an entry changed.
+ * (or was verified) not to hold them. `onlyPrimary` limits it to hosts a Make
+ * primary pointed at (hostFileOn); a host-mode peer's own entries are
+ * reconcileHostedMedia's. Resolves true when an entry changed.
  */
-export function dropHostOf(kind, filenames, peerInstanceId) {
+export function dropHostOf(kind, filenames, peerInstanceId, { onlyPrimary = false } = {}) {
   if (!Array.isArray(filenames) || filenames.length === 0) return Promise.resolve(false);
   return queueWrite(async () => {
     const entries = await readEntries();
@@ -207,7 +209,7 @@ export function dropHostOf(kind, filenames, peerInstanceId) {
     for (const filename of filenames) {
       const key = hostedKey(kind, filename);
       const hosts = hostsOf(entries[key]);
-      const remaining = hosts.filter((host) => host.peerId !== peerInstanceId);
+      const remaining = hosts.filter((host) => host.peerId !== peerInstanceId || (onlyPrimary && host.primary !== true));
       if (remaining.length === hosts.length) continue;
       if (remaining.length) entries[key] = hostEntry(remaining);
       else delete entries[key];

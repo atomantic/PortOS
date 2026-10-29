@@ -23,7 +23,8 @@ vi.mock('../lib/peerHttpClient.js', async () => ({
 vi.mock('../lib/trashFiles.js', () => ({ trashFiles: vi.fn(async () => {}) }));
 
 const { PATHS, atomicWrite, readJSONFile } = await import('../lib/fileUtils.js');
-const { makeMediaPrimary } = await import('./mediaHolders.js');
+const { makeMediaPrimary, recordPeerInventory } = await import('./mediaHolders.js');
+const { hostFileOn, listHostedEntries } = await import('./peerHostedMedia.js');
 
 const STORE = join(PATHS.data, 'media-holders.json');
 const HOLDER = { id: 'rec-a', instanceId: 'inst-a', name: 'Machine A', address: '192.0.2.10', port: 5555, enabled: true, status: 'online', syncSecret: 's'.repeat(40) };
@@ -69,5 +70,16 @@ describe('makeMediaPrimary', () => {
 
     await expect(makeMediaPrimary({ kind: 'video', filename: 'v1.mp4', instanceId: 'inst-a' })).rejects.toMatchObject({ code: 'PRIMARY_NOT_CONFIRMED' });
     expect(trashFiles).not.toHaveBeenCalled();
+  });
+});
+
+describe('recordPeerInventory', () => {
+  it('stops streaming from a primary whose inventory no longer lists the file, and ignores a malformed report', async () => {
+    await hostFileOn('video', 'kept.mp4', 'inst-a');
+    expect(await recordPeerInventory('inst-a', 'video', ['../bad'], ['kept.mp4'])).toBe(false);
+    expect(await listHostedEntries()).toHaveProperty(['video:kept.mp4']);
+
+    await recordPeerInventory('inst-a', 'video', [], ['kept.mp4']);
+    expect(await listHostedEntries()).not.toHaveProperty(['video:kept.mp4']);
   });
 });

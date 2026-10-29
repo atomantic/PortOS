@@ -90,17 +90,21 @@ const notifyHoldersChanged = (changed) => {
 
 /**
  * One peer's authoritative byte inventory for `kind`: `filenames` it holds out
- * of the `checked` names it examined. Names it did not examine keep their state.
- * A file it does not hold also stops being one this machine streams from it.
+ * of the `checked` names it examined. Names it did not examine keep their state,
+ * and a report with any malformed name is inconclusive as a whole. A file it
+ * does not hold stops being streamed from it when a Make primary pointed there;
+ * `direct` evidence about single files (a frame, a check, a command's answer)
+ * retires it as a host outright.
  */
-export async function recordPeerInventory(instanceId, kind, filenames, checked) {
+export async function recordPeerInventory(instanceId, kind, filenames, checked, { direct = false } = {}) {
   if (!isNonBlankStr(instanceId) || !KINDS.includes(kind) || !Array.isArray(filenames) || !Array.isArray(checked)) return false;
-  const present = new Set(filenames.filter(validName));
-  const examined = new Set(checked.filter(validName));
+  if (![...filenames, ...checked].every(validName)) return false;
+  const present = new Set(filenames);
+  const examined = new Set(checked);
   const absent = [...examined].filter((name) => !present.has(name));
   const at = new Date().toISOString();
   const { dropHostOf } = await import('./peerHostedMedia.js');
-  const hostsDropped = await dropHostOf(kind, absent, instanceId);
+  const hostsDropped = await dropHostOf(kind, absent, instanceId, { onlyPrimary: !direct });
   const recorded = await updateStore((store) => {
     const held = { ...(store.holdings[instanceId]?.[kind] ?? {}) };
     let changed = false;
@@ -116,7 +120,7 @@ export async function recordPeerInventory(instanceId, kind, filenames, checked) 
 
 /** A single "I hold / no longer hold" report from `instanceId` (a frame, a command's answer or a HEAD check). */
 export function notePeerHolding(instanceId, kind, filename, held) {
-  return recordPeerInventory(instanceId, kind, held ? [filename] : [], [filename]);
+  return recordPeerInventory(instanceId, kind, held ? [filename] : [], [filename], { direct: true });
 }
 
 /**

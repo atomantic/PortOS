@@ -18,6 +18,7 @@ vi.mock('../services/sharing/tombstoneGc.js', () => ({
 // would make the parity tests below compare the route to a copy of itself.
 vi.mock('../services/dataSync.js', async () => ({
   getHostedMediaInventory: vi.fn(),
+  getImageLibraryInventory: vi.fn(),
   getChecksum: vi.fn(),
   getSnapshot: vi.fn(),
   getManifest: vi.fn(),
@@ -48,7 +49,7 @@ vi.mock('../services/settings.js', async () => ({
 }));
 
 import { sweepTombstones, getSweepStatus } from '../services/sharing/tombstoneGc.js';
-import { getHostedMediaInventory, getChecksum, getSnapshot, getManifest, applyRemote, getSupportedCategories } from '../services/dataSync.js';
+import { getHostedMediaInventory, getImageLibraryInventory, getChecksum, getSnapshot, getManifest, applyRemote, getSupportedCategories } from '../services/dataSync.js';
 import { PEER_INSTANCE_ID_HEADER, __resetPullWarnThrottleForTests } from '../services/sharing/peerPullAuthorization.js';
 import { MAX_MANIFEST_SLOTS } from '../lib/syncManifest.js';
 import dataSyncRoutes, { categoryParam } from './dataSync.js';
@@ -438,6 +439,15 @@ describe('video history inventory authorization', () => {
     setPeers(allowedPeer({ enabled: false }));
     expect((await request(buildApp()).get(url).set(PEER_INSTANCE_ID_HEADER, PEER_ID)).status).toBe(403);
     expect(getHostedMediaInventory).toHaveBeenCalledTimes(1);
+  });
+
+  it('gates the whole-library image inventory with the collection peer/category authorization', async () => {
+    getImageLibraryInventory.mockResolvedValue({ version: 1, filenames: ['a.png'], checked: ['a.png'], mtimes: { 'a.png': 1 } });
+    const url = '/api/sync/mediaCollections/image-library-inventory';
+    expect((await request(buildApp()).get(url).set(PEER_INSTANCE_ID_HEADER, PEER_ID)).body.mtimes).toEqual({ 'a.png': 1 });
+    setPeers(allowedPeer({ fullSync: false, syncCategories: { mediaCollections: false } }));
+    expect((await request(buildApp()).get(url).set(PEER_INSTANCE_ID_HEADER, PEER_ID)).status).toBe(403);
+    expect(getImageLibraryInventory).toHaveBeenCalledTimes(1);
   });
 
   it('uses the same peer/category gate as history snapshots', async () => {

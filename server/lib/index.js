@@ -1024,5 +1024,6 @@ export * from './musicVideoPublishExports.js';
 export * from './musicVideoFestivalPacket.js';
 
 export * from './mediaRowOwners.js';
+export * from './mediaOriginClaim.js';
 
 export * from './peerSyncEventSchema.js';

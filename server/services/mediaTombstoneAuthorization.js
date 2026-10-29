@@ -15,7 +15,7 @@ import { peerMayDeleteMedia } from './instances.js';
 // re-create, so it is refused rather than allowed to pin the row deleted.
 export const TOMBSTONE_FUTURE_SKEW_MS = 5 * 60 * 1000;
 
-const peerIsPaired = (peer) => typeof peer?.syncSecret === 'string' && peer.syncSecret.length >= 32;
+export const peerIsPaired = (peer) => typeof peer?.syncSecret === 'string' && peer.syncSecret.length >= 32;
 const deny = (reason) => ({ allowed: false, reason });
 
 /**
