@@ -59,6 +59,7 @@ describe.skipIf(!ffmpeg)('continueFromPreviousShot', () => {
       { sceneId: 'b', startSec: 1, endSec: 3 },
     ] };
     const sidecar = join(ROOT, 'images', 'handoff-clip-a-958.metadata.json');
+    await continueFromPreviousShot('mv-1', 'b');
     const first = JSON.parse(readFileSync(sidecar, 'utf8'));
     expect(first.originInstanceId).toBe('local-inst');
     expect(Number.isFinite(Date.parse(first.createdAt))).toBe(true);
