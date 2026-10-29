@@ -1463,6 +1463,16 @@ it('carries a memory\'s era and film stock into its age sheet, test frames and s
   await runTo(project.id, 'review');
   expect(jobs.slice(before).map(keyOf).sort()).toEqual(['set:harbor', 'test:2']);
   expect(prompt('set:harbor')).toContain(`Look: ${memory}`);
+
+  // A dated age with no look of its own shares the project look.
+  const { buildCastAndSetsImagePlan } = await import('./castAndSetsPlan.js');
+  const saved = await current(project.id);
+  const direction = saved.castAndSets.direction;
+  const shared = { ...direction, sets: direction.sets.map(({ era: _e, look: _l, ...set }) => set),
+    protagonist: { ...direction.protagonist, forms: [{ ...direction.protagonist.forms[0], look: undefined }] } };
+  const plan = buildCastAndSetsImagePlan(saved, shared);
+  expect(plan['test:2'].prompt).toContain(`Look: ${present}`);
+  expect(plan['test:2'].prompt).not.toContain('Match the color');
 });
 
 it('keeps people out of set plates: no mood board person in the look, no character action in a set', async () => {

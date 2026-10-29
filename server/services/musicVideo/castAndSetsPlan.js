@@ -423,7 +423,9 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
         test.action,
         era ? eraLine(era) : form && `The place as it was when ${p.name || 'the protagonist'} was ${form.age || form.label}, with period-correct buildings, vehicles and props`,
         set?.lighting && `Light: ${set.lighting}`,
-        testLook ? `Look: ${testLook}` : form ? `Match the color, film stock and grain of the ${form.label} character sheet, not the present-day look` : style && `Look: ${style}`,
+        // A dated age with no look of its own shares the project look; an undated
+        // (older) one follows its sheet, whose description may carry the stock.
+        testLook ? `Look: ${testLook}` : form && !form.era ? `Match the color, film stock and grain of the ${form.label} character sheet` : style && `Look: ${style}`,
         note(key),
       ),
     };
