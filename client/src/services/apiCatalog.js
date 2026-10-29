@@ -260,9 +260,10 @@ export const previewCatalogSheet = (id, body = {}, options) =>
 
 export const renderCatalogSheet = (id, body = {}, options) =>
   request(`/catalog/ingredients/${enc(id)}/sheets`, { method: 'POST', body: JSON.stringify(body), ...options });
-// Remove a universe-canon sheet pointer; returns `{ filename, pointers }`.
-export const removeCatalogPointerSheet = (id, variant, options) =>
-  request(`/catalog/ingredients/${enc(id)}/sheets/pointer?variant=${enc(variant)}`, { method: 'DELETE', ...options });
+// Remove a universe-canon sheet, bound to the file shown; returns
+// `{ filename, pointers, updatedAt }`.
+export const removeCatalogPointerSheet = (id, variant, filename, options) =>
+  request(`/catalog/ingredients/${enc(id)}/sheets/pointer?variant=${enc(variant)}&filename=${enc(filename)}`, { method: 'DELETE', ...options });
 
 // --- Bulk import / export ----------------------------------------------
 

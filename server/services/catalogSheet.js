@@ -31,11 +31,11 @@ import { getBoard } from './moodBoard/db.js';
 import { recordRenderPin } from '../lib/renderTargets.js';
 import { shortId } from '../lib/fileUtils.js';
 import { getIngredient, getIngredientIdentityIds, listLiveRefsForIngredient, listMediaForIngredient, setIngredientPayloadKey } from './catalogDB.js';
-import { LEGACY_SHEET_VARIANT_ID, applySheetPointerToCharacter, readSheetPointer } from '../lib/sheetPointers.js';
+import { LEGACY_SHEET_VARIANT_ID, applySheetPointerToCharacter, listSheetPointers, readSheetPointer } from '../lib/sheetPointers.js';
 import { catalogEvents } from './catalogEvents.js';
 import { characterSheetEditBase, characterSheetReferenceCandidates } from '../lib/characterSheetReferences.js';
 import { catalogUniverseContext } from '../lib/catalogUniverseContext.js';
-import { getUniverse } from './universeBuilder.js';
+import { getUniverse, listUniverses, updateUniverse } from './universeBuilder.js';
 import { enqueueJob } from './mediaJobQueue/index.js';
 import {
   buildSheetRenderParams,
@@ -352,50 +352,85 @@ const sheetPointersOf = (payload) => ({
   referenceSheets: payload?.referenceSheets && typeof payload.referenceSheets === 'object' ? payload.referenceSheets : {},
 });
 
+const sheetLocked = (name) => new ServerError(`"${name}" is locked — unlock it before removing a reference sheet`,
+  { status: 409, code: 'CATALOG_INGREDIENT_LOCKED' });
+
+// Clear every slot of `character` that holds `filename`.
+function clearSheetFile(character, filename) {
+  let next = character;
+  for (const pointer of listSheetPointers(character)) {
+    if (pointer.filename === filename) next = applySheetPointerToCharacter(next, pointer.variant, null);
+  }
+  return next;
+}
+
 /**
- * Remove a universe-canon sheet pointer (`referenceSheetImageRef` /
- * `referenceSheets[variant]`) from a catalog character. When a linked
- * universe entry holds the same file, the universe delete unlinks the PNG and
- * clears the pointer everywhere; the canon→catalog projection carries that to
- * this row. A pointer only the catalog row holds is cleared on the row and the
- * file is kept, since another record may still name it. Returns the row's
- * fresh pointer fields so the page can apply them without a refetch.
+ * Remove a universe-canon sheet (`referenceSheetImageRef` /
+ * `referenceSheets[variant]`) from a catalog character, bound to the file the
+ * caller saw (`filename`; a newer render answers 409).
+ *
+ * When every universe slot holding the file belongs to this record's own canon
+ * entries, the universe delete unlinks the PNG and clears those slots; the
+ * canon→catalog projection carries that to this row. When any other slot names
+ * the file (another character, possibly locked, or a retained merge source),
+ * or this record is a merge survivor whose canon copies are retained evidence,
+ * only this record's own slots are cleared and the file stays. Returns the
+ * row's fresh pointer fields and `updatedAt` so the page applies them in place.
  */
-export async function removeCatalogPointerSheet(id, { variant = LEGACY_SHEET_VARIANT_ID } = {}) {
+export async function removeCatalogPointerSheet(id, { variant = LEGACY_SHEET_VARIANT_ID, filename: expected = null } = {}) {
   await assertCatalogIdentityWritable(id);
   const ingredient = await getIngredient(id);
   if (!ingredient) throw new ServerError('Ingredient not found', { status: 404, code: 'NOT_FOUND' });
-  if (ingredient.payload?.locked === true) {
-    throw new ServerError(
-      `"${ingredient.name}" is locked — unlock it before removing a reference sheet`,
-      { status: 409, code: 'CATALOG_INGREDIENT_LOCKED' },
-    );
-  }
+  if (ingredient.payload?.locked === true) throw sheetLocked(ingredient.name);
   const filename = readSheetPointer(ingredient.payload, variant);
   if (!filename) throw new ServerError(`No ${variant} reference sheet on "${ingredient.name}"`, { status: 404, code: 'NOT_FOUND' });
-  const identityIds = new Set([ingredient.id, ...await getIngredientIdentityIds(ingredient.id)]);
-  const universeIds = new Set((await listLiveRefsForIngredient(ingredient.id))
-    .filter((ref) => ref.refKind === 'universe').map((ref) => ref.refId));
-  for (const universeId of universeIds) {
-    const universe = await getLinkedUniverse(universeId);
-    const entry = (universe?.characters || []).find((c) => identityIds.has(c?.ingredientId) && readSheetPointer(c, variant) === filename);
-    if (!entry) continue;
-    const result = await deleteCharacterReferenceSheet(universe.id, entry.id, { variant });
-    const fresh = await getIngredient(ingredient.id);
-    return { ...result, pointers: sheetPointersOf(fresh?.payload) };
+  if (expected && expected !== filename) {
+    throw new ServerError('This reference sheet changed since it was shown; reload and try again', { status: 409, code: 'REFERENCE_SHEET_CHANGED' });
   }
-  const next = applySheetPointerToCharacter(ingredient.payload, variant, null);
-  const key = variant === LEGACY_SHEET_VARIANT_ID ? 'referenceSheetImageRef' : 'referenceSheets';
-  const updated = await setIngredientPayloadKey(ingredient.id, key, next[key] ?? null, {
-    guard: (current) => {
-      if (current.payload?.locked === true) {
-        throw new ServerError(`"${current.name}" is locked — unlock it before removing a reference sheet`,
-          { status: 409, code: 'CATALOG_INGREDIENT_LOCKED' });
+
+  // Like a render, only a record with no merged sources acts on its canon entries.
+  const ownsCanon = (await getIngredientIdentityIds(ingredient.id)).length === 1;
+  const isOwn = (entry) => ownsCanon && entry?.ingredientId === ingredient.id;
+  const holders = [];
+  for (const universe of await listUniverses()) {
+    for (const entry of Array.isArray(universe.characters) ? universe.characters : []) {
+      for (const pointer of listSheetPointers(entry)) {
+        if (pointer.filename === filename) holders.push({ universeId: universe.id, entry, variant: pointer.variant });
       }
-    },
-  });
+    }
+  }
+  const own = holders.filter((h) => isOwn(h.entry));
+  let result = { filename, fileDeleted: false, cleared: 0 };
+  if (own.length && own.length === holders.length) {
+    const { universeId, entry, variant: slot } = own[0];
+    result = await deleteCharacterReferenceSheet(universeId, entry.id, { variant: slot, expectedFilename: filename });
+  } else {
+    for (const universeId of new Set(own.map((h) => h.universeId))) {
+      await updateUniverse(universeId, (cur) => {
+        let touched = false;
+        const characters = (Array.isArray(cur.characters) ? cur.characters : []).map((entry) => {
+          if (!isOwn(entry)) return entry;
+          const next = clearSheetFile(entry, filename);
+          if (next !== entry) { touched = true; result.cleared += 1; }
+          return next;
+        });
+        return touched ? { characters } : null;
+      });
+    }
+  }
+  // The row itself: a no-op when the projection already cleared it.
+  let updated = await getIngredient(ingredient.id);
+  const guard = (current) => { if (current.payload?.locked === true) throw sheetLocked(current.name); };
+  if (updated?.payload?.referenceSheetImageRef === filename) {
+    updated = await setIngredientPayloadKey(ingredient.id, 'referenceSheetImageRef',
+      (current) => (current === filename ? null : current), { guard });
+  }
+  if (Object.values(sheetPointersOf(updated?.payload).referenceSheets).includes(filename)) {
+    updated = await setIngredientPayloadKey(ingredient.id, 'referenceSheets', (current) => Object.fromEntries(
+      Object.entries(current && typeof current === 'object' ? current : {}).filter(([, f]) => f !== filename)), { guard });
+  }
   if (!updated) throw new ServerError('Ingredient not found', { status: 404, code: 'NOT_FOUND' });
   catalogEvents.emit('primitive-changed', { ingredientId: updated.id });
-  console.log(`🗑️ Cleared ${variant} sheet pointer ${filename} on catalog ${shortId(updated.id)} (no universe entry held it)`);
-  return { filename, fileDeleted: false, cleared: 1, pointers: sheetPointersOf(updated.payload) };
+  console.log(`🗑️ Removed sheet ${filename} from catalog ${shortId(updated.id)} (file=${result.fileDeleted}, shared=${own.length !== holders.length})`);
+  return { ...result, pointers: sheetPointersOf(updated.payload), updatedAt: updated.updatedAt };
 }

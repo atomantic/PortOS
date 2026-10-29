@@ -217,17 +217,19 @@ export default function CatalogSheetsPanel({
   }, [ingredientId, mountedRef, onMediaChanged]);
 
   // A universe sheet is removed through the server (it deletes the canon file
-  // when a linked universe holds it); the page applies the returned pointers.
-  const removePointer = useCallback(async (variant) => {
+  // when only this record names it). The page owns the record and draft, so it
+  // gets the returned pointers even if this tab unmounted meanwhile.
+  const removePointer = useCallback(async (variant, filename) => {
     setRemovingPointer(variant);
-    const result = await removeCatalogPointerSheet(ingredientId, variant, { silent: true })
+    const result = await removeCatalogPointerSheet(ingredientId, variant, filename, { silent: true })
       .catch((err) => { toast.error(err?.message || 'Could not remove the sheet'); return null; });
+    if (result) {
+      onPointerSheetsChanged?.(result);
+      toast.success('Reference sheet removed');
+    }
     if (!mountedRef.current) return;
     setRemovingPointer(null);
     setArmedPointer(null);
-    if (!result) return;
-    onPointerSheetsChanged?.(result.pointers);
-    toast.success('Reference sheet removed');
   }, [ingredientId, mountedRef, onPointerSheetsChanged]);
 
   const dropJob = useCallback((jobId) => setJobs((cur) => cur.filter((j) => j.jobId !== jobId)), []);
@@ -308,10 +310,12 @@ export default function CatalogSheetsPanel({
   const universePath = universeCanonPath(universeRef);
 
   // The enlarged viewer steps through every sheet shown here and offers Remove.
+  // One entry per file: removing a universe sheet clears every slot of this
+  // record that holds the file, so two slots sharing one image remove together.
   const sheetEntries = groups.flatMap((g) => [
     ...g.pointer.map(([v, filename]) => ({ key: imageRefsSequenceKey(filename), variant: v, filename, ratingKey: pointerRatingKey(filename) })),
     ...g.items.map((m) => ({ key: m.mediaKey, media: m, ratingKey: mediaRatingKey(m.mediaKey) })),
-  ]);
+  ]).filter((e, i, all) => all.findIndex((other) => other.key === e.key) === i);
   const sequenceKeys = sheetEntries.map((e) => e.key).join('|');
   const sequence = useMemo(() => ({
     keys: sheetEntries.map((e) => e.key),
@@ -321,7 +325,7 @@ export default function CatalogSheetsPanel({
       if (!entry) return null;
       const remove = entry.media
         ? (onDetach && !entry.media.readOnly ? () => onDetach(entry.media.mediaKey, entry.media.kind) : null)
-        : (onPointerSheetsChanged ? () => removePointer(entry.variant) : null);
+        : (onPointerSheetsChanged ? () => removePointer(entry.variant, entry.filename) : null);
       if (!remove) return null;
       return <SheetPreviewActions key={key} bad={ratedBad(entry.ratingKey)} busy={!!removingPointer}
         onRemove={async () => { goTo(nextKey ?? prevKey); await remove(); }} />;
@@ -400,7 +404,7 @@ export default function CatalogSheetsPanel({
                     armed: armedPointer === v,
                     busy: removingPointer === v,
                     onArm: () => setArmedPointer(v),
-                    onConfirm: () => removePointer(v),
+                    onConfirm: () => removePointer(v, filename),
                     onCancel: () => setArmedPointer(null),
                   } : null} />
               ))}

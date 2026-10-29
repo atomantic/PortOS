@@ -30,10 +30,11 @@ router.post('/ingredients/:id/sheets', asyncHandler(async (req, res) => {
 }));
 
 // Remove a universe-canon sheet pointer (the catalog-media sheets detach like
-// any other media row). `variant` rides in the query string like the universe
-// sheet DELETE.
+// any other media row). `variant` and the confirmed `filename` ride in the
+// query string like the universe sheet DELETE.
 const removePointerSheetQuerySchema = z.object({
   variant: z.string().trim().min(1).max(48).optional(),
+  filename: z.string().trim().min(1).max(255).optional(),
 });
 router.delete('/ingredients/:id/sheets/pointer', asyncHandler(async (req, res) => {
   const options = validateRequest(removePointerSheetQuerySchema, req.query ?? {});

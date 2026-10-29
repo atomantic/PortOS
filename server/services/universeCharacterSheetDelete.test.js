@@ -91,6 +91,17 @@ describe('universeCharacterSheet — deleteCharacterReferenceSheet', () => {
     expect(fakeUniverseStore.get('uni-1').characters[0].referenceSheetImageRef).toBeNull();
   });
 
+  it('refuses without unlinking when a newer render replaced the confirmed file', async () => {
+    seedUniverse('uni-1', [
+      { id: 'char-1', name: 'Alex', referenceSheetImageRef: 'sheet-new.png' },
+    ]);
+
+    await expect(deleteCharacterReferenceSheet('uni-1', 'char-1', { expectedFilename: 'sheet-old.png' }))
+      .rejects.toMatchObject({ status: 409, code: 'REFERENCE_SHEET_CHANGED' });
+    expect(unlinkMock).not.toHaveBeenCalled();
+    expect(fakeUniverseStore.get('uni-1').characters[0].referenceSheetImageRef).toBe('sheet-new.png');
+  });
+
   it('treats ENOENT (file already gone) as benign — pointer still clears', async () => {
     seedUniverse('uni-1', [
       { id: 'char-1', name: 'Alex', referenceSheetImageRef: 'sheet-X.png' },

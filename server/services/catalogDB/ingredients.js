@@ -40,14 +40,16 @@ import { ServerError } from '../../lib/errorHandler.js';
 // Write ONE payload key under the row lock: a card or a side panel must never
 // write a stale whole payload, sanitize legacy fields away, or spend an
 // embedding call. `guard(current)` may throw to refuse by type; `null` clears
-// the key. Returns null for a missing row.
-export async function setIngredientPayloadKey(id, key, value, { source = 'user', guard } = {}) {
+// the key; a function receives the key's locked current value and returns the
+// next. Returns null for a missing row.
+export async function setIngredientPayloadKey(id, key, valueOrUpdate, { source = 'user', guard } = {}) {
   return withTransaction(async client => {
     await assertCatalogIdentityWritable(id, { client });
     const { rows: [current] } = await client.query(`SELECT * FROM catalog_ingredients
       WHERE id = catalog_canonical_ingredient_id($1) AND deleted = false FOR UPDATE`, [id]);
     if (!current) return null;
     guard?.(current);
+    const value = typeof valueOrUpdate === 'function' ? valueOrUpdate(current.payload?.[key]) : valueOrUpdate;
     if (isDeepStrictEqual(current.payload?.[key], value ?? undefined)) return rowToIngredient(current);
     const { rows: [row] } = value === null
       ? await client.query('UPDATE catalog_ingredients SET payload = payload - $2::text WHERE id = $1 RETURNING *', [current.id, key])

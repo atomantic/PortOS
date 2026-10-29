@@ -87,10 +87,20 @@ vi.mock('../services/apiCatalog', () => ({
 }));
 // Universe-delegated sheet renders announce completion on this broadcast.
 const { socketHandlers } = vi.hoisted(() => ({ socketHandlers: new Map() }));
+// Several panels listen to one event, so every listener receives an emit.
+const emitSocket = (event, data) => {
+  const handlers = socketHandlers.get(event);
+  if (!handlers?.size) throw new Error(`No socket listener for ${event}`);
+  for (const fn of handlers) fn(data);
+};
 vi.mock('../services/socket', () => ({
   default: {
-    on: (event, fn) => socketHandlers.set(event, fn),
-    off: (event) => socketHandlers.delete(event),
+    on: (event, fn) => socketHandlers.set(event, new Set([...(socketHandlers.get(event) || []), fn])),
+    off: (event, fn) => {
+      const handlers = socketHandlers.get(event);
+      handlers?.delete(fn);
+      if (!handlers?.size) socketHandlers.delete(event);
+    },
   },
 }));
 
@@ -1095,7 +1105,7 @@ describe('CatalogIngredient — tabbed library record pages', () => {
       fireEvent.click(within(badSheet).getByRole('button', { name: 'Remove expressions sheet' }));
       expect(api.removeCatalogPointerSheet).not.toHaveBeenCalled();
       fireEvent.click(within(badSheet).getByRole('button', { name: 'Remove' }));
-      await waitFor(() => expect(api.removeCatalogPointerSheet).toHaveBeenCalledWith('cat-chr-hero', 'expressions', { silent: true }));
+      await waitFor(() => expect(api.removeCatalogPointerSheet).toHaveBeenCalledWith('cat-chr-hero', 'expressions', 'hero-expressions.png', { silent: true }));
       await waitFor(() => expect(screen.queryByAltText('expressions reference sheet')).toBeNull());
       expect(screen.getByAltText('standard reference sheet')).toBeInTheDocument();
     } finally {
@@ -1112,8 +1122,32 @@ describe('CatalogIngredient — tabbed library record pages', () => {
     const dialog = await screen.findByRole('dialog');
     fireEvent.click(within(dialog).getByRole('button', { name: 'Remove sheet' }));
     fireEvent.click(within(dialog).getByRole('button', { name: 'Tap to remove' }));
-    await waitFor(() => expect(api.removeCatalogPointerSheet).toHaveBeenCalledWith('cat-chr-hero', 'standard', { silent: true }));
+    await waitFor(() => expect(api.removeCatalogPointerSheet).toHaveBeenCalledWith('cat-chr-hero', 'standard', 'hero-standard.png', { silent: true }));
     await waitFor(() => expect(screen.queryByAltText('standard reference sheet')).toBeNull());
+  });
+
+  it('keeps a removal finished after leaving the tab, without its own echo blocking an unsaved edit', async () => {
+    const api = await import('../services/apiCatalog');
+    const before = { ...HERO, updatedAt: '2026-01-01T00:00:00.000Z' };
+    const after = { ...before, updatedAt: '2026-01-02T00:00:00.000Z',
+      payload: { ...HERO.payload, referenceSheets: {} } };
+    getCatalogIngredientDetails.mockImplementation(async () => ({ ...detailsOf(before), media: MEDIA }));
+    let finish;
+    api.removeCatalogPointerSheet.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+    const { router } = await renderPage('/casting/cat-chr-hero/sheets');
+    const sheet = (await screen.findByAltText('expressions reference sheet')).closest('figure');
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Remove expressions sheet' }));
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Remove' }));
+    await act(async () => { await router.navigate('/casting/cat-chr-hero'); });
+    fireEvent.change(await screen.findByLabelText('Name'), { target: { value: 'Example Hero Renamed' } });
+    getCatalogIngredientDetails.mockImplementation(async () => ({ ...detailsOf(after), media: MEDIA }));
+    await act(async () => { finish({ filename: 'hero-expressions.png', pointers: { referenceSheetImageRef: 'hero-standard.png', referenceSheets: {} }, updatedAt: after.updatedAt }); });
+    await act(async () => { emitSocket('catalog:primitive-changed', { ingredientId: HERO.id }); });
+    expect(screen.queryByRole('button', { name: 'Discard local edits and load latest' })).toBeNull();
+    expect(screen.getByLabelText('Name')).toHaveValue('Example Hero Renamed');
+    await act(async () => { await router.navigate('/casting/cat-chr-hero/sheets'); });
+    expect(await screen.findByAltText('standard reference sheet')).toBeInTheDocument();
+    expect(screen.queryByAltText('expressions reference sheet')).toBeNull();
   });
 
   it('shows the server-selected canonical references beside Generate with full-size links and omissions', async () => {
@@ -1431,8 +1465,8 @@ describe('CatalogIngredient — tabbed library record pages', () => {
     const first = Promise.withResolvers();
     const second = Promise.withResolvers();
     getCatalogIngredientDetails.mockReset().mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
-    await act(async () => { socketHandlers.get('reference-sheet:changed')({ jobId: 'manual-canon-std', status: 'ready' }); });
-    await act(async () => { socketHandlers.get('reference-sheet:changed')({ jobId: 'manual-canon-exp', status: 'ready' }); });
+    await act(async () => { emitSocket('reference-sheet:changed', { jobId: 'manual-canon-std', status: 'ready' }); });
+    await act(async () => { emitSocket('reference-sheet:changed', { jobId: 'manual-canon-exp', status: 'ready' }); });
     expect(getCatalogIngredientDetails).toHaveBeenCalledTimes(2);
 
     const firstPayload = { ...HERO.payload, referenceSheetImageRef: 'hero-standard-v2.png' };
@@ -1456,7 +1490,7 @@ describe('CatalogIngredient — tabbed library record pages', () => {
       media: MEDIA,
     }));
     await act(async () => {
-      socketHandlers.get('reference-sheet:changed')({ jobId: 'canon-job', status: 'ready' });
+      emitSocket('reference-sheet:changed', { jobId: 'canon-job', status: 'ready' });
     });
     await waitFor(() => expect(screen.getByAltText('standard reference sheet').getAttribute('src'))
       .toBe('/data/image-refs/hero-standard-v2.png'));
@@ -1468,7 +1502,7 @@ describe('CatalogIngredient — tabbed library record pages', () => {
     await renderPage('/casting/cat-chr-hero/sheets');
     fireEvent.click(await screen.findByRole('button', { name: /Generate sheet/ }));
     await screen.findByTestId('job-thumb-manual-canon-fail');
-    await act(async () => { socketHandlers.get('reference-sheet:changed')({ jobId: 'manual-canon-fail', status: 'failed' }); });
+    await act(async () => { emitSocket('reference-sheet:changed', { jobId: 'manual-canon-fail', status: 'failed' }); });
     expect(toast.error).toHaveBeenCalledWith('Standard turnaround render finished but the sheet could not be saved');
     expect(screen.queryByTestId('job-thumb-manual-canon-fail')).toBeNull();
   });
@@ -1822,7 +1856,7 @@ describe('Casting lean first render', () => {
     const { router } = await renderPage('/casting/cat-chr-1/sheets');
     const picker = await screen.findByLabelText('Sheet kind');
     fireEvent.change(picker, { target: { value: 'expressions' } });
-    await act(async () => socketHandlers.get('catalog:identity-changed')({ sourceId: CHAR_FIXTURE.id }));
+    await act(async () => emitSocket('catalog:identity-changed', { sourceId: CHAR_FIXTURE.id }));
     expect(mediaCalls).toBe(2);
     expect(screen.getByLabelText('Sheet kind')).toBe(picker);
     expect(picker).toHaveValue('expressions');
