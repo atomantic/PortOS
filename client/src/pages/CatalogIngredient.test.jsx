@@ -1161,7 +1161,7 @@ describe('CatalogIngredient — tabbed library record pages', () => {
     fireEvent.change(within(library).getByLabelText('Filter by age'), { target: { value: '' } });
     fireEvent.change(within(library).getByLabelText('Media scope'), { target: { value: 'all' } });
     expect(screen.getByAltText('Sheet in its own tab')).toBeInTheDocument();
-    expect(within(screen.getByRole('group', { name: 'reference details for sheet.png' })).getByRole('button', { name: 'Guide' })).toBeEnabled();
+    expect(within(screen.getByRole('group', { name: 'Details for sheet.png' })).getByRole('button', { name: 'Guide' })).toBeEnabled();
   });
 
   it('keeps archive-only reference media visible on References without using it as a profile cover', async () => {
@@ -1392,7 +1392,7 @@ describe('CatalogIngredient — tabbed library record pages', () => {
       fireEvent.click(screen.getByRole('button', { name: /Save look/ }));
       await waitFor(() => expect(finishSave).toBeTypeOf('function'));
       await act(async () => { await router.navigate('/casting/cat-chr-hero/references'); });
-      const row = await screen.findByRole('group', { name: 'reference details for mood.png' });
+      const row = await screen.findByRole('group', { name: 'Details for mood.png' });
       fireEvent.click(within(row).getByText(/Review & refine/));
       expect(within(row).getByRole('button', { name: 'Refine as new version' })).toBeDisabled();
       expect(within(row).getByRole('status')).toHaveTextContent('Saving — the reference renders from the saved record.');
