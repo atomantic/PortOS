@@ -20,7 +20,7 @@ import { readFile, stat } from 'fs/promises';
 import { existsSync } from 'fs';
 import { PATHS, ensureDir, atomicWrite, readJSONFile, sha256File, copyFileGuarded } from '../../lib/fileUtils.js';
 import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
-import { getOrComputeImageSha256 } from '../../lib/assetHash.js';
+import { getOrComputeImageSha256, stripImageSidecarLocalBytes } from '../../lib/assetHash.js';
 import { isPlainObject } from '../../lib/objects.js';
 import { getBucket, ensureBucketLayout, bucketBlobsDir, bucketBlobPath, bucketBlobSidecarPath, bucketBlobIndexPath, bucketRecordsDir, bucketRecordPath, imageSidecarName, isHexHash } from './buckets.js';
 import { buildManifest, writeManifest, pruneBucketManifests } from './manifest.js';
@@ -156,7 +156,13 @@ async function copyAssetIfPresent(filename, kind, bucketPath, cache) {
     const sidecarSource = join(sourceDir, imageSidecarName(base));
     if (existsSync(sidecarSource)) {
       const sidecarTarget = bucketBlobSidecarPath(bucketPath, hash);
-      if (!existsSync(sidecarTarget)) await copyFileGuarded(sidecarSource, sidecarTarget);
+      if (!existsSync(sidecarTarget)) {
+        // This machine's own sidecar fields (hide, pending delete, supplier) stay here.
+        const raw = await readFile(sidecarSource);
+        const shared = stripImageSidecarLocalBytes(raw);
+        if (shared === raw) await copyFileGuarded(sidecarSource, sidecarTarget);
+        else await atomicWrite(sidecarTarget, shared);
+      }
     }
   }
   return { kind, ref: base, hash };

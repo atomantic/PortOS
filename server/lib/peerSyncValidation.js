@@ -37,6 +37,9 @@ const peerAssetManifestEntrySchema = z.discriminatedUnion('kind', [
     kind: z.literal('image'),
     sha256: hex64.optional(),
     sidecarSha256: hex64.optional(),
+    // When this copy was made: only in a library manifest sent to a receiver
+    // that asked for tombstones (an older receiver's strict schema refuses it).
+    createdAt: z.string().max(64).optional(),
   }).strict(),
   z.object({
     filename: z.string().trim().min(1).max(255),

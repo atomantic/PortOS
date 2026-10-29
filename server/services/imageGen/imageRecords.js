@@ -7,18 +7,20 @@
  * and local.js (the render graph) is imported lazily.
  */
 import { existsSync } from 'fs';
+import { stat } from 'fs/promises';
 import { join } from 'path';
 import { PATHS, readJSONFile } from '../../lib/fileUtils.js';
 import { isPlainObject } from '../../lib/objects.js';
 import { isNonBlankStr } from '../../lib/textUtils.js';
-import { stripImageSidecarLocalFields } from '../../lib/assetHash.js';
+import { stripImageSidecarLocalFields, imageLiveStamp } from '../../lib/assetHash.js';
+import { isSafeFilename } from '../../lib/pathSafety.js';
 import { isTombstoned, tombstoneTimestamp } from '../../lib/tombstones.js';
 import { parseTsMs } from '../../lib/lwwTimestamp.js';
 import { imageGenEvents } from '../imageGenEvents.js';
 import { mergeMediaTombstones, listMediaTombstones } from '../mediaTombstones.js';
 
-const GALLERY_NAME = /^[^/\\]+\.png$/i;
-export const isGalleryImageName = (filename) => typeof filename === 'string' && GALLERY_NAME.test(filename) && filename !== '.png';
+// The check assertGalleryFilename applies, as a predicate for peer-supplied keys.
+const isGalleryName = (filename) => isSafeFilename(filename, ['.png']);
 
 const sidecarPaths = (filename) => [
   join(PATHS.images, filename.replace(/\.png$/i, '.metadata.json')),
@@ -37,14 +39,19 @@ async function readSidecar(filename) {
 /**
  * The image held here as a record, `{ filename, createdAt?, originInstanceId?,
  * suppliedByInstanceId?, pendingDelete?, hidden? }`, or null when neither its
- * bytes nor its sidecar are on this machine.
+ * bytes nor its sidecar are on this machine. `createdAt` is the live stamp a
+ * tombstone must postdate (imageLiveStamp: the sidecar's, else the file's), so
+ * a stale delete of an earlier image under a re-used name spares this one.
  */
 export async function readHeldImage(filename) {
-  if (!isGalleryImageName(filename)) return null;
+  if (!isGalleryName(filename)) return null;
   const sidecar = await readSidecar(filename);
-  if (!sidecar && !existsSync(join(PATHS.images, filename))) return null;
+  const fileStat = await stat(join(PATHS.images, filename)).catch(() => null);
+  if (!sidecar && !fileStat) return null;
   const record = { filename };
-  for (const key of ['createdAt', 'originInstanceId', 'suppliedByInstanceId']) {
+  const createdAt = imageLiveStamp(sidecar, fileStat);
+  if (createdAt) record.createdAt = createdAt;
+  for (const key of ['originInstanceId', 'suppliedByInstanceId']) {
     if (isNonBlankStr(sidecar?.[key])) record[key] = sidecar[key];
   }
   if (isPlainObject(sidecar?.pendingDelete)) record.pendingDelete = sidecar.pendingDelete;
@@ -72,7 +79,7 @@ export async function withLocalImageOrigin(meta) {
 async function stampRenderOrigin(payload) {
   const filename = payload?.filename;
   // A temp render (no gallery path) has no sidecar to own.
-  if (payload?.temp || payload?.path === null || !isGalleryImageName(filename)) return;
+  if (payload?.temp || payload?.path === null || !isGalleryName(filename)) return;
   const id = await localInstanceId();
   if (!id) return;
   const { fillImageSidecarFields } = await import('./local.js');
@@ -150,7 +157,7 @@ export async function admitPeerImageTombstones(peer, tombstones, { via = 'snapsh
   const notHeld = [];
   let refused = 0;
   for (const tombstone of list) {
-    if (!isGalleryImageName(tombstone?.key)) { refused++; continue; }
+    if (!isGalleryName(tombstone?.key)) { refused++; continue; }
     if (alreadyApplied(tombstone)) continue;
     const localRow = await readHeldImage(tombstone.key);
     const verdict = authorizeRemoteMediaTombstone({ peer, tombstone, localRow, hostedIndex, via, eventOriginInstanceId });

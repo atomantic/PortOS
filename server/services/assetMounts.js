@@ -18,9 +18,8 @@ import express from 'express';
 import { join } from 'path';
 import { z } from 'zod';
 import { readFile } from 'fs/promises';
-import { PATHS, safeJSONParse } from '../lib/fileUtils.js';
-import { isPlainObject } from '../lib/objects.js';
-import { IMAGE_SIDECAR_LOCAL_FIELDS, stripImageSidecarLocalFields } from '../lib/assetHash.js';
+import { PATHS } from '../lib/fileUtils.js';
+import { stripImageSidecarLocalBytes } from '../lib/assetHash.js';
 import { ServerError, sendErrorResponse } from '../lib/errorHandler.js';
 import { ASSET_ROUTE_PREFIXES, SERVER_OWNED_PREFIXES } from '../lib/assetRoutePrefixes.js';
 import { wrWorksDir, WORK_ID_RE } from './writersRoom/_shared.js';
@@ -144,11 +143,11 @@ const SIDECAR_PATH = /^\/([A-Za-z0-9][A-Za-z0-9._-]*\.metadata\.json)$/;
 const imageSidecarGate = async (req, res, next) => {
   const match = (req.method === 'GET' || req.method === 'HEAD') ? SIDECAR_PATH.exec(req.path) : null;
   if (!match) return next();
-  const raw = await readFile(join(PATHS.images, match[1]), 'utf8').catch(() => null);
-  const parsed = raw === null ? null : safeJSONParse(raw, null);
-  if (!isPlainObject(parsed) || !IMAGE_SIDECAR_LOCAL_FIELDS.some((key) => key in parsed)) return next();
+  const raw = await readFile(join(PATHS.images, match[1])).catch(() => null);
+  const shared = raw === null ? raw : stripImageSidecarLocalBytes(raw);
+  if (shared === raw) return next();
   ASSET_STATIC_OPTS.setHeaders(res, match[1]);
-  res.type('application/json').send(JSON.stringify(stripImageSidecarLocalFields(parsed)));
+  res.type('application/json').send(shared);
 };
 
 // Mounts whose files a peer may host instead of copying (peerHostedMedia.js).

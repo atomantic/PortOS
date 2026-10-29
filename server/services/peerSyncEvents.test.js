@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
-import { mkdirSync, writeFileSync } from 'fs';
+import { mkdirSync, writeFileSync, utimesSync } from 'fs';
 import { join } from 'path';
 import { mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
 
@@ -169,6 +169,17 @@ describe('applyPeerSyncEvent for gallery images', () => {
     expect(await imageTombstones()).toEqual(['fox.png']);
   });
 
+  it("spares a copy made after the owner's delete under a re-used name, by sidecar or file stamp", async () => {
+    // imageDeleteFrame's tombstone is dated 2026-06-01.
+    seedImage('fresh.png', { originInstanceId: 'peer-o', createdAt: '2026-07-01T00:00:00.000Z' });
+    seedImage('bare.png', { originInstanceId: 'peer-o', createdAt: undefined });
+    const later = new Date('2026-07-01T00:00:00.000Z');
+    utimesSync(join(PATHS.images, 'bare.png'), later, later);
+    expect((await applyPeerSyncEvent({ id: 'rec-origin' }, imageDeleteFrame('fresh.png'))).applied).toBe(false);
+    expect((await applyPeerSyncEvent({ id: 'rec-origin' }, imageDeleteFrame('bare.png'))).applied).toBe(false);
+    expect(trashFiles).not.toHaveBeenCalled();
+  });
+
   it('ignores a delete frame from a peer that does not own the image', async () => {
     seedImage('fox.png', { originInstanceId: 'peer-o' });
     const result = await applyPeerSyncEvent({ id: 'rec-other' }, imageDeleteFrame('fox.png', 'peer-x'));
@@ -212,7 +223,9 @@ describe('local emission', () => {
       expect(changed).toHaveLength(3);
       expect(frames.length).toBeGreaterThan(0);
     });
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    // Each announce settles within a few promise turns; drain them before
+    // asserting no further frame arrives.
+    for (let turn = 0; turn < 5; turn++) await new Promise((resolve) => setImmediate(resolve));
     peerSyncBus.off('event', onEvent);
     peerSyncBus.off('media-history-changed', onChanged);
     expect(frames).toEqual([expect.objectContaining({ category: 'imageHistory', op: 'delete', id: 'mine.png', tombstone: expect.objectContaining({ key: 'mine.png' }) })]);

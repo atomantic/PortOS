@@ -60,7 +60,8 @@ describe('image origin', () => {
     await vi.waitFor(() => expect(sidecarOf('render.png').originInstanceId).toBe('local-inst'));
     expect(sidecarOf('claimed.png').originInstanceId).toBe('other-inst');
     expect(sidecarOf('temp.png')).not.toHaveProperty('originInstanceId');
-    expect(await readHeldImage('render.png')).toEqual({ filename: 'render.png', originInstanceId: 'local-inst' });
+    // With no createdAt in the sidecar, the file's own stamp is the live stamp.
+    expect(await readHeldImage('render.png')).toEqual({ filename: 'render.png', originInstanceId: 'local-inst', createdAt: expect.any(String) });
   });
 
   it("gives a variant of a peer's image this machine as origin, without the source's local fields", async () => {

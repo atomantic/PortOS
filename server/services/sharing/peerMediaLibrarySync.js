@@ -179,7 +179,7 @@ export async function buildMediaLibraryManifest({ models = false, tombstones = f
       // `.json` files in the images dir.
       if (kind === 'image' && name.endsWith('.json')) continue;
       const entry = kind === 'image'
-        ? await hashImageForManifest(name)        // sidecar-cached
+        ? await hashImageForManifest(name, { withCreatedAt: tombstones }) // sidecar-cached
         : await hashCachedLibraryAsset(name, kind, dir); // (mtime,size)-cached
       if (!entry) continue;
       if (assets.length >= MEDIA_LIBRARY_MANIFEST_CAP) { truncated = true; break; }
@@ -195,8 +195,13 @@ export async function buildMediaLibraryManifest({ models = false, tombstones = f
   // Deleted gallery images, so a receiver still holding one retires it rather
   // than this machine pulling it back. Sorted, and hashed only when present, so
   // a library with no deletes keeps its exact manifestHash.
+  // A tombstone this machine's own newer copy supersedes (a re-used name) is
+  // left out, so it cannot retire that copy on a peer.
+  const liveImages = new Map(assets.filter((e) => e.kind === 'image' && e.createdAt).map((e) => [e.filename, Date.parse(e.createdAt)]));
   const deleted = tombstones && !excluded.has('image')
-    ? [...(await listMediaTombstones('image'))].sort((a, b) => a.key.localeCompare(b.key))
+    ? (await listMediaTombstones('image'))
+      .filter((t) => !(liveImages.get(t.key) > Date.parse(t.deletedAt)))
+      .sort((a, b) => a.key.localeCompare(b.key))
     : [];
   const hashInput = sorted.map((e) => `${e.kind}:${e.filename}:${e.sha256 || ''}:${e.sidecarSha256 || ''}`).join('\n')
     + (deleted.length > 0 ? `\n#tombstones\n${deleted.map((t) => `${t.key}@${t.deletedAt}`).join('\n')}` : '');
@@ -336,7 +341,8 @@ export async function syncMediaLibraryFromPeer(peer) {
       if (removed > 0) console.log(`🗑️ peerSync: ${peer.name || peer.instanceId} library deletes removed ${removed} image(s) here`);
       if (refused > 0) console.log(`⏭️ peerSync: ${peer.name || peer.instanceId} library manifest: ignored ${refused} image tombstone(s)`);
     }
-    const missing = await diffAssetManifestAgainstLocal(manifest.assets);
+    const diffOptions = { senderInstanceId: peer.instanceId };
+    const missing = await diffAssetManifestAgainstLocal(manifest.assets, diffOptions);
     const requested = missing.length;
     let stillMissing = missing;
     if (requested > 0) {
@@ -344,7 +350,7 @@ export async function syncMediaLibraryFromPeer(peer) {
       // video-thumbnail regen). It swallows per-asset failures, so re-diff disk
       // rather than treating the pull's resolution as evidence bytes landed.
       await pullMissingAssetsFromPeer(peer.instanceId, missing);
-      stillMissing = await diffAssetManifestAgainstLocal(manifest.assets);
+      stillMissing = await diffAssetManifestAgainstLocal(manifest.assets, diffOptions);
     }
     const pulled = requested - stillMissing.length;
     if (pulled > 0) libraryIndexRepairPending.add(peer.instanceId);

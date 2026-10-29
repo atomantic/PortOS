@@ -389,7 +389,7 @@ describe('deleteMediaAnywhere for gallery images', () => {
     expect((await pending).peerName).toBe('Example rec-owner');
     expect(trashedImage('theirs.png')).toBe(true);
     expect((await listMediaTombstones('image')).map((t) => t.key)).toEqual(['theirs.png']);
-    await new Promise((r) => setTimeout(r, 20));
+    for (let turn = 0; turn < 5; turn++) await new Promise((resolve) => setImmediate(resolve));
     expect(deleteFrames).toEqual([]);
   });
 

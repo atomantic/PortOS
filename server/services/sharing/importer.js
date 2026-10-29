@@ -52,6 +52,7 @@ import { detectImageFormat, detectMediaManifest } from '../../lib/mimeTypes.js';
 import { ASSET_PULL_MAX_BYTES, SIDECAR_MAX_BYTES } from './assetLimits.js';
 import { importArchivedJobs } from '../mediaJobQueue/index.js';
 import { mapWithConcurrency } from '../../lib/mapWithConcurrency.js';
+import { stripImageSidecarLocalBytes } from '../../lib/assetHash.js';
 
 // Record kinds that participate in the non-blocking conflict journal. Universe,
 // series, AND issue all seed a base hash on first import and archive a losing
@@ -395,7 +396,9 @@ async function copyAssetsLocallyAdmitted(bucketPath, assetRefs) {
     }
     if (sidecar) {
       const sidecarTarget = join(targetDir, imageSidecarName(filename));
-      if (!existsSync(sidecarTarget)) await publishBucketAsset(sidecarTarget, sidecar);
+      // Another machine's own fields never land here: a foreign supplier id
+      // would make a third machine eligible to delete this image.
+      if (!existsSync(sidecarTarget)) await publishBucketAsset(sidecarTarget, stripImageSidecarLocalBytes(sidecar));
     }
     if (kind === 'image') await import('../mediaAssetIndex/index.js').then(m => m.indexImage({ filename })).catch(err => logFailureWithStack('❌ Media index imported asset refresh', err));
   });

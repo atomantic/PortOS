@@ -83,10 +83,14 @@ export function mergeMediaTombstones(kind, remote) {
   });
 }
 
-/** The tombstoned keys of `kind` as a Set (image filenames are never re-used, so any tombstone blocks a pull). */
-export async function mediaTombstoneKeys(kind) {
+/**
+ * Each tombstoned key of `kind` with its deletion time (epoch ms). Image names
+ * can be re-used (a re-rendered handoff or preview frame), so a pull compares
+ * the incoming copy's stamp against it rather than blocking the name forever.
+ */
+export async function mediaTombstoneStamps(kind) {
   assertKind(kind);
-  return new Set((await readStore())[kind].map((t) => t[KEY_FIELD]));
+  return new Map((await readStore())[kind].map((t) => [t[KEY_FIELD], Date.parse(t.deletedAt)]));
 }
 
 export async function isMediaTombstoned(kind, key, liveStamp) {

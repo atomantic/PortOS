@@ -149,14 +149,55 @@ export function stripImageSidecarLocalFields(sidecar) {
 }
 
 /**
- * True when `sidecar`'s gen-params hash to `advertised`. An older peer still
- * hashes its own `hidden` flag, so a copy that differs from it only by that
- * flag also matches; otherwise each such image would re-pull every sweep.
+ * Sidecar bytes without the machine-local fields, for a copy that leaves this
+ * machine or arrives from another (share buckets, the `/data/images` mount).
+ * Bytes that carry none of them, or are not a JSON object, come back unchanged
+ * (the same Buffer), so the caller can keep serving or copying them as-is.
  */
-export function sidecarMatchesGenParamsHash(sidecar, advertised) {
+export function stripImageSidecarLocalBytes(bytes) {
+  let parsed;
+  try {
+    parsed = JSON.parse(Buffer.isBuffer(bytes) ? bytes.toString('utf8') : String(bytes));
+  } catch {
+    return bytes;
+  }
+  if (!isPlainObject(parsed) || !IMAGE_SIDECAR_LOCAL_FIELDS.some((key) => Object.hasOwn(parsed, key))) return bytes;
+  return Buffer.from(JSON.stringify(stripImageSidecarLocalFields(parsed), null, 2));
+}
+
+/**
+ * When this copy of an image came to exist, for tombstone supersession: the
+ * sidecar's `createdAt`, else the later of the file's birth and modify times
+ * (a re-written file has a fresh one). ISO string, or null when neither is known.
+ */
+export function imageLiveStamp(sidecar, fileStat) {
+  if (isPlainObject(sidecar) && typeof sidecar.createdAt === 'string' && Number.isFinite(Date.parse(sidecar.createdAt))) {
+    return sidecar.createdAt;
+  }
+  const ms = Math.max(Number(fileStat?.birthtimeMs) || 0, Number(fileStat?.mtimeMs) || 0);
+  return ms > 0 ? new Date(ms).toISOString() : null;
+}
+
+/**
+ * True when `sidecar`'s gen-params hash to `advertised`. Copies that differ
+ * only in what this machine never takes from a peer also match, or each such
+ * image would re-pull every sweep: an older peer still hashes its own `hidden`
+ * flag, and a held image without an origin never adopts the sender's
+ * (`originCandidates`, e.g. the sender's instance id).
+ */
+export function sidecarMatchesGenParamsHash(sidecar, advertised, { originCandidates = [] } = {}) {
   const local = sidecarGenParamsHash(sidecar);
   if (local === advertised) return true;
   if (typeof advertised !== 'string' || !isPlainObject(sidecar)) return false;
-  return genParamsHash(sidecar, { hidden: true }) === advertised
-    || genParamsHash(sidecar, { hidden: false }) === advertised;
+  const origins = sidecar.originInstanceId === undefined
+    ? [undefined, ...originCandidates.filter((id) => typeof id === 'string' && id)]
+    : [undefined];
+  for (const originInstanceId of origins) {
+    const origin = originInstanceId ? { originInstanceId } : null;
+    for (const hidden of [undefined, true, false]) {
+      const extra = { ...origin, ...(hidden === undefined ? {} : { hidden }) };
+      if (Object.keys(extra).length > 0 && genParamsHash(sidecar, extra) === advertised) return true;
+    }
+  }
+  return false;
 }

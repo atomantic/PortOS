@@ -25,7 +25,8 @@ import { peerBaseUrl } from '../lib/peerUrl.js';
 import { withAbortTimeout } from '../lib/abortTimeout.js';
 import { safeUnder } from '../lib/ffmpeg.js';
 import { loadHistory, getHistoryItem, mutateVideoHistory, HISTORY_UNCHANGED } from './videoGen/history.js';
-import { readHeldImage, isGalleryImageName, localInstanceId } from './imageGen/imageRecords.js';
+import { readHeldImage, localInstanceId } from './imageGen/imageRecords.js';
+import { isSafeFilename } from '../lib/pathSafety.js';
 import { emitMediaHistoryChanged } from './peerSyncEventBus.js';
 import { instanceEvents } from './instanceEvents.js';
 
@@ -117,7 +118,7 @@ const MEDIA = {
   },
   image: {
     label: 'Image',
-    validKey: isGalleryImageName,
+    validKey: (key) => isSafeFilename(key, ['.png']),
     getRow: readHeldImage,
     setPending: setImagePending,
     hide: async (key) => (await import('./imageGen/local.js')).setImageHidden(key, true),

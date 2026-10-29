@@ -204,6 +204,17 @@ describe('assetHash', () => {
       expect(sidecarMatchesGenParamsHash(local, otherParams)).toBe(false);
     });
 
+    it("matches a sender's copy that differs only by an origin this held copy never takes", () => {
+      const local = { prompt: 'a cat' };
+      const senders = sidecarGenParamsHash({ prompt: 'a cat', originInstanceId: 'sender-inst' });
+      expect(sidecarMatchesGenParamsHash(local, senders)).toBe(false);
+      expect(sidecarMatchesGenParamsHash(local, senders, { originCandidates: ['sender-inst'] })).toBe(true);
+      // A held copy that has its own origin keeps comparing strictly.
+      expect(sidecarMatchesGenParamsHash({ ...local, originInstanceId: 'other-inst' }, senders, { originCandidates: ['sender-inst'] })).toBe(false);
+      // Any other difference still re-pulls.
+      expect(sidecarMatchesGenParamsHash({ prompt: 'a dog' }, senders, { originCandidates: ['sender-inst'] })).toBe(false);
+    });
+
     it('different gen-params produce different hashes', () => {
       const a = sidecarGenParamsHash({ prompt: 'a cat' });
       const b = sidecarGenParamsHash({ prompt: 'a dog' });
