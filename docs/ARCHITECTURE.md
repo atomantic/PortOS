@@ -217,10 +217,12 @@ Each install pulls from its peers (`server/services/syncOrchestrator.js`).
   full-sync peers only), which is unchanged because it is also how new images
   arrive.
 - **Tombstones.** A delete records a tombstone (`data/media-tombstones.json`)
-  before the files are trashed. The tombstone rides the frame, the
-  `videoHistory` snapshot and (for images, to full-sync peers) the library
-  manifest, so a peer that was offline during the delete retires its copy on
-  its next sync. No peer can re-offer the row. A peer's tombstone is admitted
+  before the files are trashed. It filters peer copies here at once but stays
+  in flight, never exported, until the trash commits; a failed trash withdraws
+  it and a crash leaves the next boot to settle it from file presence. A
+  committed tombstone rides the frame, the `videoHistory` snapshot and (for
+  images, to full-sync peers) the library manifest, so a peer that was offline
+  during the delete retires its copy on its next sync. No peer can re-offer the row. A peer's tombstone is admitted
   only from a paired peer with media delete allowed that owns or holds the row
   (`mediaTombstoneAuthorization.js`). Deleting a row owned elsewhere sends
   `POST /api/peer-media/delete` to the owner (`mediaRemoteDelete.js`).

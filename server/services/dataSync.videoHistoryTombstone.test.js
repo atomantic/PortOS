@@ -78,12 +78,39 @@ describe('video delete durability', () => {
     expect(await readHistory()).toEqual([]);
   });
 
-  it('leaves no tombstone when trashing fails', async () => {
+  it('leaves no tombstone when trashing fails, so the row still syncs', async () => {
     await atomicWrite(HISTORY, [row('v1')]);
     trashFiles.mockRejectedValueOnce(new Error('disk full'));
     await expect(deleteHistoryItem('v1')).rejects.toThrow('disk full');
     expect(await listMediaTombstones('video')).toEqual([]);
     expect(await readHistory()).toEqual(['v1']);
+    const { data } = await dataSync.getSnapshot('videoHistory');
+    expect(data.videos.map((v) => v.id)).toEqual(['v1']);
+    expect(data).not.toHaveProperty('tombstones');
+  });
+
+  // #14088: a peer pulling while the files are still being trashed must not
+  // receive a delete that the failed trash would then withdraw.
+  it('keeps a delete out of the snapshot until its trash commits', async () => {
+    await atomicWrite(HISTORY, [row('v1')]);
+    let finishTrash;
+    let trashStarted;
+    const started = new Promise((resolve) => { trashStarted = resolve; });
+    trashFiles.mockImplementationOnce(() => new Promise((resolve) => { finishTrash = resolve; trashStarted(); }));
+    const deleting = deleteHistoryItem('v1');
+    try {
+      await started;
+      const during = await dataSync.getSnapshot('videoHistory');
+      expect(during.data).not.toHaveProperty('tombstones');
+      // Filtering here starts at once: a peer's copy cannot slip back in meanwhile.
+      expect((await listMediaTombstones('video')).map((t) => t.key)).toEqual(['v1']);
+    } finally {
+      finishTrash();
+      await deleting;
+    }
+    const after = await dataSync.getSnapshot('videoHistory');
+    expect(after.data.tombstones.map((t) => t.key)).toEqual(['v1']);
+    expect(after.data.videos).toEqual([]);
   });
 
   it('has the tombstone recorded before files are trashed', async () => {

@@ -9,8 +9,10 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) => (
 ));
 afterAll(() => rmSync(tempRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
 
-const { recordMediaTombstone, listMediaTombstones, mergeMediaTombstones } =
-  await import('./mediaTombstones.js');
+const {
+  recordMediaTombstone, listMediaTombstones, mergeMediaTombstones,
+  beginMediaTombstone, listExportableMediaTombstones, listInFlightMediaTombstones,
+} = await import('./mediaTombstones.js');
 
 const FILE = join(tempRoot, 'media-tombstones.json');
 
@@ -62,6 +64,17 @@ describe('mediaTombstones', () => {
       expect(() => recordMediaTombstone('video', key), String(key)).toThrow(/non-empty string key/);
     }
     expect(await listMediaTombstones('video')).toEqual([]);
+  });
+
+  // #14088: an in-flight marker covers only its own delete; a newer delete of
+  // the same key merged from a peer is that peer's to advertise.
+  it('a newer peer delete of an in-flight key is exportable and drops the marker', async () => {
+    const mine = await beginMediaTombstone('video', 'vid-1');
+    expect(await listExportableMediaTombstones('video')).toEqual([]);
+    const theirs = { key: 'vid-1', deletedAt: new Date(Date.parse(mine.deletedAt) + 1000).toISOString() };
+    await mergeMediaTombstones('video', [theirs]);
+    expect(await listExportableMediaTombstones('video')).toEqual([theirs]);
+    expect(await listInFlightMediaTombstones('video')).toEqual([]);
   });
 
   it('unreadable file rejects instead of resetting', async () => {
