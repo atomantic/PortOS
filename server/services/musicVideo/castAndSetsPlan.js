@@ -35,6 +35,7 @@
  */
 
 import { trimTo } from '../../lib/textUtils.js';
+import { heightScaleLine, resolveHeight } from '../../lib/characterHeight.js';
 import { isOutsideMusicVideoReference } from '../../lib/musicVideoConditioning.js';
 // A sentence naming a person or the protagonist puts someone in an empty plate.
 import { withoutPeople } from '../../lib/musicVideoCreativeContext.js';
@@ -236,6 +237,13 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
     const age = leadingAge(form.age);
     return age === null ? [] : (protagonistForms.find((f) => f.age === age)?.images || []).slice(0, MAX_CONDITIONING - 1);
   };
+  // Each person's height, the scale cue a sheet composited into a set lacks: the
+  // direction's own, else the linked Casting record's, else a child age's median.
+  const protagonistHeight = resolveHeight(p.height || catalogLikeness[protagonistSubject?.id]?.height);
+  const formHeight = (form) => resolveHeight(form.height || catalogLikeness[form.subjectId]?.height
+    || protagonistForms.find((f) => f.age !== null && f.age === leadingAge(form.age))?.height, form.age);
+  const castHeight = (c) => resolveHeight(c.height || catalogLikeness[fixedFor('character', c.name)?.id]?.height);
+  const heightLine = (height) => (height ? `Height: ${height.text}` : '');
   const plan = {};
 
   plan.character = {
@@ -249,6 +257,7 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
       `Photographic character reference sheet of ONE consistent person, ${p.name || 'the protagonist'}: ${p.description || ''}`,
       identities.length && 'The SAME person as the identity reference images: keep their face, hair and build exactly',
       identity(p),
+      heightLine(protagonistHeight),
       p.signature && `Signature detail, always visible: ${p.signature}`,
       firstLook && `Wearing ${firstLook.description}`,
       rulesLine(p),
@@ -325,6 +334,7 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
         `Photographic character reference sheet of ${p.name || 'the protagonist'}${form.age ? ` at age ${form.age}` : ''}: the SAME person as the character reference, at a different age`,
         formRefs.length && 'The SAME person as the age reference images: keep their face, hair and build at this age exactly',
         form.description,
+        heightLine(formHeight(form)),
         'Keep what does not change with age: eye color and shape, brows, skin tone, distinguishing marks',
         form.hair && `hair: ${form.hair}`,
         form.wardrobe && `Wearing ${form.wardrobe}`,
@@ -355,6 +365,7 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
         `Photographic character reference sheet of ONE consistent person, ${c.name}${c.role ? `, the ${c.role}` : ''}: ${c.description || ''}`,
         castImages.length && 'The SAME person as the reference images: keep their face, hair and build exactly',
         identity(c),
+        heightLine(castHeight(c)),
         c.wardrobe && `Wearing ${c.wardrobe}`,
         p.name && `A different person from ${p.name}`,
         'Five views on a seamless dark grey backdrop: FRONT, 3/4, PROFILE, BACK full-body, plus a FACE close-up, with small typewriter captions',
@@ -421,6 +432,7 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
           : `Place the person from the character sheet in it (${identity(p)})`,
         form ? form.wardrobe && `Wearing ${form.wardrobe}` : look && `Wearing ${look.description}`,
         test.action,
+        heightScaleLine(form ? `${p.name || 'the protagonist'} ${form.age ? `at age ${form.age}` : `(${form.label})`}` : p.name || 'the protagonist', form ? formHeight(form) : protagonistHeight),
         era ? eraLine(era) : form && `The place as it was when ${p.name || 'the protagonist'} was ${form.age || form.label}, with period-correct buildings, vehicles and props`,
         set?.lighting && `Light: ${set.lighting}`,
         // A dated age with no look of its own shares the project look; an undated
@@ -498,7 +510,7 @@ export function castAndSetsReferences(project, stage) {
     out.push({ ...ref, condition, use: 'reference' });
   };
   const p = direction.protagonist || {};
-  push({ id: `${CAST_SETS_REF_PREFIX}character`, imageId: images.character?.imageId, role: 'character', label: `${p.name || 'Protagonist'} — character sheet`, note: trimTo([p.face, p.hair, p.signature].filter(Boolean).join('; '), 1000) }, true, { sheet: true });
+  push({ id: `${CAST_SETS_REF_PREFIX}character`, imageId: images.character?.imageId, role: 'character', label: `${p.name || 'Protagonist'} — character sheet`, note: trimTo([p.height && `Height: ${p.height}`, p.face, p.hair, p.signature].filter(Boolean).join('; '), 1000) }, true, { sheet: true });
   const cover = setCoverage(project, direction);
   const plates = [...(direction.sets || [])].sort((a, b) => (cover.get(b.id) || 0) - (cover.get(a.id) || 0));
   for (const set of plates) {
@@ -508,13 +520,14 @@ export function castAndSetsReferences(project, stage) {
   }
   // Other-age sheets are reference only: a shot of the child is described in words and matched by eye.
   for (const form of p.forms || []) {
-    push({ id: `${CAST_SETS_REF_PREFIX}form-${form.id}`.slice(0, 64), imageId: images[`form:${form.id}`]?.imageId, role: 'character', label: `${trimTo(p.name || 'Protagonist', 80)} — ${trimTo(form.label, 40)} sheet`, note: trimTo([form.age && `Age ${form.age}`, form.description, form.hair].filter(Boolean).join('; '), 1000) }, false);
+    const height = resolveHeight(form.height, form.age);
+    push({ id: `${CAST_SETS_REF_PREFIX}form-${form.id}`.slice(0, 64), imageId: images[`form:${form.id}`]?.imageId, role: 'character', label: `${trimTo(p.name || 'Protagonist', 80)} — ${trimTo(form.label, 40)} sheet`, note: trimTo([form.age && `Age ${form.age}`, height && `Height: ${height.text}`, form.description, form.hair].filter(Boolean).join('; '), 1000) }, false);
   }
   // Cast sheets condition only the shots that feature them (musicVideoConditioningReferences).
   for (const c of direction.cast || []) {
     const sheet = isFixed(c);
     if (sheet) held -= 1;
-    push({ id: castReferenceId(c), imageId: images[`cast:${c.id}`]?.imageId, role: 'character', label: `${trimTo(c.name, 80)} — cast sheet`, note: trimTo([c.role, c.face, c.hair, c.wardrobe].filter(Boolean).join('; '), 1000) }, false, { sheet });
+    push({ id: castReferenceId(c), imageId: images[`cast:${c.id}`]?.imageId, role: 'character', label: `${trimTo(c.name, 80)} — cast sheet`, note: trimTo([c.role, c.height && `Height: ${c.height}`, c.face, c.hair, c.wardrobe].filter(Boolean).join('; '), 1000) }, false, { sheet });
   }
   push({ id: `${CAST_SETS_REF_PREFIX}looks`, imageId: images.looks?.imageId, role: 'wardrobe', label: 'Looks', note: trimTo((direction.looks || []).map((l) => l.name).join(', '), 1000) }, false);
   push({ id: `${CAST_SETS_REF_PREFIX}expressions`, imageId: images.expressions?.imageId, role: 'character', label: 'Expression sheet', note: trimTo(p.gesture, 1000) }, false);

@@ -7,10 +7,10 @@ import { getMusicVideoCastAndSets } from '../../services/apiMusicVideo.js';
 const buttonClass = 'flex min-h-[44px] items-center gap-1 rounded border border-port-border px-2 py-1 text-xs sm:min-h-0 disabled:opacity-50';
 const fieldClass = 'w-full min-w-0 rounded border border-port-border bg-port-bg px-2 py-1.5 text-sm';
 
-const PROTAGONIST_FIELDS = [['name', 'Name'], ['description', 'Who they are'], ['face', 'Face'], ['hair', 'Hair'], ['signature', 'Signature detail'], ['gesture', 'Gesture']];
-const FORM_FIELDS = [['label', 'Label'], ['age', 'Age'], ['description', 'How they look at that age'], ['hair', 'Hair'], ['wardrobe', 'Wardrobe'],
+const PROTAGONIST_FIELDS = [['name', 'Name'], ['description', 'Who they are'], ['height', 'Height'], ['face', 'Face'], ['hair', 'Hair'], ['signature', 'Signature detail'], ['gesture', 'Gesture']];
+const FORM_FIELDS = [['label', 'Label'], ['age', 'Age'], ['description', 'How they look at that age'], ['height', 'Height at that age'], ['hair', 'Hair'], ['wardrobe', 'Wardrobe'],
   ['era', 'Era (year or period)'], ['look', 'Film look of that memory']];
-const CAST_FIELDS = [['name', 'Name'], ['role', 'Role'], ['description', 'Who they are'], ['face', 'Face'], ['hair', 'Hair'], ['wardrobe', 'Wardrobe']];
+const CAST_FIELDS = [['name', 'Name'], ['role', 'Role'], ['description', 'Who they are'], ['height', 'Height'], ['face', 'Face'], ['hair', 'Hair'], ['wardrobe', 'Wardrobe']];
 const SET_FIELDS = [['name', 'Name'], ['description', 'The empty place'], ['lighting', 'Lighting'], ['era', 'Era (year or period)'], ['look', 'Film look of that era']];
 const TEST_FIELDS = [['action', 'What happens in the frame'], ['caption', 'Caption']];
 const LONG = new Set(['description', 'action', 'face', 'wardrobe']);

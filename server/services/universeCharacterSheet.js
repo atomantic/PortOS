@@ -26,6 +26,7 @@ import { resolveUniverseVisualProfile } from '../lib/universeVisualProfile.js';
 import { promptAddition } from '../lib/modelInput.js';
 import { catalogFamilyRenderContext, familyImagesAddition } from './catalogFamily.js';
 import { characterSheetEditBase, characterSheetReferenceCandidates, resolveCharacterSheetReferences } from '../lib/characterSheetReferences.js';
+import { characterHeightStat } from '../lib/catalogAppearance.js';
 import { runwayImagePreservesSourceFrame } from '../lib/runwayImageModels.js';
 import { enqueueJob, getJob, mediaJobEvents } from './mediaJobQueue/index.js';
 import { buildUniverseRunTag } from './universeRunTag.js';
@@ -317,8 +318,10 @@ function buildCharacterPhotographicSheetPrompt(universe, character) {
     wardrobeLine, propsLine, expressionsLine,
   } = extractCharacterPromptCommon(character);
 
+  const height = characterHeightStat(character);
   const headerBits = [
     age ? `Age: ${age}.` : '',
+    height ? `Height: ${height}.` : '',
     pronouns ? `Pronouns: ${pronouns}.` : '',
     visualNotes ? `Visual notes: ${visualNotes}.` : '',
   ].filter(Boolean).join(' ');
