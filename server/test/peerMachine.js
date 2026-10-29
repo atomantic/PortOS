@@ -4,7 +4,8 @@
  * graph and data root (PORTOS_DATA_ROOT, a disposable temp root), so two
  * workers are two instances with separate identities, registries and stores.
  *
- * Real: the Express app with authGate, `/api/sync` and `/api/peer-media`,
+ * Real: the Express app with authGate, `/api/sync`, `/api/peer-media` and the
+ * `/data/videos` mount (with its peer-hosted fallback),
  * a Socket.IO server with the peer-sync room and frame delivery, the peer
  * relay client, the sync orchestrator, and every history/tombstone/delete
  * service. Replaced: the OS trash (files move into `<root>/trash-bin`) and the
@@ -47,6 +48,8 @@ const [
   { PATHS, atomicWrite },
   { peerFetch },
   { clearRestoredMediaTombstones },
+  holders,
+  { hostedAssetFallback, listHostedEntries },
 ] = await Promise.all([
   import('express'),
   import('socket.io'),
@@ -66,6 +69,8 @@ const [
   import('../lib/fileUtils.js'),
   import('../lib/peerHttpClient.js'),
   import('../services/mediaRestoreTombstones.js'),
+  import('../services/mediaHolders.js'),
+  import('../services/peerHostedMedia.js'),
 ]);
 
 const requests = [];
@@ -78,6 +83,8 @@ app.use(authGate);
 app.use('/api/sync', dataSyncRoutes);
 app.use('/api/peer-media', peerMediaRoutes);
 app.use('/api/video-gen', videoGenRoutes);
+// The video static mount as assetMounts.js serves it: local bytes, else the hosting peer's.
+app.use('/data/videos', express.static(PATHS.videos), hostedAssetFallback('/data/videos'));
 app.use(errorMiddleware);
 
 const httpServer = createServer(app);
@@ -137,6 +144,28 @@ const commands = {
     writeFileSync(join(PATHS.videoThumbnails, `${id}.jpg`), Buffer.from(`synthetic-thumb-${id}`));
     const row = { id, filename: `${id}.mp4`, thumbnail: `${id}.jpg`, prompt: 'Example prompt', createdAt: new Date(realNow()).toISOString() };
     await mutateVideoHistory((history) => { history.unshift(row); return history; });
+  },
+  // A copy of a render this machine already holds the row of (copy-mode sync).
+  async copyBytes({ id }) {
+    mkdirSync(PATHS.videos, { recursive: true });
+    writeFileSync(join(PATHS.videos, `${id}.mp4`), Buffer.from(`synthetic-video-${id}`));
+  },
+  async holders() {
+    return holders.listMediaHolders();
+  },
+  async makePrimary(args) {
+    return holders.makeMediaPrimary(args);
+  },
+  async drainReleases({ peerId }) {
+    return holders.drainMediaReleases(await peerById(peerId));
+  },
+  async hostedEntries() {
+    return listHostedEntries();
+  },
+  // This machine's own video URL, as a card's player requests it.
+  async fetchOwnVideo({ id }) {
+    const res = await fetch(`http://127.0.0.1:${httpServer.address().port}/data/videos/${encodeURIComponent(id)}.mp4`);
+    return { status: res.status, location: res.headers.get('x-portos-media-location'), body: await res.text() };
   },
   async fullRow({ id }) {
     return (await loadHistory()).find((r) => r.id === id) ?? null;

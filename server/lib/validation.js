@@ -3187,3 +3187,23 @@ export const peerMediaDeleteSchema = z.object({
   kind: z.enum(['video', 'image']),
   key: z.string().min(1).max(512),
 }).strict();
+
+// A file name on the media static mounts: no path separators, no traversal.
+const mediaFilenameSchema = z.string().min(1).max(255).refine((v) => !/[\\/]/.test(v) && v !== '.' && v !== '..', 'Invalid file name');
+const isoTimestampSchema = z.string().max(64).refine((v) => Number.isFinite(Date.parse(v)), 'Must be a timestamp');
+
+// POST /api/peer-media/release — a paired peer asks this machine to drop its
+// copy of a file's bytes in favor of the primary holder (services/mediaHolders.js).
+export const peerMediaReleaseSchema = z.object({
+  kind: z.enum(['video', 'image']),
+  filename: mediaFilenameSchema,
+  primaryInstanceId: z.string().min(1).max(128),
+  primaryAt: isoTimestampSchema,
+}).strict();
+
+// POST /api/media/holders/primary — keep one holder's copy, release the others.
+export const mediaMakePrimarySchema = z.object({
+  kind: z.enum(['video', 'image']),
+  filename: mediaFilenameSchema,
+  instanceId: z.string().min(1).max(128),
+}).strict();

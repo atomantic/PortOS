@@ -346,6 +346,10 @@ export { DEFAULT_SYNC_CATEGORIES };
 // file from the peer on demand (see services/peerHostedMedia.js).
 export const MEDIA_SYNC_MODES = Object.freeze(['copy', 'host']);
 export const DEFAULT_MEDIA_SYNC_MODE = 'copy';
+// A peer registered from now on hosts rather than copies, so pairing a machine
+// no longer multiplies every render. The absent field keeps reading as `copy`:
+// a peer paired before this default keeps the mode it has always had.
+export const NEW_PEER_MEDIA_SYNC_MODE = 'host';
 export const peerMediaSyncMode = (peer) => (MEDIA_SYNC_MODES.includes(peer?.mediaSyncMode) ? peer.mediaSyncMode : DEFAULT_MEDIA_SYNC_MODE);
 
 // Standing capability: may this paired peer delete media on THIS machine?
@@ -516,6 +520,7 @@ export async function addPeer({ address, port = DEFAULT_PEER_PORT, name, host, a
       // here never changes that peer's provider settings.
       mediaProvider: { enabled: false, audioModels: [], imageModels: [], videoModels: [] },
       mediaDeleteAllowed: true,
+      mediaSyncMode: NEW_PEER_MEDIA_SYNC_MODE,
       consecutiveFailures: 0,
       nextProbeAt: null,
       directions: ['outbound']
@@ -1298,6 +1303,7 @@ export async function handleAnnounce({ address, port, instanceId, name, host }) 
       enabled: true,
       syncEnabled: false,
       syncCategories: { ...DEFAULT_SYNC_CATEGORIES },
+      mediaSyncMode: NEW_PEER_MEDIA_SYNC_MODE,
       consecutiveFailures: 0,
       nextProbeAt: null,
       directions: ['inbound']

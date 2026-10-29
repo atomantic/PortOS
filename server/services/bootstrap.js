@@ -1070,6 +1070,10 @@ export const runBootSequence = ({ io, httpServer, localHttpServer, httpsEnabled,
         void import('./mediaRemoteDelete.js')
           .then(({ initMediaRemoteDelete }) => initMediaRemoteDelete())
           .catch((err) => logBootstrapFailure('❌ Media delete queue init failed', err));
+        // Queued Make-primary releases drain when their holder comes online.
+        void import('./mediaHolders.js')
+          .then(({ initMediaHolders }) => initMediaHolders())
+          .catch((err) => logBootstrapFailure('❌ Media release queue init failed', err));
         // Gallery renders record this machine as their origin, which remote delete targets.
         void import('./imageGen/imageRecords.js')
           .then(({ initImageOriginStamping }) => initImageOriginStamping())

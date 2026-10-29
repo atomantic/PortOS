@@ -403,6 +403,9 @@ function setupPeerSyncEventForwarding() {
   peerSyncBus.on('media-history-changed', (payload) => {
     ioInstance?.except(PEER_SYNC_ROOM).emit('media:history:changed', payload);
   });
+  peerSyncBus.on('media-holders-changed', () => {
+    ioInstance?.except(PEER_SYNC_ROOM).emit('media:holders:changed', {});
+  });
 }
 
 // Bounded invalidations only: records remain behind their existing HTTP gates.

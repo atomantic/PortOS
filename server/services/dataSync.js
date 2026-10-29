@@ -1049,14 +1049,27 @@ export async function mergeVideoRows(incomingRows, source) {
       return { ...row, originInstanceId: named.originInstanceId };
     });
     const before = new Map(keyed.map((r) => [r.id, r]));
-    const { merged: rawMerged, changed } = mergeArraysByKey(
+    const { merged: lwwMerged, changed: rowsChanged } = mergeArraysByKey(
       keyed,
       // suppliedByInstanceId and pendingDelete are local-only: never trust a sender's value.
       incoming.filter(hasId).map(({ suppliedByInstanceId, pendingDelete, ...rest }) => rest), // eslint-disable-line no-unused-vars
       'id',
       'createdAt',
     );
-    if (!changed && adoptedIds.size === 0) return HISTORY_UNCHANGED;
+    // The Make-primary designation is the one field of a row that moves after
+    // creation: the newest valid `primaryAt` of the local and incoming rows wins,
+    // whichever side won the row itself (a re-created row must not drop it).
+    const incomingById = new Map(incoming.filter(hasId).map((r) => [r.id, r]));
+    const designated = (r) => typeof r?.primaryInstanceId === 'string' && r.primaryInstanceId && parseTsMs(r.primaryAt) !== null;
+    let primaryChanged = false;
+    const rawMerged = lwwMerged.map((row) => {
+      const best = [before.get(row.id), incomingById.get(row.id)].filter(designated)
+        .reduce((a, b) => (!a || parseTsMs(b.primaryAt) > parseTsMs(a.primaryAt) ? b : a), null);
+      if (!best || (row.primaryInstanceId === best.primaryInstanceId && row.primaryAt === best.primaryAt)) return row;
+      primaryChanged = true;
+      return { ...row, primaryInstanceId: best.primaryInstanceId, primaryAt: best.primaryAt };
+    });
+    if (!rowsChanged && !primaryChanged && adoptedIds.size === 0) return HISTORY_UNCHANGED;
     // Ownership of a row held here never comes from a sender: its origin and
     // supplier stay the local values, even when absent (an origin-less row stays
     // origin-less, or any peer could claim it and then delete it). Only a row
@@ -1298,7 +1311,7 @@ const SNAPSHOT_CATEGORY_SCHEMA_KEYS = {
   character: [],
   digitalTwin: [],
   meatspace: ['meatspace'],
-  videoHistory: [],
+  videoHistory: ['videoHistory'],
   storyBuilder: RECORD_KIND_SCHEMA_CATEGORIES.storyBuilder,
   // Per-instance digests replaced whole under an LWW stamp, with every field
   // read defensively — no versioned on-disk layout to gate on.
@@ -1560,6 +1573,11 @@ export async function applyRemote(category, remoteData, options = {}) {
     const peer = (await getPeers()).find((p) => p.instanceId === source.peerId && p.enabled !== false);
     if (peer && remoteData?.version === 1 && Array.isArray(remoteData.filenames) && Array.isArray(remoteData.checked)) {
       const kind = options.inventoryKind === 'image' ? 'image' : 'video';
+      // Every report of held bytes feeds the holders list (services/mediaHolders.js).
+      if (kind === 'video' || category === 'mediaCollections') {
+        const { recordPeerInventory } = await import('./mediaHolders.js');
+        await recordPeerInventory(peer.instanceId, kind, remoteData.filenames, remoteData.checked);
+      }
       if (options.inventoryScope === 'library') {
         // File times only: a whole-library listing must not drive host-mode reconciliation.
         if (kind === 'image' && category === 'mediaCollections' && isPlainObject(remoteData.mtimes)) {

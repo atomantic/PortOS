@@ -267,3 +267,26 @@ describe('snapshot tombstone authorization', () => {
 });
 
 afterAll(cleanup);
+
+describe('Make-primary designation in the video snapshot', () => {
+  const stored = async () => (await readJSONFile(HISTORY, [])).find((r) => r.id === 'v1');
+  const designated = (instanceId, primaryAt) => row('v1', undefined, { ...ownedBy('peer-a'), primaryInstanceId: instanceId, primaryAt });
+
+  it('a newer designation replaces the held one, an older one never does, and origin stays local', async () => {
+    await atomicWrite(HISTORY, [designated('peer-a', '2026-06-01T00:00:00.000Z')]);
+
+    const newer = await dataSync.applyRemote('videoHistory', { videos: [{ ...designated('peer-b', '2026-07-01T00:00:00.000Z'), originInstanceId: 'peer-b' }] }, { peerId: 'peer-b' });
+    expect(newer.applied).toBe(true);
+    expect(await stored()).toMatchObject({ primaryInstanceId: 'peer-b', primaryAt: '2026-07-01T00:00:00.000Z', originInstanceId: 'peer-a' });
+
+    const older = await dataSync.applyRemote('videoHistory', { videos: [designated('peer-c', '2026-06-15T00:00:00.000Z')] }, { peerId: 'peer-c' });
+    expect(older.applied).toBe(false);
+    expect(await stored()).toMatchObject({ primaryInstanceId: 'peer-b' });
+  });
+
+  it('keeps the local designation when a re-created incoming row without one wins the row', async () => {
+    await atomicWrite(HISTORY, [designated('peer-a', '2026-06-01T00:00:00.000Z')]);
+    await dataSync.applyRemote('videoHistory', { videos: [row('v1', '2026-05-15T00:00:00.000Z', ownedBy('peer-a'))] }, { peerId: 'peer-a' });
+    expect(await stored()).toMatchObject({ createdAt: '2026-05-15T00:00:00.000Z', primaryInstanceId: 'peer-a', primaryAt: '2026-06-01T00:00:00.000Z' });
+  });
+});

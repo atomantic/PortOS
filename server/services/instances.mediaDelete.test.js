@@ -14,7 +14,7 @@ vi.mock('./peerSocketRelay.js', () => ({ connectToPeer: vi.fn(), disconnectFromP
 vi.mock('../lib/asyncMutex.js', () => ({ createMutex: () => (fn) => fn() }));
 
 import { readJSONFile, atomicWrite } from '../lib/fileUtils.js';
-import { addPeer, updatePeer, handleAnnounce, redactPeerForWire, peerMayDeleteMedia } from './instances.js';
+import { addPeer, updatePeer, handleAnnounce, redactPeerForWire, peerMayDeleteMedia, peerMediaSyncMode } from './instances.js';
 
 describe('media.delete peer capability', () => {
   it('new peers default to allowed', async () => {
@@ -49,5 +49,20 @@ describe('media.delete peer capability', () => {
 
   it('redactPeerForWire strips the local grant', () => {
     expect(redactPeerForWire({ id: 'p', mediaDeleteAllowed: false })).toEqual({ id: 'p' });
+  });
+});
+
+describe('media sync mode for new peers', () => {
+  it('a newly added or announced peer hosts media; a peer paired earlier keeps its mode', async () => {
+    let store = { self: { instanceId: 'self' }, peers: [{ id: 'old', address: '192.0.2.12', port: 5555 }] };
+    readJSONFile.mockImplementation(async () => structuredClone(store));
+    atomicWrite.mockImplementation(async (_p, d) => { store = structuredClone(d); });
+    const added = await addPeer({ address: '192.0.2.13' });
+    await handleAnnounce({ address: '192.0.2.51', port: 5555, instanceId: '22222222-2222-4222-8222-222222222222', name: 'announced' });
+    expect(added.mediaSyncMode).toBe('host');
+    expect(store.peers.find((p) => p.directions?.includes('inbound')).mediaSyncMode).toBe('host');
+    const old = store.peers.find((p) => p.id === 'old');
+    expect(old).not.toHaveProperty('mediaSyncMode');
+    expect(peerMediaSyncMode(old)).toBe('copy');
   });
 });

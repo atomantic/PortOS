@@ -760,6 +760,7 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Dom
 | `/api/dashboard/layouts` | Dashboard widget layouts |
 | `/api/dashboard/daily-actions` | Dashboard daily action tracking |
 | `/api/media/collections`, `/api/media/annotations`, `/api/media/sketches` | Media library collections/annotations/sketches |
+| `/api/media/holders` | Which machines hold each media file (`GET`) and Make primary (`POST /primary` `{ kind, filename, instanceId }`): keep that holder's copy and release the others |
 | `/api/client-errors` | Client-side error reporting |
 | `/api/backup` | Backup snapshots + restore |
 | `/api/legacy-export` | Legacy data export |
@@ -788,7 +789,7 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Dom
 | `/api/human-actions` | Scheduled steps only the human can take, as Brain threads with reminders ([Human Actions](#human-actions)) |
 | `/api/insights` | Cross-domain insights |
 | `/api/instances`, `/api/sync`, `/api/peer-sync`, `/api/sharing` | Federation / peer sync (see [COMPANION_APP_API.md](./COMPANION_APP_API.md)); `POST /api/sharing/buckets` is host control (it names a host folder PortOS writes records into and imports manifests from) |
-| `/api/peer-media` | Peer-only media commands: `POST /api/peer-media/delete` (`{ kind: 'video' \| 'image', key }`, an image keyed by gallery filename) deletes a row this machine holds at the request of a paired peer with media delete allowed here (see [PEER_PUSH_AUTH.md](./PEER_PUSH_AUTH.md)) |
+| `/api/peer-media` | Peer-only media commands: `POST /api/peer-media/delete` (`{ kind: 'video' \| 'image', key }`, an image keyed by gallery filename) deletes a row this machine holds at the request of a paired peer with media delete allowed here (see [PEER_PUSH_AUTH.md](./PEER_PUSH_AUTH.md)); `POST /api/peer-media/release` (`{ kind, filename, primaryInstanceId, primaryAt }`, same grant) drops this machine's copy of the bytes once the primary is verified to hold them, keeping the row and streaming from the primary |
 | `/api/federation/media/v1` | Authenticated queued peer audio provider (see [FEDERATED_MEDIA_PROVIDERS.md](./FEDERATED_MEDIA_PROVIDERS.md)) |
 | `/api/federation/admin/v1` | Paired-peer administration preflights and temporary signed plans; execution remains unsupported (see [peer administration planning](./features/peer-administration.md)) |
 | `/api/peer-administration` | Operator-only per-peer/action planning grants and outbound previews (see [peer administration planning](./features/peer-administration.md)) |

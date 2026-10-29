@@ -58,6 +58,11 @@ export function emitMediaHistoryChanged({ kind, op, ids }) {
   safeEmit('media-history-changed', { kind, op, ids: list });
 }
 
+/** Local-only invalidation for open holder views (services/mediaHolders.js). */
+export function emitMediaHoldersChanged() {
+  safeEmit('media-holders-changed', {});
+}
+
 async function localInstanceId() {
   const identity = await import('./instanceIdentity.js');
   const id = await identity.getInstanceId().catch(() => null);
@@ -96,6 +101,18 @@ export async function announceLocalImageDelete(record, tombstone) {
     }
   } catch (err) {
     console.error(`❌ Peer sync delete announce failed for ${record?.filename}: ${err.message}`);
+  }
+}
+
+/** Tell peers this machine now holds (or no longer holds) a media file's bytes. Never rejects. */
+export async function announceLocalHolding(kind, filename, held) {
+  try {
+    const local = await localInstanceId();
+    if (!local) return;
+    const category = kind === 'image' ? 'imageHistory' : 'videoHistory';
+    emitPeerSyncEvent({ v: PEER_SYNC_EVENT_VERSION, category, op: 'holding', id: filename, holding: { held: held === true }, originInstanceId: local });
+  } catch (err) {
+    console.error(`❌ Peer sync holding announce failed for ${filename}: ${err.message}`);
   }
 }
 

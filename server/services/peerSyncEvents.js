@@ -63,6 +63,15 @@ async function applyImageDelete(peer, event, label) {
   return { applied: removed > 0, reason: removed > 0 ? null : 'not-removed' };
 }
 
+// "I hold / no longer hold <file>": a sender speaks only for its own disk.
+async function applyHolding(peer, event, label) {
+  if (event.originInstanceId !== peer.instanceId) return ignored(label, `holding ${event.id} for another machine`);
+  const { notePeerHolding } = await import('./mediaHolders.js');
+  const kind = event.category === 'imageHistory' ? 'image' : 'video';
+  const changed = await notePeerHolding(peer.instanceId, kind, event.id, event.holding.held);
+  return { applied: changed, reason: changed ? null : 'unchanged' };
+}
+
 // Which of this install's per-peer settings lets a peer's frames in: the gate of
 // the pull that carries the same change (video snapshot, image library/collections).
 const sharesCategory = (peer, category) => {
@@ -89,6 +98,7 @@ export async function applyPeerSyncEvent(peerRef, raw) {
     const peer = (await getPeers()).find((p) => p.id === peerRef?.id);
     if (!peer?.instanceId || peer.enabled === false) return ignored(label, 'unknown or disabled peer');
     if (!sharesCategory(peer, event.category)) return ignored(label, `${event.category} sync is off for this peer`);
+    if (event.op === 'holding') return await applyHolding(peer, event, label);
     if (event.category === 'imageHistory') return await applyImageEvent(peer, event, label);
     return event.op === 'upsert'
       ? await applyVideoUpsert(peer, event, label)
