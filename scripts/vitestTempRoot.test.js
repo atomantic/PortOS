@@ -75,7 +75,7 @@ describe('real workspace runner temp lifecycle', () => {
     } finally { rmSync(host, { recursive: true, force: true }); }
   }, 25000);
 
-  it('reuses config ownership on reimport and reclaims it after interruption, preserving a live owner', async () => {
+  owned.it('reuses config ownership on reimport and reclaims it after interruption, preserving a live owner', async () => {
     const host = mkdtempSync(join(tmpdir(), 'vrt-'));
     recordTempRootOwner(host);
     let child;
@@ -165,7 +165,7 @@ describe.skipIf(process.platform === 'win32')('orphaned test browser sweep', () 
     return !isProcessAlive(pid);
   };
 
-  it('stops a browser left by a dead run and keeps one a live run still owns', async () => {
+  owned.it('stops a browser left by a dead run and keeps one a live run still owns', async () => {
     const host = mkdtempSync(join(tmpdir(), 'vrt-'));
     recordTempRootOwner(host);
     const pids = [];
@@ -201,7 +201,7 @@ describe.skipIf(process.platform === 'win32')('orphaned test browser sweep', () 
     }
   }, 20000);
 
-  it('stops a browser whose run root was already removed', async () => {
+  owned.it('stops a browser whose run root was already removed', async () => {
     const host = mkdtempSync(join(tmpdir(), 'vrt-'));
     recordTempRootOwner(host);
     let pid;
