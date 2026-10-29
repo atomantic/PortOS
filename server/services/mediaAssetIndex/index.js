@@ -131,5 +131,11 @@ export async function initMediaAssetIndex() {
     subscribed = true;
   }
 
-  return reconcileMediaAssets();
+  const result = await reconcileMediaAssets();
+  // Put Back from the OS Trash restores files with no PortOS event; this boot
+  // pass is where a locally owned item that came back sheds its delete record.
+  await import('../mediaRestoreTombstones.js')
+    .then((m) => m.clearRestoredMediaTombstones())
+    .catch((err) => console.error(`❌ Restored media delete-record check failed: ${err.message}`));
+  return result;
 }

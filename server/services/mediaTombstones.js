@@ -59,13 +59,19 @@ export function recordMediaTombstone(kind, key, deletedAt) {
   });
 }
 
-// Undo a tombstone recorded for a delete that then failed.
-export function clearMediaTombstone(kind, key) {
+// Undo a tombstone recorded for a delete that then failed, or retire one the
+// item outlived (restored, re-created). `deletedAt` clears only that exact
+// delete: a newer delete recorded since the caller looked must survive.
+// Resolves true when a tombstone was removed.
+export function clearMediaTombstone(kind, key, { deletedAt = null } = {}) {
   assertKind(kind);
   return queueWrite(async () => {
     const store = await readStore();
+    const current = store[kind].find((t) => t[KEY_FIELD] === key);
+    if (!current || (deletedAt !== null && current.deletedAt !== deletedAt)) return false;
     store[kind] = clearTombstone(store[kind], key, KEY_FIELD);
     await writeStore(store);
+    return true;
   });
 }
 

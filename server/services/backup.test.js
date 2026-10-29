@@ -101,6 +101,8 @@ vi.mock('../scripts/migrateCatalogPayload.js', () => ({ migrateCatalogPayload: c
 vi.mock('../scripts/repairUniverseTags.js', () => ({ repairUniverseTags: catalogRepair.tags }));
 const reconcileMediaAssets = vi.hoisted(() => vi.fn().mockResolvedValue({ ok: true }));
 vi.mock('./mediaAssetIndex/db.js', () => ({ reconcileMediaAssets }));
+const clearRestoredMediaTombstones = vi.hoisted(() => vi.fn().mockResolvedValue({ videos: [], images: [] }));
+vi.mock('./mediaRestoreTombstones.js', () => ({ clearRestoredMediaTombstones }));
 const executionRestore = vi.hoisted(() => ({ prepare: vi.fn(), finish: vi.fn() }));
 vi.mock('./peerExecutionRestore.js', () => ({
   preparePeerExecutionRestore: executionRestore.prepare,
@@ -4381,6 +4383,8 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
       await runRestore('/dest', 'snap-1', { dryRun: false, subdirFilter: 'brain/inbox' });
 
       expect(invalidateBrainCaches).toHaveBeenCalledTimes(1);
+      // Only a restore covering media re-checks restored media delete records (#14087).
+      expect(clearRestoredMediaTombstones).not.toHaveBeenCalled();
     });
 
     it('keeps Brain projections after a selective live restore outside Brain', async () => {
@@ -4388,6 +4392,8 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
 
       expect(invalidateBrainCaches).not.toHaveBeenCalled();
       expect(reconcileMediaAssets).toHaveBeenCalledWith({ rebuild: true });
+      // A restored item must shed the delete record of its earlier delete (#14087).
+      expect(clearRestoredMediaTombstones).toHaveBeenCalledTimes(1);
     });
 
     it('does not reload settings for a dry run', async () => {

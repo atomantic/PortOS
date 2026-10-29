@@ -222,6 +222,43 @@ describe('media deletes between two machines', () => {
   });
 });
 
+// #14087: a backup restore brings back the row and bytes of a deleted video.
+describe('restoring a deleted video from a backup', () => {
+  it('the owner un-deletes it and a peer holding the delete receives it again', async () => {
+    await b.call('connectRelay', { peerId: 'rec-a' });
+    await renderOnAHeldByB('v-restore-own');
+    const original = await a.call('fullRow', { id: 'v-restore-own' });
+    await whenApplied(b, 'delete', 'v-restore-own', () => a.call('deleteVideo', { id: 'v-restore-own' }));
+    expect(await b.call('tombstones')).toContain('v-restore-own');
+
+    const restored = await whenApplied(b, 'upsert', 'v-restore-own', () => a.call('restoreVideoFromBackup', { row: original }));
+
+    expect(restored.videos).toEqual(['v-restore-own']);
+    expect(await a.call('tombstones')).not.toContain('v-restore-own');
+    expect((await row(a, 'v-restore-own')).restoredAt).toEqual(expect.any(String));
+    // B admitted the row past its copy of the delete and dropped that copy.
+    expect(await row(b, 'v-restore-own')).toMatchObject({ originInstanceId: 'inst-a', restoredAt: expect.any(String) });
+    expect(await b.call('tombstones')).not.toContain('v-restore-own');
+    await b.call('disconnectRelay', { peerId: 'rec-a' });
+  });
+
+  it("a peer-owned restored row keeps the owner's delete record", async () => {
+    await b.call('connectRelay', { peerId: 'rec-a' });
+    await renderOnAHeldByB('v-restore-peer');
+    const held = await b.call('fullRow', { id: 'v-restore-peer' });
+    await b.call('deleteVideo', { id: 'v-restore-peer' });
+    expect(await b.call('tombstones')).toContain('v-restore-peer');
+    const mark = b.output.length;
+
+    const restored = await b.call('restoreVideoFromBackup', { row: held });
+
+    expect(restored.videos).toEqual([]);
+    expect(await b.call('tombstones')).toContain('v-restore-peer');
+    expect(b.output.slice(mark).join('')).toMatch(/Restored video v-restore-peer keeps its delete record: owned by inst-a/);
+    await b.call('disconnectRelay', { peerId: 'rec-a' });
+  });
+});
+
 describe('safety-net cadence', () => {
   afterAll(async () => {
     await a?.call('shiftClock', { ms: 0 });
