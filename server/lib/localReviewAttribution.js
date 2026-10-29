@@ -27,10 +27,10 @@ export async function recordLocalReviewAttribution(cwd, result) {
   const model = normalizePlannerId(rawModel);
   if (!model) return;
   const path = await evidencePath(cwd);
-  // Require phase initialization; never silently reuse/create evidence for an
-  // unrelated review. Atomic append keeps concurrent model receipts intact.
-  await readFile(path, 'utf8');
-  await appendFile(path, `${model}\n`);
+  // Create the evidence file on demand: a fresh claim worktree may record a
+  // completed review before any reset ran (#14102). Atomic append keeps
+  // concurrent model receipts intact.
+  await appendFile(path, `${model}\n`, { mode: 0o600 });
 }
 
 export async function localReviewAttributionLabels(cwd) {

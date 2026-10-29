@@ -75,16 +75,15 @@ it('runs a saved provider reviewer from the standalone claim bridge without boot
   };
   const results = await (async () => {
     const request = { backend: 'provider:example-gpu', diff: 'diff --git a/example.js b/example.js' };
-    // A resumed claim can complete its review before attribution was initialized.
-    // Preserve the verdict and actual health outcome, while blocking publication.
+    // A resumed claim can complete its review before attribution was initialized
+    // (#14102): the evidence file is created on demand, never failing publication.
     const noState = await runReview(request);
-    expect(noState.code).toBe(1);
-    expect(JSON.parse(noState.stdout)).toMatchObject({ ok: true, model: 'review-model', verdict: 'clean', findings: 'NO FINDINGS', attributionError: 'REVIEW_ATTRIBUTION_FAILED' });
-    expect(noState.stderr).toContain('Publication is blocked');
-    expect(noState.stderr).not.toContain(root);
+    expect(noState.code).toBe(0);
+    expect(JSON.parse(noState.stdout)).toMatchObject({ ok: true, model: 'review-model', verdict: 'clean', findings: 'NO FINDINGS' });
+    expect(JSON.parse(noState.stdout).attributionError).toBeUndefined();
     const healthy = JSON.parse(await readFile(join(data, 'settings.json'), 'utf8'));
     expect(healthy.codeReview?.reviewerHealth?.['provider:example-gpu']).toBeUndefined();
-    expect(existsSync(join(root, '.git/portos-local-review-models'))).toBe(false);
+    expect(await readFile(join(root, '.git/portos-local-review-models'), 'utf8')).toBe('review-model\n');
     expect(JSON.parse(bodies.shift())).toMatchObject({ model: 'review-model' });
     await promisify(execFile)(process.execPath, [fileURLToPath(new URL('./local-review-attribution.mjs', import.meta.url)), 'reset'], { cwd: root });
     expect(await readFile(join(root, '.git/portos-local-review-models'), 'utf8')).toBe('');
