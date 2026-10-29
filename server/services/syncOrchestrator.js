@@ -34,12 +34,12 @@ const CURSORS_FILE = dataPath('instances_sync_cursors.json');
 const SYNC_INTERVAL_MS = 60000;
 // Categories whose changes reach peers as realtime frames (peerSyncEvents.js).
 // From a peer with a live subscription the periodic tick re-pulls their
-// snapshot only this often, as a safety net for missed frames and for rows the
+// snapshot only about this often, as a safety net for missed frames and for rows the
 // peer holds but did not create (frames carry only the sender's own rows).
 // A peer without one (older version, unpaired, relay down) keeps every tick.
 // Gallery images are not here: they ride the library sweep's own timer
-// (sharing/index.js), which also pulls new images, since images have no
-// upsert frames.
+// (sharing/index.js, full-sync peers only), which also pulls new images,
+// since images have no upsert frames.
 export const SAFETY_NET_INTERVAL_MS = 5 * 60 * 1000;
 const SAFETY_NET_CATEGORIES = new Set(['videoHistory']);
 const FETCH_TIMEOUT_MS = 15000;
@@ -803,12 +803,15 @@ const emptyCoverage = () => ({ universe: new Set(), pipeline: new Set(), mediaCo
 /**
  * True when the periodic tick may skip a safety-net category for this peer: a
  * realtime subscription has been live since before the last converged
- * snapshot, and that snapshot is younger than SAFETY_NET_INTERVAL_MS.
+ * snapshot, and that snapshot is younger than about SAFETY_NET_INTERVAL_MS.
  */
 function safetyNetSnapshotFresh(peerId, category, realtimeSince, now) {
   if (realtimeSince === null || !SAFETY_NET_CATEGORIES.has(category)) return false;
   const last = safetyNetSyncedAt.get(peerId)?.get(category);
-  return last !== undefined && last >= realtimeSince && now - last < SAFETY_NET_INTERVAL_MS;
+  // `now >= last`: a clock set backwards must not stretch the wait. The half-tick
+  // margin makes the pull land on the tick nearest the interval, not the one after.
+  return last !== undefined && last >= realtimeSince && now >= last
+    && now - last < SAFETY_NET_INTERVAL_MS - SYNC_INTERVAL_MS / 2;
 }
 
 /**

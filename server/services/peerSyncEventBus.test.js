@@ -45,12 +45,13 @@ const connect = async (port, instanceId, subscribe) => {
   const frames = [];
   client.on('peer:sync:event', (frame) => frames.push(frame));
   await once(client, 'connect');
+  let ack = null;
   if (subscribe) {
     const subscribed = once(client, 'peer:sync:subscribed');
     client.emit('peer:sync:subscribe');
-    await subscribed;
+    ack = await subscribed;
   }
-  return { client, frames };
+  return { client, frames, ack };
 };
 
 describe('deliverPeerSyncEvent', () => {
@@ -68,6 +69,10 @@ describe('deliverPeerSyncEvent', () => {
     const unsubscribedPeer = await connect(port, 'peer-shared', false);
     const all = [unknown, categoryOff, qualifying, browser, unsubscribedPeer];
 
+    // The ack promises delivery exactly where delivery happens.
+    expect([unknown.ack, categoryOff.ack, qualifying.ack]).toEqual([
+      { ok: true, deliver: false }, { ok: true, deliver: false }, { ok: true, deliver: true },
+    ]);
     expect(await deliverPeerSyncEvent(ioServer, FRAME)).toBe(1);
     // Emits are ordered per socket, so a frame sent before this marker has arrived once it does.
     const markers = all.map(({ client }) => once(client, 'example:marker'));

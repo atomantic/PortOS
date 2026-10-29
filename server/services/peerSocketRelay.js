@@ -12,7 +12,7 @@
 import { io } from 'socket.io-client';
 import { instanceEvents } from './instanceEvents.js';
 import { peerBaseUrl } from '../lib/peerUrl.js';
-import { peerFetch, peerSocketOptionsFor, PEER_INSTANCE_HEADER } from '../lib/peerHttpClient.js';
+import { memoizedSelfInstanceId, peerFetch, peerSocketOptionsFor, PEER_INSTANCE_HEADER } from '../lib/peerHttpClient.js';
 import { withAbortTimeout } from '../lib/abortTimeout.js';
 import { isPlainObject } from '../lib/objects.js';
 
@@ -32,15 +32,23 @@ const relayedAgent = (data) => {
  * Connect to a peer's Socket.IO server and subscribe to agent events
  */
 export function connectToPeer(peer) {
-  if (peerConnections.has(peer.id)) return;
-
-  const url = peerBaseUrl(peer);
   // peerSocketOptionsFor injects the same credential headers peerFetch sends
   // (the pair token, and Basic until the receiver confirms the token).
   const socketOptions = peerSocketOptionsFor(peer);
   // The peer delivers sync frames only to a socket that names this install
-  // (paired peers); an unidentified subscription receives nothing.
-  const identified = Boolean(socketOptions.extraHeaders?.[PEER_INSTANCE_HEADER]);
+  // (paired peers). The header is fixed for the socket's life, so a socket
+  // opened before this install's id was resolved, or under an id a restore
+  // has since replaced, is reopened with the current one (the probe calls
+  // this every cycle while the peer is online).
+  const identity = socketOptions.extraHeaders?.[PEER_INSTANCE_HEADER] ?? null;
+  const existing = peerConnections.get(peer.id);
+  if (existing) {
+    if (existing.identity === identity) return;
+    console.log(`🔗 Peer relay reopening for ${peer.name}: this install's identity changed`);
+    disconnectFromPeer(peer.id);
+  }
+
+  const url = peerBaseUrl(peer);
   const socket = io(url, {
     reconnection: true,
     reconnectionAttempts: 5,
@@ -57,7 +65,10 @@ export function connectToPeer(peer) {
     agents: new Map(),
     // Frames apply in arrival order so a delete never races the upsert before it.
     syncQueue: Promise.resolve(),
-    // When the current subscription was acknowledged; null while no frames can arrive.
+    // The instance id this socket names itself by (null: unidentified).
+    identity,
+    // When the peer acknowledged that it will send video frames to this
+    // socket; null while none can arrive.
     realtimeSince: null,
     peer: {
       id: peer.id, name: peer.name, address: peer.address, host: peer.host ?? null, port: peer.port, auth: peer.auth ?? null,
@@ -95,8 +106,10 @@ export function connectToPeer(peer) {
   // Subscribe only when the peer advertises the channel: an older peer with a
   // password set disconnects a relay socket that sends an event it doesn't allow.
   socket.on('peer:sync:available', () => socket.emit('peer:sync:subscribe'));
-  socket.on('peer:sync:subscribed', () => {
-    if (identified) setRealtime(conn, peer.id, Date.now());
+  // Only an ack that promises delivery counts: an older server acks without
+  // `deliver`, and a peer that does not share video history with us says false.
+  socket.on('peer:sync:subscribed', (ack) => {
+    if (identity && ack?.deliver === true) setRealtime(conn, peer.id, Date.now());
   });
 
   // The sender is this connection's peer; the frame's own claims are not trusted.
@@ -156,15 +169,17 @@ function setRealtime(conn, peerId, since) {
 }
 
 /**
- * When this install's live realtime subscription to the peer (registry id) was
- * acknowledged, or null when none is live: the peer is older (never advertises
- * the channel), unpaired (its frames would not reach us), or disconnected.
+ * When the peer (registry id) acknowledged it will send this install video
+ * frames, or null when none can arrive: the peer is older (never advertises
+ * the channel or never promises delivery), does not share video history with
+ * us, is unpaired, is disconnected, or knows us by an id we no longer hold.
  * Frames sent before this moment were missed, so the sync loop treats it as the
  * point after which a snapshot may be skipped.
  */
 export function peerRealtimeSyncSince(peerId) {
   const conn = peerConnections.get(peerId);
-  return conn?.socket.connected ? conn.realtimeSince : null;
+  if (!conn?.socket.connected || conn.identity !== memoizedSelfInstanceId()) return null;
+  return conn.realtimeSince;
 }
 
 /**

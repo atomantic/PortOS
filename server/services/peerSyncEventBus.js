@@ -123,15 +123,32 @@ function handshakeInstanceId(headers) {
  */
 export function registerPeerSyncSubscriber(socket) {
   socket.emit('peer:sync:available', { v: PEER_SYNC_EVENT_VERSION });
-  socket.on('peer:sync:subscribe', () => {
-    if (socket.data) socket.data.peerSyncInstanceId = handshakeInstanceId(socket.handshake?.headers);
+  socket.on('peer:sync:subscribe', async () => {
+    const instanceId = handshakeInstanceId(socket.handshake?.headers);
+    if (socket.data) socket.data.peerSyncInstanceId = instanceId;
     socket.join(PEER_SYNC_ROOM);
-    socket.emit('peer:sync:subscribed');
+    // `deliver`: whether video-history frames will reach this subscriber now
+    // (the delivery gate below), so it knows if it may relax its snapshot pulls.
+    socket.emit('peer:sync:subscribed', { ok: true, deliver: await receivesFrames(instanceId, 'videoHistory') });
   });
   socket.on('peer:sync:unsubscribe', () => {
     socket.leave(PEER_SYNC_ROOM);
     socket.emit('peer:sync:unsubscribed');
   });
+}
+
+async function receivesFrames(instanceId, category) {
+  try {
+    if (!instanceId) return false;
+    const [{ getPeers }, shared] = await Promise.all([
+      import('./instances.js'), import('./sharing/peerSyncShared.js'),
+    ]);
+    const peer = (await getPeers()).find((p) => p.instanceId === instanceId);
+    return Boolean(peer && RECEIVER_GATE_FOR_EVENT[category](shared, peer));
+  } catch (err) {
+    console.error(`❌ Peer sync subscribe gate failed: ${err.message}`);
+    return false;
+  }
 }
 
 /**

@@ -196,29 +196,34 @@ Each install pulls from its peers (`server/services/syncOrchestrator.js`).
   (`peerSyncEventBus.js` emits them, `peerSyncEvents.js` applies them). Gallery
   images send delete frames only. The receiver's relay socket
   (`peerSocketRelay.js`) subscribes after the peer advertises
-  `peer:sync:available`. Frames go only to a paired relay that names this
-  install, for a category the sender shares with it. A sender announces only
-  rows it created and deletes of its own rows, and a frame applies without
-  waiting for the loop.
-- **Safety net.** From a peer with a live subscription (`peerRealtimeSyncSince`),
-  the 60s tick re-pulls `videoHistory` only every `SAFETY_NET_INTERVAL_MS`
-  (5 min). It pulls sooner when the subscription went live after the last
-  snapshot, since frames sent during that gap were missed. That snapshot repairs
-  missed frames and carries rows the peer holds but did not create. A peer
-  without a live subscription keeps the 60s cadence: an older version that never
-  advertises the channel, an unpaired peer, or a relay that is down. Every other
-  category keeps the 60s cadence, and `peer:online` and a manual sync always pull
-  everything. Gallery images ride the library sweep's own 60s timer
-  (`sharing/index.js`), which is unchanged because it is also how new images
+  `peer:sync:available`, and the peer's `peer:sync:subscribed` ack says whether
+  it will deliver video frames to this install (`deliver`). Frames go only to a
+  paired relay that names this install, for a category the sender shares with
+  it. A sender announces only rows it created and deletes of its own rows, and a
+  frame applies without waiting for the loop. A relay opened under an identity
+  this install no longer holds (before it was resolved, or replaced by a
+  restore) is reopened on the next probe.
+- **Safety net.** From a peer whose ack promised delivery
+  (`peerRealtimeSyncSince`), the 60s tick re-pulls `videoHistory` about every
+  `SAFETY_NET_INTERVAL_MS` (5 min). It pulls sooner when the subscription went
+  live after the last snapshot (frames sent during that gap were missed) or the
+  clock moved backwards. That snapshot repairs missed frames and carries rows
+  the peer holds but did not create. A peer without a live, delivering
+  subscription keeps the 60s cadence: an older version (no channel, or an ack
+  without `deliver`), a peer that does not share video history with this
+  install, an unpaired peer, or a relay that is down. Every other category keeps
+  the 60s cadence, and `peer:online` and a manual sync always pull everything.
+  Gallery images ride the library sweep's own 60s timer (`sharing/index.js`,
+  full-sync peers only), which is unchanged because it is also how new images
   arrive.
 - **Tombstones.** A delete records a tombstone (`data/media-tombstones.json`)
   before the files are trashed. The tombstone rides the frame, the
-  `videoHistory` snapshot and the library manifest, so a peer that was offline
-  during the delete retires its copy on its next sync. No peer can re-offer the
-  row. A peer's tombstone is admitted only from a paired peer with media delete
-  allowed that owns or holds the row (`mediaTombstoneAuthorization.js`).
-  Deleting a row owned elsewhere sends `POST /api/peer-media/delete` to the
-  owner (`mediaRemoteDelete.js`).
+  `videoHistory` snapshot and (for images, to full-sync peers) the library
+  manifest, so a peer that was offline during the delete retires its copy on
+  its next sync. No peer can re-offer the row. A peer's tombstone is admitted
+  only from a paired peer with media delete allowed that owns or holds the row
+  (`mediaTombstoneAuthorization.js`). Deleting a row owned elsewhere sends
+  `POST /api/peer-media/delete` to the owner (`mediaRemoteDelete.js`).
 
 ### Browser Automation Flow
 

@@ -93,6 +93,11 @@ async function selfInstanceId() {
   return cachedSelfInstanceId;
 }
 
+/** The memoized instance id, or null before the first hop resolved it (or after a reset). */
+export function memoizedSelfInstanceId() {
+  return cachedSelfInstanceId;
+}
+
 /** Drop the memoized instance id; the next hop re-reads the identity leaf. */
 export function resetSelfInstanceIdCache() {
   cachedSelfInstanceId = null;
