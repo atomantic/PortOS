@@ -79,6 +79,7 @@ const imageDownloads = () => vi.mocked(peerFetch).mock.calls.filter(([url]) => S
 
 beforeEach(() => {
   rmSync(PATHS.images, { recursive: true, force: true });
+  rmSync(PATHS.videos, { recursive: true, force: true });
   rmSync(join(PATHS.data, 'media-tombstones.json'), { force: true });
   vi.mocked(peerFetch).mockReset();
 });
@@ -359,5 +360,33 @@ describe('library manifest tombstones', () => {
     expect(legacy.manifestHash).toBe(before.manifestHash);
     expect(capable.tombstones).toEqual([{ key: 'gone.png', deletedAt: expect.any(String) }]);
     expect(capable.manifestHash).not.toBe(before.manifestHash);
+  });
+});
+
+describe('video deletes across the library sweep', () => {
+  const advertiseVideos = (peer, filenames) => {
+    vi.mocked(getPeers).mockResolvedValue([peer]);
+    const manifest = {
+      schemaVersion: PORTOS_SCHEMA_VERSIONS.mediaLibrary,
+      manifestHash: createHash('sha256').update(`video|${filenames.join(',')}`).digest('hex'),
+      assets: filenames.map(filename => ({ kind: 'video', filename, sha256: sha })),
+    };
+    vi.mocked(peerFetch).mockImplementation(async url => {
+      if (String(url).includes('/library-manifest')) return { ok: true, headers: new Headers(), json: async () => manifest };
+      if (String(url).endsWith('.mp4')) return { ok: true, headers: new Headers({ 'content-length': String(bytes.length) }), arrayBuffer: async () => bytes };
+      return { ok: false, status: 404, headers: new Headers() };
+    });
+  };
+  const videoDownloads = () => vi.mocked(peerFetch).mock.calls.filter(([url]) => String(url).endsWith('.mp4')).map(([url]) => String(url));
+
+  it('a deleted video is not pulled back, while a re-created one under a new id still syncs', async () => {
+    const peer = pairedPeer();
+    await recordMediaTombstone('video', 'gone-id');
+    advertiseVideos(peer, ['gone-id.mp4', 'new-id.mp4']);
+    await syncMediaLibraryFromPeer(peer);
+
+    expect(existsSync(join(PATHS.videos, 'gone-id.mp4'))).toBe(false);
+    expect(existsSync(join(PATHS.videos, 'new-id.mp4'))).toBe(true);
+    expect(videoDownloads().some((url) => url.includes('gone-id'))).toBe(false);
   });
 });
