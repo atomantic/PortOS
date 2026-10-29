@@ -1432,6 +1432,22 @@ describe('CatalogIngredient — tabbed library record pages', () => {
       ));
     });
 
+    // Catches the portrait missing from the look picker (the References tab
+    // shows it beside the references) or a look role landing on the portrait row.
+    it('offers the portrait for a look and files it as a reference copy', async () => {
+      const api = await import('../services/apiCatalog');
+      api.attachCatalogIngredientMedia.mockResolvedValue({ mediaKey: 'portrait.png', kind: 'reference', role: 'look:wardrobe-1' });
+      getCatalogIngredientDetails.mockResolvedValue({ ...detailsOf(HERO), media: MEDIA.map((m) => (m.kind === 'portrait'
+        ? { ...m, library: { review: { status: 'good' } } } : m)) });
+      await renderPage('/casting/cat-chr-hero/looks');
+      const card = await screen.findByRole('article', { name: 'Look: Red scarf' });
+      fireEvent.click(within(card).getByRole('button', { name: /Attach image/ }));
+      fireEvent.click(within(card).getByRole('button', { name: 'Use for Red scarf' }));
+      await waitFor(() => expect(api.attachCatalogIngredientMedia).toHaveBeenCalledWith(
+        'cat-chr-hero', { mediaKey: 'portrait.png', kind: 'reference', role: 'look:wardrobe-1', caption: null }, { silent: true },
+      ));
+    });
+
     it('invalidates render readiness immediately when direction changes and keeps rendering blocked after a preview failure', async () => {
       const api = await import('../services/apiCatalog');
       await renderPage('/casting/cat-chr-hero/looks');

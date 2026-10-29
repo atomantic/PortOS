@@ -532,18 +532,22 @@ function IngredientEditor() {
   // (ingredient, key, kind) row, so the caption is passed back unchanged.
   const handleSetMediaRole = useCallback(async (m, role, message) => {
     if (!record || identityReadOnly || m?.readOnly || !m?.mediaKey) return false;
+    // A role never goes on the portrait row: using the portrait for a look
+    // files a reference copy of the same image and leaves the portrait as is.
+    const copyPortrait = m.kind === 'portrait';
     const updated = await attachCatalogIngredientMedia(
       record.id,
-      { mediaKey: m.mediaKey, kind: m.kind, role, caption: m.caption ?? null },
+      { mediaKey: m.mediaKey, kind: copyPortrait ? 'reference' : m.kind, role, caption: m.caption ?? null },
       { silent: true },
     ).catch((err) => { toast.error(err?.message || 'Failed to update media'); return null; });
     if (!updated) return false;
-    setMedia((prev) => prev.map((row) => (
+    if (copyPortrait) refreshMedia();
+    else setMedia((prev) => prev.map((row) => (
       row.mediaKey === m.mediaKey && row.kind === m.kind ? { ...row, ...updated, role } : row
     )));
     toast.success(message || (role ? 'Marked as plate' : 'Plate unmarked'));
     return true;
-  }, [record, identityReadOnly]);
+  }, [record, identityReadOnly, refreshMedia]);
 
   // A finished catalog-only sheet render: attach it under its `sheet:<variant>`
   // role right away (the server-side attach hook files the same row and is
@@ -766,6 +770,11 @@ function IngredientEditor() {
   const liveLookIds = new Set(wardrobes.map((w) => w?.id).filter(Boolean));
   const liveShotIds = new Set((ingredientPayload(record.payload).greybox?.shots || []).map((s) => s.id));
   const isReferenceTabRow = (m) => isReferenceTabMedia(m, liveLookIds, liveShotIds);
+  // The References tab shows the portrait beside the references, so the look
+  // picker offers it too unless the same image already has a reference row.
+  const referenceKeys = new Set(media.filter((m) => m.kind === 'reference').map((m) => m.mediaKey));
+  const lookCandidates = media.filter((m) => (m.kind === 'reference' && isReferenceTabRow(m))
+    || (m.kind === 'portrait' && !referenceKeys.has(m.mediaKey)));
   const coverUrl = ingredientCoverUrl({
     ...record,
     thumbnailKey: media.find((m) => m.kind === 'portrait')?.mediaKey || (!mediaReady && record.coverMedia?.portraitKey) || record.thumbnailKey,
@@ -1036,7 +1045,7 @@ function IngredientEditor() {
             initialUniverseId={universeRef?.refId || ''}
             wardrobes={wardrobes}
             lookMedia={media.filter((m) => liveLookIds.has(lookIdOf(m))).map(protectMedia)}
-            candidates={media.filter((m) => m.kind === 'reference' && isReferenceTabRow(m)).map(protectMedia)}
+            candidates={lookCandidates.map(protectMedia)}
             missingMedia={missingMedia}
             editLocked={saving || unlocking || identityReadOnly}
             blockedReason={renderBlockedReason('look')}
