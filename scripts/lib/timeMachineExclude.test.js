@@ -27,8 +27,13 @@ const preservedData = [
   'cos/attachments', 'cos/held-checkout-archives', 'cos/branch-retirement-archives',
   'cos/initialized-checkout-retirements', 'jev/heads',
 ];
+const memoryPreference = (decision = 'accepted') => ({
+  get: () => decision,
+  set: vi.fn(value => { decision = value; }),
+});
 const setup = (options = {}) => setupTimeMachine(root, {
-  platform: 'darwin', env: {}, log: vi.fn(), ...options,
+  platform: 'darwin', env: {}, log: vi.fn(), exists: () => true, mkdir: vi.fn(),
+  preference: memoryPreference(), confirm: vi.fn(), ...options,
 });
 
 describe('Time Machine setup backup boundary', () => {
@@ -54,7 +59,7 @@ describe('Time Machine setup backup boundary', () => {
     expect(existsSync(root)).toBe(false);
     expect(TIME_MACHINE_EXCLUDED_DIRS.slice().sort()).toEqual(expected.slice().sort());
     const result = setup({ run });
-    expect(result).toEqual({ status: 'updated', added: expected.length - 1, excluded: 1, failures: [] });
+    expect(result).toEqual({ status: 'updated', added: expected.length - 1, excluded: 1, created: 0, failures: [] });
     const additions = calls.filter(call => call[0] === 'sudo' && call[1] === '--');
     expect(additions).toEqual(expected.filter(path => path !== 'data/cache')
       .map(path => ['sudo', '--', 'tmutil', 'addexclusion', '-p', resolve(root, path)]));
@@ -63,7 +68,7 @@ describe('Time Machine setup backup boundary', () => {
       expect(excluded.has(resolve(root, path)), path).toBe(false);
     }
     calls.length = 0;
-    expect(setup({ run })).toEqual({ status: 'present', added: 0, excluded: expected.length, failures: [] });
+    expect(setup({ run })).toEqual({ status: 'present', added: 0, excluded: expected.length, created: 0, failures: [] });
     expect(calls.every(call => call[0] === 'tmutil')).toBe(true);
     expect(existsSync(root)).toBe(false);
   });
@@ -84,6 +89,57 @@ describe('Time Machine setup backup boundary', () => {
     run.mockImplementation(command => command === 'tmutil'
       ? { status: 0, stdout: '[Included]' } : { status: 0 });
     expect(setup({ run }).status).toBe('updated');
+  });
+
+  describe('directories that do not exist yet', () => {
+    const included = vi.fn((command, args) => command === 'tmutil'
+      ? { status: 0, stdout: `[Included] ${args.at(-1)}` } : { status: 0 });
+
+    it('asks once, creates and excludes them on yes, and never asks again', () => {
+      const preference = memoryPreference(null);
+      const confirm = vi.fn(() => 'yes');
+      const mkdir = vi.fn();
+      const run = vi.fn(() => ({ status: 0 }));
+      const result = setup({ run, preference, confirm, mkdir, exists: () => false });
+      expect(confirm).toHaveBeenCalledWith(TIME_MACHINE_EXCLUDED_DIRS.length);
+      expect(preference.set).toHaveBeenCalledWith('accepted');
+      expect(mkdir).toHaveBeenCalledTimes(TIME_MACHINE_EXCLUDED_DIRS.length);
+      expect(result).toMatchObject({ status: 'updated', added: TIME_MACHINE_EXCLUDED_DIRS.length, created: TIME_MACHINE_EXCLUDED_DIRS.length });
+      confirm.mockClear();
+      setup({ run: included, preference, confirm, mkdir, exists: () => false });
+      expect(confirm).not.toHaveBeenCalled();
+    });
+
+    it('remembers a no: no directories, no sudo, no second question', () => {
+      const preference = memoryPreference(null);
+      const confirm = vi.fn(() => 'no');
+      const mkdir = vi.fn();
+      const run = vi.fn();
+      expect(setup({ run, preference, confirm, mkdir, exists: () => false }).status).toBe('declined');
+      expect(preference.set).toHaveBeenCalledWith('declined');
+      expect(setup({ run, preference, confirm, mkdir, exists: () => false }).status).toBe('declined');
+      expect(confirm).toHaveBeenCalledTimes(1);
+      expect(mkdir).not.toHaveBeenCalled();
+      expect(run).not.toHaveBeenCalled();
+    });
+
+    it('without a terminal neither prompts, records a decision, nor touches the disk', () => {
+      const preference = memoryPreference(null);
+      const mkdir = vi.fn();
+      const run = vi.fn();
+      const result = setup({ run, preference, confirm: () => null, mkdir, exists: () => false });
+      expect(result.status).toBe('undecided');
+      expect(preference.set).not.toHaveBeenCalled();
+      expect(mkdir).not.toHaveBeenCalled();
+      expect(run).not.toHaveBeenCalled();
+    });
+
+    it('does not ask when everything is already excluded', () => {
+      const confirm = vi.fn();
+      const run = vi.fn((command, args) => ({ status: 0, stdout: `[Excluded] ${args.at(-1)}` }));
+      expect(setup({ run, preference: memoryPreference(null), confirm }).status).toBe('present');
+      expect(confirm).not.toHaveBeenCalled();
+    });
   });
 
   it('retains missing-path and process errors as retryable setup warnings', () => {
