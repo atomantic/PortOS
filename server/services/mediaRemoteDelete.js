@@ -39,7 +39,16 @@ const queueWrite = createFileWriteQueue();
 
 // Lazy: the hosted index pulls in the peer registry, which the routes that load
 // this module do not otherwise need.
-const hostedIndex = () => import('./peerHostedMedia.js').then((m) => m.listHostedEntries());
+const hostedModule = () => import('./peerHostedMedia.js');
+const hostedIndex = () => hostedModule().then((m) => m.listHostedEntries());
+// A collection image a host-mode peer holds has no png or sidecar here, only a
+// hosted-index entry; its pending delete lives in the queue entry alone.
+const hostedImageEntry = async (kind, key) => (kind === 'image' ? (await hostedIndex())[`image:${key}`] ?? null : null);
+// The hosted entry is stale (or acked away): forget it and purge this machine's references.
+async function settleHostedOnly(kind, key, opts) {
+  await (await hostedModule()).dropHostedEntry(kind, key);
+  return deleteLocally(kind, key, opts);
+}
 const peerIsPaired = (peer) => typeof peer?.syncSecret === 'string' && peer.syncSecret.length >= 32;
 const peerLabel = (peer) => peer?.name || peer?.id || 'peer';
 const isEntry = (e) => isPlainObject(e) && KINDS.includes(e.kind) && isNonBlankStr(e.key) && isNonBlankStr(e.peerId)
@@ -184,7 +193,11 @@ async function retireLocalCopy(kind, peer, key, tombstone, opts) {
   const media = MEDIA[kind];
   // A queued command for the origin after another holder's ack already retired
   // the copy here (holderDeleted): nothing is left to retire.
-  if (!(await media.getRow(key))) return { status: 'deleted' };
+  if (!(await media.getRow(key))) {
+    // The host acked a hosted-only image: forget the entry and purge the references here.
+    if (await hostedImageEntry(kind, key)) await settleHostedOnly(kind, key, opts);
+    return { status: 'deleted' };
+  }
   const { authorizeRemoteMediaTombstone } = await import('./mediaTombstoneAuthorization.js');
   const verdict = authorizeRemoteMediaTombstone({
     peer, tombstone, localRow: await media.getRow(key), hostedIndex: await hostedIndex(), via: 'event',
@@ -234,12 +247,16 @@ async function deleteAnywhere(kind, key, opts) {
   const media = MEDIA[kind];
   const generation = generationOf(kind, key);
   const cancelled = () => generationOf(kind, key) !== generation;
-  const row = await media.getRow(key);
+  let row = await media.getRow(key);
+  let hostedOnly = false;
   if (!row) {
-    // An image with neither bytes nor sidecar here (a hosted collection item)
-    // keeps the plain local delete, which retires this machine's references.
-    if (kind === 'image') return deleteLocally(kind, key, opts);
-    throw new ServerError('Not found', { status: 404, code: 'NOT_FOUND' });
+    if (kind !== 'image') throw new ServerError('Not found', { status: 404, code: 'NOT_FOUND' });
+    // An image with no bytes or sidecar here is a hosted collection item when a
+    // peer hosts it: its delete goes to the host. With no host it keeps the
+    // plain local delete, which retires this machine's references.
+    if (!(await hostedImageEntry(kind, key))) return deleteLocally(kind, key, opts);
+    row = { filename: key };
+    hostedOnly = true;
   }
   const localId = await localInstanceId();
   if (localId && row.originInstanceId === localId) return deleteLocally(kind, key, opts);
@@ -333,6 +350,10 @@ async function deleteAnywhere(kind, key, opts) {
   await setPendingFlag(kind, key, null);
   if (failure) throw commandFailed(failure.peer, kind, failure.detail);
   // Every candidate answered that it does not hold the row.
+  if (hostedOnly) {
+    console.log(`⏭️ ${media.label} ${key}: no host holds it; forgotten here`);
+    return { ...(await settleHostedOnly(kind, key, opts)), status: 'owner-unknown' };
+  }
   await hideLocally(kind, key);
   console.log(`⏭️ ${media.label} ${key}: no owner candidate holds it; hidden on this machine only`);
   return { status: 'owner-unknown' };
@@ -403,14 +424,20 @@ export function deleteMediaAnywhere(kind, key, { forgetInMusicVideos = true } = 
   return run;
 }
 
+/** Queued image deletes by key: `Map<filename, { peerId, queuedAt }>`; empty when the queue is unreadable. */
+export async function listQueuedImageDeletes() {
+  const entries = await readQueue().catch(() => []);
+  return new Map(entries.filter((e) => e.kind === 'image').map((e) => [e.key, { peerId: e.peerId, queuedAt: e.queuedAt }]));
+}
+
 /** Withdraw a queued delete and clear the row's pending flag. Resolves `{ ok, cancelled }`. */
 export async function cancelPendingDelete(kind, key) {
   if (!MEDIA[kind]?.validKey(key)) throw unknownMedia();
   cancelGenerations.set(`${kind}:${key}`, generationOf(kind, key) + 1);
   const dequeued = await dropEntriesFor(kind, key);
   const row = await MEDIA[kind].getRow(key);
-  if (!row) throw new ServerError('Not found', { status: 404, code: 'NOT_FOUND' });
-  const cancelled = isPlainObject(row.pendingDelete) || dequeued > 0;
+  if (!row && !(await hostedImageEntry(kind, key))) throw new ServerError('Not found', { status: 404, code: 'NOT_FOUND' });
+  const cancelled = isPlainObject(row?.pendingDelete) || dequeued > 0;
   await setPendingFlag(kind, key, null);
   if (cancelled) console.log(`↩️ Pending delete of ${kind} ${key} cancelled`);
   return { ok: true, cancelled };
@@ -458,7 +485,7 @@ async function pruneMediaDeleteQueue(peers, nowMs = Date.now()) {
     for (const r of Array.isArray(history) ? history : []) if (isNonBlankStr(r?.id)) rows.set(`video:${r.id}`, r);
   }
   for (const entry of survivors.filter((e) => e.kind === 'image')) {
-    const row = await readHeldImage(entry.key);
+    const row = await readHeldImage(entry.key) ?? ((await hostedImageEntry('image', entry.key)) && {});
     if (row) rows.set(`image:${entry.key}`, row);
   }
   const rowReason = (entry) => {
@@ -585,7 +612,8 @@ async function drainMediaDeleteQueue(peer) {
           done++;
         } else if (result.outcome === 'not-held') {
           await setPendingFlag(entry.kind, entry.key, null);
-          await hideLocally(entry.kind, entry.key);
+          if (await MEDIA[entry.kind].getRow(entry.key)) await hideLocally(entry.kind, entry.key);
+          else if (await hostedImageEntry(entry.kind, entry.key)) await settleHostedOnly(entry.kind, entry.key);
           await notifyQueuedDeleteFailed(entry, current, 'not-held');
           console.log(`⏭️ ${peerLabel(current)} does not hold ${entry.kind} ${entry.key}; hidden on this machine only`);
         } else if (retired || result.outcome === 'invalid-ack') {
@@ -669,8 +697,8 @@ export async function executePeerMediaDelete(senderPeerId, { kind, key }) {
   if (!(await media.getRow(key))) throw notHeld();
   await media.deleteHere(key).catch((err) => { throw err?.code === 'NOT_FOUND' ? notHeld() : err; });
   await dropEntriesFor(kind, key);
-  const { listMediaTombstones } = await import('./mediaTombstones.js');
-  const tombstone = (await listMediaTombstones(kind)).find((t) => t.key === key) ?? null;
+  const { listExportableMediaTombstones } = await import('./mediaTombstones.js');
+  const tombstone = (await listExportableMediaTombstones(kind)).find((t) => t.key === key) ?? null;
   console.log(`🗑️ ${media.label} ${key} deleted at the request of ${peerLabel(peer)}`);
   return { ok: true, tombstone };
 }

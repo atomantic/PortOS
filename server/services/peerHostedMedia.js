@@ -168,6 +168,18 @@ function forgetHosted(kind, filename, peerId, revision) {
   }).catch(() => {});
 }
 
+/** Forget a hosted entry outright (its host deleted the file). */
+export function dropHostedEntry(kind, filename) {
+  return queueWrite(async () => {
+    const entries = await readEntries();
+    const key = hostedKey(kind, filename);
+    if (!(key in entries)) return false;
+    delete entries[key];
+    await writeEntries(entries);
+    return true;
+  });
+}
+
 /** Drop a hosted entry once its bytes are local; a still-absent file keeps its entry. */
 export function unmarkHosted(kind, filename) {
   return queueWrite(async () => {
@@ -187,6 +199,8 @@ export async function resolveMediaLocations(items) {
   const entries = await readEntriesOrEmpty();
   const peers = await getPeers().catch(() => []);
   const peerName = new Map(peers.map((p) => [p.instanceId, p.name || null]));
+  // A hosted image's pending delete lives in the delete queue, not a sidecar.
+  const queued = await import('./mediaRemoteDelete.js').then((m) => m.listQueuedImageDeletes()).catch(() => new Map());
   return (Array.isArray(items) ? items : []).map((item) => {
     const kind = item?.kind === 'video' ? 'video' : 'image';
     const filename = kind === 'video' ? videoRefToFilename(item.ref) : item?.ref;
@@ -195,7 +209,11 @@ export async function resolveMediaLocations(items) {
     if (existsSync(join(KIND_DIRS[kind](), safe))) return { location: 'local' };
     const hosted = entries[hostedKey(kind, safe)];
     if (!hosted) return { location: 'missing' };
-    return { location: 'remote', hostPeerId: hosted.peerId, hostPeerName: peerName.get(hosted.peerId) ?? null };
+    const pendingDelete = kind === 'image' ? queued.get(safe) : null;
+    return {
+      location: 'remote', hostPeerId: hosted.peerId, hostPeerName: peerName.get(hosted.peerId) ?? null,
+      ...(pendingDelete ? { pendingDelete } : {}),
+    };
   });
 }
 

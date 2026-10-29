@@ -1,7 +1,8 @@
 /**
  * Gallery images through the restore delete-record pass (videos and the peer
  * hop are covered end to end in mediaPeerDelete.e2e.test.js): a Put Back from
- * the OS Trash, a peer-owned image, and a delete still in flight.
+ * the OS Trash, a peer-owned image, and a delete still in flight — plus the
+ * settling of deletes a crash left in flight, for both kinds.
  */
 import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
 import { mkdirSync, rmSync, writeFileSync } from 'fs';
@@ -15,7 +16,8 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) => (
 vi.mock('./instanceIdentity.js', () => ({ UNKNOWN_INSTANCE_ID: 'unknown', getInstanceId: async () => 'inst-local' }));
 afterAll(() => rmSync(tempRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
 
-const { recordMediaTombstone, listMediaTombstones } = await import('./mediaTombstones.js');
+const { recordMediaTombstone, listMediaTombstones, listExportableMediaTombstones, listInFlightMediaTombstones } = await import('./mediaTombstones.js');
+const { atomicWrite } = await import('../lib/fileUtils.js');
 const { clearRestoredMediaTombstones } = await import('./mediaRestoreTombstones.js');
 const { peerSyncBus } = await import('./peerSyncEventBus.js');
 
@@ -26,9 +28,12 @@ const putBack = (filename, originInstanceId) => {
 };
 const imageKeys = async () => (await listMediaTombstones('image')).map((t) => t.key);
 
+const videosDir = join(tempRoot, 'videos');
+
 beforeEach(() => {
   rmSync(tempRoot, { recursive: true, force: true });
   mkdirSync(imagesDir, { recursive: true });
+  mkdirSync(videosDir, { recursive: true });
 });
 
 describe('clearRestoredMediaTombstones', () => {
@@ -60,5 +65,36 @@ describe('clearRestoredMediaTombstones', () => {
 
     expect((await clearRestoredMediaTombstones()).images).toEqual([]);
     expect(await imageKeys()).toEqual(['deleting.png']);
+  });
+});
+
+// #14088: a crash between recording a delete's tombstone and settling it
+// leaves the tombstone in flight; the next pass settles it from the file.
+describe('deletes a crash left in flight', () => {
+  const at = new Date(Date.now() - 60_000).toISOString();
+  const pending = (key) => ({ key, deletedAt: at });
+  const keys = (list) => list.map((t) => t.key).sort();
+
+  it('withdraws the delete whose file is still here and commits the one whose file is gone', async () => {
+    putBack('kept.png', 'inst-local');
+    writeFileSync(join(videosDir, 'v-kept.mp4'), Buffer.from('mp4'));
+    await atomicWrite(join(tempRoot, 'video-history.json'), [
+      { id: 'v-kept', filename: 'v-kept.mp4', createdAt: '2026-01-01T00:00:00.000Z', originInstanceId: 'inst-local' },
+      { id: 'v-trashed', filename: 'v-trashed.mp4', createdAt: '2026-01-01T00:00:00.000Z', originInstanceId: 'inst-local' },
+    ]);
+    const video = [pending('v-kept'), pending('v-trashed'), pending('v-gone')];
+    const image = [pending('kept.png'), pending('trashed.png')];
+    await atomicWrite(join(tempRoot, 'media-tombstones.json'), { version: 1, video, image, inFlight: { video, image } });
+    expect(await listExportableMediaTombstones('video')).toEqual([]);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    await clearRestoredMediaTombstones();
+
+    log.mockRestore();
+    expect(await listInFlightMediaTombstones('video')).toEqual([]);
+    expect(await listInFlightMediaTombstones('image')).toEqual([]);
+    expect(keys(await listExportableMediaTombstones('video'))).toEqual(['v-gone', 'v-trashed']);
+    expect(keys(await listExportableMediaTombstones('image'))).toEqual(['trashed.png']);
+    expect(keys(await listMediaTombstones('video'))).toEqual(['v-gone', 'v-trashed']);
   });
 });

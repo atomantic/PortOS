@@ -21,8 +21,11 @@ vi.mock('../mediaAssetIndex/index.js', () => ({
 }));
 vi.mock('../../lib/pythonSetup.js', () => ({ resolveFlux2Python: () => null, FLUX2_VENV_DEFAULT: '/fake/venv/bin/python3' }));
 vi.mock('../instanceIdentity.js', async importOriginal => ({ ...(await importOriginal()), getInstanceId: vi.fn(async () => 'local-inst') }));
-// Trash moves into a fixture-owned bin, never the host Trash.
+// Trash moves into a fixture-owned bin, never the host Trash. `trashHold`
+// lets a test hold the move open or fail it.
+let trashHold = null;
 vi.mock('../../lib/nativeTrash.js', () => ({ moveToNativeTrash: async paths => {
+  if (trashHold) await trashHold();
   const { rename, mkdir } = await vi.importActual('fs/promises');
   const bin = join(tempRoot, 'trash-bin');
   await mkdir(bin, { recursive: true });
@@ -80,8 +83,10 @@ const imageDownloads = () => vi.mocked(peerFetch).mock.calls.filter(([url]) => S
 
 beforeEach(() => {
   rmSync(PATHS.images, { recursive: true, force: true });
+  rmSync(PATHS.videos, { recursive: true, force: true });
   rmSync(join(PATHS.data, 'media-tombstones.json'), { force: true });
   vi.mocked(peerFetch).mockReset();
+  trashHold = null;
 });
 afterAll(() => { rmSync(tempRoot, { recursive: true, force: true }); });
 
@@ -347,6 +352,43 @@ describe('a held image without an origin', () => {
 });
 
 describe('library manifest tombstones', () => {
+  // #14088: a peer sweeping while the files are still being trashed must not
+  // receive a delete that a failed trash would then withdraw.
+  it('advertises a delete only once its trash commits', async () => {
+    seedImage('fading.png');
+    // Warm the sidecar hash cache first: computing it takes the image's sidecar
+    // queue, which the delete holds for as long as its trash runs.
+    await buildMediaLibraryManifest({ tombstones: true });
+    let release;
+    let started;
+    const trashing = new Promise((resolve) => { started = resolve; });
+    trashHold = () => new Promise((resolve) => { release = resolve; started(); });
+    const deleting = deleteImage('fading.png');
+    try {
+      await trashing;
+      const during = await buildMediaLibraryManifest({ tombstones: true });
+      expect(during.tombstones).toBeUndefined();
+      expect(during.assets.map((a) => a.filename)).toContain('fading.png');
+    } finally {
+      release();
+      await deleting;
+    }
+    const after = await buildMediaLibraryManifest({ tombstones: true });
+    expect(after.tombstones).toEqual([{ key: 'fading.png', deletedAt: expect.any(String) }]);
+  });
+
+  it('a failed trash leaves no delete to advertise and the image still listed', async () => {
+    seedImage('stuck.png');
+    trashHold = async () => { throw Object.assign(new Error('EACCES'), { code: 'EACCES' }); };
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await expect(deleteImage('stuck.png')).rejects.toMatchObject({ code: 'MEDIA_TRASH_FAILED' });
+    err.mockRestore();
+    const manifest = await buildMediaLibraryManifest({ tombstones: true });
+    expect(manifest.tombstones).toBeUndefined();
+    expect(manifest.assets.map((a) => a.filename)).toContain('stuck.png');
+    expect(await tombstonedKeys()).toEqual([]);
+  });
+
   it('advertises image deletes only to a receiver that asks, and only then changes the hash', async () => {
     seedImage('present.png');
     const before = await buildMediaLibraryManifest({ tombstones: true });
@@ -409,5 +451,33 @@ describe('tombstone cursor', () => {
     await syncMediaLibraryFromPeer(sender);
     await syncMediaLibraryFromPeer(sender);
     expect(libraryFetches().every(([, o]) => o.headers[PEER_LIBRARY_TOMBSTONES_SINCE_HEADER] === undefined)).toBe(true);
+  });
+});
+
+describe('video deletes across the library sweep', () => {
+  const advertiseVideos = (peer, filenames) => {
+    vi.mocked(getPeers).mockResolvedValue([peer]);
+    const manifest = {
+      schemaVersion: PORTOS_SCHEMA_VERSIONS.mediaLibrary,
+      manifestHash: createHash('sha256').update(`video|${filenames.join(',')}`).digest('hex'),
+      assets: filenames.map(filename => ({ kind: 'video', filename, sha256: sha })),
+    };
+    vi.mocked(peerFetch).mockImplementation(async url => {
+      if (String(url).includes('/library-manifest')) return { ok: true, headers: new Headers(), json: async () => manifest };
+      if (String(url).endsWith('.mp4')) return { ok: true, headers: new Headers({ 'content-length': String(bytes.length) }), arrayBuffer: async () => bytes };
+      return { ok: false, status: 404, headers: new Headers() };
+    });
+  };
+  const videoDownloads = () => vi.mocked(peerFetch).mock.calls.filter(([url]) => String(url).endsWith('.mp4')).map(([url]) => String(url));
+
+  it('a deleted video is not pulled back, while a re-created one under a new id still syncs', async () => {
+    const peer = pairedPeer();
+    await recordMediaTombstone('video', 'gone-id');
+    advertiseVideos(peer, ['gone-id.mp4', 'new-id.mp4']);
+    await syncMediaLibraryFromPeer(peer);
+
+    expect(existsSync(join(PATHS.videos, 'gone-id.mp4'))).toBe(false);
+    expect(existsSync(join(PATHS.videos, 'new-id.mp4'))).toBe(true);
+    expect(videoDownloads().some((url) => url.includes('gone-id'))).toBe(false);
   });
 });

@@ -24,7 +24,7 @@ import { sanitizeAssetFilename } from './buckets.js';
 import { PORTOS_SCHEMA_VERSIONS } from '../../lib/schemaVersions.js';
 import { getPeers } from '../instances.js';
 import { peerLibraryManifestSchema, PEER_LIBRARY_TOMBSTONES_HEADER, PEER_LIBRARY_TOMBSTONES_SINCE_HEADER } from '../../lib/validation.js';
-import { listMediaTombstones } from '../mediaTombstones.js';
+import { listExportableMediaTombstones } from '../mediaTombstones.js';
 import {
   hashSimpleAsset,
   hashImageForManifest,
@@ -201,10 +201,11 @@ export async function buildMediaLibraryManifest({ models = false, tombstones = f
   // A tombstone this machine's own newer copy supersedes (a re-used name) is
   // left out, so it cannot retire that copy on a peer. Only a real creation
   // stamp counts: a pulled copy advertises none (imageLiveStamp), so its
-  // tombstone keeps travelling.
+  // tombstone keeps travelling. A delete still trashing its files is left out
+  // until it commits (#14088).
   const liveImages = new Map(assets.filter((e) => e.kind === 'image' && e.createdAt).map((e) => [e.filename, Date.parse(e.createdAt)]));
   const deleted = tombstones && !excluded.has('image')
-    ? (await listMediaTombstones('image'))
+    ? (await listExportableMediaTombstones('image'))
       .filter((t) => !(liveImages.get(t.key) > Date.parse(t.deletedAt)))
       .filter((t) => Number.isNaN(sinceMs) || Date.parse(t.deletedAt) > sinceMs)
       .sort((a, b) => a.key.localeCompare(b.key))
