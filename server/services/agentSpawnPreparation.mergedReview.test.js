@@ -58,6 +58,27 @@ beforeEach(() => {
 afterEach(() => rmSync(directory, { recursive: true, force: true }));
 
 describe('saved review follow-up at the pre-provider spawn boundary', () => {
+  it('settles a verified merged target without dispatch even when its spawn episode is unverified', async () => {
+    const task = readSaved();
+    delete task.metadata.spawnBudgetProof;
+    save(task);
+    expect(await prepare(task)).toBeNull();
+    expect(readSaved()).toMatchObject({ status: 'completed', metadata: { totalSpawnCount: '2', retryCount: '1',
+      mergedReviewFollowUp: { status: 'verified', prUrl: task.metadata.reviewLoopPRUrl } } });
+    expect(m.lane).not.toHaveBeenCalled(); expect(m.execution).not.toHaveBeenCalled();
+    await flushImmediate();
+  });
+
+  it('holds an unverified episode when its review target is still open', async () => {
+    const task = readSaved();
+    delete task.metadata.spawnBudgetProof;
+    save(task);
+    m.probe.mockResolvedValue({ readable: true, prState: 'OPEN' });
+    expect(await prepare(task)).toBeNull();
+    expect(readSaved().status).toBe('pending');
+    expect(m.lane).not.toHaveBeenCalled(); expect(m.execution).not.toHaveBeenCalled();
+  });
+
   it('settles the exact merged target before agent/lane/workspace allocation and survives restart replay', async () => {
     const cleanupStarted = Promise.withResolvers();
     const cleanupFinished = Promise.withResolvers();
