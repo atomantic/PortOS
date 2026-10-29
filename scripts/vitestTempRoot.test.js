@@ -231,3 +231,14 @@ describe('npm debug log containment', () => {
     expect(source).toMatch(/process\.env\.npm_config_logs_max\s*=\s*'0'/);
   });
 });
+
+// Uniquely catches a lifecycle body that allocates a vrt- host outside the
+// owned-body drain (#13314): a sibling bail can end the worker before its
+// finally removes the host, which the global leak guard then reports.
+describe('lifecycle body ownership (#13314)', () => {
+  it('enrolls every asynchronous lifecycle body in the owned-body drain', () => {
+    const source = readFileSync(fileURLToPath(import.meta.url), 'utf8');
+    const plainAsync = source.split('\n').filter(line => /^\s*it(\.each\([^)]*\))?\(.*\basync\b/.test(line));
+    expect(plainAsync).toEqual([]);
+  });
+});
