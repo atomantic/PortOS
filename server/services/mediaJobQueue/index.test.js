@@ -331,6 +331,30 @@ describe('mediaJobQueue', () => {
     await waitFor(() => mediaJobQueue.getJob(job.jobId).status === 'failed');
   });
 
+  it('refuses an unanchored legacy snapshot on replay without invoking the provider', async () => {
+    const source = join(tempDataDir, 'images', 'reviewed.png');
+    mkdirSync(join(tempDataDir, 'images'), { recursive: true });
+    writeFileSync(source, 'reviewed bytes');
+    const digest = createHash('sha256').update('reviewed bytes').digest('hex');
+    mediaJobQueue.quiesceMediaJobQueue();
+    const job = await mediaJobQueue.enqueueJob({ kind: 'image', params: { prompt: 'edit', referenceImagePaths: [source], reviewedReferenceDigest: digest } });
+    const jobsPath = join(tempDataDir, 'media-jobs.json');
+    const store = JSON.parse(readFileSync(jobsPath, 'utf8'));
+    const identity = store.jobs.find(row => row.id === job.jobId).params.reviewedReferenceSnapshot;
+    delete identity.anchorVersion;
+    const manifestPath = join(tempDataDir, 'imageRefs', `snapshot-${identity.snapshotId}.json`);
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    delete manifest.anchorVersion;
+    writeFileSync(manifestPath, JSON.stringify(manifest));
+    rmSync(join(tempDataDir, 'imageRefs', `snapshot-${identity.snapshotId}.anchor`));
+    writeFileSync(jobsPath, JSON.stringify(store));
+    await importFresh();
+    await mediaJobQueue.initMediaJobQueue();
+    await waitFor(() => mediaJobQueue.getJob(job.jobId).status === 'failed');
+    expect(stubs.generateImage).not.toHaveBeenCalled();
+    expect(readFileSync(join(tempDataDir, 'imageRefs', identity.filename), 'utf8')).toBe('reviewed bytes');
+  });
+
   it('retains a snapshot when failure arrives without child-settlement proof', async () => {
     const source = join(tempDataDir, 'images', 'reviewed.png');
     mkdirSync(join(tempDataDir, 'images'), { recursive: true });

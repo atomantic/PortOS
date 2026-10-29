@@ -4,7 +4,7 @@ import { basename, join } from 'node:path';
 import { PATHS, atomicWrite, unlinkGuarded } from '../../lib/fileUtils.js';
 import { readJSONFileStrict, unreadableStoreError } from '../../lib/jsonIo.js';
 import { collectReferencedRefBasenames, ORPHAN_REF_MAX_AGE_MS } from '../imageRefsGc.js';
-import { isSnapshotStaging, readOwnedSnapshot, validSnapshotIdentity, withReviewedSnapshotLock } from './reviewedReference.js';
+import { isSnapshotStaging, readOwnedSnapshot, snapshotAnchorPath, validSnapshotIdentity, withReviewedSnapshotLock } from './reviewedReference.js';
 
 export function sweepReviewedReferences({ now = Date.now(), maxAgeMs = ORPHAN_REF_MAX_AGE_MS } = {}) {
   return withReviewedSnapshotLock(async () => {
@@ -41,9 +41,8 @@ export function sweepReviewedReferences({ now = Date.now(), maxAgeMs = ORPHAN_RE
       const imagePath = join(PATHS.imageRefs, record.filename);
       const info = await lstat(imagePath).catch(error => error.code === 'ENOENT' ? null : Promise.reject(error));
       if (!info) {
-        // Only a previously persisted deletion intent authorizes retiring the
-        // manifest after an interrupted unlink; an unexplained absence is held.
-        if (record.state === 'deleting') await unlinkGuarded(path);
+        // With the snapshot absent, a lone anchor cannot prove it has not itself
+        // been replaced. Retain the intent and any remaining file for recovery.
         continue;
       }
       if (now - info.mtimeMs < maxAgeMs) continue;
@@ -51,6 +50,7 @@ export function sweepReviewedReferences({ now = Date.now(), maxAgeMs = ORPHAN_RE
       if (!owned) continue;
       if (record.state !== 'deleting') await atomicWrite(path, { ...record, state: 'deleting' });
       await unlinkGuarded(imagePath);
+      await unlinkGuarded(snapshotAnchorPath(record.snapshotId));
       await unlinkGuarded(path);
       deleted += 1;
     }

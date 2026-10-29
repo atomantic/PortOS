@@ -36,6 +36,7 @@ describe('reviewed reference collection', () => {
     expect(await readFile(path, 'utf8')).toBe('reviewed');
     await unlink(join(root, 'images', 'output.metadata.json'));
     expect(await sweepReviewedReferences({ now: future })).toEqual({ deleted: 1 });
+    await expect(lstat(join(root, 'image-refs', `snapshot-${id.snapshotId}.anchor`))).rejects.toMatchObject({ code: 'ENOENT' });
     expect(await sweepReviewedReferences({ now: future })).toEqual({ deleted: 0 });
   });
 
@@ -63,14 +64,43 @@ describe('reviewed reference collection', () => {
     await expect(readOwnedSnapshot(id)).rejects.toMatchObject({ code: 'REVIEWED_REFERENCE_CHANGED' });
   });
 
-  it('finishes an interrupted deletion only with its persisted deletion intent', async () => {
+  it('retains an interrupted deletion when only the anchor remains', async () => {
     const id = await stageReviewedReference(randomUUID(), source, digest);
     const manifest = join(root, 'image-refs', `snapshot-${id.snapshotId}.json`);
     await markSnapshotState(id, 'settled');
     await writeFile(manifest, JSON.stringify({ ...id, state: 'deleting' }));
     await unlink(join(root, 'image-refs', id.filename));
     expect(await sweepReviewedReferences({ now: future })).toEqual({ deleted: 0 });
-    await expect(readFile(manifest)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(JSON.parse(await readFile(manifest, 'utf8')).state).toBe('deleting');
+    expect(await readFile(join(root, 'image-refs', `snapshot-${id.snapshotId}.anchor`), 'utf8')).toBe('reviewed');
+  });
+
+  it('pins the original inode and refuses replacement or loss of the anchor', async () => {
+    const id = await stageReviewedReference(randomUUID(), source, digest);
+    const path = join(root, 'image-refs', id.filename);
+    const anchor = join(root, 'image-refs', `snapshot-${id.snapshotId}.anchor`);
+    const pinned = await lstat(anchor, { bigint: true });
+    expect({ dev: String(pinned.dev), ino: String(pinned.ino) }).toEqual({ dev: id.dev, ino: id.ino });
+    await unlink(path);
+    await writeFile(path, 'reviewed');
+    const replacement = await lstat(path, { bigint: true });
+    expect({ dev: String(replacement.dev), ino: String(replacement.ino) }).not.toEqual({ dev: id.dev, ino: id.ino });
+    await expect(readOwnedSnapshot(id)).rejects.toMatchObject({ code: 'REVIEWED_REFERENCE_CHANGED' });
+    expect(await sweepReviewedReferences({ now: future })).toEqual({ deleted: 0 });
+    expect(await readFile(path, 'utf8')).toBe('reviewed');
+    await unlink(anchor);
+    await expect(readOwnedSnapshot(id)).rejects.toMatchObject({ code: 'REVIEWED_REFERENCE_CHANGED' });
+  });
+
+  it('holds legacy records without an anchor rather than adopting or collecting them', async () => {
+    const id = await stageReviewedReference(randomUUID(), source, digest);
+    const manifest = join(root, 'image-refs', `snapshot-${id.snapshotId}.json`);
+    const { anchorVersion: _anchorVersion, ...legacy } = id;
+    await unlink(join(root, 'image-refs', `snapshot-${id.snapshotId}.anchor`));
+    await writeFile(manifest, JSON.stringify({ ...legacy, state: 'settled' }));
+    await expect(readOwnedSnapshot(legacy)).rejects.toMatchObject({ code: 'REVIEWED_REFERENCE_CHANGED' });
+    expect(await sweepReviewedReferences({ now: future })).toEqual({ deleted: 0 });
+    expect(await readFile(join(root, 'image-refs', id.filename), 'utf8')).toBe('reviewed');
   });
 
   it('preserves an incomplete reservation without identity proof', async () => {
