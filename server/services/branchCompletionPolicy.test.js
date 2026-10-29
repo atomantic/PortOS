@@ -471,6 +471,8 @@ describe('reviewed reused-branch checkout incarnation', () => {
         coordinator.metadata.branchCompletionPolicy = { branch, completion: 'merge-on-green', tip: runtime.tip };
       }],
       ['coordinator capture history unreadable', ([, coordinator]) => { coordinator.metadata.completedCheckouts = 'corrupt'; }],
+      ['coordinator capture row has no head', ([, coordinator]) => { coordinator.metadata.completedCheckouts = [{}]; }],
+      ['coordinator capture row is malformed', ([, coordinator]) => { coordinator.metadata.completedCheckouts = [null]; }],
       ['coordinator bound to the same PR', ([, coordinator]) => { coordinator.metadata.reviewLoopMergeTarget = { branch, url: prUrl }; }],
       ['coordinator still running', ([, coordinator]) => { coordinator.status = 'running'; }],
       ['coordinator was a manual handoff', ([, coordinator]) => { coordinator.metadata.prCompletionPolicy = 'leave-open'; }],

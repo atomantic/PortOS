@@ -496,12 +496,13 @@ function exactCleanupHandoff(policy, input) {
       && row.head === input.tip && isDeepStrictEqual(row.incarnation, input.checkoutIncarnation)) === true;
 }
 
-// Unreadable capture history cannot prove the run never held this tip.
+// Unreadable capture history, including a row without a well-formed head,
+// cannot prove the run never held this tip.
 function capturedTip(policy, tip) {
   const rows = policy.agent.metadata?.completedCheckouts;
   if (rows !== undefined && !Array.isArray(rows)) return true;
   return policy.tip === tip || policy.agent.metadata?.branchCompletionPolicy?.tip === tip
-    || (rows || []).some(row => !isPlainObject(row) || row.head === tip);
+    || (rows || []).some(row => !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(row?.head || '') || row.head === tip);
 }
 
 /** Cleanup handoff is retirement evidence only under fresh merged-head and
