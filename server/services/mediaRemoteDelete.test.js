@@ -287,7 +287,7 @@ describe('media delete queue upkeep', () => {
     const now = Date.parse('2026-08-01T00:00:00.000Z');
     const old = new Date(now - MEDIA_DELETE_QUEUE_TTL_MS - 1000).toISOString();
     const fresh = new Date(now - 1000).toISOString();
-    await atomicWrite(HISTORY, ['v-old', 'v-fresh', 'v-unpaired'].map((id) => row(id, { originInstanceId: 'peer-o', pendingDelete: { peerId: 'rec-owner', queuedAt: fresh } })));
+    await atomicWrite(HISTORY, ['v-old', 'v-fresh', 'v-unpaired'].map((id) => row(id, { originInstanceId: id === 'v-unpaired' ? 'peer-removed' : 'peer-o', pendingDelete: { peerId: 'rec-owner', queuedAt: fresh } })));
     await atomicWrite(QUEUE, { version: 1, entries: [queueEntry('v-old', old), queueEntry('v-fresh', fresh), queueEntry('v-unpaired', fresh, 'rec-removed')] });
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(now);
@@ -371,6 +371,41 @@ describe('media delete queue upkeep', () => {
     await atomicWrite(QUEUE, { version: 1, entries: [queueEntry('v1', queuedAt)] });
     disarmQueue = initMediaRemoteDelete();
     await listenerFor('peers:updated')([]);
+    expect(await listMediaDeleteQueue()).toEqual([]);
+  });
+});
+
+describe('removing the peer a delete is queued on', () => {
+  const queuedAt = new Date().toISOString();
+  const seed = async (rowExtra = {}) => {
+    registry.peers = [peer('rec-a', 'peer-a'), peer('rec-b', 'peer-b')];
+    await atomicWrite(HISTORY, [row('v1', {
+      originInstanceId: 'peer-a', suppliedByInstanceId: 'peer-b', pendingDelete: { peerId: 'rec-a', queuedAt }, ...rowExtra,
+    })]);
+    await atomicWrite(QUEUE, { version: 1, entries: [{ peerId: 'rec-a', kind: 'video', key: 'v1', queuedAt }] });
+    disarmQueue = initMediaRemoteDelete();
+  };
+  const offline = (peers) => peers.map((p) => ({ ...p, status: 'offline' }));
+
+  // Uniquely catches a delete silently cancelled when one of several holders is unpaired.
+  it('re-targets the entry and the pending flag to the next holder, keeping queuedAt, then drops it when none remain', async () => {
+    await seed();
+    await listenerFor('peers:updated')(offline([registry.peers[1]]));
+    expect(await listMediaDeleteQueue()).toEqual([{ peerId: 'rec-b', kind: 'video', key: 'v1', queuedAt }]);
+    expect((await readRows())[0].pendingDelete).toEqual({ peerId: 'rec-b', queuedAt });
+
+    await listenerFor('peers:updated')([]);
+    expect(await listMediaDeleteQueue()).toEqual([]);
+    expect((await readRows())[0].pendingDelete).toBeUndefined();
+  });
+
+  it('does not re-target to an unpaired holder, and does not move an origin still owed a holder delete', async () => {
+    await seed();
+    await listenerFor('peers:updated')(offline([{ ...registry.peers[1], syncSecret: undefined }]));
+    expect(await listMediaDeleteQueue()).toEqual([]);
+
+    await atomicWrite(QUEUE, { version: 1, entries: [{ peerId: 'rec-a', kind: 'video', key: 'v1', queuedAt, holderDeleted: true }] });
+    await listenerFor('peers:updated')(offline([registry.peers[1]]));
     expect(await listMediaDeleteQueue()).toEqual([]);
   });
 });
