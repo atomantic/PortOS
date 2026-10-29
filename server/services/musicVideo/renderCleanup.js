@@ -1,5 +1,6 @@
 /** Retire regenerable renders without touching source takes or the cutting-room floor. */
-import { unlink, stat } from 'node:fs/promises';
+import { unlink, stat, lstat } from 'node:fs/promises';
+import { isDeepStrictEqual } from 'node:util';
 import { PATHS, atomicWrite, readJSONFile } from '../../lib/fileUtils.js';
 import { join, basename } from 'node:path';
 import { createFileWriteQueue } from '../../lib/fileWriteQueue.js';
@@ -24,9 +25,31 @@ async function readPending() {
   }
   return journal.entries;
 }
-const savePending = pending => pending.size
-  ? atomicWrite(JOURNAL, { version: 1, entries: [...pending.values()] }) : remove(JOURNAL);
-const retirementEntries = (history, pending) => [...new Map([...pending, ...history].map(entry => [entry.id, entry])).values()];
+const savePending = pending => pending.length
+  ? atomicWrite(JOURNAL, { version: 1, entries: pending }) : remove(JOURNAL);
+const retirementEntries = (history, pending) => {
+  const pendingIds = new Set(pending.map(entry => entry.id));
+  // Never collapse conflicting journal rows or replace their recovery evidence.
+  return [...pending, ...history.filter(entry => !pendingIds.has(entry.id))];
+};
+const FINAL_MODELS = new Set(['music-video', 'music-video-code', 'music-video-document', 'music-video-eidoverse']);
+const identityConflict = (entry, history, pending) => {
+  // Also refuse filename aliases on the supported case-insensitive filesystems.
+  const sharesIdentity = other => other.id === entry.id || other.filename?.toLowerCase() === entry.filename?.toLowerCase();
+  const rows = history.filter(sharesIdentity);
+  const journal = pending.filter(sharesIdentity);
+  return rows.length > 1 || journal.length > 1 || [...rows, ...journal].some(other => !isDeepStrictEqual(entry, other));
+};
+
+async function upscaleRecoveryReason(entry, history, pending) {
+  if (identityConflict(entry, history, pending)) return 'Conflicting history or cleanup journal ID or filename';
+  const path = safeUnder(PATHS.videos, entry.filename);
+  if (!entry.id || !FINAL_MODELS.has(entry.modelId) || typeof entry.upscaledFrom !== 'string' || !path) return 'Upscale ownership or filename is uncertain';
+  const info = await lstat(path).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
+  if (!info) return 'Upscaled video file is missing';
+  if (!info.isFile() || !info.size) return 'Upscaled video is not a nonempty regular file';
+  return null;
+}
 
 // Include legacy and nested references (takes, proof, kits, clone provenance).
 const references = (value, ids) => {
@@ -73,16 +96,19 @@ async function finalInventory(projectId, history, pending = [], boardOwners = nu
   const finals = [];
   const pendingIds = new Set(pending.map(entry => entry.id));
   for (const entry of retirementEntries(history, pending)) {
+    // One status per identity; conflicting journal rows remain intact on disk.
+    if (finals.some(other => other.id === entry.id)) continue;
     // Upscales are independent deliverables, even when they inherit their
     // source master's music-video tags. They are not obsolete final renders.
     if (entry.upscaledFrom) {
       if (pendingIds.has(entry.id) && entry.musicVideoProjectId === projectId) {
-        finals.push({ id: entry.id, pending: true, filename: entry.filename, createdAt: entry.createdAt, bytes: (await Promise.all(renderFiles(entry).map(size))).reduce((a, b) => a + b, 0), reason: 'Upscaled deliverable retained; review pending cleanup recovery' });
+        const reason = await upscaleRecoveryReason(entry, history, pending);
+        finals.push({ id: entry.id, pending: true, filename: entry.filename, createdAt: entry.createdAt, bytes: (await Promise.all(renderFiles(entry).map(size))).reduce((a, b) => a + b, 0), recoverable: !reason, reason: reason || 'Upscaled deliverable retained; ready to restore to video history' });
       }
       continue;
     }
     // Only the full-render pipeline owns this tag. Source clips use musicVideo.projectId.
-    if (entry.musicVideoProjectId !== projectId || !['music-video', 'music-video-code', 'music-video-document', 'music-video-eidoverse'].includes(entry.modelId) || entry.id === project.renderHistoryId) continue;
+    if (entry.musicVideoProjectId !== projectId || !FINAL_MODELS.has(entry.modelId) || entry.id === project.renderHistoryId) continue;
     const ids = new Set([entry.id, `video:${entry.filename}`]);
     for (const path of renderFiles(entry)) {
       const name = basename(path);
@@ -90,8 +116,9 @@ async function finalInventory(projectId, history, pending = [], boardOwners = nu
       for (const identity of [name, path, `${base}/${name}`, `${base}/${encodeURIComponent(name)}`]) ids.add(identity);
     }
     const referenced = owners.some(owner => references(owner, ids))
-      || history.some(other => other.id !== entry.id && references(other, ids));
-    const reason = !hasCurrent ? 'No completed replacement' : kitActive ? 'In use by a publishing-kit or cinema-package build' : referenced ? 'Referenced by saved media or production records' : null;
+      || [...history, ...pending].some(other => other.id !== entry.id && references(other, ids));
+    const reason = identityConflict(entry, history, pending) ? 'Conflicting history or cleanup journal ID or filename'
+      : !hasCurrent ? 'No completed replacement' : kitActive ? 'In use by a publishing-kit or cinema-package build' : referenced ? 'Referenced by saved media or production records' : null;
     finals.push({ id: entry.id, pending: pendingIds.has(entry.id), filename: entry.filename, createdAt: entry.createdAt, bytes: (await Promise.all(renderFiles(entry).map(size))).reduce((a, b) => a + b, 0), reason });
   }
   return { project, finals };
@@ -104,40 +131,51 @@ export async function cleanupSupersededFinals(projectId, { replacementId = null,
     const { withBoardMediaReferences } = await import('../moodBoard/db.js');
     const { withLoomMediaReferences } = await import('../fableLoom/store.js');
     return withProjectMediaMutation(() => withBoardMediaReferences(boardOwners => withLoomMediaReferences(async loomOwners => {
-      const pending = new Map((await readPending()).map(entry => [entry.id, entry]));
+      let pending = await readPending();
       let retiring = [];
+      let recovering = [];
       let retainedFiles;
       let removed = 0;
       return (async () => {
         await mutateVideoHistory(async history => {
-          const entries = retirementEntries(history, [...pending.values()]);
-          const { project, finals } = await finalInventory(projectId, history, [...pending.values()], boardOwners, loomOwners);
+          const entries = retirementEntries(history, pending);
+          const { project, finals } = await finalInventory(projectId, history, pending, boardOwners, loomOwners);
           if (replacementId && project.renderHistoryId !== replacementId) return HISTORY_UNCHANGED;
+          const recoverable = new Set(finals.filter(entry => entry.recoverable).map(entry => entry.id));
+          recovering = pending.filter(entry => recoverable.has(entry.id));
+          const restored = recovering.filter(entry => !history.some(other => other.id === entry.id));
           const eligible = new Set(finals.filter(entry => !entry.reason).map(entry => entry.id));
           retiring = entries.filter(entry => eligible.has(entry.id));
-          if (!retiring.length) return HISTORY_UNCHANGED;
+          if (!retiring.length) return restored.length ? [...restored, ...history] : HISTORY_UNCHANGED;
           retainedFiles = new Set(entries.filter(entry => !eligible.has(entry.id)).flatMap(renderFiles));
           for (const entry of retiring) {
             if (!safeUnder(PATHS.videos, entry.filename)) throw new ServerError('Invalid render filename', { status: 409, code: 'INVALID_VIDEO_PATH' });
-            pending.set(entry.id, entry);
+            if (!pending.includes(entry)) pending.push(entry);
           }
           // Recovery evidence precedes every index/history/byte mutation. The
           // history stops advertising a render before any of its bytes disappear.
           await savePending(pending);
           const { unindexVideo } = await import('../mediaAssetIndex/index.js');
           for (const entry of retiring) await unindexVideo(entry.id, { strict: true });
-          return history.filter(entry => !eligible.has(entry.id));
+          return [...restored, ...history.filter(entry => !eligible.has(entry.id))];
         });
-        if (!retiring.length) return 0;
+        // Only a resolved history publication authorizes settling recovery.
+        // Failure here leaves the original journal on disk; retry recognizes
+        // the exact restored rows without appending or overwriting them again.
+        pending = pending.filter(entry => !recovering.includes(entry));
+        if (!retiring.length) {
+          if (recovering.length) await savePending(pending);
+          return 0;
+        }
         await (async () => {
           for (const entry of retiring) {
             for (const path of renderFiles(entry)) if (!retainedFiles.has(path)) await remove(path);
-            pending.delete(entry.id);
+            pending = pending.filter(other => other !== entry);
             removed += 1;
           }
         })().finally(() => savePending(pending));
         return removed;
-      })().finally(() => { if (retiring.length) musicVideoEvents.emit('render-cleanup', { projectId }); });
+      })().finally(() => { if (retiring.length || recovering.length) musicVideoEvents.emit('render-cleanup', { projectId }); });
     })));
   }));
   return reserved ? retire() : withRenderCleanupReservation(projectId, retire);

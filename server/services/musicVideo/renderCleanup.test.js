@@ -1,16 +1,26 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 
 const root = () => lazyTempDataRoot('mv-render-cleanup-');
 vi.mock('../../lib/paths.js', async load => makePathsProxy(await load(), { dataRoot: root }));
-const state = { project: null, others: [], collections: [], timelines: [], director: [], boards: [], active: false, failHistory: false, kitActive: false, jobs: [] };
+const state = { project: null, others: [], collections: [], timelines: [], director: [], boards: [], active: false, failHistory: false, failAfterHistory: false, failJournal: false, observeHistory: null, kitActive: false, jobs: [] };
+vi.mock('node:fs/promises', async load => {
+  const actual = await load();
+  return { ...actual, unlink: async path => {
+    if (state.failJournal && path.endsWith('.music-video-render-cleanup.json')) throw new Error('Journal settlement failed');
+    return actual.unlink(path);
+  } };
+});
 vi.mock('../../lib/fileUtils.js', async load => {
   const actual = await load();
   return { ...actual, atomicWrite: async (path, data) => {
     if (state.failHistory && path.endsWith('video-history.json')) throw new Error('History write failed');
-    return actual.atomicWrite(path, data);
+    if (state.failJournal && path.endsWith('.music-video-render-cleanup.json')) throw new Error('Journal settlement failed');
+    if (path.endsWith('video-history.json')) await state.observeHistory?.();
+    await actual.atomicWrite(path, data);
+    if (state.failAfterHistory && path.endsWith('video-history.json')) throw new Error('History acknowledgment lost');
   } };
 });
 vi.mock('./publishKit.js', () => ({ isPublishKitBuildActive: () => state.kitActive }));
@@ -35,7 +45,8 @@ vi.mock('./shotSegments.js', () => ({
 
 const { cleanupSupersededFinals, cleanupRenders, getRenderCleanup, withRenderCleanupReservation, assertRenderCleanupIdle } = await import('./renderCleanup.js');
 const { PATHS } = await import('../../lib/fileUtils.js');
-const { saveHistory, loadHistory } = await import('../videoGen/history.js');
+const { saveHistory, loadHistory, getHistoryItem, mutateVideoHistory } = await import('../videoGen/history.js');
+const { holdsBackupAssetPublication } = await import('../../lib/backupSnapshotBoundary.js');
 const { unindexVideo } = await import('../mediaAssetIndex/index.js');
 const { assertSegmentCleanupIdle } = await import('./shotSegments.js');
 const { listBoards } = await import('../moodBoard/db.js');
@@ -48,6 +59,7 @@ beforeEach(async () => {
   state.project = { id: 'example-project', renderHistoryId: 'current' };
   state.others = []; state.collections = []; state.timelines = []; state.director = []; state.active = false; state.failHistory = false; state.kitActive = false; state.jobs = [];
   state.boards = [];
+  state.failAfterHistory = false; state.failJournal = false; state.observeHistory = null;
   vi.clearAllMocks();
   assertSegmentCleanupIdle.mockReset();
   await saveHistory([]);
@@ -60,6 +72,9 @@ async function seed(entries) {
   }
   await saveHistory(entries);
 }
+const journalPath = () => join(PATHS.videos, '.music-video-render-cleanup.json');
+const seedPending = entries => writeFileSync(journalPath(), JSON.stringify({ version: 1, entries }));
+const readPending = () => JSON.parse(readFileSync(journalPath(), 'utf8')).entries;
 
 describe('derived render retention', () => {
   it('retains upscaled deliverables while retiring obsolete final renders', async () => {
@@ -71,15 +86,98 @@ describe('derived render retention', () => {
     expect(existsSync(join(PATHS.videos, 'lanczos.mp4'))).toBe(true);
   });
 
-  it('retains and reports an upscale already present in the cleanup journal', async () => {
+  it('restores a journal-only upscale with its provenance and downloadable bytes while retiring unrelated finals', async () => {
+    const saved = entry('saved-upscale', { upscaledFrom: 'source-master', upscaleMethod: 'topaz', upscaleRuntime: 'example-runtime', createdAt: '2026-01-01T00:00:00Z', width: 3840, prompt: 'Example prompt', seed: 42 });
+    await seed([entry('current'), entry('source-master'), entry('old'), saved]);
+    await saveHistory([entry('current'), entry('source-master'), entry('old')]);
+    seedPending([saved]);
+    expect((await getRenderCleanup('example-project')).finals).toContainEqual(expect.objectContaining({ id: saved.id, pending: true, recoverable: true }));
+    state.observeHistory = () => {
+      expect(holdsBackupAssetPublication()).toBe(true);
+      expect(readPending()).toContainEqual(saved);
+    };
+    expect(await cleanupSupersededFinals('example-project')).toBe(1);
+    expect(await getHistoryItem(saved.id)).toEqual(saved);
+    expect(readFileSync(join(PATHS.videos, (await getHistoryItem(saved.id)).filename), 'utf8')).toBe('video');
+    expect((await loadHistory()).map(item => item.id)).toEqual([saved.id, 'current', 'source-master']);
+    expect(existsSync(join(PATHS.videos, 'old.mp4'))).toBe(false);
+    expect(existsSync(journalPath())).toBe(false);
+    expect((await cleanupRenders('example-project')).finals.map(item => item.id)).toEqual(['source-master']);
+  });
+
+  it.each(['history-write', 'history-acknowledgment', 'journal-rewrite', 'journal-remove'])('retries recovery after a failed %s without losing its evidence or duplicating history', async boundary => {
     const saved = entry('saved-upscale', { upscaledFrom: 'current', upscaleMethod: 'topaz' });
+    const otherProject = entry('other-pending', { musicVideoProjectId: 'other-project' });
+    const pending = boundary === 'journal-rewrite' ? [saved, otherProject] : [saved];
     await seed([entry('current'), saved]);
     await saveHistory([entry('current')]);
-    writeFileSync(join(PATHS.videos, '.music-video-render-cleanup.json'), JSON.stringify({ version: 1, entries: [saved] }));
-    expect((await getRenderCleanup('example-project')).finals).toEqual([expect.objectContaining({ id: 'saved-upscale', pending: true, reason: expect.stringMatching(/Upscaled deliverable retained/) })]);
+    seedPending(pending);
+    state.failHistory = boundary === 'history-write';
+    state.failAfterHistory = boundary === 'history-acknowledgment';
+    state.failJournal = boundary.startsWith('journal-');
+    await expect(cleanupSupersededFinals('example-project')).rejects.toThrow(/History|Journal/);
+    expect(readPending()).toEqual(pending);
+    expect(readFileSync(join(PATHS.videos, saved.filename), 'utf8')).toBe('video');
+    expect(await getHistoryItem(saved.id)).toEqual(boundary === 'history-write' ? null : saved);
+    state.failHistory = false; state.failAfterHistory = false; state.failJournal = false;
+    // Already-published rows settle without rewriting the history on replay.
+    state.observeHistory = vi.fn();
     expect(await cleanupSupersededFinals('example-project')).toBe(0);
-    expect(existsSync(join(PATHS.videos, 'saved-upscale.mp4'))).toBe(true);
-    expect(existsSync(join(PATHS.videos, '.music-video-render-cleanup.json'))).toBe(true);
+    expect((await loadHistory()).filter(item => item.id === saved.id)).toEqual([saved]);
+    expect(state.observeHistory).toHaveBeenCalledTimes(boundary === 'history-write' ? 1 : 0);
+    if (boundary === 'journal-rewrite') expect(readPending()).toEqual([otherProject]);
+    else expect(existsSync(journalPath())).toBe(false);
+  });
+
+  it.each(['history-id', 'history-filename', 'journal-id', 'journal-filename'])('preserves every row and file on a %s collision', async collision => {
+    const saved = entry('saved-upscale', { upscaledFrom: 'current', upscaleMethod: 'topaz' });
+    const conflicting = collision.endsWith('-id') ? entry(saved.id, { filename: 'different.mp4' }) : entry('different', { filename: saved.filename.toUpperCase() });
+    await seed([entry('current'), saved, conflicting]);
+    const history = collision.startsWith('history-') ? [entry('current'), conflicting] : [entry('current')];
+    const pending = collision.startsWith('journal-') ? [saved, conflicting] : [saved];
+    await saveHistory(history);
+    seedPending(pending);
+    const inventory = await cleanupRenders('example-project');
+    expect(inventory.finals).toContainEqual(expect.objectContaining({ id: saved.id, pending: true, recoverable: false, reason: expect.stringMatching(/Conflicting/) }));
+    expect(await loadHistory()).toEqual(history);
+    expect(readPending()).toEqual(pending);
+    for (const item of [saved, conflicting]) expect(existsSync(join(PATHS.videos, item.filename))).toBe(true);
+    expect(unindexVideo).not.toHaveBeenCalled();
+  });
+
+  it.each(['missing', 'empty', 'directory', 'symlink', 'unowned'])('retains recovery evidence when the video is %s', async condition => {
+    const saved = entry('saved-upscale', { upscaledFrom: 'current', modelId: condition === 'unowned' ? 'video-model' : 'music-video' });
+    await seed([entry('current'), saved]);
+    await saveHistory([entry('current')]);
+    seedPending([saved]);
+    const path = join(PATHS.videos, saved.filename);
+    if (condition !== 'unowned') rmSync(path);
+    if (condition === 'empty') writeFileSync(path, '');
+    if (condition === 'directory') mkdirSync(path);
+    if (condition === 'symlink') symlinkSync(join(PATHS.videos, 'current.mp4'), path);
+    const inventory = await cleanupRenders('example-project');
+    expect(inventory.finals).toEqual([expect.objectContaining({ id: saved.id, recoverable: false, reason: expect.stringMatching(/missing|nonempty regular file|ownership/) })]);
+    expect(await getHistoryItem(saved.id)).toBeNull();
+    expect(readPending()).toEqual([saved]);
+    expect(existsSync(path)).toBe(condition !== 'missing');
+    expect(readFileSync(join(PATHS.videos, 'current.mp4'), 'utf8')).toBe('video');
+  });
+
+  it('rechecks a competing history publication inside the shared history queue', async () => {
+    const saved = entry('saved-upscale', { upscaledFrom: 'current' });
+    await seed([entry('current'), saved]);
+    await saveHistory([entry('current')]);
+    seedPending([saved]);
+    let publish;
+    const ready = new Promise(resolve => { publish = resolve; });
+    const other = entry(saved.id, { filename: 'competing.mp4' });
+    const writer = mutateVideoHistory(async history => { await ready; return [...history, other]; });
+    const cleanup = cleanupSupersededFinals('example-project');
+    publish();
+    await Promise.all([writer, cleanup]);
+    expect(await getHistoryItem(saved.id)).toEqual(other);
+    expect(readPending()).toEqual([saved]);
+    expect(existsSync(join(PATHS.videos, saved.filename))).toBe(true);
   });
 
   it('retains FableLoom scene and playback videos until their saved owner is deleted', async () => {
