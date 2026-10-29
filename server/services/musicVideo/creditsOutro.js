@@ -9,19 +9,21 @@
 import { creditsOutroPrefill } from '../../lib/musicVideoCreditsOutro.js';
 
 /**
- * The suggested credits for `project`. With no artist on the track (and no
- * artist text either), an install with exactly one artist is credited with it.
+ * The suggested credits for `project`. Only a song with no artist at all (no
+ * linked artist and no artist text on its track) is credited to an install's
+ * one artist; a linked artist that is gone falls back to the track's own
+ * artist text, never to someone else. A failed lookup rejects.
  */
 export async function getMusicVideoCreditsPrefill(project) {
   const [{ getTrack }, { getArtist, listArtists }, { getAlbum }] = await Promise.all([
     import('../tracks/index.js'), import('../artists/index.js'), import('../albums/index.js'),
   ]);
-  const track = project?.trackId ? await getTrack(project.trackId).catch(() => null) : null;
-  let artist = track?.artistId ? await getArtist(track.artistId).catch(() => null) : null;
-  if (!artist && !track?.artist) {
-    const artists = await listArtists().catch(() => []);
+  const track = project?.trackId ? await getTrack(project.trackId) : null;
+  let artist = track?.artistId ? await getArtist(track.artistId) : null;
+  if (!track?.artistId && !track?.artist) {
+    const artists = await listArtists();
     if (Array.isArray(artists) && artists.length === 1) artist = artists[0];
   }
-  const album = track?.albumId ? await getAlbum(track.albumId).catch(() => null) : null;
+  const album = track?.albumId ? await getAlbum(track.albumId) : null;
   return creditsOutroPrefill({ project, track, artist, album });
 }

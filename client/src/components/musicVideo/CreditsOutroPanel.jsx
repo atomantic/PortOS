@@ -47,9 +47,10 @@ export default function CreditsOutroPanel({ project, onEditLocal, onSave }) {
   const commit = (patch) => save(normalizeCreditsOutro({ ...(credits || CREDITS_OUTRO_DEFAULTS), ...patch }));
   const fill = (keep = {}) => {
     setFilling(true);
-    return getMusicVideoCreditsPrefill(project.id, { silent: true })
-      .then((res) => save(normalizeCreditsOutro({ ...(res?.credits || CREDITS_OUTRO_DEFAULTS), ...keep, enabled: true })))
-      // The board's save already reports a failure; it must not leave the switch disabled.
+    // A failed lookup is reported (not silent) and changes nothing.
+    return getMusicVideoCreditsPrefill(project.id)
+      .then((res) => save(normalizeCreditsOutro({ ...res.credits, ...keep, enabled: true })))
+      // The request and the board's save report their own failures; neither may leave the controls disabled.
       .catch(() => null)
       .finally(() => setFilling(false));
   };
@@ -73,8 +74,9 @@ export default function CreditsOutroPanel({ project, onEditLocal, onSave }) {
           <input id={id('on')} type="checkbox" checked={on} disabled={filling} onChange={(e) => toggle(e.target.checked)} className="h-4 w-4" />
         </label>
       </div>
+      {/* Locked while a refill is in flight, so no edit is lost when its lines land. */}
       {on && (
-        <div className="space-y-2">
+        <fieldset disabled={filling} className="min-w-0 space-y-2">
           <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,10rem),1fr))] gap-2">
             <TextField id={id('title')} label="Song title" value={credits.title} onCommit={(title) => commit({ title })} />
             <TextField id={id('artist')} label="Performed by" value={credits.artist} onCommit={(artist) => commit({ artist })} />
@@ -123,7 +125,7 @@ export default function CreditsOutroPanel({ project, onEditLocal, onSave }) {
           </fieldset>
           <TextField id={id('footer')} label="Closing line" value={credits.footer} placeholder="Optional" onCommit={(footer) => commit({ footer })} />
           <p className="text-xs text-port-text-muted">Plays after the song{project.statsOutro?.enabled ? ' and the cutting room floor' : ''}. {credits.layout === 'grid' ? 'Every credit shows on one screen.' : 'Rolls up when it is taller than the frame.'}</p>
-        </div>
+        </fieldset>
       )}
     </section>
   );

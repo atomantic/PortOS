@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { describe, it, expect, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router';
 import BoardStage from './BoardStage.jsx';
 import { ShotLockContext } from '../ShotLock.jsx';
@@ -207,6 +207,19 @@ describe('BoardStage ending', () => {
     } }));
     fireEvent.click(screen.getByRole('button', { name: 'Close the credits' }));
     expect(screen.getByTestId('search').textContent).not.toContain('ending');
+    // Refill locks the editor until its lines land, so a newer edit can't be overwritten.
+    const { getMusicVideoCreditsPrefill } = await import('../../../services/apiMusicVideo.js');
+    let land;
+    getMusicVideoCreditsPrefill.mockImplementationOnce(() => new Promise((resolve) => { land = resolve; }));
+    const on = board([scene(1)], { editProjectLocal: vi.fn(), saveProjectFields });
+    on.project = { ...on.project, creditsOutro: { enabled: true, title: 'Old Title' } };
+    cleanup();
+    renderBoard(on, '/?scenes=all&ending=credits');
+    fireEvent.click(screen.getByRole('button', { name: /Refill from song/ }));
+    const editor = () => screen.getByLabelText('Song title').closest('fieldset');
+    expect(editor().disabled).toBe(true);
+    await act(async () => { land({ credits: { enabled: true, title: 'Example Song' } }); });
+    await waitFor(() => expect(editor().disabled).toBe(false));
     canvas.mockRestore();
   });
 });
