@@ -6,14 +6,15 @@ import { isDeepStrictEqual } from 'node:util';
 import { createHash } from 'node:crypto';
 import { join, resolve } from 'node:path';
 import { lstat, readFile, realpath } from 'node:fs/promises';
-import { retirementCheckoutIdentityFromPointer } from '../lib/retirementCheckoutObservation.js';
+import { isCurrentRetirementCheckout, retirementCheckoutIdentityFromPointer } from '../lib/retirementCheckoutObservation.js';
 import { checkoutSeedSchema } from '../lib/checkoutSeed.js';
 import { z } from 'zod';
 import { readReleaseSynchronizationOutbox, saveReleaseSynchronization } from './releaseSynchronizationStore.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { RELEASE_SYNC_POLICY_KEYS, RELEASE_SYNC_FROZEN_METADATA_KEYS, RELEASE_SYNC_OBLIGATIONS,
-  effectiveReleaseSynchronization, publisherCandidateSeed, publisherCandidateTarget, legacyPublisherRecovery } from '../lib/releaseSynchronization.js';
+  effectiveReleaseSynchronization, publisherCandidateSeed, publisherCandidateTarget, legacyPublisherRecovery,
+  releaseSynchronizationReset, releaseSynchronizationResetSchema, resetReleasesCheckout } from '../lib/releaseSynchronization.js';
 import { currentTaskTypeName } from '../lib/taskTypeRenames.js';
 import { storedForm } from '../lib/cosTaskRows.js';
 import { cosEvents } from './cosEvents.js';
@@ -33,6 +34,7 @@ const entrySchema = z.object({
     attempts: z.number().int().nonnegative(), checkedAt: z.string().datetime(), retryAt: z.string().datetime().nullable(),
     verifiedAt: z.string().datetime().nullable(), blocker: z.string().nullable() }).strict().optional(),
   legacyRecovery: z.record(z.string(), z.unknown()).optional(),
+  operatorReset: releaseSynchronizationResetSchema.optional(),
   checkouts: z.array(z.unknown()), registeredAt: z.string().datetime().nullable(),
   attempts: z.number().int().nonnegative(), lastAttemptAt: z.string().datetime().nullable(),
   blocker: z.string().nullable(), retryAt: z.string().datetime().nullable(),
@@ -60,14 +62,103 @@ export async function releaseTaskDispatchDisposition(task) {
   const outbox = await readOutbox();
   if (type === 'do-release') {
     return Object.values(outbox.publications).some(entry => entry.task.metadata.app === task.metadata?.app
-      && effectiveReleaseSynchronization(entry)?.status !== 'verified') ? 'wait-for-synchronization' : null;
+      && !releaseSynchronizationReset(entry) && effectiveReleaseSynchronization(entry)?.status !== 'verified') ? 'wait-for-synchronization' : null;
   }
   const entry = outbox.publications[task.metadata?.releaseSynchronization?.identity];
-  if (!entry?.registeredAt || task.id !== entry.task.id) return null;
+  if (!entry || task.id !== entry.task.id) return null;
+  if (releaseSynchronizationReset(entry)) return 'retired-continuation';
+  if (!entry.registeredAt) return null;
   const expected = { ...entry.task.metadata,
     idempotencyKey: createHash('sha256').update(JSON.stringify([entry.identity, entry.owner])).digest('hex') };
   return RELEASE_SYNC_FROZEN_METADATA_KEYS.every(key => isDeepStrictEqual(task.metadata?.[key], expected[key]))
     ? 'registered-continuation' : null;
+}
+
+/** Retire one stale checkpoint; retain its original verdict and publication. */
+export function resetReleaseSynchronization(identity, reason, actor, checkouts = []) {
+  return queue(async () => {
+    const { withClaimOwnershipLock, readClaimOwnershipAgents } = await import('./cosClaimOwnershipState.js');
+    return withClaimOwnershipLock(async () => {
+      const entry = (await readOutbox()).publications[identity];
+      if (!entry) refuse('Release synchronization was not found');
+      const previous = releaseSynchronizationReset(entry);
+      if (previous) {
+        if (previous.reason !== reason || previous.actor !== actor || !isDeepStrictEqual(previous.checkouts, checkouts)) refuse('A different operator reset was already recorded');
+        await parkRetiredContinuation(entry);
+        return previous;
+      }
+      const synchronization = effectiveReleaseSynchronization(entry);
+      if (synchronization?.status === 'verified') refuse('Release synchronization is already verified');
+      const agents = await readClaimOwnershipAgents();
+      if (!agents) refuse('Release ownership is unavailable');
+      const { getActiveAgentIds } = await import('./agentState.js');
+      const active = new Set(getActiveAgentIds());
+      const repo = await realpath(entry.owner.workspace).catch(() => null);
+      if (!repo) refuse('Release repository is unavailable');
+      if (agents.some(agent => agent.metadata?.useRunner === true || agent.metadata?.useRunner === 'true'
+        || ['runner', 'runner-tui'].includes(agent.metadata?.executionMode))) {
+        const { getActiveAgentsFromRunner } = await import('./cosRunnerClient.js');
+        const running = await getActiveAgentsFromRunner();
+        if (!Array.isArray(running) || running.some(agent => !agent || typeof agent.id !== 'string')) refuse('Release runner ownership is unavailable or active');
+        const { runnerEntryShieldsRunningRecord } = await import('../lib/runnerAgentLiveness.js');
+        const live = await Promise.all(running.map(agent => runnerEntryShieldsRunningRecord(agent)));
+        running.forEach((agent, index) => { if (live[index]) active.add(agent.id); });
+      }
+      if ([...active].some(id => !agents.some(agent => agent.id === id))) refuse('Agent ownership is unavailable');
+      for (const agent of agents) {
+        const ownsCheckpoint = agent.id === entry.owner.agentId || agent.taskId === entry.owner.taskId || agent.taskId === entry.task.id;
+        if (agent.status === 'completed' && !active.has(agent.id)) continue;
+        if (ownsCheckpoint) refuse('A release or synchronization is still active');
+        let type = currentTaskTypeName(agent.metadata?.taskAnalysisType || agent.metadata?.analysisType || agent.metadata?.selfImprovementType);
+        if (!type) {
+          const { getTaskById } = await import('./cosTaskStore.js');
+          const task = agent.taskId && await getTaskById(agent.taskId);
+          if (!task) refuse('Active agent type is unavailable');
+          type = currentTaskTypeName(task.metadata?.analysisType || task.metadata?.selfImprovementType);
+          if (!type && task.taskType !== 'user') refuse('Active agent type is unavailable');
+        }
+        if (type !== 'do-release' && type !== 'release-sync') continue;
+        const workspace = agent.sourceWorkspace || agent.metadata?.sourceWorkspace || agent.workspacePath || agent.metadata?.workspacePath;
+        const ownerRepo = workspace && await realpath(workspace).catch(() => null);
+        if (!ownerRepo || samePath(ownerRepo, repo)) refuse('A release or synchronization is still active');
+        const { execGit } = await import('../lib/execGit.js');
+        const common = async path => {
+          const result = await execGit(['rev-parse', '--path-format=absolute', '--git-common-dir'], path, { ignoreExitCode: true }).catch(() => null);
+          return result?.exitCode === 0 ? realpath(result.stdout.trim()).catch(() => null) : null;
+        };
+        const [originalCommon, activeCommon] = await Promise.all([common(repo), common(ownerRepo)]);
+        if (!originalCommon || !activeCommon || samePath(originalCommon, activeCommon)) refuse('A release or synchronization is still active');
+      }
+      if (checkouts.length) {
+        const { getBranchReconcileOutcome } = await import('./taskSchedule.js');
+        const inventory = await getBranchReconcileOutcome(entry.task.metadata.app);
+        if (!checkouts.every(checkout => inventory?.remaining?.some(row => ['path', 'branch', 'head', 'checkoutIdentity']
+          .every(key => row[key] === checkout[key])))) refuse('Selected checkout is not in the current inventory');
+        const current = await Promise.all(checkouts.map(checkout => isCurrentRetirementCheckout(checkout).catch(() => false)));
+        if (current.some(value => !value)) refuse('Selected checkout changed since the inventory');
+      }
+      entry.operatorReset = releaseSynchronizationResetSchema.parse({ version: 1, identity, resetAt: new Date().toISOString(), actor, reason, checkouts,
+        previousStatus: synchronization?.status || 'pending', previousBlocker: synchronization?.blocker || entry.blocker || null });
+      await saveReleaseSynchronization(entry);
+      const saved = (await readOutbox()).publications[identity];
+      if (!isDeepStrictEqual(saved?.operatorReset, entry.operatorReset)) refuse('Operator reset was not retained');
+      await parkRetiredContinuation(saved);
+      return saved.operatorReset;
+    });
+  });
+}
+
+async function parkRetiredContinuation(entry) {
+  const { getTaskById, updateTask } = await import('./cosTaskStore.js');
+  const task = await getTaskById(entry.task.id);
+  if (!task || task.status !== 'pending') return;
+  const result = await updateTask(task.id, { status: 'blocked', metadata: {
+    blockedReason: 'Release synchronization retired by an operator', blockedCategory: 'release-synchronization-reset',
+  } }, 'internal', { expectedStatus: 'pending', suppressDequeue: true });
+  if (!result || result.error || (result.statusChanged
+    ? !['blocked', 'completed'].includes(result.task?.status) : result.status !== 'blocked')) {
+    refuse('Retired checkpoint was recorded but its continuation could not be parked');
+  }
 }
 
 /** Agent archives remain verifier input until the corresponding durable outbox
@@ -173,6 +264,7 @@ export function ensureReleaseSynchronization(agent) {
       const owner = { agentId: agent.id, taskId: agent.taskId, startedAt: agent.startedAt,
         workspace: agent.metadata.sourceWorkspace || agent.metadata.workspacePath };
       if (!isDeepStrictEqual(entry.owner, owner) || !isDeepStrictEqual(entry.publication, publication)) refuse('Publication synchronization is owned by another coordinator');
+      if (releaseSynchronizationReset(entry)) return { taskId: entry.task.id, registeredAt: entry.registeredAt, synchronizationVerified: false, retired: true };
     } else {
       entry = await newEntry(agent, publication);
       outbox.publications[publication.identity] = entry;
@@ -197,7 +289,7 @@ export async function recoverReleaseSynchronizationHandoffs(agents) {
     && value.metadata.releasePublication.synchronizationHandoffVersion === 1)) {
     const identity = agent.metadata.releasePublication.identity;
     const previous = initial.publications[identity];
-    if (previous?.registeredAt || (previous?.retryAt && Date.parse(previous.retryAt) > Date.now()) || attempted.has(identity)) continue;
+    if (releaseSynchronizationReset(previous) || previous?.registeredAt || (previous?.retryAt && Date.parse(previous.retryAt) > Date.now()) || attempted.has(identity)) continue;
     attempted.add(identity);
     await ensureReleaseSynchronization(agent).catch(error => {
       console.log(`🚫 Release synchronization handoff retained for ${agent.id}: ${error.code || 'registration-unavailable'}`);
@@ -205,13 +297,16 @@ export async function recoverReleaseSynchronizationHandoffs(agents) {
   }
   const due = await queue(async () => {
     const outbox = await readOutbox();
-    for (const entry of Object.values(outbox.publications).filter(value => !value.registeredAt && !attempted.has(value.identity)
+    for (const entry of Object.values(outbox.publications).filter(releaseSynchronizationReset)) {
+      await parkRetiredContinuation(entry).catch(() => console.log(`🚫 Retired release continuation still needs parking: ${entry.task.id}`));
+    }
+    for (const entry of Object.values(outbox.publications).filter(value => !releaseSynchronizationReset(value) && !value.registeredAt && !attempted.has(value.identity)
       && (!value.retryAt || Date.parse(value.retryAt) <= Date.now()))) {
       await registerEntry(entry).catch(async error => {
         await retainFailure(entry, error);
       });
     }
-    return Object.values(outbox.publications).filter(entry => entry.registeredAt
+    return Object.values(outbox.publications).filter(entry => entry.registeredAt && !releaseSynchronizationReset(entry)
       && effectiveReleaseSynchronization(entry)?.status !== 'verified'
       && (!effectiveReleaseSynchronization(entry)?.retryAt || Date.parse(effectiveReleaseSynchronization(entry).retryAt) <= Date.now()))
       .sort((left, right) => (left.synchronization?.checkedAt || '').localeCompare(right.synchronization?.checkedAt || ''))
@@ -269,7 +364,7 @@ export function verifyReleaseSynchronizationTask(taskId, { agents = null, respec
   return queue(async () => {
     const outbox = await readOutbox();
     const entry = Object.values(outbox.publications).find(value => value.task.id === taskId && value.registeredAt);
-    if (!entry || effectiveReleaseSynchronization(entry)?.status === 'verified') return effectiveReleaseSynchronization(entry) || null;
+    if (!entry || releaseSynchronizationReset(entry) || effectiveReleaseSynchronization(entry)?.status === 'verified') return effectiveReleaseSynchronization(entry) || null;
     if (respectRetryAt && effectiveReleaseSynchronization(entry)?.retryAt && Date.parse(effectiveReleaseSynchronization(entry).retryAt) > Date.now()) return effectiveReleaseSynchronization(entry);
     const { readBranchCompletionPolicies } = await import('./branchCompletionPolicy.js');
     return verifyEntry(entry, agents || await readBranchCompletionPolicies({ repairIndex: false }));
@@ -378,6 +473,7 @@ export function retainReleaseSynchronizationReview(release) {
     const { readBranchCompletionPolicies } = await import('./branchCompletionPolicy.js');
     const agents = await readBranchCompletionPolicies({ repairIndex: false });
     for (const entry of entries) {
+      if (resetReleasesCheckout(entry, release)) continue;
       // A branch name alone cannot exclude a locally aliased publisher checkout.
       const [releaseRepo, ownerRepo] = release.repoPath
         ? await Promise.all([realpath(release.repoPath).catch(() => null), realpath(entry.owner.workspace).catch(() => null)]) : [null, null];
@@ -533,6 +629,7 @@ export async function prepareLegacyReleaseRetirement(release) {
   const { inspectLegacyPublisher } = await import('./legacyReleaseRecovery.js');
   const agents = await readBranchCompletionPolicies({ repairIndex: false });
   for (const entry of entries) {
+    if (resetReleasesCheckout(entry, release)) continue;
     const legacy = legacyPublisherRecovery(entry);
     const target = publisherCandidateTarget(entry);
     if (legacy?.evidence.mode === 'present' && target?.path === release.path && target.branch === release.branch
@@ -562,6 +659,7 @@ export async function validateLegacyReleaseRetirement(release, { unlocked = fals
   const { inspectLegacyPublisher, legacyProcessesSettled } = await import('./legacyReleaseRecovery.js');
   const agents = await readBranchCompletionPolicies({ repairIndex: false });
   for (const entry of entries) {
+    if (resetReleasesCheckout(entry, release)) continue;
     if (entry.publication.candidateBranch && entry.publication.candidateBranch !== release.branch) continue;
     const [ownerRepo, targetRepo] = await Promise.all([realpath(entry.owner.workspace).catch(() => null), realpath(release.repoPath).catch(() => null)]);
     if (!targetRepo) return false;

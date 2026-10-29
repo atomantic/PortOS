@@ -25,6 +25,8 @@ vi.mock('./cosState.js', async (importOriginal) => ({
 }));
 
 const sweep = vi.hoisted(() => ({ provesDead: false }));
+const releaseDisposition = vi.hoisted(() => vi.fn(async () => null));
+vi.mock('./releaseSynchronization.js', async original => ({ ...(await original()), releaseTaskDispatchDisposition: releaseDisposition }));
 vi.mock('./cosAgentLifecycle.js', async (importOriginal) => ({
   ...(await importOriginal()),
   cleanupZombieAgents: vi.fn(async () => {
@@ -70,6 +72,7 @@ describe('forceSpawnTask — stale running holder (#14039)', () => {
   let emit;
 
   beforeEach(() => {
+    releaseDisposition.mockReset().mockResolvedValue(null);
     setUseRunner(false);
     sweep.provesDead = false;
     persisted = { paused: false, agents: { [HOLDER_ID]: holder() }, config: { maxConcurrentAgents: 1 } };
@@ -92,6 +95,13 @@ describe('forceSpawnTask — stale running holder (#14039)', () => {
     expect(result.error).toContain(HOLDER_ID);
     expect(taskReadyEmits(emit)).toEqual([]);
     expect(persisted.agents[HOLDER_ID].status).toBe('running');
+  });
+
+  it('refuses a retired continuation before reporting a spawn', async () => {
+    vi.mocked(getTaskById).mockResolvedValueOnce({ id: TASK_ID, status: 'pending', taskType: 'internal', metadata: { analysisType: 'release-sync' } });
+    releaseDisposition.mockResolvedValueOnce('retired-continuation');
+    expect(await forceSpawnTask(TASK_ID)).toEqual({ error: 'This release synchronization was retired by an operator.' });
+    expect(taskReadyEmits(emit)).toEqual([]);
   });
 
   it('retries a holder the zombie sweep settled as dead', async () => {

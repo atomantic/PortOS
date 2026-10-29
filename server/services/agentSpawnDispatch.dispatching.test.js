@@ -4,6 +4,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const f = vi.hoisted(() => ({ registerGate: null, prep: null, publicationActive: false, refusePublication: false, updateResult: { ok: true }, provider: null, tui: false }));
+const releaseDisposition = vi.hoisted(() => vi.fn(async () => null));
+vi.mock('./releaseSynchronization.js', () => ({ releaseTaskDispatchDisposition: releaseDisposition }));
 vi.mock('../lib/checkoutRetirementAdmission.js', () => ({ withCheckoutPublication: vi.fn(async (_repo, work) => {
   if (f.refusePublication) throw new Error('checkout-retirement-reserved');
   f.publicationActive = true;
@@ -77,6 +79,7 @@ const isProtected = () => getActiveAgentIds().includes('agent-x') && protectedAg
 
 beforeEach(() => {
   vi.clearAllMocks();
+  releaseDisposition.mockResolvedValue(null);
   setUseRunner(false);
   f.publicationActive = f.refusePublication = false;
   f.registerGate = Promise.resolve();
@@ -87,6 +90,16 @@ beforeEach(() => {
 });
 
 describe('dispatchAgentRun ownership window', () => {
+  it('does not spawn a release continuation retired after queue admission', async () => {
+    const context = newContext();
+    context.task = { ...task, metadata: { analysisType: 'release-sync' } };
+    releaseDisposition.mockResolvedValue('retired-continuation');
+    expect(await dispatchAgentRun(context)).toBeNull();
+    expect(context.blockAndBail).toHaveBeenCalledWith(expect.objectContaining({ reason: expect.stringContaining('retired') }));
+    expect(registerAgent).not.toHaveBeenCalled();
+    expect(spawnDirectly).not.toHaveBeenCalled();
+    expect(getActiveAgentIds()).not.toContain('agent-x');
+  });
   it.each(['direct', 'tui', 'runner'])('uses the persisted dispatch for %s completion and its spawn limit', async mode => {
     const context = newContext();
     context.task = { ...task, privateSecurityScope: { localOnly: true }, metadata: { totalSpawnCount: '4', failureCount: '0' } };

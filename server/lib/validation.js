@@ -12,6 +12,7 @@ import { pipelineEditorialChecksSettingsSchema } from './pipelineValidation.js';
 import { loraTrainingConfigSchema } from './mediaValidation.js';
 import { ServerError } from './errorHandler.js';
 import { isSafeGitRef } from './gitArgs.js';
+import { releaseSynchronizationResetCheckoutSchema } from './releaseSynchronization.js';
 import { partialWithoutDefaults, emptyToUndefined, emptyToNull, optionalBooleanMap, presetProviderIdSchema, providerRefSchema } from './zodCompat.js';
 import { WORK_TRACKERS } from './workTracker.js';
 import { LAYERED_INTELLIGENCE_SOURCE_KEYS } from './layeredIntelligenceSourceKeys.js';
@@ -3043,6 +3044,10 @@ export const cosScheduleTriggerBodySchema = z.object({
 });
 export const legacyReleaseRecoveryReviewSchema = z.object({ identity: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
 export const legacyReleaseRecoveryAcceptSchema = legacyReleaseRecoveryReviewSchema.extend({ digest: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
+export const releaseSynchronizationResetBodySchema = legacyReleaseRecoveryReviewSchema.extend({
+  reason: z.string().trim().min(1).max(1000),
+  checkouts: z.array(releaseSynchronizationResetCheckoutSchema).max(10).default([]),
+}).strict();
 
 // A scoped release names the exact inventory row the operator saw (#12002).
 export const heldCheckoutRetireBodySchema = z.object({

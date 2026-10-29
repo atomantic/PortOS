@@ -39,5 +39,9 @@ describe.skipIf(!runDb)('publication ownership on PostgreSQL', () => {
     await expect(saveReleaseSynchronization(advanced)).rejects.toThrow('immutable ownership');
     await expect(saveReleaseSynchronization({ ...recovered, legacyRecovery: { version: 1, digest: 'e'.repeat(64) } })).rejects.toThrow('immutable ownership');
     expect((await readReleaseSynchronizationOutbox()).publications[identity]).toEqual(recovered);
+    const reset = { ...recovered, operatorReset: { version: 1, identity, reason: 'Fresh release' } };
+    await saveReleaseSynchronization(reset);
+    await expect(saveReleaseSynchronization(recovered)).rejects.toThrow('immutable ownership');
+    await expect(saveReleaseSynchronization({ ...reset, operatorReset: { ...reset.operatorReset, reason: 'changed' } })).rejects.toThrow('immutable ownership');
   });
 });

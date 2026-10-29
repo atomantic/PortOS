@@ -123,6 +123,15 @@ describe('releaseSynchronizationProjection', () => {
     expect(projectTaskReleaseMilestones({ id: 'example', metadata: {} }, local).metadata.releaseSynchronization.headSha).toBe(completedHead);
   });
 
+  it('shows an operator reset without claiming the historical synchronization succeeded', () => {
+    const legacy = { ...entry, checkouts: [], synchronization: { status: 'blocked', blocker: 'publisher-candidate-checkout-unverified' },
+      operatorReset: { version: 1, identity, resetAt: '2026-01-01T12:00:00Z', actor: 'local-operator',
+        reason: 'Start from main', previousStatus: 'blocked', previousBlocker: 'publisher-candidate-checkout-unverified', checkouts: [] } };
+    const projected = projectTaskReleaseMilestones({ id: 'example', metadata: {} }, legacy).metadata.releaseSynchronization;
+    expect(projected).toMatchObject({ status: 'blocked', blocker: 'publisher-candidate-checkout-unverified', operatorReset: legacy.operatorReset });
+    expect(projected.nextAction).toContain('remains unverified');
+  });
+
   it('projects release publication and synchronization onto agents', () => {
     const publisher = { id: 'publisher-agent-1', metadata: { releasePublication: publication } };
     const projectedPublisher = projectAgentReleaseMilestones(publisher, outbox);

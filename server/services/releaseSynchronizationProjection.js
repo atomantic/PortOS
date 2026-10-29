@@ -3,11 +3,12 @@
  * and agent records for detail and status views.
  */
 import { readReleaseSynchronizationOutbox } from './releaseSynchronizationStore.js';
-import { effectiveReleaseSynchronization } from '../lib/releaseSynchronization.js';
+import { effectiveReleaseSynchronization, releaseSynchronizationReset } from '../lib/releaseSynchronization.js';
 
 function buildReleaseSynchronizationPayload(entry) {
   if (!entry) return null;
   const synchronization = effectiveReleaseSynchronization(entry);
+  const reset = releaseSynchronizationReset(entry);
   const syncPr = entry.obligations?.synchronizationPr?.evidence?.prUrl
     || entry.obligations?.localReview?.evidence?.prUrl
     || null;
@@ -24,12 +25,13 @@ function buildReleaseSynchronizationPayload(entry) {
     prUrl: syncPr,
     headSha: syncHead,
     blocker: synchronization?.blocker || null,
-    ...(synchronization?.status === 'blocked' && entry.legacyRecovery && {
+    ...(reset && { operatorReset: reset, nextAction: 'The operator retired this checkpoint; its historical synchronization remains unverified.' }),
+    ...(synchronization?.status === 'blocked' && entry.legacyRecovery && !reset && {
       nextAction: entry.legacyRecovery.evidence?.mode === 'present'
         ? 'Inspect the blocker and retained evidence. After other obligations are verified, use the exact checkout retirement review; keep the checkout if any check refuses.'
         : 'Inspect the blocker and retained recovery evidence, then retry synchronization verification after resolving it.',
     }),
-    ...(synchronization?.status === 'blocked' && synchronization.blocker === 'publisher-candidate-checkout-unverified' && {
+    ...(synchronization?.status === 'blocked' && synchronization.blocker === 'publisher-candidate-checkout-unverified' && !reset && {
       nextAction: 'Keep the candidate checkout and private review evidence in place. Inspect the original publisher run, promotion PR, and checkout inventory; use the legacy recovery review when the original generation and preservation evidence survive.',
     }),
     verifiedAt: synchronization?.verifiedAt || null,

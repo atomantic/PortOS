@@ -35,6 +35,7 @@ import { COMPLETION_RECOVERY_BATCH_SIZE } from './agentDeliveryActivity.js';
 import { recordJobExecution } from './autonomousJobs.js';
 import { safeJSONParse, sleep, isTopLevelEntryName } from '../lib/fileUtils.js';
 import { ON_DEMAND_ORIGINS } from './taskScheduleConstants.js';
+import { currentTaskTypeName } from '../lib/taskTypeRenames.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { addNotification, NOTIFICATION_TYPES } from './notifications.js';
 import { todayInTimezone } from '../lib/timezone.js';
@@ -743,6 +744,14 @@ export async function forceSpawnTask(taskId, { resetSpawnBudget = false } = {}) 
   const resetStopped = resetSpawnBudget && ['in_progress', 'blocked'].includes(task.status);
   if (task.status !== 'pending' && !resetStopped) return { error: `Task is ${task.status}, not pending` };
   if (task.approvalRequired) return { error: 'Task requires approval before it can be spawned' };
+
+  const analysis = currentTaskTypeName(task.metadata?.analysisType || task.metadata?.selfImprovementType);
+  if (analysis === 'do-release' || analysis === 'release-sync') {
+    const { releaseTaskDispatchDisposition } = await import('./releaseSynchronization.js');
+    const disposition = await releaseTaskDispatchDisposition(task);
+    if (disposition === 'retired-continuation') return { error: 'This release synchronization was retired by an operator.' };
+    if (disposition === 'wait-for-synchronization') return { error: 'The previous release synchronization is unfinished.' };
+  }
 
   if (!isDaemonRunning()) return { error: 'CoS daemon is stopped — start it before force-spawning tasks' };
 
