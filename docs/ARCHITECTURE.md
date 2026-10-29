@@ -224,6 +224,10 @@ Each install pulls from its peers (`server/services/syncOrchestrator.js`).
   only from a paired peer with media delete allowed that owns or holds the row
   (`mediaTombstoneAuthorization.js`). Deleting a row owned elsewhere sends
   `POST /api/peer-media/delete` to the owner (`mediaRemoteDelete.js`).
+- **Pre-upgrade media.** A delete is announced to peers only for a row or
+  image whose recorded origin is this install. Media made before this release
+  has no recorded origin, so deleting it removes it here but does not
+  propagate to peers until the ownership backfill ships (#14089).
 
 ### Browser Automation Flow
 
