@@ -965,6 +965,49 @@ describe('Cast & Sets per-item actions', () => {
     expect((await current(project.id)).castAndSets.direction.tests[1].caption).toBe('');
   });
 
+  it('refuses a legacy card when the automatic test moved to a different identical-looking set', async () => {
+    const { buildCastAndSetsImagePlan } = await import('./castAndSetsPlan.js');
+    runPrompt.mockResolvedValue({ text: JSON.stringify({ ...DIRECTION, tests: [DIRECTION.tests[0]] }) });
+    const project = await seed();
+    await service.startCastAndSets(project.id);
+    await runTo(project.id, 'review');
+    const saved = await current(project.id);
+    const oldDirection = structuredClone(saved.castAndSets.direction);
+    oldDirection.sets = oldDirection.sets.map((set) => ['harbor', 'roof'].includes(set.id)
+      ? { ...set, name: 'Shared set', lighting: 'dusk', sections: ['shared caption'] } : set);
+    oldDirection.songMap = [{ section: 1, setId: 'harbor' }];
+    const newDirection = { ...oldDirection, songMap: [{ section: 1, setId: 'roof' }] };
+    const oldPlan = buildCastAndSetsImagePlan(saved, oldDirection);
+    const newPlan = buildCastAndSetsImagePlan(saved, newDirection);
+    expect(oldPlan['test:2'].setId).toBe('harbor');
+    expect(newPlan['test:2'].setId).toBe('roof');
+    expect(oldPlan['test:2'].prompt).toBe(newPlan['test:2'].prompt);
+    expect(oldPlan['test:2'].label).toBe(newPlan['test:2'].label);
+    for (const card of Object.values(oldPlan)) delete card.test;
+    await projects.mutateProjectRecord(project.id, (c) => ({ project: { ...c, castAndSets: {
+      ...c.castAndSets, direction: newDirection, plan: oldPlan,
+    } } }));
+    const before = await current(project.id);
+    const view = await request(app).get(`/api/music-video/${project.id}/cast-and-sets`);
+    expect(view.body.stage.plan['test:2'].test).toBeUndefined();
+    const edit = await request(app).patch(`/api/music-video/${project.id}/cast-and-sets/direction`).send({ tests: [{ index: 2, caption: 'new caption' }] });
+    expect(edit.status).toBe(409);
+    expect((await current(project.id)).castAndSets).toEqual(before.castAndSets);
+
+    const changedCaption = structuredClone(oldDirection);
+    changedCaption.tests[0].caption = 'changed caption';
+    const captionPlan = buildCastAndSetsImagePlan(saved, changedCaption);
+    expect(oldPlan['test:1'].prompt).toBe(captionPlan['test:1'].prompt);
+    expect(oldPlan['test:1'].label).not.toBe(captionPlan['test:1'].label);
+    await projects.mutateProjectRecord(project.id, (c) => ({ project: { ...c, castAndSets: { ...c.castAndSets, direction: changedCaption } } }));
+    const beforeCaptionEdit = await current(project.id);
+    const captionView = await request(app).get(`/api/music-video/${project.id}/cast-and-sets`);
+    expect(captionView.body.stage.plan['test:1'].test).toBeUndefined();
+    const captionEdit = await request(app).patch(`/api/music-video/${project.id}/cast-and-sets/direction`).send({ tests: [{ index: 1, caption: 'another caption' }] });
+    expect(captionEdit.status).toBe(409);
+    expect((await current(project.id)).castAndSets).toEqual(beforeCaptionEdit.castAndSets);
+  });
+
   it('keeps a combined test edit on the renamed look and respects an explicit different look', async () => {
     runPrompt.mockResolvedValue({ text: JSON.stringify({ ...DIRECTION, tests: [...DIRECTION.tests,
       { setId: 'roof', look: 'Watch', action: 'looking out', caption: 'last beat' }] }) });

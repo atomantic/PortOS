@@ -113,9 +113,14 @@ function matchingTestCards(project, stage) {
   const effective = plannedTests(project, direction);
   const rebuilt = buildCastAndSetsImagePlan(project, direction, { revisionNotes: keyNotesText(stage.keyNotes) });
   const cards = Object.values(stage.plan || {}).filter((item) => item.kind === 'test').sort((a, b) => a.testIndex - b.testIndex);
+  const matchesLegacy = (card) => {
+    const fresh = rebuilt[card.key];
+    return fresh && card.prompt === fresh.prompt && card.setId === fresh.setId && card.label === fresh.label
+      && JSON.stringify(card.deps) === JSON.stringify(fresh.deps) && JSON.stringify(card.refKeys) === JSON.stringify(fresh.refKeys);
+  };
   if (cards.length !== effective.length || cards.some((card, i) => card.testIndex !== i || (card.test
     ? JSON.stringify(card.test) !== JSON.stringify(effective[i])
-    : card.prompt !== rebuilt[card.key]?.prompt))) return null;
+    : !matchesLegacy(card)))) return null;
   return cards.map((card, i) => card.test || effective[i]);
 }
 
