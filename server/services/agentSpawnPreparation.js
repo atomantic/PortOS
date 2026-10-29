@@ -16,7 +16,7 @@ import { ensureInstanceId } from './instanceIdentity.js';
 import { isClaimableBy, buildClaim, buildRelease, getClaimOwner, getTargetInstance, isTargetedElsewhere } from './cosTaskClaim.js';
 import { releaseAppReviewMarker } from './appActivity.js';
 import { v4 as uuidv4 } from '../lib/uuid.js';
-import { matchesSpawnBudgetProof, spawnBudgetCount, validSpawnBudgetEpisode } from './spawnBudgetProof.js';
+import { spawnBudgetHoldReason } from './spawnBudgetProof.js';
 import { isExpectedUnpersistedMiss } from '../lib/autonomousJobTask.js';
 import { isDeepStrictEqual } from 'node:util';
 
@@ -134,20 +134,7 @@ export async function prepareAgentSpawn(task, context = createAgentSpawnContext(
     return null;
   }
   if (checkedTask) {
-    const metadata = checkedTask.metadata || {};
-    const proof = metadata.spawnBudgetProof;
-    let verified = validSpawnBudgetEpisode(proof) && metadata.spawnBudgetReconciledHold !== 'true';
-    if (verified && proof.dispatch) {
-      const { readAgentsStateForSafetyCheck } = await import('./cosState.js');
-      const state = await readAgentsStateForSafetyCheck().catch(() => null);
-      const owner = state?.trusted ? state.agents?.[proof.dispatch.agentId] : null;
-      verified = owner?.status === 'completed' && matchesSpawnBudgetProof(checkedTask, owner)
-        && spawnBudgetCount(metadata.totalSpawnCount) !== null
-        && spawnBudgetCount(metadata.totalSpawnCount) === spawnBudgetCount(proof.dispatch.totalSpawnCount);
-    } else if (verified) {
-      verified = spawnBudgetCount(metadata.totalSpawnCount ?? 0) === spawnBudgetCount(proof.baseline ?? 0);
-    }
-    if (!verified) {
+    if (await spawnBudgetHoldReason(checkedTask)) {
       emitLog('warn', `Holding task ${task.id}: inspect its dispatch receipts and explicitly reset its budget only if intended`, { taskId: task.id });
       await context.cleanupOnError('spawn budget reconciliation required');
       return null;

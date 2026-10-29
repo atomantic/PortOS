@@ -66,6 +66,7 @@ import { getPendingTaskIds as readPendingTaskIds, getUserTasks, getCosTasks, get
 import { ensureInstanceId } from './instanceIdentity.js';
 import { isHeldByOther, buildRenewal, buildClaim, getClaimOwner } from './cosTaskClaim.js';
 import { retryTasksResolvedByInvestigation } from './investigationRetry.js';
+import { spawnBudgetHoldReason } from './spawnBudgetProof.js';
 import { handBackBlockedPrRemediation } from './blockedPrRemediation.js';
 import { notifyCriticalHealth, clearCriticalHealthIfRecovered } from './healthCriticalNotifier.js';
 
@@ -734,9 +735,9 @@ export async function isPaused() {
 /**
  * Force-spawn a pending task by ID, bypassing cooldowns and evaluation intervals.
  */
-export async function forceSpawnTask(taskId) {
+export async function forceSpawnTask(taskId, { resetSpawnBudget = false } = {}) {
   maintenance.assertOpen();
-  const task = await getTaskById(taskId);
+  let task = await getTaskById(taskId);
   if (!task) return { error: 'Task not found' };
   if (task.status !== 'pending') return { error: `Task is ${task.status}, not pending` };
   if (task.approvalRequired) return { error: 'Task requires approval before it can be spawned' };
@@ -801,6 +802,19 @@ export async function forceSpawnTask(taskId) {
   const localCapacityError = await localEndpointCapacityError(resolution.provider, state.agents, taskId);
   if (localCapacityError) {
     return { error: localCapacityError };
+  }
+
+  const budgetHold = await spawnBudgetHoldReason(task);
+  if (budgetHold && !resetSpawnBudget) return { error: `${budgetHold}. Inspect dispatch history or explicitly reset the spawn budget before running.` };
+  if (resetSpawnBudget) {
+    if (!budgetHold) return { error: 'Spawn budget is already verified; no reset is needed' };
+    const saved = await updateTask(task.id, { metadata: { totalSpawnCount: undefined } }, task.taskType || 'user', {
+      expectedStatus: 'pending', expectedTask: { description: task.description, priority: task.priority, metadata: task.metadata },
+      recoveryOwner: { id: 'explicit-spawn-budget-reset', startedAt: null, requireInactive: true },
+      spawnBudgetOperation: { kind: 'reset', requireInactive: true },
+    });
+    if (!saved || saved.error || saved.statusChanged) return { error: 'Task or ownership changed before spawn budget reset' };
+    task = { ...saved, taskType: task.taskType || 'user' };
   }
 
   cosEvents.emit('task:ready', { ...task, taskType: task.taskType || 'internal' });

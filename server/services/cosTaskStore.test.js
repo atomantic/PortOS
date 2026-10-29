@@ -229,6 +229,35 @@ it('holds a legacy stopped task whose episode cannot be proven', async () => {
   expect(await getTaskById(before.id)).toEqual(before);
 });
 
+it('resets a pending spawn budget only while the captured task and owner remain unchanged', async () => {
+  await seed('user', [{ id: 'task-reset-proof', status: 'pending', priority: 'MEDIUM', description: 'Retained work', metadata: {
+    totalSpawnCount: '2', failureCount: '3', lastSpawnedAt: '2026-01-01T00:00:00.000Z',
+  } }]);
+  const task = await getTaskById('task-reset-proof');
+  const options = { expectedStatus: 'pending', expectedTask: { description: task.description, priority: task.priority, metadata: task.metadata },
+    recoveryOwner: { id: 'explicit-spawn-budget-reset', startedAt: null, requireInactive: true },
+    spawnBudgetOperation: { kind: 'reset', requireInactive: true } };
+  mock.state.agents['agent-live'] = { id: 'agent-live', taskId: task.id, status: 'running' };
+  expect(await updateTask(task.id, { metadata: { totalSpawnCount: undefined } }, 'user', options)).toMatchObject({ statusChanged: true });
+  expect(await getTaskById(task.id)).toEqual(task);
+  delete mock.state.agents['agent-live'];
+  await updateTask(task.id, { metadata: { claimedBy: 'peer', leaseExpiresAt: '2999-01-01T00:00:00.000Z' } }, 'user');
+  const leased = await getTaskById(task.id);
+  expect(await updateTask(task.id, { metadata: { totalSpawnCount: undefined } }, 'user', {
+    ...options, expectedTask: { description: leased.description, priority: leased.priority, metadata: leased.metadata },
+  })).toMatchObject({ statusChanged: true });
+  await updateTask(task.id, { metadata: { claimedBy: undefined, leaseExpiresAt: undefined } }, 'user');
+  await updateTask(task.id, { description: 'Concurrent edit' }, 'user');
+  expect(await updateTask(task.id, { metadata: { totalSpawnCount: undefined } }, 'user', options)).toMatchObject({ statusChanged: true });
+  const current = await getTaskById(task.id);
+  const saved = await updateTask(task.id, { metadata: { totalSpawnCount: undefined } }, 'user', {
+    ...options, expectedTask: { description: current.description, priority: current.priority, metadata: current.metadata },
+  });
+  expect(saved.status).toBe('pending');
+  expect(saved.metadata).toMatchObject({ failureCount: '3', spawnBudgetProof: { baseline: 0, dispatch: null } });
+  expect(saved.metadata.totalSpawnCount).toBeUndefined();
+});
+
 it('wakes the exact local parent from a persisted completed-follow-up edit', async () => {
   const { cosEvents } = await import('./cosEvents.js');
   const { getAgentRecord } = await import('./cosAgentLifecycle.js');

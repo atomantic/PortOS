@@ -3029,6 +3029,7 @@ export const cosAgentFeedbackBodySchema = z.object({
 });
 export const cosAgentBtwBodySchema = z.object({ message: z.string().trim().min(1).max(5000) });
 export const cosTaskReorderBodySchema = z.object({ taskIds: z.array(nonEmptyString) });
+export const cosTaskSpawnBodySchema = z.object({ resetSpawnBudget: z.boolean().default(false) }).strict();
 export const cosScheduleTargetBodySchema = z.object({ taskType: nonEmptyString, appId: nullishString });
 export const cosScheduleTriggerBodySchema = z.object({
   taskType: nonEmptyString,

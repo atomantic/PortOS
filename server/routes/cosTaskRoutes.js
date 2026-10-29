@@ -35,6 +35,7 @@ import {
   goalFidelityFalsePositiveSchema,
   validateRequest,
   cosTaskReorderBodySchema,
+  cosTaskSpawnBodySchema,
   cosTaskDeleteQuerySchema,
   isPaginationRequested,
   parsePagination,
@@ -709,7 +710,8 @@ router.post('/evaluate', asyncHandler(async (req, res) => {
 
 // POST /api/cos/tasks/:id/spawn - Force-spawn a pending task
 router.post('/tasks/:id/spawn', asyncHandler(async (req, res) => {
-  const result = await forceSpawnTask(req.params.id);
+  const { resetSpawnBudget } = validateRequest(cosTaskSpawnBodySchema, req.body ?? {});
+  const result = await forceSpawnTask(req.params.id, { resetSpawnBudget });
   if (result.error) {
     const message = String(result.error);
     let status = 400;
@@ -734,7 +736,7 @@ router.post('/tasks/:id/spawn', asyncHandler(async (req, res) => {
     type: 'cos.task.spawn',
     target: req.params.id,
     summary: `Force-spawned CoS task ${req.params.id}`,
-    payload: { taskId: req.params.id },
+    payload: { taskId: req.params.id, ...(resetSpawnBudget && { resetSpawnBudget: true }) },
     source: routeSource(req),
     happenedAt,
     dedupeKey: `cos.task.spawn:${req.params.id}:${happenedAt}`,

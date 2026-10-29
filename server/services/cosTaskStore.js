@@ -37,7 +37,7 @@ import { normalizeOrchestrationMode, normalizeOrchestrationProfile } from '../li
 import { loadState, withStateLock, readAgentsStateForSafetyCheck } from './cosState.js';
 import { activeAgents, runnerAgents, hasActiveTaskOwner } from './agentState.js';
 import { cosEvents } from './cosEvents.js';
-import { CLAIM_METADATA_KEYS } from './cosTaskClaim.js';
+import { CLAIM_METADATA_KEYS, isLeaseLive } from './cosTaskClaim.js';
 import { mergeTaskLists } from './cosTaskMerge.js';
 import { applyTaskListSave, countCompletedTasks, deleteStoredTask, getCompletedTaskIds, getStoredTask, loadTaskWorkingSet, pageCompletedTasks, readTaskListVersion } from './cosTaskRepository.js';
 import { planListSave, selectWorkingSet, storedForm } from '../lib/cosTaskRows.js';
@@ -861,6 +861,9 @@ async function writeTaskUpdateLocked(taskId, updates, taskType, { now, suppressD
   }
 
   const current = tasks[taskIndex];
+  if (spawnBudgetOperation?.kind === 'reset' && spawnBudgetOperation.requireInactive && isLeaseLive(current.metadata)) {
+    return { statusChanged: true, task: current };
+  }
   // These fields bind an immutable publication dispatch. Ordinary edits,
   // retries and stale completion patches cannot revoke its durable owner.
   if (current.metadata?.releaseSynchronization && updates.metadata) {

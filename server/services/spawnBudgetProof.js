@@ -40,3 +40,19 @@ export function matchesSpawnBudgetProof(task, agent) {
     ? spawnBudgetCount(expected[key]) !== null && spawnBudgetCount(expected[key]) === spawnBudgetCount(proof.dispatch[key])
     : !!expected[key] && expected[key] === proof.dispatch[key]);
 }
+
+/** Explain why a persisted task cannot be automatically dispatched. */
+export async function spawnBudgetHoldReason(task) {
+  const metadata = task?.metadata || {};
+  const proof = metadata.spawnBudgetProof;
+  if (!validSpawnBudgetEpisode(proof) || metadata.spawnBudgetReconciledHold === 'true') return 'Spawn budget history is unverified or held';
+  if (!proof.dispatch) return spawnBudgetCount(metadata.totalSpawnCount ?? 0) === spawnBudgetCount(proof.baseline ?? 0)
+    ? null : 'Spawn budget history is unverified or held';
+  const { readAgentsStateForSafetyCheck } = await import('./cosState.js');
+  const state = await readAgentsStateForSafetyCheck().catch(() => null);
+  const owner = state?.trusted ? state.agents?.[proof.dispatch.agentId] : null;
+  return owner?.status === 'completed' && matchesSpawnBudgetProof(task, owner)
+    && spawnBudgetCount(metadata.totalSpawnCount) !== null
+    && spawnBudgetCount(metadata.totalSpawnCount) === spawnBudgetCount(proof.dispatch.totalSpawnCount)
+    ? null : 'Spawn budget history is unverified or held';
+}

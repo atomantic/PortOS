@@ -7,6 +7,7 @@ const api = vi.hoisted(() => ({
   deleteCosTask: vi.fn(),
   approveCosTask: vi.fn(),
   forceSpawnTask: vi.fn(),
+  resetSpawnBudgetAndRun: vi.fn(),
   resolveCosTaskChallenge: vi.fn(),
 }));
 const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
@@ -30,6 +31,16 @@ beforeEach(() => {
 });
 
 describe('TaskItem task source', () => {
+  it('explains the budget reset and runs only after explicit confirmation', async () => {
+    api.resetSpawnBudgetAndRun.mockResolvedValue({ success: true });
+    render(<TaskItem task={task} isSystem onRefresh={vi.fn()} providers={providers} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Reset spawn budget and run' }));
+    expect(screen.getByText('Reset spawn count to zero and run? Failure count stays.')).toBeInTheDocument();
+    expect(api.resetSpawnBudgetAndRun).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Reset and run' }));
+    await waitFor(() => expect(api.resetSpawnBudgetAndRun).toHaveBeenCalledWith(task.id, { silent: true }));
+  });
+
   it('uses the scheduled task learning bucket for its ETA instead of generic task text', () => {
     const scheduled = {
       ...task,

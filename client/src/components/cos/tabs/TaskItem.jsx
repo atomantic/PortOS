@@ -210,6 +210,9 @@ export default function TaskItem({ task, agent = null, liveOutput, isSystem, spa
   const [showBlockedModal, setShowBlockedModal] = useState(false);
   const [relaunching, setRelaunching] = useState(false);
   const [blockedReason, setBlockedReason] = useState('');
+  const [budgetResetConfirm, setBudgetResetConfirm] = useState(false);
+  const [budgetResetAvailable, setBudgetResetAvailable] = useState(false);
+  const [budgetResetting, setBudgetResetting] = useState(false);
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
   // Independent armed-state from the delete confirm above — a second instance
   // of the same single-at-a-time hook, keyed on the same task id, gates
@@ -800,7 +803,10 @@ export default function TaskItem({ task, agent = null, liveOutput, isSystem, spa
                 {task.status === 'pending' && !task.approvalRequired && (
                   <button
                     onClick={async () => {
-                      const result = await api.forceSpawnTask(task.id, { silent: true }).catch(err => { toast.error(err.message); return null; });
+                      const result = await api.forceSpawnTask(task.id, { silent: true }).catch(err => {
+                        if (err.message?.includes('Spawn budget')) setBudgetResetAvailable(true);
+                        toast.error(err.message); return null;
+                      });
                       if (result?.success) toast.success(`Spawning ${task.id}`);
                       if (onRefresh) onRefresh();
                     }}
@@ -811,6 +817,24 @@ export default function TaskItem({ task, agent = null, liveOutput, isSystem, spa
                     <Play size={14} aria-hidden="true" />
                   </button>
                 )}
+                {task.status === 'pending' && !task.approvalRequired
+                  && (!task.metadata?.spawnBudgetProof || task.metadata?.spawnBudgetReconciledHold === 'true' || budgetResetAvailable)
+                  && (budgetResetConfirm ? (
+                    <ConfirmButtonPair prompt="Reset spawn count to zero and run? Failure count stays." confirmText="Reset and run"
+                      ariaLabel="Confirm reset spawn budget and run" busy={budgetResetting} tone="warning" largeTouchTargets
+                      onCancel={() => setBudgetResetConfirm(false)} onConfirm={async () => {
+                        setBudgetResetting(true);
+                        const result = await api.resetSpawnBudgetAndRun(task.id, { silent: true }).catch(err => { toast.error(err.message); return null; });
+                        setBudgetResetting(false);
+                        if (result?.success) { setBudgetResetConfirm(false); toast.success(`Spawning ${task.id}`); }
+                        if (onRefresh) onRefresh();
+                      }} />
+                  ) : (
+                    <button type="button" onClick={() => setBudgetResetConfirm(true)}
+                      className="min-h-[44px] rounded border border-port-border px-2 text-xs text-port-warning hover:bg-port-border">
+                      Reset spawn budget and run
+                    </button>
+                  ))}
                 {/* Only when a live agent holds this task — relaunching pauses that
                     agent (see relaunchAgent in agentManagement.js). */}
                 {agent && (
