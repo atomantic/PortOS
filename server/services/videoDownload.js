@@ -33,7 +33,7 @@ import { killWithEscalation } from '../lib/killWithEscalation.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../lib/sseUtils.js';
 import { downloadVideoToDir, cleanupProducedFiles } from './ytdlpVideoImport.js';
 import { loadHistory, mutateVideoHistory } from './videoGen/history.js';
-import { deleteHistoryItem } from './videoGen/local.js';
+import { deleteMediaAnywhere } from './mediaRemoteDelete.js';
 import { videoGenEvents } from './videoGen/events.js';
 
 // Host allowlist: YouTube (watch/shorts/youtu.be) + x.com/Twitter status URLs.
@@ -92,9 +92,11 @@ export async function listDownloads() {
 
 /**
  * Delete a downloaded video. Verifies the id is actually a download (not a
- * generated render) before delegating to the shared deleteHistoryItem, which
- * removes the file, thumbnail, history entry, and mediaAssetIndex row
- * (identical lifecycle to a deleted generation).
+ * generated render), then takes the same owner-aware delete as any video
+ * (mediaRemoteDelete.js): a download this machine owns goes through
+ * deleteHistoryItem here, one a peer owns is deleted on that peer first, since
+ * a tombstone recorded here for a peer's row would make other machines drop it
+ * while its owner kept it. Resolves the same `{ status }` as that delete.
  */
 export async function deleteDownload(id) {
   // Same reason as listDownloads: an unreadable history must not answer
@@ -104,7 +106,7 @@ export async function deleteDownload(id) {
   if (!item || item.source !== 'download') {
     throw new ServerError('Downloaded video not found', { status: 404, code: 'NOT_FOUND' });
   }
-  return deleteHistoryItem(id);
+  return deleteMediaAnywhere('video', id);
 }
 
 // A cancelled/failed run can leave yt-dlp's pre-merge fragment files behind

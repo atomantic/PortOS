@@ -1,5 +1,5 @@
-import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react';
 
 vi.mock('../services/apiVideoDownload.js', () => ({
   listVideoDownloads: vi.fn().mockResolvedValue([
@@ -11,14 +11,18 @@ vi.mock('../services/apiVideoDownload.js', () => ({
 vi.mock('../hooks/useVideoDownload.js', () => ({
   default: () => ({ active: false, percent: 0, stage: '', start: vi.fn(), cancel: vi.fn() }),
 }));
+const confirmState = vi.hoisted(() => ({ confirming: false }));
 vi.mock('../hooks/useConfirmDelete.js', () => ({
-  default: () => ({ isConfirming: () => false, requestDelete: vi.fn(), cancelDelete: vi.fn(), confirmDelete: vi.fn() }),
+  default: () => ({
+    isConfirming: () => confirmState.confirming, requestDelete: vi.fn(), cancelDelete: vi.fn(), confirmDelete: (fn) => fn(),
+  }),
 }));
 vi.mock('../components/video/YtDlpUpdateCard', () => ({ default: () => null }));
-vi.mock('../components/ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn() } }));
+vi.mock('../components/ui/Toast', () => ({ default: Object.assign(vi.fn(), { error: vi.fn(), success: vi.fn() }) }));
 
 import VideoDownloaderPage from './VideoDownloaderPage';
-import { listVideoDownloads } from '../services/apiVideoDownload.js';
+import { listVideoDownloads, deleteVideoDownload } from '../services/apiVideoDownload.js';
+import toast from '../components/ui/Toast';
 
 describe('VideoDownloaderPage', () => {
   it('swaps only the failed thumbnail for the placeholder', async () => {
@@ -54,5 +58,33 @@ describe('VideoDownloaderPage', () => {
 
     await waitFor(() => expect(screen.getByText('No videos downloaded yet.')).toBeInTheDocument());
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  describe('delete', () => {
+    beforeEach(() => { confirmState.confirming = true; });
+    afterEach(() => { confirmState.confirming = false; });
+    const confirmDeleteOf = async (title) => {
+      const group = await screen.findByRole('group', { name: `Delete ${title}` });
+      // The delete settles on promises; resolve them inside act.
+      await act(async () => { fireEvent.click(within(group).getByRole('button', { name: 'Delete' })); });
+    };
+
+    it('removes a download deleted on this machine', async () => {
+      deleteVideoDownload.mockResolvedValueOnce({ ok: true, status: 'deleted' });
+      render(<VideoDownloaderPage />);
+      await confirmDeleteOf('Clip A');
+      await waitFor(() => expect(screen.queryByText('Clip A')).toBeNull());
+      expect(screen.getByText('Clip B')).toBeInTheDocument();
+    });
+
+    // Uniquely catches the page dropping a peer's download whose delete is
+    // still waiting on its owner.
+    it('keeps a download whose delete is pending on its owner and says so', async () => {
+      deleteVideoDownload.mockResolvedValueOnce({ ok: true, status: 'pending', pendingDelete: { peerId: 'rec-peer', queuedAt: '2026-01-02T00:00:00.000Z' }, peerName: 'Example Peer' });
+      render(<VideoDownloaderPage />);
+      await confirmDeleteOf('Clip A');
+      await waitFor(() => expect(toast).toHaveBeenCalledWith('Delete pending until Example Peer is reachable'));
+      expect(screen.getByText('Clip A')).toBeInTheDocument();
+    });
   });
 });
