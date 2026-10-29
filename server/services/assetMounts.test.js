@@ -215,6 +215,28 @@ describe('the gallery sidecar gate', () => {
     const ordinary = await request(app).get('/data/images/plain.metadata.json');
     expect(ordinary.text).toBe(plain);
   });
+
+  // Uniquely catches a gate that only knows [A-Za-z0-9._-] names (#14064):
+  // other legal gallery names were served raw, machine-local fields included.
+  it('strips machine-local fields for every legal gallery name', async () => {
+    const images = join(tempRoot, 'images');
+    const local = { prompt: 'a fox', hidden: true, suppliedByInstanceId: 'inst-b' };
+    for (const name of ['my fox+1.metadata.json', 'renard-é.metadata.json', '@frame (2).metadata.json']) {
+      writeFileSync(join(images, name), JSON.stringify(local));
+      const res = await request(app).get(`/data/images/${encodeURIComponent(name)}`);
+      expect(res.status, name).toBe(200);
+      expect(JSON.parse(res.text), name).toEqual({ prompt: 'a fox' });
+    }
+  });
+
+  it('leaves traversal and encoded-slash names to the static mount', async () => {
+    writeFileSync(join(tempRoot, 'outside.metadata.json'), JSON.stringify({ prompt: 'outside', hidden: true }));
+    for (const path of ['/data/images/..%2Foutside.metadata.json', '/data/images/%2E%2E%2Foutside.metadata.json', '/data/images/bad%E0.metadata.json']) {
+      const res = await request(app).get(path);
+      expect(res.status, path).not.toBe(200);
+      expect(res.text, path).not.toContain('outside');
+    }
+  });
 });
 
 describe('the writers-room draft-body gate', () => {

@@ -19,6 +19,7 @@ import { join } from 'path';
 import { z } from 'zod';
 import { readFile } from 'fs/promises';
 import { PATHS } from '../lib/fileUtils.js';
+import { isTopLevelEntryName } from '../lib/pathSafety.js';
 import { stripImageSidecarLocalBytes } from '../lib/assetHash.js';
 import { ServerError, sendErrorResponse } from '../lib/errorHandler.js';
 import { ASSET_ROUTE_PREFIXES, SERVER_OWNED_PREFIXES } from '../lib/assetRoutePrefixes.js';
@@ -139,14 +140,26 @@ const imageThumbnailGate = async (req, res, next) => {
 // A gallery sidecar carries this machine's own fields (hide state, a pending
 // delete, the supplying peer), which never go to a peer or anyone else reading
 // it from the mount. A sidecar without them is served as-is by the static mount.
-const SIDECAR_PATH = /^\/([A-Za-z0-9][A-Za-z0-9._-]*\.metadata\.json)$/;
+// Every name a gallery image may have (spaces, `+`, non-ASCII...) is gated: the
+// decoded path must name one entry, the same check gallery names pass (#14064).
+// Anything else falls through to the static mount, which refuses traversal.
+function sidecarNameOf(path) {
+  let name;
+  try {
+    name = decodeURIComponent(path.slice(1));
+  } catch {
+    return null;
+  }
+  return isTopLevelEntryName(name) && name.toLowerCase().endsWith('.metadata.json') ? name : null;
+}
+
 const imageSidecarGate = async (req, res, next) => {
-  const match = (req.method === 'GET' || req.method === 'HEAD') ? SIDECAR_PATH.exec(req.path) : null;
-  if (!match) return next();
-  const raw = await readFile(join(PATHS.images, match[1])).catch(() => null);
+  const name = (req.method === 'GET' || req.method === 'HEAD') ? sidecarNameOf(req.path) : null;
+  if (!name) return next();
+  const raw = await readFile(join(PATHS.images, name)).catch(() => null);
   const shared = raw === null ? raw : stripImageSidecarLocalBytes(raw);
   if (shared === raw) return next();
-  ASSET_STATIC_OPTS.setHeaders(res, match[1]);
+  ASSET_STATIC_OPTS.setHeaders(res, name);
   res.type('application/json').send(shared);
 };
 
