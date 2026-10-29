@@ -43,7 +43,7 @@ vi.mock('./completedCheckoutEvidence.js', async original => ({ ...await original
 vi.mock('./cos.js', () => ({}));
 vi.mock('./agentCompletionData.js', () => ({ readCompletionData: vi.fn() }));
 vi.mock('./agentCompletionCleanup.js', () => ({ replayAgentCompletionCleanup: vi.fn(async () => {}) }));
-vi.mock('./cosAgentLifecycle.js', async original => ({ recordInheritedCheckoutRetirement: vi.fn(async () => true), recordSeededCheckoutRetirement: vi.fn(async () => true), isSettleableCompletionReceipt: (await original()).isSettleableCompletionReceipt, recordSuccessorCheckoutRetirement: vi.fn(async () => true), settleAbsentTaskCompletion: vi.fn(async () => true), retryCompletionCheckoutCapture: vi.fn(async () => false), reserveRepoCleanupRecovery: vi.fn(async () => ({ admitted: true, attempt: 1 })), recordRepoCleanupRecovery: vi.fn(async () => true), recordCleanupOutcome: vi.fn(async () => true), recordSwarmCleanupDelivery: vi.fn(async () => true), updateAgent: vi.fn().mockResolvedValue({}), recordRepoStateRecovery: vi.fn().mockResolvedValue(true), recordRepoStateVerification: vi.fn().mockResolvedValue(true), getAgentRecord: vi.fn(async () => null), recordCompletionCleanup: vi.fn(async () => true) }));
+vi.mock('./cosAgentLifecycle.js', async original => ({ recordHistoricalCleanupReconciliation: vi.fn(async () => true), recordInheritedCheckoutRetirement: vi.fn(async () => true), recordSeededCheckoutRetirement: vi.fn(async () => true), isSettleableCompletionReceipt: (await original()).isSettleableCompletionReceipt, recordSuccessorCheckoutRetirement: vi.fn(async () => true), settleAbsentTaskCompletion: vi.fn(async () => true), retryCompletionCheckoutCapture: vi.fn(async () => false), reserveRepoCleanupRecovery: vi.fn(async () => ({ admitted: true, attempt: 1 })), recordRepoCleanupRecovery: vi.fn(async () => true), recordCleanupOutcome: vi.fn(async () => true), recordSwarmCleanupDelivery: vi.fn(async () => true), updateAgent: vi.fn().mockResolvedValue({}), recordRepoStateRecovery: vi.fn().mockResolvedValue(true), recordRepoStateVerification: vi.fn().mockResolvedValue(true), getAgentRecord: vi.fn(async () => null), recordCompletionCleanup: vi.fn(async () => true) }));
 vi.mock('./cosClaimOwnership.js', () => ({ readClaimOwnershipAgents: vi.fn().mockResolvedValue([]), withClaimOwnershipLock: fn => fn() }));
 vi.mock('./taskSchedule.js', () => ({ recordBranchReconcileOutcome: vi.fn().mockResolvedValue({}) }));
 vi.mock('./taskScheduleStore.js', () => ({ loadSchedule: vi.fn(async () => ({})) }));
@@ -62,6 +62,7 @@ vi.mock('./cosTaskStore.js', () => ({
 }));
 vi.mock('./prWatcher.js', () => ({ readPendingMergePrs: vi.fn().mockReturnValue([]) }));
 vi.mock('./worktreeManager.js', () => ({ listWorktrees: vi.fn().mockResolvedValue([]) }));
+vi.mock('./branchReconcileRetirement.js', async original => ({ ...await original(), assertAutomaticRetirementAllowed: vi.fn(async () => {}) }));
 vi.mock('./branchReconcile.js', () => ({
   listRemoteHeads: vi.fn().mockResolvedValue(new Map()),
   cleanupMerged: vi.fn().mockResolvedValue({ cleaned: [] }),
@@ -96,7 +97,7 @@ import { readLocalBranchPresence, readCheckoutPathPresence } from './repoCleanup
 import { readRetirementForgeEvidence } from './heldCheckoutReview.js';
 import { readCompletedCheckoutIdentity } from './completedCheckoutEvidence.js';
 import { readClaimOwnershipAgents } from './cosClaimOwnership.js';
-import { retryCompletionCheckoutCapture, getAgentRecord, recordCleanupOutcome, recordSwarmCleanupDelivery, reserveRepoCleanupRecovery, recordRepoStateRecovery, recordRepoStateVerification } from './cosAgentLifecycle.js';
+import { recordHistoricalCleanupReconciliation, retryCompletionCheckoutCapture, getAgentRecord, recordCleanupOutcome, recordSwarmCleanupDelivery, reserveRepoCleanupRecovery, recordRepoStateRecovery, recordRepoStateVerification } from './cosAgentLifecycle.js';
 import { readCompletionData } from './agentCompletionData.js';
 import { recordCompletionCleanup, recordInheritedCheckoutRetirement, recordSeededCheckoutRetirement, recordSuccessorCheckoutRetirement, settleAbsentTaskCompletion } from './cosAgentLifecycle.js';
 import { replayAgentCompletionCleanup } from './agentCompletionCleanup.js';
@@ -323,7 +324,7 @@ beforeEach(() => {
     deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-1' } });
   recordBranchReconcileOutcome.mockResolvedValue({ retirementObligations: [{ ...RELEASE, createdAt: CREATED_AT }] });
   prepareInventoriedCheckoutRetirement.mockResolvedValue({ ok: true, review: review() });
-  retireInventoriedCheckout.mockResolvedValue({ ok: true, archiveDir: '/private/archive', branchDeleted: true });
+  retireInventoriedCheckout.mockReset().mockResolvedValue({ ok: true, archiveDir: '/private/archive', branchDeleted: true });
   execGh.mockResolvedValue(openView());
   readClaimOwnershipAgents.mockResolvedValue([]);
   reserveRepoCleanupRecovery.mockResolvedValue({ admitted: true, attempt: 1 });
@@ -2176,5 +2177,147 @@ describe('completion after its originating task was removed', () => {
     expect(retireInventoriedCheckout).not.toHaveBeenCalled();
     expect(inspectOrQueueCompletedReview).not.toHaveBeenCalled();
     expect(settleAbsentTaskCompletion).not.toHaveBeenCalled();
+  });
+});
+
+/** A cleanup transfer must not strand the only physical captures on an older
+ * coordinator, or spend another dispatch merely to find them again. */
+describe('historical captured swarm reconciliation', () => {
+  function episode({ parked = true } = {}) {
+    const outcome = { status: 'incomplete', recovery: { mode: 'cleanup' } };
+    const branches = ['claim/issue-41', 'claim/issue-42', 'claim/issue-43'];
+    const scope = { id: 'historical-task', taskType: 'internal', description: 'Complete selected claims', priority: 'MEDIUM',
+      metadata: { app: 'demo-app', analysisType: 'claim-issue', claimFlow: true, swarmCount: 3, prCompletion: 'merge-on-green' } };
+    const agents = [0, 1, 2].map(index => {
+      const id = `historical-${index}`, start = `2026-01-01T00:0${index * 2}:00.000Z`;
+      const expected = [['claimedBy', 'fixture-local'], ['claimedAt', start], ['lastSpawnedAt', start], ['totalSpawnCount', index + 1]];
+      return { id, taskId: scope.id, status: 'completed', startedAt: start, completedAt: `2026-01-01T00:0${index * 2 + 1}:00.000Z`,
+        result: { success: false, executionSuccess: true, deliveryRecoveryOwned: true, cleanupPending: true, taskOutcome: outcome },
+        metadata: { instanceId: 'fixture-local', taskApp: 'demo-app', taskAnalysisType: 'claim-issue', configClaimFlow: true,
+          isWorktree: false, workspacePath: '/repo', claimBranches: index ? [] : branches, claimReleasedBranches: [],
+          checkoutCapture: { status: 'captured' }, completedCheckouts: [],
+          completionTaskDispatch: { taskId: scope.id, taskType: 'internal', expected },
+          completionCleanup: { version: 1, status: 'pending', replay: { fixture: id } },
+          repoStateVerification: index < 2 ? { status: 'completed', reasons: ['cleanup-transferred-to-recovery'] } : { status: 'pending' },
+        } };
+    });
+    const source = agents[0], latest = agents[2];
+    source.metadata.completedCheckouts = branches.map((branch, index) => ({ version: 1, agentId: source.id, startedAt: source.startedAt,
+      capturedAt: source.completedAt, repoPath: '/repo', path: `/tree/${index}`, branch, head: HEAD,
+      incarnation: { pointer: { dev: '1', ino: String(index + 2), birthtimeNs: '3' },
+        gitdir: { path: `/repo/.git/worktrees/${index}`, dev: '1', ino: String(index + 5), birthtimeNs: '3' } } }));
+    const currentTask = { ...scope, status: 'blocked', metadata: { ...scope.metadata,
+      lastSpawnedAt: latest.startedAt, totalSpawnCount: '3', failureCount: '2', spawnFailedCount: '1',
+      blockedCategory: 'task-recovery-exhausted', deliveryDecisionAgentId: latest.id,
+      deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: latest.id, taskOutcome: outcome } };
+    const replays = agents.map((row, index) => ({ task: { ...scope, metadata: { ...scope.metadata,
+      ...(index ? Object.fromEntries(agents[index - 1].metadata.completionTaskDispatch.expected) : {}) } } }));
+    getTaskById.mockImplementation(async () => structuredClone(currentTask));
+    getAgentRecord.mockImplementation(async id => structuredClone(agents.find(row => row.id === id)));
+    readBranchCompletionPolicies.mockImplementation(async () => structuredClone(agents));
+    readCompletionData.mockImplementation(async row => structuredClone(replays[agents.findIndex(agent => agent.id === row.id)]));
+    listWorktrees.mockResolvedValue(source.metadata.completedCheckouts.map(row => ({ branch: `refs/heads/${row.branch}`, path: row.path, head: row.head })));
+    readCompletedCheckoutIdentity.mockImplementation(async ({ branch }) => structuredClone(source.metadata.completedCheckouts.find(row => row.branch === branch)));
+    readCheckoutPathPresence.mockResolvedValue(true);
+    localBranch(true);
+    verifyCleanupClaimDisposition.mockResolvedValue({ status: 'verified', issues: branches.map((branch, index) => ({
+      issue: 41 + index, disposition: parked && index === 2 ? 'operator-blocked' : 'merged-pr' })) });
+    findPullRequestForBranch.mockImplementation(async branch => parked && branch === branches[2]
+      ? { status: 'none', url: null, detail: null }
+      : { status: 'found', number: 41 + branches.indexOf(branch), url: `https://github.com/example/repo/pull/${41 + branches.indexOf(branch)}`, detail: 'MERGED' });
+    recordBranchReconcileOutcome.mockImplementation(async (_app, input) => ({
+      retirementObligations: input.retirementObligations?.map(row => ({ ...row, createdAt: CREATED_AT })) || [],
+    }));
+    prepareInventoriedCheckoutRetirement.mockImplementation(async ({ release }) => ({ ok: true,
+      review: { digest: 'a'.repeat(64), forge: { prHead: release.head }, comparison: { disposition: 'integrated', localPatch: '', difference: '' } } }));
+    retireInventoriedCheckout.mockImplementation(async (_input, options) => {
+      await options.beforeMutation();
+      return { ok: true, branchDeleted: true, archiveDir: null };
+    });
+    recordHistoricalCleanupReconciliation.mockImplementation(async (id, _expected, patch) => {
+      const row = agents.find(row => row.id === id);
+      row.metadata.historicalCleanupReconciliation = { ...row.metadata.historicalCleanupReconciliation, ...patch };
+      return true;
+    });
+    return { source, latest, agents, currentTask, replays, branches, run: () => run({ agentId: latest.id, agentState: structuredClone(latest),
+      task: structuredClone(currentTask), success: false }) };
+  }
+
+  it('resumes the original generations after restart, preserves parked work and every charged outcome', async () => {
+    const fixture = episode();
+    const original = structuredClone(fixture.agents), taskBefore = structuredClone(fixture.currentTask);
+    for (let restart = 0; restart < 2; restart++) {
+      const result = await fixture.run();
+      expect(result).toMatchObject({ verified: false, historicalCleanup: true, branches: [
+        { branch: 'claim/issue-41', verified: true }, { branch: 'claim/issue-42', verified: true },
+        { branch: 'claim/issue-43', verified: false, skipReason: 'cleanup-delivery-unverified' },
+      ] });
+    }
+    expect(retireInventoriedCheckout).toHaveBeenCalledTimes(4);
+    expect(retireInventoriedCheckout.mock.calls.every(([input]) => input.release.branch !== fixture.branches[2])).toBe(true);
+    expect(fixture.agents.slice(0, 2)).toEqual(original.slice(0, 2));
+    expect(fixture.latest.result).toEqual(original[2].result);
+    expect(fixture.currentTask).toEqual(taskBefore);
+    expect(fixture.latest.metadata.historicalCleanupReconciliation).toMatchObject({ status: 'held', sourceAgentId: fixture.source.id });
+    expect(addTask).not.toHaveBeenCalled();
+    expect(updateTask).not.toHaveBeenCalled();
+    expect(recordCleanupOutcome).not.toHaveBeenCalled();
+    expect(recordRepoStateVerification).not.toHaveBeenCalled();
+  });
+
+  it.each(['instance', 'other-task', 'duplicate-source', 'reset', 'missing-replay', 'missing-capture', 'active-owner', 'tracker', 'task-race', 'owner-race', 'generation-race'])(
+    'holds unsafe historical reconciliation: %s', async scenario => {
+      const f = episode();
+      if (scenario === 'instance') f.source.metadata.instanceId = 'other-instance';
+      if (scenario === 'other-task') f.source.taskId = 'other-task';
+      if (scenario === 'duplicate-source') f.agents.push({ ...structuredClone(f.source), id: 'duplicate-source' });
+      if (scenario === 'reset') f.replays[1].task.metadata.totalSpawnCount = 0;
+      if (scenario === 'missing-replay') f.replays[1] = null;
+      if (scenario === 'missing-capture') f.source.metadata.completedCheckouts.pop();
+      if (scenario === 'active-owner') readClaimOwnershipAgents.mockResolvedValue([{ id: 'new-owner', status: 'running', taskId: f.currentTask.id }]);
+      if (scenario === 'tracker') verifyCleanupClaimDisposition.mockResolvedValue({ status: 'unverified' });
+      if (scenario.endsWith('-race')) prepareInventoriedCheckoutRetirement.mockImplementation(async ({ release }) => {
+        if (scenario === 'task-race') f.currentTask.description = 'Operator changed scope';
+        if (scenario === 'owner-race') readClaimOwnershipAgents.mockResolvedValue([{ id: 'new-owner', status: 'running', taskId: f.currentTask.id }]);
+        if (scenario === 'generation-race') readCompletedCheckoutIdentity.mockResolvedValue(null);
+        return { ok: true, review: { digest: 'a'.repeat(64), forge: { prHead: release.head },
+          comparison: { disposition: 'integrated', localPatch: '', difference: '' } } };
+      });
+      const removed = vi.fn();
+      retireInventoriedCheckout.mockImplementation(async (_input, options) => { await options.beforeMutation(); removed(); return { ok: true, branchDeleted: true }; });
+      const result = await f.run();
+      expect(result.verified).toBe(false);
+      expect(removed).not.toHaveBeenCalled();
+      expect(updateTask).not.toHaveBeenCalled();
+      expect(addTask).not.toHaveBeenCalled();
+      expect(f.latest.metadata.historicalCleanupReconciliation.status).toBe('held');
+    });
+
+  it.each(['same-epoch', 'reset-epoch'])('requires the recorded dispatch episode when one exists: %s', async scenario => {
+    const f = episode();
+    const epoch = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const entries = f.agents.map(row => {
+      Object.assign(row.metadata.completionTaskDispatch, { spawnBudgetEpoch: epoch, spawnBudgetStartedAt: row.startedAt });
+      return { agentId: row.id, startedAt: row.startedAt, ...Object.fromEntries(row.metadata.completionTaskDispatch.expected) };
+    });
+    f.currentTask.metadata.spawnBudgetProof = { version: 1, epoch, baseline: 0, history: entries.slice(0, -1), dispatch: entries.at(-1) };
+    if (scenario === 'reset-epoch') f.currentTask.metadata.spawnBudgetProof.epoch = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    const result = await f.run();
+    if (scenario === 'same-epoch') expect(result.branches).toHaveLength(3);
+    else expect(result.skipReason).toBe('historical-cleanup-episode-reset-or-ambiguous');
+    expect(retireInventoriedCheckout).toHaveBeenCalledTimes(scenario === 'same-epoch' ? 2 : 0);
+    expect(updateTask).not.toHaveBeenCalled();
+  });
+
+  it('settles only after every branch verifies, using the latest owner and unchanged retry budgets', async () => {
+    const f = episode({ parked: false });
+    expect(await f.run()).toMatchObject({ verified: true, historicalCleanup: true });
+    expect(retireInventoriedCheckout).toHaveBeenCalledTimes(3);
+    expect(updateTask).toHaveBeenCalledWith(f.currentTask.id, expect.objectContaining({ status: 'completed' }), 'internal', {
+      expectedStatus: 'blocked', expectedTask: { description: f.currentTask.description, priority: f.currentTask.priority, metadata: f.currentTask.metadata },
+      recoveryOwner: { id: f.latest.id, startedAt: f.latest.startedAt, requireInactive: true }, preserveRetryBudget: true,
+    });
+    expect(f.latest.metadata.historicalCleanupReconciliation.status).toBe('verified');
+    expect(f.agents.every(row => row.result.success === false)).toBe(true);
   });
 });
