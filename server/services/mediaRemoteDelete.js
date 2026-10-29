@@ -456,6 +456,7 @@ async function pruneMediaDeleteQueue(peers, nowMs = Date.now()) {
 
 const draining = new Set();
 const sameEntry = (a, b) => a.peerId === b.peerId && a.kind === b.kind && a.key === b.key && a.queuedAt === b.queuedAt;
+const dropEntry = (entry) => updateQueue((entries) => entries.filter((e) => !sameEntry(e, entry)));
 
 /** Send every queued command for `peer` (it is online). Never rejects. */
 async function drainMediaDeleteQueue(peer) {
@@ -491,7 +492,7 @@ async function drainMediaDeleteQueue(peer) {
             retired = await retireLocalCopy(entry.kind, current, entry.key, result.tombstone);
           } catch (err) {
             if (err?.code === 'NOT_FOUND') {
-              await dropEntriesFor(entry.kind, entry.key);
+              await dropEntry(entry);
               throw err;
             }
             // Keep the command with the owner's ack so the next drain retries the
@@ -500,7 +501,9 @@ async function drainMediaDeleteQueue(peer) {
             throw err;
           }
         }
-        await dropEntriesFor(entry.kind, entry.key);
+        // Only this command: a cancel and a fresh attempt for the same media while
+        // it was out must keep the newer entry.
+        await dropEntry(entry);
         if (retired && retired.status !== 'invalid-ack') {
           console.log(`🗑️ Queued delete of ${entry.kind} ${entry.key} completed on ${peerLabel(current)} (${retired.status})`);
           done++;
