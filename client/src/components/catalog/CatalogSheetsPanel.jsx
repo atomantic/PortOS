@@ -151,19 +151,19 @@ export default function CatalogSheetsPanel({
     { variant: variantId, ...(activeFormId ? { formId: activeFormId } : {}), savedStamp }, { enabled: !!variantId });
 
   const dropJob = useCallback((jobId) => setJobs((cur) => cur.filter((j) => j.jobId !== jobId)), []);
-  const delegatedKey = jobs.filter((j) => j.delegated).map((j) => j.jobId).join(',');
   useEffect(() => {
-    if (!delegatedKey) return undefined;
-    const ids = new Set(delegatedKey.split(','));
+    const delegatedJobs = jobs.filter((j) => j.delegated);
+    if (!delegatedJobs.length) return undefined;
     const onChanged = (data) => {
-      if (!ids.has(data?.jobId)) return;
+      const job = delegatedJobs.find((j) => j.jobId === data?.jobId);
+      if (!job) return;
       dropJob(data.jobId);
       if (data.status === 'ready') onPointerSheetReady?.();
-      else if (data.status === 'failed') toast.error('Sheet render finished but the sheet could not be saved');
+      else if (data.status === 'failed') toast.error(`${job.label} render finished but the sheet could not be saved`);
     };
     socket.on(SHEET_EVENT, onChanged);
     return () => { socket.off(SHEET_EVENT, onChanged); };
-  }, [delegatedKey, dropJob, onPointerSheetReady]);
+  }, [jobs, dropJob, onPointerSheetReady]);
 
   const handleFilename = useCallback((job, filename) => {
     if (!filename || job.delegated) return;
