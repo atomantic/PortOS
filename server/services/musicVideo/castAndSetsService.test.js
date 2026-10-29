@@ -117,6 +117,9 @@ async function until(check, label, diagnostics) {
   }
 }
 
+// Reference images the director or Casting holds; a missing file is skipped at enqueue.
+const onDisk = (...names) => names.forEach((name) => writeFileSync(join(IMAGES(), name), PNG));
+
 /** Land every queued job whose key is in `keys` (all when omitted), as the image hook does. */
 async function land(projectId, keys = null) {
   const pending = jobs.filter((j) => j.params.musicVideo.projectId === projectId && !j.landed && (!keys || keys.includes(keyOf(j))));
@@ -1081,6 +1084,7 @@ describe('Cast & Sets per-item actions', () => {
 
 
 it('conditions the character, expressions and looks sheets on the director\'s own character references only', async () => {
+  onDisk('upload-face.png', 'rendered-face.png', 'board-face.png', 'pinterest-0123456789abcdef.jpg', 'old-sheet.png', 'spare-face.png');
   const project = await seed({ visualSpec: { moodBoardId: 'mb-1', references: [
     { id: 'own-upload', imageId: 'upload-face.png', role: 'character', condition: true },
     { id: 'own-render', imageId: 'rendered-face.png', role: 'character', condition: true },
@@ -1101,6 +1105,7 @@ it('conditions the character, expressions and looks sheets on the director\'s ow
 });
 
 it('keeps catalog-linked cast and places as fixed casting, conditioned on their images', async () => {
+  onDisk('keeper.png', 'mate.png', 'harbor.png', 'cliff.png');
   runPrompt.mockResolvedValue({ text: JSON.stringify({ ...DIRECTION, cast: [{ id: 'mate', name: 'Mate', role: 'deckhand', description: 'young', face: 'freckles', hair: 'red', wardrobe: 'peacoat' }] }) });
   const project = await seed({
     concept: { prompt: 'a vigil', subjects: [
@@ -1135,19 +1140,25 @@ it('keeps catalog-linked cast and places as fixed casting, conditioned on their 
 });
 
 it('conditions linked cast on their Casting images, not just a reference with their name', async () => {
+  onDisk('frank-portrait.png', 'frank-collage.png', 'nora-portrait.png', 'nora-at-7.png', 'old-frank.png', 'harbor-other.png');
   const records = {
     'cat-chr-frank': { id: 'cat-chr-frank', type: 'character', name: 'Frank', payload: { forms: [] } },
     'cat-chr-nora': { id: 'cat-chr-nora', type: 'character', name: 'Nora', payload: { forms: [{ id: 'form-young', label: 'Age 7', age: '7' }] } },
+    // Saved from another video's check-in, then linked here.
+    'cat-plc-mv-other': { id: 'cat-plc-mv-other', type: 'place', name: 'Harbor', payload: {} },
   };
   const media = {
     'cat-chr-frank': [
       { mediaKey: 'frank-portrait.png', kind: 'portrait' },
+      // Its file is gone: skipped rather than sent.
+      { mediaKey: 'frank-missing.png', kind: 'reference' },
       { mediaKey: 'frank-collage.png', kind: 'reference', library: { likeness: false } },
     ],
     'cat-chr-nora': [
       { mediaKey: 'nora-portrait.png', kind: 'portrait' },
       { mediaKey: 'nora-at-7.png', kind: 'reference', library: { variant: { formId: 'form-young' } } },
     ],
+    'cat-plc-mv-other': [{ mediaKey: 'harbor-other.png', kind: 'reference' }],
   };
   service.__setCastAndSetsDepsForTests(testDeps({ catalog: {
     getIngredient: async (id) => records[id] || null,
@@ -1165,6 +1176,7 @@ it('conditions linked cast on their Casting images, not just a reference with th
       { id: 'cs-protagonist', kind: 'character', name: 'Nora (17)', role: 'protagonist', ingredientId: 'cat-chr-nora' },
       { id: 'mvc-frank', kind: 'character', name: 'Frank', role: 'supporting', ingredientId: 'cat-chr-frank' },
       { id: 'mvc-nora-7', kind: 'character', name: 'Nora (7)', ingredientId: 'cat-chr-nora', castForm: { id: 'form-young', label: 'Age 7', age: 7 } },
+      { id: 'cs-set-harbor', kind: 'place', name: 'Harbor', ingredientId: 'cat-plc-mv-other' },
     ] },
     visualSpec: { references: [{ id: 'mvr-pull-1', imageId: 'old-frank.png', role: 'character', label: 'Frank', condition: false }] },
   });
@@ -1175,6 +1187,7 @@ it('conditions linked cast on their Casting images, not just a reference with th
   const refs = (key) => job(key).params.referenceImagePaths?.map((p) => p.split(/[\\/]/).pop());
   expect(refs('character')).toEqual(['nora-portrait.png']);
   expect(refs('cast:frank')).toEqual(['frank-portrait.png']);
+  expect(refs('set:harbor')).toEqual(['harbor-other.png']);
   // An age sheet: the canonical sheet first, then that age's own Casting image,
   // whether a subject linked at that age is bound to it or not.
   expect(refs('form:seven')).toEqual([`${job('character').id}.png`, 'nora-at-7.png']);
@@ -1182,6 +1195,7 @@ it('conditions linked cast on their Casting images, not just a reference with th
 });
 
 it('grounds an age form and its test frames on the catalog reference selected for that age', async () => {
+  onDisk('keeper.png', 'keeper-7.png');
   runPrompt.mockResolvedValue({ text: JSON.stringify({ ...DIRECTION,
     protagonist: { ...DIRECTION.protagonist, forms: [
       { id: 'age-7', label: 'Age 7', age: '7', description: 'a small girl with the same eyes', hair: 'pigtails', wardrobe: 'a plaid dress', subjectId: 'mvc-2' },

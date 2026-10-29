@@ -10,12 +10,12 @@
 // Catalog ids are deterministic per (project, subject), like the universe canon
 // promotion, so two machines saving the same synced video converge on one row.
 
-import { createHash, randomUUID } from 'crypto';
+import { randomUUID } from 'crypto';
 import { isFileBackend } from '../../lib/pgFileFacade.js';
 import { trimTo } from '../../lib/textUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { CAST_SETS_SUBJECT_PREFIX } from './castAndSetsPlan.js';
-import { leadingAge, subjectNameParts } from './castAndSetsDirection.js';
+import { leadingAge, musicVideoCastIngredientId, subjectNameParts } from './castAndSetsDirection.js';
 
 const TYPE_PREFIX = { character: 'chr', place: 'plc', object: 'obj' };
 const PRIMARY_KEY = { character: 'physicalDescription', place: 'description', object: 'description' };
@@ -23,11 +23,6 @@ const UNIVERSE_FIELD = { character: 'characters', place: 'places', object: 'obje
 const REFERENCE_ROLE = { character: 'character', place: 'set', object: 'prop' };
 const MAX_VIDEO_SUBJECTS = 24;
 const SUBJECT_DESCRIPTION_MAX = 1000;
-
-function musicVideoCastIngredientId(projectId, subject) {
-  const seed = `music-video:${projectId}:${subject.kind}:${subject.id}`;
-  return `cat-${TYPE_PREFIX[subject.kind]}-mv-${createHash('sha256').update(seed).digest('hex').slice(0, 32)}`;
-}
 
 // The Cast & Sets image behind each check-in subject: the protagonist's
 // character sheet, a supporting cast sheet, or a set plate.

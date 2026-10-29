@@ -343,9 +343,10 @@ function referencePaths(stage, item) {
     const path = id ? resolveGalleryImage(id, { mustExist: false }) : null;
     if (path) paths.push(path);
   }
-  // Casting images can live in the gallery or in image-refs uploads.
+  // Casting images can live in the gallery or in image-refs uploads; one
+  // whose file is gone is skipped so the next reference takes its slot.
   for (const id of item.refImages || []) {
-    const path = resolveGalleryImage(id) || resolveImageRef(id) || resolveGalleryImage(id, { mustExist: false });
+    const path = resolveGalleryImage(id) || resolveImageRef(id);
     if (path && !paths.includes(path)) paths.push(path);
   }
   return paths.slice(0, 4);

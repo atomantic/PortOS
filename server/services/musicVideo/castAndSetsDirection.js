@@ -38,6 +38,7 @@ import { musicVideoAllowsMedia } from '../../lib/musicVideoMediaPolicy.js';
  * empty value is an intentional clear (for the optional fields that allow it).
  */
 
+import { createHash } from 'crypto';
 import { z } from 'zod';
 import { ServerError } from '../../lib/errorHandler.js';
 import { extractJson } from '../../lib/jsonExtract.js';
@@ -154,8 +155,17 @@ export function moodBoardImageList(board, resolveItem) {
 }
 
 export const CAST_SETS_SUBJECT_PREFIX = 'cs-';
-// The deterministic record approval saves a check-in subject to (catalogCast.js).
-const CHECKIN_OWN_RECORD = /^cat-[a-z]{3}-mv-/;
+const CATALOG_TYPE_PREFIX = { character: 'chr', place: 'plc', object: 'obj' };
+
+/**
+ * The catalog record a music video subject is saved to (catalogCast.js):
+ * deterministic per (project, subject), like the universe canon promotion, so
+ * two machines saving the same synced video converge on one row.
+ */
+export function musicVideoCastIngredientId(projectId, subject) {
+  const seed = `music-video:${projectId}:${subject.kind}:${subject.id}`;
+  return `cat-${CATALOG_TYPE_PREFIX[subject.kind]}-mv-${createHash('sha256').update(seed).digest('hex').slice(0, 32)}`;
+}
 
 // The first number in a free-text age ("17", "about 60"), or null.
 export const leadingAge = (value) => {
@@ -185,7 +195,7 @@ export function fixedCasting(project) {
   const refs = project?.visualSpec?.references || [];
   return (project?.concept?.subjects || [])
     .filter((s) => s?.ingredientId && s.name && (s.kind === 'character' || s.kind === 'place')
-      && !(String(s.id || '').startsWith(CAST_SETS_SUBJECT_PREFIX) && CHECKIN_OWN_RECORD.test(s.ingredientId)))
+      && !(String(s.id || '').startsWith(CAST_SETS_SUBJECT_PREFIX) && s.ingredientId === musicVideoCastIngredientId(project.id, s)))
     .map((s) => {
       const role = s.kind === 'place' ? 'set' : 'character';
       const name = s.name.trim().toLowerCase();
