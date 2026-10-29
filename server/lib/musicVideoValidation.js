@@ -1389,6 +1389,8 @@ export const musicVideoCastAndSetsDirectionEditSchema = z.object({
       wardrobe: castSetsText(1000).optional(),
       // The fixed-casting subject whose reference grounds this age (null clears).
       subjectId: z.string().max(64).nullable().optional(),
+      // Echoed back from the saved form; the server re-stamps it from the subject.
+      subjectName: z.string().max(120).optional(),
     }).strict()).max(3).optional(),
   }).strict().optional(),
   looks: z.array(z.object({

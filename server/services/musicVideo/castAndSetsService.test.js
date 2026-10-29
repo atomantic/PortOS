@@ -1164,7 +1164,7 @@ it('grounds an age form and its test frames on the catalog reference selected fo
   const png = (key) => `${job(key).id}.png`;
   let saved = await current(project.id);
   // Only a subject the director cast from the catalog can be bound; a test at an unknown age is dropped.
-  expect(saved.castAndSets.direction.protagonist.forms.map((f) => f.subjectId)).toEqual(['mvc-2', undefined]);
+  expect(saved.castAndSets.direction.protagonist.forms.map((f) => [f.subjectId, f.subjectName])).toEqual([['mvc-2', 'Keeper (Age 7)'], [undefined, undefined]]);
   expect(saved.castAndSets.direction.tests.map((t) => t.formId)).toEqual([undefined, 'age-7']);
   expect(refs('character')).toEqual(['keeper.png']);
   expect(refs('form:age-7')).toEqual([png('character'), 'keeper-7.png']);
@@ -1204,6 +1204,9 @@ it('grounds an age form and its test frames on the catalog reference selected fo
   expect(next['form:age-7'].refImages).toBeUndefined();
   expect(next.character.refImages).toEqual(['keeper.png']);
   expect(affectedImageKeys(saved.castAndSets.plan, next).sort()).toEqual(['form:age-7', 'test:1', 'test:2']);
+  // Removed outright, its still-labeled reference stays off the present-day sheet too.
+  const removed = { ...saved, concept: { ...saved.concept, subjects: saved.concept.subjects.filter((s) => s.id !== 'mvc-2') } };
+  expect(buildCastAndSetsImagePlan(removed, saved.castAndSets.direction).character.refImages).toEqual(['keeper.png']);
 });
 
 it('keeps people out of set plates: no mood board person in the look, no character action in a set', async () => {

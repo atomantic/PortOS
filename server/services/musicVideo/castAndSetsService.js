@@ -240,7 +240,7 @@ async function runDirection(projectId, { providerId, model, effort, notes = [], 
   const sections = songSections(project);
   const merged = mergeCastAndSetsDirection(notes.length ? previous : null, parsed, { sections, medium });
   if (merged.missing.length) return fail(projectId, `The creative direction answer is missing: ${merged.missing.join(', ')}`);
-  const direction = withoutUnknownFormSubjects(project, merged.direction, notes.length ? previous : null);
+  const direction = withCheckedFormSubjects(project, merged.direction, notes.length ? previous : null);
   // The look every image prompt carries. While the director's sheet feedback
   // stands, the look line rewritten to agree with it wins; otherwise the
   // director's palette/light/texture line, else the project's visual style.
@@ -306,16 +306,26 @@ function newUnknownFormSubjects(project, direction, previous) {
   return (direction?.protagonist?.forms || []).filter((f) => f.subjectId && f.subjectId !== before.get(f.id) && !known.has(f.subjectId));
 }
 
-// A provider answer can only bind a form to a subject the director cast.
-function withoutUnknownFormSubjects(project, direction, previous) {
+/**
+ * Bind forms only to subjects the director cast: a provider's new binding to
+ * any other id is dropped (a director edit is refused before this runs), and
+ * each binding to a known subject records that subject's name, so its
+ * reference can still be kept off the present-day sheet if the subject is
+ * later removed from the video.
+ */
+function withCheckedFormSubjects(project, direction, previous) {
+  const forms = direction?.protagonist?.forms;
+  if (!forms?.length) return direction;
   const unknown = new Set(newUnknownFormSubjects(project, direction, previous).map((f) => f.id));
-  if (!unknown.size) return direction;
-  const forms = direction.protagonist.forms.map((f) => {
-    if (!unknown.has(f.id)) return f;
-    const { subjectId: _subjectId, ...rest } = f;
-    return rest;
+  const names = new Map(formSubjects(project).map((s) => [s.id, s.name]));
+  const checked = forms.map((f) => {
+    if (!f.subjectId) return f;
+    const { subjectId, subjectName, ...rest } = f;
+    if (unknown.has(f.id)) return rest;
+    const name = names.get(subjectId) || subjectName;
+    return { ...rest, subjectId, ...(name ? { subjectName: name } : {}) };
   });
-  return { ...direction, protagonist: { ...direction.protagonist, forms } };
+  return { ...direction, protagonist: { ...direction.protagonist, forms: checked } };
 }
 
 const keyNotesText = (keyNotes = {}) => Object.fromEntries(Object.entries(keyNotes).map(([k, list]) => [k, list.join('; ')]));
@@ -859,7 +869,7 @@ export async function editCastAndSetsDirection(projectId, edits) {
     changed = edited.changed;
     const notesApplied = [{ id: null, target: 'direction', text: `Edited by the director: ${changed.join(', ')}` }];
     const revised = reviseCastAndSetsOnProject(current, { processId: PROCESS_ID, notesApplied, redirect: false });
-    const next = { ...revised.project, castAndSets: { ...revised.stage, direction: edited.direction } };
+    const next = { ...revised.project, castAndSets: { ...revised.stage, direction: withCheckedFormSubjects(current, edited.direction, direction) } };
     return { project: next, stage: next.castAndSets };
   });
   console.log(`🎭 Music Video Cast & Sets ${short(projectId)} direction edited r${out.stage.revision} (${changed.length} field(s))`);

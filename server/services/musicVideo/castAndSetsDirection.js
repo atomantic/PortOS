@@ -613,9 +613,12 @@ function normalizeForms(forms, previous = []) {
       let id = slug(f.id) || slug(f.label) || slug(f.age && `age-${f.age}`) || `form-${i + 1}`;
       while (seen.has(id)) id = `${id}-${i + 1}`;
       seen.add(id);
-      const subjectId = hasOwn(f, 'subjectId') ? f.subjectId : previous.find((p) => p?.id === id)?.subjectId;
+      const prior = previous.find((p) => p?.id === id);
+      const subjectId = String((hasOwn(f, 'subjectId') ? f.subjectId : prior?.subjectId) || '').trim().slice(0, 64);
+      // The bound subject's name (stamped by the service), kept while the binding is.
+      const subjectName = subjectId && String((subjectId === prior?.subjectId && prior?.subjectName) || f.subjectName || '').trim().slice(0, 120);
       return { id, label: f.label || `Age ${f.age}`, age: f.age || '', description: f.description, hair: f.hair || '', wardrobe: f.wardrobe || '',
-        ...(typeof subjectId === 'string' && subjectId.trim() ? { subjectId: subjectId.trim().slice(0, 64) } : {}) };
+        ...(subjectId ? { subjectId } : {}), ...(subjectName ? { subjectName } : {}) };
     });
 }
 

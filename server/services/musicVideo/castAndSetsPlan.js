@@ -82,16 +82,17 @@ function formBindings(project, forms) {
   const subjects = formSubjects(project);
   return new Map(forms.filter((f) => f.subjectId).map((f) => {
     const subject = subjects.find((s) => s.id === f.subjectId);
-    if (!subject) return [f.id, { subjectId: f.subjectId, missing: 'subject', reserved: unlinkedSubjectImage(project, f.subjectId) }];
+    if (!subject) return [f.id, { subjectId: f.subjectId, missing: 'subject', reserved: unlinkedSubjectImage(project, f) }];
     return [f.id, subject.imageId ? { subjectId: f.subjectId, imageId: subject.imageId } : { subjectId: f.subjectId, missing: 'image' }];
   }));
 }
 
-// The reference still labeled for a bound subject that was since unlinked: it
-// shows that other age, so it stays off the present-day sheet too.
-function unlinkedSubjectImage(project, subjectId) {
-  const subject = (project?.concept?.subjects || []).find((s) => s?.id === subjectId && s.kind === 'character');
-  const name = String(subject?.name || '').trim().toLowerCase();
+// The reference still labeled for a bound subject that was since unlinked or
+// removed (by the name recorded on the form): it shows that other age, so it
+// stays off the present-day sheet too.
+function unlinkedSubjectImage(project, form) {
+  const subject = (project?.concept?.subjects || []).find((s) => s?.id === form.subjectId && s.kind === 'character');
+  const name = String(subject?.name || form.subjectName || '').trim().toLowerCase();
   if (!name) return null;
   return (project?.visualSpec?.references || []).find((r) => r?.imageId && r.role === 'character' && String(r.label || '').trim().toLowerCase() === name)?.imageId || null;
 }
