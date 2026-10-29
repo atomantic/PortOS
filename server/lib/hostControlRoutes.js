@@ -745,6 +745,11 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/video-gen/last-frame/:id',
   // Upscale (LTX subprocess / ffmpeg) and stitch (ffmpeg) run on the host (#11076).
   'POST /api/video-gen/upscale/:id',
+  'POST /api/video-gen/upscale/:id/topaz/quote',
+  'POST /api/video-gen/upscale/:id/topaz',
+  'GET /api/video-gen/upscale/topaz/jobs/:jobId/status',
+  'POST /api/video-gen/upscale/topaz/jobs/:jobId/cancel',
+  'POST /api/video-gen/upscale/topaz/jobs/:jobId/recover',
   'POST /api/video-gen/stitch',
   // Start trim probes/transcodes a new gallery clip with ffprobe/ffmpeg (#11418).
   'POST /api/video-gen/history/:id/trim-start',

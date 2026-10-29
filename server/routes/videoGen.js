@@ -60,6 +60,8 @@ import {
 // re-declaring it just so this file's route schemas can be built.
 import { UPSCALE_METHODS, DEFAULT_UPSCALE_METHOD } from '../services/videoGen/upscalePlan.js';
 import { enqueueLtxUpscale } from '../services/videoGen/upscaleJob.js';
+import { quoteTopaz } from '../services/videoGen/topazQuote.js';
+import { assertNoPendingTopaz, enqueueTopazUpscale, reconcileTopazStatus, recoverTopazResult } from '../services/videoGen/topazJob.js';
 import { enqueueStitch } from '../services/videoGen/stitchJob.js';
 import { trimHistoryItemStart } from '../services/videoGen/trimStart.js';
 import { cleanupMultipartTemp } from '../services/videoGen/prepareParams.js';
@@ -1370,6 +1372,36 @@ router.post('/last-frame/:id', asyncHandler(async (req, res) => {
 const upscaleMethodSchema = z.object({
   method: z.enum(UPSCALE_METHODS).default(DEFAULT_UPSCALE_METHOD),
 });
+
+router.post('/upscale/:id/topaz/quote', asyncHandler(async (req, res) => {
+  const parsed = historyIdSchema.safeParse(req.params.id);
+  if (!parsed.success) failValidation(parsed);
+  const body = validateRequest(z.object({ model: z.enum(['proteus', 'starlight']).default('proteus') }), req.body ?? {});
+  assertNoPendingTopaz(parsed.data);
+  res.json({ ok: true, quote: await quoteTopaz(parsed.data, body.model) });
+}));
+
+router.get('/upscale/topaz/jobs/:jobId/status', asyncHandler(async (req, res) => {
+  const { jobId } = validateRequest(z.object({ jobId: z.string().uuid() }), req.params);
+  res.json({ ok: true, ...await reconcileTopazStatus(jobId) });
+}));
+
+router.post('/upscale/topaz/jobs/:jobId/cancel', asyncHandler(async (req, res) => {
+  const { jobId } = validateRequest(z.object({ jobId: z.string().uuid() }), req.params);
+  res.json({ ok: true, ...await reconcileTopazStatus(jobId, { cancelRemote: true }) });
+}));
+
+router.post('/upscale/topaz/jobs/:jobId/recover', asyncHandler(async (req, res) => {
+  const { jobId } = validateRequest(z.object({ jobId: z.string().uuid() }), req.params);
+  res.json({ ok: true, job: await recoverTopazResult(jobId) });
+}));
+
+router.post('/upscale/:id/topaz', asyncHandler(async (req, res) => {
+  const parsed = historyIdSchema.safeParse(req.params.id);
+  if (!parsed.success) failValidation(parsed);
+  const body = validateRequest(z.object({ token: z.string().uuid() }), req.body ?? {});
+  res.json({ ok: true, job: await enqueueTopazUpscale(parsed.data, body.token) });
+}));
 
 // What the user must see BEFORE submitting (#6509): source geometry, the target
 // the method would produce, the padding the model grid needs, and whether this

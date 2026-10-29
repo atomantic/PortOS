@@ -1,12 +1,14 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import VideoUpscaleDrawer from './VideoUpscaleDrawer';
-import { upscaleVideo, getUpscalePlan, upscaleAdapterDownloadUrl } from '../../services/apiImageVideo';
+import { upscaleVideo, getUpscalePlan, upscaleAdapterDownloadUrl, quoteTopazUpscale, startTopazUpscale } from '../../services/apiImageVideo';
 
 vi.mock('../../services/apiImageVideo', () => ({
   upscaleVideo: vi.fn(),
   getUpscalePlan: vi.fn(),
   upscaleAdapterDownloadUrl: vi.fn(() => null),
+  quoteTopazUpscale: vi.fn(),
+  startTopazUpscale: vi.fn(),
 }));
 
 vi.mock('../ui/Toast', () => ({
@@ -73,6 +75,19 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('VideoUpscaleDrawer', () => {
+  it('requires an explicit estimate and start before submitting Topaz', async () => {
+    quoteTopazUpscale.mockResolvedValue({ quote: { token: 'quote-1', source: { resolution: { width: 640, height: 480 } }, padding: { width: 864, height: 486 }, target: { width: 1920, height: 1080 }, credits: [8, 9] } });
+    startTopazUpscale.mockResolvedValue({ job: { jobId: 'job-1' } });
+    render(<VideoUpscaleDrawer item={ITEM} onClose={vi.fn()} onUpscaled={vi.fn()} />);
+    fireEvent.click(screen.getByLabelText(/Topaz Labs cloud/));
+    expect(screen.getByRole('button', { name: 'Start Topaz upscale' })).toBeDisabled();
+    expect(quoteTopazUpscale).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Get free estimate' }));
+    expect(await screen.findByText(/Estimated 8–9 credits/)).toBeInTheDocument();
+    expect(startTopazUpscale).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Start Topaz upscale' }));
+    await waitFor(() => expect(startTopazUpscale).toHaveBeenCalledWith('video-1', 'quote-1', { silent: true }));
+  });
   it('downloads the adapter through POST and allows an explicit retry after a dropped stream', async () => {
     getUpscalePlan.mockResolvedValue({ plan: missingAdapterPlan() });
     upscaleAdapterDownloadUrl.mockReturnValue('/api/video-gen/ic-loras/pixel-upscale/download');

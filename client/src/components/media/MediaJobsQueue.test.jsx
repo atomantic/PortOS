@@ -23,8 +23,14 @@ vi.mock('../../services/apiMediaJobs.js', () => ({
 }));
 
 const getVideoGenStatus = vi.fn();
+const getTopazJobStatus = vi.fn();
+const cancelTopazRemoteJob = vi.fn();
 vi.mock('../../services/apiImageVideo.js', () => ({
   getVideoGenStatus: (...a) => getVideoGenStatus(...a),
+  getVideoHistoryItem: vi.fn(async () => ({ filename: 'source.mp4' })),
+  getTopazJobStatus: (...a) => getTopazJobStatus(...a),
+  cancelTopazRemoteJob: (...a) => cancelTopazRemoteJob(...a),
+  recoverTopazJob: vi.fn(),
 }));
 const listLorasFull = vi.fn();
 vi.mock('../../services/api', () => ({
@@ -81,6 +87,17 @@ beforeEach(() => {
   getVideoGenStatus.mockResolvedValue({ models: [] });
   listLorasFull.mockReset();
   listLorasFull.mockResolvedValue([]);
+});
+
+it('offers provider reconciliation for an uncertain Topaz job without a retry', async () => {
+  const user = userEvent.setup();
+  listQueueMediaJobs.mockResolvedValue([{ id: 'topazjob-1', kind: 'video-upscale', status: 'failed', error: 'Uncertain', params: { mode: 'topaz' }, result: { topazUncertain: true } }]);
+  getTopazJobStatus.mockResolvedValue({ requestId: 'request-1', status: 'processing' });
+  render(<MediaJobsQueue kind="video-upscale" />);
+  await user.click(await screen.findByRole('button', { name: /Show completed \/ failed \/ canceled/ }));
+  expect(screen.queryByRole('button', { name: /^Retry$/ })).toBeNull();
+  await user.click(screen.getByRole('button', { name: 'Check Topaz status' }));
+  expect(await screen.findByText('Topaz request request-1: processing')).toBeInTheDocument();
 });
 
 const failedCodexJob = {

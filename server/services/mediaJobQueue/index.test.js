@@ -86,6 +86,8 @@ const stubs = {
   hasSurvivingTrainer: vi.fn(async () => false),
   runVideoUpscale: vi.fn(() => new Promise(() => {})),
   cancelVideoUpscale: vi.fn(),
+  runTopazUpscale: vi.fn(() => new Promise(() => {})),
+  cancelTopazUpscale: vi.fn(() => true),
   runVideoStitch: vi.fn(() => new Promise(() => {})),
   cancelVideoStitch: vi.fn(),
   runSharingCopy: vi.fn(async () => ({})),
@@ -128,6 +130,12 @@ vi.mock('../superColliderRender.js', () => ({
 vi.mock('../videoGen/upscaleJob.js', () => ({
   runVideoUpscale: (...args) => stubs.runVideoUpscale(...args),
   cancel: (...args) => stubs.cancelVideoUpscale(...args),
+}));
+
+vi.mock('../videoGen/topazJob.js', () => ({
+  runVideoUpscale: (...args) => stubs.runTopazUpscale(...args),
+  cancel: (...args) => stubs.cancelTopazUpscale(...args),
+  cleanupPreparedTopaz: vi.fn(async () => {}),
 }));
 
 vi.mock('../videoGen/stitchJob.js', () => ({
@@ -257,6 +265,8 @@ beforeEach(async () => {
   stubs.runTraining.mockImplementation(() => new Promise(() => {}));
   stubs.hasSurvivingTrainer.mockResolvedValue(false);
   stubs.runVideoUpscale.mockImplementation(() => new Promise(() => {}));
+  stubs.runTopazUpscale.mockImplementation(() => new Promise(() => {}));
+  stubs.cancelTopazUpscale.mockReturnValue(true);
   stubs.runVideoStitch.mockImplementation(() => new Promise(() => {}));
   await importFresh();
 });
@@ -712,6 +722,20 @@ describe('mediaJobQueue', () => {
 
     it('reports the kind in queue capacity so it is never invisible', () => {
       expect(Object.keys(mediaJobQueue.getQueueCapacity().byKind)).toContain('video-upscale');
+    });
+
+    it('restores the same Topaz request and does not claim cancellation without provider confirmation', async () => {
+      const id = '00000000-0000-4000-8000-000000000099';
+      writeFileSync(join(tempDataDir, 'media-jobs.json'), JSON.stringify({ jobs: [{ id, kind: 'video-upscale', status: 'running', queuedAt: '2026-04-30T10:00:00Z', params: { mode: 'topaz', requestId: 'request-id' }, result: { topazPhase: 'accepting', topazUncertain: true } }] }));
+      await importFresh();
+      await mediaJobQueue.initMediaJobQueue();
+      await waitFor(() => stubs.runTopazUpscale.mock.calls.length === 1);
+      expect(stubs.runTopazUpscale).toHaveBeenCalledWith(expect.objectContaining({ jobId: id, requestId: 'request-id', topazRecovery: true }));
+      expect(mediaJobQueue.getJob(id).result).toMatchObject({ topazPhase: 'accepting', topazUncertain: true });
+      await mediaJobQueue.cancelJob(id);
+      videoGenEvents.emit('failed', { generationId: id, error: 'Cancellation unconfirmed', remoteCancellationConfirmed: false });
+      await waitFor(() => mediaJobQueue.getJob(id).status === 'failed');
+      expect(mediaJobQueue.getJob(id).result.topazUncertain).toBe(true);
     });
   });
 

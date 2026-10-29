@@ -317,6 +317,15 @@ export const upscaleVideo = (id, { method, ...options } = {}) => request(`/video
   ...(method != null ? { body: JSON.stringify({ method }) } : {}),
   ...options,
 });
+export const quoteTopazUpscale = (id, model, options = {}) => request(`/video-gen/upscale/${encodeURIComponent(id)}/topaz/quote`, {
+  method: 'POST', body: JSON.stringify({ model }), ...options,
+});
+export const startTopazUpscale = (id, token, options = {}) => request(`/video-gen/upscale/${encodeURIComponent(id)}/topaz`, {
+  method: 'POST', body: JSON.stringify({ token }), ...options,
+});
+export const getTopazJobStatus = (id, options = {}) => request(`/video-gen/upscale/topaz/jobs/${encodeURIComponent(id)}/status`, options);
+export const cancelTopazRemoteJob = (id, options = {}) => request(`/video-gen/upscale/topaz/jobs/${encodeURIComponent(id)}/cancel`, { method: 'POST', ...options });
+export const recoverTopazJob = (id, options = {}) => request(`/video-gen/upscale/topaz/jobs/${encodeURIComponent(id)}/recover`, { method: 'POST', ...options });
 // Read-only pre-submit disclosure (#6509): source geometry, target dimensions,
 // required padding, and runtime/adapter readiness for `method`. Never queues a
 // job or triggers a download. `silent` by default — the picker owns its own

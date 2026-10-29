@@ -102,6 +102,15 @@ describe('the server-owned namespace terminators', () => {
     expect(res.text).not.toContain('example-secret');
   });
 
+  it('never serves Topaz staging beneath the video mount', async () => {
+    const directory = join(tempRoot, 'videos', '.topaz-staging');
+    mkdirSync(directory, { recursive: true });
+    writeFileSync(join(directory, 'prepared.mp4'), 'private-staged-video');
+    const res = await request(app).get('/data/videos/.topaz-staging/prepared.mp4');
+    expect(res.status).toBe(404);
+    expect(res.text).not.toContain('private-staged-video');
+  });
+
   it('404s an extensionless /data path instead of answering with the SPA index', async () => {
     const res = await request(app).get('/data/image-to-3d/abc123/model');
     expect(res.status).toBe(404);

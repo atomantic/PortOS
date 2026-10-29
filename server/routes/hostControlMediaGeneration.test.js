@@ -30,6 +30,10 @@ const effects = vi.hoisted(() => ({
   filmLook: vi.fn(async () => ({ filename: 'example_look.png' })),
   lastFrame: vi.fn(async () => ({ filename: 'example-frame.png' })),
   lightRegen: vi.fn(async () => ({ filename: 'example_regen-light.png' })),
+  topazQuote: vi.fn(async () => ({ token: 'example' })),
+  topazStart: vi.fn(async () => ({ jobId: 'example-job' })),
+  topazStatus: vi.fn(async () => ({ status: 'processing' })),
+  topazRecover: vi.fn(async () => ({ jobId: 'example-job' })),
 }));
 vi.mock('../services/auth.js', () => ({
   isAuthEnabled: vi.fn(async () => auth.enabled),
@@ -116,6 +120,8 @@ vi.mock('../services/sprites/assetPrompt.js', () => ({}));
 vi.mock('../services/videoGen/runtimeInstaller.js', () => ({}));
 vi.mock('../services/videoGen/poster.js', () => ({}));
 vi.mock('../services/videoGen/upscaleJob.js', () => ({}));
+vi.mock('../services/videoGen/topazQuote.js', () => ({ quoteTopaz: effects.topazQuote }));
+vi.mock('../services/videoGen/topazJob.js', () => ({ assertNoPendingTopaz: () => {}, enqueueTopazUpscale: effects.topazStart, reconcileTopazStatus: effects.topazStatus, recoverTopazResult: effects.topazRecover }));
 vi.mock('../services/videoGen/prepareParams.js', () => ({ cleanupMultipartTemp: vi.fn() }));
 vi.mock('../services/videoGen/reactor.js', () => ({}));
 vi.mock('../services/videoGen/modelCache.js', () => ({}));
@@ -164,6 +170,11 @@ const operations = [
   ['post', '/api/image-gen/example.png/film-look', { look: { grain: 0.5 } }, effects.filmLook, 200],
   ['post', '/api/image-gen/example.png/regenerate', {}, effects.enqueue, 200],
   ['post', '/api/video-gen/last-frame/22222222-2222-4222-8222-222222222222', {}, effects.lastFrame, 200],
+  ['post', '/api/video-gen/upscale/22222222-2222-4222-8222-222222222222/topaz/quote', {}, effects.topazQuote, 200],
+  ['post', '/api/video-gen/upscale/22222222-2222-4222-8222-222222222222/topaz', { token: '33333333-3333-4333-8333-333333333333' }, effects.topazStart, 200],
+  ['get', '/api/video-gen/upscale/topaz/jobs/33333333-3333-4333-8333-333333333333/status', {}, effects.topazStatus, 200],
+  ['post', '/api/video-gen/upscale/topaz/jobs/33333333-3333-4333-8333-333333333333/cancel', {}, effects.topazStatus, 200],
+  ['post', '/api/video-gen/upscale/topaz/jobs/33333333-3333-4333-8333-333333333333/recover', {}, effects.topazRecover, 200],
   ['put', `/api/sprites/${id}/publish-binding`, { binding: null }, effects.binding, 200],
   ['post', `/api/sprites/${id}/atlas/publish`, {}, effects.publish, 200],
 ];
@@ -184,7 +195,7 @@ const appFor = (address = '192.0.2.10') => {
 const call = (app, [method, path, body], headers = {}) => {
   const pending = request(app)[method](path);
   for (const [name, value] of Object.entries(headers)) pending.set(name, value);
-  return pending.send(body);
+  return method === 'get' ? pending : pending.send(body);
 };
 const expectNoEffects = () => {
   for (const effect of Object.values(effects)) expect(effect).not.toHaveBeenCalled();

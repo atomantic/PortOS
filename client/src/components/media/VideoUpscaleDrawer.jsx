@@ -19,7 +19,7 @@ import toast from '../ui/Toast';
 import { formatBytes } from '../../utils/formatters';
 import { isHardwareAvailable, hardwareUnavailableReason } from '../../utils/systemCapabilities';
 import { useSseProgress } from '../../hooks/useSseProgress';
-import { upscaleVideo, getUpscalePlan, upscaleAdapterDownloadUrl } from '../../services/apiImageVideo';
+import { upscaleVideo, getUpscalePlan, upscaleAdapterDownloadUrl, quoteTopazUpscale, startTopazUpscale } from '../../services/apiImageVideo';
 
 export default function VideoUpscaleDrawer({ item, onClose, onUpscaled }) {
   const open = !!item;
@@ -30,6 +30,10 @@ export default function VideoUpscaleDrawer({ item, onClose, onUpscaled }) {
   const [planLoading, setPlanLoading] = useState(false);
   const [planError, setPlanError] = useState(null);
   const [submitting, setSubmitting] = useState(false);
+  const [topazModel, setTopazModel] = useState('proteus');
+  const [quote, setQuote] = useState(null);
+  const [quoteError, setQuoteError] = useState(null);
+  const [quoting, setQuoting] = useState(false);
   const [downloadItemId, setDownloadItemId] = useState(null);
   const downloading = open && downloadItemId === itemId;
   const planRequestRef = useRef(0);
@@ -42,6 +46,10 @@ export default function VideoUpscaleDrawer({ item, onClose, onUpscaled }) {
     setMethod('lanczos');
     setPlan(null);
     setPlanError(null);
+    setTopazModel('proteus');
+    setQuote(null);
+    setQuoteError(null);
+    setQuoting(false);
     setDownloadItemId(null);
   }, [open, itemId]);
 
@@ -123,8 +131,10 @@ export default function VideoUpscaleDrawer({ item, onClose, onUpscaled }) {
     if (!itemId || submitting) return;
     if (method === 'ltx' && !generativeReady) return;
     setSubmitting(true);
-    toast.loading(method === 'ltx' ? 'Upscaling 2× (generative)…' : 'Upscaling 2× — typically 10-30s…');
-    const result = await upscaleVideo(itemId, { method, silent: true }).catch((err) => {
+    toast.loading(method === 'topaz' ? 'Queueing Topaz upscale…' : method === 'ltx' ? 'Upscaling 2× (generative)…' : 'Upscaling 2× — typically 10-30s…');
+    const result = await (method === 'topaz'
+      ? startTopazUpscale(itemId, quote?.token, { silent: true })
+      : upscaleVideo(itemId, { method, silent: true })).catch((err) => {
       toast.error(err.message || 'Upscale failed');
       return null;
     });
@@ -143,7 +153,18 @@ export default function VideoUpscaleDrawer({ item, onClose, onUpscaled }) {
       toast.success('Upscaled 2×');
       onClose();
     }
-  }, [itemId, method, submitting, generativeReady, onUpscaled, onClose]);
+  }, [itemId, method, quote, submitting, generativeReady, onUpscaled, onClose]);
+
+  const getQuote = async () => {
+    setQuoting(true);
+    setQuote(null);
+    setQuoteError(null);
+    const requestId = ++planRequestRef.current;
+    await quoteTopazUpscale(itemId, topazModel, { silent: true })
+      .then(result => { if (requestId === planRequestRef.current) setQuote(result.quote); })
+      .catch(error => { if (requestId === planRequestRef.current) setQuoteError(error.message || 'Could not get a Topaz estimate'); });
+    if (requestId === planRequestRef.current) setQuoting(false);
+  };
 
   const dlFrame = dl.latest;
   const dlPct = typeof dlFrame?.progress === 'number' ? Math.round(dlFrame.progress * 100) : null;
@@ -221,7 +242,30 @@ export default function VideoUpscaleDrawer({ item, onClose, onUpscaled }) {
               )}
             </span>
           </label>
+
+          <label htmlFor="upscale-method-topaz" className="flex items-start gap-2 p-2 border border-port-border rounded cursor-pointer hover:border-port-accent/60">
+            <input type="radio" id="upscale-method-topaz" name="upscale-method" value="topaz" checked={method === 'topaz'} onChange={() => setMethod('topaz')} className="mt-0.5" />
+            <span><span className="block text-sm text-white">Topaz Labs cloud (paid)</span>
+              <span className="block text-[11px] text-gray-500">Sends this video to Topaz after you start the job.</span></span>
+          </label>
         </fieldset>
+
+        {method === 'topaz' && (
+          <div className="p-2 border border-port-border rounded space-y-2 text-xs text-gray-400">
+            <label htmlFor="topaz-model" className="block">Model</label>
+            <select id="topaz-model" value={topazModel} onChange={event => { setTopazModel(event.target.value); setQuote(null); setQuoteError(null); ++planRequestRef.current; setQuoting(false); }} className="bg-port-bg border border-port-border rounded p-1">
+              <option value="proteus">Proteus (precision)</option>
+              <option value="starlight">Starlight Fast 2 (generative)</option>
+            </select>
+            {topazModel === 'starlight' && <p className="text-port-warning">Generative enhancement can change details in the video.</p>}
+            <p>Delivery target: 1920 × 1080. The full frame is preserved with black padding when needed. The original master stays unchanged.</p>
+            <p>Topaz reserves credits when the job starts and says it automatically reloads credits at the plan rate when they run out. Your balance, dollar cost and reload charge are unknown here. Review <a className="underline text-port-accent" href="https://www.topazlabs.com/api" target="_blank" rel="noreferrer">Topaz pricing and terms</a>.</p>
+            <p>Configure your key in Settings → Credentials. Canceling locally may not stop remote processing or charges until Topaz confirms cancellation.</p>
+            <button type="button" onClick={getQuote} disabled={quoting} className="border border-port-border rounded px-2 py-1.5 disabled:opacity-50">{quoting ? 'Getting estimate…' : 'Get free estimate'}</button>
+            {quoteError && <p role="alert" className="text-port-error">{quoteError}</p>}
+            {quote && <p role="status">Source {quote.source.resolution.width} × {quote.source.resolution.height}; padded to {quote.padding.width} × {quote.padding.height}; target {quote.target.width} × {quote.target.height}. Estimated {quote.credits[0]}–{quote.credits[1]} credits.</p>}
+          </div>
+        )}
 
         {method === 'ltx' && plan && (
           <div className="p-2 border border-port-border rounded space-y-1 text-[11px] text-gray-400">
@@ -258,11 +302,11 @@ export default function VideoUpscaleDrawer({ item, onClose, onUpscaled }) {
           <button
             type="button"
             onClick={handleSubmit}
-            disabled={submitting || (method === 'ltx' && !generativeReady)}
+            disabled={submitting || (method === 'ltx' && !generativeReady) || (method === 'topaz' && (!quote || quoting))}
             className="px-3 py-1.5 text-xs rounded bg-port-accent text-white hover:bg-port-accent/80 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
           >
             {submitting && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-            Upscale 2×
+            {method === 'topaz' ? 'Start Topaz upscale' : 'Upscale 2×'}
           </button>
         </div>
       </div>

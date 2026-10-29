@@ -338,6 +338,9 @@ const retryBodySchema = z.object({
 router.post('/:id/retry', asyncHandler(async (req, res) => {
   const job = getJob(req.params.id);
   if (!job) throw new ServerError('Not found', { status: 404, code: 'NOT_FOUND' });
+  if (job.kind === 'video-upscale' && job.params?.mode === 'topaz') {
+    throw new ServerError('Request a new Topaz estimate before starting another job. Check the original provider request if its outcome was uncertain.', { status: 409, code: 'TOPAZ_REQUOTE_REQUIRED' });
+  }
   if (job.status === 'queued' || job.status === 'running') {
     throw new ServerError(
       `Job is still ${job.status} — cancel it before retrying`,
@@ -480,6 +483,7 @@ router.delete('/:id', asyncHandler(async (req, res) => {
       { status: 409, code: 'JOB_REMOTE_OUTCOME_UNCERTAIN' },
     );
   }
+  if (job.result?.topazUncertain === true) throw new ServerError('Check the Topaz request before deleting this job.', { status: 409, code: 'TOPAZ_PENDING' });
   const removed = removeArchivedJob(req.params.id);
   if (!removed) throw new ServerError('Not found', { status: 404, code: 'NOT_FOUND' });
   res.json({ ok: true });
