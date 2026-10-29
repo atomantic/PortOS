@@ -270,18 +270,27 @@ async function withoutBoardLook(project, direction) {
   return boardLook && direction.look === boardLook ? { ...direction, look: trimTo(project.concept?.style, 500) || '' } : direction;
 }
 
+/**
+ * The image plan `direction` gets from the project as it is now, with the
+ * linked Casting records' current images. A procedural project whose brief
+ * names no image tool is code-only: nothing is rendered, so no image backend
+ * is needed (or consulted).
+ */
+async function currentImagePlan(project, direction) {
+  const codeOnly = !musicVideoAllowsMedia(project, 'image') || direction.medium === 'procedural' && !castAndSetsAllowsImages(project);
+  if (codeOnly) return { codeOnly, plan: {} };
+  const { loadMusicVideoGreybox } = await import('./greyboxReferences.js');
+  const greyboxes = Object.fromEntries(await Promise.all((direction.sets || []).filter((s) => s.setReference?.greyboxShotId).map(async (set) => [set.id, await loadMusicVideoGreybox(project, { sceneId: `set:${set.id}`, setReference: set.setReference })])));
+  const catalogLikeness = await loadCastAndSetsCatalogLikeness(project, { catalog: deps.catalog });
+  return { codeOnly, plan: buildCastAndSetsImagePlan(project, direction, { revisionNotes: keyNotesText(project.castAndSets?.keyNotes), greyboxes, catalogLikeness }) };
+}
+
 /** (Re)build the plan from the stage's direction + accumulated per-image notes, then dispatch. */
 async function writePlan(projectId, { direction = null, forceKeys = [], changes = null, directedInputs = null } = {}) {
   const project = await requireProject(projectId);
   const stage = project.castAndSets;
   const nextDirection = await withoutBoardLook(project, direction || stage.direction);
-  // A procedural project whose brief names no image tool is code-only: nothing
-  // is rendered, so no image backend is needed (or consulted).
-  const codeOnly = !musicVideoAllowsMedia(project, 'image') || nextDirection.medium === 'procedural' && !castAndSetsAllowsImages(project);
-  const { loadMusicVideoGreybox } = await import('./greyboxReferences.js');
-  const greyboxes = Object.fromEntries(await Promise.all((codeOnly ? [] : nextDirection.sets || []).filter((s) => s.setReference?.greyboxShotId).map(async (set) => [set.id, await loadMusicVideoGreybox(project, { sceneId: `set:${set.id}`, setReference: set.setReference })])));
-  const catalogLikeness = codeOnly ? {} : await loadCastAndSetsCatalogLikeness(project, { catalog: deps.catalog });
-  const plan = codeOnly ? {} : buildCastAndSetsImagePlan(project, nextDirection, { revisionNotes: keyNotesText(stage.keyNotes), greyboxes, catalogLikeness });
+  const { codeOnly, plan } = await currentImagePlan(project, nextDirection);
   const renderKeys = affectedImageKeys(stage.plan || {}, plan, forceKeys);
   const settings = await deps.getSettings();
   const run = stage.productionRunId ? (project.productionRuns || []).find((r) => r.id === stage.productionRunId) : null;
@@ -938,6 +947,39 @@ export async function resumeCastAndSets(projectId, { providerId, model, effort }
     return advance(projectId);
   });
   return { project: out.project, stage: presentCastAndSets(out.stage, PROCESS_ID) };
+}
+
+/**
+ * What changed in the video's Casting since its idle sheet (in review or
+ * approved) was built: `{ images, cast }` or null. `images` are the sheet's
+ * images (`{ key, label }`) whose reference images now differ, from a Casting
+ * record's images changing or a subject being linked to (or unlinked from) a
+ * record the direction already casts; re-rendering those keys picks them up.
+ * `cast` names linked supporting characters the direction has no sheet for,
+ * which only a rebuild from the story adds. Sets are matched by image only:
+ * the direction may name a linked place's set differently.
+ */
+export async function getCastAndSetsCastingChanges(projectId) {
+  const project = await requireProject(projectId);
+  const stage = project.castAndSets;
+  if (!stage?.direction || !['review', 'approved'].includes(stage.status)) return { changes: null };
+  // Only reference images are compared, so the look line (withoutBoardLook) is not needed.
+  const direction = stage.direction;
+  const { plan } = await currentImagePlan(project, direction);
+  const before = stage.plan || {};
+  // Once approved, the sheet's own images are labeled references a name match
+  // can fall back to; they are this build's output, never a Casting change.
+  const own = new Set(Object.values(stage.images || {}).flatMap((img) => [img?.imageId, ...(img?.history || [])]).filter(Boolean));
+  const refs = (item) => (item?.refImages || []).filter((id) => !own.has(id)).join('|');
+  const images = Object.values(plan)
+    .filter((item) => before[item.key] && refs(before[item.key]) !== refs(item))
+    .map((item) => ({ key: item.key, label: item.label }));
+  const castKey = (name) => String(name || '').trim().toLowerCase();
+  const drawn = new Set([direction.protagonist?.name, ...(direction.cast || []).map((c) => c.name)].map(castKey));
+  const bound = new Set((direction.protagonist?.forms || []).map((f) => f.subjectId).filter(Boolean));
+  const cast = direction.medium === 'procedural' ? []
+    : fixedSupportingCast(project).filter((f) => !bound.has(f.id) && !drawn.has(castKey(f.name))).map((f) => f.name);
+  return { changes: images.length || cast.length ? { images, cast } : null };
 }
 
 /** The stage as the director sees it. */

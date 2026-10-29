@@ -230,6 +230,7 @@ import {
   skipCastAndSets,
   discardCastAndSets,
   getCastAndSets,
+  getCastAndSetsCastingChanges,
   presentProjectCastAndSets,
 } from '../services/musicVideo/castAndSetsService.js';
 import {
@@ -1583,6 +1584,11 @@ router.delete('/:id/dev-artifacts/:artifactId', asyncHandler(async (req, res) =>
 // production run the director started) begin work — nothing at boot does.
 router.get('/:id/cast-and-sets', asyncHandler(async (req, res) => {
   res.json(await getCastAndSets(req.params.id));
+}));
+
+// Read-only: what changed in the linked Casting records since the sheet was built.
+router.get('/:id/cast-and-sets/casting-changes', asyncHandler(async (req, res) => {
+  res.json(await getCastAndSetsCastingChanges(req.params.id));
 }));
 
 router.post('/:id/cast-and-sets', asyncHandler(async (req, res) => {

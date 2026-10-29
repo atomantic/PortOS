@@ -6,6 +6,7 @@ import ConfirmButtonPair from '../ui/ConfirmButtonPair.jsx';
 import LlmRouteNote from './LlmRouteNote.jsx';
 import Pill from '../ui/Pill.jsx';
 import { changedFieldsText, staleApprovalText } from '../../lib/musicVideoStages.js';
+import { formatCount } from '../../utils/formatters.js';
 import CastAndSetsDirectionEditor from './CastAndSetsDirectionEditor.jsx';
 import CastAndSetsFeedback from './CastAndSetsFeedback.jsx';
 import CastAndSetsReferenceProgress from './CastAndSetsReferenceProgress.jsx';
@@ -35,6 +36,47 @@ function statusLine(stage) {
   }
 }
 
+// The changed images plus every image conditioned on them: what a keyed regenerate renders.
+function withDependents(plan, keys) {
+  const out = new Set(keys);
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const item of Object.values(plan || {})) {
+      if (!out.has(item.key) && (item.deps || []).some((d) => out.has(d))) { out.add(item.key); grew = true; }
+    }
+  }
+  return out.size;
+}
+
+// A linked character with no sheet needs the direction revised (a note, so a
+// production run's check-in and standing feedback both carry over); changed
+// images only a re-render of those images and what depends on them.
+function CastingChangesNotice({ changes, plan, busy, rebuildOffered, onUpdate, onAddCast }) {
+  const images = changes.images || [];
+  const cast = changes.cast || [];
+  const lines = [
+    images.length > 0 && `New Casting images for ${changedFieldsText(images.map((i) => i.label))}.`,
+    cast.length > 0 && `${changedFieldsText(cast)} ${cast.length === 1 ? 'is' : 'are'} linked in Casting but ${cast.length === 1 ? 'has' : 'have'} no sheet yet.`,
+  ].filter(Boolean);
+  const note = `Add ${cast.join(', ')} to the cast from Casting, each with a cast sheet.`;
+  const renders = withDependents(plan, images.map((i) => i.key));
+  // Rebuild from story (offered above for the story) also casts them and re-renders with the new images.
+  const action = rebuildOffered ? null : cast.length
+    ? onAddCast && { label: `Add ${cast.length === 1 ? cast[0] : `${formatCount(cast.length)} cast`} to the sheet`, title: `Revises the direction with the note "${note}" and renders what changed`, onClick: () => onAddCast([{ text: note }]) }
+    : onUpdate && { label: `Update ${renders === 1 ? '1 image' : `${formatCount(renders)} images`}`, title: 'Re-renders the images whose Casting references changed, and the images built on them', onClick: () => onUpdate(images.map((i) => i.key)) };
+  return (
+    <div className="flex flex-wrap items-center gap-2 rounded border border-port-warning/60 p-2" role="status">
+      <p className="min-w-0 flex-1 text-xs text-port-warning">Casting changed since this sheet was built. {lines.join(' ')}</p>
+      {action && (
+        <button type="button" disabled={busy} onClick={action.onClick} title={action.title} className={`${buttonClass} border border-port-border`}>
+          <RotateCcw size={14} aria-hidden="true" /> {action.label}
+        </button>
+      )}
+    </div>
+  );
+}
+
 /**
  * The Cast & Sets check-in's state on the Autopilot card: progress while the
  * server works, "Waiting for your check-in" with the sheet one click away,
@@ -44,11 +86,15 @@ function statusLine(stage) {
  * readiness) says what changed and offers Keep approved beside each Revert,
  * right under that line (#10141). A sheet built before the director's latest
  * story or guides (`storyStale`) says so and offers Rebuild from story.
+ * Casting changes since the build (`castingChanges`, from
+ * useMusicVideoCastingChanges) are named too: new reference images offer
+ * Update to re-render those images and their dependents, a newly linked
+ * character with no sheet offers to add them through a direction note.
  * Each image card carries its own Regenerate / Edit / Remove while the stage
  * is idle, and Start over clears a check-in that has not been approved.
  * A sheet in review (or approved) takes plain-text feedback below the actions.
  */
-export default function CastAndSetsCheckin({ id, project, stale = null, storyStale = null, busy, onOpenSheet, onOpenPreview, onApprove, onRegenerate, onRegenerateImages, onEditDirection, onRefresh, onApplyFeedback, onRemoveFeedback, onResume, onRebuild, onReconfirm, onRevert, onSkip, onDiscard, onRebuildFromStory }) {
+export default function CastAndSetsCheckin({ id, project, stale = null, storyStale = null, castingChanges = null, busy, onOpenSheet, onOpenPreview, onApprove, onRegenerate, onRegenerateImages, onEditDirection, onRefresh, onApplyFeedback, onRemoveFeedback, onRegenerateWithNotes, onResume, onRebuild, onReconfirm, onRevert, onSkip, onDiscard, onRebuildFromStory }) {
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const greyboxPlaces = useMusicVideoGreyboxPlaces(project);
   const stage = project.castAndSets;
@@ -86,6 +132,10 @@ export default function CastAndSetsCheckin({ id, project, stale = null, storySta
             <RotateCcw size={14} aria-hidden="true" /> Rebuild from story
           </button>
         </div>
+      )}
+      {castingChanges && !working && (
+        <CastingChangesNotice changes={castingChanges} plan={stage.plan} busy={busy} rebuildOffered={!!storyStale}
+          onUpdate={onRegenerateImages} onAddCast={onRegenerateWithNotes} />
       )}
       {['review', 'approved'].includes(stage.status) && onEditDirection && (stage.direction?.sets || []).map((set) => (
         <div key={set.id} className="space-y-1">
