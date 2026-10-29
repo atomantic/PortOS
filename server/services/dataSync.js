@@ -39,7 +39,8 @@ import { mergeSeriesFromSync, listSeries } from './pipeline/series.js';
 import { mergeIssuesFromSync, listAllIssues } from './pipeline/issues.js';
 import { getPeers } from './instances.js';
 import { mutateVideoHistory, HISTORY_UNCHANGED } from './videoGen/history.js';
-import { markHosted } from './peerHostedMedia.js';
+import { markHosted, listHostedEntries } from './peerHostedMedia.js';
+import { authorizeRemoteVideoTombstone } from './videoTombstoneAuthorization.js';
 import { listMediaTombstones, mergeMediaTombstones } from './mediaTombstones.js';
 import { emitMediaHistoryChanged } from './peerSyncEventBus.js';
 import { referenceCollectionAssetManifest } from './sharing/peerSyncAssets.js';
@@ -950,8 +951,9 @@ async function applyVideoHistoryRemote(remoteData, source) {
   const incomingTombstones = Array.isArray(remoteData.tombstones) ? remoteData.tombstones : [];
   if (incomingRows.length === 0 && incomingTombstones.length === 0) return { applied: false, count: 0 };
 
-  // Tombstones merge first so the row merge below sees the full delete set.
-  const removedCount = await applyRemoteVideoTombstones(incomingTombstones);
+  // Tombstones merge first so the row merge below sees the full delete set;
+  // only the ones the sender is authorized for ever reach the store.
+  const removedCount = await applyRemoteVideoTombstones(await authorizedSnapshotTombstones(incomingTombstones, source));
   const { count } = await mergeVideoRows(incomingRows, source);
   const changedCount = count + removedCount;
   if (changedCount === 0) return { applied: false, count: 0 };
@@ -1046,9 +1048,27 @@ export async function mergeVideoRows(incomingRows, source) {
   return { count: changedIds.length, ids: changedIds };
 }
 
+// Snapshot tombstones pass the shared admission rule (videoTombstoneAuthorization.js)
+// against the sender's registry record; an unknown sender's are all refused.
+async function authorizedSnapshotTombstones(tombstones, source) {
+  if (tombstones.length === 0) return [];
+  const peer = source?.peerId
+    ? (await getPeers().catch(() => [])).find((p) => p.instanceId === source.peerId) ?? null
+    : null;
+  const local = await readJSONFile(VIDEO_HISTORY_FILE, [], { strict: true });
+  const rowsById = new Map((Array.isArray(local) ? local : []).filter(hasVideoRowId).map((r) => [r.id, r]));
+  const hostedIndex = await listHostedEntries();
+  const accepted = tombstones.filter((tombstone) => authorizeRemoteVideoTombstone({
+    peer, tombstone, localRow: rowsById.get(tombstone?.key) ?? null, hostedIndex, via: 'snapshot',
+  }).allowed);
+  const ignored = tombstones.length - accepted.length;
+  if (ignored > 0) console.log(`⏭️ VideoHistory snapshot from ${source?.peerId ?? 'unknown sender'}: ignored ${ignored} tombstone(s)`);
+  return accepted;
+}
+
 /**
- * Merge a remote video tombstone list and trash every local row (and its files)
- * it supersedes. Reusable by a future realtime delete path. Returns the number
+ * Merge an ALREADY AUTHORIZED video tombstone list (authorizeRemoteVideoTombstone)
+ * and trash every local row (and its files) it supersedes. Returns the number
  * of local rows removed. `fromRemoteTombstone` keeps deleteHistoryItem from
  * re-recording the tombstone or re-announcing the delete.
  */

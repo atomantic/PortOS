@@ -86,7 +86,12 @@ export async function deleteHistoryItem(id, { forgetInMusicVideos = true, fromRe
       .catch((err) => console.error(`❌ Media index video delete hook: ${err.message}`));
     // Music videos forget it too (their unused takes, marks and collection rows);
     // a batch delete from a video's asset manager forgets its whole batch at once.
-    if (forgetInMusicVideos) await import('../musicVideo/mediaPool.js').then((m) => m.forgetDeletedMusicVideoAssets([`video:${id}`]));
+    // Non-fatal like the index hook: the delete is committed and must still be announced.
+    if (forgetInMusicVideos) {
+      await import('../musicVideo/mediaPool.js')
+        .then((m) => m.forgetDeletedMusicVideoAssets([`video:${id}`]))
+        .catch((err) => console.error(`❌ Music video forget after video delete failed: ${err.message}`));
+    }
     console.log(`🗑️ Trashed video: ${item.filename}`);
     // Announce only the owner's own delete: a remote-tombstone delete was
     // already announced by the peer that recorded it.

@@ -9,9 +9,10 @@ vi.mock('../lib/fileUtils.js', async () => {
   const actual = await vi.importActual('../lib/fileUtils.js');
   return makeProxy(actual);
 });
+const registry = vi.hoisted(() => ({ peers: [] }));
 vi.mock('./instances.js', async () => {
   const actual = await vi.importActual('./instances.js');
-  return { ...actual, getPeers: async () => [] };
+  return { ...actual, getPeers: async () => registry.peers };
 });
 vi.mock('./mediaAssetIndex/index.js', () => ({ unindexVideo: async () => {} }));
 vi.mock('./musicVideo/mediaPool.js', () => ({ forgetDeletedMusicVideoAssets: async () => {} }));
@@ -24,7 +25,11 @@ const { listMediaTombstones, recordMediaTombstone } = await import('./mediaTombs
 const { trashFiles } = await import('../lib/trashFiles.js');
 
 const HISTORY = join(PATHS.data, 'video-history.json');
-const row = (id, createdAt = '2026-05-01T00:00:00.000Z') => ({ id, filename: `${id}.mp4`, createdAt });
+const row = (id, createdAt = '2026-05-01T00:00:00.000Z', extra = {}) => ({ id, filename: `${id}.mp4`, createdAt, ...extra });
+const PAIR = 's'.repeat(40);
+const pairedPeer = (instanceId, extra = {}) => ({ id: `rec-${instanceId}`, name: instanceId, instanceId, enabled: true, syncSecret: PAIR, ...extra });
+const ownedBy = (origin) => ({ originInstanceId: origin });
+const tomb = (key, deletedAt = '2026-06-01T00:00:00.000Z') => ({ key, deletedAt });
 const readHistory = async () => (await readJSONFile(HISTORY, [])).map((r) => r.id).sort();
 
 beforeEach(async () => {
@@ -33,6 +38,7 @@ beforeEach(async () => {
   await atomicWrite(HISTORY, []);
   await atomicWrite(join(PATHS.data, 'media-tombstones.json'), { version: 1, video: [], image: [] });
   trashFiles.mockClear();
+  registry.peers = [pairedPeer('peer-a'), pairedPeer('peer-b')];
 });
 
 describe('video delete durability', () => {
@@ -66,10 +72,10 @@ describe('video delete durability', () => {
   });
 
   it('snapshot from a peer with a tombstone removes the local row and files', async () => {
-    await atomicWrite(HISTORY, [row('v1'), row('v2')]);
+    await atomicWrite(HISTORY, [row('v1', undefined, ownedBy('peer-a')), row('v2')]);
     const result = await dataSync.applyRemote('videoHistory', {
       videos: [],
-      tombstones: [{ key: 'v1', deletedAt: '2026-06-01T00:00:00.000Z' }],
+      tombstones: [tomb('v1')],
     }, { peerId: 'peer-a' });
     expect(await readHistory()).toEqual(['v2']);
     expect(trashFiles).toHaveBeenCalled();
@@ -108,6 +114,48 @@ describe('video delete durability', () => {
   it('omits tombstones from the snapshot when there are none', async () => {
     const snap = await dataSync.getSnapshot('videoHistory');
     expect(snap.data).not.toHaveProperty('tombstones');
+  });
+});
+
+describe('snapshot tombstone authorization', () => {
+  const ids = async () => (await listMediaTombstones('video')).map((t) => t.key);
+
+  it('ignores a forged tombstone from a peer that does not own the row', async () => {
+    await atomicWrite(HISTORY, [row('v1', undefined, ownedBy('peer-a'))]);
+    await dataSync.applyRemote('videoHistory', { videos: [], tombstones: [tomb('v1')] }, { peerId: 'peer-b' });
+    expect(await readHistory()).toEqual(['v1']);
+    expect(await ids()).toEqual([]);
+    expect(trashFiles).not.toHaveBeenCalled();
+  });
+
+  it('ignores the owner\'s tombstone when media delete is off for that peer', async () => {
+    registry.peers = [pairedPeer('peer-a', { mediaDeleteAllowed: false })];
+    await atomicWrite(HISTORY, [row('v1', undefined, ownedBy('peer-a'))]);
+    await dataSync.applyRemote('videoHistory', { videos: [], tombstones: [tomb('v1')] }, { peerId: 'peer-a' });
+    expect(await readHistory()).toEqual(['v1']);
+    expect(await ids()).toEqual([]);
+  });
+
+  it('ignores tombstones from an unregistered or unpaired sender', async () => {
+    registry.peers = [{ ...pairedPeer('peer-a'), syncSecret: undefined }];
+    await atomicWrite(HISTORY, [row('v1', undefined, ownedBy('peer-a'))]);
+    await dataSync.applyRemote('videoHistory', { videos: [], tombstones: [tomb('v1')] }, { peerId: 'peer-a' });
+    await dataSync.applyRemote('videoHistory', { videos: [], tombstones: [tomb('v1')] }, { peerId: 'peer-unknown' });
+    expect(await readHistory()).toEqual(['v1']);
+    expect(await ids()).toEqual([]);
+  });
+
+  it('ignores a future-dated tombstone even from the owner', async () => {
+    await atomicWrite(HISTORY, [row('v1', undefined, ownedBy('peer-a'))]);
+    const future = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+    await dataSync.applyRemote('videoHistory', { videos: [], tombstones: [tomb('v1', future)] }, { peerId: 'peer-a' });
+    expect(await readHistory()).toEqual(['v1']);
+    expect(await ids()).toEqual([]);
+  });
+
+  it('does not record a tombstone for a row this machine does not hold', async () => {
+    await dataSync.applyRemote('videoHistory', { videos: [], tombstones: [tomb('ghost')] }, { peerId: 'peer-a' });
+    expect(await ids()).toEqual([]);
   });
 });
 

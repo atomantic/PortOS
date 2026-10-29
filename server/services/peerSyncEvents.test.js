@@ -16,7 +16,7 @@ vi.mock('./instances.js', async () => {
 });
 vi.mock('./instanceIdentity.js', () => ({ UNKNOWN_INSTANCE_ID: 'unknown', getInstanceId: async () => 'local-inst' }));
 vi.mock('./mediaAssetIndex/index.js', () => ({ unindexVideo: async () => {} }));
-vi.mock('./musicVideo/mediaPool.js', () => ({ forgetDeletedMusicVideoAssets: async () => {} }));
+vi.mock('./musicVideo/mediaPool.js', () => ({ forgetDeletedMusicVideoAssets: vi.fn(async () => {}) }));
 vi.mock('../lib/trashFiles.js', () => ({ trashFiles: vi.fn(async () => {}) }));
 
 const { PATHS, readJSONFile, atomicWrite } = await import('../lib/fileUtils.js');
@@ -25,6 +25,7 @@ const { peerSyncBus } = await import('./peerSyncEventBus.js');
 const { deleteHistoryItem } = await import('./videoGen/historyOps.js');
 const { mutateVideoHistory } = await import('./videoGen/history.js');
 const { listMediaTombstones } = await import('./mediaTombstones.js');
+const { forgetDeletedMusicVideoAssets } = await import('./musicVideo/mediaPool.js');
 
 const HISTORY = join(PATHS.data, 'video-history.json');
 const PAIR = 's'.repeat(40);
@@ -85,6 +86,29 @@ describe('applyPeerSyncEvent', () => {
     expect((await listMediaTombstones('video')).map((t) => t.key)).toEqual(['ghost']);
   });
 
+  it('delete for an unknown row is not recorded unless the sender is its origin', async () => {
+    const result = await applyPeerSyncEvent({ id: 'rec-other' }, deleteFrame('ghost', 'peer-o'));
+    expect(result.applied).toBe(false);
+    expect(await listMediaTombstones('video')).toEqual([]);
+  });
+
+  it('ignores a future-dated delete even from the origin', async () => {
+    await atomicWrite(HISTORY, [row('v1', { originInstanceId: 'peer-o' })]);
+    const future = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+    for (const id of ['v1', 'ghost']) {
+      const frame = { ...deleteFrame(id), tombstone: { key: id, deletedAt: future } };
+      expect((await applyPeerSyncEvent({ id: 'rec-origin' }, frame)).applied).toBe(false);
+    }
+    expect((await readRows()).map((r) => r.id)).toEqual(['v1']);
+    expect(await listMediaTombstones('video')).toEqual([]);
+  });
+
+  it('ignores an upsert for a row the sender does not originate', async () => {
+    const frame = { v: 1, category: 'videoHistory', op: 'upsert', id: 'v1', record: row('v1'), originInstanceId: 'peer-x' };
+    expect((await applyPeerSyncEvent({ id: 'rec-origin' }, frame)).applied).toBe(false);
+    expect(await readRows()).toEqual([]);
+  });
+
   it('malformed frame does not throw', async () => {
     const frames = [null, 'frame', 42, [], {}, { v: 2, category: 'videoHistory', op: 'upsert', id: 'v1', record: row('v1'), originInstanceId: 'peer-o' },
       { ...deleteFrame('v1'), extra: true }, { ...deleteFrame('v1'), tombstone: { key: 'other', deletedAt: '2026-06-01T00:00:00.000Z' } }];
@@ -116,6 +140,14 @@ describe('local emission', () => {
     const emitted = nextBusEvent('event');
     await deleteHistoryItem('v1');
     expect(await emitted).toMatchObject({ op: 'delete', id: 'v1', tombstone: { key: 'v1' } });
+  });
+
+  it('an owner delete is still announced when the music-video forget fails', async () => {
+    await atomicWrite(HISTORY, [row('v1', { originInstanceId: 'local-inst' })]);
+    forgetDeletedMusicVideoAssets.mockRejectedValueOnce(new Error('example forget failure'));
+    const emitted = nextBusEvent('event');
+    await expect(deleteHistoryItem('v1')).resolves.toEqual({ ok: true });
+    expect(await emitted).toMatchObject({ op: 'delete', id: 'v1' });
   });
 
   it('fromRemoteTombstone delete does not emit', async () => {

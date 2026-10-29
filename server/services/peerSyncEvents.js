@@ -7,8 +7,8 @@
  * ⏭️ log, never a throw.
  */
 import { peerSyncEventSchema } from '../lib/peerSyncEventSchema.js';
-import { rowOwnerCandidates } from '../lib/mediaRowOwners.js';
-import { getPeers, peerMayDeleteMedia, resolveEffectiveCategories } from './instances.js';
+import { getPeers, resolveEffectiveCategories } from './instances.js';
+import { authorizeRemoteVideoTombstone } from './videoTombstoneAuthorization.js';
 import { mergeVideoRows, applyRemoteVideoTombstones } from './dataSync.js';
 import { mergeMediaTombstones } from './mediaTombstones.js';
 import { getHistoryItem } from './videoGen/history.js';
@@ -17,14 +17,14 @@ import { stripMachineLocalFields } from './peerSyncEventBus.js';
 
 export { emitPeerSyncEvent } from './peerSyncEventBus.js';
 
-const peerIsPaired = (peer) => typeof peer?.syncSecret === 'string' && peer.syncSecret.length >= 32;
-
 const ignored = (label, reason) => {
   console.log(`⏭️ Peer sync event from ${label} ignored: ${reason}`);
   return { applied: false, reason };
 };
 
+// A sender announces only rows it originated, so the frame's origin must be the sender.
 async function applyVideoUpsert(peer, event, label) {
+  if (event.originInstanceId !== peer.instanceId) return ignored(label, `upsert ${event.id} for a row it does not originate`);
   const record = stripMachineLocalFields(event.record);
   if (record.originInstanceId && record.originInstanceId !== event.originInstanceId) {
     return ignored(label, `origin mismatch on ${event.id}`);
@@ -34,19 +34,17 @@ async function applyVideoUpsert(peer, event, label) {
   return { applied: count > 0, reason: count > 0 ? null : 'unchanged' };
 }
 
-// Only a paired peer allowed to delete media here, and only for a row it owns or
-// holds (origin, hosted index, or the peer that supplied it). An unknown row just
-// records the tombstone so the row cannot arrive later.
+// Admission is the rule the snapshot path shares (videoTombstoneAuthorization.js).
 async function applyVideoDelete(peer, event, label) {
-  if (!peerIsPaired(peer)) return ignored(label, `delete ${event.id} from an unpaired peer`);
-  if (!peerMayDeleteMedia(peer)) return ignored(label, `media delete is off for this peer (${event.id})`);
   const row = await getHistoryItem(event.id);
+  const verdict = authorizeRemoteVideoTombstone({
+    peer, tombstone: event.tombstone, localRow: row, hostedIndex: await listHostedEntries(),
+    via: 'event', eventOriginInstanceId: event.originInstanceId,
+  });
+  if (!verdict.allowed) return ignored(label, `delete ${event.id}: ${verdict.reason}`);
   if (!row) {
     await mergeMediaTombstones('video', [event.tombstone]);
     return { applied: true, reason: 'tombstone-only' };
-  }
-  if (!rowOwnerCandidates(row, await listHostedEntries()).includes(peer.instanceId)) {
-    return ignored(label, `not an owner of ${event.id}`);
   }
   const removed = await applyRemoteVideoTombstones([event.tombstone]);
   if (removed > 0) console.log(`🗑️ VideoHistory event from ${label}: deleted ${event.id}`);
