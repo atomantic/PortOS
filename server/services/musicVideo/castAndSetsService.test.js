@@ -1396,6 +1396,9 @@ it('grounds an age form and its test frames on the catalog reference selected fo
   expect(refs('test:2')).toEqual([png('set:harbor'), png('form:age-7')]);
   expect(job('test:2').params.prompt).toContain('Place the person from the Age 7 character sheet');
   expect(job('test:2').params.prompt).toContain('Wearing a plaid dress');
+  // An age with no era or film look of its own still keeps the present look off the memory.
+  expect(job('test:2').params.prompt).toContain('The place as it was when Keeper was 7');
+  expect(job('test:2').params.prompt).toContain('Match the color, film stock and grain of the Age 7 character sheet');
   expect(refs('test:1')).toEqual([png('set:lab'), png('character'), png('looks')]);
 
   // Binding an adult test to the age re-renders just it, on the child sheet.
@@ -1429,6 +1432,47 @@ it('grounds an age form and its test frames on the catalog reference selected fo
   // Removed outright, its still-labeled reference stays off the present-day sheet too.
   const removed = { ...saved, concept: { ...saved.concept, subjects: saved.concept.subjects.filter((s) => s.id !== 'mvc-2') } };
   expect(buildCastAndSetsImagePlan(removed, saved.castAndSets.direction).character.refImages).toEqual(['keeper.png']);
+});
+
+it('carries a memory\'s era and film stock into its age sheet, test frames and set plate', async () => {
+  const present = '1985 color, muted purples, 35mm grain';
+  const memory = 'black-and-white 8mm home movie, heavy grain';
+  runPrompt.mockResolvedValue({ text: JSON.stringify({ ...DIRECTION, look: present,
+    protagonist: { ...DIRECTION.protagonist, forms: [{ id: 'age-7', label: 'Age 7', age: '7', description: 'a small girl', era: '1965', look: memory }] },
+    sets: [...DIRECTION.sets, { id: 'home', name: 'Family home', description: 'a clapboard house and driveway', lighting: 'flat daylight', era: '1965', look: memory }],
+    tests: [DIRECTION.tests[0], { setId: 'harbor', look: 'Watch', action: 'skipping stones', formId: 'age-7' }, { setId: 'home', look: 'Watch', action: 'waiting on the porch' }] }) });
+  const project = await seed({ concept: { prompt: 'a vigil', subjects: [] } });
+  await service.startCastAndSets(project.id);
+  await runTo(project.id, 'review');
+  const prompt = (key) => jobs.findLast((j) => keyOf(j) === key).params.prompt;
+  expect(prompt('form:age-7')).toContain(`Era: 1965. Five views`);
+  expect(prompt('form:age-7')).toContain(`Look: ${memory}`);
+  expect(prompt('set:home')).toContain('Era: 1965, with period-correct buildings, vehicles');
+  // The age's era and stock win over a present-day set; a memory set carries its own.
+  for (const key of ['form:age-7', 'set:home', 'test:2', 'test:3']) {
+    expect(prompt(key)).toContain(`Look: ${memory}`);
+    expect(prompt(key)).not.toContain(present);
+  }
+  expect(prompt('test:2')).toContain('Era: 1965');
+  expect(prompt('set:harbor')).toContain(`Look: ${present}`);
+  expect(prompt('test:1')).toContain(`Look: ${present}`);
+
+  // The director dates a set by hand: only that plate and the frame shot in it re-render.
+  const before = jobs.length;
+  expect((await request(app).patch(`/api/music-video/${project.id}/cast-and-sets/direction`).send({ sets: [{ id: 'harbor', era: '1965', look: memory }] })).status).toBe(202);
+  await runTo(project.id, 'review');
+  expect(jobs.slice(before).map(keyOf).sort()).toEqual(['set:harbor', 'test:2']);
+  expect(prompt('set:harbor')).toContain(`Look: ${memory}`);
+
+  // A dated age with no look of its own shares the project look.
+  const { buildCastAndSetsImagePlan } = await import('./castAndSetsPlan.js');
+  const saved = await current(project.id);
+  const direction = saved.castAndSets.direction;
+  const shared = { ...direction, sets: direction.sets.map(({ era: _e, look: _l, ...set }) => set),
+    protagonist: { ...direction.protagonist, forms: [{ ...direction.protagonist.forms[0], look: undefined }] } };
+  const plan = buildCastAndSetsImagePlan(saved, shared);
+  expect(plan['test:2'].prompt).toContain(`Look: ${present}`);
+  expect(plan['test:2'].prompt).not.toContain('Match the color');
 });
 
 it('keeps people out of set plates: no mood board person in the look, no character action in a set', async () => {

@@ -255,7 +255,7 @@ describe('Cast & Sets per-image actions', () => {
   });
 
   it('binds an age to a catalog-linked character and a test to that age', async () => {
-    const age = { id: 'age-7', label: 'Age 7', age: '7', description: 'small', hair: '', wardrobe: '' };
+    const age = { id: 'age-7', label: 'Age 7', age: '7', description: 'small', hair: '', wardrobe: '', era: '', look: '' };
     const agedDirection = { ...direction, protagonist: { ...direction.protagonist, forms: [age] } };
     const plan = { ...photoPlan,
       'form:age-7': { key: 'form:age-7', kind: 'form', formId: 'age-7', label: 'June · Age 7', prompt: 'young', deps: ['character'], refKeys: ['character'], subjectId: 'gone', bindingMissing: 'subject' },
@@ -404,7 +404,7 @@ describe('Cast & Sets per-image actions', () => {
     fireEvent.change(card('June').getByLabelText('How they look at that age'), { target: { value: 'lanky, braces' } });
     await act(async () => { fireEvent.click(card('June').getByRole('button', { name: 'Save and re-render' })); });
     expect(api.editMusicVideoCastAndSetsDirection).toHaveBeenCalledWith('example-project',
-      { protagonist: { forms: [{ label: 'Teen', age: '17', description: 'lanky, braces', hair: '', wardrobe: '' }] } }, { silent: true });
+      { protagonist: { forms: [{ label: 'Teen', age: '17', description: 'lanky, braces', hair: '', wardrobe: '', era: '', look: '' }] } }, { silent: true });
   });
 
   it('says a sheet in review predates the story and rebuilds it from the story in one tap', async () => {

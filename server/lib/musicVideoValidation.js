@@ -1388,6 +1388,8 @@ export const musicVideoCastAndSetsDirectionEditSchema = z.object({
       description: castSetsText(1000),
       hair: castSetsText(1000).optional(),
       wardrobe: castSetsText(1000).optional(),
+      era: castSetsText(120).optional(),
+      look: castSetsText(500).optional(),
       // The fixed-casting subject whose reference grounds this age (null clears).
       subjectId: z.string().max(64).nullable().optional(),
       // Echoed back from the saved form; the server re-stamps it from the subject.
@@ -1433,6 +1435,8 @@ export const musicVideoCastAndSetsDirectionEditSchema = z.object({
     name: castSetsText(120).optional(),
     description: castSetsText(1000).optional(),
     lighting: castSetsText(300).optional(),
+    era: castSetsText(120).optional(),
+    look: castSetsText(500).optional(),
     imageRole: z.enum(['background', 'texture', 'decoration', 'cutout']).optional(),
     setReference: musicVideoSceneSetReferenceSchema.nullable().optional(),
   }).strict()).max(8).optional(),
