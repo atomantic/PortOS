@@ -90,9 +90,9 @@ export function markHosted(peerInstanceId, assets) {
   });
 }
 
-/** Reconcile one peer's authoritative video inventory, without touching other hosts. */
-export function reconcileHostedVideos(peerInstanceId, filenames, checked) {
-  if (!isStr(peerInstanceId) || !Array.isArray(filenames) || !Array.isArray(checked) ||
+/** Reconcile one peer's authoritative local-file inventory, without touching other hosts. */
+export function reconcileHostedMedia(peerInstanceId, kind, filenames, checked) {
+  if (!KIND_DIRS[kind] || !isStr(peerInstanceId) || !Array.isArray(filenames) || !Array.isArray(checked) ||
       [...filenames, ...checked].some((name) => !isStr(name) || sanitizeAssetFilename(name) !== name)) return Promise.resolve();
   return queueWrite(async () => {
     const entries = await readEntries();
@@ -101,7 +101,7 @@ export function reconcileHostedVideos(peerInstanceId, filenames, checked) {
     if (filenames.some((name) => !examined.has(name))) return;
     let changed = false;
     for (const [key, entry] of Object.entries(entries)) {
-      if (key.startsWith('video:') && examined.has(key.slice(6)) && !present.has(key.slice(6))) {
+      if (key.startsWith(`${kind}:`) && examined.has(key.slice(kind.length + 1)) && !present.has(key.slice(kind.length + 1))) {
         const hosts = hostsOf(entry);
         const remaining = hosts.filter((host) => host.peerId !== peerInstanceId);
         if (remaining.length === hosts.length) continue;
@@ -111,9 +111,9 @@ export function reconcileHostedVideos(peerInstanceId, filenames, checked) {
       }
     }
     for (const filename of present) {
-      if (existsSync(join(PATHS.videos, filename))) continue;
-      const key = hostedKey('video', filename);
-      // A legacy single-host entry may be the old history-derived mistake.
+      if (existsSync(join(KIND_DIRS[kind](), filename))) continue;
+      const key = hostedKey(kind, filename);
+      // A legacy single-host entry may be the old metadata-derived mistake.
       // Keep it as a fallback, but put newly verified evidence first.
       const legacy = !Array.isArray(entries[key]?.hosts) ? hostsOf(entries[key]) : [];
       const hosts = legacy.length ? [] : hostsOf(entries[key]);
@@ -141,9 +141,9 @@ export async function takeHostedAssets(peerInstanceId, missingAssets, collection
   const remaining = [];
   for (const entry of missingAssets) {
     const dir = KIND_DIRS[entry?.kind]?.();
-    // A video manifest without a digest is legacy metadata, not evidence the
-    // sender hashed local bytes. Keep it on the normal pull path instead.
-    const verified = entry.kind !== 'video' || /^[a-f0-9]{64}$/i.test(entry.sha256 || '');
+    // A digest-less manifest is metadata, not evidence of local bytes.
+    // Legacy manifests still use the normal copy path.
+    const verified = /^[a-f0-9]{64}$/i.test(entry.sha256 || '');
     const owned = verified && dir && collectionKeys.has(hostedKey(entry.kind, entry.filename));
     if (owned && !existsSync(join(dir, entry.filename))) hosted.push(entry);
     else remaining.push(entry);

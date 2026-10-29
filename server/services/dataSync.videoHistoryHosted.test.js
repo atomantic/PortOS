@@ -82,7 +82,7 @@ describe('video history peer ownership', () => {
     const collection = { id: 'collection-only', name: 'Clips', items: [{ kind: 'video', ref: 'v1', addedAt: '2026-05-22T00:00:00Z' }], createdAt: '2026-05-22T00:00:00Z', updatedAt: '2026-05-22T00:00:00Z' };
     await dataSync.applyRemote('mediaCollections', { collections: [collection] }, { peerId: 'a' });
     expect(await location()).toEqual({ location: 'missing' });
-    const result = await dataSync.getVideoHistoryInventory('mediaCollections');
+    const result = await dataSync.getHostedMediaInventory('mediaCollections');
     expect(result.checked).toContain('v1.mp4');
     await dataSync.applyRemote('mediaCollections', { version: 1, filenames: ['v1.mp4'], checked: ['v1.mp4'] }, { peerId: 'b', inventory: true });
     expect(await location()).toMatchObject({ hostPeerId: 'b' });
@@ -106,10 +106,10 @@ describe('video history peer ownership', () => {
 
   it('publishes only history files physically present on this peer', async () => {
     await dataSync.applyRemote('videoHistory', { videos: [row] }, { peerId: 'a' });
-    expect((await dataSync.getVideoHistoryInventory()).filenames).toEqual([]);
+    expect((await dataSync.getHostedMediaInventory()).filenames).toEqual([]);
     mkdirSync(PATHS.videos, { recursive: true });
     writeFileSync(join(PATHS.videos, 'v1.mp4'), 'local');
-    expect((await dataSync.getVideoHistoryInventory()).filenames).toEqual(['v1.mp4']);
+    expect((await dataSync.getHostedMediaInventory()).filenames).toEqual(['v1.mp4']);
   });
 });
 afterAll(cleanup);

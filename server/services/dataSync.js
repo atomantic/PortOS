@@ -39,7 +39,7 @@ import { mergeSeriesFromSync, listSeries } from './pipeline/series.js';
 import { mergeIssuesFromSync, listAllIssues } from './pipeline/issues.js';
 import { getPeers } from './instances.js';
 import { mutateVideoHistory, HISTORY_UNCHANGED } from './videoGen/history.js';
-import { markHosted, reconcileHostedVideos } from './peerHostedMedia.js';
+import { reconcileHostedMedia } from './peerHostedMedia.js';
 import { sanitizeAssetFilename } from './sharing/buckets.js';
 import { referenceCollectionAssetManifest } from './sharing/peerSyncAssets.js';
 import { mergeMediaCollectionsFromSync, listCollections, itemKey } from './mediaCollections.js';
@@ -861,17 +861,9 @@ async function applyMediaCollectionsRemote(remoteData, source) {
   // runs INSIDE `serializeFileWrite` (same tail as addItem / removeItem /
   // bulkUpdateCollectionItems) — a sync-driven write can't interleave with a
   // concurrent local mutation on the same JSON file.
+  // Unioned references do not prove the sender has bytes. Ownership is
+  // reconciled separately from its local-file inventory, even on checksum ties.
   const result = await mergeMediaCollectionsFromSync(filtered, { source });
-  // `host`-mode peers keep the bytes: index this snapshot's items as peer-hosted
-  // so the collection renders them via the static-mount fallback. Covers items
-  // that only ever arrive through this snapshot path (no per-record push).
-  if (source?.peerId) {
-    const senderPeer = (await getPeers().catch(() => [])).find((p) => p.instanceId === source.peerId);
-    if (senderPeer?.mediaSyncMode === 'host') {
-      const live = filtered.filter((c) => c?.deleted !== true);
-      await markHosted(source.peerId, live.flatMap((c) => referenceCollectionAssetManifest(c)).filter((asset) => asset.kind !== 'video'));
-    }
-  }
   if (result.applied) {
     console.log(`🔄 MediaCollections sync: merged ${result.count} collection(s)`);
   }
@@ -938,12 +930,12 @@ async function getVideoHistorySnapshot() {
 // This separate inventory describes only bytes on this machine, never the
 // unioned history or files streamed from another peer. It is refreshed even
 // when history is unchanged and is absent on older peers.
-export async function getVideoHistoryInventory(category = 'videoHistory') {
+export async function getHostedMediaInventory(category = 'videoHistory', kind = 'video') {
   const { data } = category === 'mediaCollections' ? await getMediaCollectionsSnapshot() : await getVideoHistorySnapshot();
   const references = category === 'mediaCollections'
-    ? data.collections.filter((c) => !c.deleted).flatMap((c) => referenceCollectionAssetManifest(c).filter((asset) => asset.kind === 'video').map((asset) => asset.filename))
+    ? data.collections.filter((c) => !c.deleted).flatMap((c) => referenceCollectionAssetManifest(c).filter((asset) => asset.kind === kind).map((asset) => asset.filename))
     : data.videos.map((row) => row.filename);
-  const names = await readdir(PATHS.videos, { withFileTypes: true }).catch((err) => {
+  const names = await readdir(kind === 'image' ? PATHS.images : PATHS.videos, { withFileTypes: true }).catch((err) => {
     if (err.code === 'ENOENT') return [];
     throw err;
   });
@@ -1391,7 +1383,10 @@ export async function applyRemote(category, remoteData, options = {}) {
   if ((category === 'videoHistory' || category === 'mediaCollections') && options.inventory === true) {
     const peer = (await getPeers()).find((p) => p.instanceId === source.peerId && p.enabled !== false && p.mediaSyncMode === 'host');
     if (peer && remoteData?.version === 1 && Array.isArray(remoteData.filenames) && Array.isArray(remoteData.checked)) {
-      await reconcileHostedVideos(peer.instanceId, remoteData.filenames, remoteData.checked);
+      const kind = options.inventoryKind === 'image' ? 'image' : 'video';
+      if (kind === 'video' || category === 'mediaCollections') {
+        await reconcileHostedMedia(peer.instanceId, kind, remoteData.filenames, remoteData.checked);
+      }
     }
     return { applied: false, count: 0 };
   }
