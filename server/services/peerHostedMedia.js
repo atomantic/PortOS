@@ -93,6 +93,33 @@ export function markHosted(peerInstanceId, assets) {
   });
 }
 
+/**
+ * Make `peerInstanceId` the first host of one file BEFORE its local copy goes
+ * (Make primary, services/mediaHolders.js), so the item streams from that peer
+ * the moment the bytes here are trashed. Unlike markHosted it does not skip a
+ * file that is still on disk; the local copy keeps winning until it is gone.
+ */
+export function hostFileOn(kind, filename, peerInstanceId) {
+  const safe = isStr(filename) ? sanitizeAssetFilename(filename) : null;
+  if (!KIND_DIRS[kind] || !safe || safe !== filename || !isStr(peerInstanceId)) return Promise.resolve(false);
+  return queueWrite(async () => {
+    const entries = await readEntries();
+    const key = hostedKey(kind, safe);
+    const others = hostsOf(entries[key]).filter((host) => host.peerId !== peerInstanceId);
+    // `primary` marks a copy this machine released on purpose; the asset sweep
+    // must not copy it back (releasedHostedKeys).
+    entries[key] = hostEntry([{ peerId: peerInstanceId, at: new Date().toISOString(), revision: randomUUID(), primary: true }, ...others]);
+    await writeEntries(entries);
+    return true;
+  });
+}
+
+/** `<kind>:<filename>` keys whose local copy was released to a Make-primary host. */
+export async function releasedHostedKeys() {
+  const entries = await readEntriesOrEmpty();
+  return new Set(Object.keys(entries).filter((key) => hostsOf(entries[key]).some((host) => host?.primary === true)));
+}
+
 /** Reconcile one peer's authoritative local-file inventory, without touching other hosts. */
 export function reconcileHostedMedia(peerInstanceId, kind, filenames, checked) {
   if (!KIND_DIRS[kind] || !isStr(peerInstanceId) || !Array.isArray(filenames) || !Array.isArray(checked) ||

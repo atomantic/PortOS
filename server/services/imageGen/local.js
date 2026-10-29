@@ -1553,6 +1553,18 @@ export async function setImagePendingDelete(filename, pending) {
   });
 }
 
+// Make primary (services/mediaHolders.js): the holder chosen to keep this
+// image's bytes. Only an image with a sidecar records it. Resolves true when changed.
+export async function setImagePrimary(filename, { instanceId, at }) {
+  assertGalleryFilename(filename);
+  return editImageSidecar(filename, (metadata) => {
+    if (!metadata || Object.keys(metadata).length === 0) return null;
+    if (metadata.primaryInstanceId === instanceId && metadata.primaryAt === at) return null;
+    Object.assign(metadata, { primaryInstanceId: instanceId, primaryAt: at });
+    return true;
+  });
+}
+
 export async function updateImagePrompt(filename, prompt) {
   assertGalleryFilename(filename);
   const trimmedPrompt = typeof prompt === 'string' ? prompt.trim() : '';

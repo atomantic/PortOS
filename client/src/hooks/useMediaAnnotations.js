@@ -3,6 +3,7 @@ import { listMediaAnnotations, setMediaAnnotation } from '../services/api';
 import socket from '../services/socket';
 import toast from '../components/ui/Toast';
 import { sameJsonShape } from '../lib/sameJsonShape';
+import { useMediaHolders } from './useMediaHolders';
 
 // Per-entry: `own`/`others` from the server, plus back-compat aliases
 // (`starred`/`rating`/`note`/`updatedAt` = local author) and `anyNote` for the
@@ -34,6 +35,7 @@ function enrichAll(raw) {
 
 export function useMediaAnnotations() {
   const [annotations, setAnnotations] = useState({});
+  const holders = useMediaHolders();
   // Mirror the latest annotations in a ref so toggleStar can read prior state
   // without using setAnnotations as a side-channel. Calling setState with a
   // side effect inside the updater function is unsafe under StrictMode /
@@ -139,12 +141,15 @@ export function useMediaAnnotations() {
   // <MediaCard> consumer reads from this hook. Callers spread it onto the card
   // and can still override individual fields (e.g. clear onToggleStar in
   // select/stitch modes by passing `onToggleStar={undefined}` after the spread).
+  // `hosts` is the card's holders entry (useMediaHolders) when another machine
+  // holds the file too, so the card can show where it lives and offer Make primary.
   const getCardProps = useCallback((key) => ({
     starred: !!annotations[key]?.starred,
     rating: annotations[key]?.rating ?? null,
     hasNote: !!annotations[key]?.anyNote,
     onToggleStar: toggleStar,
-  }), [annotations, toggleStar]);
+    hosts: holders.byCardKey[key] ?? null,
+  }), [annotations, toggleStar, holders]);
 
   return { annotations, toggleStar, updateAnnotation, getCardProps };
 }

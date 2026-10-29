@@ -52,7 +52,7 @@ export async function readHeldImage(filename) {
   const record = { filename };
   const createdAt = imageLiveStamp(sidecar, fileStat, { localInstanceId: await localInstanceId() });
   if (createdAt) record.createdAt = createdAt;
-  for (const key of ['originInstanceId', 'suppliedByInstanceId']) {
+  for (const key of ['originInstanceId', 'suppliedByInstanceId', 'primaryInstanceId']) {
     if (isNonBlankStr(sidecar?.[key])) record[key] = sidecar[key];
   }
   if (isPlainObject(sidecar?.pendingDelete)) record.pendingDelete = sidecar.pendingDelete;

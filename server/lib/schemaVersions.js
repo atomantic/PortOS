@@ -251,6 +251,12 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // it upgrades. A v1 sender stays accepted: its copies keep their original
   // `addedAt`, which the v2 receiver's removal records already supersede.
   mediaCollections: 2,
+  // videoHistory v1 = rows carry the Make-primary designation
+  // (`primaryInstanceId` + `primaryAt`, services/mediaHolders.js), merged as a
+  // field LWW on `primaryAt` while the rest of the row stays create-only. A
+  // pre-v1 receiver never maps this key, so it keeps accepting rows and holds
+  // the fields as inert content; a later incompatible row change bumps this.
+  videoHistory: 1,
   // v1 = card decks (PostgreSQL `decks` + `deck_cards`) federated via the
   // per-record peer-sync push pipeline (record kind `deck`, sync category
   // `decks`). A brand-NEW synced record type, so it gets its own per-category
@@ -1177,6 +1183,9 @@ export const RECORD_KIND_SCHEMA_CATEGORIES = Object.freeze({
  * gates whether a sender adds image `createdAt` to push manifests, never a
  * record transfer.
  *
+ * `videoHistory` (#14093): gates the `videoHistory` SNAPSHOT apply (dataSync.js
+ * SNAPSHOT_CATEGORY_SCHEMA_KEYS); video rows never ride the per-record push.
+ *
  * `peerAuth` (#8356): the peer credential handshake version, advertised by the
  * receiver's health details; it gates which header a sender presents, never a
  * record transfer.
@@ -1185,7 +1194,7 @@ export const RECORD_KIND_SCHEMA_CATEGORIES = Object.freeze({
  * leave its push transfers ungated (silent cross-install corruption). Only
  * genuinely non-push categories belong.
  */
-export const NON_RECORD_SCHEMA_CATEGORIES = Object.freeze(new Set(['memoryHistory', 'mediaLibrary', 'cosHistory', 'cosTasks', 'appQuality', 'eidoverseFoundations', 'meatspace', 'peerAuth', 'peerAssetStamps']));
+export const NON_RECORD_SCHEMA_CATEGORIES = Object.freeze(new Set(['memoryHistory', 'mediaLibrary', 'cosHistory', 'cosTasks', 'appQuality', 'eidoverseFoundations', 'meatspace', 'peerAuth', 'peerAssetStamps', 'videoHistory']));
 
 /**
  * Lazy-read the current PortOS version from the ROOT package.json so a

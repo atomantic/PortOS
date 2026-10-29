@@ -2,6 +2,7 @@ import { memo, useState } from 'react';
 import { Trash2, Download, Film, Image as ImageIcon, Sparkles, Eye, EyeOff, Maximize2, Wand2, Star, MessageSquare, Pencil, Box, Timer, ThumbsUp, ThumbsDown } from 'lucide-react';
 import MediaImage from '../MediaImage';
 import AddToCollectionMenu from './AddToCollectionMenu';
+import MediaHostsChip from './MediaHostsChip';
 import PinToMoodBoardMenu from './PinToMoodBoardMenu';
 import InlineConfirmRow from '../ui/InlineConfirmRow';
 import { loraDisplayName } from './normalize';
@@ -96,6 +97,9 @@ function MediaCard({
   hasNote = false,
   onToggleStar,
   onAnnotate,
+  // Holders entry from useMediaAnnotations' getCardProps (useMediaHolders):
+  // where the render lives when another machine holds it too.
+  hosts = null,
 }) {
   const { kind, prompt, modelId, previewUrl, thumbnailUrl, downloadUrl } = item;
   const isVideo = kind === 'video';
@@ -254,6 +258,7 @@ function MediaCard({
               <Timer className="w-2.5 h-2.5" aria-hidden="true" />{formatDurationMs(item.renderMs)}
             </span>
           )}
+          <MediaHostsChip entry={hosts} disabled={hideActions} />
         </div>
         {Array.isArray(item.loraNames) && item.loraNames.length > 0 && (
           <div className="flex flex-wrap items-center gap-1 text-[9px]" title={item.loraNames.map(loraDisplayName).join(', ')}>

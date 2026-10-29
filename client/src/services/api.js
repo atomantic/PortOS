@@ -61,6 +61,7 @@ export * from './apiDashboard.js';
 export * from './apiAsk.js';
 export * from './apiImageVideo.js';
 export * from './apiLoraTraining.js';
+export * from './apiMediaHolders.js';
 export * from './apiMediaJobs.js';
 export * from './apiWritersRoom.js';
 export * from './apiUniverseBuilder.js';

@@ -1013,14 +1013,26 @@ export async function mergeVideoRows(incomingRows, source) {
     const hasId = hasVideoRowId;
     const keyed = local.filter(hasId);
     const before = new Map(keyed.map((r) => [r.id, r]));
-    const { merged: rawMerged, changed } = mergeArraysByKey(
+    const { merged: lwwMerged, changed: rowsChanged } = mergeArraysByKey(
       keyed,
       // suppliedByInstanceId and pendingDelete are local-only: never trust a sender's value.
       incoming.filter(hasId).map(({ suppliedByInstanceId, pendingDelete, ...rest }) => rest), // eslint-disable-line no-unused-vars
       'id',
       'createdAt',
     );
-    if (!changed) return HISTORY_UNCHANGED;
+    // The Make-primary designation is the one field of a row that moves after
+    // creation: field LWW on `primaryAt`, independent of the row's own stamp.
+    const incomingById = new Map(incoming.filter(hasId).map((r) => [r.id, r]));
+    let primaryChanged = false;
+    const rawMerged = lwwMerged.map((row) => {
+      const theirs = incomingById.get(row.id);
+      const theirsAt = parseTsMs(theirs?.primaryAt);
+      if (!theirs || typeof theirs.primaryInstanceId !== 'string' || !theirs.primaryInstanceId || theirsAt === null) return row;
+      if ((parseTsMs(row.primaryAt) ?? -Infinity) >= theirsAt) return row;
+      primaryChanged = true;
+      return { ...row, primaryInstanceId: theirs.primaryInstanceId, primaryAt: theirs.primaryAt };
+    });
+    if (!rowsChanged && !primaryChanged) return HISTORY_UNCHANGED;
     // Ownership of a row held here never comes from a sender: its origin and
     // supplier stay the local values, even when absent (an origin-less row stays
     // origin-less, or any peer could claim it and then delete it). Only a row
@@ -1262,7 +1274,7 @@ const SNAPSHOT_CATEGORY_SCHEMA_KEYS = {
   character: [],
   digitalTwin: [],
   meatspace: ['meatspace'],
-  videoHistory: [],
+  videoHistory: ['videoHistory'],
   storyBuilder: RECORD_KIND_SCHEMA_CATEGORIES.storyBuilder,
   // Per-instance digests replaced whole under an LWW stamp, with every field
   // read defensively — no versioned on-disk layout to gate on.
@@ -1521,11 +1533,13 @@ export async function applyRemote(category, remoteData, options = {}) {
     };
   }
   if ((category === 'videoHistory' || category === 'mediaCollections') && options.inventory === true) {
-    const peer = (await getPeers()).find((p) => p.instanceId === source.peerId && p.enabled !== false && p.mediaSyncMode === 'host');
+    const peer = (await getPeers()).find((p) => p.instanceId === source.peerId && p.enabled !== false);
     if (peer && remoteData?.version === 1 && Array.isArray(remoteData.filenames) && Array.isArray(remoteData.checked)) {
       const kind = options.inventoryKind === 'image' ? 'image' : 'video';
       if (kind === 'video' || category === 'mediaCollections') {
-        await reconcileHostedMedia(peer.instanceId, kind, remoteData.filenames, remoteData.checked);
+        const { recordPeerInventory } = await import('./mediaHolders.js');
+        await recordPeerInventory(peer.instanceId, kind, remoteData.filenames, remoteData.checked);
+        if (peer.mediaSyncMode === 'host') await reconcileHostedMedia(peer.instanceId, kind, remoteData.filenames, remoteData.checked);
       }
     }
     return { applied: false, count: 0 };

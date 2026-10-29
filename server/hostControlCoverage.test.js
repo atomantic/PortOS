@@ -759,6 +759,7 @@ const REVIEWED_OPEN_MUTATIONS = [
   // /api/media/annotations
   ['PATCH /api/media/annotations/:key', RECORDS],
   // /api/media/collections
+  ['POST /api/media/holders/primary', REMOVES_RECORD],
   ['POST /api/media/collections', RECORDS],
   ['DELETE /api/media/collections/:id', REMOVES_RECORD],
   ['PATCH /api/media/collections/:id', RECORDS],
@@ -951,6 +952,7 @@ const REVIEWED_OPEN_MUTATIONS = [
   ['POST /api/peer-administration/preview', HANDLER_GATED],
   // /api/peer-media
   ['POST /api/peer-media/delete', PEER_SURFACE],
+  ['POST /api/peer-media/release', PEER_SURFACE],
   // /api/peer-sync
   ['POST /api/peer-sync/pull-metadata', PEER_SYNC],
   ['POST /api/peer-sync/pull-record', PEER_SYNC],

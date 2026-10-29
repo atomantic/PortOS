@@ -10,7 +10,10 @@ import { parseTsMs } from './lwwTimestamp.js';
 export const PEER_SYNC_EVENT_VERSION = 1;
 export const PEER_SYNC_MAX_RECORD_BYTES = 64 * 1024;
 export const PEER_SYNC_EVENT_CATEGORIES = Object.freeze(['videoHistory', 'imageHistory']);
-export const PEER_SYNC_EVENT_OPS = Object.freeze(['upsert', 'delete']);
+// `holding`: the sender now holds (or no longer holds) the bytes of the file
+// named by `id` (services/mediaHolders.js). A receiver predating it drops the
+// frame as malformed, which is harmless: the inventory pull carries the same fact.
+export const PEER_SYNC_EVENT_OPS = Object.freeze(['upsert', 'delete', 'holding']);
 
 // Serialized UTF-8 size; an unserializable value counts as oversize.
 function peerSyncRecordBytes(record) {
@@ -39,9 +42,14 @@ export const peerSyncEventSchema = z.object({
   id: idString,
   record: recordSchema.optional(),
   tombstone: peerSyncTombstoneSchema.optional(),
+  holding: z.object({ held: z.boolean() }).strict().optional(),
   originInstanceId: z.string().min(1).max(128),
 }).strict().superRefine((event, ctx) => {
-  if (event.op === 'upsert') {
+  if (event.op !== 'holding' && event.holding) ctx.addIssue({ code: 'custom', path: ['holding'], message: 'only a holding frame carries holding' });
+  if (event.op === 'holding') {
+    if (!event.holding) ctx.addIssue({ code: 'custom', path: ['holding'], message: 'holding needs { held }' });
+    if (event.record || event.tombstone) ctx.addIssue({ code: 'custom', path: ['op'], message: 'holding carries no record or tombstone' });
+  } else if (event.op === 'upsert') {
     if (!event.record || event.record.id !== event.id) ctx.addIssue({ code: 'custom', path: ['record'], message: 'upsert needs a record whose id matches' });
     if (event.tombstone) ctx.addIssue({ code: 'custom', path: ['tombstone'], message: 'upsert carries no tombstone' });
   } else {

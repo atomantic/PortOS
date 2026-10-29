@@ -143,3 +143,36 @@ describe('POST /api/peer-media/delete', () => {
     expect((await readRows()).map((r) => r.id)).toEqual(['v1']);
   });
 });
+
+describe('POST /api/peer-media/release', () => {
+  const release = (auth, body = {}) => request(buildApp(auth)).post('/api/peer-media/release')
+    .send({ kind: 'video', filename: 'v1.mp4', primaryInstanceId: 'peer-p', primaryAt: '2026-07-01T00:00:00.000Z', ...body });
+
+  beforeEach(() => {
+    writeFileSync(join(PATHS.videos, 'v1.mp4'), 'bytes');
+  });
+
+  it('refuses a caller that is not a paired peer, and a peer without the media delete grant', async () => {
+    const session = await release({ enabled: true, authenticated: true, method: 'session' });
+    expect(session.status).toBe(403);
+    expect(session.body.code).toBe('PEER_CREDENTIAL_REQUIRED');
+    registry.peers = [peer({ mediaDeleteAllowed: false })];
+    const refused = await release(PEER_AUTH);
+    expect(refused.status).toBe(403);
+    expect(refused.body.code).toBe('MEDIA_DELETE_FORBIDDEN');
+    expect(trashFiles).not.toHaveBeenCalled();
+  });
+
+  it('keeps the copy when the primary is not a paired peer of this machine', async () => {
+    const res = await release(PEER_AUTH, { primaryInstanceId: 'peer-unknown' });
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('PRIMARY_NOT_PAIRED');
+    expect(trashFiles).not.toHaveBeenCalled();
+  });
+
+  it('rejects a file name that is not a single path segment', async () => {
+    const res = await release(PEER_AUTH, { filename: '../video-history.json' });
+    expect(res.status).toBe(400);
+    expect(trashFiles).not.toHaveBeenCalled();
+  });
+});

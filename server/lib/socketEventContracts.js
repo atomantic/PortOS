@@ -667,6 +667,11 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
     summary: 'A media examination was saved; reconcile history without exposing prompt content.',
     payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
+  'media:holders:changed': {
+    direction: 'server-to-client',
+    summary: 'Which machines hold a media file changed (holdings, Make primary, queued releases); refetch the holders map.',
+    payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
   'media-jobs:changed': {
     direction: 'server-to-client',
     summary: 'Invalidate queue snapshots after job, progress, archive or hold changes.',

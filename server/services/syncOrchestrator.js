@@ -165,9 +165,11 @@ async function fetchPeer(peer, path) {
   return readPeerBody(res, 'json', { maxBytes }).catch(handlePeerBodyError);
 }
 
-// Older peers lack the inventory route. A successful HEAD with no remote-media
-// marker proves their static mount served local bytes, rather than proxying a
-// third peer. Failure is inconclusive and never removes an existing host.
+// Older peers lack the inventory route. For a host-mode peer, a successful HEAD
+// with no remote-media marker proves its static mount served local bytes, rather
+// than proxying a third peer; a copy-mode peer gets no per-file probe (that
+// evidence only feeds the holders list). Failure is inconclusive and never
+// removes an existing host.
 async function fetchHostedInventory(peer, category, kind) {
   const path = `/api/sync/${category}/${kind}-inventory`;
   const response = await withAbortTimeout(FETCH_TIMEOUT_MS, (signal) => peerFetch(`${peerBaseUrl(peer)}${path}`, { signal }, peer)).catch(() => null);
@@ -176,6 +178,7 @@ async function fetchHostedInventory(peer, category, kind) {
     if (!response.ok) return null;
     return readPeerBody(response, 'json', { maxBytes: PEER_BODY_DEFAULT_MAX_BYTES }).catch(() => null);
   }
+  if (peer.mediaSyncMode !== 'host') return null;
   const { checked } = await dataSync.getHostedMediaInventory(category, kind);
   // Whole literals so the peer-surface guard (apiAccessPolicy.test.js) can see both routes.
   const mediaRoot = kind === 'image' ? '/data/images/' : '/data/videos/';
@@ -604,7 +607,9 @@ async function syncDataCategoryFromPeer(peer, peerId, category, cachedChecksums,
   if (gap && !schemaGapMayHaveCleared(gap, peer, checksumRes.checksum)) {
     return { totalApplied: 0, checksum: null, blockedBySchema: gap };
   }
-  if ((category === 'videoHistory' || category === 'mediaCollections') && peer.mediaSyncMode === 'host') {
+  // Every peer's byte inventory feeds the holders list (services/mediaHolders.js);
+  // a host-mode peer's also maintains where this machine streams from.
+  if (category === 'videoHistory' || category === 'mediaCollections') {
     const kinds = category === 'mediaCollections' ? ['video', 'image'] : ['video'];
     for (const kind of kinds) {
       const inventory = await fetchHostedInventory(peer, category, kind).catch(() => null);

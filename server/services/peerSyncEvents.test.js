@@ -156,6 +156,33 @@ function seedImage(filename, sidecar) {
 const trashedImage = (filename) => trashFiles.mock.calls.some(([paths]) => paths.includes(join(PATHS.images, filename)));
 const imageTombstones = async () => (await listMediaTombstones('image')).map((t) => t.key);
 
+describe('applyPeerSyncEvent holding frames', () => {
+  const holdingFrame = (held, origin = 'peer-o', category = 'videoHistory') => ({
+    v: 1, category, op: 'holding', id: 'v1.mp4', holding: { held }, originInstanceId: origin,
+  });
+  const holderNames = async () => {
+    const { listMediaHolders } = await import('./mediaHolders.js');
+    return (await listMediaHolders()).items['video:v1.mp4']?.holders.map((h) => h.instanceId) ?? [];
+  };
+
+  beforeEach(async () => {
+    await atomicWrite(join(PATHS.data, 'media-holders.json'), { version: 1, holdings: {}, releases: [] });
+  });
+
+  it("records the sender's own holding and its release", async () => {
+    expect((await applyPeerSyncEvent({ id: 'rec-origin' }, holdingFrame(true))).applied).toBe(true);
+    expect(await holderNames()).toEqual(['peer-o']);
+    expect((await applyPeerSyncEvent({ id: 'rec-origin' }, holdingFrame(false))).applied).toBe(true);
+    expect(await holderNames()).toEqual([]);
+  });
+
+  it('ignores a holding frame that speaks for another machine', async () => {
+    const result = await applyPeerSyncEvent({ id: 'rec-other' }, holdingFrame(true, 'peer-o'));
+    expect(result.applied).toBe(false);
+    expect(await holderNames()).toEqual([]);
+  });
+});
+
 describe('applyPeerSyncEvent for gallery images', () => {
   beforeEach(() => {
     registry.peers = [imagePeer('rec-origin', 'peer-o'), imagePeer('rec-other', 'peer-x')];

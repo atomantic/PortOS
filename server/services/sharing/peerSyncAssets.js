@@ -258,6 +258,14 @@ export async function diffAssetManifestAgainstLocal(manifest, { includeMismatche
   // A gallery image deleted here (or by its owner) is never pulled back.
   const deletedImages = await deletedImageStamps(manifest);
   const deletedVideos = await deletedVideoIds(manifest);
+  // Released to a Make-primary host (services/mediaHolders.js): streamed from
+  // there on purpose, so an absent copy is not missing. Read only when needed.
+  let released = null;
+  const isReleased = async (kind, name) => {
+    if (kind !== 'image' && kind !== 'video') return false;
+    released ??= await import('../peerHostedMedia.js').then((m) => m.releasedHostedKeys()).catch(() => new Set());
+    return released.has(`${kind}:${name}`);
+  };
   const missing = [];
   for (const entry of manifest) {
     if (!isPlainObject(entry) || !isStr(entry.filename) || !isStr(entry.kind)) continue;
@@ -285,7 +293,7 @@ export async function diffAssetManifestAgainstLocal(manifest, { includeMismatche
     };
     const fullPath = join(dir, safeName);
     if (!existsSync(fullPath)) {
-      missing.push(sanitizedEntry);
+      if (!(await isReleased(entry.kind, safeName))) missing.push(sanitizedEntry);
       continue;
     }
     if (!includeMismatched) continue;

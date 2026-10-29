@@ -218,7 +218,6 @@ describe('media deletes between two machines', () => {
     expect(held.pendingDelete).toBeUndefined();
     expect(held.hidden).not.toBe(true);
     await a.call('setPeerFields', { peerId: 'rec-b', fields: { mediaDeleteAllowed: true } });
-    await b.call('disconnectRelay', { peerId: 'rec-a' });
   });
 });
 
@@ -302,5 +301,83 @@ describe('safety-net cadence', () => {
     await a.call('shiftClock', { ms: 60_000 + SAFETY_NET_INTERVAL_MS + 61_000 });
     await a.call('syncTick');
     expect(syncPulls(await b.call('takeRequests'), 'videoHistory')).toBe(1);
+  });
+});
+
+// A renders `id`; B pulls A's snapshot (the row) and byte inventory, and holds
+// a copy of the bytes, so each machine is a holder B knows of.
+async function heldOnBoth(id) {
+  await a.call('seedVideo', { id });
+  await b.call('syncWithPeer', { peerId: 'rec-a' });
+  expect(await row(b, id)).toMatchObject({ originInstanceId: 'inst-a' });
+  await b.call('copyBytes', { id });
+}
+
+const holdersOf = async (machine, id) => (await machine.call('holders')).items[`video:${id}.mp4`] ?? null;
+
+describe('media held by both machines', () => {
+  beforeAll(async () => {
+    await Promise.all([a, b].map((machine) => machine.call('shiftClock', { ms: 0 })));
+  });
+
+  it('lists both holders, and Make primary releases the other copy, which then streams from the primary', async () => {
+    await heldOnBoth('v-multi');
+    const before = await holdersOf(b, 'v-multi');
+    expect(before).toMatchObject({ cardKeys: ['video:v-multi'] });
+    expect(before.holders.map((h) => h.name)).toEqual(['This machine', 'Machine A']);
+    await a.call('takeRequests');
+
+    const result = await b.call('makePrimary', { kind: 'video', filename: 'v-multi.mp4', instanceId: 'inst-b' });
+
+    expect(result).toMatchObject({ primaryInstanceId: 'inst-b', released: [{ name: 'Machine A' }], pending: [], kept: [] });
+    expect(await a.call('takeRequests')).toContain('POST /api/peer-media/release');
+    // A's bytes went to its trash; its row stays, now naming B as primary.
+    expect((await a.call('files', { id: 'v-multi' })).video).toBe(false);
+    expect(await a.call('trashed')).toEqual(expect.arrayContaining([expect.stringMatching(/-v-multi\.mp4$/)]));
+    expect(await a.call('fullRow', { id: 'v-multi' })).toMatchObject({ primaryInstanceId: 'inst-b' });
+    expect((await a.call('hostedEntries'))['video:v-multi.mp4']).toMatchObject({ peerId: 'inst-b' });
+    expect(await a.call('fetchOwnVideo', { id: 'v-multi' })).toEqual({ status: 200, location: 'remote', body: 'synthetic-video-v-multi' });
+    // B keeps its copy and is the only holder left.
+    expect((await b.call('files', { id: 'v-multi' })).video).toBe(true);
+    expect(await holdersOf(b, 'v-multi')).toBeNull();
+  });
+
+  it('a holder that is offline keeps its copy, shown pending, until its queued release is delivered', async () => {
+    await heldOnBoth('v-queued');
+    await b.call('setPeerFields', { peerId: 'rec-a', fields: { status: 'offline' } });
+
+    const result = await b.call('makePrimary', { kind: 'video', filename: 'v-queued.mp4', instanceId: 'inst-b' });
+
+    expect(result).toMatchObject({ released: [], pending: [{ name: 'Machine A' }] });
+    expect((await a.call('files', { id: 'v-queued' })).video).toBe(true);
+    const waiting = await holdersOf(b, 'v-queued');
+    expect(waiting.holders).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'Machine A', releasePending: true })]));
+
+    await b.call('setPeerFields', { peerId: 'rec-a', fields: { status: 'online' } });
+    expect(await b.call('drainReleases', { peerId: 'rec-a' })).toBe(1);
+    expect((await a.call('files', { id: 'v-queued' })).video).toBe(false);
+    expect(await holdersOf(b, 'v-queued')).toBeNull();
+  });
+
+  it('a holder that refuses media delete for this machine keeps its copy and says so', async () => {
+    await heldOnBoth('v-refused');
+    await a.call('setPeerFields', { peerId: 'rec-b', fields: { mediaDeleteAllowed: false } });
+
+    const result = await b.call('makePrimary', { kind: 'video', filename: 'v-refused.mp4', instanceId: 'inst-b' });
+
+    expect(result).toMatchObject({ released: [], pending: [], kept: [{ name: 'Machine A', reason: 'media delete is turned off there' }] });
+    expect((await a.call('files', { id: 'v-refused' })).video).toBe(true);
+    expect((await holdersOf(b, 'v-refused')).holders).toHaveLength(2);
+    await a.call('setPeerFields', { peerId: 'rec-b', fields: { mediaDeleteAllowed: true } });
+  });
+
+  it('refuses a primary that does not hold the bytes', async () => {
+    await heldOnBoth('v-gone');
+    // A deletes its copy while B is not listening, so B still lists A as a holder.
+    await a.call('deleteVideo', { id: 'v-gone' });
+    await expect(b.call('makePrimary', { kind: 'video', filename: 'v-gone.mp4', instanceId: 'inst-a' }))
+      .rejects.toMatchObject({ code: 'PRIMARY_NOT_HOLDING' });
+    expect((await b.call('files', { id: 'v-gone' })).video).toBe(true);
+    expect((await holdersOf(b, 'v-gone'))).toBeNull();
   });
 });
