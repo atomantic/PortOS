@@ -74,25 +74,37 @@ async function restoredVideos(local) {
     }
     return stamped.length > 0 ? history : HISTORY_UNCHANGED;
   });
+  // Announced as each clears: a later failure must not strand a row whose
+  // tombstone is already gone, since no later pass would find it again.
   const cleared = [];
-  for (const row of stamped) {
-    const tombstone = restored.find((t) => t.key === row.id);
-    if (await clearMediaTombstone('video', row.id, { deletedAt: tombstone.deletedAt })) cleared.push({ ...row });
+  try {
+    for (const row of stamped) {
+      const tombstone = restored.find((t) => t.key === row.id);
+      if (await clearMediaTombstone('video', row.id, { deletedAt: tombstone.deletedAt })) cleared.push({ ...row });
+    }
+  } finally {
+    if (cleared.length > 0) announceLocalVideoRows(cleared, local);
+    for (const row of cleared) console.log(`♻️ Restored video ${row.id}: delete record cleared`);
   }
-  return cleared;
+  return cleared.map((r) => r.id);
 }
 
 async function restoredImages(local) {
   const cleared = [];
-  for (const tombstone of await listMediaTombstones('image')) {
-    if (!isSafeFilename(tombstone.key, ['.png'])) continue;
-    if (!(await reappearedAfter(join(PATHS.images, tombstone.key), tombstone.deletedAt))) continue;
-    const { metadata } = await readImageSidecar(tombstone.key);
-    if (metadata?.originInstanceId !== local) {
-      keptLog('image', tombstone.key, metadata?.originInstanceId);
-      continue;
+  try {
+    for (const tombstone of await listMediaTombstones('image')) {
+      if (!isSafeFilename(tombstone.key, ['.png'])) continue;
+      if (!(await reappearedAfter(join(PATHS.images, tombstone.key), tombstone.deletedAt))) continue;
+      const { metadata } = await readImageSidecar(tombstone.key);
+      if (metadata?.originInstanceId !== local) {
+        keptLog('image', tombstone.key, metadata?.originInstanceId);
+        continue;
+      }
+      if (await clearMediaTombstone('image', tombstone.key, { deletedAt: tombstone.deletedAt })) cleared.push(tombstone.key);
     }
-    if (await clearMediaTombstone('image', tombstone.key, { deletedAt: tombstone.deletedAt })) cleared.push(tombstone.key);
+  } finally {
+    if (cleared.length > 0) emitMediaHistoryChanged({ kind: 'image', op: 'upsert', ids: cleared });
+    for (const key of cleared) console.log(`♻️ Restored image ${key}: delete record cleared`);
   }
   return cleared;
 }
@@ -111,11 +123,7 @@ export function clearRestoredMediaTombstones() {
     if (!local) return { videos: [], images: [] };
     const videos = await restoredVideos(local);
     const images = await restoredImages(local);
-    if (videos.length > 0) announceLocalVideoRows(videos, local);
-    if (images.length > 0) emitMediaHistoryChanged({ kind: 'image', op: 'upsert', ids: images });
-    for (const row of videos) console.log(`♻️ Restored video ${row.id}: delete record cleared`);
-    for (const key of images) console.log(`♻️ Restored image ${key}: delete record cleared`);
-    return { videos: videos.map((r) => r.id), images };
+    return { videos, images };
   });
   tail = run.then(() => {}, () => {});
   return run;
