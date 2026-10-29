@@ -80,7 +80,7 @@ describe('earliest holder of a pre-upgrade video', () => {
     expect((await dataSync.getHostedMediaInventory('videoHistory')).mtimes).toEqual({ 'v1.mp4': T });
   });
 
-  const report = (id, ms) => recordPeerHoldings(id, 'video', ms === undefined ? {} : { 'v1.mp4': ms });
+  const report = (id, ms) => recordPeerHoldings(id, 'video', 'videoHistory', { mtimes: ms === undefined ? {} : { 'v1.mp4': ms }, checked: ['v1.mp4'] });
 
   it('stamps this machine when its file predates every holder, once all peers reported', async () => {
     touch(join(PATHS.videos, 'v1.mp4'), T);
@@ -102,6 +102,16 @@ describe('earliest holder of a pre-upgrade video', () => {
     expect(await originOf()).toBe('a');
   });
 
+  it('treats a report that never examined the file as unreported', async () => {
+    touch(join(PATHS.videos, 'v1.mp4'), T);
+    await report('a', T + DAY);
+    await recordPeerHoldings('b', 'video', 'mediaCollections', { mtimes: {}, checked: ['other.mp4'] });
+    expect(await reconcileMediaOrigins('video')).toBe(0);
+    await report('b', undefined);
+    expect(await reconcileMediaOrigins('video')).toBe(1); // b examined it and does not hold it: only a holds a later copy
+    expect(await originOf()).toBe('me');
+  });
+
   it('claims nothing on a tie, and never touches a copy that records a supplier', async () => {
     touch(join(PATHS.videos, 'v1.mp4'), T);
     await report('a', T);
@@ -120,8 +130,8 @@ describe('earliest holder of a pre-upgrade collection image', () => {
     writeFileSync(join(PATHS.images, 'i1.metadata.json'), JSON.stringify({ prompt: 'p' }));
     touch(join(PATHS.images, 'i1.png'), T);
     vi.spyOn(dataSync, 'getHostedMediaInventory').mockResolvedValue({ filenames: ['i1.png'] });
-    await recordPeerHoldings('a', 'image', { 'i1.png': T + DAY });
-    await recordPeerHoldings('b', 'image', { 'i1.png': T + 2 * DAY });
+    await recordPeerHoldings('a', 'image', 'mediaCollections', { mtimes: { 'i1.png': T + DAY }, checked: ['i1.png'] });
+    await recordPeerHoldings('b', 'image', 'mediaCollections', { mtimes: { 'i1.png': T + 2 * DAY }, checked: ['i1.png'] });
     expect(await reconcileMediaOrigins('image')).toBe(1);
     expect(JSON.parse(await readFile(join(PATHS.images, 'i1.metadata.json'), 'utf8')).originInstanceId).toBe('me');
     await editImageSidecar('i1.png', (m) => { delete m.originInstanceId; m.suppliedByInstanceId = 'a'; return true; });

@@ -40,16 +40,24 @@ async function readHoldings() {
   return isPlainObject(raw) && isPlainObject(raw.peers) ? raw.peers : {};
 }
 
-/** Remember the modify times `peerId` reported for the files it holds (`{ filename: mtimeMs }`). */
-export function recordPeerHoldings(peerId, kind, mtimes) {
-  if (!KINDS[kind] || !isNonBlankStr(peerId) || !isPlainObject(mtimes)) return Promise.resolve(false);
+/**
+ * Remember what `peerId` reported for one inventory scope (`category`): the
+ * modify times of the files it holds (`{ filename: mtimeMs }`) and the
+ * filenames it examined. Scopes differ (history rows vs collection assets), so
+ * a report speaks only for the names it `checked`, never for the whole kind.
+ */
+export function recordPeerHoldings(peerId, kind, category, { mtimes, checked }) {
+  if (!KINDS[kind] || !isNonBlankStr(peerId) || !isNonBlankStr(category) || !isPlainObject(mtimes) || !Array.isArray(checked)) return Promise.resolve(false);
+  const valid = (name) => typeof name === 'string' && sanitizeAssetFilename(name) === name;
   const clean = {};
   for (const [name, ms] of Object.entries(mtimes)) {
-    if (typeof ms === 'number' && Number.isFinite(ms) && ms > 0 && sanitizeAssetFilename(name) === name) clean[name] = ms;
+    if (typeof ms === 'number' && Number.isFinite(ms) && ms > 0 && valid(name)) clean[name] = ms;
   }
   return queueWrite(async () => {
     const peers = await readHoldings();
-    peers[peerId] = { ...(isPlainObject(peers[peerId]) ? peers[peerId] : {}), [kind]: { at: new Date().toISOString(), mtimes: clean } };
+    const entry = isPlainObject(peers[peerId]) ? peers[peerId] : {};
+    const scopes = isPlainObject(entry[kind]) ? entry[kind] : {};
+    peers[peerId] = { ...entry, [kind]: { ...scopes, [category]: { at: new Date().toISOString(), mtimes: clean, checked: checked.filter(valid) } } };
     await atomicWrite(HOLDINGS_FILE(), { version: SCHEMA_VERSION, peers });
     return true;
   });
@@ -122,8 +130,8 @@ const stampImageOrigin = async ({ filename, origin }) => {
 
 /**
  * Stamp the origin of every unattributed file of `kind` whose earliest holder is
- * provable. Returns the number stamped. No-op unless EVERY enabled paired peer
- * has a fresh report for `kind`.
+ * provable. Returns the number stamped. A file is only attributed when EVERY
+ * enabled paired peer has a fresh report that examined it.
  */
 export async function reconcileMediaOrigins(kind, { nowMs = Date.now() } = {}) {
   if (!KINDS[kind]) return 0;
@@ -134,17 +142,22 @@ export async function reconcileMediaOrigins(kind, { nowMs = Date.now() } = {}) {
   if (peers.length === 0) return 0;
   const holdings = await readHoldings().catch(() => null);
   if (!holdings) return 0;
-  const reports = peers.map((peer) => {
-    const report = holdings[peer.instanceId]?.[kind];
-    const fresh = isPlainObject(report?.mtimes) && nowMs - Date.parse(report.at) <= REPORT_MAX_AGE_MS;
-    return fresh ? { peer, mtimes: report.mtimes } : null;
-  });
-  if (reports.includes(null)) return 0;
+  // Fresh scope reports per peer; one speaks for a file only if the peer examined its name.
+  const scopesOf = (peer) => Object.values(isPlainObject(holdings[peer.instanceId]?.[kind]) ? holdings[peer.instanceId][kind] : {})
+    .filter((scope) => isPlainObject(scope?.mtimes) && Array.isArray(scope.checked) && nowMs - Date.parse(scope.at) <= REPORT_MAX_AGE_MS);
   const candidates = await unattributedFiles(kind);
   const claims = [];
   for (const file of candidates) {
-    const holders = reports.filter((r) => r.mtimes[file.filename] !== undefined)
-      .map((r) => ({ peerId: r.peer.instanceId, mtimeMs: r.mtimes[file.filename], mayDelete: peerMayDeleteMedia(r.peer) }));
+    const holders = [];
+    let covered = true;
+    for (const peer of peers) {
+      const scopes = scopesOf(peer).filter((scope) => scope.checked.includes(file.filename) || scope.mtimes[file.filename] !== undefined);
+      // A peer that did not examine the file is unreported for it: nobody claims.
+      if (scopes.length === 0) { covered = false; break; }
+      const held = scopes.find((scope) => scope.mtimes[file.filename] !== undefined);
+      if (held) holders.push({ peerId: peer.instanceId, mtimeMs: held.mtimes[file.filename], mayDelete: peerMayDeleteMedia(peer) });
+    }
+    if (!covered) continue;
     const origin = earliestHolderOrigin({ localId, localMtimeMs: file.mtimeMs, holders });
     if (origin) claims.push({ ...file, origin });
   }

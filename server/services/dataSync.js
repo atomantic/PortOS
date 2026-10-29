@@ -1548,7 +1548,7 @@ export async function applyRemote(category, remoteData, options = {}) {
         if (peer.mediaSyncMode === 'host') await reconcileHostedMedia(peer.instanceId, kind, remoteData.filenames, remoteData.checked);
         if (isPlainObject(remoteData.mtimes)) {
           const { recordPeerHoldings, reconcileMediaOrigins } = await import('./mediaOriginReconcile.js');
-          await recordPeerHoldings(peer.instanceId, kind, remoteData.mtimes);
+          await recordPeerHoldings(peer.instanceId, kind, category, { mtimes: remoteData.mtimes, checked: remoteData.checked });
           await reconcileMediaOrigins(kind);
         }
       }
