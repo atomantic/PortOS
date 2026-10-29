@@ -18,6 +18,7 @@ import { isPlainObject } from '../lib/objects.js';
 import { isNonBlankStr } from '../lib/textUtils.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { rowOwnerCandidates } from '../lib/mediaRowOwners.js';
+import { peerSyncTombstoneSchema } from '../lib/peerSyncEventSchema.js';
 import { peerFetch, readPeerBody } from '../lib/peerHttpClient.js';
 import { peerBaseUrl } from '../lib/peerUrl.js';
 import { withAbortTimeout } from '../lib/abortTimeout.js';
@@ -122,7 +123,13 @@ async function sendDeleteCommand(peer, kind, key) {
     return { outcome: 'unreachable', detail: err?.message || String(err) };
   }
   const body = await readPeerBody(res, 'json', { maxBytes: 64 * 1024, idleTimeoutMs: 5000 }).catch(() => null);
-  if (res.ok && body?.ok === true) return { outcome: 'ok', tombstone: body.tombstone ?? null };
+  if (res.ok && body?.ok === true) {
+    // The reply names what to delete here, so it must be the tombstone for the
+    // row we asked about and nothing else; anything else is a failed command.
+    const parsed = peerSyncTombstoneSchema.safeParse(body.tombstone);
+    if (!parsed.success || parsed.data.key !== key) return { outcome: 'invalid-ack', detail: 'reply carried no tombstone for this row' };
+    return { outcome: 'ok', tombstone: parsed.data };
+  }
   if (res.status === 403 && body?.code === 'MEDIA_DELETE_FORBIDDEN') return { outcome: 'forbidden' };
   if (res.status === 404 && body?.code === 'MEDIA_NOT_HELD') return { outcome: 'not-held' };
   const detail = `http-${res.status}${body?.code ? ` ${body.code}` : ''}`;
@@ -130,9 +137,16 @@ async function sendDeleteCommand(peer, kind, key) {
   return { outcome: 'error', detail };
 }
 
-// The owner deleted its copy; retire ours through the rule every remote video
-// tombstone passes (the owner is one of this row's owner candidates), so the
-// tombstone is recorded by the same merge and nothing is re-announced.
+// Tombstone refusals that mean the owner's reply itself is unusable.
+const BAD_TOMBSTONE_REASONS = new Set(['invalid-key', 'future-or-invalid-deletedAt']);
+
+/**
+ * The owner deleted its copy; retire ours through the rule every remote video
+ * tombstone passes (the owner is one of this row's owner candidates), so the
+ * tombstone is recorded by the same merge and nothing is re-announced.
+ * Resolves `deleted` (gone here too), `deleted-remote` (the owner's copy is
+ * gone, this one stays; `hiddenHere` when it was hidden) or `invalid-ack`.
+ */
 async function retireLocalCopy(peer, key, tombstone) {
   const [{ authorizeRemoteVideoTombstone }, { applyRemoteVideoTombstones }] = await Promise.all([
     import('./videoTombstoneAuthorization.js'), import('./dataSync.js'),
@@ -140,17 +154,22 @@ async function retireLocalCopy(peer, key, tombstone) {
   const verdict = authorizeRemoteVideoTombstone({
     peer, tombstone, localRow: await getHistoryItem(key), hostedIndex: await hostedIndex(), via: 'event',
   });
+  if (!verdict.allowed && BAD_TOMBSTONE_REASONS.has(verdict.reason)) return { status: 'invalid-ack', reason: verdict.reason };
   if (verdict.allowed) {
     await applyRemoteVideoTombstones([tombstone]);
-    // A removal that failed (already logged) must not leave the row marked pending forever.
-    if (await getHistoryItem(key)) await setPendingFlag(key, null);
-    return;
+    if (!(await getHistoryItem(key))) return { status: 'deleted' };
+    // The tombstone predates this copy (re-created since) or its removal failed
+    // (already logged): the copy here stays, and is no longer pending.
+    await setPendingFlag(key, null);
+    console.log(`⏭️ Video ${key} deleted on ${peerLabel(peer)}; the copy here was not removed`);
+    return { status: 'deleted-remote', hiddenHere: false };
   }
   // This machine does not accept that peer's tombstones (e.g. its media delete
   // is off here), so the local copy stays, hidden on this machine only.
   console.log(`⏭️ Video ${key} deleted on ${peerLabel(peer)}; local copy hidden, its tombstone is not accepted here: ${verdict.reason}`);
   await setPendingFlag(key, null);
   await hideLocally(key);
+  return { status: 'deleted-remote', hiddenHere: true };
 }
 
 async function deleteLocally(key) {
@@ -163,8 +182,26 @@ async function deleteLocally(key) {
 const forbidden = (peer) => new ServerError(`${peerLabel(peer)} refused the delete: media delete is turned off there for this machine`, {
   status: 403, code: 'MEDIA_DELETE_FORBIDDEN',
 });
+const commandFailed = (peer, detail) => new ServerError(`${peerLabel(peer)} could not delete this video (${detail}); it may need an update`, {
+  status: 502, code: 'MEDIA_DELETE_FAILED',
+});
+const imageUnsupported = () => new ServerError('Remote image delete is not supported yet', {
+  status: 422, code: 'IMAGE_DELETE_NOT_SUPPORTED', severity: 'warning',
+});
+
+// cancelPendingDelete bumps a row's generation; an attempt or drain that sees
+// it change stops before re-queuing or re-flagging the row.
+const cancelGenerations = new Map();
+const generationOf = (kind, key) => cancelGenerations.get(`${kind}:${key}`) ?? 0;
+
+// Last drain attempt per peer registry id, so an online owner that keeps
+// failing is retried from `peers:updated` at most once per RETRY_INTERVAL_MS.
+const RETRY_INTERVAL_MS = 60_000;
+const lastAttemptAt = new Map();
 
 async function deleteVideoAnywhere(key) {
+  const generation = generationOf('video', key);
+  const cancelled = () => generationOf('video', key) !== generation;
   const row = await getHistoryItem(key);
   if (!row) throw new ServerError('Not found', { status: 404, code: 'NOT_FOUND' });
   const localId = await localInstanceId();
@@ -190,7 +227,13 @@ async function deleteVideoAnywhere(key) {
   }
 
   const queuedAt = new Date().toISOString();
+  const withdrawn = async () => {
+    await setPendingFlag(key, null);
+    console.log(`↩️ Delete of video ${key} withdrawn before its owner answered`);
+    return { status: 'cancelled' };
+  };
   await setPendingFlag(key, { peerId: targets[0].id, queuedAt });
+  if (cancelled()) return withdrawn();
   const unreachable = [];
   let failure = null;
   try {
@@ -200,11 +243,15 @@ async function deleteVideoAnywhere(key) {
         ? { outcome: 'unreachable', detail: 'offline' }
         : await sendDeleteCommand(peer, 'video', key);
       if (result.outcome === 'ok') {
-        await retireLocalCopy(peer, key, result.tombstone);
+        // The owner already deleted, so a cancel that raced the dial cannot undo it.
+        const retired = await retireLocalCopy(peer, key, result.tombstone);
+        if (retired.status === 'invalid-ack') throw commandFailed(peer, `unusable tombstone: ${retired.reason}`);
         await dropEntriesFor('video', key);
         console.log(`🗑️ Video ${key} deleted on its owner ${peerLabel(peer)}`);
-        return { status: 'deleted' };
+        return { ...retired, peerName: peerLabel(peer) };
       }
+      if (cancelled()) return withdrawn();
+      if (result.outcome === 'invalid-ack') throw commandFailed(peer, result.detail);
       if (result.outcome === 'forbidden') throw forbidden(peer);
       if (result.outcome === 'unreachable') unreachable.push(peer);
       if (result.outcome === 'error' && !failure) failure = { peer, detail: result.detail };
@@ -216,17 +263,22 @@ async function deleteVideoAnywhere(key) {
   if (unreachable.length > 0) {
     const peer = unreachable[0];
     const entry = { peerId: peer.id, kind: 'video', key, queuedAt };
-    await updateQueue((entries) => [...entries.filter((e) => !(e.kind === 'video' && e.key === key)), entry]);
+    lastAttemptAt.set(peer.id, Date.now());
+    let queued = false;
+    // Re-checked inside the queue lock, the same lock cancelPendingDelete's dequeue takes.
+    await updateQueue((entries) => {
+      if (cancelled()) return entries;
+      queued = true;
+      return [...entries.filter((e) => !(e.kind === 'video' && e.key === key)), entry];
+    });
+    if (!queued) return withdrawn();
     await setPendingFlag(key, { peerId: peer.id, queuedAt });
+    if (cancelled()) return withdrawn();
     console.log(`🔌 Video ${key} delete queued until ${peerLabel(peer)} is reachable`);
     return { status: 'pending', pendingDelete: { peerId: peer.id, queuedAt }, peerName: peerLabel(peer) };
   }
   await setPendingFlag(key, null);
-  if (failure) {
-    throw new ServerError(`${peerLabel(failure.peer)} could not delete this video (${failure.detail}); it may need an update`, {
-      status: 502, code: 'MEDIA_DELETE_FAILED',
-    });
-  }
+  if (failure) throw commandFailed(failure.peer, failure.detail);
   // Every candidate answered that it does not hold the row.
   await hideLocally(key);
   console.log(`⏭️ Video ${key}: no owner candidate holds it; hidden on this machine only`);
@@ -238,14 +290,15 @@ const inFlight = new Map();
 
 /**
  * Delete `kind:key` wherever it is owned. Resolves `{ status }`:
- * `deleted` (gone here and on its owner), `pending` (queued for an unreachable
- * owner; also `pendingDelete` and `peerName`) or `owner-unknown` (hidden here
- * only). Throws a 403 `MEDIA_DELETE_FORBIDDEN` when the owner refuses.
+ * `deleted` (gone here and on its owner), `deleted-remote` (gone on its owner;
+ * the copy here stays, `hiddenHere` when hidden), `pending` (queued for an
+ * unreachable owner; also `pendingDelete` and `peerName`), `owner-unknown`
+ * (hidden here only) or `cancelled` (withdrawn while the owner was dialed).
+ * Throws 403 `MEDIA_DELETE_FORBIDDEN` when the owner refuses and 502
+ * `MEDIA_DELETE_FAILED` when its answer is unusable.
  */
 export function deleteMediaAnywhere(kind, key) {
-  if (kind === 'image') {
-    return Promise.reject(new ServerError('Remote image delete is not supported yet', { status: 501, code: 'IMAGE_DELETE_NOT_SUPPORTED' }));
-  }
+  if (kind === 'image') return Promise.reject(imageUnsupported());
   if (kind !== 'video' || !isNonBlankStr(key)) return Promise.reject(new ServerError('Unknown media', { status: 400, code: 'VALIDATION_ERROR' }));
   const id = `${kind}:${key}`;
   if (inFlight.has(id)) return inFlight.get(id);
@@ -257,6 +310,7 @@ export function deleteMediaAnywhere(kind, key) {
 /** Withdraw a queued delete and clear the row's pending flag. Resolves `{ ok, cancelled }`. */
 export async function cancelPendingDelete(kind, key) {
   if (kind !== 'video') throw new ServerError('Unknown media kind', { status: 400, code: 'VALIDATION_ERROR' });
+  cancelGenerations.set(`${kind}:${key}`, generationOf(kind, key) + 1);
   const dequeued = await dropEntriesFor(kind, key);
   const row = await getHistoryItem(key);
   if (!row) throw new ServerError('Not found', { status: 404, code: 'NOT_FOUND' });
@@ -276,16 +330,20 @@ const rowRecreated = (row, entry) => Date.parse(row?.createdAt) > Date.parse(ent
  * row's pending flag. `peers` is the current registry list.
  */
 async function pruneMediaDeleteQueue(peers, nowMs = Date.now()) {
+  const queued = await readQueue();
+  if (queued.length === 0) return 0;
   const known = new Set((Array.isArray(peers) ? peers : []).map((p) => p?.id).filter(isNonBlankStr));
+  const staleReason = (entry) => (entryExpired(entry, nowMs) ? 'expired' : !known.has(entry.peerId) ? 'peer removed' : null);
+  // The history is read only when some entry survives the cheap checks.
+  let rows = new Map();
+  if (queued.some((entry) => !staleReason(entry))) {
+    const history = await loadHistory();
+    rows = new Map((Array.isArray(history) ? history : []).filter((r) => isNonBlankStr(r?.id)).map((r) => [r.id, r]));
+  }
   const dropped = [];
-  const history = await loadHistory();
-  const rows = new Map((Array.isArray(history) ? history : []).filter((r) => isNonBlankStr(r?.id)).map((r) => [r.id, r]));
   await updateQueue((entries) => entries.filter((entry) => {
     const row = rows.get(entry.key);
-    const reason = entryExpired(entry, nowMs) ? 'expired'
-      : !known.has(entry.peerId) ? 'peer removed'
-        : !row ? 'row gone'
-          : rowRecreated(row, entry) ? 're-created' : null;
+    const reason = staleReason(entry) ?? (!row ? 'row gone' : rowRecreated(row, entry) ? 're-created' : null);
     if (reason) dropped.push({ entry, reason });
     return !reason;
   }));
@@ -297,11 +355,13 @@ async function pruneMediaDeleteQueue(peers, nowMs = Date.now()) {
 }
 
 const draining = new Set();
+const sameEntry = (a, b) => a.peerId === b.peerId && a.kind === b.kind && a.key === b.key && a.queuedAt === b.queuedAt;
 
-/** Send every queued command for `peer` (it just came online). Never rejects. */
+/** Send every queued command for `peer` (it is online). Never rejects. */
 async function drainMediaDeleteQueue(peer) {
   if (!isNonBlankStr(peer?.id) || draining.has(peer.id)) return 0;
   draining.add(peer.id);
+  lastAttemptAt.set(peer.id, Date.now());
   let done = 0;
   try {
     const { getPeers } = await import('./instances.js');
@@ -315,20 +375,25 @@ async function drainMediaDeleteQueue(peer) {
           console.log(`⏭️ Queued delete of ${entry.kind} ${entry.key} kept: ${peerLabel(peer)} is not paired`);
           continue;
         }
+        // A cancel (or a fresh attempt) since the list was read has withdrawn or replaced it.
+        if (!(await readQueue()).some((e) => sameEntry(e, entry))) continue;
         const result = await sendDeleteCommand(current, entry.kind, entry.key);
         if (result.outcome === 'unreachable') {
           console.log(`🔌 Queued delete of ${entry.kind} ${entry.key} still waiting on ${peerLabel(current)}: ${result.detail}`);
           continue;
         }
         await dropEntriesFor(entry.kind, entry.key);
-        if (result.outcome === 'ok') {
-          await retireLocalCopy(current, entry.key, result.tombstone);
-          console.log(`🗑️ Queued delete of ${entry.kind} ${entry.key} completed on ${peerLabel(current)}`);
+        const retired = result.outcome === 'ok' ? await retireLocalCopy(current, entry.key, result.tombstone) : null;
+        if (retired && retired.status !== 'invalid-ack') {
+          console.log(`🗑️ Queued delete of ${entry.kind} ${entry.key} completed on ${peerLabel(current)} (${retired.status})`);
           done++;
         } else if (result.outcome === 'not-held') {
           await setPendingFlag(entry.key, null);
           await hideLocally(entry.key);
           console.log(`⏭️ ${peerLabel(current)} does not hold ${entry.kind} ${entry.key}; hidden on this machine only`);
+        } else if (retired || result.outcome === 'invalid-ack') {
+          await setPendingFlag(entry.key, null);
+          console.warn(`⚠️ ${peerLabel(current)} answered queued delete of ${entry.kind} ${entry.key} without a usable tombstone; nothing deleted here`);
         } else {
           await setPendingFlag(entry.key, null);
           console.log(`🚫 ${peerLabel(current)} refused queued delete of ${entry.kind} ${entry.key}: ${result.outcome}${result.detail ? ` ${result.detail}` : ''}`);
@@ -345,18 +410,32 @@ async function drainMediaDeleteQueue(peer) {
   return done;
 }
 
+// After a registry change (every probe cycle emits one): prune, then retry the
+// queued commands of owners that are online now, once per RETRY_INTERVAL_MS.
+async function reconcileMediaDeleteQueue(peers) {
+  await pruneMediaDeleteQueue(peers);
+  const waiting = new Set((await readQueue()).map((e) => e.peerId));
+  const now = Date.now();
+  for (const peer of Array.isArray(peers) ? peers : []) {
+    if (!waiting.has(peer?.id) || peer.status !== 'online' || peer.enabled === false) continue;
+    if (now - (lastAttemptAt.get(peer.id) ?? -Infinity) < RETRY_INTERVAL_MS) continue;
+    await drainMediaDeleteQueue(peer);
+  }
+}
+
 let disarm = null;
 
 /**
- * Arm the queue listeners: drain on `peer:online`, prune on registry changes
- * (a removed peer's commands go with it). Idempotent; returns the disarm function.
+ * Arm the queue listeners: drain on `peer:online`; on registry changes prune
+ * (a removed peer's commands go with it) and retry owners already online.
+ * Idempotent; returns the disarm function.
  */
 export function initMediaRemoteDelete() {
   if (disarm) return disarm;
-  const onOnline = (peer) => { void drainMediaDeleteQueue(peer); };
-  const onPeers = (peers) => {
-    pruneMediaDeleteQueue(peers).catch((err) => console.error(`❌ Media delete queue prune failed: ${err.message}`));
-  };
+  // Each returns its settling promise (the emitter ignores it; tests await it).
+  const onOnline = (peer) => drainMediaDeleteQueue(peer);
+  const onPeers = (peers) => reconcileMediaDeleteQueue(peers)
+    .catch((err) => console.error(`❌ Media delete queue upkeep failed: ${err.message}`));
   instanceEvents.on('peer:online', onOnline);
   instanceEvents.on('peers:updated', onPeers);
   disarm = () => {
@@ -383,7 +462,7 @@ export async function executePeerMediaDelete(senderPeerId, { kind, key }) {
     console.log(`🚫 Media delete from ${peerLabel(peer)} refused: media delete is off for this peer`);
     throw new ServerError('Media delete is turned off for this peer', { status: 403, code: 'MEDIA_DELETE_FORBIDDEN' });
   }
-  if (kind === 'image') throw new ServerError('Remote image delete is not supported yet', { status: 501, code: 'IMAGE_DELETE_NOT_SUPPORTED' });
+  if (kind === 'image') throw imageUnsupported();
   const notHeld = () => new ServerError('This machine does not hold that media', { status: 404, code: 'MEDIA_NOT_HELD' });
   if (!(await getHistoryItem(key))) throw notHeld();
   const { deleteHistoryItem } = await import('./videoGen/historyOps.js');

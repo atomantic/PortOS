@@ -1303,8 +1303,8 @@ router.post('/upload', optionalUpload('file'), asyncHandler(async (req, res) => 
 }));
 
 // Deletes on the machine that owns the row (services/mediaRemoteDelete.js):
-// `{ ok, status: 'deleted' | 'pending' | 'owner-unknown' }`. A refusal by the
-// owner is an error, never a success.
+// `{ ok, status: 'deleted' | 'deleted-remote' | 'pending' | 'owner-unknown' | 'cancelled' }`.
+// A refusal or an unusable answer from the owner is an error, never a success.
 router.delete('/history/:id', asyncHandler(async (req, res) => {
   const parsed = historyRecordIdSchema.safeParse(req.params.id);
   if (!parsed.success) failValidation(parsed);

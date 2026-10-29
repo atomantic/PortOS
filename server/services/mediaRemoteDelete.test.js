@@ -48,6 +48,13 @@ const listMediaDeleteQueue = async () => (await readJSONFile(QUEUE, { entries: [
 const json = (status, body) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 const ownerAck = (key) => json(200, { ok: true, tombstone: { key, deletedAt: new Date().toISOString() } });
 const unreachable = () => Promise.reject(Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }));
+const deferred = () => {
+  let resolve; let reject;
+  const promise = new Promise((res, rej) => { resolve = res; reject = rej; });
+  return { promise, resolve, reject };
+};
+// The armed listener itself, so a test can await the work it starts.
+const listenerFor = (event) => instanceEvents.listeners(event).at(-1);
 const deleteFrames = [];
 const onFrame = (event) => { if (event.op === 'delete') deleteFrames.push(event); };
 peerSyncBus.on('event', onFrame);
@@ -102,7 +109,7 @@ describe('deleteMediaAnywhere', () => {
     expect(trashFiles).not.toHaveBeenCalled();
 
     answer(ownerAck('v1'));
-    expect(await pending).toEqual({ status: 'deleted' });
+    expect(await pending).toEqual({ status: 'deleted', peerName: 'Example rec-owner' });
     expect(await readRows()).toEqual([]);
     expect((await listMediaTombstones('video')).map((t) => t.key)).toEqual(['v1']);
     expect(trashFiles).toHaveBeenCalledTimes(1);
@@ -244,5 +251,142 @@ describe('media delete queue upkeep', () => {
     disarmQueue = initMediaRemoteDelete();
     instanceEvents.emit('peers:updated', []);
     await vi.waitFor(async () => expect(await listMediaDeleteQueue()).toEqual([]));
+  });
+});
+
+describe('owner acknowledgements', () => {
+  const ownedRows = () => atomicWrite(HISTORY, [row('v1', { originInstanceId: 'peer-o' }), row('v2', { originInstanceId: 'peer-o' })]);
+  const expectNothingDeleted = async () => {
+    const rows = await readRows();
+    expect(rows.map((r) => r.id)).toEqual(['v1', 'v2']);
+    expect(rows.every((r) => r.pendingDelete === undefined && r.hidden === undefined)).toBe(true);
+    expect(await listMediaTombstones('video')).toEqual([]);
+    expect(await listMediaDeleteQueue()).toEqual([]);
+    expect(trashFiles).not.toHaveBeenCalled();
+  };
+
+  // Uniquely catches an initiator that deletes whatever row the owner's reply names.
+  it('an ack naming a different row deletes neither row and fails the delete', async () => {
+    await ownedRows();
+    net.fetch = vi.fn(async () => ownerAck('v2'));
+    await expect(deleteMediaAnywhere('video', 'v1')).rejects.toMatchObject({ status: 502, code: 'MEDIA_DELETE_FAILED' });
+    await expectNothingDeleted();
+  });
+
+  it('an ack without a tombstone, or one dated in the future, deletes nothing', async () => {
+    await ownedRows();
+    const future = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+    for (const body of [{ ok: true }, { ok: true, tombstone: { key: 'v1' } }, { ok: true, tombstone: { key: 'v1', deletedAt: future } }]) {
+      net.fetch = vi.fn(async () => json(200, body));
+      await expect(deleteMediaAnywhere('video', 'v1'), JSON.stringify(body)).rejects.toMatchObject({ status: 502, code: 'MEDIA_DELETE_FAILED' });
+    }
+    await expectNothingDeleted();
+  });
+
+  it('reports deleted-remote when the owner deleted but the copy here was re-created after it', async () => {
+    await atomicWrite(HISTORY, [row('v1', { originInstanceId: 'peer-o' })]);
+    net.fetch = vi.fn(async () => json(200, { ok: true, tombstone: { key: 'v1', deletedAt: '2026-04-01T00:00:00.000Z' } }));
+    expect(await deleteMediaAnywhere('video', 'v1')).toEqual({ status: 'deleted-remote', hiddenHere: false, peerName: 'Example rec-owner' });
+    const [stored] = await readRows();
+    expect(stored.pendingDelete).toBeUndefined();
+    expect(stored.hidden).toBeUndefined();
+    expect(trashFiles).not.toHaveBeenCalled();
+  });
+
+  it('reports deleted-remote and only hides the copy when this machine refuses that owner\'s tombstones', async () => {
+    registry.peers = [peer('rec-owner', 'peer-o', { mediaDeleteAllowed: false })];
+    await atomicWrite(HISTORY, [row('v1', { originInstanceId: 'peer-o' })]);
+    net.fetch = vi.fn(async () => ownerAck('v1'));
+    expect(await deleteMediaAnywhere('video', 'v1')).toMatchObject({ status: 'deleted-remote', hiddenHere: true });
+    const [stored] = await readRows();
+    expect(stored.hidden).toBe(true);
+    expect(await listMediaTombstones('video')).toEqual([]);
+    expect(trashFiles).not.toHaveBeenCalled();
+  });
+});
+
+describe('cancel races', () => {
+  it('a cancel during the first dial is not undone by the unreachable result', async () => {
+    await atomicWrite(HISTORY, [row('v1', { originInstanceId: 'peer-o' })]);
+    const dial = deferred();
+    net.fetch = vi.fn(() => dial.promise);
+    const attempt = deleteMediaAnywhere('video', 'v1');
+    await vi.waitFor(() => expect(net.fetch).toHaveBeenCalledTimes(1));
+    expect(await cancelPendingDelete('video', 'v1')).toEqual({ ok: true, cancelled: true });
+    dial.reject(new Error('connect ECONNREFUSED'));
+    expect(await attempt).toEqual({ status: 'cancelled' });
+    expect(await listMediaDeleteQueue()).toEqual([]);
+    expect((await readRows())[0].pendingDelete).toBeUndefined();
+  });
+
+  it('a cancel during the dial does not undo an owner that already deleted', async () => {
+    await atomicWrite(HISTORY, [row('v1', { originInstanceId: 'peer-o' })]);
+    const dial = deferred();
+    net.fetch = vi.fn(() => dial.promise);
+    const attempt = deleteMediaAnywhere('video', 'v1');
+    await vi.waitFor(() => expect(net.fetch).toHaveBeenCalledTimes(1));
+    await cancelPendingDelete('video', 'v1');
+    dial.resolve(ownerAck('v1'));
+    expect((await attempt).status).toBe('deleted');
+    expect(await readRows()).toEqual([]);
+  });
+
+  it('a drain skips an entry cancelled while an earlier entry was being sent', async () => {
+    const queuedAt = new Date().toISOString();
+    const pendingDelete = { peerId: 'rec-owner', queuedAt };
+    await atomicWrite(HISTORY, [row('v1', { originInstanceId: 'peer-o', pendingDelete }), row('v2', { originInstanceId: 'peer-o', pendingDelete })]);
+    await atomicWrite(QUEUE, { version: 1, entries: ['v1', 'v2'].map((key) => ({ peerId: 'rec-owner', kind: 'video', key, queuedAt })) });
+    const first = deferred();
+    net.fetch = vi.fn(() => first.promise);
+    disarmQueue = initMediaRemoteDelete();
+    const drained = listenerFor('peer:online')(registry.peers[0]);
+    await vi.waitFor(() => expect(net.fetch).toHaveBeenCalledTimes(1));
+    await cancelPendingDelete('video', 'v2');
+    first.resolve(ownerAck('v1'));
+    await drained;
+    expect(net.fetch).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(net.fetch.mock.calls[0][1].body).key).toBe('v1');
+    const rows = await readRows();
+    expect(rows.map((r) => r.id)).toEqual(['v2']);
+    expect(rows[0].pendingDelete).toBeUndefined();
+    expect(await listMediaDeleteQueue()).toEqual([]);
+  });
+});
+
+describe('retrying an online owner', () => {
+  it('retries a queued delete for an online owner on registry updates at most once a minute', async () => {
+    const t0 = Date.now() + 365 * 24 * 60 * 60 * 1000;
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(t0);
+    const queuedAt = new Date(t0 - 1000).toISOString();
+    await atomicWrite(HISTORY, [row('v1', { originInstanceId: 'peer-o', createdAt: new Date(t0 - 5000).toISOString(), pendingDelete: { peerId: 'rec-owner', queuedAt } })]);
+    await atomicWrite(QUEUE, { version: 1, entries: [{ peerId: 'rec-owner', kind: 'video', key: 'v1', queuedAt }] });
+    net.fetch = vi.fn(async () => json(503, { error: 'busy' }));
+    disarmQueue = initMediaRemoteDelete();
+    const onPeers = listenerFor('peers:updated');
+
+    await onPeers(registry.peers);
+    expect(net.fetch).toHaveBeenCalledTimes(1);
+    vi.setSystemTime(t0 + 30_000);
+    await onPeers(registry.peers);
+    expect(net.fetch).toHaveBeenCalledTimes(1);
+    vi.setSystemTime(t0 + 61_000);
+    await onPeers(registry.peers);
+    expect(net.fetch).toHaveBeenCalledTimes(2);
+    expect((await listMediaDeleteQueue()).map((e) => e.key)).toEqual(['v1']);
+
+    // An offline owner is left for its peer:online.
+    vi.setSystemTime(t0 + 200_000);
+    await onPeers([{ ...registry.peers[0], status: 'offline' }]);
+    expect(net.fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('skips the history read when the queue is empty', async () => {
+    disarmQueue = initMediaRemoteDelete();
+    const fileUtils = await import('../lib/fileUtils.js');
+    const spy = vi.spyOn(fileUtils, 'readJSONFile');
+    await listenerFor('peers:updated')(registry.peers);
+    expect(spy.mock.calls.filter(([file]) => String(file).endsWith('video-history.json'))).toEqual([]);
+    spy.mockRestore();
   });
 });

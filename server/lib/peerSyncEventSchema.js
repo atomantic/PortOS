@@ -23,7 +23,8 @@ function peerSyncRecordBytes(record) {
 
 const idString = z.string().min(1).max(256);
 
-const tombstoneSchema = z.object({
+// Also validates a delete ack's tombstone (services/mediaRemoteDelete.js).
+export const peerSyncTombstoneSchema = z.object({
   key: idString,
   deletedAt: z.string().max(64).refine((v) => parseTsMs(v) !== null, 'deletedAt must be a timestamp'),
 }).strict();
@@ -37,7 +38,7 @@ export const peerSyncEventSchema = z.object({
   op: z.enum(PEER_SYNC_EVENT_OPS),
   id: idString,
   record: recordSchema.optional(),
-  tombstone: tombstoneSchema.optional(),
+  tombstone: peerSyncTombstoneSchema.optional(),
   originInstanceId: z.string().min(1).max(128),
 }).strict().superRefine((event, ctx) => {
   if (event.op === 'upsert') {

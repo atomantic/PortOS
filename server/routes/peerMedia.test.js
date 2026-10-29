@@ -120,7 +120,9 @@ describe('POST /api/peer-media/delete', () => {
   });
 
   it('answers image deletes as not supported yet and validates the body', async () => {
-    expect((await post(PEER_AUTH, { kind: 'image', key: 'example.png' })).status).toBe(501);
+    const image = await post(PEER_AUTH, { kind: 'image', key: 'example.png' });
+    expect(image.status).toBe(422);
+    expect(image.body.code).toBe('IMAGE_DELETE_NOT_SUPPORTED');
     expect((await post(PEER_AUTH, { kind: 'video' })).status).toBe(400);
     expect((await post(PEER_AUTH, { kind: 'video', key: 'v1', extra: true })).status).toBe(400);
     expect((await readRows()).map((r) => r.id)).toEqual(['v1']);
