@@ -131,6 +131,34 @@ describe('durable post-ingestion cleanup replay', () => {
     expect((await saved()).metadata.completionCleanup.status).toBe('completed');
   });
 
+  it('advances held chains once from a cleanup recheck receipt that defers task settlement', async () => {
+    const record = await saved();
+    record.result = { success: false, cleanupPending: true, executionSuccess: true };
+    record.metadata.repoStateVerification = { status: 'pending' };
+    await writeFile(fixture.recordPath, JSON.stringify(record));
+    const pipelineTask = { ...task, metadata: { creativeDirector: { projectId: 'synthetic-project' },
+      pipeline: { id: 'pipeline-one', status: 'running', currentStage: 0, stageResults: [], stages: [{ name: 'Only stage' }] } } };
+    await finish(pipelineTask);
+    // A worktree receipt alone, without the deferred settlement, is not the recheck's receipt.
+    const receipt = await saved();
+    receipt.metadata.completionCleanup.stages.worktree.verifiedBy = 'repository-state-verification';
+    await writeFile(fixture.recordPath, JSON.stringify(receipt));
+    await replayAgentCompletionCleanup(await saved());
+    expect(updateTask).not.toHaveBeenCalled();
+    expect(handleCreativeDirectorCompletion).not.toHaveBeenCalled();
+    const deferred = await saved();
+    deferred.metadata.completionCleanup.stages.worktree.taskSettlement = 'after-completion-stages';
+    await writeFile(fixture.recordPath, JSON.stringify(deferred));
+    await Promise.all([replayAgentCompletionCleanup(await saved()), replayAgentCompletionCleanup(await saved())]);
+    await replayAgentCompletionCleanup(await saved());
+    expect(updateTask).toHaveBeenCalledTimes(1);
+    expect(handleCreativeDirectorCompletion).toHaveBeenCalledTimes(1);
+    const settled = await saved();
+    expect(settled.metadata.completionCleanup.status).toBe('completed');
+    expect(settled.metadata.repoStateVerification).toEqual({ status: 'pending' });
+    expect(addTask).not.toHaveBeenCalled();
+  });
+
   it('persists an asynchronous chain failure without suppressing acknowledged cleanup or blindly publishing again', async () => {
     handleCreativeDirectorCompletion.mockRejectedValueOnce(new Error('chain write unavailable'));
     await expect(finish({ ...task, metadata: { creativeDirector: { projectId: 'synthetic-project' } } })).rejects.toThrow('chain write unavailable');

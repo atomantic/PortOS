@@ -439,7 +439,12 @@ async function performCompletionCleanupSteps(context, onStepError) {
   await runStep('notification', 'Plan question notification', () => notifyPlanQuestionIfNeeded(context));
   const waitForRepository = () => {
     if (state?.metadata?.checkoutCapture?.status === 'pending') throw new Error('checkout-capture-pending');
-    if (state?.result?.cleanupPending === true
+    const worktree = state?.metadata?.completionCleanup?.stages?.worktree;
+    // A cleanup-only recheck verified the repository but left task settlement
+    // to the verification pass that follows this replay.
+    const deferredSettlement = worktree?.status === 'done' && worktree.verifiedBy === 'repository-state-verification'
+      && worktree.taskSettlement === 'after-completion-stages';
+    if (state?.result?.cleanupPending === true && !deferredSettlement
       && (state.metadata?.repoStateVerification?.status !== 'completed'
         || !['repository-preservation-receipt', 'repository-state-verification'].includes(state.metadata?.completionCleanup?.stages?.worktree?.verifiedBy))) throw new Error('checkout-retirement-pending');
   };
