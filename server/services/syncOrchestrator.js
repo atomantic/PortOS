@@ -8,7 +8,7 @@
 
 import { access } from 'fs/promises';
 import { join } from 'path';
-import { readJSONFile, ensureDir, PATHS, dataPath, atomicWrite, writeFileGuarded } from '../lib/fileUtils.js';
+import { readJSONFile, ensureDir, PATHS, dataPath, atomicWrite } from '../lib/fileUtils.js';
 import { createMutex } from '../lib/asyncMutex.js';
 import { logFailureWithStack } from '../lib/failureLogging.js';
 import { instanceEvents } from './instanceEvents.js';
@@ -150,9 +150,6 @@ export async function rewindPostgresSyncCursors() {
 // failure path instead of becoming a successful no-op. Bodies are also capped
 // while streaming (a chunked body carries no Content-Length to pre-check), so an
 // endless peer response fails this pull (null) instead of exhausting the heap.
-// Avatar images share the per-asset pull cap (ASSET_PULL_MAX_BYTES).
-const AVATAR_IMAGE_MAX_BYTES = 100 * 1024 * 1024;
-
 function handlePeerBodyError(error) {
   if (error.code === PEER_BODY_IDLE_TIMEOUT) throw error;
   return null;
@@ -207,19 +204,11 @@ async function syncImageFromPeer(peer, avatarPath) {
   const exists = await access(localPath).then(() => true).catch(() => false);
   if (exists) return;
 
-  const url = `${peerBaseUrl(peer)}${avatarPath}`;
-  // Use the same request and body-idle budgets as JSON snapshots.
-  const res = await withAbortTimeout(FETCH_TIMEOUT_MS, (signal) =>
-    peerFetch(url, { signal, maxBytes: AVATAR_IMAGE_MAX_BYTES }, peer))
-    .catch(() => null);
-  if (!res?.ok) return;
-  await readPeerBody(res, 'arrayBuffer', { maxBytes: AVATAR_IMAGE_MAX_BYTES })
-    .then(async (bytes) => {
-      await ensureDir(PATHS.images);
-      await writeFileGuarded(localPath, Buffer.from(bytes));
-      console.log(`🔄 Synced avatar image: ${filename}`);
-    })
-    .catch(handlePeerBodyError);
+  // The shared asset pull owns the tombstone check, sidecar + supplier
+  // recording, extension/manifest/hash guards, size caps and in-flight dedup.
+  // Dynamic import keeps peerSyncAssets' graph out of orchestrator load.
+  const { pullMissingAssetsFromPeer } = await import('./sharing/peerSyncAssets.js');
+  await pullMissingAssetsFromPeer(peer.instanceId, [{ kind: 'image', filename }]);
 }
 
 // --- Status ---

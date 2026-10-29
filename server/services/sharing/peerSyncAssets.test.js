@@ -31,7 +31,17 @@ vi.mock('../tracks/index.js', async () => ({
     (typeof name === 'string' && name.trim() && !/[\\/]|\.\./.test(name) ? name.trim() : null)),
 }));
 
+const imageTombstones = new Map();
+vi.mock('../mediaTombstones.js', () => ({
+  mediaTombstoneStamps: vi.fn(async (kind) => (kind === 'image' ? imageTombstones : new Map())),
+}));
+vi.mock('./sidecarSync.js', () => ({
+  pullSidecarForImage: vi.fn(async () => ({ ok: true })),
+  recordImageSupplier: vi.fn(async () => {}),
+}));
+
 const { getTrack } = await import('../tracks/index.js');
+const { pullSidecarForImage, recordImageSupplier } = await import('./sidecarSync.js');
 const { peerFetch } = await import('../../lib/peerHttpClient.js');
 const { peerSyncEvents } = await import('./peerSyncShared.js');
 const {
@@ -468,6 +478,31 @@ describe('pullMissingAssetsFromPeer — unsafe and incomplete downloads (#5230)'
 
   afterEach(() => {
     if (tempRoot) rmSync(tempRoot, { recursive: true, force: true });
+  });
+
+  // Character avatars ride this path (#14077): a deleted image must stay
+  // deleted, and a pulled one keeps its sidecar and records its supplier.
+  it('does not fetch an image whose filename is tombstoned here', async () => {
+    imageTombstones.set('avatar.png', Date.now());
+    try {
+      await pullMissingAssetsFromPeer('peer-a', [{ kind: 'image', filename: 'avatar.png' }]);
+    } finally {
+      imageTombstones.clear();
+    }
+    expect(peerFetch).not.toHaveBeenCalled();
+    expect(listAssetFiles('images')).toEqual([]);
+    expect(recordImageSupplier).not.toHaveBeenCalled();
+  });
+
+  it('pulls a missing image with its sidecar and records the peer as supplier', async () => {
+    const png = Buffer.from('avatar-bytes');
+    vi.mocked(peerFetch).mockResolvedValue(mkAssetResponse(png));
+    vi.mocked(pullSidecarForImage).mockClear();
+    vi.mocked(recordImageSupplier).mockClear();
+    await pullMissingAssetsFromPeer('peer-a', [{ kind: 'image', filename: 'avatar.png' }]);
+    expect(readFileSync(join(tempRoot, 'images', 'avatar.png'))).toEqual(png);
+    expect(pullSidecarForImage).toHaveBeenCalledWith(expect.objectContaining({ instanceId: 'peer-a' }), expect.any(String), 'avatar.png');
+    expect(recordImageSupplier).toHaveBeenCalledWith('avatar.png', 'peer-a');
   });
 
   it('discards bytes whose advertised sha256 does not match before replacing local assets', async () => {
