@@ -227,13 +227,14 @@ Each install pulls from its peers (`server/services/syncOrchestrator.js`).
   (`mediaTombstoneAuthorization.js`). Deleting a row owned elsewhere sends
   `POST /api/peer-media/delete` to the owner (`mediaRemoteDelete.js`).
 - **Pre-upgrade media.** A delete is announced to peers only for a row or
-  image whose recorded origin is this install. Migration 450 backfills the
-  origin of media made before that release only from evidence: the single
-  peer named by its supplier or hosted entry, or this install when the
-  file's bytes predate the earliest registered peer (any held file, with no
-  peers). An older copy pulled from a peer cannot be told apart from local
-  media, so it stays origin-less and its deletes stay on the machine where
-  they happen until copies converge on their creator's origin (#14133).
+  image whose recorded origin is this install. Migration 450 gives media made
+  before that release this install as origin only on an install that has
+  never federated media (no registered peer, hosted file, or other machine's
+  id in its media stores), where every held file was made or imported here.
+  On a federated install an older copy pulled from a peer cannot be told
+  apart from local media, so pre-upgrade media stays origin-less and its
+  deletes stay on the machine where they happen until its creator is
+  resolved across machines (#14133).
 
 ### Browser Automation Flow
 
