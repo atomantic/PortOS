@@ -1512,9 +1512,22 @@ function describeReconcileFailure(reason) {
   return reason?.code || String(reason);
 }
 
+const restoresMediaScope = (subdirFilter) => !subdirFilter || ['images', 'videos', 'video-thumbnails', 'video-history.json']
+  .some(path => subdirFilter === path || subdirFilter.startsWith(`${path}/`));
+
+// A restored gallery image's `restoredAt` stamp is a sidecar write under the
+// backup asset-publication lease, which would wait out the snapshot cut the
+// restore holds while it reconciles, so this pass runs once the owners release.
+async function clearRestoredImageTombstones(subdirFilter) {
+  if (!restoresMediaScope(subdirFilter)) return;
+  const { clearRestoredMediaTombstones } = await import('./mediaRestoreTombstones.js');
+  await clearRestoredMediaTombstones().catch((error) => {
+    throw new Error(`Live restore cache reconciliation failed (restored image delete records: ${describeReconcileFailure(error)}). Restart PortOS before relying on restored media.`, { cause: error });
+  });
+}
+
 async function reconcileLiveFileRestore(subdirFilter) {
-  const restoresMedia = !subdirFilter || ['images', 'videos', 'video-thumbnails', 'video-history.json']
-    .some(path => subdirFilter === path || subdirFilter.startsWith(`${path}/`));
+  const restoresMedia = restoresMediaScope(subdirFilter);
   const refreshes = [
     ...(!subdirFilter || subdirFilter === 'brain' || subdirFilter.startsWith('brain/')
       ? [{ label: 'Brain cache invalidation', run: invalidateBrainCaches }]
@@ -1526,11 +1539,12 @@ async function reconcileLiveFileRestore(subdirFilter) {
         await reconcileMediaAssets({ rebuild: true });
       } }] : []),
     // A restored item keeps the delete record left by its earlier delete;
-    // locally owned ones are un-deleted and re-announced to peers.
+    // locally owned ones are un-deleted and re-announced to peers. Images wait
+    // for clearRestoredImageTombstones: their stamp needs the snapshot cut released.
     ...(restoresMedia
       ? [{ label: 'restored media delete records', run: async () => {
         const { clearRestoredMediaTombstones } = await import('./mediaRestoreTombstones.js');
-        await clearRestoredMediaTombstones();
+        await clearRestoredMediaTombstones({ images: false });
       } }] : []),
     // Migration 359 converts this plan once, at boot, so a plan restored from a
     // pre-359 snapshot would otherwise stay legacy and unrunnable: a folder
@@ -2043,6 +2057,7 @@ async function restoreHeldSnapshot({ snapshotDir, currentSource }, snapshotId, {
       return changed;
     },
   }));
+  await clearRestoredImageTombstones(subdirFilter);
   console.log(`💾 Restore complete: snapshot ${snapshotId}, ${changedFiles.length} files changed`);
   return { dryRun, snapshotId, subdirFilter, changedFiles, verification, ...restoreNotes(restoredLegacy, restoredLegacyLedger) };
 }

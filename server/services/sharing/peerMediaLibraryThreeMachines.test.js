@@ -49,6 +49,7 @@ const { deleteImage } = await import('../imageGen/local.js');
 const { listMediaTombstones } = await import('../mediaTombstones.js');
 const { applyPeerSyncEvent } = await import('../peerSyncEvents.js');
 const { stripImageSidecarLocalBytes } = await import('../../lib/assetHash.js');
+const { clearRestoredMediaTombstones } = await import('../mediaRestoreTombstones.js');
 
 const respond = (body, type) => ({
   ok: true, status: 200, headers: new Headers({ 'content-length': String(body.length), 'content-type': type }),
@@ -162,5 +163,44 @@ describe('a deleted image across three machines', () => {
 
     for (const [receiver, sender] of [['a', 'b'], ['a', 'c'], ['b', 'c'], ['c', 'a']]) await sweep(receiver, sender);
     expect(['a', 'b', 'c'].filter((m) => holds(m, 'relay-1.png'))).toEqual([]);
+  });
+});
+
+// #14099: the owner brings a deleted image back (a backup folder restore or the
+// OS Trash's Put Back); a peer that already took the delete must get it again.
+describe('a deleted image its owner restores', () => {
+  const sidecar = { originInstanceId: 'inst-a', prompt: 'p', createdAt: '2026-01-01T00:00:00.000Z' };
+  const writeOnA = () => on('a', () => {
+    mkdirSync(join(machines.roots.a, 'images'), { recursive: true });
+    writeFileSync(join(machines.roots.a, 'images', 'restored-1.png'), Buffer.from('synthetic-restored-bytes'));
+    writeFileSync(join(machines.roots.a, 'images', 'restored-1.metadata.json'), JSON.stringify(sidecar));
+  });
+  const tombstoned = async (m) => (await on(m, () => listMediaTombstones('image'))).map((t) => t.key);
+
+  it('reaches a peer holding its delete, which then drops that delete', async () => {
+    await writeOnA();
+    await sweep('b', 'a');
+    expect(holds('b', 'restored-1.png')).toBe(true);
+    await on('a', () => deleteImage('restored-1.png'));
+    await sweep('b', 'a');
+    expect(holds('b', 'restored-1.png')).toBe(false);
+    expect(await tombstoned('b')).toContain('restored-1.png');
+
+    // The restore writes the files back as they were, then the reconcile pass runs.
+    await writeOnA();
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      expect((await on('a', () => clearRestoredMediaTombstones())).images).toEqual(['restored-1.png']);
+      await sweep('b', 'a');
+    } finally {
+      log.mockRestore();
+    }
+
+    expect(holds('b', 'restored-1.png')).toBe(true);
+    expect(await tombstoned('b')).not.toContain('restored-1.png');
+    expect(await tombstoned('a')).not.toContain('restored-1.png');
+    // Neither side advertises the delete any more, so further sweeps keep it everywhere.
+    for (const [receiver, sender] of [['a', 'b'], ['b', 'a']]) await sweep(receiver, sender);
+    expect(['a', 'b'].filter((m) => holds(m, 'restored-1.png'))).toEqual(['a', 'b']);
   });
 });

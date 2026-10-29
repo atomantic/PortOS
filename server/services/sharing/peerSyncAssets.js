@@ -1249,6 +1249,10 @@ async function commitPulledAsset(peer, base, entry, localDir, fullPath, safeName
     // Even with no sidecar from the peer, record who supplied a copy new here:
     // its file time is then never mistaken for this machine making it.
     if (isNewHere) await recordImageSupplier(safeName, peer.instanceId).catch((err) => console.error(`❌ peerSync: supplier record for ${safeName} failed: ${err.message}`));
+    // The owner restored an image deleted here (#14099): its copy outlives the delete.
+    await import('../imageGen/imageRecords.js')
+      .then((m) => m.clearImageTombstoneSupersededByOwner(safeName, peer.instanceId))
+      .catch((err) => console.error(`❌ peerSync: delete record check for ${safeName} failed: ${err.message}`));
     await import('../mediaAssetIndex/index.js').then(m => m.indexImage({ filename: safeName })).catch(err => console.error(`❌ Media index peer asset refresh: ${err.message}`));
   }
   // After a video pull, regenerate the thumbnail LOCALLY rather than pulling it

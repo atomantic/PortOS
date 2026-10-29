@@ -4388,12 +4388,21 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
     });
 
     it('keeps Brain projections after a selective live restore outside Brain', async () => {
+      const { backupSnapshotCutPending } = await import('../lib/backupSnapshotBoundary.js');
+      const cutHeld = [];
+      const record = async (options) => {
+        cutHeld.push([options?.images ?? true, backupSnapshotCutPending()]);
+        return { videos: [], images: [] };
+      };
+      clearRestoredMediaTombstones.mockImplementationOnce(record).mockImplementationOnce(record);
       await runRestore('/dest', 'snap-1', { dryRun: false, subdirFilter: 'images' });
 
       expect(invalidateBrainCaches).not.toHaveBeenCalled();
       expect(reconcileMediaAssets).toHaveBeenCalledWith({ rebuild: true });
       // A restored item must shed the delete record of its earlier delete (#14087).
-      expect(clearRestoredMediaTombstones).toHaveBeenCalledTimes(1);
+      // Images wait until the cut is released: their sidecar stamp takes the
+      // asset-publication lease, which would wait on the cut (#14099).
+      expect(cutHeld).toEqual([[false, true], [true, false]]);
     });
 
     it('does not reload settings for a dry run', async () => {
