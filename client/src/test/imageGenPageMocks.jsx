@@ -119,6 +119,8 @@ export const state = {
   getSettings: vi.fn(async () => state.settings),
   /** `deleteImage`; a spy so a suite can reject a deletion. */
   deleteImage: vi.fn(async () => ({})),
+  /** `cancelImagePendingDelete`. */
+  cancelImagePendingDelete: vi.fn(async () => ({})),
   /** `listImageGalleryPage`; a spy so a suite can seed the recent strip. */
   listImageGalleryPage: vi.fn(async () => ({ items: [], total: 0, hiddenTotal: 0 })),
   /** `getFlux2Status` payload — the install banner reads the venv/token fields. */
@@ -167,6 +169,7 @@ export function resetImageGenMockState() {
   state.settings = DEFAULT_SETTINGS;
   state.getSettings.mockReset().mockImplementation(async () => state.settings);
   state.deleteImage.mockReset().mockResolvedValue({});
+  state.cancelImagePendingDelete.mockReset().mockResolvedValue({});
   state.listImageGalleryPage.mockReset().mockResolvedValue({ items: [], total: 0, hiddenTotal: 0 });
   state.flux2Status = { installed: true, ready: true };
   state.hfTokenPresent = true;
@@ -191,6 +194,7 @@ vi.mock('../services/api', () => ({
   listImageGalleryPage: (...args) => state.listImageGalleryPage(...args),
   cancelImageGen: vi.fn(async () => ({})),
   deleteImage: (...args) => state.deleteImage(...args),
+  cancelImagePendingDelete: (...args) => state.cancelImagePendingDelete(...args),
   setImageHidden: vi.fn(async () => ({})),
   cleanGalleryImage: vi.fn(async () => ({})),
   getActiveImageJob: vi.fn(async () => ({ activeJob: state.activeJob })),
