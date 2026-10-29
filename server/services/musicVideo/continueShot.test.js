@@ -4,7 +4,7 @@
  * frame (optionally moving the planned still to the end frame).
  */
 import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync, existsSync } from 'fs';
+import { mkdtempSync, rmSync, mkdirSync, existsSync, readFileSync, writeFileSync, unlinkSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -15,6 +15,7 @@ vi.mock('../../lib/fileUtils.js', async (importOriginal) => {
   const actual = await importOriginal();
   return { ...actual, PATHS: { ...actual.PATHS, videos: join(ROOT, 'videos'), images: join(ROOT, 'images') } };
 });
+vi.mock('../instanceIdentity.js', () => ({ UNKNOWN_INSTANCE_ID: 'unknown', getInstanceId: async () => 'local-inst' }));
 vi.mock('../videoGen/history.js', () => ({ getHistoryItem: vi.fn(async (id) => (id === 'clip-a' ? { id, filename: 'clip-a.mp4' } : null)) }));
 vi.mock('./projects.js', () => ({
   getProject: vi.fn(async () => mocks.project),
@@ -49,6 +50,28 @@ describe.skipIf(!ffmpeg)('continueFromPreviousShot', () => {
     expect((await probeVideoStreamInfo(join(ROOT, 'images', frame.imageId))).width).toBe(320);
     expect(mocks.appended.map((t) => [t.kind, t.assetId])).toEqual([['image', 'handoff-clip-a-958.png'], ['endImage', 'planned.png']]);
     expect(mocks.selected).toEqual(['t0', 't1']);
+  });
+
+  // Uniquely catches a handoff frame with no owner: its delete would send peers no realtime frame.
+  it('names this machine as the handoff frame\'s origin and refreshes the stamp when the frame is re-extracted', async () => {
+    mocks.project = { id: 'mv-1', scenes: [
+      { sceneId: 'a', startSec: 0, endSec: 1, loop: false, videoHistoryId: 'clip-a' },
+      { sceneId: 'b', startSec: 1, endSec: 3 },
+    ] };
+    const sidecar = join(ROOT, 'images', 'handoff-clip-a-958.metadata.json');
+    const first = JSON.parse(readFileSync(sidecar, 'utf8'));
+    expect(first.originInstanceId).toBe('local-inst');
+    expect(Number.isFinite(Date.parse(first.createdAt))).toBe(true);
+    // Same name, kept frame: the sidecar is left as it is.
+    await continueFromPreviousShot('mv-1', 'b');
+    expect(JSON.parse(readFileSync(sidecar, 'utf8'))).toEqual(first);
+    // Deleted and extracted again under the same name: a stale sidecar is replaced with a newer stamp.
+    unlinkSync(join(ROOT, 'images', 'handoff-clip-a-958.png'));
+    writeFileSync(sidecar, JSON.stringify({ originInstanceId: 'old', createdAt: '2000-01-01T00:00:00.000Z' }));
+    await continueFromPreviousShot('mv-1', 'b');
+    const again = JSON.parse(readFileSync(sidecar, 'utf8'));
+    expect(again.originInstanceId).toBe('local-inst');
+    expect(Date.parse(again.createdAt)).toBeGreaterThan(Date.parse(first.createdAt) - 1);
   });
 
   // Uniquely catches a still shot handing over the stale clip it kept, which the cut never shows.
