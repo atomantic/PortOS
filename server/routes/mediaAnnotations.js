@@ -3,12 +3,12 @@
  *     → { annotations: { [key]: { own: { authorName, starred, note, updatedAt } | null,
  *                                  others: [{ instanceId, authorName, starred, note, updatedAt }] } } }
  *   PATCH  /api/media/annotations/:key
- *     body: { starred?: boolean, note?: string } — writes the local-author entry
+ *     body: { starred?: boolean, rating?: 'good' | 'bad' | null, note?: string } — writes the local-author entry
  *     → { key, entry: { own, others } }
  *
- * Key shape: `<kind>:<ref>` where kind ∈ {image, video} and ref has no `:`.
- * Matches the convention enforced by mediaCollections.js and produced by the
- * client-side normalize.js (`item.key`).
+ * Key shape: `<kind>:<ref>` where kind ∈ {image, video, image-ref} and ref has
+ * no `:`. image/video match mediaCollections.js and normalize.js (`item.key`);
+ * image-ref is a /data/image-refs file (see mediaAnnotationKey on the client).
  */
 
 import { Router } from 'express';
@@ -27,8 +27,9 @@ const mapServiceError = createServiceErrorMapper(SERVICE_ERROR_STATUS);
 
 const patchSchema = z.object({
   starred: z.boolean().optional(),
+  rating: z.enum(svc.MEDIA_RATINGS).nullable().optional(),
   note: z.string().max(svc.NOTE_MAX_LENGTH).optional(),
-}).refine((p) => Object.keys(p).length > 0, { message: 'patch must include starred and/or note' });
+}).refine((p) => Object.keys(p).length > 0, { message: 'patch must include starred, rating and/or note' });
 
 router.get('/', asyncHandler(async (_req, res) => {
   res.json({ annotations: await svc.listAnnotations() });

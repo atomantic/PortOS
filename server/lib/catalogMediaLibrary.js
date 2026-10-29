@@ -14,9 +14,22 @@
 export const MAX_CAST_GUIDES = 4;
 export const CAST_ERAS = Object.freeze(['child', 'teen', 'adult', 'elder']);
 export const MAX_LIBRARY_TAGS = 20;
-export const REFERENCE_REVIEW_STATUSES = Object.freeze(['unreviewed', 'good', 'bad', 'rejected']);
+// Ratings a reference can be given. "Rejected" (wrong for this context) is a
+// music video take state; outside shots a wrong reference is removed from the
+// record instead. A legacy or older-peer 'rejected' still reads (and stays
+// out of render guides) and is shown as bad.
+export const REFERENCE_REVIEW_WRITE_STATUSES = Object.freeze(['unreviewed', 'good', 'bad']);
+export const REFERENCE_REVIEW_STATUSES = Object.freeze([...REFERENCE_REVIEW_WRITE_STATUSES, 'rejected']);
+export const referenceReviewStatus = (m) => {
+  const status = m?.library?.review?.status || 'unreviewed';
+  return status === 'rejected' ? 'bad' : status;
+};
 export const REFERENCE_FEEDBACK_MAX = 2000;
-export const isUsableReference = (m) => !['bad', 'rejected'].includes(m?.library?.review?.status);
+// `library.likeness === false` keeps an image (e.g. a multi-age collage board)
+// attached to the record but out of every likeness/conditioning pick.
+export const isLeftOutOfLikeness = (m) => m?.library?.likeness === false;
+export const isUsableReference = (m) => !['bad', 'rejected'].includes(m?.library?.review?.status) && !isLeftOutOfLikeness(m);
+export const isGoodReference = (m) => (m?.library?.review?.status === 'good' || m?.review?.status === 'good');
 export const rejectedReferenceKeys = (media) => new Set((Array.isArray(media) ? media : [])
   .filter(m => m && !m.deleted && ['portrait', 'reference'].includes(m.kind) && !isUsableReference(m)).map(m => m.mediaKey));
 
@@ -54,6 +67,10 @@ export function normalizeLibrary(value) {
     if (tags.length) out.tags = tags;
   }
   if (typeof value.guide === 'boolean') out.guide = value.guide;
+  if (value.likeness === false) {
+    out.likeness = false;
+    out.guide = false;
+  }
   if (isObj(value.review) && REFERENCE_REVIEW_STATUSES.includes(value.review.status)) {
     out.review = { status: value.review.status };
     if (typeof value.review.feedback === 'string') out.review.feedback = value.review.feedback.slice(0, REFERENCE_FEEDBACK_MAX);
@@ -81,7 +98,7 @@ export function filterLibraryMedia(media, filters = {}) {
     if (filters.formId && lib.variant?.formId !== filters.formId) return false;
     if (filters.tag && !(lib.tags || []).includes(String(filters.tag).toLowerCase())) return false;
     if (filters.guide === true && lib.guide !== true) return false;
-    if (filters.review && (lib.review?.status || 'unreviewed') !== filters.review) return false;
+    if (filters.review && referenceReviewStatus(m) !== referenceReviewStatus({ library: { review: { status: filters.review } } })) return false;
     return true;
   });
 }

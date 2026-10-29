@@ -18,10 +18,12 @@
  */
 
 import { resolveImageInputPath } from '../../lib/fileUtils.js';
+import { ServerError } from '../../lib/errorHandler.js';
 import { maxInputImages } from './cloudProviderConfig.js';
 
-const asPathList = (value) => (Array.isArray(value) ? value : [])
-  .filter((p) => typeof p === 'string' && p.trim());
+const invalidInput = () => new ServerError('A requested input image is unavailable or outside the allowed image roots', {
+  status: 400, code: 'IMAGE_INPUT_UNAVAILABLE',
+});
 
 /**
  * @param {object} opts
@@ -37,13 +39,15 @@ const asPathList = (value) => (Array.isArray(value) ? value : [])
  *   minus that leading source image.
  */
 export function resolveInputImages({ mode, initImagePath = null, referenceImagePaths = [], modelId = null } = {}) {
-  const rawInit = (typeof initImagePath === 'string' && initImagePath.trim()) ? initImagePath : null;
-  // An unresolvable path drops out rather than failing the render — the caller
-  // still gets a usable (possibly text-only) generation instead of a 500.
+  if ((initImagePath != null && (typeof initImagePath !== 'string' || !initImagePath.trim()))
+    || !Array.isArray(referenceImagePaths) || referenceImagePaths.some(path => typeof path !== 'string' || !path.trim())) throw invalidInput();
+  const rawInit = initImagePath;
   const resolvedInit = rawInit ? resolveImageInputPath(rawInit) : null;
-  const resolvedRefs = asPathList(referenceImagePaths)
-    .map((p) => resolveImageInputPath(p))
-    .filter(Boolean);
+  const rawRefs = referenceImagePaths;
+  const resolvedRefs = rawRefs.map((p) => resolveImageInputPath(p));
+  if ((rawInit && !resolvedInit) || resolvedRefs.some((path) => !path)) {
+    throw invalidInput();
+  }
 
   const ordered = [...(resolvedInit ? [resolvedInit] : []), ...resolvedRefs];
   // A mode with no declared cap (a direct caller passing something odd) gets no

@@ -1951,12 +1951,24 @@ input[type="color"],
 
 /* Custom animations */
 /* WebKit/Safari hardware acceleration & subpixel stabilization for spinning icons.
-   Prevents anti-aliasing flickering, jitter, and stale rasterized frames during CSS rotation. */
+   Prevents anti-aliasing flickering, jitter, and stale rasterized frames during CSS rotation.
+   Both keyframes include the same transform functions: an implicit translateZ(0)
+   start and a rotate(360deg) end interpolate as identical matrices, with no spin. */
 .animate-spin {
+  --animate-spin: portos-icon-spin 1s linear infinite;
   -webkit-backface-visibility: hidden;
   backface-visibility: hidden;
   transform: translateZ(0);
   will-change: transform;
+}
+
+@keyframes portos-icon-spin {
+  from {
+    transform: rotate(0deg) translateZ(0);
+  }
+  to {
+    transform: rotate(360deg) translateZ(0);
+  }
 }
 
 @keyframes pulse-soft {

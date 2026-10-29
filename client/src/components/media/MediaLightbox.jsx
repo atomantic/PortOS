@@ -3,15 +3,17 @@ import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
   X, Copy, Sparkles, Film, Image as ImageIcon, Download, Eraser, Wand2,
-  ChevronLeft, ChevronRight, Maximize2, Minimize2, Star, Box, ScanEye, Aperture,
+  ChevronLeft, ChevronRight, Maximize2, Minimize2, Star, Box, ScanEye, Aperture, ThumbsUp, ThumbsDown, Pencil,
 } from 'lucide-react';
 import VideoStartTrimControl from './VideoStartTrimControl';
 import PromptRefineModal from './PromptRefineModal';
+import QuickImageEdit from './QuickImageEdit';
 import { PromptFromMediaModal } from './PromptFromMedia';
 import AddToCollectionMenu from './AddToCollectionMenu';
 import SharingDownloadButton from './SharingDownloadButton';
 import PinToMoodBoardMenu from './PinToMoodBoardMenu';
-import FilmLookEditor from './FilmLookEditor.jsx';
+import FilmLookPane, { useFilmLookDraft } from './FilmLookPane.jsx';
+import FilmLookPreview from './FilmLookPreview.jsx';
 import MediaImage from '../MediaImage';
 import { useScrollLock } from '../../hooks/useScrollLock';
 import { useSwipeNav } from '../../hooks/useSwipeNav';
@@ -21,7 +23,6 @@ import useFocusTrap from '../../hooks/useFocusTrap.js';
 import { copyToClipboard } from '../../lib/clipboard';
 import { IMAGE_GEN_MODE } from '../../lib/imageGenBackends';
 import { formatDateTime, formatDateNumeric, formatDurationMs, formatBytes } from '../../utils/formatters';
-import AttributionList from './AttributionList';
 import SentPromptPanel from './SentPromptPanel';
 import ContinuationDetails from '../videoGen/ContinuationDetails';
 
@@ -47,6 +48,15 @@ import ContinuationDetails from '../videoGen/ContinuationDetails';
 // `a11yConventions.test.js` allowlists it on that basis.
 
 const NOTE_MAX = 2000;
+
+// The side pane stacks under the media on phones and sits beside it from md up.
+// Film look gets a wider pane (two slider columns) and more of a phone screen.
+const ASIDE_CLASSES = 'shrink-0 flex flex-col border-t md:border-t-0 md:border-l border-port-border min-h-0 max-h-dvh-cap md:[--dvh-cap:92vh] md:[--dvh-cap-dynamic:92dvh] [--dvh-inset:2rem]';
+const DETAILS_ASIDE_SIZE = 'md:w-80 lg:w-96 [--dvh-cap:40vh] [--dvh-cap-dynamic:40dvh]';
+// The live-look image is a plain <img> inside a wrapper, so it cannot shrink
+// to the flex row the way MediaImage does; cap it to what the pane leaves.
+const FILM_LOOK_IMG_MAX = 'max-w-full max-h-[calc(42dvh-2rem)] md:max-h-[calc(92dvh-2rem)]';
+const FILM_LOOK_ASIDE_SIZE = 'md:w-96 lg:w-[28rem] xl:w-[32rem] [--dvh-cap:50vh] [--dvh-cap-dynamic:50dvh]';
 const NOTE_DEBOUNCE_MS = 500;
 const SAVED_INDICATOR_MS = 1500;
 
@@ -104,11 +114,22 @@ function describeImageExecution(item) {
 // onClean(item) — optional. Returning a rejected promise keeps the lightbox
 // open (e.g. on error) so the user can retry.
 //
-// Film look (lib/filmLook.js) is offered on every gallery image: the editor
-// bakes a filtered copy and reports it through `onFilmLookComplete(variant)`
+// Film look (lib/filmLook.js) is offered on every gallery image: the side pane
+// swaps to the look's controls while the image shows the look live, and the
+// pane bakes a filtered copy reported through `onFilmLookComplete(variant)`
 // (the host splices it in like a clean). `filmLookProject` — optional
-// `{ look, onSave, name }` — lets the editor read and write the hosting music
+// `{ look, onSave, name }` — lets the pane read and write the hosting music
 // video project's finishing look.
+//
+// Good/bad rating sits beside the star. By default it is the media item's own
+// rating (synced like stars and notes); a page that rates items in its own
+// store (a catalog reference) passes `ratingControl` — `{ value, onRate(next),
+// busy, title }` with `next` 'good' | 'bad' | null — and that replaces it.
+//
+// pageActions — optional node with the hosting page's own controls for this
+// item (a catalog reference's rating, guide and remove buttons). It sits at the
+// top of the details pane so page-specific actions stay in place beside the
+// standard ones.
 //
 // variantGroup — optional `{ active, group: [{ label, item }, ...] }` shape
 // from `computeImageVariantGroup` (in `./variants.js`). When present, the
@@ -142,11 +163,21 @@ export default function MediaLightbox({
   onSelectVariant,
   onFilmLookComplete,
   filmLookProject = null,
+  pageActions = null,
+  ratingControl = null,
+  quickEditParams = null,
+  onQuickEditQueued = null,
 }) {
   const [fullScreen, setFullScreen] = useState(false);
   const [refineOpen, setRefineOpen] = useState(false);
   const [promptFromOpen, setPromptFromOpen] = useState(false);
   const [filmLookOpen, setFilmLookOpen] = useState(false);
+  // Videos never take the live look: an SVG filter over playing video drops
+  // phones below 1 fps (see FilmLookFrame). The pane stays open across
+  // prev/next and simply hides on a video.
+  const filmLookAvailable = !!item && item.kind !== 'video' && !!item.filename && !item.compact;
+  const filmLookShown = filmLookOpen && filmLookAvailable;
+  const filmLook = useFilmLookDraft(item, filmLookShown, filmLookProject);
   useScrollLock(!!item);
   // Read callbacks + frequently-changing values from refs so the keydown
   // listener and the note-save debounce don't tear down on every parent
@@ -190,7 +221,7 @@ export default function MediaLightbox({
       if (e.key === 'Escape') {
         if (refineOpen) { setRefineOpen(false); return; }
         if (promptFromOpen) { setPromptFromOpen(false); return; }
-        if (filmLookOpen) { setFilmLookOpen(false); return; }
+        if (filmLookShown) { setFilmLookOpen(false); return; }
         if (fullScreen) { setFullScreen(false); return; }
         cb.onClose();
         return;
@@ -220,10 +251,10 @@ export default function MediaLightbox({
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [item, hasPrevious, hasNext, fullScreen, refineOpen, promptFromOpen, filmLookOpen]);
+  }, [item, hasPrevious, hasNext, fullScreen, refineOpen, promptFromOpen, filmLookShown]);
 
   // Reset refine modal when the previewed item changes.
-  useEffect(() => { setRefineOpen(false); setPromptFromOpen(false); setFilmLookOpen(false); }, [item?.key]);
+  useEffect(() => { setRefineOpen(false); setPromptFromOpen(false); }, [item?.key]);
 
   const { onTouchStart, onTouchEnd, onTouchCancel } = useSwipeNav({ onPrevious, onNext, hasPrevious, hasNext });
 
@@ -328,7 +359,7 @@ export default function MediaLightbox({
 
   const cardClasses = fullScreen
     ? 'relative w-full h-full bg-black flex'
-    : 'relative bg-port-card border border-port-border rounded-xl overflow-hidden max-w-6xl w-full max-h-dvh-cap [--dvh-cap:92vh] [--dvh-cap-dynamic:92dvh] [--dvh-inset:2rem] flex flex-col md:flex-row';
+    : `relative bg-port-card border border-port-border rounded-xl overflow-hidden ${filmLookShown ? 'max-w-6xl md:max-w-[min(90rem,calc(100vw-8rem))]' : 'max-w-6xl'} w-full max-h-dvh-cap [--dvh-cap:92vh] [--dvh-cap-dynamic:92dvh] [--dvh-inset:2rem] flex flex-col md:flex-row`;
   const overlayPad = fullScreen ? 'p-0' : 'p-4';
   const imgMax = fullScreen ? 'max-w-[100vw] max-h-dvh-cap' : 'max-w-full max-h-dvh-cap [--dvh-cap:92vh] [--dvh-cap-dynamic:92dvh] [--dvh-inset:2rem]';
   // Anchor low in fullscreen so the chevrons land in the letterbox bar of a
@@ -368,7 +399,7 @@ export default function MediaLightbox({
       ref={overlayRef}
       role="dialog"
       aria-modal="true"
-      aria-label={`Media viewer — ${item.filename || item.key || 'item'}`}
+      aria-label={item.label || `Media viewer — ${item.filename || item.key || 'item'}`}
       className={`fixed inset-0 z-50 bg-black/90 flex items-center justify-center ${overlayPad}`}
       onClick={onClose}
       // The backdrop itself carries no tabIndex (it isn't a tab stop) and its
@@ -448,8 +479,12 @@ export default function MediaLightbox({
               preload="metadata"
               className={imgMax}
             />
+          ) : filmLookShown ? (
+            filmLook.waiting
+              ? <p className="p-4 text-sm text-gray-400" role={filmLook.sourceError ? 'alert' : 'status'}>{filmLook.sourceError || 'Loading ungraded source…'}</p>
+              : <FilmLookPreview src={filmLook.src} alt={item.prompt} look={filmLook.look} className="flex min-h-0 items-center justify-center" imgClassName={fullScreen ? imgMax : FILM_LOOK_IMG_MAX} />
           ) : (
-            <MediaImage src={item.previewUrl} alt={item.prompt} className={`${imgMax} object-contain`} placeholderClassName="w-full h-full" />
+            <MediaImage src={item.previewUrl} fallbackSrc={item.fallbackUrl} alt={item.label || item.prompt} className={`${imgMax} object-contain`} placeholderClassName="w-full h-full" />
           )}
           {/* Solid white pill keeps it readable against black letterbox bars. */}
           <button
@@ -468,7 +503,13 @@ export default function MediaLightbox({
           )}
         </div>
 
-        {!fullScreen && (
+        {!fullScreen && filmLookShown && (
+          <aside className={`${ASIDE_CLASSES} ${FILM_LOOK_ASIDE_SIZE}`} onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => { if (e.key !== 'Escape') e.stopPropagation(); }}>
+            <FilmLookPane item={item} draft={filmLook} onBack={() => setFilmLookOpen(false)} onComplete={onFilmLookComplete} projectLook={filmLookProject} />
+          </aside>
+        )}
+        {!fullScreen && !filmLookShown && (
           <SettingsPane
             item={item}
             meta={meta}
@@ -489,7 +530,9 @@ export default function MediaLightbox({
             // hydrated (#8292) — refining or editing it would treat the
             // truncation as the saved prompt.
             onRefine={item.compact ? undefined : () => setRefineOpen(true)}
-            onPromptFrom={() => setPromptFromOpen(true)}
+            onPromptFrom={item.filename || item.id ? () => setPromptFromOpen(true) : undefined}
+            pageActions={pageActions}
+            rating={ratingControl || (onAnnotationChange ? { value: annotation?.rating ?? null, onRate: (next) => onAnnotationChange({ rating: next }) } : null)}
             annotation={annotation}
             onAnnotationChange={onAnnotationChange}
             onPromptChange={item.compact ? undefined : onPromptChange}
@@ -499,14 +542,13 @@ export default function MediaLightbox({
             videoRef={videoRef}
             variantGroup={variantGroup}
             onSelectVariant={onSelectVariant}
-            onFilmLook={!isVideo && item.filename && !item.compact ? () => setFilmLookOpen(true) : undefined}
+            onFilmLook={filmLookAvailable ? () => setFilmLookOpen(true) : undefined}
+            quickEditParams={quickEditParams}
+            onQuickEditQueued={onQuickEditQueued}
           />
         )}
       </div>
       <PromptRefineModal item={item} open={refineOpen} onClose={() => setRefineOpen(false)} />
-      {!isVideo && item.filename && (
-        <FilmLookEditor item={item} open={filmLookOpen} onClose={() => setFilmLookOpen(false)} onComplete={onFilmLookComplete} projectLook={filmLookProject} />
-      )}
       <PromptFromMediaModal item={item} open={promptFromOpen} onClose={() => setPromptFromOpen(false)} onResult={onPromptAnalysis} />
     </div>,
     document.body
@@ -543,9 +585,9 @@ function SettingsPane({
   onClose, onRemix, onSendToImage, onSendToVideo, onSendTo3d, onContinue, onClean, onRegenerate, onRemoveWatermark, regenAvailable, regenBounds,
   copy, onRefine, onPromptFrom,
   annotation, onAnnotationChange, onPromptChange, onPosterChange, getPlayhead, onTrimStart, videoRef,
-  variantGroup, onSelectVariant, onFilmLook,
+  variantGroup, onSelectVariant, onFilmLook, pageActions, rating,
+  quickEditParams, onQuickEditQueued,
 }) {
-  const asideClasses = 'md:w-80 lg:w-96 shrink-0 flex flex-col border-t md:border-t-0 md:border-l border-port-border min-h-0 max-h-dvh-cap [--dvh-cap:40vh] [--dvh-cap-dynamic:40dvh] md:[--dvh-cap:92vh] md:[--dvh-cap-dynamic:92dvh] [--dvh-inset:2rem]';
   const [posterSaving, setPosterSaving] = useState(false);
   const [posterError, setPosterError] = useState(null);
   const savePoster = async atSec => {
@@ -567,6 +609,7 @@ function SettingsPane({
   // install without a FLUX runner can still attempt a (less reliable) pass.
   const regenLightAvailable = !!regenBounds?.lightAvailable;
   const [regenOpen, setRegenOpen] = useState(false);
+  const [quickEditOpen, setQuickEditOpen] = useState(false);
   const [regenStrength, setRegenStrength] = useState(regenDefault);
   // Track whether the user actually moved the slider. When untouched, the
   // request OMITS strength so the server picks its provider-aware default
@@ -665,7 +708,7 @@ function SettingsPane({
   }, [saveStatus]);
   return (
     <aside
-      className={asideClasses}
+      className={`${ASIDE_CLASSES} ${DETAILS_ASIDE_SIZE}`}
       onClick={(e) => e.stopPropagation()}
       // Same containment, minus Escape: a keystroke from a focused control in
       // this sidebar (an annotation field, a toggle) must not bubble to the
@@ -676,7 +719,19 @@ function SettingsPane({
       {item.raw?.appId && <a className="block p-3 text-port-accent" href={`/apps/${encodeURIComponent(item.raw.appId)}/overview`}>Open source app</a>}
       <header className="shrink-0 flex items-center justify-between p-3 border-b border-port-border">
         <span className="text-xs uppercase tracking-wide text-gray-400">{isVideo ? 'Video' : 'Image'} settings</span>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1">
+          {rating && [['good', ThumbsUp, 'bg-port-success/90 text-white'], ['bad', ThumbsDown, 'bg-port-error/90 text-white']].map(([value, Icon, on]) => {
+            const active = rating.value === value;
+            return (
+              <button key={value} type="button" disabled={rating.busy} aria-pressed={active}
+                onClick={() => rating.onRate(active ? null : value)}
+                className={`min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 rounded disabled:opacity-50 ${active ? on : 'text-gray-400 hover:text-white hover:bg-port-border/50'}`}
+                aria-label={value === 'good' ? 'Good' : 'Bad'}
+                title={active ? `Rated ${value} (tap to clear)` : (rating.title?.[value] || (value === 'good' ? 'Good: keep it' : 'Bad: a file to clean up'))}>
+                <Icon className="w-4 h-4" />
+              </button>
+            );
+          })}
           {onAnnotationChange && (
             <button
               type="button"
@@ -703,6 +758,7 @@ function SettingsPane({
           consume the entire editing area. Roomy viewports keep actions fixed. */}
       <div className="min-h-0 flex-1 overflow-y-auto roomy-viewport:overflow-hidden roomy-viewport:flex roomy-viewport:flex-col">
       <div className="p-3 space-y-3 text-xs roomy-viewport:min-h-0 roomy-viewport:flex-1 roomy-viewport:overflow-y-auto">
+        {pageActions && <div data-testid="page-actions">{pageActions}</div>}
         {item.compact ? (
           <div>
             <span className="block mb-1 text-gray-500 uppercase tracking-wide">Prompt</span>
@@ -824,8 +880,6 @@ function SettingsPane({
           </div>
         )}
 
-        <AttributionList record={item} />
-
         {isVideo && <ContinuationDetails continuation={item.raw?.continuation || item.continuation} />}
 
         {meta.length > 0 && (
@@ -864,6 +918,33 @@ function SettingsPane({
           >
             <Sparkles className="w-3.5 h-3.5" /> Refine Prompt
           </button>
+        )}
+        {!isVideo && item.filename && (
+          <button
+            type="button"
+            onClick={() => setQuickEditOpen((o) => !o)}
+            aria-expanded={quickEditOpen}
+            title="Describe a change and re-render this image with it, keeping everything else"
+            className={`flex-1 min-h-[44px] min-w-[80px] flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs text-white hover:opacity-90 rounded ${quickEditOpen ? "bg-port-accent" : "bg-port-accent/80"}`}
+          >
+            <Pencil className="w-3.5 h-3.5" /> Edit
+          </button>
+        )}
+        {!isVideo && item.filename && quickEditOpen && (
+          <QuickImageEdit
+            item={item}
+            generateParams={quickEditParams}
+            onDone={(result, editInfo) => {
+              setQuickEditOpen(false);
+              onClose?.();
+              if (result) {
+                onQuickEditQueued?.(result, {
+                  item,
+                  instruction: editInfo?.instruction,
+                });
+              }
+            }}
+          />
         )}
         {onPromptFrom && (
           <button

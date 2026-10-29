@@ -140,6 +140,34 @@ describe('persisted runtime continuation', () => {
     expect((await getTaskById('sys-example')).status).toBe('blocked');
   });
 
+  it.each(['undercounted-receipt', 'missing-receipt', 'malformed-receipt'])('does not resume a runtime hold with %s', async kind => {
+    await park(); facts.ancestor = true;
+    const binding = facts.owner.metadata.completionTaskDispatch;
+    if (kind === 'undercounted-receipt') binding.expected = binding.expected.map(([key, value]) => [key, key === 'totalSpawnCount' ? 5 : value]);
+    if (kind === 'missing-receipt') delete facts.owner.metadata.completionTaskDispatch;
+    if (kind === 'malformed-receipt') binding.expected = null;
+    const before = await getTaskById('sys-example');
+    expect(await sweepRuntimeVerifications()).toEqual({ resumed: [] });
+    expect(await getTaskById('sys-example')).toEqual(before);
+  });
+
+  it.each(['owner', 'task edit'])('does not release a runtime hold when a concurrent %s appears during verification', async kind => {
+    await park(); facts.ancestor = true;
+    const originalForge = execGh.getMockImplementation();
+    let entered, release;
+    const inspecting = new Promise(resolve => { entered = resolve; });
+    const inspection = new Promise(resolve => { release = resolve; });
+    execGh.mockImplementationOnce(async (...args) => { entered(); await inspection; return originalForge(...args); });
+    const pending = sweepRuntimeVerifications();
+    await inspecting;
+    if (kind === 'owner') facts.running = true;
+    else await updateTask('sys-example', { description: 'Operator revised the objective' }, 'internal');
+    const before = await getTaskById('sys-example');
+    release();
+    expect(await pending).toEqual({ resumed: [] });
+    expect(await getTaskById('sys-example')).toEqual(before);
+  });
+
   it('recovers the original resume-pointer handoff after restart before releasing a verified boot', async () => {
     await park({ ready: false }); facts.ancestor = true;
     expect(await sweepRuntimeVerifications()).toEqual({ resumed: [] });

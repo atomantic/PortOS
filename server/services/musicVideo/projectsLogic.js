@@ -1,3 +1,4 @@
+import { festivalPacketSchema } from '../../lib/musicVideoFestivalPacket.js';
 import { musicVideoMediaMode, assertMusicVideoMediaSelections } from '../../lib/musicVideoMediaPolicy.js';
 /**
  * Music Video — pure record transforms (issue #1760, Phase 1).
@@ -41,6 +42,7 @@ import { normalizeFilmLook } from '../../lib/filmLook.js';
 import { stillMoveForCamera } from '../../lib/cameraMovements.js';
 import { normalizeTitleCard } from '../../lib/musicVideoTitleCard.js';
 import { normalizeStatsOutro } from '../../lib/musicVideoStatsOutro.js';
+import { normalizeCreditsOutro } from '../../lib/musicVideoCreditsOutro.js';
 import { remapTreatmentForClone, scenesFingerprint } from './treatment.js';
 import { anchorShotsToSungLyrics, carryStoryboardApproval, dropStaleStoryboardRows } from './productionReview.js';
 import { cuesSungWithin, sungLyricTextWithin } from '../../lib/musicVideoLyricAnchors.js';
@@ -113,6 +115,7 @@ export function buildProjectRecord(input, { id, now }) {
   return {
     id,
     name,
+    ...(input.festivalPacket ? { festivalPacket: festivalPacketSchema.parse(input.festivalPacket) } : {}),
     version: 1,
     parentProjectId: null,
     rootProjectId: null,
@@ -182,6 +185,8 @@ export function buildProjectRecord(input, { id, now }) {
     titleCard: normalizeTitleCard(input.titleCard),
     // The cutting room floor outro after the song; null = off.
     statsOutro: normalizeStatsOutro(input.statsOutro),
+    // The film credits after the song (and after the floor); null = never set up.
+    creditsOutro: normalizeCreditsOutro(input.creditsOutro),
     // #8980 — optional pre-production treatment (brief, arc, shot direction,
     // proof checklist); null until the director starts one. See treatment.js.
     treatment: null,
@@ -309,6 +314,7 @@ export function cloneProjectRecord(source, {
     renderDependencies: null,
     // Publishing outputs and posted URLs belong to the source final render.
     ...(source.publishKit ? { publishKit: null } : {}),
+    ...(source.dcpExports ? { dcpExports: [] } : {}),
     // Finished outside PortOS describes the source's video; the new version is made here.
     ...(source.finishedOutside ? { finishedOutside: null } : {}),
     // #9010: the source's in-flight render mark is not the clone's.
@@ -359,6 +365,7 @@ export function applyProjectPatch(project, patch) {
   // `visualSpec` patch merges per sub-field the same way (#8965).
   const timedPatch = {
     ...patch,
+    ...('festivalPacket' in patch ? { festivalPacket: patch.festivalPacket === null ? null : festivalPacketSchema.parse(patch.festivalPacket) } : {}),
     ...(patch.productionPolicy ? { productionPolicy: normalizeMusicVideoProductionPolicy(patch.productionPolicy, project.productionPolicy) } : {}),
     ...(patch.visualSpec ? { visualSpec: normalizeVisualSpec(patch.visualSpec, project.visualSpec) } : {}),
     // Automation brief merges per sub-field; null clears it.
@@ -370,6 +377,7 @@ export function applyProjectPatch(project, patch) {
       if (previous && previous.text !== cue.text) {
         delete cue.matched;
         delete cue.suspect;
+        delete cue.silentWords;
       }
       return cue;
     }) } : {}),
@@ -392,6 +400,7 @@ export function applyProjectPatch(project, patch) {
     ...('titleCard' in patch ? { titleCard: normalizeTitleCard(patch.titleCard) } : {}),
     // The outro after the song is replaced whole; null turns it off.
     ...('statsOutro' in patch ? { statsOutro: normalizeStatsOutro(patch.statsOutro) } : {}),
+    ...('creditsOutro' in patch ? { creditsOutro: normalizeCreditsOutro(patch.creditsOutro) } : {}),
   };
   // #8988: a bed is mixed UNDER the song — the song itself can't be its bed.
   const masterTrackId = 'trackId' in patch ? patch.trackId : project.trackId;
@@ -1035,6 +1044,8 @@ export function mergeProjectRecord(local, remoteRaw) {
   // Key-presence checks preserve an intentional local empty/null value instead
   // of confusing it with a missing field.
   remote = { ...remote };
+  // Pre-packet peers can omit the optional field; absence must not erase edits.
+  if (!Object.hasOwn(remote, 'festivalPacket') && Object.hasOwn(local, 'festivalPacket')) remote.festivalPacket = local.festivalPacket;
   if (Object.hasOwn(local, 'imageMode')) remote.imageMode = local.imageMode;
   if (Object.hasOwn(local, 'imageModelId')) remote.imageModelId = local.imageModelId;
   // #9066: this install's production-run checkpoint survives a newer remote.

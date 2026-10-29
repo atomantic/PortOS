@@ -4,6 +4,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const f = vi.hoisted(() => ({ registerGate: null, prep: null, publicationActive: false, refusePublication: false, updateResult: { ok: true }, provider: null, tui: false }));
+const releaseDisposition = vi.hoisted(() => vi.fn(async () => null));
+vi.mock('./releaseSynchronization.js', () => ({ releaseTaskDispatchDisposition: releaseDisposition }));
 vi.mock('../lib/checkoutRetirementAdmission.js', () => ({ withCheckoutPublication: vi.fn(async (_repo, work) => {
   if (f.refusePublication) throw new Error('checkout-retirement-reserved');
   f.publicationActive = true;
@@ -13,7 +15,7 @@ vi.mock('./cos.js', () => ({}));
 vi.mock('./cosState.js', () => ({ getConfig: async () => ({}) }));
 vi.mock('./cosTaskStore.js', () => ({ updateTask: vi.fn(async () => f.updateResult) }));
 vi.mock('./cosAgentLifecycle.js', () => ({
-  registerAgent: vi.fn(() => f.registerGate),
+  registerAgent: vi.fn(async () => { await f.registerGate; return { startedAt: '2026-01-01T00:00:00.000Z' }; }),
   updateAgent: vi.fn(),
 }));
 vi.mock('./cosEvents.js', () => ({ emitLog: vi.fn(), cosEvents: { emit: vi.fn() } }));
@@ -77,6 +79,7 @@ const isProtected = () => getActiveAgentIds().includes('agent-x') && protectedAg
 
 beforeEach(() => {
   vi.clearAllMocks();
+  releaseDisposition.mockResolvedValue(null);
   setUseRunner(false);
   f.publicationActive = f.refusePublication = false;
   f.registerGate = Promise.resolve();
@@ -87,6 +90,42 @@ beforeEach(() => {
 });
 
 describe('dispatchAgentRun ownership window', () => {
+  it('does not spawn a release continuation retired after queue admission', async () => {
+    const context = newContext();
+    context.task = { ...task, metadata: { analysisType: 'release-sync' } };
+    releaseDisposition.mockResolvedValue('retired-continuation');
+    expect(await dispatchAgentRun(context)).toBeNull();
+    expect(context.blockAndBail).toHaveBeenCalledWith(expect.objectContaining({ reason: expect.stringContaining('retired') }));
+    expect(registerAgent).not.toHaveBeenCalled();
+    expect(spawnDirectly).not.toHaveBeenCalled();
+    expect(getActiveAgentIds()).not.toContain('agent-x');
+  });
+  it.each(['direct', 'tui', 'runner'])('uses the persisted dispatch for %s completion and its spawn limit', async mode => {
+    const context = newContext();
+    context.task = { ...task, privateSecurityScope: { localOnly: true }, metadata: { totalSpawnCount: '4', failureCount: '0' } };
+    const claimed = { ...task, status: 'in_progress', metadata: { ...context.task.metadata,
+      totalSpawnCount: 5, lastSpawnedAt: '2026-01-01T00:00:00.000Z', claimedBy: 'instance-example' } };
+    f.updateResult = claimed;
+    f.tui = mode === 'tui';
+    setUseRunner(mode === 'runner');
+    const runner = vi.fn(async () => 'agent-x');
+
+    await dispatchAgentRun(context, { spawnViaRunner: runner });
+    const launchedTask = mode === 'runner' ? runner.mock.calls[0][1]
+      : (mode === 'tui' ? spawnTuiAgent : spawnDirectly).mock.calls[0][0].task;
+    expect(launchedTask).toMatchObject({ status: 'in_progress', metadata: {
+      totalSpawnCount: 5, failureCount: '0', lastSpawnedAt: claimed.metadata.lastSpawnedAt, claimedBy: 'instance-example',
+    }, privateSecurityScope: { localOnly: true } });
+  });
+
+  it('still launches an unpersisted scheduled job with its original task', async () => {
+    const context = newContext();
+    context.task = { ...task, id: 'job-example-123', metadata: { autonomousJob: true, jobId: 'job-example' } };
+    f.updateResult = { error: 'Task not found' };
+    await dispatchAgentRun(context);
+    expect(spawnDirectly.mock.calls[0][0].task).toBe(context.task);
+  });
+
   it('protects the agent while registration is pending and releases once handed off', async () => {
     let finishRegistration;
     f.registerGate = new Promise((resolve) => { finishRegistration = resolve; });
@@ -129,12 +168,17 @@ describe('dispatchAgentRun ownership window', () => {
     f.updateResult = result;
     f.prep.cleanupReviewPinConsumed = true;
     const context = newContext();
+    context.claimAcquired = true;
+    context.spawnWorktree = { branchName: 'preserved-branch' };
     context.task = { ...task, metadata: { cleanupReviewTarget: undefined, cleanupReviewLaunchEvidence: { headSha: 'a'.repeat(40) }, totalSpawnCount: '2' } };
     expect(await dispatchAgentRun(context)).toBeNull();
     expect(registerAgent).toHaveBeenCalledOnce();
-    expect(updateTask).toHaveBeenCalledWith(task.id, expect.objectContaining({ metadata: expect.objectContaining({ totalSpawnCount: 3, cleanupReviewTarget: undefined }) }), 'user');
+    expect(updateTask).toHaveBeenCalledWith(task.id, expect.objectContaining({ metadata: expect.objectContaining({ totalSpawnCount: 3, cleanupReviewTarget: undefined }) }), 'user',
+      expect.objectContaining({ expectedTask: { metadata: context.task.metadata }, spawnBudgetOperation: { kind: 'dispatch', agentId: 'agent-x', startedAt: '2026-01-01T00:00:00.000Z' } }));
     expect(spawnDirectly).not.toHaveBeenCalled();
     expect(context.cleanupOnError).toHaveBeenCalledWith(expect.stringContaining('Failed to persist reviewed-head launch admission'));
+    expect(context.claimAcquired).toBe(false);
+    expect(context.spawnWorktree).toBeNull();
     expect(f.publicationActive).toBe(false);
   });
 

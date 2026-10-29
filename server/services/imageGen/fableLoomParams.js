@@ -15,7 +15,7 @@ import { compileFableLoomVisualRequest, fableLoomImageCapabilities } from '../fa
 import { maxInputImages, resolveCloudProviderConfig } from './cloudProviderConfig.js';
 import { selectLocalImageModelFromSettings } from './prepareParams.js';
 import { applyImageVisualProfile, imageVisualProfileRevision } from './visualProfile.js';
-import { captureRequestImage } from '../fableLoom/requestInputs.js';
+import { captureCanonImages, captureRequestImage } from '../fableLoom/requestInputs.js';
 
 const MAX_REFERENCE_IMAGES = 4;
 export const fableLoomMultipartUnsupported = () => new ServerError(
@@ -127,6 +127,9 @@ export async function prepareFableLoomImageParams({ params, mode, settings }) {
     const allReferences = [...compiled.referenceImagePaths, ...requestReferences];
     const allStrengths = [...compiled.referenceImageStrengths, ...requestReferences.map((_, index) => requestStrengths[index] ?? 1)];
     const allScales = [...canonAdapters.map((_, index) => compiled.loraScales[index] ?? 1), ...requestAdapters.map((_, index) => requestScales[index] ?? 1)];
+    // Canon images are resolved by name now but read at dispatch; their bytes are the evidence.
+    const canonAssets = compiled.visualConditioning
+      ? await captureCanonImages(compiled.visualConditioning.assets, compiled.referenceImagePaths) : [];
     const requestAssets = await Promise.all(requestReferences.map(path => captureRequestImage(path, 'request-reference')));
     if (params.initImagePath) requestAssets.push(await captureRequestImage(params.initImagePath, 'request-init', params.initImageStrength));
     const adapterNames = [...canonAdapters, ...requestFilenames, ...requestPaths];
@@ -152,7 +155,7 @@ export async function prepareFableLoomImageParams({ params, mode, settings }) {
       authoredNegativePrompt: params.authoredNegativePrompt,
       ...(renderedPrompt !== null ? { renderedPrompt } : {}),
       ...(params.visualProfileOverride !== undefined ? { visualProfileOverride: params.visualProfileOverride } : {}),
-      assets: [...compiled.visualConditioning.assets, ...requestAssets],
+      assets: [...canonAssets, ...requestAssets],
       adapters: [
         ...compiled.visualConditioning.adapters.map(adapter => ({ ...adapter, source: 'Canon adapter' })),
         ...requestAdapters.map((path, index) => ({ filename: basename(path), scale: requestScales[index] ?? 1, characterId: null, sha256: requestDigests[index], source: 'Request adapter', relativePath: relative(PATHS.loras, resolve(path)).split(sep).join('/') })),

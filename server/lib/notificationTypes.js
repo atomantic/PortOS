@@ -14,7 +14,8 @@ export const NOTIFICATION_CATALOG = {
   MUSIC_VIDEO_ATTENTION: { key: 'music_video_attention', label: 'Music Video Attention' },
   ACTION_DUE: { key: 'action_due', label: 'Scheduled Actions Due' },
   SHARE_BLOCKED: { key: 'share_blocked', label: 'Blocked Shares' },
-  GITHUB_AUDIT: { key: 'github_audit', label: 'GitHub Audit Reports' }
+  GITHUB_AUDIT: { key: 'github_audit', label: 'GitHub Audit Reports' },
+  MEDIA_DELETE_FAILED: { key: 'media_delete_failed', label: 'Media Delete Outcomes' }
 };
 
 export const NOTIFICATION_TYPES = Object.fromEntries(

@@ -144,6 +144,16 @@ describe('assembled forge claim prompts', () => {
     expect(renderAgent(claim)).toContain('If this workflow actually runs local pre-PR reviewers');
   });
 
+  it.each(['github', 'gitlab'])('renders the configured %s reviewer budget and no hardcoded three-round cap', async (tracker) => {
+    state.tracker = tracker;
+    const { prompt } = await buildClaimWorkTask(app, {
+      target: '42', prCompletion: 'review-then-merge', reviewers: ['codex'], optionalReviewers: ['codex'], reviewerMaxRounds: { codex: 2 },
+    });
+    expect(prompt).toContain('`codex` → 2 rounds');
+    expect(prompt).not.toMatch(/capped at 3 rounds|after 3 rounds/);
+    expect(prompt).toContain('never blocks opening');
+  });
+
   it('keeps the target and policy first when optional reviewer preflight emits a notice', async () => {
     vi.mocked(preflightClaimReviewers).mockResolvedValueOnce('\n\n## Reviewer identity preflight\nOptional reviewer unavailable.\n');
     const claim = await buildClaimWorkTask(app, { target: '42', prCompletion: 'review-then-merge' });
@@ -161,9 +171,15 @@ describe('assembled forge claim prompts', () => {
     expect(renderAgent(claim)).toContain('If this workflow actually runs local pre-PR reviewers');
   });
 
-  it('rejects oversized direct claim inputs before constructing a partial prompt', async () => {
-    await expect(buildClaimWorkTask(app, { target: '42', issueContext: { ...issueContext, body: 'x'.repeat(12_001) } }))
-      .rejects.toMatchObject({ status: 400, code: 'VALIDATION_ERROR' });
+  it('fetches the full issue when a direct claim snapshot is oversized', async () => {
+    const body = `${'x'.repeat(12_001)}ACCEPTANCE_CRITERION_AT_TAIL`;
+    const claim = await buildClaimWorkTask(app, { target: '42', issueContext: { ...issueContext, body } });
+    expect(claim.prompt).toContain('Fetch the full live title and body of issue #42');
+    expect(claim.prompt).not.toContain('## Prefetched Issue Context');
+    expect(claim.prompt).not.toContain('ACCEPTANCE_CRITERION_AT_TAIL');
+  });
+
+  it('rejects oversized direct claim guidance instead of constructing a partial prompt', async () => {
     await expect(buildClaimWorkTask(app, { target: '42', overrideContext: 'x'.repeat(4_001) }))
       .rejects.toMatchObject({ status: 400, code: 'VALIDATION_ERROR' });
   });

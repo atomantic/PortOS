@@ -8,12 +8,15 @@
 import { basename, join } from 'node:path';
 import { fableLoomMultipartUnsupported, prepareFableLoomImageParams } from './fableLoomParams.js';
 import { tmpdir } from 'node:os';
+import { getRunwayImageModel, RUNWAY_IMAGE_DEFAULT_MODEL } from '../../lib/runwayImageModels.js';
 import { IMAGE_GEN_MODE } from '../../lib/generationModes.js';
 import { carriedPromptAdditions, sentPromptRecord } from '../../lib/modelInput.js';
 import { FAL_IMAGE_DEFAULT_MODEL, falImageFamily } from '../../lib/falImageModels.js';
 import { maxInputImages, resolveCloudProviderConfig } from './cloudProviderConfig.js';
 import { resolveInputImages } from './inputImages.js';
-import { prepareGenerateParams, previewUploadLabel, resolveLocalImageModel, selectLocalImageModelFromSettings } from './prepareParams.js';
+import { reviewedReferencePreview } from './reviewedReference.js';
+import { ServerError } from '../../lib/errorHandler.js';
+import { prepareGenerateParams, quickEditCompositionDigest, previewUploadLabel, resolveLocalImageModel, selectLocalImageModelFromSettings } from './prepareParams.js';
 import { codexSentPrompt } from './codex.js';
 import { grokSentPrompt } from './grok.js';
 import { agySentPrompt } from './agy.js';
@@ -41,7 +44,7 @@ function previewInputImages(mode, params, modelId) {
 
 const jobOutputPath = (prefix) => join(tmpdir(), `${prefix}-<job>`, 'output.png');
 
-export async function previewImagePrompt({ uploadedInitImage = false, uploadedReferenceCount = 0, ...body }) {
+export async function previewImagePrompt({ uploadedInitImage = false, uploadedReferenceCount = 0, reviewReference = false, ...body }) {
   if (body.fableLoom && (uploadedInitImage || uploadedReferenceCount)) throw fableLoomMultipartUnsupported();
   const referenceImageFields = Array.from({ length: uploadedReferenceCount }, (_, index) => `referenceImage${index + 1}`);
   const files = {
@@ -52,8 +55,16 @@ export async function previewImagePrompt({ uploadedInitImage = false, uploadedRe
   await prepareFableLoomImageParams({ params, mode, settings });
   const showsReferenceStrengths = params.fableLoom && mode === IMAGE_GEN_MODE.LOCAL && !params.mediaProviderPeerId
     && selectLocalImageModelFromSettings(settings, params.modelId)?.runner === 'flux2';
+  if (reviewReference && (params.initImagePath || params.referenceImagePaths?.length !== 1 || uploadedInitImage || uploadedReferenceCount || (!params.mediaProviderPeerId && mode === IMAGE_GEN_MODE.EXTERNAL))) {
+    throw new ServerError('Review requires exactly one named reference image', { status: 400, code: 'REVIEWED_REFERENCE_UNSUPPORTED' });
+  }
   const envelope = {
     mode,
+    ...(params.quickEdit ? {
+      reviewedPromptDigest: quickEditCompositionDigest({ params, mode, settings }),
+      referenceImages: (params.referenceImagePaths || []).map((path, index) => ({ filename: basename(path), status: 'included', source: `Input image ${index + 1} · Reference for this edit` })),
+    } : {}),
+    ...(reviewReference ? await reviewedReferencePreview(params.referenceImagePaths[0]) : {}),
     ...(params.fableLoom ? {
       authoredPrompt: params.authoredPrompt,
       authoredNegativePrompt: params.authoredNegativePrompt,
@@ -71,22 +82,31 @@ export async function previewImagePrompt({ uploadedInitImage = false, uploadedRe
       } : {}),
     } : {}),
   };
+  return params.quickEdit ? previewQuickImageEdit({ params, mode, settings, envelope }) : previewPreparedImagePrompt({ params, mode, settings, envelope });
+}
+
+/** Apply the render backend's prompt builder to an already-prepared request. */
+export async function previewPreparedImagePrompt({ params, mode = params.mode, settings, envelope = {} }) {
   const carried = carriedPromptAdditions(params);
   const common = {
     prompt: params.prompt || '', negativePrompt: params.negativePrompt || '',
     width: params.width, height: params.height, initImageStrength: params.initImageStrength,
     promptAdditions: carried,
   };
-  const cloud = params.mediaProviderPeerId ? null : resolveCloudProviderConfig(settings, mode, { model: params.cloudModel });
+  const cloud = params.mediaProviderPeerId ? null : resolveCloudProviderConfig(settings, mode, { model: params.cloudModel || params.model });
   // The same refusal POST /generate gives a disabled provider, text-to-image included.
   if (cloud && !cloud.enabled) throw cloud.disabledError;
+
+  if (params.mediaProviderPeerId) {
+    return { ...envelope, remote: true, ...sentPromptRecord({ sentPrompt: common.prompt, sentNegativePrompt: common.negativePrompt, carried }) };
+  }
 
   if (mode === IMAGE_GEN_MODE.CODEX) {
     return { ...envelope, ...codexSentPrompt({ ...common, inputImages: previewInputImages(mode, params) }).record };
   }
   if (mode === IMAGE_GEN_MODE.GROK) {
     return { ...envelope, ...grokSentPrompt({
-      ...common, aspectRatio: cloud?.providerParams.aspectRatio, stagingPath: jobOutputPath('portos-grok'),
+      ...common, aspectRatio: params.aspectRatio ?? cloud?.providerParams.aspectRatio, stagingPath: jobOutputPath('portos-grok'),
       inputImages: previewInputImages(mode, params),
     }).record };
   }
@@ -111,4 +131,17 @@ export async function previewImagePrompt({ uploadedInitImage = false, uploadedRe
     ...(params.mediaProviderPeerId ? { remote: true } : {}),
     ...sentPromptRecord({ sentPrompt: common.prompt, sentNegativePrompt: common.negativePrompt, carried }),
   };
+}
+
+/** Quick edits validate the complete composed text before queue admission as well as preview. */
+export async function previewQuickImageEdit(context) {
+  const record = await previewPreparedImagePrompt(context);
+  const { params, mode, settings } = context;
+  const cloud = mode === IMAGE_GEN_MODE.RUNWAY && !params.mediaProviderPeerId
+    ? resolveCloudProviderConfig(settings, mode, { model: params.cloudModel || params.model }) : null;
+  const limit = cloud ? getRunwayImageModel(cloud.providerParams.model || RUNWAY_IMAGE_DEFAULT_MODEL)?.promptMaxChars ?? 32000 : 32000;
+  if (record.sentPrompt.length > limit) {
+    throw new ServerError(`Complete edit prompt is ${record.sentPrompt.length}/${limit} characters. Shorten your instruction; nothing was submitted or truncated.`, { status: 400, code: 'IMAGE_PROMPT_TOO_LONG' });
+  }
+  return record;
 }

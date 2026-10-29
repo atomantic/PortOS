@@ -11,6 +11,11 @@ import {
 const busyFrom = (crons, padding = {}) =>
   buildBusySlots(crons.map(cronWeekdayHours), { padBeforeHours: 1, padAfterHours: 2, ...padding });
 
+// A fixed 35-audit prefix keeps slot-count assertions independent of how many
+// lanes the catalog grows to (the planner needs ceil(audits / 7) slots a day).
+const FIXED_AUDITS = AUDIT_TASK_TYPE_LIST.slice(0, 35);
+const planFixed = (overrides = {}) => planQualitySchedule({ taskTypes: [...FIXED_AUDITS], ...overrides });
+
 const planAll = (overrides = {}) => planQualitySchedule({ taskTypes: [...AUDIT_TASK_TYPE_LIST], ...overrides });
 
 describe('buildBusySlots', () => {
@@ -77,7 +82,7 @@ describe('planQualitySchedule', () => {
     // With the natural offset hours occupied, an outward or wrapping search
     // would place the drain EARLIER in the day — the claim cron is daily, so
     // "01:00" is not after a 22:00 audit, it is 21 hours before the next one.
-    const plan = planAll({ busy: busyFrom(['30 3 * * *']), options: { checksPerDay: 4, claimOffsetHours: 3 } });
+    const plan = planFixed({ busy: busyFrom(['30 3 * * *']), options: { checksPerDay: 4, claimOffsetHours: 3 } });
     const auditHours = [...new Set(plan.slots.map(slot => slot.hour))];
     expect(plan.claim.hours).toHaveLength(auditHours.length);
     // Every claim hour is strictly later in the SAME day than the audit it
@@ -166,7 +171,7 @@ describe('planQualitySchedule', () => {
   });
 
   it('emits one daily cron covering every slot, not one per day', () => {
-    const plan = planAll();
+    const plan = planFixed();
     // The literal, not the production expression restated: a planner that
     // emitted one claim hour for four daily slots would pass that version.
     expect(plan.claim.cron).toBe('0 3,8,13,17,22 * * *');

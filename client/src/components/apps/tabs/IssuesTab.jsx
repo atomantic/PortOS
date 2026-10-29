@@ -24,6 +24,8 @@ import { timeAgo, formatCount } from '../../../utils/formatters';
 import { useAsyncAction } from '../../../hooks/useAsyncAction';
 import AddToThreadButton from '../../threads/AddToThreadButton';
 import RunActionButton from './RunActionButton';
+import { ISSUE_BODY_PREVIEW_MAX_CHARS, isCompleteIssueContext } from '../../../../../lib/issueContext.js';
+import { buildReviewersCsv } from '../../../../../server/lib/reviewerConfig.js';
 
 function ClaimReviewOverride({ defaults, overrides, onChange, modelOptions }) {
   return (
@@ -494,14 +496,19 @@ export default function IssuesTab({ appId, appName }) {
     const key = runKey(action, issue.number);
     replaceRuns(prev => ({ ...prev, [key]: { status: 'queuing', taskId: null } }));
     const trimmedOverrideContext = overrideContext.trim();
+    const issueContext = {
+      number: issue.number,
+      title: issue.title,
+      body: issue.body,
+      ...(issue.url ? { url: issue.url } : {})
+    };
+    // Older servers lack the completeness flag but their clipped previews are
+    // longer than the preview limit because they append a truncation notice.
+    const completePreview = issue.bodyTruncated === false
+      || (issue.bodyTruncated == null && typeof issue.body === 'string' && issue.body.length <= ISSUE_BODY_PREVIEW_MAX_CHARS);
     const result = await api.createSlashdoTask(spec.command, appId, {
       target: String(issue.number),
-      issueContext: {
-        number: issue.number,
-        title: issue.title || '',
-        body: issue.body || '',
-        ...(issue.url ? { url: issue.url } : {})
-      },
+      ...(completePreview && isCompleteIssueContext(issueContext) ? { issueContext } : {}),
       ...picker.pin,
       ...(action === 'claim' ? {
         ...(prCompletionTouched ? { prCompletion } : {}),
@@ -552,13 +559,31 @@ export default function IssuesTab({ appId, appName }) {
   // authenticated user got told to authenticate.
   const unavailable = data?.transient === true;
 
+  const providersList = reviewerModelOptions?.providers?.length
+    ? reviewerModelOptions.providers
+    : (picker.providers || []);
   const reviewerCsv = !claimReviewers || prCompletion !== 'review-then-merge' || invalidReviewOverride ? null
     : Object.keys(reviewOverrides).length
-      ? [
-        ...(reviewOverrides.reviewers ?? claimReviewers.reviewers),
-        ...(reviewOverrides.usernames ?? claimReviewers.usernames ?? []).map(username => `@${username}`),
-      ].join(', ')
-      : claimReviewers.csv;
+      ? buildReviewersCsv(
+          reviewOverrides.reviewers ?? claimReviewers.reviewers,
+          reviewOverrides.usernames ?? claimReviewers.usernames,
+          reviewOverrides.optionalReviewers ?? claimReviewers.optionalReviewers,
+          reviewOverrides.reviewerMaxRounds ?? claimReviewers.reviewerMaxRounds,
+          reviewOverrides.reviewerModels ?? claimReviewers.reviewerModels,
+          reviewOverrides.reviewerEfforts ?? claimReviewers.reviewerEfforts,
+          providersList
+        )
+      : (claimReviewers.csv && claimReviewers.csv.includes('provider:') && providersList.length
+          ? buildReviewersCsv(
+              claimReviewers.reviewers,
+              claimReviewers.usernames,
+              claimReviewers.optionalReviewers,
+              claimReviewers.reviewerMaxRounds,
+              claimReviewers.reviewerModels,
+              claimReviewers.reviewerEfforts,
+              providersList
+            )
+          : claimReviewers.csv);
   const pickedProvider = picker.providers?.find(p => p.id === picker.selectedProviderId);
   const runSettingsSummary = [
     pickedProvider?.name || picker.selectedProviderId || 'Auto',

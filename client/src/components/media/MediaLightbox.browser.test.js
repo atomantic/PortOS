@@ -142,6 +142,11 @@ describe.skipIf(!chrome)('MediaLightbox native video keyboard controls', () => {
               return React.createElement(React.Fragment, null,
                 React.createElement('button', { id: 'opener', onClick: () => setItem(video) }, 'Open video'),
                 React.createElement('div', { id: 'cards', className: 'grid grid-cols-2 md:grid-cols-4 gap-4 p-4' }, images.map(image => React.createElement(MediaCard, { key: image.key, item: image, onRemix: noop, onSendToImage: noop, onSendToVideo: noop, onSendTo3d: noop, onAnnotate: noop, onToggleStar: noop, onDelete: noop }))),
+                new URLSearchParams(location.search).has('missingPoster') && React.createElement('div', { id: 'fallback-card', style: { width: 250 } },
+                  React.createElement(MediaCard, { item: { ...video, previewUrl: '/data/video-thumbnails/unavailable.jpg' }, showCollectionMenu: false, showMoodBoardMenu: false })),
+                new URLSearchParams(location.search).has('peerImages') && ['working', 'unavailable'].map(name =>
+                  React.createElement('div', { id: name + '-image-card', key: name, style: { width: 250 } },
+                    React.createElement(MediaCard, { item: { ...images[0], filename: name + '.png', previewUrl: '/data/images/' + name + '.png', thumbnailUrl: '/data/image-thumbnails/' + name + '.webp' }, showCollectionMenu: false, showMoodBoardMenu: false }))),
                 React.createElement('button', { id: 'gallery', onClick: () => showImage(0) }, 'Open image gallery'),
                 React.createElement(MediaLightbox, { item, onClose: () => setItem(null),
                   hasPrevious: item?.kind === 'image' && index > 0,
@@ -169,6 +174,67 @@ describe.skipIf(!chrome)('MediaLightbox native video keyboard controls', () => {
     ({ browser, origin } = fixture);
   }, BROWSER_FIXTURE_STARTUP_MS);
   afterAll(() => fixture?.close());
+
+  it('decodes a video frame in a card when the hosted poster times out', async () => {
+    const page = await browser.newPage();
+    try {
+      await page.route('**/data/video-thumbnails/unavailable.jpg', route => route.fulfill({ status: 502 }));
+      await page.goto(`${origin}lightbox-test?missingPoster=1`);
+      const video = page.locator('#fallback-card video');
+      await waitForVideoData(video);
+      const pixel = await video.evaluate(element => {
+        const canvas = document.createElement('canvas');
+        canvas.width = canvas.height = 1;
+        const context = canvas.getContext('2d');
+        context.drawImage(element, 0, 0, 1, 1);
+        return [...context.getImageData(0, 0, 1, 1).data];
+      });
+      expect(pixel[2]).toBeGreaterThan(100);
+      expect(pixel[3]).toBe(255);
+      expect(await page.locator('#fallback-card').getByText('Syncing').count()).toBe(0);
+    } finally {
+      await page.close();
+    }
+  });
+
+  it('decodes a peer image thumbnail or its original after a thumbnail timeout', async () => {
+    const page = await browser.newPage({ viewport: { width: 1440, height: 1200 } });
+    const paths = [];
+    let pageErrors = 0;
+    page.on('pageerror', () => { pageErrors += 1; });
+    onTestFailed(() => console.error(`Image fallback fixture failed: requests=${paths.length}, pageErrors=${pageErrors}`));
+    try {
+      const png = await page.evaluate(() => {
+        const canvas = document.createElement('canvas');
+        canvas.width = canvas.height = 2;
+        canvas.getContext('2d').fillRect(0, 0, 2, 2);
+        return canvas.toDataURL('image/png').split(',')[1];
+      });
+      await page.route(/^https?:\/\/[^/]+\/data\/(image-thumbnails|images)\//, route => {
+        const path = new URL(route.request().url()).pathname;
+        paths.push(path);
+        if (path === '/data/image-thumbnails/unavailable.webp') return route.fulfill({ status: 502 });
+        return route.fulfill({ status: 200, contentType: 'image/png', body: Buffer.from(png, 'base64') });
+      });
+      await page.goto(`${origin}lightbox-test?peerImages=1`);
+      const working = page.locator('#working-image-card img');
+      const fallback = page.locator('#unavailable-image-card img');
+      await working.waitFor({ timeout: 5000 });
+      await working.scrollIntoViewIfNeeded();
+      await working.evaluate(image => image.decode());
+      await fallback.scrollIntoViewIfNeeded();
+      await page.waitForFunction(() => document.querySelector('#unavailable-image-card img')?.getAttribute('src') === '/data/images/unavailable.png', null, { timeout: 5000 });
+      await fallback.evaluate(image => image.decode());
+      expect(await working.getAttribute('src')).toBe('/data/image-thumbnails/working.webp');
+      expect(await fallback.getAttribute('src')).toBe('/data/images/unavailable.png');
+      expect(paths).toContain('/data/image-thumbnails/unavailable.webp');
+      expect(paths).toContain('/data/images/unavailable.png');
+      expect(await page.getByText('Syncing').count()).toBe(0);
+      expect(pageErrors).toBe(0);
+    } finally {
+      await page.close();
+    }
+  });
 
   it.each([false, true])('includes native controls in both directions (fullscreen=%s)', async fullScreen => {
     const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });

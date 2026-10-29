@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { readReleaseSynchronizationOutbox } from './releaseSynchronizationStore.js';
+import { retirementCheckoutIdentityFromPointer } from '../lib/retirementCheckoutObservation.js';
 import {
   projectTaskReleaseMilestones,
   projectAgentReleaseMilestones,
@@ -22,7 +23,14 @@ describe('releaseSynchronizationProjection', () => {
     tag: 'v1.2.3',
     releaseUrl: 'https://github.com/example/repo/releases/tag/v1.2.3',
     publishedAt: '2026-01-01T10:00:00Z',
+    repository: 'example/repo', promotionPrNumber: 12, candidateBranch: 'codex/release-publisher', candidateHead: 'a'.repeat(40),
   };
+  const pointer = { dev: '1', ino: '2', birthtimeNs: '3' };
+  const seed = { version: 1, agentId: 'publisher-agent-1', startedAt: '2026-01-01T09:00:00Z', seededAt: '2026-01-01T09:00:01Z',
+    repoPath: '/example/repo', path: '/example/publisher', branch: publication.candidateBranch, repository: pointer, checkout: pointer,
+    incarnation: { pointer, gitdir: { path: '/example/repo/.git/worktrees/publisher', ...pointer } } };
+  const target = { agentId: seed.agentId, repoPath: seed.repoPath, branch: seed.branch, path: seed.path,
+    head: publication.candidateHead, checkoutIdentity: retirementCheckoutIdentityFromPointer(pointer), createdAt: seed.seededAt };
   const entry = {
     version: 1,
     identity,
@@ -33,6 +41,7 @@ describe('releaseSynchronizationProjection', () => {
       workspace: '/example/repo',
     },
     publication,
+    checkouts: [seed],
     task: {
       id: `task-release-sync-${identity}`,
       metadata: {
@@ -52,6 +61,9 @@ describe('releaseSynchronizationProjection', () => {
           headSha: 'c'.repeat(40),
         },
       },
+      retirement: { evidence: { checkouts: [target], receipts: [{ ...target, branchDeleted: true, archiveDir: null, retiredAt: '2026-01-01T10:00:00Z' }],
+        publisherReview: { branch: seed.branch, path: seed.path, head: publication.candidateHead,
+          checkoutIdentity: target.checkoutIdentity, prUrl: 'https://github.com/example/repo/pull/12', receipt: null, models: [] } } },
     },
     synchronization: {
       status: 'verified',
@@ -101,6 +113,23 @@ describe('releaseSynchronizationProjection', () => {
       id: 'unrelated-task',
       metadata: {},
     });
+  });
+
+  it('projects the completed publication head rather than an earlier actual inspection', () => {
+    const completedHead = 'e'.repeat(40);
+    const local = { ...entry, obligations: { localReview: { evidence: { receipt: { version: 2, completedHead, reviewedHead: 'f'.repeat(40) } } } } };
+    expect(projectTaskReleaseMilestones({ id: 'example', metadata: {} }, local).metadata.releaseSynchronization.headSha).toBe(completedHead);
+    local.obligations.localReview.evidence.receipt = { version: 1, reviewedHead: completedHead };
+    expect(projectTaskReleaseMilestones({ id: 'example', metadata: {} }, local).metadata.releaseSynchronization.headSha).toBe(completedHead);
+  });
+
+  it('shows an operator reset without claiming the historical synchronization succeeded', () => {
+    const legacy = { ...entry, checkouts: [], synchronization: { status: 'blocked', blocker: 'publisher-candidate-checkout-unverified' },
+      operatorReset: { version: 1, identity, resetAt: '2026-01-01T12:00:00Z', actor: 'local-operator',
+        reason: 'Start from main', previousStatus: 'blocked', previousBlocker: 'publisher-candidate-checkout-unverified', checkouts: [] } };
+    const projected = projectTaskReleaseMilestones({ id: 'example', metadata: {} }, legacy).metadata.releaseSynchronization;
+    expect(projected).toMatchObject({ status: 'blocked', blocker: 'publisher-candidate-checkout-unverified', operatorReset: legacy.operatorReset });
+    expect(projected.nextAction).toContain('remains unverified');
   });
 
   it('projects release publication and synchronization onto agents', () => {

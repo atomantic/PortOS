@@ -75,6 +75,14 @@ export const PASTE_VERIFY_POLL_MS = 200;
 export const PASTE_VERIFY_WINDOW_MS = 2000; // max time to wait for verification after paste-commit
 export const PASTE_RETRY_MAX_ATTEMPTS = 3;
 export const PASTE_RETRY_BASE_DELAY_MS = 800;
+// Minimum wall-clock budget for the swallow-recovery ladder. Three attempts with
+// 0.8s/1.6s backoff exhaust in ~20s, which a slow-starting TUI (Claude painting
+// its composer before it binds input) outlasts: all three pastes were swallowed
+// and the run died `paste-not-rendered` with a healthy composer on screen. Once
+// the attempt count is spent, keep retrying at a fixed cadence until this window
+// (from the first paste) closes.
+export const PASTE_RETRY_MIN_WINDOW_MS = 60000;
+export const PASTE_RETRY_WINDOW_DELAY_MS = 4000;
 // Minimum prefix length for verification (shorter prompts verify whole-text)
 const MIN_VERIFIABLE_PREFIX_LEN = 15;
 export const PASTE_MARKER_PATTERN = /\[Pasted?\s*(?:text\s*#\d+[^\]]*|content\s*\d+\s*chars|~\s*\d+\s*lines?|#\d+\s*\+\d+\s*lines?|:\s*\d+(?:\.\d+)?\s*(?:B|KB|MB))\]/i;

@@ -4,23 +4,12 @@
  */
 
 import { startGit, windowsGitFailureMetadata } from './windowsGitProcess.js';
-import { AsyncLocalStorage } from 'node:async_hooks';
+import { currentGitMutationLifetime } from './gitMutationLifetime.js';
 import { StringDecoder } from 'node:string_decoder';
 import { realpathSync } from 'node:fs';
 import { isAbsolute, relative, resolve as resolvePath, sep } from 'node:path';
 
-const mutationLifetime = new AsyncLocalStorage();
-/** Admission outlives every admitted command, including siblings of a failed probe. */
-export const withGitMutationLifetime = (work, onUncertain) => {
-  const owner = { onUncertain, pending: new Set(), closed: false };
-  return mutationLifetime.run(owner, async () => {
-    try { return await work(); }
-    finally {
-      while (owner.pending.size) await Promise.allSettled([...owner.pending]);
-      owner.closed = true;
-    }
-  });
-};
+export { withGitMutationLifetime } from './gitMutationLifetime.js';
 
 const ownedWork = process[Symbol.for('portos.ownedGitWork')] ??= new Set();
 const CANCELLATION_BUDGET_MS = 5000;
@@ -55,7 +44,7 @@ globalThis.__portosAssertGitWorkSettled = assertGitWorkSettled;
  * @returns {Promise<{stdout: string|Buffer, stderr: string|Buffer, exitCode: number|null, signal?: string, terminated?: boolean}>}
  */
 export function execGit(args, cwd, options = {}) {
-  const owner = mutationLifetime.getStore();
+  const owner = currentGitMutationLifetime();
   if (owner?.closed) return Promise.reject(Object.assign(new Error('Git mutation lifetime has ended'), { code: 'GIT_MUTATION_LIFETIME_CLOSED' }));
   const promise = new Promise((resolve, reject) => {
     // `spawn` treats a missing cwd as `process.cwd()`, so a caller whose repo

@@ -71,26 +71,26 @@ export function usePagedCollection(fetchPage, { enabled = true } = {}) {
     return () => { generation.current += 1; refreshQueued.current = false; pending.current?.abort(); pending.current = null; };
   }, [reload]);
 
-  const setItems = useCallback(update => commit({ ...state.current,
-    items: typeof update === 'function' ? update(state.current.items) : update }), [commit]);
-
-  // Apply a confirmed deletion without resetting already loaded pages. A read
-  // started before the mutation may still contain the removed row: invalidate
-  // it and replay the same cursor/refresh so concurrent arrivals are not lost.
-  const removeItem = useCallback(id => {
+  // Confirmed local changes supersede reads already in flight. Replay the
+  // interrupted cursor/refresh without dropping loaded pages or queued events.
+  const setItems = useCallback(update => {
     const interrupted = pending.current;
     const restart = restartPending.current;
     generation.current += 1;
     interrupted?.abort();
     pending.current = null;
     const previous = state.current;
-    const items = previous.items.filter(item => item.id !== id);
-    // A concurrent response may already include the deletion in its total,
-    // even while the additive history merge retained the row. Never subtract
-    // twice: reconcile the count from a read started after confirmation.
+    const items = typeof update === 'function' ? update(previous.items) : update;
     commit({ ...previous, items, loading: false });
-    return interrupted ? restart() : currentRead.current(true);
+    return interrupted ? restart() : undefined;
   }, [commit]);
+
+  const removeItem = useCallback(id => {
+    // A response may already include the deletion in its total while the
+    // additive history merge retained the row. Reconcile instead of subtracting
+    // twice; ordinary setItems calls need no new read when none was interrupted.
+    return setItems(items => items.filter(item => item.id !== id)) ?? currentRead.current(true);
+  }, [setItems]);
 
   return { ...page, setItems, removeItem, hasMore: !page.loaded || page.nextCursor != null, loadMore, reload, refreshFirst };
 }

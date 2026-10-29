@@ -113,6 +113,18 @@ export default function InboxTab({ onRefresh, settings }) {
     return [...map.values()];
   }, [optimisticEntries, paged.items]);
 
+  const loadedEntriesRef = useRef(entries);
+  loadedEntriesRef.current = entries;
+  const entryReadsRef = useRef(new Map());
+
+  const applyEntry = useCallback((entry) => {
+    if (!entry?.id || deletedIdsRef.current.has(entry.id)) return;
+    // A confirmed mutation supersedes any earlier targeted read for this row.
+    entryReadsRef.current.delete(entry.id);
+    paged.setItems(items => items.map(item => item.id === entry.id ? entry : item));
+    setOptimisticEntries(items => items.map(item => item.id === entry.id ? entry : item));
+  }, [paged.setItems]);
+
   // Listen for reconnect to reconcile missed events
   useEffect(() => {
     const handleConnect = () => {
@@ -124,7 +136,27 @@ export default function InboxTab({ onRefresh, settings }) {
 
   // Listen for background classification results
   useEffect(() => {
-    const handleClassified = (data) => {
+    let active = true;
+    const handleClassified = async (data) => {
+      const entryId = data.entryId;
+      if (entryId && !deletedIdsRef.current.has(entryId) && loadedEntriesRef.current.some(entry => entry.id === entryId)) {
+        const request = {};
+        entryReadsRef.current.set(entryId, request);
+        try {
+          const entry = await api.getBrainInboxEntry(entryId, { silent: true });
+          if (!active || entryReadsRef.current.get(entryId) !== request) return;
+          if (entry.id !== entryId) throw new Error('Inbox entry did not match the classification');
+          applyEntry(entry);
+        } catch (err) {
+          if (!active || entryReadsRef.current.get(entryId) !== request) return;
+          entryReadsRef.current.delete(entryId);
+          toast.error(err.message || 'Failed to refresh classified entry');
+          paged.refreshFirst();
+          onRefresh?.();
+          return;
+        }
+      }
+      if (!active) return;
       if (data.status === 'filed') {
         toast.success(`Classified as ${data.destination}: ${data.title}`);
       } else if (data.error) {
@@ -137,8 +169,8 @@ export default function InboxTab({ onRefresh, settings }) {
     };
 
     socket.on('brain:classified', handleClassified);
-    return () => socket.off('brain:classified', handleClassified);
-  }, [paged.refreshFirst, onRefresh]);
+    return () => { active = false; socket.off('brain:classified', handleClassified); };
+  }, [applyEntry, paged.refreshFirst, onRefresh]);
 
   // Sends one capture. `payload` is the immutable request the submit built
   // (text, note, creative flag, repo-intake options) so a Retry re-sends exactly
@@ -221,6 +253,7 @@ export default function InboxTab({ onRefresh, settings }) {
     });
 
     if (result) {
+      applyEntry(result.inboxLog || result);
       toast.success(`Filed to ${destination}`);
       paged.refreshFirst();
       onRefresh?.();
@@ -237,6 +270,7 @@ export default function InboxTab({ onRefresh, settings }) {
     setRetryingId(null);
 
     if (result) {
+      applyEntry(result.inboxLog || result);
       toast.success(result.message || 'Reclassified');
       paged.refreshFirst();
       onRefresh?.();
@@ -255,6 +289,7 @@ export default function InboxTab({ onRefresh, settings }) {
     });
 
     if (result) {
+      applyEntry(result.inboxLog || result);
       toast.success(`Moved to ${fixDestination}`);
       setFixingId(null);
       setFixDestination('');
@@ -280,6 +315,7 @@ export default function InboxTab({ onRefresh, settings }) {
     });
 
     if (result) {
+      applyEntry(result.inboxLog || result);
       toast.success('Entry updated');
       setEditingId(null);
       setEditText('');
@@ -295,6 +331,7 @@ export default function InboxTab({ onRefresh, settings }) {
 
   const handleDelete = async (entryId) => {
     deletedIdsRef.current.add(entryId);
+    entryReadsRef.current.delete(entryId);
     setOptimisticEntries(prev => prev.filter(e => e.id !== entryId));
     let failed = false;
     await api.deleteBrainInboxEntry(entryId, { silent: true }).catch(err => {
@@ -319,6 +356,7 @@ export default function InboxTab({ onRefresh, settings }) {
     });
 
     if (result) {
+      applyEntry(result.inboxLog || result);
       toast.success('Marked as done');
       paged.refreshFirst();
       onRefresh?.();
@@ -625,7 +663,7 @@ export default function InboxTab({ onRefresh, settings }) {
                             <button
                               key={dest}
                               onClick={() => handleResolve(entry.id, dest)}
-                              className={`flex items-center gap-1 px-2 py-1 text-xs rounded border ${destInfo.color} hover:opacity-80 transition-opacity`}
+                              className={`flex min-h-[44px] min-w-[44px] items-center justify-center gap-1 px-2 py-1 text-xs rounded border ${destInfo.color} hover:opacity-80 transition-opacity`}
                               title={`Route to ${destInfo.label}`}
                             >
                               <Icon size={12} />
@@ -635,7 +673,7 @@ export default function InboxTab({ onRefresh, settings }) {
                         })}
                         <button
                           onClick={() => handleMarkDone(entry.id)}
-                          className="flex items-center gap-1 px-2 py-1 text-xs rounded border border-port-border text-gray-400 hover:text-port-success transition-colors"
+                          className="flex min-h-[44px] min-w-[44px] items-center justify-center gap-1 px-2 py-1 text-xs rounded border border-port-border text-gray-400 hover:text-port-success transition-colors"
                           title="Mark as done without filing"
                         >
                           <CheckCheck size={12} />
@@ -644,7 +682,7 @@ export default function InboxTab({ onRefresh, settings }) {
                         <button
                           onClick={() => handleRetry(entry.id)}
                           disabled={retryingId === entry.id}
-                          className={`flex items-center gap-1 px-2 py-1 text-xs rounded border border-port-border transition-colors ${retryingId === entry.id ? 'text-gray-600 cursor-not-allowed' : 'text-gray-400 hover:text-white'}`}
+                          className={`flex min-h-[44px] min-w-[44px] items-center justify-center gap-1 px-2 py-1 text-xs rounded border border-port-border transition-colors ${retryingId === entry.id ? 'text-gray-600 cursor-not-allowed' : 'text-gray-400 hover:text-white'}`}
                           title="Retry AI classification"
                         >
                           <RefreshCw size={12} className={retryingId === entry.id ? 'animate-spin' : ''} />
@@ -877,7 +915,7 @@ export default function InboxTab({ onRefresh, settings }) {
                       {entry.filed?.destinationId && (
                         <button
                           onClick={() => navigate(filedRecordHref(entry.filed))}
-                          className="flex items-center gap-1 px-2 py-1 text-xs rounded border border-port-border text-gray-400 hover:text-white transition-colors"
+                          className="flex min-h-[44px] min-w-[44px] items-center justify-center gap-1 px-2 py-1 text-xs rounded border border-port-border text-gray-400 hover:text-white transition-colors"
                           title={filedRecordTitle(entry.filed)}
                         >
                           <ExternalLink size={12} />
@@ -888,7 +926,7 @@ export default function InboxTab({ onRefresh, settings }) {
                       {/* Done button */}
                       <button
                         onClick={() => handleMarkDone(entry.id)}
-                        className="flex items-center gap-1 px-2 py-1 text-xs rounded border border-port-border text-gray-400 hover:text-port-success transition-colors"
+                        className="flex min-h-[44px] min-w-[44px] items-center justify-center gap-1 px-2 py-1 text-xs rounded border border-port-border text-gray-400 hover:text-port-success transition-colors"
                         title="Mark as done"
                       >
                         <CheckCheck size={12} />
@@ -897,12 +935,12 @@ export default function InboxTab({ onRefresh, settings }) {
 
                       {/* Fix button */}
                       {fixingId === entry.id ? (
-                        <div className="flex items-center gap-2">
+                        <div className="flex flex-wrap items-center gap-2">
                           <select
                             aria-label="Fix destination"
                             value={fixDestination}
                             onChange={(e) => setFixDestination(e.target.value)}
-                            className="px-2 py-1 text-xs bg-port-bg border border-port-border rounded text-white"
+                            className="min-h-[44px] min-w-[44px] px-2 py-1 text-xs bg-port-bg border border-port-border rounded text-white"
                             title="Select new destination"
                           >
                             <option value="">Select...</option>
@@ -914,14 +952,14 @@ export default function InboxTab({ onRefresh, settings }) {
                           </select>
                           <button
                             onClick={() => handleFix(entry.id)}
-                            className="px-2 py-1 text-xs rounded bg-port-accent/20 text-port-accent hover:bg-port-accent/30"
+                            className="min-h-[44px] min-w-[44px] px-2 py-1 text-xs rounded bg-port-accent/20 text-port-accent hover:bg-port-accent/30"
                             title="Move to selected destination"
                           >
                             Move
                           </button>
                           <button
                             onClick={() => { setFixingId(null); setFixDestination(''); }}
-                            className="px-2 py-1 text-xs text-gray-400 hover:text-white"
+                            className="min-h-[44px] min-w-[44px] px-2 py-1 text-xs text-gray-400 hover:text-white"
                             title="Cancel fix"
                           >
                             Cancel
@@ -930,7 +968,7 @@ export default function InboxTab({ onRefresh, settings }) {
                       ) : (
                         <button
                           onClick={() => setFixingId(entry.id)}
-                          className="flex items-center gap-1 px-2 py-1 text-xs rounded border border-port-border text-gray-400 hover:text-white transition-colors"
+                          className="flex min-h-[44px] min-w-[44px] items-center justify-center gap-1 px-2 py-1 text-xs rounded border border-port-border text-gray-400 hover:text-white transition-colors"
                           title="Fix/move to different destination"
                         >
                           <Edit2 size={12} />

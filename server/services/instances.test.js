@@ -62,6 +62,7 @@ vi.mock('../lib/tailscale.js', () => ({
 // fetch is stubbed per-test in beforeEach and restored in afterEach
 
 import dns from 'dns/promises';
+import { registerInstanceExecutionAuthorityGuard } from './instanceIdentity.js';
 import { stopForwardForPeer } from './tailcatPeer.js';
 import { readJSONFile, atomicWrite } from '../lib/fileUtils.js';
 import { getTailscaleStatus } from '../lib/tailscale.js';
@@ -69,6 +70,7 @@ import { instanceEvents } from './instanceEvents.js';
 import { connectToPeer, disconnectFromPeer } from './peerSocketRelay.js';
 import { peerBaseUrl } from '../lib/peerUrl.js';
 import {
+  setTailcatPeerPort,
   getPeers,
   getAssignableInstances,
   addPeer,
@@ -102,6 +104,7 @@ import {
 describe('instances.js', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    registerInstanceExecutionAuthorityGuard(null);
     __resetPeersSeenOnlineForTests();
     __resetPeerWakesForTests();
     vi.useFakeTimers();
@@ -115,6 +118,66 @@ describe('instances.js', () => {
     stopPolling();
     vi.useRealTimers();
     vi.unstubAllGlobals();
+  });
+
+  describe('committed peer notifications', () => {
+    const fixture = () => ({ self: { instanceId: 'self' }, peers: [{
+      id: 'p1', address: '192.0.2.10', port: 5555, name: 'fixture', enabled: true,
+      transport: 'tailcat', directions: ['outbound']
+    }] });
+
+    it('keeps subscribers on committed state when authority or storage rejects an update', async () => {
+      const persisted = fixture();
+      readJSONFile.mockImplementation(async () => structuredClone(persisted));
+      registerInstanceExecutionAuthorityGuard(() => { throw new Error('authority refused'); });
+      await expect(updatePeer('p1', { enabled: false })).rejects.toThrow('authority refused');
+      expect(atomicWrite).not.toHaveBeenCalled();
+      expect(instanceEvents.emit).not.toHaveBeenCalled();
+      registerInstanceExecutionAuthorityGuard(null);
+      atomicWrite.mockRejectedValueOnce(new Error('storage refused'));
+      await expect(updatePeer('p1', { enabled: false })).rejects.toThrow('storage refused');
+      expect(instanceEvents.emit).not.toHaveBeenCalled();
+      expect((await getPeers())[0].enabled).toBe(true);
+    });
+
+    it.each([
+      ['add', () => addPeer({ address: '192.0.2.11' })],
+      ['update', () => updatePeer('p1', { name: 'committed' })],
+      ['remove', () => removePeer('p1', { stopTransport: false })]
+    ])('publishes %s only after its write resolves', async (_name, mutate) => {
+      let persisted = fixture();
+      readJSONFile.mockImplementation(async () => structuredClone(persisted));
+      let releaseWrite;
+      atomicWrite.mockImplementationOnce(async (_path, data) => {
+        await new Promise(resolve => { releaseWrite = resolve; });
+        persisted = structuredClone(data);
+      });
+      const pending = mutate();
+      await vi.waitFor(() => expect(releaseWrite).toBeTypeOf('function'));
+      expect(instanceEvents.emit).not.toHaveBeenCalled();
+      releaseWrite();
+      await pending;
+      expect(instanceEvents.emit).toHaveBeenCalledWith('peers:updated', persisted.peers);
+      await vi.dynamicImportSettled();
+    });
+
+    it('does not report a committed update as rejected when a subscriber throws', async () => {
+      readJSONFile.mockImplementation(async () => fixture());
+      instanceEvents.emit.mockImplementationOnce(() => { throw new Error('subscriber failed'); });
+      const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+      await expect(updatePeer('p1', { name: 'committed' })).resolves.toMatchObject({ name: 'committed' });
+      expect(atomicWrite).toHaveBeenCalledOnce();
+      expect(log).toHaveBeenCalledWith('❌ Instance post-commit notification failed: subscriber failed');
+      log.mockRestore();
+    });
+
+    it('keeps missing-peer and unchanged tailcat port paths silent', async () => {
+      readJSONFile.mockImplementation(async () => fixture());
+      await updatePeer('missing', {});
+      await removePeer('missing');
+      await setTailcatPeerPort('p1', 5555);
+      expect(instanceEvents.emit).not.toHaveBeenCalled();
+    });
   });
 
   // --- Self Identity is services/instanceIdentity.test.js (#6836) ---

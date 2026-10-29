@@ -101,6 +101,8 @@ vi.mock('../scripts/migrateCatalogPayload.js', () => ({ migrateCatalogPayload: c
 vi.mock('../scripts/repairUniverseTags.js', () => ({ repairUniverseTags: catalogRepair.tags }));
 const reconcileMediaAssets = vi.hoisted(() => vi.fn().mockResolvedValue({ ok: true }));
 vi.mock('./mediaAssetIndex/db.js', () => ({ reconcileMediaAssets }));
+const clearRestoredMediaTombstones = vi.hoisted(() => vi.fn().mockResolvedValue({ videos: [], images: [] }));
+vi.mock('./mediaRestoreTombstones.js', () => ({ clearRestoredMediaTombstones }));
 const executionRestore = vi.hoisted(() => ({ prepare: vi.fn(), finish: vi.fn() }));
 vi.mock('./peerExecutionRestore.js', () => ({
   preparePeerExecutionRestore: executionRestore.prepare,
@@ -3696,10 +3698,12 @@ describe('getState and saveState', () => {
 
   const DEFAULTS = {
     lastRun: null,
+    lastSuccessfulRun: null,
     status: 'never',
     lastSnapshotId: null,
     filesChanged: 0,
     pgBackup: null,
+    restoreWarning: null,
     error: null
   };
 
@@ -4379,13 +4383,26 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
       await runRestore('/dest', 'snap-1', { dryRun: false, subdirFilter: 'brain/inbox' });
 
       expect(invalidateBrainCaches).toHaveBeenCalledTimes(1);
+      // Only a restore covering media re-checks restored media delete records (#14087).
+      expect(clearRestoredMediaTombstones).not.toHaveBeenCalled();
     });
 
     it('keeps Brain projections after a selective live restore outside Brain', async () => {
+      const { backupSnapshotCutPending } = await import('../lib/backupSnapshotBoundary.js');
+      const cutHeld = [];
+      const record = async (options) => {
+        cutHeld.push([options?.images ?? true, backupSnapshotCutPending()]);
+        return { videos: [], images: [] };
+      };
+      clearRestoredMediaTombstones.mockImplementationOnce(record).mockImplementationOnce(record);
       await runRestore('/dest', 'snap-1', { dryRun: false, subdirFilter: 'images' });
 
       expect(invalidateBrainCaches).not.toHaveBeenCalled();
       expect(reconcileMediaAssets).toHaveBeenCalledWith({ rebuild: true });
+      // A restored item must shed the delete record of its earlier delete (#14087).
+      // Images wait until the cut is released: their sidecar stamp takes the
+      // asset-publication lease, which would wait on the cut (#14099).
+      expect(cutHeld).toEqual([[false, true], [true, false]]);
     });
 
     it('does not reload settings for a dry run', async () => {
@@ -4536,6 +4553,7 @@ describe('runBackup lifecycle', () => {
     prevMemoryBackend = process.env.MEMORY_BACKEND;
     process.env.MEMORY_BACKEND = 'file';
     checkHealth.mockResolvedValue({ connected: false, hasSchema: false });
+    getBackendName.mockReturnValue(null);
 
     destRoot = await fsp.mkdtemp(joinPath(tmpdir(), 'portos-backup-dest-'));
 
@@ -4554,6 +4572,89 @@ describe('runBackup lifecycle', () => {
     else process.env.MEMORY_BACKEND = prevMemoryBackend;
     rmSync(destRoot, { recursive: true, force: true });
   });
+
+  // Unlike restore-only checks, this catches an unusable snapshot being
+  // announced and persisted as healthy even though its SQL dump succeeded.
+  it.each(['legacy metadata', 'legacy universe config', 'converted', 'file escape hatch'])(
+    'reports restore compatibility through the backup response and durable status: %s', async (scenario) => {
+      const fsp = await actualFs();
+      const { getState, restoreSnapshot } = await import('./backup.js');
+      const fileMode = scenario === 'file escape hatch';
+      if (!fileMode) delete process.env.MEMORY_BACKEND;
+      getBackendName.mockReturnValue(fileMode ? 'file' : 'postgres');
+      checkHealth.mockResolvedValue({ connected: !fileMode, hasSchema: !fileMode });
+      const io = { emit: vi.fn() };
+      const oldSnapshot = joinPath(destRoot, 'snapshots', machineHost, '2020-01-01T00-00-00');
+      await fsp.mkdir(joinPath(oldSnapshot, 'data'), { recursive: true });
+      await fsp.writeFile(joinPath(oldSnapshot, 'manifest.json'), JSON.stringify({
+        generatedAt: '2020-01-01T00:00:00.000Z', fileCount: 0, files: {},
+      }));
+      const rsync = fakeProc();
+      const pgDump = fakeProc();
+      spawn.mockReturnValueOnce(rsync);
+      if (!fileMode) spawn.mockReturnValueOnce(pgDump);
+      const pending = runBackup(destRoot, io, { retentionCount: 1 });
+      await waitFor(() => spawn.mock.calls.length === 1, 'rsync spawn');
+      const snapshotId = io.emit.mock.calls.find(([event]) => event === 'backup:started')[1].snapshotId;
+      const snapshotDir = joinPath(destRoot, 'snapshots', machineHost, snapshotId);
+      const legacy = scenario !== 'converted';
+      const paths = scenario === 'legacy universe config'
+        ? { 'universes/index.json': JSON.stringify({ config: { runs: [] } }) }
+        : legacy ? {
+          'universes/universe-example/index.json': '{}',
+          'pipeline-issues/iss-example/index.json': '{}',
+          'pipeline-series/ser-example/index.json': '{}',
+          'story-builder/stb-example/index.json': '{}',
+          'writers-room/folders.json': '[]',
+          'creative-director-projects.json': '[]',
+        } : {
+          'universes/index.json': '{}',
+          'universes.imported/universe-example/index.json': '{}',
+          'universes/universe-example/assets/sheet.png': 'synthetic asset',
+          'writers-room/folders.imported.json': '[]',
+        };
+      for (const [path, content] of Object.entries(paths)) {
+        const target = joinPath(snapshotDir, 'data', path);
+        await fsp.mkdir(dirname(target), { recursive: true });
+        await fsp.writeFile(target, content);
+      }
+      rsync.emit('close', 0);
+      if (!fileMode) {
+        await waitFor(() => spawn.mock.calls.length === 2, 'pg_dump spawn');
+        await fsp.writeFile(joinPath(snapshotDir, 'portos-db.sql'),
+          'CREATE TABLE public.memories (\n);\nCREATE TABLE public.memory_links (\n);\n-- PostgreSQL database dump complete\n');
+        pgDump.emit('close', 0);
+      }
+      const result = await pending;
+      const expectedStatus = legacy && !fileMode ? 'degraded' : 'ok';
+      expect(result).toMatchObject({ status: expectedStatus, pgBackup: { status: fileMode ? 'skipped' : 'ok' } });
+      expect(await getState()).toMatchObject({ status: expectedStatus, restoreWarning: result.restoreWarning, error: result.error });
+      expect(io.emit).toHaveBeenCalledWith('backup:completed', expect.objectContaining({ status: expectedStatus, restoreWarning: result.restoreWarning }));
+      for (const [path, content] of Object.entries(paths)) {
+        expect(await fsp.readFile(joinPath(snapshotDir, 'data', path), 'utf8')).toBe(content);
+      }
+      if (expectedStatus === 'degraded') {
+        const domains = scenario === 'legacy universe config' ? ['universes']
+          : ['universes', 'pipeline-issues', 'pipeline-series', 'story-builder', 'writers-room', 'creative-director'];
+        expect(result.prunedSnapshots).toBe(0);
+        await expect(fsp.access(oldSnapshot)).resolves.toBeUndefined();
+        expect(result.restoreWarning).toMatchObject({ code: 'BACKUP_LEGACY_DB_METADATA', domains });
+        expect(result.error).toContain('disposable offline upgrade install');
+        expect(result.manifest.files['../portos-db.sql']).toMatch(/^[a-f0-9]{64}$/);
+        await expect(restoreSnapshot(destRoot, result.snapshotId, { dryRun: true }))
+          .rejects.toMatchObject({ code: result.restoreWarning.code, context: { domains } });
+      } else {
+        expect(result.restoreWarning).toBeNull();
+        const preview = fakeProc();
+        spawn.mockReturnValueOnce(preview);
+        const spawnCount = spawn.mock.calls.length;
+        const restoring = restoreSnapshot(destRoot, result.snapshotId, { dryRun: true });
+        await waitFor(() => spawn.mock.calls.length > spawnCount, 'restore preview spawn');
+        preview.emit('close', 0);
+        await expect(restoring).resolves.toMatchObject({ dryRun: true, verification: { status: 'verified' } });
+      }
+    },
+  );
 
   it.each(['completed', 'failed', 'interrupted', 'reservation', 'directory race'])('preserves a colliding %s snapshot while a new run fails', async (state) => {
     const fsp = await actualFs();
@@ -4719,6 +4820,7 @@ describe('runBackup lifecycle', () => {
     const state = await readJson(joinPath(dataRoot, 'backup', 'state.json'));
     expect(state).toMatchObject({
       lastRun: result.lastRun,
+      lastSuccessfulRun: result.lastRun,
       lastSnapshotId: result.snapshotId,
       status: 'ok',
       filesChanged: 2,
@@ -4735,6 +4837,8 @@ describe('runBackup lifecycle', () => {
         filesChanged: 2,
         status: 'ok',
         pgBackup: SKIPPED_PG,
+        restoreWarning: null,
+        error: null,
       }],
     ]);
   });
@@ -4944,17 +5048,23 @@ describe('runBackup lifecycle', () => {
     const { errorEvents } = await import('../lib/errorHandler.js');
     const warning = vi.fn();
     if (pgStatus === 'failed') errorEvents.once('error', warning);
+    const priorRun = '2026-01-01T00:00:00.000Z';
+    const fsp = await actualFs();
+    await fsp.mkdir(joinPath(dataRoot, 'backup'), { recursive: true });
+    await fsp.writeFile(joinPath(dataRoot, 'backup', 'state.json'), JSON.stringify({ status: 'ok', lastRun: priorRun }));
     const io = { emit: vi.fn() };
     const proc = fakeProc();
     spawn.mockReturnValue(proc);
     const pending = runBackup(destRoot, io);
     await waitFor(() => spawn.mock.calls.length === 1, 'rsync spawn');
     proc.emit('close', 0);
-    await expect(pending).resolves.toMatchObject({
+    const result = await pending;
+    expect(result).toMatchObject({
       status, pgBackup: { status: pgStatus }, manifest: { fileCount: 0, files: {} },
     });
     expect(await readJson(joinPath(dataRoot, 'backup', 'state.json')))
-      .toMatchObject({ status, pgBackup: { status: pgStatus } });
+      .toMatchObject({ status, pgBackup: { status: pgStatus }, lastRun: result.lastRun,
+        lastSuccessfulRun: pgStatus === 'failed' ? priorRun : result.lastRun });
     expect(io.emit).toHaveBeenCalledWith('backup:completed', expect.objectContaining({ status }));
     if (pgStatus === 'failed') expect(warning).toHaveBeenCalledWith(
       expect.objectContaining({ code: 'BACKUP_DB_DUMP_FAILED' }), expect.any(Object));
@@ -5114,14 +5224,18 @@ describe('runBackup lifecycle', () => {
 
   it.each(['snapshot', 'reservation', 'failed'])('reports %s marker cleanup failure instead of publishing a completed backup', async (marker) => {
     const fsp = await actualFs();
-    const { saveState, getState } = await import('./backup.js');
+    const { getState } = await import('./backup.js');
     const oldIds = ['2020-01-01T00-00-00', '2020-01-02T00-00-00'];
     const snapshotsRoot = joinPath(destRoot, 'snapshots', machineHost);
     for (const id of oldIds) {
       await fsp.mkdir(joinPath(snapshotsRoot, id, 'data'), { recursive: true });
       await fsp.writeFile(joinPath(snapshotsRoot, id, 'manifest.json'), '{}');
     }
-    await saveState({ status: 'ok', lastSnapshotId: oldIds[1], error: null });
+    const priorRun = '2020-01-02T00:00:00.000Z';
+    await fsp.mkdir(joinPath(dataRoot, 'backup'), { recursive: true });
+    await fsp.writeFile(joinPath(dataRoot, 'backup', 'state.json'), JSON.stringify({
+      status: 'ok', lastSnapshotId: oldIds[1], lastRun: priorRun, error: null,
+    }));
     const io = { emit: vi.fn() };
     const proc = fakeProc();
     spawn.mockReturnValue(proc);
@@ -5131,9 +5245,14 @@ describe('runBackup lifecycle', () => {
     const snapshotDir = joinPath(snapshotsRoot, snapshotId);
     const target = marker === 'reservation' ? joinPath(snapshotsRoot, `.${snapshotId}.in-progress`)
       : joinPath(snapshotDir, marker === 'failed' ? '.failed' : '.in-progress');
-    fs.unlink.mockImplementation((path, ...args) => path === target
-      ? Promise.reject(Object.assign(new Error('private destination details'), { code: 'EACCES' }))
-      : fsp.unlink(path, ...args));
+    fs.unlink.mockImplementation(async (path, ...args) => {
+      if (path !== target) return fsp.unlink(path, ...args);
+      if (marker === 'reservation') {
+        expect(await readJson(joinPath(dataRoot, 'backup', 'state.json')))
+          .toMatchObject({ lastSuccessfulRun: priorRun });
+      }
+      throw Object.assign(new Error('private destination details'), { code: 'EACCES' });
+    });
     const rejection = expect(pending).rejects.toMatchObject({
       code: 'BACKUP_SNAPSHOT_FINALIZATION_FAILED',
       message: `Backup snapshot finalization failed (${marker} marker, EACCES)`,
@@ -5142,7 +5261,7 @@ describe('runBackup lifecycle', () => {
     await rejection;
 
     expect(await getState()).toMatchObject({
-      status: 'error', lastSnapshotId: oldIds[1],
+      status: 'error', lastSnapshotId: oldIds[1], lastSuccessfulRun: priorRun,
       error: `Backup snapshot finalization failed (${marker} marker, EACCES)`,
     });
     expect(io.emit.mock.calls.some(([event]) => event === 'backup:completed')).toBe(false);
@@ -5374,7 +5493,11 @@ describe('runBackup lifecycle', () => {
   it.each(['ENOENT', 'EACCES', 'EIO'])('persists a failed preflight (%s) over prior success and permits repair', async (code) => {
     const { saveState, getState } = await import('./backup.js');
     const priorRun = '2026-01-01T00:00:00.000Z';
-    await saveState({ lastRun: priorRun, lastSnapshotId: 'previous-snapshot', status: 'ok', error: null });
+    const fsp = await actualFs();
+    await fsp.mkdir(joinPath(dataRoot, 'backup'), { recursive: true });
+    await fsp.writeFile(joinPath(dataRoot, 'backup', 'state.json'), JSON.stringify({
+      lastRun: priorRun, lastSnapshotId: 'previous-snapshot', status: 'ok', error: null,
+    }));
     const io = { emit: vi.fn() };
     const cause = Object.assign(new Error('private destination detail'), { code });
     fs.access.mockRejectedValueOnce(cause);
@@ -5388,6 +5511,7 @@ describe('runBackup lifecycle', () => {
     expect(state).toMatchObject({
       status: 'error',
       lastSnapshotId: 'previous-snapshot',
+      lastSuccessfulRun: priorRun,
       error: `${code === 'ENOENT' ? 'Backup destination not found' : 'Backup destination inaccessible'} (${code})`
     });
     expect(Date.parse(state.lastRun)).toBeGreaterThanOrEqual(attemptStarted);
@@ -5534,7 +5658,7 @@ describe('runBackup lifecycle', () => {
       spawn.mockReturnValueOnce(rsync).mockReturnValueOnce(pgDump);
       const { errorEvents } = await import('../lib/errorHandler.js');
       errorEvents.once('error', () => {});
-      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
       const pending = runBackup(destRoot, { emit: vi.fn() }, { retentionCount: 1 });
       await waitFor(() => spawn.mock.calls.length === 1, 'rsync spawn');
       rsync.emit('close', 0);
@@ -5545,7 +5669,7 @@ describe('runBackup lifecycle', () => {
       expect(result).toMatchObject({ status: 'degraded', pgBackup: { status: 'failed' }, prunedSnapshots: 0 });
       await expect(fsp.stat(old1)).resolves.toBeDefined();
       await expect(fsp.stat(old2)).resolves.toBeDefined();
-      expect(warn).toHaveBeenCalledWith(expect.stringMatching(/^⚠️ Backup retention skipped: DB dump dump_error — keeping older snapshots$/));
+      expect(log).toHaveBeenCalledWith('💾 Backup retention skipped: degraded snapshot — keeping older snapshots');
     });
 
     it('skips a snapshot a restore is reading and still prunes the rest (#10898)', async () => {

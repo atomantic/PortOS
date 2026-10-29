@@ -26,14 +26,19 @@ export function useMediaCompletionRefresh({ onImageCompleted, onVideoCompleted, 
       if (Array.isArray(event?.results) && event.results.length > 0) onVideoDone();
     };
 
+    // Rows merged from a peer or deleted elsewhere (server peerSyncEventBus.js).
+    const onHistoryChanged = (event) => (event?.kind === 'image' ? onImageDone() : onVideoDone());
+
     socket.on('image-gen:completed', onImageDone);
     socket.on('video-gen:completed', onVideoDone);
     socket.on('video-gen:failed', onVideoFailed);
+    socket.on('media:history:changed', onHistoryChanged);
 
     return () => {
       socket.off('image-gen:completed', onImageDone);
       socket.off('video-gen:completed', onVideoDone);
       socket.off('video-gen:failed', onVideoFailed);
+      socket.off('media:history:changed', onHistoryChanged);
       Object.values(timersRef.current).forEach((timer) => {
         if (timer) clearTimeout(timer);
       });

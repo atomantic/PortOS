@@ -86,6 +86,8 @@ export const isReferenceTabMedia = (m, liveLookIds = null, liveShotIds = null) =
   return lookId === null || (liveLookIds ? !liveLookIds.has(lookId) : false);
 };
 
+export const isGoodReference = (m) => (m?.library?.review?.status === 'good' || m?.review?.status === 'good');
+
 // Cover image for a card. Attached catalog media wins; canon-mirrored rows fall
 // back to the universe's starred or first render. Both are gallery files under
 // /data/images (only canon reference sheets live under /data/image-refs).
@@ -100,6 +102,7 @@ export function ingredientCoverUrl(ingredient) {
 const USAGE_LABELS = [
   ['universe', 'universe', 'universes'],
   ['music-video', 'video', 'videos'],
+  ['storyboard', 'storyboard', 'storyboards'],
   ['creative-director', 'production', 'productions'],
   ['series', 'series', 'series'],
   ['issue', 'issue', 'issues'],

@@ -1,3 +1,4 @@
+import { publishExportLabel } from '../../../../server/lib/musicVideoPublishExports.js';
 import { useEffect, useRef, useState } from 'react';
 import { Package, Download, Copy, Sparkles, Captions, ListOrdered } from 'lucide-react';
 import useProviderModels from '../../hooks/useProviderModels.js';
@@ -6,6 +7,8 @@ import { copyToClipboard } from '../../lib/clipboard.js';
 import CoverArtPanel from './CoverArtPanel.jsx';
 import YoutubeThumbnailPanel from './YoutubeThumbnailPanel.jsx';
 import PublishCard from './PublishCard.jsx';
+import VideoUpscaleDrawer from '../media/VideoUpscaleDrawer.jsx';
+import MediaJobsQueue from '../media/MediaJobsQueue.jsx';
 import { formatCount, formatUsd } from '../../utils/formatters.js';
 
 const fmtTime = (sec) => {
@@ -97,6 +100,11 @@ export default function PublishKitPanel({ project, publishKit, enabledTargets })
   const lyricLines = (project?.lyricCues || [])
     .filter((c) => typeof c?.text === 'string' && c.text.trim() && typeof c.startSec === 'number' && Number.isFinite(c.startSec)).length;
   const [confirmReplace, setConfirmReplace] = useState(false);
+  const [upscaleSource, setUpscaleSource] = useState(null);
+  const [upscaledVideo, setUpscaledVideo] = useState(null);
+  const currentRender = useRef(null);
+  currentRender.current = `${project?.id}:${project?.renderHistoryId}`;
+  useEffect(() => { setUpscaleSource(null); setUpscaledVideo(null); }, [project?.id, project?.renderHistoryId]);
   // Every field saves as it is edited (posts and notes on blur, choices on change);
   // the card says so, since there is no Save button to press.
   const [saveState, setSaveState] = useState(null);
@@ -155,6 +163,18 @@ export default function PublishKitPanel({ project, publishKit, enabledTargets })
           </button>
         )}>
         {!canBuild && <p className="text-xs text-port-text-muted">Render the final video first. The kit is made from it.</p>}
+        {canBuild && (
+          <div className="space-y-2">
+            <button type="button" onClick={() => { setUpscaledVideo(null); setUpscaleSource({ id: project.renderHistoryId, key: currentRender.current }); }}
+              className="rounded border border-port-border px-2 py-1.5 text-xs hover:text-port-accent min-h-[44px] sm:min-h-0">
+              Upscale final render
+            </button>
+            <p className="text-xs text-port-text-muted">Creates a separate video in the gallery; the final master stays unchanged.</p>
+            {upscaledVideo?.filename && (
+              <a href={`/data/videos/${encodeURIComponent(upscaledVideo.filename)}`} download className="text-xs text-port-accent">Download upscaled video</a>
+            )}
+          </div>
+        )}
         {kitStale && (
           <p role="status" className="text-xs text-port-warning">Kit built from an earlier render. Fill draft is refused until you rebuild it. Use Rebuild kit.</p>
         )}
@@ -178,7 +198,7 @@ export default function PublishKitPanel({ project, publishKit, enabledTargets })
               )}
               {(kit.exports || []).map((e) => (
                 <li key={e.filename} className="flex flex-wrap items-center justify-between gap-2">
-                  <span>{e.label}{e.kind === 'teaser' && e.startSec != null && <span className="text-port-text-muted"> · {fmtTime(e.startSec)}–{fmtTime(e.endSec)}</span>}</span>
+                  <span>{publishExportLabel(e)}{e.kind === 'teaser' && e.startSec != null && <span className="text-port-text-muted"> · {fmtTime(e.startSec)}–{fmtTime(e.endSec)}</span>}</span>
                   <a href={`/data/videos/${e.filename}`} download className="text-port-accent flex items-center gap-1 min-h-[44px] sm:min-h-0"><Download size={12} /> Download</a>
                 </li>
               ))}
@@ -202,6 +222,11 @@ export default function PublishKitPanel({ project, publishKit, enabledTargets })
           </div>
         )}
       </PublishCard>
+
+      <VideoUpscaleDrawer item={upscaleSource} onClose={() => setUpscaleSource(null)} onUpscaled={(video) => {
+        if (upscaleSource?.key === currentRender.current) setUpscaledVideo(video);
+      }} />
+      <MediaJobsQueue kind="video-upscale" />
 
       <YoutubeThumbnailPanel key={`yt-${project?.id}`} project={project} publishKit={publishKit} />
 

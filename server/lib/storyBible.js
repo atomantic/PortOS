@@ -466,6 +466,16 @@ const ADDITIVE_PLACE_FIELD_VERSIONS = Object.freeze({
   forms: 14,
 });
 
+// v18 — a form's `height`. A behind sender keeps the form but its sanitizer
+// drops the key, so each remote form missing one takes the local form's.
+const FORM_HEIGHT_VERSION = 18;
+function withLocalFormHeights(remoteForms, localForms) {
+  if (!Array.isArray(remoteForms) || !Array.isArray(localForms)) return null;
+  const heights = new Map(localForms.filter((f) => f?.id && f.height).map((f) => [f.id, f.height]));
+  if (!remoteForms.some((f) => !f?.height && heights.has(f?.id))) return null;
+  return remoteForms.map((f) => (!f?.height && heights.has(f?.id) ? { ...f, height: heights.get(f.id) } : f));
+}
+
 // "The sender carried nothing here." Covers both absent-when-empty fields
 // (voiceCanon, psychology) and always-present list fields a behind sender's
 // sanitizer defaults to `[]` (relationshipLinks, attachments).
@@ -487,7 +497,8 @@ function preserveLegacyEntryFields(remoteEntries, localEntries, fieldVersions, s
   const unrepresentable = Object.entries(fieldVersions)
     .filter(([, since]) => sender < since)
     .map(([field]) => field);
-  if (unrepresentable.length === 0
+  const formHeights = sender < FORM_HEIGHT_VERSION;
+  if ((unrepresentable.length === 0 && !formHeights)
     || !Array.isArray(remoteEntries)
     || !Array.isArray(localEntries)) return remoteEntries;
   const localById = new Map(
@@ -502,6 +513,8 @@ function preserveLegacyEntryFields(remoteEntries, localEntries, fieldVersions, s
         restored[field] = localEntry[field];
       }
     }
+    const forms = formHeights && !restored.forms ? withLocalFormHeights(entry?.forms, localEntry.forms) : null;
+    if (forms) restored.forms = forms;
     return Object.keys(restored).length ? { ...entry, ...restored } : entry;
   });
 }
@@ -839,11 +852,14 @@ function sanitizeForm(raw) {
   if (!raw || typeof raw !== 'object') return null;
   const label = trimTo(raw.label, BIBLE_LIMITS.FORM_LABEL_MAX);
   if (!label) return null;
+  const height = trimTo(raw.height, BIBLE_LIMITS.FORM_HEIGHT_MAX);
   return {
     id: isStr(raw.id) && FORM_ID_PATTERN.test(raw.id) ? raw.id : `form-${randomUUID().slice(0, 8)}`,
     label,
     age: trimTo(raw.age, BIBLE_LIMITS.FORM_AGE_MAX),
     description: trimTo(raw.description, BIBLE_LIMITS.FORM_DESCRIPTION_MAX),
+    // A character's height at that age: the scale cue that keeps a child child-sized in a set.
+    ...(height ? { height } : {}),
   };
 }
 

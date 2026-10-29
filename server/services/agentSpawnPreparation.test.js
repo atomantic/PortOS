@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 
 const loadState = vi.hoisted(() => vi.fn());
 const hasActiveTaskOwner = vi.hoisted(() => vi.fn());
+const validCleanupRefillSource = vi.hoisted(() => vi.fn());
 
 vi.mock('./cosEvents.js', () => ({ cosEvents: { emit: vi.fn(), on: vi.fn() }, emitLog: vi.fn() }));
 vi.mock('./cosState.js', () => ({ loadState }));
@@ -14,12 +15,16 @@ vi.mock('./executionLanes.js', () => ({ determineLane: vi.fn(), acquire: vi.fn()
 vi.mock('./agentPromptBuilder.js', () => ({ getAppWorkspace: vi.fn() }));
 vi.mock('./instanceIdentity.js', () => ({ ensureInstanceId: vi.fn() }));
 vi.mock('./appActivity.js', () => ({ releaseAppReviewMarker: vi.fn() }));
+vi.mock('./swarmCleanupDelivery.js', () => ({ validCleanupRefillSource }));
 
 import { prepareAgentSpawn, createAgentSpawnContext } from './agentSpawnPreparation.js';
 import { cosEvents, emitLog } from './cosEvents.js';
-import { updateTask } from './cosTaskStore.js';
-import { release } from './executionLanes.js';
+import { getTaskById, updateTask } from './cosTaskStore.js';
+import { acquire, release } from './executionLanes.js';
 import { releaseAppReviewMarker } from './appActivity.js';
+import { createToolExecution } from './toolStateMachine.js';
+import { ensureInstanceId } from './instanceIdentity.js';
+import { newSpawnBudgetEpisode } from './spawnBudgetProof.js';
 
 describe('prepareAgentSpawn — duplicate dispatch', () => {
   it('skips a task another run already owns and reports the skip on stdout, not stderr', async () => {
@@ -32,6 +37,49 @@ describe('prepareAgentSpawn — duplicate dispatch', () => {
 
     expect(log).toHaveBeenCalledWith(expect.stringContaining('Task task-1 already has an active owner'));
     expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('holds a queued swarm successor if its source changes before spawn', async () => {
+    const task = { id: 'sys-swarm-refill-agent-source', taskType: 'internal', metadata: {
+      app: 'app', analysisType: 'claim-issue', cleanupRefillSource: 'agent-source', spawnBudgetProof: newSpawnBudgetEpisode(),
+    } };
+    loadState.mockResolvedValue({ agents: {} });
+    hasActiveTaskOwner.mockReturnValue(false);
+    ensureInstanceId.mockResolvedValue('local');
+    acquire.mockReturnValue({ success: true });
+    createToolExecution.mockReturnValue({ id: 'execution' });
+    getTaskById.mockResolvedValue(task);
+    validCleanupRefillSource.mockResolvedValue(false);
+    const context = createAgentSpawnContext(task);
+    context.cleanupOnError = vi.fn(async () => {});
+    expect(await prepareAgentSpawn(task, context)).toBeNull();
+    expect(validCleanupRefillSource).toHaveBeenCalledWith('agent-source', 'claim-issue', 'app');
+    expect(context.cleanupOnError).toHaveBeenCalledWith('cleanup delivery source unavailable');
+  });
+
+  it('holds an unproven legacy pending task before claiming or starting a provider', async () => {
+    const task = { id: 'task-legacy', taskType: 'user', status: 'pending', metadata: { totalSpawnCount: '1' } };
+    loadState.mockResolvedValue({ agents: {} }); hasActiveTaskOwner.mockReturnValue(false);
+    ensureInstanceId.mockResolvedValue('local'); getTaskById.mockResolvedValue(task);
+    const context = createAgentSpawnContext(task); context.cleanupOnError = vi.fn(async () => {});
+    updateTask.mockClear();
+    expect(await prepareAgentSpawn(task, context)).toBeNull();
+    expect(context.cleanupOnError).toHaveBeenCalledWith('spawn budget reconciliation required');
+    expect(updateTask).not.toHaveBeenCalled();
+  });
+
+  it('allows a restart refund episode to retain its already-spent baseline', async () => {
+    const task = { id: 'task-refund', taskType: 'user', status: 'pending', metadata: {
+      totalSpawnCount: '2', lastSpawnedAt: '2026-01-01T00:00:00.000Z', spawnBudgetProof: newSpawnBudgetEpisode(2),
+    } };
+    loadState.mockResolvedValue({ agents: {} }); hasActiveTaskOwner.mockReturnValue(false);
+    ensureInstanceId.mockResolvedValue('local'); getTaskById.mockResolvedValue(task);
+    acquire.mockReturnValue({ success: true }); createToolExecution.mockReturnValue({ id: 'execution' });
+    updateTask.mockResolvedValue(task);
+    const context = createAgentSpawnContext(task); context.cleanupOnError = vi.fn(async () => {});
+    expect(await prepareAgentSpawn(task, context)).toBe(context);
+    expect(context.claimAcquired).toBe(true);
+    expect(context.cleanupOnError).not.toHaveBeenCalled();
   });
 });
 

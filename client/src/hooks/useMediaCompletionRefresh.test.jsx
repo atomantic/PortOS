@@ -25,3 +25,19 @@ it('refreshes usable batch outputs after failure without treating an empty failu
   unmount();
   expect(socket.off).toHaveBeenCalledWith('video-gen:failed', failed);
 });
+
+it('refreshes the matching kind when history changes elsewhere', () => {
+  vi.useFakeTimers();
+  const onImage = vi.fn();
+  const onVideo = vi.fn();
+  const { unmount } = renderHook(() => useMediaCompletionRefresh({ onImageCompleted: onImage, onVideoCompleted: onVideo }));
+  const changed = socket.on.mock.calls.findLast(([event]) => event === 'media:history:changed')[1];
+  act(() => {
+    changed({ kind: 'video', op: 'delete', ids: ['example-video'] });
+    vi.advanceTimersByTime(250);
+  });
+  expect(onVideo).toHaveBeenCalledTimes(1);
+  expect(onImage).not.toHaveBeenCalled();
+  unmount();
+  expect(socket.off).toHaveBeenCalledWith('media:history:changed', changed);
+});

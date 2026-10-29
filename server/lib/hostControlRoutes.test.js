@@ -6,6 +6,21 @@ import {
 } from './hostControlRoutes.js';
 import { LLM_DRILL_TYPES } from './postDrillTypes.js';
 
+it('gates legacy release recovery review and acceptance as host control', () => {
+  for (const action of ['review', 'accept']) {
+    expect(isHostControlRoute('POST', `/api/cos/schedule/release-synchronization/legacy/${action}`)).toBe(true);
+  }
+});
+
+it('requires host control to retire a release checkpoint', () => {
+  expect(hostControlRouteFor('POST', '/api/cos/schedule/release-synchronization/operator-reset'))
+    .toBe('POST /api/cos/schedule/release-synchronization/operator-reset');
+});
+
+it('requires host control for a manual cleanup recheck', () => {
+  expect(isHostControlRoute('POST', '/api/cos/agents/agent-1/recheck-cleanup')).toBe(true);
+});
+
 describe('voice config instruction paths (#10990)', () => {
   const stored = {
     llm: {
@@ -140,6 +155,7 @@ describe('HOST_CONTROL_ROUTES (#8716)', () => {
   });
 
   it('covers Express spellings conservatively while preserving route boundaries', () => {
+    expect(hostControlRouteFor('POST', '/api/cos/agents/agent-123/release-candidate')).toBe('POST /api/cos/agents/:id/release-candidate');
     expect(isHostControlRoute('post', '/API/Apps/example-app/START/')).toBe(true);
     expect(hostControlRouteFor('post', '/API/HTML-COMPOSITION/TOOLKIT/SKILLS/INSTALL/')).toBe('POST /api/html-composition/toolkit/skills/install');
     expect(isHostControlRoute('GET', '/api/html-composition/toolkit')).toBe(false);

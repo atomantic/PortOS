@@ -12,6 +12,8 @@ const mocks = vi.hoisted(() => ({
   listLiveRefsForIngredient: vi.fn(),
   getUniverse: vi.fn(),
   updateUniverse: vi.fn(),
+  updateIngredientPayloadKeys: vi.fn(),
+  projectToCanon: vi.fn(),
   getSettings: vi.fn(),
   enqueueJob: vi.fn(),
   getImageModels: vi.fn(),
@@ -28,6 +30,8 @@ vi.mock('../services/catalogDB.js', () => ({
   getIngredientIdentityIds: async id => [id],
   listLiveRefsForIngredient: (...args) => mocks.listLiveRefsForIngredient(...args),
   listMediaForIngredient: (...args) => mocks.listMediaForIngredient(...args),
+  listRelationsForIngredient: async () => ({ outbound: [], inbound: [] }),
+  updateIngredientPayloadKeys: (...args) => mocks.updateIngredientPayloadKeys(...args),
 }));
 vi.mock('../lib/pathSafety.js', async (importOriginal) => ({
   ...(await importOriginal()),
@@ -46,6 +50,11 @@ vi.mock('../services/mediaJobQueue/index.js', () => ({
   mediaJobEvents: { on: vi.fn(), off: vi.fn(), emit: vi.fn() },
 }));
 vi.mock('../services/universeRunTag.js', () => ({ buildUniverseRunTag: vi.fn(async () => null) }));
+// Canon follows the catalog row through the normal projection (own suite).
+vi.mock('../services/catalogCanonProjection.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  projectToCanon: (...args) => mocks.projectToCanon(...args),
+}));
 vi.mock('../services/universeCharacterSheetSlot.js', () => ({
   claimPendingSheetSlot: vi.fn(),
   getPendingSheetSlot: vi.fn(),
@@ -78,6 +87,33 @@ const object = {
 
 const queuedParams = (n = 0) => mocks.enqueueJob.mock.calls[n][0].params;
 
+// Expected records come straight from the builders the render invokes.
+async function expectBackendPreview(preview, params) {
+  const { resolveInputImages } = await import('../services/imageGen/inputImages.js');
+  const inputImages = resolveInputImages(params);
+  let record;
+  if (params.mode === 'local') {
+    const { localSentPrompt } = await import('../services/imageGen/local.js');
+    record = await localSentPrompt({ ...params, model: mocks.getImageModels().find(m => m.id === params.modelId) });
+  } else {
+    const backends = {
+      codex: () => import('../services/imageGen/codex.js'),
+      grok: () => import('../services/imageGen/grok.js'),
+      agy: () => import('../services/imageGen/agy.js'),
+      runway: () => import('../services/imageGen/runway.js'),
+    };
+    const { [params.mode === 'runway' ? 'runwayImageSentPrompt' : params.mode + 'SentPrompt']: builder } = await backends[params.mode]();
+    const { join } = await import('node:path');
+    const { tmpdir } = await import('node:os');
+    record = builder({ ...params, inputImages, modelId: params.model,
+      stagingPath: join(tmpdir(), `portos-${params.mode}-<job>`, 'output.png') }).record;
+  }
+  expect(preview).toMatchObject(record);
+  expect(preview.sentNegativePrompt).toBe(record.sentNegativePrompt);
+  expect(preview.promptAdditions).toEqual(record.promptAdditions || []);
+}
+
+
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.listLiveRefsForIngredient.mockResolvedValue([]);
@@ -91,6 +127,35 @@ beforeEach(() => {
 });
 
 describe('catalog sheet routes', () => {
+  // Pins backend wrappers for catalog sheets, looks and delegated universe sheets.
+  it.each(['codex', 'local', 'grok'])('previews the %s backend record across sheet paths', async mode => {
+    mocks.getSettings.mockResolvedValue({ imageGen: { mode, [mode]: { enabled: true, modelId: 'dev' } } });
+    mocks.getIngredient.mockResolvedValue({ ...character, payload: { ...character.payload,
+      wardrobes: [{ id: 'outfit-1', name: 'Travel', description: 'red coat' }] } });
+    mocks.listMediaForIngredient.mockResolvedValue([{ kind: 'portrait', mediaKey: 'portrait.png' }]);
+    mocks.imageFiles.add('portrait.png');
+    const cases = [{}, { variant: 'look', wardrobeId: 'outfit-1', visualDirection: {
+      style: 'Photography', camera: 'Full body', lighting: 'Soft light', environment: 'Harbor',
+    } }, {}];
+    for (const [index, body] of cases.entries()) {
+      if (index === 2) {
+        mocks.listLiveRefsForIngredient.mockResolvedValue([{ refKind: 'universe', refId: 'universe-1', role: 'owner' }]);
+        mocks.getUniverse.mockResolvedValue({ id: 'universe-1', name: 'Example Universe',
+          characters: [{ id: 'char-entry-1', name: character.name, ingredientId: character.id }] });
+      }
+      const preview = await request(app).post(`/api/catalog/ingredients/${character.id}/sheets/preview`).send(body);
+      expect(preview.status).toBe(200);
+      const render = await request(app).post(`/api/catalog/ingredients/${character.id}/sheets`).send(body);
+      expect(render.status).toBe(200);
+      const params = queuedParams(index);
+      await expectBackendPreview(preview.body.preview, params);
+      if (mode !== 'local') {
+        expect(preview.body.preview.sentPrompt).not.toBe(params.prompt);
+        expect(preview.body.preview.promptAdditions.map(a => a.id)).toContain('agent-instructions');
+      }
+    }
+  });
+
   // Proves the images shown before Generate are the same ordered inputs queued,
   // and prevents derived sheets or a different form becoming identity fallback.
   it('previews and queues portrait and canon images once, excluding derived and alternate-form media', async () => {
@@ -134,11 +199,12 @@ describe('catalog sheet routes', () => {
     expect(res.status).toBe(200);
     expect(res.body.preview.referenceImages.map((ref) => ref.status)).toEqual(['included', 'included', 'included', 'limit']);
     expect(res.body.preview.referenceImages.every((ref) => ref.source === 'Render guide')).toBe(true);
-    expect(res.body.preview.sentPrompt).toBe(body.overridePrompt);
-    expect(res.body.preview.promptAdditions).toEqual([]);
+    expect(res.body.preview.sentPrompt).toContain(body.overridePrompt);
+    expect(res.body.preview.promptAdditions.map(a => a.id)).toEqual(['agent-instructions']);
     await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets').send(body);
     expect(queuedParams().referenceImagePaths).toHaveLength(3);
     expect(queuedParams().prompt).toBe(body.overridePrompt);
+    await expectBackendPreview(res.body.preview, queuedParams());
   });
 
   it('keeps same-age alternate costumes and rejected canon images out of canonical sheets', async () => {
@@ -152,6 +218,28 @@ describe('catalog sheet routes', () => {
     const preview = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets/preview').send({});
     expect(preview.status).toBe(200);
     expect(preview.body.preview.referenceImages.map(ref => ref.filename)).toEqual(['canonical.png']);
+  });
+
+  // A collage left out of likeness is listed (so it can be put back) but never
+  // sent, never takes a slot and never blocks the render when its file is gone.
+  it('lists a left-out image without sending it or letting it fill a reference slot', async () => {
+    mocks.getIngredient.mockResolvedValue({ ...character, payload: { ...character.payload, imageRefs: ['board.png'] } });
+    mocks.listMediaForIngredient.mockResolvedValue([
+      { kind: 'portrait', mediaKey: 'portrait.png' },
+      { kind: 'reference', mediaKey: 'board.png', library: { likeness: false } },
+      { kind: 'reference', mediaKey: 'gone-board.png', library: { likeness: false } },
+      { kind: 'reference', mediaKey: 'still.png' },
+    ]);
+    ['portrait.png', 'board.png', 'still.png'].forEach(name => mocks.imageFiles.add(name));
+    const res = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets/preview').send({});
+    expect(res.status).toBe(200);
+    expect(res.body.preview.referenceImages.map(ref => [ref.filename, ref.status, ref.mediaKind])).toEqual([
+      ['portrait.png', 'included', 'portrait'], ['still.png', 'included', 'reference'],
+      ['board.png', 'left-out', 'reference'], ['gone-board.png', 'left-out', 'reference'],
+    ]);
+    const queued = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets').send({});
+    expect(queued.status).toBe(200);
+    expect(queuedParams().referenceImagePaths.map(path => basename(path))).toEqual(['portrait.png', 'still.png']);
   });
 
   it('includes shared facial identity on delegated canonical blueprints as well as alternate-form sheets', async () => {
@@ -170,7 +258,7 @@ describe('catalog sheet routes', () => {
     mocks.getIngredient.mockResolvedValue(character);
     mocks.listMediaForIngredient.mockResolvedValue([{ kind: 'reference', mediaKey: 'missing.png', library: { guide: true } }]);
     const res = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets/preview').send({});
-    expect(res.body.preview.referenceImages).toEqual([{ filename: 'missing.png', source: 'Render guide', status: 'missing' }]);
+    expect(res.body.preview.referenceImages).toEqual([{ filename: 'missing.png', source: 'Render guide', mediaKind: 'reference', status: 'missing' }]);
     const queued = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets').send({});
     expect(queued.status).toBe(400);
     expect(mocks.enqueueJob).not.toHaveBeenCalled();
@@ -253,6 +341,35 @@ describe('catalog sheet routes', () => {
     expect(mocks.enqueueJob).not.toHaveBeenCalled();
   });
 
+  // A preview writes nothing, so the lock never hides it; only the render is refused.
+  it('previews a locked record but refuses to render it, for catalog-only and universe-delegated sheets', async () => {
+    mocks.getIngredient.mockResolvedValue({ ...object, payload: { ...object.payload, locked: true } });
+    const preview = await request(app).post('/api/catalog/ingredients/cat-obj-1/sheets/preview').send({});
+    expect(preview.status).toBe(200);
+    expect(preview.body.preview.sentPrompt).toContain('Example Lantern');
+    const render = await request(app).post('/api/catalog/ingredients/cat-obj-1/sheets').send({});
+    expect(render).toMatchObject({ status: 409, body: { code: 'CATALOG_INGREDIENT_LOCKED' } });
+
+    mocks.getIngredient.mockResolvedValue({ ...character, payload: { ...character.payload, locked: true } });
+    mocks.listLiveRefsForIngredient.mockResolvedValue([{ refKind: 'universe', refId: 'universe-1', role: 'owner' }]);
+    mocks.getUniverse.mockResolvedValue({
+      id: 'universe-1', name: 'Example Universe', influences: { embrace: [] },
+      characters: [{ id: 'char-entry-1', name: 'Example Hero', ingredientId: 'cat-chr-1', locked: true }],
+    });
+    const delegatedPreview = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets/preview').send({});
+    expect(delegatedPreview.status).toBe(200);
+    expect(delegatedPreview.body.preview.sentPrompt).toContain('Example Hero');
+    const delegatedRender = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets').send({});
+    expect(delegatedRender.status).toBe(409);
+
+    // The universe renderer keeps its own canon lock when the record is unlocked.
+    mocks.getIngredient.mockResolvedValue(character);
+    const canonLocked = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets').send({});
+    expect(canonLocked).toMatchObject({ status: 409, body: { code: 'UNIVERSE_CANON_LOCKED' } });
+    expect(mocks.enqueueJob).not.toHaveBeenCalled();
+    expect(mocks.updateUniverse).not.toHaveBeenCalled();
+  });
+
   // Catches the preview and the render drifting apart (#11317).
   it('previews exactly the prompt the render queues, for a place and an object', async () => {
     for (const [record, marker] of [[place, 'ENVIRONMENT REFERENCE SHEET'], [object, 'PRODUCT REFERENCE SHEET']]) {
@@ -280,6 +397,67 @@ describe('catalog sheet routes', () => {
       .send({ overridePrompt: typed, overrideNegativePrompt: 'blur ' });
     expect(res.body.preview.sentPrompt).toBe(typed);
     expect(res.body.preview.promptAdditions).toEqual([]);
+  });
+
+  // Catches an empty negative override being treated as absent (the template
+  // negatives sent anyway, with their chip) and the preview drifting from it.
+  it('sends an empty negative override as no negatives, with no negatives chip', async () => {
+    mocks.getIngredient.mockResolvedValue(character);
+    const body = { variant: 'standard', overrideNegativePrompt: '' };
+    const preview = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets/preview').send(body);
+    expect(preview.status).toBe(200);
+    expect(preview.body.preview.sentNegativePrompt).toBeUndefined();
+    expect(preview.body.preview.promptAdditions.map((a) => a.id)).not.toContain('sheet-negatives');
+    await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets').send(body);
+    const params = queuedParams();
+    expect(params.negativePrompt).toBe('');
+    expect(params.prompt).toBe(preview.body.preview.sentPrompt);
+    expect(params.promptAdditions).toEqual(preview.body.preview.promptAdditions);
+  });
+
+  it('renders the photographic turnaround with no negatives and no illustrated styling', async () => {
+    mocks.getIngredient.mockResolvedValue({ ...character, name: 'Ada' });
+    const body = { variant: 'photographic' };
+    const preview = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets/preview').send(body);
+    expect(preview.status).toBe(200);
+    const sent = preview.body.preview;
+    expect(sent.sentPrompt).toContain('PHOTOGRAPHIC CHARACTER REFERENCE SHEET');
+    expect(sent.sentPrompt).toContain('Ada');
+    expect(sent.sentPrompt).not.toMatch(/illustrat/i);
+    expect(sent.sentNegativePrompt).toBeUndefined();
+    const style = sent.promptAdditions.find((a) => a.id === 'sheet-default-style');
+    expect(style.text).toMatch(/photography/);
+    expect(sent.promptAdditions.map((a) => a.id)).not.toContain('sheet-negatives');
+    const res = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets').send(body);
+    expect(res.body).toMatchObject({ variant: 'photographic', role: 'sheet:photographic' });
+    const params = queuedParams();
+    expect(params.negativePrompt).toBe('');
+    expect(params.prompt).toBe(sent.sentPrompt);
+    expect(params.promptAdditions).toEqual(sent.promptAdditions);
+  });
+
+  // Catches a photoreal universe starting its cast on the illustrated sheet.
+  it('lists and defaults to the photographic sheet for a character in a photoreal universe', async () => {
+    mocks.getIngredient.mockResolvedValue({ ...character, name: 'Ada' });
+    mocks.listLiveRefsForIngredient.mockResolvedValue([{ refKind: 'universe', refId: 'universe-1', role: 'owner' }]);
+    mocks.getUniverse.mockResolvedValue({
+      id: 'universe-1', name: 'Example Universe', influences: { embrace: [] },
+      visualProfile: { version: 1, generation: { enabled: true, lighting: 'Soft window light' } },
+      characters: [{ id: 'char-entry-1', name: 'Ada', ingredientId: 'cat-chr-1' }],
+    });
+    const listed = await request(app).get('/api/catalog/ingredients/cat-chr-1/sheets/variants');
+    expect(listed.body.variants.map((v) => v.id)).toEqual(['photographic', 'standard', 'blueprint']);
+    const preview = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets/preview').send({});
+    expect(preview.body.preview.sentPrompt).toContain('PHOTOGRAPHIC CHARACTER REFERENCE SHEET');
+    expect(preview.body.preview.sentPrompt).toContain('Soft window light');
+    expect(preview.body.preview.sentPrompt).not.toMatch(/illustrat/i);
+    const res = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets').send({});
+    expect(res.body).toMatchObject({ delegatedTo: 'universe', variant: 'photographic' });
+    expect(queuedParams().prompt).toBe(preview.body.preview.sentPrompt);
+
+    mocks.getUniverse.mockResolvedValue({ id: 'universe-1', name: 'Example Universe', characters: [] });
+    const plain = await request(app).get('/api/catalog/ingredients/cat-chr-1/sheets/variants');
+    expect(plain.body.variants.map((v) => v.id)).toEqual(['standard', 'photographic', 'blueprint']);
   });
 
   describe('look renders', () => {
@@ -388,6 +566,152 @@ describe('catalog sheet routes', () => {
       expect(mocks.enqueueJob).not.toHaveBeenCalled();
     });
 
+    describe('edit from the canonical portrait', () => {
+      const codex = { imageGen: { mode: 'codex', codex: { enabled: true } } };
+      const portraitMedia = [
+        { kind: 'portrait', mediaKey: 'portrait.png' },
+        { kind: 'reference', mediaKey: 'side.png' },
+        { kind: 'reference', mediaKey: 'old-look.png', role: 'look:wd-scarf' },
+      ];
+      const body = { variant: 'look', wardrobeId: 'wd-scarf', visualDirection: { ...visualDirection, style: 'Live-action photography' } };
+      beforeEach(() => {
+        ['portrait.png', 'side.png', 'old-look.png'].forEach((name) => mocks.imageFiles.add(name));
+      });
+
+      // Catches the portrait riding as a loose reference again (the face drifts
+      // to a different person), the preview hiding the edit base, the record's
+      // everyday outfit text fighting the look, and a triptych shrinking the face.
+      it('edits the portrait into one full-body figure, with other references as guides, exactly as previewed', async () => {
+        mocks.getSettings.mockResolvedValue(codex);
+        mocks.getIngredient.mockResolvedValue(dressed);
+        mocks.listMediaForIngredient.mockResolvedValue(portraitMedia);
+        const preview = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets/preview').send(body);
+        expect(preview.status).toBe(200);
+        const sent = preview.body.preview;
+        expect(sent.editBase).toMatchObject({ filename: 'portrait.png', source: 'Portrait', status: 'included', url: '/data/images/portrait.png' });
+        expect(sent.referenceImages.map((ref) => [ref.filename, ref.status, ref.role])).toEqual([
+          ['portrait.png', 'included', 'edit-base'], ['side.png', 'included', undefined],
+        ]);
+        expect(sent.promptAdditions.map((a) => a.id)).toContain('portrait-edit-base');
+        expect(sent.promptAdditions.map((a) => a.id)).not.toContain('character-identity');
+        expect(sent.sentPrompt).toContain('ONE full-body figure');
+        expect(sent.sentPrompt).toContain('long red wool scarf over a grey travel coat');
+        expect(sent.sentPrompt).not.toContain('silver coat');
+
+        const res = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets').send(body);
+        expect(res.status).toBe(200);
+        expect(res.body.editBase).toMatchObject({ filename: 'portrait.png', status: 'included' });
+        const params = queuedParams();
+        expect(basename(params.initImagePath)).toBe('portrait.png');
+        expect(params.referenceImagePaths.map((path) => basename(path))).toEqual(['side.png']);
+        expect(params.initImageStrength).toBeGreaterThan(0.4);
+        expect(params.height).toBeGreaterThan(params.width);
+        expect(params.width).toBe(2048);
+        await expectBackendPreview(sent, params);
+      });
+
+      it('keeps today’s three-view generate with no portrait to edit', async () => {
+        mocks.getSettings.mockResolvedValue(codex);
+        mocks.getIngredient.mockResolvedValue({ ...dressed, payload: { ...dressed.payload, primaryImageRef: 'side.png' } });
+        const preview = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets/preview').send(body);
+        expect(preview.body.preview.editBase).toBeUndefined();
+        expect(preview.body.preview.referenceImages.map((ref) => ref.role)).toEqual([undefined]);
+        await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets').send(body);
+        const params = queuedParams();
+        expect(params.initImagePath).toBeUndefined();
+        expect(params.referenceImagePaths.map((path) => basename(path))).toEqual(['side.png']);
+        expect(params.prompt).toContain('three full-body views');
+        expect(params.prompt).toContain('long red wool scarf over a grey travel coat');
+        expect(params).toMatchObject({ width: 4096, height: 3072 });
+      });
+
+      // Catches a backend that cannot restage the portrait silently dropping it
+      // or pretending to edit: the reason is shown and the portrait still guides.
+      it('falls back to the portrait as a reference on the local backend and says why', async () => {
+        mocks.getIngredient.mockResolvedValue(dressed);
+        mocks.listMediaForIngredient.mockResolvedValue(portraitMedia);
+        const preview = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets/preview').send(body);
+        expect(preview.body.preview.editBase).toMatchObject({ filename: 'portrait.png', status: 'fallback', reason: expect.stringMatching(/cloud image backend/) });
+        expect(preview.body.preview.referenceImages.map((ref) => [ref.filename, ref.status])).toEqual([
+          ['portrait.png', 'included'], ['side.png', 'included'],
+        ]);
+        const res = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets').send(body);
+        expect(res.body.editBase).toMatchObject({ status: 'fallback' });
+        const params = queuedParams();
+        expect(params.initImagePath).toBeUndefined();
+        expect(params.referenceImagePaths.map((path) => basename(path))).toEqual(['portrait.png', 'side.png']);
+        expect(params.prompt).toContain('three full-body views');
+
+        mocks.getImageModels.mockReturnValue([{ id: 'dev', runner: 'mflux', hardwareCompatibility: { state: 'available' } }]);
+        const refused = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets').send(body);
+        expect(refused.status).toBe(400);
+        expect(refused.body.code).toBe('CHARACTER_SHEET_REFERENCES_UNSUPPORTED');
+      });
+
+      // Explicit guides supersede the portrait on the local backend; the
+      // fallback explanation must not claim that the omitted portrait is sent.
+      it('reports the local fallback accurately when explicit guides omit the portrait', async () => {
+        mocks.getIngredient.mockResolvedValue(dressed);
+        mocks.listMediaForIngredient.mockResolvedValue([
+          portraitMedia[0], { ...portraitMedia[1], library: { guide: true } },
+        ]);
+        const preview = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets/preview').send(body);
+        expect(preview.status).toBe(200);
+        expect(preview.body.preview.editBase).toMatchObject({ status: 'fallback', reason: expect.stringContaining('portrait is not edited') });
+        expect(preview.body.preview.referenceImages.map((ref) => ref.filename)).toEqual(['side.png']);
+        const res = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets').send(body);
+        expect(res.status).toBe(200);
+        expect(queuedParams().referenceImagePaths.map((path) => basename(path))).toEqual(['side.png']);
+      });
+
+      // FIBO Edit with only one reference retains the source crop, so it
+      // cannot restage a portrait into a full-body look or a sheet.
+      it('refuses a one-image FIBO Edit before queueing and accepts a second guide', async () => {
+        mocks.getSettings.mockResolvedValue({ imageGen: { mode: 'runway', runway: { enabled: true, model: 'bria_fibo_edit_1_5' } } });
+        mocks.getIngredient.mockResolvedValue(dressed);
+        mocks.listMediaForIngredient.mockResolvedValue([portraitMedia[0]]);
+        const preview = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets/preview').send(body);
+        expect(preview.status).toBe(400);
+        expect(preview.body.code).toBe('CHARACTER_SHEET_PORTRAIT_FRAMING_UNSUPPORTED');
+        expect(preview.body.error).toMatch(/Add another compatible reference image/);
+        const refused = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets').send(body);
+        expect(refused.status).toBe(400);
+        expect(refused.body.code).toBe(preview.body.code);
+        expect(mocks.enqueueJob).not.toHaveBeenCalled();
+
+        mocks.listMediaForIngredient.mockResolvedValue(portraitMedia);
+        const allowedPreview = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets/preview').send(body);
+        expect(allowedPreview.status).toBe(200);
+        const allowed = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets').send(body);
+        expect(allowed.status).toBe(200);
+        expect(basename(queuedParams().initImagePath)).toBe('portrait.png');
+        expect(queuedParams().referenceImagePaths.map((path) => basename(path))).toEqual(['side.png']);
+        await expectBackendPreview(allowedPreview.body.preview, queuedParams());
+        const { buildRunwayImageRequest } = await import('../lib/runwayImageModels.js');
+        const { width, height, resolution } = queuedParams();
+        const wire = buildRunwayImageRequest({ modelId: 'bria_fibo_edit_1_5', prompt: queuedParams().prompt, width, height, resolution,
+          referenceImages: [{ uri: 'portrait' }, { uri: 'side' }] });
+        expect(wire.body.ratio).toBe('768:1152');
+      });
+
+      it('starts a universe-delegated sheet from the linked record’s portrait too', async () => {
+        mocks.getSettings.mockResolvedValue(codex);
+        mocks.getIngredient.mockResolvedValue(character);
+        mocks.listMediaForIngredient.mockResolvedValue(portraitMedia);
+        mocks.listLiveRefsForIngredient.mockResolvedValue([{ refKind: 'universe', refId: 'universe-1', role: 'owner' }]);
+        mocks.getUniverse.mockResolvedValue({ id: 'universe-1', name: 'Example Universe', influences: { embrace: [] },
+          characters: [{ id: 'char-entry-1', name: 'Example Hero', ingredientId: 'cat-chr-1' }] });
+        const preview = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets/preview').send({});
+        expect(preview.body.preview.editBase).toMatchObject({ filename: 'portrait.png', status: 'included' });
+        const res = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets').send({});
+        expect(res.body.delegatedTo).toBe('universe');
+        const params = queuedParams();
+        expect(basename(params.initImagePath)).toBe('portrait.png');
+        expect(params).toMatchObject({ width: 4096, height: 3072 });
+        await expectBackendPreview(preview.body.preview, params);
+      });
+    });
+
     it('is not offered among the sheet variants', async () => {
       mocks.getIngredient.mockResolvedValue(dressed);
       const res = await request(app).get('/api/catalog/ingredients/cat-chr-1/sheets/variants');
@@ -449,6 +773,65 @@ describe('catalog sheet routes', () => {
       expect(mocks.updateUniverse).not.toHaveBeenCalled();
     });
 
+    // Catches a child's sheet drawn at the adult's height (the canonical Height stat).
+    it('states an age\'s own height on its sheet, else the typical height for a child age', async () => {
+      const tall = { ...aged, payload: { ...aged.payload, stats: [{ id: 'stat-h', label: 'Height', value: '5 ft 9 in' }] } };
+      mocks.getIngredient.mockResolvedValue(tall);
+      const sheet = async (forms, variant = 'standard') => {
+        mocks.getIngredient.mockResolvedValue({ ...tall, payload: { ...tall.payload, forms } });
+        return (await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets/preview').send({ variant, formId: 'form-kid' })).body.preview.sentPrompt;
+      };
+      const typical = await sheet(aged.payload.forms);
+      expect(typical).toContain('Height: about 4 ft (122 cm)');
+      expect(typical).not.toContain('5 ft 9 in');
+      expect(await sheet([{ ...aged.payload.forms[0], height: '3 ft 8 in' }])).toContain('Height: 3 ft 8 in');
+      expect(await sheet(aged.payload.forms, 'photographic')).toContain('Height: about 4 ft (122 cm).');
+    });
+
+    // Catches an age or look editing the present-day portrait (a 7-year-old
+    // drawn from the adult's face) and the preview hiding which images are sent.
+    describe('edit base for an age or look', () => {
+      const codex = { imageGen: { mode: 'codex', codex: { enabled: true } } };
+      beforeEach(() => {
+        mocks.getSettings.mockResolvedValue(codex);
+        mocks.getIngredient.mockResolvedValue(aged);
+        ['portrait.png', 'kid.png'].forEach((name) => mocks.imageFiles.add(name));
+      });
+
+      it('edits from the form’s own guide, not the canonical portrait, exactly as previewed', async () => {
+        mocks.listMediaForIngredient.mockResolvedValue([
+          { kind: 'portrait', mediaKey: 'portrait.png' },
+          { kind: 'reference', mediaKey: 'kid.png', library: { guide: true, variant: { formId: 'form-kid' } } },
+        ]);
+        const body = { variant: 'blueprint', formId: 'form-kid' };
+        const sent = (await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets/preview').send(body)).body.preview;
+        expect(sent.editBase).toMatchObject({ filename: 'kid.png', status: 'included', scope: 'form', source: 'Render guide · Age 7' });
+        expect(sent.referenceImages.map((ref) => [ref.filename, ref.role])).toEqual([['kid.png', 'edit-base']]);
+        expect(sent.promptAdditions.map((a) => a.id)).toContain('form-edit-base');
+        expect(sent.promptAdditions.map((a) => a.id)).not.toContain('portrait-edit-base');
+        await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets').send(body);
+        const params = queuedParams();
+        expect(basename(params.initImagePath)).toBe('kid.png');
+        await expectBackendPreview(sent, params);
+      });
+
+      it('generates fresh with the canonical portrait as a likeness guide when the form has no image', async () => {
+        mocks.listMediaForIngredient.mockResolvedValue([{ kind: 'portrait', mediaKey: 'portrait.png' }]);
+        const body = { variant: 'blueprint', formId: 'form-kid' };
+        const sent = (await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets/preview').send(body)).body.preview;
+        expect(sent.editBase).toMatchObject({ status: 'none', reason: expect.stringContaining('generated fresh') });
+        expect(sent.referenceImages.map((ref) => [ref.filename, ref.role, ref.source])).toEqual([
+          ['portrait.png', undefined, 'Portrait · canonical · present story'],
+        ]);
+        const identity = sent.promptAdditions.find((a) => a.id === 'character-identity');
+        expect(identity.text).toContain('another age or look than Age 7');
+        await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets').send(body);
+        const params = queuedParams();
+        expect(params.initImagePath).toBeUndefined();
+        expect(params.referenceImagePaths.map((path) => basename(path))).toEqual(['portrait.png']);
+      });
+    });
+
     it('refuses an unknown form, an undescribed form and a form on a look', async () => {
       mocks.getIngredient.mockResolvedValue(aged);
       const post = (body) => request(app).post('/api/catalog/ingredients/cat-chr-1/sheets').send(body);
@@ -465,6 +848,55 @@ describe('catalog sheet routes', () => {
       expect(res.status).toBe(200);
       expect(queuedParams().prompt).toContain('collapsed piers, rusted cranes');
       expect(queuedParams().catalogAttach.role).toBe('sheet:environment@form-ruin');
+    });
+  });
+
+  describe('removing a universe sheet pointer', () => {
+    const sheetOwner = { ...character, updatedAt: '2026-01-01T00:00:00.000Z', payload: { ...character.payload,
+      referenceSheetImageRef: 'example-sheet-standard.png', referenceSheets: { profile: 'example-sheet-profile.png', alt: 'example-sheet-standard.png' } } };
+    const remove = (query = '') => request(app).delete(`/api/catalog/ingredients/${character.id}/sheets/pointer${query}`);
+    // Runs the updater and guard against `locked` (the row under its lock).
+    const lockedRow = (locked = sheetOwner) => mocks.updateIngredientPayloadKeys.mockImplementation(async (id, update, { guard }) => {
+      guard({ ...locked, payload: locked.payload });
+      const next = { ...locked.payload };
+      for (const [key, value] of Object.entries(update(locked.payload))) {
+        if (value === null) delete next[key]; else next[key] = value;
+      }
+      return { ingredient: { ...locked, updatedAt: '2026-01-03T00:00:00.000Z', payload: next }, priorUpdatedAt: locked.updatedAt };
+    });
+
+    beforeEach(() => {
+      mocks.getIngredient.mockResolvedValue(sheetOwner);
+      mocks.projectToCanon.mockResolvedValue({ universes: 1, written: 1, skipped: 0 });
+    });
+
+    it('clears every row slot naming the file in one locked write, then projects it to canon', async () => {
+      // Another view edited the row after the snapshot; its clock is the prior one.
+      lockedRow({ ...sheetOwner, updatedAt: '2026-01-02T00:00:00.000Z' });
+      const res = await remove('?filename=example-sheet-standard.png');
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({ filename: 'example-sheet-standard.png', priorUpdatedAt: '2026-01-02T00:00:00.000Z',
+        updatedAt: '2026-01-03T00:00:00.000Z', pointers: { referenceSheetImageRef: null, referenceSheets: { profile: 'example-sheet-profile.png' } } });
+      const [projectedId, projected] = mocks.projectToCanon.mock.calls[0];
+      expect(projectedId).toBe(character.id);
+      expect(projected.payload.referenceSheetImageRef).toBeUndefined();
+      expect(mocks.updateUniverse).not.toHaveBeenCalled();
+    });
+
+    it('refuses whole, with nothing written or projected, when the slot moved on or the record is locked', async () => {
+      lockedRow({ ...sheetOwner, payload: { ...sheetOwner.payload, referenceSheets: { profile: 'example-sheet-profile-newer.png' } } });
+      const changed = await remove('?variant=profile&filename=example-sheet-profile.png');
+      expect(changed.status).toBe(409);
+      expect(changed.body.code).toBe('REFERENCE_SHEET_CHANGED');
+      lockedRow({ ...sheetOwner, payload: { ...sheetOwner.payload, locked: true } });
+      expect((await remove()).status).toBe(409);
+      expect(mocks.projectToCanon).not.toHaveBeenCalled();
+    });
+
+    it('answers 404 for a variant with no sheet', async () => {
+      mocks.getIngredient.mockResolvedValue(character);
+      expect((await remove('?variant=profile')).status).toBe(404);
+      expect(mocks.updateIngredientPayloadKeys).not.toHaveBeenCalled();
     });
   });
 });

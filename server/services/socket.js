@@ -71,6 +71,7 @@ import { bindSystemActivityIo } from './systemActivityNotify.js';
 import { armSystemActivityWatchers } from './systemActivityWatchers.js';
 import { armReadinessWatchers, registerReadinessSocket } from './readinessNotify.js';
 import { registerGeneratedPreviewHandlers } from './generatedPreview/sessions.js';
+import { peerSyncBus, deliverPeerSyncEvent, registerPeerSyncSubscriber, PEER_SYNC_ROOM } from './peerSyncEventBus.js';
 
 // Store CoS subscribers
 const cosSubscribers = new Set();
@@ -143,11 +144,13 @@ function registerSubscriber(socket, namespace, set) {
 // never a session — so it can never satisfy the per-event re-check below on
 // its own. This is the ONLY carve-out: a minimal, read-only allowlist of the
 // subscribe/unsubscribe events the relay needs to receive `cos:agent:*`
-// broadcasts. Every other event, including any `shell:*`/host-control event,
-// still requires a real operator session and disconnects a peer-authenticated
-// socket exactly as it did before. Keep this list minimal — do not add a
-// mutating or host-affecting event here.
-const PEER_RELAY_ALLOWED_EVENTS = new Set(['cos:subscribe', 'cos:unsubscribe']);
+// broadcasts and realtime `peer:sync:event` frames (room membership only; the
+// frames themselves are filtered per peer and category on the way out). Every
+// other event, including any `shell:*`/host-control event, still requires a
+// real operator session and disconnects a peer-authenticated socket exactly as
+// it did before. Keep this list minimal — do not add a mutating or
+// host-affecting event here.
+const PEER_RELAY_ALLOWED_EVENTS = new Set(['cos:subscribe', 'cos:unsubscribe', 'peer:sync:subscribe', 'peer:sync:unsubscribe']);
 
 // Events that execute on the host — an interactive PTY, keystrokes into the
 // user's live iTerm2 sessions, or git/npm/PM2/deploy runs in a managed app's
@@ -227,6 +230,7 @@ function registerSubscriptionHandlers(socket, _io) {
   registerSubscriber(socket, 'beeper', beeperSubscribers);
   registerSubscriber(socket, 'fableloom', fableLoomSubscribers);
   registerSubscriber(socket, 'command', commandSubscribers);
+  registerPeerSyncSubscriber(socket);
 }
 
 function registerErrorHandlers(socket, io) {
@@ -319,6 +323,8 @@ const SIMPLE_BRIDGES = [
   { emitter: importerEvents, event: 'progress', channel: 'importer:progress' },
   { emitter: catalogEvents, event: 'progress', channel: 'catalog:extract:progress' },
   { emitter: catalogEvents, event: 'primitive-changed', channel: 'catalog:primitive-changed' },
+  // A record's media rows changed (an image added, removed or re-roled).
+  { emitter: catalogEvents, event: 'assets-changed', channel: 'catalog:assets-changed' },
   { emitter: catalogIdentityEvents, event: 'changed', channel: 'catalog:identity-changed' },
   // A GitHub notification inbox sync, triage or action changed stored rows.
   { emitter: githubNotificationEvents, event: 'changed', channel: 'github:notifications:changed' },
@@ -387,6 +393,19 @@ function setupEventForwarding() {
   setupBeeperEventForwarding();
   setupRecordEventForwarding();
   setupFableLoomRunForwarding();
+  setupPeerSyncEventForwarding();
+}
+
+// Sync frames go only to the peer-sync room (filtered per peer + category);
+// the history invalidation goes to every socket EXCEPT that room.
+function setupPeerSyncEventForwarding() {
+  peerSyncBus.on('event', (event) => { void deliverPeerSyncEvent(ioInstance, event); });
+  peerSyncBus.on('media-history-changed', (payload) => {
+    ioInstance?.except(PEER_SYNC_ROOM).emit('media:history:changed', payload);
+  });
+  peerSyncBus.on('media-holders-changed', () => {
+    ioInstance?.except(PEER_SYNC_ROOM).emit('media:holders:changed', {});
+  });
 }
 
 // Bounded invalidations only: records remain behind their existing HTTP gates.
@@ -456,8 +475,14 @@ function broadcastToCos(event, data) {
     if (!socket.connected) { cosSubscribers.delete(socket); continue; }
     const completedChanged = data?.task?.status === 'completed'
       || data?.previousStatus === 'completed' || ['deleted', 'peer-merged'].includes(data?.action);
+    // Activity changes carry only a task ID and an ephemeral boolean. Forward
+    // this bounded patch to compact subscribers so an in-flight preflight can
+    // change sections immediately, without exposing task content.
+    const activity = data?.activityOnly === 'preflight' && typeof data.task?.id === 'string'
+      && typeof data.task?.preflightActive === 'boolean'
+      ? { task: { id: data.task.id, preflightActive: data.task.preflightActive } } : {};
     socket.emit(event, socket.cosTaskLists === 'invalidate'
-      ? { invalidated: true, ...(completedChanged ? { completedChanged: true } : {}) } : data);
+      ? { invalidated: true, ...(completedChanged ? { completedChanged: true } : {}), ...activity } : data);
   }
 }
 
@@ -710,17 +735,22 @@ function broadcastToInstances(event, data) { broadcastToSet(instanceSubscribers,
 
 // Set up instance event forwarding
 function setupInstanceEventForwarding() {
+  let peerUpdateSequence = 0;
   // Invalidation only: the copyable serve capability stays behind the status API.
   instanceEvents.on('tailcat:serve:changed', () => ioInstance?.emit('tailcat:serve:changed', {}));
   // Redact each peer's stored proxy password before it reaches the browser
   // (keep username + hasPassword) — same secret-stripping the GET /instances
   // route applies. `data` is the full peers array.
   instanceEvents.on('peers:updated', (data) => {
+    const sequence = ++peerUpdateSequence;
+    const publishIfCurrent = (peers) => {
+      if (sequence === peerUpdateSequence) broadcastToInstances('instances:peers:updated', peers);
+    };
     const sanitized = Array.isArray(data) ? data.map(sanitizePeerForClient) : data;
     // Best-effort attach; never block the broadcast if forward metadata is busy.
     Promise.resolve(Array.isArray(sanitized) ? attachTailcatForwardsToPeers(sanitized) : sanitized)
-      .then((enriched) => broadcastToInstances('instances:peers:updated', enriched))
-      .catch(() => broadcastToInstances('instances:peers:updated', sanitized));
+      .then(publishIfCurrent)
+      .catch(() => publishIfCurrent(sanitized));
   });
   // Realtime sync lifecycle for the Instances cards: { phase, peerId, ... }.
   // No secrets — just a peer instanceId + counts — so forward as-is.

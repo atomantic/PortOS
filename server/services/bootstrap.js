@@ -153,6 +153,7 @@ import { initSharing, quiesceSharingForExit, drainPeerSyncOperations } from './s
 import { initMortalLoomStore } from './mortalLoomStore.js';
 import { initUniverseBuilderCollectionHook } from './universeBuilderCollectionHook.js';
 import { initCatalogImageAttachHook } from './catalogImageAttachHook.js';
+import { initCatalogUniverseFiling } from './catalogUniverseFiling.js';
 import { initWritersRoomSceneImageHook } from './writersRoomSceneImageHook.js';
 import { startHostedSessionSweep, stopHostedSessionSweep } from './fableLoom/hostedSession.js';
 import { initFableLoomSceneImageHook } from './fableLoomSceneImageHook.js';
@@ -711,6 +712,9 @@ const initMediaJobDependentHooks = () => {
   // ingredient on completion, even if the editor page unmounted mid-render
   // (#1359).
   initCatalogImageAttachHook();
+  // Files catalog record images into their universes' collections as they
+  // attach or the record joins a universe/story. It only listens.
+  initCatalogUniverseFiling();
   // Writers-Room scene-image hook — durably files a queued storyboard render
   // onto its analysis snapshot + work collection on completion (#1363).
   initWritersRoomSceneImageHook();
@@ -1060,7 +1064,21 @@ export const runBootSequence = ({ io, httpServer, localHttpServer, httpsEnabled,
           .then(({ restoreServe }) => restoreServe())
           .catch((err) => logBootstrapFailure('⚠️ tailcat serve restore failed', err, console.warn));
       },
-      initSyncOrchestrator,
+      initSyncOrchestrator: () => {
+        initSyncOrchestrator();
+        // Queued remote media deletes drain when their owner comes online.
+        void import('./mediaRemoteDelete.js')
+          .then(({ initMediaRemoteDelete }) => initMediaRemoteDelete())
+          .catch((err) => logBootstrapFailure('❌ Media delete queue init failed', err));
+        // Queued Make-primary releases drain when their holder comes online.
+        void import('./mediaHolders.js')
+          .then(({ initMediaHolders }) => initMediaHolders())
+          .catch((err) => logBootstrapFailure('❌ Media release queue init failed', err));
+        // Gallery renders record this machine as their origin, which remote delete targets.
+        void import('./imageGen/imageRecords.js')
+          .then(({ initImageOriginStamping }) => initImageOriginStamping())
+          .catch((err) => logBootstrapFailure('❌ Image origin stamping init failed', err));
+      },
       // Brain digests/reviews call an AI provider, so the scheduler arms only
       // once the server is listening and only acts when the user opted in
       // (`scheduledReviewsEnabled`).

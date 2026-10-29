@@ -10,6 +10,8 @@ const maintenance = vi.hoisted(() => ({ updateMaintenanceStep: vi.fn(), listMain
 vi.mock('../services/maintenanceRun.js', () => maintenance);
 const recovery = vi.hoisted(() => ({ prepareInventoriedCheckoutRetirement: vi.fn(), retireInventoriedCheckout: vi.fn() }));
 vi.mock('../services/heldCheckoutRecovery.js', () => recovery);
+const legacyRecovery = vi.hoisted(() => ({ reviewLegacyReleaseRecovery: vi.fn(), acceptLegacyReleaseRecovery: vi.fn(), resetReleaseSynchronization: vi.fn() }));
+vi.mock('../services/releaseSynchronization.js', () => legacyRecovery);
 const refreshInventory = vi.hoisted(() => vi.fn());
 vi.mock('../services/branchReconcileRefresh.js', () => ({ refreshBranchReconcileInventory: refreshInventory }));
 
@@ -48,6 +50,33 @@ describe('CoS Schedule Routes', () => {
     app.use(express.json());
     app.use('/api/cos', scheduleRoutes);
     vi.clearAllMocks();
+  });
+
+  it('requires an exact reviewed legacy recovery digest and returns a bounded refusal', async () => {
+    app.use(errorMiddleware);
+    const identity = 'a'.repeat(64), digest = 'b'.repeat(64);
+    legacyRecovery.reviewLegacyReleaseRecovery.mockResolvedValue({ digest, mode: 'present' });
+    legacyRecovery.acceptLegacyReleaseRecovery.mockResolvedValue({ digest, acceptedAt: '2026-01-01T00:00:00Z' });
+    const base = '/api/cos/schedule/release-synchronization/legacy';
+    expect((await request(app).post(`${base}/review`).send({ identity })).body).toEqual({ digest, mode: 'present' });
+    expect((await request(app).post(`${base}/accept`).send({ identity, digest })).body).toEqual({ identity, digest, acceptedAt: '2026-01-01T00:00:00Z' });
+    expect((await request(app).post(`${base}/accept`).send({ identity, digest: 'bad' })).status).toBe(400);
+    legacyRecovery.reviewLegacyReleaseRecovery.mockRejectedValue(Object.assign(new Error('private detail'), { code: 'legacy-review-lifecycle-unverified' }));
+    const refused = await request(app).post(`${base}/review`).send({ identity });
+    expect(refused.status).toBe(409);
+    expect(refused.body.context.reason).toBe('legacy-review-lifecycle-unverified');
+    expect(JSON.stringify(refused.body)).not.toContain('private detail');
+  });
+
+  it('records an operator checkpoint reset with a reason', async () => {
+    app.use(errorMiddleware);
+    const identity = 'a'.repeat(64), reason = 'Start from main';
+    legacyRecovery.resetReleaseSynchronization.mockResolvedValue({ identity, reason });
+    const path = '/api/cos/schedule/release-synchronization/operator-reset';
+    expect((await request(app).post(path).send({ identity, reason })).body).toEqual({ identity, reason });
+    expect(legacyRecovery.resetReleaseSynchronization).toHaveBeenCalledWith(identity, reason, 'local-operator', []);
+    expect((await request(app).post(path).send({ identity, reason: '' })).status).toBe(400);
+    expect((await request(app).post(path).send({ identity, reason, actor: 'operator-session' })).status).toBe(400);
   });
 
   it('refreshes only a validated managed app target', async () => {
@@ -112,16 +141,15 @@ describe('CoS Schedule Routes', () => {
     ['review', 'CHECKOUT_REVIEW_REFUSED'], ['retire', 'CHECKOUT_RETIREMENT_REFUSED'],
   ])('returns numeric archive capacity evidence on refused %s without claiming a review or receipt', async (operation, code) => {
     const tuple = { path: '/synthetic/checkout', head: 'a'.repeat(40), branch: 'claim/42', locked: false, lockReason: null };
-    const archiveUsage = { metadata: 1024, directory: 5000000, cacheRoots: 1, cacheEntries: 80002, cacheBytes: 80136, cacheReadBytes: 80272, cacheReadHashMs: 2000, cacheProofPeakBytes: 3200 };
     const archiveLimit = { scope: 'content', kind: 'total', limitBytes: 250 * 1024 * 1024, observedBytes: 264 * 1024 * 1024 };
-    recovery.prepareInventoriedCheckoutRetirement.mockResolvedValue({ ok: false, reason: 'retirement-archive-limit-exceeded', archiveLimit, archiveUsage });
-    recovery.retireInventoriedCheckout.mockResolvedValue({ ok: false, reason: 'retirement-archive-limit-exceeded', archiveLimit, archiveUsage });
+    recovery.prepareInventoriedCheckoutRetirement.mockResolvedValue({ ok: false, reason: 'retirement-archive-limit-exceeded', archiveLimit });
+    recovery.retireInventoriedCheckout.mockResolvedValue({ ok: false, reason: 'retirement-archive-limit-exceeded', archiveLimit });
     const prUrl = 'https://github.com/example/repo/pull/42';
     const evidence = operation === 'review' ? { prUrl } : { review: { prUrl, digest: 'b'.repeat(64), acceptSuperseded: false } };
     const response = await request(app).post(`/api/cos/schedule/branch-reconcile/checkouts/${operation}`)
       .send({ appId: 'app-1', ...tuple, ...evidence });
     expect(response.status).toBe(409);
-    expect(response.body).toMatchObject({ code, context: { reason: 'retirement-archive-limit-exceeded', archiveLimit, archiveUsage } });
+    expect(response.body).toMatchObject({ code, context: { reason: 'retirement-archive-limit-exceeded', archiveLimit } });
     expect(response.body).not.toHaveProperty('review');
     expect(response.body).not.toHaveProperty('archiveDir');
     expect(JSON.stringify(response.body)).not.toContain(tuple.path);

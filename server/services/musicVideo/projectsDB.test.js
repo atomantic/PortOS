@@ -85,6 +85,20 @@ describe.skipIf(!runDb)('music video projects DB adapter', () => {
     await close();
   });
 
+  it('preserves a festival packet through PG saves, kit updates and legacy peer edits', async () => {
+    const packet = { version: 1, fields: { title: 'Festival edition' }, rights: 'unknown', musicRights: 'unknown', consent: 'unknown', festivals: [], include: ['title'] };
+    const created = await db.createProject({ name: 'Festival fixture', festivalPacket: packet });
+    expect((await db.getProject(created.id)).festivalPacket).toEqual(packet);
+    await db.updateProject(created.id, { name: 'Edited name' });
+    await db.mutateProjectRecord(created.id, current => ({ project: { ...current, publishKit: { builtAt: '2026-01-01' } } }));
+    const saved = await db.getProject(created.id);
+    const { festivalPacket: _packet, ...legacy } = saved;
+    await db.mergeProjectsFromSync([{ ...legacy, updatedAt: '2099-01-01T00:00:00.000Z' }]);
+    expect((await db.getProject(created.id)).festivalPacket).toEqual(packet);
+    await db.updateProject(created.id, { festivalPacket: { ...packet, fields: { title: 'Revised packet' } } });
+    expect((await db.getProject(created.id)).festivalPacket.fields.title).toBe('Revised packet');
+  });
+
   it('round-trips dependency evidence and selective invalidation through PostgreSQL and peer merge', async () => {
     const created = await db.createProject({ name: 'Example dependency record' });
     await db.updateProject(created.id, { scenes: [{ sceneId: 'a', startSec: 0, endSec: 5, referenceImageId: 'plate.png', videoHistoryId: null, takes: [] }] });

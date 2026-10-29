@@ -68,6 +68,9 @@ const cleanRef = (ref) => {
 const BOOTSTRAP = `(() => {
   // CSP does not block ICE/STUN. Match the render host before document code runs.
   for (const key of ['RTCPeerConnection', 'webkitRTCPeerConnection', 'WebTransport', 'Worker', 'SharedWorker', 'WebSocket']) {
+    // The composition host freezes these first (htmlComposition/browser.js); redefining a frozen key
+    // throws and would kill this whole bootstrap, leaving the page blank.
+    if (Object.getOwnPropertyDescriptor(globalThis, key)?.configurable === false) continue;
     Object.defineProperty(globalThis, key, { configurable: false, writable: false,
       value: function() { throw new Error(key + ' is disabled in compositions'); } });
   }

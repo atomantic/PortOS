@@ -10,6 +10,10 @@ vi.mock('../../hooks/useProviderModels.js', () => ({
   default: () => ({ providers: [], selectedProviderId: '', selectedModel: '', availableModels: [], setSelectedProviderId: vi.fn(), setSelectedModel: vi.fn() }),
 }));
 vi.mock('../../lib/clipboard.js', () => ({ copyToClipboard: vi.fn() }));
+vi.mock('../media/VideoUpscaleDrawer.jsx', () => ({
+  default: ({ item, onUpscaled }) => item && <button type="button" onClick={() => onUpscaled({ filename: 'result.mp4' })}>Finish upscale for {item.id}</button>,
+}));
+vi.mock('../media/MediaJobsQueue.jsx', () => ({ default: () => null }));
 
 import PublishKitPanel from './PublishKitPanel.jsx';
 
@@ -30,6 +34,26 @@ const built = {
 };
 
 describe('PublishKitPanel (#9281)', () => {
+  it('opens the current final render for a separate upscale and clears it when the render changes', () => {
+    const k = hook();
+    const { rerender } = render(<PublishKitPanel project={{ id: 'mv-1' }} publishKit={k} />);
+    expandAll();
+    expect(screen.queryByRole('button', { name: 'Upscale final render' })).toBeNull();
+    rerender(<PublishKitPanel project={{ id: 'mv-1', renderHistoryId: 'render-1' }} publishKit={k} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Upscale final render' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Finish upscale for render-1' }));
+    expect(screen.getByRole('link', { name: 'Download upscaled video' })).toHaveAttribute('href', '/data/videos/result.mp4');
+    rerender(<PublishKitPanel project={{ id: 'mv-1', renderHistoryId: 'render-2' }} publishKit={k} />);
+    expect(screen.queryByRole('link', { name: 'Download upscaled video' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Upscale final render' }));
+    expect(screen.getByRole('button', { name: 'Finish upscale for render-2' })).toBeInTheDocument();
+  });
+  it.each([[1280, 720], [1920, 1080]])('shows the measured %i × %i social export beside its download', (width, height) => {
+    render(<PublishKitPanel project={{ id: 'mv-1', publishKit: { ...built, exports: [{ ...built.exports[0], width, height }] } }} publishKit={hook()} />);
+    expandAll();
+    expect(screen.getByText(`X / social up to 1080p (12 Mbps) · ${width} × ${height}`)).toBeTruthy();
+  });
+
   it('builds only once there is a final render', () => {
     const k = hook();
     const { rerender } = render(<PublishKitPanel project={{ id: 'mv-1' }} publishKit={k} />);
@@ -127,7 +151,7 @@ describe('PublishKitPanel (#9281)', () => {
     const k = hook();
     render(<PublishKitPanel project={{ id: 'mv-1', name: 'Example Song', renderHistoryId: 'rh-1', publishKit: built }} publishKit={k} />);
     expandAll();
-    expect(screen.getByText('X / social 1080p (12 Mbps)')).toBeTruthy();
+    expect(screen.getByText('X / social up to 1080p (12 Mbps) · dimensions unknown')).toBeTruthy();
     expect(screen.getByText(/0:00 Opening line/)).toBeTruthy();
     const tags = screen.getByLabelText('Tags (comma-separated)');
     fireEvent.change(tags, { target: { value: 'music, ai video ,claude' } });

@@ -155,6 +155,9 @@ export async function sweepOrphanRefImages({
  */
 const runSweep = async () => {
   const { deleted } = await sweepOrphanRefImages();
+  const { sweepReviewedReferences } = await import('./imageGen/reviewedReferenceGc.js');
+  const snapshots = await sweepReviewedReferences();
+  if (snapshots.deleted) console.log(`🧹 Image-refs GC: removed ${snapshots.deleted} settled reviewed reference(s)`);
   if (deleted > 0) {
     console.log(`🧹 Image-refs GC: removed ${deleted} orphan staged upload(s)`);
   }

@@ -2837,7 +2837,7 @@ describe('spawnTuiAgent runtime', () => {
     );
   });
 
-  it('MCP-boot budget is codex-only: a non-codex TUI emitting the same banner still fails at 3 attempts', async () => {
+  it('MCP-boot budget is codex-only: a non-codex TUI emitting the same banner fails at the 60s retry window, not 150s', async () => {
     // Regression for codex review [P2]: the boot tracker must not latch for a
     // non-codex provider, or an unrelated TUI whose startup text contains
     // "starting mcp servers" would inherit codex's 150s budget and its
@@ -2854,12 +2854,13 @@ describe('spawnTuiAgent runtime', () => {
     await vi.advanceTimersByTimeAsync(2000);
     await flushMicrotasks();
 
-    // Fails at the fixed 3-attempt cap (~19s), NOT the 150s boot budget.
-    await vi.advanceTimersByTimeAsync(25000);
+    // Fails when the PASTE_RETRY_MIN_WINDOW_MS window closes (~60s), NOT the 150s boot budget.
+    await vi.advanceTimersByTimeAsync(75000);
     vi.useRealTimers();
     await completeDone;
 
-    expect(pasteCount()).toBe(3);
+    expect(pasteCount()).toBeGreaterThan(3);
+    expect(pasteCount()).toBeLessThan(15);
     expect(agentLifecycle.finalizeAgent).toHaveBeenCalledWith(
       expect.objectContaining({ agentId: 'agent-1', success: false, completionReason: 'paste-not-rendered' })
     );

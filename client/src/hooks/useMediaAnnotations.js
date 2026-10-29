@@ -3,9 +3,10 @@ import { listMediaAnnotations, setMediaAnnotation } from '../services/api';
 import socket from '../services/socket';
 import toast from '../components/ui/Toast';
 import { sameJsonShape } from '../lib/sameJsonShape';
+import { useMediaHolders } from './useMediaHolders';
 
 // Per-entry: `own`/`others` from the server, plus back-compat aliases
-// (`starred`/`note`/`updatedAt` = local author) and `anyNote` for the
+// (`starred`/`rating`/`note`/`updatedAt` = local author) and `anyNote` for the
 // card-level "has notes" indicator (true when any author has a note).
 function enrich(entry) {
   if (!entry || typeof entry !== 'object') return null;
@@ -15,6 +16,7 @@ function enrich(entry) {
     own,
     others,
     starred: !!own?.starred,
+    rating: own?.rating ?? null,
     note: own?.note ?? '',
     updatedAt: own?.updatedAt ?? null,
     anyStarred: !!own?.starred || others.some((o) => o.starred),
@@ -33,6 +35,7 @@ function enrichAll(raw) {
 
 export function useMediaAnnotations() {
   const [annotations, setAnnotations] = useState({});
+  const holders = useMediaHolders();
   // Mirror the latest annotations in a ref so toggleStar can read prior state
   // without using setAnnotations as a side-channel. Calling setState with a
   // side effect inside the updater function is unsafe under StrictMode /
@@ -89,10 +92,11 @@ export function useMediaAnnotations() {
       authorName: priorOwn?.authorName ?? '',
       starred: 'starred' in patch ? patch.starred : (priorOwn?.starred ?? false),
       note: 'note' in patch ? patch.note : (priorOwn?.note ?? ''),
+      rating: 'rating' in patch ? patch.rating : (priorOwn?.rating ?? null),
       updatedAt: new Date().toISOString(),
     };
     const others = prior?.others ?? [];
-    const ownEmpty = !mergedOwn.starred && !mergedOwn.note;
+    const ownEmpty = !mergedOwn.starred && !mergedOwn.note && !mergedOwn.rating;
     const nextEntry = enrich({
       own: ownEmpty ? null : mergedOwn,
       others,
@@ -133,15 +137,19 @@ export function useMediaAnnotations() {
     updateAnnotation(item.key, { starred: !priorStarred });
   }, [updateAnnotation]);
 
-  // Shortcut for the `{ starred, hasNote, onToggleStar }` triple that every
+  // Shortcut for the `{ starred, rating, hasNote, onToggleStar }` props that every
   // <MediaCard> consumer reads from this hook. Callers spread it onto the card
   // and can still override individual fields (e.g. clear onToggleStar in
   // select/stitch modes by passing `onToggleStar={undefined}` after the spread).
+  // `hosts` is the card's holders entry (useMediaHolders) when another machine
+  // holds the file too, so the card can show where it lives and offer Make primary.
   const getCardProps = useCallback((key) => ({
     starred: !!annotations[key]?.starred,
+    rating: annotations[key]?.rating ?? null,
     hasNote: !!annotations[key]?.anyNote,
     onToggleStar: toggleStar,
-  }), [annotations, toggleStar]);
+    hosts: holders.byCardKey[key] ?? null,
+  }), [annotations, toggleStar, holders]);
 
   return { annotations, toggleStar, updateAnnotation, getCardProps };
 }

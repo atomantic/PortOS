@@ -17,6 +17,8 @@ vi.mock('../services/sharing/tombstoneGc.js', () => ({
 // truth the route's hand-maintained `categoryParam` enum has to match; a stub
 // would make the parity tests below compare the route to a copy of itself.
 vi.mock('../services/dataSync.js', async () => ({
+  getHostedMediaInventory: vi.fn(),
+  getImageLibraryInventory: vi.fn(),
   getChecksum: vi.fn(),
   getSnapshot: vi.fn(),
   getManifest: vi.fn(),
@@ -47,7 +49,7 @@ vi.mock('../services/settings.js', async () => ({
 }));
 
 import { sweepTombstones, getSweepStatus } from '../services/sharing/tombstoneGc.js';
-import { getChecksum, getSnapshot, getManifest, applyRemote, getSupportedCategories } from '../services/dataSync.js';
+import { getHostedMediaInventory, getImageLibraryInventory, getChecksum, getSnapshot, getManifest, applyRemote, getSupportedCategories } from '../services/dataSync.js';
 import { PEER_INSTANCE_ID_HEADER, __resetPullWarnThrottleForTests } from '../services/sharing/peerPullAuthorization.js';
 import { MAX_MANIFEST_SLOTS } from '../lib/syncManifest.js';
 import dataSyncRoutes, { categoryParam } from './dataSync.js';
@@ -417,5 +419,44 @@ describe('GET /api/sync/:category — peer-pull authorization', () => {
     });
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ applied: false, count: 0, blockedBySchema });
+  });
+});
+
+describe('video history inventory authorization', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    settings = { federation: { strictPullAuthorization: true } };
+    setPeers(allowedPeer());
+    getHostedMediaInventory.mockResolvedValue({ version: 1, filenames: ['v.mp4'] });
+  });
+
+  it('gates image ownership with the collection peer/category authorization', async () => {
+    const url = '/api/sync/mediaCollections/image-inventory';
+    expect((await request(buildApp()).get(url).set(PEER_INSTANCE_ID_HEADER, PEER_ID)).status).toBe(200);
+    expect(getHostedMediaInventory).toHaveBeenCalledWith('mediaCollections', 'image');
+    setPeers(allowedPeer({ fullSync: false, syncCategories: { mediaCollections: false } }));
+    expect((await request(buildApp()).get(url).set(PEER_INSTANCE_ID_HEADER, PEER_ID)).status).toBe(403);
+    setPeers(allowedPeer({ enabled: false }));
+    expect((await request(buildApp()).get(url).set(PEER_INSTANCE_ID_HEADER, PEER_ID)).status).toBe(403);
+    expect(getHostedMediaInventory).toHaveBeenCalledTimes(1);
+  });
+
+  it('gates the whole-library image inventory with the collection peer/category authorization', async () => {
+    getImageLibraryInventory.mockResolvedValue({ version: 1, filenames: ['a.png'], checked: ['a.png'], mtimes: { 'a.png': 1 } });
+    const url = '/api/sync/mediaCollections/image-library-inventory';
+    expect((await request(buildApp()).get(url).set(PEER_INSTANCE_ID_HEADER, PEER_ID)).body.mtimes).toEqual({ 'a.png': 1 });
+    setPeers(allowedPeer({ fullSync: false, syncCategories: { mediaCollections: false } }));
+    expect((await request(buildApp()).get(url).set(PEER_INSTANCE_ID_HEADER, PEER_ID)).status).toBe(403);
+    expect(getImageLibraryInventory).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses the same peer/category gate as history snapshots', async () => {
+    const allowed = await request(buildApp()).get('/api/sync/videoHistory/video-inventory').set(PEER_INSTANCE_ID_HEADER, PEER_ID);
+    expect(allowed.status).toBe(200);
+    expect(allowed.body.filenames).toEqual(['v.mp4']);
+    setPeers(allowedPeer({ fullSync: false, syncCategories: { videoHistory: false } }));
+    const denied = await request(buildApp()).get('/api/sync/videoHistory/video-inventory').set(PEER_INSTANCE_ID_HEADER, PEER_ID);
+    expect(denied.status).toBe(403);
+    expect(getHostedMediaInventory).toHaveBeenCalledTimes(1);
   });
 });

@@ -155,6 +155,9 @@ const request = () => ({ id: 'demand-1', appId: 'example-app', taskType: 'code-q
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // These parity cases model a live task:ready consumer. EventEmitter.emit
+  // returns true when a listener received the event.
+  mocks.emit.mockImplementation(event => event === 'task:ready');
   mocks.state = {
     paused: false, agents: {}, stats: {},
     config: { maxConcurrentAgents: 2, maxConcurrentAgentsPerProject: 1, appReviewCooldownMs: 0,

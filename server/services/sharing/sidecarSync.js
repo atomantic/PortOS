@@ -20,12 +20,14 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 import { atomicWrite, ensureDir, readJSONFile, PATHS } from '../../lib/fileUtils.js';
 import { imageSidecarName, sanitizeAssetFilename } from './buckets.js';
-import { sidecarGenParamsHash } from '../../lib/assetHash.js';
+import { sidecarGenParamsHash, stripImageSidecarLocalFields, IMAGE_SIDECAR_LOCAL_FIELDS } from '../../lib/assetHash.js';
+import { isStr } from '../../lib/textUtils.js';
 import { isPlainObject } from '../../lib/objects.js';
 import { peerFetch } from '../../lib/peerHttpClient.js';
 import { withAbortTimeout } from '../../lib/abortTimeout.js';
 import { getPeers } from '../instances.js';
 import { peerBaseUrl } from '../../lib/peerUrl.js';
+import { rowOwnerCandidates } from '../../lib/mediaRowOwners.js';
 import { SIDECAR_MAX_BYTES } from './assetLimits.js';
 
 // Mirror the image-pull timeout (peerSync.js ASSET_PULL_TIMEOUT_MS) so a hung
@@ -65,6 +67,40 @@ async function readBodyCapped(res, maxBytes) {
     return null;
   }
   return Buffer.concat(chunks);
+}
+
+/**
+ * True when a held image with no origin takes the origin `peer`'s sidecar names:
+ * only a peer that already holds delete authority over the copy (it supplied it,
+ * or hosts its bytes), so adopting gives no peer a power it lacked.
+ */
+export function heldImageAdoptsOrigin(local, peer, imageFilename, hostedIndex) {
+  if (!isPlainObject(local) || isStr(local.originInstanceId) || !isStr(peer?.instanceId)) return false;
+  const copy = { filename: imageFilename, suppliedByInstanceId: local.suppliedByInstanceId };
+  return rowOwnerCandidates(copy, hostedIndex).includes(peer.instanceId);
+}
+
+/**
+ * The sidecar to keep when a peer's copy arrives: its gen-params, with this
+ * machine's own fields (hide state, pending delete, supplier) left as they are
+ * and the peer's ignored. Ownership of an image already held here (its sidecar
+ * has gen-params) never comes from a peer: its origin stays the local value,
+ * even when absent, unless `adoptOrigin` says the sender may name it. An image
+ * new here takes the peer's origin, and the peer is recorded as its supplier.
+ */
+function mergePeerSidecar(incoming, local, peer, adoptOrigin = false) {
+  const held = isPlainObject(local) && sidecarGenParamsHash(local) !== null;
+  const { originInstanceId: incomingOrigin, ...content } = stripImageSidecarLocalFields(incoming);
+  const merged = { ...content };
+  for (const key of IMAGE_SIDECAR_LOCAL_FIELDS) {
+    if (isPlainObject(local) && local[key] !== undefined) merged[key] = local[key];
+  }
+  const origin = held && !adoptOrigin ? local.originInstanceId : incomingOrigin;
+  if (origin !== undefined) merged.originInstanceId = origin;
+  if (!held && merged.suppliedByInstanceId === undefined && isStr(peer?.instanceId)) merged.suppliedByInstanceId = peer.instanceId;
+  // The local hash cache describes the local file; keep it over the peer's.
+  if (isPlainObject(local?.sha256)) merged.sha256 = local.sha256;
+  return merged;
 }
 
 /**
@@ -124,10 +160,48 @@ export async function pullSidecarForImage(peer, base, imageFilename) {
   // returns null exactly when nothing remains beyond the sha256 cache key.
   if (sidecarGenParamsHash(parsed) === null) return false;
   await ensureDir(PATHS.images);
-  await atomicWrite(join(PATHS.images, sidecarName), buf);
+  const sidecarPath = join(PATHS.images, sidecarName);
+  // Under the sidecar edit queue so a concurrent hide, pending-delete or prompt
+  // edit is merged, not overwritten. An unreadable local sidecar is left intact
+  // (it may hold this machine's own fields) rather than replaced.
+  const { sidecarEditQueue } = await import('../imageGen/sidecarStore.js');
+  const { listHostedEntries } = await import('../peerHostedMedia.js');
+  const hostedIndex = await listHostedEntries();
+  const written = await sidecarEditQueue(safeName, async () => {
+    const local = await readJSONFile(sidecarPath, null, { strict: true }).catch((err) => {
+      console.warn(`⚠️ peerSync: kept unreadable sidecar ${sidecarName}; not replaced from ${peer.name || peer.instanceId}: ${err.message}`);
+      return undefined;
+    });
+    if (local === undefined) return false;
+    await atomicWrite(sidecarPath, mergePeerSidecar(parsed, local, peer, heldImageAdoptsOrigin(local, peer, safeName, hostedIndex)));
+    return true;
+  });
+  if (!written) return false;
   await import('../mediaAssetIndex/index.js').then(m => m.indexImage({ filename: imageFilename })).catch(err => console.error(`❌ Media index sidecar refresh: ${err.message}`));
   console.log(`📥 peerSync: pulled sidecar ${sidecarName} from ${peer.name || peer.instanceId}`);
   return true;
+}
+
+/**
+ * Record `peerInstanceId` as the supplier of a gallery image just pulled here,
+ * unless a supplier is already recorded (pullSidecarForImage sets it when the
+ * peer had a sidecar) or the sidecar here already carries the image's
+ * gen-params: that image was held here (only its bytes were missing), and as in
+ * mergePeerSidecar a held image never takes a peer as its supplier. Creates a
+ * sidecar holding only that machine-local field when there was none; it adds no
+ * gen-params, so the manifest hash is unchanged. Runs under the sidecar edit
+ * queue, so a concurrent hide or prompt edit cannot drop it.
+ */
+export async function recordImageSupplier(imageFilename, peerInstanceId) {
+  const safeName = sanitizeAssetFilename(imageFilename);
+  if (!safeName || !/\.png$/i.test(safeName) || !isStr(peerInstanceId)) return false;
+  const { editImageSidecar } = await import('../imageGen/sidecarStore.js');
+  const changed = await editImageSidecar(safeName, (metadata) => {
+    if (!isPlainObject(metadata) || isStr(metadata.suppliedByInstanceId) || sidecarGenParamsHash(metadata) !== null) return null;
+    metadata.suppliedByInstanceId = peerInstanceId;
+    return true;
+  });
+  return changed === true;
 }
 
 /**
@@ -157,15 +231,16 @@ export async function backfillMissingSidecars({ filenames }) {
     // write an orphan `<base>.metadata.json` (sidecar with no image) and inflate
     // `attempted`.
     if (!existsSync(join(PATHS.images, safeName))) continue;
-    const sidecarPath = join(PATHS.images, imageSidecarName(safeName));
+    // Read-only skip check; the write happens in pullSidecarForImage's strict read.
+    const heldSidecarPath = join(PATHS.images, imageSidecarName(safeName));
     // A sidecar can exist yet carry NO prompt: getOrComputeImageSha256 writes a
     // cache-only `{ sha256: {...} }` sidecar for every image it hashes during
     // sync. Skipping on mere file existence would make "Pull missing prompts" a
     // no-op for exactly the images this repair targets (synced-in, no gen-params).
     // Only skip when the sidecar already holds real gen-params — sidecarGenParamsHash
     // strips the sha256 cache key and returns null when nothing else remains.
-    if (existsSync(sidecarPath)) {
-      const existing = await readJSONFile(sidecarPath, null, { logError: false });
+    if (existsSync(heldSidecarPath)) {
+      const existing = await readJSONFile(heldSidecarPath, null, { logError: false });
       if (sidecarGenParamsHash(existing) !== null) continue;
     }
     attempted++;

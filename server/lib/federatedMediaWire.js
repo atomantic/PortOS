@@ -83,6 +83,7 @@ export function effectiveJobPrompt(job) {
     if (audioPrompt) return audioPrompt;
     if (typeof marker.request?.prompt === 'string') return marker.request.prompt;
   }
+  if (typeof job?.params?.reviewedReferenceRequest?.prompt === 'string') return job.params.reviewedReferenceRequest.prompt;
   return typeof job?.params?.prompt === 'string' ? job.params.prompt : null;
 }
 

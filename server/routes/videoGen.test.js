@@ -37,6 +37,10 @@ vi.mock('../services/fableLoom/visualConditioning.js', () => ({
   fableLoomVideoCapabilities,
 }));
 vi.mock('../services/fableLoom/records.js', () => ({ getLoom }));
+vi.mock('../services/mediaRemoteDelete.js', () => ({
+  deleteMediaAnywhere: vi.fn(async () => ({ status: 'deleted' })),
+  cancelPendingDelete: vi.fn(async () => ({ ok: true, cancelled: true })),
+}));
 
 const installProcess = vi.hoisted(() => {
   const spawn = vi.fn();
@@ -322,6 +326,7 @@ vi.mock('fs/promises', () => ({
 
 import { copyFile, unlink } from 'fs/promises';
 import * as videoGenService from '../services/videoGen/local.js';
+import * as mediaRemoteDelete from '../services/mediaRemoteDelete.js';
 import * as upscaleJobService from '../services/videoGen/upscaleJob.js';
 import * as stitchJobService from '../services/videoGen/stitchJob.js';
 import { trimHistoryItemStart } from '../services/videoGen/trimStart.js';
@@ -3265,28 +3270,37 @@ describe('videoGen routes', () => {
   });
 
   describe('DELETE /history/:id', () => {
-    it('proxies to deleteHistoryItem', async () => {
-      videoGenService.deleteHistoryItem.mockResolvedValue({ ok: true, id: 'abc' });
+    it('deletes through the owner-aware delete and returns its status', async () => {
+      mediaRemoteDelete.deleteMediaAnywhere.mockResolvedValueOnce({ status: 'pending', pendingDelete: { peerId: 'peer-a', queuedAt: '2026-01-01T00:00:00.000Z' } });
       const r = await request(app).delete('/api/video-gen/history/abc');
       expect(r.status).toBe(200);
-      expect(videoGenService.deleteHistoryItem).toHaveBeenCalledWith('abc');
+      expect(r.body).toMatchObject({ ok: true, status: 'pending' });
+      expect(mediaRemoteDelete.deleteMediaAnywhere).toHaveBeenCalledWith('video', 'abc');
     });
 
     it('deletes a legitimate non-UUID federated id', async () => {
-      videoGenService.deleteHistoryItem.mockResolvedValue({ ok: true });
       const r = await request(app).delete('/api/video-gen/history/dl-abc_123');
       expect(r.status).toBe(200);
-      expect(videoGenService.deleteHistoryItem).toHaveBeenCalledWith('dl-abc_123');
+      expect(r.body.status).toBe('deleted');
+      expect(mediaRemoteDelete.deleteMediaAnywhere).toHaveBeenCalledWith('video', 'dl-abc_123');
     });
 
     // The destructive verb shipped with NO id validation, so a value carrying a
     // path segment reached deleteHistoryItem — which interpolates the id into
     // nine `${id}-fN.jpg` thumbnail unlinks. Gate it at the boundary (#5713).
     it('rejects an id carrying a path segment without touching the service', async () => {
+      mediaRemoteDelete.deleteMediaAnywhere.mockClear();
       const r = await request(app).delete(`/api/video-gen/history/${encodeURIComponent('../../etc/passwd')}`);
       expect(r.status).toBe(400);
       expect(r.body.code).toBe('VALIDATION_ERROR');
-      expect(videoGenService.deleteHistoryItem).not.toHaveBeenCalled();
+      expect(mediaRemoteDelete.deleteMediaAnywhere).not.toHaveBeenCalled();
+    });
+
+    it('cancels a pending delete', async () => {
+      const r = await request(app).post('/api/video-gen/history/abc/cancel-delete');
+      expect(r.status).toBe(200);
+      expect(r.body).toEqual({ ok: true, cancelled: true });
+      expect(mediaRemoteDelete.cancelPendingDelete).toHaveBeenCalledWith('video', 'abc');
     });
   });
 

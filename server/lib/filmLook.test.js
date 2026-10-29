@@ -53,7 +53,8 @@ describe('film look settings', () => {
     const fifth = scaleFilmLook(vhs, 0.2);
     for (const control of FILM_LOOK_CONTROLS) {
       if (control.type || control.modifier) expect(fifth[control.id]).toBe(vhs[control.id]);
-      else expect(fifth[control.id]).toBeCloseTo(vhs[control.id] * 0.2, 6);
+      // A scaled value lands on its control's step, like any normalized value.
+      else expect(Math.abs(fifth[control.id] - vhs[control.id] * 0.2)).toBeLessThanOrEqual(control.step / 2 + 1e-9);
     }
     expect(sameFilmLook(scaleFilmLook(vhs, 3), vhs)).toBe(true);
     expect(isFilmLookNeutral(scaleFilmLook(vhs, -1))).toBe(true);
@@ -80,6 +81,35 @@ describe('film look filter markup', () => {
     expect(normalizeFilmLook({ ...old, shoulder: 0.5 }).version).toBe(2);
     expect(sameFilmLook({ version: 1, halation: 0.3 }, { version: 2, halation: 0.3 })).toBe(false);
   });
+  it('bends each channel its own way for dye crossover while black, gray and white stay put', () => {
+    const tables = (look) => [...filmLookFilterMarkup(normalizeFilmLook(look)).filter.matchAll(/tableValues="([^"]+)"/g)]
+      .map((m) => m[1].split(' ').map(Number));
+    const [r, g, b] = tables({ crossover: 1 });
+    expect(normalizeFilmLook({ crossover: 1 }).version).toBe(2);
+    for (const channel of [r, g, b]) {
+      expect(channel[0]).toBe(0);
+      expect(channel[255]).toBe(1);
+      expect(channel.every((v, i) => i === 0 || v >= channel[i - 1])).toBe(true);
+    }
+    // Positive: cyan-green shadows, amber highlights; negative mirrors it.
+    expect(b[50]).toBeGreaterThan(r[50]);
+    expect(r[205]).toBeGreaterThan(b[205]);
+    const [rn, , bn] = tables({ crossover: -1 });
+    expect(rn[50]).toBeGreaterThan(bn[50]);
+    // No crossover keeps the single shared response the earlier recipes drew.
+    const [sr, sg, sb] = tables({ version: 2, shoulder: 0.5 });
+    expect(sr).toEqual(sg);
+    expect(sg).toEqual(sb);
+  });
+
+  it('keeps the version-1 light leak and fogs a version-2 leak in from the frame edge', () => {
+    const v1 = filmLookFilterMarkup(normalizeFilmLook({ leak: 0.5 }), { width: 1000, height: 500 }).filter;
+    expect(v1).toContain('x="620" y="-100" width="300" height="700"');
+    const v2 = filmLookFilterMarkup(normalizeFilmLook({ version: 2, leak: 0.5 }), { width: 1000, height: 500 }).filter;
+    expect(v2).not.toContain('x="620"');
+    expect(v2).toContain('x="860"');
+  });
+
   it('is self-contained, inactive for a neutral look, and a pure function of the frame', () => {
     // The preview and render pages receive this function by toString(): a module-scope reference would throw here.
     const standalone = new Function(`return (${filmLookFilterMarkup.toString()});`)();

@@ -14,21 +14,16 @@
  * Props:
  *   src: string                  — same as <img>; expected to be `/data/...`
  *   fallbackSrc?: string|string[] — originals to try in order if `src` fails (e.g. a thumbnail)
+ *   fallbackVideoSrc?: string    — video to preview if its poster is unavailable
  *   assetSrc?: string            — original URL whose filename peer sync reports
  *   alt: string                  — same as <img>
  *   className?: string           — applies to BOTH the live <img> and the placeholder wrapper
  *   placeholderClassName?: string — extra classes for the placeholder only
  *   ...rest                       — forwarded to <img>
  *
- * The component renders the "Syncing" placeholder on ANY image load failure
- * — the browser's <img onError> doesn't expose the HTTP status, so we can't
- * actually distinguish a 404 from a network drop. That's intentional: the
- * placeholder accurately describes the user-visible state ("this asset is
- * not loadable right now") whether the cause is "peer hasn't pushed it yet"
- * or "network is down." The `peerSync:asset-arrived` listener still gates
- * the swap-back, so a permanent network error doesn't lock the placeholder
- * on forever — the live image returns whenever the path is reachable again
- * (e.g. on the next push that triggers a re-fetch via the socket event).
+ * After every supplied image/video source fails, show a "Syncing" placeholder.
+ * Image errors don't expose HTTP status, so the component cannot distinguish
+ * a missing file from a network drop. An asset-arrived event retries the sources.
  */
 
 import { useEffect, useRef, useState } from 'react';
@@ -42,9 +37,16 @@ function basenameOf(src) {
   return last.split('?')[0] || null;
 }
 
+function cacheBust(src, nonce) {
+  if (!nonce) return src;
+  const [path, ...fragment] = src.split('#');
+  return `${path}${path.includes('?') ? '&' : '?'}_t=${nonce}${fragment.length ? `#${fragment.join('#')}` : ''}`;
+}
+
 export default function MediaImage({
   src,
   fallbackSrc,
+  fallbackVideoSrc,
   assetSrc = src,
   alt = '',
   className = '',
@@ -52,6 +54,7 @@ export default function MediaImage({
   ...rest
 }) {
   const [errored, setErrored] = useState(false);
+  const [showVideo, setShowVideo] = useState(false);
   // -1 = `src`; otherwise the index into `fallbacks` currently shown.
   const [fallbackIndex, setFallbackIndex] = useState(-1);
   const fallbacks = [fallbackSrc].flat().filter((f) => typeof f === 'string' && f && f !== src);
@@ -67,9 +70,10 @@ export default function MediaImage({
   // different filename that we DO have locally.
   useEffect(() => {
     setErrored(false);
+    setShowVideo(false);
     setFallbackIndex(-1);
     setNonce(0);
-  }, [src, assetSrc]);
+  }, [src, assetSrc, fallbackVideoSrc]);
 
   // Listen for the receiver's asset-arrived event. Match on filename only
   // (kind is implicit from the directory in the src URL) so the listener
@@ -80,6 +84,7 @@ export default function MediaImage({
     const handler = (payload) => {
       if (payload?.filename === filenameRef.current) {
         setErrored(false);
+        setShowVideo(false);
         setFallbackIndex(-1);
         setNonce((n) => n + 1);
       }
@@ -100,11 +105,26 @@ export default function MediaImage({
     );
   }
 
+  if (fallbackVideoSrc && (showVideo || !src)) {
+    const videoSrc = cacheBust(fallbackVideoSrc, nonce);
+    return (
+      <video
+        src={videoSrc.includes('#') ? videoSrc : `${videoSrc}#t=0.001`}
+        aria-label={alt}
+        className={className}
+        preload="metadata"
+        muted
+        playsInline
+        onError={() => setErrored(true)}
+      />
+    );
+  }
+
   // The cache-buster appears only after the first arrival event; the very
   // first load (before any 404) uses the bare src so HTTP caching still
   // works the way the rest of the UI expects.
   const displaySrc = fallbacks[fallbackIndex] ?? src;
-  const cacheBustedSrc = nonce > 0 ? `${displaySrc}${displaySrc.includes('?') ? '&' : '?'}_t=${nonce}` : displaySrc;
+  const cacheBustedSrc = cacheBust(displaySrc, nonce);
   // Spread `rest` FIRST so the explicit `onError` below wins over a caller-
   // provided one — we still forward the event by capturing the caller's
   // handler before composing. Putting {...rest} last would silently override
@@ -118,12 +138,10 @@ export default function MediaImage({
       alt={alt}
       className={className}
       onError={(e) => {
-        // The browser doesn't expose the HTTP status to onError, so any load
-        // failure flips into the placeholder. The `peerSync:asset-arrived`
-        // listener still gates the swap-back, so a permanent network error
-        // doesn't lock the placeholder on forever — user-visible state then
-        // accurately reflects "asset not loadable right now."
+        // A peer running an older release may reject poster requests while
+        // still allowing the original image or video to be streamed.
         if (fallbackIndex + 1 < fallbacks.length) setFallbackIndex(fallbackIndex + 1);
+        else if (fallbackVideoSrc) setShowVideo(true);
         else setErrored(true);
         callerOnError?.(e);
       }}

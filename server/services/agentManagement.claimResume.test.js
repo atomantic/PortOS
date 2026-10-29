@@ -158,7 +158,7 @@ describe('claim resume contract through spawn', () => {
     expect(f.prompt).toContain('"agentId":"replacement-agent","action":"bind"');
     expect(f.prompt).toContain('This run is replacement-agent');
     expect(f.prompt).not.toContain('/api/cos/merge-admission');
-    expect(f.prompt).toContain('antigravity-cli');
+    expect(f.prompt).toContain('antigravity');
     expect(await updateClaimOwnership({ agentId: registered.id, action: 'bind', branch: 'claim/issue-42' })).toMatchObject({ bound: true });
     const lease = await claimMergeAdmission({ agentId: registered.id, action: 'acquire' });
     expect(lease.admitted).toBe(true);

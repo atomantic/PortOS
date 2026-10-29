@@ -49,15 +49,6 @@ import { hasBranchMergeEvidence, getStatus, getStatusPorcelain } from './git.js'
 import { reapMergedWorktrees, cleanupOrphanedWorktrees, deleteCompletedLocalBranch, readWorktreeStatus } from './worktreeManager.js';
 vi.mock('./branchCompletionPolicy.js', () => ({ readBranchCompletionHold: async () => null }));
 vi.mock('./cosState.js', () => ({ readAgentsStateForSafetyCheck: async () => ({ trusted: true, agents: {} }) }));
-const archiveGate = vi.hoisted(() => ({ beforeArchive: null }));
-vi.mock('./heldCheckoutRecovery.js', async importOriginal => {
-  const actual = await importOriginal();
-  return { ...actual, releaseCheckoutWithoutArchive: async (context, prepare) => {
-    await archiveGate.beforeArchive?.(context?.repoPath);
-    return prepare();
-  } };
-});
-import { withClaimOwnershipLock, checkoutRetirementFenceReason } from './cosClaimOwnershipState.js';
 
 /**
  * Why `wantedPath` was skipped, matched separator-insensitively — `skipped[].path`
@@ -622,28 +613,24 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('reapMergedWorktrees', () => {
     expect(branches).toContain('pending-br');
   });
 
-  // #12682: the archive ran inside the shared ownership lock and starved every
-  // claim-ownership check queued behind it.
-  it('archives with the ownership queue free while fencing only the reaped checkout', async () => {
-    const mergedPath = await addWorktree(dir, 'fenced', 'fenced-br');
-    await execGit(['merge', '--no-ff', 'fenced-br', '--no-edit'], dir);
-    let started;
-    let resume;
-    const archiving = new Promise(resolve => { started = resolve; });
-    archiveGate.beforeArchive = () => new Promise(resolve => { resume = resolve; started(); });
-    try {
-      const reaping = reapMergedWorktrees(dir, { includeClaudeTrees: true });
-      await archiving;
-      expect(await withClaimOwnershipLock(() => 'settled')).toBe('settled');
-      expect(checkoutRetirementFenceReason({ repoPath: dir, branch: 'fenced-br' })).toBe('checkout-retirement-reserved');
-      expect(checkoutRetirementFenceReason({ repoPath: dir, branch: 'unrelated-br' })).toBe(null);
-      resume();
-      expect((await reaping).reaped.map(r => r.branch)).toContain('fenced-br');
-    } finally {
-      archiveGate.beforeArchive = null;
-    }
+  it('keeps ignored user data in a merged checkout but removes a recognized test cache', async () => {
+    const mergedPath = await addWorktree(dir, 'ignored-output', 'ignored-output-br');
+    await execGit(['merge', '--no-ff', 'ignored-output-br', '--no-edit'], dir);
+    await writeFile(join(dir, '.git', 'info', 'exclude'), '*.png\nserver/.cache/\n');
+    const image = join(mergedPath, 'reference.png');
+    await writeFile(image, 'sole user image');
+    const cache = join(mergedPath, 'server', '.cache', 'vitest', 'modules');
+    await mkdir(cache, { recursive: true });
+    await writeFile(join(cache, 'CACHEDIR.TAG'), 'Signature: 8a477f597d28d172789f06886806bc55\n# This file is a cache directory tag created by Vitest.\n');
+    await writeFile(join(cache, '_metadata.json'), JSON.stringify({ lockfileHash: 'abcdef12' }));
+    await writeFile(join(cache, 'a'.repeat(40)), 'compiled test module');
+    const retained = await reapMergedWorktrees(dir, { includeClaudeTrees: true });
+    expect(skipReason(retained, mergedPath)).toBe('checkout-ignored-payload-unverified');
+    expect(await readFile(image, 'utf8')).toBe('sole user image');
+    await rm(image);
+    const reaped = await reapMergedWorktrees(dir, { includeClaudeTrees: true });
+    expect(reaped.reaped.map(r => r.branch), JSON.stringify(reaped.skipped)).toContain('ignored-output-br');
     expect(existsSync(mergedPath)).toBe(false);
-    expect(checkoutRetirementFenceReason({ repoPath: dir, branch: 'fenced-br' })).toBe(null);
   });
 
   it('preserves a merged worktree that has uncommitted changes', async () => {

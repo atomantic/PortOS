@@ -110,6 +110,14 @@ export const USER_DECISION_BLOCKED_CATEGORIES = new Set([
   PROVIDER_CONFIG_BLOCKED_CATEGORY
 ]);
 
+/** Explicit spawn-budget resets do not satisfy a separate task prerequisite. */
+export function hasSpawnBudgetResetPrerequisite(metadata = {}) {
+  const category = metadata?.blockedCategory;
+  return !!metadata?.blocker || !!metadata?.releaseSynchronization
+    || (category !== 'task-recovery-exhausted'
+      && (PAUSED_BLOCKED_CATEGORIES.has(category) || USER_DECISION_BLOCKED_CATEGORIES.has(category)));
+}
+
 /**
  * Blocks a completed investigation must NOT auto-retry. The union of the two
  * sets above, expressed as a union rather than re-listed so it cannot drift from

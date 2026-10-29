@@ -42,6 +42,28 @@ import {
   WINDOWS_RISK_RULES,
 } from './ci-test-plan.js';
 
+// The planner logs its attestation verdict to stderr. Capture it so a spawn
+// adds nothing to the run's output; a failing spawn still reports it on the
+// thrown error.
+const PLANNER_STDIO = ['ignore', 'pipe', 'pipe'];
+
+// Every read-only real-tree case shares ONE whole-repository collection (1-2s
+// each). It is collected with the union of the sources those cases plan, then
+// each case plans its own source alone: the collected maps are keyed per
+// source/test/suite, and buildCiTestPlan consults only the entries for the
+// files it is handed, so the union is a superset that never widens a plan.
+const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
+const REAL_TREE_SOURCES = [
+  'server/lib/postScoring.js', 'server/lib/editorial/checkInfra/taxonomy.js',
+  'server/routes/decks.js', 'server/services/modelPinRecords.js', 'server/services/backup.js',
+  'client/src/components/catalog/GreyboxViewer.jsx', 'client/src/components/catalog/GreyboxCapture.jsx',
+  'client/src/components/catalog/GreyboxPanel.jsx', 'client/src/pages/CatalogIngredient.jsx', 'server/lib/greyboxCapture.js',
+  'client/src/lib/musicVideoFrameCapture.js', 'client/src/components/musicVideo/FrameStepper.jsx',
+  'client/src/components/musicVideo/PreviewVideo.jsx', 'client/src/components/musicVideo/ProductionReviewPanel.jsx',
+];
+let realTreeInputs;
+const realTree = () => (realTreeInputs ??= collectPlanInputs({ baseSha: 'HEAD', changedFiles: REAL_TREE_SOURCES, cwd: REPO_ROOT }));
+
 const TRACKED = [
   'server/lib/index.js',
   'server/lib/index.test.js',
@@ -163,7 +185,7 @@ it('preserves Git-quoted source and contract paths through the planner CLI', () 
   };
   const plan = (base) => JSON.parse(execFileSync(process.execPath, [planner], {
     cwd: root,
-    encoding: 'utf8',
+    encoding: 'utf8', stdio: PLANNER_STDIO,
     env: { ...process.env, CI_BASE_SHA: base, CI_BASE_REF: 'main', CI_FORCE_FULL: 'false', GITHUB_OUTPUT: '' },
   }));
   try {
@@ -270,14 +292,12 @@ it('builds the same plan from an explicit working-tree override as from the equi
 });
 
 describe('real shared-source import chains', () => {
-  const cwd = fileURLToPath(new URL('../', import.meta.url));
+  const cwd = REPO_ROOT;
   let inputs;
-  // These read-only plans share one real-tree snapshot. Synthetic mutation and
-  // recollection regressions below keep their separate per-call snapshots.
+  // Synthetic mutation and recollection regressions below keep their separate
+  // per-call snapshots.
   beforeAll(() => {
-    inputs = collectPlanInputs({ baseSha: 'HEAD', changedFiles: [
-      'server/lib/postScoring.js', 'server/lib/editorial/checkInfra/taxonomy.js',
-    ], cwd });
+    inputs = realTree();
   });
 
   it('schedules the real client precision-copy import chain for a shared scoring change', () => {
@@ -344,7 +364,7 @@ it('carries transitive browser re-exports through the planner CLI and fails clos
   const serverOnly = 'server/lib/privateOnly.js';
   const plan = (changedFiles) => JSON.parse(execFileSync(process.execPath, [planner], {
     cwd: root,
-    encoding: 'utf8',
+    encoding: 'utf8', stdio: PLANNER_STDIO,
     env: { ...process.env, CI_BASE_SHA: 'HEAD', CI_BASE_REF: 'main', CI_FORCE_FULL: 'false',
       CI_CHANGED_FILES: JSON.stringify(changedFiles), GITHUB_OUTPUT: '', GITHUB_STEP_SUMMARY: '' },
   }));
@@ -395,7 +415,7 @@ it('projects test-only shared re-exports and retains unresolved consumers withou
   const consumer = 'client/src/test/lifecycle.test.js';
   const unrelated = 'client/src/test/unrelated.test.js';
   const plan = (source) => JSON.parse(execFileSync(process.execPath, [planner], {
-    cwd: root, encoding: 'utf8',
+    cwd: root, encoding: 'utf8', stdio: PLANNER_STDIO,
     env: { ...process.env, CI_BASE_SHA: 'HEAD', CI_BASE_REF: 'main', CI_FORCE_FULL: 'false',
       CI_CHANGED_FILES: JSON.stringify([source]), GITHUB_OUTPUT: '', GITHUB_STEP_SUMMARY: '' },
   }));
@@ -539,12 +559,25 @@ it('shares source reads within one collection and observes edits and unreadable 
   }
 });
 
-it('requests DB verification for every suite in the real canonical inventory without widening the matrix', () => {
-  const cwd = fileURLToPath(new URL('../', import.meta.url));
-  const inputs = collectPlanInputs({ baseSha: 'HEAD', changedFiles: [], cwd });
+it('requests DB verification for every shape of suite in the real canonical inventory without widening the matrix', () => {
+  const inputs = realTree();
   const dbTests = resolveDbTestFiles(inputs.trackedFiles);
   expect(dbTests.length).toBeGreaterThan(50);
-  for (const suite of dbTests) {
+  // Routing keys on the same resolver that built this list, so one real suite
+  // per inventory shape proves the rule; planning all 50+ only repeated it.
+  const shapes = {
+    scripts: (path) => path.startsWith('scripts/'),
+    globbed: (path) => path.endsWith('/db.test.js'),
+    unmarked: (path) => !path.includes('.db.') && !path.endsWith('/db.test.js'),
+    realBrowser: (path) => path.includes('.realBrowser.db.'),
+    named: (path) => path.startsWith('server/') && /\.db\.test\.js$/.test(path) && !path.includes('.realBrowser.'),
+  };
+  const representatives = Object.entries(shapes).map(([shape, matches]) => {
+    const suite = dbTests.find(matches);
+    expect(suite, shape).toBeDefined();
+    return suite;
+  });
+  for (const suite of representatives) {
     const plan = buildCiTestPlan([suite], inputs);
     expect(plan, suite).toMatchObject({ full: false, db: true, server: { mode: 'files' } });
     expect(plan.server.files, suite).not.toContain(suite);
@@ -560,10 +593,8 @@ it('keeps PostgreSQL tests out of ordinary server runner selection and routes th
 });
 
 it('requests DB verification for the real deck, model pin and backup source contracts', () => {
-  const cwd = fileURLToPath(new URL('../', import.meta.url));
   const sources = ['server/routes/decks.js', 'server/services/modelPinRecords.js', 'server/services/backup.js'];
-  // One whole-repository collection; the union is a superset whose DB-dependency walk still covers each source.
-  const inputs = collectPlanInputs({ baseSha: 'HEAD', changedFiles: sources, cwd });
+  const inputs = realTree();
   for (const source of sources) {
     expect(buildCiTestPlan([source], inputs), source).toMatchObject({ full: false, db: true });
   }
@@ -581,7 +612,7 @@ it('follows DB-only deferred dependencies through the pre-install CLI and preser
   const contract = 'server/routes/decks.db.test.js';
   const plan = (changedFiles) => JSON.parse(execFileSync(process.execPath, [planner], {
     cwd: root,
-    encoding: 'utf8',
+    encoding: 'utf8', stdio: PLANNER_STDIO,
     env: { ...process.env, CI_BASE_SHA: 'HEAD', CI_BASE_REF: 'main', CI_FORCE_FULL: 'false',
       CI_CHANGED_FILES: JSON.stringify(changedFiles), GITHUB_OUTPUT: '', GITHUB_STEP_SUMMARY: '' },
   }));
@@ -1566,6 +1597,15 @@ describe('CI test impact planner', () => {
     expect(winHelper.windows).toBe(true);
   });
 
+  it('runs the native supervised release-recovery service contract on Windows', () => {
+    const source = 'server/services/releaseCandidateRecovery.js';
+    const contract = 'server/services/releaseCandidateRecovery.test.js';
+    const plan = buildCiTestPlan([source], { trackedFiles: [...TRACKED, source, contract] });
+    expect(plan.windows).toBe(true);
+    expect(plan.windowsMode).toBe('files');
+    expect(plan.windowsFiles).toContain(contract);
+  });
+
   it.each([
     'server/lib/bufferedSpawn.js',
     'server/lib/windowsGitProcess.protocol.test.js',
@@ -1626,7 +1666,8 @@ describe('CI test impact planner', () => {
     const contracts = [
       'server/services/heldCheckoutExactDelivery.integration.test.js',
       'server/services/heldCheckoutRecovery.test.js',
-      'server/services/retirementFixture.lifecycle.test.js',
+      'server/services/heldCheckoutRecovery.receipts.test.js',
+      'server/services/heldCheckoutRecovery.siblings.test.js',
     ];
     const plan = buildCiTestPlan(contracts, { trackedFiles: [...TRACKED, ...contracts] });
 
@@ -1769,7 +1810,8 @@ describe('Windows native support boundary', () => {
     'server/lib/primaryCheckoutGuard.test.js',
     'server/services/worktreeReap.test.js',
     'server/services/heldCheckoutRecovery.test.js',
-    'server/services/retirementFixture.lifecycle.test.js',
+    'server/services/heldCheckoutRecovery.receipts.test.js',
+    'server/services/heldCheckoutRecovery.siblings.test.js',
     'server/services/videoGen/metalBufferProfiles.test.js',
     'server/routes/apps/crud.test.js',
   ])('retains %s on the primary runner without adding a Windows application suite', path => {
@@ -1831,7 +1873,7 @@ it('projects transitive browser consumers through the planner CLI without replac
   const [staticSuite, deferredSuite, independentSuite] = BROWSER_SUITES;
   const plan = (changedFiles, forceFull = false) => JSON.parse(execFileSync(process.execPath, [planner], {
     cwd: root,
-    encoding: 'utf8',
+    encoding: 'utf8', stdio: PLANNER_STDIO,
     env: { ...process.env, CI_BASE_SHA: 'HEAD', CI_BASE_REF: 'main', CI_FORCE_FULL: String(forceFull),
       CI_CHANGED_FILES: JSON.stringify(changedFiles), GITHUB_OUTPUT: '', GITHUB_STEP_SUMMARY: '' },
   }));
@@ -1885,37 +1927,34 @@ it('projects transitive browser consumers through the planner CLI without replac
 describe('cross-workspace browser suites (#10312)', () => {
 
   it('selects greybox pixel parity when the bundled viewer or capture contract changes', () => {
-    const cwd = fileURLToPath(new URL('../', import.meta.url));
     const suite = 'server/services/greyboxRender.browser.test.js';
+    const inputs = realTree();
+    const trackedFiles = inputs.trackedFiles.filter((path) => !/\.(?:test|spec)\.[cm]?[jt]sx?$/.test(path) || BROWSER_SUITES.includes(path));
     for (const source of ['client/src/components/catalog/GreyboxViewer.jsx', 'client/src/components/catalog/GreyboxCapture.jsx', 'server/lib/greyboxCapture.js']) {
-      const inputs = collectPlanInputs({ baseSha: 'HEAD', changedFiles: [source], cwd });
-      const trackedFiles = inputs.trackedFiles.filter((path) => !/\.(?:test|spec)\.[cm]?[jt]sx?$/.test(path) || BROWSER_SUITES.includes(path));
-      expect(buildCiTestPlan(inputs.changedFiles, { ...inputs, trackedFiles }).browserFiles).toContain(suite);
+      expect(buildCiTestPlan([source], { ...inputs, trackedFiles }).browserFiles, source).toContain(suite);
     }
   });
 
   it('selects animatic pixel coverage when only the compositor or Save frame control changes', () => {
-    const cwd = fileURLToPath(new URL('../', import.meta.url));
     const suite = 'server/services/musicVideo/animaticCapture.browser.test.js';
+    const inputs = realTree();
+    const trackedFiles = inputs.trackedFiles.filter((path) => !/\.(?:test|spec)\.[cm]?[jt]sx?$/.test(path) || BROWSER_SUITES.includes(path));
     for (const source of ['client/src/lib/musicVideoFrameCapture.js', 'client/src/components/musicVideo/FrameStepper.jsx', 'client/src/components/musicVideo/PreviewVideo.jsx']) {
-      const inputs = collectPlanInputs({ baseSha: 'HEAD', changedFiles: [source], cwd });
-      const trackedFiles = inputs.trackedFiles.filter((path) => !/\.(?:test|spec)\.[cm]?[jt]sx?$/.test(path) || BROWSER_SUITES.includes(path));
-      const plan = buildCiTestPlan(inputs.changedFiles, { ...inputs, trackedFiles });
-      expect(plan.full).toBe(false);
-      expect(plan.browserFiles).toContain(suite);
+      const plan = buildCiTestPlan([source], { ...inputs, trackedFiles });
+      expect(plan.full, source).toBe(false);
+      expect(plan.browserFiles, source).toContain(suite);
     }
   });
 
   it('selects every music-video browser suite when a client component they mount changes', () => {
-    const cwd = fileURLToPath(new URL('../', import.meta.url));
     const source = 'client/src/components/musicVideo/ProductionReviewPanel.jsx';
-    const inputs = collectPlanInputs({ baseSha: 'HEAD', changedFiles: [source], cwd });
+    const inputs = realTree();
     // Keep the real source/import walk, with a bounded test corpus. Unrelated
     // feature-test growth must not route this scoped-browser contract through
     // the safety-cap fallback (the full-plan contract is checked separately).
     const trackedFiles = inputs.trackedFiles.filter((path) =>
       !/\.(?:test|spec)\.[cm]?[jt]sx?$/.test(path) || BROWSER_SUITES.includes(path));
-    const plan = buildCiTestPlan(inputs.changedFiles, { ...inputs, trackedFiles });
+    const plan = buildCiTestPlan([source], { ...inputs, trackedFiles });
 
     // Server-only media suites do not mount the changed client component.
     const runtimeOnly = ['server/lib/filmLook.browser.test.js', 'server/lib/filmLookGpu.browser.test.js', 'server/lib/musicVideoTitleCard.browser.test.js',
@@ -1932,13 +1971,12 @@ describe('cross-workspace browser suites (#10312)', () => {
   });
 
   it('selects greybox pixel coverage for its lazy viewer, editor and Environment route', () => {
-    const cwd = fileURLToPath(new URL('../', import.meta.url));
+    const inputs = realTree();
+    const trackedFiles = inputs.trackedFiles.filter((path) => !/\.(?:test|spec)\.[cm]?[jt]sx?$/.test(path) || BROWSER_SUITES.includes(path));
     for (const source of ['client/src/components/catalog/GreyboxViewer.jsx', 'client/src/components/catalog/GreyboxPanel.jsx', 'client/src/pages/CatalogIngredient.jsx']) {
-      const inputs = collectPlanInputs({ baseSha: 'HEAD', changedFiles: [source], cwd });
-      const trackedFiles = inputs.trackedFiles.filter((path) => !/\.(?:test|spec)\.[cm]?[jt]sx?$/.test(path) || BROWSER_SUITES.includes(path));
-      const plan = buildCiTestPlan(inputs.changedFiles, { ...inputs, trackedFiles });
-      expect(plan.full).toBe(false);
-      expect(plan.browserFiles).toContain('server/routes/catalogGreyboxViewer.browser.test.js');
+      const plan = buildCiTestPlan([source], { ...inputs, trackedFiles });
+      expect(plan.full, source).toBe(false);
+      expect(plan.browserFiles, source).toContain('server/routes/catalogGreyboxViewer.browser.test.js');
     }
   });
 
@@ -2129,13 +2167,11 @@ describe('dependency manifest Windows escalation', () => {
 });
 
 describe('path-gated single-purpose jobs', () => {
-  const repo = fileURLToPath(new URL('../', import.meta.url));
-  // The gates read only the two static input lists, which do not depend on the
+  const repo = REPO_ROOT;
+  // The gates read only the static input lists, which do not depend on the
   // diff; walking the repository once per case exceeded the 5 s test timeout (#12461).
-  let staticInputs;
   const realPlan = (changedFiles) => {
-    staticInputs ??= collectPlanInputs({ baseSha: 'HEAD', changedFiles: [], cwd: repo });
-    const { promptHistoryInputs, linuxContainmentInputs, supercolliderLiveInputs, dockerContainmentLiveInputs } = staticInputs;
+    const { promptHistoryInputs, linuxContainmentInputs, supercolliderLiveInputs, dockerContainmentLiveInputs } = realTree();
     return buildCiTestPlan(changedFiles, { promptHistoryInputs, linuxContainmentInputs, supercolliderLiveInputs, dockerContainmentLiveInputs });
   };
   const gates = (plan) => ({
@@ -2195,7 +2231,7 @@ describe('path-gated single-purpose jobs', () => {
   it('gates linux-containment on the whole closure of the tests the job runs', () => {
     // A transitive dependency of the route test that its name never mentions:
     // only the import walk can select it.
-    const inputs = collectPlanInputs({ baseSha: 'HEAD', changedFiles: [], cwd: repo });
+    const inputs = realTree();
     const closure = staticImportClosure(join(repo, 'server/routes/codeAnimationExecution.test.js')).files;
     expect(closure).toContain(join(repo, 'server/services/codeAnimation/execution.js'));
     for (const file of closure) {
@@ -2508,7 +2544,7 @@ describe('pregate attestation', () => {
       writeFileSync(join(bin, 'gh'), `#!/bin/sh\nexec "${process.execPath}" "$(dirname "$0")/gh.js" "$@"\n`, { mode: 0o755 });
       const statuses = JSON.stringify([status({ description: encode(['scan', 'lint', 'server', 'smoke', 'client', 'build'], headTree) })]);
       const plan = (env) => JSON.parse(execFileSync(process.execPath, [planner], {
-        cwd: root, encoding: 'utf8',
+        cwd: root, encoding: 'utf8', stdio: PLANNER_STDIO,
         env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, FAKE_GH_STATUSES: statuses, CI_BASE_SHA: base, GITHUB_OUTPUT: '', GITHUB_STEP_SUMMARY: '', ...prEnv, CI_PR_HEAD_SHA: head, ...env },
       }));
 

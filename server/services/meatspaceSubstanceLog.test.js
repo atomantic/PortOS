@@ -82,6 +82,68 @@ describe.each(cases)('$name event log', ({ key, items, total, result, input, upd
     expect(store.entries.find(entry => entry.date === '2024-06-02')[key]).toBeUndefined();
   });
 
+  it('targets the event identity after a prior row disappears, never the stale-index neighbour', async () => {
+    const first = await log(input);
+    const second = await log(input);
+    const third = await log(input);
+    await remove(input.date, 0, first[result].id);
+    await edit(input.date, 1, { ...update, id: second[result].id });
+    const rows = () => store.entries.find(entry => entry.date === input.date)[key][items];
+    expect(rows()[0]).toMatchObject({ ...update, id: second[result].id });
+    expect(rows()[1]).toEqual(third[result]);
+    expect((await remove(input.date, 1, second[result].id)).id).toBe(second[result].id);
+    expect(rows()).toEqual([third[result]]);
+    expect(store.eventTombstones.map(tombstone => tombstone.id).sort()).toEqual([first[result].id, second[result].id].sort());
+
+    const before = structuredClone(store);
+    expect(await edit(input.date, 0, { ...update, id: second[result].id })).toBeNull();
+    expect(await remove(input.date, 0, second[result].id)).toBeNull();
+    expect(store).toEqual(before);
+  });
+
+  it('refuses a stale date after an identified event moves and keeps legacy index addressing', async () => {
+    store.entries = [{ date: input.date, [key]: { [items]: [{ ...persisted }], [total]: 1 } }];
+    expect(await edit(input.date, 0, update)).toMatchObject({ [result]: update });
+    const event = store.entries[0][key][items][0];
+    await edit(input.date, 0, { id: event.id, date: '2024-06-02' });
+    expect(await remove(input.date, 0, event.id)).toBeNull();
+    expect(await edit(input.date, 0, { id: event.id, ...update })).toBeNull();
+    expect((await remove('2024-06-02', 0)).id).toBe(event.id);
+    store.entries = [{ date: input.date, [key]: { [items]: [{ ...persisted }], [total]: 1 } }];
+    expect(await remove(input.date, 0)).toEqual(persisted);
+  });
+
+  it('uses the supplied MortalLoom identity and returns a miss without editing its neighbour', async () => {
+    isMortalLoomEnabled.mockResolvedValue(true);
+    readDailyLogIfEnabled.mockResolvedValue({ entries: [] });
+    const records = new Map([['target', { ...persisted, id: 'target', date: input.date }], ['neighbour', { ...persisted, id: 'neighbour', date: input.date }]]);
+    mlIdAtDateIndex.mockResolvedValue('neighbour');
+    mlPatchById.mockImplementation(async (_collection, id, patch, { expectedDate }) => {
+      const record = records.get(id);
+      if (!record || record.date !== expectedDate) return null;
+      Object.assign(record, patch);
+      return record;
+    });
+    mlRemoveById.mockImplementation(async (_collection, id, { expectedDate }) => {
+      const record = records.get(id) ?? null;
+      if (!record || record.date !== expectedDate) return null;
+      records.delete(id);
+      return record;
+    });
+    await edit(input.date, 1, { ...update, id: 'target' });
+    expect(records.get('target')).toMatchObject(update);
+    expect(records.get('neighbour')).toEqual({ ...persisted, id: 'neighbour', date: input.date });
+    expect((await remove(input.date, 1, 'target')).id).toBe('target');
+    expect(await edit(input.date, 1, { ...update, id: 'target' })).toBeNull();
+    expect(await remove(input.date, 1, 'target')).toBeNull();
+    expect(records.has('neighbour')).toBe(true);
+    records.get('neighbour').date = '2024-06-02';
+    expect(await edit(input.date, 1, { ...update, id: 'neighbour' })).toBeNull();
+    expect(await remove(input.date, 1, 'neighbour')).toBeNull();
+    expect(records.get('neighbour')).toEqual({ ...persisted, id: 'neighbour', date: '2024-06-02' });
+    expect(mlIdAtDateIndex).not.toHaveBeenCalled();
+  });
+
   it('preserves the logged amount for an explicit zero count', async () => {
     const logged = await log({ ...input, count: 0 });
     expect(logged[key === 'alcohol' ? 'standardDrinks' : 'totalMg']).toBe(zeroAmount);
@@ -98,9 +160,9 @@ describe.each(cases)('$name event log', ({ key, items, total, result, input, upd
     expect(await edit(input.date, 0, { date: '2024-06-02' })).toMatchObject({
       [result]: persisted, date: '2024-06-02'
     });
-    expect(mlPatchById).toHaveBeenCalledWith(collection, 'event-id', { date: '2024-06-02' });
+    expect(mlPatchById).toHaveBeenCalledWith(collection, 'event-id', { date: '2024-06-02' }, { expectedDate: input.date });
     expect(await remove(input.date, 0)).toMatchObject(persisted);
-    expect(mlRemoveById).toHaveBeenCalledWith(collection, 'event-id');
+    expect(mlRemoveById).toHaveBeenCalledWith(collection, 'event-id', { expectedDate: input.date });
   });
 
   it('round-trips custom buttons in their existing file shape', async () => {
@@ -115,5 +177,23 @@ describe.each(cases)('$name event log', ({ key, items, total, result, input, upd
     expect(await buttons.edit(0, { name: 'Renamed' })).toEqual({ ...buttons.input, name: 'Renamed' });
     expect(await buttons.remove(0)).toEqual({ ...buttons.input, name: 'Renamed' });
     expect(buttonsStore).toEqual({ [buttons.field]: [] });
+  });
+
+  it('serializes overlapping button edits so none is lost', async () => {
+    let buttonsStore = { [buttons.field]: [{ ...buttons.input, name: 'Existing' }] };
+    readJSONFile.mockImplementation(async path => {
+      const snapshot = structuredClone(String(path).endsWith('daily-log.json') ? store : buttonsStore);
+      await new Promise(resolve => setTimeout(resolve, 5));
+      return snapshot;
+    });
+    atomicWrite.mockImplementation(async (path, data) => {
+      if (!String(path).endsWith('daily-log.json')) buttonsStore = structuredClone(data);
+    });
+    await Promise.all([
+      buttons.add({ ...buttons.input, name: 'P' }),
+      buttons.add({ ...buttons.input, name: 'Q' }),
+      buttons.remove(0)
+    ]);
+    expect(buttonsStore[buttons.field].map(b => b.name).sort()).toEqual(['P', 'Q']);
   });
 });

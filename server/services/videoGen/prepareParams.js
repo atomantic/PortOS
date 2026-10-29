@@ -718,6 +718,89 @@ async function resolveAudioFrameCount({ body, audioFilePath, effectiveModel, eff
   return effectiveNumFrames;
 }
 
+async function prepareVideoReferences({
+  body, uploads, effectiveModel, sourceImagePath, getHistory, resolveHistoryVideoPath,
+  stageUploadDurable, extraUploadedTempPaths, cleanupStaged,
+}) {
+  // Extra reference stills for a reference-to-video model. Rejected up-front on
+  // a model that declares no `maxReferenceImages` (a silently dropped reference
+  // would render a clip that ignores what the user supplied) and past the
+  // model's ceiling, which counts the first-frame input as the first image.
+  let referenceImagePaths = null;
+  if (body.referenceImageFiles?.length) {
+    const imageCountError = referenceCountError(effectiveModel, 'extra reference images', body.referenceImageFiles.length, extraReferenceImageLimit(effectiveModel), 'VIDEO_REFERENCE_IMAGES_UNSUPPORTED');
+    if (imageCountError) {
+      await cleanupStaged();
+      throw imageCountError;
+    }
+    referenceImagePaths = [];
+    for (let i = 0; i < body.referenceImageFiles.length; i++) {
+      const file = body.referenceImageFiles[i];
+      const path = resolveGalleryImage(file);
+      if (!path) {
+        await cleanupStaged();
+        throw new ServerError(
+          `referenceImageFiles[${i}] not found in gallery: ${file}`,
+          { status: 400, code: 'VIDEO_REFERENCE_IMAGE_GALLERY_MISS' },
+        );
+      }
+      referenceImagePaths.push(path);
+    }
+  }
+
+  // Ordered clip and voice references, after the same per-model ceilings as the
+  // image rows. A history clip already lives under data/videos/ and must survive
+  // the render; an uploaded voice clip is staged durably and dropped with the job.
+  let referenceVideoPaths = null;
+  if (body.referenceVideoIds?.length) {
+    const clipCountError = referenceCountError(effectiveModel, 'reference clips', body.referenceVideoIds.length, effectiveModel?.maxReferenceVideos, 'VIDEO_REFERENCE_CLIPS_UNSUPPORTED');
+    if (clipCountError) {
+      await cleanupStaged();
+      throw clipCountError;
+    }
+    const history = await getHistory();
+    referenceVideoPaths = [];
+    for (const id of body.referenceVideoIds) {
+      referenceVideoPaths.push(await resolveHistoryVideoPath(id, {
+        history,
+        label: 'referenceVideoIds entry',
+        notFoundCode: 'VIDEO_REFERENCE_CLIP_NOT_FOUND',
+        missingFileCode: 'VIDEO_REFERENCE_CLIP_FILE_MISSING',
+      }));
+    }
+  }
+  let referenceAudioPaths = null;
+  const audioUploads = REFERENCE_AUDIO_FIELDS.map((field) => uploads[field]).filter(Boolean);
+  if (audioUploads.length) {
+    const voiceCountError = referenceCountError(effectiveModel, 'voice clips', audioUploads.length, effectiveModel?.maxReferenceAudios, 'VIDEO_REFERENCE_AUDIO_UNSUPPORTED');
+    if (voiceCountError) {
+      await cleanupStaged();
+      throw voiceCountError;
+    }
+    referenceAudioPaths = [];
+    for (const upload of audioUploads) {
+      const path = await stageUploadDurable(upload, 'ref-audio');
+      extraUploadedTempPaths.push(path);
+      referenceAudioPaths.push(path);
+    }
+  }
+
+  const hasAnyReference = Boolean(referenceImagePaths?.length || referenceVideoPaths?.length || referenceAudioPaths?.length);
+  const referenceConflict = (hasAnyReference && Number(body.chunks) > 1
+    ? new ServerError(REFERENCE_CHUNKS_MESSAGE, { status: 400, code: 'VIDEO_REFERENCE_CHUNKS_CONFLICT' })
+    : null)
+    || referenceTotalError(effectiveModel, {
+      hasFirstImage: Boolean(sourceImagePath),
+      images: referenceImagePaths?.length, videos: referenceVideoPaths?.length, audios: referenceAudioPaths?.length,
+    });
+  if (referenceConflict) {
+    await cleanupStaged();
+    throw referenceConflict;
+  }
+
+  return { referenceImagePaths, referenceVideoPaths, referenceAudioPaths };
+}
+
 /**
  * The staging + resolution region, split out so `prepareVideoGenParams` can
  * wrap it in a single rollback guard (#3326) without indenting 400 lines.
@@ -1189,81 +1272,10 @@ async function resolvePreparedParams({
     }
   }
 
-  // Extra reference stills for a reference-to-video model. Rejected up-front on
-  // a model that declares no `maxReferenceImages` (a silently dropped reference
-  // would render a clip that ignores what the user supplied) and past the
-  // model's ceiling, which counts the first-frame input as the first image.
-  let referenceImagePaths = null;
-  if (body.referenceImageFiles?.length) {
-    const imageCountError = referenceCountError(effectiveModel, 'extra reference images', body.referenceImageFiles.length, extraReferenceImageLimit(effectiveModel), 'VIDEO_REFERENCE_IMAGES_UNSUPPORTED');
-    if (imageCountError) {
-      await cleanupStaged();
-      throw imageCountError;
-    }
-    referenceImagePaths = [];
-    for (let i = 0; i < body.referenceImageFiles.length; i++) {
-      const file = body.referenceImageFiles[i];
-      const path = resolveGalleryImage(file);
-      if (!path) {
-        await cleanupStaged();
-        throw new ServerError(
-          `referenceImageFiles[${i}] not found in gallery: ${file}`,
-          { status: 400, code: 'VIDEO_REFERENCE_IMAGE_GALLERY_MISS' },
-        );
-      }
-      referenceImagePaths.push(path);
-    }
-  }
-
-  // Ordered clip and voice references, after the same per-model ceilings as the
-  // image rows. A history clip already lives under data/videos/ and must survive
-  // the render; an uploaded voice clip is staged durably and dropped with the job.
-  let referenceVideoPaths = null;
-  if (body.referenceVideoIds?.length) {
-    const clipCountError = referenceCountError(effectiveModel, 'reference clips', body.referenceVideoIds.length, effectiveModel?.maxReferenceVideos, 'VIDEO_REFERENCE_CLIPS_UNSUPPORTED');
-    if (clipCountError) {
-      await cleanupStaged();
-      throw clipCountError;
-    }
-    const history = await getHistory();
-    referenceVideoPaths = [];
-    for (const id of body.referenceVideoIds) {
-      referenceVideoPaths.push(await resolveHistoryVideoPath(id, {
-        history,
-        label: 'referenceVideoIds entry',
-        notFoundCode: 'VIDEO_REFERENCE_CLIP_NOT_FOUND',
-        missingFileCode: 'VIDEO_REFERENCE_CLIP_FILE_MISSING',
-      }));
-    }
-  }
-  let referenceAudioPaths = null;
-  const audioUploads = REFERENCE_AUDIO_FIELDS.map((field) => uploads[field]).filter(Boolean);
-  if (audioUploads.length) {
-    const voiceCountError = referenceCountError(effectiveModel, 'voice clips', audioUploads.length, effectiveModel?.maxReferenceAudios, 'VIDEO_REFERENCE_AUDIO_UNSUPPORTED');
-    if (voiceCountError) {
-      await cleanupStaged();
-      throw voiceCountError;
-    }
-    referenceAudioPaths = [];
-    for (const upload of audioUploads) {
-      const path = await stageUploadDurable(upload, 'ref-audio');
-      extraUploadedTempPaths.push(path);
-      referenceAudioPaths.push(path);
-    }
-  }
-
-  const hasAnyReference = Boolean(referenceImagePaths?.length || referenceVideoPaths?.length || referenceAudioPaths?.length);
-  const referenceConflict = (hasAnyReference && Number(body.chunks) > 1
-    ? new ServerError(REFERENCE_CHUNKS_MESSAGE, { status: 400, code: 'VIDEO_REFERENCE_CHUNKS_CONFLICT' })
-    : null)
-    || referenceTotalError(effectiveModel, {
-      hasFirstImage: Boolean(sourceImagePath),
-      images: referenceImagePaths?.length, videos: referenceVideoPaths?.length, audios: referenceAudioPaths?.length,
-    });
-  if (referenceConflict) {
-    await cleanupStaged();
-    throw referenceConflict;
-  }
+  const { referenceImagePaths, referenceVideoPaths, referenceAudioPaths } = await prepareVideoReferences({
+    body, uploads, effectiveModel, sourceImagePath, getHistory, resolveHistoryVideoPath,
+    stageUploadDurable, extraUploadedTempPaths, cleanupStaged,
+  });
 
   // Collapse the parallel loraFilenames/loraScales arrays into the internal
   // `[{ filename, scale }]` shape the service (resolveVideoLoras) and the

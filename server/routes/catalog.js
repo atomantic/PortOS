@@ -16,7 +16,7 @@ import { validateRequest, parsePagination } from '../lib/validation.js';
 import {
   catalogScrapCreateSchema,
   catalogScrapPatchSchema,
-  catalogIngredientCreateSchema,
+  catalogIngredientCreateRouteSchema,
   catalogIngredientPatchSchema,
   catalogIngredientLinkSchema,
   catalogRelationLinkSchema,
@@ -28,6 +28,7 @@ import {
   catalogMediaFileUploadSchema,
   catalogMediaVoiceMemoSchema,
   catalogPortraitSetSchema,
+  catalogGeneratedImageAttachSchema,
   catalogIngredientQuerySchema,
   catalogIngredientDetailQuerySchema,
   catalogIngredientCardsQuerySchema,
@@ -51,6 +52,12 @@ import {
   catalogBrainIngestSchema,
   catalogUserTypeSchema,
   catalogUserTypesSettingsSchema,
+  catalogStoryListQuerySchema,
+  catalogStoryParamsSchema,
+  catalogStoryJoinSchema,
+  catalogStoryDraftSchema,
+  catalogVideoSubjectsQuerySchema,
+  catalogVideoSubjectLinksSchema,
   REF_KINDS,
 } from '../lib/catalogValidation.js';
 import { getActiveCatalogTypes, setUserCatalogTypes } from '../lib/catalogTypes.js';
@@ -63,9 +70,14 @@ import { captureGreyboxShot, draftGreybox, previewGreyboxPrompt, renderGreyboxSh
 import { ingestFromUrl, ingestFromFile, ingestFromVoice, ingestFromBrain } from '../services/catalogIngestSources.js';
 import { readImageGenerationMetadata, uploadIngredientMediaFile, recordIngredientVoiceMemo } from '../services/catalogMedia.js';
 import { getBoard as getMoodBoard } from '../services/moodBoard/index.js';
-import { filterLibraryMedia, pickGuideMedia, parseLibraryMediaKey, inferAgeFromText } from '../lib/catalogMediaLibrary.js';
+import { MAX_CAST_GUIDES, filterLibraryMedia, pickGuideMedia, parseLibraryMediaKey, inferAgeFromText } from '../lib/catalogMediaLibrary.js';
 import { migrateBibleToCatalog } from '../scripts/migrateBibleToCatalog.js';
 import { previewCatalogCastImport, commitCatalogCastImport } from '../services/musicVideo/catalogCast.js';
+import { draftStoryMember, joinStory, listCatalogStories } from '../services/catalogStories.js';
+import { linkVideoSubjects, listVideoSubjectLinks } from '../services/musicVideo/catalogCast.js';
+import { fileCatalogImagesIntoUniverses } from '../services/catalogUniverseFiling.js';
+import { catalogFamilyRenderContext, familyImagesAddition } from '../services/catalogFamily.js';
+import { resolveGalleryImage } from '../lib/pathSafety.js';
 import { PORTOS_SCHEMA_VERSIONS } from '../lib/schemaVersions.js';
 
 import catalogIdentityRouter from './catalogIdentity.js';
@@ -259,6 +271,38 @@ router.get('/facets', asyncHandler(async (_req, res) => {
   res.json(await catalogDB.getCatalogFacets());
 }));
 
+// Stories (storyboards, music videos, series) and their member counts for one
+// type, for the Casting / Environments / Objects story filter.
+router.get('/stories', asyncHandler(async (req, res) => {
+  const { type } = validateRequest(catalogStoryListQuerySchema, req.query);
+  res.json({ stories: await listCatalogStories({ type }) });
+}));
+
+// New from prompt: answers with a preview and the exact prompt sent; the
+// client saves the record (POST /ingredients) and joins it to the story.
+router.post('/stories/draft', asyncHandler(async (req, res) => {
+  res.json(await draftStoryMember(validateRequest(catalogStoryDraftSchema, req.body ?? {})));
+}));
+
+// A music video's subjects of one kind, each with its linked record or a
+// suggested one (same name, age form from "(17)"); link sets or clears them.
+router.get('/stories/music-video/:id/subjects', asyncHandler(async (req, res) => {
+  const { type } = validateRequest(catalogVideoSubjectsQuerySchema, req.query);
+  res.json(await listVideoSubjectLinks(req.params.id, { type }));
+}));
+
+router.post('/stories/music-video/:id/subjects/link', asyncHandler(async (req, res) => {
+  const { links } = validateRequest(catalogVideoSubjectLinksSchema, req.body ?? {});
+  const { project, linked, unlinked } = await linkVideoSubjects(req.params.id, links);
+  res.json({ concept: project?.concept || {}, updatedAt: project?.updatedAt ?? null, linked, unlinked });
+}));
+
+router.post('/stories/:kind/:id/members', asyncHandler(async (req, res) => {
+  const { kind, id } = validateRequest(catalogStoryParamsSchema, req.params);
+  const { ingredientId } = validateRequest(catalogStoryJoinSchema, req.body ?? {});
+  res.status(201).json(await joinStory(kind, id, ingredientId));
+}));
+
 router.get('/ingredient-cards', asyncHandler(async (req, res) => {
   const { ids } = validateRequest(catalogIngredientCardsQuerySchema, req.query);
   res.json({ items: await catalogDB.getIngredientCards(ids) });
@@ -364,7 +408,10 @@ router.post('/ingredient-merges/:id/recover', asyncHandler(async (req, res) => {
 }));
 
 router.post('/ingredients', asyncHandler(async (req, res) => {
-  const body = validateRequest(catalogIngredientCreateSchema, req.body);
+  const { relations = [], ...body } = validateRequest(catalogIngredientCreateRouteSchema, req.body);
+  // Check every relative first so a bad pick never leaves a half-linked record.
+  const relatives = await Promise.all(relations.map((r) => catalogDB.getIngredient(r.toId)));
+  if (relatives.some((r) => !r || r.deleted)) throw new ServerError('A related record no longer exists', { status: 404, code: 'NOT_FOUND' });
   const input = {
     type: body.type,
     name: body.name,
@@ -372,8 +419,9 @@ router.post('/ingredients', asyncHandler(async (req, res) => {
     tags: body.tags || [],
     ...(await embedIngredient(body)),
   };
-  const { createOwnedPrimitive } = await import('../services/catalogPrimitives.js');
-  const ing = body.universeId ? await createOwnedPrimitive(input, body.universeId, body.operationKey) : await catalogDB.createIngredient(input);
+  const { createOwnedPrimitive, withUserCreatedLock } = await import('../services/catalogPrimitives.js');
+  const ing = body.universeId ? await createOwnedPrimitive(input, body.universeId, body.operationKey) : await catalogDB.createIngredient(withUserCreatedLock(input));
+  for (const relation of relations) await catalogDB.linkIngredientRelation(ing.id, relation.toId, relation.kind);
   res.status(201).json(ing);
   catalogEvents.emit('primitive-changed', { ingredientId: ing.id });
 }));
@@ -532,6 +580,20 @@ router.get('/refs/dangling', asyncHandler(async (req, res) => {
 
 // --- Ingredient↔ingredient relations -----------------------------------
 
+// What a character's family adds to an image render: one labeled addition per
+// relative plus each relative's top canonical image (see catalogFamily.js).
+router.get('/ingredients/:id/family-context', asyncHandler(async (req, res) => {
+  const ing = await catalogDB.getIngredient(req.params.id);
+  if (!ing) throw new ServerError('Ingredient not found', { status: 404 });
+  if (ing.type !== 'character') return res.json({ additions: [], images: [], imagesAddition: null });
+  const { additions, candidates } = await catalogFamilyRenderContext(ing.id, ing.name);
+  // Same resolution the generate route applies to named references, so a pick
+  // here can never fail that render as missing.
+  const images = candidates.filter(({ filename }) => resolveGalleryImage(filename) || resolveImageInputPath(filename))
+    .slice(0, MAX_CAST_GUIDES).map(({ filename, source, relative }) => ({ filename, source, relative }));
+  res.json({ additions, images, imagesAddition: familyImagesAddition(ing.name, images.map((image) => image.relative)) });
+}));
+
 router.get('/ingredients/:id/relations', asyncHandler(async (req, res) => {
   const ing = await catalogDB.getIngredient(req.params.id);
   if (!ing) throw new ServerError('Ingredient not found', { status: 404 });
@@ -678,6 +740,22 @@ router.post('/ingredients/:id/media/portrait', asyncHandler(async (req, res) => 
     ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
   });
   res.status(201).json(media);
+}));
+
+// The mounted page's optimistic attach for a render it just watched complete.
+// It shares attachGeneratedMedia with the completion hook, so whichever lands
+// second sees the first under the ingredient lock and leaves one row (#13833).
+router.post('/ingredients/:id/media/generated', asyncHandler(async (req, res) => {
+  const body = validateRequest(catalogGeneratedImageAttachSchema, req.body);
+  const ing = await catalogDB.getIngredient(req.params.id);
+  if (!ing) throw new ServerError('Ingredient not found', { status: 404 });
+  if (!resolveImageInputPath(body.mediaKey)) {
+    throw new ServerError(`Media key "${body.mediaKey}" not found in the media library`, { status: 422 });
+  }
+  const metadata = await readImageGenerationMetadata(body.mediaKey);
+  const result = await catalogDB.attachGeneratedMedia(req.params.id, body.mediaKey,
+    Object.keys(metadata).length > 0 ? { metadata } : {});
+  res.status(result.attached ? 201 : 200).json(result);
 }));
 
 router.delete('/ingredients/:id/media', asyncHandler(async (req, res) => {
@@ -1062,6 +1140,18 @@ router.get('/import/music-videos', asyncHandler(async (req, res) => {
 router.post('/import/music-videos', asyncHandler(async (req, res) => {
   const { selections } = validateRequest(catalogMusicVideoImportSchema, req.body || {});
   res.json(await commitCatalogCastImport(selections));
+}));
+
+// Universe collection integrity: every image on a record that belongs to a
+// universe (directly or through a story in it) sits in that universe's
+// collection. GET reports what is missing; POST files it. Never removes, and
+// skips images the user took out of the collection.
+router.get('/universe-filing', asyncHandler(async (req, res) => {
+  res.json(await fileCatalogImagesIntoUniverses({ dryRun: true }));
+}));
+
+router.post('/universe-filing', asyncHandler(async (req, res) => {
+  res.json(await fileCatalogImagesIntoUniverses());
 }));
 
 // --- User-defined ingredient types --------------------------------------

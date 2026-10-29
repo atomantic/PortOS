@@ -6,6 +6,8 @@ vi.mock('../../../services/api', () => ({
   getDailyNicotine: vi.fn(),
   getCustomNicotineProducts: vi.fn(),
   getAppleHealthCorrelation: vi.fn(),
+  updateNicotineEntry: vi.fn().mockResolvedValue({}),
+  removeNicotineEntry: vi.fn().mockResolvedValue({}),
 }));
 vi.mock('../NicotineChart', () => ({ default: () => null }));
 vi.mock('../NicotineHealthCorrelation', () => ({ default: () => null }));
@@ -32,4 +34,16 @@ describe('NicotineTab history load', () => {
     await waitFor(() => expect(screen.getByText(/History \(1 days\)/)).toBeTruthy());
     expect(screen.queryByRole('alert')).toBeNull();
   });
+});
+
+
+it('sends the rendered event identity when editing and deleting a history row', async () => {
+  api.getDailyNicotine.mockResolvedValue([{ date: '2024-06-01', nicotine: { items: [{ id: 'event-id', product: 'Example', mgPerUnit: 3, count: 1 }] } }]);
+  render(<NicotineTab />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Edit', exact: true }));
+  fireEvent.click(screen.getByRole('button', { name: 'Save', exact: true }));
+  await waitFor(() => expect(api.updateNicotineEntry).toHaveBeenCalledWith('2024-06-01', 0, expect.objectContaining({ id: 'event-id' })));
+  fireEvent.click(await screen.findByRole('button', { name: 'Delete', exact: true }));
+  fireEvent.click(screen.getByRole('button', { name: 'Remove', exact: true }));
+  await waitFor(() => expect(api.removeNicotineEntry).toHaveBeenCalledWith('2024-06-01', 0, 'event-id'));
 });

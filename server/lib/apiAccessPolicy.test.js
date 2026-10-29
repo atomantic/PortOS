@@ -13,14 +13,14 @@ const walk = (dir) => readdirSync(dir, { withFileTypes: true }).flatMap((entry) 
 });
 
 // Every `/api/…` or `/data/…` literal in a module that dials peers through
-// peerFetch. An interpolation right after `/` is a path segment (`x`); any
+// peerFetch or peerStreamRequest. An interpolation right after `/` is a path segment (`x`); any
 // other interpolation (a query string or a caller-supplied sub-path) ends the
 // literal, and the path is then checked both bare and with a sub-path.
 const peerCallSitePaths = () => {
   const found = [];
   for (const file of [...walk(join(SERVER_ROOT, 'services')), ...walk(join(SERVER_ROOT, 'lib'))]) {
     const source = readFileSync(file, 'utf8');
-    if (!/import[^;]*\bpeerFetch\b[^;]*from/.test(source)) continue;
+    if (!/import[^;]*\b(?:peerFetch|peerStreamRequest)\b[^;]*from/.test(source)) continue;
     const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
     for (const match of code.matchAll(/(?<=['`}])\/(?:api|data)\/[^'`\s?]*/g)) {
       const literal = match[0].replace(/\/\$\{[^}]*\}/g, '/x').split('${')[0];

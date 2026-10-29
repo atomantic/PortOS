@@ -34,6 +34,7 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
   { id: 'music-take-publication', status: 'admitted', modules: ['services/musicTakePublication.js'] },
   { id: 'media-job-completion', status: 'admitted', modules: ['services/mediaJobQueue/index.js'] },
   { id: 'media-job-attach-hooks', status: 'admitted', modules: ['services/mediaJobImageHook.js'] },
+  { id: 'music-video-dcp', status: 'admitted', modules: ['services/musicVideo/dcp.js'] },
   { id: 'music-video-collection-hook', status: 'admitted', modules: ['services/musicVideoCollectionHook.js'] },
   {
     id: 'pipeline-filename-hooks',
@@ -45,11 +46,13 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
     status: 'admitted',
     modules: ['services/universeBuilderCollectionHook.js', 'services/universeCharacterSheet.js'],
   },
-  { id: 'gallery-image-workflows', status: 'admitted', modules: ['services/imageGen/local.js'] },
+  { id: 'gallery-image-workflows', status: 'admitted', modules: ['services/imageGen/local.js', 'services/imageGen/sidecarStore.js'] },
   { id: 'gallery-image-deletion-canon-purge', status: 'admitted', modules: ['services/galleryImageDeletion.js'] },
+  { id: 'restored-gallery-image-stamp', status: 'admitted', modules: ['services/mediaRestoreTombstones.js'] },
   { id: 'video-history-deletion', status: 'admitted', modules: ['services/videoGen/historyOps.js'] },
   { id: 'music-video-render-cleanup', status: 'admitted', modules: ['services/musicVideo/renderCleanup.js'] },
   { id: 'music-video-pool-deletion', status: 'admitted', modules: ['services/musicVideo/mediaPool.js'] },
+  { id: 'music-video-handoff-frame', status: 'admitted', modules: ['services/musicVideo/continueShot.js'] },
   {
     id: 'lora-dataset-workflows',
     status: 'admitted',
@@ -335,7 +338,7 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
     status: 'admitted',
     modules: [
       'services/videoGen/remote.js',
-      'services/videoGen/stitchVideos.js', 'services/videoGen/upscaleVideo.js', 'services/videoGen/upscaleJob.js',
+      'services/videoGen/stitchVideos.js', 'services/videoGen/upscaleVideo.js', 'services/videoGen/upscaleJob.js', 'services/videoGen/topazJob.js',
       'services/videoGen/trimStart.js',
       'services/videoTimeline/local.js', 'services/htmlComposition/index.js',
     ],

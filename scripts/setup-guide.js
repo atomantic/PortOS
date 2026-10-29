@@ -19,12 +19,14 @@ import { buildNetworkSetupGuide } from '../server/lib/networkExposure.js';
 import { getTailscaleStatus } from '../server/lib/tailscale.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
 import { resolveHttpMirrorPortForRoot } from './lib/envFile.js';
+import { PORTS } from '../server/lib/ports.js';
 
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const DATA_DIR = join(ROOT, 'data');
 const { dir: CERT_DIR, meta: META_PATH } = certPaths(DATA_DIR);
-const API_PORT = Number(process.env.PORT) || 5555;
+// These maintenance commands target the PM2-managed server, whose PORT is fixed.
+const API_PORT = PORTS.API;
 const MIRROR_PORT = resolveHttpMirrorPortForRoot(ROOT);
 
 const MARK = {

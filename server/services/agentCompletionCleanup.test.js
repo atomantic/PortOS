@@ -9,6 +9,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -568,6 +569,32 @@ describe('runAgentCompletionCleanup — resume pointer', () => {
   });
 });
 
+describe.each(['runner', 'spawner'])('%s completion after the spawn operation', path => {
+  it('releases the retry hold outside the closed Git lifetime while retaining caller context', async () => {
+    const gitWork = await vi.importActual('../lib/execGit.js');
+    const caller = new AsyncLocalStorage();
+    let completionCallback;
+    let released = false;
+    getAgent.mockResolvedValue(null);
+    releaseRetryHold.mockImplementationOnce(async () => {
+      expect(caller.getStore()).toEqual({ operator: 'agent' });
+      expect((await gitWork.execGit(['--version'], tmpdir())).stdout).toMatch(/^git version /);
+      released = true;
+      return {};
+    });
+    await caller.run({ operator: 'agent' }, async () => {
+      await gitWork.withGitMutationLifetime(async () => { completionCallback = AsyncLocalStorage.snapshot(); });
+      await completionCallback(async () => {
+        const task = { id: 't', metadata: {} };
+        if (path === 'runner') await runAgentCompletionCleanup({ agentId: 'a1', task, agent: {}, effectiveSuccess: false });
+        else await runSpawnerCompletionCleanup({ agentId: 'a1', task, success: false, prOwnership: {} });
+        expect(released).toBe(true);
+        await expect(gitWork.execGit(['--version'], tmpdir())).rejects.toMatchObject({ code: 'GIT_MUTATION_LIFETIME_CLOSED' });
+      });
+    });
+  });
+});
+
 // The dispatch the TUI `finish()` and direct-CLI `close` handlers hand off to
 // from their `finally`. It replaced two hand-mirrored inline copies that had
 // drifted in both directions, so what these pin is the sequence itself, the PR
@@ -588,6 +615,23 @@ describe('runSpawnerCompletionCleanup — the in-process spawners\' dispatch', (
     branchProvenEmpty: false,
     outputBuffer: 'out',
     ...overrides,
+  });
+
+  it('runs checkout cleanup outside the finished spawn Git lifetime while leaving its guard closed', async () => {
+    const gitWork = await vi.importActual('../lib/execGit.js');
+    let completionCallback;
+    await gitWork.withGitMutationLifetime(async () => { completionCallback = AsyncLocalStorage.snapshot(); });
+    let observed;
+    cleanupAgentWorktree.mockImplementationOnce(async () => {
+      observed = (await gitWork.execGit(['--version'], tmpdir())).stdout;
+      return [];
+    });
+
+    await completionCallback(async () => {
+      await runSpawnerCompletionCleanup(spawnerArgs());
+      expect(observed).toMatch(/^git version /);
+      await expect(gitWork.execGit(['--version'], tmpdir())).rejects.toMatchObject({ code: 'GIT_MUTATION_LIFETIME_CLOSED' });
+    });
   });
 
   it('leaves recovery-owned preservation and publication to the agent even with stale delivery flags', async () => {

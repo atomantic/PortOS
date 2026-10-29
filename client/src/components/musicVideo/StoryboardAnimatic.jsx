@@ -11,8 +11,8 @@ import { playthroughVersion } from './CompositionPreviewPlayer.jsx';
 import { useVideoFileSrc } from '../../hooks/useVideoFileSrc.js';
 import { selectedPerformanceInstruction } from '../../lib/musicVideoShotTiming.js';
 import { normalizeTitleCard } from '../../../../server/lib/musicVideoTitleCard.js';
-import { normalizeStatsOutro, statsOutroSeconds } from '../../../../server/lib/musicVideoStatsOutro.js';
-import StatsOutroCanvas from './StatsOutroCanvas.jsx';
+import { endingParts } from '../../../../server/lib/musicVideoEnding.js';
+import EndingCanvas from './EndingCanvas.jsx';
 import ShotStepper from './ShotStepper.jsx';
 import FrameStepper from './FrameStepper.jsx';
 import { capturePreviewFrame, lyricFrameCaptureBridge } from '../../lib/musicVideoFrameCapture.js';
@@ -518,9 +518,10 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
   const stillFps = leadFile.fps || ANIMATIC_FPS;
   const lyricsAvailable = project.lyricOverlayEnabled !== false && hasTimedLyrics(project);
   const { overlay, failed, capture: captureLyrics } = useLyricOverlay({ project, enabled: lyricsAvailable && lyricsOn, audioRef, time });
-  // The cutting room floor outro: it plays when the song ends, and Ending plays it straight away; playing or seeking the song leaves it.
-  const outro = useMusicVideoStatsOutro({ projectId: project.id, seconds: statsOutroSeconds(project.statsOutro), audioRef });
-  const outroLook = useMemo(() => normalizeStatsOutro(project.statsOutro), [project.statsOutro]);
+  // The ending (cutting room floor, then credits): it plays when the song ends, and Ending plays it straight away; playing or seeking the song leaves it.
+  const { statsOutro, creditsOutro } = project;
+  const endingPlan = useMemo(() => endingParts({ statsOutro, creditsOutro }), [statsOutro, creditsOutro]);
+  const outro = useMusicVideoStatsOutro({ projectId: project.id, seconds: endingPlan.reduce((sum, part) => sum + part.durationSec, 0), audioRef });
   const songEndSec = Number(project.audioAnalysis?.durationSec) || 0;
   useEffect(() => {
     if (!seekRequest || applied.current === seekRequest.n || !audioRef.current) return;
@@ -658,7 +659,7 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
         <TransitionGlitch scenes={scenes} figureRef={figureRef} audioRef={audioRef} time={time} layered={layered}
           endSec={Number(project.audioAnalysis?.durationSec) || null} fps={ANIMATIC_FPS} />
         {overlay}
-        {outro.active && <StatsOutroCanvas stats={outro.stats} outro={outroLook} t={outro.t} durationSec={outro.seconds} />}
+        {outro.active && <EndingCanvas parts={endingPlan} stats={outro.stats} t={outro.t} />}
         </FilmLookFrame>
       </figure>
       <div className="flex min-w-0 flex-wrap items-center gap-2">
@@ -685,7 +686,7 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
               outro.start();
             }}
             aria-pressed={outro.active}
-            title={`The cutting room floor scene that plays for ${outro.seconds}s after the song`}
+            title={`The ending that plays for ${outro.seconds}s after the song`}
             className={`flex min-h-[44px] shrink-0 items-center gap-1 rounded border px-2 text-xs sm:min-h-0 sm:py-1 ${outro.active ? 'border-port-accent text-port-accent' : 'border-port-border text-port-text-muted'}`}
           >
             <Scissors size={14} aria-hidden="true" /> Ending

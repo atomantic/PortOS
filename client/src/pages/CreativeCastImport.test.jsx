@@ -80,4 +80,23 @@ describe('CreativeCastImport', () => {
     await waitFor(() => expect(commitMusicVideoCastImport).toHaveBeenCalledTimes(1));
     expect(commitMusicVideoCastImport.mock.calls[0][0][2]).toEqual({ projectId: 'mv-1', subjectId: 'cs-set-diner', action: 'link', ingredientId: 'cat-plc-9' });
   });
+
+  it('marks a similar-name suggestion for checking and imports it with its age form', async () => {
+    previewMusicVideoCastImport.mockResolvedValueOnce({ projects: [{ projectId: 'mv-1', name: 'Example Video', items: [
+      { subjectId: 'mvc-1', kind: 'character', name: 'Ada (17)', imageId: null, action: 'link', ingredientId: 'cat-chr-ada', ingredientName: 'Ada', match: 'base', formId: 'f-young', formLabel: 'Young' },
+      { subjectId: 'mvc-2', kind: 'character', name: 'Bo', imageId: null, action: 'link', ingredientId: 'cat-chr-bo', ingredientName: 'Bo', match: 'name' },
+    ] }] }).mockResolvedValueOnce({ projects: [] });
+    commitMusicVideoCastImport.mockResolvedValue({ projects: 1, created: 0, linked: 2, kept: 0 });
+    renderPage();
+
+    expect(await screen.findByLabelText('What to do with Ada (17)')).toHaveDisplayValue('Use Ada (Young)');
+    expect(screen.getByText(/Similar name, check before importing/)).toBeInTheDocument();
+    expect(screen.getByText(/Same name in the catalog/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Import 2' }));
+
+    await waitFor(() => expect(commitMusicVideoCastImport).toHaveBeenCalledWith([
+      { projectId: 'mv-1', subjectId: 'mvc-1', action: 'link', ingredientId: 'cat-chr-ada', formId: 'f-young' },
+      { projectId: 'mv-1', subjectId: 'mvc-2', action: 'link', ingredientId: 'cat-chr-bo' },
+    ], { silent: true }));
+  });
 });

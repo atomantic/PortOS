@@ -1666,8 +1666,11 @@ export async function getNextTaskType(appId = null, { perpetualOnly = false, con
  */
 export async function triggerOnDemandTask(taskType, appId = null, {
   emit = true, origin = ON_DEMAND_ORIGINS.USER, targetPullRequest = null, burn = null,
-  provider = null, model = null, effort = null, executionOptions, targetModels = null,
+  provider = null, model = null, effort = null, executionOptions, targetModels = null, cleanupSourceAgentId = null,
 } = {}) {
+  if (cleanupSourceAgentId != null && (typeof cleanupSourceAgentId !== 'string' || !/^agent-[a-z0-9-]{1,100}$/i.test(cleanupSourceAgentId))) {
+    return { error: 'Invalid swarm cleanup continuation source' };
+  }
   // A targeted run names ONE open PR/MR instead of letting the task pick from
   // the app's whole open set (the PR/MR row's "Review this PR" button). Coerced
   // and validated here so a bad value can't reach the generator's forge filter.
@@ -1730,6 +1733,21 @@ export async function triggerOnDemandTask(taskType, appId = null, {
     });
     if (improvement) return { result: { error: improvement.reason }, changed: false };
 
+    // The source receipt and request share this write: if the server stops
+    // before the agent record is marked, replay must not enqueue a second run.
+    const pending = schedule.swarmCleanupRefillPending?.[cleanupSourceAgentId];
+    if (cleanupSourceAgentId && pending) {
+      if (schedule.onDemandHandoffs?.[pending.id]) {
+        return { result: { ...pending, alreadyQueued: true }, changed: false };
+      }
+      if (!schedule.onDemandRequests?.some(row => row.id === pending.id)) {
+        schedule.onDemandRequests ||= [];
+        schedule.onDemandRequests.push(pending);
+        return { result: { ...pending, alreadyQueued: true }, changed: true };
+      }
+      return { result: { ...pending, alreadyQueued: true }, changed: false };
+    }
+
     if (!schedule.onDemandRequests) {
       schedule.onDemandRequests = [];
     }
@@ -1740,6 +1758,7 @@ export async function triggerOnDemandTask(taskType, appId = null, {
       appId,
       origin,
       requestedAt: new Date().toISOString(),
+      ...(cleanupSourceAgentId ? { cleanupSourceAgentId } : {}),
       ...(scopedPullRequest ? { targetPullRequest: scopedPullRequest } : {}),
       ...(burnProvenance ? { burn: burnProvenance } : {}),
       ...(providerOverride ? { providerOverride } : {}),
@@ -1747,6 +1766,10 @@ export async function triggerOnDemandTask(taskType, appId = null, {
     };
 
     schedule.onDemandRequests.push(request);
+    if (cleanupSourceAgentId) {
+      schedule.swarmCleanupRefillPending ||= {};
+      schedule.swarmCleanupRefillPending[cleanupSourceAgentId] = request;
+    }
     return { result: request, changed: true };
   });
 
@@ -1788,10 +1811,27 @@ export async function triggerOnDemandTask(taskType, appId = null, {
  * completion handler owns dequeue, and the automated origin must preserve the
  * drain's park, convergence signature, and dispatch counter.
  */
-export async function queuePerpetualRefill(taskType, appId) {
+export async function queuePerpetualRefill(taskType, appId, { cleanupSourceAgentId = null } = {}) {
   return triggerOnDemandTask(taskType, appId, {
     emit: false,
     origin: ON_DEMAND_ORIGINS.REFILL,
+    cleanupSourceAgentId,
+  });
+}
+
+/** Retain the replay fence until both source recording and admission settle. */
+export async function acknowledgeSwarmCleanupRefill(agentId) {
+  return updateSchedule(async schedule => {
+    const pending = schedule.swarmCleanupRefillPending?.[agentId];
+    if (!pending) return { result: false, changed: false };
+    const handoff = schedule.onDemandHandoffs?.[pending.id];
+    if (handoff && handoff.status !== 'preparing') {
+      delete schedule.swarmCleanupRefillPending[agentId];
+      return { result: true, changed: true };
+    }
+    if (pending.sourceMarked) return { result: true, changed: false };
+    schedule.swarmCleanupRefillPending[agentId] = { ...pending, sourceMarked: true };
+    return { result: true, changed: true };
   });
 }
 

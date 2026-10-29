@@ -8,7 +8,7 @@ import UniverseMoodBoardPicker, { useStyleSourceLists, BOARD_FOLLOW_UNIVERSE, BO
 import CatalogMediaTile from './CatalogMediaTile';
 import useMounted from '../../hooks/useMounted';
 import { useModelInputPreview } from '../../hooks/useModelInputPreview';
-import { LOOK_ROLE_PREFIX, lookIdOf } from '../../lib/creativeLibraries';
+import { LOOK_ROLE_PREFIX, lookIdOf, isGoodReference } from '../../lib/creativeLibraries';
 import { uuidv4 } from '../../lib/uuid';
 import { previewCatalogSheet, renderCatalogSheet } from '../../services/apiCatalog';
 
@@ -161,6 +161,8 @@ function LookCard({
   const [busyKey, setBusyKey] = useState(null);
   const toggle = (next) => setMode((cur) => (cur === next ? null : next));
   const role = `${LOOK_ROLE_PREFIX}${wardrobe.id}`;
+  const candidateList = Array.isArray(candidates) ? candidates : [];
+  const goodCandidates = candidateList.filter(isGoodReference);
 
   const setRole = async (m, nextRole, message) => {
     if (busyKey || editLocked || !onSetRole || m.readOnly) return;
@@ -223,13 +225,15 @@ function LookCard({
       {mode === 'attach' && (
         <div className="rounded border border-port-border bg-port-bg/40 p-3">
           <h4 className="text-xs uppercase tracking-wider text-gray-500 mb-2">Use a reference image for this look</h4>
-          {candidates.length > 0 ? (
+          {goodCandidates.length > 0 ? (
             <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-6 gap-2">
-              {candidates.map((m) => (
+              {goodCandidates.map((m) => (
                 <CatalogMediaTile key={`${m.mediaKey}:${m.kind}`} m={m} missing={missingMedia?.has?.(m.mediaKey)}
                   extraActions={roleButton(m, role, `Use for ${wardrobe.name}`, `Added to ${wardrobe.name}`, Pin)} />
               ))}
             </div>
+          ) : candidateList.length > 0 ? (
+            <p className="text-xs text-gray-500">No reference images marked &quot;good&quot; to use. Mark some as good on the References tab.</p>
           ) : (
             <p className="text-xs text-gray-500">No reference images to use. Attach or generate some on the References tab.</p>
           )}

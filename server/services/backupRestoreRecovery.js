@@ -13,6 +13,7 @@ import { databaseRestoreRecovery, ensureSchema, query, withDatabaseMaintenance }
 import { syncFeedTables, syncFeedSequenceName } from '../lib/db/schema/syncFeed.js';
 import { restoreReceiptsDdl } from '../lib/db/schema/core.js';
 import { acquireBackupSnapshotCut } from '../lib/backupSnapshotBoundary.js';
+import { bumpChangeToken, CHANGE_TOKEN_DOMAINS } from './changeToken.js';
 
 // Ties the replay's psql session to its operation, so recovery can prove no
 // session of that replay is still able to commit before reading "no receipt"
@@ -211,6 +212,10 @@ export async function repairCommittedRestore(record) {
     console.error(`❌ DB restore ${record.id}: federation resync failed: ${resync.err.message}`);
     return pendingRecoveryResult('restore_sync_resync', record);
   }
+  // The restore and its migrations write the DB directly, bypassing the
+  // stores' mutation epochs. Invalidate snapshot fingerprints before reopening
+  // admission so peers can see restored and migrated records on the next sync.
+  for (const domain of CHANGE_TOKEN_DOMAINS) bumpChangeToken(domain);
   const releaseError = await Promise.resolve().then(() => databaseRestoreRecovery.release(record.id)).then(() => null, (err) => err);
   if (releaseError) {
     console.error(`❌ DB restore ${record.id}: recovery journal could not be cleared: ${releaseError.message}`);

@@ -1,6 +1,13 @@
 import { MAX_IMAGE_EDGE as SERVER_MAX_IMAGE_EDGE, MAX_IMAGE_PIXELS as SERVER_MAX_IMAGE_PIXELS } from '../../../server/lib/imageLimits.js';
 import { describe, it, expect } from 'vitest';
-import { clampImageDimensions, clampImageEdge, MAX_IMAGE_EDGE, MAX_IMAGE_PIXELS } from './imageGenResolutions';
+import {
+  clampImageDimensions,
+  clampImageEdge,
+  MAX_IMAGE_EDGE,
+  MAX_IMAGE_PIXELS,
+  RESOLUTIONS,
+  resolveResolutionLabel,
+} from './imageGenResolutions';
 
 describe('clampImageEdge', () => {
   it('uses the caps enforced by server validation', () => {
@@ -87,6 +94,25 @@ describe('clampImageDimensions', () => {
     expect(clampImageDimensions(0, 100)).toBeNull();
     expect(clampImageDimensions(NaN, 100)).toBeNull();
     expect(clampImageDimensions(undefined, undefined)).toBeNull();
+  });
+});
+
+describe('4:3 image presets', () => {
+  it('includes large (1024×768) and small (512×384) universal 4:3 presets', () => {
+    const large = RESOLUTIONS.find((r) => r.label === '1024×768 (4:3)');
+    const small = RESOLUTIONS.find((r) => r.label === '512×384 (4:3)');
+
+    expect(large).toEqual({ label: '1024×768 (4:3)', w: 1024, h: 768 });
+    expect(small).toEqual({ label: '512×384 (4:3)', w: 512, h: 384 });
+
+    // Universal presets have no compatible restrictions
+    expect(large.compatible).toBeUndefined();
+    expect(small.compatible).toBeUndefined();
+  });
+
+  it('resolves preset labels for 4:3 dimensions', () => {
+    expect(resolveResolutionLabel(RESOLUTIONS, 1024, 768).label).toBe('1024×768 (4:3)');
+    expect(resolveResolutionLabel(RESOLUTIONS, 512, 384).label).toBe('512×384 (4:3)');
   });
 });
 // @vitest-environment node

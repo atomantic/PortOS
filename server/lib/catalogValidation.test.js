@@ -42,8 +42,8 @@ describe('catalogValidation — ingredient types & ref kinds', () => {
     expect(Object.isFrozen(INGREDIENT_TYPES)).toBe(true);
   });
 
-  it('exposes the documented ref kinds (universe/series/issue/work/creative-director/music-video)', () => {
-    expect(REF_KINDS).toEqual(['universe', 'series', 'issue', 'work', 'creative-director', 'music-video']);
+  it('exposes the documented ref kinds (universe/series/issue/work/creative-director/music-video/storyboard)', () => {
+    expect(REF_KINDS).toEqual(['universe', 'series', 'issue', 'work', 'creative-director', 'music-video', 'storyboard']);
     expect(Object.isFrozen(REF_KINDS)).toBe(true);
   });
 });
@@ -722,5 +722,14 @@ describe('catalog card query boundary', () => {
     const id = 'example-'.padEnd(80, 'x');
     expect(catalogIngredientCardsQuerySchema.parse({ ids: id }).ids).toEqual([id]);
     expect(catalogIngredientCardsQuerySchema.safeParse({ ids: Array.from({ length: 51 }, (_, i) => `example-${i}`) }).success).toBe(false);
+  });
+});
+
+describe('catalogMediaLibraryPatchSchema review', () => {
+  it('accepts good/bad/unreviewed and refuses "rejected", which only music video takes use', async () => {
+    const { catalogMediaLibraryPatchSchema } = await import('./catalogValidation.js');
+    const patch = (status) => catalogMediaLibraryPatchSchema.safeParse({ mediaKey: 'a.png', kind: 'reference', review: { status } }).success;
+    expect(['unreviewed', 'good', 'bad'].map(patch)).toEqual([true, true, true]);
+    expect(patch('rejected')).toBe(false);
   });
 });

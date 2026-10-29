@@ -44,6 +44,7 @@ export default function useMusicVideoTreatment({ project, onProjectPatch, replac
   const [preview, setPreview] = useState(null);
   const [previewing, setPreviewing] = useState(false);
   const [applying, setApplying] = useState(false);
+  const [pendingWrites, setPendingWrites] = useState(0);
 
   const projectRef = useRef(projectId);
   projectRef.current = projectId;
@@ -77,9 +78,10 @@ export default function useMusicVideoTreatment({ project, onProjectPatch, replac
   // Serialize treatment writes; each reads the latest known revision when it runs.
   const enqueue = (work, fallback) => {
     const id = projectId;
+    setPendingWrites((count) => count + 1);
     const run = chainRef.current.then(() => work(id, revisionsRef.current.get(id) ?? 0));
     chainRef.current = run.catch((err) => handleConflict(id, err, fallback));
-    return run.catch(() => null);
+    return chainRef.current.then(() => run.catch(() => null)).finally(() => setPendingWrites((count) => count - 1));
   };
 
   const save = (patch) => enqueue(
@@ -161,7 +163,7 @@ export default function useMusicVideoTreatment({ project, onProjectPatch, replac
   );
 
   return {
-    compiling, preview, previewing, applying,
+    compiling, preview, previewing, applying, pendingWrites,
     save, compile, loadPreview, apply, reviewProof,
     clearPreview: () => setPreview(null),
   };

@@ -487,9 +487,11 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/cos/tasks/:id/spawn',
   'POST /api/cos/agents/:id/resume',
   'POST /api/cos/agents/:id/relaunch',
+  'POST /api/cos/agents/:id/recheck-cleanup',
   'POST /api/cos/agents/:id/btw',
   'POST /api/cos/agents/:id/security-scan',
   'POST /api/cos/agents/:id/release-publication',
+  'POST /api/cos/agents/:id/release-candidate',
   'POST /api/cos/jobs',
   'PUT /api/cos/jobs/:id',
   // Toggle arms an existing job, shell jobs included, for its next run.
@@ -503,6 +505,9 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'PUT /api/cos/schedule/task/:taskType',
   'POST /api/cos/schedule/trigger',
   'POST /api/cos/schedule/branch-reconcile/refresh',
+  'POST /api/cos/schedule/release-synchronization/legacy/review',
+  'POST /api/cos/schedule/release-synchronization/legacy/accept',
+  'POST /api/cos/schedule/release-synchronization/operator-reset',
   // Archives and removes a checkout and its merged branch under a scoped release.
   'POST /api/cos/schedule/branch-reconcile/checkouts/retire',
   'POST /api/cos/schedule/branch-reconcile/checkouts/review',
@@ -742,6 +747,11 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/video-gen/last-frame/:id',
   // Upscale (LTX subprocess / ffmpeg) and stitch (ffmpeg) run on the host (#11076).
   'POST /api/video-gen/upscale/:id',
+  'POST /api/video-gen/upscale/:id/topaz/quote',
+  'POST /api/video-gen/upscale/:id/topaz',
+  'GET /api/video-gen/upscale/topaz/jobs/:jobId/status',
+  'POST /api/video-gen/upscale/topaz/jobs/:jobId/cancel',
+  'POST /api/video-gen/upscale/topaz/jobs/:jobId/recover',
   'POST /api/video-gen/stitch',
   // Start trim probes/transcodes a new gallery clip with ffprobe/ffmpeg (#11418).
   'POST /api/video-gen/history/:id/trim-start',
@@ -755,6 +765,12 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/music-video/:id/shot-renders/preview',
   'POST /api/music-video/:id/excerpt',
   'POST /api/music-video/:id/publish-kit/build',
+  'POST /api/music-video/:id/dcp/readiness',
+  'POST /api/music-video/:id/dcp/build',
+  'POST /api/music-video/dcp/:jobId/cancel',
+  'GET /api/music-video/dcp/:jobId/events',
+  'GET /api/music-video/:id/dcp/:artifactId/report',
+  'GET /api/music-video/:id/dcp/:artifactId/location',
   'POST /api/sprites/:id/reference/generate',
   // Fork creates a record and immediately queues reference generation too.
   'POST /api/sprites/:id/fork',
@@ -1077,6 +1093,9 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   // Greybox draft hands the place and the user's instruction to a caller-chosen
   // provider (possibly a tool-capable harness). Save and capture are data-only.
   'POST /api/catalog/ingredients/:id/greybox/draft',
+  // New from prompt hands the user's prompt and the story's context to a
+  // caller-chosen provider (possibly a tool-capable harness). Joining is data-only.
+  'POST /api/catalog/stories/draft',
   'POST /api/catalog/ingredients/:id/refine',
   'POST /api/catalog/ingredients/:id/media/refine',
 
@@ -1232,6 +1251,8 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/music-video/:id/scenes/:sceneId/continue-from-previous',
   'POST /api/music-video/:id/scenes/:sceneId/performance-repair',
   'POST /api/music-video/:id/sharing-copy',
+  // Festival preview probes the selected master with ffprobe. Packet CRUD only stores text.
+  'POST /api/music-video/:id/festival-packet/preview',
   'POST /api/music-video/:id/vocal-stem',
   // Song prepare and choosing a revised song also run Demucs separation and
   // lyric alignment in Python.

@@ -23,6 +23,8 @@ import { CATALOG_TYPES as SERVER_CATALOG_TYPES } from '../../../server/lib/catal
 
 export {
   catalogReferenceRole,
+  FAMILY_RELATION_KINDS,
+  isFamilyRelationKind,
   MEDIA_KINDS,
   RELATION_KINDS,
   USER_TYPE_FIELD_KINDS,

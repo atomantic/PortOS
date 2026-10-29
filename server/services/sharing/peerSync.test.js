@@ -4061,6 +4061,20 @@ describe('peerSync', () => {
       }
     });
 
+    it("does not re-pull a held origin-less image's sidecar because the sender's copy names its origin", async () => {
+      const { createHash } = await import('crypto');
+      const { sidecarGenParamsHash } = await import('../../lib/assetHash.js');
+      await writeFile(join(PATHS.images, 'legacy.png'), 'legacy bytes');
+      await writeFile(join(PATHS.images, 'legacy.metadata.json'), '{"prompt":"a fox"}');
+      vi.mocked(mergeUniversesFromSync).mockResolvedValue({ applied: true, count: 1 });
+      const entry = {
+        filename: 'legacy.png', kind: 'image', sha256: createHash('sha256').update('legacy bytes').digest('hex'),
+        sidecarSha256: sidecarGenParamsHash({ prompt: 'a fox', originInstanceId: 'peer-a' }),
+      };
+      const result = await applyIncomingPush({ kind: 'universe', record: { id: 'u1', imageRefs: ['legacy.png'] }, assetManifest: [entry], sourceInstanceId: 'peer-a' });
+      expect(result.missingAssets).toEqual([]);
+    });
+
     it('reports missing assets in the response', async () => {
       const result = await applyIncomingPush({
         kind: 'universe',
@@ -4893,7 +4907,7 @@ describe('peerSync', () => {
         expect(call).toBeDefined();
         const body = JSON.parse(call[1].body);
         expect(body.portosMeta).toBeDefined();
-        expect(body.portosMeta.schemaVersions.universes).toBe(16);
+        expect(body.portosMeta.schemaVersions.universes).toBe(18);
         expect(typeof body.portosMeta.portosVersion).toBe('string');
       });
 

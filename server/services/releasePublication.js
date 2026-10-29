@@ -1,3 +1,4 @@
+import { readReleaseCandidate } from './releaseCandidateEvidence.js';
 import { createHash } from 'node:crypto';
 import { execGit } from '../lib/execGit.js';
 import { getOriginInfo } from '../lib/gitRemote.js';
@@ -13,40 +14,15 @@ const refuse = (message) => { throw new ServerError(message, { status: 409, code
 const requireSha = (value) => SHA.test(value || '') ? value : refuse('Release evidence has an invalid commit or tree');
 const validTime = value => typeof value === 'string' && Number.isFinite(Date.parse(value));
 
-// Read only immutable object names. No fetch, checkout, tag mutation or commands
-// taken from release/PR prose occur in the verification path.
-async function readCandidate(head, cwd) {
-  const git = async args => (await execGit(args, cwd)).stdout.trim();
-  const pins = (await git(['log', '-1', '--format=%H', '--grep=^Release-Cut: ', head])).split('\n').filter(Boolean);
-  if (pins.length !== 1) refuse('Expected exactly one recorded candidate cutoff');
-  const pin = requireSha(pins[0]);
-  const message = await git(['show', '-s', '--format=%B', pin]);
-  const trailer = key => {
-    const values = [...message.matchAll(new RegExp(`^${key}: (.+)$`, 'gm'))];
-    if (values.length !== 1) refuse(`Candidate is missing a unique ${key} trailer`);
-    return values[0][1];
-  };
-  const cutoff = requireSha(trailer('Release-Cut'));
-  const releaseBase = requireSha(trailer('Release-Base'));
-  const previousCommit = requireSha(trailer('Release-Previous-Commit'));
-  const previousTag = trailer('Release-Previous-Tag');
-  const parents = await git(['show', '-s', '--format=%P', pin]);
-  if (parents !== cutoff) refuse('Candidate pin parent differs from its cutoff');
-  const tree = async sha => requireSha(await git(['rev-parse', `${sha}^{tree}`]));
-  if (await tree(pin) !== await tree(cutoff)) refuse('Candidate pin must be metadata only');
-  for (const ancestor of [pin, releaseBase, previousCommit]) {
-    const result = await execGit(['merge-base', '--is-ancestor', ancestor, head], cwd, { ignoreExitCode: true });
-    if (result.exitCode !== 0) refuse('Candidate does not retain its recorded release ancestry');
-  }
-  const manifest = JSON.parse(await git(['show', `${head}:package.json`]));
-  return { cutoff, pin, releaseBase, previousCommit, previousTag, version: manifest.version, tree: await tree(head) };
-}
 
 export async function verifyAgentReleasePublication(agentId, body) {
   const input = validateRequest(releasePublicationRequestSchema, body);
   const agent = await getAgentRecord(agentId);
   if (!agent || agent.status !== 'running' || agent.metadata?.taskAnalysisType !== 'do-release') {
     refuse('Publication evidence requires an active release coordinator');
+  }
+  if (agent.metadata.resumedFromAgentId && agent.metadata.releaseCandidateRecovery?.status !== 'transferred') {
+    refuse('Interrupted candidate recovery must be verified before publication');
   }
   const owner = { id: agent.id, taskId: agent.taskId, startedAt: agent.startedAt, metadata: { ...agent.metadata } };
   const cwd = agent.metadata.sourceWorkspace || agent.metadata.workspacePath;
@@ -61,9 +37,17 @@ export async function verifyAgentReleasePublication(agentId, body) {
     || pr.base?.ref !== 'release' || pr.base?.repo?.full_name !== repository
     || pr.head?.repo?.full_name !== repository) refuse('Promotion must be a merged same-repository release PR');
   const candidateHead = requireSha(pr.head.sha);
+  if (typeof pr.head.ref !== 'string' || !pr.head.ref) refuse('Promotion candidate branch is unavailable');
   const promotionMerge = requireSha(pr.merge_commit_sha);
-  const candidate = await readCandidate(candidateHead, cwd);
+  const candidate = await readReleaseCandidate(candidateHead, cwd).catch(error => refuse(error.message));
   if (candidate.version !== input.version) refuse('Candidate version differs from the requested publication');
+  const transfer = agent.metadata.releaseCandidateRecovery?.transfer;
+  if (transfer && (transfer.branch !== pr.head.ref || transfer.candidate.cutoff !== candidate.cutoff
+    || transfer.candidate.pin !== candidate.pin || transfer.candidate.releaseBase !== candidate.releaseBase
+    || transfer.candidate.version !== candidate.version
+    || (transfer.publication && transfer.publication.number !== input.promotionPrNumber))) {
+    refuse('Publication differs from the recovered candidate');
+  }
   const tag = `v${input.version}`;
   const [release, run, promotion, ref] = await Promise.all([
     api(`releases/tags/${tag}`), api(`actions/runs/${input.workflowRunId}`),
@@ -93,7 +77,9 @@ export async function verifyAgentReleasePublication(agentId, body) {
   if (tagTree !== tree) refuse('Release tag tree differs from the published candidate');
   const identity = createHash('sha256').update(JSON.stringify([origin.host, repository, tag, tagCommit, tree])).digest('hex');
   const receipt = {
+    ...(transfer && { recoveredPublisher: transfer.origin }),
     status: 'verified', synchronizationHandoffVersion: 1, identity, repository, version: input.version, candidateHead,
+    candidateBranch: pr.head.ref,
     cutoff: candidate.cutoff, pin: candidate.pin, releaseBase: candidate.releaseBase,
     previousCommit: candidate.previousCommit, previousTag: candidate.previousTag,
     promotionPrNumber: input.promotionPrNumber, promotionMerge, tag, tagCommit, tagTree,

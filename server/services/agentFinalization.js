@@ -30,6 +30,7 @@ import { isPrivateSecurityTask } from '../lib/privateSecurityPolicy.js';
 import { join } from 'path';
 import { normalizeTaskOutcome, resolveTaskOutcome } from '../lib/agentOutcome.js';
 import { execGit } from '../lib/execGit.js';
+import { outsideGitMutationLifetime } from '../lib/gitMutationLifetime.js';
 import { PATHS, safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
 import { cosEvents, emitLog } from './cosEvents.js';
 // The DEFINING module, not a barrel (#3450) — see the note in
@@ -1566,7 +1567,7 @@ async function sidelineFailedAgentProvider({ providerId, verdict, terminatedByUs
   }
 }
 
-async function recordScheduledAgentOutcome({ agentId, task, verdict, terminatedByUser, hookResult }) {
+async function recordScheduledAgentOutcome({ agentId, task, verdict, terminatedByUser, hookResult, completedAt = null }) {
   // Type-level consecutive-failure ledger (#2616): feed the per-type
   // backoff/auto-park in taskSchedule. Only SCHEDULED task types carry
   // `metadata.analysisType`; user/ad-hoc tasks don't participate — so this gate
@@ -1590,7 +1591,8 @@ async function recordScheduledAgentOutcome({ agentId, task, verdict, terminatedB
       const { recordTaskTypeFailure, recordTaskTypeSuccess } = await import('./taskSchedule.js');
       const ledgerUpdate = signal.record === 'failure'
         ? recordTaskTypeFailure(scheduledType, ledgerAppId, { errorCategory: signal.category })
-        : recordTaskTypeSuccess(scheduledType, ledgerAppId);
+        : completedAt !== null ? recordTaskTypeSuccess(scheduledType, ledgerAppId, { notAfter: completedAt })
+          : recordTaskTypeSuccess(scheduledType, ledgerAppId);
       await ledgerUpdate.catch(err => {
         emitLog('warn', `⚠️ Task-type ledger update failed for ${scheduledType}: ${err.message}`, { taskType: scheduledType, agentId });
       });
@@ -1744,7 +1746,11 @@ function completionRecord({ task, verdict, hookResult, fidelity, executionInterr
  * tracking should fire EARLIER via `releaseAgentLane()` — this helper
  * owns the centralized state writes only.
  */
-export async function finalizeAgent({
+export async function finalizeAgent(input) {
+  return outsideGitMutationLifetime(() => finalizeAgentInCompletionContext(input));
+}
+
+async function finalizeAgentInCompletionContext({
   agentId,
   task,
   runId,
@@ -2073,7 +2079,7 @@ export async function finalizeAgent({
   // Persist the prerequisite BEFORE retiring execution. A crash between the
   // agent and task writes must never expose this dispatch to generic retry.
   const prerequisiteTaskResult = ['runtime-verification', 'internal-dependency', 'internal-dependency-unverified'].includes(taskUpdate.metadata?.blockedCategory)
-    ? await updateTask(task.id, taskUpdate, taskType, ...runtimeRecoveryFence(taskUpdate)) : null;
+    ? await updateTask(task.id, taskUpdate, taskType, ...completionBudgetFence(taskUpdate, agentId, cleanupOwner)) : null;
   if (prerequisiteTaskResult?.error || prerequisiteTaskResult?.statusChanged) throw new Error('Delivery prerequisite task ownership changed before completion');
   const completedAgent = await completeAgent(agentId, { ...completionRecord({
     task, verdict: deliveryVerdict, hookResult, fidelity, executionInterruption, exitCode, duration, outputBuffer, validationPassed,
@@ -2113,7 +2119,7 @@ export async function finalizeAgent({
   }
   const taskResult = prerequisiteTaskResult || (capturePending
     ? await recoverCompletionTaskHandoff(await getAgentRecord(agentId)) || { error: 'Completion cleanup task ownership changed' }
-    : await updateTask(task.id, taskUpdate, taskType, ...runtimeRecoveryFence(taskUpdate)));
+    : await updateTask(task.id, taskUpdate, taskType, ...completionBudgetFence(taskUpdate, agentId, cleanupOwner)));
   if (taskResult?.error && !isExpectedUnpersistedMiss(task, taskResult.error)) {
     const label = terminatedByUser ? 'blocked' : verdict.success ? 'completed' : 'failed';
     emitLog('warn', `⚠️ Failed to update ${label} task ${task.id}: ${taskResult.error} (taskType=${taskType})`, { taskId: task.id, agentId, error: taskResult.error });
@@ -2121,7 +2127,11 @@ export async function finalizeAgent({
 
   await sidelineFailedAgentProvider({ providerId, verdict, terminatedByUser });
 
-  await recordScheduledAgentOutcome({ agentId, task, verdict: deliveryVerdict, terminatedByUser, hookResult });
+  // Pending physical cleanup is a separate obligation. Record the validated
+  // execution verdict now, with a timestamp fence against a newer failure.
+  const cleanupExecution = capturePending && executionSuccess && validationPassed !== false;
+  await recordScheduledAgentOutcome({ agentId, task, verdict: cleanupExecution ? verdict : deliveryVerdict,
+    terminatedByUser, hookResult, completedAt: cleanupExecution ? completedAgent.completedAt || '' : null });
 
   await processAgentCompletion(agentId, task, deliverySuccess, outputBuffer);
 
@@ -2496,4 +2506,12 @@ function runtimeRecoveryFence(update) {
     ...(p.dispatchStatus === 'blocked' ? { runtimeVerificationId: update.metadata.runtimeVerificationId } : {}),
     ...Object.fromEntries(['claimedBy', 'claimedAt', 'lastSpawnedAt', 'totalSpawnCount'].map(key => [key, p.dispatch?.[key]])),
   } }];
+}
+
+function completionBudgetFence(update, agentId, agent) {
+  const epoch = agent?.metadata?.completionTaskDispatch?.spawnBudgetEpoch;
+  const fence = runtimeRecoveryFence(update);
+  if (!epoch) return fence;
+  return [{ ...fence[0], expectedStatus: fence[0]?.expectedStatus || 'in_progress',
+    spawnBudgetOperation: { kind: 'completion', agentId, epoch } }];
 }

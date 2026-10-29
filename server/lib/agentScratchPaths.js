@@ -17,6 +17,12 @@
  * names. Kept in `lib/` (not beside the writer in `services/modelAbuseGuard.js`)
  * so the classifier can ask without importing that module's provider graph.
  *
+ * Pregate also writes its local validation receipt at one reserved file path.
+ * Every pushed claim therefore carries this runtime state; treating it as
+ * unique ignored work would block retirement after a successful delivery.
+ * Match only that file, never the containing cache directory or descendants.
+ * Its producer is scripts/lib/pregateReport.js (PREGATE_REPORT_PATH).
+ *
  * Only the STATIC names live here. The completion sentinel is the same concept
  * but its name embeds a run id (`agentSentinel.js`'s `doneSentinelName(agentId)`),
  * and ignoring another run's sentinel would be wrong — so `removeWorktree` passes
@@ -62,8 +68,9 @@ export function matchesScratchRoot(path, roots = []) {
 
 /**
  * Is this worktree-relative path PortOS's own runtime scratch rather than work
- * product? Pure — `matchesScratchRoot` against the static list.
+ * product? The pregate receipt is an exact file; review scratch uses roots.
  * @param {string} path
  * @returns {boolean}
  */
-export const isAgentScratchPath = (path) => matchesScratchRoot(path, AGENT_SCRATCH_PATHS);
+export const isAgentScratchPath = (path) => path === '.cache/pregate/report.json'
+  || matchesScratchRoot(path, AGENT_SCRATCH_PATHS);

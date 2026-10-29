@@ -307,7 +307,13 @@ See the [synthetic visual validation and remaining acceptance](validation/9302-m
 
 A finishing filter for the analog, imperfect feel image and video models rarely
 give on their own: soft focus, halation, color bleed, grain, fade, a color cast,
-split toning, vignette, light leaks, gate weave and flicker. One definition in
+split toning, vignette, light leaks, gate weave and flicker, plus the film
+emulation tools a grading plug-in like Dehancer centers on: a per-channel print
+response (**Film color response**, dye crossover toward cyan-green shadows and
+amber highlights), **Halation spread**, a sharp-center **Lens fall-off**, and
+for tape a sideways **Tape softness** and a **Tracking** strip with dropouts.
+These are version-2 controls (`since: 2`); a version-1 look draws byte-for-byte
+as before, and in version 2 a light leak fogs in from the frame edge. One definition in
 `server/lib/filmLook.js` (`FILM_LOOK_CONTROLS`, `FILM_LOOK_PRESETS`,
 `filmLookFilterMarkup`) serves three surfaces, so what is tuned on a still is
 what the preview shows and what the render bakes:

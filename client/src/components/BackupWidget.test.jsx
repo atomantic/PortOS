@@ -577,6 +577,22 @@ describe('BackupWidget manual backup', () => {
     expect(mockToast.error).not.toHaveBeenCalled();
   });
 
+  it('shows conversion guidance after a successful dump leaves legacy metadata in the snapshot', async () => {
+    const message = 'Historical file metadata for universes cannot restore database-primary records. Convert this backup in a disposable offline upgrade install.';
+    mockTriggerBackup.mockResolvedValue({
+      status: 'degraded', filesChanged: 3, lastRun: new Date().toISOString(),
+      pgBackup: { status: 'ok' }, error: message,
+      restoreWarning: { code: 'BACKUP_LEGACY_DB_METADATA', domains: ['universes'], message },
+    });
+    renderWidget();
+    fireEvent.click(await screen.findByRole('button', { name: 'Backup Now' }));
+
+    expect(await screen.findByText(message)).toBeInTheDocument();
+    expect(screen.getByText('Warning')).toBeInTheDocument();
+    expect(mockToast).toHaveBeenCalledWith(expect.stringContaining(message), { icon: '⚠️' });
+    expect(mockToast.success).not.toHaveBeenCalled();
+  });
+
   it('disables the pending action and clears it with one error on rejection', async () => {
     let rejectRun;
     mockTriggerBackup.mockReturnValue(new Promise((_, reject) => { rejectRun = reject; }));

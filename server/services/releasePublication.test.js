@@ -98,7 +98,7 @@ beforeEach(async () => {
   fixture.disk = structuredClone(fixture.state);
   fixture.replies = {
     'pulls/12': { number: 12, merged: true, merged_at: '2026-01-01T01:00:00Z', merge_commit_sha: merge,
-      head: { sha: head, repo: { full_name: 'example/repo' } }, base: { ref: 'release', repo: { full_name: 'example/repo' } } },
+      head: { sha: head, ref: 'release/example-candidate', repo: { full_name: 'example/repo' } }, base: { ref: 'release', repo: { full_name: 'example/repo' } } },
     'releases/tags/v1.2.3': { tag_name: 'v1.2.3', draft: false, prerelease: false,
       html_url: 'https://github.com/example/repo/releases/tag/v1.2.3', published_at: '2026-01-01T01:01:00Z' },
     'actions/runs/34': { id: 34, repository: { full_name: 'example/repo' }, head_sha: merge, head_branch: 'release', event: 'push',
@@ -268,4 +268,42 @@ test('does not accept publication prose or caller-supplied receipts through regi
   expect(fixture.disk.agents.synthetic.metadata.releasePublication).toBeNull();
   await expect(verifyAgentReleasePublication('synthetic', input)).rejects.toThrow('active release');
   await expect(verifyAgentReleasePublication('publisher', { ...input, releaseUrl: 'https://example.com' })).rejects.toThrow();
+});
+
+test('does not accept caller-supplied release checkout ownership through generic agent metadata', async () => {
+  const forged = { releaseCandidate: { version: 1, branch: 'codex/release-agent-forged' }, checkoutSeeds: [{ forged: true }],
+    completedCheckouts: [{ forged: true }], checkoutCapture: { status: 'captured' },
+    releaseCandidateRecovery: { status: 'transferred' }, releaseCandidateSuccessor: { forged: true },
+    releaseCandidateLifecycle: { version: 1, stage: 'captured' } };
+  await registerAgent('agent-forged', 'other-task', { taskAnalysisType: 'do-release', isWorktree: false, ...forged });
+  const lifecycle = fixture.disk.agents['agent-forged'].metadata.releaseCandidateLifecycle;
+  expect(lifecycle).toEqual({ version: 1, agentId: 'agent-forged', taskId: 'other-task',
+    startedAt: fixture.disk.agents['agent-forged'].startedAt, stage: 'registered' });
+  for (const key of Object.keys(forged).filter(key => key !== 'releaseCandidateLifecycle')) expect(fixture.disk.agents['agent-forged'].metadata[key]).toBeUndefined();
+  await updateAgent('agent-forged', { metadata: forged });
+  expect(fixture.disk.agents['agent-forged'].metadata.releaseCandidateLifecycle).toEqual(lifecycle);
+  for (const key of Object.keys(forged).filter(key => key !== 'releaseCandidateLifecycle')) expect(fixture.disk.agents['agent-forged'].metadata[key]).toBeUndefined();
+  await updateAgent('agent-forged', { metadata: { taskAnalysisType: 'other' } });
+  await updateAgent('agent-forged', { metadata: { releaseCandidateLifecycle: null } });
+  expect(fixture.disk.agents['agent-forged'].metadata.releaseCandidateLifecycle).toEqual(lifecycle);
+});
+
+test('requires recovery before a resumed publisher can record publication, and rejects a concurrent recovery change', async () => {
+  fixture.state.agents.publisher.metadata.resumedFromAgentId = 'agent-predecessor';
+  await expect(verifyAgentReleasePublication('publisher', input)).rejects.toThrow('recovery must be verified');
+  delete fixture.state.agents.publisher.metadata.resumedFromAgentId;
+  fixture.readHook = () => { fixture.state.agents.publisher.metadata.releaseCandidateRecovery = { version: 1, status: 'held' }; };
+  await expect(verifyAgentReleasePublication('publisher', input)).rejects.toThrow('ownership changed');
+  expect(fixture.disk.agents.publisher.metadata.releasePublication).toBeUndefined();
+});
+
+test('binds recovered publication to the original cutoff, promotion and publisher identity', async () => {
+  const original = { agentId: 'agent-predecessor', taskId: 'release-task', startedAt: '2026-01-01T00:00:00Z' };
+  fixture.state.agents.publisher.metadata.releaseCandidateRecovery = { status: 'transferred', transfer: {
+    branch: 'release/example-candidate', origin: original, publication: { number: 12 },
+    candidate: { cutoff: 'f'.repeat(40), pin, releaseBase: root, version: '1.2.3' },
+  } };
+  await expect(verifyAgentReleasePublication('publisher', input)).rejects.toThrow('differs from the recovered');
+  fixture.state.agents.publisher.metadata.releaseCandidateRecovery.transfer.candidate.cutoff = cutoff;
+  expect(await verifyAgentReleasePublication('publisher', input)).toMatchObject({ recoveredPublisher: original, cutoff, pin, candidateHead: head });
 });

@@ -92,24 +92,93 @@ at its recorded validated SHA and close the superseded PR with a link. If no suc
 SHA was recorded, explicitly record a new cutoff and validate it from scratch;
 never treat old checks as proof of the new tree.
 
+An operator may instead explicitly abandon a stale attempt and start a new run
+from current `main`. Confirm no release is running and check existing release PRs,
+tags and publications first; the new run must use a new candidate and fresh checks.
+
 For a **new** candidate, the first fetch of `main` is the cutoff. If the launcher
 supplied a verified exact kickoff SHA, use that instead. A timestamp cannot recover
 an earlier trigger-time commit. Capture before any potentially lengthy work. Use a
 unique candidate name and an unused worktree path; never reset an existing branch:
 
+A scheduled PortOS release coordinator must first reserve its candidate with the
+server and capture its physical checkout immediately after creation. The server
+chooses the branch for that active run, checks it was unused, and records the
+checkout generation from Git; a supplied path or a branch name by itself does
+not establish ownership. Set `RELEASE_AGENT_ID` to the registered coordinator's
+ID in the following example. A release outside PortOS has no agent registration
+and can leave it unset. A missing/refused registration must not be replaced by a
+guessed seed or by adopting an existing checkout. Preserve the candidate and use
+the normal recovery workflow if a run was interrupted before its seed was saved.
+The reservation action never transfers an existing checkout. A documented
+successor uses the separate recovery action below; a resumed coordinator cannot
+reserve a second candidate.
+
 ```bash
 set -e
 # PRIMARY is the existing primary checkout; WORKTREE is a new isolated path.
 # Keep these values in the run's record, not only in transient shell variables.
-CANDIDATE_BRANCH="codex/release-$(node -e 'console.log(crypto.randomUUID())')"
+if [ -n "${RELEASE_AGENT_ID:-}" ]; then
+  CANDIDATE_BRANCH=$(curl -fsS -H "Authorization: Bearer ${PORTOS_API_TOKEN:-}" -H 'Content-Type: application/json' \
+    -d '{"action":"reserve"}' "http://127.0.0.1:5553/api/cos/agents/$RELEASE_AGENT_ID/release-candidate" | jq -er 'select(.reserved == true) | .branch')
+else
+  CANDIDATE_BRANCH="codex/release-$(node -e 'console.log(crypto.randomUUID())')"
+fi
 git fetch origin "refs/heads/main:refs/heads/$CANDIDATE_BRANCH"
 RELEASE_CUT_SHA=$(git rev-parse "$CANDIDATE_BRANCH^{commit}")
 git fetch origin refs/heads/release
 RELEASE_BASE_SHA=$(git rev-parse 'FETCH_HEAD^{commit}')
 git worktree add "$WORKTREE" "$CANDIDATE_BRANCH"
+if [ -n "${RELEASE_AGENT_ID:-}" ]; then
+  curl -fsS -H "Authorization: Bearer ${PORTOS_API_TOKEN:-}" -H 'Content-Type: application/json' \
+    -d '{"action":"capture"}' "http://127.0.0.1:5553/api/cos/agents/$RELEASE_AGENT_ID/release-candidate" | jq -e '.captured == true' >/dev/null
+fi
 git worktree lock --reason "Active release candidate $CANDIDATE_BRANCH" "$WORKTREE"
 node scripts/link-worktree-deps.js "$PRIMARY" "$WORKTREE"
 ```
+
+For an interrupted candidate, resume the original task through the service so
+its completed run and active successor have matching task, instance and resume
+lineage. Before touching the candidate, call the successor's endpoint:
+
+```bash
+node scripts/portos-api.js POST "/api/cos/agents/$RELEASE_AGENT_ID/release-candidate" \
+  "{\"action\":\"recover\",\"predecessorAgentId\":\"$PREVIOUS_RELEASE_AGENT_ID\"}"
+```
+
+Continue only on `recovered: true`, using the returned original branch and path.
+Recovery checks the original terminal head, physical Git checkout generation,
+cutoff pin, release base, prepared version, forge promotion and private review
+files under the ownership/retirement fence. It saves a separate transfer receipt
+and an honestly timestamped seed for the successor; it never edits the original
+seed, copies review files, advances a cutoff or changes a tag. A retry retains
+the original transfer. A merged promotion remains merged: verify its existing
+publication instead of opening another PR. Already recorded publication goes
+through the existing synchronization recovery, not candidate transfer.
+
+An unseeded candidate requires an independently captured service receipt from
+the original run with the exact Git pointer and administration identities. A
+creation log, matching branch/path, current inode or absent PID is insufficient.
+Missing/changed evidence yields a held `releaseCandidateRecovery` projection on
+the successor with a reason and safe next step. Preserve uncommitted work and
+the original checkout while resolving it.
+
+Newly registered coordinators also record the reservation and checkout capture
+milestones in their service-owned lifecycle. A `registered` milestone says only
+that the service observed no reservation; it does not prove a candidate was not
+created through Git. It cannot authorize a resumed run to reserve another one.
+
+**Current recovery limits:** whole-process settlement uses the existing native
+Windows supervision receipt. macOS/Linux have no equivalent durable receipt yet
+and remain held with `candidate-process-proof-unavailable`, including when the
+original PID is absent or no process currently has the checkout as its cwd.
+Historical runs missing from the trusted registry, unseeded candidates without
+contemporaneous physical evidence, and unknown private review receipt versions
+also remain held. V1 review evidence retains unknown inspection provenance; V2
+keeps its actual inspection separate from later completion. Both are validated
+with the shared receipt contract and preserved byte-for-byte, never re-certified
+as a new review. POSIX settlement support remains tracked in #13944; first
+reservation after a pre-reservation interruption is tracked in #14005.
 
 Resolve the previous **published** version tag and its peeled commit from the
 captured release history (not the latest tag on moving `main`). Verify the GitHub
@@ -225,6 +294,12 @@ the endpoint persists a publication-keyed outbox and registers exactly one
 successful response confirms that durable task ownership; the publishing
 coordinator then stops doing synchronization and may complete without waiting
 for another agent slot. Every terminal agent write repeats the ownership check.
+This is execution/publication completion, not end-to-end release completion.
+The registered continuation is eligible without a separate `release-sync`
+schedule; it remains subject to the normal owner, instance, pause, capacity and
+budget controls. While synchronization or cleanup is unfinished, another
+`do-release` preparation for that app waits on the existing continuation rather
+than selecting a version from a development branch that still has the old version.
 On a registration failure, retain the original receipt, branch/head/PR and
 checkout evidence and retry the same handoff; do not create another task or
 publish again. Interrupted handoffs resume through ordinary delivery recovery.
@@ -250,6 +325,9 @@ policy. The legacy local-review, hosted-review, CI and admission obligation name
 record that provider authority; they do not claim that PortOS independently
 re-inspected each review, check or lease after the merge. Run the requested reviews
 and validation during delivery without treating an unavailable review as clean.
+Keep the historical reviewed head in the private local-review receipt when later
+hosted feedback changes the PR; never synthesize a missing review. Before checkout
+retirement, the service retains the synchronization evidence bound to that checkout.
 
 The development quality snapshot must include the available local numeric
 measurements; an independently observed lack of local measurements is recorded
@@ -261,6 +339,54 @@ and local/remote ref absence; generic delivery/retirement recovery remains the
 only writer of those receipts. No verifier merges a PR, changes a published tag,
 steals a checkout, or resets a task retry budget. Status-view integration is
 tracked in #13773 under #13760.
+
+The ordinary inventoried checkout retirement service can release the exact
+reviewed lock as part of its fenced removal. Its initialized-submodule and
+whole-checkout counterpart currently refuses locked checkouts; retain that lock
+and the checkout as an explicit synchronization hold until service-owned lock
+recovery is available. A missing publisher seed cannot be recreated from a branch
+name or a later filesystem observation. A legacy publisher can instead be reviewed
+when its original run retains one exact v1 completion capture, the matching
+promotion PR, a revision-bound private lifecycle file, and a complete, independently
+verified existing checkout archive. A surviving checkout also needs the existing
+preservation receipt for that exact physical generation; an already absent checkout
+needs its exact service retirement receipt. Missing or conflicting evidence leaves
+the synchronization blocked. Recovery does not create a new archive or copy private
+Git state.
+
+For a publication identity from the synchronization status, an operator or authorized
+agent can POST `{ "identity": "<identity>" }` to
+`/api/cos/schedule/release-synchronization/legacy/review`. The response identifies the
+capture, preservation digest, promotion PR, lock and historical lifecycle fields. After
+inspecting it, POST the same identity and returned `digest` to the sibling `/accept`
+endpoint. Acceptance records a separate contemporary recovery receipt and reruns the
+normal independent synchronization obligations; it does not change the publication
+receipt or tag. Repeating acceptance is idempotent only while the evidence still
+matches. For a surviving checkout, use the ordinary exact checkout review and retirement
+service after acceptance. Its owner, process, generation, content and forge rechecks
+still apply. The initialized-checkout service continues to hold locked candidates.
+
+The preserved lifecycle's recorded head and status are historical metadata, not proof
+that a reviewer actually inspected the published candidate or approved it. The recovery
+records that candidate inspection is unverified; the hosting provider's merged PR is
+the delivery evidence. Keep missing lifecycle files, changed generations, active owners,
+unique content, and any unverified preservation or retirement as explicit holds.
+
+When an operator has decided to abandon a stale synchronization checkpoint and
+start a fresh release from `main`, POST `{ "identity": "<identity>", "reason":
+"<operator decision>", "checkouts": [{ "path": "<absolute path>", "branch":
+"<branch>", "head": "<40-character SHA>", "checkoutIdentity": "<64-character
+identity>" }] }` to `/api/cos/schedule/release-synchronization/operator-reset`.
+`checkouts` is optional and may be empty; when cleanup is needed, include the
+exact inventory tuples to release from this checkpoint's retention before the
+reset. The decision is immutable, so its checkout list cannot be added later.
+This host-control action refuses while a CoS release or synchronization for the same
+repository is active. The operator must also check for an external release process.
+It records the operator, reason and prior blocker, retires
+that checkpoint's queued continuation, and allows a new release. It does not mark
+the old synchronization verified, change a tag, remove a checkout, or start a
+release. Other checkout identities and outstanding checkpoints retain their own gates. Inspect and clean
+up any abandoned candidate separately before starting the new release.
 
 On Windows, newly registered CLI and PTY release publishers and synchronization
 agents launch inside a native Job with breakaway disabled, atomically assigned at process

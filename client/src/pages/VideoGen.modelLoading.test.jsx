@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { act, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 
 import {
   loadVideoGenPage,
@@ -76,12 +76,61 @@ describe('VideoGen model picker vs the /status python probe', () => {
     await waitFor(() => expect(screen.getByText('Python 3.12.1')).toBeInTheDocument());
   });
 
-  it('takes the Model field away when the context fetch names no model at all', async () => {
-    // A failed /model-context leaves nothing to offer. The field must not hold
-    // its placeholder forever — the rest of the form closes over the gap.
-    state.getVideoGenModelContext.mockRejectedValue(new Error('offline'));
+  it('retries a failed model list independently of the status probe, including another failure', async () => {
+    state.getVideoGenModelContext
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockRejectedValueOnce(new Error('still offline'))
+      .mockResolvedValue(modelContextPayload());
+    state.modelStatuses = { [MODEL_ONE.id]: { cached: true } };
+    await renderVideoGenPage();
+    fireEvent.change(screen.getByLabelText('Prompt'), { target: { value: 'a fox watches the rain' } });
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load the model list');
+    expect(screen.getByRole('button', { name: /^Generate$/ })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /^Generate$/ })).toHaveAttribute('title', 'Retry the model list before generating or queueing');
+    const statusCalls = state.getVideoGenStatus.mock.calls.length;
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('still offline'));
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+    expect(screen.getByLabelText('Model')).toHaveValue(MODEL_ONE.id);
+    await waitFor(() => expect(screen.getByRole('button', { name: /^Generate$/ })).toBeEnabled());
+    expect(state.getVideoGenModelContext).toHaveBeenCalledTimes(3);
+    expect(state.getVideoGenStatus).toHaveBeenCalledTimes(statusCalls);
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh status' }));
+    await waitFor(() => expect(state.getVideoGenStatus).toHaveBeenCalledTimes(statusCalls + 1));
+    expect(state.getVideoGenModelContext).toHaveBeenCalledTimes(3);
+  });
+
+  it('takes the Model field away for a successful empty list without showing a fetch error', async () => {
+    state.getVideoGenModelContext.mockResolvedValue(videoGenModelContext([]));
     await renderVideoGenPage();
 
     await waitFor(() => expect(screen.queryByLabelText('Model')).toBeNull());
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
+  });
+
+  it('retains successful context and selection through a failed refresh and an in-flight retry', async () => {
+    state.modelStatuses = { [MODEL_TWO.id]: { cached: true } };
+    await renderVideoGenPage();
+    fireEvent.change(screen.getByLabelText('Prompt'), { target: { value: 'a fox watches the rain' } });
+    fireEvent.change(screen.getByLabelText('Model'), { target: { value: MODEL_TWO.id } });
+    state.getVideoGenModelContext.mockRejectedValueOnce(new Error('offline'));
+    await act(async () => { state.runtimeInstallComplete(); });
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load the model list');
+    expect(screen.getByLabelText('Model')).toHaveValue(MODEL_TWO.id);
+    expect(screen.getByLabelText('Model')).toBeEnabled();
+    await waitFor(() => expect(screen.getByRole('button', { name: /^Generate$/ })).toBeEnabled());
+    const resolveContext = deferredModelContext();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(screen.getByRole('button', { name: 'Retrying…' })).toBeDisabled();
+    expect(screen.getByLabelText('Model')).toHaveValue(MODEL_TWO.id);
+    await resolveContext(modelContextPayload());
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+    expect(screen.getByLabelText('Model')).toHaveValue(MODEL_TWO.id);
   });
 });

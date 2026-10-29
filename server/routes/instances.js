@@ -96,6 +96,8 @@ const updatePeerSchema = z.object({
   // in services/instances.js): copied locally or hosted
   // by the peer and streamed on demand.
   mediaSyncMode: z.enum(['copy', 'host']).optional(),
+  // Standing grant: this paired peer may delete media on this machine (default on).
+  mediaDeleteAllowed: z.boolean().optional(),
   // Accept empty string to clear; any other string is validated/normalized in the service
   host: z.string().optional().nullable(),
   auth: peerAuthSchema,

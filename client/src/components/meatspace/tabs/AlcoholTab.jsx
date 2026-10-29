@@ -156,8 +156,8 @@ export default function AlcoholTab() {
     setRefreshKey(k => k + 1);
   };
 
-  const handleRemove = async (entryDate, index) => {
-    await api.removeAlcoholDrink(entryDate, index).catch(() => null);
+  const handleRemove = async (entryDate, index, id) => {
+    await api.removeAlcoholDrink(entryDate, index, id).catch(() => null);
     setRefreshKey(k => k + 1);
   };
 
@@ -165,6 +165,7 @@ export default function AlcoholTab() {
     setEditingKey(`${entryDate}:${index}`);
     setEditVolumeUnit('oz');
     setEditForm({
+      id: drink.id,
       name: drink.name || '',
       oz: String(drink.oz || ''),
       abv: String(drink.abv || ''),
@@ -182,6 +183,7 @@ export default function AlcoholTab() {
     const [entryDate, indexStr] = editingKey.split(':');
     const index = parseInt(indexStr, 10);
     await api.updateAlcoholDrink(entryDate, index, {
+      id: editForm.id,
       name: editForm.name,
       oz: Math.round(toOz(parseFloat(editForm.oz), editVolumeUnit) * 100) / 100,
       abv: parseFloat(editForm.abv),
@@ -708,7 +710,7 @@ export default function AlcoholTab() {
                                     confirmText="Remove"
                                     confirmIcon={Trash2}
                                     ariaLabel={`Confirm remove drink ${drink.name || 'entry'}`}
-                                    onConfirm={() => confirmDelete(() => handleRemove(entry.date, idx))}
+                                    onConfirm={() => confirmDelete(() => handleRemove(entry.date, idx, drink.id))}
                                     onCancel={cancelDelete}
                                   />
                                 ) : (

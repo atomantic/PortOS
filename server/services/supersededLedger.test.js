@@ -225,13 +225,12 @@ describe('formatSupersededForPrompt', () => {
     expect(formatSupersededForPrompt(undefined)).toBe('');
   });
 
-  it('names the branch, the replacing commits, the backup and the worktree still on disk', () => {
+  it('names the branch, the replacing commits and the worktree still on disk', () => {
     const out = formatSupersededForPrompt([{
       ...branch(),
       verdict: entry({
         was: 'honor the video backend pin',
         replacedByNote: 'backendPin.js now exports resolveVideoBackendPin()',
-        backupPatch: 'data/cos/abandoned-worktree-backups/agent-dead.patch',
         decidedAt: '2026-08-12T00:00:00.000Z'
       })
     }]);
@@ -239,7 +238,6 @@ describe('formatSupersededForPrompt', () => {
     expect(out).toContain('cos/task-x/agent-dead');
     expect(out).toContain('honor the video backend pin');
     expect(out).toContain('fff999');
-    expect(out).toContain('agent-dead.patch');
     expect(out).toContain('/repo/data/cos/worktrees/agent-dead');
   });
 

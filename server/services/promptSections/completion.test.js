@@ -52,6 +52,36 @@ describe('review-enabled completion merge gate', () => {
     expect(claim).toContain('Keep each successful reviewer');
   });
 
+  it('executes publication guards against legacy and distinct-inspection completion receipts', () => {
+    const section = buildTuiCompletionSection({ willOpenPR: true, simplifyEnabled: false, mode: COMPLETION_MODES.TUI_SLASHDO_FREE,
+      rendersInlinePrLifecycle: true, localReviewSection: 'Local review', branchName: 'delivery', baseBranch: 'main',
+      reviewPolicy: resolveReviewPolicy({ reviewers: ['codex'] }, null, null) });
+    const command = section.split('\n').find(line => line.includes('LOCAL_REMEDIATED_HEAD_SHA=$(node'));
+    const cwd = mkdtempSync(join(tmpdir(), 'publication-head-'));
+    const git = (...args) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
+    try {
+      git('init', '-q', '-b', 'delivery');
+      git('remote', 'add', 'origin', 'https://example.com/repo.git');
+      const commit = () => git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '--allow-empty', '-qm', 'change');
+      commit();
+      const inspectedHead = git('rev-parse', 'HEAD');
+      commit();
+      const completedHead = git('rev-parse', 'HEAD');
+      const receiptPath = join(cwd, '.git/portos-local-review-lifecycle');
+      for (const revision of [{ version: 1, reviewedHead: completedHead },
+        { version: 2, completedHead, reviewedHead: inspectedHead, inspectionProvenance: 'recorded' }]) {
+        const receipt = { ...revision, branch: 'delivery', origin: 'https://example.com/repo.git', base: 'main', status: 'partial', prUrl: '' };
+        writeFileSync(receiptPath, JSON.stringify(receipt));
+        const env = { ...process.env, LOCAL_OVERALL_STATUS: 'partial' };
+        expect(execFileSync('bash', ['-c', command + '\nprintf %s "$LOCAL_REMEDIATED_HEAD_SHA"'], { cwd, env, encoding: 'utf8' })).toBe(completedHead);
+        expect(JSON.parse(readFileSync(receiptPath, 'utf8'))).toEqual(receipt);
+        writeFileSync(receiptPath, JSON.stringify({ ...receipt, branch: 'other-delivery' }));
+        expect(() => execFileSync('bash', ['-c', command], { cwd, env, stdio: 'pipe' })).toThrow();
+      }
+    } finally { rmSync(cwd, { recursive: true, force: true }); }
+    expect(section).not.toContain('if [ "$LOCAL_REVIEWED_HEAD_SHA" != "$CURRENT_HEAD_SHA" ]');
+  });
+
   it('allows provider auto-merge while retaining responsibility until confirmed delivery', () => {
     const section = buildClaimFlowCompletionSection({ agentId: 'parent-example' });
     expect(section).toContain('Native provider auto-merge is allowed when the API accepts it');

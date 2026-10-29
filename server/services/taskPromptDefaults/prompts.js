@@ -1229,7 +1229,83 @@ an unfinished feature rather than dead code — check whether documentation,
 interface text, or a plan describes it. If one does, it belongs to the
 incomplete-feature work, which decides whether to finish or remove it; do not
 file a deletion here. File splits and responsibility boundaries belong to the
-module-hygiene work.`,
+module-hygiene work. Validation, recovery, and process machinery that runs and
+works but costs more than the harm it prevents belongs to the over-engineering
+work; this audit covers code that nothing runs or that is copied.`,
+
+  'over-engineering': `[Improvement: {appName}] Over-engineering audit
+
+Find process and validation machinery in {appName} that costs more than the
+harm it prevents, and recommend removing or simplifying it.
+
+Repository: {repoPath}
+
+{modeInstructions}
+
+Other audits find defects and propose safeguards. This one runs the other way:
+it looks for safeguards that already exist and asks whether each earns its
+cost. Every finding is a REMOVAL or SIMPLIFICATION, never a new check, layer,
+or workflow.
+
+## Cost is measured, not asserted
+
+Each finding needs a number: CI minutes added per run, agent or developer
+turnaround, local gate or build time, or the lines and modules that must be
+kept correct. Measure with the project's own tooling where you can (CI run
+timings, a timed local run, line counts, import graphs) and state how you
+measured. "This seems heavy" is not a finding. Speed counts: machinery that
+slows CI, the local gate, or an agent's turnaround is paying a cost on every
+single run.
+
+## Hunt for
+
+- **Parallel verification of state another system already owns** — code that
+  re-checks branch, merge, review, deployment, or build status the code host,
+  CI system, package registry, or platform already tracks authoritatively, or
+  that re-derives it into a second copy that can drift. Name the owning system
+  and what it already guarantees.
+- **Recovery machinery with no reachable failure** — archives, ledgers,
+  checkpoints, backups-before-delete, or retry and reconciliation layers whose
+  triggering failure cannot happen, or has never happened in the history, logs,
+  or tests. Show why the failure is unreachable or already handled upstream.
+- **Guards that add time without catching regressions** — CI stages, lint or
+  structural tests, pre-push gates, or validation passes that duplicate a
+  stronger check, run on every change though they only matter for a few paths,
+  or have never failed on a real regression. Cite the run time and the
+  stronger check that already covers the same failure.
+- **Instructions and docs that mandate such processes** — contributor, agent,
+  or workflow documentation requiring steps whose machinery above is removable,
+  or a checklist longer than the failures it prevents.
+
+## Evidence for "no demonstrated harm"
+
+Search history (\`git log -S\`, issue and change-request references in commit
+messages), test names, and logs for the incident the machinery was built for.
+If a real incident exists and the machinery still prevents it, keep it. If the
+cost exceeds the harm and no incident or reachable failure is found, that
+absence is the finding. State what you searched.
+
+## Not yours
+
+- **Code with no behavior** — unreferenced exports, copy-paste duplication,
+  stale scaffolding — belongs to the dead-code and duplication audit
+  (\`simplify\`). This audit targets process and validation machinery that runs and
+  works but is disproportionate, not code that nothing runs.
+- Compatibility and migration code for other installs and versions is not
+  over-engineering; read the project's rules before proposing its removal.
+- Security boundaries, data-loss protections, and checks the project's rules
+  require are not candidates unless you can show they duplicate a stronger one.
+- Do not assume one code host, CI system, or platform. Name the actual systems
+  this repository uses, and keep recommendations valid for them.
+
+## The bar
+
+For each finding give \`file:LINE\` (or the doc and section), what the machinery
+verifies or recovers, who or what already owns that guarantee, the measured
+cost, the demonstrated harm (or its absence), and the proposed removal or
+simplification — including the corrected instruction or doc text when a document
+mandates it. Reject removals that trade real safety for speed you cannot
+measure.`,
 
   'module-hygiene': `[Improvement: {appName}] Module hygiene audit
 
@@ -2461,9 +2537,22 @@ executed-path failures that no static read of one file surfaces.
    scratch root with \`restoreSnapshot\` — dry run first, then execute — and
    verify the manifest: every recorded file present with its recorded hash,
    nothing extra, nothing the current code refuses to read.
+   If the restore refuses legacy database metadata created by this rehearsal,
+   do not report that refusal as a product defect yet. \`NODE_ENV=test\` keeps
+   \`pgFileFacade\` consumers on file storage even with \`MEMORY_BACKEND=postgres\`,
+   so the synthetic records may not have gone through their normal import.
+   Create the helper-made scratch database pair below if needed, then run the
+   existing file-to-DB importer for each relevant synthetic domain (for
+   example, \`server/scripts/migrateUniversesToDB.js\` for universes) against
+   only the source scratch root and its \`portos_rehearsal_\` database. Check the
+   importer's result and verify the synthetic rows in that scratch database.
+   If imports succeed, take a fresh snapshot and repeat the dry run; retain the
+   original refusal as rehearsal evidence. If an importer cannot complete,
+   report that domain-facade coverage as uncovered and include its result.
 3. **Round-trip Postgres.** Postgres is the primary store and its dump and
    restore are where restore defects have been found, so exercise them.
-   Run \`node scripts/rehearsal-scratch-db.js create\` (one JSON line on stdout):
+   Unless step 2 already created the pair, run
+   \`node scripts/rehearsal-scratch-db.js create\` (one JSON line on stdout):
    when \`ok\` is false — no reachable Postgres, or a role that cannot create the
    base schema's extensions — use the file-only fallback below. Otherwise create
    two databases, a source and a target, and drop both with
@@ -2479,12 +2568,20 @@ executed-path failures that no static read of one file surfaces.
      snapshot — dry run first, then execute. A restore replays into whatever
      \`PGDATABASE\` its process holds, so print it and confirm the
      \`portos_rehearsal_\` prefix before each call.
-   - **Compare.** Row counts per table and the \`schema_migrations\` ledger must
-     match between source and target; any other status than \`ok\`, or a
-     mismatch, is a finding.
+   - **Compare.** Report row counts for every table in source and target.
+     Compare application-table counts and the \`schema_migrations\` ledger;
+     unexplained differences are findings. Report \`restore_receipts\` and
+     \`media_assets\` counts separately with an explanation: restore receipts
+     are machine-local evidence created by the target restore, and media assets
+     are a rebuildable index reconstructed from authoritative files, so neither
+     table is expected to have matching counts. Do not hide their observed
+     counts or treat these documented differences as data loss. Any dump or
+     restore status other than \`ok\` remains a finding.
 4. **Boot the restored root** the same way and confirm its health endpoint;
    when step 3 ran, boot it with \`MEMORY_BACKEND=postgres\` and
-   \`PGDATABASE=<target>\`, otherwise with \`MEMORY_BACKEND=file\`.
+   \`PGDATABASE=<target>\`. This verifies the primary store and memory
+   backend; the domain facades above remain file-backed under
+   \`NODE_ENV=test\`, so report their PostgreSQL boot coverage as untested.
 
 **File-only fallback.** When no scratch database can be created, run every step
 except 3 with \`MEMORY_BACKEND=file\` and \`NODE_ENV=test\`, and report the
@@ -3160,14 +3257,14 @@ Use \`feat:\` / \`fix:\` / \`refactor:\` / \`chore:\` / etc. (The bracketed-scop
 
 ${REQUIRED_REVIEW_PUBLICATION_RULE}
 
-The configured reviewers for this task, in order, are \`{reviewers}\`. Split them by where they can run, preserving order: **LOCAL reviewers** — every token that is NOT an \`@<login>\` (\`claude\` / \`codex\` / \`antigravity\` (CLI binary: \`agy\`) / \`grok\` / \`cursor\` invoke a local-CLI critique; \`lmstudio\` / \`ollama\` use the appended Local Reviewer Procedure) read the working tree and need no PR, so they run BEFORE the PR is opened. **PR-SIDE reviewers** — every \`@<login>\` token, plus any review bot the repo requests automatically on open — review cloud-side, so they can only run once the PR exists. Open the PR only when the branch is already review-clean (or a required reviewer is recorded as review-blocked) and all that remains is CI plus those PR-side reviewers.
+The configured reviewers for this task, in order, are \`{reviewers}\`. Split them by where they can run, preserving order: **LOCAL reviewers** — every token that is NOT an \`@<login>\` (\`claude\` / \`codex\` / \`antigravity\` (CLI binary: \`agy\`) / \`grok\` / \`cursor\` invoke a local-CLI critique; \`lmstudio\` / \`ollama\` use the appended Local Reviewer Procedure) read the working tree and need no PR, so they run BEFORE the PR is opened. **PR-SIDE reviewers** — every \`@<login>\` token, plus any review bot the repo requests automatically on open — review cloud-side, so they can only run once the PR exists. Open the PR only when the branch is already review-clean (or a reviewer's \`~max\` budget is spent with its findings fixed or rejected/tracked and disclosed, or a required reviewer is recorded as review-blocked) and all that remains is CI plus those PR-side reviewers.
 
 1. **Self-review your diff for reuse, quality, and efficiency** (DRY, dead code, naming, simpler equivalents, missed edge cases) and fix findings in the same diff — BEFORE opening the PR, not retroactively. Claude Code runs this as the three-agent \`/simplify\` pass; on other CLIs, do the equivalent review by hand.
-2. **Run each LOCAL reviewer in order against the BRANCH diff, not a PR diff.** No PR exists yet, so use the CLI's own base-diff mode or \`git diff origin/main...HEAD\` (substitute the repo's default branch when it isn't \`main\`); local LLM reviewers go through the appended endpoint procedure. Apply the fixes, run the tests, and commit them — capped at 3 rounds per reviewer — then advance. A missing CLI, quota/provider or transport failure, timeout, malformed response, empty response, or no-verdict result from a REQUIRED reviewer is unavailable, not clean: do NOT substitute your own self-review; record \`REVIEW_STATUS=review-blocked\` in the worktree-private status file and continue to step 3 when the code and tests are otherwise shippable. An optional reviewer (~opt) is non-blocking: a provider error, quota limit, timeout, or missing verdict from an optional reviewer must NEVER record REVIEW_STATUS=review-blocked (leave REVIEW_STATUS=clean) and does not prevent merge. If a local reviewer still has accepted findings after 3 rounds, or its fixes leave the build/tests red, do NOT open a PR — leave the branch and worktree in place, report the reviewer and the failure, and stop. Reviewer unavailability alone is review-blocked, so it does not take this stop path.
+2. **Run each LOCAL reviewer in order against the BRANCH diff, not a PR diff.** No PR exists yet, so use the CLI's own base-diff mode or \`git diff origin/main...HEAD\` (substitute the repo's default branch when it isn't \`main\`); local LLM reviewers go through the appended endpoint procedure. Apply the fixes, run the tests, and commit them — capped at that reviewer's \`~max=<n>\` budget from the reviewer list (3 rounds when it carries none; the Review round caps note below restates configured budgets) — then advance. A missing CLI, quota/provider or transport failure, timeout, malformed response, empty response, or no-verdict result from a REQUIRED reviewer is unavailable, not clean: do NOT substitute your own self-review; record \`REVIEW_STATUS=review-blocked\` in the worktree-private status file and continue to step 3 when the code and tests are otherwise shippable. An optional reviewer (~opt) is non-blocking: a provider error, quota limit, timeout, or missing verdict from an optional reviewer must NEVER record REVIEW_STATUS=review-blocked (leave REVIEW_STATUS=clean) and does not prevent merge. A spent reviewer budget with findings still open is NOT a stop: fix each accepted finding or reject/track it with concrete rationale, then open the PR and disclose in its body the rounds each reviewer ran, the revision it last reviewed and what remained — never an invented approval. Only fixes that leave the build/tests red mean do NOT open a PR — leave the branch and worktree in place, report the reviewer and the failure, and stop. Reviewer unavailability alone is review-blocked, so it does not take this stop path.
 3. Push the branch: \`git push -u origin claim/<slug>\`, then confirm \`git log --oneline @{u}..HEAD\` is empty so every review fix from step 2 is in the PR's diff.
 4. Open the PR with \`gh pr create\` — title MUST encode the slug: \`<type>([<slug>]): <description>\`. Body should summarize what shipped + test plan.
 4a. Read the review status back — shell variables do not survive between calls, so run \`REVIEW_STATUS_FILE="$(git rev-parse --git-path portos-review-status)"\` and source it. If \`REVIEW_STATUS=review-blocked\` from a required reviewer, preserve the claim branch, leave the PR open, and stop before the PR-side review, CI, or merge steps. ${REVIEW_UNAVAILABLE_REPORTING_NOTE} If all configured reviewers were optional (~opt), REVIEW_STATUS must not block the merge.
-5. **Satisfy the PR-SIDE reviewers and CI before merging.** Request each \`@<login>\` (\`gh pr edit <num> --add-reviewer <login>\`, drop the \`@\`) and address the findings — push fixes, capped at 3 rounds each; their approval gates the merge. ${FORGE_REVIEWER_WAIT_NOTE} Wait out any auto-requested review bot the same way, then let required CI finish (\`gh pr checks <num> --required --watch --fail-fast\` — REQUIRED checks only, so an optional job can't stall the merge). If a reviewer stays unsatisfied or a required check stays red, comment on the PR naming the failure, remove only the worktree, and leave the branch and PR for reconciliation.
+5. **Satisfy the PR-SIDE reviewers and CI before merging.** Request each \`@<login>\` (\`gh pr edit <num> --add-reviewer <login>\`, drop the \`@\`) and address the findings — push fixes, capped at each reviewer's \`~max=<n>\` budget (3 rounds when it carries none); their approval gates the merge. ${FORGE_REVIEWER_WAIT_NOTE} Wait out any auto-requested review bot the same way, then let required CI finish (\`gh pr checks <num> --required --watch --fail-fast\` — REQUIRED checks only, so an optional job can't stall the merge). If a required reviewer stays unsatisfied (an optional reviewer whose budget is spent is not unsatisfied) or a required check stays red, comment on the PR naming the failure, remove only the worktree, and leave the branch and PR for reconciliation.
 
 6. **Merge immediately via \`gh pr merge\`** — NEVER a local merge and NEVER \`--auto\`. Select merge, squash or rebase only from verified allowed repository methods. An unreadable state or unconfirmed mutation stops this phase; no write is retried with another method:
    \`\`\`bash
@@ -3392,7 +3489,7 @@ const CLAIM_GITHUB_LOCAL_REVIEW = `## Phase 5 — Review locally (BEFORE any PR 
 
 ${REQUIRED_REVIEW_PUBLICATION_RULE}
 
-**Every reviewer that can read the working tree runs HERE, while there is still no PR.** Open the PR once the branch is review-clean or a required reviewer is recorded as review-blocked: the PR then carries the finished diff, and the only things left to satisfy are CI and the reviewers that genuinely cannot start until a PR is open.
+**Every reviewer that can read the working tree runs HERE, while there is still no PR.** Open the PR once the branch is review-clean, a reviewer's \`~max\` budget is spent with every accepted finding fixed or rejected/tracked and disclosed, or a required reviewer is recorded as review-blocked: the PR then carries the finished diff, and the only things left to satisfy are CI and the reviewers that genuinely cannot start until a PR is open.
 
 The configured reviewers for this task, in order, are \`{reviewers}\`. Split that list in two, preserving its order:
 
@@ -3401,13 +3498,13 @@ The configured reviewers for this task, in order, are \`{reviewers}\`. Split tha
 
 1. **Write the changelog entry now, not after the reviewers run** — every commit the reviewers are about to read must already be on the branch, or the PR carries work nobody reviewed. If the repo maintains a changelog, record a one-line entry **following the convention that repo documents** — read its \`AGENTS.md\` (or \`CLAUDE.md\`) and changelog README (e.g. \`.changelog/README.md\`) first. Some repos collect per-branch fragments in a directory (e.g. \`.changelog/next/\`) via a helper script rather than appending to one shared file, precisely so parallel agents don't conflict on every merge; use that flow when it's documented. Fall back to appending to the unreleased section (\`.changelog/NEXT.md\`, or \`## Unreleased\` in \`CHANGELOG.md\`) in the repo's existing prose style only when no convention is documented. If the repo has no changelog, skip this — the PR + commit history is the record.
 2. **Self-review your diff for reuse, quality, and efficiency** (DRY, dead code, naming, simpler equivalents, missed edge cases) and fix the findings in the same diff, before any reviewer runs. Claude Code runs this as the three-agent \`/simplify\` pass; on other CLIs, do the equivalent review by hand.
-3. **Run each LOCAL reviewer in the listed order against the BRANCH diff, not a PR diff.** No PR exists yet, so \`gh pr diff\` has nothing to read — use the CLI's own base-diff mode or \`git diff origin/main...HEAD\` (substitute the repo's default branch when it isn't \`main\`). Apply the findings, run the tests, and commit the fixes — capped at 3 rounds per reviewer — then advance to the next reviewer. A missing CLI, quota/provider or transport failure, timeout, malformed response, empty response, or no-verdict result from a REQUIRED reviewer is unavailable, not clean: do NOT substitute your own self-review; record \`REVIEW_STATUS=review-blocked\` in the worktree-private status file and continue to Phase 6 when the code and tests are otherwise shippable. An optional reviewer (~opt) is non-blocking: a provider error, quota limit, timeout, or missing verdict from an optional reviewer must NEVER record REVIEW_STATUS=review-blocked (leave REVIEW_STATUS=clean) and does not prevent merge.
-4. **If the branch cannot be brought to a shippable state here, do NOT open a PR** — that means accepted reviewer findings remain after 3 rounds, fixes leave the build/tests red, a review fix is unpushed, or the review/status state cannot be persisted. Comment on the ISSUE naming the failure (\`gh issue comment "\${NUM}" --body "..."\`), leave the assignee and the \`in-progress\` label in place, preserve the checkout and branch for recovery, and stop. Reviewer unavailability alone is \`review-blocked\`, so it does not take this stop path. Do NOT run Phase 7.`;
+3. **Run each LOCAL reviewer in the listed order against the BRANCH diff, not a PR diff.** No PR exists yet, so \`gh pr diff\` has nothing to read — use the CLI's own base-diff mode or \`git diff origin/main...HEAD\` (substitute the repo's default branch when it isn't \`main\`). Apply the findings, run the tests, and commit the fixes — capped at that reviewer's \`~max=<n>\` budget from the reviewer list (3 rounds when it carries none; the Review round caps note below restates configured budgets) — then advance to the next reviewer. A missing CLI, quota/provider or transport failure, timeout, malformed response, empty response, or no-verdict result from a REQUIRED reviewer is unavailable, not clean: do NOT substitute your own self-review; record \`REVIEW_STATUS=review-blocked\` in the worktree-private status file and continue to Phase 6 when the code and tests are otherwise shippable. An optional reviewer (~opt) is non-blocking: a provider error, quota limit, timeout, or missing verdict from an optional reviewer must NEVER record REVIEW_STATUS=review-blocked (leave REVIEW_STATUS=clean) and does not prevent merge.
+4. **If the branch cannot be brought to a shippable state here, do NOT open a PR** — that means accepted findings the reviewers raised are neither fixed nor rejected/tracked with rationale, fixes leave the build/tests red, a review fix is unpushed, or the review/status state cannot be persisted. Comment on the ISSUE naming the failure (\`gh issue comment "\${NUM}" --body "..."\`), leave the assignee and the \`in-progress\` label in place, preserve the checkout and branch for recovery, and stop. Reviewer unavailability alone is \`review-blocked\`, so it does not take this stop path. Do NOT run Phase 7.`;
 
 const CLAIM_GITHUB_PUBLISHED_REVIEW = `2a. Read the Phase 5 status back — shell variables do not survive between calls, so run REVIEW_STATUS_FILE="$(git rev-parse --git-path portos-review-status)" and source it. If REVIEW_STATUS=review-blocked from a required reviewer, preserve the claim markers and branch, leave the PR open, and stop before the PR-side review, CI, or merge steps. ${REVIEW_UNAVAILABLE_REPORTING_NOTE} If all configured reviewers were optional (~opt), REVIEW_STATUS must not block the merge.
-3. **Satisfy the PR-SIDE reviewers.** For each \`@<login>\` from the Phase 5 split, request the review now (\`gh pr edit <pr-number> --add-reviewer <login>\`, drop the \`@\`) and address the findings — push fixes, capped at 3 rounds per reviewer. A required reviewer's approval gates the merge; an optional reviewer who is unavailable or gives no verdict does not. Resolve every accepted finding before proceeding, regardless of severity. ${FORGE_REVIEWER_WAIT_NOTE} If the repo auto-requests a review bot when the PR opens, wait that round out and address it the same way. With no \`@<login>\` configured and no bot review appearing, this step is a no-op.
+3. **Satisfy the PR-SIDE reviewers.** For each \`@<login>\` from the Phase 5 split, request the review now (\`gh pr edit <pr-number> --add-reviewer <login>\`, drop the \`@\`) and address the findings — push fixes, capped at that reviewer's \`~max=<n>\` budget from the reviewer list (3 rounds when it carries none; the Review round caps note below restates configured budgets). A required reviewer's approval gates the merge; an optional reviewer who is unavailable or gives no verdict does not. Resolve every accepted finding before proceeding, regardless of severity. ${FORGE_REVIEWER_WAIT_NOTE} If the repo auto-requests a review bot when the PR opens, wait that round out and address it the same way. With no \`@<login>\` configured and no bot review appearing, this step is a no-op.
 
-   **Review-stuck cleanup** (a PR-side reviewer still unsatisfied after 3 rounds): post one summarizing PR comment (\`gh pr comment\`), preserve the exact worktree and local branch. Leave the open PR, the assignee, and the \`in-progress\` label in place so the human picks up cold. Stop with the exact checkout and claim preserved.`;
+   **Review-stuck cleanup** (a PR-side reviewer still unsatisfied after its round budget (3 when it carries no \`~max\`)): post one summarizing PR comment (\`gh pr comment\`), preserve the exact worktree and local branch. Leave the open PR, the assignee, and the \`in-progress\` label in place so the human picks up cold. Stop with the exact checkout and claim preserved.`;
 
 const CLAIM_GITHUB_MERGE = `5. **Merge immediately via \`gh pr merge\`** — NEVER a local \`git merge\`. A queued provider auto-merge remains pending until MERGED is confirmed. Select merge, squash or rebase only from verified allowed repository methods. An unreadable state or unconfirmed mutation stops this phase; no write is retried with another method:
    \`\`\`bash
@@ -3542,7 +3639,7 @@ const CLAIM_GITLAB_LOCAL_REVIEW = `## Phase 5 — Review locally (BEFORE any MR 
 
 ${REQUIRED_REVIEW_PUBLICATION_RULE}
 
-**Every reviewer that can read the working tree runs HERE, while there is still no MR.** Open the MR once the branch is review-clean or a required reviewer is recorded as review-blocked: the MR then carries the finished diff, and the only things left to satisfy are CI and the reviewers that genuinely cannot start until an MR is open.
+**Every reviewer that can read the working tree runs HERE, while there is still no MR.** Open the MR once the branch is review-clean, a reviewer's \`~max\` budget is spent with every accepted finding fixed or rejected/tracked and disclosed, or a required reviewer is recorded as review-blocked: the MR then carries the finished diff, and the only things left to satisfy are CI and the reviewers that genuinely cannot start until an MR is open.
 
 The configured reviewers for this task, in order, are \`{reviewers}\`. Split that list in two, preserving its order:
 
@@ -3551,13 +3648,13 @@ The configured reviewers for this task, in order, are \`{reviewers}\`. Split tha
 
 1. **Write the changelog entry now, not after the reviewers run** — every commit the reviewers are about to read must already be on the branch, or the MR carries work nobody reviewed. If the repo maintains a changelog, record a one-line entry **following the convention that repo documents** — read its \`AGENTS.md\` (or \`CLAUDE.md\`) and changelog README (e.g. \`.changelog/README.md\`) first. Some repos collect per-branch fragments in a directory (e.g. \`.changelog/next/\`) via a helper script rather than appending to one shared file, precisely so parallel agents don't conflict on every merge; use that flow when it's documented. Fall back to appending to the unreleased section (\`.changelog/NEXT.md\`, or \`## Unreleased\` in \`CHANGELOG.md\`) in the repo's existing prose style only when no convention is documented. If the repo has no changelog, skip this.
 2. **Self-review your diff for reuse, quality, and efficiency** (DRY, dead code, naming, simpler equivalents, missed edge cases) and fix the findings in the same diff, before any reviewer runs. Claude Code runs this as the three-agent \`/simplify\` pass; on other CLIs, do the equivalent review by hand.
-3. **Run each LOCAL reviewer in the listed order against the BRANCH diff, not an MR diff.** No MR exists yet, so \`glab mr diff\` has nothing to read — use the CLI's own base-diff mode or \`git diff "origin/\${DEFAULT_BRANCH}...HEAD"\`. Apply the findings, run the tests, and commit the fixes — capped at 3 rounds per reviewer — then advance to the next reviewer. A missing CLI, quota/provider or transport failure, timeout, malformed response, empty response, or no-verdict result from a REQUIRED reviewer is unavailable, not clean: do NOT substitute your own self-review; record REVIEW_STATUS=review-blocked in the worktree-private status file and continue to Phase 6 when the code and tests are otherwise shippable. An optional reviewer (~opt) is non-blocking: a provider error, quota limit, timeout, or missing verdict from an optional reviewer must NEVER record REVIEW_STATUS=review-blocked (leave REVIEW_STATUS=clean) and does not prevent merge.
-4. **If the branch cannot be brought to a shippable state here, do NOT open an MR** — that means accepted reviewer findings remain after 3 rounds, fixes leave the build/tests red, a review fix is unpushed, or the review/status state cannot be persisted. Reviewer unavailability alone is review-blocked, so it does not take this stop path. Post a note on the ISSUE naming the reviewer and the failure (\`glab issue note "\${NUM}" -m "..."\`), leave the assignee and the \`in-progress\` label in place, preserve the checkout and branch for recovery, and stop. Leave the branch and worktree in place for a human to pick up cold. Do NOT run Phase 7.`;
+3. **Run each LOCAL reviewer in the listed order against the BRANCH diff, not an MR diff.** No MR exists yet, so \`glab mr diff\` has nothing to read — use the CLI's own base-diff mode or \`git diff "origin/\${DEFAULT_BRANCH}...HEAD"\`. Apply the findings, run the tests, and commit the fixes — capped at that reviewer's \`~max=<n>\` budget from the reviewer list (3 rounds when it carries none; the Review round caps note below restates configured budgets) — then advance to the next reviewer. A missing CLI, quota/provider or transport failure, timeout, malformed response, empty response, or no-verdict result from a REQUIRED reviewer is unavailable, not clean: do NOT substitute your own self-review; record REVIEW_STATUS=review-blocked in the worktree-private status file and continue to Phase 6 when the code and tests are otherwise shippable. An optional reviewer (~opt) is non-blocking: a provider error, quota limit, timeout, or missing verdict from an optional reviewer must NEVER record REVIEW_STATUS=review-blocked (leave REVIEW_STATUS=clean) and does not prevent merge.
+4. **If the branch cannot be brought to a shippable state here, do NOT open an MR** — that means accepted findings the reviewers raised are neither fixed nor rejected/tracked with rationale, fixes leave the build/tests red, a review fix is unpushed, or the review/status state cannot be persisted. Reviewer unavailability alone is review-blocked, so it does not take this stop path. Post a note on the ISSUE naming the reviewer and the failure (\`glab issue note "\${NUM}" -m "..."\`), leave the assignee and the \`in-progress\` label in place, preserve the checkout and branch for recovery, and stop. Leave the branch and worktree in place for a human to pick up cold. Do NOT run Phase 7.`;
 
 const CLAIM_GITLAB_PUBLISHED_REVIEW = `2a. Read the Phase 5 status back — shell variables do not survive between calls, so run REVIEW_STATUS_FILE="$(git rev-parse --git-path portos-review-status)" and source it. If REVIEW_STATUS=review-blocked from a required reviewer, preserve the claim markers and branch, leave the MR open, and stop before the MR-side review, CI, or merge steps. ${REVIEW_UNAVAILABLE_REPORTING_NOTE} If all configured reviewers were optional (~opt), REVIEW_STATUS must not block the merge.
-3. **Satisfy the MR-SIDE reviewers.** For each \`@<login>\` from the Phase 5 split, request the review now (resolve \`MR_IID\` from the source branch exactly as step 5 does, then \`glab mr update "\${MR_IID}" --reviewer <login>\`, dropping the \`@\`; if glab rejects the flag, run \`glab mr update --help\` rather than guessing) and address the findings — push fixes, capped at 3 rounds per reviewer. A required reviewer's approval gates the merge; an optional reviewer who is unavailable or gives no verdict does not. Resolve every accepted finding before proceeding, regardless of severity. ${FORGE_REVIEWER_WAIT_NOTE} If the project auto-requests a review bot when the MR opens, wait that round out and address it the same way. With no \`@<login>\` configured and no bot review appearing, this step is a no-op.
+3. **Satisfy the MR-SIDE reviewers.** For each \`@<login>\` from the Phase 5 split, request the review now (resolve \`MR_IID\` from the source branch exactly as step 5 does, then \`glab mr update "\${MR_IID}" --reviewer <login>\`, dropping the \`@\`; if glab rejects the flag, run \`glab mr update --help\` rather than guessing) and address the findings — push fixes, capped at that reviewer's \`~max=<n>\` budget from the reviewer list (3 rounds when it carries none; the Review round caps note below restates configured budgets). A required reviewer's approval gates the merge; an optional reviewer who is unavailable or gives no verdict does not. Resolve every accepted finding before proceeding, regardless of severity. ${FORGE_REVIEWER_WAIT_NOTE} If the project auto-requests a review bot when the MR opens, wait that round out and address it the same way. With no \`@<login>\` configured and no bot review appearing, this step is a no-op.
 
-   **Review-stuck cleanup** (an MR-side reviewer still unsatisfied after 3 rounds): post one summarizing MR note (\`glab mr note\`), preserve the exact worktree and local branch. Leave the open MR, the assignee, and the \`in-progress\` label in place so the human picks up cold. Stop with the exact checkout and claim preserved.`;
+   **Review-stuck cleanup** (an MR-side reviewer still unsatisfied after its round budget (3 when it carries no \`~max\`)): post one summarizing MR note (\`glab mr note\`), preserve the exact worktree and local branch. Leave the open MR, the assignee, and the \`in-progress\` label in place so the human picks up cold. Stop with the exact checkout and claim preserved.`;
 
 const CLAIM_GITLAB_CLEANUP = `## Phase 7 — Clean up (post-merge ONLY)
 
@@ -3844,7 +3941,7 @@ The configured reviewers for this task, in order, are \`{reviewers}\`. Split the
 
 1. **Write the changelog entry now, not after the reviewers run** — every commit the reviewers are about to read must already be on the branch, or the MR/PR carries work nobody reviewed. If the repo maintains a changelog, record a one-line entry **following the convention that repo documents** — read its \`AGENTS.md\` (or \`CLAUDE.md\`) and changelog README (e.g. \`.changelog/README.md\`) first. Some repos collect per-branch fragments in a directory (e.g. \`.changelog/next/\`) via a helper script rather than appending to one shared file, precisely so parallel agents don't conflict on every merge; use that flow when it's documented. Fall back to appending to the unreleased section (\`.changelog/NEXT.md\`, or \`## Unreleased\` in \`CHANGELOG.md\`) in the repo's existing prose style only when no convention is documented. Otherwise skip it.
 2. **Self-review your diff for reuse, quality, and efficiency** (DRY, dead code, naming, simpler equivalents, missed edge cases) and fix the findings in the same diff. Claude Code runs this as the three-agent \`/simplify\` pass; on other CLIs, do the equivalent by hand.
-3. **Run each LOCAL reviewer in the listed order against the BRANCH diff, not an MR/PR diff.** Nothing is open yet, so use the CLI's own base-diff mode or \`git diff "origin/\${DEFAULT_BRANCH}...HEAD"\`; local LLM reviewers go through the appended endpoint procedure. Apply the findings, run the tests, and commit the fixes — capped at 3 rounds per reviewer — then advance. A missing CLI, quota/provider or transport failure, timeout, malformed response, empty response, or no-verdict result from a REQUIRED reviewer is unavailable, not clean: do NOT substitute your own self-review; record REVIEW_STATUS=review-blocked in the worktree-private status file and continue to Phase 6 when the code and tests are otherwise shippable. An optional reviewer (~opt) is non-blocking: a provider error, quota limit, timeout, or missing verdict from an optional reviewer must NEVER record REVIEW_STATUS=review-blocked (leave REVIEW_STATUS=clean) and does not prevent merge. If accepted findings remain after 3 rounds, fixes leave the build/tests red, a review fix is unpushed, or the review/status state cannot be persisted, do NOT open one — leave the branch and worktree in place, comment the failure on the ticket (POST {portosApiUrl}/api/jira/instances/<instanceId>/tickets/<KEY>/comments), and stop. Reviewer unavailability alone is REVIEW_STATUS=review-blocked, so it does not take this stop path.
+3. **Run each LOCAL reviewer in the listed order against the BRANCH diff, not an MR/PR diff.** Nothing is open yet, so use the CLI's own base-diff mode or \`git diff "origin/\${DEFAULT_BRANCH}...HEAD"\`; local LLM reviewers go through the appended endpoint procedure. Apply the findings, run the tests, and commit the fixes — capped at that reviewer's \`~max=<n>\` budget from the reviewer list (3 rounds when it carries none; the Review round caps note below restates configured budgets) — then advance. A missing CLI, quota/provider or transport failure, timeout, malformed response, empty response, or no-verdict result from a REQUIRED reviewer is unavailable, not clean: do NOT substitute your own self-review; record REVIEW_STATUS=review-blocked in the worktree-private status file and continue to Phase 6 when the code and tests are otherwise shippable. An optional reviewer (~opt) is non-blocking: a provider error, quota limit, timeout, or missing verdict from an optional reviewer must NEVER record REVIEW_STATUS=review-blocked (leave REVIEW_STATUS=clean) and does not prevent merge. If accepted findings are neither fixed nor rejected/tracked with rationale (a spent reviewer budget alone is not a stop; disclose the partial review in the PR body), fixes leave the build/tests red, a review fix is unpushed, or the review/status state cannot be persisted, do NOT open one — leave the branch and worktree in place, comment the failure on the ticket (POST {portosApiUrl}/api/jira/instances/<instanceId>/tickets/<KEY>/comments), and stop. Reviewer unavailability alone is REVIEW_STATUS=review-blocked, so it does not take this stop path.
 4. Push the branch: \`git push -u origin "claim/\${KEY}"\`, then confirm \`git log --oneline @{u}..HEAD\` is empty so every review fix from step 3 is in the MR/PR's diff.
 5. Open the MR/PR. Reference the JIRA \`KEY\` in the title and description (there is NO \`Closes\` auto-close for JIRA). Summarize what shipped + a short test plan.
    - GitHub: \`gh pr create --fill --head "claim/\${KEY}"\` (then edit the body to mention \`KEY\` if \`--fill\` didn't).
@@ -3861,7 +3958,7 @@ The configured reviewers for this task, in order, are \`{reviewers}\`. Split the
 
 The local reviewers already ran in Phase 5, so only the reviewers that need an open MR/PR remain.
 
-1. **Satisfy the PR-SIDE reviewers.** For each \`@<login>\` from the Phase 5 split, request the review on the open MR/PR (GitHub: \`gh pr edit <pr-number> --add-reviewer <login>\`, dropping the \`@\`; GitLab: \`glab mr update <MR_IID> --reviewer <login>\`) and address the findings — push fixes, capped at 3 rounds per reviewer. ${FORGE_REVIEWER_WAIT_NOTE} Wait out any auto-requested review bot the same way. A missing reviewer, timeout, or unresolvable finding is UNSATISFIED, not clean: comment on the MR/PR naming the failure and stop. With no \`@<login>\` configured and no bot review appearing, this step is a no-op.
+1. **Satisfy the PR-SIDE reviewers.** For each \`@<login>\` from the Phase 5 split, request the review on the open MR/PR (GitHub: \`gh pr edit <pr-number> --add-reviewer <login>\`, dropping the \`@\`; GitLab: \`glab mr update <MR_IID> --reviewer <login>\`) and address the findings — push fixes, capped at that reviewer's \`~max=<n>\` budget from the reviewer list (3 rounds when it carries none; the Review round caps note below restates configured budgets). ${FORGE_REVIEWER_WAIT_NOTE} Wait out any auto-requested review bot the same way. A missing reviewer, timeout, or unresolvable finding is UNSATISFIED, not clean: comment on the MR/PR naming the failure and stop. With no \`@<login>\` configured and no bot review appearing, this step is a no-op.
 2. **Leave the MR/PR open for a human to land.** Unlike the GitHub/GitLab issue flows, this flow does NOT auto-merge — the ticket is "In Review" and a human reviews + merges. After the reviewers finish, preserve the exact worktree, local \`claim/<KEY>\` branch and open MR/PR for the intentional human handoff. Do not invoke merged retirement while it remains unmerged. **Do NOT \`git merge\`, \`gh pr merge\`, \`glab mr merge\`, or \`git pull\`** — landing the change and moving the ticket to Done is the human's call.
 
 ## Phase 7 — Report

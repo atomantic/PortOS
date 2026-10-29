@@ -1,7 +1,7 @@
 vi.mock('../musicVideo/projects.js', () => ({ getProject: vi.fn(async () => ({ mediaMode: 'code-images-video' })) }));
 vi.mock('../musicVideo/productionReviewService.js', () => ({ assertMusicVideoSceneReview: vi.fn(async () => {}) }));
 import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, readFileSync, readdirSync } from 'fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, readFileSync, readdirSync, renameSync, lstatSync } from 'fs';
 import { tmpdir } from 'os';
 import { createHash } from 'node:crypto';
 import { join, sep } from 'path';
@@ -29,7 +29,7 @@ vi.mock('../../lib/fileUtils.js', async () => {
     PATHS: new Proxy({}, {
       get(_, key) {
         if (key === 'data') return tempDataDir;
-        if (['uploads', 'videos', 'images', 'loras'].includes(key)) return join(tempDataDir, key);
+        if (['uploads', 'videos', 'images', 'loras', 'imageRefs'].includes(key)) return join(tempDataDir, key);
         return actual.PATHS[key];
       },
     }),
@@ -37,6 +37,14 @@ vi.mock('../../lib/fileUtils.js', async () => {
     resolveImageInputPath: (path) => typeof path === 'string' && path.startsWith(`${join(tempDataDir, 'images')}${sep}`) && existsSync(path) ? path : actual.resolveImageInputPath(path),
   };
 });
+
+// The queue binds `maintenance` once per module instance; delegate to the
+// current test's admission so a shared instance still gets a per-test journal.
+let currentAdmission;
+vi.mock('../../lib/maintenanceAdmission.js', async (importOriginal) => ({
+  ...await importOriginal(),
+  maintenance: new Proxy({}, { get: (_target, property) => currentAdmission[property] }),
+}));
 
 vi.mock('../../lib/mediaModels.js', () => ({
   getVideoModels: vi.fn(() => [
@@ -86,6 +94,8 @@ const stubs = {
   hasSurvivingTrainer: vi.fn(async () => false),
   runVideoUpscale: vi.fn(() => new Promise(() => {})),
   cancelVideoUpscale: vi.fn(),
+  runTopazUpscale: vi.fn(() => new Promise(() => {})),
+  cancelTopazUpscale: vi.fn(() => true),
   runVideoStitch: vi.fn(() => new Promise(() => {})),
   cancelVideoStitch: vi.fn(),
   runSharingCopy: vi.fn(async () => ({})),
@@ -128,6 +138,12 @@ vi.mock('../superColliderRender.js', () => ({
 vi.mock('../videoGen/upscaleJob.js', () => ({
   runVideoUpscale: (...args) => stubs.runVideoUpscale(...args),
   cancel: (...args) => stubs.cancelVideoUpscale(...args),
+}));
+
+vi.mock('../videoGen/topazJob.js', () => ({
+  runVideoUpscale: (...args) => stubs.runTopazUpscale(...args),
+  cancel: (...args) => stubs.cancelTopazUpscale(...args),
+  cleanupPreparedTopaz: vi.fn(async () => {}),
 }));
 
 vi.mock('../videoGen/stitchJob.js', () => ({
@@ -196,6 +212,11 @@ let videoGenEvents;
 let imageGenEvents;
 let audioGenEvents;
 
+// A fresh module graph costs ~150ms, so tests share one instance and reset it
+// with __resetForTests(). Only a test that simulates a restart (or swaps a
+// doMock'd dependency) calls importFresh(); that marks the graph dirty so the
+// next beforeEach rebuilds a clean one instead of inheriting its mocks.
+let moduleGraphDirty = true;
 async function importFresh() {
   await mediaJobQueue?.__resetForTests();
   vi.resetModules();
@@ -203,6 +224,7 @@ async function importFresh() {
   videoGenEvents = (await import('../videoGen/events.js')).videoGenEvents;
   imageGenEvents = (await import('../imageGenEvents.js')).imageGenEvents;
   audioGenEvents = (await import('../audioGen/events.js')).audioGenEvents;
+  moduleGraphDirty = true;
 }
 
 const flush = async () => {
@@ -238,13 +260,15 @@ const remoteRecoverySettlement = (jobId, peerId = remoteVideoMediaParams().peerI
 });
 
 beforeEach(async () => {
-  tempDataDir = mkdtempSync(join(tmpdir(), 'mediaJobQueue-test-'));
+  // One path for the whole file: the shared queue instance captures its jobs
+  // file under it at import. afterEach removes it, so each test starts empty.
+  tempDataDir ??= mkdtempSync(join(tmpdir(), 'mediaJobQueue-test-'));
+  mkdirSync(tempDataDir, { recursive: true });
   // Queue fixtures deliberately abandon active work when simulating a crash.
   // Give each test its own real journal, retaining it across importFresh()
   // within that test so restart recovery still exercises durable ownership.
-  const admissionModule = await vi.importActual('../../lib/maintenanceAdmission.js');
-  const admission = admissionModule.createMaintenanceAdmission(tempDataDir);
-  vi.doMock('../../lib/maintenanceAdmission.js', () => ({ ...admissionModule, maintenance: admission }));
+  const { createMaintenanceAdmission } = await vi.importActual('../../lib/maintenanceAdmission.js');
+  currentAdmission = createMaintenanceAdmission(tempDataDir);
   Object.values(stubs).forEach((fn) => fn.mockReset());
   const { getDefaultVideoModelId } = await import('../../lib/mediaModels.js');
   getDefaultVideoModelId.mockImplementation(() => 'example-mlx');
@@ -257,8 +281,16 @@ beforeEach(async () => {
   stubs.runTraining.mockImplementation(() => new Promise(() => {}));
   stubs.hasSurvivingTrainer.mockResolvedValue(false);
   stubs.runVideoUpscale.mockImplementation(() => new Promise(() => {}));
+  stubs.runTopazUpscale.mockImplementation(() => new Promise(() => {}));
+  stubs.cancelTopazUpscale.mockReturnValue(true);
   stubs.runVideoStitch.mockImplementation(() => new Promise(() => {}));
-  await importFresh();
+  if (moduleGraphDirty) await importFresh();
+  else {
+    await mediaJobQueue.__resetForTests();
+    // Settings are read through a module cache; tests write settings.json directly.
+    (await import('../settings.js')).__resetSettingsCache();
+  }
+  moduleGraphDirty = false;
 });
 
 afterEach(async () => {
@@ -276,6 +308,148 @@ afterAll(() => {
 });
 
 describe('mediaJobQueue', () => {
+  it.each(['unchanged', 'replaced', 'removed'])('dispatches the admitted reviewed bytes after the source is %s', async (change) => {
+    const source = join(tempDataDir, 'images', 'reviewed.png');
+    mkdirSync(join(tempDataDir, 'images'), { recursive: true });
+    writeFileSync(source, 'reviewed bytes');
+    const digest = createHash('sha256').update('reviewed bytes').digest('hex');
+    stubs.generateVideo.mockResolvedValue({});
+    stubs.generateImage.mockResolvedValue({});
+    const blocker = await mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'hold the lane' } });
+    await waitFor(() => stubs.generateVideo.mock.calls.length === 1);
+    const job = await mediaJobQueue.enqueueJob({ kind: 'image', params: { prompt: 'edit', referenceImagePaths: [source], reviewedReferenceDigest: digest } });
+    if (change === 'replaced') writeFileSync(source, 'unreviewed bytes');
+    if (change === 'removed') rmSync(source);
+    videoGenEvents.emit('completed', { generationId: blocker.jobId, filename: 'done.mp4' });
+    await waitFor(() => stubs.generateImage.mock.calls.length === 1);
+    const request = stubs.generateImage.mock.calls[0][0];
+    expect(request.reviewedReferenceSnapshot.jobId).toBe(job.jobId);
+    expect(readFileSync(request.referenceImagePaths[0], 'utf8')).toBe('reviewed bytes');
+    imageGenEvents.emit('failed', { generationId: job.jobId, error: 'synthetic failure', inputProcessSettled: true });
+    await waitFor(() => mediaJobQueue.getJob(job.jobId).status === 'failed');
+  });
+
+  it('replays a durably queued reviewed snapshot after restart', async () => {
+    const source = join(tempDataDir, 'images', 'reviewed.png');
+    mkdirSync(join(tempDataDir, 'images'), { recursive: true });
+    writeFileSync(source, 'reviewed bytes');
+    const digest = createHash('sha256').update('reviewed bytes').digest('hex');
+    mediaJobQueue.quiesceMediaJobQueue();
+    const job = await mediaJobQueue.enqueueJob({ kind: 'image', params: { prompt: 'edit', referenceImagePaths: [source], reviewedReferenceDigest: digest } });
+    const persisted = persistedJobs().find(row => row.id === job.jobId);
+    expect(persisted.params).toMatchObject({ prompt: '', modelId: null, pythonPath: null, referenceImagePaths: [] });
+    expect(persisted.params.reviewedReferenceRequest.prompt).toBe('edit');
+    const original = mediaJobQueue.getJob(job.jobId).params.reviewedReferenceSnapshot;
+    writeFileSync(source, 'replacement');
+    await importFresh();
+    stubs.generateImage.mockResolvedValue({});
+    await mediaJobQueue.initMediaJobQueue();
+    await waitFor(() => stubs.generateImage.mock.calls.length === 1);
+    const request = stubs.generateImage.mock.calls[0][0];
+    expect(request.reviewedReferenceSnapshot).toEqual(original);
+    expect(request.modelId).toBeUndefined();
+    expect(readFileSync(request.referenceImagePaths[0], 'utf8')).toBe('reviewed bytes');
+    imageGenEvents.emit('failed', { generationId: job.jobId, error: 'synthetic', inputProcessSettled: true });
+    await waitFor(() => mediaJobQueue.getJob(job.jobId).status === 'failed');
+  });
+
+  it('refuses an unanchored legacy snapshot on replay without invoking the provider', async () => {
+    const source = join(tempDataDir, 'images', 'reviewed.png');
+    mkdirSync(join(tempDataDir, 'images'), { recursive: true });
+    writeFileSync(source, 'reviewed bytes');
+    const digest = createHash('sha256').update('reviewed bytes').digest('hex');
+    mediaJobQueue.quiesceMediaJobQueue();
+    const job = await mediaJobQueue.enqueueJob({ kind: 'image', params: { prompt: 'edit', referenceImagePaths: [source], reviewedReferenceDigest: digest } });
+    const jobsPath = join(tempDataDir, 'media-jobs.json');
+    const store = JSON.parse(readFileSync(jobsPath, 'utf8'));
+    const identity = store.jobs.find(row => row.id === job.jobId).params.reviewedReferenceSnapshot;
+    delete identity.anchorVersion;
+    const manifestPath = join(tempDataDir, 'imageRefs', `snapshot-${identity.snapshotId}.json`);
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    delete manifest.anchorVersion;
+    writeFileSync(manifestPath, JSON.stringify(manifest));
+    rmSync(join(tempDataDir, 'imageRefs', `snapshot-${identity.snapshotId}.anchor`));
+    writeFileSync(jobsPath, JSON.stringify(store));
+    await importFresh();
+    await mediaJobQueue.initMediaJobQueue();
+    await waitFor(() => mediaJobQueue.getJob(job.jobId).status === 'failed');
+    expect(stubs.generateImage).not.toHaveBeenCalled();
+    expect(readFileSync(join(tempDataDir, 'imageRefs', identity.filename), 'utf8')).toBe('reviewed bytes');
+  });
+
+  it('retains a snapshot when failure arrives without child-settlement proof', async () => {
+    const source = join(tempDataDir, 'images', 'reviewed.png');
+    mkdirSync(join(tempDataDir, 'images'), { recursive: true });
+    writeFileSync(source, 'reviewed bytes');
+    const digest = createHash('sha256').update('reviewed bytes').digest('hex');
+    stubs.generateImage.mockResolvedValue({});
+    const job = await mediaJobQueue.enqueueJob({ kind: 'image', params: { prompt: 'edit', referenceImagePaths: [source], reviewedReferenceDigest: digest } });
+    await waitFor(() => stubs.generateImage.mock.calls.length === 1);
+    const id = mediaJobQueue.getJob(job.jobId).params.reviewedReferenceSnapshot;
+    imageGenEvents.emit('failed', { generationId: job.jobId, error: 'handoff failed' });
+    await waitFor(() => mediaJobQueue.getJob(job.jobId).status === 'failed');
+    await flush();
+    expect(JSON.parse(readFileSync(join(tempDataDir, 'imageRefs', `snapshot-${id.snapshotId}.json`), 'utf8')).state).toBe('invoked');
+    expect(readFileSync(join(tempDataDir, 'imageRefs', id.filename), 'utf8')).toBe('reviewed bytes');
+  });
+
+  it('retains a canceled remote recovery until the peer work is proven settled', async () => {
+    const source = join(tempDataDir, 'images', 'reviewed.png');
+    mkdirSync(join(tempDataDir, 'images'), { recursive: true });
+    writeFileSync(source, 'reviewed bytes');
+    const digest = createHash('sha256').update('reviewed bytes').digest('hex');
+    mediaJobQueue.quiesceMediaJobQueue();
+    const marker = { ...remoteImageMediaParams(), inputAssets: [{ role: 'referenceImages', path: source }] };
+    const job = await mediaJobQueue.enqueueJob({ kind: 'image', params: { prompt: 'edit', referenceImagePaths: [source], reviewedReferenceDigest: digest, remoteMedia: marker } });
+    const retained = mediaJobQueue.getJob(job.jobId);
+    const id = retained.params.reviewedReferenceSnapshot;
+    const { markSnapshotState } = await import('../imageGen/reviewedReference.js');
+    await markSnapshotState(id, 'invoked');
+    retained.params.remoteMedia.reconcile = true;
+    retained.params.remotePeerReservation = true;
+    await mediaJobQueue.cancelJob(job.jobId);
+    expect(JSON.parse(readFileSync(join(tempDataDir, 'imageRefs', `snapshot-${id.snapshotId}.json`), 'utf8')).state).toBe('invoked');
+  });
+
+  it('marks a canceled queued snapshot settled only after its terminal state is durable', async () => {
+    const source = join(tempDataDir, 'images', 'reviewed.png');
+    mkdirSync(join(tempDataDir, 'images'), { recursive: true });
+    writeFileSync(source, 'reviewed bytes');
+    const digest = createHash('sha256').update('reviewed bytes').digest('hex');
+    mediaJobQueue.quiesceMediaJobQueue();
+    const job = await mediaJobQueue.enqueueJob({ kind: 'image', params: { prompt: 'edit', referenceImagePaths: [source], reviewedReferenceDigest: digest } });
+    const id = mediaJobQueue.getJob(job.jobId).params.reviewedReferenceSnapshot;
+    await mediaJobQueue.cancelJob(job.jobId);
+    const manifest = JSON.parse(readFileSync(join(tempDataDir, 'imageRefs', `snapshot-${id.snapshotId}.json`), 'utf8'));
+    expect(manifest.state).toBe('settled');
+    expect(persistedJobs().find(row => row.id === job.jobId).status).toBe('canceled');
+    expect(stubs.generateImage).not.toHaveBeenCalled();
+  });
+
+  it('refuses a replaced snapshot before invoking the provider', async () => {
+    const source = join(tempDataDir, 'images', 'reviewed.png');
+    mkdirSync(join(tempDataDir, 'images'), { recursive: true });
+    writeFileSync(source, 'reviewed bytes');
+    const digest = createHash('sha256').update('reviewed bytes').digest('hex');
+    stubs.generateVideo.mockResolvedValue({});
+    const blocker = await mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'hold the lane' } });
+    await waitFor(() => stubs.generateVideo.mock.calls.length === 1);
+    const job = await mediaJobQueue.enqueueJob({ kind: 'image', params: { prompt: 'edit', referenceImagePaths: [source], reviewedReferenceDigest: digest } });
+    const snapshot = mediaJobQueue.getJob(job.jobId).params.reviewedReferenceRequest.referenceImagePaths[0];
+    const identity = mediaJobQueue.getJob(job.jobId).params.reviewedReferenceSnapshot;
+    // Keep the original inode alive: unlink + recreate may recycle it, which
+    // would not establish the distinct file this ownership regression requires.
+    renameSync(snapshot, `${snapshot}.original`);
+    writeFileSync(snapshot, 'reviewed bytes');
+    const replacement = lstatSync(snapshot, { bigint: true });
+    expect({ dev: String(replacement.dev), ino: String(replacement.ino) })
+      .not.toEqual({ dev: identity.dev, ino: identity.ino });
+    videoGenEvents.emit('completed', { generationId: blocker.jobId, filename: 'done.mp4' });
+    await waitFor(() => mediaJobQueue.getJob(job.jobId).status === 'failed');
+    expect(stubs.generateImage).not.toHaveBeenCalled();
+    expect(readFileSync(snapshot, 'utf8')).toBe('reviewed bytes');
+  });
+
   it('blocks guide generation and rechecks media policy before delayed provider dispatch', async () => {
     const { getProject } = await import('../musicVideo/projects.js');
     const request = { kind: 'image', params: { prompt: 'Synthetic guide', musicVideo: { projectId: 'mv-example', castAndSets: { key: 'guide' } } } };
@@ -389,7 +563,13 @@ describe('mediaJobQueue', () => {
     }
   });
 
-  it.each(['unchanged', 'unchanged-named', 'reference', 'adapter', 'canon-adapter', 'trigger'])('checks FableLoom %s inputs after queue delay and before provider dispatch', async (changed) => {
+  // One case per distinct gate in assertFableLoomDispatchInputs: the accepted
+  // path, a job queued before canon fingerprints (cross-version compatibility),
+  // a recorded-asset digest (shared by reference/adapter/canon files), and the
+  // adapter activation-word re-weave.
+  it.each([
+    'unchanged', 'unchanged-legacy-canon', 'canon-image', 'trigger',
+  ])('checks FableLoom %s inputs after queue delay and before provider dispatch', async (changed) => {
     const images = join(tempDataDir, 'images');
     const loras = join(tempDataDir, 'loras');
     mkdirSync(images, { recursive: true });
@@ -402,20 +582,22 @@ describe('mediaJobQueue', () => {
     writeFileSync(canonReference, 'canon-reference');
     writeFileSync(adapter, 'original-adapter');
     writeFileSync(canonAdapter, 'canon-adapter');
-    const namedAdapter = changed === 'unchanged-named';
     const hash = value => createHash('sha256').update(value).digest('hex');
+    // A job queued before canon fingerprints existed keeps its basename check.
+    const canonAsset = changed === 'unchanged-legacy-canon'
+      ? { role: 'character-neutral', filename: 'canon.png' }
+      : { role: 'character-neutral', filename: 'canon.png', inputRoot: 'images', sha256: hash('canon-reference') };
     const params = {
       mode: 'local', prompt: 'An authored view', negativePrompt: '',
       fableLoom: { loomId: 'loom-1', episodeId: 'ep-1', nodeId: 'node-1' },
       referenceImagePaths: [canonReference, reference], referenceImageStrengths: [1, 0.4],
-      loraFilenames: namedAdapter ? ['canon.safetensors', 'example.safetensors'] : ['canon.safetensors'],
-      loraPaths: namedAdapter ? [] : [adapter], loraScales: [0.8, 0.7],
+      loraFilenames: ['canon.safetensors'], loraPaths: [adapter], loraScales: [0.8, 0.7],
       visualConditioning: {
         version: 1, capability: { kind: 'image', backend: 'local' },
         authoredPrompt: 'An authored view', authoredNegativePrompt: '',
         compiledPrompt: 'An authored view', compiledNegativePrompt: '', renderedPrompt: 'An authored view',
         assets: [
-          { role: 'character-neutral', filename: 'canon.png' },
+          canonAsset,
           { role: 'request-reference', filename: 'reference.png', inputRoot: 'images', sha256: hash('original-reference') },
         ],
         referenceImageStrengths: [1, 0.4],
@@ -430,9 +612,7 @@ describe('mediaJobQueue', () => {
     await waitFor(() => stubs.generateVideo.mock.calls.length === 1);
     const second = await mediaJobQueue.enqueueJob({ kind: 'image', params });
     expect(mediaJobQueue.getJob(second.jobId).status).toBe('queued');
-    if (changed === 'reference') writeFileSync(reference, 'changed-reference');
-    if (changed === 'adapter') writeFileSync(adapter, 'changed-adapter');
-    if (changed === 'canon-adapter') writeFileSync(canonAdapter, 'changed-canon-adapter');
+    if (changed === 'canon-image') writeFileSync(canonReference, 'changed-canon-reference');
     if (changed === 'trigger') writeFileSync(`${adapter}.metadata.json`, JSON.stringify({ triggerWords: ['new-token'] }));
     videoGenEvents.emit('completed', { generationId: first.jobId, filename: 'example.mp4' });
     if (changed.startsWith('unchanged')) {
@@ -580,6 +760,20 @@ describe('mediaJobQueue', () => {
 
     it('reports the kind in queue capacity so it is never invisible', () => {
       expect(Object.keys(mediaJobQueue.getQueueCapacity().byKind)).toContain('video-upscale');
+    });
+
+    it('restores the same Topaz request and does not claim cancellation without provider confirmation', async () => {
+      const id = '00000000-0000-4000-8000-000000000099';
+      writeFileSync(join(tempDataDir, 'media-jobs.json'), JSON.stringify({ jobs: [{ id, kind: 'video-upscale', status: 'running', queuedAt: '2026-04-30T10:00:00Z', params: { mode: 'topaz', requestId: 'request-id' }, result: { topazPhase: 'accepting', topazUncertain: true } }] }));
+      await importFresh();
+      await mediaJobQueue.initMediaJobQueue();
+      await waitFor(() => stubs.runTopazUpscale.mock.calls.length === 1);
+      expect(stubs.runTopazUpscale).toHaveBeenCalledWith(expect.objectContaining({ jobId: id, requestId: 'request-id', topazRecovery: true }));
+      expect(mediaJobQueue.getJob(id).result).toMatchObject({ topazPhase: 'accepting', topazUncertain: true });
+      await mediaJobQueue.cancelJob(id);
+      videoGenEvents.emit('failed', { generationId: id, error: 'Cancellation unconfirmed', remoteCancellationConfirmed: false });
+      await waitFor(() => mediaJobQueue.getJob(id).status === 'failed');
+      expect(mediaJobQueue.getJob(id).result.topazUncertain).toBe(true);
     });
   });
 
@@ -3079,34 +3273,6 @@ async function waitFor(predicate, { timeoutMs = DEFAULT_WAIT_MS, intervalMs = 30
     lastError ? { cause: lastError } : undefined,
   );
 }
-
-// Contract test for the helper above. The bug it guards (#5512) only surfaces
-// under timing luck on a slow runner, so it is pinned deterministically here
-// rather than left to the flake that found it. One short real timeout, not a
-// repeated sleep.
-describe('waitFor test helper (#5512)', () => {
-  it('treats a throwing predicate as not-yet-true and keeps polling', async () => {
-    let calls = 0;
-    await waitFor(() => {
-      calls += 1;
-      if (calls < 3) throw new Error('ENOENT: no such file or directory');
-      return true;
-    }, { timeoutMs: 1000, intervalMs: 1 });
-    expect(calls).toBe(3);
-  });
-
-  it('still fails loudly on timeout, naming the predicate and the last error', async () => {
-    await expect(waitFor(
-      () => { throw new Error('ENOENT: no such file or directory'); },
-      { timeoutMs: 20, intervalMs: 5 },
-    )).rejects.toThrow(/never became true within 20ms.*last error: ENOENT/s);
-  });
-
-  it('reports a cleanly-false predicate without inventing an error', async () => {
-    await expect(waitFor(() => false, { timeoutMs: 20, intervalMs: 5 }))
-      .rejects.toThrow(/never became true within 20ms(?!.*last error)/s);
-  });
-});
 
 // Regression: three terminal failures must preserve the rest of a batch,
 // including its staged bytes, across reload and explicit resume.

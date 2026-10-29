@@ -1194,6 +1194,14 @@ export async function deleteModel(backend, modelId) {
  */
 export async function switchBackend(to) {
   if (!isBackend(to)) return { success: false, error: `Unknown backend: ${to}` }
+  const override = process.env.LLM_BACKEND
+  if (isBackend(override) && override !== to) {
+    return {
+      success: false,
+      code: 'BACKEND_OVERRIDE_CONFLICT',
+      error: `LLM_BACKEND is exported as ${override}. Change or unset that environment override and restart PortOS before setting ${to} as the default.`,
+    }
+  }
   await writeBackend(to)
   await ensureBackendProvider(to)
   console.log(`🔀 Active local LLM backend → ${to}`)

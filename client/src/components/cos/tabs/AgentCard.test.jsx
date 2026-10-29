@@ -554,6 +554,33 @@ describe('AgentCard agent ID', () => {
 });
 
 describe('AgentCard responsive header', () => {
+  it('keeps active, confirmation, and resume controls at the 44px minimum', async () => {
+    const runningAgent = { ...agent, status: 'running', completedAt: null };
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <AgentCard agent={runningAgent} liveOutput={[{ line: 'working' }]} onRelaunch={vi.fn()} onPause={vi.fn()} onKill={vi.fn()} />
+        <AgentCard agent={{ ...agent, id: 'paused-agent', status: 'paused' }} paused onResume={vi.fn()} />
+      </MemoryRouter>
+    );
+
+    for (const button of [
+      screen.getAllByRole('button', { name: 'Show' })[0],
+      screen.getByRole('button', { name: "Relaunch this agent's task on a different provider or model" }),
+      screen.getByRole('button', { name: 'Pause agent and preserve worktree' }),
+      screen.getByRole('button', { name: 'Force kill agent (SIGKILL)' }),
+      screen.getByRole('button', { name: "Resume this agent's task on its preserved worktree" }),
+    ]) {
+      expect(button).toHaveClass('min-h-[44px]', 'min-w-[44px]');
+      expect(button.className).not.toMatch(/sm:min-[hw]-0/);
+    }
+
+    await user.click(screen.getByRole('button', { name: 'Force kill agent (SIGKILL)' }));
+    for (const button of [screen.getByRole('button', { name: 'Confirm' }), screen.getByRole('button', { name: 'Cancel' })]) {
+      expect(button).toHaveClass('min-h-[44px]', 'min-w-[44px]');
+    }
+  });
+
   it('reserves readable identity width and lets actions wrap on narrow cards', () => {
     const onDelete = vi.fn();
     const onResume = vi.fn();
@@ -591,6 +618,46 @@ describe('AgentCard responsive header', () => {
       expect(screen.getByText('Effort: low')).toBeInTheDocument();
       cleanup();
     }
+  });
+
+  it.each([
+    ['active', { ...agent, status: 'running', completedAt: null }],
+    ['completed', agent],
+  ])('shows requested fast as a compact attribute on the %s card', (_label, cardAgent) => {
+    render(
+      <MemoryRouter>
+        <AgentCard
+          agent={{ ...cardAgent, metadata: { ...cardAgent.metadata, model: 'example-model', executionOptions: {
+            requested: { serviceTier: 'fast' }, effective: {}, provenance: { serviceTier: 'provider' },
+          } } }}
+          completed={cardAgent.status === 'completed'}
+        />
+      </MemoryRouter>
+    );
+
+    const tag = screen.getByText('fast').parentElement;
+    expect(tag.parentElement).toContainElement(screen.getByText('example-model'));
+    expect(tag).toHaveAttribute('title', expect.stringContaining('requested fast; effective unconfirmed'));
+    expect(tag).toHaveTextContent('Source: provider');
+    expect(screen.queryByLabelText('Execution options used')).not.toBeInTheDocument();
+  });
+
+  it('reports confirmed speed without mistaking it for the requested speed', () => {
+    render(<MemoryRouter><AgentCard agent={{ ...agent, metadata: { ...agent.metadata, executionOptions: {
+      requested: { serviceTier: 'fast' }, effective: { serviceTier: 'standard' },
+    } } }} completed /></MemoryRouter>);
+
+    expect(screen.getByText('fast').parentElement).toHaveAttribute('title', expect.stringContaining('requested fast; effective standard'));
+  });
+
+  it.each([
+    ['standard requested', { requested: { serviceTier: 'standard' } }],
+    ['only effective fast', { effective: { serviceTier: 'fast' } }],
+    ['no options', undefined],
+  ])('does not show the fast tag for %s', (_label, executionOptions) => {
+    render(<MemoryRouter><AgentCard agent={{ ...agent, metadata: { ...agent.metadata, executionOptions } }} completed /></MemoryRouter>);
+    expect(screen.queryByText('fast')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Execution options used')).not.toBeInTheDocument();
   });
 
   it('shows provider route provenance on active and completed cards', () => {
@@ -1411,6 +1478,20 @@ it('keeps the current cleanup verdict primary and labels stale report and warnin
   await userEvent.click(screen.getByRole('button', { name: 'Show', exact: true }));
   expect(await screen.findByText('Earlier agent report — current delivery and cleanup status shown above')).toBeInTheDocument();
   expect(screen.getByText('Cleanup is queued with the checkout preserved.')).toBeInTheDocument();
+});
+
+it('shows the assigned merge and outstanding local-work warning on a completed agent card', () => {
+  const prUrl = 'https://github.com/example/repo/pull/42';
+  const current = { ...agent, result: { success: true, cleanupPending: true,
+    taskOutcome: { status: 'no-action-needed', reason: 'The assigned review target is merged.' } }, metadata: {
+    ...agent.metadata, taskOutcomeSource: 'forge-verification', reviewLoopMergeTarget: { url: prUrl, branch: 'example' },
+    mergedReviewFollowUp: { status: 'verified', prUrl }, cleanupOutcome: { status: 'blocked', reason: 'worktree-dirty' },
+  } };
+  render(<MemoryRouter><AgentCard agent={current} completed /></MemoryRouter>);
+  expect(screen.getByText('Assigned pull request merged.')).toBeInTheDocument();
+  expect(screen.getByText('Later local work may still need delivery verification.')).toBeInTheDocument();
+  expect(screen.getByText('Local cleanup is blocked. PortOS has not confirmed safe removal.')).toBeInTheDocument();
+  expect(screen.queryByText('Delivery verified.')).not.toBeInTheDocument();
 });
 
 

@@ -265,3 +265,36 @@ describe('CoS run execution attribution', () => {
     expect(atomicWrite).toHaveBeenCalledWith(expect.stringContaining('metadata.json'), expect.objectContaining({ executionOptions }));
   });
 });
+
+describe('verified deferred cleanup run reconciliation', () => {
+  it('repairs the matching closed run once without changing execution or usage and refuses unrelated failures', async () => {
+    vi.resetModules();
+    const original = { id: 'run-recovered', agentId: 'agent-recovered', taskId: 'task-recovered',
+      endTime: '2026-10-27T10:44:57Z', duration: 1234, executionSuccess: true, success: false,
+      usageReconciled: true, error: 'cleanup pending', errorCategory: 'task-incomplete',
+      taskOutcome: { status: 'incomplete', recovery: { mode: 'cleanup' } } };
+    let saved = structuredClone(original);
+    const atomicWrite = vi.fn(async (_path, value) => { saved = value; });
+    vi.doMock('../lib/fileUtils.js', async originalModule => ({ ...(await originalModule()),
+      atomicWrite }));
+    vi.doMock('../lib/jsonIo.js', async originalModule => ({ ...(await originalModule()),
+      readJSONFileStrict: vi.fn(async () => ({ ok: true, value: saved })) }));
+    const { reconcileAgentRunDelivery, agentRunDeliveryNeedsReconciliation } = await import('./agentRunTracking.js');
+    const agent = { id: original.agentId, taskId: original.taskId, metadata: { runId: original.id },
+      result: { success: true, executionSuccess: true, cleanupPending: false,
+        deferredDeliveryOutcome: original.taskOutcome, taskOutcome: { status: 'completed', reason: 'verified cleanup' } } };
+    expect(await agentRunDeliveryNeedsReconciliation(agent)).toBe(true);
+    expect(await reconcileAgentRunDelivery(agent)).toBe(true);
+    expect(saved).toMatchObject({ success: true, taskOutcome: { status: 'completed' }, error: null,
+      endTime: original.endTime, duration: 1234, usageReconciled: true, deferredDeliveryOutcome: original.taskOutcome });
+    expect(await reconcileAgentRunDelivery(agent)).toBe(true);
+    expect(atomicWrite).toHaveBeenCalledTimes(1);
+    expect(await agentRunDeliveryNeedsReconciliation(agent)).toBe(false);
+    for (const patch of [{ agentId: 'other' }, { taskId: 'other' }, { executionSuccess: false },
+      { executionInterruption: { category: 'content-refusal' } }, { taskOutcome: { status: 'blocked' } }]) {
+      saved = { ...original, ...patch };
+      expect(await reconcileAgentRunDelivery(agent)).toBe(false);
+    }
+    expect(atomicWrite).toHaveBeenCalledTimes(1);
+  });
+});

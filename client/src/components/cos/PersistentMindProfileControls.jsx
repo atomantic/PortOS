@@ -75,9 +75,9 @@ export default function PersistentMindProfileControls({
   const harness = selectedProvider?.type === 'api'
     ? { label: 'Direct API · recommended', tone: 'border-port-success/30 bg-port-success/10 text-port-success', detail: 'Best reliability for an always-on mind: structured HTTP, clean cancellation, and no terminal state. Ollama, llama.cpp, LM Studio, vLLM, and compatible cloud endpoints use this lane.' }
     : selectedProvider?.type === 'cli'
-      ? { label: 'Headless CLI · supported', tone: 'border-port-accent/30 bg-port-accent/10 text-port-accent', detail: 'A good option when the vendor CLI owns authentication or model access, with more startup overhead than a direct API.' }
+      ? { label: 'Headless CLI · supported', tone: 'border-port-accent/30 bg-port-accent/10 text-port-accent', detail: 'Runs with the vendor shell and file tools disabled, so only a CLI with an enforced tool-free mode (such as Claude Code or Grok) can be saved here. A good option when the vendor CLI owns authentication or model access, with more startup overhead than a direct API.' }
       : selectedProvider?.type === 'tui'
-        ? { label: 'Interactive TUI · not recommended', tone: 'border-port-warning/30 bg-port-warning/10 text-port-warning', detail: 'Compatibility lane only. Startup prompts, terminal redraws, and screen scraping are fragile for unattended persistent work.' }
+        ? { label: 'Interactive TUI · unavailable', tone: 'border-port-error/30 bg-port-error/10 text-port-error', detail: 'An interactive TUI cannot run without host shell and file tools, and the mind reads third-party text unattended. Choose an API provider or a tool-free CLI such as Claude Code or Grok.' }
         : null;
 
   // The provider hook memoizes its setters in production, but simple host-page

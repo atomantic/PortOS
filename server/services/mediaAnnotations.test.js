@@ -81,6 +81,35 @@ describe('mediaAnnotations service (multi-author)', () => {
     expect(all['image:a.png']).toBeUndefined();
   });
 
+  it('setAnnotation keeps a good/bad rating on its own, clears it with null, and refuses other values', async () => {
+    const rated = await svc.setAnnotation('image:a.png', { rating: 'bad' });
+    expect(rated.own).toMatchObject({ starred: false, note: '', rating: 'bad' });
+    expect((await svc.setAnnotation('image:a.png', { starred: true })).own.rating).toBe('bad');
+    expect((await svc.setAnnotation('image:a.png', { rating: null })).own).not.toHaveProperty('rating');
+    expect((await svc.setAnnotation('image:a.png', { starred: false })).own).toBeNull();
+    await expect(svc.setAnnotation('image:a.png', { rating: 'rejected' })).rejects.toMatchObject({ code: svc.ERR_VALIDATION });
+  });
+
+  it('rates a reference sheet under image-ref:, kept apart from a same-named gallery image', async () => {
+    await svc.setAnnotation('image-ref:sheet.png', { rating: 'good' });
+    const all = await svc.listAnnotations();
+    expect(all['image-ref:sheet.png'].own.rating).toBe('good');
+    expect(all['image:sheet.png']).toBeUndefined();
+    await expect(svc.setAnnotation('catalog-image:image-refs:sheet.png', { rating: 'good' })).rejects.toMatchObject({ code: svc.ERR_VALIDATION });
+  });
+
+  it('mergePeerAnnotations takes a peer rating, and an older peer without ratings still reads its stars', async () => {
+    await svc.mergePeerAnnotations({ instanceId: 'peer-1', authorName: 'Sam', annotations: {
+      'image:a.png': { starred: false, note: '', rating: 'good', updatedAt: '2026-01-01T00:00:00.000Z' },
+      'image:b.png': { starred: true, note: '', updatedAt: '2026-01-01T00:00:00.000Z' },
+      'image:c.png': { starred: false, note: '', rating: 'rejected', updatedAt: '2026-01-01T00:00:00.000Z' },
+    } });
+    const all = await svc.listAnnotations();
+    expect(all['image:a.png'].others[0]).toMatchObject({ rating: 'good' });
+    expect(all['image:b.png'].others[0]).not.toHaveProperty('rating');
+    expect(all['image:c.png']).toBeUndefined();
+  });
+
   it('setAnnotation preserves peer authors when local entry is pruned', async () => {
     fileStore.set(STATE_PATH, {
       annotations: {

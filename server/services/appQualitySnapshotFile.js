@@ -471,6 +471,9 @@ async function landSnapshotPr(app, { body, count, defaultBranch, git, deps, mess
 
   const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
   return withCheckoutPublication(app.repoPath, async () => {
+    await (await import('./appQualitySnapshotMerge.js')).sweepSettledSnapshotCheckouts(app, git, deps)
+      .then(swept => { if (swept.length) console.log(`🧹 Retired ${swept.length} settled quality snapshot checkout(s) for app ${app.id}`); })
+      .catch(err => console.log(`⏭️ Quality snapshot checkout sweep skipped for app ${app.id}: ${err.message}`));
     worktreePath = await makeTemp(join(tmpdir(), 'portos-quality-'));
     return run().finally(() => retainWorktree ? undefined : cleanupSnapshotWorktree(app, git, worktreePath, removeTemp));
   });

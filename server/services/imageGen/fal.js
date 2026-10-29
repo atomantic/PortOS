@@ -54,6 +54,7 @@ import {
 } from '../falQueue.js';
 import { IMAGE_GEN_MODE, describeFidelity, visualReferenceRole } from './modes.js';
 import { resolveInputImages } from './inputImages.js';
+import { assertSnapshotForAdapter } from './reviewedReference.js';
 import { cloudPromptRequired } from './cloudProviderConfig.js';
 import { rejectDegenerateFrame } from './frameGuard.js';
 import { carriedPromptAdditions, promptAddition, sentPromptRecord } from '../../lib/modelInput.js';
@@ -171,18 +172,19 @@ function buildFalPrompt({ prompt, hasInitImage = false, initImageStrength, refer
 // Read one input image into a data URI — the original bytes when they are a
 // web format within the size budget, else a downscaled re-encode — and report
 // its size in megapixels (FLUX.2 bills input megapixels).
-async function encodeInputImage(filePath) {
-  const metadata = await sharp(filePath).metadata();
+async function encodeInputImage(filePath, reviewedBytes = null) {
+  const input = reviewedBytes || filePath;
+  const metadata = await sharp(input).metadata();
   const longSide = Math.max(metadata.width || 0, metadata.height || 0);
   const passThrough = longSide <= INPUT_MAX_LONG_SIDE
     && (metadata.size ?? 0) <= INPUT_MAX_BYTES
     && ['png', 'jpeg', 'webp'].includes(metadata.format);
   if (passThrough) {
-    const buffer = await readFile(filePath);
+    const buffer = reviewedBytes || await readFile(filePath);
     const mime = detectImageFormat(buffer)?.mime || `image/${metadata.format}`;
     return { dataUri: `data:${mime};base64,${buffer.toString('base64')}`, megapixels: ((metadata.width || 0) * (metadata.height || 0)) / FAL_MEGAPIXEL };
   }
-  const resized = sharp(filePath)
+  const resized = sharp(input)
     .rotate()
     .resize({ width: INPUT_MAX_LONG_SIDE, height: INPUT_MAX_LONG_SIDE, fit: 'inside', withoutEnlargement: true });
   // Keep an alpha channel lossless; everything else goes JPEG to keep the
@@ -230,7 +232,7 @@ async function generateImagePrepared({
   model, prompt = '', negativePrompt, width, height, seed,
   initImagePath, initImageStrength, referenceImagePaths = [],
   visualConditioning = null,
-  jobId: providedJobId = null,
+  jobId: providedJobId = null, reviewedReferenceSnapshot = null,
   cleanC2PA = false,
   denoise = false,
   apiKey: providedApiKey = null,
@@ -290,6 +292,7 @@ async function generateImagePrepared({
     ...sentRecord,
     createdAt: new Date().toISOString(),
   };
+  const reviewedReferenceBytes = await assertSnapshotForAdapter(reviewedReferenceSnapshot, jobId, inputImages.initPath, inputImages.referencePaths);
   const job = { ...meta, clients: [], status: 'running', renderStartedAtMs };
   jobs.set(jobId, job);
 
@@ -302,7 +305,7 @@ async function generateImagePrepared({
   // out-of-band while the client attaches to the per-job SSE stream.
   runFal(job, jobId, {
     apiKey, family, fullPrompt, negativePrompt, width, height, seed,
-    inputPaths: inputImages.paths, outputPath, filename, meta, cleanC2PA, denoise,
+    inputPaths: inputImages.paths, reviewedReferenceBytes, outputPath, filename, meta, cleanC2PA, denoise,
   }).catch((err) => {
     console.error(`❌ fal image run failed [${jobId.slice(0, 8)}]: ${err?.message}`);
   });
@@ -316,7 +319,7 @@ async function generateImagePrepared({
 
 async function runFal(job, jobId, {
   apiKey, family, fullPrompt, negativePrompt, width, height, seed,
-  inputPaths, outputPath, filename, meta, cleanC2PA = false, denoise = false,
+  inputPaths, reviewedReferenceBytes, outputPath, filename, meta, cleanC2PA = false, denoise = false,
 }) {
   const entry = createFalRequestEntry(apiKey);
   entry.aborted = preparations.take(jobId);
@@ -325,7 +328,7 @@ async function runFal(job, jobId, {
   let wroteOutput = false;
   try {
     const encoded = [];
-    for (const path of inputPaths) encoded.push(await encodeInputImage(path));
+    for (const path of inputPaths) encoded.push(await encodeInputImage(path, reviewedReferenceBytes));
     const request = buildFalImageRequest({
       modelId: family.textEndpoint,
       prompt: fullPrompt,
@@ -414,7 +417,7 @@ async function runFal(job, jobId, {
         dispatchTerminalEvent(
           jobId,
           () => broadcastSse(job, { type: 'complete', result: done }),
-          () => imageGenEvents.emit('completed', { mode: MODE, generationId: jobId, path: done.path, filename }),
+          () => imageGenEvents.emit('completed', { mode: MODE, generationId: jobId, inputProcessSettled: true, path: done.path, filename }),
         );
         closeJobAfterDelay(jobs, jobId);
       } catch (err) {

@@ -13,16 +13,21 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-vi.mock('./eventScheduler.js', () => ({
-  // The real schedule() returns the registered event; the scheduler treats a
-  // null nextRunAt as a failed registration, so the default mock returns a
-  // firing one.
-  schedule: vi.fn(() => ({ id: 'backup-daily', nextRunAt: Date.now() + 60_000 })),
-  cancel: vi.fn(),
-  // Defaults to "no missed slot" so every pre-existing test above stays
-  // unaffected by the #8456 catch-up check that now runs on every boot.
-  parseCronToPrevRun: vi.fn(() => null)
-}));
+vi.mock('./eventScheduler.js', async (importOriginal) => {
+  const real = await importOriginal();
+  return {
+    // The real schedule() returns the registered event; the scheduler treats a
+    // null nextRunAt as a failed registration, so the default mock returns a
+    // firing one.
+    schedule: vi.fn((config) => config.type === 'once'
+      ? real.schedule(config)
+      : { id: 'backup-daily', nextRunAt: Date.now() + 60_000 }),
+    cancel: vi.fn(real.cancel),
+    // Defaults to "no missed slot" so every pre-existing test above stays
+    // unaffected by the #8456 catch-up check that now runs on every boot.
+    parseCronToPrevRun: vi.fn(() => null)
+  };
+});
 
 // The scheduler subscribes to `settings:updated` at module load, so the mock
 // needs a working emitter the re-sync tests below can fire. `vi.hoisted` runs
@@ -512,14 +517,44 @@ describe('missed-slot catch-up at boot (#8456)', () => {
     });
   });
 
-  it('does not catch up when the last run is at or after the most recent slot', async () => {
+  it('does not catch up when a legacy successful run is at the most recent slot', async () => {
     getSettings.mockResolvedValue(SETTINGS);
     parseCronToPrevRun.mockReturnValue(MISSED_SLOT);
-    getState.mockResolvedValue({ lastRun: MISSED_SLOT.toISOString() });
+    getState.mockResolvedValue({ status: 'ok', lastRun: MISSED_SLOT.toISOString() });
 
     await startBackupScheduler();
     await vi.advanceTimersByTimeAsync(5 * 60_000);
 
+    expect(runBackup).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { status: 'ok', lastRun: '2026-01-02T01:00:00.000Z', lastSuccessfulRun: null },
+    { status: 'error', lastRun: '2026-01-02T01:00:00.000Z' },
+    { status: 'degraded', lastRun: '2026-01-02T01:00:00.000Z', pgBackup: { status: 'failed' } },
+    { status: 'error', lastRun: '2026-01-02T01:00:00.000Z', lastSuccessfulRun: '2026-01-01T00:00:00.000Z' },
+    { status: 'degraded', lastRun: '2026-01-02T01:00:00.000Z', lastSuccessfulRun: '2026-01-01T00:00:00.000Z' },
+  ])('catches up after an incomplete attempt: %j', async (state) => {
+    getSettings.mockResolvedValue(SETTINGS);
+    parseCronToPrevRun.mockReturnValue(MISSED_SLOT);
+    getState.mockResolvedValue(state);
+
+    await startBackupScheduler();
+    await vi.advanceTimersByTimeAsync(5 * 60_000 - 1);
+    expect(runBackup).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(runBackup).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps a satisfied slot after a later failed attempt', async () => {
+    getSettings.mockResolvedValue(SETTINGS);
+    parseCronToPrevRun.mockReturnValue(MISSED_SLOT);
+    getState.mockResolvedValue({
+      status: 'error', lastRun: '2026-01-02T01:00:00.000Z', lastSuccessfulRun: MISSED_SLOT.toISOString(),
+    });
+
+    await startBackupScheduler();
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
     expect(runBackup).not.toHaveBeenCalled();
   });
 

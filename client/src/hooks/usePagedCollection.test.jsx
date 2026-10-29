@@ -101,3 +101,66 @@ it('reconciles a delayed mutation against the current filter even with no pendin
   expect(result.current.items.map(item => item.id)).toEqual(['kept']);
   expect(result.current.total).toBe(1);
 });
+
+
+it('protects local edits and deletions during cursor reads, preserves refreshes and retries failed reconciliation', async () => {
+  const stale = deferred();
+  const replay = deferred();
+  const refreshed = deferred();
+  const saved = { id: 'edited', content: 'Saved body' };
+  const fetchPage = vi.fn()
+    .mockResolvedValueOnce({ items: [row('edited'), row('removed'), row('older')], nextCursor: 'boundary' })
+    .mockReturnValueOnce(stale.promise).mockReturnValueOnce(replay.promise)
+    .mockReturnValueOnce(refreshed.promise)
+    .mockResolvedValueOnce({ items: [saved, row('newest')], nextCursor: 'edited' });
+  const { result } = renderHook(() => usePagedCollection(fetchPage));
+  await waitFor(() => expect(result.current.loaded).toBe(true));
+  act(() => { void result.current.loadMore(); });
+  const signal = fetchPage.mock.calls[1][0].signal;
+  act(() => { void result.current.refreshFirst(); });
+  act(() => { void result.current.setItems(items => items.filter(item => item.id !== 'removed')
+    .map(item => item.id === saved.id ? saved : item)); });
+  expect(signal.aborted).toBe(true);
+  expect(fetchPage.mock.calls.slice(1).map(([request]) => request.cursor)).toEqual(['boundary', 'boundary']);
+  await act(async () => replay.resolve({ items: [row('oldest')], nextCursor: null }));
+  expect(fetchPage).toHaveBeenLastCalledWith(expect.objectContaining({ cursor: null }));
+  await act(async () => stale.resolve({ items: [row('edited'), row('removed')], nextCursor: 'wrong' }));
+  expect(result.current.items).toEqual([saved, row('older'), row('oldest')]);
+  await act(async () => refreshed.reject(new Error('Refresh unavailable')));
+  // Idle local changes keep the failed refresh available for an explicit retry.
+  act(() => { result.current.setItems([...result.current.items]); });
+  expect(fetchPage).toHaveBeenCalledTimes(4);
+  expect(result.current.error.message).toBe('Refresh unavailable');
+  await act(async () => result.current.loadMore());
+  expect(fetchPage).toHaveBeenLastCalledWith(expect.objectContaining({ cursor: null }));
+  expect(result.current.items).toEqual([saved, row('newest'), row('older'), row('oldest')]);
+  expect(result.current.error).toBeNull();
+  expect(result.current.hasMore).toBe(false);
+});
+
+it('disposes mutation replay and queued refreshes when filters change or the collection unmounts', async () => {
+  const stale = deferred();
+  const replay = deferred();
+  const filtered = deferred();
+  const firstQuery = vi.fn().mockResolvedValueOnce({ items: [row('edited')], nextCursor: null })
+    .mockReturnValueOnce(stale.promise).mockReturnValueOnce(replay.promise);
+  const secondQuery = vi.fn().mockReturnValueOnce(filtered.promise);
+  const { result, rerender, unmount } = renderHook(({ query }) => usePagedCollection(query), { initialProps: { query: firstQuery } });
+  await waitFor(() => expect(result.current.loaded).toBe(true));
+  act(() => { void result.current.refreshFirst(); });
+  act(() => { void result.current.refreshFirst(); });
+  act(() => { void result.current.setItems([row('saved')]); });
+  rerender({ query: secondQuery });
+  expect(firstQuery.mock.calls[2][0].signal.aborted).toBe(true);
+  await act(async () => {
+    stale.resolve({ items: [row('stale')], nextCursor: null });
+    replay.resolve({ items: [row('saved')], nextCursor: null });
+  });
+  expect(result.current.items).toEqual([]);
+  act(() => { void result.current.refreshFirst(); });
+  unmount();
+  expect(secondQuery.mock.calls[0][0].signal.aborted).toBe(true);
+  await act(async () => filtered.resolve({ items: [row('filtered')], nextCursor: null }));
+  expect(firstQuery).toHaveBeenCalledTimes(3);
+  expect(secondQuery).toHaveBeenCalledTimes(1);
+});

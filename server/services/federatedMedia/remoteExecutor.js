@@ -471,6 +471,7 @@ export function createRemoteMediaExecutor({
     // here, inside this run's retry, cancel and timeout envelope rather than
     // before it. See federatedMedia/inputAssets.js for what that entails.
     const request = await buildRequest(marker, {
+      jobId: state.jobId,
       requestJson: (path, options, requestOptions) => requestJson(state, path, options, requestOptions),
       emitStatus: (message) => emitStatus(state.jobId, message),
     });

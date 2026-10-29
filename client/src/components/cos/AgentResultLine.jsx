@@ -28,6 +28,10 @@ export default function AgentResultLine({ agent, className = '' }) {
   const cleanupComplete = isCleanupComplete(cleanup);
   const cleanupPending = cleanupTracked && !cleanupComplete;
   const merged = cleanup?.committedIntegrationVerified === true;
+  // The assigned PR's merge does not verify delivery of later local work.
+  const followUp = agent.metadata?.mergedReviewFollowUp;
+  const assignedPrMerged = agent.metadata?.taskOutcomeSource === 'forge-verification' && followUp?.status === 'verified'
+    && typeof followUp.prUrl === 'string' && !!followUp.prUrl && followUp.prUrl === agent.metadata?.reviewLoopMergeTarget?.url;
   // A completed cleanup audit supersedes the old cleanup-only handoff, while
   // unrelated delivery decisions and execution failures keep their own verdict.
   const cleanupResolved = cleanupComplete && merged && (outcome?.recovery?.mode === 'cleanup'
@@ -52,10 +56,13 @@ export default function AgentResultLine({ agent, className = '' }) {
         <><AlertCircle size={14} aria-hidden="true" /> {agent.result.error || 'Failed'}</>
       )}
       </span>
-      {!handoff && cleanupTracked && <div>{merged ? 'Code merged.' : deliveryComplete ? 'Delivery verified.' : 'Code delivery still needs verification.'}</div>}
+      {!handoff && cleanupTracked && (assignedPrMerged && (!merged || cleanupPending) ? <>
+        <div>Assigned pull request merged.</div>
+        <div>Later local work may still need delivery verification.</div>
+      </> : <div>{merged ? 'Code merged.' : deliveryComplete ? 'Delivery verified.' : 'Code delivery still needs verification.'}</div>)}
       {!handoff && outcome?.reason && (!cleanupTracked || outcome.recovery?.mode === 'approval') && <div>{outcome.reason}</div>}
       {interruption && <div>Execution interrupted: {interruption.category === 'content-refusal' ? 'provider safety refusal; automatic retry stopped' : interruption.category}</div>}
-      {!handoff && cleanupTracked && <CleanupStatus cleanup={cleanup} outcome={outcome} />}
+      {!handoff && cleanupTracked && <CleanupStatus cleanup={cleanup} outcome={outcome} assignedPrMerged={assignedPrMerged} />}
       <SecurityScanEvidence scanner={scanner} control={agent.metadata?.securityScanControl} />
       {!handoff && assessment && <div>{assessment.status === 'recorded' ? 'Assessment saved' : assessment.status === 'persistence-failed' ? 'Assessment could not be saved' : assessment.status === 'not-attempted' ? 'Assessment not attempted' : 'Assessment not verified as saved'}</div>}
       {!handoff && validationFailed && <div>Delivery validation failed</div>}
@@ -68,7 +75,7 @@ function isCleanupComplete(cleanup) {
   return cleanup?.status === 'verified' && (cleanup.unresolved == null || cleanup.unresolved === 0);
 }
 
-function CleanupStatus({ cleanup, outcome }) {
+function CleanupStatus({ cleanup, outcome, assignedPrMerged }) {
   const verified = isCleanupComplete(cleanup);
   const mergedAbsent = cleanup?.reason === 'already-absent-merged'
     || (cleanup?.status === 'already-absent' && cleanup.committedIntegrationVerified === true);
@@ -78,7 +85,8 @@ function CleanupStatus({ cleanup, outcome }) {
   return (
     <div>
       <div>{verified ? mergedAbsent ? 'Local worktree already removed; merged delivery confirmed.' : 'Local cleanup confirmed; preservation verified.'
-        : absent ? mergedAbsent ? cleanup.total > 1 ? 'Other repository cleanup still needs verification.' : 'The local worktree is already gone; preservation still needs verification.' : 'The local worktree is already gone; code delivery still needs verification.'
+        : absent ? mergedAbsent && cleanup.total > 1 ? 'Other repository cleanup still needs verification.'
+          : mergedAbsent || assignedPrMerged ? 'The local worktree is already gone; preservation still needs verification.' : 'The local worktree is already gone; code delivery still needs verification.'
           : blocked ? 'Local cleanup is blocked. PortOS has not confirmed safe removal.'
             : 'Local cleanup is pending; preservation and removal are not yet confirmed.'}</div>
       {!verified && <div>{owners ? <>Next: wait for the current owner to finish.<CleanupHolders owners={cleanup.owners} /></>
@@ -193,6 +201,9 @@ export function ReleasePublicationLine({ publication, synchronization, className
         <div className="text-xs text-port-error">
           Blocker: {sync.blocker}
         </div>
+      )}
+      {syncStatus === 'blocked' && sync?.nextAction && (
+        <div className="text-xs text-port-text-muted">Next action: {sync.nextAction}</div>
       )}
     </div>
   );

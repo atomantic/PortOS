@@ -1,5 +1,5 @@
 /**
- * Per-author star + free-text note, keyed by `<kind>:<ref>`. Each PortOS
+ * Per-author star, good/bad rating and free-text note, keyed by `<kind>:<ref>`. Each PortOS
  * instance only ever writes its own `instanceId` sub-entry; peer notes arrive
  * via sharing/annotationsSync.js and merge in per-author LWW. Decoupled from
  * media-jobs.json so annotations survive job pruning.
@@ -8,7 +8,7 @@
 import { join } from 'path';
 import { PATHS, atomicWrite, readJSONFile, ensureDir } from '../lib/fileUtils.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
-import { isValidKey } from '../lib/mediaItemKey.js';
+import { isValidAnnotationKey as isValidKey } from '../lib/mediaItemKey.js';
 import { getInstanceId, UNKNOWN_INSTANCE_ID } from './instanceIdentity.js';
 import { resolveLocalAuthorName } from './sharing/annotationIdentity.js';
 import { codedError } from '../lib/codedError.js';
@@ -18,6 +18,9 @@ const STATE_PATH = join(PATHS.data, 'media-annotations.json');
 export const ERR_VALIDATION = 'VALIDATION_ERROR';
 
 export const NOTE_MAX_LENGTH = 2000;
+// Good = keep it for its use; bad = a garbage file worth deleting. Absent =
+// unrated. "Rejected" (wrong for one shot) belongs to music video takes only.
+export const MEDIA_RATINGS = Object.freeze(['good', 'bad']);
 
 const DEFAULT_STATE = { annotations: {} };
 const queueWrite = createFileWriteQueue();
@@ -42,7 +45,8 @@ function sanitizeAuthorEntry(raw) {
   if (!raw || typeof raw !== 'object') return null;
   const starred = raw.starred === true;
   const note = typeof raw.note === 'string' ? raw.note.slice(0, NOTE_MAX_LENGTH) : '';
-  if (!starred && !note) return null;
+  const rating = MEDIA_RATINGS.includes(raw.rating) ? raw.rating : null;
+  if (!starred && !note && !rating) return null;
   // Read-path callers (legacy migration, on-disk hydration) tolerate a missing
   // updatedAt and stamp `now` so the entry is still usable. The merge path
   // pre-validates AND clamps `updatedAt` in `mergePeerAnnotations` before
@@ -52,7 +56,7 @@ function sanitizeAuthorEntry(raw) {
   const authorName = typeof raw.authorName === 'string' && raw.authorName.trim()
     ? raw.authorName.trim().slice(0, 120)
     : '';
-  return { authorName, starred, note, updatedAt };
+  return { authorName, starred, note, ...(rating ? { rating } : {}), updatedAt };
 }
 
 // Safety net for a stale install: migration 014 rewrites the file once, but a
@@ -233,11 +237,11 @@ export async function mergePeerAnnotations(payload) {
 /**
  * Partial merge with prune-on-empty — writes the local-instance author entry.
  *
- * Patch may include `starred` (boolean) and/or `note` (string). Fields not in
- * the patch keep their prior value (the local author's prior value, not any
- * peer's). If the merged entry ends up with `starred:false` AND an empty
- * `note`, the local-author entry is removed; if no authors remain on the key,
- * the whole key is removed.
+ * Patch may include `starred` (boolean), `rating` ('good' | 'bad' | null to
+ * clear) and/or `note` (string). Fields not in the patch keep their prior
+ * value (the local author's prior value, not any peer's). If the merged entry
+ * ends up unstarred, unrated AND with an empty `note`, the local-author entry
+ * is removed; if no authors remain on the key, the whole key is removed.
  *
  * Returns the post-write projection `{ own, others }` for this key.
  */
@@ -248,8 +252,12 @@ export async function setAnnotation(key, patch) {
   }
   const hasStarred = Object.prototype.hasOwnProperty.call(patch, 'starred');
   const hasNote = Object.prototype.hasOwnProperty.call(patch, 'note');
-  if (!hasStarred && !hasNote) {
-    throw codedError('patch must include starred and/or note', ERR_VALIDATION);
+  const hasRating = Object.prototype.hasOwnProperty.call(patch, 'rating');
+  if (!hasStarred && !hasNote && !hasRating) {
+    throw codedError('patch must include starred, rating and/or note', ERR_VALIDATION);
+  }
+  if (hasRating && patch.rating !== null && !MEDIA_RATINGS.includes(patch.rating)) {
+    throw codedError(`rating must be one of ${MEDIA_RATINGS.join(', ')} or null`, ERR_VALIDATION);
   }
   if (hasStarred && typeof patch.starred !== 'boolean') {
     throw codedError('starred must be boolean', ERR_VALIDATION);
@@ -273,15 +281,17 @@ export async function setAnnotation(key, patch) {
 
   const priorAuthors = all[key]?.authors ?? {};
   const priorOwn = priorAuthors[localInstanceId] ?? { starred: false, note: '', updatedAt: null };
+  const rating = hasRating ? patch.rating : (priorOwn.rating ?? null);
   const merged = {
     authorName: authorName || priorOwn.authorName || '',
     starred: hasStarred ? patch.starred : priorOwn.starred,
     note: hasNote ? patch.note : priorOwn.note,
+    ...(rating ? { rating } : {}),
     updatedAt: new Date().toISOString(),
   };
 
   const nextAuthors = { ...priorAuthors };
-  if (!merged.starred && !merged.note) {
+  if (!merged.starred && !merged.note && !merged.rating) {
     delete nextAuthors[localInstanceId];
   } else {
     nextAuthors[localInstanceId] = merged;

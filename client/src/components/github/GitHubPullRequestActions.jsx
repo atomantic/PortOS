@@ -48,7 +48,8 @@ export default function GitHubPullRequestActions({ notification, onUpdated, busy
         current.taskId ? <Link className="text-xs text-port-accent hover:underline" to={`/cos/tasks?task=${encodeURIComponent(current.taskId)}&source=${current.action === 'do-review' ? 'user' : 'internal'}`}>Review: {ACTION_STATUS_LABEL[current.status] || 'View task'}</Link>
           : current.appId ? <Link className="text-xs text-port-accent hover:underline" to={`/apps/${encodeURIComponent(current.appId)}/pull-requests`}>Review requested — view PRs</Link> : null
       )}
-        {['do-review', 'untrusted-review'].filter(action => pr[action === 'do-review' ? 'doReviewEligible' : 'reviewEligible']).map(action => (
+        {['do-review', 'untrusted-review'].filter(action => pr[action === 'do-review' ? 'doReviewEligible' : 'reviewEligible']
+          && !(action === 'do-review' && current?.status === 'active')).map(action => (
           <PullRequestReviewButton key={action} action={action} disabled={Boolean(busy)} busy={busy === action}
             onClick={() => { setReviewAction(action); setArmed(false); }} />
         ))}

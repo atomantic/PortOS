@@ -1,8 +1,8 @@
 # Video upscale
 
-Every clip in the video gallery can be upscaled 2×, non-destructively — the
+Clips in the video gallery can be upscaled non-destructively — the
 source file and its history row are never touched, and the result arrives as a
-**new** file with its own gallery card. Two methods share one request contract:
+**new** file with its own gallery card. The local methods use 2× scaling:
 
 | | `lanczos` | `ltx` |
 | --- | --- | --- |
@@ -17,6 +17,37 @@ source file and its history row are never touched, and the result arrives as a
 method gets exactly the pass it got before the generative method existed, with
 the same response shape — so nothing written against the older API had to
 change.
+
+### Topaz Labs cloud
+
+The same drawer is available for a music-video project's current final render
+in its publish stage. Topaz is an optional paid cloud method: configure a key in
+Settings → Credentials, choose Proteus or the generative Starlight Fast 2,
+and request a free estimate. The estimate prepares a local, padded 16:9 copy;
+it sends metadata to Topaz but does not upload the video or reserve credits.
+The drawer shows the source and padded dimensions, 1920 × 1080 target and the
+provider's credit estimate. The full frame is normalized to square pixels and
+padded without cropping. Unknown pixel aspect or geometry too large to normalize
+is refused before contacting Topaz so the display aspect is not altered.
+The generative model may change details. Topaz says credits automatically reload
+at the plan rate when exhausted; the account balance, dollar cost and reload
+charge are unknown here. Check [Topaz pricing](https://www.topazlabs.com/api).
+
+Only **Start Topaz upscale** reserves credits and uploads the prepared video.
+The queue records the provider request and checks it after a restart rather than
+creating a replacement request. A failed or canceled local observer does not
+prove the provider stopped: the queue marks uncertain outcomes and offers a
+status check. Topaz can issue a partial refund when processing has begun. The
+result is a separate gallery item; the source remains the project master and
+the original audio is attached locally. No publication is performed.
+
+The free estimate and submit endpoints are `POST /api/video-gen/upscale/:id/topaz/quote`
+with `{ model: 'proteus' | 'starlight' }` and `POST /api/video-gen/upscale/:id/topaz`
+with the returned one-use quote token. `GET /api/video-gen/upscale/topaz/jobs/:jobId/status`
+checks the existing request without resubmitting it. These routes require host
+control. The queue can also request cancellation of an uncertain remote job;
+the record remains uncertain until Topaz reports a terminal state. Estimates
+expire after 15 minutes.
 
 ## Using it
 

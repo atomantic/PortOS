@@ -498,6 +498,22 @@ describe('MediaCollectionDetail — bulkMoveOrCopy move/remove failures', () => 
     await user.click(screen.getByRole('button', { name: /copy 1 to this machine/i }));
     await waitFor(() => expect(mockLocalizeMediaCollection).toHaveBeenCalledWith(REAL_COLLECTION.id, ['image:hosted-on-peer.png'], { silent: true }));
   });
+
+  it('shows a delete-pending badge on a hosted image whose delete waits on its host', async () => {
+    mockListImageGallery.mockResolvedValue([]);
+    mockListVideoHistory.mockResolvedValue([]);
+    mockGetMediaCollection.mockResolvedValue({
+      ...REAL_COLLECTION,
+      items: [{
+        kind: 'image', ref: 'hosted-on-peer.png', location: 'remote', hostPeerId: 'peer-1', hostPeerName: 'Studio Mac',
+        pendingDelete: { peerId: 'peer-1', queuedAt: '2026-05-01T00:00:00.000Z' },
+      }],
+    });
+    renderReal();
+    expect(await screen.findByText('hosted-on-peer.png')).toBeInTheDocument();
+    expect(screen.getByTitle(/Delete pending until Studio Mac is reachable/)).toBeInTheDocument();
+    expect(screen.queryByTitle(/Hosted by Studio Mac/)).toBeNull();
+  });
 });
 
 it('uploads image and video files into the selected collection without replacing existing membership', async () => {

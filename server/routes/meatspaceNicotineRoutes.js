@@ -13,6 +13,7 @@ import {
   customNicotineProductSchema,
   customNicotineProductUpdateSchema,
   dailyRangeQuerySchema,
+  substanceEventQuerySchema,
 } from '../lib/meatspaceValidation.js';
 import * as nicotineService from '../services/meatspaceNicotine.js';
 
@@ -73,7 +74,8 @@ router.put('/nicotine/log/:date/:index', asyncHandler(async (req, res) => {
 router.delete('/nicotine/log/:date/:index', asyncHandler(async (req, res) => {
   const { date, index } = req.params;
   const parsedIndex = parseIndexParam(index);
-  const removed = await nicotineService.removeNicotine(date, parsedIndex);
+  const { id } = validateRequest(substanceEventQuerySchema, req.query);
+  const removed = await nicotineService.removeNicotine(date, parsedIndex, id);
   if (!removed) {
     throw new ServerError('Nicotine entry not found', { status: 404, code: 'NOT_FOUND' });
   }

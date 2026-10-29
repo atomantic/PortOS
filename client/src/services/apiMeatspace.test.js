@@ -96,3 +96,19 @@ it('uses the daily mix for every recommendation consumer and falls back on older
   request.mockResolvedValue({ recommendations: legacy });
   expect((await getPostRecommendations()).recommendations).toEqual(legacy);
 });
+
+
+describe('substance event identity', () => {
+  it.each([
+    ['alcohol', 'updateAlcoholDrink', 'removeAlcoholDrink'],
+    ['nicotine', 'updateNicotineEntry', 'removeNicotineEntry'],
+  ])('preserves %s IDs in updates and encoded delete queries', async (kind, updateName, removeName) => {
+    const api = await import('./apiMeatspace.js');
+    await api[updateName]('2024-06-01', 1, { id: 'event-id' });
+    expect(JSON.parse(request.mock.lastCall[1].body)).toEqual({ id: 'event-id' });
+    await api[removeName]('2024-06-01', 1, 'event/id');
+    expect(request.mock.lastCall[0]).toBe(`/meatspace/${kind}/log/2024-06-01/1?id=event%2Fid`);
+    await api[removeName]('2024-06-01', 1);
+    expect(request.mock.lastCall[0]).toBe(`/meatspace/${kind}/log/2024-06-01/1`);
+  });
+});

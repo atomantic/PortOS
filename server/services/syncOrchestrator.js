@@ -8,12 +8,13 @@
 
 import { access } from 'fs/promises';
 import { join } from 'path';
-import { readJSONFile, ensureDir, PATHS, dataPath, atomicWrite, writeFileGuarded } from '../lib/fileUtils.js';
+import { readJSONFile, ensureDir, PATHS, dataPath, atomicWrite } from '../lib/fileUtils.js';
 import { createMutex } from '../lib/asyncMutex.js';
 import { logFailureWithStack } from '../lib/failureLogging.js';
 import { instanceEvents } from './instanceEvents.js';
 import { getPeers, peerLogLabel, resolveEffectiveCategories, setPeerSchemaGap } from './instances.js';
 import { getInstanceId, UNKNOWN_INSTANCE_ID } from './instanceIdentity.js';
+import { peerRealtimeSyncSince } from './peerSocketRelay.js';
 import { peerBaseUrl } from '../lib/peerUrl.js';
 import { peerFetch, readPeerBody, PEER_BODY_IDLE_TIMEOUT, PEER_BODY_DEFAULT_MAX_BYTES } from '../lib/peerHttpClient.js';
 import * as brainSync from './brainSync.js';
@@ -28,9 +29,20 @@ import { withAbortTimeout } from '../lib/abortTimeout.js';
 import { isManifestEnvelope, diffManifestSlots, MAX_MANIFEST_SLOTS } from '../lib/syncManifest.js';
 import { PORTOS_SCHEMA_VERSIONS } from '../lib/schemaVersions.js';
 import { isNonBlankStr } from '../lib/textUtils.js';
+import { mapWithConcurrency } from '../lib/mapWithConcurrency.js';
 
 const CURSORS_FILE = dataPath('instances_sync_cursors.json');
 const SYNC_INTERVAL_MS = 60000;
+// Categories whose changes reach peers as realtime frames (peerSyncEvents.js).
+// From a peer with a live subscription the periodic tick re-pulls their
+// snapshot only about this often, as a safety net for missed frames and for rows the
+// peer holds but did not create (frames carry only the sender's own rows).
+// A peer without one (older version, unpaired, relay down) keeps every tick.
+// Gallery images are not here: they ride the library sweep's own timer
+// (sharing/index.js, full-sync peers only), which also pulls new images,
+// since images have no upsert frames.
+export const SAFETY_NET_INTERVAL_MS = 5 * 60 * 1000;
+const SAFETY_NET_CATEGORIES = new Set(['videoHistory']);
 const FETCH_TIMEOUT_MS = 15000;
 // The tombstone sweep rides the 60s tick but doesn't need the tick's cadence —
 // GRACE_MS (tombstoneGc.js) is 24h, so an hour of extra GC latency is invisible
@@ -45,6 +57,10 @@ const withLock = createMutex();
 let syncTimer = null;
 let peerOnlineHandler = null;
 const syncingPeers = new Set();
+// instanceId → Map<category, ms>: when the last snapshot of a safety-net
+// category that converged STARTED, in this process. Empty after boot, so the
+// first sync with each peer always pulls.
+const safetyNetSyncedAt = new Map();
 let lastOnlinePeerIds = null;
 // 0 = "never swept this process" — runTombstoneSweep() always runs the FIRST
 // tick after boot (or after a restart) regardless of this value, then waits
@@ -134,9 +150,6 @@ export async function rewindPostgresSyncCursors() {
 // failure path instead of becoming a successful no-op. Bodies are also capped
 // while streaming (a chunked body carries no Content-Length to pre-check), so an
 // endless peer response fails this pull (null) instead of exhausting the heap.
-// Avatar images share the per-asset pull cap (ASSET_PULL_MAX_BYTES).
-const AVATAR_IMAGE_MAX_BYTES = 100 * 1024 * 1024;
-
 function handlePeerBodyError(error) {
   if (error.code === PEER_BODY_IDLE_TIMEOUT) throw error;
   return null;
@@ -150,6 +163,40 @@ async function fetchPeer(peer, path) {
     .catch(() => null);
   if (!res?.ok) return null;
   return readPeerBody(res, 'json', { maxBytes }).catch(handlePeerBodyError);
+}
+
+// Older peers lack the inventory route. For a host-mode peer, a successful HEAD
+// with no remote-media marker proves its static mount served local bytes, rather
+// than proxying a third peer. Failure is inconclusive and never removes an existing host.
+async function fetchHostedInventory(peer, category, kind, { probeOlderPeers = true } = {}) {
+  const path = `/api/sync/${category}/${kind}-inventory`;
+  const response = await withAbortTimeout(FETCH_TIMEOUT_MS, (signal) => peerFetch(`${peerBaseUrl(peer)}${path}`, { signal }, peer)).catch(() => null);
+  if (!response) return null;
+  if (response.status !== 404) {
+    if (!response.ok) return null;
+    return readPeerBody(response, 'json', { maxBytes: PEER_BODY_DEFAULT_MAX_BYTES }).catch(() => null);
+  }
+  // An older peer reports no inventory; only host-mode reconciliation needs the
+  // per-file probe (the holders list and file times take the route's answer only).
+  if (!probeOlderPeers) return null;
+  const { checked } = await dataSync.getHostedMediaInventory(category, kind);
+  // Whole literals so the peer-surface guard (apiAccessPolicy.test.js) can see both routes.
+  const mediaRoot = kind === 'image' ? '/data/images/' : '/data/videos/';
+  const found = await mapWithConcurrency(checked, 4, async (filename) => {
+    const res = await withAbortTimeout(FETCH_TIMEOUT_MS, (signal) => peerFetch(
+      `${peerBaseUrl(peer)}${mediaRoot}${encodeURIComponent(filename)}`, { method: 'HEAD', signal }, peer,
+    )).catch(() => null);
+    return res?.ok && res.headers?.get('x-portos-media-location') !== 'remote' ? filename : null;
+  });
+  const filenames = found.filter(Boolean);
+  return { version: 1, filenames, checked: filenames };
+}
+
+// File times of every gallery image the peer holds; an older peer 404s and reports nothing.
+async function fetchImageLibraryInventory(peer) {
+  const response = await withAbortTimeout(FETCH_TIMEOUT_MS, (signal) => peerFetch(`${peerBaseUrl(peer)}/api/sync/mediaCollections/image-library-inventory`, { signal }, peer)).catch(() => null);
+  if (!response?.ok) return null;
+  return readPeerBody(response, 'json', { maxBytes: PEER_BODY_DEFAULT_MAX_BYTES }).catch(() => null);
 }
 
 /**
@@ -167,19 +214,11 @@ async function syncImageFromPeer(peer, avatarPath) {
   const exists = await access(localPath).then(() => true).catch(() => false);
   if (exists) return;
 
-  const url = `${peerBaseUrl(peer)}${avatarPath}`;
-  // Use the same request and body-idle budgets as JSON snapshots.
-  const res = await withAbortTimeout(FETCH_TIMEOUT_MS, (signal) =>
-    peerFetch(url, { signal, maxBytes: AVATAR_IMAGE_MAX_BYTES }, peer))
-    .catch(() => null);
-  if (!res?.ok) return;
-  await readPeerBody(res, 'arrayBuffer', { maxBytes: AVATAR_IMAGE_MAX_BYTES })
-    .then(async (bytes) => {
-      await ensureDir(PATHS.images);
-      await writeFileGuarded(localPath, Buffer.from(bytes));
-      console.log(`🔄 Synced avatar image: ${filename}`);
-    })
-    .catch(handlePeerBodyError);
+  // The shared asset pull owns the tombstone check, sidecar + supplier
+  // recording, extension/manifest/hash guards, size caps and in-flight dedup.
+  // Dynamic import keeps peerSyncAssets' graph out of orchestrator load.
+  const { pullMissingAssetsFromPeer } = await import('./sharing/peerSyncAssets.js');
+  await pullMissingAssetsFromPeer(peer.instanceId, [{ kind: 'image', filename }]);
 }
 
 // --- Status ---
@@ -575,6 +614,23 @@ async function syncDataCategoryFromPeer(peer, peerId, category, cachedChecksums,
   if (gap && !schemaGapMayHaveCleared(gap, peer, checksumRes.checksum)) {
     return { totalApplied: 0, checksum: null, blockedBySchema: gap };
   }
+  // Every peer's byte inventory feeds the holders list (services/mediaHolders.js);
+  // a host-mode peer's also maintains where this machine streams from.
+  if (category === 'videoHistory' || category === 'mediaCollections') {
+    const hostMode = peer.mediaSyncMode === 'host';
+    const kinds = category === 'mediaCollections' ? ['video', 'image'] : ['video'];
+    const { hasUnattributedMedia } = await import('./mediaOriginReconcile.js');
+    for (const kind of kinds) {
+      // The gallery-wide image library is asked for only while some media here has no recorded origin.
+      const unattributed = await hasUnattributedMedia(kind).catch(() => false);
+      const inventory = await fetchHostedInventory(peer, category, kind, { probeOlderPeers: hostMode }).catch(() => null);
+      if (inventory) await dataSync.applyRemote(category, inventory, { peerId, portosMeta: inventory.portosMeta, inventory: true, inventoryKind: kind });
+      if (kind === 'image' && unattributed) {
+        const library = await fetchImageLibraryInventory(peer);
+        if (library) await dataSync.applyRemote(category, library, { peerId, portosMeta: library.portosMeta, inventory: true, inventoryKind: kind, inventoryScope: 'library' });
+      }
+    }
+  }
   if (!gap && lastChecksum && lastChecksum === checksumRes.checksum) {
     return { totalApplied: 0, checksum: checksumRes.checksum };
   }
@@ -786,9 +842,24 @@ const RECORD_KIND_TO_CATEGORY = Object.freeze({
 const emptyCoverage = () => ({ universe: new Set(), pipeline: new Set(), mediaCollections: new Set() });
 
 /**
- * Sync all data from a single peer
+ * True when the periodic tick may skip a safety-net category for this peer: a
+ * realtime subscription has been live since before the last converged
+ * snapshot, and that snapshot is younger than about SAFETY_NET_INTERVAL_MS.
  */
-export async function syncWithPeer(peer, { logStart = true, onCategoryFailure, peerOrdinal = null } = {}) {
+function safetyNetSnapshotFresh(peerId, category, realtimeSince, now) {
+  if (realtimeSince === null || !SAFETY_NET_CATEGORIES.has(category)) return false;
+  const last = safetyNetSyncedAt.get(peerId)?.get(category);
+  // `now >= last`: a clock set backwards must not stretch the wait. The half-tick
+  // margin makes the pull land on the tick nearest the interval, not the one after.
+  return last !== undefined && last >= realtimeSince && now >= last
+    && now - last < SAFETY_NET_INTERVAL_MS - SYNC_INTERVAL_MS / 2;
+}
+
+/**
+ * Sync all data from a single peer. `periodic` marks the background tick;
+ * peer:online and a manual sync pull every category.
+ */
+export async function syncWithPeer(peer, { logStart = true, onCategoryFailure, peerOrdinal = null, periodic = false } = {}) {
   if (!peer.instanceId) return { brain: { totalApplied: 0 }, memory: { totalApplied: 0 } };
 
   const peerId = peer.instanceId;
@@ -910,8 +981,10 @@ export async function syncWithPeer(peer, { logStart = true, onCategoryFailure, p
     // checksum short-circuit skips, so the network cost collapses to one tiny
     // cached checksum fetch (vs. the old full skip). Source-side scoping needs
     // no inbound round-trip and is the authoritative inbound signal.
+    const snapshotStartedAt = Date.now();
+    const realtimeSince = periodic ? peerRealtimeSyncSince(peer.id) : null;
     const enabledDataCats = dataSync.getSupportedCategories()
-      .filter(cat => categories[cat]);
+      .filter(cat => categories[cat] && !safetyNetSnapshotFresh(peerId, cat, realtimeSince, snapshotStartedAt));
     const cachedChecksums = cursor.checksums || {};
 
     if (enabledDataCats.length > 0) {
@@ -930,6 +1003,11 @@ export async function syncWithPeer(peer, { logStart = true, onCategoryFailure, p
         const result = settled[i].status === 'fulfilled' ? settled[i].value : { totalApplied: 0, checksum: null };
         dataCategoryResults[enabledDataCats[i]] = result;
         reportApplied(enabledDataCats[i], result.totalApplied);
+        // A null checksum means it did not converge (failed, blocked, peer gave none).
+        if (SAFETY_NET_CATEGORIES.has(enabledDataCats[i]) && result.checksum) {
+          if (!safetyNetSyncedAt.has(peerId)) safetyNetSyncedAt.set(peerId, new Map());
+          safetyNetSyncedAt.get(peerId).set(enabledDataCats[i], snapshotStartedAt);
+        }
       }
     }
 
@@ -1092,6 +1170,7 @@ export async function syncAllPeers() {
     // finishes. Keep the start line only for an observable membership change.
     logStart: membershipChanged,
     peerOrdinal: index,
+    periodic: true,
     onCategoryFailure: () => { cycleFailed = true; },
   })));
   for (let i = 0; i < settled.length; i++) {
@@ -1156,6 +1235,7 @@ export function initSyncOrchestrator() {
   lastTombstoneSweepAt = 0;
   lastBrainSweepAt = 0;
   lastOnlinePeerIds = null;
+  safetyNetSyncedAt.clear();
   // Sync immediately when a peer comes online
   peerOnlineHandler = (peer) => {
     if (!hasAnySyncEnabled(peer)) return;
@@ -1266,6 +1346,7 @@ export function stopSyncOrchestrator() {
   lastTombstoneSweepAt = 0;
   lastBrainSweepAt = 0;
   lastOnlinePeerIds = null;
+  safetyNetSyncedAt.clear();
   if (peerOnlineHandler) {
     instanceEvents.removeListener('peer:online', peerOnlineHandler);
     peerOnlineHandler = null;

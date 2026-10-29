@@ -59,6 +59,7 @@ vi.mock('./cosTaskRepository.js', async (importOriginal) => {
 
 vi.mock('./cosState.js', async () => ({
   loadState: vi.fn(async () => mock.state),
+  readAgentsStateForSafetyCheck: vi.fn(async () => ({ trusted: true, agents: mock.state.agents })),
   withStateLock: (await import('../lib/fileWriteQueue.js')).createFileWriteQueue(),
 }));
 
@@ -152,6 +153,165 @@ beforeEach(() => {
   mock.review = { ok: true, findings: 'No findings.' };
   mock.reviewDefaults = { lmstudioModel: 'default-lmstudio', ollamaModel: 'default-ollama' };
   mock.reviewCalls = [];
+});
+
+it('reconciles a stopped stale completion only against its latest episode dispatch, without resuming it', async () => {
+  const { reconcileSpawnBudget } = await import('./spawnBudgetReconciliation.js');
+  const fresh = await addTask({ id: 'sys-proof', description: 'Proof fixture' }, 'internal');
+  const claim = (count, at) => ({ status: 'in_progress', metadata: { totalSpawnCount: count,
+    claimedBy: 'instance-example', claimedAt: at, lastSpawnedAt: at } });
+  mock.state.agents['agent-first'] = { id: 'agent-first', taskId: fresh.id, status: 'running', startedAt: '2026-01-01T00:00:00.000Z' };
+  await updateTask(fresh.id, claim(1, '2026-01-01T00:00:00.000Z'), 'internal',
+    { spawnBudgetOperation: { kind: 'dispatch', agentId: 'agent-first', startedAt: '2026-01-01T00:00:00.000Z' } });
+  await updateTask(fresh.id, { status: 'pending' }, 'internal');
+  mock.state.agents['agent-first'].status = 'completed';
+  mock.state.agents['agent-second'] = { id: 'agent-second', taskId: fresh.id, status: 'running', startedAt: '2026-01-02T00:00:00.000Z' };
+  const latest = await updateTask(fresh.id, claim(2, '2026-01-02T00:00:00.000Z'), 'internal',
+    { spawnBudgetOperation: { kind: 'dispatch', agentId: 'agent-second', startedAt: '2026-01-02T00:00:00.000Z' } });
+  const proof = latest.metadata.spawnBudgetProof;
+  const expected = ['claimedBy', 'claimedAt', 'lastSpawnedAt', 'totalSpawnCount'].map(key => [key, latest.metadata[key]]);
+  mock.state.agents['agent-second'] = { id: 'agent-second', taskId: fresh.id, status: 'running', startedAt: '2026-01-02T00:00:00.000Z',
+    metadata: { completionTaskDispatch: { taskId: fresh.id, taskType: 'internal', expected, spawnBudgetEpoch: proof.epoch,
+      spawnBudgetStartedAt: '2026-01-02T00:00:00.000Z' } } };
+  // Completion of the second run replays the first dispatch's count, through
+  // the same trusted completion operation used by finalization.
+  const blocked = await updateTask(fresh.id, { status: 'blocked', metadata: { totalSpawnCount: 1, failureCount: 3 } }, 'internal',
+    { expectedStatus: 'in_progress', spawnBudgetOperation: { kind: 'completion', agentId: 'agent-second', epoch: proof.epoch } });
+  expect(Number(blocked.metadata.totalSpawnCount)).toBe(1);
+  mock.state.agents['agent-second'].status = 'completed';
+  const corrupted = structuredClone(blocked);
+  corrupted.metadata.spawnBudgetProof.baseline = 1;
+  await seed('internal', [corrupted]);
+  const corruptSnapshot = await getTaskById(fresh.id);
+  expect(await reconcileSpawnBudget(fresh.id)).toEqual({ reconciled: false, reason: 'episode-unverified' });
+  expect(await getTaskById(fresh.id)).toEqual(corruptSnapshot);
+  await seed('internal', [blocked]);
+  const dispatchReceipt = mock.state.agents['agent-second'].metadata.completionTaskDispatch;
+  dispatchReceipt.expected = dispatchReceipt.expected.map(([key, value]) => [key, key === 'totalSpawnCount' ? '3' : value]);
+  expect(await reconcileSpawnBudget(fresh.id)).toEqual({ reconciled: false, reason: 'dispatch-receipt-conflict' });
+  dispatchReceipt.expected = dispatchReceipt.expected.map(([key, value]) => [key, key === 'totalSpawnCount' ? '2' : value]);
+  mock.writeFailure = new Error('reconciliation interrupted');
+  await expect(reconcileSpawnBudget(fresh.id)).rejects.toThrow('reconciliation interrupted');
+  mock.writeFailure = null;
+  expect(Number((await getTaskById(fresh.id)).metadata.totalSpawnCount)).toBe(1);
+  mock.state.agents['agent-other'] = { id: 'agent-other', taskId: fresh.id, status: 'running' };
+  expect(await reconcileSpawnBudget(fresh.id)).toEqual({ reconciled: false, reason: 'task-or-owner-changed' });
+  delete mock.state.agents['agent-other'];
+  const { readAgentsStateForSafetyCheck } = await import('./cosState.js');
+  vi.mocked(readAgentsStateForSafetyCheck).mockImplementationOnce(async () => {
+    await updateTask(fresh.id, { description: 'Concurrent edit' }, 'internal');
+    return { trusted: true, agents: mock.state.agents };
+  });
+  expect(await reconcileSpawnBudget(fresh.id)).toEqual({ reconciled: false, reason: 'task-or-owner-changed' });
+  expect(Number((await getTaskById(fresh.id)).metadata.totalSpawnCount)).toBe(1);
+  vi.mocked(readAgentsStateForSafetyCheck).mockImplementationOnce(async () => ({ trusted: true, agents: structuredClone(mock.state.agents) }));
+  vi.mocked(readAgentsStateForSafetyCheck).mockImplementationOnce(async () => {
+    mock.state.agents['agent-second'].metadata.completionTaskDispatch.spawnBudgetEpoch = 'changed';
+    return { trusted: true, agents: mock.state.agents };
+  });
+  expect(await reconcileSpawnBudget(fresh.id)).toEqual({ reconciled: false, reason: 'task-or-owner-changed' });
+  expect(Number((await getTaskById(fresh.id)).metadata.totalSpawnCount)).toBe(1);
+  mock.state.agents['agent-second'].metadata.completionTaskDispatch.spawnBudgetEpoch = proof.epoch;
+  const { retryTasksResolvedByInvestigation } = await import('./investigationRetry.js');
+  expect(await retryTasksResolvedByInvestigation({ id: 'sys-investigation', status: 'completed',
+    metadata: { isInvestigation: true, affectedTasks: [fresh.id] } })).toEqual({ retried: [],
+    skipped: [{ taskId: fresh.id, reason: 'spawn-budget-reconciled-held' }] });
+  expect(await getTaskById(fresh.id)).toMatchObject({ status: 'blocked', metadata: { totalSpawnCount: '2', failureCount: '3' } });
+  expect(await reconcileSpawnBudget(fresh.id)).toEqual({ reconciled: false, reason: 'already-reconciled' });
+  expect(mock.events.filter(event => event.payload?.action === 'unblocked')).toHaveLength(0);
+  const corrected = await getTaskById(fresh.id);
+  await seed('internal', [{ ...corrected, metadata: { ...corrected.metadata, totalSpawnCount: '1' } }]);
+  mock.state.agents['agent-second'].status = 'running';
+  expect(await reconcileSpawnBudget(fresh.id)).toEqual({ reconciled: false, reason: 'dispatch-receipt-unverified' });
+  expect((await getTaskById(fresh.id)).metadata.totalSpawnCount).toBe('1');
+  mock.state.agents['agent-second'].status = 'completed';
+  const reset = await reviveBlockedTask(fresh.id, {}, 'internal');
+  expect(reset.metadata.spawnBudgetProof.epoch).not.toBe(proof.epoch);
+  expect(await reconcileSpawnBudget(fresh.id)).toEqual({ reconciled: false, reason: 'episode-unverified' });
+});
+
+it('holds a legacy stopped task whose episode cannot be proven', async () => {
+  const { reconcileSpawnBudget } = await import('./spawnBudgetReconciliation.js');
+  await addTask({ id: 'sys-legacy-proof', description: 'Legacy example', metadata: {
+    totalSpawnCount: 1, failureCount: 2, lastSpawnedAt: '2026-01-01T00:00:00.000Z',
+  } }, 'internal');
+  await updateTask('sys-legacy-proof', { status: 'blocked' }, 'internal');
+  const before = await getTaskById('sys-legacy-proof');
+  expect(await reconcileSpawnBudget(before.id)).toEqual({ reconciled: false, reason: 'episode-unverified' });
+  expect(await getTaskById(before.id)).toEqual(before);
+});
+
+it('resets a pending spawn budget only while the captured task and owner remain unchanged', async () => {
+  await seed('user', [{ id: 'task-reset-proof', status: 'pending', priority: 'MEDIUM', description: 'Retained work', metadata: {
+    totalSpawnCount: '2', failureCount: '3', lastSpawnedAt: '2026-01-01T00:00:00.000Z',
+  } }]);
+  const task = await getTaskById('task-reset-proof');
+  const options = { expectedStatus: 'pending', expectedTask: { description: task.description, priority: task.priority, metadata: task.metadata },
+    recoveryOwner: { id: 'explicit-spawn-budget-reset', startedAt: null, requireInactive: true },
+    spawnBudgetOperation: { kind: 'reset', requireInactive: true } };
+  mock.state.agents['agent-live'] = { id: 'agent-live', taskId: task.id, status: 'running' };
+  expect(await updateTask(task.id, { metadata: { totalSpawnCount: undefined } }, 'user', options)).toMatchObject({ statusChanged: true });
+  expect(await getTaskById(task.id)).toEqual(task);
+  delete mock.state.agents['agent-live'];
+  await updateTask(task.id, { metadata: { claimedBy: 'peer', leaseExpiresAt: '2999-01-01T00:00:00.000Z' } }, 'user');
+  const leased = await getTaskById(task.id);
+  expect(await updateTask(task.id, { metadata: { totalSpawnCount: undefined } }, 'user', {
+    ...options, expectedTask: { description: leased.description, priority: leased.priority, metadata: leased.metadata },
+  })).toMatchObject({ statusChanged: true });
+  await updateTask(task.id, { metadata: { claimedBy: undefined, leaseExpiresAt: undefined } }, 'user');
+  await updateTask(task.id, { description: 'Concurrent edit' }, 'user');
+  expect(await updateTask(task.id, { metadata: { totalSpawnCount: undefined } }, 'user', options)).toMatchObject({ statusChanged: true });
+  const current = await getTaskById(task.id);
+  const saved = await updateTask(task.id, { metadata: { totalSpawnCount: undefined } }, 'user', {
+    ...options, expectedTask: { description: current.description, priority: current.priority, metadata: current.metadata },
+  });
+  expect(saved.status).toBe('pending');
+  expect(saved.metadata).toMatchObject({ failureCount: '3', spawnBudgetProof: { baseline: 0, dispatch: null } });
+  expect(saved.metadata.totalSpawnCount).toBeUndefined();
+});
+
+it('requeues an explicitly reset orphan with its retained checkout and failure count under the owner fence', async () => {
+  await seed('user', [{ id: 'task-reset-orphan', status: 'in_progress', priority: 'MEDIUM', description: 'Interrupted work', metadata: {
+    totalSpawnCount: '2', failureCount: '3', lastSpawnedAt: '2026-01-01T00:00:00.000Z',
+  } }]);
+  const task = await getTaskById('task-reset-orphan');
+  mock.state.agents['agent-original'] = { id: 'agent-original', taskId: task.id, status: 'completed', startedAt: 'start', metadata: { isWorktree: true } };
+  const options = { expectedStatus: 'in_progress', expectedTask: { description: task.description, priority: task.priority, metadata: task.metadata },
+    recoveryOwner: { id: 'agent-original', startedAt: 'start', requireInactive: true, requireRegistered: true, expectedOwnerMetadata: { isWorktree: true } },
+    spawnBudgetOperation: { kind: 'reset', requireInactive: true }, suppressDequeue: true };
+  mock.state.agents['agent-other'] = { id: 'agent-other', taskId: task.id, status: 'running' };
+  const patch = { status: 'pending', metadata: { totalSpawnCount: undefined, existingBranch: 'fix/example',
+    resumeWorktreePath: '/fixture/worktree', resumedFromAgentId: 'agent-original' } };
+  expect(await updateTask(task.id, patch, 'user', options)).toMatchObject({ statusChanged: true });
+  delete mock.state.agents['agent-other'];
+  mock.state.agents['agent-original'].metadata.isWorktree = false;
+  expect(await updateTask(task.id, patch, 'user', options)).toMatchObject({ statusChanged: true });
+  delete mock.state.agents['agent-original'];
+  expect(await updateTask(task.id, patch, 'user', options)).toMatchObject({ statusChanged: true });
+  mock.state.agents['agent-original'] = { id: 'agent-original', taskId: task.id, status: 'completed', startedAt: 'start', metadata: { isWorktree: true } };
+  const saved = await updateTask(task.id, patch, 'user', options);
+  expect(saved).toMatchObject({ status: 'pending', metadata: { failureCount: '3', existingBranch: 'fix/example',
+    resumeWorktreePath: '/fixture/worktree', resumedFromAgentId: 'agent-original', spawnBudgetProof: { baseline: 0, dispatch: null } } });
+  expect(saved.metadata.totalSpawnCount).toBeUndefined();
+  expect(mock.events.at(-1).payload.suppressDequeue).toBe(true);
+});
+
+it('preserves failure history when an explicitly reset blocked task is requeued', async () => {
+  await seed('user', [{ id: 'task-reset-blocked', status: 'blocked', priority: 'MEDIUM', description: 'Blocked work', metadata: {
+    totalSpawnCount: '2', failureCount: '3', lastErrorCategory: 'test-failure', lastFailureAt: '2026-01-01T00:00:00.000Z',
+    blockedCategory: 'task-incomplete',
+  } }]);
+  const task = await getTaskById('task-reset-blocked');
+  mock.state.agents['agent-original'] = { id: 'agent-original', taskId: task.id, status: 'completed', startedAt: 'start' };
+  const saved = await updateTask(task.id, { status: 'pending', metadata: { totalSpawnCount: undefined, existingBranch: 'fix/example',
+    resumedFromAgentId: 'agent-original' } }, 'user', {
+    expectedStatus: 'blocked', expectedTask: { description: task.description, priority: task.priority, metadata: task.metadata },
+    recoveryOwner: { id: 'agent-original', startedAt: 'start', requireInactive: true },
+    spawnBudgetOperation: { kind: 'reset', requireInactive: true }, suppressDequeue: true, preserveRetryBudget: true,
+  });
+  expect(saved).toMatchObject({ status: 'pending', metadata: { failureCount: '3', lastErrorCategory: 'test-failure',
+    lastFailureAt: '2026-01-01T00:00:00.000Z', existingBranch: 'fix/example', resumedFromAgentId: 'agent-original' } });
+  expect(saved.metadata.totalSpawnCount).toBeUndefined();
 });
 
 it('wakes the exact local parent from a persisted completed-follow-up edit', async () => {
@@ -1600,10 +1760,11 @@ describe('cosTaskStore.addTask', () => {
     expect(task.metadata.worktreeChangesExpected).toBeUndefined();
   });
 
-  it('raw=true stores a pre-built one-line object verbatim', async () => {
+  it('raw=true preserves supplied task fields while adding server-owned episode proof', async () => {
     const raw = { id: 'sys-raw', description: 'raw task', status: 'pending', metadata: { context: 'ctx' } };
     const task = await addTask(raw, 'internal', { raw: true });
-    expect(task).toBe(raw);
+    expect(task).toMatchObject(raw);
+    expect(task.metadata.spawnBudgetProof).toMatchObject({ version: 1, dispatch: null, epoch: expect.any(String) });
     expect(task.description).toBe('raw task');
   });
 
@@ -1951,11 +2112,25 @@ describe('cosTaskStore.updateTask', () => {
     const { recoverLegacyDeliveryBlocks } = await import('./deliveryRecovery.js');
     const outcome = { status: 'incomplete', reason: 'Remaining delivery validation.' };
     await addTask({ description: 'recover charged delivery', id: 'task-delivery-budget' }, 'user');
+    const dispatch = (count, at, agentId) => {
+      mock.state.agents[agentId] = { id: agentId, taskId: 'task-delivery-budget', status: 'running', startedAt: at };
+      return updateTask('task-delivery-budget', { status: 'in_progress', metadata: {
+        totalSpawnCount: count, claimedBy: 'fixture-instance', claimedAt: at, lastSpawnedAt: at,
+      } }, 'user', { spawnBudgetOperation: { kind: 'dispatch', agentId, startedAt: at } });
+    };
+    await dispatch(1, '2026-10-22T00:00:00.000Z', 'agent-first');
+    mock.state.agents['agent-first'].status = 'completed';
+    await updateTask('task-delivery-budget', { status: 'pending' }, 'user');
+    const latest = await dispatch(2, '2026-10-23T00:00:00.000Z', 'agent-delivery-budget');
     await updateTask('task-delivery-budget', { status: 'blocked', metadata: {
-      blockedCategory: 'task-incomplete', blockedAt: '2026-10-23T00:00:00.000Z', failureCount: 1, totalSpawnCount: 2, taskOutcome: outcome,
+      blockedCategory: 'task-incomplete', blockedAt: '2026-10-23T00:00:00.000Z', failureCount: 1, taskOutcome: outcome,
     } }, 'user');
     const task = await getTaskById('task-delivery-budget');
-    const owner = { id: 'agent-delivery-budget', taskId: task.id, status: 'completed', result: { taskOutcome: outcome }, metadata: {} };
+    const owner = { id: 'agent-delivery-budget', taskId: task.id, status: 'completed', startedAt: '2026-10-23T00:00:00.000Z',
+      result: { taskOutcome: outcome }, metadata: { completionTaskDispatch: { taskId: task.id, taskType: 'user',
+        spawnBudgetEpoch: latest.metadata.spawnBudgetProof.epoch, spawnBudgetStartedAt: latest.metadata.spawnBudgetProof.dispatch.startedAt,
+        expected: ['claimedBy', 'claimedAt', 'lastSpawnedAt', 'totalSpawnCount'].map(key => [key, latest.metadata[key]]) } } };
+    mock.state.agents[owner.id] = owner;
     mock.afterWrite = () => { throw new Error('interrupted after committed recovery transition'); };
     const release = vi.fn();
     await expect(recoverLegacyDeliveryBlocks([owner], { readTasks: async () => [task], update: updateTask, release })).rejects.toThrow('interrupted after committed recovery transition');
@@ -1972,15 +2147,29 @@ describe('cosTaskStore.updateTask', () => {
     const { recoverLegacyDeliveryBlocks } = await import('./deliveryRecovery.js');
     const outcome = { status: 'incomplete', reason: 'Remaining delivery validation.' };
     await addTask({ description: 'recover ownership', id: 'task-delivery-owner' }, 'user');
+    mock.state.agents['agent-delivery-owner'] = { id: 'agent-delivery-owner', taskId: 'task-delivery-owner', status: 'running',
+      startedAt: '2026-10-23T00:00:00.000Z' };
+    const latest = await updateTask('task-delivery-owner', { status: 'in_progress', metadata: {
+      totalSpawnCount: 1, claimedBy: 'fixture-instance', claimedAt: '2026-10-23T00:00:00.000Z',
+      lastSpawnedAt: '2026-10-23T00:00:00.000Z',
+    } }, 'user', { spawnBudgetOperation: { kind: 'dispatch', agentId: 'agent-delivery-owner', startedAt: '2026-10-23T00:00:00.000Z' } });
     await updateTask('task-delivery-owner', { status: 'blocked', metadata: {
       blockedCategory: 'task-incomplete', blockedAt: '2026-10-23T00:00:00.000Z', failureCount: 1, taskOutcome: outcome,
     } }, 'user');
     const task = await getTaskById('task-delivery-owner');
-    const owner = { id: 'agent-delivery-owner', taskId: task.id, status: 'completed', result: { taskOutcome: outcome }, metadata: {} };
+    const owner = { id: 'agent-delivery-owner', taskId: task.id, status: 'completed', startedAt: '2026-10-23T00:00:00.000Z',
+      result: { taskOutcome: outcome }, metadata: { completionTaskDispatch: { taskId: task.id, taskType: 'user',
+        spawnBudgetEpoch: latest.metadata.spawnBudgetProof.epoch, spawnBudgetStartedAt: latest.metadata.spawnBudgetProof.dispatch.startedAt,
+        expected: ['claimedBy', 'claimedAt', 'lastSpawnedAt', 'totalSpawnCount'].map(key => [key, latest.metadata[key]]) } } };
+    mock.state.agents[owner.id] = owner;
     if (race === 'manual-blocker') await updateTask(task.id, { metadata: { blocker: 'Operator hold' } }, 'user');
     else mock.state.agents.newOwner = { id: 'newOwner', taskId: task.id, status: 'running' };
     const release = vi.fn();
-    expect(await recoverLegacyDeliveryBlocks([owner], { readTasks: async () => [task], update: updateTask, release })).toEqual({ recovered: 0 });
+    const fencedUpdate = vi.fn(updateTask);
+    expect(await recoverLegacyDeliveryBlocks([owner], { readTasks: async () => [task], update: fencedUpdate, release })).toEqual({ recovered: 0 });
+    expect(fencedUpdate).toHaveBeenCalledOnce();
+    expect(fencedUpdate.mock.calls[0][3]).toMatchObject({ expectedStatus: 'blocked', expectedTask: { metadata: task.metadata },
+      recoveryOwner: { id: owner.id, startedAt: owner.startedAt } });
     const saved = await getTaskById(task.id);
     expect(saved.status).toBe('blocked');
     if (race === 'manual-blocker') expect(saved.metadata.blocker).toBe('Operator hold');
@@ -2365,11 +2554,43 @@ describe('cosTaskStore.mergePeerTasks', () => {
     await addTask({ description: 'same', priority: 'MEDIUM', id: 'task-same' }, 'user');
     mock.events = [];
     vi.mocked(repository.applyTaskListSave).mockClear();
-    const remote = [{ id: 'task-same', taskType: 'user', status: 'pending', priority: 'MEDIUM', description: 'same', metadata: {} }];
+    const remote = [{ ...(await getTaskById('task-same')), taskType: 'user' }];
     const res = await mergePeerTasks('user', remote, { now: NOW });
     expect(res).toEqual({ changed: false });
     expect(repository.applyTaskListSave).not.toHaveBeenCalled();
     expect(mock.events.some(e => e.name === 'tasks:changed')).toBe(false);
+  });
+
+  it('invalidates proof on an older peer payload even when it retained the opaque metadata', async () => {
+    await addTask({ id: 'task-legacy-peer', description: 'Peer example' }, 'user');
+    mock.state.agents['agent-peer'] = { id: 'agent-peer', taskId: 'task-legacy-peer', status: 'running', startedAt: 'start' };
+    const local = await updateTask('task-legacy-peer', { status: 'in_progress', metadata: {
+      totalSpawnCount: 1, claimedBy: 'fixture', claimedAt: '2026-01-01T00:00:00.000Z', lastSpawnedAt: '2026-01-01T00:00:00.000Z',
+    } }, 'user', { spawnBudgetOperation: { kind: 'dispatch', agentId: 'agent-peer', startedAt: 'start' } });
+    expect(local.metadata.spawnBudgetProof).toBeDefined();
+    await mergePeerTasks('user', [{ ...local, taskType: 'user' }], { now: NOW, legacySpawnBudget: true });
+    const after = await getTaskById(local.id);
+    expect(after.status).toBe(local.status);
+    expect(Number(after.metadata.totalSpawnCount)).toBe(1);
+    expect(after.metadata.spawnBudgetProof).toBeUndefined();
+  });
+
+  it('accepts a known same-episode dispatch ancestor but invalidates a concurrent fork', async () => {
+    await addTask({ id: 'task-chain', description: 'Chain example' }, 'user');
+    const claim = (count, stamp) => ({ status: 'in_progress', metadata: { totalSpawnCount: count,
+      claimedBy: 'fixture', claimedAt: stamp, lastSpawnedAt: stamp } });
+    mock.state.agents['agent-first'] = { id: 'agent-first', taskId: 'task-chain', status: 'running', startedAt: 'first-start' };
+    const first = await updateTask('task-chain', claim(1, 'first'), 'user', { spawnBudgetOperation: { kind: 'dispatch', agentId: 'agent-first', startedAt: 'first-start' } });
+    await updateTask('task-chain', { status: 'pending' }, 'user');
+    mock.state.agents['agent-first'].status = 'completed';
+    mock.state.agents['agent-second'] = { id: 'agent-second', taskId: 'task-chain', status: 'running', startedAt: 'second-start' };
+    const second = await updateTask('task-chain', claim(2, 'second'), 'user', { spawnBudgetOperation: { kind: 'dispatch', agentId: 'agent-second', startedAt: 'second-start' } });
+    await mergePeerTasks('user', [{ ...first, taskType: 'user' }], { now: NOW });
+    expect((await getTaskById('task-chain')).metadata.spawnBudgetProof).toEqual(second.metadata.spawnBudgetProof);
+    const fork = structuredClone(second);
+    fork.metadata.spawnBudgetProof.dispatch.agentId = 'agent-competing';
+    await mergePeerTasks('user', [{ ...fork, taskType: 'user' }], { now: NOW });
+    expect((await getTaskById('task-chain')).metadata.spawnBudgetProof).toBeUndefined();
   });
 
   it("never clobbers the local peer's live claim with a remote pending copy", async () => {
@@ -2940,6 +3161,61 @@ describe('cosTaskStore — a repaired task is returned exactly as it is persiste
 });
 
 describe('shared development work admission', () => {
+  it('admits one new drain after exact delivery proof while retaining the original cleanup task', async () => {
+    const { getAgentRecord } = await import('./cosAgentLifecycle.js');
+    const identity = await import('./instanceIdentity.js');
+    const local = vi.spyOn(identity, 'getInstanceId').mockResolvedValue('fixture-local');
+    const start = '2026-01-01T00:00:00.000Z';
+    const branches = ['claim/issue-1', 'claim/issue-2'];
+    const heads = ['a'.repeat(40), 'b'.repeat(40)];
+    const source = { id: 'sys-swarm-original', status: 'in_progress', priority: 'LOW', description: 'Claim next issue', metadata: {
+      app: 'example', analysisType: 'claim-issue', perpetual: true, claimFlow: true, swarmCount: 6,
+      claimedBy: 'fixture-local', claimedAt: start, lastSpawnedAt: start, totalSpawnCount: 1,
+      deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-original',
+      taskOutcome: { status: 'incomplete', recovery: { mode: 'cleanup' } },
+    } };
+    const agent = { id: 'agent-original', taskId: source.id, status: 'completed', startedAt: start, completedAt: '2026-01-01T00:02:00.000Z',
+      result: { executionSuccess: true, cleanupPending: true, deliveryRecoveryOwned: true,
+        taskOutcome: { status: 'incomplete', recovery: { mode: 'cleanup' } } },
+      metadata: { instanceId: 'fixture-local', taskApp: 'example', taskAnalysisType: 'claim-issue', configClaimFlow: true, workspacePath: '/repo', isWorktree: false,
+        checkoutCapture: { status: 'captured' }, claimBranches: branches, claimReleasedBranches: [],
+        completionTaskDispatch: { taskId: source.id, taskType: 'internal', expected: [
+          ['claimedBy', 'fixture-local'], ['claimedAt', start], ['lastSpawnedAt', start], ['totalSpawnCount', 1],
+        ] },
+        completedCheckouts: branches.map((branch, index) => ({ version: 1, agentId: 'agent-original', startedAt: start,
+          capturedAt: '2026-01-01T00:01:00.000Z', repoPath: '/repo', path: `/tree/${index}`, branch, head: heads[index],
+          incarnation: { pointer: { dev: '1', ino: '2', birthtimeNs: '3' } } })),
+        swarmCleanupDelivery: { version: 1, continuationIssued: true, branches: branches.map((branch, index) => ({ branch, head: heads[index], prUrl: `https://github.com/a/b/pull/${index + 1}` })) },
+      } };
+    await seed('internal', [source]);
+    getAgentRecord.mockResolvedValue(agent);
+    const next = id => ({ id, status: 'pending', priority: 'LOW', description: 'Claim next issue', metadata: {
+      app: 'example', analysisType: 'claim-issue', perpetual: true, claimFlow: true,
+    } });
+    try {
+      mock.state.agents.rival = { id: 'rival', taskId: source.id, status: 'running' };
+      expect(await addTask(next('sys-swarm-raced'), 'internal', { raw: true }))
+        .toMatchObject({ id: source.id, duplicate: true });
+      delete mock.state.agents.rival;
+      const first = await addTask(next('sys-swarm-next'), 'internal', { raw: true });
+      expect(first).toMatchObject({ id: 'sys-swarm-next', status: 'pending' });
+      expect(await addTask(next('sys-swarm-duplicate'), 'internal', { raw: true }))
+        .toMatchObject({ id: 'sys-swarm-next', duplicate: true });
+      expect((await getTaskById(source.id))).toMatchObject({ status: 'in_progress', metadata: { deliveryRecovery: 'cleanup' } });
+      expect(agent.metadata.completedCheckouts).toHaveLength(2);
+    } finally { local.mockRestore(); }
+  });
+
+  it('does not release the drain slot for an unverified cleanup claim', async () => {
+    const source = { id: 'sys-swarm-held', status: 'in_progress', priority: 'LOW', description: 'Claim next issue', metadata: {
+      app: 'example', analysisType: 'claim-issue', perpetual: true, claimFlow: true,
+      deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-held',
+    } };
+    await seed('internal', [source]);
+    expect(await addTask({ id: 'swarm-next', status: 'pending', priority: 'LOW', description: source.description,
+      metadata: { app: 'example', analysisType: 'claim-issue', perpetual: true, claimFlow: true } }, 'internal', { raw: true }))
+      .toMatchObject({ id: source.id, duplicate: true });
+  });
   it('matches a manual PR resolution and autonomous follow-up across task files and titles', async () => {
     const metadata = { app: 'example', reviewLoopPRUrl: 'https://github.com/acme/example/pull/42' };
     const manual = await addTask({ description: 'Manual resolve', metadata }, 'user');

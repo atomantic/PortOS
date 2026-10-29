@@ -1,5 +1,7 @@
 vi.mock('../services/appIssues.js', () => ({ prepareAppIssueClaim: vi.fn() }));
 import { prepareAppIssueClaim } from '../services/appIssues.js';
+vi.mock('../services/providers.js', () => ({ getProviderById: vi.fn() }));
+import { getProviderById } from '../services/providers.js';
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import express from 'express';
 import { rmSync } from 'node:fs';
@@ -312,6 +314,32 @@ describe('CoS Routes', () => {
       expect((await request(app).put('/api/cos/config').send({ persistentMindMaintainer: { createTasks: true } })).status).toBe(400);
     });
 
+    it('refuses a Persistent Mind provider that cannot run tool-free, for the home profile and presets', async () => {
+      const providers = {
+        'tui-example': { id: 'tui-example', type: 'tui', command: 'claude' },
+        'codex-example': { id: 'codex-example', type: 'cli', command: 'codex' },
+        'claude-example': { id: 'claude-example', type: 'cli', command: 'claude' },
+        'api-example': { id: 'api-example', type: 'api' },
+      };
+      getProviderById.mockImplementation(async (id) => providers[id] ?? null);
+      updateConfig.mockResolvedValue({});
+      for (const providerId of ['tui-example', 'codex-example']) {
+        const profileResponse = await request(app).put('/api/cos/config').send({ persistentMindProfile: { providerId, model: 'example-model' } });
+        expect(profileResponse.status).toBe(400);
+        expect(profileResponse.body.code).toBe('PROVIDER_NOT_TOOL_FREE');
+        expect(profileResponse.body.error).toContain(providerId);
+        const presetResponse = await request(app).put('/api/cos/config').send({
+          persistentMindThinkingPresets: { presets: [{ id: 'deep', providerId, model: 'example-model' }] },
+        });
+        expect(presetResponse.status).toBe(400);
+      }
+      expect(updateConfig).not.toHaveBeenCalled();
+      for (const providerId of ['claude-example', 'api-example']) {
+        const accepted = await request(app).put('/api/cos/config').send({ persistentMindProfile: { providerId, model: 'example-model' } });
+        expect(accepted.status).toBe(200);
+      }
+    });
+
     it('validates the persistent mind wake cadence', async () => {
       const updates = { persistentMindProfile: { wakeIntervalMinutes: 60 } };
       updateConfig.mockResolvedValue(updates);
@@ -618,8 +646,9 @@ describe('CoS Routes', () => {
 
       const response = await request(app).get('/api/cos/agents');
       expect(response.status).toBe(200);
+      expect(response.body[0].metadata.releasePublication).toMatchObject({ status: 'verified', identity });
       expect(response.body[0].metadata.releaseSynchronization).toMatchObject({
-        status: 'verified',
+        status: 'blocked', blocker: 'publisher-candidate-checkout-unverified',
         identity,
         prUrl: 'https://github.com/example/repo/pull/101',
       });
@@ -1973,6 +2002,23 @@ describe('CoS scoped collections', () => {
     }
     const waiting = await request(app).get('/api/cos/agents?active=1');
     expect(waiting.body).toEqual([{ ...owner, deliveryPending: true }]);
+  });
+
+  it('projects activity for an exact retry-cleanup owner without inventing a legacy owner', async () => {
+    const owner = { id: 'agent-retry-owner', taskId: 'task-held', status: 'completed' };
+    getAgents.mockResolvedValue([owner]);
+    getTaskView.mockResolvedValue({ user: { tasks: [{ id: owner.taskId, status: 'in_progress',
+      metadata: { retryPendingCleanup: owner.id } }, { id: 'legacy-hold', status: 'in_progress',
+      metadata: { retryPendingCleanup: 'true' } }] }, cos: { tasks: [] } });
+    let finish;
+    const recovery = withDeliveryActivity(owner.id, 'Cleaning up before retry', () => new Promise(resolve => { finish = resolve; }));
+    try {
+      const response = await request(app).get('/api/cos/agents?active=1');
+      expect(response.body).toEqual([expect.objectContaining({ ...owner, deliveryPending: true,
+        deliveryActivity: expect.objectContaining({ label: 'Cleaning up before retry' }) })]);
+      expect(getAgentRecord).not.toHaveBeenCalledWith('true');
+    } finally { finish(); await recovery; }
+    expect((await request(app).get('/api/cos/agents?active=1')).body).toEqual([{ ...owner, deliveryPending: true }]);
   });
 
   it('scopes live agents and validates completed page bounds without changing legacy lists', async () => {

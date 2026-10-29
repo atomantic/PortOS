@@ -27,8 +27,11 @@ import {
   reviewerEffortArgs,
   reviewerModelArg,
   buildReviewerEffortNote,
+  buildReviewerMaxRoundsNote,
   buildReviewerPinNote,
   buildReviewersCsv,
+  resolveProviderReviewerSlug,
+  BRACKET_MODEL_REVIEWERS,
   claimSafeReviewers,
   prioritizeToolFreeReviewers,
   resolveReviewerConfig,
@@ -328,6 +331,21 @@ describe('per-reviewer reasoning effort (reviewerEfforts)', () => {
     expect(reviewerEffortArgs('codex', ' HIGH ')).toEqual(['-c', 'model_reasoning_effort=high']);
   });
 
+  it('renders each configured ~max budget as prose and says exhaustion is not a block', () => {
+    const note = buildReviewerMaxRoundsNote(['grok', 'codex', '@alice'], { grok: 2, '@alice': 1, claude: 5, codex: 0 });
+    expect(note).toContain('`grok` → 2 rounds');
+    expect(note).toContain('`@alice` → 1 round.');
+    expect(note).toContain('`codex` → loop until clean (no cap)');
+    // A cap on a reviewer the prompt does not name must not leak in.
+    expect(note).not.toContain('claude');
+    expect(note).toMatch(/never blocks opening the PR/);
+    expect(note).not.toMatch(/3 rounds/);
+    // Forge logins live outside the reviewer list but carry `@login` caps.
+    expect(buildReviewerMaxRoundsNote(['grok'], { grok: 2, '@alice': 1 }, ['alice'])).toContain('`@alice` → 1 round');
+    expect(buildReviewerMaxRoundsNote(['grok'], {})).toBe('');
+    expect(buildReviewerMaxRoundsNote(undefined, { grok: 2 })).toBe('');
+  });
+
   it('builds the hand-invocation note only for CLI reviewers carrying an effort', () => {
     const note = buildReviewerEffortNote(['codex', 'claude', 'copilot'], { codex: 'high', claude: 'low', copilot: 'high' });
     expect(note).toContain('`codex -c model_reasoning_effort=high`');
@@ -451,6 +469,8 @@ describe('client mirror of the reviewer vocabulary', () => {
     const client = await import('../../client/src/lib/reviewerPins.js');
     expect([...client.MODEL_CAPABLE_CLI_REVIEWERS].sort()).toEqual([...MODEL_CAPABLE_CLI_REVIEWERS].sort());
     expect([...client.MODEL_SELECTABLE_REVIEWERS].sort()).toEqual([...MODEL_SELECTABLE_REVIEWERS].sort());
+    expect([...client.BRACKET_MODEL_REVIEWERS].sort()).toEqual([...BRACKET_MODEL_REVIEWERS].sort());
+    expect([...client.PORTOS_ONLY_REVIEWERS].sort()).toEqual([...PORTOS_ONLY_REVIEWERS].sort());
   });
 
   // The picker gates its reviewer-applies toggle on this, and `buildReviewWithArgs`
@@ -1063,5 +1083,68 @@ describe('resolveReviewPolicy', () => {
 
   it('is frozen so one builder cannot mutate the value another reads', () => {
     expect(Object.isFrozen(resolveReviewPolicy({ reviewers: ['codex'] }, null, null))).toBe(true);
+  });
+});
+
+describe('resolveProviderReviewerSlug and buildReviewersCsv with providers', () => {
+  const CODEX_SELECTION_PROVIDER = {
+    id: 'selection-e0a2d22261158b86fe9783e1',
+    name: 'Codex CLI (standard requested)',
+    type: 'cli',
+    command: 'codex',
+    harnessId: 'codex',
+    executionSourceProviderId: 'codex',
+    defaultModel: 'gpt-6.1-terra',
+    effort: 'max'
+  };
+
+  it('resolves selection provider to codex slug', () => {
+    expect(resolveProviderReviewerSlug(CODEX_SELECTION_PROVIDER)).toBe('codex');
+  });
+
+  it('resolves provider token and formats human-friendly CSV with model, max, and effort', () => {
+    const csv = buildReviewersCsv(
+      ['provider:selection-e0a2d22261158b86fe9783e1'],
+      [],
+      [],
+      { 'provider:selection-e0a2d22261158b86fe9783e1': 2 },
+      { 'provider:selection-e0a2d22261158b86fe9783e1': 'gpt-6.1-terra' },
+      { 'provider:selection-e0a2d22261158b86fe9783e1': 'medium' },
+      [CODEX_SELECTION_PROVIDER]
+    );
+    expect(csv).toBe('codex[gpt-6.1-terra]~max=2~effort=medium');
+  });
+
+  it('falls back to provider defaultModel when reviewerModels has no pin', () => {
+    const csv = buildReviewersCsv(
+      ['provider:selection-e0a2d22261158b86fe9783e1'],
+      [],
+      [],
+      { 'provider:selection-e0a2d22261158b86fe9783e1': 2 },
+      {},
+      { 'provider:selection-e0a2d22261158b86fe9783e1': 'medium' },
+      [CODEX_SELECTION_PROVIDER]
+    );
+    expect(csv).toBe('codex[gpt-6.1-terra]~max=2~effort=medium');
+  });
+
+  it('resolves claim reviewer config with providers', () => {
+    const metadata = {
+      reviewers: ['provider:selection-e0a2d22261158b86fe9783e1'],
+      reviewerMaxRounds: { 'provider:selection-e0a2d22261158b86fe9783e1': 2 },
+      reviewerEfforts: { 'provider:selection-e0a2d22261158b86fe9783e1': 'medium' }
+    };
+    const result = resolveClaimReviewerConfig(metadata, null, [], [CODEX_SELECTION_PROVIDER]);
+    expect(result.csv).toBe('codex[gpt-6.1-terra]~max=2~effort=medium');
+  });
+
+  it('buildReviewWithArgs emits resolved slug and bracketed model', () => {
+    const result = buildReviewWithArgs(['provider:selection-e0a2d22261158b86fe9783e1'], {
+      reviewerModels: { 'provider:selection-e0a2d22261158b86fe9783e1': 'gpt-6.1-terra' },
+      reviewerEfforts: { 'provider:selection-e0a2d22261158b86fe9783e1': 'medium' },
+      reviewerMaxRounds: { 'provider:selection-e0a2d22261158b86fe9783e1': 2 },
+      providers: [CODEX_SELECTION_PROVIDER]
+    });
+    expect(result).toBe('--review-with codex[gpt-6.1-terra]~max=2~effort=medium');
   });
 });

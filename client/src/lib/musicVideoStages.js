@@ -18,7 +18,7 @@ import { supersededStillsCheckpoint } from '../../../server/lib/musicVideoAutono
 import { FINISHED_OUTSIDE_RERENDER_NOTE, finishedOutside, finishedOutsideCovers } from '../../../server/lib/musicVideoFinishedOutside.js';
 
 /**
- * The six steps of a music video, in the order the director decides them. The
+ * The steps of a music video, in the order the director decides them. The
  * ids are the route's `:stage` values and stay stable across the relabel
  * (#10297 follow-up): Song is `setup`, Look is `cast-sets`, Plan (once
  * Storyboard) is `board`, Shots (once Make) is `produce` — each shot's still,
@@ -27,6 +27,7 @@ import { FINISHED_OUTSIDE_RERENDER_NOTE, finishedOutside, finishedOutsideCovers 
  */
 export const MUSIC_VIDEO_STAGES = [
   { id: 'setup', label: 'Song', title: 'Song', doneWhen: 'Done when the track is analyzed and every lyric word is timed to the vocal.' },
+  { id: 'story', label: 'Story', title: 'Story', optional: true, doneWhen: 'Done when the story direction is ready; this step is optional.' },
   { id: 'cast-sets', label: 'Look', title: 'Look', doneWhen: 'Done when the art direction is written, a visual guide is chosen, and you approve it.' },
   { id: 'board', label: 'Plan', title: 'Plan', doneWhen: 'Done when timed shots cover the whole song, each with its action, staging, camera and lyric.' },
   { id: 'produce', label: 'Shots', title: 'Shots', doneWhen: 'Done when every shot is locked (a video shot: its still, then its clip) and the composition is ready.' },
@@ -215,7 +216,11 @@ export function listPreviewSources(project, { finalVideoSrc = null, leadWith = '
   // The aligned words over a plain frame, for checking timing before there is any picture.
   if (projectHasAudio(project) && project.audioAnalysis
     && (project.lyricCues || []).some((cue) => typeof cue.startSec === 'number' && isNonBlankStr(cue.text))) {
-    sources.push({ id: 'lyrics', kind: 'lyrics', label: 'Lyric timing' });
+    const lyrics = { id: 'lyrics', kind: 'lyrics', label: 'Lyric timing' };
+    // On Song the words are being checked: lead with them. The animatic and renders
+    // follow the lyric overlay setting, so with overlays off they show no words.
+    if (leadWith === 'lyrics') sources.unshift(lyrics);
+    else sources.push(lyrics);
   }
   return sources;
 }
@@ -318,7 +323,7 @@ export function autopilotStatus(project, readiness = project?.productionReadines
 export function describeProjectStatus(project, { progress, nextAction = null, reviewingDraft = false, reviewDraftState } = {}) {
   if (!project || !progress) return null;
   const entry = progress.stages.find((stage) => stage.id === progress.current);
-  const allDone = progress.stages.every((stage) => stage.state === 'done');
+  const allDone = progress.stages.every((stage) => stage.optional || stage.state === 'done');
   const blocked = entry?.state === 'blocked';
   const asksForYou = ['review-production', 'approve-cast-sets', 'review-autonomous'].includes(nextAction?.id);
   const needsYou = blocked || asksForYou;
@@ -441,6 +446,7 @@ export function deriveStages(project, readiness = project?.productionReadiness, 
   const liveRun = !!run && RESUMABLE_RUN_STATUSES.has(run.status) && (run.status === 'running' || !shotsDone);
   const done = {
     setup: projectHasAudio(project) && !!project?.audioAnalysis && lyricSetupState(project, readiness).ok,
+    story: !!(project?.concept?.prompt?.trim() || project?.storySummary?.trim() || project?.treatment?.brief?.premise?.trim()),
     'cast-sets': castDone,
     board: planned || shotsPlanned,
     produce: shotsDone,
@@ -452,6 +458,7 @@ export function deriveStages(project, readiness = project?.productionReadiness, 
   // Finished outside PortOS: the steps it made elsewhere count as done, with no approval to go stale.
   const external = !!finishedOutside(project);
   if (external) for (const id of Object.keys(done)) if (finishedOutsideCovers(project, id)) done[id] = true;
+  if (external) done.story = true;
   const blocked = {
     'cast-sets': castStopped,
     produce: !!run && RUN_BLOCKED_STATUSES.has(run.status),
@@ -464,7 +471,7 @@ export function deriveStages(project, readiness = project?.productionReadiness, 
   };
   const current = liveRun
     ? 'produce'
-    : (MUSIC_VIDEO_STAGES.find((stage) => !done[stage.id])?.id || 'publish');
+    : (MUSIC_VIDEO_STAGES.find((stage) => !stage.optional && !done[stage.id])?.id || 'publish');
   const stages = MUSIC_VIDEO_STAGES.map((stage) => {
     let state = 'todo';
     if (done[stage.id] && !(stage.id === current && liveRun)) state = 'done';
@@ -913,6 +920,41 @@ function lyricAnchorItem(readiness, scenes) {
   };
 }
 
+/**
+ * Plan's shot list: every shot in song order (untimed ones last, `number` null)
+ * with what the timing check reads —
+ * its span, the lyric it was planned on, its storyboard action and camera (a
+ * director's draft row, else the row derived from the scene) — and each problem
+ * the storyboard readiness names for it (`flags`, one sentence each). Lyric
+ * anchors drop out once the storyboard is approved, as on the checklist.
+ */
+export function planShotRows(project, readiness = project?.productionReadiness) {
+  const storyboard = readiness?.storyboard || {};
+  const flags = new Map();
+  const flag = (sceneId, text) => sceneId && flags.set(sceneId, [...(flags.get(sceneId) || []), text]);
+  for (const c of storyboard.coverage || []) flag(c.sceneId, (COVERAGE_TEXT[c.issue] || (() => c.issue))(c));
+  for (const shot of storyboard.incompleteShots || []) flag(shot.sceneId, `Missing ${shot.missing.join(', ')}`);
+  if (!storyboard.approved) {
+    for (const { sceneId, sung, anchored } of storyboard.lyricAnchors || []) flag(sceneId, `Sung ${quoted(sung)}, anchored to ${quoted(anchored)}`);
+  }
+  const rows = new Map((storyboard.shots || []).map((row) => [row.sceneId, row]));
+  // Untimed shots (a new scene before its timing is set) follow the timed ones, unnumbered, so their problems stay visible.
+  const scenes = project?.scenes || [];
+  const timed = scenes.filter((scene) => Number.isFinite(scene?.startSec)).sort((a, b) => a.startSec - b.startSec);
+  const untimed = scenes.filter((scene) => scene && !Number.isFinite(scene.startSec));
+  return [...timed, ...untimed]
+    .map((scene, i) => {
+      const row = rows.get(scene.sceneId);
+      return {
+        scene, number: i < timed.length ? i + 1 : null,
+        lyric: typeof scene.lyricText === 'string' ? scene.lyricText.trim() : '',
+        action: row?.action || scene.visualIntent || scene.prompt || '',
+        camera: row?.camera || '',
+        flags: flags.get(scene.sceneId) || [],
+      };
+    });
+}
+
 // The art-direction row's detail and action for each Cast & Sets phase, while fields are still unwritten.
 const CAST_DIRECTION_ROWS = {
   absent: ({ stillMissing, write, analyzed }) => ({ detail: `${stillMissing}Build the cast & sets to draft it from your creative direction, song style and mood board.`,
@@ -1010,8 +1052,8 @@ function boardChecklist({ project, readiness, scenes, draft }) {
   const feedback = feedbackItem(project, 'storyboard', readiness);
   const problems = [...storyboardProblemItems(readiness, scenes), ...(feedback ? [feedback] : [])];
   return [
-    { id: 'shots', label: 'Shots planned', done: planned, detail: planned ? null : 'Plan the shots from the header, or add scenes by hand.',
-      action: planned ? null : { label: 'Open the treatment', anchor: 'mv-board-treatment' } },
+    { id: 'shots', label: 'Shots planned', done: planned, detail: planned ? null : 'Run AI Plan under Planning tools, or add shots by hand on Shots.',
+      action: planned ? null : { label: 'Open planning tools', anchor: 'mv-board-plan' } },
     ...problems,
   ];
 }
@@ -1180,7 +1222,7 @@ export function stepNotes(project, readiness = project?.productionReadiness, pub
     : drafts ? `${formatCount(drafts)} ${drafts === 1 ? 'draft' : 'drafts'} to watch` : '';
   const posts = publishPlatformProgress(project, publish);
   const publishNote = posts.total ? `${formatCount(posts.posted)} of ${formatCount(posts.total)} posted` : posts.posted ? 'Posted' : '';
-  return { setup: song, 'cast-sets': look, board, produce: make, review, publish: publishNote };
+  return { setup: song, story: project.concept?.prompt?.trim() ? 'Concept written' : '', 'cast-sets': look, board, produce: make, review, publish: publishNote };
 }
 
 /**

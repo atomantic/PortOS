@@ -92,6 +92,7 @@ Every shared-selector consumer below uses the legacy reference bridge unless it 
 | `client/src/components/music/ChiptunePanel.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/music/MusicDesigner.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/music/TrackWaveformHost.jsx` | Shared structured options or saved provider reference |
+| `client/src/components/musicVideo/ArtGuideDrafter.jsx` | Session-local structured options forwarded to art-guide preview and draft requests |
 | `client/src/components/musicVideo/AutoReviewPanel.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/musicVideo/AutonomousStartDrawer.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/musicVideo/AutopilotPanel.jsx` | Shared structured options or saved provider reference |
@@ -101,6 +102,7 @@ Every shared-selector consumer below uses the legacy reference bridge unless it 
 | `client/src/components/musicVideo/MusicVideoLlmPicker.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/musicVideo/PromotionPlanPanel.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/musicVideo/PublishKitPanel.jsx` | Shared structured options or saved provider reference |
+| `client/src/components/musicVideo/StoryWorkbench.jsx` | Shared structured options for this story-development session |
 | `client/src/components/musicVideo/TreatmentPanel.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/pipeline/AutopilotPanel.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/pipeline/SeriesAutopilotSchedule.jsx` | Shared structured options or saved provider reference |

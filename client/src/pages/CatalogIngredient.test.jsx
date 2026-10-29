@@ -60,6 +60,7 @@ const { detailsOf } = vi.hoisted(() => ({
 }));
 
 vi.mock('../services/apiCatalog', () => ({
+  getCatalogFamilyContext: vi.fn(async () => ({ additions: [], images: [], imagesAddition: null })),
   getCatalogIngredientDetails: vi.fn(async () => detailsOf(CHAR_FIXTURE)),
   getCatalogUniverseContext: vi.fn(async () => ({ ...detailsOf(CHAR_FIXTURE).universeContext, usageComplete: true })),
   listCatalogRelatedImages: vi.fn(async () => ({ items: [], total: 0, limit: 24, offset: 0 })),
@@ -75,22 +76,35 @@ vi.mock('../services/apiCatalog', () => ({
   listCatalogIngredientMedia: vi.fn(async () => []),
   attachCatalogIngredientMedia: vi.fn(),
   setCatalogIngredientPortrait: vi.fn(),
+  attachCatalogIngredientGeneratedImage: vi.fn(),
   detachCatalogIngredientMedia: vi.fn(),
   listCatalogSheetVariants: vi.fn(async () => ({ variants: [] })),
   previewCatalogSheet: vi.fn(async () => ({ preview: null })),
   renderCatalogSheet: vi.fn(),
+  removeCatalogPointerSheet: vi.fn(),
   refineCatalogMedia: vi.fn(async () => ({ sentPrompt: 'Example reference refinement' })),
+  updateCatalogIngredientMediaLibrary: vi.fn(async () => ({})),
 }));
 // Universe-delegated sheet renders announce completion on this broadcast.
 const { socketHandlers } = vi.hoisted(() => ({ socketHandlers: new Map() }));
+// Several panels listen to one event, so every listener receives an emit.
+const emitSocket = (event, data) => {
+  const handlers = socketHandlers.get(event);
+  if (!handlers?.size) throw new Error(`No socket listener for ${event}`);
+  for (const fn of handlers) fn(data);
+};
 vi.mock('../services/socket', () => ({
   default: {
-    on: (event, fn) => socketHandlers.set(event, fn),
-    off: (event) => socketHandlers.delete(event),
+    on: (event, fn) => socketHandlers.set(event, new Set([...(socketHandlers.get(event) || []), fn])),
+    off: (event, fn) => {
+      const handlers = socketHandlers.get(event);
+      handlers?.delete(fn);
+      if (!handlers?.size) socketHandlers.delete(event);
+    },
   },
 }));
 
-vi.mock('../services/apiSystem', () => ({ generateImage: vi.fn(), getSelfInstance: vi.fn(async () => ({ instanceId: 'canonical-owner' })), getInstances: vi.fn(async () => ({ peers: [{ instanceId: 'canonical-owner', host: 'canonical.example', port: 5555 }] })) }));
+vi.mock('../services/apiSystem', () => ({ generateImage: vi.fn(), getSettings: vi.fn(async () => ({})), updateSettings: vi.fn(async () => ({})), getSelfInstance: vi.fn(async () => ({ instanceId: 'canonical-owner' })), getInstances: vi.fn(async () => ({ peers: [{ instanceId: 'canonical-owner', host: 'canonical.example', port: 5555 }] })) }));
 vi.mock('../services/apiCatalogIdentity', () => ({
   listCatalogIdentities: vi.fn(async () => ({ items: [], nextOffset: null })), getCatalogIdentity: vi.fn(), acceptCatalogIdentity: vi.fn(), abortCatalogIdentity: vi.fn(),
 }));
@@ -116,22 +130,38 @@ vi.mock('../components/pipeline/MediaJobThumb', async () => {
     useEffect(() => {
       if (!jobId) return;
       if (jobId === 'fail-job') onStatus?.('failed');
-      else onFilename?.(`${jobId}.png`);
+      else if (!jobId.startsWith('manual-')) onFilename?.(`${jobId}.png`);
     }, [jobId, onFilename, onStatus]);
-    return null;
+    return (
+      <div data-testid={`job-thumb-${jobId}`}>
+        <button onClick={() => onFilename?.(`${jobId}.png`)}>Complete job</button>
+      </div>
+    );
   }
   return { default: MockMediaJobThumb };
 });
 vi.mock('../services/apiImageVideo', () => ({
+  listImageVariants: vi.fn(async () => ({ items: [] })),
+  getGalleryImages: vi.fn(async () => []),
+  listMediaGalleryPage: vi.fn(async () => ({ items: [] })),
   listImageGalleryPage: vi.fn(async () => ({ items: [], total: 0, offset: 0, limit: 60 })),
+  applyImageFilmLook: vi.fn(async () => ({ filename: 'one-look.png' })),
   // Echo the request as the "sent" prompt, with its declared additions as chips.
   previewImagePrompt: vi.fn(async (body) => ({
     sentPrompt: body.prompt,
+    ...(body.quickEdit ? { reviewedPromptDigest: 'b'.repeat(64) } : {}),
+    ...(body.reviewReference ? { reviewedReferenceDigest: 'a'.repeat(64), reviewedReferenceImage: 'data:image/png;base64,eA==' } : {}),
     ...(body.negativePrompt ? { sentNegativePrompt: body.negativePrompt } : {}),
     promptAdditions: body.promptAdditions || [],
   })),
 }));
 vi.mock('../components/IngredientPicker', () => ({ default: () => null }));
+const { mediaAnnotationsFixture } = vi.hoisted(() => ({ mediaAnnotationsFixture: { current: {} } }));
+vi.mock('../hooks/useMediaAnnotations', () => ({ useMediaAnnotations: () => ({ annotations: mediaAnnotationsFixture.current, updateAnnotation: vi.fn() }) }));
+vi.mock('../components/media/AddToCollectionMenu', () => ({ default: () => null }));
+vi.mock('../components/media/PinToMoodBoardMenu', () => ({ default: () => null }));
+vi.mock('../components/media/PromptRefineModal', () => ({ default: () => null }));
+vi.mock('../components/media/PromptFromMedia', () => ({ PromptFromMediaModal: () => null }));
 vi.mock('../components/MediaImage', () => ({ default: ({ src, alt, fallbackSrc }) => <img src={src} alt={alt} data-fallback-src={fallbackSrc} /> }));
 vi.mock('../components/loraTraining/CharacterLoraChip', () => ({ default: () => null }));
 vi.mock('../components/TagPicker', () => ({
@@ -371,6 +401,25 @@ describe('CatalogIngredient — character sheet', () => {
       { silent: true },
     ));
     await waitFor(() => expect(screen.queryByText('Example Place')).toBeNull());
+  });
+
+  it('keeps a character’s family in the Family picker, out of the generic Relations list', async () => {
+    unlinkCatalogIngredientRelation.mockResolvedValue({});
+    getCatalogIngredientDetails.mockImplementation(async () => ({
+      ...detailsOf(CHAR_FIXTURE),
+      relations: {
+        outbound: [{ fromId: CHAR_FIXTURE.id, toId: 'cat-chr-frank', kind: 'wife-of', other: { id: 'cat-chr-frank', name: 'Example Frank', type: 'character' } }],
+        inbound: [{ fromId: 'cat-chr-kid', toId: CHAR_FIXTURE.id, kind: 'daughter-of', other: { id: 'cat-chr-kid', name: 'Example Kid', type: 'character' } }],
+      },
+    }));
+    await renderPage();
+
+    const remove = await screen.findByRole('button', { name: 'Remove Wife of Example Frank' });
+    expect(screen.getByRole('link', { name: 'Example Kid' })).toHaveAttribute('href', '/casting/cat-chr-kid');
+    expect(screen.queryByRole('button', { name: 'Remove relation to Example Frank' })).toBeNull();
+    fireEvent.click(remove);
+    await waitFor(() => expect(unlinkCatalogIngredientRelation).toHaveBeenCalledWith(
+      CHAR_FIXTURE.id, { toId: 'cat-chr-frank', kind: 'wife-of' }, { silent: true }));
   });
 
   describe('unsaved changes', () => {
@@ -770,9 +819,9 @@ describe('CatalogIngredient — character sheet', () => {
 
   it('composes the prompt from name + visual fields + tags, then renders and sets the portrait', async () => {
     const { generateImage } = await import('../services/apiSystem');
-    const { setCatalogIngredientPortrait } = await import('../services/apiCatalog');
+    const { attachCatalogIngredientGeneratedImage } = await import('../services/apiCatalog');
     generateImage.mockResolvedValue({ jobId: 'job-1' });
-    setCatalogIngredientPortrait.mockResolvedValue({});
+    attachCatalogIngredientGeneratedImage.mockResolvedValue({ kind: 'portrait', attached: true });
     await renderPage();
     await waitFor(() => expect(screen.getByDisplayValue('Sharp eyes, ink-stained cuffs.')).toBeTruthy());
 
@@ -793,18 +842,18 @@ describe('CatalogIngredient — character sheet', () => {
     expect(genPayload.prompt).toMatch(/Ada Lovelace/);
     expect(genPayload.prompt).toMatch(/Sharp eyes/);
     expect(genPayload.catalogIngredientId).toBe('cat-chr-1');
-    // The MediaJobThumb stub fires onFilename → with no existing portrait the
-    // render is attached as THE portrait.
-    await waitFor(() => expect(setCatalogIngredientPortrait).toHaveBeenCalledWith(
+    // The MediaJobThumb stub fires onFilename → the server-decided generated
+    // attach files the render (portrait when none exists).
+    await waitFor(() => expect(attachCatalogIngredientGeneratedImage).toHaveBeenCalledWith(
       'cat-chr-1', { mediaKey: 'job-1.png' }, { silent: true },
     ));
   });
 
   it('attaches a synchronously-returned image (external mode, no jobId)', async () => {
     const { generateImage } = await import('../services/apiSystem');
-    const { setCatalogIngredientPortrait } = await import('../services/apiCatalog');
+    const { attachCatalogIngredientGeneratedImage } = await import('../services/apiCatalog');
     generateImage.mockResolvedValue({ filename: 'ext.png' }); // external SD-API: no jobId
-    setCatalogIngredientPortrait.mockResolvedValue({});
+    attachCatalogIngredientGeneratedImage.mockResolvedValue({ kind: 'portrait', attached: true });
     await renderPage();
     await waitFor(() => expect(screen.getByDisplayValue('Sharp eyes, ink-stained cuffs.')).toBeTruthy());
 
@@ -814,7 +863,7 @@ describe('CatalogIngredient — character sheet', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: /^Render$/i })).toHaveProperty('disabled', false));
     fireEvent.click(screen.getByRole('button', { name: /^Render$/i }));
 
-    await waitFor(() => expect(setCatalogIngredientPortrait).toHaveBeenCalledWith(
+    await waitFor(() => expect(attachCatalogIngredientGeneratedImage).toHaveBeenCalledWith(
       'cat-chr-1', { mediaKey: 'ext.png' }, { silent: true },
     ));
   });
@@ -1044,6 +1093,119 @@ describe('CatalogIngredient — tabbed library record pages', () => {
     expect(screen.queryByAltText('mood.png')).toBeNull();
   });
 
+  it('removes a universe sheet from its card after a confirm and flags one rated bad', async () => {
+    const api = await import('../services/apiCatalog');
+    mediaAnnotationsFixture.current = { 'image-ref:hero-expressions.png': { rating: 'bad' } };
+    getCatalogIngredientDetails.mockImplementation(async () => ({ ...detailsOf({ ...HERO, updatedAt: '2026-01-01T00:00:00.000Z' }), media: MEDIA }));
+    api.removeCatalogPointerSheet.mockResolvedValue({ filename: 'hero-expressions.png', priorUpdatedAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-02T00:00:00.000Z', pointers: { referenceSheetImageRef: 'hero-standard.png', referenceSheets: {} } });
+    try {
+      await renderPage('/casting/cat-chr-hero/sheets');
+      const badSheet = (await screen.findByAltText('expressions reference sheet')).closest('figure');
+      expect(await within(badSheet).findByText('Rated bad')).toBeInTheDocument();
+      fireEvent.click(within(badSheet).getByRole('button', { name: 'Remove expressions sheet' }));
+      expect(api.removeCatalogPointerSheet).not.toHaveBeenCalled();
+      fireEvent.click(within(badSheet).getByRole('button', { name: 'Remove' }));
+      await waitFor(() => expect(api.removeCatalogPointerSheet).toHaveBeenCalledWith('cat-chr-hero', 'expressions', 'hero-expressions.png', { silent: true }));
+      await waitFor(() => expect(screen.queryByAltText('expressions reference sheet')).toBeNull());
+      expect(screen.getByAltText('standard reference sheet')).toBeInTheDocument();
+    } finally {
+      mediaAnnotationsFixture.current = {};
+    }
+  });
+
+  it('removes the open universe sheet from the enlarged viewer', async () => {
+    const api = await import('../services/apiCatalog');
+    getCatalogIngredientDetails.mockImplementation(async () => ({ ...detailsOf({ ...HERO, updatedAt: '2026-01-01T00:00:00.000Z' }), media: MEDIA }));
+    api.removeCatalogPointerSheet.mockResolvedValue({ filename: 'hero-standard.png', priorUpdatedAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-02T00:00:00.000Z', pointers: { referenceSheetImageRef: null, referenceSheets: { expressions: 'hero-expressions.png' } } });
+    await renderPage('/casting/cat-chr-hero/sheets');
+    fireEvent.click(await screen.findByRole('button', { name: 'Enlarge standard reference sheet' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Remove sheet' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Tap to remove' }));
+    await waitFor(() => expect(api.removeCatalogPointerSheet).toHaveBeenCalledWith('cat-chr-hero', 'standard', 'hero-standard.png', { silent: true }));
+    await waitFor(() => expect(screen.queryByAltText('standard reference sheet')).toBeNull());
+  });
+
+  it('keeps a removal finished after leaving the tab, without its own echo blocking an unsaved edit', async () => {
+    const api = await import('../services/apiCatalog');
+    const before = { ...HERO, updatedAt: '2026-01-01T00:00:00.000Z' };
+    const after = { ...before, updatedAt: '2026-01-02T00:00:00.000Z',
+      payload: { ...HERO.payload, referenceSheets: {} } };
+    getCatalogIngredientDetails.mockImplementation(async () => ({ ...detailsOf(before), media: MEDIA }));
+    let finish;
+    api.removeCatalogPointerSheet.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+    const { router } = await renderPage('/casting/cat-chr-hero/sheets');
+    const sheet = (await screen.findByAltText('expressions reference sheet')).closest('figure');
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Remove expressions sheet' }));
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Remove' }));
+    await act(async () => { await router.navigate('/casting/cat-chr-hero'); });
+    fireEvent.change(await screen.findByLabelText('Name'), { target: { value: 'Example Hero Renamed' } });
+    getCatalogIngredientDetails.mockImplementation(async () => ({ ...detailsOf(after), media: MEDIA }));
+    await act(async () => { finish({ filename: 'hero-expressions.png', pointers: { referenceSheetImageRef: 'hero-standard.png', referenceSheets: {} },
+      priorUpdatedAt: before.updatedAt, updatedAt: after.updatedAt }); });
+    await act(async () => { emitSocket('catalog:primitive-changed', { ingredientId: HERO.id }); });
+    expect(screen.queryByRole('button', { name: 'Discard local edits and load latest' })).toBeNull();
+    expect(screen.getByLabelText('Name')).toHaveValue('Example Hero Renamed');
+    await act(async () => { await router.navigate('/casting/cat-chr-hero/sheets'); });
+    expect(await screen.findByAltText('standard reference sheet')).toBeInTheDocument();
+    expect(screen.queryByAltText('expressions reference sheet')).toBeNull();
+  });
+
+  it('re-reads the sheets instead of adopting a removal answer when the record moved on meanwhile', async () => {
+    const api = await import('../services/apiCatalog');
+    const before = { ...HERO, updatedAt: '2026-01-01T00:00:00.000Z' };
+    // Another view edited the record between the page load and this removal.
+    const latest = { ...before, updatedAt: '2026-01-03T00:00:00.000Z', payload: { ...HERO.payload, referenceSheets: {} } };
+    getCatalogIngredientDetails.mockImplementation(async () => ({ ...detailsOf(before), media: MEDIA }));
+    api.removeCatalogPointerSheet.mockResolvedValue({ filename: 'hero-expressions.png', priorUpdatedAt: '2026-01-02T00:00:00.000Z',
+      updatedAt: latest.updatedAt, pointers: { referenceSheetImageRef: 'hero-standard.png', referenceSheets: {} } });
+    await renderPage('/casting/cat-chr-hero/sheets');
+    const sheet = (await screen.findByAltText('expressions reference sheet')).closest('figure');
+    getCatalogIngredientDetails.mockClear();
+    getCatalogIngredientDetails.mockImplementation(async () => ({ ...detailsOf(latest), media: MEDIA }));
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Remove expressions sheet' }));
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Remove' }));
+    await waitFor(() => expect(getCatalogIngredientDetails).toHaveBeenCalled());
+    await waitFor(() => expect(screen.queryByAltText('expressions reference sheet')).toBeNull());
+  });
+
+  it('flags another view\'s edit found after a removal instead of dropping it under an unsaved draft', async () => {
+    const api = await import('../services/apiCatalog');
+    const before = { ...HERO, updatedAt: '2026-01-01T00:00:00.000Z' };
+    const latest = { ...before, name: 'Example Hero Elsewhere', updatedAt: '2026-01-03T00:00:00.000Z', payload: { ...HERO.payload, referenceSheets: {} } };
+    getCatalogIngredientDetails.mockImplementation(async () => ({ ...detailsOf(before), media: MEDIA }));
+    let finish;
+    api.removeCatalogPointerSheet.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+    const { router } = await renderPage('/casting/cat-chr-hero/sheets');
+    const sheet = (await screen.findByAltText('expressions reference sheet')).closest('figure');
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Remove expressions sheet' }));
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Remove' }));
+    await act(async () => { await router.navigate('/casting/cat-chr-hero'); });
+    fireEvent.change(await screen.findByLabelText('Name'), { target: { value: 'Example Hero Draft' } });
+    getCatalogIngredientDetails.mockImplementation(async () => ({ ...detailsOf(latest), media: MEDIA }));
+    await act(async () => { finish({ filename: 'hero-expressions.png', priorUpdatedAt: '2026-01-02T00:00:00.000Z', updatedAt: latest.updatedAt,
+      pointers: { referenceSheetImageRef: 'hero-standard.png', referenceSheets: {} } }); });
+    expect(await screen.findByRole('button', { name: 'Discard local edits and load latest' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Name')).toHaveValue('Example Hero Draft');
+  });
+
+  it('keeps one removal in flight across leaving and reopening the Sheets tab', async () => {
+    const api = await import('../services/apiCatalog');
+    api.removeCatalogPointerSheet.mockClear();
+    api.removeCatalogPointerSheet.mockReturnValue(new Promise(() => {}));
+    const { router } = await renderPage('/casting/cat-chr-hero/sheets');
+    const sheet = (await screen.findByAltText('expressions reference sheet')).closest('figure');
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Remove expressions sheet' }));
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Remove' }));
+    await act(async () => { await router.navigate('/casting/cat-chr-hero'); });
+    await act(async () => { await router.navigate('/casting/cat-chr-hero/sheets'); });
+    const standard = (await screen.findByAltText('standard reference sheet')).closest('figure');
+    expect(within(standard).getByRole('button', { name: 'Remove standard sheet' })).toBeDisabled();
+    expect(api.removeCatalogPointerSheet).toHaveBeenCalledTimes(1);
+  });
+
   it('shows the server-selected canonical references beside Generate with full-size links and omissions', async () => {
     const api = await import('../services/apiCatalog');
     api.previewCatalogSheet.mockResolvedValue({ preview: {
@@ -1055,19 +1217,42 @@ describe('CatalogIngredient — tabbed library record pages', () => {
       ],
     } });
     await renderPage('/casting/cat-chr-hero/sheets');
-    const references = await screen.findByRole('region', { name: 'Canonical reference images' });
+    const references = await screen.findByRole('region', { name: 'Reference images sent' });
     expect(within(references).getByAltText('Canonical reference 1')).toHaveAttribute('src', '/data/image-refs/canon.png');
     const enlargeBtn = within(references).getByRole('button', { name: 'Enlarge Canonical reference 1' });
     expect(enlargeBtn).toBeInTheDocument();
     fireEvent.click(enlargeBtn);
     const dialog = await screen.findByRole('dialog', { name: 'Canonical reference 1' });
     expect(dialog).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Close image preview' }));
+    fireEvent.click(within(dialog).getAllByRole('button', { name: 'Close' })[0]);
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(within(references).getByText('Will be sent to the model')).toBeInTheDocument();
     expect(within(references).getByText(/Not sent.*limit/)).toBeInTheDocument();
     expect(within(references).getByText(/Missing file/)).toBeInTheDocument();
     expect(api.renderCatalogSheet).not.toHaveBeenCalled();
+  });
+
+  it('leaves a reference out of likeness from the sheet preview and puts it back', async () => {
+    const api = await import('../services/apiCatalog');
+    api.updateCatalogIngredientMediaLibrary.mockClear();
+    api.previewCatalogSheet.mockResolvedValue({ preview: {
+      sentPrompt: 'Example sheet', promptAdditions: [],
+      referenceImages: [
+        { filename: 'still.png', source: 'Reference library', status: 'included', mediaKind: 'reference' },
+        { filename: 'board.png', source: 'Reference library', status: 'left-out', mediaKind: 'reference' },
+      ],
+    } });
+    await renderPage('/casting/cat-chr-hero/sheets');
+    const references = await screen.findByRole('region', { name: 'Reference images sent' });
+    expect(within(references).getByText('Left out of likeness guides')).toBeInTheDocument();
+    const calls = api.previewCatalogSheet.mock.calls.length;
+    fireEvent.click(within(references).getByRole('button', { name: 'Leave out: still.png' }));
+    await waitFor(() => expect(api.updateCatalogIngredientMediaLibrary).toHaveBeenCalledWith('cat-chr-hero',
+      { mediaKey: 'still.png', kind: 'reference', likeness: false }, { silent: true }));
+    await waitFor(() => expect(api.previewCatalogSheet.mock.calls.length).toBeGreaterThan(calls));
+    fireEvent.click(within(await screen.findByRole('region', { name: 'Reference images sent' })).getByRole('button', { name: 'Use for likeness: board.png' }));
+    await waitFor(() => expect(api.updateCatalogIngredientMediaLibrary).toHaveBeenCalledWith('cat-chr-hero',
+      { mediaKey: 'board.png', kind: 'reference', likeness: true }, { silent: true }));
   });
 
   it.each([
@@ -1081,9 +1266,10 @@ describe('CatalogIngredient — tabbed library record pages', () => {
     await renderPage(route);
     expect(screen.getByAltText('Example subject cover')).toHaveAttribute('src', '/data/image-thumbnails/cover.webp');
     fireEvent.click(screen.getByRole('button', { name: 'Enlarge Example subject cover' }));
-    const preview = screen.getByRole('dialog', { name: 'Example subject cover' });
+    const preview = await screen.findByRole('dialog', { name: 'Example subject cover' });
+    await act(async () => {});
     expect(within(preview).getByAltText('Example subject cover')).toHaveAttribute('data-fallback-src', '/data/image-refs/cover.png');
-    fireEvent.click(within(preview).getByRole('button', { name: 'Close image preview' }));
+    fireEvent.click(within(preview).getAllByRole('button', { name: 'Close' })[0]);
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     expect(updateCatalogIngredient).not.toHaveBeenCalled();
   });
@@ -1123,7 +1309,7 @@ describe('CatalogIngredient — tabbed library record pages', () => {
     fireEvent.change(within(library).getByLabelText('Filter by age'), { target: { value: '' } });
     fireEvent.change(within(library).getByLabelText('Media scope'), { target: { value: 'all' } });
     expect(screen.getByAltText('Sheet in its own tab')).toBeInTheDocument();
-    expect(within(screen.getByRole('group', { name: 'reference details for sheet.png' })).getByRole('button', { name: 'Guide' })).toBeEnabled();
+    expect(within(screen.getByRole('group', { name: 'Details for sheet.png' })).getByRole('button', { name: 'Guide' })).toBeEnabled();
   });
 
   it('keeps archive-only reference media visible on References without using it as a profile cover', async () => {
@@ -1188,8 +1374,9 @@ describe('CatalogIngredient — tabbed library record pages', () => {
     getCatalogIngredientDetails.mockResolvedValue(detailsOf({ ...HERO, payload: { imageRefs: ['one.png', 'two.png'] } }));
     const { router } = await renderPage('/casting/cat-chr-hero/references');
     fireEvent.click(screen.getAllByRole('button', { name: 'Enlarge Example Hero canon reference' })[0]);
-    expect(new URLSearchParams(router.state.location.search).get('preview')).toBe('catalog-image:images:one.png');
-    expect(screen.getAllByRole('dialog')).toHaveLength(1);
+    expect(new URLSearchParams(router.state.location.search).get('preview')).toBe('image:one.png');
+    expect(await screen.findAllByRole('dialog')).toHaveLength(1);
+    await act(async () => {});
     await act(async () => { await router.navigate(-1); });
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     expect(router.state.location.pathname).toBe('/casting/cat-chr-hero/references');
@@ -1198,7 +1385,7 @@ describe('CatalogIngredient — tabbed library record pages', () => {
   it('opens a direct image link beyond loaded results and preserves its static mount', async () => {
     getCatalogIngredientDetails.mockResolvedValue(detailsOf({ ...HERO, payload: {} }));
     await renderPage('/casting/cat-chr-hero/references?preview=catalog-image%3Aimage-refs%3Aunlisted.png');
-    const dialog = await screen.findByRole('dialog', { name: 'Example Hero image unlisted.png' });
+    const dialog = await screen.findByRole('dialog');
     expect(screen.getAllByRole('dialog')).toHaveLength(1);
     expect(within(dialog).getByRole('img')).toHaveAttribute('src', '/data/image-refs/unlisted.png');
     expect(within(dialog).getByRole('img')).toHaveAttribute('data-fallback-src', '/data/images/unlisted.png');
@@ -1282,6 +1469,70 @@ describe('CatalogIngredient — tabbed library record pages', () => {
     ));
   });
 
+  it('keeps the sheet form usable while a render runs so another sheet can start', async () => {
+    const api = await import('../services/apiCatalog');
+    api.renderCatalogSheet
+      .mockResolvedValueOnce({ jobId: 'manual-std', variant: 'standard', role: 'sheet:standard', delegatedTo: null })
+      .mockResolvedValueOnce({ jobId: 'manual-exp', variant: 'expressions', role: 'sheet:expressions', delegatedTo: null });
+    api.attachCatalogIngredientMedia.mockResolvedValue({});
+    await renderPage('/casting/cat-chr-hero/sheets');
+
+    const kind = await screen.findByLabelText('Sheet kind');
+    await waitFor(() => expect(screen.getByRole('button', { name: /Generate sheet/ })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: /Generate sheet/ }));
+    expect(await screen.findByTestId('job-thumb-manual-std')).toBeInTheDocument();
+    // The same sheet can't be queued twice, but the pickers stay live.
+    expect(screen.getByRole('button', { name: /Rendering/ })).toBeDisabled();
+    expect(kind).toBeEnabled();
+
+    fireEvent.change(kind, { target: { value: 'expressions' } });
+    await waitFor(() => expect(screen.getByRole('button', { name: /Generate sheet/ })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: /Generate sheet/ }));
+    expect(await screen.findByTestId('job-thumb-manual-exp')).toBeInTheDocument();
+    expect(screen.getByTestId('job-thumb-manual-std')).toBeInTheDocument();
+    expect(screen.getByText('Rendering 2')).toBeInTheDocument();
+
+    // Each job attaches under its own role as it finishes.
+    fireEvent.click(within(screen.getByTestId('job-thumb-manual-std')).getByRole('button', { name: 'Complete job' }));
+    await waitFor(() => expect(api.attachCatalogIngredientMedia).toHaveBeenCalledWith(
+      'cat-chr-hero', { mediaKey: 'manual-std.png', kind: 'reference', role: 'sheet:standard' }, { silent: true },
+    ));
+    expect(screen.queryByTestId('job-thumb-manual-std')).toBeNull();
+    expect(screen.getByTestId('job-thumb-manual-exp')).toBeInTheDocument();
+    fireEvent.click(within(screen.getByTestId('job-thumb-manual-exp')).getByRole('button', { name: 'Complete job' }));
+    await waitFor(() => expect(api.attachCatalogIngredientMedia).toHaveBeenCalledWith(
+      'cat-chr-hero', { mediaKey: 'manual-exp.png', kind: 'reference', role: 'sheet:expressions' }, { silent: true },
+    ));
+  });
+
+  it('keeps the latest canon pointers when concurrent sheet refreshes finish out of order', async () => {
+    const api = await import('../services/apiCatalog');
+    api.renderCatalogSheet
+      .mockResolvedValueOnce({ jobId: 'manual-canon-std', variant: 'standard', delegatedTo: 'universe' })
+      .mockResolvedValueOnce({ jobId: 'manual-canon-exp', variant: 'expressions', delegatedTo: 'universe' });
+    await renderPage('/casting/cat-chr-hero/sheets');
+    fireEvent.click(await screen.findByRole('button', { name: /Generate sheet/ }));
+    await screen.findByTestId('job-thumb-manual-canon-std');
+    fireEvent.change(screen.getByLabelText('Sheet kind'), { target: { value: 'expressions' } });
+    await waitFor(() => expect(screen.getByRole('button', { name: /Generate sheet/ })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: /Generate sheet/ }));
+    await screen.findByTestId('job-thumb-manual-canon-exp');
+
+    const first = Promise.withResolvers();
+    const second = Promise.withResolvers();
+    getCatalogIngredientDetails.mockReset().mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+    await act(async () => { emitSocket('reference-sheet:changed', { jobId: 'manual-canon-std', status: 'ready' }); });
+    await act(async () => { emitSocket('reference-sheet:changed', { jobId: 'manual-canon-exp', status: 'ready' }); });
+    expect(getCatalogIngredientDetails).toHaveBeenCalledTimes(2);
+
+    const firstPayload = { ...HERO.payload, referenceSheetImageRef: 'hero-standard-v2.png' };
+    const latestPayload = { ...firstPayload, referenceSheets: { expressions: 'hero-expressions-v2.png' } };
+    await act(async () => { second.resolve(detailsOf({ ...HERO, payload: latestPayload })); });
+    await act(async () => { first.resolve(detailsOf({ ...HERO, payload: firstPayload })); });
+    expect(screen.getByAltText('standard reference sheet')).toHaveAttribute('src', '/data/image-refs/hero-standard-v2.png');
+    expect(screen.getByAltText('expressions reference sheet')).toHaveAttribute('src', '/data/image-refs/hero-expressions-v2.png');
+  });
+
   it('refreshes canon pointers when a universe-delegated sheet is announced ready', async () => {
     const api = await import('../services/apiCatalog');
     api.renderCatalogSheet.mockResolvedValue({ jobId: 'canon-job', variant: 'standard', delegatedTo: 'universe' });
@@ -1295,10 +1546,21 @@ describe('CatalogIngredient — tabbed library record pages', () => {
       media: MEDIA,
     }));
     await act(async () => {
-      socketHandlers.get('reference-sheet:changed')({ jobId: 'canon-job', status: 'ready' });
+      emitSocket('reference-sheet:changed', { jobId: 'canon-job', status: 'ready' });
     });
     await waitFor(() => expect(screen.getByAltText('standard reference sheet').getAttribute('src'))
       .toBe('/data/image-refs/hero-standard-v2.png'));
+  });
+
+  it('identifies a delegated sheet whose publication failed', async () => {
+    const api = await import('../services/apiCatalog');
+    api.renderCatalogSheet.mockResolvedValue({ jobId: 'manual-canon-fail', variant: 'standard', delegatedTo: 'universe' });
+    await renderPage('/casting/cat-chr-hero/sheets');
+    fireEvent.click(await screen.findByRole('button', { name: /Generate sheet/ }));
+    await screen.findByTestId('job-thumb-manual-canon-fail');
+    await act(async () => { emitSocket('reference-sheet:changed', { jobId: 'manual-canon-fail', status: 'failed' }); });
+    expect(toast.error).toHaveBeenCalledWith('Standard turnaround render finished but the sheet could not be saved');
+    expect(screen.queryByTestId('job-thumb-manual-canon-fail')).toBeNull();
   });
 
   it('keeps an unsaved name edit across tab switches without a discard prompt', async () => {
@@ -1353,7 +1615,7 @@ describe('CatalogIngredient — tabbed library record pages', () => {
       fireEvent.click(screen.getByRole('button', { name: /Save look/ }));
       await waitFor(() => expect(finishSave).toBeTypeOf('function'));
       await act(async () => { await router.navigate('/casting/cat-chr-hero/references'); });
-      const row = await screen.findByRole('group', { name: 'reference details for mood.png' });
+      const row = await screen.findByRole('group', { name: 'Details for mood.png' });
       fireEvent.click(within(row).getByText(/Review & refine/));
       expect(within(row).getByRole('button', { name: 'Refine as new version' })).toBeDisabled();
       expect(within(row).getByRole('status')).toHaveTextContent('Saving — the reference renders from the saved record.');
@@ -1390,6 +1652,22 @@ describe('CatalogIngredient — tabbed library record pages', () => {
       ));
       await waitFor(() => expect(api.attachCatalogIngredientMedia).toHaveBeenCalledWith(
         'cat-chr-hero', { mediaKey: 'look-job.png', kind: 'reference', role: 'look:wardrobe-1' }, { silent: true },
+      ));
+    });
+
+    // Catches the portrait missing from the look picker (the References tab
+    // shows it beside the references) or a look role landing on the portrait row.
+    it('offers the portrait for a look and files it as a reference copy', async () => {
+      const api = await import('../services/apiCatalog');
+      api.attachCatalogIngredientMedia.mockResolvedValue({ mediaKey: 'portrait.png', kind: 'reference', role: 'look:wardrobe-1' });
+      getCatalogIngredientDetails.mockResolvedValue({ ...detailsOf(HERO), media: MEDIA.map((m) => (m.kind === 'portrait'
+        ? { ...m, library: { review: { status: 'good' } } } : m)) });
+      await renderPage('/casting/cat-chr-hero/looks');
+      const card = await screen.findByRole('article', { name: 'Look: Red scarf' });
+      fireEvent.click(within(card).getByRole('button', { name: /Attach image/ }));
+      fireEvent.click(within(card).getByRole('button', { name: 'Use for Red scarf' }));
+      await waitFor(() => expect(api.attachCatalogIngredientMedia).toHaveBeenCalledWith(
+        'cat-chr-hero', { mediaKey: 'portrait.png', kind: 'reference', role: 'look:wardrobe-1', caption: null }, { silent: true },
       ));
     });
 
@@ -1459,6 +1737,24 @@ describe('CatalogIngredient — tabbed library record pages', () => {
       await act(async () => { await router.navigate('/casting/cat-chr-hero/references'); });
       await waitFor(() => expect(screen.getAllByRole('img').map((img) => img.getAttribute('src')))
         .toContain('/data/image-thumbnails/look-1.webp'));
+    });
+
+    it('filters candidate reference images in the attach menu to only those marked good', async () => {
+      getCatalogIngredientDetails.mockResolvedValue({
+        ...detailsOf(HERO),
+        media: [
+          ...MEDIA,
+          { mediaKey: 'good-ref.png', kind: 'reference', role: null, library: { review: { status: 'good' } } },
+          { mediaKey: 'bad-ref.png', kind: 'reference', role: null, library: { review: { status: 'bad' } } },
+        ],
+      });
+      await renderPage('/casting/cat-chr-hero/looks');
+      fireEvent.click(await screen.findByRole('button', { name: 'Attach image' }));
+      expect(screen.getByRole('button', { name: 'Use for Red scarf' })).toBeInTheDocument();
+      const sources = screen.getAllByRole('img').map((img) => img.getAttribute('src') || '');
+      expect(sources.some((s) => s.includes('good-ref'))).toBe(true);
+      expect(sources.some((s) => s.includes('bad-ref'))).toBe(false);
+      expect(sources.some((s) => s.includes('mood.png'))).toBe(false);
     });
   });
 
@@ -1616,7 +1912,7 @@ describe('Casting lean first render', () => {
     const { router } = await renderPage('/casting/cat-chr-1/sheets');
     const picker = await screen.findByLabelText('Sheet kind');
     fireEvent.change(picker, { target: { value: 'expressions' } });
-    await act(async () => socketHandlers.get('catalog:identity-changed')({ sourceId: CHAR_FIXTURE.id }));
+    await act(async () => emitSocket('catalog:identity-changed', { sourceId: CHAR_FIXTURE.id }));
     expect(mediaCalls).toBe(2);
     expect(screen.getByLabelText('Sheet kind')).toBe(picker);
     expect(picker).toHaveValue('expressions');
@@ -1690,4 +1986,94 @@ it('returns to an allowed Universe Cast context while retaining compact page que
   await act(async () => router.navigate(`/casting/cat-chr-1/profile${router.state.location.search}`));
   expect(screen.getByRole('tab', { name: 'Story' })).toHaveAttribute('aria-selected', 'true');
   expect(screen.getByRole('link', { name: 'Back to Casting' })).toHaveAttribute('href', back);
+});
+
+it('adds a card with rendering animation placeholder when editing an image from the casting catalog and live updates when completed', async () => {
+  const { generateImage } = await import('../services/apiSystem');
+  const { attachCatalogIngredientGeneratedImage } = await import('../services/apiCatalog');
+  generateImage.mockResolvedValue({ jobId: 'manual-edit-1', status: 'queued', position: 1 });
+  attachCatalogIngredientGeneratedImage.mockResolvedValue({ kind: 'reference', attached: true });
+
+  getCatalogIngredientDetails.mockResolvedValue({
+    ...detailsOf(CHAR_FIXTURE),
+    media: [
+      { mediaKey: 'one.png', kind: 'reference', library: { variant: { label: 'Primary image' } } },
+    ],
+  });
+
+  await renderPage('/casting/cat-chr-1/references?preview=image%3Aone.png');
+  const dialog = await screen.findByRole('dialog');
+  expect(dialog).toBeInTheDocument();
+
+  // Click the Edit action in the media lightbox
+  const editToggleBtn = within(dialog).getByRole('button', { name: 'Edit' });
+  await act(async () => { fireEvent.click(editToggleBtn); });
+
+  // Enter instructions in QuickImageEdit form
+  const input = await within(dialog).findByLabelText('What should change?');
+  fireEvent.change(input, { target: { value: 'make the jacket red' } });
+  const form = input.closest('form');
+  await waitFor(() => expect(within(form).getByRole('button', { name: 'Edit' })).toBeEnabled());
+  await act(async () => { fireEvent.submit(form); });
+
+  // generateImage is invoked with catalogIngredientId and reference
+  await waitFor(() => expect(generateImage).toHaveBeenCalledWith(
+    expect.objectContaining({
+      catalogIngredientId: 'cat-chr-1',
+      catalogMediaKind: 'reference',
+      referenceImageFiles: ['one.png'],
+      prompt: 'make the jacket red',
+      quickEdit: true,
+      reviewedReferenceDigest: 'a'.repeat(64),
+      reviewedPromptDigest: 'b'.repeat(64),
+    }),
+    { silent: true },
+  ));
+
+  // The modal is dismissed
+  await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+
+  // A card with rendering animation placeholder is added to the reference gallery
+  const pendingCard = await screen.findByTestId('library-row-pending');
+  expect(pendingCard).toBeInTheDocument();
+  expect(within(pendingCard).getByRole('heading', { level: 4, name: 'Edit: make the jacket red' })).toBeInTheDocument();
+  expect(within(pendingCard).getByText('Rendering')).toBeInTheDocument();
+  expect(within(pendingCard).getByText('From one.png')).toBeInTheDocument();
+  expect(within(pendingCard).getByText('Live updating…')).toBeInTheDocument();
+
+  // Complete the in-flight render
+  const completeBtn = within(pendingCard).getByRole('button', { name: 'Complete job' });
+  fireEvent.click(completeBtn);
+
+  await waitFor(() => expect(attachCatalogIngredientGeneratedImage).toHaveBeenCalledWith(
+    'cat-chr-1',
+    { mediaKey: 'manual-edit-1.png' },
+    { silent: true },
+  ));
+
+  // Pending card is cleared upon completion
+  await waitFor(() => expect(screen.queryByTestId('library-row-pending')).not.toBeInTheDocument());
+});
+
+it('files a film-look copy of a record image in its references with the source details', async () => {
+  const { applyImageFilmLook } = await import('../services/apiImageVideo');
+  const { attachCatalogIngredientMedia, updateCatalogIngredientMediaLibrary } = await import('../services/apiCatalog');
+  attachCatalogIngredientMedia.mockReset().mockResolvedValue({});
+  updateCatalogIngredientMediaLibrary.mockClear();
+  getCatalogIngredientDetails.mockResolvedValue({
+    ...detailsOf(CHAR_FIXTURE),
+    media: [{ mediaKey: 'one.png', kind: 'reference', library: { variant: { age: 30, formId: 'canonical' }, tags: ['coat'] } }],
+  });
+
+  await renderPage('/casting/cat-chr-1/references?preview=image%3Aone.png');
+  const dialog = await screen.findByRole('dialog');
+  await act(async () => { fireEvent.click(within(dialog).getByRole('button', { name: 'Film look' })); });
+  const presets = within(dialog).getByRole('group', { name: 'Film look presets' });
+  await act(async () => { fireEvent.click(within(presets).getAllByRole('button').find((b) => b.getAttribute('aria-pressed') === 'false')); });
+  await act(async () => { fireEvent.click(within(dialog).getByRole('button', { name: /Save filtered copy/ })); });
+
+  await waitFor(() => expect(applyImageFilmLook).toHaveBeenCalledWith('one.png', expect.any(Object), { silent: true }));
+  await waitFor(() => expect(attachCatalogIngredientMedia).toHaveBeenCalledWith('cat-chr-1', { mediaKey: 'one-look.png', kind: 'reference' }, { silent: true }));
+  await waitFor(() => expect(updateCatalogIngredientMediaLibrary).toHaveBeenCalledWith('cat-chr-1',
+    { mediaKey: 'one-look.png', kind: 'reference', variant: { age: 30, formId: 'canonical' }, tags: ['coat'] }, { silent: true }));
 });

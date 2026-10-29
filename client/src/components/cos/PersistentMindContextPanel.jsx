@@ -24,7 +24,7 @@ const playbookDraft = (data) => ({
 
 const harnessTone = (recommendation) => recommendation === 'recommended'
   ? 'success'
-  : recommendation === 'not-recommended' ? 'warning' : 'info';
+  : recommendation === 'unavailable' ? 'error' : 'info';
 
 export default function PersistentMindContextPanel({ view = 'all', refreshKey = 0, onMemoriesChanged }) {
   const [data, setData] = useState(null);

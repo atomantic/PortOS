@@ -24,7 +24,10 @@ import { universeAestheticLine } from '../lib/universeVisualStyle.js';
 import { applyImageVisualProfile } from './imageGen/visualProfile.js';
 import { resolveUniverseVisualProfile } from '../lib/universeVisualProfile.js';
 import { promptAddition } from '../lib/modelInput.js';
-import { characterSheetReferenceCandidates, resolveCharacterSheetReferences } from '../lib/characterSheetReferences.js';
+import { catalogFamilyRenderContext, familyImagesAddition } from './catalogFamily.js';
+import { characterSheetEditBase, characterSheetReferenceCandidates, resolveCharacterSheetReferences } from '../lib/characterSheetReferences.js';
+import { characterHeightStat } from '../lib/catalogAppearance.js';
+import { runwayImagePreservesSourceFrame } from '../lib/runwayImageModels.js';
 import { enqueueJob, getJob, mediaJobEvents } from './mediaJobQueue/index.js';
 import { buildUniverseRunTag } from './universeRunTag.js';
 import { IMAGE_GEN_MODE } from './imageGen/modes.js';
@@ -59,10 +62,20 @@ const CODEX_HEIGHT = 3072;
 // return the FLUX-tuned defaults; the renderer overrides for codex so the
 // text annotations land at codex's native hi-res instead of being downsampled
 // from a smaller request.
+// Codex doubles the template's own size, so a portrait-orientation template (a
+// single full-body look) keeps its orientation at codex's resolution too.
 function resolveSheetDimensions(mode, builtWidth, builtHeight) {
-  if (mode === IMAGE_GEN_MODE.CODEX) return { width: CODEX_WIDTH, height: CODEX_HEIGHT };
-  return { width: builtWidth || DEFAULT_WIDTH, height: builtHeight || DEFAULT_HEIGHT };
+  const width = builtWidth || DEFAULT_WIDTH;
+  const height = builtHeight || DEFAULT_HEIGHT;
+  if (mode === IMAGE_GEN_MODE.CODEX) return { width: width * (CODEX_WIDTH / DEFAULT_WIDTH), height: height * (CODEX_HEIGHT / DEFAULT_HEIGHT) };
+  return { width, height };
 }
+
+// Codex/grok/agy/fal/runway describe the init image's fidelity in words
+// (describeFidelity): the default 0.25 tells the model to keep the source's
+// composition, which would pin a headshot. 0.6 asks for a strong reference
+// the template may restage, while identity is held by the edit-base addition.
+const PORTRAIT_EDIT_STRENGTH = 0.6;
 
 const DEFAULT_EXPRESSIONS = Object.freeze([
   'neutral', 'curious', 'worried', 'surprised', 'amused', 'determined', 'relaxed',
@@ -76,6 +89,8 @@ const trim = (s) => (typeof s === 'string' ? s.trim() : '');
 // Style line a sheet carries when no universe supplies one (a catalog-only
 // record). Exported so the catalog renderer can list it as a prompt addition.
 export const DEFAULT_CHARACTER_SHEET_STYLE = 'Style: contemporary illustrated character design with confident line work and saturated, intentional color.';
+// The photographic sheet's style when no universe supplies one.
+export const DEFAULT_PHOTOGRAPHIC_SHEET_STYLE = 'Style: natural studio photography with true-to-life color, real skin texture and soft, even key light.';
 
 // Shared field bag used by every variant's prompt builder. Centralizes the
 // trim/flatten calls so a new variant only writes the style-specific layout
@@ -283,6 +298,59 @@ export function buildCharacterBlueprintSheetPrompt(universe, character) {
   };
 }
 
+/**
+ * Photographic variant — a photographed turnaround and expression reference
+ * of a real person on a plain studio backdrop, for photoreal universes. It
+ * ships NO default negatives: the illustrated sheet's negatives (which ban
+ * photographs) fight a photographic look, and an empty negative is the
+ * user's stated rule for this kind of render.
+ */
+function buildCharacterPhotographicSheetPrompt(universe, character) {
+  if (!universe || !character) {
+    throw new ServerError('buildCharacterPhotographicSheetPrompt: universe and character are required', {
+      status: 400, code: 'VALIDATION_ERROR',
+    });
+  }
+
+  const styleBits = universeAestheticLine(universe);
+  const {
+    name, role, pronouns, age, visualNotes, physical, silhouette, posture, special, visualIdentity,
+    wardrobeLine, propsLine, expressionsLine,
+  } = extractCharacterPromptCommon(character);
+
+  const height = characterHeightStat(character);
+  const headerBits = [
+    age ? `Age: ${age}.` : '',
+    height ? `Height: ${height}.` : '',
+    pronouns ? `Pronouns: ${pronouns}.` : '',
+    visualNotes ? `Visual notes: ${visualNotes}.` : '',
+  ].filter(Boolean).join(' ');
+
+  const promptParts = [
+    `PHOTOGRAPHIC CHARACTER REFERENCE SHEET — one studio contact page of photographs of ONE real person, ${name}${role ? `, ${role}` : ''}, shot on camera against a plain seamless light grey studio backdrop.`,
+    styleBits || DEFAULT_PHOTOGRAPHIC_SHEET_STYLE,
+    headerBits,
+    physical ? `Physical description: ${physical}` : '',
+    `Turnaround row (top half): four full-body photographs of ${name} at the same camera height, distance and focal length — FRONT, 3/4, SIDE profile, BACK — standing relaxed with arms slightly away from the body so build, proportions and clothing read clearly.`,
+    `Expression row (bottom half): seven head-and-shoulders portrait photographs of the same person facing the camera, showing — ${expressionsLine}.`,
+    silhouette ? `Silhouette: ${silhouette}` : '',
+    posture ? `Posture: ${posture}` : '',
+    special ? `Distinctive traits: ${special}` : '',
+    visualIdentity ? `Facial identity: ${visualIdentity}` : '',
+    wardrobeLine ? `Wardrobe, identical in every photograph: ${wardrobeLine}.` : 'Wardrobe: the same everyday outfit in every photograph.',
+    propsLine ? `Props held or worn where natural: ${propsLine}.` : '',
+    'Layout: thin white gutters between frames and a small plain sans-serif caption under each one (FRONT, 3/4, SIDE, BACK, then each expression name). The same person, lighting, exposure and color in every frame.',
+  ].filter(Boolean);
+
+  return {
+    prompt: promptParts.join('\n\n'),
+    negativePrompt: '',
+    width: DEFAULT_WIDTH,
+    height: DEFAULT_HEIGHT,
+    modelId: null,
+  };
+}
+
 // Per-generation filename so re-renders don't trample prior versions; the
 // "live" sheet pointer on the character always names the newest, but older
 // files stay on disk for rollback. The variant token in the middle keeps
@@ -302,6 +370,16 @@ const SHEET_VARIANTS = Object.freeze({
     label: 'Illustrated turnaround',
     description: 'Dense multi-zone reference sheet — front/back/side views, expression progression, color palette, wardrobe + props, hand gestures. Renders in the universe\'s defined illustrated style.',
     collectionCategory: 'character-sheet',
+    defaultStyle: DEFAULT_CHARACTER_SHEET_STYLE,
+  }),
+  photographic: Object.freeze({
+    id: 'photographic',
+    build: buildCharacterPhotographicSheetPrompt,
+    filenameToken: 'photo',
+    label: 'Photographic turnaround',
+    description: 'Studio photographs of a real person on a plain backdrop — front/3/4/side/back full-body views and a row of expression portraits. No default negatives. For photoreal universes.',
+    collectionCategory: 'character-photo-sheet',
+    defaultStyle: DEFAULT_PHOTOGRAPHIC_SHEET_STYLE,
   }),
   blueprint: Object.freeze({
     id: 'blueprint',
@@ -310,6 +388,7 @@ const SHEET_VARIANTS = Object.freeze({
     label: 'Blueprint concept sheet',
     description: 'Annotated character concept sheet on a clean white background with glowing accent linework over a structured base color. Both colors auto-pick from the character\'s palette.',
     collectionCategory: 'character-blueprint',
+    defaultStyle: DEFAULT_CHARACTER_SHEET_STYLE,
   }),
 });
 
@@ -330,10 +409,21 @@ export function getSheetVariantBuilder(variant) {
   return getVariantConfig(variant).build;
 }
 
+/** The style a variant's template carries when no universe supplies one. */
+export function getSheetVariantDefaultStyle(variant) {
+  return getVariantConfig(variant).defaultStyle;
+}
+
 // Catalog for the UI — pure, no I/O. The client renders one panel row per
 // entry. New entries here become available everywhere without further wiring.
-export function listSheetVariants() {
-  return Object.values(SHEET_VARIANTS).map((v) => ({
+// A photoreal universe (`photographic`) lists the photographic sheet first, so
+// a picker that defaults to the first entry starts on it.
+export function listSheetVariants({ photographic = false } = {}) {
+  const all = Object.values(SHEET_VARIANTS);
+  const ordered = photographic
+    ? [SHEET_VARIANTS.photographic, ...all.filter((v) => v !== SHEET_VARIANTS.photographic)]
+    : all;
+  return ordered.map((v) => ({
     id: v.id,
     label: v.label,
     description: v.description,
@@ -393,10 +483,18 @@ function subscribeToSheetJob(jobId, handlers) {
  * `styleLine` is the style block the template carries; it is listed as
  * `styleChip` only when the template (not a typed override) is sent and the
  * block is actually in it. A typed override is sent exactly as written.
- * Returns `{ params, prompt, negativePrompt, modelId, activeMode }`.
+ *
+ * `editBaseCandidate` is the record's canonical portrait. On a backend that
+ * edits, the render starts from it (`initImagePath`) and the other references
+ * follow as identity guides; `built` may then be a function of
+ * `{ editFromPortrait }` so a template can pick a layout that suits an edit.
+ * `form` ({ label }) is the age or look being rendered: its own image is the
+ * edit base (never the canonical portrait), canonical images guide likeness
+ * only, and with no image of its own the render generates fresh.
+ * Returns `{ params, prompt, negativePrompt, modelId, activeMode, referenceImages, editBase }`.
  */
 export async function buildSheetRenderParams({
-  built,
+  built: buildOrBuilt,
   options = {},
   styleLine = '',
   renderPin = {},
@@ -404,16 +502,12 @@ export async function buildSheetRenderParams({
   styleChip = { id: 'universe-style', label: 'Universe style' },
   negativesLabel = 'Character sheet negatives',
   referenceCandidates = [],
+  editBaseCandidate = null,
+  form = null,
   sharedIdentity = '',
+  family = { additions: [], candidates: [] },
+  selfName = '',
 }) {
-  const hasPromptOverride = typeof options.overridePrompt === 'string' && !!options.overridePrompt.trim();
-  const hasNegativeOverride = typeof options.overrideNegativePrompt === 'string' && !!options.overrideNegativePrompt.trim();
-  let prompt = hasPromptOverride ? options.overridePrompt : built.prompt;
-  const identityAddition = !hasPromptOverride && sharedIdentity && !prompt.includes(sharedIdentity)
-    ? promptAddition('shared-character-identity', 'Shared facial identity', sharedIdentity) : null;
-  if (identityAddition) prompt += `\n\nShared facial identity: ${sharedIdentity}`;
-  const negativePrompt = hasNegativeOverride ? options.overrideNegativePrompt : built.negativePrompt;
-
   const settings = await getSettings();
   // Text-template rendering works with any image-gen backend. Route through
   // the media-job queue with the active mode set; codex and local are both
@@ -428,6 +522,43 @@ export async function buildSheetRenderParams({
     fallbackMode: IMAGE_GEN_MODE.LOCAL,
   });
   const activeMode = sheetTarget.mode;
+  const cloud = sheetTarget.cloud;
+  if (cloud && !cloud.enabled) throw cloud.disabledError;
+  const localModel = !cloud && activeMode === IMAGE_GEN_MODE.LOCAL ? selectLocalImageModelFromSettings(settings, options.modelId) : null;
+  const modelId = cloud ? cloud.modelId : localModel?.id || null;
+  const references = resolveCharacterSheetReferences([...referenceCandidates, ...family.candidates], activeMode, modelId, localModel, editBaseCandidate);
+  if (form) {
+    const scopeLabel = { form: form.label, canonical: 'canonical · present story' };
+    references.images = references.images.map((image) => (image.scope ? { ...image, source: `${image.source} · ${scopeLabel[image.scope]}` } : image));
+    if (references.editBase?.scope) references.editBase = { ...references.editBase, source: `${references.editBase.source} · ${form.label}` };
+    if (!references.editBase) {
+      references.editBase = {
+        status: 'none',
+        reason: `${form.label} has no image of its own yet, so the sheet is generated fresh rather than edited from the present-day portrait. Assign a ${form.label} reference in the reference library to edit from it.`,
+      };
+    }
+  }
+  const editFromPortrait = !!references.initPath;
+  if (editFromPortrait && activeMode === IMAGE_GEN_MODE.RUNWAY
+    && runwayImagePreservesSourceFrame(modelId, 1 + references.paths.length)) {
+    throw new ServerError('Runway FIBO Edit keeps the portrait’s framing with one image and cannot reliably reframe it for the requested sheet or look. Add another compatible reference image or choose another image model.', {
+      status: 400, code: 'CHARACTER_SHEET_PORTRAIT_FRAMING_UNSUPPORTED',
+    });
+  }
+  const built = typeof buildOrBuilt === 'function' ? buildOrBuilt({ editFromPortrait }) : buildOrBuilt;
+
+  const hasPromptOverride = typeof options.overridePrompt === 'string' && !!options.overridePrompt.trim();
+  // A blank prompt override means "use the template"; a negative override is
+  // the user's choice even when empty, so "" sends no template negatives.
+  const hasNegativeOverride = typeof options.overrideNegativePrompt === 'string';
+  let prompt = hasPromptOverride ? options.overridePrompt : built.prompt;
+  const identityAddition = !hasPromptOverride && sharedIdentity && !prompt.includes(sharedIdentity)
+    ? promptAddition('shared-character-identity', 'Shared facial identity', sharedIdentity) : null;
+  if (identityAddition) prompt += `\n\nShared facial identity: ${sharedIdentity}`;
+  const familyAdditions = hasPromptOverride ? [] : family.additions;
+  for (const addition of familyAdditions) prompt += `\n\n${addition.text}`;
+  const negativePrompt = hasNegativeOverride ? options.overrideNegativePrompt : built.negativePrompt;
+
   // Sheet renders hard-code cleanC2PA=true (lossless metadata strip — gpt-image
   // adds a caBX provenance chunk we don't want to ship) and denoise=false
   // (the median+sharpen pass blurs annotation text; sheets ship with their
@@ -437,14 +568,15 @@ export async function buildSheetRenderParams({
   const denoise = false;
   // Codex's image_gen tool can render up to 4K — asking for FLUX's 2048×1536
   // under-uses the available headroom and pixelates annotation text when the
-  // user zooms. resolveSheetDimensions bumps codex up to 4K landscape while
-  // local FLUX keeps its memory-tuned 2048×1536 defaults.
+  // user zooms. resolveSheetDimensions doubles the template size for codex
+  // while local FLUX keeps the template's memory-tuned size.
   const { width, height } = resolveSheetDimensions(activeMode, built.width, built.height);
   // The sheet template is PortOS's own text around the record's fields; the
   // style and the sheet negatives it carries are listed on the render's
   // sent-prompt record (#11317). A typed override is sent as written.
   const promptAdditions = [
     identityAddition,
+    ...familyAdditions,
     !hasPromptOverride && styleLine && prompt.includes(styleLine.trim()) ? promptAddition(styleChip.id, styleChip.label, styleLine) : null,
     !hasNegativeOverride ? promptAddition('sheet-negatives', negativesLabel, built.negativePrompt) : null,
   ].filter(Boolean);
@@ -459,17 +591,10 @@ export async function buildSheetRenderParams({
     denoise,
   };
 
-  let modelId = null;
-  let localModel = null;
   let params;
-  const cloud = sheetTarget.cloud;
   if (cloud) {
-    if (!cloud.enabled) throw cloud.disabledError;
-    modelId = cloud.modelId;
     params = { ...baseParams, ...cloud.providerParams };
   } else if (activeMode === IMAGE_GEN_MODE.LOCAL) {
-    localModel = selectLocalImageModelFromSettings(settings, options.modelId);
-    modelId = localModel?.id || null;
     if (!modelId) {
       throw new ServerError(
         'No local image-gen models are registered. Install a model via `bash scripts/setup-image-video.sh` before generating a reference sheet.',
@@ -483,21 +608,47 @@ export async function buildSheetRenderParams({
       { status: 400, code: 'UNIVERSE_CHARACTER_SHEET_UNSUPPORTED_MODE' },
     );
   }
-  const references = resolveCharacterSheetReferences(referenceCandidates, activeMode, modelId, localModel);
-  if (references.paths.length) {
-    params.referenceImagePaths = references.paths;
-    if (!hasPromptOverride) {
-      const text = 'Use the attached canonical character images as the identity reference. Preserve the character’s facial features, proportions, skin, hair, markings and distinctive likeness across every view. Apply the requested age, wardrobe and visual direction while keeping the same character identity.';
-      prompt += `\n\n${text}`;
-      params.prompt = prompt;
-      params.promptAdditions = [...(params.promptAdditions || []), promptAddition('character-identity', 'Canonical character likeness', text)];
+  if (references.paths.length) params.referenceImagePaths = references.paths;
+  if (editFromPortrait) {
+    params.initImagePath = references.initPath;
+    params.initImageStrength = PORTRAIT_EDIT_STRENGTH;
+  }
+  if (!hasPromptOverride) {
+    const guides = references.images.filter((image) => image.status === 'included' && image.role !== 'edit-base');
+    const ownGuides = guides.some((image) => !image.relative);
+    const added = [];
+    const otherAgeLine = form && guides.some((image) => image.scope === 'canonical')
+      ? ` Some attached images show this person at another age or look than ${form.label}: take only facial identity from them and render the age, build, hairstyle and wardrobe the description asks for.` : '';
+    if (editFromPortrait && form) {
+      const guideLine = ownGuides ? ` The other attached images of this character are identity guides for the same person.${otherAgeLine}` : '';
+      added.push(promptAddition('form-edit-base', `Edit from the ${form.label} reference`, `Edit the FIRST attached image, this character as ${form.label}, into the image described above. Keep this exact person at this age: the same facial structure, eyes, skin, hair color and distinctive marks. Apply the hairstyle, clothing, pose, framing, setting and layout the description asks for, and do not keep the image’s own clothing, crop or background unless the description asks for them.${guideLine}`));
+    } else if (editFromPortrait) {
+      const guideLine = ownGuides ? ' The other attached images of this character are identity guides for the same person.' : '';
+      added.push(promptAddition('portrait-edit-base', 'Edit from the canonical portrait', `Edit the FIRST attached image, the character’s canonical portrait, into the image described above. Keep this exact person: the same facial structure, eyes, skin, hair color and distinctive marks. Apply the age, hairstyle, clothing, pose, framing, setting and layout the description asks for, and do not keep the portrait’s own clothing, crop or background unless the description asks for them.${guideLine}`));
+    } else if (ownGuides && form) {
+      added.push(promptAddition('character-identity', `Likeness for ${form.label}`, `Use the attached images of this character as the identity reference. Preserve the facial features, skin, hair color, markings and distinctive likeness across every view.${otherAgeLine || ` Render the age, build and wardrobe the description asks for.`}`));
+    } else if (ownGuides) {
+      added.push(promptAddition('character-identity', 'Canonical character likeness', 'Use the attached canonical character images as the identity reference. Preserve the character’s facial features, proportions, skin, hair, markings and distinctive likeness across every view. Apply the requested age, wardrobe and visual direction while keeping the same character identity.'));
     }
+    // Relatives' images come after the record's own, so its identity keeps priority.
+    added.push(familyImagesAddition(selfName || built.name || 'this character', guides.filter((image) => image.relative).map((image) => image.relative)));
+    for (const addition of added.filter(Boolean)) {
+      prompt += `\n\n${addition.text}`;
+      params.promptAdditions = [...(params.promptAdditions || []), addition];
+    }
+    params.prompt = prompt;
   }
   params = applyImageVisualProfile(params, visualProfile);
-  return { params, prompt: params.prompt, negativePrompt: params.negativePrompt, modelId, activeMode, referenceImages: references.images };
+  return {
+    params, settings, prompt: params.prompt, negativePrompt: params.negativePrompt, modelId, activeMode,
+    referenceImages: references.images, editBase: references.editBase,
+  };
 }
 
+// Relatives' images are optional likeness hints: an unavailable one is shown
+// as not sent but never blocks the record's own render.
 export function assertSheetReferencesAvailable(referenceImages) {
+  referenceImages = referenceImages.filter((ref) => !ref.relative);
   if (referenceImages.some((ref) => ref.status === 'unsupported')) {
     throw new ServerError('Canonical references need FLUX.2 or Qwen Image 2.1 on the local backend, or a cloud image backend. Select a supported sheet render target before generating.', {
       status: 400, code: 'CHARACTER_SHEET_REFERENCES_UNSUPPORTED',
@@ -524,35 +675,37 @@ async function prepareCharacterSheet(universeId, entryId, options) {
       status: 404, code: 'UNIVERSE_CANON_NOT_FOUND',
     });
   }
-  // Same frozen-identity guard the character refine/expand flows enforce —
-  // the UI gates this too, but the route is reachable directly so the lock
-  // has to be enforced server-side as well. 409 mirrors refineUniverseCharacter.
-  if (character.locked === true) {
-    throw new ServerError(
-      `Character "${character.name}" is locked — unlock it before rendering a reference sheet`,
-      { status: 409, code: 'UNIVERSE_CANON_LOCKED' },
-    );
-  }
   const built = variantConfig.build(universe, character);
   const media = character.ingredientId
     ? await import('./catalogDB.js').then(({ listMediaForIngredient }) => listMediaForIngredient(character.ingredientId))
     : [];
+  const universeStyle = universeAestheticLine(universe);
   const sheet = await buildSheetRenderParams({
-    built, options, styleLine: universeAestheticLine(universe), renderPin: recordRenderPin(universe), visualProfile: options.visualProfileOverride === undefined ? universe.visualProfile : options.visualProfileOverride,
+    built,
+    options,
+    styleLine: universeStyle || variantConfig.defaultStyle,
+    styleChip: universeStyle
+      ? { id: 'universe-style', label: 'Universe style' }
+      : { id: 'sheet-default-style', label: 'Default sheet style' },
+    renderPin: recordRenderPin(universe), visualProfile: options.visualProfileOverride === undefined ? universe.visualProfile : options.visualProfileOverride,
     referenceCandidates: characterSheetReferenceCandidates(character, media),
+    editBaseCandidate: characterSheetEditBase(character, media),
     sharedIdentity: character.visualIdentity,
+    family: await catalogFamilyRenderContext(character.ingredientId, character.name),
+    selfName: character.name,
   });
   return { variant, variantConfig, universe, character, ...sheet };
 }
 
 /** What a universe character's sheet render would send, without queueing it. */
 export async function previewCharacterReferenceSheet(universeId, entryId, options = {}) {
-  const { params, referenceImages } = await prepareCharacterSheet(universeId, entryId, options);
+  const { params, settings, referenceImages, editBase } = await prepareCharacterSheet(universeId, entryId, options);
+  const { previewPreparedImagePrompt } = await import('./imageGen/promptPreview.js');
   return {
-    sentPrompt: params.prompt,
-    ...(params.negativePrompt ? { sentNegativePrompt: params.negativePrompt } : {}),
-    promptAdditions: params.promptAdditions || [],
+    promptAdditions: [],
+    ...await previewPreparedImagePrompt({ params, settings }),
     referenceImages,
+    ...(editBase ? { editBase } : {}),
   };
 }
 
@@ -562,13 +715,24 @@ export async function previewCharacterReferenceSheet(universeId, entryId, option
  * any failure there is logged (the client tracks the render via SSE).
  *
  * `variant` selects the sheet style ('standard' = illustrated turnaround,
- * 'blueprint' = annotated concept sheet on white). Defaults to 'standard'
+ * 'photographic' = studio photo turnaround, 'blueprint' = annotated concept
+ * sheet on white). Defaults to 'standard'
  * so existing callers (and the legacy route) stay unchanged.
  */
 export async function renderCharacterReferenceSheet(universeId, entryId, options = {}) {
   const {
     variant, variantConfig, universe, character, params, prompt, modelId, activeMode, referenceImages,
   } = await prepareCharacterSheet(universeId, entryId, options);
+  // Same frozen-identity guard the character refine/expand flows enforce —
+  // the UI gates this too, but the route is reachable directly so the lock
+  // has to be enforced server-side as well. 409 mirrors refineUniverseCharacter.
+  // Only the render is guarded: a preview never writes.
+  if (character.locked === true) {
+    throw new ServerError(
+      `Character "${character.name}" is locked — unlock it before rendering a reference sheet`,
+      { status: 409, code: 'UNIVERSE_CANON_LOCKED' },
+    );
+  }
   assertSheetReferencesAvailable(referenceImages);
 
   // Resolve (or create) the universe's media collection up front, then attach

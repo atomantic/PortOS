@@ -28,9 +28,9 @@ export const repairImageModel = (modelId, { deep = false } = {}) => request(`/im
 });
 export const listImageGallery = (options = {}) => request('/image-gen/gallery', options);
 // Opt-in page envelope; keep listImageGallery's legacy array/options signature.
-export const listImageGalleryPage = ({ limit = 60, offset = 0, q = '', hidden, starred, summary, compact, filename, kind, media, collectionId, universeId, entryCategory, entryKind } = {}, options = {}) => {
+export const listImageGalleryPage = ({ limit = 60, offset = 0, q = '', hidden, starred, rating, summary, compact, filename, kind, media, collectionId, universeId, entryCategory, entryKind } = {}, options = {}) => {
   const params = new URLSearchParams({ limit, offset, q });
-  for (const [key, value] of Object.entries({ hidden, starred, summary, compact, filename, kind, media, collectionId, universeId, entryCategory, entryKind })) {
+  for (const [key, value] of Object.entries({ hidden, starred, rating, summary, compact, filename, kind, media, collectionId, universeId, entryCategory, entryKind })) {
     if (value !== undefined) params.set(key, value);
   }
   return request(`/image-gen/gallery?${params}`, options);
@@ -57,7 +57,9 @@ export const cancelImageGen = (opts = {}, options = {}) => request('/image-gen/c
   body: JSON.stringify(opts),
   ...options,
 });
+// Resolves `{ ok, status }` like deleteVideoHistoryItem (see mediaDeleteOutcome).
 export const deleteImage = (filename, options = {}) => request(`/image-gen/${encodeURIComponent(filename)}`, { method: 'DELETE', ...options });
+export const cancelImagePendingDelete = (filename, options = {}) => request(`/image-gen/${encodeURIComponent(filename)}/cancel-delete`, { method: 'POST', ...options });
 export const setImageHidden = (filename, hidden, options = {}) => request(`/image-gen/${encodeURIComponent(filename)}/visibility`, {
   method: 'POST',
   body: JSON.stringify({ hidden }),
@@ -296,7 +298,12 @@ export const uploadGalleryVideo = (base64Data, filename, options = {}) => reques
   body: uploadBody(base64Data, filename),
   ...options,
 });
+// Resolves `{ ok, status }`: `deleted`, `deleted-remote`, `pending` (queued for
+// the owning peer, with `pendingDelete` and `peerName`; `deletedOn` and
+// `removedHere` when another holder already deleted), `owner-unknown` (hidden
+// here only) or `cancelled`; lib/mediaDeleteOutcome.js maps it for a list.
 export const deleteVideoHistoryItem = (id, options = {}) => request(`/video-gen/history/${encodeURIComponent(id)}`, { method: 'DELETE', ...options });
+export const cancelVideoPendingDelete = (id, options = {}) => request(`/video-gen/history/${encodeURIComponent(id)}/cancel-delete`, { method: 'POST', ...options });
 export const setVideoHidden = (id, hidden, options = {}) => request(`/video-gen/history/${encodeURIComponent(id)}/visibility`, {
   method: 'POST',
   body: JSON.stringify({ hidden }),
@@ -317,6 +324,15 @@ export const upscaleVideo = (id, { method, ...options } = {}) => request(`/video
   ...(method != null ? { body: JSON.stringify({ method }) } : {}),
   ...options,
 });
+export const quoteTopazUpscale = (id, model, options = {}) => request(`/video-gen/upscale/${encodeURIComponent(id)}/topaz/quote`, {
+  method: 'POST', body: JSON.stringify({ model }), ...options,
+});
+export const startTopazUpscale = (id, token, options = {}) => request(`/video-gen/upscale/${encodeURIComponent(id)}/topaz`, {
+  method: 'POST', body: JSON.stringify({ token }), ...options,
+});
+export const getTopazJobStatus = (id, options = {}) => request(`/video-gen/upscale/topaz/jobs/${encodeURIComponent(id)}/status`, options);
+export const cancelTopazRemoteJob = (id, options = {}) => request(`/video-gen/upscale/topaz/jobs/${encodeURIComponent(id)}/cancel`, { method: 'POST', ...options });
+export const recoverTopazJob = (id, options = {}) => request(`/video-gen/upscale/topaz/jobs/${encodeURIComponent(id)}/recover`, { method: 'POST', ...options });
 // Read-only pre-submit disclosure (#6509): source geometry, target dimensions,
 // required padding, and runtime/adapter readiness for `method`. Never queues a
 // job or triggers a download. `silent` by default — the picker owns its own

@@ -255,6 +255,26 @@ describe('Cast & Sets direct edits', () => {
   const saved = mergeCastAndSetsDirection(null, parseCastAndSetsResponse(JSON.stringify(PROCEDURAL_ANSWER)), { sections, medium: 'procedural' }).direction;
   const direction = { ...saved, look: 'flat fills' };
 
+  it('keeps distinct original looks that differ only in case during a combined edit', () => {
+    const base = mergeCastAndSetsDirection(null, parseCastAndSetsResponse(JSON.stringify(ANSWER)), { sections }).direction;
+    const previous = { ...base, looks: [{ name: 'Summer', description: 'coat' }, { name: 'SUMMER', description: 'hat' }],
+      tests: [{ setId: 'lab-room', look: 'Summer', action: 'walk', caption: '' }, { setId: 'harbor', look: 'SUMMER', action: 'wait', caption: '' }] };
+    const looks = [{ originalName: 'Summer', name: 'Rain', description: 'coat' }, { originalName: 'SUMMER', name: 'Sun', description: 'hat' }];
+    const edited = applyCastAndSetsDirectionEdits(previous, { looks, tests: [{ index: 1, look: 'Summer' }, { index: 2, look: 'SUMMER' }] }, { sections });
+    expect(edited.direction.tests.map((test) => test.look)).toEqual(['Rain', 'Sun']);
+    expect(() => applyCastAndSetsDirectionEdits(previous, { looks, tests: [{ index: 1, look: 'summer' }] }, { sections }))
+      .toThrow(/ambiguous/i);
+    const oneRenamed = [looks[0], { originalName: 'SUMMER', name: 'SUMMER', description: 'hat' }];
+    expect(() => applyCastAndSetsDirectionEdits(previous, { looks: oneRenamed, tests: [{ index: 1, look: 'Summer' }] }, { sections }))
+      .toThrow(/ambiguous/i);
+    const removed = applyCastAndSetsDirectionEdits(previous, { looks: oneRenamed,
+      tests: [{ index: 1, look: 'Summer', remove: true }] }, { sections });
+    expect(removed.direction.tests.map((test) => test.look)).toEqual(['SUMMER']);
+    const retained = applyCastAndSetsDirectionEdits(previous, { looks: oneRenamed,
+      tests: [{ index: 1, look: 'SUMMER' }, { index: 2, look: 'SUMMER' }] }, { sections });
+    expect(retained.direction.tests.map((test) => test.look)).toEqual(['SUMMER', 'SUMMER']);
+  });
+
   it('replaces present fields, keeps absent ones, clears on empty, and reports what changed', () => {
     const edited = applyCastAndSetsDirectionEdits(direction, {
       protagonist: { palette: '#112233, #445566', movement: '', expressions: ['calm: bow level'] },
@@ -272,10 +292,32 @@ describe('Cast & Sets direct edits', () => {
     expect(applyCastAndSetsDirectionEdits(direction, { world: { camera: direction.world.camera } }, { sections }).changed).toEqual([]);
   });
 
-  it('refuses a photographic direction, an unknown set, and an edit that empties the protagonist', () => {
-    expect(() => applyCastAndSetsDirectionEdits({ ...direction, medium: undefined }, { world: { camera: 'x' } })).toThrow(/procedural/);
+  it('refuses an unknown set and an edit that empties the protagonist', () => {
     expect(() => applyCastAndSetsDirectionEdits(direction, { sets: [{ id: 'nowhere', imageRole: 'cutout' }] })).toThrow(/Unknown set/);
     const bare = { ...direction, protagonist: { ...direction.protagonist, description: '' } };
     expect(() => applyCastAndSetsDirectionEdits(bare, { protagonist: { construction: '' } })).toThrow(/protagonist/);
+  });
+});
+
+describe('fixed supporting cast in the merge (#14069)', () => {
+  const sections = [{ index: 0, label: 'Intro', startSec: 0, endSec: 10 }];
+  const answer = (cast, forms = []) => ({
+    logline: 'A vigil.', protagonist: { name: 'Keeper', face: 'weathered', forms },
+    looks: [{ name: 'Watch', description: 'oilskin' }],
+    sets: ['a', 'b', 'c'].map((id) => ({ id, name: `Set ${id}`, description: 'an empty quay' })),
+    cast,
+  });
+  const person = (name) => ({ name, description: 'as written' });
+
+  it('never casts an age-form subject as supporting cast, and adds a same-named pair of omitted subjects once', () => {
+    const fixedCast = [
+      { id: 'mvc-young', name: 'Young Keeper', description: 'the keeper at seven' },
+      { id: 'mvc-a', name: 'Twin', description: 'first record' },
+      { id: 'mvc-b', name: 'twin', description: 'second record' },
+    ];
+    const forms = [{ id: 'age-7', label: 'Age 7', description: 'small', subjectId: 'mvc-young' }];
+    const { direction } = mergeCastAndSetsDirection(null, answer([person('Young Keeper'), person('Helper')], forms), { sections, fixedCast });
+    expect(direction.cast.map((c) => c.name)).toEqual(['Helper', 'Twin']);
+    expect(direction.protagonist.forms[0].subjectId).toBe('mvc-young');
   });
 });

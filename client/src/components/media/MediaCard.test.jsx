@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, act } from '@testing-library/react';
+import { render, screen, fireEvent, act, within } from '@testing-library/react';
 import MediaCard from './MediaCard';
 import { normalizeImage, normalizeVideo } from './normalize';
 
@@ -94,6 +94,37 @@ describe('MediaCard', () => {
     expect(screen.getByAltText('late synced image').getAttribute('src')).toMatch(
       /^\/data\/image-thumbnails\/late\.webp\?_t=/
     );
+  });
+
+  it('previews a hosted video when its poster is unavailable and retries after the video arrives', () => {
+    const item = normalizeVideo({ id: 'clip', filename: 'clip.mp4', thumbnail: 'custom-poster.jpg', prompt: 'remote clip' });
+    const { container } = render(<MediaCard item={item} showCollectionMenu={false} />);
+
+    fireEvent.error(screen.getByAltText('remote clip'));
+    const video = container.querySelector('video');
+    expect(video).toHaveAttribute('src', '/data/videos/clip.mp4#t=0.001');
+    expect(video).toHaveAttribute('preload', 'metadata');
+    expect(screen.queryByText(/Syncing/i)).not.toBeInTheDocument();
+
+    fireEvent.error(video);
+    expect(screen.getByText(/Syncing/i)).toBeInTheDocument();
+    act(() => emitAssetArrived({ filename: 'clip.mp4', kind: 'video' }));
+    expect(screen.getByAltText('remote clip')).toHaveAttribute('src', '/data/video-thumbnails/custom-poster.jpg?_t=1');
+    fireEvent.error(screen.getByAltText('remote clip'));
+    expect(container.querySelector('video')).toHaveAttribute('src', '/data/videos/clip.mp4?_t=1#t=0.001');
+  });
+
+  it('previews a video without a poster', () => {
+    const item = normalizeVideo({ id: 'clip', filename: 'clip.mp4', prompt: 'remote clip' });
+    const { container } = render(<MediaCard item={item} showCollectionMenu={false} />);
+    expect(container.querySelector('video')).toHaveAttribute('src', '/data/videos/clip.mp4#t=0.001');
+  });
+
+  it('does not request a video for a legacy history row with no filename', () => {
+    const item = normalizeVideo({ id: 'legacy', prompt: 'legacy clip' });
+    const { container } = render(<MediaCard item={item} showCollectionMenu={false} />);
+    expect(container.querySelector('video')).toBeNull();
+    expect(screen.queryByText(/Syncing/i)).not.toBeInTheDocument();
   });
 
   it('arms an inline confirm row before deleting instead of deleting on first click', () => {
@@ -244,5 +275,28 @@ describe('shared media-card file size', () => {
     expect(screen.queryByTitle('Original file size')).not.toBeInTheDocument();
     rerender(<MediaCard item={{ ...imageItem, fileSizeBytes: 0 }} />);
     expect(screen.getByTitle('Original file size')).toHaveTextContent('0 B');
+  });
+
+  // Uniquely catches a pending row that still offers Delete (a second command)
+  // or hides where its delete is waiting. Each card is queried in its own container.
+  it('shows where a pending delete waits and offers cancel instead of delete', () => {
+    const pendingVideo = normalizeVideo({ id: 'v-pending', filename: 'v-pending.mp4', prompt: 'pending clip',
+      pendingDelete: { peerId: 'rec-peer', queuedAt: '2026-01-01T00:00:00.000Z' } });
+    const plainVideo = normalizeVideo({ id: 'v-plain', filename: 'v-plain.mp4', prompt: 'plain clip' });
+    const onDelete = vi.fn();
+    const onCancelPendingDelete = vi.fn();
+    const props = { onDelete, onCancelPendingDelete, showCollectionMenu: false, showMoodBoardMenu: false };
+    const pendingCard = within(render(<MediaCard item={pendingVideo} pendingPeerName="Example Peer" {...props} />).container);
+    const plainCard = within(render(<MediaCard item={plainVideo} {...props} />).container);
+
+    expect(pendingCard.getByRole('status')).toHaveTextContent('Delete pending on Example Peer');
+    expect(pendingCard.queryByRole('button', { name: 'Delete' })).toBeNull();
+    fireEvent.click(pendingCard.getByRole('button', { name: 'Cancel pending delete' }));
+    expect(onCancelPendingDelete).toHaveBeenCalledWith(pendingVideo);
+
+    expect(plainCard.queryByRole('status')).toBeNull();
+    expect(plainCard.queryByRole('button', { name: 'Cancel pending delete' })).toBeNull();
+    expect(plainCard.getByRole('button', { name: 'Delete' })).toBeInTheDocument();
+    expect(onDelete).not.toHaveBeenCalled();
   });
 });

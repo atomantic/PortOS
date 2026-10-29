@@ -212,6 +212,9 @@ export const resolveCosTaskChallenge = (id, body, options = {}) => request(`/cos
 });
 export const forceCosEvaluate = (options = {}) => request('/cos/evaluate', { method: 'POST', ...options });
 export const forceSpawnTask = (taskId, options = {}) => request(`/cos/tasks/${taskId}/spawn`, { method: 'POST', ...options });
+export const resetSpawnBudgetAndRun = (taskId, options = {}) => request(`/cos/tasks/${taskId}/spawn`, {
+  method: 'POST', body: JSON.stringify({ resetSpawnBudget: true }), ...options
+});
 export const getOrchestrationProfiles = (options) => request('/settings/orchestration-profiles', options);
 export const saveOrchestrationProfile = (profile, options = {}) => request('/settings/orchestration-profiles', {
   method: 'POST',
@@ -230,6 +233,9 @@ export const deleteOrchestrationProfile = (id, options = {}) => request(`/settin
 export const getCosHealth = (options = {}) => request('/cos/health', options);
 export const forceHealthCheck = (options = {}) => request('/cos/health/check', { method: 'POST', ...options });
 export const getCosAgents = ({ active = false, ...options } = {}) => request(`/cos/agents${active ? '?active=1' : ''}`, options);
+export const recheckCosAgentCleanup = (agentId, taskId, options = {}) => request(`/cos/agents/${encodeURIComponent(agentId)}/recheck-cleanup`, {
+  method: 'POST', body: JSON.stringify({ taskId }), ...options,
+});
 export const getCosCompletedAgents = ({ cursor, limit = 25, feedback = false, ...options } = {}) =>
   request(`/cos/agents/${feedback ? 'feedback/pending' : 'completed'}${runEventQuery({ limit, cursor })}`, options);
 export const getCosPendingAgentFeedback = ({ countOnly, ...options } = {}) => request(`/cos/agents/feedback/pending${countOnly ? '?countOnly=1' : ''}`, options);

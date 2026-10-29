@@ -8,7 +8,7 @@ import { copyToClipboard } from '../../lib/clipboard';
 const groupControls = (groupId) => FILM_LOOK_CONTROLS.filter((control) => control.group === groupId);
 // Modifiers and tints ride under the effect they shape: they show once that effect is on.
 const dependsOn = {
-  halationColor: 'halation', castColor: 'cast', shadowColor: 'splitTone', highlightColor: 'splitTone',
+  halationColor: 'halation', halationSpread: 'halation', castColor: 'cast', shadowColor: 'splitTone', highlightColor: 'splitTone',
   grainSize: 'grain', grainColor: 'grain', leakColor: 'leak',
 };
 const shown = (control, look) => !dependsOn[control.id] || Math.abs(look[dependsOn[control.id]]) > 0;

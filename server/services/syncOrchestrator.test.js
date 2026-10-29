@@ -19,6 +19,12 @@ vi.mock('./instanceIdentity.js', () => ({
   // a stable id to exercise the scoped path.
   getInstanceId: vi.fn().mockResolvedValue('our-inst-id'),
 }));
+// The relay's live-subscription state drives the safety-net cadence.
+vi.mock('./peerSocketRelay.js', () => ({
+  connectToPeer: vi.fn(),
+  disconnectFromPeer: vi.fn(),
+  peerRealtimeSyncSince: vi.fn(() => null),
+}));
 vi.mock('./brainSyncLog.js', () => ({
   getChangesSince: vi.fn(),
   getCurrentSeq: vi.fn(() => 0),
@@ -66,6 +72,7 @@ vi.mock('./memoryBackend.js', () => ({
   getBackendName: vi.fn(() => 'postgres')
 }));
 vi.mock('./dataSync.js', () => ({
+  getHostedMediaInventory: vi.fn(),
   getSnapshot: vi.fn().mockResolvedValue({ data: {}, checksum: 'abc' }),
   getChecksum: vi.fn().mockResolvedValue({ checksum: 'abc' }),
   // null = "this category serves no manifest" (every category but `usage`),
@@ -121,6 +128,9 @@ vi.mock('./sharing/tombstoneGc.js', () => ({
     orphanBaseHashes: 0, orphanSubscriptions: 0, refused: [],
   }),
 }));
+vi.mock('./sharing/peerSyncAssets.js', () => ({
+  pullMissingAssetsFromPeer: vi.fn().mockResolvedValue(undefined),
+}));
 vi.mock('./brainTombstoneGc.js', () => ({
   sweepBrainTombstones: vi.fn().mockResolvedValue({ pruned: 0 }),
 }));
@@ -138,6 +148,7 @@ import { getCurrentSeq, compactLog } from './brainSyncLog.js';
 import { getBrainChecksum, applyBrainSnapshot } from './brainReconcile.js';
 import { getMaxSequence } from './memorySync.js';
 import { peerFetch } from '../lib/peerHttpClient.js';
+import { peerRealtimeSyncSince } from './peerSocketRelay.js';
 import {
   syncWithPeer,
   syncAllPeers,
@@ -145,6 +156,7 @@ import {
   initSyncOrchestrator,
   stopSyncOrchestrator,
   BRAIN_TOMBSTONE_SWEEP_INTERVAL_MS,
+  SAFETY_NET_INTERVAL_MS,
 } from './syncOrchestrator.js';
 
 const nativeFetch = globalThis.fetch;
@@ -229,24 +241,6 @@ describe('syncOrchestrator', () => {
       }
     });
 
-    it('reports an avatar body stall without persisting partial image bytes', async () => {
-      const { applyRemote } = await import('./dataSync.js');
-      applyRemote.mockResolvedValue({ applied: true, count: 1 });
-      mockFetch.mockImplementation(async (url) => {
-        if (url.includes('/data/images/')) return new Response(new ReadableStream({}));
-        return { ok: true, json: async () => ({ data: { avatarPath: '/data/images/example.png' }, checksum: 'avatar' }) };
-      });
-      const peer = { ...mockPeer, syncCategories: { brain: false, memory: false, character: true } };
-      const sync = syncWithPeer(peer);
-      await vi.advanceTimersByTimeAsync(60000);
-      await sync;
-      expect(writeFileGuarded).not.toHaveBeenCalled();
-      expect(instanceEvents.emit).toHaveBeenLastCalledWith('sync:progress', expect.objectContaining({
-        phase: 'complete', error: 'character: Peer response body stalled'
-      }));
-      applyRemote.mockResolvedValue({ applied: false, count: 0 });
-    });
-
     // An endless chunked body (no Content-Length) must fail the pull at the cap
     // rather than grow the heap. One shared chunk keeps the test cheap.
     const endlessBody = () => {
@@ -270,30 +264,35 @@ describe('syncOrchestrator', () => {
       expect(body.pulled).toBeLessThanOrEqual(18);
     });
 
-    it('skips an avatar that streams past the asset cap', async () => {
-      const { applyRemote } = await import('./dataSync.js');
-      applyRemote.mockResolvedValue({ applied: true, count: 1 });
-      const body = endlessBody();
-      mockFetch.mockImplementation(async (url) => (url.includes('/data/images/')
-        ? body.response
-        : { ok: true, json: async () => ({ data: { avatarPath: '/data/images/example.png' }, checksum: 'avatar' }) }));
-      await syncWithPeer({ ...mockPeer, syncCategories: { brain: false, memory: false, character: true } });
-      expect(writeFileGuarded).not.toHaveBeenCalled();
-      expect(body.cancel).toHaveBeenCalledOnce();
-      expect(body.pulled).toBeLessThanOrEqual(8);
-      applyRemote.mockResolvedValue({ applied: false, count: 0 });
-    });
+    describe('character avatar images', () => {
+      const characterPeer = () => ({ ...mockPeer, syncCategories: { brain: false, memory: false, character: true } });
+      const serveAvatar = async (avatarPath) => {
+        const { applyRemote } = await import('./dataSync.js');
+        applyRemote.mockResolvedValue({ applied: true, count: 1 });
+        mockFetch.mockResolvedValue({ ok: true, json: async () => ({ data: { avatarPath }, checksum: 'avatar' }) });
+      };
+      afterEach(async () => {
+        const { applyRemote } = await import('./dataSync.js');
+        applyRemote.mockResolvedValue({ applied: false, count: 0 });
+      });
 
-    it('does not fetch or store a peer-supplied SVG avatar', async () => {
-      const { applyRemote } = await import('./dataSync.js');
-      applyRemote.mockResolvedValue({ applied: true, count: 1 });
-      mockFetch.mockResolvedValue({ ok: true, json: async () => ({
-        data: { avatarPath: '/data/images/peer.svg' }, checksum: 'avatar',
-      }) });
-      await syncWithPeer({ ...mockPeer, syncCategories: { brain: false, memory: false, character: true } });
-      expect(mockFetch.mock.calls.some(([url]) => String(url).includes('/data/images/peer.svg'))).toBe(false);
-      expect(writeFileGuarded).not.toHaveBeenCalled();
-      applyRemote.mockResolvedValue({ applied: false, count: 0 });
+      // Tombstone, sidecar, supplier and hash guards live in the shared pull
+      // (peerSyncAssets.test.js); this pins that the avatar rides that path.
+      it('pulls a missing avatar through the shared asset pull, not a private fetch', async () => {
+        const { pullMissingAssetsFromPeer } = await import('./sharing/peerSyncAssets.js');
+        await serveAvatar('/data/images/example.png');
+        await syncWithPeer(characterPeer());
+        expect(pullMissingAssetsFromPeer).toHaveBeenCalledWith(mockPeer.instanceId, [{ kind: 'image', filename: 'example.png' }]);
+        expect(mockFetch.mock.calls.some(([url]) => String(url).includes('/data/images/'))).toBe(false);
+        expect(writeFileGuarded).not.toHaveBeenCalled();
+      });
+
+      it('does not pull a peer-supplied SVG avatar', async () => {
+        const { pullMissingAssetsFromPeer } = await import('./sharing/peerSyncAssets.js');
+        await serveAvatar('/data/images/peer.svg');
+        await syncWithPeer(characterPeer());
+        expect(pullMissingAssetsFromPeer).not.toHaveBeenCalled();
+      });
     });
 
     it.each([
@@ -544,6 +543,59 @@ describe('syncOrchestrator', () => {
       expect(call[2]).toBe(peerWithCats);
       // The 15s budget survived the move off fetchWithTimeout.
       expect(call[1].signal).toBeInstanceOf(AbortSignal);
+    });
+  });
+
+  // Cases the two-machine e2e (mediaPeerDelete.e2e.test.js) cannot reach cheaply.
+  describe('safety-net cadence for realtime-connected peers', () => {
+    const peer = { ...mockPeer, id: 'rec-peer', syncCategories: { brain: false, memory: false, videoHistory: true } };
+    const tick = () => syncWithPeer(peer, { periodic: true });
+    const videoPulls = () => mockFetch.mock.calls.filter(([url]) => url.includes('/api/sync/videoHistory/checksum')).length;
+
+    beforeEach(async () => {
+      const dataSync = await import('./dataSync.js');
+      dataSync.getSupportedCategories.mockReturnValue(['videoHistory']);
+      mockFetch.mockResolvedValue({ ok: true, json: async () => ({ checksum: 'video-cksum', data: {} }) });
+    });
+
+    afterEach(async () => {
+      const dataSync = await import('./dataSync.js');
+      dataSync.getSupportedCategories.mockReturnValue(['goals', 'character', 'digitalTwin', 'meatspace']);
+      peerRealtimeSyncSince.mockReturnValue(null);
+    });
+
+    it('pulls on the next tick when the subscription came up after the last snapshot', async () => {
+      peerRealtimeSyncSince.mockReturnValue(Date.now());
+      await tick();
+      vi.advanceTimersByTime(60_000);
+      await tick();
+      expect(videoPulls()).toBe(1);
+
+      // The relay reconnected: frames sent before this were missed.
+      peerRealtimeSyncSince.mockReturnValue(Date.now());
+      vi.advanceTimersByTime(60_000);
+      await tick();
+      expect(videoPulls()).toBe(2);
+    });
+
+    it('pulls when the clock was set back behind the last snapshot', async () => {
+      peerRealtimeSyncSince.mockReturnValue(Date.now() - 1000);
+      await tick();
+      vi.setSystemTime(Date.now() - 10 * 60_000);
+      await tick();
+      expect(videoPulls()).toBe(2);
+    });
+
+    it('pulls on the tick nearest the interval, not the one after it', async () => {
+      peerRealtimeSyncSince.mockReturnValue(Date.now());
+      await tick();
+      vi.advanceTimersByTime(4 * 60_000);
+      await tick();
+      expect(videoPulls()).toBe(1);
+      // The fifth-minute tick, firing a little early.
+      vi.advanceTimersByTime(SAFETY_NET_INTERVAL_MS - 4 * 60_000 - 20_000);
+      await tick();
+      expect(videoPulls()).toBe(2);
     });
   });
 
@@ -1366,6 +1418,49 @@ describe('syncOrchestrator', () => {
         checksum: 'remote', senderPortosVersion: '2.7.0', localSchemaVersions: PORTOS_SCHEMA_VERSIONS,
       }));
     });
+  });
+
+  it.each([['videoHistory', 'video'], ['mediaCollections', 'image']])('refreshes %s ownership on matching checksums and ignores unavailable peers', async (category, kind) => {
+    const dataSync = await import('./dataSync.js');
+    dataSync.getSupportedCategories.mockReturnValue([category]);
+    dataSync.applyRemote.mockResolvedValue({ applied: false, count: 0 });
+    readJSONFile.mockImplementation(async () => ({ 'peer-inst-1': { checksums: { [category]: 'same' } } }));
+    const peer = { ...mockPeer, mediaSyncMode: 'host', syncCategories: { [category]: true } };
+    const evidence = { version: 1, filenames: ['clip.mp4'], checked: ['clip.mp4'], portosMeta: { schemaVersions: {} } };
+    mockFetch.mockImplementation(async (url) => {
+      if (url.includes(`/${category}/checksum`)) return { ok: true, json: async () => ({ checksum: 'same' }) };
+      if (url.includes(`/${category}/${kind}-inventory`)) return { ok: true, json: async () => evidence };
+      return { ok: false };
+    });
+    await syncWithPeer(peer);
+    expect(dataSync.applyRemote).toHaveBeenCalledWith(category, evidence, expect.objectContaining({ peerId: peer.instanceId, inventory: true, inventoryKind: kind }));
+    expect(mockFetch.mock.calls.some(([url]) => url.includes(`/${category}/snapshot`))).toBe(false);
+    dataSync.applyRemote.mockClear();
+    mockFetch.mockImplementation(async (url) => url.includes(`/${category}/checksum`)
+      ? { ok: true, json: async () => ({ checksum: 'same' }) } : { ok: false });
+    await syncWithPeer(peer);
+    expect(dataSync.applyRemote).not.toHaveBeenCalled();
+    dataSync.getSupportedCategories.mockReturnValue(['goals', 'character', 'digitalTwin', 'meatspace']);
+  });
+
+  it.each([['videoHistory', 'video'], ['mediaCollections', 'image']])('verifies older %s hosts with HEAD and rejects proxied bytes', async (category, kind) => {
+    const dataSync = await import('./dataSync.js');
+    dataSync.getSupportedCategories.mockReturnValue([category]);
+    dataSync.getHostedMediaInventory.mockResolvedValue({ checked: ['local.mp4', 'relayed.mp4', 'offline.mp4'] });
+    dataSync.applyRemote.mockResolvedValue({ applied: false, count: 0 });
+    readJSONFile.mockImplementation(async () => ({ 'peer-inst-1': { checksums: { [category]: 'same' } } }));
+    mockFetch.mockImplementation(async (url) => {
+      if (url.includes('/checksum')) return { ok: true, json: async () => ({ checksum: 'same' }) };
+      if (url.includes(`/${kind}-inventory`)) return { ok: false, status: 404 };
+      if (url.endsWith('/local.mp4')) return { ok: true, headers: new Headers() };
+      if (url.endsWith('/offline.mp4')) throw new Error('offline');
+      if (url.endsWith('/relayed.mp4')) return { ok: true, headers: new Headers({ 'X-PortOS-Media-Location': 'remote' }) };
+      return { ok: false };
+    });
+    await syncWithPeer({ ...mockPeer, mediaSyncMode: 'host', syncCategories: { [category]: true } });
+    expect(dataSync.applyRemote).toHaveBeenCalledWith(category, { version: 1, filenames: ['local.mp4'], checked: ['local.mp4'] }, expect.objectContaining({ inventory: true, inventoryKind: kind }));
+    expect(mockFetch.mock.calls.some(([url, options]) => url.includes(`/data/${kind === 'image' ? 'images' : 'videos'}/local.mp4`) && options.method === 'HEAD')).toBe(true);
+    dataSync.getSupportedCategories.mockReturnValue(['goals', 'character', 'digitalTwin', 'meatspace']);
   });
 
   // #5759: `usage` is always dirty AND a map of per-instance slots, so the

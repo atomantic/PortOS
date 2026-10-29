@@ -20,6 +20,8 @@ import { ensureDir, PATHS } from '../../lib/fileUtils.js';
 import { findFfmpeg, probeVideoGeometry, runFfmpegProcess, safeUnder } from '../../lib/ffmpeg.js';
 import { previousShot, sceneClipOutFrameSec, shotHandoffSource } from '../../lib/musicVideoHandoffFrame.js';
 import { getHistoryItem } from '../videoGen/history.js';
+import { writeLocalImageSidecarIfMissing } from '../imageGen/imageRecords.js';
+import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { appendSceneTakes, selectSceneTake } from './projects.js';
 import { requireProject } from './requireProject.js';
 import { assertClipUnlocked } from './productionReview.js';
@@ -56,15 +58,22 @@ export async function continueFromPreviousShot(projectId, sceneId, { keepStillAs
   // Keyed by clip and time, so the same handoff is extracted once.
   const imageId = `handoff-${entry.id}-${Math.round(atSec * 1000)}.png`;
   const outPath = join(PATHS.images, imageId);
-  if (!existsSync(outPath)) {
-    const result = await runFfmpegProcess({
-      bin: ffmpeg,
-      args: ['-y', '-hide_banner', '-loglevel', 'error', '-ss', String(atSec), '-i', videoPath, '-frames:v', '1', outPath],
-    });
-    if (!result.ok || !existsSync(outPath)) {
-      throw refuse(`Could not extract the previous shot's out-frame: ${result.reason || 'ffmpeg failed'}`, 'MUSIC_VIDEO_HANDOFF_FRAME_FAILED', 500);
+  // One lease from the ffmpeg write through the owner stamp, so a backup snapshot never holds the frame without its sidecar.
+  await withBackupAssetPublication(async () => {
+    const extracting = !existsSync(outPath);
+    if (extracting) {
+      const result = await runFfmpegProcess({
+        bin: ffmpeg,
+        args: ['-y', '-hide_banner', '-loglevel', 'error', '-ss', String(atSec), '-i', videoPath, '-frames:v', '1', outPath],
+      });
+      if (!result.ok || !existsSync(outPath)) {
+        throw refuse(`Could not extract the previous shot's out-frame: ${result.reason || 'ffmpeg failed'}`, 'MUSIC_VIDEO_HANDOFF_FRAME_FAILED', 500);
+      }
     }
-  }
+    // Name this machine as the frame's owner so deleting it reaches peers. A frame
+    // re-extracted under a reused name replaces any stale sidecar with a new createdAt.
+    await writeLocalImageSidecarIfMissing(imageId, { replace: extracting });
+  });
   console.log(`🎞️ Handoff frame for ${sceneId}: ${previous.sceneId} clip at ${atSec}s of ${geometry.durationSec.toFixed(2)}s`);
 
   return startFromFrame(projectId, scene, imageId, { keepStillAsEnd,

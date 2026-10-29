@@ -1,3 +1,6 @@
+import { musicVideoDcpRequestSchema } from '../lib/musicVideoValidation.js';
+import { inspectDcpReadiness } from '../services/musicVideo/dcpPreflight.js';
+import { activeDcp, startDcp, attachDcp, cancelDcp, dcpArtifactPaths } from '../services/musicVideo/dcp.js';
 /**
  * Music Video Routes — REST surface for the director scene board (#1760, Phase 1).
  *
@@ -12,6 +15,8 @@ import { existsSync } from 'fs';
 import { unlink } from 'fs/promises';
 import { pipeline } from 'stream/promises';
 import { Router } from 'express';
+import storyRoutes from './musicVideoStory.js';
+import festivalPacketRoutes from './musicVideoFestivalPacket.js';
 import { musicVideoRenderCleanupSchema, musicVideoRenderPreviewSchema, musicVideoSongStyleSunoSchema, musicVideoProjectListQuerySchema, musicVideoFinishedOutsideSchema, musicVideoProductionDraftSchema, musicVideoProductionApprovalSchema, musicVideoShotLockSchema, musicVideoProductionProofSchema, musicVideoProductionImportSchema, musicVideoContinueShotSchema, musicVideoPoolUseSchema, musicVideoPoolMarkSchema, musicVideoPoolSearchQuerySchema, musicVideoPoolDeleteSchema, musicVideoPoolImportSchema, musicVideoLibrarySearchQuerySchema, musicVideoPoolAddSchema, musicVideoProductionFeedbackSchema, musicVideoProductionFeedbackResolutionSchema, musicVideoLyricAnchorSyncSchema, musicVideoProductionReviseSchema, musicVideoProductionRevertSchema } from '../lib/musicVideoValidation.js';
 import { productionReadiness } from '../services/musicVideo/productionReview.js';
 import { presentMusicVideoDependencies } from '../lib/musicVideoDependencies.js';
@@ -131,6 +136,7 @@ import {
   refreshSongStyleFromSuno,
 } from '../services/musicVideo/projects.js';
 import { requireProject } from '../services/musicVideo/requireProject.js';
+import { labelProjectReferences } from '../services/musicVideo/referenceLabels.js';
 import { buildHandoffManifest, buildHandoffBundle, matchSceneByFileTag } from '../services/musicVideo/handoff.js';
 import { getHistoryItem } from '../services/videoGen/history.js';
 import {
@@ -222,7 +228,9 @@ import {
   approveCastAndSets,
   reconfirmCastAndSets,
   skipCastAndSets,
+  discardCastAndSets,
   getCastAndSets,
+  getCastAndSetsCastingChanges,
   presentProjectCastAndSets,
 } from '../services/musicVideo/castAndSetsService.js';
 import {
@@ -309,7 +317,8 @@ router.get('/:id', asyncHandler(async (req, res) => {
   // Transient (never persisted): lets a reloaded page reattach to a running publishing-kit build.
   const activePublishKitBuild = getActivePublishKitBuild(p.id);
   const presented = await presentProjectForRead(p);
-  res.json(activePublishKitBuild ? { ...presented, activePublishKitBuild } : presented);
+  const activeDcpBuild = activeDcp(p.id);
+  res.json({ ...presented, ...(activePublishKitBuild ? { activePublishKitBuild } : {}), ...(activeDcpBuild ? { activeDcpBuild } : {}) });
 }));
 
 router.post('/', asyncHandler(async (req, res) => {
@@ -365,6 +374,12 @@ router.patch('/:id', asyncHandler(async (req, res) => {
   const data = validateRequest(projectUpdateSchema, req.body);
   const updated = await updateProject(req.params.id, data);
   res.json(updated);
+}));
+
+// Names references saved before catalog naming existed; answers only the labels it filled.
+router.post('/:id/references/catalog-labels', asyncHandler(async (req, res) => {
+  await requireProject(req.params.id);
+  res.json({ labels: (await labelProjectReferences(req.params.id, { backfill: true }))?.labels || {} });
 }));
 
 // Finished outside PortOS: the earlier steps count as done without forging approvals.
@@ -480,6 +495,9 @@ router.post('/:id/plan', asyncHandler(async (req, res) => {
   const result = await planProject(req.params.id, { seedPrompts, providerId, model, effort, mode: mode ?? 'require' });
   res.json(result);
 }));
+
+router.use('/', storyRoutes);
+router.use('/', festivalPacketRoutes);
 
 // --- Pre-production treatment (#8980) ---
 // A structured brief, a compiled whole-song arc, per-shot direction keyed to
@@ -1066,6 +1084,27 @@ router.post('/:id/excerpt', asyncHandler(async (req, res) => {
   res.json(await startExcerptRender(req.params.id, { startSec, endSec, aspect, fade }));
 }));
 
+// Local cinema package: no upload or external delivery.
+router.post('/:id/dcp/readiness', asyncHandler(async (req, res) => {
+  res.json(await inspectDcpReadiness(req.params.id));
+}));
+router.post('/:id/dcp/build', asyncHandler(async (req, res) => {
+  const input = validateRequest(musicVideoDcpRequestSchema, req.body);
+  res.json(await startDcp(req.params.id, input));
+}));
+router.get('/dcp/:jobId/events', (req, res) => {
+  if (!attachDcp(req.params.jobId, res)) throw new ServerError('Cinema package job not found or expired', { status: 404, code: 'NOT_FOUND' });
+});
+router.post('/dcp/:jobId/cancel', (req, res) => res.json({ ok: cancelDcp(req.params.jobId) }));
+router.get('/:id/dcp/:artifactId/location', asyncHandler(async (req, res) => {
+  const { packagePath } = await dcpArtifactPaths(req.params.id, req.params.artifactId);
+  res.json({ packagePath });
+}));
+router.get('/:id/dcp/:artifactId/report', asyncHandler(async (req, res) => {
+  const { reportPath } = await dcpArtifactPaths(req.params.id, req.params.artifactId);
+  res.download(reportPath, 'dcp-verification.txt');
+}));
+
 // --- Publishing kit (#9281) ---
 // Platform encodes, thumbnails, captions and chapters from the final render
 // (an SSE job), plus per-platform copy: one user-triggered draft, then edits.
@@ -1547,6 +1586,11 @@ router.get('/:id/cast-and-sets', asyncHandler(async (req, res) => {
   res.json(await getCastAndSets(req.params.id));
 }));
 
+// Read-only: what changed in the linked Casting records since the sheet was built.
+router.get('/:id/cast-and-sets/casting-changes', asyncHandler(async (req, res) => {
+  res.json(await getCastAndSetsCastingChanges(req.params.id));
+}));
+
 router.post('/:id/cast-and-sets', asyncHandler(async (req, res) => {
   const input = validateRequest(musicVideoCastAndSetsStartSchema, req.body || {});
   res.status(202).json(await startCastAndSets(req.params.id, input));
@@ -1569,6 +1613,11 @@ router.post('/:id/cast-and-sets/feedback', asyncHandler(async (req, res) => {
 
 router.delete('/:id/cast-and-sets/feedback/:feedbackId', asyncHandler(async (req, res) => {
   res.json(await removeCastAndSetsFeedbackEntry(req.params.id, req.params.feedbackId));
+}));
+
+// Start over: drop a check-in that is not approved (images stay in the gallery).
+router.delete('/:id/cast-and-sets', asyncHandler(async (req, res) => {
+  res.json(await discardCastAndSets(req.params.id));
 }));
 
 router.post('/:id/cast-and-sets/resume', asyncHandler(async (req, res) => {
@@ -1695,6 +1744,13 @@ router.get('/:id/stats-outro', asyncHandler(async (req, res) => {
   const project = await requireProject(req.params.id);
   const { getMusicVideoOutroStats } = await import('../services/musicVideo/statsOutro.js');
   res.json({ stats: await getMusicVideoOutroStats(project) });
+}));
+
+// The credits ending's suggested lines: song, artist, director and album from the track and its artist.
+router.get('/:id/credits-prefill', asyncHandler(async (req, res) => {
+  const project = await requireProject(req.params.id);
+  const { getMusicVideoCreditsPrefill } = await import('../services/musicVideo/creditsOutro.js');
+  res.json({ credits: await getMusicVideoCreditsPrefill(project) });
 }));
 
 // The asset manager: mark unused stills and clips ★ ingredient / ✕ bad, or delete them from the library.

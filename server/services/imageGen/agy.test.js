@@ -107,6 +107,14 @@ afterEach(async () => {
 });
 
 describe('agy image provider', () => {
+  it('refuses unowned reviewed snapshot metadata before spawning', async () => {
+    await mkdir(FAKE_IMAGES_DIR, { recursive: true });
+    await writeFile(join(FAKE_IMAGES_DIR, 'reviewed.png'), 'synthetic image');
+    await expect(agy.generateImage({ prompt: 'edit', referenceImagePaths: ['reviewed.png'], reviewedReferenceSnapshot: { jobId: 'unowned' } }))
+      .rejects.toMatchObject({ code: 'REVIEWED_REFERENCE_CHANGED' });
+    expect(spawnCalls).toHaveLength(0);
+  });
+
   it('lists installed models after closing stdin', async () => {
     const pending = agy.listModels({ agyPath: '/opt/agy' });
     expect(spawnCalls[0].bin).toBe('/opt/agy');
@@ -293,7 +301,7 @@ describe('agy image provider', () => {
     for (const name of ['source.png', 'ref-a.png', 'ref-b.png', 'overflow.png']) await writeFile(join(FAKE_IMAGES_DIR, name), 'fake');
     const job = await agy.generateImage({
       prompt: 'a fox', initImagePath: join(FAKE_IMAGES_DIR, 'source.png'),
-      referenceImagePaths: ['missing.png', 'ref-a.png', 'ref-b.png', 'overflow.png'],
+      referenceImagePaths: ['ref-a.png', 'ref-b.png', 'overflow.png'],
     });
     const png = Buffer.concat([
       Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),

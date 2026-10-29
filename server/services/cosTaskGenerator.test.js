@@ -15,8 +15,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { readFileSync } from 'fs';
 import * as taskStore from './cosTaskStore.js';
 import * as appActivity from './appActivity.js';
+import { releaseTaskDispatchDisposition } from './releaseSynchronization.js';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
+
+vi.mock('./releaseSynchronization.js', () => ({ releaseTaskDispatchDisposition: vi.fn(async () => null) }));
 
 // buildJiraTicketTask resolves the claim-issue-jira prompt body (dynamic import)
 // and the Code Review Defaults (static import). Mock both leaf services so the
@@ -452,7 +455,7 @@ describe('{reviewers} interpolation honors Code Review Defaults', () => {
     // and the three keyed pins come out together, so a new pin kind cannot reach
     // one site and silently miss another. It also applies the claim copilot
     // guard, which is what keeps the retired Copilot fallback from reappearing.
-    expect(GEN_SRC).toContain('resolveClaimReviewerConfig(metadata, codeReviewDefaults, codeReviewDefaults?.reviewers)');
+    expect(GEN_SRC).toContain('resolveClaimReviewerConfig(metadata, codeReviewDefaults, codeReviewDefaults?.reviewers, providers)');
     // Every claim path layers the app's claim-work metadata over the defaults
     // through claimReviewersFrom — no path may resolve the defaults alone with
     // a bare `{}` (that silently drops a pinned override; #6210).
@@ -500,7 +503,7 @@ describe('{reviewers} interpolation honors Code Review Defaults', () => {
     // feed the cap into the shared claim resolver, which applies task-over-default
     // precedence (unit-tested in reviewerConfig.test.js).
     expect(CLAIM_SRC).toContain('reviewerMaxRounds: reviewerMaxRounds ?? metadata?.reviewerMaxRounds');
-    expect(GEN_SRC).toContain('resolveClaimReviewerConfig(metadata, codeReviewDefaults, codeReviewDefaults?.reviewers)');
+    expect(GEN_SRC).toContain('resolveClaimReviewerConfig(metadata, codeReviewDefaults, codeReviewDefaults?.reviewers, providers)');
     expect(LAYER_SRC).not.toContain('resolveReviewerMaxRounds(');
   });
 
@@ -710,7 +713,7 @@ describe('work-item target', () => {
 
     it('also supports GitLab while rejecting mismatched or non-forge targets', () => {
       expect(buildPrefetchedIssueContextBlock('claim-issue-gitlab', '42', issueContext)).toContain('Issue number: 42');
-      expect(buildPrefetchedIssueContextBlock('claim-issue', '43', issueContext)).toBe('');
+      expect(buildPrefetchedIssueContextBlock('claim-issue', '43', issueContext)).toContain('Fetch the full live title and body of issue #43');
       expect(buildPrefetchedIssueContextBlock('plan-task', '42', issueContext)).toBe('');
     });
 
@@ -728,12 +731,16 @@ describe('work-item target', () => {
       expect(block.trimEnd().endsWith('</portos-prefetched-issue>')).toBe(true);
     });
 
-    it('rejects oversized direct issue fields instead of truncating them', () => {
+    it('requests the full issue for oversized or incomplete direct snapshots', () => {
       for (const [field, limit] of Object.entries({ title: 1000, body: 12_000, url: 2048 })) {
-        expect(() => buildPrefetchedIssueContextBlock('claim-issue', '42', {
+        const block = buildPrefetchedIssueContextBlock('claim-issue', '42', {
           ...issueContext, [field]: 'x'.repeat(limit + 1)
-        })).toThrow(`Issue ${field} exceeds the ${limit}-character limit`);
+        });
+        expect(block).toContain('Fetch the full live title and body of issue #42');
+        expect(block).not.toContain('## Prefetched Issue Context');
       }
+      expect(buildPrefetchedIssueContextBlock('claim-issue', '42')).toContain('Fetch the full live title and body');
+      expect(buildPrefetchedIssueContextBlock('claim-issue', '42', { number: 42, title: 'Missing body' })).toContain('Fetch the full live title and body');
       expect(buildPrefetchedIssueContextBlock('claim-issue', '42', {
         ...issueContext, body: 'x'.repeat(12_000)
       })).toContain('x'.repeat(12_000));
@@ -1699,9 +1706,9 @@ describe('ignoreTaskId reaches the in-flight-counting gates (#3179)', () => {
  */
 describe('ignoreTaskId reaches BOTH completion-continuation generators (#3179)', () => {
   it('the idle-review chain threads ignoreTaskId end to end', () => {
-    expect(GEN_SRC).toMatch(/export async function generateIdleReviewTask\(state, \{ ignoreTaskId = null, isAppEligible = \(\) => true \} = \{\}\)/);
-    expect(GEN_SRC).toContain('generateManagedAppImprovementTask(nextApp, state, { ignoreTaskId })');
-    expect(GEN_SRC).toMatch(/async function generateManagedAppImprovementTask\(app, state, \{ ignoreTaskId = null \} = \{\}\)/);
+    expect(GEN_SRC).toMatch(/export async function generateIdleReviewTask\(state, \{ ignoreTaskId = null, isAppEligible = \(\) => true, onPreflightStart = null \} = \{\}\)/);
+    expect(GEN_SRC).toContain('generateManagedAppImprovementTask(nextApp, state, { ignoreTaskId, onPreflightStart })');
+    expect(GEN_SRC).toMatch(/async function generateManagedAppImprovementTask\(app, state, \{ ignoreTaskId = null, onPreflightStart = null \} = \{\}\)/);
     expect(GEN_SRC).toMatch(/prepareManagedAppImprovementTask\(nextType, app, state, \{[\s\S]*ignoreTaskId[\s\S]*\}\)/);
   });
 
@@ -2196,6 +2203,35 @@ describe('admitAutoApprovedSystemTasks dry-run/execute parity', () => {
     expect(persist).toHaveBeenCalledTimes(1);
     expect(persist).toHaveBeenCalledWith('exhausted', expect.objectContaining({ status: 'blocked' }), 'internal');
 
+    vi.restoreAllMocks();
+  });
+
+  it('dispatches enrolled release continuation without a schedule and withholds the next release in both engines', async () => {
+    vi.spyOn(appActivity, 'isAppOnCooldown').mockResolvedValue(false);
+    vi.mocked(releaseTaskDispatchDisposition).mockImplementation(async t => t.id === 'sync'
+      ? 'registered-continuation' : t.metadata?.analysisType === 'do-release' ? 'wait-for-synchronization' : null);
+    const tasks = [task('sync', { analysisType: 'release-sync' }),
+      task('unregistered', { analysisType: 'release-sync' }), task('next-release', { analysisType: 'do-release' }),
+      task('disabled', { analysisType: 'disabled-type' })];
+    for (const mode of ['dry-run', 'execute']) {
+      const admitted = await admitAutoApprovedSystemTasks(ctxFor(mode, tasks), execAdapter(4));
+      expect(admitted.map(t => t.id)).toEqual(['sync']);
+    }
+    const prepared = await prepareManagedAppImprovementTask('do-release', { id: 'example-app' }, {}, { onDemand: true });
+    expect(prepared).toMatchObject({ task: null, skip: { gate: 'release-synchronization' } });
+    vi.mocked(releaseTaskDispatchDisposition).mockResolvedValue(null);
+    vi.restoreAllMocks();
+  });
+
+  it('does not dispatch a retired continuation even if its schedule is enabled', async () => {
+    vi.spyOn(appActivity, 'isAppOnCooldown').mockResolvedValue(false);
+    vi.mocked(releaseTaskDispatchDisposition).mockResolvedValue('retired-continuation');
+    for (const mode of ['dry-run', 'execute']) {
+      const ctx = ctxFor(mode, [task('old-sync', { analysisType: 'release-sync' })]);
+      ctx.taskSchedule.tasks['release-sync'] = { enabled: true };
+      expect(await admitAutoApprovedSystemTasks(ctx, execAdapter(4))).toEqual([]);
+    }
+    vi.mocked(releaseTaskDispatchDisposition).mockResolvedValue(null);
     vi.restoreAllMocks();
   });
 });

@@ -21,6 +21,13 @@ Common port labels:
 - `health` - Health check endpoint
 - `ws` - WebSocket server
 
+Managed setup/update commands (`verify-server-health.js`, `open-ui-in-browser.js`,
+`setup-guide.js`, and `print-access-url.js`) use `PORTS.API`, matching PM2, and
+ignore a generic shell `PORT`. `PORTOS_HTTP_PORT` still overrides the loopback
+mirror through the environment or `.env`. A standalone `node server/index.js`
+may explicitly use `PORT` for a custom listener; these managed maintenance
+commands target the PM2 listener.
+
 ## PortOS Port Allocations
 
 | Port | Process | Label | Description |

@@ -36,7 +36,12 @@ const instanceRegistry = vi.hoisted(() => ({ data: { self: null, peers: [] } }))
 vi.mock('./instanceIdentity.js', async () => ({
   ...(await vi.importActual('./instanceIdentity.js')),
   loadData: async () => instanceRegistry.data,
-  withData: async (mutate) => mutate(instanceRegistry.data),
+  withData: async (mutate) => {
+    const notifications = [];
+    const result = await mutate(instanceRegistry.data, notify => notifications.push(notify));
+    for (const notify of notifications) notify();
+    return result;
+  },
   getInstanceId: async () => 'self-example-instance',
 }));
 
@@ -1186,8 +1191,10 @@ describe('paired peer credential (#8356)', () => {
     app.post('/api/apps/:id/restart', (req, res) => res.json({ auth: req.portosAuthContext }));
     app.put('/api/settings', (req, res) => res.json({ auth: req.portosAuthContext }));
     app.post('/api/peer-sync/push', (req, res) => res.json({ auth: req.portosAuthContext }));
+    app.all('/api/peer-media/delete', (req, res) => res.json({ auth: req.portosAuthContext }));
     app.get('/api/federation/media/v1/status', (req, res) => res.json({ auth: req.portosAuthContext }));
     app.post('/api/providers/fleet-host/key', (req, res) => res.json({ auth: req.portosAuthContext }));
+    app.all(['/data/image-thumbnails/:name', '/data/video-thumbnails/:name'], (req, res) => res.json({ auth: req.portosAuthContext }));
     app.post('/api/commands/execute', requireHostControl, (_req, res) => res.json({ ran: true }));
     return app;
   };
@@ -1258,6 +1265,42 @@ describe('paired peer credential (#8356)', () => {
     expect(asset.status).toBe(403);
     expect(asset.text).toBe('Forbidden');
     expect(warn.mock.calls.some(([line]) => line.includes('POST /api/cos/tasks'))).toBe(true);
+  });
+
+  it('allows paired peers to read thumbnails while keeping writes and anonymous reads gated', async () => {
+    const auth = await import('./auth.js');
+    await auth.setPassword({ newPassword: 'example-password' });
+    writePeers([pairedPeer()]);
+    const app = await buildApp();
+    const headers = await peerHeaders();
+    for (const path of ['/data/image-thumbnails/example.webp', '/data/video-thumbnails/example.jpg']) {
+      const read = await withHeaders(request(app).get(path), headers);
+      expect(read.status).toBe(200);
+      expect(read.body.auth.method).toBe('peer');
+      expect((await withHeaders(request(app).head(path), headers)).status).toBe(200);
+      expect((await withHeaders(request(app).post(path), headers)).status).toBe(403);
+      expect((await request(app).get(path)).status).toBe(401);
+    }
+  });
+
+  // The route admits only `method: 'peer'`; this pins that the gate yields it
+  // for the pair credential, and only for the POST, in both auth modes.
+  it('marks the pair credential, not Basic or anonymous callers, as a peer on the remote media delete route', async () => {
+    writePeers([pairedPeer()]);
+    const headers = await peerHeaders();
+    let app = await buildApp();
+    expect((await withHeaders(request(app).post('/api/peer-media/delete').send({}), headers)).body.auth.method).toBe('peer');
+    expect((await request(app).post('/api/peer-media/delete').send({})).body.auth.method).toBeNull();
+
+    const auth = await import('./auth.js');
+    await auth.setPassword({ newPassword: 'example-password' });
+    app = await buildApp();
+    expect((await withHeaders(request(app).post('/api/peer-media/delete').send({}), headers)).body.auth)
+      .toEqual({ enabled: true, authenticated: true, method: 'peer', peerId: 'peer-record' });
+    expect((await withHeaders(request(app).get('/api/peer-media/delete'), headers)).body.code).toBe('PEER_SCOPE_FORBIDDEN');
+    const basic = { Authorization: basicHeader('example-password') };
+    expect((await withHeaders(request(app).post('/api/peer-media/delete').send({}), basic)).body.auth.method).toBe('basic');
+    expect((await request(app).post('/api/peer-media/delete').send({})).status).toBe(401);
   });
 
   it('still identifies a paired peer on the federation surface after the instance password is removed', async () => {

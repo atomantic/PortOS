@@ -1047,10 +1047,9 @@ describe('readEndpointCapacity (#4834)', () => {
   });
 
   it('excludes the dispatching task\'s OWN agent so Run-now can supersede a zombie', () => {
-    // forceSpawnTask deliberately supersedes a `running` holder older than the
-    // spawn grace — that is the documented recovery for an agent whose PTY died
-    // without a close handler. Counting the zombie would make the one recovery
-    // the route exists to provide unreachable at a limit of 1.
+    // Run now is the recovery for an agent whose PTY died without a close
+    // handler. Counting the task's own stale record would make that recovery
+    // unreachable at a limit of 1.
     const agents = { a: runningOn('lmstudio-tui', 'task-stuck') };
     expect(readEndpointCapacity(LOCAL_ENDPOINT, agents, slots, { ignoreTaskId: 'task-stuck' }).atCapacity).toBe(false);
     expect(readEndpointCapacity(LOCAL_ENDPOINT, agents, slots, { ignoreTaskId: 'other-task' }).atCapacity).toBe(true);
@@ -1589,8 +1588,8 @@ describe('cos.js source — priority + capacity invariants', () => {
   });
 
   it('forceSpawnTask passes its task id so its own zombie agent is excluded (#4834)', () => {
-    // The route deliberately supersedes a stale `running` holder — counting that
-    // agent would make the recovery unreachable at a limit of 1. The exclusion
+    // Counting the task's own stale record would make Run-now recovery
+    // unreachable at a limit of 1. The exclusion
     // itself is driven directly in the `readEndpointCapacity` block above; what
     // that can't see is whether this caller opts into it.
     const forceFn = extractFnBody(COS_SRC, COS_SRC.indexOf('export async function forceSpawnTask'));
@@ -2062,6 +2061,30 @@ describe('resetOrphanedTasks — latest run outcome (#12057)', () => {
     expect(taskStore.updateTask).toHaveBeenCalledExactlyOnceWith(taskId, { status: 'completed' }, 'user');
     expect(agentManagement.handleOrphanedTask).not.toHaveBeenCalled();
   });
+
+  it('preserves active and capacity-waiting preflight cards before reaping an idle local orphan', async () => {
+    const { beginPreflightActivity } = await import('./preflightActivity.js');
+    const store = await import('./taskScheduleStore.js');
+    const card = { id: 'preflight-demand-1', status: 'in_progress', description: 'Preparing', priority: 'HIGH', metadata: {
+      machineLocal: true, preflight: { requestId: 'demand-1', taskType: 'branch-reconcile', phase: 'queued',
+        updatedAt: '2026-01-01T01:00:00Z', steps: [{ key: 'queued', status: 'active' }] },
+    } };
+    let queue = [{ id: 'demand-1' }];
+    vi.spyOn(store, 'updateSchedule').mockImplementation(async fn => (await fn({ onDemandRequests: queue })).result);
+    vi.spyOn(taskStore, 'getTaskById').mockResolvedValue(card);
+    taskStore.getAllTasks.mockResolvedValue({ user: { grouped: { in_progress: [] } }, cos: { grouped: { in_progress: [card] } } });
+    const end = beginPreflightActivity(card.id);
+    try {
+      await resetOrphanedTasks();
+      expect(taskStore.updateTask).not.toHaveBeenCalled();
+    } finally { end(); }
+    await resetOrphanedTasks();
+    expect(taskStore.updateTask).not.toHaveBeenCalled();
+    queue = [];
+    await resetOrphanedTasks();
+    expect(taskStore.updateTask).toHaveBeenCalledWith(card.id, expect.objectContaining({ status: 'completed' }), 'internal',
+      expect.objectContaining({ expectedStatus: 'in_progress' }));
+  });
 });
 
 // A failed run's retry is held non-spawnable (`in_progress` + marker) while its
@@ -2164,18 +2187,15 @@ describe('forceSpawnTask — pre-validate provider before task:ready', () => {
       .toBeLessThan(forceFn.indexOf("cosEvents.emit('task:ready'"));
   });
 
-  // ...but only while that agent is plausibly still mid-spawn. Outside the window,
-  // a `pending` task carrying a `running` agent is a zombie record — and this
-  // route never runs cleanupZombieAgents — so an unbounded refusal would turn the
-  // task's own recovery action into a permanent no-op.
-  it('bounds the refusal so a stale holder can still be superseded', () => {
-    // The bound now lives in lib/cosSpawnWindow.js, shared with the status
-    // counters and the task lists — so the pending LIST that renders the "Run
-    // now" button and the refusal behind it agree about which holders are stale.
+  // ...but only while that agent is plausibly still mid-spawn. Past the window a
+  // stale holder is settled through the zombie sweep instead — behaviour pinned
+  // in cos.forceSpawnOwner.test.js (#14039).
+  it('bounds the spawn-window refusal with the shared settlement', () => {
+    // The bound lives in lib/cosSpawnWindow.js, shared with the status counters
+    // and the task lists — so the pending LIST that renders the "Run now" button
+    // and the refusal behind it agree about which holders are stale.
     expect(forceFn, 'the holder refusal must go through the age-bounded settlement')
       .toMatch(/spawningAgentForTask\(taskId, runningAgents\)/);
-    expect(forceFn, 'a stale holder must fall through to the spawn, not return')
-      .toMatch(/const holder = runningAgents\.get\(taskId\);/);
     expect(COS_SRC, 'the bound must come from the shared settlement, not a local copy')
       .toMatch(/spawningAgentForTask[\s\S]*?from '\.\.\/lib\/cosSpawnWindow\.js'/);
     expect(COS_SRC, 'no second grace window may be declared here')

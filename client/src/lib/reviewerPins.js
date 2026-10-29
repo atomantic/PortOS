@@ -276,3 +276,52 @@ export function normalizeReviewers(meta) {
 
 // Stable provider-backed reviewer identity; mirror of the server vocabulary.
 export const isProviderReviewer = (value) => typeof value === 'string' && /^provider:[a-z0-9][a-z0-9-]{0,79}$/.test(value);
+
+// Reviewers PortOS serves itself with no slashdo counterpart.
+export const PORTOS_ONLY_REVIEWERS = ['lmstudio', 'mtplx', 'kilo', 'kimi'];
+
+// Reviewers whose slashdo --review-with entry accepts a [<model>] bracket.
+export const BRACKET_MODEL_REVIEWERS = MODEL_SELECTABLE_REVIEWERS.filter(r => !PORTOS_ONLY_REVIEWERS.includes(r));
+
+/**
+ * Resolve a provider record (or provider ID) to a canonical reviewer slug
+ * (e.g. 'codex', 'claude', 'antigravity', etc.).
+ *
+ * @param {object|string} provider
+ * @param {string} [providerId]
+ * @returns {string|null}
+ */
+export function resolveProviderReviewerSlug(provider, providerId = null) {
+  if (provider && typeof provider === 'object') {
+    const candidates = [
+      provider.harnessId && provider.harnessId !== 'direct' ? provider.harnessId : null,
+      provider.command === 'agy' ? 'antigravity' : provider.command === 'cursor-agent' ? 'cursor' : provider.command,
+      provider.executionSourceProviderId && !provider.executionSourceProviderId.startsWith('selection-')
+        ? provider.executionSourceProviderId.replace(/-(cli|tui)$/, '')
+        : null,
+      provider.id ? provider.id.replace(/-(cli|tui)$/, '') : null,
+      provider.id
+    ].filter(Boolean);
+
+    for (const raw of candidates) {
+      if (typeof raw !== 'string') continue;
+      const normalized = REVIEWER_ALIASES[raw.toLowerCase()] || raw.toLowerCase();
+      if (REVIEWER_VALUES.includes(normalized)) {
+        return normalized;
+      }
+    }
+  }
+
+  const rawId = typeof provider === 'string' ? provider : (providerId || (provider?.id ?? null));
+  if (typeof rawId === 'string' && rawId) {
+    const stripped = rawId.replace(/^provider:/, '').replace(/-(cli|tui)$/, '').toLowerCase();
+    const normalized = REVIEWER_ALIASES[stripped] || stripped;
+    if (REVIEWER_VALUES.includes(normalized)) return normalized;
+    for (const v of REVIEWER_VALUES) {
+      if (stripped === v || stripped.startsWith(`${v}-`) || stripped.endsWith(`-${v}`)) {
+        return v;
+      }
+    }
+  }
+  return null;
+}

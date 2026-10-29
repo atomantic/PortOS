@@ -6,6 +6,8 @@ import InfiniteScrollFooter from '../ui/InfiniteScrollFooter.jsx';
 import { deleteMusicVideoPoolAssets, getMusicVideoMediaPool, markMusicVideoPoolAssets, searchMusicVideoMediaPool } from '../../services/apiMusicVideo.js';
 import { takeThumbUrl, takeClipUrl } from '../../lib/musicVideoTakes.js';
 import { formatCount } from '../../utils/formatters.js';
+import { mediaDeleteOutcome } from '../../lib/mediaDeleteOutcome.js';
+import toast from '../ui/Toast';
 
 const PAGE = 60;
 const SLOT_NOUN = { image: 'still', video: 'clip', endImage: 'end frame' };
@@ -37,6 +39,29 @@ function otherFrameItem(scene, kind) {
   return { kind: 'image', assetId, sceneId: scene.sceneId, prompt: take?.prompt || scene[other.prompt] || null, clipIds: [], ownFrame: other.label };
 }
 export const poolKey = (item) => `${item.kind}:${item.assetId}`;
+/**
+ * What a pool delete response means for the listed targets: `gone` keys leave the
+ * pool, `pending` maps a key to the marker an asset keeps while its owner is
+ * unreachable. Notices other than plain success are toasted. A response without
+ * per-item results (an older server) removes every target.
+ */
+export function settlePoolDelete(result, targets) {
+  const gone = new Set();
+  const pending = new Map();
+  const results = new Map((result?.items || []).map((item) => [poolKey(item), item]));
+  for (const target of targets) {
+    const key = poolKey(target);
+    const outcome = mediaDeleteOutcome(results.get(key) || { status: 'deleted' }, target.kind);
+    if (outcome.remove) gone.add(key);
+    else if (outcome.pendingDelete) pending.set(key, outcome.pendingDelete);
+    if (outcome.tone !== 'success') toast(outcome.notice);
+  }
+  return { gone, pending };
+}
+// The pool after a delete: removed items drop out, pending ones carry their marker.
+export const applyPoolDelete = (pool, { gone, pending }) => pool
+  .filter((item) => !gone.has(poolKey(item)))
+  .map((item) => (pending.has(poolKey(item)) ? { ...item, pendingDelete: pending.get(poolKey(item)) } : item));
 /** "Used on #3, #12" for an item other shots (or this one) use now, else null. */
 export const usedLabel = (item, shotNumbers) => {
   const numbers = (item.inUseBy || []).map((id) => shotNumbers.get(id)).filter(Boolean);
@@ -148,9 +173,10 @@ export default function SceneTakePicker({ open, onClose, projectId, scene, kind,
     setPicked((prev) => ({ ...prev, mark: next }));
   });
   const remove = (targets) => run(async () => {
-    await deleteMusicVideoPoolAssets(projectId, targets.map(({ kind: k, assetId }) => ({ kind: k, assetId })), { silent: true });
-    const gone = new Set(targets.map(poolKey));
-    setPool((prev) => prev.filter((item) => !gone.has(poolKey(item))));
+    const result = await deleteMusicVideoPoolAssets(projectId, targets.map(({ kind: k, assetId }) => ({ kind: k, assetId })), { silent: true });
+    const settled = settlePoolDelete(result, targets);
+    const { gone } = settled;
+    setPool((prev) => applyPoolDelete(prev, settled));
     setPicked((prev) => (prev && gone.has(poolKey(prev)) ? null : prev));
     setConfirmDelete(null);
   });
@@ -253,6 +279,7 @@ export default function SceneTakePicker({ open, onClose, projectId, scene, kind,
                     {item.mark === 'bad' ? <Ban size={11} aria-label="bad" /> : <Star size={11} aria-label="ingredient" />}
                   </span>
                 )}
+                {item.pendingDelete && <span className="port-media-overlay-strong absolute bottom-6 left-1 rounded px-1 text-[10px] leading-tight text-port-warning">Delete pending</span>}
                 {!item.ownFrame && item.inUseBy?.length > 0 && (
                   <span className="port-media-overlay-strong absolute bottom-1 left-1 rounded px-1 text-[10px] leading-tight">In use</span>
                 )}

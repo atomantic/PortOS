@@ -1,3 +1,4 @@
+import { publishExportLabel } from '../../../lib/musicVideoPublishExports.js';
 /**
  * Music Video publishing (#9282) — what each platform posts, built from the
  * project's publishing kit (#9281). Pure: project + kit + the director's
@@ -152,10 +153,10 @@ const youtubeThumbnailFile = (kit) => {
   return kit.thumbnail ? { dir: 'videoThumbnails', name: kit.thumbnail } : null;
 };
 
-/** The 1080p encode a native video post (LinkedIn, Facebook) uploads. */
+/** The up-to-1080p social encode a native video post (LinkedIn, Facebook) uploads. */
 function nativeVideo(project, kit, platform) {
   const clip = (kit.exports || []).find((e) => e.kind === 'x-1080p')?.filename;
-  if (!clip) throw missing(`Build the publishing kit first — the ${platform} post uploads its 1080p encode`);
+  if (!clip) throw missing(`Build the publishing kit first — the ${platform} post uploads its up-to-1080p social encode`);
   requireFreshKit(project, kit);
   return { dir: 'videos', name: clip };
 }
@@ -206,7 +207,7 @@ const BUILDERS = {
     const hook = text(kit.copy?.x?.hook);
     if (!hook) throw missing('Write the X hook post in the release copy first');
     const clip = (kit.exports || []).find((e) => e.kind === 'x-1080p')?.filename;
-    if (!clip) throw missing('Build the publishing kit first — the X post carries its 1080p encode');
+    if (!clip) throw missing('Build the publishing kit first — the X post carries its up-to-1080p social encode');
     requireFreshKit(project, kit);
     const writing = [hook, text(kit.copy?.x?.story), text(options.prompt)].join('\n');
     const others = otherPosts(kit, options, writing, { exclude: ['suno', 'youtube', 'x'] });
@@ -419,13 +420,13 @@ export function publishPreviewParts(platform, project, payload) {
       break;
     case 'x':
       (p.posts || []).forEach((post, i) => {
-        const media = post.media ? (post.media.dir === 'videos' ? ' · with the 1080p video' : ' · with an image') : '';
+        const media = post.media ? (post.media.dir === 'videos' ? ` · with ${publishExportLabel((project.publishKit?.exports || []).find((e) => e.filename === post.media.name))}` : ' · with an image') : '';
         add(i === 0 ? `Post${media}` : `Reply ${i}${media}`, post.text);
       });
       break;
     case 'linkedin':
     case 'facebook':
-      add('Video', 'The 1080p encode of the final render');
+      add('Video', publishExportLabel((project.publishKit?.exports || []).find((e) => e.filename === p.video?.name)));
       add('Post', p.text);
       if (platform === 'facebook') add('AI label', yesNo(p.aiLabel));
       add(platform === 'facebook' ? 'First comment (you press Enter)' : 'First comment (you press Comment)', p.firstComment);

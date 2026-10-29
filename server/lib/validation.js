@@ -12,6 +12,7 @@ import { pipelineEditorialChecksSettingsSchema } from './pipelineValidation.js';
 import { loraTrainingConfigSchema } from './mediaValidation.js';
 import { ServerError } from './errorHandler.js';
 import { isSafeGitRef } from './gitArgs.js';
+import { releaseSynchronizationResetCheckoutSchema } from './releaseSynchronization.js';
 import { partialWithoutDefaults, emptyToUndefined, emptyToNull, optionalBooleanMap, presetProviderIdSchema, providerRefSchema } from './zodCompat.js';
 import { WORK_TRACKERS } from './workTracker.js';
 import { LAYERED_INTELLIGENCE_SOURCE_KEYS } from './layeredIntelligenceSourceKeys.js';
@@ -3029,6 +3030,7 @@ export const cosAgentFeedbackBodySchema = z.object({
 });
 export const cosAgentBtwBodySchema = z.object({ message: z.string().trim().min(1).max(5000) });
 export const cosTaskReorderBodySchema = z.object({ taskIds: z.array(nonEmptyString) });
+export const cosTaskSpawnBodySchema = z.object({ resetSpawnBudget: z.boolean().default(false) }).strict();
 export const cosScheduleTargetBodySchema = z.object({ taskType: nonEmptyString, appId: nullishString });
 export const cosScheduleTriggerBodySchema = z.object({
   taskType: nonEmptyString,
@@ -3040,6 +3042,13 @@ export const cosScheduleTriggerBodySchema = z.object({
   targetModels: z.array(nonEmptyString).nullable().optional(),
   targetPullRequest: z.union([z.number(), z.string()]).nullable().optional(),
 });
+export const legacyReleaseRecoveryReviewSchema = z.object({ identity: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
+export const legacyReleaseRecoveryAcceptSchema = legacyReleaseRecoveryReviewSchema.extend({ digest: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
+export const releaseSynchronizationResetBodySchema = legacyReleaseRecoveryReviewSchema.extend({
+  reason: z.string().trim().min(1).max(1000),
+  checkouts: z.array(releaseSynchronizationResetCheckoutSchema).max(10).default([]),
+}).strict();
+
 // A scoped release names the exact inventory row the operator saw (#12002).
 export const heldCheckoutRetireBodySchema = z.object({
   checkoutIdentity: z.string().regex(/^[a-f0-9]{64}$/).optional(),
@@ -3176,3 +3185,30 @@ export const textEncoderDownloadParamsSchema = z.object({ id: z.string().min(1).
 export const providerExecutionOptionsQuerySchema = z.object({ model: z.string().trim().max(512).optional(), refresh: z.enum(['true', 'false']).optional() }).strict();
 
 export const executionOptionSelectionSchema = z.object({ model: z.string().trim().max(512).optional(), executionOptions: executionOptionsSchema }).strict();
+
+// POST /api/peer-media/delete — a paired peer asks this machine to delete a
+// media row it holds. Video rows key on the history id, images on the filename.
+export const peerMediaDeleteSchema = z.object({
+  kind: z.enum(['video', 'image']),
+  key: z.string().min(1).max(512),
+}).strict();
+
+// A file name on the media static mounts: no path separators, no traversal.
+const mediaFilenameSchema = z.string().min(1).max(255).refine((v) => !/[\\/]/.test(v) && v !== '.' && v !== '..', 'Invalid file name');
+const isoTimestampSchema = z.string().max(64).refine((v) => Number.isFinite(Date.parse(v)), 'Must be a timestamp');
+
+// POST /api/peer-media/release — a paired peer asks this machine to drop its
+// copy of a file's bytes in favor of the primary holder (services/mediaHolders.js).
+export const peerMediaReleaseSchema = z.object({
+  kind: z.enum(['video', 'image']),
+  filename: mediaFilenameSchema,
+  primaryInstanceId: z.string().min(1).max(128),
+  primaryAt: isoTimestampSchema,
+}).strict();
+
+// POST /api/media/holders/primary — keep one holder's copy, release the others.
+export const mediaMakePrimarySchema = z.object({
+  kind: z.enum(['video', 'image']),
+  filename: mediaFilenameSchema,
+  instanceId: z.string().min(1).max(128),
+}).strict();

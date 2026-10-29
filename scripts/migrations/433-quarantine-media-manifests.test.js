@@ -58,9 +58,11 @@ describe('migration 433 — persisted media manifests', () => {
     tag.write('ID3'); tag[3] = 4;
     const size = tagLength - 10;
     for (let i = 0; i < 4; i++) tag[9 - i] = (size >>> (i * 7)) & 0x7f;
-    const path = await fixture('audio', 'tagged.mp3', Buffer.concat([tag, Buffer.from(playlist)]));
+    const bytes = Buffer.concat([tag, Buffer.from(playlist)]);
+    const path = await fixture('audio', 'tagged.mp3', bytes);
     await expect(migration.up({ rootDir })).resolves.toEqual({ quarantined: 1 });
-    expect(await readFile(`${path}.quarantined`)).toEqual(Buffer.concat([tag, Buffer.from(playlist)]));
+    // Buffer#equals, not toEqual: deep-equality over a 1 MiB buffer costs seconds.
+    expect((await readFile(`${path}.quarantined`)).equals(bytes)).toBe(true);
   });
 
   it('never overwrites an existing quarantine: takes the next free numbered name and tolerates missing stores', async () => {

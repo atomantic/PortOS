@@ -8,10 +8,14 @@ import { pullUniverseCanonReferences } from '../../lib/musicVideoUniverseRefs.js
 import CharacterStylePicker from './CharacterStylePicker.jsx';
 import IngredientPicker from '../IngredientPicker.jsx';
 import { ingredientPath } from '../../lib/creativeLibraries.js';
+import { VideoCastLinksDisclosure } from './VideoCastLinks.jsx';
 
 const inputClass = 'w-full min-w-0 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm';
 const kinds = [['character', 'Cast'], ['place', 'Places'], ['object', 'Objects']];
 const fields = { character: 'characters', place: 'places', object: 'objects' };
+// Unchecked subjects are saved to these catalog pages on Cast & Sets approval
+// and offered by the importer; `localOnly` opts a subject out of both.
+const catalogPages = { character: 'Casting', place: 'Environments', object: 'Objects' };
 
 // A catalog record as a canon-shaped entry, so its image joins the look
 // references the same way a universe entry's does. Attached catalog media wins.
@@ -27,7 +31,7 @@ const catalogEntry = (ingredient) => {
 };
 
 /** Project-owned snapshots: changing source canon never silently recasts a video. */
-export default function CreativeSetupPanel({ project, onSave, onPendingChange }) {
+export default function CreativeSetupPanel({ project, onSave, onPendingChange, onCastLinked }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(null);
   const [lists, setLists] = useState({ universes: [] });
@@ -168,7 +172,7 @@ export default function CreativeSetupPanel({ project, onSave, onPendingChange })
         </div>
         {subject.ingredientId
           ? <Link className="text-xs text-port-accent" target="_blank" to={ingredientPath({ id: subject.ingredientId, type: subject.kind })}>Open in catalog</Link>
-          : <div className="flex items-center gap-2 min-h-[32px]"><input id={idFor(`local-${subject.id}`)} type="checkbox" checked={!!subject.localOnly} onChange={(e) => setDraft((d) => ({ ...d, subjects: d.subjects.map((s) => (s.id === subject.id ? { ...s, localOnly: e.target.checked || undefined } : s)) }))} /><label htmlFor={idFor(`local-${subject.id}`)} className="text-xs text-port-text-muted">Keep in this video only</label></div>}
+          : <div className="flex items-center gap-2 min-h-[32px]"><input id={idFor(`local-${subject.id}`)} type="checkbox" checked={!!subject.localOnly} onChange={(e) => setDraft((d) => ({ ...d, subjects: d.subjects.map((s) => (s.id === subject.id ? { ...s, localOnly: e.target.checked || undefined } : s)) }))} /><label htmlFor={idFor(`local-${subject.id}`)} className="text-xs text-port-text-muted">Don&apos;t save to {catalogPages[subject.kind]}</label></div>}
         <label htmlFor={idFor(`description-${subject.id}`)} className="sr-only">Description for {subject.name}</label>
         <textarea id={idFor(`description-${subject.id}`)} rows={2} maxLength={1000} className={inputClass} value={subject.description || ''} onChange={(e) => setDraft((d) => ({ ...d, subjects: d.subjects.map((s) => s.id === subject.id ? { ...s, description: e.target.value } : s) }))} />
       </li>)}</ul>
@@ -181,6 +185,11 @@ export default function CreativeSetupPanel({ project, onSave, onPendingChange })
       {(newName.trim() || newDescription.trim()) && <p className="text-xs text-port-text-muted">Add the new subject to the production before saving.</p>}
       <div className="flex flex-wrap gap-3"><button type="button" onClick={save} disabled={!universeReady || !!newName.trim() || !!newDescription.trim()} className="bg-port-accent text-white rounded px-3 py-2 text-sm disabled:opacity-50">{saving ? 'Saving…' : 'Save creative setup'}</button><button type="button" onClick={() => setEditing(false)} className="text-sm">Cancel</button></div>
     </fieldset>}
+    {!editing && subjects.length > 0 && <VideoCastLinksDisclosure
+      summary={`Catalog links (${formatCount(subjects.filter((s) => s.ingredientId).length)} of ${formatCount(subjects.length)} linked)`}
+      summaryClassName="min-h-[44px] flex items-center cursor-pointer text-xs text-port-accent"
+      defaultOpen={subjects.some((s) => !s.ingredientId && !s.localOnly)}
+      projectId={project.id} universeId={project.concept?.universeId || null} onLinked={onCastLinked} idPrefix={idFor('link')} />}
     {!editing && project.productionPolicy?.strategy === 'code-first' && <p className="text-xs text-port-text-muted">Code-first plan · generated video allowance {formatCount(project.productionPolicy.maxGeneratedVideoPercent, { maximumFractionDigits: 3 })}% of final song time</p>}
     {!editing && conflict && <div role="status" className="rounded border border-port-warning/60 p-2 space-y-1">
       <p className="text-xs text-port-warning">{conflict.message}</p>

@@ -40,7 +40,8 @@ import PreflightProgress from './PreflightProgress';
 import DeliveryStatus from '../DeliveryStatus';
 import BlockedSystemRecovery from '../BlockedSystemRecovery';
 import { ReleasePublicationLine } from '../AgentResultLine';
-import { isDeliveryCleanupHeld } from '../../../../../server/lib/taskRetryHold.js';
+import { isDeliveryCleanupHeld, isRetryHeld } from '../../../../../server/lib/taskRetryHold.js';
+import { hasSpawnBudgetResetPrerequisite } from '../../../../../server/lib/taskBlockCategories.js';
 
 const statusIcons = {
   pending: <Clock size={16} aria-hidden="true" className="text-yellow-500" />,
@@ -150,7 +151,7 @@ function getSuccessRateStyle(rate) {
   return { bg: 'bg-port-error/15', text: 'text-port-error', label: 'low' };
 }
 
-export default function TaskItem({ task, agent = null, liveOutput, isSystem, spawning = false, selected = false, onRefresh, onTaskUnblocked, onTaskDeleted, providers, providersLoaded, durations, dragHandleProps, apps, instances = null, onEditingChange }) {
+export default function TaskItem({ task, agent = null, liveOutput, isSystem, spawning = false, waiting = false, unconfirmed = null, retryIdentity, retryIdentityLoading = false, selected = false, onRefresh, onTaskUnblocked, onTaskDeleted, providers, providersLoaded, durations, dragHandleProps, apps, instances = null, onEditingChange }) {
   // System tasks live in the internal queue. Every task mutation must name that
   // source; otherwise the API's user-queue default searches the user queue and
   // reports the system task as missing.
@@ -159,8 +160,15 @@ export default function TaskItem({ task, agent = null, liveOutput, isSystem, spa
   // show the running glyph, not the queued clock. See spawnAgentForTask's
   // registration ordering for why the two disagree.
   const finalizing = task.status === 'in_progress' && isDeliveryCleanupHeld(task.metadata) && agent?.status !== 'running';
-  const displayStatus = finalizing ? 'finalizing' : spawning ? 'in_progress' : task.status;
-  const statusLabel = finalizing ? 'cleanup incomplete' : displayStatus;
+  const retryCleanupActive = task.status === 'in_progress' && isRetryHeld(task.metadata)
+    && agent?.taskId === task.id && Boolean(agent.deliveryActivity) && agent.status !== 'running';
+  const statusProtected = isDeliveryCleanupHeld(task.metadata) || isRetryHeld(task.metadata) || Boolean(task.metadata?.preflight?.requestId) || Boolean(unconfirmed);
+  const protectedReason = unconfirmed ? 'Confirm current activity before changing this task’s status.'
+    : task.metadata?.preflight?.requestId ? 'Pre-agent progress is updated by the scheduler.'
+      : 'Cleanup must finish or be recovered before this task can be marked complete.';
+  const displayStatus = waiting || unconfirmed ? 'pending' : finalizing ? 'finalizing' : spawning ? 'in_progress' : task.status;
+  const statusLabel = unconfirmed ? 'activity unconfirmed' : finalizing ? (waiting ? 'cleanup pending' : 'cleanup in progress')
+    : retryCleanupActive ? 'retry cleanup in progress' : waiting ? 'waiting' : displayStatus;
   const idScope = isSystem ? 'sys' : 'user';
   // Either queue. A USER row can hold too: a row the importer had to RECOVER is
   // withheld from the unattended spawn and keeps that hold (#7300, #7367). Gating the button on `isSystem` would leave it pending with
@@ -210,6 +218,9 @@ export default function TaskItem({ task, agent = null, liveOutput, isSystem, spa
   const [showBlockedModal, setShowBlockedModal] = useState(false);
   const [relaunching, setRelaunching] = useState(false);
   const [blockedReason, setBlockedReason] = useState('');
+  const [budgetResetConfirm, setBudgetResetConfirm] = useState(false);
+  const [budgetResetAvailable, setBudgetResetAvailable] = useState(false);
+  const [budgetResetting, setBudgetResetting] = useState(false);
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
   // Independent armed-state from the delete confirm above — a second instance
   // of the same single-at-a-time hook, keyed on the same task id, gates
@@ -239,7 +250,7 @@ export default function TaskItem({ task, agent = null, liveOutput, isSystem, spa
   // Calculate duration estimate for pending tasks
   // Uses P80 estimate when available for more realistic time predictions
   const durationEstimate = useMemo(() => {
-    if (displayStatus !== 'pending') return null;
+    if (task.status !== 'pending' || spawning) return null;
 
     // The shared 4-rung cascade (#8001) — the same module `AgentCard` estimates
     // through, so a pending task and the agent it becomes agree. Queue reads
@@ -256,7 +267,7 @@ export default function TaskItem({ task, agent = null, liveOutput, isSystem, spa
     if (!estimate) return null;
     // This card renders whole minutes; the shared estimator answers in ms.
     return { ...estimate, estimatedMin: Math.round(estimate.estimatedMs / 60000) };
-  }, [durations, task, taskSource, taskProvider, taskModel, taskEffort, displayStatus]);
+  }, [durations, task, taskSource, taskProvider, taskModel, taskEffort, spawning]);
 
   const handleStatusChange = async (newStatus, blockedReasonText = '', successMessage = `Task marked as ${newStatus}`) => {
     const updates = { status: newStatus, type: taskSource };
@@ -437,6 +448,7 @@ export default function TaskItem({ task, agent = null, liveOutput, isSystem, spa
           </button>
         )}
         <button
+          disabled={statusProtected}
           onClick={() => {
             if (task.status === 'blocked') {
               // Clicking blocked status clears it back to pending
@@ -448,12 +460,22 @@ export default function TaskItem({ task, agent = null, liveOutput, isSystem, spa
             }
           }}
           className="mt-0.5 hover:scale-110 transition-transform"
-          aria-label={`Status: ${statusLabel}. Click to mark as ${task.status === 'completed' || task.status === 'blocked' ? 'pending' : 'completed'}`}
+          aria-label={`Status: ${statusLabel}. ${statusProtected ? protectedReason : `Click to mark as ${task.status === 'completed' || task.status === 'blocked' ? 'pending' : 'completed'}`}`}
         >
           {statusIcons[displayStatus]}
         </button>
         <div className="flex-1 min-w-0">
-          {finalizing && <DeliveryStatus agent={agent} ownerId={task.metadata.deliveryRecoveryAgentId} />}
+          {finalizing && !unconfirmed && <DeliveryStatus agent={agent} ownerId={task.metadata.deliveryRecoveryAgentId} taskId={task.id} onRefresh={onRefresh} />}
+          {retryCleanupActive && !finalizing && <p className="mb-2 text-sm text-port-text-muted">{agent.deliveryActivity.label}</p>}
+          {unconfirmed && <p className="mb-2 text-sm text-port-text-muted">{unconfirmed}</p>}
+          {retryIdentity && <button type="button" onClick={retryIdentity} disabled={retryIdentityLoading}
+            className="mb-2 min-h-[44px] rounded border border-port-border px-2 text-sm text-port-accent disabled:opacity-50">
+            {retryIdentityLoading ? 'Checking instance identity…' : 'Retry instance identity'}
+          </button>}
+          {waiting && !finalizing && !task.metadata?.preflight && <p className="mb-2 text-sm text-port-text-muted">
+            {isRetryHeld(task.metadata) ? 'Waiting for the previous run’s cleanup before retrying.' : 'Waiting for an agent or recovery; active execution is not confirmed.'}
+          </p>}
+          {statusProtected && <p className="mb-2 text-sm text-port-text-muted">{protectedReason}</p>}
           <div className="flex items-center gap-2 mb-1 flex-wrap">
             <span className="text-sm font-mono text-gray-500 min-w-0 break-words">{task.id}</span>
             {task.metadata?.app && apps?.find(a => a.id === task.metadata.app)?.name && (
@@ -643,6 +665,8 @@ export default function TaskItem({ task, agent = null, liveOutput, isSystem, spa
               )}
               <PreflightProgress
                 preflight={task.metadata?.preflight}
+                active={task.preflightActive === true}
+                unconfirmed={Boolean(unconfirmed)}
                 idScope={idScope}
                 taskId={task.id}
               />
@@ -797,10 +821,13 @@ export default function TaskItem({ task, agent = null, liveOutput, isSystem, spa
                     row's only recovery affordance away with it. forceSpawnTask
                     refuses a task a live agent already holds, so a click during a
                     real spawn gets an honest error rather than a duplicate run. */}
-                {task.status === 'pending' && !task.approvalRequired && (
+                {task.status === 'pending' && !task.approvalRequired && !task.metadata?.preflight?.requestId && (
                   <button
                     onClick={async () => {
-                      const result = await api.forceSpawnTask(task.id, { silent: true }).catch(err => { toast.error(err.message); return null; });
+                      const result = await api.forceSpawnTask(task.id, { silent: true }).catch(err => {
+                        if (err.message?.includes('Spawn budget')) setBudgetResetAvailable(true);
+                        toast.error(err.message); return null;
+                      });
                       if (result?.success) toast.success(`Spawning ${task.id}`);
                       if (onRefresh) onRefresh();
                     }}
@@ -811,9 +838,30 @@ export default function TaskItem({ task, agent = null, liveOutput, isSystem, spa
                     <Play size={14} aria-hidden="true" />
                   </button>
                 )}
+                {(task.status === 'pending' || task.status === 'blocked' || (task.status === 'in_progress' && agent?.status !== 'running')) && !task.approvalRequired
+                  && !unconfirmed
+                  && !task.metadata?.preflight?.requestId
+                  && !hasSpawnBudgetResetPrerequisite(task.metadata) && !isDeliveryCleanupHeld(task.metadata) && !isRetryHeld(task.metadata)
+                  && (task.status === 'in_progress' || !task.metadata?.spawnBudgetProof || task.metadata?.spawnBudgetReconciledHold === 'true' || budgetResetAvailable)
+                  && (budgetResetConfirm ? (
+                    <ConfirmButtonPair prompt="Reset spawn count to zero and run? Failure count stays." confirmText="Reset and run"
+                      ariaLabel="Confirm reset spawn budget and run" busy={budgetResetting} tone="warning" largeTouchTargets
+                      onCancel={() => setBudgetResetConfirm(false)} onConfirm={async () => {
+                        setBudgetResetting(true);
+                        const result = await api.resetSpawnBudgetAndRun(task.id, { silent: true }).catch(err => { toast.error(err.message); return null; });
+                        setBudgetResetting(false);
+                        if (result?.success) { setBudgetResetConfirm(false); toast.success(`Spawning ${task.id}`); }
+                        if (onRefresh) onRefresh();
+                      }} />
+                  ) : (
+                    <button type="button" onClick={() => setBudgetResetConfirm(true)}
+                      className="min-h-[44px] rounded border border-port-border px-2 text-xs text-port-warning hover:bg-port-border">
+                      Reset spawn budget and run
+                    </button>
+                  ))}
                 {/* Only when a live agent holds this task — relaunching pauses that
                     agent (see relaunchAgent in agentManagement.js). */}
-                {agent && (
+                {agent?.status === 'running' && (
                   <button
                     type="button"
                     onClick={() => setRelaunching(true)}

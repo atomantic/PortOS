@@ -2,11 +2,11 @@
  * Agent Action Executor
  *
  * Executes scheduled agent actions by connecting to platform APIs.
- * Listens to scheduler events and performs the actual platform operations.
+ * Registers an awaitable executor for platform operations and terminal activity.
  * Supports AI-generated content when params are missing.
  */
 
-import { scheduleEvents } from './automationScheduler.js';
+import { registerActionExecutor } from './automationScheduler.js';
 import * as agentActivity from './agentActivity.js';
 import * as platformAccounts from './platformAccounts.js';
 import * as agentPersonalities from './agentPersonalities.js';
@@ -583,125 +583,120 @@ async function executeMoltworldInteract(client, account, params) {
   return results;
 }
 
-/**
- * Initialize the action executor
- * Listens to scheduler events and executes actions
- */
-let executeListener = null;
+/** The scheduler retains ownership through platform writes and terminal activity. */
+async function executeScheduledAction({ scheduleId, schedule, timestamp }) {
+  console.log(`⚡ Executing scheduled action: ${schedule.action.type} (${scheduleId})`);
 
-export function init() {
-  // Prevent duplicate listeners from THIS module specifically. Tracking our
-  // own handler (rather than counting all `execute` listeners) avoids both
-  // a false-positive skip when another module subscribes to the same event
-  // and a stale-flag skip when tests call `removeAllListeners()` between cases.
-  if (executeListener && scheduleEvents.listeners('execute').includes(executeListener)) return;
-
-  executeListener = ({ scheduleId, schedule, timestamp }) => {
-    (async () => {
-    console.log(`⚡ Executing scheduled action: ${schedule.action.type} (${scheduleId})`);
-
-    // Get account with full credentials
-    const account = await platformAccounts.getAccountWithCredentials(schedule.accountId);
-    if (!account) {
-      console.error(`❌ Account not found: ${schedule.accountId}`);
-      await agentActivity.logActivity({
-        agentId: schedule.agentId,
-        accountId: schedule.accountId,
-        scheduleId,
-        action: schedule.action.type,
-        params: schedule.action.params,
-        status: 'failed',
-        error: 'Account not found',
-        timestamp
-      });
-      return;
-    }
-
-    // Check account status
-    if (account.status !== 'active') {
-      console.log(`⏸️ Skipping action - account not active: ${account.status}`);
-      await agentActivity.logActivity({
-        agentId: schedule.agentId,
-        accountId: schedule.accountId,
-        scheduleId,
-        action: schedule.action.type,
-        params: schedule.action.params,
-        status: 'skipped',
-        error: `Account status: ${account.status}`,
-        timestamp
-      });
-      return;
-    }
-
-    // Get agent personality
-    const agent = await agentPersonalities.getAgentById(schedule.agentId);
-    if (!agent) {
-      console.error(`❌ Agent not found: ${schedule.agentId}`);
-      return;
-    }
-
-    // Check if agent is enabled
-    if (!agent.enabled) {
-      console.log(`⏸️ Skipping action - agent disabled`);
-      await agentActivity.logActivity({
-        agentId: schedule.agentId,
-        accountId: schedule.accountId,
-        scheduleId,
-        action: schedule.action.type,
-        params: schedule.action.params,
-        status: 'skipped',
-        error: 'Agent disabled',
-        timestamp
-      });
-      return;
-    }
-
-    // Execute the action
-    const startTime = Date.now();
-    let result = null;
-    let error = null;
-
-    let failure = null;
-    try {
-      result = await executeAction(schedule, account, agent);
-      console.log(`✅ Action completed: ${schedule.action.type}`);
-    } catch (err) {
-      failure = err;
-    }
-
-    const code = typeof failure?.code === 'string' ? failure.code : null;
-    const skipped = !!(code && (
-      code.startsWith('untrusted-content-')
-      || code.startsWith('security-guard-')
-      || code.startsWith('security-model-')
-      || code === 'PROVIDER_MODE_NOT_PERMITTED'
-    ));
-    if (failure && skipped) console.warn(`⏸️ Skipped ${schedule.action.type}: ${failure.message} (${code})`);
-    else if (failure) console.error(`❌ Action failed: ${failure.message}`);
-    error = failure ? failure.message : null;
-
-    // Record activity
-    await platformAccounts.recordActivity(schedule.accountId);
-
-    // Log completion
+  // Get account with full credentials
+  const account = await platformAccounts.getAccountWithCredentials(schedule.accountId);
+  if (!account) {
+    console.error(`❌ Account not found: ${schedule.accountId}`);
     await agentActivity.logActivity({
       agentId: schedule.agentId,
       accountId: schedule.accountId,
       scheduleId,
       action: schedule.action.type,
       params: schedule.action.params,
-      status: failure ? (skipped ? 'skipped' : 'failed') : 'completed',
-      result,
-      error,
-      ...(code ? { code } : {}),
-      timestamp: new Date().toISOString(),
-      durationMs: Date.now() - startTime
+      status: 'failed',
+      error: 'Account not found',
+      timestamp
     });
-    })().catch(err => {
-      console.error(`❌ Unhandled error in execute listener for schedule ${scheduleId}: ${err.message}`);
-    });
-  };
+    return;
+  }
 
-  scheduleEvents.on('execute', executeListener);
+  // Check account status
+  if (account.status !== 'active') {
+    console.log(`⏸️ Skipping action - account not active: ${account.status}`);
+    await agentActivity.logActivity({
+      agentId: schedule.agentId,
+      accountId: schedule.accountId,
+      scheduleId,
+      action: schedule.action.type,
+      params: schedule.action.params,
+      status: 'skipped',
+      error: `Account status: ${account.status}`,
+      timestamp
+    });
+    return;
+  }
+
+  // Get agent personality
+  const agent = await agentPersonalities.getAgentById(schedule.agentId);
+  if (!agent) {
+    console.error(`❌ Agent not found: ${schedule.agentId}`);
+    await agentActivity.logActivity({
+      agentId: schedule.agentId,
+      accountId: schedule.accountId,
+      scheduleId,
+      action: schedule.action.type,
+      params: schedule.action.params,
+      status: 'failed',
+      error: 'Agent not found',
+      timestamp
+    });
+    return;
+  }
+
+  // Check if agent is enabled
+  if (!agent.enabled) {
+    console.log(`⏸️ Skipping action - agent disabled`);
+    await agentActivity.logActivity({
+      agentId: schedule.agentId,
+      accountId: schedule.accountId,
+      scheduleId,
+      action: schedule.action.type,
+      params: schedule.action.params,
+      status: 'skipped',
+      error: 'Agent disabled',
+      timestamp
+    });
+    return;
+  }
+
+  // Execute the action
+  const startTime = Date.now();
+  let result = null;
+  let error = null;
+
+  let failure = null;
+  try {
+    result = await executeAction(schedule, account, agent);
+    console.log(`✅ Action completed: ${schedule.action.type}`);
+  } catch (err) {
+    failure = err;
+  }
+
+  const code = typeof failure?.code === 'string' ? failure.code : null;
+  const skipped = !!(code && (
+    code.startsWith('untrusted-content-')
+    || code.startsWith('security-guard-')
+    || code.startsWith('security-model-')
+    || code === 'PROVIDER_MODE_NOT_PERMITTED'
+  ));
+  if (failure && skipped) console.log(`⏸️ Skipped ${schedule.action.type}: ${failure.message} (${code})`);
+  else if (failure) console.error(`❌ Action failed: ${failure.message}`);
+  error = failure ? failure.message : null;
+
+  // Record activity
+  await platformAccounts.recordActivity(schedule.accountId);
+
+  // Log completion
+  await agentActivity.logActivity({
+    agentId: schedule.agentId,
+    accountId: schedule.accountId,
+    scheduleId,
+    action: schedule.action.type,
+    params: schedule.action.params,
+    status: failure ? (skipped ? 'skipped' : 'failed') : 'completed',
+    result,
+    error,
+    ...(code ? { code } : {}),
+    timestamp: new Date().toISOString(),
+    durationMs: Date.now() - startTime
+  });
+}
+
+export function init() {
+  registerActionExecutor(executeScheduledAction);
   console.log('⚡ Agent action executor initialized');
 }

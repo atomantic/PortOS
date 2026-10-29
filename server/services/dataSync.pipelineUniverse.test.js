@@ -163,19 +163,19 @@ describe('dataSync — universe category', () => {
     const snap = await dataSync.getSnapshot('universe');
     expect(snap.portosMeta).toBeDefined();
     expect(typeof snap.portosMeta.portosVersion).toBe('string');
-    expect(snap.portosMeta.schemaVersions.universes).toBe(16);
+    expect(snap.portosMeta.schemaVersions.universes).toBe(18);
   });
 
   it('applyRemote rejects when sender schemaVersions are AHEAD of local code', async () => {
     writeUniverseState({ universes: [], runs: [] });
     const result = await dataSync.applyRemote('universe', {
       universes: [{ id: 'u-new', name: 'Foundry', updatedAt: '2026-05-17T10:00:00Z' }],
-    }, { portosMeta: { portosVersion: '99.0.0', schemaVersions: { universes: 17 } } });
+    }, { portosMeta: { portosVersion: '99.0.0', schemaVersions: { universes: 19 } } });
     expect(result.applied).toBe(false);
     expect(result.count).toBe(0);
     expect(result.blockedBySchema).toBeDefined();
     expect(result.blockedBySchema.ahead).toEqual([
-      { category: 'universes', senderV: 17, receiverV: 16 },
+      { category: 'universes', senderV: 19, receiverV: 18 },
     ]);
     expect(result.blockedBySchema.senderPortosVersion).toBe('99.0.0');
     // Nothing was written.
@@ -247,6 +247,22 @@ describe('dataSync — universe category', () => {
     const [universe] = readUniverseState().universes;
     expect(universe.characters[0].forms).toEqual([kid]);
     expect(universe.places[0].forms[0].label).toBe('Ruined');
+  });
+
+  // Catches a forms-aware peer that predates heights stripping an age's height.
+  it('keeps each form\'s height when a pre-height peer wins LWW', async () => {
+    const base = { id: 'u-heights', name: 'Example', createdAt: '2026-05-17T09:00:00Z' };
+    const kid = { id: 'form-kid', label: 'Age 7', age: '7', description: 'yellow raincoat' };
+    writeUniverseState({ universes: [{ ...base, updatedAt: '2026-05-17T10:00:00Z',
+      characters: [{ id: 'character-1', name: 'Example', forms: [{ ...kid, height: '3 ft 9 in' }] }],
+    }], runs: [] });
+    const peerEdit = (updatedAt, universes, forms) => dataSync.applyRemote('universe', { universes: [{ ...base, updatedAt,
+      characters: [{ id: 'character-1', name: 'Peer edit', forms }] }] }, { portosMeta: { schemaVersions: { universes } } });
+    expect((await peerEdit('2026-05-17T11:00:00Z', 17, [{ ...kid, description: 'green raincoat' }])).applied).toBe(true);
+    expect(readUniverseState().universes[0].characters[0].forms).toEqual([{ ...kid, description: 'green raincoat', height: '3 ft 9 in' }]);
+    // A height-aware peer's omission is a clear.
+    expect((await peerEdit('2026-05-17T12:00:00Z', 18, [kid])).applied).toBe(true);
+    expect(readUniverseState().universes[0].characters[0].forms).toEqual([kid]);
   });
 
   it('applyRemote falls through for legacy senders that send NO portosMeta at all', async () => {
@@ -1223,6 +1239,8 @@ describe('dataSync — per-category schema gate (cross-key isolation)', () => {
       'memoryHistory',
       // Peer credential handshake version (#8356), advertised in health details; never a data category.
       'peerAuth',
+      // Image-stamp capability (#14067), advertised in health details; never a data category.
+      'peerAssetStamps',
       // Numeric PortOS quality uses its version-validated read-through endpoint, never snapshot writes.
       'appQuality',
       // catalog → in-process applyRemoteChanges (server/services/catalogSync.js)

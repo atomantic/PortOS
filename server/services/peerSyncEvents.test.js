@@ -1,0 +1,313 @@
+import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
+import { mkdirSync, writeFileSync, utimesSync } from 'fs';
+import { join } from 'path';
+import { mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
+
+const { makeProxy, cleanup } = mockPathsDataRoot({ prefix: 'portos-peer-sync-events-' });
+const registry = vi.hoisted(() => ({ peers: [] }));
+
+vi.mock('../lib/fileUtils.js', async () => {
+  const actual = await vi.importActual('../lib/fileUtils.js');
+  return makeProxy(actual);
+});
+vi.mock('./instances.js', async () => {
+  const actual = await vi.importActual('./instances.js');
+  return { ...actual, getPeers: async () => registry.peers };
+});
+vi.mock('./instanceIdentity.js', () => ({ UNKNOWN_INSTANCE_ID: 'unknown', getInstanceId: async () => 'local-inst' }));
+vi.mock('./mediaAssetIndex/index.js', () => ({ unindexVideo: async () => {}, unindexImage: async () => {}, indexImage: async () => {} }));
+vi.mock('../lib/pythonSetup.js', () => ({ resolveFlux2Python: () => null, FLUX2_VENV_DEFAULT: '/fake/venv/bin/python3' }));
+vi.mock('./musicVideo/mediaPool.js', () => ({ forgetDeletedMusicVideoAssets: vi.fn(async () => {}) }));
+vi.mock('../lib/trashFiles.js', () => ({ trashFiles: vi.fn(async () => {}) }));
+
+const { PATHS, readJSONFile, atomicWrite } = await import('../lib/fileUtils.js');
+const { applyPeerSyncEvent } = await import('./peerSyncEvents.js');
+const { peerSyncBus } = await import('./peerSyncEventBus.js');
+const { deleteHistoryItem } = await import('./videoGen/historyOps.js');
+const { mutateVideoHistory } = await import('./videoGen/history.js');
+const { listMediaTombstones } = await import('./mediaTombstones.js');
+const { forgetDeletedMusicVideoAssets } = await import('./musicVideo/mediaPool.js');
+const { trashFiles } = await import('../lib/trashFiles.js');
+const { deleteImage } = await import('./imageGen/local.js');
+
+const HISTORY = join(PATHS.data, 'video-history.json');
+const PAIR = 's'.repeat(40);
+const peer = (id, instanceId, extra = {}) => ({ id, name: id, instanceId, enabled: true, syncSecret: PAIR, syncCategories: { videoHistory: true }, ...extra });
+const row = (id, extra = {}) => ({ id, filename: `${id}.mp4`, createdAt: '2026-05-01T00:00:00.000Z', ...extra });
+const deleteFrame = (id, origin = 'peer-o') => ({ v: 1, category: 'videoHistory', op: 'delete', id, tombstone: { key: id, deletedAt: '2026-06-01T00:00:00.000Z' }, originInstanceId: origin });
+const readRows = async () => readJSONFile(HISTORY, []);
+const nextBusEvent = (name) => new Promise((resolve) => peerSyncBus.once(name, resolve));
+
+beforeEach(async () => {
+  mkdirSync(PATHS.videos, { recursive: true });
+  mkdirSync(PATHS.videoThumbnails, { recursive: true });
+  await atomicWrite(HISTORY, []);
+  await atomicWrite(join(PATHS.data, 'media-tombstones.json'), { version: 1, video: [], image: [] });
+  registry.peers = [peer('rec-origin', 'peer-o'), peer('rec-other', 'peer-x')];
+  trashFiles.mockClear();
+});
+
+describe('applyPeerSyncEvent', () => {
+  it('upsert event adds a row through the shared merge', async () => {
+    const result = await applyPeerSyncEvent({ id: 'rec-origin' }, {
+      v: 1, category: 'videoHistory', op: 'upsert', id: 'v1',
+      record: row('v1', { originInstanceId: 'peer-o', hidden: true, suppliedByInstanceId: 'forged' }),
+      originInstanceId: 'peer-o',
+    });
+    expect(result.applied).toBe(true);
+    const [stored] = await readRows();
+    expect(stored).toMatchObject({ id: 'v1', originInstanceId: 'peer-o', suppliedByInstanceId: 'peer-o' });
+    expect(stored).not.toHaveProperty('hidden');
+  });
+
+  it('delete event from origin removes row', async () => {
+    await atomicWrite(HISTORY, [row('v1', { originInstanceId: 'peer-o' })]);
+    const result = await applyPeerSyncEvent({ id: 'rec-origin' }, deleteFrame('v1'));
+    expect(result.applied).toBe(true);
+    expect(await readRows()).toEqual([]);
+    expect((await listMediaTombstones('video')).map((t) => t.key)).toEqual(['v1']);
+  });
+
+  it('delete event from a non-owner peer is ignored', async () => {
+    await atomicWrite(HISTORY, [row('v1', { originInstanceId: 'peer-o' })]);
+    const result = await applyPeerSyncEvent({ id: 'rec-other' }, deleteFrame('v1', 'peer-x'));
+    expect(result.applied).toBe(false);
+    expect((await readRows()).map((r) => r.id)).toEqual(['v1']);
+    expect(await listMediaTombstones('video')).toEqual([]);
+  });
+
+  it('delete event from a peer with media delete turned off is ignored', async () => {
+    registry.peers = [peer('rec-origin', 'peer-o', { mediaDeleteAllowed: false })];
+    await atomicWrite(HISTORY, [row('v1', { originInstanceId: 'peer-o' })]);
+    const result = await applyPeerSyncEvent({ id: 'rec-origin' }, deleteFrame('v1'));
+    expect(result.applied).toBe(false);
+    expect((await readRows()).map((r) => r.id)).toEqual(['v1']);
+  });
+
+  it('delete for a row not held here only records the tombstone', async () => {
+    const result = await applyPeerSyncEvent({ id: 'rec-other' }, deleteFrame('ghost', 'peer-x'));
+    expect(result.reason).toBe('tombstone-only');
+    expect((await listMediaTombstones('video')).map((t) => t.key)).toEqual(['ghost']);
+  });
+
+  it('delete for an unknown row is not recorded unless the sender is its origin', async () => {
+    const result = await applyPeerSyncEvent({ id: 'rec-other' }, deleteFrame('ghost', 'peer-o'));
+    expect(result.applied).toBe(false);
+    expect(await listMediaTombstones('video')).toEqual([]);
+  });
+
+  it('ignores a future-dated delete even from the origin', async () => {
+    await atomicWrite(HISTORY, [row('v1', { originInstanceId: 'peer-o' })]);
+    const future = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+    for (const id of ['v1', 'ghost']) {
+      const frame = { ...deleteFrame(id), tombstone: { key: id, deletedAt: future } };
+      expect((await applyPeerSyncEvent({ id: 'rec-origin' }, frame)).applied).toBe(false);
+    }
+    expect((await readRows()).map((r) => r.id)).toEqual(['v1']);
+    expect(await listMediaTombstones('video')).toEqual([]);
+  });
+
+  it('ignores an upsert for a row the sender does not originate', async () => {
+    const frame = { v: 1, category: 'videoHistory', op: 'upsert', id: 'v1', record: row('v1'), originInstanceId: 'peer-x' };
+    expect((await applyPeerSyncEvent({ id: 'rec-origin' }, frame)).applied).toBe(false);
+    expect(await readRows()).toEqual([]);
+  });
+
+  // Uniquely catches a merge that lets a sender claim an origin-less row and then delete it.
+  it('a newer upsert never gives a held origin-less row the sender\'s origin', async () => {
+    await atomicWrite(HISTORY, [row('v1')]);
+    const upsert = { v: 1, category: 'videoHistory', op: 'upsert', id: 'v1',
+      record: row('v1', { createdAt: '2026-07-01T00:00:00.000Z', prompt: 'example newer' }), originInstanceId: 'peer-o' };
+    expect((await applyPeerSyncEvent({ id: 'rec-origin' }, upsert)).applied).toBe(true);
+    const [stored] = await readRows();
+    expect(stored.prompt).toBe('example newer');
+    expect(stored).not.toHaveProperty('originInstanceId');
+    expect(stored).not.toHaveProperty('suppliedByInstanceId');
+    const frame = { ...deleteFrame('v1'), tombstone: { key: 'v1', deletedAt: '2026-08-01T00:00:00.000Z' } };
+    expect((await applyPeerSyncEvent({ id: 'rec-origin' }, frame)).applied).toBe(false);
+    expect((await readRows()).map((r) => r.id)).toEqual(['v1']);
+    expect(trashFiles).not.toHaveBeenCalled();
+  });
+
+  it('malformed frame does not throw', async () => {
+    const frames = [null, 'frame', 42, [], {}, { v: 2, category: 'videoHistory', op: 'upsert', id: 'v1', record: row('v1'), originInstanceId: 'peer-o' },
+      { ...deleteFrame('v1'), extra: true }, { ...deleteFrame('v1'), tombstone: { key: 'other', deletedAt: '2026-06-01T00:00:00.000Z' } }];
+    for (const frame of frames) {
+      await expect(applyPeerSyncEvent({ id: 'rec-origin' }, frame)).resolves.toMatchObject({ applied: false });
+    }
+    await expect(applyPeerSyncEvent({ id: 'rec-missing' }, deleteFrame('v1'))).resolves.toMatchObject({ applied: false });
+  });
+
+  it('ignores a peer this install does not sync video history with', async () => {
+    registry.peers = [peer('rec-origin', 'peer-o', { syncCategories: { videoHistory: false } })];
+    const frame = { v: 1, category: 'videoHistory', op: 'upsert', id: 'v1', record: row('v1'), originInstanceId: 'peer-o' };
+    expect((await applyPeerSyncEvent({ id: 'rec-origin' }, frame)).applied).toBe(false);
+    expect(await readRows()).toEqual([]);
+  });
+});
+
+const imagePeer = (id, instanceId, extra = {}) => peer(id, instanceId, { syncCategories: { mediaCollections: true }, ...extra });
+const imageDeleteFrame = (key, origin = 'peer-o') => ({ v: 1, category: 'imageHistory', op: 'delete', id: key, tombstone: { key, deletedAt: '2026-06-01T00:00:00.000Z' }, originInstanceId: origin });
+function seedImage(filename, sidecar) {
+  mkdirSync(PATHS.images, { recursive: true });
+  writeFileSync(join(PATHS.images, filename), 'synthetic');
+  writeFileSync(join(PATHS.images, filename.replace(/\.png$/, '.metadata.json')), JSON.stringify({ prompt: 'p', createdAt: '2026-05-01T00:00:00.000Z', ...sidecar }));
+}
+const trashedImage = (filename) => trashFiles.mock.calls.some(([paths]) => paths.includes(join(PATHS.images, filename)));
+const imageTombstones = async () => (await listMediaTombstones('image')).map((t) => t.key);
+
+describe('applyPeerSyncEvent holding frames', () => {
+  const holdingFrame = (held, origin = 'peer-o', category = 'videoHistory') => ({
+    v: 1, category, op: 'holding', id: 'v1.mp4', holding: { held }, originInstanceId: origin,
+  });
+  const holderNames = async () => {
+    const { listMediaHolders } = await import('./mediaHolders.js');
+    return (await listMediaHolders()).items['video:v1.mp4']?.holders.map((h) => h.instanceId) ?? [];
+  };
+
+  beforeEach(async () => {
+    await atomicWrite(join(PATHS.data, 'media-holders.json'), { version: 1, holdings: {}, releases: [] });
+  });
+
+  it("records the sender's own holding and its release", async () => {
+    expect((await applyPeerSyncEvent({ id: 'rec-origin' }, holdingFrame(true))).applied).toBe(true);
+    expect(await holderNames()).toEqual(['peer-o']);
+    expect((await applyPeerSyncEvent({ id: 'rec-origin' }, holdingFrame(false))).applied).toBe(true);
+    expect(await holderNames()).toEqual([]);
+  });
+
+  it('a host that reports it no longer holds the file stops being listed and streamed from', async () => {
+    const { markHosted, listHostedEntries } = await import('./peerHostedMedia.js');
+    await markHosted('peer-o', [{ kind: 'video', filename: 'v1.mp4' }]);
+    expect(await holderNames()).toEqual(['peer-o']);
+    await applyPeerSyncEvent({ id: 'rec-origin' }, holdingFrame(false));
+    expect(await holderNames()).toEqual([]);
+    expect(await listHostedEntries()).not.toHaveProperty(['video:v1.mp4']);
+  });
+
+  it('ignores a holding frame that speaks for another machine', async () => {
+    const result = await applyPeerSyncEvent({ id: 'rec-other' }, holdingFrame(true, 'peer-o'));
+    expect(result.applied).toBe(false);
+    expect(await holderNames()).toEqual([]);
+  });
+});
+
+describe('applyPeerSyncEvent for gallery images', () => {
+  beforeEach(() => {
+    registry.peers = [imagePeer('rec-origin', 'peer-o'), imagePeer('rec-other', 'peer-x')];
+  });
+
+  it("deletes a held image on its owner's delete frame", async () => {
+    seedImage('fox.png', { originInstanceId: 'peer-o' });
+    const result = await applyPeerSyncEvent({ id: 'rec-origin' }, imageDeleteFrame('fox.png'));
+    expect(result.applied).toBe(true);
+    expect(trashedImage('fox.png')).toBe(true);
+    expect(await imageTombstones()).toEqual(['fox.png']);
+  });
+
+  it("spares a copy whose sidecar was stamped after the owner's delete under a re-used name", async () => {
+    // imageDeleteFrame's tombstone is dated 2026-06-01.
+    seedImage('fresh.png', { originInstanceId: 'peer-o', createdAt: '2026-07-01T00:00:00.000Z' });
+    expect((await applyPeerSyncEvent({ id: 'rec-origin' }, imageDeleteFrame('fresh.png'))).applied).toBe(false);
+    expect(trashFiles).not.toHaveBeenCalled();
+  });
+
+  it("retires a peer's copy with no creation stamp even when its file landed after the delete", async () => {
+    // A pulled file is born when it lands; that time says nothing about the image.
+    seedImage('pulled.png', { originInstanceId: 'peer-o', createdAt: undefined });
+    const later = new Date('2026-07-01T00:00:00.000Z');
+    utimesSync(join(PATHS.images, 'pulled.png'), later, later);
+    expect((await applyPeerSyncEvent({ id: 'rec-origin' }, imageDeleteFrame('pulled.png'))).applied).toBe(true);
+    expect(trashedImage('pulled.png')).toBe(true);
+  });
+
+  it('ignores a delete frame from a peer that does not own the image', async () => {
+    seedImage('fox.png', { originInstanceId: 'peer-o' });
+    const result = await applyPeerSyncEvent({ id: 'rec-other' }, imageDeleteFrame('fox.png', 'peer-x'));
+    expect(result.applied).toBe(false);
+    expect(trashFiles).not.toHaveBeenCalled();
+    expect(await imageTombstones()).toEqual([]);
+  });
+
+  it('records a delete for an image not held here only when the sender is its origin', async () => {
+    expect((await applyPeerSyncEvent({ id: 'rec-origin' }, imageDeleteFrame('ghost.png'))).reason).toBe('tombstone-only');
+    expect((await applyPeerSyncEvent({ id: 'rec-other' }, { ...imageDeleteFrame('other.png'), originInstanceId: 'peer-o' })).applied).toBe(false);
+    expect(await imageTombstones()).toEqual(['ghost.png']);
+  });
+
+  it('ignores image frames from a peer this install shares no media with, and image upserts', async () => {
+    registry.peers = [peer('rec-origin', 'peer-o')];
+    seedImage('fox.png', { originInstanceId: 'peer-o' });
+    expect((await applyPeerSyncEvent({ id: 'rec-origin' }, imageDeleteFrame('fox.png'))).applied).toBe(false);
+    registry.peers = [imagePeer('rec-origin', 'peer-o')];
+    const upsert = { v: 1, category: 'imageHistory', op: 'upsert', id: 'new.png', record: { id: 'new.png' }, originInstanceId: 'peer-o' };
+    expect((await applyPeerSyncEvent({ id: 'rec-origin' }, upsert)).applied).toBe(false);
+    expect(trashFiles).not.toHaveBeenCalled();
+  });
+});
+
+describe('local emission', () => {
+  it('an owner image delete emits its tombstone; a peer-owned or remote-tombstone one does not', async () => {
+    const frames = [];
+    const onEvent = (event) => frames.push(event);
+    peerSyncBus.on('event', onEvent);
+    seedImage('mine.png', { originInstanceId: 'local-inst' });
+    seedImage('theirs.png', { originInstanceId: 'peer-o' });
+    seedImage('retired.png', { originInstanceId: 'local-inst' });
+    const changed = [];
+    const onChanged = (event) => changed.push(event);
+    peerSyncBus.on('media-history-changed', onChanged);
+    await deleteImage('mine.png');
+    await deleteImage('theirs.png');
+    await deleteImage('retired.png', { fromRemoteTombstone: true });
+    await vi.waitFor(() => {
+      expect(changed).toHaveLength(3);
+      expect(frames.length).toBeGreaterThan(0);
+    });
+    // Each announce settles within a few promise turns; drain them before
+    // asserting no further frame arrives.
+    for (let turn = 0; turn < 5; turn++) await new Promise((resolve) => setImmediate(resolve));
+    peerSyncBus.off('event', onEvent);
+    peerSyncBus.off('media-history-changed', onChanged);
+    expect(frames).toEqual([expect.objectContaining({ category: 'imageHistory', op: 'delete', id: 'mine.png', tombstone: expect.objectContaining({ key: 'mine.png' }) })]);
+    expect(await imageTombstones()).toEqual(expect.arrayContaining(['mine.png', 'theirs.png']));
+    expect(await imageTombstones()).not.toContain('retired.png');
+  });
+
+  it('a locally added row is announced as an upsert with machine-local fields stripped', async () => {
+    const emitted = nextBusEvent('event');
+    await mutateVideoHistory((h) => { h.unshift(row('mine', { hidden: true })); return h; });
+    const event = await emitted;
+    expect(event).toMatchObject({ op: 'upsert', id: 'mine', originInstanceId: 'local-inst' });
+    expect(event.record).not.toHaveProperty('hidden');
+  });
+
+  it('an owner delete emits its tombstone', async () => {
+    await atomicWrite(HISTORY, [row('v1', { originInstanceId: 'local-inst' })]);
+    const emitted = nextBusEvent('event');
+    await deleteHistoryItem('v1');
+    expect(await emitted).toMatchObject({ op: 'delete', id: 'v1', tombstone: { key: 'v1' } });
+  });
+
+  it('an owner delete is still announced when the music-video forget fails', async () => {
+    await atomicWrite(HISTORY, [row('v1', { originInstanceId: 'local-inst' })]);
+    forgetDeletedMusicVideoAssets.mockRejectedValueOnce(new Error('example forget failure'));
+    const emitted = nextBusEvent('event');
+    await expect(deleteHistoryItem('v1')).resolves.toEqual({ ok: true });
+    expect(await emitted).toMatchObject({ op: 'delete', id: 'v1' });
+  });
+
+  it('fromRemoteTombstone delete does not emit', async () => {
+    await atomicWrite(HISTORY, [row('v1', { originInstanceId: 'local-inst' })]);
+    const onEvent = vi.fn();
+    peerSyncBus.on('event', onEvent);
+    const changed = nextBusEvent('media-history-changed');
+    await deleteHistoryItem('v1', { fromRemoteTombstone: true });
+    expect(await changed).toMatchObject({ kind: 'video', op: 'delete', ids: ['v1'] });
+    await new Promise((resolve) => setImmediate(resolve));
+    peerSyncBus.off('event', onEvent);
+    expect(onEvent).not.toHaveBeenCalled();
+  });
+});
+
+afterAll(cleanup);

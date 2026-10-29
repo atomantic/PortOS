@@ -453,24 +453,27 @@ export async function updateUniverse(id, patchOrMutator = {}, options = {}) {
   // already precise.
   // `options.afterWrite(record)` keeps an idempotent catalog membership write
   // inside this same queue, including no-op retries. It must not re-enter it.
+  // `options.transactional` gives the mutator and afterWrite a shared client
+  // and commits their DB work with the PG universe write before projection.
+  // The file backend retains compensating writes for the test/dev escape hatch.
   // `options.updatedAt` stamps that record clock instead of receipt time — only
   // the share-bucket importer's remote LWW apply passes it, so the winning
   // source revision's clock survives and the next one can still win (#10761).
   const {
     silent = false, canonProjectionGuard = null, canonProjectionIdentityIds = [], replaceCategories = false,
-    touchesCanon = true, updatedAt: incomingUpdatedAt = null, afterWrite = null,
+    touchesCanon = true, updatedAt: incomingUpdatedAt = null, afterWrite = null, transactional = false,
   } = options;
   const s = store();
-  const { merged, nameChanged, skipped, removedCharacterIds, prevEphemeral, nextEphemeral } = await s.queueRecordWrite(id, async () => {
-    const cur = await s.loadOne(id);
+  const write = async (client = null) => {
+    const cur = await s.loadOne(id, { client });
     if (!cur) throw codedError(`Universe not found: ${id}`, ERR_NOT_FOUND);
     if (cur.deleted) throw codedError(`Universe not found: ${id}`, ERR_NOT_FOUND);
 
     let patch;
     if (isMutator) {
-      patch = await patchOrMutator(cur);
+      patch = await patchOrMutator(cur, { client });
       if (patch === null || patch === undefined) {
-        if (afterWrite) await afterWrite(cur);
+        if (afterWrite) await afterWrite(cur, { client });
         return { merged: cur, nameChanged: false, skipped: true };
       }
       // `typeof === 'object'` matches arrays and null — reject both so a stray
@@ -669,28 +672,14 @@ export async function updateUniverse(id, patchOrMutator = {}, options = {}) {
     if (Array.isArray(mergedRecord.characters)) {
       mergedRecord.characters = pruneStaleReferenceSheets(mergedRecord.characters);
     }
-    await s.writeRecord(id, mergedRecord);
-    if (afterWrite) await afterWrite(mergedRecord).catch(async (error) => {
+    await s.writeRecord(id, mergedRecord, { client });
+    if (afterWrite) await afterWrite(mergedRecord, { client }).catch(async (error) => {
       // Keep the compatibility cache unchanged when its association write
-      // fails. The queue remains held through compensation and retry.
-      await s.writeRecord(id, cur);
+      // fails. A PG transaction rolls it back; the file backend needs the
+      // existing compensating write. The queue is held throughout.
+      if (!client || s.getBackendName() !== 'postgres') await s.writeRecord(id, cur);
       throw error;
     });
-    // Project the freshly-persisted canon arrays back into their catalog rows
-    // SYNCHRONOUSLY (inside the queue) so the authoritative catalog_ingredients
-    // row can never lag the embedded cache on the same request. Best-effort:
-    // projectToCatalog never throws (per-entry failures are logged), but wrap
-    // the import/call anyway — this runs inside the queued write critical
-    // section and an uncaught throw here would reject the whole save. Skipped
-    // when the patch can't have touched canon arrays (rename/scalar PATCH).
-    if (touchesCanon && (isMutator || 'characters' in patch || 'places' in patch || 'objects' in patch)) {
-      try {
-        const { projectToCatalog } = await import('../catalogCanonProjection.js');
-        await projectToCatalog(id, mergedRecord, { guardToken: canonProjectionGuard, guardIdentityIds: canonProjectionIdentityIds });
-      } catch (err) {
-        console.error(`🔁 canon→catalog projection failed for ${id}: ${err.message}`);
-      }
-    }
     // Diff inside the queue so we read against the freshest merged state;
     // gate on patches that could have touched characters (mutator or
     // literal-PATCH carrying `characters`) — rename/scalar PATCHes are the
@@ -708,6 +697,7 @@ export async function updateUniverse(id, patchOrMutator = {}, options = {}) {
       nameChanged: mergedRecord.name !== cur.name,
       skipped: false,
       removedCharacterIds,
+      projectCanon: touchesCanon && (isMutator || 'characters' in patch || 'places' in patch || 'objects' in patch),
       // Surface the (prev, next) ephemeral pair so the post-queue side
       // effects can wire subscribe / unsubscribe for the transition.
       // Compare against `cur` (the pre-merge record) so transitions are
@@ -715,6 +705,26 @@ export async function updateUniverse(id, patchOrMutator = {}, options = {}) {
       prevEphemeral: cur.ephemeral === true,
       nextEphemeral: mergedRecord.ephemeral === true,
     };
+  };
+  const { merged, nameChanged, skipped, removedCharacterIds, prevEphemeral, nextEphemeral } = await s.queueRecordWrite(id, async () => {
+    // Backend selection can itself use the pool; finish it before checking out
+    // a transaction client, then use that client for both the read and write.
+    if (transactional) await s.prepare();
+    const result = transactional
+      ? await (await import('../../lib/db.js')).withTransaction(write)
+      : await write();
+    if (transactional && !result.skipped && s.getBackendName() === 'postgres') s.transactionCommitted();
+    // Keep projection inside the universe queue, but after an optional DB
+    // transaction commits so its catalog rows are visible to the projection.
+    if (result.projectCanon) {
+      try {
+        const { projectToCatalog } = await import('../catalogCanonProjection.js');
+        await projectToCatalog(id, result.merged, { guardToken: canonProjectionGuard, guardIdentityIds: canonProjectionIdentityIds });
+      } catch (err) {
+        console.error(`🔁 canon→catalog projection failed for ${id}: ${err.message}`);
+      }
+    }
+    return result;
   });
   if (skipped) return merged;
   // Slot map is in-process; without this it persists past the logical delete.

@@ -75,14 +75,14 @@ describe('attachMedia', () => {
 
   it('defaults role/caption to null when omitted', async () => {
     await catalogDB.attachMedia('i1', 'hero.png', 'reference');
-    expect(calls[0].params).toEqual(['i1', 'hero.png', 'reference', null, null]);
+    expect(calls.at(-1).params).toEqual(['i1', 'hero.png', 'reference', null, null]);
   });
 
   it('stores generation provenance alongside the attachment', async () => {
     const metadata = { format: 'a1111', prompt: 'a paper boat', steps: 24, seed: 42 };
     await catalogDB.attachMedia('i1', 'render.png', 'reference', { metadata });
-    expect(calls[0].sql).toMatch(/metadata\)/i);
-    expect(calls[0].params).toEqual(['i1', 'render.png', 'reference', null, null, JSON.stringify(metadata)]);
+    expect(calls.at(-1).sql).toMatch(/metadata\)/i);
+    expect(calls.at(-1).params).toEqual(['i1', 'render.png', 'reference', null, null, JSON.stringify(metadata)]);
   });
 
   it('does not replace an attachment that appeared after a completion hook read', async () => {
@@ -146,6 +146,8 @@ describe('detachMedia', () => {
 describe('setPortraitMedia', () => {
   it('demotes other live portraits then attaches the new one', async () => {
     await catalogDB.setPortraitMedia('i1', 'new.png', { caption: 'now' });
+    // Table write lock before the row lock, the order merge also uses.
+    expect(calls.shift().sql).toBe('LOCK TABLE catalog_ingredient_media IN ROW EXCLUSIVE MODE');
     expect(calls.shift().sql).toMatch(/SELECT id FROM catalog_ingredients WHERE id = catalog_resolve_ingredient_id\(\$1\) FOR UPDATE/);
     // Demote only after locking the owning ingredient.
     expect(calls[0].sql).toMatch(/UPDATE catalog_ingredient_media SET deleted = true/i);

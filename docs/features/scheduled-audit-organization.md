@@ -14,7 +14,8 @@ better-data-safety, better-simplify, better-module-hygiene, better-api-contract,
 better-ui-lifecycle, better-observability, and better-copy, plus the service
 and data-platform lenses better-infrastructure, better-data-integrity,
 better-reliability, better-privacy, and better-cost-efficiency, and the gap
-lenses better-feature-completeness and better-workflow-recovery. The existing
+lenses better-feature-completeness and better-workflow-recovery, and
+better-over-engineering. The existing
 better-* names, including better-dev-environment, remain unchanged.
 
 Operational tasks (claims, review pipelines, reconciliation, releases, repo sync),
@@ -52,6 +53,8 @@ needs every pass. Existing evidence and urgent defects take priority.
    missing boundary coverage. Fix security, data-loss, and runtime defects first.
 2. **Structural drift**: consolidate sources of truth before polishing code
    that may disappear. **Simplify**: remove dead and duplicate code next.
+   **Over-engineering** then removes process and validation machinery that
+   costs more than the harm it prevents.
 3. **Module hygiene**: establish ownership, reuse, and boundaries. Remove
    unnecessary dependencies once the surviving owners are clear.
 4. **Complexity**: remeasure branching in surviving functions and simplify the

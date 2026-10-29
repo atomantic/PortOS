@@ -12,8 +12,20 @@ import { stat, access } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { compactSource } from '../mediaAssetIndex/logic.js';
 import { PATHS, readJSONFile, atomicWrite } from '../../lib/fileUtils.js';
+import { compareNewerWins } from '../../lib/lwwTimestamp.js';
 
 const HISTORY_FILE = join(PATHS.data, 'video-history.json');
+
+/**
+ * The stamp a video tombstone must postdate to retire this row: its creation,
+ * or a later `restoredAt` its owner set when the user brought the row back
+ * from a backup after deleting it (mediaRestoreTombstones.js). `createdAt`
+ * stays the row's immutable LWW key; an older peer that ignores `restoredAt`
+ * keeps treating the row as deleted, as before.
+ */
+export function videoRowLiveStamp(row) {
+  return compareNewerWins(row?.restoredAt, row?.createdAt) ? row.restoredAt : row?.createdAt;
+}
 
 // STRICT (#4115): every write to this file goes `loadHistory` → mutate →
 // `saveHistory`, so a present-but-unreadable video-history.json swallowed to `[]`
@@ -107,13 +119,53 @@ export async function getHistoryItem(id) {
 // file is not rewritten (an idempotent replay stays a true no-op).
 export const HISTORY_UNCHANGED = Symbol('video-history-unchanged');
 let historyWriteTail = Promise.resolve();
-export function mutateVideoHistory(mutator) {
+// `originInstanceId` (the machine that created the row) is immutable once set:
+// a row rebuilt under a known id inherits the prior row's origin, and only
+// genuinely new ids get the local id. Peer merges pass `{ stampOrigin: false }`
+// because rows they add were created elsewhere. Stamped only when the id is known.
+export function mutateVideoHistory(mutator, { stampOrigin = true } = {}) {
   const run = historyWriteTail.then(async () => {
     const history = await loadHistory();
-    const next = await mutator(Array.isArray(history) ? history : []);
+    const base = Array.isArray(history) ? history : [];
+    // Captured before the mutator, which may edit rows in place.
+    const priorOrigins = stampOrigin ? new Map(base.map((r) => [r?.id, r?.originInstanceId])) : null;
+    const next = await mutator(base);
     if (next === HISTORY_UNCHANGED) return history;
     const toSave = Array.isArray(next) ? next : history;
+    // Rows this local mutation added (new ids); announced to peers after the save.
+    const added = [];
+    let origin = null;
+    if (stampOrigin && Array.isArray(toSave)) {
+      for (const r of toSave) {
+        if (!r || typeof r !== 'object') continue;
+        if (!priorOrigins.has(r.id)) added.push(r);
+        else if (priorOrigins.get(r.id) && r.originInstanceId !== priorOrigins.get(r.id)) r.originInstanceId = priorOrigins.get(r.id);
+      }
+      if (added.length > 0) {
+        // Lazy: identity pulls in fileUtils at load; a stamping failure must never lose the row.
+        origin = await import('../instanceIdentity.js')
+          .then((m) => m.getInstanceId().then((id) => (id === m.UNKNOWN_INSTANCE_ID ? null : id)))
+          .catch((err) => { console.log(`⏭️ Video origin stamp skipped: ${err.message}`); return null; });
+        // A new id on the local path was created HERE, even when the mutator spread
+        // a peer's source row (upscale, trim): origin is this machine, never a
+        // copied one, and the copied machine-local supplier and pending delete are dropped.
+        for (const r of added) {
+          delete r.suppliedByInstanceId;
+          delete r.pendingDelete;
+          if (origin) r.originInstanceId = origin;
+          else delete r.originInstanceId;
+        }
+      }
+    }
     await saveHistory(toSave);
+    if (added.length > 0) {
+      // After the commit, once per added row; peer merges (stampOrigin:false) never announce.
+      // Copied now: the caller receives `toSave` and may edit it before the import settles.
+      const committed = added.map((r) => ({ ...r }));
+      void import('../peerSyncEventBus.js')
+        .then((m) => m.announceLocalVideoRows(committed, origin))
+        .catch((err) => console.error(`❌ Video row announce failed: ${err.message}`));
+    }
     return toSave;
   });
   // Keep the tail alive even if this mutation rejects, so one failure doesn't

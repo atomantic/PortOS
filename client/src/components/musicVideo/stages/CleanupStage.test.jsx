@@ -43,6 +43,18 @@ describe('production cleanup', () => {
     expect(screen.getByText('Superseded — safe to remove')).toBeInTheDocument();
   });
 
+  it('allows recovery when retained upscales are the only pending work', async () => {
+    getMusicVideoRenderCleanup.mockResolvedValue({ finals: [{ id: 'upscale', bytes: 4000, pending: true, recoverable: true, reason: 'Upscaled deliverable retained; ready to restore to video history' }], segments: { stale: [], unusedLooks: [] } });
+    cleanupMusicVideoRenders.mockResolvedValue({ finals: [], segments: { stale: [], unusedLooks: [] } });
+    render(<CleanupStage board={{ project: { id: 'example-project' } }} />);
+    const recover = await screen.findByRole('button', { name: 'Recover upscales and remove superseded renders' });
+    expect(recover).toBeEnabled();
+    expect(screen.getByText(/restore retained upscales \(1\) to video history without removing their files/)).toBeInTheDocument();
+    fireEvent.click(recover);
+    await waitFor(() => expect(cleanupMusicVideoRenders).toHaveBeenCalledWith('example-project', { unusedLooks: false }, { silent: true }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Remove superseded renders' })).toBeDisabled());
+  });
+
   it('keeps mutation failures visible when cleanup socket events refresh the inventory', async () => {
     let rejectCleanup;
     cleanupMusicVideoRenders.mockReturnValueOnce(new Promise((_resolve, reject) => { rejectCleanup = reject; }));

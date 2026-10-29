@@ -21,6 +21,7 @@ import { DEFAULT_PEER_PORT } from '../lib/ports.js';
 import { peerBaseUrl } from '../lib/peerUrl.js';
 import { isPeerApiRequestAllowed } from '../lib/apiAccessPolicy.js';
 import { peerFetch, peerAuthHeaders, PEER_AUTH_HEADER } from '../lib/peerHttpClient.js';
+import { isPairedPeer, PAIR_SECRET_MIN_LENGTH } from '../lib/peerPairing.js';
 import { withAbortTimeout } from '../lib/abortTimeout.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { getSelfHost } from '../lib/peerSelfHost.js';
@@ -168,7 +169,7 @@ function sameAuth(a, b) {
 // are local-only too, so peers cannot discover or influence our assignments.
 export function redactPeerForWire(peer) {
   if (!peer || typeof peer !== 'object') return peer;
-  if (!('auth' in peer) && !('mediaProvider' in peer) && !('mediaProviderStatus' in peer)
+  if (!('auth' in peer) && !('mediaProvider' in peer) && !('mediaDeleteAllowed' in peer) && !('mediaProviderStatus' in peer)
     && !('tcAddress' in peer) && !('syncSecret' in peer)) {
     return peer;
   }
@@ -176,6 +177,7 @@ export function redactPeerForWire(peer) {
     auth: _auth,
     syncSecret: _syncSecret,
     mediaProvider: _mediaProvider,
+    mediaDeleteAllowed: _mediaDeleteAllowed,
     mediaProviderStatus: _mediaProviderStatus,
     tcAddress: _tcAddress,
     ...rest
@@ -344,7 +346,18 @@ export { DEFAULT_SYNC_CATEGORIES };
 // file from the peer on demand (see services/peerHostedMedia.js).
 export const MEDIA_SYNC_MODES = Object.freeze(['copy', 'host']);
 export const DEFAULT_MEDIA_SYNC_MODE = 'copy';
+// A peer registered from now on hosts rather than copies, so pairing a machine
+// no longer multiplies every render. The absent field keeps reading as `copy`:
+// a peer paired before this default keeps the mode it has always had.
+export const NEW_PEER_MEDIA_SYNC_MODE = 'host';
 export const peerMediaSyncMode = (peer) => (MEDIA_SYNC_MODES.includes(peer?.mediaSyncMode) ? peer.mediaSyncMode : DEFAULT_MEDIA_SYNC_MODE);
+
+// Standing capability: may this paired peer delete media on THIS machine?
+// Peers are trusted; the grant is ON unless the operator explicitly refuses it
+// (an absent field reads as allowed). Announce-created peers store no field: an
+// announcement alone grants nothing, and the delete route separately requires a
+// pair-authenticated caller. Machine-local — set per peer in Instances.
+export const peerMayDeleteMedia = (peer) => peer?.mediaDeleteAllowed !== false;
 
 // Categories that stay on for a peer even when the user's master `syncEnabled`
 // switch is off — that switch predates them and means "don't replicate my
@@ -468,7 +481,7 @@ const PER_RECORD_CATEGORY_KINDS = Object.freeze([
 ]);
 
 export async function addPeer({ address, port = DEFAULT_PEER_PORT, name, host, auth, transport, protocol = 'http' }) {
-  const peer = await withData(async (data) => {
+  const peer = await withData(async (data, afterCommit) => {
     const normalizedHost = validHost(host);
     const normalizedAuth = sanitizePeerAuth(auth);
     const entry = {
@@ -506,13 +519,15 @@ export async function addPeer({ address, port = DEFAULT_PEER_PORT, name, host, a
       // Consumer-side routing is explicit and machine-local. Enabling a peer
       // here never changes that peer's provider settings.
       mediaProvider: { enabled: false, audioModels: [], imageModels: [], videoModels: [] },
+      mediaDeleteAllowed: true,
+      mediaSyncMode: NEW_PEER_MEDIA_SYNC_MODE,
       consecutiveFailures: 0,
       nextProbeAt: null,
       directions: ['outbound']
     };
     data.peers.push(entry);
     console.log(`🌐 Peer added: ${entry.name} (${peerBaseUrl(entry)})`);
-    instanceEvents.emit('peers:updated', data.peers);
+    afterCommit(() => instanceEvents.emit('peers:updated', data.peers));
     return entry;
   });
   void announceSelf(peer);
@@ -531,12 +546,12 @@ export async function addPeer({ address, port = DEFAULT_PEER_PORT, name, host, a
  */
 export async function setTailcatPeerPort(id, port) {
   if (!Number.isInteger(port) || port < 1 || port > 65535) return null;
-  const updated = await withData(async (data) => {
+  const updated = await withData(async (data, afterCommit) => {
     const peer = data.peers.find(p => p.id === id && p.transport === 'tailcat');
     if (!peer || peer.port === port) return peer || null;
     peer.port = port;
     console.log(`🐈 Tailcat peer ${peer.name} repointed to 127.0.0.1:${port}`);
-    instanceEvents.emit('peers:updated', data.peers);
+    afterCommit(() => instanceEvents.emit('peers:updated', data.peers));
     return peer;
   });
   // The relay pins the peer URL at connect time, so it has to redial the new port.
@@ -552,12 +567,12 @@ export async function removePeer(id, { stopTransport = true } = {}) {
     const { stopForwardForPeer } = await import('./tailcatPeer.js');
     await stopForwardForPeer(id);
   }
-  const removed = await withData(async (data) => {
+  const removed = await withData(async (data, afterCommit) => {
     const idx = data.peers.findIndex(p => p.id === id);
     if (idx === -1) return null;
     const [entry] = data.peers.splice(idx, 1);
     console.log(`🌐 Peer removed: ${entry.name}`);
-    instanceEvents.emit('peers:updated', data.peers);
+    afterCommit(() => instanceEvents.emit('peers:updated', data.peers));
     return entry;
   });
   // Retire that instance's federated usage digest. Without this the row stays in
@@ -589,11 +604,11 @@ export async function updatePeer(id, updates, { probe = true } = {}) {
   // sync is bidirectional (the user owns all machines). The actual send reads
   // the freshest persisted map at send time via the serialized queue below.
   let reciprocate = false;
-  const result = await withData(async (data) => {
+  const result = await withData(async (data, afterCommit) => {
     const peer = data.peers.find(p => p.id === id);
     if (!peer) return null;
     if (updates.syncSecret !== undefined) {
-      if (updates.syncSecret !== null && (typeof updates.syncSecret !== 'string' || updates.syncSecret.length < 32 || updates.syncSecret.length > 256)) {
+      if (updates.syncSecret !== null && (typeof updates.syncSecret !== 'string' || updates.syncSecret.length < PAIR_SECRET_MIN_LENGTH || updates.syncSecret.length > 256)) {
         throw new Error('Peer sync secret must contain 32 to 256 characters');
       }
       if (updates.syncSecret !== peer.syncSecret) {
@@ -615,6 +630,7 @@ export async function updatePeer(id, updates, { probe = true } = {}) {
     if (updates.mediaSyncMode !== undefined && MEDIA_SYNC_MODES.includes(updates.mediaSyncMode)) {
       peer.mediaSyncMode = updates.mediaSyncMode;
     }
+    if (typeof updates.mediaDeleteAllowed === 'boolean') peer.mediaDeleteAllowed = updates.mediaDeleteAllowed;
     if (updates.enabled !== undefined) peer.enabled = updates.enabled;
     if (updates.syncEnabled !== undefined) peer.syncEnabled = updates.syncEnabled;
     // Full-sync ("mirror everything") toggle. A false→true flip implies every
@@ -720,7 +736,7 @@ export async function updatePeer(id, updates, { probe = true } = {}) {
         peer.schemaGaps = updates.schemaGaps;
       }
     }
-    instanceEvents.emit('peers:updated', data.peers);
+    afterCommit(() => instanceEvents.emit('peers:updated', data.peers));
     return peer;
   });
   // Tear down the socket relay only after a real state transition so it can
@@ -792,7 +808,7 @@ async function pairPeerSyncSecretNow(id) {
   if (!selfInstanceId || selfInstanceId === UNKNOWN_INSTANCE_ID) {
     throw new ServerError('This instance identity is not ready for peer pairing.', { status: 409, code: 'INSTANCE_IDENTITY_REQUIRED' });
   }
-  const syncSecret = typeof peer.syncSecret === 'string' && peer.syncSecret.length >= 32 && peer.peerAuthAccepted !== true
+  const syncSecret = isPairedPeer(peer) && peer.peerAuthAccepted !== true
     ? peer.syncSecret
     : crypto.randomBytes(32).toString('base64url');
   const headers = {
@@ -850,7 +866,7 @@ async function pairPeerSyncSecretNow(id) {
  * (updatePeer replaces the whole map). An empty map is stored as no key.
  */
 export async function setPeerSchemaGap(instanceId, category, gapOrNull) {
-  return withData(async (data) => {
+  return withData(async (data, afterCommit) => {
     const peer = data.peers.find((p) => p.instanceId === instanceId);
     if (!peer) return null;
     const gaps = peer.schemaGaps && typeof peer.schemaGaps === 'object' && !Array.isArray(peer.schemaGaps) ? { ...peer.schemaGaps } : {};
@@ -862,7 +878,7 @@ export async function setPeerSchemaGap(instanceId, category, gapOrNull) {
     }
     if (Object.keys(gaps).length > 0) peer.schemaGaps = gaps;
     else delete peer.schemaGaps;
-    instanceEvents.emit('peers:updated', data.peers);
+    afterCommit(() => instanceEvents.emit('peers:updated', data.peers));
     return peer;
   });
 }
@@ -870,7 +886,7 @@ export async function setPeerSchemaGap(instanceId, category, gapOrNull) {
 /** Save a pair secret only for the already-registered peer named by its identity header. */
 export async function acceptPeerSyncSecretFromPeer(instanceId, syncSecret) {
   let changed = false;
-  const peer = await withData(async (data) => {
+  const peer = await withData(async (data, afterCommit) => {
     const matches = data.peers.filter((item) => item.instanceId === instanceId);
     if (matches.length !== 1) return null;
     const entry = matches[0];
@@ -886,7 +902,7 @@ export async function acceptPeerSyncSecretFromPeer(instanceId, syncSecret) {
       entry.directions = [...directions, 'inbound'];
       changed = true;
     }
-    instanceEvents.emit('peers:updated', data.peers);
+    afterCommit(() => instanceEvents.emit('peers:updated', data.peers));
     return entry;
   });
   if (changed && peer) disconnectFromPeer(peer.id);
@@ -1192,7 +1208,7 @@ export async function handleAnnounce({ address, port, instanceId, name, host }) 
   // branch, which records a sighting without trusting it).
   let markedOnlinePeer = null;
   let peerToWake = null;
-  const result = await withData(async (data) => {
+  const result = await withData(async (data, afterCommit) => {
     // Check for existing peer by instanceId
     let existing = data.peers.find(p => p.instanceId === instanceId);
     // instanceId is public (GET /api/system/health returns it unauthenticated),
@@ -1231,7 +1247,7 @@ export async function handleAnnounce({ address, port, instanceId, name, host }) 
     if (existing && !matchedByAddress && existing.transport !== 'tailcat' && existing.address !== address) {
       console.warn(`⚠️ Peer announce instanceId matched but address mismatched (expected ${existing.address}, got ${address}) — ignoring host/port/name update`);
       existing.lastSeen = new Date().toISOString();
-      instanceEvents.emit('peers:updated', data.peers);
+      afterCommit(() => instanceEvents.emit('peers:updated', data.peers));
       return { created: false, peer: existing };
     }
 
@@ -1261,7 +1277,7 @@ export async function handleAnnounce({ address, port, instanceId, name, host }) 
       existing.directions = existing.directions || [];
       if (!existing.directions.includes('inbound')) existing.directions.push('inbound');
       console.log(`🌐 Peer announced (existing): ${existing.name} (${address}:${port})`);
-      instanceEvents.emit('peers:updated', data.peers);
+      afterCommit(() => instanceEvents.emit('peers:updated', data.peers));
       return { created: false, peer: existing };
     }
 
@@ -1287,13 +1303,14 @@ export async function handleAnnounce({ address, port, instanceId, name, host }) 
       enabled: true,
       syncEnabled: false,
       syncCategories: { ...DEFAULT_SYNC_CATEGORIES },
+      mediaSyncMode: NEW_PEER_MEDIA_SYNC_MODE,
       consecutiveFailures: 0,
       nextProbeAt: null,
       directions: ['inbound']
     };
     data.peers.push(peer);
     console.log(`🌐 Peer announced (new): ${peer.name} (${peerBaseUrl(peer)})`);
-    instanceEvents.emit('peers:updated', data.peers);
+    afterCommit(() => instanceEvents.emit('peers:updated', data.peers));
     return { created: true, peer };
   });
 
@@ -1425,7 +1442,7 @@ export async function applyReciprocalSync(instanceId, categories, { fullSync } =
   const turnedOnKinds = [];
   let backfillInstanceId = null;
   let changed = false;
-  const peer = await withData(async (data) => {
+  const peer = await withData(async (data, afterCommit) => {
     const entry = data.peers.find(p => p.instanceId === instanceId);
     if (!entry || entry.syncSecret) return null;
     // Default the baseline so a partial stored map doesn't make absent-vs-false
@@ -1506,7 +1523,7 @@ export async function applyReciprocalSync(instanceId, categories, { fullSync } =
     }
     if (turnedOnKinds.length > 0) backfillInstanceId = entry.instanceId || null;
     changed = true;
-    instanceEvents.emit('peers:updated', data.peers);
+    afterCommit(() => instanceEvents.emit('peers:updated', data.peers));
     return entry;
   });
   if (!peer) return { changed: false, peer: null };
@@ -1568,13 +1585,13 @@ export async function requestReciprocalSync(peer, categories, { fullSync } = {})
 }
 
 async function markDirection(peerId, direction) {
-  await withData(async (data) => {
+  await withData(async (data, afterCommit) => {
     const peer = data.peers.find(p => p.id === peerId);
     if (!peer) return;
     peer.directions = peer.directions || [];
     if (!peer.directions.includes(direction)) {
       peer.directions.push(direction);
-      instanceEvents.emit('peers:updated', data.peers);
+      afterCommit(() => instanceEvents.emit('peers:updated', data.peers));
     }
   });
 }

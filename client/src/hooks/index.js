@@ -67,6 +67,7 @@ export { default as useSceneClipPlayback } from './useSceneClipPlayback.js';
 export { default as useSceneRenderLifecycle } from './useSceneRenderLifecycle.js';
 export { default as useMusicVideoAutoReview } from './useMusicVideoAutoReview.js';
 export { default as useMusicVideoCastAndSets } from './useMusicVideoCastAndSets.js';
+export { default as useMusicVideoCastingChanges } from './useMusicVideoCastingChanges.js';
 export { default as useMusicVideoDevArtifacts } from './useMusicVideoDevArtifacts.js';
 export { default as useMusicVideoExcerpts } from './useMusicVideoExcerpts.js';
 export { default as useMusicVideoCoverLettering } from './useMusicVideoCoverLettering.js';
@@ -106,6 +107,7 @@ export { default as useLocalModels } from './useLocalModels.js';
 export { default as useVisionModelIds } from './useVisionModelIds.js';
 export { default as useToolUseModelIds } from './useToolUseModelIds.js';
 export * from './useToolUseModelIds.js';
+export { default as usePendingDeletePeerNames } from './usePendingDeletePeerNames.js';
 export { default as usePreviewRoute } from './usePreviewRoute.js';
 export { default as useProviderCatalog } from './useProviderCatalog.js';
 export * from './useProviderCatalog.js';
@@ -188,6 +190,7 @@ export * from './useImageGenPageRuntime.js';
 export * from './useSpritePendingRenders.js';
 export { default as useSpriteRecordCrud } from './useSpriteRecordCrud.js';
 export * from './useMediaCompletionRefresh.js';
+export * from './useMediaHolders.js';
 export * from './useOpenClawAttachments.js';
 
 // === Settings-derived shared state ===

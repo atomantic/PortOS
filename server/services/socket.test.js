@@ -60,6 +60,8 @@ vi.mock('./beeperSocketEvents.js', async () => {
 });
 vi.mock('./instanceEvents.js', async () => ({ instanceEvents: new (await import('node:events')).EventEmitter() }));
 import { instanceEvents } from './instanceEvents.js';
+vi.mock('./tailcatPeer.js', () => ({ attachTailcatForwardsToPeers: vi.fn(async (peers) => peers) }));
+import { attachTailcatForwardsToPeers } from './tailcatPeer.js';
 vi.mock('./review.js', () => ({ reviewEvents: { on: vi.fn((...args) => queueListeners.review.push(args)) } }));
 vi.mock('./loops.js', () => ({ loopEvents: { on: vi.fn() } }));
 vi.mock('./imageGenEvents.js', () => ({ imageGenEvents: { on: vi.fn() } }));
@@ -417,6 +419,61 @@ describe('socket.js — initSocket', () => {
     initSocket(io);
   });
 
+  it.each(['success', 'failure'])('discards obsolete peer enrichment after a newer removal (%s)', async (outcome) => {
+    const subscriber = makeSocket('peer-subscriber');
+    createdSockets.push(subscriber);
+    io.connect(subscriber);
+    subscriber.handlers['instances:subscribe']();
+    let resolveFirst;
+    let rejectFirst;
+    vi.mocked(attachTailcatForwardsToPeers).mockImplementationOnce(() => new Promise((resolve, reject) => {
+      resolveFirst = resolve;
+      rejectFirst = reject;
+    }));
+    const oldPeers = [{ id: 'example-removed-peer', transport: 'tailcat' }];
+    instanceEvents.emit('peers:updated', oldPeers);
+    instanceEvents.emit('peers:updated', []);
+    await new Promise(setImmediate);
+    expect(subscriber.emitted.filter(([name]) => name === 'instances:peers:updated')).toEqual([
+      ['instances:peers:updated', []],
+    ]);
+    if (outcome === 'success') resolveFirst(oldPeers);
+    else rejectFirst(new Error('Example forward metadata failure'));
+    await new Promise(setImmediate);
+    expect(subscriber.emitted.filter(([name]) => name === 'instances:peers:updated')).toEqual([
+      ['instances:peers:updated', []],
+    ]);
+  });
+
+  it('delivers ordinary enriched peer updates and sanitizes the newest enrichment failure', async () => {
+    const subscriber = makeSocket('peer-subscriber');
+    const outsider = makeSocket('peer-outsider');
+    createdSockets.push(subscriber, outsider);
+    io.connect(subscriber);
+    io.connect(outsider);
+    subscriber.handlers['instances:subscribe']();
+    const peers = [{ id: 'example-peer', transport: 'tailcat', auth: { username: 'example', password: 'synthetic-secret' }, syncSecret: 'synthetic-sync-secret', tcAddress: 'tcEXAMPLE' }];
+    vi.mocked(attachTailcatForwardsToPeers).mockImplementationOnce(async (sanitized) =>
+      sanitized.map((peer) => ({ ...peer, tailcatForward: { id: 'example-forward' } })));
+    instanceEvents.emit('peers:updated', peers);
+    await new Promise(setImmediate);
+    const [sanitized] = vi.mocked(attachTailcatForwardsToPeers).mock.calls.at(-1)[0];
+    expect(sanitized.auth).toEqual({ username: 'example', hasPassword: true });
+    expect(sanitized).not.toHaveProperty('syncSecret');
+    expect(sanitized).not.toHaveProperty('tcAddress');
+    expect(subscriber.emitted.filter(([name]) => name === 'instances:peers:updated')).toEqual([
+      ['instances:peers:updated', [{ ...sanitized, tailcatForward: { id: 'example-forward' } }]],
+    ]);
+    vi.mocked(attachTailcatForwardsToPeers).mockRejectedValueOnce(new Error('Example forward metadata failure'));
+    instanceEvents.emit('peers:updated', peers);
+    await new Promise(setImmediate);
+    expect(subscriber.emitted.filter(([name]) => name === 'instances:peers:updated').at(-1)).toEqual([
+      'instances:peers:updated', [sanitized],
+    ]);
+    expect(outsider.emitted.some(([name]) => name === 'instances:peers:updated')).toBe(false);
+    expect(peers[0].auth.password).toBe('synthetic-secret');
+  });
+
   it('forwards bounded project, commission and storyboard invalidations from structural and local-only writes', () => {
     emitRecordUpdated('creativeDirectorProject', 'cd-example');
     emitRecordDeleted('creativeDirectorProject', 'cd-example');
@@ -477,6 +534,8 @@ describe('socket.js — initSocket', () => {
     expect(compact.emitted).toContainEqual(['cos:tasks:changed', { invalidated: true, completedChanged: true }]);
     forwardChange({ task: { id: 'live', status: 'in_progress' } });
     expect(compact.emitted.at(-1)).toEqual(['cos:tasks:changed', { invalidated: true }]);
+    forwardChange({ activityOnly: 'preflight', task: { id: 'preflight-1', preflightActive: true, metadata: { prompt: 'private' } } });
+    expect(compact.emitted.at(-1)).toEqual(['cos:tasks:changed', { invalidated: true, task: { id: 'preflight-1', preflightActive: true } }]);
   });
 
   it('composes every per-feature handler registrar for a connected socket', () => {

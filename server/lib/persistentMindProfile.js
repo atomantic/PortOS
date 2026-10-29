@@ -8,6 +8,7 @@
 
 import { z } from 'zod';
 import { EFFORT_LEVELS } from './providerModels.js';
+import { isToolFreeOneShotProvider } from './providerVendors.js';
 import { trimTo } from './textUtils.js';
 
 export const PERSISTENT_MIND_PROFILE_SCHEMA_VERSION = 1;
@@ -97,4 +98,19 @@ export function mergePersistentMindProfile(previous, update) {
     ...(providerChanged && patch.model === undefined ? { model: '' } : {}),
     ...(providerChanged && patch.effort === undefined ? { effort: '' } : {}),
   });
+}
+
+/**
+ * The reason a provider cannot back the mind, or null when it can. The mind
+ * wakes unattended and reads text other people wrote (feeds, invitations,
+ * public issues, peer chat), so a vendor shell/file toolset — which no semantic
+ * grant governs — is never available to it. Only an API provider or a headless
+ * CLI with an enforced tool-free mode qualifies; there is no operator escape
+ * hatch because no operator is present for a wake.
+ */
+export function persistentMindToolFreeRefusal(provider) {
+  if (!provider || isToolFreeOneShotProvider(provider)) return null;
+  const label = provider.id || provider.command || 'unknown';
+  const lane = provider.type === 'tui' ? 'an interactive TUI' : `a ${provider.type || 'unknown'} provider`;
+  return `Persistent Mind cannot use provider "${label}": it is ${lane} that cannot run without host shell and file tools, and the mind reads third-party text unattended. Choose an API provider or a tool-free CLI such as Claude Code or Grok.`;
 }

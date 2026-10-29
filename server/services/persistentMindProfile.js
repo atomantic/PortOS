@@ -12,7 +12,7 @@
  */
 
 import { effortLevelsForProvider } from '../lib/providerModels.js';
-import { normalizePersistentMindProfile } from '../lib/persistentMindProfile.js';
+import { normalizePersistentMindProfile, persistentMindToolFreeRefusal } from '../lib/persistentMindProfile.js';
 import {
   findPersistentMindThinkingPreset,
   normalizePersistentMindThinkingSelection,
@@ -40,6 +40,9 @@ async function resolveExactRoute({ providerId, model, effort, noun, incompleteEr
     const status = getProviderStatus(provider.id);
     return { ok: false, error: status?.message || `${noun} provider "${provider.id}" is unavailable` };
   }
+
+  const toolFreeRefusal = persistentMindToolFreeRefusal(provider);
+  if (toolFreeRefusal) return { ok: false, error: toolFreeRefusal };
 
   const models = providerModelIds(provider);
   if (requireCatalog && models.length === 0) {

@@ -111,9 +111,9 @@ function turbulencePixel(tables, x, y, { baseFrequency = [0, 0], numOctaves = 1,
 
 /**
  * The 1D blur kernel used to match Chrome's filter for a standard deviation.
- * Small sigmas use the browser's measured model: accelerated filters use a
- * sampled Gaussian, while Chromium's raster path uses boxes (including an
- * identity for small windows). Larger sigmas use the spec's window
+ * The browser's measured model decides: accelerated filters use a sampled
+ * Gaussian at every sigma, while Chromium's raster path uses boxes (including
+ * an identity for small windows) with the spec's window
  * d = ⌊σ·3·√(2π)/4 + ½⌋ (for an even d, two boxes of d shifted against each
  * other plus one of d + 1). Past Skia's 135 limit (a 255-pixel window) Chrome blurs a downscaled copy; a sampled Gaussian stands
  * in for that. `weights[i]` applies to offset `i - origin`; `boxes` and
@@ -130,7 +130,7 @@ function blurKernel(sigma, smallBlur = 'gaussian') {
     for (let i = 0; i < weights.length; i++) weights[i] /= sum;
     return { weights, origin: radius };
   };
-  if (sigma < 2 && smallBlur === 'gaussian') return gaussian();
+  if (smallBlur === 'gaussian') return gaussian();
   const window = Math.max(1, Math.floor(Math.fround(sigma * 3 * Math.sqrt(2 * Math.PI) / 4 + 0.5)));
   if (window === 1) return null;
   if (window >= 255) return gaussian();
@@ -374,16 +374,16 @@ void main() {
   vec4 c = unpremul(texelFetch(a, pixel(), 0));
   color = premul(c * slope + intercept);
 }`,
-    transferTable: `uniform sampler2D a; uniform float curve[256];
-float mapped(float x) {
+    transferTable: `uniform sampler2D a; uniform sampler2D curves;
+float mapped(float x, int channel) {
   float p = clamp(x, 0.0, 1.0) * 255.0;
   int i = min(254, int(floor(p)));
-  return mix(curve[i], curve[i + 1], p - float(i));
+  return mix(texelFetch(curves, ivec2(i, 0), 0)[channel], texelFetch(curves, ivec2(i + 1, 0), 0)[channel], p - float(i));
 }
 void main() {
   if (clipped()) { color = vec4(0.0); return; }
   vec4 c = unpremul(texelFetch(a, pixel(), 0));
-  color = premul(vec4(mapped(c.r), mapped(c.g), mapped(c.b), c.a));
+  color = premul(vec4(mapped(c.r, 0), mapped(c.g, 1), mapped(c.b, 2), c.a));
 }`,
     composite: `uniform sampler2D a; uniform sampler2D b; uniform int op; uniform vec4 k;
 void main() {
@@ -497,6 +497,7 @@ void main() {
   let output = null;
   const tableCache = new Map();
   const kernelCache = new Map();
+  const curveCache = new Map();
   const profileCache = new Map();
   const resize = (w, h) => {
     if (w === width && h === height) return;
@@ -578,20 +579,33 @@ void main() {
     });
   };
   // The row and column profiles of a blurred flood rectangle: the row one
-  // rounded to 8 bits as Skia's horizontal pass stores it.
+  // rounded to 8 bits as Skia's horizontal pass stores it. Fitted to Chrome's
+  // accelerated blur: it reads a flood about FLOOD_OUTSET px wider on every
+  // side than its subregion, and FLOOD_REACH px past the frame where the flood
+  // runs off it (the vignette and version-2 leak floods are fractional and
+  // large-sigma; unadjusted, the all-controls look fell to 38.6 dB).
+  const FLOOD_OUTSET = 1.5;
+  const FLOOD_REACH = 3;
   const floodBlurProfiles = (flood, sx, sy) => {
+    // Each pixel of the rectangle weighs by how much of it the (fractional) edges cover.
     const profile = (length, from, to, sigma) => {
       const values = new Float32Array(length);
       const kernel = sigma > 0 ? blurKernel(sigma) : null;
+      const covered = (j) => Math.max(0, Math.min(j + 1, to) - Math.max(j, from));
       for (let i = 0; i < length; i++) {
-        if (!kernel) { values[i] = i >= from && i < to ? 1 : 0; continue; }
+        if (!kernel) { values[i] = Math.max(0, Math.min(i + 1, to) - Math.max(i, from)) >= 0.5 ? 1 : 0; continue; }
         let sum = 0;
-        for (let j = Math.max(from, i - (kernel.weights.length - 1 - kernel.origin)); j < Math.min(to, i + kernel.origin + 1); j++) sum += kernel.weights[i - j + kernel.origin];
+        for (let j = Math.max(Math.floor(from), i - (kernel.weights.length - 1 - kernel.origin)); j < Math.min(Math.ceil(to), i + kernel.origin + 1); j++) sum += kernel.weights[i - j + kernel.origin] * covered(j);
         values[i] = sum;
       }
       return values;
     };
-    const [x0, y0, x1, y1] = flood.rect;
+    let [x0, y0, x1, y1] = flood.rect;
+    if (smallBlur === 'gaussian') {
+      const grow = (a, b, length) => [Math.max(-FLOOD_REACH, a - FLOOD_OUTSET), Math.min(length + FLOOD_REACH, b + FLOOD_OUTSET)];
+      [x0, x1] = grow(flood.region[0], flood.region[2], width);
+      [y0, y1] = grow(flood.region[1], flood.region[3], height);
+    }
     const row = profile(width, x0, x1, sx);
     const column = profile(height, y0, y1, sy);
     const bytes = new Uint8Array(width * 4);
@@ -614,6 +628,20 @@ void main() {
       tableCache.set(seed, { latticeTexture, gradientTexture });
     }
     return tableCache.get(seed);
+  };
+  const curveTexture = (channels) => {
+    const key = channels.map(values => values.join(' ')).join('|');
+    if (!curveCache.has(key)) {
+      const data = new Float32Array(256 * 4);
+      for (let i = 0; i < 256; i++) { data[i * 4] = channels[0][i]; data[i * 4 + 1] = channels[1][i]; data[i * 4 + 2] = channels[2][i]; data[i * 4 + 3] = 1; }
+      if (curveCache.size > 16) {
+        const [oldest, value] = curveCache.entries().next().value;
+        gl.deleteTexture(value);
+        curveCache.delete(oldest);
+      }
+      curveCache.set(key, texture(256, 1, gl.RGBA32F, gl.RGBA, gl.FLOAT, data));
+    }
+    return curveCache.get(key);
   };
   const kernelTexture = (sigma) => {
     const key = String(sigma);
@@ -749,7 +777,7 @@ void main() {
         const opacity = num(attrs['flood-opacity'], 1);
         const color = [r * opacity, g * opacity, bl * opacity, opacity];
         run('flood', target, (u) => { clipUniform(u, region); gl.uniform4f(u.floodColor, ...color); });
-        floodOf = { color, rect: pixelRect(region) };
+        floodOf = { color, rect: pixelRect(region), region };
       } else if (p.type === 'feOffset') {
         run('offset', target, (u, bind) => { clipUniform(u, region); bind('a', a); gl.uniform2f(u.shift, num(attrs.dx), num(attrs.dy)); gl.uniform1i(u.sampled, i < last - 1 ? 1 : 0); });
       } else if (p.type === 'feGaussianBlur') {
@@ -793,11 +821,12 @@ void main() {
         run('matrix', target, (u, bind) => { clipUniform(u, region); bind('a', a); gl.uniformMatrix4fv(u.m, false, m); gl.uniform4f(u.bias, values[4], values[9], values[14], values[19]); });
       } else if (p.type === 'feComponentTransfer') {
         if (p.funcs.R?.type === 'table') {
-          const values = String(p.funcs.R.tableValues || '').trim().split(/[\s,]+/).map(Number);
-          if (values.length !== 256 || values.some(v => !Number.isFinite(v) || v < 0 || v > 1)
-            || ['G', 'B'].some(c => p.funcs[c]?.type !== 'table' || p.funcs[c].tableValues !== p.funcs.R.tableValues)
+          // Each channel may carry its own response (dye crossover); all three are 256-entry tables.
+          const channels = ['R', 'G', 'B'].map(c => (p.funcs[c]?.type === 'table' ? String(p.funcs[c].tableValues || '').trim().split(/[\s,]+/).map(Number) : null));
+          if (channels.some(values => !values || values.length !== 256 || values.some(v => !Number.isFinite(v) || v < 0 || v > 1))
             || (p.funcs.A && p.funcs.A.type !== 'identity')) throw new Error('unsupported film response table');
-          run('transferTable', target, (u, bind) => { clipUniform(u, region); bind('a', a); gl.uniform1fv(u['curve[0]'], values); });
+          const curves = curveTexture(channels);
+          run('transferTable', target, (u, bind) => { clipUniform(u, region); bind('a', a); bind('curves', curves); });
         } else {
         const slope = [1, 1, 1, 1], intercept = [0, 0, 0, 0];
         ['R', 'G', 'B', 'A'].forEach((channel, i) => {

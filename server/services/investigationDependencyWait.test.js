@@ -12,6 +12,7 @@ vi.mock('../lib/paths.js', async original => {
   return makePathsProxy(await original(), { dataRoot: () => lazyTempDataRoot('portos-investigation-wait-') });
 });
 vi.mock('./cosState.js', async () => ({ loadState: async () => ({ agents: fixture.agents }),
+  readAgentsStateForSafetyCheck: async () => ({ trusted: true, agents: fixture.agents }),
   withStateLock: (await import('../lib/fileWriteQueue.js')).createFileWriteQueue() }));
 vi.mock('./cos.js', () => ({ isRunning: () => false }));
 vi.mock('./notifications.js', () => ({ removeByMetadata: async () => 0 }));
@@ -53,13 +54,13 @@ const wait = async () => {
   fixture.agents['agent-investigator'].status = 'completed';
   return service;
 };
-const complete = async (agentId = 'agent-owner') => {
+const complete = async (agentId = 'agent-owner', options = {}) => {
   const agent = fixture.agents[agentId];
   agent.status = 'completed'; agent.completedAt = agent.startedAt;
   agent.result = { success: true, validationPassed: true, taskOutcome: { status: 'completed', reason: 'Exact merged code verified.' } };
   agent.metadata.completedCheckouts = [{ version: 1, agentId: agent.id, startedAt: agent.startedAt, capturedAt: agent.completedAt,
     repoPath: root, path: agent.metadata.workspacePath, branch: agent.metadata.worktreeBranch, head: sha }];
-  await updateTask('sys-dependency', { status: 'completed' }, 'internal');
+  await updateTask('sys-dependency', { status: 'completed' }, 'internal', options);
 };
 beforeAll(async () => {
   root = await mkdtemp(join(tmpdir(), 'portos-investigation-git-'));
@@ -87,6 +88,17 @@ beforeEach(async () => {
   for (const task of tasks) await seed(task);
 });
 describe('investigation dependency wait through persisted task events', () => {
+  it('does not wake dependent work from an explicit cleanup-only completion', async () => {
+    await wait();
+    const service = makeService();
+    const unbind = service.bind(cosEvents);
+    try {
+      await complete('agent-owner', { suppressCompletionWake: true });
+      expect((await getTaskById('sys-investigation')).status).toBe('blocked');
+      // An independent later reconciliation can still prove and resume it.
+      expect(await service.reconcile()).toEqual({ resumed: ['sys-investigation'] });
+    } finally { unbind(); }
+  });
   it.each(['verified', 'unrelated', 'foreign', 'different-task', 'different-branch'])('carries progress through only a verified same-task registered successor: %s', async mode => {
     const service = await wait();
     const predecessor = fixture.agents['agent-owner'];

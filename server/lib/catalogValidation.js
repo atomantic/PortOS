@@ -13,7 +13,7 @@
 import { z } from 'zod';
 import { universeVisualProfileSchema } from './universeVisualProfileValidation.js';
 import { BIBLE_LIMITS, FORM_ID_PATTERN } from './storyBible.js';
-import { REFERENCE_REVIEW_STATUSES, REFERENCE_FEEDBACK_MAX } from './catalogMediaLibrary.js';
+import { REFERENCE_REVIEW_STATUSES, REFERENCE_REVIEW_WRITE_STATUSES, REFERENCE_FEEDBACK_MAX } from './catalogMediaLibrary.js';
 import {
   INGREDIENT_TYPE_IDS,
   RELATION_KIND_IDS,
@@ -28,6 +28,7 @@ import { GENERATION_METADATA_LIMITS } from './pngMetadata.js';
 import { EFFORT_LEVELS } from './providerModels.js';
 
 import { isTruthyMeta } from './metadataFlags.js';
+import { STORY_DRAFT_LIMITS } from './catalogStoryDraft.js';
 // Derived from the shared type registry (`catalogTypes.js`) — adding a SYSTEM
 // type there flows through to consumers automatically. Kept as a frozen
 // re-export so existing `import { INGREDIENT_TYPES }` callers are unaffected.
@@ -59,6 +60,7 @@ export const REF_KINDS = Object.freeze([
   'work',
   'creative-director',
   'music-video',
+  'storyboard',
 ]);
 
 // Relation kinds derived from the shared registry (`catalogTypes.js`) — adding
@@ -272,6 +274,45 @@ export const catalogIngredientCreateSchema = z.object({
   operationKey: z.string().uuid().optional(),
 }).strict();
 
+// Relations a new record starts with (Casting's Family picker): `kind` reads
+// "the new record is <kind> <toId>".
+const initialRelations = z.array(z.object({
+  toId: z.string().trim().min(1).max(80),
+  kind: z.enum(RELATION_KIND_IDS),
+}).strict()).max(20);
+
+export const catalogIngredientCreateRouteSchema = catalogIngredientCreateSchema.extend({
+  relations: initialRelations.optional(),
+}).strict();
+
+// Casting / Environments / Objects story filters and New from prompt.
+const storyKind = z.enum(['storyboard', 'music-video', 'series']);
+export const catalogStoryListQuerySchema = z.object({ type: z.enum(['character', 'place', 'object']).optional() }).strict();
+export const catalogStoryJoinSchema = z.object({ ingredientId: z.string().trim().min(1).max(128) }).strict();
+export const catalogStoryParamsSchema = z.object({ kind: storyKind, id: z.string().trim().min(1).max(120) }).strict();
+export const catalogVideoSubjectsQuerySchema = z.object({ type: z.enum(['character', 'place', 'object']).optional() }).strict();
+export const catalogVideoSubjectLinksSchema = z.object({
+  links: z.array(z.object({
+    subjectId: z.string().trim().min(1).max(64),
+    ingredientId: z.string().trim().min(1).max(128).nullable(),
+    formId: z.string().regex(FORM_ID_PATTERN).optional(),
+    // Replace the subject's description with the catalog's appearance text.
+    useCatalogText: z.boolean().optional(),
+  }).strict()).min(1).max(24),
+}).strict();
+export const catalogStoryDraftSchema = z.object({
+  type: z.enum(['character', 'place', 'object']),
+  universeId: z.string().trim().max(120).optional().default(''),
+  storyKind: storyKind.optional(),
+  storyId: z.string().trim().min(1).max(120).optional(),
+  prompt: z.string().trim().min(1).max(STORY_DRAFT_LIMITS.prompt),
+  providerId: z.string().trim().max(80).optional().default(''),
+  model: z.string().trim().max(200).optional().default(''),
+  effort: z.string().trim().max(32).optional().default(''),
+  relations: initialRelations.optional().default([]),
+}).strict()
+  .refine((v) => (v.storyKind == null) === (v.storyId == null), { message: 'storyKind and storyId must be supplied together', path: ['storyId'] });
+
 // Revision-history sources, mirrored from the catalog_ingredient_revisions
 // DB CHECK constraint. The PATCH route accepts an optional `source`/`actor` so
 // AI-driven callers (story-builder refine) can label their edits; a manual
@@ -394,7 +435,7 @@ export const catalogMediaAttachSchema = z.object({
 }).strict();
 
 // Casting reference library patch (#casting-reference-library). Identifies a
-// live media row by (mediaKey, kind) and merges any of variant/tags/guide.
+// live media row by (mediaKey, kind) and merges any of variant/tags/guide/likeness.
 export const catalogMediaLibraryVariantSchema = z.object({
   age: z.number().int().min(0).max(150).optional(),
   era: z.enum(['child', 'teen', 'adult', 'elder']).optional(),
@@ -408,8 +449,9 @@ export const catalogMediaLibraryPatchSchema = z.object({
   variant: catalogMediaLibraryVariantSchema.optional(),
   tags: z.array(z.string().trim().min(1).max(40)).max(20).optional(),
   guide: z.boolean().optional(),
+  likeness: z.boolean().optional(),
   review: z.object({
-    status: z.enum(REFERENCE_REVIEW_STATUSES),
+    status: z.enum(REFERENCE_REVIEW_WRITE_STATUSES),
     feedback: z.string().max(REFERENCE_FEEDBACK_MAX).optional(),
   }).strict().optional(),
 }).strict();
@@ -445,6 +487,12 @@ export const catalogPortraitSetSchema = z.object({
   mediaKey: z.string().trim().min(1).max(512),
   role: z.string().trim().max(64).optional().nullable(),
   caption: z.string().trim().max(2_000).optional().nullable(),
+}).strict();
+
+// Generated-image attach body: the server chooses portrait vs reference under
+// the ingredient lock and leaves an already-attached render untouched.
+export const catalogGeneratedImageAttachSchema = z.object({
+  mediaKey: z.string().trim().min(1).max(512),
 }).strict();
 
 // Reference-sheet render/preview body. The prompt overrides are the user's own
@@ -634,6 +682,8 @@ export const catalogMusicVideoImportSchema = z.object({
     subjectId: z.string().min(1).max(64),
     action: z.enum(['create', 'link', 'local']),
     ingredientId: z.string().min(1).max(128).optional(),
+    // The linked record's age or look the subject shows, from the preview.
+    formId: z.string().min(1).max(128).optional(),
   }).strict().refine((s) => s.action !== 'link' || s.ingredientId, { message: 'link needs an ingredientId' })).min(1).max(2000),
 }).strict();
 

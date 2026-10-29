@@ -26,6 +26,38 @@ function sourceProofReader(repoPath, deadline) {
   return { git, env };
 }
 
+async function retainSourceRef(git, head, retainMissingSource) {
+  const retainedRef = `refs/portos/retained-checkout-source/${head}`;
+  if (await git(['symbolic-ref', '--quiet', retainedRef]).then(() => true, () => false)) return null;
+  const read = () => git(['for-each-ref', '--count=2', '--format=%(objectname) %(symref)', retainedRef]).catch(() => null);
+  let retainedHead = await read();
+  if (retainedHead && retainedHead !== head) return null;
+  if (!retainedHead && !retainMissingSource) return null;
+  if (!retainedHead) {
+    await git(['update-ref', '--no-deref', retainedRef, head, '0'.repeat(head.length)]).catch(() => {});
+    retainedHead = await read();
+  }
+  return retainedHead === head ? { retainedRef, retainedHead } : null;
+}
+
+/** Explicit supersession retains source, it does not certify its integration.
+ * Git reachability preserves the entire original tree/history without copying
+ * or imposing a patch-size limit. The caller checks release and local content.
+ */
+export async function retainCheckoutSourceObjects({ repoPath, sourceHead: head, targetHead: target,
+  retainMissingSource = false, deadline = performance.now() + 10000 }) {
+  if (!oid(head) || !oid(target)) return null;
+  const { git } = sourceProofReader(repoPath, deadline);
+  if (await git(['cat-file', '-t', head]) !== 'commit') return null;
+  const sourceTree = await git(['rev-parse', `${head}^{tree}`]);
+  if (!oid(sourceTree)) return null;
+  // Check unique object connectivity without copying a patch or enumerating
+  // its bytes into JavaScript. Missing private blobs must retain the checkout.
+  await git(['rev-list', '--objects', '--missing=error', '--quiet', head, '--not', target]);
+  const retained = await retainSourceRef(git, head, retainMissingSource);
+  return retained ? { version: 2, sourceHead: head, sourceTree, targetHead: target, ...retained } : null;
+}
+
 /** Retain exact small local source objects under a private, non-branch ref.
  * Callers separately prove ownership/release and the actual merged target. */
 export async function retainCheckoutSourceProof({ repoPath, sourceHead: head, comparisonHead: tip,
@@ -48,19 +80,10 @@ export async function retainCheckoutSourceProof({ repoPath, sourceHead: head, co
   if (!Buffer.isBuffer(delta) || delta.length > maxDeltaBytes) return null;
   // The OID in this private namespace names exact source objects, not an
   // integration claim or branch. CAS never replaces unrelated retained work.
-  const retainedRef = `refs/portos/retained-checkout-source/${head}`;
-  if (await git(['symbolic-ref', '--quiet', retainedRef]).then(() => true, () => false)) return null;
-  const read = () => git(['for-each-ref', '--count=2', '--format=%(objectname) %(symref)', retainedRef]).catch(() => null);
-  let retainedHead = await read();
-  if (retainedHead && retainedHead !== head) return null;
-  if (!retainedHead && !retainMissingSource) return null;
-  if (!retainedHead) {
-    await git(['update-ref', '--no-deref', retainedRef, head, '0'.repeat(head.length)]).catch(() => {});
-    retainedHead = await read();
-  }
-  if (retainedHead !== head) return null;
+  const retained = await retainSourceRef(git, head, retainMissingSource);
+  if (!retained) return null;
   return { sourceHead: head, base, sourceCommits: rows.length, deltaBytes: delta.length,
-    deltaSha256: createHash('sha256').update(delta).digest('hex'), targetHead: target, retainedRef, retainedHead };
+    deltaSha256: createHash('sha256').update(delta).digest('hex'), targetHead: target, ...retained };
 }
 
 export async function readResumedCheckoutDeliveries(input, agents, { retainMissingSource = false } = {}) {

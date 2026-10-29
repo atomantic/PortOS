@@ -35,6 +35,8 @@ export const DB_TEST_INCLUDE = [
   'services/catalogDB/payloadKey.db.test.js',
   'services/catalogDB.media.db.test.js',
   'services/catalogPrimitiveUsage.db.test.js',
+  'services/catalogStories.db.test.js',
+  'services/catalogUniverseFiling.db.test.js',
   'services/catalogSync.tombstoneRevival.db.test.js',
   'services/catalogSync.changeClock.db.test.js',
   'services/catalogSync.pendingParents.db.test.js',
@@ -64,6 +66,7 @@ export const DB_TEST_INCLUDE = [
   'services/creativeDirector/projectsDB.test.js',
   'services/musicVideo/projectsDB.test.js',
   'routes/catalog.test.js',
+  'routes/catalogOwnedPrimitive.db.test.js',
   'routes/mindToolRecipes.db.test.js',
   'routes/decks.db.test.js',
   'services/decksSync.db.test.js',
@@ -77,6 +80,9 @@ export const DB_TEST_INCLUDE = [
   'scripts/db-migrations/018-cos-tasks-from-files.db.test.js',
   'services/cosAgentRepository.db.test.js',
   'scripts/db-migrations/020-cos-agents-from-state.db.test.js',
+  'scripts/db-migrations/022-unlock-canon-joined-records.db.test.js',
+  'scripts/db-migrations/023-owned-records-join-universe-canon.db.test.js',
+  'scripts/db-migrations/024-scrap-canon-entries.db.test.js',
 ];
 
 const patterns = DB_TEST_INCLUDE.map((pattern) => posix.normalize(posix.join('server', pattern)));

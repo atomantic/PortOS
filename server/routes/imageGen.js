@@ -33,12 +33,13 @@ import { getImageModels, requiredReposForModel } from '../lib/mediaModels.js';
 import { inspectModelCache, verifyModelCache, repairModelCache, aggregateVerifies } from '../lib/hfCache.js';
 import { startHfDownloadStream } from '../services/hfDownloadStream.js';
 import { PATHS, ensureDir, resolveGalleryImage, unlinkGuarded, copyFileGuarded } from '../lib/fileUtils.js';
-import { prepareGenerateParams, resolveLocalImageModel } from '../services/imageGen/prepareParams.js';
+import { prepareGenerateParams, quickEditCompositionDigest, resolveLocalImageModel } from '../services/imageGen/prepareParams.js';
 import { IMAGE_REFERENCE_REQUEST_LIMIT } from '../lib/imageGenCapabilities.js';
 import { applyImageClean, applyWatermarkRemoval, applyLightRegenVariant } from '../services/imageGen/variants.js';
 import { applyFilmLookBake, readFilmLookSource } from '../services/imageGen/filmLookBake.js';
 import { universeVisualProfileSchema } from '../lib/universeVisualProfileValidation.js';
-import { previewImagePrompt } from '../services/imageGen/promptPreview.js';
+import { previewImagePrompt, previewQuickImageEdit } from '../services/imageGen/promptPreview.js';
+import { assertReviewedReference } from '../services/imageGen/reviewedReference.js';
 import { filmLookBakeSchema } from '../lib/filmLookValidation.js';
 import { join, basename } from 'node:path';
 import { STYLE_PRESETS } from '../lib/writersRoomStylePresets.js';
@@ -49,7 +50,7 @@ import {
 } from '../services/imageGen/regen.js';
 import { getSketchPngPath, isValidKey as isValidSketchKey } from '../services/mediaSketches.js';
 import { itemKey } from '../lib/mediaItemKey.js';
-import { deleteGalleryImage } from '../services/galleryImageDeletion.js';
+import { deleteMediaAnywhere, cancelPendingDelete } from '../services/mediaRemoteDelete.js';
 import * as characterService from '../services/character.js';
 import { randomUUID } from 'crypto';
 import { buildUniverseRunTag } from '../services/universeRunTag.js';
@@ -122,6 +123,8 @@ const noNulPrompt = z.string().max(MAX_PROMPT_LENGTH)
 
 const generateSchema = z.object({
   promptAdditions: promptAdditionsSchema,
+  quickEdit: z.boolean().optional(),
+  reviewedPromptDigest: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   // Empty prompt allowed — i2i / edit / unconditional generation don't require
   // one. The multipart FormData builder drops empty-string fields, so an empty
   // prompt arrives as `undefined`; default it to '' rather than rejecting.
@@ -173,6 +176,7 @@ const generateSchema = z.object({
   // numerically only by local FLUX.2; the cloud CLIs expose no per-reference
   // weight, so they receive the paths alone.
   referenceImageFiles: z.array(galleryImageFilenameSchema('reference image')).max(MAX_REFERENCE_IMAGES).optional(),
+  reviewedReferenceDigest: z.string().regex(/^[0-9a-f]{64}$/).optional(),
   referenceStrengths: z.array(z.number().min(0).max(1)).max(MAX_REFERENCE_IMAGES).optional(),
   // Per-render override of the cleaners. When omitted, the route inherits
   // from `settings.imageGen.{mode}.{cleanC2PA,denoise}`. Explicit booleans
@@ -489,6 +493,7 @@ const queuedImageResponse = ({ jobId, position, status, mode, model, mediaProvid
 const promptPreviewSchema = generateSchema.safeExtend({
   uploadedInitImage: z.boolean().optional(),
   uploadedReferenceCount: z.number().int().min(0).max(MAX_REFERENCE_IMAGES).optional(),
+  reviewReference: z.boolean().optional(),
 });
 
 router.post('/prompt-preview', asyncHandler(async (req, res) => {
@@ -509,6 +514,23 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
   });
 
   await prepareFableLoomImageParams({ params, mode, settings });
+
+  if (data.quickEdit && (!data.reviewedReferenceDigest || data.reviewedPromptDigest !== quickEditCompositionDigest({ params, mode, settings }))) {
+    throw new ServerError('Image settings or prompt changed. Review the refreshed full prompt before editing.', { status: 409, code: 'REVIEWED_PROMPT_CHANGED' });
+  }
+
+  if (data.quickEdit) {
+    const sent = await previewQuickImageEdit({ params, mode, settings });
+    params.sentPrompt = sent.sentPrompt;
+  }
+
+  if (data.reviewedReferenceDigest) {
+    if (params.initImagePath || params.referenceImagePaths?.length !== 1 || (!params.mediaProviderPeerId && mode === IMAGE_GEN_MODE.EXTERNAL)) {
+      throw new ServerError('Reviewed quick edits require one reference on a supported image backend', { status: 400, code: 'REVIEWED_REFERENCE_UNSUPPORTED' });
+    }
+    await assertReviewedReference(params.referenceImagePaths[0], data.reviewedReferenceDigest);
+    params.reviewedReferenceDigest = data.reviewedReferenceDigest;
+  }
 
   // Resolve an optional universe-collection target into a job tag the
   // completion hook understands. Done server-side so a base-style probe lands
@@ -696,6 +718,14 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
         visualConditioning: params.visualConditioning,
       },
     );
+  }
+  if (params.catalogAttach && result?.filename) {
+    const { attachGeneratedMedia } = await import('../services/catalogDB.js');
+    const { catalogEvents } = await import('../services/catalogEvents.js');
+    await attachGeneratedMedia(params.catalogAttach.ingredientId, result.filename, {
+      kind: params.catalogAttach.kind || 'reference',
+    }).catch(() => {});
+    catalogEvents.emit('primitive-changed', { ingredientId: params.catalogAttach.ingredientId });
   }
   res.json(result);
 }));
@@ -924,10 +954,18 @@ router.post('/cancel', asyncHandler(async (req, res) => {
   res.json({ ok: cancelled });
 }));
 
-// Also purges the filename from universe canon (entry `imageRefs` and style
-// references) inside the same backup admission as the file removal.
+// Deletes on the machine that owns the image (services/mediaRemoteDelete.js):
+// `{ ok, status: 'deleted' | 'deleted-remote' | 'pending' | 'owner-unknown' | 'cancelled' }`.
+// A local delete also purges the filename from universe canon (entry `imageRefs`
+// and style references) inside the same backup admission as the file removal.
 router.delete('/:filename', asyncHandler(async (req, res) => {
-  res.json(await deleteGalleryImage(req.params.filename));
+  local.assertGalleryFilename(req.params.filename);
+  res.json({ ok: true, ...(await deleteMediaAnywhere('image', req.params.filename)) });
+}));
+
+router.post('/:filename/cancel-delete', asyncHandler(async (req, res) => {
+  local.assertGalleryFilename(req.params.filename);
+  res.json(await cancelPendingDelete('image', req.params.filename));
 }));
 
 // Variant set for ONE image, for the lightbox original-vs-cleaned toggle —

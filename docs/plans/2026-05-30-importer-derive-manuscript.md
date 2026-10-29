@@ -15,8 +15,8 @@ A comic script was imported (series `ser-c22c6c9e-3a02-43be-bc38-6cd2de82bd27`).
 Create an isolated worktree off the latest `main` and do all work there:
 
 ```
-git -C /Users/adameivy/github.com/atomantic/PortOS fetch origin
-git -C /Users/adameivy/github.com/atomantic/PortOS worktree add -b feat/importer-derive-manuscript ../PortOS-derive origin/main
+git -C ~/github.com/atomantic/PortOS fetch origin
+git -C ~/github.com/atomantic/PortOS worktree add -b feat/importer-derive-manuscript ../PortOS-derive origin/main
 ```
 
 Run `npm run install:all` in the worktree (submodules + deps). All file paths below are relative to the worktree root. Commit/push only when the user asks.

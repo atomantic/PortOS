@@ -134,6 +134,11 @@ vi.mock('../services/mediaJobQueue/index.js', () => ({
 
 const recordUserAction = vi.hoisted(() => vi.fn(async () => ({ id: 'evt' })));
 vi.mock('../services/userActions.js', () => ({ recordUserAction }));
+const remoteDelete = vi.hoisted(() => ({
+  deleteMediaAnywhere: vi.fn(async () => ({ status: 'pending', pendingDelete: { peerId: 'rec-owner', queuedAt: '2026-01-01T00:00:00.000Z' }, peerName: 'Example Owner' })),
+  cancelPendingDelete: vi.fn(async () => ({ ok: true, cancelled: true })),
+}));
+vi.mock('../services/mediaRemoteDelete.js', () => remoteDelete);
 
 // The /generate route resolves an optional universeRun collection target via
 // findOrCreateUniverseCollection. Mock it so the universeRun test asserts the
@@ -143,10 +148,10 @@ vi.mock('../services/userActions.js', () => ({ recordUserAction }));
 // wiring without standing up a peer registry.
 const federatedPeerId = '00000000-0000-4000-8000-0000000000f1';
 vi.mock('../services/federatedMedia/remoteSubmission.js', () => ({
-  prepareRemoteMediaJob: vi.fn(async ({ peerId, kind, request }) => ({
+  prepareRemoteMediaJob: vi.fn(async ({ peerId, kind, request, inputAssets }) => ({
     peer: { id: peerId },
     capability: { kind, engine: request.engine, modelId: request.modelId },
-    remoteMedia: { wireVersion: 1, peerId, reconcile: false, cancelRequested: false, request },
+    remoteMedia: { wireVersion: 1, peerId, reconcile: false, cancelRequested: false, request, ...(inputAssets?.length ? { inputAssets } : {}) },
   })),
 }));
 
@@ -226,6 +231,73 @@ describe('Image Gen Routes', () => {
     app.use('/api/image-gen', imageGenRoutes);
     app.use(errorMiddleware);
     vi.clearAllMocks();
+  });
+
+  it('deletes an image on the machine that owns it and reports a pending delete as pending', async () => {
+    const res = await request(app).delete('/api/image-gen/fox.png');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true, status: 'pending', pendingDelete: { peerId: 'rec-owner', queuedAt: '2026-01-01T00:00:00.000Z' }, peerName: 'Example Owner' });
+    expect(remoteDelete.deleteMediaAnywhere).toHaveBeenCalledWith('image', 'fox.png');
+    const cancel = await request(app).post('/api/image-gen/fox.png/cancel-delete');
+    expect(cancel.body).toEqual({ ok: true, cancelled: true });
+    expect(remoteDelete.cancelPendingDelete).toHaveBeenCalledWith('image', 'fox.png');
+  });
+
+  it('binds quick-edit preview to provider defaults and persists the exact composition without changing authored text', async () => {
+    await fileUtils.ensureDir(fileUtils.PATHS.images);
+    await writeFile(pathJoin(fileUtils.PATHS.images, 'quick-edit-prompt.png'), 'reviewed bytes');
+    const body = { prompt: '  Make the coat red.  ', quickEdit: true, referenceImageFiles: ['quick-edit-prompt.png'] };
+    const settings = { imageGen: { mode: 'codex', codex: { enabled: true } } };
+    getSettings.mockResolvedValue(settings);
+    const preview = await request(app).post('/api/image-gen/prompt-preview').send({ ...body, reviewReference: true });
+    expect(preview.status).toBe(200);
+    expect(preview.body.sentPrompt).toContain('Edit the reference image:   Make the coat red.  . Keep everything else');
+    expect(preview.body.promptAdditions.map(a => a.id)).toEqual(['quick-edit-prefix', 'quick-edit-preservation', 'agent-instructions']);
+    const reviewed = { ...body, reviewedReferenceDigest: preview.body.reviewedReferenceDigest, reviewedPromptDigest: preview.body.reviewedPromptDigest };
+    getSettings.mockResolvedValue({ imageGen: { ...settings.imageGen, codex: { enabled: true, model: 'changed-model' } } });
+    const stale = await request(app).post('/api/image-gen/generate').send(reviewed);
+    expect(stale.status).toBe(409);
+    expect(stale.body.code).toBe('REVIEWED_PROMPT_CHANGED');
+    expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+    getSettings.mockResolvedValue(settings);
+    const sent = await request(app).post('/api/image-gen/generate').send(reviewed);
+    expect(sent.status).toBe(200);
+    const params = mediaJobQueue.enqueueJob.mock.calls.at(-1)[0].params;
+    expect(params.authoredPrompt).toBe(body.prompt);
+    expect(params.sentPrompt).toBe(preview.body.sentPrompt);
+    expect(params.promptAdditions).toEqual(preview.body.promptAdditions.slice(0, 2));
+    getSettings.mockResolvedValue({ imageGen: { mode: 'external' } });
+  });
+
+  it('refuses complete quick-edit prompts over the limit with a count before queue admission', async () => {
+    await fileUtils.ensureDir(fileUtils.PATHS.images);
+    await writeFile(pathJoin(fileUtils.PATHS.images, 'quick-edit-limit.png'), 'reviewed bytes');
+    getSettings.mockResolvedValueOnce({ imageGen: { mode: 'codex', codex: { enabled: true } } });
+    const response = await request(app).post('/api/image-gen/prompt-preview').send({
+      prompt: 'x'.repeat(31999), quickEdit: true, referenceImageFiles: ['quick-edit-limit.png'], reviewReference: true,
+    });
+    expect(response.status).toBe(400);
+    expect(response.body.error).toMatch(/\d+\/32000 characters/);
+    expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+  });
+
+  it('rejects a reference replaced after preview before admitting a quick edit', async () => {
+    await fileUtils.ensureDir(fileUtils.PATHS.images);
+    const path = pathJoin(fileUtils.PATHS.images, 'quick-edit-reviewed.png');
+    await writeFile(path, 'reviewed bytes');
+    const body = { prompt: 'Change the coat', mode: 'codex', referenceImageFiles: ['quick-edit-reviewed.png'] };
+    const settings = { imageGen: { mode: 'codex', codex: { enabled: true } } };
+    getSettings.mockResolvedValueOnce(settings);
+    const preview = await request(app).post('/api/image-gen/prompt-preview').send({ ...body, reviewReference: true });
+    expect(preview.status).toBe(200);
+    expect(preview.body.reviewedReferenceImage).toContain(Buffer.from('reviewed bytes').toString('base64'));
+    await writeFile(path, 'replacement bytes');
+    getSettings.mockResolvedValueOnce(settings);
+    const response = await request(app).post('/api/image-gen/generate').send({ ...body, reviewedReferenceDigest: preview.body.reviewedReferenceDigest });
+    expect(response.status).toBe(409);
+    expect(response.body.code).toBe('REVIEWED_REFERENCE_CHANGED');
+    expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+    expect(imageGen.generateImage).not.toHaveBeenCalled();
   });
 
   describe('GET /api/image-gen/gallery', () => {
@@ -2283,6 +2355,22 @@ describe('Image Gen Routes', () => {
   });
 
   describe('POST /api/image-gen/generate — federated media provider', () => {
+    it('previews and queues a reviewed peer reference even when the local default is text-only', async () => {
+      await fileUtils.ensureDir(fileUtils.PATHS.images);
+      await writeFile(pathJoin(fileUtils.PATHS.images, 'peer-reviewed.png'), 'reviewed peer image');
+      const body = { prompt: 'Edit the scene', modelId: 'dev', mediaProviderPeerId: federatedPeerId, referenceImageFiles: ['peer-reviewed.png'] };
+      const preview = await request(app).post('/api/image-gen/prompt-preview').send({ ...body, reviewReference: true });
+      expect(preview.status).toBe(200);
+      expect(preview.body.remote).toBe(true);
+      expect(preview.body.sentPrompt).toBe(body.prompt);
+      const response = await request(app).post('/api/image-gen/generate').send({ ...body, reviewedReferenceDigest: preview.body.reviewedReferenceDigest });
+      expect(response.status).toBe(200);
+      expect(mediaJobQueue.enqueueJob).toHaveBeenCalledWith(expect.objectContaining({ params: expect.objectContaining({
+        reviewedReferenceDigest: preview.body.reviewedReferenceDigest,
+        remoteMedia: expect.objectContaining({ inputAssets: [expect.objectContaining({ role: 'referenceImages' })] }),
+      }) }));
+    });
+
     it('submits to the selected peer and keeps the prompt inside the versioned marker', async () => {
       const response = await request(app).post('/api/image-gen/generate').send({
         prompt: 'a lighthouse at dusk',
@@ -2335,6 +2423,26 @@ describe('Image Gen Routes', () => {
         mediaProviderPeerId: federatedPeerId,
       });
 
+      expect(response.status).toBe(400);
+      expect(response.body.code).toBe('MEDIA_PROVIDER_MODEL_REQUIRED');
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+    });
+
+    it('previews a peer reference independently of a disabled local cloud backend', async () => {
+      await fileUtils.ensureDir(fileUtils.PATHS.images);
+      await writeFile(pathJoin(fileUtils.PATHS.images, 'peer-disabled-local.png'), 'reviewed peer image');
+      getSettings.mockResolvedValueOnce({ imageGen: { mode: 'codex', codex: { enabled: false } } });
+      const response = await request(app).post('/api/image-gen/prompt-preview').send({
+        prompt: 'Edit the scene', modelId: 'dev', mediaProviderPeerId: federatedPeerId,
+        referenceImageFiles: ['peer-disabled-local.png'], reviewReference: true,
+      });
+      expect(response.status).toBe(200);
+      expect(response.body).toMatchObject({ remote: true, sentPrompt: 'Edit the scene', reviewedReferenceDigest: expect.any(String) });
+    });
+
+    it('does not substitute the local model for an unnamed peer model', async () => {
+      getSettings.mockResolvedValueOnce({ imageGen: { mode: 'local', local: { modelId: 'qwen-image-2.1' } } });
+      const response = await request(app).post('/api/image-gen/generate').send({ prompt: 'a lighthouse', mediaProviderPeerId: federatedPeerId });
       expect(response.status).toBe(400);
       expect(response.body.code).toBe('MEDIA_PROVIDER_MODEL_REQUIRED');
       expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();

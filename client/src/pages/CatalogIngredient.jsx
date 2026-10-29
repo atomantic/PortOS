@@ -28,9 +28,12 @@ import {
   restoreCatalogIngredientRevision,
   attachCatalogIngredientMedia,
   setCatalogIngredientPortrait,
+  attachCatalogIngredientGeneratedImage,
   detachCatalogIngredientMedia,
   uploadCatalogIngredientMediaFile,
   recordCatalogIngredientVoiceMemo,
+  updateCatalogIngredientMediaLibrary,
+  removeCatalogPointerSheet,
 } from '../services/apiCatalog';
 import { arrayBufferToBase64 } from '../lib/audioRecorder';
 import useMemoRecorder from '../hooks/useMemoRecorder';
@@ -43,9 +46,11 @@ import useMounted from '../hooks/useMounted';
 import IngredientPicker from '../components/IngredientPicker';
 import MediaImage from '../components/MediaImage';
 import GenerateImageControl from '../components/catalog/GenerateImageControl';
+import MediaJobThumb from '../components/pipeline/MediaJobThumb';
 import { buildGenerationPromptSeed } from '../lib/catalogImagePrompt';
 import CatalogMediaTile from '../components/catalog/CatalogMediaTile';
-import CatalogImagePreview, { CatalogImagePreviewProvider } from '../components/catalog/CatalogImagePreview';
+import CatalogImagePreview from '../components/catalog/CatalogImagePreview';
+import { CatalogImagePreviewProvider } from '../components/catalog/CatalogImagePreviewProvider';
 import CatalogRelatedImages from '../components/catalog/CatalogRelatedImages';
 import CatalogSheetsPanel, { ReferenceSheetPanel } from '../components/catalog/CatalogSheetsPanel';
 import CatalogUnlockNotice from '../components/catalog/CatalogUnlockNotice';
@@ -61,6 +66,7 @@ import ObjectAttachmentsEditor from '../components/universe/ObjectAttachmentsEdi
 import CatalogRedesign from '../components/catalog/CatalogRedesign';
 import CatalogUniversePanel from '../components/catalog/CatalogUniversePanel';
 import CatalogFormsEditor from '../components/catalog/CatalogFormsEditor';
+import CatalogFamilyPicker from '../components/catalog/CatalogFamilyPicker';
 import CatalogMergePanel from '../components/catalog/CatalogMergePanel';
 import CatalogIdentityPanel from '../components/catalog/CatalogIdentityPanel';
 import CatalogIdentityNotice from '../components/catalog/CatalogIdentityNotice';
@@ -68,7 +74,7 @@ import CharacterLoraChip from '../components/loraTraining/CharacterLoraChip';
 import TagPicker from '../components/TagPicker';
 import GenericIngredientFields from '../components/GenericIngredientFields';
 import useUnsavedChangesGuard from '../hooks/useUnsavedChangesGuard';
-import { getCatalogType, CATALOG_BADGE_BY_ID, RELATION_KINDS, getRelationKind } from '../lib/catalogTypes';
+import { getCatalogType, CATALOG_BADGE_BY_ID, RELATION_KINDS, getRelationKind, isFamilyRelationKind } from '../lib/catalogTypes';
 import {
   libraryForPathname, ingredientPath, ingredientCoverUrl, resolveDetailTab, detailTabPath,
   isSheetMedia, isPlateMedia, isReferenceTabMedia, lookIdOf,
@@ -78,6 +84,7 @@ import { timeAgo, formatDateTime } from '../utils/formatters';
 import { humanizeIntegrityField } from '../lib/characterIntegrity';
 import { listSheetPointers } from '../lib/sheetPointers';
 import { formsOf } from '../lib/catalogForms';
+import { safeReadJsonSession, safeWriteJsonSession, safeRemoveSession } from '../lib/safeStorage';
 
 // Per-type editor field list + badge color now come from the shared registry
 // (`client/src/lib/catalogTypes.js`). Each editor entry is `[key, label, kind]`
@@ -185,6 +192,7 @@ function IngredientEditor() {
   const [mediaLoading, setMediaLoading] = useState(false);
   const [mediaError, setMediaError] = useState(null);
   const mediaSequence = useRef(0);
+  const sheetPointerSequence = useRef(0);
   const mediaReadyRef = useRef(false);
   mediaReadyRef.current = mediaReady;
   const refreshMediaRef = useRef(null);
@@ -402,19 +410,89 @@ function IngredientEditor() {
   };
 
   // A freshly-generated image lands in the media library as `<jobId>.png`; wire
-  // it onto this ingredient. First image becomes the portrait (so it shows as
-  // the card thumbnail immediately); later ones attach as references.
+  // it onto this ingredient. The server decides under the ingredient lock: the
+  // first image becomes the portrait (so it shows as the card thumbnail
+  // immediately), later ones references, and a render the completion hook
+  // already filed is left as is (#13833).
   const handleGeneratedImage = useCallback(async (filename) => {
     if (!record || identityReadOnly || !filename) return;
-    const hasPortrait = media.some((m) => m.kind === 'portrait');
-    const ok = await (hasPortrait
-      ? attachCatalogIngredientMedia(record.id, { mediaKey: filename, kind: 'reference' }, { silent: true })
-      : setCatalogIngredientPortrait(record.id, { mediaKey: filename }, { silent: true })
-    ).then(() => true).catch((err) => { toast.error(err?.message || 'Failed to attach generated image'); return false; });
-    if (!ok) return;
+    const result = await attachCatalogIngredientGeneratedImage(record.id, { mediaKey: filename }, { silent: true })
+      .catch((err) => { toast.error(err?.message || 'Failed to attach generated image'); return null; });
+    if (!result) return;
     refreshMedia();
-    toast.success(hasPortrait ? 'Generated image attached' : 'Generated portrait set');
+    toast.success(result.kind === 'portrait' ? 'Generated portrait set' : 'Generated image attached');
+  }, [record, refreshMedia, identityReadOnly]);
+
+  // A film-look copy saved from one of this record's images joins its
+  // references, carrying the source's form, age and tags so library filters
+  // keep it beside the original. Images from elsewhere stay gallery-only.
+  const handleVariantSaved = useCallback(async (variant, source) => {
+    if (!record || identityReadOnly || !variant?.filename) return;
+    const rows = media.filter((m) => !m.deleted && m.mediaKey === source?.filename && (m.kind === 'reference' || m.kind === 'portrait'));
+    if (rows.length === 0) return;
+    const ok = await attachCatalogIngredientMedia(record.id, { mediaKey: variant.filename, kind: 'reference' }, { silent: true })
+      .then(() => true)
+      .catch((err) => { toast.error(err?.message || 'Could not add the copy to references'); return false; });
+    if (!ok) return;
+    const library = (rows.find((m) => m.kind === 'reference') || rows[0]).library || {};
+    const variantFields = Object.fromEntries(['age', 'era', 'wardrobeId', 'formId', 'label']
+      .filter((field) => library.variant?.[field] !== undefined).map((field) => [field, library.variant[field]]));
+    const carried = {
+      ...(Object.keys(variantFields).length > 0 ? { variant: variantFields } : {}),
+      ...(library.tags?.length ? { tags: library.tags } : {}),
+    };
+    if (Object.keys(carried).length > 0) {
+      await updateCatalogIngredientMediaLibrary(record.id, { mediaKey: variant.filename, kind: 'reference', ...carried }, { silent: true })
+        .catch((err) => toast.error(err?.message || 'Could not copy the reference details'));
+    }
+    refreshMedia();
+    toast.success('Filtered copy added to references');
   }, [record, media, refreshMedia, identityReadOnly]);
+
+  const [pendingRenders, setPendingRenders] = useState(() => (
+    id ? (safeReadJsonSession(`catalog_pending_renders_${id}`, []) || []) : []
+  ));
+
+  useEffect(() => {
+    if (!id) return;
+    if (pendingRenders.length > 0) {
+      safeWriteJsonSession(`catalog_pending_renders_${id}`, pendingRenders);
+    } else {
+      safeRemoveSession(`catalog_pending_renders_${id}`);
+    }
+  }, [id, pendingRenders]);
+
+  const handleQuickEditQueued = useCallback((result, { item, instruction } = {}) => {
+    if (!result) return;
+    if (result.jobId) {
+      setPendingRenders((prev) => [
+        ...prev.filter(p => p.jobId !== result.jobId),
+        {
+          jobId: result.jobId,
+          ingredientId: record?.id || id,
+          instruction: instruction || '',
+          sourceFilename: item?.filename || '',
+          startedAt: Date.now(),
+        },
+      ]);
+    } else if (result.filename) {
+      handleGeneratedImage(result.filename);
+    }
+  }, [record?.id, id, handleGeneratedImage]);
+
+  const handlePendingRenderComplete = useCallback(async (jobId, filename) => {
+    setPendingRenders((prev) => prev.filter(p => p.jobId !== jobId));
+    if (filename) {
+      await handleGeneratedImage(filename);
+    }
+  }, [handleGeneratedImage]);
+
+  const handlePendingRenderFailed = useCallback((jobId, status, error) => {
+    setPendingRenders((prev) => prev.filter(p => p.jobId !== jobId));
+    if (error) toast.error(error);
+    else if (status === 'canceled') toast.error('Render canceled');
+    else toast.error('Render failed');
+  }, []);
 
   // Upload a dropped/picked file straight onto the ingredient. The server picks
   // the media kind (image→reference, audio, video) from the MIME and stores the
@@ -456,18 +534,22 @@ function IngredientEditor() {
   // (ingredient, key, kind) row, so the caption is passed back unchanged.
   const handleSetMediaRole = useCallback(async (m, role, message) => {
     if (!record || identityReadOnly || m?.readOnly || !m?.mediaKey) return false;
+    // A role never goes on the portrait row: using the portrait for a look
+    // files a reference copy of the same image and leaves the portrait as is.
+    const copyPortrait = m.kind === 'portrait';
     const updated = await attachCatalogIngredientMedia(
       record.id,
-      { mediaKey: m.mediaKey, kind: m.kind, role, caption: m.caption ?? null },
+      { mediaKey: m.mediaKey, kind: copyPortrait ? 'reference' : m.kind, role, caption: m.caption ?? null },
       { silent: true },
     ).catch((err) => { toast.error(err?.message || 'Failed to update media'); return null; });
     if (!updated) return false;
-    setMedia((prev) => prev.map((row) => (
+    if (copyPortrait) refreshMedia();
+    else setMedia((prev) => prev.map((row) => (
       row.mediaKey === m.mediaKey && row.kind === m.kind ? { ...row, ...updated, role } : row
     )));
     toast.success(message || (role ? 'Marked as plate' : 'Plate unmarked'));
     return true;
-  }, [record, identityReadOnly]);
+  }, [record, identityReadOnly, refreshMedia]);
 
   // A finished catalog-only sheet render: attach it under its `sheet:<variant>`
   // role right away (the server-side attach hook files the same row and is
@@ -517,25 +599,62 @@ function IngredientEditor() {
   // projection already copied onto this row. Pull just the pointer fields into
   // both the saved record and the draft, so an unsaved edit stays intact and
   // stays exactly as dirty as it was.
+  // `updatedAt` is the row's clock after the change, so its own
+  // catalog:primitive-changed echo is not mistaken for an external edit.
+  const applySheetPointers = useCallback((recordId, fresh, updatedAt) => {
+    const pointers = {};
+    for (const key of SHEET_POINTER_KEYS) {
+      if (Object.hasOwn(fresh, key)) pointers[key] = fresh[key];
+    }
+    setRecord((prev) => (prev?.id === recordId
+      ? { ...prev, ...(updatedAt ? { updatedAt } : {}), payload: { ...ingredientPayload(prev.payload), ...pointers } }
+      : prev));
+    setPayload((cur) => ({ ...cur, ...pointers }));
+  }, []);
   const refreshSheetPointers = useCallback(() => {
     if (!id) return;
     const requestedId = id;
+    const sequence = ++sheetPointerSequence.current;
+    const isCurrentRequest = () => mountedRef.current && activeVisitRef.current.id === requestedId
+      && sequence === sheetPointerSequence.current;
     getCatalogIngredientDetails(id, { silent: true, view: detailView })
       .then((d) => {
-        if (activeVisitRef.current.id !== requestedId || !d?.ingredient) return;
-        const fresh = ingredientPayload(d.ingredient.payload);
-        const pointers = {};
-        for (const key of SHEET_POINTER_KEYS) {
-          if (Object.hasOwn(fresh, key)) pointers[key] = fresh[key];
-        }
-        setRecord((prev) => (prev?.id === requestedId
-          ? { ...prev, payload: { ...ingredientPayload(prev.payload), ...pointers } }
-          : prev));
-        setPayload((cur) => ({ ...cur, ...pointers }));
+        if (!isCurrentRequest() || !d?.ingredient) return;
+        applySheetPointers(requestedId, ingredientPayload(d.ingredient.payload));
         toast.success('Reference sheet ready');
       })
-      .catch(() => { toast.error('Reference sheet rendered — reload to see it'); });
-  }, [id, detailView]);
+      .catch(() => { if (isCurrentRequest()) toast.error('Reference sheet rendered — reload to see it'); });
+  }, [id, detailView, mountedRef, applySheetPointers]);
+  // Removing a universe sheet runs here, not in the Sheets tab, so the
+  // one-at-a-time flag and the answer survive the tab unmounting. The answer's
+  // clock is adopted only when this page held the row's clock from just before
+  // the removal. Otherwise the record changed elsewhere too: the pointers still
+  // apply, and the full record is re-read and goes through the same
+  // external-change check as a socket refresh.
+  const [removingPointerSheet, setRemovingPointerSheet] = useState(null);
+  const removingPointerSheetRef = useRef(null);
+  const handleRemovePointerSheet = useCallback(async (variant, filename) => {
+    if (!id || removingPointerSheetRef.current) return;
+    const recordId = id;
+    removingPointerSheetRef.current = filename;
+    setRemovingPointerSheet(filename);
+    const result = await removeCatalogPointerSheet(recordId, variant, filename, { silent: true })
+      .catch((err) => { toast.error(err?.message || 'Could not remove the sheet'); return null; });
+    removingPointerSheetRef.current = null;
+    if (!mountedRef.current) return;
+    setRemovingPointerSheet(null);
+    if (!result?.pointers || activeVisitRef.current.id !== recordId) return;
+    toast.success('Reference sheet removed');
+    ++sheetPointerSequence.current;
+    const adopt = !!result.priorUpdatedAt && result.priorUpdatedAt === editSnapshot.current?.updatedAt;
+    applySheetPointers(recordId, result.pointers, adopt ? result.updatedAt : undefined);
+    if (adopt) return;
+    const details = await getCatalogIngredientDetails(recordId, { silent: true, view: detailView }).catch(() => null);
+    if (!mountedRef.current || activeVisitRef.current.id !== recordId || !details?.ingredient) return;
+    if (details.ingredient.updatedAt === editSnapshot.current?.updatedAt) return;
+    if (editSnapshot.current?.dirty) setExternalDetails(details);
+    else applyDetails(details);
+  }, [id, applySheetPointers, applyDetails, detailView, mountedRef]);
 
   const handleSave = async () => {
     if (!record || identityReadOnly || unlocking || characterActionBusy) return;
@@ -690,6 +809,11 @@ function IngredientEditor() {
   const liveLookIds = new Set(wardrobes.map((w) => w?.id).filter(Boolean));
   const liveShotIds = new Set((ingredientPayload(record.payload).greybox?.shots || []).map((s) => s.id));
   const isReferenceTabRow = (m) => isReferenceTabMedia(m, liveLookIds, liveShotIds);
+  // The References tab shows the portrait beside the references, so the look
+  // picker offers it too unless the same image already has a reference row.
+  const referenceKeys = new Set(media.filter((m) => m.kind === 'reference').map((m) => m.mediaKey));
+  const lookCandidates = media.filter((m) => (m.kind === 'reference' && isReferenceTabRow(m))
+    || (m.kind === 'portrait' && !referenceKeys.has(m.mediaKey)));
   const coverUrl = ingredientCoverUrl({
     ...record,
     thumbnailKey: media.find((m) => m.kind === 'portrait')?.mediaKey || (!mediaReady && record.coverMedia?.portraitKey) || record.thumbnailKey,
@@ -702,7 +826,12 @@ function IngredientEditor() {
     : isDirty ? `Save your profile edits first — the ${subject} renders from the saved record.` : null);
 
   return (
-    <CatalogImagePreviewProvider key={record.id} name={record.name}>
+    <CatalogImagePreviewProvider
+      key={record.id}
+      ingredientId={record.id}
+      onQuickEditQueued={handleQuickEditQueued}
+      onVariantSaved={handleVariantSaved}
+    >
     <fieldset disabled={mergeBusy} className="flex h-full min-h-0 min-w-0 flex-col">
       <UnsavedChangesConfirm
         guard={routeGuard}
@@ -891,6 +1020,12 @@ function IngredientEditor() {
               </div>}
               storyExtra={<fieldset disabled={identityReadOnly || characterActionBusy}><EditableListFields fields={editableLists.filter(field => field.key === 'aliases')} payload={payload} onChange={updatePayload} /></fieldset>}
             >
+              <div className="bg-port-card border border-port-border rounded-lg p-4">
+                <CatalogFamilyPicker selfName={name} excludeIds={[record.id]} disabled={identityReadOnly || characterActionBusy}
+                  items={relations.outbound.filter((r) => isFamilyRelationKind(r.kind)).map((r) => ({ kind: r.kind, id: r.toId, name: r.other?.name }))}
+                  inbound={relations.inbound.filter((r) => isFamilyRelationKind(r.kind)).map((r) => ({ kind: r.kind, id: r.fromId, name: r.other?.name }))}
+                  onAdd={(kind, target) => handleAddRelation(target, kind)} onRemove={(item) => handleRemoveRelation(item.id, item.kind)} />
+              </div>
               <fieldset disabled={identityReadOnly || characterActionBusy}><CatalogFormsEditor type={record.type} payload={payload} onChange={updatePayload} /></fieldset>
               <RevealTimingField entry={{ ...payload, id: record.id }} editable={!identityReadOnly && !characterActionBusy && payload.locked !== true}
                 onPatch={patch => setPayload(previous => ({ ...previous, ...patch }))} />
@@ -939,6 +1074,9 @@ function IngredientEditor() {
             savedStamp={record.updatedAt || null}
             onSheetFile={handleSheetFile}
             onPointerSheetReady={refreshSheetPointers}
+            onRemovePointerSheet={identityReadOnly ? undefined : handleRemovePointerSheet}
+            removingPointerSheet={removingPointerSheet}
+            onMediaChanged={identityReadOnly ? undefined : refreshMedia}
           />
         )}
 
@@ -949,7 +1087,7 @@ function IngredientEditor() {
             initialUniverseId={universeRef?.refId || ''}
             wardrobes={wardrobes}
             lookMedia={media.filter((m) => liveLookIds.has(lookIdOf(m))).map(protectMedia)}
-            candidates={media.filter((m) => m.kind === 'reference' && isReferenceTabRow(m)).map(protectMedia)}
+            candidates={lookCandidates.map(protectMedia)}
             missingMedia={missingMedia}
             editLocked={saving || unlocking || identityReadOnly}
             blockedReason={renderBlockedReason('look')}
@@ -989,12 +1127,18 @@ function IngredientEditor() {
             readOnly={identityReadOnly}
             referenceLibrary={record.type === 'character' ? { ingredientId: record.id, forms: formsOf(record.payload), media: media.map(protectMedia), onChanged: refreshMedia,
               revision: record.updatedAt, blockedReason: renderBlockedReason('reference'),
+              pendingRenders: pendingRenders.filter(p => !p.ingredientId || p.ingredientId === record.id),
+              onPendingRenderComplete: handlePendingRenderComplete,
+              onPendingRenderFailed: handlePendingRenderFailed,
               onMediaUpdated: updated => setMedia(previous => previous.map(row => {
                 if (row.mediaKey !== updated.mediaKey || (row.ingredientId || record.id) !== (updated.ingredientId || record.id)) return row;
                 if (row.kind === updated.kind) return updated;
                 return ['bad', 'rejected'].includes(updated.library?.review?.status)
                   ? { ...row, library: { ...(row.library || {}), guide: false } } : row;
               })) } : null}
+            pendingRenders={pendingRenders.filter(p => !p.ingredientId || p.ingredientId === record.id)}
+            onPendingRenderComplete={handlePendingRenderComplete}
+            onPendingRenderFailed={handlePendingRenderFailed}
             media={(tabs ? media.filter(isReferenceTabRow) : media).map(protectMedia)}
             canonImageRefs={[payload.primaryImageRef, ...(Array.isArray(payload.imageRefs) ? payload.imageRefs : [])].filter((ref) =>
               !media.some((m) => (m.kind === 'portrait' || m.kind === 'reference') && m.mediaKey === ref))}
@@ -1270,12 +1414,15 @@ function StatListEditor({ field, value, onChange }) {
 // ingredient → other) are user-editable here; inbound edges (other → this
 // ingredient) are read-only because the owning ingredient is the other end.
 function RelationsPanel({ record, relations, evidence, onAdd, onRemove, readOnly = false, retainedSourceId }) {
+  // A character's family ties live in its Family picker.
+  const shown = (r) => record.type !== 'character' || !isFamilyRelationKind(r.kind ?? r.id);
+  const kinds = RELATION_KINDS.filter(shown);
   const [pickerOpen, setPickerOpen] = useState(false);
-  const [kind, setKind] = useState(RELATION_KINDS[0].id);
+  const [kind, setKind] = useState(kinds[0].id);
   const [armedRelation, setArmedRelation] = useState(null);
   const [removingRelation, setRemovingRelation] = useState(null);
-  const outbound = Array.isArray(relations.outbound) ? relations.outbound : [];
-  const inbound = Array.isArray(relations.inbound) ? relations.inbound : [];
+  const outbound = Array.isArray(relations.outbound) ? relations.outbound.filter(shown) : [];
+  const inbound = Array.isArray(relations.inbound) ? relations.inbound.filter(shown) : [];
   const evidenceList = Array.isArray(evidence)
     ? evidence.filter((item) => typeof item === 'string' && item.trim())
     : typeof evidence === 'string' && evidence.trim()
@@ -1305,7 +1452,7 @@ function RelationsPanel({ record, relations, evidence, onAdd, onRemove, readOnly
           <label htmlFor="relation-kind" className="sr-only">Relation kind</label>
           <select id="relation-kind" disabled={readOnly} value={kind} onChange={(e) => setKind(e.target.value)}
             className="px-2 py-1.5 bg-port-bg border border-port-border rounded text-xs text-white focus:outline-none focus:border-port-accent">
-            {RELATION_KINDS.map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
+            {kinds.map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
           </select>
           <button type="button" onClick={() => setPickerOpen(true)} disabled={readOnly}
             className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-port-accent hover:bg-port-accent/90 text-white text-xs font-medium">
@@ -1413,7 +1560,7 @@ function RelationsPanel({ record, relations, evidence, onAdd, onRemove, readOnly
 // memo" (MediaRecorder → WAV → Whisper transcript) persist through the catalog
 // media-upload/voice routes into the federating library dirs, then attach via
 // the same media-refs seam gallery picks use.
-function MediaPanel({ canonRemoval = null, readOnly = false, referenceLibrary = null, media, canonImageRefs = [], primaryImageRef, missingMedia, onAttach, onSetPortrait, onDetach, onUploadFile, onRecordVoice, genIngredientId, genName, genDescription, genUniverseId, onGenerated }) {
+function MediaPanel({ canonRemoval = null, readOnly = false, referenceLibrary = null, media, canonImageRefs = [], primaryImageRef, missingMedia, onAttach, onSetPortrait, onDetach, onUploadFile, onRecordVoice, genIngredientId, genName, genDescription, genUniverseId, onGenerated, pendingRenders = [], onPendingRenderComplete, onPendingRenderFailed }) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [busy, setBusy] = useState(false); // upload or transcription in flight
@@ -1532,8 +1679,27 @@ function MediaPanel({ canonRemoval = null, readOnly = false, referenceLibrary = 
         </div>
       )}
 
-      {tileMedia.length > 0 && (
+      {!referenceLibrary && (tileMedia.length > 0 || pendingRenders.length > 0) && (
         <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-3">
+          {pendingRenders.map((pending) => (
+            <div key={pending.jobId} data-testid="pending-media-tile" className="rounded-lg border border-port-accent/40 bg-port-bg shadow-sm overflow-hidden flex flex-col">
+              <div className="relative aspect-square w-full bg-port-card/40 flex items-center justify-center overflow-hidden">
+                <MediaJobThumb
+                  jobId={pending.jobId}
+                  label={pending.instruction || 'Refined reference'}
+                  size="fill"
+                  onFilename={(filename) => onPendingRenderComplete?.(pending.jobId, filename)}
+                  onStatus={(status, err) => {
+                    if (status === 'failed' || status === 'canceled') onPendingRenderFailed?.(pending.jobId, status, err);
+                  }}
+                />
+              </div>
+              <div className="p-2 border-t border-port-border text-xs flex items-center justify-between">
+                <span className="truncate text-gray-300 font-medium">{pending.instruction || 'Edited reference'}</span>
+                <span className="text-[10px] text-port-accent uppercase animate-pulse">Rendering</span>
+              </div>
+            </div>
+          ))}
           {tileMedia.map((m) => (
             <CatalogMediaTile key={`${m.mediaKey}:${m.kind}`} m={m} missing={missingMedia.has(m.mediaKey)}
               onSetPortrait={onSetPortrait} onDetach={onDetach} armedDetach={armedDetach}
@@ -1584,7 +1750,7 @@ function MediaPanel({ canonRemoval = null, readOnly = false, referenceLibrary = 
 // Modal that lists the existing media gallery (history) so the user can attach
 // or set-portrait from already-generated assets — the "scoped to existing media
 // history" requirement. Never uploads; it only references library keys.
-function GalleryPickerModal({ onClose, onPick }) {
+export function GalleryPickerModal({ onClose, onPick }) {
   const [query, setQuery] = useState('');
   const page = useGalleryPage({ q: query });
   const items = page.loading && page.items.length === 0 ? null : page.items;
@@ -1612,16 +1778,16 @@ function GalleryPickerModal({ onClose, onPick }) {
           {items === null && <p className="text-xs text-gray-500">Loading gallery…</p>}
           {items?.length === 0 && <p className="text-xs text-gray-500">No images in the gallery yet. Generate one in Image Gen first.</p>}
           {items && items.length > 0 && (
-            <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
               {items.map((it) => (
                 <div key={it.filename} className="relative group rounded border border-port-border overflow-hidden">
                   <MediaImage src={it.path || `/data/images/${it.filename}`} alt={it.filename}
                     className="w-full aspect-square object-cover" />
-                  <div className="absolute inset-x-0 bottom-0 flex opacity-100 sm:opacity-0 sm:group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+                  <div className="absolute inset-x-0 bottom-0 flex opacity-100 sm:opacity-0 sm:group-hover:opacity-100 focus-within:opacity-100 [@media(hover:none)]:opacity-100 transition-opacity">
                     <button type="button" onClick={() => onPick(it.filename, false)}
-                      className="flex-1 text-[10px] py-2.5 sm:py-1 bg-black/70 text-gray-200 hover:text-white">Attach</button>
+                      className="flex-1 min-w-0 min-h-[44px] text-[10px] bg-black/70 text-gray-200 hover:text-white">Attach</button>
                     <button type="button" onClick={() => onPick(it.filename, true)}
-                      className="flex-1 text-[10px] py-2.5 sm:py-1 bg-black/70 text-gray-200 hover:text-port-warning">Portrait</button>
+                      className="flex-1 min-w-0 min-h-[44px] text-[10px] bg-black/70 text-gray-200 hover:text-port-warning">Portrait</button>
                   </div>
                 </div>
               ))}

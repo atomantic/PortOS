@@ -12,6 +12,9 @@ vi.mock('../../services/apiMusicVideo.js', () => ({
   listMusicVideoCharacterStyles: vi.fn(async () => [CLAUDIA]),
   setMusicVideoCharacterStyleReference: vi.fn(async (_id, imageId) => ({ ...CLAUDIA, referenceImageId: imageId })),
 }));
+vi.mock('./VideoCastLinks.jsx', () => ({
+  VideoCastLinksDisclosure: ({ summary, defaultOpen }) => <p data-open={String(!!defaultOpen)}>{summary}</p>,
+}));
 vi.mock('../IngredientPicker.jsx', () => ({
   default: ({ open: isOpen, type, excludeIds, onSelect }) => (isOpen ? (
     <div role="dialog" aria-label={`Pick ${type}`} data-exclude={excludeIds.join(',')}>
@@ -83,7 +86,7 @@ describe('creative setup', () => {
     render(<MemoryRouter><CreativeSetupPanel project={cast} onSave={onSave} onPendingChange={vi.fn()} /></MemoryRouter>);
     fireEvent.click(screen.getByText('Edit'));
     expect(screen.getByRole('link', { name: 'Open in catalog' })).toHaveAttribute('href', '/casting/cat-chr-1');
-    fireEvent.click(screen.getByLabelText('Keep in this video only'));
+    fireEvent.click(screen.getByLabelText("Don't save to Objects"));
     fireEvent.click(screen.getByText('Save creative setup'));
     await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
     expect(onSave.mock.calls[0][0].concept.subjects[1]).toEqual(expect.objectContaining({ id: 'mvc-2', localOnly: true }));

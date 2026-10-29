@@ -79,6 +79,16 @@ describe('playthroughVersion', () => {
     expect(playthroughVersion({ titleCard: { ...card, title: 'Example Song' } })).not.toBe(blank);
     expect(playthroughVersion({ titleCard: null })).toBe(blank);
   });
+
+  // Uniquely catches a whole song's word times overflowing the preview socket's 500-character revision.
+  it('stays within the preview revision limit for a full song and still changes with one word time', () => {
+    const cues = Array.from({ length: 60 }, (_, line) => ({ id: `l${line}`, text: 'one two three four five six', startSec: line * 3, endSec: line * 3 + 3,
+      words: Array.from({ length: 6 }, (__, i) => ({ w: 'x', startSec: line * 3 + i * 0.5, endSec: line * 3 + i * 0.5 + 0.4 })) }));
+    const version = playthroughVersion({ lyricCues: cues });
+    expect(version.length).toBeLessThanOrEqual(500);
+    const nudged = cues.map((cue, line) => (line === 30 ? { ...cue, words: cue.words.map((w, i) => (i === 2 ? { ...w, endSec: w.endSec + 0.01 } : w)) } : cue));
+    expect(playthroughVersion({ lyricCues: nudged })).not.toBe(version);
+  });
 });
 
 describe('CompositionPreviewPlayer', () => {

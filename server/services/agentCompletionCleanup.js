@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { outsideGitMutationLifetime } from '../lib/gitMutationLifetime.js';
 import { withDeliveryActivity } from './agentDeliveryActivity.js';
 import { storeCompletionData, readCompletionData, completionReplayInput } from './agentCompletionData.js';
 /**
@@ -320,7 +321,11 @@ async function resolveWorktreeCleanupOptions({ agentId, task, outputBuffer, task
  *
  * @param {{ agentId: string, task: object, agent: object, effectiveSuccess: boolean, outputBuffer: string, branchProvenEmpty?: boolean }} params
  */
-export async function runAgentCompletionCleanup({ agentId, task, agent, effectiveSuccess, outputBuffer, prClaimVerified = false, branchProvenEmpty = false }) {
+export async function runAgentCompletionCleanup(input) {
+  return outsideGitMutationLifetime(() => runAgentCompletionCleanupInOwnContext(input));
+}
+
+async function runAgentCompletionCleanupInOwnContext({ agentId, task, agent, effectiveSuccess, outputBuffer, prClaimVerified = false, branchProvenEmpty = false }) {
   // Fetch agent state once for JIRA, plan-question, and the resume pointer. Its
   // worktree fields are stamped once at registerAgent and never mutated, so passing
   // it to the release spares a re-read that would re-split the whole output.txt.
@@ -351,7 +356,11 @@ export async function runAgentCompletionCleanup({ agentId, task, agent, effectiv
  * `context.prOwnership` is `{ taskOpenPR, agentOpensOwnPr }`, resolved by the
  * entry point from its own source of truth.
  */
-async function runCompletionCleanupSteps(context, { onStepError }) {
+async function runCompletionCleanupSteps(...args) {
+  return outsideGitMutationLifetime(() => runCompletionCleanupInOwnContext(...args));
+}
+
+async function runCompletionCleanupInOwnContext(context, { onStepError }) {
   if (!Object.values(STEP_ERROR_POLICY).includes(onStepError)) throw new Error(`Unknown completion-cleanup step error policy: ${onStepError}`);
   if (cleanupRuns.has(context.agentId)) return cleanupRuns.get(context.agentId);
   const run = withDeliveryActivity(context.agentId, 'Processing completion handoffs and workspace cleanup',
@@ -430,7 +439,12 @@ async function performCompletionCleanupSteps(context, onStepError) {
   await runStep('notification', 'Plan question notification', () => notifyPlanQuestionIfNeeded(context));
   const waitForRepository = () => {
     if (state?.metadata?.checkoutCapture?.status === 'pending') throw new Error('checkout-capture-pending');
-    if (state?.result?.cleanupPending === true
+    const worktree = state?.metadata?.completionCleanup?.stages?.worktree;
+    // A cleanup-only recheck verified the repository but left task settlement
+    // to the verification pass that follows this replay.
+    const deferredSettlement = worktree?.status === 'done' && worktree.verifiedBy === 'repository-state-verification'
+      && worktree.taskSettlement === 'after-completion-stages';
+    if (state?.result?.cleanupPending === true && !deferredSettlement
       && (state.metadata?.repoStateVerification?.status !== 'completed'
         || !['repository-preservation-receipt', 'repository-state-verification'].includes(state.metadata?.completionCleanup?.stages?.worktree?.verifiedBy))) throw new Error('checkout-retirement-pending');
   };
@@ -732,7 +746,11 @@ async function reportWorktreeCleanupWarnings({ agentId, task, cleanupWarnings })
  * must reach cleanup, or a run that opened no PR is cleaned up as a success and
  * loses its retry state (#3358).
  */
-export async function runSpawnerCompletionCleanup({ agentId, task, success: effectiveSuccess, prOwnership, prClaimVerified = false, branchProvenEmpty = false, outputBuffer }) {
+export async function runSpawnerCompletionCleanup(input) {
+  return outsideGitMutationLifetime(() => runSpawnerCompletionCleanupInOwnContext(input));
+}
+
+async function runSpawnerCompletionCleanupInOwnContext({ agentId, task, success: effectiveSuccess, prOwnership, prClaimVerified = false, branchProvenEmpty = false, outputBuffer }) {
   let agentState = null;
   try {
     const { getAgent } = await import('./cosAgentLifecycle.js');

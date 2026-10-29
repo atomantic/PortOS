@@ -1648,10 +1648,10 @@ export function resolveUndeliveredTaskUpdate(task, outcome, agentId, now = Date.
   const decision = resolveFailedTaskDecision(task, { category: `task-${outcome.status}`, message: outcome.reason }, { agentId, now });
   if (!approval && outcome.recovery?.mode === 'cleanup') {
     return { status: 'in_progress', metadata: { ...task.metadata,
-      deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: agentId, taskOutcome: outcome } };
+      deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: agentId, deliveryDecisionAgentId: agentId, taskOutcome: outcome } };
   }
   if (!approval && decision.status !== 'blocked') return { status: decision.status,
-    metadata: { ...task.metadata, ...decision.metadataUpdates, deliveryDecisionAgentId: undefined, blockedReason: undefined, blockedCategory: undefined, blockedAt: undefined, deliveryRecovery: undefined, deliveryRecoveryAgentId: undefined, taskOutcome: outcome } };
+    metadata: { ...task.metadata, ...decision.metadataUpdates, deliveryDecisionAgentId: agentId, blockedReason: undefined, blockedCategory: undefined, blockedAt: undefined, deliveryRecovery: undefined, deliveryRecoveryAgentId: undefined, taskOutcome: outcome } };
   const options = approval ? outcome.recovery.options : [
     'Fix the reported cause and retry the retained work with a fresh retry budget.',
     'Keep the task stopped and preserve its work; do not spend more agent runs.',

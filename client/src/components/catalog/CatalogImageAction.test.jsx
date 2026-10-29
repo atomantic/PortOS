@@ -3,12 +3,13 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { MemoryRouter } from 'react-router';
 import CatalogCard from './CatalogCard';
 import { getCatalogType } from '../../lib/catalogTypes';
-import { getCatalogIngredientDetails, setCatalogIngredientPortrait } from '../../services/apiCatalog';
+import { getCatalogIngredientDetails, attachCatalogIngredientGeneratedImage, getCatalogFamilyContext } from '../../services/apiCatalog';
 import { getUniverse } from '../../services/apiUniverseBuilder';
 import { generateImage } from '../../services/apiSystem';
 
 vi.mock('../../services/apiCatalog', () => ({ getCatalogIngredientDetails: vi.fn(),
-  setCatalogIngredientPortrait: vi.fn(async () => ({})), attachCatalogIngredientMedia: vi.fn(async () => ({})) }));
+  getCatalogFamilyContext: vi.fn(async () => ({ additions: [], images: [], imagesAddition: null })),
+  attachCatalogIngredientGeneratedImage: vi.fn(async () => ({ kind: 'portrait', attached: true })) }));
 vi.mock('../../services/apiUniverseBuilder', () => ({ getUniverse: vi.fn() }));
 vi.mock('../../services/apiSystem', () => ({ generateImage: vi.fn() }));
 vi.mock('../../services/apiImageVideo', () => ({ previewImagePrompt: vi.fn(async body => ({
@@ -30,6 +31,7 @@ beforeEach(() => {
   getUniverse.mockReset().mockResolvedValue({ id: 'example-world', name: 'Example world',
     influences: { embrace: ['analog photography', 'soft light'], avoid: ['cartoon'] } });
   generateImage.mockReset().mockResolvedValue({ filename: 'example-render.png' });
+  getCatalogFamilyContext.mockReset().mockResolvedValue({ additions: [], images: [], imagesAddition: null });
 });
 
 describe('catalog card image actions', () => {
@@ -56,8 +58,37 @@ describe('catalog card image actions', () => {
     expect(body.promptAdditions.map(item => item.label)).toEqual(['Universe style', 'Style negatives']);
     expect(body.catalogIngredientId).toBe(record.id);
     expect(body.universeRun).toEqual({ universeId: 'example-world', universeName: 'Example world' });
-    await waitFor(() => expect(setCatalogIngredientPortrait).toHaveBeenCalledWith(record.id, { mediaKey: 'example-render.png' }, { silent: true }));
+    await waitFor(() => expect(attachCatalogIngredientGeneratedImage).toHaveBeenCalledWith(record.id, { mediaKey: 'example-render.png' }, { silent: true }));
     expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('sends the character’s family as labeled blocks and relatives’ images, and lets the user drop the images', async () => {
+    const mother = { id: 'family-mother-of-nora', label: 'Family · Mother of Nora', text: 'Example subject is the mother of Nora.' };
+    const imagesAddition = { id: 'family-images', label: 'Family reference images', text: 'The attached images of Nora show family.' };
+    getCatalogFamilyContext.mockResolvedValue({ additions: [mother], imagesAddition,
+      images: [{ filename: 'nora.png', source: 'Mother of Nora · Portrait', relative: { name: 'Nora', term: 'mother', blood: true } }] });
+    showCard();
+    fireEvent.click(screen.getByRole('button', { name: 'Edit image prompt for Example subject' }));
+    const dialog = screen.getByRole('dialog');
+    await within(dialog).findByLabelText(/Send family images \(Mother of Nora · Portrait\)/);
+    expect(within(dialog).getByLabelText('Prompt', { exact: true }).value).not.toContain('mother of Nora');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Render', exact: true }));
+    await waitFor(() => expect(generateImage).toHaveBeenCalledTimes(1));
+    const [sent] = generateImage.mock.calls[0];
+    expect(sent.prompt).toMatch(/\n\nExample subject is the mother of Nora\.\n\nThe attached images of Nora show family\.$/);
+    expect(sent.promptAdditions).toEqual(expect.arrayContaining([mother, imagesAddition]));
+    expect(sent.referenceImageFiles).toEqual(['nora.png']);
+
+    generateImage.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: 'Edit image prompt for Example subject' }));
+    await waitFor(() => expect(getCatalogFamilyContext).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(within(screen.getByRole('dialog')).getByRole('button', { name: 'Render', exact: true })).toBeEnabled());
+    fireEvent.click(within(screen.getByRole('dialog')).getByLabelText(/Send family images/));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Render', exact: true }));
+    await waitFor(() => expect(generateImage).toHaveBeenCalledTimes(1));
+    expect(generateImage.mock.calls[0][0].referenceImageFiles).toBeUndefined();
+    expect(generateImage.mock.calls[0][0].prompt).not.toContain('attached images');
+    expect(generateImage.mock.calls[0][0].prompt).toContain('mother of Nora');
   });
 
   it('portals the editable preview outside clipping cards and sends the exact edited input', async () => {

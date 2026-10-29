@@ -13,6 +13,7 @@ import {
   approveMusicVideoCastAndSets,
   reconfirmMusicVideoCastAndSets,
   skipMusicVideoCastAndSets,
+  discardMusicVideoCastAndSets,
 } from '../services/apiMusicVideo.js';
 
 // Where a stage stops needing the server: the autopilot continues past an
@@ -36,12 +37,13 @@ const reachedCheckpoint = (stage) => CHECKPOINTS.has(stage?.status) || stage?.in
  * `interrupted` by a restart), or null when it could not start or the wait was
  * abandoned with `cancelWait()` (the kickoff's Cancel).
  *
- * Returns `{ busy, start, regenerate, editDirection, applyFeedback, removeFeedback, resume, approve, reconfirm, skip, runToCheckpoint, cancelWait }`.
+ * Returns `{ busy, refresh, start, regenerate, regenerateImages, editDirection, applyFeedback, removeFeedback, resume, approve, reconfirm, skip, discard, rebuildFromStory, runToCheckpoint, cancelWait }`.
  */
 export default function useMusicVideoCastAndSets({ project, replaceProject } = {}) {
   const projectId = project?.id || null;
   const [busy, setBusy] = useState(false);
   const replaceRef = useRef(replaceProject);
+  const refreshRef = useRef(null);
   const snapshotRevision = useRef(0);
   const waiter = useRef(null);
   useEffect(() => {
@@ -77,10 +79,22 @@ export default function useMusicVideoCastAndSets({ project, replaceProject } = {
       if (pending) return pending;
       const revision = snapshotRevision.current;
       pending = getMusicVideoProject(projectId, { silent: true }).then((next) => {
-        if (active && next?.id === projectId && revision === snapshotRevision.current) applyProject(next);
-      }).catch(() => {}).finally(() => { pending = null; });
+        if (active && next?.id === projectId && revision === snapshotRevision.current) { applyProject(next); return true; }
+        return false;
+      }).catch(() => false).finally(() => { pending = null; });
       return pending;
     };
+    // A card read already saw a newer stage. Start after that read, and make
+    // any earlier reconnect/visibility response ineligible to replace it.
+    const refreshCurrent = (minRevision = 0) => {
+      const revision = ++snapshotRevision.current;
+      return getMusicVideoProject(projectId, { silent: true }).then((next) => {
+        if (minRevision && (!Number.isFinite(next?.castAndSets?.revision) || next.castAndSets.revision < minRevision)) return false;
+        if (active && next?.id === projectId && revision === snapshotRevision.current) { applyProject(next); return true; }
+        return false;
+      }).catch(() => false);
+    };
+    refreshRef.current = { projectId, refresh: refreshCurrent };
     socket.on('music-video:cast-and-sets', onStage);
     socket.on('music-video:dev-artifact', onArtifact);
     socket.on('connect', refresh);
@@ -92,6 +106,7 @@ export default function useMusicVideoCastAndSets({ project, replaceProject } = {
     });
     return () => {
       active = false;
+      if (refreshRef.current?.refresh === refreshCurrent) refreshRef.current = null;
       unsubscribeVisibility();
       socket.off('music-video:cast-and-sets', onStage);
       socket.off('music-video:dev-artifact', onArtifact);
@@ -103,6 +118,8 @@ export default function useMusicVideoCastAndSets({ project, replaceProject } = {
       }
     };
   }, [projectId]);
+
+  const refresh = (minRevision) => (refreshRef.current?.projectId === projectId ? refreshRef.current.refresh(minRevision) : Promise.resolve(false));
 
   const call = (request, success) => {
     setBusy(true);
@@ -118,6 +135,7 @@ export default function useMusicVideoCastAndSets({ project, replaceProject } = {
 
   const start = () => call(() => startMusicVideoCastAndSets(projectId, {}, { silent: true }));
   const regenerate = (notes) => call(() => regenerateMusicVideoCastAndSets(projectId, notes ? { notes } : {}, { silent: true }), 'Regenerating with your notes');
+  const regenerateImages = (keys) => call(() => regenerateMusicVideoCastAndSets(projectId, { keys }, { silent: true }), keys.length === 1 ? 'Re-rendering that image' : 'Re-rendering those images');
   const editDirection = (edits) => call(() => editMusicVideoCastAndSetsDirection(projectId, edits, { silent: true }), edits.sets?.some((set) => Object.hasOwn(set, 'setReference')) ? 'Greybox selection saved — regenerate to apply it' : 'Direction saved — re-rendering what changed');
   const applyFeedback = ({ text, target = null }) => call(() => applyMusicVideoCastAndSetsFeedback(projectId, { text, ...(target ? { target } : {}) }, { silent: true }), 'Applying your feedback');
   const removeFeedback = (feedbackId) => call(() => removeMusicVideoCastAndSetsFeedback(projectId, feedbackId, { silent: true }));
@@ -125,6 +143,12 @@ export default function useMusicVideoCastAndSets({ project, replaceProject } = {
   const approve = () => call(() => approveMusicVideoCastAndSets(projectId, { silent: true }), 'Cast & Sets approved');
   const reconfirm = () => call(() => reconfirmMusicVideoCastAndSets(projectId, { silent: true }), 'Cast & Sets kept approved');
   const skip = () => call(() => skipMusicVideoCastAndSets(projectId, { silent: true }), 'Cast & Sets check-in skipped');
+  const discard = () => call(() => discardMusicVideoCastAndSets(projectId, { silent: true }), 'Cast & Sets cleared — build it again when your story and guides are ready');
+  // A sheet in review must be cleared before a fresh build; any other idle sheet rebuilds in place.
+  const rebuildFromStory = (status) => call(async () => {
+    if (status === 'review') await discardMusicVideoCastAndSets(projectId, { silent: true });
+    return startMusicVideoCastAndSets(projectId, {}, { silent: true });
+  }, 'Rebuilding Cast & Sets from your story');
 
   const runToCheckpoint = (target) => {
     if (!target?.id) return Promise.resolve(null);
@@ -153,5 +177,5 @@ export default function useMusicVideoCastAndSets({ project, replaceProject } = {
     w.resolve(null);
   };
 
-  return { busy, start, regenerate, editDirection, applyFeedback, removeFeedback, resume, approve, reconfirm, skip, runToCheckpoint, cancelWait };
+  return { busy, refresh, start, regenerate, regenerateImages, editDirection, applyFeedback, removeFeedback, resume, approve, reconfirm, skip, discard, rebuildFromStory, runToCheckpoint, cancelWait };
 }

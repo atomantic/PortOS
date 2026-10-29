@@ -5,7 +5,7 @@ import express from 'express';
 import { request } from '../lib/testHelper.js';
 import localLlmRoutes from './localLlm.js';
 import { runLocalLlmTest, compareLocalLlmModels } from '../services/localLlmPlayground.js';
-import { listModels, listVisionModels, listToolUseModels, installModel } from '../services/localLlm.js';
+import { listModels, listVisionModels, listToolUseModels, installModel, switchBackend } from '../services/localLlm.js';
 import { enrichCatalogWithVariants, applyMeasuredFit } from '../services/huggingFaceCatalog.js';
 import { getMeasuredFits } from '../services/localModelAssessmentStore.js';
 import { runAssessment } from '../services/localModelAssessments.js';
@@ -994,5 +994,31 @@ describe('Jev integration policies', () => {
     expect(persisted.unrelated).toBe(true);
     const invalid = await request(app).put('/api/local-llm/jev/policy').send({ sources: { email: { classifierMode: 'optional' } } });
     expect(invalid.status).toBe(400);
+  });
+});
+
+
+describe('local LLM default switching', () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  it('returns the actionable conflict to the client and never emits completion', async () => {
+    const error = 'LLM_BACKEND is exported as ollama. Change or unset that environment override and restart PortOS before setting lmstudio as the default.';
+    switchBackend.mockResolvedValue({ success: false, code: 'BACKEND_OVERRIDE_CONFLICT', error });
+    const app = makeApp();
+    const res = await request(app).post('/api/local-llm/switch').send({ to: 'lmstudio' });
+    expect(res.status).toBe(409);
+    expect(res.body.error).toBe(error);
+    const progress = app.get('io').emit.mock.calls;
+    expect(progress.some(([, payload]) => payload.event === 'complete')).toBe(false);
+    expect(progress.some(([, payload]) => payload.event === 'error' && payload.message === error)).toBe(true);
+  });
+
+  it('returns a successful default change and emits completion', async () => {
+    switchBackend.mockResolvedValue({ success: true, backend: 'lmstudio' });
+    const app = makeApp();
+    const res = await request(app).post('/api/local-llm/switch').send({ to: 'lmstudio' });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ success: true, backend: 'lmstudio' });
+    expect(app.get('io').emit.mock.calls.some(([, payload]) => payload.event === 'complete')).toBe(true);
   });
 });

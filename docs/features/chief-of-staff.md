@@ -166,9 +166,10 @@ review obligation whose commits are already on the default branch (ancestor or
 patch-equivalent) is removed in place: no PR identity, owner
 history or agent review is needed, and the retirement
 service re-proves merge evidence and ownership under its fence. Nothing is copied
-into an archive. Git-ignored payload is checked separately: unverified ignored
-files retain the checkout and branch, while recognized disposable module caches
-and links retain their existing policy. Historical recovery archives and
+into an archive. The checkout remains if Git status shows work or ignored content
+cannot be independently verified as disposable; merge evidence does not cover
+those local bytes. This also applies to an agent's completed checkout and to
+superseded retirement. Historical recovery archives and
 unfinished quarantine journals remain available after setup. Human handoffs
 and unreadable policy stay held. Other completed local review obligations become bounded
 `REVIEW_RETIREMENT` tasks after a fresh merged-PR preview accepts their policy,
@@ -193,9 +194,10 @@ and leaves remote-only receipts and concurrent replacement receipts untouched.
 A single locked checkout no longer labels unrelated review holds as live owners.
 
 A branch with a fresh SUPERSEDED verdict (its replacement still on the default
-branch, its tip and dirty paths unchanged) is backed up under
-`data/cos/abandoned-worktree-backups/` and retired by the scheduled
-reconciliation, behind the same owner and lock gates as merged cleanup. The
+branch, its tip and dirty paths unchanged) is retired by the scheduled
+reconciliation, behind the same owner and lock gates as merged cleanup, and
+only when its worktree is clean: nothing is copied first, so a tree holding
+uncommitted or untracked work is held and reported instead. The
 per-app `reapSuperseded` toggle (on unless `false`, and off whenever
 `cleanupMerged` is off) keeps such branches instead; direct `reconcile()`
 callers still opt in explicitly.

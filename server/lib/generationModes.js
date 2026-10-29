@@ -73,6 +73,7 @@ export const MEDIA_JOB_EXECUTION_LANES = Object.freeze(['gpu', 'cloud', 'remote'
 
 export const mediaJobExecutionLane = ({ kind, mode, remote } = {}) => {
   if (remote) return 'remote';
+  if (kind === 'video-upscale' && mode === 'topaz') return 'cloud';
   if (kind === 'image' && CLOUD_IMAGE_GEN_MODES.includes(mode)) return 'cloud';
   if (kind === 'video' && CLOUD_VIDEO_GEN_MODES.includes(mode)) return 'cloud';
   return 'gpu';

@@ -418,12 +418,41 @@ describe('alignProjectLyrics', () => {
     expect(saved.lyricAlignSource).toBeUndefined();
   });
 
-  it('saves nothing when CTC lands in silence, the song or text changes, or alignment is cancelled', async () => {
-    for (const outcome of ['silence', 'audio', 'text', 'cancel']) {
+  it.each([true, false])('retries a line CTC placed in vocal silence, then saves and flags what stays silent (%s)', async (repaired) => {
+    const record = { ...project, vocalStemFilename: 'stem.wav', lyricCues: [
+      { id: 'a', text: 'walking home', startSec: null, endSec: null },
+      { id: 'b', text: 'under neon', startSec: null, endSec: null },
+    ] };
+    const stem = encodePcm16Wav(16000 * 10);
+    for (const [start, end] of [[1, 2], [5, 6]]) {
+      for (let i = start * 16000; i < end * 16000; i++) stem.writeInt16LE(5000, 44 + i * 2);
+    }
+    const h = harness(vi.fn(), record, { resolveAudio: async () => ({ path: 'stem.wav', source: 'vocal-stem' }) });
+    h.decodeAudio.mockResolvedValue(stem);
+    const line = (text, start) => text.split(' ').map((w, i) => ({ w, startSec: start + i * 0.5, endSec: start + (i + 1) * 0.5, conf: 'matched' }));
+    const whole = [line('walking home', 1), line('under neon', 3)];
+    const retry = repaired ? line('under neon', 5) : line('under neon', 3.5);
+    const forceAlign = vi.fn().mockResolvedValueOnce(whole).mockResolvedValueOnce([retry]);
+    const saved = await h.run({ deps: { forceAlign } });
+    expect(forceAlign).toHaveBeenLastCalledWith(stem, [record.lyricCues[1]], expect.objectContaining({ startSec: 2, endSec: 10 }));
+    expect(h.updateProject).toHaveBeenCalledOnce();
+    expect(saved.lyricCues[0].silentWords).toBeUndefined();
+    if (repaired) {
+      expect(saved.lyricCues[1]).toMatchObject({ words: retry });
+      expect(saved.lyricCues[1].silentWords).toBeUndefined();
+      expect(saved.lyricAlignSilentWords).toBe(0);
+    } else {
+      expect(saved.lyricCues[1]).toMatchObject({ words: whole[1], silentWords: [0, 1] });
+      expect(saved.lyricAlignSilentWords).toBe(2);
+    }
+  });
+
+  it('saves nothing when the song or text changes, or alignment is cancelled', async () => {
+    for (const outcome of ['audio', 'text', 'cancel']) {
       const record = { ...project, vocalStemFilename: 'stem.wav', lyricCues: [{ id: 'a', text: 'walking', startSec: null, endSec: null }] };
       const h = harness(vi.fn(), record, { resolveAudio: async () => ({ path: 'stem.wav', source: 'vocal-stem' }) });
       const stem = encodePcm16Wav(16000 * 3);
-      if (outcome !== 'silence') for (let i = 16000; i < 32000; i++) stem.writeInt16LE(5000, 44 + i * 2);
+      for (let i = 16000; i < 32000; i++) stem.writeInt16LE(5000, 44 + i * 2);
       h.decodeAudio.mockResolvedValue(stem);
       let cancelled = false;
       const forceAlign = async () => {
@@ -433,7 +462,7 @@ describe('alignProjectLyrics', () => {
         return [[{ w: 'walking', startSec: 1, endSec: 2, conf: 'matched' }]];
       };
       await expect(h.run({ deps: { forceAlign }, isCancelled: () => cancelled })).rejects.toMatchObject(
-        outcome === 'cancel' ? { canceled: true } : { code: { silence: 'LYRIC_ALIGN_SILENT_WORDS', audio: 'MUSIC_VIDEO_AUDIO_CHANGED', text: 'LYRIC_ALIGN_TEXT_CHANGED' }[outcome] });
+        outcome === 'cancel' ? { canceled: true } : { code: { audio: 'MUSIC_VIDEO_AUDIO_CHANGED', text: 'LYRIC_ALIGN_TEXT_CHANGED' }[outcome] });
       expect(h.updateProject).not.toHaveBeenCalled();
     }
   });

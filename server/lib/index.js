@@ -82,6 +82,7 @@ export * as memoryValidation from './memoryValidation.js';
 export * as modelPersonalityValidation from './modelPersonalityValidation.js';
 export * as moodBoardValidation from './moodBoardValidation.js';
 export * as musicVideoValidation from './musicVideoValidation.js';
+export * as musicVideoStoryValidation from './musicVideoStoryValidation.js';
 export * as notesValidation from './notesValidation.js';
 export * as peerSyncValidation from './peerSyncValidation.js';
 export * as pipelineValidation from './pipelineValidation.js';
@@ -123,6 +124,7 @@ export * as catalogBulkParsers from './catalogBulkParsers.js';
 export * from './catalogChunking.js';
 export * from './catalogSourceKinds.js';
 export * from './catalogTypes.js';
+export * from './catalogStoryDraft.js';
 export * as catalogUniverseTags from './catalogUniverseTags.js';
 export * from './canonPrompt.js';
 export * from './comicScriptParser.js';
@@ -186,6 +188,7 @@ export * from './characterEvolutionCoverage.js';
 // re-exports CHARACTER_ARC_TYPES from here, so keep this flat export ahead of
 // the namespaced storyBible below.
 export * from './characterFramework.js';
+export * from './characterHeight.js';
 export * from './characterIntegrity.js';
 // The cast-integrity vocabulary characterIntegrity.js reports in, as a pure leaf.
 export * from './characterIntegrityVocabulary.js';
@@ -454,6 +457,7 @@ export * from './hostShutdown.js';
 export * from './httpDrain.js';
 export * from './upgradeFallback.js';
 export * from './execGit.js';
+export * from './gitMutationLifetime.js';
 export * from './windowsGitProcess.js';
 export * from './ffmpeg.js';
 export * from './ffmpegFilterGraph.js';
@@ -507,6 +511,7 @@ export * from './itermMessages.js';
 export * from './itermScreenRender.js';
 export * from './networkExposure.js';
 export * from './peerHttpClient.js';
+export * from './peerPairing.js';
 export * from './peerProbeDiagnostics.js';
 export * from './peerSelfHost.js';
 export * from './protobufWire.js';
@@ -919,6 +924,8 @@ export * from './filmLook.js';
 export * from './filmLookValidation.js';
 export * from './filmLookGpu.js';
 export * from './musicVideoStatsOutro.js';
+export * from './musicVideoCreditsOutro.js';
+export * from './musicVideoEnding.js';
 export * from './musicVideoTitleCard.js';
 export * from './musicVideoDependencies.js';
 export * from './musicVideoEndFrame.js';
@@ -979,6 +986,7 @@ export * from './legacyRetirementTransition.js';
 export * from './retirementCheckoutObservation.js';
 
 export * from './checkoutRetirementAdmission.js';
+export * from './checkoutSeed.js';
 export * from './moltworldExplore.js';
 export * from './pgJson.js';
 export * from './errorLogFingerprint.js';
@@ -1010,3 +1018,12 @@ export * from './testCacheRetirementProof.js';
 export * from './realityStarterV2.js';
 export * from './universeVisualProfile.js';
 export * from './universeVisualProfileValidation.js';
+
+export * from './musicVideoPublishExports.js';
+
+export * from './musicVideoFestivalPacket.js';
+
+export * from './mediaRowOwners.js';
+export * from './mediaOriginClaim.js';
+
+export * from './peerSyncEventSchema.js';

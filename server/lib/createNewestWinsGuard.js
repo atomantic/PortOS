@@ -44,9 +44,11 @@ export function createNewestWinsGuard() {
       return !!prev && at < prev;
     },
     // Record `at` as the newest applied for `key`. No-op for an absent `at` so
-    // an untimed render can't poison the slot against future timed ones.
+    // an untimed render can't poison the slot against future timed ones, and
+    // never rewinds: marking an older render (a duplicate a client already
+    // filed) must not re-admit renders older than the recorded newest.
     mark: (key, at) => {
-      if (at) latest.set(key, at);
+      if (at && !(latest.get(key) > at)) latest.set(key, at);
     },
     clear: () => latest.clear(),
   };

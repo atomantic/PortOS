@@ -19,6 +19,7 @@ import { PATHS, ensureDir, detectImageFormat, writeFileGuarded } from '../../lib
 import { MAX_IMAGE_DATA_URL_BYTES } from '../../lib/moodBoardValidation.js';
 import { fetchPublicBinary } from '../../lib/safeUrlFetch.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
+import { writeLocalImageSidecarIfMissing } from '../imageGen/imageRecords.js';
 import { emitRecordUpdated } from '../sharing/recordEvents.js';
 import { externalImageItems, isExternalImageUrl } from './logic.js';
 import * as store from './db.js';
@@ -28,6 +29,18 @@ const MAX_IMAGE_BYTES = MAX_IMAGE_DATA_URL_BYTES;
 const DOWNLOAD_CONCURRENCY = 3;
 const UA = 'Mozilla/5.0 (compatible; PortOS Mood Board/1.0; +https://github.com/atomantic/PortOS)';
 const IMAGE_HEADERS = { 'User-Agent': UA, Accept: 'image/*' };
+
+/**
+ * Write a board copy plus a local-origin sidecar. The name is a content/URL
+ * hash, so saving again after a delete re-uses it; the sidecar's `createdAt`
+ * is what lets peers holding the old tombstone accept the new copy.
+ */
+function publishBoardCopy(filename, buffer) {
+  return withBackupAssetPublication(async () => {
+    await writeFileGuarded(join(PATHS.images, filename), buffer);
+    await writeLocalImageSidecarIfMissing(filename);
+  });
+}
 
 /**
  * Decode a `data:image/<fmt>;base64,...` URI and persist it into `data/images/`
@@ -72,7 +85,7 @@ async function saveDataImageUrl(dataUrl) {
   }
   const filename = `board-${createHash('sha1').update(buffer).digest('hex').slice(0, 16)}${fmt.ext}`;
   await ensureDir(PATHS.images);
-  await withBackupAssetPublication(() => writeFileGuarded(join(PATHS.images, filename), buffer));
+  await publishBoardCopy(filename, buffer);
   return `/data/images/${filename}`;
 }
 
@@ -93,7 +106,7 @@ async function downloadExternalImage(url) {
   await ensureDir(PATHS.images);
   // URL-keyed, so a repeat rewrites bytes a board may already name: hold the
   // backup lease (#9982) so the in-place write never overlaps a snapshot.
-  await withBackupAssetPublication(() => writeFileGuarded(join(PATHS.images, filename), res.buffer));
+  await publishBoardCopy(filename, res.buffer);
   return `/data/images/${filename}`;
 }
 

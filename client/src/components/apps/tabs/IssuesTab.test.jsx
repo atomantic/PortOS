@@ -227,6 +227,26 @@ describe('IssuesTab', () => {
     expect(await screen.findByRole('link', { name: /Queued/ })).toBeInTheDocument();
   });
 
+  it.each([
+    ['Claim', 'next', { body: `${'x'.repeat(12_001)}ACCEPTANCE_CRITERION_AT_TAIL`, bodyTruncated: false }],
+    ['Replan', 'replan', { body: `${'x'.repeat(12_001)}ACCEPTANCE_CRITERION_AT_TAIL`, bodyTruncated: false }],
+    ['Claim', 'next', { body: `${'x'.repeat(8_000)}\n\n…(truncated)`, bodyTruncated: true }],
+    ['Replan', 'replan', { body: `${'x'.repeat(8_000)}\n\n…(truncated)`, bodyTruncated: true }],
+    ['Claim', 'next', { body: `${'x'.repeat(8_000)}\n\n…(truncated)` }],
+    ['Replan', 'replan', { body: `${'x'.repeat(8_000)}\n\n…(truncated)` }],
+    ['Claim', 'next', { title: 'x'.repeat(1_001) }],
+    ['Replan', 'replan', { url: `https://example.com/${'x'.repeat(2_048)}` }],
+  ])('queues %s without a partial issue snapshot', async (action, command, fields) => {
+    api.getAppIssues.mockResolvedValue(okPayload([{ ...ISSUE, ...fields }]));
+    await renderTab();
+    fireEvent.click(await screen.findByRole('button', { name: new RegExp(action) }));
+    await waitFor(() => expect(api.createSlashdoTask).toHaveBeenCalled());
+    const [sentCommand, , payload] = api.createSlashdoTask.mock.calls.at(-1);
+    expect(sentCommand).toBe(command);
+    expect(payload.target).toBe('42');
+    expect(payload).not.toHaveProperty('issueContext');
+  });
+
   it('tracks the claimed task from queued through active and completed over the CoS socket', async () => {
     await renderTab();
 
@@ -332,6 +352,36 @@ describe('IssuesTab', () => {
 
     expect(await screen.findByText('codex,claude')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'claim-work override' })).toHaveAttribute('href', '/cos/schedule');
+  });
+
+  it('formats provider tokens into human-friendly reviewer format with model and effort', async () => {
+    api.getProviders.mockResolvedValue({
+      activeProvider: 'selection-e0a2d22261158b86fe9783e1',
+      providers: [{
+        id: 'selection-e0a2d22261158b86fe9783e1',
+        name: 'Codex CLI',
+        type: 'cli',
+        command: 'codex',
+        harnessId: 'codex',
+        enabled: true,
+        defaultModel: 'gpt-6.1-terra',
+        effort: 'max'
+      }],
+    });
+    api.getAppClaimReviewers.mockResolvedValue({
+      source: 'defaults',
+      reviewers: ['provider:selection-e0a2d22261158b86fe9783e1'],
+      usernames: [],
+      optionalReviewers: [],
+      reviewerMaxRounds: { 'provider:selection-e0a2d22261158b86fe9783e1': 2 },
+      reviewerModels: { 'provider:selection-e0a2d22261158b86fe9783e1': 'gpt-6.1-terra' },
+      reviewerEfforts: { 'provider:selection-e0a2d22261158b86fe9783e1': 'medium' },
+      csv: 'provider:selection-e0a2d22261158b86fe9783e1~max=2~effort=medium',
+    });
+
+    await renderTab({ open: true });
+
+    expect(await screen.findByText('codex[gpt-6.1-terra]~max=2~effort=medium')).toBeInTheDocument();
   });
 
   it('points at the Code Reviewers panel when no override is in play', async () => {

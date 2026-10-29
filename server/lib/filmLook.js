@@ -40,11 +40,20 @@ export const FILM_LOOK_CONTROLS = Object.freeze([
   { id: 'halation', group: 'focus', label: 'Halation', term: 'halation · highlight bloom', min: 0, max: 1, step: 0.01, def: 0,
     hint: 'Film lets bright light bounce back through the emulsion: warm halos around lamps, signs and skin highlights.',
     words: (v) => (v > 0.5 ? 'strong red-orange halation around highlights, blooming neon' : 'soft halation around light sources') },
+  { id: 'halationSpread', group: 'focus', label: 'Halation spread', term: 'halation size · emulsion scatter', min: 0, max: 1, step: 0.01, def: 0, modifier: 'halation', since: 2,
+    hint: 'How far the halo reaches past the highlight. Low hugs the edge like fine-grain stock; high blooms across the frame like a cine print.',
+    words: (v) => (v > 0.5 ? 'wide blooming halation' : 'tight halation hugging bright edges') },
   { id: 'halationColor', group: 'focus', label: 'Halation color', term: 'halation tint', type: 'color', def: '#ff5a1f',
     hint: 'Film halation is red-orange (the anti-halation layer passes red). Change it for a stylized glow.' },
   { id: 'chroma', group: 'focus', label: 'Color fringing', term: 'chromatic aberration', min: 0, max: 1, step: 0.01, def: 0,
     hint: 'A cheap lens focuses red and blue at different points: colored fringes at edges, strongest off-center.',
     words: () => 'chromatic aberration, color fringing at edges, cheap lens' },
+  { id: 'edgeSoftness', group: 'focus', label: 'Lens fall-off', term: 'soft corners · vintage lens', min: 0, max: 1, step: 0.01, def: 0, since: 2,
+    hint: 'Sharp in the middle, softer toward the edges: an old fast lens wide open, which also reads as shallow depth of field.',
+    words: (v) => (v > 0.5 ? 'vintage lens wide open, soft swirling edges, shallow depth of field' : 'vintage lens, gently soft corners') },
+  { id: 'smear', group: 'focus', label: 'Tape softness', term: 'horizontal smear · VHS resolution', min: 0, max: 1, step: 0.01, def: 0, since: 2,
+    hint: 'Videotape keeps vertical detail but loses horizontal detail, so edges smear sideways and fine texture goes mushy.',
+    words: (v) => (v > 0.5 ? 'smeary low-resolution VHS picture' : 'soft analog video picture') },
   { id: 'bleed', group: 'focus', label: 'Color bleed', term: 'chroma smear · VHS bleed', min: 0, max: 1, step: 0.01, def: 0,
     hint: 'Tape and broadcast carry color at lower resolution than brightness, so colors smear sideways past their edges.',
     words: (v) => (v > 0.5 ? 'heavy VHS color bleed, smeared chroma' : 'slight analog color bleed') },
@@ -73,6 +82,9 @@ export const FILM_LOOK_CONTROLS = Object.freeze([
   { id: 'toe', group: 'color', label: 'Shadow toe', term: 'film shadow response', min: 0, max: 1, step: 0.01, def: 0, since: 2,
     hint: 'Deepens low tones progressively while holding the black point; leaves midtones alone.',
     words: () => 'grounded photographic shadows' },
+  { id: 'crossover', group: 'color', label: 'Film color response', term: 'dye crossover · print stock', min: -1, max: 1, step: 0.01, def: 0, since: 2,
+    hint: 'Film dyes respond differently through the tonal range. Positive gives cyan-green shadows and warm amber highlights like a cinema print; negative cools the highlights and warms the shadows like expired stock.',
+    words: (v) => (v > 0 ? 'cinema print film color, teal-green shadows and warm amber highlights' : 'expired film color shift, warm shadows and cool highlights') },
   { id: 'highlightChroma', group: 'color', label: 'Highlight color restraint', term: 'negative highlight chroma', min: 0, max: 1, step: 0.01, def: 0, since: 2,
     hint: 'Gently reduces saturation as tones approach white, preserving color in the shadows.',
     words: () => 'restrained highlight color' },
@@ -95,6 +107,9 @@ export const FILM_LOOK_CONTROLS = Object.freeze([
     words: (v) => (v > 0.6 ? 'coarse Super 8 grain' : v > 0.3 ? '16mm grain' : 'fine 35mm grain') },
   { id: 'grainColor', group: 'texture', label: 'Color grain', term: 'chroma noise', type: 'toggle', def: false,
     hint: 'Monochrome grain is film. Colored speckle is a sensor at high ISO or a Polaroid emulsion.' },
+  { id: 'tracking', group: 'texture', label: 'Tracking', term: 'head-switching noise · dropouts', min: 0, max: 1, step: 0.01, def: 0, since: 2,
+    hint: 'The torn strip along the bottom of a VHS frame and the odd white dropout streak where the tape lost its oxide.',
+    words: () => 'VHS head-switching noise at the bottom of frame, tape dropouts' },
   { id: 'tapeNoise', group: 'texture', label: 'Tape noise', term: 'tape bands · tracking noise', min: 0, max: 1, step: 0.01, def: 0,
     hint: 'Faint horizontal bands of brightness noise, the texture of a worn videotape.',
     words: () => 'VHS tape noise, horizontal tracking bands' },
@@ -123,10 +138,16 @@ export const FILM_LOOK_PRESETS = Object.freeze([
   { id: 'none', label: 'Clean', summary: 'No finishing; the picture as rendered.', values: {} },
   { id: 'neon-rain', label: 'Neon rain 80s', summary: 'Yellow-green cast, red-orange halation, missed focus, heavy grain, crushed shadows, faded contrast.',
     values: { defocus: 0.3, diffusion: 0.25, halation: 0.8, chroma: 0.25, bleed: 0.35, contrast: -0.2, fade: 0.3, saturation: 0.15, warmth: 0.2, tint: -0.15, cast: 0.2, castColor: '#b9c04a', splitTone: 0.35, shadowColor: '#163a2e', highlightColor: '#ffa060', grain: 0.6, grainSize: 0.45, vignette: 0.35 } },
-  { id: 'polaroid', label: 'Polaroid', summary: 'Soft, warm, faded instant film with a milky lift and fine color speckle.',
-    values: { defocus: 0.2, diffusion: 0.3, halation: 0.2, contrast: -0.3, fade: 0.45, saturation: -0.15, warmth: 0.3, tint: 0.15, cast: 0.15, castColor: '#e8c48a', grain: 0.3, grainSize: 0.3, grainColor: true, vignette: 0.45 } },
-  { id: 'vhs', label: 'VHS', summary: 'Smeared color, soft detail, tape bands and a slow drifting leak.',
-    values: { defocus: 0.35, bleed: 0.8, chroma: 0.4, contrast: -0.1, saturation: 0.1, grain: 0.25, grainSize: 0.2, grainColor: true, tapeNoise: 0.5, vignette: 0.15, weave: 0.2, flicker: 0.15 } },
+  { id: 'cinematic-analog', label: 'Cinematic analog', summary: 'Warm amber skin, teal-green shadows, wide halation round the lights, soft grain and a vintage lens falling off at the edges.',
+    values: { version: 2, defocus: 0.06, diffusion: 0.18, halation: 0.55, halationSpread: 0.55, edgeSoftness: 0.55, crossover: 0.85, toe: 0.35, shoulder: 0.6, highlightChroma: 0.2, fade: 0.12, contrast: 0.08, saturation: 0.12, warmth: 0.22, tint: -0.12, splitTone: 0.28, shadowColor: '#1d4a44', highlightColor: '#ffb067', grain: 0.38, grainSize: 0.3, vignette: 0.35 } },
+  { id: 'tungsten-night', label: 'Tungsten night', summary: 'Night film balanced for lamps: red halos round every light, cool shadows, visible grain.',
+    values: { version: 2, diffusion: 0.1, halation: 0.75, halationSpread: 0.35, halationColor: '#ff3a1a', crossover: 0.5, toe: 0.3, shoulder: 0.5, fade: 0.08, saturation: 0.08, warmth: -0.12, tint: -0.04, splitTone: 0.2, shadowColor: '#12404a', highlightColor: '#ffb067', grain: 0.35, grainSize: 0.32, vignette: 0.2 } },
+  { id: 'pastel-portrait', label: 'Pastel portrait', summary: 'Portrait negative: soft highlights, gentle warm skin, quiet pastel color and fine grain.',
+    values: { version: 2, diffusion: 0.12, halation: 0.12, crossover: 0.25, shoulder: 0.7, toe: 0.1, highlightChroma: 0.35, fade: 0.15, contrast: -0.08, saturation: -0.08, warmth: 0.12, tint: 0.05, grain: 0.2, grainSize: 0.2, vignette: 0.12 } },
+  { id: 'polaroid', label: 'Polaroid', summary: 'Instant film: creamy highlights, cyan-leaning shadows, soft corners and a warm leak fogging the edge.',
+    values: { version: 2, defocus: 0.12, diffusion: 0.2, halation: 0.2, halationSpread: 0.4, edgeSoftness: 0.3, crossover: 0.5, toe: 0.3, shoulder: 0.5, highlightChroma: 0.3, contrast: 0.12, fade: 0.15, warmth: 0.2, tint: 0.08, grain: 0.25, grainSize: 0.3, grainColor: true, vignette: 0.4, leak: 0.7 } },
+  { id: 'vhs', label: 'VHS', summary: 'Sideways smear and color bleed, a torn tracking strip along the bottom, dropouts and faint chroma noise.',
+    values: { version: 2, smear: 0.6, bleed: 0.65, chroma: 0.15, diffusion: 0.15, contrast: -0.05, fade: 0.12, saturation: 0.05, tint: 0.06, grain: 0.12, grainSize: 0.15, grainColor: true, tracking: 0.3, tapeNoise: 0.08, vignette: 0.1 } },
   { id: 'super8', label: 'Super 8', summary: 'Coarse grain, warm faded color, gate weave and projector flicker.',
     values: { defocus: 0.15, halation: 0.35, contrast: -0.1, fade: 0.25, saturation: 0.1, warmth: 0.35, grain: 0.75, grainSize: 0.7, vignette: 0.5, leak: 0.2, weave: 0.6, flicker: 0.4 } },
   { id: '16mm', label: '16mm', summary: 'Documentary film: visible grain, honest color, a gentle vignette.',
@@ -164,7 +185,7 @@ export function filmLookPreset(id) {
 export function normalizeFilmLook(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
   if (input.version !== undefined && input.version !== 1 && input.version !== 2) return null;
-  const version = input.version === 2 || FILM_LOOK_CONTROLS.some((c) => c.since === 2 && Number(input[c.id]) > 0) ? 2 : FILM_LOOK_VERSION;
+  const version = input.version === 2 || FILM_LOOK_CONTROLS.some((c) => c.since === 2 && Math.abs(Number(input[c.id])) > 0) ? 2 : FILM_LOOK_VERSION;
   const look = { version, preset: FILM_LOOK_PRESET_IDS.includes(input.preset) ? input.preset : 'custom' };
   for (const control of FILM_LOOK_CONTROLS) {
     const value = input[control.id];
@@ -268,15 +289,23 @@ export function filmLookFilterMarkup(look, { frame = 0, width = 1920, height = 1
 
   // Version 1 stays byte-for-byte identical. The new curve is evaluated before
   // glow so optical effects cannot clip the source before its shoulder acts.
-  if (look?.version === 2 && (v('shoulder') || v('toe'))) {
-    const table = Array.from({ length: 256 }, (_, i) => {
-      const x = i / 255;
-      if (x < 0.25) return n(x * (1 - v('toe') * 0.6 * (1 - x / 0.25) ** 2));
-      if (x <= 0.55) return n(x);
+  if (look?.version === 2 && (v('shoulder') || v('toe') || v('crossover'))) {
+    const curve = (x) => {
+      if (x < 0.25) return x * (1 - v('toe') * 0.6 * (1 - x / 0.25) ** 2);
+      if (x <= 0.55) return x;
       const t = (x - 0.55) / 0.45;
-      return n(0.55 + 0.45 * t / (1 + v('shoulder') * 0.8 * t));
-    }).join(' ');
-    emit(`<feComponentTransfer in="${cur}" result="">${['R', 'G', 'B'].map((c) => `<feFunc${c} type="table" tableValues="${table}"/>`).join('')}</feComponentTransfer>`);
+      return 0.55 + 0.45 * t / (1 + v('shoulder') * 0.8 * t);
+    };
+    // Dye crossover: each channel bends away from the shared curve in opposite
+    // directions below and above middle gray (zero at black, gray and white), so
+    // shadows lean cyan-green and highlights amber without moving the end points.
+    const lean = { R: 0.13, G: -0.045, B: -0.15 };
+    const tables = ['R', 'G', 'B'].map((c) => Array.from({ length: 256 }, (_, i) => {
+      const x = i / 255;
+      const y = curve(x) + v('crossover') * lean[c] * (2 * x - 1) * 4 * x * (1 - x);
+      return n(Math.min(1, Math.max(0, y)));
+    }).join(' '));
+    emit(`<feComponentTransfer in="${cur}" result="">${['R', 'G', 'B'].map((c, i) => `<feFunc${c} type="table" tableValues="${tables[i]}"/>`).join('')}</feComponentTransfer>`);
   }
   if (look?.version === 2 && v('highlightChroma')) {
     const pic = cur;
@@ -294,6 +323,20 @@ export function filmLookFilterMarkup(look, { frame = 0, width = 1920, height = 1
   }
   const defocus = v('defocus');
   if (defocus > 0) emit(`<feGaussianBlur in="${cur}" stdDeviation="${n(Math.pow(defocus, 1.5) * 0.014 * w)}" edgeMode="duplicate" result=""/>`);
+  const edgeSoftness = v('edgeSoftness');
+  if (edgeSoftness > 0) {
+    // Sharp center, blurred rim: picture × mask + blur × (1 − mask), the mask a soft-edged lit rectangle.
+    const pic = cur;
+    const blurred = emit(`<feGaussianBlur in="${pic}" stdDeviation="${n((0.001 + 0.006 * edgeSoftness) * w)}" edgeMode="duplicate" result=""/>`);
+    const inset = 0.1 + 0.16 * edgeSoftness;
+    const lit = emit(`<feFlood flood-color="#fff" x="${n(w * inset)}" y="${n(h * inset)}" width="${n(w * (1 - 2 * inset))}" height="${n(h * (1 - 2 * inset))}" result=""/>`);
+    const mask = emit(`<feGaussianBlur in="${lit}" stdDeviation="${n(0.09 * w)}" x="0" y="0" width="${n(w)}" height="${n(h)}" result=""/>`);
+    const sharp = emit(`<feComposite in="${pic}" in2="${mask}" operator="in" result=""/>`);
+    const rim = emit(`<feComposite in="${blurred}" in2="${mask}" operator="arithmetic" k1="-1" k2="1" k3="0" k4="0" result=""/>`);
+    emit(`<feComposite in="${sharp}" in2="${rim}" operator="arithmetic" k1="0" k2="1" k3="1" k4="0" result=""/>`);
+  }
+  const smear = v('smear');
+  if (smear > 0) emit(`<feGaussianBlur in="${cur}" stdDeviation="${n(smear * 0.0045 * w)} 0" edgeMode="duplicate" result=""/>`);
 
   const bleed = v('bleed');
   if (bleed > 0) {
@@ -329,9 +372,11 @@ export function filmLookFilterMarkup(look, { frame = 0, width = 1920, height = 1
     const [hr, hg, hb] = rgb(hex('halationColor', '#ff5a1f'));
     const luma = emit(`<feColorMatrix in="${pic}" type="matrix" values="${lumaRgb}" result=""/>`);
     const bright = emit(`<feComponentTransfer in="${luma}" result=""><feFuncR type="linear" slope="2.5" intercept="-1.5"/><feFuncG type="linear" slope="2.5" intercept="-1.5"/><feFuncB type="linear" slope="2.5" intercept="-1.5"/></feComponentTransfer>`);
-    const spread = emit(`<feGaussianBlur in="${bright}" stdDeviation="${n((look?.version === 2 ? 0.001 + 0.006 * halation : 0.008 + 0.03 * halation) * w)}" edgeMode="duplicate" result=""/>`);
+    const reach = v('halationSpread');
+    const spread = emit(`<feGaussianBlur in="${bright}" stdDeviation="${n((look?.version === 2 ? 0.001 + 0.006 * halation + 0.03 * reach : 0.008 + 0.03 * halation) * w)}" edgeMode="duplicate" result=""/>`);
     const tinted = emit(`<feColorMatrix in="${spread}" type="matrix" values="${n(hr)} 0 0 0 0 0 ${n(hg)} 0 0 0 0 0 ${n(hb)} 0 0 0 0 0 1 0" result=""/>`);
-    emit(`<feComposite in="${pic}" in2="${tinted}" operator="arithmetic" k1="0" k2="1" k3="${n(1.3 * halation)}" k4="0" result=""/>`);
+    // A wider halo spreads the same light thinner; lift it so spread changes reach, not strength.
+    emit(`<feComposite in="${pic}" in2="${tinted}" operator="arithmetic" k1="0" k2="1" k3="${n(1.3 * halation * (1 + 1.5 * reach))}" k4="0" result=""/>`);
   }
 
   // Tone: exposure, contrast, fade, flicker, warmth and tint fold into one
@@ -396,6 +441,21 @@ export function filmLookFilterMarkup(look, { frame = 0, width = 1920, height = 1
     const blended = emit(`<feBlend in="${mono}" in2="${pic}" mode="soft-light" result=""/>`);
     emit(`<feComposite in="${pic}" in2="${blended}" operator="arithmetic" k1="0" k2="${n(1 - 0.8 * tape)}" k3="${n(0.8 * tape)}" k4="0" result=""/>`);
   }
+  const tracking = v('tracking');
+  if (tracking > 0) {
+    const pic = cur;
+    // Dropouts: thin horizontal streaks where one row of the noise peaks, re-drawn every frame.
+    const noise = emit(`<feTurbulence type="fractalNoise" baseFrequency="${n(0.004 * (1920 / w))} ${n(0.3 * (1080 / h))}" numOctaves="1" seed="${((f * 13) % 9973) + 1}" result=""/>`);
+    const peaks = emit(`<feComponentTransfer in="${noise}" result=""><feFuncR type="linear" slope="14" intercept="${n(-14 * (0.74 - 0.04 * tracking))}"/></feComponentTransfer>`);
+    const streaks = emit(`<feColorMatrix in="${peaks}" type="matrix" values="0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 ${n(0.7 * tracking)} 0 0 0 0" result=""/>`);
+    const dropped = emit(`<feComposite in="${streaks}" in2="${pic}" operator="over" result=""/>`);
+    // Head switching: the bottom rows torn sideways and lifted, jumping a little every frame.
+    const band = Math.max(1, (0.012 + 0.025 * tracking) * h);
+    const jump = 0.6 + 0.4 * hash(f + 101);
+    const torn = emit(`<feOffset in="${dropped}" dx="${n(tracking * 0.03 * w * jump)}" dy="0" x="0" y="${n(h - band)}" width="${n(w)}" height="${n(band)}" result=""/>`);
+    const lifted = emit(`<feComponentTransfer in="${torn}" x="0" y="${n(h - band)}" width="${n(w)}" height="${n(band)}" result=""><feFuncR type="linear" slope="0.85" intercept="0.1"/><feFuncG type="linear" slope="0.85" intercept="0.1"/><feFuncB type="linear" slope="0.85" intercept="0.1"/></feComponentTransfer>`);
+    emit(`<feComposite in="${lifted}" in2="${dropped}" operator="over" result=""/>`);
+  }
   const vignette = v('vignette');
   if (vignette > 0) {
     const pic = cur;
@@ -410,10 +470,25 @@ export function filmLookFilterMarkup(look, { frame = 0, width = 1920, height = 1
     const pic = cur;
     const drift = 0.62 + 0.18 * Math.sin(f * 0.011) + 0.05 * Math.sin(f * 0.047);
     const breathe = 0.75 + 0.25 * Math.sin(f * 0.023 + 1);
-    const glow = emit(`<feFlood flood-color="${hex('leakColor', '#ff7a2a')}" x="${n(w * drift)}" y="${n(-h * 0.2)}" width="${n(w * 0.3)}" height="${n(h * 1.4)}" result=""/>`);
-    const soft = emit(`<feGaussianBlur in="${glow}" stdDeviation="${n(0.09 * w)}" x="0" y="0" width="${n(w)}" height="${n(h)}" result=""/>`);
-    const faded = emit(`<feComponentTransfer in="${soft}" result=""><feFuncA type="linear" slope="${n(leak * breathe)}" intercept="0"/></feComponentTransfer>`);
-    emit(`<feBlend in="${faded}" in2="${pic}" mode="screen" result=""/>`);
+    if (look?.version === 2) {
+      // Fogged from the film edge: a wide glow and a hotter, paler core pressed against the right side,
+      // sliding up and down the edge as the frames advance.
+      const color = hex('leakColor', '#ff7a2a');
+      const core = `#${rgb(color).map((c) => Math.round(255 * (c + (1 - c) * 0.55)).toString(16).padStart(2, '0')).join('')}`;
+      const top = h * (0.05 + 0.25 * (drift - 0.62) / 0.23);
+      const glow = emit(`<feFlood flood-color="${color}" x="${n(w * 0.86)}" y="${n(top)}" width="${n(w * 0.4)}" height="${n(h * 0.8)}" result=""/>`);
+      const wide = emit(`<feGaussianBlur in="${glow}" stdDeviation="${n(0.11 * w)}" x="0" y="0" width="${n(w)}" height="${n(h)}" result=""/>`);
+      const hot = emit(`<feFlood flood-color="${core}" x="${n(w * 0.95)}" y="${n(top + h * 0.15)}" width="${n(w * 0.2)}" height="${n(h * 0.5)}" result=""/>`);
+      const tight = emit(`<feGaussianBlur in="${hot}" stdDeviation="${n(0.05 * w)}" x="0" y="0" width="${n(w)}" height="${n(h)}" result=""/>`);
+      const fog = emit(`<feBlend in="${tight}" in2="${wide}" mode="screen" result=""/>`);
+      const faded = emit(`<feComponentTransfer in="${fog}" result=""><feFuncA type="linear" slope="${n(Math.min(1, 1.2 * leak * breathe))}" intercept="0"/></feComponentTransfer>`);
+      emit(`<feBlend in="${faded}" in2="${pic}" mode="screen" result=""/>`);
+    } else {
+      const glow = emit(`<feFlood flood-color="${hex('leakColor', '#ff7a2a')}" x="${n(w * drift)}" y="${n(-h * 0.2)}" width="${n(w * 0.3)}" height="${n(h * 1.4)}" result=""/>`);
+      const soft = emit(`<feGaussianBlur in="${glow}" stdDeviation="${n(0.09 * w)}" x="0" y="0" width="${n(w)}" height="${n(h)}" result=""/>`);
+      const faded = emit(`<feComponentTransfer in="${soft}" result=""><feFuncA type="linear" slope="${n(leak * breathe)}" intercept="0"/></feComponentTransfer>`);
+      emit(`<feBlend in="${faded}" in2="${pic}" mode="screen" result=""/>`);
+    }
   }
 
   if (look?.version === 2 && parts.length > 2) emit(`<feComposite in="${cur}" in2="SourceGraphic" operator="in" result=""/>`);
@@ -435,8 +510,9 @@ export function filmLookFilterMarkup(look, { frame = 0, width = 1920, height = 1
  * its `transform`), and the cast, grain, tape bands, vignette and leak become
  * blended `overlays` in the render's order, each a flat color, a gradient or a
  * tile rasterized once (`image`) and shifted per song frame (`shift`, [0, 1)).
- * The glows, the fringing and the split tone have no cheap stand-in and are
- * left to the exact filter the paused picture shows. Returns null for a
+ * The glows, the fringing, the split tone, the dye crossover, the lens fall-off
+ * and the tracking strip have no cheap stand-in and are left to the exact filter
+ * the paused picture shows; tape softness rides in the round CSS blur. Returns null for a
  * neutral look.
  */
 export function filmLookMotionLayers(look, { frame = 0, width = 1920, height = 1080 } = {}) {
@@ -462,7 +538,9 @@ function filmLookMotionMarkup(settings, { frame = 0, width = 1920, height = 1080
   const f = Math.max(0, Math.floor(frame));
   const filter = [];
   const defocus = v('defocus');
-  if (defocus > 0) filter.push(`blur(${n(Math.pow(defocus, 1.5) * 0.014 * w)}px)`);
+  // CSS blur is round; tape softness rides in it at half strength, a sideways smear's nearest stand-in.
+  const blur = Math.pow(defocus, 1.5) * 0.014 * w + v('smear') * 0.002 * w;
+  if (blur > 0) filter.push(`blur(${n(blur)}px)`);
   // The render's per-channel transfer v' = slope·v + intercept, as brightness(b) then
   // contrast(k): k·b·v + (1 − k)/2, so k = 1 − 2·intercept and b = slope / k.
   const exposure = v('exposure'); const contrast = v('contrast'); const fade = v('fade'); const flicker = v('flicker');
@@ -521,8 +599,12 @@ function filmLookMotionMarkup(settings, { frame = 0, width = 1920, height = 1080
   if (leak > 0) {
     const drift = 0.62 + 0.18 * Math.sin(f * 0.011) + 0.05 * Math.sin(f * 0.047);
     const breathe = 0.75 + 0.25 * Math.sin(f * 0.023 + 1);
-    overlays.push({ key: 'leak', kind: 'gradient', opacity: n(Math.min(1, leak * breathe)), blend: 'screen',
-      gradient: `radial-gradient(ellipse 40% 140% at ${n((drift + 0.15) * 100)}% 50%, ${hexColor(settings.leakColor, '#ff7a2a')} 0%, rgba(0,0,0,0) 70%)` });
+    const color = hexColor(settings.leakColor, '#ff7a2a');
+    overlays.push(settings.version === 2
+      ? { key: 'leak', kind: 'gradient', opacity: n(Math.min(1, 1.2 * leak * breathe)), blend: 'screen',
+        gradient: `radial-gradient(ellipse 35% 60% at 100% ${n((0.45 + 0.25 * (drift - 0.62) / 0.23) * 100)}%, ${color} 0%, rgba(0,0,0,0) 75%)` }
+      : { key: 'leak', kind: 'gradient', opacity: n(Math.min(1, leak * breathe)), blend: 'screen',
+        gradient: `radial-gradient(ellipse 40% 140% at ${n((drift + 0.15) * 100)}% 50%, ${color} 0%, rgba(0,0,0,0) 70%)` });
   }
   return { filter: filter.join(' ') || null, transform, overlays };
 }

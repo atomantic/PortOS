@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { describe, it, expect, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router';
 import BoardStage from './BoardStage.jsx';
 import { ShotLockContext } from '../ShotLock.jsx';
@@ -12,7 +12,8 @@ vi.mock('../ContactSheetButton.jsx', () => ({ default: () => null }));
 vi.mock('../TreatmentPanel.jsx', () => ({ default: () => null, treatmentSummary: () => '' }));
 vi.mock('../ProjectActionGroups.jsx', () => ({ PlanActions: () => null }));
 vi.mock('../../../services/apiMusicVideo.js', async (load) => ({ ...await load(),
-  getMusicVideoOutroStats: vi.fn(async () => ({ stats: { stills: { made: 30, kept: 12 }, clips: { made: 9, kept: 4 }, rejected: 5, shots: 3, transitions: 0, imageEffects: 0, cameraMoves: 0, lipSyncs: 0, floorImages: [] } })) }));
+  getMusicVideoOutroStats: vi.fn(async () => ({ stats: { stills: { made: 30, kept: 12 }, clips: { made: 9, kept: 4 }, rejected: 5, shots: 3, transitions: 0, imageEffects: 0, cameraMoves: 0, lipSyncs: 0, floorImages: [] } })),
+  getMusicVideoCreditsPrefill: vi.fn(async () => ({ credits: { enabled: true, durationSec: 10, title: 'Example Song', artist: 'Example Artist', lines: [{ role: 'Directed by', name: 'Example Artist' }], footer: '' } })) }));
 
 const scene = (n, extra = {}) => ({ sceneId: `s${n}`, order: n - 1, label: `Part ${n}`, referenceImageId: 'f.png', videoHistoryId: 'v', startSec: (n - 1) * 3, endSec: n * 3, takes: [], ...extra });
 const board = (scenes, over = {}) => ({
@@ -172,7 +173,7 @@ describe('BoardStage ending', () => {
     const canvas = vi.spyOn(window.HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null);
     renderBoard(b, '/?scenes=all');
     const thumbs = screen.getByLabelText('Storyboard thumbnails').querySelectorAll(':scope > button');
-    const ending = thumbs[thumbs.length - 1];
+    const ending = thumbs[thumbs.length - 2];
     expect(ending.getAttribute('aria-label')).toBe('Open the ending: cutting room floor');
     expect(ending.textContent).toContain('Off');
     fireEvent.click(ending);
@@ -186,6 +187,48 @@ describe('BoardStage ending', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Close the ending' }));
     expect(screen.getByTestId('search').textContent).not.toContain('ending');
     expect(screen.queryByRole('region', { name: 'Ending: cutting room floor' })).toBeNull();
+    canvas.mockRestore();
+  });
+
+  it('lists the credits last and fills them from the song and artist when turned on', async () => {
+    const saveProjectFields = vi.fn(async () => {});
+    const b = board([scene(1)], { editProjectLocal: vi.fn(), saveProjectFields });
+    const canvas = vi.spyOn(window.HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null);
+    renderBoard(b, '/?scenes=all');
+    const thumbs = screen.getByLabelText('Storyboard thumbnails').querySelectorAll(':scope > button');
+    const credits = thumbs[thumbs.length - 1];
+    expect(credits.getAttribute('aria-label')).toBe('Open the ending: credits');
+    fireEvent.click(credits);
+    expect(screen.getByTestId('search').textContent).toContain('ending=credits');
+    const card = screen.getByRole('region', { name: 'Ending: credits' });
+    fireEvent.click(within(card).getByLabelText(/Off/));
+    await waitFor(() => expect(saveProjectFields).toHaveBeenCalledWith({ creditsOutro: {
+      enabled: true, durationSec: 10, layout: 'roll', title: 'Example Song', artist: 'Example Artist', lines: [{ role: 'Directed by', name: 'Example Artist' }], footer: '',
+    } }));
+    fireEvent.click(screen.getByRole('button', { name: 'Close the credits' }));
+    expect(screen.getByTestId('search').textContent).not.toContain('ending');
+    // Refill locks the editor until its lines land, so a newer edit can't be overwritten.
+    const { getMusicVideoCreditsPrefill } = await import('../../../services/apiMusicVideo.js');
+    let land;
+    getMusicVideoCreditsPrefill.mockImplementationOnce(() => new Promise((resolve) => { land = resolve; }));
+    const on = board([scene(1)], { editProjectLocal: vi.fn(), saveProjectFields });
+    on.project = { ...on.project, creditsOutro: { enabled: true, title: 'Old Title' } };
+    cleanup();
+    renderBoard(on, '/?scenes=all&ending=credits');
+    fireEvent.click(screen.getByRole('button', { name: /Refill from song/ }));
+    const editor = () => screen.getByLabelText('Song title').closest('fieldset');
+    expect(editor().disabled).toBe(true);
+    await act(async () => { land({ credits: { enabled: true, title: 'Example Song' } }); });
+    await waitFor(() => expect(editor().disabled).toBe(false));
+    // A refill left behind by closing the card is dropped, so the reopened editor's edits stand.
+    getMusicVideoCreditsPrefill.mockImplementationOnce(() => new Promise((resolve) => { land = resolve; }));
+    fireEvent.click(screen.getByRole('button', { name: /Refill from song/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Close the credits' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Open the ending: credits' }));
+    expect(editor().disabled).toBe(false);
+    saveProjectFields.mockClear();
+    await act(async () => { land({ credits: { enabled: true, title: 'Stale Refill' } }); });
+    expect(saveProjectFields).not.toHaveBeenCalled();
     canvas.mockRestore();
   });
 });

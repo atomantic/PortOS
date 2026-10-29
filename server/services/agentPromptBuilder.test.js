@@ -252,6 +252,35 @@ describe('composable skill template routing', () => {
     }
   });
 
+  it('keeps the deciding swarm record discoverable through cleanup transfer and exhaustion in both prompt paths', async () => {
+    const { resolveUndeliveredTaskUpdate, MAX_TASK_RETRIES } = await import('./agentErrorAnalysis.js');
+    const task = makeTask({ description: 'Finish the selected issues', metadata: { claimFlow: true,
+      failureCount: 1, totalSpawnCount: 2 } });
+    const cleanup = resolveUndeliveredTaskUpdate(task, { status: 'incomplete', reason: 'Code delivery completed; cleanup remains.',
+      recovery: { mode: 'cleanup' } }, 'agent-captured');
+    const retry = resolveUndeliveredTaskUpdate({ ...task, ...cleanup }, { status: 'incomplete',
+      reason: 'Cleanup verification cannot run (cleanup-delivery-unverified).' }, 'agent-captured');
+    const exhausted = resolveUndeliveredTaskUpdate({ ...task, ...retry, metadata: { ...retry.metadata,
+      failureCount: MAX_TASK_RETRIES - 1 } }, { status: 'incomplete', reason: 'The reported no-action-needed result was not verified.' }, 'agent-retry');
+    for (const [update, owner] of [[cleanup, 'agent-captured'], [retry, 'agent-captured'], [exhausted, 'agent-retry']]) {
+      const next = { ...task, ...update };
+      expect(next.metadata.totalSpawnCount).toBe(2);
+      const prompts = [buildLightContextPrompt(next, '/workspace/app', null, { agentId: 'agent-next', providerId: 'codex-tui', providerCommand: 'codex' }),
+        await buildAgentPrompt(next, {}, '/workspace/app', null, { agentId: 'agent-next', providerType: 'api' })];
+      for (const prompt of prompts) {
+        expect(prompt).toContain(`GET /api/cos/agents/${owner}`);
+        expect(prompt).toContain('Verify its taskId matches this task');
+        expect(prompt).toContain('claimReleasedBranches, completedCheckouts and cleanupOutcomes');
+        expect(prompt).toContain('a retained checkout is not proof of a running owner');
+        expect(prompt).toContain('A merged subset does not settle unfinished siblings');
+        expect(prompt).toContain('Preserve the existing retry/spawn budgets');
+      }
+    }
+    expect(retry.metadata.retryPendingCleanup).toBe('agent-captured');
+    expect(exhausted.status).toBe('blocked');
+    expect(exhausted.metadata.failureCount).toBe(MAX_TASK_RETRIES);
+  });
+
   it('keeps the final module-hygiene mission generic across API and TUI/CLI paths', async () => {
     const description = DEFAULT_TASK_PROMPTS['module-hygiene']
       .replaceAll('{appName}', 'Example App')
@@ -1756,6 +1785,30 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).toContain('review-blocked');
       expect(prompt).not.toContain('No code review was requested for this task');
       expect(prompt).not.toMatch(/write the completion sentinel — the run is not done/);
+    });
+
+    it.each([
+      { isTui: true, reviewerSource: 'inherited', resumed: false },
+      { isTui: true, reviewerSource: 'explicit', resumed: true },
+      { isTui: false, reviewerSource: 'inherited', resumed: false },
+      { isTui: false, reviewerSource: 'explicit', resumed: true },
+    ])('does not claim a local review for merge-only $reviewerSource reviewers (TUI=$isTui, resumed=$resumed)', ({ isTui, reviewerSource, resumed }) => {
+      const metadata = { openPR: true, prCompletion: 'merge-on-green', reviewLoop: false,
+        ...(reviewerSource === 'explicit' ? { reviewers: ['codex'], usernames: ['alice'] } : {}),
+        ...(resumed ? { resumedFromAgentId: 'agent-prior' } : {}) };
+      const defaults = reviewerSource === 'inherited' ? { reviewers: ['codex'], usernames: ['alice'] } : undefined;
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata }), '/r',
+        { branchName: 'b', worktreePath: '/tmp/wt', baseBranch: 'main', existingBranch: resumed },
+        { isTui, providerId: isTui ? 'codex-tui' : 'codex', providerCommand: 'codex',
+          defaultReviewers: defaults?.reviewers, codeReviewDefaults: defaults });
+      const gate = prompt.slice(prompt.indexOf('## Merge Gate'));
+
+      expect(prompt).not.toContain('### Local Review Before Opening the PR/MR');
+      expect(gate).toContain('No code review was requested for this task');
+      expect(gate).not.toContain('has completed; no PR-side code reviewer');
+      expect(gate).not.toContain('Required local-review merge gate');
+      expect(gate).toContain('gh pr merge "$PR_URL" --merge --match-head-commit <verified-head>');
     });
 
     it('inlines the slashdo CLI-reviewer recipe into the inline loop, as the follow-up gets', () => {

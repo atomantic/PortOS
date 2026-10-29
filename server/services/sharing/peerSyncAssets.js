@@ -11,6 +11,7 @@
  */
 import { extname, join } from 'path';
 import { existsSync } from 'fs';
+import { stat } from 'fs/promises';
 import { createHash } from 'crypto';
 import { PATHS, atomicWrite, readJSONFile, ensureDir, sha256File } from '../../lib/fileUtils.js';
 import { isPlainObject } from '../../lib/objects.js';
@@ -18,12 +19,12 @@ import { peerBaseUrl } from '../../lib/peerUrl.js';
 import { peerFetch } from '../../lib/peerHttpClient.js';
 import { RESPONSE_TOO_LARGE } from '../../lib/httpClient.js';
 import { withAbortTimeout } from '../../lib/abortTimeout.js';
-import { getOrComputeImageSha256, sidecarGenParamsHash } from '../../lib/assetHash.js';
+import { getOrComputeImageSha256, sidecarGenParamsHash, sidecarMatchesGenParamsHash, imageLiveStamp } from '../../lib/assetHash.js';
 import { generateThumbnail } from '../../lib/ffmpeg.js';
 import { sanitizeRecordForWire } from '../../lib/syncWire.js';
 import { collectAssetReferences } from './exporter.js';
 import { imageSidecarName, sanitizeAssetFilename } from './buckets.js';
-import { pullSidecarForImage } from './sidecarSync.js';
+import { pullSidecarForImage, recordImageSupplier, heldImageAdoptsOrigin } from './sidecarSync.js';
 import { parseKey } from '../../lib/mediaItemKey.js';
 import { headshotImageFilename } from '../authors/index.js';
 import { portraitImageFilename } from '../artists/index.js';
@@ -41,6 +42,8 @@ import { detectMediaManifest } from '../../lib/mimeTypes.js';
 import { mapWithConcurrency } from '../../lib/mapWithConcurrency.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { ASSET_PULL_MAX_BYTES } from './assetLimits.js';
+import { mediaTombstoneStamps } from '../mediaTombstones.js';
+import { parseTsMs } from '../../lib/lwwTimestamp.js';
 
 // Bound file hashing to avoid starving unrelated filesystem work when a
 // large record (especially a deck) advertises hundreds of images.
@@ -159,7 +162,28 @@ export function referenceCollectionAssetManifest(collection) {
 // and this module must never import that table (recordKinds.js ->
 // peerSyncAssets.js is the only allowed direction between the two).
 
-export async function hashImageForManifest(filename) {
+// A gallery image deleted here, unless the incoming copy says it was made after
+// the delete (a re-used name). An asset with no usable stamp stays blocked, so
+// an older peer's copy cannot resurrect the deleted image.
+const deletedImageStamps = (entries) => (entries.some((entry) => entry?.kind === 'image') ? mediaTombstoneStamps('image') : new Map());
+function blockedByImageTombstone(stamps, entry) {
+  if (entry?.kind !== 'image' || !stamps.has(entry.filename)) return false;
+  const incoming = parseTsMs(entry.createdAt);
+  return incoming === null || !(incoming > stamps.get(entry.filename));
+}
+
+// Video tombstones key on the history row id, but the bytes ride the library
+// sweep as `<id>.<ext>`. A re-created video has a new id, so the stem never matches it.
+const deletedVideoIds = async (entries) => (entries.some((entry) => entry?.kind === 'video') ? new Set((await mediaTombstoneStamps('video')).keys()) : new Set());
+const blockedByVideoTombstone = (ids, entry) => entry?.kind === 'video' && isStr(entry.filename) && ids.has(entry.filename.replace(/\.[^.]+$/, ''));
+
+/**
+ * `withCreatedAt` adds the image's live stamp (imageLiveStamp) so a receiver
+ * holding a tombstone for a re-used name can tell a newer image from the
+ * deleted one. Only the library manifest asks for it, and only from receivers
+ * that understand it (see PEER_LIBRARY_TOMBSTONES_HEADER).
+ */
+export async function hashImageForManifest(filename, { withCreatedAt = false, localInstanceId = null } = {}) {
   // Sanitize before join — a record with `imageRefs` containing a path-
   // traversal filename (peer-pushed via linkedCollection, hand-edited,
   // or import bug) would otherwise let us stat/hash files outside
@@ -180,7 +204,29 @@ export async function hashImageForManifest(filename) {
   // null when there are no gen-params, so we never advertise a hash for a
   // pure cache-only sidecar.
   const sidecarSha256 = sidecarGenParamsHash(result.sidecar);
-  return { filename: safeName, kind: 'image', sha256: result.hash, ...(sidecarSha256 ? { sidecarSha256 } : {}) };
+  // A pulled copy without a sidecar stamp advertises none, so receivers keep a
+  // tombstoned name blocked rather than taking its pull time as new.
+  const createdAt = withCreatedAt ? imageLiveStamp(result.sidecar, await stat(fullPath).catch(() => null), { localInstanceId }) : null;
+  return { filename: safeName, kind: 'image', sha256: result.hash, ...(sidecarSha256 ? { sidecarSha256 } : {}), ...(createdAt ? { createdAt } : {}) };
+}
+
+// The receiver advertises the capability in its health details (see
+// PORTOS_SCHEMA_VERSIONS.peerAssetStamps); an older one never does.
+export const peerAcceptsAssetStamps = (peer) => peer?.lastHealth?.assetStamps?.version >= 1;
+
+/**
+ * Add each image entry's live stamp to a per-record push manifest so a receiver
+ * holding a tombstone for a re-used name can tell a re-made image from the
+ * deleted one. Call only for a receiver that advertised it accepts the field
+ * (its strict entry schema refuses it otherwise). An image with no stamp keeps
+ * its entry unchanged and stays blocked there.
+ */
+export async function stampImageManifestEntries(manifest, { localInstanceId = null } = {}) {
+  return mapWithConcurrency(manifest, ASSET_HASH_CONCURRENCY, async (entry) => {
+    if (entry?.kind !== 'image') return entry;
+    const stamped = await hashImageForManifest(entry.filename, { withCreatedAt: true, localInstanceId });
+    return stamped?.createdAt ? { ...entry, createdAt: stamped.createdAt } : entry;
+  });
 }
 
 export async function hashSimpleAsset(filename, kind, sourceDir) {
@@ -207,11 +253,24 @@ export async function hashSimpleAsset(filename, kind, sourceDir) {
  * The receiver will background-fetch each missing asset from the sender's
  * `/data/{images,image-refs,videos}/<filename>` static mount.
  */
-export async function diffAssetManifestAgainstLocal(manifest, { includeMismatched = true } = {}) {
+export async function diffAssetManifestAgainstLocal(manifest, { includeMismatched = true, senderInstanceId = null } = {}) {
   if (!Array.isArray(manifest)) return [];
+  // A gallery image deleted here (or by its owner) is never pulled back.
+  const deletedImages = await deletedImageStamps(manifest);
+  const deletedVideos = await deletedVideoIds(manifest);
+  // Released to a Make-primary host (services/mediaHolders.js): streamed from
+  // there on purpose, so an absent copy is not missing. Read only when needed.
+  let released = null;
+  const isReleased = async (kind, name) => {
+    if (kind !== 'image' && kind !== 'video') return false;
+    released ??= await import('../peerHostedMedia.js').then((m) => m.releasedHostedKeys()).catch(() => new Set());
+    return released.has(`${kind}:${name}`);
+  };
   const missing = [];
+  let hostedIndex = null;
   for (const entry of manifest) {
     if (!isPlainObject(entry) || !isStr(entry.filename) || !isStr(entry.kind)) continue;
+    if (blockedByImageTombstone(deletedImages, entry) || blockedByVideoTombstone(deletedVideos, entry)) continue;
     const dir = directoryForAssetKind(entry.kind);
     if (!dir) continue;
     // Peer-supplied filenames go straight into a local `join(dir, name)` here
@@ -231,10 +290,11 @@ export async function diffAssetManifestAgainstLocal(manifest, { includeMismatche
       kind: entry.kind,
       ...(isStr(entry.sha256) ? { sha256: entry.sha256 } : {}),
       ...(isStr(entry.sidecarSha256) ? { sidecarSha256: entry.sidecarSha256 } : {}),
+      ...(entry.kind === 'image' && isStr(entry.createdAt) ? { createdAt: entry.createdAt } : {}),
     };
     const fullPath = join(dir, safeName);
     if (!existsSync(fullPath)) {
-      missing.push(sanitizedEntry);
+      if (!(await isReleased(entry.kind, safeName))) missing.push(sanitizedEntry);
       continue;
     }
     if (!includeMismatched) continue;
@@ -277,8 +337,10 @@ export async function diffAssetManifestAgainstLocal(manifest, { includeMismatche
       // became unreadable between the existsSync check and the stat).
       const localSidecar = imageHashResult?.sidecar
         ?? await readJSONFile(join(PATHS.images, imageSidecarName(safeName)), null, { logError: false });
-      const localSidecarHash = sidecarGenParamsHash(localSidecar);
-      if (localSidecarHash !== entry.sidecarSha256) missing.push(sanitizedEntry);
+      // A copy this sender may name the origin of must pull the sidecar to adopt it.
+      hostedIndex ??= await import('../peerHostedMedia.js').then((m) => m.listHostedEntries());
+      const adopts = heldImageAdoptsOrigin(localSidecar, { instanceId: senderInstanceId }, safeName, hostedIndex);
+      if (!sidecarMatchesGenParamsHash(localSidecar, entry.sidecarSha256, { originCandidates: adopts ? [] : [senderInstanceId] })) missing.push(sanitizedEntry);
     }
   }
   return missing;
@@ -954,7 +1016,10 @@ export async function pullMissingAssetsFromPeer(senderInstanceId, missingAssets,
     return;
   }
   const base = peerBaseUrl(peer);
+  const deletedImages = await deletedImageStamps(missingAssets);
+  const deletedVideos = await deletedVideoIds(missingAssets);
   for (const entry of missingAssets) {
+    if (blockedByImageTombstone(deletedImages, entry) || blockedByVideoTombstone(deletedVideos, entry)) continue;
     await pullOneAsset(peer, base, entry, includeMismatched).catch((err) => {
       console.log(`⚠️ peerSync: asset pull ${entry.filename} from ${peer.name || senderInstanceId} failed: ${err.message}`);
     });
@@ -1177,6 +1242,7 @@ async function doPullOneAsset(peer, base, entry, urlPrefix, localDir, safeName, 
 async function commitPulledAsset(peer, base, entry, localDir, fullPath, safeName, buffer, includeMismatched) {
   await ensureDir(localDir);
   if (!includeMismatched && existsSync(fullPath)) return;
+  const isNewHere = !existsSync(fullPath);
   // atomicWrite (temp + rename) so a crash mid-write doesn't leave a
   // half-written file that subsequent `diffAssetManifestAgainstLocal`
   // calls would see as "present" and stop re-requesting.
@@ -1192,6 +1258,13 @@ async function commitPulledAsset(peer, base, entry, localDir, fullPath, safeName
   // a missing sidecar just means the image lands in Unsorted without a prompt.
   if (entry.kind === 'image') {
     await pullSidecarForImage(peer, base, safeName).catch(() => {});
+    // Even with no sidecar from the peer, record who supplied a copy new here:
+    // its file time is then never mistaken for this machine making it.
+    if (isNewHere) await recordImageSupplier(safeName, peer.instanceId).catch((err) => console.error(`❌ peerSync: supplier record for ${safeName} failed: ${err.message}`));
+    // The owner restored an image deleted here (#14099): its copy outlives the delete.
+    await import('../imageGen/imageRecords.js')
+      .then((m) => m.clearImageTombstoneSupersededByOwner(safeName, peer.instanceId))
+      .catch((err) => console.error(`❌ peerSync: delete record check for ${safeName} failed: ${err.message}`));
     await import('../mediaAssetIndex/index.js').then(m => m.indexImage({ filename: safeName })).catch(err => console.error(`❌ Media index peer asset refresh: ${err.message}`));
   }
   // After a video pull, regenerate the thumbnail LOCALLY rather than pulling it

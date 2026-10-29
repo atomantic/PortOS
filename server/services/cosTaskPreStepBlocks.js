@@ -38,6 +38,7 @@ import { applyAppPlaceholders } from '../lib/appPromptPlaceholders.js';
 import { renderOrPrependSection } from '../lib/promptSectionRenderer.js';
 import {
   appendReviewerEffortBlock,
+  appendReviewerMaxRoundsBlock,
   buildLocalReviewerInstructions,
   buildTargetWorkItemBlock,
 } from './cosTaskPrompts.js';
@@ -509,11 +510,10 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
   if (result.cleaned.length) {
     emitLog('info', `🔀 branch-reconcile ${app.name}: cleaned ${result.cleaned.length} merged branch(es)`, { appId: app.id, analysisType: taskType });
   }
-  // Reported separately from `cleaned`: a superseded branch's work is NOT on the
-  // default branch — it landed there under other names — so it survives only as
-  // the backup the reap wrote before deleting it.
+  // Reported separately from `cleaned`: a superseded branch's commits are NOT
+  // ancestors of the default branch — the work landed there under other names.
   if (result.reapedSuperseded?.length) {
-    emitLog('info', `🔀 branch-reconcile ${app.name}: reaped ${result.reapedSuperseded.length} verified-superseded branch(es) (backed up under data/cos/abandoned-worktree-backups)`, { appId: app.id, analysisType: taskType });
+    emitLog('info', `🔀 branch-reconcile ${app.name}: reaped ${result.reapedSuperseded.length} verified-superseded branch(es)`, { appId: app.id, analysisType: taskType });
   }
   // Verified-superseded branches are reaped by the reconciler itself (reported in
   // `reapedSuperseded`). What is left in `superseded` is the reap's leftovers —
@@ -1073,8 +1073,11 @@ export async function buildImprovementTaskDescription({ promptTemplate, app, pro
   // keyed pins). Local-LLM reviewers stay in the operative list; their service
   // invocation contract is appended after rendering so customized legacy prompts
   // receive it without needing a new placeholder.
-  const codeReviewDefaults = await getCodeReviewDefaults().catch(() => null);
-  const claimReviewers = resolveClaimReviewerConfig(metadata, codeReviewDefaults, codeReviewDefaults?.reviewers);
+  const [codeReviewDefaults, providers] = await Promise.all([
+    getCodeReviewDefaults().catch(() => null),
+    import('./providers.js').then(m => m.listProviders()).catch(() => [])
+  ]);
+  const claimReviewers = resolveClaimReviewerConfig(metadata, codeReviewDefaults, codeReviewDefaults?.reviewers, providers);
   const rendersReviewers = /\{reviewers\}/.test(promptTemplate);
   const reviewerIdentityNotice = rendersReviewers
     ? await preflightClaimReviewers(app, claimReviewers, { metadata, appOverrideMetadata: reviewerOverrideMetadata, taskType: reviewerTaskType })
@@ -1083,6 +1086,7 @@ export async function buildImprovementTaskDescription({ promptTemplate, app, pro
     reviewers: promptReviewers,
     reviewerModels: promptReviewerModels,
     reviewerEfforts: promptReviewerEfforts,
+    reviewerMaxRounds: promptReviewerMaxRounds,
     csv: reviewersCsv
   } = claimReviewers;
   // {issueAuthorFilter} directive — the filter was already merged (global →
@@ -1145,6 +1149,7 @@ export async function buildImprovementTaskDescription({ promptTemplate, app, pro
     // and give it two owners to drift apart.
     + (rendersReviewers
         ? appendReviewerEffortBlock(promptReviewers, promptReviewerEfforts, promptReviewerModels)
+          + appendReviewerMaxRoundsBlock(promptReviewers, promptReviewerMaxRounds, claimReviewers.usernames)
           + buildLocalReviewerInstructions(promptReviewers, promptReviewerModels, promptReviewerEfforts, {
             claimCommentGate: promptTaskType === 'claim-issue',
             enforceIsolation: promptTaskType.startsWith('claim-issue'),

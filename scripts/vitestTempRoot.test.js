@@ -75,7 +75,7 @@ describe('real workspace runner temp lifecycle', () => {
     } finally { rmSync(host, { recursive: true, force: true }); }
   }, 25000);
 
-  it('reuses config ownership on reimport and reclaims it after interruption, preserving a live owner', async () => {
+  owned.it('reuses config ownership on reimport and reclaims it after interruption, preserving a live owner', async () => {
     const host = mkdtempSync(join(tmpdir(), 'vrt-'));
     recordTempRootOwner(host);
     let child;
@@ -165,7 +165,7 @@ describe.skipIf(process.platform === 'win32')('orphaned test browser sweep', () 
     return !isProcessAlive(pid);
   };
 
-  it('stops a browser left by a dead run and keeps one a live run still owns', async () => {
+  owned.it('stops a browser left by a dead run and keeps one a live run still owns', async () => {
     const host = mkdtempSync(join(tmpdir(), 'vrt-'));
     recordTempRootOwner(host);
     const pids = [];
@@ -201,7 +201,7 @@ describe.skipIf(process.platform === 'win32')('orphaned test browser sweep', () 
     }
   }, 20000);
 
-  it('stops a browser whose run root was already removed', async () => {
+  owned.it('stops a browser whose run root was already removed', async () => {
     const host = mkdtempSync(join(tmpdir(), 'vrt-'));
     recordTempRootOwner(host);
     let pid;
@@ -229,5 +229,16 @@ describe('npm debug log containment', () => {
   it('bootstrap disables npm log files for the runner process', () => {
     const source = readFileSync(join(repo, 'scripts/lib/vitestTempRoot.js'), 'utf8');
     expect(source).toMatch(/process\.env\.npm_config_logs_max\s*=\s*'0'/);
+  });
+});
+
+// Uniquely catches a lifecycle body that allocates a vrt- host outside the
+// owned-body drain (#13314): a sibling bail can end the worker before its
+// finally removes the host, which the global leak guard then reports.
+describe('lifecycle body ownership (#13314)', () => {
+  it('enrolls every asynchronous lifecycle body in the owned-body drain', () => {
+    const source = readFileSync(fileURLToPath(import.meta.url), 'utf8');
+    const plainAsync = source.split('\n').filter(line => /^\s*it(\.each\([^)]*\))?\(.*\basync\b/.test(line));
+    expect(plainAsync).toEqual([]);
   });
 });

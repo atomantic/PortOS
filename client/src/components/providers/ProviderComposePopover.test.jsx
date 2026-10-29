@@ -42,6 +42,16 @@ async function composePiTui() {
 }
 
 describe('ProviderComposePopover', () => {
+  it('offers an inline retry instead of an empty harness picker after a catalog failure', () => {
+    const retry = vi.fn();
+    mocked.useProviderCatalog.mockReturnValue({ ...CATALOG, error: new Error('offline'), retry });
+    render(<ProviderComposePopover open onClose={vi.fn()} onCompose={vi.fn()} />);
+    expect(screen.getByRole('alert').textContent).toContain('Provider catalog could not be loaded');
+    expect(screen.queryByLabelText('Harness')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(retry).toHaveBeenCalledTimes(1);
+  });
+
   it('carries the server-advertised speed through a composed Codex selection', async () => {
     mocked.useProviderCatalog.mockReturnValue({ ...CATALOG,
       harnesses: [{ id: 'codex', label: 'Codex', enabled: true, detected: true, modes: ['cli'], executionOptionKeys: ['serviceTier'] }],

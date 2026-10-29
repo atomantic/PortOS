@@ -1,3 +1,4 @@
+import { festivalPacketSchema } from './musicVideoFestivalPacket.js';
 import {
   BIBLE_LIMITS,
   IDENTITY_ASSET_ROLES,
@@ -63,6 +64,13 @@ export function stripMusicVideoLocalRenderPins(record, { stripVideoBackend = tru
     songRevision: _songRevision, songRevisionHistory: _songRevisionHistory,
     ...shared
   } = record;
+  // Only the portable versioned packet crosses the existing opted-in project wire.
+  // Reject malformed/unsafe peer payloads instead of preserving unknown fields.
+  if (shared.festivalPacket != null) {
+    const packet = festivalPacketSchema.safeParse(shared.festivalPacket);
+    if (packet.success) shared.festivalPacket = packet.data;
+    else delete shared.festivalPacket;
+  }
   // A composition document names a folder on this install only
   // (services/musicVideo/compositionDocument.js); the render mode and HUD
   // settings still sync, and a peer without the files refuses to render.

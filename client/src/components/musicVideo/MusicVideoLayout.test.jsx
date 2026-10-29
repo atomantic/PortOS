@@ -12,37 +12,40 @@ const progressFor = (current, states = {}) => ({
 });
 
 describe('music-video step navigation', () => {
-  it('lists the six steps with a state word and one fact each, then Assets, and opens a step on click', () => {
+  it('lists the seven steps with a state word and one fact each, then Assets, and opens a step on click', () => {
     const onStageChange = vi.fn();
     render(<MusicVideoLayout project={{ id: 'example-project', name: 'Example Project', version: 2 }} stage="board" trackLabel="Example Track"
       onStageChange={onStageChange} progress={progressFor('board', { setup: 'done', 'cast-sets': 'done' })}
-      status={{ headline: 'Step 3 of 6: Storyboard needs you', tone: 'warn', needsYouStage: 'board' }}
+      status={{ headline: 'Step 4 of 7: Plan needs you', tone: 'warn', needsYouStage: 'board' }}
       notes={{ setup: '4:40 · 70 lyric lines', board: '26 shots' }}
       spend={{ spentUsd: 3, capUsd: 10 }} />);
     expect(stepNavs()).toHaveLength(2);
     const steps = within(rail()).getAllByRole('button');
     expect(steps.map((step) => step.textContent)).toEqual([
       'Song' + 'Done' + '4:40 · 70 lyric lines',
+      '2Story' + 'Not started',
       'Look' + 'Done',
-      '3Plan' + 'Needs you' + '26 shots',
-      '4Shots' + 'Not started',
-      '5Final render' + 'Not started',
-      '6Publish' + 'Not started',
+      '4Plan' + 'Needs you' + '26 shots',
+      '5Shots' + 'Not started',
+      '6Final render' + 'Not started',
+      '7Publish' + 'Not started',
       'Assets', 'Cleanup',
     ]);
-    expect(steps[2]).toHaveAttribute('aria-current', 'step');
-    fireEvent.click(steps[3]);
+    expect(steps[3]).toHaveAttribute('aria-current', 'step');
+    fireEvent.click(steps[1]);
+    expect(onStageChange).toHaveBeenCalledWith('story');
+    fireEvent.click(steps[4]);
     expect(onStageChange).toHaveBeenCalledWith('produce');
-    fireEvent.click(steps[6]);
+    fireEvent.click(steps[7]);
     expect(onStageChange).toHaveBeenCalledWith('assets');
     // The phone bar says each state to screen readers, since it shows only icons.
     expect(within(phoneBar()).getAllByRole('tab').map((tab) => tab.textContent)).toEqual([
-      'Song, Done', 'Look, Done', 'Plan, Needs you', 'Shots, Not started', 'Final render, Not started', 'Publish, Not started', 'Assets', 'Cleanup',
+      'Song, Done', 'Story, Not started', 'Look, Done', 'Plan, Needs you', 'Shots, Not started', 'Final render, Not started', 'Publish, Not started', 'Assets', 'Cleanup',
     ]);
     // The step names what "done" means under its title, and labels the panel.
     expect(screen.getByRole('tabpanel', { name: 'Plan' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { level: 3, name: 'Plan' })).toBeInTheDocument();
-    expect(screen.getByText(MUSIC_VIDEO_STAGES[2].doneWhen)).toBeInTheDocument();
+    expect(screen.getByText(MUSIC_VIDEO_STAGES.find((stage) => stage.id === 'board').doneWhen)).toBeInTheDocument();
     // The track, version and spend stay in the header.
     expect(screen.getByText('Example Track')).toBeInTheDocument();
     expect(screen.getByText('v2')).toBeInTheDocument();
@@ -54,7 +57,7 @@ describe('music-video step navigation', () => {
       onStageChange={vi.fn()} progress={progressFor('cast-sets')} spend={{ spentUsd: 0, capUsd: 0 }}
       lead={<section aria-label="What this step needs">Art direction written</section>} />);
     expect(screen.getByRole('heading', { level: 3, name: 'Look' })).toBeInTheDocument();
-    expect(screen.queryByText(MUSIC_VIDEO_STAGES[1].doneWhen)).toBeNull();
+    expect(screen.queryByText(MUSIC_VIDEO_STAGES.find((stage) => stage.id === 'cast-sets').doneWhen)).toBeNull();
   });
 
   it('says where the project stands in one line, and a status error marks no step as needing you', () => {
@@ -95,7 +98,7 @@ describe('music-video step navigation', () => {
   it('keeps settings beside the title and lets the next action carry the status', () => {
     render(<MusicVideoLayout project={{ id: 'example-project', name: 'Example Project' }} stage="board"
       onStageChange={() => {}} progress={progressFor('board')} spend={{ spentUsd: 0 }} onOpenSettings={() => {}}
-      status={{ headline: 'Step 3 of 6: Storyboard needs you', tone: 'warn', needsYouStage: 'board' }}
+      status={{ headline: 'Step 4 of 7: Plan needs you', tone: 'warn', needsYouStage: 'board' }}
       nextAction={{ id: 'review-production', kind: 'goto', label: 'Review timed storyboard' }} onNextAction={() => {}} />);
     const title = screen.getByRole('heading', { level: 2, name: 'Example Project' });
     expect(title.parentElement).toContainElement(screen.getByRole('button', { name: 'Project settings' }));

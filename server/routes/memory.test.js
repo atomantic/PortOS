@@ -83,10 +83,13 @@ describe('Memory Routes', () => {
   });
 
   let app;
+  let authContext;
 
   beforeEach(() => {
     app = express();
     app.use(express.json());
+    authContext = null;
+    app.use((req, _res, next) => { req.portosAuthContext = authContext; next(); });
     app.use('/api/memory', memoryRoutes);
     vi.clearAllMocks();
     settings = {};
@@ -168,10 +171,13 @@ describe('Memory Routes', () => {
   // ===========================================================================
 
   describe('GET /api/memory/sync', () => {
+    beforeEach(() => {
+      peers.push({ instanceId: 'peer-a-instance-id', enabled: true, syncEnabled: true, syncCategories: { memory: true } });
+    });
     it('should return 400 when backend is not postgres', async () => {
       ensureBackend.mockResolvedValue('file');
 
-      const response = await request(app).get('/api/memory/sync');
+      const response = await request(app).get('/api/memory/sync').set(PEER_INSTANCE_ID_HEADER, 'peer-a-instance-id');
 
       expect(response.status).toBe(400);
       expect(response.body.error).toMatch(/PostgreSQL/);
@@ -184,7 +190,7 @@ describe('Memory Routes', () => {
         maxSequence: '42'
       });
 
-      const response = await request(app).get('/api/memory/sync?since=10&limit=50');
+      const response = await request(app).get('/api/memory/sync?since=10&limit=50').set(PEER_INSTANCE_ID_HEADER, 'peer-a-instance-id');
 
       expect(response.status).toBe(200);
       expect(response.body.maxSequence).toBe('42');
@@ -195,7 +201,7 @@ describe('Memory Routes', () => {
       ensureBackend.mockResolvedValue('postgres');
       memorySync.getChangesSince.mockResolvedValue({ memories: [], maxSequence: '0' });
 
-      await request(app).get('/api/memory/sync');
+      await request(app).get('/api/memory/sync').set(PEER_INSTANCE_ID_HEADER, 'peer-a-instance-id');
 
       expect(memorySync.getChangesSince).toHaveBeenCalledWith('0', 100);
     });
@@ -204,7 +210,7 @@ describe('Memory Routes', () => {
       ensureBackend.mockResolvedValue('postgres');
       memorySync.getChangesSince.mockResolvedValue({ memories: [], maxSequence: '0' });
 
-      await request(app).get('/api/memory/sync?limit=5000');
+      await request(app).get('/api/memory/sync?limit=5000').set(PEER_INSTANCE_ID_HEADER, 'peer-a-instance-id');
 
       expect(memorySync.getChangesSince).toHaveBeenCalledWith('0', 1000);
     });
@@ -213,15 +219,14 @@ describe('Memory Routes', () => {
       ensureBackend.mockResolvedValue('postgres');
       memorySync.getChangesSince.mockResolvedValue({ memories: [], maxSequence: '0' });
 
-      const response = await request(app).get('/api/memory/sync?since=10&limit=50&schemaVersion=3');
+      const response = await request(app).get('/api/memory/sync?since=10&limit=50&schemaVersion=3').set(PEER_INSTANCE_ID_HEADER, 'peer-a-instance-id');
 
       expect(response.status).toBe(200);
       expect(memorySync.getChangesSince).toHaveBeenCalledWith('10', 50, 3);
     });
 
-    it('strict mode refuses a peer the user does not share memory with', async () => {
+    it('refuses a peer the user does not share memory with by default', async () => {
       ensureBackend.mockResolvedValue('postgres');
-      settings = { federation: { strictPullAuthorization: true } };
       peers.splice(0, peers.length, {
         instanceId: 'peer-a-instance-id', enabled: true, syncEnabled: true,
         directions: ['outbound', 'inbound'], syncCategories: { brain: true, memory: false },
@@ -230,14 +235,49 @@ describe('Memory Routes', () => {
       const response = await request(app).get('/api/memory/sync').set(PEER_INSTANCE_ID_HEADER, 'peer-a-instance-id');
 
       expect(response.status).toBe(403);
+      expect(response.body.code).toBe('PEER_PULL_FORBIDDEN');
       expect(memorySync.getChangesSince).not.toHaveBeenCalled();
+    });
+
+    it('refuses unidentified and unknown callers without strict mode', async () => {
+      ensureBackend.mockResolvedValue('postgres');
+      for (const instanceId of [null, 'unknown-instance']) {
+        const pending = request(app).get('/api/memory/sync');
+        const response = await (instanceId ? pending.set(PEER_INSTANCE_ID_HEADER, instanceId) : pending);
+        expect(response.status).toBe(403);
+        expect(response.body.code).toBe('PEER_PULL_FORBIDDEN');
+      }
+      expect(memorySync.getChangesSince).not.toHaveBeenCalled();
+    });
+
+    it('preserves local and delegated operator reads', async () => {
+      ensureBackend.mockResolvedValue('postgres');
+      memorySync.getChangesSince.mockResolvedValue({ memories: [], maxSequence: '0' });
+      for (const auth of [
+        { enabled: false, authenticated: false, method: null },
+        { enabled: true, authenticated: true, method: 'session' },
+      ]) {
+        authContext = auth;
+        const response = await request(app).get('/api/memory/sync');
+        expect(response.status).toBe(200);
+      }
+      expect(memorySync.getChangesSince).toHaveBeenCalledTimes(2);
+    });
+
+    it('serves memory when fullSync grants the category', async () => {
+      ensureBackend.mockResolvedValue('postgres');
+      peers[0] = { ...peers[0], fullSync: true, syncCategories: { memory: false } };
+      memorySync.getChangesSince.mockResolvedValue({ memories: [], maxSequence: '0' });
+      const response = await request(app).get('/api/memory/sync').set(PEER_INSTANCE_ID_HEADER, 'peer-a-instance-id');
+      expect(response.status).toBe(200);
+      expect(memorySync.getChangesSince).toHaveBeenCalledOnce();
     });
 
     it('passes a schema-version conflict through at the HTTP boundary', async () => {
       ensureBackend.mockResolvedValue('postgres');
       memorySync.getChangesSince.mockRejectedValue(Object.assign(new Error('schema version is ahead'), { status: 409 }));
 
-      const response = await request(app).get('/api/memory/sync?schemaVersion=99');
+      const response = await request(app).get('/api/memory/sync?schemaVersion=99').set(PEER_INSTANCE_ID_HEADER, 'peer-a-instance-id');
 
       expect(response.status).toBe(409);
       expect(response.body.error).toMatch(/schema version is ahead/);

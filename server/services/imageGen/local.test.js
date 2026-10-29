@@ -1244,6 +1244,18 @@ describe('imageGen local.generateImage runtime pre-flight', () => {
 
 // Regression: SSE had the Python diagnosis, but the queue and status snapshot
 // replaced it with only an exit code. Exercise the actual child close boundary.
+describe('reviewed local references', () => {
+  it('refuses unowned snapshot metadata before starting a child', async () => {
+    mockResolveFlux2Python.mockReturnValue('/fake/venv-flux2/bin/python3');
+    mockIsFlux2VenvHealthy.mockResolvedValue(true);
+    mockSpawn.mockReset();
+    writeFileSync(join(PATHS.images, 'reviewed-local.png'), 'synthetic image');
+    await expect(generateImage({ modelId: 'qwen-image-2.1', prompt: 'edit', referenceImagePaths: ['reviewed-local.png'], reviewedReferenceSnapshot: { jobId: 'unowned' } }))
+      .rejects.toMatchObject({ code: 'REVIEWED_REFERENCE_CHANGED' });
+    expect(mockSpawn).not.toHaveBeenCalled();
+  });
+});
+
 describe('local render failure delivery', () => {
   it.each([
     ['USER_ERROR:torch_runtime_broken\n❌ Unknown diffusers pipeline class: QwenImage21Pipeline. Reinstall the runtime.\n', 'Reinstall the runtime.'],

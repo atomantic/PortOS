@@ -46,7 +46,6 @@ import {
   resolveRuntimeFingerprint,
   loadHistory,
   getHistoryItem,
-  deleteHistoryItem,
   setHistoryItemHidden,
   updateHistoryItemPrompt,
   extractLastFrame,
@@ -60,6 +59,8 @@ import {
 // re-declaring it just so this file's route schemas can be built.
 import { UPSCALE_METHODS, DEFAULT_UPSCALE_METHOD } from '../services/videoGen/upscalePlan.js';
 import { enqueueLtxUpscale } from '../services/videoGen/upscaleJob.js';
+import { quoteTopaz } from '../services/videoGen/topazQuote.js';
+import { assertNoPendingTopaz, enqueueTopazUpscale, reconcileTopazStatus, recoverTopazResult } from '../services/videoGen/topazJob.js';
 import { enqueueStitch } from '../services/videoGen/stitchJob.js';
 import { trimHistoryItemStart } from '../services/videoGen/trimStart.js';
 import { cleanupMultipartTemp } from '../services/videoGen/prepareParams.js';
@@ -100,6 +101,7 @@ import {
 import { detectSystemCapabilities, withHardwareCompatibility } from '../lib/systemCapabilities.js';
 import { isDisplaySleepEnabled } from '../services/videoGen/displayPower.js';
 import { promptAdditionsSchema } from '../lib/modelInput.js';
+import { deleteMediaAnywhere, cancelPendingDelete } from '../services/mediaRemoteDelete.js';
 import { VIDEO_TILING_MODES } from '../lib/videoTiling.js';
 import { RUNWAY_SPECIAL_VIDEO_MODES, RUNWAY_ACT_TWO_RATIOS, RUNWAY_ALEPH_ASPECTS } from '../lib/runwaySpecialVideoModels.js';
 
@@ -1302,10 +1304,19 @@ router.post('/upload', optionalUpload('file'), asyncHandler(async (req, res) => 
   res.json(await saveUploadedGalleryVideo(data, filename));
 }));
 
+// Deletes on the machine that owns the row (services/mediaRemoteDelete.js):
+// `{ ok, status: 'deleted' | 'deleted-remote' | 'pending' | 'owner-unknown' | 'cancelled' }`.
+// A refusal or an unusable answer from the owner is an error, never a success.
 router.delete('/history/:id', asyncHandler(async (req, res) => {
   const parsed = historyRecordIdSchema.safeParse(req.params.id);
   if (!parsed.success) failValidation(parsed);
-  res.json(await deleteHistoryItem(parsed.data));
+  res.json({ ok: true, ...(await deleteMediaAnywhere('video', parsed.data)) });
+}));
+
+router.post('/history/:id/cancel-delete', asyncHandler(async (req, res) => {
+  const parsed = historyRecordIdSchema.safeParse(req.params.id);
+  if (!parsed.success) failValidation(parsed);
+  res.json(await cancelPendingDelete('video', parsed.data));
 }));
 
 router.post('/history/:id/visibility', asyncHandler(async (req, res) => {
@@ -1370,6 +1381,36 @@ router.post('/last-frame/:id', asyncHandler(async (req, res) => {
 const upscaleMethodSchema = z.object({
   method: z.enum(UPSCALE_METHODS).default(DEFAULT_UPSCALE_METHOD),
 });
+
+router.post('/upscale/:id/topaz/quote', asyncHandler(async (req, res) => {
+  const parsed = historyIdSchema.safeParse(req.params.id);
+  if (!parsed.success) failValidation(parsed);
+  const body = validateRequest(z.object({ model: z.enum(['proteus', 'starlight']).default('proteus') }), req.body ?? {});
+  assertNoPendingTopaz(parsed.data);
+  res.json({ ok: true, quote: await quoteTopaz(parsed.data, body.model) });
+}));
+
+router.get('/upscale/topaz/jobs/:jobId/status', asyncHandler(async (req, res) => {
+  const { jobId } = validateRequest(z.object({ jobId: z.string().uuid() }), req.params);
+  res.json({ ok: true, ...await reconcileTopazStatus(jobId) });
+}));
+
+router.post('/upscale/topaz/jobs/:jobId/cancel', asyncHandler(async (req, res) => {
+  const { jobId } = validateRequest(z.object({ jobId: z.string().uuid() }), req.params);
+  res.json({ ok: true, ...await reconcileTopazStatus(jobId, { cancelRemote: true }) });
+}));
+
+router.post('/upscale/topaz/jobs/:jobId/recover', asyncHandler(async (req, res) => {
+  const { jobId } = validateRequest(z.object({ jobId: z.string().uuid() }), req.params);
+  res.json({ ok: true, job: await recoverTopazResult(jobId) });
+}));
+
+router.post('/upscale/:id/topaz', asyncHandler(async (req, res) => {
+  const parsed = historyIdSchema.safeParse(req.params.id);
+  if (!parsed.success) failValidation(parsed);
+  const body = validateRequest(z.object({ token: z.string().uuid() }), req.body ?? {});
+  res.json({ ok: true, job: await enqueueTopazUpscale(parsed.data, body.token) });
+}));
 
 // What the user must see BEFORE submitting (#6509): source geometry, the target
 // the method would produce, the padding the model grid needs, and whether this

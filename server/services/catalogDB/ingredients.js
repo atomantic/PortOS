@@ -30,6 +30,7 @@ import {
   HAS_ANY_HOMING_REF,
   HOMING_REF_KINDS_SQL,
   liveHomingTargetSql,
+  STORYBOARD_PANEL_MEMBERS_SQL,
 } from './shared.js';
 import { normalizeTags } from './tags.js';
 import { assertCatalogIdentityWritable, getCatalogIdentityAccessForIds } from './identityAccess.js';
@@ -56,6 +57,34 @@ export async function setIngredientPayloadKey(id, key, value, { source = 'user',
     const updated = rowToIngredient(row);
     await recordIngredientRevision(updated, { source, client });
     return updated;
+  });
+}
+
+// Like setIngredientPayloadKey for several keys in one locked write:
+// `update(lockedPayload)` returns `{ key: value }` changes (`null` removes a
+// key), so a multi-key edit either lands whole or not at all. Returns
+// `{ ingredient, priorUpdatedAt }`, the latter being the locked row's clock
+// just before this write, or null for a missing row.
+export async function updateIngredientPayloadKeys(id, update, { source = 'user', guard } = {}) {
+  return withTransaction(async client => {
+    await assertCatalogIdentityWritable(id, { client });
+    const { rows: [current] } = await client.query(`SELECT * FROM catalog_ingredients
+      WHERE id = catalog_canonical_ingredient_id($1) AND deleted = false FOR UPDATE`, [id]);
+    if (!current) return null;
+    guard?.(current);
+    const priorUpdatedAt = rowToIngredient(current).updatedAt;
+    const payload = current.payload && typeof current.payload === 'object' ? current.payload : {};
+    const next = { ...payload };
+    for (const [key, value] of Object.entries(update(payload) || {})) {
+      if (value === null) delete next[key];
+      else next[key] = value;
+    }
+    if (isDeepStrictEqual(next, payload)) return { ingredient: rowToIngredient(current), priorUpdatedAt };
+    const { rows: [row] } = await client.query('UPDATE catalog_ingredients SET payload = $2::jsonb WHERE id = $1 RETURNING *',
+      [current.id, toPgJson(next)]);
+    const ingredient = rowToIngredient(row);
+    await recordIngredientRevision(ingredient, { source, client });
+    return { ingredient, priorUpdatedAt };
   });
 }
 
@@ -493,6 +522,13 @@ export async function listIngredients({ ids, type, tag, query: q, refKind = null
             OR (r.ref_kind = 'series' AND r.ref_id IN (
                   SELECT id FROM pipeline_series WHERE universe_id = $${refIdx} AND deleted = false))`));
       params.push(refId);
+    } else if (refKind === 'storyboard' && refId) {
+      // A storyboard story is its `storyboard` refs plus the records its panels use.
+      const refIdx = idx++;
+      needsRefs = true;
+      conditions.push(inSet('id', `SELECT r.cid FROM canonical_refs r WHERE r.ref_kind = 'storyboard' AND r.ref_id = $${refIdx}
+        UNION SELECT pm.cid FROM (${STORYBOARD_PANEL_MEMBERS_SQL}) pm WHERE pm.board_id = $${refIdx}`));
+      params.push(refId);
     } else if (refKind && refId) {
       needsRefs = true;
       conditions.push(inSet('id', `SELECT r.cid FROM canonical_refs r WHERE r.ref_kind = $${idx++} AND r.ref_id = $${idx++}`));
@@ -610,17 +646,20 @@ export async function searchIngredientsByEmbedding(vector, { type, limit = 20, t
 /**
  * Live records of `type` whose name or one of whose aliases equals one of
  * `names` (trimmed, case-insensitive), oldest first. Used to link to an
- * existing record instead of creating a same-named duplicate.
+ * existing record instead of creating a same-named duplicate. With
+ * `firstWord`, the name's or alias's first word is compared instead, so
+ * "Ada" finds "Ada Example".
  */
-export async function findIngredientsByName(type, names) {
+export async function findIngredientsByName(type, names, { firstWord = false } = {}) {
   const keys = [...new Set((names || []).map((n) => String(n || '').trim().toLowerCase()).filter(Boolean))];
   if (!type || !keys.length) return [];
+  const key = (column) => (firstWord ? `split_part(lower(btrim(${column})), ' ', 1)` : `lower(btrim(${column}))`);
   const result = await query(
     `SELECT * FROM catalog_ingredients
        WHERE deleted = false AND id = catalog_canonical_ingredient_id(id) AND type = $1
-         AND (lower(btrim(name)) = ANY($2)
+         AND (${key('name')} = ANY($2)
            OR (jsonb_typeof(payload->'aliases') = 'array'
-             AND EXISTS (SELECT 1 FROM jsonb_array_elements_text(payload->'aliases') a WHERE lower(btrim(a)) = ANY($2))))
+             AND EXISTS (SELECT 1 FROM jsonb_array_elements_text(payload->'aliases') a WHERE ${key('a')} = ANY($2))))
        ORDER BY created_at, id`,
     [type, keys],
   );

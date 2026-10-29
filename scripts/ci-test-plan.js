@@ -282,6 +282,7 @@ export const WINDOWS_RISK_RULES = [
   /^server\/services\/shell\b/,
   /^server\/services\/agentTuiSpawning(?:\/|(?:\.test)?\.js$)/,
   /^server\/services\/tuiPromptRunner(?:\.test)?\.js$/,
+  /^server\/services\/releaseCandidate(?:Recovery|Settlement|Evidence)(?:\.test)?\.js$/,
 ];
 
 // Each entry protects the supported native boundary. No import-graph expansion:
@@ -308,6 +309,7 @@ export const WINDOWS_CONTRACT_TESTS = [
   // Real native ownership/cancellation and safe filesystem semantics.
   'server/lib/execGit.test.js',
   'server/lib/windowsAgentProcess.test.js',
+  'server/services/releaseCandidateRecovery.test.js',
   'server/lib/windowsGitProcess.test.js',
   'server/lib/windowsGitProcess.protocol.test.js',
   'server/lib/gitRepositoryIdentity.test.js',

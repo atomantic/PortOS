@@ -554,6 +554,7 @@ describe('fableLoom production service', () => {
       const reloaded = reloadedLoom.episodes[0].nodes[0].visualConditioning;
       expect(storedLoom.episodes[0].nodes[0].visualConditioning).toEqual(reloaded);
       expect(reloaded.assets).toEqual(expect.arrayContaining([
+        expect.objectContaining({ role: 'character-neutral', inputRoot: 'images', filename: 'neutral.png', sha256: expect.stringMatching(/^[a-f0-9]{64}$/) }),
         expect.objectContaining({ role: 'request-reference', inputRoot: 'images', filename: 'reference.png' }),
         expect.objectContaining({ role: 'request-init', inputRoot: 'images', strength: 0.3 }),
       ]));
@@ -584,6 +585,23 @@ describe('fableLoom production service', () => {
         .rejects.toMatchObject({ code: 'EXACT_INPUTS_REFUSED', status: 409 });
       await writeFile(adapter, 'adapter-original');
       await writeFile(canonAdapter, 'canon-changed');
+      await expect(startEpisodeProductionBatch('loom-1', 'ep-1', { mode: 'exact_inputs', assetTypes: ['image'], nodeIds: ['node-1'] }))
+        .rejects.toMatchObject({ code: 'EXACT_INPUTS_REFUSED', status: 409 });
+      await writeFile(canonAdapter, 'canon-original');
+      // A canon image keeps its filename but changes bytes after the render.
+      await writeFile(canonImages[1], 'canon-image-changed');
+      await expect(startEpisodeProductionBatch('loom-1', 'ep-1', { mode: 'exact_inputs', assetTypes: ['image'], nodeIds: ['node-1'] }))
+        .rejects.toMatchObject({ code: 'EXACT_INPUTS_REFUSED', status: 409 });
+      const plan = await planEpisodeProduction('loom-1', 'ep-1', { mode: 'exact_inputs', assetTypes: ['image'], nodeIds: ['node-1'] });
+      expect(plan.exactInputIssues.flatMap(issue => issue.errors)).toContain('Canon image "profile.png" is unavailable or changed.');
+      await writeFile(canonImages[1], 'canon-image-1');
+      // A render recorded before canon fingerprints names its canon images but cannot prove their bytes.
+      for (const node of reloadedLoom.episodes[0].nodes) {
+        node.visualConditioning = { ...reloaded, assets: reloaded.assets.map(({ inputRoot: _root, sha256: _sha, ...asset }) => (
+          asset.role.startsWith('request-') ? { ...asset, inputRoot: _root, sha256: _sha } : asset)) };
+      }
+      const legacyPlan = await planEpisodeProduction('loom-1', 'ep-1', { mode: 'exact_inputs', assetTypes: ['image'], nodeIds: ['node-1'] });
+      expect(legacyPlan.exactInputIssues.flatMap(issue => issue.errors)).toContainEqual(expect.stringContaining('images "neutral.png", "profile.png", "full-body.png" have no content fingerprints'));
       await expect(startEpisodeProductionBatch('loom-1', 'ep-1', { mode: 'exact_inputs', assetTypes: ['image'], nodeIds: ['node-1'] }))
         .rejects.toMatchObject({ code: 'EXACT_INPUTS_REFUSED', status: 409 });
       expect(queueMocks.enqueueJob).toHaveBeenCalledTimes(1);

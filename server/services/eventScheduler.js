@@ -52,7 +52,7 @@ const activeTimers = new Map()
 
 // Cancellation removes an event from the registry while its handler can still
 // be writing. Keep those runs until shutdown has drained them before DB close.
-const activeRuns = new Set()
+const activeRuns = new Map()
 let quiesced = false
 
 // Event history
@@ -428,11 +428,7 @@ function schedule(config) {
     lastRunSkipped: null,
     lastSkipReason: null,
     lastError: null,
-    consecutiveFailures: 0,
-    // The promise of the run in progress, or null. One run per event at a
-    // time: a trigger that lands mid-run joins it instead of starting a
-    // second handler over the same state (#12022).
-    inFlight: null
+    consecutiveFailures: 0
   }
 
   // Calculate next run time
@@ -509,7 +505,12 @@ function scheduleNextRun(event) {
  * @param {Object} event - Event object
  */
 function runEventFloating(event) {
-  runEvent(event).catch(err => {
+  const joined = activeRuns.has(event.id)
+  runEvent(event).then(() => {
+    // A replacement timer consumed its slot while the previous registration
+    // was running. Re-arm only that still-current registration after the join.
+    if (joined && scheduledEvents.get(event.id) === event) rearm(event)
+  }).catch(err => {
     console.error(`❌ Event ${event.id} run failed: ${err.message}`)
   })
 }
@@ -604,14 +605,17 @@ function recordEventHistory(event, { startTime, success, error, skipped, skipRea
  * @returns {Promise<void>}
  */
 function runEvent(event) {
-  if (event.inFlight) return event.inFlight
+  if (activeRuns.has(event.id)) return activeRuns.get(event.id)
   if (quiesced) return Promise.resolve()
-  event.inFlight = executeEvent(event).finally(() => {
-    activeRuns.delete(event.inFlight)
-    event.inFlight = null
+  let settleRun
+  let rejectRun
+  const run = new Promise((resolve, reject) => { settleRun = resolve; rejectRun = reject }).finally(() => {
+    activeRuns.delete(event.id)
   })
-  activeRuns.add(event.inFlight)
-  return event.inFlight
+  // Claim the id before invoking the handler, which can synchronously re-enter.
+  activeRuns.set(event.id, run)
+  executeEvent(event).then(settleRun, rejectRun)
+  return run
 }
 
 /**
@@ -860,7 +864,7 @@ function quiesce() {
 
 /** Quiesce first; the shutdown caller owns the bounded wait before closing DB. */
 function drain() {
-  return Promise.allSettled([...activeRuns])
+  return Promise.allSettled([...activeRuns.values()])
 }
 
 /**
@@ -877,8 +881,8 @@ async function triggerNow(id) {
   const event = scheduledEvents.get(id)
   if (!event) return false
 
-  if (event.inFlight) {
-    await event.inFlight
+  if (activeRuns.has(id)) {
+    await activeRuns.get(id)
     return { joined: true }
   }
 

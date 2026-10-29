@@ -22,10 +22,16 @@ describe('ImageGen backend-probe gating', () => {
     resetImageGenMockState();
     // Interactive MediaCard so a suite can drive hide/delete through the page's
     // own handlers, and a MediaPreview that renders only while a preview is open.
-    state.mediaCardFactory = ({ item, onToggleHidden, onDelete }) => (
+    state.mediaCardFactory = ({ item, onToggleHidden, onDelete, onCancelPendingDelete, pendingPeerName }) => (
       <div>
         <button type="button" onClick={() => onToggleHidden(item)}>{item.filename}</button>
         <button type="button" aria-label={`Delete ${item.filename}`} onClick={() => onDelete(item)}>Delete</button>
+        {item.pendingDelete && (
+          <>
+            <span role="status">Delete pending on {pendingPeerName || 'the owning machine'}</span>
+            <button type="button" aria-label={`Cancel pending delete ${item.filename}`} onClick={() => onCancelPendingDelete(item)}>Cancel</button>
+          </>
+        )}
       </div>
     );
     state.mediaPreviewFactory = ({ preview }) => (
@@ -69,6 +75,43 @@ describe('ImageGen backend-probe gating', () => {
     await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Delete recent.png' })));
     expect(screen.getByRole('button', { name: 'recent.png' })).toBeInTheDocument();
     expect(screen.getByText('Recent renders (1 of 1)')).toBeInTheDocument();
+  });
+
+  it("keeps a peer's image while its delete waits on the owning machine", async () => {
+    let held = ['theirs.png', 'mine.png'];
+    state.listImageGalleryPage.mockImplementation(async () => ({ items: held.map((filename) => ({ filename })), total: held.length, hiddenTotal: 0 }));
+    state.deleteImage.mockImplementation(async (filename) => {
+      if (filename === 'theirs.png') return { ok: true, status: 'pending', pendingDelete: { peerId: 'rec-peer', queuedAt: '2026-01-03T00:00:00.000Z' }, peerName: 'Example Peer' };
+      held = held.filter((name) => name !== filename);
+      return { ok: true, status: 'deleted' };
+    });
+    await mount();
+    const { default: toast } = await import('../components/ui/Toast');
+    await screen.findByRole('button', { name: 'Delete theirs.png' });
+    const loads = state.listImageGalleryPage.mock.calls.length;
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Delete theirs.png' })));
+    // Not reported as deleted, and no refresh is needed to bring it back.
+    expect(toast).toHaveBeenCalledWith('Delete pending until Example Peer is reachable');
+    expect(state.listImageGalleryPage.mock.calls.length).toBe(loads);
+    expect(screen.getByRole('button', { name: 'theirs.png' })).toBeInTheDocument();
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Delete mine.png' })));
+    expect(screen.getByRole('button', { name: 'theirs.png' })).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'mine.png' })).toBeNull());
+  });
+
+  // Uniquely catches the Image Gen strip losing the pending marker and its
+  // Cancel after load, for a row already pending and one just deleted.
+  it('shows a pending delete with the peer name and clears it through the cancel API', async () => {
+    state.peers = [{ id: 'rec-peer', name: 'Example Peer' }];
+    state.listImageGalleryPage.mockImplementation(async () => ({
+      items: [{ filename: 'theirs.png', pendingDelete: { peerId: 'rec-peer' } }], total: 1, hiddenTotal: 0,
+    }));
+    await mount();
+    expect(await screen.findByText('Delete pending on Example Peer')).toBeInTheDocument();
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Cancel pending delete theirs.png' })));
+    expect(state.cancelImagePendingDelete).toHaveBeenCalledWith('theirs.png', { silent: true });
+    await waitFor(() => expect(screen.queryByRole('status')).toBeNull());
+    expect(screen.getByRole('button', { name: 'theirs.png' })).toBeInTheDocument();
   });
 
   // The probe decides which backend can RUN, not what the user may TYPE. While

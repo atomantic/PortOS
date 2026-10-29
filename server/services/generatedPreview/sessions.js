@@ -515,6 +515,8 @@ async function startCodeAnimation(session, input) {
 async function openGeneratedPreview(socket, data) {
   const parsed = openSchema.safeParse(data);
   if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    console.log(`🚫 Generated preview open refused: ${issue?.path.join('.') || 'request'} ${issue?.message || 'invalid'}`);
     fail(socket, { requestId: data?.requestId, message: 'The preview request was not valid.' });
     return;
   }

@@ -2,7 +2,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
 
-vi.mock('../services/artists/index.js', () => ({
+vi.mock('../services/artists/index.js', async () => ({
+  SUBMISSION_FIELD_SPECS: (await vi.importActual('../services/artists/logic.js')).SUBMISSION_FIELD_SPECS,
+  buildSubmissionProfile: (await vi.importActual('../services/artists/logic.js')).buildSubmissionProfile,
   NAME_MAX: 120,
   GENRE_MAX: 120,
   BIO_MAX: 4000,
@@ -105,6 +107,32 @@ describe('artists routes', () => {
     const r = await request(app).patch('/api/artists/artist-1').send({ name: 'Nova Star' });
     expect(r.status).toBe(200);
     expect(artists.updateArtist).toHaveBeenCalledWith('artist-1', { name: 'Nova Star' });
+  });
+
+  it('PATCH /:id saves press & submission fields and refuses an over-long bio', async () => {
+    const ok = await request(app).patch('/api/artists/artist-1').send({ bioShort: '  Makes songs.  ', sunoUrl: 'https://suno.com/@nova' });
+    expect(ok.status).toBe(200);
+    expect(artists.updateArtist).toHaveBeenCalledWith('artist-1', { bioShort: 'Makes songs.', sunoUrl: 'https://suno.com/@nova' });
+    const tooLong = await request(app).patch('/api/artists/artist-1').send({ bioOneLine: 'x'.repeat(301) });
+    expect(tooLong.status).toBe(400);
+    expect(artists.updateArtist).toHaveBeenCalledTimes(1);
+  });
+
+  it('GET /:id/submission-profile returns the curated profile with its gaps', async () => {
+    artists.getArtist.mockResolvedValueOnce({ id: 'artist-1', name: 'Nova', bioShort: 'Makes songs.', spotifyUrl: 'https://open.spotify.com/artist/x', updatedAt: '2026-10-28T00:00:00.000Z' });
+    const r = await request(app).get('/api/artists/artist-1/submission-profile');
+    expect(r.status).toBe(200);
+    expect(r.body.profile).toMatchObject({ name: 'Nova', bioShort: 'Makes songs.', creditName: '' });
+    expect(r.body.missing).toContain('Name for credits');
+    expect(r.body.missing).not.toContain('Links');
+    expect(r.body.markdown).toContain('- Spotify: https://open.spotify.com/artist/x');
+    expect(r.body.markdown).toContain('- Short bio: Makes songs.');
+  });
+
+  it('GET /:id/submission-profile returns 404 when absent', async () => {
+    artists.getArtist.mockResolvedValueOnce(null);
+    const r = await request(app).get('/api/artists/artist-missing/submission-profile');
+    expect(r.status).toBe(404);
   });
 
   it('DELETE /:id soft-deletes an artist', async () => {

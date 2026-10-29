@@ -3,6 +3,7 @@ import toast from '../components/ui/Toast';
 import socket from '../services/socket';
 import {
   getMusicVideoProject,
+  buildMusicVideoDcp, musicVideoDcpEventsUrl, cancelMusicVideoDcp,
   buildMusicVideoPublishKit,
   musicVideoPublishKitEventsUrl,
   cancelMusicVideoPublishKit,
@@ -68,6 +69,26 @@ export default function useMusicVideoPublishKit({ project, replaceProject } = {}
     lostConnectionMessage: 'Lost connection to the publishing kit build',
     startErrorFallback: 'Failed to start the publishing kit build',
   });
+
+  const dcpJob = useSseJobSlot({
+    startRequest: input => buildMusicVideoDcp(projectId, input, { silent: true }),
+    eventsUrl: musicVideoDcpEventsUrl,
+    cancelRequest: cancelMusicVideoDcp,
+    onComplete: (_frame, id) => reload(id),
+    onKickoffError: err => {
+      if (err?.code === 'DCP_IN_PROGRESS' && err.context?.jobId) { dcpJob.attach(err.context.jobId, projectId); return true; }
+      return false;
+    },
+    errorFallback: 'Cinema package export failed',
+    canceledMessage: 'Cinema package export cancelled',
+    lostConnectionMessage: 'Lost connection to the cinema package export',
+  });
+  const attachedDcp = useRef(new Set());
+  const activeDcpId = project?.activeDcpBuild?.jobId || null;
+  useEffect(() => {
+    if (!activeDcpId || !projectId || attachedDcp.current.has(activeDcpId)) return;
+    if (dcpJob.attach(activeDcpId, projectId)) attachedDcp.current.add(activeDcpId);
+  }, [activeDcpId, projectId]);
 
   // Reload or second tab: adopt the build the server says is running. Each jobId is
   // adopted once, so the stale record can't re-adopt a build that already finished.
@@ -158,6 +179,7 @@ export default function useMusicVideoPublishKit({ project, replaceProject } = {}
   };
 
   return {
+    dcp: { active: dcpJob.active, stage: dcpJob.stage, build: input => dcpJob.start(input, projectId), cancel: dcpJob.cancel },
     building: job.active,
     progress: job.active ? job.percent : 0,
     build: () => job.start({}, projectId),

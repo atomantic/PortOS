@@ -32,6 +32,8 @@ export const MIGRATION_OWNED_PATHS = new Set([
   'cos/quota-burn.json',
   'cos/quota-burn.pre-359.json',
   // Migration 370 preserves this install's managed Tailcat serve consent/key.
+  // Migration 451 folds the old peer-media-holdings.json into this record (#14141).
+  'media-holders.json',
   'tailcat-serve.json',
   // Migration 397 re-binds this install's own Eidoverse foundations to
   // body-derived assay evidence (#7625). Every record in it is the user's own
@@ -51,6 +53,10 @@ export const MIGRATION_OWNED_PATHS = new Set([
   // (LM_STUDIO_URL, CDP_HOST) and cause the service to ignore those env vars.
   'memory-classifier-config.json',
   'browser-config.json',
+  // Migration 450 stamps the origin machine on this install's own video rows
+  // and gallery image sidecars; a seed would be stamped as media made here.
+  'video-history.json',
+  'images',
 ]);
 
 /**

@@ -250,7 +250,8 @@ describe('Catalog parsed write bodies', () => {
     await projectionDone.promise;
 
     expect(restored.status).toBe(200);
-    expect(restored.body.payload).toEqual({ schemaVersion: 0, description: 'Earlier description' });
+    // A record the user creates starts explicitly unlocked, and the restore returns to that.
+    expect(restored.body.payload).toEqual({ schemaVersion: 0, description: 'Earlier description', locked: false });
     expect(canon.characters[0]).toMatchObject({
       id: 'canon-1', ingredientId: 'ing-1', name: 'Earlier Name',
       description: 'Earlier description', createdAt: '2026-09-12T00:00:00.000Z',
@@ -259,7 +260,7 @@ describe('Catalog parsed write bodies', () => {
     expect(revisions).toHaveLength(3);
     expect(revisions.at(-1)).toMatchObject({
       ingredientId: 'ing-1', name: 'Earlier Name',
-      payload: { schemaVersion: 0, description: 'Earlier description' },
+      payload: { schemaVersion: 0, description: 'Earlier description', locked: false },
       source: 'user', actor: 'editor',
     });
   });

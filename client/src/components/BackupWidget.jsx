@@ -29,7 +29,7 @@ const RESOURCE_EVENTS = ['backup:changed'];
 
 function computeHealth(status) {
   if (!status || status.status === 'error') return 'critical';
-  // 'degraded' = files backed up but the DB dump failed — surface as a warning.
+  // Degraded snapshots need operator attention before recovery.
   if (status.status === 'degraded') return 'warning';
   if (status.status === 'never') return 'warning';
   if (status.status === 'running') return 'healthy';
@@ -486,7 +486,7 @@ const BackupWidget = memo(function BackupWidget() {
       lastRun: result.lastRun,
       filesChanged: result.filesChanged,
       pgBackup: result.pgBackup,
-      error: result.pgBackup?.status === 'failed' ? `DB dump ${result.pgBackup.reason}` : null,
+      error: result.error ?? (result.pgBackup?.status === 'failed' ? `DB dump ${result.pgBackup.reason}` : null),
     }));
   });
   const [snapshotsOpen, setSnapshotsOpen] = useState(false);
@@ -576,6 +576,12 @@ const BackupWidget = memo(function BackupWidget() {
       )}
 
       {/* Error message */}
+      {status?.status === 'degraded' && status.error && (
+        <div role="status" className="mb-4 p-3 rounded-lg bg-port-warning/10 border border-port-warning/20 flex items-start gap-2">
+          <AlertTriangle size={14} className="text-port-warning shrink-0 mt-0.5" />
+          <p className="text-xs text-port-warning">{status.error}</p>
+        </div>
+      )}
       {status?.status === 'error' && status.error && (
         <div role="status" className="mb-4 p-3 rounded-lg bg-port-error/10 border border-port-error/20 flex items-start gap-2">
           <XCircle size={14} className="text-port-error shrink-0 mt-0.5" />

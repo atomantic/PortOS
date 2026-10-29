@@ -688,6 +688,12 @@ function SyncCategoriesPanel({ peer, onRefresh }) {
     onRefresh();
   };
 
+  const mediaDeleteAllowed = peer.mediaDeleteAllowed !== false;
+  const toggleMediaDeleteAllowed = async () => {
+    await updatePeer(peer.id, { mediaDeleteAllowed: !mediaDeleteAllowed }).catch(() => null);
+    onRefresh();
+  };
+
   const toggleAll = async (enable) => {
     const updated = {};
     for (const { key } of SYNC_CATEGORY_META) {
@@ -794,6 +800,19 @@ function SyncCategoriesPanel({ peer, onRefresh }) {
               </>
             )}
           </div>
+          <label htmlFor={`media-delete-${peer.id}`} className="flex items-start gap-2 mb-2 cursor-pointer">
+            <input
+              id={`media-delete-${peer.id}`}
+              type="checkbox"
+              checked={mediaDeleteAllowed}
+              onChange={toggleMediaDeleteAllowed}
+              className="mt-0.5 min-h-[16px] min-w-[16px]"
+            />
+            <span className="text-xs text-gray-300">
+              Allow this peer to delete media on this machine
+              <span className="block text-[10px] text-gray-600">When off, deletions this peer makes do not remove your local images or videos.</span>
+            </span>
+          </label>
           {SYNC_CATEGORY_META.map(({ key, label, icon: Icon, description }) => {
             // Under full mirror every category reads as on and is non-interactive.
             const on = fullSync || isCategoryOn(categories, key);
@@ -1594,9 +1613,11 @@ function InstancesContent() {
   const [snapshotLoaded, setSnapshotLoaded] = useState(false);
   const [snapshotLoading, setSnapshotLoading] = useState(false);
   const snapshotRequest = useRef(0);
+  const peerEventRevision = useRef(0);
 
   const fetchData = useCallback(async () => {
     const request = ++snapshotRequest.current;
+    const peerRevision = peerEventRevision.current;
     setSnapshotLoading(true);
     const data = await getInstances({ silent: true }).catch(() => null);
     if (request !== snapshotRequest.current) return;
@@ -1604,7 +1625,9 @@ function InstancesContent() {
     setSnapshotError(!data);
     if (data) {
       setSelf(data.self);
-      setPeers(data.peers);
+      // Peer events can be newer than this read; the other snapshot fields
+      // still belong to the latest request and must settle independently.
+      if (peerRevision === peerEventRevision.current) setPeers(data.peers);
       setSyncStatus(data.syncStatus ?? null);
       setSnapshotLoaded(true);
     }
@@ -1627,6 +1650,7 @@ function InstancesContent() {
     ]).finally(() => { if (active) setLoading(false); });
 
     const handlePeersUpdated = (updatedPeers) => {
+      peerEventRevision.current += 1;
       setPeers(updatedPeers);
     };
     socket.on('instances:peers:updated', handlePeersUpdated);

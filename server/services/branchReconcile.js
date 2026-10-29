@@ -40,7 +40,6 @@ import { githubRepoSpec, githubApiHost } from '../lib/workTracker.js';
 import { safeJSONParse, PATHS } from '../lib/fileUtils.js';
 import { PROTECTED_BRANCHES } from '../lib/gitArgs.js';
 import { ledgerPath, readVerdictLedger, partitionSuperseded, recordVerdictInstruction, recordVerdict, sameDirtyPaths } from './supersededLedger.js';
-import { backupSupersededBranch } from './supersededBackup.js';
 import { claimCheckoutOwnerReason, RECONCILE_AGENT_ID_PLACEHOLDER } from '../lib/claimContinuation.js';
 import { withClaimOwnershipLock, readClaimOwnershipAgents, retireWithUnlockedArchive } from './cosClaimOwnership.js';
 import { agentApiCurl } from '../lib/agentApiToken.js';
@@ -1221,17 +1220,17 @@ export async function cleanupMerged(repoPath, defaultBranch, merged, { activeAge
  * that nobody runs. Nine verdicts had accumulated in this install that way, each
  * one a branch and a worktree still on disk.
  *
- * What makes deleting safe here is the BACKUP, not the verdict: nothing is
- * removed until `backupSupersededBranch` has written the branch's commits, its
- * worktree diff and its untracked files under
- * `data/cos/abandoned-worktree-backups/`. A backup that throws skips the reap.
+ * What makes deleting safe here is the verdict (the work landed on the default
+ * branch under other names, so the forge already holds it) together with a clean
+ * worktree: nothing is copied before removal, so a tree with uncommitted or
+ * untracked work is held and reported rather than reaped.
  *
  * Ordering is deliberate and costs nothing to get right: the verdict/branch
  * pairing is a pure contract check for a direct caller (through `reconcile` it is
  * already proven by `isVerdictFresh`, but this function is exported and deletes
  * things, so it does not take the pairing on faith), then `retireBranch`'s own
  * pure protection gate, and only then — as its `prepare` hook, past every way
- * this can still refuse — is a backup written. A branch permanently held by a
+ * this can still refuse — the holder recheck. A branch permanently held by a
  * lock or a live CoS agent therefore costs no I/O at all on a recurring pass.
  *
  * @param {string} repoPath
@@ -1267,28 +1266,15 @@ export async function reapSupersededBranches(repoPath, defaultBranch, superseded
       appId,
       allowLiveClaim: true,
       label: `🔀 branch-reconcile: remove superseded worktree for ${b.branch}`,
-      // The dirty tree IS this branch's deliverable — an abandoned agent worktree
-      // has no commits of its own — so refusing on it would make the reap a no-op
-      // for the exact shape it exists to retire. What replaces the gate: the
-      // verdict was recorded against these same paths (checked above) and
-      // `prepare` copies them into the backup before anything is removed.
-      requireCleanWorktree: false,
       // A worktree outside the managed roots is reachable here and nowhere else —
-      // the verdict, superseded backup and receipt supply the preservation proof, and
-      // the idle floor covers a process still in the tree. See the constant.
+      // the fresh verdict and a clean tree supply the preservation proof, and the
+      // idle floor covers a process still in the tree. See the constant.
       unmanagedIdleMs: SUPERSEDED_UNMANAGED_IDLE_MS,
       prepare: async () => {
-        const backup = await backupSupersededBranch(repoPath, b, { defaultBranch, ...(cosDir ? { cosDir } : {}) })
-          .catch((err) => ({ error: err.message }));
-        if (!backup?.error) {
-          // The smaller superseded backup is the only copy. The checkout itself is not archived.
-          if (!b.worktreePath) return backup;
-          const tree = (await listWorktrees(repoPath)).find(holder => holder.path === b.worktreePath);
-          if (!tree || tree.head !== b.tip || tree.branch !== `refs/heads/${b.branch}`) return { error: 'worktree-holder-changed' };
-          return backup;
-        }
-        console.error(`❌ branch-reconcile: backup failed for ${b.branch}, not reaping: ${backup.error}`);
-        return { error: `backup-failed: ${backup.error}` };
+        if (!b.worktreePath) return null;
+        const tree = (await listWorktrees(repoPath)).find(holder => holder.path === b.worktreePath);
+        if (!tree || tree.head !== b.tip || tree.branch !== `refs/heads/${b.branch}`) return { error: 'worktree-holder-changed' };
+        return null;
       },
     });
     if (!retired.ok) {
@@ -1296,14 +1282,13 @@ export async function reapSupersededBranches(repoPath, defaultBranch, superseded
       hold(b, failure);
       continue;
     }
-    const backup = retired.prepared;
     // Keep the verdict, stamped with what happened to it. The entry is now a
-    // record rather than a cache — it names the backup a human needs to undo this.
+    // record rather than a cache.
     await recordVerdict(
-      { ...verdict, branch: b.branch, repoPath, reapedAt: new Date().toISOString(), backupPatch: backup.dir },
+      { ...verdict, branch: b.branch, repoPath, reapedAt: new Date().toISOString() },
       cosDir
     ).catch((err) => console.error(`⚠️ branch-reconcile: reaped ${b.branch} but could not update the verdict ledger: ${err.message}`));
-    console.log(`🔀 branch-reconcile: reaped superseded branch ${b.branch} (backup: ${backup.dir})`);
+    console.log(`🔀 branch-reconcile: reaped superseded branch ${b.branch}`);
     reaped.push(b.branch);
   }
   return { reaped, held, skipped };
@@ -1314,7 +1299,7 @@ export async function reapSupersededBranches(repoPath, defaultBranch, superseded
  *
  * The destructive tail shared by `cleanupMerged` and `reapSupersededBranches`.
  * Both prove their own safety FIRST — one that the work is merged, the other
- * that it is superseded and backed up — and then run exactly this: the same
+ * that it is superseded — and then run exactly this: the same
  * protection gate, the same dirty-tree refusal, the same removal order (the
  * branch delete fails while a worktree still has it checked out). Extracted so
  * the two cannot drift, since a guard added to one and missed on the other is a
@@ -1325,18 +1310,16 @@ export async function reapSupersededBranches(repoPath, defaultBranch, superseded
  * @param {{ activeAgentIds?: Set<string>, staleClaimIdleMs?: number, allowLiveClaim?: boolean, label: string, requireCleanWorktree?: boolean, unmanagedIdleMs?: number, prepare?: () => Promise<any> }} opts
  *   `prepare` runs after every gate has passed and before the first irreversible
  *   step, and aborts the retirement by resolving to `{ error }`. That is the only
- *   place work like "write a recoverable backup" belongs: earlier it is paid for
- *   branches that are then refused, later it is too late to matter. It runs
+ *   place a last recheck belongs: earlier it is paid for branches that are
+ *   then refused, later it is too late to matter. It runs
  *   with the claim-ownership lock released and the branch fenced, and removal
  *   then refuses a worktree whose dirty paths no longer match `b.dirtyPaths`.
  *
  *   `requireCleanWorktree` (default true) is the caller's answer to "could this
  *   tree hold work that is not accounted for?". For `cleanupMerged` it can, so a
  *   dirty tree refuses: merged proves the COMMITS landed and says nothing about
- *   the working tree. `reapSupersededBranches` sets it false because the dirty
- *   tree is the branch's whole deliverable and it accounts for that tree twice
- *   over — the verdict was recorded against exactly these paths, and `prepare`
- *   copies them out before anything is removed. Never set it false without both.
+ *   the working tree; a superseded verdict does not either, and nothing is
+ *   copied before removal, so both callers keep the default.
  *
  *   `unmanagedIdleMs` (default none) admits a worktree outside the managed roots
  *   once it has sat idle that long. Same bar: only a caller with proof beyond
@@ -1391,17 +1374,10 @@ async function retireBranch(repoPath, b, opts) {
       const prepared = gated.prepare ? await gated.prepare() : null;
       if (prepared?.error) return { result: { ok: false, reason: prepared.error } };
       if (!gated.archiveTree) return { archive: { prepared, preservation: prepared?.preservation || null } };
-      const { releaseCheckoutWithoutArchive } = await import('./heldCheckoutRecovery.js');
-      try {
-        const preservation = await releaseCheckoutWithoutArchive({ repoPath, path: gated.archiveTree.path, branch: gated.b.branch }, async () => {
-          const status = await execGit(['status', '--porcelain'], gated.archiveTree.path).then(r => r.stdout, () => null);
-          if (status === null) throw new Error('worktree-status-unavailable');
-          return null;
-        });
-        return { archive: { prepared, preservation } };
-      } catch (error) {
-        return { result: { ok: false, reason: error.message || 'checkout-not-disposable' } };
-      }
+      // Removal re-proves merge evidence and ownership, and checks ignored content.
+      const status = await execGit(['status', '--porcelain'], gated.archiveTree.path).then(r => r.stdout, () => null);
+      if (status === null) return { result: { ok: false, reason: 'worktree-status-unavailable' } };
+      return { archive: { prepared, preservation: null } };
     },
     finish: ({ gated }, { prepared, preservation }) => finishBranchRetirement(repoPath, gated, { prepared, preservation }),
   });
@@ -1535,7 +1511,7 @@ export async function checkoutIdleMs(worktreePath) {
 
 /**
  * Removal and branch deletion. `preservation` is an optional held-checkout record
- * (production removal does not create one) and `prepared` is the `prepare` backup,
+ * (production removal does not create one) and `prepared` is the `prepare` result,
  * taken after admission with the ownership lock released.
  */
 async function finishBranchRetirement(repoPath, { b, expectedHead, readPolicyHold, mergeTarget, label, requireCleanWorktree, claimOwners, mergedRetirement, claimCompletion, appId }, { prepared = null, preservation = null } = {}) {
@@ -1566,11 +1542,10 @@ async function finishBranchRetirement(repoPath, { b, expectedHead, readPolicyHol
       const dirtyPaths = await worktreeDirtyPaths(b.worktreePath);
       if (dirtyPaths === null) return 'worktree-status-unavailable';
       if (requireCleanWorktree && dirtyPaths.length) return 'worktree-dirty';
-      // The backup ran unlocked; a tree whose change set moved since is not what it holds.
-      if (prepared && !sameDirtyPaths(b.dirtyPaths, dirtyPaths)) return 'worktree-changed-since-backup';
       if (mergedRetirement && !await hasBranchMergeEvidence(repoPath, expectedHead, mergeTarget).catch(() => false)) return 'not-merged-on-recheck';
       return preservation ? preservation.verify(holder) : null;
     };
+    // Merge evidence does not cover ignored local content; removal checks it separately.
     removal = await forceRemoveWorktreeDir(repoPath, b.worktreePath, { label, log: 'all', verifyRemoval });
     // The branch is still checked out by a surviving worktree: deleting it would
     // fail, and reporting success would mark the branch reconciled while it is held.
@@ -1784,22 +1759,15 @@ async function reapDetachedWorktrees(repoPath, defaultBranch, detached, { active
         if (initialHold) return { result: { removed: false, reason: initialHold } };
         return { fence: { repoPath, path: tree.path }, current };
       },
-      archive: async ({ current }) => {
-        const { releaseCheckoutWithoutArchive } = await import('./heldCheckoutRecovery.js');
-        try {
-          const archive = await releaseCheckoutWithoutArchive({ repoPath, path: current.path }, async () => ({
-            verify: async holder => {
-              if (!holder || holder.head !== current.head || holder.branch) return 'worktree-holder-changed';
-              const status = await execGit(['status', '--porcelain'], current.path).then(r => r.stdout, () => null);
-              if (status === null || !classifyWorktreeDirt(status).clean) return 'worktree-dirty';
-              return null;
-            },
-          }));
-          return { archive };
-        } catch {
-          return { result: { removed: false, reason: 'checkout-not-disposable' } };
-        }
-      },
+      // Removal independently checks ignored local content.
+      archive: async ({ current }) => ({ archive: {
+        verify: async holder => {
+          if (!holder || holder.head !== current.head || holder.branch) return 'worktree-holder-changed';
+          const status = await execGit(['status', '--porcelain'], current.path).then(r => r.stdout, () => null);
+          if (status === null || !classifyWorktreeDirt(status).clean) return 'worktree-dirty';
+          return null;
+        },
+      } }),
       finish: async (_admitted, preservation) => {
         const checkoutIdentity = await readRetirementCheckoutIdentity(tree.path).catch(() => null);
         const removed = await forceRemoveWorktreeDir(repoPath, tree.path, {

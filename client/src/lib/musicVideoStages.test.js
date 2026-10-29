@@ -119,7 +119,7 @@ describe('deriveStages / deriveNextAction', () => {
     expect(deriveNextAction(composed)).toMatchObject({ id: 'goto-compose', stage: 'produce', anchor: 'mv-composition' });
 
     const finished = { ...ready, renderHistoryId: 'rh-1' };
-    expect(stateOf(finished)).toEqual({ setup: 'done', 'cast-sets': 'done', board: 'done', produce: 'done', review: 'done', publish: 'active' });
+    expect(stateOf(finished)).toEqual({ setup: 'done', story: 'todo', 'cast-sets': 'done', board: 'done', produce: 'done', review: 'done', publish: 'active' });
     // #9281: a rendered project moves on to the release.
     expect(deriveNextAction(finished)).toMatchObject({ id: 'goto-publish', kind: 'goto', stage: 'publish', label: 'Build the publishing kit' });
     // With the kit built, the header names one platform at a time: the next one not yet posted.
@@ -351,11 +351,12 @@ describe('stage route param', () => {
     expect(resolveStageParam(undefined)).toBeNull();
   });
 
-  it('opens Shots for an old Compose link and the new step names, and lists six steps each saying what done means', () => {
+  it('keeps old stage links and places optional Story between Song and Look', () => {
     expect(resolveStageParam('compose')).toBe('produce');
     expect(resolveStageParam('shots')).toBe('produce');
     expect(resolveStageParam('plan')).toBe('board');
-    expect(MUSIC_VIDEO_STAGES.map((stage) => stage.label)).toEqual(['Song', 'Look', 'Plan', 'Shots', 'Final render', 'Publish']);
+    expect(MUSIC_VIDEO_STAGES.map((stage) => stage.label)).toEqual(['Song', 'Story', 'Look', 'Plan', 'Shots', 'Final render', 'Publish']);
+    expect(deriveStages({ trackId: 't1', audioAnalysis: ANALYSIS, ...LYRICS }).current).toBe('cast-sets');
     for (const stage of MUSIC_VIDEO_STAGES) expect(stage.doneWhen).toMatch(/^Done when /);
   });
 
@@ -395,21 +396,21 @@ describe('describeProjectStatus', () => {
   it('names the step and flags the one waiting on the director', () => {
     const status = describeProjectStatus({ excerpts: [] },
       { progress: stages('cast-sets', { setup: 'done' }), nextAction: { id: 'review-production', stage: 'cast-sets' } });
-    expect(status).toEqual({ headline: 'Step 2 of 6: Look needs you', tone: 'warn', needsYouStage: 'cast-sets' });
+    expect(status).toEqual({ headline: 'Step 3 of 7: Look needs you', tone: 'warn', needsYouStage: 'cast-sets' });
     // A blocked step needs the director even with no approval to give.
     expect(describeProjectStatus({}, { progress: stages('produce', { produce: 'blocked' }) }))
-      .toMatchObject({ headline: 'Step 4 of 6: Shots needs you', needsYouStage: 'produce' });
+      .toMatchObject({ headline: 'Step 5 of 7: Shots needs you', needsYouStage: 'produce' });
   });
 
   it('names the step an approval sits on, even when an earlier step is still open', () => {
     // Song is not done yet, but the header asks for the art approval on Look.
     const status = describeProjectStatus({}, { progress: stages('setup'), nextAction: { id: 'review-production', stage: 'cast-sets' } });
-    expect(status).toMatchObject({ headline: 'Step 2 of 6: Look needs you', needsYouStage: 'cast-sets' });
+    expect(status).toMatchObject({ headline: 'Step 3 of 7: Look needs you', needsYouStage: 'cast-sets' });
     expect(describeProjectStatus({}, { progress: stages('setup'), nextAction: { id: 'approve-cast-sets', kind: 'run' } }).needsYouStage).toBe('cast-sets');
   });
 
   it('reads plainly when nothing waits on the director', () => {
-    expect(describeProjectStatus({}, { progress: stages('review') })).toEqual({ headline: 'Step 5 of 6: Final render', tone: 'muted', needsYouStage: null });
+    expect(describeProjectStatus({}, { progress: stages('review') })).toEqual({ headline: 'Step 6 of 7: Final render', tone: 'muted', needsYouStage: null });
     const done = describeProjectStatus({ renderHistoryId: 'r1' }, { progress: { current: 'publish', stages: MUSIC_VIDEO_STAGES.map((stage) => ({ ...stage, state: 'done' })) } });
     expect(done).toEqual({ headline: 'Published', tone: 'ok', needsYouStage: null });
   });
@@ -669,7 +670,7 @@ describe('stepNotes', () => {
       devArtifacts: [{ id: 'g', title: 'Guide' }], productionReview: { draft: { guideArtifactId: 'g' } },
     };
     expect(stepNotes(project)).toEqual({
-      setup: '4:40 · 2 lyric lines', 'cast-sets': 'Visual guide chosen', board: '2 shots',
+      setup: '4:40 · 2 lyric lines', story: '', 'cast-sets': 'Visual guide chosen', board: '2 shots',
       produce: '1 of 2 shots have their picture', review: '', publish: '',
     });
     expect(stepNotes({ ...project, composition: { mode: 'document' } }).produce).toBe('Picture drawn by the composition');
@@ -699,6 +700,13 @@ describe('preview source order on Storyboard', () => {
     expect(listPreviewSources(board, { leadWith: 'storyboard' }).map((s) => s.id)).toEqual(['animatic', 'excerpt:aaaaaa']);
     const doc = { ...board, composition: { mode: 'document', document: { directory: 'd' } } };
     expect(listPreviewSources(doc, { leadWith: 'storyboard' }).map((s) => s.id)).toEqual(['document', 'animatic', 'excerpt:aaaaaa']);
+  });
+
+  // Uniquely catches the Song step opening the animatic, which hides the words when lyric overlays are off.
+  it('leads with the lyric timing playthrough on the Song step once words are timed', () => {
+    const song = { trackId: 't', audioAnalysis: { durationSec: 60 }, scenes: [{ sceneId: 's1' }], lyricCues: [{ id: 'c', text: 'hi', startSec: 1 }] };
+    expect(listPreviewSources(song, { leadWith: 'lyrics' }).map((s) => s.id)).toEqual(['lyrics', 'animatic']);
+    expect(listPreviewSources(song).map((s) => s.id)).toEqual(['animatic', 'lyrics']);
   });
 });
 

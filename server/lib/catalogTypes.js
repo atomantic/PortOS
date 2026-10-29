@@ -449,6 +449,10 @@ export function canonicalTagKey(label) {
  *   inverseLabel — label shown when the relation is viewed from the `to` side
  *             (the inbound direction), so a single stored edge reads correctly
  *             from both ingredients' detail pages.
+ *   family  — a family tie between two characters, picked in Casting's Family
+ *             panel. `term` names the `from` side for render prompts ("the
+ *             mother of Nora"); `blood` marks inherited resemblance (a spouse
+ *             or partner gets era/age fit instead).
  */
 const RELATION_REGISTRY = [
   { id: 'forked-from', label: 'Forked from', inverseLabel: 'Forks' },
@@ -457,10 +461,34 @@ const RELATION_REGISTRY = [
   { id: 'owned-by',    label: 'Owned by',    inverseLabel: 'Owns' },
   { id: 'used-by',     label: 'Used by',     inverseLabel: 'Uses' },
   { id: 'created-by',  label: 'Created by',  inverseLabel: 'Creator of' },
-  { id: 'parent-of',   label: 'Parent of',   inverseLabel: 'Child of' },
+  { id: 'parent-of',   label: 'Parent of',   inverseLabel: 'Child of', family: true, term: 'parent', blood: true },
   { id: 'variant-of',  label: 'Variant of',  inverseLabel: 'Has variant' },
   { id: 'references',  label: 'References',   inverseLabel: 'Referenced by' },
   { id: 'related-to',  label: 'Related to',  inverseLabel: 'Related to' },
+  // Family ties. Peers on an older PortOS store unknown kinds harmlessly (the
+  // sync schema keeps `kind` freeform) and show the raw id.
+  { id: 'mother-of',        label: 'Mother of',        inverseLabel: 'Child of',           family: true, term: 'mother',        blood: true },
+  { id: 'father-of',        label: 'Father of',        inverseLabel: 'Child of',           family: true, term: 'father',        blood: true },
+  { id: 'daughter-of',      label: 'Daughter of',      inverseLabel: 'Parent of',          family: true, term: 'daughter',      blood: true },
+  { id: 'son-of',           label: 'Son of',           inverseLabel: 'Parent of',          family: true, term: 'son',           blood: true },
+  { id: 'child-of',         label: 'Child of',         inverseLabel: 'Parent of',          family: true, term: 'child',         blood: true },
+  { id: 'wife-of',          label: 'Wife of',          inverseLabel: 'Spouse of',          family: true, term: 'wife',          blood: false },
+  { id: 'husband-of',       label: 'Husband of',       inverseLabel: 'Spouse of',          family: true, term: 'husband',       blood: false },
+  { id: 'spouse-of',        label: 'Spouse of',        inverseLabel: 'Spouse of',          family: true, term: 'spouse',        blood: false },
+  { id: 'partner-of',       label: 'Partner of',       inverseLabel: 'Partner of',         family: true, term: 'partner',       blood: false },
+  { id: 'sister-of',        label: 'Sister of',        inverseLabel: 'Sibling of',         family: true, term: 'sister',        blood: true },
+  { id: 'brother-of',       label: 'Brother of',       inverseLabel: 'Sibling of',         family: true, term: 'brother',       blood: true },
+  { id: 'sibling-of',       label: 'Sibling of',       inverseLabel: 'Sibling of',         family: true, term: 'sibling',       blood: true },
+  { id: 'twin-of',          label: 'Twin of',          inverseLabel: 'Twin of',            family: true, term: 'twin',          blood: true },
+  { id: 'grandmother-of',   label: 'Grandmother of',   inverseLabel: 'Grandchild of',      family: true, term: 'grandmother',   blood: true },
+  { id: 'grandfather-of',   label: 'Grandfather of',   inverseLabel: 'Grandchild of',      family: true, term: 'grandfather',   blood: true },
+  { id: 'granddaughter-of', label: 'Granddaughter of', inverseLabel: 'Grandparent of',     family: true, term: 'granddaughter', blood: true },
+  { id: 'grandson-of',      label: 'Grandson of',      inverseLabel: 'Grandparent of',     family: true, term: 'grandson',      blood: true },
+  { id: 'aunt-of',          label: 'Aunt of',          inverseLabel: 'Niece or nephew of', family: true, term: 'aunt',          blood: true },
+  { id: 'uncle-of',         label: 'Uncle of',         inverseLabel: 'Niece or nephew of', family: true, term: 'uncle',         blood: true },
+  { id: 'niece-of',         label: 'Niece of',         inverseLabel: 'Aunt or uncle of',   family: true, term: 'niece',         blood: true },
+  { id: 'nephew-of',        label: 'Nephew of',        inverseLabel: 'Aunt or uncle of',   family: true, term: 'nephew',        blood: true },
+  { id: 'cousin-of',        label: 'Cousin of',        inverseLabel: 'Cousin of',          family: true, term: 'cousin',        blood: true },
 ];
 
 // Fail-fast at module load — duplicate / malformed relation kinds block boot.
@@ -483,6 +511,11 @@ const RELATION_BY_ID = Object.freeze(Object.fromEntries(RELATION_KINDS.map((r) =
 export function getRelationKind(id) {
   return RELATION_BY_ID[id];
 }
+
+/** Family relation kinds, in picker order. */
+export const FAMILY_RELATION_KINDS = Object.freeze(RELATION_KINDS.filter((r) => r.family));
+
+export const isFamilyRelationKind = (id) => RELATION_BY_ID[id]?.family === true;
 
 /**
  * Catalog ingredient MEDIA-attachment kinds. An ingredient can carry typed
@@ -561,6 +594,7 @@ const CONTAINER_ROLES = Object.freeze({
   series: { character: 'cast', place: 'canon-place', object: 'canon-object' },
   'creative-director': { character: 'cast', place: 'location', object: 'prop', scene: 'scene' },
   'music-video': { character: 'cast', place: 'set', object: 'prop' },
+  storyboard: { character: 'cast', place: 'set', object: 'prop' },
 });
 
 export const catalogReferenceRole = (type, refKind) => CONTAINER_ROLES[refKind]?.[type] || (refKind === 'series' ? 'mentioned' : 'reference');

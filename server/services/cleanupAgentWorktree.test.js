@@ -1801,6 +1801,18 @@ describe('releaseRetryHold', () => {
     expect(updateTask).not.toHaveBeenCalled();
   });
 
+  it('fences runtime pointer preparation to the caller’s observed task and inactive owner', async () => {
+    const observed = { ...task(), description: 'Original', priority: 'HIGH', status: 'blocked', metadata: {
+      blockedCategory: 'runtime-verification', blockedAt: 'now', deliveryDecisionAgentId: 'agent-x', totalSpawnCount: '1',
+    } };
+    getTaskById.mockResolvedValue({ ...observed, description: 'Concurrent edit' });
+    const recoveryOwner = { id: 'agent-x', startedAt: 'start', requireInactive: true };
+    await releaseRetryHold({ agentId: 'agent-x', task: observed, success: false, agentMetadata: {}, recoveryOwner });
+    expect(updateTask).toHaveBeenCalledWith('task-1', expect.anything(), 'user', expect.objectContaining({
+      recoveryOwner, expectedTask: { description: observed.description, priority: observed.priority, metadata: observed.metadata },
+    }));
+  });
+
   it.each(['task-approval', 'task-recovery-exhausted'])('records a first attempt resume pointer for %s without dispatching it', async blockedCategory => {
     getTaskById.mockResolvedValue({ id: 'task-1', status: 'blocked', metadata: { blockedCategory, blockedAt: 'now', deliveryDecisionAgentId: 'agent-x' } });
     git.getWorktreeBranches.mockResolvedValue(new Set([DEAD_BRANCH]));

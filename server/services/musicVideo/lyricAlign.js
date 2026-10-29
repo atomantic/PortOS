@@ -122,11 +122,14 @@ export async function alignProjectLyrics(projectId, options = {}) {
   const promptCues = windowed ? [cue] : cues;
   const prompt = alignmentPrompt(promptCues);
   let forcedWords = null;
+  let stemPcm = null;
   let recognized = [];
   let kind;
   if (source === 'vocal-stem') {
     onProgress({ stage: 'loading-model' });
     checkCancel();
+    stemPcm = vocalPcm(wav);
+    const silentCount = (words) => findSilentWords([{ words }], stemPcm).length;
     // Both explicit cue alignment and automatic repairs use the same runner,
     // decoded stem, cancellation and progress callbacks. Save only once below.
     const alignStemCues = (entries, window) => deps.forceAlign(wav, entries, {
@@ -137,7 +140,10 @@ export async function alignProjectLyrics(projectId, options = {}) {
       const wholeSongWords = forcedWords;
       forcedWords = [...wholeSongWords];
       for (let index = 0; index < cues.length; index++) {
-        if (!compressedWords(wholeSongWords[index])) continue;
+        const original = wholeSongWords[index];
+        const compressed = compressedWords(original);
+        const silent = silentCount(original);
+        if (!compressed && silent === 0) continue;
         checkCancel();
         const startSec = cues[index - 1]?.endSec ?? wholeSongWords[index - 1]?.at(-1)?.endSec ?? 0;
         const endSec = cues[index + 1]?.startSec ?? wholeSongWords[index + 1]?.[0]?.startSec ?? wavDurationSec(wav);
@@ -145,7 +151,10 @@ export async function alignProjectLyrics(projectId, options = {}) {
         if (!(endSec > startSec)) continue;
         const [retry] = await alignStemCues([cues[index]], { startSec, endSec });
         checkCancel();
-        if (retry.length === wholeSongWords[index].length && !compressedWords(retry)) forcedWords[index] = retry;
+        if (retry.length !== original.length || compressedWords(retry)) continue;
+        const retrySilent = silentCount(retry);
+        // Keep the retry only when it fixes something without landing more words in silence.
+        if (retrySilent < silent || (compressed && retrySilent <= silent)) forcedWords[index] = retry;
       }
     }
     kind = 'MMS_FA';
@@ -195,19 +204,21 @@ export async function alignProjectLyrics(projectId, options = {}) {
     const aligned = align(freshCues);
     nextCues = cueId ? freshCues.map((entry, index) => (entry.id === cueId ? aligned[index] : entry)) : aligned;
   }
+  // Words placed where the vocal stem is silent are flagged on their line, not
+  // refused: the director needs the timings saved to hear and fix them.
+  const silentWords = stemPcm ? findSilentWords(nextCues, stemPcm) : [];
+  nextCues = nextCues.map((entry) => {
+    const rest = { ...entry };
+    delete rest.silentWords;
+    const indices = silentWords.filter((word) => word.cueId === entry.id).map((word) => word.wordIndex);
+    return indices.length ? { ...rest, silentWords: indices } : rest;
+  });
   const matched = nextCues.reduce((sum, entry) => sum + (entry.words || []).filter((word) => word.conf === 'matched').length, 0);
   console.log(`🎤 Aligned lyric words from the ${source} via ${kind} (${matched} words matched)`);
   // Provenance is project-wide, so only a whole-song pass may change it; one
   // re-aligned line leaves the other lines' timings as stale as they were.
   const patch = { lyricCues: nextCues, ...(cueId ? {} : { lyricAlignSource: source }) };
-  if (source === 'vocal-stem') {
-    const silentWords = findSilentWords(nextCues, vocalPcm(wav));
-    patch.lyricAlignSilentWords = silentWords.length;
-    if (silentWords.some((word) => !cueId || word.cueId === cueId)) {
-      throw new ServerError('Some lyric words aligned to silence. Check that the lyrics match the vocal, then re-align.',
-        { status: 422, code: 'LYRIC_ALIGN_SILENT_WORDS' });
-    }
-  }
+  if (stemPcm) patch.lyricAlignSilentWords = silentWords.length;
   if (!cueId) {
     const analysis = relabeledAnalysis(fresh, nextCues);
     if (analysis) patch.audioAnalysis = analysis;

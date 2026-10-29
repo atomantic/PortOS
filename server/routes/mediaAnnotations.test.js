@@ -6,6 +6,7 @@ import { errorEvents, errorMiddleware } from '../lib/errorHandler.js';
 vi.mock('../services/mediaAnnotations.js', () => ({
   ERR_VALIDATION: 'VALIDATION_ERROR',
   NOTE_MAX_LENGTH: 2000,
+  MEDIA_RATINGS: ['good', 'bad'],
   listAnnotations: vi.fn(),
   setAnnotation: vi.fn(),
 }));
@@ -40,6 +41,8 @@ describe('/api/media/annotations', () => {
   it('refuses an empty or over-long patch before touching the store', async () => {
     expect((await request(app).patch('/api/media/annotations/image:a.png').send({})).status).toBe(400);
     expect((await request(app).patch('/api/media/annotations/image:a.png').send({ note: 'x'.repeat(2001) })).status).toBe(400);
+    // "Rejected" is a music video take state, never a media rating.
+    expect((await request(app).patch('/api/media/annotations/image:a.png').send({ rating: 'rejected' })).status).toBe(400);
     expect(svc.setAnnotation).not.toHaveBeenCalled();
     notBroadcast();
   });

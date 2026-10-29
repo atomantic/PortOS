@@ -10,7 +10,10 @@ import useVideoDownload from '../hooks/useVideoDownload.js';
 import useConfirmDelete from '../hooks/useConfirmDelete.js';
 import useListResource from '../hooks/useListResource';
 import { listVideoDownloads, deleteVideoDownload } from '../services/apiVideoDownload.js';
+import { cancelVideoPendingDelete } from '../services/apiImageVideo.js';
+import usePendingDeletePeerNames from '../hooks/usePendingDeletePeerNames.js';
 import { timeAgo, formatTimecode } from '../utils/formatters';
+import { mediaDeleteOutcome } from '../lib/mediaDeleteOutcome';
 
 const loadVideoDownloads = () => listVideoDownloads({ silent: true });
 
@@ -26,6 +29,7 @@ export default function VideoDownloaderPage() {
   const [deletingId, setDeletingId] = useState(null);
   // Thumbnail filenames that failed to load; keyed by value so a new thumbnail retries.
   const [failedThumbs, setFailedThumbs] = useState(() => new Set());
+  const { peerNames, rememberPeerName } = usePendingDeletePeerNames(downloads);
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
 
   // Prepend the finished clip to the list rather than refetching (reactive UI).
@@ -43,10 +47,34 @@ export default function VideoDownloaderPage() {
     start(trimmed);
   };
 
+  const setPendingDelete = (id, pendingDelete) => setDownloads((prev) => prev.map((d) => {
+    if (d.id !== id) return d;
+    const { pendingDelete: _previous, ...rest } = d; // eslint-disable-line no-unused-vars
+    return pendingDelete ? { ...rest, pendingDelete } : rest;
+  }));
+
+  const onCancelPendingDelete = async (id) => {
+    const cancelled = await cancelVideoPendingDelete(id, { silent: true })
+      .then(() => true)
+      .catch((err) => { toast.error(err?.message || 'Cancel failed'); return false; });
+    if (!cancelled) return;
+    setPendingDelete(id, null);
+    toast.success('Pending delete cancelled');
+  };
+
   const onDelete = (id) => confirmDelete(async () => {
     setDeletingId(id);
     await deleteVideoDownload(id, { silent: true })
-      .then(() => setDownloads((prev) => prev.filter((d) => d.id !== id)))
+      .then((result) => {
+        // A peer's download is deleted on its owner; one still waiting on it stays listed.
+        const outcome = mediaDeleteOutcome(result, 'video');
+        if (outcome.remove) setDownloads((prev) => prev.filter((d) => d.id !== id));
+        else {
+          rememberPeerName(outcome.pendingDelete?.peerId, result.peerName);
+          setPendingDelete(id, outcome.pendingDelete);
+        }
+        if (outcome.tone === 'info') toast(outcome.notice);
+      })
       .catch((err) => toast.error(err?.message || 'Failed to delete video'))
       .finally(() => setDeletingId(null));
   });
@@ -164,7 +192,19 @@ export default function VideoDownloaderPage() {
                   )}
                 </div>
                 <div className="shrink-0">
-                  {isConfirming(d.id) ? (
+                  {d.pendingDelete ? (
+                    <div className="flex flex-col items-end gap-1 text-[11px] text-port-warning">
+                      <span role="status">Delete pending on {(d.pendingDelete.peerId && peerNames[d.pendingDelete.peerId]) || 'the owning machine'}</span>
+                      <button
+                        type="button"
+                        onClick={() => onCancelPendingDelete(d.id)}
+                        aria-label="Cancel pending delete"
+                        className="min-h-[44px] px-2 text-port-accent hover:underline"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  ) : isConfirming(d.id) ? (
                     <ConfirmButtonPair
                       prompt="Delete?"
                       busy={deletingId === d.id}

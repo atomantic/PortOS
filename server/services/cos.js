@@ -35,6 +35,7 @@ import { COMPLETION_RECOVERY_BATCH_SIZE } from './agentDeliveryActivity.js';
 import { recordJobExecution } from './autonomousJobs.js';
 import { safeJSONParse, sleep, isTopLevelEntryName } from '../lib/fileUtils.js';
 import { ON_DEMAND_ORIGINS } from './taskScheduleConstants.js';
+import { currentTaskTypeName } from '../lib/taskTypeRenames.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { addNotification, NOTIFICATION_TYPES } from './notifications.js';
 import { todayInTimezone } from '../lib/timezone.js';
@@ -48,7 +49,7 @@ import { mergePersistentMindPlaybook } from '../lib/persistentMindPlaybook.js';
 import { mergePersistentMindThinkingPresets } from '../lib/persistentMindThinkingPresets.js';
 // Dependency-free leaf holding the shared agent maps + the runner-mode flag,
 // read by `isRunnerHolding` below.
-import { useRunner, spawningTasks } from './agentState.js';
+import { useRunner, spawningTasks, hasActiveTaskOwner } from './agentState.js';
 
 // Shared state management (extracted to avoid circular deps)
 import { loadState, saveState, withStateLock, loadConfig, saveConfig, withConfigLock, ensureDirectories, isImprovementEnabled, canQueueImprovementTasks, SCRIPTS_DIR, isDaemonRunning, setDaemonRunning } from './cosState.js';
@@ -66,6 +67,7 @@ import { getPendingTaskIds as readPendingTaskIds, getUserTasks, getCosTasks, get
 import { ensureInstanceId } from './instanceIdentity.js';
 import { isHeldByOther, buildRenewal, buildClaim, getClaimOwner } from './cosTaskClaim.js';
 import { retryTasksResolvedByInvestigation } from './investigationRetry.js';
+import { spawnBudgetHoldReason } from './spawnBudgetProof.js';
 import { handBackBlockedPrRemediation } from './blockedPrRemediation.js';
 import { notifyCriticalHealth, clearCriticalHealthIfRecovered } from './healthCriticalNotifier.js';
 
@@ -734,12 +736,22 @@ export async function isPaused() {
 /**
  * Force-spawn a pending task by ID, bypassing cooldowns and evaluation intervals.
  */
-export async function forceSpawnTask(taskId) {
+export async function forceSpawnTask(taskId, { resetSpawnBudget = false } = {}) {
   maintenance.assertOpen();
-  const task = await getTaskById(taskId);
+  let task = await getTaskById(taskId);
   if (!task) return { error: 'Task not found' };
-  if (task.status !== 'pending') return { error: `Task is ${task.status}, not pending` };
+  if (task.metadata?.preflight?.requestId) return { error: 'Preflight progress cards cannot be spawned' };
+  const resetStopped = resetSpawnBudget && ['in_progress', 'blocked'].includes(task.status);
+  if (task.status !== 'pending' && !resetStopped) return { error: `Task is ${task.status}, not pending` };
   if (task.approvalRequired) return { error: 'Task requires approval before it can be spawned' };
+
+  const analysis = currentTaskTypeName(task.metadata?.analysisType || task.metadata?.selfImprovementType);
+  if (analysis === 'do-release' || analysis === 'release-sync') {
+    const { releaseTaskDispatchDisposition } = await import('./releaseSynchronization.js');
+    const disposition = await releaseTaskDispatchDisposition(task);
+    if (disposition === 'retired-continuation') return { error: 'This release synchronization was retired by an operator.' };
+    if (disposition === 'wait-for-synchronization') return { error: 'The previous release synchronization is unfinished.' };
+  }
 
   if (!isDaemonRunning()) return { error: 'CoS daemon is stopped — start it before force-spawning tasks' };
 
@@ -752,30 +764,41 @@ export async function forceSpawnTask(taskId) {
   if (await isRunnerHolding()) {
     return { error: 'CoS Runner is not reachable — start the cos-runner app before force-spawning tasks' };
   }
-  const running = Object.values(state.agents).filter(a => a.status === 'running');
+  let running = Object.values(state.agents).filter(a => a.status === 'running');
   // An agent is registered as running BEFORE spawnAgentForTask flips its task off
   // `pending`, so the status check above still passes for the seconds between
   // those two writes — an explicit "Run now" landing there would get a bogus
   // `{ success: true }` and a "Spawning" toast for a second dispatch that
   // withSpawnDedupGuard then silently drops. Refuse it here instead, where every
   // caller (UI, voice, API) sees the same honest answer.
-  //
-  // Bounded to the spawn window on purpose, via the same age-bounded settlement
-  // the status counters and task lists use (lib/cosSpawnWindow.js):
-  // outside it, a `pending` task carrying a `running` agent is a BROKEN state —
-  // a zombie record whose process died before cleanupZombieAgents (which this
-  // route does not run) swept it — and "Run now" is the user's recovery for
-  // exactly that. Refusing indefinitely would turn the guard into a trap: the
-  // task is visibly stuck and nothing in the UI can restart it. Sharing the
-  // bound is what keeps the pending LIST that renders this button in agreement
-  // with the refusal behind it.
   const runningAgents = runningAgentsByTaskId(running);
   const holder = runningAgents.get(taskId);
+  if (resetStopped && holder) return { error: `Agent ${holder.id} still owns this task` };
   if (spawningAgentForTask(taskId, runningAgents)) {
     return { error: `Agent ${holder.id} is already running this task` };
   }
+  // Past the spawn window (lib/cosSpawnWindow.js), a `pending` task under a
+  // `running` agent is either a zombie record or a live run whose task write
+  // lagged. Age is not evidence of death, and prepareAgentSpawn refuses every
+  // active owner, so falling through would report a spawn that never happens
+  // (#14039). Settle through the zombie sweep's liveness evidence (pid, runner
+  // listing, in-process handles) — the same sweep GET /agents runs — then
+  // admit only if the shared ownership gate now agrees.
+  let ownerAgents = state.agents;
   if (holder) {
-    emitLog('warn', `⚠️ Force-spawning ${taskId} over stale agent ${holder.id} (running for ${Math.round(spawnClaimAgeMs(holder) / 1000)}s on a still-pending task)`, { taskId, agentId: holder.id });
+    const { cleanupZombieAgents } = await import('./cosAgentLifecycle.js');
+    await cleanupZombieAgents();
+    ownerAgents = (await loadState()).agents;
+    running = Object.values(ownerAgents).filter(a => a.status === 'running');
+  }
+  if (hasActiveTaskOwner(taskId, ownerAgents)) {
+    const ownerNote = holder
+      ? `Agent ${holder.id} still owns this task (running for ${Math.round(spawnClaimAgeMs(holder) / 1000)}s) and its process could not be confirmed dead`
+      : 'A finishing agent still owns this task';
+    return {
+      error: `${ownerNote} — stop that agent or wait for it to finish before running the task again`,
+      code: 'TASK_OWNER_HELD',
+    };
   }
   if (running.length >= state.config.maxConcurrentAgents) {
     return { error: `No available agent slots (${running.length}/${state.config.maxConcurrentAgents})` };
@@ -798,9 +821,28 @@ export async function forceSpawnTask(taskId) {
   // "Run now" would toast "Spawning" for a task the chokepoint immediately holds
   // as pending. Checked against the RESOLVED provider (post-fallback), so it
   // never refuses a run that would have swapped to a cloud provider anyway.
-  const localCapacityError = await localEndpointCapacityError(resolution.provider, state.agents, taskId);
+  const localCapacityError = await localEndpointCapacityError(resolution.provider, ownerAgents, taskId);
   if (localCapacityError) {
     return { error: localCapacityError };
+  }
+
+  const budgetHold = await spawnBudgetHoldReason(task);
+  if (budgetHold && !resetSpawnBudget) return { error: `${budgetHold}. Inspect dispatch history or explicitly reset the spawn budget before running.` };
+  if (resetSpawnBudget) {
+    if (!budgetHold) return { error: 'Spawn budget is already verified; no reset is needed' };
+    const orphan = resetStopped ? await import('./explicitSpawnBudgetReset.js')
+      .then(({ prepareExplicitOrphanBudgetReset }) => prepareExplicitOrphanBudgetReset(task)) : null;
+    if (orphan?.error) return { error: orphan.error };
+    const saved = await updateTask(task.id, { ...(resetStopped ? { status: 'pending' } : {}),
+      metadata: { ...orphan?.pointer, totalSpawnCount: undefined } }, task.taskType || 'user', {
+      expectedStatus: task.status, expectedTask: { description: task.description, priority: task.priority, metadata: task.metadata },
+      recoveryOwner: { id: orphan?.owner?.id || 'explicit-spawn-budget-reset', startedAt: orphan?.owner?.startedAt || null, requireInactive: true,
+        ...(orphan?.owner ? { requireRegistered: true, expectedOwnerMetadata: structuredClone(orphan.owner.metadata) } : {}) },
+      spawnBudgetOperation: { kind: 'reset', requireInactive: true }, suppressDequeue: true, preserveRetryBudget: true,
+    });
+    if (saved?.error) return { error: saved.error };
+    if (!saved || saved.statusChanged) return { error: 'Task or ownership changed before spawn budget reset' };
+    task = { ...saved, taskType: task.taskType || 'user' };
   }
 
   cosEvents.emit('task:ready', { ...task, taskType: task.taskType || 'internal' });
@@ -870,14 +912,17 @@ export async function resetOrphanedTasks({ bootRecovery = false } = {}) {
   // one still inside its grace window is left alone: a pr-reviewer security
   // scan is minutes of real work, and reaping a live preflight would make the
   // card lie in the one direction that matters.
-  const { finishPreflightCard, isPreflightCard, isStalePreflightCard } = await import('./preflightTaskCard.js');
+  const { closeStalePreflightCard, isPreflightCard, isStalePreflightCard } = await import('./preflightTaskCard.js');
 
   const processOrphanedTasks = async (tasks) => {
     for (const task of tasks) {
       if (isPreflightCard(task)) {
         if (isStalePreflightCard(task)) {
-          emitLog('info', `Closing preflight card ${task.id} — no process is still running its checks`, { taskId: task.id });
-          await finishPreflightCard(task.id, { outcome: 'interrupted' });
+          const closed = await closeStalePreflightCard(task).catch(error => {
+            emitLog('warn', `Unable to verify stale preflight ownership: ${error.message}`, { taskId: task.id });
+            return false;
+          });
+          if (closed) emitLog('info', `Closing preflight card ${task.id} — no process is still running its checks`, { taskId: task.id });
         }
         continue;
       }
@@ -1578,6 +1623,13 @@ export async function init() {
     }
   });
 
+  cosEvents.on('swarm:cleanup-delivery-verified', ({ agentId }) => {
+    import('./swarmCleanupRefill.js').then(({ refillDeliveredCleanupSwarm }) => refillDeliveredCleanupSwarm(agentId, {
+      wake: () => dequeueNextTask(), refillPlan: perpetualRefillPlan,
+    }))
+      .catch(err => console.error(`❌ Swarm cleanup continuation failed: ${err.message}`));
+  });
+
   // Record autonomous job execution only after the agent actually spawns.
   // Update lastRun BEFORE clearing the spawning guard to prevent a race where
   // a pending timer fires between clearSpawningJob and recordJobExecution,
@@ -1634,7 +1686,7 @@ export async function init() {
     } else if (data.action === 'approved' || data.action === 'unblocked' || data.action === 'requeued') {
       if (data.suppressDequeue) return;
       scheduleDequeue();
-    } else if (data.task?.status === 'completed' && data.previousStatus !== 'completed') {
+    } else if (data.suppressCompletionWake !== true && data.task?.status === 'completed' && data.previousStatus !== 'completed') {
       // A finished investigation releases the task(s) its failure was blocking
       // (see investigationRetry.js). Keyed on the completion rather than on who
       // wrote it, so it covers BOTH an investigation agent finishing its run and

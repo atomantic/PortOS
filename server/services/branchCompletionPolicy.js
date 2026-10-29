@@ -327,6 +327,45 @@ function knownPhysicalIdentity(value) {
     && /^[1-9]\d*$/.test(value.ino) && /^[1-9]\d*$/.test(value.birthtimeNs);
 }
 
+// A pinned claim reserves its branch before its TUI receives a prompt. A
+// runner-confirmed paste failure cannot own a later, server-captured generation
+// of the same task. A recorded binding or ambiguous identity remains a hold.
+function precreationStartupFailure(policy, input, policies) {
+  const agent = policy.agent, meta = agent.metadata || {}, result = agent.result || {};
+  const started = Date.parse(agent.startedAt), ended = Date.parse(agent.completedAt);
+  const incarnation = input.checkoutIncarnation, forge = input.retirementForge;
+  if (agent.status !== 'completed' || result.success !== false || result.executionSuccess !== false
+    || result.completionReason !== 'paste-not-rendered' || result.errorAnalysis?.completionReason !== 'paste-not-rendered'
+    || result.errorAnalysis?.category !== 'startup-failure' || result.errorAnalysis?.origin !== 'runner'
+    || result.orphaned === true || result.validationPassed === false
+    || policy.completion !== PR_COMPLETIONS.MERGE_ON_GREEN || meta.configClaimFlow !== true
+    || meta.isWorktree !== false || meta.claimPicksOwnBranch !== false || meta.claimSelectionPending !== true
+    || meta.claimBranch !== input.branch || !samePath(meta.workspacePath, input.repoPath) || meta.sourceWorkspace != null
+    || meta.branchCompletionPolicy != null || meta.reviewLoopMergeTarget != null || meta.prDeliveryTarget != null || meta.recoveryMergeTarget != null
+    || ['claimBranches', 'claimReleasedBranches', 'checkoutSeeds', 'checkoutCapture', 'completedCheckouts'].some(key => Object.hasOwn(meta, key))
+    || typeof agent.taskId !== 'string' || !agent.taskId || typeof meta.instanceId !== 'string' || !meta.instanceId || meta.instanceId === 'unknown'
+    || !Number.isFinite(started) || !Number.isFinite(ended) || started > ended
+    || !isAbsolute(input.checkoutPath || '') || samePath(input.checkoutPath, input.repoPath)
+    || !checkoutSeedSchema.shape.incarnation.safeParse(incarnation).success
+    || !isAbsolute(incarnation.gitdir.path) || !knownPhysicalIdentity(incarnation.pointer) || !knownPhysicalIdentity(incarnation.gitdir)
+    || forge?.scopeProof !== 'exact-delivered-head' || forge.prUrl !== input.prUrl
+    || !parsePullRequestUrl(input.prUrl) || !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(input.tip || '')
+    || forge.prHead !== input.tip || input.verifiedPrHead !== input.tip) return false;
+  // Compare conservatively past the end of the stored millisecond.
+  const after = (BigInt(ended) + 1n) * 1_000_000n;
+  if (BigInt(incarnation.pointer.birthtimeNs) <= after || BigInt(incarnation.gitdir.birthtimeNs) <= after) return false;
+  return policies.some(candidate => {
+    const next = candidate.agent, nextMeta = next.metadata || {};
+    return next.id !== agent.id && next.taskId === agent.taskId && nextMeta.instanceId === meta.instanceId
+      && candidate.completion === PR_COMPLETIONS.MERGE_ON_GREEN && next.status === 'completed'
+      && next.result?.success === true && next.result?.executionSuccess === true && next.result?.validationPassed !== false
+      && Date.parse(next.startedAt) > ended && Date.parse(next.completedAt) >= Date.parse(next.startedAt)
+      && Array.isArray(nextMeta.completedCheckouts) && nextMeta.completedCheckouts.some(row => completedCheckoutReceiptValid(next, row)
+        && samePath(row.repoPath, input.repoPath) && row.branch === input.branch && samePath(row.path, input.checkoutPath)
+        && row.head === input.tip && isDeepStrictEqual(row.incarnation, incarnation));
+  });
+}
+
 function distinctCapturedAdministration(incarnation, current) {
   return checkoutSeedSchema.shape.incarnation.safeParse(incarnation).success
     && isAbsolute(incarnation.gitdir.path) && knownPhysicalIdentity(incarnation.pointer)
@@ -373,6 +412,23 @@ function separatelyDeliveredCheckout(policy, input) {
   return rows?.length === 1 ? rows[0] : null;
 }
 
+/** A merged PR whose rewritten head contains the exact local tip shipped every
+ * local commit. That settles this checkout's obligation only; the owner's
+ * recorded verdict stays unchanged. Bound to the reviewed tip and PR head. */
+function ancestorDeliveredCheckout(policy, input) {
+  const forge = input.retirementForge, agent = policy.agent, target = reviewTarget(policy);
+  if (input.detachedCheckoutIdentity || forge?.scopeProof !== 'ancestor-of-delivered-head' || forge.prUrl !== input.prUrl
+    || !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(input.tip || '') || forge.deliveredAncestorHead !== input.tip
+    || forge.prHead !== input.verifiedPrHead || input.verifiedPrHead === input.tip
+    || agent.status !== 'completed' || !agent.result || agent.result.validationPassed === false
+    || agent.result.taskOutcome?.recovery?.mode === 'approval' || agent.metadata?.blocker
+    || ![PR_COMPLETIONS.REVIEW_THEN_MERGE, PR_COMPLETIONS.MERGE_ON_GREEN].includes(policy.completion)
+    || (retirementPr(policy) && retirementPr(policy) !== input.prUrl)
+    || (policy.tip && ![input.tip, input.verifiedPrHead].includes(policy.tip))
+    || (target && (target.branch !== input.branch || target.url !== input.prUrl))) return null;
+  return { tip: input.tip, prHead: input.verifiedPrHead };
+}
+
 function reviewedIncarnation(input, policies) {
   if (!isAbsolute(input.checkoutPath || '') || samePath(input.checkoutPath, input.repoPath)
     || !input.prUrl || (input.verifiedPrHead !== input.tip && !policies.some(policy => representedOriginalContinuation(policy, input)))
@@ -391,18 +447,28 @@ function reviewedIncarnation(input, policies) {
   if (!owners.length) return null;
   const firstStarted = Math.min(...owners.map(policy => Date.parse(policy.agent.startedAt)));
   const identity = input.checkoutIdentities?.[input.checkoutPath];
+  const primaryIdentity = input.checkoutIdentities?.[input.repoPath];
+  const superseding = owners.find(owner => exactCleanupHandoff(owner, input));
   const prior = [];
+  const supersededBy = new Map();
   // Explicitly resumed owners are this checkout's history even after a move.
   // A mismatching PR must hold, rather than masquerade as unrelated history.
   const resumedOwners = new Set(policies.map(policy => policy.agent.metadata?.resumedFromAgentId).filter(Boolean));
   const current = policies.filter(policy => {
     const workspace = policy.agent.metadata?.workspacePath;
     const target = reviewTarget(policy);
+    const separateCheckout = !samePath(workspace, input.repoPath)
+      && identity && input.checkoutIdentities?.[workspace] && input.checkoutIdentities[workspace] !== identity
+      && primaryIdentity && input.checkoutIdentities[workspace] !== primaryIdentity;
+    // A coordinator running in the primary checkout (a swarm) has no separate
+    // physical identity. It is history only when a later exact cleanup handoff
+    // for this tip/PR/checkout generation superseded it and it never captured this tip.
+    const supersededCoordinator = !separateCheckout && superseding && samePath(workspace, input.repoPath)
+      && identity && primaryIdentity && identity !== primaryIdentity && !capturedTip(policy, input.tip);
     const unrelated = policy.agent.status === 'completed' && !resumedOwners.has(policy.agent.id)
       && policy.completion !== PR_COMPLETIONS.LEAVE_OPEN
-      && isAbsolute(workspace || '') && !samePath(workspace, input.repoPath) && !samePath(workspace, input.checkoutPath)
-      && identity && input.checkoutIdentities?.[workspace] && input.checkoutIdentities[workspace] !== identity
-      && input.checkoutIdentities[input.repoPath] && input.checkoutIdentities[workspace] !== input.checkoutIdentities[input.repoPath]
+      && isAbsolute(workspace || '') && !samePath(workspace, input.checkoutPath)
+      && (separateCheckout || supersededCoordinator)
       && Number.isFinite(Date.parse(policy.agent.startedAt))
       && Date.parse(policy.agent.completedAt) >= Date.parse(policy.agent.startedAt)
       && Date.parse(policy.agent.completedAt) < firstStarted
@@ -410,10 +476,33 @@ function reviewedIncarnation(input, policies) {
       && (!policy.prUrl || parsePullRequestUrl(policy.prUrl))
       && (!target || (target.branch === input.branch && parsePullRequestUrl(target.url)
         && (!policy.prUrl || policy.prUrl === target.url)));
-    if (unrelated) prior.push(policy);
+    if (unrelated) {
+      prior.push(policy);
+      if (!separateCheckout) supersededBy.set(policy.agent.id, superseding.agent.id);
+    }
     return !unrelated;
   });
-  return { current, prior };
+  return { current, prior, supersededBy };
+}
+
+/** A completed cleanup handoff whose own receipt binds this exact PR, merged
+ * tip and server-captured checkout generation. */
+function exactCleanupHandoff(policy, input) {
+  const agent = policy.agent;
+  return completedCleanupForRetirement(policy, input) && retirementPr(policy) === input.prUrl
+    && (!policy.tip || policy.tip === input.tip)
+    && agent.metadata.completedCheckouts?.some(row => completedCheckoutReceiptValid(agent, row)
+      && samePath(row.repoPath, input.repoPath) && row.branch === input.branch && samePath(row.path, input.checkoutPath)
+      && row.head === input.tip && isDeepStrictEqual(row.incarnation, input.checkoutIncarnation)) === true;
+}
+
+// Unreadable capture history, including a row without a well-formed head,
+// cannot prove the run never held this tip.
+function capturedTip(policy, tip) {
+  const rows = policy.agent.metadata?.completedCheckouts;
+  if (rows !== undefined && !Array.isArray(rows)) return true;
+  return policy.tip === tip || policy.agent.metadata?.branchCompletionPolicy?.tip === tip
+    || (rows || []).some(row => !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(row?.head || '') || row.head === tip);
 }
 
 /** Cleanup handoff is retirement evidence only under fresh merged-head and
@@ -529,11 +618,12 @@ export function reviewedRetirementPolicy(input) {
   // unrelated history; a current checkout's handoff must never be filtered out.
   const decision = completionDecision({ ...input, prUrl: undefined });
   if (decision.reason === unavailable) return { reason: decision.reason };
-  const resumed = resumedCleanupPolicies(decision.policies || [], input);
+  const allPolicies = decision.policies || [];
+  const resumed = resumedCleanupPolicies(allPolicies.filter(policy => !precreationStartupFailure(policy, input, allPolicies)), input);
   const incarnation = reviewedIncarnation(input, resumed);
   const policies = incarnation?.current || resumed;
   if (policies.some(p => p.completion === PR_COMPLETIONS.LEAVE_OPEN)) return { reason: held };
-  if (policies.some(p => !separatelyDeliveredCheckout(p, input) && (p.agent.status !== 'completed' || (p.agent.result?.success !== true && !completedCleanupForRetirement(p, input)
+  if (policies.some(p => !separatelyDeliveredCheckout(p, input) && !ancestorDeliveredCheckout(p, input) && (p.agent.status !== 'completed' || (p.agent.result?.success !== true && !completedCleanupForRetirement(p, input)
     && !reviewedOrphanCheckout(p, input) && !completedDetachedSibling(p, input) && !continuedDelivery(p, input) && !p.resumedCleanup)
     || (p.completion !== PR_COMPLETIONS.REVIEW_THEN_MERGE
       && !(p.completion === PR_COMPLETIONS.MERGE_ON_GREEN && continuedDelivery(p, input)))
@@ -551,6 +641,7 @@ export function reviewedRetirementPolicy(input) {
     ...(p.resumedCleanup && { resumedCleanup: p.resumedCleanup }),
     ...(separatelyDeliveredCheckout(p, input) && { retainedSiblingObligation: separatelyDeliveredCheckout(p, input) }),
     ...(continuedDelivery(p, input) && { continuedDelivery: continuedDelivery(p, input) }),
+    ...(ancestorDeliveredCheckout(p, input) && { deliveredAncestor: ancestorDeliveredCheckout(p, input) }),
     ...(reviewedOrphanCheckout(p, input) && { orphanedExecution: true }),
     ...(completedDetachedSibling(p, input) && { ...(p.agent.result?.orphaned === true ? { orphanedSibling: true } : { completedSibling: true }), detachedCheckoutIdentity: input.detachedCheckoutIdentity }),
     branch: p.branch, completion: p.completion,
@@ -563,6 +654,7 @@ export function reviewedRetirementPolicy(input) {
       status: p.agent.status, success: p.agent.result?.success ?? null, completion: p.completion ?? null,
       workspacePath: p.agent.metadata.workspacePath, prUrl: retirementPr(p) ?? null,
       checkoutIdentity: input.checkoutIdentities[p.agent.metadata.workspacePath],
+      ...(incarnation.supersededBy.has(p.agent.id) && { supersededBy: incarnation.supersededBy.get(p.agent.id) }),
     })).sort((a, b) => String(a.id).localeCompare(String(b.id))),
   }) };
 }

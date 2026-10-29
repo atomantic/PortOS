@@ -17,8 +17,17 @@ const reservationSchema = z.object({ owner: ownerSchema, executable: z.string().
 const startedSchema = z.object({ owner: ownerSchema, pid: z.number().int().positive(), created: z.string().regex(/^[1-9][0-9]+$/) }).strict();
 const receiptSchema = startedSchema.extend({ version: z.literal(1), settledAt: z.string().datetime(),
   active: z.literal(0), exitCode: z.number().int().min(0).max(0xffffffff) }).strict();
+// Diagnostic only: a supervisor failure record never substitutes for proof.
+const failureSchema = z.object({ version: z.literal(1), code: z.number().int(), stage: z.enum(['job', 'attributes', 'launch',
+  'process-times', 'started-receipt', 'accounting', 'cancel', 'root-exit', 'exit-code', 'settled-receipt']) }).strict();
 const directory = agentId => join(PATHS.cos, 'process-settlement', idSchema.parse(agentId));
-const unavailable = () => Object.assign(new Error('Windows agent process settlement is unverified'), { code: 'WINDOWS_AGENT_PROCESS_UNVERIFIED' });
+const unavailable = (reason, failure) => {
+  // Allowlisted record/stage names and a numeric code only, so a hold can be
+  // diagnosed without exposing paths, PIDs or owner nonces.
+  const detail = [reason, failure && `supervisor ${failure.stage} ${failure.code}`].filter(Boolean).join('; ');
+  return Object.assign(new Error(`Windows agent process settlement is unverified${detail ? ` (${detail})` : ''}`),
+    { code: 'WINDOWS_AGENT_PROCESS_UNVERIFIED', ...(reason && { reason }), ...(failure && { supervisorStage: failure.stage, supervisorCode: failure.code }) });
+};
 let compiled;
 
 async function supervisor() {
@@ -90,15 +99,25 @@ export function watchWindowsAgentProcess(child, launch) {
  * native handle/creation time, rather than a recycled PID, binds the proof. */
 export async function readWindowsAgentSettlement(agent) {
   const read = async name => JSON.parse(await readFile(join(directory(agent.id), name), 'utf8'));
+  let record = 'reservation';
   try {
     const { owner } = reservationSchema.parse(await read('owner.json'));
+    record = 'identity';
     if (owner.agentId !== agent.id || owner.taskId !== agent.taskId || owner.startedAt !== agent.startedAt) throw unavailable();
+    record = 'launch';
     const launch = await read('launch.json');
+    record = 'started';
     const started = startedSchema.parse(await read('started.json'));
+    record = 'receipt';
     const receipt = receiptSchema.parse(await read('settled.json'));
-    if (![launch, started, receipt].every(record => isDeepStrictEqual(record.owner, owner))
+    record = 'binding';
+    if (![launch, started, receipt].every(value => isDeepStrictEqual(value.owner, owner))
       || started.pid !== receipt.pid || started.created !== receipt.created
       || Date.parse(receipt.settledAt) < Date.parse(owner.startedAt) || Date.parse(receipt.settledAt) > Date.now()) throw unavailable();
     return receipt;
-  } catch { throw unavailable(); }
+  } catch (error) {
+    let failure = null;
+    try { failure = failureSchema.parse(await read('failure.json')); } catch { /* absent or invalid diagnostics add nothing */ }
+    throw unavailable(`${record}-${error?.code === 'ENOENT' ? 'missing' : 'invalid'}`, failure);
+  }
 }

@@ -276,6 +276,56 @@ describe('scoped legacy retirement policy', () => {
   });
 });
 
+describe('pre-creation claim startup failure', () => {
+  function delivery() {
+    const claim = 'claim/issue-42', checkoutPath = join(tmpdir(), 'later-claim');
+    const tip = 'a'.repeat(40), startedAt = '2026-04-02T00:00:00.000Z', completedAt = '2026-04-02T01:00:00.000Z';
+    const birthtimeNs = String(BigInt(Date.parse('2026-04-01T00:00:00.000Z')) * 1_000_000n);
+    const incarnation = { pointer: { dev: '1', ino: '2', birthtimeNs },
+      gitdir: { path: join(tmpdir(), 'later-gitdir'), dev: '1', ino: '3', birthtimeNs } };
+    const failed = { id: 'failed', taskId: 'task', status: 'completed', startedAt: '2026-03-01T00:00:00.000Z',
+      completedAt: '2026-03-01T00:01:00.000Z', result: { success: false, executionSuccess: false,
+        completionReason: 'paste-not-rendered', errorAnalysis: { category: 'startup-failure', origin: 'runner', completionReason: 'paste-not-rendered' } },
+      metadata: { instanceId: 'local', workspacePath: repoPath, isWorktree: false, configClaimFlow: true,
+        claimBranch: claim, claimSelectionPending: true, claimPicksOwnBranch: false, prCompletionPolicy: 'merge-on-green' } };
+    const completed = { id: 'completed', taskId: 'task', status: 'completed', startedAt, completedAt,
+      result: { success: true, executionSuccess: true }, metadata: { instanceId: 'local', workspacePath: repoPath,
+        claimBranches: [claim], prCompletionPolicy: 'merge-on-green', completedCheckouts: [{ version: 1, agentId: 'completed',
+          startedAt, capturedAt: completedAt, repoPath, branch: claim, path: checkoutPath, head: tip, incarnation }] } };
+    const input = { repoPath, branch: claim, checkoutPath, tip, prUrl, verifiedPrHead: tip, checkoutIncarnation: incarnation,
+      retirementForge: { prUrl, prHead: tip, scopeProof: 'exact-delivered-head' },
+      deliveryContinuations: [{ agentId: completed.id, originalPrUrl: null, prUrl, tip, capturedHead: tip,
+        capturedAt: completedAt, checkoutIncarnation: incarnation }], agents: [failed, completed] };
+    return { input, failed, completed };
+  }
+
+  it('excludes only the proven earlier startup attempt and preserves uncertain ownership', () => {
+    const baseline = delivery();
+    const original = structuredClone(baseline.input.agents);
+    expect(reviewedRetirementPolicy(baseline.input).reason).toBeNull();
+    expect(baseline.input.agents).toEqual(original);
+    const refusals = [
+      ['bound branch', ({ failed }) => { failed.metadata.claimBranches = ['claim/issue-42']; }],
+      ['unknown capture', ({ failed }) => { failed.metadata.checkoutSeeds = []; }],
+      ['missing startup evidence', ({ failed }) => { failed.result.errorAnalysis.origin = null; }],
+      ['unfinished owner', ({ failed }) => { failed.status = 'running'; }],
+      ['handoff policy', ({ failed }) => { failed.metadata.prCompletionPolicy = 'leave-open'; }],
+      ['unknown completion time', ({ failed }) => { failed.completedAt = null; }],
+      ['overlapping generation', ({ failed }) => { failed.completedAt = '2026-04-01T12:00:00.000Z'; }],
+      ['missing checkout identity', ({ input }) => { input.checkoutIncarnation = null; }],
+      ['unverified forge head', ({ input }) => { input.verifiedPrHead = 'b'.repeat(40); }],
+      ['different task', ({ completed }) => { completed.taskId = 'another-task'; }],
+      ['different instance', ({ completed }) => { completed.metadata.instanceId = 'another-instance'; }],
+      ['failed successor', ({ completed }) => { completed.result.success = false; }],
+      ['uncaptured successor', ({ completed }) => { completed.metadata.completedCheckouts = []; }],
+    ];
+    for (const [label, mutate] of refusals) {
+      const context = delivery(); mutate(context);
+      expect(reviewedRetirementPolicy(context.input).reason, label).toBeTruthy();
+    }
+  });
+});
+
 describe('reviewed reused-branch checkout incarnation', () => {
   const checkoutPath = join(tmpdir(), 'synthetic-current-checkout');
   const input = () => ({ repoPath, branch, checkoutPath, prUrl, tip: runtime.tip, verifiedPrHead: runtime.tip,
@@ -378,6 +428,70 @@ describe('reviewed reused-branch checkout incarnation', () => {
       if (change === 'same-filesystem-identity') scope.checkoutIdentities[prior.metadata.workspacePath] = scope.checkoutIdentities[checkoutPath];
       expect(reviewedRetirementPolicy({ ...scope, agents }).reason).toBeTruthy();
     });
+
+  describe('failed swarm coordinator in the primary checkout superseded by a later cleanup handoff', () => {
+    const generation = { pointer: { dev: '1', ino: '11', birthtimeNs: '111' }, gitdir: { path: '/synthetic/gitdir', dev: '1', ino: '12', birthtimeNs: '112' } };
+    function swarm() {
+      const [current, coordinator] = owners();
+      current.result = { success: false, executionSuccess: true, validationPassed: true, cleanupPending: true,
+        taskOutcome: { status: 'incomplete', recovery: { mode: 'cleanup' } } };
+      current.metadata.completedCheckouts = [{ version: 1, agentId: current.id, startedAt: current.startedAt,
+        capturedAt: '2026-03-01T00:30:00Z', repoPath, branch, path: checkoutPath, head: runtime.tip, incarnation: structuredClone(generation) }];
+      coordinator.metadata.workspacePath = repoPath;
+      coordinator.metadata.claimBranches = [branch, 'claim/other-issue'];
+      return [current, coordinator];
+    }
+    const scope = agents => ({ ...input(), agents, checkoutIncarnation: structuredClone(generation) });
+
+    it('retires the merged tip and records the coordinator as superseded history', () => {
+      const agents = swarm();
+      expect(reviewedRetirementPolicy(scope(agents))).toMatchObject({ reason: null, policies: [{ id: 'current' }],
+        priorCheckouts: [{ id: 'prior', success: false, workspacePath: repoPath, supersededBy: 'current' }] });
+      // A coordinator that captured an older head of the branch is still history.
+      agents[1].metadata.completedCheckouts = [{ version: 1, agentId: 'prior', startedAt: agents[1].startedAt,
+        capturedAt: agents[1].completedAt, repoPath, branch, path: checkoutPath, head: 'b'.repeat(40), incarnation: structuredClone(generation) }];
+      expect(reviewedRetirementPolicy(scope(agents)).reason).toBeNull();
+    });
+
+    it.each([
+      ['successful owner without a cleanup handoff', ([current]) => { current.result = { success: true }; }],
+      ['cleanup handoff no longer pending', ([current]) => { current.result.cleanupPending = false; }],
+      ['handoff captured a different generation', ([current]) => { current.metadata.completedCheckouts[0].incarnation.pointer.ino = '99'; }],
+      ['handoff for another PR', ([current]) => { current.metadata.reviewLoopMergeTarget = { branch, url: 'https://github.com/example/repository/pull/41' }; }],
+      ['handoff captured another tip', ([current]) => { current.metadata.completedCheckouts[0].head = 'b'.repeat(40); }],
+      ['coordinator started after the handoff owner', ([, coordinator]) => {
+        coordinator.startedAt = '2026-03-01T02:00:00Z'; coordinator.completedAt = '2026-03-01T03:00:00Z';
+      }],
+      ['coordinator overlapped the handoff owner', ([current, coordinator]) => { coordinator.completedAt = current.startedAt; }],
+      ['coordinator captured the current tip', ([, coordinator]) => {
+        coordinator.metadata.completedCheckouts = [{ version: 1, agentId: 'prior', startedAt: coordinator.startedAt,
+          capturedAt: coordinator.completedAt, repoPath, branch, path: checkoutPath, head: runtime.tip, incarnation: structuredClone(generation) }];
+      }],
+      ['coordinator receipt bound the current tip', ([, coordinator]) => {
+        coordinator.metadata.branchCompletionPolicy = { branch, completion: 'merge-on-green', tip: runtime.tip };
+      }],
+      ['coordinator capture history unreadable', ([, coordinator]) => { coordinator.metadata.completedCheckouts = 'corrupt'; }],
+      ['coordinator capture row has no head', ([, coordinator]) => { coordinator.metadata.completedCheckouts = [{}]; }],
+      ['coordinator capture row is malformed', ([, coordinator]) => { coordinator.metadata.completedCheckouts = [null]; }],
+      ['coordinator bound to the same PR', ([, coordinator]) => { coordinator.metadata.reviewLoopMergeTarget = { branch, url: prUrl }; }],
+      ['coordinator still running', ([, coordinator]) => { coordinator.status = 'running'; }],
+      ['coordinator was a manual handoff', ([, coordinator]) => { coordinator.metadata.prCompletionPolicy = 'leave-open'; }],
+    ])('keeps the hold when %s', (_label, mutate) => {
+      const agents = swarm();
+      mutate(agents);
+      expect(reviewedRetirementPolicy(scope(agents)).reason).toBeTruthy();
+    });
+
+    it.each([
+      ['no server-read checkout generation', context => { delete context.checkoutIncarnation; }],
+      ['reviewed checkout shares the primary identity', context => { context.checkoutIdentities[checkoutPath] = context.checkoutIdentities[repoPath]; }],
+      ['primary identity unreadable', context => { delete context.checkoutIdentities[repoPath]; }],
+    ])('keeps the hold with %s', (_label, mutate) => {
+      const context = scope(swarm());
+      mutate(context);
+      expect(reviewedRetirementPolicy(context).reason).toBeTruthy();
+    });
+  });
 
   it('uses the first current incarnation owner, not a later successful recovery, as the overlap cutoff', () => {
     const agents = owners();

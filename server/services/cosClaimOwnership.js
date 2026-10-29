@@ -18,6 +18,8 @@
  */
 import { resolve } from 'path';
 import { bindClaimBranch, releaseClaimBranch, reserveReconcileBranch, reconcileAssignedTarget, reconcileMergeTarget, claimCheckoutOwnerReason } from '../lib/claimContinuation.js';
+import { isTruthyMeta } from '../lib/metadataFlags.js';
+import { advanceCandidateLifecycle } from './releaseCandidateLifecycle.js';
 
 import { withClaimOwnershipLock, readClaimOwnershipAgents, checkoutRetirementFenceReason } from './cosClaimOwnershipState.js';
 
@@ -33,7 +35,7 @@ export { withClaimOwnershipLock, readClaimOwnershipAgents, checkoutRetirementFen
 export const CLAIM_OWNERSHIP_QUEUE_TIMEOUT_MS = 15_000;
 const retryAfterMs = 5000;
 
-async function ownershipTransaction(operation, done, work) {
+export async function ownershipTransaction(operation, done, work) {
   const { withStateLock, loadState, saveState } = await import('./cosState.js');
   const queuedAt = performance.now();
   let started = false;
@@ -103,11 +105,20 @@ async function ownershipTransaction(operation, done, work) {
 export async function updateClaimOwnership({ agentId, action, branch }) {
   const done = action === 'bind' ? 'bound' : 'released';
   const { cosEvents } = await import('./cosEvents.js');
-  return ownershipTransaction(action === 'bind' ? 'bind' : 'release', done, async (state, save) => {
+  let wakeRecovery = false;
+  let repository;
+  const result = await ownershipTransaction(action === 'bind' ? 'bind' : 'release', done, async (state, save) => {
     const agent = state.agents?.[agentId];
     if (!agent || agent.id !== agentId) return { [done]: false, reason: 'owner-unknown' };
     const repoPath = agent.sourceWorkspace || agent.metadata?.sourceWorkspace || agent.workspacePath || agent.metadata?.workspacePath;
     if (!repoPath) return { [done]: false, reason: 'ownership-unreadable' };
+    repository = repoPath;
+    const meta = agent.metadata || {};
+    const released = meta.claimReleasedBranches ?? agent.claimReleasedBranches ?? [];
+    const bound = meta.claimBranches ?? agent.claimBranches ?? [];
+    wakeRecovery = action === 'release' ? !released.includes(branch)
+      : isTruthyMeta(agent.claimSelectionPending ?? meta.claimSelectionPending)
+        || (isTruthyMeta(agent.claimPicksOwnBranch ?? meta.claimPicksOwnBranch) && !bound.length && !released.length);
     // Binding a checkout that is mid-archive would hand it to a run that the
     // retirement then removes; releasing a branch never needs the fence.
     const fenced = action === 'bind' && checkoutRetirementFenceReason({ repoPath, branch });
@@ -123,6 +134,69 @@ export async function updateClaimOwnership({ agentId, action, branch }) {
         catch { return { [done]: false, reason: 'checkout-seed-unavailable' }; }
       }
       state.agents[agentId] = updated;
+      await save();
+      cosEvents.emit('agent:updated', state.agents[agentId]);
+      return { [done]: true, branch };
+    }).catch(error => {
+      if (error.code === 'CHECKOUT_RETIREMENT_RESERVED') return { [done]: false, reason: 'checkout-retirement-reserved' };
+      throw error;
+    });
+  });
+  // Wake completion recovery only after the ownership transaction releases its
+  // locks. A picker settling its selection can unblock unrelated old claims.
+  if (result[done] && wakeRecovery) cosEvents.emit('claim:ownership-changed', { agentId, repository });
+  return result;
+}
+
+/** Reserve a new scheduled release candidate before its branch or checkout
+ * exists. The only accepted branch is server-derived from the active run ID;
+ * capture locates the physical checkout through Git, never a caller path.
+ * Existing/unregistered candidates intentionally cannot be adopted here.
+ */
+export async function updateReleaseCandidateOwnership(agentId, action) {
+  const done = action === 'reserve' ? 'reserved' : 'captured';
+  if (!/^agent-[a-z0-9-]+$/.test(agentId) || !['reserve', 'capture'].includes(action)) return { [done]: false, reason: 'candidate-owner-invalid' };
+  const branch = `codex/release-${agentId}`;
+  const { cosEvents } = await import('./cosEvents.js');
+  return ownershipTransaction(`release-${action}`, done, async (state, save) => {
+    const agent = state.agents?.[agentId];
+    if (!agent || agent.id !== agentId || agent.status !== 'running' || agent.metadata?.taskAnalysisType !== 'do-release'
+      || agent.metadata.isWorktree !== false || !Number.isFinite(Date.parse(agent.startedAt))) return { [done]: false, reason: 'release-owner-unverified' };
+    const repoPath = agent.sourceWorkspace || agent.metadata?.sourceWorkspace || agent.workspacePath || agent.metadata?.workspacePath;
+    if (!repoPath) return { [done]: false, reason: 'ownership-unreadable' };
+    if (checkoutRetirementFenceReason({ repoPath, branch })) return { [done]: false, reason: 'checkout-retirement-reserved' };
+    const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
+    return withCheckoutPublication(repoPath, async () => {
+      if (agent.metadata.releaseCandidateRecovery || agent.metadata.resumedFromAgentId) return { [done]: false, reason: 'candidate-recovery-required' };
+      const prior = agent.metadata.releaseCandidate;
+      if (prior && (prior.version !== 1 || prior.branch !== branch || prior.startedAt !== agent.startedAt)) return { [done]: false, reason: 'candidate-owner-conflict' };
+      const other = claimCheckoutOwnerReason({ branchName: branch, sourceWorkspace: repoPath, agents: Object.values(state.agents), ignoreIds: [agentId] });
+      if (other) return { [done]: false, reason: other };
+      if (action === 'reserve') {
+        if (prior) return { reserved: true, branch };
+        const [{ listWorktrees }, { execGit }] = await Promise.all([import('./worktreeManager.js'), import('../lib/execGit.js')]);
+        const [trees, ref] = await Promise.all([listWorktrees(repoPath), execGit(['show-ref', '--verify', '--quiet', `refs/heads/${branch}`], repoPath, { ignoreExitCode: true })]);
+        if (!Array.isArray(trees) || ref.exitCode !== 1 || trees.some(tree => branchOf(tree) === branch)) return { reserved: false, reason: 'candidate-branch-not-available' };
+        const candidate = { version: 1, branch, startedAt: agent.startedAt, reservedAt: new Date().toISOString() };
+        let lifecycle;
+        try { lifecycle = advanceCandidateLifecycle(agent, 'reserved', candidate); }
+        catch { return { reserved: false, reason: 'candidate-lifecycle-conflict' }; }
+        state.agents[agentId] = { ...agent, metadata: { ...agent.metadata, releaseCandidate: candidate,
+          ...(lifecycle && { releaseCandidateLifecycle: lifecycle }) } };
+      } else {
+        if (!prior) return { captured: false, reason: 'candidate-reservation-missing' };
+        const { captureCheckoutSeeds } = await import('./completedCheckoutEvidence.js');
+        let seeds;
+        try { seeds = await captureCheckoutSeeds(agent, { allowUncreated: false }); }
+        catch { return { captured: false, reason: 'checkout-seed-unavailable' }; }
+        if (seeds.length !== 1 || seeds[0].agentId !== agentId || seeds[0].startedAt !== agent.startedAt
+          || seeds[0].branch !== branch) return { captured: false, reason: 'checkout-seed-unavailable' };
+        let lifecycle;
+        try { lifecycle = advanceCandidateLifecycle(agent, 'captured', prior); }
+        catch { return { captured: false, reason: 'candidate-lifecycle-conflict' }; }
+        state.agents[agentId] = { ...agent, metadata: { ...agent.metadata, checkoutSeeds: seeds,
+          ...(lifecycle && { releaseCandidateLifecycle: lifecycle }) } };
+      }
       await save();
       cosEvents.emit('agent:updated', state.agents[agentId]);
       return { [done]: true, branch };

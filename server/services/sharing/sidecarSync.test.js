@@ -33,7 +33,10 @@ vi.mock('../../lib/peerUrl.js', async () => ({
 import { PATHS } from '../../lib/fileUtils.js';
 import { peerFetch } from '../../lib/peerHttpClient.js';
 import { getPeers } from '../instances.js';
-import { pullSidecarForImage, backfillMissingSidecars } from './sidecarSync.js';
+import { pullSidecarForImage, backfillMissingSidecars, recordImageSupplier } from './sidecarSync.js';
+import { editImageSidecar } from '../imageGen/sidecarStore.js';
+import { getOrComputeImageSha256 } from '../../lib/assetHash.js';
+import '../imageGen/local.js'; // registers the sidecar-queue sha256 writer
 
 let tmp;
 let originalImagesPath;
@@ -221,6 +224,77 @@ describe('pullSidecarForImage', () => {
     });
     const result = await pullSidecarForImage(fakePeer, fakeBase, 'noheader.png');
     expect(result).toBe(false);
+  });
+});
+
+describe("pullSidecarForImage and this machine's own fields", () => {
+  const respond = (body) => {
+    const buf = Buffer.from(JSON.stringify(body));
+    vi.mocked(peerFetch).mockResolvedValue({
+      ok: true,
+      headers: new Headers({ 'content-length': String(buf.byteLength) }),
+      arrayBuffer: async () => buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength),
+    });
+  };
+  const sidecarPath = () => join(PATHS.images, 'img.metadata.json');
+  const written = async () => JSON.parse(await readFile(sidecarPath(), 'utf8'));
+  const forged = { hidden: true, pendingDelete: { peerId: 'p', queuedAt: '2026-01-01T00:00:00.000Z' }, suppliedByInstanceId: 'forged' };
+
+  it("takes a new image's origin from the peer, records the peer as supplier, and none of the peer's own fields", async () => {
+    respond({ prompt: 'a fox', originInstanceId: 'origin-o', ...forged });
+    expect(await pullSidecarForImage(fakePeer, fakeBase, 'img.png')).toBe(true);
+    expect(await written()).toEqual({ prompt: 'a fox', originInstanceId: 'origin-o', suppliedByInstanceId: 'peer-x' });
+  });
+
+  it("never changes a held image's origin or this machine's fields", async () => {
+    const local = { prompt: 'old', hidden: true, pendingDelete: { peerId: 'q', queuedAt: '2026-02-01T00:00:00.000Z' } };
+    await writeFile(sidecarPath(), JSON.stringify(local));
+    respond({ prompt: 'new', originInstanceId: 'claimant', hidden: false, suppliedByInstanceId: 'forged' });
+    expect(await pullSidecarForImage(fakePeer, fakeBase, 'img.png')).toBe(true);
+    // Origin-less here stays origin-less: no peer can claim the image and then delete it.
+    expect(await written()).toEqual({ prompt: 'new', hidden: true, pendingDelete: local.pendingDelete });
+  });
+});
+
+describe('recordImageSupplier', () => {
+  const sidecarFile = () => join(PATHS.images, 'pulled.metadata.json');
+  const read = async () => JSON.parse(await readFile(sidecarFile(), 'utf8'));
+
+  it('records the supplier of a pulled image with no sidecar, alongside a concurrent edit', async () => {
+    await writeFile(join(PATHS.images, 'pulled.png'), 'bytes');
+    // Both go through the per-file edit queue, so neither drops the other.
+    const [recorded] = await Promise.all([
+      recordImageSupplier('pulled.png', 'peer-x'),
+      editImageSidecar('pulled.png', (metadata) => { metadata.hidden = true; return true; }),
+    ]);
+    expect(recorded).toBe(true);
+    expect(await read()).toEqual({ suppliedByInstanceId: 'peer-x', hidden: true });
+    expect(await recordImageSupplier('pulled.png', 'peer-y')).toBe(false);
+    expect((await read()).suppliedByInstanceId).toBe('peer-x');
+  });
+
+  it("never names a supplier for an image held here whose sidecar survived its bytes", async () => {
+    await writeFile(join(PATHS.images, 'pulled.png'), 'bytes');
+    await writeFile(sidecarFile(), JSON.stringify({ prompt: 'mine', originInstanceId: 'test-instance' }));
+    expect(await recordImageSupplier('pulled.png', 'peer-x')).toBe(false);
+    expect(await read()).toEqual({ prompt: 'mine', originInstanceId: 'test-instance' });
+  });
+});
+
+describe('recordImageSupplier racing the image hash cache write', () => {
+  it('keeps both the sha256 cache and the supplier', async () => {
+    const imagePath = join(PATHS.images, 'raced.png');
+    await writeFile(imagePath, 'bytes');
+    await writeFile(join(PATHS.images, 'raced.metadata.json'), JSON.stringify({ hidden: true }));
+    // The hash call reads the sidecar before hashing; the supplier record lands
+    // while it hashes. Only the shared edit queue lets the later cache write
+    // see the supplier instead of overwriting it with its stale read.
+    const hashing = getOrComputeImageSha256(imagePath);
+    const recorded = await recordImageSupplier('raced.png', 'peer-x');
+    const { hash } = await hashing;
+    expect(recorded).toBe(true);
+    const onDisk = JSON.parse(await readFile(join(PATHS.images, 'raced.metadata.json'), 'utf8'));
+    expect(onDisk).toMatchObject({ hidden: true, suppliedByInstanceId: 'peer-x', sha256: { value: hash } });
   });
 });
 

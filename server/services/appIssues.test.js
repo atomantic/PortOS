@@ -73,6 +73,7 @@ describe('listAppIssues — GitHub', () => {
       number: 42,
       title: 'Crash on save',
       body: 'Steps to reproduce…',
+      bodyTruncated: false,
       url: 'https://github.com/acme/widget/issues/42',
       labels: [{ name: 'bug', color: '#d73a4a', description: 'Something is broken' }],
       assignees: ['alice', 'bob'],
@@ -147,6 +148,7 @@ describe('listAppIssues — GitHub', () => {
     const result = await listAppIssues(APP);
     expect(result.issues[0].body.length).toBeLessThan(9000);
     expect(result.issues[0].body).toMatch(/truncated/);
+    expect(result.issues[0].bodyTruncated).toBe(true);
   });
 
   it('flags a full capped page and clipped bodies so a lookup cannot certify a negative', async () => {
@@ -215,6 +217,7 @@ describe('listAppIssues — GitLab', () => {
       number: 7,
       title: 'Add export',
       body: 'We need CSV',
+      bodyTruncated: false,
       assignees: ['dana'],
       author: 'erin',
       milestone: 'Sprint 3',
@@ -232,6 +235,16 @@ describe('listAppIssues — GitLab', () => {
     expect(execGlabJson.mock.calls[0][0]).toEqual(['issue', 'list', '--per-page', '100']);
     expect(execGlabJson.mock.calls[1][0]).toEqual(['label', 'list', '--per-page', '100']);
     expect(execGlabJson.mock.calls[1][1]).toBe('/repo');
+  });
+
+  it('marks a clipped GitLab description as incomplete', async () => {
+    useGitlabOrigin();
+    execGlabJson.mockImplementation(async (args) => args[0] === 'label'
+      ? { reason: 'ok', rows: [] }
+      : { reason: 'ok', rows: [{ iid: 7, title: 'Long', description: 'x'.repeat(8_001), labels: [] }] });
+    const result = await listAppIssues(APP);
+    expect(result.issues[0]).toMatchObject({ bodyTruncated: true });
+    expect(result.enumeration.bodiesClipped).toBe(true);
   });
 
   it('a label absent from label list still renders neutral; the issue list is unaffected', async () => {

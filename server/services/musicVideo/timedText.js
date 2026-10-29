@@ -97,7 +97,14 @@ export const normalizeLyricCues = (cues) => normalizeList(cues, 'lc', (cue) => {
   const words = normalizeWords(text, cue.words);
   const matched = Number.isFinite(cue.matched) && cue.matched >= 0 && cue.matched <= 1
     ? { matched: cue.matched } : {};
-  return { text, ...(words ? { words, ...(cue.suspect === true ? { suspect: true } : {}) } : {}), ...matched };
+  const silentWords = words && Array.isArray(cue.silentWords)
+    ? [...new Set(cue.silentWords.filter((index) => Number.isInteger(index) && index >= 0 && index < words.length))].sort((a, b) => a - b)
+    : [];
+  return {
+    text,
+    ...(words ? { words, ...(cue.suspect === true ? { suspect: true } : {}), ...(silentWords.length ? { silentWords } : {}) } : {}),
+    ...matched,
+  };
 });
 
 const finiteSec = (n) => typeof n === 'number' && Number.isFinite(n);
@@ -139,6 +146,7 @@ export function invalidateTimedText(project) {
     delete next.words;
     delete next.matched;
     delete next.suspect;
+    delete next.silentWords;
     return next;
   }) : list);
   return {

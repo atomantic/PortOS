@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import {
-  ArrowRight, Bot, Check, Clapperboard, Film, History, Images, LayoutGrid, Music, Pencil, Play, Send, Settings, Users, Trash2,
+  ArrowRight, BookOpen, Bot, Check, Clapperboard, Film, History, Images, LayoutGrid, Music, Pencil, Play, Send, Settings, Users, Trash2,
 } from 'lucide-react';
 import CancelRenderButton from './CancelRenderButton.jsx';
 import TabPills from '../ui/TabPills.jsx';
@@ -11,7 +11,7 @@ import { MUSIC_VIDEO_PAGES } from '../../lib/musicVideoStages.js';
 // One icon per step: the phone's bottom bar collapses to icons, and a repeated
 // glyph would be a repeated destination.
 const STAGE_ICONS = {
-  setup: Music, 'cast-sets': Users, board: LayoutGrid, produce: Clapperboard, review: Film, publish: Send, assets: Images, cleanup: Trash2,
+  setup: Music, story: BookOpen, 'cast-sets': Users, board: LayoutGrid, produce: Clapperboard, review: Film, publish: Send, assets: Images, cleanup: Trash2,
 };
 
 // The page's scroll body (the route is full-width, so the page owns its
@@ -49,7 +49,7 @@ const MARK_CLASSES = {
   muted: 'bg-port-border text-port-text-muted',
 };
 
-/** The six steps as a vertical list (md and up): number or check, name, state word and one fact. */
+/** The steps as a vertical list (md and up): number or check, name, state word and one fact. */
 function StepRail({ stages, stage, onStageChange, needsYouStage, notes }) {
   return (
     <nav aria-label="Steps" className="hidden md:block">
@@ -112,7 +112,7 @@ const DOCK_CLASSES = 'min-w-0 max-xl:order-first max-xl:col-span-full xl:sticky 
 /**
  * The Music Video project frame. A sticky header says where the project stands
  * in one line (`status.headline`) beside the one next action, with the spend,
- * the autopilot control and Project settings. The six steps run down the left
+ * the autopilot control and Project settings. The steps run down the left
  * from `md` (a bottom icon bar on a phone), each with its state word and one
  * fact; the open step shows its title and what "done" means, then its content;
  * the preview is docked on the right from `xl` (a mini-player below that).
@@ -140,7 +140,7 @@ export default function MusicVideoLayout({
   const headerRef = useRef(null);
   const rootRef = useRef(null);
   const dockRef = useRef(null);
-  // On a step reviewed by watching (Storyboard, Make, Final render) the player is the main
+  // On a step reviewed by watching (Shots, Final render) the player is the main
   // element: full width at the top of the step with the approval beside it, not a side column.
   const sideDock = !!dock && !playerFirst;
   const expandedDock = sideDock && previewExpanded;

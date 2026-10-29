@@ -68,6 +68,7 @@ const SAFE_PRODUCTION_PARAMETER_KEYS = new Set([
 ]);
 const REPLAY_INPUT_ROOTS = new Set(['images', 'imageRefs', 'visualTemplates', 'imageCleanTmp', 'federatedMediaInbox']);
 const REPLAY_ADAPTER_SOURCES = new Set(['Canon adapter', 'Request adapter']);
+const REQUEST_INPUT_ROLES = new Set(['request-init', 'request-reference']);
 const REPLAY_PROMPT_MAX = 131072;
 const has = (value, key) => Object.hasOwn(value, key);
 const plain = value => value && typeof value === 'object' && !Array.isArray(value);
@@ -120,8 +121,9 @@ function validReplayEvidence(raw) {
     || (Array.isArray(raw.adapters) && raw.adapters.length > 8)
     || (Array.isArray(raw.referenceImageStrengths) && (raw.referenceImageStrengths.length > LOOM_LIMITS.VISUAL_PROVENANCE_ASSETS_MAX
       || raw.referenceImageStrengths.some(value => !Number.isFinite(value) || value < 0 || value > 1))))) return false;
+  // Request inputs and (since schema v13) canon images carry a root + digest; neither may be partial.
   const invalidAsset = (Array.isArray(raw.assets) ? raw.assets : []).some(item => {
-    if (!plain(item) || !['request-init', 'request-reference'].includes(item.role)) return false;
+    if (!plain(item)) return false;
     if (!['inputRoot', 'sha256', 'strength'].some(key => has(item, key))) return false; // legacy incomplete record
     return !safeFilename(item.filename) || !REPLAY_INPUT_ROOTS.has(item.inputRoot) || !validDigest(item.sha256)
       || (has(item, 'strength') && (item.role !== 'request-init' || !Number.isFinite(item.strength) || item.strength < 0 || item.strength > 1));
@@ -223,8 +225,14 @@ export const sanitizeAudioOccupancy = validateAudioOccupancy;
  * typed playback asset. The playback module owns this shape so the node
  * sanitizer can safely handle one manifest per rendered clip without a
  * records-module import cycle.
+ *
+ * `asSchemaVersion` projects the manifest to what an older `fableLoom` sync
+ * peer can represent: <12 has no request replay evidence, 12 has no canon
+ * image fingerprints.
  */
-export function sanitizeVisualConditioning(raw, { legacyV11 = false } = {}) {
+export function sanitizeVisualConditioning(raw, { asSchemaVersion = Infinity } = {}) {
+  const legacyV11 = asSchemaVersion < 12;
+  const canonFingerprints = asSchemaVersion >= 13;
   if (!raw || typeof raw !== 'object' || raw.version !== 1) return null;
   if (!legacyV11 && !validReplayEvidence(raw)) return null;
   const list = (value, max) => (Array.isArray(value) ? value.slice(0, max) : []);
@@ -293,12 +301,16 @@ export function sanitizeVisualConditioning(raw, { legacyV11 = false } = {}) {
     },
     assets: list(raw.assets, LOOM_LIMITS.VISUAL_PROVENANCE_ASSETS_MAX)
       .filter((item) => item && typeof item === 'object')
-      .map((item) => ({
-        role: trimTo(item.role, 64), bindingId: nullableRef(item.bindingId),
-        required: item.required === true, filename: !legacyV11 && ['request-init', 'request-reference'].includes(item.role) && safeFilename(item.filename) ? item.filename : trimTo(item.filename, 256),
-        ...(!legacyV11 && ['request-init', 'request-reference'].includes(item.role) && REPLAY_INPUT_ROOTS.has(item.inputRoot) && validDigest(item.sha256) ? { inputRoot: item.inputRoot, sha256: item.sha256,
-          ...(has(item, 'strength') ? { strength: item.strength } : {}) } : {}),
-      })),
+      .map((item) => {
+        const fingerprinted = REPLAY_INPUT_ROOTS.has(item.inputRoot) && validDigest(item.sha256);
+        const evidence = !legacyV11 && (REQUEST_INPUT_ROLES.has(item.role) || (canonFingerprints && fingerprinted));
+        return {
+          role: trimTo(item.role, 64), bindingId: nullableRef(item.bindingId),
+          required: item.required === true, filename: evidence && safeFilename(item.filename) ? item.filename : trimTo(item.filename, 256),
+          ...(evidence && fingerprinted ? { inputRoot: item.inputRoot, sha256: item.sha256,
+            ...(has(item, 'strength') ? { strength: item.strength } : {}) } : {}),
+        };
+      }),
     adapters: list(raw.adapters, 8)
       .filter((item) => item && typeof item === 'object')
       .map((item) => ({

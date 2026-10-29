@@ -248,6 +248,25 @@ describe.skipIf(!runDb)('catalogDB.findIngredientsByName', () => {
     expect(await catalogDB.findIngredientsByName('character', ['  '])).toEqual([]);
   });
 
+  it('matches by the first word of a live name or alias when asked', async () => {
+    const make = async (type, name, payload = {}) => {
+      const row = await catalogDB.createIngredient({ type, name, payload });
+      createdIngredientIds.add(row.id);
+      return row;
+    };
+    const first = `ada${nonce}`;
+    const full = await make('character', ` ${first} Example `);
+    const aliased = await make('character', `The Pilot ${nonce}`, { aliases: [`${first} Other`] });
+    const exact = await make('character', first);
+    await make('place', `${first} Diner`);
+    const gone = await make('character', `${first} Gone`);
+    await catalogDB.deleteIngredient(gone.id);
+
+    const found = await catalogDB.findIngredientsByName('character', [first.toUpperCase()], { firstWord: true });
+    expect(found.map((r) => r.id)).toEqual([full.id, aliased.id, exact.id]);
+    expect((await catalogDB.findIngredientsByName('character', [first])).map((r) => r.id)).toEqual([exact.id]);
+  });
+
   it('reports which ingredients exist locally and which already carry a live or tombstoned ref to a record (#12466)', async () => {
     const make = async (name) => {
       const row = await catalogDB.createIngredient({ type: 'character', name: `${name} ${nonce}` });

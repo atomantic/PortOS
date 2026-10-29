@@ -21,14 +21,14 @@
  * before/around `npm install`. Two implementations across that boundary is the
  * correct number; four is not.
  *
- * Values containing `$&` / `$`` / `$'` are written via a replacer *function*
- * so `String.replace` does not expand them.
+ * Values are written literally, including String.replace's special $-patterns.
  */
 
 import { readFileSync } from 'fs';
-import { join } from 'path';
+import { join, resolve } from 'path';
 import { PATHS, atomicWrite } from './fileUtils.js';
 import { escapeRegExp } from './textUtils.js';
+import { createKeyedFileWriteQueue } from './fileWriteQueue.js';
 
 /**
  * PortOS's own `.env` — where machine-local state is recorded.
@@ -38,6 +38,17 @@ import { escapeRegExp } from './textUtils.js';
  * whichever checkout loaded the code.
  */
 export const PORTOS_ENV_PATH = join(PATHS.installRoot || PATHS.root || '', '.env');
+
+const queueEnvWrite = createKeyedFileWriteQueue();
+
+/**
+ * Serialize the entire read-modify-write transaction, including vault key
+ * provisioning, on the same file. Callers must not acquire this queue again
+ * inside their transaction. Independent files retain independent queues.
+ */
+export function queuePortosEnvWrite(envPath, write) {
+  return queueEnvWrite(resolve(envPath), write);
+}
 
 function getDefaultEnvPath() {
   return join(PATHS.installRoot || PATHS.root || '', '.env');
@@ -88,11 +99,10 @@ function appendEnvLines(base, lines) {
 }
 
 /**
- * Set ONE key, replacing the line that already declares it.
+ * Set ONE key, replacing its first active declaration and removing duplicates.
  *
- * The replacement is a FUNCTION, not a string. A value carrying one of
- * String.replace's special $-patterns would otherwise be expanded into the
- * surrounding text instead of written literally.
+ * Match the readers' whitespace-tolerant syntax. Normalizing only this key
+ * makes first- and last-assignment readers agree without changing other keys.
  *
  * @param {string} contents
  * @param {string} key
@@ -101,10 +111,15 @@ function appendEnvLines(base, lines) {
  */
 export function upsertEnvLine(contents, key, value) {
   const text = String(contents || '');
-  const pattern = new RegExp(`^${escapeRegExp(key)}=.*$`, 'm');
-  return pattern.test(text)
-    ? text.replace(pattern, () => `${key}=${value}`)
-    : appendEnvLines(text, [`${key}=${value}`]);
+  const pattern = new RegExp(`^\\s*${escapeRegExp(key)}\\s*=`);
+  let replaced = false;
+  const lines = text.split('\n').flatMap(line => {
+    if (!pattern.test(line)) return [line];
+    if (replaced) return [];
+    replaced = true;
+    return [`${key}=${value}${line.endsWith('\r') ? '\r' : ''}`];
+  });
+  return replaced ? lines.join('\n') : appendEnvLines(text, [`${key}=${value}`]);
 }
 
 /**
@@ -129,9 +144,8 @@ export function readPortosEnvValue(key, envPath) {
 /**
  * Set (or add) a single key in the PortOS `.env` file.
  *
- * Async over `atomicWrite`, with the replacer-function guard for `$`-patterns.
- * If the key already exists, its line is replaced in-place; otherwise it is
- * appended with proper newline handling.
+ * Async over `atomicWrite`. Existing active declarations converge to one line;
+ * a missing key is appended with proper newline handling.
  *
  * @param {string} key - env var name
  * @param {string} value - unquoted value to write
@@ -140,15 +154,17 @@ export function readPortosEnvValue(key, envPath) {
  */
 export async function upsertPortosEnvLine(key, value, envPath) {
   const path = envPath ?? getDefaultEnvPath();
-  let contents = '';
-  try {
-    contents = readFileSync(path, 'utf8');
-  } catch (err) {
-    // Only a missing file is an empty start. Any other read failure (EACCES,
-    // EMFILE, EIO) would otherwise rewrite .env as this one line, dropping
-    // PGPASSWORD, PRIVACY_VAULT_KEY and every other recorded value.
-    if (err.code !== 'ENOENT') throw err;
-  }
-  const next = upsertEnvLine(contents, key, value);
-  await atomicWrite(path, next);
+  return queuePortosEnvWrite(path, async () => {
+    let contents = '';
+    try {
+      contents = readFileSync(path, 'utf8');
+    } catch (err) {
+      // Only a missing file is an empty start. Any other read failure (EACCES,
+      // EMFILE, EIO) would otherwise rewrite .env as this one line, dropping
+      // PGPASSWORD, PRIVACY_VAULT_KEY and every other recorded value.
+      if (err.code !== 'ENOENT') throw err;
+    }
+    const next = upsertEnvLine(contents, key, value);
+    await atomicWrite(path, next);
+  });
 }

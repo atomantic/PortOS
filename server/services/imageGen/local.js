@@ -21,7 +21,7 @@ import { join, dirname, resolve as resolvePath, sep as PATH_SEP, basename } from
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
 import { trashFiles } from '../../lib/trashFiles.js';
-import { atomicWrite, assertSafeFilename, detectImageFormat, ensureDir, listDirectoryByExtension, PATHS, safeJSONParse, resolveImageInputPath, tryReadFile, rmGuarded, unlinkGuarded } from '../../lib/fileUtils.js';
+import { atomicWrite, assertSafeFilename, detectImageFormat, ensureDir, listDirectoryByExtension, PATHS, resolveImageInputPath, rmGuarded, unlinkGuarded } from '../../lib/fileUtils.js';
 import { extractPngGenerationMetadata, extractPngGenerationMetadataFile } from '../../lib/pngMetadata.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
@@ -48,7 +48,10 @@ import { hardwareUnavailableReason, isHardwareCompatible } from '../../lib/syste
 import { usesDiffusersRunner, flux2Bf16BaseRepo } from '../../lib/runners.js';
 import { weaveLoraTriggers } from '../../lib/loraTriggers.js';
 import { provenanceForRender } from '../../lib/assetProvenance.js';
-import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
+import { registerGallerySha256Writer } from '../../lib/assetHash.js';
+import { beginMediaTombstone, commitLocalDeleteTombstone, clearMediaTombstone } from '../mediaTombstones.js';
+import { withLocalImageOrigin } from './imageRecords.js';
+import { readImageSidecar, refreshImageIndex, sidecarEditQueue, editImageSidecar } from './sidecarStore.js';
 import { readTriggerWordsByFilename, readLoraLicensesByFilename } from '../loras.js';
 import { carriedPromptAdditions, promptAddition, sentPromptRecord } from '../../lib/modelInput.js';
 
@@ -620,7 +623,7 @@ export async function localSentPrompt({ model, modelId, prompt = '', negativePro
   return sentPromptRecord({ sentPrompt: meta.sentPrompt, sentNegativePrompt: meta.sentNegativePrompt, carried: meta.promptAdditions || [] });
 }
 
-export async function generateImage({ pythonPath, prompt = '', negativePrompt = '', modelId = LOCAL_IMAGEGEN_DEFAULT_MODEL, width = 1024, height = 1024, steps, guidance, seed, quantize = '8', loraFilenames = [], loraPaths = [], loraScales = [], initImagePath = null, initImageStrength = null, referenceImagePaths = [], referenceImageStrengths = [], visualConditioning = null, jobId: providedJobId = null, cleanC2PA = false, denoise = false, regenOf = null, upscaleTo = null, outputTarget = null, promptAdditions = [] }) {
+export async function generateImage({ pythonPath, prompt = '', negativePrompt = '', modelId = LOCAL_IMAGEGEN_DEFAULT_MODEL, width = 1024, height = 1024, steps, guidance, seed, quantize = '8', loraFilenames = [], loraPaths = [], loraScales = [], initImagePath = null, initImageStrength = null, referenceImagePaths = [], referenceImageStrengths = [], visualConditioning = null, jobId: providedJobId = null, reviewedReferenceSnapshot = null, cleanC2PA = false, denoise = false, regenOf = null, upscaleTo = null, outputTarget = null, promptAdditions = [] }) {
   // The ingestion instant `renderTimingFields` measures from — the queue calls
   // generateImage the moment it picks this job up. See lib/renderTiming.js.
   const renderStartedAtMs = Date.now();
@@ -747,6 +750,12 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
     resolveInputPath: resolveImageInputPath,
     loraExists: existsSync,
   });
+  if ((initImagePath && !validInitImagePath)
+    || (Array.isArray(referenceImagePaths) && referenceImagePaths.length !== validReferenceImagePaths.length)) {
+    throw new ServerError('A requested input image is unavailable or outside the allowed image roots', {
+      status: 400, code: 'IMAGE_INPUT_UNAVAILABLE',
+    });
+  }
   if (usesMossSwift(model)) {
     meta.quantize = null;
     meta.quantization = 'bf16';
@@ -806,6 +815,9 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
       meta.omittedInputImages = omittedInputs.map(input => ({ ...input, reason: 'unsupported-render-path' }));
     }
     meta.inputProvenance = 'provider-inputs';
+    if (reviewedReferenceSnapshot && (providerInputs.referenceImagePaths.length !== 1 || providerInputs.referenceImagePaths[0] !== validReferenceImagePaths[0])) {
+      throw new ServerError('The selected local render path cannot apply the reviewed reference', { status: 400, code: 'REVIEWED_REFERENCE_UNSUPPORTED' });
+    }
     meta.referenceImageFilenames = providerInputs.referenceImagePaths.map(path => basename(path));
     meta.referenceImageStrengths = validReferenceImageStrengths.filter((_, index) => providerInputs.referenceImagePaths.includes(validReferenceImagePaths[index]));
     if (!providerInputs.initImagePath) {
@@ -842,6 +854,11 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
     startedEmitted = true;
     activeJob = { ...meta, generationId: jobId, totalSteps: actualSteps, step: 0, progress: 0, currentImage: null, mode: IMAGE_GEN_MODE.LOCAL };
 
+    if (reviewedReferenceSnapshot || [validInitImagePath, ...validReferenceImagePaths].some(path => path?.startsWith(join(PATHS.imageRefs, 'snapshot-')))) {
+      const { assertSnapshotForAdapter } = await import('./reviewedReference.js');
+      await assertSnapshotForAdapter(reviewedReferenceSnapshot, jobId, validInitImagePath, validReferenceImagePaths);
+      if (preparation.cancelRequested) throw new ServerError('Canceled before the render started', { status: 409, code: 'IMAGE_GEN_CANCELED' });
+    }
     proc = spawn(bin, args, safeChildProcessOptions({ env: childEnv, stdio: ['ignore', 'pipe', 'pipe'] }));
     // Same tick as the spawn, before the claim handoff below awaits file I/O: a
     // child that dies inside that window would otherwise emit 'close' with no
@@ -869,7 +886,7 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
       if (activeProcess === proc) activeProcess = null;
       if (activeJob?.generationId === jobId) activeJob = null;
       if (startedEmitted) {
-        imageGenEvents.emit('failed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, error: err.message });
+        imageGenEvents.emit('failed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, error: err.message, inputProcessSettled: !proc?.pid });
       }
       await releaseHeavyClaim();
       jobs.delete(jobId);
@@ -1128,7 +1145,7 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
           dispatchTerminalEvent(
             jobId,
             () => broadcastSse(job, { type: 'error', error: emptyFrame }),
-            () => imageGenEvents.emit('failed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, error: emptyFrame }),
+            () => imageGenEvents.emit('failed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, inputProcessSettled: true, error: emptyFrame }),
           );
           return;
         }
@@ -1213,7 +1230,7 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
           dispatchTerminalEvent(
             jobId,
             () => broadcastSse(job, { type: 'error', error: errorText, kind: userKind, repo: userRepo }),
-            () => imageGenEvents.emit('failed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, error: job.error }),
+            () => imageGenEvents.emit('failed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, inputProcessSettled: true, error: job.error }),
           );
         } else {
           job.status = 'complete';
@@ -1292,12 +1309,12 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
             () => broadcastSse(job, { type: 'complete', result }),
             () => {
               if (!skipSidecar) {
-                imageGenEvents.emit('completed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, path: publicPath, filename, seed: actualSeed, ...(meta.executionProvenance ? { executionProvenance: meta.executionProvenance } : {}) });
+                imageGenEvents.emit('completed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, inputProcessSettled: true, path: publicPath, filename, seed: actualSeed, ...(meta.executionProvenance ? { executionProvenance: meta.executionProvenance } : {}) });
               } else {
                 // `temp: true` tells the media-asset-index + peer-sync hooks to
                 // ignore this render — there's no gallery file or sidecar to
                 // index/federate.
-                imageGenEvents.emit('completed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, path: null, filename, seed: actualSeed, outputPath, temp: true, ...(meta.executionProvenance ? { executionProvenance: meta.executionProvenance } : {}) });
+                imageGenEvents.emit('completed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, inputProcessSettled: true, path: null, filename, seed: actualSeed, outputPath, temp: true, ...(meta.executionProvenance ? { executionProvenance: meta.executionProvenance } : {}) });
               }
             },
           );
@@ -1325,7 +1342,7 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
           dispatchTerminalEvent(
             jobId,
             () => broadcastSse(job, { type: 'error', error: reason }),
-            () => imageGenEvents.emit('failed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, error: reason }),
+            () => imageGenEvents.emit('failed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, inputProcessSettled: true, error: reason }),
           );
         }
       } finally {
@@ -1347,7 +1364,7 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
       dispatchTerminalEvent(
         jobId,
         () => broadcastSse(job, { type: 'error', error: reason }),
-        () => imageGenEvents.emit('failed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, error: reason }),
+        () => imageGenEvents.emit('failed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, inputProcessSettled: true, error: reason }),
       );
       closeJobAfterDelay(jobs, jobId);
     });
@@ -1382,27 +1399,10 @@ export function assertGalleryFilename(filename) {
   });
 }
 
-// Returns `{ path, metadata }`. `path` is the resolved sidecar location, or
-// the preferred Portos location on miss — callers writing back land at the
-// canonical path automatically.
-export async function readImageSidecar(filename) {
-  const portosSidecar = join(PATHS.images, filename.replace('.png', '.metadata.json'));
-  const altSidecar = join(PATHS.images, `${filename}.metadata.json`);
-  for (const path of [portosSidecar, altSidecar]) {
-    const raw = await tryReadFile(path);
-    if (raw != null) return { path, metadata: safeJSONParse(raw, {}) };
-  }
-  return { path: portosSidecar, metadata: {} };
-}
+export { readImageSidecar };
 
 // Decoder safety is independent of the upload file-size policy.
 const MAX_GALLERY_UPLOAD_PIXELS = 96 * 1000 * 1000;
-
-async function refreshImageIndex(filename) {
-  await import('../mediaAssetIndex/index.js')
-    .then(m => m.indexImage({ filename }))
-    .catch(err => console.error(`❌ Media index image refresh failed: ${err.message}`));
-}
 
 /**
  * Persist user-uploaded image bytes (base64) into the gallery dir under
@@ -1436,9 +1436,10 @@ export async function saveUploadedGalleryImage(base64Data, tempPath) {
   }
   // Read Stable Diffusion-compatible PNG text chunks before sharp normalizes
   // the image. JPEG/WebP/GIF uploads simply produce an empty projection.
-  const metadata = tempPath
+  // An upload is made here, so this machine owns it (its sidecar records that).
+  const metadata = await withLocalImageOrigin(tempPath
     ? await extractPngGenerationMetadataFile(tempPath)
-    : extractPngGenerationMetadata(input);
+    : extractPngGenerationMetadata(input));
   // Normalize to PNG so the gallery's PNG-only list/delete paths manage it.
   // `.rotate()` with no args bakes in EXIF orientation before the metadata is
   // dropped, so a camera-JPEG portrait isn't saved sideways/upside-down.
@@ -1489,15 +1490,31 @@ export async function listGallery() {
   return items.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 }
 
-export async function deleteImage(filename) {
+// `fromRemoteTombstone`: the owner's tombstone, already merged, deleted it, so
+// it is neither re-recorded (that would restamp deletedAt) nor re-announced.
+export async function deleteImage(filename, { fromRemoteTombstone = false } = {}) {
   assertGalleryFilename(filename);
-  return withBackupAssetPublication(() => sidecarEditQueue(filename, async () => {
-    await trashFiles([
-      join(PATHS.images, filename),
-      join(PATHS.images, filename.replace(/\.png$/i, '.metadata.json')),
-      join(PATHS.images, `${filename}.metadata.json`),
-      join(PATHS.imageThumbnails, filename.replace(/\.png$/i, '.webp')),
-    ]);
+  let record = null;
+  let tombstone = null;
+  const result = await withBackupAssetPublication(() => sidecarEditQueue(filename, async () => {
+    const { metadata } = await readImageSidecar(filename);
+    record = { filename, originInstanceId: metadata.originInstanceId };
+    // Record BEFORE trashing: a crash between the two must never leave a
+    // deleted image without its tombstone. It stays in flight (unexported)
+    // until the trash commits, and is withdrawn if the trash fails (#14088).
+    if (!fromRemoteTombstone) tombstone = await beginMediaTombstone('image', filename);
+    try {
+      await trashFiles([
+        join(PATHS.images, filename),
+        join(PATHS.images, filename.replace(/\.png$/i, '.metadata.json')),
+        join(PATHS.images, `${filename}.metadata.json`),
+        join(PATHS.imageThumbnails, filename.replace(/\.png$/i, '.webp')),
+      ]);
+    } catch (err) {
+      if (tombstone) await clearMediaTombstone('image', filename, { deletedAt: tombstone.deletedAt });
+      throw err;
+    }
+    if (tombstone) await commitLocalDeleteTombstone('image', tombstone);
     // trashFiles verifies removal before derived records can be retired.
     await import('../mediaAssetIndex/index.js')
       .then((m) => m.unindexImage(filename))
@@ -1505,37 +1522,15 @@ export async function deleteImage(filename) {
     console.log(`🗑️ Trashed image: ${filename}`);
     return { ok: true };
   }));
-}
-
-// Sidecar edits are whole-file read→modify→replace cycles; atomicWrite stops a
-// torn file but not two edits (prompt + visibility) reading the same copy and
-// the later write dropping the earlier field. One tail per gallery filename
-// covers both sidecar spellings, and the index refresh stays inside the turn.
-const sidecarEditQueue = createKeyCachedQueue();
-
-// `mutate` edits the metadata in place; returning null leaves the file as it was.
-function editImageSidecar(filename, mutate) {
-  // Admit before joining the queue so a cut drains every already-requested
-  // edit, including one waiting for an earlier edit's index refresh.
-  return withBackupAssetPublication(() => sidecarEditQueue(filename, async () => {
-    const { path: sidecarPath, metadata } = await readImageSidecar(filename);
-    const result = mutate(metadata);
-    if (result === null) return null;
-    // A stale edit queued after deletion must not recreate its sidecar/index.
-    // Sidecar-only records remain editable while peer media bytes are pending.
-    const present = await Promise.all([
-      join(PATHS.images, filename),
-      join(PATHS.images, filename.replace(/\.png$/i, '.metadata.json')),
-      join(PATHS.images, `${filename}.metadata.json`),
-    ].map(path => stat(path).then(() => true, error => {
-      if (error.code === 'ENOENT') return false;
-      throw error;
-    })));
-    if (!present.some(Boolean)) throw new ServerError('Image not found', { status: 404, code: 'NOT_FOUND' });
-    await atomicWrite(sidecarPath, metadata);
-    await refreshImageIndex(filename);
-    return result;
-  }));
+  // The one emitter of an image delete: views refresh, and the owner's own
+  // delete goes to peers (a remote-tombstone delete was announced by its owner).
+  void import('../peerSyncEventBus.js')
+    .then(async (m) => {
+      m.emitMediaHistoryChanged({ kind: 'image', op: 'delete', ids: [filename] });
+      if (!fromRemoteTombstone) await m.announceLocalImageDelete(record, tombstone);
+    })
+    .catch((err) => console.error(`❌ Image delete announce failed: ${err.message}`));
+  return result;
 }
 
 export async function setImageHidden(filename, hidden) {
@@ -1543,6 +1538,31 @@ export async function setImageHidden(filename, hidden) {
   return editImageSidecar(filename, (metadata) => {
     metadata.hidden = !!hidden;
     return { ok: true, hidden: metadata.hidden };
+  });
+}
+
+// Machine-local, like `hidden`: a delete this machine queued for the image's
+// owner (`{ peerId, queuedAt }`), or null to clear it. Resolves true when changed.
+export async function setImagePendingDelete(filename, pending) {
+  assertGalleryFilename(filename);
+  return editImageSidecar(filename, (metadata) => {
+    if (!pending && !('pendingDelete' in metadata)) return null;
+    if (pending) metadata.pendingDelete = pending;
+    else delete metadata.pendingDelete;
+    return true;
+  });
+}
+
+// Make primary (services/mediaHolders.js): the holder chosen to keep this
+// image's bytes. Only an image with a sidecar records it. Resolves true when changed.
+export async function setImagePrimary(filename, { instanceId, at }) {
+  assertGalleryFilename(filename);
+  return editImageSidecar(filename, (metadata) => {
+    if (!metadata || Object.keys(metadata).length === 0) return null;
+    // Field LWW on primaryAt, as on video rows: an older designation never replaces a newer one.
+    if (Date.parse(metadata.primaryAt) >= Date.parse(at)) return null;
+    Object.assign(metadata, { primaryInstanceId: instanceId, primaryAt: at });
+    return true;
   });
 }
 
@@ -1569,6 +1589,21 @@ export function fillImageSidecarFields(filename, fields) {
     return true;
   });
 }
+
+// Persist the byte-hash cache (`lib/assetHash.js`) through the edit queue so it
+// re-reads the CURRENT sidecar and cannot drop a concurrent edit (hidden flag,
+// supplying peer, ...). An image without a sidecar gets none created for the
+// cache. Not indexed: the hash cache is not a searchable field. Resolves to the
+// merged sidecar, or null when nothing was written.
+export function cacheImageSha256(filename, entry) {
+  assertGalleryFilename(filename);
+  return editImageSidecar(filename, (metadata) => {
+    if (!metadata || Object.keys(metadata).length === 0) return null;
+    metadata.sha256 = entry;
+    return { ...metadata };
+  }, { reindex: false });
+}
+registerGallerySha256Writer(cacheImageSha256);
 
 // Returns just `{ filename, name }` — clients send `filename` back in the
 // generate payload's `loraFilenames` and the server resolves it against

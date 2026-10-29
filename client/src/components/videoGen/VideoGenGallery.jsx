@@ -11,7 +11,7 @@ import { normalizeVideo } from '../media/normalize';
 export default function VideoGenGallery({
   galleryVisible, galleryHidden, favoritesOnly, showHidden,
   onToggleFavorites, onToggleShowHidden,
-  onPreview, onRemix, onContinue, onUpscale, onDelete, onToggleHidden, getCardProps,
+  onPreview, onRemix, onContinue, onUpscale, onDelete, onCancelPendingDelete, pendingPeerNames, onToggleHidden, getCardProps,
   finishTargetFor, onFinish,
 }) {
   const visibleItems = useMemo(
@@ -67,6 +67,8 @@ export default function VideoGenGallery({
                     {...finishProps(item)}
                     onUpscale={onUpscale}
                     onDelete={onDelete}
+                    onCancelPendingDelete={onCancelPendingDelete}
+                    pendingPeerName={item.pendingDelete?.peerId ? pendingPeerNames?.[item.pendingDelete.peerId] : null}
                     onToggleHidden={onToggleHidden}
                     {...getCardProps(item.key)}
                   />
@@ -97,6 +99,8 @@ export default function VideoGenGallery({
                     onContinue={onContinue}
                     {...finishProps(item)}
                     onDelete={onDelete}
+                    onCancelPendingDelete={onCancelPendingDelete}
+                    pendingPeerName={item.pendingDelete?.peerId ? pendingPeerNames?.[item.pendingDelete.peerId] : null}
                     onToggleHidden={onToggleHidden}
                     {...getCardProps(item.key)}
                   />

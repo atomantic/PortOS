@@ -90,7 +90,12 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // it on an unrelated Universe edit and LWW the loss back. The catalog gate stays
   // put: catalog peer-receive stores the payload verbatim.
   // v16 = optional generation/finishing visual profile. Older sanitizers strip it.
-  universes: 16,
+  // v17 = film look controls for dye crossover, halation spread, lens fall-off,
+  // tape softness and tracking. An older strict film-look schema refuses the
+  // profile's finishing look; an older normalizer drops the controls.
+  // v18 = canon `forms[]` entries may carry a `height` (a character's height at
+  // that age). A <=v17 sanitizer strips it and would LWW the loss back.
+  universes: 18,
   // v1 = post-split. Migrations 035/036 introduced the pipeline collection
   // layout for issues and series.
   // v2 = `stages.audio.audioMode` + `stages.audio.cues[]` added (whole-episode
@@ -246,6 +251,12 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // it upgrades. A v1 sender stays accepted: its copies keep their original
   // `addedAt`, which the v2 receiver's removal records already supersede.
   mediaCollections: 2,
+  // videoHistory v1 = rows carry the Make-primary designation
+  // (`primaryInstanceId` + `primaryAt`, services/mediaHolders.js), merged as a
+  // field LWW on `primaryAt` while the rest of the row stays create-only. A
+  // pre-v1 receiver never maps this key, so it keeps accepting rows and holds
+  // the fields as inert content; a later incompatible row change bumps this.
+  videoHistory: 1,
   // v1 = card decks (PostgreSQL `decks` + `deck_cards`) federated via the
   // per-record peer-sync push pipeline (record kind `deck`, sync category
   // `decks`). A brand-NEW synced record type, so it gets its own per-category
@@ -297,7 +308,11 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // `tracks` tables) federated via the per-record peer-sync push pipeline.
   // Each kind gets its own category gate so an older peer can reject only the
   // music record type it cannot parse while unrelated categories keep flowing.
-  artists: 1,
+  // artists v2 = the press & submission profile (creditName, bioOneLine,
+  // bioShort, statements, platform links, agent notes). A ≤v1 peer would
+  // re-sanitize the record through its profile-unaware `sanitizeArtist`, drop
+  // the curated text and LWW the loss back, so it rejects the transfer instead.
+  artists: 2,
   albums: 1,
   // tracks v2 = `track.renders[]` render-history added (every generated/uploaded
   // take, so the studio shows each render as a card + can re-select an earlier
@@ -463,7 +478,11 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // normalizer would strip both and whole-row LWW the loss back.
   // v14 = per-reference review/feedback and refinement lineage. Older peers
   // strip these fields and could restore rejected conditioning references.
-  catalog: 14,
+  // v15 = media `library.likeness: false` (image left out of likeness guides).
+  // Older normalizers strip it and would send a left-out collage again.
+  // v16 = bible `forms[]` entries may carry a `height` (scale cue for renders).
+  // A <=v15 sanitizer strips it and whole-row LWW would send the loss back.
+  catalog: 16,
   // v1 = cross-machine resumable Story Builder sessions (#730). Sessions are
   // local-only by default and excluded from sync; only `sync: true` sessions
   // ride the `storyBuilder` snapshot category. This is a brand-NEW synced
@@ -530,7 +549,10 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // v12 records exact per-render request input identities, prompts and visual
   // profile. Older sanitizers strip them; old inbound edits preserve them only
   // for the same render when the v11-representable manifest still matches.
-  fableLoom: 12,
+  // v13 records each canon image's input root and content digest, so exact
+  // replay can prove the canon bytes it sent. A v12 sanitizer strips them; old
+  // inbound edits preserve them under the same same-render rule as v12.
+  fableLoom: 13,
   // v1 = Creative Director projects (PostgreSQL `creative_director_projects`)
   // federated via the per-record peer-sync push pipeline (record kind
   // `creativeDirectorProject`, sync category `creativeDirectorProjects`, #1564).
@@ -774,7 +796,20 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // and its missing-capture refusal. Optional on existing records; no backfill.
   // v27 = original version-2 film response controls and recipes. Older
   // renderers discard these controls and cannot reproduce the chosen finish.
-  musicVideoProjects: 27,
+  // v28 = film look controls for dye crossover, halation spread, lens fall-off,
+  // tape softness and tracking. Older renderers discard them and cannot
+  // reproduce the chosen finish.
+  // v29 = lyric words aligned into vocal silence (`lyricCues[].silentWords`),
+  // saved and flagged instead of refused. A v28 strict cue schema rejects the
+  // field and its normalizer drops it. Optional, no backfill.
+  // v30 = the director's rough story summary, retained across project sync.
+  // v31 = a creative-setup subject's catalog age form (`concept.subjects[].castForm`),
+  // which a v30 strict subject schema rejects with a 400. Optional, no backfill.
+  // v32 = optional versioned festival packet; older strict project schemas cannot edit it.
+  // No backfill. New receivers preserve a packet omitted by an older sender.
+  // v33 = the film credits ending (`creditsOutro`), which a v32 strict project
+  // schema rejects and its normalizer drops on save. Optional, no backfill.
+  musicVideoProjects: 33,
   // v1 = Creative Commission FEEDBACK federation (PostgreSQL `commission_feedback`)
   // via the per-record peer-sync push pipeline (record kind `commissionFeedback`,
   // sync category `commissionFeedback`, #2686 — split-record follow-up to #2657).
@@ -927,7 +962,10 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // evidence. Older peers may clip that evidence or substitute a smaller model.
   // v10 = executionOptions and execution-selection provider references. Older
   // peers would ignore an explicit Standard/Fast override when claiming a task.
-  cosTasks: 10,
+  // v11 = server-owned retry-episode and latest-dispatch proof. A legacy peer
+  // may reset a counter while retaining unknown metadata, so its payload
+  // invalidates proof on the receiver instead of authorizing reconciliation.
+  cosTasks: 11,
   // v1 = the Eidoverse foundation promote-candidate envelope (#7455, epic
   // #7453) — authorized to cross the federation layer by the federated
   // Eidoverse foundations ADR (docs/decisions/2026-09-18-federated-eidoverse-foundations.md).
@@ -1032,6 +1070,13 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // the Basic header only after that confirmation (`peer.peerAuthAccepted`), so
   // an older receiver, which never answers, keeps getting Basic.
   peerAuth: 1,
+  // v1 = a receiver accepts the optional image `createdAt` on per-record push
+  // `assetManifest` entries (#14067), so a re-made image under a re-used name
+  // outranks a delete tombstone. Capability, not a record gate: the receiver's
+  // entry schema is strict, so a sender stamps only after the receiver's health
+  // details advertise `assetStamps.version` >= 1 (`peer.lastHealth`); an older
+  // receiver never answers and never sees the field.
+  peerAssetStamps: 1,
   // NOTE: `videoHistory` is intentionally NOT listed here. The version gate
   // rejects the ENTIRE snapshot/push payload on ANY ahead-mismatch (the
   // comparator walks the union of keys), so declaring a brand-new key would
@@ -1042,6 +1087,16 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // so it does not need whole-payload gating. An older peer that lacks the
   // `videoHistory` route simply rejects that one category request and keeps
   // syncing everything else.
+  // The snapshot also carries an OPTIONAL `tombstones` list (deliberate deletes,
+  // keyed by row id). The gate is per-category (`scopeVersionDiff`), but
+  // videoHistory is intentionally left ungated: `tombstones` is additive, so an
+  // older peer loses no data — it only fails to learn deletes. The field is
+  // omitted when empty; once a newer peer holds tombstones its checksum differs
+  // from an older peer's, so the pair never converges until the older one
+  // upgrades. That costs no extra pulls: a pull follows only a change in the
+  // sender's own checksum (syncOrchestrator.js compares it with the one cached
+  // for that peer), so each side re-applies the other's snapshot once per real
+  // change, not every cycle.
   //
   // The gate is now PER-CATEGORY (see `scopeVersionDiff` below + its three
   // call sites: dataSync `applyRemote`, peerSync push, sharing importer), so
@@ -1124,6 +1179,13 @@ export const RECORD_KIND_SCHEMA_CATEGORIES = Object.freeze({
  * `applyRemote` through SNAPSHOT_CATEGORY_SCHEMA_KEYS; meatspace is never a
  * per-record push.
  *
+ * `peerAssetStamps` (#14067): advertised by the receiver's health details; it
+ * gates whether a sender adds image `createdAt` to push manifests, never a
+ * record transfer.
+ *
+ * `videoHistory` (#14093): gates the `videoHistory` SNAPSHOT apply (dataSync.js
+ * SNAPSHOT_CATEGORY_SCHEMA_KEYS); video rows never ride the per-record push.
+ *
  * `peerAuth` (#8356): the peer credential handshake version, advertised by the
  * receiver's health details; it gates which header a sender presents, never a
  * record transfer.
@@ -1132,7 +1194,7 @@ export const RECORD_KIND_SCHEMA_CATEGORIES = Object.freeze({
  * leave its push transfers ungated (silent cross-install corruption). Only
  * genuinely non-push categories belong.
  */
-export const NON_RECORD_SCHEMA_CATEGORIES = Object.freeze(new Set(['memoryHistory', 'mediaLibrary', 'cosHistory', 'cosTasks', 'appQuality', 'eidoverseFoundations', 'meatspace', 'peerAuth']));
+export const NON_RECORD_SCHEMA_CATEGORIES = Object.freeze(new Set(['memoryHistory', 'mediaLibrary', 'cosHistory', 'cosTasks', 'appQuality', 'eidoverseFoundations', 'meatspace', 'peerAuth', 'peerAssetStamps', 'videoHistory']));
 
 /**
  * Lazy-read the current PortOS version from the ROOT package.json so a

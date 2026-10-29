@@ -7,7 +7,7 @@ import { castAndSetsPreviewItems } from './CastAndSetsReferenceProgress.jsx';
 
 const { listeners, api, getMediaJob } = vi.hoisted(() => ({
   listeners: new Map(),
-  api: { getMusicVideoProject: vi.fn(), startMusicVideoCastAndSets: vi.fn(), regenerateMusicVideoCastAndSets: vi.fn(), editMusicVideoCastAndSetsDirection: vi.fn(), resumeMusicVideoCastAndSets: vi.fn(), approveMusicVideoCastAndSets: vi.fn(), reconfirmMusicVideoCastAndSets: vi.fn(), revertMusicVideoProductionInput: vi.fn(), skipMusicVideoCastAndSets: vi.fn(), applyMusicVideoCastAndSetsFeedback: vi.fn(), removeMusicVideoCastAndSetsFeedback: vi.fn() },
+  api: { getMusicVideoProject: vi.fn(), getMusicVideoCastAndSets: vi.fn(), startMusicVideoCastAndSets: vi.fn(), regenerateMusicVideoCastAndSets: vi.fn(), editMusicVideoCastAndSetsDirection: vi.fn(), resumeMusicVideoCastAndSets: vi.fn(), approveMusicVideoCastAndSets: vi.fn(), reconfirmMusicVideoCastAndSets: vi.fn(), revertMusicVideoProductionInput: vi.fn(), skipMusicVideoCastAndSets: vi.fn(), applyMusicVideoCastAndSetsFeedback: vi.fn(), removeMusicVideoCastAndSetsFeedback: vi.fn(), discardMusicVideoCastAndSets: vi.fn(), getMusicVideoCastAndSetsCastingChanges: vi.fn() },
   getMediaJob: vi.fn(),
 }));
 vi.mock('../../services/socket', () => ({ default: {
@@ -53,6 +53,7 @@ beforeEach(() => {
   listeners.clear();
   vi.clearAllMocks();
   getMediaJob.mockResolvedValue({ status: 'queued' });
+  api.getMusicVideoCastAndSetsCastingChanges.mockResolvedValue({ changes: null });
   api.getMusicVideoProject.mockReset();
 });
 afterEach(() => vi.restoreAllMocks());
@@ -200,6 +201,272 @@ describe('Cast & Sets direction editing', () => {
     fireEvent.change(screen.getByLabelText('Camera'), { target: { value: 'locked off' } });
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Save direction/ })); });
     expect(screen.getByLabelText('Camera').value).toBe('locked off');
+  });
+});
+
+describe('Cast & Sets per-image actions', () => {
+  const photoPlan = {
+    character: { key: 'character', kind: 'character', label: 'June', prompt: 'June portrait', deps: [], refKeys: [] },
+    expressions: { key: 'expressions', kind: 'expressions', label: 'June · moods', prompt: 'moods', deps: ['character'], refKeys: ['character'] },
+    'cast:dad': { key: 'cast:dad', kind: 'cast', castId: 'dad', label: 'Dad', prompt: 'Dad portrait', deps: [], refKeys: [] },
+  };
+  const direction = { protagonist: { name: 'June', description: 'a girl', expressions: ['eyes closed, looking down'], forms: [] },
+    cast: [{ id: 'dad', name: 'Dad', role: 'father', description: 'tall' }], sets: [], tests: [] };
+  const sheet = (status, extra = {}) => ({ id: 'example-project', castAndSets: { revision: 1, status, plan: photoPlan, images: {}, direction, ...extra } });
+
+  it('edits moods, removes a cast member and re-renders one image from its card', async () => {
+    api.regenerateMusicVideoCastAndSets.mockResolvedValue({ project: sheet('imaging', { revision: 2 }) });
+    api.editMusicVideoCastAndSetsDirection.mockResolvedValue({ project: sheet('review', { revision: 2 }) });
+    render(<Harness initial={sheet('review')} locked={false} />);
+    fireEvent.click(card('June · moods').getByRole('button', { name: 'Edit June · moods' }));
+    const moods = card('June · moods').getByLabelText(/One mood per line/);
+    expect(moods.value).toBe('eyes closed, looking down');
+    fireEvent.change(moods, { target: { value: 'eyes closed, looking down\ncarefree, eyes closed' } });
+    await act(async () => { fireEvent.click(card('June · moods').getByRole('button', { name: 'Save and re-render' })); });
+    expect(api.editMusicVideoCastAndSetsDirection).toHaveBeenLastCalledWith('example-project',
+      { protagonist: { expressions: ['eyes closed, looking down', 'carefree, eyes closed'] } }, { silent: true });
+
+    fireEvent.click(card('Dad').getByRole('button', { name: 'Remove Dad' }));
+    await act(async () => { fireEvent.click(card('Dad').getByRole('button', { name: 'Remove Dad from the sheet' })); });
+    expect(api.editMusicVideoCastAndSetsDirection).toHaveBeenLastCalledWith('example-project', { cast: [{ id: 'dad', remove: true }] }, { silent: true });
+
+    await act(async () => { fireEvent.click(card('Dad').getByRole('button', { name: 'Regenerate Dad' })); });
+    expect(api.regenerateMusicVideoCastAndSets).toHaveBeenCalledWith('example-project', { keys: ['cast:dad'] }, { silent: true });
+  });
+
+  it('edits structured wardrobe sections and exposes automatic test controls', async () => {
+    const photoDirection = { ...direction, looks: [{ name: 'Rain', description: 'coat', chapters: 'chorus' }] };
+    const plan = { ...photoPlan,
+      looks: { key: 'looks', kind: 'looks', label: 'Wardrobe', prompt: 'looks', deps: [], refKeys: [] },
+      'test:1': { key: 'test:1', kind: 'test', testIndex: 0, label: 'Automatic frame', test: { action: 'walk', caption: 'bridge' }, prompt: 'test', deps: [], refKeys: [] },
+    };
+    api.editMusicVideoCastAndSetsDirection.mockResolvedValue({ project: sheet('review', { revision: 2, direction: photoDirection, plan }) });
+    render(<Harness initial={sheet('review', { direction: photoDirection, plan })} locked={false} />);
+    fireEvent.click(card('Wardrobe').getByRole('button', { name: 'Edit Wardrobe' }));
+    fireEvent.change(card('Wardrobe').getByLabelText('Song sections'), { target: { value: 'chorus, bridge' } });
+    await act(async () => { fireEvent.click(card('Wardrobe').getByRole('button', { name: 'Save and re-render' })); });
+    expect(api.editMusicVideoCastAndSetsDirection).toHaveBeenLastCalledWith('example-project', { looks: [{ name: 'Rain', description: 'coat', chapters: 'chorus, bridge', originalName: 'Rain' }] }, { silent: true });
+    fireEvent.click(card('Automatic frame').getByRole('button', { name: 'Edit Automatic frame' }));
+    expect(card('Automatic frame').getByLabelText('What happens in the frame').value).toBe('walk');
+    fireEvent.change(card('Automatic frame').getByLabelText('Caption'), { target: { value: 'outro' } });
+    await act(async () => { fireEvent.click(card('Automatic frame').getByRole('button', { name: 'Save and re-render' })); });
+    expect(api.editMusicVideoCastAndSetsDirection).toHaveBeenLastCalledWith('example-project', { tests: [{ index: 1, caption: 'outro' }] }, { silent: true });
+    expect(card('Automatic frame').getByRole('button', { name: 'Remove Automatic frame' })).toBeInTheDocument();
+  });
+
+  it('binds an age to a catalog-linked character and a test to that age', async () => {
+    const age = { id: 'age-7', label: 'Age 7', age: '7', description: 'small', height: '', hair: '', wardrobe: '', era: '', look: '' };
+    const agedDirection = { ...direction, protagonist: { ...direction.protagonist, forms: [age] } };
+    const plan = { ...photoPlan,
+      'form:age-7': { key: 'form:age-7', kind: 'form', formId: 'age-7', label: 'June · Age 7', prompt: 'young', deps: ['character'], refKeys: ['character'], subjectId: 'gone', bindingMissing: 'subject' },
+      'test:1': { key: 'test:1', kind: 'test', testIndex: 0, label: 'Memory', test: { action: 'skip stones', caption: 'memory' }, prompt: 'test', deps: [], refKeys: [] },
+    };
+    const linked = { ...sheet('review', { direction: agedDirection, plan }), concept: { subjects: [
+      { id: 'mvc-child', kind: 'character', name: 'June (Age 7)', ingredientId: 'cat-1', castForm: { id: 'age-7', label: 'Age 7' } },
+      { id: 'mvc-local', kind: 'character', name: 'Stranger' },
+      { id: 'cs-protagonist', kind: 'character', name: 'June', ingredientId: 'cat-2' },
+    ] } };
+    api.editMusicVideoCastAndSetsDirection.mockResolvedValue({ project: linked });
+    render(<Harness initial={linked} locked={false} />);
+    expect(card('June · Age 7').getByText(/no longer cast in this video/)).toBeInTheDocument();
+    fireEvent.click(card('June · Age 7').getByRole('button', { name: 'Edit June · Age 7' }));
+    const subject = card('June · Age 7').getByLabelText('Catalog reference for this age');
+    expect([...subject.options].map((o) => o.value)).toEqual(['', 'mvc-child']);
+    fireEvent.change(subject, { target: { value: 'mvc-child' } });
+    await act(async () => { fireEvent.click(card('June · Age 7').getByRole('button', { name: 'Save and re-render' })); });
+    expect(api.editMusicVideoCastAndSetsDirection).toHaveBeenLastCalledWith('example-project',
+      { protagonist: { forms: [{ ...age, id: 'age-7', subjectId: 'mvc-child' }] } }, { silent: true });
+    fireEvent.click(card('Memory').getByRole('button', { name: 'Edit Memory' }));
+    fireEvent.change(card('Memory').getByLabelText('Age shown'), { target: { value: 'age-7' } });
+    await act(async () => { fireEvent.click(card('Memory').getByRole('button', { name: 'Save and re-render' })); });
+    expect(api.editMusicVideoCastAndSetsDirection).toHaveBeenLastCalledWith('example-project', { tests: [{ index: 1, formId: 'age-7' }] }, { silent: true });
+  });
+
+  it('loads a matching legacy test before editing and can clear its caption', async () => {
+    const legacy = { key: 'test:1', kind: 'test', testIndex: 0, setId: 'harbor', label: 'Harbor', prompt: 'saved prompt', deps: [], refKeys: [] };
+    const withTest = sheet('review', { plan: { 'test:1': legacy } });
+    api.getMusicVideoCastAndSets.mockResolvedValue({ stage: { revision: 1, plan: { 'test:1': { ...legacy, test: { action: 'walking the quay', caption: 'the opener' } } } } });
+    api.editMusicVideoCastAndSetsDirection.mockResolvedValue({ project: withTest });
+    render(<Harness initial={withTest} locked={false} />);
+    await act(async () => { fireEvent.click(card('Harbor').getByRole('button', { name: 'Edit Harbor' })); });
+    expect(api.getMusicVideoCastAndSets).toHaveBeenCalledWith('example-project', { silent: true });
+    expect(card('Harbor').getByLabelText('What happens in the frame').value).toBe('walking the quay');
+    expect(card('Harbor').getByLabelText('Caption').value).toBe('the opener');
+    fireEvent.change(card('Harbor').getByLabelText('Caption'), { target: { value: '' } });
+    await act(async () => { fireEvent.click(card('Harbor').getByRole('button', { name: 'Save and re-render' })); });
+    expect(api.editMusicVideoCastAndSetsDirection).toHaveBeenLastCalledWith('example-project', { tests: [{ index: 1, caption: '' }] }, { silent: true });
+  });
+
+  it('does not open a legacy test editor when the saved plan cannot be verified', async () => {
+    const legacy = { key: 'test:1', kind: 'test', testIndex: 0, setId: 'harbor', label: 'Harbor', prompt: 'saved prompt', deps: [], refKeys: [] };
+    api.getMusicVideoCastAndSets.mockResolvedValue({ stage: { revision: 1, plan: { 'test:1': legacy } } });
+    render(<Harness initial={sheet('review', { plan: { 'test:1': legacy } })} locked={false} />);
+    await act(async () => { fireEvent.click(card('Harbor').getByRole('button', { name: 'Edit Harbor' })); });
+    expect(card('Harbor').queryByLabelText('What happens in the frame')).not.toBeInTheDocument();
+    expect(card('Harbor').getByText(/Rebuild the check-in before editing/)).toBeInTheDocument();
+  });
+
+  it('refreshes a missed stage update before retrying a stale legacy card', async () => {
+    const legacy = { key: 'test:1', kind: 'test', testIndex: 0, setId: 'harbor', label: 'Harbor', prompt: 'saved prompt', deps: [], refKeys: [] };
+    const newer = { ...legacy, prompt: 'new prompt', test: { action: 'new action', caption: 'new caption' } };
+    const updated = sheet('review', { revision: 2, plan: { 'test:1': newer } });
+    api.getMusicVideoCastAndSets.mockResolvedValueOnce({ stage: updated.castAndSets });
+    api.getMusicVideoProject.mockResolvedValueOnce(updated);
+    render(<Harness initial={sheet('review', { plan: { 'test:1': legacy } })} locked={false} />);
+    await act(async () => { fireEvent.click(card('Harbor').getByRole('button', { name: 'Edit Harbor' })); });
+    expect(api.getMusicVideoProject).toHaveBeenCalledWith('example-project', { silent: true });
+    expect(card('Harbor').getByText('new prompt')).toBeInTheDocument();
+    fireEvent.click(card('Harbor').getByRole('button', { name: 'Edit Harbor' }));
+    expect(card('Harbor').getByLabelText('What happens in the frame').value).toBe('new action');
+  });
+
+  it('keeps a newer socket stage when a stale card refresh finishes later', async () => {
+    const legacy = { key: 'test:1', kind: 'test', testIndex: 0, setId: 'harbor', label: 'Harbor', prompt: 'saved prompt', deps: [], refKeys: [] };
+    const makeStage = (revision) => sheet('review', { revision, plan: { 'test:1': { ...legacy, prompt: `prompt ${revision}`, test: { action: `action ${revision}` } } } });
+    const pending = deferred();
+    api.getMusicVideoCastAndSets.mockResolvedValueOnce({ stage: makeStage(2).castAndSets });
+    api.getMusicVideoProject.mockReturnValueOnce(pending.promise);
+    render(<Harness initial={sheet('review', { plan: { 'test:1': legacy } })} locked={false} />);
+    await act(async () => { fireEvent.click(card('Harbor').getByRole('button', { name: 'Edit Harbor' })); });
+    expect(api.getMusicVideoProject).toHaveBeenCalledTimes(1);
+    await stage(makeStage(3));
+    await act(async () => { pending.resolve(makeStage(2)); });
+    expect(card('Harbor').getByText('prompt 3')).toBeInTheDocument();
+    fireEvent.click(card('Harbor').getByRole('button', { name: 'Edit Harbor' }));
+    expect(card('Harbor').getByLabelText('What happens in the frame').value).toBe('action 3');
+  });
+
+  it('starts a fresh project read after finding a newer card and ignores an earlier read at the same revision', async () => {
+    const legacy = { key: 'test:1', kind: 'test', testIndex: 0, setId: 'harbor', label: 'Harbor', prompt: 'saved prompt', deps: [], refKeys: [] };
+    const initial = sheet('review', { revision: 2, plan: { 'test:1': legacy } });
+    const updated = sheet('review', { revision: 2, plan: { 'test:1': { ...legacy, prompt: 'new prompt', test: { action: 'new action' } } } });
+    const pending = deferred();
+    api.getMusicVideoProject.mockReturnValueOnce(pending.promise).mockResolvedValueOnce(updated);
+    api.getMusicVideoCastAndSets.mockResolvedValue({ stage: updated.castAndSets });
+    render(<Harness initial={initial} locked={false} />);
+    await emit('connect');
+    await act(async () => { fireEvent.click(card('Harbor').getByRole('button', { name: 'Edit Harbor' })); });
+    expect(api.getMusicVideoProject).toHaveBeenCalledTimes(2);
+    expect(card('Harbor').getByText('new prompt')).toBeInTheDocument();
+    await act(async () => { pending.resolve(initial); });
+    expect(card('Harbor').getByText('new prompt')).toBeInTheDocument();
+  });
+
+  it('explains when a stale card cannot refresh automatically', async () => {
+    const legacy = { key: 'test:1', kind: 'test', testIndex: 0, setId: 'harbor', label: 'Harbor', prompt: 'saved prompt', deps: [], refKeys: [] };
+    api.getMusicVideoCastAndSets.mockResolvedValueOnce({ stage: { revision: 2, plan: { 'test:1': legacy } } });
+    api.getMusicVideoProject.mockRejectedValueOnce(new Error('offline'));
+    render(<Harness initial={sheet('review', { plan: { 'test:1': legacy } })} locked={false} />);
+    await act(async () => { fireEvent.click(card('Harbor').getByRole('button', { name: 'Edit Harbor' })); });
+    expect(card('Harbor').getByText(/Refresh the project and try editing/)).toBeInTheDocument();
+    expect(card('Harbor').getByRole('button', { name: 'Edit Harbor' })).toBeEnabled();
+  });
+
+  it('ignores a legacy test read superseded by a newer stage', async () => {
+    const legacy = { key: 'test:1', kind: 'test', testIndex: 0, setId: 'harbor', label: 'Harbor', prompt: 'saved prompt', deps: [], refKeys: [] };
+    const pending = deferred();
+    api.getMusicVideoCastAndSets.mockReturnValue(pending.promise);
+    render(<Harness initial={sheet('review', { plan: { 'test:1': legacy } })} locked={false} />);
+    fireEvent.click(card('Harbor').getByRole('button', { name: 'Edit Harbor' }));
+    await stage(sheet('review', { revision: 2, plan: { 'test:1': { ...legacy, prompt: 'new prompt', test: { action: 'new action', caption: 'new caption' } } } }));
+    expect(card('Harbor').getByRole('button', { name: 'Edit Harbor' })).toBeEnabled();
+    expect(card('Harbor').getByRole('button', { name: 'Regenerate Harbor' })).toBeEnabled();
+    fireEvent.click(card('Harbor').getByRole('button', { name: 'Edit Harbor' }));
+    expect(card('Harbor').getByLabelText('What happens in the frame').value).toBe('new action');
+    await act(async () => { pending.resolve({ stage: { revision: 1, plan: { 'test:1': { ...legacy, test: { action: 'old action' } } } } }); });
+    expect(card('Harbor').getByLabelText('What happens in the frame').value).toBe('new action');
+    expect(card('Harbor').queryByText(/This test changed/)).not.toBeInTheDocument();
+  });
+
+  it('does not let an old legacy read clear a newer pending read', async () => {
+    const legacy = { key: 'test:1', kind: 'test', testIndex: 0, setId: 'harbor', label: 'Harbor', prompt: 'saved prompt', deps: [], refKeys: [] };
+    const first = deferred();
+    const second = deferred();
+    api.getMusicVideoCastAndSets.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+    render(<Harness initial={sheet('review', { plan: { 'test:1': legacy } })} locked={false} />);
+    fireEvent.click(card('Harbor').getByRole('button', { name: 'Edit Harbor' }));
+    const newer = { ...legacy, prompt: 'new prompt' };
+    await stage(sheet('review', { revision: 2, plan: { 'test:1': newer } }));
+    fireEvent.click(card('Harbor').getByRole('button', { name: 'Edit Harbor' }));
+    await act(async () => { first.resolve({ stage: { revision: 1, plan: { 'test:1': { ...legacy, test: { action: 'old action' } } } } }); });
+    expect(card('Harbor').getByRole('button', { name: 'Edit Harbor' })).toBeDisabled();
+    expect(card('Harbor').queryByLabelText('What happens in the frame')).not.toBeInTheDocument();
+    await act(async () => { second.resolve({ stage: { revision: 2, plan: { 'test:1': { ...newer, test: { action: 'new action' } } } } }); });
+    expect(card('Harbor').getByLabelText('What happens in the frame').value).toBe('new action');
+  });
+
+  it('adds another age to the protagonist', async () => {
+    api.editMusicVideoCastAndSetsDirection.mockResolvedValue({ project: sheet('review', { revision: 2 }) });
+    render(<Harness initial={sheet('failed')} locked={false} />);
+    fireEvent.click(card('June').getByRole('button', { name: 'Add another age' }));
+    fireEvent.change(card('June').getByLabelText('Label'), { target: { value: 'Teen' } });
+    fireEvent.change(card('June').getByLabelText('Age'), { target: { value: '17' } });
+    fireEvent.change(card('June').getByLabelText('How they look at that age'), { target: { value: 'lanky, braces' } });
+    fireEvent.change(card('June').getByLabelText('Height at that age'), { target: { value: '5 ft 4 in' } });
+    await act(async () => { fireEvent.click(card('June').getByRole('button', { name: 'Save and re-render' })); });
+    expect(api.editMusicVideoCastAndSetsDirection).toHaveBeenCalledWith('example-project',
+      { protagonist: { forms: [{ label: 'Teen', age: '17', description: 'lanky, braces', height: '5 ft 4 in', hair: '', wardrobe: '', era: '', look: '' }] } }, { silent: true });
+  });
+
+  it('says a sheet in review predates the story and rebuilds it from the story in one tap', async () => {
+    api.discardMusicVideoCastAndSets.mockResolvedValue({ project: { id: 'example-project' } });
+    api.startMusicVideoCastAndSets.mockResolvedValue({ project: sheet('directing', { revision: 2 }) });
+    const Page = () => {
+      const [value, setValue] = useState(sheet('review'));
+      const actions = useMusicVideoCastAndSets({ project: value, replaceProject: setValue });
+      return <CastSetsStage board={{ project: value, locked: false, castSets: actions, kickoff: { running: false }, devArtifacts: { busy: false }, openArtifact: vi.fn(),
+        productionReadiness: { castAndSets: { approved: false, stale: null, storyStale: { changedFields: ['story', 'cast guide'] } } }, approveCastAndSets: actions.approve, skipCastAndSets: actions.skip, ...DRAFTS }} />;
+    };
+    render(<Page />);
+    expect(screen.getByText(/Built before your latest story, cast guide/)).toBeInTheDocument();
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Rebuild from story/ })); });
+    expect(api.discardMusicVideoCastAndSets).toHaveBeenCalledWith('example-project', { silent: true });
+    expect(api.startMusicVideoCastAndSets).toHaveBeenCalledWith('example-project', {}, { silent: true });
+    // While the new direction is written, the banner gives way to progress.
+    expect(screen.queryByRole('button', { name: /Rebuild from story/ })).toBeNull();
+  });
+
+  it('offers to update the images whose Casting references changed (with their dependents), then to add a newly linked character', async () => {
+    api.regenerateMusicVideoCastAndSets.mockResolvedValue({ project: sheet('imaging', { revision: 2 }) });
+    api.getMusicVideoCastAndSetsCastingChanges.mockResolvedValue({ changes: { images: [{ key: 'character', label: 'June' }], cast: [] } });
+    const Page = ({ initial }) => {
+      const [value, setValue] = useState(initial);
+      selectProject = setValue;
+      const actions = useMusicVideoCastAndSets({ project: value, replaceProject: setValue });
+      return <CastSetsStage board={{ project: value, locked: false, castSets: actions, kickoff: { running: false }, devArtifacts: { busy: false }, openArtifact: vi.fn(),
+        productionReadiness: { castAndSets: { approved: true, stale: null, storyStale: null } }, approveCastAndSets: actions.approve, skipCastAndSets: actions.skip, ...DRAFTS }} />;
+    };
+    render(<Page initial={sheet('approved')} />);
+    expect(await screen.findByText(/New Casting images for June\./)).toBeInTheDocument();
+    expect(api.getMusicVideoCastAndSetsCastingChanges).toHaveBeenCalledWith('example-project', { silent: true });
+    // The expression sheet is built on the character sheet, so it re-renders too.
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Update 2 images/ })); });
+    expect(api.regenerateMusicVideoCastAndSets).toHaveBeenCalledWith('example-project', { keys: ['character'] }, { silent: true });
+    // While those re-render the notice gives way to progress.
+    expect(screen.queryByText(/Casting changed since this sheet was built/)).toBeNull();
+
+    api.getMusicVideoCastAndSetsCastingChanges.mockResolvedValue({ changes: { images: [], cast: ['Zora'] } });
+    await act(async () => { selectProject(sheet('review', { revision: 2 })); });
+    expect(await screen.findByText(/Zora is linked in Casting but has no sheet yet\./)).toBeInTheDocument();
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Add Zora to the sheet/ })); });
+    // A direction note, not a discard: a production run's check-in and standing feedback carry over.
+    expect(api.regenerateMusicVideoCastAndSets).toHaveBeenLastCalledWith('example-project',
+      { notes: [{ text: 'Add Zora to the cast from Casting, each with a cast sheet.' }] }, { silent: true });
+    expect(api.discardMusicVideoCastAndSets).not.toHaveBeenCalled();
+  });
+
+  it('hides card actions while working and starts over only after confirming', async () => {
+    const view = render(<Harness initial={sheet('imaging')} locked={false} />);
+    expect(screen.queryByRole('button', { name: 'Regenerate Dad' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Start over/ })).toBeNull();
+    view.unmount();
+    api.discardMusicVideoCastAndSets.mockResolvedValue({ project: { id: 'example-project' } });
+    render(<Harness initial={sheet('failed')} locked={false} />);
+    fireEvent.click(screen.getByRole('button', { name: /Start over/ }));
+    expect(api.discardMusicVideoCastAndSets).not.toHaveBeenCalled();
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Start Cast & Sets over' })); });
+    expect(api.discardMusicVideoCastAndSets).toHaveBeenCalledWith('example-project', { silent: true });
+    expect(screen.queryByText('Cast & Sets check-in')).toBeNull();
   });
 });
 

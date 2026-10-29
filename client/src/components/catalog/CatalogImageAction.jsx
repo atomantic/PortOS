@@ -1,5 +1,5 @@
 import { useCallback } from 'react';
-import { getCatalogIngredientDetails, attachCatalogIngredientMedia, setCatalogIngredientPortrait } from '../../services/apiCatalog';
+import { getCatalogIngredientDetails, attachCatalogIngredientGeneratedImage } from '../../services/apiCatalog';
 import { buildGenerationPromptSeed } from '../../lib/catalogImagePrompt';
 import { getCatalogType } from '../../lib/catalogTypes';
 import GenerateImageControl from './GenerateImageControl';
@@ -19,13 +19,12 @@ export default function CatalogImageAction({ ingredient, getType = getCatalogTyp
   };
   const complete = useCallback(async filename => {
     await getCatalogIngredientDetails(ingredient.id, { silent: true }).then(async details => {
-      const media = details.media || [];
-      if (!media.some(item => item.mediaKey === filename)) {
-        if (media.some(item => item.kind === 'portrait')) await attachCatalogIngredientMedia(ingredient.id, { mediaKey: filename, kind: 'reference' }, { silent: true });
-        else await setCatalogIngredientPortrait(ingredient.id, { mediaKey: filename }, { silent: true });
-      }
-      const portrait = media.find(item => item.kind === 'portrait');
-      onCover?.(`/data/images/${encodeURIComponent(portrait?.mediaKey || filename)}`);
+      // The server chooses the kind under the ingredient lock and leaves a
+      // render the completion hook already filed as is (#13833).
+      const { kind } = await attachCatalogIngredientGeneratedImage(ingredient.id, { mediaKey: filename }, { silent: true });
+      // A reference never becomes the cover; without a known portrait, keep the current one.
+      const coverKey = kind === 'portrait' ? filename : (details.media || []).find(item => item.kind === 'portrait')?.mediaKey;
+      if (coverKey) onCover?.(`/data/images/${encodeURIComponent(coverKey)}`);
     }).catch(error => toast.error(error.message || 'Could not attach the generated image'));
   }, [ingredient.id, onCover]);
 

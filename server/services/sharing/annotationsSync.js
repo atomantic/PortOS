@@ -183,7 +183,7 @@ export async function exportAnnotationsToBucket(bucket, localAnnotations, sender
     // Keep an already-published tombstone verbatim so an unchanged state
     // compares equal below instead of being rewritten with a fresh timestamp.
     const priorEntry = prior.annotations[key];
-    if (priorEntry && priorEntry.starred === false && priorEntry.note === '' && assetKeys.has(key)) {
+    if (priorEntry && priorEntry.starred === false && priorEntry.note === '' && !priorEntry.rating && assetKeys.has(key)) {
       filtered[key] = priorEntry;
       continue;
     }

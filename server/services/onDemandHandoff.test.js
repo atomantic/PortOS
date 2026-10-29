@@ -13,7 +13,7 @@ const request = { id: 'demand-one', taskType: 'security', burn: { maintenanceRun
 beforeEach(async () => {
   world.tasks = []; world.fail = false;
   await updateSchedule(async schedule => {
-    schedule.onDemandRequests = [request]; schedule.onDemandHandoffs = {};
+    schedule.onDemandRequests = [request]; schedule.onDemandHandoffs = {}; schedule.swarmCleanupRefillPending = {};
     return { changed: true };
   });
 });
@@ -79,4 +79,63 @@ it('never overwrites an existing receipt even if the same request is queued agai
   expect(await claimOnDemandRequest(request.id)).toBeNull();
   expect((await getOnDemandHandoffs())[request.id]).toEqual(receipt);
   expect((await loadSchedule()).onDemandRequests).toEqual([request]);
+});
+
+it('requeues an interrupted cleanup refill and keeps its source fence until admission', async () => {
+  const refill = { id: 'refill-one', taskType: 'claim-issue', appId: 'app-one', origin: 'refill', cleanupSourceAgentId: 'agent-one' };
+  await updateSchedule(async schedule => {
+    schedule.onDemandRequests = [refill]; schedule.swarmCleanupRefillPending = { 'agent-one': { ...refill, sourceMarked: true } };
+    return { changed: true };
+  });
+  await claimOnDemandRequest(refill.id);
+  await updateSchedule(async schedule => {
+    schedule.onDemandHandoffs[refill.id].owner = 'previous-process';
+    schedule.onDemandHandoffs[refill.id].ownerPid = 2147483647;
+    return { changed: true };
+  });
+  vi.spyOn(process, 'kill').mockImplementation(() => { throw Object.assign(new Error('gone'), { code: 'ESRCH' }); });
+  expect((await getOnDemandHandoffs())[refill.id]).toBeUndefined();
+  let schedule = await loadSchedule();
+  expect(schedule.onDemandRequests).toEqual([refill]);
+  expect(schedule.swarmCleanupRefillPending['agent-one']).toMatchObject({ id: refill.id, sourceMarked: true });
+  const retry = await claimOnDemandRequest(refill.id);
+  await settleOnDemandRequest(retry, { taskId: 'sys-swarm-refill-agent-one' });
+  schedule = await loadSchedule();
+  expect(schedule.onDemandHandoffs[refill.id]).toMatchObject({ status: 'accepted', taskId: 'sys-swarm-refill-agent-one' });
+  expect(schedule.swarmCleanupRefillPending['agent-one']).toBeUndefined();
+});
+
+it('recognizes a persisted cleanup successor after an interrupted admission', async () => {
+  const refill = { id: 'refill-two', taskType: 'claim-issue', appId: 'app-one', origin: 'refill', cleanupSourceAgentId: 'agent-two' };
+  await updateSchedule(async schedule => {
+    schedule.onDemandRequests = [refill]; schedule.swarmCleanupRefillPending = { 'agent-two': refill };
+    return { changed: true };
+  });
+  await claimOnDemandRequest(refill.id);
+  await updateSchedule(async schedule => {
+    schedule.onDemandHandoffs[refill.id].owner = 'previous-process';
+    schedule.onDemandHandoffs[refill.id].ownerPid = 2147483647;
+    return { changed: true };
+  });
+  vi.spyOn(process, 'kill').mockImplementation(() => { throw Object.assign(new Error('gone'), { code: 'ESRCH' }); });
+  world.tasks = [{ id: 'sys-swarm-refill-agent-two', metadata: { cleanupRefillSource: 'agent-two', idempotencyKey: 'swarm-cleanup-refill:agent-two' } }];
+  expect((await getOnDemandHandoffs())[refill.id]).toMatchObject({ status: 'accepted', taskId: 'sys-swarm-refill-agent-two' });
+  const schedule = await loadSchedule();
+  expect(schedule.onDemandRequests).toEqual([]);
+  // The source has not been marked yet, so replay must retain this receipt.
+  expect(schedule.swarmCleanupRefillPending['agent-two']).toMatchObject({ id: refill.id });
+});
+
+it('requeues a transient admission failure without losing its cleanup source', async () => {
+  const refill = { id: 'refill-three', taskType: 'claim-issue', appId: 'app-one', origin: 'refill', cleanupSourceAgentId: 'agent-three' };
+  await updateSchedule(async schedule => {
+    schedule.onDemandRequests = [refill]; schedule.swarmCleanupRefillPending = { 'agent-three': refill };
+    return { changed: true };
+  });
+  const claim = await claimOnDemandRequest(refill.id);
+  expect(await settleOnDemandRequest(claim, { reason: 'temporarily busy', retry: true })).toBe(true);
+  const schedule = await loadSchedule();
+  expect(schedule.onDemandRequests).toEqual([refill]);
+  expect(schedule.onDemandHandoffs[refill.id]).toBeUndefined();
+  expect(schedule.swarmCleanupRefillPending['agent-three']).toMatchObject({ id: refill.id });
 });

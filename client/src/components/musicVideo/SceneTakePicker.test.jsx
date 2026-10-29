@@ -71,6 +71,18 @@ describe('Swap from unused', () => {
     expect(await screen.findByRole('button', { name: '✕ Bad 0' })).toBeTruthy();
   });
 
+  // Uniquely catches a peer-owned asset vanishing from the pool before its owner has deleted it.
+  it('keeps an asset whose delete is pending on its owner, marked as pending', async () => {
+    api.deleteMusicVideoPoolAssets.mockResolvedValueOnce({ deleted: 0, items: [{ kind: 'image', assetId: 'blurry.png', status: 'pending', pendingDelete: { peerId: 'p1' }, peerName: 'Example Peer' }] });
+    render(<SceneTakePicker open projectId="mv-1" scene={{ sceneId: 's8' }} kind="image" onPlace={vi.fn()} shotNumbers={new Map([['s8', 8]])} />);
+    fireEvent.click(await screen.findByRole('tab', { name: /Floor/ }));
+    fireEvent.click(screen.getByRole('button', { name: '✕ Bad 1' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete 1 bad' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Yes, delete' }));
+    expect(await screen.findByText('Delete pending')).toBeTruthy();
+    expect(screen.getByRole('button', { name: '✕ Bad 1' })).toBeTruthy();
+  });
+
   // Uniquely catches a frame another shot uses dropping out of the picker, or one this slot holds being offered back.
   it('offers a still another shot uses, says where, and never offers to delete it', async () => {
     api.getMusicVideoMediaPool.mockImplementationOnce(async () => ({ items: [

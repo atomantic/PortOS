@@ -16,6 +16,8 @@ export function useBackupRun(onComplete) {
         // The socket error toast already announces the dump failure; acknowledge
         // the file portion without an extra error toast or unqualified success.
         toast(`Backup complete — ${pluralize(filesChanged, 'file')} changed; database dump failed`, { icon: '⚠️' });
+      } else if (result?.status === 'degraded') {
+        toast(`Backup complete — ${pluralize(filesChanged, 'file')} changed; ${result.restoreWarning?.message || result.error || 'snapshot needs attention'}`, { icon: '⚠️' });
       } else {
         toast.success(`Backup complete — ${pluralize(filesChanged, 'file')} changed`, { icon: '💾' });
       }

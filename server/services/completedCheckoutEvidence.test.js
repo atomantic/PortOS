@@ -68,6 +68,12 @@ describe('completed claim checkout evidence', () => {
     expect(await hasCompletedCheckoutEvidence([record], target())).toBe(false);
   });
 
+  it('captures the remaining claimed checkouts when another claimed branch has no checkout (#14103)', async () => {
+    agent.metadata = { ...agent.metadata, claimBranches: ['claim/issue-missing', branch] };
+    const receipts = await captureCompletedCheckouts(agent, { success: true, strict: true });
+    expect(receipts).toEqual([expect.objectContaining({ branch, head })]);
+  });
+
   it('withholds proof for failed, historical, released, unreadable or changed checkouts', async () => {
     expect(await captureCompletedCheckouts(agent, { success: false })).toEqual([]);
     expect(await captureCompletedCheckouts({ ...agent, status: 'completed' }, { success: true })).toEqual([]);

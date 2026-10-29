@@ -26,6 +26,13 @@ import { errorMiddleware } from '../lib/errorHandler.js';
 import { checkHealth, ensureSchema, close, query, withTransaction, POOL_CONFIG } from '../lib/db.js';
 import { requireDbOrSkip } from '../lib/dbTestGate.js';
 
+// Universe canon writes use the same disposable PostgreSQL as catalog rows.
+vi.mock('../lib/pgFileFacade.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, isFileBackend: () => false,
+    createPgFileFacade: (options) => actual.createPgFileFacade({ ...options, isFile: () => false }) };
+});
+
 // Mock embeddings — the bulk-import + restore routes call these; we don't want a
 // network round-trip and the assertions never inspect the vector.
 vi.mock('../services/embeddings.js', () => ({
@@ -33,6 +40,14 @@ vi.mock('../services/embeddings.js', () => ({
   ingredientEmbedSeed: vi.fn((e) => e),
   embedIngredient: vi.fn(async () => ({})),
 }));
+
+// Only keys under this test's prefix resolve as library images; everything
+// else keeps the real resolver.
+vi.mock('../lib/fileUtils.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, resolveImageInputPath: (key, ...rest) => (String(key).startsWith('generated-route-')
+    ? `/example/images/${key}` : actual.resolveImageInputPath(key, ...rest)) };
+});
 
 const catalogDB = await import('../services/catalogDB.js');
 const router = (await import('./catalog.js')).default;
@@ -506,6 +521,23 @@ describe.skipIf(!runDb)('ingredient content and history commit together', () => 
     });
   });
 
+  it('creates a cast record with its family relations, and refuses a missing relative before creating anything', async () => {
+    const nora = await request(makeApp()).post('/api/catalog/ingredients').send({ type: 'character', name: `Nora ${NONCE}` });
+    createdIngredientIds.add(nora.body.id);
+    const mother = await request(makeApp()).post('/api/catalog/ingredients')
+      .send({ type: 'character', name: `Mother ${NONCE}`, relations: [{ toId: nora.body.id, kind: 'mother-of' }] });
+    expect(mother.status).toBe(201);
+    createdIngredientIds.add(mother.body.id);
+    const relations = await request(makeApp()).get(`/api/catalog/ingredients/${nora.body.id}/relations`);
+    expect(relations.body.inbound).toEqual([expect.objectContaining({ fromId: mother.body.id, kind: 'mother-of' })]);
+
+    const name = `Orphan ${NONCE}`;
+    const refused = await request(makeApp()).post('/api/catalog/ingredients')
+      .send({ type: 'character', name, relations: [{ toId: 'cat-chr-missing', kind: 'father-of' }] });
+    expect(refused.status).toBe(404);
+    expect((await catalogDB.listIngredients({ type: 'character', query: name })).items).toEqual([]);
+  });
+
   it('keeps create and update inside a supplied transaction, including reads of uncommitted rows', async () => {
     const id = `cat-chr-owned-${NONCE}`;
     createdIngredientIds.add(id);
@@ -688,7 +720,7 @@ describe.skipIf(!runDb)('POST /api/catalog/scraps/:id/commit — universe bindin
   it('replays a lost response and concurrent commits without duplicating the batch, and rejects changed input', async () => {
     const scrap = await catalogDB.createScrap({ rawText: 'Example receipt source' });
     createdScrapIds.add(scrap.id);
-    await query('INSERT INTO universes (id, name) VALUES ($1, $2) ON CONFLICT DO NOTHING', [UNI, 'Example Universe']);
+    await query(`INSERT INTO universes (id, name, data) VALUES ($1, $2, jsonb_build_object('id', $1::text, 'name', $2::text)) ON CONFLICT DO NOTHING`, [UNI, 'Example Universe']);
     const operationKey = randomUUID();
     receiptKeys.add(operationKey);
     const body = {
@@ -753,7 +785,7 @@ describe.skipIf(!runDb)('POST /api/catalog/scraps/:id/commit — universe bindin
   });
 
   it('links every committed ingredient to the universe with the type-derived role, and clusters the batch with related-to edges', async () => {
-    await query('INSERT INTO universes (id, name) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING', [UNI, `Commit Universe ${NONCE}`]);
+    await query(`INSERT INTO universes (id, name, data) VALUES ($1, $2, jsonb_build_object('id', $1::text, 'name', $2::text)) ON CONFLICT (id) DO NOTHING`, [UNI, `Commit Universe ${NONCE}`]);
     const scrap = await catalogDB.createScrap({ rawText: `Commit binding source ${NONCE}` });
     createdScrapIds.add(scrap.id);
 
@@ -946,7 +978,7 @@ describe.skipIf(!runDb)('GET /api/catalog/facets + ingredient filters (#1762)', 
   });
 
   it('returns the facets envelope with universe membership + bucket counts', async () => {
-    await query('INSERT INTO universes (id, name) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING', [UNI, `Route Universe ${NONCE}`]);
+    await query(`INSERT INTO universes (id, name, data) VALUES ($1, $2, jsonb_build_object('id', $1::text, 'name', $2::text)) ON CONFLICT (id) DO NOTHING`, [UNI, `Route Universe ${NONCE}`]);
     const linked = await catalogDB.createIngredient({ type: 'character', name: `Route Linked ${NONCE}`, tags: [`rt-${NONCE}`] });
     const raw = await catalogDB.createIngredient({ type: 'idea', name: `Route Raw ${NONCE}` });
     createdIngredientIds.add(linked.id);
@@ -1029,5 +1061,27 @@ describe.skipIf(!runDb)('shared card and lock HTTP boundaries', () => {
     expect(response.body.items[0].payload).not.toHaveProperty('voiceCanon');
     expect((await request(makeApp()).get('/api/catalog/ingredient-cards')).status).toBe(400);
     expect((await request(makeApp()).get(`/api/catalog/ingredient-cards?ids=${Array.from({ length: 51 }, (_, i) => `id-${i}`).join(',')}`)).status).toBe(400);
+  });
+});
+
+describe.skipIf(!runDb)('POST /api/catalog/ingredients/:id/media/generated (#13833)', () => {
+  it('files a render once under a server-chosen kind and reports a repeat as already attached', async () => {
+    const ing = await catalogDB.createIngredient({ type: 'character', name: 'Example generated subject' });
+    createdIngredientIds.add(ing.id);
+    const url = `/api/catalog/ingredients/${ing.id}/media/generated`;
+    const first = await request(makeApp()).post(url).send({ mediaKey: `generated-route-${NONCE}-a.png` });
+    expect(first.status).toBe(201);
+    expect(first.body).toMatchObject({ kind: 'portrait', attached: true, media: { kind: 'portrait' } });
+    const second = await request(makeApp()).post(url).send({ mediaKey: `generated-route-${NONCE}-b.png` });
+    expect(second.body).toMatchObject({ kind: 'reference', attached: true });
+    const repeat = await request(makeApp()).post(url).send({ mediaKey: `generated-route-${NONCE}-a.png` });
+    expect(repeat.status).toBe(200);
+    expect(repeat.body).toMatchObject({ kind: 'portrait', attached: false });
+    expect((await catalogDB.listMediaForIngredient(ing.id)).map((m) => [m.mediaKey, m.kind])).toEqual([
+      [`generated-route-${NONCE}-a.png`, 'portrait'], [`generated-route-${NONCE}-b.png`, 'reference'],
+    ]);
+    expect((await request(makeApp()).post(url).send({ mediaKey: `missing-${NONCE}.png` })).status).toBe(422);
+    expect((await request(makeApp()).post('/api/catalog/ingredients/nonexistent/media/generated')
+      .send({ mediaKey: `generated-route-${NONCE}-c.png` })).status).toBe(404);
   });
 });

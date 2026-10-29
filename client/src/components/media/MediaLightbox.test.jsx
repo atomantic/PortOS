@@ -10,8 +10,9 @@ vi.mock('./AddToCollectionMenu', () => ({ default: () => null }));
 vi.mock('./PromptRefineModal', () => ({
   default: ({ open }) => open ? <div data-testid="refine-modal" /> : null,
 }));
-vi.mock('./FilmLookEditor.jsx', () => ({
-  default: ({ open }) => open ? <div data-testid="film-look-editor" /> : null,
+vi.mock('./FilmLookPane.jsx', async (importOriginal) => ({
+  ...(await importOriginal()),
+  default: ({ onBack }) => <div data-testid="film-look-pane"><button type="button" onClick={onBack}>Back to details</button></div>,
 }));
 vi.mock('./PromptFromMedia', () => ({
   default: () => null,
@@ -227,18 +228,52 @@ describe('MediaLightbox Escape cascade', () => {
     expect(screen.getByRole('dialog')).toBeTruthy();
   });
 
-  it('opens the film look editor from the image actions and closes it without closing the lightbox', () => {
+  it('swaps the side pane to film look in place and steps back to details without closing', () => {
     const onClose = vi.fn();
-    render(<MediaLightbox item={imageItem} onClose={onClose} />);
+    const { rerender } = render(<MediaLightbox item={imageItem} onClose={onClose} hasNext onNext={() => {}} />);
 
     fireEvent.click(screen.getByRole('button', { name: 'Film look' }));
-    const editor = screen.getByTestId('film-look-editor');
+    expect(screen.getByTestId('film-look-pane')).toBeTruthy();
+    expect(screen.getByTestId('film-look-image')).toBeTruthy();
+    expect(screen.queryByText(/Image settings/)).toBeNull();
+    // One dialog: the look is tuned inside the viewer, not a second modal.
+    expect(screen.getAllByRole('dialog')).toHaveLength(1);
 
-    fireEvent.keyDown(editor, { key: 'Escape' });
+    // Prev/next keeps the pane open on the next image.
+    rerender(<MediaLightbox item={{ ...imageItem, key: 'image:next.png', filename: 'next.png' }} onClose={onClose} />);
+    expect(screen.getByTestId('film-look-pane')).toBeTruthy();
 
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
     expect(onClose).not.toHaveBeenCalled();
-    expect(screen.queryByTestId('film-look-editor')).toBeNull();
-    expect(screen.getByRole('dialog')).toBeTruthy();
+    expect(screen.queryByTestId('film-look-pane')).toBeNull();
+    expect(screen.getByText(/Image settings/)).toBeTruthy();
+  });
+
+  it('hides the film look pane on a video so no filter runs over playback', () => {
+    HTMLMediaElement.prototype.play = vi.fn().mockResolvedValue(undefined);
+    const { rerender } = render(<MediaLightbox item={imageItem} onClose={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Film look' }));
+    rerender(<MediaLightbox item={videoItem} onClose={() => {}} />);
+    expect(screen.queryByTestId('film-look-pane')).toBeNull();
+    expect(screen.queryByTestId('film-look-image')).toBeNull();
+    delete HTMLMediaElement.prototype.play;
+  });
+
+  it('rates the item good or bad beside the star, and a tap on the active rating clears it', () => {
+    const onAnnotationChange = vi.fn();
+    const { rerender } = render(<MediaLightbox item={imageItem} onClose={() => {}} annotation={{}} onAnnotationChange={onAnnotationChange} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Bad' }));
+    expect(onAnnotationChange).toHaveBeenLastCalledWith({ rating: 'bad' });
+    rerender(<MediaLightbox item={imageItem} onClose={() => {}} annotation={{ rating: 'bad' }} onAnnotationChange={onAnnotationChange} />);
+    expect(screen.getByRole('button', { name: 'Bad' })).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(screen.getByRole('button', { name: 'Bad' }));
+    expect(onAnnotationChange).toHaveBeenLastCalledWith({ rating: null });
+    // A page with its own rating store takes the slot instead.
+    const onRate = vi.fn();
+    rerender(<MediaLightbox item={imageItem} onClose={() => {}} annotation={{ rating: 'bad' }} onAnnotationChange={onAnnotationChange} ratingControl={{ value: 'good', onRate }} />);
+    expect(screen.getByRole('button', { name: 'Good' })).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(screen.getByRole('button', { name: 'Bad' }));
+    expect(onRate).toHaveBeenCalledWith('bad');
   });
 
   it('closes the lightbox when Escape is pressed with nothing else open', () => {

@@ -17,6 +17,25 @@ export const getCatalogStats = (options) => request('/catalog/stats', options);
 // { types, universes, series, tags, unlinkedCount, orphanedCount, total }.
 export const getCatalogFacets = (options) => request('/catalog/facets', options);
 
+// --- Stories (storyboards, music videos, series) ------------------------
+
+export const listCatalogStories = (type, options) =>
+  request(`/catalog/stories?${new URLSearchParams({ type })}`, options);
+
+export const draftCatalogStoryMember = (body, options) =>
+  request('/catalog/stories/draft', { method: 'POST', body: JSON.stringify(body), ...options });
+
+export const joinCatalogStory = (kind, id, ingredientId, options) =>
+  request(`/catalog/stories/${enc(kind)}/${enc(id)}/members`, { method: 'POST', body: JSON.stringify({ ingredientId }), ...options });
+
+// A music video's subjects with their linked record or a suggested one (same
+// name, the age form "(17)" names); linking sets or clears ingredientId + form.
+export const listVideoSubjectLinks = (projectId, type, options) =>
+  request(`/catalog/stories/music-video/${enc(projectId)}/subjects${type ? `?${new URLSearchParams({ type })}` : ''}`, options);
+
+export const linkVideoSubjects = (projectId, links, options) =>
+  request(`/catalog/stories/music-video/${enc(projectId)}/subjects/link`, { method: 'POST', body: JSON.stringify({ links }), ...options });
+
 // --- Scraps -------------------------------------------------------------
 
 export const createCatalogScrap = (body = {}, options) =>
@@ -189,6 +208,10 @@ export const unlinkCatalogIngredient = (id, body, options) =>
 export const listCatalogIngredientsForRef = (refKind, refId, options) =>
   request(`/catalog/refs/${enc(refKind)}/${enc(refId)}/ingredients`, options);
 
+// What a character's family adds to an image render (labeled additions + relatives' images).
+export const getCatalogFamilyContext = (id, options) =>
+  request(`/catalog/ingredients/${enc(id)}/family-context`, options);
+
 export const linkCatalogIngredientRelation = (id, body, options) =>
   request(`/catalog/ingredients/${enc(id)}/relations`, { method: 'POST', body: JSON.stringify(body), ...options });
 
@@ -205,6 +228,11 @@ export const attachCatalogIngredientMedia = (id, body, options) =>
 
 export const setCatalogIngredientPortrait = (id, body, options) =>
   request(`/catalog/ingredients/${enc(id)}/media/portrait`, { method: 'POST', body: JSON.stringify(body), ...options });
+
+// Attach a just-rendered image; the server picks portrait vs reference and
+// returns `{ media, kind, attached }` (attached:false when already filed).
+export const attachCatalogIngredientGeneratedImage = (id, body, options) =>
+  request(`/catalog/ingredients/${enc(id)}/media/generated`, { method: 'POST', body: JSON.stringify(body), ...options });
 
 export const detachCatalogIngredientMedia = (id, body, options) =>
   request(`/catalog/ingredients/${enc(id)}/media`, { method: 'DELETE', body: JSON.stringify(body), ...options });
@@ -232,6 +260,10 @@ export const previewCatalogSheet = (id, body = {}, options) =>
 
 export const renderCatalogSheet = (id, body = {}, options) =>
   request(`/catalog/ingredients/${enc(id)}/sheets`, { method: 'POST', body: JSON.stringify(body), ...options });
+// Remove a universe-canon sheet, bound to the file shown; returns
+// `{ filename, pointers, updatedAt }`.
+export const removeCatalogPointerSheet = (id, variant, filename, options) =>
+  request(`/catalog/ingredients/${enc(id)}/sheets/pointer?variant=${enc(variant)}&filename=${enc(filename)}`, { method: 'DELETE', ...options });
 
 // --- Bulk import / export ----------------------------------------------
 

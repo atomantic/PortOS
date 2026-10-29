@@ -45,7 +45,7 @@ import { remainingActionBudget } from '../lib/domainBudgets.js';
 import { getDomainBudgetStatus } from './domainUsage.js';
 import { pendingCosActionReservations } from './cosAdmissionReservations.js';
 import { cosEvents, emitLog } from './cosEvents.js';
-import { addTask, updateTask, getAllTasks, getCosTasks, reconcileLegacyForgeMaintenanceTasks } from './cosTaskStore.js';
+import { addTask, updateTask, getAllTasks, getCosTasks, getTaskById, reconcileLegacyForgeMaintenanceTasks } from './cosTaskStore.js';
 import { PRIORITY_VALUES } from '../lib/taskParser.js';
 import { recordDecision, DECISION_TYPES } from './decisionLog.js';
 import { isAppOnCooldown, markAppReviewCooldown, bindAppReviewAgent, markIdleReviewStarted, getNextAppForReview, loadAppActivity, isAppActivityOnCooldown } from './appActivity.js';
@@ -53,6 +53,7 @@ import { getActiveApps, getAppTaskTypeOverrides } from './apps.js';
 // The single Priority-0 on-demand loop body, shared with the dequeueNextTask
 // engine in cos.js so the two can no longer drift (#6618).
 import { drainOnDemandRequests } from './onDemandDrain.js';
+import { beginPreflightActivity } from './preflightActivity.js';
 import { admitFeatureAgentTasks, admitIdleReviewTask, countUnregisteredInFlight, isUserTaskRunnableUnattended } from './cosDequeue.js';
 import { spawningTasks } from './agentState.js';
 import { resolveAgentProviderPin } from './appTaskProviderPin.js';
@@ -257,8 +258,9 @@ const AUTO_APPROVED_GATES = Object.freeze([
   {
     name: 'disabled-analysis-type',
     rejects: (task, hooks) => hooks.extraSkip(task),
-    onReject: async (task) => {
-      emitLog('info', `System task skipped — task type '${analysisTypeForTask(task)}' is disabled`, { taskId: task.id });
+    onReject: async (task, { detail }) => {
+      emitLog('info', typeof detail === 'string' ? `System task deferred — ${detail}`
+        : `System task skipped — task type '${analysisTypeForTask(task)}' is disabled`, { taskId: task.id });
     },
   },
   {
@@ -553,8 +555,15 @@ export async function resolveAutonomyBudget(state, runningAgentEntries) {
 // current schedule key, or they would read as disabled and never drain.
 const analysisTypeForTask = (task) => currentTaskTypeName(task.metadata?.analysisType || task.metadata?.selfImprovementType);
 
-function isDisabledAnalysisType(task, taskSchedule) {
+async function isDisabledAnalysisType(task, taskSchedule) {
   const analysisType = analysisTypeForTask(task);
+  if (['release-sync', 'do-release'].includes(analysisType)) {
+    const { releaseTaskDispatchDisposition } = await import('./releaseSynchronization.js');
+    const disposition = await releaseTaskDispatchDisposition(task);
+    if (disposition === 'registered-continuation') return false;
+    if (disposition === 'retired-continuation') return 'the previous release synchronization was retired by an operator';
+    if (disposition === 'wait-for-synchronization') return 'previous release is published; development synchronization and cleanup are unfinished';
+  }
   // The shared drain contract always supplies a schedule. If that contract is
   // ever violated, fail closed for scheduled analysis work without aborting the
   // rest of the evaluation cycle.
@@ -726,6 +735,7 @@ async function spawnPriority0OnDemand(ctx) {
       (spawnProjectCounts[appId || '_self'] || 0) >= perProjectLimit,
     canSpawn: spawnAdapter.canSpawn,
     emitSpawn: spawnAdapter.emitSpawn,
+    deferPreflightDispatch: spawnAdapter.deferPreflightDispatch,
   });
   return { schedule };
 }
@@ -965,11 +975,38 @@ export async function evaluateTasks(options) {
     const project = task.metadata?.app || '_self';
     spawnProjectCounts[project] = (spawnProjectCounts[project] || 0) + 1;
   };
+  // An admission here is only an in-memory pick. Keep its card and activity
+  // alive until the loop below actually emits task:ready; a later tier may fail.
+  const deferredPreflights = new Map();
+  const deferPreflightDispatch = (taskId, entry) => {
+    if (!taskId || deferredPreflights.has(taskId)) throw new Error('Cannot defer preflight for a missing or duplicate task');
+    deferredPreflights.set(taskId, { ...entry, attempted: false });
+  };
+  const settleDeferredPreflight = async (taskId, emitted) => {
+    const entry = deferredPreflights.get(taskId);
+    if (!entry) return;
+    deferredPreflights.delete(taskId);
+    try {
+      const { finishPreflightCard, finishPreflightDispatch } = await import('./preflightTaskCard.js');
+      if (emitted) await finishPreflightDispatch(entry.cardId, entry.resultTaskId);
+      else await finishPreflightCard(entry.cardId, {
+        outcome: 'failed', reason: 'dispatch-interrupted',
+        note: entry.persisted || entry.attempted
+          ? 'The handoff did not finish. Inspect the task and activity log before trying again.'
+          : 'The handoff did not finish. Check the activity log and run again.',
+      });
+    } catch (error) {
+      console.error(`❌ Could not settle preflight card ${entry.cardId}: ${error.message}`);
+    } finally {
+      entry.endPreflight();
+    }
+  };
   // The adapter every tier hands to its shared admission pass, unchanged. Those
   // passes also serve dequeueNextTask (cos.js), which dispatches and counts
   // through different objects, so they take emit and track as separate hooks;
   // here `admitSpawn` already does both, so the track hook is inert.
-  const spawnAdapter = Object.freeze({ canSpawn: canSpawnTask, emitSpawn: admitSpawn, trackSpawn: () => {}, isOwned: isTaskOwned });
+  const spawnAdapter = Object.freeze({ canSpawn: canSpawnTask, emitSpawn: admitSpawn, trackSpawn: () => {},
+    isOwned: isTaskOwned, deferPreflightDispatch });
 
   // Check if there are pending user tasks (even if on cooldown). If user tasks
   // exist, don't run self-improvement — wait for user tasks to be ready.
@@ -996,58 +1033,66 @@ export async function evaluateTasks(options) {
     spawnAdapter,
   });
 
-  // Priority 0 (on-demand) spends against the global slot cap and runs even when
-  // paused — an explicit user "Run" bypasses the global pause.
-  const { schedule: taskSchedule } = await spawnPriority0OnDemand(ctx);
-
-  // Every tier below is scheduled/autonomous/user work that the global pause
-  // stops. When paused we skip them and let the shared spawn loop below emit just
-  // the on-demand tasks Priority 0 collected.
-  if (!paused) {
-    // Priority 1 spends against the global slot cap.
-    await spawnPriority1UserTasks(ctx);
-
-    // Ceiling for AUTOMATIC admissions this cycle (#711). User and on-demand
-    // tasks already bypassed the mode gate; on-demand also bypasses pause. The
-    // automatic tiers may add at most `autonomousActionsRemaining` more tasks.
-    // On-demand runs still count as non-user work in the completion ledger and
-    // subsequent in-flight allowance; only user tasks are exempt. With no action
-    // cap this equals `availableSlots`.
-    const autonomousSlotCeiling = Math.min(availableSlots, tasksToSpawn.length + autonomousActionsRemaining);
-
-    // Priorities 2, 3.6, 4 spend against the lower autonomous ceiling.
-    await spawnPriority2AutoApproved(ctx, { taskSchedule, autonomousSlotCeiling });
-    await maybeQueueImprovementTasks(ctx);
-    await spawnPriority36FeatureAgents(ctx, { autonomousSlotCeiling });
-    await spawnPriority4IdleReview(ctx, { autonomousSlotCeiling });
-  }
-
-  // Emit evaluation status
   const pendingUserCount = userTaskData.grouped?.pending?.length || 0;
   const inProgressCount = userTaskData.grouped?.in_progress?.length || 0;
   const pendingSystemCount = cosTaskData.grouped?.pending?.length || 0;
 
-  const evalLevel = tasksToSpawn.length > 0 ? 'info' : 'debug';
-  emitLog(evalLevel, `Evaluation: ${pendingUserCount} user pending, ${inProgressCount} in_progress, ${pendingSystemCount} system, spawning ${tasksToSpawn.length}`, {
-    pendingUser: pendingUserCount,
-    inProgress: inProgressCount,
-    pendingSystem: pendingSystemCount,
-    toSpawn: tasksToSpawn.length,
-    availableSlots
-  });
+  try {
+    // Priority 0 (on-demand) spends against the global slot cap and runs even when
+    // paused — an explicit user "Run" bypasses the global pause.
+    const { schedule: taskSchedule } = await spawnPriority0OnDemand(ctx);
 
-  // Note: Performance summaries, learning insights, and rehabilitation checks
-  // are now handled by dedicated maintenance intervals (cos-performance-summary,
-  // cos-learning-insights, cos-rehabilitation-check) instead of evalCount gating.
+    // Every tier below is scheduled/autonomous/user work that the global pause
+    // stops. When paused we skip them and let the shared spawn loop below emit just
+    // the on-demand tasks Priority 0 collected.
+    if (!paused) {
+      // Priority 1 spends against the global slot cap.
+      await spawnPriority1UserTasks(ctx);
 
-  // Spawn all ready tasks (up to available slots)
-  for (const task of tasksToSpawn) {
-    emitLog('success', `Spawning task: ${task.id} (${task.priority || 'MEDIUM'})`, {
-      taskId: task.id,
-      taskType: task.taskType,
-      app: task.metadata?.app
+      // Ceiling for AUTOMATIC admissions this cycle (#711). User and on-demand
+      // tasks already bypassed the mode gate; on-demand also bypasses pause. The
+      // automatic tiers may add at most `autonomousActionsRemaining` more tasks.
+      // On-demand runs still count as non-user work in the completion ledger and
+      // subsequent in-flight allowance; only user tasks are exempt. With no action
+      // cap this equals `availableSlots`.
+      const autonomousSlotCeiling = Math.min(availableSlots, tasksToSpawn.length + autonomousActionsRemaining);
+
+      // Priorities 2, 3.6, 4 spend against the lower autonomous ceiling.
+      await spawnPriority2AutoApproved(ctx, { taskSchedule, autonomousSlotCeiling });
+      await maybeQueueImprovementTasks(ctx);
+      await spawnPriority36FeatureAgents(ctx, { autonomousSlotCeiling });
+      await spawnPriority4IdleReview(ctx, { autonomousSlotCeiling });
+    }
+
+    // Emit evaluation status
+    const evalLevel = tasksToSpawn.length > 0 ? 'info' : 'debug';
+    emitLog(evalLevel, `Evaluation: ${pendingUserCount} user pending, ${inProgressCount} in_progress, ${pendingSystemCount} system, spawning ${tasksToSpawn.length}`, {
+      pendingUser: pendingUserCount,
+      inProgress: inProgressCount,
+      pendingSystem: pendingSystemCount,
+      toSpawn: tasksToSpawn.length,
+      availableSlots
     });
-    cosEvents.emit('task:ready', task);
+
+    // Note: Performance summaries, learning insights, and rehabilitation checks
+    // are now handled by dedicated maintenance intervals (cos-performance-summary,
+    // cos-learning-insights, cos-rehabilitation-check) instead of evalCount gating.
+
+    // Spawn all ready tasks (up to available slots)
+    for (const task of tasksToSpawn) {
+      emitLog('success', `Spawning task: ${task.id} (${task.priority || 'MEDIUM'})`, {
+        taskId: task.id,
+        taskType: task.taskType,
+        app: task.metadata?.app
+      });
+      const entry = deferredPreflights.get(task.id);
+      if (entry) entry.attempted = true;
+      const emitted = cosEvents.emit('task:ready', task);
+      if (entry) await settleDeferredPreflight(task.id, emitted);
+    }
+  } finally {
+    // A failed tier (or an interrupted dispatch) must not claim a handoff.
+    for (const taskId of deferredPreflights.keys()) await settleDeferredPreflight(taskId, false);
   }
 
   // Emit awaiting approval count if any
@@ -1086,7 +1131,7 @@ export async function evaluateTasks(options) {
  * @param {Object} options - Completion exclusion and optional app eligibility
  * @returns {Object} Task plus deferred dispatch/card handoff, or a null task
  */
-export async function generateIdleReviewTask(state, { ignoreTaskId = null, isAppEligible = () => true } = {}) {
+export async function generateIdleReviewTask(state, { ignoreTaskId = null, isAppEligible = () => true, onPreflightStart = null } = {}) {
   if (!isImprovementEnabled(state)) {
     emitLog('debug', 'Improvement tasks are disabled');
     return { task: null, pendingPerpetualDispatch: null, preflightCardId: null };
@@ -1116,7 +1161,7 @@ export async function generateIdleReviewTask(state, { ignoreTaskId = null, isApp
         await saveState(s);
       });
 
-      const { task: idleTask, pendingPerpetualDispatch, preflightCardId } = await generateManagedAppImprovementTask(nextApp, state, { ignoreTaskId });
+      const { task: idleTask, pendingPerpetualDispatch, preflightCardId } = await generateManagedAppImprovementTask(nextApp, state, { ignoreTaskId, onPreflightStart });
       // Only bind the active marker once a real task exists.
       if (idleTask) {
         await bindAppReviewAgent(nextApp.id, `idle-review-${Date.now()}`);
@@ -1160,7 +1205,7 @@ export async function generateIdleReviewTask(state, { ignoreTaskId = null, isApp
  * it). Without it the completing task would make its own app look busy and
  * block the next perpetual run.
  */
-export function buildImprovementDedupSets(existingTasks, { ignoreTaskId = null } = {}) {
+export function buildImprovementDedupSets(existingTasks, { ignoreTaskId = null, cleanupOnlyIds = new Set() } = {}) {
   const existingTaskTypes = new Set();
   // Apps that already have *any* pending/in_progress/failure-blocked improvement
   // task. We cap each app at one queued improvement at a time to avoid a fan-out
@@ -1171,7 +1216,7 @@ export function buildImprovementDedupSets(existingTasks, { ignoreTaskId = null }
   const appsWithBlockedImprovement = new Map();
 
   for (const task of existingTasks) {
-    if (task.id === ignoreTaskId) continue;
+    if (task.id === ignoreTaskId || cleanupOnlyIds.has(task.id)) continue;
     const isActive = task.status === 'pending' || task.status === 'in_progress';
     const isBlocked = task.status === 'blocked';
     const isFailureBlocked = isBlocked && task.metadata?.blockedCategory !== 'user-terminated';
@@ -1259,6 +1304,7 @@ export async function queueDueInstallWideImprovementTasks({
  */
 export async function queueEligibleImprovementTasks(state, cosTaskData, {
   ignoreTaskId = null, wakeAfterRecord = true, perpetualContinuation = null,
+  continuationSourceAgentId = null,
   prepareTask = prepareManagedAppImprovementTask, persistTask = addTask
 } = {}) {
   const taskSchedule = await import('./taskSchedule.js');
@@ -1266,18 +1312,35 @@ export async function queueEligibleImprovementTasks(state, cosTaskData, {
 
   if (!isImprovementEnabled(state)) return;
 
+  // A crash may occur after the exact successor was stored but before the
+  // source receipt was marked. Recognize it even in task history, before its
+  // active row can block the ordinary per-app deduplication below.
+  if (continuationSourceAgentId) {
+    const existing = await getTaskById(`sys-swarm-refill-${continuationSourceAgentId}`);
+    if (existing?.taskType === 'internal' && existing.metadata?.cleanupRefillSource === continuationSourceAgentId
+      && existing.metadata.idempotencyKey === `swarm-cleanup-refill:${continuationSourceAgentId}`
+      && existing.metadata.app === perpetualContinuation?.appId
+      && existing.metadata.analysisType === perpetualContinuation?.taskType) {
+      return { queued: 0, continuationSatisfied: true };
+    }
+  }
+
   // Existing active AND blocked system tasks feed the dedup sets — see
   // buildImprovementDedupSets for the occupancy semantics (#2614). The same
   // `ignoreTaskId` is forwarded to addTask below so its disk-level duplicate
   // scan ignores it too.
   const existingTasks = cosTaskData.tasks || [];
+  const cleanupOnlyIds = await (await import('./swarmCleanupDelivery.js')).verifiedCleanupSwarmTaskIds(existingTasks,
+    { allowSourceAgentId: continuationSourceAgentId })
+    .catch(() => new Set());
   const { existingTaskTypes, appsWithPendingImprovement, blockedTaskTypes, appsWithBlockedImprovement } =
-    buildImprovementDedupSets(existingTasks, { ignoreTaskId });
+    buildImprovementDedupSets(existingTasks, { ignoreTaskId, cleanupOnlyIds });
 
   // One clock for the whole tick: cron eligibility lasts a single minute, and
   // preparing earlier apps can take longer than that (#11755).
   const tickNow = Date.now();
   let queued = 0;
+  let continuationSatisfied = false;
 
   // Install-wide task types have no managed-app target: their cadence is
   // tracked by the global execution record, and one task is the complete run
@@ -1289,7 +1352,7 @@ export async function queueEligibleImprovementTasks(state, cosTaskData, {
   // that is independently due must get its own lane. The dedup key is the bare
   // analysis type, matching buildImprovementDedupSets for globally-scoped tasks
   // and ensuring one pending/blocked task suppresses only its own duplicate.
-  queued += await queueDueInstallWideImprovementTasks({
+  if (!continuationSourceAgentId) queued += await queueDueInstallWideImprovementTasks({
     dueTasks: await getDueTasks(null, { now: tickNow }), state, taskSchedule, existingTaskTypes,
     blockedTaskTypes, ignoreTaskId, wakeAfterRecord
   });
@@ -1304,16 +1367,18 @@ export async function queueEligibleImprovementTasks(state, cosTaskData, {
   const activitySnapshot = await loadAppActivity().catch(() => ({ apps: {} }));
 
   // Queue eligible improvement tasks for all managed apps (including PortOS)
-  const apps = await getActiveApps().catch(() => []);
+  const apps = (await getActiveApps().catch(() => []))
+    .filter(app => !continuationSourceAgentId || app.id === perpetualContinuation?.appId);
   // Snapshot every app's due set against `tickNow` BEFORE any prepareTask runs:
   // prepare does network and git work, so evaluating lazily would judge later
   // apps against a clock that already left the cron minute.
   const appDueSnapshots = [];
   for (const app of apps) {
     const continuingTaskType = perpetualContinuation?.appId === app.id ? perpetualContinuation.taskType : null;
+    const dueTasks = await getDueTasks(app.id, { continuingTaskType, now: tickNow });
     appDueSnapshots.push({
       app, continuingTaskType,
-      dueTasks: await getDueTasks(app.id, { continuingTaskType, now: tickNow })
+      dueTasks: continuationSourceAgentId ? dueTasks.filter(row => row.taskType === continuingTaskType) : dueTasks
     });
   }
 
@@ -1395,14 +1460,22 @@ export async function queueEligibleImprovementTasks(state, cosTaskData, {
       // (which use MEDIUM priority + `app-improve-*` id).
       task.priority = 'LOW';
       task.priorityValue = PRIORITY_VALUES.LOW;
-      task.id = `sys-${app.id.slice(0, 8)}-${nextType}-${Date.now().toString(36)}`;
+      task.id = continuationSourceAgentId ? `sys-swarm-refill-${continuationSourceAgentId}`
+        : `sys-${app.id.slice(0, 8)}-${nextType}-${Date.now().toString(36)}`;
+      if (continuationSourceAgentId) task.metadata = { ...task.metadata, cleanupRefillSource: continuationSourceAgentId };
 
       // Queue path: addTask's raw branch persists the task through COS-TASKS.md,
       // which folds multi-line descriptions to first line + full body in
       // metadata.prompt (#4153). On-demand path: emits unpersisted task on
       // task:ready, renders full description via getTaskPrompt.
-      const newTask = await persistTask(task, 'internal', { raw: true, ignoreTaskId, suppressDequeue: true });
-      if (newTask?.duplicate) continue;
+      const newTask = await persistTask(task, 'internal', { raw: true, ignoreTaskId, suppressDequeue: true,
+        ...(continuationSourceAgentId && { idempotencyKey: `swarm-cleanup-refill:${continuationSourceAgentId}` }) });
+      if (newTask?.duplicate) {
+        if (continuationSourceAgentId && newTask.id === task.id) continuationSatisfied = true;
+        continue;
+      }
+      if (newTask?.error) throw new Error(newTask.error);
+      if (continuationSourceAgentId) continuationSatisfied = true;
       // Recorded from `pendingPerpetualDispatch` — the RECORD prepare returned —
       // never from `task` or `newTask`: addTask hands back a different object
       // whenever the description is multi-line, so recording must not depend on
@@ -1423,6 +1496,7 @@ export async function queueEligibleImprovementTasks(state, cosTaskData, {
   if (queued > 0) {
     emitLog('info', `Queued ${queued} improvement task(s) to system tasks`);
   }
+  if (continuationSourceAgentId) return { queued, continuationSatisfied };
 }
 
 /**
@@ -1654,8 +1728,11 @@ export async function generateSelfImprovementTaskForType(taskType, state, option
   // Resolve that token here so the global/on-demand path gets the same reviewer
   // contract and local-review procedure as an app-scoped release task.
   if (description.includes('{reviewers}')) {
-    const codeReviewDefaults = await getCodeReviewDefaults().catch(() => null);
-    const reviewers = resolveClaimReviewerConfig(metadata, codeReviewDefaults, codeReviewDefaults?.reviewers);
+    const [codeReviewDefaults, providers] = await Promise.all([
+      getCodeReviewDefaults().catch(() => null),
+      import('./providers.js').then(m => m.listProviders()).catch(() => [])
+    ]);
+    const reviewers = resolveClaimReviewerConfig(metadata, codeReviewDefaults, codeReviewDefaults?.reviewers, providers);
     Object.assign(metadata, reviewerConfigMetadata(reviewers));
     description = description
       .replace(/\{reviewers\}/g, () => reviewers.csv)
@@ -1810,7 +1887,7 @@ export function applyAppWorktreeDefault(metadata, app) {
   }
 }
 
-async function generateManagedAppImprovementTask(app, state, { ignoreTaskId = null } = {}) {
+async function generateManagedAppImprovementTask(app, state, { ignoreTaskId = null, onPreflightStart = null } = {}) {
   const taskSchedule = await import('./taskSchedule.js');
 
   // First, check for any on-demand task requests for this app
@@ -1833,75 +1910,94 @@ async function generateManagedAppImprovementTask(app, state, { ignoreTaskId = nu
   // `params`), forwarded exactly as the on-demand drain forwards them.
   let stolenRunOverrides = null;
   let stolenRequest = null;
+  let endPreflight = () => {};
+  let transferred = false;
 
-  if (appRequests.length > 0) {
-    const request = await taskSchedule.clearOnDemandRequest(appRequests[0].id);
-    if (!request) {
-      // Another drain (or cancellation) owns this receipt. Returning its card
-      // would let the idle tier close the winner's still-running preflight.
-      return { task: null, pendingPerpetualDispatch: null, preflightCardId: null };
+  try {
+    if (appRequests.length > 0) {
+      const { cardIdForRequest, reportPreflightStep } = await import('./preflightTaskCard.js');
+      endPreflight = beginPreflightActivity(cardIdForRequest(appRequests[0]));
+      const request = await taskSchedule.clearOnDemandRequest(appRequests[0].id);
+      if (!request) {
+        // Another drain (or cancellation) owns this receipt. Returning its card
+        // would let the idle tier close the winner's still-running preflight.
+        return { task: null, pendingPerpetualDispatch: null, preflightCardId: null };
+      }
+      stolenRequest = request;
+      targetPullRequest = request.targetPullRequest ?? null;
+      stolenRunOverrides = request.burn?.overrides?.params ?? null;
+      stolenCardId = cardIdForRequest(request);
+      if (stolenCardId && onPreflightStart) {
+        onPreflightStart(stolenCardId, endPreflight);
+        transferred = true;
+      }
+      await reportPreflightStep(stolenCardId, 'prepare');
+      // Only a human "Run" may clear the drain's brakes (park state, dispatch
+      // count); the policy lives in applyOnDemandRunResets so this idle-review
+      // path can't drift from the shared on-demand drain — without it,
+      // a currently drain-capped or parked perpetual type dequeued here stays
+      // capped/parked and the explicit "Run" silently produces no task.
+      await taskSchedule.applyOnDemandRunResets(request, app.id);
+      nextType = request.taskType;
+      selectionReason = 'on-demand';
+      emitLog('info', `Processing on-demand app task request: ${nextType} for ${app.name}`, { requestId: request.id });
+    } else {
+      // Use the schedule service to determine the next task type
+      const nextTypeResult = await taskSchedule.getNextTaskType(app.id);
+
+      if (!nextTypeResult) {
+        emitLog('info', `No app improvement tasks are eligible for ${app.name} based on schedule`);
+        // `stolenCardId`, never a literal null: this branch happens to be the one
+        // where no steal occurred, but a later early return added above it would
+        // strand the card all over again.
+        return { task: null, pendingPerpetualDispatch: null, preflightCardId: stolenCardId };
+      }
+
+      nextType = nextTypeResult.taskType;
+      selectionReason = nextTypeResult.reason;
     }
-    stolenRequest = request;
-    targetPullRequest = request.targetPullRequest ?? null;
-    stolenRunOverrides = request.burn?.overrides?.params ?? null;
-    const { cardIdForRequest } = await import('./preflightTaskCard.js');
-    stolenCardId = cardIdForRequest(request);
-    // Only a human "Run" may clear the drain's brakes (park state, dispatch
-    // count); the policy lives in applyOnDemandRunResets so this idle-review
-    // path can't drift from the shared on-demand drain — without it,
-    // a currently drain-capped or parked perpetual type dequeued here stays
-    // capped/parked and the explicit "Run" silently produces no task.
-    await taskSchedule.applyOnDemandRunResets(request, app.id);
-    nextType = request.taskType;
-    selectionReason = 'on-demand';
-    emitLog('info', `Processing on-demand app task request: ${nextType} for ${app.name}`, { requestId: request.id });
-  } else {
-    // Use the schedule service to determine the next task type
-    const nextTypeResult = await taskSchedule.getNextTaskType(app.id);
 
-    if (!nextTypeResult) {
-      emitLog('info', `No app improvement tasks are eligible for ${app.name} based on schedule`);
-      // `stolenCardId`, never a literal null: this branch happens to be the one
-      // where no steal occurred, but a later early return added above it would
-      // strand the card all over again.
-      return { task: null, pendingPerpetualDispatch: null, preflightCardId: stolenCardId };
+    // Delegate the actual task build to the per-type generator so the dynamic
+    // blocks run on the idle-review path too: pr-watcher's PR poll +
+    // {prData}/{repoFullName}/{defaultBranch} injection, and reference-watch's
+    // {referenceData} injection. Without delegation this path replaced only the
+    // generic placeholders, so a watcher type selected here would spawn a prompt
+    // with the literal {prData}/{referenceData} markers and never poll. The
+    // preparer owns skip cadence and success activity/logging; this caller
+    // records execution only when preparation produces a task.
+    const prepared = await prepareManagedAppImprovementTask(nextType, app, state, {
+      ignoreTaskId,
+      targetPullRequest,
+      onDemand: selectionReason === 'on-demand',
+      runOverrides: stolenRunOverrides,
+      providerOverride: stolenRequest?.providerOverride ?? null,
+      // The deterministic pre-agent work (pr-reviewer's security preflight)
+      // reports into the stolen Run's card as it runs, exactly as it does on the
+      // on-demand drain — this is the whole reason the card is opened early.
+      preflightCardId: stolenCardId
+    });
+    const { task, pendingPerpetualDispatch } = prepared;
+    if (task) await taskSchedule.recordExecution(`task:${nextType}`, app.id);
+    // Idle-review can steal a queued on-demand request for this app. That
+    // request is still a user Run — apply the same consent as Priority 0.
+    if (stolenRequest) {
+      applyOnDemandConsent(task);
+      if (task) task.metadata = { ...(task.metadata || {}), ...onDemandRequestMetadata(stolenRequest) };
     }
-
-    nextType = nextTypeResult.taskType;
-    selectionReason = nextTypeResult.reason;
+    // The card is closed by whoever rules on the task (the spawn tier), not here:
+    // a task this returns can still be refused a slot, and a card closed
+    // `handed-off` would then name an agent that never started.
+    return { task, pendingPerpetualDispatch, preflightCardId: stolenCardId };
+  } catch (error) {
+    if (stolenRequest && stolenCardId) {
+      const { finishPreflightCard } = await import('./preflightTaskCard.js');
+      await finishPreflightCard(stolenCardId, { outcome: 'failed', reason: 'preparation-failed',
+        note: 'Preparation failed before the handoff completed. Check the activity log and run again.' });
+    }
+    throw error;
+  } finally {
+    if (!transferred) endPreflight();
   }
-
-  // Delegate the actual task build to the per-type generator so the dynamic
-  // blocks run on the idle-review path too: pr-watcher's PR poll +
-  // {prData}/{repoFullName}/{defaultBranch} injection, and reference-watch's
-  // {referenceData} injection. Without delegation this path replaced only the
-  // generic placeholders, so a watcher type selected here would spawn a prompt
-  // with the literal {prData}/{referenceData} markers and never poll. The
-  // preparer owns skip cadence and success activity/logging; this caller
-  // records execution only when preparation produces a task.
-  const prepared = await prepareManagedAppImprovementTask(nextType, app, state, {
-    ignoreTaskId,
-    targetPullRequest,
-    onDemand: selectionReason === 'on-demand',
-    runOverrides: stolenRunOverrides,
-    providerOverride: stolenRequest?.providerOverride ?? null,
-    // The deterministic pre-agent work (pr-reviewer's security preflight)
-    // reports into the stolen Run's card as it runs, exactly as it does on the
-    // on-demand drain — this is the whole reason the card is opened early.
-    preflightCardId: stolenCardId
-  });
-  const { task, pendingPerpetualDispatch } = prepared;
-  if (task) await taskSchedule.recordExecution(`task:${nextType}`, app.id);
-  // Idle-review can steal a queued on-demand request for this app. That
-  // request is still a user Run — apply the same consent as Priority 0.
-  if (stolenRequest) {
-    applyOnDemandConsent(task);
-    if (task) task.metadata = { ...(task.metadata || {}), ...onDemandRequestMetadata(stolenRequest) };
-  }
-  // The card is closed by whoever rules on the task (the spawn tier), not here:
-  // a task this returns can still be refused a slot, and a card closed
-  // `handed-off` would then name an agent that never started.
-  return { task, pendingPerpetualDispatch, preflightCardId: stolenCardId };
 }
 
 // How many CONSECUTIVE transient skips (across evaluations) applyPerpetualWorkGate
@@ -2584,6 +2680,14 @@ export async function prepareManagedAppImprovementTask(taskType, app, state, {
 
   // Also protect requests queued before the target-scope gate was installed.
   if (requiresInstallWideTarget(taskType)) return skipped('install-wide-target');
+  // Cron and explicit on-demand preparation bypass Priority 2. They must join
+  // the same unfinished release instead of choosing a version from stale main.
+  if (currentTaskTypeName(taskType) === 'do-release') {
+    const { releaseTaskDispatchDisposition } = await import('./releaseSynchronization.js');
+    if (await releaseTaskDispatchDisposition({ metadata: { analysisType: 'do-release', app: app.id } })
+      === 'wait-for-synchronization') return skipped('release-synchronization', {
+      reason: 'The previous release is published but its development synchronization and cleanup are unfinished. Resume its existing continuation before preparing another release.' });
+  }
 
   // NOTE: `updateAppActivity` + the "Generating improvement task" log are
   // intentionally deferred until AFTER every gate returns non-null (see end

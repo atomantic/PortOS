@@ -63,9 +63,9 @@ because it is not the password. A disabled peer's token is refused.
 ### Peer API surface
 
 `PEER_API_SURFACE` in `server/lib/apiAccessPolicy.js` is the contract; this
-table mirrors it. `server/lib/apiAccessPolicy.test.js` scans every
-`peerFetch` call site and fails when this version calls a peer path the list
-does not admit.
+table mirrors it. `server/lib/apiAccessPolicy.test.js` scans `peerFetch` and
+`peerStreamRequest` call sites and fails when this version calls a peer path
+the list does not admit.
 
 | Methods | Path | Used by |
 |---------|------|---------|
@@ -77,18 +77,25 @@ does not admit.
 | GET | `/api/memory/sync`, `/api/catalog/sync`, `/api/sync/*` | Snapshot sync |
 | GET | `/api/peer-sync/*` | Record, manifest, and archive pulls |
 | POST | `/api/peer-sync/push` | Record push |
+| POST | `/api/peer-media/delete` | Remote media delete (also needs this install's media-delete capability for the peer) |
 | any | `/api/federation/media/v1/*` | Federated media provider |
 | GET | `/api/providers/fleet-host` | Fleet LLM host discovery |
 | POST | `/api/providers/fleet-host/key` | Fleet LLM host key |
 | any | `/api/eidoverse/travel/federation/*` | Eidoverse guest travel |
-| GET | `/data/{images,image-refs,videos,music,audio,writers-room/works}/*` | Asset pulls |
+| GET | `/data/{images,image-thumbnails,image-refs,videos,video-thumbnails,music,audio,models,writers-room/works}/*` | Asset pulls and hosted previews |
 
 GET includes HEAD. Paths with `.`/`..`/empty segments or encoded separators
 are refused. Brain, memory, catalog and `/api/sync/*` reads also check this
 install's sharing settings for the caller (`authorizePeerPull`): a peer whose
-category is off is warned about, and refused with `403 PEER_PULL_FORBIDDEN`
-when `federation.strictPullAuthorization` is on (the digital twin, MeatSpace
-and character snapshots refuse a denied caller even without strict mode). The generic `GET /api/instances/peers/:id/query` proxy reaches only
+category is off is refused with `403 PEER_PULL_FORBIDDEN` for brain, memory,
+digital twin, MeatSpace and character reads even without strict mode. Catalog
+and the remaining categories retain the warn-first ramp unless
+`federation.strictPullAuthorization` is on. Scoped peer credentials bind this
+check to the verified peer's registered identity; requests without scoped peer
+authentication retain the self-asserted instance header for compatibility.
+Brain and memory reads also preserve verified operator/agent sessions and genuine
+local connections when the password is off. Scoped peers always use their peer
+category grant, including on a local connection. The generic `GET /api/instances/peers/:id/query` proxy reaches only
 these paths on a paired peer.
 
 `POST /api/instances/peers/pair-secret` is a separate Basic-auth bootstrap, not

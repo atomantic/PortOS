@@ -3,12 +3,16 @@
  *
  * Connects as a Socket.IO client to each online peer, subscribes to cos:agent:*
  * events, and re-emits them locally through instanceEvents for the client UI.
+ * Also subscribes to the peer's realtime sync frames (`peer:sync:event`) and
+ * applies them, one at a time per peer, through peerSyncEvents.js. Whether
+ * that subscription is live (peerRealtimeSyncSince) sets the sync loop's
+ * cadence for the categories the frames carry.
  */
 
 import { io } from 'socket.io-client';
 import { instanceEvents } from './instanceEvents.js';
 import { peerBaseUrl } from '../lib/peerUrl.js';
-import { peerFetch, peerSocketOptionsFor } from '../lib/peerHttpClient.js';
+import { memoizedSelfInstanceId, peerFetch, peerSocketOptionsFor, PEER_INSTANCE_HEADER } from '../lib/peerHttpClient.js';
 import { withAbortTimeout } from '../lib/abortTimeout.js';
 import { isPlainObject } from '../lib/objects.js';
 
@@ -28,7 +32,21 @@ const relayedAgent = (data) => {
  * Connect to a peer's Socket.IO server and subscribe to agent events
  */
 export function connectToPeer(peer) {
-  if (peerConnections.has(peer.id)) return;
+  // peerSocketOptionsFor injects the same credential headers peerFetch sends
+  // (the pair token, and Basic until the receiver confirms the token).
+  const socketOptions = peerSocketOptionsFor(peer);
+  // The peer delivers sync frames only to a socket that names this install
+  // (paired peers). The header is fixed for the socket's life, so a socket
+  // opened before this install's id was resolved, or under an id a restore
+  // has since replaced, is reopened with the current one (the probe calls
+  // this every cycle while the peer is online).
+  const identity = socketOptions.extraHeaders?.[PEER_INSTANCE_HEADER] ?? null;
+  const existing = peerConnections.get(peer.id);
+  if (existing) {
+    if (existing.identity === identity) return;
+    console.log(`🔗 Peer relay reopening for ${peer.name}: this install's identity changed`);
+    disconnectFromPeer(peer.id);
+  }
 
   const url = peerBaseUrl(peer);
   const socket = io(url, {
@@ -36,9 +54,7 @@ export function connectToPeer(peer) {
     reconnectionAttempts: 5,
     reconnectionDelay: 5000,
     timeout: CONNECT_TIMEOUT_MS,
-    // peerSocketOptionsFor injects the same credential headers peerFetch sends
-    // (the pair token, and Basic until the receiver confirms the token).
-    ...peerSocketOptionsFor(peer)
+    ...socketOptions
   });
 
   // `host` is required so fetchPeerAgents() can rebuild the HTTPS URL via peerBaseUrl();
@@ -47,6 +63,13 @@ export function connectToPeer(peer) {
   const conn = {
     socket,
     agents: new Map(),
+    // Frames apply in arrival order so a delete never races the upsert before it.
+    syncQueue: Promise.resolve(),
+    // The instance id this socket names itself by (null: unidentified).
+    identity,
+    // When the peer acknowledged that it will send video frames to this
+    // socket; null while none can arrive.
+    realtimeSince: null,
     peer: {
       id: peer.id, name: peer.name, address: peer.address, host: peer.host ?? null, port: peer.port, auth: peer.auth ?? null,
       syncSecret: peer.syncSecret ?? null, peerAuthAccepted: peer.peerAuthAccepted === true,
@@ -65,6 +88,7 @@ export function connectToPeer(peer) {
 
   socket.on('disconnect', () => {
     console.log(`🔗 Peer relay disconnected: ${peer.name}`);
+    setRealtime(conn, peer.id, null);
     conn.agents.clear();
     instanceEvents.emit('peer:agents:updated', { peerId: peer.id, agents: [] });
   });
@@ -77,6 +101,24 @@ export function connectToPeer(peer) {
     } catch (err) {
       console.error(`❌ Peer relay ${event} from ${peer.name} failed: ${err.message}`);
     }
+  });
+
+  // Subscribe only when the peer advertises the channel: an older peer with a
+  // password set disconnects a relay socket that sends an event it doesn't allow.
+  socket.on('peer:sync:available', () => socket.emit('peer:sync:subscribe'));
+  // Only an ack that promises delivery counts: an older server acks without
+  // `deliver`, and a peer that does not share video history with us says false.
+  socket.on('peer:sync:subscribed', (ack) => {
+    if (identity && ack?.deliver === true) setRealtime(conn, peer.id, Date.now());
+  });
+
+  // The sender is this connection's peer; the frame's own claims are not trusted.
+  // Lazy: the apply side pulls in the sync merge graph only once a frame arrives.
+  socket.on('peer:sync:event', (data) => {
+    conn.syncQueue = conn.syncQueue
+      .then(() => import('./peerSyncEvents.js'))
+      .then((m) => m.applyPeerSyncEvent({ id: peer.id, name: peer.name }, data))
+      .catch((err) => console.error(`❌ Peer relay peer:sync:event from ${peer.name} failed: ${err.message}`));
   });
 
   // Agent spawned
@@ -120,6 +162,28 @@ export function connectToPeer(peer) {
   });
 }
 
+function setRealtime(conn, peerId, since) {
+  if (conn.realtimeSince === since) return;
+  conn.realtimeSince = since;
+  // No production listener: a test seam the two-machine harness
+  // (server/test/peerMachine.js) waits on instead of polling.
+  instanceEvents.emit('peer:sync:realtime', { peerId, live: since !== null });
+}
+
+/**
+ * When the peer (registry id) acknowledged it will send this install video
+ * frames, or null when none can arrive: the peer is older (never advertises
+ * the channel or never promises delivery), does not share video history with
+ * us, is unpaired, is disconnected, or knows us by an id we no longer hold.
+ * Frames sent before this moment were missed, so the sync loop treats it as the
+ * point after which a snapshot may be skipped.
+ */
+export function peerRealtimeSyncSince(peerId) {
+  const conn = peerConnections.get(peerId);
+  if (!conn?.socket.connected || conn.identity !== memoizedSelfInstanceId()) return null;
+  return conn.realtimeSince;
+}
+
 /**
  * Fetch current agents from peer via HTTP and populate initial state
  */
@@ -154,6 +218,7 @@ export function disconnectFromPeer(peerId) {
   if (!conn) return;
 
   conn.socket.disconnect();
+  setRealtime(conn, peerId, null);
   conn.agents.clear();
   peerConnections.delete(peerId);
   instanceEvents.emit('peer:agents:updated', { peerId, agents: [] });

@@ -734,4 +734,24 @@ describe('DailyLogTab mobile toolbar', () => {
     fireEvent.keyDown(window, { key: 'Escape' });
     expect(screen.queryByRole('menu')).toBeNull();
   });
+
+  describe('failed sidebar reads', () => {
+    it('shows Retry instead of "No entries yet" when listDailyLogs rejects, then recovers', async () => {
+      api.listDailyLogs.mockRejectedValueOnce(new Error('boom'));
+      await renderTab();
+      expect(screen.queryByText(/No entries yet/)).toBeNull();
+      api.listDailyLogs.mockResolvedValue({ records: [entryFor(YESTERDAY, 'old day')] });
+      await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Retry' })); await vi.advanceTimersByTimeAsync(0); });
+      expect(screen.getByText(YESTERDAY)).toBeTruthy();
+      expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
+    });
+
+    it.each(['getProviders', 'getActivityDigestSettings'])('shows Retry and no "No AI provider" copy when %s rejects', async (name) => {
+      api[name].mockRejectedValue(new Error('boom'));
+      await renderTab();
+      await act(async () => { fireEvent.click(screen.getByLabelText('Daily log settings')); await vi.advanceTimersByTimeAsync(0); });
+      expect(screen.queryByText(/No AI provider selected/)).toBeNull();
+      expect(screen.getByText(/Could not load the digest settings/)).toBeTruthy();
+    });
+  });
 });

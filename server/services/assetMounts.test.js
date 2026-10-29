@@ -102,6 +102,15 @@ describe('the server-owned namespace terminators', () => {
     expect(res.text).not.toContain('example-secret');
   });
 
+  it('never serves Topaz staging beneath the video mount', async () => {
+    const directory = join(tempRoot, 'videos', '.topaz-staging');
+    mkdirSync(directory, { recursive: true });
+    writeFileSync(join(directory, 'prepared.mp4'), 'private-staged-video');
+    const res = await request(app).get('/data/videos/.topaz-staging/prepared.mp4');
+    expect(res.status).toBe(404);
+    expect(res.text).not.toContain('private-staged-video');
+  });
+
   it('404s an extensionless /data path instead of answering with the SPA index', async () => {
     const res = await request(app).get('/data/image-to-3d/abc123/model');
     expect(res.status).toBe(404);
@@ -194,6 +203,48 @@ describe('the server-owned namespace terminators', () => {
     const res = await request(app).get('/data/voice-profiles/voice-profile-1/benchmarks/v1/01-identity.wav');
     expect(res.status).toBe(200);
     expect(res.text).toBe('WAVBYTES');
+  });
+});
+
+describe('the gallery sidecar gate', () => {
+  it("serves a sidecar without this machine's own fields, and an ordinary one byte for byte", async () => {
+    const images = join(tempRoot, 'images');
+    writeFileSync(join(images, 'own.metadata.json'), JSON.stringify({
+      prompt: 'a fox', originInstanceId: 'inst-a', hidden: true,
+      pendingDelete: { peerId: 'p', queuedAt: '2026-01-01T00:00:00.000Z' }, suppliedByInstanceId: 'inst-b',
+    }));
+    const plain = JSON.stringify({ prompt: 'a cat' }, null, 2);
+    writeFileSync(join(images, 'plain.metadata.json'), plain);
+
+    const own = await request(app).get('/data/images/own.metadata.json');
+    expect(own.status).toBe(200);
+    expect(JSON.parse(own.text)).toEqual({ prompt: 'a fox', originInstanceId: 'inst-a' });
+    expect(Number(own.headers['content-length'])).toBe(Buffer.byteLength(own.text));
+    expect(own.headers['x-content-type-options']).toBe('nosniff');
+    const ordinary = await request(app).get('/data/images/plain.metadata.json');
+    expect(ordinary.text).toBe(plain);
+  });
+
+  // Uniquely catches a gate that only knows [A-Za-z0-9._-] names (#14064):
+  // other legal gallery names were served raw, machine-local fields included.
+  it('strips machine-local fields for every legal gallery name', async () => {
+    const images = join(tempRoot, 'images');
+    const local = { prompt: 'a fox', hidden: true, suppliedByInstanceId: 'inst-b' };
+    for (const name of ['my fox+1.metadata.json', 'renard-é.metadata.json', '@frame (2).metadata.json']) {
+      writeFileSync(join(images, name), JSON.stringify(local));
+      const res = await request(app).get(`/data/images/${encodeURIComponent(name)}`);
+      expect(res.status, name).toBe(200);
+      expect(JSON.parse(res.text), name).toEqual({ prompt: 'a fox' });
+    }
+  });
+
+  it('leaves traversal and encoded-slash names to the static mount', async () => {
+    writeFileSync(join(tempRoot, 'outside.metadata.json'), JSON.stringify({ prompt: 'outside', hidden: true }));
+    for (const path of ['/data/images/..%2Foutside.metadata.json', '/data/images/%2E%2E%2Foutside.metadata.json', '/data/images/bad%E0.metadata.json']) {
+      const res = await request(app).get(path);
+      expect(res.status, path).not.toBe(200);
+      expect(res.text, path).not.toContain('outside');
+    }
   });
 });
 

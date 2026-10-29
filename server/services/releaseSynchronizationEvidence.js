@@ -9,7 +9,7 @@ import { claimCheckoutOwner } from '../lib/claimContinuation.js';
 import { hasProcessCwdInside } from '../lib/processCwdProbe.js';
 import { retirementCheckoutIdentityFromPointer } from '../lib/retirementCheckoutObservation.js';
 import { matchingRetirementReceipts } from '../lib/reconcileRetirementEvidence.js';
-import { RELEASE_SYNC_FROZEN_METADATA_KEYS, RELEASE_SYNC_OBLIGATIONS } from '../lib/releaseSynchronization.js';
+import { RELEASE_SYNC_FROZEN_METADATA_KEYS, RELEASE_SYNC_OBLIGATIONS, publisherCandidateTarget, legacyPublisherRecovery } from '../lib/releaseSynchronization.js';
 import { completedCheckoutReceiptValid, readCompletedCheckoutIdentity } from './completedCheckoutEvidence.js';
 import { execGh } from './github.js';
 import { resolveForgeExecOptions } from './forgeExecOptions.js';
@@ -20,6 +20,7 @@ import { readCheckoutPathPresence, readLocalBranchPresence } from './repoCleanup
 import { buildQualitySnapshot } from './appQualityFederation.js';
 import { classifyQualitySnapshot, serializeQualitySnapshot } from './appQualitySnapshotFormat.js';
 import { getActiveAgentIds } from './agentState.js';
+import { readAgentsStateForSafetyCheck } from './cosState.js';
 
 const sha = value => /^[a-f0-9]{40}$/.test(value || '');
 const time = value => Number.isFinite(Date.parse(value));
@@ -34,7 +35,7 @@ async function readSynchronizationForge(origin, forgeExec, path, paginate = fals
   return JSON.parse(await execGh(args, undefined, forgeExec));
 }
 
-async function checkoutTargets(entry, agents) {
+async function checkoutTargets(entry, agents, liveAgents) {
   const targets = [];
   for (const agent of agents.filter(value => value.taskId === entry.task.id
     || (value.id === entry.owner.agentId && value.startedAt === entry.owner.startedAt))
@@ -53,7 +54,7 @@ async function checkoutTargets(entry, agents) {
         checkoutIdentity: retirementCheckoutIdentityFromPointer(seed.incarnation?.pointer), createdAt: seed.seededAt, agentId: agent.id };
       if (!target.checkoutIdentity || !time(target.createdAt)) hold('checkout-generation-unverified');
       if (claimCheckoutOwner({ branchName: target.branch, holderPath: target.path, sourceWorkspace: target.repoPath,
-        agents, ignoreIds: agents.filter(value => value.taskId === entry.task.id || value.id === entry.owner.agentId).map(value => value.id) })) hold('checkout-conflicting-live-owner');
+        agents: liveAgents, ignoreIds: agents.filter(value => value.taskId === entry.task.id || value.id === entry.owner.agentId).map(value => value.id) })) hold('checkout-conflicting-live-owner');
       const previousIndex = targets.findIndex(row => row.path === target.path && row.checkoutIdentity === target.checkoutIdentity);
       if (previousIndex < 0) targets.push(target);
       else {
@@ -63,6 +64,15 @@ async function checkoutTargets(entry, agents) {
         targets[previousIndex] = target;
       }
     }
+  }
+  const legacy = legacyPublisherRecovery(entry);
+  if (legacy) {
+    const publisher = agents.find(agent => agent.id === entry.owner.agentId && agent.startedAt === entry.owner.startedAt);
+    const { legacyPublisherCapture } = await import('./legacyReleaseRecovery.js');
+    if (!isDeepStrictEqual(legacyPublisherCapture(entry, publisher), legacy.evidence.capture)) hold('publisher-checkout-evidence-unavailable');
+    const target = publisherCandidateTarget(entry);
+    if (claimCheckoutOwner({ branchName: target.branch, holderPath: target.path, sourceWorkspace: target.repoPath, agents: liveAgents })) hold('checkout-conflicting-live-owner');
+    targets.push(target);
   }
   // Never lose a retained physical generation when an agent leaves the working
   // set or later attempts acquire a different checkout.
@@ -74,7 +84,16 @@ async function checkoutTargets(entry, agents) {
 
 async function context(entry, agents) {
   const publisher = agents.find(agent => agent.id === entry.owner.agentId && agent.startedAt === entry.owner.startedAt);
+  const candidateTarget = publisherCandidateTarget(entry);
+  const legacy = legacyPublisherRecovery(entry);
+  if (!candidateTarget) hold('publisher-candidate-checkout-unverified');
   if (!publisher || entry.checkouts.some(seed => !publisher.metadata?.checkoutSeeds?.some(current => isDeepStrictEqual(current, seed)))) hold('publisher-checkout-evidence-unavailable');
+  let legacyProof;
+  if (legacy) {
+    const { inspectLegacyPublisher } = await import('./legacyReleaseRecovery.js');
+    legacyProof = await inspectLegacyPublisher(entry, agents);
+    if (legacyProof.digest !== legacy.digest || !await legacyProof.recheck()) hold('legacy-recovery-evidence-changed');
+  }
   if (ownersOf(entry, agents).filter(agent => agent.status !== 'completed').length > 1) hold('continuation-conflicting-live-owners');
   const task = await getTaskById(entry.task.id);
   const expected = { ...entry.task.metadata, idempotencyKey: digest([entry.identity, entry.owner]) };
@@ -95,7 +114,12 @@ async function context(entry, agents) {
   if (repository.full_name !== origin.fullName || typeof repository.default_branch !== 'string') hold('synchronization-default-unreadable');
   const development = await api(`git/ref/heads/${encodeURIComponent(repository.default_branch)}`);
   if (development.object?.type !== 'commit' || !sha(development.object.sha)) hold('synchronization-default-unreadable');
-  const checkouts = await checkoutTargets(entry, agents);
+  // Archived completion records establish delivery history, not current
+  // checkout occupancy. Compact legacy records need not have a live status.
+  const live = await readAgentsStateForSafetyCheck();
+  if (!live.trusted || !live.agents || Array.isArray(live.agents)) hold('checkout-ownership-unreadable');
+  const checkouts = await checkoutTargets(entry, agents, Object.values(live.agents));
+  if (!checkouts.some(row => isDeepStrictEqual(row, candidateTarget))) hold('publisher-candidate-head-unverified');
   const syncCheckouts = checkouts.filter(row => ownersOf(entry, agents).some(agent => agent.id === row.agentId));
   if (!syncCheckouts.length) hold('continuation-checkout-unverified');
   const saved = entry.obligations.synchronizationPr.evidence;
@@ -122,7 +146,7 @@ async function context(entry, agents) {
     const comparison = await api(`compare/${base}...${head}`);
     return ['ahead', 'identical'].includes(comparison.status) && comparison.merge_base_commit?.sha === base;
   };
-  return { task, app, cwd, origin, forgeExec, api, pages, checkouts, pr, target, ancestor };
+  return { task, app, cwd, origin, forgeExec, api, pages, checkouts, pr, target, ancestor, legacyProof };
 }
 
 /** Every accepted result has inspected source evidence and a revision binding.
@@ -207,7 +231,8 @@ export async function inspectReleaseSynchronization(entry, agents) {
     obligations.retirement = { status: 'pending' };
     obligations.processSettlement = { status: 'pending' };
   }
-  obligations.retirement.evidence = { ...obligations.retirement.evidence, ...binding, checkouts };
+  obligations.retirement.evidence = { ...obligations.retirement.evidence, ...binding, checkouts,
+    ...(entry.obligations.retirement.evidence?.publisherReview && { publisherReview: entry.obligations.retirement.evidence.publisherReview }) };
   await check('processSettlement', async () => {
     const owners = [...ownersOf(entry, agents), ...agents.filter(agent => agent.id === entry.owner.agentId && agent.startedAt === entry.owner.startedAt)];
     if (!owners.length || owners.some(agent => agent.status !== 'completed')) wait('release-owner-still-active');
@@ -233,9 +258,10 @@ export async function inspectReleaseSynchronization(entry, agents) {
       // checkoutTargets already validated the exact server-captured generations.
       // Every retained generation must belong to one of these supervised runs.
       if (checkouts.some(row => !owners.some(agent => agent.id === row.agentId
-        && agent.metadata?.checkoutSeeds?.some(seed => seed.path === row.path
+        && (agent.metadata?.checkoutSeeds?.some(seed => seed.path === row.path
           && seed.startedAt === agent.startedAt
-          && retirementCheckoutIdentityFromPointer(seed.incarnation?.pointer) === row.checkoutIdentity)))) hold('checkout-process-owner-unverified');
+          && retirementCheckoutIdentityFromPointer(seed.incarnation?.pointer) === row.checkoutIdentity)
+          || (legacyPublisherRecovery(entry) && isDeepStrictEqual(row, publisherCandidateTarget(entry))))))) hold('checkout-process-owner-unverified');
       return { owners: owners.map(agent => ({ id: agent.id, startedAt: agent.startedAt, completedAt: agent.completedAt })), checkouts, receipts };
     }
     for (const agent of owners.filter(value => Number.isSafeInteger(value.pid) && value.pid > 0)) {
@@ -247,8 +273,18 @@ export async function inspectReleaseSynchronization(entry, agents) {
   });
   await check('retirement', async () => {
     if (obligations.processSettlement.status !== 'verified') wait('retirement-awaits-process-settlement');
+    const publisherCheckout = publisherCandidateTarget(entry);
+    const legacy = legacyPublisherRecovery(entry);
+    const review = obligations.retirement.evidence?.publisherReview;
+    const publisherPrUrl = `https://github.com/${entry.publication.repository}/pull/${entry.publication.promotionPrNumber}`;
+    if (!checkouts.some(row => isDeepStrictEqual(row, publisherCheckout))) hold('publisher-candidate-head-unverified');
+    if (!legacy && (!review || review.branch !== publisherCheckout.branch || review.path !== publisherCheckout.path
+      || review.head !== publisherCheckout.head || review.checkoutIdentity !== publisherCheckout.checkoutIdentity
+      || review.prUrl !== publisherPrUrl || !Array.isArray(review.models)
+      || (review.receipt !== null && (!review.receipt || review.receipt.prUrl !== publisherPrUrl)))) hold('publisher-private-review-unretained');
     const outcome = await getBranchReconcileOutcome(ctx.app.id);
-    const receipts = checkouts.map(row => matchingRetirementReceipts(outcome, row).find(receipt => receipt.archiveDir === null
+    const receipts = checkouts.map(row => matchingRetirementReceipts(outcome, row).find(receipt =>
+      (legacy && isDeepStrictEqual(row, publisherCheckout) ? isDeepStrictEqual(receipt, ctx.legacyProof.retirement) : receipt.archiveDir === null)
       && receipt.checkoutIdentity === row.checkoutIdentity && Date.parse(receipt.retiredAt) >= Date.parse(row.createdAt)
       && Date.parse(receipt.retiredAt) <= Date.now()));
     if (!receipts.length || receipts.some(receipt => !receipt)) hold('exact-retirement-receipt-unverified');
@@ -262,7 +298,7 @@ export async function inspectReleaseSynchronization(entry, agents) {
     if (!Array.isArray(trees) || !trees.length || !(remote instanceof Map)) throw new Error('retirement-inventory-unreadable');
     if (checkouts.some(row => remote.has(row.branch) || trees.some(tree => tree.path === row.path
       || tree.branch?.replace(/^refs\/heads\//, '') === row.branch))) hold('retired-checkout-or-ref-present');
-    return { checkouts, receipts };
+    return { checkouts, receipts, ...(legacy ? { legacyRecovery: legacy } : { publisherReview: review }) };
   });
   const verified = RELEASE_SYNC_OBLIGATIONS.every(key => obligations[key]?.status === 'verified');
   const blocked = RELEASE_SYNC_OBLIGATIONS.find(key => obligations[key]?.status === 'blocked');

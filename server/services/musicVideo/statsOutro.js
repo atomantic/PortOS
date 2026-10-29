@@ -1,9 +1,10 @@
 /**
- * Music Video — the cutting room floor outro (lib/musicVideoStatsOutro.js):
- * the tally read from the project's records, and the final-render pass that
- * appends the scene after the song.
+ * Music Video — the ending after the song (lib/musicVideoEnding.js: the
+ * cutting room floor, then the film credits, each optional): the floor's tally
+ * read from the project's records, and the final-render pass that appends the
+ * ending after the song.
  *
- * The pass captures the outro page (the same painter the animatic draws with)
+ * The pass captures the ending page (the same painters the animatic draws with)
  * through the shared composition encoder, then joins it to the finished cut
  * with silence under it. In a footage render it runs before the film look pass,
  * so the look grades the outro with the rest of the film; a seeked render draws
@@ -16,7 +17,9 @@ import { fileURLToPath } from 'node:url';
 import { PATHS } from '../../lib/paths.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { filmLookRuntimeSource, isFilmLookNeutral, normalizeFilmLook } from '../../lib/filmLook.js';
-import { STATS_OUTRO_FONTS, musicVideoOutroStats, normalizeStatsOutro, statsOutroPageSource } from '../../lib/musicVideoStatsOutro.js';
+import { STATS_OUTRO_FONTS, musicVideoOutroStats } from '../../lib/musicVideoStatsOutro.js';
+import { CREDITS_OUTRO_FONTS } from '../../lib/musicVideoCreditsOutro.js';
+import { endingPageSource, endingParts } from '../../lib/musicVideoEnding.js';
 
 export const STATS_OUTRO_SCRATCH_DIR = 'music-video-stats-outro';
 
@@ -24,6 +27,17 @@ export const STATS_OUTRO_SCRATCH_DIR = 'music-video-stats-outro';
 export const sweepStatsOutroScratch = async () => rm(join(PATHS.data, STATS_OUTRO_SCRATCH_DIR), { recursive: true, force: true });
 
 const FONT_DIR = new URL('./documentTemplates/shared/fonts/', import.meta.url);
+const TITLE_FONT_DIR = new URL('./titleCardFonts/', import.meta.url);
+// Every face file the ending page declares, by file name: where it is bundled.
+const ENDING_FONT_FILES = Object.freeze({
+  [STATS_OUTRO_FONTS.head.file]: FONT_DIR,
+  [STATS_OUTRO_FONTS.body.file]: FONT_DIR,
+  [CREDITS_OUTRO_FONTS.title.file]: TITLE_FONT_DIR,
+  [CREDITS_OUTRO_FONTS.body.file]: FONT_DIR,
+});
+
+/** The tally for a floor that is not shown: nothing to count, nothing on the floor. */
+const NO_STATS = Object.freeze({ floorImages: Object.freeze([]) });
 
 /**
  * The tally for `project`: its shots' takes and selections plus every still
@@ -41,31 +55,34 @@ export async function getMusicVideoOutroStats(project) {
   return musicVideoOutroStats(project, { collectionItems: [...(collection?.items || []), ...stamped] });
 }
 
-/** The outro page: a full-frame canvas, its faces, and the script that draws it per seek. Pure. */
-function statsOutroPage({ stats, imageSrcs, width, height, fps, durationSec }) {
+/** The ending page: a full-frame canvas, its faces, and the script that draws it per seek. Pure. */
+function endingPage({ width, height }) {
   const face = ({ family, file }, weight) => `@font-face { font-family: "${family}"; src: url(fonts/${file}) format("woff2"); font-weight: ${weight}; }`;
-  return `<!doctype html><html><head><meta charset="utf-8"><title>Cutting room floor</title>
+  return `<!doctype html><html><head><meta charset="utf-8"><title>Ending</title>
 <style>${face(STATS_OUTRO_FONTS.head, '100 900')}
 ${face(STATS_OUTRO_FONTS.body, '100 900')}
+${face(CREDITS_OUTRO_FONTS.title, CREDITS_OUTRO_FONTS.title.weight)}
+${face(CREDITS_OUTRO_FONTS.body, CREDITS_OUTRO_FONTS.body.weight)}
 html,body{margin:0;width:${width}px;height:${height}px;overflow:hidden;background:#000}canvas{display:block;width:${width}px;height:${height}px}</style>
 </head><body><canvas id="outro"></canvas><script src="app.js"></script></body></html>\n`;
 }
 
 /**
- * Capture the project's outro alone, silent, into `outputPath` on a
- * `width`×`height` frame at `fps`. Resolves its seconds (0 when the outro is
- * off; nothing is written). `stats` (getMusicVideoOutroStats) may be passed in
+ * Capture the project's ending alone, silent, into `outputPath` on a
+ * `width`×`height` frame at `fps`. Resolves its seconds (0 when nothing is
+ * on; nothing is written). `stats` (getMusicVideoOutroStats) may be passed in
  * when the caller already read it. Rejects on failure or when `signal` aborts.
  */
 export async function renderStatsOutroClip({ project, outputPath, width, height, fps, jobId, signal, onProgress, withFilmLook = false, stats: knownStats = null }) {
-  const outro = normalizeStatsOutro(project?.statsOutro);
-  if (!outro?.enabled) return 0;
+  const parts = endingParts(project);
+  if (!parts.length) return 0;
   if (typeof jobId !== 'string' || !/^[A-Za-z0-9_-]+$/.test(jobId)) throw new Error('Invalid outro job id');
   const { openComposition } = await import('../htmlComposition/browser.js');
   const { encodeComposition } = await import('../htmlComposition/encode.js');
   const { ensureImageThumbnail } = await import('../../lib/imageThumbnail.js');
-  const durationSec = outro.durationSec;
-  const stats = knownStats || await getMusicVideoOutroStats(project);
+  const durationSec = parts.reduce((sum, part) => sum + part.durationSec, 0);
+  const floorOn = parts.some((part) => part.kind === 'floor');
+  const stats = !floorOn ? NO_STATS : knownStats || await getMusicVideoOutroStats(project);
   const directory = `${STATS_OUTRO_SCRATCH_DIR}/${jobId}`;
   const scratch = join(PATHS.data, directory);
   let page;
@@ -73,7 +90,7 @@ export async function renderStatsOutroClip({ project, outputPath, width, height,
     await rm(scratch, { recursive: true, force: true });
     await mkdir(join(scratch, 'media'), { recursive: true });
     await mkdir(join(scratch, 'fonts'), { recursive: true });
-    for (const { file } of Object.values(STATS_OUTRO_FONTS)) await copyFile(fileURLToPath(new URL(file, FONT_DIR)), join(scratch, 'fonts', file));
+    for (const [file, dir] of Object.entries(ENDING_FONT_FILES)) await copyFile(fileURLToPath(new URL(file, dir)), join(scratch, 'fonts', file));
     // The floor's stills ride as their small gallery thumbnails; one that is gone leaves a film offcut in its place.
     const imageSrcs = [];
     for (const [i, imageId] of stats.floorImages.entries()) {
@@ -87,8 +104,8 @@ export async function renderStatsOutroClip({ project, outputPath, width, height,
       const staged = source && await link(source, target).then(() => true, () => copyFile(source, target).then(() => true, () => false));
       imageSrcs.push(staged ? `media/${name}` : '');
     }
-    await writeFile(join(scratch, 'index.html'), statsOutroPage({ stats, imageSrcs, width, height, fps, durationSec }));
-    await writeFile(join(scratch, 'app.js'), statsOutroPageSource({ stats, outro, imageSrcs, width, height, fps, durationSec }));
+    await writeFile(join(scratch, 'index.html'), endingPage({ width, height }));
+    await writeFile(join(scratch, 'app.js'), endingPageSource({ stats, parts, imageSrcs, width, height, fps, durationSec }));
     signal?.throwIfAborted();
     // A render whose film look is drawn in its page (the seeked modes) has no later
     // pass to grade the outro, so the outro page draws the look itself.
@@ -107,14 +124,13 @@ export async function renderStatsOutroClip({ project, outputPath, width, height,
 }
 
 /**
- * Append the project's outro to the finished render at `path`, in place.
- * Resolves the seconds it added (0 when the outro is off; the file is then
+ * Append the project's ending to the finished render at `path`, in place.
+ * Resolves the seconds it added (0 when nothing is on; the file is then
  * untouched). Rejects on failure or when `signal` aborts, leaving `path` as
  * it was.
  */
 export async function appendStatsOutro({ project, path, jobId, signal, onProgress, withFilmLook = false }) {
-  const outro = normalizeStatsOutro(project?.statsOutro);
-  if (!outro?.enabled) return 0;
+  if (!endingParts(project).length) return 0;
   if (typeof jobId !== 'string' || !/^[A-Za-z0-9_-]+$/.test(jobId)) throw new Error('Invalid outro job id');
   const { findFfmpeg, runFfmpegProcess, probeVideoGeometry } = await import('../../lib/ffmpeg.js');
   const ffmpeg = await findFfmpeg();
@@ -146,7 +162,7 @@ export async function appendStatsOutro({ project, path, jobId, signal, onProgres
     }
     await rename(joined, path);
     onProgress?.(1);
-    console.log(`🎞️ Music-video outro [${jobId.slice(0, 8)}]: ${durationSec}s cutting room floor after the song`);
+    console.log(`🎞️ Music-video outro [${jobId.slice(0, 8)}]: ${durationSec}s ending after the song`);
     return durationSec;
   } finally {
     await rm(clip, { force: true }).catch(() => {});

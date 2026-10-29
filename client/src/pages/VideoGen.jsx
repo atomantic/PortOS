@@ -44,6 +44,7 @@ import { RUNWAY_SPECIAL_VIDEO_MODES, getRunwaySpecialVideoModel } from '../../..
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useSearchParams } from 'react-router';
 import { isMiniMaxH3Runtime } from '../lib/runnerFamilies';
+import { mediaDeleteOutcome } from '../lib/mediaDeleteOutcome';
 import { appendTriggerWords } from '../lib/loraTriggers';
 import Drawer from '../components/Drawer';
 import { ImageGenTab } from '../components/settings/ImageGenTab';
@@ -86,6 +87,7 @@ import { useMediaJobSse } from '../hooks/useMediaJobSse';
 import { useMediaCompletionRefresh } from '../hooks/useMediaCompletionRefresh';
 import { useMediaAnnotations } from '../hooks/useMediaAnnotations';
 import usePreviewRoute from '../hooks/usePreviewRoute';
+import usePendingDeletePeerNames from '../hooks/usePendingDeletePeerNames';
 import useMediaPreviewActions from '../hooks/useMediaPreviewActions';
 import { useVideoGenForm } from '../hooks/useVideoGenForm.js';
 import { useFederatedMediaTarget } from '../hooks/useFederatedMediaTarget';
@@ -96,7 +98,7 @@ import ModelInputPreview from '../components/media/ModelInputPreview';
 import RemoteMediaTargetPicker from '../components/federatedMedia/RemoteMediaTargetPicker';
 import {
   getVideoGenStatus, getVideoGenModelContext, generateVideo, cancelVideoGen, previewVideoPrompt,
-  listVideoHistory, getVideoHistoryItem, deleteVideoHistoryItem, setVideoHidden,
+  listVideoHistory, getVideoHistoryItem, deleteVideoHistoryItem, cancelVideoPendingDelete, setVideoHidden,
   patchSettingsSlice,
   getActiveVideoJob,
   getSettings,
@@ -198,9 +200,9 @@ export default function VideoGen() {
   // `/model-context`. Fetched alongside /status on mount, it lands first — so
   // the Model picker paints on a cold load instead of holding a placeholder
   // through the interpreter probe.
-  const [modelContext, setModelContext] = useState(null);
+  const [modelContextRequest, setModelContextRequest] = useState({ state: 'loading', context: null, error: null });
+  const { context: modelContext } = modelContextRequest;
   const [statusLoading, setStatusLoading] = useState(true);
-  const [modelContextLoading, setModelContextLoading] = useState(true);
   // Grok Build CLI video backend (#2859 phase 2) — surfaced only when the
   // user enabled Grok in Settings → Image Gen (one toggle covers image +
   // video). 'local' keeps every existing flow untouched.
@@ -467,14 +469,37 @@ export default function VideoGen() {
   ], [galleryVisibleItems, galleryHiddenItems, showHidden]);
   const [preview, setPreview] = usePreviewRoute(previewItems);
 
+  const { peerNames: pendingPeerNames, rememberPeerName } = usePendingDeletePeerNames(history);
+  const withPendingDelete = useCallback((id, pendingDelete) => setHistory((h) => h.map((v) => {
+    if (v.id !== id) return v;
+    const { pendingDelete: _previous, ...rest } = v; // eslint-disable-line no-unused-vars
+    return pendingDelete ? { ...rest, pendingDelete } : rest;
+  })), []);
   const handleDeleteHistory = useCallback(async (item) => {
     const raw = item?.raw || item;
-    const deleted = await deleteVideoHistoryItem(raw.id, { silent: true })
-      .then(() => true)
-      .catch((err) => { toast.error(err.message || 'Delete failed'); return false; });
-    if (!deleted) return;
+    const result = await deleteVideoHistoryItem(raw.id, { silent: true })
+      .catch((err) => { toast.error(err.message || 'Delete failed'); return null; });
+    if (!result) return;
+    const outcome = mediaDeleteOutcome(result, 'video');
+    // A delete that waits on, or did not reach, this machine's copy keeps the row.
+    if (!outcome.remove) {
+      rememberPeerName(outcome.pendingDelete?.peerId, result.peerName);
+      withPendingDelete(raw.id, outcome.pendingDelete);
+      toast(outcome.notice);
+      return;
+    }
     setHistory((h) => h.filter((v) => v.id !== raw.id));
-  }, []);
+    if (outcome.tone === 'info') toast(outcome.notice);
+  }, [rememberPeerName, withPendingDelete]);
+  const handleCancelPendingDelete = useCallback(async (item) => {
+    const raw = item?.raw || item;
+    const cancelled = await cancelVideoPendingDelete(raw.id, { silent: true })
+      .then(() => true)
+      .catch((err) => { toast.error(err.message || 'Cancel failed'); return false; });
+    if (!cancelled) return;
+    withPendingDelete(raw.id, null);
+    toast.success('Pending delete cancelled');
+  }, [withPendingDelete]);
   const handlePromptSaved = useCallback((item, prompt) => {
     const id = item?.id || item?.raw?.id;
     if (!id) return;
@@ -673,16 +698,13 @@ export default function VideoGen() {
       .finally(() => setStatusLoading(false));
   }, []);
 
-  // Kept separate from refreshStatus so the picker never inherits the python
-  // probe's latency. A failure leaves `modelContext` null, which reads exactly
-  // like "no model to offer" — the Model field takes itself away rather than
-  // holding a placeholder forever.
+  // Model context never waits on the python probe. Refreshes retain the last
+  // successful context so a transient catalog failure cannot erase a selection.
   const refreshModelContext = useCallback(() => {
-    setModelContextLoading(true);
+    setModelContextRequest((previous) => ({ ...previous, state: 'loading' }));
     getVideoGenModelContext({ silent: true })
-      .then(setModelContext)
-      .catch(() => {})
-      .finally(() => setModelContextLoading(false));
+      .then((context) => setModelContextRequest({ state: 'ready', context, error: null }))
+      .catch((error) => setModelContextRequest((previous) => ({ ...previous, state: 'error', error })));
   }, []);
 
   useEffect(() => {
@@ -1013,7 +1035,7 @@ export default function VideoGen() {
   // no model at all takes the field away. That fetch no longer waits on the
   // python probe, so on a cold load the list itself is normally what lands.
   const modelsLoading = models.length === 0;
-  const modelFieldVisible = !modelsLoading || modelContextLoading;
+  const modelFieldVisible = !modelsLoading || modelContextRequest.state !== 'ready';
   const falModel = getFalVideoModel(falModelId);
   const falResolutions = falVideoResolutions(falModel);
   const runwayCatalog = useRunwayCatalog(isRunway, mode);
@@ -1106,6 +1128,10 @@ export default function VideoGen() {
     byovLabel: byovStatus?.label,
     byovGateBlocked,
     byovRuntimeMissing,
+    modelContextUnavailable: !modelContext && {
+      loading: 'Loading the model list…',
+      error: 'Retry the model list before generating or queueing',
+    }[modelContextRequest.state],
     blockedAsset,
     extendModeBlocked,
     a2vModeBlocked,
@@ -1829,6 +1855,15 @@ export default function VideoGen() {
                   onChange={(e) => handleModelChange(e.target.value)}
                   loading={modelsLoading}
                 />
+                {modelContextRequest.error && (
+                  <ListLoadError
+                    what="the model list"
+                    error={modelContextRequest.error}
+                    onRetry={refreshModelContext}
+                    retrying={modelContextRequest.state === 'loading'}
+                    className="mb-2"
+                  />
+                )}
                 <ModelWorkflowHelp model={currentModel} mode={mode} models={models} onResolutionChange={handleResolutionChange} />
                 {remixModelFallback && (
                   <p className="mt-1 text-[11px] text-port-accent leading-snug" role="status">
@@ -2066,6 +2101,7 @@ export default function VideoGen() {
       />
 
       <MediaJobsQueue kind="video" />
+      <MediaJobsQueue kind="video-upscale" />
 
       <VideoGenGallery
         galleryVisible={galleryVisibleItems}
@@ -2079,6 +2115,8 @@ export default function VideoGen() {
         onContinue={handleContinueVideo}
         onUpscale={handleUpscaleHistory}
         onDelete={handleDeleteHistory}
+        onCancelPendingDelete={handleCancelPendingDelete}
+        pendingPeerNames={pendingPeerNames}
         onToggleHidden={handleToggleHistoryHidden}
         getCardProps={getCardProps}
         finishTargetFor={resolveFinishTarget}

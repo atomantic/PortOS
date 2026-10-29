@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, writeFileSync, rmSync } from 'fs';
+import { mkdtempSync, writeFileSync, readFileSync, mkdirSync, copyFileSync, rmSync } from 'fs';
+import { spawnSync } from 'child_process';
+import { fileURLToPath } from 'url';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { parseEnvFile, upsertEnvKey } from './envFile.js';
@@ -102,6 +104,15 @@ describe('upsertEnvKey', () => {
     expect(parsed.PGMODE).toBe('file');
   });
 
+  // Pins setup/PM2's last-assignment reader after the writer collapses only
+  // the changed key, preserving comments and unrelated duplicate precedence.
+  it('updates spaced and repeated assignments without touching other declarations', () => {
+    writeFileSync(envPath, '# LLM_BACKEND=comment\r\nOTHER=first\r\n  LLM_BACKEND \t= "old"\r\nOTHER=last\r\nLLM_BACKEND=stale\r\n');
+    upsertEnvKey(envPath, 'LLM_BACKEND', '"new $& $` $\' value"');
+    expect(parseEnvFile(envPath)).toEqual({ LLM_BACKEND: "new $& $` $' value", OTHER: 'last' });
+    expect(readFileSync(envPath, 'utf8')).toBe('# LLM_BACKEND=comment\r\nOTHER=first\r\nLLM_BACKEND="new $& $` $\' value"\r\nOTHER=last\r\n');
+  });
+
   it('upserts LLM_BACKEND correctly', () => {
     upsertEnvKey(envPath, 'LLM_BACKEND', 'ollama');
     upsertEnvKey(envPath, 'LLM_BACKEND', 'lmstudio');
@@ -113,5 +124,104 @@ describe('upsertEnvKey', () => {
     // $$ , $& , $1 would all be mangled by a string replacement arg.
     upsertEnvKey(envPath, 'PGPASSWORD', 'p$$ass$&w$1ord');
     expect(parseEnvFile(envPath)).toMatchObject({ PGPASSWORD: 'p$$ass$&w$1ord' });
+  });
+});
+
+// Uniquely catches setup reporting success after an unreadable existing .env
+// was treated as empty and overwritten, even when writing is permitted.
+describe('interactive setup read failure', () => {
+  it('surfaces a failed read without opening the existing configuration for writing', () => {
+    const scriptsDir = join(dir, 'scripts');
+    mkdirSync(join(scriptsDir, 'lib'), { recursive: true });
+    for (const relative of ['setup-llm.js', 'lib/envFile.js', 'lib/envFile.cjs']) {
+      copyFileSync(fileURLToPath(new URL(`../${relative}`, import.meta.url)), join(scriptsDir, relative));
+    }
+    writeFileSync(join(dir, 'package.json'), '{"type":"module"}');
+    const original = 'UNRELATED=synthetic-marker\n';
+    writeFileSync(envPath, original);
+    const preload = join(dir, 'inject-read-failure.mjs');
+    writeFileSync(preload, `
+      import fs from 'node:fs';
+      import readline from 'node:readline';
+      import childProcess from 'node:child_process';
+      import { syncBuiltinESMExports } from 'node:module';
+      const read = fs.readFileSync;
+      const write = fs.writeFileSync;
+      fs.readFileSync = (path, ...args) => {
+        if (String(path).endsWith('/.env')) throw Object.assign(new Error('synthetic read denied'), { code: 'EACCES' });
+        return read(path, ...args);
+      };
+      fs.writeFileSync = (path, ...args) => {
+        if (String(path).endsWith('/.env')) process.stderr.write('ENV_WRITE_ATTEMPT\\n');
+        return write(path, ...args);
+      };
+      Object.defineProperty(process.stdin, 'isTTY', { value: true });
+      Object.defineProperty(process.stdout, 'isTTY', { value: true });
+      readline.createInterface = () => ({ question: (_, answer) => answer('1'), close() {} });
+      childProcess.execFileSync = () => Buffer.from('synthetic installed command');
+      delete process.env.LLM_BACKEND;
+      syncBuiltinESMExports();
+    `);
+    const result = spawnSync(process.execPath, ['--import', preload, join(scriptsDir, 'setup-llm.js')], { encoding: 'utf8' });
+    expect(result.error).toBeUndefined();
+    expect(result.status, JSON.stringify(result)).not.toBe(0);
+    expect(result.stderr).toContain('synthetic read denied');
+    expect(result.stderr).not.toContain('ENV_WRITE_ATTEMPT');
+    expect(result.stdout).not.toContain('Local LLM backend set to');
+    expect(readFileSync(envPath, 'utf8')).toBe(original);
+  });
+});
+
+describe('local LLM setup backend precedence', () => {
+  async function runSetup({ saved, exported, interactive = false }) {
+    const scriptsDir = join(dir, 'scripts');
+    mkdirSync(join(scriptsDir, 'lib'), { recursive: true });
+    for (const relative of ['setup-llm.js', 'lib/envFile.js', 'lib/envFile.cjs']) {
+      copyFileSync(fileURLToPath(new URL(`../${relative}`, import.meta.url)), join(scriptsDir, relative));
+    }
+    writeFileSync(join(dir, 'package.json'), '{"type":"module"}');
+    writeFileSync(envPath, `LLM_BACKEND=${saved}\nOTHER=keep\n`);
+    const preload = join(dir, 'stub-setup-runtime.mjs');
+    writeFileSync(preload, `
+      import readline from 'node:readline';
+      import childProcess from 'node:child_process';
+      import { syncBuiltinESMExports } from 'node:module';
+      Object.defineProperty(process.stdin, 'isTTY', { value: ${interactive} });
+      Object.defineProperty(process.stdout, 'isTTY', { value: ${interactive} });
+      readline.createInterface = () => ({ question: (_, answer) => answer('3'), close() {} });
+      childProcess.execFileSync = () => { throw new Error('synthetic command unavailable'); };
+      ${exported === undefined ? 'delete process.env.LLM_BACKEND;' : `process.env.LLM_BACKEND = ${JSON.stringify(exported)};`}
+      syncBuiltinESMExports();
+    `);
+    const result = spawnSync(process.execPath, ['--import', preload, join(scriptsDir, 'setup-llm.js')], { encoding: 'utf8' });
+    return { ...result, envContent: readFileSync(envPath, 'utf8') };
+  }
+
+  it.each([
+    ['valid exported value wins over a different valid saved value', 'lmstudio', 'ollama', 'ollama'],
+    ['valid exported value wins over an invalid saved value', 'invalid', 'ollama', 'ollama'],
+    ['invalid exported value falls through to a valid saved value', 'lmstudio', 'invalid', 'lmstudio'],
+  ])('%s', (_name, saved, exported, expected) => {
+    const result = runSetup({ saved, exported });
+    return result.then(({ status, stdout, envContent }) => {
+      expect(status).toBe(0);
+      expect(stdout).toContain(`Local LLM backend: ${expected}`);
+      expect(envContent).toContain(`LLM_BACKEND=${saved}`);
+    });
+  });
+
+  it('keeps the noninteractive no-backend behavior when neither source is valid', async () => {
+    const result = await runSetup({ saved: 'invalid', exported: 'also-invalid' });
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('No local LLM backend selected');
+    expect(result.envContent).toContain('LLM_BACKEND=invalid');
+    expect(result.envContent).toContain('OTHER=keep');
+  });
+
+  it('keeps the interactive skip behavior when neither source is valid', async () => {
+    const result = await runSetup({ saved: 'invalid', exported: 'also-invalid', interactive: true });
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('Skipped — pick a backend later');
+    expect(result.envContent).toContain('LLM_BACKEND=invalid');
   });
 });

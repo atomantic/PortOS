@@ -8,7 +8,8 @@ import { getConfig } from '../services/cosState.js';
 import { getStatus, pause, resume, start, stop, updateConfig } from '../services/cos.js';
 import { getAllDomainUsageToday } from '../services/domainUsage.js';
 import { reinitialize as reinitializeEmbeddings } from '../services/memoryEmbeddings.js';
-import { asyncHandler } from '../lib/errorHandler.js';
+import { asyncHandler, ServerError } from '../lib/errorHandler.js';
+import { getProviderById } from '../services/providers.js';
 import { validateRequest } from '../lib/validation.js';
 import { z } from 'zod';
 import { DOMAIN_IDS, DOMAIN_MODES } from '../lib/domainAutonomy.js';
@@ -18,7 +19,7 @@ import { AVATAR_VARIANT_PATTERN, RIGGED_VARIANT_PREFIX } from '../lib/avatarVari
 import { AVATAR_STYLE_IDS } from '../lib/avatarStyles.js';
 import { BUDGET_LIMIT_FIELDS } from '../lib/domainBudgets.js';
 import { persistentMindCapabilitiesSchema } from '../lib/persistentMindCapabilities.js';
-import { persistentMindProfileSchema } from '../lib/persistentMindProfile.js';
+import { persistentMindProfileSchema, persistentMindToolFreeRefusal } from '../lib/persistentMindProfile.js';
 import { persistentMindThinkingPresetsSchema } from '../lib/persistentMindThinkingPresets.js';
 import { persistentMindPromptSchema } from '../lib/persistentMindPrompt.js';
 import { persistentMindPlaybookSchema } from '../lib/persistentMindPlaybook.js';
@@ -164,9 +165,25 @@ router.get('/budget-usage', asyncHandler(async (req, res) => {
   res.json(usage);
 }));
 
+// The mind wakes unattended over third-party text, so a home or thinking-preset
+// provider that cannot run tool-free is refused at save time. A stored route
+// that predates this check is refused when it resolves (services/persistentMindProfile.js).
+async function assertMindRoutesToolFree(config) {
+  const providerIds = new Set([
+    config.persistentMindProfile?.providerId,
+    ...(config.persistentMindThinkingPresets?.presets ?? []).map((preset) => preset.providerId),
+  ].filter(Boolean));
+  for (const providerId of providerIds) {
+    const provider = await getProviderById(providerId);
+    const refusal = provider ? persistentMindToolFreeRefusal(provider) : null;
+    if (refusal) throw new ServerError(refusal, { status: 400, code: 'PROVIDER_NOT_TOOL_FREE' });
+  }
+}
+
 // PUT /api/cos/config - Update configuration
 router.put('/config', asyncHandler(async (req, res) => {
   const validated = validateRequest(cosConfigSchema, req.body);
+  await assertMindRoutesToolFree(validated);
   const config = await updateConfig(validated);
   if (validated.embeddingProviderId !== undefined || validated.embeddingModel !== undefined) {
     reinitializeEmbeddings();

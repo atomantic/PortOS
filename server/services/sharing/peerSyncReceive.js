@@ -457,7 +457,7 @@ async function diffIncomingAssets({ kind, record, desc, issues, linkedCollection
   if (ownAssets.length < incomingAssets.length) {
     console.warn(`⚠️ peerSync: ignored ${incomingAssets.length - ownAssets.length} unreferenced push assets`);
   }
-  const missingAssets = await diffAssetManifestAgainstLocal(ownAssets, { includeMismatched: applied });
+  const missingAssets = await diffAssetManifestAgainstLocal(ownAssets, { includeMismatched: applied, senderInstanceId: sourceInstanceId });
   if (missingAssets.length === 0 || !bundlesMergeable) return missingAssets;
   return takeHostedCollectionAssets({ kind, record, desc, issues, linkedCollection, linkedTrack, sourceInstanceId, missingAssets });
 }

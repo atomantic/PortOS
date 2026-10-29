@@ -3,27 +3,40 @@
  * and agent records for detail and status views.
  */
 import { readReleaseSynchronizationOutbox } from './releaseSynchronizationStore.js';
+import { effectiveReleaseSynchronization, releaseSynchronizationReset } from '../lib/releaseSynchronization.js';
 
 function buildReleaseSynchronizationPayload(entry) {
   if (!entry) return null;
+  const synchronization = effectiveReleaseSynchronization(entry);
+  const reset = releaseSynchronizationReset(entry);
   const syncPr = entry.obligations?.synchronizationPr?.evidence?.prUrl
     || entry.obligations?.localReview?.evidence?.prUrl
     || null;
   const syncHead = entry.obligations?.synchronizationPr?.evidence?.headSha
-    || entry.obligations?.localReview?.evidence?.receipt?.reviewedHead
+    || entry.obligations?.localReview?.evidence?.receipt?.completedHead
+    || (entry.obligations?.localReview?.evidence?.receipt?.version === 1 && entry.obligations.localReview.evidence.receipt.reviewedHead)
     || entry.obligations?.requiredCi?.evidence?.headSha
     || null;
 
   return {
     version: 1,
     identity: entry.identity,
-    status: entry.synchronization?.status || 'pending',
+    status: synchronization?.status || 'pending',
     prUrl: syncPr,
     headSha: syncHead,
-    blocker: entry.synchronization?.blocker || null,
-    verifiedAt: entry.synchronization?.verifiedAt || null,
-    checkedAt: entry.synchronization?.checkedAt || null,
-    retryAt: entry.synchronization?.retryAt || null,
+    blocker: synchronization?.blocker || null,
+    ...(reset && { operatorReset: reset, nextAction: 'The operator retired this checkpoint; its historical synchronization remains unverified.' }),
+    ...(synchronization?.status === 'blocked' && entry.legacyRecovery && !reset && {
+      nextAction: entry.legacyRecovery.evidence?.mode === 'present'
+        ? 'Inspect the blocker and retained evidence. After other obligations are verified, use the exact checkout retirement review; keep the checkout if any check refuses.'
+        : 'Inspect the blocker and retained recovery evidence, then retry synchronization verification after resolving it.',
+    }),
+    ...(synchronization?.status === 'blocked' && synchronization.blocker === 'publisher-candidate-checkout-unverified' && !reset && {
+      nextAction: 'Keep the candidate checkout and private review evidence in place. Inspect the original publisher run, promotion PR, and checkout inventory; use the legacy recovery review when the original generation and preservation evidence survive.',
+    }),
+    verifiedAt: synchronization?.verifiedAt || null,
+    checkedAt: synchronization?.checkedAt || null,
+    retryAt: synchronization?.retryAt || null,
     tag: entry.publication?.tag,
     releaseUrl: entry.publication?.releaseUrl,
     publishedAt: entry.publication?.publishedAt,

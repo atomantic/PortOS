@@ -20,7 +20,7 @@ vi.mock('./cosState.js', () => ({
 }));
 vi.mock('./cosEvents.js', () => ({ cosEvents: { emit: vi.fn() } }));
 
-const { updateClaimOwnership, checkReconcileOwnership, CLAIM_OWNERSHIP_QUEUE_TIMEOUT_MS } = await import('./cosClaimOwnership.js');
+const { updateClaimOwnership, updateReleaseCandidateOwnership, checkReconcileOwnership, CLAIM_OWNERSHIP_QUEUE_TIMEOUT_MS } = await import('./cosClaimOwnership.js');
 // Hold the same leaf fence cleanup uses while exercising binding through its public service.
 const { withClaimOwnershipLock, reserveCheckoutRetirementFence } = await import('./cosClaimOwnershipState.js');
 const { claimContinuationAdmission, claimBranchAdmission } = await import('../lib/claimContinuation.js');
@@ -93,6 +93,7 @@ describe('updateClaimOwnership', () => {
     expect(await updateClaimOwnership({ agentId: 'agent-epicrun', action: 'release', branch: 'claim/issue-101' }))
       .toEqual({ released: true, branch: 'claim/issue-101' });
     expect(store.state.agents['agent-epicrun'].metadata).toMatchObject({ claimBranches: [], claimReleasedBranches: ['claim/issue-101'] });
+    expect(cosEvents.emit).toHaveBeenCalledWith('claim:ownership-changed', { agentId: 'agent-epicrun', repository: SOURCE });
   });
 
   it('refuses an unknown or finished run without writing', async () => {
@@ -103,7 +104,89 @@ describe('updateClaimOwnership', () => {
     expect(await updateClaimOwnership({ agentId: 'agent-epicrun', action: 'bind', branch: 'claim/issue-101' }))
       .toEqual({ bound: false, reason: 'owner-not-running' });
     expect(store.state.agents['agent-epicrun'].metadata).toEqual(before.agents['agent-epicrun'].metadata);
+    expect(cosEvents.emit).not.toHaveBeenCalledWith('claim:ownership-changed', expect.anything());
   });
+});
+
+it('reserves a release branch before creation and captures its actual locked checkout generation', async () => {
+  const { mkdtemp, readFile, writeFile, rename, rm } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { materializeGitRepo } = await import('../lib/gitTestRepo.js');
+  const { execGit } = await import('../lib/execGit.js');
+  const { captureCompletedCheckouts } = await import('./completedCheckoutEvidence.js');
+  const { claimCheckoutOwnerReason } = await import('../lib/claimContinuation.js');
+  const scratch = await mkdtemp(join(tmpdir(), 'portos-release-seed-'));
+  try {
+    const repo = join(scratch, 'repo');
+    const checkout = join(scratch, 'candidate');
+    await materializeGitRepo(repo);
+    const agentId = 'agent-epicrun';
+    const branch = `codex/release-${agentId}`;
+    store.state.agents[agentId] = { id: agentId, status: 'running', startedAt: new Date().toISOString(),
+      metadata: { taskAnalysisType: 'do-release', isWorktree: false, workspacePath: repo } };
+    const agent = store.state.agents[agentId];
+    agent.taskId = 'release-task';
+    agent.metadata.releaseCandidateLifecycle = { version: 1, agentId, taskId: agent.taskId, startedAt: agent.startedAt, stage: 'registered' };
+    expect(await updateReleaseCandidateOwnership(agentId, 'capture')).toEqual({ captured: false, reason: 'candidate-reservation-missing' });
+    expect(await updateReleaseCandidateOwnership(agentId, 'reserve')).toEqual({ reserved: true, branch });
+    const reserved = store.state.agents[agentId].metadata.releaseCandidateLifecycle;
+    expect(reserved).toMatchObject({ stage: 'reserved', branch, reservedAt: store.state.agents[agentId].metadata.releaseCandidate.reservedAt });
+    expect(await updateReleaseCandidateOwnership(agentId, 'reserve')).toEqual({ reserved: true, branch });
+    expect(store.state.agents[agentId].metadata.releaseCandidateLifecycle).toEqual(reserved);
+    expect(claimCheckoutOwnerReason({ branchName: branch, sourceWorkspace: repo, agents: Object.values(store.state.agents) })).toBe('claim-owner-active');
+    expect(await updateReleaseCandidateOwnership(agentId, 'capture')).toEqual({ captured: false, reason: 'checkout-seed-unavailable' });
+    await execGit(['worktree', 'add', '-b', branch, checkout, 'main'], repo);
+    await execGit(['worktree', 'lock', '--reason', 'Active release candidate', checkout], repo);
+    store.state.agents[agentId].metadata.releaseCandidateLifecycle = { ...reserved, taskId: 'wrong-task' };
+    expect(await updateReleaseCandidateOwnership(agentId, 'capture')).toEqual({ captured: false, reason: 'candidate-lifecycle-conflict' });
+    expect(store.state.agents[agentId].metadata.checkoutSeeds).toBeUndefined();
+    store.state.agents[agentId].metadata.releaseCandidateLifecycle = reserved;
+    expect(await updateReleaseCandidateOwnership(agentId, 'capture')).toEqual({ captured: true, branch });
+    const lifecycle = store.state.agents[agentId].metadata.releaseCandidateLifecycle;
+    expect(lifecycle).toMatchObject({ ...reserved, stage: 'captured', capturedAt: expect.any(String) });
+    expect(await updateReleaseCandidateOwnership(agentId, 'capture')).toEqual({ captured: true, branch });
+    expect(store.state.agents[agentId].metadata.releaseCandidateLifecycle).toEqual(lifecycle);
+    const seed = store.state.agents[agentId].metadata.checkoutSeeds[0];
+    expect(seed).toMatchObject({ agentId, branch, path: await (await import('node:fs/promises')).realpath(checkout) });
+    expect(await captureCompletedCheckouts(store.state.agents[agentId], { success: true, strict: true })).toMatchObject([{ branch, path: seed.path }]);
+    const pointer = join(checkout, '.git');
+    const contents = await readFile(pointer);
+    await rename(pointer, join(scratch, 'original-pointer'));
+    await writeFile(pointer, contents);
+    expect(await updateReleaseCandidateOwnership(agentId, 'capture')).toEqual({ captured: false, reason: 'checkout-seed-unavailable' });
+    expect(store.state.agents[agentId].metadata.checkoutSeeds).toEqual([seed]);
+    await rm(pointer);
+    await rename(join(scratch, 'original-pointer'), pointer);
+    await execGit(['worktree', 'unlock', checkout], repo);
+    await execGit(['worktree', 'remove', checkout], repo);
+    expect(await updateReleaseCandidateOwnership(agentId, 'capture')).toEqual({ captured: false, reason: 'checkout-seed-unavailable' });
+    expect(store.state.agents[agentId].metadata.checkoutSeeds).toEqual([seed]);
+  } finally { await rm(scratch, { recursive: true, force: true, maxRetries: 3 }); }
+});
+
+it('does not adopt a release branch that already existed before reservation', async () => {
+  const { mkdtemp, rm } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { materializeGitRepo } = await import('../lib/gitTestRepo.js');
+  const { execGit } = await import('../lib/execGit.js');
+  const scratch = await mkdtemp(join(tmpdir(), 'portos-release-collision-'));
+  try {
+    const repo = join(scratch, 'repo');
+    await materializeGitRepo(repo);
+    await execGit(['branch', 'codex/release-agent-epicrun', 'main'], repo);
+    store.state.agents['agent-epicrun'] = { id: 'agent-epicrun', status: 'running', startedAt: new Date().toISOString(),
+      metadata: { taskAnalysisType: 'do-release', isWorktree: false, workspacePath: repo } };
+    expect(await updateReleaseCandidateOwnership('agent-epicrun', 'reserve')).toEqual({ reserved: false, reason: 'candidate-branch-not-available' });
+    expect(store.state.agents['agent-epicrun'].metadata.releaseCandidate).toBeUndefined();
+  } finally { await rm(scratch, { recursive: true, force: true, maxRetries: 3 }); }
+});
+
+it('treats a malformed release reservation as unreadable ownership', async () => {
+  store.state.agents['agent-epicrun'].metadata.releaseCandidate = { branch: 'codex/release-agent-epicrun' };
+  expect(await updateClaimOwnership({ agentId: 'agent-epicrun', action: 'bind', branch: 'claim/issue-101' }))
+    .toEqual({ bound: false, reason: 'ownership-unreadable' });
 });
 
 describe('claim ownership queued transaction deadlines', () => {
@@ -184,7 +267,8 @@ describe('claim ownership queued transaction deadlines', () => {
     expect(await pending).toEqual({ bound: true, branch: 'claim/issue-101' });
     await following;
     expect(store.state.agents['agent-epicrun'].metadata.claimBranches).toEqual(['claim/issue-101']);
-    expect(cosEvents.emit).toHaveBeenCalledOnce();
+    expect(cosEvents.emit).toHaveBeenCalledWith('agent:updated', expect.objectContaining({ id: 'agent-epicrun' }));
+    expect(cosEvents.emit).toHaveBeenCalledWith('claim:ownership-changed', { agentId: 'agent-epicrun', repository: SOURCE });
     const diagnostics = [...console.warn.mock.calls, ...console.log.mock.calls].flat().join(' ');
     expect(diagnostics).not.toMatch(/agent-epicrun|claim\/issue|repos/);
     expect(diagnostics).toMatch(/ownershipQueueMs=\d+ stateQueueMs=\d+ ownerReadMs=\d+ ownershipCheckMs=\d+ persistenceMs=\d+/);

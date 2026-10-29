@@ -120,17 +120,9 @@ vi.mock('../lib/fileUtils.js', async () => {
   };
 });
 
-const backupSupersededBranchMock = vi.fn(async (_repoPath, branch) => ({
-  dir: `/repo/data/cos/abandoned-worktree-backups/${branch.branch.replace(/\//g, '-')}`,
-  manifest: 'manifest.json',
-  untracked: []
-}));
 vi.mock('./taskSchedule.js', () => ({
   recordWorkspaceCheckoutRetirement: vi.fn(async () => null),
   recordHeldCheckoutRetirement: vi.fn(async (_appId, receipt) => ({ retired: [{ ...receipt, archiveDir: null }] })),
-}));
-vi.mock('./supersededBackup.js', () => ({
-  backupSupersededBranch: (...args) => backupSupersededBranchMock(...args)
 }));
 
 import {
@@ -157,28 +149,6 @@ import { getOriginInfo } from '../lib/gitRemote.js';
 import { __resetForgeNoAccessLog } from '../lib/forgeAccessErrors.js';
 
 const RETIRE_HEAD = 'a'.repeat(40);
-/**
- * #12682: hold preservation open and prove, while it is pending, that the shared
- * ownership queue is free and only the retiring checkout is fenced.
- */
-async function expectArchiveOutsideOwnershipLock(retirement, fenced) {
-  let started;
-  let finish;
-  const archiving = new Promise(resolve => { started = resolve; });
-  releaseCheckoutWithoutArchive.mockImplementationOnce((_context, prepare) => new Promise(resolve => {
-    finish = () => resolve(prepare());
-    started();
-  }));
-  const pending = retirement();
-  await archiving;
-  expect(await withClaimOwnershipLock(() => 'settled')).toBe('settled');
-  expect(checkoutRetirementFenceReason({ repoPath: '/repo', ...fenced })).toBe('checkout-retirement-reserved');
-  expect(checkoutRetirementFenceReason({ repoPath: '/repo', branch: 'feature/unrelated', path: '/repo/data/cos/worktrees/other' })).toBe(null);
-  finish();
-  const result = await pending;
-  expect(checkoutRetirementFenceReason({ repoPath: '/repo', ...fenced })).toBe(null);
-  return result;
-}
 const pinnedRef = args => args[0] === 'rev-parse' && args[1] === '--verify' && /^refs\/heads\/[^{}]+$/.test(args[2]);
 const gitFixtureResult = (stdout = '', exitCode = 0) => async args => ({ stdout: pinnedRef(args) ? RETIRE_HEAD : stdout, exitCode });
 let retirementTrees = [];
@@ -216,11 +186,6 @@ beforeEach(() => {
   wt.deleteCompletedLocalBranch.mockResolvedValue(true);
   execGit.mockImplementation(gitFixtureResult('', 0));
   tryReadFileMock.mockResolvedValue(null);
-  backupSupersededBranchMock.mockImplementation(async (_repoPath, branch) => ({
-    dir: `/repo/data/cos/abandoned-worktree-backups/${branch.branch.replace(/\//g, '-')}`,
-    manifest: 'manifest.json',
-    untracked: []
-  }));
 });
 
 describe('classifyBranch', () => {
@@ -515,13 +480,12 @@ describe('cleanupMerged', () => {
     expect(git.deleteBranch).not.toHaveBeenCalled();
   });
 
-  it('archives a merged checkout outside the ownership lock while fencing its branch', async () => {
+  it('uses the guarded removal path for a merged checkout', async () => {
     git.hasBranchMergeEvidence.mockResolvedValue(true);
     const worktreePath = '/repo/.claude/worktrees/next-2190';
-    const res = await expectArchiveOutsideOwnershipLock(
-      () => cleanupMerged('/repo', 'main', [{ branch: 'next/issue-2190', worktreePath }]), { branch: 'next/issue-2190' });
+    const res = await cleanupMerged('/repo', 'main', [{ branch: 'next/issue-2190', worktreePath }]);
     expect(res.cleaned).toEqual(['next/issue-2190']);
-    expect(wt.forceRemoveWorktreeDir).toHaveBeenCalledWith('/repo', worktreePath, expect.any(Object));
+    expect(releaseCheckoutWithoutArchive).not.toHaveBeenCalled();
   });
 
   it('deletes a merged branch with no worktree', async () => {
@@ -1674,7 +1638,7 @@ describe('reconcile — cached SUPERSEDED verdicts (#3842)', () => {
 
   // The abandoned-worktree shape: branch fully behind main, uncommitted work in a
   // dead agent's worktree, one collision path with the default branch.
-  const setupAbandoned = ({ tip = RETIRE_HEAD, replacedByReachable = true } = {}) => {
+  const setupAbandoned = ({ tip = RETIRE_HEAD, replacedByReachable = true, status = DIRTY } = {}) => {
     git.getBranches.mockResolvedValue([
       { name: BRANCH, isDefault: false, current: false, tracking: 'origin/main', merged: false }
     ]);
@@ -1692,7 +1656,7 @@ describe('reconcile — cached SUPERSEDED verdicts (#3842)', () => {
       if (cmd === 'diff') return { stdout: 'server/services/thing.js\n', exitCode: 0 };
       if (cmd === 'rev-list') return { stdout: '301\t0\n', exitCode: 0 };
       // `status --porcelain` in the worktree.
-      return { stdout: DIRTY, exitCode: 0 };
+      return { stdout: status, exitCode: 0 };
     });
   };
 
@@ -1718,77 +1682,26 @@ describe('reconcile — cached SUPERSEDED verdicts (#3842)', () => {
     expect(res.reapedSuperseded).toEqual([]);
     expect(res.superseded.map(entry => entry.branch)).toEqual([BRANCH]);
     expect(res.skipped).toContainEqual({ branch: BRANCH, reason: 'reap-superseded-disabled' });
-    expect(backupSupersededBranchMock).not.toHaveBeenCalled();
     expect(wt.forceRemoveWorktreeDir).not.toHaveBeenCalled();
     expect(wt.deleteCompletedLocalBranch).not.toHaveBeenCalled();
   });
 
-  it('retains an explicitly opted-in superseded checkout whose head changes during backup', async () => {
-    setupAbandoned();
-    tryReadFileMock.mockResolvedValue(ledger());
-    const changed = { head: 'b'.repeat(40), path: WORKTREE, branch: `refs/heads/${BRANCH}` };
-    backupSupersededBranchMock.mockImplementation(async () => {
-      wt.listWorktrees.mockResolvedValue([changed]);
-      return { dir: '/backups/x', manifest: 'manifest.json', untracked: [] };
-    });
-    wt.forceRemoveWorktreeDir.mockImplementation(async (_repo, _path, options) => {
-      const reason = await options.verifyRemoval(changed);
-      return { removed: !reason, reason };
-    });
+  it('retains an explicitly opted-in superseded checkout whose head changes just before removal', async () => {
+    setupAbandoned({ status: '' });
+    tryReadFileMock.mockResolvedValue(ledger({ dirtyPaths: [] }));
+    const original = { head: RETIRE_HEAD, path: WORKTREE, branch: `refs/heads/${BRANCH}` };
+    const changed = { ...original, head: 'b'.repeat(40) };
+    // Only the recheck made by the retirement's final `prepare` step sees the new head.
+    wt.listWorktrees.mockImplementation(async () => [new Error().stack.includes('prepare') ? changed : original]);
     const res = await reconcile('/repo', { reapSuperseded: true, activeAgentIds: new Set() });
     expect(res.reapedSuperseded).toEqual([]);
     expect(res.skipped).toContainEqual({ branch: BRANCH, reason: 'worktree-holder-changed' });
     expect(wt.deleteCompletedLocalBranch).not.toHaveBeenCalled();
   });
 
-  // #12748: the backup copies the dirty tree, and it ran inside the shared
-  // claim-ownership lock that every bind/release/reserve queues behind.
-  it('backs up an opted-in superseded checkout with the ownership queue free and only it fenced', async () => {
-    setupAbandoned();
-    tryReadFileMock.mockResolvedValue(ledger());
-    let started;
-    let finish;
-    const backingUp = new Promise(resolve => { started = resolve; });
-    backupSupersededBranchMock.mockImplementationOnce(() => new Promise(resolve => {
-      finish = () => resolve({ dir: '/backups/x', manifest: 'manifest.json', untracked: [] });
-      started();
-    }));
-    const pending = reconcile('/repo', { reapSuperseded: true, activeAgentIds: new Set() });
-    await backingUp;
-    expect(await withClaimOwnershipLock(() => 'settled')).toBe('settled');
-    expect(checkoutRetirementFenceReason({ repoPath: '/repo', path: WORKTREE })).toBe('checkout-retirement-reserved');
-    expect(checkoutRetirementFenceReason({ repoPath: '/repo', branch: BRANCH })).toBe('checkout-retirement-reserved');
-    expect(checkoutRetirementFenceReason({ repoPath: '/repo', branch: 'feature/unrelated', path: '/repo/data/cos/worktrees/other' })).toBe(null);
-    finish();
-    expect((await pending).reapedSuperseded).toEqual([BRANCH]);
-    expect(checkoutRetirementFenceReason({ repoPath: '/repo', branch: BRANCH })).toBe(null);
-  });
-
-  it('retains an opted-in superseded checkout whose change set moves during its unlocked backup', async () => {
-    setupAbandoned();
-    tryReadFileMock.mockResolvedValue(ledger());
-    const scripted = execGit.getMockImplementation();
-    let backedUp = false;
-    execGit.mockImplementation(async (args, ...rest) => (backedUp && args[0] === 'status'
-      ? { stdout: `${DIRTY}?? notes.md\n`, exitCode: 0 }
-      : scripted(args, ...rest)));
-    backupSupersededBranchMock.mockImplementation(async () => {
-      backedUp = true;
-      return { dir: '/backups/x', manifest: 'manifest.json', untracked: [] };
-    });
-    wt.forceRemoveWorktreeDir.mockImplementation(async (_repo, _path, options) => {
-      const reason = await options.verifyRemoval({ head: RETIRE_HEAD, path: WORKTREE, branch: `refs/heads/${BRANCH}` });
-      return { removed: !reason, reason };
-    });
-    const res = await reconcile('/repo', { reapSuperseded: true, activeAgentIds: new Set() });
-    expect(res.reapedSuperseded).toEqual([]);
-    expect(res.skipped).toContainEqual({ branch: BRANCH, reason: 'worktree-changed-since-backup' });
-    expect(wt.deleteCompletedLocalBranch).not.toHaveBeenCalled();
-  });
-
   it('retains an explicitly opted-in superseded ref when its deletion lease fails', async () => {
-    setupAbandoned();
-    tryReadFileMock.mockResolvedValue(ledger());
+    setupAbandoned({ status: '' });
+    tryReadFileMock.mockResolvedValue(ledger({ dirtyPaths: [] }));
     wt.deleteCompletedLocalBranch.mockResolvedValue(false);
     const res = await reconcile('/repo', { reapSuperseded: true, activeAgentIds: new Set() });
     expect(res.reapedSuperseded).toEqual([]);
@@ -1797,9 +1710,19 @@ describe('reconcile — cached SUPERSEDED verdicts (#3842)', () => {
     expect(git.deleteBranch).not.toHaveBeenCalled();
   });
 
-  it('reaps a branch with a fresh cached verdict, after backing it up', async () => {
+  it('holds a verified-superseded branch whose worktree has uncommitted work, since nothing is copied first', async () => {
     setupAbandoned();
     tryReadFileMock.mockResolvedValue(ledger());
+    const res = await reconcile('/repo', { reapSuperseded: true, activeAgentIds: new Set() });
+    expect(res.reapedSuperseded).toEqual([]);
+    expect(res.skipped).toContainEqual({ branch: BRANCH, reason: 'worktree-dirty' });
+    expect(wt.forceRemoveWorktreeDir).not.toHaveBeenCalled();
+    expect(wt.deleteCompletedLocalBranch).not.toHaveBeenCalled();
+  });
+
+  it('reaps a branch with a fresh cached verdict', async () => {
+    setupAbandoned({ status: '' });
+    tryReadFileMock.mockResolvedValue(ledger({ dirtyPaths: [] }));
 
     const res = await reconcile('/repo', { reapSuperseded: true, activeAgentIds: new Set() });
     expect(res.inFlight).toEqual([]);
@@ -1808,37 +1731,7 @@ describe('reconcile — cached SUPERSEDED verdicts (#3842)', () => {
     expect(res.reapedSuperseded).toEqual([BRANCH]);
     expect(res.cleaned).not.toContain(BRANCH);
     expect(res.superseded).toEqual([]);
-    expect(backupSupersededBranchMock).toHaveBeenCalledTimes(1);
-    expect(wt.forceRemoveWorktreeDir).toHaveBeenCalledWith('/repo', WORKTREE, expect.anything());
     expect(wt.deleteCompletedLocalBranch).toHaveBeenCalledWith('/repo', BRANCH, RETIRE_HEAD, expect.objectContaining({ onRetired: expect.any(Function) }));
-  });
-
-  it('backs up before it deletes anything', async () => {
-    setupAbandoned();
-    tryReadFileMock.mockResolvedValue(ledger());
-    const order = [];
-    backupSupersededBranchMock.mockImplementation(async () => {
-      order.push('backup');
-      return { dir: '/backups/x', manifest: 'manifest.json', untracked: [] };
-    });
-    wt.forceRemoveWorktreeDir.mockImplementation(async () => { order.push('remove'); wt.listWorktrees.mockResolvedValue([]); return { removed: true, warning: null }; });
-    wt.deleteCompletedLocalBranch.mockImplementation(async () => { order.push('delete'); return true; });
-
-    await reconcile('/repo', { reapSuperseded: true, activeAgentIds: new Set() });
-    expect(order).toEqual(['backup', 'remove', 'delete']);
-  });
-
-  // No recoverable copy, no delete. The verdict is not what makes this safe.
-  it('does not reap when the backup fails', async () => {
-    setupAbandoned();
-    tryReadFileMock.mockResolvedValue(ledger());
-    backupSupersededBranchMock.mockRejectedValue(new Error('disk full'));
-
-    const res = await reconcile('/repo', { reapSuperseded: true, activeAgentIds: new Set() });
-    expect(wt.forceRemoveWorktreeDir).not.toHaveBeenCalled();
-    expect(git.deleteBranch).not.toHaveBeenCalled();
-    expect(res.superseded.map((b) => b.branch)).toEqual([BRANCH]);
-    expect(res.skipped).toContainEqual({ branch: BRANCH, reason: 'backup-failed: disk full' });
   });
 
   // Verified-superseded branches are backed up before removal and their work
@@ -1872,7 +1765,6 @@ describe('reconcile — cached SUPERSEDED verdicts (#3842)', () => {
     }));
 
     const res = await reconcile('/repo', { reapSuperseded: true, activeAgentIds: new Set() });
-    expect(backupSupersededBranchMock).toHaveBeenCalledTimes(1);
     expect(wt.forceRemoveWorktreeDir).toHaveBeenCalledWith('/repo', CLAIM_TREE, expect.anything());
     expect(wt.deleteCompletedLocalBranch).toHaveBeenCalledWith('/repo', CLAIM, RETIRE_HEAD, expect.objectContaining({ onRetired: expect.any(Function) }));
     expect(res.reapedSuperseded).toEqual([CLAIM]);
@@ -1897,7 +1789,6 @@ describe('reconcile — cached SUPERSEDED verdicts (#3842)', () => {
     const res = await reapSupersededBranches('/repo', 'main', superseded, { activeAgentIds: new Set() });
     expect(wt.forceRemoveWorktreeDir).not.toHaveBeenCalled();
     expect(git.deleteBranch).not.toHaveBeenCalled();
-    expect(backupSupersededBranchMock).not.toHaveBeenCalled();
     expect(res.held.map((b) => b.branch)).toEqual([CLAIM]);
     expect(res.skipped.find((sk) => sk.branch === CLAIM)?.reason).toBe('worktree-locked');
   });
@@ -1906,7 +1797,7 @@ describe('reconcile — cached SUPERSEDED verdicts (#3842)', () => {
   // (an agent's `/tmp` checkout) used to be held with
   // 'worktree-unmanaged-location' on every cycle — a hold nothing ever lifts,
   // so the coordinator was told "PortOS reaps it" about a branch PortOS never
-  // would. The verdict and the backup are the independent proof #10270's
+  // would. The verdict and a clean tree are the independent proof #10270's
   // location gate lacks; a short idle floor covers a process still in the tree.
   it('reaps a superseded branch from an unmanaged location once its worktree has sat idle', async () => {
     const TMP_TREE = '/private/tmp/portos-deep-oversized-order';
@@ -1919,7 +1810,6 @@ describe('reconcile — cached SUPERSEDED verdicts (#3842)', () => {
 
     const young = await reapSupersededBranches('/repo', 'main', [entry(5 * 60 * 1000)], { activeAgentIds: new Set() });
     expect(wt.forceRemoveWorktreeDir).not.toHaveBeenCalled();
-    expect(backupSupersededBranchMock).not.toHaveBeenCalled();
     expect(young.reaped).toEqual([]);
     const hold = young.skipped.find((sk) => sk.branch === BRANCH);
     expect(hold.reason).toBe('worktree-unmanaged-location');
@@ -1930,7 +1820,6 @@ describe('reconcile — cached SUPERSEDED verdicts (#3842)', () => {
     expect(young.held[0]).toMatchObject({ branch: BRANCH, holdReason: 'worktree-unmanaged-location', holdRetryAt: hold.retryAt });
 
     const idle = await reapSupersededBranches('/repo', 'main', [entry(SUPERSEDED_UNMANAGED_IDLE_MS)], { activeAgentIds: new Set() });
-    expect(backupSupersededBranchMock).toHaveBeenCalledTimes(1);
     expect(wt.forceRemoveWorktreeDir).toHaveBeenCalledWith('/repo', TMP_TREE, expect.anything());
     expect(wt.deleteCompletedLocalBranch).toHaveBeenCalledWith('/repo', BRANCH, RETIRE_HEAD, expect.objectContaining({ onRetired: expect.any(Function) }));
     expect(idle.reaped).toEqual([BRANCH]);
@@ -1964,7 +1853,6 @@ describe('reconcile — cached SUPERSEDED verdicts (#3842)', () => {
     const res = await reapSupersededBranches('/repo', 'main', superseded, { activeAgentIds: new Set(['agent-deadbeef']) });
     expect(wt.forceRemoveWorktreeDir).not.toHaveBeenCalled();
     expect(git.deleteBranch).not.toHaveBeenCalled();
-    expect(backupSupersededBranchMock).not.toHaveBeenCalled();
     expect(res.held.map((b) => b.branch)).toEqual([BRANCH]);
     expect(res.skipped.find((sk) => sk.branch === BRANCH)?.reason).toBe('worktree-active-agent');
   });
@@ -1977,7 +1865,6 @@ describe('reconcile — cached SUPERSEDED verdicts (#3842)', () => {
     tryReadFileMock.mockResolvedValue(ledger());
 
     const res = await reconcile('/repo', { reapSuperseded: false, activeAgentIds: new Set() });
-    expect(backupSupersededBranchMock).not.toHaveBeenCalled();
     expect(git.deleteBranch).not.toHaveBeenCalled();
     expect(res.reapedSuperseded).toEqual([]);
     expect(res.skipped).toContainEqual({ branch: BRANCH, reason: 'reap-superseded-disabled' });
@@ -1988,7 +1875,6 @@ describe('reconcile — cached SUPERSEDED verdicts (#3842)', () => {
     tryReadFileMock.mockResolvedValue(ledger());
 
     const res = await reconcile('/repo', { cleanup: false, activeAgentIds: new Set() });
-    expect(backupSupersededBranchMock).not.toHaveBeenCalled();
     expect(git.deleteBranch).not.toHaveBeenCalled();
     expect(res.skipped).toContainEqual({ branch: BRANCH, reason: 'reap-superseded-disabled' });
     expect(res.superseded.map((b) => b.branch)).toEqual([BRANCH]);
@@ -1999,9 +1885,9 @@ describe('reconcile — cached SUPERSEDED verdicts (#3842)', () => {
   // side no longer does. Both the partition and the reap must subtract it — a raw
   // compare in either one strands the branch it was written to retire.
   it('reaps a verdict recorded before the scratch subtraction shipped', async () => {
-    setupAbandoned();
+    setupAbandoned({ status: '?? PORTOS_PUBLIC_REVIEW_INPUT.json\n' });
     tryReadFileMock.mockResolvedValue(ledger({
-      dirtyPaths: ['server/services/thing.js', 'PORTOS_PUBLIC_REVIEW_INPUT.json']
+      dirtyPaths: ['PORTOS_PUBLIC_REVIEW_INPUT.json']
     }));
 
     const res = await reconcile('/repo', { reapSuperseded: true, activeAgentIds: new Set() });
@@ -2023,7 +1909,6 @@ describe('reconcile — cached SUPERSEDED verdicts (#3842)', () => {
     }], { activeAgentIds: new Set() });
     expect(out.reaped).toEqual([]);
     expect(out.skipped).toEqual([{ branch: BRANCH, reason: 'verdict-does-not-match-branch' }]);
-    expect(backupSupersededBranchMock).not.toHaveBeenCalled();
   });
 
   it('re-analyzes when the branch tip moved', async () => {
@@ -2114,15 +1999,7 @@ describe('reconcile — detached-HEAD worktrees (#10825)', () => {
     expect(wt.forceRemoveWorktreeDir).toHaveBeenCalledWith('/repo', path, expect.any(Object));
     expect(res.detachedWorktrees).toEqual([]);
     expect(preserveMergedCheckout).not.toHaveBeenCalled();
-    expect(releaseCheckoutWithoutArchive).toHaveBeenCalled();
-  });
-
-  it('archives a detached tree outside the ownership lock while fencing its path', async () => {
-    const path = '/repo/data/cos/worktrees/agent-1234abcd';
-    wt.listWorktrees.mockResolvedValue([MAIN, detachedTree(path)]);
-    stubGit();
-    const res = await expectArchiveOutsideOwnershipLock(() => reconcile('/repo'), { path });
-    expect(res.cleaned).toContain(path);
+    expect(releaseCheckoutWithoutArchive).not.toHaveBeenCalled();
   });
 
   it('removes a clean detached tree without copying it', async () => {

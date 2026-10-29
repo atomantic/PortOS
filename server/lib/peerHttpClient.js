@@ -3,6 +3,7 @@ import http from 'node:http';
 import https from 'node:https';
 import { createHmac } from 'node:crypto';
 import { insecureFetch, RESPONSE_TOO_LARGE } from './httpClient.js';
+import { isPairedPeer } from './peerPairing.js';
 
 const peerHttpsAgent = new https.Agent({ rejectUnauthorized: false, keepAlive: true });
 const httpsFetch = insecureFetch(peerHttpsAgent);
@@ -64,7 +65,7 @@ export function derivePeerAuthToken(syncSecret, senderInstanceId) {
  */
 function peerCredentialHeaders(peer, selfInstanceId) {
   if (!peer) return {};
-  const paired = typeof peer.syncSecret === 'string' && peer.syncSecret.length >= 32 && Boolean(selfInstanceId);
+  const paired = isPairedPeer(peer) && Boolean(selfInstanceId);
   if (!paired) return peerAuthHeaders(peer);
   return {
     [PEER_INSTANCE_HEADER]: selfInstanceId,
@@ -90,6 +91,11 @@ async function selfInstanceId() {
     const id = await instanceIdentity?.getInstanceId?.().catch(() => null);
     if (typeof id === 'string' && id && id !== instanceIdentity?.UNKNOWN_INSTANCE_ID) cachedSelfInstanceId = id;
   }
+  return cachedSelfInstanceId;
+}
+
+/** The memoized instance id, or null before the first hop resolved it (or after a reset). */
+export function memoizedSelfInstanceId() {
   return cachedSelfInstanceId;
 }
 
