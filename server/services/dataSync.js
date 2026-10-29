@@ -38,11 +38,11 @@ import { getPipelineMutationEpoch } from './pipeline/syncEpoch.js';
 import { mergeSeriesFromSync, listSeries } from './pipeline/series.js';
 import { mergeIssuesFromSync, listAllIssues } from './pipeline/issues.js';
 import { getPeers } from './instances.js';
-import { mutateVideoHistory, HISTORY_UNCHANGED } from './videoGen/history.js';
+import { mutateVideoHistory, HISTORY_UNCHANGED, videoRowLiveStamp } from './videoGen/history.js';
 import { listHostedEntries, reconcileHostedMedia } from './peerHostedMedia.js';
 import { sanitizeAssetFilename } from './sharing/buckets.js';
 import { authorizeRemoteMediaTombstone } from './mediaTombstoneAuthorization.js';
-import { listMediaTombstones, mergeMediaTombstones } from './mediaTombstones.js';
+import { listMediaTombstones, mergeMediaTombstones, clearMediaTombstone } from './mediaTombstones.js';
 import { emitMediaHistoryChanged } from './peerSyncEventBus.js';
 import { referenceCollectionAssetManifest } from './sharing/peerSyncAssets.js';
 import { mergeMediaCollectionsFromSync, listCollections, itemKey } from './mediaCollections.js';
@@ -982,9 +982,15 @@ async function applyVideoHistoryRemote(remoteData, source) {
  */
 export async function mergeVideoRows(incomingRows, source) {
   const tombstones = await listMediaTombstones('video');
-  // A row survives a tombstone only when it was (re)created after the delete.
-  const isDeleted = (r) => isTombstoned(tombstones, r.id, r.createdAt, 'key');
-  const incoming = (Array.isArray(incomingRows) ? incomingRows : []).filter((r) => !(hasVideoRowId(r) && isDeleted(r)));
+  // Only the row's owner may un-delete it: a `restoredAt` from any other
+  // sender is dropped, so it can neither pass a delete here nor shield the
+  // row from its owner's later delete.
+  const fromOwner = (r) => typeof source?.peerId === 'string' && r?.originInstanceId === source.peerId;
+  const admitted = (Array.isArray(incomingRows) ? incomingRows : [])
+    .map((r) => (r && typeof r === 'object' && 'restoredAt' in r && !fromOwner(r) ? (({ restoredAt, ...rest }) => rest)(r) : r)); // eslint-disable-line no-unused-vars
+  // A row survives a tombstone only when it was (re)created or restored after the delete.
+  const isDeleted = (r) => isTombstoned(tombstones, r.id, videoRowLiveStamp(r), 'key');
+  const incoming = admitted.filter((r) => !(hasVideoRowId(r) && isDeleted(r)));
   if (incoming.length === 0) return { count: 0, ids: [] };
 
   // The whole read/merge/write runs inside the shared history mutation queue so
@@ -1045,6 +1051,13 @@ export async function mergeVideoRows(incomingRows, source) {
     return [...merged, ...idless].sort((a, b) =>
       String(b?.createdAt ?? '').localeCompare(String(a?.createdAt ?? '')));
   }, { stampOrigin: false });
+  // A row admitted past a tombstone held here (re-created or restored by its
+  // owner) supersedes it: drop it, or this machine keeps advertising a delete
+  // its peers no longer hold and the snapshots never converge.
+  const superseded = new Map(tombstones.map((t) => [t.key, t.deletedAt]));
+  for (const id of changedIds) {
+    if (superseded.has(id)) await clearMediaTombstone('video', id, { deletedAt: superseded.get(id) });
+  }
   emitMediaHistoryChanged({ kind: 'video', op: 'upsert', ids: changedIds });
   return { count: changedIds.length, ids: changedIds };
 }
@@ -1082,7 +1095,7 @@ export async function applyRemoteVideoTombstones(remoteTombstones, { forgetInMus
   // in the store covers has not been admitted for this sender.
   const keys = new Set(remoteTombstones.map((t) => t?.key).filter((key) => typeof key === 'string'));
   const doomed = (Array.isArray(local) ? local : [])
-    .filter((r) => hasVideoRowId(r) && keys.has(r.id) && isTombstoned(tombstones, r.id, r.createdAt, 'key'));
+    .filter((r) => hasVideoRowId(r) && keys.has(r.id) && isTombstoned(tombstones, r.id, videoRowLiveStamp(r), 'key'));
   if (doomed.length === 0) return 0;
   // Lazy import: historyOps pulls in trash/ffmpeg machinery the sync read path avoids.
   const { deleteHistoryItem } = await import('./videoGen/historyOps.js');
@@ -1095,7 +1108,7 @@ export async function applyRemoteVideoTombstones(remoteTombstones, { forgetInMus
       const result = await deleteHistoryItem(row.id, {
         fromRemoteTombstone: true,
         forgetInMusicVideos,
-        onlyIf: (current) => isTombstoned(tombstones, current.id, current.createdAt, 'key'),
+        onlyIf: (current) => isTombstoned(tombstones, current.id, videoRowLiveStamp(current), 'key'),
       });
       if (result?.skipped) {
         console.log(`⏭️ VideoHistory tombstone: ${row.id} was re-created since the delete`);

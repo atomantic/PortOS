@@ -46,6 +46,7 @@ const [
   { loadData: readRegistry },
   { PATHS, atomicWrite },
   { peerFetch },
+  { clearRestoredMediaTombstones },
 ] = await Promise.all([
   import('express'),
   import('socket.io'),
@@ -64,6 +65,7 @@ const [
   import('../services/instanceIdentity.js'),
   import('../lib/fileUtils.js'),
   import('../lib/peerHttpClient.js'),
+  import('../services/mediaRestoreTombstones.js'),
 ]);
 
 const requests = [];
@@ -136,8 +138,20 @@ const commands = {
     const row = { id, filename: `${id}.mp4`, thumbnail: `${id}.jpg`, prompt: 'Example prompt', createdAt: new Date(realNow()).toISOString() };
     await mutateVideoHistory((history) => { history.unshift(row); return history; });
   },
+  async fullRow({ id }) {
+    return (await loadHistory()).find((r) => r.id === id) ?? null;
+  },
+  // A backup folder restore of video-history.json + videos/: the bytes and the
+  // row written straight to disk (as rsync does), then the restore reconcile's
+  // delete-record pass.
+  async restoreVideoFromBackup({ row }) {
+    mkdirSync(PATHS.videos, { recursive: true });
+    writeFileSync(join(PATHS.videos, row.filename), Buffer.from(`synthetic-video-${row.id}`));
+    await atomicWrite(join(PATHS.data, 'video-history.json'), [row, ...(await loadHistory()).filter((r) => r.id !== row.id)]);
+    return clearRestoredMediaTombstones();
+  },
   async rows() {
-    return (await loadHistory()).map(({ id, originInstanceId, pendingDelete, hidden }) => ({ id, originInstanceId, pendingDelete, hidden }));
+    return (await loadHistory()).map(({ id, originInstanceId, pendingDelete, hidden, restoredAt }) => ({ id, originInstanceId, pendingDelete, hidden, restoredAt }));
   },
   async files({ id }) {
     return {

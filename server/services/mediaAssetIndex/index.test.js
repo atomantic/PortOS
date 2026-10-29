@@ -20,6 +20,8 @@ vi.mock('./db.js', async () => ({ upsertAsset, reconcileMediaAssets, removeAsset
 vi.mock('../../lib/db.js', () => ({ checkHealth, ensureSchema }));
 vi.mock('../imageGen/local.js', () => ({ readImageSidecar, listGallery: vi.fn(async () => []) }));
 vi.mock('../videoGen/local.js', () => ({ loadHistory }));
+const clearRestoredMediaTombstones = vi.fn(async () => ({ videos: [], images: [] }));
+vi.mock('../mediaRestoreTombstones.js', () => ({ clearRestoredMediaTombstones }));
 
 import { imageGenEvents } from '../imageGenEvents.js';
 import { videoGenEvents } from '../videoGen/events.js';
@@ -61,6 +63,8 @@ describe('initMediaAssetIndex', () => {
     await initMediaAssetIndex();
     expect(ensureSchema).toHaveBeenCalled();
     expect(reconcileMediaAssets).toHaveBeenCalled();
+    // Boot is where a Put Back from the OS Trash sheds its delete record.
+    expect(clearRestoredMediaTombstones).toHaveBeenCalled();
 
     // A finished image render → one upsert keyed image:<filename>, sidecar merged.
     imageGenEvents.emit('completed', { generationId: 'g1', filename: 'img-1.png' });

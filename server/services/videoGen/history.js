@@ -12,8 +12,20 @@ import { stat, access } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { compactSource } from '../mediaAssetIndex/logic.js';
 import { PATHS, readJSONFile, atomicWrite } from '../../lib/fileUtils.js';
+import { compareNewerWins } from '../../lib/lwwTimestamp.js';
 
 const HISTORY_FILE = join(PATHS.data, 'video-history.json');
+
+/**
+ * The stamp a video tombstone must postdate to retire this row: its creation,
+ * or a later `restoredAt` its owner set when the user brought the row back
+ * from a backup after deleting it (mediaRestoreTombstones.js). `createdAt`
+ * stays the row's immutable LWW key; an older peer that ignores `restoredAt`
+ * keeps treating the row as deleted, as before.
+ */
+export function videoRowLiveStamp(row) {
+  return compareNewerWins(row?.restoredAt, row?.createdAt) ? row.restoredAt : row?.createdAt;
+}
 
 // STRICT (#4115): every write to this file goes `loadHistory` → mutate →
 // `saveHistory`, so a present-but-unreadable video-history.json swallowed to `[]`

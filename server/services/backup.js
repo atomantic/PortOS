@@ -1513,17 +1513,24 @@ function describeReconcileFailure(reason) {
 }
 
 async function reconcileLiveFileRestore(subdirFilter) {
+  const restoresMedia = !subdirFilter || ['images', 'videos', 'video-thumbnails', 'video-history.json']
+    .some(path => subdirFilter === path || subdirFilter.startsWith(`${path}/`));
   const refreshes = [
     ...(!subdirFilter || subdirFilter === 'brain' || subdirFilter.startsWith('brain/')
       ? [{ label: 'Brain cache invalidation', run: invalidateBrainCaches }]
       : []),
     { label: 'settings reload', run: reloadSettings },
-    ...((!subdirFilter || ['images', 'videos', 'video-thumbnails', 'video-history.json']
-      .some(path => subdirFilter === path || subdirFilter.startsWith(`${path}/`)))
-      && !usesFileEscapeHatch()
+    ...(restoresMedia && !usesFileEscapeHatch()
       ? [{ label: 'media index rebuild', run: async () => {
         const { reconcileMediaAssets } = await import('./mediaAssetIndex/db.js');
         await reconcileMediaAssets({ rebuild: true });
+      } }] : []),
+    // A restored item keeps the delete record left by its earlier delete;
+    // locally owned ones are un-deleted and re-announced to peers.
+    ...(restoresMedia
+      ? [{ label: 'restored media delete records', run: async () => {
+        const { clearRestoredMediaTombstones } = await import('./mediaRestoreTombstones.js');
+        await clearRestoredMediaTombstones();
       } }] : []),
     // Migration 359 converts this plan once, at boot, so a plan restored from a
     // pre-359 snapshot would otherwise stay legacy and unrunnable: a folder
