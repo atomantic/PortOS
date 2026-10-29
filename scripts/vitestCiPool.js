@@ -89,8 +89,6 @@ const EXCLUSIVE_TESTS = [
   // Windows deadlines in the parallel group; retain deadlines on a quiet worker.
   '../scripts/ciTestPolicy.test.js',
   'services/git.sharedRecovery.test.js',
-  '../scripts/persistentMindProcessAuditCleanup.test.js',
-  '../scripts/writersRoomPromotionCleanup.test.js',
 ];
 
 /**

@@ -2612,6 +2612,8 @@ export async function __resetForTests() {
   pendingTransitions.clear();
   videoHolds.clear();
   sseJobs.clear();
+  quotaCooldowns.clear();
+  recoveringJobs.clear();
   workerStarted = false;
   workerOperation = null;
   dispatchQuiesced = false;

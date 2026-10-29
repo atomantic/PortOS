@@ -36,8 +36,10 @@ const { runDatabaseCutover } = await import('./databaseMaintenanceCutover.js');
 
 const native = { mode: 'native', host: 'db.example.invalid', port: 5432, database: 'example_test', user: 'example' };
 const docker = { mode: 'docker', host: 'db.example.invalid', port: 5561, database: 'example_test', user: 'example' };
-// `fast` shortens the proof deadline for a run that is MEANT to hit it. A run
-// that must succeed uses `patient` instead: its restarted server is a real
+// `fast` shortens the proof deadline for a run that is MEANT to hit it: every
+// such case makes the proof impossible (wrong pool, unhealthy target, stopped
+// process, reused pid), so the whole deadline is waited out and its length only
+// costs wall time. Keep it short. A run that must succeed uses `patient` instead: its restarted server is a real
 // subprocess whose startup is CPU-bound — 1-2s idle, but 4-5s once the host is
 // ~13x oversubscribed, with a valid proof published just AFTER a 4s deadline
 // (#9368). Racing a clock against that startup made recovery flaky without
@@ -45,7 +47,7 @@ const docker = { mode: 'docker', host: 'db.example.invalid', port: 5561, databas
 // costs nothing when the host is healthy.
 import { isProcessAlive } from '../test/processAlive.js';
 
-const fast = { graceMs: 1500, pollMs: 20, proofTimeoutMs: 4000 };
+const fast = { graceMs: 1500, pollMs: 20, proofTimeoutMs: 1000 };
 const patient = { ...fast, proofTimeoutMs: 30_000 };
 const alive = isProcessAlive;
 const processStart = async pid => process.platform === 'win32' ? null

@@ -954,12 +954,30 @@ interpreter bound from `resolveTestPython()`; ffmpeg/ffprobe; and Chrome for
 the browser suites, found with the suites' own candidate list,
 `resolveTestChrome` in `scripts/lib/testChrome.js`); an unknown program
 handed a `.py` file fails closed; the workspace Vitest config closure, setup files,
-`scripts/vitestCiPool.js`, `package.json` and lockfile; the full Node
+`scripts/vitestCiPool.js`, `package.json` and lockfile (the workspace base,
+below); the full Node
 version, `process.platform`, `process.arch`; and `TEST_MEMO_ENV` (`CI`,
 `NODE_ENV`, `PORTOS_BROWSER_TEST_PROFILE`, `PORTOS_CI_BROWSER_OWNER`,
 `PORTOS_REQUIRE_BROWSER_SUITES`, `PORTOS_REQUIRE_LINUX_CONTAINMENT`,
 `PORTOS_TEST_QUIET`, `PORTOS_TEST_PYTHON`, `CHROME_PATH`, `TZ`, `LANG`,
 `LC_ALL`, `CI_EXPECT_SLASHDO_SUBMODULE`, …).
+
+The workspace base leaves out two things that cannot change what a
+collected file proves. The test-selection modules the configs import only
+for `include`/`exclude` (`WORKSPACE_SELECTION_MODULES`:
+`scripts/lib/workspaceTests.js`, `scripts/lib/dbTestFiles.js`,
+`scripts/lib/browserSuites.js`) decide which files run, so adding a suite to
+`DB_TEST_INCLUDE` no longer moves every key; a test that imports one keys it
+through its own closure. And the walk does not follow a bare
+`vi.mock`/`vi.doMock`/`vi.unmock` registration: setup's global
+`vi.mock('./services/instances.js', …)` loads nothing until a test imports
+`instances.js`, and then that module and its closure are in the test's own
+closure (a non-literal edge fails the floor key closed) or record. What the
+setup files really import (`mockPathsDataRoot.js`, `fileWriteQueue.js`,
+`test/admissionSetup.js`, …) stays in every key. Before this, the floor
+base pulled in instances.js's ~100-file product closure, so an edit to
+`catalogValidation.js` changed every floor key and pull requests never hit
+the nightly memo.
 
 The recorded key takes the setup phase from the record too. Vitest's depfile
 lists, in every test file's record, the modules its custom environment and
@@ -971,7 +989,8 @@ setup files only mock or never load (`services/instances.js` and its
 closure) no longer invalidates every recorded key. A record that does not
 name every setup entry (a per-file environment pragma) keeps the full static
 base, and a setup-phase problem the static walk finds still fails both keys
-closed. The floor key always walks the setup closure.
+closed. The floor key always walks the setup closure (less bare mock
+registrations).
 
 **Never memoized (fails closed).** A file in the planner's `ALWAYS_RUN_TESTS`
 or in `TEST_MEMO_NEVER` (the tree-wide convention and catalog scanners); a
