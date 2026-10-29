@@ -16,7 +16,7 @@
 import { EventEmitter } from 'node:events';
 import { registerHooks } from 'node:module';
 import { parentPort, workerData } from 'node:worker_threads';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { join } from 'node:path';
 
@@ -144,6 +144,11 @@ const commands = {
       video: existsSync(join(PATHS.videos, `${id}.mp4`)),
       thumbnail: existsSync(join(PATHS.videoThumbnails, `${id}.jpg`)),
     };
+  },
+  // Names in this machine's trash stand-in (peerMachineTrash.js).
+  async trashed() {
+    const bin = join(workerData.root, 'trash-bin');
+    return existsSync(bin) ? readdirSync(bin) : [];
   },
   async tombstones() {
     return (await listMediaTombstones('video')).map((t) => t.key);

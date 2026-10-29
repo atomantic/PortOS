@@ -10,7 +10,7 @@
  * invalidation or frame delivery); the cadence cases shift one machine's
  * Date.now instead of sleeping.
  */
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { Worker } from 'node:worker_threads';
 import { rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -39,24 +39,52 @@ function startMachine(name) {
   worker.stderr.on('data', (chunk) => output.push(String(chunk)));
   const pending = new Map();
   let seq = 0;
-  const ready = new Promise((resolve, reject) => {
-    worker.once('error', reject);
-    worker.on('message', (message) => {
-      if (message.ready) return resolve();
-      const call = pending.get(message.id);
-      pending.delete(message.id);
-      if (!message.error) return call.resolve(message.result);
-      const err = new Error(`${name}: ${message.error.message}`);
-      Object.assign(err, { status: message.error.status, code: message.error.code });
-      call.reject(err);
-    });
+  let dead = null;
+  let markReady;
+  let failStart;
+  const ready = new Promise((resolve, reject) => { markReady = resolve; failStart = reject; });
+  // After a crash or exit every outstanding and later call fails at once,
+  // naming the machine, instead of waiting out the test timeout.
+  const die = (reason) => {
+    if (dead) return;
+    dead = new Error(`machine ${name} ${reason}`);
+    failStart(dead);
+    for (const call of pending.values()) call.reject(dead);
+    pending.clear();
+  };
+  worker.on('error', (err) => die(`crashed: ${err.message}`));
+  worker.on('exit', (code) => die(`exited (code ${code})`));
+  worker.on('message', (message) => {
+    if (message.ready) return markReady();
+    const call = pending.get(message.id);
+    pending.delete(message.id);
+    if (!call) return;
+    if (!message.error) return call.resolve(message.result);
+    const err = new Error(`${name}: ${message.error.message}`);
+    Object.assign(err, { status: message.error.status, code: message.error.code });
+    call.reject(err);
   });
   const call = (cmd, args) => new Promise((resolve, reject) => {
+    if (dead) return reject(dead);
     const id = ++seq;
     pending.set(id, { resolve, reject });
     worker.postMessage({ id, cmd, args });
   });
-  return { root, ready, call, output, terminate: () => worker.terminate() };
+  return { name, root, ready, call, output, terminate: () => worker.terminate() };
+}
+
+// Teardown that runs even when a worker crashed or hangs: bounded stop, then
+// terminate and remove the root regardless.
+async function shutDown(machine) {
+  try {
+    let timer;
+    const bound = new Promise((resolve) => { timer = setTimeout(resolve, 5000); });
+    await Promise.race([machine.call('stop').catch(() => {}), bound]);
+    clearTimeout(timer);
+  } finally {
+    await machine.terminate().catch(() => {});
+    rmSync(machine.root, { recursive: true, force: true });
+  }
 }
 
 const peerRecord = (m, port) => ({
@@ -96,12 +124,18 @@ beforeAll(async () => {
 }, 120_000);
 
 afterAll(async () => {
-  for (const machine of [a, b]) {
-    if (!machine) continue;
-    await machine.call('stop').catch(() => {});
-    await machine.terminate();
-    rmSync(machine.root, { recursive: true, force: true });
-  }
+  await Promise.allSettled([a, b].filter(Boolean).map(shutDown));
+});
+
+// A failing case prints what both machines logged while it ran.
+beforeEach(({ onTestFailed }) => {
+  const marks = [a, b].map((machine) => machine?.output.length ?? 0);
+  onTestFailed(() => {
+    for (const [i, machine] of [a, b].entries()) {
+      const logged = machine?.output.slice(marks[i]).join('');
+      if (logged) process.stderr.write(`\n--- machine ${machine.name} output ---\n${logged}`);
+    }
+  });
 });
 
 describe('media deletes between two machines', () => {
@@ -114,6 +148,7 @@ describe('media deletes between two machines', () => {
 
     expect(result.status).toBe('deleted');
     expect(await a.call('files', { id: 'v-event' })).toEqual({ video: false, thumbnail: false });
+    expect(await a.call('trashed')).toEqual(expect.arrayContaining([expect.stringMatching(/-v-event\.mp4$/), expect.stringMatching(/-v-event\.jpg$/)]));
     expect(await ids(b)).not.toContain('v-event');
     expect(await b.call('tombstones')).toContain('v-event');
     // B never pulled a snapshot from A: the frame alone carried the delete.
@@ -154,6 +189,8 @@ describe('media deletes between two machines', () => {
     expect(result).toMatchObject({ status: 'deleted', peerName: 'Machine A' });
     expect(await a.call('takeRequests')).toContain('POST /api/peer-media/delete');
     expect(await a.call('files', { id: 'v-remote' })).toEqual({ video: false, thumbnail: false });
+    // Moved to A's trash (the OS trash stand-in), not erased.
+    expect(await a.call('trashed')).toEqual(expect.arrayContaining([expect.stringMatching(/-v-remote\.mp4$/), expect.stringMatching(/-v-remote\.jpg$/)]));
     expect(await ids(a)).not.toContain('v-remote');
     expect(await ids(b)).not.toContain('v-remote');
     expect(await a.call('tombstones')).toContain('v-remote');
