@@ -1063,6 +1063,10 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // so it does not need whole-payload gating. An older peer that lacks the
   // `videoHistory` route simply rejects that one category request and keeps
   // syncing everything else.
+  // The snapshot also carries an OPTIONAL `tombstones` list (deliberate deletes,
+  // keyed by row id). Older peers ignore it (they simply keep unioning rows and
+  // may re-offer a deleted row until upgraded); it is omitted when empty so the
+  // checksum of a peer with no deletes is unchanged. Additive, so still ungated.
   //
   // The gate is now PER-CATEGORY (see `scopeVersionDiff` below + its three
   // call sites: dataSync `applyRemote`, peerSync push, sharing importer), so

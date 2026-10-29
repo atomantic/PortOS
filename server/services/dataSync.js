@@ -40,6 +40,7 @@ import { mergeIssuesFromSync, listAllIssues } from './pipeline/issues.js';
 import { getPeers } from './instances.js';
 import { mutateVideoHistory, HISTORY_UNCHANGED } from './videoGen/history.js';
 import { markHosted } from './peerHostedMedia.js';
+import { listMediaTombstones, mergeMediaTombstones } from './mediaTombstones.js';
 import { referenceCollectionAssetManifest } from './sharing/peerSyncAssets.js';
 import { mergeMediaCollectionsFromSync, listCollections, itemKey } from './mediaCollections.js';
 import { listSyncableSessionsForWire, mergeStorySessionsFromSync } from './storyBuilder.js';
@@ -931,13 +932,30 @@ async function getVideoHistorySnapshot() {
       .map(({ hidden, ...rest }) => rest) // eslint-disable-line no-unused-vars
       .sort((a, b) => a.id.localeCompare(b.id)),
   };
+  // Deliberate deletes ride the snapshot so a peer still holding the row can't
+  // resurrect it. Sorted by key for a deterministic checksum. The key is OMITTED
+  // when empty so a peer with no deletes keeps the exact pre-tombstone checksum
+  // (an older peer that ignores `tombstones` would otherwise never converge).
+  const tombstones = [...(await listMediaTombstones('video'))].sort((a, b) => a.key.localeCompare(b.key));
+  if (tombstones.length > 0) data.tombstones = tombstones;
   return { data, checksum: computeChecksum(data) };
 }
 
 async function applyVideoHistoryRemote(remoteData, source) {
   if (!remoteData) return { applied: false, count: 0 };
-  const incoming = Array.isArray(remoteData.videos) ? remoteData.videos : [];
-  if (incoming.length === 0) return { applied: false, count: 0 };
+  const incomingRows = Array.isArray(remoteData.videos) ? remoteData.videos : [];
+  const incomingTombstones = Array.isArray(remoteData.tombstones) ? remoteData.tombstones : [];
+  if (incomingRows.length === 0 && incomingTombstones.length === 0) return { applied: false, count: 0 };
+
+  // Tombstones merge first so the row merge below sees the full delete set.
+  const removedCount = await applyRemoteVideoTombstones(incomingTombstones);
+  const tombstones = await listMediaTombstones('video');
+  // A row survives a tombstone only when it was (re)created after the delete.
+  const isDeleted = (r) => isTombstoned(tombstones, r.id, r.createdAt, 'key');
+  const incoming = incomingRows.filter((r) => !(hasVideoRowId(r) && isDeleted(r)));
+  if (incoming.length === 0) {
+    return removedCount > 0 ? { applied: true, count: removedCount } : { applied: false, count: 0 };
+  }
 
   // `host`-mode peers keep the bytes: index their video rows as peer-hosted so
   // /data/videos and /data/video-thumbnails stream from the peer instead of
@@ -994,9 +1012,38 @@ async function applyVideoHistoryRemote(remoteData, source) {
     return [...merged, ...idless].sort((a, b) =>
       String(b?.createdAt ?? '').localeCompare(String(a?.createdAt ?? '')));
   });
+  changedCount += removedCount;
   if (changedCount === 0) return { applied: false, count: 0 };
   console.log(`🔄 VideoHistory sync: merged ${changedCount} video row(s)`);
   return { applied: true, count: changedCount };
+}
+
+/**
+ * Merge a remote video tombstone list and trash every local row (and its files)
+ * it supersedes. Reusable by a future realtime delete path. Returns the number
+ * of local rows removed. `fromRemoteTombstone` keeps deleteHistoryItem from
+ * re-recording the tombstone or re-announcing the delete.
+ */
+export async function applyRemoteVideoTombstones(remoteTombstones) {
+  if (!Array.isArray(remoteTombstones) || remoteTombstones.length === 0) return 0;
+  await mergeMediaTombstones('video', remoteTombstones);
+  const tombstones = await listMediaTombstones('video');
+  const local = await readJSONFile(VIDEO_HISTORY_FILE, [], { strict: true });
+  const doomed = (Array.isArray(local) ? local : [])
+    .filter((r) => hasVideoRowId(r) && isTombstoned(tombstones, r.id, r.createdAt, 'key'));
+  if (doomed.length === 0) return 0;
+  // Lazy import: historyOps pulls in trash/ffmpeg machinery the sync read path avoids.
+  const { deleteHistoryItem } = await import('./videoGen/historyOps.js');
+  let removed = 0;
+  for (const row of doomed) {
+    try {
+      await deleteHistoryItem(row.id, { fromRemoteTombstone: true });
+      removed++;
+    } catch (err) {
+      console.error(`❌ VideoHistory tombstone removal failed for ${row.id}: ${err.message}`);
+    }
+  }
+  return removed;
 }
 
 // --- Category: Story Builder sessions ---

@@ -7,6 +7,7 @@ import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js'
 import { safeUnder } from '../../lib/ffmpeg.js';
 import { mutateVideoHistory } from './history.js';
 import { extendMasterPath } from './extendMaster.js';
+import { recordMediaTombstone } from '../mediaTombstones.js';
 
 export async function updateHistoryItemPrompt(id, prompt) {
   let result;
@@ -42,7 +43,10 @@ export async function setHistoryItemHidden(id, hidden) {
   return result;
 }
 
-export async function deleteHistoryItem(id, { forgetInMusicVideos = true } = {}) {
+// `fromRemoteTombstone`: the delete originated from a peer's tombstone, which the
+// caller already merged — so don't re-record it (that would restamp deletedAt
+// and ping-pong) or re-announce it.
+export async function deleteHistoryItem(id, { forgetInMusicVideos = true, fromRemoteTombstone = false } = {}) {
   // One lease covers the history read, file removals, history rewrite, and
   // derived row removal; per-file admission would leave gaps between stores.
   return withBackupAssetPublication(async () => {
@@ -65,6 +69,7 @@ export async function deleteHistoryItem(id, { forgetInMusicVideos = true } = {})
       await trashFiles(files);
       return history.filter(entry => entry.id !== id);
     });
+    if (!fromRemoteTombstone) await recordMediaTombstone('video', id);
     // Drop the derived index row with the entry (#2738) — keyed by job id, the
     // ref the index wrote it under. Non-fatal + dynamically imported; see the
     // matching hook in imageGen/local.js#deleteImage for the rationale.
