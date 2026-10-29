@@ -3,10 +3,10 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { existsSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { destroyGitSandbox, makeGitSandbox, SKIP_HEAVY_INTEGRATION } from '../lib/gitTestRepo.js';
 import { execGit } from '../lib/execGit.js';
-import { retireSnapshotMergeCheckouts } from './appQualitySnapshotMerge.js';
+import { retireSnapshotMergeCheckouts, sweepSettledSnapshotCheckouts } from './appQualitySnapshotMerge.js';
 
 const pr = { url: 'https://github.com/example/repo/pull/7' };
 const admitted = { checkSnapshotPublicationOwnership: async () => ({ admitted: true }) };
@@ -27,11 +27,19 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('retireSnapshotMergeCheckouts', () => {
     return path;
   }
 
-  it('retains unverified ignored validation output in a merged snapshot checkout', async () => {
+  it('retires a clean merged snapshot checkout holding only its receipt and validation report', async () => {
     const path = await snapshotCheckout('clean');
     const held = await retireSnapshotMergeCheckouts({ id: 'app', repoPath: sandbox.repo }, pr, admitted);
+    expect(held).toEqual([]);
+    expect(existsSync(path)).toBe(false);
+  });
+
+  it('retains unverified ignored output in a merged snapshot checkout', async () => {
+    const path = await snapshotCheckout('ignored');
+    await writeFile(join(path, '.cache', 'unique-output.bin'), 'only copy');
+    const held = await retireSnapshotMergeCheckouts({ id: 'app', repoPath: sandbox.repo }, pr, admitted);
     expect(held).toHaveLength(1);
-    expect(existsSync(join(path, '.cache', 'pregate', 'report.json'))).toBe(true);
+    expect(existsSync(join(path, '.cache', 'unique-output.bin'))).toBe(true);
   });
 
   it('keeps a snapshot checkout with untracked work', async () => {
@@ -41,5 +49,28 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('retireSnapshotMergeCheckouts', () => {
     expect(held).toHaveLength(1);
     expect(existsSync(path)).toBe(true);
     expect(existsSync(join(path, 'wanted.txt'))).toBe(true);
+  });
+
+  it('sweeps checkouts of settled PRs and keeps those of open PRs', async () => {
+    const make = async (name, prUrl) => {
+      const path = join(sandbox.scratch, `portos-quality-${name}`);
+      await execGit(['worktree', 'add', '--detach', path, 'HEAD'], sandbox.repo);
+      const head = (await execGit(['rev-parse', 'HEAD'], path)).stdout.trim();
+      await writeFile(join(sandbox.repo, '.git', 'info', 'exclude'), '.cache/\n');
+      await mkdir(join(path, '.cache'), { recursive: true });
+      await writeFile(join(path, '.cache', 'quality-snapshot-merge.json'), JSON.stringify({ prUrl, checkoutHead: head }));
+      return path;
+    };
+    const merged = await make('merged', 'https://github.com/example/repo/pull/1');
+    const open = await make('open', 'https://github.com/example/repo/pull/2');
+    const deps = {
+      ...admitted,
+      resolveForgeForRepo: async () => ({ cli: 'gh', env: {} }),
+      execGh: async args => JSON.stringify({ state: args[2].endsWith('/1') ? 'MERGED' : 'OPEN' }),
+    };
+    const swept = await sweepSettledSnapshotCheckouts({ id: 'app', repoPath: sandbox.repo }, {}, deps);
+    expect(swept.map(p => basename(p))).toEqual([basename(merged)]);
+    expect(existsSync(merged)).toBe(false);
+    expect(existsSync(open)).toBe(true);
   });
 });

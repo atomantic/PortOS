@@ -92,7 +92,7 @@ export async function validateSnapshotMerge(app, pr, evidence, git, deps) {
 }
 
 /** Git's durable checkout inventory plus our evidence survives publisher restarts. */
-export async function retainedSnapshotMergeCheckouts(app, pr, deps) {
+async function listSnapshotCheckouts(app, deps, wantedPrUrl = null) {
   const list = deps.listSnapshotMergeWorktrees || (await import('./worktreeManager.js')).listWorktrees;
   const read = deps.readMergeEvidence || readFile;
   const retained = [];
@@ -102,25 +102,30 @@ export async function retainedSnapshotMergeCheckouts(app, pr, deps) {
       .catch(error => { if (error.code === 'ENOENT') return null; throw error; });
     if (body === null) continue;
     const record = JSON.parse(body);
-    if (record.prUrl !== pr.url) continue;
+    if (wantedPrUrl && record.prUrl !== wantedPrUrl) continue;
     if (record.checkoutHead !== tree.head || !tree.detached || tree.branch || tree.locked) {
       throw new Error('retained-snapshot-checkout-changed');
     }
-    retained.push(tree);
+    retained.push({ ...tree, prUrl: record.prUrl });
   }
   return retained;
 }
 
+export const retainedSnapshotMergeCheckouts = (app, pr, deps) => listSnapshotCheckouts(app, deps, pr.url);
+
 /** Remove verified snapshot checkouts in place. Nothing is copied into an archive. */
-export async function retireSnapshotMergeCheckouts(app, pr, deps) {
+export const retireSnapshotMergeCheckouts = async (app, pr, deps) =>
+  retireSnapshotTrees(app, deps, await retainedSnapshotMergeCheckouts(app, pr, deps));
+
+async function retireSnapshotTrees(app, deps, trees) {
   const { forceRemoveWorktreeDir, classifyWorktreeDirt } = await import('./worktreeManager.js');
   const { execGit } = await import('../lib/execGit.js');
   const { retireWithUnlockedArchive } = await import('./cosClaimOwnershipState.js');
   const checkOwner = deps.checkSnapshotPublicationOwnership
     || (await import('./cosClaimOwnership.js')).checkSnapshotPublicationOwnership;
   const held = [];
-  for (const tree of await retainedSnapshotMergeCheckouts(app, pr, deps)) {
-    const ownership = async () => (await checkOwner({ appId: app.id, branch: 'portos/quality-snapshot', prUrl: pr.url }))?.admitted === true;
+  for (const tree of trees) {
+    const ownership = async () => (await checkOwner({ appId: app.id, branch: 'portos/quality-snapshot', prUrl: tree.prUrl }))?.admitted === true;
     const result = await retireWithUnlockedArchive({
       busy: () => ({ removed: false }),
       admit: async () => await ownership()
@@ -141,6 +146,33 @@ export async function retireSnapshotMergeCheckouts(app, pr, deps) {
     if (!result.removed) held.push(tree.path);
   }
   return held;
+}
+
+/**
+ * A deferred guarded merge keeps its checkout, and every retry cuts a fresh one;
+ * only a successful merge by the SAME run retires them. A PR that lands another
+ * way (auto-merge, manual, a later run) therefore strands its checkouts. Retire
+ * the ones whose PR is MERGED or CLOSED; an unreadable state keeps the tree.
+ */
+export async function sweepSettledSnapshotCheckouts(app, git, deps) {
+  const trees = await listSnapshotCheckouts(app, deps);
+  if (!trees.length) return [];
+  const resolveForge = deps.resolveForgeForRepo || git.resolveForgeForRepo;
+  const { cli, env } = await resolveForge(app.repoPath, { forgeAccount: app.forgeAccount || null });
+  if (cli !== 'gh') return [];
+  const execGh = deps.execGh || (await import('./github.js')).execGh;
+  const settled = new Map();
+  const isSettled = async prUrl => {
+    if (!settled.has(prUrl)) {
+      settled.set(prUrl, execGh(['pr', 'view', prUrl, '--json', 'state'], undefined, { cwd: app.repoPath, env })
+        .then(raw => ['MERGED', 'CLOSED'].includes(JSON.parse(raw)?.state), () => false));
+    }
+    return settled.get(prUrl);
+  };
+  const done = [];
+  for (const tree of trees) if (await isSettled(tree.prUrl)) done.push(tree);
+  const held = new Set(await retireSnapshotTrees(app, deps, done));
+  return done.map(tree => tree.path).filter(path => !held.has(path));
 }
 
 /** Called only inside admission. A moving base needs new guards, not a rebase. */
