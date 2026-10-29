@@ -36,6 +36,7 @@ const { PATHS } = await import('../../lib/fileUtils.js');
 const { getPeers } = await import('../instances.js');
 const { peerFetch } = await import('../../lib/peerHttpClient.js');
 const { syncMediaLibraryFromPeer, buildMediaLibraryManifest } = await import('./peerMediaLibrarySync.js');
+const { FORCE_REVALIDATE_EVERY } = await import('./peerSyncShared.js');
 const { diffAssetManifestAgainstLocal } = await import('./peerSyncAssets.js');
 const { listMediaTombstones, recordMediaTombstone } = await import('../mediaTombstones.js');
 const { PEER_LIBRARY_TOMBSTONES_HEADER, PEER_LIBRARY_TOMBSTONES_SINCE_HEADER } = await import('../../lib/validation.js');
@@ -386,6 +387,18 @@ describe('tombstone cursor', () => {
     const [first, second] = libraryFetches();
     expect(first[1].headers[PEER_LIBRARY_TOMBSTONES_SINCE_HEADER]).toBeUndefined();
     expect(second[1].headers[PEER_LIBRARY_TOMBSTONES_SINCE_HEADER]).toBe(deletedAt);
+  });
+
+  it('asks for the full list again every FORCE_REVALIDATE_EVERY sweeps so a missed older-stamped tombstone heals', async () => {
+    const owner = pairedPeer();
+    seedImage('heal.png', { prompt: 'p', createdAt: '2026-01-01T00:00:00.000Z', originInstanceId: owner.instanceId });
+    advertise(owner, [], { tombstones: [{ key: 'heal.png', deletedAt: now() }] });
+    vi.mocked(peerFetch).mockClear();
+    for (let i = 0; i < FORCE_REVALIDATE_EVERY; i++) await syncMediaLibraryFromPeer(owner);
+    const sent = libraryFetches().map(([, o]) => o.headers[PEER_LIBRARY_TOMBSTONES_SINCE_HEADER] !== undefined);
+    expect(sent[0]).toBe(false);
+    expect(sent[1]).toBe(true);
+    expect(sent[FORCE_REVALIDATE_EVERY - 1]).toBe(false);
   });
 
   it('keeps the cursor back while a tombstone is refused so it is offered again', async () => {

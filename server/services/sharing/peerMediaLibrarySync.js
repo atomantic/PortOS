@@ -236,6 +236,7 @@ const libraryUnchangedSkips = new Map(); // peerInstanceId → count
 // tombstone cursor so an unchanged set is not re-shipped. In-memory like the
 // hash above: a restart sends no cursor and gets the full list.
 const libraryTombstoneCursor = new Map(); // peerInstanceId → ISO deletedAt
+const libraryTombstoneSweeps = new Map(); // peerInstanceId → sweeps counted toward the next full-list request
 // Per-peer re-entrancy guard so a slow sweep (large pull) can't overlap itself
 // when the periodic tick fires again before it finishes.
 const librarySweepInFlight = new Set(); // peerInstanceId
@@ -291,7 +292,12 @@ export async function syncMediaLibraryFromPeer(peer) {
   librarySweepInFlight.add(peer.instanceId);
   try {
     const url = `${peerBaseUrl(peer)}/api/peer-sync/library-manifest?models=1`;
-    const cursor = libraryTombstoneCursor.get(peer.instanceId);
+    // A timestamp cursor can miss a tombstone stamped at or before it (clock
+    // skew, a relayed older delete), so every FORCE_REVALIDATE_EVERY-th sweep
+    // asks for the full list instead and heals that.
+    const cursorSweeps = (libraryTombstoneSweeps.get(peer.instanceId) || 0) + 1;
+    libraryTombstoneSweeps.set(peer.instanceId, cursorSweeps % FORCE_REVALIDATE_EVERY);
+    const cursor = cursorSweeps % FORCE_REVALIDATE_EVERY === 0 ? undefined : libraryTombstoneCursor.get(peer.instanceId);
     const headers = { [PEER_LIBRARY_TOMBSTONES_HEADER]: '1', ...(cursor ? { [PEER_LIBRARY_TOMBSTONES_SINCE_HEADER]: cursor } : {}) };
     const res = await withAbortTimeout(ASSET_PULL_TIMEOUT_MS, (signal) =>
       peerFetch(url, { signal, maxBytes: MEDIA_LIBRARY_MANIFEST_MAX_BYTES, headers }, peer))
