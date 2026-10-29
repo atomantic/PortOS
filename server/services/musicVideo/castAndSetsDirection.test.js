@@ -255,6 +255,21 @@ describe('Cast & Sets direct edits', () => {
   const saved = mergeCastAndSetsDirection(null, parseCastAndSetsResponse(JSON.stringify(PROCEDURAL_ANSWER)), { sections, medium: 'procedural' }).direction;
   const direction = { ...saved, look: 'flat fills' };
 
+  it('keeps distinct original looks that differ only in case during a combined edit', () => {
+    const base = mergeCastAndSetsDirection(null, parseCastAndSetsResponse(JSON.stringify(ANSWER)), { sections }).direction;
+    const previous = { ...base, looks: [{ name: 'Summer', description: 'coat' }, { name: 'SUMMER', description: 'hat' }],
+      tests: [{ setId: 'lab-room', look: 'Summer', action: 'walk', caption: '' }, { setId: 'harbor', look: 'SUMMER', action: 'wait', caption: '' }] };
+    const looks = [{ originalName: 'Summer', name: 'Rain', description: 'coat' }, { originalName: 'SUMMER', name: 'Sun', description: 'hat' }];
+    const edited = applyCastAndSetsDirectionEdits(previous, { looks, tests: [{ index: 1, look: 'Summer' }, { index: 2, look: 'SUMMER' }] }, { sections });
+    expect(edited.direction.tests.map((test) => test.look)).toEqual(['Rain', 'Sun']);
+    expect(() => applyCastAndSetsDirectionEdits(previous, { looks, tests: [{ index: 1, look: 'summer' }] }, { sections }))
+      .toThrow(/ambiguous/i);
+    const oneRenamed = [looks[0], { originalName: 'SUMMER', name: 'SUMMER', description: 'hat' }];
+    const retained = applyCastAndSetsDirectionEdits(previous, { looks: oneRenamed,
+      tests: [{ index: 1, look: 'Summer' }, { index: 2, look: 'SUMMER' }] }, { sections });
+    expect(retained.direction.tests.map((test) => test.look)).toEqual(['Rain', 'SUMMER']);
+  });
+
   it('replaces present fields, keeps absent ones, clears on empty, and reports what changed', () => {
     const edited = applyCastAndSetsDirectionEdits(direction, {
       protagonist: { palette: '#112233, #445566', movement: '', expressions: ['calm: bow level'] },

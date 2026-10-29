@@ -283,10 +283,31 @@ describe('Cast & Sets per-image actions', () => {
     api.getMusicVideoCastAndSets.mockReturnValue(pending.promise);
     render(<Harness initial={sheet('review', { plan: { 'test:1': legacy } })} locked={false} />);
     fireEvent.click(card('Harbor').getByRole('button', { name: 'Edit Harbor' }));
-    await stage(sheet('review', { revision: 2, plan: { 'test:1': { ...legacy, prompt: 'new prompt' } } }));
+    await stage(sheet('review', { revision: 2, plan: { 'test:1': { ...legacy, prompt: 'new prompt', test: { action: 'new action', caption: 'new caption' } } } }));
+    expect(card('Harbor').getByRole('button', { name: 'Edit Harbor' })).toBeEnabled();
+    expect(card('Harbor').getByRole('button', { name: 'Regenerate Harbor' })).toBeEnabled();
+    fireEvent.click(card('Harbor').getByRole('button', { name: 'Edit Harbor' }));
+    expect(card('Harbor').getByLabelText('What happens in the frame').value).toBe('new action');
     await act(async () => { pending.resolve({ stage: { revision: 1, plan: { 'test:1': { ...legacy, test: { action: 'old action' } } } } }); });
+    expect(card('Harbor').getByLabelText('What happens in the frame').value).toBe('new action');
+    expect(card('Harbor').queryByText(/This test changed/)).not.toBeInTheDocument();
+  });
+
+  it('does not let an old legacy read clear a newer pending read', async () => {
+    const legacy = { key: 'test:1', kind: 'test', testIndex: 0, setId: 'harbor', label: 'Harbor', prompt: 'saved prompt', deps: [], refKeys: [] };
+    const first = deferred();
+    const second = deferred();
+    api.getMusicVideoCastAndSets.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+    render(<Harness initial={sheet('review', { plan: { 'test:1': legacy } })} locked={false} />);
+    fireEvent.click(card('Harbor').getByRole('button', { name: 'Edit Harbor' }));
+    const newer = { ...legacy, prompt: 'new prompt' };
+    await stage(sheet('review', { revision: 2, plan: { 'test:1': newer } }));
+    fireEvent.click(card('Harbor').getByRole('button', { name: 'Edit Harbor' }));
+    await act(async () => { first.resolve({ stage: { revision: 1, plan: { 'test:1': { ...legacy, test: { action: 'old action' } } } } }); });
+    expect(card('Harbor').getByRole('button', { name: 'Edit Harbor' })).toBeDisabled();
     expect(card('Harbor').queryByLabelText('What happens in the frame')).not.toBeInTheDocument();
-    expect(card('Harbor').getByText(/This test changed/)).toBeInTheDocument();
+    await act(async () => { second.resolve({ stage: { revision: 2, plan: { 'test:1': { ...newer, test: { action: 'new action' } } } } }); });
+    expect(card('Harbor').getByLabelText('What happens in the frame').value).toBe('new action');
   });
 
   it('adds another age to the protagonist', async () => {

@@ -15,6 +15,8 @@ const TEST_FIELDS = [['action', 'What happens in the frame'], ['caption', 'Capti
 const LONG = new Set(['description', 'action', 'face', 'wardrobe']);
 
 const lines = (text) => String(text || '').split('\n').map((line) => line.trim()).filter(Boolean);
+const cardIdentity = (projectId, revision, item) => JSON.stringify([projectId, revision, item?.key, item?.kind,
+  item?.testIndex, item?.setId, item?.label, item?.prompt, item?.deps, item?.refKeys]);
 
 /**
  * What one card on the check-in edits, as `{ fields | list, values, toEdits, removeEdits }`:
@@ -115,12 +117,18 @@ function ItemEditor({ editor, label, busy, onSave, onCancel }) {
 export default function CastAndSetsItemActions({ item, direction, revision, projectId, busy, onRegenerate, onEdit }) {
   const [mode, setMode] = useState(null);
   const [resolution, setResolution] = useState(null);
-  const [loading, setLoading] = useState(false);
+  const [pending, setPending] = useState(null);
   const [notice, setNotice] = useState('');
   const mounted = useMounted();
-  const identity = JSON.stringify([projectId, revision, item.key, item.testIndex, item.setId, item.prompt]);
+  const savedIdentity = cardIdentity(projectId, revision, item);
+  const identity = JSON.stringify([savedIdentity, item.test || null]);
   const currentIdentity = useRef(identity);
-  currentIdentity.current = identity;
+  const requestVersion = useRef(0);
+  if (currentIdentity.current !== identity) {
+    currentIdentity.current = identity;
+    requestVersion.current += 1;
+  }
+  const loading = pending?.identity === identity && pending?.version === requestVersion.current;
   const resolvedTest = resolution?.identity === identity ? resolution.test : null;
   const currentMode = mode === 'edit' && resolution && !resolvedTest ? null : mode;
   const editor = editorFor(resolvedTest ? { ...item, test: resolvedTest } : item, direction);
@@ -131,13 +139,13 @@ export default function CastAndSetsItemActions({ item, direction, revision, proj
     if (currentMode === 'edit') { close(); return; }
     setNotice('');
     if (item.kind !== 'test' || item.test) { setResolution(null); setMode('edit'); return; }
-    setLoading(true);
+    const version = ++requestVersion.current;
+    setPending({ identity, version });
     try {
       const { stage } = await getMusicVideoCastAndSets(projectId, { silent: true });
-      if (!mounted.current) return;
+      if (!mounted.current || requestVersion.current !== version || currentIdentity.current !== identity) return;
       const fresh = stage?.plan?.[item.key];
-      if (currentIdentity.current !== identity || stage?.revision !== revision || fresh?.prompt !== item.prompt
-        || fresh?.testIndex !== item.testIndex || fresh?.setId !== item.setId) {
+      if (cardIdentity(projectId, stage?.revision, fresh) !== savedIdentity) {
         setNotice('This test changed. Try editing it again.');
         return;
       }
@@ -148,9 +156,9 @@ export default function CastAndSetsItemActions({ item, direction, revision, proj
       setResolution({ identity, test: fresh.test });
       setMode('edit');
     } catch {
-      if (mounted.current && currentIdentity.current === identity) setNotice('Could not load this test. Try again.');
+      if (mounted.current && requestVersion.current === version && currentIdentity.current === identity) setNotice('Could not load this test. Try again.');
     } finally {
-      if (mounted.current) setLoading(false);
+      if (mounted.current) setPending((current) => (current?.version === version ? null : current));
     }
   };
   const actionBusy = busy || loading;
