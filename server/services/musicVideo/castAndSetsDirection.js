@@ -258,11 +258,11 @@ const OUTPUT_SHAPE = `{
     "gesture": "<a recurring gesture tied to a lyric hook, quoting the hook>",
     "rules": ["<continuity or safety rule>"],
     "expressions": ["<a mood from the story: what the face, eyes and head do>"],
-    "forms": [{ "id": "<short-slug>", "label": "<e.g. Age 7>", "age": "<age>", "description": "<how they look at that age>", "hair": "<hair at that age>", "wardrobe": "<their outfit at that age>", "subjectId": "<the FIXED CASTING subject id of the protagonist at this age, or empty>" }]
+    "forms": [{ "id": "<short-slug>", "label": "<e.g. Age 7>", "age": "<age>", "description": "<how they look at that age>", "hair": "<hair at that age>", "wardrobe": "<their outfit at that age>", "era": "<the year or period this age is seen in, e.g. 1965>", "look": "<the film stock, format and color of that memory when it differs from the main look, e.g. black-and-white 8mm home movie, heavy grain; or empty>", "subjectId": "<the FIXED CASTING subject id of the protagonist at this age, or empty>" }]
   },
   "looks": [{ "name": "<SHORT NAME>", "description": "<the complete outfit>", "chapters": "<which parts of the song>" }],
   "cast": [{ "id": "<short-slug>", "name": "<a name>", "role": "<what they are in the video: drummer, shopkeeper, ...>", "description": "<who they are: age, vibe, attitude>", "face": "<face: skin, eyes, brows, distinguishing features>", "hair": "<hair>", "wardrobe": "<their one outfit>" }],
-  "sets": [{ "id": "<short-slug>", "name": "<set name>", "description": "<the empty location, concrete and visual, with nobody in it>", "lighting": "<its one dominant light>", "sections": ["<section label it serves>"] }],
+  "sets": [{ "id": "<short-slug>", "name": "<set name>", "description": "<the empty location, concrete and visual, with nobody in it>", "lighting": "<its one dominant light>", "era": "<the year or period it is seen in when that is not the present story, or empty>", "look": "<the film stock, format and color of that era when it differs from the main look, or empty>", "sections": ["<section label it serves>"] }],
   "songMap": [{ "section": 0, "setId": "<short-slug>" }],
   "tests": [{ "setId": "<short-slug>", "look": "<SHORT NAME>", "action": "<what the protagonist does in this frame>", "caption": "<the lyric or beat it serves>", "formId": "<the protagonist.forms id when this frame shows them at that other age, or empty>" }],
   "overlayConcept": { "summary": "<one persistent graphic layer that ties every shot together>", "elements": [{ "name": "<element>", "description": "<what it shows and when it changes>" }] },
@@ -412,11 +412,12 @@ export function buildCastAndSetsPrompt(project, { moodImages = [], board = null,
     LOOK_AND_SET_RULES,
     '- songMap: one entry per song section index listed above, naming the set that section plays in.',
     '- looks: each is a different complete outfit the protagonist wears at their present-story age. An outfit from another age goes in that age\'s protagonist.forms wardrobe, never in looks.',
+    '- sets in another era: a place the story shows in a memory or another period gets that era and, when the story gives the era its own film stock or color, that look; the same place in two eras is two sets. Present-story sets leave both empty.',
     '- tests: in-set frames of the protagonist that prove the cast works in the world; each names a set id and a look name, and shows a moment from the story. A test showing the protagonist at one of their other ages names that form\'s id in formId; otherwise formId is empty.',
     `- protagonist.expressions: 4–6 moods the protagonist actually shows in THIS story, each "<mood>: <what the face, eyes and head do>" (e.g. "grief held in: eyes closed, head bowed"). They become the expression sheet. ${musicVideoLipSyncs(project)
     ? 'Some shots lip-sync, so one may be singing.'
     : 'Nobody sings or mouths the words on camera in this video: no singing, open-mouthed or straight-to-lens performance expressions.'}`,
-    `- protagonist.forms: when the story shows the protagonist at OTHER ages (a childhood memory, a teenage flashback), one entry per other age, at most ${CAST_SETS_LIMITS.forms}: its age, a short label ("Age 7"), how they look then, their hair and their outfit. The other protagonist fields describe them at their present-story age. When FIXED CASTING lists a character who is the protagonist at that age, put its subject id in subjectId; otherwise subjectId is empty. [] when they appear at one age only.`,
+    `- protagonist.forms: when the story shows the protagonist at OTHER ages (a childhood memory, a teenage flashback), one entry per other age, at most ${CAST_SETS_LIMITS.forms}: its age, a short label ("Age 7"), how they look then, their hair, their outfit, the era (year or period) that age is seen in, and that memory's own film stock, format and color in look when the story gives each era its own (empty when it shares the main look). The other protagonist fields describe them at their present-story age. When FIXED CASTING lists a character who is the protagonist at that age, put its subject id in subjectId; otherwise subjectId is empty. [] when they appear at one age only.`,
     `- cast: the RECURRING supporting characters besides the protagonist that the song, concept or guidance calls for (band members, someone who returns across scenes)${fixedSupportingCast(project).length
     ? `: every character FIXED CASTING lists that is not the protagonist or one of their other ages, each as its own entry under its own name, plus at most ${CAST_SETS_LIMITS.cast} more`
     : `, at most ${CAST_SETS_LIMITS.cast}; [] when the protagonist is alone`}. Each gets their own photographic character sheet. Shots that name a cast member by name or role are conditioned on that sheet, so give each a distinct name and a plain role word.`,
@@ -495,6 +496,8 @@ const formSchema = z.preprocess(withoutNulls, z.object({
   description: prose(TEXT).optional(),
   hair: prose(TEXT).optional(),
   wardrobe: prose(TEXT).optional(),
+  era: prose(SHORT).optional(),
+  look: prose(500).optional(),
   subjectId: text(64).optional(),
 }).passthrough());
 
@@ -538,6 +541,8 @@ const setSchema = z.object({
   name: text(SHORT),
   description: text(TEXT),
   lighting: text(300).optional(),
+  era: text(SHORT).optional(),
+  look: text(500).optional(),
   imageRole: z.string().optional(),
   sections: z.union([z.array(z.union([z.string(), z.number()])), z.string()]).optional(),
 }).passthrough();
@@ -624,6 +629,9 @@ function normalizeSets(sets, sections, procedural = false) {
       name: s.name,
       description: s.description,
       lighting: s.lighting || '',
+      // A memory set's period and film stock; present-story sets keep their legacy shape.
+      ...(!procedural && s.era ? { era: s.era } : {}),
+      ...(!procedural && s.look ? { look: s.look } : {}),
       ...(procedural ? { imageRole: normalizeRole(s.imageRole) } : {}),
       sections: rawSections.map((x) => (typeof x === 'number' ? labels.get(String(x)) || '' : String(x).trim())).filter(Boolean).slice(0, 12),
     };
@@ -705,6 +713,7 @@ function normalizeForms(forms, previous = []) {
       // The bound subject's name (stamped by the service), kept while the binding is.
       const subjectName = subjectId && String((subjectId === prior?.subjectId && prior?.subjectName) || f.subjectName || '').trim().slice(0, 120);
       return { id, label: f.label || `Age ${f.age}`, age: f.age || '', description: f.description, hair: f.hair || '', wardrobe: f.wardrobe || '',
+        ...(f.era ? { era: f.era } : {}), ...(f.look ? { look: f.look } : {}),
         ...(subjectId ? { subjectId } : {}), ...(subjectName ? { subjectName } : {}) };
     });
 }
@@ -826,7 +835,7 @@ export const CAST_SETS_EDITABLE_PROTAGONIST = Object.freeze({ construction: TEXT
 export const CAST_SETS_EDITABLE_PHOTO_PROTAGONIST = Object.freeze({ name: SHORT, description: TEXT, face: TEXT, hair: TEXT, signature: TEXT, gesture: TEXT });
 export const CAST_SETS_EDITABLE_WORLD = Object.freeze({ layout: TEXT, depth: 500, lighting: 500, camera: 500, transitions: 500 });
 const EDITABLE_CAST = Object.freeze({ name: SHORT, role: SHORT, description: TEXT, face: TEXT, hair: TEXT, wardrobe: TEXT });
-const EDITABLE_SET = Object.freeze({ name: SHORT, description: TEXT, lighting: 300 });
+const EDITABLE_SET = Object.freeze({ name: SHORT, description: TEXT, lighting: 300, era: SHORT, look: 500 });
 const EDITABLE_TEST = Object.freeze({ action: TEXT, caption: 300, look: SHORT });
 // A test's form binding: a present `formId` replaces it (null or '' clears it).
 const testFormPatch = (patch) => (hasOwn(patch, 'formId') ? { formId: patch.formId || '' } : {});
@@ -862,7 +871,7 @@ function patchItems(list, patches, { what, keyOf, fields, extra = () => ({}) }) 
  *   world?:       procedural world rules;
  *   looks?:       the whole wardrobe list;
  *   cast?:        `[{ id, remove?, name?, role?, description?, face?, hair?, wardrobe? }]`;
- *   sets?:        `[{ id, remove?, name?, description?, lighting?, imageRole? }]`, or
+ *   sets?:        `[{ id, remove?, name?, description?, lighting?, era?, look?, imageRole? }]`, or
  *                 greybox selections only (`[{ id, setReference }]`, saved apart);
  *   tests?:       `[{ index (1-based), remove?, action?, caption?, look? }]` — an
  *                 edited test list is no longer topped up with automatic tests.

@@ -20,10 +20,12 @@
  *   - `looks`       — the wardrobe lookbook, one panel per look.
  *   - `set:<id>`    — one EMPTY plate per set: any sentence of the description,
  *                     lighting or look that puts a person in it is dropped. Plates do
- *                     not depend on the character, so they render alongside it.
+ *                     not depend on the character, so they render alongside it. A
+ *                     memory set's own `era` and `look` replace the project look.
  *   - `test:<n>`    — the protagonist in a set: conditioned on that set's plate,
  *                     the character sheet and the looks sheet — or, for a test
- *                     at another age (`test.formId`), that age's form sheet.
+ *                     at another age (`test.formId`), that age's form sheet. A
+ *                     test takes the era and look of its form, else of its set.
  *
  * A `procedural` direction (see castAndSetsDirection.js) plans none of the
  * photographic sheets, expression/looks sheets or tests: the characters are
@@ -99,6 +101,9 @@ function unlinkedSubjectImage(project, form) {
   if (!name) return null;
   return (project?.visualSpec?.references || []).find((r) => r?.imageId && r.role === 'character' && String(r.label || '').trim().toLowerCase() === name)?.imageId || null;
 }
+
+// A memory's period, so the model dresses the frame in it rather than the present story's.
+const eraLine = (era) => (era ? `Era: ${era}, with period-correct buildings, vehicles, signage and props` : '');
 
 function rulesLine(p) {
   return (p.rules || []).length ? `Rules: ${p.rules.join('; ')}` : '';
@@ -324,8 +329,9 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
         form.hair && `hair: ${form.hair}`,
         form.wardrobe && `Wearing ${form.wardrobe}`,
         rulesLine(p),
+        form.era && `Era: ${form.era}`,
         'Five views on a seamless dark grey backdrop: FRONT, 3/4, PROFILE, BACK full-body, plus a FACE close-up, with small typewriter captions',
-        style && `Look: ${style}`,
+        (form.look || style) && `Look: ${form.look || style}`,
         `${PHOTO}, even studio light, lookbook realism`,
         note(key),
       ),
@@ -363,6 +369,8 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
   for (const set of direction.sets || []) {
     const key = `set:${set.id}`;
     const plateLight = withoutPeople(set.lighting, p.name);
+    // A memory set is shot on its own era's stock, not the present story's.
+    const setLook = withoutPeople(set.look, p.name) || plateStyle;
     const placeImages = greyboxes[set.id]?.reference.imageId ? [greyboxes[set.id].reference.imageId] : fixedImages(fixedFor('place', set.name));
     plan[key] = {
       key,
@@ -377,8 +385,9 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
         'Empty set plate, no people',
         placeImages.length && 'The same location as the reference images',
         withoutPeople(set.description, p.name) || set.name,
+        eraLine(set.era),
         plateLight && `Lighting: ${plateLight}`,
-        plateStyle && `Look: ${plateStyle}`,
+        setLook && `Look: ${setLook}`,
         'Photorealistic music video location still',
         note(key),
       ),
@@ -392,6 +401,10 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
     // character and looks sheets would condition the wrong person.
     const form = test.formId ? forms.find((f) => f.id === test.formId) : null;
     const key = `test:${i + 1}`;
+    // A memory frame takes the period and film stock of the age it shows, else
+    // of its set; the present story's look would render a 1965 memory in 1985 color.
+    const era = form?.era || set?.era || '';
+    const testLook = form?.look || set?.look || '';
     plan[key] = {
       key,
       kind: 'test',
@@ -408,8 +421,9 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
           : `Place the person from the character sheet in it (${identity(p)})`,
         form ? form.wardrobe && `Wearing ${form.wardrobe}` : look && `Wearing ${look.description}`,
         test.action,
+        era ? eraLine(era) : form && `The place as it was when ${p.name || 'the protagonist'} was ${form.age || form.label}, with period-correct buildings, vehicles and props`,
         set?.lighting && `Light: ${set.lighting}`,
-        style && `Look: ${style}`,
+        testLook ? `Look: ${testLook}` : form ? `Match the color, film stock and grain of the ${form.label} character sheet, not the present-day look` : style && `Look: ${style}`,
         note(key),
       ),
     };
@@ -488,7 +502,7 @@ export function castAndSetsReferences(project, stage) {
   for (const set of plates) {
     // A procedural texture, decoration or cutout is a loose asset, not a look to condition frames on.
     const conditions = direction.medium !== 'procedural' || (set.imageRole || 'background') === 'background';
-    push({ id: `${CAST_SETS_REF_PREFIX}set-${set.id}`.slice(0, 64), imageId: images[`set:${set.id}`]?.imageId, role: 'set', label: trimTo(set.name, 120), note: trimTo([set.description, set.lighting].filter(Boolean).join(' — '), 1000) }, conditions);
+    push({ id: `${CAST_SETS_REF_PREFIX}set-${set.id}`.slice(0, 64), imageId: images[`set:${set.id}`]?.imageId, role: 'set', label: trimTo(set.name, 120), note: trimTo([set.era && `Era: ${set.era}`, set.description, set.lighting, set.look].filter(Boolean).join(' — '), 1000) }, conditions);
   }
   // Other-age sheets are reference only: a shot of the child is described in words and matched by eye.
   for (const form of p.forms || []) {

@@ -8,9 +8,10 @@ const buttonClass = 'flex min-h-[44px] items-center gap-1 rounded border border-
 const fieldClass = 'w-full min-w-0 rounded border border-port-border bg-port-bg px-2 py-1.5 text-sm';
 
 const PROTAGONIST_FIELDS = [['name', 'Name'], ['description', 'Who they are'], ['face', 'Face'], ['hair', 'Hair'], ['signature', 'Signature detail'], ['gesture', 'Gesture']];
-const FORM_FIELDS = [['label', 'Label'], ['age', 'Age'], ['description', 'How they look at that age'], ['hair', 'Hair'], ['wardrobe', 'Wardrobe']];
+const FORM_FIELDS = [['label', 'Label'], ['age', 'Age'], ['description', 'How they look at that age'], ['hair', 'Hair'], ['wardrobe', 'Wardrobe'],
+  ['era', 'Era (year or period)'], ['look', 'Film look of that memory']];
 const CAST_FIELDS = [['name', 'Name'], ['role', 'Role'], ['description', 'Who they are'], ['face', 'Face'], ['hair', 'Hair'], ['wardrobe', 'Wardrobe']];
-const SET_FIELDS = [['name', 'Name'], ['description', 'The empty place'], ['lighting', 'Lighting']];
+const SET_FIELDS = [['name', 'Name'], ['description', 'The empty place'], ['lighting', 'Lighting'], ['era', 'Era (year or period)'], ['look', 'Film look of that era']];
 const TEST_FIELDS = [['action', 'What happens in the frame'], ['caption', 'Caption']];
 const LONG = new Set(['description', 'action', 'face', 'wardrobe']);
 
@@ -63,7 +64,9 @@ function editorFor(item, direction, adding = false, subjects = []) {
   }
   if (item.kind === 'plate') {
     const set = (direction?.sets || []).find((s) => s.id === item.setId) || {};
-    return { fields: SET_FIELDS, values: Object.fromEntries(SET_FIELDS.map(([key]) => [key, set[key] || ''])),
+    // A procedural plate has no film stock or period of its own.
+    const setFields = direction?.medium === 'procedural' ? SET_FIELDS.filter(([key]) => key !== 'era' && key !== 'look') : SET_FIELDS;
+    return { fields: setFields, values: Object.fromEntries(setFields.map(([key]) => [key, set[key] || ''])),
       toEdits: (v) => ({ sets: [{ id: set.id, ...v }] }), removeEdits: () => ({ sets: [{ id: set.id, remove: true }] }) };
   }
   if (item.kind === 'test') {
