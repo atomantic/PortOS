@@ -510,11 +510,10 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
   if (result.cleaned.length) {
     emitLog('info', `🔀 branch-reconcile ${app.name}: cleaned ${result.cleaned.length} merged branch(es)`, { appId: app.id, analysisType: taskType });
   }
-  // Reported separately from `cleaned`: a superseded branch's work is NOT on the
-  // default branch — it landed there under other names — so it survives only as
-  // the backup the reap wrote before deleting it.
+  // Reported separately from `cleaned`: a superseded branch's commits are NOT
+  // ancestors of the default branch — the work landed there under other names.
   if (result.reapedSuperseded?.length) {
-    emitLog('info', `🔀 branch-reconcile ${app.name}: reaped ${result.reapedSuperseded.length} verified-superseded branch(es) (backed up under data/cos/abandoned-worktree-backups)`, { appId: app.id, analysisType: taskType });
+    emitLog('info', `🔀 branch-reconcile ${app.name}: reaped ${result.reapedSuperseded.length} verified-superseded branch(es)`, { appId: app.id, analysisType: taskType });
   }
   // Verified-superseded branches are reaped by the reconciler itself (reported in
   // `reapedSuperseded`). What is left in `superseded` is the reap's leftovers —
