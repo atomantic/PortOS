@@ -277,6 +277,46 @@ describe('Cast & Sets per-image actions', () => {
     expect(card('Harbor').getByText(/Rebuild the check-in before editing/)).toBeInTheDocument();
   });
 
+  it('refreshes a missed stage update before retrying a stale legacy card', async () => {
+    const legacy = { key: 'test:1', kind: 'test', testIndex: 0, setId: 'harbor', label: 'Harbor', prompt: 'saved prompt', deps: [], refKeys: [] };
+    const newer = { ...legacy, prompt: 'new prompt', test: { action: 'new action', caption: 'new caption' } };
+    const updated = sheet('review', { revision: 2, plan: { 'test:1': newer } });
+    api.getMusicVideoCastAndSets.mockResolvedValueOnce({ stage: updated.castAndSets });
+    api.getMusicVideoProject.mockResolvedValueOnce(updated);
+    render(<Harness initial={sheet('review', { plan: { 'test:1': legacy } })} locked={false} />);
+    await act(async () => { fireEvent.click(card('Harbor').getByRole('button', { name: 'Edit Harbor' })); });
+    expect(api.getMusicVideoProject).toHaveBeenCalledWith('example-project', { silent: true });
+    expect(card('Harbor').getByText('new prompt')).toBeInTheDocument();
+    fireEvent.click(card('Harbor').getByRole('button', { name: 'Edit Harbor' }));
+    expect(card('Harbor').getByLabelText('What happens in the frame').value).toBe('new action');
+  });
+
+  it('keeps a newer socket stage when a stale card refresh finishes later', async () => {
+    const legacy = { key: 'test:1', kind: 'test', testIndex: 0, setId: 'harbor', label: 'Harbor', prompt: 'saved prompt', deps: [], refKeys: [] };
+    const makeStage = (revision) => sheet('review', { revision, plan: { 'test:1': { ...legacy, prompt: `prompt ${revision}`, test: { action: `action ${revision}` } } } });
+    const pending = deferred();
+    api.getMusicVideoCastAndSets.mockResolvedValueOnce({ stage: makeStage(2).castAndSets });
+    api.getMusicVideoProject.mockReturnValueOnce(pending.promise);
+    render(<Harness initial={sheet('review', { plan: { 'test:1': legacy } })} locked={false} />);
+    await act(async () => { fireEvent.click(card('Harbor').getByRole('button', { name: 'Edit Harbor' })); });
+    expect(api.getMusicVideoProject).toHaveBeenCalledTimes(1);
+    await stage(makeStage(3));
+    await act(async () => { pending.resolve(makeStage(2)); });
+    expect(card('Harbor').getByText('prompt 3')).toBeInTheDocument();
+    fireEvent.click(card('Harbor').getByRole('button', { name: 'Edit Harbor' }));
+    expect(card('Harbor').getByLabelText('What happens in the frame').value).toBe('action 3');
+  });
+
+  it('explains when a stale card cannot refresh automatically', async () => {
+    const legacy = { key: 'test:1', kind: 'test', testIndex: 0, setId: 'harbor', label: 'Harbor', prompt: 'saved prompt', deps: [], refKeys: [] };
+    api.getMusicVideoCastAndSets.mockResolvedValueOnce({ stage: { revision: 2, plan: { 'test:1': legacy } } });
+    api.getMusicVideoProject.mockRejectedValueOnce(new Error('offline'));
+    render(<Harness initial={sheet('review', { plan: { 'test:1': legacy } })} locked={false} />);
+    await act(async () => { fireEvent.click(card('Harbor').getByRole('button', { name: 'Edit Harbor' })); });
+    expect(card('Harbor').getByText(/Refresh the project and try editing/)).toBeInTheDocument();
+    expect(card('Harbor').getByRole('button', { name: 'Edit Harbor' })).toBeEnabled();
+  });
+
   it('ignores a legacy test read superseded by a newer stage', async () => {
     const legacy = { key: 'test:1', kind: 'test', testIndex: 0, setId: 'harbor', label: 'Harbor', prompt: 'saved prompt', deps: [], refKeys: [] };
     const pending = deferred();

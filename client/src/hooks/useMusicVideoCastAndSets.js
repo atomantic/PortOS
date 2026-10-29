@@ -37,12 +37,13 @@ const reachedCheckpoint = (stage) => CHECKPOINTS.has(stage?.status) || stage?.in
  * `interrupted` by a restart), or null when it could not start or the wait was
  * abandoned with `cancelWait()` (the kickoff's Cancel).
  *
- * Returns `{ busy, start, regenerate, regenerateImages, editDirection, applyFeedback, removeFeedback, resume, approve, reconfirm, skip, discard, rebuildFromStory, runToCheckpoint, cancelWait }`.
+ * Returns `{ busy, refresh, start, regenerate, regenerateImages, editDirection, applyFeedback, removeFeedback, resume, approve, reconfirm, skip, discard, rebuildFromStory, runToCheckpoint, cancelWait }`.
  */
 export default function useMusicVideoCastAndSets({ project, replaceProject } = {}) {
   const projectId = project?.id || null;
   const [busy, setBusy] = useState(false);
   const replaceRef = useRef(replaceProject);
+  const refreshRef = useRef(null);
   const snapshotRevision = useRef(0);
   const waiter = useRef(null);
   useEffect(() => {
@@ -78,10 +79,12 @@ export default function useMusicVideoCastAndSets({ project, replaceProject } = {
       if (pending) return pending;
       const revision = snapshotRevision.current;
       pending = getMusicVideoProject(projectId, { silent: true }).then((next) => {
-        if (active && next?.id === projectId && revision === snapshotRevision.current) applyProject(next);
-      }).catch(() => {}).finally(() => { pending = null; });
+        if (active && next?.id === projectId && revision === snapshotRevision.current) { applyProject(next); return true; }
+        return false;
+      }).catch(() => false).finally(() => { pending = null; });
       return pending;
     };
+    refreshRef.current = { projectId, refresh };
     socket.on('music-video:cast-and-sets', onStage);
     socket.on('music-video:dev-artifact', onArtifact);
     socket.on('connect', refresh);
@@ -93,6 +96,7 @@ export default function useMusicVideoCastAndSets({ project, replaceProject } = {
     });
     return () => {
       active = false;
+      if (refreshRef.current?.refresh === refresh) refreshRef.current = null;
       unsubscribeVisibility();
       socket.off('music-video:cast-and-sets', onStage);
       socket.off('music-video:dev-artifact', onArtifact);
@@ -104,6 +108,8 @@ export default function useMusicVideoCastAndSets({ project, replaceProject } = {
       }
     };
   }, [projectId]);
+
+  const refresh = () => (refreshRef.current?.projectId === projectId ? refreshRef.current.refresh() : Promise.resolve(false));
 
   const call = (request, success) => {
     setBusy(true);
@@ -161,5 +167,5 @@ export default function useMusicVideoCastAndSets({ project, replaceProject } = {
     w.resolve(null);
   };
 
-  return { busy, start, regenerate, regenerateImages, editDirection, applyFeedback, removeFeedback, resume, approve, reconfirm, skip, discard, rebuildFromStory, runToCheckpoint, cancelWait };
+  return { busy, refresh, start, regenerate, regenerateImages, editDirection, applyFeedback, removeFeedback, resume, approve, reconfirm, skip, discard, rebuildFromStory, runToCheckpoint, cancelWait };
 }

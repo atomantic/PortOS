@@ -114,11 +114,11 @@ function ItemEditor({ editor, label, busy, onSave, onCancel }) {
  * member, set, test or other age from the sheet, and add another age to the
  * protagonist. Shown only while the stage is not working.
  */
-export default function CastAndSetsItemActions({ item, direction, revision, projectId, busy, onRegenerate, onEdit }) {
+export default function CastAndSetsItemActions({ item, direction, revision, projectId, busy, onRegenerate, onEdit, onRefresh }) {
   const [mode, setMode] = useState(null);
   const [resolution, setResolution] = useState(null);
   const [pending, setPending] = useState(null);
-  const [notice, setNotice] = useState('');
+  const [notice, setNotice] = useState(null);
   const mounted = useMounted();
   const savedIdentity = cardIdentity(projectId, revision, item);
   const identity = JSON.stringify([savedIdentity, item.test || null]);
@@ -137,7 +137,7 @@ export default function CastAndSetsItemActions({ item, direction, revision, proj
   const save = async (edits) => { if (await onEdit(edits)) close(); };
   const edit = async () => {
     if (currentMode === 'edit') { close(); return; }
-    setNotice('');
+    setNotice(null);
     if (item.kind !== 'test' || item.test) { setResolution(null); setMode('edit'); return; }
     const version = ++requestVersion.current;
     setPending({ identity, version });
@@ -146,17 +146,20 @@ export default function CastAndSetsItemActions({ item, direction, revision, proj
       if (!mounted.current || requestVersion.current !== version || currentIdentity.current !== identity) return;
       const fresh = stage?.plan?.[item.key];
       if (cardIdentity(projectId, stage?.revision, fresh) !== savedIdentity) {
-        setNotice('This test changed. Try editing it again.');
+        const refreshed = await onRefresh?.();
+        if (mounted.current && requestVersion.current === version && currentIdentity.current === identity) {
+          setNotice({ identity, text: refreshed ? 'This test changed. Try editing it again.' : 'This test changed. Refresh the project and try editing it again.' });
+        }
         return;
       }
       if (!fresh?.test) {
-        setNotice('Rebuild the check-in before editing this test.');
+        setNotice({ identity, text: 'Rebuild the check-in before editing this test.' });
         return;
       }
       setResolution({ identity, test: fresh.test });
       setMode('edit');
     } catch {
-      if (mounted.current && requestVersion.current === version && currentIdentity.current === identity) setNotice('Could not load this test. Try again.');
+      if (mounted.current && requestVersion.current === version && currentIdentity.current === identity) setNotice({ identity, text: 'Could not load this test. Try again.' });
     } finally {
       if (mounted.current) setPending((current) => (current?.version === version ? null : current));
     }
@@ -188,7 +191,7 @@ export default function CastAndSetsItemActions({ item, direction, revision, proj
             ariaLabel={`Remove ${label} from the sheet`} confirmAriaLabel={`Remove ${label} from the sheet`} onConfirm={() => save(editor.removeEdits())} onCancel={close} />
         )}
       </div>
-      {notice && <p role="status" className="text-xs text-port-warning">{notice}</p>}
+      {notice?.identity === identity && <p role="status" className="text-xs text-port-warning">{notice.text}</p>}
       {currentMode === 'edit' && <ItemEditor editor={editor} label={label} busy={busy} onSave={save} onCancel={close} />}
       {mode === 'add' && <ItemEditor editor={editorFor(item, direction, true)} label="another age" busy={busy} onSave={save} onCancel={close} />}
     </div>
