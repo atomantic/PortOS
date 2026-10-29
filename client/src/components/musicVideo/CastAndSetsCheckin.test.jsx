@@ -425,9 +425,9 @@ describe('Cast & Sets per-image actions', () => {
     expect(screen.queryByRole('button', { name: /Rebuild from story/ })).toBeNull();
   });
 
-  it('offers to update just the images whose Casting references changed, then a rebuild for a newly linked character', async () => {
+  it('offers to update the images whose Casting references changed (with their dependents), then to add a newly linked character', async () => {
     api.regenerateMusicVideoCastAndSets.mockResolvedValue({ project: sheet('imaging', { revision: 2 }) });
-    api.getMusicVideoCastAndSetsCastingChanges.mockResolvedValue({ changes: { images: [{ key: 'character', label: 'Character sheet' }, { key: 'looks', label: 'Looks' }], cast: [] } });
+    api.getMusicVideoCastAndSetsCastingChanges.mockResolvedValue({ changes: { images: [{ key: 'character', label: 'June' }], cast: [] } });
     const Page = ({ initial }) => {
       const [value, setValue] = useState(initial);
       selectProject = setValue;
@@ -436,19 +436,22 @@ describe('Cast & Sets per-image actions', () => {
         productionReadiness: { castAndSets: { approved: true, stale: null, storyStale: null } }, approveCastAndSets: actions.approve, skipCastAndSets: actions.skip, ...DRAFTS }} />;
     };
     render(<Page initial={sheet('approved')} />);
-    expect(await screen.findByText(/New Casting images for Character sheet, Looks\./)).toBeInTheDocument();
+    expect(await screen.findByText(/New Casting images for June\./)).toBeInTheDocument();
     expect(api.getMusicVideoCastAndSetsCastingChanges).toHaveBeenCalledWith('example-project', { silent: true });
+    // The expression sheet is built on the character sheet, so it re-renders too.
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Update 2 images/ })); });
-    expect(api.regenerateMusicVideoCastAndSets).toHaveBeenCalledWith('example-project', { keys: ['character', 'looks'] }, { silent: true });
+    expect(api.regenerateMusicVideoCastAndSets).toHaveBeenCalledWith('example-project', { keys: ['character'] }, { silent: true });
     // While those re-render the notice gives way to progress.
     expect(screen.queryByText(/Casting changed since this sheet was built/)).toBeNull();
 
-    api.startMusicVideoCastAndSets.mockResolvedValue({ project: sheet('directing', { revision: 3 }) });
     api.getMusicVideoCastAndSetsCastingChanges.mockResolvedValue({ changes: { images: [], cast: ['Zora'] } });
-    await act(async () => { selectProject(sheet('approved', { revision: 2 })); });
+    await act(async () => { selectProject(sheet('review', { revision: 2 })); });
     expect(await screen.findByText(/Zora is linked in Casting but has no sheet yet\./)).toBeInTheDocument();
-    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Rebuild from story/ })); });
-    expect(api.startMusicVideoCastAndSets).toHaveBeenCalledWith('example-project', {}, { silent: true });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Add Zora to the sheet/ })); });
+    // A direction note, not a discard: a production run's check-in and standing feedback carry over.
+    expect(api.regenerateMusicVideoCastAndSets).toHaveBeenLastCalledWith('example-project',
+      { notes: [{ text: 'Add Zora to the cast from Casting, each with a cast sheet.' }] }, { silent: true });
+    expect(api.discardMusicVideoCastAndSets).not.toHaveBeenCalled();
   });
 
   it('hides card actions while working and starts over only after confirming', async () => {

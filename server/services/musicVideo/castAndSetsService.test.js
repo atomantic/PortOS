@@ -1595,4 +1595,16 @@ it('names the Casting changes since the sheet was built, and an image update cle
   await runTo(project.id, 'review');
   expect(jobs.findLast((j) => keyOf(j) === 'cast:anika').params.referenceImagePaths.map((p) => p.split(/[\\/]/).pop())).toEqual(['anika-new.png']);
   expect(await changes()).toEqual({ images: [], cast: ['Zora'] });
+
+  // A direction note adds the missing character and keeps the director's standing feedback.
+  await projects.mutateProjectRecord(project.id, (p) => ({ project: { ...p, castAndSets: { ...p.castAndSets, feedback: [{ id: 'fb-keep', text: 'Keep it moody', at: '2026-01-01T00:00:00.000Z', revision: 1 }] } } }));
+  const prompts = runPrompt.mock.calls.length;
+  expect((await request(app).post(`/api/music-video/${project.id}/cast-and-sets/regenerate`).send({ notes: [{ text: 'Add Zora to the cast from Casting, each with a cast sheet.' }] })).status).toBe(202);
+  await until(async () => runPrompt.mock.calls.length > prompts, 'the revised direction');
+  await runTo(project.id, 'review');
+  expect(runPrompt.mock.calls.at(-1)[0].prompt).toContain('Keep it moody');
+  const saved = await current(project.id);
+  expect(saved.castAndSets.direction.cast.map((c) => c.name)).toContain('Zora');
+  expect(saved.castAndSets.feedback.map((f) => f.id)).toEqual(['fb-keep']);
+  expect(await changes()).toBeNull();
 });

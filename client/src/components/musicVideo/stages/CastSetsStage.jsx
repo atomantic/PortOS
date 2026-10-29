@@ -78,6 +78,7 @@ export default function CastSetsStage({ board }) {
           onRefresh={castSets.refresh}
           onApplyFeedback={castSets.applyFeedback}
           onRemoveFeedback={castSets.removeFeedback}
+          onRegenerateWithNotes={castSets.regenerate}
           onResume={() => castSets.resume()}
           onRebuild={() => castSets.start()}
           onReconfirm={() => castSets.reconfirm()}
