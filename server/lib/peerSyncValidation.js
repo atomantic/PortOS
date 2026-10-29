@@ -350,6 +350,12 @@ export const peerLibraryManifestQuerySchema = z.object({ models: z.literal('1').
 // not a query flag, because an older sender's query schema is strict too.
 export const PEER_LIBRARY_TOMBSTONES_HEADER = 'X-PortOS-Library-Tombstones';
 
+// Optional ISO cursor: the newest `deletedAt` the receiver has already processed
+// from this sender. The manifest then carries only strictly newer tombstones.
+// Absent (first sweep, restart, older receiver) means the full list, so peers
+// converge either way; an older sender ignores the header and sends everything.
+export const PEER_LIBRARY_TOMBSTONES_SINCE_HEADER = 'X-PortOS-Library-Tombstones-Since';
+
 export const peerLibraryManifestSchema = z.object({
   schemaVersion: z.number().int().min(0).max(1_000_000),
   manifestHash: hex64,

@@ -39,6 +39,7 @@ import {
   peerPullMetadataSchema,
   peerLibraryManifestQuerySchema,
   PEER_LIBRARY_TOMBSTONES_HEADER,
+  PEER_LIBRARY_TOMBSTONES_SINCE_HEADER,
   COS_ARCHIVE_DATE_RE,
   COS_AGENT_ID_RE,
   COS_ARCHIVE_FILES,
@@ -182,6 +183,7 @@ router.get('/library-manifest', asyncHandler(async (req, res) => {
   res.json(await buildMediaLibraryManifest({
     models: query.models === '1',
     tombstones: req.get(PEER_LIBRARY_TOMBSTONES_HEADER) === '1',
+    tombstonesSince: req.get(PEER_LIBRARY_TOMBSTONES_SINCE_HEADER),
   }));
 }));
 

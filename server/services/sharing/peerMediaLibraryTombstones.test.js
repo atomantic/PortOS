@@ -39,9 +39,10 @@ const { PATHS } = await import('../../lib/fileUtils.js');
 const { getPeers } = await import('../instances.js');
 const { peerFetch } = await import('../../lib/peerHttpClient.js');
 const { syncMediaLibraryFromPeer, buildMediaLibraryManifest } = await import('./peerMediaLibrarySync.js');
+const { FORCE_REVALIDATE_EVERY } = await import('./peerSyncShared.js');
 const { diffAssetManifestAgainstLocal } = await import('./peerSyncAssets.js');
 const { listMediaTombstones, recordMediaTombstone } = await import('../mediaTombstones.js');
-const { PEER_LIBRARY_TOMBSTONES_HEADER } = await import('../../lib/validation.js');
+const { PEER_LIBRARY_TOMBSTONES_HEADER, PEER_LIBRARY_TOMBSTONES_SINCE_HEADER } = await import('../../lib/validation.js');
 const { sidecarGenParamsHash } = await import('../../lib/assetHash.js');
 const { deleteImage } = await import('../imageGen/local.js');
 const { localizeImageUrl } = await import('../moodBoard/localize.js');
@@ -401,6 +402,55 @@ describe('library manifest tombstones', () => {
     expect(legacy.manifestHash).toBe(before.manifestHash);
     expect(capable.tombstones).toEqual([{ key: 'gone.png', deletedAt: expect.any(String) }]);
     expect(capable.manifestHash).not.toBe(before.manifestHash);
+  });
+});
+
+describe('tombstone cursor', () => {
+  const libraryFetches = () => vi.mocked(peerFetch).mock.calls.filter(([url]) => String(url).includes('/library-manifest'));
+
+  it('sends only tombstones newer than the receiver cursor, and the full list without one', async () => {
+    await recordMediaTombstone('image', 'old.png', '2026-01-01T00:00:00.000Z');
+    await recordMediaTombstone('image', 'new.png', '2026-02-01T00:00:00.000Z');
+    const keys = async (since) => ((await buildMediaLibraryManifest({ tombstones: true, tombstonesSince: since })).tombstones ?? []).map((t) => t.key);
+    expect(await keys(undefined)).toEqual(['new.png', 'old.png']);
+    expect(await keys('garbage')).toEqual(['new.png', 'old.png']);
+    expect(await keys('2026-01-01T00:00:00.000Z')).toEqual(['new.png']);
+    expect(await keys('2026-02-01T00:00:00.000Z')).toEqual([]);
+  });
+
+  it('asks with the newest admitted deletedAt on the next sweep, and sends none on the first', async () => {
+    const owner = pairedPeer();
+    seedImage('cursor.png', { prompt: 'p', createdAt: '2026-01-01T00:00:00.000Z', originInstanceId: owner.instanceId });
+    const deletedAt = now();
+    advertise(owner, [], { tombstones: [{ key: 'cursor.png', deletedAt }] });
+    vi.mocked(peerFetch).mockClear();
+    await syncMediaLibraryFromPeer(owner);
+    await syncMediaLibraryFromPeer(owner);
+    const [first, second] = libraryFetches();
+    expect(first[1].headers[PEER_LIBRARY_TOMBSTONES_SINCE_HEADER]).toBeUndefined();
+    expect(second[1].headers[PEER_LIBRARY_TOMBSTONES_SINCE_HEADER]).toBe(deletedAt);
+  });
+
+  it('asks for the full list again every FORCE_REVALIDATE_EVERY sweeps so a missed older-stamped tombstone heals', async () => {
+    const owner = pairedPeer();
+    seedImage('heal.png', { prompt: 'p', createdAt: '2026-01-01T00:00:00.000Z', originInstanceId: owner.instanceId });
+    advertise(owner, [], { tombstones: [{ key: 'heal.png', deletedAt: now() }] });
+    vi.mocked(peerFetch).mockClear();
+    for (let i = 0; i < FORCE_REVALIDATE_EVERY; i++) await syncMediaLibraryFromPeer(owner);
+    const sent = libraryFetches().map(([, o]) => o.headers[PEER_LIBRARY_TOMBSTONES_SINCE_HEADER] !== undefined);
+    expect(sent[0]).toBe(false);
+    expect(sent[1]).toBe(true);
+    expect(sent[FORCE_REVALIDATE_EVERY - 1]).toBe(false);
+  });
+
+  it('keeps the cursor back while a tombstone is refused so it is offered again', async () => {
+    const sender = pairedPeer();
+    seedImage('refused.png', { prompt: 'p', createdAt: '2026-01-01T00:00:00.000Z', originInstanceId: 'someone-else' });
+    advertise(sender, ['refused.png'], { tombstones: [{ key: 'refused.png', deletedAt: now() }] });
+    vi.mocked(peerFetch).mockClear();
+    await syncMediaLibraryFromPeer(sender);
+    await syncMediaLibraryFromPeer(sender);
+    expect(libraryFetches().every(([, o]) => o.headers[PEER_LIBRARY_TOMBSTONES_SINCE_HEADER] === undefined)).toBe(true);
   });
 });
 
