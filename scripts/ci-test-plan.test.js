@@ -1640,6 +1640,8 @@ describe('CI test impact planner', () => {
     const contracts = [
       'server/services/heldCheckoutExactDelivery.integration.test.js',
       'server/services/heldCheckoutRecovery.test.js',
+      'server/services/heldCheckoutRecovery.receipts.test.js',
+      'server/services/heldCheckoutRecovery.siblings.test.js',
     ];
     const plan = buildCiTestPlan(contracts, { trackedFiles: [...TRACKED, ...contracts] });
 
@@ -1782,6 +1784,8 @@ describe('Windows native support boundary', () => {
     'server/lib/primaryCheckoutGuard.test.js',
     'server/services/worktreeReap.test.js',
     'server/services/heldCheckoutRecovery.test.js',
+    'server/services/heldCheckoutRecovery.receipts.test.js',
+    'server/services/heldCheckoutRecovery.siblings.test.js',
     'server/services/videoGen/metalBufferProfiles.test.js',
     'server/routes/apps/crud.test.js',
   ])('retains %s on the primary runner without adding a Windows application suite', path => {
