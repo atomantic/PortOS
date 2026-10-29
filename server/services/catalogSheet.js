@@ -30,7 +30,9 @@ import { universeAestheticLine, universeVisualStyleTokens } from '../lib/univers
 import { getBoard } from './moodBoard/db.js';
 import { recordRenderPin } from '../lib/renderTargets.js';
 import { shortId } from '../lib/fileUtils.js';
-import { getIngredient, getIngredientIdentityIds, listLiveRefsForIngredient, listMediaForIngredient } from './catalogDB.js';
+import { getIngredient, getIngredientIdentityIds, listLiveRefsForIngredient, listMediaForIngredient, setIngredientPayloadKey } from './catalogDB.js';
+import { LEGACY_SHEET_VARIANT_ID, applySheetPointerToCharacter, readSheetPointer } from '../lib/sheetPointers.js';
+import { catalogEvents } from './catalogEvents.js';
 import { characterSheetEditBase, characterSheetReferenceCandidates } from '../lib/characterSheetReferences.js';
 import { catalogUniverseContext } from '../lib/catalogUniverseContext.js';
 import { getUniverse } from './universeBuilder.js';
@@ -43,6 +45,7 @@ import {
   listSheetVariants,
   previewCharacterReferenceSheet,
   renderCharacterReferenceSheet,
+  deleteCharacterReferenceSheet,
 } from './universeCharacterSheet.js';
 import {
   DEFAULT_ENVIRONMENT_SHEET_STYLE,
@@ -342,4 +345,57 @@ export async function renderCatalogSheet(id, options = {}) {
     delegatedTo: null,
     queuePosition: queued.position,
   };
+}
+
+const sheetPointersOf = (payload) => ({
+  referenceSheetImageRef: payload?.referenceSheetImageRef ?? null,
+  referenceSheets: payload?.referenceSheets && typeof payload.referenceSheets === 'object' ? payload.referenceSheets : {},
+});
+
+/**
+ * Remove a universe-canon sheet pointer (`referenceSheetImageRef` /
+ * `referenceSheets[variant]`) from a catalog character. When a linked
+ * universe entry holds the same file, the universe delete unlinks the PNG and
+ * clears the pointer everywhere; the canon→catalog projection carries that to
+ * this row. A pointer only the catalog row holds is cleared on the row and the
+ * file is kept, since another record may still name it. Returns the row's
+ * fresh pointer fields so the page can apply them without a refetch.
+ */
+export async function removeCatalogPointerSheet(id, { variant = LEGACY_SHEET_VARIANT_ID } = {}) {
+  await assertCatalogIdentityWritable(id);
+  const ingredient = await getIngredient(id);
+  if (!ingredient) throw new ServerError('Ingredient not found', { status: 404, code: 'NOT_FOUND' });
+  if (ingredient.payload?.locked === true) {
+    throw new ServerError(
+      `"${ingredient.name}" is locked — unlock it before removing a reference sheet`,
+      { status: 409, code: 'CATALOG_INGREDIENT_LOCKED' },
+    );
+  }
+  const filename = readSheetPointer(ingredient.payload, variant);
+  if (!filename) throw new ServerError(`No ${variant} reference sheet on "${ingredient.name}"`, { status: 404, code: 'NOT_FOUND' });
+  const identityIds = new Set([ingredient.id, ...await getIngredientIdentityIds(ingredient.id)]);
+  const universeIds = new Set((await listLiveRefsForIngredient(ingredient.id))
+    .filter((ref) => ref.refKind === 'universe').map((ref) => ref.refId));
+  for (const universeId of universeIds) {
+    const universe = await getLinkedUniverse(universeId);
+    const entry = (universe?.characters || []).find((c) => identityIds.has(c?.ingredientId) && readSheetPointer(c, variant) === filename);
+    if (!entry) continue;
+    const result = await deleteCharacterReferenceSheet(universe.id, entry.id, { variant });
+    const fresh = await getIngredient(ingredient.id);
+    return { ...result, pointers: sheetPointersOf(fresh?.payload) };
+  }
+  const next = applySheetPointerToCharacter(ingredient.payload, variant, null);
+  const key = variant === LEGACY_SHEET_VARIANT_ID ? 'referenceSheetImageRef' : 'referenceSheets';
+  const updated = await setIngredientPayloadKey(ingredient.id, key, next[key] ?? null, {
+    guard: (current) => {
+      if (current.payload?.locked === true) {
+        throw new ServerError(`"${current.name}" is locked — unlock it before removing a reference sheet`,
+          { status: 409, code: 'CATALOG_INGREDIENT_LOCKED' });
+      }
+    },
+  });
+  if (!updated) throw new ServerError('Ingredient not found', { status: 404, code: 'NOT_FOUND' });
+  catalogEvents.emit('primitive-changed', { ingredientId: updated.id });
+  console.log(`🗑️ Cleared ${variant} sheet pointer ${filename} on catalog ${shortId(updated.id)} (no universe entry held it)`);
+  return { filename, fileDeleted: false, cleared: 1, pointers: sheetPointersOf(updated.payload) };
 }

@@ -16,7 +16,21 @@ import { PreviewContext, SequenceContext, catalogImageItem, safeBasename } from 
 // filenames), `render(key, { nextKey, prevKey, goTo })` adds the page's own
 // controls (guide, primary, remove) to the viewer's side pane, and
 // `rating(key, nav)` puts the record's reference rating in the viewer's
-// standard good/bad slot.
+// standard good/bad slot. A key `image-refs/<file>` (see `imageRefsSequenceKey`)
+// names a file under /data/image-refs, such as a universe canon sheet, which
+// has no gallery record; every other key is a gallery filename.
+const IMAGE_REFS_KEY_PREFIX = 'image-refs/';
+export const imageRefsSequenceKey = (filename) => `${IMAGE_REFS_KEY_PREFIX}${filename}`;
+const sequenceItem = (key) => (key.startsWith(IMAGE_REFS_KEY_PREFIX)
+  ? catalogImageItem('image-refs', key.slice(IMAGE_REFS_KEY_PREFIX.length))
+  : catalogImageItem('images', key));
+function sequenceKeyOf(item) {
+  if (item?.filename) return item.filename;
+  const match = /^\/data\/image-refs\/([^/?#]+)$/.exec(item?.previewUrl || '');
+  if (!match) return null;
+  try { return imageRefsSequenceKey(decodeURIComponent(match[1])); } catch { return null; }
+}
+
 export function useCatalogPreviewSequence(sequence) {
   const setSequence = useContext(SequenceContext);
   useEffect(() => {
@@ -30,7 +44,7 @@ export function useCatalogPreviewSequence(sequence) {
 // (a film look) of the open image, so the page can file it on its record.
 export function CatalogImagePreviewProvider({ children, ingredientId, onQuickEditQueued, onVariantSaved }) {
   const [sequence, setSequence] = useState(null);
-  const items = useMemo(() => (sequence?.keys || []).map((key) => catalogImageItem('images', key)).filter(Boolean), [sequence]);
+  const items = useMemo(() => (sequence?.keys || []).map(sequenceItem).filter(Boolean), [sequence]);
   const galleryResolver = useGalleryPreviewResolver();
   const resolveItem = useCallback(async (key) => {
     const legacy = /^catalog-image:(images|image-refs):(.+)$/.exec(key);
@@ -45,13 +59,14 @@ export function CatalogImagePreviewProvider({ children, ingredientId, onQuickEdi
   const [preview, setPreview] = useHydratedPreviewRoute(items, { resolveItem });
   const { annotations, updateAnnotation } = useMediaAnnotations();
   const actions = useMediaPreviewActions();
-  const index = sequence && preview?.filename ? sequence.keys.indexOf(preview.filename) : -1;
+  const previewKey = sequenceKeyOf(preview);
+  const index = sequence && previewKey ? sequence.keys.indexOf(previewKey) : -1;
   const prevKey = index > 0 ? sequence.keys[index - 1] : null;
   const nextKey = index >= 0 && index < sequence.keys.length - 1 ? sequence.keys[index + 1] : null;
-  const goTo = (key) => setPreview(key ? catalogImageItem('images', key) : null);
+  const goTo = (key) => setPreview(key ? sequenceItem(key) : null);
   const nav = { nextKey, prevKey, goTo };
-  const pageActions = index >= 0 ? sequence.render?.(preview.filename, nav) : null;
-  const ratingControl = index >= 0 ? sequence.rating?.(preview.filename, nav) ?? null : null;
+  const pageActions = index >= 0 ? sequence.render?.(previewKey, nav) : null;
+  const ratingControl = index >= 0 ? sequence.rating?.(previewKey, nav) ?? null : null;
   const activeIngredientId = sequence?.ingredientId || ingredientId;
   const activeOnQuickEditQueued = sequence?.onQuickEditQueued || onQuickEditQueued;
   return (

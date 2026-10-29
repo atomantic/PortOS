@@ -10,9 +10,12 @@ import CatalogImagePreview from './CatalogImagePreview';
 // `onSetPortrait` is optional (sheet tiles omit it); `extraActions` adds
 // tab-specific buttons (Plates' mark/unmark) to the hover action row, and
 // `label` captions the tile (a sheet's variant); `contain` shows a wide image
-// (a sheet) whole instead of a square crop.
+// (a sheet) whole instead of a square crop. `badge` overlays the top-left
+// corner (a sheet's "Rated bad"), and `pinActions` keeps the action row in view
+// without hover.
 export default function CatalogMediaTile({
   m, missing, isPortrait = false, onSetPortrait, onDetach, armedDetach, onArmDetach, extraActions = null, label = null, contain = false,
+  badge = null, pinActions = false,
 }) {
   const isImage = m.kind === 'portrait' || m.kind === 'reference';
   const isAudio = m.kind === 'audio';
@@ -44,6 +47,7 @@ export default function CatalogMediaTile({
       {label && (
         <div className="text-[10px] uppercase tracking-wider text-gray-500 px-2 py-1 border-t border-port-border truncate">{label}</div>
       )}
+      {badge}
       {missing && (
         <span className="absolute top-1 left-1 text-[9px] px-1 py-0.5 rounded bg-port-warning/20 text-port-warning border border-port-warning/40"
           title="This asset isn't in your media library yet (received from a peer before the file arrived).">
@@ -59,7 +63,7 @@ export default function CatalogMediaTile({
         </div>
       )}
       {m.readOnly && <p className="text-xs text-gray-500 p-2 break-words">Read-only provenance · {m.ingredientId || 'retained media'}</p>}
-      {!m.readOnly && <div className="port-media-overlay absolute top-1 right-1 flex gap-1 rounded opacity-100 sm:opacity-0 sm:group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+      {!m.readOnly && <div className={`port-media-overlay absolute top-1 right-1 flex gap-1 rounded transition-opacity ${pinActions ? 'opacity-100' : 'opacity-100 sm:opacity-0 sm:group-hover:opacity-100 focus-within:opacity-100'}`}>
         {extraActions}
         {onDetach && (armedDetach === tileKey ? (
           <ConfirmButtonPair prompt="Detach?" confirmText="Detach" cancelText="Cancel"

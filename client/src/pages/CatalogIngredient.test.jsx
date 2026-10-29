@@ -81,6 +81,7 @@ vi.mock('../services/apiCatalog', () => ({
   listCatalogSheetVariants: vi.fn(async () => ({ variants: [] })),
   previewCatalogSheet: vi.fn(async () => ({ preview: null })),
   renderCatalogSheet: vi.fn(),
+  removeCatalogPointerSheet: vi.fn(),
   refineCatalogMedia: vi.fn(async () => ({ sentPrompt: 'Example reference refinement' })),
   updateCatalogIngredientMediaLibrary: vi.fn(async () => ({})),
 }));
@@ -145,7 +146,8 @@ vi.mock('../services/apiImageVideo', () => ({
   })),
 }));
 vi.mock('../components/IngredientPicker', () => ({ default: () => null }));
-vi.mock('../hooks/useMediaAnnotations', () => ({ useMediaAnnotations: () => ({ annotations: {}, updateAnnotation: vi.fn() }) }));
+const { mediaAnnotationsFixture } = vi.hoisted(() => ({ mediaAnnotationsFixture: { current: {} } }));
+vi.mock('../hooks/useMediaAnnotations', () => ({ useMediaAnnotations: () => ({ annotations: mediaAnnotationsFixture.current, updateAnnotation: vi.fn() }) }));
 vi.mock('../components/media/AddToCollectionMenu', () => ({ default: () => null }));
 vi.mock('../components/media/PinToMoodBoardMenu', () => ({ default: () => null }));
 vi.mock('../components/media/PromptRefineModal', () => ({ default: () => null }));
@@ -1079,6 +1081,39 @@ describe('CatalogIngredient — tabbed library record pages', () => {
     // Sheets don't carry the profile form or the general media panel.
     expect(screen.queryByLabelText('Name')).toBeNull();
     expect(screen.queryByAltText('mood.png')).toBeNull();
+  });
+
+  it('removes a universe sheet from its card after a confirm and flags one rated bad', async () => {
+    const api = await import('../services/apiCatalog');
+    mediaAnnotationsFixture.current = { 'image-ref:hero-expressions.png': { rating: 'bad' } };
+    api.removeCatalogPointerSheet.mockResolvedValue({ filename: 'hero-expressions.png',
+      pointers: { referenceSheetImageRef: 'hero-standard.png', referenceSheets: {} } });
+    try {
+      await renderPage('/casting/cat-chr-hero/sheets');
+      const badSheet = (await screen.findByAltText('expressions reference sheet')).closest('figure');
+      expect(await within(badSheet).findByText('Rated bad')).toBeInTheDocument();
+      fireEvent.click(within(badSheet).getByRole('button', { name: 'Remove expressions sheet' }));
+      expect(api.removeCatalogPointerSheet).not.toHaveBeenCalled();
+      fireEvent.click(within(badSheet).getByRole('button', { name: 'Remove' }));
+      await waitFor(() => expect(api.removeCatalogPointerSheet).toHaveBeenCalledWith('cat-chr-hero', 'expressions', { silent: true }));
+      await waitFor(() => expect(screen.queryByAltText('expressions reference sheet')).toBeNull());
+      expect(screen.getByAltText('standard reference sheet')).toBeInTheDocument();
+    } finally {
+      mediaAnnotationsFixture.current = {};
+    }
+  });
+
+  it('removes the open universe sheet from the enlarged viewer', async () => {
+    const api = await import('../services/apiCatalog');
+    api.removeCatalogPointerSheet.mockResolvedValue({ filename: 'hero-standard.png',
+      pointers: { referenceSheetImageRef: null, referenceSheets: { expressions: 'hero-expressions.png' } } });
+    await renderPage('/casting/cat-chr-hero/sheets');
+    fireEvent.click(await screen.findByRole('button', { name: 'Enlarge standard reference sheet' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Remove sheet' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Tap to remove' }));
+    await waitFor(() => expect(api.removeCatalogPointerSheet).toHaveBeenCalledWith('cat-chr-hero', 'standard', { silent: true }));
+    await waitFor(() => expect(screen.queryByAltText('standard reference sheet')).toBeNull());
   });
 
   it('shows the server-selected canonical references beside Generate with full-size links and omissions', async () => {

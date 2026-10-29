@@ -598,6 +598,16 @@ function IngredientEditor() {
   // projection already copied onto this row. Pull just the pointer fields into
   // both the saved record and the draft, so an unsaved edit stays intact and
   // stays exactly as dirty as it was.
+  const applySheetPointers = useCallback((recordId, fresh) => {
+    const pointers = {};
+    for (const key of SHEET_POINTER_KEYS) {
+      if (Object.hasOwn(fresh, key)) pointers[key] = fresh[key];
+    }
+    setRecord((prev) => (prev?.id === recordId
+      ? { ...prev, payload: { ...ingredientPayload(prev.payload), ...pointers } }
+      : prev));
+    setPayload((cur) => ({ ...cur, ...pointers }));
+  }, []);
   const refreshSheetPointers = useCallback(() => {
     if (!id) return;
     const requestedId = id;
@@ -607,19 +617,17 @@ function IngredientEditor() {
     getCatalogIngredientDetails(id, { silent: true, view: detailView })
       .then((d) => {
         if (!isCurrentRequest() || !d?.ingredient) return;
-        const fresh = ingredientPayload(d.ingredient.payload);
-        const pointers = {};
-        for (const key of SHEET_POINTER_KEYS) {
-          if (Object.hasOwn(fresh, key)) pointers[key] = fresh[key];
-        }
-        setRecord((prev) => (prev?.id === requestedId
-          ? { ...prev, payload: { ...ingredientPayload(prev.payload), ...pointers } }
-          : prev));
-        setPayload((cur) => ({ ...cur, ...pointers }));
+        applySheetPointers(requestedId, ingredientPayload(d.ingredient.payload));
         toast.success('Reference sheet ready');
       })
       .catch(() => { if (isCurrentRequest()) toast.error('Reference sheet rendered — reload to see it'); });
-  }, [id, detailView, mountedRef]);
+  }, [id, detailView, mountedRef, applySheetPointers]);
+  // A removed universe sheet returns the row's fresh pointer fields.
+  const handlePointerSheetsChanged = useCallback((pointers) => {
+    if (!id || !pointers || activeVisitRef.current.id !== id) return;
+    ++sheetPointerSequence.current;
+    applySheetPointers(id, pointers);
+  }, [id, applySheetPointers]);
 
   const handleSave = async () => {
     if (!record || identityReadOnly || unlocking || characterActionBusy) return;
@@ -1039,6 +1047,7 @@ function IngredientEditor() {
             savedStamp={record.updatedAt || null}
             onSheetFile={handleSheetFile}
             onPointerSheetReady={refreshSheetPointers}
+            onPointerSheetsChanged={identityReadOnly ? undefined : handlePointerSheetsChanged}
             onMediaChanged={identityReadOnly ? undefined : refreshMedia}
           />
         )}

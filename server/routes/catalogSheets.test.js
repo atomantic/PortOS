@@ -12,6 +12,8 @@ const mocks = vi.hoisted(() => ({
   listLiveRefsForIngredient: vi.fn(),
   getUniverse: vi.fn(),
   updateUniverse: vi.fn(),
+  setIngredientPayloadKey: vi.fn(),
+  deleteCharacterReferenceSheet: vi.fn(),
   getSettings: vi.fn(),
   enqueueJob: vi.fn(),
   getImageModels: vi.fn(),
@@ -29,6 +31,7 @@ vi.mock('../services/catalogDB.js', () => ({
   listLiveRefsForIngredient: (...args) => mocks.listLiveRefsForIngredient(...args),
   listMediaForIngredient: (...args) => mocks.listMediaForIngredient(...args),
   listRelationsForIngredient: async () => ({ outbound: [], inbound: [] }),
+  setIngredientPayloadKey: (...args) => mocks.setIngredientPayloadKey(...args),
 }));
 vi.mock('../lib/pathSafety.js', async (importOriginal) => ({
   ...(await importOriginal()),
@@ -47,6 +50,11 @@ vi.mock('../services/mediaJobQueue/index.js', () => ({
   mediaJobEvents: { on: vi.fn(), off: vi.fn(), emit: vi.fn() },
 }));
 vi.mock('../services/universeRunTag.js', () => ({ buildUniverseRunTag: vi.fn(async () => null) }));
+// The universe delete (file unlink + pointer purge) has its own suite.
+vi.mock('../services/universeCharacterSheet.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  deleteCharacterReferenceSheet: (...args) => mocks.deleteCharacterReferenceSheet(...args),
+}));
 vi.mock('../services/universeCharacterSheetSlot.js', () => ({
   claimPendingSheetSlot: vi.fn(),
   getPendingSheetSlot: vi.fn(),
@@ -825,6 +833,48 @@ describe('catalog sheet routes', () => {
       expect(res.status).toBe(200);
       expect(queuedParams().prompt).toContain('collapsed piers, rusted cranes');
       expect(queuedParams().catalogAttach.role).toBe('sheet:environment@form-ruin');
+    });
+  });
+
+  describe('removing a universe sheet pointer', () => {
+    const sheetOwner = { ...character, payload: { ...character.payload,
+      referenceSheetImageRef: 'example-sheet-standard.png', referenceSheets: { profile: 'example-sheet-profile.png' } } };
+    const remove = (variant) => request(app).delete(`/api/catalog/ingredients/${character.id}/sheets/pointer${variant ? `?variant=${variant}` : ''}`);
+
+    it('deletes through the linked universe entry and returns the cleared pointers', async () => {
+      const universe = { id: 'universe-1', name: 'Example Universe', characters: [{ id: 'char-entry-1', name: character.name,
+        ingredientId: character.id, referenceSheetImageRef: 'example-sheet-standard.png' }] };
+      mocks.getIngredient.mockResolvedValueOnce(sheetOwner)
+        .mockResolvedValueOnce({ ...sheetOwner, payload: { ...sheetOwner.payload, referenceSheetImageRef: null } });
+      mocks.listLiveRefsForIngredient.mockResolvedValue([{ refKind: 'universe', refId: 'universe-1', role: 'owner' }]);
+      mocks.getUniverse.mockResolvedValue(universe);
+      mocks.deleteCharacterReferenceSheet.mockResolvedValue({ filename: 'example-sheet-standard.png', fileDeleted: true, cleared: 1 });
+      const res = await remove();
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({ filename: 'example-sheet-standard.png', cleared: 1,
+        pointers: { referenceSheetImageRef: null, referenceSheets: { profile: 'example-sheet-profile.png' } } });
+      expect(mocks.deleteCharacterReferenceSheet).toHaveBeenCalledWith('universe-1', 'char-entry-1', { variant: 'standard' });
+      expect(mocks.setIngredientPayloadKey).not.toHaveBeenCalled();
+    });
+
+    it('clears a pointer only the catalog row holds without touching a universe', async () => {
+      mocks.getIngredient.mockResolvedValue(sheetOwner);
+      mocks.setIngredientPayloadKey.mockImplementation(async (id, key, value) => ({ ...sheetOwner, payload: { ...sheetOwner.payload, [key]: value } }));
+      const res = await remove('profile');
+      expect(res.status).toBe(200);
+      expect(mocks.setIngredientPayloadKey).toHaveBeenCalledWith(character.id, 'referenceSheets', {}, expect.any(Object));
+      expect(res.body).toMatchObject({ filename: 'example-sheet-profile.png', fileDeleted: false,
+        pointers: { referenceSheetImageRef: 'example-sheet-standard.png', referenceSheets: {} } });
+      expect(mocks.deleteCharacterReferenceSheet).not.toHaveBeenCalled();
+    });
+
+    it('refuses a locked record and a variant with no sheet', async () => {
+      mocks.getIngredient.mockResolvedValue({ ...sheetOwner, payload: { ...sheetOwner.payload, locked: true } });
+      expect((await remove()).status).toBe(409);
+      mocks.getIngredient.mockResolvedValue(character);
+      expect((await remove('profile')).status).toBe(404);
+      expect(mocks.deleteCharacterReferenceSheet).not.toHaveBeenCalled();
+      expect(mocks.setIngredientPayloadKey).not.toHaveBeenCalled();
     });
   });
 });
