@@ -1559,7 +1559,8 @@ export async function setImagePrimary(filename, { instanceId, at }) {
   assertGalleryFilename(filename);
   return editImageSidecar(filename, (metadata) => {
     if (!metadata || Object.keys(metadata).length === 0) return null;
-    if (metadata.primaryInstanceId === instanceId && metadata.primaryAt === at) return null;
+    // Field LWW on primaryAt, as on video rows: an older designation never replaces a newer one.
+    if (Date.parse(metadata.primaryAt) >= Date.parse(at)) return null;
     Object.assign(metadata, { primaryInstanceId: instanceId, primaryAt: at });
     return true;
   });

@@ -170,6 +170,28 @@ describe('POST /api/peer-media/release', () => {
     expect(trashFiles).not.toHaveBeenCalled();
   });
 
+  it('refuses a delayed release that a newer designation recorded here supersedes', async () => {
+    await atomicWrite(HISTORY, [{ ...row('v1'), primaryInstanceId: 'local-inst', primaryAt: '2026-08-01T00:00:00.000Z' }]);
+    const res = await release(PEER_AUTH);
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('PRIMARY_SUPERSEDED');
+    expect(trashFiles).not.toHaveBeenCalled();
+  });
+
+  it('keeps the newer image designation against an older release, whichever machine it names', async () => {
+    mkdirSync(PATHS.images, { recursive: true });
+    writeFileSync(join(PATHS.images, 'fox.png'), 'png');
+    const sidecar = join(PATHS.images, 'fox.metadata.json');
+    writeFileSync(sidecar, JSON.stringify({ prompt: 'Example', primaryInstanceId: 'local-inst', primaryAt: '2026-08-01T00:00:00.000Z' }));
+
+    const stale = await release(PEER_AUTH, { kind: 'image', filename: 'fox.png' });
+    expect(stale.body.code).toBe('PRIMARY_SUPERSEDED');
+    const older = await release(PEER_AUTH, { kind: 'image', filename: 'fox.png', primaryInstanceId: 'local-inst' });
+    expect(older.body).toEqual({ ok: true, released: false });
+    expect(await readJSONFile(sidecar, null)).toMatchObject({ primaryInstanceId: 'local-inst', primaryAt: '2026-08-01T00:00:00.000Z' });
+    expect(trashFiles).not.toHaveBeenCalled();
+  });
+
   it('rejects a file name that is not a single path segment', async () => {
     const res = await release(PEER_AUTH, { filename: '../video-history.json' });
     expect(res.status).toBe(400);

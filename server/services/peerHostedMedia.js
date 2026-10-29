@@ -195,6 +195,29 @@ function forgetHosted(kind, filename, peerId, revision) {
   }).catch(() => {});
 }
 
+/**
+ * Forget `peerInstanceId` as a host of these files, any revision: it reported
+ * (or was verified) not to hold them. Resolves true when an entry changed.
+ */
+export function dropHostOf(kind, filenames, peerInstanceId) {
+  if (!Array.isArray(filenames) || filenames.length === 0) return Promise.resolve(false);
+  return queueWrite(async () => {
+    const entries = await readEntries();
+    let changed = false;
+    for (const filename of filenames) {
+      const key = hostedKey(kind, filename);
+      const hosts = hostsOf(entries[key]);
+      const remaining = hosts.filter((host) => host.peerId !== peerInstanceId);
+      if (remaining.length === hosts.length) continue;
+      if (remaining.length) entries[key] = hostEntry(remaining);
+      else delete entries[key];
+      changed = true;
+    }
+    if (changed) await writeEntries(entries);
+    return changed;
+  });
+}
+
 /** Forget a hosted entry outright (its host deleted the file). */
 export function dropHostedEntry(kind, filename) {
   return queueWrite(async () => {

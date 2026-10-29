@@ -176,6 +176,15 @@ describe('applyPeerSyncEvent holding frames', () => {
     expect(await holderNames()).toEqual([]);
   });
 
+  it('a host that reports it no longer holds the file stops being listed and streamed from', async () => {
+    const { markHosted, listHostedEntries } = await import('./peerHostedMedia.js');
+    await markHosted('peer-o', [{ kind: 'video', filename: 'v1.mp4' }]);
+    expect(await holderNames()).toEqual(['peer-o']);
+    await applyPeerSyncEvent({ id: 'rec-origin' }, holdingFrame(false));
+    expect(await holderNames()).toEqual([]);
+    expect(await listHostedEntries()).not.toHaveProperty(['video:v1.mp4']);
+  });
+
   it('ignores a holding frame that speaks for another machine', async () => {
     const result = await applyPeerSyncEvent({ id: 'rec-other' }, holdingFrame(true, 'peer-o'));
     expect(result.applied).toBe(false);

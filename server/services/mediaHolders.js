@@ -91,13 +91,17 @@ const notifyHoldersChanged = (changed) => {
 /**
  * One peer's authoritative byte inventory for `kind`: `filenames` it holds out
  * of the `checked` names it examined. Names it did not examine keep their state.
+ * A file it does not hold also stops being one this machine streams from it.
  */
 export async function recordPeerInventory(instanceId, kind, filenames, checked) {
   if (!isNonBlankStr(instanceId) || !KINDS.includes(kind) || !Array.isArray(filenames) || !Array.isArray(checked)) return false;
   const present = new Set(filenames.filter(validName));
   const examined = new Set(checked.filter(validName));
+  const absent = [...examined].filter((name) => !present.has(name));
   const at = new Date().toISOString();
-  return notifyHoldersChanged(await updateStore((store) => {
+  const { dropHostOf } = await import('./peerHostedMedia.js');
+  const hostsDropped = await dropHostOf(kind, absent, instanceId);
+  const recorded = await updateStore((store) => {
     const held = { ...(store.holdings[instanceId]?.[kind] ?? {}) };
     let changed = false;
     for (const name of examined) {
@@ -106,10 +110,11 @@ export async function recordPeerInventory(instanceId, kind, filenames, checked) 
     }
     if (changed) store.holdings[instanceId] = { ...(store.holdings[instanceId] ?? {}), [kind]: held };
     return changed;
-  }));
+  });
+  return notifyHoldersChanged(hostsDropped || recorded);
 }
 
-/** A single "I hold / no longer hold" report from `instanceId` (a frame or a command's answer). */
+/** A single "I hold / no longer hold" report from `instanceId` (a frame, a command's answer or a HEAD check). */
 export function notePeerHolding(instanceId, kind, filename, held) {
   return recordPeerInventory(instanceId, kind, held ? [filename] : [], [filename]);
 }
@@ -161,6 +166,21 @@ async function setPrimaryOnRow(kind, filename, primaryInstanceId, primaryAt) {
   return ids.length > 0;
 }
 
+/** This machine's recorded designation for a file: `{ instanceId, at }`, or null. */
+async function currentPrimary(kind, filename) {
+  if (kind === 'image') {
+    const held = await readHeldImage(filename);
+    return held?.primaryInstanceId ? { instanceId: held.primaryInstanceId, at: held.primaryAt ?? null } : null;
+  }
+  const history = await loadHistory();
+  let newest = null;
+  for (const row of Array.isArray(history) ? history : []) {
+    if (row?.filename !== filename || !isNonBlankStr(row.primaryInstanceId)) continue;
+    if (!newest || (parseTsMs(row.primaryAt) ?? -Infinity) > (parseTsMs(newest.at) ?? -Infinity)) newest = { instanceId: row.primaryInstanceId, at: row.primaryAt ?? null };
+  }
+  return newest;
+}
+
 /**
  * Drop this machine's copy in favor of `primary` (a registered peer that was
  * just verified to hold the bytes): the hosted index points at it first, then
@@ -178,7 +198,8 @@ async function releaseLocalCopy(kind, filename, primary, primaryAt) {
 
 /**
  * Send the release command to one holder. Resolves `{ outcome, detail? }`:
- * `ok`, `not-held`, `forbidden`, `unreachable` (worth retrying) or `error`
+ * `ok`, `not-held`, `forbidden`, `superseded` (a newer primary is recorded
+ * there), `unreachable` (worth retrying) or `error`
  * (a refusal retrying will not change, e.g. an older peer without the route).
  */
 async function sendReleaseCommand(peer, { kind, filename, primaryInstanceId, primaryAt }) {
@@ -197,6 +218,7 @@ async function sendReleaseCommand(peer, { kind, filename, primaryInstanceId, pri
   if (res.ok && body?.ok === true) return { outcome: 'ok' };
   if (res.status === 404 && body?.code === 'MEDIA_NOT_HELD') return { outcome: 'not-held' };
   if (res.status === 403 && body?.code === 'MEDIA_DELETE_FORBIDDEN') return { outcome: 'forbidden' };
+  if (res.status === 409 && body?.code === 'PRIMARY_SUPERSEDED') return { outcome: 'superseded' };
   const detail = `http-${res.status}${body?.code ? ` ${body.code}` : ''}`;
   if (res.status >= 500 && res.status !== 501) return { outcome: 'unreachable', detail };
   return { outcome: 'error', detail };
@@ -277,6 +299,11 @@ export async function listMediaHolders() {
   return { self, items };
 }
 
+const KEPT_REASONS = {
+  forbidden: 'media delete is turned off there',
+  superseded: 'a newer primary is recorded there',
+};
+
 /**
  * Keep `instanceId`'s copy of `kind:filename` and release every other holder's.
  * Refused (409) while the chosen holder is unreachable or does not hold the
@@ -329,7 +356,7 @@ export async function makeMediaPrimary({ kind, filename, instanceId }) {
       queued.push({ peerId: peer.id, ...command, queuedAt: primaryAt });
       result.pending.push({ instanceId: holderId, name });
     } else {
-      result.kept.push({ instanceId: holderId, name, reason: sent.outcome === 'forbidden' ? 'media delete is turned off there' : `refused (${sent.detail}); it may need an update` });
+      result.kept.push({ instanceId: holderId, name, reason: KEPT_REASONS[sent.outcome] ?? `refused (${sent.detail}); it may need an update` });
     }
   }
   // This designation supersedes every release queued earlier for the file.
@@ -341,6 +368,10 @@ export async function makeMediaPrimary({ kind, filename, instanceId }) {
   if (primary && selfHolds) {
     await releaseLocalCopy(kind, filename, primary, primaryAt);
     result.released.push({ instanceId: self, name: 'This machine' });
+  } else if (primary) {
+    // No copy here: stream from the primary rather than a holder that released.
+    const { hostFileOn } = await import('./peerHostedMedia.js');
+    await hostFileOn(kind, filename, primary.instanceId);
   }
   emitMediaHoldersChanged();
   console.log(`🗂️ ${kind} ${filename}: primary is ${primary ? peerLabel(primary) : 'this machine'} (released ${result.released.length}, pending ${result.pending.length}, kept ${result.kept.length})`);
@@ -368,6 +399,12 @@ export async function executePeerMediaRelease(senderPeerId, { kind, filename, pr
   }
   if (!KINDS.includes(kind) || !validName(filename)) throw new ServerError('Unknown media', { status: 400, code: 'VALIDATION_ERROR' });
   if (!holdsHere(kind, filename)) throw new ServerError('This machine does not hold that media', { status: 404, code: 'MEDIA_NOT_HELD' });
+  // A delayed (queued) release must not undo a newer designation recorded here.
+  const recorded = await currentPrimary(kind, filename);
+  if (recorded && recorded.instanceId !== primaryInstanceId && (parseTsMs(recorded.at) ?? -Infinity) >= parseTsMs(primaryAt)) {
+    console.log(`⏭️ Release of ${kind} ${filename} from ${peerLabel(sender)} refused: a newer primary is recorded here`);
+    throw new ServerError('A newer primary is recorded for this media here; the copy was kept', { status: 409, code: 'PRIMARY_SUPERSEDED' });
+  }
   if (primaryInstanceId === await localInstanceId()) {
     // This machine is the primary: it keeps its copy.
     await setPrimaryOnRow(kind, filename, primaryInstanceId, primaryAt);
