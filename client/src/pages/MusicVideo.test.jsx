@@ -4,6 +4,8 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 vi.mock('../services/apiRunwayCatalog.js', async (importOriginal) => ({ ...await importOriginal(), loadRunwayCatalog: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('../services/apiMediaJobs.js', async (importOriginal) => ({ ...await importOriginal(), listQueueMediaJobs: vi.fn(async () => []) }));
+import { listQueueMediaJobs } from '../services/apiMediaJobs.js';
 import { render, screen, waitFor, fireEvent, within, act } from '@testing-library/react';
 import { findEnabledByRole } from '../test/enabledBarrier.js';
 import { MemoryRouter, Routes, Route, useNavigate, useLocation } from 'react-router';
@@ -3030,6 +3032,7 @@ describe('MusicVideo stage tabs (#9243)', () => {
       {MV_ROUTES}
     </MemoryRouter>);
     const notes = await screen.findByLabelText(/Making-of notes/);
+    await waitFor(() => expect(listQueueMediaJobs).toHaveBeenCalledWith({ kind: 'video-upscale', limit: 10 }));
     expect(notes).toHaveValue('Example first story');
     fireEvent.change(notes, { target: { value: 'Example unsaved first story' } });
     fireEvent.click(screen.getByRole('button', { name: 'go-/music-video/mv-other/publish' }));
