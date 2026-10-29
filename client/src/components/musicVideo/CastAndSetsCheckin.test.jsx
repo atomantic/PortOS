@@ -253,6 +253,34 @@ describe('Cast & Sets per-image actions', () => {
     expect(card('Automatic frame').getByRole('button', { name: 'Remove Automatic frame' })).toBeInTheDocument();
   });
 
+  it('binds an age to a catalog-linked character and a test to that age', async () => {
+    const age = { id: 'age-7', label: 'Age 7', age: '7', description: 'small', hair: '', wardrobe: '' };
+    const agedDirection = { ...direction, protagonist: { ...direction.protagonist, forms: [age] } };
+    const plan = { ...photoPlan,
+      'form:age-7': { key: 'form:age-7', kind: 'form', formId: 'age-7', label: 'June · Age 7', prompt: 'young', deps: ['character'], refKeys: ['character'], subjectId: 'gone', bindingMissing: 'subject' },
+      'test:1': { key: 'test:1', kind: 'test', testIndex: 0, label: 'Memory', test: { action: 'skip stones', caption: 'memory' }, prompt: 'test', deps: [], refKeys: [] },
+    };
+    const linked = { ...sheet('review', { direction: agedDirection, plan }), concept: { subjects: [
+      { id: 'mvc-child', kind: 'character', name: 'June (Age 7)', ingredientId: 'cat-1', castForm: { id: 'age-7', label: 'Age 7' } },
+      { id: 'mvc-local', kind: 'character', name: 'Stranger' },
+      { id: 'cs-protagonist', kind: 'character', name: 'June', ingredientId: 'cat-2' },
+    ] } };
+    api.editMusicVideoCastAndSetsDirection.mockResolvedValue({ project: linked });
+    render(<Harness initial={linked} locked={false} />);
+    expect(card('June · Age 7').getByText(/no longer cast in this video/)).toBeInTheDocument();
+    fireEvent.click(card('June · Age 7').getByRole('button', { name: 'Edit June · Age 7' }));
+    const subject = card('June · Age 7').getByLabelText('Catalog reference for this age');
+    expect([...subject.options].map((o) => o.value)).toEqual(['', 'mvc-child']);
+    fireEvent.change(subject, { target: { value: 'mvc-child' } });
+    await act(async () => { fireEvent.click(card('June · Age 7').getByRole('button', { name: 'Save and re-render' })); });
+    expect(api.editMusicVideoCastAndSetsDirection).toHaveBeenLastCalledWith('example-project',
+      { protagonist: { forms: [{ ...age, id: 'age-7', subjectId: 'mvc-child' }] } }, { silent: true });
+    fireEvent.click(card('Memory').getByRole('button', { name: 'Edit Memory' }));
+    fireEvent.change(card('Memory').getByLabelText('Age shown'), { target: { value: 'age-7' } });
+    await act(async () => { fireEvent.click(card('Memory').getByRole('button', { name: 'Save and re-render' })); });
+    expect(api.editMusicVideoCastAndSetsDirection).toHaveBeenLastCalledWith('example-project', { tests: [{ index: 1, formId: 'age-7' }] }, { silent: true });
+  });
+
   it('loads a matching legacy test before editing and can clear its caption', async () => {
     const legacy = { key: 'test:1', kind: 'test', testIndex: 0, setId: 'harbor', label: 'Harbor', prompt: 'saved prompt', deps: [], refKeys: [] };
     const withTest = sheet('review', { plan: { 'test:1': legacy } });

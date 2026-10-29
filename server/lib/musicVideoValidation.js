@@ -1387,6 +1387,8 @@ export const musicVideoCastAndSetsDirectionEditSchema = z.object({
       description: castSetsText(1000),
       hair: castSetsText(1000).optional(),
       wardrobe: castSetsText(1000).optional(),
+      // The fixed-casting subject whose reference grounds this age (null clears).
+      subjectId: z.string().max(64).nullable().optional(),
     }).strict()).max(3).optional(),
   }).strict().optional(),
   looks: z.array(z.object({
@@ -1411,6 +1413,8 @@ export const musicVideoCastAndSetsDirectionEditSchema = z.object({
     action: castSetsText(1000).optional(),
     caption: castSetsText(300).optional(),
     look: castSetsText(120).optional(),
+    // The protagonist form (other age) this test shows; null clears it.
+    formId: z.string().max(64).nullable().optional(),
   }).strict()).max(4).optional(),
   world: z.object({
     layout: castSetsText(1000).optional(),

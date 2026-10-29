@@ -65,6 +65,7 @@ import {
   castAndSetsAllowsImages,
   castAndSetsMedium,
   describeDirectionChanges,
+  formSubjects,
   mergeCastAndSetsDirection,
   moodBoardImageList,
   parseCastAndSetsResponse,
@@ -237,8 +238,9 @@ async function runDirection(projectId, { providerId, model, effort, notes = [], 
   const parsed = parseCastAndSetsResponse(text);
   if (!parsed) return fail(projectId, 'The creative direction answer had no usable JSON');
   const sections = songSections(project);
-  const { direction, missing } = mergeCastAndSetsDirection(notes.length ? previous : null, parsed, { sections, medium });
-  if (missing.length) return fail(projectId, `The creative direction answer is missing: ${missing.join(', ')}`);
+  const merged = mergeCastAndSetsDirection(notes.length ? previous : null, parsed, { sections, medium });
+  if (merged.missing.length) return fail(projectId, `The creative direction answer is missing: ${merged.missing.join(', ')}`);
+  const direction = withoutUnknownFormSubjects(project, merged.direction, notes.length ? previous : null);
   // The look every image prompt carries. While the director's sheet feedback
   // stands, the look line rewritten to agree with it wins; otherwise the
   // director's palette/light/texture line, else the project's visual style.
@@ -290,6 +292,30 @@ async function writePlan(projectId, { direction = null, forceKeys = [], changes 
   console.log(`🎭 Music Video Cast & Sets ${short(projectId)} r${out.stage.revision}: ${renderKeys.length} image(s) to render${route ? ` on ${route.mode}` : ' (code-only, no image backend)'}`);
   publish(projectId, out.project);
   return advance(projectId);
+}
+
+/**
+ * A form's subject binding a caller just set (it differs from the one `previous`
+ * held for that form id) that names no fixed-casting character of `project`.
+ * An unchanged binding whose subject was since unlinked is left for the plan
+ * to report as missing, so it never blocks an unrelated edit.
+ */
+function newUnknownFormSubjects(project, direction, previous) {
+  const known = new Set(formSubjects(project).map((s) => s.id));
+  const before = new Map((previous?.protagonist?.forms || []).map((f) => [f.id, f.subjectId]));
+  return (direction?.protagonist?.forms || []).filter((f) => f.subjectId && f.subjectId !== before.get(f.id) && !known.has(f.subjectId));
+}
+
+// A provider answer can only bind a form to a subject the director cast.
+function withoutUnknownFormSubjects(project, direction, previous) {
+  const unknown = new Set(newUnknownFormSubjects(project, direction, previous).map((f) => f.id));
+  if (!unknown.size) return direction;
+  const forms = direction.protagonist.forms.map((f) => {
+    if (!unknown.has(f.id)) return f;
+    const { subjectId: _subjectId, ...rest } = f;
+    return rest;
+  });
+  return { ...direction, protagonist: { ...direction.protagonist, forms } };
 }
 
 const keyNotesText = (keyNotes = {}) => Object.fromEntries(Object.entries(keyNotes).map(([k, list]) => [k, list.join('; ')]));
@@ -826,6 +852,9 @@ export async function editCastAndSetsDirection(projectId, edits) {
       direction = { ...direction, tests };
     }
     const edited = applyCastAndSetsDirectionEdits(direction, edits, { sections });
+    if (newUnknownFormSubjects(current, edited.direction, direction).length) {
+      throw new ServerError('That age is linked to a character this video has not cast from the catalog. Link the character in Creative setup first.', { status: 422, code: 'CAST_SETS_UNKNOWN_SUBJECT' });
+    }
     if (!edited.changed.length) throw new ServerError('Nothing changed — edit a field first', { status: 422, code: 'CAST_SETS_NO_EDITS' });
     changed = edited.changed;
     const notesApplied = [{ id: null, target: 'direction', text: `Edited by the director: ${changed.join(', ')}` }];
