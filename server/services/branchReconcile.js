@@ -1511,7 +1511,7 @@ export async function checkoutIdleMs(worktreePath) {
 
 /**
  * Removal and branch deletion. `preservation` is an optional held-checkout record
- * (production removal does not create one) and `prepared` is the `prepare` backup,
+ * (production removal does not create one) and `prepared` is the `prepare` result,
  * taken after admission with the ownership lock released.
  */
 async function finishBranchRetirement(repoPath, { b, expectedHead, readPolicyHold, mergeTarget, label, requireCleanWorktree, claimOwners, mergedRetirement, claimCompletion, appId }, { prepared = null, preservation = null } = {}) {
@@ -1542,8 +1542,6 @@ async function finishBranchRetirement(repoPath, { b, expectedHead, readPolicyHol
       const dirtyPaths = await worktreeDirtyPaths(b.worktreePath);
       if (dirtyPaths === null) return 'worktree-status-unavailable';
       if (requireCleanWorktree && dirtyPaths.length) return 'worktree-dirty';
-      // The backup ran unlocked; a tree whose change set moved since is not what it holds.
-      if (prepared && !sameDirtyPaths(b.dirtyPaths, dirtyPaths)) return 'worktree-changed-since-backup';
       if (mergedRetirement && !await hasBranchMergeEvidence(repoPath, expectedHead, mergeTarget).catch(() => false)) return 'not-merged-on-recheck';
       return preservation ? preservation.verify(holder) : null;
     };
