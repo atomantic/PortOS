@@ -35,6 +35,8 @@ import { peerFetch } from '../../lib/peerHttpClient.js';
 import { getPeers } from '../instances.js';
 import { pullSidecarForImage, backfillMissingSidecars, recordImageSupplier } from './sidecarSync.js';
 import { editImageSidecar } from '../imageGen/sidecarStore.js';
+import { getOrComputeImageSha256 } from '../../lib/assetHash.js';
+import '../imageGen/local.js'; // registers the sidecar-queue sha256 writer
 
 let tmp;
 let originalImagesPath;
@@ -276,6 +278,23 @@ describe('recordImageSupplier', () => {
     await writeFile(sidecarFile(), JSON.stringify({ prompt: 'mine', originInstanceId: 'test-instance' }));
     expect(await recordImageSupplier('pulled.png', 'peer-x')).toBe(false);
     expect(await read()).toEqual({ prompt: 'mine', originInstanceId: 'test-instance' });
+  });
+});
+
+describe('recordImageSupplier racing the image hash cache write', () => {
+  it('keeps both the sha256 cache and the supplier', async () => {
+    const imagePath = join(PATHS.images, 'raced.png');
+    await writeFile(imagePath, 'bytes');
+    await writeFile(join(PATHS.images, 'raced.metadata.json'), JSON.stringify({ hidden: true }));
+    // The hash call reads the sidecar before hashing; the supplier record lands
+    // while it hashes. Only the shared edit queue lets the later cache write
+    // see the supplier instead of overwriting it with its stale read.
+    const hashing = getOrComputeImageSha256(imagePath);
+    const recorded = await recordImageSupplier('raced.png', 'peer-x');
+    const { hash } = await hashing;
+    expect(recorded).toBe(true);
+    const onDisk = JSON.parse(await readFile(join(PATHS.images, 'raced.metadata.json'), 'utf8'));
+    expect(onDisk).toMatchObject({ hidden: true, suppliedByInstanceId: 'peer-x', sha256: { value: hash } });
   });
 });
 
