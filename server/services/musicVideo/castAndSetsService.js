@@ -963,7 +963,8 @@ export async function getCastAndSetsCastingChanges(projectId) {
   const project = await requireProject(projectId);
   const stage = project.castAndSets;
   if (!stage?.direction || !['review', 'approved'].includes(stage.status)) return { changes: null };
-  const direction = await withoutBoardLook(project, stage.direction);
+  // Only reference images are compared, so the look line (withoutBoardLook) is not needed.
+  const direction = stage.direction;
   const { plan } = await currentImagePlan(project, direction);
   const before = stage.plan || {};
   // Once approved, the sheet's own images are labeled references a name match
