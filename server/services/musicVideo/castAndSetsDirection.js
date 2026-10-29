@@ -172,16 +172,23 @@ export function fixedCasting(project) {
       const name = s.name.trim().toLowerCase();
       const ref = refs.find((r) => r?.imageId && r.role === role && String(r.label || '').trim().toLowerCase() === name
         && !isOutsideMusicVideoReference(r));
-      return { kind: s.kind, name: s.name.trim(), role: s.role || null, description: s.description || '', imageId: ref?.imageId || null };
+      return { id: s.id, kind: s.kind, name: s.name.trim(), role: s.role || null, description: s.description || '', ...(s.castForm?.label ? { castForm: s.castForm.label } : {}), imageId: ref?.imageId || null };
     });
 }
+
+/**
+ * The project subjects a protagonist form may be bound to (`form.subjectId`):
+ * the fixed-casting characters, so a form is only ever grounded on a catalog
+ * record the director chose, never on an identity read out of free text.
+ */
+export const formSubjects = (project) => fixedCasting(project).filter((f) => f.kind === 'character');
 
 function fixedCastingBlock(project) {
   const fixed = fixedCasting(project);
   if (!fixed.length) return '';
   return [
     'FIXED CASTING (catalog records the director chose; keep them):',
-    ...fixed.map((f) => `- ${f.kind}${f.role === 'protagonist' ? ' (protagonist)' : ''}: ${trimTo(f.name, 120)}${f.description ? ` — ${trimTo(f.description, 500)}` : ''}`),
+    ...fixed.map((f) => `- ${f.kind}${f.role === 'protagonist' ? ' (protagonist)' : ''}: ${trimTo(f.name, 120)}${f.description ? ` — ${trimTo(f.description, 500)}` : ''}${f.kind === 'character' ? ` [subject id: ${f.id}${f.castForm ? `, shown as: ${trimTo(f.castForm, 80)}` : ''}]` : ''}`),
     'Use each one as given: the same name, and its description for face, hair and wardrobe, or for the empty location. A character marked protagonist is the protagonist unless a character style above fixes it; other characters go in "cast"; places become sets. Design only what this list leaves missing.',
   ].join('\n');
 }
@@ -199,13 +206,13 @@ const OUTPUT_SHAPE = `{
     "gesture": "<a recurring gesture tied to a lyric hook, quoting the hook>",
     "rules": ["<continuity or safety rule>"],
     "expressions": ["<a mood from the story: what the face, eyes and head do>"],
-    "forms": [{ "id": "<short-slug>", "label": "<e.g. Age 7>", "age": "<age>", "description": "<how they look at that age>", "hair": "<hair at that age>", "wardrobe": "<their outfit at that age>" }]
+    "forms": [{ "id": "<short-slug>", "label": "<e.g. Age 7>", "age": "<age>", "description": "<how they look at that age>", "hair": "<hair at that age>", "wardrobe": "<their outfit at that age>", "subjectId": "<the FIXED CASTING subject id of the protagonist at this age, or empty>" }]
   },
   "looks": [{ "name": "<SHORT NAME>", "description": "<the complete outfit>", "chapters": "<which parts of the song>" }],
   "cast": [{ "id": "<short-slug>", "name": "<a name>", "role": "<what they are in the video: drummer, shopkeeper, ...>", "description": "<who they are: age, vibe, attitude>", "face": "<face: skin, eyes, brows, distinguishing features>", "hair": "<hair>", "wardrobe": "<their one outfit>" }],
   "sets": [{ "id": "<short-slug>", "name": "<set name>", "description": "<the empty location, concrete and visual, with nobody in it>", "lighting": "<its one dominant light>", "sections": ["<section label it serves>"] }],
   "songMap": [{ "section": 0, "setId": "<short-slug>" }],
-  "tests": [{ "setId": "<short-slug>", "look": "<SHORT NAME>", "action": "<what the protagonist does in this frame>", "caption": "<the lyric or beat it serves>" }],
+  "tests": [{ "setId": "<short-slug>", "look": "<SHORT NAME>", "action": "<what the protagonist does in this frame>", "caption": "<the lyric or beat it serves>", "formId": "<the protagonist.forms id when this frame shows them at that other age, or empty>" }],
   "overlayConcept": { "summary": "<one persistent graphic layer that ties every shot together>", "elements": [{ "name": "<element>", "description": "<what it shows and when it changes>" }] },
   "questions": ["<a question for the director>"]
 }`;
@@ -352,11 +359,11 @@ export function buildCastAndSetsPrompt(project, { moodImages = [], board = null,
     '- Give every set ONE dominant light color or quality so a cut tells the viewer where we are.',
     LOOK_AND_SET_RULES,
     '- songMap: one entry per song section index listed above, naming the set that section plays in.',
-    '- tests: in-set frames of the protagonist that prove the cast works in the world; each names a set id and a look name, and shows a moment from the story.',
+    '- tests: in-set frames of the protagonist that prove the cast works in the world; each names a set id and a look name, and shows a moment from the story. A test showing the protagonist at one of their other ages names that form\'s id in formId; otherwise formId is empty.',
     `- protagonist.expressions: 4–6 moods the protagonist actually shows in THIS story, each "<mood>: <what the face, eyes and head do>" (e.g. "grief held in: eyes closed, head bowed"). They become the expression sheet. ${musicVideoLipSyncs(project)
     ? 'Some shots lip-sync, so one may be singing.'
     : 'Nobody sings or mouths the words on camera in this video: no singing, open-mouthed or straight-to-lens performance expressions.'}`,
-    `- protagonist.forms: when the story shows the protagonist at OTHER ages (a childhood memory, a teenage flashback), one entry per other age, at most ${CAST_SETS_LIMITS.forms}: its age, a short label ("Age 7"), how they look then, their hair and their outfit. The other protagonist fields describe them at their present-story age. [] when they appear at one age only.`,
+    `- protagonist.forms: when the story shows the protagonist at OTHER ages (a childhood memory, a teenage flashback), one entry per other age, at most ${CAST_SETS_LIMITS.forms}: its age, a short label ("Age 7"), how they look then, their hair and their outfit. The other protagonist fields describe them at their present-story age. When FIXED CASTING lists a character who is the protagonist at that age, put its subject id in subjectId; otherwise subjectId is empty. [] when they appear at one age only.`,
     `- cast: the RECURRING supporting characters besides the protagonist that the song, concept or guidance calls for (band members, someone who returns across scenes), at most ${CAST_SETS_LIMITS.cast}; [] when the protagonist is alone. Each gets their own photographic character sheet. Shots that name a cast member by name or role are conditioned on that sheet, so give each a distinct name and a plain role word.`,
     '- Wet or revealing looks use opaque fabric so the video stays safe to post.',
     '- questions: up to three things you need the director to decide.',
@@ -433,6 +440,7 @@ const formSchema = z.preprocess(withoutNulls, z.object({
   description: prose(TEXT).optional(),
   hair: prose(TEXT).optional(),
   wardrobe: prose(TEXT).optional(),
+  subjectId: text(64).optional(),
 }).passthrough());
 
 const protagonistSchema = z.preprocess(withoutNulls, z.object({
@@ -488,7 +496,7 @@ const castSchema = z.preprocess(withoutNulls, z.object({
   hair: prose(TEXT).optional(),
   wardrobe: prose(TEXT).optional(),
 }).passthrough());
-const testSchema = z.object({ setId: z.string(), look: text(SHORT).optional(), action: text(TEXT), caption: text(300).optional() }).passthrough();
+const testSchema = z.object({ setId: z.string(), look: text(SHORT).optional(), action: text(TEXT), caption: text(300).optional(), formId: text(64).optional() }).passthrough();
 const overlaySchema = z.union([
   text(TEXT).transform((summary) => ({ summary, elements: [] })),
   z.object({
@@ -596,29 +604,46 @@ function normalizeCast(cast, protagonist) {
 }
 
 // Other ages of the protagonist: a described form, unique slug ids, capped.
-function normalizeForms(forms) {
+// `subjectId` (optional) binds the form to a fixed-casting subject's reference;
+// a form listed without the key keeps the binding `previous` had for its id.
+function normalizeForms(forms, previous = []) {
   const seen = new Set();
   return (Array.isArray(forms) ? forms : []).filter((f) => f && (f.label || f.age) && f.description)
     .slice(0, CAST_SETS_LIMITS.forms).map((f, i) => {
       let id = slug(f.id) || slug(f.label) || slug(f.age && `age-${f.age}`) || `form-${i + 1}`;
       while (seen.has(id)) id = `${id}-${i + 1}`;
       seen.add(id);
-      return { id, label: f.label || `Age ${f.age}`, age: f.age || '', description: f.description, hair: f.hair || '', wardrobe: f.wardrobe || '' };
+      const prior = previous.find((p) => p?.id === id);
+      const subjectId = String((hasOwn(f, 'subjectId') ? f.subjectId : prior?.subjectId) || '').trim().slice(0, 64);
+      // The bound subject's name (stamped by the service), kept while the binding is.
+      const subjectName = subjectId && String((subjectId === prior?.subjectId && prior?.subjectName) || f.subjectName || '').trim().slice(0, 120);
+      return { id, label: f.label || `Age ${f.age}`, age: f.age || '', description: f.description, hair: f.hair || '', wardrobe: f.wardrobe || '',
+        ...(subjectId ? { subjectId } : {}), ...(subjectName ? { subjectName } : {}) };
     });
 }
 
-function normalizeTests(tests, sets, looks) {
+// A test naming a form shows the protagonist at that age; one naming a form the
+// direction no longer has is dropped, never re-cast as the present-day protagonist.
+function normalizeTests(tests, sets, looks, forms = []) {
   const setIds = new Set(sets.map((s) => s.id));
+  const formIds = new Set(forms.map((f) => f.id));
   return tests
-    .map((t) => ({ ...t, setId: slug(t.setId) }))
-    .filter((t) => setIds.has(t.setId) && t.action)
+    .map((t) => ({ ...t, setId: slug(t.setId), formId: typeof t.formId === 'string' ? t.formId.trim() : '' }))
+    .filter((t) => setIds.has(t.setId) && t.action && (!t.formId || formIds.has(t.formId)))
     .slice(0, CAST_SETS_LIMITS.tests.max)
     .map((t) => ({
       setId: t.setId,
       look: looks.find((l) => l.name.toLowerCase() === String(t.look || '').toLowerCase())?.name || looks[0]?.name || '',
       action: t.action,
       caption: t.caption || '',
+      ...(t.formId ? { formId: t.formId } : {}),
     }));
+}
+
+/** The tests in `tests` whose form is not among `forms` (a 422 for a director edit). */
+function testsWithMissingForm(tests, forms) {
+  const formIds = new Set((forms || []).map((f) => f.id));
+  return (tests || []).flatMap((t, i) => (t?.formId && !formIds.has(t.formId) ? [i + 1] : []));
 }
 
 /**
@@ -645,7 +670,7 @@ export function mergeCastAndSetsDirection(previous, parsed, { sections = [], med
     rules: (hasOwn(p1, 'rules') ? p1.rules : (p0.rules || [])).filter(Boolean).slice(0, CAST_SETS_LIMITS.rules),
   };
   const expressions = (hasOwn(p1, 'expressions') ? p1.expressions : (p0.expressions || [])).filter(Boolean).slice(0, CAST_SETS_LIMITS.expressions);
-  const forms = procedural ? [] : normalizeForms(hasOwn(p1, 'forms') ? p1.forms : p0.forms);
+  const forms = procedural ? [] : normalizeForms(hasOwn(p1, 'forms') ? p1.forms : p0.forms, p0.forms || []);
   // A photographic protagonist without moods or other ages keeps its legacy shape
   // (its seeded Cast guide still reads as the same content).
   if (procedural || expressions.length) protagonist.expressions = expressions;
@@ -670,7 +695,7 @@ export function mergeCastAndSetsDirection(previous, parsed, { sections = [], med
     return prior?.setReference ? { ...set, setReference: prior.setReference } : set;
   });
   const songMap = normalizeSongMap(pick('songMap', []), sets, sections);
-  const tests = normalizeTests(pick('tests', []), sets, looks);
+  const tests = normalizeTests(pick('tests', []), sets, looks, forms);
   const overlayRaw = pick('overlayConcept', { summary: '', elements: [] }) || {};
   const overlayConcept = {
     summary: overlayRaw.summary || '',
@@ -715,6 +740,8 @@ export const CAST_SETS_EDITABLE_WORLD = Object.freeze({ layout: TEXT, depth: 500
 const EDITABLE_CAST = Object.freeze({ name: SHORT, role: SHORT, description: TEXT, face: TEXT, hair: TEXT, wardrobe: TEXT });
 const EDITABLE_SET = Object.freeze({ name: SHORT, description: TEXT, lighting: 300 });
 const EDITABLE_TEST = Object.freeze({ action: TEXT, caption: 300, look: SHORT });
+// A test's form binding: a present `formId` replaces it (null or '' clears it).
+const testFormPatch = (patch) => (hasOwn(patch, 'formId') ? { formId: patch.formId || '' } : {});
 
 const pickText = (source, caps) => Object.fromEntries(
   Object.entries(caps).filter(([key]) => typeof source?.[key] === 'string').map(([key, max]) => [key, source[key].trim().slice(0, max)]),
@@ -820,8 +847,17 @@ export function applyCastAndSetsDirectionEdits(previous, edits, { sections = [] 
       }
       return { ...test, ...(renamed && { look: renamed }), key: test.index };
     });
-    parsed.tests = patchItems(parsed.tests || previous.tests || [], tests, { what: 'test', keyOf: (_t, i) => i + 1, fields: EDITABLE_TEST });
+    parsed.tests = patchItems(parsed.tests || previous.tests || [], tests, { what: 'test', keyOf: (_t, i) => i + 1, fields: EDITABLE_TEST, extra: testFormPatch });
     parsed.testsFixed = true;
+  }
+  // A director edit never drops a test silently: removing (or mistyping) the age
+  // a test shows is refused until that test is reassigned or removed.
+  if (!procedural) {
+    const forms = normalizeForms(hasOwn(parsed.protagonist, 'forms') ? parsed.protagonist.forms : previous?.protagonist?.forms, previous?.protagonist?.forms || []);
+    const orphaned = testsWithMissingForm(parsed.tests || previous?.tests, forms);
+    if (orphaned.length) {
+      throw new ServerError(`An age that is not on the sheet is shown by test ${orphaned.join(', ')}. Give each another age or remove it first.`, { status: 422, code: 'CAST_SETS_UNKNOWN_FORM' });
+    }
   }
   const { direction, missing } = mergeCastAndSetsDirection(previous, parsed, { sections, medium: procedural ? 'procedural' : 'photographic', minSets: 1 });
   if (missing.length) throw new ServerError(`That edit would leave the direction without: ${missing.join(', ')}`, { status: 422, code: 'CAST_SETS_EDIT_INVALID' });
