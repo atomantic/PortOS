@@ -470,7 +470,9 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // normalizer would strip both and whole-row LWW the loss back.
   // v14 = per-reference review/feedback and refinement lineage. Older peers
   // strip these fields and could restore rejected conditioning references.
-  catalog: 14,
+  // v15 = media `library.likeness: false` (image left out of likeness guides).
+  // Older normalizers strip it and would send a left-out collage again.
+  catalog: 15,
   // v1 = cross-machine resumable Story Builder sessions (#730). Sessions are
   // local-only by default and excluded from sync; only `sync: true` sessions
   // ride the `storyBuilder` snapshot category. This is a brand-NEW synced

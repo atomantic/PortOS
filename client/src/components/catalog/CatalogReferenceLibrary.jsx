@@ -4,7 +4,7 @@ import { Compass, Loader2, Star, ThumbsDown, ThumbsUp, Trash2 } from 'lucide-rea
 import CatalogMediaTile from './CatalogMediaTile';
 import CatalogReferenceReview from './CatalogReferenceReview';
 import MediaJobThumb from '../pipeline/MediaJobThumb';
-import { REFERENCE_REVIEW_WRITE_STATUSES, referenceReviewStatus, rejectedReferenceKeys } from '../../../../server/lib/catalogMediaLibrary.js';
+import { REFERENCE_REVIEW_WRITE_STATUSES, isLeftOutOfLikeness, referenceReviewStatus, rejectedReferenceKeys } from '../../../../server/lib/catalogMediaLibrary.js';
 import { formatCount } from '../../utils/formatters';
 import { updateCatalogIngredientMediaLibrary, attachCatalogIngredientMediaFromMoodBoard } from '../../services/apiCatalog';
 
@@ -211,6 +211,11 @@ export default function CatalogReferenceLibrary({
     return updated;
   };
 
+  // The server applies likeness to every attachment of the file, so reload.
+  const toggleLikeness = async (lead, leftOut) => {
+    if (await save(lead, { likeness: leftOut })) onChanged?.();
+  };
+
   const importBoard = async () => {
     const ids = itemIds.split(/[\s,]+/).filter(Boolean);
     if (!boardId.trim() || ids.length === 0) return;
@@ -335,6 +340,7 @@ export default function CatalogReferenceLibrary({
             const key = `${m.ingredientId || ingredientId}:${m.kind}:${m.mediaKey}`;
             const lib = m.library || {};
             const isGuide = lib.guide === true && !rejected.has(m.mediaKey);
+            const leftOut = attachments.some(isLeftOutOfLikeness);
             const editable = !readOnly && !m.readOnly;
             const title = lib.variant?.label || attachments.find((a) => a.library?.variant?.label)?.library.variant.label || m.caption || m.mediaKey;
             const summary = [forms.find((f) => f.id === lib.variant?.formId)?.label || 'Canonical',
@@ -359,12 +365,21 @@ export default function CatalogReferenceLibrary({
                   ))}
                   {m.kind !== 'video' && (editable ? (
                     <button type="button" disabled={!!busyKey || rejected.has(m.mediaKey) || (!isGuide && guideCount >= MAX_CAST_GUIDES)} aria-pressed={isGuide}
-                      title={!isGuide && guideCount >= MAX_CAST_GUIDES ? `At most ${MAX_CAST_GUIDES} render guides` : 'Use as a render guide'}
+                      title={rejected.has(m.mediaKey) ? (leftOut ? 'Left out of likeness, so it cannot guide renders' : 'Rated bad, so it cannot guide renders')
+                        : !isGuide && guideCount >= MAX_CAST_GUIDES ? `At most ${MAX_CAST_GUIDES} render guides` : 'Use as a render guide'}
                       onClick={() => toggleGuide(attachments, m, isGuide)}
                       className={`flex min-h-11 w-full items-center justify-center gap-2 rounded border px-3 text-sm disabled:opacity-40 ${isGuide ? 'border-port-accent bg-port-accent/10 text-port-accent' : 'border-port-border text-gray-300 hover:border-port-accent'}`}>
                       <Compass size={16} aria-hidden="true" /> {busyKey.endsWith(`:${m.mediaKey}`) ? 'Saving…' : isGuide ? 'Guide' : 'Make guide'}
                     </button>
                   ) : isGuide && <p className="text-xs text-port-accent">Render guide</p>)}
+                  {m.kind !== 'video' && (editable ? (
+                    <button type="button" disabled={!!busyKey} aria-pressed={!leftOut}
+                      title="Leave a collage or mood board out of the images that guide likeness"
+                      onClick={() => toggleLikeness(m, leftOut)}
+                      className={`flex min-h-11 w-full items-center justify-center rounded border border-port-border px-3 text-sm hover:border-port-accent disabled:opacity-40 ${leftOut ? 'text-gray-400' : 'text-gray-300'}`}>
+                      {leftOut ? 'Left out of likeness' : 'Used for likeness'}
+                    </button>
+                  ) : leftOut && <p className="text-xs text-gray-500">Left out of likeness</p>)}
                   {m.kind !== 'video' && <CatalogReferenceReview
                     ingredientId={ingredientId} media={m} readOnly={!editable} saving={!!busyKey}
                     onSave={patch => save(m, patch)} onChanged={onChanged} revision={previewRevision} blockedReason={blockedReason} />}

@@ -212,6 +212,28 @@ describe('catalog sheet routes', () => {
     expect(preview.body.preview.referenceImages.map(ref => ref.filename)).toEqual(['canonical.png']);
   });
 
+  // A collage left out of likeness is listed (so it can be put back) but never
+  // sent, never takes a slot and never blocks the render when its file is gone.
+  it('lists a left-out image without sending it or letting it fill a reference slot', async () => {
+    mocks.getIngredient.mockResolvedValue({ ...character, payload: { ...character.payload, imageRefs: ['board.png'] } });
+    mocks.listMediaForIngredient.mockResolvedValue([
+      { kind: 'portrait', mediaKey: 'portrait.png' },
+      { kind: 'reference', mediaKey: 'board.png', library: { likeness: false } },
+      { kind: 'reference', mediaKey: 'gone-board.png', library: { likeness: false } },
+      { kind: 'reference', mediaKey: 'still.png' },
+    ]);
+    ['portrait.png', 'board.png', 'still.png'].forEach(name => mocks.imageFiles.add(name));
+    const res = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets/preview').send({});
+    expect(res.status).toBe(200);
+    expect(res.body.preview.referenceImages.map(ref => [ref.filename, ref.status, ref.mediaKind])).toEqual([
+      ['portrait.png', 'included', 'portrait'], ['still.png', 'included', 'reference'],
+      ['board.png', 'left-out', 'reference'], ['gone-board.png', 'left-out', 'reference'],
+    ]);
+    const queued = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets').send({});
+    expect(queued.status).toBe(200);
+    expect(queuedParams().referenceImagePaths.map(path => basename(path))).toEqual(['portrait.png', 'still.png']);
+  });
+
   it('includes shared facial identity on delegated canonical blueprints as well as alternate-form sheets', async () => {
     mocks.getIngredient.mockResolvedValue(character);
     mocks.listLiveRefsForIngredient.mockResolvedValue([{ refKind: 'universe', refId: 'universe-1', role: 'owner' }]);
@@ -228,7 +250,7 @@ describe('catalog sheet routes', () => {
     mocks.getIngredient.mockResolvedValue(character);
     mocks.listMediaForIngredient.mockResolvedValue([{ kind: 'reference', mediaKey: 'missing.png', library: { guide: true } }]);
     const res = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets/preview').send({});
-    expect(res.body.preview.referenceImages).toEqual([{ filename: 'missing.png', source: 'Render guide', status: 'missing' }]);
+    expect(res.body.preview.referenceImages).toEqual([{ filename: 'missing.png', source: 'Render guide', mediaKind: 'reference', status: 'missing' }]);
     const queued = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets').send({});
     expect(queued.status).toBe(400);
     expect(mocks.enqueueJob).not.toHaveBeenCalled();

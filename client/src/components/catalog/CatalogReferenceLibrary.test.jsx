@@ -74,6 +74,18 @@ describe('CatalogReferenceLibrary', () => {
     expect(api.updateCatalogIngredientMediaLibrary).toHaveBeenCalledWith('cat-chr-1', { mediaKey: 'seventeen.png', kind: 'reference', guide: true }, { silent: true });
   });
 
+  it('puts a left-out collage back into likeness and refreshes', async () => {
+    const onChanged = vi.fn();
+    api.updateCatalogIngredientMediaLibrary.mockResolvedValueOnce({ mediaKey: 'board.png', kind: 'reference', library: {} });
+    render(<CatalogReferenceLibrary ingredientId="cat-chr-1" onChanged={onChanged}
+      media={[{ mediaKey: 'board.png', kind: 'reference', library: { likeness: false, guide: false } }]} />);
+    expect(screen.getByRole('button', { name: 'Make guide' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Left out of likeness' }));
+    await waitFor(() => expect(onChanged).toHaveBeenCalled());
+    expect(api.updateCatalogIngredientMediaLibrary).toHaveBeenCalledWith('cat-chr-1',
+      { mediaKey: 'board.png', kind: 'reference', likeness: true }, { silent: true });
+  });
+
   it('disables new guides at the cap of four', () => {
     const full = [1, 2, 3, 4, 5].map((n) => ({ mediaKey: `${n}.png`, kind: 'reference', library: { guide: n <= 4 } }));
     render(<CatalogReferenceLibrary ingredientId="cat-chr-1" media={full} />);

@@ -12,7 +12,7 @@ import { useModelInputPreview } from '../../hooks/useModelInputPreview';
 import { LEGACY_SHEET_VARIANT_ID, readSheetPointer, listSheetPointers } from '../../lib/sheetPointers.js';
 import { SHEET_ROLE_PREFIX } from '../../lib/creativeLibraries';
 import { formsOf, splitSheetRole } from '../../lib/catalogForms';
-import { listCatalogSheetVariants, previewCatalogSheet, renderCatalogSheet } from '../../services/apiCatalog';
+import { listCatalogSheetVariants, previewCatalogSheet, renderCatalogSheet, updateCatalogIngredientMediaLibrary } from '../../services/apiCatalog';
 
 // Universe-canon sheets live on the payload as pointers into /data/image-refs.
 // `[variant, filename]` pairs, with the legacy pointer de-duplicated against a
@@ -94,7 +94,7 @@ const SHEET_EVENT = 'reference-sheet:changed';
 // (`sheet:<variant>@<formId>`), which always renders through the catalog path.
 export default function CatalogSheetsPanel({
   ingredientId, payload, universeRef, sheetMedia, missingMedia, onDetach,
-  blockedReason = null, savedStamp = null, onSheetFile, onPointerSheetReady,
+  blockedReason = null, savedStamp = null, onSheetFile, onPointerSheetReady, onMediaChanged,
 }) {
   const mountedRef = useMounted();
   const [variants, setVariants] = useState(null);
@@ -130,8 +130,21 @@ export default function CatalogSheetsPanel({
     previewCatalogSheet(ingredientId, body, options).then((r) => r?.preview ?? null), [ingredientId]);
   const forms = formsOf(payload);
   const activeFormId = forms.some((f) => f.id === formId) ? formId : '';
+  const [likenessRevision, setLikenessRevision] = useState(0);
   const preview = useModelInputPreview(fetchPreview,
-    { variant: variantId, ...(activeFormId ? { formId: activeFormId } : {}), savedStamp }, { enabled: !!variantId });
+    { variant: variantId, ...(activeFormId ? { formId: activeFormId } : {}), savedStamp }, { enabled: !!variantId, revision: likenessRevision });
+
+  // Leaving an image out (e.g. a multi-age collage board) keeps it on the
+  // record but out of every likeness pick; the server applies it to both the
+  // portrait and reference rows of that file.
+  const toggleLikeness = useCallback(async (image, include) => {
+    const updated = await updateCatalogIngredientMediaLibrary(ingredientId,
+      { mediaKey: image.filename, kind: image.mediaKind, likeness: include }, { silent: true })
+      .catch((err) => { toast.error(err?.message || 'Could not update reference'); return null; });
+    if (!updated || !mountedRef.current) return;
+    setLikenessRevision((n) => n + 1);
+    onMediaChanged?.();
+  }, [ingredientId, mountedRef, onMediaChanged]);
 
   const jobId = pending?.jobId || null;
   const delegated = !!pending?.delegated;
@@ -259,7 +272,7 @@ export default function CatalogSheetsPanel({
           </div>
           {variant?.description && <p className="text-xs text-gray-400">{variant.description}</p>}
           {blockedReason && <p className="text-xs text-port-warning" role="status">{blockedReason}</p>}
-          <ModelInputPreview preview={preview} prompt="" />
+          <ModelInputPreview preview={preview} prompt="" onToggleLikeness={onMediaChanged ? toggleLikeness : undefined} />
         </div>
       )}
 

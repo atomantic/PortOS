@@ -113,6 +113,19 @@ describe.skipIf(!runDb)('atomic local image writes', () => {
     });
     expect(media.find(m => m.kind === 'portrait').library.guide).toBe(false);
   });
+  it('leaves both attachments of an image out of likeness and puts both back', async () => {
+    const id = await ingredient();
+    await catalogDB.attachMedia(id, 'board.png', 'reference', { library: { guide: true } });
+    await catalogDB.setPortraitMedia(id, 'board.png', { library: { tags: ['collage'] } });
+    const out = await catalogDB.updateMediaLibrary(id, 'board.png', 'reference', { likeness: false });
+    expect(out.library).toEqual({ guide: false, likeness: false });
+    let media = await catalogDB.listMediaForIngredient(id);
+    expect(media.find(m => m.kind === 'portrait').library).toEqual({ tags: ['collage'], guide: false, likeness: false });
+    expect((await catalogDB.updateMediaLibrary(id, 'board.png', 'portrait', { guide: true })).library.guide).toBe(false);
+    await catalogDB.updateMediaLibrary(id, 'board.png', 'portrait', { likeness: true });
+    media = await catalogDB.listMediaForIngredient(id);
+    expect(media.map(m => m.library.likeness)).toEqual([undefined, undefined]);
+  });
   it.each([false, true])('serializes generic and dedicated writes (existing portrait: %s)', async (existing) => {
     const id = await ingredient();
     if (existing) await catalogDB.setPortraitMedia(id, 'old.png');
