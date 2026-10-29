@@ -346,6 +346,11 @@ export const MEDIA_SYNC_MODES = Object.freeze(['copy', 'host']);
 export const DEFAULT_MEDIA_SYNC_MODE = 'copy';
 export const peerMediaSyncMode = (peer) => (MEDIA_SYNC_MODES.includes(peer?.mediaSyncMode) ? peer.mediaSyncMode : DEFAULT_MEDIA_SYNC_MODE);
 
+// Standing capability: may this paired peer delete media on THIS machine?
+// Peers are trusted; the grant is ON unless the operator explicitly refuses it
+// (an absent field reads as allowed). Machine-local — set per peer in Instances.
+export const peerMayDeleteMedia = (peer) => peer?.mediaDeleteAllowed !== false;
+
 // Categories that stay on for a peer even when the user's master `syncEnabled`
 // switch is off — that switch predates them and means "don't replicate my
 // content to this peer", so it must not silently retract a default-ON one.
@@ -506,6 +511,7 @@ export async function addPeer({ address, port = DEFAULT_PEER_PORT, name, host, a
       // Consumer-side routing is explicit and machine-local. Enabling a peer
       // here never changes that peer's provider settings.
       mediaProvider: { enabled: false, audioModels: [], imageModels: [], videoModels: [] },
+      mediaDeleteAllowed: true,
       consecutiveFailures: 0,
       nextProbeAt: null,
       directions: ['outbound']
@@ -615,6 +621,7 @@ export async function updatePeer(id, updates, { probe = true } = {}) {
     if (updates.mediaSyncMode !== undefined && MEDIA_SYNC_MODES.includes(updates.mediaSyncMode)) {
       peer.mediaSyncMode = updates.mediaSyncMode;
     }
+    if (typeof updates.mediaDeleteAllowed === 'boolean') peer.mediaDeleteAllowed = updates.mediaDeleteAllowed;
     if (updates.enabled !== undefined) peer.enabled = updates.enabled;
     if (updates.syncEnabled !== undefined) peer.syncEnabled = updates.syncEnabled;
     // Full-sync ("mirror everything") toggle. A false→true flip implies every
@@ -1287,6 +1294,7 @@ export async function handleAnnounce({ address, port, instanceId, name, host }) 
       enabled: true,
       syncEnabled: false,
       syncCategories: { ...DEFAULT_SYNC_CATEGORIES },
+      mediaDeleteAllowed: true,
       consecutiveFailures: 0,
       nextProbeAt: null,
       directions: ['inbound']
