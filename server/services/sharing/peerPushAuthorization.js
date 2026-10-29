@@ -2,11 +2,12 @@
 import { timingSafeEqual } from 'node:crypto';
 import { getPeers } from '../instances.js';
 import { ServerError } from '../../lib/errorHandler.js';
+import { isPairedPeer } from '../../lib/peerPairing.js';
 import { peerAllowsOutbound, peerHasCategory } from './peerSyncShared.js';
 
 function peerSyncTokenMatches(peer, token) {
   const expected = peer?.syncSecret;
-  if (typeof expected !== 'string' || expected.length < 32 || typeof token !== 'string') return false;
+  if (!isPairedPeer(peer) || typeof token !== 'string') return false;
   const a = Buffer.from(expected);
   const b = Buffer.from(token);
   return a.length === b.length && timingSafeEqual(a, b);
@@ -18,7 +19,7 @@ export async function authorizeIncomingPush(payload, { peerToken, pullPeerId } =
   // A local pull already bound the response to the configured destination.
   // No HTTP input can select this context; the pull service alone supplies it.
   const localPull = peer && typeof pullPeerId === 'string' && pullPeerId.length > 0
-    && pullPeerId === peer.id && typeof peer.syncSecret === 'string' && peer.syncSecret.length >= 32;
+    && pullPeerId === peer.id && isPairedPeer(peer);
   if (!localPull && !peerSyncTokenMatches(peer, peerToken)) {
     throw new ServerError('Pair this peer from its Instances page before pushing records', {
       status: 401, code: 'PEER_SYNC_AUTH_REQUIRED',
