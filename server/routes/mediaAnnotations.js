@@ -6,9 +6,9 @@
  *     body: { starred?: boolean, rating?: 'good' | 'bad' | null, note?: string } — writes the local-author entry
  *     → { key, entry: { own, others } }
  *
- * Key shape: `<kind>:<ref>` where kind ∈ {image, video} and ref has no `:`.
- * Matches the convention enforced by mediaCollections.js and produced by the
- * client-side normalize.js (`item.key`).
+ * Key shape: `<kind>:<ref>` where kind ∈ {image, video, image-ref} and ref has
+ * no `:`. image/video match mediaCollections.js and normalize.js (`item.key`);
+ * image-ref is a /data/image-refs file (see mediaAnnotationKey on the client).
  */
 
 import { Router } from 'express';

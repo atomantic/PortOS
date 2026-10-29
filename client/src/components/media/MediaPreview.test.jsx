@@ -19,7 +19,7 @@ vi.mock('../../services/apiImageVideo', () => ({
 // its own interaction coverage; this stub exposes the item it receives and
 // invokes the same callback the real Save prompt button uses.
 vi.mock('./MediaLightbox', () => ({
-  default: ({ item, onPromptChange, onPromptAnalysis, onPosterChange, onTrimStart, variantGroup, onSelectVariant }) => item ? (
+  default: ({ item, annotation, onAnnotationChange, onPromptChange, onPromptAnalysis, onPosterChange, onTrimStart, variantGroup, onSelectVariant }) => item ? (
     <div data-testid="lightbox">
       {onTrimStart && <button type="button" onClick={() => onTrimStart(item, 1.25)}>Start clip here</button>}
       <button type="button" onClick={() => onPromptAnalysis(item, { videoPrompt: 'analysed prompt' })}>Analyze prompt</button>
@@ -27,6 +27,8 @@ vi.mock('./MediaLightbox', () => ({
       <button onClick={() => onPosterChange(item, 12.4)}>Save poster</button>
       <span data-testid="lightbox-prompt">{item.prompt}</span>
       <span data-testid="lightbox-filename">{item.filename}</span>
+      <span data-testid="lightbox-rating">{annotation?.rating ?? 'unrated'}</span>
+      {onAnnotationChange && <button type="button" onClick={() => onAnnotationChange({ rating: 'good' })}>Good</button>}
       <button type="button" onClick={() => onPromptChange(item, 'a saved prompt')}>
         Save prompt
       </button>
@@ -321,4 +323,23 @@ it('hands the trimmed clip to the host, and offers no trim to a host that cannot
 
   rerender(<MediaPreview preview={VIDEO} setPreview={() => {}} items={[VIDEO]} />);
   expect(screen.queryByRole('button', { name: 'Start clip here' })).toBeNull();
+});
+
+it('rates a /data/image-refs sheet under its image-ref: key, whatever key the page gave it', () => {
+  const sheet = {
+    kind: 'image',
+    key: 'catalog-image:image-refs:sheet-1.png',
+    previewUrl: '/data/image-refs/sheet-1.png',
+    prompt: '(no prompt)',
+  };
+  const updateAnnotation = vi.fn();
+  render(
+    <MemoryRouter>
+      <MediaPreview preview={sheet} setPreview={() => {}} items={[]}
+        annotations={{ 'image-ref:sheet-1.png': { rating: 'bad' } }} updateAnnotation={updateAnnotation} />
+    </MemoryRouter>,
+  );
+  expect(screen.getByTestId('lightbox-rating')).toHaveTextContent('bad');
+  fireEvent.click(screen.getByRole('button', { name: 'Good' }));
+  expect(updateAnnotation).toHaveBeenCalledWith('image-ref:sheet-1.png', { rating: 'good' });
 });
