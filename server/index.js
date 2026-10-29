@@ -189,6 +189,7 @@ import roundsRoutes from './routes/rounds.js';
 import midiRuntimeRoutes from './routes/midiRuntime.js';
 import harnessRoutes from './routes/harnesses.js';
 import peerSyncRoutes from './routes/peerSync.js';
+import peerMediaRoutes from './routes/peerMedia.js';
 import askRoutes from './routes/ask.js';
 import remoteDesktopRoutes from './routes/remoteDesktop.js';
 import remoteDesktopViewerRoutes from './routes/remoteDesktopViewer.js';
@@ -513,6 +514,7 @@ app.use('/api/rounds', roundsRoutes);
 app.use('/api/midi-runtime', midiRuntimeRoutes);
 app.use('/api/harnesses', harnessRoutes);
 app.use('/api/peer-sync', peerSyncRoutes);
+app.use('/api/peer-media', peerMediaRoutes);
 app.use('/api/ask', askRoutes);
 
 

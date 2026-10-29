@@ -50,6 +50,9 @@ export const PEER_API_SURFACE = Object.freeze([
   // Record push/pull (sharing/*): reads, plus the one inbound push.
   { prefix: '/api/peer-sync/', methods: READ },
   { path: '/api/peer-sync/push', methods: Object.freeze(['POST']) },
+  // Remote media delete (services/mediaRemoteDelete.js): the handler also
+  // requires the sender's media-delete capability on this install.
+  { path: '/api/peer-media/delete', methods: Object.freeze(['POST']) },
   // Planning-only administration. Each exact endpoint independently verifies
   // the current paired identity and a host-local action grant. Never host control.
   ...['preflight', 'plans', 'receipt', 'execute', 'execution/preflight', 'execution/dispatch', 'execution/status'].map(endpoint => ({

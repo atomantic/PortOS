@@ -928,12 +928,13 @@ async function getVideoHistorySnapshot() {
   // the immutable-`createdAt` LWW merge keeps the existing row on a tie).
   // `suppliedByInstanceId` is likewise MACHINE-LOCAL (who handed THIS machine the
   // row); stripped so identical row sets hash identically. `originInstanceId` syncs.
+  // `pendingDelete` (a delete queued for the row's owner) is this machine's own work.
   // Canonicalize ordering for the wire so two peers holding identical sets
   // produce identical checksums regardless of insertion (newest-first) order.
   // Mirrors getMediaCollectionsSnapshot's sort-by-id rationale.
   const data = {
     videos: rows
-      .map(({ hidden, suppliedByInstanceId, ...rest }) => rest) // eslint-disable-line no-unused-vars
+      .map(({ hidden, suppliedByInstanceId, pendingDelete, ...rest }) => rest) // eslint-disable-line no-unused-vars
       .sort((a, b) => a.id.localeCompare(b.id)),
   };
   // Deliberate deletes ride the snapshot so a peer still holding the row can't
@@ -1007,8 +1008,8 @@ export async function mergeVideoRows(incomingRows, source) {
     const before = new Map(keyed.map((r) => [r.id, r]));
     const { merged: rawMerged, changed } = mergeArraysByKey(
       keyed,
-      // suppliedByInstanceId is local-only: never trust a sender's value.
-      incoming.filter(hasId).map(({ suppliedByInstanceId, ...rest }) => rest), // eslint-disable-line no-unused-vars
+      // suppliedByInstanceId and pendingDelete are local-only: never trust a sender's value.
+      incoming.filter(hasId).map(({ suppliedByInstanceId, pendingDelete, ...rest }) => rest), // eslint-disable-line no-unused-vars
       'id',
       'createdAt',
     );

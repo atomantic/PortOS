@@ -77,7 +77,7 @@ export function videoToRow(entry, { now } = {}) {
 const COMPACT_FIELDS = ['id', 'filename', 'path', 'thumbnail', 'createdAt', 'hidden', 'width', 'height',
   'appId', 'model', 'modelId', 'mode', 'seed', 'steps', 'numFrames', 'fps', 'fileSizeBytes', 'renderMs', 'loraFilenames',
   'lora_filenames', 'loraPaths', 'lora_paths', 'stitchedFrom', 'upscaledFrom', 'extractedFromVideoId',
-  'cleanedFrom', 'autoCleaned', 'regenerated', 'watermarkRemoved'];
+  'cleanedFrom', 'autoCleaned', 'regenerated', 'watermarkRemoved', 'pendingDelete'];
 export const COMPACT_PROMPT_CHARS = 240;
 // Scalars the list predicates read (db.js assetFilter) that are not card
 // fields. A compact source keeps them so scope filters match exactly as they

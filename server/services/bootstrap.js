@@ -1064,7 +1064,13 @@ export const runBootSequence = ({ io, httpServer, localHttpServer, httpsEnabled,
           .then(({ restoreServe }) => restoreServe())
           .catch((err) => logBootstrapFailure('⚠️ tailcat serve restore failed', err, console.warn));
       },
-      initSyncOrchestrator,
+      initSyncOrchestrator: () => {
+        initSyncOrchestrator();
+        // Queued remote media deletes drain when their owner comes online.
+        void import('./mediaRemoteDelete.js')
+          .then(({ initMediaRemoteDelete }) => initMediaRemoteDelete())
+          .catch((err) => logBootstrapFailure('❌ Media delete queue init failed', err));
+      },
       // Brain digests/reviews call an AI provider, so the scheduler arms only
       // once the server is listening and only acts when the user opted in
       // (`scheduledReviewsEnabled`).

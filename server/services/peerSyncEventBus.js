@@ -20,7 +20,7 @@ const SYNC_CATEGORY_FOR_EVENT = Object.freeze({ videoHistory: 'videoHistory' });
 
 // Per-machine row fields that never cross the wire (see getVideoHistorySnapshot).
 export function stripMachineLocalFields(record) {
-  const { hidden, suppliedByInstanceId, ...rest } = record; // eslint-disable-line no-unused-vars
+  const { hidden, suppliedByInstanceId, pendingDelete, ...rest } = record; // eslint-disable-line no-unused-vars
   return rest;
 }
 

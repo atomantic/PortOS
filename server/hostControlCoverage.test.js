@@ -946,6 +946,8 @@ const REVIEWED_OPEN_MUTATIONS = [
   ['POST /api/peer-administration/execution-status', HANDLER_GATED],
   ['POST /api/peer-administration/grants', HANDLER_GATED],
   ['POST /api/peer-administration/preview', HANDLER_GATED],
+  // /api/peer-media
+  ['POST /api/peer-media/delete', PEER_SURFACE],
   // /api/peer-sync
   ['POST /api/peer-sync/pull-metadata', PEER_SYNC],
   ['POST /api/peer-sync/pull-record', PEER_SYNC],
@@ -1270,6 +1272,7 @@ const REVIEWED_OPEN_MUTATIONS = [
   // /api/video-gen
   ['POST /api/video-gen/cancel', REDUCES_EXECUTION],
   ['DELETE /api/video-gen/history/:id', REMOVES_RECORD],
+  ['POST /api/video-gen/history/:id/cancel-delete', REDUCES_EXECUTION],
   ['PATCH /api/video-gen/history/:id/prompt', RECORDS],
   ['POST /api/video-gen/history/:id/visibility', RECORDS],
   ['POST /api/video-gen/ic-loras/:mode/download', MODEL_DATA],

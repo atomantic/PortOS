@@ -136,9 +136,10 @@ export function mutateVideoHistory(mutator, { stampOrigin = true } = {}) {
           .catch((err) => { console.log(`⏭️ Video origin stamp skipped: ${err.message}`); return null; });
         // A new id on the local path was created HERE, even when the mutator spread
         // a peer's source row (upscale, trim): origin is this machine, never a
-        // copied one, and the copied machine-local supplier is dropped.
+        // copied one, and the copied machine-local supplier and pending delete are dropped.
         for (const r of added) {
           delete r.suppliedByInstanceId;
+          delete r.pendingDelete;
           if (origin) r.originInstanceId = origin;
           else delete r.originInstanceId;
         }
