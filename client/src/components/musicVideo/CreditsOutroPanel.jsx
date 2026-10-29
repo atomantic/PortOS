@@ -8,6 +8,9 @@ import {
 // Lengths offered for the credits, in seconds (inside CREDITS_OUTRO_LIMITS).
 const LENGTHS = [6, 8, 10, 12, 15, 20, 25, 30];
 
+// The layouts offered, in CREDITS_OUTRO_LAYOUTS order.
+const LAYOUT_LABELS = { roll: 'Roll', grid: 'Grid (one screen)' };
+
 const FIELD = 'min-h-[44px] rounded border border-port-border bg-port-bg px-2 py-1 text-sm sm:min-h-0';
 
 /** One text field: edited in place, saved when it loses focus. */
@@ -81,6 +84,12 @@ export default function CreditsOutroPanel({ project, onEditLocal, onSave }) {
                 {lengths.map((sec) => <option key={sec} value={sec}>{sec}s</option>)}
               </select>
             </div>
+            <div>
+              <label htmlFor={id('layout')} className="mb-0.5 block text-xs text-port-text-muted">Layout</label>
+              <select id={id('layout')} value={credits.layout} onChange={(e) => commit({ layout: e.target.value })} className={FIELD}>
+                {Object.entries(LAYOUT_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+              </select>
+            </div>
           </div>
           <fieldset className="min-w-0 space-y-1">
             <legend className="mb-0.5 text-xs text-port-text-muted">Credits</legend>
@@ -106,14 +115,14 @@ export default function CreditsOutroPanel({ project, onEditLocal, onSave }) {
                   <Plus size={14} aria-hidden="true" /> Add credit
                 </button>
               )}
-              <button type="button" onClick={() => fill({ durationSec: credits.durationSec })} disabled={filling}
+              <button type="button" onClick={() => fill({ durationSec: credits.durationSec, layout: credits.layout })} disabled={filling}
                 className="flex min-h-[44px] items-center gap-1 rounded border border-port-border px-2 text-xs text-port-text-muted sm:min-h-0 sm:py-1">
                 <RotateCcw size={14} aria-hidden="true" /> Refill from song &amp; artist
               </button>
             </div>
           </fieldset>
           <TextField id={id('footer')} label="Closing line" value={credits.footer} placeholder="Optional" onCommit={(footer) => commit({ footer })} />
-          <p className="text-xs text-port-text-muted">Plays after the song{project.statsOutro?.enabled ? ' and the cutting room floor' : ''}. Rolls up when it is taller than the frame.</p>
+          <p className="text-xs text-port-text-muted">Plays after the song{project.statsOutro?.enabled ? ' and the cutting room floor' : ''}. {credits.layout === 'grid' ? 'Every credit shows on one screen.' : 'Rolls up when it is taller than the frame.'}</p>
         </div>
       )}
     </section>

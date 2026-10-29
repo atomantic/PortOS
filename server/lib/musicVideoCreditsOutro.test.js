@@ -65,5 +65,10 @@ describe('credits ending', () => {
     const early = texts(long, 3).find((d) => d.text === 'Person 0');
     const later = texts(long, 3.2).find((d) => d.text === 'Person 0');
     expect(later.y).toBeLessThan(early.y);
+    // The grid shows every credit on the one frame, still.
+    const grid = texts({ ...long, layout: 'grid' }, 5);
+    expect(grid.filter((d) => d.text.startsWith('Person '))).toHaveLength(20);
+    expect(grid.every((d) => d.y > 0 && d.y < 720)).toBe(true);
+    expect(texts({ ...long, layout: 'grid' }, 7)).toEqual(grid);
   });
 });

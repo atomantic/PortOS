@@ -203,7 +203,7 @@ describe('BoardStage ending', () => {
     const card = screen.getByRole('region', { name: 'Ending: credits' });
     fireEvent.click(within(card).getByLabelText(/Off/));
     await waitFor(() => expect(saveProjectFields).toHaveBeenCalledWith({ creditsOutro: {
-      enabled: true, durationSec: 10, title: 'Example Song', artist: 'Example Artist', lines: [{ role: 'Directed by', name: 'Example Artist' }], footer: '',
+      enabled: true, durationSec: 10, layout: 'roll', title: 'Example Song', artist: 'Example Artist', lines: [{ role: 'Directed by', name: 'Example Artist' }], footer: '',
     } }));
     fireEvent.click(screen.getByRole('button', { name: 'Close the credits' }));
     expect(screen.getByTestId('search').textContent).not.toContain('ending');

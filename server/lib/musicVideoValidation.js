@@ -4,7 +4,7 @@ import { MUSIC_VIDEO_GRADE_PRESETS, MUSIC_VIDEO_GRADE_MAX_GRAIN } from './musicV
 import { filmLookSchema } from './filmLookValidation.js';
 import { TITLE_CARD_FONTS, TITLE_CARD_LIMITS, TITLE_CARD_POSITIONS, TITLE_CARD_STYLES } from './musicVideoTitleCard.js';
 import { STATS_OUTRO_LIMITS, STATS_OUTRO_LINES } from './musicVideoStatsOutro.js';
-import { CREDITS_OUTRO_LIMITS } from './musicVideoCreditsOutro.js';
+import { CREDITS_OUTRO_LAYOUTS, CREDITS_OUTRO_LIMITS } from './musicVideoCreditsOutro.js';
 import { COVER_DESIGN_OPTIONS } from './musicVideoCoverOverlay.js';
 import { DISTROKID_REMEMBERED_OPTIONS } from './distrokidGenres.js';
 import { CROSS_LINK_EDIT_TARGETS } from './musicVideoCrossLinks.js';
@@ -1450,6 +1450,7 @@ export const musicVideoStatsOutroSchema = z.object({
 export const musicVideoCreditsOutroSchema = z.object({
   enabled: z.boolean().optional(),
   durationSec: z.number().min(CREDITS_OUTRO_LIMITS.durationMin).max(CREDITS_OUTRO_LIMITS.durationMax).optional(),
+  layout: z.enum(CREDITS_OUTRO_LAYOUTS).optional(),
   title: z.string().max(CREDITS_OUTRO_LIMITS.textMax).optional(),
   artist: z.string().max(CREDITS_OUTRO_LIMITS.textMax).optional(),
   lines: z.array(z.object({

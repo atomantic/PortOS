@@ -3,9 +3,10 @@
  * the song (and after the cutting room floor, when that is on too). It names
  * the song and who performed it, then a list of credit lines (role over name:
  * Directed by, Music by, Produced by, …) and an optional closing line, in
- * white serif and spaced capitals on black. When the block fits the frame it
- * fades in and holds; when it is taller than the frame it rolls up like a
- * film's end credits. One record on the project (`project.creditsOutro`,
+ * white serif and spaced capitals on black. In the `roll` layout the block
+ * fades in and holds when it fits the frame and rolls up like a film's end
+ * credits when it is taller; in the `grid` layout everything shows on one
+ * fixed frame, the credits laid out in columns and sized to fit. One record on the project (`project.creditsOutro`,
  * null = never set up) turns it on and holds every line exactly as edited.
  *
  * `creditsOutroPrefill` fills a new record from the project, its track, the
@@ -19,8 +20,10 @@
  */
 
 export const CREDITS_OUTRO_LIMITS = Object.freeze({ durationMin: 4, durationMax: 30, textMax: 80, linesMax: 24 });
+/** `roll`: held when it fits, rolled up when taller than the frame. `grid`: everything on one fixed frame. */
+export const CREDITS_OUTRO_LAYOUTS = Object.freeze(['roll', 'grid']);
 export const CREDITS_OUTRO_DEFAULTS = Object.freeze({
-  enabled: false, durationSec: 10, title: '', artist: '', lines: Object.freeze([]), footer: '',
+  enabled: false, durationSec: 10, layout: 'roll', title: '', artist: '', lines: Object.freeze([]), footer: '',
 });
 /** The faces the page draws in (bundled OFL files, registered by each page). */
 export const CREDITS_OUTRO_FONTS = Object.freeze({
@@ -50,6 +53,7 @@ export function normalizeCreditsOutro(input) {
   return {
     enabled: typeof input.enabled === 'boolean' ? input.enabled : CREDITS_OUTRO_DEFAULTS.enabled,
     durationSec: Math.round(Math.min(durationMax, Math.max(durationMin, raw)) * 10) / 10,
+    layout: CREDITS_OUTRO_LAYOUTS.includes(input.layout) ? input.layout : CREDITS_OUTRO_DEFAULTS.layout,
     title: cleanText(input.title, textMax),
     artist: cleanText(input.artist, textMax),
     lines,
@@ -100,8 +104,9 @@ export function creditsOutroPrefill({ project = null, track = null, artist = nul
 /**
  * Paint the credits at scene time `t` (0 = its first frame) on a
  * width × height 2D context. `credits` is the normalized record. The block
- * sits centred inside the title-safe width; it holds when it fits the frame
- * and rolls up when it does not, in from black and out to black.
+ * sits centred inside the title-safe area: a grid fills one fixed frame; a
+ * roll holds when it fits and rolls up when it does not. In from black and
+ * out to black.
  */
 function drawCreditsOutro(ctx, { width, height, t, durationSec, credits, fonts = {} }) {
   const serif = fonts.title || '"MV Credits Serif", "Playfair Display", Georgia, "Times New Roman", serif';
@@ -147,39 +152,95 @@ function drawCreditsOutro(ctx, { width, height, t, durationSec, credits, fonts =
   };
 
   const safeW = width * 0.8;
-  const unitsTall = items.reduce((sum, item) => sum + item.h, 0);
-  // Sized for a readable card: a role line is ~1/34 of the frame's short side, shrunk so the widest line fits.
-  let px = Math.min(width, height) / 34;
-  const wordy = items.filter((item) => item.text);
-  const widest = Math.max(1, ...wordy.map((item) => measure(item, px)));
-  if (widest > safeW) px *= safeW / widest;
-  const blockH = unitsTall * px;
   const safeH = height * 0.8;
-  const rolls = blockH > safeH;
-  // A held card is centred; a roll carries the block from below the frame to above it across the scene.
   const fadeIn = Math.min(0.8, D * 0.15);
   const fadeOut = Math.min(0.8, D * 0.15);
-  const top = rolls
-    ? height - (height + blockH) * clamp(t / D)
-    : (height - blockH) / 2;
-
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'alphabetic';
-  let y = top;
-  for (const item of items) {
-    const base = y + item.h * px * 0.72;
-    y += item.h * px;
-    if (!item.text || base < -px * 3 || base > height + px * 3) continue;
+  const paint = (item, x, base, px) => {
     ctx.font = fontFor(item.kind, px);
     ctx.fillStyle = item.kind === 'role' || item.kind === 'by' || item.kind === 'footer' ? '#b9b2a6' : '#f4efe6';
     const spacing = tracking(item.kind) * px;
     if (spacing && 'letterSpacing' in ctx) {
       ctx.letterSpacing = `${spacing}px`;
       // Letter spacing trails the last glyph; shift by half a gap to stay centred.
-      ctx.fillText(item.text, width / 2 + spacing / 2, base);
+      ctx.fillText(item.text, x + spacing / 2, base);
       ctx.letterSpacing = '0px';
     } else {
-      ctx.fillText(item.text, width / 2, base);
+      ctx.fillText(item.text, x, base);
+    }
+  };
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'alphabetic';
+
+  if (c.layout === 'grid') {
+    // One fixed frame: the heading on top, the credits in a centred grid of
+    // role-over-name cells, the closing line under them. The column count is
+    // whichever lets the type be largest while everything fits.
+    const head = items.filter((item) => item.kind === 'title' || item.kind === 'by' || item.kind === 'artist');
+    const cells = lines.map((line) => ({
+      role: clean(line.role) ? { kind: 'role', text: clean(line.role).toUpperCase(), h: 1.5 } : null,
+      name: clean(line.name) ? { kind: 'name', text: clean(line.name), h: 1.9 } : null,
+    }));
+    const foot = footer ? { kind: 'footer', text: footer, h: 1.4 } : null;
+    const per = (item) => (item ? measure(item, 100) / 100 : 0); // width per px, as type scales linearly
+    const headUnits = head.reduce((sum, item) => sum + item.h, 0);
+    const headWide = Math.max(0, ...head.map(per), per(foot));
+    const cellWide = Math.max(0, ...cells.map((cell) => Math.max(per(cell.role), per(cell.name))));
+    const CELL_H = 3.4;
+    const ROW_GAP = 1.1;
+    const maxCols = Math.max(1, Math.min(cells.length, height > width ? 2 : 4));
+    // A grid has columns: two at least once there are two credits.
+    const minCols = Math.min(2, maxCols);
+    let best = null;
+    for (let cols = minCols; cols <= maxCols; cols++) {
+      const rowsN = cells.length ? Math.ceil(cells.length / cols) : 0;
+      const units = headUnits + (head.length && rowsN ? 1.6 : 0) + rowsN * CELL_H + Math.max(0, rowsN - 1) * ROW_GAP + (foot ? 2 + foot.h : 0);
+      const fits = [safeH / Math.max(1, units), Math.min(width, height) / 30];
+      if (headWide > 0) fits.push(safeW / headWide);
+      if (cellWide > 0) fits.push((safeW / cols) * 0.9 / cellWide);
+      const size = Math.min(...fits);
+      // On a tie (both at the size cap), the fuller grid wins: fewer empty cells.
+      const empty = rowsN * cols - cells.length;
+      const tie = best && Math.abs(size - best.px) < 1e-6;
+      if (!best || size > best.px + 1e-6 || (tie && empty < best.empty)) best = { px: size, cols, rowsN, units, empty };
+    }
+    const px = best.px;
+    let y = (height - best.units * px) / 2;
+    for (const item of head) {
+      paint(item, width / 2, y + item.h * px * 0.72, px);
+      y += item.h * px;
+    }
+    if (head.length && best.rowsN) y += 1.6 * px;
+    const colW = safeW / best.cols;
+    cells.forEach((cell, i) => {
+      const row = Math.floor(i / best.cols);
+      const inRow = Math.min(best.cols, cells.length - row * best.cols);
+      // A short last row is centred under the full ones.
+      const x = width / 2 + ((i % best.cols) - (inRow - 1) / 2) * colW;
+      const top = y + row * (CELL_H + ROW_GAP) * px;
+      if (cell.role) paint(cell.role, x, top + 1.5 * px * 0.72, px);
+      if (cell.name) paint(cell.name, x, top + (cell.role ? 1.5 : 0.75) * px + 1.9 * px * 0.72, px);
+    });
+    y += (best.rowsN * CELL_H + Math.max(0, best.rowsN - 1) * ROW_GAP) * px;
+    if (foot) paint(foot, width / 2, y + 2 * px + foot.h * px * 0.72, px);
+  } else {
+    const unitsTall = items.reduce((sum, item) => sum + item.h, 0);
+    // Sized for a readable card: a role line is ~1/34 of the frame's short side, shrunk so the widest line fits.
+    let px = Math.min(width, height) / 34;
+    const wordy = items.filter((item) => item.text);
+    const widest = Math.max(1, ...wordy.map((item) => measure(item, px)));
+    if (widest > safeW) px *= safeW / widest;
+    const blockH = unitsTall * px;
+    const rolls = blockH > safeH;
+    // A held card is centred; a roll carries the block from below the frame to above it across the scene.
+    const top = rolls
+      ? height - (height + blockH) * clamp(t / D)
+      : (height - blockH) / 2;
+    let y = top;
+    for (const item of items) {
+      const base = y + item.h * px * 0.72;
+      y += item.h * px;
+      if (!item.text || base < -px * 3 || base > height + px * 3) continue;
+      paint(item, width / 2, base, px);
     }
   }
 
