@@ -20,13 +20,17 @@ vi.mock('../lib/fileUtils.js', async original => {
 });
 vi.mock('node:fs/promises', async original => {
   const actual = await original();
-  return { ...actual, realpath: async path => path.startsWith('/example/') ? path : actual.realpath(path),
+  // Native node:path keeps the host dialect even while process.platform is pinned.
+  // Map only synthetic fixture paths back to their POSIX keys; real I/O stays native.
+  const fixturePath = path => typeof path === 'string' ? path.replaceAll('\\', '/').replace(/^[a-z]:/i, '') : path;
+  return { ...actual, realpath: async path => typeof path === 'string' && fixturePath(path).startsWith('/example/')
+    ? fixturePath(path) : actual.realpath(path),
     lstat: async (path, options) => {
-      const item = f.physical[path];
+      const item = f.physical[fixturePath(path)];
       return item ? { dev: BigInt(item.dev), ino: BigInt(item.ino), birthtimeNs: BigInt(item.birthtimeNs),
         isDirectory: () => item.directory, isFile: () => !item.directory } : actual.lstat(path, options);
     },
-    readFile: async (path, ...options) => f.physical[path]?.contents ?? actual.readFile(path, ...options) };
+    readFile: async (path, ...options) => f.physical[fixturePath(path)]?.contents ?? actual.readFile(path, ...options) };
 });
 vi.mock('./legacyReleaseRecovery.js', async original => ({ ...await original(), legacyProcessesSettled: async () => f.legacySettled, inspectLegacyPublisher: async () => {
   if (!f.legacyProof) throw Object.assign(new Error('legacy proof unavailable'), { code: 'legacy-proof-unavailable' });
@@ -102,6 +106,7 @@ beforeEach(async () => {
   f.legacyProof = null; f.legacySettled = true; f.promotion = null; f.physical = {}; f.forgeCalls = 0;
   f.liveAgents = null;
   f.liveTrusted = true;
+  // POSIX settlement is the default contract; the native Windows test overrides it.
   restorePlatform = pinPlatform('darwin');
   f.failSave = false;
   identity = (await import('node:crypto')).randomBytes(32).toString('hex');
