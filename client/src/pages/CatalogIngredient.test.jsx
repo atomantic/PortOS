@@ -1092,7 +1092,7 @@ describe('CatalogIngredient — tabbed library record pages', () => {
       ],
     } });
     await renderPage('/casting/cat-chr-hero/sheets');
-    const references = await screen.findByRole('region', { name: 'Canonical reference images' });
+    const references = await screen.findByRole('region', { name: 'Reference images sent' });
     expect(within(references).getByAltText('Canonical reference 1')).toHaveAttribute('src', '/data/image-refs/canon.png');
     const enlargeBtn = within(references).getByRole('button', { name: 'Enlarge Canonical reference 1' });
     expect(enlargeBtn).toBeInTheDocument();

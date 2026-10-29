@@ -743,6 +743,50 @@ describe('catalog sheet routes', () => {
       expect(mocks.updateUniverse).not.toHaveBeenCalled();
     });
 
+    // Catches an age or look editing the present-day portrait (a 7-year-old
+    // drawn from the adult's face) and the preview hiding which images are sent.
+    describe('edit base for an age or look', () => {
+      const codex = { imageGen: { mode: 'codex', codex: { enabled: true } } };
+      beforeEach(() => {
+        mocks.getSettings.mockResolvedValue(codex);
+        mocks.getIngredient.mockResolvedValue(aged);
+        ['portrait.png', 'kid.png'].forEach((name) => mocks.imageFiles.add(name));
+      });
+
+      it('edits from the form’s own guide, not the canonical portrait, exactly as previewed', async () => {
+        mocks.listMediaForIngredient.mockResolvedValue([
+          { kind: 'portrait', mediaKey: 'portrait.png' },
+          { kind: 'reference', mediaKey: 'kid.png', library: { guide: true, variant: { formId: 'form-kid' } } },
+        ]);
+        const body = { variant: 'blueprint', formId: 'form-kid' };
+        const sent = (await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets/preview').send(body)).body.preview;
+        expect(sent.editBase).toMatchObject({ filename: 'kid.png', status: 'included', scope: 'form', source: 'Render guide · Age 7' });
+        expect(sent.referenceImages.map((ref) => [ref.filename, ref.role])).toEqual([['kid.png', 'edit-base']]);
+        expect(sent.promptAdditions.map((a) => a.id)).toContain('form-edit-base');
+        expect(sent.promptAdditions.map((a) => a.id)).not.toContain('portrait-edit-base');
+        await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets').send(body);
+        const params = queuedParams();
+        expect(basename(params.initImagePath)).toBe('kid.png');
+        await expectBackendPreview(sent, params);
+      });
+
+      it('generates fresh with the canonical portrait as a likeness guide when the form has no image', async () => {
+        mocks.listMediaForIngredient.mockResolvedValue([{ kind: 'portrait', mediaKey: 'portrait.png' }]);
+        const body = { variant: 'blueprint', formId: 'form-kid' };
+        const sent = (await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets/preview').send(body)).body.preview;
+        expect(sent.editBase).toMatchObject({ status: 'none', reason: expect.stringContaining('generated fresh') });
+        expect(sent.referenceImages.map((ref) => [ref.filename, ref.role, ref.source])).toEqual([
+          ['portrait.png', undefined, 'Portrait · canonical · present story'],
+        ]);
+        const identity = sent.promptAdditions.find((a) => a.id === 'character-identity');
+        expect(identity.text).toContain('another age or look than Age 7');
+        await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets').send(body);
+        const params = queuedParams();
+        expect(params.initImagePath).toBeUndefined();
+        expect(params.referenceImagePaths.map((path) => basename(path))).toEqual(['portrait.png']);
+      });
+    });
+
     it('refuses an unknown form, an undescribed form and a form on a look', async () => {
       mocks.getIngredient.mockResolvedValue(aged);
       const post = (body) => request(app).post('/api/catalog/ingredients/cat-chr-1/sheets').send(body);
