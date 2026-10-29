@@ -107,12 +107,27 @@ export async function getHistoryItem(id) {
 // file is not rewritten (an idempotent replay stays a true no-op).
 export const HISTORY_UNCHANGED = Symbol('video-history-unchanged');
 let historyWriteTail = Promise.resolve();
-export function mutateVideoHistory(mutator) {
+// Rows this mutation ADDS get `originInstanceId` (the machine that created the
+// row; immutable once set). Peer merges pass `{ stampOrigin: false }` because
+// rows they add were created elsewhere. The id is stamped only when known.
+export function mutateVideoHistory(mutator, { stampOrigin = true } = {}) {
   const run = historyWriteTail.then(async () => {
     const history = await loadHistory();
-    const next = await mutator(Array.isArray(history) ? history : []);
+    const base = Array.isArray(history) ? history : [];
+    const knownIds = stampOrigin ? new Set(base.map((r) => r?.id)) : null;
+    const next = await mutator(base);
     if (next === HISTORY_UNCHANGED) return history;
     const toSave = Array.isArray(next) ? next : history;
+    if (stampOrigin && Array.isArray(toSave)) {
+      const fresh = toSave.filter((r) => r && typeof r === 'object' && !r.originInstanceId && !knownIds.has(r.id));
+      if (fresh.length > 0) {
+        // Lazy: identity pulls in fileUtils at load; a stamping failure must never lose the row.
+        const origin = await import('../instanceIdentity.js')
+          .then((m) => m.getInstanceId().then((id) => (id === m.UNKNOWN_INSTANCE_ID ? null : id)))
+          .catch((err) => { console.log(`⏭️ Video origin stamp skipped: ${err.message}`); return null; });
+        if (origin) for (const r of fresh) r.originInstanceId = origin;
+      }
+    }
     await saveHistory(toSave);
     return toSave;
   });

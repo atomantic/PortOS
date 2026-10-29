@@ -987,13 +987,27 @@ async function applyVideoHistoryRemote(remoteData, source) {
     const hasId = hasVideoRowId;
     const keyed = local.filter(hasId);
     const before = new Map(keyed.map((r) => [r.id, r]));
-    const { merged, changed } = mergeArraysByKey(
+    const { merged: rawMerged, changed } = mergeArraysByKey(
       keyed,
       incoming.filter(hasId),
       'id',
       'createdAt',
     );
     if (!changed) return HISTORY_UNCHANGED;
+    // Origin is immutable once set; rows new to this machine record who supplied
+    // them (this sender) so a later fetch knows where the bytes can come from.
+    const merged = rawMerged.map((row) => {
+      const prev = before.get(row.id);
+      if (prev === row) return row;
+      const originInstanceId = prev?.originInstanceId ?? row.originInstanceId;
+      const suppliedByInstanceId = row.suppliedByInstanceId ?? prev?.suppliedByInstanceId
+        ?? (source?.peerId ? source.peerId : undefined);
+      return {
+        ...row,
+        ...(originInstanceId ? { originInstanceId } : {}),
+        ...(suppliedByInstanceId ? { suppliedByInstanceId } : {}),
+      };
+    });
 
     // `count` reports rows actually added/updated by this merge (not total
     // post-merge size — that would over-report when callers sum across
@@ -1011,7 +1025,7 @@ async function applyVideoHistoryRemote(remoteData, source) {
     // Media History grid expects them.
     return [...merged, ...idless].sort((a, b) =>
       String(b?.createdAt ?? '').localeCompare(String(a?.createdAt ?? '')));
-  });
+  }, { stampOrigin: false });
   changedCount += removedCount;
   if (changedCount === 0) return { applied: false, count: 0 };
   console.log(`🔄 VideoHistory sync: merged ${changedCount} video row(s)`);
