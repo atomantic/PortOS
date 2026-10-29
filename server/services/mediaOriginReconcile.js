@@ -7,13 +7,12 @@
  * when every paired peer reported and that holder is strictly earliest
  * (lib/mediaOriginClaim.js). All holders run the same rule, so they agree.
  *
- * `data/peer-media-holdings.json` is `file-primary` and machine-local: what
- * each peer last reported, never federated.
+ * What each peer last reported lives with the holders in `data/media-holders.json`
+ * (services/mediaHolders.js): machine-local, never federated.
  */
 import { readdir, stat } from 'fs/promises';
 import { join } from 'path';
-import { PATHS, readJSONFile, atomicWrite } from '../lib/fileUtils.js';
-import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
+import { PATHS } from '../lib/fileUtils.js';
 import { isPlainObject } from '../lib/objects.js';
 import { isNonBlankStr } from '../lib/textUtils.js';
 import { earliestHolderOrigin } from '../lib/mediaOriginClaim.js';
@@ -24,44 +23,17 @@ import { listHostedEntries, hostedKey } from './peerHostedMedia.js';
 import { mutateVideoHistory, loadHistory, HISTORY_UNCHANGED } from './videoGen/history.js';
 import { emitMediaHistoryChanged } from './peerSyncEventBus.js';
 
-const HOLDINGS_FILE = () => join(PATHS.data, 'peer-media-holdings.json');
-const SCHEMA_VERSION = 1;
 // A report older than this no longer proves what the peer holds; treated as unreported.
 const REPORT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 // A scan that found nothing to attribute is not repeated every sync cycle.
 const EMPTY_RECHECK_MS = 10 * 60 * 1000;
 const KINDS = { video: () => PATHS.videos, image: () => PATHS.images };
-const queueWrite = createFileWriteQueue();
 const emptyUntil = new Map();
 
-async function readHoldings() {
-  // STRICT: an unreadable file must not be written back as an empty one.
-  const raw = await readJSONFile(HOLDINGS_FILE(), null, { strict: true });
-  return isPlainObject(raw) && isPlainObject(raw.peers) ? raw.peers : {};
-}
-
-/**
- * Remember what `peerId` reported for one inventory scope (`category`): the
- * modify times of the files it holds (`{ filename: mtimeMs }`) and the
- * filenames it examined. Scopes differ (history rows vs collection assets), so
- * a report speaks only for the names it `checked`, never for the whole kind,
- * unless it is `complete` (a full listing of the folder: absence means not held).
- */
-export function recordPeerHoldings(peerId, kind, category, { mtimes, checked, complete = false }) {
-  if (!KINDS[kind] || !isNonBlankStr(peerId) || !isNonBlankStr(category) || !isPlainObject(mtimes) || !Array.isArray(checked)) return Promise.resolve(false);
-  const valid = (name) => typeof name === 'string' && sanitizeAssetFilename(name) === name;
-  const clean = {};
-  for (const [name, ms] of Object.entries(mtimes)) {
-    if (typeof ms === 'number' && Number.isFinite(ms) && ms > 0 && valid(name)) clean[name] = ms;
-  }
-  return queueWrite(async () => {
-    const peers = await readHoldings();
-    const entry = isPlainObject(peers[peerId]) ? peers[peerId] : {};
-    const scopes = isPlainObject(entry[kind]) ? entry[kind] : {};
-    peers[peerId] = { ...entry, [kind]: { ...scopes, [category]: { at: new Date().toISOString(), mtimes: clean, checked: checked.filter(valid), ...(complete === true && { complete: true }) } } };
-    await atomicWrite(HOLDINGS_FILE(), { version: SCHEMA_VERSION, peers });
-    return true;
-  });
+/** Record one peer's inventory scope with its file times (the shared holdings record, services/mediaHolders.js). */
+export async function recordPeerHoldings(peerId, kind, category, report) {
+  const { recordPeerReport } = await import('./mediaHolders.js');
+  return recordPeerReport(peerId, kind, category, report);
 }
 
 const mtimeOf = (kind, filename) => stat(join(KINDS[kind](), filename)).then((s) => s.mtimeMs, () => null);
@@ -143,7 +115,7 @@ export async function reconcileMediaOrigins(kind, { nowMs = Date.now() } = {}) {
   if (!isNonBlankStr(localId) || localId === UNKNOWN_INSTANCE_ID) return 0;
   const peers = (await getPeers().catch(() => [])).filter((p) => p?.enabled !== false && peerIsPaired(p) && isNonBlankStr(p.instanceId));
   if (peers.length === 0) return 0;
-  const holdings = await readHoldings().catch(() => null);
+  const holdings = await import('./mediaHolders.js').then((m) => m.readPeerReports()).catch(() => null);
   if (!holdings) return 0;
   // Fresh scope reports per peer; one speaks for a file only if the peer examined its name.
   const scopesOf = (peer) => Object.values(isPlainObject(holdings[peer.instanceId]?.[kind]) ? holdings[peer.instanceId][kind] : {})

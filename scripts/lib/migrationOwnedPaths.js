@@ -32,6 +32,8 @@ export const MIGRATION_OWNED_PATHS = new Set([
   'cos/quota-burn.json',
   'cos/quota-burn.pre-359.json',
   // Migration 370 preserves this install's managed Tailcat serve consent/key.
+  // Migration 451 folds the old peer-media-holdings.json into this record (#14141).
+  'media-holders.json',
   'tailcat-serve.json',
   // Migration 397 re-binds this install's own Eidoverse foundations to
   // body-derived assay evidence (#7625). Every record in it is the user's own
