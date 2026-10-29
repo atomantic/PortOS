@@ -1107,6 +1107,29 @@ describe('CatalogIngredient — tabbed library record pages', () => {
     expect(api.renderCatalogSheet).not.toHaveBeenCalled();
   });
 
+  it('leaves a reference out of likeness from the sheet preview and puts it back', async () => {
+    const api = await import('../services/apiCatalog');
+    api.updateCatalogIngredientMediaLibrary.mockClear();
+    api.previewCatalogSheet.mockResolvedValue({ preview: {
+      sentPrompt: 'Example sheet', promptAdditions: [],
+      referenceImages: [
+        { filename: 'still.png', source: 'Reference library', status: 'included', mediaKind: 'reference' },
+        { filename: 'board.png', source: 'Reference library', status: 'left-out', mediaKind: 'reference' },
+      ],
+    } });
+    await renderPage('/casting/cat-chr-hero/sheets');
+    const references = await screen.findByRole('region', { name: 'Reference images sent' });
+    expect(within(references).getByText('Left out of likeness guides')).toBeInTheDocument();
+    const calls = api.previewCatalogSheet.mock.calls.length;
+    fireEvent.click(within(references).getByRole('button', { name: 'Leave out: still.png' }));
+    await waitFor(() => expect(api.updateCatalogIngredientMediaLibrary).toHaveBeenCalledWith('cat-chr-hero',
+      { mediaKey: 'still.png', kind: 'reference', likeness: false }, { silent: true }));
+    await waitFor(() => expect(api.previewCatalogSheet.mock.calls.length).toBeGreaterThan(calls));
+    fireEvent.click(within(await screen.findByRole('region', { name: 'Reference images sent' })).getByRole('button', { name: 'Use for likeness: board.png' }));
+    await waitFor(() => expect(api.updateCatalogIngredientMediaLibrary).toHaveBeenCalledWith('cat-chr-hero',
+      { mediaKey: 'board.png', kind: 'reference', likeness: true }, { silent: true }));
+  });
+
   it.each([
     ['character', '/casting/example/profile'],
     ['place', '/environments/example/profile'],

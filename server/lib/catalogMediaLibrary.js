@@ -25,7 +25,10 @@ export const referenceReviewStatus = (m) => {
   return status === 'rejected' ? 'bad' : status;
 };
 export const REFERENCE_FEEDBACK_MAX = 2000;
-export const isUsableReference = (m) => !['bad', 'rejected'].includes(m?.library?.review?.status);
+// `library.likeness === false` keeps an image (e.g. a multi-age collage board)
+// attached to the record but out of every likeness/conditioning pick.
+export const isLeftOutOfLikeness = (m) => m?.library?.likeness === false;
+export const isUsableReference = (m) => !['bad', 'rejected'].includes(m?.library?.review?.status) && !isLeftOutOfLikeness(m);
 export const isGoodReference = (m) => (m?.library?.review?.status === 'good' || m?.review?.status === 'good');
 export const rejectedReferenceKeys = (media) => new Set((Array.isArray(media) ? media : [])
   .filter(m => m && !m.deleted && ['portrait', 'reference'].includes(m.kind) && !isUsableReference(m)).map(m => m.mediaKey));
@@ -64,6 +67,10 @@ export function normalizeLibrary(value) {
     if (tags.length) out.tags = tags;
   }
   if (typeof value.guide === 'boolean') out.guide = value.guide;
+  if (value.likeness === false) {
+    out.likeness = false;
+    out.guide = false;
+  }
   if (isObj(value.review) && REFERENCE_REVIEW_STATUSES.includes(value.review.status)) {
     out.review = { status: value.review.status };
     if (typeof value.review.feedback === 'string') out.review.feedback = value.review.feedback.slice(0, REFERENCE_FEEDBACK_MAX);

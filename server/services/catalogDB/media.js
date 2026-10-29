@@ -251,6 +251,7 @@ export async function updateMediaLibrary(ingredientId, mediaKey, kind, patch = {
       ...(hasOwn(effective, 'variant') ? { variant: effective.variant } : {}),
       ...(hasOwn(effective, 'tags') ? { tags: effective.tags } : {}),
       ...(hasOwn(effective, 'guide') ? { guide: effective.guide } : {}),
+      ...(hasOwn(effective, 'likeness') ? { likeness: effective.likeness } : {}),
       ...(hasOwn(effective, 'review') ? { review: { ...prev.review, ...effective.review } } : {}),
       ...(hasOwn(effective, 'derivedFrom') ? { derivedFrom: effective.derivedFrom } : {}),
     });
@@ -259,10 +260,19 @@ export async function updateMediaLibrary(ingredientId, mediaKey, kind, patch = {
         WHERE ingredient_id = catalog_resolve_ingredient_id($1) AND media_key = $2 AND kind <> $3 AND deleted = false
           AND library->>'guide' = 'true'`, [ingredientId, mediaKey, kind]);
     }
+    // Likeness is per image, not per attachment: the portrait and reference
+    // rows of one file always agree, like a bad rating.
+    if (hasOwn(effective, 'likeness')) {
+      await client.query(`UPDATE catalog_ingredient_media SET library = CASE WHEN $4::boolean
+          THEN COALESCE(library, '{}'::jsonb) - 'likeness'
+          ELSE COALESCE(library, '{}'::jsonb) || '{"likeness": false, "guide": false}'::jsonb END
+        WHERE ingredient_id = catalog_resolve_ingredient_id($1) AND media_key = $2 AND kind <> $3 AND deleted = false`,
+      [ingredientId, mediaKey, kind, next.likeness !== false]);
+    }
     if (next.guide === true) {
       const rejected = await client.query(`SELECT EXISTS (SELECT 1 FROM catalog_ingredient_media
         WHERE ingredient_id = catalog_resolve_ingredient_id($1) AND media_key = $2 AND kind <> $3 AND deleted = false
-          AND library->'review'->>'status' IN ('bad', 'rejected')) AS blocked`, [ingredientId, mediaKey, kind]);
+          AND (library->'review'->>'status' IN ('bad', 'rejected') OR library->>'likeness' = 'false')) AS blocked`, [ingredientId, mediaKey, kind]);
       if (rejected.rows[0].blocked) next.guide = false;
     }
     if (next.guide === true && prev.guide !== true) {

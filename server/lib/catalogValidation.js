@@ -435,7 +435,7 @@ export const catalogMediaAttachSchema = z.object({
 }).strict();
 
 // Casting reference library patch (#casting-reference-library). Identifies a
-// live media row by (mediaKey, kind) and merges any of variant/tags/guide.
+// live media row by (mediaKey, kind) and merges any of variant/tags/guide/likeness.
 export const catalogMediaLibraryVariantSchema = z.object({
   age: z.number().int().min(0).max(150).optional(),
   era: z.enum(['child', 'teen', 'adult', 'elder']).optional(),
@@ -449,6 +449,7 @@ export const catalogMediaLibraryPatchSchema = z.object({
   variant: catalogMediaLibraryVariantSchema.optional(),
   tags: z.array(z.string().trim().min(1).max(40)).max(20).optional(),
   guide: z.boolean().optional(),
+  likeness: z.boolean().optional(),
   review: z.object({
     status: z.enum(REFERENCE_REVIEW_WRITE_STATUSES),
     feedback: z.string().max(REFERENCE_FEEDBACK_MAX).optional(),

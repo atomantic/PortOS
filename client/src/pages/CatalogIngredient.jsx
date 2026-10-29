@@ -1039,6 +1039,7 @@ function IngredientEditor() {
             savedStamp={record.updatedAt || null}
             onSheetFile={handleSheetFile}
             onPointerSheetReady={refreshSheetPointers}
+            onMediaChanged={identityReadOnly ? undefined : refreshMedia}
           />
         )}
 

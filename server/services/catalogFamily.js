@@ -63,7 +63,7 @@ export async function catalogFamilyRenderContext(ingredientId, selfName) {
     if (!record || record.deleted) return null;
     const payload = record.payload && typeof record.payload === 'object' ? record.payload : {};
     const kind = getRelationKind(edge.kind);
-    const top = characterSheetReferenceCandidates(payload, media)[0];
+    const top = characterSheetReferenceCandidates(payload, media).find((c) => !c.leftOut);
     return { edge, record, kind, payload, top };
   }));
   const live = relatives.filter(Boolean);

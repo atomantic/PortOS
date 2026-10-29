@@ -55,7 +55,8 @@ describe('PORTOS_SCHEMA_VERSIONS', () => {
 
   it('version-gates catalog object attachments and media generation provenance', () => {
     // v11 adds the ref/relation/media tombstone-revival guard (#8347).
-    expect(PORTOS_SCHEMA_VERSIONS.catalog).toBe(14);
+    // v15 adds the per-image likeness opt-out on media library rows.
+    expect(PORTOS_SCHEMA_VERSIONS.catalog).toBe(15);
   });
 
   it('version-gates the persisted FableLoom shot and reference shape', () => {

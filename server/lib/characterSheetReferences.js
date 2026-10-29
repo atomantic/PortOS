@@ -1,7 +1,7 @@
 import { basename, join, relative } from 'node:path';
 import { PATHS } from './paths.js';
 import { isSafeFilename, resolveImageInputPath } from './pathSafety.js';
-import { MAX_CAST_GUIDES, pickGuideMedia, rejectedReferenceKeys, matchesReferenceVariant } from './catalogMediaLibrary.js';
+import { MAX_CAST_GUIDES, isLeftOutOfLikeness, pickGuideMedia, rejectedReferenceKeys, matchesReferenceVariant } from './catalogMediaLibrary.js';
 import { maxInputImages } from './imageGenCapabilities.js';
 import { CLOUD_IMAGE_GEN_MODES, IMAGE_GEN_MODE } from './generationModes.js';
 import { RUNNER_FAMILIES } from './runners.js';
@@ -17,9 +17,14 @@ function eligibleImages(character, media, want) {
   const formMatches = (m) => !m.library?.variant?.formId || m.library.variant.formId === want.formId
     || (!want.formId && m.kind === 'portrait' && Number.isInteger(want.age) && m.library.variant.age === want.age);
   const rejected = rejectedReferenceKeys(media);
-  const images = media.filter((m) => m && !m.deleted && ['portrait', 'reference'].includes(m.kind)
-    && !rejected.has(m.mediaKey) && matchesReferenceVariant(m, want) && formMatches(m));
-  return { want, formMatches, rejected, images };
+  const fits = (m) => m && !m.deleted && ['portrait', 'reference'].includes(m.kind)
+    && matchesReferenceVariant(m, want) && formMatches(m);
+  const images = media.filter((m) => fits(m) && !rejected.has(m.mediaKey));
+  // Images the user left out of likeness stay listed (never sent) so the
+  // preview can offer to put them back.
+  const leftOut = media.filter((m) => fits(m) && isLeftOutOfLikeness(m) && !DERIVED_ROLE.test(m.role || '')
+    && !['bad', 'rejected'].includes(m.library?.review?.status));
+  return { want, formMatches, rejected, images, leftOut };
 }
 
 // While an age or look renders, each candidate says whether it is that form's
@@ -30,15 +35,17 @@ const scoped = (want, scope) => (want.formId ? { scope } : {});
 // Explicit guides own selection. Automatic fallback excludes derived looks,
 // sheets and archived media so a previous off-model render cannot seed itself.
 export function characterSheetReferenceCandidates(character, media = [], want = {}) {
-  const { want: wanted, formMatches, rejected, images } = eligibleImages(character, media, want);
+  const { want: wanted, formMatches, rejected, images, leftOut } = eligibleImages(character, media, want);
   want = wanted;
   const guides = images.filter((m) => m.library?.guide === true);
   const scopeOf = (m) => scoped(want, ownForm(m, want) ? 'form' : 'canonical');
-  if (guides.length) return pickGuideMedia(guides, want).map((m) => ({
-    filename: m.mediaKey, source: 'Render guide', ...scopeOf(m),
-  }));
+  const sourceOf = (m) => (m.kind === 'portrait' ? 'Portrait' : 'Reference library');
+  const leftOutCandidates = leftOut.map((m) => ({ filename: m.mediaKey, source: sourceOf(m), mediaKind: m.kind, leftOut: true, ...scopeOf(m) }));
+  if (guides.length) return [...pickGuideMedia(guides, want).map((m) => ({
+    filename: m.mediaKey, source: 'Render guide', mediaKind: m.kind, ...scopeOf(m),
+  })), ...leftOutCandidates];
   const candidates = pickGuideMedia(images.filter((m) => !DERIVED_ROLE.test(m.role || '')), want)
-    .map((m) => ({ filename: m.mediaKey, source: m.kind === 'portrait' ? 'Portrait' : 'Reference library', ...scopeOf(m) }));
+    .map((m) => ({ filename: m.mediaKey, source: sourceOf(m), mediaKind: m.kind, ...scopeOf(m) }));
   const excluded = new Set(media.filter((m) => !m.deleted && (rejected.has(m.mediaKey) || !matchesReferenceVariant(m, want) || !formMatches(m))).map(m => m.mediaKey));
   const canon = [
     { filename: character.primaryImageRef, source: 'Primary canon image' },
@@ -46,7 +53,7 @@ export function characterSheetReferenceCandidates(character, media = [], want = 
   ].filter((ref) => ref.filename && !excluded.has(ref.filename)).map((ref) => ({ ...ref, ...scoped(want, 'canonical') }));
   // Keep the selected portrait first, then the authored canon references.
   return [...candidates.filter((c) => c.source === 'Portrait'), ...canon,
-    ...candidates.filter((c) => c.source !== 'Portrait')];
+    ...candidates.filter((c) => c.source !== 'Portrait'), ...leftOutCandidates];
 }
 
 /**
@@ -133,9 +140,14 @@ export function resolveCharacterSheetReferences(candidates, mode, modelId, local
     if (seen.has(filename)) continue;
     seen.add(filename);
     const { path, entry } = viewableImage(filename);
+    const kind = candidate.mediaKind ? { mediaKind: candidate.mediaKind } : {};
+    if (candidate.leftOut) {
+      images.push(entry({ source: candidate.source, status: 'left-out', ...kind, ...scopeField(candidate) }));
+      continue;
+    }
     const status = paths.length >= guideLimit ? 'limit' : !path ? 'missing' : !supported ? 'unsupported' : 'included';
     if (status === 'included') paths.push(path);
-    images.push(entry({ source: candidate.source, status, ...scopeField(candidate), ...(candidate.relative ? { relative: candidate.relative } : {}) }));
+    images.push(entry({ source: candidate.source, status, ...kind, ...scopeField(candidate), ...(candidate.relative ? { relative: candidate.relative } : {}) }));
   }
   return { paths, images, initPath, editBase };
 }
