@@ -7,7 +7,7 @@ import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js'
 import { safeUnder } from '../../lib/ffmpeg.js';
 import { mutateVideoHistory, HISTORY_UNCHANGED } from './history.js';
 import { extendMasterPath } from './extendMaster.js';
-import { beginMediaTombstone, commitMediaTombstone, clearMediaTombstone } from '../mediaTombstones.js';
+import { beginMediaTombstone, commitLocalDeleteTombstone, clearMediaTombstone } from '../mediaTombstones.js';
 
 export async function updateHistoryItemPrompt(id, prompt) {
   let result;
@@ -84,12 +84,7 @@ export async function deleteHistoryItem(id, { forgetInMusicVideos = true, fromRe
         if (tombstone) await clearMediaTombstone('video', id, { deletedAt: tombstone.deletedAt });
         throw err;
       }
-      // The files are gone, so a failed marker write must not fail the delete:
-      // the boot pass commits the tombstone from the missing file instead.
-      if (tombstone) {
-        await commitMediaTombstone('video', tombstone)
-          .catch((err) => console.error(`❌ Video ${id} delete record left in flight: ${err.message}`));
-      }
+      if (tombstone) await commitLocalDeleteTombstone('video', tombstone);
       return history.filter(entry => entry.id !== id);
     });
     if (skipped) return { ok: false, skipped: true };

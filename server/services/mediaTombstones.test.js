@@ -4,19 +4,25 @@ import { join } from 'path';
 import { createTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
 const tempRoot = createTempDataRoot('portos-media-tombstones-');
-vi.mock('../lib/fileUtils.js', async (importOriginal) => (
-  makePathsProxy(await importOriginal(), { dataRoot: tempRoot })
-));
+// `failWrites` makes the next N store writes reject, as a full disk would.
+let failWrites = 0;
+vi.mock('../lib/fileUtils.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  const atomicWrite = (...args) => (failWrites-- > 0 ? Promise.reject(new Error('ENOSPC')) : actual.atomicWrite(...args));
+  return makePathsProxy(actual, { dataRoot: tempRoot, overrides: { atomicWrite } });
+});
 afterAll(() => rmSync(tempRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
 
 const {
   recordMediaTombstone, listMediaTombstones, mergeMediaTombstones,
   beginMediaTombstone, listExportableMediaTombstones, listInFlightMediaTombstones,
+  commitLocalDeleteTombstone,
 } = await import('./mediaTombstones.js');
 
 const FILE = join(tempRoot, 'media-tombstones.json');
 
 beforeEach(() => {
+  failWrites = 0;
   mkdirSync(tempRoot, { recursive: true });
   rmSync(FILE, { force: true });
 });
@@ -75,6 +81,27 @@ describe('mediaTombstones', () => {
     await mergeMediaTombstones('video', [theirs]);
     expect(await listExportableMediaTombstones('video')).toEqual([theirs]);
     expect(await listInFlightMediaTombstones('video')).toEqual([]);
+  });
+
+  // The files are already trashed, so a commit that cannot be written must not
+  // fail the delete, nor hold the tombstone back from peers until a restart.
+  it('retries a commit that could not be written until the delete is exportable', async () => {
+    const tombstone = await beginMediaTombstone('image', 'a.png');
+    vi.useFakeTimers({ toFake: ['setTimeout'] });
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      failWrites = 1;
+      await expect(commitLocalDeleteTombstone('image', tombstone)).resolves.toBeUndefined();
+      expect(await listExportableMediaTombstones('image')).toEqual([]);
+      await vi.advanceTimersByTimeAsync(5_000);
+      await vi.waitFor(async () => expect(await listExportableMediaTombstones('image')).toEqual([tombstone]));
+      expect(await listInFlightMediaTombstones('image')).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+      err.mockRestore();
+      log.mockRestore();
+    }
   });
 
   it('unreadable file rejects instead of resetting', async () => {

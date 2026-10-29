@@ -128,6 +128,31 @@ export function commitMediaTombstone(kind, tombstone) {
   });
 }
 
+// Retry delays for a commit that could not be written, capped at the last.
+const COMMIT_RETRY_DELAYS_MS = [5_000, 30_000, 120_000, 300_000];
+
+/**
+ * Commit a local delete whose files are already in the Trash. Never rejects:
+ * the delete happened, so failing it would strand a fileless row. A failed
+ * write is retried in the background until it lands, so the delete reaches
+ * snapshots without waiting for a restart; the boot pass still settles a
+ * marker a crash leaves before then.
+ */
+export function commitLocalDeleteTombstone(kind, tombstone) {
+  return commitWithRetry(kind, tombstone, 0);
+}
+
+async function commitWithRetry(kind, tombstone, attempt) {
+  try {
+    await commitMediaTombstone(kind, tombstone);
+    if (attempt > 0) console.log(`✅ ${kind} ${tombstone.key} delete record committed after ${attempt} retr${attempt === 1 ? 'y' : 'ies'}`);
+  } catch (err) {
+    const delay = COMMIT_RETRY_DELAYS_MS[Math.min(attempt, COMMIT_RETRY_DELAYS_MS.length - 1)];
+    console.error(`❌ ${kind} ${tombstone.key} delete record left in flight (retrying in ${delay / 1000}s): ${err.message}`);
+    setTimeout(() => { void commitWithRetry(kind, tombstone, attempt + 1); }, delay).unref?.();
+  }
+}
+
 // Undo a tombstone recorded for a delete that then failed, or retire one the
 // item outlived (restored, re-created). `deletedAt` clears only that exact
 // delete: a newer delete recorded since the caller looked must survive.

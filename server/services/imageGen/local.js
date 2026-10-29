@@ -49,7 +49,7 @@ import { usesDiffusersRunner, flux2Bf16BaseRepo } from '../../lib/runners.js';
 import { weaveLoraTriggers } from '../../lib/loraTriggers.js';
 import { provenanceForRender } from '../../lib/assetProvenance.js';
 import { registerGallerySha256Writer } from '../../lib/assetHash.js';
-import { beginMediaTombstone, commitMediaTombstone, clearMediaTombstone } from '../mediaTombstones.js';
+import { beginMediaTombstone, commitLocalDeleteTombstone, clearMediaTombstone } from '../mediaTombstones.js';
 import { withLocalImageOrigin } from './imageRecords.js';
 import { readImageSidecar, refreshImageIndex, sidecarEditQueue, editImageSidecar } from './sidecarStore.js';
 import { readTriggerWordsByFilename, readLoraLicensesByFilename } from '../loras.js';
@@ -1514,12 +1514,7 @@ export async function deleteImage(filename, { fromRemoteTombstone = false } = {}
       if (tombstone) await clearMediaTombstone('image', filename, { deletedAt: tombstone.deletedAt });
       throw err;
     }
-    // The files are gone, so a failed marker write must not fail the delete:
-    // the boot pass commits the tombstone from the missing file instead.
-    if (tombstone) {
-      await commitMediaTombstone('image', tombstone)
-        .catch((err) => console.error(`❌ Image ${filename} delete record left in flight: ${err.message}`));
-    }
+    if (tombstone) await commitLocalDeleteTombstone('image', tombstone);
     // trashFiles verifies removal before derived records can be retired.
     await import('../mediaAssetIndex/index.js')
       .then((m) => m.unindexImage(filename))
