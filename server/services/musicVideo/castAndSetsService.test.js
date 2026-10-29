@@ -1287,8 +1287,9 @@ it('refuses a budget that cannot cover the fixed cast sheets before queueing any
 it('conditions linked cast on their Casting images, not just a reference with their name', async () => {
   onDisk('frank-portrait.png', 'frank-collage.png', 'nora-portrait.png', 'nora-at-7.png', 'old-frank.png', 'harbor-other.png', 'child.png', 'gus-ref.png');
   const records = {
-    'cat-chr-frank': { id: 'cat-chr-frank', type: 'character', name: 'Frank', payload: { forms: [] } },
-    'cat-chr-nora': { id: 'cat-chr-nora', type: 'character', name: 'Nora', payload: { forms: [{ id: 'form-young', label: 'Age 7', age: '7' }] } },
+    'cat-chr-frank': { id: 'cat-chr-frank', type: 'character', name: 'Frank', payload: { forms: [], stats: [{ label: 'Height', value: '6 ft 1 in' }] } },
+    'cat-chr-nora': { id: 'cat-chr-nora', type: 'character', name: 'Nora', payload: { stats: [{ label: 'Height', value: '5 ft 5 in (165 cm)' }],
+      forms: [{ id: 'form-young', label: 'Age 7', age: '7', height: '3 ft 11 in (119 cm)' }] } },
     'cat-chr-child': { id: 'cat-chr-child', type: 'character', name: 'Nora', payload: {} },
     'cat-chr-gus': { id: 'cat-chr-gus', type: 'character', name: 'Gus', payload: {} },
     // Saved from another video's check-in, then linked here.
@@ -1352,6 +1353,11 @@ it('conditions linked cast on their Casting images, not just a reference with th
   // whether a subject linked at that age is bound to it or not.
   expect(refs('form:seven')).toEqual([`${job('character').id}.png`, 'nora-at-7.png']);
   expect(refs('form:young')).toEqual([`${job('character').id}.png`, 'nora-at-7.png']);
+  // Casting's heights reach the sheets: the record's own, and each age's own.
+  expect(job('character').params.prompt).toContain('Height: 5 ft 5 in (165 cm)');
+  expect(job('form:seven').params.prompt).toContain('Height: 3 ft 11 in (119 cm)');
+  expect(job('form:young').params.prompt).toContain('Height: 3 ft 11 in (119 cm)');
+  expect(job('cast:frank').params.prompt).toContain('Height: 6 ft 1 in');
 });
 
 it('grounds an age form and its test frames on the catalog reference selected for that age', async () => {
@@ -1473,6 +1479,28 @@ it('carries a memory\'s era and film stock into its age sheet, test frames and s
   const plan = buildCastAndSetsImagePlan(saved, shared);
   expect(plan['test:2'].prompt).toContain(`Look: ${present}`);
   expect(plan['test:2'].prompt).not.toContain('Match the color');
+});
+
+it('keeps a child child-sized in a test frame: the age\'s height, else the typical one, as a scale cue', async () => {
+  runPrompt.mockResolvedValue({ text: JSON.stringify({ ...DIRECTION,
+    protagonist: { ...DIRECTION.protagonist, height: '5 ft 6 in (168 cm)', forms: [{ id: 'age-7', label: 'Age 7', age: '7', description: 'a small girl' }] },
+    tests: [DIRECTION.tests[0], { setId: 'harbor', look: 'Watch', action: 'beside the family car', formId: 'age-7' }] }) });
+  const project = await seed({ concept: { prompt: 'a vigil', subjects: [] } });
+  await service.startCastAndSets(project.id);
+  await runTo(project.id, 'review');
+  const prompt = (key) => jobs.findLast((j) => keyOf(j) === key).params.prompt;
+  expect(prompt('form:age-7')).toContain('Height: about 4 ft (122 cm)');
+  expect(prompt('test:2')).toContain('Scale: Keeper at age 7 is about 4 ft (122 cm) tall: shorter than the roof of a parked car');
+  expect(prompt('character')).toContain('Height: 5 ft 6 in (168 cm)');
+  expect(prompt('test:1')).toContain('Scale: Keeper is 5 ft 6 in (168 cm) tall');
+
+  // The director gives the age its own height: just that age's sheet and frame re-render.
+  const before = jobs.length;
+  const forms = (await current(project.id)).castAndSets.direction.protagonist.forms.map((f) => ({ ...f, height: '3 ft 9 in' }));
+  expect((await request(app).patch(`/api/music-video/${project.id}/cast-and-sets/direction`).send({ protagonist: { forms } })).status).toBe(202);
+  await runTo(project.id, 'review');
+  expect(jobs.slice(before).map(keyOf).sort()).toEqual(['form:age-7', 'test:2']);
+  expect(prompt('test:2')).toContain('Scale: Keeper at age 7 is 3 ft 9 in tall');
 });
 
 it('keeps people out of set plates: no mood board person in the look, no character action in a set', async () => {

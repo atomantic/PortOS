@@ -27,7 +27,8 @@ describe('PORTOS_SCHEMA_VERSIONS', () => {
     // These are additive + version-gated so an older peer
     // cannot strip-then-LWW them.
     // v15 adds an optional place `greybox` layout; additive + version-gated.
-    expect(PORTOS_SCHEMA_VERSIONS.universes).toBe(17);
+    // v18 adds an optional `height` on canon forms.
+    expect(PORTOS_SCHEMA_VERSIONS.universes).toBe(18);
   });
 
   it('declares pipeline collection layout versions', () => {
@@ -56,7 +57,8 @@ describe('PORTOS_SCHEMA_VERSIONS', () => {
   it('version-gates catalog object attachments and media generation provenance', () => {
     // v11 adds the ref/relation/media tombstone-revival guard (#8347).
     // v15 adds the per-image likeness opt-out on media library rows.
-    expect(PORTOS_SCHEMA_VERSIONS.catalog).toBe(15);
+    // v16 adds an optional `height` on bible forms.
+    expect(PORTOS_SCHEMA_VERSIONS.catalog).toBe(16);
   });
 
   it('version-gates the persisted FableLoom shot and reference shape', () => {
@@ -130,14 +132,14 @@ describe('buildPortosMeta', () => {
   it('returns { portosVersion, schemaVersions } with the live registry', async () => {
     const meta = await buildPortosMeta();
     expect(meta.portosVersion).toMatch(/^\d+\.\d+\.\d+/);
-    expect(meta.schemaVersions.universes).toBe(17);
+    expect(meta.schemaVersions.universes).toBe(18);
     expect(meta.schemaVersions.pipelineIssues).toBe(4);
     expect(meta.schemaVersions.pipelineSeries).toBe(14);
   });
 
   it('overrides merge into schemaVersions', async () => {
     const meta = await buildPortosMeta({ schemaVersions: { future: 1 } });
-    expect(meta.schemaVersions.universes).toBe(17);
+    expect(meta.schemaVersions.universes).toBe(18);
     expect(meta.schemaVersions.future).toBe(1);
   });
 });

@@ -79,6 +79,7 @@ export const CAST_SETS_LIMITS = Object.freeze({
 export const CAST_SETS_IMAGE_ROLES = Object.freeze(['background', 'texture', 'decoration', 'cutout']);
 const TEXT = 1000;
 const SHORT = 120;
+const HEIGHT = 80;
 const LYRICS_MAX = 6000;
 const MOOD_ITEMS_MAX = 40;
 const MOOD_ITEM_TEXT = 280;
@@ -252,16 +253,17 @@ const OUTPUT_SHAPE = `{
   "protagonist": {
     "name": "<a name or designation>",
     "description": "<who they are in the song: age, vibe, attitude>",
+    "height": "<their height at their present-story age, e.g. 5 ft 6 in (168 cm)>",
     "face": "<face: skin, eyes, brows, distinguishing features>",
     "hair": "<hair that reads in silhouette>",
     "signature": "<one signature prop or detail present in every look>",
     "gesture": "<a recurring gesture tied to a lyric hook, quoting the hook>",
     "rules": ["<continuity or safety rule>"],
     "expressions": ["<a mood from the story: what the face, eyes and head do>"],
-    "forms": [{ "id": "<short-slug>", "label": "<e.g. Age 7>", "age": "<age>", "description": "<how they look at that age>", "hair": "<hair at that age>", "wardrobe": "<their outfit at that age>", "era": "<the year or period this age is seen in, e.g. 1965>", "look": "<the film stock, format and color of that memory when it differs from the main look, e.g. black-and-white 8mm home movie, heavy grain; or empty>", "subjectId": "<the FIXED CASTING subject id of the protagonist at this age, or empty>" }]
+    "forms": [{ "id": "<short-slug>", "label": "<e.g. Age 7>", "age": "<age>", "description": "<how they look at that age>", "hair": "<hair at that age>", "wardrobe": "<their outfit at that age>", "height": "<their height at that age, e.g. 4 ft (122 cm) at 7>", "era": "<the year or period this age is seen in, e.g. 1965>", "look": "<the film stock, format and color of that memory when it differs from the main look, e.g. black-and-white 8mm home movie, heavy grain; or empty>", "subjectId": "<the FIXED CASTING subject id of the protagonist at this age, or empty>" }]
   },
   "looks": [{ "name": "<SHORT NAME>", "description": "<the complete outfit>", "chapters": "<which parts of the song>" }],
-  "cast": [{ "id": "<short-slug>", "name": "<a name>", "role": "<what they are in the video: drummer, shopkeeper, ...>", "description": "<who they are: age, vibe, attitude>", "face": "<face: skin, eyes, brows, distinguishing features>", "hair": "<hair>", "wardrobe": "<their one outfit>" }],
+  "cast": [{ "id": "<short-slug>", "name": "<a name>", "role": "<what they are in the video: drummer, shopkeeper, ...>", "description": "<who they are: age, vibe, attitude>", "height": "<their height, e.g. 5 ft 10 in (178 cm)>", "face": "<face: skin, eyes, brows, distinguishing features>", "hair": "<hair>", "wardrobe": "<their one outfit>" }],
   "sets": [{ "id": "<short-slug>", "name": "<set name>", "description": "<the empty location, concrete and visual, with nobody in it>", "lighting": "<its one dominant light>", "era": "<the year or period it is seen in when that is not the present story, or empty>", "look": "<the film stock, format and color of that era when it differs from the main look, or empty>", "sections": ["<section label it serves>"] }],
   "songMap": [{ "section": 0, "setId": "<short-slug>" }],
   "tests": [{ "setId": "<short-slug>", "look": "<SHORT NAME>", "action": "<what the protagonist does in this frame>", "caption": "<the lyric or beat it serves>", "formId": "<the protagonist.forms id when this frame shows them at that other age, or empty>" }],
@@ -417,7 +419,7 @@ export function buildCastAndSetsPrompt(project, { moodImages = [], board = null,
     `- protagonist.expressions: 4–6 moods the protagonist actually shows in THIS story, each "<mood>: <what the face, eyes and head do>" (e.g. "grief held in: eyes closed, head bowed"). They become the expression sheet. ${musicVideoLipSyncs(project)
     ? 'Some shots lip-sync, so one may be singing.'
     : 'Nobody sings or mouths the words on camera in this video: no singing, open-mouthed or straight-to-lens performance expressions.'}`,
-    `- protagonist.forms: when the story shows the protagonist at OTHER ages (a childhood memory, a teenage flashback), one entry per other age, at most ${CAST_SETS_LIMITS.forms}: its age, a short label ("Age 7"), how they look then, their hair, their outfit, the era (year or period) that age is seen in, and that memory's own film stock, format and color in look when the story gives each era its own (empty when it shares the main look). The other protagonist fields describe them at their present-story age. When FIXED CASTING lists a character who is the protagonist at that age, put its subject id in subjectId; otherwise subjectId is empty. [] when they appear at one age only.`,
+    `- protagonist.forms: when the story shows the protagonist at OTHER ages (a childhood memory, a teenage flashback), one entry per other age, at most ${CAST_SETS_LIMITS.forms}: its age, a short label ("Age 7"), how they look then, their height then (a child is far shorter than an adult: about 4 ft at 7), their hair, their outfit, the era (year or period) that age is seen in, and that memory's own film stock, format and color in look when the story gives each era its own (empty when it shares the main look). The other protagonist fields describe them at their present-story age. When FIXED CASTING lists a character who is the protagonist at that age, put its subject id in subjectId; otherwise subjectId is empty. [] when they appear at one age only.`,
     `- cast: the RECURRING supporting characters besides the protagonist that the song, concept or guidance calls for (band members, someone who returns across scenes)${fixedSupportingCast(project).length
     ? `: every character FIXED CASTING lists that is not the protagonist or one of their other ages, each as its own entry under its own name, plus at most ${CAST_SETS_LIMITS.cast} more`
     : `, at most ${CAST_SETS_LIMITS.cast}; [] when the protagonist is alone`}. Each gets their own photographic character sheet. Shots that name a cast member by name or role are conditioned on that sheet, so give each a distinct name and a plain role word.`,
@@ -496,6 +498,7 @@ const formSchema = z.preprocess(withoutNulls, z.object({
   description: prose(TEXT).optional(),
   hair: prose(TEXT).optional(),
   wardrobe: prose(TEXT).optional(),
+  height: prose(HEIGHT).optional(),
   era: prose(SHORT).optional(),
   look: prose(500).optional(),
   subjectId: text(64).optional(),
@@ -504,6 +507,7 @@ const formSchema = z.preprocess(withoutNulls, z.object({
 const protagonistSchema = z.preprocess(withoutNulls, z.object({
   name: prose(SHORT).optional(),
   description: prose(TEXT).optional(),
+  height: prose(HEIGHT).optional(),
   face: prose(TEXT).optional(),
   hair: prose(TEXT).optional(),
   signature: prose(TEXT).optional(),
@@ -552,6 +556,7 @@ const castSchema = z.preprocess(withoutNulls, z.object({
   name: prose(SHORT),
   role: prose(SHORT).optional(),
   description: prose(TEXT).optional(),
+  height: prose(HEIGHT).optional(),
   face: prose(TEXT).optional(),
   hair: prose(TEXT).optional(),
   wardrobe: prose(TEXT).optional(),
@@ -694,7 +699,8 @@ function normalizeCast(cast, protagonist, { fixed = [], forms = [] } = {}) {
     let id = slug(c.id) || slug(c.name) || `cast-${i + 1}`;
     while (seen.has(id)) id = `${id}-${i + 1}`;
     seen.add(id);
-    return { id, name: c.name, role: c.role || '', description: c.description || '', face: c.face || '', hair: c.hair || '', wardrobe: c.wardrobe || '' };
+    return { id, name: c.name, role: c.role || '', description: c.description || '', face: c.face || '', hair: c.hair || '', wardrobe: c.wardrobe || '',
+      ...(c.height ? { height: c.height } : {}) };
   });
 }
 
@@ -713,7 +719,7 @@ function normalizeForms(forms, previous = []) {
       // The bound subject's name (stamped by the service), kept while the binding is.
       const subjectName = subjectId && String((subjectId === prior?.subjectId && prior?.subjectName) || f.subjectName || '').trim().slice(0, 120);
       return { id, label: f.label || `Age ${f.age}`, age: f.age || '', description: f.description, hair: f.hair || '', wardrobe: f.wardrobe || '',
-        ...(f.era ? { era: f.era } : {}), ...(f.look ? { look: f.look } : {}),
+        ...(f.height ? { height: f.height } : {}), ...(f.era ? { era: f.era } : {}), ...(f.look ? { look: f.look } : {}),
         ...(subjectId ? { subjectId } : {}), ...(subjectName ? { subjectName } : {}) };
     });
 }
@@ -766,6 +772,8 @@ export function mergeCastAndSetsDirection(previous, parsed, { sections = [], med
     gesture: pField('gesture'),
     rules: (hasOwn(p1, 'rules') ? p1.rules : (p0.rules || [])).filter(Boolean).slice(0, CAST_SETS_LIMITS.rules),
   };
+  // Optional so a protagonist without one keeps its legacy shape.
+  if (!procedural && pField('height')) protagonist.height = pField('height');
   const expressions = (hasOwn(p1, 'expressions') ? p1.expressions : (p0.expressions || [])).filter(Boolean).slice(0, CAST_SETS_LIMITS.expressions);
   const forms = procedural ? [] : normalizeForms(hasOwn(p1, 'forms') ? p1.forms : p0.forms, p0.forms || []);
   // A photographic protagonist without moods or other ages keeps its legacy shape
@@ -832,9 +840,9 @@ export function mergeCastAndSetsDirection(previous, parsed, { sections = [], med
 // is held to. Procedural protagonists keep their construction fields; a
 // photographic one its face, hair and signature.
 export const CAST_SETS_EDITABLE_PROTAGONIST = Object.freeze({ construction: TEXT, shapeLanguage: 500, materials: 500, palette: 300, movement: TEXT });
-export const CAST_SETS_EDITABLE_PHOTO_PROTAGONIST = Object.freeze({ name: SHORT, description: TEXT, face: TEXT, hair: TEXT, signature: TEXT, gesture: TEXT });
+export const CAST_SETS_EDITABLE_PHOTO_PROTAGONIST = Object.freeze({ name: SHORT, description: TEXT, height: HEIGHT, face: TEXT, hair: TEXT, signature: TEXT, gesture: TEXT });
 export const CAST_SETS_EDITABLE_WORLD = Object.freeze({ layout: TEXT, depth: 500, lighting: 500, camera: 500, transitions: 500 });
-const EDITABLE_CAST = Object.freeze({ name: SHORT, role: SHORT, description: TEXT, face: TEXT, hair: TEXT, wardrobe: TEXT });
+const EDITABLE_CAST = Object.freeze({ name: SHORT, role: SHORT, description: TEXT, height: HEIGHT, face: TEXT, hair: TEXT, wardrobe: TEXT });
 const EDITABLE_SET = Object.freeze({ name: SHORT, description: TEXT, lighting: 300, era: SHORT, look: 500 });
 const EDITABLE_TEST = Object.freeze({ action: TEXT, caption: 300, look: SHORT });
 // A test's form binding: a present `formId` replaces it (null or '' clears it).
@@ -870,7 +878,7 @@ function patchItems(list, patches, { what, keyOf, fields, extra = () => ({}) }) 
  *                 `expressions` (the whole list), `forms` (the whole list, photographic);
  *   world?:       procedural world rules;
  *   looks?:       the whole wardrobe list;
- *   cast?:        `[{ id, remove?, name?, role?, description?, face?, hair?, wardrobe? }]`;
+ *   cast?:        `[{ id, remove?, name?, role?, description?, height?, face?, hair?, wardrobe? }]`;
  *   sets?:        `[{ id, remove?, name?, description?, lighting?, era?, look?, imageRole? }]`, or
  *                 greybox selections only (`[{ id, setReference }]`, saved apart);
  *   tests?:       `[{ index (1-based), remove?, action?, caption?, look? }]` — an

@@ -188,6 +188,7 @@ export * from './characterEvolutionCoverage.js';
 // re-exports CHARACTER_ARC_TYPES from here, so keep this flat export ahead of
 // the namespaced storyBible below.
 export * from './characterFramework.js';
+export * from './characterHeight.js';
 export * from './characterIntegrity.js';
 // The cast-integrity vocabulary characterIntegrity.js reports in, as a pure leaf.
 export * from './characterIntegrityVocabulary.js';

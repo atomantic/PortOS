@@ -1377,6 +1377,7 @@ export const musicVideoCastAndSetsDirectionEditSchema = z.object({
     expressions: z.array(castSetsText(300)).max(8).optional(),
     name: castSetsText(120).optional(),
     description: castSetsText(1000).optional(),
+    height: castSetsText(80).optional(),
     face: castSetsText(1000).optional(),
     hair: castSetsText(1000).optional(),
     signature: castSetsText(1000).optional(),
@@ -1388,6 +1389,7 @@ export const musicVideoCastAndSetsDirectionEditSchema = z.object({
       description: castSetsText(1000),
       hair: castSetsText(1000).optional(),
       wardrobe: castSetsText(1000).optional(),
+      height: castSetsText(80).optional(),
       era: castSetsText(120).optional(),
       look: castSetsText(500).optional(),
       // The fixed-casting subject whose reference grounds this age (null clears).
@@ -1409,6 +1411,7 @@ export const musicVideoCastAndSetsDirectionEditSchema = z.object({
     name: castSetsText(120).optional(),
     role: castSetsText(120).optional(),
     description: castSetsText(1000).optional(),
+    height: castSetsText(80).optional(),
     face: castSetsText(1000).optional(),
     hair: castSetsText(1000).optional(),
     wardrobe: castSetsText(1000).optional(),

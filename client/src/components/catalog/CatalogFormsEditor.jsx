@@ -1,8 +1,9 @@
 import { Plus, Trash2, UserRound } from 'lucide-react';
 import { newFormId, formAgeField, formAgeLabel } from '../../lib/catalogForms';
 import { BIBLE_LIMITS } from '../../lib/bibleLimits';
+import { formatHeight, typicalHeightCm } from '../../../../server/lib/characterHeight.js';
 
-const { FORM_LABEL_MAX: LABEL_MAX, FORM_AGE_MAX: AGE_MAX, FORM_DESCRIPTION_MAX: DESCRIPTION_MAX, FORMS_PER_ENTRY_MAX: FORMS_MAX } = BIBLE_LIMITS;
+const { FORM_LABEL_MAX: LABEL_MAX, FORM_AGE_MAX: AGE_MAX, FORM_DESCRIPTION_MAX: DESCRIPTION_MAX, FORM_HEIGHT_MAX: HEIGHT_MAX, FORMS_PER_ENTRY_MAX: FORMS_MAX } = BIBLE_LIMITS;
 
 const inputClass = 'w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm focus:outline-none focus:border-port-accent';
 const labelClass = 'block text-xs uppercase tracking-wider text-gray-500 mb-1';
@@ -70,6 +71,16 @@ export default function CatalogFormsEditor({ type, payload, onChange }) {
                   </button>
                 </div>
                 {!form.label?.trim() && <p className="text-xs text-port-warning">Name it, or Save drops it.</p>}
+                {type === 'character' && (
+                  <div>
+                    <label htmlFor={`${base}-height`} className={labelClass}>Height</label>
+                    <input id={`${base}-height`} type="text" value={form.height || ''} maxLength={HEIGHT_MAX}
+                      onChange={(e) => update(form.id, { height: e.target.value })}
+                      placeholder={typicalHeightCm(form.age) ? `${formatHeight(typicalHeightCm(form.age))}, typical at this age` : '5 ft 6 in (168 cm)'}
+                      className={inputClass} />
+                    <p className="mt-1 text-xs text-gray-500">Keeps this age to scale beside cars, doors and adults in a scene. Blank uses the typical height for a child’s age.</p>
+                  </div>
+                )}
                 <div>
                   <label htmlFor={`${base}-description`} className={labelClass}>{type === 'character' ? 'Hair, clothing & appearance' : 'How it looks'}</label>
                   <textarea id={`${base}-description`} value={form.description || ''} maxLength={DESCRIPTION_MAX} rows={2}

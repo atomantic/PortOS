@@ -5,6 +5,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { execGit } from '../lib/execGit.js';
 import { assertNoUniqueIgnoredCheckoutPayload } from './heldCheckoutRecovery.js';
+import { getShippedMediaRegistry } from '../lib/mediaModels.js';
 
 // The retirement boundary may delete a merged checkout without archiving it
 // only when every ignored file is a recognized regenerable byproduct.
@@ -19,7 +20,7 @@ describe('assertNoUniqueIgnoredCheckoutPayload runtime byproducts', () => {
   beforeEach(async () => {
     dir = realpathSync(await mkdtemp(join(tmpdir(), 'portos-ignored-payload-')));
     await execGit(['init', '-q'], dir);
-    await writeFile(join(dir, '.gitignore'), '__pycache__/\n.cache/\nscratch/\n');
+    await writeFile(join(dir, '.gitignore'), '__pycache__/\n.cache/\nscratch/\ndata/\n');
   });
   afterEach(() => rm(dir, { recursive: true, force: true }));
 
@@ -27,6 +28,20 @@ describe('assertNoUniqueIgnoredCheckoutPayload runtime byproducts', () => {
     await put('scripts/__pycache__/tool.cpython-313.pyc');
     await put('scripts/lib/__pycache__/other.cpython-315.pyc');
     await put(diagnostics, '{}');
+    await expect(assertNoUniqueIgnoredCheckoutPayload(dir)).resolves.toBeUndefined();
+  });
+
+  it('accepts an unedited lazily-seeded media registry but keeps an edited one', async () => {
+    const seeded = { ...getShippedMediaRegistry(), _shippedDefaults: { video: { mlx: [] } } };
+    await put('data/media-models.json', JSON.stringify(seeded, null, 2));
+    await expect(assertNoUniqueIgnoredCheckoutPayload(dir)).resolves.toBeUndefined();
+    seeded.textEncoders = [...(seeded.textEncoders || []), { id: 'user-added' }];
+    await put('data/media-models.json', JSON.stringify(seeded, null, 2));
+    await expect(assertNoUniqueIgnoredCheckoutPayload(dir)).rejects.toThrow('checkout-ignored-payload-unverified');
+  });
+
+  it('accepts the quality-snapshot publisher retention receipt', async () => {
+    await put('.cache/quality-snapshot-merge.json', '{}');
     await expect(assertNoUniqueIgnoredCheckoutPayload(dir)).resolves.toBeUndefined();
   });
 

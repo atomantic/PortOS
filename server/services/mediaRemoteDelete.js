@@ -421,17 +421,37 @@ const entryExpired = (entry, nowMs) => nowMs - Date.parse(entry.queuedAt) > MEDI
 const rowRecreated = (row, entry) => Date.parse(row?.createdAt) > Date.parse(entry.queuedAt);
 
 /**
- * Drop entries that expired (30 days), target a peer no longer registered
- * (unpaired), or whose row is gone or was re-created; clears each dropped
- * row's pending flag. `peers` is the current registry list.
+ * Another registered, paired holder of the row that can carry out a delete
+ * whose queued peer was removed; null when none remains (or the command only
+ * makes sense for its original peer: an origin still owed a holder's delete,
+ * or an owner ack waiting to be retired).
+ */
+async function retargetPeer(entry, row, peers, hosted) {
+  if (entry.holderDeleted || entry.ackTombstone) return null;
+  const localId = await localInstanceId();
+  const candidates = rowOwnerCandidates(row, hosted).filter((id) => id !== localId);
+  for (const id of candidates) {
+    const p = peers.find((x) => x?.instanceId === id);
+    if (p && isNonBlankStr(p.id) && p.enabled !== false && peerIsPaired(p)) return p;
+  }
+  return null;
+}
+
+/**
+ * Drop entries that expired (30 days), whose row is gone or was re-created, or
+ * whose peer is no longer registered (unpaired) and that no other registered
+ * holder can take over; clears each dropped row's pending flag. An entry whose
+ * peer was removed is re-targeted to the next usable owner candidate instead,
+ * keeping `queuedAt` so the original expiry still applies. `peers` is the
+ * current registry list.
  */
 async function pruneMediaDeleteQueue(peers, nowMs = Date.now()) {
   const queued = await readQueue();
   if (queued.length === 0) return 0;
-  const known = new Set((Array.isArray(peers) ? peers : []).map((p) => p?.id).filter(isNonBlankStr));
-  const staleReason = (entry) => (entryExpired(entry, nowMs) ? 'expired' : !known.has(entry.peerId) ? 'peer removed' : null);
-  // Rows are read only for entries that survive the cheap checks.
-  const survivors = queued.filter((entry) => !staleReason(entry));
+  const peerList = Array.isArray(peers) ? peers : [];
+  const known = new Set(peerList.map((p) => p?.id).filter(isNonBlankStr));
+  // Rows are read only for entries that survive the expiry check.
+  const survivors = queued.filter((entry) => !entryExpired(entry, nowMs));
   const rows = new Map();
   if (survivors.some((entry) => entry.kind === 'video')) {
     const history = await loadHistory();
@@ -441,20 +461,45 @@ async function pruneMediaDeleteQueue(peers, nowMs = Date.now()) {
     const row = await readHeldImage(entry.key);
     if (row) rows.set(`image:${entry.key}`, row);
   }
+  const rowReason = (entry) => {
+    const row = rows.get(`${entry.kind}:${entry.key}`);
+    return !row ? (entry.holderDeleted ? null : 'row gone') : rowRecreated(row, entry) ? 're-created' : null;
+  };
+  // Resolved ahead of the queue lock: the candidate lookup is async.
+  const retargets = new Map();
+  const orphans = survivors.filter((entry) => !known.has(entry.peerId) && !rowReason(entry) && rows.has(`${entry.kind}:${entry.key}`));
+  if (orphans.length > 0) {
+    const hosted = await hostedIndex();
+    for (const entry of orphans) {
+      const next = await retargetPeer(entry, rows.get(`${entry.kind}:${entry.key}`), peerList, hosted);
+      if (next) retargets.set(entry, next);
+    }
+  }
   const dropped = [];
+  const moved = [];
   // Only entries in the snapshot whose rows were read above are judged; one
   // queued since then has no row in the map and is not "gone".
-  await updateQueue((entries) => entries.filter((entry) => {
-    if (!queued.some((seen) => sameEntry(seen, entry))) return true;
-    const row = rows.get(`${entry.kind}:${entry.key}`);
-    const reason = staleReason(entry)
-      ?? (!row ? (entry.holderDeleted ? null : 'row gone') : rowRecreated(row, entry) ? 're-created' : null);
-    if (reason) dropped.push({ entry, reason });
-    return !reason;
+  await updateQueue((entries) => entries.flatMap((entry) => {
+    const seen = queued.find((s) => sameEntry(s, entry));
+    if (!seen) return [entry];
+    const reason = entryExpired(entry, nowMs) ? 'expired'
+      : rowReason(entry) ?? (!known.has(entry.peerId) && !retargets.has(seen) ? 'peer removed' : null);
+    if (reason) {
+      dropped.push({ entry, reason });
+      return [];
+    }
+    const next = retargets.get(seen);
+    if (!next || known.has(entry.peerId)) return [entry];
+    moved.push({ entry, next });
+    return [{ ...entry, peerId: next.id }];
   }));
   for (const { entry, reason } of dropped) {
     console.log(`⏭️ Queued delete of ${entry.kind} ${entry.key} dropped: ${reason}`);
     await setPendingFlag(entry.kind, entry.key, null);
+  }
+  for (const { entry, next } of moved) {
+    console.log(`🔀 Queued delete of ${entry.kind} ${entry.key} re-targeted to ${peerLabel(next)}: its peer was removed`);
+    await setPendingFlag(entry.kind, entry.key, { peerId: next.id, queuedAt: entry.queuedAt });
   }
   return dropped.length;
 }
