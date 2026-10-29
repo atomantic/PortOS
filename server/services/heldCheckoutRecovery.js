@@ -1935,7 +1935,8 @@ export async function fetchRetirementProofObjects(repoPath, release, prUrl, expe
     return { ok: false, reason: 'retirement-pr-repository-mismatch' };
   }
   if (expectedHeadSha !== null && forge.prHead !== expectedHeadSha) return { ok: false, reason: 'receipt-pr-head-changed' };
-  const exactDelivery = forge.scopeProof === 'exact-delivered-head' && forge.prHead === release.head && !opts.sourceSupersessionHead;
+  const exactDelivery = !opts.sourceSupersessionHead && ((forge.scopeProof === 'exact-delivered-head' && forge.prHead === release.head)
+    || (forge.scopeProof === 'ancestor-of-delivered-head' && Boolean(release.branch) && forge.deliveredAncestorHead === release.head));
   const representedDetached = !release.branch && !opts.sourceSupersessionHead
     && forge.scopeProof === 'represented-detached-head' && forge.exactAliasHead === release.head
     && forge.detachedRepresentation?.sourceHead === release.head

@@ -510,6 +510,7 @@ export * from './itermMessages.js';
 export * from './itermScreenRender.js';
 export * from './networkExposure.js';
 export * from './peerHttpClient.js';
+export * from './peerPairing.js';
 export * from './peerProbeDiagnostics.js';
 export * from './peerSelfHost.js';
 export * from './protobufWire.js';

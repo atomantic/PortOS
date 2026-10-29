@@ -56,7 +56,7 @@ export default function CastSetsStage({ board }) {
       <StageSection title="Visual guidance" summary={directionSummary(project)}>
         <LookReferencesPanel key={`look-${project.id}`} project={project}
           onSave={board.saveStyleReferences} onSaveSpec={board.saveVisualSpec} onAddReference={board.onAddReference}
-          onPendingChange={board.setStyleReferencesPending} />
+          onReferenceLabels={board.applyReferenceLabels} onPendingChange={board.setStyleReferencesPending} />
         <fieldset disabled={locked} className="min-w-0"><VisualSpecPanel key={project.id} project={project} onSave={board.saveVisualSpec} /></fieldset>
       </StageSection>
       {project.castAndSets ? (

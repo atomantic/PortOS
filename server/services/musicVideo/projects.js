@@ -32,6 +32,7 @@ import { VIDEO_GEN_MODE, resolveVideoMode } from '../videoGen/modes.js';
 import { getSettings } from '../settings.js';
 import { withStyleSnapshots } from './styleSnapshots.js';
 import { queueProjectCatalogLinkSync } from './catalogLinks.js';
+import { labelProjectReferences } from './referenceLabels.js';
 
 // Shared dispatcher (#2899). ensureSchema() runs inside the selector (mirroring
 // memoryBackend.js) so the backend is self-sufficient regardless of boot ordering.
@@ -206,16 +207,21 @@ export async function updateProject(id, patch) {
     || seeded?.visualSpec?.moodBoardId !== undefined;
   const resolved = needsSnapshot ? await withStyleSnapshots(seeded, await backend.getProject(id)) : seeded;
   const castChanged = resolved?.concept?.subjects !== undefined;
+  // A reference added from the gallery or a mood board takes its catalog record's name.
+  // Linking the cast alone leaves approvals current, so naming then must not stale them.
+  const referencesChanged = resolved?.visualSpec?.references !== undefined;
+  const nameReferences = async (saved) => (referencesChanged || castChanged
+    ? (await labelProjectReferences(id, { backfill: !referencesChanged }))?.project || saved : saved);
   if (!Array.isArray(resolved.scenes)) {
     const next = await backend.updateProject(id, resolved);
     emitRecordUpdated('musicVideoProject', id);
     if (castChanged) queueProjectCatalogLinkSync(id);
-    return next;
+    return nameReferences(next);
   }
   const { applyProjectPatch } = await import('./projectsLogic.js');
   const { project } = await mutateProjectRecord(id, current => ({ project: applyProjectPatch(current, resolved) }));
   if (castChanged) queueProjectCatalogLinkSync(id);
-  return project;
+  return nameReferences(project);
 }
 
 /**

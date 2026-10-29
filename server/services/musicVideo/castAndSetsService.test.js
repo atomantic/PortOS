@@ -1154,13 +1154,17 @@ it('conditions linked cast on their Casting images, not just a reference with th
     listMediaForIngredient: async (id) => media[id] || [],
   } }));
   runPrompt.mockResolvedValue({ text: JSON.stringify({ ...DIRECTION,
-    protagonist: { ...DIRECTION.protagonist, name: 'Nora', forms: [{ id: 'seven', label: 'Age 7', age: '7', description: 'a small girl' }] },
+    protagonist: { ...DIRECTION.protagonist, name: 'Nora', forms: [
+      { id: 'seven', label: 'Age 7', age: '7', description: 'a small girl', subjectId: 'mvc-nora-7' },
+      { id: 'young', label: 'Age 7 again', age: '7', description: 'unbound' },
+    ] },
     cast: [{ id: 'frank', name: 'Frank', role: 'father', description: 'sixties', face: 'lined', hair: 'grey', wardrobe: 'suit' }] }) });
   const project = await seed({
     concept: { prompt: 'a wake', subjects: [
       // Linked in Casting after an earlier check-in had cast its own Nora.
       { id: 'cs-protagonist', kind: 'character', name: 'Nora (17)', role: 'protagonist', ingredientId: 'cat-chr-nora' },
       { id: 'mvc-frank', kind: 'character', name: 'Frank', role: 'supporting', ingredientId: 'cat-chr-frank' },
+      { id: 'mvc-nora-7', kind: 'character', name: 'Nora (7)', ingredientId: 'cat-chr-nora', castForm: { id: 'form-young', label: 'Age 7', age: 7 } },
     ] },
     visualSpec: { references: [{ id: 'mvr-pull-1', imageId: 'old-frank.png', role: 'character', label: 'Frank', condition: false }] },
   });
@@ -1171,8 +1175,86 @@ it('conditions linked cast on their Casting images, not just a reference with th
   const refs = (key) => job(key).params.referenceImagePaths?.map((p) => p.split(/[\\/]/).pop());
   expect(refs('character')).toEqual(['nora-portrait.png']);
   expect(refs('cast:frank')).toEqual(['frank-portrait.png']);
-  // An age sheet: the canonical sheet first, then that age's own Casting image.
+  // An age sheet: the canonical sheet first, then that age's own Casting image,
+  // whether a subject linked at that age is bound to it or not.
   expect(refs('form:seven')).toEqual([`${job('character').id}.png`, 'nora-at-7.png']);
+  expect(refs('form:young')).toEqual([`${job('character').id}.png`, 'nora-at-7.png']);
+});
+
+it('grounds an age form and its test frames on the catalog reference selected for that age', async () => {
+  runPrompt.mockResolvedValue({ text: JSON.stringify({ ...DIRECTION,
+    protagonist: { ...DIRECTION.protagonist, forms: [
+      { id: 'age-7', label: 'Age 7', age: '7', description: 'a small girl with the same eyes', hair: 'pigtails', wardrobe: 'a plaid dress', subjectId: 'mvc-2' },
+      { id: 'age-15', label: 'Age 15', age: '15', description: 'a lanky teen', subjectId: 'mvc-404' },
+    ] },
+    tests: [
+      DIRECTION.tests[0],
+      { setId: 'harbor', look: 'Watch', action: 'skipping stones as a child', caption: 'memory', formId: 'age-7' },
+      { setId: 'roof', look: 'Watch', action: 'at an age the sheet does not have', formId: 'age-99' },
+    ] }) });
+  const project = await seed({
+    concept: { prompt: 'a vigil', subjects: [
+      { id: 'mvc-1', kind: 'character', name: 'Keeper', role: 'protagonist', ingredientId: 'cat-chr-1' },
+      { id: 'mvc-2', kind: 'character', name: 'Keeper (Age 7)', ingredientId: 'cat-chr-1', castForm: { id: 'age-7', label: 'Age 7', age: 7 } },
+      { id: 'mvc-3', kind: 'character', name: 'Stranger' },
+    ] },
+    visualSpec: { references: [
+      { id: 'mvr-pull-1', imageId: 'keeper.png', role: 'character', label: 'Keeper', condition: true },
+      // Flagged to condition frames, yet it is the child: it must stay off the adult sheet.
+      { id: 'mvr-pull-2', imageId: 'keeper-7.png', role: 'character', label: 'Keeper (Age 7)', condition: true },
+    ] },
+  });
+  await service.startCastAndSets(project.id);
+  await runTo(project.id, 'review');
+  expect(runPrompt.mock.calls[0][0].prompt).toContain('Keeper (Age 7) [subject id: mvc-2, shown as: Age 7]');
+  const job = (key) => jobs.findLast((j) => keyOf(j) === key);
+  const refs = (key) => job(key).params.referenceImagePaths?.map((p) => p.split(/[\\/]/).pop());
+  const png = (key) => `${job(key).id}.png`;
+  let saved = await current(project.id);
+  // Only a subject the director cast from the catalog can be bound; a test at an unknown age is dropped.
+  expect(saved.castAndSets.direction.protagonist.forms.map((f) => [f.subjectId, f.subjectName])).toEqual([['mvc-2', 'Keeper (Age 7)'], [undefined, undefined]]);
+  expect(saved.castAndSets.direction.tests.map((t) => t.formId)).toEqual([undefined, 'age-7']);
+  expect(refs('character')).toEqual(['keeper.png']);
+  expect(refs('form:age-7')).toEqual([png('character'), 'keeper-7.png']);
+  expect(job('form:age-7').params.prompt).toContain('SAME person as the age reference image');
+  expect(refs('form:age-15')).toEqual([png('character')]);
+  // The child test is the child's sheet in the set; the adult test keeps the adult sheet and looks.
+  expect(refs('test:2')).toEqual([png('set:harbor'), png('form:age-7')]);
+  expect(job('test:2').params.prompt).toContain('Place the person from the Age 7 character sheet');
+  expect(job('test:2').params.prompt).toContain('Wearing a plaid dress');
+  expect(refs('test:1')).toEqual([png('set:lab'), png('character'), png('looks')]);
+
+  // Binding an adult test to the age re-renders just it, on the child sheet.
+  const before = jobs.length;
+  expect((await request(app).patch(`/api/music-video/${project.id}/cast-and-sets/direction`).send({ tests: [{ index: 1, formId: 'age-7' }] })).status).toBe(202);
+  await runTo(project.id, 'review');
+  expect(jobs.slice(before).map(keyOf)).toEqual(['test:1']);
+  expect(refs('test:1')).toEqual([png('set:lab'), png('form:age-7')]);
+
+  // A non-catalog subject, or removing an age a test still shows, is refused and nothing is saved.
+  saved = await current(project.id);
+  const forms = saved.castAndSets.direction.protagonist.forms;
+  const stranger = await request(app).patch(`/api/music-video/${project.id}/cast-and-sets/direction`)
+    .send({ protagonist: { forms: forms.map((f) => (f.id === 'age-15' ? { ...f, subjectId: 'mvc-3' } : f)) } });
+  expect(stranger.status).toBe(422);
+  expect(stranger.body.code).toBe('CAST_SETS_UNKNOWN_SUBJECT');
+  const orphan = await request(app).patch(`/api/music-video/${project.id}/cast-and-sets/direction`)
+    .send({ protagonist: { forms: forms.filter((f) => f.id !== 'age-7') } });
+  expect(orphan.status).toBe(422);
+  expect(orphan.body.code).toBe('CAST_SETS_UNKNOWN_FORM');
+  expect((await current(project.id)).castAndSets).toEqual(saved.castAndSets);
+
+  // Unlinking the child subject leaves the binding visible as missing and re-renders its dependents.
+  const { buildCastAndSetsImagePlan, affectedImageKeys } = await import('./castAndSetsPlan.js');
+  const unlinked = { ...saved, concept: { ...saved.concept, subjects: saved.concept.subjects.map((s) => (s.id === 'mvc-2' ? { ...s, ingredientId: undefined } : s)) } };
+  const next = buildCastAndSetsImagePlan(unlinked, saved.castAndSets.direction);
+  expect(next['form:age-7']).toMatchObject({ subjectId: 'mvc-2', bindingMissing: 'subject' });
+  expect(next['form:age-7'].refImages).toBeUndefined();
+  expect(next.character.refImages).toEqual(['keeper.png']);
+  expect(affectedImageKeys(saved.castAndSets.plan, next).sort()).toEqual(['form:age-7', 'test:1', 'test:2']);
+  // Removed outright, its still-labeled reference stays off the present-day sheet too.
+  const removed = { ...saved, concept: { ...saved.concept, subjects: saved.concept.subjects.filter((s) => s.id !== 'mvc-2') } };
+  expect(buildCastAndSetsImagePlan(removed, saved.castAndSets.direction).character.refImages).toEqual(['keeper.png']);
 });
 
 it('keeps people out of set plates: no mood board person in the look, no character action in a set', async () => {

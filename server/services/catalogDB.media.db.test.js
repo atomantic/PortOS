@@ -335,3 +335,26 @@ describe.skipIf(!runDb)('atomic local image writes', () => {
     expect(Object.fromEntries((await liveRows(id)).map((row) => [row.media_key, row.kind]))).toEqual(expected);
   });
 });
+
+describe.skipIf(!runDb)('findMediaOwnersByKeys', () => {
+  it('names each image by its owner, preferring the caller\'s linked records and skipping detached rows', async () => {
+    const lead = await catalogDB.createIngredient({ type: 'character', name: 'Example Lead' });
+    const friend = await catalogDB.createIngredient({ type: 'character', name: 'Example Friend' });
+    const rink = await catalogDB.createIngredient({ type: 'place', name: 'Example Rink' });
+    ids.push(lead.id, friend.id, rink.id);
+    await catalogDB.attachMedia(lead.id, 'owners-shared.png', 'reference');
+    await catalogDB.setPortraitMedia(friend.id, 'owners-shared.png');
+    await catalogDB.attachMedia(rink.id, 'owners-plate.png', 'reference');
+    await catalogDB.attachMedia(rink.id, 'owners-gone.png', 'reference');
+    await catalogDB.detachMedia(rink.id, 'owners-gone.png', 'reference');
+    const keys = ['owners-shared.png', 'owners-plate.png', 'owners-gone.png', 'owners-unknown.png'];
+
+    const unlinked = await catalogDB.findMediaOwnersByKeys(keys);
+    expect(unlinked.get('owners-shared.png')).toMatchObject({ name: 'Example Friend', preferredId: null });
+    expect(unlinked.get('owners-plate.png')).toMatchObject({ name: 'Example Rink', type: 'place' });
+    expect([...unlinked.keys()].sort()).toEqual(['owners-plate.png', 'owners-shared.png']);
+
+    const linked = await catalogDB.findMediaOwnersByKeys(keys, { preferIds: [lead.id] });
+    expect(linked.get('owners-shared.png')).toMatchObject({ ingredientId: lead.id, name: 'Example Lead', preferredId: lead.id });
+  });
+});

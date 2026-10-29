@@ -296,3 +296,23 @@ export async function updateMediaLibrary(ingredientId, mediaKey, kind, patch = {
     return rowToMedia(result.rows[0]);
   });
 }
+
+// Which catalog record owns each image, for naming a reference picked from the
+// gallery. One live row per key: a record in `preferIds` (the caller's linked
+// cast) wins, then a portrait, then the newest attach. Merged records answer
+// with their canonical record; `preferredId` is the `preferIds` entry it matched.
+export async function findMediaOwnersByKeys(mediaKeys, { preferIds = [] } = {}) {
+  const keys = [...new Set((mediaKeys || []).filter((key) => typeof key === 'string' && key))];
+  if (!keys.length) return new Map();
+  const { rows } = await query(
+    `SELECT DISTINCT ON (m.media_key) m.media_key, i.id, i.name, i.type, preferred.id AS preferred_id
+       FROM catalog_ingredient_media m
+       JOIN catalog_ingredients i ON i.id = catalog_canonical_ingredient_id(m.ingredient_id) AND i.deleted = false
+       LEFT JOIN LATERAL (SELECT p AS id FROM unnest($2::text[]) p
+         WHERE catalog_canonical_ingredient_id(p) = i.id LIMIT 1) preferred ON true
+      WHERE m.media_key = ANY($1) AND m.deleted = false
+      ORDER BY m.media_key, (preferred.id IS NOT NULL) DESC, (m.kind = 'portrait') DESC, m.created_at DESC`,
+    [keys, [...new Set(preferIds.filter((id) => typeof id === 'string' && id))]],
+  );
+  return new Map(rows.map((row) => [row.media_key, { ingredientId: row.id, name: row.name, type: row.type, preferredId: row.preferred_id ?? null }]));
+}

@@ -65,6 +65,7 @@ import {
   castAndSetsAllowsImages,
   castAndSetsMedium,
   describeDirectionChanges,
+  formSubjects,
   mergeCastAndSetsDirection,
   moodBoardImageList,
   parseCastAndSetsResponse,
@@ -240,8 +241,9 @@ async function runDirection(projectId, { providerId, model, effort, notes = [], 
   const parsed = parseCastAndSetsResponse(text);
   if (!parsed) return fail(projectId, 'The creative direction answer had no usable JSON');
   const sections = songSections(project);
-  const { direction, missing } = mergeCastAndSetsDirection(notes.length ? previous : null, parsed, { sections, medium });
-  if (missing.length) return fail(projectId, `The creative direction answer is missing: ${missing.join(', ')}`);
+  const merged = mergeCastAndSetsDirection(notes.length ? previous : null, parsed, { sections, medium });
+  if (merged.missing.length) return fail(projectId, `The creative direction answer is missing: ${merged.missing.join(', ')}`);
+  const direction = withCheckedFormSubjects(project, merged.direction, notes.length ? previous : null);
   // The look every image prompt carries. While the director's sheet feedback
   // stands, the look line rewritten to agree with it wins; otherwise the
   // director's palette/light/texture line, else the project's visual style.
@@ -294,6 +296,40 @@ async function writePlan(projectId, { direction = null, forceKeys = [], changes 
   console.log(`🎭 Music Video Cast & Sets ${short(projectId)} r${out.stage.revision}: ${renderKeys.length} image(s) to render${route ? ` on ${route.mode}` : ' (code-only, no image backend)'}`);
   publish(projectId, out.project);
   return advance(projectId);
+}
+
+/**
+ * A form's subject binding a caller just set (it differs from the one `previous`
+ * held for that form id) that names no fixed-casting character of `project`.
+ * An unchanged binding whose subject was since unlinked is left for the plan
+ * to report as missing, so it never blocks an unrelated edit.
+ */
+function newUnknownFormSubjects(project, direction, previous) {
+  const known = new Set(formSubjects(project).map((s) => s.id));
+  const before = new Map((previous?.protagonist?.forms || []).map((f) => [f.id, f.subjectId]));
+  return (direction?.protagonist?.forms || []).filter((f) => f.subjectId && f.subjectId !== before.get(f.id) && !known.has(f.subjectId));
+}
+
+/**
+ * Bind forms only to subjects the director cast: a provider's new binding to
+ * any other id is dropped (a director edit is refused before this runs), and
+ * each binding to a known subject records that subject's name, so its
+ * reference can still be kept off the present-day sheet if the subject is
+ * later removed from the video.
+ */
+function withCheckedFormSubjects(project, direction, previous) {
+  const forms = direction?.protagonist?.forms;
+  if (!forms?.length) return direction;
+  const unknown = new Set(newUnknownFormSubjects(project, direction, previous).map((f) => f.id));
+  const names = new Map(formSubjects(project).map((s) => [s.id, s.name]));
+  const checked = forms.map((f) => {
+    if (!f.subjectId) return f;
+    const { subjectId, subjectName, ...rest } = f;
+    if (unknown.has(f.id)) return rest;
+    const name = names.get(subjectId) || subjectName;
+    return { ...rest, subjectId, ...(name ? { subjectName: name } : {}) };
+  });
+  return { ...direction, protagonist: { ...direction.protagonist, forms: checked } };
 }
 
 const keyNotesText = (keyNotes = {}) => Object.fromEntries(Object.entries(keyNotes).map(([k, list]) => [k, list.join('; ')]));
@@ -831,11 +867,14 @@ export async function editCastAndSetsDirection(projectId, edits) {
       direction = { ...direction, tests };
     }
     const edited = applyCastAndSetsDirectionEdits(direction, edits, { sections });
+    if (newUnknownFormSubjects(current, edited.direction, direction).length) {
+      throw new ServerError('That age is linked to a character this video has not cast from the catalog. Link the character in Creative setup first.', { status: 422, code: 'CAST_SETS_UNKNOWN_SUBJECT' });
+    }
     if (!edited.changed.length) throw new ServerError('Nothing changed — edit a field first', { status: 422, code: 'CAST_SETS_NO_EDITS' });
     changed = edited.changed;
     const notesApplied = [{ id: null, target: 'direction', text: `Edited by the director: ${changed.join(', ')}` }];
     const revised = reviseCastAndSetsOnProject(current, { processId: PROCESS_ID, notesApplied, redirect: false });
-    const next = { ...revised.project, castAndSets: { ...revised.stage, direction: edited.direction } };
+    const next = { ...revised.project, castAndSets: { ...revised.stage, direction: withCheckedFormSubjects(current, edited.direction, direction) } };
     return { project: next, stage: next.castAndSets };
   });
   console.log(`🎭 Music Video Cast & Sets ${short(projectId)} direction edited r${out.stage.revision} (${changed.length} field(s))`);
