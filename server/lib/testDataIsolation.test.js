@@ -15,21 +15,22 @@
  */
 
 import { describe, it, expect, vi, afterEach, afterAll } from 'vitest';
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from 'fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync } from 'fs';
 import { tmpdir } from 'os';
 import { isAbsolute, join, relative, sep } from 'path';
 import { appendFileGuarded, atomicWrite, copyFileGuarded, createWriteStreamGuarded, ensureDir, renameGuarded, rmGuarded, unlinkGuarded, writeFileGuarded } from './fileCore.js';
 import { appendJSONLine } from './jsonIo.js';
 import { createCollectionStore } from './collectionStore.js';
-import { assertNotNewRealDataDir, assertNotRealDataWrite, isInsideRealDataRoot } from './testDataIsolation.js';
+import { assertNotNewRealDataDir, assertNotRealDataWrite, isInsideRealDataRoot, _resolveGuardRoots } from './testDataIsolation.js';
+import { resolveCodeRootForModule } from './dataRoot.js';
 import { isPathAtOrInsideDir } from './pathContainment.js';
 import { isTestRunner } from './runtimeEnv.js';
 import { PATHS } from './paths.js';
 
-// The real tree this guard defends. Read from the unmocked PATHS on purpose:
-// this suite mocks nothing, so it is the same root the guard re-derives, and
-// referencing it here proves the two agree.
-const REAL_DATA = PATHS.data;
+// The real tree this guard defends, derived the way the guard derives it. Inside
+// a CoS worktree that is the primary install's data/, not PATHS.data (which is
+// the worktree's own exempt scratch tree), so PATHS is deliberately not used.
+const REAL_DATA = _resolveGuardRoots(resolveCodeRootForModule(import.meta.url)).root;
 const tempRoot = mkdtempSync(join(tmpdir(), 'portos-test-isolation-'));
 
 afterAll(() => rmSync(tempRoot, { recursive: true, force: true }));
@@ -257,5 +258,28 @@ describe('collectionStore recursive delete', () => {
     } finally {
       rmSync(recordLink, { force: true });
     }
+  });
+});
+
+describe('_resolveGuardRoots (#14074)', () => {
+  const primary = realpathSync(mkdtempSync(join(tmpdir(), 'portos-guard-roots-')));
+  const worktree = join(primary, 'data', 'cos', 'worktrees', 'claim-example');
+  mkdirSync(join(worktree, 'data'), { recursive: true });
+  afterAll(() => rmSync(primary, { recursive: true, force: true }));
+
+  it('protects the install data/ and exempts only the executing worktree checkout', () => {
+    const { root, exempt } = _resolveGuardRoots(worktree);
+    expect(isPathAtOrInsideDir(root, join(primary, 'data', 'brain', 'x.json'))).toBe(true);
+    expect(isPathAtOrInsideDir(root, join(worktree, 'data', 'x.json'))).toBe(true);
+    expect(isPathAtOrInsideDir(exempt, join(worktree, 'data', 'x.json'))).toBe(true);
+    // a sibling checkout is real data from this worktree's point of view
+    expect(isPathAtOrInsideDir(exempt, join(primary, 'data', 'cos', 'worktrees', 'other', 'x.json'))).toBe(false);
+    expect(isPathAtOrInsideDir(exempt, join(primary, 'data', 'brain', 'x.json'))).toBe(false);
+  });
+
+  it('exempts nothing outside a worktree', () => {
+    const { root, exempt } = _resolveGuardRoots(primary);
+    expect(exempt).toBeNull();
+    expect(isPathAtOrInsideDir(root, join(primary, 'data', 'x.json'))).toBe(true);
   });
 });
