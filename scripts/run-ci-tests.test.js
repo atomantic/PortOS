@@ -82,11 +82,12 @@ it('hands Vitest the selection as a file, sliced by the runner for the matrix sh
     installFakeNpm(fixture, REPORTING_NPM);
     // The planner fans both scoped modes out (ci-test-plan.js fansOut), so
     // each must hand Vitest its slice rather than run the whole selection twice.
-    // Related selection is closure-based: this runner imports
-    // scripts/lib/directInvocation.js, so the runner's own test is related to it.
+    // Related mode reaches this same handoff after planTestMemo widens the
+    // selection; that union is pinned in lib/testMemoRunner.test.js and its
+    // parity with `vitest related` on the fixture graph below, without walking
+    // this whole repository's import graph here.
     const files = ['server/lib/example.test.js', 'scripts/example.test.js'];
     for (const [mode, shard, sources, expected] of [
-      ['related', '', ['scripts/lib/directInvocation.js'], ['../scripts/run-ci-tests.test.js', 'lib/example.test.js', '../scripts/example.test.js']],
       ['files', '', [], ['lib/example.test.js', '../scripts/example.test.js']],
       // Two explicit files split three ways: shard 2 of 3 gets exactly one of them.
       ['files', '2/3', [], [vitestShardSlice(files, { repoRoot: join(import.meta.dirname, '..'), scope: 'server', index: 2, count: 3 })].flat().map((rel) => toWorkspacePath('server', rel))],
@@ -118,13 +119,15 @@ it('hands only real client fixture consumers to Vitest for a shared browser clea
   const fixture = mkdtempSync(join(tmpdir(), 'portos-client-helper-selection-'));
   try {
     installFakeNpm(fixture, REPORTING_NPM);
-    const unused = collectPlanInputs({ baseSha: 'HEAD', changedFiles: ['scripts/lib/setupDbChoice.js'], cwd: join(import.meta.dirname, '..') });
-    expect(buildCiTestPlan(unused.changedFiles, unused)).toMatchObject({
+    const unused = 'scripts/lib/setupDbChoice.js';
+    const source = 'scripts/lib/ownedBrowserCleanup.js';
+    // One whole-repository walk for both plans: the collected maps are keyed per
+    // source/test/suite, so each single-source plan reads only its own entries.
+    const inputs = collectPlanInputs({ baseSha: 'HEAD', changedFiles: [unused, source], cwd: join(import.meta.dirname, '..') });
+    expect(buildCiTestPlan([unused], inputs)).toMatchObject({
       full: false, build: false, client: { mode: 'skip', files: [] },
     });
-    const source = 'scripts/lib/ownedBrowserCleanup.js';
-    const inputs = collectPlanInputs({ baseSha: 'HEAD', changedFiles: [source], cwd: join(import.meta.dirname, '..') });
-    const plan = buildCiTestPlan(inputs.changedFiles, inputs);
+    const plan = buildCiTestPlan([source], inputs);
     expect(plan.full).toBe(false);
     expect(plan.build).toBe(false);
     expect(plan.server.mode).toBe('related');
@@ -1163,7 +1166,9 @@ describe('report launcher subprocess lifecycle (#9804)', () => {
   // Windows cannot deliver POSIX SIGINT/SIGTERM to a Node process; ordinary
   // outcomes and recovery below still exercise its real npm.cmd boundary.
   describe.skipIf(process.platform === 'win32')('graceful signals', () => {
-    for (const signal of ['SIGINT', 'SIGTERM', 'SIGUSR2']) {
+    // SIGTERM shares cancel('SIGTERM') and its 143 status with the SIGUSR2
+    // abort case (and the runNpm abort contract above), so it is not repeated.
+    for (const signal of ['SIGINT', 'SIGUSR2']) {
       it(`${signal} fails the stage, stops descendants, and removes the report root`, async () => {
         const host = mkdtempSync(join(tmpdir(), 'rcl-'));
         let run;
