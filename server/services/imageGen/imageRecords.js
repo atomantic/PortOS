@@ -17,7 +17,7 @@ import { isSafeFilename } from '../../lib/pathSafety.js';
 import { isTombstoned } from '../../lib/tombstones.js';
 import { parseTsMs } from '../../lib/lwwTimestamp.js';
 import { imageGenEvents } from '../imageGenEvents.js';
-import { mergeMediaTombstones, listMediaTombstones } from '../mediaTombstones.js';
+import { mergeMediaTombstones, listMediaTombstones, clearMediaTombstone } from '../mediaTombstones.js';
 
 // The check assertGalleryFilename applies, as a predicate for peer-supplied keys.
 const isGalleryName = (filename) => isSafeFilename(filename, ['.png']);
@@ -60,6 +60,25 @@ export async function readHeldImage(filename) {
   return record;
 }
 
+/**
+ * Drop the tombstone held here for `filename` once a copy pulled from its owner
+ * (`ownerInstanceId`) is stamped after that delete: the owner restored it
+ * (`restoredAt`, imageLiveStamp), so the delete no longer applies anywhere and
+ * this machine must stop holding it. A copy from any other holder leaves the
+ * tombstone, as a relayed delete never retires a copy here either.
+ * Resolves true when a tombstone was removed.
+ */
+export async function clearImageTombstoneSupersededByOwner(filename, ownerInstanceId) {
+  if (!isGalleryName(filename) || !isNonBlankStr(ownerInstanceId)) return false;
+  const tombstone = (await listMediaTombstones('image')).find((t) => t.key === filename);
+  if (!tombstone) return false;
+  const record = await readHeldImage(filename);
+  if (record?.originInstanceId !== ownerInstanceId || !(parseTsMs(record.createdAt) > parseTsMs(tombstone.deletedAt))) return false;
+  const cleared = await clearMediaTombstone('image', filename, { deletedAt: tombstone.deletedAt });
+  if (cleared) console.log(`♻️ Image ${filename} restored by its owner: delete record cleared`);
+  return cleared;
+}
+
 export async function localInstanceId() {
   const identity = await import('../instanceIdentity.js');
   const id = await identity.getInstanceId().catch(() => null);
@@ -72,7 +91,8 @@ export async function localInstanceId() {
  * do not carry over.
  */
 export async function withLocalImageOrigin(meta) {
-  const { originInstanceId: _source, ...rest } = stripImageSidecarLocalFields(isPlainObject(meta) ? meta : {}); // eslint-disable-line no-unused-vars
+  // A source's restore stamp describes that image's delete, not this new one.
+  const { originInstanceId: _source, restoredAt: _restored, ...rest } = stripImageSidecarLocalFields(isPlainObject(meta) ? meta : {}); // eslint-disable-line no-unused-vars
   // A durable creation stamp that travels with the sidecar (imageLiveStamp).
   if (typeof rest.createdAt !== 'string' || !Number.isFinite(Date.parse(rest.createdAt))) rest.createdAt = new Date().toISOString();
   const id = await localInstanceId();

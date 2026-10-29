@@ -5,7 +5,7 @@
  * settling of deletes a crash left in flight, for both kinds.
  */
 import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
-import { mkdirSync, rmSync, writeFileSync } from 'fs';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { createTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
@@ -13,6 +13,7 @@ const tempRoot = createTempDataRoot('portos-media-restore-');
 vi.mock('../lib/fileUtils.js', async (importOriginal) => (
   makePathsProxy(await importOriginal(), { dataRoot: tempRoot })
 ));
+vi.mock('../lib/databaseMaintenanceJournal.js', async (importOriginal) => ({ ...(await importOriginal()), assertDatabaseAdmission: () => {} }));
 vi.mock('./instanceIdentity.js', () => ({ UNKNOWN_INSTANCE_ID: 'unknown', getInstanceId: async () => 'inst-local' }));
 afterAll(() => rmSync(tempRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
 
@@ -27,6 +28,7 @@ const putBack = (filename, originInstanceId) => {
   writeFileSync(join(imagesDir, filename.replace(/\.png$/, '.metadata.json')), JSON.stringify({ originInstanceId, createdAt: '2026-01-01T00:00:00.000Z' }));
 };
 const imageKeys = async () => (await listMediaTombstones('image')).map((t) => t.key);
+const sidecarOf = (filename) => JSON.parse(readFileSync(join(imagesDir, filename.replace(/\.png$/, '.metadata.json')), 'utf8'));
 
 const videosDir = join(tempRoot, 'videos');
 
@@ -41,8 +43,9 @@ describe('clearRestoredMediaTombstones', () => {
     const delivered = [];
     const onChange = (payload) => delivered.push(payload);
     peerSyncBus.on('media-history-changed', onChange);
-    await recordMediaTombstone('image', 'mine.png', new Date(Date.now() - 60_000).toISOString());
-    await recordMediaTombstone('image', 'theirs.png', new Date(Date.now() - 60_000).toISOString());
+    const deletedAt = new Date(Date.now() - 60_000).toISOString();
+    await recordMediaTombstone('image', 'mine.png', deletedAt);
+    await recordMediaTombstone('image', 'theirs.png', deletedAt);
     putBack('mine.png', 'inst-local');
     putBack('theirs.png', 'inst-peer');
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});
@@ -54,6 +57,43 @@ describe('clearRestoredMediaTombstones', () => {
     expect(await imageKeys()).toEqual(['theirs.png']);
     expect(delivered).toEqual([{ kind: 'image', op: 'upsert', ids: ['mine.png'] }]);
     expect(log.mock.calls.flat().join('\n')).toMatch(/Restored image theirs\.png keeps its delete record: owned by inst-peer/);
+    log.mockRestore();
+    // #14099: stamped past the delete, so a peer holding it admits the image.
+    expect(Date.parse(sidecarOf('mine.png').restoredAt)).toBeGreaterThan(Date.parse(deletedAt));
+    expect(sidecarOf('mine.png').createdAt).toBe('2026-01-01T00:00:00.000Z');
+    expect(sidecarOf('theirs.png')).not.toHaveProperty('restoredAt');
+  });
+
+  // A backup restore holds the snapshot cut while it reconciles; the image
+  // stamp takes the publication lease, so that caller defers images.
+  it('leaves restored images for a later pass when asked to skip them', async () => {
+    await recordMediaTombstone('image', 'later.png', new Date(Date.now() - 60_000).toISOString());
+    putBack('later.png', 'inst-local');
+
+    expect((await clearRestoredMediaTombstones({ images: false })).images).toEqual([]);
+    expect(await imageKeys()).toEqual(['later.png']);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    expect((await clearRestoredMediaTombstones()).images).toEqual(['later.png']);
+    log.mockRestore();
+  });
+
+  // A boot pass waiting on the publication lease must not hold up a restore's
+  // pass made under the snapshot cut, or each waits on the other forever.
+  it("a pass waiting on the cut does not block the cut holder's pass", async () => {
+    await recordMediaTombstone('image', 'cut.png', new Date(Date.now() - 60_000).toISOString());
+    putBack('cut.png', 'inst-local');
+    const { acquireBackupSnapshotCut } = await import('../lib/backupSnapshotBoundary.js');
+    const releaseCut = await acquireBackupSnapshotCut();
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    let boot;
+    try {
+      boot = clearRestoredMediaTombstones();
+      await expect(clearRestoredMediaTombstones({ images: false })).resolves.toEqual({ videos: [], images: [] });
+      expect(await imageKeys()).toEqual(['cut.png']);
+    } finally {
+      releaseCut();
+    }
+    expect((await boot).images).toEqual(['cut.png']);
     log.mockRestore();
   });
 

@@ -3,6 +3,7 @@ import { basename, join } from 'path';
 import { createHash } from 'crypto';
 import { atomicWrite, readJSONFile, sha256File, PATHS } from './fileUtils.js';
 import { isPlainObject, canonicalStringify, POLLUTING_KEYS } from './objects.js';
+import { compareNewerWins } from './lwwTimestamp.js';
 
 // Each image at `data/images/{uuid}.png` has a sibling `.metadata.json`
 // sidecar carrying its generation provenance (model, prompt, dimensions, etc).
@@ -201,6 +202,14 @@ export function stripImageSidecarLocalBytes(bytes) {
  */
 export function imageLiveStamp(sidecar, fileStat, { localInstanceId = null } = {}) {
   const meta = isPlainObject(sidecar) ? sidecar : {};
+  const created = createdStamp(meta, fileStat, localInstanceId);
+  // The owner stamps `restoredAt` past the delete when the user brings a
+  // deleted image back (mediaRestoreTombstones.js), so a peer still holding
+  // that delete admits the restored copy. It never makes a copy look older.
+  return compareNewerWins(meta.restoredAt, created) ? meta.restoredAt : created;
+}
+
+function createdStamp(meta, fileStat, localInstanceId) {
   if (typeof meta.createdAt === 'string' && Number.isFinite(Date.parse(meta.createdAt))) return meta.createdAt;
   if (typeof localInstanceId !== 'string' || !localInstanceId || meta.originInstanceId !== localInstanceId) return null;
   const ms = Number(fileStat?.mtimeMs);

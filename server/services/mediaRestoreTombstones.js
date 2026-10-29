@@ -15,8 +15,13 @@
  *
  * Only an item this machine owns (`originInstanceId`) is un-deleted here; a
  * peer-owned one keeps its tombstone and follows its owner's delete. A restored
- * video row is stamped `restoredAt` past the delete, so a peer still holding
- * the tombstone admits it (videoRowLiveStamp) and drops its copy of the tombstone.
+ * video row or image sidecar is stamped `restoredAt` past the delete, so a peer
+ * still holding the tombstone admits it (videoRowLiveStamp, imageLiveStamp) and
+ * drops its copy of the tombstone.
+ *
+ * The image stamp is a sidecar write, which takes the backup asset-publication
+ * lease, so a backup restore (which holds the snapshot cut while it reconciles)
+ * defers images to a second pass after it releases its owners.
  *
  * The same pass first settles a delete a crash left in flight (its tombstone
  * recorded but never committed or withdrawn, mediaTombstones.js): the file
@@ -25,7 +30,8 @@
  */
 import { stat } from 'fs/promises';
 import { join } from 'path';
-import { PATHS } from '../lib/fileUtils.js';
+import { PATHS, atomicWrite } from '../lib/fileUtils.js';
+import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 import { safeUnder } from '../lib/ffmpeg.js';
 import { isSafeFilename } from '../lib/pathSafety.js';
 import { parseTsMs } from '../lib/lwwTimestamp.js';
@@ -145,17 +151,20 @@ async function restoredImages(local) {
     for (const { key } of await listMediaTombstones('image')) {
       if (!isSafeFilename(key, ['.png'])) continue;
       // Inside the per-image queue deleteImage records and trashes under, for
-      // the same reason the video check runs inside the history writer.
-      const restored = await sidecarEditQueue(key, async () => {
+      // the same reason the video check runs inside the history writer. The
+      // stamp lands before the tombstone clears: a crash in between leaves the
+      // tombstone for the next pass rather than a restored image peers refuse.
+      const restored = await withBackupAssetPublication(() => sidecarEditQueue(key, async () => {
         const tombstone = (await listMediaTombstones('image')).find((t) => t.key === key);
         if (!tombstone || !(await reappearedAfter(join(PATHS.images, key), tombstone.deletedAt))) return false;
-        const { metadata } = await readImageSidecar(key);
+        const { path, metadata } = await readImageSidecar(key);
         if (metadata?.originInstanceId !== local) {
           keptLog('image', key, metadata?.originInstanceId);
           return false;
         }
+        await atomicWrite(path, { ...metadata, restoredAt: supersedingTimestamp(tombstone.deletedAt) });
         return clearMediaTombstone('image', key, { deletedAt: tombstone.deletedAt });
-      });
+      }));
       if (restored) cleared.push(key);
     }
   } finally {
@@ -165,25 +174,36 @@ async function restoredImages(local) {
   return cleared;
 }
 
+// Two queues: the restored-image pass takes the backup publication lease, so a
+// pass waiting on it while a restore holds the snapshot cut must not hold up
+// the restore's own lease-free pass (settling, videos) behind it.
 let tail = Promise.resolve();
+let imageTail = Promise.resolve();
+
+function serialized(queue, work) {
+  const run = queue.then(work);
+  return [run, run.then(() => {}, () => {})];
+}
 
 /**
  * Settle every delete a crash left in flight, then clear the tombstone of
  * every locally owned video row and gallery image that came back after its
  * delete, and announce the restored rows to peers.
  * Serialized: the backup restore and the boot reconcile may overlap.
+ * `images: false` skips the restored-image pass, for a caller holding the
+ * backup snapshot cut (the image stamp would wait on that cut).
  * Resolves `{ videos, images }`, the restored keys.
  */
-export function clearRestoredMediaTombstones() {
-  const run = tail.then(async () => {
+export async function clearRestoredMediaTombstones({ images: includeImages = true } = {}) {
+  let run;
+  [run, tail] = serialized(tail, async () => {
     await resolveInFlightVideos();
     await resolveInFlightImages();
     const local = await localInstanceId();
-    if (!local) return { videos: [], images: [] };
-    const videos = await restoredVideos(local);
-    const images = await restoredImages(local);
-    return { videos, images };
+    return { local, videos: local ? await restoredVideos(local) : [] };
   });
-  tail = run.then(() => {}, () => {});
-  return run;
+  const { local, videos } = await run;
+  if (!local || !includeImages) return { videos, images: [] };
+  [run, imageTail] = serialized(imageTail, () => restoredImages(local));
+  return { videos, images: await run };
 }
