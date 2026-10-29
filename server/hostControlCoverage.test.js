@@ -1589,6 +1589,7 @@ const REVIEWED_PROCESS_GETS = [
   ['GET /api/models/performance/task-benchmark', TOOLKIT_INJECTED],
   ['GET /api/music-video', JOB_TABLE],
   ['GET /api/music-video/:id', JOB_TABLE],
+  ['GET /api/music-video/:id/cast-and-sets/casting-changes', "Rebuilds the Cast & Sets image plan from stored records and the linked Casting records' media to compare reference images; the trace reaches the provider runner through the service's test-seam `deps` defaults, but this read calls only the catalog reads and queues or runs nothing."],
   ['GET /api/music-video/:id/film-looks', MUSIC_VIDEO_PLAN_READ],
   ['GET /api/music-video/:id/media-pool/library', 'Searches stored media for the pool; the trace reaches the local image backend whole through a namespace import, while the handler reads only its gallery records.'],
   ['GET /api/music-video/:id/media-pool/search', 'Searches stored media for the pool; the trace reaches the local image backend whole through a namespace import, while the handler reads only its gallery records.'],
