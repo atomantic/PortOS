@@ -36,7 +36,7 @@ import { trimTo } from '../../lib/textUtils.js';
 import { isOutsideMusicVideoReference } from '../../lib/musicVideoConditioning.js';
 // A sentence naming a person or the protagonist puts someone in an empty plate.
 import { withoutPeople } from '../../lib/musicVideoCreativeContext.js';
-import { CAST_SETS_SUBJECT_PREFIX, fixedCasting, formSubjects, leadingAge, musicVideoLipSyncs, songSections, subjectNameParts } from './castAndSetsDirection.js';
+import { CAST_SETS_SUBJECT_PREFIX, fixedCasting, fixedSupportingCast, formSubjects, leadingAge, musicVideoLipSyncs, songSections, subjectNameParts } from './castAndSetsDirection.js';
 
 export const CAST_SETS_IMAGE_SIZE = Object.freeze({ width: 1536, height: 1024 });
 // Mirrors MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES / the visual spec's list cap.
@@ -457,6 +457,8 @@ export function noteImageKeys(target, plan) {
  * themselves), then the supporting cast sheets (conditioning only the shots
  * that feature them), then the looks and expression sheets as unconditioned
  * reference. Replaces any earlier Cast & Sets references; keeps the director's.
+ * Room in the list is held for the sheets of the catalog-linked supporting
+ * characters the director cast, so nothing else pushes one of them out.
  */
 export function castAndSetsReferences(project, stage) {
   const existing = (project?.visualSpec?.references || []).filter((r) => !String(r.id || '').startsWith(CAST_SETS_REF_PREFIX));
@@ -464,16 +466,19 @@ export function castAndSetsReferences(project, stage) {
   let room = Math.max(0, MAX_REFERENCES - existing.length);
   const images = stage?.images || {};
   const direction = stage?.direction || {};
+  const fixed = new Set(fixedSupportingCast(project).map((f) => f.name.toLowerCase()));
+  const isFixed = (c) => fixed.has(String(c.name || '').trim().toLowerCase()) && Boolean(images[`cast:${c.id}`]?.imageId);
+  let held = (direction.cast || []).filter(isFixed).length;
   const out = [];
-  const push = (ref, wantsCondition) => {
-    if (!ref.imageId || room <= 0) return;
+  const push = (ref, wantsCondition, { sheet = false } = {}) => {
+    if (!ref.imageId || room - (sheet ? 0 : held) <= 0) return;
     const condition = wantsCondition && budget > 0;
     if (condition) budget -= 1;
     room -= 1;
     out.push({ ...ref, condition, use: 'reference' });
   };
   const p = direction.protagonist || {};
-  push({ id: `${CAST_SETS_REF_PREFIX}character`, imageId: images.character?.imageId, role: 'character', label: `${p.name || 'Protagonist'} — character sheet`, note: trimTo([p.face, p.hair, p.signature].filter(Boolean).join('; '), 1000) }, true);
+  push({ id: `${CAST_SETS_REF_PREFIX}character`, imageId: images.character?.imageId, role: 'character', label: `${p.name || 'Protagonist'} — character sheet`, note: trimTo([p.face, p.hair, p.signature].filter(Boolean).join('; '), 1000) }, true, { sheet: true });
   const cover = setCoverage(project, direction);
   const plates = [...(direction.sets || [])].sort((a, b) => (cover.get(b.id) || 0) - (cover.get(a.id) || 0));
   for (const set of plates) {
@@ -487,11 +492,31 @@ export function castAndSetsReferences(project, stage) {
   }
   // Cast sheets condition only the shots that feature them (musicVideoConditioningReferences).
   for (const c of direction.cast || []) {
-    push({ id: `${CAST_SETS_REF_PREFIX}cast-${c.id}`.slice(0, 64), imageId: images[`cast:${c.id}`]?.imageId, role: 'character', label: `${trimTo(c.name, 80)} — cast sheet`, note: trimTo([c.role, c.face, c.hair, c.wardrobe].filter(Boolean).join('; '), 1000) }, false);
+    const sheet = isFixed(c);
+    if (sheet) held -= 1;
+    push({ id: castReferenceId(c), imageId: images[`cast:${c.id}`]?.imageId, role: 'character', label: `${trimTo(c.name, 80)} — cast sheet`, note: trimTo([c.role, c.face, c.hair, c.wardrobe].filter(Boolean).join('; '), 1000) }, false, { sheet });
   }
   push({ id: `${CAST_SETS_REF_PREFIX}looks`, imageId: images.looks?.imageId, role: 'wardrobe', label: 'Looks', note: trimTo((direction.looks || []).map((l) => l.name).join(', '), 1000) }, false);
   push({ id: `${CAST_SETS_REF_PREFIX}expressions`, imageId: images.expressions?.imageId, role: 'character', label: 'Expression sheet', note: trimTo(p.gesture, 1000) }, false);
   return [...existing, ...out];
+}
+
+const castReferenceId = (c) => `${CAST_SETS_REF_PREFIX}cast-${c.id}`.slice(0, 64);
+
+/**
+ * The catalog-linked supporting characters whose rendered cast sheet is not in
+ * `references` (castAndSetsReferences ran out of room): an approval must refuse
+ * rather than publish a check-in that silently lost their sheets.
+ */
+export function fixedCastSheetsWithoutReference(project, stage, references) {
+  const fixed = new Set(fixedSupportingCast(project).map((f) => f.name.toLowerCase()));
+  return (stage?.direction?.cast || [])
+    .filter((c) => {
+      const imageId = stage.images?.[`cast:${c.id}`]?.imageId;
+      return fixed.has(String(c.name || '').trim().toLowerCase()) && imageId
+        && !(references || []).some((r) => r.id === castReferenceId(c) && r.imageId === imageId);
+    })
+    .map((c) => c.name);
 }
 
 /**
