@@ -1,0 +1,36 @@
+name: Poster Chrome investigation
+
+# Explicitly dispatched diagnostic; it does not affect required CI or publish caches.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  matrix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 26.x
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+      - name: Install identical dependencies
+        env:
+          ONNXRUNTIME_NODE_INSTALL_CUDA: skip
+        run: |
+          npm ci --prefix server
+          npm ci --prefix autofixer
+          node scripts/trusted-rebuilds.js server
+          git submodule update --init lib/slashdo
+      - name: Run finite paired comparison
+        env:
+          PORTOS_CI_BROWSER_OWNER: unit
+          PORTOS_TEST_QUIET: 1
+          PGPASSWORD: portos
+        run: node scripts/posterCiMatrix.js
