@@ -1141,7 +1141,22 @@ it('keeps catalog-linked cast and places as fixed casting, conditioned on their 
 
 // #14069: five catalog-linked supporting characters, more than the invented-cast allowance.
 const FIXED_SUPPORTING = ['Anika', 'Boris', 'Cyrus', 'Delia', 'Elio'];
-const fixedCastProject = (extra = {}) => seed({
+const fixedCastProject = (extra = {}) => {
+  // Casting images the plan conditions each linked character's sheet on.
+  onDisk('keeper.png', ...FIXED_SUPPORTING.map((name) => `${name.toLowerCase()}.png`));
+  const records = { 'cat-lead': { id: 'cat-lead', type: 'character', name: 'Keeper', payload: {} } };
+  const media = { 'cat-lead': [{ mediaKey: 'keeper.png', kind: 'portrait' }] };
+  FIXED_SUPPORTING.forEach((name, i) => {
+    records[`cat-${i}`] = { id: `cat-${i}`, type: 'character', name, payload: {} };
+    media[`cat-${i}`] = [{ mediaKey: `${name.toLowerCase()}.png`, kind: 'portrait' }];
+  });
+  service.__setCastAndSetsDepsForTests(testDeps({ catalog: {
+    getIngredient: async (id) => records[id] || null,
+    listMediaForIngredient: async (id) => media[id] || [],
+  } }));
+  return seedFixedCast(extra);
+};
+const seedFixedCast = (extra = {}) => seed({
   concept: { prompt: 'a vigil', subjects: [
     { id: 'mvc-lead', kind: 'character', name: 'Keeper', role: 'protagonist', ingredientId: 'cat-lead' },
     ...FIXED_SUPPORTING.map((name, i) => ({ id: `mvc-${i}`, kind: 'character', name, role: i === 4 ? 'band' : 'supporting', description: `${name} from the catalog`, ingredientId: `cat-${i}` })),
