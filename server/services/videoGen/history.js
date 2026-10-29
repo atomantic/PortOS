@@ -107,19 +107,26 @@ export async function getHistoryItem(id) {
 // file is not rewritten (an idempotent replay stays a true no-op).
 export const HISTORY_UNCHANGED = Symbol('video-history-unchanged');
 let historyWriteTail = Promise.resolve();
-// Rows this mutation ADDS get `originInstanceId` (the machine that created the
-// row; immutable once set). Peer merges pass `{ stampOrigin: false }` because
-// rows they add were created elsewhere. The id is stamped only when known.
+// `originInstanceId` (the machine that created the row) is immutable once set:
+// a row rebuilt under a known id inherits the prior row's origin, and only
+// genuinely new ids get the local id. Peer merges pass `{ stampOrigin: false }`
+// because rows they add were created elsewhere. Stamped only when the id is known.
 export function mutateVideoHistory(mutator, { stampOrigin = true } = {}) {
   const run = historyWriteTail.then(async () => {
     const history = await loadHistory();
     const base = Array.isArray(history) ? history : [];
-    const knownIds = stampOrigin ? new Set(base.map((r) => r?.id)) : null;
+    // Captured before the mutator, which may edit rows in place.
+    const priorOrigins = stampOrigin ? new Map(base.map((r) => [r?.id, r?.originInstanceId])) : null;
     const next = await mutator(base);
     if (next === HISTORY_UNCHANGED) return history;
     const toSave = Array.isArray(next) ? next : history;
     if (stampOrigin && Array.isArray(toSave)) {
-      const fresh = toSave.filter((r) => r && typeof r === 'object' && !r.originInstanceId && !knownIds.has(r.id));
+      const fresh = [];
+      for (const r of toSave) {
+        if (!r || typeof r !== 'object' || r.originInstanceId) continue;
+        if (!priorOrigins.has(r.id)) fresh.push(r);
+        else if (priorOrigins.get(r.id)) r.originInstanceId = priorOrigins.get(r.id);
+      }
       if (fresh.length > 0) {
         // Lazy: identity pulls in fileUtils at load; a stamping failure must never lose the row.
         const origin = await import('../instanceIdentity.js')

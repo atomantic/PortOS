@@ -924,12 +924,14 @@ async function getVideoHistorySnapshot() {
   // but strip `hidden` itself so the checksum is hide-state-independent and the
   // flag doesn't propagate (the receiver keeps its own local `hidden` because
   // the immutable-`createdAt` LWW merge keeps the existing row on a tie).
+  // `suppliedByInstanceId` is likewise MACHINE-LOCAL (who handed THIS machine the
+  // row); stripped so identical row sets hash identically. `originInstanceId` syncs.
   // Canonicalize ordering for the wire so two peers holding identical sets
   // produce identical checksums regardless of insertion (newest-first) order.
   // Mirrors getMediaCollectionsSnapshot's sort-by-id rationale.
   const data = {
     videos: rows
-      .map(({ hidden, ...rest }) => rest) // eslint-disable-line no-unused-vars
+      .map(({ hidden, suppliedByInstanceId, ...rest }) => rest) // eslint-disable-line no-unused-vars
       .sort((a, b) => a.id.localeCompare(b.id)),
   };
   // Deliberate deletes ride the snapshot so a peer still holding the row can't
@@ -989,19 +991,19 @@ async function applyVideoHistoryRemote(remoteData, source) {
     const before = new Map(keyed.map((r) => [r.id, r]));
     const { merged: rawMerged, changed } = mergeArraysByKey(
       keyed,
-      incoming.filter(hasId),
+      // suppliedByInstanceId is local-only: never trust a sender's value.
+      incoming.filter(hasId).map(({ suppliedByInstanceId, ...rest }) => rest), // eslint-disable-line no-unused-vars
       'id',
       'createdAt',
     );
     if (!changed) return HISTORY_UNCHANGED;
-    // Origin is immutable once set; rows new to this machine record who supplied
-    // them (this sender) so a later fetch knows where the bytes can come from.
+    // Origin is immutable once set. suppliedBy is local-only: kept from the local
+    // row, or set to this sender only when the row is newly added here.
     const merged = rawMerged.map((row) => {
       const prev = before.get(row.id);
       if (prev === row) return row;
       const originInstanceId = prev?.originInstanceId ?? row.originInstanceId;
-      const suppliedByInstanceId = row.suppliedByInstanceId ?? prev?.suppliedByInstanceId
-        ?? (source?.peerId ? source.peerId : undefined);
+      const suppliedByInstanceId = prev ? prev.suppliedByInstanceId : source?.peerId;
       return {
         ...row,
         ...(originInstanceId ? { originInstanceId } : {}),

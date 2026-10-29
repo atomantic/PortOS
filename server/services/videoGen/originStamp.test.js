@@ -42,6 +42,28 @@ describe('video row origin stamping', () => {
   });
 });
 
+describe('origin and supplier invariants', () => {
+  it('a row rebuilt under a known id keeps its origin; stampOrigin:false skips', async () => {
+    await mutateVideoHistory((h) => { h.unshift({ id: 'r', createdAt: '2026-04-01T00:00:00Z', originInstanceId: 'peer-o' }); return h; }, { stampOrigin: false });
+    await mutateVideoHistory((h) => [{ id: 'r', createdAt: '2026-04-02T00:00:00Z' }, ...h.filter((x) => x.id !== 'r')]);
+    await mutateVideoHistory((h) => { h.unshift({ id: 'n', createdAt: '2026-04-03T00:00:00Z' }); return h; }, { stampOrigin: false });
+    const h = await loadHistory();
+    expect(h.find((x) => x.id === 'r').originInstanceId).toBe('peer-o');
+    expect(h.find((x) => x.id === 'n').originInstanceId).toBeUndefined();
+  });
+
+  it('suppliedBy never rides the snapshot and a foreign incoming value is dropped', async () => {
+    await mutateVideoHistory((h) => { h.unshift({ id: 's', createdAt: '2026-05-01T00:00:00Z', suppliedByInstanceId: 'X' }); return h; }, { stampOrigin: false });
+    const a = await dataSync.getSnapshot('videoHistory');
+    await mutateVideoHistory((h) => { h.find((x) => x.id === 's').suppliedByInstanceId = 'Y'; return h; }, { stampOrigin: false });
+    const b = await dataSync.getSnapshot('videoHistory');
+    expect(a.checksum).toBe(b.checksum);
+    expect(JSON.stringify(a.data)).not.toContain('suppliedBy');
+    await dataSync.applyRemote('videoHistory', { videos: [{ id: 'f', createdAt: '2026-06-01T00:00:00Z', suppliedByInstanceId: 'foreign' }] }, { peerId: 'peer-a' });
+    expect((await loadHistory()).find((x) => x.id === 'f').suppliedByInstanceId).toBe('peer-a');
+  });
+});
+
 describe('rowOwnerCandidates', () => {
   it('orders, dedupes, and returns [] when nothing is known', () => {
     const idx = { 'video:x.mp4': { peerId: 'p2' }, 'image:x.mp4': { peerId: 'p1' }, 'video:y.mp4': { peerId: 'p9' } };
