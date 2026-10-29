@@ -35,6 +35,8 @@ vi.mock('./fileUtils.js', async (importOriginal) => {
 afterAll(cleanupTempDataRoots);
 
 const { sidecarPathForImage, getOrComputeImageSha256, sidecarGenParamsHash, sidecarMatchesGenParamsHash } = await import('./assetHash.js');
+// Loading the gallery service registers its edit-queue writer, as server boot does.
+await import('../services/imageGen/local.js');
 
 let imageDir;
 

@@ -48,6 +48,7 @@ import { hardwareUnavailableReason, isHardwareCompatible } from '../../lib/syste
 import { usesDiffusersRunner, flux2Bf16BaseRepo } from '../../lib/runners.js';
 import { weaveLoraTriggers } from '../../lib/loraTriggers.js';
 import { provenanceForRender } from '../../lib/assetProvenance.js';
+import { registerGallerySha256Writer } from '../../lib/assetHash.js';
 import { recordMediaTombstone, clearMediaTombstone } from '../mediaTombstones.js';
 import { withLocalImageOrigin } from './imageRecords.js';
 import { readImageSidecar, refreshImageIndex, sidecarEditQueue, editImageSidecar } from './sidecarStore.js';
@@ -1587,6 +1588,7 @@ export function cacheImageSha256(filename, entry) {
     return { ...metadata };
   }, { reindex: false });
 }
+registerGallerySha256Writer(cacheImageSha256);
 
 // Returns just `{ filename, name }` — clients send `filename` back in the
 // generate payload's `loraFilenames` and the server resolves it against

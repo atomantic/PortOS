@@ -84,17 +84,27 @@ export async function getOrComputeImageSha256(imagePath) {
   }
   // The write goes through the gallery sidecar edit queue so it re-reads the
   // CURRENT sidecar; a read-modify-write here would drop an edit (hidden flag,
-  // supplying peer, ...) that landed after our read above. services/ is
-  // imported dynamically because lib/ must not depend on it statically. A
-  // missing sidecar stays missing; a failed write is logged but the hash is
-  // still valid for this call.
-  const merged = await import('../services/imageGen/local.js')
-    .then(({ cacheImageSha256 }) => cacheImageSha256(filename, entry))
+  // supplying peer, ...) that landed after our read above. The queue lives in
+  // services/, which registers its writer here (lib never imports upward). With
+  // no writer registered the cache is simply not persisted: the hash is still
+  // valid for this call and is recomputed next time. A failed write is logged.
+  if (!gallerySha256Writer) return { hash, sidecar: fallback };
+  const merged = await Promise.resolve()
+    .then(() => gallerySha256Writer(filename, entry))
     .catch((err) => {
       console.error(`⚠️ assetHash: sidecar write failed for ${sidecarPath}: ${err?.message || err}`);
       return null;
     });
   return { hash, sidecar: merged || fallback };
+}
+
+let gallerySha256Writer = null;
+/**
+ * Register the gallery sidecar edit-queue writer `(filename, entry) => merged | null`
+ * that persists the hash cache (services/imageGen/local.js `cacheImageSha256`).
+ */
+export function registerGallerySha256Writer(writer) {
+  gallerySha256Writer = typeof writer === 'function' ? writer : null;
 }
 
 /**
