@@ -172,17 +172,18 @@ export function stripImageSidecarLocalBytes(bytes) {
  *
  * The sidecar's `createdAt` is the stamp whenever it has one; it travels with
  * the sidecar, so every machine sees the same time. The file's modify time is a
- * stamp ONLY for a copy made on this machine (no supplier recorded, and the
- * origin absent or `localInstanceId`): a pulled, copied or restored file is
- * born when it lands, so its file time would make the deleted image look newer
- * than its delete and bring it back. Birth time is never used, for the same reason.
+ * stamp ONLY when the sidecar names THIS machine as the image's origin. Any other
+ * copy (pulled, imported, restored, synced by an older peer, or with no origin
+ * at all) may have landed after the delete, and its file time would make the
+ * deleted image look newer than its delete and bring it back. An origin-less
+ * copy has no owner candidates either, so a peer's tombstone cannot reach it and
+ * the stricter stamp never deletes anything a peer could not already delete.
+ * Birth time is never used: copies and restores set it.
  */
 export function imageLiveStamp(sidecar, fileStat, { localInstanceId = null } = {}) {
   const meta = isPlainObject(sidecar) ? sidecar : {};
   if (typeof meta.createdAt === 'string' && Number.isFinite(Date.parse(meta.createdAt))) return meta.createdAt;
-  const supplied = typeof meta.suppliedByInstanceId === 'string' && meta.suppliedByInstanceId !== '';
-  const foreign = typeof meta.originInstanceId === 'string' && meta.originInstanceId !== '' && meta.originInstanceId !== localInstanceId;
-  if (supplied || foreign) return null;
+  if (typeof localInstanceId !== 'string' || !localInstanceId || meta.originInstanceId !== localInstanceId) return null;
   const ms = Number(fileStat?.mtimeMs);
   return Number.isFinite(ms) && ms > 0 ? new Date(ms).toISOString() : null;
 }

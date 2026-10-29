@@ -9,7 +9,7 @@
 import { existsSync } from 'fs';
 import { stat } from 'fs/promises';
 import { join } from 'path';
-import { PATHS, readJSONFile } from '../../lib/fileUtils.js';
+import { PATHS, readJSONFile, atomicWrite } from '../../lib/fileUtils.js';
 import { isPlainObject } from '../../lib/objects.js';
 import { isNonBlankStr } from '../../lib/textUtils.js';
 import { stripImageSidecarLocalFields, imageLiveStamp } from '../../lib/assetHash.js';
@@ -40,8 +40,8 @@ async function readSidecar(filename) {
  * The image held here as a record, `{ filename, createdAt?, originInstanceId?,
  * suppliedByInstanceId?, pendingDelete?, hidden? }`, or null when neither its
  * bytes nor its sidecar are on this machine. `createdAt` is the live stamp a
- * tombstone must postdate (imageLiveStamp: the sidecar's, else the file's for a
- * copy made here), so a stale delete of an earlier image under a re-used name
+ * tombstone must postdate (imageLiveStamp: the sidecar's, else the file's when
+ * the sidecar names this machine as origin), so a stale delete of an earlier image under a re-used name
  * spares this one; absent means the copy counts as older than any tombstone.
  */
 export async function readHeldImage(filename) {
@@ -77,6 +77,21 @@ export async function withLocalImageOrigin(meta) {
   if (typeof rest.createdAt !== 'string' || !Number.isFinite(Date.parse(rest.createdAt))) rest.createdAt = new Date().toISOString();
   const id = await localInstanceId();
   return id ? { ...rest, originInstanceId: id } : rest;
+}
+
+/**
+ * Give an image this machine just wrote without a sidecar (a mood-board copy,
+ * a plain external render) one naming this machine as origin with its creation
+ * time, so its age and owner travel with it. An existing sidecar is left as it
+ * is: origin is set once. Call inside the writer's backup lease.
+ */
+export async function writeLocalImageSidecarIfMissing(filename) {
+  if (!isSafeFilename(filename, ['.png', '.jpg', '.jpeg', '.webp', '.gif', '.avif'])) return false;
+  const stem = filename.replace(/\.[^.]+$/, '');
+  const paths = [join(PATHS.images, `${stem}.metadata.json`), join(PATHS.images, `${filename}.metadata.json`)];
+  if (paths.some((path) => existsSync(path))) return false;
+  await atomicWrite(paths[0], await withLocalImageOrigin({}));
+  return true;
 }
 
 async function stampRenderOrigin(payload) {
@@ -139,6 +154,8 @@ export async function applyRemoteImageTombstones(remoteTombstones) {
  * Admit image tombstones from `peer` through the shared rule, then apply them:
  * a held image goes through the full delete, and an event's tombstone for an
  * image not held here is only recorded (a manifest's is refused; see the rule).
+ * A tombstone this machine already holds is not re-admitted; it only retires a
+ * copy here that it outdates.
  * Resolves `{ removed, recorded, refused }`.
  */
 export async function admitPeerImageTombstones(peer, tombstones, { via = 'snapshot', eventOriginInstanceId = null } = {}) {
@@ -161,7 +178,13 @@ export async function admitPeerImageTombstones(peer, tombstones, { via = 'snapsh
   let refused = 0;
   for (const tombstone of list) {
     if (!isGalleryName(tombstone?.key)) { refused++; continue; }
-    if (alreadyApplied(tombstone)) continue;
+    if (alreadyApplied(tombstone)) {
+      // This machine already holds this delete (its own, or one admitted
+      // earlier). A copy that came back by a path the filter does not cover is
+      // retired again when the copy is older than it (applyRemoteImageTombstones).
+      if (existsSync(join(PATHS.images, tombstone.key))) held.push(tombstone);
+      continue;
+    }
     const localRow = await readHeldImage(tombstone.key);
     const verdict = authorizeRemoteMediaTombstone({ peer, tombstone, localRow, hostedIndex, via, eventOriginInstanceId });
     if (!verdict.allowed) refused++;

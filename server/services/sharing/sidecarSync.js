@@ -156,20 +156,25 @@ export async function pullSidecarForImage(peer, base, imageFilename) {
 }
 
 /**
- * Record `peerInstanceId` as the supplier of an image just pulled here, unless
- * a supplier is already recorded (pullSidecarForImage sets it when the peer had
- * a sidecar). Creates a sidecar holding only that machine-local field when the
- * peer had none; it adds no gen-params, so the manifest hash is unchanged.
+ * Record `peerInstanceId` as the supplier of a gallery image just pulled here,
+ * unless a supplier is already recorded (pullSidecarForImage sets it when the
+ * peer had a sidecar) or the sidecar here already carries the image's
+ * gen-params: that image was held here (only its bytes were missing), and as in
+ * mergePeerSidecar a held image never takes a peer as its supplier. Creates a
+ * sidecar holding only that machine-local field when there was none; it adds no
+ * gen-params, so the manifest hash is unchanged. Runs under the sidecar edit
+ * queue, so a concurrent hide or prompt edit cannot drop it.
  */
 export async function recordImageSupplier(imageFilename, peerInstanceId) {
   const safeName = sanitizeAssetFilename(imageFilename);
-  if (!safeName || !isStr(peerInstanceId)) return false;
-  const sidecarPath = join(PATHS.images, imageSidecarName(safeName));
-  const existing = await readJSONFile(sidecarPath, null, { strict: true });
-  if (existing !== null && !isPlainObject(existing)) return false;
-  if (isStr(existing?.suppliedByInstanceId)) return false;
-  await atomicWrite(sidecarPath, { ...(existing || {}), suppliedByInstanceId: peerInstanceId });
-  return true;
+  if (!safeName || !/\.png$/i.test(safeName) || !isStr(peerInstanceId)) return false;
+  const { editImageSidecar } = await import('../imageGen/sidecarStore.js');
+  const changed = await editImageSidecar(safeName, (metadata) => {
+    if (!isPlainObject(metadata) || isStr(metadata.suppliedByInstanceId) || sidecarGenParamsHash(metadata) !== null) return null;
+    metadata.suppliedByInstanceId = peerInstanceId;
+    return true;
+  });
+  return changed === true;
 }
 
 /**

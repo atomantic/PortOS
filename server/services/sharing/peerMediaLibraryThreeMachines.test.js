@@ -5,10 +5,11 @@
  * when it lands, so a file-time stamp would make C's copy look newer than A's
  * delete. C would keep it and advertise that, A would pull it back, and the
  * image would be back everywhere. Every machine runs the real sweep, manifest,
- * sidecar pull and admission code on its own data root.
+ * sidecar pull and admission code on its own data root. C's copy is pinned an
+ * hour after the delete, so the result never depends on pull speed.
  */
 import { afterAll, describe, expect, it, vi } from 'vitest';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { createTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
@@ -84,7 +85,13 @@ const on = async (m, fn) => {
   return fn();
 };
 const sweep = (receiver, sender) => on(receiver, () => syncMediaLibraryFromPeer(peerRecord(sender)));
-const holds = (m) => existsSync(join(machines.roots[m], 'images', 'upload-1.png'));
+const holds = (m, name = 'upload-1.png') => existsSync(join(machines.roots[m], 'images', name));
+// Land C's copy an hour after the delete, so the outcome never depends on how
+// fast the pull ran: a file-time stamp would always look newer than the delete.
+const landLater = (m, name) => {
+  const later = new Date(Date.now() + 60 * 60 * 1000);
+  utimesSync(join(machines.roots[m], 'images', name), later, later);
+};
 
 afterAll(() => { rmSync(base, { recursive: true, force: true }); });
 
@@ -106,6 +113,7 @@ describe('a deleted image across three machines', () => {
     // C returns and syncs with B first, so it copies the image after the delete.
     await sweep('c', 'b');
     expect(holds('c')).toBe(true);
+    landLater('c', 'upload-1.png');
 
     // A sweeps C: C's copy carries no creation stamp, so A keeps the name blocked.
     await sweep('a', 'c');
@@ -123,6 +131,36 @@ describe('a deleted image across three machines', () => {
 
     // Further sweeps in every direction bring nothing back.
     for (const [receiver, sender] of [['a', 'b'], ['a', 'c'], ['b', 'c'], ['c', 'b'], ['b', 'a']]) await sweep(receiver, sender);
-    expect(['a', 'b', 'c'].filter(holds)).toEqual([]);
+    expect(['a', 'b', 'c'].filter((m) => holds(m))).toEqual([]);
+  });
+
+  it('a sidecar-less image deleted by its holder is relayed to a machine that never heard from it', async () => {
+    // A holds a copy with no sidecar at all (no origin, no stamp); B copies it
+    // from A, recording A as supplier because A sent no sidecar.
+    await on('a', () => writeFileSync(join(machines.roots.a, 'images', 'relay-1.png'), Buffer.from('synthetic-relay-bytes')));
+    await sweep('b', 'a');
+    const bSidecar = JSON.parse(readFileSync(join(machines.roots.b, 'images', 'relay-1.metadata.json'), 'utf8'));
+    expect(bSidecar.suppliedByInstanceId).toBe('inst-a');
+
+    await on('a', () => deleteImage('relay-1.png'));
+    // C copies it from B after the delete, B recorded as its supplier.
+    await sweep('c', 'b');
+    expect(holds('c', 'relay-1.png')).toBe(true);
+    landLater('c', 'relay-1.png');
+
+    // A never pulls it back from C: C's copy carries no creation stamp.
+    await sweep('a', 'c');
+    expect(holds('a', 'relay-1.png')).toBe(false);
+    // A is not C's supplier, so C refuses A's delete directly...
+    await sweep('c', 'a');
+    expect(holds('c', 'relay-1.png')).toBe(true);
+    // ...but B, supplied by A, takes it and relays it, and C accepts it from B.
+    await sweep('b', 'a');
+    expect(holds('b', 'relay-1.png')).toBe(false);
+    await sweep('c', 'b');
+    expect(holds('c', 'relay-1.png')).toBe(false);
+
+    for (const [receiver, sender] of [['a', 'b'], ['a', 'c'], ['b', 'c'], ['c', 'a']]) await sweep(receiver, sender);
+    expect(['a', 'b', 'c'].filter((m) => holds(m, 'relay-1.png'))).toEqual([]);
   });
 });

@@ -17,6 +17,7 @@ import { fetchWithTimeout } from '../../lib/fetchWithTimeout.js';
 import { autoCleanGeneratedImage } from '../../lib/imageClean.js';
 import { imageGenEvents } from '../imageGenEvents.js';
 import { IMAGE_GEN_MODE } from './modes.js';
+import { writeLocalImageSidecarIfMissing } from './imageRecords.js';
 
 const PROGRESS_POLL_INTERVAL = 500;
 const IMAGE_PREVIEW_THROTTLE = 2000;
@@ -159,12 +160,16 @@ export async function generateImage({ sdapiUrl, prompt, negativePrompt, width, h
       await ensureDir(PATHS.images);
       const filename = `${randomUUID()}.png`;
       const pngPath = join(PATHS.images, filename);
-      const sidecarPath = visualProfile ? join(PATHS.images, `${filename.slice(0, -4)}.metadata.json`) : null;
-      return publishImageFiles([pngPath, ...(sidecarPath ? [sidecarPath] : [])], async () => {
+      const ownSidecarPath = join(PATHS.images, `${filename.slice(0, -4)}.metadata.json`);
+      const sidecarPath = visualProfile ? ownSidecarPath : null;
+      return publishImageFiles([pngPath, ownSidecarPath], async () => {
         await atomicWrite(pngPath, Buffer.from(data.images[0], 'base64'));
         const reason = await rejectDegenerateFrame(pngPath);
         if (reason) throw new ServerError(reason, { status: 502, code: 'DEGENERATE_FRAME' });
         if (sidecarPath) await atomicWrite(sidecarPath, JSON.stringify({ prompt, negativePrompt, width, height, steps, cfgScale, seed, model, mode: IMAGE_GEN_MODE.EXTERNAL, generationId, createdAt: new Date().toISOString(), visualProfile, visualProfileRevision, promptAdditions }, null, 2));
+        // A plain render keeps its PNG-only finishing, but still records that
+        // it was made here and when, for remote delete and tombstones.
+        else await writeLocalImageSidecarIfMissing(filename);
         // Auto-clean BEFORE the SSE complete fires so the URL the client opens
         // serves the cleaned bytes. Profile renders also preserve their source
         // metadata; legacy renders keep the existing PNG-only behavior.

@@ -21,7 +21,7 @@ import { join, dirname, resolve as resolvePath, sep as PATH_SEP, basename } from
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
 import { trashFiles } from '../../lib/trashFiles.js';
-import { atomicWrite, assertSafeFilename, detectImageFormat, ensureDir, listDirectoryByExtension, PATHS, safeJSONParse, resolveImageInputPath, tryReadFile, rmGuarded, unlinkGuarded } from '../../lib/fileUtils.js';
+import { atomicWrite, assertSafeFilename, detectImageFormat, ensureDir, listDirectoryByExtension, PATHS, resolveImageInputPath, rmGuarded, unlinkGuarded } from '../../lib/fileUtils.js';
 import { extractPngGenerationMetadata, extractPngGenerationMetadataFile } from '../../lib/pngMetadata.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
@@ -48,9 +48,9 @@ import { hardwareUnavailableReason, isHardwareCompatible } from '../../lib/syste
 import { usesDiffusersRunner, flux2Bf16BaseRepo } from '../../lib/runners.js';
 import { weaveLoraTriggers } from '../../lib/loraTriggers.js';
 import { provenanceForRender } from '../../lib/assetProvenance.js';
-import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
 import { recordMediaTombstone, clearMediaTombstone } from '../mediaTombstones.js';
 import { withLocalImageOrigin } from './imageRecords.js';
+import { readImageSidecar, refreshImageIndex, sidecarEditQueue, editImageSidecar } from './sidecarStore.js';
 import { readTriggerWordsByFilename, readLoraLicensesByFilename } from '../loras.js';
 import { carriedPromptAdditions, promptAddition, sentPromptRecord } from '../../lib/modelInput.js';
 
@@ -1398,27 +1398,10 @@ export function assertGalleryFilename(filename) {
   });
 }
 
-// Returns `{ path, metadata }`. `path` is the resolved sidecar location, or
-// the preferred Portos location on miss — callers writing back land at the
-// canonical path automatically.
-export async function readImageSidecar(filename) {
-  const portosSidecar = join(PATHS.images, filename.replace('.png', '.metadata.json'));
-  const altSidecar = join(PATHS.images, `${filename}.metadata.json`);
-  for (const path of [portosSidecar, altSidecar]) {
-    const raw = await tryReadFile(path);
-    if (raw != null) return { path, metadata: safeJSONParse(raw, {}) };
-  }
-  return { path: portosSidecar, metadata: {} };
-}
+export { readImageSidecar };
 
 // Decoder safety is independent of the upload file-size policy.
 const MAX_GALLERY_UPLOAD_PIXELS = 96 * 1000 * 1000;
-
-async function refreshImageIndex(filename) {
-  await import('../mediaAssetIndex/index.js')
-    .then(m => m.indexImage({ filename }))
-    .catch(err => console.error(`❌ Media index image refresh failed: ${err.message}`));
-}
 
 /**
  * Persist user-uploaded image bytes (base64) into the gallery dir under
@@ -1545,37 +1528,6 @@ export async function deleteImage(filename, { fromRemoteTombstone = false } = {}
     })
     .catch((err) => console.error(`❌ Image delete announce failed: ${err.message}`));
   return result;
-}
-
-// Sidecar edits are whole-file read→modify→replace cycles; atomicWrite stops a
-// torn file but not two edits (prompt + visibility) reading the same copy and
-// the later write dropping the earlier field. One tail per gallery filename
-// covers both sidecar spellings, and the index refresh stays inside the turn.
-const sidecarEditQueue = createKeyCachedQueue();
-
-// `mutate` edits the metadata in place; returning null leaves the file as it was.
-function editImageSidecar(filename, mutate) {
-  // Admit before joining the queue so a cut drains every already-requested
-  // edit, including one waiting for an earlier edit's index refresh.
-  return withBackupAssetPublication(() => sidecarEditQueue(filename, async () => {
-    const { path: sidecarPath, metadata } = await readImageSidecar(filename);
-    const result = mutate(metadata);
-    if (result === null) return null;
-    // A stale edit queued after deletion must not recreate its sidecar/index.
-    // Sidecar-only records remain editable while peer media bytes are pending.
-    const present = await Promise.all([
-      join(PATHS.images, filename),
-      join(PATHS.images, filename.replace(/\.png$/i, '.metadata.json')),
-      join(PATHS.images, `${filename}.metadata.json`),
-    ].map(path => stat(path).then(() => true, error => {
-      if (error.code === 'ENOENT') return false;
-      throw error;
-    })));
-    if (!present.some(Boolean)) throw new ServerError('Image not found', { status: 404, code: 'NOT_FOUND' });
-    await atomicWrite(sidecarPath, metadata);
-    await refreshImageIndex(filename);
-    return result;
-  }));
 }
 
 export async function setImageHidden(filename, hidden) {

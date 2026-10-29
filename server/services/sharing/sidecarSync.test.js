@@ -33,7 +33,8 @@ vi.mock('../../lib/peerUrl.js', async () => ({
 import { PATHS } from '../../lib/fileUtils.js';
 import { peerFetch } from '../../lib/peerHttpClient.js';
 import { getPeers } from '../instances.js';
-import { pullSidecarForImage, backfillMissingSidecars } from './sidecarSync.js';
+import { pullSidecarForImage, backfillMissingSidecars, recordImageSupplier } from './sidecarSync.js';
+import { editImageSidecar } from '../imageGen/sidecarStore.js';
 
 let tmp;
 let originalImagesPath;
@@ -250,6 +251,31 @@ describe("pullSidecarForImage and this machine's own fields", () => {
     expect(await pullSidecarForImage(fakePeer, fakeBase, 'img.png')).toBe(true);
     // Origin-less here stays origin-less: no peer can claim the image and then delete it.
     expect(await written()).toEqual({ prompt: 'new', hidden: true, pendingDelete: local.pendingDelete });
+  });
+});
+
+describe('recordImageSupplier', () => {
+  const sidecarFile = () => join(PATHS.images, 'pulled.metadata.json');
+  const read = async () => JSON.parse(await readFile(sidecarFile(), 'utf8'));
+
+  it('records the supplier of a pulled image with no sidecar, alongside a concurrent edit', async () => {
+    await writeFile(join(PATHS.images, 'pulled.png'), 'bytes');
+    // Both go through the per-file edit queue, so neither drops the other.
+    const [recorded] = await Promise.all([
+      recordImageSupplier('pulled.png', 'peer-x'),
+      editImageSidecar('pulled.png', (metadata) => { metadata.hidden = true; return true; }),
+    ]);
+    expect(recorded).toBe(true);
+    expect(await read()).toEqual({ suppliedByInstanceId: 'peer-x', hidden: true });
+    expect(await recordImageSupplier('pulled.png', 'peer-y')).toBe(false);
+    expect((await read()).suppliedByInstanceId).toBe('peer-x');
+  });
+
+  it("never names a supplier for an image held here whose sidecar survived its bytes", async () => {
+    await writeFile(join(PATHS.images, 'pulled.png'), 'bytes');
+    await writeFile(sidecarFile(), JSON.stringify({ prompt: 'mine', originInstanceId: 'test-instance' }));
+    expect(await recordImageSupplier('pulled.png', 'peer-x')).toBe(false);
+    expect(await read()).toEqual({ prompt: 'mine', originInstanceId: 'test-instance' });
   });
 });
 

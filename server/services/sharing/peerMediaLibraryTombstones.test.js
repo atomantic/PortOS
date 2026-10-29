@@ -158,9 +158,10 @@ describe('a re-used image name', () => {
   const BEFORE = new Date('2026-02-01T00:00:00.000Z');
   const AFTER = new Date('2026-04-01T00:00:00.000Z');
   const setFileTimes = (filename, when) => utimesSync(join(PATHS.images, filename), when, when);
-  const seedBare = (filename, when) => {
-    mkdirSync(PATHS.images, { recursive: true });
-    writeFileSync(join(PATHS.images, filename), bytes);
+  // A copy made here with no creation stamp: its sidecar names only this
+  // machine (local-inst, the mocked identity) as origin, so its file time counts.
+  const seedMadeHere = (filename, when) => {
+    seedImage(filename, { originInstanceId: 'local-inst' });
     setFileTimes(filename, when);
   };
   const entry = (filename, extra = {}) => ({ kind: 'image', filename, sha256: sha, ...extra });
@@ -176,7 +177,7 @@ describe('a re-used image name', () => {
 
   it('advertises its live stamp to a receiver that asked, and drops its own superseded tombstone', async () => {
     seedImage('again.png', { prompt: 'p', createdAt: AFTER.toISOString() });
-    seedBare('bare.png', AFTER);
+    seedMadeHere('bare.png', AFTER);
     await recordMediaTombstone('image', 'again.png', DELETED_AT);
     await recordMediaTombstone('image', 'bare.png', DELETED_AT);
     await recordMediaTombstone('image', 'gone.png', DELETED_AT);
@@ -209,7 +210,7 @@ describe('a re-used image name', () => {
   });
 
   it('a copy re-made here under a deleted name is spared by the stale tombstone and still offered to peers', async () => {
-    seedBare('handoff.png', AFTER);
+    seedMadeHere('handoff.png', AFTER);
     await recordMediaTombstone('image', 'handoff.png', DELETED_AT);
     const { applyRemoteImageTombstones } = await import('../imageGen/imageRecords.js');
     expect(await applyRemoteImageTombstones([{ key: 'handoff.png', deletedAt: DELETED_AT }])).toBe(0);
@@ -221,6 +222,29 @@ describe('a re-used image name', () => {
     // A peer holding the old tombstone pulls the re-made copy.
     rmSync(join(PATHS.images, 'handoff.png'));
     expect(await diffAssetManifestAgainstLocal([offered])).toHaveLength(1);
+  });
+
+  it('an origin-less copy that lands after the delete counts as old: retired, advertised unstamped, never pulled back', async () => {
+    // Deleted here; the copy then returns by a path that records no supplier
+    // (an older peer's pull, an avatar sync, a restore), with a fresh file time.
+    await recordMediaTombstone('image', 'returned.png', DELETED_AT);
+    mkdirSync(PATHS.images, { recursive: true });
+    writeFileSync(join(PATHS.images, 'returned.png'), bytes);
+    setFileTimes('returned.png', AFTER);
+    const manifest = await buildMediaLibraryManifest({ tombstones: true });
+    const offered = manifest.assets.find((a) => a.filename === 'returned.png');
+    expect(offered).not.toHaveProperty('createdAt');
+    expect(manifest.tombstones.map((t) => t.key)).toEqual(['returned.png']);
+    // A peer holding the delete keeps the name blocked against this copy.
+    rmSync(join(PATHS.images, 'returned.png'));
+    expect(await diffAssetManifestAgainstLocal([offered])).toEqual([]);
+    // Back here, the same delete relayed by any paired peer retires the copy.
+    writeFileSync(join(PATHS.images, 'returned.png'), bytes);
+    setFileTimes('returned.png', AFTER);
+    const relay = pairedPeer();
+    advertise(relay, [], { tombstones: [{ key: 'returned.png', deletedAt: DELETED_AT }] });
+    await syncMediaLibraryFromPeer(relay);
+    expect(held('returned.png')).toBe(false);
   });
 
   it('a pulled copy with no creation stamp is advertised without one, and its tombstone keeps travelling', async () => {
