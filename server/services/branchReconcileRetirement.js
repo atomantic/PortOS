@@ -68,9 +68,12 @@ export async function prepareReconcileRetirements(app, result, deps = {}) {
         || typeof prepared.review.comparison.localPatch !== 'string' || typeof prepared.review.comparison.difference !== 'string') {
         held.push({ ...release, reason: 'retirement-comparison-unavailable' }); continue;
       }
-      // Exact affected-file equality plus exact published head requires no
-      // cognitive judgment. The service repeats all guards and archive checks.
-      if (prepared.review.forge?.prHead === release.head
+      // Exact affected-file equality plus an exact published head, or a merged
+      // head that contains every local commit, requires no cognitive judgment.
+      // The service repeats all guards and archive checks.
+      const delivered = prepared.review.forge?.prHead === release.head
+        || (prepared.review.comparison?.ancestorOfDeliveredHead === true && prepared.review.forge?.deliveredAncestorHead === release.head);
+      if (delivered
         && prepared.review.comparison?.disposition === 'integrated'
         && prepared.review.comparison.difference === '') {
         const retire = deps.retire || (await import('./heldCheckoutRecovery.js')).retireInventoriedCheckout;

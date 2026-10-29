@@ -42,6 +42,27 @@ async function detachedDeliveryProof(repoPath, sourceHead, deliveredHead) {
   return { sourceHead, deliveredHead, base, targetTree, sourceCommits: rows.length };
 }
 
+/** Whether the forge reports `head` as a strict descendant of `tip`. A tip the
+ * forge does not know (never pushed, or collected) is not contained. */
+async function forgeContainsTip(origin, options, execGh, tip, head) {
+  const raw = await execGh(['api', '--hostname', origin.host, `repos/${origin.fullName}/compare/${tip}...${head}?per_page=1`], undefined, options)
+    .catch(error => {
+      if (/\(HTTP (404|422)\)/.test(error.ghStderr || '')) return null;
+      throw new Error('retirement-forge-unavailable');
+    });
+  if (raw === null) return false;
+  let compare;
+  try { compare = JSON.parse(raw); } catch { throw new Error('retirement-forge-unavailable'); }
+  return compare?.status === 'ahead' && compare.behind_by === 0
+    && compare.base_commit?.sha === tip && compare.merge_base_commit?.sha === tip;
+}
+
+/** Local, graft- and replace-free ancestry: the forge's answer is only a candidate. */
+const locallyContains = (repoPath, tip, head) => execGit(['--no-replace-objects', '-c', 'core.commitGraph=false',
+  'merge-base', '--is-ancestor', tip, head], repoPath, { ignoreExitCode: true, timeout: 5000, maxBuffer: 65536,
+  env: { ...process.env, GIT_NO_REPLACE_OBJECTS: '1', GIT_NO_LAZY_FETCH: '1', GIT_OPTIONAL_LOCKS: '0', GIT_GRAFT_FILE: devNull } })
+  .then(result => result.exitCode === 0, () => false);
+
 /** Selects the merged PR for an exact local tip. Selection is not proof: callers
  * re-read the PR with `readRetirementForgeEvidence` before acting on it.
  * `mergedAt` is the forge's merge time, or null for a historical-branch match.
@@ -136,11 +157,19 @@ export async function readRetirementForgeEvidence(repoPath, branch, prUrl, { for
   const detachedRepresentation = detachedCandidate && detachedSourceHead !== remote.headRefOid
     ? await detachedDeliveryProof(repoPath, detachedSourceHead, remote.headRefOid) : null;
   const exactDelivery = !supersession && oid(exactDeliveredHead) && exactDeliveredHead === remote.headRefOid;
+  // A merged PR whose head was rewritten after this checkout last pushed can
+  // still contain every local commit. Only the same named head branch qualifies;
+  // the review re-proves the ancestry against local objects before acting.
+  // Unlike a rewritten detached copy, these exact commits stay in the merged
+  // PR's own history, so a later in-PR revert is that delivery's decision.
+  const ancestorDelivery = !exactDelivery && !supersession && remote.headRefName === branch && oid(exactDeliveredHead)
+    && await forgeContainsTip(origin, options, execGh, exactDeliveredHead, remote.headRefOid);
   let scope;
-  if (exactDelivery || detachedRepresentation) {
+  if (exactDelivery || detachedRepresentation || ancestorDelivery) {
     if (detail.merge_commit_sha !== remote.mergeCommit.oid) throw new Error('retirement-pr-not-matching-merged');
     scope = detachedRepresentation ? { scopeProof: 'represented-detached-head', detachedRepresentation }
-      : { scopeProof: 'exact-delivered-head' };
+      : ancestorDelivery ? { scopeProof: 'ancestor-of-delivered-head', deliveredAncestorHead: exactDeliveredHead }
+        : { scopeProof: 'exact-delivered-head' };
   } else {
     if (!Number.isInteger(detail.changed_files) || detail.changed_files < 1 || detail.changed_files > 3000
       || !Number.isInteger(detail.commits) || detail.commits < 1 || detail.commits > 250) {
@@ -222,15 +251,19 @@ export async function buildCheckoutRetirementReview({ repoPath, release, prUrl, 
   const represented = !kind && !release.branch && forge.scopeProof === 'represented-detached-head'
     && forge.detachedRepresentation?.sourceHead === release.head
     && JSON.stringify(await detachedDeliveryProof(repoPath, release.head, forge.prHead)) === JSON.stringify(forge.detachedRepresentation);
-  if (!kind && ((release.head === forge.prHead && forge.scopeProof === 'exact-delivered-head') || represented)) {
+  const ancestor = !kind && release.branch && release.head !== forge.prHead
+    && forge.scopeProof === 'ancestor-of-delivered-head' && forge.deliveredAncestorHead === release.head;
+  if (!kind && ((release.head === forge.prHead && forge.scopeProof === 'exact-delivered-head') || represented || ancestor)) {
     // Exact delivery needs no historical patch scope. The merged head and its
     // actual target are independently bound to local objects and this digest.
-    await Promise.all([...new Set([release.head, forge.mergeCommit, targetHead, forge.defaultHead])]
+    await Promise.all([...new Set([release.head, forge.prHead, forge.mergeCommit, targetHead, forge.defaultHead])]
       .map(head => git(['cat-file', '-e', `${head}^{commit}`], repoPath).catch(() => { throw new Error('retirement-local-objects-missing'); })));
     await git(['merge-base', '--is-ancestor', forge.mergeCommit, targetHead], repoPath)
       .catch(() => { throw new Error(forge.targetBranch ? 'retirement-merge-not-in-target' : 'retirement-merge-not-in-default'); });
+    if (ancestor && !await locallyContains(repoPath, release.head, forge.prHead)) throw new Error('retirement-local-commit-undelivered');
     const evidence = { repoPath, release, forge, contentFingerprint, administrationFingerprint, policy,
-      comparison: { base: release.head, paths: [], localPatch: '', difference: '', exactMergedDelivery: !represented, ...(represented && { representedDetachedDelivery: true }), disposition: 'integrated' } };
+      comparison: { base: release.head, paths: [], localPatch: '', difference: '', exactMergedDelivery: !represented && !ancestor,
+        ...(represented && { representedDetachedDelivery: true }), ...(ancestor && { ancestorOfDeliveredHead: true }), disposition: 'integrated' } };
     return { digest: createHash('sha256').update(JSON.stringify(evidence)).digest('hex'), ...evidence };
   }
   if (!oid(forge.changeBase) || !oid(forge.firstCommit) || !Array.isArray(forge.changedPaths)
