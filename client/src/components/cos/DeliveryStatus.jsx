@@ -12,8 +12,12 @@ const HOLD_REASONS = {
   'active-agent-owner': 'Waiting for the current workspace owner to finish.',
   'release-sync-local-review-unretained': 'Waiting for release review evidence to be verified before cleanup.',
   'cleanup-review-required': 'The retained checkout needs a preservation review before it can be removed.',
-  'completion-stages-pending': 'Repository cleanup was checked, but other completion steps still need to finish.',
+  'completion-stages-pending': 'Other completion steps must finish before cleanup can be retried safely.',
   'leave-open-cleanup-unsupported': 'The pull request is meant to stay open, so its checkout is being preserved.',
+  'cleanup-provenance-unverified': 'The run’s execution and cleanup ownership could not be verified.',
+  'checkout-capture-unverified': 'The original checkout capture could not be verified.',
+  'checkout-capture-pending': 'Waiting for the original checkout capture to be recovered.',
+  'swarm-continuation-pending': 'A pending swarm continuation must be resolved before cleanup can finish without starting more work.',
 };
 
 export default function DeliveryStatus({ agent, ownerId, taskId, onRefresh }) {

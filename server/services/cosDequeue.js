@@ -267,7 +267,7 @@ export async function admitIdleReviewTask({
   cosAutonomyMode,
   autonomousSlotCeiling,
   ignoreTaskId = null,
-}, { canSpawn, emitSpawn, trackSpawn }) {
+}, { canSpawn, emitSpawn, trackSpawn, deferPreflightDispatch = null }) {
   if (!isIdleTierEligible({
     spawned: alreadySpawned,
     hasPendingUserTasks,
@@ -283,6 +283,7 @@ export async function admitIdleReviewTask({
   let preflightCardId = null;
   let endPreflight = () => {};
   let handoffAttempted = false;
+  let preflightTransferred = false;
   try {
     const generated = await generateIdleReviewTask(state, {
       ignoreTaskId,
@@ -298,7 +299,10 @@ export async function admitIdleReviewTask({
       emitSpawn(task);
       trackSpawn(task);
     }
-    await closeStolenIdleReviewCard(preflightCardId, admitted ? task : null);
+    if (admitted && preflightCardId && deferPreflightDispatch) {
+      deferPreflightDispatch(task.id, { cardId: preflightCardId, resultTaskId: task.id, endPreflight, persisted: false });
+      preflightTransferred = true;
+    } else await closeStolenIdleReviewCard(preflightCardId, admitted ? task : null);
   } catch (error) {
     if (preflightCardId) {
       const { finishPreflightCard } = await import('./preflightTaskCard.js');
@@ -308,7 +312,7 @@ export async function admitIdleReviewTask({
     }
     throw error;
   } finally {
-    endPreflight();
+    if (!preflightTransferred) endPreflight();
   }
 }
 

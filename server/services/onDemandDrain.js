@@ -63,6 +63,7 @@ export async function drainOnDemandRequests(ctx, adapter) {
     projectCapacityExhausted = () => false,
     canSpawn,
     emitSpawn,
+    deferPreflightDispatch = null,
     addTaskOptions = {},
   } = adapter;
 
@@ -221,6 +222,7 @@ export async function drainOnDemandRequests(ctx, adapter) {
     let request = null;
     let acceptedTaskId = null;
     let handoffAttempted = false;
+    let preflightTransferred = false;
     let preparationFailed = false;
     let refusalReason = null;
     // Mark the claim attempt before it leaves the schedule queue. This lets
@@ -343,7 +345,10 @@ export async function drainOnDemandRequests(ctx, adapter) {
           await recordDeferredPerpetualDispatch(pendingPerpetualDispatch, taskScheduleMod);
           handoffAttempted = true;
           emitSpawn(task);
-          await finishPreflightDispatch(cardId, acceptedTaskId);
+          if (cardId && deferPreflightDispatch) {
+            deferPreflightDispatch(task.id, { cardId, resultTaskId: acceptedTaskId, endPreflight, persisted: true });
+            preflightTransferred = true;
+          } else await finishPreflightDispatch(cardId, acceptedTaskId);
         } else if (persisted.status === 'blocked' && !request.cleanupSourceAgentId) {
           // Explicit user Run colliding with a failure-blocked twin (#2614):
           // revive the existing task instead of silently dropping the Run and
@@ -361,7 +366,10 @@ export async function drainOnDemandRequests(ctx, adapter) {
           const revived = isLegacyDeepAudit(task.metadata) ? stored : { ...task, id: persisted.id };
           handoffAttempted = true;
           emitSpawn(revived);
-          await finishPreflightDispatch(cardId, acceptedTaskId);
+          if (cardId && deferPreflightDispatch) {
+            deferPreflightDispatch(revived.id, { cardId, resultTaskId: acceptedTaskId, endPreflight, persisted: true });
+            preflightTransferred = true;
+          } else await finishPreflightDispatch(cardId, acceptedTaskId);
           emitLog('info', `🔁 On-demand ${request.taskType} revived blocked task ${persisted.id}`, { taskId: persisted.id });
         } else if (!claim || quotaBurnProvenance(persisted.metadata).requestId === request.id
           || (request.cleanupSourceAgentId && persisted.id === task.id)) {
@@ -385,7 +393,7 @@ export async function drainOnDemandRequests(ctx, adapter) {
       // refill with no task) still owes the card a close — a card left open would
       // keep animating until the orphan sweep reaped it. Already-closed cards are
       // a no-op, so the specific reason each path recorded above survives.
-      await finishPreflightDispatch(cardId);
+      if (!preflightTransferred) await finishPreflightDispatch(cardId);
       if (userInitiated) {
         const preparationMs = Math.round(performance.now() - preparationStartedAt);
         emitLog('info', `On-demand preparation finished: ${request.taskType} (${request.id}) — queue wait ${queueWaitMs ?? 'unknown'}ms, preparation ${preparationMs}ms, ${task ? 'task generated' : 'no task generated'}`, {
@@ -400,12 +408,12 @@ export async function drainOnDemandRequests(ctx, adapter) {
       preparationFailed = true;
       if (request) await finishPreflightCard(cardIdForRequest(request), {
         outcome: 'failed', reason: 'preparation-failed',
-        note: handoffAttempted ? 'The handoff did not finish. Inspect the task and activity log before trying again.'
+        note: handoffAttempted || acceptedTaskId ? 'The handoff did not finish. Inspect the task and activity log before trying again.'
           : 'Preparation failed before the handoff completed. Check the activity log and run again.',
       });
       throw error;
     } finally {
-      endPreflight();
+      if (!preflightTransferred) endPreflight();
       if (claim) {
         const retry = !!request.cleanupSourceAgentId && !acceptedTaskId
           && !await taskScheduleMod.isPerpetualParkActive(request.taskType, request.appId).catch(() => false);

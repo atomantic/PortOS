@@ -151,7 +151,7 @@ function getSuccessRateStyle(rate) {
   return { bg: 'bg-port-error/15', text: 'text-port-error', label: 'low' };
 }
 
-export default function TaskItem({ task, agent = null, liveOutput, isSystem, spawning = false, waiting = false, unconfirmed = null, selected = false, onRefresh, onTaskUnblocked, onTaskDeleted, providers, providersLoaded, durations, dragHandleProps, apps, instances = null, onEditingChange }) {
+export default function TaskItem({ task, agent = null, liveOutput, isSystem, spawning = false, waiting = false, unconfirmed = null, retryIdentity, retryIdentityLoading = false, selected = false, onRefresh, onTaskUnblocked, onTaskDeleted, providers, providersLoaded, durations, dragHandleProps, apps, instances = null, onEditingChange }) {
   // System tasks live in the internal queue. Every task mutation must name that
   // source; otherwise the API's user-queue default searches the user queue and
   // reports the system task as missing.
@@ -468,6 +468,10 @@ export default function TaskItem({ task, agent = null, liveOutput, isSystem, spa
           {finalizing && !unconfirmed && <DeliveryStatus agent={agent} ownerId={task.metadata.deliveryRecoveryAgentId} taskId={task.id} onRefresh={onRefresh} />}
           {retryCleanupActive && !finalizing && <p className="mb-2 text-sm text-port-text-muted">{agent.deliveryActivity.label}</p>}
           {unconfirmed && <p className="mb-2 text-sm text-port-text-muted">{unconfirmed}</p>}
+          {retryIdentity && <button type="button" onClick={retryIdentity} disabled={retryIdentityLoading}
+            className="mb-2 min-h-[44px] rounded border border-port-border px-2 text-sm text-port-accent disabled:opacity-50">
+            {retryIdentityLoading ? 'Checking instance identity…' : 'Retry instance identity'}
+          </button>}
           {waiting && !finalizing && !task.metadata?.preflight && <p className="mb-2 text-sm text-port-text-muted">
             {isRetryHeld(task.metadata) ? 'Waiting for the previous run’s cleanup before retrying.' : 'Waiting for an agent or recovery; active execution is not confirmed.'}
           </p>}

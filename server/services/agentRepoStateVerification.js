@@ -295,6 +295,23 @@ function manualCompletionReady(agent) {
     && Object.values(stages).every(stage => stage?.status === 'done');
 }
 
+// These are the execution-side prerequisites of isSettleableCompletionReceipt.
+// Repository verification produces the remaining cleanup and integration
+// receipts, so they cannot be required until after the recheck has run.
+function manualCleanupProvenanceValid(agent) {
+  const result = agent?.result;
+  const metadata = agent?.metadata;
+  return result?.deliveryRecoveryOwned === true && result.executionSuccess === true
+    && result.validationPassed !== false && result.taskOutcome?.status === 'incomplete'
+    && result.taskOutcome?.recovery?.mode === 'cleanup' && !result.executionInterruption
+    && !metadata?.executionInterruption && !metadata?.blocker;
+}
+
+function manualSwarmContinuationPending(agent) {
+  const proof = agent?.metadata?.swarmCleanupDelivery;
+  return !!proof && proof.continuationIssued !== true;
+}
+
 async function notifyDeliveredSwarmCleanup(agentId, { notify = true } = {}) {
   const [{ getAgentRecord }, { getTaskById }, { getInstanceId }, contract] = await Promise.all([
     import('./cosAgentLifecycle.js'), import('./cosTaskStore.js'), import('./instanceIdentity.js'), import('./swarmCleanupDelivery.js'),
@@ -381,7 +398,8 @@ export async function verifyAgentRepoState(input) {
     && input.agentState.metadata.isWorktree === false;
   const verify = async () => {
     if (input.manualCleanupOnly) {
-      const reason = await input.recheckCleanup().then(() => null, error => error.message);
+      // A pending capture can be repaired below before any retirement.
+      const reason = await input.recheckCleanup({ requireCapture: false }).then(() => null, error => error.message);
       if (reason) return skipped(reason);
     }
     if (cleanupPending && !input.manualCleanupOnly && input.agentState?.metadata?.isWorktree === false) {
@@ -398,6 +416,10 @@ export async function verifyAgentRepoState(input) {
       if (!recovered || recovered.status !== 'completed' || recovered.startedAt !== input.agentState.startedAt
         || recovered.metadata?.checkoutCapture?.status !== 'captured') return skipped('checkout-capture-pending');
       input = { ...input, agentState: recovered };
+    }
+    if (input.manualCleanupOnly) {
+      const reason = await input.recheckCleanup().then(() => null, error => error.message);
+      if (reason) return skipped(reason);
     }
     if (cleanupPending) {
       const { getTaskById } = await import('./cosTaskStore.js');
@@ -544,12 +566,17 @@ export async function recheckAgentCleanup(agentId, taskId) {
     return { ok: false, reason: 'cleanup-owner-changed' };
   }
   if (verificationRuns.has(agentId) || getDeliveryActivity(agentId)) return { ok: false, reason: 'cleanup-already-running' };
+  if (!manualCleanupProvenanceValid(agent)) return { ok: true, verified: false, reasons: ['cleanup-provenance-unverified'] };
+  if (manualSwarmContinuationPending(agent)) return { ok: true, verified: false, reasons: ['swarm-continuation-pending'] };
   if (!manualCompletionReady(agent)) return { ok: true, verified: false, reasons: ['completion-stages-pending'] };
-  const recheckCleanup = async () => {
+  const recheckCleanup = async ({ requireCapture = true } = {}) => {
     const [currentTask, currentAgent] = await Promise.all([getTaskById(taskId), getAgentRecord(agentId)]);
     if (!isDeepStrictEqual(currentTask, task) || currentAgent?.status !== 'completed' || currentAgent.result?.cleanupPending !== true
       || currentAgent.taskId !== taskId || currentAgent.startedAt !== agent.startedAt) throw new Error('cleanup-owner-changed');
+    if (!manualCleanupProvenanceValid(currentAgent)) throw new Error('cleanup-provenance-unverified');
+    if (manualSwarmContinuationPending(currentAgent)) throw new Error('swarm-continuation-pending');
     if (!manualCompletionReady(currentAgent)) throw new Error('completion-stages-pending');
+    if (requireCapture && currentAgent.metadata?.checkoutCapture?.status !== 'captured') throw new Error('checkout-capture-unverified');
   };
   const result = await manualCleanupContext.run(true, () => verifyAgentRepoState({ agentId, agentState: agent, task, success: agent.result.success === true,
     prExpected: isTruthyMeta(task.metadata?.openPR), manualCleanupOnly: true, recheckCleanup }));
@@ -1567,7 +1594,7 @@ async function retireIntegratedCheckout({ appId, observed, issues, record, block
         const hold = await resolveCheckoutIncarnation({ metadata, sourceWorkspace, branchName, worktreePath });
         if (hold) throw new Error(hold.reason);
       }
-    } }).catch(error => ({ reason: (error.message.startsWith('historical-cleanup-') || ['daemon-stopped', 'automatic-retirement-disabled', 'checkout-incarnation-changed', 'claim-owner-active', 'claim-owner-ambiguous', 'cleanup-owner-changed', 'completion-stages-pending'].includes(error.message)) ? error.message : 'retirement-outcome-uncertain' }));
+    } }).catch(error => ({ reason: (error.message.startsWith('historical-cleanup-') || ['daemon-stopped', 'automatic-retirement-disabled', 'checkout-incarnation-changed', 'claim-owner-active', 'claim-owner-ambiguous', 'cleanup-owner-changed', 'cleanup-provenance-unverified', 'swarm-continuation-pending', 'completion-stages-pending', 'checkout-capture-unverified'].includes(error.message)) ? error.message : 'retirement-outcome-uncertain' }));
   if (!result.ok || result.branchDeleted !== true || (recheckCleanup && result.archiveDir != null)) {
     return blockWith(result.reason || result.branchRetainedReason || 'retirement-receipt-unverified', { issues, observed });
   }

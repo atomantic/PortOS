@@ -613,6 +613,31 @@ describe('schedule disablement at dispatch', () => {
  * every exit from the loop.
  */
 describe('preflight task card', () => {
+  it('keeps activity with the evaluator until the actual dispatch is settled', async () => {
+    const { isPreflightActive } = await import('./preflightActivity.js');
+    mocks.getOnDemandRequests.mockResolvedValue([appRequest()]);
+    const { adapter } = generatorAdapter();
+    let deferred;
+    adapter.deferPreflightDispatch = (taskId, entry) => { deferred = { taskId, ...entry }; };
+
+    await drainOnDemandRequests({ state: STATE }, adapter);
+    expect(deferred).toMatchObject({ taskId: 'gen-1', cardId: 'preflight-req-1', resultTaskId: 'persisted-1', persisted: true });
+    expect(isPreflightActive(deferred.cardId)).toBe(true);
+    expect(mocks.finishPreflightDispatch).not.toHaveBeenCalled();
+    deferred.endPreflight();
+    expect(isPreflightActive(deferred.cardId)).toBe(false);
+  });
+
+  it('does not suggest an immediate rerun after the task was already persisted', async () => {
+    mocks.getOnDemandRequests.mockResolvedValue([appRequest()]);
+    mocks.recordDeferredPerpetualDispatch.mockRejectedValueOnce(new Error('schedule write failed'));
+    await expect(drainOnDemandRequests({ state: STATE }, generatorAdapter().adapter)).rejects.toThrow('schedule write failed');
+    expect(mocks.addTask).toHaveBeenCalledOnce();
+    expect(mocks.finishPreflightCard).toHaveBeenCalledWith('preflight-req-1', expect.objectContaining({
+      outcome: 'failed', note: expect.stringContaining('Inspect the task'),
+    }));
+  });
+
   it('opens a card for a human Run before the capacity check, so a waiting Run is still visible', async () => {
     mocks.getOnDemandRequests.mockResolvedValue([appRequest({ targetPullRequest: 42 })]);
     const { adapter } = generatorAdapter({ availableSlots: 0 });

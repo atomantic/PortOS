@@ -196,6 +196,31 @@ describe('idle review stealing a queued on-demand request', () => {
     } finally { spy.mockRestore(); }
   });
 
+  it('transfers an admitted stolen card to the periodic evaluator through dispatch', async () => {
+    const { beginPreflightActivity, isPreflightActive } = await import('./preflightActivity.js');
+    const { admitIdleReviewTask } = await import('./cosDequeue.js');
+    const taskStore = await import('./cosTaskStore.js');
+    const generator = await import('./cosTaskGenerator.js');
+    const task = { id: 'stolen-task', metadata: { app: 'example-app' } };
+    const storeSpy = vi.spyOn(taskStore, 'getCosApprovalView').mockResolvedValue({ autoApprovedCount: 0 });
+    const generatorSpy = vi.spyOn(generator, 'generateIdleReviewTask').mockImplementation(async (_state, { onPreflightStart }) => {
+      onPreflightStart('preflight-demand-1', beginPreflightActivity('preflight-demand-1'));
+      return { task, pendingPerpetualDispatch: null, preflightCardId: 'preflight-demand-1' };
+    });
+    let deferred;
+    try {
+      await admitIdleReviewTask({ state: { ...STATE, config: { ...STATE.config, idleReviewEnabled: true } },
+        alreadySpawned: 0, hasPendingUserTasks: false, cosAutonomyMode: 'execute', autonomousSlotCeiling: 1 },
+      { canSpawn: () => true, emitSpawn: vi.fn(), trackSpawn: vi.fn(),
+        deferPreflightDispatch: (taskId, entry) => { deferred = { taskId, ...entry }; } });
+      expect(deferred).toMatchObject({ taskId: task.id, cardId: 'preflight-demand-1', resultTaskId: task.id, persisted: false });
+      expect(isPreflightActive(deferred.cardId)).toBe(true);
+      expect(preflight.finishDispatch).not.toHaveBeenCalled();
+      deferred.endPreflight();
+      expect(isPreflightActive(deferred.cardId)).toBe(false);
+    } finally { generatorSpy.mockRestore(); storeSpy.mockRestore(); }
+  });
+
   it('binds the pre-agent progress reporter to that card', async () => {
     scheduleMocks.requests = [request()];
     await generateIdleReviewTask(STATE);

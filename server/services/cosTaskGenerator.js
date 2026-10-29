@@ -734,6 +734,7 @@ async function spawnPriority0OnDemand(ctx) {
       (spawnProjectCounts[appId || '_self'] || 0) >= perProjectLimit,
     canSpawn: spawnAdapter.canSpawn,
     emitSpawn: spawnAdapter.emitSpawn,
+    deferPreflightDispatch: spawnAdapter.deferPreflightDispatch,
   });
   return { schedule };
 }
@@ -973,11 +974,38 @@ export async function evaluateTasks(options) {
     const project = task.metadata?.app || '_self';
     spawnProjectCounts[project] = (spawnProjectCounts[project] || 0) + 1;
   };
+  // An admission here is only an in-memory pick. Keep its card and activity
+  // alive until the loop below actually emits task:ready; a later tier may fail.
+  const deferredPreflights = new Map();
+  const deferPreflightDispatch = (taskId, entry) => {
+    if (!taskId || deferredPreflights.has(taskId)) throw new Error('Cannot defer preflight for a missing or duplicate task');
+    deferredPreflights.set(taskId, { ...entry, attempted: false });
+  };
+  const settleDeferredPreflight = async (taskId, emitted) => {
+    const entry = deferredPreflights.get(taskId);
+    if (!entry) return;
+    deferredPreflights.delete(taskId);
+    try {
+      const { finishPreflightCard, finishPreflightDispatch } = await import('./preflightTaskCard.js');
+      if (emitted) await finishPreflightDispatch(entry.cardId, entry.resultTaskId);
+      else await finishPreflightCard(entry.cardId, {
+        outcome: 'failed', reason: 'dispatch-interrupted',
+        note: entry.persisted || entry.attempted
+          ? 'The handoff did not finish. Inspect the task and activity log before trying again.'
+          : 'The handoff did not finish. Check the activity log and run again.',
+      });
+    } catch (error) {
+      console.error(`❌ Could not settle preflight card ${entry.cardId}: ${error.message}`);
+    } finally {
+      entry.endPreflight();
+    }
+  };
   // The adapter every tier hands to its shared admission pass, unchanged. Those
   // passes also serve dequeueNextTask (cos.js), which dispatches and counts
   // through different objects, so they take emit and track as separate hooks;
   // here `admitSpawn` already does both, so the track hook is inert.
-  const spawnAdapter = Object.freeze({ canSpawn: canSpawnTask, emitSpawn: admitSpawn, trackSpawn: () => {}, isOwned: isTaskOwned });
+  const spawnAdapter = Object.freeze({ canSpawn: canSpawnTask, emitSpawn: admitSpawn, trackSpawn: () => {},
+    isOwned: isTaskOwned, deferPreflightDispatch });
 
   // Check if there are pending user tasks (even if on cooldown). If user tasks
   // exist, don't run self-improvement — wait for user tasks to be ready.
@@ -1004,58 +1032,66 @@ export async function evaluateTasks(options) {
     spawnAdapter,
   });
 
-  // Priority 0 (on-demand) spends against the global slot cap and runs even when
-  // paused — an explicit user "Run" bypasses the global pause.
-  const { schedule: taskSchedule } = await spawnPriority0OnDemand(ctx);
-
-  // Every tier below is scheduled/autonomous/user work that the global pause
-  // stops. When paused we skip them and let the shared spawn loop below emit just
-  // the on-demand tasks Priority 0 collected.
-  if (!paused) {
-    // Priority 1 spends against the global slot cap.
-    await spawnPriority1UserTasks(ctx);
-
-    // Ceiling for AUTOMATIC admissions this cycle (#711). User and on-demand
-    // tasks already bypassed the mode gate; on-demand also bypasses pause. The
-    // automatic tiers may add at most `autonomousActionsRemaining` more tasks.
-    // On-demand runs still count as non-user work in the completion ledger and
-    // subsequent in-flight allowance; only user tasks are exempt. With no action
-    // cap this equals `availableSlots`.
-    const autonomousSlotCeiling = Math.min(availableSlots, tasksToSpawn.length + autonomousActionsRemaining);
-
-    // Priorities 2, 3.6, 4 spend against the lower autonomous ceiling.
-    await spawnPriority2AutoApproved(ctx, { taskSchedule, autonomousSlotCeiling });
-    await maybeQueueImprovementTasks(ctx);
-    await spawnPriority36FeatureAgents(ctx, { autonomousSlotCeiling });
-    await spawnPriority4IdleReview(ctx, { autonomousSlotCeiling });
-  }
-
-  // Emit evaluation status
   const pendingUserCount = userTaskData.grouped?.pending?.length || 0;
   const inProgressCount = userTaskData.grouped?.in_progress?.length || 0;
   const pendingSystemCount = cosTaskData.grouped?.pending?.length || 0;
 
-  const evalLevel = tasksToSpawn.length > 0 ? 'info' : 'debug';
-  emitLog(evalLevel, `Evaluation: ${pendingUserCount} user pending, ${inProgressCount} in_progress, ${pendingSystemCount} system, spawning ${tasksToSpawn.length}`, {
-    pendingUser: pendingUserCount,
-    inProgress: inProgressCount,
-    pendingSystem: pendingSystemCount,
-    toSpawn: tasksToSpawn.length,
-    availableSlots
-  });
+  try {
+    // Priority 0 (on-demand) spends against the global slot cap and runs even when
+    // paused — an explicit user "Run" bypasses the global pause.
+    const { schedule: taskSchedule } = await spawnPriority0OnDemand(ctx);
 
-  // Note: Performance summaries, learning insights, and rehabilitation checks
-  // are now handled by dedicated maintenance intervals (cos-performance-summary,
-  // cos-learning-insights, cos-rehabilitation-check) instead of evalCount gating.
+    // Every tier below is scheduled/autonomous/user work that the global pause
+    // stops. When paused we skip them and let the shared spawn loop below emit just
+    // the on-demand tasks Priority 0 collected.
+    if (!paused) {
+      // Priority 1 spends against the global slot cap.
+      await spawnPriority1UserTasks(ctx);
 
-  // Spawn all ready tasks (up to available slots)
-  for (const task of tasksToSpawn) {
-    emitLog('success', `Spawning task: ${task.id} (${task.priority || 'MEDIUM'})`, {
-      taskId: task.id,
-      taskType: task.taskType,
-      app: task.metadata?.app
+      // Ceiling for AUTOMATIC admissions this cycle (#711). User and on-demand
+      // tasks already bypassed the mode gate; on-demand also bypasses pause. The
+      // automatic tiers may add at most `autonomousActionsRemaining` more tasks.
+      // On-demand runs still count as non-user work in the completion ledger and
+      // subsequent in-flight allowance; only user tasks are exempt. With no action
+      // cap this equals `availableSlots`.
+      const autonomousSlotCeiling = Math.min(availableSlots, tasksToSpawn.length + autonomousActionsRemaining);
+
+      // Priorities 2, 3.6, 4 spend against the lower autonomous ceiling.
+      await spawnPriority2AutoApproved(ctx, { taskSchedule, autonomousSlotCeiling });
+      await maybeQueueImprovementTasks(ctx);
+      await spawnPriority36FeatureAgents(ctx, { autonomousSlotCeiling });
+      await spawnPriority4IdleReview(ctx, { autonomousSlotCeiling });
+    }
+
+    // Emit evaluation status
+    const evalLevel = tasksToSpawn.length > 0 ? 'info' : 'debug';
+    emitLog(evalLevel, `Evaluation: ${pendingUserCount} user pending, ${inProgressCount} in_progress, ${pendingSystemCount} system, spawning ${tasksToSpawn.length}`, {
+      pendingUser: pendingUserCount,
+      inProgress: inProgressCount,
+      pendingSystem: pendingSystemCount,
+      toSpawn: tasksToSpawn.length,
+      availableSlots
     });
-    cosEvents.emit('task:ready', task);
+
+    // Note: Performance summaries, learning insights, and rehabilitation checks
+    // are now handled by dedicated maintenance intervals (cos-performance-summary,
+    // cos-learning-insights, cos-rehabilitation-check) instead of evalCount gating.
+
+    // Spawn all ready tasks (up to available slots)
+    for (const task of tasksToSpawn) {
+      emitLog('success', `Spawning task: ${task.id} (${task.priority || 'MEDIUM'})`, {
+        taskId: task.id,
+        taskType: task.taskType,
+        app: task.metadata?.app
+      });
+      const entry = deferredPreflights.get(task.id);
+      if (entry) entry.attempted = true;
+      const emitted = cosEvents.emit('task:ready', task);
+      if (entry) await settleDeferredPreflight(task.id, emitted);
+    }
+  } finally {
+    // A failed tier (or an interrupted dispatch) must not claim a handoff.
+    for (const taskId of deferredPreflights.keys()) await settleDeferredPreflight(taskId, false);
   }
 
   // Emit awaiting approval count if any

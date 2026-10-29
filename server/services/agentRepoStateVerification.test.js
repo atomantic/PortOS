@@ -159,6 +159,8 @@ const review = () => ({ digest: 'a'.repeat(64), policy: { policies: [{ id: 'agen
   comparison: { disposition: 'review-supersession', localPatch: '+old behavior', difference: '+new behavior' }, forge: { prHead: HEAD } });
 const completedCleanup = () => ({ version: 1, status: 'completed', stages: Object.fromEntries(
   ['sentinel', 'jira', 'notification', 'pipeline', 'creative', 'worktree', 'report'].map(key => [key, { status: 'done' }])) });
+const manualCleanupResult = () => ({ success: false, cleanupPending: true, deliveryRecoveryOwned: true,
+  executionSuccess: true, validationPassed: null, taskOutcome: { status: 'incomplete', recovery: { mode: 'cleanup' } } });
 const openView = (patch = {}) => JSON.stringify({ number: 9, state: 'OPEN', isDraft: false, isCrossRepository: false, headRefName: BRANCH, headRefOid: HEAD, mergeable: 'MERGEABLE', reviewDecision: '', statusCheckRollup: [{ name: 'CI', status: 'QUEUED' }], ...patch });
 
 /** The `{user, cos}` shape `getAllTasks` really returns. Follow-ups land in `cos`. */
@@ -1205,12 +1207,16 @@ describe('verifyAgentRepoState — clean runs', () => {
 });
 
 describe('verifyAgentRepoState — divergent runs', () => {
-  it('rechecks a selected cleanup owner through the existing retirement gates without a new task', async () => {
+  it.each([
+    ['without a continuation proof', null],
+    ['after the continuation was issued', { version: 1, continuationIssued: true }],
+  ])('rechecks a selected cleanup owner %s without a new task', async (_scenario, proof) => {
     const pending = { ...task(), status: 'in_progress', metadata: { ...task().metadata,
       deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-1' } };
     const owner = { ...agentState(), id: 'agent-1', taskId: pending.id, status: 'completed',
-      result: { success: false, cleanupPending: true }, metadata: { ...agentState().metadata,
-        completionCleanup: completedCleanup(), repoStateVerification: { status: 'pending' } } };
+      result: manualCleanupResult(), metadata: { ...agentState().metadata,
+        checkoutCapture: { status: 'captured' }, completionCleanup: completedCleanup(), repoStateVerification: { status: 'pending' },
+        ...(proof && { swarmCleanupDelivery: proof }) } };
     getTaskById.mockResolvedValue(pending);
     getAgentRecord.mockResolvedValue(owner);
     existsSync.mockReturnValue(true);
@@ -1230,6 +1236,164 @@ describe('verifyAgentRepoState — divergent runs', () => {
     expect(releaseRetryHold).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['unattributed recovery', { deliveryRecoveryOwned: undefined }, {}],
+    ['unowned recovery', { deliveryRecoveryOwned: false }, {}],
+    ['missing execution verdict', { executionSuccess: undefined }, {}],
+    ['failed execution', { executionSuccess: false }, {}],
+    ['failed validation', { validationPassed: false }, {}],
+    ['wrong outcome', { taskOutcome: { status: 'blocked', recovery: { mode: 'cleanup' } } }, {}],
+    ['missing recovery mode', { taskOutcome: { status: 'incomplete' } }, {}],
+    ['different recovery mode', { taskOutcome: { status: 'incomplete', recovery: { mode: 'retry' } } }, {}],
+    ['result interruption', { executionInterruption: { reason: 'stopped' } }, {}],
+    ['metadata interruption', {}, { executionInterruption: { reason: 'stopped' } }],
+    ['metadata blocker', {}, { blocker: { reason: 'manual decision' } }],
+  ])('retains the task and checkout for %s', async (_name, resultPatch, metadataPatch) => {
+    const pending = { ...task(), status: 'in_progress', metadata: { ...task().metadata,
+      deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-1' } };
+    const owner = { ...agentState(), id: 'agent-1', taskId: pending.id, status: 'completed',
+      result: { ...manualCleanupResult(), ...resultPatch }, metadata: { ...agentState().metadata, ...metadataPatch,
+        checkoutCapture: { status: 'captured' }, completionCleanup: completedCleanup(), repoStateVerification: { status: 'pending' } } };
+    getTaskById.mockResolvedValue(pending);
+    getAgentRecord.mockResolvedValue(owner);
+
+    expect(await recheckAgentCleanup(owner.id, pending.id)).toEqual({ ok: true, verified: false, reasons: ['cleanup-provenance-unverified'] });
+    expect(retireInventoriedCheckout).not.toHaveBeenCalled();
+    expect(recordRepoStateVerification).not.toHaveBeenCalled();
+    expect(updateTask).not.toHaveBeenCalled();
+    expect(addTask).not.toHaveBeenCalled();
+  });
+
+  it.each([undefined, false])('retains a cleanup-held task when its swarm continuation is unissued (%s)', async issued => {
+    const pending = { ...task(), status: 'in_progress', metadata: { ...task().metadata,
+      deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-1' } };
+    const owner = { ...agentState(), id: 'agent-1', taskId: pending.id, status: 'completed',
+      result: manualCleanupResult(), metadata: { ...agentState().metadata,
+        checkoutCapture: { status: 'captured' }, completionCleanup: completedCleanup(), repoStateVerification: { status: 'pending' },
+        swarmCleanupDelivery: { version: 1, continuationIssued: issued } } };
+    getTaskById.mockResolvedValue(pending);
+    getAgentRecord.mockResolvedValue(owner);
+
+    expect(await recheckAgentCleanup(owner.id, pending.id)).toEqual({ ok: true, verified: false, reasons: ['swarm-continuation-pending'] });
+    expect(retireInventoriedCheckout).not.toHaveBeenCalled();
+    expect(recordRepoStateVerification).not.toHaveBeenCalled();
+    expect(updateTask).not.toHaveBeenCalled();
+    expect(addTask).not.toHaveBeenCalled();
+  });
+
+  it.each(['retirement', 'settlement'])('rechecks a newly recorded swarm continuation before %s', async boundary => {
+    const pending = { ...task(), status: 'in_progress', metadata: { ...task().metadata,
+      deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-1' } };
+    const owner = { ...agentState(), id: 'agent-1', taskId: pending.id, status: 'completed',
+      result: manualCleanupResult(), metadata: { ...agentState().metadata,
+        checkoutCapture: { status: 'captured' }, completionCleanup: completedCleanup(), repoStateVerification: { status: 'pending' } } };
+    getTaskById.mockResolvedValue(pending);
+    getAgentRecord.mockResolvedValue(owner);
+    existsSync.mockReturnValue(true);
+    localBranch(true);
+    listWorktrees.mockResolvedValue([RELEASE]);
+    findPullRequestForBranch.mockResolvedValue({ status: 'found', url: 'https://github.com/example/repo/pull/1', detail: 'MERGED' });
+    prepareInventoriedCheckoutRetirement.mockResolvedValue({ ok: true, review: { ...review(), comparison: { disposition: 'integrated', localPatch: '', difference: '' } } });
+    let removed = false;
+    retireInventoriedCheckout.mockImplementation(async (_input, options) => {
+      if (boundary === 'retirement') owner.metadata.swarmCleanupDelivery = { version: 1 };
+      await options.beforeMutation();
+      removed = true;
+      return { ok: true, branchDeleted: true };
+    });
+    if (boundary === 'settlement') recordCompletionCleanup.mockImplementationOnce(async () => {
+      owner.metadata.swarmCleanupDelivery = { version: 1 };
+      return true;
+    });
+
+    expect(await recheckAgentCleanup(owner.id, pending.id)).toMatchObject({ ok: true, verified: false, reasons: ['swarm-continuation-pending'] });
+    expect(removed).toBe(boundary === 'settlement');
+    expect(updateTask).not.toHaveBeenCalled();
+    expect(addTask).not.toHaveBeenCalled();
+  });
+
+  it('rechecks delivery provenance immediately before checkout retirement', async () => {
+    const pending = { ...task(), status: 'in_progress', metadata: { ...task().metadata,
+      deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-1' } };
+    const owner = { ...agentState(), id: 'agent-1', taskId: pending.id, status: 'completed',
+      result: manualCleanupResult(), metadata: { ...agentState().metadata,
+        checkoutCapture: { status: 'captured' }, completionCleanup: completedCleanup(), repoStateVerification: { status: 'pending' } } };
+    getTaskById.mockResolvedValue(pending);
+    getAgentRecord.mockResolvedValue(owner);
+    existsSync.mockReturnValue(true);
+    localBranch(true);
+    listWorktrees.mockResolvedValue([RELEASE]);
+    findPullRequestForBranch.mockResolvedValue({ status: 'found', url: 'https://github.com/example/repo/pull/1', detail: 'MERGED' });
+    prepareInventoriedCheckoutRetirement.mockResolvedValue({ ok: true, review: { ...review(), comparison: { disposition: 'integrated', localPatch: '', difference: '' } } });
+    let removed = false;
+    retireInventoriedCheckout.mockImplementation(async (_input, options) => {
+      owner.result.executionSuccess = false;
+      await options.beforeMutation();
+      removed = true;
+      return { ok: true, branchDeleted: true };
+    });
+
+    expect(await recheckAgentCleanup(owner.id, pending.id)).toMatchObject({ ok: true, verified: false, reasons: ['cleanup-provenance-unverified'] });
+    expect(removed).toBe(false);
+    expect(updateTask).not.toHaveBeenCalled();
+  });
+
+  it('rechecks delivery provenance before completing the task', async () => {
+    const pending = { ...task(), status: 'in_progress', metadata: { ...task().metadata,
+      deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-1' } };
+    const owner = { ...agentState(), id: 'agent-1', taskId: pending.id, status: 'completed',
+      result: manualCleanupResult(), metadata: { ...agentState().metadata,
+        checkoutCapture: { status: 'captured' }, completionCleanup: completedCleanup(), repoStateVerification: { status: 'pending' } } };
+    getTaskById.mockResolvedValue(pending);
+    getAgentRecord.mockResolvedValue(owner);
+    existsSync.mockReturnValue(true);
+    localBranch(true);
+    listWorktrees.mockResolvedValue([RELEASE]);
+    findPullRequestForBranch.mockResolvedValue({ status: 'found', url: 'https://github.com/example/repo/pull/1', detail: 'MERGED' });
+    prepareInventoriedCheckoutRetirement.mockResolvedValue({ ok: true, review: { ...review(), comparison: { disposition: 'integrated', localPatch: '', difference: '' } } });
+    retireInventoriedCheckout.mockImplementation(async (_input, options) => { await options.beforeMutation(); return { ok: true, branchDeleted: true }; });
+    recordCompletionCleanup.mockImplementationOnce(async () => { owner.metadata.blocker = { reason: 'manual decision' }; return true; });
+
+    expect(await recheckAgentCleanup(owner.id, pending.id)).toMatchObject({ ok: true, verified: false, reasons: ['cleanup-provenance-unverified'] });
+    expect(retireInventoriedCheckout).toHaveBeenCalledOnce();
+    expect(updateTask).not.toHaveBeenCalled();
+  });
+
+  it('requires a captured checkout before retiring or completing a manual recheck', async () => {
+    const pending = { ...task(), status: 'in_progress', metadata: { ...task().metadata,
+      deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-1' } };
+    const owner = { ...agentState(), id: 'agent-1', taskId: pending.id, status: 'completed',
+      result: manualCleanupResult(), metadata: { ...agentState().metadata,
+        completionCleanup: completedCleanup(), repoStateVerification: { status: 'pending' } } };
+    getTaskById.mockResolvedValue(pending);
+    getAgentRecord.mockResolvedValue(owner);
+    expect(await recheckAgentCleanup(owner.id, pending.id)).toMatchObject({ ok: true, verified: false, reasons: ['checkout-capture-unverified'] });
+    expect(retireInventoriedCheckout).not.toHaveBeenCalled();
+    expect(updateTask).not.toHaveBeenCalled();
+  });
+
+  it('repairs a pending capture before applying the captured-checkout gate', async () => {
+    const pending = { ...task(), status: 'in_progress', metadata: { ...task().metadata,
+      deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-1' } };
+    const owner = { ...agentState(), id: 'agent-1', taskId: pending.id, status: 'completed',
+      result: manualCleanupResult(), metadata: { ...agentState().metadata,
+        checkoutCapture: { status: 'pending' }, completionCleanup: completedCleanup(), repoStateVerification: { status: 'pending' } } };
+    getTaskById.mockResolvedValue(pending);
+    getAgentRecord.mockResolvedValue(owner);
+    retryCompletionCheckoutCapture.mockImplementationOnce(async () => { owner.metadata.checkoutCapture.status = 'captured'; return true; });
+    existsSync.mockReturnValue(true);
+    localBranch(true);
+    listWorktrees.mockResolvedValue([RELEASE]);
+    findPullRequestForBranch.mockResolvedValue({ status: 'found', url: 'https://github.com/example/repo/pull/1', detail: 'MERGED' });
+    prepareInventoriedCheckoutRetirement.mockResolvedValue({ ok: true, review: { ...review(), comparison: { disposition: 'integrated', localPatch: '', difference: '' } } });
+    retireInventoriedCheckout.mockImplementation(async (_input, options) => { await options.beforeMutation(); return { ok: true, branchDeleted: true }; });
+
+    expect(await recheckAgentCleanup(owner.id, pending.id)).toMatchObject({ ok: true, verified: true });
+    expect(retryCompletionCheckoutCapture).toHaveBeenCalledWith(owner.id);
+    expect(retireInventoriedCheckout).toHaveBeenCalledOnce();
+    expect(updateTask).toHaveBeenCalledWith(pending.id, expect.objectContaining({ status: 'completed' }), 'user', expect.any(Object));
+  });
+
   it('retains the task when another completion stage is still pending', async () => {
     const pending = { ...task(), status: 'in_progress', metadata: { ...task().metadata,
       deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-1' } };
@@ -1237,8 +1401,8 @@ describe('verifyAgentRepoState — divergent runs', () => {
     receipt.status = 'pending';
     receipt.stages.pipeline = { status: 'held', reason: 'checkout-retirement-pending' };
     const owner = { ...agentState(), id: 'agent-1', taskId: pending.id, status: 'completed',
-      result: { success: false, cleanupPending: true }, metadata: { ...agentState().metadata,
-        completionCleanup: receipt, repoStateVerification: { status: 'pending' } } };
+      result: manualCleanupResult(), metadata: { ...agentState().metadata,
+        checkoutCapture: { status: 'captured' }, completionCleanup: receipt, repoStateVerification: { status: 'pending' } } };
     getTaskById.mockResolvedValue(pending);
     getAgentRecord.mockResolvedValue(owner);
     existsSync.mockReturnValue(true);
@@ -1259,8 +1423,8 @@ describe('verifyAgentRepoState — divergent runs', () => {
     const pending = { ...task(), status: 'in_progress', metadata: { ...task().metadata,
       deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-1' } };
     const owner = { ...agentState(), id: 'agent-1', taskId: pending.id, status: 'completed',
-      result: { success: false, cleanupPending: true }, metadata: { ...agentState().metadata,
-        completionCleanup: completedCleanup(), repoStateVerification: { status: 'pending' } } };
+      result: manualCleanupResult(), metadata: { ...agentState().metadata,
+        checkoutCapture: { status: 'captured' }, completionCleanup: completedCleanup(), repoStateVerification: { status: 'pending' } } };
     getTaskById.mockResolvedValue(pending);
     getAgentRecord.mockResolvedValue(owner);
     existsSync.mockReturnValue(true);
@@ -1282,8 +1446,8 @@ describe('verifyAgentRepoState — divergent runs', () => {
     const pending = { ...task({ prCompletion: 'leave-open' }), status: 'in_progress',
       metadata: { ...task({ prCompletion: 'leave-open' }).metadata, deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-1' } };
     const owner = { ...agentState(), id: 'agent-1', taskId: pending.id, status: 'completed',
-      result: { success: false, cleanupPending: true }, metadata: { ...agentState().metadata,
-        completionCleanup: completedCleanup(), repoStateVerification: { status: 'pending' } } };
+      result: manualCleanupResult(), metadata: { ...agentState().metadata,
+        checkoutCapture: { status: 'captured' }, completionCleanup: completedCleanup(), repoStateVerification: { status: 'pending' } } };
     getTaskById.mockResolvedValue(pending);
     getAgentRecord.mockResolvedValue(owner);
     existsSync.mockReturnValue(true);
@@ -1303,8 +1467,8 @@ describe('verifyAgentRepoState — divergent runs', () => {
       metadata: { ...task({ claimFlow: true, analysisType: 'claim-issue' }).metadata,
         deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-swarm' } };
     const owner = { id: 'agent-swarm', taskId: pending.id, status: 'completed', startedAt: CREATED_AT,
-      result: { success: false, cleanupPending: true }, metadata: { isWorktree: false, workspacePath: '/repo',
-        configClaimFlow: true, claimBranches: branches, completedCheckouts: captures, completionCleanup: completedCleanup(),
+      result: manualCleanupResult(), metadata: { isWorktree: false, workspacePath: '/repo',
+        configClaimFlow: true, claimBranches: branches, completedCheckouts: captures, checkoutCapture: { status: 'captured' }, completionCleanup: completedCleanup(),
         repoStateVerification: { status: 'pending' } } };
     getTaskById.mockResolvedValue(pending);
     getAgentRecord.mockImplementation(async id => id === 'unrelated-owner' ? null : owner);
@@ -1379,8 +1543,8 @@ describe('verifyAgentRepoState — divergent runs', () => {
     const pending = { ...task(), status: 'in_progress', metadata: { ...task().metadata,
       deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-1' } };
     const owner = { ...agentState(), id: 'agent-1', taskId: pending.id, status: 'completed',
-      result: { success: false, cleanupPending: true }, metadata: { ...agentState().metadata,
-        completionCleanup: completedCleanup(), repoStateVerification: { status: 'pending' } } };
+      result: manualCleanupResult(), metadata: { ...agentState().metadata,
+        checkoutCapture: { status: 'captured' }, completionCleanup: completedCleanup(), repoStateVerification: { status: 'pending' } } };
     getAgentRecord.mockResolvedValue(owner);
     getTaskById.mockResolvedValueOnce(null);
     expect(await recheckAgentCleanup(owner.id, pending.id)).toEqual({ ok: false, reason: 'cleanup-owner-changed' });
@@ -1407,8 +1571,8 @@ describe('verifyAgentRepoState — divergent runs', () => {
     const pending = { ...task(), status: 'in_progress', metadata: { ...task().metadata,
       deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-1' } };
     const owner = { ...agentState(), id: 'agent-1', taskId: pending.id, status: 'completed',
-      result: { cleanupPending: true }, metadata: { ...agentState().metadata,
-        completionCleanup: completedCleanup(), repoStateVerification: { status: 'pending' } } };
+      result: manualCleanupResult(), metadata: { ...agentState().metadata,
+        checkoutCapture: { status: 'captured' }, completionCleanup: completedCleanup(), repoStateVerification: { status: 'pending' } } };
     getAgentRecord.mockResolvedValue(owner);
     getTaskById.mockResolvedValueOnce(pending).mockResolvedValueOnce(pending)
       .mockResolvedValueOnce({ ...pending, description: 'Changed by the operator' });
@@ -1422,8 +1586,8 @@ describe('verifyAgentRepoState — divergent runs', () => {
     const pending = { ...task(), status: 'in_progress', metadata: { ...task().metadata,
       deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-1' } };
     const owner = { ...agentState(), id: 'agent-1', taskId: pending.id, status: 'completed',
-      result: { success: false, cleanupPending: true }, metadata: { ...agentState().metadata,
-        completionCleanup: completedCleanup(), repoStateVerification: { status: 'pending' } } };
+      result: manualCleanupResult(), metadata: { ...agentState().metadata,
+        checkoutCapture: { status: 'captured' }, completionCleanup: completedCleanup(), repoStateVerification: { status: 'pending' } } };
     getTaskById.mockResolvedValue(pending);
     getAgentRecord.mockResolvedValue(owner);
     existsSync.mockReturnValue(true);
