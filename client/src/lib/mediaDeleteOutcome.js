@@ -8,6 +8,11 @@ export function mediaDeleteOutcome(result, kind = 'video') {
   const peer = result?.peerName || 'the owning machine';
   switch (result?.status) {
     case 'pending':
+      // Another holder deleted its copy (and the one here went with it) while
+      // the origin was unreachable; the origin still has to delete its own.
+      if (result.removedHere) {
+        return { remove: true, pendingDelete: null, notice: `Deleted on ${result.deletedOn || 'another machine'}; still pending on ${peer} until it is reachable`, tone: 'info' };
+      }
       return { remove: false, pendingDelete: result.pendingDelete || { peerId: null }, notice: `Delete pending until ${peer} is reachable`, tone: 'info' };
     case 'owner-unknown':
       return { remove: true, pendingDelete: null, notice: 'Owner unknown: hidden on this machine only, nothing was deleted', tone: 'info' };

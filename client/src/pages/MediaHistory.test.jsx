@@ -235,6 +235,17 @@ describe('remote video delete', () => {
     expect(screen.getByText('Clip one')).toBeInTheDocument();
   });
 
+  it('drops a row a holder already deleted while its origin is still pending', async () => {
+    deleteApi.deleteVideoHistoryItem.mockResolvedValue({
+      ok: true, status: 'pending', pendingDelete: { peerId: 'rec-peer', queuedAt: '2026-01-02T00:00:00.000Z' },
+      peerName: 'Example Peer', deletedOn: 'Example Holder', removedHere: true,
+    });
+    open();
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete v1.mp4' }));
+    await waitFor(() => expect(screen.queryByText('Clip one')).toBeNull());
+    expect(toast).toHaveBeenCalledWith('Deleted on Example Holder; still pending on Example Peer until it is reachable');
+  });
+
   it('resolves a pending row\'s peer name from the registry when the page loads', async () => {
     rows[0].data.pendingDelete = { peerId: 'rec-peer', queuedAt: '2026-01-02T00:00:00.000Z' };
     open();

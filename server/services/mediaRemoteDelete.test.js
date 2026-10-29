@@ -355,6 +355,65 @@ describe('owner acknowledgements', () => {
   });
 });
 
+describe('the origin is the authority', () => {
+  const twoHolders = (originExtra = {}) => {
+    registry.peers = [peer('rec-owner', 'peer-o', originExtra), peer('rec-sup', 'peer-s')];
+    return atomicWrite(HISTORY, [row('v1', { originInstanceId: 'peer-o', suppliedByInstanceId: 'peer-s' })]);
+  };
+  const dialed = () => net.fetch.mock.calls.map(([, , target]) => target.id);
+
+  // Uniquely catches a delete reported done because a supplier acked while the
+  // origin, which refuses other machines' tombstones, never heard of it.
+  it('queues the unreachable origin even after a supplier acks, and reports pending', async () => {
+    await twoHolders();
+    net.fetch = vi.fn((url, options, target) => (target.id === 'rec-sup' ? Promise.resolve(ownerAck('v1')) : unreachable()));
+    const result = await deleteMediaAnywhere('video', 'v1');
+    expect(dialed()).toEqual(['rec-owner', 'rec-sup']);
+    expect(result).toMatchObject({
+      status: 'pending', peerName: 'Example rec-owner', deletedOn: 'Example rec-sup', removedHere: true,
+      pendingDelete: { peerId: 'rec-owner' },
+    });
+    // The supplier's delete stands: the copy here went with its tombstone.
+    expect(await readRows()).toEqual([]);
+    expect((await listMediaTombstones('video')).map((t) => t.key)).toEqual(['v1']);
+    expect(await listMediaDeleteQueue()).toEqual([
+      { peerId: 'rec-owner', kind: 'video', key: 'v1', queuedAt: result.pendingDelete.queuedAt, holderDeleted: true },
+    ]);
+
+    // The queued command outlives the row here and completes on the origin.
+    disarmQueue = initMediaRemoteDelete();
+    await listenerFor('peers:updated')(registry.peers.map((p) => ({ ...p, status: 'offline' })));
+    expect(await listMediaDeleteQueue()).toHaveLength(1);
+    net.fetch = vi.fn(async () => ownerAck('v1'));
+    expect(await listenerFor('peer:online')(registry.peers[0])).toBe(1);
+    expect(dialed()).toEqual(['rec-owner']);
+    expect(await listMediaDeleteQueue()).toEqual([]);
+  });
+
+  it('reports deleted when the origin acks, without dialing other holders', async () => {
+    await twoHolders();
+    net.fetch = vi.fn(async () => ownerAck('v1'));
+    expect(await deleteMediaAnywhere('video', 'v1')).toEqual({ status: 'deleted', peerName: 'Example rec-owner' });
+    expect(dialed()).toEqual(['rec-owner']);
+    expect(await listMediaDeleteQueue()).toEqual([]);
+  });
+
+  it('surfaces the origin\'s 403 without asking other holders', async () => {
+    await twoHolders();
+    net.fetch = vi.fn(async () => json(403, { error: 'off', code: 'MEDIA_DELETE_FORBIDDEN' }));
+    await expect(deleteMediaAnywhere('video', 'v1')).rejects.toMatchObject({ status: 403, code: 'MEDIA_DELETE_FORBIDDEN' });
+    expect(dialed()).toEqual(['rec-owner']);
+    expect((await readRows())[0].pendingDelete).toBeUndefined();
+    expect(await listMediaDeleteQueue()).toEqual([]);
+  });
+
+  it('refuses with 409 when the origin is unpaired, even with a paired holder', async () => {
+    await twoHolders({ syncSecret: undefined });
+    await expect(deleteMediaAnywhere('video', 'v1')).rejects.toMatchObject({ status: 409, message: expect.stringContaining('Example rec-owner') });
+    expect(peerFetch).not.toHaveBeenCalled();
+  });
+});
+
 describe('cancel races', () => {
   it('a cancel during the first dial is not undone by the unreachable result', async () => {
     await atomicWrite(HISTORY, [row('v1', { originInstanceId: 'peer-o' })]);

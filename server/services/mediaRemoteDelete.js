@@ -48,7 +48,9 @@ const isEntry = (e) => isPlainObject(e) && KINDS.includes(e.kind) && isNonBlankS
 async function readQueue() {
   const raw = await readJSONFile(QUEUE_FILE(), null, { strict: true });
   const entries = Array.isArray(raw?.entries) ? raw.entries : [];
-  return entries.filter(isEntry).map(({ peerId, kind, key, queuedAt }) => ({ peerId, kind, key, queuedAt }));
+  return entries.filter(isEntry).map(({ peerId, kind, key, queuedAt, holderDeleted }) => (
+    holderDeleted === true ? { peerId, kind, key, queuedAt, holderDeleted } : { peerId, kind, key, queuedAt }
+  ));
 }
 
 // `fn(entries)` returns the next list; the file is rewritten only when it changes.
@@ -176,6 +178,9 @@ const BAD_TOMBSTONE_REASONS = new Set(['invalid-key', 'future-or-invalid-deleted
  */
 async function retireLocalCopy(kind, peer, key, tombstone) {
   const media = MEDIA[kind];
+  // A queued command for the origin after another holder's ack already retired
+  // the copy here (holderDeleted): nothing is left to retire.
+  if (!(await media.getRow(key))) return { status: 'deleted' };
   const { authorizeRemoteMediaTombstone } = await import('./mediaTombstoneAuthorization.js');
   const verdict = authorizeRemoteMediaTombstone({
     peer, tombstone, localRow: await media.getRow(key), hostedIndex: await hostedIndex(), via: 'event',
@@ -248,10 +253,14 @@ async function deleteAnywhere(kind, key) {
     // keeps its own copy, since it never accepts this machine's tombstone.
     return deleteLocally(kind, key);
   }
-  // Fail closed: a registered owner this machine cannot reach would keep its copy.
-  const targets = registered.filter((p) => p.enabled !== false && peerIsPaired(p));
-  if (targets.length === 0) {
-    const peer = registered[0];
+  // Fail closed: a registered owner this machine cannot reach would keep its
+  // copy. The origin is the authority every other copy re-syncs from, so an
+  // unpaired origin refuses the delete even when another holder could take it.
+  const usable = (p) => p.enabled !== false && peerIsPaired(p);
+  const targets = registered.filter(usable);
+  const origin = registered.find((p) => p.instanceId === row.originInstanceId) ?? null;
+  if (targets.length === 0 || (origin && !usable(origin))) {
+    const peer = origin ?? registered[0];
     const action = peer.enabled === false ? `Turn ${peerLabel(peer)} back on` : `Pair with ${peerLabel(peer)}`;
     throw new ServerError(`${action} to delete its media from here`, {
       status: 409, code: 'MEDIA_OWNER_NOT_PAIRED',
@@ -268,6 +277,9 @@ async function deleteAnywhere(kind, key) {
   if (cancelled()) return withdrawn();
   const unreachable = [];
   let failure = null;
+  // Another holder's ack while the origin is unreachable: its copy is gone,
+  // but the delete is not done until the origin has it too.
+  let holderAck = null;
   try {
     for (const peer of targets) {
       // A peer the probe marks offline is queued for its `peer:online` rather than dialed.
@@ -278,8 +290,12 @@ async function deleteAnywhere(kind, key) {
         // The owner already deleted, so a cancel that raced the dial cannot undo it.
         const retired = await retireLocalCopy(kind, peer, key, result.tombstone);
         if (retired.status === 'invalid-ack') throw commandFailed(peer, kind, `unusable tombstone: ${retired.reason}`);
+        console.log(`🗑️ ${media.label} ${key} deleted on ${peerLabel(peer)}`);
+        if (origin && peer !== origin && unreachable.includes(origin)) {
+          holderAck = { peer, retired };
+          break;
+        }
         await dropEntriesFor(kind, key);
-        console.log(`🗑️ ${media.label} ${key} deleted on its owner ${peerLabel(peer)}`);
         return { ...retired, peerName: peerLabel(peer) };
       }
       if (cancelled()) return withdrawn();
@@ -292,6 +308,7 @@ async function deleteAnywhere(kind, key) {
     await setPendingFlag(kind, key, null);
     throw err;
   }
+  if (holderAck) return queueForOrigin(kind, key, { origin, queuedAt, holderAck, cancelled });
   if (unreachable.length > 0) {
     const peer = unreachable[0];
     const entry = { peerId: peer.id, kind, key, queuedAt };
@@ -317,6 +334,43 @@ async function deleteAnywhere(kind, key) {
   return { status: 'owner-unknown' };
 }
 
+/**
+ * Another holder deleted its copy (and the one here was retired by its
+ * tombstone) while the origin was unreachable. The origin refuses other
+ * machines' tombstones, so it only learns of the delete from this command:
+ * queue it, marked `holderDeleted` so it outlives the row here, and report the
+ * delete pending until the origin acks. A cancel only stops the queuing; the
+ * holder's delete already happened.
+ */
+async function queueForOrigin(kind, key, { origin, queuedAt, holderAck, cancelled }) {
+  const media = MEDIA[kind];
+  const { peer: holder, retired } = holderAck;
+  const done = { ...retired, peerName: peerLabel(holder) };
+  lastAttemptAt.set(origin.id, Date.now());
+  let queued = false;
+  await updateQueue((entries) => {
+    if (cancelled()) return entries;
+    queued = true;
+    const entry = { peerId: origin.id, kind, key, queuedAt, holderDeleted: true };
+    return [...entries.filter((e) => !(e.kind === kind && e.key === key)), entry];
+  });
+  const pendingDelete = { peerId: origin.id, queuedAt };
+  if (!queued) {
+    await setPendingFlag(kind, key, null);
+    return done;
+  }
+  // A copy that stayed here (re-created since, or only hidden) shows the pending origin.
+  await setPendingFlag(kind, key, pendingDelete);
+  console.log(`🔌 ${media.label} ${key} delete queued until its origin ${peerLabel(origin)} is reachable`);
+  return {
+    status: 'pending',
+    pendingDelete,
+    peerName: peerLabel(origin),
+    deletedOn: peerLabel(holder),
+    removedHere: retired.status === 'deleted' || retired.hiddenHere === true,
+  };
+}
+
 // One delete per row at a time; a repeated click joins the one in flight.
 const inFlight = new Map();
 
@@ -324,7 +378,8 @@ const inFlight = new Map();
  * Delete `kind:key` wherever it is owned. Resolves `{ status }`:
  * `deleted` (gone here and on its owner), `deleted-remote` (gone on its owner;
  * the copy here stays, `hiddenHere` when hidden), `pending` (queued for an
- * unreachable owner; also `pendingDelete` and `peerName`), `owner-unknown`
+ * unreachable owner; also `pendingDelete` and `peerName`; when another holder
+ * already deleted its copy, also `deletedOn` and `removedHere`), `owner-unknown`
  * (hidden here only) or `cancelled` (withdrawn while the owner was dialed).
  * Throws 403 `MEDIA_DELETE_FORBIDDEN` when the owner refuses and 502
  * `MEDIA_DELETE_FAILED` when its answer is unusable.
@@ -381,7 +436,8 @@ async function pruneMediaDeleteQueue(peers, nowMs = Date.now()) {
   const dropped = [];
   await updateQueue((entries) => entries.filter((entry) => {
     const row = rows.get(`${entry.kind}:${entry.key}`);
-    const reason = staleReason(entry) ?? (!row ? 'row gone' : rowRecreated(row, entry) ? 're-created' : null);
+    const reason = staleReason(entry)
+      ?? (!row ? (entry.holderDeleted ? null : 'row gone') : rowRecreated(row, entry) ? 're-created' : null);
     if (reason) dropped.push({ entry, reason });
     return !reason;
   }));

@@ -299,7 +299,8 @@ export const uploadGalleryVideo = (base64Data, filename, options = {}) => reques
   ...options,
 });
 // Resolves `{ ok, status }`: `deleted`, `deleted-remote`, `pending` (queued for
-// the owning peer, with `pendingDelete` and `peerName`), `owner-unknown` (hidden
+// the owning peer, with `pendingDelete` and `peerName`; `deletedOn` and
+// `removedHere` when another holder already deleted), `owner-unknown` (hidden
 // here only) or `cancelled`; lib/mediaDeleteOutcome.js maps it for a list.
 export const deleteVideoHistoryItem = (id, options = {}) => request(`/video-gen/history/${encodeURIComponent(id)}`, { method: 'DELETE', ...options });
 export const cancelVideoPendingDelete = (id, options = {}) => request(`/video-gen/history/${encodeURIComponent(id)}/cancel-delete`, { method: 'POST', ...options });
