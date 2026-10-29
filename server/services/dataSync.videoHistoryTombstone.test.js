@@ -283,4 +283,10 @@ describe('Make-primary designation in the video snapshot', () => {
     expect(older.applied).toBe(false);
     expect(await stored()).toMatchObject({ primaryInstanceId: 'peer-b' });
   });
+
+  it('keeps the local designation when a re-created incoming row without one wins the row', async () => {
+    await atomicWrite(HISTORY, [designated('peer-a', '2026-06-01T00:00:00.000Z')]);
+    await dataSync.applyRemote('videoHistory', { videos: [row('v1', '2026-05-15T00:00:00.000Z', ownedBy('peer-a'))] }, { peerId: 'peer-a' });
+    expect(await stored()).toMatchObject({ createdAt: '2026-05-15T00:00:00.000Z', primaryInstanceId: 'peer-a', primaryAt: '2026-06-01T00:00:00.000Z' });
+  });
 });

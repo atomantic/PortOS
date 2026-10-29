@@ -1021,16 +1021,17 @@ export async function mergeVideoRows(incomingRows, source) {
       'createdAt',
     );
     // The Make-primary designation is the one field of a row that moves after
-    // creation: field LWW on `primaryAt`, independent of the row's own stamp.
+    // creation: the newest valid `primaryAt` of the local and incoming rows wins,
+    // whichever side won the row itself (a re-created row must not drop it).
     const incomingById = new Map(incoming.filter(hasId).map((r) => [r.id, r]));
+    const designated = (r) => typeof r?.primaryInstanceId === 'string' && r.primaryInstanceId && parseTsMs(r.primaryAt) !== null;
     let primaryChanged = false;
     const rawMerged = lwwMerged.map((row) => {
-      const theirs = incomingById.get(row.id);
-      const theirsAt = parseTsMs(theirs?.primaryAt);
-      if (!theirs || typeof theirs.primaryInstanceId !== 'string' || !theirs.primaryInstanceId || theirsAt === null) return row;
-      if ((parseTsMs(row.primaryAt) ?? -Infinity) >= theirsAt) return row;
+      const best = [before.get(row.id), incomingById.get(row.id)].filter(designated)
+        .reduce((a, b) => (!a || parseTsMs(b.primaryAt) > parseTsMs(a.primaryAt) ? b : a), null);
+      if (!best || (row.primaryInstanceId === best.primaryInstanceId && row.primaryAt === best.primaryAt)) return row;
       primaryChanged = true;
-      return { ...row, primaryInstanceId: theirs.primaryInstanceId, primaryAt: theirs.primaryAt };
+      return { ...row, primaryInstanceId: best.primaryInstanceId, primaryAt: best.primaryAt };
     });
     if (!rowsChanged && !primaryChanged) return HISTORY_UNCHANGED;
     // Ownership of a row held here never comes from a sender: its origin and

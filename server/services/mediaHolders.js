@@ -196,6 +196,8 @@ async function releaseLocalCopy(kind, filename, primary, primaryAt) {
   console.log(`🗂️ ${kind} ${filename}: local copy released; it now streams from ${peerLabel(primary)}`);
 }
 
+const RETRYABLE_CODES = new Set(['PRIMARY_UNREACHABLE', 'MEDIA_BUSY']);
+
 /**
  * Send the release command to one holder. Resolves `{ outcome, detail? }`:
  * `ok`, `not-held`, `forbidden`, `superseded` (a newer primary is recorded
@@ -220,6 +222,8 @@ async function sendReleaseCommand(peer, { kind, filename, primaryInstanceId, pri
   if (res.status === 403 && body?.code === 'MEDIA_DELETE_FORBIDDEN') return { outcome: 'forbidden' };
   if (res.status === 409 && body?.code === 'PRIMARY_SUPERSEDED') return { outcome: 'superseded' };
   const detail = `http-${res.status}${body?.code ? ` ${body.code}` : ''}`;
+  // The holder could not reach the primary, or is mid-change on the same file: retry later.
+  if (res.status === 409 && RETRYABLE_CODES.has(body?.code)) return { outcome: 'unreachable', detail };
   if (res.status >= 500 && res.status !== 501) return { outcome: 'unreachable', detail };
   return { outcome: 'error', detail };
 }
@@ -299,6 +303,24 @@ export async function listMediaHolders() {
   return { self, items };
 }
 
+// Files with a Make primary or an incoming release in progress on this machine.
+// Two machines making different holders primary at once must not each verify
+// the other's copy and then both release theirs: a release that arrives while
+// this machine is changing the same file answers busy (retryable, so it stays
+// queued) instead of waiting, which cannot deadlock the two commands.
+const busyFiles = new Set();
+
+async function withFileBusy(kind, filename, busyError, fn) {
+  const key = fileKey(kind, filename);
+  if (busyFiles.has(key)) throw busyError();
+  busyFiles.add(key);
+  try {
+    return await fn();
+  } finally {
+    busyFiles.delete(key);
+  }
+}
+
 const KEPT_REASONS = {
   forbidden: 'media delete is turned off there',
   superseded: 'a newer primary is recorded there',
@@ -313,6 +335,11 @@ const KEPT_REASONS = {
  */
 export async function makeMediaPrimary({ kind, filename, instanceId }) {
   if (!KINDS.includes(kind) || !validName(filename)) throw new ServerError('Unknown media', { status: 400, code: 'VALIDATION_ERROR' });
+  const busy = () => new ServerError('Make primary is already running for this media', { status: 409, code: 'MEDIA_BUSY' });
+  return withFileBusy(kind, filename, busy, () => designatePrimary(kind, filename, instanceId));
+}
+
+async function designatePrimary(kind, filename, instanceId) {
   const { self, registered, remote } = await collectHolders();
   const others = [...(remote.get(fileKey(kind, filename)) ?? [])];
   const selfHolds = holdsHere(kind, filename);
@@ -337,9 +364,19 @@ export async function makeMediaPrimary({ kind, filename, instanceId }) {
   }
 
   const primaryAt = new Date().toISOString();
+  const command = { kind, filename, primaryInstanceId: instanceId, primaryAt };
+  if (primary && selfHolds) {
+    // Before this machine gives up its copy, the primary confirms it keeps its
+    // own under its busy guard (the release route, addressed to the primary):
+    // two machines naming each other at once both answer busy, so neither lets go.
+    const confirmed = await sendReleaseCommand(primary, command);
+    if (confirmed.outcome !== 'ok') {
+      const why = confirmed.outcome === 'unreachable' ? 'it is busy or unreachable; try again' : KEPT_REASONS[confirmed.outcome] ?? `${confirmed.detail}; it may need an update`;
+      throw new ServerError(`${peerLabel(primary)} did not confirm it keeps this ${kind} (${why}); nothing was deleted`, { status: 409, code: 'PRIMARY_NOT_CONFIRMED' });
+    }
+  }
   await setPrimaryOnRow(kind, filename, instanceId, primaryAt);
   const result = { primaryInstanceId: instanceId, released: [], pending: [], kept: [] };
-  const command = { kind, filename, primaryInstanceId: instanceId, primaryAt };
   const queued = [];
   for (const holderId of others.filter((id) => id !== instanceId)) {
     const peer = registered.get(holderId);
@@ -398,6 +435,11 @@ export async function executePeerMediaRelease(senderPeerId, { kind, filename, pr
     throw new ServerError('Media delete is turned off for this peer', { status: 403, code: 'MEDIA_DELETE_FORBIDDEN' });
   }
   if (!KINDS.includes(kind) || !validName(filename)) throw new ServerError('Unknown media', { status: 400, code: 'VALIDATION_ERROR' });
+  const busy = () => new ServerError('This machine is changing that media; retry later', { status: 409, code: 'MEDIA_BUSY' });
+  return withFileBusy(kind, filename, busy, () => releaseForPeer(peers, sender, { kind, filename, primaryInstanceId, primaryAt }));
+}
+
+async function releaseForPeer(peers, sender, { kind, filename, primaryInstanceId, primaryAt }) {
   if (!holdsHere(kind, filename)) throw new ServerError('This machine does not hold that media', { status: 404, code: 'MEDIA_NOT_HELD' });
   // A delayed (queued) release must not undo a newer designation recorded here.
   const recorded = await currentPrimary(kind, filename);

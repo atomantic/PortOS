@@ -342,6 +342,21 @@ describe('media held by both machines', () => {
     expect(await holdersOf(b, 'v-multi')).toBeNull();
   });
 
+  it('making the other machine primary has it confirm first, then releases the copy here', async () => {
+    await heldOnBoth('v-there');
+    await a.call('takeRequests');
+
+    const result = await b.call('makePrimary', { kind: 'video', filename: 'v-there.mp4', instanceId: 'inst-a' });
+
+    expect(result).toMatchObject({ primaryInstanceId: 'inst-a', released: [{ name: 'This machine' }] });
+    // A confirmed through the release route and kept its copy.
+    expect(await a.call('takeRequests')).toContain('POST /api/peer-media/release');
+    expect((await a.call('files', { id: 'v-there' })).video).toBe(true);
+    expect(await a.call('fullRow', { id: 'v-there' })).toMatchObject({ primaryInstanceId: 'inst-a' });
+    expect((await b.call('files', { id: 'v-there' })).video).toBe(false);
+    expect(await b.call('fetchOwnVideo', { id: 'v-there' })).toEqual({ status: 200, location: 'remote', body: 'synthetic-video-v-there' });
+  });
+
   it('a holder that is offline keeps its copy, shown pending, until its queued release is delivered', async () => {
     await heldOnBoth('v-queued');
     await b.call('setPeerFields', { peerId: 'rec-a', fields: { status: 'offline' } });
