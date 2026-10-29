@@ -1,3 +1,5 @@
+import { validSpawnBudgetEpisode } from './spawnBudgetProof.js';
+
 /** Crash-safe task handoff inside the original completion receipt. No branch discovery. */
 const DISPATCH_KEYS = ['claimedBy', 'claimedAt', 'lastSpawnedAt', 'totalSpawnCount'];
 const VERSION_KEYS = [...DISPATCH_KEYS, 'updatedAt', 'deliveryRecovery', 'deliveryRecoveryAgentId'];
@@ -12,17 +14,6 @@ const spawnCount = value => {
 const matches = (metadata, expected) => expected.every(([key, value]) => key === 'totalSpawnCount'
   ? spawnCount(value) !== null && spawnCount(metadata?.[key]) === spawnCount(value)
   : (metadata?.[key] ?? null) === value);
-
-/** A higher receipt count is a reason to hold, not proof of the current episode. */
-export function hasUndercountedDispatch(task, agent) {
-  const binding = agent?.metadata?.completionTaskDispatch;
-  if (agent?.taskId !== task?.id || binding?.taskId !== task?.id
-    || binding.taskType !== (task.taskType || 'user') || !Array.isArray(binding.expected)) return false;
-  const rows = binding.expected.filter(row => Array.isArray(row) && row.length === 2 && row[0] === 'totalSpawnCount');
-  const charged = rows.length === 1 ? spawnCount(rows[0][1]) : null;
-  const current = spawnCount(task.metadata?.totalSpawnCount);
-  return charged !== null && current !== null && charged > current;
-}
 
 /** Match the server's dispatch binding, including metadata scalar round-trips. */
 export function matchesCompletionTaskDispatch(agent, task) {
@@ -39,8 +30,11 @@ export async function bindCompletionTaskDispatch(agentId, task) {
   if (task?.status !== 'in_progress' || !task.metadata?.lastSpawnedAt || !task.metadata?.claimedBy
     || spawnCount(task.metadata.totalSpawnCount) === null) return false;
   const { updateAgent } = await import('./cosAgentLifecycle.js');
+  const proof = task.metadata.spawnBudgetProof;
   return !!await updateAgent(agentId, { metadata: { completionTaskDispatch: {
     taskId: task.id, taskType: task.taskType || 'user', expected: entries(task.metadata, DISPATCH_KEYS),
+    ...(validSpawnBudgetEpisode(proof) && proof.dispatch?.agentId === agentId
+      ? { spawnBudgetEpoch: proof.epoch, spawnBudgetStartedAt: proof.dispatch.startedAt } : {}),
   } } });
 }
 
