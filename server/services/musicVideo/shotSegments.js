@@ -30,7 +30,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { AAC_ENCODE_ARGS, runFfmpegProcess, supportsSetparamsFilter } from '../../lib/ffmpeg.js';
 import { filterGraphViaFile } from '../../lib/ffmpegFilterGraph.js';
 import { isFilmLookNeutral, normalizeFilmLook } from '../../lib/filmLook.js';
-import { normalizeStatsOutro } from '../../lib/musicVideoStatsOutro.js';
+import { endingParts } from '../../lib/musicVideoEnding.js';
 import { AUDIO_NORM, buildAudioBedMix } from '../videoTimeline/audioBedMix.js';
 import { buildMusicVideoFfmpegArgs, planMusicVideoRender } from './render.js';
 import { composedLyricWindows, projectTypographyPlan } from './composition.js';
@@ -177,14 +177,17 @@ export async function planShotSegments(project, options) {
 }
 
 async function planOutroSegment(project, { dir, width, height, fps, offsetSec }) {
-  const outro = normalizeStatsOutro(project?.statsOutro);
-  if (!outro?.enabled) return null;
-  const stats = await getMusicVideoOutroStats(project);
+  const parts = endingParts(project);
+  if (!parts.length) return null;
+  const durationSec = parts.reduce((sum, part) => sum + part.durationSec, 0);
+  const stats = parts.some((part) => part.kind === 'floor') ? await getMusicVideoOutroStats(project) : null;
+  // A floor-only ending keeps the key it had before credits existed, so its cached file still serves.
+  const outro = parts.length === 1 && parts[0].kind === 'floor' ? parts[0].outro : parts;
   const baseKey = hash({ v: SHOT_SEGMENT_VERSION, outro, stats, width, height, fps });
   const look = shotFilmLook(project, null);
   const lookKey = look ? segmentLookKey({ baseKey, startSec: offsetSec }, look, fps) : null;
   return {
-    outro: true, stats, startSec: offsetSec, durationSec: outro.durationSec, frames: Math.round(outro.durationSec * fps), look, baseKey, lookKey,
+    outro: true, stats, startSec: offsetSec, durationSec, frames: Math.round(durationSec * fps), look, baseKey, lookKey,
     basePath: join(dir, `outro-${baseKey}.mp4`),
     path: join(dir, lookKey ? `outro-${baseKey}-${lookKey}.mp4` : `outro-${baseKey}.mp4`),
   };

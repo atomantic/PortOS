@@ -4,6 +4,7 @@ import { MUSIC_VIDEO_GRADE_PRESETS, MUSIC_VIDEO_GRADE_MAX_GRAIN } from './musicV
 import { filmLookSchema } from './filmLookValidation.js';
 import { TITLE_CARD_FONTS, TITLE_CARD_LIMITS, TITLE_CARD_POSITIONS, TITLE_CARD_STYLES } from './musicVideoTitleCard.js';
 import { STATS_OUTRO_LIMITS, STATS_OUTRO_LINES } from './musicVideoStatsOutro.js';
+import { CREDITS_OUTRO_LAYOUTS, CREDITS_OUTRO_LIMITS } from './musicVideoCreditsOutro.js';
 import { COVER_DESIGN_OPTIONS } from './musicVideoCoverOverlay.js';
 import { DISTROKID_REMEMBERED_OPTIONS } from './distrokidGenres.js';
 import { CROSS_LINK_EDIT_TARGETS } from './musicVideoCrossLinks.js';
@@ -1450,6 +1451,21 @@ export const musicVideoStatsOutroSchema = z.object({
   hidden: z.array(z.enum(STATS_OUTRO_LINES.map((line) => line.key))).max(STATS_OUTRO_LINES.length).optional(),
 }).strict();
 
+// The film credits ending (lib/musicVideoCreditsOutro.js): song, artist,
+// role/name lines and a closing line after the song.
+export const musicVideoCreditsOutroSchema = z.object({
+  enabled: z.boolean().optional(),
+  durationSec: z.number().min(CREDITS_OUTRO_LIMITS.durationMin).max(CREDITS_OUTRO_LIMITS.durationMax).optional(),
+  layout: z.enum(CREDITS_OUTRO_LAYOUTS).optional(),
+  title: z.string().max(CREDITS_OUTRO_LIMITS.textMax).optional(),
+  artist: z.string().max(CREDITS_OUTRO_LIMITS.textMax).optional(),
+  lines: z.array(z.object({
+    role: z.string().max(CREDITS_OUTRO_LIMITS.textMax).optional(),
+    name: z.string().max(CREDITS_OUTRO_LIMITS.textMax).optional(),
+  }).strict()).max(CREDITS_OUTRO_LIMITS.linesMax).optional(),
+  footer: z.string().max(CREDITS_OUTRO_LIMITS.textMax).optional(),
+}).strict();
+
 // The opening title card (lib/musicVideoTitleCard.js): song title, artist, year
 // in a corner over the opener. Every field is optional (the normalizer fills
 // defaults); null on the project = none.
@@ -1507,6 +1523,8 @@ export const musicVideoProjectCreateSchema = z.object({
   titleCard: musicVideoTitleCardSchema.nullable().optional(),
   // The cutting room floor outro after the song (lib/musicVideoStatsOutro.js); null = off.
   statsOutro: musicVideoStatsOutroSchema.nullable().optional(),
+  // The film credits after the song (lib/musicVideoCreditsOutro.js); null = never set up.
+  creditsOutro: musicVideoCreditsOutroSchema.nullable().optional(),
 }).strict();
 
 export const musicVideoProjectUpdateSchema = z.object({
@@ -1540,6 +1558,8 @@ export const musicVideoProjectUpdateSchema = z.object({
   titleCard: musicVideoTitleCardSchema.nullable().optional(),
   // The cutting room floor outro after the song (lib/musicVideoStatsOutro.js); null = off.
   statsOutro: musicVideoStatsOutroSchema.nullable().optional(),
+  // The film credits after the song (lib/musicVideoCreditsOutro.js); null = never set up.
+  creditsOutro: musicVideoCreditsOutroSchema.nullable().optional(),
   // The Create › Storyboards board this video is planned from; null unlinks.
   storyboardId: z.string().regex(STORYBOARD_ID_PATTERN, 'storyboardId must be a storyboard id').nullable().optional(),
 }).strict();
