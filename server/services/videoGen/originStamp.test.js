@@ -21,9 +21,10 @@ const dataSync = await import('../dataSync.js');
 const { rowOwnerCandidates } = await import('../../lib/mediaRowOwners.js');
 
 describe('video row origin stamping', () => {
-  it('stamps a new locally-created row with originInstanceId, never an existing one', async () => {
-    await mutateVideoHistory((h) => { h.unshift({ id: 'a', createdAt: '2026-01-01T00:00:00Z', originInstanceId: 'other' }); return h; });
-    await mutateVideoHistory((h) => { h.unshift({ id: 'b', createdAt: '2026-01-02T00:00:00Z' }); return h; });
+  it('stamps every new locally-created row with the local origin, never an existing one', async () => {
+    await mutateVideoHistory((h) => { h.unshift({ id: 'a', createdAt: '2026-01-01T00:00:00Z', originInstanceId: 'other' }); return h; }, { stampOrigin: false });
+    await mutateVideoHistory((h) => { h.unshift({ id: 'b', createdAt: '2026-01-02T00:00:00Z', originInstanceId: 'copied' }); return h; });
+    await mutateVideoHistory((h) => { h.find((r) => r.id === 'a').prompt = 'edited'; return h; });
     const h = await loadHistory();
     expect(h.find((r) => r.id === 'b').originInstanceId).toBe('local-inst');
     expect(h.find((r) => r.id === 'a').originInstanceId).toBe('other');
@@ -50,6 +51,16 @@ describe('origin and supplier invariants', () => {
     const h = await loadHistory();
     expect(h.find((x) => x.id === 'r').originInstanceId).toBe('peer-o');
     expect(h.find((x) => x.id === 'n').originInstanceId).toBeUndefined();
+  });
+
+  it('an upscale-shaped copy of a peer row gets the local origin and no supplier', async () => {
+    await mutateVideoHistory((h) => { h.unshift({ id: 'src', createdAt: '2026-04-04T00:00:00Z', originInstanceId: 'peer-o', suppliedByInstanceId: 'peer-o' }); return h; }, { stampOrigin: false });
+    await mutateVideoHistory((h) => { h.unshift({ ...h.find((x) => x.id === 'src'), id: 'up', upscaledFrom: 'src' }); return h; });
+    const h = await loadHistory();
+    const up = h.find((x) => x.id === 'up');
+    expect(up.originInstanceId).toBe('local-inst');
+    expect(up).not.toHaveProperty('suppliedByInstanceId');
+    expect(h.find((x) => x.id === 'src')).toMatchObject({ originInstanceId: 'peer-o', suppliedByInstanceId: 'peer-o' });
   });
 
   it('suppliedBy never rides the snapshot and a foreign incoming value is dropped', async () => {

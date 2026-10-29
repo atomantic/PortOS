@@ -9,6 +9,7 @@ import { makePathsProxy, lazyTempDataRoot, cleanupTempDataRoots } from '../../li
 vi.mock('../../lib/fileUtils.js', async (importOriginal) =>
   makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-trim-start-') }));
 afterAll(cleanupTempDataRoots);
+vi.mock('../instanceIdentity.js', async (importOriginal) => ({ ...(await importOriginal()), getInstanceId: async () => 'local-inst' }));
 
 const hasFfmpeg = (() => {
   try {
@@ -51,6 +52,16 @@ describe.skipIf(!hasFfmpeg)('trimHistoryItemStart (real ffmpeg)', () => {
     expect(await probeFrameCount(join(PATHS.videos, `${SOURCE_ID}.mp4`))).toBe(48);
     const history = await loadHistory();
     expect(history.map((h) => h.id)).toEqual([entry.id, SOURCE_ID]);
+  });
+
+  // Uniquely catches a derived clip that inherits a peer source row's origin and
+  // machine-local supplier, which would make the peer its owner here.
+  it('stamps a trim of a peer-supplied clip with the local origin and no supplier', async () => {
+    await mutateVideoHistory((h) => { Object.assign(h[0], { originInstanceId: 'peer-o', suppliedByInstanceId: 'peer-o' }); return h; }, { stampOrigin: false });
+    const entry = await trimHistoryItemStart(SOURCE_ID, { startSec: 0.5 });
+    const stored = (await loadHistory()).find((h) => h.id === entry.id);
+    expect(stored.originInstanceId).toBe('local-inst');
+    expect(stored).not.toHaveProperty('suppliedByInstanceId');
   });
 
   it('refuses a start at the first frame or past the end, writing nothing', async () => {

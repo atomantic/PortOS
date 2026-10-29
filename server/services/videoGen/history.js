@@ -134,7 +134,14 @@ export function mutateVideoHistory(mutator, { stampOrigin = true } = {}) {
         origin = await import('../instanceIdentity.js')
           .then((m) => m.getInstanceId().then((id) => (id === m.UNKNOWN_INSTANCE_ID ? null : id)))
           .catch((err) => { console.log(`⏭️ Video origin stamp skipped: ${err.message}`); return null; });
-        if (origin) for (const r of added) if (!r.originInstanceId) r.originInstanceId = origin;
+        // A new id on the local path was created HERE, even when the mutator spread
+        // a peer's source row (upscale, trim): origin is this machine, never a
+        // copied one, and the copied machine-local supplier is dropped.
+        for (const r of added) {
+          delete r.suppliedByInstanceId;
+          if (origin) r.originInstanceId = origin;
+          else delete r.originInstanceId;
+        }
       }
     }
     await saveHistory(toSave);
