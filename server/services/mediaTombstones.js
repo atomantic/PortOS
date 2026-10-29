@@ -14,6 +14,7 @@ import {
   recordTombstone,
   mergeTombstones,
   isTombstoned,
+  clearTombstone,
 } from '../lib/tombstones.js';
 
 const FILE = () => join(PATHS.data, 'media-tombstones.json');
@@ -46,6 +47,16 @@ export function recordMediaTombstone(kind, key, deletedAt) {
     store[kind] = recordTombstone(store[kind], key, { keyField: KEY_FIELD, deletedAt, limit: DEFAULT_TOMBSTONE_LIMIT });
     await writeStore(store);
     return store[kind].find((t) => t[KEY_FIELD] === key) ?? null;
+  });
+}
+
+// Undo a tombstone recorded for a delete that then failed.
+export function clearMediaTombstone(kind, key) {
+  assertKind(kind);
+  return queueWrite(async () => {
+    const store = await readStore();
+    store[kind] = clearTombstone(store[kind], key, KEY_FIELD);
+    await writeStore(store);
   });
 }
 

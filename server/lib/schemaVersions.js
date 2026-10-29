@@ -1064,9 +1064,12 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // `videoHistory` route simply rejects that one category request and keeps
   // syncing everything else.
   // The snapshot also carries an OPTIONAL `tombstones` list (deliberate deletes,
-  // keyed by row id). Older peers ignore it (they simply keep unioning rows and
-  // may re-offer a deleted row until upgraded); it is omitted when empty so the
-  // checksum of a peer with no deletes is unchanged. Additive, so still ungated.
+  // keyed by row id). The gate is per-category (`scopeVersionDiff`), but
+  // videoHistory is intentionally left ungated: `tombstones` is additive, so an
+  // older peer loses no data — it only fails to learn deletes. The field is
+  // omitted when empty; once a newer peer holds tombstones its checksum differs
+  // from an older peer's, so that pair re-syncs this category each cycle until
+  // the older one upgrades.
   //
   // The gate is now PER-CATEGORY (see `scopeVersionDiff` below + its three
   // call sites: dataSync `applyRemote`, peerSync push, sharing importer), so

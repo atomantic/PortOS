@@ -7,7 +7,7 @@ import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js'
 import { safeUnder } from '../../lib/ffmpeg.js';
 import { mutateVideoHistory } from './history.js';
 import { extendMasterPath } from './extendMaster.js';
-import { recordMediaTombstone } from '../mediaTombstones.js';
+import { recordMediaTombstone, clearMediaTombstone } from '../mediaTombstones.js';
 
 export async function updateHistoryItemPrompt(id, prompt) {
   let result;
@@ -66,10 +66,17 @@ export async function deleteHistoryItem(id, { forgetInMusicVideos = true, fromRe
       if (item.thumbnail) files.push(safeUnder(PATHS.videoThumbnails, item.thumbnail));
       // Evaluation frames are derived; include all supported frame slots.
       for (let i = 1; i <= 9; i++) files.push(safeUnder(PATHS.videoThumbnails, `${id}-f${i}.jpg`));
-      await trashFiles(files);
+      // Record BEFORE trashing: a crash between the two must never leave a
+      // deleted row without its tombstone. Undo if the trash itself fails.
+      if (!fromRemoteTombstone) await recordMediaTombstone('video', id);
+      try {
+        await trashFiles(files);
+      } catch (err) {
+        if (!fromRemoteTombstone) await clearMediaTombstone('video', id);
+        throw err;
+      }
       return history.filter(entry => entry.id !== id);
     });
-    if (!fromRemoteTombstone) await recordMediaTombstone('video', id);
     // Drop the derived index row with the entry (#2738) — keyed by job id, the
     // ref the index wrote it under. Non-fatal + dynamically imported; see the
     // matching hook in imageGen/local.js#deleteImage for the rationale.

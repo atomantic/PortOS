@@ -43,6 +43,22 @@ describe('video delete durability', () => {
     expect(await readHistory()).toEqual([]);
   });
 
+  it('leaves no tombstone when trashing fails', async () => {
+    await atomicWrite(HISTORY, [row('v1')]);
+    trashFiles.mockRejectedValueOnce(new Error('disk full'));
+    await expect(deleteHistoryItem('v1')).rejects.toThrow('disk full');
+    expect(await listMediaTombstones('video')).toEqual([]);
+    expect(await readHistory()).toEqual(['v1']);
+  });
+
+  it('has the tombstone recorded before files are trashed', async () => {
+    await atomicWrite(HISTORY, [row('v1')]);
+    let seen;
+    trashFiles.mockImplementationOnce(async () => { seen = (await listMediaTombstones('video')).map((t) => t.key); });
+    await deleteHistoryItem('v1');
+    expect(seen).toEqual(['v1']);
+  });
+
   it('fromRemoteTombstone does not re-record the tombstone', async () => {
     await atomicWrite(HISTORY, [row('v1')]);
     await deleteHistoryItem('v1', { fromRemoteTombstone: true });

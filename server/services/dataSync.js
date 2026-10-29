@@ -1040,6 +1040,11 @@ export async function applyRemoteVideoTombstones(remoteTombstones) {
       await deleteHistoryItem(row.id, { fromRemoteTombstone: true });
       removed++;
     } catch (err) {
+      // Row already gone is an expected race with a concurrent local delete.
+      if (err?.code === 'NOT_FOUND') {
+        console.log(`⏭️ VideoHistory tombstone: ${row.id} already removed`);
+        continue;
+      }
       console.error(`❌ VideoHistory tombstone removal failed for ${row.id}: ${err.message}`);
     }
   }
