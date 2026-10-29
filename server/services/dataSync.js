@@ -982,25 +982,28 @@ async function applyVideoHistoryRemote(remoteData, source) {
  * Returns `{ count, ids }` for rows actually added or updated.
  */
 export async function mergeVideoRows(incomingRows, source) {
-  const tombstones = await listMediaTombstones('video');
   // Only the row's owner may un-delete it: a `restoredAt` from any other
   // sender is dropped, so it can neither pass a delete here nor shield the
   // row from its owner's later delete.
   const fromOwner = (r) => typeof source?.peerId === 'string' && r?.originInstanceId === source.peerId;
   const admitted = (Array.isArray(incomingRows) ? incomingRows : [])
     .map((r) => (r && typeof r === 'object' && 'restoredAt' in r && !fromOwner(r) ? (({ restoredAt, ...rest }) => rest)(r) : r)); // eslint-disable-line no-unused-vars
-  // A row survives a tombstone only when it was (re)created or restored after the delete.
-  const isDeleted = (r) => isTombstoned(tombstones, r.id, videoRowLiveStamp(r), 'key');
-  const incoming = admitted.filter((r) => !(hasVideoRowId(r) && isDeleted(r)));
-  if (incoming.length === 0) return { count: 0, ids: [] };
 
   // The whole read/merge/write runs inside the shared history mutation queue so
   // a local completion (videoDownload) or another peer's snapshot can't be
   // overwritten by this merge's stale base. The queue's read is STRICT (#4115):
   // an unreadable file rejects instead of becoming an empty merge base that
   // would delete every local-only row on write-back.
+  // Tombstones are read INSIDE the writer: a local delete records its tombstone
+  // while holding it, so reading before we queue would miss a delete that commits
+  // while we wait and re-add the row it just removed (#14123).
   const changedIds = [];
-  await mutateVideoHistory((local) => {
+  let tombstones = [];
+  await mutateVideoHistory(async (local) => {
+    tombstones = await listMediaTombstones('video');
+    // A row survives a tombstone only when it was (re)created or restored after the delete.
+    const incoming = admitted.filter((r) => !(hasVideoRowId(r) && isTombstoned(tombstones, r.id, videoRowLiveStamp(r), 'key')));
+    if (incoming.length === 0) return HISTORY_UNCHANGED;
     // Union by `id`, LWW on `createdAt` when both sides know the same row.
     // Video-history rows are append-mostly and immutable once written, so
     // `createdAt` is a sufficient (and the only) freshness signal — there's no

@@ -147,6 +147,18 @@ describe('video delete durability', () => {
     expect(await readHistory()).toEqual(['v3']);
   });
 
+  // #14123: the tombstone must be read inside the history writer, or a merge
+  // queued behind a delete filters against the pre-delete tombstone list.
+  it('a peer merge racing a local delete does not re-add the deleted row', async () => {
+    await atomicWrite(HISTORY, [row('v1')]);
+    const deleting = deleteHistoryItem('v1');
+    const merging = dataSync.applyRemote('videoHistory', { videos: [row('v1')] }, { peerId: 'peer-a' });
+    await deleting;
+    await merging;
+    expect(await readHistory()).toEqual([]);
+    expect((await listMediaTombstones('video')).map((t) => t.key)).toEqual(['v1']);
+  });
+
   it('re-created row with newer createdAt survives its tombstone', async () => {
     await recordMediaTombstone('video', 'v1', '2026-06-01T00:00:00.000Z');
     await dataSync.applyRemote('videoHistory', {
