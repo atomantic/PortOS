@@ -131,7 +131,7 @@ export function initImageOriginStamping() {
  * created after the delete survives. Returns the number of images removed.
  * `fromRemoteTombstone` keeps deleteImage from re-recording or re-announcing.
  */
-export async function applyRemoteImageTombstones(remoteTombstones) {
+export async function applyRemoteImageTombstones(remoteTombstones, { forgetInMusicVideos = true } = {}) {
   if (!Array.isArray(remoteTombstones) || remoteTombstones.length === 0) return 0;
   await mergeMediaTombstones('image', remoteTombstones);
   const tombstones = await listMediaTombstones('image');
@@ -141,7 +141,7 @@ export async function applyRemoteImageTombstones(remoteTombstones) {
     const held = await readHeldImage(key);
     if (!held || !isTombstoned(tombstones, key, held.createdAt, 'key')) continue;
     try {
-      await deleteGalleryImage(key, { fromRemoteTombstone: true });
+      await deleteGalleryImage(key, { fromRemoteTombstone: true, forgetInMusicVideos });
       removed++;
     } catch (err) {
       console.error(`❌ Image tombstone removal failed for ${key}: ${err.message}`);

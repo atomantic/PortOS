@@ -113,8 +113,8 @@ const MEDIA = {
     getRow: getHistoryItem,
     setPending: setVideoPending,
     hide: async (key) => (await import('./videoGen/historyOps.js')).setHistoryItemHidden(key, true),
-    deleteHere: async (key) => (await import('./videoGen/historyOps.js')).deleteHistoryItem(key),
-    applyTombstone: async (tombstone) => (await import('./dataSync.js')).applyRemoteVideoTombstones([tombstone]),
+    deleteHere: async (key, opts) => (await import('./videoGen/historyOps.js')).deleteHistoryItem(key, opts),
+    applyTombstone: async (tombstone, opts) => (await import('./dataSync.js')).applyRemoteVideoTombstones([tombstone], opts),
   },
   image: {
     label: 'Image',
@@ -122,8 +122,8 @@ const MEDIA = {
     getRow: readHeldImage,
     setPending: setImagePending,
     hide: async (key) => (await import('./imageGen/local.js')).setImageHidden(key, true),
-    deleteHere: async (key) => (await import('./galleryImageDeletion.js')).deleteGalleryImage(key),
-    applyTombstone: async (tombstone) => (await import('./imageGen/imageRecords.js')).applyRemoteImageTombstones([tombstone]),
+    deleteHere: async (key, opts) => (await import('./galleryImageDeletion.js')).deleteGalleryImage(key, opts),
+    applyTombstone: async (tombstone, opts) => (await import('./imageGen/imageRecords.js')).applyRemoteImageTombstones([tombstone], opts),
   },
 };
 
@@ -179,7 +179,7 @@ const BAD_TOMBSTONE_REASONS = new Set(['invalid-key', 'future-or-invalid-deleted
  * Resolves `deleted` (gone here too), `deleted-remote` (the owner's copy is
  * gone, this one stays; `hiddenHere` when it was hidden) or `invalid-ack`.
  */
-async function retireLocalCopy(kind, peer, key, tombstone) {
+async function retireLocalCopy(kind, peer, key, tombstone, opts) {
   const media = MEDIA[kind];
   // A queued command for the origin after another holder's ack already retired
   // the copy here (holderDeleted): nothing is left to retire.
@@ -190,7 +190,7 @@ async function retireLocalCopy(kind, peer, key, tombstone) {
   });
   if (!verdict.allowed && BAD_TOMBSTONE_REASONS.has(verdict.reason)) return { status: 'invalid-ack', reason: verdict.reason };
   if (verdict.allowed) {
-    await media.applyTombstone(tombstone);
+    await media.applyTombstone(tombstone, opts);
     if (!(await media.getRow(key))) return { status: 'deleted' };
     // The tombstone predates this copy (re-created since) or its removal failed
     // (already logged): the copy here stays, and is no longer pending.
@@ -206,8 +206,8 @@ async function retireLocalCopy(kind, peer, key, tombstone) {
   return { status: 'deleted-remote', hiddenHere: true };
 }
 
-async function deleteLocally(kind, key) {
-  const result = await MEDIA[kind].deleteHere(key);
+async function deleteLocally(kind, key, opts) {
+  const result = await MEDIA[kind].deleteHere(key, opts);
   await dropEntriesFor(kind, key);
   return { ...(isPlainObject(result) ? result : {}), status: 'deleted' };
 }
@@ -229,7 +229,7 @@ const generationOf = (kind, key) => cancelGenerations.get(`${kind}:${key}`) ?? 0
 const RETRY_INTERVAL_MS = 60_000;
 const lastAttemptAt = new Map();
 
-async function deleteAnywhere(kind, key) {
+async function deleteAnywhere(kind, key, opts) {
   const media = MEDIA[kind];
   const generation = generationOf(kind, key);
   const cancelled = () => generationOf(kind, key) !== generation;
@@ -237,11 +237,11 @@ async function deleteAnywhere(kind, key) {
   if (!row) {
     // An image with neither bytes nor sidecar here (a hosted collection item)
     // keeps the plain local delete, which retires this machine's references.
-    if (kind === 'image') return deleteLocally(kind, key);
+    if (kind === 'image') return deleteLocally(kind, key, opts);
     throw new ServerError('Not found', { status: 404, code: 'NOT_FOUND' });
   }
   const localId = await localInstanceId();
-  if (localId && row.originInstanceId === localId) return deleteLocally(kind, key);
+  if (localId && row.originInstanceId === localId) return deleteLocally(kind, key, opts);
   const candidates = rowOwnerCandidates(row, await hostedIndex()).filter((id) => id !== localId);
 
   const { getPeers } = await import('./instances.js');
@@ -254,7 +254,7 @@ async function deleteAnywhere(kind, key) {
     // pre-upgrade row has no origin), so no command could ever be answered:
     // delete it here, missing files included. A former owner that re-pairs
     // keeps its own copy, since it never accepts this machine's tombstone.
-    return deleteLocally(kind, key);
+    return deleteLocally(kind, key, opts);
   }
   // Fail closed: a registered owner this machine cannot reach would keep its
   // copy. The origin is the authority every other copy re-syncs from, so an
@@ -291,7 +291,7 @@ async function deleteAnywhere(kind, key) {
         : await sendDeleteCommand(peer, kind, key);
       if (result.outcome === 'ok') {
         // The owner already deleted, so a cancel that raced the dial cannot undo it.
-        const retired = await retireLocalCopy(kind, peer, key, result.tombstone);
+        const retired = await retireLocalCopy(kind, peer, key, result.tombstone, opts);
         if (retired.status === 'invalid-ack') throw commandFailed(peer, kind, `unusable tombstone: ${retired.reason}`);
         console.log(`🗑️ ${media.label} ${key} deleted on ${peerLabel(peer)}`);
         if (origin && peer !== origin && unreachable.includes(origin)) {
@@ -384,16 +384,20 @@ const inFlight = new Map();
  * unreachable owner; also `pendingDelete` and `peerName`; when another holder
  * already deleted its copy, also `deletedOn` and `removedHere`), `owner-unknown`
  * (hidden here only) or `cancelled` (withdrawn while the owner was dialed).
+ * `forgetInMusicVideos: false` leaves the music-video cleanup to a caller that
+ * already holds the project mutation boundary (a pool batch delete).
  * Throws 403 `MEDIA_DELETE_FORBIDDEN` when the owner refuses and 502
  * `MEDIA_DELETE_FAILED` when its answer is unusable.
  */
 const unknownMedia = () => new ServerError('Unknown media', { status: 400, code: 'VALIDATION_ERROR' });
 
-export function deleteMediaAnywhere(kind, key) {
+export function deleteMediaAnywhere(kind, key, { forgetInMusicVideos = true } = {}) {
   if (!MEDIA[kind]?.validKey(key)) return Promise.reject(unknownMedia());
-  const id = `${kind}:${key}`;
+  // Keyed by the cleanup mode too: a pool batch holds the project mutation
+  // boundary and must not join a delete whose cleanup waits on that boundary.
+  const id = `${kind}:${key}:${forgetInMusicVideos}`;
   if (inFlight.has(id)) return inFlight.get(id);
-  const run = deleteAnywhere(kind, key).finally(() => inFlight.delete(id));
+  const run = deleteAnywhere(kind, key, { forgetInMusicVideos }).finally(() => inFlight.delete(id));
   inFlight.set(id, run);
   return run;
 }
