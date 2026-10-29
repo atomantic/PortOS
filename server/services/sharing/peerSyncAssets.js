@@ -24,7 +24,7 @@ import { generateThumbnail } from '../../lib/ffmpeg.js';
 import { sanitizeRecordForWire } from '../../lib/syncWire.js';
 import { collectAssetReferences } from './exporter.js';
 import { imageSidecarName, sanitizeAssetFilename } from './buckets.js';
-import { pullSidecarForImage } from './sidecarSync.js';
+import { pullSidecarForImage, recordImageSupplier } from './sidecarSync.js';
 import { parseKey } from '../../lib/mediaItemKey.js';
 import { headshotImageFilename } from '../authors/index.js';
 import { portraitImageFilename } from '../artists/index.js';
@@ -178,7 +178,7 @@ function blockedByImageTombstone(stamps, entry) {
  * deleted one. Only the library manifest asks for it, and only from receivers
  * that understand it (see PEER_LIBRARY_TOMBSTONES_HEADER).
  */
-export async function hashImageForManifest(filename, { withCreatedAt = false } = {}) {
+export async function hashImageForManifest(filename, { withCreatedAt = false, localInstanceId = null } = {}) {
   // Sanitize before join — a record with `imageRefs` containing a path-
   // traversal filename (peer-pushed via linkedCollection, hand-edited,
   // or import bug) would otherwise let us stat/hash files outside
@@ -199,7 +199,9 @@ export async function hashImageForManifest(filename, { withCreatedAt = false } =
   // null when there are no gen-params, so we never advertise a hash for a
   // pure cache-only sidecar.
   const sidecarSha256 = sidecarGenParamsHash(result.sidecar);
-  const createdAt = withCreatedAt ? imageLiveStamp(result.sidecar, await stat(fullPath).catch(() => null)) : null;
+  // A pulled copy without a sidecar stamp advertises none, so receivers keep a
+  // tombstoned name blocked rather than taking its pull time as new.
+  const createdAt = withCreatedAt ? imageLiveStamp(result.sidecar, await stat(fullPath).catch(() => null), { localInstanceId }) : null;
   return { filename: safeName, kind: 'image', sha256: result.hash, ...(sidecarSha256 ? { sidecarSha256 } : {}), ...(createdAt ? { createdAt } : {}) };
 }
 
@@ -1202,6 +1204,7 @@ async function doPullOneAsset(peer, base, entry, urlPrefix, localDir, safeName, 
 async function commitPulledAsset(peer, base, entry, localDir, fullPath, safeName, buffer, includeMismatched) {
   await ensureDir(localDir);
   if (!includeMismatched && existsSync(fullPath)) return;
+  const isNewHere = !existsSync(fullPath);
   // atomicWrite (temp + rename) so a crash mid-write doesn't leave a
   // half-written file that subsequent `diffAssetManifestAgainstLocal`
   // calls would see as "present" and stop re-requesting.
@@ -1217,6 +1220,9 @@ async function commitPulledAsset(peer, base, entry, localDir, fullPath, safeName
   // a missing sidecar just means the image lands in Unsorted without a prompt.
   if (entry.kind === 'image') {
     await pullSidecarForImage(peer, base, safeName).catch(() => {});
+    // Even with no sidecar from the peer, record who supplied a copy new here:
+    // its file time is then never mistaken for this machine making it.
+    if (isNewHere) await recordImageSupplier(safeName, peer.instanceId).catch((err) => console.error(`❌ peerSync: supplier record for ${safeName} failed: ${err.message}`));
     await import('../mediaAssetIndex/index.js').then(m => m.indexImage({ filename: safeName })).catch(err => console.error(`❌ Media index peer asset refresh: ${err.message}`));
   }
   // After a video pull, regenerate the thumbnail LOCALLY rather than pulling it

@@ -58,10 +58,11 @@ describe('image origin', () => {
     imageGenEvents.emit('completed', { filename: 'claimed.png', path: '/data/images/claimed.png' });
     imageGenEvents.emit('completed', { filename: 'temp.png', path: null, temp: true });
     await vi.waitFor(() => expect(sidecarOf('render.png').originInstanceId).toBe('local-inst'));
+    // A render the provider stamped no time on gets one that travels with it.
+    expect(Date.parse(sidecarOf('render.png').createdAt)).not.toBeNaN();
     expect(sidecarOf('claimed.png').originInstanceId).toBe('other-inst');
     expect(sidecarOf('temp.png')).not.toHaveProperty('originInstanceId');
-    // With no createdAt in the sidecar, the file's own stamp is the live stamp.
-    expect(await readHeldImage('render.png')).toEqual({ filename: 'render.png', originInstanceId: 'local-inst', createdAt: expect.any(String) });
+    expect(await readHeldImage('render.png')).toEqual({ filename: 'render.png', originInstanceId: 'local-inst', createdAt: sidecarOf('render.png').createdAt });
   });
 
   it("gives a variant of a peer's image this machine as origin, without the source's local fields", async () => {
@@ -80,6 +81,6 @@ describe('image origin', () => {
   it('records this machine as the origin of an upload', async () => {
     const jpeg = await sharp({ create: { width: 2, height: 2, channels: 3, background: '#335577' } }).jpeg().toBuffer();
     const { filename } = await saveUploadedGalleryImage(jpeg.toString('base64'));
-    expect(sidecarOf(filename)).toEqual({ originInstanceId: 'local-inst' });
+    expect(sidecarOf(filename)).toEqual({ originInstanceId: 'local-inst', createdAt: expect.any(String) });
   });
 });

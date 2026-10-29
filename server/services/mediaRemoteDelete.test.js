@@ -230,8 +230,10 @@ describe('media delete queue upkeep', () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(now);
     disarmQueue = initMediaRemoteDelete();
-    instanceEvents.emit('peers:updated', registry.peers);
-    await vi.waitFor(async () => expect((await listMediaDeleteQueue()).map((e) => e.key)).toEqual(['v-fresh']));
+    // Await the listener's own settling promise: the queue is rewritten before
+    // the dropped rows' flags are cleared, so polling the queue alone races.
+    await listenerFor('peers:updated')(registry.peers);
+    expect((await listMediaDeleteQueue()).map((e) => e.key)).toEqual(['v-fresh']);
     const flags = Object.fromEntries((await readRows()).map((r) => [r.id, Boolean(r.pendingDelete)]));
     expect(flags).toEqual({ 'v-old': false, 'v-fresh': true, 'v-unpaired': false });
   });
@@ -241,8 +243,8 @@ describe('media delete queue upkeep', () => {
     await atomicWrite(HISTORY, [row('v1', { createdAt: '2026-06-02T00:00:00.000Z' })]);
     await atomicWrite(QUEUE, { version: 1, entries: [queueEntry('v1', queuedAt)] });
     disarmQueue = initMediaRemoteDelete();
-    instanceEvents.emit('peers:updated', registry.peers);
-    await vi.waitFor(async () => expect(await listMediaDeleteQueue()).toEqual([]));
+    await listenerFor('peers:updated')(registry.peers);
+    expect(await listMediaDeleteQueue()).toEqual([]);
   });
 
   it('prunes a removed peer\'s entries when the registry changes', async () => {
@@ -250,8 +252,8 @@ describe('media delete queue upkeep', () => {
     await atomicWrite(HISTORY, [row('v1', { originInstanceId: 'peer-o' })]);
     await atomicWrite(QUEUE, { version: 1, entries: [queueEntry('v1', queuedAt)] });
     disarmQueue = initMediaRemoteDelete();
-    instanceEvents.emit('peers:updated', []);
-    await vi.waitFor(async () => expect(await listMediaDeleteQueue()).toEqual([]));
+    await listenerFor('peers:updated')([]);
+    expect(await listMediaDeleteQueue()).toEqual([]);
   });
 });
 

@@ -166,16 +166,25 @@ export function stripImageSidecarLocalBytes(bytes) {
 }
 
 /**
- * When this copy of an image came to exist, for tombstone supersession: the
- * sidecar's `createdAt`, else the later of the file's birth and modify times
- * (a re-written file has a fresh one). ISO string, or null when neither is known.
+ * When this copy of an image came to exist, for tombstone supersession. ISO
+ * string, or null when unknown: a caller treats a null-stamped copy as OLD, so
+ * a tombstone retires it and a pull of a tombstoned name stays blocked.
+ *
+ * The sidecar's `createdAt` is the stamp whenever it has one; it travels with
+ * the sidecar, so every machine sees the same time. The file's modify time is a
+ * stamp ONLY for a copy made on this machine (no supplier recorded, and the
+ * origin absent or `localInstanceId`): a pulled, copied or restored file is
+ * born when it lands, so its file time would make the deleted image look newer
+ * than its delete and bring it back. Birth time is never used, for the same reason.
  */
-export function imageLiveStamp(sidecar, fileStat) {
-  if (isPlainObject(sidecar) && typeof sidecar.createdAt === 'string' && Number.isFinite(Date.parse(sidecar.createdAt))) {
-    return sidecar.createdAt;
-  }
-  const ms = Math.max(Number(fileStat?.birthtimeMs) || 0, Number(fileStat?.mtimeMs) || 0);
-  return ms > 0 ? new Date(ms).toISOString() : null;
+export function imageLiveStamp(sidecar, fileStat, { localInstanceId = null } = {}) {
+  const meta = isPlainObject(sidecar) ? sidecar : {};
+  if (typeof meta.createdAt === 'string' && Number.isFinite(Date.parse(meta.createdAt))) return meta.createdAt;
+  const supplied = typeof meta.suppliedByInstanceId === 'string' && meta.suppliedByInstanceId !== '';
+  const foreign = typeof meta.originInstanceId === 'string' && meta.originInstanceId !== '' && meta.originInstanceId !== localInstanceId;
+  if (supplied || foreign) return null;
+  const ms = Number(fileStat?.mtimeMs);
+  return Number.isFinite(ms) && ms > 0 ? new Date(ms).toISOString() : null;
 }
 
 /**

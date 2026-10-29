@@ -167,6 +167,7 @@ async function hashCachedLibraryAsset(name, kind, dir) {
 // gallery image tombstones (`tombstones`, see PEER_LIBRARY_TOMBSTONES_HEADER).
 export async function buildMediaLibraryManifest({ models = false, tombstones = false } = {}) {
   const excluded = await excludedLibraryKinds();
+  const localId = tombstones ? await import('../imageGen/imageRecords.js').then((m) => m.localInstanceId()) : null;
   const assets = [];
   let truncated = false;
   for (const { kind, dir } of mediaLibraryDirs()) {
@@ -179,7 +180,7 @@ export async function buildMediaLibraryManifest({ models = false, tombstones = f
       // `.json` files in the images dir.
       if (kind === 'image' && name.endsWith('.json')) continue;
       const entry = kind === 'image'
-        ? await hashImageForManifest(name, { withCreatedAt: tombstones }) // sidecar-cached
+        ? await hashImageForManifest(name, { withCreatedAt: tombstones, localInstanceId: localId }) // sidecar-cached
         : await hashCachedLibraryAsset(name, kind, dir); // (mtime,size)-cached
       if (!entry) continue;
       if (assets.length >= MEDIA_LIBRARY_MANIFEST_CAP) { truncated = true; break; }
@@ -196,7 +197,9 @@ export async function buildMediaLibraryManifest({ models = false, tombstones = f
   // than this machine pulling it back. Sorted, and hashed only when present, so
   // a library with no deletes keeps its exact manifestHash.
   // A tombstone this machine's own newer copy supersedes (a re-used name) is
-  // left out, so it cannot retire that copy on a peer.
+  // left out, so it cannot retire that copy on a peer. Only a real creation
+  // stamp counts: a pulled copy advertises none (imageLiveStamp), so its
+  // tombstone keeps travelling.
   const liveImages = new Map(assets.filter((e) => e.kind === 'image' && e.createdAt).map((e) => [e.filename, Date.parse(e.createdAt)]));
   const deleted = tombstones && !excluded.has('image')
     ? (await listMediaTombstones('image'))

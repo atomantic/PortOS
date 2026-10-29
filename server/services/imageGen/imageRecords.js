@@ -40,8 +40,9 @@ async function readSidecar(filename) {
  * The image held here as a record, `{ filename, createdAt?, originInstanceId?,
  * suppliedByInstanceId?, pendingDelete?, hidden? }`, or null when neither its
  * bytes nor its sidecar are on this machine. `createdAt` is the live stamp a
- * tombstone must postdate (imageLiveStamp: the sidecar's, else the file's), so
- * a stale delete of an earlier image under a re-used name spares this one.
+ * tombstone must postdate (imageLiveStamp: the sidecar's, else the file's for a
+ * copy made here), so a stale delete of an earlier image under a re-used name
+ * spares this one; absent means the copy counts as older than any tombstone.
  */
 export async function readHeldImage(filename) {
   if (!isGalleryName(filename)) return null;
@@ -49,7 +50,7 @@ export async function readHeldImage(filename) {
   const fileStat = await stat(join(PATHS.images, filename)).catch(() => null);
   if (!sidecar && !fileStat) return null;
   const record = { filename };
-  const createdAt = imageLiveStamp(sidecar, fileStat);
+  const createdAt = imageLiveStamp(sidecar, fileStat, { localInstanceId: await localInstanceId() });
   if (createdAt) record.createdAt = createdAt;
   for (const key of ['originInstanceId', 'suppliedByInstanceId']) {
     if (isNonBlankStr(sidecar?.[key])) record[key] = sidecar[key];
@@ -72,6 +73,8 @@ export async function localInstanceId() {
  */
 export async function withLocalImageOrigin(meta) {
   const { originInstanceId: _source, ...rest } = stripImageSidecarLocalFields(isPlainObject(meta) ? meta : {}); // eslint-disable-line no-unused-vars
+  // A durable creation stamp that travels with the sidecar (imageLiveStamp).
+  if (typeof rest.createdAt !== 'string' || !Number.isFinite(Date.parse(rest.createdAt))) rest.createdAt = new Date().toISOString();
   const id = await localInstanceId();
   return id ? { ...rest, originInstanceId: id } : rest;
 }
@@ -83,16 +86,16 @@ async function stampRenderOrigin(payload) {
   const id = await localInstanceId();
   if (!id) return;
   const { fillImageSidecarFields } = await import('./local.js');
-  // Fills only an absent origin, so a set origin never changes.
-  await fillImageSidecarFields(filename, { originInstanceId: id });
+  // Fills only absent fields, so a set origin or creation stamp never changes.
+  await fillImageSidecarFields(filename, { originInstanceId: id, createdAt: new Date().toISOString() });
 }
 
 let stampHandler = null;
 
 /**
  * Every provider's finished gallery render emits `completed` after its sidecar
- * write; stamp this machine as the render's origin there, the one point all
- * providers share. Idempotent; returns the disarm function.
+ * write; stamp this machine as the render's origin (and its creation time, if
+ * the provider wrote none) there, the one point all providers share. Idempotent; returns the disarm function.
  */
 export function initImageOriginStamping() {
   if (!stampHandler) {

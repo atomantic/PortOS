@@ -169,15 +169,20 @@ describe('applyPeerSyncEvent for gallery images', () => {
     expect(await imageTombstones()).toEqual(['fox.png']);
   });
 
-  it("spares a copy made after the owner's delete under a re-used name, by sidecar or file stamp", async () => {
+  it("spares a copy whose sidecar was stamped after the owner's delete under a re-used name", async () => {
     // imageDeleteFrame's tombstone is dated 2026-06-01.
     seedImage('fresh.png', { originInstanceId: 'peer-o', createdAt: '2026-07-01T00:00:00.000Z' });
-    seedImage('bare.png', { originInstanceId: 'peer-o', createdAt: undefined });
-    const later = new Date('2026-07-01T00:00:00.000Z');
-    utimesSync(join(PATHS.images, 'bare.png'), later, later);
     expect((await applyPeerSyncEvent({ id: 'rec-origin' }, imageDeleteFrame('fresh.png'))).applied).toBe(false);
-    expect((await applyPeerSyncEvent({ id: 'rec-origin' }, imageDeleteFrame('bare.png'))).applied).toBe(false);
     expect(trashFiles).not.toHaveBeenCalled();
+  });
+
+  it("retires a peer's copy with no creation stamp even when its file landed after the delete", async () => {
+    // A pulled file is born when it lands; that time says nothing about the image.
+    seedImage('pulled.png', { originInstanceId: 'peer-o', createdAt: undefined });
+    const later = new Date('2026-07-01T00:00:00.000Z');
+    utimesSync(join(PATHS.images, 'pulled.png'), later, later);
+    expect((await applyPeerSyncEvent({ id: 'rec-origin' }, imageDeleteFrame('pulled.png'))).applied).toBe(true);
+    expect(trashedImage('pulled.png')).toBe(true);
   });
 
   it('ignores a delete frame from a peer that does not own the image', async () => {

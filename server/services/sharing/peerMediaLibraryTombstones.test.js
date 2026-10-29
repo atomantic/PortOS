@@ -3,7 +3,7 @@
  * deleted here must not come back from a peer that still holds it.
  */
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { existsSync, mkdirSync, rmSync, writeFileSync, utimesSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync, utimesSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { createTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
@@ -188,15 +188,48 @@ describe('a re-used image name', () => {
     expect((await buildMediaLibraryManifest()).assets.every((a) => !('createdAt' in a))).toBe(true);
   });
 
-  it.each([
-    ['with a sidecar stamp', (owner) => seedImage('reborn.png', { prompt: 'p', createdAt: AFTER.toISOString(), originInstanceId: owner })],
-    ['with only the file stamp', (owner) => { seedImage('reborn.png', { prompt: 'p', originInstanceId: owner }); setFileTimes('reborn.png', AFTER); }],
-  ])('a stale manifest tombstone from the owner spares a copy made after it, %s', async (_label, seed) => {
+  it('a stale manifest tombstone from the owner spares a copy its sidecar stamps as made after it', async () => {
     const owner = pairedPeer();
-    seed(owner.instanceId);
+    seedImage('reborn.png', { prompt: 'p', createdAt: AFTER.toISOString(), originInstanceId: owner.instanceId });
     advertise(owner, [], { tombstones: [{ key: 'reborn.png', deletedAt: DELETED_AT }] });
     await syncMediaLibraryFromPeer(owner);
     expect(held('reborn.png')).toBe(true);
+  });
+
+  it.each([
+    ['owned by the peer', (owner) => ({ prompt: 'p', originInstanceId: owner })],
+    ['supplied by the peer', (owner) => ({ prompt: 'p', suppliedByInstanceId: owner })],
+  ])("retires a copy %s with no creation stamp, however recently its file landed", async (_label, sidecar) => {
+    const owner = pairedPeer();
+    seedImage('landed.png', sidecar(owner.instanceId));
+    setFileTimes('landed.png', AFTER);
+    advertise(owner, [], { tombstones: [{ key: 'landed.png', deletedAt: DELETED_AT }] });
+    await syncMediaLibraryFromPeer(owner);
+    expect(held('landed.png')).toBe(false);
+  });
+
+  it('a copy re-made here under a deleted name is spared by the stale tombstone and still offered to peers', async () => {
+    seedBare('handoff.png', AFTER);
+    await recordMediaTombstone('image', 'handoff.png', DELETED_AT);
+    const { applyRemoteImageTombstones } = await import('../imageGen/imageRecords.js');
+    expect(await applyRemoteImageTombstones([{ key: 'handoff.png', deletedAt: DELETED_AT }])).toBe(0);
+    expect(held('handoff.png')).toBe(true);
+    const manifest = await buildMediaLibraryManifest({ tombstones: true });
+    const offered = manifest.assets.find((a) => a.filename === 'handoff.png');
+    expect(Date.parse(offered.createdAt)).toBeGreaterThan(Date.parse(DELETED_AT));
+    expect(manifest.tombstones ?? []).toEqual([]);
+    // A peer holding the old tombstone pulls the re-made copy.
+    rmSync(join(PATHS.images, 'handoff.png'));
+    expect(await diffAssetManifestAgainstLocal([offered])).toHaveLength(1);
+  });
+
+  it('a pulled copy with no creation stamp is advertised without one, and its tombstone keeps travelling', async () => {
+    seedImage('relay.png', { prompt: 'p', originInstanceId: 'origin-inst', suppliedByInstanceId: 'origin-inst' });
+    setFileTimes('relay.png', AFTER);
+    await recordMediaTombstone('image', 'relay.png', DELETED_AT);
+    const manifest = await buildMediaLibraryManifest({ tombstones: true });
+    expect(manifest.assets.find((a) => a.filename === 'relay.png')).not.toHaveProperty('createdAt');
+    expect(manifest.tombstones.map((t) => t.key)).toEqual(['relay.png']);
   });
 
   it('the same tombstone still retires a copy older than it', async () => {
@@ -215,6 +248,23 @@ describe('a re-used image name', () => {
     await syncMediaLibraryFromPeer(owner);
     expect(held('remade.png')).toBe(true);
     expect(imageDownloads()).toBe(1);
+  });
+});
+
+describe('a pulled image without a peer sidecar', () => {
+  it('records its supplier, so its file time is never taken as made here', async () => {
+    const peer = pairedPeer();
+    advertise(peer, ['bare-pull.png']);
+    await syncMediaLibraryFromPeer(peer);
+    expect(held('bare-pull.png')).toBe(true);
+    const sidecar = JSON.parse(readFileSync(join(PATHS.images, 'bare-pull.metadata.json'), 'utf8'));
+    expect(sidecar.suppliedByInstanceId).toBe(peer.instanceId);
+    const { readHeldImage } = await import('../imageGen/imageRecords.js');
+    expect((await readHeldImage('bare-pull.png')).createdAt).toBeUndefined();
+    // No gen-params were added, so nothing new is advertised for it.
+    const entry = (await buildMediaLibraryManifest({ tombstones: true })).assets.find((a) => a.filename === 'bare-pull.png');
+    expect(entry).not.toHaveProperty('sidecarSha256');
+    expect(entry).not.toHaveProperty('createdAt');
   });
 });
 

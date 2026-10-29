@@ -156,6 +156,23 @@ export async function pullSidecarForImage(peer, base, imageFilename) {
 }
 
 /**
+ * Record `peerInstanceId` as the supplier of an image just pulled here, unless
+ * a supplier is already recorded (pullSidecarForImage sets it when the peer had
+ * a sidecar). Creates a sidecar holding only that machine-local field when the
+ * peer had none; it adds no gen-params, so the manifest hash is unchanged.
+ */
+export async function recordImageSupplier(imageFilename, peerInstanceId) {
+  const safeName = sanitizeAssetFilename(imageFilename);
+  if (!safeName || !isStr(peerInstanceId)) return false;
+  const sidecarPath = join(PATHS.images, imageSidecarName(safeName));
+  const existing = await readJSONFile(sidecarPath, null, { strict: true });
+  if (existing !== null && !isPlainObject(existing)) return false;
+  if (isStr(existing?.suppliedByInstanceId)) return false;
+  await atomicWrite(sidecarPath, { ...(existing || {}), suppliedByInstanceId: peerInstanceId });
+  return true;
+}
+
+/**
  * For each local image filename lacking a sidecar, try each online peer until
  * one yields the sidecar. Returns `{ attempted, recovered }`.
  *
