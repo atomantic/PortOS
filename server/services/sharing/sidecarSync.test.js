@@ -224,6 +224,35 @@ describe('pullSidecarForImage', () => {
   });
 });
 
+describe("pullSidecarForImage and this machine's own fields", () => {
+  const respond = (body) => {
+    const buf = Buffer.from(JSON.stringify(body));
+    vi.mocked(peerFetch).mockResolvedValue({
+      ok: true,
+      headers: new Headers({ 'content-length': String(buf.byteLength) }),
+      arrayBuffer: async () => buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength),
+    });
+  };
+  const sidecarPath = () => join(PATHS.images, 'img.metadata.json');
+  const written = async () => JSON.parse(await readFile(sidecarPath(), 'utf8'));
+  const forged = { hidden: true, pendingDelete: { peerId: 'p', queuedAt: '2026-01-01T00:00:00.000Z' }, suppliedByInstanceId: 'forged' };
+
+  it("takes a new image's origin from the peer, records the peer as supplier, and none of the peer's own fields", async () => {
+    respond({ prompt: 'a fox', originInstanceId: 'origin-o', ...forged });
+    expect(await pullSidecarForImage(fakePeer, fakeBase, 'img.png')).toBe(true);
+    expect(await written()).toEqual({ prompt: 'a fox', originInstanceId: 'origin-o', suppliedByInstanceId: 'peer-x' });
+  });
+
+  it("never changes a held image's origin or this machine's fields", async () => {
+    const local = { prompt: 'old', hidden: true, pendingDelete: { peerId: 'q', queuedAt: '2026-02-01T00:00:00.000Z' } };
+    await writeFile(sidecarPath(), JSON.stringify(local));
+    respond({ prompt: 'new', originInstanceId: 'claimant', hidden: false, suppliedByInstanceId: 'forged' });
+    expect(await pullSidecarForImage(fakePeer, fakeBase, 'img.png')).toBe(true);
+    // Origin-less here stays origin-less: no peer can claim the image and then delete it.
+    expect(await written()).toEqual({ prompt: 'new', hidden: true, pendingDelete: local.pendingDelete });
+  });
+});
+
 describe('backfillMissingSidecars', () => {
   it('attempts only images without sidecars and skips already-present ones', async () => {
     // Create two images: one with a real gen-params sidecar already, one bare.

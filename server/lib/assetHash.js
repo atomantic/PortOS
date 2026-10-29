@@ -108,19 +108,55 @@ export async function getOrComputeImageSha256(imagePath) {
  * sidecarSha256 in that case).
  */
 export function sidecarGenParamsHash(sidecar) {
+  return genParamsHash(sidecar, null);
+}
+
+function genParamsHash(sidecar, extra) {
   if (!isPlainObject(sidecar)) return null;
   // Object.create(null) so a peer-supplied `__proto__` key can't mutate the
   // temp object's prototype via `genParams[key] = …` (prototype-pollution
   // footgun). POLLUTING_KEYS (__proto__/constructor/prototype) are skipped
   // outright — legitimate gen-params never use them, so the hash is identical
   // for real sidecars while a hostile one stays inert and deterministic.
+  // Machine-local fields are skipped like `sha256`, so a sidecar that has none
+  // keeps the exact hash it had before they existed.
   const genParams = Object.create(null);
   let count = 0;
   for (const key of Object.keys(sidecar)) {
-    if (key === 'sha256' || POLLUTING_KEYS.has(key)) continue;
+    if (key === 'sha256' || POLLUTING_KEYS.has(key) || IMAGE_SIDECAR_LOCAL_FIELDS.includes(key)) continue;
     genParams[key] = sidecar[key];
     count += 1;
   }
-  if (count === 0) return null;
+  if (count === 0 && !extra) return null;
+  if (extra) Object.assign(genParams, extra);
   return createHash('sha256').update(canonicalStringify(genParams)).digest('hex');
+}
+
+/**
+ * Per-machine image sidecar fields: this machine's hide state, a delete it has
+ * queued for the image's owner, and the peer that handed it the image. They are
+ * never served to a peer, never taken from a peer's copy, and not part of
+ * `sidecarGenParamsHash`. `originInstanceId` is not among them: it syncs.
+ */
+export const IMAGE_SIDECAR_LOCAL_FIELDS = Object.freeze(['hidden', 'pendingDelete', 'suppliedByInstanceId']);
+
+/** A copy of `sidecar` without the machine-local fields (non-objects pass through). */
+export function stripImageSidecarLocalFields(sidecar) {
+  if (!isPlainObject(sidecar)) return sidecar;
+  const out = { ...sidecar };
+  for (const key of IMAGE_SIDECAR_LOCAL_FIELDS) delete out[key];
+  return out;
+}
+
+/**
+ * True when `sidecar`'s gen-params hash to `advertised`. An older peer still
+ * hashes its own `hidden` flag, so a copy that differs from it only by that
+ * flag also matches; otherwise each such image would re-pull every sweep.
+ */
+export function sidecarMatchesGenParamsHash(sidecar, advertised) {
+  const local = sidecarGenParamsHash(sidecar);
+  if (local === advertised) return true;
+  if (typeof advertised !== 'string' || !isPlainObject(sidecar)) return false;
+  return genParamsHash(sidecar, { hidden: true }) === advertised
+    || genParamsHash(sidecar, { hidden: false }) === advertised;
 }

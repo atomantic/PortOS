@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { catalogSyncIngredientSchema, catalogSyncRefSchema } from './catalogValidation.js';
 import { TASK_STATUS_VALUES, TASK_PRIORITY_VALUES } from './taskParser.js';
+import { peerSyncTombstoneSchema } from './peerSyncEventSchema.js';
 
 // =============================================================================
 // PEER SYNC SCHEMAS
@@ -340,10 +341,18 @@ export const peerSyncNowSchema = z.object({
 // so a malformed envelope is rejected at the boundary.
 export const peerLibraryManifestQuerySchema = z.object({ models: z.literal('1').optional() }).strict();
 
+// A receiver that applies gallery image tombstones sends this header; only then
+// does the manifest carry `tombstones` (deleted image filenames), because an
+// older receiver's strict schema would refuse the whole manifest. A header,
+// not a query flag, because an older sender's query schema is strict too.
+export const PEER_LIBRARY_TOMBSTONES_HEADER = 'X-PortOS-Library-Tombstones';
+
 export const peerLibraryManifestSchema = z.object({
   schemaVersion: z.number().int().min(0).max(1_000_000),
   manifestHash: hex64,
   assets: z.array(peerAssetManifestEntrySchema).max(100_000),
+  // Capped at the image tombstone store's limit (services/mediaTombstones.js).
+  tombstones: z.array(peerSyncTombstoneSchema).max(5000).optional(),
 }).strict();
 
 // --- Completed-agent CoS history federation (#1650) ----------------------

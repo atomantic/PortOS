@@ -18,7 +18,7 @@ import { peerBaseUrl } from '../../lib/peerUrl.js';
 import { peerFetch } from '../../lib/peerHttpClient.js';
 import { RESPONSE_TOO_LARGE } from '../../lib/httpClient.js';
 import { withAbortTimeout } from '../../lib/abortTimeout.js';
-import { getOrComputeImageSha256, sidecarGenParamsHash } from '../../lib/assetHash.js';
+import { getOrComputeImageSha256, sidecarGenParamsHash, sidecarMatchesGenParamsHash } from '../../lib/assetHash.js';
 import { generateThumbnail } from '../../lib/ffmpeg.js';
 import { sanitizeRecordForWire } from '../../lib/syncWire.js';
 import { collectAssetReferences } from './exporter.js';
@@ -41,6 +41,7 @@ import { detectMediaManifest } from '../../lib/mimeTypes.js';
 import { mapWithConcurrency } from '../../lib/mapWithConcurrency.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { ASSET_PULL_MAX_BYTES } from './assetLimits.js';
+import { mediaTombstoneKeys } from '../mediaTombstones.js';
 
 // Bound file hashing to avoid starving unrelated filesystem work when a
 // large record (especially a deck) advertises hundreds of images.
@@ -209,9 +210,12 @@ export async function hashSimpleAsset(filename, kind, sourceDir) {
  */
 export async function diffAssetManifestAgainstLocal(manifest, { includeMismatched = true } = {}) {
   if (!Array.isArray(manifest)) return [];
+  // A gallery image deleted here (or by its owner) is never pulled back.
+  const deletedImages = manifest.some((entry) => entry?.kind === 'image') ? await mediaTombstoneKeys('image') : new Set();
   const missing = [];
   for (const entry of manifest) {
     if (!isPlainObject(entry) || !isStr(entry.filename) || !isStr(entry.kind)) continue;
+    if (entry.kind === 'image' && deletedImages.has(entry.filename)) continue;
     const dir = directoryForAssetKind(entry.kind);
     if (!dir) continue;
     // Peer-supplied filenames go straight into a local `join(dir, name)` here
@@ -277,8 +281,7 @@ export async function diffAssetManifestAgainstLocal(manifest, { includeMismatche
       // became unreadable between the existsSync check and the stat).
       const localSidecar = imageHashResult?.sidecar
         ?? await readJSONFile(join(PATHS.images, imageSidecarName(safeName)), null, { logError: false });
-      const localSidecarHash = sidecarGenParamsHash(localSidecar);
-      if (localSidecarHash !== entry.sidecarSha256) missing.push(sanitizedEntry);
+      if (!sidecarMatchesGenParamsHash(localSidecar, entry.sidecarSha256)) missing.push(sanitizedEntry);
     }
   }
   return missing;
@@ -954,7 +957,9 @@ export async function pullMissingAssetsFromPeer(senderInstanceId, missingAssets,
     return;
   }
   const base = peerBaseUrl(peer);
+  const deletedImages = missingAssets.some((entry) => entry?.kind === 'image') ? await mediaTombstoneKeys('image') : new Set();
   for (const entry of missingAssets) {
+    if (entry?.kind === 'image' && deletedImages.has(entry.filename)) continue;
     await pullOneAsset(peer, base, entry, includeMismatched).catch((err) => {
       console.log(`⚠️ peerSync: asset pull ${entry.filename} from ${peer.name || senderInstanceId} failed: ${err.message}`);
     });

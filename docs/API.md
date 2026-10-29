@@ -787,7 +787,7 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Dom
 | `/api/human-actions` | Scheduled steps only the human can take, as Brain threads with reminders ([Human Actions](#human-actions)) |
 | `/api/insights` | Cross-domain insights |
 | `/api/instances`, `/api/sync`, `/api/peer-sync`, `/api/sharing` | Federation / peer sync (see [COMPANION_APP_API.md](./COMPANION_APP_API.md)); `POST /api/sharing/buckets` is host control (it names a host folder PortOS writes records into and imports manifests from) |
-| `/api/peer-media` | Peer-only media commands: `POST /api/peer-media/delete` deletes a row this machine holds at the request of a paired peer with media delete allowed here (see [PEER_PUSH_AUTH.md](./PEER_PUSH_AUTH.md)) |
+| `/api/peer-media` | Peer-only media commands: `POST /api/peer-media/delete` (`{ kind: 'video' \| 'image', key }`, an image keyed by gallery filename) deletes a row this machine holds at the request of a paired peer with media delete allowed here (see [PEER_PUSH_AUTH.md](./PEER_PUSH_AUTH.md)) |
 | `/api/federation/media/v1` | Authenticated queued peer audio provider (see [FEDERATED_MEDIA_PROVIDERS.md](./FEDERATED_MEDIA_PROVIDERS.md)) |
 | `/api/federation/admin/v1` | Paired-peer administration preflights and temporary signed plans; execution remains unsupported (see [peer administration planning](./features/peer-administration.md)) |
 | `/api/peer-administration` | Operator-only per-peer/action planning grants and outbound previews (see [peer administration planning](./features/peer-administration.md)) |

@@ -8,7 +8,7 @@
  */
 import { peerSyncEventSchema } from '../lib/peerSyncEventSchema.js';
 import { getPeers, resolveEffectiveCategories } from './instances.js';
-import { authorizeRemoteVideoTombstone } from './videoTombstoneAuthorization.js';
+import { authorizeRemoteMediaTombstone } from './mediaTombstoneAuthorization.js';
 import { mergeVideoRows, applyRemoteVideoTombstones } from './dataSync.js';
 import { mergeMediaTombstones } from './mediaTombstones.js';
 import { getHistoryItem } from './videoGen/history.js';
@@ -34,10 +34,10 @@ async function applyVideoUpsert(peer, event, label) {
   return { applied: count > 0, reason: count > 0 ? null : 'unchanged' };
 }
 
-// Admission is the rule the snapshot path shares (videoTombstoneAuthorization.js).
+// Admission is the rule the snapshot path shares (mediaTombstoneAuthorization.js).
 async function applyVideoDelete(peer, event, label) {
   const row = await getHistoryItem(event.id);
-  const verdict = authorizeRemoteVideoTombstone({
+  const verdict = authorizeRemoteMediaTombstone({
     peer, tombstone: event.tombstone, localRow: row, hostedIndex: await listHostedEntries(),
     via: 'event', eventOriginInstanceId: event.originInstanceId,
   });
@@ -51,6 +51,32 @@ async function applyVideoDelete(peer, event, label) {
   return { applied: removed > 0, reason: removed > 0 ? null : 'not-removed' };
 }
 
+// Gallery images ride the library manifest and the per-record asset pull, so
+// only deletes travel as frames; a new image reaches peers on their next sweep.
+// The admission rule and the delete are the manifest path's (imageRecords.js).
+async function applyImageDelete(peer, event, label) {
+  const { admitPeerImageTombstones } = await import('./imageGen/imageRecords.js');
+  const { removed, recorded, refused } = await admitPeerImageTombstones(peer, [event.tombstone], {
+    via: 'event', eventOriginInstanceId: event.originInstanceId,
+  });
+  if (refused > 0) return ignored(label, `image delete ${event.id}: not authorized`);
+  if (removed > 0) console.log(`🗑️ ImageHistory event from ${label}: deleted ${event.id}`);
+  if (recorded > 0) return { applied: true, reason: 'tombstone-only' };
+  return { applied: removed > 0, reason: removed > 0 ? null : 'not-removed' };
+}
+
+// Which of this install's per-peer settings lets a peer's frames in: the gate of
+// the pull that carries the same change (video snapshot, image library/collections).
+const sharesCategory = (peer, category) => {
+  const categories = resolveEffectiveCategories(peer);
+  return category === 'videoHistory' ? categories.videoHistory === true : categories.mediaCollections === true;
+};
+
+async function applyImageEvent(peer, event, label) {
+  if (event.op === 'upsert') return ignored(label, `image upsert ${event.id}: images arrive through the library sweep`);
+  return applyImageDelete(peer, event, label);
+}
+
 /**
  * Apply one frame from the peer whose registry id is `peerRef.id`. The live
  * registry record is re-read so a capability or category change applies to
@@ -62,11 +88,10 @@ export async function applyPeerSyncEvent(peerRef, raw) {
     const parsed = peerSyncEventSchema.safeParse(raw);
     if (!parsed.success) return ignored(label, 'malformed frame');
     const event = parsed.data;
-    // imageHistory frames are accepted on the wire but not applied yet.
-    if (event.category !== 'videoHistory') return ignored(label, `unsupported category ${event.category}`);
     const peer = (await getPeers()).find((p) => p.id === peerRef?.id);
     if (!peer?.instanceId || peer.enabled === false) return ignored(label, 'unknown or disabled peer');
-    if (!resolveEffectiveCategories(peer).videoHistory) return ignored(label, 'videoHistory sync is off for this peer');
+    if (!sharesCategory(peer, event.category)) return ignored(label, `${event.category} sync is off for this peer`);
+    if (event.category === 'imageHistory') return await applyImageEvent(peer, event, label);
     return event.op === 'upsert'
       ? await applyVideoUpsert(peer, event, label)
       : await applyVideoDelete(peer, event, label);

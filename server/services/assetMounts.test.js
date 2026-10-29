@@ -197,6 +197,26 @@ describe('the server-owned namespace terminators', () => {
   });
 });
 
+describe('the gallery sidecar gate', () => {
+  it("serves a sidecar without this machine's own fields, and an ordinary one byte for byte", async () => {
+    const images = join(tempRoot, 'images');
+    writeFileSync(join(images, 'own.metadata.json'), JSON.stringify({
+      prompt: 'a fox', originInstanceId: 'inst-a', hidden: true,
+      pendingDelete: { peerId: 'p', queuedAt: '2026-01-01T00:00:00.000Z' }, suppliedByInstanceId: 'inst-b',
+    }));
+    const plain = JSON.stringify({ prompt: 'a cat' }, null, 2);
+    writeFileSync(join(images, 'plain.metadata.json'), plain);
+
+    const own = await request(app).get('/data/images/own.metadata.json');
+    expect(own.status).toBe(200);
+    expect(JSON.parse(own.text)).toEqual({ prompt: 'a fox', originInstanceId: 'inst-a' });
+    expect(Number(own.headers['content-length'])).toBe(Buffer.byteLength(own.text));
+    expect(own.headers['x-content-type-options']).toBe('nosniff');
+    const ordinary = await request(app).get('/data/images/plain.metadata.json');
+    expect(ordinary.text).toBe(plain);
+  });
+});
+
 describe('the writers-room draft-body gate', () => {
   it('serves a draft body but not the metadata beside it', async () => {
     const body = await request(app).get('/data/writers-room/works/wr-work-1/drafts/d1.md');

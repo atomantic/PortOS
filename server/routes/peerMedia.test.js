@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import express from 'express';
-import { mkdirSync } from 'fs';
+import { mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
 import { request } from '../lib/testHelper.js';
@@ -18,7 +18,7 @@ vi.mock('../services/instances.js', async () => {
   return { ...actual, getPeers: async () => registry.peers };
 });
 vi.mock('../services/instanceIdentity.js', () => ({ UNKNOWN_INSTANCE_ID: 'unknown', getInstanceId: async () => 'local-inst' }));
-vi.mock('../services/mediaAssetIndex/index.js', () => ({ unindexVideo: async () => {} }));
+vi.mock('../services/mediaAssetIndex/index.js', () => ({ unindexVideo: async () => {}, unindexImage: async () => {} }));
 vi.mock('../services/musicVideo/mediaPool.js', () => ({ forgetDeletedMusicVideoAssets: async () => {} }));
 vi.mock('../lib/trashFiles.js', () => ({ trashFiles: vi.fn(async () => {}) }));
 
@@ -119,10 +119,25 @@ describe('POST /api/peer-media/delete', () => {
     expect(await listMediaTombstones('video')).toEqual([]);
   });
 
-  it('answers image deletes as not supported yet and validates the body', async () => {
-    const image = await post(PEER_AUTH, { kind: 'image', key: 'example.png' });
-    expect(image.status).toBe(422);
-    expect(image.body.code).toBe('IMAGE_DELETE_NOT_SUPPORTED');
+  it('deletes a gallery image this machine holds and answers with its tombstone', async () => {
+    mkdirSync(PATHS.images, { recursive: true });
+    writeFileSync(join(PATHS.images, 'fox.png'), 'synthetic');
+    writeFileSync(join(PATHS.images, 'fox.metadata.json'), JSON.stringify({ prompt: 'a fox', originInstanceId: 'local-inst' }));
+    const res = await post(PEER_AUTH, { kind: 'image', key: 'fox.png' });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ ok: true, tombstone: { key: 'fox.png' } });
+    expect(trashFiles).toHaveBeenCalledWith(expect.arrayContaining([join(PATHS.images, 'fox.png')]));
+    expect((await listMediaTombstones('image')).map((t) => t.key)).toEqual(['fox.png']);
+    await vi.waitFor(() => expect(deleteFrames).toEqual([expect.objectContaining({ category: 'imageHistory', id: 'fox.png' })]));
+
+    const ghost = await post(PEER_AUTH, { kind: 'image', key: 'ghost.png' });
+    expect(ghost.status).toBe(404);
+    expect(ghost.body.code).toBe('MEDIA_NOT_HELD');
+  });
+
+  it('validates the body and the image filename', async () => {
+    expect((await post(PEER_AUTH, { kind: 'image', key: '../escape.png' })).status).toBe(400);
+    expect((await post(PEER_AUTH, { kind: 'image', key: 'notes.txt' })).status).toBe(400);
     expect((await post(PEER_AUTH, { kind: 'video' })).status).toBe(400);
     expect((await post(PEER_AUTH, { kind: 'video', key: 'v1', extra: true })).status).toBe(400);
     expect((await readRows()).map((r) => r.id)).toEqual(['v1']);

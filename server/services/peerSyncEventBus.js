@@ -14,9 +14,13 @@ import { PEER_INSTANCE_HEADER } from '../lib/peerHttpClient.js';
 export const PEER_SYNC_ROOM = 'peer-sync';
 export const peerSyncBus = new EventEmitter();
 
-// Frame category → the per-peer sync category that governs who may receive it.
-// imageHistory has no sync category yet, so its frames reach nobody.
-const SYNC_CATEGORY_FOR_EVENT = Object.freeze({ videoHistory: 'videoHistory' });
+// Frame category → who may receive it: the gate of the pull that carries the
+// same change. Video rows ride the `videoHistory` snapshot; gallery images ride
+// the library manifest, served to every peer this install shares outbound with.
+const RECEIVER_GATE_FOR_EVENT = Object.freeze({
+  videoHistory: (shared, peer) => shared.peerAllowsCategoryPull(peer, 'videoHistory'),
+  imageHistory: (shared, peer) => shared.peerAllowsOutbound(peer),
+});
 
 // Per-machine row fields that never cross the wire (see getVideoHistorySnapshot).
 export function stripMachineLocalFields(record) {
@@ -83,6 +87,18 @@ export async function announceLocalVideoDelete(item, tombstone) {
   }
 }
 
+/** Announce a committed gallery image delete; the tombstone goes to peers only for an image this machine owns. */
+export async function announceLocalImageDelete(record, tombstone) {
+  try {
+    const local = await localInstanceId();
+    if (tombstone && local && record?.originInstanceId === local) {
+      emitPeerSyncEvent({ v: PEER_SYNC_EVENT_VERSION, category: 'imageHistory', op: 'delete', id: record.filename, tombstone, originInstanceId: local });
+    }
+  } catch (err) {
+    console.error(`❌ Peer sync delete announce failed for ${record?.filename}: ${err.message}`);
+  }
+}
+
 // Literal rather than imported: instanceIdentity loads the file store, which
 // history writers that load this module must not pull in.
 const UNKNOWN_INSTANCE_ID = 'unknown';
@@ -120,16 +136,16 @@ export function registerPeerSyncSubscriber(socket) {
 
 /**
  * Send a frame to every subscribed relay socket whose peer this install shares
- * the frame's category with (the same predicate the snapshot pull gate uses).
+ * the frame's category with (the same predicate its pull gate uses).
  * A socket with no identified, known peer gets nothing.
  */
 export async function deliverPeerSyncEvent(io, event) {
   try {
-    const category = SYNC_CATEGORY_FOR_EVENT[event?.category];
-    if (!io || !category) return 0;
+    const receives = RECEIVER_GATE_FOR_EVENT[event?.category];
+    if (!io || !receives) return 0;
     const sockets = await io.in(PEER_SYNC_ROOM).fetchSockets();
     if (sockets.length === 0) return 0;
-    const [{ getPeers }, { peerAllowsCategoryPull }] = await Promise.all([
+    const [{ getPeers }, shared] = await Promise.all([
       import('./instances.js'), import('./sharing/peerSyncShared.js'),
     ]);
     const peers = await getPeers();
@@ -137,7 +153,7 @@ export async function deliverPeerSyncEvent(io, event) {
     for (const socket of sockets) {
       const instanceId = socket.data?.peerSyncInstanceId;
       const peer = instanceId ? peers.find((p) => p.instanceId === instanceId) : null;
-      if (!peer || !peerAllowsCategoryPull(peer, category)) continue;
+      if (!peer || !receives(shared, peer)) continue;
       socket.emit('peer:sync:event', event);
       sent++;
     }

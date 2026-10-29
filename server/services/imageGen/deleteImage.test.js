@@ -36,7 +36,10 @@ vi.mock('../mediaAssetIndex/index.js', () => ({ unindexImage }));
 
 // The native adapter moves into a fixture-owned bin, never the host Trash.
 let trashError = null;
+let tombstonesAtTrash = null;
 vi.mock('../../lib/nativeTrash.js', () => ({ moveToNativeTrash: async paths => {
+  const { readFile } = await vi.importActual('fs/promises');
+  tombstonesAtTrash = await readFile(join(imagesDir, 'media-tombstones.json'), 'utf8').then(JSON.parse, () => null);
   if (trashError) throw trashError;
   const { rename, mkdir } = await vi.importActual('fs/promises');
   const bin = join(tmpRoot, 'trash');
@@ -47,6 +50,7 @@ vi.mock('../../lib/nativeTrash.js', () => ({ moveToNativeTrash: async paths => {
 let tmpRoot;
 let priorRegistryEnv;
 let deleteImage;
+let listMediaTombstones;
 
 beforeAll(async () => {
   tmpRoot = mkdtempSync(join(tmpdir(), 'portos-gallery-delete-test-'));
@@ -55,6 +59,7 @@ beforeAll(async () => {
   process.env.PORTOS_MEDIA_MODELS_FILE = join(tmpRoot, 'media-models.json');
   vi.resetModules();
   ({ deleteImage } = await import('./local.js'));
+  ({ listMediaTombstones } = await import('../mediaTombstones.js'));
 });
 
 afterAll(() => {
@@ -66,6 +71,7 @@ afterAll(() => {
 beforeEach(() => {
   vi.clearAllMocks();
   trashError = null;
+  tombstonesAtTrash = null;
   rmSync(join(tmpRoot, 'trash'), { recursive: true, force: true });
   rmSync(imagesDir, { recursive: true, force: true });
 });
@@ -92,6 +98,16 @@ describe('deleteImage → media asset index delete hook', () => {
     expect(existsSync(join(tmpRoot, 'trash', 'img-1.metadata.json'))).toBe(true);
     // The ref must be the gallery filename — the key the index wrote the row under.
     expect(unindexImage).toHaveBeenCalledWith('img-1.png');
+    // The tombstone is durable before the files move, so a crash cannot lose the delete.
+    expect(tombstonesAtTrash.image.map((t) => t.key)).toEqual(['img-1.png']);
+    expect((await listMediaTombstones('image')).map((t) => t.key)).toEqual(['img-1.png']);
+  });
+
+  it('a delete applying a peer tombstone records nothing itself', async () => {
+    seedImage('img-4.png');
+    await deleteImage('img-4.png', { fromRemoteTombstone: true });
+    expect(existsSync(join(imagesDir, 'img-4.png'))).toBe(false);
+    expect(await listMediaTombstones('image')).toEqual([]);
   });
 
   it('is non-fatal: a failing index removal still deletes the file and returns ok', async () => {
@@ -115,6 +131,8 @@ describe('deleteImage → media asset index delete hook', () => {
     expect(existsSync(join(imagesDir, 'img-3.png'))).toBe(true);
     expect(existsSync(join(imagesDir, 'img-3.metadata.json'))).toBe(true);
     expect(unindexImage).not.toHaveBeenCalled();
+    // The tombstone recorded for the attempt is withdrawn with it.
+    expect(await listMediaTombstones('image')).toEqual([]);
     errSpy.mockRestore();
   });
 });

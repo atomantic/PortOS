@@ -1,8 +1,9 @@
 /**
- * Delete a media row on the machine that owns it.
+ * Delete a media row (a video history row by id, a gallery image by filename)
+ * on the machine that owns it.
  *
- * A row this machine owns is deleted here (deleteHistoryItem records the
- * tombstone and announces it). A row owned elsewhere is never tombstoned here
+ * A row this machine owns is deleted here (deleteHistoryItem / deleteImage
+ * records the tombstone and announces it). A row owned elsewhere is never tombstoned here
  * first: the delete command goes to the owner (`POST /api/peer-media/delete`),
  * the row carries a machine-local `pendingDelete` flag meanwhile, and the
  * local copy goes only once the owner acks, through the same authorization and
@@ -24,6 +25,7 @@ import { peerBaseUrl } from '../lib/peerUrl.js';
 import { withAbortTimeout } from '../lib/abortTimeout.js';
 import { safeUnder } from '../lib/ffmpeg.js';
 import { loadHistory, getHistoryItem, mutateVideoHistory, HISTORY_UNCHANGED } from './videoGen/history.js';
+import { readHeldImage, isGalleryImageName, localInstanceId } from './imageGen/imageRecords.js';
 import { emitMediaHistoryChanged } from './peerSyncEventBus.js';
 import { instanceEvents } from './instanceEvents.js';
 
@@ -72,15 +74,9 @@ async function dropEntriesFor(kind, key) {
   return removed;
 }
 
-async function localInstanceId() {
-  const identity = await import('./instanceIdentity.js');
-  const id = await identity.getInstanceId().catch(() => null);
-  return isNonBlankStr(id) && id !== identity.UNKNOWN_INSTANCE_ID ? id : null;
-}
-
 // `pending` = `{ peerId, queuedAt }` sets the flag; null clears it. Machine-local:
-// snapshots, frames and merges strip it like `hidden`.
-async function setPendingFlag(key, pending) {
+// snapshots, frames, served sidecars and merges strip it like `hidden`.
+async function setVideoPending(key, pending) {
   let changed = false;
   await mutateVideoHistory((history) => {
     const item = history.find((h) => h?.id === key);
@@ -90,18 +86,54 @@ async function setPendingFlag(key, pending) {
     changed = true;
     return history;
   });
-  if (changed) emitMediaHistoryChanged({ kind: 'video', op: 'upsert', ids: [key] });
+  return changed;
 }
 
-async function hideLocally(key) {
-  const { setHistoryItemHidden } = await import('./videoGen/historyOps.js');
-  await setHistoryItemHidden(key, true);
-  emitMediaHistoryChanged({ kind: 'video', op: 'upsert', ids: [key] });
+async function setImagePending(key, pending) {
+  const held = await readHeldImage(key);
+  if (!held || (!pending && !held.pendingDelete)) return false;
+  const { setImagePendingDelete } = await import('./imageGen/local.js');
+  return (await setImagePendingDelete(key, pending)) === true;
 }
 
-function fileIsLocal(row) {
-  const file = isNonBlankStr(row?.filename) ? safeUnder(PATHS.videos, row.filename) : null;
-  return Boolean(file && existsSync(file));
+/**
+ * What each kind needs from the shared flow: its row as `rowOwnerCandidates`
+ * reads it, the machine-local pending/hidden flags, the full local delete, and
+ * the merge of an authorized owner tombstone.
+ */
+const MEDIA = {
+  video: {
+    label: 'Video',
+    validKey: isNonBlankStr,
+    getRow: getHistoryItem,
+    setPending: setVideoPending,
+    hide: async (key) => (await import('./videoGen/historyOps.js')).setHistoryItemHidden(key, true),
+    fileIsLocal: (row) => {
+      const file = isNonBlankStr(row?.filename) ? safeUnder(PATHS.videos, row.filename) : null;
+      return Boolean(file && existsSync(file));
+    },
+    deleteHere: async (key) => (await import('./videoGen/historyOps.js')).deleteHistoryItem(key),
+    applyTombstone: async (tombstone) => (await import('./dataSync.js')).applyRemoteVideoTombstones([tombstone]),
+  },
+  image: {
+    label: 'Image',
+    validKey: isGalleryImageName,
+    getRow: readHeldImage,
+    setPending: setImagePending,
+    hide: async (key) => (await import('./imageGen/local.js')).setImageHidden(key, true),
+    fileIsLocal: (row) => existsSync(join(PATHS.images, row.filename)),
+    deleteHere: async (key) => (await import('./galleryImageDeletion.js')).deleteGalleryImage(key),
+    applyTombstone: async (tombstone) => (await import('./imageGen/imageRecords.js')).applyRemoteImageTombstones([tombstone]),
+  },
+};
+
+async function setPendingFlag(kind, key, pending) {
+  if (await MEDIA[kind].setPending(key, pending)) emitMediaHistoryChanged({ kind, op: 'upsert', ids: [key] });
+}
+
+async function hideLocally(kind, key) {
+  await MEDIA[kind].hide(key);
+  emitMediaHistoryChanged({ kind, op: 'upsert', ids: [key] });
 }
 
 /**
@@ -141,52 +173,47 @@ async function sendDeleteCommand(peer, kind, key) {
 const BAD_TOMBSTONE_REASONS = new Set(['invalid-key', 'future-or-invalid-deletedAt']);
 
 /**
- * The owner deleted its copy; retire ours through the rule every remote video
+ * The owner deleted its copy; retire ours through the rule every remote media
  * tombstone passes (the owner is one of this row's owner candidates), so the
  * tombstone is recorded by the same merge and nothing is re-announced.
  * Resolves `deleted` (gone here too), `deleted-remote` (the owner's copy is
  * gone, this one stays; `hiddenHere` when it was hidden) or `invalid-ack`.
  */
-async function retireLocalCopy(peer, key, tombstone) {
-  const [{ authorizeRemoteVideoTombstone }, { applyRemoteVideoTombstones }] = await Promise.all([
-    import('./videoTombstoneAuthorization.js'), import('./dataSync.js'),
-  ]);
-  const verdict = authorizeRemoteVideoTombstone({
-    peer, tombstone, localRow: await getHistoryItem(key), hostedIndex: await hostedIndex(), via: 'event',
+async function retireLocalCopy(kind, peer, key, tombstone) {
+  const media = MEDIA[kind];
+  const { authorizeRemoteMediaTombstone } = await import('./mediaTombstoneAuthorization.js');
+  const verdict = authorizeRemoteMediaTombstone({
+    peer, tombstone, localRow: await media.getRow(key), hostedIndex: await hostedIndex(), via: 'event',
   });
   if (!verdict.allowed && BAD_TOMBSTONE_REASONS.has(verdict.reason)) return { status: 'invalid-ack', reason: verdict.reason };
   if (verdict.allowed) {
-    await applyRemoteVideoTombstones([tombstone]);
-    if (!(await getHistoryItem(key))) return { status: 'deleted' };
+    await media.applyTombstone(tombstone);
+    if (!(await media.getRow(key))) return { status: 'deleted' };
     // The tombstone predates this copy (re-created since) or its removal failed
     // (already logged): the copy here stays, and is no longer pending.
-    await setPendingFlag(key, null);
-    console.log(`⏭️ Video ${key} deleted on ${peerLabel(peer)}; the copy here was not removed`);
+    await setPendingFlag(kind, key, null);
+    console.log(`⏭️ ${media.label} ${key} deleted on ${peerLabel(peer)}; the copy here was not removed`);
     return { status: 'deleted-remote', hiddenHere: false };
   }
   // This machine does not accept that peer's tombstones (e.g. its media delete
   // is off here), so the local copy stays, hidden on this machine only.
-  console.log(`⏭️ Video ${key} deleted on ${peerLabel(peer)}; local copy hidden, its tombstone is not accepted here: ${verdict.reason}`);
-  await setPendingFlag(key, null);
-  await hideLocally(key);
+  console.log(`⏭️ ${media.label} ${key} deleted on ${peerLabel(peer)}; local copy hidden, its tombstone is not accepted here: ${verdict.reason}`);
+  await setPendingFlag(kind, key, null);
+  await hideLocally(kind, key);
   return { status: 'deleted-remote', hiddenHere: true };
 }
 
-async function deleteLocally(key) {
-  const { deleteHistoryItem } = await import('./videoGen/historyOps.js');
-  await deleteHistoryItem(key);
-  await dropEntriesFor('video', key);
-  return { status: 'deleted' };
+async function deleteLocally(kind, key) {
+  const result = await MEDIA[kind].deleteHere(key);
+  await dropEntriesFor(kind, key);
+  return { ...(isPlainObject(result) ? result : {}), status: 'deleted' };
 }
 
 const forbidden = (peer) => new ServerError(`${peerLabel(peer)} refused the delete: media delete is turned off there for this machine`, {
   status: 403, code: 'MEDIA_DELETE_FORBIDDEN',
 });
-const commandFailed = (peer, detail) => new ServerError(`${peerLabel(peer)} could not delete this video (${detail}); it may need an update`, {
+const commandFailed = (peer, kind, detail) => new ServerError(`${peerLabel(peer)} could not delete this ${kind} (${detail}); it may need an update`, {
   status: 502, code: 'MEDIA_DELETE_FAILED',
-});
-const imageUnsupported = () => new ServerError('Remote image delete is not supported yet', {
-  status: 422, code: 'IMAGE_DELETE_NOT_SUPPORTED', severity: 'warning',
 });
 
 // cancelPendingDelete bumps a row's generation; an attempt or drain that sees
@@ -199,14 +226,20 @@ const generationOf = (kind, key) => cancelGenerations.get(`${kind}:${key}`) ?? 0
 const RETRY_INTERVAL_MS = 60_000;
 const lastAttemptAt = new Map();
 
-async function deleteVideoAnywhere(key) {
-  const generation = generationOf('video', key);
-  const cancelled = () => generationOf('video', key) !== generation;
-  const row = await getHistoryItem(key);
-  if (!row) throw new ServerError('Not found', { status: 404, code: 'NOT_FOUND' });
+async function deleteAnywhere(kind, key) {
+  const media = MEDIA[kind];
+  const generation = generationOf(kind, key);
+  const cancelled = () => generationOf(kind, key) !== generation;
+  const row = await media.getRow(key);
+  if (!row) {
+    // An image with neither bytes nor sidecar here (a hosted collection item)
+    // keeps the plain local delete, which retires this machine's references.
+    if (kind === 'image') return deleteLocally(kind, key);
+    throw new ServerError('Not found', { status: 404, code: 'NOT_FOUND' });
+  }
   const localId = await localInstanceId();
   const candidates = rowOwnerCandidates(row, await hostedIndex()).filter((id) => id !== localId);
-  if ((localId && row.originInstanceId === localId) || (candidates.length === 0 && fileIsLocal(row))) return deleteLocally(key);
+  if ((localId && row.originInstanceId === localId) || (candidates.length === 0 && media.fileIsLocal(row))) return deleteLocally(kind, key);
 
   const { getPeers } = await import('./instances.js');
   const peers = await getPeers();
@@ -215,8 +248,8 @@ async function deleteVideoAnywhere(key) {
     .filter(Boolean);
   if (registered.length === 0) {
     // Fail closed: nobody to send the command to, so only this machine's view changes.
-    await hideLocally(key);
-    console.log(`⏭️ Video ${key} has no known owner; hidden on this machine only`);
+    await hideLocally(kind, key);
+    console.log(`⏭️ ${media.label} ${key} has no known owner; hidden on this machine only`);
     return { status: 'owner-unknown' };
   }
   const targets = registered.filter(peerIsPaired);
@@ -228,11 +261,11 @@ async function deleteVideoAnywhere(key) {
 
   const queuedAt = new Date().toISOString();
   const withdrawn = async () => {
-    await setPendingFlag(key, null);
-    console.log(`↩️ Delete of video ${key} withdrawn before its owner answered`);
+    await setPendingFlag(kind, key, null);
+    console.log(`↩️ Delete of ${kind} ${key} withdrawn before its owner answered`);
     return { status: 'cancelled' };
   };
-  await setPendingFlag(key, { peerId: targets[0].id, queuedAt });
+  await setPendingFlag(kind, key, { peerId: targets[0].id, queuedAt });
   if (cancelled()) return withdrawn();
   const unreachable = [];
   let failure = null;
@@ -241,47 +274,47 @@ async function deleteVideoAnywhere(key) {
       // A peer the probe marks offline is queued for its `peer:online` rather than dialed.
       const result = peer.status === 'offline'
         ? { outcome: 'unreachable', detail: 'offline' }
-        : await sendDeleteCommand(peer, 'video', key);
+        : await sendDeleteCommand(peer, kind, key);
       if (result.outcome === 'ok') {
         // The owner already deleted, so a cancel that raced the dial cannot undo it.
-        const retired = await retireLocalCopy(peer, key, result.tombstone);
-        if (retired.status === 'invalid-ack') throw commandFailed(peer, `unusable tombstone: ${retired.reason}`);
-        await dropEntriesFor('video', key);
-        console.log(`🗑️ Video ${key} deleted on its owner ${peerLabel(peer)}`);
+        const retired = await retireLocalCopy(kind, peer, key, result.tombstone);
+        if (retired.status === 'invalid-ack') throw commandFailed(peer, kind, `unusable tombstone: ${retired.reason}`);
+        await dropEntriesFor(kind, key);
+        console.log(`🗑️ ${media.label} ${key} deleted on its owner ${peerLabel(peer)}`);
         return { ...retired, peerName: peerLabel(peer) };
       }
       if (cancelled()) return withdrawn();
-      if (result.outcome === 'invalid-ack') throw commandFailed(peer, result.detail);
+      if (result.outcome === 'invalid-ack') throw commandFailed(peer, kind, result.detail);
       if (result.outcome === 'forbidden') throw forbidden(peer);
       if (result.outcome === 'unreachable') unreachable.push(peer);
       if (result.outcome === 'error' && !failure) failure = { peer, detail: result.detail };
     }
   } catch (err) {
-    await setPendingFlag(key, null);
+    await setPendingFlag(kind, key, null);
     throw err;
   }
   if (unreachable.length > 0) {
     const peer = unreachable[0];
-    const entry = { peerId: peer.id, kind: 'video', key, queuedAt };
+    const entry = { peerId: peer.id, kind, key, queuedAt };
     lastAttemptAt.set(peer.id, Date.now());
     let queued = false;
     // Re-checked inside the queue lock, the same lock cancelPendingDelete's dequeue takes.
     await updateQueue((entries) => {
       if (cancelled()) return entries;
       queued = true;
-      return [...entries.filter((e) => !(e.kind === 'video' && e.key === key)), entry];
+      return [...entries.filter((e) => !(e.kind === kind && e.key === key)), entry];
     });
     if (!queued) return withdrawn();
-    await setPendingFlag(key, { peerId: peer.id, queuedAt });
+    await setPendingFlag(kind, key, { peerId: peer.id, queuedAt });
     if (cancelled()) return withdrawn();
-    console.log(`🔌 Video ${key} delete queued until ${peerLabel(peer)} is reachable`);
+    console.log(`🔌 ${media.label} ${key} delete queued until ${peerLabel(peer)} is reachable`);
     return { status: 'pending', pendingDelete: { peerId: peer.id, queuedAt }, peerName: peerLabel(peer) };
   }
-  await setPendingFlag(key, null);
-  if (failure) throw commandFailed(failure.peer, failure.detail);
+  await setPendingFlag(kind, key, null);
+  if (failure) throw commandFailed(failure.peer, kind, failure.detail);
   // Every candidate answered that it does not hold the row.
-  await hideLocally(key);
-  console.log(`⏭️ Video ${key}: no owner candidate holds it; hidden on this machine only`);
+  await hideLocally(kind, key);
+  console.log(`⏭️ ${media.label} ${key}: no owner candidate holds it; hidden on this machine only`);
   return { status: 'owner-unknown' };
 }
 
@@ -297,26 +330,27 @@ const inFlight = new Map();
  * Throws 403 `MEDIA_DELETE_FORBIDDEN` when the owner refuses and 502
  * `MEDIA_DELETE_FAILED` when its answer is unusable.
  */
+const unknownMedia = () => new ServerError('Unknown media', { status: 400, code: 'VALIDATION_ERROR' });
+
 export function deleteMediaAnywhere(kind, key) {
-  if (kind === 'image') return Promise.reject(imageUnsupported());
-  if (kind !== 'video' || !isNonBlankStr(key)) return Promise.reject(new ServerError('Unknown media', { status: 400, code: 'VALIDATION_ERROR' }));
+  if (!MEDIA[kind]?.validKey(key)) return Promise.reject(unknownMedia());
   const id = `${kind}:${key}`;
   if (inFlight.has(id)) return inFlight.get(id);
-  const run = deleteVideoAnywhere(key).finally(() => inFlight.delete(id));
+  const run = deleteAnywhere(kind, key).finally(() => inFlight.delete(id));
   inFlight.set(id, run);
   return run;
 }
 
 /** Withdraw a queued delete and clear the row's pending flag. Resolves `{ ok, cancelled }`. */
 export async function cancelPendingDelete(kind, key) {
-  if (kind !== 'video') throw new ServerError('Unknown media kind', { status: 400, code: 'VALIDATION_ERROR' });
+  if (!MEDIA[kind]?.validKey(key)) throw unknownMedia();
   cancelGenerations.set(`${kind}:${key}`, generationOf(kind, key) + 1);
   const dequeued = await dropEntriesFor(kind, key);
-  const row = await getHistoryItem(key);
+  const row = await MEDIA[kind].getRow(key);
   if (!row) throw new ServerError('Not found', { status: 404, code: 'NOT_FOUND' });
   const cancelled = isPlainObject(row.pendingDelete) || dequeued > 0;
-  await setPendingFlag(key, null);
-  if (cancelled) console.log(`↩️ Pending delete of video ${key} cancelled`);
+  await setPendingFlag(kind, key, null);
+  if (cancelled) console.log(`↩️ Pending delete of ${kind} ${key} cancelled`);
   return { ok: true, cancelled };
 }
 
@@ -334,22 +368,27 @@ async function pruneMediaDeleteQueue(peers, nowMs = Date.now()) {
   if (queued.length === 0) return 0;
   const known = new Set((Array.isArray(peers) ? peers : []).map((p) => p?.id).filter(isNonBlankStr));
   const staleReason = (entry) => (entryExpired(entry, nowMs) ? 'expired' : !known.has(entry.peerId) ? 'peer removed' : null);
-  // The history is read only when some entry survives the cheap checks.
-  let rows = new Map();
-  if (queued.some((entry) => !staleReason(entry))) {
+  // Rows are read only for entries that survive the cheap checks.
+  const survivors = queued.filter((entry) => !staleReason(entry));
+  const rows = new Map();
+  if (survivors.some((entry) => entry.kind === 'video')) {
     const history = await loadHistory();
-    rows = new Map((Array.isArray(history) ? history : []).filter((r) => isNonBlankStr(r?.id)).map((r) => [r.id, r]));
+    for (const r of Array.isArray(history) ? history : []) if (isNonBlankStr(r?.id)) rows.set(`video:${r.id}`, r);
+  }
+  for (const entry of survivors.filter((e) => e.kind === 'image')) {
+    const row = await readHeldImage(entry.key);
+    if (row) rows.set(`image:${entry.key}`, row);
   }
   const dropped = [];
   await updateQueue((entries) => entries.filter((entry) => {
-    const row = rows.get(entry.key);
+    const row = rows.get(`${entry.kind}:${entry.key}`);
     const reason = staleReason(entry) ?? (!row ? 'row gone' : rowRecreated(row, entry) ? 're-created' : null);
     if (reason) dropped.push({ entry, reason });
     return !reason;
   }));
   for (const { entry, reason } of dropped) {
     console.log(`⏭️ Queued delete of ${entry.kind} ${entry.key} dropped: ${reason}`);
-    await setPendingFlag(entry.key, null);
+    await setPendingFlag(entry.kind, entry.key, null);
   }
   return dropped.length;
 }
@@ -383,19 +422,19 @@ async function drainMediaDeleteQueue(peer) {
           continue;
         }
         await dropEntriesFor(entry.kind, entry.key);
-        const retired = result.outcome === 'ok' ? await retireLocalCopy(current, entry.key, result.tombstone) : null;
+        const retired = result.outcome === 'ok' ? await retireLocalCopy(entry.kind, current, entry.key, result.tombstone) : null;
         if (retired && retired.status !== 'invalid-ack') {
           console.log(`🗑️ Queued delete of ${entry.kind} ${entry.key} completed on ${peerLabel(current)} (${retired.status})`);
           done++;
         } else if (result.outcome === 'not-held') {
-          await setPendingFlag(entry.key, null);
-          await hideLocally(entry.key);
+          await setPendingFlag(entry.kind, entry.key, null);
+          await hideLocally(entry.kind, entry.key);
           console.log(`⏭️ ${peerLabel(current)} does not hold ${entry.kind} ${entry.key}; hidden on this machine only`);
         } else if (retired || result.outcome === 'invalid-ack') {
-          await setPendingFlag(entry.key, null);
+          await setPendingFlag(entry.kind, entry.key, null);
           console.warn(`⚠️ ${peerLabel(current)} answered queued delete of ${entry.kind} ${entry.key} without a usable tombstone; nothing deleted here`);
         } else {
-          await setPendingFlag(entry.key, null);
+          await setPendingFlag(entry.kind, entry.key, null);
           console.log(`🚫 ${peerLabel(current)} refused queued delete of ${entry.kind} ${entry.key}: ${result.outcome}${result.detail ? ` ${result.detail}` : ''}`);
         }
       } catch (err) {
@@ -462,14 +501,14 @@ export async function executePeerMediaDelete(senderPeerId, { kind, key }) {
     console.log(`🚫 Media delete from ${peerLabel(peer)} refused: media delete is off for this peer`);
     throw new ServerError('Media delete is turned off for this peer', { status: 403, code: 'MEDIA_DELETE_FORBIDDEN' });
   }
-  if (kind === 'image') throw imageUnsupported();
+  const media = MEDIA[kind];
+  if (!media?.validKey(key)) throw unknownMedia();
   const notHeld = () => new ServerError('This machine does not hold that media', { status: 404, code: 'MEDIA_NOT_HELD' });
-  if (!(await getHistoryItem(key))) throw notHeld();
-  const { deleteHistoryItem } = await import('./videoGen/historyOps.js');
-  await deleteHistoryItem(key).catch((err) => { throw err?.code === 'NOT_FOUND' ? notHeld() : err; });
-  await dropEntriesFor('video', key);
+  if (!(await media.getRow(key))) throw notHeld();
+  await media.deleteHere(key).catch((err) => { throw err?.code === 'NOT_FOUND' ? notHeld() : err; });
+  await dropEntriesFor(kind, key);
   const { listMediaTombstones } = await import('./mediaTombstones.js');
-  const tombstone = (await listMediaTombstones('video')).find((t) => t.key === key) ?? null;
-  console.log(`🗑️ Video ${key} deleted at the request of ${peerLabel(peer)}`);
+  const tombstone = (await listMediaTombstones(kind)).find((t) => t.key === key) ?? null;
+  console.log(`🗑️ ${media.label} ${key} deleted at the request of ${peerLabel(peer)}`);
   return { ok: true, tombstone };
 }

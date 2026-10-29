@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
-import { mkdirSync } from 'fs';
+import { mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
 
@@ -15,7 +15,8 @@ vi.mock('./instances.js', async () => {
   return { ...actual, getPeers: async () => registry.peers };
 });
 vi.mock('./instanceIdentity.js', () => ({ UNKNOWN_INSTANCE_ID: 'unknown', getInstanceId: async () => 'local-inst' }));
-vi.mock('./mediaAssetIndex/index.js', () => ({ unindexVideo: async () => {} }));
+vi.mock('./mediaAssetIndex/index.js', () => ({ unindexVideo: async () => {}, unindexImage: async () => {}, indexImage: async () => {} }));
+vi.mock('../lib/pythonSetup.js', () => ({ resolveFlux2Python: () => null, FLUX2_VENV_DEFAULT: '/fake/venv/bin/python3' }));
 vi.mock('./musicVideo/mediaPool.js', () => ({ forgetDeletedMusicVideoAssets: vi.fn(async () => {}) }));
 vi.mock('../lib/trashFiles.js', () => ({ trashFiles: vi.fn(async () => {}) }));
 
@@ -27,6 +28,7 @@ const { mutateVideoHistory } = await import('./videoGen/history.js');
 const { listMediaTombstones } = await import('./mediaTombstones.js');
 const { forgetDeletedMusicVideoAssets } = await import('./musicVideo/mediaPool.js');
 const { trashFiles } = await import('../lib/trashFiles.js');
+const { deleteImage } = await import('./imageGen/local.js');
 
 const HISTORY = join(PATHS.data, 'video-history.json');
 const PAIR = 's'.repeat(40);
@@ -144,7 +146,80 @@ describe('applyPeerSyncEvent', () => {
   });
 });
 
+const imagePeer = (id, instanceId, extra = {}) => peer(id, instanceId, { syncCategories: { mediaCollections: true }, ...extra });
+const imageDeleteFrame = (key, origin = 'peer-o') => ({ v: 1, category: 'imageHistory', op: 'delete', id: key, tombstone: { key, deletedAt: '2026-06-01T00:00:00.000Z' }, originInstanceId: origin });
+function seedImage(filename, sidecar) {
+  mkdirSync(PATHS.images, { recursive: true });
+  writeFileSync(join(PATHS.images, filename), 'synthetic');
+  writeFileSync(join(PATHS.images, filename.replace(/\.png$/, '.metadata.json')), JSON.stringify({ prompt: 'p', createdAt: '2026-05-01T00:00:00.000Z', ...sidecar }));
+}
+const trashedImage = (filename) => trashFiles.mock.calls.some(([paths]) => paths.includes(join(PATHS.images, filename)));
+const imageTombstones = async () => (await listMediaTombstones('image')).map((t) => t.key);
+
+describe('applyPeerSyncEvent for gallery images', () => {
+  beforeEach(() => {
+    registry.peers = [imagePeer('rec-origin', 'peer-o'), imagePeer('rec-other', 'peer-x')];
+  });
+
+  it("deletes a held image on its owner's delete frame", async () => {
+    seedImage('fox.png', { originInstanceId: 'peer-o' });
+    const result = await applyPeerSyncEvent({ id: 'rec-origin' }, imageDeleteFrame('fox.png'));
+    expect(result.applied).toBe(true);
+    expect(trashedImage('fox.png')).toBe(true);
+    expect(await imageTombstones()).toEqual(['fox.png']);
+  });
+
+  it('ignores a delete frame from a peer that does not own the image', async () => {
+    seedImage('fox.png', { originInstanceId: 'peer-o' });
+    const result = await applyPeerSyncEvent({ id: 'rec-other' }, imageDeleteFrame('fox.png', 'peer-x'));
+    expect(result.applied).toBe(false);
+    expect(trashFiles).not.toHaveBeenCalled();
+    expect(await imageTombstones()).toEqual([]);
+  });
+
+  it('records a delete for an image not held here only when the sender is its origin', async () => {
+    expect((await applyPeerSyncEvent({ id: 'rec-origin' }, imageDeleteFrame('ghost.png'))).reason).toBe('tombstone-only');
+    expect((await applyPeerSyncEvent({ id: 'rec-other' }, { ...imageDeleteFrame('other.png'), originInstanceId: 'peer-o' })).applied).toBe(false);
+    expect(await imageTombstones()).toEqual(['ghost.png']);
+  });
+
+  it('ignores image frames from a peer this install shares no media with, and image upserts', async () => {
+    registry.peers = [peer('rec-origin', 'peer-o')];
+    seedImage('fox.png', { originInstanceId: 'peer-o' });
+    expect((await applyPeerSyncEvent({ id: 'rec-origin' }, imageDeleteFrame('fox.png'))).applied).toBe(false);
+    registry.peers = [imagePeer('rec-origin', 'peer-o')];
+    const upsert = { v: 1, category: 'imageHistory', op: 'upsert', id: 'new.png', record: { id: 'new.png' }, originInstanceId: 'peer-o' };
+    expect((await applyPeerSyncEvent({ id: 'rec-origin' }, upsert)).applied).toBe(false);
+    expect(trashFiles).not.toHaveBeenCalled();
+  });
+});
+
 describe('local emission', () => {
+  it('an owner image delete emits its tombstone; a peer-owned or remote-tombstone one does not', async () => {
+    const frames = [];
+    const onEvent = (event) => frames.push(event);
+    peerSyncBus.on('event', onEvent);
+    seedImage('mine.png', { originInstanceId: 'local-inst' });
+    seedImage('theirs.png', { originInstanceId: 'peer-o' });
+    seedImage('retired.png', { originInstanceId: 'local-inst' });
+    const changed = [];
+    const onChanged = (event) => changed.push(event);
+    peerSyncBus.on('media-history-changed', onChanged);
+    await deleteImage('mine.png');
+    await deleteImage('theirs.png');
+    await deleteImage('retired.png', { fromRemoteTombstone: true });
+    await vi.waitFor(() => {
+      expect(changed).toHaveLength(3);
+      expect(frames.length).toBeGreaterThan(0);
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    peerSyncBus.off('event', onEvent);
+    peerSyncBus.off('media-history-changed', onChanged);
+    expect(frames).toEqual([expect.objectContaining({ category: 'imageHistory', op: 'delete', id: 'mine.png', tombstone: expect.objectContaining({ key: 'mine.png' }) })]);
+    expect(await imageTombstones()).toEqual(expect.arrayContaining(['mine.png', 'theirs.png']));
+    expect(await imageTombstones()).not.toContain('retired.png');
+  });
+
   it('a locally added row is announced as an upsert with machine-local fields stripped', async () => {
     const emitted = nextBusEvent('event');
     await mutateVideoHistory((h) => { h.unshift(row('mine', { hidden: true })); return h; });

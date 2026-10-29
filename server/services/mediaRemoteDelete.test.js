@@ -20,7 +20,8 @@ vi.mock('../lib/peerHttpClient.js', async (importOriginal) => ({
   peerFetch: vi.fn((...args) => net.fetch(...args)),
 }));
 vi.mock('./instanceIdentity.js', () => ({ UNKNOWN_INSTANCE_ID: 'unknown', getInstanceId: async () => 'local-inst' }));
-vi.mock('./mediaAssetIndex/index.js', () => ({ unindexVideo: async () => {} }));
+vi.mock('./mediaAssetIndex/index.js', () => ({ unindexVideo: async () => {}, unindexImage: async () => {}, indexImage: async () => {} }));
+vi.mock('../lib/pythonSetup.js', () => ({ resolveFlux2Python: () => null, FLUX2_VENV_DEFAULT: '/fake/venv/bin/python3' }));
 vi.mock('./musicVideo/mediaPool.js', () => ({ forgetDeletedMusicVideoAssets: async () => {} }));
 vi.mock('../lib/trashFiles.js', () => ({ trashFiles: vi.fn(async () => {}) }));
 
@@ -87,7 +88,7 @@ afterAll(() => {
 describe('deleteMediaAnywhere', () => {
   it('deletes a row this machine owns locally and announces it', async () => {
     await atomicWrite(HISTORY, [row('v1', { originInstanceId: 'local-inst' })]);
-    expect(await deleteMediaAnywhere('video', 'v1')).toEqual({ status: 'deleted' });
+    expect(await deleteMediaAnywhere('video', 'v1')).toEqual({ ok: true, status: 'deleted' });
     expect(await readRows()).toEqual([]);
     expect(peerFetch).not.toHaveBeenCalled();
     await vi.waitFor(() => expect(deleteFrames.map((e) => e.id)).toEqual(['v1']));
@@ -350,6 +351,84 @@ describe('cancel races', () => {
     expect(rows.map((r) => r.id)).toEqual(['v2']);
     expect(rows[0].pendingDelete).toBeUndefined();
     expect(await listMediaDeleteQueue()).toEqual([]);
+  });
+});
+
+describe('deleteMediaAnywhere for gallery images', () => {
+  const sidecarFile = (filename) => join(PATHS.images, filename.replace(/\.png$/, '.metadata.json'));
+  const seedImage = (filename, sidecar) => {
+    mkdirSync(PATHS.images, { recursive: true });
+    writeFileSync(join(PATHS.images, filename), 'synthetic');
+    writeFileSync(sidecarFile(filename), JSON.stringify({ prompt: 'p', createdAt: '2026-05-01T00:00:00.000Z', ...sidecar }));
+  };
+  const sidecar = (filename) => readJSONFile(sidecarFile(filename), null);
+  const trashedImage = (filename) => trashFiles.mock.calls.some(([paths]) => paths.includes(join(PATHS.images, filename)));
+
+  it('deletes an image this machine owns here and announces it', async () => {
+    seedImage('mine.png', { originInstanceId: 'local-inst' });
+    expect(await deleteMediaAnywhere('image', 'mine.png')).toMatchObject({ ok: true, status: 'deleted' });
+    expect(trashedImage('mine.png')).toBe(true);
+    expect((await listMediaTombstones('image')).map((t) => t.key)).toEqual(['mine.png']);
+    expect(peerFetch).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(deleteFrames).toEqual([expect.objectContaining({ category: 'imageHistory', id: 'mine.png' })]));
+  });
+
+  it("sends a peer's image delete to its owner and retires the copy here only on the ack", async () => {
+    seedImage('theirs.png', { originInstanceId: 'peer-o' });
+    let answer;
+    net.fetch = vi.fn(() => new Promise((resolve) => { answer = resolve; }));
+    const pending = deleteMediaAnywhere('image', 'theirs.png');
+    await vi.waitFor(() => expect(net.fetch).toHaveBeenCalledTimes(1));
+    expect(JSON.parse(net.fetch.mock.calls[0][1].body)).toEqual({ kind: 'image', key: 'theirs.png' });
+    expect((await sidecar('theirs.png')).pendingDelete).toMatchObject({ peerId: 'rec-owner' });
+    expect(await listMediaTombstones('image')).toEqual([]);
+    expect(trashFiles).not.toHaveBeenCalled();
+
+    answer(ownerAck('theirs.png'));
+    // trashFiles is a stub, so the bytes stay on disk: the copy here was asked to go.
+    expect((await pending).peerName).toBe('Example rec-owner');
+    expect(trashedImage('theirs.png')).toBe(true);
+    expect((await listMediaTombstones('image')).map((t) => t.key)).toEqual(['theirs.png']);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(deleteFrames).toEqual([]);
+  });
+
+  it('queues an unreachable owner with a machine-local pending flag, and cancels it', async () => {
+    seedImage('theirs.png', { originInstanceId: 'peer-o' });
+    net.fetch = vi.fn(unreachable);
+    const result = await deleteMediaAnywhere('image', 'theirs.png');
+    expect(result).toMatchObject({ status: 'pending', pendingDelete: { peerId: 'rec-owner' } });
+    expect(await listMediaDeleteQueue()).toEqual([{ peerId: 'rec-owner', kind: 'image', key: 'theirs.png', queuedAt: result.pendingDelete.queuedAt }]);
+    expect((await sidecar('theirs.png')).pendingDelete).toEqual(result.pendingDelete);
+    expect(await listMediaTombstones('image')).toEqual([]);
+
+    expect(await cancelPendingDelete('image', 'theirs.png')).toEqual({ ok: true, cancelled: true });
+    expect(await listMediaDeleteQueue()).toEqual([]);
+    expect((await sidecar('theirs.png')).pendingDelete).toBeUndefined();
+  });
+
+  it('drains a queued image delete when its owner comes online', async () => {
+    seedImage('theirs.png', { originInstanceId: 'peer-o' });
+    net.fetch = vi.fn(unreachable);
+    await deleteMediaAnywhere('image', 'theirs.png');
+    net.fetch = vi.fn(async () => ownerAck('theirs.png'));
+    disarmQueue = initMediaRemoteDelete();
+    await listenerFor('peer:online')(registry.peers[0]);
+    expect(trashedImage('theirs.png')).toBe(true);
+    expect(await listMediaDeleteQueue()).toEqual([]);
+  });
+
+  it('hides an image with no knowable owner here only', async () => {
+    seedImage('orphan.png', { originInstanceId: 'peer-gone' });
+    expect(await deleteMediaAnywhere('image', 'orphan.png')).toEqual({ status: 'owner-unknown' });
+    expect((await sidecar('orphan.png')).hidden).toBe(true);
+    expect(trashFiles).not.toHaveBeenCalled();
+    expect(await listMediaTombstones('image')).toEqual([]);
+  });
+
+  it('refuses a key that is not a gallery image filename', async () => {
+    await expect(deleteMediaAnywhere('image', '../escape.png')).rejects.toMatchObject({ status: 400 });
+    await expect(deleteMediaAnywhere('image', 'clip.mp4')).rejects.toMatchObject({ status: 400 });
   });
 });
 

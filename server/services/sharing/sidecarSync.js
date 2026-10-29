@@ -20,7 +20,8 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 import { atomicWrite, ensureDir, readJSONFile, PATHS } from '../../lib/fileUtils.js';
 import { imageSidecarName, sanitizeAssetFilename } from './buckets.js';
-import { sidecarGenParamsHash } from '../../lib/assetHash.js';
+import { sidecarGenParamsHash, stripImageSidecarLocalFields, IMAGE_SIDECAR_LOCAL_FIELDS } from '../../lib/assetHash.js';
+import { isStr } from '../../lib/textUtils.js';
 import { isPlainObject } from '../../lib/objects.js';
 import { peerFetch } from '../../lib/peerHttpClient.js';
 import { withAbortTimeout } from '../../lib/abortTimeout.js';
@@ -65,6 +66,29 @@ async function readBodyCapped(res, maxBytes) {
     return null;
   }
   return Buffer.concat(chunks);
+}
+
+/**
+ * The sidecar to keep when a peer's copy arrives: its gen-params, with this
+ * machine's own fields (hide state, pending delete, supplier) left as they are
+ * and the peer's ignored. Ownership of an image already held here (its sidecar
+ * has gen-params) never comes from a peer: its origin stays the local value,
+ * even when absent. An image new here takes the peer's origin, and the peer is
+ * recorded as its supplier.
+ */
+function mergePeerSidecar(incoming, local, peer) {
+  const held = isPlainObject(local) && sidecarGenParamsHash(local) !== null;
+  const { originInstanceId: incomingOrigin, ...content } = stripImageSidecarLocalFields(incoming);
+  const merged = { ...content };
+  for (const key of IMAGE_SIDECAR_LOCAL_FIELDS) {
+    if (isPlainObject(local) && local[key] !== undefined) merged[key] = local[key];
+  }
+  const origin = held ? local.originInstanceId : incomingOrigin;
+  if (origin !== undefined) merged.originInstanceId = origin;
+  if (!held && merged.suppliedByInstanceId === undefined && isStr(peer?.instanceId)) merged.suppliedByInstanceId = peer.instanceId;
+  // The local hash cache describes the local file; keep it over the peer's.
+  if (isPlainObject(local?.sha256)) merged.sha256 = local.sha256;
+  return merged;
 }
 
 /**
@@ -124,7 +148,8 @@ export async function pullSidecarForImage(peer, base, imageFilename) {
   // returns null exactly when nothing remains beyond the sha256 cache key.
   if (sidecarGenParamsHash(parsed) === null) return false;
   await ensureDir(PATHS.images);
-  await atomicWrite(join(PATHS.images, sidecarName), buf);
+  const sidecarPath = join(PATHS.images, sidecarName);
+  await atomicWrite(sidecarPath, mergePeerSidecar(parsed, await readJSONFile(sidecarPath, null, { logError: false }), peer));
   await import('../mediaAssetIndex/index.js').then(m => m.indexImage({ filename: imageFilename })).catch(err => console.error(`❌ Media index sidecar refresh: ${err.message}`));
   console.log(`📥 peerSync: pulled sidecar ${sidecarName} from ${peer.name || peer.instanceId}`);
   return true;

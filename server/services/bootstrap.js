@@ -1070,6 +1070,10 @@ export const runBootSequence = ({ io, httpServer, localHttpServer, httpsEnabled,
         void import('./mediaRemoteDelete.js')
           .then(({ initMediaRemoteDelete }) => initMediaRemoteDelete())
           .catch((err) => logBootstrapFailure('❌ Media delete queue init failed', err));
+        // Gallery renders record this machine as their origin, which remote delete targets.
+        void import('./imageGen/imageRecords.js')
+          .then(({ initImageOriginStamping }) => initImageOriginStamping())
+          .catch((err) => logBootstrapFailure('❌ Image origin stamping init failed', err));
       },
       // Brain digests/reviews call an AI provider, so the scheduler arms only
       // once the server is listening and only acts when the user opted in

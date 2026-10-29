@@ -21,6 +21,10 @@ const FILE = () => join(PATHS.data, 'media-tombstones.json');
 const SCHEMA_VERSION = 1;
 const KEY_FIELD = 'key';
 const KINDS = ['video', 'image'];
+// Gallery images are deleted in batches far larger than videos; a tombstone
+// that falls off the cap lets a peer's copy come back.
+// The image cap matches the library manifest schema (peerSyncValidation.js).
+const KIND_LIMITS = { video: DEFAULT_TOMBSTONE_LIMIT, image: 5000 };
 const queueWrite = createFileWriteQueue();
 
 function assertKind(kind) {
@@ -44,7 +48,7 @@ export function recordMediaTombstone(kind, key, deletedAt) {
   assertKind(kind);
   return queueWrite(async () => {
     const store = await readStore();
-    store[kind] = recordTombstone(store[kind], key, { keyField: KEY_FIELD, deletedAt, limit: DEFAULT_TOMBSTONE_LIMIT });
+    store[kind] = recordTombstone(store[kind], key, { keyField: KEY_FIELD, deletedAt, limit: KIND_LIMITS[kind] });
     await writeStore(store);
     return store[kind].find((t) => t[KEY_FIELD] === key) ?? null;
   });
@@ -70,13 +74,19 @@ export function mergeMediaTombstones(kind, remote) {
   return queueWrite(async () => {
     const store = await readStore();
     const before = new Set(store[kind].map((t) => `${t[KEY_FIELD]}@${t.deletedAt}`));
-    const { merged, changed } = mergeTombstones(store[kind], remote, { keyField: KEY_FIELD });
+    const { merged, changed } = mergeTombstones(store[kind], remote, { keyField: KEY_FIELD, limit: KIND_LIMITS[kind] });
     if (changed) {
       store[kind] = merged;
       await writeStore(store);
     }
     return { added: merged.filter((t) => !before.has(`${t[KEY_FIELD]}@${t.deletedAt}`)) };
   });
+}
+
+/** The tombstoned keys of `kind` as a Set (image filenames are never re-used, so any tombstone blocks a pull). */
+export async function mediaTombstoneKeys(kind) {
+  assertKind(kind);
+  return new Set((await readStore())[kind].map((t) => t[KEY_FIELD]));
 }
 
 export async function isMediaTombstoned(kind, key, liveStamp) {

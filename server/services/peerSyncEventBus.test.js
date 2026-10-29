@@ -96,7 +96,32 @@ describe('deliverPeerSyncEvent', () => {
     expect(claimed.frames).toEqual([]);
   });
 
-  it('delivers nothing for a category with no sync mapping', async () => {
-    expect(await deliverPeerSyncEvent({ in: () => { throw new Error('not reached'); } }, { ...FRAME, category: 'imageHistory' })).toBe(0);
+  it('sends an image frame to peers the library manifest is served to, video category or not', async () => {
+    registry.peers = [
+      peer('peer-video-off', false),
+      { ...peer('peer-sync-off', true), syncEnabled: false },
+      { ...peer('peer-inbound-only', true), directions: ['inbound'] },
+    ];
+    httpServer = createServer();
+    ioServer = new Server(httpServer);
+    ioServer.on('connection', (socket) => registerPeerSyncSubscriber(socket));
+    const port = await new Promise((resolve) => httpServer.listen(0, '127.0.0.1', () => resolve(httpServer.address().port)));
+    const outbound = await connect(port, 'peer-video-off', true);
+    const silenced = await connect(port, 'peer-sync-off', true);
+    const inboundOnly = await connect(port, 'peer-inbound-only', true);
+    const imageFrame = { v: 1, category: 'imageHistory', op: 'delete', id: 'fox.png', tombstone: { key: 'fox.png', deletedAt: '2026-01-01T00:00:00.000Z' }, originInstanceId: 'self-example-instance' };
+
+    expect(await deliverPeerSyncEvent(ioServer, imageFrame)).toBe(1);
+    const all = [outbound, silenced, inboundOnly];
+    const markers = all.map(({ client }) => once(client, 'example:marker'));
+    ioServer.emit('example:marker');
+    await Promise.all(markers);
+    expect(outbound.frames).toEqual([imageFrame]);
+    expect(silenced.frames).toEqual([]);
+    expect(inboundOnly.frames).toEqual([]);
+  });
+
+  it('delivers nothing for a category with no receiver gate', async () => {
+    expect(await deliverPeerSyncEvent({ in: () => { throw new Error('not reached'); } }, { ...FRAME, category: 'brain' })).toBe(0);
   });
 });

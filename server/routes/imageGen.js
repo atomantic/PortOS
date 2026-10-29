@@ -50,7 +50,7 @@ import {
 } from '../services/imageGen/regen.js';
 import { getSketchPngPath, isValidKey as isValidSketchKey } from '../services/mediaSketches.js';
 import { itemKey } from '../lib/mediaItemKey.js';
-import { deleteGalleryImage } from '../services/galleryImageDeletion.js';
+import { deleteMediaAnywhere, cancelPendingDelete } from '../services/mediaRemoteDelete.js';
 import * as characterService from '../services/character.js';
 import { randomUUID } from 'crypto';
 import { buildUniverseRunTag } from '../services/universeRunTag.js';
@@ -954,10 +954,18 @@ router.post('/cancel', asyncHandler(async (req, res) => {
   res.json({ ok: cancelled });
 }));
 
-// Also purges the filename from universe canon (entry `imageRefs` and style
-// references) inside the same backup admission as the file removal.
+// Deletes on the machine that owns the image (services/mediaRemoteDelete.js):
+// `{ ok, status: 'deleted' | 'deleted-remote' | 'pending' | 'owner-unknown' | 'cancelled' }`.
+// A local delete also purges the filename from universe canon (entry `imageRefs`
+// and style references) inside the same backup admission as the file removal.
 router.delete('/:filename', asyncHandler(async (req, res) => {
-  res.json(await deleteGalleryImage(req.params.filename));
+  local.assertGalleryFilename(req.params.filename);
+  res.json({ ok: true, ...(await deleteMediaAnywhere('image', req.params.filename)) });
+}));
+
+router.post('/:filename/cancel-delete', asyncHandler(async (req, res) => {
+  local.assertGalleryFilename(req.params.filename);
+  res.json(await cancelPendingDelete('image', req.params.filename));
 }));
 
 // Variant set for ONE image, for the lightbox original-vs-cleaned toggle —

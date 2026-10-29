@@ -566,6 +566,7 @@ const REVIEWED_OPEN_MUTATIONS = [
   ['POST /api/image-clean/result/:jobId/save', RECORDS],
   // /api/image-gen
   ['DELETE /api/image-gen/:filename', REMOVES_RECORD],
+  ['POST /api/image-gen/:filename/cancel-delete', REDUCES_EXECUTION],
   ['POST /api/image-gen/:filename/clean', IN_PROCESS_MEDIA],
   ['PATCH /api/image-gen/:filename/prompt', RECORDS],
   ['POST /api/image-gen/:filename/remove-watermark', IN_PROCESS_MEDIA],

@@ -40,7 +40,7 @@ import { mergeIssuesFromSync, listAllIssues } from './pipeline/issues.js';
 import { getPeers } from './instances.js';
 import { mutateVideoHistory, HISTORY_UNCHANGED } from './videoGen/history.js';
 import { markHosted, listHostedEntries } from './peerHostedMedia.js';
-import { authorizeRemoteVideoTombstone } from './videoTombstoneAuthorization.js';
+import { authorizeRemoteMediaTombstone } from './mediaTombstoneAuthorization.js';
 import { listMediaTombstones, mergeMediaTombstones } from './mediaTombstones.js';
 import { emitMediaHistoryChanged } from './peerSyncEventBus.js';
 import { referenceCollectionAssetManifest } from './sharing/peerSyncAssets.js';
@@ -1052,7 +1052,7 @@ export async function mergeVideoRows(incomingRows, source) {
   return { count: changedIds.length, ids: changedIds };
 }
 
-// Snapshot tombstones pass the shared admission rule (videoTombstoneAuthorization.js)
+// Snapshot tombstones pass the shared admission rule (mediaTombstoneAuthorization.js)
 // against the sender's registry record; an unknown sender's are all refused.
 async function authorizedSnapshotTombstones(tombstones, source) {
   if (tombstones.length === 0) return [];
@@ -1062,7 +1062,7 @@ async function authorizedSnapshotTombstones(tombstones, source) {
   const local = await readJSONFile(VIDEO_HISTORY_FILE, [], { strict: true });
   const rowsById = new Map((Array.isArray(local) ? local : []).filter(hasVideoRowId).map((r) => [r.id, r]));
   const hostedIndex = await listHostedEntries();
-  const accepted = tombstones.filter((tombstone) => authorizeRemoteVideoTombstone({
+  const accepted = tombstones.filter((tombstone) => authorizeRemoteMediaTombstone({
     peer, tombstone, localRow: rowsById.get(tombstone?.key) ?? null, hostedIndex, via: 'snapshot',
   }).allowed);
   const ignored = tombstones.length - accepted.length;
@@ -1071,7 +1071,7 @@ async function authorizedSnapshotTombstones(tombstones, source) {
 }
 
 /**
- * Merge an ALREADY AUTHORIZED video tombstone list (authorizeRemoteVideoTombstone)
+ * Merge an ALREADY AUTHORIZED video tombstone list (authorizeRemoteMediaTombstone)
  * and trash every local row (and its files) it supersedes. Returns the number
  * of local rows removed. `fromRemoteTombstone` keeps deleteHistoryItem from
  * re-recording the tombstone or re-announcing the delete.

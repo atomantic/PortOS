@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vites
 import { mkdir, rm, writeFile, readFile } from 'fs/promises';
 import { join, dirname } from 'path';
 import { tmpdir } from 'os';
+import { createHash } from 'crypto';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from './mockPathsDataRoot.js';
 
 // The positive sha256-compute / cache / invalidate cases need the sidecar
@@ -17,7 +18,7 @@ vi.mock('./fileUtils.js', async (importOriginal) =>
   makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-assethash-') }));
 afterAll(cleanupTempDataRoots);
 
-const { sidecarPathForImage, getOrComputeImageSha256, sidecarGenParamsHash } = await import('./assetHash.js');
+const { sidecarPathForImage, getOrComputeImageSha256, sidecarGenParamsHash, sidecarMatchesGenParamsHash } = await import('./assetHash.js');
 
 let imageDir;
 
@@ -176,6 +177,31 @@ describe('assetHash', () => {
       const a = sidecarGenParamsHash({ prompt: 'x', model: 'flux', steps: 30 });
       const b = sidecarGenParamsHash({ steps: 30, model: 'flux', prompt: 'x' });
       expect(a).toBe(b);
+    });
+
+    it("keeps a sidecar's hash when it has no machine-local fields, and ignores them when it does", () => {
+      // Pinned literal: a sidecar without the new fields must hash exactly as before them.
+      expect(sidecarGenParamsHash({ prompt: 'a cat', model: 'flux' }))
+        .toBe('dd5c5c8b0546483c663b3c28fafee51aab023e76e7bb4038fef0481209104747');
+      const plain = sidecarGenParamsHash({ prompt: 'a cat', originInstanceId: 'inst-a' });
+      expect(sidecarGenParamsHash({
+        prompt: 'a cat', originInstanceId: 'inst-a',
+        hidden: true, pendingDelete: { peerId: 'p', queuedAt: '2026-01-01T00:00:00.000Z' }, suppliedByInstanceId: 'inst-b',
+      })).toBe(plain);
+      // The origin syncs, so it is part of the hash.
+      expect(sidecarGenParamsHash({ prompt: 'a cat' })).not.toBe(plain);
+    });
+
+    it("matches an older peer's hash that still counts its own hide flag", () => {
+      const local = { prompt: 'a cat', hidden: false };
+      const otherParams = sidecarGenParamsHash({ prompt: 'a cat', other: 1 });
+      expect(sidecarMatchesGenParamsHash(local, sidecarGenParamsHash({ prompt: 'a cat' }))).toBe(true);
+      for (const hidden of [true, false]) {
+        // What an older peer advertises: the canonical hash with its `hidden` included.
+        const advertised = createHash('sha256').update(JSON.stringify({ hidden, prompt: 'a cat' })).digest('hex');
+        expect(sidecarMatchesGenParamsHash(local, advertised)).toBe(true);
+      }
+      expect(sidecarMatchesGenParamsHash(local, otherParams)).toBe(false);
     });
 
     it('different gen-params produce different hashes', () => {

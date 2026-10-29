@@ -1,9 +1,11 @@
 /**
- * The one admission rule for a video tombstone that arrives from a peer, shared
- * by the snapshot path (dataSync.js) and realtime delete frames
- * (peerSyncEvents.js). A tombstone deletes the user's media, so it is accepted
- * only from a registered, paired peer that may delete media here, and only for
- * a row that peer owns or holds. A refused tombstone is never recorded.
+ * The one admission rule for a media tombstone that arrives from a peer, shared
+ * by the snapshot paths (dataSync.js for video rows, the library manifest for
+ * gallery images), realtime delete frames (peerSyncEvents.js) and remote-delete
+ * acks. A tombstone deletes the user's media, so it is accepted only from a
+ * registered, paired peer that may delete media here, and only for a row (a
+ * video history row, or a gallery image keyed by filename) that peer owns or
+ * holds. A refused tombstone is never recorded.
  */
 import { parseTsMs } from '../lib/lwwTimestamp.js';
 import { rowOwnerCandidates } from '../lib/mediaRowOwners.js';
@@ -18,12 +20,13 @@ const deny = (reason) => ({ allowed: false, reason });
 
 /**
  * `peer` is the sender's registry record (null when unknown); `localRow` the
- * row held here under `tombstone.key` (null when absent); `hostedIndex` the
+ * row held here under `tombstone.key` (null when absent; an image's row is
+ * imageRecords.readHeldImage); `hostedIndex` the
  * peer-hosted media entries. `via` is 'snapshot' or 'event'; an event's
  * `eventOriginInstanceId` lets the origin record a delete for a row this
  * machine has not received yet. Returns `{ allowed, reason }`.
  */
-export function authorizeRemoteVideoTombstone({ peer, tombstone, localRow, hostedIndex, via, eventOriginInstanceId = null, nowMs = Date.now() }) {
+export function authorizeRemoteMediaTombstone({ peer, tombstone, localRow, hostedIndex, via, eventOriginInstanceId = null, nowMs = Date.now() }) {
   if (typeof tombstone?.key !== 'string' || !tombstone.key) return deny('invalid-key');
   const deletedMs = parseTsMs(tombstone.deletedAt);
   if (deletedMs === null || deletedMs > nowMs + TOMBSTONE_FUTURE_SKEW_MS) return deny('future-or-invalid-deletedAt');

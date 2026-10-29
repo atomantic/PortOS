@@ -17,7 +17,10 @@
 import express from 'express';
 import { join } from 'path';
 import { z } from 'zod';
-import { PATHS } from '../lib/fileUtils.js';
+import { readFile } from 'fs/promises';
+import { PATHS, safeJSONParse } from '../lib/fileUtils.js';
+import { isPlainObject } from '../lib/objects.js';
+import { IMAGE_SIDECAR_LOCAL_FIELDS, stripImageSidecarLocalFields } from '../lib/assetHash.js';
 import { ServerError, sendErrorResponse } from '../lib/errorHandler.js';
 import { ASSET_ROUTE_PREFIXES, SERVER_OWNED_PREFIXES } from '../lib/assetRoutePrefixes.js';
 import { wrWorksDir, WORK_ID_RE } from './writersRoom/_shared.js';
@@ -134,10 +137,25 @@ const imageThumbnailGate = async (req, res, next) => {
   next();
 };
 
+// A gallery sidecar carries this machine's own fields (hide state, a pending
+// delete, the supplying peer), which never go to a peer or anyone else reading
+// it from the mount. A sidecar without them is served as-is by the static mount.
+const SIDECAR_PATH = /^\/([A-Za-z0-9][A-Za-z0-9._-]*\.metadata\.json)$/;
+const imageSidecarGate = async (req, res, next) => {
+  const match = (req.method === 'GET' || req.method === 'HEAD') ? SIDECAR_PATH.exec(req.path) : null;
+  if (!match) return next();
+  const raw = await readFile(join(PATHS.images, match[1]), 'utf8').catch(() => null);
+  const parsed = raw === null ? null : safeJSONParse(raw, null);
+  if (!isPlainObject(parsed) || !IMAGE_SIDECAR_LOCAL_FIELDS.some((key) => key in parsed)) return next();
+  ASSET_STATIC_OPTS.setHeaders(res, match[1]);
+  res.type('application/json').send(JSON.stringify(stripImageSidecarLocalFields(parsed)));
+};
+
 // Mounts whose files a peer may host instead of copying (peerHostedMedia.js).
 const HOSTED_FALLBACK_ROUTES = new Set(['/data/images', '/data/videos', '/data/video-thumbnails']);
 
 const ASSET_GATES = {
+  '/data/images': imageSidecarGate,
   '/data/image-thumbnails': imageThumbnailGate,
   '/data/writers-room/works': writersRoomAssetsOnly,
 };
