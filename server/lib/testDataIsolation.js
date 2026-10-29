@@ -93,8 +93,8 @@ export function _resolveGuardRoots(codeRoot) {
     return { root: canonicalizePath(join(installRoot, 'data')), exempt: null };
   }
   const resolved = resolve(installRoot);
-  const at = resolved.indexOf(`${sep}${WORKTREE_SEGMENT}`);
-  const primary = at > 0 ? resolved.slice(0, at) : null;
+  const at = resolved.indexOf(`${sep}${WORKTREE_SEGMENT}${sep}`);
+  const primary = at < 0 ? null : (at === 0 ? sep : resolved.slice(0, at));
   return {
     root: canonicalizePath(join(primary ?? resolved, 'data')),
     exempt: primary ? canonicalizePath(resolved) : null,

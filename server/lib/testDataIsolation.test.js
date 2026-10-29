@@ -23,7 +23,7 @@ import { appendJSONLine } from './jsonIo.js';
 import { createCollectionStore } from './collectionStore.js';
 import { assertNotNewRealDataDir, assertNotRealDataWrite, isInsideRealDataRoot, _resolveGuardRoots } from './testDataIsolation.js';
 import { resolveCodeRootForModule } from './dataRoot.js';
-import { isPathAtOrInsideDir } from './pathContainment.js';
+import { canonicalizePath, isPathAtOrInsideDir } from './pathContainment.js';
 import { isTestRunner } from './runtimeEnv.js';
 import { PATHS } from './paths.js';
 
@@ -275,6 +275,14 @@ describe('_resolveGuardRoots (#14074)', () => {
     // a sibling checkout is real data from this worktree's point of view
     expect(isPathAtOrInsideDir(exempt, join(primary, 'data', 'cos', 'worktrees', 'other', 'x.json'))).toBe(false);
     expect(isPathAtOrInsideDir(exempt, join(primary, 'data', 'brain', 'x.json'))).toBe(false);
+  });
+
+  it('matches whole path components and a root-level install', () => {
+    const lookalike = join(primary, 'data', 'cos', 'worktrees-backup', 'x');
+    expect(_resolveGuardRoots(lookalike).exempt).toBeNull();
+    const rootLevel = _resolveGuardRoots(`${sep}data${sep}cos${sep}worktrees${sep}claim-example`);
+    expect(rootLevel.root).toBe(canonicalizePath(`${sep}data`));
+    expect(rootLevel.exempt).toBe(canonicalizePath(`${sep}data${sep}cos${sep}worktrees${sep}claim-example`));
   });
 
   it('exempts nothing outside a worktree', () => {
