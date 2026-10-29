@@ -53,10 +53,10 @@ const renderFiles = entry => [safeUnder(PATHS.videos, entry.filename),
 
 async function finalInventory(projectId, history, pending = [], boardOwners = null, loomOwners = null) {
   const project = await requireProject(projectId);
-  const [{ listCollections }, timeline, director, { listBoards }, { isPublishKitBuildActive }, { listJobs }, looms] = await Promise.all([
+  const [{ listCollections }, timeline, director, { listBoards }, { isPublishKitBuildActive }, { isDcpActive }, { listJobs }, looms] = await Promise.all([
     import('../mediaCollections.js'), import('../videoTimeline/local.js'), import('../creativeDirector/local.js'),
     import('../moodBoard/db.js'),
-    import('./publishKit.js'), import('../mediaJobQueue/index.js'),
+    import('./publishKit.js'), import('./dcp.js'), import('../mediaJobQueue/index.js'),
     import('../fableLoom/store.js'),
   ]);
   // Completed run receipts describe history, rather than a live media dependency.
@@ -67,7 +67,7 @@ async function finalInventory(projectId, history, pending = [], boardOwners = nu
   const owners = [projects, listJobs().filter(job => ['queued', 'running'].includes(job.status)),
     ...(await Promise.all([listCollections(), timeline.listProjects(), director.listProjects(), boardOwners ?? listBoards(),
       loomOwners ?? looms.listRaw().then(records => records.filter(record => record?.deleted !== true))]))].flat();
-  const kitActive = isPublishKitBuildActive(projectId);
+  const kitActive = isPublishKitBuildActive(projectId) || isDcpActive(projectId);
   const current = history.find(entry => entry.id === project.renderHistoryId);
   const hasCurrent = current && await size(safeUnder(PATHS.videos, current.filename)) > 0;
   const finals = [];
@@ -91,7 +91,7 @@ async function finalInventory(projectId, history, pending = [], boardOwners = nu
     }
     const referenced = owners.some(owner => references(owner, ids))
       || history.some(other => other.id !== entry.id && references(other, ids));
-    const reason = !hasCurrent ? 'No completed replacement' : kitActive ? 'In use by a publishing-kit build' : referenced ? 'Referenced by saved media or production records' : null;
+    const reason = !hasCurrent ? 'No completed replacement' : kitActive ? 'In use by a publishing-kit or cinema-package build' : referenced ? 'Referenced by saved media or production records' : null;
     finals.push({ id: entry.id, pending: pendingIds.has(entry.id), filename: entry.filename, createdAt: entry.createdAt, bytes: (await Promise.all(renderFiles(entry).map(size))).reduce((a, b) => a + b, 0), reason });
   }
   return { project, finals };

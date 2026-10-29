@@ -347,7 +347,7 @@ export const FFMPEG_KILL_GRACE_MS = 5000;
 export const FFMPEG_FRAME_TIMEOUT_MS = 2 * 60 * 1000;
 export const FFMPEG_SCAN_TIMEOUT_MS = 15 * 60 * 1000;
 
-export function runFfmpegProcess({ bin, args, signal, timeoutMs, stderrTailBytes = 2000, returnStderr = false } = {}) {
+export function runFfmpegProcess({ bin, args, signal, timeoutMs, stderrTailBytes = 2000, returnStderr = false, env, onStdout } = {}) {
   if (!bin || typeof bin !== 'string') {
     return Promise.resolve({ ok: false, reason: 'invalid ffmpeg binary' });
   }
@@ -355,8 +355,9 @@ export function runFfmpegProcess({ bin, args, signal, timeoutMs, stderrTailBytes
     return Promise.resolve({ ok: false, reason: 'invalid ffmpeg args' });
   }
   return new Promise((resolve) => {
-    const stdio = stderrTailBytes > 0 ? ['ignore', 'ignore', 'pipe'] : 'ignore';
-    const proc = spawn(bin, args, safeChildProcessOptions({ stdio }));
+    const stdio = ['ignore', onStdout ? 'pipe' : 'ignore', stderrTailBytes > 0 ? 'pipe' : 'ignore'];
+    const proc = spawn(bin, args, safeChildProcessOptions({ stdio, ...(env ? { env } : {}) }));
+    if (onStdout) proc.stdout.on('data', onStdout);
     let stderrTail = '';
     if (stderrTailBytes > 0 && proc.stderr) {
       proc.stderr.on('data', (chunk) => {
@@ -395,6 +396,7 @@ export function runFfmpegProcess({ bin, args, signal, timeoutMs, stderrTailBytes
     if (signal) {
       onAbort = terminate;
       signal.addEventListener('abort', onAbort, { once: true });
+      if (signal.aborted) terminate();
     }
     const cleanupSignal = () => {
       if (signal && onAbort) signal.removeEventListener('abort', onAbort);

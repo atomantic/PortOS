@@ -18,6 +18,7 @@ import { CROSS_LINK_EDIT_TARGETS } from './musicVideoCrossLinks.js';
  */
 
 import { z } from 'zod';
+export const musicVideoDcpRequestSchema = z.object({ grade: z.enum(['rec709', 'rec1886']), renderHistoryId: z.string().min(1), sourceSha256: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
 import { GROK_VIDEO_DURATIONS } from './grokVideoClip.js';
 import { knownFilmStyleIdSchema } from './filmStyleGrammars.js';
 
