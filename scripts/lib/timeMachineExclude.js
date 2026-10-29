@@ -1,6 +1,7 @@
 /** Fixed paths survive deletion/recreation; never derive these from Spotlight's archive exclusions. */
 import { spawnSync } from 'node:child_process';
-import { resolve } from 'node:path';
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, writeFileSync, writeSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 
 // Separate from rsync's glob policy: tmutil cannot exclude regenerable files
 // inside a creative directory without also losing its irreplaceable contents.
@@ -44,29 +45,107 @@ export const TIME_MACHINE_EXCLUDED_DIRS = [
   'browser/node_modules',
 ];
 
-/** Best-effort setup: no directory creation, exclusion removal, or install failure. */
+const PREFERENCE_FILE = 'data/time-machine-exclusions.json';
+
+/** Machine-local answer to "exclude these from Time Machine?": 'accepted' | 'declined' | null (never asked). */
+export function createFilePreference(installRoot) {
+  const file = resolve(installRoot, PREFERENCE_FILE);
+  return {
+    get() {
+      try {
+        const { decision } = JSON.parse(readFileSync(file, 'utf8'));
+        return decision === 'accepted' || decision === 'declined' ? decision : null;
+      } catch {
+        return null;
+      }
+    },
+    set(decision) {
+      mkdirSync(dirname(file), { recursive: true });
+      writeFileSync(file, `${JSON.stringify({ decision, decidedAt: new Date().toISOString() }, null, 2)}\n`);
+    },
+  };
+}
+
+/**
+ * Ask on the controlling terminal. update.sh routes stdout/stderr to its log, so
+ * the question goes to /dev/tty directly; with no terminal (UI-driven update, CI)
+ * it returns null and the caller neither prompts nor records a decision.
+ */
+export function confirmOnTty(count, { open = openSync, write = writeSync, read = readSync, close = closeSync } = {}) {
+  let fd;
+  try {
+    fd = open('/dev/tty', 'r+');
+    write(fd, `\n💾 PortOS can exclude ${count} regenerable directories (node_modules, caches, render scratch) from Time Machine.\n   Creates any that are missing; needs sudo once. Your answer is remembered. Exclude them? [Y/n] `);
+    const buf = Buffer.alloc(64);
+    const bytes = read(fd, buf, 0, buf.length, null);
+    if (bytes === 0) return null; // Ctrl-D: cancelled, not consent
+    const answer = buf.toString('utf8', 0, bytes).trim().toLowerCase();
+    return answer === 'n' || answer === 'no' ? 'no' : 'yes';
+  } catch {
+    return null;
+  } finally {
+    if (fd !== undefined) close(fd);
+  }
+}
+
+/** Best-effort setup: no install failure; asks once, creates missing dirs only after consent. */
 export function excludeFromTimeMachine(installRoot, {
   platform = process.platform,
   run = spawnSync,
   env = process.env,
+  exists = existsSync,
+  mkdir = mkdirSync,
+  preference = createFilePreference(installRoot),
+  confirm = confirmOnTty,
 } = {}) {
   if (platform !== 'darwin') return { status: 'unsupported' };
   if (env.PORTOS_SKIP_TIMEMACHINE_EXCLUDE === '1') return { status: 'skipped' };
-  const result = { status: 'present', added: 0, excluded: 0, failures: [] };
-  let authenticated = false;
-  let authenticationError = null;
+  const result = { status: 'present', added: 0, excluded: 0, created: 0, failures: [] };
   const options = { encoding: 'utf8', stdio: ['inherit', 'pipe', 'pipe'], timeout: 30_000 };
+  const pending = [];
   for (const relativePath of TIME_MACHINE_EXCLUDED_DIRS) {
     const path = resolve(installRoot, relativePath);
+    try {
+      if (exists(path)) {
+        const check = run('tmutil', ['isexcluded', path], options);
+        if (check.status === 0 && check.stdout?.includes('[Excluded]')) {
+          result.excluded++;
+          continue;
+        }
+      }
+      pending.push(path);
+    } catch (error) {
+      // An unavailable process runner is also a best-effort setup failure.
+      result.failures.push({ path, error: error.message });
+    }
+  }
+  if (!pending.length) {
+    result.status = result.failures.length ? 'partial' : 'present';
+    return result;
+  }
+
+  let decision = preference.get();
+  if (!decision) {
+    const answer = confirm(pending.length);
+    if (!answer) return { ...result, status: 'undecided', pending: pending.length };
+    decision = answer === 'no' ? 'declined' : 'accepted';
+    try { preference.set(decision); } catch (error) { result.failures.push({ path: PREFERENCE_FILE, error: error.message }); }
+  }
+  if (decision === 'declined') return { ...result, status: 'declined', pending: pending.length };
+
+  let authenticated = false;
+  let authenticationError = null;
+  for (const path of pending) {
     if (authenticationError) {
       result.failures.push({ path, error: authenticationError });
       continue;
     }
     try {
-      const check = run('tmutil', ['isexcluded', path], options);
-      if (check.status === 0 && check.stdout?.includes('[Excluded]')) {
-        result.excluded++;
-        continue;
+      // tmutil cannot exclude a path that does not exist; the fixed-path exclusion
+      // then survives the directory being deleted and recreated.
+      if (!exists(path)) {
+        mkdir(path, { recursive: true });
+        result.created++;
       }
       if (!authenticated) {
         const auth = run('sudo', ['-v'], options);
@@ -84,7 +163,6 @@ export function excludeFromTimeMachine(installRoot, {
         result.failures.push({ path, error: add.error?.message || add.stderr?.trim() || `sudo exited with status ${add.status}` });
       }
     } catch (error) {
-      // An unavailable process runner is also a best-effort setup failure.
       result.failures.push({ path, error: error.message });
     }
   }

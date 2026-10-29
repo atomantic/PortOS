@@ -267,6 +267,7 @@ const REVIEWED_OPEN_MUTATIONS = [
   ['DELETE /api/catalog/ingredients/:id/relations', REMOVES_RECORD],
   ['POST /api/catalog/ingredients/:id/relations', RECORDS],
   ['POST /api/catalog/ingredients/:id/revisions/:revisionId/restore', RECORDS],
+  ['DELETE /api/catalog/ingredients/:id/sheets/pointer', REMOVES_RECORD],
   ['POST /api/catalog/ingredients/:id/sheets/preview', READ_OVER_POST],
   ['POST /api/catalog/ingredients/merge', RECORDS],
   ['POST /api/catalog/migration/rerun', RECORDS],

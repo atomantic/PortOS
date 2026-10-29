@@ -12,6 +12,8 @@ vi.mock('../../services/apiCatalog', () => ({
   listCatalogSheetVariants: vi.fn(),
 }));
 
+vi.mock('../../hooks/useMediaAnnotations', () => ({ useMediaAnnotations: () => ({ annotations: {}, updateAnnotation: vi.fn() }) }));
+
 vi.mock('../media/UniverseMoodBoardPicker', () => ({
   default: () => <div>UniverseMoodBoardPicker</div>,
   useStyleSourceLists: () => ({ universes: [], boards: [] }),

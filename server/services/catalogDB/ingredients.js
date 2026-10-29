@@ -60,6 +60,34 @@ export async function setIngredientPayloadKey(id, key, value, { source = 'user',
   });
 }
 
+// Like setIngredientPayloadKey for several keys in one locked write:
+// `update(lockedPayload)` returns `{ key: value }` changes (`null` removes a
+// key), so a multi-key edit either lands whole or not at all. Returns
+// `{ ingredient, priorUpdatedAt }`, the latter being the locked row's clock
+// just before this write, or null for a missing row.
+export async function updateIngredientPayloadKeys(id, update, { source = 'user', guard } = {}) {
+  return withTransaction(async client => {
+    await assertCatalogIdentityWritable(id, { client });
+    const { rows: [current] } = await client.query(`SELECT * FROM catalog_ingredients
+      WHERE id = catalog_canonical_ingredient_id($1) AND deleted = false FOR UPDATE`, [id]);
+    if (!current) return null;
+    guard?.(current);
+    const priorUpdatedAt = rowToIngredient(current).updatedAt;
+    const payload = current.payload && typeof current.payload === 'object' ? current.payload : {};
+    const next = { ...payload };
+    for (const [key, value] of Object.entries(update(payload) || {})) {
+      if (value === null) delete next[key];
+      else next[key] = value;
+    }
+    if (isDeepStrictEqual(next, payload)) return { ingredient: rowToIngredient(current), priorUpdatedAt };
+    const { rows: [row] } = await client.query('UPDATE catalog_ingredients SET payload = $2::jsonb WHERE id = $1 RETURNING *',
+      [current.id, toPgJson(next)]);
+    const ingredient = rowToIngredient(row);
+    await recordIngredientRevision(ingredient, { source, client });
+    return { ingredient, priorUpdatedAt };
+  });
+}
+
 export const setIngredientLock = (id, locked) => setIngredientPayloadKey(id, 'locked', locked, {
   guard: (current) => {
     if (!BIBLE_SANITIZERS[current.type]) throw new ServerError('This ingredient type has no canon lock', { status: 400 });

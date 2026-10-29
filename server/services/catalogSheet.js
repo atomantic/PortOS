@@ -30,7 +30,10 @@ import { universeAestheticLine, universeVisualStyleTokens } from '../lib/univers
 import { getBoard } from './moodBoard/db.js';
 import { recordRenderPin } from '../lib/renderTargets.js';
 import { shortId } from '../lib/fileUtils.js';
-import { getIngredient, getIngredientIdentityIds, listLiveRefsForIngredient, listMediaForIngredient } from './catalogDB.js';
+import { getIngredient, getIngredientIdentityIds, listLiveRefsForIngredient, listMediaForIngredient, updateIngredientPayloadKeys } from './catalogDB.js';
+import { LEGACY_SHEET_VARIANT_ID, readSheetPointer } from '../lib/sheetPointers.js';
+import { projectToCanon } from './catalogCanonProjection.js';
+import { catalogEvents } from './catalogEvents.js';
 import { characterSheetEditBase, characterSheetReferenceCandidates } from '../lib/characterSheetReferences.js';
 import { catalogUniverseContext } from '../lib/catalogUniverseContext.js';
 import { getUniverse } from './universeBuilder.js';
@@ -342,4 +345,57 @@ export async function renderCatalogSheet(id, options = {}) {
     delegatedTo: null,
     queuePosition: queued.position,
   };
+}
+
+const sheetPointersOf = (payload) => ({
+  referenceSheetImageRef: payload?.referenceSheetImageRef ?? null,
+  referenceSheets: payload?.referenceSheets && typeof payload.referenceSheets === 'object' ? payload.referenceSheets : {},
+});
+
+const sheetLocked = (name) => new ServerError(`"${name}" is locked — unlock it before removing a reference sheet`,
+  { status: 409, code: 'CATALOG_INGREDIENT_LOCKED' });
+
+/**
+ * Take a universe-canon sheet (`referenceSheetImageRef` /
+ * `referenceSheets[variant]`) off a catalog character, bound to the file the
+ * caller saw (`filename`; a newer render answers 409).
+ *
+ * Only references change, and only on the catalog row, the record's store of
+ * truth: one locked write clears every slot of the row naming the file, or
+ * refuses whole if the record is locked. The canon copies follow through the
+ * normal catalog→canon projection, which keeps its LWW and ownership rules
+ * (cross-owner contextual canon, newer embedded edits). The PNG stays on disk,
+ * since other characters, merged-source evidence or catalog media may still
+ * name it.
+ *
+ * Returns the fresh pointer fields with `updatedAt` and `priorUpdatedAt` (the
+ * locked row's clock just before this write), so the page adopts the new clock
+ * only when it already held the prior one.
+ */
+export async function removeCatalogPointerSheet(id, { variant = LEGACY_SHEET_VARIANT_ID, filename: expected = null } = {}) {
+  await assertCatalogIdentityWritable(id);
+  const ingredient = await getIngredient(id);
+  if (!ingredient) throw new ServerError('Ingredient not found', { status: 404, code: 'NOT_FOUND' });
+  const filename = expected || readSheetPointer(ingredient.payload, variant);
+  if (!filename) throw new ServerError(`No ${variant} reference sheet on "${ingredient.name}"`, { status: 404, code: 'NOT_FOUND' });
+  const result = await updateIngredientPayloadKeys(ingredient.id, (payload) => {
+    const current = readSheetPointer(payload, variant);
+    if (current !== filename) {
+      throw current
+        ? new ServerError('This reference sheet changed since it was shown; reload and try again', { status: 409, code: 'REFERENCE_SHEET_CHANGED' })
+        : new ServerError(`No ${variant} reference sheet on "${ingredient.name}"`, { status: 404, code: 'NOT_FOUND' });
+    }
+    const sheets = payload.referenceSheets && typeof payload.referenceSheets === 'object' ? payload.referenceSheets : {};
+    return {
+      ...(payload.referenceSheetImageRef === filename ? { referenceSheetImageRef: null } : {}),
+      ...(Object.values(sheets).includes(filename)
+        ? { referenceSheets: Object.fromEntries(Object.entries(sheets).filter(([, f]) => f !== filename)) } : {}),
+    };
+  }, { guard: (current) => { if (current.payload?.locked === true) throw sheetLocked(current.name); } });
+  if (!result) throw new ServerError('Ingredient not found', { status: 404, code: 'NOT_FOUND' });
+  const { ingredient: updated, priorUpdatedAt } = result;
+  catalogEvents.emit('primitive-changed', { ingredientId: updated.id });
+  const projected = await projectToCanon(updated.id, updated);
+  console.log(`🗑️ Removed sheet ${filename} from catalog ${shortId(updated.id)} (canon universes written=${projected.written}, file kept)`);
+  return { filename, pointers: sheetPointersOf(updated.payload), updatedAt: updated.updatedAt, priorUpdatedAt };
 }

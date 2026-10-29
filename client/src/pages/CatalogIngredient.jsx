@@ -33,6 +33,7 @@ import {
   uploadCatalogIngredientMediaFile,
   recordCatalogIngredientVoiceMemo,
   updateCatalogIngredientMediaLibrary,
+  removeCatalogPointerSheet,
 } from '../services/apiCatalog';
 import { arrayBufferToBase64 } from '../lib/audioRecorder';
 import useMemoRecorder from '../hooks/useMemoRecorder';
@@ -598,6 +599,18 @@ function IngredientEditor() {
   // projection already copied onto this row. Pull just the pointer fields into
   // both the saved record and the draft, so an unsaved edit stays intact and
   // stays exactly as dirty as it was.
+  // `updatedAt` is the row's clock after the change, so its own
+  // catalog:primitive-changed echo is not mistaken for an external edit.
+  const applySheetPointers = useCallback((recordId, fresh, updatedAt) => {
+    const pointers = {};
+    for (const key of SHEET_POINTER_KEYS) {
+      if (Object.hasOwn(fresh, key)) pointers[key] = fresh[key];
+    }
+    setRecord((prev) => (prev?.id === recordId
+      ? { ...prev, ...(updatedAt ? { updatedAt } : {}), payload: { ...ingredientPayload(prev.payload), ...pointers } }
+      : prev));
+    setPayload((cur) => ({ ...cur, ...pointers }));
+  }, []);
   const refreshSheetPointers = useCallback(() => {
     if (!id) return;
     const requestedId = id;
@@ -607,19 +620,41 @@ function IngredientEditor() {
     getCatalogIngredientDetails(id, { silent: true, view: detailView })
       .then((d) => {
         if (!isCurrentRequest() || !d?.ingredient) return;
-        const fresh = ingredientPayload(d.ingredient.payload);
-        const pointers = {};
-        for (const key of SHEET_POINTER_KEYS) {
-          if (Object.hasOwn(fresh, key)) pointers[key] = fresh[key];
-        }
-        setRecord((prev) => (prev?.id === requestedId
-          ? { ...prev, payload: { ...ingredientPayload(prev.payload), ...pointers } }
-          : prev));
-        setPayload((cur) => ({ ...cur, ...pointers }));
+        applySheetPointers(requestedId, ingredientPayload(d.ingredient.payload));
         toast.success('Reference sheet ready');
       })
       .catch(() => { if (isCurrentRequest()) toast.error('Reference sheet rendered — reload to see it'); });
-  }, [id, detailView, mountedRef]);
+  }, [id, detailView, mountedRef, applySheetPointers]);
+  // Removing a universe sheet runs here, not in the Sheets tab, so the
+  // one-at-a-time flag and the answer survive the tab unmounting. The answer's
+  // clock is adopted only when this page held the row's clock from just before
+  // the removal. Otherwise the record changed elsewhere too: the pointers still
+  // apply, and the full record is re-read and goes through the same
+  // external-change check as a socket refresh.
+  const [removingPointerSheet, setRemovingPointerSheet] = useState(null);
+  const removingPointerSheetRef = useRef(null);
+  const handleRemovePointerSheet = useCallback(async (variant, filename) => {
+    if (!id || removingPointerSheetRef.current) return;
+    const recordId = id;
+    removingPointerSheetRef.current = filename;
+    setRemovingPointerSheet(filename);
+    const result = await removeCatalogPointerSheet(recordId, variant, filename, { silent: true })
+      .catch((err) => { toast.error(err?.message || 'Could not remove the sheet'); return null; });
+    removingPointerSheetRef.current = null;
+    if (!mountedRef.current) return;
+    setRemovingPointerSheet(null);
+    if (!result?.pointers || activeVisitRef.current.id !== recordId) return;
+    toast.success('Reference sheet removed');
+    ++sheetPointerSequence.current;
+    const adopt = !!result.priorUpdatedAt && result.priorUpdatedAt === editSnapshot.current?.updatedAt;
+    applySheetPointers(recordId, result.pointers, adopt ? result.updatedAt : undefined);
+    if (adopt) return;
+    const details = await getCatalogIngredientDetails(recordId, { silent: true, view: detailView }).catch(() => null);
+    if (!mountedRef.current || activeVisitRef.current.id !== recordId || !details?.ingredient) return;
+    if (details.ingredient.updatedAt === editSnapshot.current?.updatedAt) return;
+    if (editSnapshot.current?.dirty) setExternalDetails(details);
+    else applyDetails(details);
+  }, [id, applySheetPointers, applyDetails, detailView, mountedRef]);
 
   const handleSave = async () => {
     if (!record || identityReadOnly || unlocking || characterActionBusy) return;
@@ -1039,6 +1074,8 @@ function IngredientEditor() {
             savedStamp={record.updatedAt || null}
             onSheetFile={handleSheetFile}
             onPointerSheetReady={refreshSheetPointers}
+            onRemovePointerSheet={identityReadOnly ? undefined : handleRemovePointerSheet}
+            removingPointerSheet={removingPointerSheet}
             onMediaChanged={identityReadOnly ? undefined : refreshMedia}
           />
         )}

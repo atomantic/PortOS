@@ -12,6 +12,8 @@ const mocks = vi.hoisted(() => ({
   listLiveRefsForIngredient: vi.fn(),
   getUniverse: vi.fn(),
   updateUniverse: vi.fn(),
+  updateIngredientPayloadKeys: vi.fn(),
+  projectToCanon: vi.fn(),
   getSettings: vi.fn(),
   enqueueJob: vi.fn(),
   getImageModels: vi.fn(),
@@ -29,6 +31,7 @@ vi.mock('../services/catalogDB.js', () => ({
   listLiveRefsForIngredient: (...args) => mocks.listLiveRefsForIngredient(...args),
   listMediaForIngredient: (...args) => mocks.listMediaForIngredient(...args),
   listRelationsForIngredient: async () => ({ outbound: [], inbound: [] }),
+  updateIngredientPayloadKeys: (...args) => mocks.updateIngredientPayloadKeys(...args),
 }));
 vi.mock('../lib/pathSafety.js', async (importOriginal) => ({
   ...(await importOriginal()),
@@ -47,6 +50,11 @@ vi.mock('../services/mediaJobQueue/index.js', () => ({
   mediaJobEvents: { on: vi.fn(), off: vi.fn(), emit: vi.fn() },
 }));
 vi.mock('../services/universeRunTag.js', () => ({ buildUniverseRunTag: vi.fn(async () => null) }));
+// Canon follows the catalog row through the normal projection (own suite).
+vi.mock('../services/catalogCanonProjection.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  projectToCanon: (...args) => mocks.projectToCanon(...args),
+}));
 vi.mock('../services/universeCharacterSheetSlot.js', () => ({
   claimPendingSheetSlot: vi.fn(),
   getPendingSheetSlot: vi.fn(),
@@ -825,6 +833,55 @@ describe('catalog sheet routes', () => {
       expect(res.status).toBe(200);
       expect(queuedParams().prompt).toContain('collapsed piers, rusted cranes');
       expect(queuedParams().catalogAttach.role).toBe('sheet:environment@form-ruin');
+    });
+  });
+
+  describe('removing a universe sheet pointer', () => {
+    const sheetOwner = { ...character, updatedAt: '2026-01-01T00:00:00.000Z', payload: { ...character.payload,
+      referenceSheetImageRef: 'example-sheet-standard.png', referenceSheets: { profile: 'example-sheet-profile.png', alt: 'example-sheet-standard.png' } } };
+    const remove = (query = '') => request(app).delete(`/api/catalog/ingredients/${character.id}/sheets/pointer${query}`);
+    // Runs the updater and guard against `locked` (the row under its lock).
+    const lockedRow = (locked = sheetOwner) => mocks.updateIngredientPayloadKeys.mockImplementation(async (id, update, { guard }) => {
+      guard({ ...locked, payload: locked.payload });
+      const next = { ...locked.payload };
+      for (const [key, value] of Object.entries(update(locked.payload))) {
+        if (value === null) delete next[key]; else next[key] = value;
+      }
+      return { ingredient: { ...locked, updatedAt: '2026-01-03T00:00:00.000Z', payload: next }, priorUpdatedAt: locked.updatedAt };
+    });
+
+    beforeEach(() => {
+      mocks.getIngredient.mockResolvedValue(sheetOwner);
+      mocks.projectToCanon.mockResolvedValue({ universes: 1, written: 1, skipped: 0 });
+    });
+
+    it('clears every row slot naming the file in one locked write, then projects it to canon', async () => {
+      // Another view edited the row after the snapshot; its clock is the prior one.
+      lockedRow({ ...sheetOwner, updatedAt: '2026-01-02T00:00:00.000Z' });
+      const res = await remove('?filename=example-sheet-standard.png');
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({ filename: 'example-sheet-standard.png', priorUpdatedAt: '2026-01-02T00:00:00.000Z',
+        updatedAt: '2026-01-03T00:00:00.000Z', pointers: { referenceSheetImageRef: null, referenceSheets: { profile: 'example-sheet-profile.png' } } });
+      const [projectedId, projected] = mocks.projectToCanon.mock.calls[0];
+      expect(projectedId).toBe(character.id);
+      expect(projected.payload.referenceSheetImageRef).toBeUndefined();
+      expect(mocks.updateUniverse).not.toHaveBeenCalled();
+    });
+
+    it('refuses whole, with nothing written or projected, when the slot moved on or the record is locked', async () => {
+      lockedRow({ ...sheetOwner, payload: { ...sheetOwner.payload, referenceSheets: { profile: 'example-sheet-profile-newer.png' } } });
+      const changed = await remove('?variant=profile&filename=example-sheet-profile.png');
+      expect(changed.status).toBe(409);
+      expect(changed.body.code).toBe('REFERENCE_SHEET_CHANGED');
+      lockedRow({ ...sheetOwner, payload: { ...sheetOwner.payload, locked: true } });
+      expect((await remove()).status).toBe(409);
+      expect(mocks.projectToCanon).not.toHaveBeenCalled();
+    });
+
+    it('answers 404 for a variant with no sheet', async () => {
+      mocks.getIngredient.mockResolvedValue(character);
+      expect((await remove('?variant=profile')).status).toBe(404);
+      expect(mocks.updateIngredientPayloadKeys).not.toHaveBeenCalled();
     });
   });
 });

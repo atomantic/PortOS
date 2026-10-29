@@ -1574,6 +1574,20 @@ export function fillImageSidecarFields(filename, fields) {
   });
 }
 
+// Persist the byte-hash cache (`lib/assetHash.js`) through the edit queue so it
+// re-reads the CURRENT sidecar and cannot drop a concurrent edit (hidden flag,
+// supplying peer, ...). An image without a sidecar gets none created for the
+// cache. Not indexed: the hash cache is not a searchable field. Resolves to the
+// merged sidecar, or null when nothing was written.
+export function cacheImageSha256(filename, entry) {
+  assertGalleryFilename(filename);
+  return editImageSidecar(filename, (metadata) => {
+    if (!metadata || Object.keys(metadata).length === 0) return null;
+    metadata.sha256 = entry;
+    return { ...metadata };
+  }, { reindex: false });
+}
+
 // Returns just `{ filename, name }` — clients send `filename` back in the
 // generate payload's `loraFilenames` and the server resolves it against
 // PATHS.loras. Avoids leaking absolute server paths into the API surface.

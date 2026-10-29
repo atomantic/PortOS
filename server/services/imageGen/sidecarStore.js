@@ -38,8 +38,9 @@ export async function refreshImageIndex(filename) {
 export const sidecarEditQueue = createKeyCachedQueue();
 
 // `mutate` edits the metadata in place; returning null leaves the file as it was.
+// `reindex: false` skips the index refresh for non-searchable fields (the hash cache).
 // Gallery (`.png`) filenames only: the `.png` → `.metadata.json` spelling above.
-export function editImageSidecar(filename, mutate) {
+export function editImageSidecar(filename, mutate, { reindex = true } = {}) {
   // Admit before joining the queue so a cut drains every already-requested
   // edit, including one waiting for an earlier edit's index refresh.
   return withBackupAssetPublication(() => sidecarEditQueue(filename, async () => {
@@ -58,7 +59,7 @@ export function editImageSidecar(filename, mutate) {
     })));
     if (!present.some(Boolean)) throw new ServerError('Image not found', { status: 404, code: 'NOT_FOUND' });
     await atomicWrite(sidecarPath, metadata);
-    await refreshImageIndex(filename);
+    if (reindex) await refreshImageIndex(filename);
     return result;
   }));
 }

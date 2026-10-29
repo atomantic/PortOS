@@ -1,14 +1,17 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router';
-import { ExternalLink, Image as ImageIcon, Loader2, Sparkles } from 'lucide-react';
+import { ExternalLink, Image as ImageIcon, Loader2, Sparkles, ThumbsDown, Trash2 } from 'lucide-react';
 import toast from '../ui/Toast';
+import ConfirmButtonPair from '../ui/ConfirmButtonPair.jsx';
 import CatalogImagePreview from './CatalogImagePreview';
+import { imageRefsSequenceKey, useCatalogPreviewSequence } from './CatalogImagePreviewProvider';
 import MediaJobThumb from '../pipeline/MediaJobThumb';
 import ModelInputPreview from '../media/ModelInputPreview';
 import CatalogMediaTile from './CatalogMediaTile';
 import socket from '../../services/socket';
 import useMounted from '../../hooks/useMounted';
 import { useModelInputPreview } from '../../hooks/useModelInputPreview';
+import { useMediaAnnotations } from '../../hooks/useMediaAnnotations';
 import { LEGACY_SHEET_VARIANT_ID, readSheetPointer, listSheetPointers } from '../../lib/sheetPointers.js';
 import { SHEET_ROLE_PREFIX } from '../../lib/creativeLibraries';
 import { formsOf, splitSheetRole } from '../../lib/catalogForms';
@@ -29,15 +32,61 @@ const universeCanonPath = (universeRef) => (universeRef?.refId
   ? `/universes/${encodeURIComponent(universeRef.refId)}#canon`
   : null);
 
-function PointerSheetFigure({ variant, filename }) {
+// Media-annotation keys the viewer's good/bad rating writes: a universe sheet
+// under /data/image-refs is `image-ref:<file>`, a catalog sheet is a gallery image.
+const pointerRatingKey = (filename) => `image-ref:${filename}`;
+const mediaRatingKey = (mediaKey) => `image:${mediaKey}`;
+
+// `remove` (optional) is `{ armed, busy, disabled, onArm, onConfirm, onCancel }`; a sheet
+// rated Bad keeps its remove control in view instead of behind hover.
+function PointerSheetFigure({ variant, filename, bad = false, remove = null }) {
   return (
-    <figure className="rounded border border-port-border overflow-hidden bg-port-bg">
+    <figure className={`relative group rounded border overflow-hidden bg-port-bg ${bad ? 'border-port-error/60' : 'border-port-border'}`}>
       <CatalogImagePreview src={`/data/image-refs/${encodeURIComponent(filename)}`} fallbackSrc={`/data/images/${encodeURIComponent(filename)}`} alt={`${variant} reference sheet`}
         className="w-full object-contain max-h-[420px]" />
+      {bad && <BadFlag />}
       <figcaption className="text-[10px] uppercase tracking-wider text-gray-500 px-2 py-1 border-t border-port-border">
         {variant}
       </figcaption>
+      {remove && (
+        <div className={`port-media-overlay absolute top-1 right-1 flex gap-1 rounded transition-opacity ${bad || remove.armed ? 'opacity-100' : 'opacity-100 sm:opacity-0 sm:group-hover:opacity-100 focus-within:opacity-100'}`}>
+          {remove.armed ? (
+            <ConfirmButtonPair prompt="Remove sheet?" confirmText="Remove" cancelText="Cancel" ariaLabel="Confirm sheet removal"
+              busy={remove.busy} busyText="Removing…" onConfirm={remove.onConfirm} onCancel={remove.onCancel} largeTouchTargets />
+          ) : (
+            <button type="button" onClick={remove.onArm} disabled={remove.disabled} title="Remove this sheet" aria-label={`Remove ${variant} sheet`}
+              className="port-media-overlay-item p-2 sm:p-1 rounded hover:text-port-error">
+              <Trash2 size={12} aria-hidden="true" />
+            </button>
+          )}
+        </div>
+      )}
     </figure>
+  );
+}
+
+function BadFlag() {
+  return (
+    <span className="absolute top-1 left-1 inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-port-error/20 text-port-error border border-port-error/40"
+      title="Rated bad in the viewer: remove it so nothing picks it up again">
+      <ThumbsDown size={10} aria-hidden="true" /> Rated bad
+    </span>
+  );
+}
+
+// The viewer's side-pane action for the open sheet: tap Remove, then confirm.
+function SheetPreviewActions({ bad, busy, onRemove }) {
+  const [arming, setArming] = useState(false);
+  return (
+    <div className="space-y-1.5">
+      {bad && <p className="text-xs text-port-error">Rated bad. Remove it to take it off this record.</p>}
+      <button type="button" disabled={busy} onClick={() => { if (arming) { setArming(false); onRemove(); } else setArming(true); }}
+        onBlur={() => setArming(false)} title="Remove this reference sheet from the record"
+        className={`flex w-full min-h-11 items-center justify-center gap-1.5 rounded border px-2 text-xs disabled:opacity-40 ${arming ? 'border-port-error bg-port-error/20 text-port-error' : 'border-port-border text-gray-300 hover:border-port-error hover:text-port-error'}`}>
+        {busy ? <Loader2 size={13} className="animate-spin" aria-hidden="true" /> : <Trash2 size={13} aria-hidden="true" />}
+        {arming ? 'Tap to remove' : 'Remove sheet'}
+      </button>
+    </div>
   );
 }
 
@@ -112,6 +161,7 @@ function SheetJob({ job, onFilename, onStatus }) {
 export default function CatalogSheetsPanel({
   ingredientId, payload, universeRef, sheetMedia, missingMedia, onDetach,
   blockedReason = null, savedStamp = null, onSheetFile, onPointerSheetReady, onMediaChanged,
+  onRemovePointerSheet, removingPointerSheet = null,
 }) {
   const mountedRef = useMounted();
   const [variants, setVariants] = useState(null);
@@ -121,6 +171,9 @@ export default function CatalogSheetsPanel({
   const [starting, setStarting] = useState(false);
   const [jobs, setJobs] = useState([]); // [{ jobId, role, delegated, label }]
   const [armedDetach, setArmedDetach] = useState(null);
+  const [armedPointer, setArmedPointer] = useState(null);
+  const { annotations } = useMediaAnnotations();
+  const ratedBad = (key) => annotations?.[key]?.rating === 'bad';
 
   useEffect(() => {
     let active = true;
@@ -162,6 +215,14 @@ export default function CatalogSheetsPanel({
     setLikenessRevision((n) => n + 1);
     onMediaChanged?.();
   }, [ingredientId, mountedRef, onMediaChanged]);
+
+  // The page runs a universe sheet removal (`onRemovePointerSheet`) and holds
+  // its in-flight file (`removingPointerSheet`), since it owns the record and
+  // draft and outlives this tab.
+  const removePointer = useCallback((variant, filename) => {
+    setArmedPointer(null);
+    return onRemovePointerSheet?.(variant, filename);
+  }, [onRemovePointerSheet]);
 
   const dropJob = useCallback((jobId) => setJobs((cur) => cur.filter((j) => j.jobId !== jobId)), []);
   useEffect(() => {
@@ -240,6 +301,31 @@ export default function CatalogSheetsPanel({
   ];
   const universePath = universeCanonPath(universeRef);
 
+  // The enlarged viewer steps through every sheet shown here and offers Remove.
+  // One entry per file: removing a universe sheet clears every slot of this
+  // record that holds the file, so two slots sharing one image remove together.
+  const sheetEntries = groups.flatMap((g) => [
+    ...g.pointer.map(([v, filename]) => ({ key: imageRefsSequenceKey(filename), variant: v, filename, ratingKey: pointerRatingKey(filename) })),
+    ...g.items.map((m) => ({ key: m.mediaKey, media: m, ratingKey: mediaRatingKey(m.mediaKey) })),
+  ]).filter((e, i, all) => all.findIndex((other) => other.key === e.key) === i);
+  const sequenceKeys = sheetEntries.map((e) => e.key).join('|');
+  const sequence = useMemo(() => ({
+    keys: sheetEntries.map((e) => e.key),
+    ingredientId,
+    render: (key, { nextKey, prevKey, goTo }) => {
+      const entry = sheetEntries.find((e) => e.key === key);
+      if (!entry) return null;
+      const remove = entry.media
+        ? (onDetach && !entry.media.readOnly ? () => onDetach(entry.media.mediaKey, entry.media.kind) : null)
+        : (onRemovePointerSheet ? () => removePointer(entry.variant, entry.filename) : null);
+      if (!remove) return null;
+      return <SheetPreviewActions key={key} bad={ratedBad(entry.ratingKey)} busy={!!removingPointerSheet}
+        onRemove={async () => { goTo(nextKey ?? prevKey); await remove(); }} />;
+    },
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [sequenceKeys, ingredientId, annotations, removingPointerSheet, onDetach, onRemovePointerSheet, removePointer]);
+  useCatalogPreviewSequence(sequence);
+
   return (
     <section className="bg-port-card border border-port-border rounded-lg p-4 space-y-3">
       <div className="flex items-center justify-between gap-2 flex-wrap">
@@ -304,12 +390,27 @@ export default function CatalogSheetsPanel({
           <h3 className="text-xs uppercase tracking-wider text-gray-400">{group.title}</h3>
           {group.pointer.length > 0 || group.items.length > 0 ? (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {group.pointer.map(([v, filename]) => <PointerSheetFigure key={`ptr:${v}`} variant={v} filename={filename} />)}
-              {group.items.map((m) => (
-                <CatalogMediaTile key={`${m.mediaKey}:${m.kind}`} m={m} label={labelFor(m)} contain
-                  missing={missingMedia?.has?.(m.mediaKey)} onDetach={onDetach}
-                  armedDetach={armedDetach} onArmDetach={setArmedDetach} />
+              {group.pointer.map(([v, filename]) => (
+                <PointerSheetFigure key={`ptr:${v}`} variant={v} filename={filename} bad={ratedBad(pointerRatingKey(filename))}
+                  remove={onRemovePointerSheet ? {
+                    armed: armedPointer === v,
+                    busy: removingPointerSheet === filename,
+                    // One removal at a time, so answers cannot arrive out of order.
+                    disabled: !!removingPointerSheet,
+                    onArm: () => setArmedPointer(v),
+                    onConfirm: () => removePointer(v, filename),
+                    onCancel: () => setArmedPointer(null),
+                  } : null} />
               ))}
+              {group.items.map((m) => {
+                const bad = ratedBad(mediaRatingKey(m.mediaKey));
+                return (
+                  <CatalogMediaTile key={`${m.mediaKey}:${m.kind}`} m={m} label={labelFor(m)} contain
+                    missing={missingMedia?.has?.(m.mediaKey)} onDetach={onDetach}
+                    armedDetach={armedDetach} onArmDetach={setArmedDetach}
+                    badge={bad ? <BadFlag /> : null} pinActions={bad} />
+                );
+              })}
             </div>
           ) : (
             <p className="text-xs text-gray-500">No sheets yet.</p>
