@@ -18,10 +18,12 @@
  *
  * BOUNDED BY `SPAWN_CLAIM_GRACE_MS`, for the reason `forceSpawnTask` is. Past
  * that window a `pending` task carrying a `running` agent is not mid-spawn, it
- * is a BROKEN state — a zombie record whose process died before the sweep
- * caught it. Settling it as active indefinitely would hide the stuck task from
- * every pending count AND drop it out of the lists that render its "Run now"
- * recovery, so the bound hands it back as queued work the user can restart.
+ * is a BROKEN state — usually a zombie record whose process died before the
+ * sweep caught it. Settling it as active indefinitely would hide the stuck task
+ * from every pending count AND drop it out of the lists that render its "Run
+ * now" recovery, so the bound hands it back as queued work the user can
+ * restart; "Run now" then settles the holder through the zombie sweep and
+ * reports a named hold if it survives.
  *
  * Pure leaf with no imports, so `client/src/lib/cosSpawnWindow.js` re-exports
  * it and the UI shares this settlement rather than keeping a copy that can
