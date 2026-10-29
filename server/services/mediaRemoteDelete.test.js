@@ -633,6 +633,52 @@ describe('deleteMediaAnywhere for gallery images', () => {
     expect(await listMediaDeleteQueue()).toEqual([]);
   });
 
+  describe('an image only a host-mode peer holds', () => {
+    const HOSTED = join(PATHS.data, 'peer-hosted-media.json');
+    const hostedEntries = async () => (await readJSONFile(HOSTED, { entries: {} })).entries;
+    const seedHosted = (filename) => atomicWrite(HOSTED, {
+      version: 1,
+      entries: { [`image:${filename}`]: { peerId: 'peer-o', at: '2026-05-01T00:00:00.000Z', revision: 'r1' } },
+    });
+
+    it('sends the delete to the host, shows pending while it is offline, and forgets the entry on the drain ack', async () => {
+      await seedHosted('hosted.png');
+      net.fetch = vi.fn(unreachable);
+      const result = await deleteMediaAnywhere('image', 'hosted.png');
+      expect(result).toMatchObject({ status: 'pending', pendingDelete: { peerId: 'rec-owner' } });
+      expect(JSON.parse(net.fetch.mock.calls[0][1].body)).toEqual({ kind: 'image', key: 'hosted.png' });
+      // Nothing is reported deleted before the ack.
+      expect(Object.keys(await hostedEntries())).toEqual(['image:hosted.png']);
+      expect(await listMediaTombstones('image')).toEqual([]);
+      const { resolveMediaLocations } = await import('./peerHostedMedia.js');
+      expect(await resolveMediaLocations([{ kind: 'image', ref: 'hosted.png' }])).toEqual([
+        expect.objectContaining({ location: 'remote', pendingDelete: result.pendingDelete }),
+      ]);
+
+      net.fetch = vi.fn(async () => ownerAck('hosted.png'));
+      disarmQueue = initMediaRemoteDelete();
+      await listenerFor('peer:online')(registry.peers[0]);
+      expect(await hostedEntries()).toEqual({});
+      expect(await listMediaDeleteQueue()).toEqual([]);
+      expect((await listMediaTombstones('image')).map((t) => t.key)).toEqual(['hosted.png']);
+    });
+
+    it('forgets the entry at once when the host acks the first command', async () => {
+      await seedHosted('hosted.png');
+      net.fetch = vi.fn(async () => ownerAck('hosted.png'));
+      expect(await deleteMediaAnywhere('image', 'hosted.png')).toMatchObject({ status: 'deleted' });
+      expect(await hostedEntries()).toEqual({});
+    });
+
+    it('cancels a queued hosted delete', async () => {
+      await seedHosted('hosted.png');
+      net.fetch = vi.fn(unreachable);
+      await deleteMediaAnywhere('image', 'hosted.png');
+      expect(await cancelPendingDelete('image', 'hosted.png')).toEqual({ ok: true, cancelled: true });
+      expect(await listMediaDeleteQueue()).toEqual([]);
+    });
+  });
+
   it('deletes an image here whose origin peer is no longer registered', async () => {
     seedImage('orphan.png', { originInstanceId: 'peer-gone' });
     expect(await deleteMediaAnywhere('image', 'orphan.png')).toMatchObject({ ok: true, status: 'deleted' });
