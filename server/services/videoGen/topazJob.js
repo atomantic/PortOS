@@ -8,7 +8,7 @@ import { pipeline } from 'node:stream/promises';
 import { Readable, Transform } from 'node:stream';
 import { createWriteStream } from 'node:fs';
 import { PATHS, UUID_RE } from '../../lib/fileUtils.js';
-import { safeUnder, probeVideoStreamInfo, probeFrameCount, probeVideoDuration, hasAudioStream, generateThumbnail } from '../../lib/ffmpeg.js';
+import { safeUnder, probeVideoStreamInfo, probeFrameCount, probeVideoDuration, probeSquareVideoPixels, hasAudioStream, generateThumbnail } from '../../lib/ffmpeg.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { maintenance } from '../../lib/maintenanceAdmission.js';
 import { enqueueJob, getJob, listJobs, updateJobResult } from '../mediaJobQueue/index.js';
@@ -233,11 +233,11 @@ export async function runVideoUpscale(params) {
         return HISTORY_UNCHANGED;
       }));
     } else if (priorFinal?.nlink > 1) throw safeError('The staged output is referenced elsewhere.');
-    const finalized = await finalizeUpscaleOutput(downloadPath, finalPath, { width: target.width, height: target.height, frameCount: source.frameCount, audioSourcePath: path, signal: entry.abort.signal });
+    const finalized = await finalizeUpscaleOutput(downloadPath, finalPath, { width: target.width, height: target.height, frameCount: source.frameCount, audioSourcePath: path, signal: entry.abort.signal, squarePixels: true });
     if (!finalized.ok) throw safeError('Could not attach the original audio to the Topaz result.');
-    const [measured, duration, originalAudio, outputAudio] = await Promise.all([probeVideoStreamInfo(finalPath), probeVideoDuration(finalPath), hasAudioStream(path), hasAudioStream(finalPath)]);
+    const [measured, duration, originalAudio, outputAudio, squarePixels] = await Promise.all([probeVideoStreamInfo(finalPath), probeVideoDuration(finalPath), hasAudioStream(path), hasAudioStream(finalPath), probeSquareVideoPixels(finalPath)]);
     const frames = measured.frameCount ?? await probeFrameCount(finalPath);
-    if (measured.width !== target.width || measured.height !== target.height || frames !== source.frameCount || !(measured.fps > 0) || Math.abs(measured.fps - source.frameRate) > 0.01 || !(duration > 0) || Math.abs(duration - source.duration) > 1 / source.frameRate + 0.05 || originalAudio !== outputAudio) throw safeError('Topaz result did not preserve the requested dimensions, timeline or audio.');
+    if (measured.width !== target.width || measured.height !== target.height || squarePixels !== true || frames !== source.frameCount || !(measured.fps > 0) || Math.abs(measured.fps - source.frameRate) > 0.01 || !(duration > 0) || Math.abs(duration - source.duration) > 1 / source.frameRate + 0.05 || originalAudio !== outputAudio) throw safeError('Topaz result did not preserve the requested dimensions, timeline or audio.');
     if (await hashTopazFile(path) !== params.sourceDigest) throw safeError('The source changed while the result was being finalized.');
     const result = await withBackupAssetPublication(async () => {
       try {

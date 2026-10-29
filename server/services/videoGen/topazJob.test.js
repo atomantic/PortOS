@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { makePathsProxy, lazyTempDataRoot, cleanupTempDataRoots } from '../../lib/mockPathsDataRoot.js';
 
 vi.mock('../../lib/fileUtils.js', async original => makePathsProxy(await original(), { dataRoot: () => lazyTempDataRoot('topaz-job-') }));
-const state = vi.hoisted(() => ({ rows: [], result: {}, key: 'test-key', phase: null, fetches: [], audio: true, invalid: false, failPreparedProbe: false, invalidOutput: false }));
+const state = vi.hoisted(() => ({ rows: [], result: {}, key: 'test-key', phase: null, fetches: [], audio: true, invalid: false, failPreparedProbe: false, invalidOutput: false, pixelAspect: { numerator: 1, denominator: 1 } }));
 vi.mock('../settings.js', () => ({ getSettings: async () => ({ videoGen: { topaz: { apiKey: state.key } } }) }));
 vi.mock('./history.js', () => ({
   HISTORY_UNCHANGED: Symbol('unchanged'),
@@ -31,6 +31,8 @@ vi.mock('../../lib/ffmpeg.js', () => ({
   probeVideoStreamInfo: async path => path.includes('source') ? { width: state.invalid ? 0 : 640, height: 480, fps: 24, frameCount: 24 } : path.includes('topaz-staging') && !path.endsWith('.output.mp4') && !path.endsWith('.final.mp4') ? { width: 864, height: 486, fps: 24, frameCount: state.failPreparedProbe ? null : 24 } : { width: state.invalidOutput ? 1280 : 1920, height: 1080, fps: 24, frameCount: 24 },
   probeFrameCount: async () => { if (state.failPreparedProbe) throw new Error('probe failed'); return 24; },
   probeVideoDuration: async () => 1,
+  probeVideoPixelAspect: async () => state.pixelAspect,
+  probeSquareVideoPixels: async () => true,
   hasAudioStream: async () => state.audio,
   generateThumbnail: async () => null,
 }));
@@ -51,7 +53,7 @@ const response = (body, status = 200) => new Response(JSON.stringify(body), { st
 beforeEach(async () => {
   state.videos = PATHS.videos;
   state.jobId = jobId;
-  state.key = 'test-key'; state.rows = [{ id: sourceId, filename: 'source.mp4' }]; state.result = {}; state.job = {}; state.related = []; state.updates = []; state.fetches = []; state.audio = true; state.invalid = false; state.failPreparedProbe = false; state.invalidOutput = false; state.failHistoryOnce = false;
+  state.key = 'test-key'; state.rows = [{ id: sourceId, filename: 'source.mp4' }]; state.result = {}; state.job = {}; state.related = []; state.updates = []; state.fetches = []; state.audio = true; state.invalid = false; state.failPreparedProbe = false; state.invalidOutput = false; state.failHistoryOnce = false; state.pixelAspect = { numerator: 1, denominator: 1 };
   await mkdir(PATHS.videos, { recursive: true });
   await unlink(join(PATHS.videos, `${jobId}.mp4`)).catch(() => {});
   await writeFile(join(PATHS.videos, 'source.mp4'), 'source');
@@ -112,6 +114,21 @@ describe('Topaz job boundary', () => {
     state.invalid = true;
     await expect(quoteTopaz(sourceId)).rejects.toMatchObject({ code: 'TOPAZ_INVALID_DIMENSIONS' });
     expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('refuses unknown pixel aspect before a provider request', async () => {
+    state.pixelAspect = null;
+    await expect(quoteTopaz(sourceId)).rejects.toMatchObject({ code: 'TOPAZ_PIXEL_ASPECT_UNSUPPORTED' });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('discloses exact square-pixel normalization for an anamorphic source', async () => {
+    state.pixelAspect = { numerator: 4, denominator: 3 };
+    const quote = await quoteTopaz(sourceId);
+    expect(quote.normalized).toEqual({ width: 864, height: 486 });
+    expect(quote.padding).toEqual({ width: 864, height: 486 });
+    await enqueueTopazUpscale(sourceId, quote.token);
+    await runVideoUpscale({ ...state.enqueued.params, jobId });
   });
 
   it('cleans its prepared file when an estimate fails', async () => {

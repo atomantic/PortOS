@@ -26,8 +26,10 @@ Settings → Credentials, choose Proteus or the generative Starlight Fast 2,
 and request a free estimate. The estimate prepares a local, padded 16:9 copy;
 it sends metadata to Topaz but does not upload the video or reserve credits.
 The drawer shows the source and padded dimensions, 1920 × 1080 target and the
-provider's credit estimate. Black padding preserves the entire frame. The
-generative model may change details. Topaz says credits automatically reload
+provider's credit estimate. The full frame is normalized to square pixels and
+padded without cropping. Unknown pixel aspect or geometry too large to normalize
+is refused before contacting Topaz so the display aspect is not altered.
+The generative model may change details. Topaz says credits automatically reload
 at the plan rate when exhausted; the account balance, dollar cost and reload
 charge are unknown here. Check [Topaz pricing](https://www.topazlabs.com/api).
 

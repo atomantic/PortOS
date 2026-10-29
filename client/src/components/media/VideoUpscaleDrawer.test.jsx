@@ -76,7 +76,7 @@ afterEach(() => vi.unstubAllGlobals());
 
 describe('VideoUpscaleDrawer', () => {
   it('requires an explicit estimate and start before submitting Topaz', async () => {
-    quoteTopazUpscale.mockResolvedValue({ quote: { token: 'quote-1', source: { resolution: { width: 640, height: 480 } }, padding: { width: 864, height: 486 }, target: { width: 1920, height: 1080 }, credits: [8, 9] } });
+    quoteTopazUpscale.mockResolvedValue({ quote: { token: 'quote-1', source: { resolution: { width: 640, height: 480 } }, normalized: { width: 640, height: 480 }, padding: { width: 864, height: 486 }, target: { width: 1920, height: 1080 }, credits: [8, 9] } });
     startTopazUpscale.mockResolvedValue({ job: { jobId: 'job-1' } });
     render(<VideoUpscaleDrawer item={ITEM} onClose={vi.fn()} onUpscaled={vi.fn()} />);
     fireEvent.click(screen.getByLabelText(/Topaz Labs cloud/));
@@ -96,7 +96,7 @@ describe('VideoUpscaleDrawer', () => {
     fireEvent.click(screen.getByLabelText(/Topaz Labs cloud/));
     fireEvent.click(screen.getByRole('button', { name: 'Get free estimate' }));
     view.rerender(<VideoUpscaleDrawer item={{ id: 'video-2' }} onClose={vi.fn()} onUpscaled={vi.fn()} />);
-    await act(async () => resolveQuote({ quote: { token: 'old', source: { resolution: { width: 640, height: 480 } }, padding: { width: 864, height: 486 }, target: { width: 1920, height: 1080 }, credits: [8, 9] } }));
+    await act(async () => resolveQuote({ quote: { token: 'old', source: { resolution: { width: 640, height: 480 } }, normalized: { width: 640, height: 480 }, padding: { width: 864, height: 486 }, target: { width: 1920, height: 1080 }, credits: [8, 9] } }));
     fireEvent.click(screen.getByLabelText(/Topaz Labs cloud/));
     expect(screen.queryByText(/Estimated 8–9 credits/)).toBeNull();
     expect(screen.getByRole('button', { name: 'Start Topaz upscale' })).toBeDisabled();

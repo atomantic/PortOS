@@ -607,6 +607,24 @@ export const probeVideoStreamInfo = async (videoPath) => {
   };
 };
 
+// Pixel aspect is distinct from raster dimensions. Null means ffprobe could
+// not establish it; callers that require exact display geometry can refuse.
+export const probeVideoPixelAspect = async (videoPath) => {
+  if (typeof videoPath !== 'string' || !videoPath) return null;
+  const stdout = await runFfprobe(['-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=sample_aspect_ratio', '-of', 'default=nokey=1:noprint_wrappers=1', videoPath]);
+  const match = /^\s*(\d+):(\d+)\s*$/.exec(stdout);
+  if (!match || Number(match[1]) <= 0 || Number(match[2]) <= 0) return null;
+  const numerator = Number(match[1]);
+  const denominator = Number(match[2]);
+  if (!Number.isSafeInteger(numerator) || !Number.isSafeInteger(denominator)) return null;
+  return { numerator, denominator };
+};
+
+export const probeSquareVideoPixels = async videoPath => {
+  const aspect = await probeVideoPixelAspect(videoPath);
+  return aspect ? aspect.numerator === aspect.denominator : null;
+};
+
 // What a stream copy needs two clips to share before their video can be joined
 // without a decode: codec, profile/level, pixel format and the colour tags the
 // decoder reads off the stream. Joined into one comparable string, or null when
