@@ -714,7 +714,10 @@ router.post('/tasks/:id/spawn', asyncHandler(async (req, res) => {
     const message = String(result.error);
     let status = 400;
     let code = 'SPAWN_FAILED';
-    if (/not found/i.test(message)) {
+    if (result.code === 'TASK_OWNER_HELD') {
+      status = 409;
+      code = result.code;
+    } else if (/not found/i.test(message)) {
       status = 404;
       code = 'NOT_FOUND';
     } else if (/not pending/i.test(message)) {

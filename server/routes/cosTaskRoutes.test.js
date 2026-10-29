@@ -592,6 +592,16 @@ describe('CoS task routes write operator-action rows (#5594)', () => {
     expect(spawn.dedupeKey).toBe(`cos.task.spawn:sys-1:${spawn.happenedAt}`);
   });
 
+  it('answers a Run now held by a surviving task owner with 409 and records nothing (#14039)', async () => {
+    forceSpawnTask.mockResolvedValue({ error: 'Agent agent-1 still owns this task', code: 'TASK_OWNER_HELD' });
+
+    const res = await request(buildApp()).post('/api/cos/tasks/task-1/spawn');
+
+    expect(res.status).toBe(409);
+    expect(res.body).toMatchObject({ code: 'TASK_OWNER_HELD', error: 'Agent agent-1 still owns this task' });
+    expect(await onlyType('cos.task.spawn')).toEqual([]);
+  });
+
   it('records nothing when the mutation itself failed', async () => {
     updateTask.mockResolvedValueOnce({ error: 'Task not found' });
     expect((await request(buildApp()).put('/api/cos/tasks/ghost').send({ priority: 'HIGH' })).status).toBe(404);
