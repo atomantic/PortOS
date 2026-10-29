@@ -33,7 +33,8 @@ export async function reconcileSpawnBudget(taskId) {
   if (count === charged) return { reconciled: false, reason: 'already-reconciled' };
   const saved = await updateTask(task.id, { metadata: { totalSpawnCount: charged, spawnBudgetReconciledHold: 'true' } }, task.taskType || 'user', {
     expectedStatus: 'blocked', expectedTask: { description: task.description, priority: task.priority, metadata: task.metadata },
-    recoveryOwner: { id: agent.id, startedAt: agent.startedAt, requireInactive: true },
+    recoveryOwner: { id: agent.id, startedAt: agent.startedAt, requireInactive: true, requireRegistered: true,
+      expectedOwnerMetadata: structuredClone(agent.metadata) },
     spawnBudgetOperation: { kind: 'reconcile' },
   });
   return saved?.error || saved?.statusChanged ? { reconciled: false, reason: 'task-or-owner-changed' }

@@ -1,8 +1,10 @@
 import { isDeliveryCleanupHeld, isRetryHeld } from '../lib/taskRetryHold.js';
+import { hasSpawnBudgetResetPrerequisite } from '../lib/taskBlockCategories.js';
 
 /** Resolve a unique stopped orphan's retained checkout before an explicit reset. */
 export async function prepareExplicitOrphanBudgetReset(task) {
-  if (task?.status !== 'in_progress' || isDeliveryCleanupHeld(task.metadata) || isRetryHeld(task.metadata)) {
+  if (!['in_progress', 'blocked'].includes(task?.status) || isDeliveryCleanupHeld(task.metadata) || isRetryHeld(task.metadata)
+    || hasSpawnBudgetResetPrerequisite(task.metadata)) {
     return { error: 'Task cleanup owns this checkout; inspect its recovery before resetting the budget' };
   }
   const { readAgentsStateForSafetyCheck } = await import('./cosState.js');

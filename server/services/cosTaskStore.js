@@ -886,6 +886,9 @@ async function writeTaskUpdateLocked(taskId, updates, taskType, { now, suppressD
       }
     }
     const registered = owners.agents?.[recoveryOwner.id];
+    if (recoveryOwner.requireRegistered && (!registered || registered.taskId !== taskId || registered.status !== 'completed'
+      || registered.startedAt !== recoveryOwner.startedAt
+      || !isDeepStrictEqual(registered.metadata, recoveryOwner.expectedOwnerMetadata))) return { statusChanged: true, task: current };
     const competing = Object.values(owners.agents || {}).some(agent => agent.id !== recoveryOwner.id
       && agent.taskId === taskId && ['running', 'paused'].includes(agent.status))
       || [activeAgents, runnerAgents].some(entries => [...entries].some(([id, agent]) => id !== recoveryOwner.id
@@ -998,6 +1001,12 @@ async function writeTaskUpdateLocked(taskId, updates, taskType, { now, suppressD
     for (const key of keys) {
       if ((runtimeRelease || dependencyRelease) && ['failureCount', 'lastErrorCategory', 'lastFailureAt'].includes(key)) continue;
       delete updatedMetadata[key];
+    }
+  }
+  if (preserveRetryBudget && spawnBudgetOperation?.kind === 'reset' && spawnBudgetOperation.requireInactive
+    && expectedStatus === 'blocked' && expectedTask && recoveryOwner?.requireInactive && updates.status === 'pending') {
+    for (const key of ['failureCount', 'lastErrorCategory', 'lastFailureAt']) {
+      if (Object.hasOwn(current.metadata || {}, key)) updatedMetadata[key] = current.metadata[key];
     }
   }
   // Automatic delivery recovery continues the charged attempt, unlike an

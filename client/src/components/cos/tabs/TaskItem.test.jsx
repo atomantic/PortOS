@@ -47,6 +47,13 @@ describe('TaskItem task source', () => {
     expect(api.resetSpawnBudgetAndRun).not.toHaveBeenCalled();
   });
 
+  it('offers explicit recovery for a blocked legacy task without unblocking it on render', () => {
+    render(<TaskItem task={{ ...task, status: 'blocked', metadata: { failureCount: '3' } }} isSystem onRefresh={vi.fn()} providers={providers} />);
+    expect(screen.getByRole('button', { name: 'Reset spawn budget and run' })).toBeInTheDocument();
+    expect(api.updateCosTask).not.toHaveBeenCalled();
+    expect(api.resetSpawnBudgetAndRun).not.toHaveBeenCalled();
+  });
+
   it('uses the scheduled task learning bucket for its ETA instead of generic task text', () => {
     const scheduled = {
       ...task,

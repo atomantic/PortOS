@@ -16,6 +16,8 @@ beforeEach(() => {
 describe('explicit orphan budget reset preparation', () => {
   it('keeps the unique stopped owner and retained checkout as the resume target', async () => {
     expect(await prepareExplicitOrphanBudgetReset(task)).toEqual({ owner, pointer: fixture.pointer });
+    expect(await prepareExplicitOrphanBudgetReset({ ...task, status: 'blocked', metadata: { ...task.metadata, blockedCategory: 'task-incomplete' } }))
+      .toEqual({ owner, pointer: fixture.pointer });
   });
   it.each(['unreadable', 'active', 'ambiguous', 'checkout', 'cleanup'])('holds %s evidence without making a retry decision', async condition => {
     let current = task;
@@ -25,5 +27,15 @@ describe('explicit orphan budget reset preparation', () => {
     if (condition === 'checkout') fixture.pointer = {};
     if (condition === 'cleanup') current = { ...task, metadata: { ...task.metadata, deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: owner.id } };
     expect(await prepareExplicitOrphanBudgetReset(current)).toEqual({ error: expect.any(String) });
+  });
+  it.each(['runtime-verification', 'internal-dependency', 'internal-dependency-unverified', 'agent-paused', 'task-approval', 'user-terminated'])
+    ('does not bypass the %s prerequisite', async blockedCategory => {
+      expect(await prepareExplicitOrphanBudgetReset({ ...task, status: 'blocked', metadata: { ...task.metadata, blockedCategory } }))
+        .toEqual({ error: expect.any(String) });
+    });
+  it('does not override release synchronization or a user blocker', async () => {
+    for (const metadata of [{ releaseSynchronization: { version: 1 } }, { blocker: 'Operator decision' }]) {
+      expect(await prepareExplicitOrphanBudgetReset({ ...task, status: 'blocked', metadata })).toEqual({ error: expect.any(String) });
+    }
   });
 });

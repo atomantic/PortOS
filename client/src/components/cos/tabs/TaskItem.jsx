@@ -40,7 +40,8 @@ import PreflightProgress from './PreflightProgress';
 import DeliveryStatus from '../DeliveryStatus';
 import BlockedSystemRecovery from '../BlockedSystemRecovery';
 import { ReleasePublicationLine } from '../AgentResultLine';
-import { isDeliveryCleanupHeld } from '../../../../../server/lib/taskRetryHold.js';
+import { isDeliveryCleanupHeld, isRetryHeld } from '../../../../../server/lib/taskRetryHold.js';
+import { hasSpawnBudgetResetPrerequisite } from '../../../../../server/lib/taskBlockCategories.js';
 
 const statusIcons = {
   pending: <Clock size={16} aria-hidden="true" className="text-yellow-500" />,
@@ -817,7 +818,8 @@ export default function TaskItem({ task, agent = null, liveOutput, isSystem, spa
                     <Play size={14} aria-hidden="true" />
                   </button>
                 )}
-                {(task.status === 'pending' || (task.status === 'in_progress' && agent?.status !== 'running')) && !task.approvalRequired
+                {(task.status === 'pending' || task.status === 'blocked' || (task.status === 'in_progress' && agent?.status !== 'running')) && !task.approvalRequired
+                  && !hasSpawnBudgetResetPrerequisite(task.metadata) && !isDeliveryCleanupHeld(task.metadata) && !isRetryHeld(task.metadata)
                   && (task.status === 'in_progress' || !task.metadata?.spawnBudgetProof || task.metadata?.spawnBudgetReconciledHold === 'true' || budgetResetAvailable)
                   && (budgetResetConfirm ? (
                     <ConfirmButtonPair prompt="Reset spawn count to zero and run? Failure count stays." confirmText="Reset and run"
