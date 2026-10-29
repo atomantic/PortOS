@@ -26,8 +26,8 @@ import { isSafeFilename } from '../lib/pathSafety.js';
 import { parseTsMs } from '../lib/lwwTimestamp.js';
 import { supersedingTimestamp } from '../lib/tombstones.js';
 import { listMediaTombstones, clearMediaTombstone } from './mediaTombstones.js';
-import { loadHistory, mutateVideoHistory, HISTORY_UNCHANGED } from './videoGen/history.js';
-import { readImageSidecar } from './imageGen/sidecarStore.js';
+import { mutateVideoHistory, HISTORY_UNCHANGED } from './videoGen/history.js';
+import { readImageSidecar, sidecarEditQueue } from './imageGen/sidecarStore.js';
 import { announceLocalVideoRows, emitMediaHistoryChanged } from './peerSyncEventBus.js';
 
 async function localInstanceId() {
@@ -51,25 +51,24 @@ const keptLog = (kind, key, origin) => console.log(
   `⏭️ Restored ${kind} ${key} keeps its delete record: owned by ${origin || 'an unknown machine'}, so it follows the owner's delete`,
 );
 
+// Classified inside the history writer: deleteHistoryItem records its
+// tombstone and trashes the files in one writer turn, so no delete is ever
+// caught between the two here (ctime alone cannot tell that state apart).
 async function restoredVideos(local) {
-  const tombstones = await listMediaTombstones('video');
-  if (tombstones.length === 0) return [];
-  const rows = new Map((await loadHistory()).filter((r) => typeof r?.id === 'string').map((r) => [r.id, r]));
+  if ((await listMediaTombstones('video')).length === 0) return [];
   const restored = [];
-  for (const tombstone of tombstones) {
-    const row = rows.get(tombstone.key);
-    if (!row || !(await reappearedAfter(safeUnder(PATHS.videos, row.filename), tombstone.deletedAt))) continue;
-    if (row.originInstanceId !== local) keptLog('video', row.id, row.originInstanceId);
-    else restored.push(tombstone);
-  }
-  if (restored.length === 0) return [];
-
-  const restoredAt = new Map(restored.map((t) => [t.key, supersedingTimestamp(t.deletedAt)]));
   const stamped = [];
-  await mutateVideoHistory((history) => {
+  await mutateVideoHistory(async (history) => {
+    const tombstones = new Map((await listMediaTombstones('video')).map((t) => [t.key, t]));
     for (const row of history) {
-      if (!restoredAt.has(row?.id)) continue;
-      row.restoredAt = restoredAt.get(row.id);
+      const tombstone = tombstones.get(row?.id);
+      if (!tombstone || !(await reappearedAfter(safeUnder(PATHS.videos, row.filename), tombstone.deletedAt))) continue;
+      if (row.originInstanceId !== local) {
+        keptLog('video', row.id, row.originInstanceId);
+        continue;
+      }
+      row.restoredAt = supersedingTimestamp(tombstone.deletedAt);
+      restored.push(tombstone);
       stamped.push(row);
     }
     return stamped.length > 0 ? history : HISTORY_UNCHANGED;
@@ -92,15 +91,21 @@ async function restoredVideos(local) {
 async function restoredImages(local) {
   const cleared = [];
   try {
-    for (const tombstone of await listMediaTombstones('image')) {
-      if (!isSafeFilename(tombstone.key, ['.png'])) continue;
-      if (!(await reappearedAfter(join(PATHS.images, tombstone.key), tombstone.deletedAt))) continue;
-      const { metadata } = await readImageSidecar(tombstone.key);
-      if (metadata?.originInstanceId !== local) {
-        keptLog('image', tombstone.key, metadata?.originInstanceId);
-        continue;
-      }
-      if (await clearMediaTombstone('image', tombstone.key, { deletedAt: tombstone.deletedAt })) cleared.push(tombstone.key);
+    for (const { key } of await listMediaTombstones('image')) {
+      if (!isSafeFilename(key, ['.png'])) continue;
+      // Inside the per-image queue deleteImage records and trashes under, for
+      // the same reason the video check runs inside the history writer.
+      const restored = await sidecarEditQueue(key, async () => {
+        const tombstone = (await listMediaTombstones('image')).find((t) => t.key === key);
+        if (!tombstone || !(await reappearedAfter(join(PATHS.images, key), tombstone.deletedAt))) return false;
+        const { metadata } = await readImageSidecar(key);
+        if (metadata?.originInstanceId !== local) {
+          keptLog('image', key, metadata?.originInstanceId);
+          return false;
+        }
+        return clearMediaTombstone('image', key, { deletedAt: tombstone.deletedAt });
+      });
+      if (restored) cleared.push(key);
     }
   } finally {
     if (cleared.length > 0) emitMediaHistoryChanged({ kind: 'image', op: 'upsert', ids: cleared });
