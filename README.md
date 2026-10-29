@@ -385,7 +385,7 @@ PortOS/
 Run these from the repository root after setup. They use the PM2 bundled with PortOS, so a global `pm2` command is not required.
 
 ```bash
-npm start                                      # Build the client and start PortOS
+npm start                                      # Build the client and start PortOS (leaves already-running apps alone)
 npm run pm2:status                             # View status
 npm run pm2:logs -- portos-server --lines 100    # View server logs
 npm run pm2:restart                            # Restart production apps (without Vite)
