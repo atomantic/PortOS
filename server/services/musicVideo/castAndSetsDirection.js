@@ -803,6 +803,7 @@ export function applyCastAndSetsDirectionEdits(previous, edits, { sections = [] 
   }
   if (!procedural && Array.isArray(edits?.tests) && edits.tests.length) {
     const tests = edits.tests.map((test) => {
+      if (test.remove) return { ...test, key: test.index };
       const name = test.look?.trim();
       let renamed = null;
       if (name && !currentLookNamesExact.has(name)) {

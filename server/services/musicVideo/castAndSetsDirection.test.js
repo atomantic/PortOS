@@ -267,6 +267,9 @@ describe('Cast & Sets direct edits', () => {
     const oneRenamed = [looks[0], { originalName: 'SUMMER', name: 'SUMMER', description: 'hat' }];
     expect(() => applyCastAndSetsDirectionEdits(previous, { looks: oneRenamed, tests: [{ index: 1, look: 'Summer' }] }, { sections }))
       .toThrow(/ambiguous/i);
+    const removed = applyCastAndSetsDirectionEdits(previous, { looks: oneRenamed,
+      tests: [{ index: 1, look: 'Summer', remove: true }] }, { sections });
+    expect(removed.direction.tests.map((test) => test.look)).toEqual(['SUMMER']);
     const retained = applyCastAndSetsDirectionEdits(previous, { looks: oneRenamed,
       tests: [{ index: 1, look: 'SUMMER' }, { index: 2, look: 'SUMMER' }] }, { sections });
     expect(retained.direction.tests.map((test) => test.look)).toEqual(['SUMMER', 'SUMMER']);

@@ -307,9 +307,9 @@ describe('Cast & Sets per-image actions', () => {
     expect(card('Harbor').getByLabelText('What happens in the frame').value).toBe('action 3');
   });
 
-  it('does not apply an older coalesced project read after the card found a newer revision', async () => {
+  it('starts a fresh project read after finding a newer card and ignores an earlier read at the same revision', async () => {
     const legacy = { key: 'test:1', kind: 'test', testIndex: 0, setId: 'harbor', label: 'Harbor', prompt: 'saved prompt', deps: [], refKeys: [] };
-    const initial = sheet('review', { plan: { 'test:1': legacy } });
+    const initial = sheet('review', { revision: 2, plan: { 'test:1': legacy } });
     const updated = sheet('review', { revision: 2, plan: { 'test:1': { ...legacy, prompt: 'new prompt', test: { action: 'new action' } } } });
     const pending = deferred();
     api.getMusicVideoProject.mockReturnValueOnce(pending.promise).mockResolvedValueOnce(updated);
@@ -317,9 +317,9 @@ describe('Cast & Sets per-image actions', () => {
     render(<Harness initial={initial} locked={false} />);
     await emit('connect');
     await act(async () => { fireEvent.click(card('Harbor').getByRole('button', { name: 'Edit Harbor' })); });
+    expect(api.getMusicVideoProject).toHaveBeenCalledTimes(2);
+    expect(card('Harbor').getByText('new prompt')).toBeInTheDocument();
     await act(async () => { pending.resolve(initial); });
-    expect(card('Harbor').getByText(/Refresh the project and try editing/)).toBeInTheDocument();
-    await act(async () => { fireEvent.click(card('Harbor').getByRole('button', { name: 'Edit Harbor' })); });
     expect(card('Harbor').getByText('new prompt')).toBeInTheDocument();
   });
 

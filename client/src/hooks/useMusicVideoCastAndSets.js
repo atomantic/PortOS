@@ -57,7 +57,6 @@ export default function useMusicVideoCastAndSets({ project, replaceProject } = {
     if (!projectId) return undefined;
     let active = true;
     let pending = null;
-    let pendingMinRevision = 0;
     const applyProject = (next) => {
       snapshotRevision.current += 1;
       replaceRef.current?.(next);
@@ -76,18 +75,26 @@ export default function useMusicVideoCastAndSets({ project, replaceProject } = {
     };
     // Recover events missed while disconnected or hidden, once per transition.
     // A newer socket snapshot or a project switch wins over an in-flight read.
-    const refresh = (minRevision = 0) => {
-      if (Number.isFinite(minRevision)) pendingMinRevision = Math.max(pendingMinRevision, minRevision);
+    const refresh = () => {
       if (pending) return pending;
       const revision = snapshotRevision.current;
       pending = getMusicVideoProject(projectId, { silent: true }).then((next) => {
-        if (pendingMinRevision && (!Number.isFinite(next?.castAndSets?.revision) || next.castAndSets.revision < pendingMinRevision)) return false;
         if (active && next?.id === projectId && revision === snapshotRevision.current) { applyProject(next); return true; }
         return false;
-      }).catch(() => false).finally(() => { pending = null; pendingMinRevision = 0; });
+      }).catch(() => false).finally(() => { pending = null; });
       return pending;
     };
-    refreshRef.current = { projectId, refresh };
+    // A card read already saw a newer stage. Start after that read, and make
+    // any earlier reconnect/visibility response ineligible to replace it.
+    const refreshCurrent = (minRevision = 0) => {
+      const revision = ++snapshotRevision.current;
+      return getMusicVideoProject(projectId, { silent: true }).then((next) => {
+        if (minRevision && (!Number.isFinite(next?.castAndSets?.revision) || next.castAndSets.revision < minRevision)) return false;
+        if (active && next?.id === projectId && revision === snapshotRevision.current) { applyProject(next); return true; }
+        return false;
+      }).catch(() => false);
+    };
+    refreshRef.current = { projectId, refresh: refreshCurrent };
     socket.on('music-video:cast-and-sets', onStage);
     socket.on('music-video:dev-artifact', onArtifact);
     socket.on('connect', refresh);
@@ -99,7 +106,7 @@ export default function useMusicVideoCastAndSets({ project, replaceProject } = {
     });
     return () => {
       active = false;
-      if (refreshRef.current?.refresh === refresh) refreshRef.current = null;
+      if (refreshRef.current?.refresh === refreshCurrent) refreshRef.current = null;
       unsubscribeVisibility();
       socket.off('music-video:cast-and-sets', onStage);
       socket.off('music-video:dev-artifact', onArtifact);
