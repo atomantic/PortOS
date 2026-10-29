@@ -24,6 +24,7 @@ import { useMediaAnnotations } from '../hooks/useMediaAnnotations';
 import useMediaPreviewActions from '../hooks/useMediaPreviewActions';
 import useHydratedPreviewRoute from '../hooks/useHydratedPreviewRoute';
 import { useGalleryPage } from '../hooks/useGalleryPage';
+import { videoDeleteOutcome } from '../lib/videoDeleteOutcome';
 import socket from '../services/socket';
 import useMounted from '../hooks/useMounted';
 import { getMediaJob } from '../services/apiMediaJobs';
@@ -162,18 +163,19 @@ export default function MediaHistory() {
       const result = await (item.kind === 'image'
         ? deleteImage(item.filename, { silent: true })
         : deleteVideoHistoryItem(item.id, { silent: true }));
-      // The owner is offline: the delete waits for it, so the row stays, marked.
-      if (result?.status === 'pending') {
-        const peerId = result.pendingDelete?.peerId;
+      const outcome = item.kind === 'video' ? videoDeleteOutcome(result) : { remove: true, tone: 'success' };
+      // A delete that waits on, or did not reach, this machine's copy keeps the row.
+      if (!outcome.remove) {
+        const peerId = outcome.pendingDelete?.peerId;
         if (peerId && result.peerName) setPeerNames((prev) => ({ ...prev, [peerId]: result.peerName }));
-        withPendingDelete(item.key, result.pendingDelete || { peerId: null });
-        toast(`Delete pending until ${result.peerName || 'the owning machine'} is reachable`);
+        withPendingDelete(item.key, outcome.pendingDelete);
+        toast(outcome.notice);
         return;
       }
       setItems((all) => all.filter((x) => x.key !== item.key));
       page.setTotal(total => Math.max(0, total - 1));
       refresh();
-      if (result?.status === 'owner-unknown') toast('Owner unknown: hidden on this machine only, nothing was deleted');
+      if (outcome.tone === 'info') toast(outcome.notice);
     } catch (err) {
       toast.error(err.message || 'Delete failed');
     }

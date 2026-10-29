@@ -250,6 +250,22 @@ describe('remote video delete', () => {
     expect(toast).toHaveBeenCalledWith('Owner unknown: hidden on this machine only, nothing was deleted');
   });
 
+  it('keeps a row the owner deleted when the copy here was not removed, and says so', async () => {
+    deleteApi.deleteVideoHistoryItem.mockResolvedValue({ ok: true, status: 'deleted-remote', hiddenHere: false, peerName: 'Example Peer' });
+    open();
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete v1.mp4' }));
+    await waitFor(() => expect(toast).toHaveBeenCalledWith('Deleted on Example Peer; the copy on this machine remains'));
+    expect(screen.getByText('Clip one')).toBeInTheDocument();
+  });
+
+  it('drops a row the owner deleted whose copy here was hidden', async () => {
+    deleteApi.deleteVideoHistoryItem.mockResolvedValue({ ok: true, status: 'deleted-remote', hiddenHere: true, peerName: 'Example Peer' });
+    open();
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete v1.mp4' }));
+    await waitFor(() => expect(screen.queryByText('Clip one')).toBeNull());
+    expect(toast).toHaveBeenCalledWith('Deleted on Example Peer; the copy on this machine was only hidden');
+  });
+
   it('surfaces an owner refusal and keeps the row', async () => {
     deleteApi.deleteVideoHistoryItem.mockRejectedValue(new Error('Example Peer refused the delete'));
     open();

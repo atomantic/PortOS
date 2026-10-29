@@ -44,6 +44,7 @@ import { RUNWAY_SPECIAL_VIDEO_MODES, getRunwaySpecialVideoModel } from '../../..
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useSearchParams } from 'react-router';
 import { isMiniMaxH3Runtime } from '../lib/runnerFamilies';
+import { videoDeleteOutcome } from '../lib/videoDeleteOutcome';
 import { appendTriggerWords } from '../lib/loraTriggers';
 import Drawer from '../components/Drawer';
 import { ImageGenTab } from '../components/settings/ImageGenTab';
@@ -472,14 +473,19 @@ export default function VideoGen() {
     const result = await deleteVideoHistoryItem(raw.id, { silent: true })
       .catch((err) => { toast.error(err.message || 'Delete failed'); return null; });
     if (!result) return;
-    // An offline owner keeps the row here, marked, until the delete reaches it.
-    if (result.status === 'pending') {
-      setHistory((h) => h.map((v) => (v.id === raw.id ? { ...v, pendingDelete: result.pendingDelete } : v)));
-      toast(`Delete pending until ${result.peerName || 'the owning machine'} is reachable`);
+    const outcome = videoDeleteOutcome(result);
+    // A delete that waits on, or did not reach, this machine's copy keeps the row.
+    if (!outcome.remove) {
+      setHistory((h) => h.map((v) => {
+        if (v.id !== raw.id) return v;
+        const { pendingDelete: _previous, ...rest } = v; // eslint-disable-line no-unused-vars
+        return outcome.pendingDelete ? { ...rest, pendingDelete: outcome.pendingDelete } : rest;
+      }));
+      toast(outcome.notice);
       return;
     }
     setHistory((h) => h.filter((v) => v.id !== raw.id));
-    if (result.status === 'owner-unknown') toast('Owner unknown: hidden on this machine only, nothing was deleted');
+    if (outcome.tone === 'info') toast(outcome.notice);
   }, []);
   const handlePromptSaved = useCallback((item, prompt) => {
     const id = item?.id || item?.raw?.id;

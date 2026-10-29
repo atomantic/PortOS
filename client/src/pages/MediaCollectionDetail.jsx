@@ -13,6 +13,7 @@ import { useMediaAnnotations } from '../hooks/useMediaAnnotations';
 import { useAsyncAction } from '../hooks/useAsyncAction';
 import useGalleryPreviewResolver from '../hooks/useGalleryPreviewResolver';
 import { UNSORTED_ID, buildUnsortedCollection } from '../lib/unsorted';
+import { videoDeleteOutcome } from '../lib/videoDeleteOutcome';
 import {
   getMediaCollection, updateMediaCollection,
   listMediaCollections,
@@ -202,16 +203,21 @@ export default function MediaCollectionDetail() {
     });
     if (!ok) return;
     const matches = row => row.kind === item.kind && (row.kind === 'image' ? row.data.filename === item.filename : row.data.id === item.id);
-    // An offline owner keeps the row here, marked, until the delete reaches it.
-    if (ok.status === 'pending') {
-      page.setItems(rows => rows.map(row => (matches(row) ? { ...row, data: { ...row.data, pendingDelete: ok.pendingDelete } } : row)));
-      toast(`Delete pending until ${ok.peerName || 'the owning machine'} is reachable`);
+    const outcome = item.kind === 'video' ? videoDeleteOutcome(ok) : { remove: true, tone: 'success' };
+    // A delete that waits on, or did not reach, this machine's copy keeps the row.
+    if (!outcome.remove) {
+      page.setItems(rows => rows.map((row) => {
+        if (!matches(row)) return row;
+        const { pendingDelete: _previous, ...data } = row.data; // eslint-disable-line no-unused-vars
+        return { ...row, data: outcome.pendingDelete ? { ...data, pendingDelete: outcome.pendingDelete } : data };
+      }));
+      toast(outcome.notice);
       return;
     }
     page.setItems(rows => rows.filter(row => !matches(row)));
     page.setTotal(total => Math.max(0, total - 1));
     page.refresh();
-    if (ok.status === 'owner-unknown') toast('Owner unknown: hidden on this machine only, nothing was deleted');
+    if (outcome.tone === 'info') toast(outcome.notice);
     else toast.success(`Deleted ${item.kind === 'image' ? item.filename : 'video'}`);
   }, [page.setItems, page.setTotal, page.refresh]);
 
