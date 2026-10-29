@@ -14,6 +14,9 @@
  *   instead (#14133).
  * - A supplier or host names a machine that held the media, not its creator, so
  *   it never becomes an origin; any such id marks the install as federated.
+ *   Media tombstones carry no machine id, so an install whose every peer was
+ *   removed before this release leaves no trace and its old pulls are claimed
+ *   here; #14133 settles such a claim against an earlier holder.
  * - A record whose bytes are not on this machine is not claimed.
  *
  * An existing origin is never changed, so a re-run is a no-op. Writes go
