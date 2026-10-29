@@ -173,6 +173,58 @@ it('does not infer merged delivery or backup existence from successful execution
   expect(screen.queryByText('Local cleanup confirmed; preservation verified.')).not.toBeInTheDocument();
 });
 
+it('shows the verified assigned PR without claiming later local work was delivered or preserved', () => {
+  const prUrl = 'https://github.com/example/repo/pull/42';
+  const agent = { result: { success: true, executionSuccess: true, cleanupPending: true,
+    taskOutcome: { status: 'no-action-needed', reason: 'The assigned review target is merged.' } }, metadata: {
+    taskOutcomeSource: 'forge-verification', reviewLoopMergeTarget: { url: prUrl, branch: 'example' },
+    mergedReviewFollowUp: { status: 'verified', prUrl }, cleanupOutcome: { status: 'blocked', reason: 'worktree-dirty' },
+  } };
+  const view = render(<AgentResultLine agent={agent} />);
+  expect(screen.getByText('Assigned pull request merged.')).toBeInTheDocument();
+  expect(screen.getByText('Later local work may still need delivery verification.')).toBeInTheDocument();
+  expect(screen.getByText('Local cleanup is blocked. PortOS has not confirmed safe removal.')).toBeInTheDocument();
+  expect(screen.queryByText('Delivery verified.')).not.toBeInTheDocument();
+  expect(screen.queryByText('Completed successfully')).not.toBeInTheDocument();
+
+  view.rerender(<AgentResultLine agent={{ ...agent, result: { ...agent.result, success: false,
+    taskOutcome: { status: 'incomplete', reason: 'Cleanup is pending.', recovery: { mode: 'cleanup' } } } }} />);
+  expect(screen.getByText('Task incomplete')).toBeInTheDocument();
+  expect(screen.getByText('Assigned pull request merged.')).toBeInTheDocument();
+  expect(screen.getByText('Later local work may still need delivery verification.')).toBeInTheDocument();
+
+  view.rerender(<AgentResultLine agent={{ ...agent, metadata: { ...agent.metadata,
+    cleanupOutcome: { status: 'blocked', reason: 'absent-checkout-settlement-unverified', committedIntegrationVerified: true } } }} />);
+  expect(screen.getByText('Assigned pull request merged.')).toBeInTheDocument();
+  expect(screen.getByText('Later local work may still need delivery verification.')).toBeInTheDocument();
+  expect(screen.getByText('Local cleanup is blocked. PortOS has not confirmed safe removal.')).toBeInTheDocument();
+  expect(screen.queryByText('Code merged.')).not.toBeInTheDocument();
+
+  view.rerender(<AgentResultLine agent={{ ...agent, metadata: { ...agent.metadata,
+    cleanupOutcome: { status: 'already-absent', reason: 'already-absent-preservation-unverified' } } }} />);
+  expect(screen.getByText('Assigned pull request merged.')).toBeInTheDocument();
+  expect(screen.getByText('Later local work may still need delivery verification.')).toBeInTheDocument();
+  expect(screen.getByText('The local worktree is already gone; preservation still needs verification.')).toBeInTheDocument();
+  expect(screen.getByText('Next: PortOS must verify the remaining delivery and cleanup state.')).toBeInTheDocument();
+
+  for (const metadata of [
+    { ...agent.metadata, mergedReviewFollowUp: { status: 'verified', prUrl: 'https://github.com/example/repo/pull/99' } },
+    { ...agent.metadata, mergedReviewFollowUp: { status: 'unverified', prUrl } },
+    { ...agent.metadata, taskOutcomeSource: 'sentinel' },
+    { ...agent.metadata, reviewLoopMergeTarget: null },
+  ]) {
+    view.rerender(<AgentResultLine agent={{ ...agent, result: { ...agent.result, success: false }, metadata }} />);
+    expect(screen.queryByText('Assigned pull request merged.')).not.toBeInTheDocument();
+    expect(screen.getByText('Code delivery still needs verification.')).toBeInTheDocument();
+  }
+
+  view.rerender(<AgentResultLine agent={{ ...agent, metadata: { ...agent.metadata,
+    cleanupOutcome: { status: 'verified', committedIntegrationVerified: true } } }} />);
+  expect(screen.getByText('Code merged.')).toBeInTheDocument();
+  expect(screen.getByText('Local cleanup confirmed; preservation verified.')).toBeInTheDocument();
+  expect(screen.queryByText('Later local work may still need delivery verification.')).not.toBeInTheDocument();
+});
+
 it('lets verified current cleanup supersede only a stale cleanup-only handoff', () => {
   const record = { result: { success: false, executionSuccess: true, cleanupPending: true,
     taskOutcome: { status: 'incomplete', reason: 'Historical cleanup queued.', recovery: { mode: 'cleanup' } } },

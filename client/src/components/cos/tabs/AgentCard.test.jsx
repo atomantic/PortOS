@@ -1480,6 +1480,20 @@ it('keeps the current cleanup verdict primary and labels stale report and warnin
   expect(screen.getByText('Cleanup is queued with the checkout preserved.')).toBeInTheDocument();
 });
 
+it('shows the assigned merge and outstanding local-work warning on a completed agent card', () => {
+  const prUrl = 'https://github.com/example/repo/pull/42';
+  const current = { ...agent, result: { success: true, cleanupPending: true,
+    taskOutcome: { status: 'no-action-needed', reason: 'The assigned review target is merged.' } }, metadata: {
+    ...agent.metadata, taskOutcomeSource: 'forge-verification', reviewLoopMergeTarget: { url: prUrl, branch: 'example' },
+    mergedReviewFollowUp: { status: 'verified', prUrl }, cleanupOutcome: { status: 'blocked', reason: 'worktree-dirty' },
+  } };
+  render(<MemoryRouter><AgentCard agent={current} completed /></MemoryRouter>);
+  expect(screen.getByText('Assigned pull request merged.')).toBeInTheDocument();
+  expect(screen.getByText('Later local work may still need delivery verification.')).toBeInTheDocument();
+  expect(screen.getByText('Local cleanup is blocked. PortOS has not confirmed safe removal.')).toBeInTheDocument();
+  expect(screen.queryByText('Delivery verified.')).not.toBeInTheDocument();
+});
+
 
 it('shows a publication milestone on the running card without a terminal result', () => {
   render(<MemoryRouter><AgentCard agent={{ ...agent, status: 'running', result: null, completedAt: null,
