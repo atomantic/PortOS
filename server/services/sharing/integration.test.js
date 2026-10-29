@@ -393,6 +393,38 @@ describe('sharing round-trip', () => {
     }
   });
 
+  const LOCAL_FIELDS = { hidden: true, pendingDelete: { peerId: 'rec-peer', queuedAt: '2026-01-01T00:00:00.000Z' }, suppliedByInstanceId: 'third-inst' };
+
+  it("exports an image sidecar without this machine's own fields", async () => {
+    const bucket = await buckets.createBucket({ name: 'Example Bucket', path: tempBucket, mode: 'auto-merge' });
+    const universeBuilder = await import('../universeBuilder.js');
+    const mediaCollections = await import('../mediaCollections.js');
+    const u = await universeBuilder.createUniverse({ name: 'Example Universe' });
+    const png = pngBytes('LOCALFIELDS');
+    writeFileSync(join(tempData, 'images', 'own-fields.png'), png);
+    writeFileSync(join(tempData, 'images', 'own-fields.metadata.json'), JSON.stringify({ prompt: 'example', originInstanceId: 'origin-inst', ...LOCAL_FIELDS }));
+    const collection = await mediaCollections.findOrCreateCollectionByName({ name: `Universe: ${u.name}`, description: 'Linked', universeId: u.id });
+    await mediaCollections.addItem(collection.id, { kind: 'image', ref: 'own-fields.png' });
+    await exporter.exportUniverse(u.id, bucket.id);
+    const exported = JSON.parse(readFileSync(buckets.bucketBlobSidecarPath(tempBucket, sha256Hex(png)), 'utf8'));
+    expect(exported).toMatchObject({ prompt: 'example', originInstanceId: 'origin-inst' });
+    for (const key of Object.keys(LOCAL_FIELDS)) expect(exported).not.toHaveProperty(key);
+  });
+
+  it("imports an image sidecar without another machine's own fields", async () => {
+    const bucket = await buckets.createBucket({ name: 'Foreign fields', path: tempBucket, mode: 'auto-merge' });
+    const png = pngBytes('FOREIGN');
+    const hash = sha256Hex(png);
+    const dir = join(tempBucket, 'assets', 'blobs');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, hash), png);
+    writeFileSync(`${join(dir, hash)}.metadata.json`, JSON.stringify({ prompt: 'example', originInstanceId: 'origin-inst', ...LOCAL_FIELDS }));
+    const filename = writeAssetManifest([{ kind: 'image', ref: 'foreign.png', hash }], 'foreign-fields');
+    expect(await importer.processManifest(bucket.id, filename)).toMatchObject({ processed: true });
+    const imported = JSON.parse(readFileSync(join(tempData, 'images', buckets.imageSidecarName('foreign.png')), 'utf8'));
+    expect(imported).toEqual({ prompt: 'example', originInstanceId: 'origin-inst' });
+  });
+
   it('names an exported media record by its job id, never by an imported sidecar id', async () => {
     const bucket = await buckets.createBucket({ name: 'Example Bucket', path: tempBucket, mode: 'auto-merge' });
     const universeBuilder = await import('../universeBuilder.js');

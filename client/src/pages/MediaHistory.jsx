@@ -25,11 +25,12 @@ import { useMediaAnnotations } from '../hooks/useMediaAnnotations';
 import useMediaPreviewActions from '../hooks/useMediaPreviewActions';
 import useHydratedPreviewRoute from '../hooks/useHydratedPreviewRoute';
 import { useGalleryPage } from '../hooks/useGalleryPage';
+import { mediaDeleteOutcome } from '../lib/mediaDeleteOutcome';
 import socket from '../services/socket';
 import useMounted from '../hooks/useMounted';
 import { getMediaJob } from '../services/apiMediaJobs';
 import {
-  deleteVideoHistoryItem, stitchVideos, deleteImage,
+  deleteVideoHistoryItem, cancelVideoPendingDelete, cancelImagePendingDelete, stitchVideos, deleteImage, getInstances,
 } from '../services/api';
 
 const FILTERS = [
@@ -135,18 +136,64 @@ export default function MediaHistory() {
     }
   };
 
+  // Registry id → display name for "Delete pending on <peer>", read once when a
+  // pending row names a peer this page has not resolved yet.
+  const [peerNames, setPeerNames] = useState({});
+  const unresolvedPeerIds = useMemo(() => [...new Set(items.map((it) => it.pendingDelete?.peerId)
+    .filter((id) => typeof id === 'string' && !(id in peerNames)))].join(','), [items, peerNames]);
+  useEffect(() => {
+    if (!unresolvedPeerIds) return undefined;
+    let active = true;
+    const ids = unresolvedPeerIds.split(',');
+    getInstances({ silent: true }).catch(() => null).then((data) => {
+      // A failed lookup caches nothing, so a later items change retries it.
+      if (!active || !data) return;
+      const known = Object.fromEntries((data?.peers || []).map((p) => [p.id, p.name || p.id]));
+      setPeerNames((prev) => ({ ...prev, ...Object.fromEntries(ids.map((id) => [id, known[id] ?? null])) }));
+    });
+    return () => { active = false; };
+  }, [unresolvedPeerIds]);
+
+  const withPendingDelete = useCallback((key, pendingDelete) => setItems((all) => all.map((x) => {
+    if (x.key !== key) return x;
+    const { pendingDelete: _previous, ...raw } = x.raw; // eslint-disable-line no-unused-vars
+    return { ...x, pendingDelete, raw: pendingDelete ? { ...raw, pendingDelete } : raw };
+  })), [setItems]);
+
   const handleDelete = useCallback(async (item) => {
     try {
-      await (item.kind === 'image'
+      const result = await (item.kind === 'image'
         ? deleteImage(item.filename, { silent: true })
         : deleteVideoHistoryItem(item.id, { silent: true }));
+      const outcome = mediaDeleteOutcome(result, item.kind);
+      // A delete that waits on, or did not reach, this machine's copy keeps the row.
+      if (!outcome.remove) {
+        const peerId = outcome.pendingDelete?.peerId;
+        if (peerId && result.peerName) setPeerNames((prev) => ({ ...prev, [peerId]: result.peerName }));
+        withPendingDelete(item.key, outcome.pendingDelete);
+        toast(outcome.notice);
+        return;
+      }
       setItems((all) => all.filter((x) => x.key !== item.key));
       page.setTotal(total => Math.max(0, total - 1));
       refresh();
+      if (outcome.tone === 'info') toast(outcome.notice);
     } catch (err) {
       toast.error(err.message || 'Delete failed');
     }
-  }, [setItems, page.setTotal, refresh]);
+  }, [setItems, withPendingDelete, page.setTotal, refresh]);
+
+  const handleCancelPendingDelete = useCallback(async (item) => {
+    try {
+      await (item.kind === 'image'
+        ? cancelImagePendingDelete(item.filename, { silent: true })
+        : cancelVideoPendingDelete(item.id, { silent: true }));
+      withPendingDelete(item.key, null);
+      toast.success('Pending delete cancelled');
+    } catch (err) {
+      toast.error(err.message || 'Cancel failed');
+    }
+  }, [withPendingDelete]);
 
   const handlePromptSaved = useCallback((item, prompt) => {
     setItems((all) => all.map((current) => current.key === item.key ? { ...current, prompt } : current));
@@ -297,6 +344,8 @@ export default function MediaHistory() {
                   onContinue={!stitchMode ? handleContinue : undefined}
                   onUpscale={!stitchMode && it.kind === 'video' ? handleUpscale : undefined}
                   onDelete={!stitchMode ? handleDelete : undefined}
+                  onCancelPendingDelete={!stitchMode ? handleCancelPendingDelete : undefined}
+                  pendingPeerName={it.pendingDelete?.peerId ? peerNames[it.pendingDelete.peerId] : null}
                   selectionLabel={idx !== -1 ? idx + 1 : null}
                   selected={idx !== -1}
                   disabled={stitchMode && it.kind !== 'video'}

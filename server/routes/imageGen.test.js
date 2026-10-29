@@ -134,6 +134,11 @@ vi.mock('../services/mediaJobQueue/index.js', () => ({
 
 const recordUserAction = vi.hoisted(() => vi.fn(async () => ({ id: 'evt' })));
 vi.mock('../services/userActions.js', () => ({ recordUserAction }));
+const remoteDelete = vi.hoisted(() => ({
+  deleteMediaAnywhere: vi.fn(async () => ({ status: 'pending', pendingDelete: { peerId: 'rec-owner', queuedAt: '2026-01-01T00:00:00.000Z' }, peerName: 'Example Owner' })),
+  cancelPendingDelete: vi.fn(async () => ({ ok: true, cancelled: true })),
+}));
+vi.mock('../services/mediaRemoteDelete.js', () => remoteDelete);
 
 // The /generate route resolves an optional universeRun collection target via
 // findOrCreateUniverseCollection. Mock it so the universeRun test asserts the
@@ -226,6 +231,16 @@ describe('Image Gen Routes', () => {
     app.use('/api/image-gen', imageGenRoutes);
     app.use(errorMiddleware);
     vi.clearAllMocks();
+  });
+
+  it('deletes an image on the machine that owns it and reports a pending delete as pending', async () => {
+    const res = await request(app).delete('/api/image-gen/fox.png');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true, status: 'pending', pendingDelete: { peerId: 'rec-owner', queuedAt: '2026-01-01T00:00:00.000Z' }, peerName: 'Example Owner' });
+    expect(remoteDelete.deleteMediaAnywhere).toHaveBeenCalledWith('image', 'fox.png');
+    const cancel = await request(app).post('/api/image-gen/fox.png/cancel-delete');
+    expect(cancel.body).toEqual({ ok: true, cancelled: true });
+    expect(remoteDelete.cancelPendingDelete).toHaveBeenCalledWith('image', 'fox.png');
   });
 
   it('binds quick-edit preview to provider defaults and persists the exact composition without changing authored text', async () => {

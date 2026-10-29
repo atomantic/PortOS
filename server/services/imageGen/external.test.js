@@ -14,6 +14,7 @@ vi.mock('../../lib/fileUtils.js', () => ({
 vi.mock('./frameGuard.js', () => ({ rejectDegenerateFrame: async () => null }));
 vi.mock('../../lib/imageClean.js', () => ({ autoCleanGeneratedImage: vi.fn() }));
 vi.mock('../imageGenEvents.js', () => ({ imageGenEvents }));
+vi.mock('../instanceIdentity.js', () => ({ UNKNOWN_INSTANCE_ID: 'unknown', getInstanceId: async () => 'local-inst' }));
 
 import { atomicWrite } from '../../lib/fileUtils.js';
 import { naturalUniverseVisualProfile } from '../../lib/universeVisualProfile.js';
@@ -111,4 +112,12 @@ it('publishes a source sidecar with exact prompt and profile facts for optional 
   const write = atomicWrite.mock.calls.find(([path]) => path.endsWith(result.filename.replace('.png', '.metadata.json')));
   expect(write).toBeDefined();
   expect(JSON.parse(write[1])).toMatchObject({ prompt: 'Exact source prompt', visualProfile: profile, visualProfileRevision: 'example-revision', mode: 'external' });
+});
+
+it('records this machine as origin, with a creation time, for a plain render with no profile sidecar', async () => {
+  atomicWrite.mockClear();
+  fetchWithTimeout.mockImplementation(async url => response(url.endsWith('/txt2img') ? { images: ['aGVsbG8='] } : { sd_model_checkpoint: 'example-model' }));
+  const result = await generateImage({ sdapiUrl: 'http://example.test', prompt: 'Plain prompt' });
+  const write = atomicWrite.mock.calls.find(([path]) => path.endsWith(result.filename.replace('.png', '.metadata.json')));
+  expect(write?.[1]).toEqual({ originInstanceId: 'local-inst', createdAt: expect.any(String) });
 });

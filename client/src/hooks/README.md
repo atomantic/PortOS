@@ -72,7 +72,7 @@ grep -i "what you want to do" client/src/hooks/README.md
 |---|---|---|
 | `useAvatarCapabilities` | Verified animated records for the avatar selectors (`GET /avatar/rigged`) plus the honest state→clip resolvers (`resolveStateClip`, `resolvePlaybackClip`, `coverageSummary`): an uncovered CoS state falls back to a clip the character actually has, never a pretended one. | Any surface offering or playing a rigged-record avatar (CoS avatar selector, CoS playback). |
 | `useMediaAnnotations` | Per-entry `own`/`others` annotations with back-compat aliases. | Showing media annotations + ownership. |
-| `useMediaCompletionRefresh` | Refetch on image/video completion socket events. | A list view that needs to refresh when new media lands. |
+| `useMediaCompletionRefresh` | Refetch on image/video completion and `media:history:changed` socket events. | A list view that needs to refresh when new media lands. |
 | `useOpenClawAttachments` | File attachment handling (base64, size-capped). | OpenClaw attachment UI. |
 | `useMediaPreviewActions` | Shared MediaPreview / MediaLightbox action handlers (images + videos — dispatch by `item.kind`). | New surface that exposes the same 4 preview actions. |
 | `useClonedGltf` | Clones a drei-cached GLTF scene with skeleton bindings intact and wires its animations; the colocated `GltfPrimitive` prevents R3F from disposing shared cache resources. Accepts an optional animation transform for derived clip sets. | Any skinned GLTF rendered from `useGLTF`; render its scene through `GltfPrimitive` so remounts cannot inherit disposed geometry or materials. |

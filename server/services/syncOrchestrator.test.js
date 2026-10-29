@@ -19,6 +19,12 @@ vi.mock('./instanceIdentity.js', () => ({
   // a stable id to exercise the scoped path.
   getInstanceId: vi.fn().mockResolvedValue('our-inst-id'),
 }));
+// The relay's live-subscription state drives the safety-net cadence.
+vi.mock('./peerSocketRelay.js', () => ({
+  connectToPeer: vi.fn(),
+  disconnectFromPeer: vi.fn(),
+  peerRealtimeSyncSince: vi.fn(() => null),
+}));
 vi.mock('./brainSyncLog.js', () => ({
   getChangesSince: vi.fn(),
   getCurrentSeq: vi.fn(() => 0),
@@ -139,6 +145,7 @@ import { getCurrentSeq, compactLog } from './brainSyncLog.js';
 import { getBrainChecksum, applyBrainSnapshot } from './brainReconcile.js';
 import { getMaxSequence } from './memorySync.js';
 import { peerFetch } from '../lib/peerHttpClient.js';
+import { peerRealtimeSyncSince } from './peerSocketRelay.js';
 import {
   syncWithPeer,
   syncAllPeers,
@@ -146,6 +153,7 @@ import {
   initSyncOrchestrator,
   stopSyncOrchestrator,
   BRAIN_TOMBSTONE_SWEEP_INTERVAL_MS,
+  SAFETY_NET_INTERVAL_MS,
 } from './syncOrchestrator.js';
 
 const nativeFetch = globalThis.fetch;
@@ -545,6 +553,59 @@ describe('syncOrchestrator', () => {
       expect(call[2]).toBe(peerWithCats);
       // The 15s budget survived the move off fetchWithTimeout.
       expect(call[1].signal).toBeInstanceOf(AbortSignal);
+    });
+  });
+
+  // Cases the two-machine e2e (mediaPeerDelete.e2e.test.js) cannot reach cheaply.
+  describe('safety-net cadence for realtime-connected peers', () => {
+    const peer = { ...mockPeer, id: 'rec-peer', syncCategories: { brain: false, memory: false, videoHistory: true } };
+    const tick = () => syncWithPeer(peer, { periodic: true });
+    const videoPulls = () => mockFetch.mock.calls.filter(([url]) => url.includes('/api/sync/videoHistory/checksum')).length;
+
+    beforeEach(async () => {
+      const dataSync = await import('./dataSync.js');
+      dataSync.getSupportedCategories.mockReturnValue(['videoHistory']);
+      mockFetch.mockResolvedValue({ ok: true, json: async () => ({ checksum: 'video-cksum', data: {} }) });
+    });
+
+    afterEach(async () => {
+      const dataSync = await import('./dataSync.js');
+      dataSync.getSupportedCategories.mockReturnValue(['goals', 'character', 'digitalTwin', 'meatspace']);
+      peerRealtimeSyncSince.mockReturnValue(null);
+    });
+
+    it('pulls on the next tick when the subscription came up after the last snapshot', async () => {
+      peerRealtimeSyncSince.mockReturnValue(Date.now());
+      await tick();
+      vi.advanceTimersByTime(60_000);
+      await tick();
+      expect(videoPulls()).toBe(1);
+
+      // The relay reconnected: frames sent before this were missed.
+      peerRealtimeSyncSince.mockReturnValue(Date.now());
+      vi.advanceTimersByTime(60_000);
+      await tick();
+      expect(videoPulls()).toBe(2);
+    });
+
+    it('pulls when the clock was set back behind the last snapshot', async () => {
+      peerRealtimeSyncSince.mockReturnValue(Date.now() - 1000);
+      await tick();
+      vi.setSystemTime(Date.now() - 10 * 60_000);
+      await tick();
+      expect(videoPulls()).toBe(2);
+    });
+
+    it('pulls on the tick nearest the interval, not the one after it', async () => {
+      peerRealtimeSyncSince.mockReturnValue(Date.now());
+      await tick();
+      vi.advanceTimersByTime(4 * 60_000);
+      await tick();
+      expect(videoPulls()).toBe(1);
+      // The fifth-minute tick, firing a little early.
+      vi.advanceTimersByTime(SAFETY_NET_INTERVAL_MS - 4 * 60_000 - 20_000);
+      await tick();
+      expect(videoPulls()).toBe(2);
     });
   });
 

@@ -39,8 +39,11 @@ import { mergeSeriesFromSync, listSeries } from './pipeline/series.js';
 import { mergeIssuesFromSync, listAllIssues } from './pipeline/issues.js';
 import { getPeers } from './instances.js';
 import { mutateVideoHistory, HISTORY_UNCHANGED } from './videoGen/history.js';
-import { reconcileHostedMedia } from './peerHostedMedia.js';
+import { listHostedEntries, reconcileHostedMedia } from './peerHostedMedia.js';
 import { sanitizeAssetFilename } from './sharing/buckets.js';
+import { authorizeRemoteMediaTombstone } from './mediaTombstoneAuthorization.js';
+import { listMediaTombstones, mergeMediaTombstones } from './mediaTombstones.js';
+import { emitMediaHistoryChanged } from './peerSyncEventBus.js';
 import { referenceCollectionAssetManifest } from './sharing/peerSyncAssets.js';
 import { mergeMediaCollectionsFromSync, listCollections, itemKey } from './mediaCollections.js';
 import { listSyncableSessionsForWire, mergeStorySessionsFromSync } from './storyBuilder.js';
@@ -916,14 +919,23 @@ async function getVideoHistorySnapshot() {
   // but strip `hidden` itself so the checksum is hide-state-independent and the
   // flag doesn't propagate (the receiver keeps its own local `hidden` because
   // the immutable-`createdAt` LWW merge keeps the existing row on a tie).
+  // `suppliedByInstanceId` is likewise MACHINE-LOCAL (who handed THIS machine the
+  // row); stripped so identical row sets hash identically. `originInstanceId` syncs.
+  // `pendingDelete` (a delete queued for the row's owner) is this machine's own work.
   // Canonicalize ordering for the wire so two peers holding identical sets
   // produce identical checksums regardless of insertion (newest-first) order.
   // Mirrors getMediaCollectionsSnapshot's sort-by-id rationale.
   const data = {
     videos: rows
-      .map(({ hidden, ...rest }) => rest) // eslint-disable-line no-unused-vars
+      .map(({ hidden, suppliedByInstanceId, pendingDelete, ...rest }) => rest) // eslint-disable-line no-unused-vars
       .sort((a, b) => a.id.localeCompare(b.id)),
   };
+  // Deliberate deletes ride the snapshot so a peer still holding the row can't
+  // resurrect it. Sorted by key for a deterministic checksum. The key is OMITTED
+  // when empty so a peer with no deletes keeps the exact pre-tombstone checksum
+  // (an older peer that ignores `tombstones` would otherwise never converge).
+  const tombstones = [...(await listMediaTombstones('video'))].sort((a, b) => a.key.localeCompare(b.key));
+  if (tombstones.length > 0) data.tombstones = tombstones;
   return { data, checksum: computeChecksum(data) };
 }
 
@@ -946,17 +958,41 @@ export async function getHostedMediaInventory(category = 'videoHistory', kind = 
   return { version: 1, filenames, checked, portosMeta: await buildPortosMeta() };
 }
 
-async function applyVideoHistoryRemote(remoteData) {
+async function applyVideoHistoryRemote(remoteData, source) {
   if (!remoteData) return { applied: false, count: 0 };
-  const incoming = Array.isArray(remoteData.videos) ? remoteData.videos : [];
-  if (incoming.length === 0) return { applied: false, count: 0 };
+  const incomingRows = Array.isArray(remoteData.videos) ? remoteData.videos : [];
+  const incomingTombstones = Array.isArray(remoteData.tombstones) ? remoteData.tombstones : [];
+  if (incomingRows.length === 0 && incomingTombstones.length === 0) return { applied: false, count: 0 };
+
+  // Tombstones merge first so the row merge below sees the full delete set;
+  // only the ones the sender is authorized for ever reach the store.
+  const removedCount = await applyRemoteVideoTombstones(await authorizedSnapshotTombstones(incomingTombstones, source));
+  const { count } = await mergeVideoRows(incomingRows, source);
+  const changedCount = count + removedCount;
+  if (changedCount === 0) return { applied: false, count: 0 };
+  console.log(`🔄 VideoHistory sync: merged ${changedCount} video row(s)`);
+  return { applied: true, count: changedCount };
+}
+
+/**
+ * The one video-row merge, shared by the snapshot path and realtime
+ * `peer:sync:event` upserts. `source.peerId` is the SENDER's instance id.
+ * Drops tombstoned rows, then union-merges by id (LWW on `createdAt`) inside the history write queue.
+ * Returns `{ count, ids }` for rows actually added or updated.
+ */
+export async function mergeVideoRows(incomingRows, source) {
+  const tombstones = await listMediaTombstones('video');
+  // A row survives a tombstone only when it was (re)created after the delete.
+  const isDeleted = (r) => isTombstoned(tombstones, r.id, r.createdAt, 'key');
+  const incoming = (Array.isArray(incomingRows) ? incomingRows : []).filter((r) => !(hasVideoRowId(r) && isDeleted(r)));
+  if (incoming.length === 0) return { count: 0, ids: [] };
 
   // The whole read/merge/write runs inside the shared history mutation queue so
   // a local completion (videoDownload) or another peer's snapshot can't be
   // overwritten by this merge's stale base. The queue's read is STRICT (#4115):
   // an unreadable file rejects instead of becoming an empty merge base that
   // would delete every local-only row on write-back.
-  let changedCount = 0;
+  const changedIds = [];
   await mutateVideoHistory((local) => {
     // Union by `id`, LWW on `createdAt` when both sides know the same row.
     // Video-history rows are append-mostly and immutable once written, so
@@ -967,13 +1003,30 @@ async function applyVideoHistoryRemote(remoteData) {
     const hasId = hasVideoRowId;
     const keyed = local.filter(hasId);
     const before = new Map(keyed.map((r) => [r.id, r]));
-    const { merged, changed } = mergeArraysByKey(
+    const { merged: rawMerged, changed } = mergeArraysByKey(
       keyed,
-      incoming.filter(hasId),
+      // suppliedByInstanceId and pendingDelete are local-only: never trust a sender's value.
+      incoming.filter(hasId).map(({ suppliedByInstanceId, pendingDelete, ...rest }) => rest), // eslint-disable-line no-unused-vars
       'id',
       'createdAt',
     );
     if (!changed) return HISTORY_UNCHANGED;
+    // Ownership of a row held here never comes from a sender: its origin and
+    // supplier stay the local values, even when absent (an origin-less row stays
+    // origin-less, or any peer could claim it and then delete it). Only a row
+    // newly added here takes the incoming origin, with this sender as supplier.
+    const merged = rawMerged.map((row) => {
+      const prev = before.get(row.id);
+      if (prev === row) return row;
+      const { originInstanceId: incomingOrigin, ...content } = row;
+      const originInstanceId = prev ? prev.originInstanceId : incomingOrigin;
+      const suppliedByInstanceId = prev ? prev.suppliedByInstanceId : source?.peerId;
+      return {
+        ...content,
+        ...(originInstanceId ? { originInstanceId } : {}),
+        ...(suppliedByInstanceId ? { suppliedByInstanceId } : {}),
+      };
+    });
 
     // `count` reports rows actually added/updated by this merge (not total
     // post-merge size — that would over-report when callers sum across
@@ -981,7 +1034,7 @@ async function applyVideoHistoryRemote(remoteData) {
     // `count` contract.
     for (const row of merged) {
       const prev = before.get(row.id);
-      if (!prev || prev !== row) changedCount++;
+      if (!prev || prev !== row) changedIds.push(row.id);
     }
 
     // Preserve any local rows that lacked an id (the merge dropped them from its
@@ -991,10 +1044,79 @@ async function applyVideoHistoryRemote(remoteData) {
     // Media History grid expects them.
     return [...merged, ...idless].sort((a, b) =>
       String(b?.createdAt ?? '').localeCompare(String(a?.createdAt ?? '')));
-  });
-  if (changedCount === 0) return { applied: false, count: 0 };
-  console.log(`🔄 VideoHistory sync: merged ${changedCount} video row(s)`);
-  return { applied: true, count: changedCount };
+  }, { stampOrigin: false });
+  emitMediaHistoryChanged({ kind: 'video', op: 'upsert', ids: changedIds });
+  return { count: changedIds.length, ids: changedIds };
+}
+
+// Snapshot tombstones pass the shared admission rule (mediaTombstoneAuthorization.js)
+// against the sender's registry record; an unknown sender's are all refused.
+async function authorizedSnapshotTombstones(tombstones, source) {
+  if (tombstones.length === 0) return [];
+  const peer = source?.peerId
+    ? (await getPeers().catch(() => [])).find((p) => p.instanceId === source.peerId) ?? null
+    : null;
+  const local = await readJSONFile(VIDEO_HISTORY_FILE, [], { strict: true });
+  const rowsById = new Map((Array.isArray(local) ? local : []).filter(hasVideoRowId).map((r) => [r.id, r]));
+  const hostedIndex = await listHostedEntries();
+  const accepted = tombstones.filter((tombstone) => authorizeRemoteMediaTombstone({
+    peer, tombstone, localRow: rowsById.get(tombstone?.key) ?? null, hostedIndex, via: 'snapshot',
+  }).allowed);
+  const ignored = tombstones.length - accepted.length;
+  if (ignored > 0) console.log(`⏭️ VideoHistory snapshot from ${source?.peerId ?? 'unknown sender'}: ignored ${ignored} tombstone(s)`);
+  return accepted;
+}
+
+/**
+ * Merge an ALREADY AUTHORIZED video tombstone list (authorizeRemoteMediaTombstone)
+ * and trash every local row (and its files) it supersedes. Returns the number
+ * of local rows removed. `fromRemoteTombstone` keeps deleteHistoryItem from
+ * re-recording the tombstone or re-announcing the delete.
+ */
+export async function applyRemoteVideoTombstones(remoteTombstones) {
+  if (!Array.isArray(remoteTombstones) || remoteTombstones.length === 0) return 0;
+  await mergeMediaTombstones('video', remoteTombstones);
+  const tombstones = await listMediaTombstones('video');
+  const local = await readJSONFile(VIDEO_HISTORY_FILE, [], { strict: true });
+  // Only the rows these authorized tombstones name: a row another tombstone
+  // in the store covers has not been admitted for this sender.
+  const keys = new Set(remoteTombstones.map((t) => t?.key).filter((key) => typeof key === 'string'));
+  const doomed = (Array.isArray(local) ? local : [])
+    .filter((r) => hasVideoRowId(r) && keys.has(r.id) && isTombstoned(tombstones, r.id, r.createdAt, 'key'));
+  if (doomed.length === 0) return 0;
+  // Lazy import: historyOps pulls in trash/ffmpeg machinery the sync read path avoids.
+  const { deleteHistoryItem } = await import('./videoGen/historyOps.js');
+  let removed = 0;
+  const failures = [];
+  for (const row of doomed) {
+    try {
+      // Re-checked under the history writer: a replacement row written since the
+      // read above carries a newer createdAt and must survive this tombstone.
+      const result = await deleteHistoryItem(row.id, {
+        fromRemoteTombstone: true,
+        onlyIf: (current) => isTombstoned(tombstones, current.id, current.createdAt, 'key'),
+      });
+      if (result?.skipped) {
+        console.log(`⏭️ VideoHistory tombstone: ${row.id} was re-created since the delete`);
+        continue;
+      }
+      removed++;
+    } catch (err) {
+      // Row already gone is an expected race with a concurrent local delete.
+      if (err?.code === 'NOT_FOUND') {
+        console.log(`⏭️ VideoHistory tombstone: ${row.id} already removed`);
+        continue;
+      }
+      console.error(`❌ VideoHistory tombstone removal failed for ${row.id}: ${err.message}`);
+      failures.push(row.id);
+    }
+  }
+  // Fail the apply so the caller retries (a snapshot keeps its checksum uncached)
+  // instead of leaving a tombstoned row and its files in place.
+  if (failures.length > 0) {
+    throw new Error(`VideoHistory tombstone removal failed for ${failures.length} row(s): ${failures.join(', ')}`);
+  }
+  return removed;
 }
 
 // --- Category: Story Builder sessions ---

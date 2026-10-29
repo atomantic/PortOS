@@ -11,6 +11,7 @@ import useConfirmDelete from '../hooks/useConfirmDelete.js';
 import useListResource from '../hooks/useListResource';
 import { listVideoDownloads, deleteVideoDownload } from '../services/apiVideoDownload.js';
 import { timeAgo, formatTimecode } from '../utils/formatters';
+import { mediaDeleteOutcome } from '../lib/mediaDeleteOutcome';
 
 const loadVideoDownloads = () => listVideoDownloads({ silent: true });
 
@@ -46,7 +47,12 @@ export default function VideoDownloaderPage() {
   const onDelete = (id) => confirmDelete(async () => {
     setDeletingId(id);
     await deleteVideoDownload(id, { silent: true })
-      .then(() => setDownloads((prev) => prev.filter((d) => d.id !== id)))
+      .then((result) => {
+        // A peer's download is deleted on its owner; one still waiting on it stays listed.
+        const outcome = mediaDeleteOutcome(result, 'video');
+        if (outcome.remove) setDownloads((prev) => prev.filter((d) => d.id !== id));
+        if (outcome.tone === 'info') toast(outcome.notice);
+      })
       .catch((err) => toast.error(err?.message || 'Failed to delete video'))
       .finally(() => setDeletingId(null));
   });

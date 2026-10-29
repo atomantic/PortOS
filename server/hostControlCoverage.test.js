@@ -567,6 +567,7 @@ const REVIEWED_OPEN_MUTATIONS = [
   ['POST /api/image-clean/result/:jobId/save', RECORDS],
   // /api/image-gen
   ['DELETE /api/image-gen/:filename', REMOVES_RECORD],
+  ['POST /api/image-gen/:filename/cancel-delete', REDUCES_EXECUTION],
   ['POST /api/image-gen/:filename/clean', IN_PROCESS_MEDIA],
   ['PATCH /api/image-gen/:filename/prompt', RECORDS],
   ['POST /api/image-gen/:filename/remove-watermark', IN_PROCESS_MEDIA],
@@ -948,6 +949,8 @@ const REVIEWED_OPEN_MUTATIONS = [
   ['POST /api/peer-administration/execution-status', HANDLER_GATED],
   ['POST /api/peer-administration/grants', HANDLER_GATED],
   ['POST /api/peer-administration/preview', HANDLER_GATED],
+  // /api/peer-media
+  ['POST /api/peer-media/delete', PEER_SURFACE],
   // /api/peer-sync
   ['POST /api/peer-sync/pull-metadata', PEER_SYNC],
   ['POST /api/peer-sync/pull-record', PEER_SYNC],
@@ -1272,6 +1275,7 @@ const REVIEWED_OPEN_MUTATIONS = [
   // /api/video-gen
   ['POST /api/video-gen/cancel', REDUCES_EXECUTION],
   ['DELETE /api/video-gen/history/:id', REMOVES_RECORD],
+  ['POST /api/video-gen/history/:id/cancel-delete', REDUCES_EXECUTION],
   ['PATCH /api/video-gen/history/:id/prompt', RECORDS],
   ['POST /api/video-gen/history/:id/visibility', RECORDS],
   ['POST /api/video-gen/ic-loras/:mode/download', MODEL_DATA],
@@ -1499,6 +1503,8 @@ const MUSIC_VIDEO_PLAN_READ = "Plans the render to report shot, look or cleanup 
 const MOLTBOOK_READ = 'Reads from the Moltbook API with the stored agent key; a response that demands verification is answered with the account\'s configured model and screened by the local abuse classifier, as on every Moltbook call.';
 const PEER_PAYLOAD = 'Peer endpoint in PEER_API_SURFACE that builds its payload from stored records; the executors the trace reaches come from whole-module namespace imports of the stores it reads.';
 const PEER_ADMIN_READ = 'Describes peer-administration state from stored grants and catalog reviews; the installer and execution adapters the trace reaches run only from the handler-gated execution and catalog-review writes.';
+const SYNC_CATEGORY_TABLE = "Reads sync categories, checksums, a manifest or a snapshot; the trace follows the snapshot category table whole into its applyRemote handlers, whose tombstone apply trashes a peer-deleted video only when a pulled peer snapshot is applied, never from a GET.";
+const PEER_RELAY_LISTENER = "Reads stored records through a whole-module instances.js import; the trace reaches probePeer and the socket relay's `peer:sync:event` listener, which trashes a video only when a delete frame from its paired owner arrives, never from this GET.";
 
 // 'METHOD /path' as scanRouteGraph spells it, like REVIEWED_OPEN_MUTATIONS.
 const REVIEWED_PROCESS_GETS = [
@@ -1509,13 +1515,16 @@ const REVIEWED_PROCESS_GETS = [
   ['GET /api/agents/tools/rate-limits', MOLTBOOK_READ],
   ['GET /api/agents/tools/relevant-posts', MOLTBOOK_READ],
   ['GET /api/agents/tools/submolts', MOLTBOOK_READ],
+  ['GET /api/apps', PEER_RELAY_LISTENER],
   ['GET /api/apps/:id', FORGE_READ],
   ['GET /api/apps/:id/issues', FORGE_READ],
   ['GET /api/apps/:id/lane-health', FORGE_READ],
   ['GET /api/apps/:id/logs', PM2_READ],
   ['GET /api/apps/:id/pull-requests', FORGE_READ],
+  ['GET /api/apps/:id/quality-history', PEER_RELAY_LISTENER],
   ['GET /api/apps/:id/quality-schedule', FORGE_READ],
   ['GET /api/apps/:id/repository-sources', "Inspects a managed app's checkouts with read-only git and gh queries, and refreshes origin with `git fetch` when the last fetch is stale; a fetch updates only remote-tracking refs, and the caller chooses no repository, remote or command."],
+  ['GET /api/apps/quality-federation', PEER_RELAY_LISTENER],
   ['GET /api/beeper/oauth/callback', 'OAuth redirect target: stores the credential Beeper returns and arms its ingestion socket to the fixed Beeper endpoint, as completing the connection the operator started requires.'],
   ['GET /api/browser', "Reads the managed browser's status, including its tab list over CDP; a caller without host control gets pages and downloads stripped (#12488)."],
   ['GET /api/browser/logs', PM2_READ],
@@ -1553,6 +1562,8 @@ const REVIEWED_PROCESS_GETS = [
   ['GET /api/image-to-3d/targets', 'Reports image-to-3D target install state with each adapter\'s fixed probes (Metal toolchain, module imports); the adapter table\'s install and generate functions run only from the gated install and generate routes.'],
   ['GET /api/image-to-3d/targets/:targetId/install', 'Reports image-to-3D target install state with each adapter\'s fixed probes (Metal toolchain, module imports); the adapter table\'s install and generate functions run only from the gated install and generate routes.'],
   ['GET /api/image-to-3d/trellis2/install', 'Reports image-to-3D target install state with each adapter\'s fixed probes (Metal toolchain, module imports); the adapter table\'s install and generate functions run only from the gated install and generate routes.'],
+  ['GET /api/instances', SYNC_CATEGORY_TABLE],
+  ['GET /api/instances/sync-status', SYNC_CATEGORY_TABLE],
   ['GET /api/iterm/status', 'Reports iTerm2 bridge availability from fixed probes (`defaults read`, an is-running AppleScript) and the bridge\'s current state; opens no API connection.'],
   ['GET /api/local-llm/assessments', RUNTIME_STATUS],
   ['GET /api/local-llm/capability-tests', RUNTIME_STATUS],
@@ -1608,6 +1619,7 @@ const REVIEWED_PROCESS_GETS = [
   ['GET /api/providers/comparison', TOOLKIT_INJECTED],
   ['GET /api/providers/composites/:id', PROVIDER_STATUS],
   ['GET /api/providers/fleet-host', PROVIDER_STATUS],
+  ['GET /api/providers/fleet-host/usage', PEER_RELAY_LISTENER],
   ['GET /api/providers/harnesses', PROVIDER_STATUS],
   ['GET /api/providers/management/preview', TOOLKIT_INJECTED],
   ['GET /api/providers/model-pins', FORGE_READ],
@@ -1626,6 +1638,10 @@ const REVIEWED_PROCESS_GETS = [
   ['GET /api/settings/ai-assignments', FORGE_READ],
   ['GET /api/settings/media-share-candidates', 'Reports which local media generators this install offers peers, from readiness probes and the media-job queue\'s in-memory state; the encoders in the queue\'s runtime table run only from its worker.'],
   ['GET /api/sprites/:id/walk/runs/:runId/source-frames', 'Lists the raw frames already on disk for a walk run; the ffmpeg re-extraction the trace reaches runs only for `extract: true`, which only the gated POST .../source-frames/extract passes (#13156).'],
+  ['GET /api/sync', SYNC_CATEGORY_TABLE],
+  ['GET /api/sync/:category/checksum', SYNC_CATEGORY_TABLE],
+  ['GET /api/sync/:category/manifest', SYNC_CATEGORY_TABLE],
+  ['GET /api/sync/:category/snapshot', SYNC_CATEGORY_TABLE],
   ['GET /api/system/activity', ACTIVE_WORK_READ],
   ['GET /api/system/health/details', JOB_TABLE],
   ['GET /api/system/processing', ACTIVE_WORK_READ],

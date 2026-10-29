@@ -38,6 +38,7 @@ import {
   peerSyncNowSchema,
   peerPullMetadataSchema,
   peerLibraryManifestQuerySchema,
+  PEER_LIBRARY_TOMBSTONES_HEADER,
   COS_ARCHIVE_DATE_RE,
   COS_AGENT_ID_RE,
   COS_ARCHIVE_FILES,
@@ -178,7 +179,10 @@ router.get('/manifest', asyncHandler(async (req, res) => {
 router.get('/library-manifest', asyncHandler(async (req, res) => {
   await authorizePeerPull(req, { route: 'library-manifest' });
   const query = validateRequest(peerLibraryManifestQuerySchema, req.query);
-  res.json(await buildMediaLibraryManifest({ models: query.models === '1' }));
+  res.json(await buildMediaLibraryManifest({
+    models: query.models === '1',
+    tombstones: req.get(PEER_LIBRARY_TOMBSTONES_HEADER) === '1',
+  }));
 }));
 
 // --- GET /cos-history-manifest --- advertise this instance's completed-agent

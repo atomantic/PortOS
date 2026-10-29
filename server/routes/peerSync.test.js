@@ -616,10 +616,12 @@ describe('peer-sync routes', () => {
       const res = await request(buildApp()).get('/api/peer-sync/library-manifest');
       expect(res.status).toBe(200);
       expect(res.body).toEqual(manifest);
-      expect(svc.buildMediaLibraryManifest).toHaveBeenCalledWith({ models: false });
-      const capable = await request(buildApp()).get('/api/peer-sync/library-manifest?models=1');
+      expect(svc.buildMediaLibraryManifest).toHaveBeenCalledWith({ models: false, tombstones: false });
+      const capable = await request(buildApp()).get('/api/peer-sync/library-manifest?models=1')
+        .set('X-PortOS-Library-Tombstones', '1');
       expect(capable.status).toBe(200);
-      expect(svc.buildMediaLibraryManifest).toHaveBeenLastCalledWith({ models: true });
+      // Image tombstones only for a receiver that says it applies them.
+      expect(svc.buildMediaLibraryManifest).toHaveBeenLastCalledWith({ models: true, tombstones: true });
     });
   });
 

@@ -1,17 +1,17 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Mock the history store so listDownloads/deleteDownload can be exercised
-// without touching disk, and mock deleteHistoryItem so deleteDownload's
+// without touching disk, and mock the owner-aware delete so deleteDownload's
 // delegation is observable.
-const { historyStore, deleteHistoryItem } = vi.hoisted(() => ({
+const { historyStore, deleteMediaAnywhere } = vi.hoisted(() => ({
   historyStore: { items: [] },
-  deleteHistoryItem: vi.fn(async () => ({ ok: true })),
+  deleteMediaAnywhere: vi.fn(async () => ({ ok: true, status: 'deleted' })),
 }));
 vi.mock('./videoGen/history.js', () => ({
   loadHistory: vi.fn(async () => historyStore.items),
   saveHistory: vi.fn(async (h) => { historyStore.items = h; }),
 }));
-vi.mock('./videoGen/local.js', () => ({ deleteHistoryItem }));
+vi.mock('./mediaRemoteDelete.js', () => ({ deleteMediaAnywhere }));
 vi.mock('./videoGen/events.js', () => ({ videoGenEvents: { emit: vi.fn() } }));
 
 import {
@@ -71,15 +71,17 @@ describe('listDownloads / deleteDownload', () => {
     expect(list[0].id).toBe('dl-1');
   });
 
-  it('deletes a download by delegating to deleteHistoryItem', async () => {
+  // Uniquely catches a download delete that tombstones a peer's row here
+  // instead of asking its owner (the owner-aware path decides where it goes).
+  it('deletes a download through the owner-aware media delete', async () => {
     const res = await deleteDownload('dl-1');
-    expect(res).toEqual({ ok: true });
-    expect(deleteHistoryItem).toHaveBeenCalledWith('dl-1');
+    expect(res).toEqual({ ok: true, status: 'deleted' });
+    expect(deleteMediaAnywhere).toHaveBeenCalledWith('video', 'dl-1');
   });
 
   it('refuses to delete a non-download history id (404)', async () => {
     await expect(deleteDownload('gen-1')).rejects.toMatchObject({ status: 404 });
-    expect(deleteHistoryItem).not.toHaveBeenCalled();
+    expect(deleteMediaAnywhere).not.toHaveBeenCalled();
   });
 
   it('404s for an unknown id', async () => {

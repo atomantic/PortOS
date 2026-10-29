@@ -21,7 +21,7 @@ import { join, dirname, resolve as resolvePath, sep as PATH_SEP, basename } from
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
 import { trashFiles } from '../../lib/trashFiles.js';
-import { atomicWrite, assertSafeFilename, detectImageFormat, ensureDir, listDirectoryByExtension, PATHS, safeJSONParse, resolveImageInputPath, tryReadFile, rmGuarded, unlinkGuarded } from '../../lib/fileUtils.js';
+import { atomicWrite, assertSafeFilename, detectImageFormat, ensureDir, listDirectoryByExtension, PATHS, resolveImageInputPath, rmGuarded, unlinkGuarded } from '../../lib/fileUtils.js';
 import { extractPngGenerationMetadata, extractPngGenerationMetadataFile } from '../../lib/pngMetadata.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
@@ -48,7 +48,10 @@ import { hardwareUnavailableReason, isHardwareCompatible } from '../../lib/syste
 import { usesDiffusersRunner, flux2Bf16BaseRepo } from '../../lib/runners.js';
 import { weaveLoraTriggers } from '../../lib/loraTriggers.js';
 import { provenanceForRender } from '../../lib/assetProvenance.js';
-import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
+import { registerGallerySha256Writer } from '../../lib/assetHash.js';
+import { recordMediaTombstone, clearMediaTombstone } from '../mediaTombstones.js';
+import { withLocalImageOrigin } from './imageRecords.js';
+import { readImageSidecar, refreshImageIndex, sidecarEditQueue, editImageSidecar } from './sidecarStore.js';
 import { readTriggerWordsByFilename, readLoraLicensesByFilename } from '../loras.js';
 import { carriedPromptAdditions, promptAddition, sentPromptRecord } from '../../lib/modelInput.js';
 
@@ -1396,27 +1399,10 @@ export function assertGalleryFilename(filename) {
   });
 }
 
-// Returns `{ path, metadata }`. `path` is the resolved sidecar location, or
-// the preferred Portos location on miss — callers writing back land at the
-// canonical path automatically.
-export async function readImageSidecar(filename) {
-  const portosSidecar = join(PATHS.images, filename.replace('.png', '.metadata.json'));
-  const altSidecar = join(PATHS.images, `${filename}.metadata.json`);
-  for (const path of [portosSidecar, altSidecar]) {
-    const raw = await tryReadFile(path);
-    if (raw != null) return { path, metadata: safeJSONParse(raw, {}) };
-  }
-  return { path: portosSidecar, metadata: {} };
-}
+export { readImageSidecar };
 
 // Decoder safety is independent of the upload file-size policy.
 const MAX_GALLERY_UPLOAD_PIXELS = 96 * 1000 * 1000;
-
-async function refreshImageIndex(filename) {
-  await import('../mediaAssetIndex/index.js')
-    .then(m => m.indexImage({ filename }))
-    .catch(err => console.error(`❌ Media index image refresh failed: ${err.message}`));
-}
 
 /**
  * Persist user-uploaded image bytes (base64) into the gallery dir under
@@ -1450,9 +1436,10 @@ export async function saveUploadedGalleryImage(base64Data, tempPath) {
   }
   // Read Stable Diffusion-compatible PNG text chunks before sharp normalizes
   // the image. JPEG/WebP/GIF uploads simply produce an empty projection.
-  const metadata = tempPath
+  // An upload is made here, so this machine owns it (its sidecar records that).
+  const metadata = await withLocalImageOrigin(tempPath
     ? await extractPngGenerationMetadataFile(tempPath)
-    : extractPngGenerationMetadata(input);
+    : extractPngGenerationMetadata(input));
   // Normalize to PNG so the gallery's PNG-only list/delete paths manage it.
   // `.rotate()` with no args bakes in EXIF orientation before the metadata is
   // dropped, so a camera-JPEG portrait isn't saved sideways/upside-down.
@@ -1503,15 +1490,29 @@ export async function listGallery() {
   return items.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 }
 
-export async function deleteImage(filename) {
+// `fromRemoteTombstone`: the owner's tombstone, already merged, deleted it, so
+// it is neither re-recorded (that would restamp deletedAt) nor re-announced.
+export async function deleteImage(filename, { fromRemoteTombstone = false } = {}) {
   assertGalleryFilename(filename);
-  return withBackupAssetPublication(() => sidecarEditQueue(filename, async () => {
-    await trashFiles([
-      join(PATHS.images, filename),
-      join(PATHS.images, filename.replace(/\.png$/i, '.metadata.json')),
-      join(PATHS.images, `${filename}.metadata.json`),
-      join(PATHS.imageThumbnails, filename.replace(/\.png$/i, '.webp')),
-    ]);
+  let record = null;
+  let tombstone = null;
+  const result = await withBackupAssetPublication(() => sidecarEditQueue(filename, async () => {
+    const { metadata } = await readImageSidecar(filename);
+    record = { filename, originInstanceId: metadata.originInstanceId };
+    // Record BEFORE trashing: a crash between the two must never leave a
+    // deleted image without its tombstone. Undo if the trash itself fails.
+    if (!fromRemoteTombstone) tombstone = await recordMediaTombstone('image', filename);
+    try {
+      await trashFiles([
+        join(PATHS.images, filename),
+        join(PATHS.images, filename.replace(/\.png$/i, '.metadata.json')),
+        join(PATHS.images, `${filename}.metadata.json`),
+        join(PATHS.imageThumbnails, filename.replace(/\.png$/i, '.webp')),
+      ]);
+    } catch (err) {
+      if (!fromRemoteTombstone) await clearMediaTombstone('image', filename);
+      throw err;
+    }
     // trashFiles verifies removal before derived records can be retired.
     await import('../mediaAssetIndex/index.js')
       .then((m) => m.unindexImage(filename))
@@ -1519,37 +1520,15 @@ export async function deleteImage(filename) {
     console.log(`🗑️ Trashed image: ${filename}`);
     return { ok: true };
   }));
-}
-
-// Sidecar edits are whole-file read→modify→replace cycles; atomicWrite stops a
-// torn file but not two edits (prompt + visibility) reading the same copy and
-// the later write dropping the earlier field. One tail per gallery filename
-// covers both sidecar spellings, and the index refresh stays inside the turn.
-const sidecarEditQueue = createKeyCachedQueue();
-
-// `mutate` edits the metadata in place; returning null leaves the file as it was.
-function editImageSidecar(filename, mutate, { reindex = true } = {}) {
-  // Admit before joining the queue so a cut drains every already-requested
-  // edit, including one waiting for an earlier edit's index refresh.
-  return withBackupAssetPublication(() => sidecarEditQueue(filename, async () => {
-    const { path: sidecarPath, metadata } = await readImageSidecar(filename);
-    const result = mutate(metadata);
-    if (result === null) return null;
-    // A stale edit queued after deletion must not recreate its sidecar/index.
-    // Sidecar-only records remain editable while peer media bytes are pending.
-    const present = await Promise.all([
-      join(PATHS.images, filename),
-      join(PATHS.images, filename.replace(/\.png$/i, '.metadata.json')),
-      join(PATHS.images, `${filename}.metadata.json`),
-    ].map(path => stat(path).then(() => true, error => {
-      if (error.code === 'ENOENT') return false;
-      throw error;
-    })));
-    if (!present.some(Boolean)) throw new ServerError('Image not found', { status: 404, code: 'NOT_FOUND' });
-    await atomicWrite(sidecarPath, metadata);
-    if (reindex) await refreshImageIndex(filename);
-    return result;
-  }));
+  // The one emitter of an image delete: views refresh, and the owner's own
+  // delete goes to peers (a remote-tombstone delete was announced by its owner).
+  void import('../peerSyncEventBus.js')
+    .then(async (m) => {
+      m.emitMediaHistoryChanged({ kind: 'image', op: 'delete', ids: [filename] });
+      if (!fromRemoteTombstone) await m.announceLocalImageDelete(record, tombstone);
+    })
+    .catch((err) => console.error(`❌ Image delete announce failed: ${err.message}`));
+  return result;
 }
 
 export async function setImageHidden(filename, hidden) {
@@ -1557,6 +1536,18 @@ export async function setImageHidden(filename, hidden) {
   return editImageSidecar(filename, (metadata) => {
     metadata.hidden = !!hidden;
     return { ok: true, hidden: metadata.hidden };
+  });
+}
+
+// Machine-local, like `hidden`: a delete this machine queued for the image's
+// owner (`{ peerId, queuedAt }`), or null to clear it. Resolves true when changed.
+export async function setImagePendingDelete(filename, pending) {
+  assertGalleryFilename(filename);
+  return editImageSidecar(filename, (metadata) => {
+    if (!pending && !('pendingDelete' in metadata)) return null;
+    if (pending) metadata.pendingDelete = pending;
+    else delete metadata.pendingDelete;
+    return true;
   });
 }
 
@@ -1597,6 +1588,7 @@ export function cacheImageSha256(filename, entry) {
     return { ...metadata };
   }, { reindex: false });
 }
+registerGallerySha256Writer(cacheImageSha256);
 
 // Returns just `{ filename, name }` — clients send `filename` back in the
 // generate payload's `loraFilenames` and the server resolves it against

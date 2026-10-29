@@ -44,6 +44,7 @@ import { RUNWAY_SPECIAL_VIDEO_MODES, getRunwaySpecialVideoModel } from '../../..
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useSearchParams } from 'react-router';
 import { isMiniMaxH3Runtime } from '../lib/runnerFamilies';
+import { mediaDeleteOutcome } from '../lib/mediaDeleteOutcome';
 import { appendTriggerWords } from '../lib/loraTriggers';
 import Drawer from '../components/Drawer';
 import { ImageGenTab } from '../components/settings/ImageGenTab';
@@ -469,11 +470,22 @@ export default function VideoGen() {
 
   const handleDeleteHistory = useCallback(async (item) => {
     const raw = item?.raw || item;
-    const deleted = await deleteVideoHistoryItem(raw.id, { silent: true })
-      .then(() => true)
-      .catch((err) => { toast.error(err.message || 'Delete failed'); return false; });
-    if (!deleted) return;
+    const result = await deleteVideoHistoryItem(raw.id, { silent: true })
+      .catch((err) => { toast.error(err.message || 'Delete failed'); return null; });
+    if (!result) return;
+    const outcome = mediaDeleteOutcome(result, 'video');
+    // A delete that waits on, or did not reach, this machine's copy keeps the row.
+    if (!outcome.remove) {
+      setHistory((h) => h.map((v) => {
+        if (v.id !== raw.id) return v;
+        const { pendingDelete: _previous, ...rest } = v; // eslint-disable-line no-unused-vars
+        return outcome.pendingDelete ? { ...rest, pendingDelete: outcome.pendingDelete } : rest;
+      }));
+      toast(outcome.notice);
+      return;
+    }
     setHistory((h) => h.filter((v) => v.id !== raw.id));
+    if (outcome.tone === 'info') toast(outcome.notice);
   }, []);
   const handlePromptSaved = useCallback((item, prompt) => {
     const id = item?.id || item?.raw?.id;

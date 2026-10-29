@@ -13,6 +13,7 @@ import { useMediaAnnotations } from '../hooks/useMediaAnnotations';
 import { useAsyncAction } from '../hooks/useAsyncAction';
 import useGalleryPreviewResolver from '../hooks/useGalleryPreviewResolver';
 import { UNSORTED_ID, buildUnsortedCollection } from '../lib/unsorted';
+import { mediaDeleteOutcome } from '../lib/mediaDeleteOutcome';
 import {
   getMediaCollection, updateMediaCollection,
   listMediaCollections,
@@ -201,10 +202,23 @@ export default function MediaCollectionDetail() {
       return null;
     });
     if (!ok) return;
-    page.setItems(rows => rows.filter(row => !(row.kind === item.kind && (row.kind === 'image' ? row.data.filename === item.filename : row.data.id === item.id))));
+    const matches = row => row.kind === item.kind && (row.kind === 'image' ? row.data.filename === item.filename : row.data.id === item.id);
+    const outcome = mediaDeleteOutcome(ok, item.kind);
+    // A delete that waits on, or did not reach, this machine's copy keeps the row.
+    if (!outcome.remove) {
+      page.setItems(rows => rows.map((row) => {
+        if (!matches(row)) return row;
+        const { pendingDelete: _previous, ...data } = row.data; // eslint-disable-line no-unused-vars
+        return { ...row, data: outcome.pendingDelete ? { ...data, pendingDelete: outcome.pendingDelete } : data };
+      }));
+      toast(outcome.notice);
+      return;
+    }
+    page.setItems(rows => rows.filter(row => !matches(row)));
     page.setTotal(total => Math.max(0, total - 1));
     page.refresh();
-    toast.success(`Deleted ${item.kind === 'image' ? item.filename : 'video'}`);
+    if (outcome.tone === 'info') toast(outcome.notice);
+    else toast.success(`Deleted ${item.kind === 'image' ? item.filename : 'video'}`);
   }, [page.setItems, page.setTotal, page.refresh]);
 
   const handlePromptSaved = useCallback((item, prompt) => {

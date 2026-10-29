@@ -23,7 +23,8 @@ import { withAbortTimeout } from '../../lib/abortTimeout.js';
 import { sanitizeAssetFilename } from './buckets.js';
 import { PORTOS_SCHEMA_VERSIONS } from '../../lib/schemaVersions.js';
 import { getPeers } from '../instances.js';
-import { peerLibraryManifestSchema } from '../../lib/validation.js';
+import { peerLibraryManifestSchema, PEER_LIBRARY_TOMBSTONES_HEADER } from '../../lib/validation.js';
+import { listMediaTombstones } from '../mediaTombstones.js';
 import {
   hashSimpleAsset,
   hashImageForManifest,
@@ -162,9 +163,11 @@ async function hashCachedLibraryAsset(name, kind, dir) {
  * @returns {Promise<{ schemaVersion:number, manifestHash:string, assets:Array }>}
  */
 // Older receivers validate a closed asset-kind enum. Models are opt-in so their
-// ordinary image/audio/video sweeps remain valid until they upgrade.
-export async function buildMediaLibraryManifest({ models = false } = {}) {
+// ordinary image/audio/video sweeps remain valid until they upgrade. So are
+// gallery image tombstones (`tombstones`, see PEER_LIBRARY_TOMBSTONES_HEADER).
+export async function buildMediaLibraryManifest({ models = false, tombstones = false } = {}) {
   const excluded = await excludedLibraryKinds();
+  const localId = tombstones ? await import('../imageGen/imageRecords.js').then((m) => m.localInstanceId()) : null;
   const assets = [];
   let truncated = false;
   for (const { kind, dir } of mediaLibraryDirs()) {
@@ -177,7 +180,7 @@ export async function buildMediaLibraryManifest({ models = false } = {}) {
       // `.json` files in the images dir.
       if (kind === 'image' && name.endsWith('.json')) continue;
       const entry = kind === 'image'
-        ? await hashImageForManifest(name)        // sidecar-cached
+        ? await hashImageForManifest(name, { withCreatedAt: tombstones, localInstanceId: localId }) // sidecar-cached
         : await hashCachedLibraryAsset(name, kind, dir); // (mtime,size)-cached
       if (!entry) continue;
       if (assets.length >= MEDIA_LIBRARY_MANIFEST_CAP) { truncated = true; break; }
@@ -190,10 +193,28 @@ export async function buildMediaLibraryManifest({ models = false } = {}) {
   // Deterministic order (sort by filename) so the manifestHash converges across
   // machines regardless of readdir order / filesystem.
   const sorted = assets.sort((a, b) => (a.filename < b.filename ? -1 : a.filename > b.filename ? 1 : 0));
-  const manifestHash = createHash('sha256')
-    .update(sorted.map((e) => `${e.kind}:${e.filename}:${e.sha256 || ''}:${e.sidecarSha256 || ''}`).join('\n'))
-    .digest('hex');
-  return { schemaVersion: PORTOS_SCHEMA_VERSIONS.mediaLibrary, manifestHash, assets: sorted };
+  // Deleted gallery images, so a receiver still holding one retires it rather
+  // than this machine pulling it back. Sorted, and hashed only when present, so
+  // a library with no deletes keeps its exact manifestHash.
+  // A tombstone this machine's own newer copy supersedes (a re-used name) is
+  // left out, so it cannot retire that copy on a peer. Only a real creation
+  // stamp counts: a pulled copy advertises none (imageLiveStamp), so its
+  // tombstone keeps travelling.
+  const liveImages = new Map(assets.filter((e) => e.kind === 'image' && e.createdAt).map((e) => [e.filename, Date.parse(e.createdAt)]));
+  const deleted = tombstones && !excluded.has('image')
+    ? (await listMediaTombstones('image'))
+      .filter((t) => !(liveImages.get(t.key) > Date.parse(t.deletedAt)))
+      .sort((a, b) => a.key.localeCompare(b.key))
+    : [];
+  const hashInput = sorted.map((e) => `${e.kind}:${e.filename}:${e.sha256 || ''}:${e.sidecarSha256 || ''}`).join('\n')
+    + (deleted.length > 0 ? `\n#tombstones\n${deleted.map((t) => `${t.key}@${t.deletedAt}`).join('\n')}` : '');
+  const manifestHash = createHash('sha256').update(hashInput).digest('hex');
+  return {
+    schemaVersion: PORTOS_SCHEMA_VERSIONS.mediaLibrary,
+    manifestHash,
+    assets: sorted,
+    ...(deleted.length > 0 ? { tombstones: deleted } : {}),
+  };
 }
 
 // Receiver-side: last manifestHash fully processed per peer, so an unchanged
@@ -264,7 +285,7 @@ export async function syncMediaLibraryFromPeer(peer) {
   try {
     const url = `${peerBaseUrl(peer)}/api/peer-sync/library-manifest?models=1`;
     const res = await withAbortTimeout(ASSET_PULL_TIMEOUT_MS, (signal) =>
-      peerFetch(url, { signal, maxBytes: MEDIA_LIBRARY_MANIFEST_MAX_BYTES }, peer))
+      peerFetch(url, { signal, maxBytes: MEDIA_LIBRARY_MANIFEST_MAX_BYTES, headers: { [PEER_LIBRARY_TOMBSTONES_HEADER]: '1' } }, peer))
       .catch(() => null);
     if (!res || !res.ok) return { pulled: 0, skipped: 'unreachable' };
     // Enforce the manifest cap before buffering the body. peerFetch's `maxBytes`
@@ -315,7 +336,16 @@ export async function syncMediaLibraryFromPeer(peer) {
       }
       libraryUnchangedSkips.set(peer.instanceId, 0); // periodic forced re-diff — fall through
     }
-    const missing = await diffAssetManifestAgainstLocal(manifest.assets);
+    // Deletes first, before anything is written: an authorized tombstone retires
+    // the copy here, and the diff skips every image tombstoned on this machine.
+    if (manifest.tombstones?.length > 0) {
+      const { admitPeerImageTombstones } = await import('../imageGen/imageRecords.js');
+      const { removed, refused } = await admitPeerImageTombstones(peer, manifest.tombstones, { via: 'snapshot' });
+      if (removed > 0) console.log(`🗑️ peerSync: ${peer.name || peer.instanceId} library deletes removed ${removed} image(s) here`);
+      if (refused > 0) console.log(`⏭️ peerSync: ${peer.name || peer.instanceId} library manifest: ignored ${refused} image tombstone(s)`);
+    }
+    const diffOptions = { senderInstanceId: peer.instanceId };
+    const missing = await diffAssetManifestAgainstLocal(manifest.assets, diffOptions);
     const requested = missing.length;
     let stillMissing = missing;
     if (requested > 0) {
@@ -323,7 +353,7 @@ export async function syncMediaLibraryFromPeer(peer) {
       // video-thumbnail regen). It swallows per-asset failures, so re-diff disk
       // rather than treating the pull's resolution as evidence bytes landed.
       await pullMissingAssetsFromPeer(peer.instanceId, missing);
-      stillMissing = await diffAssetManifestAgainstLocal(manifest.assets);
+      stillMissing = await diffAssetManifestAgainstLocal(manifest.assets, diffOptions);
     }
     const pulled = requested - stillMissing.length;
     if (pulled > 0) libraryIndexRepairPending.add(peer.instanceId);

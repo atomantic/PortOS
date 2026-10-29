@@ -3180,3 +3180,10 @@ export const textEncoderDownloadParamsSchema = z.object({ id: z.string().min(1).
 export const providerExecutionOptionsQuerySchema = z.object({ model: z.string().trim().max(512).optional(), refresh: z.enum(['true', 'false']).optional() }).strict();
 
 export const executionOptionSelectionSchema = z.object({ model: z.string().trim().max(512).optional(), executionOptions: executionOptionsSchema }).strict();
+
+// POST /api/peer-media/delete — a paired peer asks this machine to delete a
+// media row it holds. Video rows key on the history id, images on the filename.
+export const peerMediaDeleteSchema = z.object({
+  kind: z.enum(['video', 'image']),
+  key: z.string().min(1).max(512),
+}).strict();

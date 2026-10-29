@@ -77,6 +77,7 @@ the list does not admit.
 | GET | `/api/memory/sync`, `/api/catalog/sync`, `/api/sync/*` | Snapshot sync |
 | GET | `/api/peer-sync/*` | Record, manifest, and archive pulls |
 | POST | `/api/peer-sync/push` | Record push |
+| POST | `/api/peer-media/delete` | Remote media delete (also needs this install's media-delete capability for the peer) |
 | any | `/api/federation/media/v1/*` | Federated media provider |
 | GET | `/api/providers/fleet-host` | Fleet LLM host discovery |
 | POST | `/api/providers/fleet-host/key` | Fleet LLM host key |

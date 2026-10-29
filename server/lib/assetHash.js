@@ -84,17 +84,27 @@ export async function getOrComputeImageSha256(imagePath) {
   }
   // The write goes through the gallery sidecar edit queue so it re-reads the
   // CURRENT sidecar; a read-modify-write here would drop an edit (hidden flag,
-  // supplying peer, ...) that landed after our read above. services/ is
-  // imported dynamically because lib/ must not depend on it statically. A
-  // missing sidecar stays missing; a failed write is logged but the hash is
-  // still valid for this call.
-  const merged = await import('../services/imageGen/local.js')
-    .then(({ cacheImageSha256 }) => cacheImageSha256(filename, entry))
+  // supplying peer, ...) that landed after our read above. The queue lives in
+  // services/, which registers its writer here (lib never imports upward). With
+  // no writer registered the cache is simply not persisted: the hash is still
+  // valid for this call and is recomputed next time. A failed write is logged.
+  if (!gallerySha256Writer) return { hash, sidecar: fallback };
+  const merged = await Promise.resolve()
+    .then(() => gallerySha256Writer(filename, entry))
     .catch((err) => {
       console.error(`⚠️ assetHash: sidecar write failed for ${sidecarPath}: ${err?.message || err}`);
       return null;
     });
   return { hash, sidecar: merged || fallback };
+}
+
+let gallerySha256Writer = null;
+/**
+ * Register the gallery sidecar edit-queue writer `(filename, entry) => merged | null`
+ * that persists the hash cache (services/imageGen/local.js `cacheImageSha256`).
+ */
+export function registerGallerySha256Writer(writer) {
+  gallerySha256Writer = typeof writer === 'function' ? writer : null;
 }
 
 /**
@@ -117,19 +127,106 @@ export async function getOrComputeImageSha256(imagePath) {
  * sidecarSha256 in that case).
  */
 export function sidecarGenParamsHash(sidecar) {
+  return genParamsHash(sidecar, null);
+}
+
+function genParamsHash(sidecar, extra) {
   if (!isPlainObject(sidecar)) return null;
   // Object.create(null) so a peer-supplied `__proto__` key can't mutate the
   // temp object's prototype via `genParams[key] = …` (prototype-pollution
   // footgun). POLLUTING_KEYS (__proto__/constructor/prototype) are skipped
   // outright — legitimate gen-params never use them, so the hash is identical
   // for real sidecars while a hostile one stays inert and deterministic.
+  // Machine-local fields are skipped like `sha256`, so a sidecar that has none
+  // keeps the exact hash it had before they existed.
   const genParams = Object.create(null);
   let count = 0;
   for (const key of Object.keys(sidecar)) {
-    if (key === 'sha256' || POLLUTING_KEYS.has(key)) continue;
+    if (key === 'sha256' || POLLUTING_KEYS.has(key) || IMAGE_SIDECAR_LOCAL_FIELDS.includes(key)) continue;
     genParams[key] = sidecar[key];
     count += 1;
   }
-  if (count === 0) return null;
+  if (count === 0 && !extra) return null;
+  if (extra) Object.assign(genParams, extra);
   return createHash('sha256').update(canonicalStringify(genParams)).digest('hex');
+}
+
+/**
+ * Per-machine image sidecar fields: this machine's hide state, a delete it has
+ * queued for the image's owner, and the peer that handed it the image. They are
+ * never served to a peer, never taken from a peer's copy, and not part of
+ * `sidecarGenParamsHash`. `originInstanceId` is not among them: it syncs.
+ */
+export const IMAGE_SIDECAR_LOCAL_FIELDS = Object.freeze(['hidden', 'pendingDelete', 'suppliedByInstanceId']);
+
+/** A copy of `sidecar` without the machine-local fields (non-objects pass through). */
+export function stripImageSidecarLocalFields(sidecar) {
+  if (!isPlainObject(sidecar)) return sidecar;
+  const out = { ...sidecar };
+  for (const key of IMAGE_SIDECAR_LOCAL_FIELDS) delete out[key];
+  return out;
+}
+
+/**
+ * Sidecar bytes without the machine-local fields, for a copy that leaves this
+ * machine or arrives from another (share buckets, the `/data/images` mount).
+ * Bytes that carry none of them, or are not a JSON object, come back unchanged
+ * (the same Buffer), so the caller can keep serving or copying them as-is.
+ */
+export function stripImageSidecarLocalBytes(bytes) {
+  let parsed;
+  try {
+    parsed = JSON.parse(Buffer.isBuffer(bytes) ? bytes.toString('utf8') : String(bytes));
+  } catch {
+    return bytes;
+  }
+  if (!isPlainObject(parsed) || !IMAGE_SIDECAR_LOCAL_FIELDS.some((key) => Object.hasOwn(parsed, key))) return bytes;
+  return Buffer.from(JSON.stringify(stripImageSidecarLocalFields(parsed), null, 2));
+}
+
+/**
+ * When this copy of an image came to exist, for tombstone supersession. ISO
+ * string, or null when unknown: a caller treats a null-stamped copy as OLD, so
+ * a tombstone retires it and a pull of a tombstoned name stays blocked.
+ *
+ * The sidecar's `createdAt` is the stamp whenever it has one; it travels with
+ * the sidecar, so every machine sees the same time. The file's modify time is a
+ * stamp ONLY when the sidecar names THIS machine as the image's origin. Any other
+ * copy (pulled, imported, restored, synced by an older peer, or with no origin
+ * at all) may have landed after the delete, and its file time would make the
+ * deleted image look newer than its delete and bring it back. An origin-less
+ * copy has no owner candidates either, so a peer's tombstone cannot reach it and
+ * the stricter stamp never deletes anything a peer could not already delete.
+ * Birth time is never used: copies and restores set it.
+ */
+export function imageLiveStamp(sidecar, fileStat, { localInstanceId = null } = {}) {
+  const meta = isPlainObject(sidecar) ? sidecar : {};
+  if (typeof meta.createdAt === 'string' && Number.isFinite(Date.parse(meta.createdAt))) return meta.createdAt;
+  if (typeof localInstanceId !== 'string' || !localInstanceId || meta.originInstanceId !== localInstanceId) return null;
+  const ms = Number(fileStat?.mtimeMs);
+  return Number.isFinite(ms) && ms > 0 ? new Date(ms).toISOString() : null;
+}
+
+/**
+ * True when `sidecar`'s gen-params hash to `advertised`. Copies that differ
+ * only in what this machine never takes from a peer also match, or each such
+ * image would re-pull every sweep: an older peer still hashes its own `hidden`
+ * flag, and a held image without an origin never adopts the sender's
+ * (`originCandidates`, e.g. the sender's instance id).
+ */
+export function sidecarMatchesGenParamsHash(sidecar, advertised, { originCandidates = [] } = {}) {
+  const local = sidecarGenParamsHash(sidecar);
+  if (local === advertised) return true;
+  if (typeof advertised !== 'string' || !isPlainObject(sidecar)) return false;
+  const origins = sidecar.originInstanceId === undefined
+    ? [undefined, ...originCandidates.filter((id) => typeof id === 'string' && id)]
+    : [undefined];
+  for (const originInstanceId of origins) {
+    const origin = originInstanceId ? { originInstanceId } : null;
+    for (const hidden of [undefined, true, false]) {
+      const extra = { ...origin, ...(hidden === undefined ? {} : { hidden }) };
+      if (Object.keys(extra).length > 0 && genParamsHash(sidecar, extra) === advertised) return true;
+    }
+  }
+  return false;
 }

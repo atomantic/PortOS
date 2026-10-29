@@ -11,9 +11,10 @@ import { deleteImage } from './imageGen/local.js';
 import { purgeImageRefFromAllUniverses } from './universeCanon.js';
 import { removeItemFromAllCollections } from './mediaCollections.js';
 
-export function deleteGalleryImage(filename, { forgetInMusicVideos = true } = {}) {
+// `fromRemoteTombstone` is passed through to deleteImage (see there).
+export function deleteGalleryImage(filename, { forgetInMusicVideos = true, fromRemoteTombstone = false } = {}) {
   return withBackupAssetPublication(async () => {
-    const result = await deleteImage(filename);
+    const result = await deleteImage(filename, { fromRemoteTombstone });
     // Best-effort: a purge failure must not fail the gallery delete itself.
     const universePurge = await purgeImageRefFromAllUniverses(filename).catch((err) => {
       console.warn(`⚠️ Universe canon purge failed for ${filename}: ${err?.message || err}`);

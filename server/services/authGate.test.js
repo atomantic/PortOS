@@ -1191,6 +1191,7 @@ describe('paired peer credential (#8356)', () => {
     app.post('/api/apps/:id/restart', (req, res) => res.json({ auth: req.portosAuthContext }));
     app.put('/api/settings', (req, res) => res.json({ auth: req.portosAuthContext }));
     app.post('/api/peer-sync/push', (req, res) => res.json({ auth: req.portosAuthContext }));
+    app.all('/api/peer-media/delete', (req, res) => res.json({ auth: req.portosAuthContext }));
     app.get('/api/federation/media/v1/status', (req, res) => res.json({ auth: req.portosAuthContext }));
     app.post('/api/providers/fleet-host/key', (req, res) => res.json({ auth: req.portosAuthContext }));
     app.all(['/data/image-thumbnails/:name', '/data/video-thumbnails/:name'], (req, res) => res.json({ auth: req.portosAuthContext }));
@@ -1280,6 +1281,26 @@ describe('paired peer credential (#8356)', () => {
       expect((await withHeaders(request(app).post(path), headers)).status).toBe(403);
       expect((await request(app).get(path)).status).toBe(401);
     }
+  });
+
+  // The route admits only `method: 'peer'`; this pins that the gate yields it
+  // for the pair credential, and only for the POST, in both auth modes.
+  it('marks the pair credential, not Basic or anonymous callers, as a peer on the remote media delete route', async () => {
+    writePeers([pairedPeer()]);
+    const headers = await peerHeaders();
+    let app = await buildApp();
+    expect((await withHeaders(request(app).post('/api/peer-media/delete').send({}), headers)).body.auth.method).toBe('peer');
+    expect((await request(app).post('/api/peer-media/delete').send({})).body.auth.method).toBeNull();
+
+    const auth = await import('./auth.js');
+    await auth.setPassword({ newPassword: 'example-password' });
+    app = await buildApp();
+    expect((await withHeaders(request(app).post('/api/peer-media/delete').send({}), headers)).body.auth)
+      .toEqual({ enabled: true, authenticated: true, method: 'peer', peerId: 'peer-record' });
+    expect((await withHeaders(request(app).get('/api/peer-media/delete'), headers)).body.code).toBe('PEER_SCOPE_FORBIDDEN');
+    const basic = { Authorization: basicHeader('example-password') };
+    expect((await withHeaders(request(app).post('/api/peer-media/delete').send({}), basic)).body.auth.method).toBe('basic');
+    expect((await request(app).post('/api/peer-media/delete').send({})).status).toBe(401);
   });
 
   it('still identifies a paired peer on the federation surface after the instance password is removed', async () => {

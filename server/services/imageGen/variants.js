@@ -26,6 +26,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { atomicWrite, PATHS } from '../../lib/fileUtils.js';
 import { stripPngC2PAChunk } from '../../lib/imageClean.js';
 import { omitRenderTiming } from '../../lib/renderTiming.js';
+import { withLocalImageOrigin } from './imageRecords.js';
 import { removeCornerWatermark } from '../../lib/imageWatermark.js';
 import { applyLightRegen, computePixelDelta } from './regen.js';
 import { listCollections, addItem, ERR_DUPLICATE } from '../mediaCollections.js';
@@ -98,7 +99,9 @@ export async function persistVariant({
   // the gallery card claim a duration this image never took. Stripped here, in
   // the one place that owns the variant sidecar write, so it holds for every
   // current and future caller.
-  const untimedVariantMeta = omitRenderTiming(variantMeta);
+  // The variant is made here: this machine is its origin whatever the source's
+  // was, and the source's machine-local fields (hide, pending delete) stay behind.
+  const untimedVariantMeta = await withLocalImageOrigin(omitRenderTiming(variantMeta));
 
   return withBackupAssetPublication(() => publishImageFiles([outPath, sidecarPath], async () => {
     await atomicWrite(outPath, data);

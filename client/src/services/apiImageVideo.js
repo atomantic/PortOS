@@ -57,7 +57,9 @@ export const cancelImageGen = (opts = {}, options = {}) => request('/image-gen/c
   body: JSON.stringify(opts),
   ...options,
 });
+// Resolves `{ ok, status }` like deleteVideoHistoryItem (see mediaDeleteOutcome).
 export const deleteImage = (filename, options = {}) => request(`/image-gen/${encodeURIComponent(filename)}`, { method: 'DELETE', ...options });
+export const cancelImagePendingDelete = (filename, options = {}) => request(`/image-gen/${encodeURIComponent(filename)}/cancel-delete`, { method: 'POST', ...options });
 export const setImageHidden = (filename, hidden, options = {}) => request(`/image-gen/${encodeURIComponent(filename)}/visibility`, {
   method: 'POST',
   body: JSON.stringify({ hidden }),
@@ -296,7 +298,12 @@ export const uploadGalleryVideo = (base64Data, filename, options = {}) => reques
   body: uploadBody(base64Data, filename),
   ...options,
 });
+// Resolves `{ ok, status }`: `deleted`, `deleted-remote`, `pending` (queued for
+// the owning peer, with `pendingDelete` and `peerName`; `deletedOn` and
+// `removedHere` when another holder already deleted), `owner-unknown` (hidden
+// here only) or `cancelled`; lib/mediaDeleteOutcome.js maps it for a list.
 export const deleteVideoHistoryItem = (id, options = {}) => request(`/video-gen/history/${encodeURIComponent(id)}`, { method: 'DELETE', ...options });
+export const cancelVideoPendingDelete = (id, options = {}) => request(`/video-gen/history/${encodeURIComponent(id)}/cancel-delete`, { method: 'POST', ...options });
 export const setVideoHidden = (id, hidden, options = {}) => request(`/video-gen/history/${encodeURIComponent(id)}/visibility`, {
   method: 'POST',
   body: JSON.stringify({ hidden }),

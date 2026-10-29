@@ -46,7 +46,6 @@ import {
   resolveRuntimeFingerprint,
   loadHistory,
   getHistoryItem,
-  deleteHistoryItem,
   setHistoryItemHidden,
   updateHistoryItemPrompt,
   extractLastFrame,
@@ -102,6 +101,7 @@ import {
 import { detectSystemCapabilities, withHardwareCompatibility } from '../lib/systemCapabilities.js';
 import { isDisplaySleepEnabled } from '../services/videoGen/displayPower.js';
 import { promptAdditionsSchema } from '../lib/modelInput.js';
+import { deleteMediaAnywhere, cancelPendingDelete } from '../services/mediaRemoteDelete.js';
 import { VIDEO_TILING_MODES } from '../lib/videoTiling.js';
 import { RUNWAY_SPECIAL_VIDEO_MODES, RUNWAY_ACT_TWO_RATIOS, RUNWAY_ALEPH_ASPECTS } from '../lib/runwaySpecialVideoModels.js';
 
@@ -1304,10 +1304,19 @@ router.post('/upload', optionalUpload('file'), asyncHandler(async (req, res) => 
   res.json(await saveUploadedGalleryVideo(data, filename));
 }));
 
+// Deletes on the machine that owns the row (services/mediaRemoteDelete.js):
+// `{ ok, status: 'deleted' | 'deleted-remote' | 'pending' | 'owner-unknown' | 'cancelled' }`.
+// A refusal or an unusable answer from the owner is an error, never a success.
 router.delete('/history/:id', asyncHandler(async (req, res) => {
   const parsed = historyRecordIdSchema.safeParse(req.params.id);
   if (!parsed.success) failValidation(parsed);
-  res.json(await deleteHistoryItem(parsed.data));
+  res.json({ ok: true, ...(await deleteMediaAnywhere('video', parsed.data)) });
+}));
+
+router.post('/history/:id/cancel-delete', asyncHandler(async (req, res) => {
+  const parsed = historyRecordIdSchema.safeParse(req.params.id);
+  if (!parsed.success) failValidation(parsed);
+  res.json(await cancelPendingDelete('video', parsed.data));
 }));
 
 router.post('/history/:id/visibility', asyncHandler(async (req, res) => {
