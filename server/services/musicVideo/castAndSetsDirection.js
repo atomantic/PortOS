@@ -617,6 +617,10 @@ const castKey = (name) => String(name || '').trim().toLowerCase();
 // director's catalog-linked supporting characters) is kept once by name beyond
 // the invented-cast cap; one the answer left out (or left undrawable) is added
 // from its catalog description, unless it is the protagonist or a bound age form.
+// Identity here is the name on purpose: fixedCasting pulls each subject's image
+// by reference label, sheets and shot conditioning match a cast member by name,
+// and a fixed subject sharing the protagonist's name is the one the direction
+// cast as the protagonist. Two same-named subjects are one person to all of them.
 function normalizeCast(cast, protagonist, { fixed = [], forms = [] } = {}) {
   const seen = new Set();
   const lead = castKey(protagonist?.name);
