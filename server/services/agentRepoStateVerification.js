@@ -286,13 +286,21 @@ const verificationRuns = new Map();
 const manualCleanupContext = new AsyncLocalStorage();
 const CLAIM_OWNER_HOLDS = new Set(['claim-owner-active', 'claim-owner-ambiguous']);
 const MANUAL_COMPLETION_STAGES = ['sentinel', 'jira', 'notification', 'pipeline', 'creative', 'worktree', 'report'];
+// Chain stages that agentCompletionCleanup defers until this verification's
+// worktree receipt exists. Any other unfinished stage refuses the recheck.
+const REPOSITORY_HELD_STAGES = new Set(['pipeline', 'creative']);
+const REPOSITORY_HOLD_REASONS = new Set(['checkout-capture-pending', 'checkout-retirement-pending']);
 
-function manualCompletionReady(agent) {
+/** 'ready' when every completion stage finished; 'repository-held' when only
+ * pipeline/creative stages wait on this verification; otherwise null. */
+function manualCompletionMode(agent) {
   const receipt = agent?.metadata?.completionCleanup;
   const stages = receipt?.stages;
-  return receipt?.version === 1 && receipt.status === 'completed' && stages
-    && MANUAL_COMPLETION_STAGES.every(key => stages[key]?.status === 'done')
-    && Object.values(stages).every(stage => stage?.status === 'done');
+  if (receipt?.version !== 1 || !stages || !MANUAL_COMPLETION_STAGES.every(key => stages[key])) return null;
+  const unfinished = Object.entries(stages).filter(([, stage]) => stage?.status !== 'done');
+  if (!unfinished.length) return receipt.status === 'completed' ? 'ready' : null;
+  return receipt.status === 'pending' && unfinished.every(([key, stage]) => REPOSITORY_HELD_STAGES.has(key)
+    && stage.status === 'held' && REPOSITORY_HOLD_REASONS.has(stage.reason)) ? 'repository-held' : null;
 }
 
 // These are the execution-side prerequisites of isSettleableCompletionReceipt.
@@ -506,13 +514,22 @@ export async function verifyAgentRepoState(input) {
       }
       const { recordCompletionCleanup } = await import('./cosAgentLifecycle.js');
       if (input.agentState.metadata?.completionCleanup?.version === 1) {
+        // A deferred receipt releases held chain stages to the normal replay,
+        // whose later verification pass settles the task after they finish.
         const recorded = await recordCompletionCleanup(input.agentId, input.agentState.startedAt, {
-          stages: { worktree: { status: 'done', retryable: false, value: [], verifiedBy: 'repository-state-verification' } } });
+          stages: { worktree: { status: 'done', retryable: false, value: [], verifiedBy: 'repository-state-verification',
+            ...(input.deferTaskSettlement && { taskSettlement: 'after-completion-stages' }) } } });
         if (!recorded) return { ...result, verified: false, skipReason: 'cleanup-ledger-settlement-unverified' };
       }
       if (input.manualCleanupOnly) {
         const reason = await input.recheckCleanup().then(() => null, error => error.message);
         if (reason) return { ...result, verified: false, skipReason: reason };
+      }
+      if (input.deferTaskSettlement) {
+        const { recordRepoStateVerification } = await import('./cosAgentLifecycle.js');
+        await recordRepoStateVerification(input.agentId, { status: 'pending', checkedAt: new Date().toISOString(),
+          reasons: ['completion-handoff-pending'] });
+        return { ...result, verified: false, skipReason: 'completion-handoff-pending' };
       }
       const settlementFence = input.task.status === 'blocked' ? {
         expectedStatus: 'blocked', expectedTask: { description: input.task.description, priority: input.task.priority, metadata: input.task.metadata },
@@ -568,18 +585,22 @@ export async function recheckAgentCleanup(agentId, taskId) {
   if (verificationRuns.has(agentId) || getDeliveryActivity(agentId)) return { ok: false, reason: 'cleanup-already-running' };
   if (!manualCleanupProvenanceValid(agent)) return { ok: true, verified: false, reasons: ['cleanup-provenance-unverified'] };
   if (manualSwarmContinuationPending(agent)) return { ok: true, verified: false, reasons: ['swarm-continuation-pending'] };
-  if (!manualCompletionReady(agent)) return { ok: true, verified: false, reasons: ['completion-stages-pending'] };
+  const mode = manualCompletionMode(agent);
+  if (!mode) return { ok: true, verified: false, reasons: ['completion-stages-pending'] };
   const recheckCleanup = async ({ requireCapture = true } = {}) => {
     const [currentTask, currentAgent] = await Promise.all([getTaskById(taskId), getAgentRecord(agentId)]);
     if (!isDeepStrictEqual(currentTask, task) || currentAgent?.status !== 'completed' || currentAgent.result?.cleanupPending !== true
       || currentAgent.taskId !== taskId || currentAgent.startedAt !== agent.startedAt) throw new Error('cleanup-owner-changed');
     if (!manualCleanupProvenanceValid(currentAgent)) throw new Error('cleanup-provenance-unverified');
     if (manualSwarmContinuationPending(currentAgent)) throw new Error('swarm-continuation-pending');
-    if (!manualCompletionReady(currentAgent)) throw new Error('completion-stages-pending');
+    // A held run never settles here, even if its stages finish concurrently.
+    const current = manualCompletionMode(currentAgent);
+    if (!current || (mode === 'ready' && current !== 'ready')) throw new Error('completion-stages-pending');
     if (requireCapture && currentAgent.metadata?.checkoutCapture?.status !== 'captured') throw new Error('checkout-capture-unverified');
   };
   const result = await manualCleanupContext.run(true, () => verifyAgentRepoState({ agentId, agentState: agent, task, success: agent.result.success === true,
-    prExpected: isTruthyMeta(task.metadata?.openPR), manualCleanupOnly: true, recheckCleanup }));
+    prExpected: isTruthyMeta(task.metadata?.openPR), manualCleanupOnly: true, recheckCleanup,
+    deferTaskSettlement: mode === 'repository-held' }));
   if (result.skipReason === 'cleanup-owner-changed') return { ok: false, reason: result.skipReason };
   const reasons = [...new Set([result.skipReason, ...(result.branches || []).map(row => row.skipReason)].filter(Boolean))];
   return { ok: true, verified: result.verified === true, reasons };

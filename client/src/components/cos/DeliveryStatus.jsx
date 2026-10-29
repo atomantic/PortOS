@@ -13,6 +13,7 @@ const HOLD_REASONS = {
   'release-sync-local-review-unretained': 'Waiting for release review evidence to be verified before cleanup.',
   'cleanup-review-required': 'The retained checkout needs a preservation review before it can be removed.',
   'completion-stages-pending': 'Other completion steps must finish before cleanup can be retried safely.',
+  'completion-handoff-pending': 'Repository cleanup is verified. The next completion recovery pass finishes the pipeline or Creative Director hand-off, then completes the task.',
   'leave-open-cleanup-unsupported': 'The pull request is meant to stay open, so its checkout is being preserved.',
   'cleanup-provenance-unverified': 'The run’s execution and cleanup ownership could not be verified.',
   'checkout-capture-unverified': 'The original checkout capture could not be verified.',

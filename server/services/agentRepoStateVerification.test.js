@@ -1394,29 +1394,130 @@ describe('verifyAgentRepoState — divergent runs', () => {
     expect(updateTask).toHaveBeenCalledWith(pending.id, expect.objectContaining({ status: 'completed' }), 'user', expect.any(Object));
   });
 
-  it('retains the task when another completion stage is still pending', async () => {
-    const pending = { ...task(), status: 'in_progress', metadata: { ...task().metadata,
-      deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-1' } };
-    const receipt = completedCleanup();
-    receipt.status = 'pending';
-    receipt.stages.pipeline = { status: 'held', reason: 'checkout-retirement-pending' };
-    const owner = { ...agentState(), id: 'agent-1', taskId: pending.id, status: 'completed',
-      result: manualCleanupResult(), metadata: { ...agentState().metadata,
-        checkoutCapture: { status: 'captured' }, completionCleanup: receipt, repoStateVerification: { status: 'pending' } } };
-    getTaskById.mockResolvedValue(pending);
-    getAgentRecord.mockResolvedValue(owner);
-    existsSync.mockReturnValue(true);
-    localBranch(true);
-    listWorktrees.mockResolvedValue([RELEASE]);
-    findPullRequestForBranch.mockResolvedValue({ status: 'found', url: 'https://github.com/example/repo/pull/1', detail: 'MERGED' });
-    prepareInventoriedCheckoutRetirement.mockResolvedValue({ ok: true, review: { ...review(), comparison: { disposition: 'integrated', localPatch: '', difference: '' } } });
-    retireInventoriedCheckout.mockImplementation(async (_input, options) => { await options.beforeMutation(); return { ok: true, branchDeleted: true }; });
+  describe('completion stages held on repository verification (#14128)', () => {
+    const captured = { version: 1, agentId: 'agent-1', startedAt: CREATED_AT, capturedAt: CREATED_AT,
+      repoPath: '/repo', branch: BRANCH, path: WORKTREE, head: HEAD, incarnation: { pointer: { dev: '1', ino: '2', birthtimeNs: '3' } } };
+    const heldOwner = stagePatch => {
+      const pending = { ...task(), status: 'in_progress', metadata: { ...task().metadata,
+        deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-1' } };
+      const receipt = completedCleanup();
+      receipt.status = 'pending';
+      Object.assign(receipt.stages, stagePatch);
+      const owner = { ...agentState(), id: 'agent-1', taskId: pending.id, status: 'completed', completedAt: CREATED_AT,
+        result: manualCleanupResult(), metadata: { ...agentState().metadata, completedCheckouts: [captured],
+          checkoutCapture: { status: 'captured' }, completionCleanup: receipt, repoStateVerification: { status: 'pending' } } };
+      getTaskById.mockResolvedValue(pending);
+      getAgentRecord.mockResolvedValue(owner);
+      existsSync.mockReturnValue(true);
+      localBranch(true);
+      listWorktrees.mockResolvedValue([RELEASE]);
+      readCompletedCheckoutIdentity.mockResolvedValue(captured);
+      findPullRequestForBranch.mockResolvedValue({ status: 'found', url: 'https://github.com/example/repo/pull/1', detail: 'MERGED' });
+      prepareInventoriedCheckoutRetirement.mockResolvedValue({ ok: true, review: { ...review(), comparison: { disposition: 'integrated', localPatch: '', difference: '' } } });
+      return { pending, owner };
+    };
+    const expectNoSettlementOrDispatch = () => {
+      expect(updateTask).not.toHaveBeenCalled();
+      expect(addTask).not.toHaveBeenCalled();
+      expect(replayAgentCompletionCleanup).not.toHaveBeenCalled();
+      expect(releaseRetryHold).not.toHaveBeenCalled();
+      expect(recordRepoStateVerification).not.toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ status: 'completed' }));
+    };
 
-    expect(await recheckAgentCleanup(owner.id, pending.id)).toMatchObject({ ok: true, verified: false, reasons: ['completion-stages-pending'] });
-    expect(retireInventoriedCheckout).not.toHaveBeenCalled();
-    expect(recordRepoStateVerification).not.toHaveBeenCalled();
-    expect(updateTask).not.toHaveBeenCalled();
-    expect(addTask).not.toHaveBeenCalled();
+    it.each([
+      ['pipeline', 'checkout-retirement-pending'], ['creative', 'checkout-retirement-pending'], ['pipeline', 'checkout-capture-pending'],
+    ])('retires the checkout for a %s stage held on %s and leaves the task to the completion lifecycle', async (key, reason) => {
+      const { pending, owner } = heldOwner({ [key]: { status: 'held', retryable: true, reason } });
+      retireInventoriedCheckout.mockImplementation(async (_input, options) => { await options.beforeMutation(); return { ok: true, branchDeleted: true }; });
+
+      expect(await recheckAgentCleanup(owner.id, pending.id)).toEqual({ ok: true, verified: false, reasons: ['completion-handoff-pending'] });
+      expect(retireInventoriedCheckout).toHaveBeenCalledOnce();
+      expect(recordCompletionCleanup).toHaveBeenCalledWith(owner.id, owner.startedAt, { stages: { worktree: { status: 'done', retryable: false,
+        value: [], verifiedBy: 'repository-state-verification', taskSettlement: 'after-completion-stages' } } });
+      expect(recordRepoStateVerification).toHaveBeenCalledWith(owner.id, expect.objectContaining({ status: 'pending', reasons: ['completion-handoff-pending'] }));
+      expectNoSettlementOrDispatch();
+    });
+
+    it('settles the task in the normal verification pass after the held stages finish', async () => {
+      const { pending, owner } = heldOwner({ pipeline: { status: 'held', retryable: true, reason: 'checkout-retirement-pending' } });
+      retireInventoriedCheckout.mockImplementation(async (_input, options) => { await options.beforeMutation(); return { ok: true, branchDeleted: true }; });
+      await recheckAgentCleanup(owner.id, pending.id);
+      expect(updateTask).not.toHaveBeenCalled();
+      // The completion replay advanced its chain from the deferred receipt; the
+      // retired checkout is now absent and only task settlement remains.
+      owner.metadata.completionCleanup = { ...completedCleanup(), stages: { ...completedCleanup().stages,
+        worktree: { status: 'done', verifiedBy: 'repository-state-verification', taskSettlement: 'after-completion-stages' } } };
+      localBranch(false);
+      existsSync.mockReturnValue(false);
+      listWorktrees.mockResolvedValue([]);
+      findMissingCheckoutPreservation.mockResolvedValue({ kind: 'service-retirement-receipt', recheck: vi.fn(async () => true) });
+      expect(await verifyAgentRepoState({ agentId: owner.id, agentState: owner, task: pending, success: false, prExpected: true }))
+        .toMatchObject({ verified: true });
+      expect(updateTask).toHaveBeenCalledOnce();
+      expect(updateTask).toHaveBeenCalledWith(pending.id, expect.objectContaining({ status: 'completed' }), 'user',
+        expect.objectContaining({ expectedStatus: 'in_progress' }));
+      expect(recordRepoStateVerification).toHaveBeenLastCalledWith(owner.id, expect.objectContaining({ status: 'completed' }));
+      expect(retireInventoriedCheckout).toHaveBeenCalledOnce();
+      expect(addTask).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['a failed chain hand-off', { pipeline: { status: 'failed', retryable: false, reason: 'pipeline-write-unverified' } }],
+      ['a running chain hand-off', { creative: { status: 'running', retryable: false } }],
+      ['an abandoned chain hand-off', { pipeline: { status: 'abandoned', reason: 'external-handoff-unverified' } }],
+      ['a chain hold with another reason', { pipeline: { status: 'held', reason: 'completion-sentinel-generation-pending' } }],
+      ['an external hand-off held on capture', { jira: { status: 'held', retryable: true, reason: 'checkout-capture-pending' } }],
+      ['a held worktree stage', { pipeline: { status: 'held', reason: 'checkout-retirement-pending' }, worktree: { status: 'held', value: ['warning'] } }],
+      ['a held completion signal', { sentinel: { status: 'held' } }],
+    ])('refuses the recheck for %s', async (_name, stagePatch) => {
+      const { pending, owner } = heldOwner(stagePatch);
+      expect(await recheckAgentCleanup(owner.id, pending.id)).toEqual({ ok: true, verified: false, reasons: ['completion-stages-pending'] });
+      expect(retireInventoriedCheckout).not.toHaveBeenCalled();
+      expect(recordCompletionCleanup).not.toHaveBeenCalled();
+      expect(recordRepoStateVerification).not.toHaveBeenCalled();
+      expectNoSettlementOrDispatch();
+    });
+
+    it('retains the checkout if a held stage starts running during the recheck', async () => {
+      const { pending, owner } = heldOwner({ pipeline: { status: 'held', retryable: true, reason: 'checkout-retirement-pending' } });
+      let removed = false;
+      retireInventoriedCheckout.mockImplementation(async (_input, options) => {
+        owner.metadata.completionCleanup.stages.pipeline = { status: 'running', retryable: true };
+        await options.beforeMutation();
+        removed = true;
+        return { ok: true, branchDeleted: true };
+      });
+      expect(await recheckAgentCleanup(owner.id, pending.id)).toMatchObject({ ok: true, verified: false, reasons: ['completion-stages-pending'] });
+      expect(removed).toBe(false);
+      expect(recordCompletionCleanup).not.toHaveBeenCalled();
+      expectNoSettlementOrDispatch();
+    });
+
+    it('does not settle a held run even if its stages finish concurrently', async () => {
+      const { pending, owner } = heldOwner({ pipeline: { status: 'held', retryable: true, reason: 'checkout-retirement-pending' } });
+      retireInventoriedCheckout.mockImplementation(async (_input, options) => {
+        owner.metadata.completionCleanup = completedCleanup();
+        await options.beforeMutation();
+        return { ok: true, branchDeleted: true };
+      });
+      expect(await recheckAgentCleanup(owner.id, pending.id)).toEqual({ ok: true, verified: false, reasons: ['completion-handoff-pending'] });
+      expectNoSettlementOrDispatch();
+    });
+
+    it('refuses a held run whose task owner changes during retirement', async () => {
+      const { pending, owner } = heldOwner({ pipeline: { status: 'held', retryable: true, reason: 'checkout-retirement-pending' } });
+      let removed = false;
+      retireInventoriedCheckout.mockImplementation(async (_input, options) => {
+        getTaskById.mockResolvedValue({ ...pending, metadata: { ...pending.metadata, deliveryRecoveryAgentId: 'agent-2' } });
+        await options.beforeMutation();
+        removed = true;
+        return { ok: true, branchDeleted: true };
+      });
+      expect(await recheckAgentCleanup(owner.id, pending.id)).toEqual({ ok: false, reason: 'cleanup-owner-changed' });
+      expect(removed).toBe(false);
+      expect(recordCompletionCleanup).not.toHaveBeenCalled();
+      expectNoSettlementOrDispatch();
+    });
   });
 
   it('retains the task if another completion stage changes while cleanup settles', async () => {
