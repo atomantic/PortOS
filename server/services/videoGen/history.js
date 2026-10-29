@@ -127,7 +127,7 @@ export function mutateVideoHistory(mutator, { stampOrigin = true } = {}) {
       for (const r of toSave) {
         if (!r || typeof r !== 'object') continue;
         if (!priorOrigins.has(r.id)) added.push(r);
-        else if (!r.originInstanceId && priorOrigins.get(r.id)) r.originInstanceId = priorOrigins.get(r.id);
+        else if (priorOrigins.get(r.id) && r.originInstanceId !== priorOrigins.get(r.id)) r.originInstanceId = priorOrigins.get(r.id);
       }
       if (added.length > 0) {
         // Lazy: identity pulls in fileUtils at load; a stamping failure must never lose the row.

@@ -55,6 +55,31 @@ const connect = async (port, instanceId, subscribe) => {
 };
 
 describe('deliverPeerSyncEvent', () => {
+  it('delivers concurrent publications in publication order', async () => {
+    registry.peers = [peer('peer-shared', true)];
+    httpServer = createServer();
+    ioServer = new Server(httpServer);
+    ioServer.on('connection', (socket) => registerPeerSyncSubscriber(socket));
+    const port = await new Promise((resolve) => httpServer.listen(0, '127.0.0.1', () => resolve(httpServer.address().port)));
+    const qualifying = await connect(port, 'peer-shared', true);
+    // The first delivery's socket lookup is slow; the second must still go out after it.
+    const realIn = ioServer.in.bind(ioServer);
+    let first = true;
+    ioServer.in = (room) => {
+      const target = realIn(room);
+      if (!first) return target;
+      first = false;
+      return { fetchSockets: async () => { await new Promise((r) => setTimeout(r, 30)); return target.fetchSockets(); } };
+    };
+    const upsert = deliverPeerSyncEvent(ioServer, FRAME);
+    const del = deliverPeerSyncEvent(ioServer, { ...FRAME, op: 'delete', record: undefined });
+    expect(await Promise.all([upsert, del])).toEqual([1, 1]);
+    const marker = once(qualifying.client, 'example:marker');
+    ioServer.emit('example:marker');
+    await marker;
+    expect(qualifying.frames.map((f) => f.op)).toEqual(['upsert', 'delete']);
+  });
+
   it('sends a frame only to subscribed sockets whose known peer shares the category', async () => {
     registry.peers = [peer('peer-shared', true), peer('peer-off', false)];
     httpServer = createServer();

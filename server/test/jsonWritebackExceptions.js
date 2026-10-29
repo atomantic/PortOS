@@ -132,10 +132,6 @@ export const JSON_WRITEBACK_EXCEPTIONS = [
     "reason": "No write-back cycle: transport manifests are input-only; exports build new manifests from authoritative records."
   },
   {
-    "key": "sharing/sidecarSync.js :: sidecarPath",
-    "reason": "Replace-from-peer: the pull always writes the peer's gen-params, as the raw-byte write did before; an unreadable local sidecar only loses this machine's own fields (hide, pending delete, supplier), never the peer content, and the write repairs the file."
-  },
-  {
     "key": "signalSync.js :: stateFilePath ( )",
     "reason": "Rebuildable cursor: losing it re-reads recent messages, and the signal:<messageId> dedupe key makes the replay idempotent."
   },

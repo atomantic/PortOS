@@ -48,9 +48,12 @@ const isEntry = (e) => isPlainObject(e) && KINDS.includes(e.kind) && isNonBlankS
 async function readQueue() {
   const raw = await readJSONFile(QUEUE_FILE(), null, { strict: true });
   const entries = Array.isArray(raw?.entries) ? raw.entries : [];
-  return entries.filter(isEntry).map(({ peerId, kind, key, queuedAt, holderDeleted }) => (
-    holderDeleted === true ? { peerId, kind, key, queuedAt, holderDeleted } : { peerId, kind, key, queuedAt }
-  ));
+  return entries.filter(isEntry).map(({ peerId, kind, key, queuedAt, holderDeleted, ackTombstone }) => ({
+    peerId, kind, key, queuedAt,
+    ...(holderDeleted === true ? { holderDeleted } : {}),
+    // The owner's acknowledged tombstone, kept when retiring the copy here failed.
+    ...(isPlainObject(ackTombstone) ? { ackTombstone } : {}),
+  }));
 }
 
 // `fn(entries)` returns the next list; the file is rewritten only when it changes.
@@ -434,7 +437,10 @@ async function pruneMediaDeleteQueue(peers, nowMs = Date.now()) {
     if (row) rows.set(`image:${entry.key}`, row);
   }
   const dropped = [];
+  // Only entries in the snapshot whose rows were read above are judged; one
+  // queued since then has no row in the map and is not "gone".
   await updateQueue((entries) => entries.filter((entry) => {
+    if (!queued.some((seen) => sameEntry(seen, entry))) return true;
     const row = rows.get(`${entry.kind}:${entry.key}`);
     const reason = staleReason(entry)
       ?? (!row ? (entry.holderDeleted ? null : 'row gone') : rowRecreated(row, entry) ? 're-created' : null);
@@ -471,13 +477,30 @@ async function drainMediaDeleteQueue(peer) {
         }
         // A cancel (or a fresh attempt) since the list was read has withdrawn or replaced it.
         if (!(await readQueue()).some((e) => sameEntry(e, entry))) continue;
-        const result = await sendDeleteCommand(current, entry.kind, entry.key);
+        // The owner already deleted and acknowledged; only the retirement here is left.
+        const result = entry.ackTombstone
+          ? { outcome: 'ok', tombstone: entry.ackTombstone }
+          : await sendDeleteCommand(current, entry.kind, entry.key);
         if (result.outcome === 'unreachable') {
           console.log(`🔌 Queued delete of ${entry.kind} ${entry.key} still waiting on ${peerLabel(current)}: ${result.detail}`);
           continue;
         }
+        let retired = null;
+        if (result.outcome === 'ok') {
+          try {
+            retired = await retireLocalCopy(entry.kind, current, entry.key, result.tombstone);
+          } catch (err) {
+            if (err?.code === 'NOT_FOUND') {
+              await dropEntriesFor(entry.kind, entry.key);
+              throw err;
+            }
+            // Keep the command with the owner's ack so the next drain retries the
+            // retirement here; re-sending would find the owner no longer holds it.
+            await updateQueue((entries) => entries.map((e) => (sameEntry(e, entry) ? { ...e, ackTombstone: result.tombstone } : e)));
+            throw err;
+          }
+        }
         await dropEntriesFor(entry.kind, entry.key);
-        const retired = result.outcome === 'ok' ? await retireLocalCopy(entry.kind, current, entry.key, result.tombstone) : null;
         if (retired && retired.status !== 'invalid-ack') {
           console.log(`🗑️ Queued delete of ${entry.kind} ${entry.key} completed on ${peerLabel(current)} (${retired.status})`);
           done++;

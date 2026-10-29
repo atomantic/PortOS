@@ -5,7 +5,7 @@ import { PATHS, atomicWrite } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { safeUnder } from '../../lib/ffmpeg.js';
-import { mutateVideoHistory } from './history.js';
+import { mutateVideoHistory, HISTORY_UNCHANGED } from './history.js';
 import { extendMasterPath } from './extendMaster.js';
 import { recordMediaTombstone, clearMediaTombstone } from '../mediaTombstones.js';
 
@@ -46,17 +46,24 @@ export async function setHistoryItemHidden(id, hidden) {
 // `fromRemoteTombstone`: the delete originated from a peer's tombstone, which the
 // caller already merged — so don't re-record it (that would restamp deletedAt
 // and ping-pong) or re-announce it.
-export async function deleteHistoryItem(id, { forgetInMusicVideos = true, fromRemoteTombstone = false } = {}) {
+// `onlyIf(row)` re-checks the row inside the history writer: a remote tombstone
+// must not retire a replacement written after the caller's own read.
+export async function deleteHistoryItem(id, { forgetInMusicVideos = true, fromRemoteTombstone = false, onlyIf = null } = {}) {
   // One lease covers the history read, file removals, history rewrite, and
   // derived row removal; per-file admission would leave gaps between stores.
   return withBackupAssetPublication(async () => {
     let item;
     let tombstone = null;
+    let skipped = false;
     // Hold the history writer across its recovery snapshot and the file move,
     // so overlapping prompt edits/deletes cannot retire a different revision.
     await mutateVideoHistory(async history => {
       item = history.find((entry) => entry.id === id);
       if (!item) throw new ServerError('Not found', { status: 404, code: 'NOT_FOUND' });
+      if (onlyIf && !onlyIf(item)) {
+        skipped = true;
+        return HISTORY_UNCHANGED;
+      }
       const videoFile = safeUnder(PATHS.videos, item.filename);
       if (!videoFile) throw new ServerError('Invalid video filename', { status: 400, code: 'INVALID_VIDEO_PATH' });
       // The shared history file stays in place; recycle a per-video copy of
@@ -78,6 +85,7 @@ export async function deleteHistoryItem(id, { forgetInMusicVideos = true, fromRe
       }
       return history.filter(entry => entry.id !== id);
     });
+    if (skipped) return { ok: false, skipped: true };
     // Drop the derived index row with the entry (#2738) — keyed by job id, the
     // ref the index wrote it under. Non-fatal + dynamically imported; see the
     // matching hook in imageGen/local.js#deleteImage for the rationale.

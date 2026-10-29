@@ -154,9 +154,19 @@ async function receivesFrames(instanceId, category) {
 /**
  * Send a frame to every subscribed relay socket whose peer this install shares
  * the frame's category with (the same predicate its pull gate uses).
- * A socket with no identified, known peer gets nothing.
+ * A socket with no identified, known peer gets nothing. Deliveries run one at
+ * a time in publication order: each awaits socket and registry reads, and the
+ * receiver applies frames in arrival order, so a delete must never overtake
+ * the upsert published before it.
  */
-export async function deliverPeerSyncEvent(io, event) {
+let deliveryTail = Promise.resolve();
+export function deliverPeerSyncEvent(io, event) {
+  const run = deliveryTail.then(() => deliverNow(io, event));
+  deliveryTail = run;
+  return run;
+}
+
+async function deliverNow(io, event) {
   try {
     const receives = RECEIVER_GATE_FOR_EVENT[event?.category];
     if (!io || !receives) return 0;

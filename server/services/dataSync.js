@@ -1087,9 +1087,19 @@ export async function applyRemoteVideoTombstones(remoteTombstones) {
   // Lazy import: historyOps pulls in trash/ffmpeg machinery the sync read path avoids.
   const { deleteHistoryItem } = await import('./videoGen/historyOps.js');
   let removed = 0;
+  const failures = [];
   for (const row of doomed) {
     try {
-      await deleteHistoryItem(row.id, { fromRemoteTombstone: true });
+      // Re-checked under the history writer: a replacement row written since the
+      // read above carries a newer createdAt and must survive this tombstone.
+      const result = await deleteHistoryItem(row.id, {
+        fromRemoteTombstone: true,
+        onlyIf: (current) => isTombstoned(tombstones, current.id, current.createdAt, 'key'),
+      });
+      if (result?.skipped) {
+        console.log(`⏭️ VideoHistory tombstone: ${row.id} was re-created since the delete`);
+        continue;
+      }
       removed++;
     } catch (err) {
       // Row already gone is an expected race with a concurrent local delete.
@@ -1098,7 +1108,13 @@ export async function applyRemoteVideoTombstones(remoteTombstones) {
         continue;
       }
       console.error(`❌ VideoHistory tombstone removal failed for ${row.id}: ${err.message}`);
+      failures.push(row.id);
     }
+  }
+  // Fail the apply so the caller retries (a snapshot keeps its checksum uncached)
+  // instead of leaving a tombstoned row and its files in place.
+  if (failures.length > 0) {
+    throw new Error(`VideoHistory tombstone removal failed for ${failures.length} row(s): ${failures.join(', ')}`);
   }
   return removed;
 }

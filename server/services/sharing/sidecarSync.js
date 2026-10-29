@@ -149,7 +149,20 @@ export async function pullSidecarForImage(peer, base, imageFilename) {
   if (sidecarGenParamsHash(parsed) === null) return false;
   await ensureDir(PATHS.images);
   const sidecarPath = join(PATHS.images, sidecarName);
-  await atomicWrite(sidecarPath, mergePeerSidecar(parsed, await readJSONFile(sidecarPath, null, { logError: false }), peer));
+  // Under the sidecar edit queue so a concurrent hide, pending-delete or prompt
+  // edit is merged, not overwritten. An unreadable local sidecar is left intact
+  // (it may hold this machine's own fields) rather than replaced.
+  const { sidecarEditQueue } = await import('../imageGen/sidecarStore.js');
+  const written = await sidecarEditQueue(safeName, async () => {
+    const local = await readJSONFile(sidecarPath, null, { strict: true }).catch((err) => {
+      console.warn(`⚠️ peerSync: kept unreadable sidecar ${sidecarName}; not replaced from ${peer.name || peer.instanceId}: ${err.message}`);
+      return undefined;
+    });
+    if (local === undefined) return false;
+    await atomicWrite(sidecarPath, mergePeerSidecar(parsed, local, peer));
+    return true;
+  });
+  if (!written) return false;
   await import('../mediaAssetIndex/index.js').then(m => m.indexImage({ filename: imageFilename })).catch(err => console.error(`❌ Media index sidecar refresh: ${err.message}`));
   console.log(`📥 peerSync: pulled sidecar ${sidecarName} from ${peer.name || peer.instanceId}`);
   return true;
@@ -204,15 +217,16 @@ export async function backfillMissingSidecars({ filenames }) {
     // write an orphan `<base>.metadata.json` (sidecar with no image) and inflate
     // `attempted`.
     if (!existsSync(join(PATHS.images, safeName))) continue;
-    const sidecarPath = join(PATHS.images, imageSidecarName(safeName));
+    // Read-only skip check; the write happens in pullSidecarForImage's strict read.
+    const heldSidecarPath = join(PATHS.images, imageSidecarName(safeName));
     // A sidecar can exist yet carry NO prompt: getOrComputeImageSha256 writes a
     // cache-only `{ sha256: {...} }` sidecar for every image it hashes during
     // sync. Skipping on mere file existence would make "Pull missing prompts" a
     // no-op for exactly the images this repair targets (synced-in, no gen-params).
     // Only skip when the sidecar already holds real gen-params — sidecarGenParamsHash
     // strips the sha256 cache key and returns null when nothing else remains.
-    if (existsSync(sidecarPath)) {
-      const existing = await readJSONFile(sidecarPath, null, { logError: false });
+    if (existsSync(heldSidecarPath)) {
+      const existing = await readJSONFile(heldSidecarPath, null, { logError: false });
       if (sidecarGenParamsHash(existing) !== null) continue;
     }
     attempted++;

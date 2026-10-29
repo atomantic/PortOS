@@ -49,6 +49,25 @@ describe('applyRemoteVideoTombstones scope', () => {
     expect(await dataSync.applyRemoteVideoTombstones([tomb('v-named')])).toBe(1);
     expect(await readHistory()).toEqual(['v-other']);
   });
+
+  it('fails the apply when trashing a tombstoned row fails, so the sync retries', async () => {
+    await atomicWrite(HISTORY, [row('v-stuck')]);
+    trashFiles.mockRejectedValueOnce(new Error('disk busy'));
+    await expect(dataSync.applyRemoteVideoTombstones([tomb('v-stuck')])).rejects.toThrow(/v-stuck/);
+    expect(await readHistory()).toEqual(['v-stuck']);
+  });
+
+  it('a remote-tombstone delete re-checks the row inside the history writer', async () => {
+    // The replacement row (newer than the delete) is what the writer sees, so it survives.
+    await atomicWrite(HISTORY, [row('v-race', '2026-07-01T00:00:00.000Z')]);
+    const result = await deleteHistoryItem('v-race', {
+      fromRemoteTombstone: true,
+      onlyIf: (current) => Date.parse(current.createdAt) <= Date.parse('2026-06-01T00:00:00.000Z'),
+    });
+    expect(result).toEqual({ ok: false, skipped: true });
+    expect(trashFiles).not.toHaveBeenCalled();
+    expect(await readHistory()).toEqual(['v-race']);
+  });
 });
 
 describe('video delete durability', () => {

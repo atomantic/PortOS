@@ -146,7 +146,8 @@ export default function MediaHistory() {
     let active = true;
     const ids = unresolvedPeerIds.split(',');
     getInstances({ silent: true }).catch(() => null).then((data) => {
-      if (!active) return;
+      // A failed lookup caches nothing, so a later items change retries it.
+      if (!active || !data) return;
       const known = Object.fromEntries((data?.peers || []).map((p) => [p.id, p.name || p.id]));
       setPeerNames((prev) => ({ ...prev, ...Object.fromEntries(ids.map((id) => [id, known[id] ?? null])) }));
     });

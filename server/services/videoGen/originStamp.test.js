@@ -53,6 +53,12 @@ describe('origin and supplier invariants', () => {
     expect(h.find((x) => x.id === 'n').originInstanceId).toBeUndefined();
   });
 
+  it('a row rebuilt under a known id with a different origin keeps the prior one', async () => {
+    await mutateVideoHistory((h) => { h.unshift({ id: 'k', createdAt: '2026-04-01T00:00:00Z', originInstanceId: 'peer-o' }); return h; }, { stampOrigin: false });
+    await mutateVideoHistory((h) => [{ id: 'k', createdAt: '2026-04-02T00:00:00Z', originInstanceId: 'claimed' }, ...h.filter((x) => x.id !== 'k')]);
+    expect((await loadHistory()).find((x) => x.id === 'k').originInstanceId).toBe('peer-o');
+  });
+
   it('an upscale-shaped copy of a peer row gets the local origin and no supplier', async () => {
     await mutateVideoHistory((h) => { h.unshift({ id: 'src', createdAt: '2026-04-04T00:00:00Z', originInstanceId: 'peer-o', suppliedByInstanceId: 'peer-o' }); return h; }, { stampOrigin: false });
     await mutateVideoHistory((h) => { h.unshift({ ...h.find((x) => x.id === 'src'), id: 'up', upscaledFrom: 'src' }); return h; });

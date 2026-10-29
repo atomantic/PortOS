@@ -160,10 +160,30 @@ describe('deleteMediaAnywhere', () => {
     net.fetch = vi.fn(async () => ownerAck('v1'));
     disarmQueue = initMediaRemoteDelete();
     instanceEvents.emit('peer:online', registry.peers[0]);
-    await vi.waitFor(async () => expect(await readRows()).toEqual([]));
-    expect(await listMediaDeleteQueue()).toEqual([]);
+    // The entry is dropped only after the copy here is retired.
+    await vi.waitFor(async () => expect(await listMediaDeleteQueue()).toEqual([]));
+    expect(await readRows()).toEqual([]);
     expect((await listMediaTombstones('video')).map((t) => t.key)).toEqual(['v1']);
     expect(deleteFrames).toEqual([]);
+  });
+
+  it('keeps the owner ack when retiring the copy here fails, and retires it on the next drain', async () => {
+    await atomicWrite(HISTORY, [row('v1', { originInstanceId: 'peer-o' })]);
+    net.fetch = vi.fn(unreachable);
+    await deleteMediaAnywhere('video', 'v1');
+    net.fetch = vi.fn(async () => ownerAck('v1'));
+    trashFiles.mockRejectedValueOnce(new Error('disk busy'));
+    disarmQueue = initMediaRemoteDelete();
+    await listenerFor('peer:online')(registry.peers[0]);
+    const [kept] = await listMediaDeleteQueue();
+    expect(kept).toMatchObject({ key: 'v1', ackTombstone: { key: 'v1' } });
+    expect((await readRows()).map((r) => r.id)).toEqual(['v1']);
+    // The owner no longer holds it; the retry must use the stored ack, not re-send.
+    net.fetch = vi.fn(async () => json(404, { code: 'MEDIA_NOT_HELD' }));
+    await listenerFor('peer:online')(registry.peers[0]);
+    expect(net.fetch).not.toHaveBeenCalled();
+    expect(await readRows()).toEqual([]);
+    expect(await listMediaDeleteQueue()).toEqual([]);
   });
 
   // Uniquely catches a pre-upgrade row (no origin, file already gone) that a
