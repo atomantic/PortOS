@@ -207,6 +207,30 @@ describe('CatalogReferenceLibrary', () => {
     }, { silent: true });
   });
 
+  it('renames a reference card from its details and clears back to the caption', async () => {
+    api.updateCatalogIngredientMediaLibrary.mockImplementation(async (_id, body) => ({
+      mediaKey: body.mediaKey, kind: body.kind, caption: 'Original caption', library: { variant: body.variant },
+    }));
+    function Gallery() {
+      const [rows, setRows] = useState([{ mediaKey: 'source.png', kind: 'reference', caption: 'Original caption', library: { variant: { age: 27, label: 'Nora 37 old title' } } }]);
+      return <CatalogReferenceLibrary ingredientId="cast" media={rows} onMediaUpdated={updated => setRows([updated])} />;
+    }
+    render(<Gallery />);
+    const row = screen.getByTestId('library-row');
+    expect(within(row).getByRole('heading', { name: 'Nora 37 old title' })).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Title for source.png'), { target: { value: '  Nora 27 short bob ' } });
+    fireEvent.blur(screen.getByLabelText('Title for source.png'));
+    expect(api.updateCatalogIngredientMediaLibrary).toHaveBeenLastCalledWith('cast', {
+      mediaKey: 'source.png', kind: 'reference', variant: { age: 27, label: 'Nora 27 short bob' },
+    }, { silent: true });
+    await waitFor(() => expect(within(row).getByRole('heading', { name: 'Nora 27 short bob' })).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText('Title for source.png'), { target: { value: '' } });
+    fireEvent.blur(screen.getByLabelText('Title for source.png'));
+    await waitFor(() => expect(within(row).getByRole('heading', { name: 'Original caption' })).toBeInTheDocument());
+    expect(api.updateCatalogIngredientMediaLibrary).toHaveBeenCalledTimes(2);
+    api.updateCatalogIngredientMediaLibrary.mockImplementation(async () => ({}));
+  });
+
   it('blocks refinement while the profile is unsaved while allowing review guidance to be saved', () => {
     render(<CatalogReferenceLibrary ingredientId="cast" media={[{ mediaKey: 'source.png', kind: 'reference',
       library: { review: { status: 'good', feedback: 'Preserve the face' } } }]} blockedReason="Save your profile edits first" />);

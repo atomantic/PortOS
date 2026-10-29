@@ -352,6 +352,14 @@ export default function CatalogReferenceLibrary({
                         <details>
                           <summary className="flex min-h-11 cursor-pointer items-center text-xs text-port-accent">Edit reference details</summary>
                           <fieldset disabled={!!busyKey} className="grid min-w-0 grid-cols-[repeat(auto-fit,minmax(min(100%,7rem),1fr))] gap-2 text-xs disabled:opacity-50">
+                            <label htmlFor={`${id}-${key}-title`} className="col-span-full min-w-0 space-y-1"><span>Title</span>
+                              <input key={lib.variant?.label ?? ''} id={`${id}-${key}-title`} aria-label={`Title for ${m.mediaKey}`} maxLength={120} defaultValue={lib.variant?.label ?? ''}
+                                placeholder={m.caption || m.mediaKey} className={fieldClass}
+                                onBlur={(e) => {
+                                  const label = e.target.value.trim() || undefined;
+                                  if (label !== lib.variant?.label) save(m, { variant: { ...(lib.variant || {}), label } });
+                                }} />
+                            </label>
                             {forms.length > 0 && (
                               <label htmlFor={`${id}-${key}-form`} className="min-w-0 space-y-1"><span>Age or look</span>
                                 <select id={`${id}-${key}-form`} aria-label={`Age or look for ${m.mediaKey}`} value={lib.variant?.formId || ''} className={fieldClass}
