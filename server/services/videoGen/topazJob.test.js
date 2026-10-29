@@ -9,7 +9,11 @@ vi.mock('../settings.js', () => ({ getSettings: async () => ({ videoGen: { topaz
 vi.mock('./history.js', () => ({
   HISTORY_UNCHANGED: Symbol('unchanged'),
   loadHistory: async () => state.rows,
-  mutateVideoHistory: async fn => fn(state.rows),
+  mutateVideoHistory: async fn => {
+    const next = await fn([...state.rows]);
+    if (state.failHistoryOnce) { state.failHistoryOnce = false; throw new Error('synthetic history failure'); }
+    if (Array.isArray(next)) state.rows = next;
+  },
 }));
 vi.mock('./upscaleVideo.js', () => ({
   resolveHistoryItem: async id => state.rows.find(row => row.id === id),
@@ -47,7 +51,7 @@ const response = (body, status = 200) => new Response(JSON.stringify(body), { st
 beforeEach(async () => {
   state.videos = PATHS.videos;
   state.jobId = jobId;
-  state.key = 'test-key'; state.rows = [{ id: sourceId, filename: 'source.mp4' }]; state.result = {}; state.job = {}; state.related = []; state.updates = []; state.fetches = []; state.audio = true; state.invalid = false; state.failPreparedProbe = false; state.invalidOutput = false;
+  state.key = 'test-key'; state.rows = [{ id: sourceId, filename: 'source.mp4' }]; state.result = {}; state.job = {}; state.related = []; state.updates = []; state.fetches = []; state.audio = true; state.invalid = false; state.failPreparedProbe = false; state.invalidOutput = false; state.failHistoryOnce = false;
   await mkdir(PATHS.videos, { recursive: true });
   await unlink(join(PATHS.videos, `${jobId}.mp4`)).catch(() => {});
   await writeFile(join(PATHS.videos, 'source.mp4'), 'source');
@@ -205,6 +209,17 @@ describe('Topaz job boundary', () => {
     expect(failed).toHaveBeenCalledOnce();
     expect(await readFile(collision, 'utf8')).toBe('keep this');
     expect(state.rows).toHaveLength(1);
+  });
+
+  it('rolls back the new output when its history publication fails', async () => {
+    const { params } = await queued();
+    state.failHistoryOnce = true;
+    const failed = vi.fn(); videoGenEvents.once('failed', failed);
+    await runVideoUpscale(params);
+    expect(failed).toHaveBeenCalledOnce();
+    expect(state.rows).toHaveLength(1);
+    await expect(stat(join(PATHS.videos, `${jobId}.mp4`))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(state.result.topazRecoveryAvailable).toBe(true);
   });
 
   it.each([['canceled', true, false, false], ['processing', false, true, false], ['complete', false, false, true]])('reports remote cancellation only when status is %s', async (providerStatus, confirmed, uncertain, recoverable) => {
