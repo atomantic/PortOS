@@ -8,9 +8,11 @@
  * - any peer whose reported holdings list it: its byte inventory, pulled on the
  *   sync safety net, and its realtime `holding` frames ("I hold / no longer
  *   hold <file>").
- * Reported holdings and this machine's queued release commands live in
- * `data/media-holders.json`: machine-local evidence (`file-primary`,
- * docs/STORAGE.md) that never federates as a file.
+ * Reported holdings (filenames, plus each inventory scope's file modify times
+ * that origin attribution reads, services/mediaOriginReconcile.js) and this
+ * machine's queued release commands live in `data/media-holders.json`:
+ * machine-local evidence (`file-primary`, docs/STORAGE.md) that never federates
+ * as a file.
  *
  * A release keeps the row and drops only the bytes: the holder seeds its hosted
  * index with the primary, so the item streams from there, then trashes its copy.
@@ -57,8 +59,19 @@ const isRelease = (e) => isPlainObject(e) && KINDS.includes(e.kind) && validName
   && isNonBlankStr(e.primaryInstanceId) && parseTsMs(e.primaryAt) !== null && Number.isFinite(Date.parse(e.queuedAt));
 
 // STRICT: an unreadable store rejects rather than being rewritten as empty.
+const isReport = (r) => isPlainObject(r) && isPlainObject(r.mtimes) && Array.isArray(r.checked) && Number.isFinite(Date.parse(r.at));
+
 async function readStore() {
   const raw = await readJSONFile(STORE_FILE(), null, { strict: true });
+  const reports = {};
+  for (const [instanceId, kinds] of Object.entries(isPlainObject(raw?.reports) ? raw.reports : {})) {
+    if (!isNonBlankStr(instanceId) || !isPlainObject(kinds)) continue;
+    for (const kind of KINDS) {
+      if (!isPlainObject(kinds[kind])) continue;
+      const scopes = Object.fromEntries(Object.entries(kinds[kind]).filter(([scope, r]) => isNonBlankStr(scope) && isReport(r)));
+      if (Object.keys(scopes).length > 0) reports[instanceId] = { ...reports[instanceId], [kind]: scopes };
+    }
+  }
   const holdings = {};
   for (const [instanceId, kinds] of Object.entries(isPlainObject(raw?.holdings) ? raw.holdings : {})) {
     if (!isNonBlankStr(instanceId) || !isPlainObject(kinds)) continue;
@@ -69,9 +82,34 @@ async function readStore() {
   }
   const releases = (Array.isArray(raw?.releases) ? raw.releases : []).filter(isRelease)
     .map(({ peerId, kind, filename, primaryInstanceId, primaryAt, queuedAt }) => ({ peerId, kind, filename, primaryInstanceId, primaryAt, queuedAt }));
-  return { holdings, releases };
+  return { holdings, reports, releases };
 }
-const readStoreOrEmpty = () => readStore().catch(() => ({ holdings: {}, releases: [] }));
+const readStoreOrEmpty = () => readStore().catch(() => ({ holdings: {}, reports: {}, releases: [] }));
+
+/** Each peer's last inventory reports with file times: `{ instanceId: { kind: { scope: { at, mtimes, checked, complete? } } } }`. */
+export async function readPeerReports() {
+  return (await readStore()).reports;
+}
+
+/**
+ * Remember what `instanceId` reported for one inventory scope (`scope`): the
+ * modify times of the files it holds (`{ filename: mtimeMs }`) and the names it
+ * examined. Scopes differ (history rows vs collection assets), so a report
+ * speaks only for the names it `checked`, never for the whole kind, unless it is
+ * `complete` (a full listing of the folder: absence means not held).
+ */
+export function recordPeerReport(instanceId, kind, scope, { mtimes, checked, complete = false }) {
+  if (!KINDS.includes(kind) || !isNonBlankStr(instanceId) || !isNonBlankStr(scope) || !isPlainObject(mtimes) || !Array.isArray(checked)) return Promise.resolve(false);
+  const clean = {};
+  for (const [name, ms] of Object.entries(mtimes)) {
+    if (typeof ms === 'number' && Number.isFinite(ms) && ms > 0 && validName(name)) clean[name] = ms;
+  }
+  return updateStore((store) => {
+    const entry = store.reports[instanceId] ?? {};
+    store.reports[instanceId] = { ...entry, [kind]: { ...entry[kind], [scope]: { at: new Date().toISOString(), mtimes: clean, checked: checked.filter(validName), ...(complete === true && { complete: true }) } } };
+    return true;
+  });
+}
 
 // `fn(store)` mutates the store in place and returns true when it changed.
 function updateStore(fn) {
@@ -113,6 +151,12 @@ export async function recordPeerInventory(instanceId, kind, filenames, checked, 
       if (!present.has(name) && held[name]) { delete held[name]; changed = true; }
     }
     if (changed) store.holdings[instanceId] = { ...(store.holdings[instanceId] ?? {}), [kind]: held };
+    // A peer that no longer holds a file stops being a holder for origin attribution too.
+    for (const report of Object.values(store.reports[instanceId]?.[kind] ?? {})) {
+      for (const name of absent) {
+        if (report.mtimes[name] !== undefined) { delete report.mtimes[name]; changed = true; }
+      }
+    }
     return changed;
   });
   return notifyHoldersChanged(hostsDropped || recorded);
@@ -487,6 +531,9 @@ async function pruneStore(peers) {
     let changed = false;
     for (const instanceId of Object.keys(store.holdings)) {
       if (!instanceIds.has(instanceId)) { delete store.holdings[instanceId]; changed = true; }
+    }
+    for (const instanceId of Object.keys(store.reports)) {
+      if (!instanceIds.has(instanceId)) { delete store.reports[instanceId]; changed = true; }
     }
     const next = store.releases.filter((e) => registryIds.has(e.peerId) && !entryExpired(e, nowMs));
     if (next.length !== store.releases.length) {

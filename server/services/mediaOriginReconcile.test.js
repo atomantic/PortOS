@@ -38,7 +38,7 @@ const videoRow = { id: 'v1', filename: 'v1.mp4', createdAt: '2026-05-22T00:00:00
 beforeEach(async () => {
   mkdirSync(PATHS.videos, { recursive: true });
   mkdirSync(PATHS.images, { recursive: true });
-  for (const name of ['peer-hosted-media.json', 'peer-media-holdings.json', 'video-history.json']) rmSync(join(PATHS.data, name), { force: true });
+  for (const name of ['peer-hosted-media.json', 'media-holders.json', 'video-history.json']) rmSync(join(PATHS.data, name), { force: true });
   writeFileSync(join(PATHS.videos, 'v1.mp4'), 'bytes');
   peers.list = [peer('a'), peer('b')];
   await saveHistory([{ ...videoRow }]);
@@ -110,6 +110,16 @@ describe('earliest holder of a pre-upgrade video', () => {
     await report('b', undefined);
     expect(await reconcileMediaOrigins('video')).toBe(1); // b examined it and does not hold it: only a holds a later copy
     expect(await originOf()).toBe('me');
+  });
+
+  it('stops counting a peer as a holder once it reports it no longer holds the file', async () => {
+    touch(join(PATHS.videos, 'v1.mp4'), T + 2 * DAY);
+    await report('a', T);
+    await report('b', T + DAY);
+    const { notePeerHolding } = await import('./mediaHolders.js');
+    await notePeerHolding('a', 'video', 'v1.mp4', false);
+    expect(await reconcileMediaOrigins('video')).toBe(1);
+    expect(await originOf()).toBe('b'); // a's earlier copy is gone, so b is the earliest holder
   });
 
   it('lets a newer scope that no longer lists the file override an older one that did', async () => {
