@@ -72,20 +72,29 @@ export async function getOrComputeImageSha256(imagePath) {
     return { hash: cached.value, sidecar };
   }
   const hash = await sha256File(imagePath);
-  const next = {
-    ...(sidecar || {}),
-    sha256: { value: hash, mtimeMs: info.mtimeMs, size: info.size },
-  };
-  // Atomic so a concurrent reader never sees a half-written file. A race with
-  // a parallel re-render is benign: the loser's hash entry just gets
-  // overwritten on the next read (mtimeMs comparison invalidates it).
-  await atomicWrite(sidecarPath, next).catch((err) => {
-    // Sidecar may be missing entirely (asset has no provenance) and the dir
-    // may not exist — log but don't fail the caller, the hash is still valid
-    // for this call's purposes.
-    console.error(`⚠️ assetHash: sidecar write failed for ${sidecarPath}: ${err?.message || err}`);
-  });
-  return { hash, sidecar: next };
+  const entry = { value: hash, mtimeMs: info.mtimeMs, size: info.size };
+  const fallback = { ...(sidecar || {}), sha256: entry };
+  const filename = basename(imagePath);
+  if (!/^[\w.-]+\.png$/i.test(filename) || filename.includes('..')) {
+    // Not a gallery filename the edit queue accepts: keep the plain write.
+    await atomicWrite(sidecarPath, fallback).catch((err) => {
+      console.error(`⚠️ assetHash: sidecar write failed for ${sidecarPath}: ${err?.message || err}`);
+    });
+    return { hash, sidecar: fallback };
+  }
+  // The write goes through the gallery sidecar edit queue so it re-reads the
+  // CURRENT sidecar; a read-modify-write here would drop an edit (hidden flag,
+  // supplying peer, ...) that landed after our read above. services/ is
+  // imported dynamically because lib/ must not depend on it statically. A
+  // missing sidecar stays missing; a failed write is logged but the hash is
+  // still valid for this call.
+  const merged = await import('../services/imageGen/local.js')
+    .then(({ cacheImageSha256 }) => cacheImageSha256(filename, entry))
+    .catch((err) => {
+      console.error(`⚠️ assetHash: sidecar write failed for ${sidecarPath}: ${err?.message || err}`);
+      return null;
+    });
+  return { hash, sidecar: merged || fallback };
 }
 
 /**
