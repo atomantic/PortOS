@@ -45,7 +45,6 @@ import {
   listSheetVariants,
   previewCharacterReferenceSheet,
   renderCharacterReferenceSheet,
-  deleteCharacterReferenceSheet,
 } from './universeCharacterSheet.js';
 import {
   DEFAULT_ENVIRONMENT_SHEET_STYLE,
@@ -365,17 +364,20 @@ function clearSheetFile(character, filename) {
 }
 
 /**
- * Remove a universe-canon sheet (`referenceSheetImageRef` /
- * `referenceSheets[variant]`) from a catalog character, bound to the file the
+ * Take a universe-canon sheet (`referenceSheetImageRef` /
+ * `referenceSheets[variant]`) off a catalog character, bound to the file the
  * caller saw (`filename`; a newer render answers 409).
  *
- * When every universe slot holding the file belongs to this record's own canon
- * entries, the universe delete unlinks the PNG and clears those slots; the
- * canon→catalog projection carries that to this row. When any other slot names
- * the file (another character, possibly locked, or a retained merge source),
- * or this record is a merge survivor whose canon copies are retained evidence,
- * only this record's own slots are cleared and the file stays. Returns the
- * row's fresh pointer fields and `updatedAt` so the page applies them in place.
+ * Only references: every slot of this record that names the file is cleared,
+ * on the row and on each canon entry carrying this record's own id. The PNG
+ * stays on disk, because other characters, merged-source evidence or catalog
+ * media may still name it, and no snapshot of those holders can be proven
+ * current at an unlink. Every affected lock is checked before the first write,
+ * and again inside each serialized write.
+ *
+ * Returns the fresh pointer fields plus `updatedAt` and `priorUpdatedAt` (the
+ * row clock before this removal), so the page adopts the new clock only when
+ * nothing else changed the record meanwhile.
  */
 export async function removeCatalogPointerSheet(id, { variant = LEGACY_SHEET_VARIANT_ID, filename: expected = null } = {}) {
   await assertCatalogIdentityWritable(id);
@@ -387,50 +389,44 @@ export async function removeCatalogPointerSheet(id, { variant = LEGACY_SHEET_VAR
   if (expected && expected !== filename) {
     throw new ServerError('This reference sheet changed since it was shown; reload and try again', { status: 409, code: 'REFERENCE_SHEET_CHANGED' });
   }
+  const isOwn = (entry) => entry?.ingredientId === ingredient.id;
+  const holdsFile = (entry) => listSheetPointers(entry).some((p) => p.filename === filename);
+  const lockedEntry = (entries) => entries.find((entry) => isOwn(entry) && holdsFile(entry) && entry.locked === true);
 
-  // Like a render, only a record with no merged sources acts on its canon entries.
-  const ownsCanon = (await getIngredientIdentityIds(ingredient.id)).length === 1;
-  const isOwn = (entry) => ownsCanon && entry?.ingredientId === ingredient.id;
-  const holders = [];
-  for (const universe of await listUniverses()) {
-    for (const entry of Array.isArray(universe.characters) ? universe.characters : []) {
-      for (const pointer of listSheetPointers(entry)) {
-        if (pointer.filename === filename) holders.push({ universeId: universe.id, entry, variant: pointer.variant });
-      }
-    }
-  }
-  const own = holders.filter((h) => isOwn(h.entry));
-  let result = { filename, fileDeleted: false, cleared: 0 };
-  if (own.length && own.length === holders.length) {
-    const { universeId, entry, variant: slot } = own[0];
-    result = await deleteCharacterReferenceSheet(universeId, entry.id, { variant: slot, expectedFilename: filename });
-  } else {
-    for (const universeId of new Set(own.map((h) => h.universeId))) {
-      await updateUniverse(universeId, (cur) => {
-        let touched = false;
-        const characters = (Array.isArray(cur.characters) ? cur.characters : []).map((entry) => {
-          if (!isOwn(entry)) return entry;
-          const next = clearSheetFile(entry, filename);
-          if (next !== entry) { touched = true; result.cleared += 1; }
-          return next;
-        });
-        return touched ? { characters } : null;
+  const universes = (await listUniverses()).filter((u) => (u.characters || []).some((c) => isOwn(c) && holdsFile(c)));
+  const locked = universes.map((u) => lockedEntry(u.characters)).find(Boolean);
+  if (locked) throw sheetLocked(locked.name || ingredient.name);
+
+  let cleared = 0;
+  for (const universe of universes) {
+    await updateUniverse(universe.id, (cur) => {
+      const list = Array.isArray(cur.characters) ? cur.characters : [];
+      const lockedNow = lockedEntry(list);
+      if (lockedNow) throw sheetLocked(lockedNow.name || ingredient.name);
+      let touched = false;
+      const characters = list.map((entry) => {
+        if (!isOwn(entry)) return entry;
+        const next = clearSheetFile(entry, filename);
+        if (next !== entry) { touched = true; cleared += 1; }
+        return next;
       });
-    }
+      return touched ? { characters } : null;
+    });
   }
-  // The row itself: a no-op when the projection already cleared it.
-  let updated = await getIngredient(ingredient.id);
+  // The row itself, from its locked current value: a no-op when the canon
+  // projection already cleared it.
   const guard = (current) => { if (current.payload?.locked === true) throw sheetLocked(current.name); };
-  if (updated?.payload?.referenceSheetImageRef === filename) {
-    updated = await setIngredientPayloadKey(ingredient.id, 'referenceSheetImageRef',
-      (current) => (current === filename ? null : current), { guard });
-  }
-  if (Object.values(sheetPointersOf(updated?.payload).referenceSheets).includes(filename)) {
-    updated = await setIngredientPayloadKey(ingredient.id, 'referenceSheets', (current) => Object.fromEntries(
-      Object.entries(current && typeof current === 'object' ? current : {}).filter(([, f]) => f !== filename)), { guard });
-  }
+  await setIngredientPayloadKey(ingredient.id, 'referenceSheetImageRef',
+    (current) => (current === filename ? null : current), { guard });
+  const updated = await setIngredientPayloadKey(ingredient.id, 'referenceSheets', (current) => (current && typeof current === 'object'
+    ? Object.fromEntries(Object.entries(current).filter(([, f]) => f !== filename)) : current), { guard });
   if (!updated) throw new ServerError('Ingredient not found', { status: 404, code: 'NOT_FOUND' });
   catalogEvents.emit('primitive-changed', { ingredientId: updated.id });
-  console.log(`🗑️ Removed sheet ${filename} from catalog ${shortId(updated.id)} (file=${result.fileDeleted}, shared=${own.length !== holders.length})`);
-  return { ...result, pointers: sheetPointersOf(updated.payload), updatedAt: updated.updatedAt };
+  console.log(`🗑️ Removed sheet ${filename} from catalog ${shortId(updated.id)} (canon slots cleared=${cleared}, file kept)`);
+  return {
+    filename, cleared,
+    pointers: sheetPointersOf(updated.payload),
+    updatedAt: updated.updatedAt,
+    priorUpdatedAt: ingredient.updatedAt ?? null,
+  };
 }

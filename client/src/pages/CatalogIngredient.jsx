@@ -610,7 +610,7 @@ function IngredientEditor() {
       : prev));
     setPayload((cur) => ({ ...cur, ...pointers }));
   }, []);
-  const refreshSheetPointers = useCallback(() => {
+  const refreshSheetPointers = useCallback(({ announce = true } = {}) => {
     if (!id) return;
     const requestedId = id;
     const sequence = ++sheetPointerSequence.current;
@@ -619,17 +619,25 @@ function IngredientEditor() {
     getCatalogIngredientDetails(id, { silent: true, view: detailView })
       .then((d) => {
         if (!isCurrentRequest() || !d?.ingredient) return;
-        applySheetPointers(requestedId, ingredientPayload(d.ingredient.payload), d.ingredient.updatedAt);
-        toast.success('Reference sheet ready');
+        applySheetPointers(requestedId, ingredientPayload(d.ingredient.payload));
+        if (announce) toast.success('Reference sheet ready');
       })
-      .catch(() => { if (isCurrentRequest()) toast.error('Reference sheet rendered — reload to see it'); });
+      .catch(() => { if (isCurrentRequest()) toast.error(announce ? 'Reference sheet rendered — reload to see it' : 'Reload to see the current reference sheets'); });
   }, [id, detailView, mountedRef, applySheetPointers]);
-  // A removed universe sheet returns the row's fresh pointer fields and clock.
-  const handlePointerSheetsChanged = useCallback(({ pointers, updatedAt } = {}) => {
+  // A removed universe sheet returns the row's pointers and clock. They are
+  // adopted only when the record had not moved on from the clock the removal
+  // started from; otherwise (another view's edit, or a later removal answered
+  // first) the pointers are re-read and the clock is left for the usual
+  // external-change check.
+  const handlePointerSheetsChanged = useCallback(({ pointers, updatedAt, priorUpdatedAt } = {}) => {
     if (!id || !pointers || !mountedRef.current || activeVisitRef.current.id !== id) return;
+    if (!priorUpdatedAt || priorUpdatedAt !== editSnapshot.current?.updatedAt) {
+      refreshSheetPointers({ announce: false });
+      return;
+    }
     ++sheetPointerSequence.current;
     applySheetPointers(id, pointers, updatedAt);
-  }, [id, applySheetPointers, mountedRef]);
+  }, [id, applySheetPointers, refreshSheetPointers, mountedRef]);
 
   const handleSave = async () => {
     if (!record || identityReadOnly || unlocking || characterActionBusy) return;

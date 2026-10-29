@@ -906,9 +906,7 @@ export function deleteCharacterReferenceSheet(universeId, entryId, options) {
   return withBackupAssetPublication(() => removeCharacterReferenceSheet(universeId, entryId, options));
 }
 
-// `expectedFilename` binds the delete to the file the caller confirmed: a render
-// that published a new sheet since then leaves the slot untouched (409).
-async function removeCharacterReferenceSheet(universeId, entryId, { variant = LEGACY_SHEET_VARIANT_ID, expectedFilename = null } = {}) {
+async function removeCharacterReferenceSheet(universeId, entryId, { variant = LEGACY_SHEET_VARIANT_ID } = {}) {
   const variantConfig = getVariantConfig(variant);
   const universe = await getUniverse(universeId);
   const list = Array.isArray(universe.characters) ? universe.characters : [];
@@ -925,11 +923,6 @@ async function removeCharacterReferenceSheet(universeId, entryId, { variant = LE
     );
   }
   const filename = readSheetPointer(character, variant);
-  if (expectedFilename && filename !== expectedFilename) {
-    throw new ServerError('This reference sheet changed since it was shown; reload and try again', {
-      status: 409, code: 'REFERENCE_SHEET_CHANGED',
-    });
-  }
   if (!filename) {
     return { filename: null, fileDeleted: false, cleared: 0 };
   }

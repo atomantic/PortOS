@@ -37,7 +37,7 @@ const universeCanonPath = (universeRef) => (universeRef?.refId
 const pointerRatingKey = (filename) => `image-ref:${filename}`;
 const mediaRatingKey = (mediaKey) => `image:${mediaKey}`;
 
-// `remove` (optional) is `{ armed, busy, onArm, onConfirm, onCancel }`; a sheet
+// `remove` (optional) is `{ armed, busy, disabled, onArm, onConfirm, onCancel }`; a sheet
 // rated Bad keeps its remove control in view instead of behind hover.
 function PointerSheetFigure({ variant, filename, bad = false, remove = null }) {
   return (
@@ -54,7 +54,7 @@ function PointerSheetFigure({ variant, filename, bad = false, remove = null }) {
             <ConfirmButtonPair prompt="Remove sheet?" confirmText="Remove" cancelText="Cancel" ariaLabel="Confirm sheet removal"
               busy={remove.busy} busyText="Removing…" onConfirm={remove.onConfirm} onCancel={remove.onCancel} largeTouchTargets />
           ) : (
-            <button type="button" onClick={remove.onArm} title="Remove this sheet" aria-label={`Remove ${variant} sheet`}
+            <button type="button" onClick={remove.onArm} disabled={remove.disabled} title="Remove this sheet" aria-label={`Remove ${variant} sheet`}
               className="port-media-overlay-item p-2 sm:p-1 rounded hover:text-port-error">
               <Trash2 size={12} aria-hidden="true" />
             </button>
@@ -403,6 +403,8 @@ export default function CatalogSheetsPanel({
                   remove={onPointerSheetsChanged ? {
                     armed: armedPointer === v,
                     busy: removingPointer === v,
+                    // One removal at a time, so answers cannot arrive out of order.
+                    disabled: !!removingPointer,
                     onArm: () => setArmedPointer(v),
                     onConfirm: () => removePointer(v, filename),
                     onCancel: () => setArmedPointer(null),
