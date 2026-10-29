@@ -3,6 +3,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const net = { fetchPublicBinary: vi.fn() };
 const writeFileGuarded = vi.fn(async () => {});
 vi.mock('../../lib/safeUrlFetch.js', () => net);
+const writeSidecar = vi.fn(async () => true);
+vi.mock('../imageGen/imageRecords.js', () => ({ writeLocalImageSidecarIfMissing: (...args) => writeSidecar(...args) }));
 vi.mock('./db.js', () => ({ getBoard: vi.fn() }));
 vi.mock('../sharing/recordEvents.js', () => ({ emitRecordUpdated: vi.fn() }));
 vi.mock('../../lib/backupSnapshotBoundary.js', () => ({ withBackupAssetPublication: (fn) => fn() }));
@@ -19,6 +21,7 @@ describe('localizeImageUrl', () => {
   beforeEach(() => {
     net.fetchPublicBinary.mockReset();
     writeFileGuarded.mockClear();
+    writeSidecar.mockClear();
   });
 
   it('refuses private and loopback hosts, since item URLs also arrive through peer sync', async () => {
@@ -36,6 +39,7 @@ describe('localizeImageUrl', () => {
     expect(result).toMatch(/^\/data\/images\/board-[0-9a-f]{16}\.webp$/);
     expect(writeFileGuarded).toHaveBeenCalledTimes(1);
     expect(writeFileGuarded.mock.calls[0][1]).toEqual(webp);
+    expect(writeSidecar).toHaveBeenCalledWith(result.split('/').pop());
     expect(net.fetchPublicBinary).not.toHaveBeenCalled();
   });
 
