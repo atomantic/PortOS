@@ -19,7 +19,7 @@ export default function usePendingDeletePeerNames(rows) {
       setPeerNames((prev) => ({ ...prev, ...Object.fromEntries(ids.map((id) => [id, known[id] ?? null])) }));
     });
     return () => { active = false; };
-  }, [unresolvedPeerIds]);
+  }, [unresolvedPeerIds, rows]); // rows: a refresh retries a failed lookup
   const rememberPeerName = useCallback((peerId, name) => {
     if (peerId && name) setPeerNames((prev) => ({ ...prev, [peerId]: name }));
   }, []);
