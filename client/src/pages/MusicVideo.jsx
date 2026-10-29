@@ -76,6 +76,7 @@ import MusicVideoProjectCard from '../components/musicVideo/MusicVideoProjectCar
 import PreviewDock from '../components/musicVideo/PreviewDock.jsx';
 import TitleCardPanel from '../components/musicVideo/TitleCardPanel.jsx';
 import StatsOutroPanel from '../components/musicVideo/StatsOutroPanel.jsx';
+import CreditsOutroPanel from '../components/musicVideo/CreditsOutroPanel.jsx';
 import NeedsAttentionBanner from '../components/musicVideo/NeedsAttentionBanner.jsx';
 import SetupStage from '../components/musicVideo/stages/SetupStage.jsx';
 import StoryStage from '../components/musicVideo/stages/StoryStage.jsx';
@@ -1553,6 +1554,7 @@ function ProjectWorkspace({
       <TitleCardPanel project={selected} onEditLocal={editProjectLocal} onSave={saveProjectFields}
         onPreview={(startSec) => seekToScene({ startSec }, { play: true })} />
       <StatsOutroPanel project={selected} onEditLocal={editProjectLocal} onSave={saveProjectFields} />
+      <CreditsOutroPanel project={selected} onEditLocal={editProjectLocal} onSave={saveProjectFields} />
     </div>
   ));
   const board = selected ? {

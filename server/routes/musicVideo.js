@@ -1733,6 +1733,13 @@ router.get('/:id/stats-outro', asyncHandler(async (req, res) => {
   res.json({ stats: await getMusicVideoOutroStats(project) });
 }));
 
+// The credits ending's suggested lines: song, artist, director and album from the track and its artist.
+router.get('/:id/credits-prefill', asyncHandler(async (req, res) => {
+  const project = await requireProject(req.params.id);
+  const { getMusicVideoCreditsPrefill } = await import('../services/musicVideo/creditsOutro.js');
+  res.json({ credits: await getMusicVideoCreditsPrefill(project) });
+}));
+
 // The asset manager: mark unused stills and clips ★ ingredient / ✕ bad, or delete them from the library.
 router.patch('/:id/media-pool/marks', asyncHandler(async (req, res) => {
   const { items, mark } = validateRequest(musicVideoPoolMarkSchema, req.body);

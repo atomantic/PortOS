@@ -204,6 +204,8 @@ export const getMusicVideoMediaPool = (id, options = {}) => request(`/music-vide
 /** Swap's prompt search: `{ items: [{ kind, assetId }] }`, the pool items whose prompts hold every word. */
 export const searchMusicVideoMediaPool = (id, q, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/media-pool/search?q=${encodeURIComponent(q)}`, options);
+/** The credits ending's suggested lines for a video (song, artist, director, album): `{ credits }`. */
+export const getMusicVideoCreditsPrefill = (id, options = {}) => request(`/music-video/${encodeURIComponent(id)}/credits-prefill`, options);
 /** The cutting room floor outro's tally for a video: `{ stats }`. */
 export const getMusicVideoOutroStats = (id, options = {}) => request(`/music-video/${encodeURIComponent(id)}/stats-outro`, options);
 // Asset manager: mark unused pool items ★ 'ingredient' / ✕ 'bad' (null clears) → { assetMarks }.

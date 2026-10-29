@@ -5,6 +5,7 @@ import ContactSheetButton from '../ContactSheetButton.jsx';
 import LockAllShots from '../LockAllShots.jsx';
 import SceneCard from '../SceneCard.jsx';
 import EndingCard, { EndingThumbnail } from '../EndingCard.jsx';
+import CreditsEndingCard, { CreditsThumbnail } from '../CreditsEndingCard.jsx';
 import ScenePoster from '../ScenePoster.jsx';
 import ShotEffectsCard, { SceneEffectBadges } from '../ShotEffectsCard.jsx';
 import { ShotLockContext, SHOT_LOCK_LABELS, overallShotLock, shotUnlocked } from '../ShotLock.jsx';
@@ -92,10 +93,13 @@ export default function BoardStage({ board }) {
   }, { replace: true });
   // The ending after the song sits after the last shot; opening it is a search param on the board (a shot's route closes it).
   const navigate = useNavigate();
-  const endingOpen = !activeSceneId && searchParams.get('ending') === '1';
-  const openEnding = () => {
+  // `ending=1` is the cutting room floor, `ending=credits` the credits.
+  const endingParam = activeSceneId ? null : searchParams.get('ending');
+  const endingOpen = endingParam === '1';
+  const creditsOpen = endingParam === 'credits';
+  const openEnding = (which = '1') => {
     const params = new URLSearchParams(searchParams);
-    params.set('ending', '1');
+    params.set('ending', which);
     navigate({ pathname: `/music-video/${project.id}/produce`, search: `?${params}` }, { replace: true });
   };
   const closeEnding = () => setSearchParams((prev) => {
@@ -252,12 +256,18 @@ export default function BoardStage({ board }) {
             {PANEL_NOTICES[panelOf(scene)?.state] && <span className="block text-xs text-port-warning">{PANEL_NOTICES[panelOf(scene).state]}</span>}
           </button>)}
           {scenes.length > 0 && filter === 'all' && (
-            <EndingThumbnail project={project} open={endingOpen} onOpen={endingOpen ? closeEnding : openEnding} />
+            <EndingThumbnail project={project} open={endingOpen} onOpen={endingOpen ? closeEnding : () => openEnding('1')} />
+          )}
+          {scenes.length > 0 && filter === 'all' && (
+            <CreditsThumbnail project={project} open={creditsOpen} onOpen={creditsOpen ? closeEnding : () => openEnding('credits')} />
           )}
         </div>
         <div ref={inspectorRef} className="mt-3">
           {endingOpen && (
             <EndingCard project={project} onEditLocal={board.editProjectLocal} onSave={board.saveProjectFields} onClose={closeEnding} />
+          )}
+          {creditsOpen && (
+            <CreditsEndingCard project={project} onEditLocal={board.editProjectLocal} onSave={board.saveProjectFields} onClose={closeEnding} />
           )}
           {scenes.map((scene, idx) => scene.sceneId !== activeSceneId ? null : (
             <SceneCard
