@@ -1,19 +1,21 @@
 import CatalogImagePreview from '../catalog/CatalogImagePreview';
 
-// `editBase` (from the server preview) is the record's portrait: either the
-// image the render edits (also listed in `images` with role 'edit-base') or,
-// on a backend that cannot edit, a fallback with the reason it is not used so.
+// `editBase` (from the server preview) is the image the render edits (also
+// listed in `images` with role 'edit-base'), a fallback with the reason a
+// backend cannot edit it, or `none` when an age or look has no image of its
+// own and the render generates fresh instead of editing the canonical portrait.
 export default function ModelReferenceImages({ images, editBase, onOpenPreview }) {
   if (!Array.isArray(images)) return null;
   const editing = images.some((image) => image.role === 'edit-base');
   return (
-    <section aria-label="Canonical reference images" className="space-y-2">
-      <h3 className="text-xs font-semibold text-gray-300">Canonical reference images</h3>
+    <section aria-label="Reference images sent" className="space-y-2">
+      <h3 className="text-xs font-semibold text-gray-300">Reference images sent</h3>
       <p className="text-xs text-gray-500">
         {editing
-          ? 'The render edits the portrait; the other images guide likeness.'
+          ? `The render edits the ${editBase?.scope === 'form' ? 'first image' : 'portrait'}; the other images guide likeness.`
           : 'Render guides take priority; otherwise the portrait and canon images supply likeness.'}
       </p>
+      {editBase?.status === 'none' && <p role="status" className="text-xs text-gray-400">{editBase.reason}</p>}
       {editBase?.status === 'fallback' && (
         <p role="status" className="text-xs text-port-warning">Not editing from the portrait: {editBase.reason}</p>
       )}

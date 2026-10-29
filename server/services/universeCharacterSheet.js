@@ -485,6 +485,9 @@ function subscribeToSheetJob(jobId, handlers) {
  * edits, the render starts from it (`initImagePath`) and the other references
  * follow as identity guides; `built` may then be a function of
  * `{ editFromPortrait }` so a template can pick a layout that suits an edit.
+ * `form` ({ label }) is the age or look being rendered: its own image is the
+ * edit base (never the canonical portrait), canonical images guide likeness
+ * only, and with no image of its own the render generates fresh.
  * Returns `{ params, prompt, negativePrompt, modelId, activeMode, referenceImages, editBase }`.
  */
 export async function buildSheetRenderParams({
@@ -497,6 +500,7 @@ export async function buildSheetRenderParams({
   negativesLabel = 'Character sheet negatives',
   referenceCandidates = [],
   editBaseCandidate = null,
+  form = null,
   sharedIdentity = '',
   family = { additions: [], candidates: [] },
   selfName = '',
@@ -520,6 +524,17 @@ export async function buildSheetRenderParams({
   const localModel = !cloud && activeMode === IMAGE_GEN_MODE.LOCAL ? selectLocalImageModelFromSettings(settings, options.modelId) : null;
   const modelId = cloud ? cloud.modelId : localModel?.id || null;
   const references = resolveCharacterSheetReferences([...referenceCandidates, ...family.candidates], activeMode, modelId, localModel, editBaseCandidate);
+  if (form) {
+    const scopeLabel = { form: form.label, canonical: 'canonical · present story' };
+    references.images = references.images.map((image) => (image.scope ? { ...image, source: `${image.source} · ${scopeLabel[image.scope]}` } : image));
+    if (references.editBase?.scope) references.editBase = { ...references.editBase, source: `${references.editBase.source} · ${form.label}` };
+    if (!references.editBase) {
+      references.editBase = {
+        status: 'none',
+        reason: `${form.label} has no image of its own yet, so the sheet is generated fresh rather than edited from the present-day portrait. Assign a ${form.label} reference in the reference library to edit from it.`,
+      };
+    }
+  }
   const editFromPortrait = !!references.initPath;
   if (editFromPortrait && activeMode === IMAGE_GEN_MODE.RUNWAY
     && runwayImagePreservesSourceFrame(modelId, 1 + references.paths.length)) {
@@ -599,9 +614,16 @@ export async function buildSheetRenderParams({
     const guides = references.images.filter((image) => image.status === 'included' && image.role !== 'edit-base');
     const ownGuides = guides.some((image) => !image.relative);
     const added = [];
-    if (editFromPortrait) {
+    const otherAgeLine = form && guides.some((image) => image.scope === 'canonical')
+      ? ` Some attached images show this person at another age or look than ${form.label}: take only facial identity from them and render the age, build, hairstyle and wardrobe the description asks for.` : '';
+    if (editFromPortrait && form) {
+      const guideLine = ownGuides ? ` The other attached images of this character are identity guides for the same person.${otherAgeLine}` : '';
+      added.push(promptAddition('form-edit-base', `Edit from the ${form.label} reference`, `Edit the FIRST attached image, this character as ${form.label}, into the image described above. Keep this exact person at this age: the same facial structure, eyes, skin, hair color and distinctive marks. Apply the hairstyle, clothing, pose, framing, setting and layout the description asks for, and do not keep the image’s own clothing, crop or background unless the description asks for them.${guideLine}`));
+    } else if (editFromPortrait) {
       const guideLine = ownGuides ? ' The other attached images of this character are identity guides for the same person.' : '';
       added.push(promptAddition('portrait-edit-base', 'Edit from the canonical portrait', `Edit the FIRST attached image, the character’s canonical portrait, into the image described above. Keep this exact person: the same facial structure, eyes, skin, hair color and distinctive marks. Apply the age, hairstyle, clothing, pose, framing, setting and layout the description asks for, and do not keep the portrait’s own clothing, crop or background unless the description asks for them.${guideLine}`));
+    } else if (ownGuides && form) {
+      added.push(promptAddition('character-identity', `Likeness for ${form.label}`, `Use the attached images of this character as the identity reference. Preserve the facial features, skin, hair color, markings and distinctive likeness across every view.${otherAgeLine || ` Render the age, build and wardrobe the description asks for.`}`));
     } else if (ownGuides) {
       added.push(promptAddition('character-identity', 'Canonical character likeness', 'Use the attached canonical character images as the identity reference. Preserve the character’s facial features, proportions, skin, hair, markings and distinctive likeness across every view. Apply the requested age, wardrobe and visual direction while keeping the same character identity.'));
     }
