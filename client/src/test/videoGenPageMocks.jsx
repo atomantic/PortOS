@@ -196,6 +196,7 @@ vi.mock('../services/api', () => ({
   listVideoHistory: (...args) => state.listVideoHistory(...args),
   getVideoHistoryItem: (...args) => state.getVideoHistoryItem(...args),
   deleteVideoHistoryItem: vi.fn(async () => ({})),
+  cancelVideoPendingDelete: vi.fn(async () => ({})),
   setVideoHidden: vi.fn(async () => ({})),
   extractLastFrame: vi.fn(async () => ({})),
   upscaleVideo: vi.fn(async () => ({})),

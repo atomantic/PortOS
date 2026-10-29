@@ -20,7 +20,12 @@ import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import { makePathsProxy, lazyTempDataRoot, cleanupTempDataRoots } from '../lib/mockPathsDataRoot.js';
 
-const race = vi.hoisted(() => ({ beforeDelete: null, beforeSave: null, onRequest: null }));
+const race = vi.hoisted(() => ({ beforeDelete: null, beforeSave: null, onRequest: null, ownerAnswer: null }));
+// `ownerAnswer(kind, key)` stands in for a peer-owned asset: the real flow dials the owner and is covered in mediaRemoteDelete.test.js.
+vi.mock('../services/mediaRemoteDelete.js', async (original) => {
+  const actual = await original();
+  return { ...actual, deleteMediaAnywhere: async (kind, key, opts) => (race.ownerAnswer?.(kind, key) ?? actual.deleteMediaAnywhere(kind, key, opts)) };
+});
 vi.mock('../services/galleryImageDeletion.js', async (original) => {
   const actual = await original();
   return { ...actual, deleteGalleryImage: async (...args) => {
@@ -68,7 +73,7 @@ let project;
 let sceneA;
 let sceneB;
 beforeEach(async () => {
-  race.beforeDelete = race.beforeSave = race.onRequest = null;
+  race.beforeDelete = race.beforeSave = race.onRequest = race.ownerAnswer = null;
   rmSync(join(ROOT(), 'music-video-projects.json'), { force: true });
   rmSync(join(ROOT(), 'images'), { recursive: true, force: true });
   seedVideoHistory([]);
@@ -510,6 +515,7 @@ describe('the shot asset manager', () => {
 
     const deleted = await request(app).post(`${base()}/media-pool/delete`).send({ items: [{ kind: 'image', assetId: 'bad.png' }] });
     expect(deleted.status).toBe(200);
+    expect(deleted.body).toMatchObject({ deleted: 1, items: [{ kind: 'image', assetId: 'bad.png', status: 'deleted' }] });
     // A clip deleted from Media history is forgotten the same way.
     const { deleteHistoryItem } = await import('../services/videoGen/historyOps.js');
     await deleteHistoryItem('bad-clip');
@@ -521,6 +527,27 @@ describe('the shot asset manager', () => {
     expect(stored.assetMarks).toEqual({ 'image:keep.png': 'ingredient' });
     const { getCollection, musicVideoCollectionId } = await import('../services/mediaCollections.js');
     expect((await getCollection(musicVideoCollectionId(project.id))).items.map((item) => item.ref).sort()).toEqual(['b-clip', 'b-used.png', 'keep.png', 'shared.png', 'used.png']);
+  });
+});
+
+describe('deleting a peer-owned pool asset', () => {
+  // Uniquely catches a pool delete removing or forgetting an asset here before its owner has deleted it.
+  it('keeps a pending asset and its takes, and forgets one the owner deleted', async () => {
+    for (const name of ['theirs.png', 'gone.png', 'first.png']) seedImage(name);
+    // The shot's first take is its own; the later ones sit unused in the pool.
+    for (const name of ['first.png', 'theirs.png', 'gone.png']) await addTake(sceneA.sceneId, { kind: 'image', assetId: name, source: 'generated' });
+    await projects.mutateProjectRecord(project.id, (current) => ({ project: { ...current, assetMarks: { 'image:theirs.png': 'bad', 'image:gone.png': 'bad' } } }));
+    const remove = (items) => request(app).post(`/api/music-video/${project.id}/media-pool/delete`).send({ items });
+    race.ownerAnswer = async (kind, key) => (key === 'theirs.png'
+      ? { status: 'pending', pendingDelete: { peerId: 'peer-1', queuedAt: '2026-05-01T00:00:00.000Z' }, peerName: 'Example Peer' }
+      : { status: 'deleted-remote', hiddenHere: true, peerName: 'Example Peer' });
+    const res = await remove([{ kind: 'image', assetId: 'theirs.png' }, { kind: 'image', assetId: 'gone.png' }]);
+    expect(res.status).toBe(200);
+    expect(res.body.deleted).toBe(1);
+    expect(res.body.items.map((item) => [item.assetId, item.status])).toEqual([['theirs.png', 'pending'], ['gone.png', 'deleted-remote']]);
+    // Nothing was deleted or tombstoned here: the bytes stay, and only the hidden asset is forgotten.
+    expect(existsSync(join(ROOT(), 'images', 'theirs.png'))).toBe(true);
+    expect((await projects.getProject(project.id)).assetMarks).toEqual({ 'image:theirs.png': 'bad' });
   });
 });
 

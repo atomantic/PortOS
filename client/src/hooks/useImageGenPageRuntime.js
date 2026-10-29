@@ -577,6 +577,8 @@ export function useImageGenPageRuntime() {
         sendToVideo,
         handleSendTo3d,
         handleDelete: gallery.actions.delete,
+        handleCancelPendingDelete: gallery.actions.cancelPendingDelete,
+        pendingPeerNames: gallery.pendingPeerNames,
         handleToggleHidden: gallery.actions.toggleHidden,
         getCardProps: gallery.getCardProps,
         toggleGalleryStar: gallery.actions.toggleStar,

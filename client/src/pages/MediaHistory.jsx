@@ -28,9 +28,10 @@ import { useGalleryPage } from '../hooks/useGalleryPage';
 import { mediaDeleteOutcome } from '../lib/mediaDeleteOutcome';
 import socket from '../services/socket';
 import useMounted from '../hooks/useMounted';
+import usePendingDeletePeerNames from '../hooks/usePendingDeletePeerNames';
 import { getMediaJob } from '../services/apiMediaJobs';
 import {
-  deleteVideoHistoryItem, cancelVideoPendingDelete, cancelImagePendingDelete, stitchVideos, deleteImage, getInstances,
+  deleteVideoHistoryItem, cancelVideoPendingDelete, cancelImagePendingDelete, stitchVideos, deleteImage,
 } from '../services/api';
 
 const FILTERS = [
@@ -136,23 +137,7 @@ export default function MediaHistory() {
     }
   };
 
-  // Registry id → display name for "Delete pending on <peer>", read once when a
-  // pending row names a peer this page has not resolved yet.
-  const [peerNames, setPeerNames] = useState({});
-  const unresolvedPeerIds = useMemo(() => [...new Set(items.map((it) => it.pendingDelete?.peerId)
-    .filter((id) => typeof id === 'string' && !(id in peerNames)))].join(','), [items, peerNames]);
-  useEffect(() => {
-    if (!unresolvedPeerIds) return undefined;
-    let active = true;
-    const ids = unresolvedPeerIds.split(',');
-    getInstances({ silent: true }).catch(() => null).then((data) => {
-      // A failed lookup caches nothing, so a later items change retries it.
-      if (!active || !data) return;
-      const known = Object.fromEntries((data?.peers || []).map((p) => [p.id, p.name || p.id]));
-      setPeerNames((prev) => ({ ...prev, ...Object.fromEntries(ids.map((id) => [id, known[id] ?? null])) }));
-    });
-    return () => { active = false; };
-  }, [unresolvedPeerIds]);
+  const { peerNames, rememberPeerName } = usePendingDeletePeerNames(items);
 
   const withPendingDelete = useCallback((key, pendingDelete) => setItems((all) => all.map((x) => {
     if (x.key !== key) return x;
@@ -169,7 +154,7 @@ export default function MediaHistory() {
       // A delete that waits on, or did not reach, this machine's copy keeps the row.
       if (!outcome.remove) {
         const peerId = outcome.pendingDelete?.peerId;
-        if (peerId && result.peerName) setPeerNames((prev) => ({ ...prev, [peerId]: result.peerName }));
+        rememberPeerName(peerId, result.peerName);
         withPendingDelete(item.key, outcome.pendingDelete);
         toast(outcome.notice);
         return;
@@ -181,7 +166,7 @@ export default function MediaHistory() {
     } catch (err) {
       toast.error(err.message || 'Delete failed');
     }
-  }, [setItems, withPendingDelete, page.setTotal, refresh]);
+  }, [setItems, withPendingDelete, rememberPeerName, page.setTotal, refresh]);
 
   const handleCancelPendingDelete = useCallback(async (item) => {
     try {

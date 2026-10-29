@@ -3,7 +3,7 @@ import { useSearchParams } from 'react-router';
 import { Activity, Ban, Check, Film, FolderInput, Image as ImageIcon, Library, Pencil, Search, Star, Trash2 } from 'lucide-react';
 import TabPills from '../../ui/TabPills.jsx';
 import InfiniteScrollFooter from '../../ui/InfiniteScrollFooter.jsx';
-import { DeleteConfirm, filterPool, poolKey, usedLabel } from '../SceneTakePicker.jsx';
+import { DeleteConfirm, applyPoolDelete, filterPool, poolKey, settlePoolDelete, usedLabel } from '../SceneTakePicker.jsx';
 import { shotNumbers as numberShots } from '../ShotStepper.jsx';
 import { addMusicVideoLibraryMedia, deleteMusicVideoPoolAssets, getMusicVideoMediaPool, importMusicVideoPool, listMusicVideoProjectSummaries, markMusicVideoPoolAssets, searchMusicVideoLibrary, searchMusicVideoMediaPool } from '../../../services/apiMusicVideo.js';
 import { takeThumbUrl, takeClipUrl } from '../../../lib/musicVideoTakes.js';
@@ -103,9 +103,10 @@ export default function AssetsStage({ board }) {
     setPool((prev) => prev.map((item) => (poolKey(item) === poolKey(picked) ? { ...item, mark: next } : item)));
   });
   const remove = (targets) => run(async () => {
-    await deleteMusicVideoPoolAssets(projectId, targets.map(({ kind: k, assetId }) => ({ kind: k, assetId })), { silent: true });
-    const gone = new Set(targets.map(poolKey));
-    setPool((prev) => prev.filter((item) => !gone.has(poolKey(item))));
+    const result = await deleteMusicVideoPoolAssets(projectId, targets.map(({ kind: k, assetId }) => ({ kind: k, assetId })), { silent: true });
+    const settled = settlePoolDelete(result, targets);
+    const { gone } = settled;
+    setPool((prev) => applyPoolDelete(prev, settled));
     if (picked && gone.has(poolKey(picked))) setParams({ asset: null });
     setConfirmDelete(null);
   });
@@ -243,6 +244,7 @@ export default function AssetsStage({ board }) {
                     {item.mark === 'bad' ? <Ban size={11} aria-label="bad" /> : <Star size={11} aria-label="ingredient" />}
                   </span>
                 )}
+                {item.pendingDelete && <span className="port-media-overlay-strong absolute bottom-6 left-1 rounded px-1 text-[10px] leading-tight text-port-warning">Delete pending</span>}
                 {inUse(item) && <span className="port-media-overlay-strong absolute bottom-1 left-1 rounded px-1 text-[10px] leading-tight">In use</span>}
               </button>
             </li>
