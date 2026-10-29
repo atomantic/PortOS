@@ -172,6 +172,11 @@ function blockedByImageTombstone(stamps, entry) {
   return incoming === null || !(incoming > stamps.get(entry.filename));
 }
 
+// Video tombstones key on the history row id, but the bytes ride the library
+// sweep as `<id>.<ext>`. A re-created video has a new id, so the stem never matches it.
+const deletedVideoIds = async (entries) => (entries.some((entry) => entry?.kind === 'video') ? new Set((await mediaTombstoneStamps('video')).keys()) : new Set());
+const blockedByVideoTombstone = (ids, entry) => entry?.kind === 'video' && isStr(entry.filename) && ids.has(entry.filename.replace(/\.[^.]+$/, ''));
+
 /**
  * `withCreatedAt` adds the image's live stamp (imageLiveStamp) so a receiver
  * holding a tombstone for a re-used name can tell a newer image from the
@@ -233,10 +238,11 @@ export async function diffAssetManifestAgainstLocal(manifest, { includeMismatche
   if (!Array.isArray(manifest)) return [];
   // A gallery image deleted here (or by its owner) is never pulled back.
   const deletedImages = await deletedImageStamps(manifest);
+  const deletedVideos = await deletedVideoIds(manifest);
   const missing = [];
   for (const entry of manifest) {
     if (!isPlainObject(entry) || !isStr(entry.filename) || !isStr(entry.kind)) continue;
-    if (blockedByImageTombstone(deletedImages, entry)) continue;
+    if (blockedByImageTombstone(deletedImages, entry) || blockedByVideoTombstone(deletedVideos, entry)) continue;
     const dir = directoryForAssetKind(entry.kind);
     if (!dir) continue;
     // Peer-supplied filenames go straight into a local `join(dir, name)` here
@@ -980,8 +986,9 @@ export async function pullMissingAssetsFromPeer(senderInstanceId, missingAssets,
   }
   const base = peerBaseUrl(peer);
   const deletedImages = await deletedImageStamps(missingAssets);
+  const deletedVideos = await deletedVideoIds(missingAssets);
   for (const entry of missingAssets) {
-    if (blockedByImageTombstone(deletedImages, entry)) continue;
+    if (blockedByImageTombstone(deletedImages, entry) || blockedByVideoTombstone(deletedVideos, entry)) continue;
     await pullOneAsset(peer, base, entry, includeMismatched).catch((err) => {
       console.log(`⚠️ peerSync: asset pull ${entry.filename} from ${peer.name || senderInstanceId} failed: ${err.message}`);
     });
