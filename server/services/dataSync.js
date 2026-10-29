@@ -982,9 +982,15 @@ async function applyVideoHistoryRemote(remoteData, source) {
  */
 export async function mergeVideoRows(incomingRows, source) {
   const tombstones = await listMediaTombstones('video');
+  // Only the row's owner may un-delete it: a `restoredAt` from any other
+  // sender is dropped, so it can neither pass a delete here nor shield the
+  // row from its owner's later delete.
+  const fromOwner = (r) => typeof source?.peerId === 'string' && r?.originInstanceId === source.peerId;
+  const admitted = (Array.isArray(incomingRows) ? incomingRows : [])
+    .map((r) => (r && typeof r === 'object' && 'restoredAt' in r && !fromOwner(r) ? (({ restoredAt, ...rest }) => rest)(r) : r)); // eslint-disable-line no-unused-vars
   // A row survives a tombstone only when it was (re)created or restored after the delete.
   const isDeleted = (r) => isTombstoned(tombstones, r.id, videoRowLiveStamp(r), 'key');
-  const incoming = (Array.isArray(incomingRows) ? incomingRows : []).filter((r) => !(hasVideoRowId(r) && isDeleted(r)));
+  const incoming = admitted.filter((r) => !(hasVideoRowId(r) && isDeleted(r)));
   if (incoming.length === 0) return { count: 0, ids: [] };
 
   // The whole read/merge/write runs inside the shared history mutation queue so

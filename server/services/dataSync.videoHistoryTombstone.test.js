@@ -128,6 +128,20 @@ describe('video delete durability', () => {
     expect(await readHistory()).toEqual(['v1', 'v2']);
   });
 
+  // #14087: only the row's owner may un-delete it with a restore stamp.
+  it('admits a restored row only from its owner, which also retires the superseded tombstone', async () => {
+    await recordMediaTombstone('video', 'v1', '2026-06-01T00:00:00.000Z');
+    const restored = row('v1', '2026-05-01T00:00:00.000Z', { ...ownedBy('peer-a'), restoredAt: '2026-06-01T00:00:00.001Z' });
+
+    await dataSync.applyRemote('videoHistory', { videos: [restored] }, { peerId: 'peer-b' });
+    expect(await readHistory()).toEqual([]);
+    expect((await listMediaTombstones('video')).map((t) => t.key)).toEqual(['v1']);
+
+    await dataSync.applyRemote('videoHistory', { videos: [restored] }, { peerId: 'peer-a' });
+    expect(await readHistory()).toEqual(['v1']);
+    expect(await listMediaTombstones('video')).toEqual([]);
+  });
+
   it('checksum is stable across tombstone insertion order', async () => {
     const a = '2026-06-01T00:00:00.000Z';
     const b = '2026-06-02T00:00:00.000Z';
