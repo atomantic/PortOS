@@ -154,21 +154,22 @@ describe('deleteMediaAnywhere', () => {
     expect(deleteFrames).toEqual([]);
   });
 
-  it('owner-unknown hides locally and sends nothing', async () => {
-    // No origin, no hosted entry, no supplier and no local file: nobody to ask.
+  // Uniquely catches a pre-upgrade row (no origin, file already gone) that a
+  // single-machine install could only ever hide.
+  it('deletes an origin-less row whose file is missing on a machine with no peers', async () => {
+    registry.peers = [];
     await atomicWrite(HISTORY, [row('v1')]);
-    expect(await deleteMediaAnywhere('video', 'v1')).toEqual({ status: 'owner-unknown' });
-    const [stored] = await readRows();
-    expect(stored.hidden).toBe(true);
-    expect(stored.pendingDelete).toBeUndefined();
+    expect(await deleteMediaAnywhere('video', 'v1')).toEqual({ ok: true, status: 'deleted' });
+    expect(await readRows()).toEqual([]);
+    expect((await listMediaTombstones('video')).map((t) => t.key)).toEqual(['v1']);
     expect(peerFetch).not.toHaveBeenCalled();
-    expect(await listMediaTombstones('video')).toEqual([]);
     expect(await listMediaDeleteQueue()).toEqual([]);
   });
 
-  it('treats a candidate that is not a registered peer as owner-unknown', async () => {
+  it('deletes a row here when its origin peer is no longer registered', async () => {
     await atomicWrite(HISTORY, [row('v1', { originInstanceId: 'peer-gone' })]);
-    expect((await deleteMediaAnywhere('video', 'v1')).status).toBe('owner-unknown');
+    expect((await deleteMediaAnywhere('video', 'v1')).status).toBe('deleted');
+    expect(await readRows()).toEqual([]);
     expect(peerFetch).not.toHaveBeenCalled();
   });
 
@@ -178,6 +179,34 @@ describe('deleteMediaAnywhere', () => {
     expect((await deleteMediaAnywhere('video', 'v1')).status).toBe('deleted');
     expect(await readRows()).toEqual([]);
     expect(peerFetch).not.toHaveBeenCalled();
+  });
+
+  it('refuses with 409 when the registered owner is not paired, and changes nothing', async () => {
+    registry.peers = [peer('rec-owner', 'peer-o', { syncSecret: undefined })];
+    await atomicWrite(HISTORY, [row('v1', { originInstanceId: 'peer-o' })]);
+    await expect(deleteMediaAnywhere('video', 'v1')).rejects.toMatchObject({ status: 409, code: 'MEDIA_OWNER_NOT_PAIRED' });
+    const [stored] = await readRows();
+    expect(stored.hidden).toBeUndefined();
+    expect(stored.pendingDelete).toBeUndefined();
+    expect(await listMediaTombstones('video')).toEqual([]);
+    expect(peerFetch).not.toHaveBeenCalled();
+  });
+
+  it('refuses with 409 when the registered owner is turned off here', async () => {
+    registry.peers = [peer('rec-owner', 'peer-o', { enabled: false })];
+    await atomicWrite(HISTORY, [row('v1', { originInstanceId: 'peer-o' })]);
+    await expect(deleteMediaAnywhere('video', 'v1')).rejects.toMatchObject({ status: 409, message: expect.stringContaining('back on') });
+    expect((await readRows()).map((r) => r.id)).toEqual(['v1']);
+  });
+
+  it('hides the row here only when every owner candidate says it does not hold it', async () => {
+    await atomicWrite(HISTORY, [row('v1', { originInstanceId: 'peer-o' })]);
+    net.fetch = vi.fn(async () => json(404, { error: 'not held', code: 'MEDIA_NOT_HELD' }));
+    expect(await deleteMediaAnywhere('video', 'v1')).toEqual({ status: 'owner-unknown' });
+    const [stored] = await readRows();
+    expect(stored.hidden).toBe(true);
+    expect(stored.pendingDelete).toBeUndefined();
+    expect(await listMediaTombstones('video')).toEqual([]);
   });
 
   it('403 from owner un-hides and surfaces the error', async () => {
@@ -420,12 +449,12 @@ describe('deleteMediaAnywhere for gallery images', () => {
     expect(await listMediaDeleteQueue()).toEqual([]);
   });
 
-  it('hides an image with no knowable owner here only', async () => {
+  it('deletes an image here whose origin peer is no longer registered', async () => {
     seedImage('orphan.png', { originInstanceId: 'peer-gone' });
-    expect(await deleteMediaAnywhere('image', 'orphan.png')).toEqual({ status: 'owner-unknown' });
-    expect((await sidecar('orphan.png')).hidden).toBe(true);
-    expect(trashFiles).not.toHaveBeenCalled();
-    expect(await listMediaTombstones('image')).toEqual([]);
+    expect(await deleteMediaAnywhere('image', 'orphan.png')).toMatchObject({ ok: true, status: 'deleted' });
+    expect(trashedImage('orphan.png')).toBe(true);
+    expect((await listMediaTombstones('image')).map((t) => t.key)).toEqual(['orphan.png']);
+    expect(peerFetch).not.toHaveBeenCalled();
   });
 
   it('refuses a key that is not a gallery image filename', async () => {

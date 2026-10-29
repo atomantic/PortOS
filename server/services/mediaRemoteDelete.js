@@ -9,10 +9,10 @@
  * local copy goes only once the owner acks, through the same authorization and
  * tombstone path a peer's own delete frame takes. An unreachable owner leaves
  * the command in `data/media-delete-queue.json`, drained on `peer:online`.
+ * A row no registered peer can own is deleted here like a local one.
  * The queue describes this machine's own work and never federates.
  */
 import { join } from 'path';
-import { existsSync } from 'fs';
 import { PATHS, readJSONFile, atomicWrite } from '../lib/fileUtils.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { isPlainObject } from '../lib/objects.js';
@@ -23,7 +23,6 @@ import { peerSyncTombstoneSchema } from '../lib/peerSyncEventSchema.js';
 import { peerFetch, readPeerBody } from '../lib/peerHttpClient.js';
 import { peerBaseUrl } from '../lib/peerUrl.js';
 import { withAbortTimeout } from '../lib/abortTimeout.js';
-import { safeUnder } from '../lib/ffmpeg.js';
 import { loadHistory, getHistoryItem, mutateVideoHistory, HISTORY_UNCHANGED } from './videoGen/history.js';
 import { readHeldImage, localInstanceId } from './imageGen/imageRecords.js';
 import { isSafeFilename } from '../lib/pathSafety.js';
@@ -109,10 +108,6 @@ const MEDIA = {
     getRow: getHistoryItem,
     setPending: setVideoPending,
     hide: async (key) => (await import('./videoGen/historyOps.js')).setHistoryItemHidden(key, true),
-    fileIsLocal: (row) => {
-      const file = isNonBlankStr(row?.filename) ? safeUnder(PATHS.videos, row.filename) : null;
-      return Boolean(file && existsSync(file));
-    },
     deleteHere: async (key) => (await import('./videoGen/historyOps.js')).deleteHistoryItem(key),
     applyTombstone: async (tombstone) => (await import('./dataSync.js')).applyRemoteVideoTombstones([tombstone]),
   },
@@ -122,7 +117,6 @@ const MEDIA = {
     getRow: readHeldImage,
     setPending: setImagePending,
     hide: async (key) => (await import('./imageGen/local.js')).setImageHidden(key, true),
-    fileIsLocal: (row) => existsSync(join(PATHS.images, row.filename)),
     deleteHere: async (key) => (await import('./galleryImageDeletion.js')).deleteGalleryImage(key),
     applyTombstone: async (tombstone) => (await import('./imageGen/imageRecords.js')).applyRemoteImageTombstones([tombstone]),
   },
@@ -239,23 +233,27 @@ async function deleteAnywhere(kind, key) {
     throw new ServerError('Not found', { status: 404, code: 'NOT_FOUND' });
   }
   const localId = await localInstanceId();
+  if (localId && row.originInstanceId === localId) return deleteLocally(kind, key);
   const candidates = rowOwnerCandidates(row, await hostedIndex()).filter((id) => id !== localId);
-  if ((localId && row.originInstanceId === localId) || (candidates.length === 0 && media.fileIsLocal(row))) return deleteLocally(kind, key);
 
   const { getPeers } = await import('./instances.js');
   const peers = await getPeers();
   const registered = candidates
-    .map((id) => peers.find((p) => p.instanceId === id && p.enabled !== false))
+    .map((id) => peers.find((p) => p.instanceId === id))
     .filter(Boolean);
   if (registered.length === 0) {
-    // Fail closed: nobody to send the command to, so only this machine's view changes.
-    await hideLocally(kind, key);
-    console.log(`⏭️ ${media.label} ${key} has no known owner; hidden on this machine only`);
-    return { status: 'owner-unknown' };
+    // No registered machine can own it (its origin peer was removed, or a
+    // pre-upgrade row has no origin), so no command could ever be answered:
+    // delete it here, missing files included. A former owner that re-pairs
+    // keeps its own copy, since it never accepts this machine's tombstone.
+    return deleteLocally(kind, key);
   }
-  const targets = registered.filter(peerIsPaired);
+  // Fail closed: a registered owner this machine cannot reach would keep its copy.
+  const targets = registered.filter((p) => p.enabled !== false && peerIsPaired(p));
   if (targets.length === 0) {
-    throw new ServerError(`Pair with ${peerLabel(registered[0])} to delete its media from here`, {
+    const peer = registered[0];
+    const action = peer.enabled === false ? `Turn ${peerLabel(peer)} back on` : `Pair with ${peerLabel(peer)}`;
+    throw new ServerError(`${action} to delete its media from here`, {
       status: 409, code: 'MEDIA_OWNER_NOT_PAIRED',
     });
   }
