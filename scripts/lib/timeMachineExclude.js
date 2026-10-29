@@ -71,18 +71,20 @@ export function createFilePreference(installRoot) {
  * the question goes to /dev/tty directly; with no terminal (UI-driven update, CI)
  * it returns null and the caller neither prompts nor records a decision.
  */
-export function confirmOnTty(count) {
+export function confirmOnTty(count, { open = openSync, write = writeSync, read = readSync, close = closeSync } = {}) {
   let fd;
   try {
-    fd = openSync('/dev/tty', 'r+');
-    writeSync(fd, `\n💾 PortOS can exclude ${count} regenerable directories (node_modules, caches, render scratch) from Time Machine.\n   Creates any that are missing; needs sudo once. Your answer is remembered. Exclude them? [Y/n] `);
+    fd = open('/dev/tty', 'r+');
+    write(fd, `\n💾 PortOS can exclude ${count} regenerable directories (node_modules, caches, render scratch) from Time Machine.\n   Creates any that are missing; needs sudo once. Your answer is remembered. Exclude them? [Y/n] `);
     const buf = Buffer.alloc(64);
-    const answer = buf.toString('utf8', 0, readSync(fd, buf, 0, buf.length, null)).trim().toLowerCase();
+    const bytes = read(fd, buf, 0, buf.length, null);
+    if (bytes === 0) return null; // Ctrl-D: cancelled, not consent
+    const answer = buf.toString('utf8', 0, bytes).trim().toLowerCase();
     return answer === 'n' || answer === 'no' ? 'no' : 'yes';
   } catch {
     return null;
   } finally {
-    if (fd !== undefined) closeSync(fd);
+    if (fd !== undefined) close(fd);
   }
 }
 
