@@ -114,7 +114,7 @@ function ReferenceCard({ item, stage, onOpenPreview, actions }) {
           </div>
         )}
       </details>
-      {actions && <CastAndSetsItemActions item={item} direction={stage.direction} {...actions} />}
+      {actions && <CastAndSetsItemActions key={actions.projectId} item={item} direction={stage.direction} revision={stage.revision} {...actions} />}
     </article>
   );
 }

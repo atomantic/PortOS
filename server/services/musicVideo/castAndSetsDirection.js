@@ -769,6 +769,7 @@ export function applyCastAndSetsDirectionEdits(previous, edits, { sections = [] 
   }
   const procedural = previous?.medium === 'procedural';
   const parsed = {};
+  let renamedLooks = new Map(), currentLookNames = new Set(), currentLookNamesExact = new Set();
   if (edits?.protagonist) {
     const protagonist = pickText(edits.protagonist, procedural ? CAST_SETS_EDITABLE_PROTAGONIST : CAST_SETS_EDITABLE_PHOTO_PROTAGONIST);
     if (Array.isArray(edits.protagonist.expressions)) {
@@ -785,7 +786,10 @@ export function applyCastAndSetsDirectionEdits(previous, edits, { sections = [] 
     if (new Set(originals).size !== originals.length || originals.some((name) => !(previous.looks || []).some((look) => look.name === name)) || new Set(names).size !== names.length) {
       throw new ServerError('Look names or original references are ambiguous', { status: 422, code: 'CAST_SETS_EDIT_INVALID' });
     }
-    const renames = new Map(edits.looks.filter((l) => l.originalName).map((l) => [l.originalName, l.name]));
+    const renames = new Map(edits.looks.flatMap((look, i) => look.originalName ? [[look.originalName, parsed.looks[i].name]] : []));
+    renamedLooks = renames;
+    currentLookNames = new Set(parsed.looks.map((look) => look.name.toLowerCase()));
+    currentLookNamesExact = new Set(parsed.looks.map((look) => look.name));
     parsed.tests = (previous.tests || []).map((test) => ({ ...test, look: renames.get(test.look) || test.look }));
   }
   if (!procedural && Array.isArray(edits?.cast) && edits.cast.length) {
@@ -798,7 +802,25 @@ export function applyCastAndSetsDirectionEdits(previous, edits, { sections = [] 
     });
   }
   if (!procedural && Array.isArray(edits?.tests) && edits.tests.length) {
-    parsed.tests = patchItems(parsed.tests || previous.tests || [], edits.tests.map((t) => ({ ...t, key: t.index })), { what: 'test', keyOf: (_t, i) => i + 1, fields: EDITABLE_TEST });
+    const tests = edits.tests.map((test) => {
+      if (test.remove) return { ...test, key: test.index };
+      const name = test.look?.trim();
+      let renamed = null;
+      if (name && !currentLookNamesExact.has(name)) {
+        const matches = [...renamedLooks].filter(([original]) => original.toLowerCase() === name.toLowerCase());
+        if (currentLookNames.has(name.toLowerCase())) {
+          if (matches.some(([, target]) => target && target.toLowerCase() !== name.toLowerCase())) {
+            throw new ServerError('Look reference is ambiguous', { status: 422, code: 'CAST_SETS_EDIT_INVALID' });
+          }
+        } else {
+          renamed = renamedLooks.get(name);
+          if (!renamed && matches.length > 1) throw new ServerError('Look reference is ambiguous', { status: 422, code: 'CAST_SETS_EDIT_INVALID' });
+          renamed ||= matches[0]?.[1];
+        }
+      }
+      return { ...test, ...(renamed && { look: renamed }), key: test.index };
+    });
+    parsed.tests = patchItems(parsed.tests || previous.tests || [], tests, { what: 'test', keyOf: (_t, i) => i + 1, fields: EDITABLE_TEST });
     parsed.testsFixed = true;
   }
   const { direction, missing } = mergeCastAndSetsDirection(previous, parsed, { sections, medium: procedural ? 'procedural' : 'photographic', minSets: 1 });

@@ -106,6 +106,38 @@ let deps = { ...defaults };
 export function __setCastAndSetsDepsForTests(overrides) { deps = { ...defaults, ...overrides }; }
 export const __castAndSetsProcessId = () => PROCESS_ID;
 
+// A legacy card has no test snapshot. Use the same complete plan comparison
+// for read-time hydration and write-time edits; a partial match is ambiguous.
+function matchingTestCards(project, stage) {
+  const direction = stage.direction;
+  const effective = plannedTests(project, direction);
+  const rebuilt = buildCastAndSetsImagePlan(project, direction, { revisionNotes: keyNotesText(stage.keyNotes) });
+  const cards = Object.values(stage.plan || {}).filter((item) => item.kind === 'test').sort((a, b) => a.testIndex - b.testIndex);
+  const matchesLegacy = (card) => {
+    const fresh = rebuilt[card.key];
+    return fresh && card.prompt === fresh.prompt && card.setId === fresh.setId && card.label === fresh.label
+      && JSON.stringify(card.deps) === JSON.stringify(fresh.deps) && JSON.stringify(card.refKeys) === JSON.stringify(fresh.refKeys);
+  };
+  if (cards.length !== effective.length || cards.some((card, i) => card.testIndex !== i || (card.test
+    ? JSON.stringify(card.test) !== JSON.stringify(effective[i])
+    : !matchesLegacy(card)))) return null;
+  return cards.map((card, i) => card.test || effective[i]);
+}
+
+function presentStage(project) {
+  const stage = presentCastAndSets(project?.castAndSets, PROCESS_ID);
+  if (!stage?.direction) return stage;
+  // Older malformed records should remain readable; an unverified card stays
+  // unhydrated and the edit route continues to reject a mismatched plan.
+  try {
+    if (!Object.values(stage.plan || {}).some((item) => item.kind === 'test' && !item.test)) return stage;
+    const tests = matchingTestCards(project, stage);
+    if (!tests) return stage;
+    return { ...stage, plan: Object.fromEntries(Object.entries(stage.plan).map(([key, item]) => [key,
+      item.kind === 'test' && !item.test ? { ...item, test: tests[item.testIndex] } : item])) };
+  } catch { return stage; }
+}
+
 /**
  * The project as a CLIENT reads it. Only this process knows its own id, so only
  * the server can tell a working stage a restart unpinned (`interrupted`) from
@@ -787,15 +819,11 @@ export async function editCastAndSetsDirection(projectId, edits) {
     if (stage.status === 'skipped') throw new ServerError('The Cast & Sets check-in was skipped — rebuild it first', { status: 409, code: 'CAST_SETS_NOT_IN_REVIEW' });
     let direction = stage.direction;
     if (edits.tests?.length) {
-      const effective = plannedTests(current, direction);
-      const rebuilt = buildCastAndSetsImagePlan(current, direction, { revisionNotes: keyNotesText(stage.keyNotes) });
-      const cards = Object.values(stage.plan || {}).filter((item) => item.kind === 'test').sort((a, b) => a.testIndex - b.testIndex);
-      if (cards.length !== effective.length || cards.some((card, i) => card.testIndex !== i || (card.test
-        ? JSON.stringify(card.test) !== JSON.stringify(effective[i])
-        : card.prompt !== rebuilt[card.key]?.prompt))) {
+      const tests = matchingTestCards(current, stage);
+      if (!tests) {
         throw new ServerError('The saved test cards no longer match this direction. Rebuild the check-in before editing them.', { status: 409, code: 'CAST_SETS_TEST_PLAN_STALE' });
       }
-      direction = { ...direction, tests: cards.map((card, i) => card.test || effective[i]) };
+      direction = { ...direction, tests };
     }
     const edited = applyCastAndSetsDirectionEdits(direction, edits, { sections });
     if (!edited.changed.length) throw new ServerError('Nothing changed — edit a field first', { status: 422, code: 'CAST_SETS_NO_EDITS' });
@@ -853,7 +881,7 @@ export async function resumeCastAndSets(projectId, { providerId, model, effort }
 /** The stage as the director sees it. */
 export async function getCastAndSets(projectId) {
   const project = await requireProject(projectId);
-  return { stage: presentCastAndSets(project.castAndSets, PROCESS_ID) };
+  return { stage: presentStage(project) };
 }
 
 // ---- completion hook entry points ----------------------------------------------------------
