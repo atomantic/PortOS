@@ -5,7 +5,7 @@ import { stat } from 'node:fs/promises';
 import { registerStaging, cleanupTopazStaging, topazPreparedPath } from './topazStaging.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { UUID_RE } from '../../lib/fileUtils.js';
-import { probeVideoStreamInfo, probeFrameCount, probeVideoDuration, probeVideoPixelAspect, probeSquareVideoPixels } from '../../lib/ffmpeg.js';
+import { probeVideoStreamInfo, probeFrameCount, probeVideoDuration, probeVideoPixelAspect, probeSquareVideoPixels, probeVideoAudioPresence } from '../../lib/ffmpeg.js';
 import { getSettings } from '../settings.js';
 import { resolveHistoryItem, resolveSourcePath } from './upscaleVideo.js';
 import { padSourceForUpscale } from './upscaleFfmpeg.js';
@@ -72,12 +72,13 @@ export async function quoteTopaz(historyId, model = 'proteus') {
   const item = await resolveHistoryItem(historyId);
   if (item.upscaledFrom) throw new ServerError('Cannot upscale an already-upscaled video.', { status: 400, code: 'ALREADY_UPSCALED' });
   const path = resolveSourcePath(item);
-  const [info, stream, duration, pixelAspect] = await Promise.all([stat(path), probeVideoStreamInfo(path), probeVideoDuration(path), probeVideoPixelAspect(path)]);
+  const [info, stream, duration, pixelAspect, sourceHasAudio] = await Promise.all([stat(path), probeVideoStreamInfo(path), probeVideoDuration(path), probeVideoPixelAspect(path), probeVideoAudioPresence(path)]);
   const sourceDigest = await hashTopazFile(path);
   const frameCount = stream.frameCount ?? await probeFrameCount(path);
   if (!Number.isSafeInteger(stream.width) || !Number.isSafeInteger(stream.height) || stream.width <= 0 || stream.height <= 0 || !Number.isFinite(stream.fps) || !(stream.fps > 0) || !Number.isFinite(duration) || !(duration > 0) || !Number.isSafeInteger(frameCount) || frameCount <= 0 || !info.size) {
     throw new ServerError('The source dimensions, frame rate or duration could not be measured.', { status: 400, code: 'TOPAZ_INVALID_DIMENSIONS' });
   }
+  if (sourceHasAudio === null) throw new ServerError('The source audio could not be inspected.', { status: 400, code: 'TOPAZ_AUDIO_UNKNOWN' });
   const normalized = squareDisplayDimensions(stream.width, stream.height, pixelAspect);
   const padding = normalized && deliveryPadding(normalized.width, normalized.height);
   if (!normalized || !padding || padding.width > 16384 || padding.height > 16384) throw new ServerError('The source pixel aspect is unknown or cannot be represented within supported dimensions.', { status: 400, code: 'TOPAZ_PIXEL_ASPECT_UNSUPPORTED' });
@@ -112,7 +113,7 @@ export async function quoteTopaz(historyId, model = 'proteus') {
     const now = Date.now();
     const reportCleanup = () => console.error('❌ Expired Topaz staging cleanup failed; owned files were retained.');
     for (const [id, quote] of quotes) if (quote.expiresAt < now) { quotes.delete(id); void cleanupTopazStaging(quote.preparedId).catch(reportCleanup); }
-    quotes.set(token, { historyId, filename: item.filename, size: info.size, mtimeMs: info.mtimeMs, sourceDigest, preparedDigest, preparedId, source, target, model, requestId: created.requestId, keyFingerprint: topazKeyFingerprint(key), expiresAt: now + QUOTE_TTL_MS });
+    quotes.set(token, { historyId, filename: item.filename, size: info.size, mtimeMs: info.mtimeMs, sourceDigest, preparedDigest, sourceHasAudio, preparedId, source, target, model, requestId: created.requestId, keyFingerprint: topazKeyFingerprint(key), expiresAt: now + QUOTE_TTL_MS });
     const expiry = setTimeout(() => { const stale = quotes.get(token); if (stale) { quotes.delete(token); void cleanupTopazStaging(stale.preparedId).catch(reportCleanup); } }, QUOTE_TTL_MS);
     expiry.unref();
     retained = true;

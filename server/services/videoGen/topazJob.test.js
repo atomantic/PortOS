@@ -33,7 +33,7 @@ vi.mock('../../lib/ffmpeg.js', () => ({
   probeVideoDuration: async () => 1,
   probeVideoPixelAspect: async () => state.pixelAspect,
   probeSquareVideoPixels: async () => true,
-  hasAudioStream: async () => state.audio,
+  probeVideoAudioPresence: async () => state.audio,
   generateThumbnail: async () => null,
 }));
 vi.mock('./upscaleFfmpeg.js', () => ({
@@ -110,6 +110,12 @@ describe('Topaz job boundary', () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
+  it('refuses an unmeasurable audio stream before contacting Topaz', async () => {
+    state.audio = null;
+    await expect(quoteTopaz(sourceId)).rejects.toMatchObject({ code: 'TOPAZ_AUDIO_UNKNOWN' });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it('rejects invalid source dimensions before contacting Topaz', async () => {
     state.invalid = true;
     await expect(quoteTopaz(sourceId)).rejects.toMatchObject({ code: 'TOPAZ_INVALID_DIMENSIONS' });
@@ -182,6 +188,15 @@ describe('Topaz job boundary', () => {
     expect(failed.mock.calls[0][0].error).toMatch(/unexpected output dimensions/);
     expect(state.rows).toHaveLength(1);
     await expect(stat(topazPreparedPath(params.preparedId))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('fails rather than treating an unmeasurable output soundtrack as silence', async () => {
+    const { params } = await queued();
+    state.audio = null;
+    const failed = vi.fn(); videoGenEvents.once('failed', failed);
+    await runVideoUpscale(params);
+    expect(failed.mock.calls[0][0].error).toMatch(/timeline or audio/);
+    expect(state.rows).toHaveLength(1);
   });
 
   it('retrieves an already completed provider result without accepting or uploading again', async () => {

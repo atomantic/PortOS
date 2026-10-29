@@ -8,7 +8,7 @@ import { pipeline } from 'node:stream/promises';
 import { Readable, Transform } from 'node:stream';
 import { createWriteStream } from 'node:fs';
 import { PATHS, UUID_RE } from '../../lib/fileUtils.js';
-import { safeUnder, probeVideoStreamInfo, probeFrameCount, probeVideoDuration, probeSquareVideoPixels, hasAudioStream, generateThumbnail } from '../../lib/ffmpeg.js';
+import { safeUnder, probeVideoStreamInfo, probeFrameCount, probeVideoDuration, probeSquareVideoPixels, probeVideoAudioPresence, generateThumbnail } from '../../lib/ffmpeg.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { maintenance } from '../../lib/maintenanceAdmission.js';
 import { enqueueJob, getJob, listJobs, updateJobResult } from '../mediaJobQueue/index.js';
@@ -168,7 +168,7 @@ export async function runVideoUpscale(params) {
     if (!preparedPath || !downloadPath || !UUID_RE.test(requestId || '') || !UUID_RE.test(jobId || '') || !Object.hasOwn(TOPAZ_MODELS, model)
       || target?.width !== 1920 || target?.height !== 1080 || !Number.isSafeInteger(source?.size) || source.size <= 0
       || !Number.isSafeInteger(source?.frameCount) || source.frameCount <= 0 || !Number.isFinite(source?.frameRate) || !(source.frameRate > 0) || !Number.isFinite(source?.duration) || !(source.duration > 0)
-      || !/^[a-f0-9]{64}$/.test(params.sourceDigest || '') || !/^[a-f0-9]{64}$/.test(params.preparedDigest || '')) throw safeError('Invalid Topaz job record.');
+      || typeof params.sourceHasAudio !== 'boolean' || !/^[a-f0-9]{64}$/.test(params.sourceDigest || '') || !/^[a-f0-9]{64}$/.test(params.preparedDigest || '')) throw safeError('Invalid Topaz job record.');
     const history = await loadHistory();
     const existing = history.find(row => row.id === jobId && row.upscaledFrom === historyId && row.upscaleMethod === 'topaz');
     if (existing) { delivered = true; await retireRecoveryOffers(); videoGenEvents.emit('completed', { generationId: jobId, ...existing }); return existing; }
@@ -238,9 +238,9 @@ export async function runVideoUpscale(params) {
     } else if (priorFinal?.nlink > 1) throw safeError('The staged output is referenced elsewhere.');
     const finalized = await finalizeUpscaleOutput(downloadPath, finalPath, { width: target.width, height: target.height, frameCount: source.frameCount, audioSourcePath: path, signal: entry.abort.signal, squarePixels: true });
     if (!finalized.ok) throw safeError('Could not attach the original audio to the Topaz result.');
-    const [measured, duration, originalAudio, outputAudio, squarePixels] = await Promise.all([probeVideoStreamInfo(finalPath), probeVideoDuration(finalPath), hasAudioStream(path), hasAudioStream(finalPath), probeSquareVideoPixels(finalPath)]);
+    const [measured, duration, originalAudio, outputAudio, squarePixels] = await Promise.all([probeVideoStreamInfo(finalPath), probeVideoDuration(finalPath), probeVideoAudioPresence(path), probeVideoAudioPresence(finalPath), probeSquareVideoPixels(finalPath)]);
     const frames = measured.frameCount ?? await probeFrameCount(finalPath);
-    if (measured.width !== target.width || measured.height !== target.height || squarePixels !== true || frames !== source.frameCount || !(measured.fps > 0) || Math.abs(measured.fps - source.frameRate) > 0.01 || !(duration > 0) || Math.abs(duration - source.duration) > 1 / source.frameRate + 0.05 || originalAudio !== outputAudio) throw safeError('Topaz result did not preserve the requested dimensions, timeline or audio.');
+    if (measured.width !== target.width || measured.height !== target.height || squarePixels !== true || frames !== source.frameCount || !(measured.fps > 0) || Math.abs(measured.fps - source.frameRate) > 0.01 || !(duration > 0) || Math.abs(duration - source.duration) > 1 / source.frameRate + 0.05 || originalAudio === null || outputAudio === null || originalAudio !== params.sourceHasAudio || originalAudio !== outputAudio) throw safeError('Topaz result did not preserve the requested dimensions, timeline or audio.');
     if (await hashTopazFile(path) !== params.sourceDigest) throw safeError('The source changed while the result was being finalized.');
     const result = await withBackupAssetPublication(async () => {
       try {
