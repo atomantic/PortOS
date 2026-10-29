@@ -26,6 +26,7 @@ vi.mock('../sharing/recordEvents.js', () => ({
   autoSubscribeRecordToAllPeers: vi.fn(async () => {}),
 }));
 const writeFileGuarded = vi.fn(async () => {});
+vi.mock('../imageGen/imageRecords.js', () => ({ writeLocalImageSidecarIfMissing: vi.fn(async () => true) }));
 vi.mock('../browserService.js', () => ({ getHealthStatus: vi.fn(), navigateToUrlPinned: vi.fn() }));
 vi.mock('../../lib/fileUtils.js', async (importOriginal) => ({
   ...(await importOriginal()),

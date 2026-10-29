@@ -41,6 +41,7 @@ const { listMediaTombstones, recordMediaTombstone } = await import('../mediaTomb
 const { PEER_LIBRARY_TOMBSTONES_HEADER } = await import('../../lib/validation.js');
 const { sidecarGenParamsHash } = await import('../../lib/assetHash.js');
 const { deleteImage } = await import('../imageGen/local.js');
+const { localizeImageUrl } = await import('../moodBoard/localize.js');
 
 const bytes = Buffer.from('synthetic-peer-image');
 const sha = createHash('sha256').update(bytes).digest('hex');
@@ -263,20 +264,31 @@ describe('a re-used image name', () => {
     expect(offered).not.toHaveProperty('createdAt');
   });
 
-  it('a deterministic-name image deleted and saved again here survives a relay of the old delete', async () => {
-    // Mood-board copies are named by a hash of their URL and written with no
-    // sidecar (#14065), so saving the same URL again re-uses the deleted name.
-    const name = 'board-0123456789abcdef.png';
-    seedImage(name);
-    await deleteImage(name);
-    expect(held(name)).toBe(false);
-    mkdirSync(PATHS.images, { recursive: true });
-    writeFileSync(join(PATHS.images, name), bytes);
+  it('a mood-board image deleted and saved again is stamped newer than the delete, so a peer holding the tombstone accepts it', async () => {
+    // Board copies are named by a content hash, so saving the same bytes again
+    // re-uses the deleted name; the local-origin sidecar written at save time
+    // is what makes the copy newer than the old delete (#14095).
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]);
+    const dataUrl = `data:image/png;base64,${png.toString('base64')}`;
+    const saved = (await localizeImageUrl(dataUrl)).split('/').pop();
+    await deleteImage(saved);
+    expect(held(saved)).toBe(false);
     const [deleted] = await listMediaTombstones('image');
-    const stranger = pairedPeer();
-    advertise(stranger, [], { tombstones: [deleted] });
-    await syncMediaLibraryFromPeer(stranger);
-    expect(held(name)).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await localizeImageUrl(dataUrl);
+
+    const sidecar = JSON.parse(readFileSync(join(PATHS.images, saved.replace(/\.png$/, '.metadata.json')), 'utf8'));
+    expect(sidecar.originInstanceId).toBe('local-inst');
+    const offered = (await buildMediaLibraryManifest({ tombstones: true })).assets.find((a) => a.filename === saved);
+    expect(new Date(offered.createdAt).getTime()).toBeGreaterThan(new Date(deleted.deletedAt).getTime());
+
+    // A peer that still holds the tombstone pulls it from the creating machine.
+    rmSync(PATHS.images, { recursive: true, force: true });
+    await recordMediaTombstone('image', saved, deleted.deletedAt);
+    const owner = pairedPeer();
+    advertise(owner, [saved], { createdAt: offered.createdAt });
+    await syncMediaLibraryFromPeer(owner);
+    expect(held(saved)).toBe(true);
   });
 
   it('a pulled copy with no creation stamp is advertised without one, and its tombstone keeps travelling', async () => {
