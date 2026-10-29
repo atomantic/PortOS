@@ -28,6 +28,7 @@ import { hasClaimCheckoutBindings, hasReleaseCandidateBinding, boundCheckoutBran
 import { isAgentHandoff } from '../lib/agentOutcome.js';
 import { collectProtectedCleanupOwners } from '../lib/taskRetryHold.js';
 import { reconcileStaleAgentReservations, releaseAgentReservation } from './agentMaintenanceReservations.js';
+import { initialCandidateLifecycle } from './releaseCandidateLifecycle.js';
 
 function hasPendingRepoStateVerification(agent) {
   return agent?.status === 'completed' && agent?.metadata?.repoStateVerification?.status === 'pending';
@@ -107,6 +108,8 @@ export async function readProtectedCleanupOwners({ state = null, index = null, t
 }
 
 export async function registerAgent(agentId, taskId, metadata = {}) {
+  const { releaseCandidateLifecycle: _lifecycle, ...untrustedMetadata } = metadata;
+  metadata = untrustedMetadata;
   metadata = { ...metadata, releasePublication: null };
   if (metadata.taskAnalysisType === 'do-release') {
     // A task's supplied metadata is not a server-observed checkout reservation.
@@ -124,6 +127,9 @@ export async function registerAgent(agentId, taskId, metadata = {}) {
       metadata,
       output: []
     };
+    if (metadata.taskAnalysisType === 'do-release' && metadata.isWorktree === false) {
+      registered.metadata = { ...metadata, releaseCandidateLifecycle: initialCandidateLifecycle(registered) };
+    }
     if (metadata.isWorktree === true && metadata.worktreeBranch && metadata.sourceWorkspace) {
       const { captureCheckoutSeeds } = await import('./completedCheckoutEvidence.js');
       registered.metadata = { ...metadata, checkoutSeeds: await captureCheckoutSeeds(registered) };
@@ -170,6 +176,10 @@ export async function updateAgent(agentId, updates) {
     // and stale completion metadata cannot forge or revoke an observed release.
     if (updates.metadata && Object.hasOwn(updates.metadata, 'releasePublication')) {
       const { releasePublication: _publication, ...metadata } = updates.metadata;
+      updates = { ...updates, metadata };
+    }
+    if (updates.metadata && Object.hasOwn(updates.metadata, 'releaseCandidateLifecycle')) {
+      const { releaseCandidateLifecycle: _lifecycle, ...metadata } = updates.metadata;
       updates = { ...updates, metadata };
     }
     if (current.metadata?.taskAnalysisType === 'do-release' && updates.metadata) {
