@@ -323,6 +323,8 @@ const SIMPLE_BRIDGES = [
   { emitter: importerEvents, event: 'progress', channel: 'importer:progress' },
   { emitter: catalogEvents, event: 'progress', channel: 'catalog:extract:progress' },
   { emitter: catalogEvents, event: 'primitive-changed', channel: 'catalog:primitive-changed' },
+  // A record's media rows changed (an image added, removed or re-roled).
+  { emitter: catalogEvents, event: 'assets-changed', channel: 'catalog:assets-changed' },
   { emitter: catalogIdentityEvents, event: 'changed', channel: 'catalog:identity-changed' },
   // A GitHub notification inbox sync, triage or action changed stored rows.
   { emitter: githubNotificationEvents, event: 'changed', channel: 'github:notifications:changed' },

@@ -1565,3 +1565,34 @@ it('saves a greybox plate choice without rendering and holds approval until rege
   expect((await current(project.id)).castAndSets.greyboxPending).toBe(false);
   await expect(service.approveCastAndSets(project.id)).resolves.toMatchObject({ stage: { status: 'approved' } });
 });
+
+it('names the Casting changes since the sheet was built, and an image update clears them', async () => {
+  runPrompt.mockResolvedValue({ text: fixedCastAnswer() });
+  const project = await fixedCastProject();
+  const media = { 'cat-0': [{ mediaKey: 'anika.png', kind: 'portrait' }] };
+  const catalog = {
+    getIngredient: async (id) => (id === 'cat-new' ? { id, type: 'character', name: 'Zora', payload: {} } : { id, type: 'character', name: id, payload: {} }),
+    listMediaForIngredient: async (id) => media[id] || [{ mediaKey: id === 'cat-lead' ? 'keeper.png' : `${FIXED_SUPPORTING[Number(id.slice(4))]?.toLowerCase()}.png`, kind: 'portrait' }],
+  };
+  service.__setCastAndSetsDepsForTests(testDeps({ catalog }));
+  await service.startCastAndSets(project.id);
+  await runTo(project.id, 'review');
+  const changes = async () => (await request(app).get(`/api/music-video/${project.id}/cast-and-sets/casting-changes`)).body.changes;
+  expect(await changes()).toBeNull();
+  // Approval files the sheet's own images as references; they are not a Casting change.
+  expect((await request(app).post(`/api/music-video/${project.id}/cast-and-sets/approve`).send({})).status).toBe(200);
+  expect(await changes()).toBeNull();
+
+  // A new Casting image for a linked character, and a newly linked character with no sheet.
+  onDisk('anika-new.png');
+  media['cat-0'] = [{ mediaKey: 'anika-new.png', kind: 'portrait' }];
+  await projects.mutateProjectRecord(project.id, (p) => ({ project: { ...p, concept: { ...p.concept, subjects: [...p.concept.subjects,
+    { id: 'mvc-new', kind: 'character', name: 'Zora', role: 'supporting', description: 'Zora from the catalog', ingredientId: 'cat-new' }] } } }));
+  expect(await changes()).toEqual({ images: [{ key: 'cast:anika', label: expect.stringContaining('Anika') }], cast: ['Zora'] });
+
+  // Updating that image re-renders it on the new Casting image; only the missing sheet remains.
+  expect((await request(app).post(`/api/music-video/${project.id}/cast-and-sets/regenerate`).send({ keys: ['cast:anika'] })).status).toBe(202);
+  await runTo(project.id, 'review');
+  expect(jobs.findLast((j) => keyOf(j) === 'cast:anika').params.referenceImagePaths.map((p) => p.split(/[\\/]/).pop())).toEqual(['anika-new.png']);
+  expect(await changes()).toEqual({ images: [], cast: ['Zora'] });
+});

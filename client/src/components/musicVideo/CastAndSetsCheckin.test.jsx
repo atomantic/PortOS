@@ -7,7 +7,7 @@ import { castAndSetsPreviewItems } from './CastAndSetsReferenceProgress.jsx';
 
 const { listeners, api, getMediaJob } = vi.hoisted(() => ({
   listeners: new Map(),
-  api: { getMusicVideoProject: vi.fn(), getMusicVideoCastAndSets: vi.fn(), startMusicVideoCastAndSets: vi.fn(), regenerateMusicVideoCastAndSets: vi.fn(), editMusicVideoCastAndSetsDirection: vi.fn(), resumeMusicVideoCastAndSets: vi.fn(), approveMusicVideoCastAndSets: vi.fn(), reconfirmMusicVideoCastAndSets: vi.fn(), revertMusicVideoProductionInput: vi.fn(), skipMusicVideoCastAndSets: vi.fn(), applyMusicVideoCastAndSetsFeedback: vi.fn(), removeMusicVideoCastAndSetsFeedback: vi.fn(), discardMusicVideoCastAndSets: vi.fn() },
+  api: { getMusicVideoProject: vi.fn(), getMusicVideoCastAndSets: vi.fn(), startMusicVideoCastAndSets: vi.fn(), regenerateMusicVideoCastAndSets: vi.fn(), editMusicVideoCastAndSetsDirection: vi.fn(), resumeMusicVideoCastAndSets: vi.fn(), approveMusicVideoCastAndSets: vi.fn(), reconfirmMusicVideoCastAndSets: vi.fn(), revertMusicVideoProductionInput: vi.fn(), skipMusicVideoCastAndSets: vi.fn(), applyMusicVideoCastAndSetsFeedback: vi.fn(), removeMusicVideoCastAndSetsFeedback: vi.fn(), discardMusicVideoCastAndSets: vi.fn(), getMusicVideoCastAndSetsCastingChanges: vi.fn() },
   getMediaJob: vi.fn(),
 }));
 vi.mock('../../services/socket', () => ({ default: {
@@ -53,6 +53,7 @@ beforeEach(() => {
   listeners.clear();
   vi.clearAllMocks();
   getMediaJob.mockResolvedValue({ status: 'queued' });
+  api.getMusicVideoCastAndSetsCastingChanges.mockResolvedValue({ changes: null });
   api.getMusicVideoProject.mockReset();
 });
 afterEach(() => vi.restoreAllMocks());
@@ -422,6 +423,32 @@ describe('Cast & Sets per-image actions', () => {
     expect(api.startMusicVideoCastAndSets).toHaveBeenCalledWith('example-project', {}, { silent: true });
     // While the new direction is written, the banner gives way to progress.
     expect(screen.queryByRole('button', { name: /Rebuild from story/ })).toBeNull();
+  });
+
+  it('offers to update just the images whose Casting references changed, then a rebuild for a newly linked character', async () => {
+    api.regenerateMusicVideoCastAndSets.mockResolvedValue({ project: sheet('imaging', { revision: 2 }) });
+    api.getMusicVideoCastAndSetsCastingChanges.mockResolvedValue({ changes: { images: [{ key: 'character', label: 'Character sheet' }, { key: 'looks', label: 'Looks' }], cast: [] } });
+    const Page = ({ initial }) => {
+      const [value, setValue] = useState(initial);
+      selectProject = setValue;
+      const actions = useMusicVideoCastAndSets({ project: value, replaceProject: setValue });
+      return <CastSetsStage board={{ project: value, locked: false, castSets: actions, kickoff: { running: false }, devArtifacts: { busy: false }, openArtifact: vi.fn(),
+        productionReadiness: { castAndSets: { approved: true, stale: null, storyStale: null } }, approveCastAndSets: actions.approve, skipCastAndSets: actions.skip, ...DRAFTS }} />;
+    };
+    render(<Page initial={sheet('approved')} />);
+    expect(await screen.findByText(/New Casting images for Character sheet, Looks\./)).toBeInTheDocument();
+    expect(api.getMusicVideoCastAndSetsCastingChanges).toHaveBeenCalledWith('example-project', { silent: true });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Update 2 images/ })); });
+    expect(api.regenerateMusicVideoCastAndSets).toHaveBeenCalledWith('example-project', { keys: ['character', 'looks'] }, { silent: true });
+    // While those re-render the notice gives way to progress.
+    expect(screen.queryByText(/Casting changed since this sheet was built/)).toBeNull();
+
+    api.startMusicVideoCastAndSets.mockResolvedValue({ project: sheet('directing', { revision: 3 }) });
+    api.getMusicVideoCastAndSetsCastingChanges.mockResolvedValue({ changes: { images: [], cast: ['Zora'] } });
+    await act(async () => { selectProject(sheet('approved', { revision: 2 })); });
+    expect(await screen.findByText(/Zora is linked in Casting but has no sheet yet\./)).toBeInTheDocument();
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Rebuild from story/ })); });
+    expect(api.startMusicVideoCastAndSets).toHaveBeenCalledWith('example-project', {}, { silent: true });
   });
 
   it('hides card actions while working and starts over only after confirming', async () => {
