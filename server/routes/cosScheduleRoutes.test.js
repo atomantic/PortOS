@@ -10,7 +10,7 @@ const maintenance = vi.hoisted(() => ({ updateMaintenanceStep: vi.fn(), listMain
 vi.mock('../services/maintenanceRun.js', () => maintenance);
 const recovery = vi.hoisted(() => ({ prepareInventoriedCheckoutRetirement: vi.fn(), retireInventoriedCheckout: vi.fn() }));
 vi.mock('../services/heldCheckoutRecovery.js', () => recovery);
-const legacyRecovery = vi.hoisted(() => ({ reviewLegacyReleaseRecovery: vi.fn(), acceptLegacyReleaseRecovery: vi.fn() }));
+const legacyRecovery = vi.hoisted(() => ({ reviewLegacyReleaseRecovery: vi.fn(), acceptLegacyReleaseRecovery: vi.fn(), resetReleaseSynchronization: vi.fn() }));
 vi.mock('../services/releaseSynchronization.js', () => legacyRecovery);
 const refreshInventory = vi.hoisted(() => vi.fn());
 vi.mock('../services/branchReconcileRefresh.js', () => ({ refreshBranchReconcileInventory: refreshInventory }));
@@ -66,6 +66,17 @@ describe('CoS Schedule Routes', () => {
     expect(refused.status).toBe(409);
     expect(refused.body.context.reason).toBe('legacy-review-lifecycle-unverified');
     expect(JSON.stringify(refused.body)).not.toContain('private detail');
+  });
+
+  it('records an operator checkpoint reset with a reason', async () => {
+    app.use(errorMiddleware);
+    const identity = 'a'.repeat(64), reason = 'Start from main';
+    legacyRecovery.resetReleaseSynchronization.mockResolvedValue({ identity, reason });
+    const path = '/api/cos/schedule/release-synchronization/operator-reset';
+    expect((await request(app).post(path).send({ identity, reason })).body).toEqual({ identity, reason });
+    expect(legacyRecovery.resetReleaseSynchronization).toHaveBeenCalledWith(identity, reason, 'local-operator', []);
+    expect((await request(app).post(path).send({ identity, reason: '' })).status).toBe(400);
+    expect((await request(app).post(path).send({ identity, reason, actor: 'operator-session' })).status).toBe(400);
   });
 
   it('refreshes only a validated managed app target', async () => {

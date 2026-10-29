@@ -2222,6 +2222,18 @@ describe('admitAutoApprovedSystemTasks dry-run/execute parity', () => {
     vi.mocked(releaseTaskDispatchDisposition).mockResolvedValue(null);
     vi.restoreAllMocks();
   });
+
+  it('does not dispatch a retired continuation even if its schedule is enabled', async () => {
+    vi.spyOn(appActivity, 'isAppOnCooldown').mockResolvedValue(false);
+    vi.mocked(releaseTaskDispatchDisposition).mockResolvedValue('retired-continuation');
+    for (const mode of ['dry-run', 'execute']) {
+      const ctx = ctxFor(mode, [task('old-sync', { analysisType: 'release-sync' })]);
+      ctx.taskSchedule.tasks['release-sync'] = { enabled: true };
+      expect(await admitAutoApprovedSystemTasks(ctx, execAdapter(4))).toEqual([]);
+    }
+    vi.mocked(releaseTaskDispatchDisposition).mockResolvedValue(null);
+    vi.restoreAllMocks();
+  });
 });
 
 // A Priority 0 on-demand task is persisted as pending + auto-approved, so

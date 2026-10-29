@@ -12,6 +12,11 @@ it('gates legacy release recovery review and acceptance as host control', () => 
   }
 });
 
+it('requires host control to retire a release checkpoint', () => {
+  expect(hostControlRouteFor('POST', '/api/cos/schedule/release-synchronization/operator-reset'))
+    .toBe('POST /api/cos/schedule/release-synchronization/operator-reset');
+});
+
 it('requires host control for a manual cleanup recheck', () => {
   expect(isHostControlRoute('POST', '/api/cos/agents/agent-1/recheck-cleanup')).toBe(true);
 });

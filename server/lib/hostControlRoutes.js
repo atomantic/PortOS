@@ -507,6 +507,7 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/cos/schedule/branch-reconcile/refresh',
   'POST /api/cos/schedule/release-synchronization/legacy/review',
   'POST /api/cos/schedule/release-synchronization/legacy/accept',
+  'POST /api/cos/schedule/release-synchronization/operator-reset',
   // Archives and removes a checkout and its merged branch under a scoped release.
   'POST /api/cos/schedule/branch-reconcile/checkouts/retire',
   'POST /api/cos/schedule/branch-reconcile/checkouts/review',

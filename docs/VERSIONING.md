@@ -92,6 +92,10 @@ at its recorded validated SHA and close the superseded PR with a link. If no suc
 SHA was recorded, explicitly record a new cutoff and validate it from scratch;
 never treat old checks as proof of the new tree.
 
+An operator may instead explicitly abandon a stale attempt and start a new run
+from current `main`. Confirm no release is running and check existing release PRs,
+tags and publications first; the new run must use a new candidate and fresh checks.
+
 For a **new** candidate, the first fetch of `main` is the cutoff. If the launcher
 supplied a verified exact kickoff SHA, use that instead. A timestamp cannot recover
 an earlier trigger-time commit. Capture before any potentially lengthy work. Use a
@@ -367,6 +371,22 @@ that a reviewer actually inspected the published candidate or approved it. The r
 records that candidate inspection is unverified; the hosting provider's merged PR is
 the delivery evidence. Keep missing lifecycle files, changed generations, active owners,
 unique content, and any unverified preservation or retirement as explicit holds.
+
+When an operator has decided to abandon a stale synchronization checkpoint and
+start a fresh release from `main`, POST `{ "identity": "<identity>", "reason":
+"<operator decision>", "checkouts": [{ "path": "<absolute path>", "branch":
+"<branch>", "head": "<40-character SHA>", "checkoutIdentity": "<64-character
+identity>" }] }` to `/api/cos/schedule/release-synchronization/operator-reset`.
+`checkouts` is optional and may be empty; when cleanup is needed, include the
+exact inventory tuples to release from this checkpoint's retention before the
+reset. The decision is immutable, so its checkout list cannot be added later.
+This host-control action refuses while a CoS release or synchronization for the same
+repository is active. The operator must also check for an external release process.
+It records the operator, reason and prior blocker, retires
+that checkpoint's queued continuation, and allows a new release. It does not mark
+the old synchronization verified, change a tag, remove a checkout, or start a
+release. Other checkout identities and outstanding checkpoints retain their own gates. Inspect and clean
+up any abandoned candidate separately before starting the new release.
 
 On Windows, newly registered CLI and PTY release publishers and synchronization
 agents launch inside a native Job with breakaway disabled, atomically assigned at process

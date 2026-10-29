@@ -38,6 +38,7 @@ import { resolveAgentProviderAndModel } from './agentProviderResolution.js';
 import { prepareAgentWorkspace } from './agentWorkspacePrep.js';
 import { buildClaim } from './cosTaskClaim.js';
 import { cosEvents, emitLog } from './cosEvents.js';
+import { currentTaskTypeName } from '../lib/taskTypeRenames.js';
 
 const ROOT_DIR = PATHS.root;
 const AGENTS_DIR = PATHS.cosAgents;
@@ -50,6 +51,18 @@ const AGENTS_DIR = PATHS.cosAgents;
 export async function dispatchAgentRun(context, opts) {
   markAgentDispatching(context.agentId);
   try {
+    const type = currentTaskTypeName(context.task.metadata?.analysisType || context.task.metadata?.selfImprovementType);
+    if (type === 'do-release' || type === 'release-sync') {
+      const [{ withClaimOwnershipLock }, { releaseTaskDispatchDisposition }] = await Promise.all([
+        import('./cosClaimOwnershipState.js'), import('./releaseSynchronization.js'),
+      ]);
+      const disposition = await withClaimOwnershipLock(() => releaseTaskDispatchDisposition(context.task));
+      if (disposition === 'retired-continuation' || disposition === 'wait-for-synchronization') {
+        return context.blockAndBail({ reason: disposition === 'retired-continuation'
+          ? 'This release synchronization was retired by an operator.'
+          : 'The previous release synchronization is unfinished.', persist: false });
+      }
+    }
     return await runAgentDispatch(context, opts);
   } finally {
     clearAgentDispatching(context.agentId);

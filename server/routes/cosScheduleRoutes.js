@@ -10,7 +10,7 @@ import { z } from 'zod';
 import * as taskSchedule from '../services/taskSchedule.js';
 import { logCosScheduleUpdate } from '../services/userActionScheduleLog.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { sanitizeTaskMetadata, taskDataInputsSchema, validateRequest, parsePagination, cosScheduleTargetBodySchema, cosScheduleTriggerBodySchema, heldCheckoutRetireBodySchema, heldCheckoutReviewBodySchema, initializedCheckoutRetireBodySchema, initializedCheckoutTransactionSchema, initializedCheckoutRestoreSchema, initializedCheckoutBranchRetireSchema, initializedCheckoutMetadataRestoreSchema, initializedCheckoutFinalizationSchema, initializedCheckoutQuarantineResumptionSchema, legacyReleaseRecoveryReviewSchema, legacyReleaseRecoveryAcceptSchema } from '../lib/validation.js';
+import { sanitizeTaskMetadata, taskDataInputsSchema, validateRequest, parsePagination, cosScheduleTargetBodySchema, cosScheduleTriggerBodySchema, heldCheckoutRetireBodySchema, heldCheckoutReviewBodySchema, initializedCheckoutRetireBodySchema, initializedCheckoutTransactionSchema, initializedCheckoutRestoreSchema, initializedCheckoutBranchRetireSchema, initializedCheckoutMetadataRestoreSchema, initializedCheckoutFinalizationSchema, initializedCheckoutQuarantineResumptionSchema, legacyReleaseRecoveryReviewSchema, legacyReleaseRecoveryAcceptSchema, releaseSynchronizationResetBodySchema } from '../lib/validation.js';
 import { promptSourceSchema, PROMPT_SOURCES, scheduleExecutionFieldsSchema } from '../lib/cosValidation.js';
 import { EFFORT_LEVELS } from '../lib/providerModels.js';
 import { INTERVAL_TYPES, decodeIntervalType, isCronExpression, isKnownIntervalType } from '../services/taskScheduleConstants.js';
@@ -318,6 +318,14 @@ router.post('/schedule/release-synchronization/legacy/accept', asyncHandler(asyn
   const { acceptLegacyReleaseRecovery } = await import('../services/releaseSynchronization.js');
   const receipt = await legacyRecoveryCall(() => acceptLegacyReleaseRecovery(identity, digest));
   res.json({ identity, digest: receipt.digest, acceptedAt: receipt.acceptedAt });
+}));
+
+// This is an explicit operator decision, not a successful synchronization.
+router.post('/schedule/release-synchronization/operator-reset', asyncHandler(async (req, res) => {
+  const { identity, reason, checkouts } = validateRequest(releaseSynchronizationResetBodySchema, req.body);
+  const { resetReleaseSynchronization } = await import('../services/releaseSynchronization.js');
+  const actor = req.portosAuthContext?.method === 'session' ? 'operator-session' : 'local-operator';
+  res.json(await resetReleaseSynchronization(identity, reason, actor, checkouts));
 }));
 
 // Scan without changing Git state or scheduling provider work.

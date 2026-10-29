@@ -4,6 +4,29 @@ import { matchingRetirementReceipts } from './reconcileRetirementEvidence.js';
 import { isAbsolute, resolve } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { createHash } from 'node:crypto';
+import { z } from 'zod';
+
+// An operator can retire a stale synchronization checkpoint without claiming
+// that its missing historical evidence was verified.
+export const releaseSynchronizationResetCheckoutSchema = z.object({ path: z.string().refine(isAbsolute), branch: z.string().min(1),
+  head: z.string().regex(/^[a-f0-9]{40}$/), checkoutIdentity: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
+export const releaseSynchronizationResetSchema = z.object({
+  version: z.literal(1), identity: z.string().regex(/^[a-f0-9]{64}$/),
+  resetAt: z.string().datetime(), actor: z.enum(['operator-session', 'local-operator']),
+  reason: z.string().trim().min(1).max(1000),
+  previousStatus: z.enum(['pending', 'running', 'blocked']), previousBlocker: z.string().nullable(),
+  checkouts: z.array(releaseSynchronizationResetCheckoutSchema).max(10),
+}).strict();
+
+export function releaseSynchronizationReset(entry) {
+  const parsed = releaseSynchronizationResetSchema.safeParse(entry?.operatorReset);
+  return parsed.success && parsed.data.identity === entry.identity ? parsed.data : null;
+}
+
+export function resetReleasesCheckout(entry, checkout) {
+  return releaseSynchronizationReset(entry)?.checkouts.some(row => row.path === checkout.path && row.branch === checkout.branch
+    && row.head === checkout.head && row.checkoutIdentity === checkout.checkoutIdentity) === true;
+}
 
 const physicalIdentity = value => value && /^(0|[1-9]\d*)$/.test(value.dev || '') && /^[1-9]\d*$/.test(value.ino || '')
   && /^[1-9]\d*$/.test(value.birthtimeNs || '');
