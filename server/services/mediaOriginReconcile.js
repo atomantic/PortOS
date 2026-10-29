@@ -154,8 +154,9 @@ export async function reconcileMediaOrigins(kind, { nowMs = Date.now() } = {}) {
       const scopes = scopesOf(peer).filter((scope) => scope.checked.includes(file.filename) || scope.mtimes[file.filename] !== undefined);
       // A peer that did not examine the file is unreported for it: nobody claims.
       if (scopes.length === 0) { covered = false; break; }
-      const held = scopes.find((scope) => scope.mtimes[file.filename] !== undefined);
-      if (held) holders.push({ peerId: peer.instanceId, mtimeMs: held.mtimes[file.filename], mayDelete: peerMayDeleteMedia(peer) });
+      // Overlapping scopes: the newest report that covers the name is the peer's current answer.
+      const newest = scopes.reduce((a, b) => (Date.parse(b.at) > Date.parse(a.at) ? b : a));
+      if (newest.mtimes[file.filename] !== undefined) holders.push({ peerId: peer.instanceId, mtimeMs: newest.mtimes[file.filename], mayDelete: peerMayDeleteMedia(peer) });
     }
     if (!covered) continue;
     const origin = earliestHolderOrigin({ localId, localMtimeMs: file.mtimeMs, holders });

@@ -112,6 +112,17 @@ describe('earliest holder of a pre-upgrade video', () => {
     expect(await originOf()).toBe('me');
   });
 
+  it('lets a newer scope that no longer lists the file override an older one that did', async () => {
+    touch(join(PATHS.videos, 'v1.mp4'), T + 2 * DAY);
+    await report('a', T);
+    await report('b', T + DAY);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await recordPeerHoldings('a', 'video', 'mediaCollections', { mtimes: {}, checked: ['v1.mp4'] });
+    // a's newest report says it holds nothing, so b (T+DAY) is the earliest holder against this machine.
+    expect(await reconcileMediaOrigins('video')).toBe(1);
+    expect(await originOf()).toBe('b');
+  });
+
   it('claims nothing on a tie, and never touches a copy that records a supplier', async () => {
     touch(join(PATHS.videos, 'v1.mp4'), T);
     await report('a', T);
