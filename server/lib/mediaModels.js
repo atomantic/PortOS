@@ -65,6 +65,7 @@ import { join, dirname } from 'path';
 import { randomUUID } from 'node:crypto';
 import { PATHS, expandHome } from './fileUtils.js';
 import { isPlainObject } from './objects.js';
+import { isWorktreeRoot } from './dataRoot.js';
 import {
   LEGACY_VIDEO_KEYS,
   VIDEO_BUCKET_CUDA,
@@ -1308,6 +1309,15 @@ const writeRegistryAtomic = (reg) => {
   }
 };
 
+// A process executing from a CoS claim worktree (an agent's ad-hoc `node -e`, a
+// script that transitively imports this module) resolves PATHS.data to the
+// checkout's own data/, so the lazy seed would strand an ignored 80 KB registry
+// that blocks retirement of the merged checkout (#14112). Such a process runs on
+// the in-memory shipped defaults instead; an explicit PORTOS_MEDIA_MODELS_FILE
+// (the test fixture, a disposable boot) still seeds the path it names.
+export const isSeedSuppressed = (registryFile = REGISTRY_FILE, explicit = process.env.PORTOS_MEDIA_MODELS_FILE) =>
+  !explicit && isWorktreeRoot(registryFile);
+
 /**
  * True when `text` is a registry nobody has edited: the shipped defaults plus the
  * `_shippedDefaults` bookkeeping the first load adds. Such a file is regenerable.
@@ -1321,7 +1331,7 @@ export const isPristineRegistrySeed = (text) => {
 };
 
 const seedIfMissing = () => {
-  if (existsSync(REGISTRY_FILE)) return;
+  if (existsSync(REGISTRY_FILE) || isSeedSuppressed()) return;
   ensureDir(REGISTRY_FILE);
   writeRegistryAtomic(DEFAULT_REGISTRY);
   console.log(`📝 Seeded media model registry: ${REGISTRY_FILE}`);
@@ -1840,6 +1850,7 @@ export const loadMediaModels = () => {
   let parsed = DEFAULT_REGISTRY;
   let readOk = false;
   try {
+    if (!existsSync(REGISTRY_FILE) && isSeedSuppressed()) throw new Error('worktree checkout: registry not seeded');
     const raw = readFileSync(REGISTRY_FILE, 'utf-8');
     parsed = JSON.parse(raw);
     readOk = true;
