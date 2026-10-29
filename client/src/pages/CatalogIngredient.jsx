@@ -191,6 +191,7 @@ function IngredientEditor() {
   const [mediaLoading, setMediaLoading] = useState(false);
   const [mediaError, setMediaError] = useState(null);
   const mediaSequence = useRef(0);
+  const sheetPointerSequence = useRef(0);
   const mediaReadyRef = useRef(false);
   mediaReadyRef.current = mediaReady;
   const refreshMediaRef = useRef(null);
@@ -600,9 +601,12 @@ function IngredientEditor() {
   const refreshSheetPointers = useCallback(() => {
     if (!id) return;
     const requestedId = id;
+    const sequence = ++sheetPointerSequence.current;
+    const isCurrentRequest = () => mountedRef.current && activeVisitRef.current.id === requestedId
+      && sequence === sheetPointerSequence.current;
     getCatalogIngredientDetails(id, { silent: true, view: detailView })
       .then((d) => {
-        if (activeVisitRef.current.id !== requestedId || !d?.ingredient) return;
+        if (!isCurrentRequest() || !d?.ingredient) return;
         const fresh = ingredientPayload(d.ingredient.payload);
         const pointers = {};
         for (const key of SHEET_POINTER_KEYS) {
@@ -614,8 +618,8 @@ function IngredientEditor() {
         setPayload((cur) => ({ ...cur, ...pointers }));
         toast.success('Reference sheet ready');
       })
-      .catch(() => { toast.error('Reference sheet rendered — reload to see it'); });
-  }, [id, detailView]);
+      .catch(() => { if (isCurrentRequest()) toast.error('Reference sheet rendered — reload to see it'); });
+  }, [id, detailView, mountedRef]);
 
   const handleSave = async () => {
     if (!record || identityReadOnly || unlocking || characterActionBusy) return;

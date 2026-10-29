@@ -1321,6 +1321,70 @@ describe('CatalogIngredient — tabbed library record pages', () => {
     ));
   });
 
+  it('keeps the sheet form usable while a render runs so another sheet can start', async () => {
+    const api = await import('../services/apiCatalog');
+    api.renderCatalogSheet
+      .mockResolvedValueOnce({ jobId: 'manual-std', variant: 'standard', role: 'sheet:standard', delegatedTo: null })
+      .mockResolvedValueOnce({ jobId: 'manual-exp', variant: 'expressions', role: 'sheet:expressions', delegatedTo: null });
+    api.attachCatalogIngredientMedia.mockResolvedValue({});
+    await renderPage('/casting/cat-chr-hero/sheets');
+
+    const kind = await screen.findByLabelText('Sheet kind');
+    await waitFor(() => expect(screen.getByRole('button', { name: /Generate sheet/ })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: /Generate sheet/ }));
+    expect(await screen.findByTestId('job-thumb-manual-std')).toBeInTheDocument();
+    // The same sheet can't be queued twice, but the pickers stay live.
+    expect(screen.getByRole('button', { name: /Rendering/ })).toBeDisabled();
+    expect(kind).toBeEnabled();
+
+    fireEvent.change(kind, { target: { value: 'expressions' } });
+    await waitFor(() => expect(screen.getByRole('button', { name: /Generate sheet/ })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: /Generate sheet/ }));
+    expect(await screen.findByTestId('job-thumb-manual-exp')).toBeInTheDocument();
+    expect(screen.getByTestId('job-thumb-manual-std')).toBeInTheDocument();
+    expect(screen.getByText('Rendering 2')).toBeInTheDocument();
+
+    // Each job attaches under its own role as it finishes.
+    fireEvent.click(within(screen.getByTestId('job-thumb-manual-std')).getByRole('button', { name: 'Complete job' }));
+    await waitFor(() => expect(api.attachCatalogIngredientMedia).toHaveBeenCalledWith(
+      'cat-chr-hero', { mediaKey: 'manual-std.png', kind: 'reference', role: 'sheet:standard' }, { silent: true },
+    ));
+    expect(screen.queryByTestId('job-thumb-manual-std')).toBeNull();
+    expect(screen.getByTestId('job-thumb-manual-exp')).toBeInTheDocument();
+    fireEvent.click(within(screen.getByTestId('job-thumb-manual-exp')).getByRole('button', { name: 'Complete job' }));
+    await waitFor(() => expect(api.attachCatalogIngredientMedia).toHaveBeenCalledWith(
+      'cat-chr-hero', { mediaKey: 'manual-exp.png', kind: 'reference', role: 'sheet:expressions' }, { silent: true },
+    ));
+  });
+
+  it('keeps the latest canon pointers when concurrent sheet refreshes finish out of order', async () => {
+    const api = await import('../services/apiCatalog');
+    api.renderCatalogSheet
+      .mockResolvedValueOnce({ jobId: 'manual-canon-std', variant: 'standard', delegatedTo: 'universe' })
+      .mockResolvedValueOnce({ jobId: 'manual-canon-exp', variant: 'expressions', delegatedTo: 'universe' });
+    await renderPage('/casting/cat-chr-hero/sheets');
+    fireEvent.click(await screen.findByRole('button', { name: /Generate sheet/ }));
+    await screen.findByTestId('job-thumb-manual-canon-std');
+    fireEvent.change(screen.getByLabelText('Sheet kind'), { target: { value: 'expressions' } });
+    await waitFor(() => expect(screen.getByRole('button', { name: /Generate sheet/ })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: /Generate sheet/ }));
+    await screen.findByTestId('job-thumb-manual-canon-exp');
+
+    const first = Promise.withResolvers();
+    const second = Promise.withResolvers();
+    getCatalogIngredientDetails.mockReset().mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+    await act(async () => { socketHandlers.get('reference-sheet:changed')({ jobId: 'manual-canon-std', status: 'ready' }); });
+    await act(async () => { socketHandlers.get('reference-sheet:changed')({ jobId: 'manual-canon-exp', status: 'ready' }); });
+    expect(getCatalogIngredientDetails).toHaveBeenCalledTimes(2);
+
+    const firstPayload = { ...HERO.payload, referenceSheetImageRef: 'hero-standard-v2.png' };
+    const latestPayload = { ...firstPayload, referenceSheets: { expressions: 'hero-expressions-v2.png' } };
+    await act(async () => { second.resolve(detailsOf({ ...HERO, payload: latestPayload })); });
+    await act(async () => { first.resolve(detailsOf({ ...HERO, payload: firstPayload })); });
+    expect(screen.getByAltText('standard reference sheet')).toHaveAttribute('src', '/data/image-refs/hero-standard-v2.png');
+    expect(screen.getByAltText('expressions reference sheet')).toHaveAttribute('src', '/data/image-refs/hero-expressions-v2.png');
+  });
+
   it('refreshes canon pointers when a universe-delegated sheet is announced ready', async () => {
     const api = await import('../services/apiCatalog');
     api.renderCatalogSheet.mockResolvedValue({ jobId: 'canon-job', variant: 'standard', delegatedTo: 'universe' });
@@ -1338,6 +1402,17 @@ describe('CatalogIngredient — tabbed library record pages', () => {
     });
     await waitFor(() => expect(screen.getByAltText('standard reference sheet').getAttribute('src'))
       .toBe('/data/image-refs/hero-standard-v2.png'));
+  });
+
+  it('identifies a delegated sheet whose publication failed', async () => {
+    const api = await import('../services/apiCatalog');
+    api.renderCatalogSheet.mockResolvedValue({ jobId: 'manual-canon-fail', variant: 'standard', delegatedTo: 'universe' });
+    await renderPage('/casting/cat-chr-hero/sheets');
+    fireEvent.click(await screen.findByRole('button', { name: /Generate sheet/ }));
+    await screen.findByTestId('job-thumb-manual-canon-fail');
+    await act(async () => { socketHandlers.get('reference-sheet:changed')({ jobId: 'manual-canon-fail', status: 'failed' }); });
+    expect(toast.error).toHaveBeenCalledWith('Standard turnaround render finished but the sheet could not be saved');
+    expect(screen.queryByTestId('job-thumb-manual-canon-fail')).toBeNull();
   });
 
   it('keeps an unsaved name edit across tab switches without a discard prompt', async () => {
