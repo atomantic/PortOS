@@ -923,6 +923,8 @@ export * from './filmLook.js';
 export * from './filmLookValidation.js';
 export * from './filmLookGpu.js';
 export * from './musicVideoStatsOutro.js';
+export * from './musicVideoCreditsOutro.js';
+export * from './musicVideoEnding.js';
 export * from './musicVideoTitleCard.js';
 export * from './musicVideoDependencies.js';
 export * from './musicVideoEndFrame.js';

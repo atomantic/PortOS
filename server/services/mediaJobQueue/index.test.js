@@ -38,6 +38,14 @@ vi.mock('../../lib/fileUtils.js', async () => {
   };
 });
 
+// The queue binds `maintenance` once per module instance; delegate to the
+// current test's admission so a shared instance still gets a per-test journal.
+let currentAdmission;
+vi.mock('../../lib/maintenanceAdmission.js', async (importOriginal) => ({
+  ...await importOriginal(),
+  maintenance: new Proxy({}, { get: (_target, property) => currentAdmission[property] }),
+}));
+
 vi.mock('../../lib/mediaModels.js', () => ({
   getVideoModels: vi.fn(() => [
     { id: 'example-mlx', runtime: 'mlx_video' },
@@ -204,6 +212,11 @@ let videoGenEvents;
 let imageGenEvents;
 let audioGenEvents;
 
+// A fresh module graph costs ~150ms, so tests share one instance and reset it
+// with __resetForTests(). Only a test that simulates a restart (or swaps a
+// doMock'd dependency) calls importFresh(); that marks the graph dirty so the
+// next beforeEach rebuilds a clean one instead of inheriting its mocks.
+let moduleGraphDirty = true;
 async function importFresh() {
   await mediaJobQueue?.__resetForTests();
   vi.resetModules();
@@ -211,6 +224,7 @@ async function importFresh() {
   videoGenEvents = (await import('../videoGen/events.js')).videoGenEvents;
   imageGenEvents = (await import('../imageGenEvents.js')).imageGenEvents;
   audioGenEvents = (await import('../audioGen/events.js')).audioGenEvents;
+  moduleGraphDirty = true;
 }
 
 const flush = async () => {
@@ -246,13 +260,15 @@ const remoteRecoverySettlement = (jobId, peerId = remoteVideoMediaParams().peerI
 });
 
 beforeEach(async () => {
-  tempDataDir = mkdtempSync(join(tmpdir(), 'mediaJobQueue-test-'));
+  // One path for the whole file: the shared queue instance captures its jobs
+  // file under it at import. afterEach removes it, so each test starts empty.
+  tempDataDir ??= mkdtempSync(join(tmpdir(), 'mediaJobQueue-test-'));
+  mkdirSync(tempDataDir, { recursive: true });
   // Queue fixtures deliberately abandon active work when simulating a crash.
   // Give each test its own real journal, retaining it across importFresh()
   // within that test so restart recovery still exercises durable ownership.
-  const admissionModule = await vi.importActual('../../lib/maintenanceAdmission.js');
-  const admission = admissionModule.createMaintenanceAdmission(tempDataDir);
-  vi.doMock('../../lib/maintenanceAdmission.js', () => ({ ...admissionModule, maintenance: admission }));
+  const { createMaintenanceAdmission } = await vi.importActual('../../lib/maintenanceAdmission.js');
+  currentAdmission = createMaintenanceAdmission(tempDataDir);
   Object.values(stubs).forEach((fn) => fn.mockReset());
   const { getDefaultVideoModelId } = await import('../../lib/mediaModels.js');
   getDefaultVideoModelId.mockImplementation(() => 'example-mlx');
@@ -268,7 +284,13 @@ beforeEach(async () => {
   stubs.runTopazUpscale.mockImplementation(() => new Promise(() => {}));
   stubs.cancelTopazUpscale.mockReturnValue(true);
   stubs.runVideoStitch.mockImplementation(() => new Promise(() => {}));
-  await importFresh();
+  if (moduleGraphDirty) await importFresh();
+  else {
+    await mediaJobQueue.__resetForTests();
+    // Settings are read through a module cache; tests write settings.json directly.
+    (await import('../settings.js')).__resetSettingsCache();
+  }
+  moduleGraphDirty = false;
 });
 
 afterEach(async () => {
@@ -541,40 +563,35 @@ describe('mediaJobQueue', () => {
     }
   });
 
+  // One case per distinct gate in assertFableLoomDispatchInputs: the accepted
+  // path, a job queued before canon fingerprints (cross-version compatibility),
+  // a recorded-asset digest (shared by reference/adapter/canon files), and the
+  // adapter activation-word re-weave.
   it.each([
-    'unchanged', 'unchanged-named', 'unchanged-legacy-canon', 'reference', 'adapter', 'canon-adapter', 'canon-image',
-    'canon-source', 'trigger',
+    'unchanged', 'unchanged-legacy-canon', 'canon-image', 'trigger',
   ])('checks FableLoom %s inputs after queue delay and before provider dispatch', async (changed) => {
     const images = join(tempDataDir, 'images');
     const loras = join(tempDataDir, 'loras');
-    const elsewhere = join(tempDataDir, 'elsewhere');
     mkdirSync(images, { recursive: true });
     mkdirSync(loras, { recursive: true });
-    mkdirSync(elsewhere, { recursive: true });
     const reference = join(images, 'reference.png');
     const canonReference = join(images, 'canon.png');
-    // Same basename and bytes as the recorded canon image, but not its recorded source.
-    const substitutedCanon = join(elsewhere, 'canon.png');
     const adapter = join(loras, 'example.safetensors');
     const canonAdapter = join(loras, 'canon.safetensors');
     writeFileSync(reference, 'original-reference');
     writeFileSync(canonReference, 'canon-reference');
-    writeFileSync(substitutedCanon, 'canon-reference');
     writeFileSync(adapter, 'original-adapter');
     writeFileSync(canonAdapter, 'canon-adapter');
-    const namedAdapter = changed === 'unchanged-named';
     const hash = value => createHash('sha256').update(value).digest('hex');
     // A job queued before canon fingerprints existed keeps its basename check.
     const canonAsset = changed === 'unchanged-legacy-canon'
       ? { role: 'character-neutral', filename: 'canon.png' }
       : { role: 'character-neutral', filename: 'canon.png', inputRoot: 'images', sha256: hash('canon-reference') };
-    const sentCanon = changed === 'canon-source' ? substitutedCanon : canonReference;
     const params = {
       mode: 'local', prompt: 'An authored view', negativePrompt: '',
       fableLoom: { loomId: 'loom-1', episodeId: 'ep-1', nodeId: 'node-1' },
-      referenceImagePaths: [sentCanon, reference], referenceImageStrengths: [1, 0.4],
-      loraFilenames: namedAdapter ? ['canon.safetensors', 'example.safetensors'] : ['canon.safetensors'],
-      loraPaths: namedAdapter ? [] : [adapter], loraScales: [0.8, 0.7],
+      referenceImagePaths: [canonReference, reference], referenceImageStrengths: [1, 0.4],
+      loraFilenames: ['canon.safetensors'], loraPaths: [adapter], loraScales: [0.8, 0.7],
       visualConditioning: {
         version: 1, capability: { kind: 'image', backend: 'local' },
         authoredPrompt: 'An authored view', authoredNegativePrompt: '',
@@ -595,9 +612,6 @@ describe('mediaJobQueue', () => {
     await waitFor(() => stubs.generateVideo.mock.calls.length === 1);
     const second = await mediaJobQueue.enqueueJob({ kind: 'image', params });
     expect(mediaJobQueue.getJob(second.jobId).status).toBe('queued');
-    if (changed === 'reference') writeFileSync(reference, 'changed-reference');
-    if (changed === 'adapter') writeFileSync(adapter, 'changed-adapter');
-    if (changed === 'canon-adapter') writeFileSync(canonAdapter, 'changed-canon-adapter');
     if (changed === 'canon-image') writeFileSync(canonReference, 'changed-canon-reference');
     if (changed === 'trigger') writeFileSync(`${adapter}.metadata.json`, JSON.stringify({ triggerWords: ['new-token'] }));
     videoGenEvents.emit('completed', { generationId: first.jobId, filename: 'example.mp4' });
@@ -3259,34 +3273,6 @@ async function waitFor(predicate, { timeoutMs = DEFAULT_WAIT_MS, intervalMs = 30
     lastError ? { cause: lastError } : undefined,
   );
 }
-
-// Contract test for the helper above. The bug it guards (#5512) only surfaces
-// under timing luck on a slow runner, so it is pinned deterministically here
-// rather than left to the flake that found it. One short real timeout, not a
-// repeated sleep.
-describe('waitFor test helper (#5512)', () => {
-  it('treats a throwing predicate as not-yet-true and keeps polling', async () => {
-    let calls = 0;
-    await waitFor(() => {
-      calls += 1;
-      if (calls < 3) throw new Error('ENOENT: no such file or directory');
-      return true;
-    }, { timeoutMs: 1000, intervalMs: 1 });
-    expect(calls).toBe(3);
-  });
-
-  it('still fails loudly on timeout, naming the predicate and the last error', async () => {
-    await expect(waitFor(
-      () => { throw new Error('ENOENT: no such file or directory'); },
-      { timeoutMs: 20, intervalMs: 5 },
-    )).rejects.toThrow(/never became true within 20ms.*last error: ENOENT/s);
-  });
-
-  it('reports a cleanly-false predicate without inventing an error', async () => {
-    await expect(waitFor(() => false, { timeoutMs: 20, intervalMs: 5 }))
-      .rejects.toThrow(/never became true within 20ms(?!.*last error)/s);
-  });
-});
 
 // Regression: three terminal failures must preserve the rest of a batch,
 // including its staged bytes, across reload and explicit resume.

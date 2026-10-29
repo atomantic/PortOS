@@ -51,7 +51,7 @@ import { documentRenderInitScripts, encodeDocumentComposition, prepareDocumentRe
 import { sweepCompositionScratch } from './compositionRender.js';
 import { applyFilmLookFinish, filmLookFinishNeeded } from './filmLookFinish.js';
 import { appendStatsOutro, sweepStatsOutroScratch } from './statsOutro.js';
-import { statsOutroSeconds } from '../../lib/musicVideoStatsOutro.js';
+import { endingSeconds } from '../../lib/musicVideoEnding.js';
 import { selectedPerformanceInstruction } from '../../lib/musicVideoShotTiming.js';
 import { captureMusicVideoEvidence, musicVideoTakeChanges } from '../../lib/musicVideoDependencies.js';
 import { assertCurrentPerformanceTakes, withDraftPerformanceFallbacks } from './performanceShot.js';
@@ -978,7 +978,7 @@ async function renderSeekedMode(projectId, project, handOff, renderer, options =
       plan, project, projectId, jobId, audioPath, soundBed, outputPath, signal,
       onProgress: (fraction) => broadcastSse(job, { type: 'progress', progress: fraction }),
     });
-    // The cutting room floor outro (when on) joins after the song.
+    // The ending (cutting room floor, credits; when on) joins after the song.
     const outroSec = await appendStatsOutro({ project, path: outputPath, jobId, signal, withFilmLook: !!renderer.filmLookInPage });
     return outroSec > 0 ? { ...encoded, durationSec: encoded.durationSec + outroSec } : encoded;
   }).then(async (encoded) => {
@@ -1227,8 +1227,8 @@ async function renderAdmittedMusicVideo(projectId, options, permit) {
     // look after ffmpeg (filmLookFinish.js); the pass takes the second half of
     // whatever the encode's share of the bar is.
     const finishing = filmLookFinishNeeded(project);
-    // Seconds the outro scene adds after the song (0 when it is off).
-    const outroSec = statsOutroSeconds(project.statsOutro);
+    // Seconds the ending (cutting room floor, credits) adds after the song (0 when both are off).
+    const outroSec = endingSeconds(project);
     const startEncode = (encode) => {
       const encodeTop = finishing ? 0.5 : 1;
       const encodeProgress = (fraction) => encodeTop * fraction;

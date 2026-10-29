@@ -57,8 +57,8 @@
  */
 
 import { existsSync, lstatSync, readlinkSync } from 'fs';
-import { basename, dirname, isAbsolute, join, resolve } from 'path';
-import { resolveCodeRootForModule, resolveInstallRoot } from './dataRoot.js';
+import { basename, dirname, isAbsolute, join, resolve, sep } from 'path';
+import { isWorktreeRoot, resolveCodeRootForModule, resolveInstallRoot } from './dataRoot.js';
 import { canonicalizePath, isPathAtOrInsideDir } from './pathContainment.js';
 import { isVitestRunner } from './runtimeEnv.js';
 
@@ -69,10 +69,40 @@ import { isVitestRunner } from './runtimeEnv.js';
 // `PATHS.data` to a temp root (which is exactly what a well-behaved suite does)
 // must not also be able to redirect the guard's idea of what the real root is,
 // or the guard would approve every write it is supposed to refuse.
-let cachedRoot = null;
-const realDataRoot = () => (cachedRoot ??= canonicalizePath(
-  join(resolveInstallRoot(resolveCodeRootForModule(import.meta.url)), 'data'),
-));
+let cachedRoots = null;
+const WORKTREE_SEGMENT = join('data', 'cos', 'worktrees');
+
+/**
+ * The protected data root plus the checkout exempted from it.
+ *
+ * A CoS worktree lives at `<install>/data/cos/worktrees/<name>`, so its own
+ * (empty, git-tracked-only) `data/` is nested beneath the install's live data
+ * tree and holds no user records. Run from there the guard must protect the
+ * real `<install>/data` while letting the suite use the worktree's own scratch
+ * tree; otherwise suites that persist through the default `PATHS` fail on an
+ * unmodified base (#14074). Outside a worktree there is no exemption.
+ *
+ * Exported for tests: the live module location cannot be varied in-process.
+ *
+ * @param {string} codeRoot - the executing checkout's root
+ * @returns {{ root: string, exempt: string|null }}
+ */
+export function _resolveGuardRoots(codeRoot) {
+  const installRoot = resolveInstallRoot(codeRoot);
+  if (!isWorktreeRoot(installRoot)) {
+    return { root: canonicalizePath(join(installRoot, 'data')), exempt: null };
+  }
+  const resolved = resolve(installRoot);
+  const at = resolved.indexOf(`${sep}${WORKTREE_SEGMENT}${sep}`);
+  const primary = at < 0 ? null : (at === 0 ? sep : resolved.slice(0, at));
+  return {
+    root: canonicalizePath(join(primary ?? resolved, 'data')),
+    exempt: primary ? canonicalizePath(resolved) : null,
+  };
+}
+
+const guardRoots = () => (cachedRoots ??= _resolveGuardRoots(resolveCodeRootForModule(import.meta.url)));
+const realDataRoot = () => guardRoots().root;
 
 // Memo of already-canonicalized DIRECTORIES. Without it every guarded write
 // re-walks its whole path with `realpathSync`, and the misses go through a
@@ -160,8 +190,10 @@ const canonicalTargets = (target) => {
  */
 export function isInsideRealDataRoot(target) {
   if (typeof target !== 'string' || target === '') return false;
-  const root = realDataRoot();
-  return canonicalTargets(target).some((candidate) => isPathAtOrInsideDir(root, candidate));
+  const { root, exempt } = guardRoots();
+  return canonicalTargets(target).some(
+    (candidate) => isPathAtOrInsideDir(root, candidate) && !(exempt && isPathAtOrInsideDir(exempt, candidate)),
+  );
 }
 
 /**

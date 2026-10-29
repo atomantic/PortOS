@@ -26,7 +26,8 @@
  * `DIRECTORY_INPUT_LIMIT`); the installed version of every package the
  * members reach; the sibling imports of a Python sidecar; the version of an
  * external program a member reaches (`TEST_MEMO_TOOLS`); the workspace's
- * Vitest configuration closure and manifest (for a recorded key, the setup
+ * Vitest configuration closure and manifest, less the test-selection modules
+ * and bare mock registrations (`workspaceBase`; for a recorded key, the setup
  * files and custom environment come from the record instead of the static
  * walk: `WORKSPACE_SETUP_ENTRIES`); the full Node version, platform and
  * arch; and `TEST_MEMO_ENV`.
@@ -127,15 +128,30 @@ export const TEST_MEMO_NEVER = Object.freeze({
 
 /**
  * Workspace inputs shared by every key: the Vitest config(s) and setup files
- * (walked as closures), the worker-pool policy, and the manifest/lockfile.
+ * (walked as closures, see `workspaceBase`), the worker-pool policy, and the
+ * manifest/lockfile.
  */
 export const WORKSPACE_BASE_INPUTS = Object.freeze({
   server: ['server/vitest.config.js', 'server/vitest.setup.js', 'scripts/vitestCiPool.js', 'server/package.json', 'server/package-lock.json'],
   client: ['client/vitest.config.js', 'client/src/test/setup.js', 'scripts/vitestCiPool.js', 'client/package.json', 'client/package-lock.json'],
   // The Postgres service is not visible to a key; the schema its suites run against is applied from these tracked files.
-  db: ['server/vitest.config.db.js', 'server/vitest.setup.js', 'scripts/vitestCiPool.js', 'scripts/lib/dbTestFiles.js', 'server/package.json', 'server/package-lock.json',
+  db: ['server/vitest.config.db.js', 'server/vitest.setup.js', 'scripts/vitestCiPool.js', 'server/package.json', 'server/package-lock.json',
     'server/scripts/init-db.sql', 'server/scripts/setup-db-test.mjs'],
 });
+
+/**
+ * Test-selection modules the configs import only for `include`/`exclude`
+ * (and the CI runner for enumeration and browser sharding). They decide
+ * which files a run collects, never what a collected file proves, so the
+ * workspace base stops its walk at them: adding a DB suite to
+ * `DB_TEST_INCLUDE` must not move every key. A test that imports one (the
+ * DB inventory guard) still keys it through its own closure.
+ */
+export const WORKSPACE_SELECTION_MODULES = Object.freeze([
+  'scripts/lib/browserSuites.js',
+  'scripts/lib/dbTestFiles.js',
+  'scripts/lib/workspaceTests.js',
+]);
 
 /**
  * Setup-phase entries: each config's `setupFiles` and its repository-local
@@ -182,6 +198,8 @@ const READ_CALLEES = new Set(['readFileSync', 'readFile', 'readdirSync', 'readdi
   'copyFileSync', 'copyFile', 'cpSync', 'cp', 'readJson', 'readJsonSync', 'globSync', 'glob']);
 const DIR_READ_CALLEES = /^(?:readdir|opendir|glob)/;
 const MOCK_CALLEES = new Set(['mock', 'doMock', 'importActual', 'importMock', 'unmock', 'doUnmock']);
+/** Mock calls that only register a factory for a path; the rest load the module. */
+const MOCK_REGISTER_CALLEES = new Set(['mock', 'doMock', 'unmock', 'doUnmock']);
 const PATH_LIKE_LITERAL = /^(?:\.{1,2}\/)?[\w@.-]+(?:\/[\w@.-]+)+\.[a-z0-9]{1,8}$/i;
 const GIT_SPAWN = /\b(?:execFileSync|execFile|spawnSync|spawn|execSync|exec|bufferedSpawn|bufferedSpawnOrThrow)\s*\(\s*(?:'git'|`git\s)/;
 const GIT_PACKAGE = /^(?:simple-git|isomorphic-git|nodegit)$/;
@@ -524,7 +542,7 @@ function widestPathExpression(tokens, match, index) {
  */
 export function extractFileFacts(src, { fileRel, cwdRel }) {
   const facts = {
-    edges: [], // { spec, kind: 'static'|'dynamic'|'require'|'mock' }
+    edges: [], // { spec, kind: 'static'|'dynamic'|'require'|'mock' (registration)|'mock-import' }
     paths: [], // { rel, walk } — repo-relative literal paths
     dirs: [], // { rel, walk } — repo-relative directory prefixes whose tree is an input
     scopedNames: [], // basenames a require() reads under an unknown directory: every tracked file of that name is an input
@@ -645,7 +663,7 @@ export function extractFileFacts(src, { fileRel, cwdRel }) {
     }
     if (isMember && receiver?.t === 'id' && receiver.v === 'vi' && open !== null && MOCK_CALLEES.has(token.v)) {
       const arg = literalArg(open);
-      if (arg.kind === 'literal') facts.edges.push({ spec: arg.value, kind: 'mock' });
+      if (arg.kind === 'literal') facts.edges.push({ spec: arg.value, kind: MOCK_REGISTER_CALLEES.has(token.v) ? 'mock' : 'mock-import' });
       else if (arg.kind === 'expr' && tokens[arg.index].t === 'id' && tokens[arg.index].v === 'import') continue; // vi.mock(import('./x')): the import() pass records it
       else facts.unresolvedEdges.push(`vi.${token.v}() with a non-literal specifier`);
       continue;
@@ -857,6 +875,7 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
     const resolved = {
       modules: new Set(), // import edges: narrowed to what a green run loaded by the recorded key
       sideModules: new Set(), // JS read as text, spawned, loaded natively or as a worker: in every key with its closure
+      mockOnly: new Set(), // modules only named by a vi.mock-style registration, which loads nothing by itself
       inputs: new Set(), absent: new Set(), packages: new Map(), tools: new Set(),
       unresolvedEdges: [], unresolvedInputs: [], oversized: [], localReads: [], never: false, git: false,
     };
@@ -933,10 +952,13 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
       if (viaExt) addFile(viaExt);
     };
 
+    const registered = new Set();
+    const loaded = new Set();
     for (const { spec, kind } of raw.edges) {
       if (spec.startsWith('/')) { resolved.unresolvedEdges.push(`absolute specifier ${spec}`); continue; }
       if (spec.startsWith('.')) {
         const target = resolveRelativeSpecifier(rel, spec, fs.kind);
+        if (target !== null) (kind === 'mock' ? registered : loaded).add(target);
         // require() is a native load the Vite module runner never records.
         if (target !== null) { addFile(target, { edge: kind !== 'require' }); continue; }
         // Node cannot load a module whose import is missing, so a file with one
@@ -947,8 +969,9 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
       }
       if (isBuiltin(spec) || spec.startsWith('data:')) continue;
       if (GIT_PACKAGE.test(packageNameOf(spec))) resolved.git = true;
-      addPackage(spec, { mock: kind === 'mock' });
+      addPackage(spec, { mock: kind === 'mock' || kind === 'mock-import' });
     }
+    for (const target of registered) if (!loaded.has(target) && resolved.modules.has(target)) resolved.mockOnly.add(target);
     for (const { rel: target, walk } of raw.paths) addPath(target, walk);
     for (const { rel: dirRel, walk } of raw.dirs) addDir(dirRel, walk);
     for (const { value, walk, dir } of raw.cwdLiterals) {
@@ -965,7 +988,7 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
   };
 
   /** Fold the facts of `members` (and, when walking, of everything they reach) into one verdict. */
-  const gather = (roots, { walk, testRel = null, stop = null }) => {
+  const gather = (roots, { walk, testRel = null, stop = null, followMockOnly = true }) => {
     const members = new Set();
     // A side module (read as text, spawned, loaded natively or as a worker)
     // is never narrowed by the recording: it and its own closure are walked
@@ -984,7 +1007,7 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
       if (members.has(rel) || stop?.has(rel)) continue;
       members.add(rel);
       const f = factsFor(rel);
-      if (walkEdges) for (const dep of f.modules) if (!members.has(dep)) stack.push({ rel: dep, walkEdges: true });
+      if (walkEdges) for (const dep of f.modules) if (!members.has(dep) && (followMockOnly || !f.mockOnly.has(dep))) stack.push({ rel: dep, walkEdges: true });
       for (const side of f.sideModules) if (!members.has(side)) stack.push({ rel: side, walkEdges: true });
       for (const input of f.inputs) inputs.add(input);
       for (const tool of f.tools) tools.add(tool);
@@ -1009,7 +1032,7 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
     return { members, inputs, absent, packages: packageVersions, tools, unresolvedEdges, unresolvedInputs, never, git };
   };
 
-  const closureOf = (entry, testRel = entry, stop = null) => gather([entry], { walk: true, testRel, stop });
+  const closureOf = (entry, testRel = entry, stop = null, { followMockOnly = true } = {}) => gather([entry], { walk: true, testRel, stop, followMockOnly });
 
   const snapshotInputs = (testRel) => {
     const base = posix.basename(testRel);
@@ -1037,21 +1060,26 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
 
   /**
    * The workspace-level inputs every key shares: the Vitest config closure and
-   * manifest. `recorded` is the same walk stopped at the setup entries the
+   * manifest. The walk skips `WORKSPACE_SELECTION_MODULES` and the targets of
+   * a bare `vi.mock`/`vi.doMock`/`vi.unmock` registration: setup's global
+   * `vi.mock('./services/instances.js', …)` loads instances.js only when a
+   * test imports it, and then it is in that test's own closure (a non-literal
+   * edge fails the floor key closed) or record. `recorded` is the same walk stopped at the setup entries the
    * config reaches (`WORKSPACE_SETUP_ENTRIES`), for a recorded key whose
    * module list names every one of `recorded.entries`. It keeps the full
    * walk's `unresolved`, so a setup-phase problem fails both keys closed.
    */
   const workspaceBase = (roots, setupEntries = []) => {
-    const walkBase = (stop) => {
+    const walkBase = (setupStops) => {
+      const stop = new Set([...WORKSPACE_SELECTION_MODULES, ...setupStops]);
       const files = new Set();
       const packageVersions = new Map();
       const unresolved = [];
       for (const root of roots) {
-        if (stop?.has(root)) continue;
+        if (stop.has(root)) continue;
         if (fs.kind(root) !== 'file') { unresolved.push(`missing workspace input ${root}`); continue; }
         if (!JS_EXT.test(root)) { files.add(root); continue; }
-        const closure = closureOf(root, null, stop);
+        const closure = closureOf(root, null, stop, { followMockOnly: false });
         for (const rel of closure.members) files.add(rel);
         for (const rel of closure.inputs) files.add(rel);
         for (const [name, version] of closure.packages) packageVersions.set(name, version);
@@ -1059,10 +1087,10 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
       }
       return { files, packages: packageVersions, unresolved };
     };
-    const full = walkBase(null);
+    const full = walkBase([]);
     const entries = setupEntries.filter((rel) => full.files.has(rel));
     if (!entries.length) return { ...full, recorded: null };
-    const narrowed = walkBase(new Set(entries));
+    const narrowed = walkBase(entries);
     return { ...full, recorded: { ...narrowed, unresolved: full.unresolved, entries } };
   };
 

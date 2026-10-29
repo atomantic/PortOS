@@ -797,7 +797,9 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // which a v30 strict subject schema rejects with a 400. Optional, no backfill.
   // v32 = optional versioned festival packet; older strict project schemas cannot edit it.
   // No backfill. New receivers preserve a packet omitted by an older sender.
-  musicVideoProjects: 32,
+  // v33 = the film credits ending (`creditsOutro`), which a v32 strict project
+  // schema rejects and its normalizer drops on save. Optional, no backfill.
+  musicVideoProjects: 33,
   // v1 = Creative Commission FEEDBACK federation (PostgreSQL `commission_feedback`)
   // via the per-record peer-sync push pipeline (record kind `commissionFeedback`,
   // sync category `commissionFeedback`, #2686 — split-record follow-up to #2657).

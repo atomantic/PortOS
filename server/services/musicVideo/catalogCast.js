@@ -10,11 +10,12 @@
 // Catalog ids are deterministic per (project, subject), like the universe canon
 // promotion, so two machines saving the same synced video converge on one row.
 
-import { createHash, randomUUID } from 'crypto';
+import { randomUUID } from 'crypto';
 import { isFileBackend } from '../../lib/pgFileFacade.js';
 import { trimTo } from '../../lib/textUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { CAST_SETS_SUBJECT_PREFIX } from './castAndSetsPlan.js';
+import { leadingAge, musicVideoCastIngredientId, subjectNameParts } from './castAndSetsDirection.js';
 
 const TYPE_PREFIX = { character: 'chr', place: 'plc', object: 'obj' };
 const PRIMARY_KEY = { character: 'physicalDescription', place: 'description', object: 'description' };
@@ -22,11 +23,6 @@ const UNIVERSE_FIELD = { character: 'characters', place: 'places', object: 'obje
 const REFERENCE_ROLE = { character: 'character', place: 'set', object: 'prop' };
 const MAX_VIDEO_SUBJECTS = 24;
 const SUBJECT_DESCRIPTION_MAX = 1000;
-
-function musicVideoCastIngredientId(projectId, subject) {
-  const seed = `music-video:${projectId}:${subject.kind}:${subject.id}`;
-  return `cat-${TYPE_PREFIX[subject.kind]}-mv-${createHash('sha256').update(seed).digest('hex').slice(0, 32)}`;
-}
 
 // The Cast & Sets image behind each check-in subject: the protagonist's
 // character sheet, a supporting cast sheet, or a set plate.
@@ -377,20 +373,6 @@ export async function commitCatalogCastImport(selections, deps = null) {
   console.log(`🎭 Music video cast import: ${totals.created} created, ${totals.linked} linked, ${totals.kept} kept in their videos (${totals.projects} videos)`);
   return totals;
 }
-
-// "Nora (17)" → { base: 'Nora', qualifier: '17' }: a subject named for one age
-// or look of a cast member. The qualifier only picks among the record's forms.
-// "Nora, 17" is read the same way; only a trailing number follows a comma.
-function subjectNameParts(name) {
-  const text = String(name || '').trim();
-  const match = text.match(/^(.*?)\s*[([]\s*([^)\]]*?)\s*[)\]]\s*$/) || text.match(/^(.*?)\s*,\s*(\d{1,3})$/);
-  return match && match[1] ? { base: match[1].trim(), qualifier: match[2] } : { base: text, qualifier: '' };
-}
-
-const leadingAge = (value) => {
-  const match = String(value ?? '').match(/\d{1,3}/);
-  return match ? Number(match[0]) : null;
-};
 
 // The record's age form a qualifier names: "17" matches a form aged 17, a word
 // matches a form whose label or age carries it. None: the record's own form.

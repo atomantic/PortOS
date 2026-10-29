@@ -256,16 +256,57 @@ describe('recorded key', () => {
     const change = (rel) => ({ ...files, [rel]: `${files[rel]}// changed\n` });
     const baseline = withRecord(files, 'server/lib/a.test.js', loaded);
     expect(baseline.recorded.memoizable).toBe(true);
-    // The setup phase never loaded instances.js (no suite imported it): its closure is outside the recorded key, inside the floor key.
+    // Setup only registers a mock for instances.js; no suite here imports it, so its closure is outside both keys.
     expect(withRecord(change('server/lib/peerLeaf.js'), 'server/lib/a.test.js', loaded).recorded.key).toBe(baseline.recorded.key);
-    expect(withRecord(change('server/lib/peerLeaf.js'), 'server/lib/a.test.js', loaded).floor.key).not.toBe(baseline.floor.key);
+    expect(withRecord(change('server/lib/peerLeaf.js'), 'server/lib/a.test.js', loaded).floor.key).toBe(baseline.floor.key);
     for (const rel of ['server/lib/setupHelper.js', 'server/test/envHelper.js', 'server/vitest.setup.js', 'scripts/vitestCiPool.js']) {
-      expect(withRecord(change(rel), 'server/lib/a.test.js', loaded).recorded.key, rel).not.toBe(baseline.recorded.key);
+      const changed = withRecord(change(rel), 'server/lib/a.test.js', loaded);
+      expect(changed.recorded.key, rel).not.toBe(baseline.recorded.key);
+      expect(changed.floor.key, rel).not.toBe(baseline.floor.key);
     }
-    // A record without the environment (a per-file pragma) keeps the full static base.
+    // A suite that imports the mocked module keys its closure itself, under both keys.
+    const peerTest = "import { it } from 'vitest';\nimport { getPeers } from '../services/instances.js';\nit('p', () => getPeers());\n";
+    const peers = { ...files, 'server/lib/peers.test.js': peerTest };
+    const peersLoaded = ['server/lib/peers.test.js', 'server/services/instances.js', 'server/lib/peerLeaf.js', ...loaded.slice(recorded.length)];
+    const peersBaseline = withRecord(peers, 'server/lib/peers.test.js', peersLoaded);
+    const peersChanged = withRecord({ ...peers, 'server/lib/peerLeaf.js': 'export const peer = 2;\n' }, 'server/lib/peers.test.js', peersLoaded);
+    expect(peersBaseline.floor.memoizable && peersBaseline.recorded.memoizable).toBe(true);
+    expect(peersChanged.floor.key).not.toBe(peersBaseline.floor.key);
+    expect(peersChanged.recorded.key).not.toBe(peersBaseline.recorded.key);
+    // A record without the environment (a per-file pragma) keeps the full static base, environment closure included.
     const withoutEnv = loaded.filter((rel) => !rel.startsWith('server/test/'));
-    expect(withRecord(change('server/lib/peerLeaf.js'), 'server/lib/a.test.js', withoutEnv).recorded.key)
+    expect(withRecord(change('server/test/envHelper.js'), 'server/lib/a.test.js', withoutEnv).recorded.key)
       .not.toBe(withRecord(files, 'server/lib/a.test.js', withoutEnv).recorded.key);
+  });
+
+  it('ignores edits to the test-selection modules the config imports', () => {
+    const files = {
+      ...TREE,
+      'server/vitest.config.js': [
+        "import { vitestCiPool } from '../scripts/vitestCiPool.js';",
+        "import { SERVER_TEST_EXCLUDE } from '../scripts/lib/workspaceTests.js';",
+        'export default { test: { exclude: SERVER_TEST_EXCLUDE } };',
+      ].join('\n'),
+      'scripts/lib/workspaceTests.js': "import { DB_TEST_INCLUDE } from './dbTestFiles.js';\nimport { BROWSER_SUITES } from './browserSuites.js';\nexport const SERVER_TEST_EXCLUDE = [...DB_TEST_INCLUDE, ...BROWSER_SUITES];\n",
+      'scripts/lib/dbTestFiles.js': "export const DB_TEST_INCLUDE = ['services/x.db.test.js'];\n",
+      'scripts/lib/browserSuites.js': "export const BROWSER_SUITES = ['server/lib/x.browser.test.js'];\n",
+    };
+    const baseline = withRecord(files);
+    expect(baseline.floor.memoizable && baseline.recorded.memoizable).toBe(true);
+    const edits = {
+      'scripts/lib/dbTestFiles.js': "export const DB_TEST_INCLUDE = ['services/x.db.test.js', 'services/y.db.test.js'];\n",
+      'scripts/lib/browserSuites.js': "export const BROWSER_SUITES = ['server/lib/x.browser.test.js', 'server/lib/y.browser.test.js'];\n",
+      'scripts/lib/workspaceTests.js': `${files['scripts/lib/workspaceTests.js']}export const extra = 1;\n`,
+    };
+    for (const [rel, text] of Object.entries(edits)) {
+      const changed = withRecord({ ...files, [rel]: text });
+      expect(changed.floor.key, rel).toBe(baseline.floor.key);
+      expect(changed.recorded.key, rel).toBe(baseline.recorded.key);
+    }
+    // A test that reads the inventory itself still keys it.
+    const guard = { ...files, 'server/lib/inventory.test.js': "import { it } from 'vitest';\nimport { DB_TEST_INCLUDE } from '../../scripts/lib/dbTestFiles.js';\nit('i', () => DB_TEST_INCLUDE);\n" };
+    expect(keyOf({ ...guard, 'scripts/lib/dbTestFiles.js': edits['scripts/lib/dbTestFiles.js'] }, 'server/lib/inventory.test.js').floor.key)
+      .not.toBe(keyOf(guard, 'server/lib/inventory.test.js').floor.key);
   });
 
   it('is not memoizable when the loaded set reaches outside the repository', () => {
