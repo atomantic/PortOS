@@ -238,13 +238,45 @@ describe('a re-used image name', () => {
     // A peer holding the delete keeps the name blocked against this copy.
     rmSync(join(PATHS.images, 'returned.png'));
     expect(await diffAssetManifestAgainstLocal([offered])).toEqual([]);
-    // Back here, the same delete relayed by any paired peer retires the copy.
-    writeFileSync(join(PATHS.images, 'returned.png'), bytes);
-    setFileTimes('returned.png', AFTER);
+    // Back here, the same delete relayed by the peer that supplied the copy
+    // (an owner candidate) retires it.
     const relay = pairedPeer();
+    seedImage('returned.png', { suppliedByInstanceId: relay.instanceId });
+    setFileTimes('returned.png', AFTER);
     advertise(relay, [], { tombstones: [{ key: 'returned.png', deletedAt: DELETED_AT }] });
     await syncMediaLibraryFromPeer(relay);
     expect(held('returned.png')).toBe(false);
+  });
+
+  it('a delete held here, relayed by a peer that is no owner of the copy, never retires it', async () => {
+    // Unstamped, origin-less, supplier-less: counts as old, but no peer owns it.
+    await recordMediaTombstone('image', 'unowned.png', DELETED_AT);
+    mkdirSync(PATHS.images, { recursive: true });
+    writeFileSync(join(PATHS.images, 'unowned.png'), bytes);
+    setFileTimes('unowned.png', AFTER);
+    const stranger = pairedPeer();
+    advertise(stranger, [], { tombstones: [{ key: 'unowned.png', deletedAt: DELETED_AT }] });
+    await syncMediaLibraryFromPeer(stranger);
+    expect(held('unowned.png')).toBe(true);
+    // Still offered without a stamp, so peers holding the delete keep it blocked.
+    const offered = (await buildMediaLibraryManifest({ tombstones: true })).assets.find((a) => a.filename === 'unowned.png');
+    expect(offered).not.toHaveProperty('createdAt');
+  });
+
+  it('a deterministic-name image deleted and saved again here survives a relay of the old delete', async () => {
+    // Mood-board copies are named by a hash of their URL and written with no
+    // sidecar (#14065), so saving the same URL again re-uses the deleted name.
+    const name = 'board-0123456789abcdef.png';
+    seedImage(name);
+    await deleteImage(name);
+    expect(held(name)).toBe(false);
+    mkdirSync(PATHS.images, { recursive: true });
+    writeFileSync(join(PATHS.images, name), bytes);
+    const [deleted] = await listMediaTombstones('image');
+    const stranger = pairedPeer();
+    advertise(stranger, [], { tombstones: [deleted] });
+    await syncMediaLibraryFromPeer(stranger);
+    expect(held(name)).toBe(true);
   });
 
   it('a pulled copy with no creation stamp is advertised without one, and its tombstone keeps travelling', async () => {

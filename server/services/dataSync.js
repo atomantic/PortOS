@@ -1081,8 +1081,11 @@ export async function applyRemoteVideoTombstones(remoteTombstones) {
   await mergeMediaTombstones('video', remoteTombstones);
   const tombstones = await listMediaTombstones('video');
   const local = await readJSONFile(VIDEO_HISTORY_FILE, [], { strict: true });
+  // Only the rows these authorized tombstones name: a row another tombstone
+  // in the store covers has not been admitted for this sender.
+  const keys = new Set(remoteTombstones.map((t) => t?.key).filter((key) => typeof key === 'string'));
   const doomed = (Array.isArray(local) ? local : [])
-    .filter((r) => hasVideoRowId(r) && isTombstoned(tombstones, r.id, r.createdAt, 'key'));
+    .filter((r) => hasVideoRowId(r) && keys.has(r.id) && isTombstoned(tombstones, r.id, r.createdAt, 'key'));
   if (doomed.length === 0) return 0;
   // Lazy import: historyOps pulls in trash/ffmpeg machinery the sync read path avoids.
   const { deleteHistoryItem } = await import('./videoGen/historyOps.js');

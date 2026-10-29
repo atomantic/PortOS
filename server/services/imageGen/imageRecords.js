@@ -154,8 +154,8 @@ export async function applyRemoteImageTombstones(remoteTombstones) {
  * Admit image tombstones from `peer` through the shared rule, then apply them:
  * a held image goes through the full delete, and an event's tombstone for an
  * image not held here is only recorded (a manifest's is refused; see the rule).
- * A tombstone this machine already holds is not re-admitted; it only retires a
- * copy here that it outdates.
+ * A tombstone this machine already holds is not re-recorded; it retires a copy
+ * here that it outdates only when the same rule admits the sender for that copy.
  * Resolves `{ removed, recorded, refused }`.
  */
 export async function admitPeerImageTombstones(peer, tombstones, { via = 'snapshot', eventOriginInstanceId = null } = {}) {
@@ -178,18 +178,19 @@ export async function admitPeerImageTombstones(peer, tombstones, { via = 'snapsh
   let refused = 0;
   for (const tombstone of list) {
     if (!isGalleryName(tombstone?.key)) { refused++; continue; }
-    if (alreadyApplied(tombstone)) {
-      // This machine already holds this delete (its own, or one admitted
-      // earlier). A copy that came back by a path the filter does not cover is
-      // retired again when the copy is older than it (applyRemoteImageTombstones).
-      if (existsSync(join(PATHS.images, tombstone.key))) held.push(tombstone);
-      continue;
-    }
+    // A delete this machine already holds (its own, or one admitted earlier)
+    // needs no re-recording; it is only worth checking when a copy is on disk
+    // (one that came back by a path the pull filter does not cover).
+    const known = alreadyApplied(tombstone);
+    if (known && !existsSync(join(PATHS.images, tombstone.key))) continue;
+    // Every retire passes the shared rule, a relayed known delete included: the
+    // sender must be an owner candidate of THIS copy, or any paired peer could
+    // remove an unstamped image made here under a re-used name.
     const localRow = await readHeldImage(tombstone.key);
     const verdict = authorizeRemoteMediaTombstone({ peer, tombstone, localRow, hostedIndex, via, eventOriginInstanceId });
     if (!verdict.allowed) refused++;
     else if (localRow) held.push(tombstone);
-    else notHeld.push(tombstone);
+    else if (!known) notHeld.push(tombstone);
   }
   if (notHeld.length > 0) await mergeMediaTombstones('image', notHeld);
   const removed = await applyRemoteImageTombstones(held);

@@ -41,6 +41,16 @@ beforeEach(async () => {
   registry.peers = [pairedPeer('peer-a'), pairedPeer('peer-b')];
 });
 
+describe('applyRemoteVideoTombstones scope', () => {
+  it('retires only the rows the authorized tombstones name', async () => {
+    // A held row another stored tombstone covers was not admitted for this sender.
+    await atomicWrite(HISTORY, [row('v-named'), row('v-other')]);
+    await recordMediaTombstone('video', 'v-other', '2026-06-01T00:00:00.000Z');
+    expect(await dataSync.applyRemoteVideoTombstones([tomb('v-named')])).toBe(1);
+    expect(await readHistory()).toEqual(['v-other']);
+  });
+});
+
 describe('video delete durability', () => {
   it('deleting a video records a tombstone', async () => {
     await atomicWrite(HISTORY, [row('v1')]);
