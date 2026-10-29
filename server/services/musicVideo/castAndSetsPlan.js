@@ -287,6 +287,10 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
     refImages: identities,
     prompt: join(
       `Fashion lookbook sheet of the SAME person as the character reference, ${looks.length} full-body panels side by side`,
+      // The character sheet wears the first look; without this the model copies
+      // that outfit into every panel.
+      'Take only the face, hair and build from the references, never their clothing: each panel wears its own outfit below, and no two panels share an outfit',
+      'The same one person alone in every panel, nobody else in frame',
       identity(p),
       rulesLine(p),
       ...looks.map((l, i) => `LOOK 0${i + 1} ${l.name.toUpperCase()}: ${l.description}${p.signature ? `, with ${p.signature}` : ''}`),

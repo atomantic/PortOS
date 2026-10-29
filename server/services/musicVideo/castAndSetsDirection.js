@@ -411,6 +411,7 @@ export function buildCastAndSetsPrompt(project, { moodImages = [], board = null,
     '- Give every set ONE dominant light color or quality so a cut tells the viewer where we are.',
     LOOK_AND_SET_RULES,
     '- songMap: one entry per song section index listed above, naming the set that section plays in.',
+    '- looks: each is a different complete outfit the protagonist wears at their present-story age. An outfit from another age goes in that age\'s protagonist.forms wardrobe, never in looks.',
     '- tests: in-set frames of the protagonist that prove the cast works in the world; each names a set id and a look name, and shows a moment from the story. A test showing the protagonist at one of their other ages names that form\'s id in formId; otherwise formId is empty.',
     `- protagonist.expressions: 4–6 moods the protagonist actually shows in THIS story, each "<mood>: <what the face, eyes and head do>" (e.g. "grief held in: eyes closed, head bowed"). They become the expression sheet. ${musicVideoLipSyncs(project)
     ? 'Some shots lip-sync, so one may be singing.'

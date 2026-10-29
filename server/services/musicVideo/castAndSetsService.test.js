@@ -908,6 +908,17 @@ describe('Cast & Sets per-item actions', () => {
     expect(singing).not.toContain('Mouth closed');
   });
 
+  it('gives each looks panel its own outfit instead of the character sheet\'s', async () => {
+    const { buildCastAndSetsImagePlan } = await import('./castAndSetsPlan.js');
+    const plan = buildCastAndSetsImagePlan({ scenes: [] }, DIRECTION);
+    expect(plan.character.prompt).toContain('Wearing oilskin coat, wool sweater');
+    expect(plan.looks.refKeys).toEqual(['character']);
+    expect(plan.looks.prompt).toContain('never their clothing');
+    expect(plan.looks.prompt).toContain('nobody else in frame');
+    expect(plan.looks.prompt).toContain('LOOK 01 WATCH: oilskin coat, wool sweater');
+    expect(plan.looks.prompt).toContain('LOOK 02 STORM: soaked dark sweater');
+  });
+
   it('preserves wardrobe mappings and controls automatic tests through the route', async () => {
     runPrompt.mockResolvedValue({ text: JSON.stringify({ ...DIRECTION, tests: [DIRECTION.tests[0]] }) });
     const project = await seed();
