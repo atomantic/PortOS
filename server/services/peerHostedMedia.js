@@ -17,6 +17,7 @@
 import { join, extname, basename } from 'path';
 import { existsSync } from 'fs';
 import { pipeline } from 'stream/promises';
+import { randomUUID } from 'crypto';
 import { PATHS, readJSONFile, atomicWrite } from '../lib/fileUtils.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { isPlainObject } from '../lib/objects.js';
@@ -45,6 +46,9 @@ const KIND_PREFIX = { image: '/data/images', video: '/data/videos' };
 const VIDEO_EXTS = ['.mp4', '.webm', '.mov', '.m4v', '.ogv'];
 
 export const hostedKey = (kind, filename) => `${kind}:${filename}`;
+const hostsOf = (entry) => Array.isArray(entry?.hosts) ? entry.hosts : (entry?.peerId ? [{ peerId: entry.peerId, at: entry.at, revision: entry.revision }] : []);
+const hostEntry = (hosts) => ({ peerId: hosts[0].peerId, at: hosts[0].at, revision: hosts[0].revision, hosts });
+
 
 // STRICT: an unreadable index must never be written back as an empty one that
 // wipes every entry (absent file → real empty). Rendering-side readers use
@@ -74,12 +78,54 @@ export function markHosted(peerInstanceId, assets) {
       if (!dir || !filename) continue;
       if (existsSync(join(dir, filename))) continue;
       const key = hostedKey(asset.kind, filename);
-      if (entries[key]?.peerId === peerInstanceId) continue;
-      entries[key] = { peerId: peerInstanceId, at };
+      const hosts = hostsOf(entries[key]);
+      const index = hosts.findIndex((host) => host.peerId === peerInstanceId);
+      if (index >= 0) hosts[index] = { peerId: peerInstanceId, at, revision: randomUUID() };
+      else hosts.push({ peerId: peerInstanceId, at, revision: randomUUID() });
+      entries[key] = hostEntry(hosts);
       changed++;
     }
     if (changed > 0) await writeEntries(entries);
     return changed;
+  });
+}
+
+/** Reconcile one peer's authoritative video inventory, without touching other hosts. */
+export function reconcileHostedVideos(peerInstanceId, filenames, checked) {
+  if (!isStr(peerInstanceId) || !Array.isArray(filenames) || !Array.isArray(checked) ||
+      [...filenames, ...checked].some((name) => !isStr(name) || sanitizeAssetFilename(name) !== name)) return Promise.resolve();
+  return queueWrite(async () => {
+    const entries = await readEntries();
+    const present = new Set(filenames);
+    const examined = new Set(checked);
+    if (filenames.some((name) => !examined.has(name))) return;
+    let changed = false;
+    for (const [key, entry] of Object.entries(entries)) {
+      if (key.startsWith('video:') && examined.has(key.slice(6)) && !present.has(key.slice(6))) {
+        const hosts = hostsOf(entry);
+        const remaining = hosts.filter((host) => host.peerId !== peerInstanceId);
+        if (remaining.length === hosts.length) continue;
+        if (remaining.length) entries[key] = hostEntry(remaining);
+        else delete entries[key];
+        changed = true;
+      }
+    }
+    for (const filename of present) {
+      if (existsSync(join(PATHS.videos, filename))) continue;
+      const key = hostedKey('video', filename);
+      // A legacy single-host entry may be the old history-derived mistake.
+      // Keep it as a fallback, but put newly verified evidence first.
+      const legacy = !Array.isArray(entries[key]?.hosts) ? hostsOf(entries[key]) : [];
+      const hosts = legacy.length ? [] : hostsOf(entries[key]);
+      const index = hosts.findIndex((host) => host.peerId === peerInstanceId);
+      const evidence = { peerId: peerInstanceId, at: new Date().toISOString(), revision: randomUUID() };
+      if (index >= 0) hosts[index] = evidence;
+      else hosts.push(evidence);
+      for (const host of legacy) if (host.peerId !== peerInstanceId) hosts.push(host);
+      entries[key] = hostEntry(hosts);
+      changed = true;
+    }
+    if (changed) await writeEntries(entries);
   });
 }
 
@@ -95,7 +141,10 @@ export async function takeHostedAssets(peerInstanceId, missingAssets, collection
   const remaining = [];
   for (const entry of missingAssets) {
     const dir = KIND_DIRS[entry?.kind]?.();
-    const owned = dir && collectionKeys.has(hostedKey(entry.kind, entry.filename));
+    // A video manifest without a digest is legacy metadata, not evidence the
+    // sender hashed local bytes. Keep it on the normal pull path instead.
+    const verified = entry.kind !== 'video' || /^[a-f0-9]{64}$/i.test(entry.sha256 || '');
+    const owned = verified && dir && collectionKeys.has(hostedKey(entry.kind, entry.filename));
     if (owned && !existsSync(join(dir, entry.filename))) hosted.push(entry);
     else remaining.push(entry);
   }
@@ -103,10 +152,16 @@ export async function takeHostedAssets(peerInstanceId, missingAssets, collection
   return remaining;
 }
 
-function forgetHosted(kind, filename) {
+function forgetHosted(kind, filename, peerId, revision) {
   return queueWrite(async () => {
     const entries = await readEntries();
-    if (delete entries[hostedKey(kind, filename)]) await writeEntries(entries);
+    const key = hostedKey(kind, filename);
+    const hosts = hostsOf(entries[key]);
+    const remaining = hosts.filter((host) => host.peerId !== peerId || host.revision !== revision);
+    if (remaining.length === hosts.length) return;
+    if (remaining.length) entries[key] = hostEntry(remaining);
+    else delete entries[key];
+    await writeEntries(entries);
   }).catch(() => {});
 }
 
@@ -190,24 +245,24 @@ async function resolveHostedRequest(mount, filename) {
   if (!safe) return null;
   if (mount === '/data/images') {
     const hosted = await lookupHosted('image', safe);
-    return hosted && { peerId: hosted.peerId, url: `${KIND_PREFIX.image}/${encodeURIComponent(safe)}`, drop: { kind: 'image', filename: safe } };
+    return hosted && { peerId: hosted.peerId, hosts: hostsOf(hosted), url: `${KIND_PREFIX.image}/${encodeURIComponent(safe)}`, drop: { kind: 'image', filename: safe } };
   }
   if (mount === '/data/videos') {
     const hosted = await lookupHosted('video', safe);
-    return hosted && { peerId: hosted.peerId, url: `${KIND_PREFIX.video}/${encodeURIComponent(safe)}`, drop: { kind: 'video', filename: safe } };
+    return hosted && { peerId: hosted.peerId, hosts: hostsOf(hosted), url: `${KIND_PREFIX.video}/${encodeURIComponent(safe)}`, drop: { kind: 'video', filename: safe } };
   }
   if (mount === '/data/image-thumbnails') {
     // `<stem>.webp` is derived from `<stem>.png`; the peer serves its own
     // thumbnail from the same path, so ask it for the thumbnail directly.
     const hosted = await lookupHosted('image', `${safe.replace(/\.webp$/i, '')}.png`);
-    return hosted && { peerId: hosted.peerId, url: `/data/image-thumbnails/${encodeURIComponent(safe)}` };
+    return hosted && { peerId: hosted.peerId, hosts: hostsOf(hosted), url: `/data/image-thumbnails/${encodeURIComponent(safe)}` };
   }
   if (mount === '/data/video-thumbnails') {
     const entries = await readEntriesOrEmpty();
     const videos = await videoFilenamesForThumbnail(safe).catch(() => []);
     for (const video of videos) {
       const hosted = entries[hostedKey('video', video)];
-      if (hosted) return { peerId: hosted.peerId, url: `/data/video-thumbnails/${encodeURIComponent(safe)}` };
+      if (hosted) return { peerId: hosted.peerId, hosts: hostsOf(hosted), url: `/data/video-thumbnails/${encodeURIComponent(safe)}` };
     }
     // If history names this poster, don't substitute an unrelated same-stem
     // video. The stem fallback is for older records with no poster mapping.
@@ -215,7 +270,7 @@ async function resolveHostedRequest(mount, filename) {
     const stem = basename(safe, extname(safe));
     for (const ext of VIDEO_EXTS) {
       const hosted = entries[hostedKey('video', `${stem}${ext}`)];
-      if (hosted) return { peerId: hosted.peerId, url: `/data/video-thumbnails/${encodeURIComponent(safe)}` };
+      if (hosted) return { peerId: hosted.peerId, hosts: hostsOf(hosted), url: `/data/video-thumbnails/${encodeURIComponent(safe)}` };
     }
   }
   return null;
@@ -235,21 +290,29 @@ export function hostedAssetFallback(mount) {
     if (!filename || filename.includes('/')) return next();
     const target = await resolveHostedRequest(mount, filename).catch(() => null);
     if (!target) return next();
-    const peer = await findHostPeer(target.peerId);
-    if (!peer) return next();
+    const peers = await getPeers().catch(() => []);
+    const candidates = target.hosts.map((host) => ({ host, peer: peers.find((p) => p.instanceId === host.peerId && p.enabled !== false) })).filter((candidate) => candidate.peer);
+    if (!candidates.length) return next();
     const isThumbnail = mount === '/data/image-thumbnails' || mount === '/data/video-thumbnails';
     const timeoutMs = isThumbnail ? THUMBNAIL_TIMEOUT_MS : STREAM_TIMEOUT_MS;
-    await streamFromPeer(peer, target.url, req, res, target.drop, timeoutMs).catch((err) => {
-      const reason = err?.name === 'AbortError' || err?.message === 'peer media stream idle timeout' ? 'timeout' : 'transport error';
-      if (isThumbnail && reason === 'timeout') console.log(`🐢 peerHostedMedia: stream ${mount} from peer timed out`);
-      else console.warn(`⚠️ peerHostedMedia: stream ${mount} from peer failed (${reason})`);
-      if (!res.headersSent) res.status(502).end();
-      else res.destroy();
-    });
+    for (let i = 0; i < candidates.length; i++) {
+      const { peer, host } = candidates[i];
+      const last = i === candidates.length - 1;
+      try {
+        const drop = target.drop && { ...target.drop, revision: host.revision };
+        if (await streamFromPeer(peer, target.url, req, res, drop, timeoutMs, last)) return;
+      } catch (err) {
+        const reason = err?.name === 'AbortError' || err?.message === 'peer media stream idle timeout' ? 'timeout' : 'transport error';
+        if (isThumbnail && reason === 'timeout') console.log(`🐢 peerHostedMedia: stream ${mount} from peer timed out`);
+        else console.warn(`⚠️ peerHostedMedia: stream ${mount} from peer failed (${reason})`);
+        if (res.headersSent) { res.destroy(); return; }
+        if (last) { res.status(502).end(); return; }
+      }
+    }
   };
 }
 
-async function streamFromPeer(peer, path, req, res, drop, timeoutMs) {
+async function streamFromPeer(peer, path, req, res, drop, timeoutMs, last) {
   const headers = {};
   if (isStr(req.headers.range)) headers.Range = req.headers.range;
   const upstream = await withAbortTimeout(timeoutMs, (signal) =>
@@ -260,9 +323,10 @@ async function streamFromPeer(peer, path, req, res, drop, timeoutMs) {
     upstream.stream.destroy();
     // The peer no longer has it (deleted, or a snapshot referenced bytes it never
     // held): forget the entry so the collection stops advertising it as hosted.
-    if (upstream.status === 404 && drop) await forgetHosted(drop.kind, drop.filename);
+    if (upstream.status === 404 && drop) await forgetHosted(drop.kind, drop.filename, peer.instanceId, drop.revision);
+    if (!last) return false;
     res.status(upstream.status === 404 ? 404 : 502).end();
-    return;
+    return true;
   }
   res.status(upstream.status);
   if (res.locals.assetDownload) res.attachment(decodeURIComponent(basename(path)));
@@ -277,9 +341,11 @@ async function streamFromPeer(peer, path, req, res, drop, timeoutMs) {
   res.setHeader('X-PortOS-Media-Location', 'remote');
   if (req.method === 'HEAD') {
     upstream.stream.destroy();
-    return res.end();
+    res.end();
+    return true;
   }
   // The header-wait timer is spent by now; bound a stalled body too.
   upstream.stream.setTimeout?.(timeoutMs, () => upstream.stream.destroy(new Error('peer media stream idle timeout')));
   await pipeline(upstream.stream, res);
+  return true;
 }

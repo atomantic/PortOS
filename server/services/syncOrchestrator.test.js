@@ -66,6 +66,7 @@ vi.mock('./memoryBackend.js', () => ({
   getBackendName: vi.fn(() => 'postgres')
 }));
 vi.mock('./dataSync.js', () => ({
+  getVideoHistoryInventory: vi.fn(),
   getSnapshot: vi.fn().mockResolvedValue({ data: {}, checksum: 'abc' }),
   getChecksum: vi.fn().mockResolvedValue({ checksum: 'abc' }),
   // null = "this category serves no manifest" (every category but `usage`),
@@ -1366,6 +1367,47 @@ describe('syncOrchestrator', () => {
         checksum: 'remote', senderPortosVersion: '2.7.0', localSchemaVersions: PORTOS_SCHEMA_VERSIONS,
       }));
     });
+  });
+
+  it('refreshes host inventory on matching history checksums and ignores unavailable peers', async () => {
+    const dataSync = await import('./dataSync.js');
+    dataSync.getSupportedCategories.mockReturnValue(['videoHistory']);
+    dataSync.applyRemote.mockResolvedValue({ applied: false, count: 0 });
+    readJSONFile.mockImplementation(async () => ({ 'peer-inst-1': { checksums: { videoHistory: 'same' } } }));
+    const peer = { ...mockPeer, mediaSyncMode: 'host', syncCategories: { videoHistory: true } };
+    const evidence = { version: 1, filenames: ['clip.mp4'], checked: ['clip.mp4'], portosMeta: { schemaVersions: {} } };
+    mockFetch.mockImplementation(async (url) => {
+      if (url.includes('/videoHistory/checksum')) return { ok: true, json: async () => ({ checksum: 'same' }) };
+      if (url.includes('/videoHistory/video-inventory')) return { ok: true, json: async () => evidence };
+      return { ok: false };
+    });
+    await syncWithPeer(peer);
+    expect(dataSync.applyRemote).toHaveBeenCalledWith('videoHistory', evidence, expect.objectContaining({ peerId: peer.instanceId, inventory: true }));
+    expect(mockFetch.mock.calls.some(([url]) => url.includes('/videoHistory/snapshot'))).toBe(false);
+    dataSync.applyRemote.mockClear();
+    mockFetch.mockImplementation(async (url) => url.includes('/videoHistory/checksum')
+      ? { ok: true, json: async () => ({ checksum: 'same' }) } : { ok: false });
+    await syncWithPeer(peer);
+    expect(dataSync.applyRemote).not.toHaveBeenCalled();
+    dataSync.getSupportedCategories.mockReturnValue(['goals', 'character', 'digitalTwin', 'meatspace']);
+  });
+
+  it('verifies older hosts with HEAD and rejects proxied bytes as ownership', async () => {
+    const dataSync = await import('./dataSync.js');
+    dataSync.getSupportedCategories.mockReturnValue(['videoHistory']);
+    dataSync.getVideoHistoryInventory.mockResolvedValue({ checked: ['local.mp4', 'relayed.mp4'] });
+    dataSync.applyRemote.mockResolvedValue({ applied: false, count: 0 });
+    readJSONFile.mockImplementation(async () => ({ 'peer-inst-1': { checksums: { videoHistory: 'same' } } }));
+    mockFetch.mockImplementation(async (url) => {
+      if (url.includes('/checksum')) return { ok: true, json: async () => ({ checksum: 'same' }) };
+      if (url.includes('/video-inventory')) return { ok: false, status: 404 };
+      if (url.endsWith('/local.mp4')) return { ok: true, headers: new Headers() };
+      if (url.endsWith('/relayed.mp4')) return { ok: true, headers: new Headers({ 'X-PortOS-Media-Location': 'remote' }) };
+      return { ok: false };
+    });
+    await syncWithPeer({ ...mockPeer, mediaSyncMode: 'host', syncCategories: { videoHistory: true } });
+    expect(dataSync.applyRemote).toHaveBeenCalledWith('videoHistory', { version: 1, filenames: ['local.mp4'], checked: ['local.mp4'] }, expect.objectContaining({ inventory: true }));
+    dataSync.getSupportedCategories.mockReturnValue(['goals', 'character', 'digitalTwin', 'meatspace']);
   });
 
   // #5759: `usage` is always dirty AND a map of per-instance slots, so the
