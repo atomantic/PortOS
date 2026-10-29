@@ -6,6 +6,7 @@
 import { characterSheetReferenceCandidates } from '../../lib/characterSheetReferences.js';
 import { pickGuideMedia } from '../../lib/catalogMediaLibrary.js';
 import { resolveGalleryImage, resolveImageRef } from '../../lib/pathSafety.js';
+import { characterHeightStat } from '../../lib/catalogAppearance.js';
 import { fixedCasting, leadingAge } from './castAndSetsDirection.js';
 
 // The same likeness pick a Casting sheet render makes (guides, else portrait,
@@ -25,10 +26,10 @@ function subjectImages(payload, media, formId) {
 }
 
 /**
- * `{ [subjectId]: { images, forms: [{ age, images }] } }` for the project's
- * linked cast and sets. A character's `images` show the age form the subject
- * is linked at (else the record's own); `forms` hold each other age's own
- * images. Only images whose file exists are listed, so a missing one never
+ * `{ [subjectId]: { images, height?, forms: [{ age, images, height? }] } }`
+ * for the project's linked cast and sets. A character's `images` and `height`
+ * show the age form the subject is linked at (else the record's own, its
+ * Height stat); `forms` hold each other age's own images and height. Only images whose file exists are listed, so a missing one never
  * takes a reference slot or hides the fallback. A record that fails to load
  * is skipped: its subject falls back to the project's references.
  */
@@ -60,14 +61,19 @@ export async function loadCastAndSetsCatalogLikeness(project, deps = {}) {
     const payload = record.payload || {};
     const forms = (Array.isArray(payload.forms) ? payload.forms : []).filter((form) => form?.id);
     // Canon images come from the payload, not media rows: checked here too.
+    const linkedForm = f.castFormId ? forms.find((form) => form.id === f.castFormId) : null;
+    // A linked age states only its own height: the canonical one is another age's.
+    const height = String(linkedForm ? linkedForm.height || '' : characterHeightStat(payload)).trim();
     out[f.id] = {
       images: subjectImages(payload, rows, f.castFormId).filter(exists),
+      ...(height ? { height } : {}),
       // Only an age's own images: the canonical ones show another age.
       forms: forms.map((form) => ({
         age: leadingAge(form.age),
         images: characterSheetReferenceCandidates(payload, rows, { formId: form.id })
           .filter((c) => !c.leftOut && c.scope === 'form' && exists(c.filename)).map((c) => c.filename),
-      })).filter((form) => form.age !== null && form.images.length),
+        ...(form.height ? { height: String(form.height).trim() } : {}),
+      })).filter((form) => form.age !== null && (form.images.length || form.height)),
     };
   }));
   return out;

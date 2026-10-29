@@ -93,7 +93,9 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // v17 = film look controls for dye crossover, halation spread, lens fall-off,
   // tape softness and tracking. An older strict film-look schema refuses the
   // profile's finishing look; an older normalizer drops the controls.
-  universes: 17,
+  // v18 = canon `forms[]` entries may carry a `height` (a character's height at
+  // that age). A <=v17 sanitizer strips it and would LWW the loss back.
+  universes: 18,
   // v1 = post-split. Migrations 035/036 introduced the pipeline collection
   // layout for issues and series.
   // v2 = `stages.audio.audioMode` + `stages.audio.cues[]` added (whole-episode
@@ -472,7 +474,9 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // strip these fields and could restore rejected conditioning references.
   // v15 = media `library.likeness: false` (image left out of likeness guides).
   // Older normalizers strip it and would send a left-out collage again.
-  catalog: 15,
+  // v16 = bible `forms[]` entries may carry a `height` (scale cue for renders).
+  // A <=v15 sanitizer strips it and whole-row LWW would send the loss back.
+  catalog: 16,
   // v1 = cross-machine resumable Story Builder sessions (#730). Sessions are
   // local-only by default and excluded from sync; only `sync: true` sessions
   // ride the `storyBuilder` snapshot category. This is a brand-NEW synced

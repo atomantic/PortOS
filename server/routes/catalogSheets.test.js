@@ -773,6 +773,21 @@ describe('catalog sheet routes', () => {
       expect(mocks.updateUniverse).not.toHaveBeenCalled();
     });
 
+    // Catches a child's sheet drawn at the adult's height (the canonical Height stat).
+    it('states an age\'s own height on its sheet, else the typical height for a child age', async () => {
+      const tall = { ...aged, payload: { ...aged.payload, stats: [{ id: 'stat-h', label: 'Height', value: '5 ft 9 in' }] } };
+      mocks.getIngredient.mockResolvedValue(tall);
+      const sheet = async (forms, variant = 'standard') => {
+        mocks.getIngredient.mockResolvedValue({ ...tall, payload: { ...tall.payload, forms } });
+        return (await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets/preview').send({ variant, formId: 'form-kid' })).body.preview.sentPrompt;
+      };
+      const typical = await sheet(aged.payload.forms);
+      expect(typical).toContain('Height: about 4 ft (122 cm)');
+      expect(typical).not.toContain('5 ft 9 in');
+      expect(await sheet([{ ...aged.payload.forms[0], height: '3 ft 8 in' }])).toContain('Height: 3 ft 8 in');
+      expect(await sheet(aged.payload.forms, 'photographic')).toContain('Height: about 4 ft (122 cm).');
+    });
+
     // Catches an age or look editing the present-day portrait (a 7-year-old
     // drawn from the adult's face) and the preview hiding which images are sent.
     describe('edit base for an age or look', () => {
