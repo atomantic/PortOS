@@ -46,7 +46,7 @@ vi.mock('../lib/ffmpeg.js', async (original) => ({ ...(await original()), findFf
 }));
 vi.mock('../lib/sseUtils.js', () => ({ broadcastSse: vi.fn(), attachSseClient: vi.fn(() => true), closeJobAfterDelay: vi.fn() }));
 // The draft render stamps this install's id on its in-flight mark (#9010).
-vi.mock('../services/instanceIdentity.js', () => ({ ensureInstanceId: vi.fn(async () => 'inst-test') }));
+vi.mock('../services/instanceIdentity.js', () => ({ ensureInstanceId: vi.fn(async () => 'inst-test'), getInstanceId: vi.fn(async () => 'inst-test'), UNKNOWN_INSTANCE_ID: 'unknown' }));
 vi.mock('../lib/killWithEscalation.js', () => ({ killWithEscalation: vi.fn((proc) => proc.emit('close', null, 'SIGTERM')) }));
 vi.mock('../services/htmlComposition/encode.js', () => ({ encodeFileContactSheetAtTimes: vi.fn(async () => {}) }));
 vi.mock('../services/mediaJobQueue/index.js', () => ({
