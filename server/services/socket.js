@@ -71,9 +71,7 @@ import { bindSystemActivityIo } from './systemActivityNotify.js';
 import { armSystemActivityWatchers } from './systemActivityWatchers.js';
 import { armReadinessWatchers, registerReadinessSocket } from './readinessNotify.js';
 import { registerGeneratedPreviewHandlers } from './generatedPreview/sessions.js';
-import { peerSyncBus, deliverPeerSyncEvent, PEER_SYNC_ROOM } from './peerSyncEventBus.js';
-import { PEER_SYNC_EVENT_VERSION } from '../lib/peerSyncEventSchema.js';
-import { readCallerInstanceId } from './sharing/peerPullAuthorization.js';
+import { peerSyncBus, deliverPeerSyncEvent, registerPeerSyncSubscriber, PEER_SYNC_ROOM } from './peerSyncEventBus.js';
 
 // Store CoS subscribers
 const cosSubscribers = new Set();
@@ -233,23 +231,6 @@ function registerSubscriptionHandlers(socket, _io) {
   registerSubscriber(socket, 'fableloom', fableLoomSubscribers);
   registerSubscriber(socket, 'command', commandSubscribers);
   registerPeerSyncSubscriber(socket);
-}
-
-// Realtime peer sync (peerSyncEventBus.js). Advertised on connect so a relay
-// subscribes only to a server that allows it. The subscriber's identity is the
-// handshake's X-PortOS-Instance-Id (verified by the pair token when a password
-// is set); a socket with no known peer joins but is never sent a frame.
-function registerPeerSyncSubscriber(socket) {
-  socket.emit('peer:sync:available', { v: PEER_SYNC_EVENT_VERSION });
-  socket.on('peer:sync:subscribe', () => {
-    if (socket.data) socket.data.peerSyncInstanceId = readCallerInstanceId({ headers: socket.handshake?.headers });
-    socket.join(PEER_SYNC_ROOM);
-    socket.emit('peer:sync:subscribed');
-  });
-  socket.on('peer:sync:unsubscribe', () => {
-    socket.leave(PEER_SYNC_ROOM);
-    socket.emit('peer:sync:unsubscribed');
-  });
 }
 
 function registerErrorHandlers(socket, io) {

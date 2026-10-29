@@ -9,9 +9,7 @@
  */
 import { EventEmitter } from 'events';
 import { peerSyncEventSchema, PEER_SYNC_EVENT_VERSION } from '../lib/peerSyncEventSchema.js';
-import { getPeers } from './instances.js';
-import { peerAllowsCategoryPull } from './sharing/peerSyncShared.js';
-import { getInstanceId, UNKNOWN_INSTANCE_ID } from './instanceIdentity.js';
+import { PEER_INSTANCE_HEADER } from '../lib/peerHttpClient.js';
 
 export const PEER_SYNC_ROOM = 'peer-sync';
 export const peerSyncBus = new EventEmitter();
@@ -57,8 +55,9 @@ export function emitMediaHistoryChanged({ kind, op, ids }) {
 }
 
 async function localInstanceId() {
-  const id = await getInstanceId().catch(() => null);
-  return typeof id === 'string' && id && id !== UNKNOWN_INSTANCE_ID ? id : null;
+  const identity = await import('./instanceIdentity.js');
+  const id = await identity.getInstanceId().catch(() => null);
+  return typeof id === 'string' && id && id !== identity.UNKNOWN_INSTANCE_ID ? id : null;
 }
 
 /** Announce rows this machine just added; only rows it originated go to peers. */
@@ -84,6 +83,36 @@ export async function announceLocalVideoDelete(item, tombstone) {
   }
 }
 
+// Same reading as peerPullAuthorization's readCallerInstanceId, without its
+// settings/registry imports.
+function handshakeInstanceId(headers) {
+  const header = headers?.[PEER_INSTANCE_HEADER.toLowerCase()];
+  const raw = Array.isArray(header) ? header[0] : header;
+  const value = typeof raw === 'string' ? raw.split(',')[0].trim() : '';
+  // The `unknown` sentinel matches no registered peer, so delivery skips it.
+  return value || null;
+}
+
+/**
+ * Server side of the room, registered per connection by socket.js. Advertised
+ * on connect so a relay subscribes only to a server that allows it. The
+ * subscriber's identity is the handshake's X-PortOS-Instance-Id (verified by
+ * the pair token when a password is set); a socket with no known peer joins
+ * but is never sent a frame.
+ */
+export function registerPeerSyncSubscriber(socket) {
+  socket.emit('peer:sync:available', { v: PEER_SYNC_EVENT_VERSION });
+  socket.on('peer:sync:subscribe', () => {
+    if (socket.data) socket.data.peerSyncInstanceId = handshakeInstanceId(socket.handshake?.headers);
+    socket.join(PEER_SYNC_ROOM);
+    socket.emit('peer:sync:subscribed');
+  });
+  socket.on('peer:sync:unsubscribe', () => {
+    socket.leave(PEER_SYNC_ROOM);
+    socket.emit('peer:sync:unsubscribed');
+  });
+}
+
 /**
  * Send a frame to every subscribed relay socket whose peer this install shares
  * the frame's category with (the same predicate the snapshot pull gate uses).
@@ -95,6 +124,9 @@ export async function deliverPeerSyncEvent(io, event) {
     if (!io || !category) return 0;
     const sockets = await io.in(PEER_SYNC_ROOM).fetchSockets();
     if (sockets.length === 0) return 0;
+    const [{ getPeers }, { peerAllowsCategoryPull }] = await Promise.all([
+      import('./instances.js'), import('./sharing/peerSyncShared.js'),
+    ]);
     const peers = await getPeers();
     let sent = 0;
     for (const socket of sockets) {

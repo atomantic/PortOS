@@ -13,7 +13,7 @@ export const PEER_SYNC_EVENT_CATEGORIES = Object.freeze(['videoHistory', 'imageH
 export const PEER_SYNC_EVENT_OPS = Object.freeze(['upsert', 'delete']);
 
 // Serialized UTF-8 size; an unserializable value counts as oversize.
-export function peerSyncRecordBytes(record) {
+function peerSyncRecordBytes(record) {
   try {
     return Buffer.byteLength(JSON.stringify(record) ?? '', 'utf8');
   } catch {
