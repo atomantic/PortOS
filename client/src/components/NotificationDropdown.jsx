@@ -70,6 +70,11 @@ const NOTIFICATION_TYPE_CONFIG = {
     icon: GitPullRequest,
     color: 'text-gray-300',
     bgColor: 'bg-gray-500/20'
+  },
+  media_delete_failed: {
+    icon: Trash2,
+    color: 'text-red-400',
+    bgColor: 'bg-red-500/20'
   }
 };
 
