@@ -104,6 +104,8 @@ async function listSnapshotCheckouts(app, deps, wantedPrUrl = null) {
     const record = JSON.parse(body);
     if (wantedPrUrl && record.prUrl !== wantedPrUrl) continue;
     if (record.checkoutHead !== tree.head || !tree.detached || tree.branch || tree.locked) {
+      // The repo-wide sweep must not let one drifted tree strand the settled ones.
+      if (!wantedPrUrl) continue;
       throw new Error('retained-snapshot-checkout-changed');
     }
     retained.push({ ...tree, prUrl: record.prUrl });

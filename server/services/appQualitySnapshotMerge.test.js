@@ -73,4 +73,26 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('retireSnapshotMergeCheckouts', () => {
     expect(existsSync(merged)).toBe(false);
     expect(existsSync(open)).toBe(true);
   });
+
+  it('sweeps past a drifted checkout instead of aborting', async () => {
+    const make = async (name, prUrl, checkoutHead) => {
+      const path = join(sandbox.scratch, `portos-quality-${name}`);
+      await execGit(['worktree', 'add', '--detach', path, 'HEAD'], sandbox.repo);
+      const head = checkoutHead || (await execGit(['rev-parse', 'HEAD'], path)).stdout.trim();
+      await writeFile(join(sandbox.repo, '.git', 'info', 'exclude'), '.cache/\n');
+      await mkdir(join(path, '.cache'), { recursive: true });
+      await writeFile(join(path, '.cache', 'quality-snapshot-merge.json'), JSON.stringify({ prUrl, checkoutHead: head }));
+      return path;
+    };
+    const drifted = await make('drifted', 'https://github.com/example/repo/pull/2', 'f'.repeat(40));
+    const merged = await make('merged', 'https://github.com/example/repo/pull/1');
+    const deps = {
+      ...admitted,
+      resolveForgeForRepo: async () => ({ cli: 'gh', env: {} }),
+      execGh: async () => JSON.stringify({ state: 'MERGED' }),
+    };
+    const swept = await sweepSettledSnapshotCheckouts({ id: 'app', repoPath: sandbox.repo }, {}, deps);
+    expect(swept.map(p => basename(p))).toEqual([basename(merged)]);
+    expect(existsSync(drifted)).toBe(true);
+  });
 });
