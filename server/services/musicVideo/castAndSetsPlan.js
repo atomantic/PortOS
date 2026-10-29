@@ -33,7 +33,7 @@ import { trimTo } from '../../lib/textUtils.js';
 import { isOutsideMusicVideoReference } from '../../lib/musicVideoConditioning.js';
 // A sentence naming a person or the protagonist puts someone in an empty plate.
 import { withoutPeople } from '../../lib/musicVideoCreativeContext.js';
-import { CAST_SETS_SUBJECT_PREFIX, fixedCasting, musicVideoLipSyncs, songSections } from './castAndSetsDirection.js';
+import { CAST_SETS_SUBJECT_PREFIX, fixedCasting, leadingAge, musicVideoLipSyncs, songSections, subjectNameParts } from './castAndSetsDirection.js';
 
 export const CAST_SETS_IMAGE_SIZE = Object.freeze({ width: 1536, height: 1024 });
 // Mirrors MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES / the visual spec's list cap.
@@ -146,14 +146,15 @@ function buildProceduralImagePlan(direction, { revisionNotes = {}, greyboxes = {
  * Build the full image plan for a direction: `{ [key]: { key, kind, label,
  * prompt, deps, refKeys, refImages?, setId?, testIndex? } }`. `refKeys` name
  * other plan keys whose image is passed as a reference (in order), then
- * `refImages` (the director's character identity images, or a linked catalog
- * record's image) follow: only the
- * project's own images, never mood board images. A revision note for a key is
- * appended to its prompt.
+ * `refImages` (a linked catalog record's Casting images, else the reference
+ * labeled with its name, then the director's character identity images)
+ * follow: only the project's and catalog's own images, never mood board
+ * images. `catalogLikeness` is castAndSetsCatalogLikeness.js's result. A
+ * revision note for a key is appended to its prompt.
  */
 const expressionGrid = (n) => (n === 0 || n > 4 ? '2 rows x 3 columns' : n === 4 ? '2 rows x 2 columns' : `1 row x ${n} columns`);
 
-export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = {}, greyboxes = {} } = {}) {
+export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = {}, greyboxes = {}, catalogLikeness = {} } = {}) {
   if (direction.medium === 'procedural') return buildProceduralImagePlan(direction, { revisionNotes, greyboxes });
   const p = direction.protagonist || {};
   const looks = direction.looks || [];
@@ -161,14 +162,24 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
   const style = trimTo(direction.look, 500) || trimTo(project?.concept?.style, 500);
   const firstLight = direction.sets?.[0]?.lighting || '';
   const note = (key) => (revisionNotes[key] ? `Revision: ${revisionNotes[key]}` : '');
-  // A linked catalog record's image conditions the sheet or plate of the
-  // protagonist, cast member or set the direction kept it as (by name).
-  const fixed = fixedCasting(project).filter((f) => f.imageId);
-  const fixedImage = (kind, name) => {
+  // A linked catalog record's images condition the sheet or plate of the
+  // protagonist, cast member or set the direction kept it as (by name, or by
+  // the name without its age qualifier: "Nora (17)" is Nora).
+  const fixed = fixedCasting(project);
+  const baseName = (name) => subjectNameParts(name).base.toLowerCase();
+  const fixedFor = (kind, name) => {
     const key = String(name || '').trim().toLowerCase();
-    return fixed.find((f) => f.kind === kind && f.name.toLowerCase() === key)?.imageId || null;
+    const ofKind = fixed.filter((f) => f.kind === kind);
+    return ofKind.find((f) => f.name.toLowerCase() === key) || ofKind.find((f) => baseName(f.name) === baseName(key)) || null;
   };
-  const identities = [...new Set([fixedImage('character', p.name), ...identityImages(project)].filter(Boolean))].slice(0, MAX_CONDITIONING);
+  const fixedImages = (kind, name) => {
+    const f = fixedFor(kind, name);
+    const catalog = f && catalogLikeness[f.ingredientId]?.images;
+    return (catalog?.length ? catalog : [f?.imageId].filter(Boolean)).slice(0, MAX_CONDITIONING);
+  };
+  const identities = [...new Set([...fixedImages('character', p.name), ...identityImages(project)])].slice(0, MAX_CONDITIONING);
+  // Another age of a linked protagonist: that age's own Casting images.
+  const protagonistForms = catalogLikeness[fixedFor('character', p.name)?.ingredientId]?.forms || [];
   const plan = {};
 
   plan.character = {
@@ -237,6 +248,10 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
 
   // Other ages: the same person younger or older, each on their own sheet,
   // conditioned on the canonical one so the face carries across the years.
+  const formImages = (form) => {
+    const age = leadingAge(form.age);
+    return age === null ? [] : (protagonistForms.find((f) => f.age === age)?.images || []).slice(0, MAX_CONDITIONING - 1);
+  };
   for (const form of p.forms || []) {
     const key = `form:${form.id}`;
     plan[key] = {
@@ -246,6 +261,7 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
       formId: form.id,
       deps: ['character'],
       refKeys: ['character'],
+      ...(formImages(form).length ? { refImages: formImages(form) } : {}),
       prompt: join(
         `Photographic character reference sheet of ${p.name || 'the protagonist'}${form.age ? ` at age ${form.age}` : ''}: the SAME person as the character reference, at a different age`,
         form.description,
@@ -265,7 +281,7 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
   // the same five views as the protagonist's, so shots naming them keep them.
   for (const c of direction.cast || []) {
     const key = `cast:${c.id}`;
-    const castImage = fixedImage('character', c.name);
+    const castImages = fixedImages('character', c.name);
     plan[key] = {
       key,
       kind: 'cast',
@@ -273,10 +289,10 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
       castId: c.id,
       deps: [],
       refKeys: [],
-      ...(castImage ? { refImages: [castImage] } : {}),
+      ...(castImages.length ? { refImages: castImages } : {}),
       prompt: join(
         `Photographic character reference sheet of ONE consistent person, ${c.name}${c.role ? `, the ${c.role}` : ''}: ${c.description || ''}`,
-        castImage && 'The SAME person as the reference image: keep their face, hair and build exactly',
+        castImages.length && 'The SAME person as the reference images: keep their face, hair and build exactly',
         identity(c),
         c.wardrobe && `Wearing ${c.wardrobe}`,
         p.name && `A different person from ${p.name}`,
@@ -292,7 +308,7 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
   for (const set of direction.sets || []) {
     const key = `set:${set.id}`;
     const plateLight = withoutPeople(set.lighting, p.name);
-    const placeImage = greyboxes[set.id]?.reference.imageId || fixedImage('place', set.name);
+    const placeImages = greyboxes[set.id]?.reference.imageId ? [greyboxes[set.id].reference.imageId] : fixedImages('place', set.name);
     plan[key] = {
       key,
       kind: 'plate',
@@ -301,10 +317,10 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
       ...(set.setReference?.greyboxShotId ? { setReference: set.setReference } : {}),
       deps: [],
       refKeys: [],
-      ...(placeImage ? { refImages: [placeImage] } : {}),
+      ...(placeImages.length ? { refImages: placeImages } : {}),
       prompt: join(
         'Empty set plate, no people',
-        placeImage && 'The same location as the reference image',
+        placeImages.length && 'The same location as the reference images',
         withoutPeople(set.description, p.name) || set.name,
         plateLight && `Lighting: ${plateLight}`,
         plateStyle && `Look: ${plateStyle}`,

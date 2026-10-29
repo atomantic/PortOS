@@ -154,25 +154,47 @@ export function moodBoardImageList(board, resolveItem) {
 }
 
 export const CAST_SETS_SUBJECT_PREFIX = 'cs-';
+// The deterministic record approval saves a check-in subject to (catalogCast.js).
+const CHECKIN_OWN_RECORD = /^cat-[a-z]{3}-mv-/;
+
+// The first number in a free-text age ("17", "about 60"), or null.
+export const leadingAge = (value) => {
+  const match = String(value ?? '').match(/\d{1,3}/);
+  return match ? Number(match[0]) : null;
+};
+
+// "Nora (17)" → { base: 'Nora', qualifier: '17' }: a subject named for one age
+// or look of a cast member. "Nora, 17" is read the same way; only a trailing
+// number follows a comma.
+export function subjectNameParts(name) {
+  const text = String(name || '').trim();
+  const match = text.match(/^(.*?)\s*[([]\s*([^)\]]*?)\s*[)\]]\s*$/) || text.match(/^(.*?)\s*,\s*(\d{1,3})$/);
+  return match && match[1] ? { base: match[1].trim(), qualifier: match[2] } : { base: text, qualifier: '' };
+}
 
 /**
  * Catalog-linked cast and places the director chose in Creative setup: fixed
  * casting the check-in keeps instead of redesigning. Each carries the image
  * the Look step pulled for it (a reference labelled with its name), which
- * conditions its sheet or plate. Cast & Sets' own earlier subjects are left
- * out, so a regenerate can still redesign them.
+ * conditions its sheet or plate when its catalog record has no images
+ * (castAndSetsCatalogLikeness.js). Cast & Sets' own earlier subjects saved to
+ * their own catalog record are left out, so a regenerate can still redesign
+ * them; one the director re-linked to another Casting record is fixed.
  */
 export function fixedCasting(project) {
   const refs = project?.visualSpec?.references || [];
   return (project?.concept?.subjects || [])
     .filter((s) => s?.ingredientId && s.name && (s.kind === 'character' || s.kind === 'place')
-      && !String(s.id || '').startsWith(CAST_SETS_SUBJECT_PREFIX))
+      && !(String(s.id || '').startsWith(CAST_SETS_SUBJECT_PREFIX) && CHECKIN_OWN_RECORD.test(s.ingredientId)))
     .map((s) => {
       const role = s.kind === 'place' ? 'set' : 'character';
       const name = s.name.trim().toLowerCase();
       const ref = refs.find((r) => r?.imageId && r.role === role && String(r.label || '').trim().toLowerCase() === name
         && !isOutsideMusicVideoReference(r));
-      return { kind: s.kind, name: s.name.trim(), role: s.role || null, description: s.description || '', imageId: ref?.imageId || null };
+      return {
+        kind: s.kind, name: s.name.trim(), role: s.role || null, description: s.description || '', imageId: ref?.imageId || null,
+        ingredientId: s.ingredientId, castFormId: s.castForm?.id || null,
+      };
     });
 }
 

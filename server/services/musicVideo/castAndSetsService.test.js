@@ -193,6 +193,7 @@ const testDeps = (overrides = {}) => ({
   loadBoard: async () => board,
   boardItemImage: async () => (item) => (item.type === 'image' ? { kind: 'image', filename: item.file } : null),
   loadTrack: async () => null,
+  catalog: { getIngredient: async () => null, listMediaForIngredient: async () => [] },
   ...overrides,
 });
 afterEach(async () => {
@@ -1131,6 +1132,47 @@ it('keeps catalog-linked cast and places as fixed casting, conditioned on their 
   expect(job('set:harbor').params.prompt).toContain('The same location as the reference image');
   // An unlinked place is designed fresh.
   expect(refs('set:roof')).toBeUndefined();
+});
+
+it('conditions linked cast on their Casting images, not just a reference with their name', async () => {
+  const records = {
+    'cat-chr-frank': { id: 'cat-chr-frank', type: 'character', name: 'Frank', payload: { forms: [] } },
+    'cat-chr-nora': { id: 'cat-chr-nora', type: 'character', name: 'Nora', payload: { forms: [{ id: 'form-young', label: 'Age 7', age: '7' }] } },
+  };
+  const media = {
+    'cat-chr-frank': [
+      { mediaKey: 'frank-portrait.png', kind: 'portrait' },
+      { mediaKey: 'frank-collage.png', kind: 'reference', library: { likeness: false } },
+    ],
+    'cat-chr-nora': [
+      { mediaKey: 'nora-portrait.png', kind: 'portrait' },
+      { mediaKey: 'nora-at-7.png', kind: 'reference', library: { variant: { formId: 'form-young' } } },
+    ],
+  };
+  service.__setCastAndSetsDepsForTests(testDeps({ catalog: {
+    getIngredient: async (id) => records[id] || null,
+    listMediaForIngredient: async (id) => media[id] || [],
+  } }));
+  runPrompt.mockResolvedValue({ text: JSON.stringify({ ...DIRECTION,
+    protagonist: { ...DIRECTION.protagonist, name: 'Nora', forms: [{ id: 'seven', label: 'Age 7', age: '7', description: 'a small girl' }] },
+    cast: [{ id: 'frank', name: 'Frank', role: 'father', description: 'sixties', face: 'lined', hair: 'grey', wardrobe: 'suit' }] }) });
+  const project = await seed({
+    concept: { prompt: 'a wake', subjects: [
+      // Linked in Casting after an earlier check-in had cast its own Nora.
+      { id: 'cs-protagonist', kind: 'character', name: 'Nora (17)', role: 'protagonist', ingredientId: 'cat-chr-nora' },
+      { id: 'mvc-frank', kind: 'character', name: 'Frank', role: 'supporting', ingredientId: 'cat-chr-frank' },
+    ] },
+    visualSpec: { references: [{ id: 'mvr-pull-1', imageId: 'old-frank.png', role: 'character', label: 'Frank', condition: false }] },
+  });
+  await service.startCastAndSets(project.id);
+  await runTo(project.id, 'review');
+  expect(runPrompt.mock.calls[0][0].prompt).toContain('- character (protagonist): Nora (17)');
+  const job = (key) => jobs.findLast((j) => keyOf(j) === key);
+  const refs = (key) => job(key).params.referenceImagePaths?.map((p) => p.split(/[\\/]/).pop());
+  expect(refs('character')).toEqual(['nora-portrait.png']);
+  expect(refs('cast:frank')).toEqual(['frank-portrait.png']);
+  // An age sheet: the canonical sheet first, then that age's own Casting image.
+  expect(refs('form:seven')).toEqual([`${job('character').id}.png`, 'nora-at-7.png']);
 });
 
 it('keeps people out of set plates: no mood board person in the look, no character action in a set', async () => {

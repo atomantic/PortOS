@@ -80,6 +80,7 @@ import {
   plannedTests,
 } from './castAndSetsPlan.js';
 import { renderCastAndSetsSheet } from './castAndSetsSheet.js';
+import { loadCastAndSetsCatalogLikeness } from './castAndSetsCatalogLikeness.js';
 import { findDevArtifact, reviewDevArtifact, resolveDevArtifactNotes } from './devArtifacts.js';
 import { findProductionRun, haltProduction, rebaseProductionAfterCheckin, reserveProductionStep, settleProductionStep } from './production.js';
 
@@ -101,6 +102,8 @@ const defaults = {
   sheetImage: (path) => sheetImage(path),
   imageParams: (settings, route, common) => imageJobParams(settings, route, common),
   resolveRoute: null,
+  // getIngredient/listMediaForIngredient; null = the live catalog.
+  catalog: null,
 };
 let deps = { ...defaults };
 export function __setCastAndSetsDepsForTests(overrides) { deps = { ...defaults, ...overrides }; }
@@ -272,7 +275,8 @@ async function writePlan(projectId, { direction = null, forceKeys = [], changes 
   const codeOnly = !musicVideoAllowsMedia(project, 'image') || nextDirection.medium === 'procedural' && !castAndSetsAllowsImages(project);
   const { loadMusicVideoGreybox } = await import('./greyboxReferences.js');
   const greyboxes = Object.fromEntries(await Promise.all((codeOnly ? [] : nextDirection.sets || []).filter((s) => s.setReference?.greyboxShotId).map(async (set) => [set.id, await loadMusicVideoGreybox(project, { sceneId: `set:${set.id}`, setReference: set.setReference })])));
-  const plan = codeOnly ? {} : buildCastAndSetsImagePlan(project, nextDirection, { revisionNotes: keyNotesText(stage.keyNotes), greyboxes });
+  const catalogLikeness = codeOnly ? {} : await loadCastAndSetsCatalogLikeness(project, { catalog: deps.catalog });
+  const plan = codeOnly ? {} : buildCastAndSetsImagePlan(project, nextDirection, { revisionNotes: keyNotesText(stage.keyNotes), greyboxes, catalogLikeness });
   const renderKeys = affectedImageKeys(stage.plan || {}, plan, forceKeys);
   const settings = await deps.getSettings();
   const run = stage.productionRunId ? (project.productionRuns || []).find((r) => r.id === stage.productionRunId) : null;
@@ -303,8 +307,9 @@ function referencePaths(stage, item) {
     const path = id ? resolveGalleryImage(id, { mustExist: false }) : null;
     if (path) paths.push(path);
   }
+  // Casting images can live in the gallery or in image-refs uploads.
   for (const id of item.refImages || []) {
-    const path = resolveGalleryImage(id, { mustExist: false });
+    const path = resolveGalleryImage(id) || resolveImageRef(id) || resolveGalleryImage(id, { mustExist: false });
     if (path && !paths.includes(path)) paths.push(path);
   }
   return paths.slice(0, 4);
