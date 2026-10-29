@@ -88,11 +88,12 @@ export async function getOrComputeImageSha256(imagePath) {
   // imported dynamically because lib/ must not depend on it statically. A
   // missing sidecar stays missing; a failed write is logged but the hash is
   // still valid for this call.
-  const { cacheImageSha256 } = await import('../services/imageGen/local.js');
-  const merged = await cacheImageSha256(filename, entry).catch((err) => {
-    console.error(`⚠️ assetHash: sidecar write failed for ${sidecarPath}: ${err?.message || err}`);
-    return null;
-  });
+  const merged = await import('../services/imageGen/local.js')
+    .then(({ cacheImageSha256 }) => cacheImageSha256(filename, entry))
+    .catch((err) => {
+      console.error(`⚠️ assetHash: sidecar write failed for ${sidecarPath}: ${err?.message || err}`);
+      return null;
+    });
   return { hash, sidecar: merged || fallback };
 }
 
