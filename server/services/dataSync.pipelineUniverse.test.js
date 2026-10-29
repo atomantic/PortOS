@@ -1239,6 +1239,8 @@ describe('dataSync — per-category schema gate (cross-key isolation)', () => {
       'memoryHistory',
       // Peer credential handshake version (#8356), advertised in health details; never a data category.
       'peerAuth',
+      // Image-stamp capability (#14067), advertised in health details; never a data category.
+      'peerAssetStamps',
       // Numeric PortOS quality uses its version-validated read-through endpoint, never snapshot writes.
       'appQuality',
       // catalog → in-process applyRemoteChanges (server/services/catalogSync.js)

@@ -1064,6 +1064,13 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // the Basic header only after that confirmation (`peer.peerAuthAccepted`), so
   // an older receiver, which never answers, keeps getting Basic.
   peerAuth: 1,
+  // v1 = a receiver accepts the optional image `createdAt` on per-record push
+  // `assetManifest` entries (#14067), so a re-made image under a re-used name
+  // outranks a delete tombstone. Capability, not a record gate: the receiver's
+  // entry schema is strict, so a sender stamps only after the receiver's health
+  // details advertise `assetStamps.version` >= 1 (`peer.lastHealth`); an older
+  // receiver never answers and never sees the field.
+  peerAssetStamps: 1,
   // NOTE: `videoHistory` is intentionally NOT listed here. The version gate
   // rejects the ENTIRE snapshot/push payload on ANY ahead-mismatch (the
   // comparator walks the union of keys), so declaring a brand-new key would
@@ -1166,6 +1173,10 @@ export const RECORD_KIND_SCHEMA_CATEGORIES = Object.freeze({
  * `applyRemote` through SNAPSHOT_CATEGORY_SCHEMA_KEYS; meatspace is never a
  * per-record push.
  *
+ * `peerAssetStamps` (#14067): advertised by the receiver's health details; it
+ * gates whether a sender adds image `createdAt` to push manifests, never a
+ * record transfer.
+ *
  * `peerAuth` (#8356): the peer credential handshake version, advertised by the
  * receiver's health details; it gates which header a sender presents, never a
  * record transfer.
@@ -1174,7 +1185,7 @@ export const RECORD_KIND_SCHEMA_CATEGORIES = Object.freeze({
  * leave its push transfers ungated (silent cross-install corruption). Only
  * genuinely non-push categories belong.
  */
-export const NON_RECORD_SCHEMA_CATEGORIES = Object.freeze(new Set(['memoryHistory', 'mediaLibrary', 'cosHistory', 'cosTasks', 'appQuality', 'eidoverseFoundations', 'meatspace', 'peerAuth']));
+export const NON_RECORD_SCHEMA_CATEGORIES = Object.freeze(new Set(['memoryHistory', 'mediaLibrary', 'cosHistory', 'cosTasks', 'appQuality', 'eidoverseFoundations', 'meatspace', 'peerAuth', 'peerAssetStamps']));
 
 /**
  * Lazy-read the current PortOS version from the ROOT package.json so a
