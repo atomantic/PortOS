@@ -83,14 +83,19 @@ export async function announceLocalVideoDelete(item, tombstone) {
   }
 }
 
+// Literal rather than imported: instanceIdentity loads the file store, which
+// history writers that load this module must not pull in.
+const UNKNOWN_INSTANCE_ID = 'unknown';
+
 // Same reading as peerPullAuthorization's readCallerInstanceId, without its
 // settings/registry imports.
 function handshakeInstanceId(headers) {
   const header = headers?.[PEER_INSTANCE_HEADER.toLowerCase()];
   const raw = Array.isArray(header) ? header[0] : header;
   const value = typeof raw === 'string' ? raw.split(',')[0].trim() : '';
-  // The `unknown` sentinel matches no registered peer, so delivery skips it.
-  return value || null;
+  // instanceIdentity's UNKNOWN_INSTANCE_ID (pinned by the test) is no identity,
+  // as in the snapshot pull check; a stored peer must never match it.
+  return value && value !== UNKNOWN_INSTANCE_ID ? value : null;
 }
 
 /**

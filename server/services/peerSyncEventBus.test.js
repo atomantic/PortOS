@@ -78,6 +78,24 @@ describe('deliverPeerSyncEvent', () => {
     for (const other of [unknown, categoryOff, browser, unsubscribedPeer]) expect(other.frames).toEqual([]);
   });
 
+  it('treats the unknown-identity placeholder as no identity', async () => {
+    // The placeholder this module refuses must stay instanceIdentity's sentinel.
+    expect((await import('./instanceIdentity.js')).UNKNOWN_INSTANCE_ID).toBe('unknown');
+    registry.peers = [peer('unknown', true)];
+    httpServer = createServer();
+    ioServer = new Server(httpServer);
+    ioServer.on('connection', (socket) => registerPeerSyncSubscriber(socket));
+    const port = await new Promise((resolve) => httpServer.listen(0, '127.0.0.1', () => resolve(httpServer.address().port)));
+    const claimed = await connect(port, 'unknown', true);
+    const [serverSocket] = await ioServer.in('peer-sync').fetchSockets();
+    expect(serverSocket.data.peerSyncInstanceId).toBeNull();
+    expect(await deliverPeerSyncEvent(ioServer, FRAME)).toBe(0);
+    const marker = once(claimed.client, 'example:marker');
+    ioServer.emit('example:marker');
+    await marker;
+    expect(claimed.frames).toEqual([]);
+  });
+
   it('delivers nothing for a category with no sync mapping', async () => {
     expect(await deliverPeerSyncEvent({ in: () => { throw new Error('not reached'); } }, { ...FRAME, category: 'imageHistory' })).toBe(0);
   });
