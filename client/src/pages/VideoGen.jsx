@@ -44,7 +44,7 @@ import { RUNWAY_SPECIAL_VIDEO_MODES, getRunwaySpecialVideoModel } from '../../..
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useSearchParams } from 'react-router';
 import { isMiniMaxH3Runtime } from '../lib/runnerFamilies';
-import { videoDeleteOutcome } from '../lib/videoDeleteOutcome';
+import { mediaDeleteOutcome } from '../lib/mediaDeleteOutcome';
 import { appendTriggerWords } from '../lib/loraTriggers';
 import Drawer from '../components/Drawer';
 import { ImageGenTab } from '../components/settings/ImageGenTab';
@@ -473,7 +473,7 @@ export default function VideoGen() {
     const result = await deleteVideoHistoryItem(raw.id, { silent: true })
       .catch((err) => { toast.error(err.message || 'Delete failed'); return null; });
     if (!result) return;
-    const outcome = videoDeleteOutcome(result);
+    const outcome = mediaDeleteOutcome(result, 'video');
     // A delete that waits on, or did not reach, this machine's copy keeps the row.
     if (!outcome.remove) {
       setHistory((h) => h.map((v) => {

@@ -24,12 +24,12 @@ import { useMediaAnnotations } from '../hooks/useMediaAnnotations';
 import useMediaPreviewActions from '../hooks/useMediaPreviewActions';
 import useHydratedPreviewRoute from '../hooks/useHydratedPreviewRoute';
 import { useGalleryPage } from '../hooks/useGalleryPage';
-import { videoDeleteOutcome } from '../lib/videoDeleteOutcome';
+import { mediaDeleteOutcome } from '../lib/mediaDeleteOutcome';
 import socket from '../services/socket';
 import useMounted from '../hooks/useMounted';
 import { getMediaJob } from '../services/apiMediaJobs';
 import {
-  deleteVideoHistoryItem, cancelVideoPendingDelete, stitchVideos, deleteImage, getInstances,
+  deleteVideoHistoryItem, cancelVideoPendingDelete, cancelImagePendingDelete, stitchVideos, deleteImage, getInstances,
 } from '../services/api';
 
 const FILTERS = [
@@ -163,7 +163,7 @@ export default function MediaHistory() {
       const result = await (item.kind === 'image'
         ? deleteImage(item.filename, { silent: true })
         : deleteVideoHistoryItem(item.id, { silent: true }));
-      const outcome = item.kind === 'video' ? videoDeleteOutcome(result) : { remove: true, tone: 'success' };
+      const outcome = mediaDeleteOutcome(result, item.kind);
       // A delete that waits on, or did not reach, this machine's copy keeps the row.
       if (!outcome.remove) {
         const peerId = outcome.pendingDelete?.peerId;
@@ -183,7 +183,9 @@ export default function MediaHistory() {
 
   const handleCancelPendingDelete = useCallback(async (item) => {
     try {
-      await cancelVideoPendingDelete(item.id, { silent: true });
+      await (item.kind === 'image'
+        ? cancelImagePendingDelete(item.filename, { silent: true })
+        : cancelVideoPendingDelete(item.id, { silent: true }));
       withPendingDelete(item.key, null);
       toast.success('Pending delete cancelled');
     } catch (err) {

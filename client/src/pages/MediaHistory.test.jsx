@@ -8,7 +8,7 @@ import { MemoryRouter } from 'react-router';
 
 const { fetchPage, deleteImage, saveAnnotation, getGalleryImages, getVideoHistoryItem, listImageVariants, stitchVideos, toast, socketHandlers } = vi.hoisted(() => ({ stitchVideos: vi.fn(), toast: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }), socketHandlers: new Map(), fetchPage: vi.fn(), deleteImage: vi.fn(), saveAnnotation: vi.fn(), getGalleryImages: vi.fn(), getVideoHistoryItem: vi.fn(), listImageVariants: vi.fn() }));
 vi.mock('../services/apiImageVideo', () => ({ listMediaGalleryPage: fetchPage, getGalleryImages, getVideoHistoryItem, listImageVariants }));
-const deleteApi = vi.hoisted(() => ({ deleteVideoHistoryItem: vi.fn(), cancelVideoPendingDelete: vi.fn(), getInstances: vi.fn() }));
+const deleteApi = vi.hoisted(() => ({ deleteVideoHistoryItem: vi.fn(), cancelVideoPendingDelete: vi.fn(), cancelImagePendingDelete: vi.fn(), getInstances: vi.fn() }));
 vi.mock('../services/api', () => ({ listMediaGalleryPage: fetchPage, deleteImage, stitchVideos, ...deleteApi }));
 vi.mock('../services/socket', () => ({ default: { on: (event, fn) => socketHandlers.set(event, fn), off: (event) => socketHandlers.delete(event) } }));
 vi.mock('../components/ui/Toast', () => ({ default: toast }));
@@ -272,5 +272,40 @@ describe('remote video delete', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Delete v1.mp4' }));
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Example Peer refused the delete'));
     expect(screen.getByText('Clip one')).toBeInTheDocument();
+  });
+});
+
+describe('remote image delete', () => {
+  beforeEach(() => {
+    rows = [
+      { kind: 'image', data: { filename: 'theirs.png', prompt: 'Their fox', createdAt: '2026-01-02' } },
+      { kind: 'image', data: { filename: 'other.png', prompt: 'Other cat', createdAt: '2026-01-01' } },
+    ];
+    deleteApi.getInstances.mockResolvedValue({ peers: [{ id: 'rec-peer', name: 'Example Peer' }] });
+  });
+
+  it("keeps a peer's image while its delete is pending and cancels it through the image API", async () => {
+    deleteImage.mockResolvedValue({ ok: true, status: 'pending', pendingDelete: { peerId: 'rec-peer', queuedAt: '2026-01-03T00:00:00.000Z' }, peerName: 'Example Peer' });
+    deleteApi.cancelImagePendingDelete.mockResolvedValue({ ok: true, cancelled: true });
+    open();
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete theirs.png' }));
+    const cancel = await screen.findByRole('button', { name: 'Cancel theirs.png pending on Example Peer' });
+    expect(toast).toHaveBeenCalledWith('Delete pending until Example Peer is reachable');
+    expect(screen.getByText('Their fox')).toBeInTheDocument();
+    // Only the image asked about is pending.
+    expect(screen.queryByRole('button', { name: /^Cancel other\.png/ })).toBeNull();
+    fireEvent.click(cancel);
+    await waitFor(() => expect(screen.queryByRole('button', { name: /^Cancel theirs\.png/ })).toBeNull());
+    expect(deleteApi.cancelImagePendingDelete).toHaveBeenCalledWith('theirs.png', { silent: true });
+    expect(deleteApi.cancelVideoPendingDelete).not.toHaveBeenCalled();
+  });
+
+  it('removes an owner-unknown image with a notice that nothing was deleted', async () => {
+    deleteImage.mockResolvedValue({ ok: true, status: 'owner-unknown' });
+    open();
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete theirs.png' }));
+    await waitFor(() => expect(screen.queryByText('Their fox')).toBeNull());
+    expect(toast).toHaveBeenCalledWith('Owner unknown: hidden on this machine only, nothing was deleted');
+    expect(screen.getByText('Other cat')).toBeInTheDocument();
   });
 });

@@ -71,6 +71,28 @@ describe('ImageGen backend-probe gating', () => {
     expect(screen.getByText('Recent renders (1 of 1)')).toBeInTheDocument();
   });
 
+  it("keeps a peer's image while its delete waits on the owning machine", async () => {
+    let held = ['theirs.png', 'mine.png'];
+    state.listImageGalleryPage.mockImplementation(async () => ({ items: held.map((filename) => ({ filename })), total: held.length, hiddenTotal: 0 }));
+    state.deleteImage.mockImplementation(async (filename) => {
+      if (filename === 'theirs.png') return { ok: true, status: 'pending', pendingDelete: { peerId: 'rec-peer', queuedAt: '2026-01-03T00:00:00.000Z' }, peerName: 'Example Peer' };
+      held = held.filter((name) => name !== filename);
+      return { ok: true, status: 'deleted' };
+    });
+    await mount();
+    const { default: toast } = await import('../components/ui/Toast');
+    await screen.findByRole('button', { name: 'Delete theirs.png' });
+    const loads = state.listImageGalleryPage.mock.calls.length;
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Delete theirs.png' })));
+    // Not reported as deleted, and no refresh is needed to bring it back.
+    expect(toast).toHaveBeenCalledWith('Delete pending until Example Peer is reachable');
+    expect(state.listImageGalleryPage.mock.calls.length).toBe(loads);
+    expect(screen.getByRole('button', { name: 'theirs.png' })).toBeInTheDocument();
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Delete mine.png' })));
+    expect(screen.getByRole('button', { name: 'theirs.png' })).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'mine.png' })).toBeNull());
+  });
+
   // The probe decides which backend can RUN, not what the user may TYPE. While
   // it is in flight the whole above-the-fold form must stay usable.
   it('leaves the prompt fields editable while the status probe is still in flight', async () => {

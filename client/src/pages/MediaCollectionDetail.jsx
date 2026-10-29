@@ -13,7 +13,7 @@ import { useMediaAnnotations } from '../hooks/useMediaAnnotations';
 import { useAsyncAction } from '../hooks/useAsyncAction';
 import useGalleryPreviewResolver from '../hooks/useGalleryPreviewResolver';
 import { UNSORTED_ID, buildUnsortedCollection } from '../lib/unsorted';
-import { videoDeleteOutcome } from '../lib/videoDeleteOutcome';
+import { mediaDeleteOutcome } from '../lib/mediaDeleteOutcome';
 import {
   getMediaCollection, updateMediaCollection,
   listMediaCollections,
@@ -203,7 +203,7 @@ export default function MediaCollectionDetail() {
     });
     if (!ok) return;
     const matches = row => row.kind === item.kind && (row.kind === 'image' ? row.data.filename === item.filename : row.data.id === item.id);
-    const outcome = item.kind === 'video' ? videoDeleteOutcome(ok) : { remove: true, tone: 'success' };
+    const outcome = mediaDeleteOutcome(ok, item.kind);
     // A delete that waits on, or did not reach, this machine's copy keeps the row.
     if (!outcome.remove) {
       page.setItems(rows => rows.map((row) => {

@@ -1,10 +1,10 @@
 /**
- * What a video delete response means for the list showing the row
- * (server/services/mediaRemoteDelete.js): whether the row leaves the list,
- * the pending marker to keep on it, and the notice to show.
+ * What a video or gallery-image delete response means for the list showing
+ * the row (server/services/mediaRemoteDelete.js): whether the row leaves the
+ * list, the pending marker to keep on it, and the notice to show.
  * Returns `{ remove, pendingDelete, notice, tone }`; tone is `success` or `info`.
  */
-export function videoDeleteOutcome(result) {
+export function mediaDeleteOutcome(result, kind = 'video') {
   const peer = result?.peerName || 'the owning machine';
   switch (result?.status) {
     case 'pending':
@@ -18,6 +18,6 @@ export function videoDeleteOutcome(result) {
     case 'cancelled':
       return { remove: false, pendingDelete: null, notice: 'Delete cancelled', tone: 'info' };
     default:
-      return { remove: true, pendingDelete: null, notice: 'Deleted video', tone: 'success' };
+      return { remove: true, pendingDelete: null, notice: `Deleted ${kind === 'image' ? 'image' : 'video'}`, tone: 'success' };
   }
 }

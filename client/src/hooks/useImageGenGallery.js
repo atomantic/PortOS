@@ -4,6 +4,7 @@ import usePreviewRoute from './usePreviewRoute';
 import { useMediaAnnotations } from './useMediaAnnotations';
 import { useRecentImageGallery } from './useRecentImageGallery';
 import toast from '../components/ui/Toast';
+import { mediaDeleteOutcome } from '../lib/mediaDeleteOutcome';
 import {
   cleanGalleryImage,
   deleteImage,
@@ -71,10 +72,22 @@ export function useImageGenGallery({ previewParam }) {
   const handleDelete = useCallback(async (item) => {
     const filename = item?.filename;
     if (!filename) return;
-    const deleted = await deleteImage(filename).then(() => true, () => false);
-    if (!deleted) return;
+    const result = await deleteImage(filename).catch(() => null);
+    if (!result) return;
+    const outcome = mediaDeleteOutcome(result, 'image');
+    // A delete that waits on, or did not reach, this machine's copy keeps the image.
+    if (!outcome.remove) {
+      setGallery((current) => current.map((image) => {
+        if (image.filename !== filename) return image;
+        const { pendingDelete: _previous, ...rest } = image; // eslint-disable-line no-unused-vars
+        return outcome.pendingDelete ? { ...rest, pendingDelete: outcome.pendingDelete } : rest;
+      }));
+      toast(outcome.notice);
+      return;
+    }
     setGallery((current) => current.filter((image) => image.filename !== filename));
     refreshGallery();
+    if (outcome.tone === 'info') toast(outcome.notice);
   }, [refreshGallery, setGallery]);
 
   const handlePromptSaved = useCallback((item, prompt) => {

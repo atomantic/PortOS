@@ -76,6 +76,8 @@ export function normalizeImage(i) {
     // `formatDurationMs(NaN)` renders the literal string "NaNd NaNh".
     renderMs: Number.isFinite(i.renderMs) ? i.renderMs : null,
     hidden: !!i.hidden,
+    // Machine-local: a delete sent to (or queued for) the peer that owns this image.
+    pendingDelete: i.pendingDelete && typeof i.pendingDelete === 'object' ? i.pendingDelete : null,
     extractedFromVideoId: i.extractedFromVideoId || null,
     extractedFromVideoFilename: i.extractedFromVideoFilename || null,
     // Cleaning lineage — stamped by /api/image-gen/:filename/clean (manual,
