@@ -87,6 +87,7 @@ import { useMediaJobSse } from '../hooks/useMediaJobSse';
 import { useMediaCompletionRefresh } from '../hooks/useMediaCompletionRefresh';
 import { useMediaAnnotations } from '../hooks/useMediaAnnotations';
 import usePreviewRoute from '../hooks/usePreviewRoute';
+import usePendingDeletePeerNames from '../hooks/usePendingDeletePeerNames';
 import useMediaPreviewActions from '../hooks/useMediaPreviewActions';
 import { useVideoGenForm } from '../hooks/useVideoGenForm.js';
 import { useFederatedMediaTarget } from '../hooks/useFederatedMediaTarget';
@@ -97,7 +98,7 @@ import ModelInputPreview from '../components/media/ModelInputPreview';
 import RemoteMediaTargetPicker from '../components/federatedMedia/RemoteMediaTargetPicker';
 import {
   getVideoGenStatus, getVideoGenModelContext, generateVideo, cancelVideoGen, previewVideoPrompt,
-  listVideoHistory, getVideoHistoryItem, deleteVideoHistoryItem, setVideoHidden,
+  listVideoHistory, getVideoHistoryItem, deleteVideoHistoryItem, cancelVideoPendingDelete, setVideoHidden,
   patchSettingsSlice,
   getActiveVideoJob,
   getSettings,
@@ -468,6 +469,12 @@ export default function VideoGen() {
   ], [galleryVisibleItems, galleryHiddenItems, showHidden]);
   const [preview, setPreview] = usePreviewRoute(previewItems);
 
+  const { peerNames: pendingPeerNames, rememberPeerName } = usePendingDeletePeerNames(history);
+  const withPendingDelete = useCallback((id, pendingDelete) => setHistory((h) => h.map((v) => {
+    if (v.id !== id) return v;
+    const { pendingDelete: _previous, ...rest } = v; // eslint-disable-line no-unused-vars
+    return pendingDelete ? { ...rest, pendingDelete } : rest;
+  })), []);
   const handleDeleteHistory = useCallback(async (item) => {
     const raw = item?.raw || item;
     const result = await deleteVideoHistoryItem(raw.id, { silent: true })
@@ -476,17 +483,23 @@ export default function VideoGen() {
     const outcome = mediaDeleteOutcome(result, 'video');
     // A delete that waits on, or did not reach, this machine's copy keeps the row.
     if (!outcome.remove) {
-      setHistory((h) => h.map((v) => {
-        if (v.id !== raw.id) return v;
-        const { pendingDelete: _previous, ...rest } = v; // eslint-disable-line no-unused-vars
-        return outcome.pendingDelete ? { ...rest, pendingDelete: outcome.pendingDelete } : rest;
-      }));
+      rememberPeerName(outcome.pendingDelete?.peerId, result.peerName);
+      withPendingDelete(raw.id, outcome.pendingDelete);
       toast(outcome.notice);
       return;
     }
     setHistory((h) => h.filter((v) => v.id !== raw.id));
     if (outcome.tone === 'info') toast(outcome.notice);
-  }, []);
+  }, [rememberPeerName, withPendingDelete]);
+  const handleCancelPendingDelete = useCallback(async (item) => {
+    const raw = item?.raw || item;
+    const cancelled = await cancelVideoPendingDelete(raw.id, { silent: true })
+      .then(() => true)
+      .catch((err) => { toast.error(err.message || 'Cancel failed'); return false; });
+    if (!cancelled) return;
+    withPendingDelete(raw.id, null);
+    toast.success('Pending delete cancelled');
+  }, [withPendingDelete]);
   const handlePromptSaved = useCallback((item, prompt) => {
     const id = item?.id || item?.raw?.id;
     if (!id) return;
@@ -2102,6 +2115,8 @@ export default function VideoGen() {
         onContinue={handleContinueVideo}
         onUpscale={handleUpscaleHistory}
         onDelete={handleDeleteHistory}
+        onCancelPendingDelete={handleCancelPendingDelete}
+        pendingPeerNames={pendingPeerNames}
         onToggleHidden={handleToggleHistoryHidden}
         getCardProps={getCardProps}
         finishTargetFor={resolveFinishTarget}

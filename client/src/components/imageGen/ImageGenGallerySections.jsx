@@ -10,7 +10,7 @@ export default function ImageGenGallerySections({ gallery, cards }) {
   } = gallery;
   const {
     setPreview, handleRemix, handleSendToImage, sendToVideo, handleSendTo3d,
-    handleDelete, handleToggleHidden, getCardProps, toggleGalleryStar,
+    handleDelete, handleCancelPendingDelete, pendingPeerNames, handleToggleHidden, getCardProps, toggleGalleryStar,
   } = cards;
 
   return (
@@ -30,7 +30,7 @@ export default function ImageGenGallerySections({ gallery, cards }) {
           ) : (
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
               {visibleGalleryItems.slice(0, 5).map((item) => (
-                <MediaCard key={item.key} item={item} onPreview={setPreview} onRemix={handleRemix} onSendToImage={handleSendToImage} onSendToVideo={sendToVideo} onSendTo3d={handleSendTo3d} onDelete={handleDelete} onToggleHidden={handleToggleHidden} {...getCardProps(item.key)} onToggleStar={toggleGalleryStar} />
+                <MediaCard key={item.key} item={item} onPreview={setPreview} onRemix={handleRemix} onSendToImage={handleSendToImage} onSendToVideo={sendToVideo} onSendTo3d={handleSendTo3d} onDelete={handleDelete} onCancelPendingDelete={handleCancelPendingDelete} pendingPeerName={item.pendingDelete?.peerId ? pendingPeerNames?.[item.pendingDelete.peerId] : null} onToggleHidden={handleToggleHidden} {...getCardProps(item.key)} onToggleStar={toggleGalleryStar} />
               ))}
             </div>
           )}
@@ -45,7 +45,7 @@ export default function ImageGenGallerySections({ gallery, cards }) {
           {showHidden && (
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
               {hiddenGalleryItems.map((item) => (
-                <MediaCard key={item.key} item={item} onPreview={setPreview} onRemix={handleRemix} onSendToImage={handleSendToImage} onSendToVideo={sendToVideo} onSendTo3d={handleSendTo3d} onDelete={handleDelete} onToggleHidden={handleToggleHidden} {...getCardProps(item.key)} onToggleStar={toggleGalleryStar} />
+                <MediaCard key={item.key} item={item} onPreview={setPreview} onRemix={handleRemix} onSendToImage={handleSendToImage} onSendToVideo={sendToVideo} onSendTo3d={handleSendTo3d} onDelete={handleDelete} onCancelPendingDelete={handleCancelPendingDelete} pendingPeerName={item.pendingDelete?.peerId ? pendingPeerNames?.[item.pendingDelete.peerId] : null} onToggleHidden={handleToggleHidden} {...getCardProps(item.key)} onToggleStar={toggleGalleryStar} />
               ))}
             </div>
           )}

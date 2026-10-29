@@ -8,6 +8,10 @@ vi.mock('../services/apiVideoDownload.js', () => ({
   ]),
   deleteVideoDownload: vi.fn(),
 }));
+vi.mock('../services/apiImageVideo.js', () => ({ cancelVideoPendingDelete: vi.fn().mockResolvedValue({}) }));
+vi.mock('../services/api', () => ({
+  getInstances: vi.fn().mockResolvedValue({ peers: [{ id: 'rec-peer', name: 'Example Peer' }] }),
+}));
 vi.mock('../hooks/useVideoDownload.js', () => ({
   default: () => ({ active: false, percent: 0, stage: '', start: vi.fn(), cancel: vi.fn() }),
 }));
@@ -23,6 +27,7 @@ vi.mock('../components/ui/Toast', () => ({ default: Object.assign(vi.fn(), { err
 import VideoDownloaderPage from './VideoDownloaderPage';
 import { listVideoDownloads, deleteVideoDownload } from '../services/apiVideoDownload.js';
 import toast from '../components/ui/Toast';
+import { cancelVideoPendingDelete } from '../services/apiImageVideo.js';
 
 describe('VideoDownloaderPage', () => {
   it('swaps only the failed thumbnail for the placeholder', async () => {
@@ -58,6 +63,19 @@ describe('VideoDownloaderPage', () => {
 
     await waitFor(() => expect(screen.getByText('No videos downloaded yet.')).toBeInTheDocument());
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  // Uniquely catches a downloader row that cannot show or withdraw its pending delete.
+  it('shows a loaded pending delete with the peer name and cancels it through the API', async () => {
+    listVideoDownloads.mockResolvedValueOnce([
+      { id: 'a', filename: 'a.mp4', title: 'Clip A', createdAt: new Date().toISOString(), pendingDelete: { peerId: 'rec-peer' } },
+    ]);
+    render(<VideoDownloaderPage />);
+    expect(await screen.findByText('Delete pending on Example Peer')).toBeInTheDocument();
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Cancel pending delete' })); });
+    expect(cancelVideoPendingDelete).toHaveBeenCalledWith('a', { silent: true });
+    await waitFor(() => expect(screen.queryByText(/Delete pending on/)).toBeNull());
+    expect(screen.getByText('Clip A')).toBeInTheDocument();
   });
 
   describe('delete', () => {

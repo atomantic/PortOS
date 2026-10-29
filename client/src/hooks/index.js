@@ -106,6 +106,7 @@ export { default as useLocalModels } from './useLocalModels.js';
 export { default as useVisionModelIds } from './useVisionModelIds.js';
 export { default as useToolUseModelIds } from './useToolUseModelIds.js';
 export * from './useToolUseModelIds.js';
+export { default as usePendingDeletePeerNames } from './usePendingDeletePeerNames.js';
 export { default as usePreviewRoute } from './usePreviewRoute.js';
 export { default as useProviderCatalog } from './useProviderCatalog.js';
 export * from './useProviderCatalog.js';

@@ -45,4 +45,17 @@ describe('VideoGen gallery deletion', () => {
     await waitFor(() => expect(screen.queryByRole('button', { name: record.prompt })).not.toBeInTheDocument());
     expect(api.deleteVideoHistoryItem).toHaveBeenLastCalledWith(record.id, { silent: true });
   });
+
+  // Uniquely catches the Video Gen strip dropping the pending marker/Cancel for a
+  // row loaded already pending.
+  it('shows a loaded pending delete with the peer name and clears it through the cancel API', async () => {
+    state.peers = [{ id: 'rec-peer', name: 'Example Peer' }];
+    state.listVideoHistory.mockResolvedValue([{ ...record, pendingDelete: { peerId: 'rec-peer' } }]);
+    await renderVideoGenPage();
+    expect(await screen.findByText('Delete pending on Example Peer')).toBeInTheDocument();
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Cancel pending delete' })); });
+    expect(api.cancelVideoPendingDelete).toHaveBeenCalledWith(record.id, { silent: true });
+    await waitFor(() => expect(screen.queryByText(/Delete pending on/)).toBeNull());
+    expect(screen.getByRole('button', { name: record.prompt })).toBeInTheDocument();
+  });
 });
