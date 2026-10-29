@@ -1073,7 +1073,7 @@ async function authorizedSnapshotTombstones(tombstones, source) {
  * of local rows removed. `fromRemoteTombstone` keeps deleteHistoryItem from
  * re-recording the tombstone or re-announcing the delete.
  */
-export async function applyRemoteVideoTombstones(remoteTombstones) {
+export async function applyRemoteVideoTombstones(remoteTombstones, { forgetInMusicVideos = true } = {}) {
   if (!Array.isArray(remoteTombstones) || remoteTombstones.length === 0) return 0;
   await mergeMediaTombstones('video', remoteTombstones);
   const tombstones = await listMediaTombstones('video');
@@ -1094,6 +1094,7 @@ export async function applyRemoteVideoTombstones(remoteTombstones) {
       // read above carries a newer createdAt and must survive this tombstone.
       const result = await deleteHistoryItem(row.id, {
         fromRemoteTombstone: true,
+        forgetInMusicVideos,
         onlyIf: (current) => isTombstoned(tombstones, current.id, current.createdAt, 'key'),
       });
       if (result?.skipped) {

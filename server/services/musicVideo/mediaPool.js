@@ -364,11 +364,18 @@ export async function forgetDeletedMusicVideoAssets(keys, { mutateProjectRecord:
   }
 }
 
+// Whether the copy on this machine is gone (or hidden) after a deleteMediaAnywhere result.
+const poolCopyGone = (result) => result.status === 'deleted'
+  || (result.status === 'deleted-remote' && result.hiddenHere === true)
+  || (result.status === 'pending' && result.removedHere === true);
+
 /**
  * Delete unused stills and clips of a video from the media library (the asset
  * manager's "Delete"): only assets in the video's pool, so a shot's still or
- * clip and media this video never made are refused. Each delete then forgets
- * the batch on every music video (forgetDeletedMusicVideoAssets).
+ * clip and media this video never made are refused. Each delete goes to the
+ * machine that owns the asset (deleteMediaAnywhere), then the batch is forgotten
+ * on every music video (forgetDeletedMusicVideoAssets). Resolves `{ deleted, items }`,
+ * one result per item with its delete status.
  */
 export async function deleteMusicVideoPoolAssets(project, items) {
   const { withProjectMediaMutation, listProjects } = await import('./projects.js');
@@ -387,20 +394,21 @@ export async function deleteMusicVideoPoolAssets(project, items) {
     if (refused.length) {
       throw new ServerError(`${refused.length} of these ${refused.length === 1 ? 'is' : 'are'} on a shot or not made for this video`, { status: 409, code: 'POOL_ASSET_IN_USE' });
     }
-    const [{ deleteGalleryImage }, { deleteHistoryItem }] = await Promise.all([
-      import('../galleryImageDeletion.js'), import('../videoGen/historyOps.js'),
-    ]);
-    const deleted = [];
+    const { deleteMediaAnywhere } = await import('../mediaRemoteDelete.js');
+    const results = [];
+    const forget = [];
     try {
       for (const item of items) {
-        await (item.kind === 'image' ? deleteGalleryImage : deleteHistoryItem)(item.assetId, { forgetInMusicVideos: false });
-        deleted.push(`${item.kind}:${item.assetId}`);
+        // The owner deletes first; a peer-owned asset is never tombstoned here ahead of it.
+        const result = await deleteMediaAnywhere(item.kind, item.assetId, { forgetInMusicVideos: false });
+        results.push({ kind: item.kind, assetId: item.assetId, ...result });
+        if (poolCopyGone(result)) forget.push(`${item.kind}:${item.assetId}`);
       }
     } finally {
       // Even when a later deletion fails, forget the completed prefix. Keep the
       // failed item's evidence, and let the original error reach the caller.
-      if (deleted.length) await forgetDeletedMusicVideoAssets(deleted, admitted);
+      if (forget.length) await forgetDeletedMusicVideoAssets(forget, admitted);
     }
-    return { deleted: deleted.length };
+    return { deleted: forget.length, items: results };
   }));
 }
