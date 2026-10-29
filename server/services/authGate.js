@@ -20,6 +20,7 @@ import {
   hostControlSettingsPathsIn, isHostControlRoute, voiceConfigHostControlPathsIn,
 } from '../lib/hostControlRoutes.js';
 import { derivePeerAuthToken, PEER_AUTH_HEADER, PEER_INSTANCE_HEADER } from '../lib/peerHttpClient.js';
+import { isPairedPeer } from '../lib/peerPairing.js';
 import { loadData as loadInstances } from './instanceIdentity.js';
 
 // Paths that bypass the auth gate even when a password is set:
@@ -58,7 +59,7 @@ const pairedPeerFor = async (instanceId) => {
   const data = await loadInstances().catch(() => null);
   const peers = Array.isArray(data?.peers) ? data.peers : [];
   return peers.find((p) => p?.instanceId === instanceId && p.enabled !== false
-    && typeof p.syncSecret === 'string' && p.syncSecret.length >= 32) ?? null;
+    && isPairedPeer(p)) ?? null;
 };
 
 const verifyPeerToken = async (headers) => {
