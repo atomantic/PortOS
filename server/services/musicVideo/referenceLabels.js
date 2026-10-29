@@ -11,7 +11,7 @@ import { isFileBackend } from '../../lib/pgFileFacade.js';
 const unlabeled = (ref) => typeof ref?.imageId === 'string' && ref.imageId && !(typeof ref.label === 'string' && ref.label.trim());
 
 /** The references with catalog names filled in, or null when none changes. */
-export function labelReferences(references, owners, subjects = []) {
+function labelReferences(references, owners, subjects = []) {
   const subjectName = new Map(subjects.filter((s) => s?.ingredientId && s.name?.trim()).map((s) => [s.ingredientId, s.name.trim()]));
   let changed = false;
   const next = (references || []).map((ref) => {
