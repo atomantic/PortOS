@@ -157,7 +157,7 @@ describe('earliest holder of a pre-upgrade collection image', () => {
     expect(await reconcileMediaOrigins('image')).toBe(0); // b has not reported
     await recordPeerHoldings('b', 'image', 'imageLibrary', { mtimes: { 'lib1.png': T }, checked: ['lib1.png'] });
     expect(await reconcileMediaOrigins('image')).toBe(0); // tie
-    await recordPeerHoldings('b', 'image', 'imageLibrary', { mtimes: { 'lib1.png': T + 2 * DAY }, checked: ['lib1.png'] });
+    await recordPeerHoldings('b', 'image', 'imageLibrary', { mtimes: {}, checked: [], complete: true }); // b lists its whole library and lacks the image
     expect(await reconcileMediaOrigins('image')).toBe(1);
     expect(JSON.parse(await readFile(join(PATHS.images, 'lib1.metadata.json'), 'utf8')).originInstanceId).toBe('me');
   });

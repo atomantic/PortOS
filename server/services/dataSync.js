@@ -968,7 +968,8 @@ export async function getHostedMediaInventory(category = 'videoHistory', kind = 
   return { version: 1, filenames, checked, mtimes, portosMeta: await buildPortosMeta() };
 }
 
-// Unlike the collection inventory, this lists every gallery image on disk. Older peers 404 it.
+// Unlike the collection inventory, this lists every gallery image on disk, so a name
+// absent from it is genuinely not held (`complete`). Older peers 404 it.
 export async function getImageLibraryInventory() {
   const entries = await readdir(PATHS.images, { withFileTypes: true }).catch((err) => {
     if (err.code === 'ENOENT') return [];
@@ -980,7 +981,7 @@ export async function getImageLibraryInventory() {
     const info = await stat(join(PATHS.images, name)).catch(() => null);
     if (info) mtimes[name] = info.mtimeMs;
   }
-  return { version: 1, filenames, checked: filenames, mtimes, portosMeta: await buildPortosMeta() };
+  return { version: 1, filenames, checked: filenames, complete: true, mtimes, portosMeta: await buildPortosMeta() };
 }
 
 async function applyVideoHistoryRemote(remoteData, source) {
@@ -1563,7 +1564,7 @@ export async function applyRemote(category, remoteData, options = {}) {
         // File times only: a whole-library listing must not drive host-mode reconciliation.
         if (kind === 'image' && category === 'mediaCollections' && isPlainObject(remoteData.mtimes)) {
           const { recordPeerHoldings, reconcileMediaOrigins } = await import('./mediaOriginReconcile.js');
-          await recordPeerHoldings(peer.instanceId, 'image', 'imageLibrary', { mtimes: remoteData.mtimes, checked: remoteData.checked });
+          await recordPeerHoldings(peer.instanceId, 'image', 'imageLibrary', { mtimes: remoteData.mtimes, checked: remoteData.checked, complete: remoteData.complete === true });
           await reconcileMediaOrigins('image');
         }
       } else if (kind === 'video' || category === 'mediaCollections') {
