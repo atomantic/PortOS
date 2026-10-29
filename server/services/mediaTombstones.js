@@ -2,7 +2,15 @@
  * Media tombstones — durable record of deliberate video/image deletes so a
  * peer that still holds the file cannot resurrect it on the next union sync.
  * Video tombstones key on the row `id`; image tombstones on the filename.
- * Persists to data/media-tombstones.json as `{ version, video: [], image: [] }`.
+ * Persists to data/media-tombstones.json as `{ version, video: [], image: [] }`,
+ * plus a machine-local `inFlight` section while a local delete is underway.
+ *
+ * In-flight: a local delete records its tombstone before trashing the files
+ * (crash safety) but the trash can still fail and withdraw it. Until the trash
+ * commits, the tombstone filters rows HERE but is never exported (snapshot,
+ * library manifest, delete response): a peer that merged a delete that never
+ * happened would hide the owner's still-present row forever (#14088). A marker
+ * left by a crash is settled at boot from file presence (mediaRestoreTombstones.js).
  */
 import { join } from 'path';
 import { PATHS, readJSONFile, atomicWrite } from '../lib/fileUtils.js';
@@ -35,28 +43,114 @@ function assertKind(kind) {
 async function readStore() {
   const raw = await readJSONFile(FILE(), null, { strict: true });
   const src = isPlainObject(raw) ? raw : {};
+  const inFlight = isPlainObject(src.inFlight) ? src.inFlight : {};
   return {
     version: SCHEMA_VERSION,
     video: normalizeTombstones(src.video, KEY_FIELD),
     image: normalizeTombstones(src.image, KEY_FIELD),
+    inFlight: {
+      video: normalizeTombstones(inFlight.video, KEY_FIELD),
+      image: normalizeTombstones(inFlight.image, KEY_FIELD),
+    },
   };
 }
 
-const writeStore = (store) => atomicWrite(FILE(), store);
+const stampOf = (t) => `${t[KEY_FIELD]}@${t.deletedAt}`;
+
+// A marker only means something while its exact tombstone is stored: one a
+// newer (peer) delete replaced, or a clear removed, is dropped.
+function inFlightStamps(store, kind) {
+  const live = new Set(store[kind].map(stampOf));
+  return store.inFlight[kind].filter((t) => live.has(stampOf(t)));
+}
+
+function writeStore(store) {
+  const inFlight = {};
+  for (const kind of KINDS) {
+    const marks = inFlightStamps(store, kind);
+    if (marks.length > 0) inFlight[kind] = marks;
+  }
+  const out = { version: store.version, video: store.video, image: store.image };
+  return atomicWrite(FILE(), Object.keys(inFlight).length > 0 ? { ...out, inFlight } : out);
+}
+
+function assertKey(kind, key) {
+  if (typeof key !== 'string' || key === '') {
+    throw new Error(`A ${kind} tombstone needs a non-empty string key`);
+  }
+}
 
 // A delete that cannot be recorded must fail rather than look recorded: the
 // caller would trash the file with nothing stopping a peer from restoring it.
 export function recordMediaTombstone(kind, key, deletedAt) {
   assertKind(kind);
-  if (typeof key !== 'string' || key === '') {
-    throw new Error(`A ${kind} tombstone needs a non-empty string key`);
-  }
+  assertKey(kind, key);
   return queueWrite(async () => {
     const store = await readStore();
     store[kind] = recordTombstone(store[kind], key, { keyField: KEY_FIELD, deletedAt, limit: KIND_LIMITS[kind] });
     await writeStore(store);
     return store[kind].find((t) => t[KEY_FIELD] === key) ?? null;
   });
+}
+
+/**
+ * Record the tombstone of a local delete that has not committed yet: it
+ * filters incoming copies here at once, but stays out of every export until
+ * commitMediaTombstone. Withdraw a failed delete with clearMediaTombstone and
+ * the returned `deletedAt`. Resolves the recorded tombstone.
+ */
+export function beginMediaTombstone(kind, key) {
+  assertKind(kind);
+  assertKey(kind, key);
+  return queueWrite(async () => {
+    const store = await readStore();
+    store[kind] = recordTombstone(store[kind], key, { keyField: KEY_FIELD, limit: KIND_LIMITS[kind] });
+    const tombstone = store[kind].find((t) => t[KEY_FIELD] === key) ?? null;
+    if (tombstone) {
+      store.inFlight[kind] = [...store.inFlight[kind].filter((t) => t[KEY_FIELD] !== key), tombstone];
+    }
+    await writeStore(store);
+    return tombstone;
+  });
+}
+
+/** The delete committed: its tombstone becomes exportable. Resolves true when a marker was removed. */
+export function commitMediaTombstone(kind, tombstone) {
+  assertKind(kind);
+  return queueWrite(async () => {
+    const store = await readStore();
+    const stamp = stampOf(tombstone);
+    const kept = store.inFlight[kind].filter((t) => stampOf(t) !== stamp);
+    if (kept.length === store.inFlight[kind].length) return false;
+    store.inFlight[kind] = kept;
+    await writeStore(store);
+    return true;
+  });
+}
+
+// Retry delays for a commit that could not be written, capped at the last.
+const COMMIT_RETRY_DELAYS_MS = [5_000, 30_000, 120_000, 300_000];
+
+/**
+ * Commit a local delete whose files are already in the Trash. Never rejects:
+ * the delete happened, so failing it would strand a fileless row. A failed
+ * write is retried in the background until it lands, so the delete reaches
+ * snapshots without waiting for a restart; the boot pass still settles a
+ * marker a crash leaves before then.
+ */
+export function commitLocalDeleteTombstone(kind, tombstone) {
+  return commitWithRetry(kind, tombstone, 0);
+}
+
+async function commitWithRetry(kind, tombstone, attempt) {
+  try {
+    await commitMediaTombstone(kind, tombstone);
+    if (attempt > 0) console.log(`✅ ${kind} ${tombstone.key} delete record committed after ${attempt} retr${attempt === 1 ? 'y' : 'ies'}`);
+  } catch (err) {
+    const delay = COMMIT_RETRY_DELAYS_MS[Math.min(attempt, COMMIT_RETRY_DELAYS_MS.length - 1)];
+    console.error(`❌ ${kind} ${tombstone.key} delete record left in flight (retrying in ${delay / 1000}s): ${err.message}`);
+    setTimeout(() => { void commitWithRetry(kind, tombstone, attempt + 1); }, delay).unref?.();
+  }
 }
 
 // Undo a tombstone recorded for a delete that then failed, or retire one the
@@ -75,9 +169,24 @@ export function clearMediaTombstone(kind, key, { deletedAt = null } = {}) {
   });
 }
 
+/** Every tombstone of `kind`, in-flight ones included: the set that filters rows on this machine. */
 export async function listMediaTombstones(kind) {
   assertKind(kind);
   return (await readStore())[kind];
+}
+
+/** The tombstones a peer may receive: those of committed deletes only. */
+export async function listExportableMediaTombstones(kind) {
+  assertKind(kind);
+  const store = await readStore();
+  const pending = new Set(inFlightStamps(store, kind).map(stampOf));
+  return store[kind].filter((t) => !pending.has(stampOf(t)));
+}
+
+/** Tombstones of local deletes that have not committed (a crash leaves these behind). */
+export async function listInFlightMediaTombstones(kind) {
+  assertKind(kind);
+  return inFlightStamps(await readStore(), kind);
 }
 
 export function mergeMediaTombstones(kind, remote) {

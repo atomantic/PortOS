@@ -21,8 +21,11 @@ vi.mock('../mediaAssetIndex/index.js', () => ({
 }));
 vi.mock('../../lib/pythonSetup.js', () => ({ resolveFlux2Python: () => null, FLUX2_VENV_DEFAULT: '/fake/venv/bin/python3' }));
 vi.mock('../instanceIdentity.js', async importOriginal => ({ ...(await importOriginal()), getInstanceId: vi.fn(async () => 'local-inst') }));
-// Trash moves into a fixture-owned bin, never the host Trash.
+// Trash moves into a fixture-owned bin, never the host Trash. `trashHold`
+// lets a test hold the move open or fail it.
+let trashHold = null;
 vi.mock('../../lib/nativeTrash.js', () => ({ moveToNativeTrash: async paths => {
+  if (trashHold) await trashHold();
   const { rename, mkdir } = await vi.importActual('fs/promises');
   const bin = join(tempRoot, 'trash-bin');
   await mkdir(bin, { recursive: true });
@@ -82,6 +85,7 @@ beforeEach(() => {
   rmSync(PATHS.videos, { recursive: true, force: true });
   rmSync(join(PATHS.data, 'media-tombstones.json'), { force: true });
   vi.mocked(peerFetch).mockReset();
+  trashHold = null;
 });
 afterAll(() => { rmSync(tempRoot, { recursive: true, force: true }); });
 
@@ -347,6 +351,43 @@ describe('a held image without an origin', () => {
 });
 
 describe('library manifest tombstones', () => {
+  // #14088: a peer sweeping while the files are still being trashed must not
+  // receive a delete that a failed trash would then withdraw.
+  it('advertises a delete only once its trash commits', async () => {
+    seedImage('fading.png');
+    // Warm the sidecar hash cache first: computing it takes the image's sidecar
+    // queue, which the delete holds for as long as its trash runs.
+    await buildMediaLibraryManifest({ tombstones: true });
+    let release;
+    let started;
+    const trashing = new Promise((resolve) => { started = resolve; });
+    trashHold = () => new Promise((resolve) => { release = resolve; started(); });
+    const deleting = deleteImage('fading.png');
+    try {
+      await trashing;
+      const during = await buildMediaLibraryManifest({ tombstones: true });
+      expect(during.tombstones).toBeUndefined();
+      expect(during.assets.map((a) => a.filename)).toContain('fading.png');
+    } finally {
+      release();
+      await deleting;
+    }
+    const after = await buildMediaLibraryManifest({ tombstones: true });
+    expect(after.tombstones).toEqual([{ key: 'fading.png', deletedAt: expect.any(String) }]);
+  });
+
+  it('a failed trash leaves no delete to advertise and the image still listed', async () => {
+    seedImage('stuck.png');
+    trashHold = async () => { throw Object.assign(new Error('EACCES'), { code: 'EACCES' }); };
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await expect(deleteImage('stuck.png')).rejects.toMatchObject({ code: 'MEDIA_TRASH_FAILED' });
+    err.mockRestore();
+    const manifest = await buildMediaLibraryManifest({ tombstones: true });
+    expect(manifest.tombstones).toBeUndefined();
+    expect(manifest.assets.map((a) => a.filename)).toContain('stuck.png');
+    expect(await tombstonedKeys()).toEqual([]);
+  });
+
   it('advertises image deletes only to a receiver that asks, and only then changes the hash', async () => {
     seedImage('present.png');
     const before = await buildMediaLibraryManifest({ tombstones: true });

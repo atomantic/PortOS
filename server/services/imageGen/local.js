@@ -49,7 +49,7 @@ import { usesDiffusersRunner, flux2Bf16BaseRepo } from '../../lib/runners.js';
 import { weaveLoraTriggers } from '../../lib/loraTriggers.js';
 import { provenanceForRender } from '../../lib/assetProvenance.js';
 import { registerGallerySha256Writer } from '../../lib/assetHash.js';
-import { recordMediaTombstone, clearMediaTombstone } from '../mediaTombstones.js';
+import { beginMediaTombstone, commitLocalDeleteTombstone, clearMediaTombstone } from '../mediaTombstones.js';
 import { withLocalImageOrigin } from './imageRecords.js';
 import { readImageSidecar, refreshImageIndex, sidecarEditQueue, editImageSidecar } from './sidecarStore.js';
 import { readTriggerWordsByFilename, readLoraLicensesByFilename } from '../loras.js';
@@ -1500,8 +1500,9 @@ export async function deleteImage(filename, { fromRemoteTombstone = false } = {}
     const { metadata } = await readImageSidecar(filename);
     record = { filename, originInstanceId: metadata.originInstanceId };
     // Record BEFORE trashing: a crash between the two must never leave a
-    // deleted image without its tombstone. Undo if the trash itself fails.
-    if (!fromRemoteTombstone) tombstone = await recordMediaTombstone('image', filename);
+    // deleted image without its tombstone. It stays in flight (unexported)
+    // until the trash commits, and is withdrawn if the trash fails (#14088).
+    if (!fromRemoteTombstone) tombstone = await beginMediaTombstone('image', filename);
     try {
       await trashFiles([
         join(PATHS.images, filename),
@@ -1510,9 +1511,10 @@ export async function deleteImage(filename, { fromRemoteTombstone = false } = {}
         join(PATHS.imageThumbnails, filename.replace(/\.png$/i, '.webp')),
       ]);
     } catch (err) {
-      if (!fromRemoteTombstone) await clearMediaTombstone('image', filename);
+      if (tombstone) await clearMediaTombstone('image', filename, { deletedAt: tombstone.deletedAt });
       throw err;
     }
+    if (tombstone) await commitLocalDeleteTombstone('image', tombstone);
     // trashFiles verifies removal before derived records can be retired.
     await import('../mediaAssetIndex/index.js')
       .then((m) => m.unindexImage(filename))

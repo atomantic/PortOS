@@ -7,7 +7,7 @@ import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js'
 import { safeUnder } from '../../lib/ffmpeg.js';
 import { mutateVideoHistory, HISTORY_UNCHANGED } from './history.js';
 import { extendMasterPath } from './extendMaster.js';
-import { recordMediaTombstone, clearMediaTombstone } from '../mediaTombstones.js';
+import { beginMediaTombstone, commitLocalDeleteTombstone, clearMediaTombstone } from '../mediaTombstones.js';
 
 export async function updateHistoryItemPrompt(id, prompt) {
   let result;
@@ -75,14 +75,16 @@ export async function deleteHistoryItem(id, { forgetInMusicVideos = true, fromRe
       // Evaluation frames are derived; include all supported frame slots.
       for (let i = 1; i <= 9; i++) files.push(safeUnder(PATHS.videoThumbnails, `${id}-f${i}.jpg`));
       // Record BEFORE trashing: a crash between the two must never leave a
-      // deleted row without its tombstone. Undo if the trash itself fails.
-      if (!fromRemoteTombstone) tombstone = await recordMediaTombstone('video', id);
+      // deleted row without its tombstone. It stays in flight (unexported)
+      // until the trash commits, and is withdrawn if the trash fails (#14088).
+      if (!fromRemoteTombstone) tombstone = await beginMediaTombstone('video', id);
       try {
         await trashFiles(files);
       } catch (err) {
-        if (!fromRemoteTombstone) await clearMediaTombstone('video', id);
+        if (tombstone) await clearMediaTombstone('video', id, { deletedAt: tombstone.deletedAt });
         throw err;
       }
+      if (tombstone) await commitLocalDeleteTombstone('video', tombstone);
       return history.filter(entry => entry.id !== id);
     });
     if (skipped) return { ok: false, skipped: true };

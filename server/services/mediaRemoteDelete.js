@@ -697,8 +697,8 @@ export async function executePeerMediaDelete(senderPeerId, { kind, key }) {
   if (!(await media.getRow(key))) throw notHeld();
   await media.deleteHere(key).catch((err) => { throw err?.code === 'NOT_FOUND' ? notHeld() : err; });
   await dropEntriesFor(kind, key);
-  const { listMediaTombstones } = await import('./mediaTombstones.js');
-  const tombstone = (await listMediaTombstones(kind)).find((t) => t.key === key) ?? null;
+  const { listExportableMediaTombstones } = await import('./mediaTombstones.js');
+  const tombstone = (await listExportableMediaTombstones(kind)).find((t) => t.key === key) ?? null;
   console.log(`🗑️ ${media.label} ${key} deleted at the request of ${peerLabel(peer)}`);
   return { ok: true, tombstone };
 }

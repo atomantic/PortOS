@@ -42,7 +42,7 @@ import { mutateVideoHistory, HISTORY_UNCHANGED, videoRowLiveStamp } from './vide
 import { listHostedEntries, reconcileHostedMedia } from './peerHostedMedia.js';
 import { sanitizeAssetFilename } from './sharing/buckets.js';
 import { authorizeRemoteMediaTombstone } from './mediaTombstoneAuthorization.js';
-import { listMediaTombstones, mergeMediaTombstones, clearMediaTombstone } from './mediaTombstones.js';
+import { listMediaTombstones, listExportableMediaTombstones, mergeMediaTombstones, clearMediaTombstone } from './mediaTombstones.js';
 import { emitMediaHistoryChanged } from './peerSyncEventBus.js';
 import { referenceCollectionAssetManifest } from './sharing/peerSyncAssets.js';
 import { mergeMediaCollectionsFromSync, listCollections, itemKey } from './mediaCollections.js';
@@ -934,7 +934,8 @@ async function getVideoHistorySnapshot() {
   // resurrect it. Sorted by key for a deterministic checksum. The key is OMITTED
   // when empty so a peer with no deletes keeps the exact pre-tombstone checksum
   // (an older peer that ignores `tombstones` would otherwise never converge).
-  const tombstones = [...(await listMediaTombstones('video'))].sort((a, b) => a.key.localeCompare(b.key));
+  // A delete still trashing its files is left out until it commits (#14088).
+  const tombstones = [...(await listExportableMediaTombstones('video'))].sort((a, b) => a.key.localeCompare(b.key));
   if (tombstones.length > 0) data.tombstones = tombstones;
   return { data, checksum: computeChecksum(data) };
 }
