@@ -165,9 +165,11 @@ async function fetchHostedInventory(peer, category, kind) {
     return readPeerBody(response, 'json', { maxBytes: PEER_BODY_DEFAULT_MAX_BYTES }).catch(() => null);
   }
   const { checked } = await dataSync.getHostedMediaInventory(category, kind);
+  // Whole literals so the peer-surface guard (apiAccessPolicy.test.js) can see both routes.
+  const mediaRoot = kind === 'image' ? '/data/images/' : '/data/videos/';
   const found = await mapWithConcurrency(checked, 4, async (filename) => {
     const res = await withAbortTimeout(FETCH_TIMEOUT_MS, (signal) => peerFetch(
-      `${peerBaseUrl(peer)}/data/${kind === 'image' ? 'images' : 'videos'}/${encodeURIComponent(filename)}`, { method: 'HEAD', signal }, peer,
+      `${peerBaseUrl(peer)}${mediaRoot}${encodeURIComponent(filename)}`, { method: 'HEAD', signal }, peer,
     )).catch(() => null);
     return res?.ok && res.headers?.get('x-portos-media-location') !== 'remote' ? filename : null;
   });
