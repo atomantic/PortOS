@@ -265,9 +265,11 @@ describe('Cast & Sets direct edits', () => {
     expect(() => applyCastAndSetsDirectionEdits(previous, { looks, tests: [{ index: 1, look: 'summer' }] }, { sections }))
       .toThrow(/ambiguous/i);
     const oneRenamed = [looks[0], { originalName: 'SUMMER', name: 'SUMMER', description: 'hat' }];
+    expect(() => applyCastAndSetsDirectionEdits(previous, { looks: oneRenamed, tests: [{ index: 1, look: 'Summer' }] }, { sections }))
+      .toThrow(/ambiguous/i);
     const retained = applyCastAndSetsDirectionEdits(previous, { looks: oneRenamed,
-      tests: [{ index: 1, look: 'Summer' }, { index: 2, look: 'SUMMER' }] }, { sections });
-    expect(retained.direction.tests.map((test) => test.look)).toEqual(['Rain', 'SUMMER']);
+      tests: [{ index: 1, look: 'SUMMER' }, { index: 2, look: 'SUMMER' }] }, { sections });
+    expect(retained.direction.tests.map((test) => test.look)).toEqual(['SUMMER', 'SUMMER']);
   });
 
   it('replaces present fields, keeps absent ones, clears on empty, and reports what changed', () => {

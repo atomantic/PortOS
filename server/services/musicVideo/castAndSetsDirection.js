@@ -804,11 +804,18 @@ export function applyCastAndSetsDirectionEdits(previous, edits, { sections = [] 
   if (!procedural && Array.isArray(edits?.tests) && edits.tests.length) {
     const tests = edits.tests.map((test) => {
       const name = test.look?.trim();
-      let renamed = name && !currentLookNamesExact.has(name) ? renamedLooks.get(name) : null;
-      if (name && !renamed && !currentLookNames.has(name.toLowerCase())) {
+      let renamed = null;
+      if (name && !currentLookNamesExact.has(name)) {
         const matches = [...renamedLooks].filter(([original]) => original.toLowerCase() === name.toLowerCase());
-        if (matches.length > 1) throw new ServerError('Look reference is ambiguous', { status: 422, code: 'CAST_SETS_EDIT_INVALID' });
-        renamed = matches[0]?.[1];
+        if (currentLookNames.has(name.toLowerCase())) {
+          if (matches.some(([, target]) => target && target.toLowerCase() !== name.toLowerCase())) {
+            throw new ServerError('Look reference is ambiguous', { status: 422, code: 'CAST_SETS_EDIT_INVALID' });
+          }
+        } else {
+          renamed = renamedLooks.get(name);
+          if (!renamed && matches.length > 1) throw new ServerError('Look reference is ambiguous', { status: 422, code: 'CAST_SETS_EDIT_INVALID' });
+          renamed ||= matches[0]?.[1];
+        }
       }
       return { ...test, ...(renamed && { look: renamed }), key: test.index };
     });

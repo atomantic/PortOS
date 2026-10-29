@@ -146,7 +146,7 @@ export default function CastAndSetsItemActions({ item, direction, revision, proj
       if (!mounted.current || requestVersion.current !== version || currentIdentity.current !== identity) return;
       const fresh = stage?.plan?.[item.key];
       if (cardIdentity(projectId, stage?.revision, fresh) !== savedIdentity) {
-        const refreshed = await onRefresh?.();
+        const refreshed = await onRefresh?.(stage?.revision);
         if (mounted.current && requestVersion.current === version && currentIdentity.current === identity) {
           setNotice({ identity, text: refreshed ? 'This test changed. Try editing it again.' : 'This test changed. Refresh the project and try editing it again.' });
         }

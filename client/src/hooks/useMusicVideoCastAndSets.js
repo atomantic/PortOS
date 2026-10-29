@@ -57,6 +57,7 @@ export default function useMusicVideoCastAndSets({ project, replaceProject } = {
     if (!projectId) return undefined;
     let active = true;
     let pending = null;
+    let pendingMinRevision = 0;
     const applyProject = (next) => {
       snapshotRevision.current += 1;
       replaceRef.current?.(next);
@@ -75,13 +76,15 @@ export default function useMusicVideoCastAndSets({ project, replaceProject } = {
     };
     // Recover events missed while disconnected or hidden, once per transition.
     // A newer socket snapshot or a project switch wins over an in-flight read.
-    const refresh = () => {
+    const refresh = (minRevision = 0) => {
+      if (Number.isFinite(minRevision)) pendingMinRevision = Math.max(pendingMinRevision, minRevision);
       if (pending) return pending;
       const revision = snapshotRevision.current;
       pending = getMusicVideoProject(projectId, { silent: true }).then((next) => {
+        if (pendingMinRevision && (!Number.isFinite(next?.castAndSets?.revision) || next.castAndSets.revision < pendingMinRevision)) return false;
         if (active && next?.id === projectId && revision === snapshotRevision.current) { applyProject(next); return true; }
         return false;
-      }).catch(() => false).finally(() => { pending = null; });
+      }).catch(() => false).finally(() => { pending = null; pendingMinRevision = 0; });
       return pending;
     };
     refreshRef.current = { projectId, refresh };
@@ -109,7 +112,7 @@ export default function useMusicVideoCastAndSets({ project, replaceProject } = {
     };
   }, [projectId]);
 
-  const refresh = () => (refreshRef.current?.projectId === projectId ? refreshRef.current.refresh() : Promise.resolve(false));
+  const refresh = (minRevision) => (refreshRef.current?.projectId === projectId ? refreshRef.current.refresh(minRevision) : Promise.resolve(false));
 
   const call = (request, success) => {
     setBusy(true);
