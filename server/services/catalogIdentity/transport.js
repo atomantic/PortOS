@@ -3,6 +3,7 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { peerFetch, readPeerBody, derivePeerAuthToken } from '../../lib/peerHttpClient.js';
 import { peerBaseUrl } from '../../lib/peerUrl.js';
+import { isPairedPeer } from '../../lib/peerPairing.js';
 import { canonicalStringify } from '../../lib/objects.js';
 import { findPeerById, peerAllowsOutbound, peerAllowsCategoryPull } from '../sharing/peerSyncShared.js';
 import { getInstanceId, UNKNOWN_INSTANCE_ID } from '../instanceIdentity.js';
@@ -23,7 +24,7 @@ const equal = (a, b) => typeof a === 'string' && typeof b === 'string' && /^[a-f
 export async function identityPeer(instanceId) {
   const peer = await findPeerById(instanceId);
   if (!peer || peer.instanceId !== instanceId || !peerAllowsOutbound(peer)
-      || !peerAllowsCategoryPull(peer, 'catalog') || !peer.directions?.includes('inbound') || typeof peer.syncSecret !== 'string' || peer.syncSecret.length < 32) {
+      || !peerAllowsCategoryPull(peer, 'catalog') || !peer.directions?.includes('inbound') || !isPairedPeer(peer)) {
     fail('A currently paired, enabled catalog peer with outbound sharing is required', 'CATALOG_IDENTITY_PEER_FORBIDDEN', 403);
   }
   return peer;

@@ -42,6 +42,7 @@ import { normalizeFilmLook } from '../../lib/filmLook.js';
 import { stillMoveForCamera } from '../../lib/cameraMovements.js';
 import { normalizeTitleCard } from '../../lib/musicVideoTitleCard.js';
 import { normalizeStatsOutro } from '../../lib/musicVideoStatsOutro.js';
+import { normalizeCreditsOutro } from '../../lib/musicVideoCreditsOutro.js';
 import { remapTreatmentForClone, scenesFingerprint } from './treatment.js';
 import { anchorShotsToSungLyrics, carryStoryboardApproval, dropStaleStoryboardRows } from './productionReview.js';
 import { cuesSungWithin, sungLyricTextWithin } from '../../lib/musicVideoLyricAnchors.js';
@@ -184,6 +185,8 @@ export function buildProjectRecord(input, { id, now }) {
     titleCard: normalizeTitleCard(input.titleCard),
     // The cutting room floor outro after the song; null = off.
     statsOutro: normalizeStatsOutro(input.statsOutro),
+    // The film credits after the song (and after the floor); null = never set up.
+    creditsOutro: normalizeCreditsOutro(input.creditsOutro),
     // #8980 — optional pre-production treatment (brief, arc, shot direction,
     // proof checklist); null until the director starts one. See treatment.js.
     treatment: null,
@@ -311,6 +314,7 @@ export function cloneProjectRecord(source, {
     renderDependencies: null,
     // Publishing outputs and posted URLs belong to the source final render.
     ...(source.publishKit ? { publishKit: null } : {}),
+    ...(source.dcpExports ? { dcpExports: [] } : {}),
     // Finished outside PortOS describes the source's video; the new version is made here.
     ...(source.finishedOutside ? { finishedOutside: null } : {}),
     // #9010: the source's in-flight render mark is not the clone's.
@@ -396,6 +400,7 @@ export function applyProjectPatch(project, patch) {
     ...('titleCard' in patch ? { titleCard: normalizeTitleCard(patch.titleCard) } : {}),
     // The outro after the song is replaced whole; null turns it off.
     ...('statsOutro' in patch ? { statsOutro: normalizeStatsOutro(patch.statsOutro) } : {}),
+    ...('creditsOutro' in patch ? { creditsOutro: normalizeCreditsOutro(patch.creditsOutro) } : {}),
   };
   // #8988: a bed is mixed UNDER the song — the song itself can't be its bed.
   const masterTrackId = 'trackId' in patch ? patch.trackId : project.trackId;

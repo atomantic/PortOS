@@ -19,6 +19,7 @@
 import { resolve } from 'path';
 import { bindClaimBranch, releaseClaimBranch, reserveReconcileBranch, reconcileAssignedTarget, reconcileMergeTarget, claimCheckoutOwnerReason } from '../lib/claimContinuation.js';
 import { isTruthyMeta } from '../lib/metadataFlags.js';
+import { advanceCandidateLifecycle } from './releaseCandidateLifecycle.js';
 
 import { withClaimOwnershipLock, readClaimOwnershipAgents, checkoutRetirementFenceReason } from './cosClaimOwnershipState.js';
 
@@ -176,8 +177,12 @@ export async function updateReleaseCandidateOwnership(agentId, action) {
         const [{ listWorktrees }, { execGit }] = await Promise.all([import('./worktreeManager.js'), import('../lib/execGit.js')]);
         const [trees, ref] = await Promise.all([listWorktrees(repoPath), execGit(['show-ref', '--verify', '--quiet', `refs/heads/${branch}`], repoPath, { ignoreExitCode: true })]);
         if (!Array.isArray(trees) || ref.exitCode !== 1 || trees.some(tree => branchOf(tree) === branch)) return { reserved: false, reason: 'candidate-branch-not-available' };
-        state.agents[agentId] = { ...agent, metadata: { ...agent.metadata,
-          releaseCandidate: { version: 1, branch, startedAt: agent.startedAt, reservedAt: new Date().toISOString() } } };
+        const candidate = { version: 1, branch, startedAt: agent.startedAt, reservedAt: new Date().toISOString() };
+        let lifecycle;
+        try { lifecycle = advanceCandidateLifecycle(agent, 'reserved', candidate); }
+        catch { return { reserved: false, reason: 'candidate-lifecycle-conflict' }; }
+        state.agents[agentId] = { ...agent, metadata: { ...agent.metadata, releaseCandidate: candidate,
+          ...(lifecycle && { releaseCandidateLifecycle: lifecycle }) } };
       } else {
         if (!prior) return { captured: false, reason: 'candidate-reservation-missing' };
         const { captureCheckoutSeeds } = await import('./completedCheckoutEvidence.js');
@@ -186,7 +191,11 @@ export async function updateReleaseCandidateOwnership(agentId, action) {
         catch { return { captured: false, reason: 'checkout-seed-unavailable' }; }
         if (seeds.length !== 1 || seeds[0].agentId !== agentId || seeds[0].startedAt !== agent.startedAt
           || seeds[0].branch !== branch) return { captured: false, reason: 'checkout-seed-unavailable' };
-        state.agents[agentId] = { ...agent, metadata: { ...agent.metadata, checkoutSeeds: seeds } };
+        let lifecycle;
+        try { lifecycle = advanceCandidateLifecycle(agent, 'captured', prior); }
+        catch { return { captured: false, reason: 'candidate-lifecycle-conflict' }; }
+        state.agents[agentId] = { ...agent, metadata: { ...agent.metadata, checkoutSeeds: seeds,
+          ...(lifecycle && { releaseCandidateLifecycle: lifecycle }) } };
       }
       await save();
       cosEvents.emit('agent:updated', state.agents[agentId]);

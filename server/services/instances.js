@@ -21,6 +21,7 @@ import { DEFAULT_PEER_PORT } from '../lib/ports.js';
 import { peerBaseUrl } from '../lib/peerUrl.js';
 import { isPeerApiRequestAllowed } from '../lib/apiAccessPolicy.js';
 import { peerFetch, peerAuthHeaders, PEER_AUTH_HEADER } from '../lib/peerHttpClient.js';
+import { isPairedPeer, PAIR_SECRET_MIN_LENGTH } from '../lib/peerPairing.js';
 import { withAbortTimeout } from '../lib/abortTimeout.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { getSelfHost } from '../lib/peerSelfHost.js';
@@ -602,7 +603,7 @@ export async function updatePeer(id, updates, { probe = true } = {}) {
     const peer = data.peers.find(p => p.id === id);
     if (!peer) return null;
     if (updates.syncSecret !== undefined) {
-      if (updates.syncSecret !== null && (typeof updates.syncSecret !== 'string' || updates.syncSecret.length < 32 || updates.syncSecret.length > 256)) {
+      if (updates.syncSecret !== null && (typeof updates.syncSecret !== 'string' || updates.syncSecret.length < PAIR_SECRET_MIN_LENGTH || updates.syncSecret.length > 256)) {
         throw new Error('Peer sync secret must contain 32 to 256 characters');
       }
       if (updates.syncSecret !== peer.syncSecret) {
@@ -802,7 +803,7 @@ async function pairPeerSyncSecretNow(id) {
   if (!selfInstanceId || selfInstanceId === UNKNOWN_INSTANCE_ID) {
     throw new ServerError('This instance identity is not ready for peer pairing.', { status: 409, code: 'INSTANCE_IDENTITY_REQUIRED' });
   }
-  const syncSecret = typeof peer.syncSecret === 'string' && peer.syncSecret.length >= 32 && peer.peerAuthAccepted !== true
+  const syncSecret = isPairedPeer(peer) && peer.peerAuthAccepted !== true
     ? peer.syncSecret
     : crypto.randomBytes(32).toString('base64url');
   const headers = {

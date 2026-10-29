@@ -12,7 +12,7 @@ import { useModelInputPreview } from '../../hooks/useModelInputPreview';
 import { LEGACY_SHEET_VARIANT_ID, readSheetPointer, listSheetPointers } from '../../lib/sheetPointers.js';
 import { SHEET_ROLE_PREFIX } from '../../lib/creativeLibraries';
 import { formsOf, splitSheetRole } from '../../lib/catalogForms';
-import { listCatalogSheetVariants, previewCatalogSheet, renderCatalogSheet } from '../../services/apiCatalog';
+import { listCatalogSheetVariants, previewCatalogSheet, renderCatalogSheet, updateCatalogIngredientMediaLibrary } from '../../services/apiCatalog';
 
 // Universe-canon sheets live on the payload as pointers into /data/image-refs.
 // `[variant, filename]` pairs, with the legacy pointer de-duplicated against a
@@ -81,6 +81,20 @@ export function ReferenceSheetPanel({ payload, universeRef }) {
 
 const SHEET_EVENT = 'reference-sheet:changed';
 
+// One in-flight render. Binds the job's callbacks so several renders (one per
+// age/look or sheet kind) can run side by side.
+function SheetJob({ job, onFilename, onStatus }) {
+  const handleFilename = useCallback((filename) => onFilename(job, filename), [job, onFilename]);
+  const handleStatus = useCallback((status) => onStatus(job, status), [job, onStatus]);
+  return (
+    <li className="flex items-center gap-2 min-w-0">
+      <MediaJobThumb jobId={job.jobId} label="Reference sheet" size="xs"
+        onFilename={handleFilename} onStatus={handleStatus} />
+      <span className="text-xs text-gray-300 truncate">{job.label}</span>
+    </li>
+  );
+}
+
 // The Sheets tab: universe pointer sheets plus `sheet:<variant>` catalog
 // media, a variant picker, the server's preview of exactly what the render
 // sends, and Generate. The render reads the SAVED record, so Generate is gated
@@ -89,12 +103,15 @@ const SHEET_EVENT = 'reference-sheet:changed';
 // and is attached optimistically via `onSheetFile` (the server hook is
 // idempotent); a universe-linked character's render delegates to the canon
 // renderer and lands as a payload pointer, announced by `reference-sheet:changed`.
+// Renders run in the background: the form stays usable so another age/look or
+// sheet kind can start while earlier ones finish; only a duplicate of a role
+// already rendering is refused.
 // Sheets group by form: the canonical present-story form first (universe
 // pointers + `sheet:<variant>`), then each alternate age/look
 // (`sheet:<variant>@<formId>`), which always renders through the catalog path.
 export default function CatalogSheetsPanel({
   ingredientId, payload, universeRef, sheetMedia, missingMedia, onDetach,
-  blockedReason = null, savedStamp = null, onSheetFile, onPointerSheetReady,
+  blockedReason = null, savedStamp = null, onSheetFile, onPointerSheetReady, onMediaChanged,
 }) {
   const mountedRef = useMounted();
   const [variants, setVariants] = useState(null);
@@ -102,7 +119,7 @@ export default function CatalogSheetsPanel({
   const [variantId, setVariantId] = useState('');
   const [formId, setFormId] = useState(''); // '' = canonical
   const [starting, setStarting] = useState(false);
-  const [pending, setPending] = useState(null); // { jobId, role, delegated }
+  const [jobs, setJobs] = useState([]); // [{ jobId, role, delegated, label }]
   const [armedDetach, setArmedDetach] = useState(null);
 
   useEffect(() => {
@@ -130,41 +147,56 @@ export default function CatalogSheetsPanel({
     previewCatalogSheet(ingredientId, body, options).then((r) => r?.preview ?? null), [ingredientId]);
   const forms = formsOf(payload);
   const activeFormId = forms.some((f) => f.id === formId) ? formId : '';
+  const [likenessRevision, setLikenessRevision] = useState(0);
   const preview = useModelInputPreview(fetchPreview,
-    { variant: variantId, ...(activeFormId ? { formId: activeFormId } : {}), savedStamp }, { enabled: !!variantId });
+    { variant: variantId, ...(activeFormId ? { formId: activeFormId } : {}), savedStamp }, { enabled: !!variantId, revision: likenessRevision });
 
-  const jobId = pending?.jobId || null;
-  const delegated = !!pending?.delegated;
+  // Leaving an image out (e.g. a multi-age collage board) keeps it on the
+  // record but out of every likeness pick; the server applies it to both the
+  // portrait and reference rows of that file.
+  const toggleLikeness = useCallback(async (image, include) => {
+    const updated = await updateCatalogIngredientMediaLibrary(ingredientId,
+      { mediaKey: image.filename, kind: image.mediaKind, likeness: include }, { silent: true })
+      .catch((err) => { toast.error(err?.message || 'Could not update reference'); return null; });
+    if (!updated || !mountedRef.current) return;
+    setLikenessRevision((n) => n + 1);
+    onMediaChanged?.();
+  }, [ingredientId, mountedRef, onMediaChanged]);
+
+  const dropJob = useCallback((jobId) => setJobs((cur) => cur.filter((j) => j.jobId !== jobId)), []);
   useEffect(() => {
-    if (!jobId || !delegated) return undefined;
+    const delegatedJobs = jobs.filter((j) => j.delegated);
+    if (!delegatedJobs.length) return undefined;
     const onChanged = (data) => {
-      if (data?.jobId !== jobId) return;
-      setPending(null);
+      const job = delegatedJobs.find((j) => j.jobId === data?.jobId);
+      if (!job) return;
+      dropJob(data.jobId);
       if (data.status === 'ready') onPointerSheetReady?.();
-      else if (data.status === 'failed') toast.error('Sheet render finished but the sheet could not be saved');
+      else if (data.status === 'failed') toast.error(`${job.label} render finished but the sheet could not be saved`);
     };
     socket.on(SHEET_EVENT, onChanged);
     return () => { socket.off(SHEET_EVENT, onChanged); };
-  }, [jobId, delegated, onPointerSheetReady]);
+  }, [jobs, dropJob, onPointerSheetReady]);
 
-  const role = pending?.role;
-  const handleFilename = useCallback((filename) => {
-    if (!filename || delegated) return;
-    setPending(null);
-    onSheetFile?.(filename, role);
-  }, [delegated, role, onSheetFile]);
+  const handleFilename = useCallback((job, filename) => {
+    if (!filename || job.delegated) return;
+    dropJob(job.jobId);
+    onSheetFile?.(filename, job.role);
+  }, [dropJob, onSheetFile]);
 
-  const handleStatus = useCallback((status) => {
+  const handleStatus = useCallback((job, status) => {
     if (status !== 'failed' && status !== 'canceled') return;
-    setPending(null);
-    if (status === 'failed') toast.error('Sheet render failed');
-  }, []);
+    dropJob(job.jobId);
+    if (status === 'failed') toast.error(`${job.label} render failed`);
+  }, [dropJob]);
 
   const variant = (variants || []).find((v) => v.id === variantId) || null;
   const renderBlocked = blockedReason || preview.error;
+  const selectedRole = variant ? `${SHEET_ROLE_PREFIX}${variant.id}${activeFormId ? `@${activeFormId}` : ''}` : null;
+  const selectedRendering = !!selectedRole && jobs.some((j) => j.role === selectedRole);
 
   const handleGenerate = async () => {
-    if (!variant || renderBlocked) return;
+    if (!variant || renderBlocked || starting || selectedRendering) return;
     setStarting(true);
     const form = forms.find((f) => f.id === activeFormId) || null;
     const queued = await renderCatalogSheet(ingredientId, { variant: variant.id, ...(form ? { formId: form.id } : {}) }, { silent: true })
@@ -175,12 +207,13 @@ export default function CatalogSheetsPanel({
       if (queued) toast.error('Sheet render returned no job');
       return;
     }
-    setPending({
+    const what = form ? `${variant.label} · ${form.label}` : variant.label;
+    setJobs((cur) => [...cur.filter((j) => j.jobId !== queued.jobId), {
       jobId: queued.jobId,
       role: queued.role || `${SHEET_ROLE_PREFIX}${queued.variant || variant.id}${form ? `@${form.id}` : ''}`,
       delegated: queued.delegatedTo === 'universe',
-    });
-    const what = form ? `${variant.label} · ${form.label}` : variant.label;
+      label: what,
+    }]);
     toast.success(queued.delegatedTo === 'universe'
       ? `Rendering ${what} on the linked universe…`
       : `Rendering ${what}…`);
@@ -206,7 +239,6 @@ export default function CatalogSheetsPanel({
       .map((k) => ({ id: k, title: formLabel(k), pointer: [], items: sheetsByForm.get(k) })),
   ];
   const universePath = universeCanonPath(universeRef);
-  const busy = starting || !!jobId;
 
   return (
     <section className="bg-port-card border border-port-border rounded-lg p-4 space-y-3">
@@ -232,7 +264,7 @@ export default function CatalogSheetsPanel({
             {forms.length > 0 && (
               <div className="min-w-0 flex-1 max-w-sm">
                 <label htmlFor="catalog-sheet-form" className="block text-xs uppercase tracking-wider text-gray-500 mb-1">Age or look</label>
-                <select id="catalog-sheet-form" value={activeFormId} onChange={(e) => setFormId(e.target.value)} disabled={busy}
+                <select id="catalog-sheet-form" value={activeFormId} onChange={(e) => setFormId(e.target.value)}
                   className="w-full px-2 py-2 bg-port-bg border border-port-border rounded text-sm text-white focus:outline-none focus:border-port-accent">
                   <option value="">Canonical · present story</option>
                   {forms.map((f) => <option key={f.id} value={f.id}>{f.label || 'Unnamed'}</option>)}
@@ -241,25 +273,29 @@ export default function CatalogSheetsPanel({
             )}
             <div className="min-w-0 flex-1 max-w-sm">
               <label htmlFor="catalog-sheet-variant" className="block text-xs uppercase tracking-wider text-gray-500 mb-1">Sheet kind</label>
-              <select id="catalog-sheet-variant" value={variantId} onChange={(e) => setVariantId(e.target.value)} disabled={busy}
+              <select id="catalog-sheet-variant" value={variantId} onChange={(e) => setVariantId(e.target.value)}
                 className="w-full px-2 py-2 bg-port-bg border border-port-border rounded text-sm text-white focus:outline-none focus:border-port-accent">
                 {variants.map((v) => <option key={v.id} value={v.id}>{v.label}</option>)}
               </select>
             </div>
-            <button type="button" onClick={handleGenerate} disabled={busy || !!renderBlocked || !variant}
-              title={renderBlocked || undefined}
+            <button type="button" onClick={handleGenerate} disabled={starting || selectedRendering || !!renderBlocked || !variant}
+              title={renderBlocked || (selectedRendering ? 'This sheet is already rendering' : undefined)}
               className="inline-flex items-center gap-1.5 min-h-[40px] px-3 py-2 rounded bg-port-accent hover:bg-port-accent/90 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium">
-              {busy ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <Sparkles size={14} aria-hidden="true" />}
-              {jobId ? 'Rendering…' : 'Generate sheet'}
+              {starting || selectedRendering ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <Sparkles size={14} aria-hidden="true" />}
+              {selectedRendering ? 'Rendering…' : 'Generate sheet'}
             </button>
-            {jobId && (
-              <MediaJobThumb jobId={jobId} label="Reference sheet" size="xs"
-                onFilename={handleFilename} onStatus={handleStatus} />
-            )}
           </div>
+          {jobs.length > 0 && (
+            <div aria-label="Sheets rendering">
+              <p className="text-xs uppercase tracking-wider text-gray-500 mb-1">Rendering {jobs.length}</p>
+              <ul className="flex flex-wrap gap-3">
+                {jobs.map((job) => <SheetJob key={job.jobId} job={job} onFilename={handleFilename} onStatus={handleStatus} />)}
+              </ul>
+            </div>
+          )}
           {variant?.description && <p className="text-xs text-gray-400">{variant.description}</p>}
           {blockedReason && <p className="text-xs text-port-warning" role="status">{blockedReason}</p>}
-          <ModelInputPreview preview={preview} prompt="" />
+          <ModelInputPreview preview={preview} prompt="" onToggleLikeness={onMediaChanged ? toggleLikeness : undefined} />
         </div>
       )}
 

@@ -72,6 +72,7 @@ vi.mock('./memoryBackend.js', () => ({
   getBackendName: vi.fn(() => 'postgres')
 }));
 vi.mock('./dataSync.js', () => ({
+  getHostedMediaInventory: vi.fn(),
   getSnapshot: vi.fn().mockResolvedValue({ data: {}, checksum: 'abc' }),
   getChecksum: vi.fn().mockResolvedValue({ checksum: 'abc' }),
   // null = "this category serves no manifest" (every category but `usage`),
@@ -1427,6 +1428,49 @@ describe('syncOrchestrator', () => {
         checksum: 'remote', senderPortosVersion: '2.7.0', localSchemaVersions: PORTOS_SCHEMA_VERSIONS,
       }));
     });
+  });
+
+  it.each([['videoHistory', 'video'], ['mediaCollections', 'image']])('refreshes %s ownership on matching checksums and ignores unavailable peers', async (category, kind) => {
+    const dataSync = await import('./dataSync.js');
+    dataSync.getSupportedCategories.mockReturnValue([category]);
+    dataSync.applyRemote.mockResolvedValue({ applied: false, count: 0 });
+    readJSONFile.mockImplementation(async () => ({ 'peer-inst-1': { checksums: { [category]: 'same' } } }));
+    const peer = { ...mockPeer, mediaSyncMode: 'host', syncCategories: { [category]: true } };
+    const evidence = { version: 1, filenames: ['clip.mp4'], checked: ['clip.mp4'], portosMeta: { schemaVersions: {} } };
+    mockFetch.mockImplementation(async (url) => {
+      if (url.includes(`/${category}/checksum`)) return { ok: true, json: async () => ({ checksum: 'same' }) };
+      if (url.includes(`/${category}/${kind}-inventory`)) return { ok: true, json: async () => evidence };
+      return { ok: false };
+    });
+    await syncWithPeer(peer);
+    expect(dataSync.applyRemote).toHaveBeenCalledWith(category, evidence, expect.objectContaining({ peerId: peer.instanceId, inventory: true, inventoryKind: kind }));
+    expect(mockFetch.mock.calls.some(([url]) => url.includes(`/${category}/snapshot`))).toBe(false);
+    dataSync.applyRemote.mockClear();
+    mockFetch.mockImplementation(async (url) => url.includes(`/${category}/checksum`)
+      ? { ok: true, json: async () => ({ checksum: 'same' }) } : { ok: false });
+    await syncWithPeer(peer);
+    expect(dataSync.applyRemote).not.toHaveBeenCalled();
+    dataSync.getSupportedCategories.mockReturnValue(['goals', 'character', 'digitalTwin', 'meatspace']);
+  });
+
+  it.each([['videoHistory', 'video'], ['mediaCollections', 'image']])('verifies older %s hosts with HEAD and rejects proxied bytes', async (category, kind) => {
+    const dataSync = await import('./dataSync.js');
+    dataSync.getSupportedCategories.mockReturnValue([category]);
+    dataSync.getHostedMediaInventory.mockResolvedValue({ checked: ['local.mp4', 'relayed.mp4', 'offline.mp4'] });
+    dataSync.applyRemote.mockResolvedValue({ applied: false, count: 0 });
+    readJSONFile.mockImplementation(async () => ({ 'peer-inst-1': { checksums: { [category]: 'same' } } }));
+    mockFetch.mockImplementation(async (url) => {
+      if (url.includes('/checksum')) return { ok: true, json: async () => ({ checksum: 'same' }) };
+      if (url.includes(`/${kind}-inventory`)) return { ok: false, status: 404 };
+      if (url.endsWith('/local.mp4')) return { ok: true, headers: new Headers() };
+      if (url.endsWith('/offline.mp4')) throw new Error('offline');
+      if (url.endsWith('/relayed.mp4')) return { ok: true, headers: new Headers({ 'X-PortOS-Media-Location': 'remote' }) };
+      return { ok: false };
+    });
+    await syncWithPeer({ ...mockPeer, mediaSyncMode: 'host', syncCategories: { [category]: true } });
+    expect(dataSync.applyRemote).toHaveBeenCalledWith(category, { version: 1, filenames: ['local.mp4'], checked: ['local.mp4'] }, expect.objectContaining({ inventory: true, inventoryKind: kind }));
+    expect(mockFetch.mock.calls.some(([url, options]) => url.includes(`/data/${kind === 'image' ? 'images' : 'videos'}/local.mp4`) && options.method === 'HEAD')).toBe(true);
+    dataSync.getSupportedCategories.mockReturnValue(['goals', 'character', 'digitalTwin', 'meatspace']);
   });
 
   // #5759: `usage` is always dirty AND a map of per-instance slots, so the

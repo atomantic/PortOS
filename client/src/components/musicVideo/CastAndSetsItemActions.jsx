@@ -1,6 +1,8 @@
-import { useId, useState } from 'react';
+import { useId, useRef, useState } from 'react';
 import { Pencil, Plus, RotateCcw, Trash2 } from 'lucide-react';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair.jsx';
+import useMounted from '../../hooks/useMounted.js';
+import { getMusicVideoCastAndSets } from '../../services/apiMusicVideo.js';
 
 const buttonClass = 'flex min-h-[44px] items-center gap-1 rounded border border-port-border px-2 py-1 text-xs sm:min-h-0 disabled:opacity-50';
 const fieldClass = 'w-full min-w-0 rounded border border-port-border bg-port-bg px-2 py-1.5 text-sm';
@@ -13,17 +15,27 @@ const TEST_FIELDS = [['action', 'What happens in the frame'], ['caption', 'Capti
 const LONG = new Set(['description', 'action', 'face', 'wardrobe']);
 
 const lines = (text) => String(text || '').split('\n').map((line) => line.trim()).filter(Boolean);
+const cardIdentity = (projectId, revision, item) => JSON.stringify([projectId, revision, item?.key, item?.kind,
+  item?.testIndex, item?.setId, item?.label, item?.prompt, item?.deps, item?.refKeys]);
+
+// A select field: `[key, label, options]` with options as `[value, text]` pairs ('' = none).
+const subjectField = (subjects, current) => ['subjectId', 'Catalog reference for this age',
+  [['', 'None: draw from the main sheet'], ...subjects.map((s) => [s.id, s.castForm?.label ? `${s.name} (${s.castForm.label})` : s.name]),
+    ...(current && !subjects.some((s) => s.id === current) ? [[current, 'A character no longer cast in this video']] : [])]];
+const formField = (forms) => ['formId', 'Age shown', [['', 'Present day'], ...forms.map((f) => [f.id, f.label])]];
 
 /**
  * What one card on the check-in edits, as `{ fields | list, values, toEdits, removeEdits }`:
  * the direction text the image is drawn from, and the PATCH body that saves or removes it.
  */
-function editorFor(item, direction, adding = false) {
+function editorFor(item, direction, adding = false, subjects = []) {
   const p = direction?.protagonist || {};
   const forms = p.forms || [];
+  const formFields = (current) => (subjects.length || current ? [...FORM_FIELDS, subjectField(subjects, current)] : FORM_FIELDS);
   if (item.kind === 'character') {
     if (adding) {
-      return { fields: FORM_FIELDS, values: { label: '', age: '', description: '', hair: '', wardrobe: '' },
+      const fields = formFields('');
+      return { fields, values: Object.fromEntries(fields.map(([key]) => [key, ''])),
         toEdits: (v) => ({ protagonist: { forms: [...forms, v] } }) };
     }
     return { fields: PROTAGONIST_FIELDS, values: Object.fromEntries(PROTAGONIST_FIELDS.map(([key]) => [key, p[key] || ''])),
@@ -39,7 +51,8 @@ function editorFor(item, direction, adding = false) {
   }
   if (item.kind === 'form') {
     const form = forms.find((f) => f.id === item.formId) || {};
-    return { fields: FORM_FIELDS, values: Object.fromEntries(FORM_FIELDS.map(([key]) => [key, form[key] || ''])),
+    const fields = formFields(form.subjectId);
+    return { fields, values: Object.fromEntries(fields.map(([key]) => [key, form[key] || ''])),
       toEdits: (v) => ({ protagonist: { forms: forms.map((f) => (f.id === form.id ? { ...v, id: f.id } : f)) } }),
       removeEdits: () => ({ protagonist: { forms: forms.filter((f) => f.id !== form.id) } }) };
   }
@@ -56,11 +69,17 @@ function editorFor(item, direction, adding = false) {
   if (item.kind === 'test') {
     const index = (item.testIndex ?? 0) + 1;
     const test = item.test || (direction?.tests || [])[index - 1] || {};
-    return { fields: TEST_FIELDS, values: Object.fromEntries(TEST_FIELDS.map(([key]) => [key, test[key] || ''])),
+    const testFields = forms.length || test.formId ? [...TEST_FIELDS, formField(forms)] : TEST_FIELDS;
+    return { fields: testFields, values: Object.fromEntries(testFields.map(([key]) => [key, test[key] || ''])),
       toEdits: (v) => ({ tests: [{ index, ...Object.fromEntries(Object.entries(v).filter(([key, value]) => value !== (test[key] || ''))) }] }), removeEdits: () => ({ tests: [{ index, remove: true }] }) };
   }
   return null;
 }
+
+const BINDING_MISSING = {
+  subject: 'The catalog character this age was linked to is no longer cast in this video, so it is drawn from the main sheet only.',
+  image: 'The catalog character this age is linked to has no reference image yet, so it is drawn from the main sheet only.',
+};
 
 function ItemEditor({ editor, label, busy, onSave, onCancel }) {
   const baseId = useId();
@@ -88,9 +107,13 @@ function ItemEditor({ editor, label, busy, onSave, onCancel }) {
         <label htmlFor={`${baseId}-text`} className="block text-xs text-port-text-muted">{editor.list}
           <textarea id={`${baseId}-text`} rows={6} className={fieldClass} value={values.text} onChange={(e) => set('text', e.target.value)} />
         </label>
-      ) : editor.fields.map(([key, name]) => (
+      ) : editor.fields.map(([key, name, options]) => (
         <label key={key} htmlFor={`${baseId}-${key}`} className="block text-xs text-port-text-muted">{name}
-          {LONG.has(key)
+          {options ? (
+            <select id={`${baseId}-${key}`} className={fieldClass} value={values[key]} onChange={(e) => set(key, e.target.value)}>
+              {options.map(([value, text]) => <option key={value} value={value}>{text}</option>)}
+            </select>
+          ) : LONG.has(key)
             ? <textarea id={`${baseId}-${key}`} rows={3} className={fieldClass} value={values[key]} onChange={(e) => set(key, e.target.value)} />
             : <input id={`${baseId}-${key}`} className={fieldClass} value={values[key]} onChange={(e) => set(key, e.target.value)} />}
         </label>
@@ -108,32 +131,78 @@ function ItemEditor({ editor, label, busy, onSave, onCancel }) {
  * One check-in card's own actions: render this image again, edit the direction
  * text it is drawn from (saving re-renders only what changed), remove a cast
  * member, set, test or other age from the sheet, and add another age to the
- * protagonist. Shown only while the stage is not working.
+ * protagonist. Shown only while the stage is not working. `formSubjects` are the
+ * catalog-linked characters an age may be grounded on.
  */
-export default function CastAndSetsItemActions({ item, direction, busy, onRegenerate, onEdit }) {
+export default function CastAndSetsItemActions({ item, direction, revision, projectId, busy, formSubjects = [], onRegenerate, onEdit, onRefresh }) {
   const [mode, setMode] = useState(null);
-  const editor = editorFor(item, direction);
+  const [resolution, setResolution] = useState(null);
+  const [pending, setPending] = useState(null);
+  const [notice, setNotice] = useState(null);
+  const mounted = useMounted();
+  const savedIdentity = cardIdentity(projectId, revision, item);
+  const identity = JSON.stringify([savedIdentity, item.test || null]);
+  const currentIdentity = useRef(identity);
+  const requestVersion = useRef(0);
+  if (currentIdentity.current !== identity) {
+    currentIdentity.current = identity;
+    requestVersion.current += 1;
+  }
+  const loading = pending?.identity === identity && pending?.version === requestVersion.current;
+  const resolvedTest = resolution?.identity === identity ? resolution.test : null;
+  const currentMode = mode === 'edit' && resolution && !resolvedTest ? null : mode;
+  const editor = editorFor(resolvedTest ? { ...item, test: resolvedTest } : item, direction, false, formSubjects);
   const label = item.label || item.key;
   const close = () => setMode(null);
   const save = async (edits) => { if (await onEdit(edits)) close(); };
+  const edit = async () => {
+    if (currentMode === 'edit') { close(); return; }
+    setNotice(null);
+    if (item.kind !== 'test' || item.test) { setResolution(null); setMode('edit'); return; }
+    const version = ++requestVersion.current;
+    setPending({ identity, version });
+    try {
+      const { stage } = await getMusicVideoCastAndSets(projectId, { silent: true });
+      if (!mounted.current || requestVersion.current !== version || currentIdentity.current !== identity) return;
+      const fresh = stage?.plan?.[item.key];
+      if (cardIdentity(projectId, stage?.revision, fresh) !== savedIdentity) {
+        const refreshed = await onRefresh?.(stage?.revision);
+        if (mounted.current && requestVersion.current === version && currentIdentity.current === identity) {
+          setNotice({ identity, text: refreshed ? 'This test changed. Try editing it again.' : 'This test changed. Refresh the project and try editing it again.' });
+        }
+        return;
+      }
+      if (!fresh?.test) {
+        setNotice({ identity, text: 'Rebuild the check-in before editing this test.' });
+        return;
+      }
+      setResolution({ identity, test: fresh.test });
+      setMode('edit');
+    } catch {
+      if (mounted.current && requestVersion.current === version && currentIdentity.current === identity) setNotice({ identity, text: 'Could not load this test. Try again.' });
+    } finally {
+      if (mounted.current) setPending((current) => (current?.version === version ? null : current));
+    }
+  };
+  const actionBusy = busy || loading;
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap gap-2">
-        <button type="button" disabled={busy} onClick={() => onRegenerate([item.key])} className={buttonClass} aria-label={`Regenerate ${label}`}>
+        <button type="button" disabled={actionBusy} onClick={() => onRegenerate([item.key])} className={buttonClass} aria-label={`Regenerate ${label}`}>
           <RotateCcw size={12} aria-hidden="true" /> Regenerate
         </button>
         {editor && !editor.missing && (
-          <button type="button" disabled={busy} onClick={() => setMode(mode === 'edit' ? null : 'edit')} aria-expanded={mode === 'edit'} className={buttonClass} aria-label={`Edit ${label}`}>
-            <Pencil size={12} aria-hidden="true" /> Edit
+          <button type="button" disabled={actionBusy} onClick={edit} aria-expanded={currentMode === 'edit'} className={buttonClass} aria-label={`Edit ${label}`}>
+            <Pencil size={12} aria-hidden="true" /> {loading ? 'Loading…' : 'Edit'}
           </button>
         )}
         {item.kind === 'character' && (direction?.protagonist?.forms || []).length < 3 && (
-          <button type="button" disabled={busy} onClick={() => setMode(mode === 'add' ? null : 'add')} aria-expanded={mode === 'add'} className={buttonClass}>
+          <button type="button" disabled={actionBusy} onClick={() => setMode(mode === 'add' ? null : 'add')} aria-expanded={mode === 'add'} className={buttonClass}>
             <Plus size={12} aria-hidden="true" /> Add another age
           </button>
         )}
         {editor?.removeEdits && !editor.missing && mode !== 'remove' && (
-          <button type="button" disabled={busy} onClick={() => setMode('remove')} className={`${buttonClass} text-port-error`} aria-label={`Remove ${label}`}>
+          <button type="button" disabled={actionBusy} onClick={() => setMode('remove')} className={`${buttonClass} text-port-error`} aria-label={`Remove ${label}`}>
             <Trash2 size={12} aria-hidden="true" /> Remove
           </button>
         )}
@@ -142,8 +211,10 @@ export default function CastAndSetsItemActions({ item, direction, busy, onRegene
             ariaLabel={`Remove ${label} from the sheet`} confirmAriaLabel={`Remove ${label} from the sheet`} onConfirm={() => save(editor.removeEdits())} onCancel={close} />
         )}
       </div>
-      {mode === 'edit' && <ItemEditor editor={editor} label={label} busy={busy} onSave={save} onCancel={close} />}
-      {mode === 'add' && <ItemEditor editor={editorFor(item, direction, true)} label="another age" busy={busy} onSave={save} onCancel={close} />}
+      {BINDING_MISSING[item.bindingMissing] && <p className="text-xs text-port-warning">{BINDING_MISSING[item.bindingMissing]}</p>}
+      {notice?.identity === identity && <p role="status" className="text-xs text-port-warning">{notice.text}</p>}
+      {currentMode === 'edit' && <ItemEditor editor={editor} label={label} busy={busy} onSave={save} onCancel={close} />}
+      {mode === 'add' && <ItemEditor editor={editorFor(item, direction, true, formSubjects)} label="another age" busy={busy} onSave={save} onCancel={close} />}
     </div>
   );
 }

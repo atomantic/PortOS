@@ -28,6 +28,7 @@ import { hasClaimCheckoutBindings, hasReleaseCandidateBinding, boundCheckoutBran
 import { isAgentHandoff } from '../lib/agentOutcome.js';
 import { collectProtectedCleanupOwners } from '../lib/taskRetryHold.js';
 import { reconcileStaleAgentReservations, releaseAgentReservation } from './agentMaintenanceReservations.js';
+import { initialCandidateLifecycle } from './releaseCandidateLifecycle.js';
 
 function hasPendingRepoStateVerification(agent) {
   return agent?.status === 'completed' && agent?.metadata?.repoStateVerification?.status === 'pending';
@@ -107,6 +108,8 @@ export async function readProtectedCleanupOwners({ state = null, index = null, t
 }
 
 export async function registerAgent(agentId, taskId, metadata = {}) {
+  const { releaseCandidateLifecycle: _lifecycle, ...untrustedMetadata } = metadata;
+  metadata = untrustedMetadata;
   metadata = { ...metadata, releasePublication: null };
   if (metadata.taskAnalysisType === 'do-release') {
     // A task's supplied metadata is not a server-observed checkout reservation.
@@ -124,6 +127,9 @@ export async function registerAgent(agentId, taskId, metadata = {}) {
       metadata,
       output: []
     };
+    if (metadata.taskAnalysisType === 'do-release' && metadata.isWorktree === false) {
+      registered.metadata = { ...metadata, releaseCandidateLifecycle: initialCandidateLifecycle(registered) };
+    }
     if (metadata.isWorktree === true && metadata.worktreeBranch && metadata.sourceWorkspace) {
       const { captureCheckoutSeeds } = await import('./completedCheckoutEvidence.js');
       registered.metadata = { ...metadata, checkoutSeeds: await captureCheckoutSeeds(registered) };
@@ -170,6 +176,10 @@ export async function updateAgent(agentId, updates) {
     // and stale completion metadata cannot forge or revoke an observed release.
     if (updates.metadata && Object.hasOwn(updates.metadata, 'releasePublication')) {
       const { releasePublication: _publication, ...metadata } = updates.metadata;
+      updates = { ...updates, metadata };
+    }
+    if (updates.metadata && Object.hasOwn(updates.metadata, 'releaseCandidateLifecycle')) {
+      const { releaseCandidateLifecycle: _lifecycle, ...metadata } = updates.metadata;
       updates = { ...updates, metadata };
     }
     if (current.metadata?.taskAnalysisType === 'do-release' && updates.metadata) {
@@ -314,6 +324,26 @@ export function recordRepoStateVerification(agentId, verification) {
   });
 }
 
+/** Historical cleanup has its own ledger; the runs' original verdicts and
+ * transferred verification records remain evidence, never rewritten success. */
+export async function recordHistoricalCleanupReconciliation(agentId, expected, patch) {
+  let matched = false;
+  const saved = await updateCompletionReceipt(agentId, (metadata, agent) => {
+    const { historicalCleanupReconciliation: _prior, ...current } = metadata;
+    const { historicalCleanupReconciliation: _expected, ...original } = expected.metadata || {};
+    if (agent.startedAt !== expected.startedAt || agent.taskId !== expected.taskId
+      || !isDeepStrictEqual(agent.result, expected.result) || !isDeepStrictEqual(current, original)) return metadata;
+    matched = true;
+    const { branchOutcome, ...fields } = patch;
+    const prior = metadata.historicalCleanupReconciliation || {};
+    return { ...metadata, historicalCleanupReconciliation: { ...prior, ...fields,
+      ...(branchOutcome && { branches: { ...prior.branches,
+        [JSON.stringify([branchOutcome.branch, branchOutcome.path || null])]: { ...branchOutcome, observedAt: patch.checkedAt } } }),
+    } };
+  }, { preserveResult: true });
+  return saved && matched;
+}
+
 /** Reserve a cognitive recovery once per exact observation on its original run.
  * Persist before dispatch: an interrupted publication stays held, never launches
  * another agent just because the old task completed or the server restarted.
@@ -454,7 +484,7 @@ function resultAfterCompletionReceipt(agent, metadata) {
     taskOutcome: { status: 'completed', reason: 'Delivery and repository cleanup verified by server completion receipts.' } };
 }
 
-async function updateCompletionReceipt(agentId, update) {
+async function updateCompletionReceipt(agentId, update, { preserveResult = false } = {}) {
   return withBackupAssetPublication(() => withStateLock(async () => {
     const state = await loadState();
     let agent = state.agents[agentId];
@@ -467,7 +497,7 @@ async function updateCompletionReceipt(agentId, update) {
     if (!agent || (agent.id || agent.agentId) !== agentId || agent.status !== 'completed') return false;
     const metadata = agent.metadata || {};
     const nextMetadata = await update(metadata, agent);
-    const result = resultAfterCompletionReceipt(agent, nextMetadata);
+    const result = preserveResult ? agent.result : resultAfterCompletionReceipt(agent, nextMetadata);
     const updated = { ...agent, result, metadata: nextMetadata };
     if (result?.deferredDeliveryOutcome?.recovery?.mode === 'cleanup') {
       const { reconcileAgentRunDelivery } = await import('./agentRunTracking.js');

@@ -113,6 +113,19 @@ describe.skipIf(!runDb)('atomic local image writes', () => {
     });
     expect(media.find(m => m.kind === 'portrait').library.guide).toBe(false);
   });
+  it('leaves both attachments of an image out of likeness and puts both back', async () => {
+    const id = await ingredient();
+    await catalogDB.attachMedia(id, 'board.png', 'reference', { library: { guide: true } });
+    await catalogDB.setPortraitMedia(id, 'board.png', { library: { tags: ['collage'] } });
+    const out = await catalogDB.updateMediaLibrary(id, 'board.png', 'reference', { likeness: false });
+    expect(out.library).toEqual({ guide: false, likeness: false });
+    let media = await catalogDB.listMediaForIngredient(id);
+    expect(media.find(m => m.kind === 'portrait').library).toEqual({ tags: ['collage'], guide: false, likeness: false });
+    expect((await catalogDB.updateMediaLibrary(id, 'board.png', 'portrait', { guide: true })).library.guide).toBe(false);
+    await catalogDB.updateMediaLibrary(id, 'board.png', 'portrait', { likeness: true });
+    media = await catalogDB.listMediaForIngredient(id);
+    expect(media.map(m => m.library.likeness)).toEqual([undefined, undefined]);
+  });
   it.each([false, true])('serializes generic and dedicated writes (existing portrait: %s)', async (existing) => {
     const id = await ingredient();
     if (existing) await catalogDB.setPortraitMedia(id, 'old.png');
@@ -320,5 +333,28 @@ describe.skipIf(!runDb)('atomic local image writes', () => {
       result: { filename: 'older.png' }, queuedAt: new Date(Date.now() + offset).toISOString() });
     await hook.__testing.settled();
     expect(Object.fromEntries((await liveRows(id)).map((row) => [row.media_key, row.kind]))).toEqual(expected);
+  });
+});
+
+describe.skipIf(!runDb)('findMediaOwnersByKeys', () => {
+  it('names each image by its owner, preferring the caller\'s linked records and skipping detached rows', async () => {
+    const lead = await catalogDB.createIngredient({ type: 'character', name: 'Example Lead' });
+    const friend = await catalogDB.createIngredient({ type: 'character', name: 'Example Friend' });
+    const rink = await catalogDB.createIngredient({ type: 'place', name: 'Example Rink' });
+    ids.push(lead.id, friend.id, rink.id);
+    await catalogDB.attachMedia(lead.id, 'owners-shared.png', 'reference');
+    await catalogDB.setPortraitMedia(friend.id, 'owners-shared.png');
+    await catalogDB.attachMedia(rink.id, 'owners-plate.png', 'reference');
+    await catalogDB.attachMedia(rink.id, 'owners-gone.png', 'reference');
+    await catalogDB.detachMedia(rink.id, 'owners-gone.png', 'reference');
+    const keys = ['owners-shared.png', 'owners-plate.png', 'owners-gone.png', 'owners-unknown.png'];
+
+    const unlinked = await catalogDB.findMediaOwnersByKeys(keys);
+    expect(unlinked.get('owners-shared.png')).toMatchObject({ name: 'Example Friend', preferredId: null });
+    expect(unlinked.get('owners-plate.png')).toMatchObject({ name: 'Example Rink', type: 'place' });
+    expect([...unlinked.keys()].sort()).toEqual(['owners-plate.png', 'owners-shared.png']);
+
+    const linked = await catalogDB.findMediaOwnersByKeys(keys, { preferIds: [lead.id] });
+    expect(linked.get('owners-shared.png')).toMatchObject({ ingredientId: lead.id, name: 'Example Lead', preferredId: lead.id });
   });
 });

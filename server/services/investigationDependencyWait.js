@@ -204,7 +204,7 @@ export function _createInvestigationDependencyWait(deps = {}) {
       cursor = waiting.length ? (start + candidates.length) % waiting.length : 0;
       for (const task of candidates) {
         const parsed = waitSchema.safeParse(task.metadata.investigationDependencyWait);
-        if (!parsed.success || !scoped(task) || humanHeld(task)) continue;
+        if (!parsed.success || !scoped(task) || humanHeld(task) || task.metadata?.spawnBudgetReconciledHold === 'true') continue;
         const wait = parsed.data;
         if (wait.phase !== 'waiting' || wait.instanceId !== instanceId
           || (wait.retryAt && Date.parse(wait.retryAt) > now())) continue;

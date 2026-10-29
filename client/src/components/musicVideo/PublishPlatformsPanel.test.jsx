@@ -7,6 +7,8 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import PublishPlatformsPanel from './PublishPlatformsPanel.jsx';
 import PublishKitPanel from './PublishKitPanel.jsx';
 
+vi.mock('../media/MediaJobsQueue.jsx', () => ({ default: () => null }));
+
 // Publish cards and platform rows fold when done; open everything so a test sees the whole page.
 const expandAll = () => { for (let b = screen.queryAllByRole('button', { expanded: false }); b.length; b = screen.queryAllByRole('button', { expanded: false })) b.forEach((x) => fireEvent.click(x)); };
 

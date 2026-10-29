@@ -39,7 +39,8 @@ import { mergeSeriesFromSync, listSeries } from './pipeline/series.js';
 import { mergeIssuesFromSync, listAllIssues } from './pipeline/issues.js';
 import { getPeers } from './instances.js';
 import { mutateVideoHistory, HISTORY_UNCHANGED } from './videoGen/history.js';
-import { markHosted, listHostedEntries } from './peerHostedMedia.js';
+import { listHostedEntries, reconcileHostedMedia } from './peerHostedMedia.js';
+import { sanitizeAssetFilename } from './sharing/buckets.js';
 import { authorizeRemoteMediaTombstone } from './mediaTombstoneAuthorization.js';
 import { listMediaTombstones, mergeMediaTombstones } from './mediaTombstones.js';
 import { emitMediaHistoryChanged } from './peerSyncEventBus.js';
@@ -863,17 +864,9 @@ async function applyMediaCollectionsRemote(remoteData, source) {
   // runs INSIDE `serializeFileWrite` (same tail as addItem / removeItem /
   // bulkUpdateCollectionItems) — a sync-driven write can't interleave with a
   // concurrent local mutation on the same JSON file.
+  // Unioned references do not prove the sender has bytes. Ownership is
+  // reconciled separately from its local-file inventory, even on checksum ties.
   const result = await mergeMediaCollectionsFromSync(filtered, { source });
-  // `host`-mode peers keep the bytes: index this snapshot's items as peer-hosted
-  // so the collection renders them via the static-mount fallback. Covers items
-  // that only ever arrive through this snapshot path (no per-record push).
-  if (source?.peerId) {
-    const senderPeer = (await getPeers().catch(() => [])).find((p) => p.instanceId === source.peerId);
-    if (senderPeer?.mediaSyncMode === 'host') {
-      const live = filtered.filter((c) => c?.deleted !== true);
-      await markHosted(source.peerId, live.flatMap((c) => referenceCollectionAssetManifest(c)));
-    }
-  }
   if (result.applied) {
     console.log(`🔄 MediaCollections sync: merged ${result.count} collection(s)`);
   }
@@ -946,6 +939,25 @@ async function getVideoHistorySnapshot() {
   return { data, checksum: computeChecksum(data) };
 }
 
+// This separate inventory describes only bytes on this machine, never the
+// unioned history or files streamed from another peer. It is refreshed even
+// when history is unchanged and is absent on older peers.
+export async function getHostedMediaInventory(category = 'videoHistory', kind = 'video') {
+  const { data } = category === 'mediaCollections' ? await getMediaCollectionsSnapshot() : await getVideoHistorySnapshot();
+  const references = category === 'mediaCollections'
+    ? data.collections.filter((c) => !c.deleted).flatMap((c) => referenceCollectionAssetManifest(c).filter((asset) => asset.kind === kind).map((asset) => asset.filename))
+    : data.videos.map((row) => row.filename);
+  const names = await readdir(kind === 'image' ? PATHS.images : PATHS.videos, { withFileTypes: true }).catch((err) => {
+    if (err.code === 'ENOENT') return [];
+    throw err;
+  });
+  const local = new Set(names.filter((entry) => entry.isFile()).map((entry) => entry.name));
+  const checked = [...new Set(references.filter((name) =>
+    typeof name === 'string' && sanitizeAssetFilename(name) === name))];
+  const filenames = checked.filter((name) => local.has(name));
+  return { version: 1, filenames, checked, portosMeta: await buildPortosMeta() };
+}
+
 async function applyVideoHistoryRemote(remoteData, source) {
   if (!remoteData) return { applied: false, count: 0 };
   const incomingRows = Array.isArray(remoteData.videos) ? remoteData.videos : [];
@@ -965,8 +977,7 @@ async function applyVideoHistoryRemote(remoteData, source) {
 /**
  * The one video-row merge, shared by the snapshot path and realtime
  * `peer:sync:event` upserts. `source.peerId` is the SENDER's instance id.
- * Drops tombstoned rows, indexes a host-mode sender's files as peer-hosted,
- * then union-merges by id (LWW on `createdAt`) inside the history write queue.
+ * Drops tombstoned rows, then union-merges by id (LWW on `createdAt`) inside the history write queue.
  * Returns `{ count, ids }` for rows actually added or updated.
  */
 export async function mergeVideoRows(incomingRows, source) {
@@ -975,20 +986,6 @@ export async function mergeVideoRows(incomingRows, source) {
   const isDeleted = (r) => isTombstoned(tombstones, r.id, r.createdAt, 'key');
   const incoming = (Array.isArray(incomingRows) ? incomingRows : []).filter((r) => !(hasVideoRowId(r) && isDeleted(r)));
   if (incoming.length === 0) return { count: 0, ids: [] };
-
-  // `host`-mode peers keep the bytes: index their video rows as peer-hosted so
-  // /data/videos and /data/video-thumbnails stream from the peer instead of
-  // rendering "Syncing". Runs before the merge's no-change early return so rows
-  // merged earlier still get indexed; markHosted skips files already local.
-  if (source?.peerId) {
-    const senderPeer = (await getPeers().catch(() => [])).find((p) => p.instanceId === source.peerId);
-    if (senderPeer?.mediaSyncMode === 'host') {
-      const hosted = incoming
-        .filter((r) => typeof r?.filename === 'string' && r.filename)
-        .map((r) => ({ kind: 'video', filename: r.filename }));
-      await markHosted(source.peerId, hosted);
-    }
-  }
 
   // The whole read/merge/write runs inside the shared history mutation queue so
   // a local completion (videoDownload) or another peer's snapshot can't be
@@ -1488,6 +1485,16 @@ export async function applyRemote(category, remoteData, options = {}) {
         receiverSchemaVersions: PORTOS_SCHEMA_VERSIONS,
       },
     };
+  }
+  if ((category === 'videoHistory' || category === 'mediaCollections') && options.inventory === true) {
+    const peer = (await getPeers()).find((p) => p.instanceId === source.peerId && p.enabled !== false && p.mediaSyncMode === 'host');
+    if (peer && remoteData?.version === 1 && Array.isArray(remoteData.filenames) && Array.isArray(remoteData.checked)) {
+      const kind = options.inventoryKind === 'image' ? 'image' : 'video';
+      if (kind === 'video' || category === 'mediaCollections') {
+        await reconcileHostedMedia(peer.instanceId, kind, remoteData.filenames, remoteData.checked);
+      }
+    }
+    return { applied: false, count: 0 };
   }
   // Third arg: sender envelope details for appliers that disambiguate
   // omitted-vs-cleared fields by sender version (universe moodBoardId, #4188).

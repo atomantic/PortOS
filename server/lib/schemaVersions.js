@@ -470,7 +470,9 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // normalizer would strip both and whole-row LWW the loss back.
   // v14 = per-reference review/feedback and refinement lineage. Older peers
   // strip these fields and could restore rejected conditioning references.
-  catalog: 14,
+  // v15 = media `library.likeness: false` (image left out of likeness guides).
+  // Older normalizers strip it and would send a left-out collage again.
+  catalog: 15,
   // v1 = cross-machine resumable Story Builder sessions (#730). Sessions are
   // local-only by default and excluded from sync; only `sync: true` sessions
   // ride the `storyBuilder` snapshot category. This is a brand-NEW synced
@@ -795,7 +797,9 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // which a v30 strict subject schema rejects with a 400. Optional, no backfill.
   // v32 = optional versioned festival packet; older strict project schemas cannot edit it.
   // No backfill. New receivers preserve a packet omitted by an older sender.
-  musicVideoProjects: 32,
+  // v33 = the film credits ending (`creditsOutro`), which a v32 strict project
+  // schema rejects and its normalizer drops on save. Optional, no backfill.
+  musicVideoProjects: 33,
   // v1 = Creative Commission FEEDBACK federation (PostgreSQL `commission_feedback`)
   // via the per-record peer-sync push pipeline (record kind `commissionFeedback`,
   // sync category `commissionFeedback`, #2686 — split-record follow-up to #2657).
@@ -948,7 +952,10 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // evidence. Older peers may clip that evidence or substitute a smaller model.
   // v10 = executionOptions and execution-selection provider references. Older
   // peers would ignore an explicit Standard/Fast override when claiming a task.
-  cosTasks: 10,
+  // v11 = server-owned retry-episode and latest-dispatch proof. A legacy peer
+  // may reset a counter while retaining unknown metadata, so its payload
+  // invalidates proof on the receiver instead of authorizing reconciliation.
+  cosTasks: 11,
   // v1 = the Eidoverse foundation promote-candidate envelope (#7455, epic
   // #7453) — authorized to cross the federation layer by the federated
   // Eidoverse foundations ADR (docs/decisions/2026-09-18-federated-eidoverse-foundations.md).

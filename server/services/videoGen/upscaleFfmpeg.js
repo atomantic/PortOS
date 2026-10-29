@@ -27,8 +27,9 @@ import {
 // `stop_mode=clone` repeats the LAST frame rather than inserting black, so the
 // padding the model sees is a still hold of the final image instead of a hard
 // cut to black that it would try to synthesize detail into.
-const alignFilter = ({ width, height, padFrames, fps }) => {
-  const chain = [`pad=${width}:${height}:0:0:color=black`];
+const alignFilter = ({ width, height, padFrames, fps, squareWidth, squareHeight }) => {
+  const chain = squareWidth && squareHeight ? [`scale=${squareWidth}:${squareHeight}:flags=lanczos`, 'setsar=1'] : [];
+  chain.push(`pad=${width}:${height}:0:0:color=black`);
   if (padFrames > 0) chain.push(`tpad=stop_mode=clone:stop_duration=${(padFrames / fps).toFixed(6)}`);
   return chain;
 };
@@ -48,7 +49,7 @@ const withColorTag = async (chain) => {
  * @returns {{ok: true} | {ok: false, reason: string}}
  */
 export const padSourceForUpscale = async (sourcePath, outPath, {
-  width, height, padFrames = 0, fps, signal,
+  width, height, padFrames = 0, fps, signal, squareWidth, squareHeight,
 } = {}) => {
   let ffmpeg;
   try {
@@ -63,7 +64,7 @@ export const padSourceForUpscale = async (sourcePath, outPath, {
     signal,
     args: [
       '-i', sourcePath,
-      '-vf', await withColorTag(alignFilter({ width, height, padFrames, fps })),
+      '-vf', await withColorTag(alignFilter({ width, height, padFrames, fps, squareWidth, squareHeight })),
       ...H264_ENCODE_ARGS,
       ...BT709_CONTAINER_ARGS,
       '-an',
@@ -87,7 +88,7 @@ export const padSourceForUpscale = async (sourcePath, outPath, {
  * @returns {{ok: true} | {ok: false, reason: string}}
  */
 export const finalizeUpscaleOutput = async (renderedPath, outPath, {
-  width, height, frameCount, audioSourcePath, signal,
+  width, height, frameCount, audioSourcePath, signal, squarePixels = false,
 } = {}) => {
   let ffmpeg;
   try {
@@ -105,7 +106,7 @@ export const finalizeUpscaleOutput = async (renderedPath, outPath, {
     args: [
       '-i', renderedPath,
       '-i', audioSourcePath,
-      '-filter_complex', `[0:v]${await withColorTag([`crop=${width}:${height}:0:0`])}[v]`,
+      '-filter_complex', `[0:v]${await withColorTag([`crop=${width}:${height}:0:0`, ...(squarePixels ? ['setsar=1'] : [])])}[v]`,
       '-map', '[v]',
       '-map', '1:a:0?',
       ...H264_ENCODE_ARGS,

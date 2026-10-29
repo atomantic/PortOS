@@ -110,6 +110,10 @@ const redactExternalTokens = (settings) => {
       const { apiKey, ...rest } = videoGen.runway;
       videoGen.runway = rest;
     }
+    if (isPlainObject(videoGen.topaz)) {
+      const { apiKey, ...rest } = videoGen.topaz;
+      videoGen.topaz = rest;
+    }
     next.videoGen = videoGen;
   }
   return next;
@@ -165,6 +169,7 @@ const preserveExternallyOwnedKeys = (next, current) => {
   carryOverNested('videoGen', 'fal', 'apiKey');
   carryOverNested('videoGen', 'reactor', 'apiKey');
   carryOverNested('videoGen', 'runway', 'apiKey');
+  carryOverNested('videoGen', 'topaz', 'apiKey');
   // beeperSettingsSchema is `.strict()` with no `token`/`tokenExpiresAt`
   // field, so a valid `beeper` PUT through this route can never carry either
   // — without this, the generic top-level shallow merge (`{ ...current,

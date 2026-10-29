@@ -104,6 +104,21 @@ export function musicVideoSongStyleContext(concept) {
   ].filter(Boolean).join('\n');
 }
 
+// Every cast member is named, however many the director cast from the catalog:
+// past four, they share one description budget, and the cast block sits outside
+// the context's overall cut so no name is lost to it.
+const CAST_CONTEXT_MAX = 1800;
+const DIRECTION_CONTEXT_MAX = 6000;
+function directionCastLines(cast) {
+  const share = cast.length > 4 ? Math.floor(CAST_CONTEXT_MAX / cast.length) : null;
+  return cast.map((c) => {
+    const head = `Cast ${trimTo(c.name, 80)}${c.role ? ` (${trimTo(c.role, 60)})` : ''}`;
+    const body = [c.description, c.face, c.hair, c.wardrobe].filter(Boolean).map((v) => trimTo(v, 200)).join('; ');
+    const text = share == null ? body : trimTo(body, Math.max(0, share - head.length - 2));
+    return text ? `${head}: ${text}` : head;
+  });
+}
+
 /** Bounded Cast & Sets bible; mood-board subjects are never location authority. */
 export function musicVideoDirectionContext(direction) {
   if (!direction) return '';
@@ -117,7 +132,7 @@ export function musicVideoDirectionContext(direction) {
     const body = pairs.filter(([, v]) => v).map(([k, v]) => `${k}: ${trimTo(v, 300)}`).join('; ');
     return body ? [`${label} ${body}`] : [];
   };
-  return [
+  const before = [
     procedural
       ? 'Cast & Sets direction (authoritative characters, environments, motion and camera; characters and scenes are authored in code, never photographed):'
       : 'Cast & Sets direction (authoritative locations and wardrobe):',
@@ -131,11 +146,14 @@ export function musicVideoDirectionContext(direction) {
     ...(procedural ? lines('World rules:', [
       ['layout', w.layout], ['depth', w.depth], ['lighting', w.lighting], ['camera', w.camera], ['transitions', w.transitions],
     ]) : []),
-    // Name a supporting cast member (or their role) in a shot that features them: that shot is conditioned on their sheet.
-    ...((direction.cast || []).slice(0, 4).map((c) => `Cast ${trimTo(c.name, 80)}${c.role ? ` (${trimTo(c.role, 60)})` : ''}: ${[c.description, c.face, c.hair, c.wardrobe].filter(Boolean).map((v) => trimTo(v, 200)).join('; ')}`)),
+  ].join('\n').slice(0, DIRECTION_CONTEXT_MAX);
+  // Name a supporting cast member (or their role) in a shot that features them: that shot is conditioned on their sheet.
+  const cast = directionCastLines(direction.cast || []).join('\n');
+  const after = [
     ...((direction.looks || []).slice(0, 8).map((l) => `Look ${trimTo(l.name, 80)}: ${trimTo(l.description, 300)}; chapters: ${trimTo(l.chapters, 120)}`)),
     ...((direction.sets || []).slice(0, 8).map((s) => `Set ${trimTo(s.name, 80)}: ${trimTo(s.description, 300)}; lighting: ${trimTo(s.lighting, 120)}${procedural ? `; image role: ${s.imageRole || 'background'}` : ''}`)),
-  ].join('\n').slice(0, 6000);
+  ].join('\n').slice(0, Math.max(0, DIRECTION_CONTEXT_MAX - before.length - 1));
+  return [before, cast, after].filter(Boolean).join('\n');
 }
 
 const CODE_CONTEXT_MAX = 8000;

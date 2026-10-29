@@ -76,6 +76,7 @@ import MusicVideoProjectCard from '../components/musicVideo/MusicVideoProjectCar
 import PreviewDock from '../components/musicVideo/PreviewDock.jsx';
 import TitleCardPanel from '../components/musicVideo/TitleCardPanel.jsx';
 import StatsOutroPanel from '../components/musicVideo/StatsOutroPanel.jsx';
+import CreditsOutroPanel from '../components/musicVideo/CreditsOutroPanel.jsx';
 import NeedsAttentionBanner from '../components/musicVideo/NeedsAttentionBanner.jsx';
 import SetupStage from '../components/musicVideo/stages/SetupStage.jsx';
 import StoryStage from '../components/musicVideo/stages/StoryStage.jsx';
@@ -1553,6 +1554,7 @@ function ProjectWorkspace({
       <TitleCardPanel project={selected} onEditLocal={editProjectLocal} onSave={saveProjectFields}
         onPreview={(startSec) => seekToScene({ startSec }, { play: true })} />
       <StatsOutroPanel project={selected} onEditLocal={editProjectLocal} onSave={saveProjectFields} />
+      <CreditsOutroPanel project={selected} onEditLocal={editProjectLocal} onSave={saveProjectFields} />
     </div>
   ));
   const board = selected ? {
@@ -1627,6 +1629,9 @@ function ProjectWorkspace({
       patchProject(project.id, { concept: project.concept, visualSpec: project.visualSpec, productionPolicy: project.productionPolicy });
     }),
     applyCastLinks: ({ concept, updatedAt }) => patchProject(selected.id, { concept, ...(updatedAt ? { updatedAt } : {}) }),
+    // Only labels still empty here: an edit made while the request ran keeps its own.
+    applyReferenceLabels: (labels) => patchProject(selected.id, (p) => ({ visualSpec: { ...(p.visualSpec || {}),
+      references: (p.visualSpec?.references || []).map((ref) => (labels[ref.id] && !ref.label?.trim() ? { ...ref, label: labels[ref.id] } : ref)) } })),
     setCreativeSetupPending,
     setStyleReferencesPending,
     saveStyleReferences: (patch) => updateMusicVideoProject(selected.id, patch, { silent: true }).then((project) => {

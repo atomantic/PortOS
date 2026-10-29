@@ -74,6 +74,18 @@ describe('CatalogReferenceLibrary', () => {
     expect(api.updateCatalogIngredientMediaLibrary).toHaveBeenCalledWith('cat-chr-1', { mediaKey: 'seventeen.png', kind: 'reference', guide: true }, { silent: true });
   });
 
+  it('puts a left-out collage back into likeness and refreshes', async () => {
+    const onChanged = vi.fn();
+    api.updateCatalogIngredientMediaLibrary.mockResolvedValueOnce({ mediaKey: 'board.png', kind: 'reference', library: {} });
+    render(<CatalogReferenceLibrary ingredientId="cat-chr-1" onChanged={onChanged}
+      media={[{ mediaKey: 'board.png', kind: 'reference', library: { likeness: false, guide: false } }]} />);
+    expect(screen.getByRole('button', { name: 'Make guide' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Left out of likeness' }));
+    await waitFor(() => expect(onChanged).toHaveBeenCalled());
+    expect(api.updateCatalogIngredientMediaLibrary).toHaveBeenCalledWith('cat-chr-1',
+      { mediaKey: 'board.png', kind: 'reference', likeness: true }, { silent: true });
+  });
+
   it('disables new guides at the cap of four', () => {
     const full = [1, 2, 3, 4, 5].map((n) => ({ mediaKey: `${n}.png`, kind: 'reference', library: { guide: n <= 4 } }));
     render(<CatalogReferenceLibrary ingredientId="cat-chr-1" media={full} />);
@@ -115,18 +127,39 @@ describe('CatalogReferenceLibrary', () => {
     expect(screen.getByRole('img')).toHaveAttribute('src', '/data/image-thumbnails/seven.webp');
   });
 
-  it('shows one visual while retaining independently stored portrait and reference metadata', async () => {
+  it('shows one control set for a visual attached as both primary and reference', async () => {
     render(<CatalogReferenceLibrary ingredientId="cat-chr-1" media={[
-      { kind: 'portrait', mediaKey: 'shared.png', library: { tags: ['portrait-tag'] } },
-      { kind: 'reference', mediaKey: 'shared.png', library: { guide: true, variant: { age: 17 }, tags: ['reference-tag'] } },
+      { kind: 'portrait', mediaKey: 'shared.png', library: { tags: ['portrait-tag'], review: { status: 'unreviewed', feedback: 'Too dark' } } },
+      { kind: 'reference', mediaKey: 'shared.png', library: { variant: { age: 17, label: 'Age 17 portrait' }, tags: ['reference-tag'] } },
     ]} />);
     expect(screen.getAllByRole('img')).toHaveLength(1);
-    const reference = screen.getByRole('group', { name: 'reference details for shared.png' });
-    expect(within(reference).getByText(/Age 17/)).toHaveTextContent('reference-tag');
-    expect(screen.getByRole('group', { name: 'portrait details for shared.png' })).toHaveTextContent('portrait-tag');
-    fireEvent.click(within(reference).getByRole('button', { name: 'Guide' }));
+    const details = screen.getByRole('group', { name: 'Details for shared.png' });
+    expect(within(details).getByRole('heading', { name: 'Age 17 portrait' })).toBeInTheDocument();
+    expect(within(details).getByText(/Age 17 · teen/)).toHaveTextContent('reference-tag');
+    expect(within(details).getByText('portrait · reference')).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: 'Make guide' })).toHaveLength(1);
+    expect(screen.getAllByRole('button', { name: 'Good' })).toHaveLength(1);
+    // The guide goes on the reference only; one rating covers both attachments and keeps each one's feedback.
+    fireEvent.click(within(details).getByRole('button', { name: 'Make guide' }));
     await waitFor(() => expect(api.updateCatalogIngredientMediaLibrary).toHaveBeenCalledWith(
-      'cat-chr-1', { mediaKey: 'shared.png', kind: 'reference', guide: false }, { silent: true }));
+      'cat-chr-1', { mediaKey: 'shared.png', kind: 'reference', guide: true }, { silent: true }));
+    fireEvent.click(within(details).getByRole('button', { name: 'Good' }));
+    await waitFor(() => expect(api.updateCatalogIngredientMediaLibrary).toHaveBeenCalledWith(
+      'cat-chr-1', { mediaKey: 'shared.png', kind: 'portrait', review: { status: 'good', feedback: 'Too dark' } }, { silent: true }));
+    expect(api.updateCatalogIngredientMediaLibrary).toHaveBeenCalledWith(
+      'cat-chr-1', { mediaKey: 'shared.png', kind: 'reference', review: { status: 'good' } }, { silent: true });
+    expect(api.updateCatalogIngredientMediaLibrary).toHaveBeenCalledTimes(3);
+  });
+
+  it('clears a guide from every attachment of a visual', async () => {
+    render(<CatalogReferenceLibrary ingredientId="cat-chr-1" media={[
+      { kind: 'portrait', mediaKey: 'shared.png', library: { guide: true } },
+      { kind: 'reference', mediaKey: 'shared.png', library: { guide: true } },
+    ]} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Guide' }));
+    await waitFor(() => expect(api.updateCatalogIngredientMediaLibrary).toHaveBeenCalledTimes(2));
+    for (const kind of ['portrait', 'reference']) expect(api.updateCatalogIngredientMediaLibrary).toHaveBeenCalledWith(
+      'cat-chr-1', { mediaKey: 'shared.png', kind, guide: false }, { silent: true });
   });
 
   it('preserves per-attachment read-only provenance and counts guides outside this tab', () => {
@@ -205,6 +238,30 @@ describe('CatalogReferenceLibrary', () => {
     expect(api.updateCatalogIngredientMediaLibrary).toHaveBeenCalledWith('cast', {
       mediaKey: 'source.png', kind: 'reference', variant: { age: 17, era: undefined, formId: 'teen' },
     }, { silent: true });
+  });
+
+  it('renames a reference card from its details and clears back to the caption', async () => {
+    api.updateCatalogIngredientMediaLibrary.mockImplementation(async (_id, body) => ({
+      mediaKey: body.mediaKey, kind: body.kind, caption: 'Original caption', library: { variant: body.variant },
+    }));
+    function Gallery() {
+      const [rows, setRows] = useState([{ mediaKey: 'source.png', kind: 'reference', caption: 'Original caption', library: { variant: { age: 27, label: 'Nora 37 old title' } } }]);
+      return <CatalogReferenceLibrary ingredientId="cast" media={rows} onMediaUpdated={updated => setRows([updated])} />;
+    }
+    render(<Gallery />);
+    const row = screen.getByTestId('library-row');
+    expect(within(row).getByRole('heading', { name: 'Nora 37 old title' })).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Title for source.png'), { target: { value: '  Nora 27 short bob ' } });
+    fireEvent.blur(screen.getByLabelText('Title for source.png'));
+    expect(api.updateCatalogIngredientMediaLibrary).toHaveBeenLastCalledWith('cast', {
+      mediaKey: 'source.png', kind: 'reference', variant: { age: 27, label: 'Nora 27 short bob' },
+    }, { silent: true });
+    await waitFor(() => expect(within(row).getByRole('heading', { name: 'Nora 27 short bob' })).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText('Title for source.png'), { target: { value: '' } });
+    fireEvent.blur(screen.getByLabelText('Title for source.png'));
+    await waitFor(() => expect(within(row).getByRole('heading', { name: 'Original caption' })).toBeInTheDocument());
+    expect(api.updateCatalogIngredientMediaLibrary).toHaveBeenCalledTimes(2);
+    api.updateCatalogIngredientMediaLibrary.mockImplementation(async () => ({}));
   });
 
   it('blocks refinement while the profile is unsaved while allowing review guidance to be saved', () => {

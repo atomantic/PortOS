@@ -16,6 +16,9 @@ import { ensureInstanceId } from './instanceIdentity.js';
 import { isClaimableBy, buildClaim, buildRelease, getClaimOwner, getTargetInstance, isTargetedElsewhere } from './cosTaskClaim.js';
 import { releaseAppReviewMarker } from './appActivity.js';
 import { v4 as uuidv4 } from '../lib/uuid.js';
+import { spawnBudgetHoldReason } from './spawnBudgetProof.js';
+import { isExpectedUnpersistedMiss } from '../lib/autonomousJobTask.js';
+import { isDeepStrictEqual } from 'node:util';
 
 const ROOT_DIR = PATHS.root;
 
@@ -123,6 +126,13 @@ export async function prepareAgentSpawn(task, context = createAgentSpawnContext(
     return null;
   }
 
+  const checked = await getTaskById(task.id).then(value => ({ value }), () => ({ failed: true }));
+  const checkedTask = checked.value;
+  if (checked.failed || (!checkedTask && !isExpectedUnpersistedMiss(task, 'Task not found'))) {
+    emitLog('warn', `Holding task ${task.id}: task state is unavailable`, { taskId: task.id });
+    await context.cleanupOnError('task state unavailable');
+    return null;
+  }
   if (isRetirementOnlyRecovery(task) && await settleRetirementRecoveryBeforeSpawn(task)) {
     await context.cleanupOnError('retirement dispatch settled or changed');
     return null;
@@ -137,7 +147,13 @@ export async function prepareAgentSpawn(task, context = createAgentSpawnContext(
     return null;
   }
 
-  const totalSpawns = Number(task.metadata?.totalSpawnCount) || 0;
+  if (checkedTask && await spawnBudgetHoldReason(checkedTask)) {
+    emitLog('warn', `Holding task ${task.id}: inspect its dispatch receipts and explicitly reset its budget only if intended`, { taskId: task.id });
+    await context.cleanupOnError('spawn budget reconciliation required');
+    return null;
+  }
+
+  const totalSpawns = Number(checkedTask?.metadata?.totalSpawnCount ?? task.metadata?.totalSpawnCount) || 0;
   if (totalSpawns >= MAX_TOTAL_SPAWNS) {
     console.log(`🚫 Task ${task.id} hit max total spawns (${totalSpawns}/${MAX_TOTAL_SPAWNS}), blocking`);
     return context.blockAndBail({
@@ -164,7 +180,13 @@ export async function prepareAgentSpawn(task, context = createAgentSpawnContext(
   });
   startExecution(context.toolExecution.id);
 
-  const freshTask = await getTaskById(task.id).catch(() => null);
+  const fresh = await getTaskById(task.id).then(value => ({ value }), () => ({ failed: true }));
+  const freshTask = fresh.value;
+  if (fresh.failed || !!checkedTask !== !!freshTask || (checkedTask && (checkedTask.status !== freshTask.status
+    || !isDeepStrictEqual(checkedTask.metadata, freshTask.metadata)))) {
+    await context.cleanupOnError('task changed after spawn budget verification');
+    return null;
+  }
   if (task.metadata?.cleanupRefillSource || freshTask?.metadata?.cleanupRefillSource) {
     const source = freshTask?.metadata?.cleanupRefillSource;
     const { validCleanupRefillSource } = await import('./swarmCleanupDelivery.js');
@@ -192,11 +214,14 @@ export async function prepareAgentSpawn(task, context = createAgentSpawnContext(
     }
     const claimUpdate = await updateTask(task.id, {
       metadata: buildClaim(instanceId),
-    }, task.taskType || 'user').catch(() => null);
-    if (claimUpdate && !claimUpdate.error) {
-      context.claimAcquired = true;
-      task.metadata = claimUpdate.metadata;
+    }, task.taskType || 'user', { expectedStatus: freshTask.status,
+      expectedTask: { description: freshTask.description, priority: freshTask.priority, metadata: freshTask.metadata } }).catch(() => null);
+    if (!claimUpdate || claimUpdate.error || claimUpdate.statusChanged) {
+      await context.cleanupOnError('task or claim changed during dispatch');
+      return null;
     }
+    context.claimAcquired = true;
+    task.metadata = claimUpdate.metadata;
   }
 
   context.setupCatchArmed = true;

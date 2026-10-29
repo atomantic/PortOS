@@ -6,8 +6,9 @@ import { musicVideoAllowsMedia } from '../../lib/musicVideoMediaPolicy.js';
  * Before any image is made, one provider call reads the song as a story and
  * returns the production's cast and world: a logline, one protagonist (face,
  * hair, signature prop, a recurring gesture tied to a lyric hook, continuity
- * rules), 1–4 wardrobe looks mapped to chapters, up to 4 recurring supporting
- * cast members (photographic only), 3–8 sets (one dominant light
+ * rules), 1–4 wardrobe looks mapped to chapters, every catalog-linked supporting
+ * character the director cast plus up to 4 more the model invents (photographic
+ * only), 3–8 sets (one dominant light
  * each) mapped to song sections, 2–4 in-set test frames, an overlay concept,
  * and the 2–4 mood-board images that best show the look. The prompt is told
  * explicitly that the mood board is look/lighting/texture reference only —
@@ -38,6 +39,7 @@ import { musicVideoAllowsMedia } from '../../lib/musicVideoMediaPolicy.js';
  * empty value is an intentional clear (for the optional fields that allow it).
  */
 
+import { createHash } from 'crypto';
 import { z } from 'zod';
 import { ServerError } from '../../lib/errorHandler.js';
 import { extractJson } from '../../lib/jsonExtract.js';
@@ -67,7 +69,11 @@ export const CAST_SETS_LIMITS = Object.freeze({
   expressions: 8,
   questions: 4,
   overlayElements: 4,
+  // Supporting cast the model invents. Catalog-linked supporting characters the
+  // director cast (fixedSupportingCast) never count against it: each one keeps
+  // its sheet, bounded only by the project's own subject cap.
   cast: 4,
+  fixedCast: 24,
   forms: 3,
 });
 export const CAST_SETS_IMAGE_ROLES = Object.freeze(['background', 'texture', 'decoration', 'cutout']);
@@ -154,26 +160,79 @@ export function moodBoardImageList(board, resolveItem) {
 }
 
 export const CAST_SETS_SUBJECT_PREFIX = 'cs-';
+const CATALOG_TYPE_PREFIX = { character: 'chr', place: 'plc', object: 'obj' };
+
+/**
+ * The catalog record a music video subject is saved to (catalogCast.js):
+ * deterministic per (project, subject), like the universe canon promotion, so
+ * two machines saving the same synced video converge on one row.
+ */
+export function musicVideoCastIngredientId(projectId, subject) {
+  const seed = `music-video:${projectId}:${subject.kind}:${subject.id}`;
+  return `cat-${CATALOG_TYPE_PREFIX[subject.kind]}-mv-${createHash('sha256').update(seed).digest('hex').slice(0, 32)}`;
+}
+
+// The first number in a free-text age ("17", "about 60"), or null.
+export const leadingAge = (value) => {
+  const match = String(value ?? '').match(/\d{1,3}/);
+  return match ? Number(match[0]) : null;
+};
+
+// "Nora (17)" → { base: 'Nora', qualifier: '17' }: a subject named for one age
+// or look of a cast member. "Nora, 17" is read the same way; only a trailing
+// number follows a comma.
+export function subjectNameParts(name) {
+  const text = String(name || '').trim();
+  const match = text.match(/^(.*?)\s*[([]\s*([^)\]]*?)\s*[)\]]\s*$/) || text.match(/^(.*?)\s*,\s*(\d{1,3})$/);
+  return match && match[1] ? { base: match[1].trim(), qualifier: match[2] } : { base: text, qualifier: '' };
+}
 
 /**
  * Catalog-linked cast and places the director chose in Creative setup: fixed
  * casting the check-in keeps instead of redesigning. Each carries the image
  * the Look step pulled for it (a reference labelled with its name), which
- * conditions its sheet or plate. Cast & Sets' own earlier subjects are left
- * out, so a regenerate can still redesign them.
+ * conditions its sheet or plate when its catalog record has no images
+ * (castAndSetsCatalogLikeness.js). Cast & Sets' own earlier subjects saved to
+ * their own catalog record are left out, so a regenerate can still redesign
+ * them; one the director re-linked to another Casting record is fixed.
  */
 export function fixedCasting(project) {
   const refs = project?.visualSpec?.references || [];
   return (project?.concept?.subjects || [])
     .filter((s) => s?.ingredientId && s.name && (s.kind === 'character' || s.kind === 'place')
-      && !String(s.id || '').startsWith(CAST_SETS_SUBJECT_PREFIX))
+      && !(String(s.id || '').startsWith(CAST_SETS_SUBJECT_PREFIX) && s.ingredientId === musicVideoCastIngredientId(project.id, s)))
     .map((s) => {
       const role = s.kind === 'place' ? 'set' : 'character';
       const name = s.name.trim().toLowerCase();
       const ref = refs.find((r) => r?.imageId && r.role === role && String(r.label || '').trim().toLowerCase() === name
         && !isOutsideMusicVideoReference(r));
-      return { kind: s.kind, name: s.name.trim(), role: s.role || null, description: s.description || '', imageId: ref?.imageId || null };
+      return {
+        id: s.id, kind: s.kind, name: s.name.trim(), role: s.role || null, description: s.description || '',
+        ...(s.castForm?.label ? { castForm: s.castForm.label } : {}), imageId: ref?.imageId || null,
+        ingredientId: s.ingredientId, castFormId: s.castForm?.id || null,
+      };
     });
+}
+
+/**
+ * The project subjects a protagonist form may be bound to (`form.subjectId`):
+ * the fixed-casting characters, so a form is only ever grounded on a catalog
+ * record the director chose, never on an identity read out of free text.
+ */
+export const formSubjects = (project) => fixedCasting(project).filter((f) => f.kind === 'character');
+
+/**
+ * The fixed-casting characters that must each appear in `direction.cast`: every
+ * catalog-linked character except the protagonist, and except an age form of
+ * the protagonist's own catalog record (that one belongs in protagonist.forms).
+ */
+export function fixedSupportingCast(project) {
+  const subjects = project?.concept?.subjects || [];
+  const leadRecords = new Set(subjects.filter((s) => s?.role === 'protagonist' && s.ingredientId).map((s) => s.ingredientId));
+  const recordOf = new Map(subjects.map((s) => [s?.id, s?.ingredientId]));
+  return formSubjects(project)
+    .filter((f) => f.role !== 'protagonist' && !leadRecords.has(recordOf.get(f.id)))
+    .slice(0, CAST_SETS_LIMITS.fixedCast);
 }
 
 function fixedCastingBlock(project) {
@@ -181,7 +240,7 @@ function fixedCastingBlock(project) {
   if (!fixed.length) return '';
   return [
     'FIXED CASTING (catalog records the director chose; keep them):',
-    ...fixed.map((f) => `- ${f.kind}${f.role === 'protagonist' ? ' (protagonist)' : ''}: ${trimTo(f.name, 120)}${f.description ? ` — ${trimTo(f.description, 500)}` : ''}`),
+    ...fixed.map((f) => `- ${f.kind}${f.role === 'protagonist' ? ' (protagonist)' : ''}: ${trimTo(f.name, 120)}${f.description ? ` — ${trimTo(f.description, 500)}` : ''}${f.kind === 'character' ? ` [subject id: ${f.id}${f.castForm ? `, shown as: ${trimTo(f.castForm, 80)}` : ''}]` : ''}`),
     'Use each one as given: the same name, and its description for face, hair and wardrobe, or for the empty location. A character marked protagonist is the protagonist unless a character style above fixes it; other characters go in "cast"; places become sets. Design only what this list leaves missing.',
   ].join('\n');
 }
@@ -199,13 +258,13 @@ const OUTPUT_SHAPE = `{
     "gesture": "<a recurring gesture tied to a lyric hook, quoting the hook>",
     "rules": ["<continuity or safety rule>"],
     "expressions": ["<a mood from the story: what the face, eyes and head do>"],
-    "forms": [{ "id": "<short-slug>", "label": "<e.g. Age 7>", "age": "<age>", "description": "<how they look at that age>", "hair": "<hair at that age>", "wardrobe": "<their outfit at that age>" }]
+    "forms": [{ "id": "<short-slug>", "label": "<e.g. Age 7>", "age": "<age>", "description": "<how they look at that age>", "hair": "<hair at that age>", "wardrobe": "<their outfit at that age>", "subjectId": "<the FIXED CASTING subject id of the protagonist at this age, or empty>" }]
   },
   "looks": [{ "name": "<SHORT NAME>", "description": "<the complete outfit>", "chapters": "<which parts of the song>" }],
   "cast": [{ "id": "<short-slug>", "name": "<a name>", "role": "<what they are in the video: drummer, shopkeeper, ...>", "description": "<who they are: age, vibe, attitude>", "face": "<face: skin, eyes, brows, distinguishing features>", "hair": "<hair>", "wardrobe": "<their one outfit>" }],
   "sets": [{ "id": "<short-slug>", "name": "<set name>", "description": "<the empty location, concrete and visual, with nobody in it>", "lighting": "<its one dominant light>", "sections": ["<section label it serves>"] }],
   "songMap": [{ "section": 0, "setId": "<short-slug>" }],
-  "tests": [{ "setId": "<short-slug>", "look": "<SHORT NAME>", "action": "<what the protagonist does in this frame>", "caption": "<the lyric or beat it serves>" }],
+  "tests": [{ "setId": "<short-slug>", "look": "<SHORT NAME>", "action": "<what the protagonist does in this frame>", "caption": "<the lyric or beat it serves>", "formId": "<the protagonist.forms id when this frame shows them at that other age, or empty>" }],
   "overlayConcept": { "summary": "<one persistent graphic layer that ties every shot together>", "elements": [{ "name": "<element>", "description": "<what it shows and when it changes>" }] },
   "questions": ["<a question for the director>"]
 }`;
@@ -352,12 +411,14 @@ export function buildCastAndSetsPrompt(project, { moodImages = [], board = null,
     '- Give every set ONE dominant light color or quality so a cut tells the viewer where we are.',
     LOOK_AND_SET_RULES,
     '- songMap: one entry per song section index listed above, naming the set that section plays in.',
-    '- tests: in-set frames of the protagonist that prove the cast works in the world; each names a set id and a look name, and shows a moment from the story.',
+    '- tests: in-set frames of the protagonist that prove the cast works in the world; each names a set id and a look name, and shows a moment from the story. A test showing the protagonist at one of their other ages names that form\'s id in formId; otherwise formId is empty.',
     `- protagonist.expressions: 4–6 moods the protagonist actually shows in THIS story, each "<mood>: <what the face, eyes and head do>" (e.g. "grief held in: eyes closed, head bowed"). They become the expression sheet. ${musicVideoLipSyncs(project)
     ? 'Some shots lip-sync, so one may be singing.'
     : 'Nobody sings or mouths the words on camera in this video: no singing, open-mouthed or straight-to-lens performance expressions.'}`,
-    `- protagonist.forms: when the story shows the protagonist at OTHER ages (a childhood memory, a teenage flashback), one entry per other age, at most ${CAST_SETS_LIMITS.forms}: its age, a short label ("Age 7"), how they look then, their hair and their outfit. The other protagonist fields describe them at their present-story age. [] when they appear at one age only.`,
-    `- cast: the RECURRING supporting characters besides the protagonist that the song, concept or guidance calls for (band members, someone who returns across scenes), at most ${CAST_SETS_LIMITS.cast}; [] when the protagonist is alone. Each gets their own photographic character sheet. Shots that name a cast member by name or role are conditioned on that sheet, so give each a distinct name and a plain role word.`,
+    `- protagonist.forms: when the story shows the protagonist at OTHER ages (a childhood memory, a teenage flashback), one entry per other age, at most ${CAST_SETS_LIMITS.forms}: its age, a short label ("Age 7"), how they look then, their hair and their outfit. The other protagonist fields describe them at their present-story age. When FIXED CASTING lists a character who is the protagonist at that age, put its subject id in subjectId; otherwise subjectId is empty. [] when they appear at one age only.`,
+    `- cast: the RECURRING supporting characters besides the protagonist that the song, concept or guidance calls for (band members, someone who returns across scenes)${fixedSupportingCast(project).length
+    ? `: every character FIXED CASTING lists that is not the protagonist or one of their other ages, each as its own entry under its own name, plus at most ${CAST_SETS_LIMITS.cast} more`
+    : `, at most ${CAST_SETS_LIMITS.cast}; [] when the protagonist is alone`}. Each gets their own photographic character sheet. Shots that name a cast member by name or role are conditioned on that sheet, so give each a distinct name and a plain role word.`,
     '- Wet or revealing looks use opaque fabric so the video stays safe to post.',
     '- questions: up to three things you need the director to decide.',
   ].join('\n');
@@ -433,6 +494,7 @@ const formSchema = z.preprocess(withoutNulls, z.object({
   description: prose(TEXT).optional(),
   hair: prose(TEXT).optional(),
   wardrobe: prose(TEXT).optional(),
+  subjectId: text(64).optional(),
 }).passthrough());
 
 const protagonistSchema = z.preprocess(withoutNulls, z.object({
@@ -488,7 +550,7 @@ const castSchema = z.preprocess(withoutNulls, z.object({
   hair: prose(TEXT).optional(),
   wardrobe: prose(TEXT).optional(),
 }).passthrough());
-const testSchema = z.object({ setId: z.string(), look: text(SHORT).optional(), action: text(TEXT), caption: text(300).optional() }).passthrough();
+const testSchema = z.object({ setId: z.string(), look: text(SHORT).optional(), action: text(TEXT), caption: text(300).optional(), formId: text(64).optional() }).passthrough();
 const overlaySchema = z.union([
   text(TEXT).transform((summary) => ({ summary, elements: [] })),
   z.object({
@@ -581,54 +643,104 @@ function normalizeSongMap(entries, sets, sections) {
   return [...out.values()].sort((a, b) => a.section - b.section);
 }
 
+const castKey = (name) => String(name || '').trim().toLowerCase();
+
 // Supporting cast: a named person with something to draw (face or description),
-// unique slug ids, never the protagonist again.
-function normalizeCast(cast, protagonist) {
+// unique slug ids, never the protagonist again. Each `fixed` subject (the
+// director's catalog-linked supporting characters) is kept once by name beyond
+// the invented-cast cap; one the answer left out (or left undrawable) is added
+// from its catalog description, unless it is the protagonist or a bound age form.
+// Identity here is the name on purpose: fixedCasting pulls each subject's image
+// by reference label, sheets and shot conditioning match a cast member by name,
+// and a fixed subject sharing the protagonist's name is the one the direction
+// cast as the protagonist. Two same-named subjects are one person to all of them.
+function normalizeCast(cast, protagonist, { fixed = [], forms = [] } = {}) {
   const seen = new Set();
-  const lead = String(protagonist?.name || '').trim().toLowerCase();
-  return cast.filter((c) => c.name && (c.face || c.description) && c.name.trim().toLowerCase() !== lead)
-    .slice(0, CAST_SETS_LIMITS.cast).map((c, i) => {
-      let id = slug(c.id) || slug(c.name) || `cast-${i + 1}`;
-      while (seen.has(id)) id = `${id}-${i + 1}`;
-      seen.add(id);
-      return { id, name: c.name, role: c.role || '', description: c.description || '', face: c.face || '', hair: c.hair || '', wardrobe: c.wardrobe || '' };
-    });
+  const lead = castKey(protagonist?.name);
+  const fixedNames = new Set(fixed.map((f) => castKey(f.name)));
+  // A fixed subject bound to a protagonist age form is that form, never also supporting cast.
+  const bound = new Set(forms.map((f) => f.subjectId).filter(Boolean));
+  const boundNames = new Set(fixed.filter((f) => bound.has(f.id)).map((f) => castKey(f.name)));
+  const placed = new Set([lead, ...boundNames]);
+  let invented = 0;
+  const kept = cast.filter((c) => {
+    const key = castKey(c.name);
+    if (!key || !(c.face || c.description) || key === lead || boundNames.has(key)) return false;
+    if (fixedNames.has(key)) {
+      if (placed.has(key)) return false;
+      placed.add(key);
+      return true;
+    }
+    if (invented >= CAST_SETS_LIMITS.cast) return false;
+    invented += 1;
+    return true;
+  });
+  const added = fixed.filter((f) => {
+    const key = castKey(f.name);
+    if (placed.has(key)) return false;
+    placed.add(key);
+    return true;
+  }).map((f) => ({ name: f.name, role: f.role === 'band' ? 'band member' : '', description: trimTo(f.description, TEXT) }));
+  return [...kept, ...added].map((c, i) => {
+    let id = slug(c.id) || slug(c.name) || `cast-${i + 1}`;
+    while (seen.has(id)) id = `${id}-${i + 1}`;
+    seen.add(id);
+    return { id, name: c.name, role: c.role || '', description: c.description || '', face: c.face || '', hair: c.hair || '', wardrobe: c.wardrobe || '' };
+  });
 }
 
 // Other ages of the protagonist: a described form, unique slug ids, capped.
-function normalizeForms(forms) {
+// `subjectId` (optional) binds the form to a fixed-casting subject's reference;
+// a form listed without the key keeps the binding `previous` had for its id.
+function normalizeForms(forms, previous = []) {
   const seen = new Set();
   return (Array.isArray(forms) ? forms : []).filter((f) => f && (f.label || f.age) && f.description)
     .slice(0, CAST_SETS_LIMITS.forms).map((f, i) => {
       let id = slug(f.id) || slug(f.label) || slug(f.age && `age-${f.age}`) || `form-${i + 1}`;
       while (seen.has(id)) id = `${id}-${i + 1}`;
       seen.add(id);
-      return { id, label: f.label || `Age ${f.age}`, age: f.age || '', description: f.description, hair: f.hair || '', wardrobe: f.wardrobe || '' };
+      const prior = previous.find((p) => p?.id === id);
+      const subjectId = String((hasOwn(f, 'subjectId') ? f.subjectId : prior?.subjectId) || '').trim().slice(0, 64);
+      // The bound subject's name (stamped by the service), kept while the binding is.
+      const subjectName = subjectId && String((subjectId === prior?.subjectId && prior?.subjectName) || f.subjectName || '').trim().slice(0, 120);
+      return { id, label: f.label || `Age ${f.age}`, age: f.age || '', description: f.description, hair: f.hair || '', wardrobe: f.wardrobe || '',
+        ...(subjectId ? { subjectId } : {}), ...(subjectName ? { subjectName } : {}) };
     });
 }
 
-function normalizeTests(tests, sets, looks) {
+// A test naming a form shows the protagonist at that age; one naming a form the
+// direction no longer has is dropped, never re-cast as the present-day protagonist.
+function normalizeTests(tests, sets, looks, forms = []) {
   const setIds = new Set(sets.map((s) => s.id));
+  const formIds = new Set(forms.map((f) => f.id));
   return tests
-    .map((t) => ({ ...t, setId: slug(t.setId) }))
-    .filter((t) => setIds.has(t.setId) && t.action)
+    .map((t) => ({ ...t, setId: slug(t.setId), formId: typeof t.formId === 'string' ? t.formId.trim() : '' }))
+    .filter((t) => setIds.has(t.setId) && t.action && (!t.formId || formIds.has(t.formId)))
     .slice(0, CAST_SETS_LIMITS.tests.max)
     .map((t) => ({
       setId: t.setId,
       look: looks.find((l) => l.name.toLowerCase() === String(t.look || '').toLowerCase())?.name || looks[0]?.name || '',
       action: t.action,
       caption: t.caption || '',
+      ...(t.formId ? { formId: t.formId } : {}),
     }));
+}
+
+/** The tests in `tests` whose form is not among `forms` (a 422 for a director edit). */
+function testsWithMissingForm(tests, forms) {
+  const formIds = new Set((forms || []).map((f) => f.id));
+  return (tests || []).flatMap((t, i) => (t?.formId && !formIds.has(t.formId) ? [i + 1] : []));
 }
 
 /**
  * Merge a parsed (partial) answer onto the current direction and normalize
  * the result. Absent keys keep `previous`; present keys replace (an empty
- * string/array clears the optional text/list fields). Returns
+ * string/array clears the optional text/list fields). `fixedCast` is the
+ * project's fixedSupportingCast: each stays in the cast (see normalizeCast). Returns
  * `{ direction, missing }` — `missing` lists the required parts still absent,
  * so a first pass with an unusable answer can be refused.
  */
-export function mergeCastAndSetsDirection(previous, parsed, { sections = [], medium = null, minSets = CAST_SETS_LIMITS.sets.min } = {}) {
+export function mergeCastAndSetsDirection(previous, parsed, { sections = [], medium = null, minSets = CAST_SETS_LIMITS.sets.min, fixedCast = [] } = {}) {
   const base = previous || {};
   const procedural = (medium || base.medium) === 'procedural';
   const pick = (key, fallback) => (hasOwn(parsed, key) ? parsed[key] : (hasOwn(base, key) ? base[key] : fallback));
@@ -645,7 +757,7 @@ export function mergeCastAndSetsDirection(previous, parsed, { sections = [], med
     rules: (hasOwn(p1, 'rules') ? p1.rules : (p0.rules || [])).filter(Boolean).slice(0, CAST_SETS_LIMITS.rules),
   };
   const expressions = (hasOwn(p1, 'expressions') ? p1.expressions : (p0.expressions || [])).filter(Boolean).slice(0, CAST_SETS_LIMITS.expressions);
-  const forms = procedural ? [] : normalizeForms(hasOwn(p1, 'forms') ? p1.forms : p0.forms);
+  const forms = procedural ? [] : normalizeForms(hasOwn(p1, 'forms') ? p1.forms : p0.forms, p0.forms || []);
   // A photographic protagonist without moods or other ages keeps its legacy shape
   // (its seeded Cast guide still reads as the same content).
   if (procedural || expressions.length) protagonist.expressions = expressions;
@@ -670,7 +782,7 @@ export function mergeCastAndSetsDirection(previous, parsed, { sections = [], med
     return prior?.setReference ? { ...set, setReference: prior.setReference } : set;
   });
   const songMap = normalizeSongMap(pick('songMap', []), sets, sections);
-  const tests = normalizeTests(pick('tests', []), sets, looks);
+  const tests = normalizeTests(pick('tests', []), sets, looks, forms);
   const overlayRaw = pick('overlayConcept', { summary: '', elements: [] }) || {};
   const overlayConcept = {
     summary: overlayRaw.summary || '',
@@ -686,7 +798,7 @@ export function mergeCastAndSetsDirection(previous, parsed, { sections = [], med
     protagonist,
     looks,
     // Photographic only: a procedural cast lives in `definitions`.
-    ...(procedural ? {} : { cast: normalizeCast(pick('cast', []), protagonist) }),
+    ...(procedural ? {} : { cast: normalizeCast(pick('cast', []), protagonist, { fixed: fixedCast, forms }) }),
     sets,
     songMap,
     tests,
@@ -715,6 +827,8 @@ export const CAST_SETS_EDITABLE_WORLD = Object.freeze({ layout: TEXT, depth: 500
 const EDITABLE_CAST = Object.freeze({ name: SHORT, role: SHORT, description: TEXT, face: TEXT, hair: TEXT, wardrobe: TEXT });
 const EDITABLE_SET = Object.freeze({ name: SHORT, description: TEXT, lighting: 300 });
 const EDITABLE_TEST = Object.freeze({ action: TEXT, caption: 300, look: SHORT });
+// A test's form binding: a present `formId` replaces it (null or '' clears it).
+const testFormPatch = (patch) => (hasOwn(patch, 'formId') ? { formId: patch.formId || '' } : {});
 
 const pickText = (source, caps) => Object.fromEntries(
   Object.entries(caps).filter(([key]) => typeof source?.[key] === 'string').map(([key, max]) => [key, source[key].trim().slice(0, max)]),
@@ -754,10 +868,11 @@ function patchItems(list, patches, { what, keyOf, fields, extra = () => ({}) }) 
  * The result goes through the same merge + normalize as a provider answer, so
  * it can never be shaped differently from one; the director may cut the sets
  * down to one. Returns `{ direction, changed }` (`changed` names what actually
- * changed, for the revision record); throws 422 for an unknown item or an edit
- * that would leave the direction unusable.
+ * changed, for the revision record); throws 422 for an unknown item, an edit
+ * that would leave the direction unusable, or one that removes or renames a
+ * catalog-linked supporting character (`fixedCast`; unlink it in Creative setup).
  */
-export function applyCastAndSetsDirectionEdits(previous, edits, { sections = [] } = {}) {
+export function applyCastAndSetsDirectionEdits(previous, edits, { sections = [], fixedCast = [] } = {}) {
   if (edits?.sets?.length && !edits.protagonist && !edits.world && edits.sets.every((s) => Object.hasOwn(s, 'setReference') && !Object.hasOwn(s, 'imageRole'))) {
     const updates = new Map(edits.sets.map((s) => [s.id, s.setReference]));
     if ([...updates.keys()].some((id) => !previous.sets?.some((s) => s.id === id))) {
@@ -769,6 +884,7 @@ export function applyCastAndSetsDirectionEdits(previous, edits, { sections = [] 
   }
   const procedural = previous?.medium === 'procedural';
   const parsed = {};
+  let renamedLooks = new Map(), currentLookNames = new Set(), currentLookNamesExact = new Set();
   if (edits?.protagonist) {
     const protagonist = pickText(edits.protagonist, procedural ? CAST_SETS_EDITABLE_PROTAGONIST : CAST_SETS_EDITABLE_PHOTO_PROTAGONIST);
     if (Array.isArray(edits.protagonist.expressions)) {
@@ -785,10 +901,22 @@ export function applyCastAndSetsDirectionEdits(previous, edits, { sections = [] 
     if (new Set(originals).size !== originals.length || originals.some((name) => !(previous.looks || []).some((look) => look.name === name)) || new Set(names).size !== names.length) {
       throw new ServerError('Look names or original references are ambiguous', { status: 422, code: 'CAST_SETS_EDIT_INVALID' });
     }
-    const renames = new Map(edits.looks.filter((l) => l.originalName).map((l) => [l.originalName, l.name]));
+    const renames = new Map(edits.looks.flatMap((look, i) => look.originalName ? [[look.originalName, parsed.looks[i].name]] : []));
+    renamedLooks = renames;
+    currentLookNames = new Set(parsed.looks.map((look) => look.name.toLowerCase()));
+    currentLookNamesExact = new Set(parsed.looks.map((look) => look.name));
     parsed.tests = (previous.tests || []).map((test) => ({ ...test, look: renames.get(test.look) || test.look }));
   }
   if (!procedural && Array.isArray(edits?.cast) && edits.cast.length) {
+    const fixedNames = new Set(fixedCast.map((f) => castKey(f.name)));
+    const locked = edits.cast.flatMap((patch) => {
+      const member = (previous.cast || []).find((c) => c.id === patch.id);
+      const renamed = typeof patch.name === 'string' && castKey(patch.name) !== castKey(member?.name);
+      return member && fixedNames.has(castKey(member.name)) && (patch.remove || renamed) ? [member.name] : [];
+    });
+    if (locked.length) {
+      throw new ServerError(`${locked.join(', ')} ${locked.length > 1 ? 'are' : 'is'} cast from the catalog in Creative setup. Unlink ${locked.length > 1 ? 'them' : 'it'} there to remove or rename ${locked.length > 1 ? 'them' : 'it'}.`, { status: 422, code: 'CAST_SETS_FIXED_CAST' });
+    }
     parsed.cast = patchItems(previous.cast || [], edits.cast.map((c) => ({ ...c, key: c.id })), { what: 'cast member', keyOf: (c) => c.id, fields: EDITABLE_CAST });
   }
   if (Array.isArray(edits?.sets) && edits.sets.length) {
@@ -798,10 +926,37 @@ export function applyCastAndSetsDirectionEdits(previous, edits, { sections = [] 
     });
   }
   if (!procedural && Array.isArray(edits?.tests) && edits.tests.length) {
-    parsed.tests = patchItems(parsed.tests || previous.tests || [], edits.tests.map((t) => ({ ...t, key: t.index })), { what: 'test', keyOf: (_t, i) => i + 1, fields: EDITABLE_TEST });
+    const tests = edits.tests.map((test) => {
+      if (test.remove) return { ...test, key: test.index };
+      const name = test.look?.trim();
+      let renamed = null;
+      if (name && !currentLookNamesExact.has(name)) {
+        const matches = [...renamedLooks].filter(([original]) => original.toLowerCase() === name.toLowerCase());
+        if (currentLookNames.has(name.toLowerCase())) {
+          if (matches.some(([, target]) => target && target.toLowerCase() !== name.toLowerCase())) {
+            throw new ServerError('Look reference is ambiguous', { status: 422, code: 'CAST_SETS_EDIT_INVALID' });
+          }
+        } else {
+          renamed = renamedLooks.get(name);
+          if (!renamed && matches.length > 1) throw new ServerError('Look reference is ambiguous', { status: 422, code: 'CAST_SETS_EDIT_INVALID' });
+          renamed ||= matches[0]?.[1];
+        }
+      }
+      return { ...test, ...(renamed && { look: renamed }), key: test.index };
+    });
+    parsed.tests = patchItems(parsed.tests || previous.tests || [], tests, { what: 'test', keyOf: (_t, i) => i + 1, fields: EDITABLE_TEST, extra: testFormPatch });
     parsed.testsFixed = true;
   }
-  const { direction, missing } = mergeCastAndSetsDirection(previous, parsed, { sections, medium: procedural ? 'procedural' : 'photographic', minSets: 1 });
+  // A director edit never drops a test silently: removing (or mistyping) the age
+  // a test shows is refused until that test is reassigned or removed.
+  if (!procedural) {
+    const forms = normalizeForms(hasOwn(parsed.protagonist, 'forms') ? parsed.protagonist.forms : previous?.protagonist?.forms, previous?.protagonist?.forms || []);
+    const orphaned = testsWithMissingForm(parsed.tests || previous?.tests, forms);
+    if (orphaned.length) {
+      throw new ServerError(`An age that is not on the sheet is shown by test ${orphaned.join(', ')}. Give each another age or remove it first.`, { status: 422, code: 'CAST_SETS_UNKNOWN_FORM' });
+    }
+  }
+  const { direction, missing } = mergeCastAndSetsDirection(previous, parsed, { sections, medium: procedural ? 'procedural' : 'photographic', minSets: 1, fixedCast });
   if (missing.length) throw new ServerError(`That edit would leave the direction without: ${missing.join(', ')}`, { status: 422, code: 'CAST_SETS_EDIT_INVALID' });
   return { direction: { ...direction, look: previous.look || '' }, changed: describeEdits(previous, direction) };
 }

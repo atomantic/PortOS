@@ -3,7 +3,7 @@ import socket from '../services/socket';
 import { getMusicVideoShotRenders } from '../services/apiMusicVideo.js';
 
 // The project fields that can change which cached shot segments are current.
-const renderInputs = (project) => JSON.stringify([project?.scenes, project?.filmLook, project?.composition, project?.statsOutro, project?.trackId, project?.lyricCues, project?.renderHistoryId]);
+const renderInputs = (project) => JSON.stringify([project?.scenes, project?.filmLook, project?.composition, project?.statsOutro, project?.creditsOutro, project?.trackId, project?.lyricCues, project?.renderHistoryId]);
 
 /**
  * The composed final render's per-shot cache state (`GET /:id/shot-renders`):

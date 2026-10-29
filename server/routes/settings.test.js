@@ -1009,6 +1009,16 @@ describe('Settings routes — beeper slice (#30)', () => {
     expect(JSON.stringify(res.body)).not.toMatch(/super-secret-token/);
   });
 
+  it('redacts the Topaz key from settings and preserves it across unrelated video settings updates', async () => {
+    store = { videoGen: { topaz: { apiKey: 'private-topaz-key' } } };
+    const read = await request(buildApp()).get('/api/settings');
+    expect(JSON.stringify(read.body)).not.toContain('private-topaz-key');
+    const saved = await request(buildApp()).put('/api/settings').send({ videoGen: { topaz: {} } });
+    expect(saved.status).toBe(200);
+    expect(store.videoGen.topaz.apiKey).toBe('private-topaz-key');
+    expect(JSON.stringify(saved.body)).not.toContain('private-topaz-key');
+  });
+
   // Without this, the generic top-level shallow merge would REPLACE
   // current.beeper wholesale and silently wipe out a token stored by another
   // write path (#31's vault, or a hand-edited settings.json) the instant the

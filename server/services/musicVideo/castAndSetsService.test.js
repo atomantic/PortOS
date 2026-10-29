@@ -117,6 +117,9 @@ async function until(check, label, diagnostics) {
   }
 }
 
+// Reference images the director or Casting holds; a missing file is skipped at enqueue.
+const onDisk = (...names) => names.forEach((name) => writeFileSync(join(IMAGES(), name), PNG));
+
 /** Land every queued job whose key is in `keys` (all when omitted), as the image hook does. */
 async function land(projectId, keys = null) {
   const pending = jobs.filter((j) => j.params.musicVideo.projectId === projectId && !j.landed && (!keys || keys.includes(keyOf(j))));
@@ -193,6 +196,7 @@ const testDeps = (overrides = {}) => ({
   loadBoard: async () => board,
   boardItemImage: async () => (item) => (item.type === 'image' ? { kind: 'image', filename: item.file } : null),
   loadTrack: async () => null,
+  catalog: { getIngredient: async () => null, listMediaForIngredient: async () => [] },
   ...overrides,
 });
 afterEach(async () => {
@@ -947,6 +951,8 @@ describe('Cast & Sets per-item actions', () => {
       return { project: { ...c, castAndSets: { ...c.castAndSets, plan } } };
     });
     const before = await current(project.id);
+    const staleView = await request(app).get(`/api/music-video/${project.id}/cast-and-sets`);
+    expect(staleView.body.stage.plan['test:2'].test).toBeUndefined();
     const stale = await request(app).patch(`/api/music-video/${project.id}/cast-and-sets/direction`).send({ tests: [{ index: 2, caption: 'new caption' }] });
     expect(stale.status).toBe(409);
     expect((await current(project.id)).castAndSets).toEqual(before.castAndSets);
@@ -955,9 +961,76 @@ describe('Cast & Sets per-item actions', () => {
       plan['test:2'].prompt = plan['test:2'].prompt.slice(0, -6);
       return { project: { ...c, castAndSets: { ...c.castAndSets, plan } } };
     });
-    expect((await request(app).patch(`/api/music-video/${project.id}/cast-and-sets/direction`).send({ tests: [{ index: 2, caption: 'new caption' }] })).status).toBe(202);
+    const view = await request(app).get(`/api/music-video/${project.id}/cast-and-sets`);
+    expect(view.body.stage.plan['test:2'].test).toMatchObject({ action: expect.stringContaining('quiet moment'), caption: expect.any(String) });
+    expect((await current(project.id)).castAndSets.plan['test:2'].test).toBeUndefined();
+    expect((await request(app).patch(`/api/music-video/${project.id}/cast-and-sets/direction`).send({ tests: [{ index: 2, caption: '' }] })).status).toBe(202);
     await runTo(project.id, 'review');
-    expect((await current(project.id)).castAndSets.direction.tests[1].caption).toBe('new caption');
+    expect((await current(project.id)).castAndSets.direction.tests[1].caption).toBe('');
+  });
+
+  it('refuses a legacy card when the automatic test moved to a different identical-looking set', async () => {
+    const { buildCastAndSetsImagePlan } = await import('./castAndSetsPlan.js');
+    runPrompt.mockResolvedValue({ text: JSON.stringify({ ...DIRECTION, tests: [DIRECTION.tests[0]] }) });
+    const project = await seed();
+    await service.startCastAndSets(project.id);
+    await runTo(project.id, 'review');
+    const saved = await current(project.id);
+    const oldDirection = structuredClone(saved.castAndSets.direction);
+    oldDirection.sets = oldDirection.sets.map((set) => ['harbor', 'roof'].includes(set.id)
+      ? { ...set, name: 'Shared set', lighting: 'dusk', sections: ['shared caption'] } : set);
+    oldDirection.songMap = [{ section: 1, setId: 'harbor' }];
+    const newDirection = { ...oldDirection, songMap: [{ section: 1, setId: 'roof' }] };
+    const oldPlan = buildCastAndSetsImagePlan(saved, oldDirection);
+    const newPlan = buildCastAndSetsImagePlan(saved, newDirection);
+    expect(oldPlan['test:2'].setId).toBe('harbor');
+    expect(newPlan['test:2'].setId).toBe('roof');
+    expect(oldPlan['test:2'].prompt).toBe(newPlan['test:2'].prompt);
+    expect(oldPlan['test:2'].label).toBe(newPlan['test:2'].label);
+    for (const card of Object.values(oldPlan)) delete card.test;
+    await projects.mutateProjectRecord(project.id, (c) => ({ project: { ...c, castAndSets: {
+      ...c.castAndSets, direction: newDirection, plan: oldPlan,
+    } } }));
+    const before = await current(project.id);
+    const view = await request(app).get(`/api/music-video/${project.id}/cast-and-sets`);
+    expect(view.body.stage.plan['test:2'].test).toBeUndefined();
+    const edit = await request(app).patch(`/api/music-video/${project.id}/cast-and-sets/direction`).send({ tests: [{ index: 2, caption: 'new caption' }] });
+    expect(edit.status).toBe(409);
+    expect((await current(project.id)).castAndSets).toEqual(before.castAndSets);
+
+    const changedCaption = structuredClone(oldDirection);
+    changedCaption.tests[0].caption = 'changed caption';
+    const captionPlan = buildCastAndSetsImagePlan(saved, changedCaption);
+    expect(oldPlan['test:1'].prompt).toBe(captionPlan['test:1'].prompt);
+    expect(oldPlan['test:1'].label).not.toBe(captionPlan['test:1'].label);
+    await projects.mutateProjectRecord(project.id, (c) => ({ project: { ...c, castAndSets: { ...c.castAndSets, direction: changedCaption } } }));
+    const beforeCaptionEdit = await current(project.id);
+    const captionView = await request(app).get(`/api/music-video/${project.id}/cast-and-sets`);
+    expect(captionView.body.stage.plan['test:1'].test).toBeUndefined();
+    const captionEdit = await request(app).patch(`/api/music-video/${project.id}/cast-and-sets/direction`).send({ tests: [{ index: 1, caption: 'another caption' }] });
+    expect(captionEdit.status).toBe(409);
+    expect((await current(project.id)).castAndSets).toEqual(beforeCaptionEdit.castAndSets);
+  });
+
+  it('keeps a combined test edit on the renamed look and respects an explicit different look', async () => {
+    runPrompt.mockResolvedValue({ text: JSON.stringify({ ...DIRECTION, tests: [...DIRECTION.tests,
+      { setId: 'roof', look: 'Watch', action: 'looking out', caption: 'last beat' }] }) });
+    const project = await seed();
+    await service.startCastAndSets(project.id);
+    await runTo(project.id, 'review');
+    let saved = await current(project.id);
+    const looks = saved.castAndSets.direction.looks.map((look) => ({ ...look, originalName: look.name }));
+    looks[1].name = 'Rain';
+    const ambiguous = await request(app).patch(`/api/music-video/${project.id}/cast-and-sets/direction`).send({ looks: [looks[0], { ...looks[1], originalName: looks[0].originalName }],
+      tests: [{ index: 1, look: 'Storm' }] });
+    expect(ambiguous.status).toBe(422);
+    const combined = await request(app).patch(`/api/music-video/${project.id}/cast-and-sets/direction`).send({ looks,
+      tests: [{ index: 1, look: 'Storm', caption: 'new beat' }, { index: 2, look: 'Rain' }, { index: 3, look: 'Watch' }] });
+    expect(combined.status).toBe(202);
+    await runTo(project.id, 'review');
+    saved = await current(project.id);
+    expect(saved.castAndSets.direction.tests.map((test) => test.look)).toEqual(['Rain', 'Rain', 'Watch']);
+    expect(saved.castAndSets.direction.tests[0].caption).toBe('new beat');
   });
 
   it('reads the story, draws moods and other ages, then edits, removes and re-renders single items', async () => {
@@ -1011,6 +1084,7 @@ describe('Cast & Sets per-item actions', () => {
 
 
 it('conditions the character, expressions and looks sheets on the director\'s own character references only', async () => {
+  onDisk('upload-face.png', 'rendered-face.png', 'board-face.png', 'pinterest-0123456789abcdef.jpg', 'old-sheet.png', 'spare-face.png');
   const project = await seed({ visualSpec: { moodBoardId: 'mb-1', references: [
     { id: 'own-upload', imageId: 'upload-face.png', role: 'character', condition: true },
     { id: 'own-render', imageId: 'rendered-face.png', role: 'character', condition: true },
@@ -1031,6 +1105,7 @@ it('conditions the character, expressions and looks sheets on the director\'s ow
 });
 
 it('keeps catalog-linked cast and places as fixed casting, conditioned on their images', async () => {
+  onDisk('keeper.png', 'mate.png', 'harbor.png', 'cliff.png');
   runPrompt.mockResolvedValue({ text: JSON.stringify({ ...DIRECTION, cast: [{ id: 'mate', name: 'Mate', role: 'deckhand', description: 'young', face: 'freckles', hair: 'red', wardrobe: 'peacoat' }] }) });
   const project = await seed({
     concept: { prompt: 'a vigil', subjects: [
@@ -1062,6 +1137,287 @@ it('keeps catalog-linked cast and places as fixed casting, conditioned on their 
   expect(job('set:harbor').params.prompt).toContain('The same location as the reference image');
   // An unlinked place is designed fresh.
   expect(refs('set:roof')).toBeUndefined();
+});
+
+// #14069: five catalog-linked supporting characters, more than the invented-cast allowance.
+const FIXED_SUPPORTING = ['Anika', 'Boris', 'Cyrus', 'Delia', 'Elio'];
+const fixedCastProject = (extra = {}) => {
+  // Casting images the plan conditions each linked character's sheet on.
+  onDisk('keeper.png', ...FIXED_SUPPORTING.map((name) => `${name.toLowerCase()}.png`));
+  const records = { 'cat-lead': { id: 'cat-lead', type: 'character', name: 'Keeper', payload: {} } };
+  const media = { 'cat-lead': [{ mediaKey: 'keeper.png', kind: 'portrait' }] };
+  FIXED_SUPPORTING.forEach((name, i) => {
+    records[`cat-${i}`] = { id: `cat-${i}`, type: 'character', name, payload: {} };
+    media[`cat-${i}`] = [{ mediaKey: `${name.toLowerCase()}.png`, kind: 'portrait' }];
+  });
+  service.__setCastAndSetsDepsForTests(testDeps({ catalog: {
+    getIngredient: async (id) => records[id] || null,
+    listMediaForIngredient: async (id) => media[id] || [],
+  } }));
+  return seedFixedCast(extra);
+};
+const seedFixedCast = (extra = {}) => seed({
+  concept: { prompt: 'a vigil', subjects: [
+    { id: 'mvc-lead', kind: 'character', name: 'Keeper', role: 'protagonist', ingredientId: 'cat-lead' },
+    ...FIXED_SUPPORTING.map((name, i) => ({ id: `mvc-${i}`, kind: 'character', name, role: i === 4 ? 'band' : 'supporting', description: `${name} from the catalog`, ingredientId: `cat-${i}` })),
+    { id: 's-note', kind: 'object', name: 'Brass lantern' },
+  ] },
+  visualSpec: { references: [
+    { id: 'mvr-pull-lead', imageId: 'keeper.png', role: 'character', label: 'Keeper', condition: false },
+    ...FIXED_SUPPORTING.map((name) => ({ id: `mvr-pull-${name}`, imageId: `${name.toLowerCase()}.png`, role: 'character', label: name, condition: false })),
+  ] },
+  ...extra,
+});
+// The answer casts four of them and five invented people, and leaves Elio out.
+const fixedCastAnswer = () => JSON.stringify({ ...DIRECTION, cast: [
+  ...FIXED_SUPPORTING.slice(0, 4).map((name) => ({ name, role: '', description: `${name}, as written`, face: 'calm' })),
+  ...['Gusta', 'Halden', 'Ivory', 'Jolie', 'Kitto'].map((name) => ({ name, role: '', description: 'invented', face: 'plain' })),
+] });
+
+it('keeps a catalog-conditioned sheet for every fixed supporting character through regeneration and approval, with invented cast still bounded (#14069)', async () => {
+  runPrompt.mockResolvedValue({ text: fixedCastAnswer() });
+  const project = await fixedCastProject();
+  await service.startCastAndSets(project.id);
+  await runTo(project.id, 'review');
+  const prompt = runPrompt.mock.calls[0][0].prompt;
+  for (const name of FIXED_SUPPORTING) expect(prompt).toContain(`- character: ${name} — ${name} from the catalog`);
+  expect(prompt).toMatch(/- cast: the RECURRING supporting characters[^\n]*every character FIXED CASTING lists[^\n]*plus at most 4 more/);
+  expect(prompt).not.toMatch(/- cast:[^\n]*, at most 4;/);
+
+  let saved = await current(project.id);
+  // All five fixed (the omitted one from its catalog record), four invented, never the protagonist.
+  expect(saved.castAndSets.direction.cast.map((c) => c.name)).toEqual(['Anika', 'Boris', 'Cyrus', 'Delia', 'Gusta', 'Halden', 'Ivory', 'Jolie', 'Elio']);
+  expect(saved.castAndSets.direction.cast.at(-1)).toMatchObject({ id: 'elio', role: 'band member', description: 'Elio from the catalog' });
+  const job = (key) => jobs.findLast((j) => keyOf(j) === key);
+  const refs = (key) => job(key).params.referenceImagePaths?.map((p) => p.split(/[\\/]/).pop());
+  for (const name of FIXED_SUPPORTING) {
+    const key = `cast:${name.toLowerCase()}`;
+    expect(refs(key)).toEqual([`${name.toLowerCase()}.png`]);
+    expect(job(key).params.prompt).toContain(`ONE consistent person, ${name}`);
+  }
+  expect(refs('cast:gusta')).toBeUndefined();
+  expect(jobs.map(keyOf)).not.toContain('cast:kitto');
+
+  // A revision whose answer clears the cast keeps every fixed character's entry and sheet.
+  runPrompt.mockResolvedValue({ text: JSON.stringify({ ...DIRECTION, cast: [] }) });
+  await request(app).post(`/api/music-video/${project.id}/dev-artifacts/${saved.castAndSets.artifactId}/notes`).send({ text: 'Tighten the story' });
+  expect((await request(app).post(`/api/music-video/${project.id}/cast-and-sets/regenerate`).send({})).status).toBe(202);
+  await until(async () => runPrompt.mock.calls.length === 2, 'the revised direction');
+  await runTo(project.id, 'review');
+  saved = await current(project.id);
+  expect(saved.castAndSets.direction.cast.map((c) => c.name)).toEqual(FIXED_SUPPORTING);
+
+  // A director edit cannot drop one silently, and an unrelated edit keeps them all.
+  const removal = await request(app).patch(`/api/music-video/${project.id}/cast-and-sets/direction`).send({ cast: [{ id: 'elio', remove: true }] });
+  expect(removal.status).toBe(422);
+  expect(removal.body.code).toBe('CAST_SETS_FIXED_CAST');
+  expect((await current(project.id)).castAndSets).toEqual(saved.castAndSets);
+  expect((await request(app).patch(`/api/music-video/${project.id}/cast-and-sets/direction`).send({ protagonist: { gesture: 'a slow wave' } })).status).toBe(202);
+  await runTo(project.id, 'review');
+  saved = await current(project.id);
+  expect(saved.castAndSets.direction.cast.map((c) => c.name)).toEqual(FIXED_SUPPORTING);
+
+  expect((await request(app).post(`/api/music-video/${project.id}/cast-and-sets/approve`).send({})).status).toBe(200);
+  const done = await current(project.id);
+  for (const name of FIXED_SUPPORTING) {
+    expect(done.visualSpec.references.find((r) => r.id === `mvr-cs-cast-${name.toLowerCase()}`)).toMatchObject({ role: 'character', condition: false });
+  }
+  // The director's subjects stay as authored; none is duplicated as a check-in subject.
+  expect(done.concept.subjects.filter((s) => !s.id.startsWith('cs-'))).toEqual(project.concept.subjects);
+  expect(done.concept.subjects.filter((s) => s.id.startsWith('cs-cast-'))).toEqual([]);
+  // The planner is told about all of them, and a shot naming all five stays within the per-shot cap.
+  const { musicVideoDirectionContext } = await import('../../lib/musicVideoCreativeContext.js');
+  const context = musicVideoDirectionContext(done.castAndSets.direction);
+  for (const name of FIXED_SUPPORTING) expect(context).toContain(`Cast ${name}`);
+  const { musicVideoConditioningReferences, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES } = await import('../../lib/musicVideoConditioning.js');
+  const shot = musicVideoConditioningReferences(done, { sectionIndex: 0, prompt: 'Anika, Boris, Cyrus, Delia and Elio on the quay' });
+  expect(shot).toHaveLength(MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES);
+  expect(shot[2].id).toBe('mvr-cs-cast-anika');
+});
+
+it('holds reference room for fixed cast sheets and refuses an approval that cannot fit them (#14069)', async () => {
+  runPrompt.mockResolvedValue({ text: fixedCastAnswer() });
+  const project = await fixedCastProject();
+  await service.startCastAndSets(project.id);
+  await runTo(project.id, 'review');
+  const filler = (n) => Array.from({ length: n }, (_, i) => ({ id: `mvr-own-${i}`, imageId: `own-${i}.png`, role: 'mood', condition: false }));
+  const withOwn = (n) => projects.mutateProjectRecord(project.id, (p) => ({ project: { ...p, visualSpec: { ...p.visualSpec, references: [...project.visualSpec.references, ...filler(n)] } } }));
+  await withOwn(15);
+  const before = await current(project.id);
+  const full = await request(app).post(`/api/music-video/${project.id}/cast-and-sets/approve`).send({});
+  expect(full.status).toBe(409);
+  expect(full.body.code).toBe('CAST_SETS_REFERENCE_LIMIT');
+  expect(full.body.error).toContain('the cast sheets for Cyrus, Delia, Elio cannot be added. Remove 3 of');
+  expect(await current(project.id)).toEqual(before);
+  // Exactly that much room: the character and the fixed cast sheets take it, ahead of plates and invented cast.
+  await withOwn(12);
+  expect((await request(app).post(`/api/music-video/${project.id}/cast-and-sets/approve`).send({})).status).toBe(200);
+  const ours = (await current(project.id)).visualSpec.references.filter((r) => r.id.startsWith('mvr-cs-')).map((r) => r.id);
+  expect(ours).toEqual(['mvr-cs-character', ...FIXED_SUPPORTING.map((name) => `mvr-cs-cast-${name.toLowerCase()}`)]);
+});
+
+it('refuses a budget that cannot cover the fixed cast sheets before queueing anything, naming them (#14069)', async () => {
+  runPrompt.mockResolvedValue({ text: fixedCastAnswer() });
+  const project = await fixedCastProject();
+  const { run } = await projects.mutateProjectRecord(project.id, (p) => production.startProductionOnProject(p, {
+    pool: [{ kind: 'image', mode: 'codex', model: null }],
+    processId: 'example-process', limits: { maxReviewAttempts: 2, maxGenerations: 12 }, pricing: { 'image:codex:': 0.25 },
+  }));
+  await service.startCastAndSets(project.id, { productionRunId: run.id });
+  await until(async () => (await current(project.id)).productionRuns[0].status === 'limit-reached', 'the budget halt');
+  const saved = await current(project.id);
+  expect(jobs).toHaveLength(0);
+  expect(saved.castAndSets.status).toBe('failed');
+  expect(saved.productionRuns[0].stopReason || saved.productionRuns[0].reason || saved.castAndSets.stopReason || saved.castAndSets.reason).toMatch(/needs \d+ images, 9 of them supporting cast sheets/);
+  // The selected identities stay in the direction for a resume with a higher limit.
+  expect(saved.castAndSets.direction.cast.filter((c) => FIXED_SUPPORTING.includes(c.name))).toHaveLength(5);
+});
+
+it('conditions linked cast on their Casting images, not just a reference with their name', async () => {
+  onDisk('frank-portrait.png', 'frank-collage.png', 'nora-portrait.png', 'nora-at-7.png', 'old-frank.png', 'harbor-other.png', 'child.png', 'gus-ref.png');
+  const records = {
+    'cat-chr-frank': { id: 'cat-chr-frank', type: 'character', name: 'Frank', payload: { forms: [] } },
+    'cat-chr-nora': { id: 'cat-chr-nora', type: 'character', name: 'Nora', payload: { forms: [{ id: 'form-young', label: 'Age 7', age: '7' }] } },
+    'cat-chr-child': { id: 'cat-chr-child', type: 'character', name: 'Nora', payload: {} },
+    'cat-chr-gus': { id: 'cat-chr-gus', type: 'character', name: 'Gus', payload: {} },
+    // Saved from another video's check-in, then linked here.
+    'cat-plc-mv-other': { id: 'cat-plc-mv-other', type: 'place', name: 'Harbor', payload: {} },
+  };
+  const media = {
+    'cat-chr-frank': [
+      { mediaKey: 'frank-portrait.png', kind: 'portrait' },
+      // Its file is gone: skipped rather than sent.
+      { mediaKey: 'frank-missing.png', kind: 'reference' },
+      { mediaKey: 'frank-collage.png', kind: 'reference', library: { likeness: false } },
+    ],
+    'cat-chr-nora': [
+      { mediaKey: 'nora-portrait.png', kind: 'portrait' },
+      { mediaKey: 'nora-at-7.png', kind: 'reference', library: { variant: { formId: 'form-young' } } },
+    ],
+    'cat-plc-mv-other': [{ mediaKey: 'harbor-other.png', kind: 'reference' }],
+    'cat-chr-child': [{ mediaKey: 'child.png', kind: 'portrait' }],
+    // Every Casting file is gone: the reference labeled with his name stands in.
+    'cat-chr-gus': [1, 2, 3, 4].map((n) => ({ mediaKey: `gus-gone-${n}.png`, kind: 'reference' })),
+  };
+  service.__setCastAndSetsDepsForTests(testDeps({ catalog: {
+    getIngredient: async (id) => records[id] || null,
+    listMediaForIngredient: async (id) => media[id] || [],
+  } }));
+  runPrompt.mockResolvedValue({ text: JSON.stringify({ ...DIRECTION,
+    protagonist: { ...DIRECTION.protagonist, name: 'Nora', forms: [
+      { id: 'seven', label: 'Age 7', age: '7', description: 'a small girl', subjectId: 'mvc-nora-7' },
+      { id: 'young', label: 'Age 7 again', age: '7', description: 'unbound' },
+    ] },
+    cast: [
+      { id: 'frank', name: 'Frank', role: 'father', description: 'sixties', face: 'lined', hair: 'grey', wardrobe: 'suit' },
+      { id: 'gus', name: 'Gus', role: 'uncle', description: 'fifties' },
+    ] }) });
+  const project = await seed({
+    concept: { prompt: 'a wake', subjects: [
+      // Linked in Casting after an earlier check-in had cast its own Nora.
+      { id: 'cs-protagonist', kind: 'character', name: 'Nora (17)', role: 'protagonist', ingredientId: 'cat-chr-nora' },
+      { id: 'mvc-frank', kind: 'character', name: 'Frank', role: 'supporting', ingredientId: 'cat-chr-frank' },
+      { id: 'mvc-nora-7', kind: 'character', name: 'Nora (7)', ingredientId: 'cat-chr-nora', castForm: { id: 'form-young', label: 'Age 7', age: 7 } },
+      { id: 'cs-set-harbor', kind: 'place', name: 'Harbor', ingredientId: 'cat-plc-mv-other' },
+      // Shares the protagonist's name exactly, but is not the protagonist.
+      { id: 'mvc-child', kind: 'character', name: 'Nora', role: 'supporting', ingredientId: 'cat-chr-child' },
+      { id: 'mvc-gus', kind: 'character', name: 'Gus', role: 'supporting', ingredientId: 'cat-chr-gus' },
+    ] },
+    visualSpec: { references: [
+      { id: 'mvr-pull-1', imageId: 'old-frank.png', role: 'character', label: 'Frank', condition: false },
+      { id: 'mvr-pull-2', imageId: 'gus-ref.png', role: 'character', label: 'Gus', condition: false },
+    ] },
+  });
+  await service.startCastAndSets(project.id);
+  await runTo(project.id, 'review');
+  expect(runPrompt.mock.calls[0][0].prompt).toContain('- character (protagonist): Nora (17)');
+  const job = (key) => jobs.findLast((j) => keyOf(j) === key);
+  const refs = (key) => job(key).params.referenceImagePaths?.map((p) => p.split(/[\\/]/).pop());
+  expect(refs('character')).toEqual(['nora-portrait.png']);
+  expect(refs('cast:frank')).toEqual(['frank-portrait.png']);
+  expect(refs('set:harbor')).toEqual(['harbor-other.png']);
+  expect(refs('cast:gus')).toEqual(['gus-ref.png']);
+  // An age sheet: the canonical sheet first, then that age's own Casting image,
+  // whether a subject linked at that age is bound to it or not.
+  expect(refs('form:seven')).toEqual([`${job('character').id}.png`, 'nora-at-7.png']);
+  expect(refs('form:young')).toEqual([`${job('character').id}.png`, 'nora-at-7.png']);
+});
+
+it('grounds an age form and its test frames on the catalog reference selected for that age', async () => {
+  onDisk('keeper.png', 'keeper-7.png');
+  runPrompt.mockResolvedValue({ text: JSON.stringify({ ...DIRECTION,
+    protagonist: { ...DIRECTION.protagonist, forms: [
+      { id: 'age-7', label: 'Age 7', age: '7', description: 'a small girl with the same eyes', hair: 'pigtails', wardrobe: 'a plaid dress', subjectId: 'mvc-2' },
+      { id: 'age-15', label: 'Age 15', age: '15', description: 'a lanky teen', subjectId: 'mvc-404' },
+    ] },
+    tests: [
+      DIRECTION.tests[0],
+      { setId: 'harbor', look: 'Watch', action: 'skipping stones as a child', caption: 'memory', formId: 'age-7' },
+      { setId: 'roof', look: 'Watch', action: 'at an age the sheet does not have', formId: 'age-99' },
+    ] }) });
+  const project = await seed({
+    concept: { prompt: 'a vigil', subjects: [
+      { id: 'mvc-1', kind: 'character', name: 'Keeper', role: 'protagonist', ingredientId: 'cat-chr-1' },
+      { id: 'mvc-2', kind: 'character', name: 'Keeper (Age 7)', ingredientId: 'cat-chr-1', castForm: { id: 'age-7', label: 'Age 7', age: 7 } },
+      { id: 'mvc-3', kind: 'character', name: 'Stranger' },
+    ] },
+    visualSpec: { references: [
+      { id: 'mvr-pull-1', imageId: 'keeper.png', role: 'character', label: 'Keeper', condition: true },
+      // Flagged to condition frames, yet it is the child: it must stay off the adult sheet.
+      { id: 'mvr-pull-2', imageId: 'keeper-7.png', role: 'character', label: 'Keeper (Age 7)', condition: true },
+    ] },
+  });
+  await service.startCastAndSets(project.id);
+  await runTo(project.id, 'review');
+  expect(runPrompt.mock.calls[0][0].prompt).toContain('Keeper (Age 7) [subject id: mvc-2, shown as: Age 7]');
+  const job = (key) => jobs.findLast((j) => keyOf(j) === key);
+  const refs = (key) => job(key).params.referenceImagePaths?.map((p) => p.split(/[\\/]/).pop());
+  const png = (key) => `${job(key).id}.png`;
+  let saved = await current(project.id);
+  // Only a subject the director cast from the catalog can be bound; a test at an unknown age is dropped.
+  expect(saved.castAndSets.direction.protagonist.forms.map((f) => [f.subjectId, f.subjectName])).toEqual([['mvc-2', 'Keeper (Age 7)'], [undefined, undefined]]);
+  expect(saved.castAndSets.direction.tests.map((t) => t.formId)).toEqual([undefined, 'age-7']);
+  expect(refs('character')).toEqual(['keeper.png']);
+  expect(refs('form:age-7')).toEqual([png('character'), 'keeper-7.png']);
+  expect(job('form:age-7').params.prompt).toContain('SAME person as the age reference image');
+  expect(refs('form:age-15')).toEqual([png('character')]);
+  // The child test is the child's sheet in the set; the adult test keeps the adult sheet and looks.
+  expect(refs('test:2')).toEqual([png('set:harbor'), png('form:age-7')]);
+  expect(job('test:2').params.prompt).toContain('Place the person from the Age 7 character sheet');
+  expect(job('test:2').params.prompt).toContain('Wearing a plaid dress');
+  expect(refs('test:1')).toEqual([png('set:lab'), png('character'), png('looks')]);
+
+  // Binding an adult test to the age re-renders just it, on the child sheet.
+  const before = jobs.length;
+  expect((await request(app).patch(`/api/music-video/${project.id}/cast-and-sets/direction`).send({ tests: [{ index: 1, formId: 'age-7' }] })).status).toBe(202);
+  await runTo(project.id, 'review');
+  expect(jobs.slice(before).map(keyOf)).toEqual(['test:1']);
+  expect(refs('test:1')).toEqual([png('set:lab'), png('form:age-7')]);
+
+  // A non-catalog subject, or removing an age a test still shows, is refused and nothing is saved.
+  saved = await current(project.id);
+  const forms = saved.castAndSets.direction.protagonist.forms;
+  const stranger = await request(app).patch(`/api/music-video/${project.id}/cast-and-sets/direction`)
+    .send({ protagonist: { forms: forms.map((f) => (f.id === 'age-15' ? { ...f, subjectId: 'mvc-3' } : f)) } });
+  expect(stranger.status).toBe(422);
+  expect(stranger.body.code).toBe('CAST_SETS_UNKNOWN_SUBJECT');
+  const orphan = await request(app).patch(`/api/music-video/${project.id}/cast-and-sets/direction`)
+    .send({ protagonist: { forms: forms.filter((f) => f.id !== 'age-7') } });
+  expect(orphan.status).toBe(422);
+  expect(orphan.body.code).toBe('CAST_SETS_UNKNOWN_FORM');
+  expect((await current(project.id)).castAndSets).toEqual(saved.castAndSets);
+
+  // Unlinking the child subject leaves the binding visible as missing and re-renders its dependents.
+  const { buildCastAndSetsImagePlan, affectedImageKeys } = await import('./castAndSetsPlan.js');
+  const unlinked = { ...saved, concept: { ...saved.concept, subjects: saved.concept.subjects.map((s) => (s.id === 'mvc-2' ? { ...s, ingredientId: undefined } : s)) } };
+  const next = buildCastAndSetsImagePlan(unlinked, saved.castAndSets.direction);
+  expect(next['form:age-7']).toMatchObject({ subjectId: 'mvc-2', bindingMissing: 'subject' });
+  expect(next['form:age-7'].refImages).toBeUndefined();
+  expect(next.character.refImages).toEqual(['keeper.png']);
+  expect(affectedImageKeys(saved.castAndSets.plan, next).sort()).toEqual(['form:age-7', 'test:1', 'test:2']);
+  // Removed outright, its still-labeled reference stays off the present-day sheet too.
+  const removed = { ...saved, concept: { ...saved.concept, subjects: saved.concept.subjects.filter((s) => s.id !== 'mvc-2') } };
+  expect(buildCastAndSetsImagePlan(removed, saved.castAndSets.direction).character.refImages).toEqual(['keeper.png']);
 });
 
 it('keeps people out of set plates: no mood board person in the look, no character action in a set', async () => {

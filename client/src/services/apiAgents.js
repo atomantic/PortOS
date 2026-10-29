@@ -212,6 +212,9 @@ export const resolveCosTaskChallenge = (id, body, options = {}) => request(`/cos
 });
 export const forceCosEvaluate = (options = {}) => request('/cos/evaluate', { method: 'POST', ...options });
 export const forceSpawnTask = (taskId, options = {}) => request(`/cos/tasks/${taskId}/spawn`, { method: 'POST', ...options });
+export const resetSpawnBudgetAndRun = (taskId, options = {}) => request(`/cos/tasks/${taskId}/spawn`, {
+  method: 'POST', body: JSON.stringify({ resetSpawnBudget: true }), ...options
+});
 export const getOrchestrationProfiles = (options) => request('/settings/orchestration-profiles', options);
 export const saveOrchestrationProfile = (profile, options = {}) => request('/settings/orchestration-profiles', {
   method: 'POST',

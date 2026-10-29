@@ -6,16 +6,31 @@ import { _createBlockedSystemInvestigationRecovery } from './blockedSystemInvest
 import { resolveUndeliveredTaskUpdate, MAX_TASK_RETRIES } from './agentErrorAnalysis.js';
 import { buildInvestigationFingerprint, couldReleaseBlockedTasks } from '../lib/investigationTasks.js';
 
-const identity = vi.hoisted(() => ({ agent: null }));
+const identity = vi.hoisted(() => ({ agent: null, others: [], trusted: true }));
 vi.mock('./cosAgentLifecycle.js', () => ({ getAgentRecord: vi.fn(async () => identity.agent) }));
 vi.mock('./instanceIdentity.js', () => ({ getInstanceId: vi.fn(async () => 'fixture-local'), UNKNOWN_INSTANCE_ID: 'unknown' }));
+vi.mock('./cosState.js', async importOriginal => ({ ...(await importOriginal()),
+  readAgentsStateForSafetyCheck: vi.fn(async () => ({ trusted: identity.trusted,
+    agents: Object.fromEntries([identity.agent, ...identity.others].filter(agent => agent?.id).map(agent => [agent.id, agent])) })) }));
+vi.mock('./agentState.js', async importOriginal => ({ ...(await importOriginal()), activeAgents: new Map(), runnerAgents: new Map() }));
 
 let root, path, time, created, calls, hold, failAfterCreate, race, failLink;
 const read = async () => JSON.parse(await readFile(path, 'utf8'));
 const write = queues => writeFile(path, JSON.stringify(queues));
+const episode = (agentId = 'agent-original', count = 1) => ({ version: 1, epoch: '11111111-1111-4111-8111-111111111111', baseline: Number(count) - 1,
+  dispatch: { agentId, startedAt: '2026-01-01T00:00:00Z', claimedBy: 'fixture-local', claimedAt: 'claimed', lastSpawnedAt: 'spawned', totalSpawnCount: count } });
+const ownerForTask = task => {
+  const proof = task.metadata.spawnBudgetProof;
+  const expected = ['claimedBy', 'claimedAt', 'lastSpawnedAt', 'totalSpawnCount'].map(key => [key, proof.dispatch[key]]);
+  return { id: proof.dispatch.agentId, startedAt: proof.dispatch.startedAt, status: 'completed', taskId: task.id,
+    metadata: { instanceId: 'fixture-local', completionTaskDispatch: { taskId: task.id, taskType: 'internal',
+      expected, spawnBudgetEpoch: proof.epoch, spawnBudgetStartedAt: proof.dispatch.startedAt } } };
+};
+const withTaskId = (task, id) => ({ ...task, id, metadata: { ...task.metadata,
+  spawnBudgetProof: episode(`agent-${id}`) } });
 const source = () => ({ id: 'system-original', taskType: 'internal', status: 'in_progress', priority: 'MEDIUM',
   description: 'Finish retained claims, including unfinished source work.', metadata: { app: 'fixture', analysisType: 'claim-issue',
-    failureCount: String(MAX_TASK_RETRIES - 1), totalSpawnCount: '1' } });
+    failureCount: String(MAX_TASK_RETRIES - 1), totalSpawnCount: '1', spawnBudgetProof: episode() } });
 const blocked = () => {
   const task = source();
   const update = resolveUndeliveredTaskUpdate(task, { status: 'incomplete', reason: 'Merged delivery still has unfinished siblings.' }, 'agent-original', time);
@@ -49,13 +64,15 @@ const update = async (task, state) => {
   return current;
 };
 const factory = (realOwner = false) => _createBlockedSystemInvestigationRecovery({ read, update, create, now: () => time,
-  ...(!realOwner && { ownerFor: async task => task.metadata?.foreign ? null : { agentId: 'agent-original', instanceId: 'fixture-local' } }),
+  ...(!realOwner && { ownerFor: async task => task.metadata?.foreign ? null :
+    { agentId: task.metadata.spawnBudgetProof.dispatch.agentId, instanceId: 'fixture-local', agent: ownerForTask(task) } }),
   permission: async () => hold });
 
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), 'blocked-investigation-'));
   path = join(root, 'queues.json');
   time = Date.parse('2026-01-01T00:00:00.000Z');
+  identity.agent = null; identity.others = []; identity.trusted = true;
   created = calls = 0; hold = null; failAfterCreate = race = failLink = false;
   await write({ user: { tasks: [] }, cos: { tasks: [blocked()] } });
 });
@@ -71,7 +88,7 @@ describe('blocked system recovery persisted workflow', () => {
     expect(original.metadata).toMatchObject({ failureCount: MAX_TASK_RETRIES, totalSpawnCount: '1',
       taskOutcome: { status: 'incomplete' }, blockedInvestigation: { phase: 'queued', attempts: 1, taskId: 'investigator-1' } });
     expect(original.description).toBe(source().description);
-    queues.cos.tasks.push({ ...blocked(), id: 'same-cause', metadata: { ...blocked().metadata } });
+    queues.cos.tasks.push(withTaskId(blocked(), 'same-cause'));
     await write(queues);
     await factory().recover('same-cause');
     queues = await read();
@@ -136,7 +153,7 @@ describe('blocked system recovery persisted workflow', () => {
 
   it('does not starve later failures behind already-owned investigations', async () => {
     const queues = await read();
-    queues.cos.tasks = Array.from({ length: 5 }, (_, i) => ({ ...blocked(), id: `source-${i}` }));
+    queues.cos.tasks = Array.from({ length: 5 }, (_, i) => withTaskId(blocked(), `source-${i}`));
     await write(queues);
     const recovery = factory();
     await recovery.sweep();
@@ -150,7 +167,7 @@ describe('blocked system recovery persisted workflow', () => {
     const queues = await read();
     queues.cos.tasks[0].metadata.deliveryDecisionAgentId = 'agent-original';
     await write(queues);
-    const good = { status: 'completed', taskId: 'system-original', metadata: { instanceId: 'fixture-local' } };
+    const good = ownerForTask(queues.cos.tasks[0]);
     for (const record of [null, { ...good, status: 'running' }, { ...good, taskId: 'other-task' },
       { ...good, metadata: { instanceId: 'another-instance' } }]) {
       identity.agent = record;
@@ -160,6 +177,47 @@ describe('blocked system recovery persisted workflow', () => {
     identity.agent = good;
     expect(await factory(true).recover('system-original')).toMatchObject({ handled: true, taskId: 'investigator-1' });
     expect(created).toBe(1);
+  });
+
+  it('holds when the owner inventory is unreadable or a competing owner is active', async () => {
+    const queues = await read();
+    const task = queues.cos.tasks[0];
+    task.metadata.deliveryDecisionAgentId = 'agent-original';
+    await write(queues);
+    identity.agent = ownerForTask(task);
+    identity.trusted = false;
+    expect(await factory(true).recover(task.id)).toEqual({ handled: false, reason: 'local-owner-unverified' });
+    identity.trusted = true;
+    identity.others = [{ id: 'agent-other', taskId: task.id, status: 'running' }];
+    expect(await factory(true).recover(task.id)).toEqual({ handled: false, reason: 'local-owner-unverified' });
+    expect(await read()).toEqual(queues);
+    expect(created).toBe(0);
+  });
+
+  it.each([[2, '1'], ['2', 1]])('holds a blocked task when its local owner receipt charged %s but its record retained %s', async (charged, retained) => {
+    const queues = await read();
+    queues.cos.tasks[0].metadata.deliveryDecisionAgentId = 'agent-original';
+    queues.cos.tasks[0].metadata.totalSpawnCount = retained;
+    queues.cos.tasks[0].metadata.spawnBudgetProof = episode('agent-original', charged);
+    await write(queues);
+    identity.agent = ownerForTask(queues.cos.tasks[0]);
+    const recovery = factory(true);
+    expect(await recovery.recover('system-original')).toEqual({ handled: false, reason: 'spawn-budget-reconciliation-required' });
+    expect(await recovery.recover('system-original')).toEqual({ handled: false, reason: 'spawn-budget-reconciliation-required' });
+    expect(await read()).toEqual(queues);
+    expect(created).toBe(0);
+  });
+
+  it('holds a blocked task when legacy history lacks its episode proof', async () => {
+    const queues = await read();
+    const task = queues.cos.tasks[0];
+    task.metadata.deliveryDecisionAgentId = 'agent-original';
+    identity.agent = ownerForTask(task);
+    delete task.metadata.spawnBudgetProof;
+    await write(queues);
+    expect(await factory(true).recover('system-original')).toEqual({ handled: false, reason: 'spawn-budget-reconciliation-required' });
+    expect(await read()).toEqual(queues);
+    expect(created).toBe(0);
   });
 
   it('lets a user/owner transition win before creation', async () => {

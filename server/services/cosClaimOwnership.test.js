@@ -125,13 +125,28 @@ it('reserves a release branch before creation and captures its actual locked che
     const branch = `codex/release-${agentId}`;
     store.state.agents[agentId] = { id: agentId, status: 'running', startedAt: new Date().toISOString(),
       metadata: { taskAnalysisType: 'do-release', isWorktree: false, workspacePath: repo } };
+    const agent = store.state.agents[agentId];
+    agent.taskId = 'release-task';
+    agent.metadata.releaseCandidateLifecycle = { version: 1, agentId, taskId: agent.taskId, startedAt: agent.startedAt, stage: 'registered' };
     expect(await updateReleaseCandidateOwnership(agentId, 'capture')).toEqual({ captured: false, reason: 'candidate-reservation-missing' });
     expect(await updateReleaseCandidateOwnership(agentId, 'reserve')).toEqual({ reserved: true, branch });
+    const reserved = store.state.agents[agentId].metadata.releaseCandidateLifecycle;
+    expect(reserved).toMatchObject({ stage: 'reserved', branch, reservedAt: store.state.agents[agentId].metadata.releaseCandidate.reservedAt });
+    expect(await updateReleaseCandidateOwnership(agentId, 'reserve')).toEqual({ reserved: true, branch });
+    expect(store.state.agents[agentId].metadata.releaseCandidateLifecycle).toEqual(reserved);
     expect(claimCheckoutOwnerReason({ branchName: branch, sourceWorkspace: repo, agents: Object.values(store.state.agents) })).toBe('claim-owner-active');
     expect(await updateReleaseCandidateOwnership(agentId, 'capture')).toEqual({ captured: false, reason: 'checkout-seed-unavailable' });
     await execGit(['worktree', 'add', '-b', branch, checkout, 'main'], repo);
     await execGit(['worktree', 'lock', '--reason', 'Active release candidate', checkout], repo);
+    store.state.agents[agentId].metadata.releaseCandidateLifecycle = { ...reserved, taskId: 'wrong-task' };
+    expect(await updateReleaseCandidateOwnership(agentId, 'capture')).toEqual({ captured: false, reason: 'candidate-lifecycle-conflict' });
+    expect(store.state.agents[agentId].metadata.checkoutSeeds).toBeUndefined();
+    store.state.agents[agentId].metadata.releaseCandidateLifecycle = reserved;
     expect(await updateReleaseCandidateOwnership(agentId, 'capture')).toEqual({ captured: true, branch });
+    const lifecycle = store.state.agents[agentId].metadata.releaseCandidateLifecycle;
+    expect(lifecycle).toMatchObject({ ...reserved, stage: 'captured', capturedAt: expect.any(String) });
+    expect(await updateReleaseCandidateOwnership(agentId, 'capture')).toEqual({ captured: true, branch });
+    expect(store.state.agents[agentId].metadata.releaseCandidateLifecycle).toEqual(lifecycle);
     const seed = store.state.agents[agentId].metadata.checkoutSeeds[0];
     expect(seed).toMatchObject({ agentId, branch, path: await (await import('node:fs/promises')).realpath(checkout) });
     expect(await captureCompletedCheckouts(store.state.agents[agentId], { success: true, strict: true })).toMatchObject([{ branch, path: seed.path }]);

@@ -71,6 +71,8 @@ afterAll(() => cleanupTempDataRoots());
 describe('cutting room floor outro pass', () => {
   it('leaves a render alone, without a browser, while the outro is off', async () => {
     expect(await appendStatsOutro({ project: { ...project, statsOutro: { enabled: false } }, path, jobId: 'job-off' })).toBe(0);
+    // Credits turned on with nothing to show add nothing either.
+    expect(await appendStatsOutro({ project: { ...project, statsOutro: null, creditsOutro: { enabled: true } }, path, jobId: 'job-empty' })).toBe(0);
     expect(await appendStatsOutro({ project: { ...project, statsOutro: null }, path, jobId: 'job-none' })).toBe(0);
     expect(seen.opened).toEqual([]);
     expect(await readFile(path, 'utf8')).toBe('render');
@@ -83,7 +85,7 @@ describe('cutting room floor outro pass', () => {
     expect(opened.options).toMatchObject({ ownedBrowser: true, initScripts: [] });
     // A JPEG still rides as itself (as the animatic shows it); a PNG with no thumbnail is a film offcut.
     expect(opened.media).toEqual(['floor-1.jpg']);
-    expect(opened.fonts.sort()).toEqual(['archivo-variable.woff2', 'ibm-plex-mono-500.woff2']);
+    expect(opened.fonts.sort()).toEqual(['archivo-variable.woff2', 'ibm-plex-mono-500.woff2', 'playfair-display-700.woff2']);
     expect(opened.index).toContain('<canvas id="outro">');
     // The counts the page draws are the project's: its shot, its collection and the clip stamped with it.
     expect(opened.app).toContain('"stills":{"made":3,"kept":1},"clips":{"made":2,"kept":0}');
@@ -94,6 +96,21 @@ describe('cutting room floor outro pass', () => {
     expect(await readFile(path, 'utf8')).toBe('render-with-outro');
     expect(existsSync(join(PATHS.data, STATS_OUTRO_SCRATCH_DIR, 'job-on'))).toBe(false);
     expect(existsSync(`${path}.outro.mp4`)).toBe(false);
+  });
+
+  it('plays the credits after the floor, and alone without counting anything when the floor is off', async () => {
+    const creditsOutro = { enabled: true, durationSec: 10, title: 'Example Song', artist: 'Example Artist', lines: [{ role: 'Directed by', name: 'Example Artist' }] };
+    expect(await appendStatsOutro({ project: { ...project, creditsOutro }, path, jobId: 'job-both' })).toBe(16);
+    expect(seen.contract.durationSec).toBe(16);
+    expect(seen.opened[0].app).toContain('"kind":"floor","startSec":0,"durationSec":6');
+    expect(seen.opened[0].app).toContain('"kind":"credits","startSec":6,"durationSec":10');
+    expect(seen.opened[0].index).toContain('font-family: "MV Credits Serif"');
+    await writeFile(path, 'render');
+    seen.opened.length = 0;
+    expect(await appendStatsOutro({ project: { ...project, statsOutro: null, creditsOutro }, path, jobId: 'job-credits' })).toBe(10);
+    expect(seen.opened[0].media).toEqual([]);
+    expect(seen.opened[0].app).toContain('const STATS = {"floorImages":[]};');
+    expect(await readFile(path, 'utf8')).toBe('render-with-outro');
   });
 
   it('draws the film look in the outro page for a render that has no later look pass', async () => {

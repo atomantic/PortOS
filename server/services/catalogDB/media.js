@@ -251,6 +251,7 @@ export async function updateMediaLibrary(ingredientId, mediaKey, kind, patch = {
       ...(hasOwn(effective, 'variant') ? { variant: effective.variant } : {}),
       ...(hasOwn(effective, 'tags') ? { tags: effective.tags } : {}),
       ...(hasOwn(effective, 'guide') ? { guide: effective.guide } : {}),
+      ...(hasOwn(effective, 'likeness') ? { likeness: effective.likeness } : {}),
       ...(hasOwn(effective, 'review') ? { review: { ...prev.review, ...effective.review } } : {}),
       ...(hasOwn(effective, 'derivedFrom') ? { derivedFrom: effective.derivedFrom } : {}),
     });
@@ -259,10 +260,19 @@ export async function updateMediaLibrary(ingredientId, mediaKey, kind, patch = {
         WHERE ingredient_id = catalog_resolve_ingredient_id($1) AND media_key = $2 AND kind <> $3 AND deleted = false
           AND library->>'guide' = 'true'`, [ingredientId, mediaKey, kind]);
     }
+    // Likeness is per image, not per attachment: the portrait and reference
+    // rows of one file always agree, like a bad rating.
+    if (hasOwn(effective, 'likeness')) {
+      await client.query(`UPDATE catalog_ingredient_media SET library = CASE WHEN $4::boolean
+          THEN COALESCE(library, '{}'::jsonb) - 'likeness'
+          ELSE COALESCE(library, '{}'::jsonb) || '{"likeness": false, "guide": false}'::jsonb END
+        WHERE ingredient_id = catalog_resolve_ingredient_id($1) AND media_key = $2 AND kind <> $3 AND deleted = false`,
+      [ingredientId, mediaKey, kind, next.likeness !== false]);
+    }
     if (next.guide === true) {
       const rejected = await client.query(`SELECT EXISTS (SELECT 1 FROM catalog_ingredient_media
         WHERE ingredient_id = catalog_resolve_ingredient_id($1) AND media_key = $2 AND kind <> $3 AND deleted = false
-          AND library->'review'->>'status' IN ('bad', 'rejected')) AS blocked`, [ingredientId, mediaKey, kind]);
+          AND (library->'review'->>'status' IN ('bad', 'rejected') OR library->>'likeness' = 'false')) AS blocked`, [ingredientId, mediaKey, kind]);
       if (rejected.rows[0].blocked) next.guide = false;
     }
     if (next.guide === true && prev.guide !== true) {
@@ -285,4 +295,24 @@ export async function updateMediaLibrary(ingredientId, mediaKey, kind, patch = {
     );
     return rowToMedia(result.rows[0]);
   });
+}
+
+// Which catalog record owns each image, for naming a reference picked from the
+// gallery. One live row per key: a record in `preferIds` (the caller's linked
+// cast) wins, then a portrait, then the newest attach. Merged records answer
+// with their canonical record; `preferredId` is the `preferIds` entry it matched.
+export async function findMediaOwnersByKeys(mediaKeys, { preferIds = [] } = {}) {
+  const keys = [...new Set((mediaKeys || []).filter((key) => typeof key === 'string' && key))];
+  if (!keys.length) return new Map();
+  const { rows } = await query(
+    `SELECT DISTINCT ON (m.media_key) m.media_key, i.id, i.name, i.type, preferred.id AS preferred_id
+       FROM catalog_ingredient_media m
+       JOIN catalog_ingredients i ON i.id = catalog_canonical_ingredient_id(m.ingredient_id) AND i.deleted = false
+       LEFT JOIN LATERAL (SELECT p AS id FROM unnest($2::text[]) p
+         WHERE catalog_canonical_ingredient_id(p) = i.id LIMIT 1) preferred ON true
+      WHERE m.media_key = ANY($1) AND m.deleted = false
+      ORDER BY m.media_key, (preferred.id IS NOT NULL) DESC, (m.kind = 'portrait') DESC, m.created_at DESC`,
+    [keys, [...new Set(preferIds.filter((id) => typeof id === 'string' && id))]],
+  );
+  return new Map(rows.map((row) => [row.media_key, { ingredientId: row.id, name: row.name, type: row.type, preferredId: row.preferred_id ?? null }]));
 }

@@ -69,7 +69,7 @@ describe('credentialInventory', () => {
 
   it('reports settings over env when both are set, without echoing the value', async () => {
     const { credentials, headline } = await getCredentialInventory({
-      settings: { imageGen: { hfToken: 'hf_thisMustNeverLeaveTheServer' }, civitai: { apiKey: 'secret-civitai-key' } },
+      settings: { imageGen: { hfToken: 'hf_thisMustNeverLeaveTheServer' }, civitai: { apiKey: 'secret-civitai-key' }, videoGen: { topaz: { apiKey: 'private-topaz-key' } } },
       env: { HF_TOKEN: 'hf_envMustNotWin', CIVITAI_API_KEY: 'env-civitai' },
       envFile: new Map(),
       detectors: {},
@@ -78,9 +78,11 @@ describe('credentialInventory', () => {
     expect(headline).toMatch(/no key at all/i);
     expect(byId(credentials, 'huggingface')).toMatchObject({ configured: true, source: 'settings' });
     expect(byId(credentials, 'civitai')).toMatchObject({ configured: true, source: 'settings' });
+    expect(byId(credentials, 'topaz')).toMatchObject({ configured: true, source: 'settings', editable: true });
     expect(JSON.stringify({ credentials })).not.toMatch(secretShaped);
     expect(JSON.stringify({ credentials })).not.toContain('hf_thisMustNeverLeaveTheServer');
     expect(JSON.stringify({ credentials })).not.toContain('secret-civitai-key');
+    expect(JSON.stringify({ credentials })).not.toContain('private-topaz-key');
   });
 
   it('distinguishes repo .env from inherited process.env', async () => {

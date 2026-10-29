@@ -118,6 +118,8 @@ const INHERITED_ENV = {
   PORTOS_CI_BROWSER_OWNER: 'CI-only test ownership selector; Linux unit shards exclude suites owned by the browser job',
   PORTOS_TEST_PYTHON: 'test-harness interpreter override',
   PORTOS_TEST_QUIET: 'test-harness log silencer',
+  PORTOS_PROFILE_HELD_RECEIPT: 'test-harness timing report for the held-checkout recovery suites (read by their shared fixture)',
+  PORTOS_PROFILE_RETIREMENT_FIXTURE: 'test-harness timing report for the held-checkout retirement fixtures (read by their shared fixture)',
 };
 
 /**

@@ -4,6 +4,7 @@ import { MUSIC_VIDEO_GRADE_PRESETS, MUSIC_VIDEO_GRADE_MAX_GRAIN } from './musicV
 import { filmLookSchema } from './filmLookValidation.js';
 import { TITLE_CARD_FONTS, TITLE_CARD_LIMITS, TITLE_CARD_POSITIONS, TITLE_CARD_STYLES } from './musicVideoTitleCard.js';
 import { STATS_OUTRO_LIMITS, STATS_OUTRO_LINES } from './musicVideoStatsOutro.js';
+import { CREDITS_OUTRO_LAYOUTS, CREDITS_OUTRO_LIMITS } from './musicVideoCreditsOutro.js';
 import { COVER_DESIGN_OPTIONS } from './musicVideoCoverOverlay.js';
 import { DISTROKID_REMEMBERED_OPTIONS } from './distrokidGenres.js';
 import { CROSS_LINK_EDIT_TARGETS } from './musicVideoCrossLinks.js';
@@ -18,6 +19,7 @@ import { CROSS_LINK_EDIT_TARGETS } from './musicVideoCrossLinks.js';
  */
 
 import { z } from 'zod';
+export const musicVideoDcpRequestSchema = z.object({ grade: z.enum(['rec709', 'rec1886']), renderHistoryId: z.string().min(1), sourceSha256: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
 import { GROK_VIDEO_DURATIONS } from './grokVideoClip.js';
 import { knownFilmStyleIdSchema } from './filmStyleGrammars.js';
 
@@ -1386,6 +1388,10 @@ export const musicVideoCastAndSetsDirectionEditSchema = z.object({
       description: castSetsText(1000),
       hair: castSetsText(1000).optional(),
       wardrobe: castSetsText(1000).optional(),
+      // The fixed-casting subject whose reference grounds this age (null clears).
+      subjectId: z.string().max(64).nullable().optional(),
+      // Echoed back from the saved form; the server re-stamps it from the subject.
+      subjectName: z.string().max(120).optional(),
     }).strict()).max(3).optional(),
   }).strict().optional(),
   looks: z.array(z.object({
@@ -1394,6 +1400,7 @@ export const musicVideoCastAndSetsDirectionEditSchema = z.object({
     chapters: castSetsText(300).optional(),
     originalName: castSetsText(120).optional(),
   }).strict()).min(1).max(4).optional(),
+  // Every catalog-linked supporting character (the 24-subject cap) plus 4 invented ones.
   cast: z.array(z.object({
     id: z.string().min(1).max(64),
     remove: z.literal(true).optional(),
@@ -1403,13 +1410,15 @@ export const musicVideoCastAndSetsDirectionEditSchema = z.object({
     face: castSetsText(1000).optional(),
     hair: castSetsText(1000).optional(),
     wardrobe: castSetsText(1000).optional(),
-  }).strict()).max(4).optional(),
+  }).strict()).max(28).optional(),
   tests: z.array(z.object({
     index: z.number().int().min(1).max(4),
     remove: z.literal(true).optional(),
     action: castSetsText(1000).optional(),
     caption: castSetsText(300).optional(),
     look: castSetsText(120).optional(),
+    // The protagonist form (other age) this test shows; null clears it.
+    formId: z.string().max(64).nullable().optional(),
   }).strict()).max(4).optional(),
   world: z.object({
     layout: castSetsText(1000).optional(),
@@ -1441,6 +1450,21 @@ export const musicVideoStatsOutroSchema = z.object({
   title: z.string().max(STATS_OUTRO_LIMITS.textMax).optional(),
   subtitle: z.string().max(STATS_OUTRO_LIMITS.textMax).optional(),
   hidden: z.array(z.enum(STATS_OUTRO_LINES.map((line) => line.key))).max(STATS_OUTRO_LINES.length).optional(),
+}).strict();
+
+// The film credits ending (lib/musicVideoCreditsOutro.js): song, artist,
+// role/name lines and a closing line after the song.
+export const musicVideoCreditsOutroSchema = z.object({
+  enabled: z.boolean().optional(),
+  durationSec: z.number().min(CREDITS_OUTRO_LIMITS.durationMin).max(CREDITS_OUTRO_LIMITS.durationMax).optional(),
+  layout: z.enum(CREDITS_OUTRO_LAYOUTS).optional(),
+  title: z.string().max(CREDITS_OUTRO_LIMITS.textMax).optional(),
+  artist: z.string().max(CREDITS_OUTRO_LIMITS.textMax).optional(),
+  lines: z.array(z.object({
+    role: z.string().max(CREDITS_OUTRO_LIMITS.textMax).optional(),
+    name: z.string().max(CREDITS_OUTRO_LIMITS.textMax).optional(),
+  }).strict()).max(CREDITS_OUTRO_LIMITS.linesMax).optional(),
+  footer: z.string().max(CREDITS_OUTRO_LIMITS.textMax).optional(),
 }).strict();
 
 // The opening title card (lib/musicVideoTitleCard.js): song title, artist, year
@@ -1500,6 +1524,8 @@ export const musicVideoProjectCreateSchema = z.object({
   titleCard: musicVideoTitleCardSchema.nullable().optional(),
   // The cutting room floor outro after the song (lib/musicVideoStatsOutro.js); null = off.
   statsOutro: musicVideoStatsOutroSchema.nullable().optional(),
+  // The film credits after the song (lib/musicVideoCreditsOutro.js); null = never set up.
+  creditsOutro: musicVideoCreditsOutroSchema.nullable().optional(),
 }).strict();
 
 export const musicVideoProjectUpdateSchema = z.object({
@@ -1533,6 +1559,8 @@ export const musicVideoProjectUpdateSchema = z.object({
   titleCard: musicVideoTitleCardSchema.nullable().optional(),
   // The cutting room floor outro after the song (lib/musicVideoStatsOutro.js); null = off.
   statsOutro: musicVideoStatsOutroSchema.nullable().optional(),
+  // The film credits after the song (lib/musicVideoCreditsOutro.js); null = never set up.
+  creditsOutro: musicVideoCreditsOutroSchema.nullable().optional(),
   // The Create › Storyboards board this video is planned from; null unlinks.
   storyboardId: z.string().regex(STORYBOARD_ID_PATTERN, 'storyboardId must be a storyboard id').nullable().optional(),
 }).strict();

@@ -13,8 +13,9 @@
  * Media deleted from the library drops out of the counts with it.
  *
  * `drawStatsOutro` is the one painter for the storyboard animatic (a canvas
- * over the picture) and the final render (a page captured frame by frame and
- * appended to the cut), so both show the same frames. Every frame is a pure
+ * over the picture) and the final render (the ending page of
+ * lib/musicVideoEnding.js, captured frame by frame and appended to the cut),
+ * so both show the same frames. Every frame is a pure
  * function of the scene's own time. Browser-safe, no imports.
  */
 
@@ -134,7 +135,7 @@ export function musicVideoOutroStats(project, { collectionItems = [] } = {}) {
 }
 
 /* The functions below are inlined into the render page by toString()
- * (statsOutroPageSource), so each must stay self-contained: no references to
+ * (endingPageSource in lib/musicVideoEnding.js), so each must stay self-contained: no references to
  * module scope, only to each other by name. */
 
 /**
@@ -364,46 +365,3 @@ function drawStatsOutro(ctx, { width, height, t, durationSec, stats, outro = nul
 }
 
 export { statsOutroRows, drawStatsOutro };
-
-/**
- * The render page's script: draws the outro full-frame on a canvas and
- * exposes `globalThis.portosComposition` (`seek(t)` on the outro's own time)
- * for the shared composition encoder. `imageSrcs[i]` is the page-relative file
- * for `stats.floorImages[i]`; the faces are declared by the page's
- * @font-face rules. Every seek waits for the stills and faces to load.
- */
-export function statsOutroPageSource({ stats, outro = null, imageSrcs = [], width, height, fps, durationSec }) {
-  const json = (value) => JSON.stringify(value).replace(/</g, '\\u003c');
-  return `(() => {
-  ${statsOutroRows.toString()}
-  ${drawStatsOutro.toString()}
-  const STATS = ${json(stats)};
-  const OUTRO = ${json(outro)};
-  const SRCS = ${json(imageSrcs)};
-  const WIDTH = ${Number(width)}, HEIGHT = ${Number(height)}, FPS = ${Number(fps)}, DURATION = ${Number(durationSec)};
-  const canvas = document.getElementById('outro');
-  canvas.width = WIDTH;
-  canvas.height = HEIGHT;
-  const ctx = canvas.getContext('2d');
-  const images = SRCS.map(() => null);
-  const loaded = Promise.all(SRCS.map((src, i) => new Promise((resolve) => {
-    const img = new Image();
-    img.onload = () => { images[i] = img; resolve(); };
-    img.onerror = () => resolve();
-    img.src = src;
-  })));
-  const faces = document.fonts && document.fonts.load
-    ? Promise.all(['800 40px "MV Archivo"', '500 40px "MV Mono"', '600 40px "MV Mono"'].map((font) => document.fonts.load(font).catch(() => null)))
-    : Promise.resolve();
-  globalThis.portosComposition = {
-    durationSec: DURATION, fps: FPS, width: WIDTH, height: HEIGHT,
-    async seek(t) {
-      await loaded;
-      await faces;
-      drawStatsOutro(ctx, { width: WIDTH, height: HEIGHT, t, durationSec: DURATION, stats: STATS, outro: OUTRO, images });
-      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-    },
-  };
-})();
-`;
-}

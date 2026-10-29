@@ -1,6 +1,6 @@
 /** Reviewed quick-edit references: a job-bound copy and its durable ownership record. */
 import { createHash, randomUUID } from 'node:crypto';
-import { readFile, writeFile, mkdir, lstat } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, lstat, link } from 'node:fs/promises';
 import { extname, join } from 'node:path';
 import { PATHS, atomicWrite } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
@@ -11,6 +11,7 @@ const activeStaging = new Set();
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const sha = /^[0-9a-f]{64}$/;
 const manifestPath = id => join(PATHS.imageRefs, `snapshot-${id}.json`);
+export const snapshotAnchorPath = id => join(PATHS.imageRefs, `snapshot-${id}.anchor`);
 
 export async function reviewedReferencePreview(path) {
   const bytes = await readFile(path).catch(() => null);
@@ -47,8 +48,11 @@ export async function stageReviewedReference(jobId, source, expected) {
     await writeFile(manifestPath(snapshotId), JSON.stringify({ ...identity, state: 'reserved' }), { flag: 'wx', mode: 0o600, flush: true });
     const path = join(PATHS.imageRefs, filename);
     await writeFile(path, bytes, { flag: 'wx', mode: 0o400, flush: true });
+    // Keep the original inode allocated even if the public path is replaced.
+    // An interrupted reservation without the completed record is held by GC.
+    await link(path, snapshotAnchorPath(snapshotId));
     const info = await lstat(path, { bigint: true });
-    const owned = { ...identity, dev: String(info.dev), ino: String(info.ino) };
+    const owned = { ...identity, dev: String(info.dev), ino: String(info.ino), anchorVersion: 1 };
     if (!validSnapshotIdentity(owned)) throw invalid();
     await atomicWrite(manifestPath(snapshotId), { ...owned, state: 'reserved' });
     return owned;
@@ -59,6 +63,7 @@ export async function stageReviewedReference(jobId, source, expected) {
 
 export function validSnapshotIdentity(identity) {
   return Boolean(identity && uuid.test(identity.jobId || '') && uuid.test(identity.snapshotId || '')
+    && identity.anchorVersion === 1
     && sha.test(identity.digest || '') && /^\d+$/.test(identity.dev || '') && /^[1-9]\d*$/.test(identity.ino || '')
     && new RegExp(`^snapshot-${identity.snapshotId}\\.(png|jpg|jpeg|webp)$`, 'i').test(identity.filename || ''));
 }
@@ -66,14 +71,18 @@ export function validSnapshotIdentity(identity) {
 export async function readOwnedSnapshot(identity) {
   if (!validSnapshotIdentity(identity)) throw invalid();
   const record = await readFile(manifestPath(identity.snapshotId), 'utf8').then(JSON.parse).catch(() => null);
-  if (!record || ['jobId', 'snapshotId', 'filename', 'digest', 'dev', 'ino'].some(key => record[key] !== identity[key])
+  if (!record || ['jobId', 'snapshotId', 'filename', 'digest', 'dev', 'ino', 'anchorVersion'].some(key => record[key] !== identity[key])
     || !['reserved', 'invoked', 'settled', 'deleting'].includes(record.state)) throw invalid();
   const path = join(PATHS.imageRefs, identity.filename);
+  const anchor = await lstat(snapshotAnchorPath(identity.snapshotId), { bigint: true }).catch(() => null);
+  if (!anchor?.isFile() || String(anchor.dev) !== identity.dev || String(anchor.ino) !== identity.ino) throw invalid();
   const info = await lstat(path, { bigint: true }).catch(() => null);
   if (!info?.isFile() || String(info.dev) !== identity.dev || String(info.ino) !== identity.ino) throw invalid();
   const bytes = await readFile(path).catch(() => null);
   const after = await lstat(path, { bigint: true }).catch(() => null);
-  if (!bytes || digest(bytes) !== identity.digest || !after?.isFile() || String(after.dev) !== identity.dev || String(after.ino) !== identity.ino) throw invalid();
+  const anchorAfter = await lstat(snapshotAnchorPath(identity.snapshotId), { bigint: true }).catch(() => null);
+  if (!bytes || digest(bytes) !== identity.digest || !after?.isFile() || String(after.dev) !== identity.dev || String(after.ino) !== identity.ino
+    || !anchorAfter?.isFile() || String(anchorAfter.dev) !== identity.dev || String(anchorAfter.ino) !== identity.ino) throw invalid();
   return { record, path, bytes };
 }
 

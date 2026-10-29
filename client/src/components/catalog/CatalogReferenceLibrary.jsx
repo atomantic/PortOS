@@ -4,7 +4,7 @@ import { Compass, Loader2, Star, ThumbsDown, ThumbsUp, Trash2 } from 'lucide-rea
 import CatalogMediaTile from './CatalogMediaTile';
 import CatalogReferenceReview from './CatalogReferenceReview';
 import MediaJobThumb from '../pipeline/MediaJobThumb';
-import { REFERENCE_REVIEW_WRITE_STATUSES, referenceReviewStatus, rejectedReferenceKeys } from '../../../../server/lib/catalogMediaLibrary.js';
+import { REFERENCE_REVIEW_WRITE_STATUSES, isLeftOutOfLikeness, referenceReviewStatus, rejectedReferenceKeys } from '../../../../server/lib/catalogMediaLibrary.js';
 import { formatCount } from '../../utils/formatters';
 import { updateCatalogIngredientMediaLibrary, attachCatalogIngredientMediaFromMoodBoard } from '../../services/apiCatalog';
 
@@ -16,10 +16,15 @@ const RATINGS = [
 // Clicking the active rating clears it back to unreviewed. A wrong reference
 // is removed from the record rather than rated "rejected" (that state is for
 // music video takes); a legacy 'rejected' reads as bad.
-const rateReview = (m, status) => {
+const rateReview = (m, status, next = referenceReviewStatus(m) === status ? 'unreviewed' : status) => {
   const review = m.library?.review || {};
-  return { review: { status: referenceReviewStatus(m) === status ? 'unreviewed' : status, ...(review.feedback ? { feedback: review.feedback } : {}) } };
+  return { review: { status: next, ...(review.feedback ? { feedback: review.feedback } : {}) } };
 };
+// A visual attached as both primary and reference gets one control set, on
+// its lead attachment: the one already guiding, else the reference (it holds
+// the variant metadata), else the portrait.
+const leadAttachment = (attachments) => attachments.find((m) => m.library?.guide === true)
+  || attachments.find((m) => m.kind !== 'portrait') || attachments[0];
 
 function RatingButtons({ media, busy, onRate, className = 'grid grid-cols-2 gap-1.5' }) {
   const current = referenceReviewStatus(media);
@@ -41,7 +46,7 @@ function RatingButtons({ media, busy, onRate, className = 'grid grid-cols-2 gap-
 // takes the viewer's good/bad slot): make it a render guide, make it the
 // primary image, or remove it from this record (the image itself stays in
 // Media History).
-function PreviewActions({ media: m, busy, isGuide, guideFull, guideBlocked, onGuide, onSetPortrait, onDetach }) {
+function PreviewActions({ media: m, isPortrait, busy, isGuide, guideFull, guideBlocked, onGuide, onSetPortrait, onDetach }) {
   const [arming, setArming] = useState(false);
   const btn = 'flex min-h-11 items-center justify-center gap-1.5 rounded border px-2 text-xs disabled:opacity-40';
   return (
@@ -52,7 +57,7 @@ function PreviewActions({ media: m, busy, isGuide, guideFull, guideBlocked, onGu
           className={`${btn} ${isGuide ? 'border-port-accent bg-port-accent/10 text-port-accent' : 'border-port-border text-gray-300 hover:border-port-accent'}`}>
           <Compass size={13} aria-hidden="true" /> {isGuide ? 'Guide' : 'Make guide'}
         </button>
-        {m.kind === 'portrait'
+        {isPortrait
           ? <span className={`${btn} border-port-warning/40 text-port-warning`}><Star size={13} aria-hidden="true" /> Primary</span>
           : <button type="button" disabled={busy || !onSetPortrait} onClick={() => onSetPortrait(m.mediaKey)} title="Make this the record's primary image"
             className={`${btn} border-port-border text-gray-300 hover:border-port-warning hover:text-port-warning`}>
@@ -135,9 +140,8 @@ export default function CatalogReferenceLibrary({
 
   // Enlarged previews step through the filtered images and rate in place.
   const tilesByKey = new Map();
-  for (const [, attachments] of groups) {
-    const tile = attachments.find((m) => m.kind === 'portrait') || attachments[0];
-    if (tile.kind !== 'video') tilesByKey.set(tile.mediaKey, tile);
+  for (const [groupKey, attachments] of groups) {
+    if (groupKey.startsWith('image:')) tilesByKey.set(attachments[0].mediaKey, leadAttachment(attachments));
   }
   const sequenceKeys = [...tilesByKey.keys()];
   const sequence = useMemo(() => ({
@@ -148,13 +152,14 @@ export default function CatalogReferenceLibrary({
       if (!m || readOnly || m.readOnly) return null;
       const isGuide = m.library?.guide === true && !rejected.has(m.mediaKey);
       // The rated or removed image may leave the filtered list, so step on to a neighbor.
-      return <PreviewActions key={key} media={m} busy={!!busyKey} isGuide={isGuide} guideFull={guideCount >= MAX_CAST_GUIDES} guideBlocked={rejected.has(m.mediaKey)}
-        onGuide={() => save(m, { guide: !isGuide })}
+      const attachments = groups.get(`image:${key}`) || [m];
+      return <PreviewActions key={key} media={m} isPortrait={attachments.some((a) => a.kind === 'portrait')} busy={!!busyKey} isGuide={isGuide} guideFull={guideCount >= MAX_CAST_GUIDES} guideBlocked={rejected.has(m.mediaKey)}
+        onGuide={() => toggleGuide(attachments, m, isGuide)}
         onSetPortrait={onSetPortrait}
         onDetach={onDetach ? async () => {
           goTo(nextKey ?? prevKey);
           // A visual attached as both primary and reference leaves the record entirely.
-          for (const a of groups.get(`image:${key}`) || [m]) await onDetach(a.mediaKey, a.kind);
+          for (const a of attachments) await onDetach(a.mediaKey, a.kind);
         } : undefined} />;
     },
     rating: (key, { nextKey, prevKey, goTo }) => {
@@ -167,7 +172,7 @@ export default function CatalogReferenceLibrary({
         title: { good: 'Good reference', bad: 'Bad: kept out of render guides' },
         // A rating can drop the image from the filtered list, so step on to a neighbor.
         onRate: async (next) => {
-          if (await save(m, rateReview(m, next || status || 'unreviewed'))) goTo(nextKey ?? prevKey);
+          if (await rateAll(groups.get(`image:${key}`) || [m], m, next || status || 'unreviewed')) goTo(nextKey ?? prevKey);
         },
       };
     },
@@ -188,6 +193,27 @@ export default function CatalogReferenceLibrary({
     } finally {
       setBusyKey('');
     }
+  };
+
+  // One rating covers every attachment of the visual so they never disagree.
+  const rateAll = async (attachments, lead, status) => {
+    const next = referenceReviewStatus(lead) === status ? 'unreviewed' : status;
+    let updated;
+    for (const a of attachments) if (!(updated = await save(a, rateReview(a, status, next)))) return undefined;
+    return updated;
+  };
+  // The guide lives on the lead only (each guided row takes a guide slot);
+  // turning it off clears any other attachment still guiding.
+  const toggleGuide = async (attachments, lead, isGuide) => {
+    if (!isGuide) return save(lead, { guide: true });
+    let updated;
+    for (const a of attachments.filter((x) => x.library?.guide === true)) if (!(updated = await save(a, { guide: false }))) return undefined;
+    return updated;
+  };
+
+  // The server applies likeness to every attachment of the file, so reload.
+  const toggleLikeness = async (lead, leftOut) => {
+    if (await save(lead, { likeness: leftOut })) onChanged?.();
   };
 
   const importBoard = async () => {
@@ -310,90 +336,105 @@ export default function CatalogReferenceLibrary({
           {[...groups].map(([groupKey, attachments]) => {
             const tile = attachments.find((m) => m.kind === 'portrait') || attachments[0];
             const tileEditable = !readOnly && !tile.readOnly;
+            const m = leadAttachment(attachments);
+            const key = `${m.ingredientId || ingredientId}:${m.kind}:${m.mediaKey}`;
+            const lib = m.library || {};
+            const isGuide = lib.guide === true && !rejected.has(m.mediaKey);
+            const leftOut = attachments.some(isLeftOutOfLikeness);
+            const editable = !readOnly && !m.readOnly;
+            const title = lib.variant?.label || attachments.find((a) => a.library?.variant?.label)?.library.variant.label || m.caption || m.mediaKey;
+            const summary = [forms.find((f) => f.id === lib.variant?.formId)?.label || 'Canonical',
+              Number.isInteger(lib.variant?.age) ? `Age ${lib.variant.age}` : '', eraFor(m), ...(lib.tags || [])].filter(Boolean).join(' · ');
+            const currentStatus = referenceReviewStatus(m);
             return (
               <li key={groupKey} data-testid="library-row" className="min-w-0 rounded-lg border border-port-border bg-port-bg">
                 <CatalogMediaTile m={tile} missing={missingMedia.has(tile.mediaKey)} contain
                   isPortrait={tile.kind === 'portrait'} onSetPortrait={tileEditable ? onSetPortrait : undefined}
                   onDetach={tileEditable ? onDetach : undefined} armedDetach={armedDetach} onArmDetach={setArmedDetach} />
-                {attachments.map((m) => {
-                  const key = `${m.ingredientId || ingredientId}:${m.kind}:${m.mediaKey}`;
-                  const lib = m.library || {};
-                  const isGuide = lib.guide === true && !rejected.has(m.mediaKey);
-                  const editable = !readOnly && !m.readOnly;
-                  const title = lib.variant?.label || m.caption || m.mediaKey;
-                  const summary = [forms.find((f) => f.id === lib.variant?.formId)?.label || 'Canonical',
-                    Number.isInteger(lib.variant?.age) ? `Age ${lib.variant.age}` : '', eraFor(m), ...(lib.tags || [])].filter(Boolean).join(' · ');
-                  const currentStatus = referenceReviewStatus(m);
-                  return (
-                    <div key={key} role="group" aria-label={`${m.kind} details for ${m.mediaKey}`} className="min-w-0 space-y-2 border-t border-port-border p-3">
-                      <div className="flex min-w-0 items-start gap-2">
-                        {m.kind === 'portrait' && <Star size={14} aria-label="Primary" className="mt-0.5 shrink-0 text-port-warning" />}
-                        <h4 className="min-w-0 flex-1 text-sm font-medium [overflow-wrap:anywhere]">{title}</h4>
-                        <span className="shrink-0 text-xs text-gray-500">{m.kind}</span>
-                      </div>
-                      <p className="text-xs text-gray-400 [overflow-wrap:anywhere]">{summary}</p>
-                      {m.kind !== 'video' && (editable ? (
-                        <RatingButtons media={m} busy={!!busyKey} onRate={(status) => save(m, rateReview(m, status))} />
-                      ) : currentStatus !== 'unreviewed' && (
-                        <p className={`text-xs font-medium capitalize ${currentStatus === 'good' ? 'text-port-success' : 'text-port-error'}`}>Rating: {currentStatus}</p>
-                      ))}
-                      {m.kind !== 'video' && (editable ? (
-                        <button type="button" disabled={!!busyKey || rejected.has(m.mediaKey) || (!isGuide && guideCount >= MAX_CAST_GUIDES)} aria-pressed={isGuide}
-                          title={!isGuide && guideCount >= MAX_CAST_GUIDES ? `At most ${MAX_CAST_GUIDES} render guides` : 'Use as a render guide'}
-                          onClick={() => save(m, { guide: !isGuide })}
-                          className={`flex min-h-11 w-full items-center justify-center gap-2 rounded border px-3 text-sm disabled:opacity-40 ${isGuide ? 'border-port-accent bg-port-accent/10 text-port-accent' : 'border-port-border text-gray-300 hover:border-port-accent'}`}>
-                          <Compass size={16} aria-hidden="true" /> {busyKey === `${m.kind}:${m.mediaKey}` ? 'Saving…' : isGuide ? 'Guide' : 'Make guide'}
-                        </button>
-                      ) : isGuide && <p className="text-xs text-port-accent">Render guide</p>)}
-                      {m.kind !== 'video' && <CatalogReferenceReview
-                        ingredientId={ingredientId} media={m} readOnly={!editable} saving={!!busyKey}
-                        onSave={patch => save(m, patch)} onChanged={onChanged} revision={previewRevision} blockedReason={blockedReason} />}
-                      {editable && (
-                        <details>
-                          <summary className="flex min-h-11 cursor-pointer items-center text-xs text-port-accent">Edit reference details</summary>
-                          <fieldset disabled={!!busyKey} className="grid min-w-0 grid-cols-[repeat(auto-fit,minmax(min(100%,7rem),1fr))] gap-2 text-xs disabled:opacity-50">
-                            {forms.length > 0 && (
-                              <label htmlFor={`${id}-${key}-form`} className="min-w-0 space-y-1"><span>Age or look</span>
-                                <select id={`${id}-${key}-form`} aria-label={`Age or look for ${m.mediaKey}`} value={lib.variant?.formId || ''} className={fieldClass}
-                                  onChange={(e) => {
-                                    const form = forms.find(f => f.id === e.target.value);
-                                    const age = /^\d+$/.test(String(form?.age).trim()) ? Number(form.age) : undefined;
-                                    save(m, { variant: { ...(lib.variant || {}), formId: e.target.value || undefined,
-                                      ...(age !== undefined ? { age, era: undefined } : {}) } });
-                                  }}>
-                                  <option value="">Canonical</option>
-                                  {forms.map((f) => <option key={f.id} value={f.id}>{f.label}</option>)}
-                                </select>
-                              </label>
-                            )}
-                            <label htmlFor={`${id}-${key}-age`} className="min-w-0 space-y-1"><span>Age</span>
-                              <input key={lib.variant?.age ?? ''} id={`${id}-${key}-age`} aria-label={`Age for ${m.mediaKey}`} type="number" min="0" max="150" defaultValue={lib.variant?.age ?? ''} className={fieldClass}
-                                onBlur={(e) => {
-                                  if (!e.target.validity.valid) return;
-                                  const age = e.target.value === '' ? undefined : Number(e.target.value);
-                                  if (age !== lib.variant?.age) save(m, { variant: { ...(lib.variant || {}), age } });
-                                }} />
-                            </label>
-                            <label htmlFor={`${id}-${key}-era`} className="min-w-0 space-y-1"><span>Era</span>
-                              <select id={`${id}-${key}-era`} aria-label={`Era for ${m.mediaKey}`} value={lib.variant?.era || ''} className={fieldClass}
-                                onChange={(e) => save(m, { variant: { ...(lib.variant || {}), era: e.target.value || undefined } })}>
-                                <option value="">From age</option>
-                                {ERAS.map((era) => <option key={era} value={era}>{era}</option>)}
-                              </select>
-                            </label>
-                            <label htmlFor={`${id}-${key}-tags`} className="col-span-full min-w-0 space-y-1"><span>Tags (comma separated)</span>
-                              <input key={(lib.tags || []).join(',')} id={`${id}-${key}-tags`} aria-label={`Tags for ${m.mediaKey}`} defaultValue={(lib.tags || []).join(', ')} placeholder="e.g. studio, winter" className={fieldClass}
-                                onBlur={(e) => {
-                                  const next = e.target.value.split(',').map((tag) => tag.trim()).filter(Boolean);
-                                  if (next.join(',') !== (lib.tags || []).join(',')) save(m, { tags: next });
-                                }} />
-                            </label>
-                          </fieldset>
-                        </details>
-                      )}
-                    </div>
-                  );
-                })}
+                <div role="group" aria-label={`Details for ${m.mediaKey}`} className="min-w-0 space-y-2 border-t border-port-border p-3">
+                  <div className="flex min-w-0 items-start gap-2">
+                    {tile.kind === 'portrait' && <Star size={14} aria-label="Primary" className="mt-0.5 shrink-0 text-port-warning" />}
+                    <h4 className="min-w-0 flex-1 text-sm font-medium [overflow-wrap:anywhere]">{title}</h4>
+                    <span className="shrink-0 text-xs text-gray-500">{attachments.map((a) => a.kind).join(' · ')}</span>
+                  </div>
+                  <p className="text-xs text-gray-400 [overflow-wrap:anywhere]">{summary}</p>
+                  {m.kind !== 'video' && (editable ? (
+                    <RatingButtons media={m} busy={!!busyKey} onRate={(status) => rateAll(attachments, m, status)} />
+                  ) : currentStatus !== 'unreviewed' && (
+                    <p className={`text-xs font-medium capitalize ${currentStatus === 'good' ? 'text-port-success' : 'text-port-error'}`}>Rating: {currentStatus}</p>
+                  ))}
+                  {m.kind !== 'video' && (editable ? (
+                    <button type="button" disabled={!!busyKey || rejected.has(m.mediaKey) || (!isGuide && guideCount >= MAX_CAST_GUIDES)} aria-pressed={isGuide}
+                      title={rejected.has(m.mediaKey) ? (leftOut ? 'Left out of likeness, so it cannot guide renders' : 'Rated bad, so it cannot guide renders')
+                        : !isGuide && guideCount >= MAX_CAST_GUIDES ? `At most ${MAX_CAST_GUIDES} render guides` : 'Use as a render guide'}
+                      onClick={() => toggleGuide(attachments, m, isGuide)}
+                      className={`flex min-h-11 w-full items-center justify-center gap-2 rounded border px-3 text-sm disabled:opacity-40 ${isGuide ? 'border-port-accent bg-port-accent/10 text-port-accent' : 'border-port-border text-gray-300 hover:border-port-accent'}`}>
+                      <Compass size={16} aria-hidden="true" /> {busyKey.endsWith(`:${m.mediaKey}`) ? 'Saving…' : isGuide ? 'Guide' : 'Make guide'}
+                    </button>
+                  ) : isGuide && <p className="text-xs text-port-accent">Render guide</p>)}
+                  {m.kind !== 'video' && (editable ? (
+                    <button type="button" disabled={!!busyKey} aria-pressed={!leftOut}
+                      title="Leave a collage or mood board out of the images that guide likeness"
+                      onClick={() => toggleLikeness(m, leftOut)}
+                      className={`flex min-h-11 w-full items-center justify-center rounded border border-port-border px-3 text-sm hover:border-port-accent disabled:opacity-40 ${leftOut ? 'text-gray-400' : 'text-gray-300'}`}>
+                      {leftOut ? 'Left out of likeness' : 'Used for likeness'}
+                    </button>
+                  ) : leftOut && <p className="text-xs text-gray-500">Left out of likeness</p>)}
+                  {m.kind !== 'video' && <CatalogReferenceReview
+                    ingredientId={ingredientId} media={m} readOnly={!editable} saving={!!busyKey}
+                    onSave={patch => save(m, patch)} onChanged={onChanged} revision={previewRevision} blockedReason={blockedReason} />}
+                  {editable && (
+                    <details>
+                      <summary className="flex min-h-11 cursor-pointer items-center text-xs text-port-accent">Edit reference details</summary>
+                      <fieldset disabled={!!busyKey} className="grid min-w-0 grid-cols-[repeat(auto-fit,minmax(min(100%,7rem),1fr))] gap-2 text-xs disabled:opacity-50">
+                        <label htmlFor={`${id}-${key}-title`} className="col-span-full min-w-0 space-y-1"><span>Title</span>
+                          <input key={lib.variant?.label ?? ''} id={`${id}-${key}-title`} aria-label={`Title for ${m.mediaKey}`} maxLength={120} defaultValue={lib.variant?.label ?? ''}
+                            placeholder={m.caption || m.mediaKey} className={fieldClass}
+                            onBlur={(e) => {
+                              const label = e.target.value.trim() || undefined;
+                              if (label !== lib.variant?.label) save(m, { variant: { ...(lib.variant || {}), label } });
+                            }} />
+                        </label>
+                        {forms.length > 0 && (
+                          <label htmlFor={`${id}-${key}-form`} className="min-w-0 space-y-1"><span>Age or look</span>
+                            <select id={`${id}-${key}-form`} aria-label={`Age or look for ${m.mediaKey}`} value={lib.variant?.formId || ''} className={fieldClass}
+                              onChange={(e) => {
+                                const form = forms.find(f => f.id === e.target.value);
+                                const age = /^\d+$/.test(String(form?.age).trim()) ? Number(form.age) : undefined;
+                                save(m, { variant: { ...(lib.variant || {}), formId: e.target.value || undefined,
+                                  ...(age !== undefined ? { age, era: undefined } : {}) } });
+                              }}>
+                              <option value="">Canonical</option>
+                              {forms.map((f) => <option key={f.id} value={f.id}>{f.label}</option>)}
+                            </select>
+                          </label>
+                        )}
+                        <label htmlFor={`${id}-${key}-age`} className="min-w-0 space-y-1"><span>Age</span>
+                          <input key={lib.variant?.age ?? ''} id={`${id}-${key}-age`} aria-label={`Age for ${m.mediaKey}`} type="number" min="0" max="150" defaultValue={lib.variant?.age ?? ''} className={fieldClass}
+                            onBlur={(e) => {
+                              if (!e.target.validity.valid) return;
+                              const age = e.target.value === '' ? undefined : Number(e.target.value);
+                              if (age !== lib.variant?.age) save(m, { variant: { ...(lib.variant || {}), age } });
+                            }} />
+                        </label>
+                        <label htmlFor={`${id}-${key}-era`} className="min-w-0 space-y-1"><span>Era</span>
+                          <select id={`${id}-${key}-era`} aria-label={`Era for ${m.mediaKey}`} value={lib.variant?.era || ''} className={fieldClass}
+                            onChange={(e) => save(m, { variant: { ...(lib.variant || {}), era: e.target.value || undefined } })}>
+                            <option value="">From age</option>
+                            {ERAS.map((era) => <option key={era} value={era}>{era}</option>)}
+                          </select>
+                        </label>
+                        <label htmlFor={`${id}-${key}-tags`} className="col-span-full min-w-0 space-y-1"><span>Tags (comma separated)</span>
+                          <input key={(lib.tags || []).join(',')} id={`${id}-${key}-tags`} aria-label={`Tags for ${m.mediaKey}`} defaultValue={(lib.tags || []).join(', ')} placeholder="e.g. studio, winter" className={fieldClass}
+                            onBlur={(e) => {
+                              const next = e.target.value.split(',').map((tag) => tag.trim()).filter(Boolean);
+                              if (next.join(',') !== (lib.tags || []).join(',')) save(m, { tags: next });
+                            }} />
+                        </label>
+                      </fieldset>
+                    </details>
+                  )}
+                </div>
               </li>
             );
           })}

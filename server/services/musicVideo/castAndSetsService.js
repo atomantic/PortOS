@@ -65,6 +65,8 @@ import {
   castAndSetsAllowsImages,
   castAndSetsMedium,
   describeDirectionChanges,
+  fixedSupportingCast,
+  formSubjects,
   mergeCastAndSetsDirection,
   moodBoardImageList,
   parseCastAndSetsResponse,
@@ -72,14 +74,17 @@ import {
 } from './castAndSetsDirection.js';
 import {
   CAST_SETS_IMAGE_SIZE,
+  CAST_SETS_REF_PREFIX,
   affectedImageKeys,
   buildCastAndSetsImagePlan,
   castAndSetsReferences,
   castAndSetsSubjects,
+  fixedCastSheetsWithoutReference,
   noteImageKeys,
   plannedTests,
 } from './castAndSetsPlan.js';
 import { renderCastAndSetsSheet } from './castAndSetsSheet.js';
+import { loadCastAndSetsCatalogLikeness } from './castAndSetsCatalogLikeness.js';
 import { findDevArtifact, reviewDevArtifact, resolveDevArtifactNotes } from './devArtifacts.js';
 import { findProductionRun, haltProduction, rebaseProductionAfterCheckin, reserveProductionStep, settleProductionStep } from './production.js';
 
@@ -101,10 +106,44 @@ const defaults = {
   sheetImage: (path) => sheetImage(path),
   imageParams: (settings, route, common) => imageJobParams(settings, route, common),
   resolveRoute: null,
+  // getIngredient/listMediaForIngredient; null = the live catalog.
+  catalog: null,
 };
 let deps = { ...defaults };
 export function __setCastAndSetsDepsForTests(overrides) { deps = { ...defaults, ...overrides }; }
 export const __castAndSetsProcessId = () => PROCESS_ID;
+
+// A legacy card has no test snapshot. Use the same complete plan comparison
+// for read-time hydration and write-time edits; a partial match is ambiguous.
+function matchingTestCards(project, stage) {
+  const direction = stage.direction;
+  const effective = plannedTests(project, direction);
+  const rebuilt = buildCastAndSetsImagePlan(project, direction, { revisionNotes: keyNotesText(stage.keyNotes) });
+  const cards = Object.values(stage.plan || {}).filter((item) => item.kind === 'test').sort((a, b) => a.testIndex - b.testIndex);
+  const matchesLegacy = (card) => {
+    const fresh = rebuilt[card.key];
+    return fresh && card.prompt === fresh.prompt && card.setId === fresh.setId && card.label === fresh.label
+      && JSON.stringify(card.deps) === JSON.stringify(fresh.deps) && JSON.stringify(card.refKeys) === JSON.stringify(fresh.refKeys);
+  };
+  if (cards.length !== effective.length || cards.some((card, i) => card.testIndex !== i || (card.test
+    ? JSON.stringify(card.test) !== JSON.stringify(effective[i])
+    : !matchesLegacy(card)))) return null;
+  return cards.map((card, i) => card.test || effective[i]);
+}
+
+function presentStage(project) {
+  const stage = presentCastAndSets(project?.castAndSets, PROCESS_ID);
+  if (!stage?.direction) return stage;
+  // Older malformed records should remain readable; an unverified card stays
+  // unhydrated and the edit route continues to reject a mismatched plan.
+  try {
+    if (!Object.values(stage.plan || {}).some((item) => item.kind === 'test' && !item.test)) return stage;
+    const tests = matchingTestCards(project, stage);
+    if (!tests) return stage;
+    return { ...stage, plan: Object.fromEntries(Object.entries(stage.plan).map(([key, item]) => [key,
+      item.kind === 'test' && !item.test ? { ...item, test: tests[item.testIndex] } : item])) };
+  } catch { return stage; }
+}
 
 /**
  * The project as a CLIENT reads it. Only this process knows its own id, so only
@@ -205,8 +244,9 @@ async function runDirection(projectId, { providerId, model, effort, notes = [], 
   const parsed = parseCastAndSetsResponse(text);
   if (!parsed) return fail(projectId, 'The creative direction answer had no usable JSON');
   const sections = songSections(project);
-  const { direction, missing } = mergeCastAndSetsDirection(notes.length ? previous : null, parsed, { sections, medium });
-  if (missing.length) return fail(projectId, `The creative direction answer is missing: ${missing.join(', ')}`);
+  const merged = mergeCastAndSetsDirection(notes.length ? previous : null, parsed, { sections, medium, fixedCast: fixedSupportingCast(project) });
+  if (merged.missing.length) return fail(projectId, `The creative direction answer is missing: ${merged.missing.join(', ')}`);
+  const direction = withCheckedFormSubjects(project, merged.direction, notes.length ? previous : null);
   // The look every image prompt carries. While the director's sheet feedback
   // stands, the look line rewritten to agree with it wins; otherwise the
   // director's palette/light/texture line, else the project's visual style.
@@ -240,7 +280,8 @@ async function writePlan(projectId, { direction = null, forceKeys = [], changes 
   const codeOnly = !musicVideoAllowsMedia(project, 'image') || nextDirection.medium === 'procedural' && !castAndSetsAllowsImages(project);
   const { loadMusicVideoGreybox } = await import('./greyboxReferences.js');
   const greyboxes = Object.fromEntries(await Promise.all((codeOnly ? [] : nextDirection.sets || []).filter((s) => s.setReference?.greyboxShotId).map(async (set) => [set.id, await loadMusicVideoGreybox(project, { sceneId: `set:${set.id}`, setReference: set.setReference })])));
-  const plan = codeOnly ? {} : buildCastAndSetsImagePlan(project, nextDirection, { revisionNotes: keyNotesText(stage.keyNotes), greyboxes });
+  const catalogLikeness = codeOnly ? {} : await loadCastAndSetsCatalogLikeness(project, { catalog: deps.catalog });
+  const plan = codeOnly ? {} : buildCastAndSetsImagePlan(project, nextDirection, { revisionNotes: keyNotesText(stage.keyNotes), greyboxes, catalogLikeness });
   const renderKeys = affectedImageKeys(stage.plan || {}, plan, forceKeys);
   const settings = await deps.getSettings();
   const run = stage.productionRunId ? (project.productionRuns || []).find((r) => r.id === stage.productionRunId) : null;
@@ -260,6 +301,40 @@ async function writePlan(projectId, { direction = null, forceKeys = [], changes 
   return advance(projectId);
 }
 
+/**
+ * A form's subject binding a caller just set (it differs from the one `previous`
+ * held for that form id) that names no fixed-casting character of `project`.
+ * An unchanged binding whose subject was since unlinked is left for the plan
+ * to report as missing, so it never blocks an unrelated edit.
+ */
+function newUnknownFormSubjects(project, direction, previous) {
+  const known = new Set(formSubjects(project).map((s) => s.id));
+  const before = new Map((previous?.protagonist?.forms || []).map((f) => [f.id, f.subjectId]));
+  return (direction?.protagonist?.forms || []).filter((f) => f.subjectId && f.subjectId !== before.get(f.id) && !known.has(f.subjectId));
+}
+
+/**
+ * Bind forms only to subjects the director cast: a provider's new binding to
+ * any other id is dropped (a director edit is refused before this runs), and
+ * each binding to a known subject records that subject's name, so its
+ * reference can still be kept off the present-day sheet if the subject is
+ * later removed from the video.
+ */
+function withCheckedFormSubjects(project, direction, previous) {
+  const forms = direction?.protagonist?.forms;
+  if (!forms?.length) return direction;
+  const unknown = new Set(newUnknownFormSubjects(project, direction, previous).map((f) => f.id));
+  const names = new Map(formSubjects(project).map((s) => [s.id, s.name]));
+  const checked = forms.map((f) => {
+    if (!f.subjectId) return f;
+    const { subjectId, subjectName, ...rest } = f;
+    if (unknown.has(f.id)) return rest;
+    const name = names.get(subjectId) || subjectName;
+    return { ...rest, subjectId, ...(name ? { subjectName: name } : {}) };
+  });
+  return { ...direction, protagonist: { ...direction.protagonist, forms: checked } };
+}
+
 const keyNotesText = (keyNotes = {}) => Object.fromEntries(Object.entries(keyNotes).map(([k, list]) => [k, list.join('; ')]));
 
 // ---- images -----------------------------------------------------------------------
@@ -271,8 +346,10 @@ function referencePaths(stage, item) {
     const path = id ? resolveGalleryImage(id, { mustExist: false }) : null;
     if (path) paths.push(path);
   }
+  // Casting images can live in the gallery or in image-refs uploads; one
+  // whose file is gone is skipped so the next reference takes its slot.
   for (const id of item.refImages || []) {
-    const path = resolveGalleryImage(id, { mustExist: false });
+    const path = resolveGalleryImage(id) || resolveImageRef(id);
     if (path && !paths.includes(path)) paths.push(path);
   }
   return paths.slice(0, 4);
@@ -457,6 +534,13 @@ function advance(projectId) {
   return entry.promise;
 }
 
+// What the check-in asks the budget for, so a refusal names the cast it would cover.
+function checkinPlanSize(stage) {
+  const pending = Object.entries(stage.images || {}).filter(([, image]) => image.status === 'pending').map(([key]) => key);
+  const cast = pending.filter((key) => key.startsWith('cast:')).length;
+  return `The Cast & Sets check-in needs ${pending.length} image${pending.length === 1 ? '' : 's'}${cast ? `, ${cast} of them supporting cast sheets` : ''}`;
+}
+
 async function advanceOnce(projectId) {
   const project = await requireProject(projectId);
   const stage = project.castAndSets;
@@ -471,10 +555,11 @@ async function advanceOnce(projectId) {
     const reserved = await reserveCheckinPlan(projectId).catch((error) => ({ error }));
     if (reserved.error) {
       const limit = ['PRODUCTION_SPEND_LIMIT', 'PRODUCTION_BUDGET_EXHAUSTED'].includes(reserved.error.code);
+      const reason = limit ? `${checkinPlanSize(stage)}: ${reserved.error.message}. Raise the run's limit and resume.` : reserved.error.message;
       const out = await mutateProjectRecord(projectId, (current) => {
-        const failed = setCastAndSetsStatus(refundUnusedCheckinSteps(current), 'failed', { reason: reserved.error.message });
+        const failed = setCastAndSetsStatus(refundUnusedCheckinSteps(current), 'failed', { reason });
         return haltProduction(failed.project, stage.productionRunId, {
-          status: limit ? 'limit-reached' : 'blocked', reason: reserved.error.message,
+          status: limit ? 'limit-reached' : 'blocked', reason,
         });
       });
       musicVideoEvents.emit('production', { projectId, runId: out.run.id, run: out.run, action: { type: 'idle' }, project: out.project });
@@ -582,12 +667,18 @@ function queueCheckinCastToCatalog(projectId) {
  */
 function applyApproval(project, now) {
   const stage = project.castAndSets;
+  const references = castAndSetsReferences(project, stage);
+  const unseated = fixedCastSheetsWithoutReference(project, stage, references);
+  if (unseated.length) {
+    const characterLost = stage.images?.character?.imageId && !references.some((r) => r.id === `${CAST_SETS_REF_PREFIX}character`);
+    throw new ServerError(`The project's reference list is full, so the cast sheet${unseated.length > 1 ? 's' : ''} for ${unseated.join(', ')} cannot be added. Remove ${unseated.length + (characterLost ? 1 : 0)} of the project's own visual references and approve again.`, { status: 409, code: 'CAST_SETS_REFERENCE_LIMIT' });
+  }
   let next = {
     ...project,
     visualSpec: {
       references: [], palette: [], typography: '', cameraRules: '', moodBoardId: null,
       ...(project.visualSpec || {}),
-      references: castAndSetsReferences(project, stage),
+      references,
     },
     concept: { ...(project.concept || {}), subjects: castAndSetsSubjects(project, stage) },
   };
@@ -787,22 +878,21 @@ export async function editCastAndSetsDirection(projectId, edits) {
     if (stage.status === 'skipped') throw new ServerError('The Cast & Sets check-in was skipped — rebuild it first', { status: 409, code: 'CAST_SETS_NOT_IN_REVIEW' });
     let direction = stage.direction;
     if (edits.tests?.length) {
-      const effective = plannedTests(current, direction);
-      const rebuilt = buildCastAndSetsImagePlan(current, direction, { revisionNotes: keyNotesText(stage.keyNotes) });
-      const cards = Object.values(stage.plan || {}).filter((item) => item.kind === 'test').sort((a, b) => a.testIndex - b.testIndex);
-      if (cards.length !== effective.length || cards.some((card, i) => card.testIndex !== i || (card.test
-        ? JSON.stringify(card.test) !== JSON.stringify(effective[i])
-        : card.prompt !== rebuilt[card.key]?.prompt))) {
+      const tests = matchingTestCards(current, stage);
+      if (!tests) {
         throw new ServerError('The saved test cards no longer match this direction. Rebuild the check-in before editing them.', { status: 409, code: 'CAST_SETS_TEST_PLAN_STALE' });
       }
-      direction = { ...direction, tests: cards.map((card, i) => card.test || effective[i]) };
+      direction = { ...direction, tests };
     }
-    const edited = applyCastAndSetsDirectionEdits(direction, edits, { sections });
+    const edited = applyCastAndSetsDirectionEdits(direction, edits, { sections, fixedCast: fixedSupportingCast(current) });
+    if (newUnknownFormSubjects(current, edited.direction, direction).length) {
+      throw new ServerError('That age is linked to a character this video has not cast from the catalog. Link the character in Creative setup first.', { status: 422, code: 'CAST_SETS_UNKNOWN_SUBJECT' });
+    }
     if (!edited.changed.length) throw new ServerError('Nothing changed — edit a field first', { status: 422, code: 'CAST_SETS_NO_EDITS' });
     changed = edited.changed;
     const notesApplied = [{ id: null, target: 'direction', text: `Edited by the director: ${changed.join(', ')}` }];
     const revised = reviseCastAndSetsOnProject(current, { processId: PROCESS_ID, notesApplied, redirect: false });
-    const next = { ...revised.project, castAndSets: { ...revised.stage, direction: edited.direction } };
+    const next = { ...revised.project, castAndSets: { ...revised.stage, direction: withCheckedFormSubjects(current, edited.direction, direction) } };
     return { project: next, stage: next.castAndSets };
   });
   console.log(`🎭 Music Video Cast & Sets ${short(projectId)} direction edited r${out.stage.revision} (${changed.length} field(s))`);
@@ -853,7 +943,7 @@ export async function resumeCastAndSets(projectId, { providerId, model, effort }
 /** The stage as the director sees it. */
 export async function getCastAndSets(projectId) {
   const project = await requireProject(projectId);
-  return { stage: presentCastAndSets(project.castAndSets, PROCESS_ID) };
+  return { stage: presentStage(project) };
 }
 
 // ---- completion hook entry points ----------------------------------------------------------

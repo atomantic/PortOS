@@ -12,6 +12,7 @@ vi.mock('../lib/paths.js', async original => {
   return makePathsProxy(await original(), { dataRoot: () => lazyTempDataRoot('portos-investigation-wait-') });
 });
 vi.mock('./cosState.js', async () => ({ loadState: async () => ({ agents: fixture.agents }),
+  readAgentsStateForSafetyCheck: async () => ({ trusted: true, agents: fixture.agents }),
   withStateLock: (await import('../lib/fileWriteQueue.js')).createFileWriteQueue() }));
 vi.mock('./cos.js', () => ({ isRunning: () => false }));
 vi.mock('./notifications.js', () => ({ removeByMetadata: async () => 0 }));

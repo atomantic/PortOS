@@ -212,6 +212,28 @@ describe('catalog sheet routes', () => {
     expect(preview.body.preview.referenceImages.map(ref => ref.filename)).toEqual(['canonical.png']);
   });
 
+  // A collage left out of likeness is listed (so it can be put back) but never
+  // sent, never takes a slot and never blocks the render when its file is gone.
+  it('lists a left-out image without sending it or letting it fill a reference slot', async () => {
+    mocks.getIngredient.mockResolvedValue({ ...character, payload: { ...character.payload, imageRefs: ['board.png'] } });
+    mocks.listMediaForIngredient.mockResolvedValue([
+      { kind: 'portrait', mediaKey: 'portrait.png' },
+      { kind: 'reference', mediaKey: 'board.png', library: { likeness: false } },
+      { kind: 'reference', mediaKey: 'gone-board.png', library: { likeness: false } },
+      { kind: 'reference', mediaKey: 'still.png' },
+    ]);
+    ['portrait.png', 'board.png', 'still.png'].forEach(name => mocks.imageFiles.add(name));
+    const res = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets/preview').send({});
+    expect(res.status).toBe(200);
+    expect(res.body.preview.referenceImages.map(ref => [ref.filename, ref.status, ref.mediaKind])).toEqual([
+      ['portrait.png', 'included', 'portrait'], ['still.png', 'included', 'reference'],
+      ['board.png', 'left-out', 'reference'], ['gone-board.png', 'left-out', 'reference'],
+    ]);
+    const queued = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets').send({});
+    expect(queued.status).toBe(200);
+    expect(queuedParams().referenceImagePaths.map(path => basename(path))).toEqual(['portrait.png', 'still.png']);
+  });
+
   it('includes shared facial identity on delegated canonical blueprints as well as alternate-form sheets', async () => {
     mocks.getIngredient.mockResolvedValue(character);
     mocks.listLiveRefsForIngredient.mockResolvedValue([{ refKind: 'universe', refId: 'universe-1', role: 'owner' }]);
@@ -228,7 +250,7 @@ describe('catalog sheet routes', () => {
     mocks.getIngredient.mockResolvedValue(character);
     mocks.listMediaForIngredient.mockResolvedValue([{ kind: 'reference', mediaKey: 'missing.png', library: { guide: true } }]);
     const res = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets/preview').send({});
-    expect(res.body.preview.referenceImages).toEqual([{ filename: 'missing.png', source: 'Render guide', status: 'missing' }]);
+    expect(res.body.preview.referenceImages).toEqual([{ filename: 'missing.png', source: 'Render guide', mediaKind: 'reference', status: 'missing' }]);
     const queued = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets').send({});
     expect(queued.status).toBe(400);
     expect(mocks.enqueueJob).not.toHaveBeenCalled();
@@ -741,6 +763,50 @@ describe('catalog sheet routes', () => {
       expect(params.prompt).toContain('green eyes and a distinctive nose');
       expect(preview.body.preview.sentPrompt).toBe(params.prompt);
       expect(mocks.updateUniverse).not.toHaveBeenCalled();
+    });
+
+    // Catches an age or look editing the present-day portrait (a 7-year-old
+    // drawn from the adult's face) and the preview hiding which images are sent.
+    describe('edit base for an age or look', () => {
+      const codex = { imageGen: { mode: 'codex', codex: { enabled: true } } };
+      beforeEach(() => {
+        mocks.getSettings.mockResolvedValue(codex);
+        mocks.getIngredient.mockResolvedValue(aged);
+        ['portrait.png', 'kid.png'].forEach((name) => mocks.imageFiles.add(name));
+      });
+
+      it('edits from the form’s own guide, not the canonical portrait, exactly as previewed', async () => {
+        mocks.listMediaForIngredient.mockResolvedValue([
+          { kind: 'portrait', mediaKey: 'portrait.png' },
+          { kind: 'reference', mediaKey: 'kid.png', library: { guide: true, variant: { formId: 'form-kid' } } },
+        ]);
+        const body = { variant: 'blueprint', formId: 'form-kid' };
+        const sent = (await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets/preview').send(body)).body.preview;
+        expect(sent.editBase).toMatchObject({ filename: 'kid.png', status: 'included', scope: 'form', source: 'Render guide · Age 7' });
+        expect(sent.referenceImages.map((ref) => [ref.filename, ref.role])).toEqual([['kid.png', 'edit-base']]);
+        expect(sent.promptAdditions.map((a) => a.id)).toContain('form-edit-base');
+        expect(sent.promptAdditions.map((a) => a.id)).not.toContain('portrait-edit-base');
+        await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets').send(body);
+        const params = queuedParams();
+        expect(basename(params.initImagePath)).toBe('kid.png');
+        await expectBackendPreview(sent, params);
+      });
+
+      it('generates fresh with the canonical portrait as a likeness guide when the form has no image', async () => {
+        mocks.listMediaForIngredient.mockResolvedValue([{ kind: 'portrait', mediaKey: 'portrait.png' }]);
+        const body = { variant: 'blueprint', formId: 'form-kid' };
+        const sent = (await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets/preview').send(body)).body.preview;
+        expect(sent.editBase).toMatchObject({ status: 'none', reason: expect.stringContaining('generated fresh') });
+        expect(sent.referenceImages.map((ref) => [ref.filename, ref.role, ref.source])).toEqual([
+          ['portrait.png', undefined, 'Portrait · canonical · present story'],
+        ]);
+        const identity = sent.promptAdditions.find((a) => a.id === 'character-identity');
+        expect(identity.text).toContain('another age or look than Age 7');
+        await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets').send(body);
+        const params = queuedParams();
+        expect(params.initImagePath).toBeUndefined();
+        expect(params.referenceImagePaths.map((path) => basename(path))).toEqual(['portrait.png']);
+      });
     });
 
     it('refuses an unknown form, an undescribed form and a form on a look', async () => {

@@ -210,7 +210,7 @@ async function resolveSheetTarget(id, options) {
       if (entry) return { ingredient, payload, variant, delegate: { universeId: universe.id, entryId: entry.id } };
     }
   }
-  return { ingredient, payload: catalogAppearance(ingredient.type, payload, form), variant, universe: universes[0] ?? null };
+  return { ingredient, payload: catalogAppearance(ingredient.type, payload, form), variant, form, universe: universes[0] ?? null };
 }
 
 // Presence is checked without rewriting authored text. Board pins alone are
@@ -279,6 +279,7 @@ async function buildCatalogSheet(target, options) {
     renderPin: universe ? recordRenderPin(universe) : {},
     referenceCandidates: ingredient.type === 'character' ? characterSheetReferenceCandidates(payload, media, options) : [],
     editBaseCandidate: ingredient.type === 'character' ? characterSheetEditBase(payload, media, options) : null,
+    form: ingredient.type === 'character' && target.form ? { label: target.form.label || 'This age or look' } : null,
     sharedIdentity: ingredient.type === 'character' ? payload.visualIdentity : '',
     family: ingredient.type === 'character' ? await catalogFamilyRenderContext(ingredient.id, ingredient.name) : undefined,
     selfName: ingredient.name,

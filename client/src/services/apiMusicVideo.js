@@ -37,6 +37,9 @@ export const cloneMusicVideoProject = (id, data = {}, options = {}) => request(`
 export const updateMusicVideoProject = (id, patch, options = {}) => request(`/music-video/${encodeURIComponent(id)}`, {
   method: 'PATCH', body: JSON.stringify(patch), ...options,
 });
+export const labelMusicVideoReferencesFromCatalog = (id, options = {}) => request(`/music-video/${encodeURIComponent(id)}/references/catalog-labels`, {
+  method: 'POST', ...options,
+});
 export const getMusicVideoStoryContext = (id, options = {}) => request(`/music-video/${encodeURIComponent(id)}/story/context`, options);
 export const saveMusicVideoStorySummary = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/story/summary`, {
   method: 'PUT', body: JSON.stringify(body), ...options,
@@ -204,6 +207,8 @@ export const getMusicVideoMediaPool = (id, options = {}) => request(`/music-vide
 /** Swap's prompt search: `{ items: [{ kind, assetId }] }`, the pool items whose prompts hold every word. */
 export const searchMusicVideoMediaPool = (id, q, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/media-pool/search?q=${encodeURIComponent(q)}`, options);
+/** The credits ending's suggested lines for a video (song, artist, director, album): `{ credits }`. */
+export const getMusicVideoCreditsPrefill = (id, options = {}) => request(`/music-video/${encodeURIComponent(id)}/credits-prefill`, options);
 /** The cutting room floor outro's tally for a video: `{ stats }`. */
 export const getMusicVideoOutroStats = (id, options = {}) => request(`/music-video/${encodeURIComponent(id)}/stats-outro`, options);
 // Asset manager: mark unused pool items ★ 'ingredient' / ✕ 'bad' (null clears) → { assetMarks }.
@@ -577,6 +582,8 @@ export const deleteMusicVideoDevArtifact = (id, artifactId, options = {}) =>
 // ---- Cast & Sets check-in (before the shot plan) ----
 // Start / regenerate / resume return at once (`{ project, stage }`); the stage
 // advances server-side and reports over the `music-video:cast-and-sets` socket event.
+export const getMusicVideoCastAndSets = (id, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/cast-and-sets`, options);
 export const startMusicVideoCastAndSets = (id, body = {}, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/cast-and-sets`, { method: 'POST', body: JSON.stringify(body), ...options });
 // Body: { notes?: [{ text, target? }], keys?: [planKey] } — omitted notes = the sheet's open notes;
@@ -707,3 +714,10 @@ export const getMusicVideoFestivalPacket = (id, options = {}) => request(`/music
 export const previewMusicVideoFestivalPacket = (id, packet, options = {}) => request(`/music-video/${encodeURIComponent(id)}/festival-packet/preview`, { ...options, method: 'POST', body: JSON.stringify(packet) });
 
 export const saveMusicVideoFestivalPacket = (id, packet, options = {}) => request(`/music-video/${encodeURIComponent(id)}/festival-packet`, { ...options, method: 'PUT', body: JSON.stringify(packet) });
+
+export const inspectMusicVideoDcp = (id, options = {}) => request(`/music-video/${encodeURIComponent(id)}/dcp/readiness`, { method: 'POST', ...options });
+export const buildMusicVideoDcp = (id, input, options = {}) => request(`/music-video/${encodeURIComponent(id)}/dcp/build`, { method: 'POST', body: JSON.stringify(input), ...options });
+export const musicVideoDcpEventsUrl = jobId => `/api/music-video/dcp/${encodeURIComponent(jobId)}/events`;
+export const cancelMusicVideoDcp = (jobId, options = {}) => request(`/music-video/dcp/${encodeURIComponent(jobId)}/cancel`, { method: 'POST', ...options });
+export const getMusicVideoDcpLocation = (id, artifactId, options = {}) => request(`/music-video/${encodeURIComponent(id)}/dcp/${encodeURIComponent(artifactId)}/location`, options);
+export const musicVideoDcpReportUrl = (id, artifactId) => `/api/music-video/${encodeURIComponent(id)}/dcp/${encodeURIComponent(artifactId)}/report`;

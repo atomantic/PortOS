@@ -1,0 +1,19 @@
+# Local cinema packages
+
+The Music Video Publish stage can create a local, unencrypted SMPTE 2K Flat DCP from the current final render. Install [DCP-o-matic](https://dcpomatic.com/download) separately on the PortOS host; PortOS does not download or bundle it. The tested DCP-o-matic 2.18.51 create, encoder and verifier command-line tools must be installed together, along with ffprobe. On macOS the standard app bundle is discovered under `/Applications/DCP-o-matic 2.app/Contents/MacOS`; on Windows the standard `DCP-o-matic 2/bin` under Program Files is checked. Tools on the server's PATH are also discovered. Check the DCP-o-matic installation and its command-line help if the inspection reports a missing or incompatible tool. DCP-o-matic is GPL licensed; distribution obligations would need review before bundling it.
+
+Inspect the final render and tools in Publish, then choose the conversion corresponding to how the source was graded: DCP-o-matic Rec.709 (gamma 2.2) or Rec.1886 (gamma 2.4). Stream color tags alone do not establish the grading display gamma. This version requires a single progressive 24 fps video stream with square pixels, explicitly tagged BT.709 primaries, transfer and matrix with video-range levels, and a single labeled stereo audio stream. Correct missing or unsupported metadata and prepare a suitable master before proceeding. The exporter checks frame timestamps and refuses variable timing, then validates the generated project's format, color conversion, crop and audio mapping. The stereo channels map to left and right; other output channels are silent.
+
+The source is copied and hashed for the job, and the original is not modified. The 1998 × 1080 container fits the whole image without cropping. A smaller source is scaled to fit, not enhanced or made native 2K. Encoding and full verification can take substantial time and disk space; the preflight requires enough space for the source copy, a conservative package estimate and working overhead. Each completed package and report stays in a separate folder under the PortOS host's video data directory. The project records its source render, source digest, settings and verification state; a newer final render makes the older package visibly stale. Use **Locate package on host** to find the folder and download the report separately. A failed verification remains labeled as failed and keeps its report. A cancellation or failed encode removes only its own staging directory; previous packages and the source are kept. An interrupted server can leave a job staging directory for manual investigation.
+
+Verification checks technical properties, not playback at every cinema. Inspect picture, sound, synchronization and playback with the festival or projection system. Confirm the venue's delivery format and drive requirements. No package is uploaded or submitted by this feature. [FilmFreeway says its DCP slot accepts DCPs ordered through its own paid service](https://filmfreeway.com/help/article/16109/create-a-festival-ready-dcp-with-filmfreeway); a local package is a separate deliverable when the venue accepts one.
+
+## Real-tool integration test
+
+Install a compatible DCP-o-matic toolchain and ffmpeg/ffprobe, then point `PORTOS_DCP_TEST_TOOLS` at the directory containing `dcpomatic2_create`, `dcpomatic2_cli` and `dcpomatic2_verify_cli` (on Windows their `.exe` counterparts). From `server/` run:
+
+```sh
+PORTOS_DCP_TEST_TOOLS='/path/to/DCP-o-matic 2.app/Contents/MacOS' ./node_modules/.bin/vitest run routes/musicVideoDcp.integration.test.js
+```
+
+The test generates a synthetic two-second source, builds a package through the route, compares the source hash, checks container dimensions, active area, duration, frame rate and decoded left/right audio, and checks that the real verifier rejects a deliberately damaged copy. The test is skipped when the optional tool directory is not specified. It uses temporary test data, not a real project or master.

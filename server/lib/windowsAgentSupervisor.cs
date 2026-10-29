@@ -42,9 +42,17 @@ public static class WindowsAgentSupervisor
     [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
     [DllImport("kernel32.dll", SetLastError=true)] static extern bool GetProcessTimes(IntPtr process, out long created, out long exited, out long kernel, out long user);
     [DllImport("kernel32.dll", SetLastError=true)] static extern bool GetExitCodeProcess(IntPtr process, out uint code);
-    [DllImport("kernel32.dll")] static extern uint WaitForSingleObject(IntPtr handle, uint milliseconds);
+    [DllImport("kernel32.dll", SetLastError=true)] static extern uint WaitForSingleObject(IntPtr handle, uint milliseconds);
 
-    static void Require(bool success) { if (!success) throw new InvalidOperationException(); }
+    // Failure diagnostics carry only an allowlisted stage name and a numeric
+    // Win32/wait/HRESULT code (0 for a failed invariant); never paths, PIDs,
+    // owner nonces or command text.
+    static string stage = "request";
+    static int? failureCode;
+    static void Fail(int code) { failureCode = code; throw new InvalidOperationException(); }
+    static void Require(bool success) { if (!success) Fail(Marshal.GetLastWin32Error()); }
+    // Invariants that are not Win32 calls: a stale last-error would mislead.
+    static void Check(bool valid) { if (!valid) Fail(0); }
     static string Quote(string argument) {
         // Match Node's non-verbatim argv construction. The shared shim adapter
         // deliberately leaves caret-escaped cmd arguments unquoted, and bypasses
@@ -89,16 +97,19 @@ public static class WindowsAgentSupervisor
         var inherited = new IntPtr[3];
         var process = new ProcessInfo();
         bool initialized = false;
+        string directory = null;
         try {
-            Require(args.Length == 1);
+            Check(args.Length == 1);
             var request = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(File.ReadAllText(args[0]));
-            string directory = Path.GetDirectoryName(args[0]);
+            directory = Path.GetDirectoryName(args[0]);
+            stage = "job";
             if ((bool)request["pty"]) Require(SetConsoleCtrlHandler(consoleControl, true));
             job = CreateJobObject(IntPtr.Zero, null);
             Require(job != IntPtr.Zero);
             var limits = new ExtendedLimits();
             limits.Basic.Flags = 0x2000; // KILL_ON_JOB_CLOSE; no descendant breakaway.
             Require(SetInformationJobObject(job, 9, ref limits, Marshal.SizeOf(limits)));
+            stage = "attributes";
             for (int i = 0; i < 3; i++) {
                 Require(DuplicateHandle(GetCurrentProcess(), GetStdHandle(-10 - i), GetCurrentProcess(), out inherited[i], 0, true, 2));
             }
@@ -112,15 +123,16 @@ public static class WindowsAgentSupervisor
             jobs = Marshal.AllocHGlobal(IntPtr.Size); Marshal.WriteIntPtr(jobs, job);
             Require(UpdateProcThreadAttribute(attributes, 0, new IntPtr(0x20002), handles, new IntPtr(IntPtr.Size * 3), IntPtr.Zero, IntPtr.Zero));
             Require(UpdateProcThreadAttribute(attributes, 0, new IntPtr(0x2000D), jobs, new IntPtr(IntPtr.Size), IntPtr.Zero, IntPtr.Zero));
+            stage = "launch";
             var startup = new StartupEx();
             startup.Startup.Size = Marshal.SizeOf(startup); startup.Attributes = attributes;
             startup.Startup.Flags = 0x100;
             startup.Startup.Input = inherited[0]; startup.Startup.Output = inherited[1]; startup.Startup.Error = inherited[2];
             string executable = (string)request["command"];
-            Require(executable.IndexOf('\0') < 0 && ((string)request["cwd"]).IndexOf('\0') < 0);
+            Check(executable.IndexOf('\0') < 0 && ((string)request["cwd"]).IndexOf('\0') < 0);
             var arguments = new List<string>();
             foreach (object argument in (IEnumerable)request["args"]) {
-                Require(((string)argument).IndexOf('\0') < 0);
+                Check(((string)argument).IndexOf('\0') < 0);
                 arguments.Add((string)argument);
             }
             var command = new StringBuilder(Quote(executable));
@@ -132,7 +144,7 @@ public static class WindowsAgentSupervisor
                 command.Append(" /d /s /c \"");
                 for (int i = 1; i < arguments.Count; i++) {
                     if (i > 1) command.Append(' ');
-                    Require(arguments[i].IndexOf('"') < 0);
+                    Check(arguments[i].IndexOf('"') < 0);
                     command.Append(Quote(arguments[i]));
                 }
                 command.Append('"');
@@ -141,18 +153,29 @@ public static class WindowsAgentSupervisor
             }
             // Inherit the caller's already composed environment and console/PTY.
             Require(CreateProcess(executable, command, IntPtr.Zero, IntPtr.Zero, true, (bool)request["pty"] ? 0x00080000u : 0x08080000u, IntPtr.Zero, (string)request["cwd"], ref startup, out process));
+            stage = "process-times";
             long created, exited, kernel, user;
             Require(GetProcessTimes(process.Process, out created, out exited, out kernel, out user));
-            Require(created > 0);
+            Check(created > 0);
+            stage = "started-receipt";
             WriteReceipt(Path.Combine(directory, "started.json"), new { owner = request["owner"], pid = process.Pid, created = created.ToString() });
             bool cancelling = false;
             while (true) {
+                stage = "accounting";
                 Accounting accounting;
                 Require(QueryInformationJobObject(job, 1, out accounting, Marshal.SizeOf(typeof(Accounting)), IntPtr.Zero));
                 if (accounting.Active == 0) {
-                    Require(WaitForSingleObject(process.Process, 0) == 0);
+                    stage = "root-exit";
+                    // Job accounting drops a process during rundown, before its
+                    // handle is signaled; a zero-time wait refused real
+                    // settlement after TerminateJobObject (#14035). Wait on the
+                    // exact root handle, bounded so a stuck rundown still holds.
+                    uint wait = WaitForSingleObject(process.Process, 5000);
+                    if (wait != 0) Fail(wait == 0xFFFFFFFF ? Marshal.GetLastWin32Error() : unchecked((int)wait));
+                    stage = "exit-code";
                     uint code;
                     Require(GetExitCodeProcess(process.Process, out code));
+                    stage = "settled-receipt";
                     WriteReceipt(Path.Combine(directory, "settled.json"), new { version = 1, owner = request["owner"], pid = process.Pid,
                         created = created.ToString(), settledAt = DateTime.UtcNow.ToString("o"), active = 0, exitCode = code });
                     return unchecked((int)code);
@@ -160,11 +183,19 @@ public static class WindowsAgentSupervisor
                 // Cancellation addresses the retained Job handle, never a PID.
                 // The supervisor survives long enough to verify the job is empty.
                 if (!cancelling && (Interlocked.CompareExchange(ref stopRequested, 0, 0) != 0 || File.Exists(Path.Combine(directory, "cancel")))) {
+                    stage = "cancel";
                     Require(TerminateJobObject(job, 1)); cancelling = true;
                 }
                 Thread.Sleep(25);
             }
-        } catch { return 1; } // No exception paths or command text leave this boundary.
+        } catch (Exception error) {
+            // No exception text, paths or command text leave this boundary.
+            int code = failureCode ?? error.HResult;
+            if (directory != null) {
+                try { WriteReceipt(Path.Combine(directory, "failure.json"), new { version = 1, stage = stage, code = code }); } catch { }
+            }
+            return 1;
+        }
         finally {
             if (job != IntPtr.Zero) CloseHandle(job);
             if (process.Thread != IntPtr.Zero) CloseHandle(process.Thread);

@@ -14,13 +14,16 @@
  *                     the story (`protagonist.expressions`); a direction saved
  *                     before those existed keeps the 2×3 performance sheet.
  *   - `form:<id>`   — one more character sheet per other age the story shows
- *                     the protagonist at, conditioned on the canonical sheet.
+ *                     the protagonist at, conditioned on the canonical sheet and,
+ *                     when the form is bound to a fixed-casting subject
+ *                     (`form.subjectId`), on that subject's own reference image.
  *   - `looks`       — the wardrobe lookbook, one panel per look.
  *   - `set:<id>`    — one EMPTY plate per set: any sentence of the description,
  *                     lighting or look that puts a person in it is dropped. Plates do
  *                     not depend on the character, so they render alongside it.
  *   - `test:<n>`    — the protagonist in a set: conditioned on that set's plate,
- *                     the character sheet and the looks sheet.
+ *                     the character sheet and the looks sheet — or, for a test
+ *                     at another age (`test.formId`), that age's form sheet.
  *
  * A `procedural` direction (see castAndSetsDirection.js) plans none of the
  * photographic sheets, expression/looks sheets or tests: the characters are
@@ -33,7 +36,7 @@ import { trimTo } from '../../lib/textUtils.js';
 import { isOutsideMusicVideoReference } from '../../lib/musicVideoConditioning.js';
 // A sentence naming a person or the protagonist puts someone in an empty plate.
 import { withoutPeople } from '../../lib/musicVideoCreativeContext.js';
-import { CAST_SETS_SUBJECT_PREFIX, fixedCasting, musicVideoLipSyncs, songSections } from './castAndSetsDirection.js';
+import { CAST_SETS_SUBJECT_PREFIX, fixedCasting, fixedSupportingCast, formSubjects, leadingAge, musicVideoLipSyncs, songSections, subjectNameParts } from './castAndSetsDirection.js';
 
 export const CAST_SETS_IMAGE_SIZE = Object.freeze({ width: 1536, height: 1024 });
 // Mirrors MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES / the visual spec's list cap.
@@ -62,11 +65,39 @@ function identity(p) {
  * PortOS rendered), never a mood board import or Pinterest pin, and never an
  * earlier Cast & Sets output (the sheet would condition on itself).
  */
-function identityImages(project) {
+function identityImages(project, exclude = new Set()) {
   return [...new Set((project?.visualSpec?.references || [])
-    .filter((r) => r?.role === 'character' && r.condition && r.imageId
+    .filter((r) => r?.role === 'character' && r.condition && r.imageId && !exclude.has(r.imageId)
       && !String(r.id || '').startsWith(CAST_SETS_REF_PREFIX) && !isOutsideMusicVideoReference(r))
     .map((r) => r.imageId))].slice(0, MAX_CONDITIONING);
+}
+
+/**
+ * Each protagonist form's binding: `{ subjectId, images, imageId }` when it
+ * names a fixed-casting subject with images (its Casting images, else the
+ * reference labeled with its name, `imageId`), `{ subjectId, missing }` when
+ * the subject is gone or unlinked (`'subject'`) or has none (`'image'`).
+ * A missing binding conditions on nothing extra; it never borrows another image.
+ */
+function formBindings(project, forms, catalogLikeness) {
+  const subjects = formSubjects(project);
+  return new Map(forms.filter((f) => f.subjectId).map((f) => {
+    const subject = subjects.find((s) => s.id === f.subjectId);
+    if (!subject) return [f.id, { subjectId: f.subjectId, missing: 'subject', reserved: unlinkedSubjectImage(project, f) }];
+    const catalog = catalogLikeness[subject.id]?.images || [];
+    const images = (catalog.length ? catalog : [subject.imageId].filter(Boolean)).slice(0, MAX_CONDITIONING - 1);
+    return [f.id, images.length ? { subjectId: f.subjectId, images, imageId: subject.imageId } : { subjectId: f.subjectId, missing: 'image' }];
+  }));
+}
+
+// The reference still labeled for a bound subject that was since unlinked or
+// removed (by the name recorded on the form): it shows that other age, so it
+// stays off the present-day sheet too.
+function unlinkedSubjectImage(project, form) {
+  const subject = (project?.concept?.subjects || []).find((s) => s?.id === form.subjectId && s.kind === 'character');
+  const name = String(subject?.name || form.subjectName || '').trim().toLowerCase();
+  if (!name) return null;
+  return (project?.visualSpec?.references || []).find((r) => r?.imageId && r.role === 'character' && String(r.label || '').trim().toLowerCase() === name)?.imageId || null;
 }
 
 function rulesLine(p) {
@@ -87,7 +118,9 @@ export function setCoverage(project, direction) {
 /** The in-set tests to render: the direction's own, topped up to two from the most-used sets. A procedural direction has none. */
 export function plannedTests(project, direction) {
   if (direction?.medium === 'procedural') return [];
-  const tests = (direction?.tests || []).slice(0, 4);
+  // A test at an age the direction no longer has is never re-cast as the adult.
+  const formIds = new Set((direction?.protagonist?.forms || []).map((f) => f.id));
+  const tests = (direction?.tests || []).filter((t) => !t.formId || formIds.has(t.formId)).slice(0, 4);
   // The director edited the list: what they kept is the plan.
   if (tests.length >= 2 || direction?.testsFixed) return tests;
   const cover = setCoverage(project, direction);
@@ -146,14 +179,15 @@ function buildProceduralImagePlan(direction, { revisionNotes = {}, greyboxes = {
  * Build the full image plan for a direction: `{ [key]: { key, kind, label,
  * prompt, deps, refKeys, refImages?, setId?, testIndex? } }`. `refKeys` name
  * other plan keys whose image is passed as a reference (in order), then
- * `refImages` (the director's character identity images, or a linked catalog
- * record's image) follow: only the
- * project's own images, never mood board images. A revision note for a key is
- * appended to its prompt.
+ * `refImages` (a linked catalog record's Casting images, else the reference
+ * labeled with its name, then the director's character identity images)
+ * follow: only the project's and catalog's own images, never mood board
+ * images. `catalogLikeness` is castAndSetsCatalogLikeness.js's result. A
+ * revision note for a key is appended to its prompt.
  */
 const expressionGrid = (n) => (n === 0 || n > 4 ? '2 rows x 3 columns' : n === 4 ? '2 rows x 2 columns' : `1 row x ${n} columns`);
 
-export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = {}, greyboxes = {} } = {}) {
+export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = {}, greyboxes = {}, catalogLikeness = {} } = {}) {
   if (direction.medium === 'procedural') return buildProceduralImagePlan(direction, { revisionNotes, greyboxes });
   const p = direction.protagonist || {};
   const looks = direction.looks || [];
@@ -161,14 +195,42 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
   const style = trimTo(direction.look, 500) || trimTo(project?.concept?.style, 500);
   const firstLight = direction.sets?.[0]?.lighting || '';
   const note = (key) => (revisionNotes[key] ? `Revision: ${revisionNotes[key]}` : '');
-  // A linked catalog record's image conditions the sheet or plate of the
-  // protagonist, cast member or set the direction kept it as (by name).
-  const fixed = fixedCasting(project).filter((f) => f.imageId);
-  const fixedImage = (kind, name) => {
+  const forms = p.forms || [];
+  const bindings = formBindings(project, forms, catalogLikeness);
+  const boundSubjects = new Set([...bindings.values()].map((b) => b.subjectId));
+  // A linked catalog record's images (castAndSetsCatalogLikeness.js), else the
+  // reference labeled with its name, condition the sheet or plate of the
+  // protagonist, cast member or set the direction kept it as: by name, or by
+  // the name without its age qualifier ("Nora (17)" is Nora), where the
+  // protagonist prefers its own subject over one an age form is bound to.
+  const fixed = fixedCasting(project);
+  const baseName = (name) => subjectNameParts(name).base.toLowerCase();
+  const fixedFor = (kind, name, { protagonist = false } = {}) => {
     const key = String(name || '').trim().toLowerCase();
-    return fixed.find((f) => f.kind === kind && f.name.toLowerCase() === key)?.imageId || null;
+    const ofKind = fixed.filter((f) => f.kind === kind);
+    const exact = ofKind.find((f) => f.name.toLowerCase() === key);
+    const based = ofKind.filter((f) => baseName(f.name) === baseName(key));
+    if (!protagonist) return exact || based[0] || null;
+    // The designated protagonist wins a name another subject shares (a
+    // supporting child "Nora" beside "Nora (17)"); never an age-bound subject.
+    return based.find((f) => f.role === 'protagonist')
+      || (exact && !boundSubjects.has(exact.id) ? exact : null)
+      || based.find((f) => !boundSubjects.has(f.id)) || null;
   };
-  const identities = [...new Set([fixedImage('character', p.name), ...identityImages(project)].filter(Boolean))].slice(0, MAX_CONDITIONING);
+  const fixedImages = (f) => {
+    const catalog = f && catalogLikeness[f.id]?.images;
+    return (catalog?.length ? catalog : [f?.imageId].filter(Boolean)).slice(0, MAX_CONDITIONING);
+  };
+  const protagonistSubject = fixedFor('character', p.name, { protagonist: true });
+  // An age-specific reference grounds its own form, never the present-day sheet.
+  const formImages = new Set([...bindings.values()].map((b) => b.imageId || b.reserved).filter(Boolean));
+  const identities = [...new Set([...fixedImages(protagonistSubject), ...identityImages(project, formImages)].filter((id) => id && !formImages.has(id)))].slice(0, MAX_CONDITIONING);
+  // An age form no subject is bound to: that age's own Casting images of the protagonist's record.
+  const protagonistForms = catalogLikeness[protagonistSubject?.id]?.forms || [];
+  const ageImages = (form) => {
+    const age = leadingAge(form.age);
+    return age === null ? [] : (protagonistForms.find((f) => f.age === age)?.images || []).slice(0, MAX_CONDITIONING - 1);
+  };
   const plan = {};
 
   plan.character = {
@@ -237,17 +299,22 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
 
   // Other ages: the same person younger or older, each on their own sheet,
   // conditioned on the canonical one so the face carries across the years.
-  for (const form of p.forms || []) {
+  for (const form of forms) {
     const key = `form:${form.id}`;
+    const binding = bindings.get(form.id);
+    const formRefs = binding ? binding.images || [] : ageImages(form);
     plan[key] = {
       key,
       kind: 'form',
       label: `${p.name || 'Protagonist'} · ${form.label}`,
       formId: form.id,
+      ...(binding ? { subjectId: binding.subjectId, ...(binding.missing ? { bindingMissing: binding.missing } : {}) } : {}),
       deps: ['character'],
       refKeys: ['character'],
+      ...(formRefs.length ? { refImages: formRefs } : {}),
       prompt: join(
         `Photographic character reference sheet of ${p.name || 'the protagonist'}${form.age ? ` at age ${form.age}` : ''}: the SAME person as the character reference, at a different age`,
+        formRefs.length && 'The SAME person as the age reference images: keep their face, hair and build at this age exactly',
         form.description,
         'Keep what does not change with age: eye color and shape, brows, skin tone, distinguishing marks',
         form.hair && `hair: ${form.hair}`,
@@ -265,7 +332,7 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
   // the same five views as the protagonist's, so shots naming them keep them.
   for (const c of direction.cast || []) {
     const key = `cast:${c.id}`;
-    const castImage = fixedImage('character', c.name);
+    const castImages = fixedImages(fixedFor('character', c.name));
     plan[key] = {
       key,
       kind: 'cast',
@@ -273,10 +340,10 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
       castId: c.id,
       deps: [],
       refKeys: [],
-      ...(castImage ? { refImages: [castImage] } : {}),
+      ...(castImages.length ? { refImages: castImages } : {}),
       prompt: join(
         `Photographic character reference sheet of ONE consistent person, ${c.name}${c.role ? `, the ${c.role}` : ''}: ${c.description || ''}`,
-        castImage && 'The SAME person as the reference image: keep their face, hair and build exactly',
+        castImages.length && 'The SAME person as the reference images: keep their face, hair and build exactly',
         identity(c),
         c.wardrobe && `Wearing ${c.wardrobe}`,
         p.name && `A different person from ${p.name}`,
@@ -292,7 +359,7 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
   for (const set of direction.sets || []) {
     const key = `set:${set.id}`;
     const plateLight = withoutPeople(set.lighting, p.name);
-    const placeImage = greyboxes[set.id]?.reference.imageId || fixedImage('place', set.name);
+    const placeImages = greyboxes[set.id]?.reference.imageId ? [greyboxes[set.id].reference.imageId] : fixedImages(fixedFor('place', set.name));
     plan[key] = {
       key,
       kind: 'plate',
@@ -301,10 +368,10 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
       ...(set.setReference?.greyboxShotId ? { setReference: set.setReference } : {}),
       deps: [],
       refKeys: [],
-      ...(placeImage ? { refImages: [placeImage] } : {}),
+      ...(placeImages.length ? { refImages: placeImages } : {}),
       prompt: join(
         'Empty set plate, no people',
-        placeImage && 'The same location as the reference image',
+        placeImages.length && 'The same location as the reference images',
         withoutPeople(set.description, p.name) || set.name,
         plateLight && `Lighting: ${plateLight}`,
         plateStyle && `Look: ${plateStyle}`,
@@ -317,6 +384,9 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
   plannedTests(project, direction).forEach((test, i) => {
     const set = (direction.sets || []).find((s) => s.id === test.setId);
     const look = looks.find((l) => l.name === test.look) || firstLook;
+    // A test at another age is that age's sheet in the set: the present-day
+    // character and looks sheets would condition the wrong person.
+    const form = test.formId ? forms.find((f) => f.id === test.formId) : null;
     const key = `test:${i + 1}`;
     plan[key] = {
       key,
@@ -325,12 +395,14 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
       setId: test.setId,
       testIndex: i,
       test: { ...test },
-      deps: ['character', `set:${test.setId}`, 'looks'].filter((k) => plan[k]),
-      refKeys: [`set:${test.setId}`, 'character', 'looks'].filter((k) => plan[k]),
+      deps: (form ? [`form:${form.id}`, `set:${test.setId}`] : ['character', `set:${test.setId}`, 'looks']).filter((k) => plan[k]),
+      refKeys: (form ? [`set:${test.setId}`, `form:${form.id}`] : [`set:${test.setId}`, 'character', 'looks']).filter((k) => plan[k]),
       prompt: join(
         `Photorealistic music video still, wide 16:9. Recreate the ${set?.name || 'set'} from the set plate reference, same camera angle and light`,
-        `Place the person from the character sheet in it (${identity(p)})`,
-        look && `Wearing ${look.description}`,
+        form
+          ? `Place the person from the ${form.label} character sheet in it (${[form.age && `${p.name || 'the protagonist'} at age ${form.age}`, form.hair && `hair: ${form.hair}`].filter(Boolean).join('; ') || form.label})`
+          : `Place the person from the character sheet in it (${identity(p)})`,
+        form ? form.wardrobe && `Wearing ${form.wardrobe}` : look && `Wearing ${look.description}`,
         test.action,
         set?.lighting && `Light: ${set.lighting}`,
         style && `Look: ${style}`,
@@ -385,6 +457,8 @@ export function noteImageKeys(target, plan) {
  * themselves), then the supporting cast sheets (conditioning only the shots
  * that feature them), then the looks and expression sheets as unconditioned
  * reference. Replaces any earlier Cast & Sets references; keeps the director's.
+ * Room in the list is held for the sheets of the catalog-linked supporting
+ * characters the director cast, so nothing else pushes one of them out.
  */
 export function castAndSetsReferences(project, stage) {
   const existing = (project?.visualSpec?.references || []).filter((r) => !String(r.id || '').startsWith(CAST_SETS_REF_PREFIX));
@@ -392,16 +466,19 @@ export function castAndSetsReferences(project, stage) {
   let room = Math.max(0, MAX_REFERENCES - existing.length);
   const images = stage?.images || {};
   const direction = stage?.direction || {};
+  const fixed = new Set(fixedSupportingCast(project).map((f) => f.name.toLowerCase()));
+  const isFixed = (c) => fixed.has(String(c.name || '').trim().toLowerCase()) && Boolean(images[`cast:${c.id}`]?.imageId);
+  let held = (direction.cast || []).filter(isFixed).length;
   const out = [];
-  const push = (ref, wantsCondition) => {
-    if (!ref.imageId || room <= 0) return;
+  const push = (ref, wantsCondition, { sheet = false } = {}) => {
+    if (!ref.imageId || room - (sheet ? 0 : held) <= 0) return;
     const condition = wantsCondition && budget > 0;
     if (condition) budget -= 1;
     room -= 1;
     out.push({ ...ref, condition, use: 'reference' });
   };
   const p = direction.protagonist || {};
-  push({ id: `${CAST_SETS_REF_PREFIX}character`, imageId: images.character?.imageId, role: 'character', label: `${p.name || 'Protagonist'} — character sheet`, note: trimTo([p.face, p.hair, p.signature].filter(Boolean).join('; '), 1000) }, true);
+  push({ id: `${CAST_SETS_REF_PREFIX}character`, imageId: images.character?.imageId, role: 'character', label: `${p.name || 'Protagonist'} — character sheet`, note: trimTo([p.face, p.hair, p.signature].filter(Boolean).join('; '), 1000) }, true, { sheet: true });
   const cover = setCoverage(project, direction);
   const plates = [...(direction.sets || [])].sort((a, b) => (cover.get(b.id) || 0) - (cover.get(a.id) || 0));
   for (const set of plates) {
@@ -415,11 +492,31 @@ export function castAndSetsReferences(project, stage) {
   }
   // Cast sheets condition only the shots that feature them (musicVideoConditioningReferences).
   for (const c of direction.cast || []) {
-    push({ id: `${CAST_SETS_REF_PREFIX}cast-${c.id}`.slice(0, 64), imageId: images[`cast:${c.id}`]?.imageId, role: 'character', label: `${trimTo(c.name, 80)} — cast sheet`, note: trimTo([c.role, c.face, c.hair, c.wardrobe].filter(Boolean).join('; '), 1000) }, false);
+    const sheet = isFixed(c);
+    if (sheet) held -= 1;
+    push({ id: castReferenceId(c), imageId: images[`cast:${c.id}`]?.imageId, role: 'character', label: `${trimTo(c.name, 80)} — cast sheet`, note: trimTo([c.role, c.face, c.hair, c.wardrobe].filter(Boolean).join('; '), 1000) }, false, { sheet });
   }
   push({ id: `${CAST_SETS_REF_PREFIX}looks`, imageId: images.looks?.imageId, role: 'wardrobe', label: 'Looks', note: trimTo((direction.looks || []).map((l) => l.name).join(', '), 1000) }, false);
   push({ id: `${CAST_SETS_REF_PREFIX}expressions`, imageId: images.expressions?.imageId, role: 'character', label: 'Expression sheet', note: trimTo(p.gesture, 1000) }, false);
   return [...existing, ...out];
+}
+
+const castReferenceId = (c) => `${CAST_SETS_REF_PREFIX}cast-${c.id}`.slice(0, 64);
+
+/**
+ * The catalog-linked supporting characters whose rendered cast sheet is not in
+ * `references` (castAndSetsReferences ran out of room): an approval must refuse
+ * rather than publish a check-in that silently lost their sheets.
+ */
+export function fixedCastSheetsWithoutReference(project, stage, references) {
+  const fixed = new Set(fixedSupportingCast(project).map((f) => f.name.toLowerCase()));
+  return (stage?.direction?.cast || [])
+    .filter((c) => {
+      const imageId = stage.images?.[`cast:${c.id}`]?.imageId;
+      return fixed.has(String(c.name || '').trim().toLowerCase()) && imageId
+        && !(references || []).some((r) => r.id === castReferenceId(c) && r.imageId === imageId);
+    })
+    .map((c) => c.name);
 }
 
 /**

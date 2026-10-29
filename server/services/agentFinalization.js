@@ -2079,7 +2079,7 @@ async function finalizeAgentInCompletionContext({
   // Persist the prerequisite BEFORE retiring execution. A crash between the
   // agent and task writes must never expose this dispatch to generic retry.
   const prerequisiteTaskResult = ['runtime-verification', 'internal-dependency', 'internal-dependency-unverified'].includes(taskUpdate.metadata?.blockedCategory)
-    ? await updateTask(task.id, taskUpdate, taskType, ...runtimeRecoveryFence(taskUpdate)) : null;
+    ? await updateTask(task.id, taskUpdate, taskType, ...completionBudgetFence(taskUpdate, agentId, cleanupOwner)) : null;
   if (prerequisiteTaskResult?.error || prerequisiteTaskResult?.statusChanged) throw new Error('Delivery prerequisite task ownership changed before completion');
   const completedAgent = await completeAgent(agentId, { ...completionRecord({
     task, verdict: deliveryVerdict, hookResult, fidelity, executionInterruption, exitCode, duration, outputBuffer, validationPassed,
@@ -2119,7 +2119,7 @@ async function finalizeAgentInCompletionContext({
   }
   const taskResult = prerequisiteTaskResult || (capturePending
     ? await recoverCompletionTaskHandoff(await getAgentRecord(agentId)) || { error: 'Completion cleanup task ownership changed' }
-    : await updateTask(task.id, taskUpdate, taskType, ...runtimeRecoveryFence(taskUpdate)));
+    : await updateTask(task.id, taskUpdate, taskType, ...completionBudgetFence(taskUpdate, agentId, cleanupOwner)));
   if (taskResult?.error && !isExpectedUnpersistedMiss(task, taskResult.error)) {
     const label = terminatedByUser ? 'blocked' : verdict.success ? 'completed' : 'failed';
     emitLog('warn', `⚠️ Failed to update ${label} task ${task.id}: ${taskResult.error} (taskType=${taskType})`, { taskId: task.id, agentId, error: taskResult.error });
@@ -2506,4 +2506,12 @@ function runtimeRecoveryFence(update) {
     ...(p.dispatchStatus === 'blocked' ? { runtimeVerificationId: update.metadata.runtimeVerificationId } : {}),
     ...Object.fromEntries(['claimedBy', 'claimedAt', 'lastSpawnedAt', 'totalSpawnCount'].map(key => [key, p.dispatch?.[key]])),
   } }];
+}
+
+function completionBudgetFence(update, agentId, agent) {
+  const epoch = agent?.metadata?.completionTaskDispatch?.spawnBudgetEpoch;
+  const fence = runtimeRecoveryFence(update);
+  if (!epoch) return fence;
+  return [{ ...fence[0], expectedStatus: fence[0]?.expectedStatus || 'in_progress',
+    spawnBudgetOperation: { kind: 'completion', agentId, epoch } }];
 }

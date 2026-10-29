@@ -16,6 +16,7 @@ vi.mock('../hooks/useMediaCompletionRefresh', () => ({ useMediaCompletionRefresh
 vi.mock('../hooks/useMediaAnnotations', () => ({ useMediaAnnotations: () => ({ annotations: {}, updateAnnotation: saveAnnotation, getCardProps: () => ({}) }) }));
 vi.mock('../hooks/useMediaPreviewActions', () => ({ default: () => ({}) }));
 vi.mock('../components/media/VideoUpscaleDrawer', () => ({ default: () => null }));
+vi.mock('../components/media/MediaJobsQueue', () => ({ default: () => null }));
 vi.mock('../components/media/MediaPreview', () => ({ default: ({ preview }) => preview ? <div role="dialog">{preview.prompt}{preview.detailError && ' [details unavailable]'}</div> : null }));
 vi.mock('../components/media/MediaCard', () => ({ default: ({ item, onDelete, onToggleStar, onPreview, onClick, onCancelPendingDelete, pendingPeerName }) => <div>{onClick && <button type="button" onClick={() => onClick(item)}>Pick {item.filename}</button>}<button type="button" onClick={() => onPreview(item)}>{item.prompt}</button><button type="button" onClick={() => onToggleStar(item)}>Favorite {item.filename}</button><button type="button" onClick={() => onDelete(item)}>Delete {item.filename}</button>{item.pendingDelete && <button type="button" onClick={() => onCancelPendingDelete(item)}>Cancel {item.filename} pending on {pendingPeerName}</button>}</div> }));
 vi.mock('../components/media/MediaHistoryGrid', () => ({ default: ({ items, children }) => <div>{items.map(children)}</div> }));

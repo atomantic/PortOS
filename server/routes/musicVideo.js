@@ -1,3 +1,6 @@
+import { musicVideoDcpRequestSchema } from '../lib/musicVideoValidation.js';
+import { inspectDcpReadiness } from '../services/musicVideo/dcpPreflight.js';
+import { activeDcp, startDcp, attachDcp, cancelDcp, dcpArtifactPaths } from '../services/musicVideo/dcp.js';
 /**
  * Music Video Routes — REST surface for the director scene board (#1760, Phase 1).
  *
@@ -133,6 +136,7 @@ import {
   refreshSongStyleFromSuno,
 } from '../services/musicVideo/projects.js';
 import { requireProject } from '../services/musicVideo/requireProject.js';
+import { labelProjectReferences } from '../services/musicVideo/referenceLabels.js';
 import { buildHandoffManifest, buildHandoffBundle, matchSceneByFileTag } from '../services/musicVideo/handoff.js';
 import { getHistoryItem } from '../services/videoGen/history.js';
 import {
@@ -312,7 +316,8 @@ router.get('/:id', asyncHandler(async (req, res) => {
   // Transient (never persisted): lets a reloaded page reattach to a running publishing-kit build.
   const activePublishKitBuild = getActivePublishKitBuild(p.id);
   const presented = await presentProjectForRead(p);
-  res.json(activePublishKitBuild ? { ...presented, activePublishKitBuild } : presented);
+  const activeDcpBuild = activeDcp(p.id);
+  res.json({ ...presented, ...(activePublishKitBuild ? { activePublishKitBuild } : {}), ...(activeDcpBuild ? { activeDcpBuild } : {}) });
 }));
 
 router.post('/', asyncHandler(async (req, res) => {
@@ -368,6 +373,12 @@ router.patch('/:id', asyncHandler(async (req, res) => {
   const data = validateRequest(projectUpdateSchema, req.body);
   const updated = await updateProject(req.params.id, data);
   res.json(updated);
+}));
+
+// Names references saved before catalog naming existed; answers only the labels it filled.
+router.post('/:id/references/catalog-labels', asyncHandler(async (req, res) => {
+  await requireProject(req.params.id);
+  res.json({ labels: (await labelProjectReferences(req.params.id, { backfill: true }))?.labels || {} });
 }));
 
 // Finished outside PortOS: the earlier steps count as done without forging approvals.
@@ -1072,6 +1083,27 @@ router.post('/:id/excerpt', asyncHandler(async (req, res) => {
   res.json(await startExcerptRender(req.params.id, { startSec, endSec, aspect, fade }));
 }));
 
+// Local cinema package: no upload or external delivery.
+router.post('/:id/dcp/readiness', asyncHandler(async (req, res) => {
+  res.json(await inspectDcpReadiness(req.params.id));
+}));
+router.post('/:id/dcp/build', asyncHandler(async (req, res) => {
+  const input = validateRequest(musicVideoDcpRequestSchema, req.body);
+  res.json(await startDcp(req.params.id, input));
+}));
+router.get('/dcp/:jobId/events', (req, res) => {
+  if (!attachDcp(req.params.jobId, res)) throw new ServerError('Cinema package job not found or expired', { status: 404, code: 'NOT_FOUND' });
+});
+router.post('/dcp/:jobId/cancel', (req, res) => res.json({ ok: cancelDcp(req.params.jobId) }));
+router.get('/:id/dcp/:artifactId/location', asyncHandler(async (req, res) => {
+  const { packagePath } = await dcpArtifactPaths(req.params.id, req.params.artifactId);
+  res.json({ packagePath });
+}));
+router.get('/:id/dcp/:artifactId/report', asyncHandler(async (req, res) => {
+  const { reportPath } = await dcpArtifactPaths(req.params.id, req.params.artifactId);
+  res.download(reportPath, 'dcp-verification.txt');
+}));
+
 // --- Publishing kit (#9281) ---
 // Platform encodes, thumbnails, captions and chapters from the final render
 // (an SSE job), plus per-platform copy: one user-triggered draft, then edits.
@@ -1706,6 +1738,13 @@ router.get('/:id/stats-outro', asyncHandler(async (req, res) => {
   const project = await requireProject(req.params.id);
   const { getMusicVideoOutroStats } = await import('../services/musicVideo/statsOutro.js');
   res.json({ stats: await getMusicVideoOutroStats(project) });
+}));
+
+// The credits ending's suggested lines: song, artist, director and album from the track and its artist.
+router.get('/:id/credits-prefill', asyncHandler(async (req, res) => {
+  const project = await requireProject(req.params.id);
+  const { getMusicVideoCreditsPrefill } = await import('../services/musicVideo/creditsOutro.js');
+  res.json({ credits: await getMusicVideoCreditsPrefill(project) });
 }));
 
 // The asset manager: mark unused stills and clips ★ ingredient / ✕ bad, or delete them from the library.

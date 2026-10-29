@@ -745,6 +745,11 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/video-gen/last-frame/:id',
   // Upscale (LTX subprocess / ffmpeg) and stitch (ffmpeg) run on the host (#11076).
   'POST /api/video-gen/upscale/:id',
+  'POST /api/video-gen/upscale/:id/topaz/quote',
+  'POST /api/video-gen/upscale/:id/topaz',
+  'GET /api/video-gen/upscale/topaz/jobs/:jobId/status',
+  'POST /api/video-gen/upscale/topaz/jobs/:jobId/cancel',
+  'POST /api/video-gen/upscale/topaz/jobs/:jobId/recover',
   'POST /api/video-gen/stitch',
   // Start trim probes/transcodes a new gallery clip with ffprobe/ffmpeg (#11418).
   'POST /api/video-gen/history/:id/trim-start',
@@ -758,6 +763,12 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/music-video/:id/shot-renders/preview',
   'POST /api/music-video/:id/excerpt',
   'POST /api/music-video/:id/publish-kit/build',
+  'POST /api/music-video/:id/dcp/readiness',
+  'POST /api/music-video/:id/dcp/build',
+  'POST /api/music-video/dcp/:jobId/cancel',
+  'GET /api/music-video/dcp/:jobId/events',
+  'GET /api/music-video/:id/dcp/:artifactId/report',
+  'GET /api/music-video/:id/dcp/:artifactId/location',
   'POST /api/sprites/:id/reference/generate',
   // Fork creates a record and immediately queues reference generation too.
   'POST /api/sprites/:id/fork',

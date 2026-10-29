@@ -20,6 +20,20 @@ export function mediaRecordRef(item) {
   return null;
 }
 
+// The media-annotations key (star/rating/note) for a viewer item. Gallery
+// media keep their `image:`/`video:` key. A file under /data/image-refs (a
+// reference sheet or upload-only reference) has no gallery record, and pages
+// give it a page-local key (`catalog-image:image-refs:…`, `canon-sheet:…`), so
+// it is annotated as `image-ref:<file>`: valid on the server and never shared
+// with a same-named gallery image.
+export function mediaAnnotationKey(item) {
+  const match = /^\/data\/image-refs\/([^/?#]+)$/.exec(item?.previewUrl || '');
+  if (match) {
+    try { return `image-ref:${decodeURIComponent(match[1])}`; } catch { return null; }
+  }
+  return item?.key ?? null;
+}
+
 // GET /image-gen/:filename/variants read in flight, keyed by filename. This
 // hydration module (`fetchMediaRecord`, below) and `useImageVariants` (the
 // lightbox's original-vs-cleaned toggle) both want this SAME group the

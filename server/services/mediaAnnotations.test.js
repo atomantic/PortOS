@@ -90,6 +90,14 @@ describe('mediaAnnotations service (multi-author)', () => {
     await expect(svc.setAnnotation('image:a.png', { rating: 'rejected' })).rejects.toMatchObject({ code: svc.ERR_VALIDATION });
   });
 
+  it('rates a reference sheet under image-ref:, kept apart from a same-named gallery image', async () => {
+    await svc.setAnnotation('image-ref:sheet.png', { rating: 'good' });
+    const all = await svc.listAnnotations();
+    expect(all['image-ref:sheet.png'].own.rating).toBe('good');
+    expect(all['image:sheet.png']).toBeUndefined();
+    await expect(svc.setAnnotation('catalog-image:image-refs:sheet.png', { rating: 'good' })).rejects.toMatchObject({ code: svc.ERR_VALIDATION });
+  });
+
   it('mergePeerAnnotations takes a peer rating, and an older peer without ratings still reads its stars', async () => {
     await svc.mergePeerAnnotations({ instanceId: 'peer-1', authorName: 'Sam', annotations: {
       'image:a.png': { starred: false, note: '', rating: 'good', updatedAt: '2026-01-01T00:00:00.000Z' },

@@ -16,6 +16,7 @@ import MediaCard from '../components/media/MediaCard';
 import MediaHistoryGrid from '../components/media/MediaHistoryGrid';
 import MediaPreview from '../components/media/MediaPreview';
 import VideoUpscaleDrawer from '../components/media/VideoUpscaleDrawer';
+import MediaJobsQueue from '../components/media/MediaJobsQueue';
 import FavoritesFilterChip from '../components/media/FavoritesFilterChip';
 import RatingFilterChips from '../components/media/RatingFilterChips';
 import { normalizeImage, normalizeMediaRow, normalizeVideo } from '../components/media/normalize';
@@ -385,6 +386,7 @@ export default function MediaHistory() {
         onClose={() => setUpscaleItem(null)}
         onUpscaled={handleUpscaled}
       />
+      <MediaJobsQueue kind="video-upscale" />
     </div>
   );
 }

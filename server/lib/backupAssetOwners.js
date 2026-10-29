@@ -34,6 +34,7 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
   { id: 'music-take-publication', status: 'admitted', modules: ['services/musicTakePublication.js'] },
   { id: 'media-job-completion', status: 'admitted', modules: ['services/mediaJobQueue/index.js'] },
   { id: 'media-job-attach-hooks', status: 'admitted', modules: ['services/mediaJobImageHook.js'] },
+  { id: 'music-video-dcp', status: 'admitted', modules: ['services/musicVideo/dcp.js'] },
   { id: 'music-video-collection-hook', status: 'admitted', modules: ['services/musicVideoCollectionHook.js'] },
   {
     id: 'pipeline-filename-hooks',
@@ -335,7 +336,7 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
     status: 'admitted',
     modules: [
       'services/videoGen/remote.js',
-      'services/videoGen/stitchVideos.js', 'services/videoGen/upscaleVideo.js', 'services/videoGen/upscaleJob.js',
+      'services/videoGen/stitchVideos.js', 'services/videoGen/upscaleVideo.js', 'services/videoGen/upscaleJob.js', 'services/videoGen/topazJob.js',
       'services/videoGen/trimStart.js',
       'services/videoTimeline/local.js', 'services/htmlComposition/index.js',
     ],

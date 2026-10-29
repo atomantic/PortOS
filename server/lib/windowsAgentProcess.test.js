@@ -2,10 +2,11 @@ import { afterAll, beforeEach, describe, expect, it as vitestIt, vi } from 'vite
 import { once } from 'node:events';
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
+import { DISPOSABLE_ROOT_MARKER } from './dataRoot.js';
 import { lazyTempDataRoot, makePathsProxy, cleanupTempDataRoots, ownTestBodies } from './mockPathsDataRoot.js';
 
 vi.mock('./fileUtils.js', async original => {
@@ -49,10 +50,24 @@ it('recovers a complete durable receipt and rejects reused agent/start, nonce an
 });
 
 it('retains missing and unreadable proof rather than treating registry absence as settlement', async () => {
-  await expect(readWindowsAgentSettlement(agent)).rejects.toMatchObject({ code: 'WINDOWS_AGENT_PROCESS_UNVERIFIED' });
+  await expect(readWindowsAgentSettlement(agent)).rejects.toMatchObject({ code: 'WINDOWS_AGENT_PROCESS_UNVERIFIED', reason: 'reservation-missing' });
   await proof();
   await writeFile(join(root, 'started.json'), '{');
-  await expect(readWindowsAgentSettlement(agent)).rejects.toMatchObject({ code: 'WINDOWS_AGENT_PROCESS_UNVERIFIED' });
+  await expect(readWindowsAgentSettlement(agent)).rejects.toMatchObject({ code: 'WINDOWS_AGENT_PROCESS_UNVERIFIED', reason: 'started-invalid' });
+});
+
+it('reports allowlisted supervisor failure diagnostics without letting them stand in for a receipt', async () => {
+  await proof();
+  await rm(join(root, 'settled.json'));
+  await writeFile(join(root, 'failure.json'), JSON.stringify({ version: 1, stage: 'root-exit', code: 258 }));
+  const error = await readWindowsAgentSettlement(agent).catch(value => value);
+  expect(error).toMatchObject({ code: 'WINDOWS_AGENT_PROCESS_UNVERIFIED', reason: 'receipt-missing', supervisorStage: 'root-exit', supervisorCode: 258 });
+  expect(error.message).toBe('Windows agent process settlement is unverified (receipt-missing; supervisor root-exit 258)');
+  // A record outside the allowlist contributes nothing to the message.
+  await writeFile(join(root, 'failure.json'), JSON.stringify({ version: 1, stage: 'example-unlisted', code: 1 }));
+  const unlisted = await readWindowsAgentSettlement(agent).catch(value => value);
+  expect(unlisted).not.toHaveProperty('supervisorStage');
+  expect(unlisted.message).toBe('Windows agent process settlement is unverified (receipt-missing)');
 });
 
 async function waitForFile(file) {
@@ -97,6 +112,8 @@ setTimeout(() => process.exit(3), 20000).unref();`);
       const receipt = await readWindowsAgentSettlement(agent);
       expect(receipt.active).toBe(0);
       const moduleUrl = pathToFileURL(join(import.meta.dirname, 'windowsAgentProcess.js')).href;
+      // Without the marker, a reader launched from a CoS worktree ignores the pin.
+      await writeFile(join(dirname(PATHS.data), DISPOSABLE_ROOT_MARKER), 'test fixture');
       const reader = `import { readWindowsAgentSettlement } from ${JSON.stringify(moduleUrl)}; process.stdout.write(JSON.stringify(await readWindowsAgentSettlement(JSON.parse(process.argv[1]))));`;
       const result = await promisify(execFile)(process.execPath, ['--input-type=module', '-e', reader, JSON.stringify(agent)], {
         env: { ...process.env, PORTOS_DATA_ROOT: dirname(PATHS.data) }, timeout: 5000,
@@ -151,7 +168,10 @@ setTimeout(() => process.exit(3), 20000).unref();`);
       await waitForFile(join(root, 'started.json'));
       nativeKill('SIGKILL');
       await closed;
-      await expect(readWindowsAgentSettlement(agent)).rejects.toMatchObject({ code: 'WINDOWS_AGENT_PROCESS_UNVERIFIED' });
+      // A killed supervisor leaves no failure record: loss stays distinct from a failed stage.
+      const error = await readWindowsAgentSettlement(agent).catch(value => value);
+      expect(error).toMatchObject({ code: 'WINDOWS_AGENT_PROCESS_UNVERIFIED', reason: 'receipt-missing' });
+      expect(error).not.toHaveProperty('supervisorStage');
     } finally { nativeKill('SIGKILL'); await closed; }
   }, 30000);
 
@@ -203,7 +223,7 @@ setTimeout(() => process.exit(3), 20000).unref();`);
       expect((await closed)[0]).toBe(1);
       expect(output).toBe('');
       expect(existsSync(join(root, 'started.json'))).toBe(false);
-      await expect(readWindowsAgentSettlement(agent)).rejects.toMatchObject({ code: 'WINDOWS_AGENT_PROCESS_UNVERIFIED' });
+      await expect(readWindowsAgentSettlement(agent)).rejects.toMatchObject({ code: 'WINDOWS_AGENT_PROCESS_UNVERIFIED', reason: 'started-missing', supervisorStage: 'launch', supervisorCode: 0 });
     } finally { killProcessTree(child); await closed; }
   }, 30000);
 

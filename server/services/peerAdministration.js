@@ -15,6 +15,7 @@ import { createMutex } from '../lib/asyncMutex.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { loadData } from './instanceIdentity.js';
 import { derivePeerAuthToken, PEER_AUTH_HEADER, PEER_INSTANCE_HEADER } from '../lib/peerHttpClient.js';
+import { isPairedPeer } from '../lib/peerPairing.js';
 import { PEER_ADMIN_ACTIONS, PEER_ADMIN_SCOPE, peerAdminActionSchema } from '../lib/peerAdminValidation.js';
 import { LOCAL_LLM_CATALOG, catalogSizeBytes } from '../lib/localLlmCatalog.js';
 
@@ -59,7 +60,7 @@ export async function peerAdminIdentity(peerId, { allowInactive = false } = {}) 
   const peer = peers?.find(entry => entry.id === peerId);
   if (!uuid.safeParse(self?.instanceId).success || !uuid.safeParse(peer?.instanceId).success
     || peer.instanceId === self.instanceId || (!allowInactive && (peer.enabled === false
-    || typeof peer.syncSecret !== 'string' || peer.syncSecret.length < 32))) {
+    || !isPairedPeer(peer)))) {
     refuse('PEER_ADMIN_PAIR_REQUIRED', 'An enabled pair with verified instance identities is required');
   }
   return { peer, self };
@@ -97,7 +98,7 @@ export async function describePeerAdminSetup(peerId) {
   const peer = peers?.find(entry => entry.id === peerId);
   if (!peer) refuse('PEER_ADMIN_PEER_NOT_FOUND', 'Peer not found', 404);
   const paired = uuid.safeParse(self?.instanceId).success && uuid.safeParse(peer.instanceId).success
-    && peer.instanceId !== self.instanceId && peer.enabled !== false && typeof peer.syncSecret === 'string' && peer.syncSecret.length >= 32;
+    && peer.instanceId !== self.instanceId && peer.enabled !== false && isPairedPeer(peer);
   const store = await readGrants();
   return {
     scope: PEER_ADMIN_SCOPE, executionSupported: false,

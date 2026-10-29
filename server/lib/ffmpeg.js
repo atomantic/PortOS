@@ -347,7 +347,7 @@ export const FFMPEG_KILL_GRACE_MS = 5000;
 export const FFMPEG_FRAME_TIMEOUT_MS = 2 * 60 * 1000;
 export const FFMPEG_SCAN_TIMEOUT_MS = 15 * 60 * 1000;
 
-export function runFfmpegProcess({ bin, args, signal, timeoutMs, stderrTailBytes = 2000, returnStderr = false } = {}) {
+export function runFfmpegProcess({ bin, args, signal, timeoutMs, stderrTailBytes = 2000, returnStderr = false, env, onStdout } = {}) {
   if (!bin || typeof bin !== 'string') {
     return Promise.resolve({ ok: false, reason: 'invalid ffmpeg binary' });
   }
@@ -355,8 +355,9 @@ export function runFfmpegProcess({ bin, args, signal, timeoutMs, stderrTailBytes
     return Promise.resolve({ ok: false, reason: 'invalid ffmpeg args' });
   }
   return new Promise((resolve) => {
-    const stdio = stderrTailBytes > 0 ? ['ignore', 'ignore', 'pipe'] : 'ignore';
-    const proc = spawn(bin, args, safeChildProcessOptions({ stdio }));
+    const stdio = ['ignore', onStdout ? 'pipe' : 'ignore', stderrTailBytes > 0 ? 'pipe' : 'ignore'];
+    const proc = spawn(bin, args, safeChildProcessOptions({ stdio, ...(env ? { env } : {}) }));
+    if (onStdout) proc.stdout.on('data', onStdout);
     let stderrTail = '';
     if (stderrTailBytes > 0 && proc.stderr) {
       proc.stderr.on('data', (chunk) => {
@@ -395,6 +396,7 @@ export function runFfmpegProcess({ bin, args, signal, timeoutMs, stderrTailBytes
     if (signal) {
       onAbort = terminate;
       signal.addEventListener('abort', onAbort, { once: true });
+      if (signal.aborted) terminate();
     }
     const cleanupSignal = () => {
       if (signal && onAbort) signal.removeEventListener('abort', onAbort);
@@ -472,6 +474,21 @@ export const hasAudioStream = async (videoPath) => {
     videoPath,
   ]);
   return stdout.length > 0;
+};
+
+// Unlike the permissive helper above, distinguish a silent video from a
+// failed probe when a caller must verify that a soundtrack was preserved.
+export const probeVideoAudioPresence = async (videoPath) => {
+  if (typeof videoPath !== 'string' || !videoPath) return null;
+  const ffprobe = await findFfprobe();
+  if (!ffprobe) return null;
+  const result = await execFileAsync(ffprobe, [
+    '-v', 'error', '-select_streams', 'a:0', '-show_entries', 'stream=index',
+    '-of', 'default=nokey=1:noprint_wrappers=1', videoPath,
+  ], safeChildProcessOptions({ timeout: 5000 })).catch(() => null);
+  if (!result) return null;
+  const output = (result.stdout || '').trim();
+  return output === '' ? false : /^\d+$/.test(output) ? true : null;
 };
 
 // Single-video thumbnail extraction. Seeks to mid-clip rather than frame 0
@@ -605,6 +622,24 @@ export const probeVideoStreamInfo = async (videoPath) => {
     fps: parseRate(frameRate),
     frameCount: positiveInt(frames),
   };
+};
+
+// Pixel aspect is distinct from raster dimensions. Null means ffprobe could
+// not establish it; callers that require exact display geometry can refuse.
+export const probeVideoPixelAspect = async (videoPath) => {
+  if (typeof videoPath !== 'string' || !videoPath) return null;
+  const stdout = await runFfprobe(['-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=sample_aspect_ratio', '-of', 'default=nokey=1:noprint_wrappers=1', videoPath]);
+  const match = /^\s*(\d+):(\d+)\s*$/.exec(stdout);
+  if (!match || Number(match[1]) <= 0 || Number(match[2]) <= 0) return null;
+  const numerator = Number(match[1]);
+  const denominator = Number(match[2]);
+  if (!Number.isSafeInteger(numerator) || !Number.isSafeInteger(denominator)) return null;
+  return { numerator, denominator };
+};
+
+export const probeSquareVideoPixels = async videoPath => {
+  const aspect = await probeVideoPixelAspect(videoPath);
+  return aspect ? aspect.numerator === aspect.denominator : null;
 };
 
 // What a stream copy needs two clips to share before their video can be joined

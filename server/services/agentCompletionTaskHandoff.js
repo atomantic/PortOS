@@ -1,3 +1,5 @@
+import { validSpawnBudgetEpisode } from './spawnBudgetProof.js';
+
 /** Crash-safe task handoff inside the original completion receipt. No branch discovery. */
 const DISPATCH_KEYS = ['claimedBy', 'claimedAt', 'lastSpawnedAt', 'totalSpawnCount'];
 const VERSION_KEYS = [...DISPATCH_KEYS, 'updatedAt', 'deliveryRecovery', 'deliveryRecoveryAgentId'];
@@ -28,8 +30,11 @@ export async function bindCompletionTaskDispatch(agentId, task) {
   if (task?.status !== 'in_progress' || !task.metadata?.lastSpawnedAt || !task.metadata?.claimedBy
     || spawnCount(task.metadata.totalSpawnCount) === null) return false;
   const { updateAgent } = await import('./cosAgentLifecycle.js');
+  const proof = task.metadata.spawnBudgetProof;
   return !!await updateAgent(agentId, { metadata: { completionTaskDispatch: {
     taskId: task.id, taskType: task.taskType || 'user', expected: entries(task.metadata, DISPATCH_KEYS),
+    ...(validSpawnBudgetEpisode(proof) && proof.dispatch?.agentId === agentId
+      ? { spawnBudgetEpoch: proof.epoch, spawnBudgetStartedAt: proof.dispatch.startedAt } : {}),
   } } });
 }
 

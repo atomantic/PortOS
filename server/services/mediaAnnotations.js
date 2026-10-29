@@ -8,7 +8,7 @@
 import { join } from 'path';
 import { PATHS, atomicWrite, readJSONFile, ensureDir } from '../lib/fileUtils.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
-import { isValidKey } from '../lib/mediaItemKey.js';
+import { isValidAnnotationKey as isValidKey } from '../lib/mediaItemKey.js';
 import { getInstanceId, UNKNOWN_INSTANCE_ID } from './instanceIdentity.js';
 import { resolveLocalAuthorName } from './sharing/annotationIdentity.js';
 import { codedError } from '../lib/codedError.js';

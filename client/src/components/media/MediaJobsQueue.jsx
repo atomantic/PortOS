@@ -19,7 +19,7 @@ import {
 import { useSocketResource } from '../../hooks/useSocketResource';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 import { formatTimeOfDaySeconds } from '../../utils/formatters';
-import { getVideoGenStatus } from '../../services/apiImageVideo.js';
+import { getVideoGenStatus, getVideoHistoryItem, getTopazJobStatus, cancelTopazRemoteJob, recoverTopazJob } from '../../services/apiImageVideo.js';
 import { listLorasFull } from '../../services/api';
 import ModelSelect from '../ModelSelect';
 import ResolutionField from './ResolutionField';
@@ -163,14 +163,14 @@ export default function MediaJobsQueue({ kind, recentLimit = 10, className = '' 
   }));
 
   const handleCancel = (id) => cancelMediaJob(id, { silent: true })
-    .then(() => {
+    .then((result) => {
       // Optimistic update: queued jobs flip to 'canceled' immediately (the
       // worker won't pick them up). For running jobs leave the server status
       // alone; the next queue refresh replaces this optimistic flag with the
       // server-projected `cancelRequested` state until the job is terminal.
       setJobs((prev) => prev.map((j) => {
         if (j.id !== id) return j;
-        if (j.status === 'queued') return { ...j, status: 'canceled', cancelRequested: false };
+        if (j.status === 'queued' && result.status === 'canceled') return { ...j, status: 'canceled', cancelRequested: false };
         return { ...j, cancelRequested: true };
       }));
       toast.success('Cancel requested');
@@ -186,13 +186,13 @@ export default function MediaJobsQueue({ kind, recentLimit = 10, className = '' 
       if (j.status === 'queued' || j.status === 'running') {
         liveJobs.push(j);
         if (j.status === 'queued') queued += 1;
-      } else if ((j.status === 'failed' || j.status === 'canceled') && recentJobs.length < recentLimit) {
+      } else if ((j.status === 'failed' || j.status === 'canceled' || (kind === 'video-upscale' && j.status === 'completed')) && (j.result?.topazUncertain || j.result?.topazRecoveryAvailable || recentJobs.length < recentLimit)) {
         recentJobs.push(j);
         if (j.status === 'failed') failed += 1;
       }
     }
     return { live: liveJobs, recent: recentJobs, queuedCount: queued, failedCount: failed };
-  }, [jobs, recentLimit]);
+  }, [jobs, recentLimit, kind]);
 
   const videoLanes = useMemo(() => {
     if (kind !== 'video') return [];
@@ -240,7 +240,7 @@ export default function MediaJobsQueue({ kind, recentLimit = 10, className = '' 
       setJobs((prev) => prev.filter((j) => j.id !== id));
     })
     .catch((err) => toast.error(err?.message || 'Delete failed'));
-  const KIND_LABEL = { image: 'Image', video: 'Video', training: 'Training' };
+  const KIND_LABEL = { image: 'Image', video: 'Video', 'video-upscale': 'Upscale', training: 'Training' };
   const headerLabel = kind
     ? `${KIND_LABEL[kind] || ''} ${kind === 'training' ? 'Queue' : kind === 'video' ? 'Render Queues' : 'Render Queue'}`.trim()
     : 'Render Queue';
@@ -268,7 +268,7 @@ export default function MediaJobsQueue({ kind, recentLimit = 10, className = '' 
           </span>
         </div>
         <div className="flex items-center gap-1 shrink-0">
-          {queuedCount > 0 && (
+          {queuedCount > 0 && kind !== 'video-upscale' && (
             <button
               onClick={handleClearQueued}
               className="flex items-center gap-1 px-2 py-1 rounded text-xs text-gray-300 hover:text-port-error hover:bg-port-error/10 border border-port-border hover:border-port-error/40"
@@ -347,7 +347,7 @@ export default function MediaJobsQueue({ kind, recentLimit = 10, className = '' 
               className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-300 pt-1"
             >
               {showRecent ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
-              {showRecent ? 'Hide' : 'Show'} failed / canceled ({recent.length})
+              {showRecent ? 'Hide' : 'Show'} {kind === 'video-upscale' ? 'completed / failed / canceled' : 'failed / canceled'} ({recent.length})
             </button>
           )}
           {showRecent && recent.map((j) => <JobRow key={j.id} job={j} onCancel={handleCancel} onRetry={handleRetry} onDelete={handleDelete} />)}
@@ -461,11 +461,12 @@ function TrainingJobDetail({ runId }) {
 
 function JobRow({ job, onCancel, onRetry, onRunNow, onDelete }) {
   const Icon = KIND_ICON[job.kind] || Film;
+  const isTopaz = job.kind === 'video-upscale' && job.params?.mode === 'topaz';
   const canCancel = job.status === 'queued' || job.status === 'running';
-  const canRetry = job.kind !== 'training' && (job.status === 'failed' || job.status === 'canceled') && typeof onRetry === 'function';
+  const canRetry = !isTopaz && job.kind !== 'training' && (job.status === 'failed' || job.status === 'canceled') && typeof onRetry === 'function';
   // Delete only on terminal rows — live jobs go through Cancel.
   const canDelete = (job.status === 'failed' || job.status === 'canceled' || job.status === 'completed')
-    && typeof onDelete === 'function';
+    && !job.result?.topazUncertain && typeof onDelete === 'function';
   // Run-now is codex-only — GPU jobs serialize on the single MLX runtime.
   const isQueuedCloud = job.status === 'queued' && job.kind === 'image' && isCloudCliMode(job.params?.mode);
   const canRunNow = isQueuedCloud && typeof onRunNow === 'function';
@@ -476,6 +477,31 @@ function JobRow({ job, onCancel, onRetry, onRunNow, onDelete }) {
     : 0;
   // Inline edit form for retry-with-overrides.
   const [editing, setEditing] = useState(false);
+  const [topazStatus, setTopazStatus] = useState(null);
+  const [checkingTopaz, setCheckingTopaz] = useState(false);
+  const [topazSource, setTopazSource] = useState(null);
+  useEffect(() => {
+    if (!isTopaz || job.status !== 'completed' || !job.result?.upscaledFrom) return undefined;
+    let current = true;
+    getVideoHistoryItem(job.result.upscaledFrom, { silent: true })
+      .then(item => { if (current) setTopazSource(item); })
+      .catch(() => { if (current) setTopazSource(null); });
+    return () => { current = false; };
+  }, [isTopaz, job.status, job.result?.upscaledFrom]);
+  const checkTopaz = (cancelRemote = false) => {
+    setCheckingTopaz(true);
+    (cancelRemote ? cancelTopazRemoteJob(job.id, { silent: true }) : getTopazJobStatus(job.id, { silent: true }))
+      .then(result => setTopazStatus(`Topaz request ${result.requestId}: ${result.status}`))
+      .catch(error => setTopazStatus(error.message || 'Could not check Topaz status'))
+      .finally(() => setCheckingTopaz(false));
+  };
+  const recoverTopaz = () => {
+    setCheckingTopaz(true);
+    recoverTopazJob(job.id, { silent: true })
+      .then(() => setTopazStatus('Result retrieval queued.'))
+      .catch(error => setTopazStatus(error.message || 'Could not retrieve Topaz result'))
+      .finally(() => setCheckingTopaz(false));
+  };
   // A federated job renders from the wire request inside its `remoteMedia`
   // marker, so a prompt/model edit here would never reach the peer — and the
   // server re-normalizes the retry anyway. Offer the plain Retry, not the
@@ -577,6 +603,28 @@ function JobRow({ job, onCancel, onRetry, onRunNow, onDelete }) {
       </div>
       {job.status === 'failed' && job.error && (
         <div role="status" className="text-xs text-port-error mt-2 truncate" title={job.error}>{job.error}</div>
+      )}
+      {isTopaz && !canCancel && (job.result?.topazUncertain || topazStatus || job.result?.topazProviderStatus || job.result?.topazRecoveryAvailable) && (
+        <div className="mt-2 space-y-1 text-xs text-port-warning">
+          {job.result?.topazUncertain && <>
+            <p>Topaz processing or charges may continue. Check the existing request before starting another.</p>
+            <div className="flex flex-wrap gap-2">
+              <button type="button" onClick={() => checkTopaz()} disabled={checkingTopaz} className="rounded border border-port-border px-2 py-1 disabled:opacity-50">{checkingTopaz ? 'Checking…' : 'Check Topaz status'}</button>
+              <button type="button" onClick={() => checkTopaz(true)} disabled={checkingTopaz} className="rounded border border-port-border px-2 py-1 disabled:opacity-50">Request Topaz cancellation</button>
+            </div>
+          </>}
+          {job.result?.topazRecoveryAvailable && <button type="button" onClick={recoverTopaz} disabled={checkingTopaz} className="rounded border border-port-border px-2 py-1 disabled:opacity-50">Retrieve Topaz result</button>}
+          {(topazStatus || job.result?.topazProviderStatus) && <p role="status">{topazStatus || `Topaz status: ${job.result.topazProviderStatus}`}</p>}
+        </div>
+      )}
+      {isTopaz && job.status === 'completed' && job.result?.filename && (
+        <div className="mt-2 space-y-1 text-xs">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            {topazSource?.filename && <div><p>Original master</p><video controls preload="metadata" src={`/data/videos/${encodeURIComponent(topazSource.filename)}`} className="max-w-full max-h-64" /></div>}
+            <div><p>Topaz result</p><video controls preload="metadata" src={`/data/videos/${encodeURIComponent(job.result.filename)}`} className="max-w-full max-h-64" /></div>
+          </div>
+          <a href={`/data/videos/${encodeURIComponent(job.result.filename)}`} download className="text-port-accent">Download upscaled video</a>
+        </div>
       )}
       {job.status === 'queued' && job.statusMsg && (
         <div role="status" className="text-xs text-port-warning-text mt-2 truncate" title={job.statusMsg}>{job.statusMsg}</div>

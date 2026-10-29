@@ -48,10 +48,12 @@ function statusLine(stage) {
  * is idle, and Start over clears a check-in that has not been approved.
  * A sheet in review (or approved) takes plain-text feedback below the actions.
  */
-export default function CastAndSetsCheckin({ id, project, stale = null, storyStale = null, busy, onOpenSheet, onOpenPreview, onApprove, onRegenerate, onRegenerateImages, onEditDirection, onApplyFeedback, onRemoveFeedback, onResume, onRebuild, onReconfirm, onRevert, onSkip, onDiscard, onRebuildFromStory }) {
+export default function CastAndSetsCheckin({ id, project, stale = null, storyStale = null, busy, onOpenSheet, onOpenPreview, onApprove, onRegenerate, onRegenerateImages, onEditDirection, onRefresh, onApplyFeedback, onRemoveFeedback, onResume, onRebuild, onReconfirm, onRevert, onSkip, onDiscard, onRebuildFromStory }) {
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const greyboxPlaces = useMusicVideoGreyboxPlaces(project);
   const stage = project.castAndSets;
+  // Mirrors the server's formSubjects: catalog-linked characters outside Cast & Sets' own `cs-` subjects.
+  const formSubjects = (project.concept?.subjects || []).filter((s) => s?.kind === 'character' && s.ingredientId && !String(s.id || '').startsWith('cs-'));
   if (!stage) return null;
   const working = WORKING.has(stage.status) && !stage.interrupted;
   const sheet = stage.artifactId ? (project.devArtifacts || []).find((a) => a.id === stage.artifactId && !a.deleted) : null;
@@ -95,7 +97,7 @@ export default function CastAndSetsCheckin({ id, project, stale = null, storySta
       {stage.greyboxPending && <p role="status" className="text-xs text-port-warning">Greybox selection saved. Regenerate to render the set plates with it.</p>}
       <CastAndSetsReferenceProgress stage={stage} onOpenPreview={onOpenPreview}
         actions={!working && stage.direction && stage.status !== 'skipped' && onRegenerateImages && onEditDirection
-          ? { busy, onRegenerate: onRegenerateImages, onEdit: onEditDirection } : null} />
+          ? { projectId: project.id, busy, formSubjects, onRegenerate: onRegenerateImages, onEdit: onEditDirection, onRefresh } : null} />
       <div className="flex flex-wrap gap-2">
         {sheet && (
           <button type="button" onClick={() => onOpenSheet(sheet.id)} className={`${buttonClass} border border-port-border`}>
