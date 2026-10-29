@@ -5,12 +5,17 @@ vi.mock('./cosTaskStore.js', () => ({
   getTaskById: vi.fn(),
   updateTask: vi.fn(),
 }));
+const schedule = vi.hoisted(() => ({ value: {} }));
+vi.mock('./taskScheduleStore.js', () => ({
+  updateSchedule: vi.fn(async mutate => (await mutate(schedule.value)).result),
+}));
 
 const { addTask, getTaskById, updateTask } = await import('./cosTaskStore.js');
 const {
   PREFLIGHT_CARD_STALE_MS,
   finishPreflightCard,
   finishPreflightDispatch,
+  closeStalePreflightCard,
   isPreflightCard,
   isStalePreflightCard,
   preflightCardId,
@@ -24,6 +29,7 @@ const cardFor = (preflight) => ({ id: preflightCardId('demand-1'), metadata: { p
 
 beforeEach(() => {
   vi.clearAllMocks();
+  schedule.value = {};
   addTask.mockResolvedValue({ id: preflightCardId('demand-1') });
   updateTask.mockResolvedValue({ id: preflightCardId('demand-1') });
 });
@@ -36,7 +42,7 @@ describe('preflightTaskCard', () => {
     expect(taskType).toBe('internal');
     expect(options).toMatchObject({ raw: true, suppressDequeue: true });
     // The PR/MR row finds the run its button started through these three keys.
-    expect(task.metadata).toMatchObject({ app: 'portos', analysisType: 'pr-reviewer', targetPullRequest: 42 });
+    expect(task.metadata).toMatchObject({ app: 'portos', analysisType: 'pr-reviewer', targetPullRequest: 42, machineLocal: true });
     expect(task.description).toContain('PortOS');
     expect(task.metadata.preflight.steps[0]).toMatchObject({ key: 'queued', status: 'active' });
   });
@@ -165,5 +171,43 @@ describe('preflightTaskCard', () => {
     // A multi-minute security scan is live work; only a restart leaves one older than the grace.
     expect(isStalePreflightCard(fresh, Date.now() + PREFLIGHT_CARD_STALE_MS + 1)).toBe(true);
     expect(isStalePreflightCard(cardFor({ requestId: 'd', steps: [], updatedAt: 'nonsense' }))).toBe(true);
+  });
+
+  it('reaps only a stale local card with no active preparation or queued request', async () => {
+    const { createPreflightState } = await import('../lib/preflightPlan.js');
+    const { beginPreflightActivity } = await import('./preflightActivity.js');
+    const preflight = createPreflightState({ requestId: 'demand-1', taskType: 'pr-reviewer' });
+    preflight.updatedAt = new Date(Date.now() - PREFLIGHT_CARD_STALE_MS - 1).toISOString();
+    const task = { ...cardFor(preflight), status: 'in_progress', description: 'Preparing', priority: 'HIGH',
+      metadata: { preflight, machineLocal: true } };
+    getTaskById.mockResolvedValue(task);
+    schedule.value = { onDemandRequests: [{ id: 'demand-1' }] };
+    expect(await closeStalePreflightCard(task)).toBe(false);
+    expect(updateTask).not.toHaveBeenCalled();
+    schedule.value = {};
+    const end = beginPreflightActivity(task.id);
+    try {
+      expect(await closeStalePreflightCard(task)).toBe(false);
+      expect(updateTask).not.toHaveBeenCalled();
+    } finally { end(); }
+    expect(await closeStalePreflightCard(task)).toBe(true);
+    expect(updateTask).toHaveBeenCalledWith(task.id, expect.objectContaining({ status: 'completed',
+      metadata: expect.objectContaining({ preflight: expect.objectContaining({ outcome: 'interrupted' }) }) }), 'internal',
+    expect.objectContaining({ expectedStatus: 'in_progress', expectedTask: expect.objectContaining({ metadata: task.metadata }) }));
+  });
+
+  it('retains legacy/remote cards and ambiguous queue or handoff evidence', async () => {
+    const { createPreflightState } = await import('../lib/preflightPlan.js');
+    const preflight = createPreflightState({ requestId: 'demand-1', taskType: 'pr-reviewer' });
+    preflight.updatedAt = new Date(Date.now() - PREFLIGHT_CARD_STALE_MS - 1).toISOString();
+    const task = { ...cardFor(preflight), status: 'in_progress', metadata: { preflight } };
+    getTaskById.mockResolvedValue(task);
+    expect(await closeStalePreflightCard(task)).toBe(false);
+    task.metadata.machineLocal = 'true';
+    schedule.value = { onDemandRequests: 'unreadable' };
+    expect(await closeStalePreflightCard(task)).toBe(false);
+    schedule.value = { onDemandHandoffs: { 'demand-1': { status: 'preparing' } } };
+    expect(await closeStalePreflightCard(task)).toBe(false);
+    expect(updateTask).not.toHaveBeenCalled();
   });
 });

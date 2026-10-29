@@ -2061,6 +2061,30 @@ describe('resetOrphanedTasks — latest run outcome (#12057)', () => {
     expect(taskStore.updateTask).toHaveBeenCalledExactlyOnceWith(taskId, { status: 'completed' }, 'user');
     expect(agentManagement.handleOrphanedTask).not.toHaveBeenCalled();
   });
+
+  it('preserves active and capacity-waiting preflight cards before reaping an idle local orphan', async () => {
+    const { beginPreflightActivity } = await import('./preflightActivity.js');
+    const store = await import('./taskScheduleStore.js');
+    const card = { id: 'preflight-demand-1', status: 'in_progress', description: 'Preparing', priority: 'HIGH', metadata: {
+      machineLocal: true, preflight: { requestId: 'demand-1', taskType: 'branch-reconcile', phase: 'queued',
+        updatedAt: '2026-01-01T01:00:00Z', steps: [{ key: 'queued', status: 'active' }] },
+    } };
+    let queue = [{ id: 'demand-1' }];
+    vi.spyOn(store, 'updateSchedule').mockImplementation(async fn => (await fn({ onDemandRequests: queue })).result);
+    vi.spyOn(taskStore, 'getTaskById').mockResolvedValue(card);
+    taskStore.getAllTasks.mockResolvedValue({ user: { grouped: { in_progress: [] } }, cos: { grouped: { in_progress: [card] } } });
+    const end = beginPreflightActivity(card.id);
+    try {
+      await resetOrphanedTasks();
+      expect(taskStore.updateTask).not.toHaveBeenCalled();
+    } finally { end(); }
+    await resetOrphanedTasks();
+    expect(taskStore.updateTask).not.toHaveBeenCalled();
+    queue = [];
+    await resetOrphanedTasks();
+    expect(taskStore.updateTask).toHaveBeenCalledWith(card.id, expect.objectContaining({ status: 'completed' }), 'internal',
+      expect.objectContaining({ expectedStatus: 'in_progress' }));
+  });
 });
 
 // A failed run's retry is held non-spawnable (`in_progress` + marker) while its

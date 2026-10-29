@@ -644,6 +644,49 @@ describe('preflight task card', () => {
     );
   });
 
+  it('publishes live preflight activity only while preparation is in progress, including on failure', async () => {
+    const { projectPreflightTask } = await import('./preflightActivity.js');
+    const card = { id: 'preflight-req-1', metadata: { preflight: { requestId: 'req-1' } } };
+    mocks.getOnDemandRequests.mockResolvedValue([appRequest()]);
+    mocks.prepareManagedAppImprovementTask.mockImplementationOnce(async () => {
+      expect(projectPreflightTask(card).preflightActive).toBe(true);
+      throw new Error('synthetic preparation failure');
+    });
+    await expect(drainOnDemandRequests({ state: STATE }, generatorAdapter().adapter)).rejects.toThrow('synthetic preparation failure');
+    expect(projectPreflightTask(card).preflightActive).toBe(false);
+    expect(mocks.finishPreflightCard).toHaveBeenCalledWith(card.id, expect.objectContaining({ outcome: 'failed', reason: 'preparation-failed' }));
+  });
+
+  it('holds activity during a claim race and releases it when another consumer won', async () => {
+    const { isPreflightActive } = await import('./preflightActivity.js');
+    const entered = Promise.withResolvers();
+    const release = Promise.withResolvers();
+    mocks.getOnDemandRequests.mockResolvedValue([appRequest()]);
+    mocks.clearOnDemandRequest.mockImplementationOnce(async () => { entered.resolve(); await release.promise; return null; });
+    const pending = drainOnDemandRequests({ state: STATE }, generatorAdapter().adapter);
+    await entered.promise;
+    expect(isPreflightActive('preflight-req-1')).toBe(true);
+    release.resolve();
+    await pending;
+    expect(isPreflightActive('preflight-req-1')).toBe(false);
+    expect(mocks.finishPreflightCard).not.toHaveBeenCalled();
+  });
+
+  it('does not claim a handoff occurred when task persistence fails or a duplicate cannot be resumed', async () => {
+    mocks.getOnDemandRequests.mockResolvedValue([appRequest()]);
+    mocks.addTask.mockResolvedValueOnce({ error: 'storage unavailable' });
+    await expect(drainOnDemandRequests({ state: STATE }, generatorAdapter().adapter)).rejects.toThrow('storage unavailable');
+    expect(mocks.finishPreflightDispatch).not.toHaveBeenCalled();
+    expect(mocks.finishPreflightCard).toHaveBeenCalledWith('preflight-req-1', expect.objectContaining({ outcome: 'failed' }));
+
+    vi.clearAllMocks();
+    mocks.addTask.mockResolvedValueOnce({ id: 'blocked-1', duplicate: true, status: 'blocked' });
+    mocks.reviveBlockedTask.mockResolvedValueOnce({ error: 'cleanup held' });
+    await drainOnDemandRequests({ state: STATE }, generatorAdapter().adapter);
+    expect(mocks.finishPreflightDispatch).not.toHaveBeenCalled();
+    expect(mocks.finishPreflightCard).toHaveBeenCalledWith('preflight-req-1', expect.objectContaining({ outcome: 'failed', reason: 'existing-task-held' }));
+  });
+
   it('closes the card against the persisted task id once an agent task exists', async () => {
     mocks.getOnDemandRequests.mockResolvedValue([appRequest()]);
     const { adapter } = generatorAdapter();

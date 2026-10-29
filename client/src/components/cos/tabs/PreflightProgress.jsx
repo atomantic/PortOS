@@ -23,10 +23,11 @@ const STEP_STYLE = {
   pending: { icon: <CircleDashed size={13} aria-hidden="true" className="text-gray-600" />, text: 'text-gray-500' },
 };
 
-export default function PreflightProgress({ preflight, idScope, taskId }) {
+export default function PreflightProgress({ preflight, active = false, unconfirmed = false, idScope, taskId }) {
   const steps = Array.isArray(preflight?.steps) ? preflight.steps : null;
   if (!steps?.length) return null;
-  const running = preflight.phase === 'queued' || preflight.phase === 'preparing';
+  const unfinished = preflight.phase === 'queued' || preflight.phase === 'preparing';
+  const running = unfinished && active;
   const footer = preflight.note
     || (!running && preflight.reason ? `Reason: ${preflight.reason}` : null);
 
@@ -39,12 +40,12 @@ export default function PreflightProgress({ preflight, idScope, taskId }) {
       <div className="flex items-center gap-2 text-gray-300">
         <span className="font-medium">Pre-agent checks</span>
         <span className="text-xs text-gray-500">
-          {running ? 'running now — no agent has started yet' : 'finished'}
+          {running ? 'running now — no agent has started yet' : unfinished ? (unconfirmed ? 'activity unconfirmed' : 'waiting for preparation') : 'finished'}
         </span>
       </div>
       <ol className="mt-1 space-y-1">
         {steps.map((step) => {
-          const style = STEP_STYLE[step.status] || STEP_STYLE.pending;
+          const style = STEP_STYLE[step.status === 'active' && !running ? 'pending' : step.status] || STEP_STYLE.pending;
           return (
             <li key={`${idScope}-${taskId}-preflight-${step.key}`} className="flex items-start gap-2">
               <span className="mt-0.5 shrink-0">{style.icon}</span>

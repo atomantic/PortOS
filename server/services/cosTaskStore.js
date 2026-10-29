@@ -719,10 +719,10 @@ async function addTaskAttempt(taskData, taskType, { raw = false, ignoreTaskId = 
  * `expectedStatus`, when supplied, is checked under the task-file lock. A mismatch
  * returns `{ statusChanged: true }` without writing or retiring pause state.
  */
-export async function updateTask(taskId, updates, taskType = 'user', { now = Date.now(), suppressDequeue = false, expectedStatus = null, expectedMetadata = null, expectedTask = null, recoveryOwner = null, preserveRetryBudget = false, spawnBudgetOperation = null } = {}) {
+export async function updateTask(taskId, updates, taskType = 'user', { now = Date.now(), suppressDequeue = false, suppressCompletionWake = false, expectedStatus = null, expectedMetadata = null, expectedTask = null, recoveryOwner = null, preserveRetryBudget = false, spawnBudgetOperation = null } = {}) {
   validateRequest(cosTaskTypeSchema, taskType);
   const release = await preparePauseRelease(taskId, updates);
-  const result = await writeTaskUpdate(taskId, release ? { ...updates, metadata: release.metadata } : updates, taskType, { now, suppressDequeue, expectedStatus, expectedMetadata, expectedTask, recoveryOwner, preserveRetryBudget, spawnBudgetOperation });
+  const result = await writeTaskUpdate(taskId, release ? { ...updates, metadata: release.metadata } : updates, taskType, { now, suppressDequeue, suppressCompletionWake, expectedStatus, expectedMetadata, expectedTask, recoveryOwner, preserveRetryBudget, spawnBudgetOperation });
   if (release && !result?.error && !result?.statusChanged) {
     await retirePausedAgent(release.agentId, taskId, resolveTaskTargetBranch(result?.metadata));
   }
@@ -835,7 +835,7 @@ async function writeTaskUpdate(taskId, updates, taskType, options) {
 }
 
 // Caller holds withStateLock, including its status and ownership decision.
-async function writeTaskUpdateLocked(taskId, updates, taskType, { now, suppressDequeue = false, expectedStatus = null, expectedMetadata = null, expectedTask = null, recoveryOwner = null, preserveRetryBudget = false, spawnBudgetOperation = null }) {
+async function writeTaskUpdateLocked(taskId, updates, taskType, { now, suppressDequeue = false, suppressCompletionWake = false, expectedStatus = null, expectedMetadata = null, expectedTask = null, recoveryOwner = null, preserveRetryBudget = false, spawnBudgetOperation = null }) {
   const tasks = await readTaskFile(taskType);
 
   let taskIndex = tasks.findIndex(t => t.id === taskId);
@@ -1131,6 +1131,8 @@ async function writeTaskUpdateLocked(taskId, updates, taskType, { now, suppressD
   // `status === 'completed'`, which is true on every later write too.
   const change = { type: taskType, action: transition.action, task: updatedTask, previousStatus };
   if (suppressDequeue) change.suppressDequeue = true;
+  // An explicit cleanup-only action must not itself launch dependent work.
+  if (suppressCompletionWake) change.suppressCompletionWake = true;
   cosEvents.emit('tasks:changed', change);
   return updatedTask;
 }

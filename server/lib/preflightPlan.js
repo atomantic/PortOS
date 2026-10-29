@@ -161,7 +161,7 @@ export function preflightHeadline(preflight) {
   if (preflight.phase === PREFLIGHT_PHASES.FAILED) return preflight.reason ? `Preflight failed: ${preflight.reason}` : 'Preflight failed';
   if (preflight.phase === PREFLIGHT_PHASES.INTERRUPTED) return 'Preflight interrupted by a server restart';
   if (preflight.phase === PREFLIGHT_PHASES.DONE) {
-    if (preflight.outcome === 'handed-off') return 'Preflight passed — agent started';
+    if (preflight.outcome === 'handed-off') return 'Preflight passed — task handed off';
     if (preflight.outcome === 'programmatic') return 'Completed without an agent';
     return 'Preflight found nothing to do';
   }

@@ -78,7 +78,7 @@ describe('preflightPlan', () => {
   it('distinguishes a hand-off from work that never needed an agent', () => {
     const base = createPreflightState({ requestId: 'd', taskType: 'pr-reviewer' });
     expect(preflightHeadline(finalizePreflight(base, { outcome: 'handed-off', resultTaskId: 't-1' })))
-      .toBe('Preflight passed — agent started');
+      .toBe('Preflight passed — task handed off');
     expect(preflightHeadline(finalizePreflight(base, { outcome: 'programmatic' }))).toBe('Completed without an agent');
     expect(preflightHeadline(finalizePreflight(base, { outcome: 'interrupted' })))
       .toBe('Preflight interrupted by a server restart');

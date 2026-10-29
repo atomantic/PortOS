@@ -739,6 +739,7 @@ export async function forceSpawnTask(taskId, { resetSpawnBudget = false } = {}) 
   maintenance.assertOpen();
   let task = await getTaskById(taskId);
   if (!task) return { error: 'Task not found' };
+  if (task.metadata?.preflight?.requestId) return { error: 'Preflight progress cards cannot be spawned' };
   const resetStopped = resetSpawnBudget && ['in_progress', 'blocked'].includes(task.status);
   if (task.status !== 'pending' && !resetStopped) return { error: `Task is ${task.status}, not pending` };
   if (task.approvalRequired) return { error: 'Task requires approval before it can be spawned' };
@@ -902,14 +903,17 @@ export async function resetOrphanedTasks({ bootRecovery = false } = {}) {
   // one still inside its grace window is left alone: a pr-reviewer security
   // scan is minutes of real work, and reaping a live preflight would make the
   // card lie in the one direction that matters.
-  const { finishPreflightCard, isPreflightCard, isStalePreflightCard } = await import('./preflightTaskCard.js');
+  const { closeStalePreflightCard, isPreflightCard, isStalePreflightCard } = await import('./preflightTaskCard.js');
 
   const processOrphanedTasks = async (tasks) => {
     for (const task of tasks) {
       if (isPreflightCard(task)) {
         if (isStalePreflightCard(task)) {
-          emitLog('info', `Closing preflight card ${task.id} — no process is still running its checks`, { taskId: task.id });
-          await finishPreflightCard(task.id, { outcome: 'interrupted' });
+          const closed = await closeStalePreflightCard(task).catch(error => {
+            emitLog('warn', `Unable to verify stale preflight ownership: ${error.message}`, { taskId: task.id });
+            return false;
+          });
+          if (closed) emitLog('info', `Closing preflight card ${task.id} — no process is still running its checks`, { taskId: task.id });
         }
         continue;
       }
@@ -1673,7 +1677,7 @@ export async function init() {
     } else if (data.action === 'approved' || data.action === 'unblocked' || data.action === 'requeued') {
       if (data.suppressDequeue) return;
       scheduleDequeue();
-    } else if (data.task?.status === 'completed' && data.previousStatus !== 'completed') {
+    } else if (data.suppressCompletionWake !== true && data.task?.status === 'completed' && data.previousStatus !== 'completed') {
       // A finished investigation releases the task(s) its failure was blocking
       // (see investigationRetry.js). Keyed on the completion rather than on who
       // wrote it, so it covers BOTH an investigation agent finishing its run and

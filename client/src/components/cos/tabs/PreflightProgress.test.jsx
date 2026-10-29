@@ -19,10 +19,17 @@ describe('PreflightProgress', () => {
   });
 
   it('names the check that is running and says no agent has started', () => {
-    render(<PreflightProgress preflight={preflight()} idScope="cos" taskId="t-1" />);
+    render(<PreflightProgress preflight={preflight()} active idScope="cos" taskId="t-1" />);
     expect(screen.getByText('Screening PR content for hidden Unicode and prompt injection')).toBeInTheDocument();
     expect(screen.getByText('Screening 2 pull requests through the abuse guard')).toBeInTheDocument();
     expect(screen.getByLabelText('Pre-agent checks')).toHaveAttribute('aria-busy', 'true');
+  });
+
+  it('does not animate a persisted preparation when no process is running it', () => {
+    render(<PreflightProgress preflight={preflight()} idScope="cos" taskId="t-1" />);
+    expect(screen.getByLabelText('Pre-agent checks')).toHaveAttribute('aria-busy', 'false');
+    expect(screen.getByText('waiting for preparation')).toBeInTheDocument();
+    expect(screen.getByLabelText('Pre-agent checks').querySelector('.animate-spin')).toBeNull();
   });
 
   it('stops reading as busy once the phase is terminal, and surfaces the note', () => {

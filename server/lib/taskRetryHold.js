@@ -85,6 +85,12 @@ export function isRetryHeld(metadata) {
   return typeof value === 'string' && value !== '' && value !== 'false' && value !== 'null' && value !== 'undefined';
 }
 
+/** Return the exact attributed cleanup owner, never a legacy boolean marker. */
+export function retryHoldOwnerId(metadata) {
+  const value = metadata?.[RETRY_HOLD_KEY];
+  return isRetryHeld(metadata) && typeof value === 'string' && !isTruthyMeta(value) ? value : null;
+}
+
 /**
  * May `agentId` release this hold? Only the run that armed it — or anyone, when
  * the marker carries no id (legacy shape). The orphan sweep deliberately does NOT
@@ -130,9 +136,9 @@ export function collectProtectedCleanupOwners(tasks) {
     const meta = task.metadata;
     if (isDeliveryCleanupHeld(meta)) ownerIds.add(meta.deliveryRecoveryAgentId);
     if (isRetryHeld(meta)) {
-      const holder = meta[RETRY_HOLD_KEY];
-      if (isTruthyMeta(holder)) hasUnattributedRetryHold = true;
-      else if (typeof holder === 'string' && holder) ownerIds.add(holder);
+      const holder = retryHoldOwnerId(meta);
+      if (holder) ownerIds.add(holder);
+      else if (isTruthyMeta(meta[RETRY_HOLD_KEY])) hasUnattributedRetryHold = true;
     }
   }
   return {

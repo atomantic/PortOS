@@ -650,6 +650,24 @@ describe('GET /api/cos/tasks — the spawn window (lib/cosSpawnWindow.js)', () =
     expect(res.status).toBe(200);
     expect(res.body.user.grouped.pending.map((t) => t.id)).toEqual(['user/42', 'user/43']);
   });
+
+  it('projects process-local preflight activity and clears it when preparation ends', async () => {
+    const { beginPreflightActivity } = await import('../services/preflightActivity.js');
+    const task = { id: 'preflight-demand-1', status: 'in_progress', metadata: { preflight: { requestId: 'demand-1' } } };
+    getTaskView.mockResolvedValue({ user: { tasks: [], grouped: {} }, cos: { tasks: [task], grouped: { in_progress: [task] } } });
+    getAgents.mockResolvedValue([]);
+    const getQueue = () => new Promise((resolve, reject) => {
+      const req = { method: 'GET', url: '/tasks', query: { view: 'queue' }, headers: {} };
+      const res = { json: resolve };
+      cosTaskRoutes.handle(req, res, reject);
+    });
+    const end = beginPreflightActivity(task.id);
+    try {
+      expect((await getQueue()).cos.tasks[0].preflightActive).toBe(true);
+    } finally { end(); }
+    expect((await getQueue()).cos.tasks[0].preflightActive).toBe(false);
+    expect(task).not.toHaveProperty('preflightActive');
+  });
 });
 
 // The bounded views select inside the store (#9677): the route only picks the

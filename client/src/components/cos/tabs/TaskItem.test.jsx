@@ -8,6 +8,7 @@ const api = vi.hoisted(() => ({
   approveCosTask: vi.fn(),
   forceSpawnTask: vi.fn(),
   resetSpawnBudgetAndRun: vi.fn(),
+  recheckCosAgentCleanup: vi.fn(),
   resolveCosTaskChallenge: vi.fn(),
 }));
 const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
@@ -31,6 +32,27 @@ beforeEach(() => {
 });
 
 describe('TaskItem task source', () => {
+  it.each([
+    ['delivery cleanup', { deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-owner' }, /Cleanup must finish/],
+    ['retry cleanup', { retryPendingCleanup: 'agent-owner' }, /Cleanup must finish/],
+    ['pre-agent progress', { preflight: { requestId: 'demand-1' } }, /Pre-agent progress is updated/],
+  ])('cannot mark %s complete using the status glyph', (_label, metadata, reason) => {
+    const held = { ...task, status: 'in_progress', metadata };
+    render(<MemoryRouter><TaskItem task={held} isSystem waiting onRefresh={vi.fn()} providers={providers} /></MemoryRouter>);
+    const status = screen.getByRole('button', { name: /Status:/ });
+    expect(status).toBeDisabled();
+    expect(screen.getByText(reason)).toBeInTheDocument();
+    fireEvent.click(status);
+    expect(api.updateCosTask).not.toHaveBeenCalled();
+  });
+
+  it('does not show a new agent duration for a completed execution awaiting cleanup', () => {
+    const held = { ...task, status: 'in_progress', metadata: { analysisType: 'security', deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-owner' } };
+    const durations = { 'self-improve:security': { avgDurationMs: 120000, p80DurationMs: 120000, completed: 5, successRate: 100 } };
+    render(<MemoryRouter><TaskItem task={held} isSystem waiting onRefresh={vi.fn()} providers={providers} durations={durations} /></MemoryRouter>);
+    expect(screen.queryByText('~2m')).toBeNull();
+  });
+
   it('explains the budget reset and runs only after explicit confirmation', async () => {
     api.resetSpawnBudgetAndRun.mockResolvedValue({ success: true });
     render(<TaskItem task={task} isSystem onRefresh={vi.fn()} providers={providers} />);

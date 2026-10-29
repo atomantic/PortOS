@@ -53,6 +53,7 @@ import { getActiveApps, getAppTaskTypeOverrides } from './apps.js';
 // The single Priority-0 on-demand loop body, shared with the dequeueNextTask
 // engine in cos.js so the two can no longer drift (#6618).
 import { drainOnDemandRequests } from './onDemandDrain.js';
+import { beginPreflightActivity } from './preflightActivity.js';
 import { admitFeatureAgentTasks, admitIdleReviewTask, countUnregisteredInFlight, isUserTaskRunnableUnattended } from './cosDequeue.js';
 import { spawningTasks } from './agentState.js';
 import { resolveAgentProviderPin } from './appTaskProviderPin.js';
@@ -1093,7 +1094,7 @@ export async function evaluateTasks(options) {
  * @param {Object} options - Completion exclusion and optional app eligibility
  * @returns {Object} Task plus deferred dispatch/card handoff, or a null task
  */
-export async function generateIdleReviewTask(state, { ignoreTaskId = null, isAppEligible = () => true } = {}) {
+export async function generateIdleReviewTask(state, { ignoreTaskId = null, isAppEligible = () => true, onPreflightStart = null } = {}) {
   if (!isImprovementEnabled(state)) {
     emitLog('debug', 'Improvement tasks are disabled');
     return { task: null, pendingPerpetualDispatch: null, preflightCardId: null };
@@ -1123,7 +1124,7 @@ export async function generateIdleReviewTask(state, { ignoreTaskId = null, isApp
         await saveState(s);
       });
 
-      const { task: idleTask, pendingPerpetualDispatch, preflightCardId } = await generateManagedAppImprovementTask(nextApp, state, { ignoreTaskId });
+      const { task: idleTask, pendingPerpetualDispatch, preflightCardId } = await generateManagedAppImprovementTask(nextApp, state, { ignoreTaskId, onPreflightStart });
       // Only bind the active marker once a real task exists.
       if (idleTask) {
         await bindAppReviewAgent(nextApp.id, `idle-review-${Date.now()}`);
@@ -1849,7 +1850,7 @@ export function applyAppWorktreeDefault(metadata, app) {
   }
 }
 
-async function generateManagedAppImprovementTask(app, state, { ignoreTaskId = null } = {}) {
+async function generateManagedAppImprovementTask(app, state, { ignoreTaskId = null, onPreflightStart = null } = {}) {
   const taskSchedule = await import('./taskSchedule.js');
 
   // First, check for any on-demand task requests for this app
@@ -1872,75 +1873,94 @@ async function generateManagedAppImprovementTask(app, state, { ignoreTaskId = nu
   // `params`), forwarded exactly as the on-demand drain forwards them.
   let stolenRunOverrides = null;
   let stolenRequest = null;
+  let endPreflight = () => {};
+  let transferred = false;
 
-  if (appRequests.length > 0) {
-    const request = await taskSchedule.clearOnDemandRequest(appRequests[0].id);
-    if (!request) {
-      // Another drain (or cancellation) owns this receipt. Returning its card
-      // would let the idle tier close the winner's still-running preflight.
-      return { task: null, pendingPerpetualDispatch: null, preflightCardId: null };
+  try {
+    if (appRequests.length > 0) {
+      const { cardIdForRequest, reportPreflightStep } = await import('./preflightTaskCard.js');
+      endPreflight = beginPreflightActivity(cardIdForRequest(appRequests[0]));
+      const request = await taskSchedule.clearOnDemandRequest(appRequests[0].id);
+      if (!request) {
+        // Another drain (or cancellation) owns this receipt. Returning its card
+        // would let the idle tier close the winner's still-running preflight.
+        return { task: null, pendingPerpetualDispatch: null, preflightCardId: null };
+      }
+      stolenRequest = request;
+      targetPullRequest = request.targetPullRequest ?? null;
+      stolenRunOverrides = request.burn?.overrides?.params ?? null;
+      stolenCardId = cardIdForRequest(request);
+      if (stolenCardId && onPreflightStart) {
+        onPreflightStart(stolenCardId, endPreflight);
+        transferred = true;
+      }
+      await reportPreflightStep(stolenCardId, 'prepare');
+      // Only a human "Run" may clear the drain's brakes (park state, dispatch
+      // count); the policy lives in applyOnDemandRunResets so this idle-review
+      // path can't drift from the shared on-demand drain — without it,
+      // a currently drain-capped or parked perpetual type dequeued here stays
+      // capped/parked and the explicit "Run" silently produces no task.
+      await taskSchedule.applyOnDemandRunResets(request, app.id);
+      nextType = request.taskType;
+      selectionReason = 'on-demand';
+      emitLog('info', `Processing on-demand app task request: ${nextType} for ${app.name}`, { requestId: request.id });
+    } else {
+      // Use the schedule service to determine the next task type
+      const nextTypeResult = await taskSchedule.getNextTaskType(app.id);
+
+      if (!nextTypeResult) {
+        emitLog('info', `No app improvement tasks are eligible for ${app.name} based on schedule`);
+        // `stolenCardId`, never a literal null: this branch happens to be the one
+        // where no steal occurred, but a later early return added above it would
+        // strand the card all over again.
+        return { task: null, pendingPerpetualDispatch: null, preflightCardId: stolenCardId };
+      }
+
+      nextType = nextTypeResult.taskType;
+      selectionReason = nextTypeResult.reason;
     }
-    stolenRequest = request;
-    targetPullRequest = request.targetPullRequest ?? null;
-    stolenRunOverrides = request.burn?.overrides?.params ?? null;
-    const { cardIdForRequest } = await import('./preflightTaskCard.js');
-    stolenCardId = cardIdForRequest(request);
-    // Only a human "Run" may clear the drain's brakes (park state, dispatch
-    // count); the policy lives in applyOnDemandRunResets so this idle-review
-    // path can't drift from the shared on-demand drain — without it,
-    // a currently drain-capped or parked perpetual type dequeued here stays
-    // capped/parked and the explicit "Run" silently produces no task.
-    await taskSchedule.applyOnDemandRunResets(request, app.id);
-    nextType = request.taskType;
-    selectionReason = 'on-demand';
-    emitLog('info', `Processing on-demand app task request: ${nextType} for ${app.name}`, { requestId: request.id });
-  } else {
-    // Use the schedule service to determine the next task type
-    const nextTypeResult = await taskSchedule.getNextTaskType(app.id);
 
-    if (!nextTypeResult) {
-      emitLog('info', `No app improvement tasks are eligible for ${app.name} based on schedule`);
-      // `stolenCardId`, never a literal null: this branch happens to be the one
-      // where no steal occurred, but a later early return added above it would
-      // strand the card all over again.
-      return { task: null, pendingPerpetualDispatch: null, preflightCardId: stolenCardId };
+    // Delegate the actual task build to the per-type generator so the dynamic
+    // blocks run on the idle-review path too: pr-watcher's PR poll +
+    // {prData}/{repoFullName}/{defaultBranch} injection, and reference-watch's
+    // {referenceData} injection. Without delegation this path replaced only the
+    // generic placeholders, so a watcher type selected here would spawn a prompt
+    // with the literal {prData}/{referenceData} markers and never poll. The
+    // preparer owns skip cadence and success activity/logging; this caller
+    // records execution only when preparation produces a task.
+    const prepared = await prepareManagedAppImprovementTask(nextType, app, state, {
+      ignoreTaskId,
+      targetPullRequest,
+      onDemand: selectionReason === 'on-demand',
+      runOverrides: stolenRunOverrides,
+      providerOverride: stolenRequest?.providerOverride ?? null,
+      // The deterministic pre-agent work (pr-reviewer's security preflight)
+      // reports into the stolen Run's card as it runs, exactly as it does on the
+      // on-demand drain — this is the whole reason the card is opened early.
+      preflightCardId: stolenCardId
+    });
+    const { task, pendingPerpetualDispatch } = prepared;
+    if (task) await taskSchedule.recordExecution(`task:${nextType}`, app.id);
+    // Idle-review can steal a queued on-demand request for this app. That
+    // request is still a user Run — apply the same consent as Priority 0.
+    if (stolenRequest) {
+      applyOnDemandConsent(task);
+      if (task) task.metadata = { ...(task.metadata || {}), ...onDemandRequestMetadata(stolenRequest) };
     }
-
-    nextType = nextTypeResult.taskType;
-    selectionReason = nextTypeResult.reason;
+    // The card is closed by whoever rules on the task (the spawn tier), not here:
+    // a task this returns can still be refused a slot, and a card closed
+    // `handed-off` would then name an agent that never started.
+    return { task, pendingPerpetualDispatch, preflightCardId: stolenCardId };
+  } catch (error) {
+    if (stolenRequest && stolenCardId) {
+      const { finishPreflightCard } = await import('./preflightTaskCard.js');
+      await finishPreflightCard(stolenCardId, { outcome: 'failed', reason: 'preparation-failed',
+        note: 'Preparation failed before the handoff completed. Check the activity log and run again.' });
+    }
+    throw error;
+  } finally {
+    if (!transferred) endPreflight();
   }
-
-  // Delegate the actual task build to the per-type generator so the dynamic
-  // blocks run on the idle-review path too: pr-watcher's PR poll +
-  // {prData}/{repoFullName}/{defaultBranch} injection, and reference-watch's
-  // {referenceData} injection. Without delegation this path replaced only the
-  // generic placeholders, so a watcher type selected here would spawn a prompt
-  // with the literal {prData}/{referenceData} markers and never poll. The
-  // preparer owns skip cadence and success activity/logging; this caller
-  // records execution only when preparation produces a task.
-  const prepared = await prepareManagedAppImprovementTask(nextType, app, state, {
-    ignoreTaskId,
-    targetPullRequest,
-    onDemand: selectionReason === 'on-demand',
-    runOverrides: stolenRunOverrides,
-    providerOverride: stolenRequest?.providerOverride ?? null,
-    // The deterministic pre-agent work (pr-reviewer's security preflight)
-    // reports into the stolen Run's card as it runs, exactly as it does on the
-    // on-demand drain — this is the whole reason the card is opened early.
-    preflightCardId: stolenCardId
-  });
-  const { task, pendingPerpetualDispatch } = prepared;
-  if (task) await taskSchedule.recordExecution(`task:${nextType}`, app.id);
-  // Idle-review can steal a queued on-demand request for this app. That
-  // request is still a user Run — apply the same consent as Priority 0.
-  if (stolenRequest) {
-    applyOnDemandConsent(task);
-    if (task) task.metadata = { ...(task.metadata || {}), ...onDemandRequestMetadata(stolenRequest) };
-  }
-  // The card is closed by whoever rules on the task (the spawn tier), not here:
-  // a task this returns can still be refused a slot, and a card closed
-  // `handed-off` would then name an agent that never started.
-  return { task, pendingPerpetualDispatch, preflightCardId: stolenCardId };
 }
 
 // How many CONSECUTIVE transient skips (across evaluations) applyPerpetualWorkGate

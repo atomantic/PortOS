@@ -57,6 +57,7 @@ vi.mock('./cosLocalEndpointSlots.js', async (importOriginal) => ({
 const { forceSpawnTask } = await import('./cos.js');
 const { cosEvents } = await import('./cosEvents.js');
 const { cleanupZombieAgents } = await import('./cosAgentLifecycle.js');
+const { getTaskById } = await import('./cosTaskStore.js');
 const { setUseRunner, useRunner, activeAgents } = await import('./agentState.js');
 
 const originalUseRunner = useRunner;
@@ -124,5 +125,14 @@ describe('forceSpawnTask — stale running holder (#14039)', () => {
     expect(result.error).toBe(`Agent ${HOLDER_ID} is already running this task`);
     expect(cleanupZombieAgents).not.toHaveBeenCalled();
     expect(taskReadyEmits(emit)).toEqual([]);
+  });
+
+  it('refuses to spawn a preflight progress card even with an explicit budget reset', async () => {
+    vi.mocked(getTaskById).mockResolvedValueOnce({ id: 'preflight-demand-1', status: 'in_progress',
+      metadata: { preflight: { requestId: 'demand-1' } } });
+    const result = await forceSpawnTask('preflight-demand-1', { resetSpawnBudget: true });
+    expect(result.error).toMatch(/preflight progress cards cannot be spawned/i);
+    expect(taskReadyEmits(emit)).toEqual([]);
+    expect(cleanupZombieAgents).not.toHaveBeenCalled();
   });
 });

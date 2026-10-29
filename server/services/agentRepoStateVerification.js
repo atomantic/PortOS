@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from 'node:util';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { outsideGitMutationLifetime } from '../lib/gitMutationLifetime.js';
 import { retirementCheckoutIdentityFromPointer } from '../lib/retirementCheckoutObservation.js';
 import { createSingleFlight } from '../lib/singleFlight.js';
@@ -6,7 +7,7 @@ import { hasClaimFlowContract } from '../lib/claimFlowTaskTypes.js';
 import { isHumanClaimWorktree, worktreeAgentId } from '../lib/worktreeOwnership.js';
 import { readGitCommonDirectory } from '../lib/gitRepositoryIdentity.js';
 import { recoverCompletionTaskHandoff, matchesCompletionTaskDispatch } from './agentCompletionTaskHandoff.js';
-import { withDeliveryActivity, COMPLETION_RECOVERY_BATCH_SIZE } from './agentDeliveryActivity.js';
+import { getDeliveryActivity, withDeliveryActivity, COMPLETION_RECOVERY_BATCH_SIZE } from './agentDeliveryActivity.js';
 import { MANAGED_WORKTREE_CLEANUP_CONTRACT } from '../lib/mergeGateContract.js';
 import { processAuditFingerprint } from '../lib/persistentMindProcessAudit.js';
 import { completionSentinelPresent } from './agentCompletionSentinel.js';
@@ -280,7 +281,19 @@ async function probeRepoState({ sourceWorkspace, branchName, worktreePath, branc
  * @returns {Promise<{verified: boolean, skipReason: string|null, issues: Array<{code: string, message: string}>, observed: object|null, recoveryTaskId: string|null}>}
  */
 const verificationRuns = new Map();
+// Events emitted by an explicit cleanup-only recheck must not start another
+// completion replay. Unrelated events retain their normal wake behaviour.
+const manualCleanupContext = new AsyncLocalStorage();
 const CLAIM_OWNER_HOLDS = new Set(['claim-owner-active', 'claim-owner-ambiguous']);
+const MANUAL_COMPLETION_STAGES = ['sentinel', 'jira', 'notification', 'pipeline', 'creative', 'worktree', 'report'];
+
+function manualCompletionReady(agent) {
+  const receipt = agent?.metadata?.completionCleanup;
+  const stages = receipt?.stages;
+  return receipt?.version === 1 && receipt.status === 'completed' && stages
+    && MANUAL_COMPLETION_STAGES.every(key => stages[key]?.status === 'done')
+    && Object.values(stages).every(stage => stage?.status === 'done');
+}
 
 async function notifyDeliveredSwarmCleanup(agentId, { notify = true } = {}) {
   const [{ getAgentRecord }, { getTaskById }, { getInstanceId }, contract] = await Promise.all([
@@ -367,7 +380,11 @@ export async function verifyAgentRepoState(input) {
   const swarmCleanup = cleanupPending && input.agentState?.metadata?.configClaimFlow === true
     && input.agentState.metadata.isWorktree === false;
   const verify = async () => {
-    if (cleanupPending && input.agentState?.metadata?.isWorktree === false) {
+    if (input.manualCleanupOnly) {
+      const reason = await input.recheckCleanup().then(() => null, error => error.message);
+      if (reason) return skipped(reason);
+    }
+    if (cleanupPending && !input.manualCleanupOnly && input.agentState?.metadata?.isWorktree === false) {
       const { recoverHistoricalClaimCleanup } = await import('./historicalClaimCleanup.js');
       const historical = await recoverHistoricalClaimCleanup(input.agentState, verifyRunBranches);
       if (historical) return { ...historical, historicalCleanup: true };
@@ -386,13 +403,15 @@ export async function verifyAgentRepoState(input) {
       const { getTaskById } = await import('./cosTaskStore.js');
       const original = await getTaskById(input.task.id);
       if (!original) {
+        if (input.manualCleanupOnly) return skipped('cleanup-owner-changed');
         const snapshot = await readAbsentTaskSnapshot(input.agentState);
         if (!snapshot) return skipped('cleanup-task-unavailable');
         input = { ...input, task: snapshot, prExpected: input.prExpected || isTruthyMeta(snapshot.metadata?.openPR), originTaskAbsent: true };
         return verifyRunBranches({ ...input, success: true, cleanupWarnings: [] });
       }
-      const current = await recoverCompletionTaskHandoff(input.agentState) || original;
-      if ((current.status !== 'in_progress' && !exhaustedCleanupOwner(current, input.agentState)) || current.metadata?.deliveryRecovery !== 'cleanup'
+      const current = input.manualCleanupOnly ? original : await recoverCompletionTaskHandoff(input.agentState) || original;
+      if ((input.manualCleanupOnly && !isDeepStrictEqual(current, input.task))
+        || (current.status !== 'in_progress' && !exhaustedCleanupOwner(current, input.agentState)) || current.metadata?.deliveryRecovery !== 'cleanup'
         || current.metadata.deliveryRecoveryAgentId !== input.agentId) {
         return skipped('cleanup-owner-changed');
       }
@@ -403,7 +422,7 @@ export async function verifyAgentRepoState(input) {
       ...(cleanupPending ? { cleanupWarnings: [] } : {}) });
   };
   const run = withDeliveryActivity(input.agentId, 'Checking delivery and repository preservation', async () => {
-    if (swarmCleanup) {
+    if (swarmCleanup && !input.manualCleanupOnly) {
       // Persist delivery proof before cleanup can settle the task, but let the
       // first retirement pass finish before a new picker enters the repository.
       await notifyDeliveredSwarmCleanup(input.agentId, { notify: false }).catch(error => {
@@ -441,7 +460,7 @@ export async function verifyAgentRepoState(input) {
         return issue && disposition.issues?.some(row => row.issue === Number(issue) && row.disposition === 'operator-blocked');
       })) unsupported = null;
     }
-    if (cleanupPending && unsupported) {
+    if (cleanupPending && unsupported && !input.manualCleanupOnly) {
       // An exhausted task gets no new recovery dispatch or refunded budget.
       if (input.task.status === 'blocked') return result;
       const { resolveUndeliveredTaskUpdate } = await import('./agentErrorAnalysis.js');
@@ -459,16 +478,29 @@ export async function verifyAgentRepoState(input) {
       return { ...result, skipReason: 'cleanup-transferred-to-recovery' };
     }
     if (cleanupPending && result.verified) {
+      if (input.manualCleanupOnly) {
+        const reason = await input.recheckCleanup().then(() => null, error => error.message);
+        if (reason) return { ...result, verified: false, skipReason: reason };
+      }
       const { recordCompletionCleanup } = await import('./cosAgentLifecycle.js');
       if (input.agentState.metadata?.completionCleanup?.version === 1) {
         const recorded = await recordCompletionCleanup(input.agentId, input.agentState.startedAt, {
           stages: { worktree: { status: 'done', retryable: false, value: [], verifiedBy: 'repository-state-verification' } } });
         if (!recorded) return { ...result, verified: false, skipReason: 'cleanup-ledger-settlement-unverified' };
       }
+      if (input.manualCleanupOnly) {
+        const reason = await input.recheckCleanup().then(() => null, error => error.message);
+        if (reason) return { ...result, verified: false, skipReason: reason };
+      }
       const settlementFence = input.task.status === 'blocked' ? {
         expectedStatus: 'blocked', expectedTask: { description: input.task.description, priority: input.task.priority, metadata: input.task.metadata },
         recoveryOwner: { id: input.agentId, startedAt: input.agentState.startedAt }, preserveRetryBudget: true,
-      } : { expectedStatus: 'in_progress', expectedMetadata: { deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: input.agentId } };
+      } : { expectedStatus: 'in_progress', expectedMetadata: { deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: input.agentId },
+        // getTaskById projects the queue source into taskType; the stored row
+        // may have a different or absent value, so fence its remaining fields.
+        ...(input.manualCleanupOnly && { suppressCompletionWake: true,
+          recoveryOwner: { id: input.agentId, startedAt: input.agentState.startedAt, requireInactive: true },
+          expectedTask: Object.fromEntries(Object.entries(input.task).filter(([key]) => key !== 'taskType')) }) };
       const updated = await updateTask(input.task.id, { status: 'completed', metadata: {
         deliveryRecovery: undefined, deliveryRecoveryAgentId: undefined,
         taskOutcome: { status: 'completed', reason: 'Delivery and repository cleanup were verified by completion recovery.' },
@@ -488,7 +520,7 @@ export async function verifyAgentRepoState(input) {
       await recordRepoStateVerification(input.agentId, { status: settled ? 'completed' : 'pending',
         checkedAt: new Date().toISOString(), reasons: [...new Set(outcomes.map(item => item.skipReason).filter(Boolean))] });
     }
-    if (swarmCleanup) {
+    if (swarmCleanup && !input.manualCleanupOnly) {
       await notifyDeliveredSwarmCleanup(input.agentId).catch(error => {
         emitLog('warn', `Swarm delivery verification deferred: ${error.message}`, { agentId: input.agentId });
       });
@@ -497,6 +529,33 @@ export async function verifyAgentRepoState(input) {
   }).finally(() => verificationRuns.delete(input.agentId));
   verificationRuns.set(input.agentId, run);
   return run;
+}
+
+/** Recheck one current cleanup owner without starting another provider task. */
+export async function recheckAgentCleanup(agentId, taskId) {
+  const [{ getAgentRecord }, { getTaskById }] = await Promise.all([
+    import('./cosAgentLifecycle.js'), import('./cosTaskStore.js'),
+  ]);
+  const agent = await getAgentRecord(agentId);
+  const task = await getTaskById(taskId);
+  if (!agent || !task || agent.taskId !== taskId || agent.status !== 'completed'
+    || agent.result?.cleanupPending !== true || task.status !== 'in_progress'
+    || task.metadata?.deliveryRecovery !== 'cleanup' || task.metadata.deliveryRecoveryAgentId !== agentId) {
+    return { ok: false, reason: 'cleanup-owner-changed' };
+  }
+  if (verificationRuns.has(agentId) || getDeliveryActivity(agentId)) return { ok: false, reason: 'cleanup-already-running' };
+  if (!manualCompletionReady(agent)) return { ok: true, verified: false, reasons: ['completion-stages-pending'] };
+  const recheckCleanup = async () => {
+    const [currentTask, currentAgent] = await Promise.all([getTaskById(taskId), getAgentRecord(agentId)]);
+    if (!isDeepStrictEqual(currentTask, task) || currentAgent?.status !== 'completed' || currentAgent.result?.cleanupPending !== true
+      || currentAgent.taskId !== taskId || currentAgent.startedAt !== agent.startedAt) throw new Error('cleanup-owner-changed');
+    if (!manualCompletionReady(currentAgent)) throw new Error('completion-stages-pending');
+  };
+  const result = await manualCleanupContext.run(true, () => verifyAgentRepoState({ agentId, agentState: agent, task, success: agent.result.success === true,
+    prExpected: isTruthyMeta(task.metadata?.openPR), manualCleanupOnly: true, recheckCleanup }));
+  if (result.skipReason === 'cleanup-owner-changed') return { ok: false, reason: result.skipReason };
+  const reasons = [...new Set([result.skipReason, ...(result.branches || []).map(row => row.skipReason)].filter(Boolean))];
+  return { ok: true, verified: result.verified === true, reasons };
 }
 
 /** Wake only this terminal job after its execution entry was released. The
@@ -849,11 +908,13 @@ function wakeClaimOwnershipHolds(ownerId, repository) {
 /** Bind the deterministic receipt handoff, including duplicate completion replay. */
 export function bindCompletionRetirementEvents(events) {
   const onChange = data => {
-    if (data?.task?.status !== 'completed' || !data.task.metadata?.reviewLoopFollowUp) return;
+    if (data?.suppressCompletionWake || manualCleanupContext.getStore()
+      || data?.task?.status !== 'completed' || !data.task.metadata?.reviewLoopFollowUp) return;
     return resumeCompletedDeliveryParent(data.task)
       .catch(error => emitLog('warn', `Parent completion deferred after delivery follow-up: ${error.message}`, { taskId: data.task.id }));
   };
   const onRetirement = async receipt => {
+    if (manualCleanupContext.getStore()) return;
     if (!receipt?.appId || !receipt.path || !receipt.branch || !receipt.checkoutIdentity) return;
     const [{ getAppById }, { readBranchCompletionPolicies }] = await Promise.all([
       import('./apps.js'), import('./branchCompletionPolicy.js'),
@@ -888,11 +949,12 @@ export function bindCompletionRetirementEvents(events) {
   const onReceipt = receipt => onRetirement(receipt)
     .catch(error => emitLog('warn', `Completion deferred after retirement receipt: ${error.message}`, { appId: receipt?.appId }));
   const onCapture = data => {
-    if (typeof data?.agentId !== 'string' || !data.agentId) return;
+    if (manualCleanupContext.getStore() || typeof data?.agentId !== 'string' || !data.agentId) return;
     return resumeAgentCompletionRetirement(data.agentId)
       .catch(error => emitLog('warn', `Completion deferred after checkout capture: ${error.message}`, { agentId: data.agentId }));
   };
   const onClaimOwnership = data => {
+    if (manualCleanupContext.getStore()) return;
     const ownerId = data?.agentId || data?.id;
     if (typeof ownerId !== 'string' || !ownerId) return;
     const repository = data?.repository || data?.sourceWorkspace || data?.metadata?.sourceWorkspace || data?.workspacePath || data?.metadata?.workspacePath;
@@ -1274,7 +1336,7 @@ async function verifyRunBranches(input) {
     issues: results.flatMap(result => result.issues), skipReason: null };
 }
 
-async function verifyAgentBranchState({ agentId, task, agentState, success, prExpected = false, cleanupWarnings = [], originTaskAbsent = false, recheckCleanup, recordCleanup }) {
+async function verifyAgentBranchState({ agentId, task, agentState, success, prExpected = false, cleanupWarnings = [], originTaskAbsent = false, recheckCleanup, recordCleanup, manualCleanupOnly = false }) {
   const metadata = agentState?.metadata || {};
   // Claim prompts own publication even when the generic openPR toggle is off.
   // Resumed claims are already worktree runs, so they bypass the swarm loop
@@ -1362,11 +1424,12 @@ async function verifyAgentBranchState({ agentId, task, agentState, success, prEx
 
   if (resolvePrCompletion(task?.metadata) === PR_COMPLETIONS.LEAVE_OPEN) {
     emitLog('warn', `Review-only branch ${branchName} needs attention; automatic cleanup and recovery suppressed`, { agentId, branchName });
+    if (manualCleanupOnly) return blockWith('leave-open-cleanup-unsupported', { issues, observed });
     return skipped(null, { issues, observed });
   }
 
   return settleDivergedBranch({ agentId, task, agentState, app, appId, metadata, sourceWorkspace, branchName, worktreePath,
-    observed, issues, record, blockWith, recheckCleanup });
+    observed, issues, record, blockWith, recheckCleanup, manualCleanupOnly });
 }
 
 /**
@@ -1480,6 +1543,7 @@ async function settleDivergedBranch(ctx) {
     return held;
   }
   if (prepared.integrated) return retireIntegratedCheckout({ ...ctx, appId: prepared.appId }, prepared.retirement);
+  if (ctx.manualCleanupOnly) return blockWith('cleanup-review-required', { issues, observed });
   if (ctx.task?.status === 'blocked' && ctx.agentState?.result?.cleanupPending === true) {
     return ctx.blockWith('cleanup-budget-exhausted', { issues, observed });
   }
@@ -1490,18 +1554,20 @@ async function settleDivergedBranch(ctx) {
   return fileDivergenceRecovery({ ...ctx, appId: prepared.appId }, prepared.retirement);
 }
 
-async function retireIntegratedCheckout({ appId, observed, issues, record, blockWith, recheckCleanup, metadata, sourceWorkspace, branchName, worktreePath }, retirement) {
+async function retireIntegratedCheckout({ appId, observed, issues, record, blockWith, recheckCleanup, manualCleanupOnly, metadata, sourceWorkspace, branchName, worktreePath }, retirement) {
   const { retireInventoriedCheckout } = await import('./heldCheckoutRecovery.js');
   const { assertAutomaticRetirementAllowed } = await import('./branchReconcileRetirement.js');
   const result = await retireInventoriedCheckout({ appId, release: retirement.release,
     review: { prUrl: retirement.prUrl, digest: retirement.digest, acceptSuperseded: false } }, { beforeMutation: async () => {
-      await assertAutomaticRetirementAllowed();
+      // An explicit host-authorized recheck is not unattended daemon work.
+      // It still goes through all ownership, review and retirement gates.
+      if (!manualCleanupOnly) await assertAutomaticRetirementAllowed();
       await recheckCleanup?.();
       if (recheckCleanup) {
         const hold = await resolveCheckoutIncarnation({ metadata, sourceWorkspace, branchName, worktreePath });
         if (hold) throw new Error(hold.reason);
       }
-    } }).catch(error => ({ reason: (error.message.startsWith('historical-cleanup-') || ['daemon-stopped', 'automatic-retirement-disabled', 'checkout-incarnation-changed', 'claim-owner-active', 'claim-owner-ambiguous'].includes(error.message)) ? error.message : 'retirement-outcome-uncertain' }));
+    } }).catch(error => ({ reason: (error.message.startsWith('historical-cleanup-') || ['daemon-stopped', 'automatic-retirement-disabled', 'checkout-incarnation-changed', 'claim-owner-active', 'claim-owner-ambiguous', 'cleanup-owner-changed', 'completion-stages-pending'].includes(error.message)) ? error.message : 'retirement-outcome-uncertain' }));
   if (!result.ok || result.branchDeleted !== true || (recheckCleanup && result.archiveDir != null)) {
     return blockWith(result.reason || result.branchRetainedReason || 'retirement-receipt-unverified', { issues, observed });
   }

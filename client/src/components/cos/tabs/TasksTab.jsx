@@ -26,6 +26,8 @@ import { MicroGlyph, SchematicLabel } from '../../micrographics';
 import useAssignableInstances from '../../../hooks/useAssignableInstances';
 import { formatCount } from '../../../utils/formatters';
 import { runningAgentsByTaskId, isSpawningTask } from '../../../lib/cosSpawnWindow';
+import { retryHoldOwnerId } from '../../../../../server/lib/taskRetryHold.js';
+import { isTruthyMeta } from '../../../../../server/lib/metadataFlags.js';
 import BrailleSpinner from '../../BrailleSpinner';
 
 // Maps a task-section status → micrographic glyph spec. Animation only on
@@ -33,6 +35,7 @@ import BrailleSpinner from '../../BrailleSpinner';
 const SECTION_GLYPH = {
   pending:    { variant: 'pulse-dot',   state: 'warn',    animated: false },
   active:     { variant: 'scan',        state: 'accent',  animated: true  },
+  unconfirmed:{ variant: 'warning-tri', state: 'warn',    animated: false },
   blocked:    { variant: 'warning-tri', state: 'error',   animated: false },
   completed:  { variant: 'check-tick',  state: 'success', animated: false },
 };
@@ -43,7 +46,30 @@ function SectionGlyph({ status }) {
   return <MicroGlyph variant={spec.variant} state={spec.state} animated={spec.animated} size={13} />;
 }
 
-export default function TasksTab({ completedRevision = 0, tasks, agents = [], liveOutputs = {}, onRefresh, onTaskAdded, onTaskUnblocked, onTaskDeleted, providers, providersLoaded, apps }) {
+const SECTION_LABELS = { pending: 'Pending', active: 'Active', unconfirmed: 'Activity unconfirmed', blocked: 'Blocked', completed: 'Completed' };
+const SECTION_STYLES = {
+  pending: { text: 'text-port-warning', background: 'bg-port-warning/10' },
+  active: { text: 'text-port-accent', background: 'bg-port-accent/10' },
+  unconfirmed: { text: 'text-port-warning', background: 'bg-port-warning/10' },
+  blocked: { text: 'text-port-error', background: 'bg-port-error/10' },
+  completed: { text: 'text-port-success', background: 'bg-port-success/10' },
+};
+
+function QueueSectionHeader({ section, count, expanded, onToggle }) {
+  const style = SECTION_STYLES[section];
+  const label = <span className={`text-sm font-medium ${style.text} flex items-center gap-2`}>
+    {section === 'completed' && (expanded ? <ChevronDown size={14} aria-hidden="true" /> : <ChevronRight size={14} aria-hidden="true" />)}
+    <SectionGlyph status={section} />
+    {SECTION_LABELS[section]} ({count})
+  </span>;
+  return <div className={`bg-port-card border border-port-border rounded-lg ${style.background}`}>
+    {section === 'completed' ? <button type="button" onClick={onToggle} aria-expanded={expanded}
+      className="w-full px-3 py-2 flex items-center justify-between">{label}</button>
+      : <div className="px-3 py-2 flex items-center justify-between">{label}</div>}
+  </div>;
+}
+
+export default function TasksTab({ completedRevision = 0, tasks, agents = [], agentsLoaded = true, agentsError = null, liveOutputs = {}, onRefresh, onTaskAdded, onTaskUnblocked, onTaskDeleted, providers, providersLoaded, apps }) {
   const [searchParams] = useSearchParams();
   const [userTasksLocal, setUserTasksLocal] = useState([]);
   const [durations, setDurations] = useState(null);
@@ -117,15 +143,49 @@ export default function TasksTab({ completedRevision = 0, tasks, agents = [], li
     [runningAgentByTaskId]
   );
 
+  const taskAgent = useCallback((task) => {
+    const running = runningAgentByTaskId.get(task.id);
+    if (running) return running;
+    const owners = [task.metadata?.deliveryRecoveryAgentId, retryHoldOwnerId(task.metadata)]
+      .map(ownerId => agentById.get(ownerId)).filter(owner => owner?.taskId === task.id);
+    return owners.find(owner => owner.deliveryActivity) || owners[0] || null;
+  }, [runningAgentByTaskId, agentById]);
+  const isWorking = useCallback((task) => {
+    if (agentsLoaded && !agentsError && isSpawning(task)) return true;
+    if (task.status !== 'in_progress') return false;
+    if (task.preflightActive === true) return true;
+    if (!agentsLoaded || agentsError) return false;
+    const agent = taskAgent(task);
+    return agent?.status === 'running' || Boolean(agent?.taskId === task.id && agent?.deliveryActivity);
+  }, [agentsError, agentsLoaded, isSpawning, taskAgent]);
+  const selfInstanceId = assignableInstances?.find(instance => instance.isSelf)?.instanceId;
+  const unconfirmedReason = useCallback((task) => {
+    if (task.status !== 'in_progress' || isWorking(task)) return null;
+    if (task.metadata?.preflight?.requestId) {
+      if (isTruthyMeta(task.metadata.machineLocal) && task.preflightActive === false) return null;
+      return 'This shared pre-agent card may be running on another instance; current activity is unconfirmed.';
+    }
+    if (agentsError) return 'Agent status could not be loaded; current activity is unconfirmed.';
+    if (!agentsLoaded) return 'Agent status is loading; current activity is unconfirmed.';
+    if (task.metadata?.claimedBy && task.metadata.claimedBy !== selfInstanceId) {
+      return selfInstanceId ? 'A different instance claimed this task; its current activity is unconfirmed here.'
+        : 'The owner instance could not be identified; current activity is unconfirmed.';
+    }
+    return null;
+  }, [agentsError, agentsLoaded, isWorking, selfInstanceId]);
+  const isWaiting = useCallback((task) => ['pending', 'in_progress'].includes(task.status)
+    && !isWorking(task) && !unconfirmedReason(task), [isWorking, unconfirmedReason]);
+
   // Split tasks by status for system tasks
   const pendingSystemTasks = useMemo(() =>
-    cosTasks.filter(t => t.status === 'pending' && !isSpawning(t)),
-    [cosTasks, isSpawning]
+    cosTasks.filter(isWaiting),
+    [cosTasks, isWaiting]
   );
   const activeSystemTasks = useMemo(() =>
-    cosTasks.filter(t => t.status === 'in_progress' || isSpawning(t)),
-    [cosTasks, isSpawning]
+    cosTasks.filter(isWorking),
+    [cosTasks, isWorking]
   );
+  const unconfirmedSystemTasks = useMemo(() => cosTasks.filter(unconfirmedReason), [cosTasks, unconfirmedReason]);
   const blockedSystemTasks = useMemo(() =>
     cosTasks.filter(t => t.status === 'blocked'),
     [cosTasks]
@@ -137,13 +197,14 @@ export default function TasksTab({ completedRevision = 0, tasks, agents = [], li
 
   // Split user tasks by status (only pending tasks are sortable)
   const pendingUserTasksLocal = useMemo(() =>
-    userTasksLocal.filter(t => t.status === 'pending' && !isSpawning(t)),
-    [userTasksLocal, isSpawning]
+    userTasksLocal.filter(isWaiting),
+    [userTasksLocal, isWaiting]
   );
   const activeUserTasksLocal = useMemo(() =>
-    userTasksLocal.filter(t => t.status === 'in_progress' || isSpawning(t)),
-    [userTasksLocal, isSpawning]
+    userTasksLocal.filter(isWorking),
+    [userTasksLocal, isWorking]
   );
+  const unconfirmedUserTasksLocal = useMemo(() => userTasksLocal.filter(unconfirmedReason), [userTasksLocal, unconfirmedReason]);
   const blockedUserTasksLocal = useMemo(() =>
     userTasksLocal.filter(t => t.status === 'blocked'),
     [userTasksLocal]
@@ -155,7 +216,7 @@ export default function TasksTab({ completedRevision = 0, tasks, agents = [], li
 
   // Memoize sortable item IDs for DndContext (only pending tasks)
   const sortableIds = useMemo(() =>
-    pendingUserTasksLocal.map(t => t.id),
+    pendingUserTasksLocal.filter(t => t.status === 'pending').map(t => t.id),
     [pendingUserTasksLocal]
   );
 
@@ -243,6 +304,49 @@ export default function TasksTab({ completedRevision = 0, tasks, agents = [], li
   const isCosLoading = tasks?.cos == null;
   const isQueueLoading = isUserLoading || isCosLoading;
 
+  // Keep every row under one keyed parent while its section changes. A
+  // cleanup heartbeat can otherwise unmount the editor and discard a draft.
+  const renderQueueRows = (isSystem) => {
+    const source = isSystem ? 'internal' : 'user';
+    const completedCount = isSystem ? tasks.cos?.completedCount : tasks.user?.completedCount;
+    const completed = isSystem ? completedSystemTasks : completedUserTasksLocal;
+    const expanded = isSystem ? showCompletedSystemTasks : showCompletedUserTasks;
+    const history = isSystem ? systemHistory : userHistory;
+    const toggleCompleted = isSystem ? () => setShowCompletedSystemTasks(!expanded) : () => setShowCompletedUserTasks(!expanded);
+    const sections = [
+      ['pending', isSystem ? pendingSystemTasks : pendingUserTasksLocal],
+      ['active', isSystem ? activeSystemTasks : activeUserTasksLocal],
+      ['unconfirmed', isSystem ? unconfirmedSystemTasks : unconfirmedUserTasksLocal],
+      ['blocked', isSystem ? blockedSystemTasks : blockedUserTasksLocal],
+      ['completed', completed],
+    ];
+    const entries = sections.flatMap(([section, rows]) => {
+      const count = section === 'completed' ? completedCount ?? rows.length : rows.length;
+      if (!count) return [];
+      return [{ kind: 'header', section, count }, ...rows.map(task => ({ kind: 'task', section, task })),
+        ...(section === 'completed' && expanded && completedCount != null ? [{ kind: 'footer', section }] : [])];
+    });
+    return <div className="space-y-1.5">{entries.map(entry => {
+      if (entry.kind === 'header') return <QueueSectionHeader key={`section:${entry.section}`} section={entry.section}
+        count={entry.count} expanded={expanded} onToggle={toggleCompleted} />;
+      if (entry.kind === 'footer') return <InfiniteScrollFooter key="history-footer" hasMore={history.hasMore} loading={history.loading}
+        error={history.error} onLoadMore={history.loadMore} />;
+      const { task, section } = entry;
+      const spawning = agentsLoaded && !agentsError && isSpawning(task);
+      const agent = section !== 'unconfirmed' && (task.status === 'in_progress' || spawning) ? taskAgent(task) : null;
+      const props = { task, agent, spawning, liveOutput: liveOutputs[runningAgentByTaskId.get(task.id)?.id],
+        waiting: section === 'pending' && task.status === 'in_progress',
+        unconfirmed: section === 'unconfirmed' ? unconfirmedReason(task) : null,
+        selected: isTaskSelected(task, source), onRefresh: section === 'completed' ? refreshHistory : onRefresh,
+        onTaskUnblocked, onTaskDeleted: handleTaskDeleted, providers, providersLoaded, durations, apps, instances: assignableInstances };
+      const hidden = section === 'completed' && !expanded;
+      return isSystem
+        ? <div key={`task:${task.id}`} data-task-group={section} hidden={hidden}><TaskItem {...props} isSystem /></div>
+        : <SortableTaskItem key={`task:${task.id}`} {...props} group={section} hidden={hidden}
+          sortable={section === 'pending' && task.status === 'pending'} />;
+    })}</div>;
+  };
+
 
   return (
     <div className="space-y-6">
@@ -259,6 +363,7 @@ export default function TasksTab({ completedRevision = 0, tasks, agents = [], li
             <>
               {formatCount(pendingUserTasksLocal.length + pendingSystemTasks.length)} pending
               {' · '}{formatCount(activeUserTasksLocal.length + activeSystemTasks.length)} active
+              {(unconfirmedUserTasksLocal.length + unconfirmedSystemTasks.length) > 0 && <> · {formatCount(unconfirmedUserTasksLocal.length + unconfirmedSystemTasks.length)} activity unconfirmed</>}
               {' · '}{formatCount(blockedUserTasksLocal.length + blockedSystemTasks.length)} blocked
             </>
           )}
@@ -271,103 +376,17 @@ export default function TasksTab({ completedRevision = 0, tasks, agents = [], li
           <div className="relative bg-port-card border border-port-border rounded-lg p-6 text-center text-gray-400">
             <BrailleSpinner text="Loading task queue…" />
           </div>
-        ) : pendingUserTasksLocal.length === 0 && activeUserTasksLocal.length === 0 && blockedUserTasksLocal.length === 0 && (tasks.user?.completedCount ?? completedUserTasksLocal.length) === 0 ? (
+        ) : pendingUserTasksLocal.length === 0 && activeUserTasksLocal.length === 0 && unconfirmedUserTasksLocal.length === 0 && blockedUserTasksLocal.length === 0 && (tasks.user?.completedCount ?? completedUserTasksLocal.length) === 0 ? (
           <div className="relative bg-port-card border border-port-border rounded-lg p-6 text-center text-gray-500">
             <SchematicLabel module="USER" status="EMPTY" glyph="bracket-pair" state="idle" variant="tab" />
             No user tasks. Add one above.
           </div>
         ) : (
-          <div className="space-y-3">
-            {/* Pending Section */}
-            {pendingUserTasksLocal.length > 0 && (
-              <div className="bg-port-card border border-port-border rounded-lg overflow-hidden">
-                <div className="px-3 py-2 bg-port-warning/10 border-b border-port-border flex items-center justify-between">
-                  <span className="text-sm font-medium text-port-warning flex items-center gap-2">
-                    <SectionGlyph status="pending" />
-                    Pending ({pendingUserTasksLocal.length})
-                  </span>
-                </div>
-                <div className="p-2">
-                  <DndContext
-                    sensors={sensors}
-                    collisionDetection={closestCenter}
-                    onDragEnd={handleDragEnd}
-                  >
-                    <SortableContext
-                      items={sortableIds}
-                      strategy={verticalListSortingStrategy}
-                    >
-                      <div className="space-y-1.5">
-                        {pendingUserTasksLocal.map(task => (
-                          <SortableTaskItem key={task.id} task={task} selected={isTaskSelected(task, 'user')} onRefresh={onRefresh} onTaskUnblocked={onTaskUnblocked} onTaskDeleted={handleTaskDeleted} providers={providers} providersLoaded={providersLoaded} durations={durations} apps={apps} instances={assignableInstances} />
-                        ))}
-                      </div>
-                    </SortableContext>
-                  </DndContext>
-                </div>
-              </div>
-            )}
-
-            {/* Active Section */}
-            {activeUserTasksLocal.length > 0 && (
-              <div className="bg-port-card border border-port-border rounded-lg overflow-hidden">
-                <div className="px-3 py-2 bg-port-accent/10 border-b border-port-border flex items-center justify-between">
-                  <span className="text-sm font-medium text-port-accent flex items-center gap-2">
-                    <SectionGlyph status="active" />
-                    Active ({activeUserTasksLocal.length})
-                  </span>
-                </div>
-                <div className="p-2 space-y-1.5">
-                  {activeUserTasksLocal.map(task => (
-                    <TaskItem key={task.id} task={task} agent={runningAgentByTaskId.get(task.id) || agentById.get(task.metadata?.deliveryRecoveryAgentId)} liveOutput={liveOutputs[runningAgentByTaskId.get(task.id)?.id]} spawning={isSpawning(task)} selected={isTaskSelected(task, 'user')} onRefresh={onRefresh} onTaskUnblocked={onTaskUnblocked} onTaskDeleted={handleTaskDeleted} providers={providers} providersLoaded={providersLoaded} durations={durations} apps={apps} instances={assignableInstances} />
-                  ))}
-                </div>
-              </div>
-            )}
-
-
-            {/* Blocked Section */}
-            {blockedUserTasksLocal.length > 0 && (
-              <div className="bg-port-card border border-port-border rounded-lg overflow-hidden">
-                <div className="px-3 py-2 bg-port-error/10 border-b border-port-border flex items-center justify-between">
-                  <span className="text-sm font-medium text-port-error flex items-center gap-2">
-                    <SectionGlyph status="blocked" />
-                    Blocked ({blockedUserTasksLocal.length})
-                  </span>
-                </div>
-                <div className="p-2 space-y-1.5">
-                  {blockedUserTasksLocal.map(task => (
-                    <TaskItem key={task.id} task={task} selected={isTaskSelected(task, 'user')} onRefresh={onRefresh} onTaskUnblocked={onTaskUnblocked} onTaskDeleted={handleTaskDeleted} providers={providers} providersLoaded={providersLoaded} durations={durations} apps={apps} instances={assignableInstances} />
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Completed Section - Collapsible */}
-            {(tasks.user?.completedCount ?? completedUserTasksLocal.length) > 0 && (
-              <div className="bg-port-card border border-port-border rounded-lg overflow-hidden">
-                <button
-                  onClick={() => setShowCompletedUserTasks(!showCompletedUserTasks)}
-                  className="w-full px-3 py-2 bg-port-success/10 border-b border-port-border flex items-center justify-between hover:bg-port-success/20 transition-colors"
-                  aria-expanded={showCompletedUserTasks}
-                >
-                  <span className="text-sm font-medium text-port-success flex items-center gap-2">
-                    {showCompletedUserTasks ? <ChevronDown size={14} aria-hidden="true" /> : <ChevronRight size={14} aria-hidden="true" />}
-                    <SectionGlyph status="completed" />
-                    Completed ({tasks.user?.completedCount ?? completedUserTasksLocal.length})
-                  </span>
-                </button>
-                {showCompletedUserTasks && (
-                  <div className="p-2 space-y-1.5">
-                    {completedUserTasksLocal.map(task => (
-                      <TaskItem key={task.id} task={task} selected={isTaskSelected(task, 'user')} onRefresh={refreshHistory} onTaskUnblocked={onTaskUnblocked} onTaskDeleted={handleTaskDeleted} providers={providers} providersLoaded={providersLoaded} durations={durations} apps={apps} instances={assignableInstances} />
-                    ))}
-                    {tasks.user?.completedCount != null && <InfiniteScrollFooter hasMore={userHistory.hasMore} loading={userHistory.loading} error={userHistory.error} onLoadMore={userHistory.loadMore} />}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
+          <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+            <SortableContext items={sortableIds} strategy={verticalListSortingStrategy}>
+              {renderQueueRows(false)}
+            </SortableContext>
+          </DndContext>
         )}
       </div>
 
@@ -380,91 +399,12 @@ export default function TasksTab({ completedRevision = 0, tasks, agents = [], li
           <div className="relative bg-port-card border border-port-border rounded-lg p-6 text-center text-gray-400">
             <BrailleSpinner text="Loading system tasks…" />
           </div>
-        ) : pendingSystemTasks.length === 0 && activeSystemTasks.length === 0 && blockedSystemTasks.length === 0 && (tasks.cos?.completedCount ?? completedSystemTasks.length) === 0 ? (
+        ) : pendingSystemTasks.length === 0 && activeSystemTasks.length === 0 && unconfirmedSystemTasks.length === 0 && blockedSystemTasks.length === 0 && (tasks.cos?.completedCount ?? completedSystemTasks.length) === 0 ? (
           <div className="relative bg-port-card border border-port-border rounded-lg p-6 text-center text-gray-500">
             <SchematicLabel module="COS" status="EMPTY" glyph="bracket-pair" state="idle" variant="tab" />
             No system tasks.
           </div>
-        ) : (
-          <div className="space-y-3">
-            {/* Pending Section */}
-            {pendingSystemTasks.length > 0 && (
-              <div className="bg-port-card border border-port-border rounded-lg overflow-hidden">
-                <div className="px-3 py-2 bg-port-warning/10 border-b border-port-border flex items-center justify-between">
-                  <span className="text-sm font-medium text-port-warning flex items-center gap-2">
-                    <SectionGlyph status="pending" />
-                    Pending ({pendingSystemTasks.length})
-                  </span>
-                </div>
-                <div className="p-2 space-y-1.5">
-                  {pendingSystemTasks.map(task => (
-                    <TaskItem key={task.id} task={task} isSystem selected={isTaskSelected(task, 'internal')} onRefresh={onRefresh} onTaskUnblocked={onTaskUnblocked} onTaskDeleted={handleTaskDeleted} providers={providers} providersLoaded={providersLoaded} durations={durations} apps={apps} instances={assignableInstances} />
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Active Section */}
-            {activeSystemTasks.length > 0 && (
-              <div className="bg-port-card border border-port-border rounded-lg overflow-hidden">
-                <div className="px-3 py-2 bg-port-accent/10 border-b border-port-border flex items-center justify-between">
-                  <span className="text-sm font-medium text-port-accent flex items-center gap-2">
-                    <SectionGlyph status="active" />
-                    Active ({activeSystemTasks.length})
-                  </span>
-                </div>
-                <div className="p-2 space-y-1.5">
-                  {activeSystemTasks.map(task => (
-                    <TaskItem key={task.id} task={task} isSystem agent={runningAgentByTaskId.get(task.id) || agentById.get(task.metadata?.deliveryRecoveryAgentId)} liveOutput={liveOutputs[runningAgentByTaskId.get(task.id)?.id]} spawning={isSpawning(task)} selected={isTaskSelected(task, 'internal')} onRefresh={onRefresh} onTaskUnblocked={onTaskUnblocked} onTaskDeleted={handleTaskDeleted} providers={providers} providersLoaded={providersLoaded} durations={durations} apps={apps} instances={assignableInstances} />
-                  ))}
-                </div>
-              </div>
-            )}
-
-
-            {/* Blocked Section */}
-            {blockedSystemTasks.length > 0 && (
-              <div className="bg-port-card border border-port-border rounded-lg overflow-hidden">
-                <div className="px-3 py-2 bg-port-error/10 border-b border-port-border flex items-center justify-between">
-                  <span className="text-sm font-medium text-port-error flex items-center gap-2">
-                    <SectionGlyph status="blocked" />
-                    Blocked ({blockedSystemTasks.length})
-                  </span>
-                </div>
-                <div className="p-2 space-y-1.5">
-                  {blockedSystemTasks.map(task => (
-                    <TaskItem key={task.id} task={task} isSystem selected={isTaskSelected(task, 'internal')} onRefresh={onRefresh} onTaskUnblocked={onTaskUnblocked} onTaskDeleted={handleTaskDeleted} providers={providers} providersLoaded={providersLoaded} durations={durations} apps={apps} instances={assignableInstances} />
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Completed Section - Collapsible */}
-            {(tasks.cos?.completedCount ?? completedSystemTasks.length) > 0 && (
-              <div className="bg-port-card border border-port-border rounded-lg overflow-hidden">
-                <button
-                  onClick={() => setShowCompletedSystemTasks(!showCompletedSystemTasks)}
-                  className="w-full px-3 py-2 bg-port-success/10 border-b border-port-border flex items-center justify-between hover:bg-port-success/20 transition-colors"
-                  aria-expanded={showCompletedSystemTasks}
-                >
-                  <span className="text-sm font-medium text-port-success flex items-center gap-2">
-                    {showCompletedSystemTasks ? <ChevronDown size={14} aria-hidden="true" /> : <ChevronRight size={14} aria-hidden="true" />}
-                    <SectionGlyph status="completed" />
-                    Completed ({tasks.cos?.completedCount ?? completedSystemTasks.length})
-                  </span>
-                </button>
-                {showCompletedSystemTasks && (
-                  <div className="p-2 space-y-1.5">
-                    {completedSystemTasks.map(task => (
-                      <TaskItem key={task.id} task={task} isSystem selected={isTaskSelected(task, 'internal')} onRefresh={refreshHistory} onTaskUnblocked={onTaskUnblocked} onTaskDeleted={handleTaskDeleted} providers={providers} providersLoaded={providersLoaded} durations={durations} apps={apps} instances={assignableInstances} />
-                    ))}
-                    {tasks.cos?.completedCount != null && <InfiniteScrollFooter hasMore={systemHistory.hasMore} loading={systemHistory.loading} error={systemHistory.error} onLoadMore={systemHistory.loadMore} />}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        )}
+        ) : renderQueueRows(true)}
       </div>
 
     </div>
