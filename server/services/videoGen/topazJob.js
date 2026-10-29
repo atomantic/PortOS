@@ -95,10 +95,9 @@ export async function recoverTopazResult(jobId) {
     const status = await reconcileTopazStatus(jobId);
     if (status.status !== 'complete') throw new ServerError('Topaz has not confirmed that this result is complete.', { status: 409, code: 'TOPAZ_RECOVERY_UNAVAILABLE' });
     await registerStaging(preparedId).catch(() => { throw new ServerError('Could not prepare Topaz staging.', { status: 500, code: 'TOPAZ_PREPARE_FAILED' }); });
-    const result = await enqueueJob({ kind: 'video-upscale', params: { ...job.params, preparedId, resumeOnly: true, topazRecovery: false } })
+    const result = await enqueueJob({ kind: 'video-upscale', params: { ...job.params, preparedId, resumeOnly: true, topazRecovery: false, recoveryParentId: jobId } })
       .catch(async error => { await cleanupTopazStaging(preparedId).catch(() => { throw new ServerError('Could not clean Topaz staging.', { status: 500, code: 'TOPAZ_CLEANUP_FAILED' }); }); throw error; });
     releaseTopazStaging(preparedId);
-    await updateJobResult(jobId, { topazRecoveryAvailable: false });
     return result;
   } finally { admitting.delete(historyId); }
 }
@@ -236,6 +235,10 @@ export async function runVideoUpscale(params) {
       return row;
     });
     delivered = true;
+    if (UUID_RE.test(params.recoveryParentId || '')) {
+      await updateJobResult(params.recoveryParentId, { topazRecoveryAvailable: false })
+        .catch(() => console.error('❌ Could not update the previous Topaz recovery record; it was retained.'));
+    }
     videoGenEvents.emit('completed', { generationId: jobId, ...result });
     return result;
   } catch (error) {
@@ -244,13 +247,16 @@ export async function runVideoUpscale(params) {
       if (key && topazKeyFingerprint(key) === params.keyFingerprint) {
         await topazRequest(`/video/${requestId}`, { method: 'DELETE', key }).catch(() => null);
         const state = await topazRequest(`/video/${requestId}/status`, { key }).catch(() => null);
+        if (state) status = state;
         confirmedCancel = state?.status === 'canceled';
         providerTerminal = ['canceled', 'failed', 'complete'].includes(state?.status);
       }
     }
     if (getJob(jobId)?.result?.topazPhase) await updateJobResult(jobId, { topazUncertain: !providerTerminal, topazRequestId: requestId }).catch(() => {});
     if (providerTerminal && !confirmedCancel && status?.status === 'complete') await updateJobResult(jobId, { topazRecoveryAvailable: true, topazProviderStatus: 'complete', topazRequestId: requestId }).catch(() => {});
-    fail(entry.cancelRequested && !confirmedCancel ? `Local cancellation was requested; Topaz request ${requestId} is unconfirmed and charges or processing may continue.` : (error.safeTopaz || error instanceof ServerError ? error.message : 'Topaz upscale could not be completed.'));
+    fail(entry.cancelRequested && !confirmedCancel
+      ? (status?.status === 'complete' ? 'Topaz completed before cancellation; retrieve the result from the queue.' : `Local cancellation was requested; Topaz request ${requestId} is unconfirmed and charges or processing may continue.`)
+      : (error.safeTopaz || error instanceof ServerError ? error.message : 'Topaz upscale could not be completed.'));
   } finally {
     active.delete(jobId);
     const cleanupFailed = () => {

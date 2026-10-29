@@ -173,6 +173,7 @@ describe('Topaz job boundary', () => {
     await recoverTopazResult(jobId);
     const recovered = { ...state.enqueued.params, jobId };
     expect(recovered.resumeOnly).toBe(true);
+    expect(state.result.topazRecoveryAvailable).toBe(true);
     state.result = {};
     await runVideoUpscale(recovered);
     expect(state.rows[0]).toMatchObject({ upscaledFrom: sourceId, upscaleMethod: 'topaz' });
@@ -190,7 +191,7 @@ describe('Topaz job boundary', () => {
     expect(state.rows).toHaveLength(1);
   });
 
-  it.each([['canceled', true], ['processing', false]])('reports remote cancellation only when status is %s', async (providerStatus, confirmed) => {
+  it.each([['canceled', true, false, false], ['processing', false, true, false], ['complete', false, false, true]])('reports remote cancellation only when status is %s', async (providerStatus, confirmed, uncertain, recoverable) => {
     const { params } = await queued();
     let uploadStarted;
     const started = new Promise(resolve => { uploadStarted = resolve; });
@@ -209,6 +210,7 @@ describe('Topaz job boundary', () => {
     expect(cancel(jobId)).toBe(true);
     await running;
     expect(failed.mock.calls[0][0].remoteCancellationConfirmed).toBe(confirmed);
-    expect(state.result.topazUncertain).toBe(!confirmed);
+    expect(state.result.topazUncertain).toBe(uncertain);
+    expect(state.result.topazRecoveryAvailable === true).toBe(recoverable);
   });
 });
