@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 
 vi.mock('../services/apiCatalogTypes', () => ({
   listCatalogTypes: vi.fn(),
@@ -10,13 +10,15 @@ import { listCatalogTypes } from '../services/apiCatalogTypes';
 
 // Tiny consumer that renders the hook output for assertions.
 function Probe() {
-  const { types, getType, ids, loading } = useCatalogTypes();
+  const { types, getType, ids, loading, error, refresh } = useCatalogTypes();
   return (
     <div>
       <span data-testid="loading">{String(loading)}</span>
       <span data-testid="ids">{ids.join(',')}</span>
       <span data-testid="faction-label">{getType('faction')?.label || ''}</span>
       <span data-testid="count">{types.length}</span>
+      <span data-testid="error">{error ? 'yes' : 'no'}</span>
+      <button type="button" onClick={() => refresh()}>refresh</button>
     </div>
   );
 }
@@ -53,6 +55,17 @@ describe('useCatalogTypes', () => {
     listCatalogTypes.mockRejectedValue(new Error('offline'));
     render(<CatalogTypesProvider><Probe /></CatalogTypesProvider>);
     await waitFor(() => expect(screen.getByTestId('loading').textContent).toBe('false'));
+    expect(screen.getByTestId('count').textContent).toBe('6');
+    expect(screen.getByTestId('error').textContent).toBe('yes');
+  });
+
+  it('clears the error when a later refresh succeeds', async () => {
+    listCatalogTypes.mockRejectedValueOnce(new Error('offline'));
+    listCatalogTypes.mockResolvedValueOnce({ types: [] });
+    render(<CatalogTypesProvider><Probe /></CatalogTypesProvider>);
+    await waitFor(() => expect(screen.getByTestId('error').textContent).toBe('yes'));
+    fireEvent.click(screen.getByRole('button', { name: 'refresh' }));
+    await waitFor(() => expect(screen.getByTestId('error').textContent).toBe('no'));
     expect(screen.getByTestId('count').textContent).toBe('6');
   });
 });
