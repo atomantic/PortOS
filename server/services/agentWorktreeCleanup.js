@@ -13,7 +13,6 @@ import { isLegacyDeepAudit } from '../lib/auditWorkflow.js';
  */
 
 import { existsSync } from 'fs';
-import { isDeepStrictEqual } from 'node:util';
 import { PORTOS_APP_ID } from '../lib/appIdentity.js';
 import { join } from 'path';
 import { emitLog } from './cosEvents.js';
@@ -1176,17 +1175,9 @@ export async function releaseRetryHold({ agentId, task, success, agentMetadata, 
  * whether an agent actually started or the task is still waiting (no slots,
  * daemon stopped, …) rather than guessing.
  */
-export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, prUrl, prBranch, forkHead = null, sourceWorkspace, prCompletion = PR_COMPLETIONS.REVIEW_THEN_MERGE, reviewers = DEFAULT_REVIEWERS, usernames = [], optionalReviewers = [], reviewerMaxRounds = {}, reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false, reviewerModels = null, reviewerEfforts = null, leaveOpen = false, selfReview = false, dispatch = 'queue', reviewTarget = null, mergeGuardTarget = null }) {
+export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, prUrl, prBranch, forkHead = null, sourceWorkspace, prCompletion = PR_COMPLETIONS.REVIEW_THEN_MERGE, reviewers = DEFAULT_REVIEWERS, usernames = [], optionalReviewers = [], reviewerMaxRounds = {}, reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false, reviewerModels = null, reviewerEfforts = null, leaveOpen = false, selfReview = false, dispatch = 'queue', reviewTarget = null }) {
   if (!prUrl || !prBranch) return null;
   if (prCompletion === PR_COMPLETIONS.LEAVE_OPEN) return null;
-
-  if (mergeGuardTarget) {
-    const { validatePendingMergeRecovery } = await import('./pendingMergeRecovery.js');
-    if (mergeGuardTarget.prUrl !== prUrl || mergeGuardTarget.branch !== prBranch
-      || mergeGuardTarget.sourceTaskId !== originalTask?.id || mergeGuardTarget.sourceAgentId !== originalAgentId) return { blocked: 'Merge recovery identity changed' };
-    const refused = await validatePendingMergeRecovery({ target: mergeGuardTarget, workspacePath: sourceWorkspace });
-    if (refused) return { blocked: refused };
-  }
 
   if (reviewTarget) {
     const { validateCleanupReviewTarget } = await import('./cosMergeHandoff.js');
@@ -1200,7 +1191,7 @@ export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, p
   // spawn budget on every CI/conflict handoff and recursively nests its title.
   // The id hint also recovers receipts written before the marker was retained.
   if (isTruthyMeta(originalTask?.metadata?.reviewLoopFollowUp) || originalTask?.id?.startsWith('sys-rl-')) {
-    return resumeReviewLoopCoordinator(originalTask.id, prUrl, prBranch, reviewTarget, mergeGuardTarget);
+    return resumeReviewLoopCoordinator(originalTask.id, prUrl, prBranch, reviewTarget);
   }
 
   const parsedPr = git.parsePullRequestUrl(prUrl);
@@ -1381,7 +1372,6 @@ export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, p
       simplify: false,
       // Marker flags consumed by the agent prompt + completion handler
       reviewLoopFollowUp: true,
-      ...(mergeGuardTarget ? { pendingMergeGuardTarget: mergeGuardTarget } : {}),
       ...(reviewTarget ? { cleanupReviewTarget: reviewTarget, resumeWorktreePath: reviewTarget.worktreePath } : {}),
       prCompletion,
       // Merge-only run: no reviewers, the prompt is a CI-gate-and-merge procedure.
@@ -1443,13 +1433,6 @@ export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, p
   const immediate = dispatch === 'immediate';
   const persisted = await addTask(followUpTask, 'internal', { raw: true, suppressDequeue: immediate });
 
-  if (mergeGuardTarget) {
-    const { getTaskById } = await import('./cosTaskStore.js');
-    const saved = persisted?.id && await getTaskById(persisted.id).catch(() => null);
-    if (!saved || !['pending', 'in_progress'].includes(saved.status)
-      || !isDeepStrictEqual(saved.metadata?.pendingMergeGuardTarget ?? saved.metadata?.pendingMergeGuardLaunchEvidence, mergeGuardTarget)) return { deferred: true };
-  }
-
   // A duplicate rejection persisted NOTHING under `followUpTaskId` — an equivalent
   // follow-up is already queued under a different id. Return THAT record so a
   // caller reports (and force-spawns) the task that actually exists instead of the
@@ -1483,7 +1466,7 @@ export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, p
   return { ...followUpTask, dispatch: { started: true, reason: null } };
 }
 
-async function resumeReviewLoopCoordinator(taskId, prUrl, prBranch, reviewTarget = null, mergeGuardTarget = null) {
+async function resumeReviewLoopCoordinator(taskId, prUrl, prBranch, reviewTarget = null) {
   const { getTaskById } = await import('./cosTaskStore.js');
   const task = await getTaskById(taskId);
   if (!task || task.taskType !== 'internal' || !isTruthyMeta(task.metadata?.reviewLoopFollowUp)
@@ -1514,7 +1497,6 @@ async function resumeReviewLoopCoordinator(taskId, prUrl, prBranch, reviewTarget
   const result = await updateTask(taskId, {
     status: 'pending',
     metadata: { reviewLoopRecoveryReason: 'The handed-off PR needs fresh validation, review or conflict resolution',
-      ...(mergeGuardTarget ? { pendingMergeGuardTarget: mergeGuardTarget } : {}),
       ...(reviewTarget ? { cleanupReviewTarget: reviewTarget, resumeWorktreePath: reviewTarget.worktreePath } : {}) },
   }, 'internal', {
     expectedStatus: 'completed',
