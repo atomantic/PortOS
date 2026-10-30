@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { buildTypographyDocument, composedLyricWindows, cueStateAt, normalizeComposition, overlayWindows, projectTypographyPlan, renderableCues, sectionCardCues } from './composition.js';
+import { productionReviewBasis } from './productionReview.js';
+import { buildTypographyDocument, composedLyricWindows, cueStateAt, normalizeComposition, overlayWindows, withAutopilotCutting, projectTypographyPlan, renderableCues, sectionCardCues } from './composition.js';
 
 const cue = (over = {}) => ({ id: 'c', text: 'Hello world', startSec: 10, endSec: 12, template: 'fade', placement: 'lower', emphasis: 'subtitle', ...over });
 
@@ -177,5 +178,24 @@ describe('buildTypographyDocument (#8984)', () => {
     const html = buildTypographyDocument({ cues: cards, style: { font: 'serif', graphicLanguage: 'HUD counters' },
       width: 1280, height: 720, durationSec: 10, fps: 24 });
     expect(html).toContain('Menlo');
+  });
+});
+
+describe('withAutopilotCutting keeps the Art approval basis (#14174)', () => {
+  it('defaulting cutting does not stale Art for a project with no composition or no mode', () => {
+    for (const project of [{ id: 'p' }, { id: 'p', composition: { cutting: undefined } }]) {
+      const started = withAutopilotCutting(project);
+      expect(started.composition.cutting).toBe('intercut');
+      expect(productionReviewBasis(started).art).toBe(productionReviewBasis(project).art);
+    }
+  });
+
+  it('a real render mode change still stales Art', () => {
+    const project = { id: 'p', composition: { mode: 'concat' } };
+    const started = withAutopilotCutting(project);
+    expect(started.composition.mode).toBe('concat');
+    expect(productionReviewBasis(started).art).toBe(productionReviewBasis(project).art);
+    expect(productionReviewBasis({ ...started, composition: { ...started.composition, mode: 'composed' } }).art)
+      .not.toBe(productionReviewBasis(project).art);
   });
 });
