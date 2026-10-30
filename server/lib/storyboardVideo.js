@@ -20,8 +20,9 @@ export const STORYBOARD_VIDEO_LIMITS = Object.freeze({
 const TEXT = { intent: 1000, logline: 500, synopsis: 5000, script: 50000 };
 
 const FRAMING_WORDS = Object.freeze({
-  'extreme-wide': 'Extreme wide shot', wide: 'Wide shot', medium: 'Medium shot', close: 'Close-up',
-  'extreme-close': 'Extreme close-up', 'over-the-shoulder': 'Over-the-shoulder shot', 'two-shot': 'Two-shot', pov: 'POV shot',
+  'extreme-wide': 'Extreme wide shot', wide: 'Wide shot', full: 'Full shot', 'medium-wide': 'Medium wide shot',
+  medium: 'Medium shot', 'medium-close': 'Medium close-up', close: 'Close-up',
+  'extreme-close': 'Extreme close-up', insert: 'Insert shot', 'over-the-shoulder': 'Over-the-shoulder shot', 'two-shot': 'Two-shot', pov: 'POV shot',
 });
 
 const clip = (text, max) => String(text || '').trim().slice(0, max);

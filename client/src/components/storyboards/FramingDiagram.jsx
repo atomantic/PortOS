@@ -33,12 +33,20 @@ const SCENES = {
   ),
   wide: () => (
     <>
-      <Horizon y={84} />
-      <path className="stroke-gray-500" strokeWidth="1" fill="none" d="M12 84V40H40V84M120 84V52H150V84" />
-      <Figure x={80} top={16} scale={0.68} />
+      <Horizon y={80} />
+      <path className="stroke-gray-500" strokeWidth="1" fill="none" d="M8 80V30H48V80M24 80V58H34V80M112 80V38H154V80M122 50H132V60H122ZM138 50H148V60H138Z" />
+      <Figure x={80} top={47} scale={0.33} />
     </>
   ),
+  full: () => (
+    <>
+      <Horizon y={86} />
+      <Figure x={80} top={6} scale={0.8} />
+    </>
+  ),
+  'medium-wide': () => <Figure x={80} top={8} scale={1.05} />,
   medium: () => <Figure x={80} top={10} scale={1.45} />,
+  'medium-close': () => <Figure x={80} top={10} scale={2} />,
   close: () => <Figure x={80} top={10} scale={2.65} />,
   'extreme-close': () => (
     <g className="fill-port-card stroke-current" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
@@ -46,6 +54,14 @@ const SCENES = {
       <path d="M22 54Q80 4 138 54Q80 92 22 54Z" />
       <circle cx="80" cy="52" r="20" fill="none" />
       <circle cx="80" cy="52" r="8" className="fill-current" stroke="none" />
+    </g>
+  ),
+  insert: () => (
+    <g className="fill-port-card stroke-current" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path className="stroke-gray-500" fill="none" strokeWidth="1" d="M0 78H160" />
+      <path d="M58 30H102V72Q102 80 94 80H66Q58 80 58 72Z" />
+      <path fill="none" d="M102 40Q120 40 120 52Q120 64 102 64" />
+      <path className="stroke-gray-500" fill="none" d="M70 22Q66 16 70 10M80 22Q76 16 80 10M90 22Q86 16 90 10" />
     </g>
   ),
   'over-the-shoulder': () => (
