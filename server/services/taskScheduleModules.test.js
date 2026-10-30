@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import * as backoff from './taskScheduleBackoff.js';
 import * as constants from './taskScheduleConstants.js';
 import * as registry from './taskScheduleRegistry.js';
+import * as ledger from './branchReconcileOutcome.js';
 import * as schedule from './taskSchedule.js';
 import * as templates from './taskScheduleTemplates.js';
 
@@ -47,5 +48,22 @@ describe('taskSchedule module boundaries', () => {
     expect(reconciliationSource).toContain("from './versions.js'");
     expect(reconciliationSource).toContain("from './shippedPrompts.js'");
     expect(source('./taskSchedule.js')).not.toContain('reconcileStoredPrompt');
+  });
+
+  it('keeps the checkout-retirement ledger out of the cadence module (#14177)', () => {
+    const scheduler = source('./taskSchedule.js');
+    for (const name of Object.keys(ledger)) {
+      expect(schedule[name], name).toBeUndefined();
+      expect(scheduler, name).not.toMatch(new RegExp(`function ${name}\\b`));
+    }
+    for (const dependency of ['branchReconcileOutcome', 'branchReconcileInventoryPrune', 'repoCleanupObservation',
+      'reconcileRetirementEvidence', 'legacyRetirementTransition', 'retirementCheckoutObservation']) {
+      expect(scheduler, dependency).not.toContain(`/${dependency}.js'`);
+    }
+    // The ledger shares the persisted record through the store, never through the scheduler.
+    const ledgerSource = source('./branchReconcileOutcome.js');
+    expect(ledgerSource).toContain("from './taskScheduleStore.js'");
+    expect(ledgerSource).not.toContain("from './taskSchedule.js'");
+    expect(source('./taskScheduleStore.js')).toContain('export function ensureExecutionRecord');
   });
 });

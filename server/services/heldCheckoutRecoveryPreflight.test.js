@@ -8,7 +8,7 @@ vi.mock('../lib/paths.js', async importOriginal => makePathsProxy(await importOr
 }));
 const injected = vi.hoisted(() => ({ app: null, outcome: null, ignored: [] }));
 vi.mock('./apps.js', () => ({ getAppById: async () => injected.app }));
-vi.mock('./taskSchedule.js', () => ({ getBranchReconcileOutcome: async () => injected.outcome }));
+vi.mock('./branchReconcileOutcome.js', () => ({ getBranchReconcileOutcome: async () => injected.outcome }));
 vi.mock('../lib/execGit.js', async importOriginal => ({
   ...await importOriginal(),
   execGit: async args => {

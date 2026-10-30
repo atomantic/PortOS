@@ -50,7 +50,7 @@ vi.mock('./taskScheduleStore.js', async importOriginal => ({
     return (await mutate(injected.schedule)).result;
   },
 }));
-const { recordBranchReconcileOutcome, getBranchReconcileOutcome } = await import('./taskSchedule.js');
+const { recordBranchReconcileOutcome, getBranchReconcileOutcome } = await import('./branchReconcileOutcome.js');
 
 describe.skipIf(SKIP_HEAVY_INTEGRATION)('outside reconciliation retirement receipts (real git)', () => {
   let scratch;

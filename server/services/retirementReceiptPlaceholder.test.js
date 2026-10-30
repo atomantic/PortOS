@@ -22,7 +22,7 @@ vi.mock('./cosClaimOwnership.js', async importOriginal => {
 import { PATHS } from '../lib/fileUtils.js';
 import { cleanupTempDataRoots } from '../lib/mockPathsDataRoot.js';
 import { execGit } from '../lib/execGit.js';
-import { recordHeldCheckoutRetirement, getBranchReconcileInventory } from './taskSchedule.js';
+import { recordHeldCheckoutRetirement, getBranchReconcileInventory } from './branchReconcileOutcome.js';
 
 let root, row, receipt;
 const appId = 'synthetic-app';

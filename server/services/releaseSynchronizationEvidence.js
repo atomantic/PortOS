@@ -15,7 +15,7 @@ import { execGh } from './github.js';
 import { resolveForgeExecOptions } from './forgeExecOptions.js';
 import { getTaskById } from './cosTaskStore.js';
 import { getAppById } from './apps.js';
-import { getBranchReconcileOutcome } from './taskSchedule.js';
+import { getBranchReconcileOutcome } from './branchReconcileOutcome.js';
 import { readCheckoutPathPresence, readLocalBranchPresence } from './repoCleanupObservation.js';
 import { buildQualitySnapshot } from './appQualityFederation.js';
 import { classifyQualitySnapshot, serializeQualitySnapshot } from './appQualitySnapshotFormat.js';

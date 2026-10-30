@@ -19,7 +19,7 @@ vi.mock('./heldCheckoutRecovery.js', () => ({
   preserveMergedCheckout: (...args) => preserveCheckoutMock(...args),
 }));
 const retirementReceiptMock = vi.hoisted(() => vi.fn(async () => null));
-vi.mock('./taskSchedule.js', () => ({ recordWorkspaceCheckoutRetirement: retirementReceiptMock }));
+vi.mock('./branchReconcileOutcome.js', () => ({ recordWorkspaceCheckoutRetirement: retirementReceiptMock }));
 const completionOwnersMock = vi.fn(async () => []);
 vi.mock('./cosClaimOwnershipState.js', async importOriginal => ({ ...await importOriginal(), readClaimOwnershipAgents: (...args) => completionOwnersMock(...args) }));
 const completionHoldMock = vi.fn(async () => null);

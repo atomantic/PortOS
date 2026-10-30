@@ -3,7 +3,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 // The schedule adapter serializes each write and returns fresh objects on read,
 // matching persistence rather than sharing an in-memory execution record.
 const persisted = vi.hoisted(() => ({ json: '' }));
-vi.mock('./taskScheduleStore.js', () => ({
+vi.mock('./taskScheduleStore.js', async importOriginal => ({
+  ...(await importOriginal()),
   loadSchedule: async () => JSON.parse(persisted.json),
   updateSchedule: async (mutate) => {
     const schedule = JSON.parse(persisted.json);

@@ -6,7 +6,8 @@ vi.mock('./cosTaskStore.js', () => ({
   updateTask: vi.fn(),
 }));
 const schedule = vi.hoisted(() => ({ value: {} }));
-vi.mock('./taskScheduleStore.js', () => ({
+vi.mock('./taskScheduleStore.js', async importOriginal => ({
+  ...(await importOriginal()),
   updateSchedule: vi.fn(async mutate => (await mutate(schedule.value)).result),
 }));
 

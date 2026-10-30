@@ -33,7 +33,7 @@ vi.mock('./apps.js', () => ({ getAppById: async (id) => (injected.app?.id === id
 import { describeHeldCheckoutRecovery, setReceiptWork, it, beforeEach, scratch, repo, external, cosDir, receiptWork, noOwners, heldCheckout, registered, lockText, archives, addProofOrigin, reviewedCheckout, receiptCheckout } from './_heldCheckoutRecoveryFixture.js';
 const { retireInventoriedCheckout, retirePendingMergeCheckout } = await import('./heldCheckoutRecovery.js');
 const { sha256File } = await import('../lib/fileUtils.js');
-const { recordBranchReconcileOutcome, getBranchReconcileOutcome } = await import('./taskSchedule.js');
+const { recordBranchReconcileOutcome, getBranchReconcileOutcome } = await import('./branchReconcileOutcome.js');
 
 describeHeldCheckoutRecovery(() => {
   it.each(['delivered', 'recreated-after-removal', 'different-generation', 'unmerged-original', 'unreadable-original', 'unrelated-capture',

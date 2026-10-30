@@ -19,7 +19,7 @@ vi.mock('./agentState.js', () => ({ getActiveAgentIds: () => new Set() }));
 vi.mock('./userTimezone.js', () => ({ getUserTimezone: async () => 'UTC' }));
 vi.mock('./supersededLedger.js', async importOriginal => ({ ...await importOriginal(), readVerdictLedger: async () => [] }));
 
-import { getBranchReconcileInventory, getBranchReconcileOutcome, recordBranchReconcileOutcome } from './taskSchedule.js';
+import { getBranchReconcileInventory, getBranchReconcileOutcome, recordBranchReconcileOutcome } from './branchReconcileOutcome.js';
 import { updateSchedule } from './taskScheduleStore.js';
 
 describe.skipIf(SKIP_HEAVY_INTEGRATION)('retirement receipt reconciliation through persisted inventory', () => {

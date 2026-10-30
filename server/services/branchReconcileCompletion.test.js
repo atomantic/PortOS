@@ -8,7 +8,7 @@ vi.mock('./branchReconcile.js', async (importOriginal) => ({
   ...await importOriginal(),
   reconcile: vi.fn(), buildActiveOwnerIds: vi.fn(() => new Set(['active'])),
 }));
-vi.mock('./taskSchedule.js', () => ({ getBranchReconcileOutcome: vi.fn(), recordBranchReconcileOutcome: vi.fn() }));
+vi.mock('./branchReconcileOutcome.js', () => ({ getBranchReconcileOutcome: vi.fn(), recordBranchReconcileOutcome: vi.fn() }));
 vi.mock('./cosEvents.js', () => ({ emitLog: vi.fn() }));
 vi.mock('./prWatcher.js', () => ({ readPendingMergePrs: vi.fn(() => [{ prBranch: 'claim/queued' }]) }));
 import { recordCleanupOutcome, recordRepoCleanupRecovery } from './cosAgentLifecycle.js';
@@ -17,7 +17,7 @@ import { getTaskById } from './cosTaskStore.js';
 import { readClaimOwnershipAgents } from './cosClaimOwnership.js';
 import { reconcile } from './branchReconcile.js';
 import { emitLog } from './cosEvents.js';
-import { getBranchReconcileOutcome, recordBranchReconcileOutcome } from './taskSchedule.js';
+import { getBranchReconcileOutcome, recordBranchReconcileOutcome } from './branchReconcileOutcome.js';
 import { settleBranchReconcileRun, settleRetirementReviewRun } from './branchReconcileCompletion.js';
 
 const agent = { id: 'agent-reconcile', taskId: 'task-example', metadata: { taskAnalysisType: 'branch-reconcile', taskApp: 'example' } };

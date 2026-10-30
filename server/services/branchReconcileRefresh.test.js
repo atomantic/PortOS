@@ -20,7 +20,7 @@ vi.mock('./supersededLedger.js', async importOriginal => ({ ...await importOrigi
 vi.mock('./heldCheckoutRecovery.js', () => ({ recoverMissingCheckoutPreservations: async ({ outcome }) => outcome }));
 
 import { PATHS } from '../lib/paths.js';
-import { getBranchReconcileOutcome, recordBranchReconcileOutcome } from './taskSchedule.js';
+import { getBranchReconcileOutcome, recordBranchReconcileOutcome } from './branchReconcileOutcome.js';
 import { refreshBranchReconcileInventory } from './branchReconcileRefresh.js';
 
 describe.skipIf(SKIP_HEAVY_INTEGRATION)('branch reconciliation inventory refresh (real Git)', () => {

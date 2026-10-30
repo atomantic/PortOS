@@ -6,7 +6,7 @@ import { join } from 'path';
 import { atomicWrite, ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { isPlainObject } from '../lib/objects.js';
-import { currentTaskTypeName } from '../lib/scheduledTaskTypes.js';
+import { currentTaskTypeName, taskExecutionKey as executionKey } from '../lib/scheduledTaskTypes.js';
 import { emitLog } from './cosEvents.js';
 import { LEGACY_INTERVAL_TYPES, normalizeIntervalConfig } from './taskScheduleConstants.js';
 import {
@@ -307,6 +307,37 @@ export async function updateSchedule(mutate) {
     if (needsSave || changed) await saveScheduleNow(schedule);
     return result;
   });
+}
+
+/**
+ * The park record lives ALONGSIDE the execution record (global or per-app), so a
+ * perpetual task's "parked until" survives restarts the same way `lastRun` does.
+ * Returns the execution sub-record that holds the park fields, creating the
+ * skeleton if absent.
+ */
+export function ensureExecutionRecord(schedule, taskType, appId) {
+  const key = executionKey(taskType);
+  if (!schedule.executions[key]) {
+    schedule.executions[key] = { lastRun: null, count: 0, perApp: {} };
+  }
+  const top = schedule.executions[key];
+  if (appId) {
+    if (!top.perApp) top.perApp = {};
+    if (!top.perApp[appId]) top.perApp[appId] = { lastRun: null, count: 0 };
+    return top.perApp[appId];
+  }
+  return top;
+}
+
+/**
+ * Resolve the EXISTING execution sub-record (global or per-app) without creating
+ * it — the read-only counterpart to ensureExecutionRecord. Returns null when the
+ * task (or that app) has no record yet.
+ */
+export function resolveExecutionRecord(schedule, taskType, appId = null) {
+  const top = schedule.executions[executionKey(taskType)];
+  if (!top) return null;
+  return (appId ? top.perApp?.[appId] : top) || null;
 }
 
 async function saveScheduleNow(schedule) {

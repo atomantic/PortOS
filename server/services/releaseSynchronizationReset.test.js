@@ -14,7 +14,7 @@ vi.mock('./cosClaimOwnershipState.js', () => ({
 }));
 vi.mock('./agentState.js', () => ({ getActiveAgentIds: () => ownership.active }));
 vi.mock('./cosRunnerClient.js', () => ({ getActiveAgentsFromRunner: async () => ownership.runner }));
-vi.mock('./taskSchedule.js', () => ({ getBranchReconcileOutcome: async () => ({ remaining: ownership.inventory }) }));
+vi.mock('./branchReconcileOutcome.js', () => ({ getBranchReconcileOutcome: async () => ({ remaining: ownership.inventory }) }));
 vi.mock('./branchCompletionPolicy.js', () => ({ readBranchCompletionPolicies: async () => [] }));
 vi.mock('./cosTaskStore.js', () => ({ getTaskById: async id => ownership.task?.id === id ? ownership.task : null,
   updateTask: async (id, patch) => { ownership.updates.push({ id, patch }); if (ownership.updateResult) return ownership.updateResult;

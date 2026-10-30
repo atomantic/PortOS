@@ -1579,7 +1579,7 @@ async function finishBranchRetirement(repoPath, { b, expectedHead, readPolicyHol
     onRetired: async () => {
       if (!appId) return;
       try {
-        const { recordHeldCheckoutRetirement } = await import('./taskSchedule.js');
+        const { recordHeldCheckoutRetirement } = await import('./branchReconcileOutcome.js');
         const absent = await execGit(['show-ref', '--verify', '--quiet', `refs/heads/${b.branch}`], repoPath, { ignoreExitCode: true });
         if (absent.exitCode !== 1) throw new Error('retirement-branch-recreated');
         const outcome = await recordHeldCheckoutRetirement(appId, {
@@ -1676,9 +1676,9 @@ const isStillDetachedOnMerged = async (repoPath, treePath, defaultBranch) => {
  */
 async function recordDetachedRetirement(repoPath, appId, { path, head, checkoutIdentity }) {
   const receipt = { path, head, branchDeleted: false, checkoutOnly: true, ...(checkoutIdentity && { checkoutIdentity }) };
-  const taskSchedule = await import('./taskSchedule.js');
-  if (!appId) return taskSchedule.recordWorkspaceCheckoutRetirement(repoPath, receipt).then(() => true, () => false);
-  return taskSchedule.recordHeldCheckoutRetirement(appId, receipt).then(outcome => outcome?.retired?.some(row => row.path === path
+  const outcomes = await import('./branchReconcileOutcome.js');
+  if (!appId) return outcomes.recordWorkspaceCheckoutRetirement(repoPath, receipt).then(() => true, () => false);
+  return outcomes.recordHeldCheckoutRetirement(appId, receipt).then(outcome => outcome?.retired?.some(row => row.path === path
     && !row.branch && row.head === head && row.checkoutOnly === true && row.branchDeleted === false && row.archiveDir == null
     && (!checkoutIdentity || row.checkoutIdentity === checkoutIdentity)) === true, () => false);
 }

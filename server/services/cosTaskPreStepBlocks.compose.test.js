@@ -52,11 +52,14 @@ vi.mock('./taskSchedule.js', () => ({
   getTaskInterval: vi.fn(async () => ({ type: 'perpetual', taskMetadata: {} })),
   stripManagedAgentOptionsFromOverride: vi.fn((_type, meta) => meta),
   recordExecution: vi.fn(async () => {}),
-  recordBranchReconcileOutcome: vi.fn(async () => {}),
-  getBranchReconcileOutcome: vi.fn(async () => null),
   parkPerpetual: (...a) => parkPerpetual(...a),
   getPerpetualDrainState: (...a) => getPerpetualDrainState(...a),
   recordPerpetualDispatch: (...a) => recordPerpetualDispatch(...a),
+}));
+
+vi.mock('./branchReconcileOutcome.js', () => ({
+  recordBranchReconcileOutcome: vi.fn(async () => {}),
+  getBranchReconcileOutcome: vi.fn(async () => null),
 }));
 
 vi.mock('./appActivity.js', async (importActual) => ({
@@ -139,7 +142,8 @@ import { emitLog } from './cosEvents.js';
 import { inspectOpenDeliveryRepair } from './repoCleanupObservation.js';
 import { inspectOrQueueCompletedReview } from './repoCleanupRecovery.js';
 import { prepareManagedAppImprovementTask, recordDeferredPerpetualDispatch } from './cosTaskGenerator.js';
-import { getTaskInterval, getBranchReconcileOutcome, recordBranchReconcileOutcome } from './taskSchedule.js';
+import { getTaskInterval } from './taskSchedule.js';
+import { getBranchReconcileOutcome, recordBranchReconcileOutcome } from './branchReconcileOutcome.js';
 import { applyPerpetualDrainCap } from './cosTaskPreStepBlocks.js';
 import { readAgentsStateForSafetyCheck } from './cosState.js';
 

@@ -1690,7 +1690,7 @@ async function prepareRecoveryRetirement({ agentId, appId, app: taskApp, sourceW
   const release = { branch: branchName, path: worktreePath || tree.path, head: tree.head,
     ...(checkoutIdentity && { checkoutIdentity, observedAt: new Date().toISOString() }),
     locked: tree.locked === true, lockReason: tree.lockReason ?? null };
-  const { recordBranchReconcileOutcome } = await import('./taskSchedule.js');
+  const { recordBranchReconcileOutcome } = await import('./branchReconcileOutcome.js');
   const outcome = await recordBranchReconcileOutcome(app.id, { status: 'incomplete', reason: 'retirement-review-pending',
     retirementObligations: [{ ...release, reason: 'retirement-review-pending' }],
     nextAction: 'Review this exact checkout through the retirement API; require ok:true and branchDeleted:true with no archive directory.' });

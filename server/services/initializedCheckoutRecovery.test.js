@@ -12,7 +12,8 @@ vi.mock('node:os', async importOriginal => {
   const actual = await importOriginal();
   return { ...actual, type: () => persisted.hostType || actual.type() };
 });
-vi.mock('./taskScheduleStore.js', () => ({
+vi.mock('./taskScheduleStore.js', async importOriginal => ({
+  ...(await importOriginal()),
   loadSchedule: async () => JSON.parse(persisted.json),
   updateSchedule: async mutate => {
     const schedule = JSON.parse(persisted.json);
