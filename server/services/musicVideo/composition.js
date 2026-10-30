@@ -194,7 +194,10 @@ export function normalizeComposition(input) {
  */
 export function withAutopilotCutting(project) {
   if (!project || project.composition?.cutting) return project;
-  return { ...project, composition: normalizeComposition({ ...(project.composition || {}), cutting: 'intercut' }) };
+  const { mode, ...composition } = normalizeComposition({ ...(project.composition || {}), cutting: 'intercut' });
+  // An undecided render mode stays absent: `mode` is part of the Art approval basis, so
+  // materializing the 'concat' default here would stale approvals the run didn't change.
+  return { ...project, composition: project.composition?.mode ? { ...composition, mode } : composition };
 }
 
 /**
