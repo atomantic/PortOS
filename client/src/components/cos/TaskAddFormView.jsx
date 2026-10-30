@@ -683,7 +683,7 @@ export default function TaskAddFormView({ form, compact = false, queueFirst = fa
           {' · '}{state.planOnly ? 'Read-only planning' : state.useWorktree ? 'Worktree' : 'Direct checkout'}
           {' · '}{completion}
           {!state.planOnly && state.openPR && state.prCompletion === 'review-then-merge' && ` · Review: ${[...reviewers, ...usernames.map((name) => '@' + name)].join(', ') || 'None'}`}
-          {isFederated && ` · Instance: ${assignableInstances.find((instance) => instance.id === state.targetInstanceId)?.name || state.targetInstanceId || 'Any'}`}
+          {isFederated && ` · Instance: ${assignableInstances.find((instance) => instance.instanceId === state.targetInstanceId)?.name || state.targetInstanceId || 'Any'}`}
           {state.planOnly && ` · Issue: ${state.issueTarget}`}
           {state.createJiraTicket && !state.planOnly && ' · JIRA ticket'}
           {state.enhancePrompt && ' · Enhance prompt'}
