@@ -20,15 +20,29 @@
 // reads the membership only (it doesn't assume the order), so reordering is safe.
 export const SHOT_TYPES = Object.freeze([
   'extreme-wide',      // landscape / crowd master where figures are small
-  'wide',              // full-figure establishing of the space
-  'medium',            // waist/chest framing — the default coverage shot
-  'close',             // face/detail framing
-  'extreme-close',     // an eye, a hand, an object insert
+  'wide',              // establishing the space, figures small but readable
+  'full',              // head to toe, the figure fills the frame height
+  'medium-wide',       // knees/mid-thigh up ("cowboy")
+  'medium',            // waist up — the default coverage shot
+  'medium-close',      // chest up
+  'close',             // head and shoulders, the face fills the frame
+  'extreme-close',     // one part of the face: eyes, lips
+  'insert',            // an object or hand detail cut in from the scene
   'over-the-shoulder', // OTS — frames one subject past another's shoulder
   'two-shot',          // two subjects sharing the frame
   'pov',               // the subject's literal point of view
 ]);
 const SHOT_TYPE_SET = new Set(SHOT_TYPES);
+
+// Camera angle / height relative to the subject, independent of framing.
+export const SHOT_ANGLES = Object.freeze([
+  'eye-level',  // level with the subject's eyes
+  'high',       // above, looking down
+  'low',        // below, looking up
+  'birds-eye',  // straight down from overhead
+  'worms-eye',  // from the ground, looking steeply up
+  'dutch',      // camera rolled so the horizon tilts
+]);
 
 // On-screen direction the subject faces / moves. `neutral` = head-on or
 // ambiguous (no axis to cross); `left`/`right` are the screen-relative sides the
@@ -40,11 +54,14 @@ const SCREEN_DIRECTION_SET = new Set(SCREEN_DIRECTIONS);
 // token so a near-miss isn't silently dropped to null. Keys are pre-lowercased.
 const SHOT_TYPE_ALIASES = Object.freeze({
   ews: 'extreme-wide', 'extreme wide': 'extreme-wide',
-  establishing: 'wide', ws: 'wide', long: 'wide', full: 'wide', 'full-shot': 'wide',
+  establishing: 'wide', ws: 'wide', long: 'wide',
+  fs: 'full', 'full-shot': 'full', 'full shot': 'full', 'full-body': 'full',
+  mws: 'medium-wide', 'medium wide': 'medium-wide', 'medium-long': 'medium-wide', cowboy: 'medium-wide', 'american': 'medium-wide',
   ms: 'medium', mid: 'medium', 'mid-shot': 'medium',
+  mcu: 'medium-close', 'medium close': 'medium-close', 'medium close-up': 'medium-close', 'medium-close-up': 'medium-close',
   cu: 'close', closeup: 'close', 'close-up': 'close',
   ecu: 'extreme-close', 'extreme closeup': 'extreme-close', 'extreme close-up': 'extreme-close',
-  insert: 'extreme-close', detail: 'extreme-close',
+  detail: 'insert', 'insert shot': 'insert', cutaway: 'insert',
   ots: 'over-the-shoulder', 'over the shoulder': 'over-the-shoulder',
   two: 'two-shot', '2-shot': 'two-shot', 'two shot': 'two-shot',
   'point of view': 'pov', "subject's pov": 'pov',

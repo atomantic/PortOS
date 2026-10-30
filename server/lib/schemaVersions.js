@@ -112,7 +112,9 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // older sanitizer's omission LWW-strip or overwrite it.
   // v4 = text-stage generation identity for owner-scoped restart recovery.
   // Older sanitizers strip it; gate transfers to keep execution ownership intact.
-  pipelineIssues: 4,
+  // v5 = shot framings `full`, `medium-wide`, `medium-close`, `insert`; a v4
+  // sanitizer would null a shot's shotType and LWW that back.
+  pipelineIssues: 5,
   // v2 = `series.arc.readerMap` added (Unified Story Builder). Additive +
   // gracefully-degrading, but version-gated so a not-yet-upgraded peer can't
   // round-trip a series through its readerMap-unaware sanitizer and LWW-strip
@@ -294,7 +296,9 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // `pencil` and write that back.
   // v9 = an image node's `style` input (the style text sent after the shot,
   // with no prompt writer in between); a v8 peer would drop the edge.
-  storyboards: 9,
+  // v10 = panel framings `full`, `medium-wide`, `medium-close`, `insert`, and a
+  // panel's camera `angle`; a v9 peer would null or drop them.
+  storyboards: 10,
   // v1 = author personas (PostgreSQL `authors` table) federated via the
   // per-record peer-sync push pipeline (record kind `author`, sync category
   // `authors`). A brand-NEW synced record type like `storyBuilder` below, so it

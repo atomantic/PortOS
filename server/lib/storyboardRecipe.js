@@ -265,8 +265,13 @@ export function recipeRunOrder(recipe) {
 }
 
 const FRAMING_WORDS = Object.freeze({
-  'extreme-wide': 'extreme wide shot', wide: 'wide establishing shot', medium: 'medium shot', close: 'close-up',
-  'extreme-close': 'extreme close-up insert', 'over-the-shoulder': 'over-the-shoulder shot', 'two-shot': 'two-shot', pov: 'point-of-view shot',
+  'extreme-wide': 'extreme wide shot', wide: 'wide establishing shot', full: 'full shot, head to toe',
+  'medium-wide': 'medium wide shot, knees up', medium: 'medium shot', 'medium-close': 'medium close-up, chest up', close: 'close-up',
+  'extreme-close': 'extreme close-up', insert: 'insert shot of a detail', 'over-the-shoulder': 'over-the-shoulder shot', 'two-shot': 'two-shot', pov: 'point-of-view shot',
+});
+const ANGLE_WORDS = Object.freeze({
+  'eye-level': 'eye-level angle', high: 'high angle looking down', low: 'low angle looking up',
+  'birds-eye': "bird's-eye view straight down", 'worms-eye': "worm's-eye view from the ground", dutch: 'Dutch angle, tilted horizon',
 });
 
 /**
@@ -282,6 +287,7 @@ export function textNodeValue(node, { beat, panel } = {}) {
   return [
     panel?.action,
     panel?.framing ? `Framing: ${FRAMING_WORDS[panel.framing] || panel.framing}.` : '',
+    panel?.angle ? `Angle: ${ANGLE_WORDS[panel.angle] || panel.angle}.` : '',
     panel?.camera ? `Camera: ${panel.camera}` : '',
   ].filter((v) => v && v.trim()).join('\n');
 }
