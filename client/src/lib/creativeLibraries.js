@@ -72,7 +72,8 @@ export const PLATE_ROLE = 'plate';
 const roleOf = (m) => (typeof m?.role === 'string' ? m.role : '');
 export const isSheetMedia = (m) => roleOf(m).startsWith(SHEET_ROLE_PREFIX);
 export const isPlateMedia = (m) => roleOf(m) === PLATE_ROLE;
-// Casting > Design takes (`design:<roundId>`) live on the Design tab.
+// Casting > Design takes (`design:<roundId>:<n>`) live on the Design tab;
+// an anchored one (a render guide) also shows on References.
 export const isDesignMedia = (m) => isDesignRole(roleOf(m));
 export const isGreyboxShotMedia = (m) => roleOf(m).startsWith(GREYBOX_SHOT_ROLE_PREFIX);
 const greyboxShotIdOf = (m) => roleOf(m).slice(GREYBOX_SHOT_ROLE_PREFIX.length);
@@ -83,7 +84,7 @@ export const lookIdOf = (m) => (roleOf(m).startsWith(LOOK_ROLE_PREFIX) ? roleOf(
 // `liveShotIds` (the greybox's shot ids) does the same for a capture whose shot
 // was removed.
 export const isReferenceTabMedia = (m, liveLookIds = null, liveShotIds = null) => {
-  if (isSheetMedia(m) || isPlateMedia(m) || isDesignMedia(m)) return false;
+  if (isSheetMedia(m) || isPlateMedia(m) || (isDesignMedia(m) && m.library?.guide !== true)) return false;
   if (isGreyboxShotMedia(m)) return !liveShotIds?.has(greyboxShotIdOf(m));
   const lookId = lookIdOf(m);
   return lookId === null || (liveLookIds ? !liveLookIds.has(lookId) : false);

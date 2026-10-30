@@ -829,7 +829,7 @@ function IngredientEditor() {
     ...record,
     thumbnailKey: media.find((m) => m.kind === 'portrait')?.mediaKey || (!mediaReady && record.coverMedia?.portraitKey) || record.thumbnailKey,
     payload,
-  }) || ingredientCoverUrl({ thumbnailKey: media.find((m) => m.kind === 'reference' && !m.role?.startsWith('archive:') && !isDesignMedia(m))?.mediaKey || (!mediaReady && record.coverMedia?.referenceKey) });
+  }) || ingredientCoverUrl({ thumbnailKey: media.find((m) => m.kind === 'reference' && !m.role?.startsWith('archive:') && (!isDesignMedia(m) || m.library?.guide === true))?.mediaKey || (!mediaReady && record.coverMedia?.referenceKey) });
   const renderBlockedReason = (subject) => identityReason || (record.payload?.locked === true
     ? 'Unlock this record above before rendering.'
     : saving || lookSaving || characterActionBusy || unlocking
