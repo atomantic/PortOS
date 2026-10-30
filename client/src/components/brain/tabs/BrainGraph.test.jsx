@@ -128,6 +128,44 @@ describe('overview loading outcomes', () => {
     expect(screen.queryByText(/No brain entities/)).not.toBeInTheDocument();
   });
 
+  it('shows a retryable search error instead of an empty index when the search read fails', async () => {
+    const user = userEvent.setup();
+    api.getBrainGraphSearchIndex
+      .mockRejectedValueOnce(new Error('Unavailable'))
+      .mockResolvedValueOnce({ nodes: [{ id: 'n1', label: 'Alpha', brainType: 'ideas' }] });
+    await renderGraph();
+
+    expect(screen.getByTestId('graph-canvas')).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent(/Search is unavailable/);
+    await user.click(screen.getByRole('button', { name: 'Retry search' }));
+    await act(async () => {});
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    await user.type(screen.getByPlaceholderText(/search memories/i), 'Alpha');
+    expect(await screen.findByRole('option', { name: /Alpha/i })).toBeInTheDocument();
+  });
+
+  it('offers a retry instead of hiding the missing count when the embeddings status read fails', async () => {
+    api.getEmbeddingsStatus
+      .mockRejectedValueOnce(new Error('Unavailable'))
+      .mockResolvedValueOnce({ missing: 3, total: 5 });
+    await renderGraph();
+
+    expect(screen.queryByRole('button', { name: /missing/ })).not.toBeInTheDocument();
+    await act(async () => {
+      screen.getByRole('button', { name: 'Retry status' }).click();
+    });
+    expect(screen.getByRole('button', { name: /3 missing/ })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Retry status' })).not.toBeInTheDocument();
+  });
+
+  it('treats a successful empty search index as no matches, not an error', async () => {
+    const user = userEvent.setup();
+    await renderGraph();
+    await user.type(screen.getByPlaceholderText(/search memories/i), 'zzz');
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Retry search' })).not.toBeInTheDocument();
+  });
+
   it('drops an obsolete mount response after effect cleanup', async () => {
     let resolveObsolete;
     api.getBrainGraph.mockImplementationOnce(() => new Promise(resolve => { resolveObsolete = resolve; }))
