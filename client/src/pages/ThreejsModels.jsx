@@ -39,7 +39,7 @@ export default function ThreejsModels() {
   ));
   const [name, setName] = useState(() => nameFromFilename(imageFromRoute));
   const [prompt, setPrompt] = useState('');
-  const families = useThreejsModelFamilies();
+  const { families, status: familiesStatus, retry: retryFamilies } = useThreejsModelFamilies();
   const [family, setFamily] = useState(GENERAL_FAMILY_ID);
   const [effort, setEffort] = useState('');
   const [creating, setCreating] = useState(false);
@@ -159,6 +159,8 @@ export default function ThreejsModels() {
           <SubjectFamilySelect
             id="threejs-model-family"
             families={families}
+            status={familiesStatus}
+            onRetry={retryFamilies}
             value={family}
             onChange={setFamily}
             disabled={creating}

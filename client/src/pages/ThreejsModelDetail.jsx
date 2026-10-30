@@ -305,7 +305,7 @@ export default function ThreejsModelDetail() {
   const [feedback, setFeedback] = useState('');
   const [starting, setStarting] = useState(false);
   const [effort, setEffort] = useState('');
-  const families = useThreejsModelFamilies();
+  const { families, status: familiesStatus, retry: retryFamilies } = useThreejsModelFamilies();
   const [family, setFamily] = useState(GENERAL_FAMILY_ID);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const providerSyncRef = useRef('');
@@ -597,6 +597,8 @@ export default function ThreejsModelDetail() {
           <SubjectFamilySelect
             id="threejs-family"
             families={families}
+            status={familiesStatus}
+            onRetry={retryFamilies}
             value={family}
             onChange={setFamily}
             disabled={generating}
