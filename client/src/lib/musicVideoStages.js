@@ -19,18 +19,19 @@ import { FINISHED_OUTSIDE_RERENDER_NOTE, finishedOutside, finishedOutsideCovers 
 import { coldOpenScenes, normalizePreMusic, songScenes } from '../../../server/lib/musicVideoColdOpen.js';
 
 /**
- * The steps of a music video, in the order the director decides them. The
+ * The steps of a music video, in the order the director decides them: the
+ * story is planned shot by shot before the Look is cast. The
  * ids are the route's `:stage` values and stay stable across the relabel
- * (#10297 follow-up): Song is `setup`, Look is `cast-sets`, Plan (once
- * Storyboard) is `board`, Shots (once Make) is `produce` — each shot's still,
+ * (#10297 follow-up): Song is `setup`, Look is `cast-sets`, Storyboard (once
+ * Plan) is `board`, Shots (once Make) is `produce` — each shot's still,
  * clip and locks, then the composition over them — and Final render is
  * `review`. `doneWhen` is the one line a step shows under its title.
  */
 export const MUSIC_VIDEO_STAGES = [
   { id: 'setup', label: 'Song', title: 'Song', doneWhen: 'Done when the track is analyzed and every lyric word is timed to the vocal.' },
   { id: 'story', label: 'Story', title: 'Story', optional: true, doneWhen: 'Done when the story direction is ready; this step is optional.' },
+  { id: 'board', label: 'Storyboard', title: 'Storyboard', doneWhen: 'Done when timed shots cover the whole song, each with its action, staging, camera and lyric.' },
   { id: 'cast-sets', label: 'Look', title: 'Look', doneWhen: 'Done when the art direction is written, a visual guide is chosen, and you approve it.' },
-  { id: 'board', label: 'Plan', title: 'Plan', doneWhen: 'Done when timed shots cover the whole song, each with its action, staging, camera and lyric.' },
   { id: 'produce', label: 'Shots', title: 'Shots', doneWhen: 'Done when every shot is locked (a video shot: its still, then its clip) and the composition is ready.' },
   { id: 'review', label: 'Final render', title: 'Final render', doneWhen: 'Done when the full video is rendered from the approved plan and is up to date.' },
   { id: 'publish', label: 'Publish', title: 'Publish', doneWhen: 'Done when every platform you turned on has a post.' },
@@ -46,7 +47,7 @@ export const MUSIC_VIDEO_PAGES = [
 ];
 
 // Old links name the Compose tab, which is now part of Shots; the new names work as links too.
-const LEGACY_STAGE_IDS = { compose: 'produce', plan: 'board', shots: 'produce' };
+const LEGACY_STAGE_IDS = { compose: 'produce', plan: 'board', storyboard: 'board', shots: 'produce' };
 
 
 export const isStageId = (value) => MUSIC_VIDEO_STAGES.some((stage) => stage.id === value);
@@ -435,7 +436,7 @@ export function deriveStages(project, readiness = project?.productionReadiness, 
   const cast = project?.castAndSets || null;
   const run = currentProductionRun(project);
   const planned = !!readiness?.storyboard.approved;
-  const shotsPlanned = (project?.scenes || []).length > 0 && !!readiness && !readiness.storyboard.problems?.length;
+  const shotsPlanned = (project?.scenes || []).length > 0 && !!readiness && !(readiness.storyboard.problems || []).some((text) => !ART_APPROVAL_PROBLEM.test(text));
   const castStopped = castSetsPhase(cast) === 'stopped';
   const castDone = !!readiness?.art.approved;
   // Code and document renders draw the picture themselves; scene footage is optional there.
@@ -563,9 +564,10 @@ function approvalNeeds(project, readiness, run) {
   // A document storyboard brings its shots from the authored source, so it has nothing to plan on the board.
   const draftReview = project.productionReview?.draft || {};
   const documentShots = draftReview.storyboardSource === 'document' && (draftReview.storyboard || []).length > 0;
-  const boardNeedsOwnAction = !art && board && scenes.length === 0 && !documentShots;
+  // Plan comes before Look, so an unplanned board is the director's own action whatever the art's state.
+  const boardNeedsOwnAction = board && scenes.length === 0 && !documentShots;
   const pilotParked = !!run && RESUMABLE_RUN_STATUSES.has(run.status) && !!run.pilot?.scenes?.length && !readiness?.proof?.approved;
-  const planUnfinished = !art && board && scenes.length > 0 && !documentShots && (readiness?.storyboard?.problems || []).some(notFeedback);
+  const planUnfinished = board && scenes.length > 0 && !documentShots && (readiness?.storyboard?.problems || []).some(planProblem);
   return { art, board, artUnwritten, castPhase, ownAction: castNeedsOwnAction || boardNeedsOwnAction, pilotParked, planUnfinished };
 }
 
@@ -592,7 +594,10 @@ function castSetsNextAction({ project, castPhase, kickoffBlockedReason }) {
   return kickoffAction(kickoffBlockedReason);
 }
 
-const boardNextAction = ({ project }) => ({ id: 'plan', kind: 'run', label: 'Plan the shots', shortLabel: 'Plan', ...analyzeFirst(project) });
+// An autopilot project with nothing planned yet is the run's to start (or its Cast & Sets check-in to settle).
+const boardNextAction = (args) => (args.project.automation && !(args.project.scenes || []).length && args.castPhase !== 'settled'
+  ? castSetsNextAction(args)
+  : { id: 'plan', kind: 'run', label: 'Plan the shots', shortLabel: 'Plan', ...analyzeFirst(args.project) });
 
 // The composition step's name by render mode; concat and the other footage-only modes add typography.
 const COMPOSE_LABELS = { document: ['Attach a composition', 'Attach'], eidoverse: ['Save the Eidoverse scene', 'Save'], code: ['Generate the code video', 'Generate'] };
@@ -647,7 +652,7 @@ export function deriveNextAction(project, {
   const needs = approvalNeeds(project, readiness, run);
   const resumable = !!run && RESUMABLE_RUN_STATUSES.has(run.status);
   const busy = renderActive || kickoffRunning;
-  if (needs.planUnfinished && !busy && !resumable) return { id: 'finish-plan', kind: 'goto', stage: 'board', label: 'Finish the plan', shortLabel: 'Plan' };
+  if (needs.planUnfinished && !busy && !resumable) return { id: 'finish-plan', kind: 'goto', stage: 'board', label: 'Finish the storyboard', shortLabel: 'Storyboard' };
   if (shouldJumpToReview(project, { run, art: needs.art, board: needs.board, pilotParked: needs.pilotParked, busy, ownAction: needs.ownAction })) {
     return reviewProductionAction(needs);
   }
@@ -748,6 +753,9 @@ function unlockedDetail(readiness, item) {
 // checklist lists those requests on their own Feedback row instead.
 const FEEDBACK_PROBLEM = /^Resolve (art|storyboard|proof) feedback for /;
 const notFeedback = (text) => !FEEDBACK_PROBLEM.test(text);
+// Plan comes before Look, so the storyboard gate's "approve the art first" is Look's to settle, not Plan's.
+const ART_APPROVAL_PROBLEM = /^Review and approve the current art direction/;
+const planProblem = (text) => notFeedback(text) && !ART_APPROVAL_PROBLEM.test(text);
 
 /**
  * Whether Make shows the animated proof: only while something needs it — a
@@ -811,8 +819,6 @@ function feedbackItem(project, stage, readiness, { optional = false } = {}) {
 // Storyboard readiness problems, grouped by what the user has to go fix. The
 // server returns plain sentences; the first matching rule picks the group.
 const STORYBOARD_PROBLEM_GROUPS = [
-  // The art approval lives on the Look step, so the button goes there.
-  { id: 'art', label: 'Art direction', test: /art direction|art feedback/i, action: { label: 'Review art direction', stage: APPROVAL_STAGES.art, anchor: APPROVAL_ANCHORS.art } },
   // A document storyboard needs a manifest from its current build; its message mentions timing, so it is matched first.
   { id: 'manifest', label: 'Document shot manifest', test: /shot manifest/i, action: { label: 'Import the shot manifest', anchor: 'mv-review-planning' } },
   { id: 'lyrics', label: 'Lyrics', test: /lyrics|instrumental/i, action: { label: 'Import lyrics', stage: 'setup', anchor: 'mv-lyrics-import' } },
@@ -827,17 +833,14 @@ function storyboardProblemItems(readiness, scenes = []) {
   // Shots whose lyric anchors differ from the singing get a row of their own that names each shot.
   const anchors = lyricAnchorItem(readiness, scenes);
   const stale = staleRowsItem(readiness);
-  const problems = summarizeStoryboardProblems(readiness?.storyboard?.problems?.filter(notFeedback)
+  const problems = summarizeStoryboardProblems(readiness?.storyboard?.problems?.filter(planProblem)
     .filter((text) => (!anchors || !ANCHOR_PROBLEM.test(text)) && (!stale || !STALE_ROWS_PROBLEM.test(text))));
   if (readiness?.storyboard?.approved || (!problems.length && !anchors && !stale)) return [];
   return [...STORYBOARD_PROBLEM_GROUPS.flatMap((group, index) => {
     const earlier = STORYBOARD_PROBLEM_GROUPS.slice(0, index);
     const mine = problems.filter((text) => group.test.test(text) && !earlier.some((g) => g.test.test(text)));
     if (!mine.length) return [];
-    // An art approval that went stale says what changed, so the row is not a bare "approve first".
-    const stale = group.id === 'art' && staleApprovalText(readiness?.art?.stale);
-    const details = stale ? mine.map((text) => (ART_APPROVAL_PROBLEM.test(text) ? `${stale} Approve it again on the Look step.` : text)) : mine;
-    return [namedShots({ id: `board-${group.id}`, label: group.label, done: false, details, action: group.action }, readiness, scenes)];
+    return [namedShots({ id: `board-${group.id}`, label: group.label, done: false, details: mine, action: group.action }, readiness, scenes)];
   }), ...(stale ? [stale] : []), ...(anchors ? [anchors] : [])];
 }
 
@@ -898,7 +901,6 @@ function staleRowsItem(readiness) {
     action: { label: rows.length === 1 ? 'Remove it' : `Remove all ${rows.length}`, run: 'remove-stale-rows' },
   };
 }
-const ART_APPROVAL_PROBLEM = /^Review and approve the current art direction/;
 const quoted = (lines) => (lines.length ? lines.map((line) => `“${line}”`).join(' / ') : 'nothing');
 
 /**
@@ -1109,10 +1111,14 @@ function produceChecklist({ project, readiness, scenes, draft, mode }) {
   // A document storyboard is approved whole; Board shots lock their stills one by one or all at once.
   const documentBoard = draft.storyboardSource === 'document';
   const reviewed = approvalItem(project, readiness, 'storyboard', 'Timed storyboard', documentBoard ? 'Ready for your review below.' : 'Lock each still on its card, or lock them all below.');
-  const planOpen = (readiness?.storyboard?.problems || []).some(notFeedback) && !reviewed.stale;
+  const planOpen = (readiness?.storyboard?.problems || []).some(planProblem) && !reviewed.stale;
   const stills = documentBoard ? reviewed : { ...unlockedDetail(readiness, reviewed), label: 'Every still locked',
     ...(reviewed.action && !reviewed.action.run ? { action: { ...reviewed.action, label: 'Lock the stills' } } : {}) };
-  items.push(planOpen && !reviewed.done ? { ...stills, detail: 'Finish the plan first.', action: { label: 'Open the plan', stage: 'board' } } : stills);
+  const lookOpen = !planOpen && !reviewed.stale && (readiness?.storyboard?.problems || []).some((text) => ART_APPROVAL_PROBLEM.test(text));
+  items.push(reviewed.done ? stills
+    : planOpen ? { ...stills, detail: 'Finish the storyboard first.', action: { label: 'Open the storyboard', stage: 'board' } }
+      : lookOpen ? { ...stills, detail: 'Approve the Look first.', action: { label: 'Open Look', stage: 'cast-sets', anchor: APPROVAL_ANCHORS.art } }
+        : stills);
   const lockClips = clipLockItem(readiness);
   if (lockClips) items.push(lockClips);
   const work = COMPOSITION_ITEMS[mode]?.(project.composition || {}, project);
