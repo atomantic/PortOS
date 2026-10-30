@@ -25,7 +25,7 @@ async function runApiSyncAccount(accountId, io) {
   if (enabledCalendars.length === 0) throw new ServerError('No enabled subcalendars', { status: 400 });
 
   io?.emit('calendar:sync:started', { accountId, method: 'api' });
-  console.log(`📅 Starting Google API sync for ${account.name} (${enabledCalendars.length} calendars)`);
+  console.log(`📅 Starting Google API sync for account ${accountId} (${enabledCalendars.length} calendars)`);
 
   try {
     const auth = await getAuthenticatedClient();
@@ -105,7 +105,7 @@ async function runApiSyncAccount(accountId, io) {
         };
         failures.push(failure);
         results.push({ ...failure, status: 'error' });
-        console.warn(`⚠️ Google API: ${sc.name} fetch failed: ${error}`);
+        console.warn(`⚠️ Google API: calendar fetch failed for account ${accountId}${reason?.code ? ` code=${reason.code}` : ''}`);
         continue;
       }
       const { allEvents } = fetchResult.value;
@@ -114,7 +114,7 @@ async function runApiSyncAccount(accountId, io) {
       totalUpdated += syncResult.updated;
       totalPruned += syncResult.pruned;
       results.push({ calendarId: sc.calendarId, calendarName: sc.name, events: allEvents.length, ...syncResult, status: 'success' });
-      console.log(`📅 Google API: ${sc.name} → ${allEvents.length} events`);
+      console.log(`📅 Google API: account ${accountId} calendar synced → ${allEvents.length} events`);
     }
 
     if (failures.length === enabledCalendars.length) {
@@ -132,12 +132,12 @@ async function runApiSyncAccount(accountId, io) {
       accountId, newEvents: totalNew, updated: totalUpdated, pruned: totalPruned, status, method: 'api',
       ...(failures.length ? { reason, failedCalendars: failures } : {}),
     });
-    console.log(`📅 Google API sync ${status} for ${account.name}: ${totalNew} new, ${totalUpdated} updated, ${totalPruned} pruned`);
+    console.log(`📅 Google API sync ${status} for account ${accountId}: ${totalNew} new, ${totalUpdated} updated, ${totalPruned} pruned`);
 
     return { newEvents: totalNew, updated: totalUpdated, pruned: totalPruned, calendars: results, status, ...(reason ? { reason } : {}) };
   } catch (error) {
     const failure = error instanceof Error ? error : new Error(String(error));
-    console.error(`❌ Google API sync failed for ${account.name}: ${failure.message}`);
+    console.error(`❌ Google API sync failed for account ${accountId}${failure.code ? ` code=${failure.code}` : ''}`);
     io?.emit('calendar:sync:failed', { accountId, error: failure.message, method: 'api', ...(failure.calendars ? { calendars: failure.calendars } : {}) });
     await Promise.resolve().then(() => updateSyncStatus(accountId, 'error')).catch(() => {});
     throw error instanceof Error ? error : failure;
@@ -176,6 +176,6 @@ export async function apiDiscoverCalendars(accountId) {
 
   await updateSubcalendars(accountId, merged);
 
-  console.log(`📅 Discovered ${allCalendars.length} calendars via Google API for ${account.name}`);
+  console.log(`📅 Discovered ${allCalendars.length} calendars via Google API for account ${accountId}`);
   return { calendars: merged, status: 'success' };
 }

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Mock the token source and the HTTP client so the sync runs offline.
 vi.mock('./messageTokenExtractor.js', () => ({
@@ -53,5 +53,56 @@ describe('syncOutlookCalendarApi — malformed-body masquerade guard', () => {
     expect(result.status).toBe('success');
     expect(result.events).toHaveLength(1);
     expect(result.events[0].title).toBe('Standup');
+  });
+});
+
+// #14157: the log stream is forwarded to logs:line subscribers, so the account
+// address and the provider response body must stay out of it.
+describe('syncOutlookCalendarApi — log privacy (#14157)', () => {
+  const MARKER_ACCOUNT = { id: 'acc-privacy-1', email: 'zz-marker-mailbox@example.com' };
+  let lines;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    lines = [];
+    const sink = (...args) => { lines.push(args.join(' ')); };
+    vi.spyOn(console, 'log').mockImplementation(sink);
+    vi.spyOn(console, 'error').mockImplementation(sink);
+    vi.spyOn(console, 'warn').mockImplementation(sink);
+    getToken.mockResolvedValue({ token: 'fake-token' });
+  });
+
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  it('logs the account id and not the address on a successful sync', async () => {
+    fetchWithTimeout.mockResolvedValue(mockJsonResponse({ value: [] }));
+    await syncOutlookCalendarApi(MARKER_ACCOUNT, { events: [] }, null);
+    const out = lines.join('\n');
+    expect(out).toContain('acc-privacy-1');
+    expect(out).toContain('sync complete');
+    expect(out).not.toContain('zz-marker-mailbox');
+  });
+
+  it('logs the account id and status, not the address or response body, on an HTTP error', async () => {
+    fetchWithTimeout.mockResolvedValue({
+      ok: false,
+      status: 500,
+      text: async () => 'upstream said zz-marker-mailbox@example.com is broken',
+    });
+    const result = await syncOutlookCalendarApi(MARKER_ACCOUNT, { events: [] }, null);
+    expect(result.status).toBe('api-error');
+    const out = lines.join('\n');
+    expect(out).toContain('acc-privacy-1');
+    expect(out).toContain('status=500');
+    expect(out).not.toContain('zz-marker-mailbox');
+    expect(out).not.toContain('upstream said');
+  });
+
+  it('logs the account id and not the address when the token is unavailable', async () => {
+    getToken.mockResolvedValue({ error: true, message: 'no token' });
+    await syncOutlookCalendarApi(MARKER_ACCOUNT, { events: [] }, null);
+    const out = lines.join('\n');
+    expect(out).toContain('acc-privacy-1');
+    expect(out).not.toContain('zz-marker-mailbox');
   });
 });

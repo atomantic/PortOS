@@ -188,7 +188,7 @@ async function runAccountSync(accountId, io, options) {
   if (!account.enabled) throw new ServerError('Account is disabled', { status: 400 });
 
   io?.emit('calendar:sync:started', { accountId });
-  console.log(`📅 Starting calendar sync for ${account.name} (${account.type})`);
+  console.log(`📅 Starting calendar sync for account ${accountId} (${account.type})`);
 
   const providerSync = async () => {
     const cache = await loadCache(accountId);
@@ -251,7 +251,7 @@ async function runAccountSync(accountId, io, options) {
         // A windowed fetch only vouches for events overlapping its window.
         cache.events = cache.events.filter(e => !e.externalId || fetchedIds.has(e.externalId) || !overlapsSyncWindow(e, providerResult?.dateRange));
         pruned = before - cache.events.length;
-        if (pruned > 0) console.log(`🧹 Pruned ${pruned} stale calendar events from ${account.name}`);
+        if (pruned > 0) console.log(`🧹 Pruned ${pruned} stale calendar events for account ${accountId}`);
       }
 
       return { newCount: uniqueNew.length, pruned, total: cache.events.length };
@@ -269,13 +269,13 @@ async function runAccountSync(accountId, io, options) {
       console.error(`🗓️  Activity ingest failed for account ${accountId}: ${err.message}`));
 
     io?.emit('calendar:sync:completed', { accountId, newEvents: newCount, pruned, status: providerStatus });
-    console.log(`📅 Sync complete for ${account.name}: ${newCount} new, ${pruned} pruned, status=${providerStatus}`);
+    console.log(`📅 Sync complete for account ${accountId}: ${newCount} new, ${pruned} pruned, status=${providerStatus}`);
 
     return { newEvents: newCount, pruned, total, status: providerStatus };
   };
 
   const result = await providerSync().catch(async (error) => {
-    console.error(`📅 Sync failed for ${account.name} (${account.type}): ${error.message}`);
+    console.error(`📅 Sync failed for account ${accountId} (${account.type}) status=${error.status ?? 502}${error.code ? ` code=${error.code}` : ''}`);
     await updateSyncStatus(accountId, 'error').catch(() => {});
     io?.emit('calendar:sync:failed', { accountId, error: error.message });
     throw error instanceof ServerError ? error : new ServerError(error.message, { status: 502 });
