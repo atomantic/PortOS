@@ -814,7 +814,11 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // v34 = a shot moved before the song (`scene.preMusic`: its cold-open length
   // and sound), which a v33 strict scene schema rejects with a 400 and a v33
   // re-plan drops. Optional, no backfill: a shot without it plays on the song.
-  musicVideoProjects: 34,
+  // v35 = the cast guides and Cast & Sets sheets a still was conditioned on
+  // (`take.castInputs`). An older peer that rebuilds a take from an explicit
+  // field list drops the field and a newer `updatedAt` would LWW that loss
+  // back. Optional, no backfill: a take without it reads as unknown, not stale.
+  musicVideoProjects: 35,
   // v1 = Creative Commission FEEDBACK federation (PostgreSQL `commission_feedback`)
   // via the per-record peer-sync push pipeline (record kind `commissionFeedback`,
   // sync category `commissionFeedback`, #2686 — split-record follow-up to #2657).

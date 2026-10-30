@@ -111,6 +111,7 @@ describe('useMusicVideoSceneMedia Casting guides (#12763)', () => {
     ]); });
     await act(async () => { await result.current.generateFrame(cast.scenes[0]); });
     expect(generateImage.mock.calls.at(-1)[0].referenceImageFiles).toEqual(['child.png']);
+    expect(generateImage.mock.calls.at(-1)[0].musicVideo.castInputs).toEqual({ ingredientId: 'cat-chr-x', guides: ['child.png'], sheets: [] });
   });
 
   // Uniquely catches a failed reload on tab refocus wiping loaded guides, so renders go out without them.
@@ -130,5 +131,34 @@ describe('useMusicVideoSceneMedia Casting guides (#12763)', () => {
     expect(result.current.castMedia['cat-chr-x']).toHaveLength(1);
     await act(async () => { await result.current.generateFrame(cast.scenes[0]); });
     expect(generateImage.mock.calls.at(-1)[0].referenceImageFiles).toEqual(['child.png']);
+    expect(generateImage.mock.calls.at(-1)[0].musicVideo.castInputs).toEqual({ ingredientId: 'cat-chr-x', guides: ['child.png'], sheets: [] });
+  });
+
+  // Uniquely catches a synchronous frame, or a one-tap re-render, posting the take without the guides it sent.
+  it('posts the sent guides and a one-tap re-render on a frame that finishes inline', async () => {
+    const { addMusicVideoSceneTake } = await import('../services/apiMusicVideo.js');
+    addMusicVideoSceneTake.mockReset();
+    addMusicVideoSceneTake.mockResolvedValue({ scene: { referenceImageId: 'done.png', takes: [] } });
+    generateImage.mockResolvedValueOnce({ filename: 'done.png' });
+    listCatalogIngredientMedia.mockResolvedValue([{ mediaKey: 'child.png', kind: 'reference', library: { variant: { age: 7 }, guide: true } }]);
+    const cast = {
+      id: 'p4',
+      concept: { subjects: [{ id: 'mvc-1', kind: 'character', name: 'Example Lead', ingredientId: 'cat-chr-x' }] },
+      scenes: [{ sceneId: 's1', order: 0, label: 'Intro', prompt: 'a lighthouse', referenceImageId: null, takes: [], endFramePrompt: 'a sketch', characterVariant: { ingredientId: 'cat-chr-x', age: 7 } }],
+    };
+    const { result } = renderHook(() => useMusicVideoSceneMedia({ project: cast, videoSettings: { settings: {} }, applyScenePatch: vi.fn() }));
+    await waitFor(() => expect(result.current.castMedia['cat-chr-x']).toHaveLength(1));
+    await act(async () => { await result.current.generateFrame(cast.scenes[0], { replaceSelection: true }); });
+    const castInputs = { ingredientId: 'cat-chr-x', guides: ['child.png'], sheets: [] };
+    expect(generateImage.mock.calls.at(-1)[0].musicVideo).toMatchObject({ castInputs, replaceSelection: true });
+    expect(addMusicVideoSceneTake).toHaveBeenCalledWith('p4', 's1', {
+      kind: 'image', assetId: 'done.png', source: 'generated', castInputs, replaceSelection: true,
+    }, { silent: true });
+    generateImage.mockResolvedValueOnce({ filename: 'end.png' });
+    await act(async () => { await result.current.generateEndFrame(cast.scenes[0], { replaceSelection: true }); });
+    expect(generateImage.mock.calls.at(-1)[0].musicVideo).toMatchObject({ slot: 'end', castInputs, replaceSelection: true });
+    expect(addMusicVideoSceneTake).toHaveBeenLastCalledWith('p4', 's1', {
+      kind: 'endImage', assetId: 'end.png', source: 'generated', castInputs, replaceSelection: true,
+    }, { silent: true });
   });
 });

@@ -34,6 +34,7 @@ import { authoredShotPrompt, musicVideoFrameModelInput } from '../../lib/musicVi
 import { sceneEndFrameRequestFields } from '../../lib/musicVideoEndFrame.js';
 import { conditioningReferences, falRouteVideoSettings, runwayRouteVideoSettings } from './productionPool.js';
 import { loadSceneCastMedia } from './castGuideMedia.js';
+import { castInputsFromReferences } from '../../lib/musicVideoCastLook.js';
 import { musicVideoFrameGenSize } from '../../lib/musicVideoAspect.js';
 
 const unprompted = (scene, what) => new ServerError(
@@ -58,8 +59,15 @@ async function dispatchFrame({ project, scene, route, tag, settings }) {
   const { prompt, promptAdditions } = musicVideoFrameModelInput(project, scene, { repairs: unmet, fixes, greybox });
   if (!prompt) throw unprompted(scene, 'frame');
   // A Casting guide may live in any image-input root (catalog.js validates it with resolveImageInputPath).
-  const referenceImagePaths = conditioningReferences(project, scene, await loadSceneCastMedia(scene), greybox)
-    .map((ref) => (ref.greybox ? greybox.path : ref.castGuide ? resolveImageInputPath(ref.imageId) : resolveGalleryImage(ref.imageId, { mustExist: false }))).filter(Boolean);
+  const chosen = conditioningReferences(project, scene, await loadSceneCastMedia(scene), greybox);
+  const sent = [];
+  const referenceImagePaths = [];
+  for (const ref of chosen) {
+    const path = ref.greybox ? greybox.path : ref.castGuide ? resolveImageInputPath(ref.imageId) : resolveGalleryImage(ref.imageId, { mustExist: false });
+    if (!path) continue;
+    referenceImagePaths.push(path);
+    sent.push(ref);
+  }
   const [{ resolveRenderTargetConfig }, { resolveImageCleaners }, { enqueueJob }] = await Promise.all([
     import('../imageGen/cloudProviderConfig.js'),
     import('../../lib/imageCleanDefaults.js'),
@@ -80,7 +88,8 @@ async function dispatchFrame({ project, scene, route, tag, settings }) {
     cleanC2PA,
     denoise,
     ...(referenceImagePaths.length ? { referenceImagePaths, referenceImageStrengths: referenceImagePaths.map(() => 1) } : {}),
-    musicVideo: tag,
+    // Stamp the references this enqueue sends. The hook must not re-read Casting when the job finishes.
+    musicVideo: { ...tag, castInputs: castInputsFromReferences(scene, sent) },
   };
   const baseParams = resolved.cloud
     ? { ...resolved.cloud.jobParams, ...common }

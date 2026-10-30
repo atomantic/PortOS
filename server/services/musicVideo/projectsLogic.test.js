@@ -963,6 +963,39 @@ describe('mergeProjectRecord (#1770 LWW)', () => {
     expect(r.next.deleted).toBe(true);
   });
 
+  // Uniquely catches an older peer's newer body dropping castInputs from a take it still sends, or resurrecting a take it dropped.
+  it('keeps cast inputs an older peer omitted, and a newer peer\'s own snapshot', () => {
+    const castInputs = { ingredientId: 'cat-example', guides: ['child.png'], sheets: [{ id: 'mvr-cs-character', imageId: 'sheet.png' }] };
+    const local = {
+      id: 'mv-1', updatedAt: '2026-01-01T00:00:00Z',
+      scenes: [{ sceneId: 's1', takes: [
+        { takeId: 'mvt-1', kind: 'image', assetId: 'frame.png', castInputs },
+        { takeId: 'mvt-dropped', kind: 'image', assetId: 'gone.png', castInputs },
+      ] }],
+    };
+    const remote = {
+      id: 'mv-1', updatedAt: '2026-01-05T00:00:00Z', name: 'remote edit',
+      scenes: [{ sceneId: 's1', prompt: 'newer prompt', takes: [
+        { takeId: 'mvt-1', kind: 'image', assetId: 'frame.png', prompt: 'newer' },
+        { takeId: 'mvt-2', kind: 'image', assetId: 'other.png' },
+      ] }],
+    };
+    const { next, remoteWins } = mergeProjectRecord(local, remote);
+    expect(remoteWins).toBe(true);
+    expect(next.name).toBe('remote edit');
+    expect(next.scenes[0].prompt).toBe('newer prompt');
+    expect(next.scenes[0].takes[0]).toMatchObject({ prompt: 'newer', castInputs });
+    expect(next.scenes[0].takes[1]).not.toHaveProperty('castInputs');
+    expect(next.scenes[0].takes.some((take) => take.takeId === 'mvt-dropped')).toBe(false);
+
+    const newer = { ingredientId: null, guides: ['face-new.png'], sheets: [] };
+    const kept = mergeProjectRecord(
+      { id: 'mv-1', updatedAt: '2026-01-01T00:00:00Z', scenes: [{ sceneId: 's1', takes: [{ takeId: 'mvt-1', castInputs }] }] },
+      { id: 'mv-1', updatedAt: '2026-01-05T00:00:00Z', scenes: [{ sceneId: 's1', takes: [{ takeId: 'mvt-1', castInputs: newer }] }] },
+    );
+    expect(kept.next.scenes[0].takes[0].castInputs).toEqual(newer);
+  });
+
   it('a same-updatedAt re-push is a no-op (changed=false, no churn)', () => {
     const local = { id: 'mv-1', updatedAt: '2026-01-05T00:00:00Z', name: 'same', deleted: false, deletedAt: null };
     const remote = { id: 'mv-1', updatedAt: '2026-01-05T00:00:00Z', name: 'same' };

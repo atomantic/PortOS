@@ -6,7 +6,8 @@ import { effectiveJobPrompt } from '../lib/federatedMediaWire.js';
  * `params.musicVideo`, appends the rendered filename to that project scene's
  * immutable takes (#8965) — server-side, independent of any mounted client. The
  * take becomes the scene's `referenceImageId` only while that slot is still
- * unselected; it never replaces a frame the director already selected. This is
+ * unselected. It replaces a selected frame only when the job tag sets
+ * `replaceSelection` (a one-tap re-render). This is
  * the durable counterpart to the director board's optimistic generate-then-
  * attach: a long-running local/Codex render that completes after the user
  * navigated away, refreshed, or moved their cursor still lands on the scene
@@ -54,14 +55,20 @@ const hook = createMediaJobImageHook({
   // A deleted project/scene 404s here, so a late completion can't resurrect it.
   // A render tagged `slot: 'end'` (#11173) is a candidate for the scene's
   // style-break end frame, never its start frame.
-  attach: ({ projectId, sceneId, filename, job }) => appendSceneTakes(projectId, sceneId, [{
-    kind: job.params?.musicVideo?.slot === 'end' ? 'endImage' : 'image',
-    assetId: filename,
-    source: 'generated',
-    provider: 'portos',
-    jobId: typeof job.id === 'string' ? job.id : null,
-    prompt: effectiveJobPrompt(job),
-  }]),
+  attach: ({ projectId, sceneId, filename, job }) => {
+    const tag = job.params?.musicVideo || {};
+    return appendSceneTakes(projectId, sceneId, [{
+      kind: tag.slot === 'end' ? 'endImage' : 'image',
+      assetId: filename,
+      source: 'generated',
+      provider: 'portos',
+      jobId: typeof job.id === 'string' ? job.id : null,
+      prompt: effectiveJobPrompt(job),
+      // Copied from the submit, not recomputed: a long render can finish after Casting changes.
+      ...(tag.castInputs ? { castInputs: tag.castInputs } : {}),
+      ...(tag.replaceSelection === true ? { replaceSelection: true } : {}),
+    }]);
+  },
   onAttached: ({ projectId, sceneId, filename }, { scene, appended }) => {
     musicVideoEvents.emit('scene-image', {
       projectId,
