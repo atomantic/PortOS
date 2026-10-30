@@ -5,16 +5,19 @@
  * `<boardPath>/panel/:panelId` and the view in `?view=board|play`.
  *
  * Beats view: one row per beat (title, musical role, estimated length) with a
- * strip of panels. Board view: every panel as one sheet, the classic
- * storyboard page. Play view: the animatic, with the temp track under it. Each write returns the whole board, and the editor keeps the
- * newest one it has seen (`updatedAt`), so two quick edits can't land out of
- * order. `embedded` drops the page chrome (back link, full height, song brief
- * and Make video) for a host page that has its own.
+ * strip of panels. Board view: the same beats as storyboard sheets, each
+ * beat's panels in a grid. Play view: the animatic, with the temp track under
+ * it. A panel opens in the side panel. Each write returns the whole board, and
+ * the editor keeps the newest one it has seen (`updatedAt`), so two quick
+ * edits can't land out of order. `embedded` drops the page chrome (back link,
+ * full height, song brief and Make video) for a host page that has its own,
+ * opens on the board view, folds the board settings behind a toggle, and shows
+ * the host's `actions` beside the editor's own.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
-import { ArrowLeft, BookOpen, Clapperboard, ExternalLink, LayoutGrid, LayoutPanelLeft, ListMusic, Loader2, Play, Plus, Rows3, ScrollText } from 'lucide-react';
+import { ArrowLeft, BookOpen, Clapperboard, ExternalLink, LayoutGrid, LayoutPanelLeft, ListMusic, Loader2, Play, Plus, Rows3, ScrollText, SlidersHorizontal } from 'lucide-react';
 import TabPills from '../ui/TabPills';
 import toast from '../ui/Toast';
 import socket from '../../services/socket';
@@ -32,7 +35,6 @@ import MakeEmptyPanels from './MakeEmptyPanels';
 import PlotBeatsDrawer from './PlotBeatsDrawer';
 import SongBriefDrawer from './SongBriefDrawer';
 import StoryboardPlayer from './StoryboardPlayer';
-import PanelCard from './PanelCard';
 import PanelDrawer from './PanelDrawer';
 import VideoDraftDrawer from '../creative-director/VideoDraftDrawer';
 import { beatSeconds, findPanel } from './storyboardArt';
@@ -50,10 +52,12 @@ const EDITOR_PARAMS = ['panelTab', 'makeView', 'node', 'plot', 'brief', 'video',
 const selectClass = 'min-h-[44px] bg-port-bg border border-port-border rounded px-2 text-sm text-white';
 const headerButton = 'min-h-[44px] inline-flex items-center gap-1.5 rounded border border-port-border px-3 text-sm text-gray-200 hover:border-port-accent/60 hover:text-white';
 
-export default function StoryboardEditor({ boardId: id, panelId, boardPath, embedded = false, onBoard, refreshKey = 0 }) {
+export default function StoryboardEditor({ boardId: id, panelId, boardPath, embedded = false, onBoard, refreshKey = 0, actions = null }) {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
-  const view = VIEW_IDS.has(searchParams.get('view')) ? searchParams.get('view') : 'beats';
+  const defaultView = embedded ? 'board' : 'beats';
+  const view = VIEW_IDS.has(searchParams.get('view')) ? searchParams.get('view') : defaultView;
+  const [showSettings, setShowSettings] = useState(!embedded);
   // Drawers over the board (`?plot=open`, `?brief=open`, `?video=open`), deep-linkable.
   const setDrawerParam = (key, on) => setSearchParams((prev) => {
     const next = new URLSearchParams(prev);
@@ -171,7 +175,7 @@ export default function StoryboardEditor({ boardId: id, panelId, boardPath, embe
   const closePanel = () => navigate(`${boardPath}${panelSearch()}`);
   const setView = (next) => setSearchParams((prev) => {
     const params = new URLSearchParams(prev);
-    if (next === 'beats') params.delete('view');
+    if (next === defaultView) params.delete('view');
     else params.set('view', next);
     return params;
   }, { replace: true });
@@ -190,6 +194,14 @@ export default function StoryboardEditor({ boardId: id, panelId, boardPath, embe
   };
 
   const found = board && panelId ? findPanel(board, panelId) : null;
+  // Previous / next panel in story order; `checkOnly` asks whether one exists.
+  const stepPanel = (delta, checkOnly = false) => {
+    const order = (board?.beats || []).flatMap((beat) => beat.panels.map((panel) => panel.id));
+    const target = order[order.indexOf(panelId) + delta];
+    if (!found || !target) return false;
+    if (!checkOnly) openPanel(target);
+    return true;
+  };
 
   const panelHandlers = {
     onPatch: (patch) => write(() => updateStoryboardPanel(id, panelId, patch)),
@@ -281,31 +293,43 @@ export default function StoryboardEditor({ boardId: id, panelId, boardPath, embe
               onCommit={(name) => write(() => updateStoryboard(id, { name }))} className="text-base font-semibold" />
           </div>
           <span className="text-sm text-gray-400 tabular-nums shrink-0" title="Estimated runtime">{formatTimecode(runtime)}</span>
+          {embedded && (
+            <button type="button" onClick={() => setShowSettings((on) => !on)} aria-expanded={showSettings} aria-controls="storyboard-settings"
+              aria-label="Board settings" title="Logline, aspect, art style, mood board"
+              className={`min-h-[44px] min-w-[44px] inline-flex items-center justify-center rounded hover:text-white ${showSettings ? 'text-port-accent' : 'text-gray-400'}`}>
+              <SlidersHorizontal size={18} />
+            </button>
+          )}
           <TabPills tabs={VIEW_TABS} activeTab={view} onChange={setView} variant="pills" size="sm" mobileCompact ariaLabel="Storyboard view" />
         </div>
-        <div className="flex flex-wrap items-start gap-2">
-          <div className="flex-1 min-w-[14rem]">
-            <CommitField id="storyboard-logline" multiline value={board.logline} maxLength={STORYBOARD_LIMITS.logline}
-              placeholder="Logline: the story in a sentence" ariaLabel="Logline" minHeightClass="min-h-[2.75rem]"
-              onCommit={(logline) => write(() => updateStoryboard(id, { logline }))} />
+        {showSettings && (
+          <div id="storyboard-settings" className="flex flex-wrap items-start gap-2">
+            <div className="flex-1 min-w-[14rem]">
+              <CommitField id="storyboard-logline" multiline value={board.logline} maxLength={STORYBOARD_LIMITS.logline}
+                placeholder="Logline: the story in a sentence" ariaLabel="Logline" minHeightClass="min-h-[2.75rem]"
+                onCommit={(logline) => write(() => updateStoryboard(id, { logline }))} />
+            </div>
+            <label htmlFor="storyboard-aspect" className="sr-only">Aspect ratio</label>
+            <select id="storyboard-aspect" value={board.aspectRatio} className={selectClass}
+              onChange={(event) => write(() => updateStoryboard(id, { aspectRatio: event.target.value }))}>
+              {STORYBOARD_ASPECT_RATIOS.map((ratio) => <option key={ratio} value={ratio}>{ratio}</option>)}
+            </select>
+            <label htmlFor="storyboard-art-style" className="sr-only">Art style</label>
+            <select id="storyboard-art-style" value={board.artStyle} className={selectClass}
+              onChange={(event) => write(() => updateStoryboard(id, { artStyle: event.target.value }))}>
+              {STORYBOARD_ART_STYLES.map((style) => <option key={style} value={style}>{STORYBOARD_ART_STYLE_LABELS[style]}</option>)}
+            </select>
+            <label htmlFor="storyboard-mood-board" className="sr-only">Mood board</label>
+            <select id="storyboard-mood-board" value={board.moodBoardId || ''} className={`${selectClass} max-w-[12rem]`}
+              onChange={(event) => write(() => updateStoryboard(id, { moodBoardId: event.target.value || null }))}>
+              <option value="">No mood board</option>
+              {missingMoodBoard ? <option value={board.moodBoardId}>Missing mood board</option> : null}
+              {moodBoards.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+            </select>
           </div>
-          <label htmlFor="storyboard-aspect" className="sr-only">Aspect ratio</label>
-          <select id="storyboard-aspect" value={board.aspectRatio} className={selectClass}
-            onChange={(event) => write(() => updateStoryboard(id, { aspectRatio: event.target.value }))}>
-            {STORYBOARD_ASPECT_RATIOS.map((ratio) => <option key={ratio} value={ratio}>{ratio}</option>)}
-          </select>
-          <label htmlFor="storyboard-art-style" className="sr-only">Art style</label>
-          <select id="storyboard-art-style" value={board.artStyle} className={selectClass}
-            onChange={(event) => write(() => updateStoryboard(id, { artStyle: event.target.value }))}>
-            {STORYBOARD_ART_STYLES.map((style) => <option key={style} value={style}>{STORYBOARD_ART_STYLE_LABELS[style]}</option>)}
-          </select>
-          <label htmlFor="storyboard-mood-board" className="sr-only">Mood board</label>
-          <select id="storyboard-mood-board" value={board.moodBoardId || ''} className={`${selectClass} max-w-[12rem]`}
-            onChange={(event) => write(() => updateStoryboard(id, { moodBoardId: event.target.value || null }))}>
-            <option value="">No mood board</option>
-            {missingMoodBoard ? <option value={board.moodBoardId}>Missing mood board</option> : null}
-            {moodBoards.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
-          </select>
+        )}
+        <div className="flex flex-wrap items-start gap-2">
+          {actions}
           <button type="button" onClick={() => setPlotOpen(true)} className={headerButton}>
             <ScrollText size={16} aria-hidden="true" /> Beats from plot
           </button>
@@ -348,22 +372,6 @@ export default function StoryboardEditor({ boardId: id, panelId, boardPath, embe
         ) : view === 'play' ? (
           <StoryboardPlayer board={board} sketchNonce={sketchNonce}
             onTempTrack={(tempTrack) => write(() => updateStoryboard(id, { tempTrack }))} />
-        ) : view === 'board' ? (
-          <ol className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2" aria-label="All panels">
-            {board.beats.flatMap((beat, beatIndex) => beat.panels.map((panel, index) => (
-              <li key={panel.id}>
-                <PanelCard
-                  panel={panel}
-                  number={panelNumbers.get(panel.id)}
-                  aspectRatio={board.aspectRatio}
-                  selected={panel.id === panelId}
-                  sketchNonce={sketchNonce}
-                  caption={index === 0 ? (beat.title || `Beat ${beatIndex + 1}`) : null}
-                  onOpen={() => openPanel(panel.id)}
-                />
-              </li>
-            )))}
-          </ol>
         ) : (
           <div className="space-y-3">
             {board.beats.map((beat, beatIndex) => {
@@ -386,6 +394,7 @@ export default function StoryboardEditor({ boardId: id, panelId, boardPath, embe
                   onAddPanel={() => addPanel(beat.id)}
                   onOpenPanel={openPanel}
                   pinOptions={pinOptions}
+                  grid={view === 'board'}
                 />
               );
             })}
@@ -413,6 +422,7 @@ export default function StoryboardEditor({ boardId: id, panelId, boardPath, embe
         sketchNonce={sketchNonce}
         busy={pending === 'sketch'}
         onClose={closePanel}
+        onStep={stepPanel}
         handlers={panelHandlers}
       />
     </div>

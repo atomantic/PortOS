@@ -120,6 +120,12 @@ export const storyboardPanelNodeUpdateSchema = z.object({
   extraRefs: z.array(recipeImage).max(R.images).optional(),
 }).strict();
 
+// Make empty panels, or Redraw all (every panel, one new frame each).
+export const storyboardMakeEmptySchema = z.object({
+  redraw: z.boolean().optional(),
+  selectNew: z.boolean().optional(),
+}).strict();
+
 // A frame correction: the take it starts from and the director's note.
 export const storyboardPanelCorrectSchema = z.object({
   takeId: entityId,

@@ -450,7 +450,8 @@ export function deriveStages(project, readiness = project?.productionReadiness, 
     setup: projectHasAudio(project) && !!project?.audioAnalysis && lyricSetupState(project, readiness).ok,
     story: !!(project?.concept?.prompt?.trim() || project?.storySummary?.trim() || project?.treatment?.brief?.premise?.trim()),
     'cast-sets': castDone,
-    board: planned || shotsPlanned,
+    // Reopened for rework, the storyboard waits for Approve storyboard whatever else is done.
+    board: (planned || shotsPlanned) && !project?.storyboardReopenedAt,
     produce: shotsDone,
     // A render made before later scene edits no longer counts as the final video.
     review: !!project?.renderHistoryId && !isFinalRenderStale(project),
@@ -1061,6 +1062,8 @@ function boardChecklist({ project, readiness, scenes, draft }) {
   return [
     { id: 'shots', label: 'Shots planned', done: planned, detail: planned ? null : 'Run AI Plan under Planning tools, or add shots by hand on Shots.',
       action: planned ? null : { label: 'Open planning tools', anchor: 'mv-board-plan' } },
+    ...(project?.storyboardReopenedAt ? [{ id: 'storyboard-approved', label: 'Storyboard approved', done: false,
+      detail: 'Reopened for rework. Approve it once the panels are right.', action: { label: 'Approve storyboard', anchor: 'mv-board-approve' } }] : []),
     ...problems,
   ];
 }

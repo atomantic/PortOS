@@ -16,7 +16,7 @@
  */
 
 import { STORYBOARD_DEFAULT_HOLD_SEC } from './storyboardSongBrief.js';
-import { STORYBOARD_MUSICAL_ROLE_LABELS } from './storyboardVocabulary.js';
+import { newStoryboardEntityId, STORYBOARD_MUSICAL_ROLE_LABELS } from './storyboardVocabulary.js';
 
 export const STORYBOARD_FIT_MIN_SHOT_SEC = 2;
 
@@ -235,4 +235,63 @@ export function fitStoryboardToSong(board, song, { starts = {}, minShotSec = STO
     });
   });
   return { beats: fitBeats, shots };
+}
+
+// A song-section name's musical role ("Verse 2" → verse); null when none fits.
+const ROLE_PATTERNS = [
+  ['pre-chorus', /^pre[\s-]?chorus\b/i], ['chorus', /\bchorus\b|^hook\b|^refrain\b/i], ['verse', /^verse\b/i],
+  ['bridge', /^(?:middle\s+(?:8|eight)|bridge)\b/i], ['intro', /^intro\b/i], ['outro', /^(?:outro|ending)\b/i],
+  ['breakdown', /^breakdown\b/i], ['drop', /^(?:beat\s+)?drop\b/i], ['build', /^build\b/i],
+  ['instrumental', /^(?:instrumental|interlude|(?:guitar\s+|piano\s+)?solo)\b/i],
+];
+export const sectionMusicalRole = (label) => ROLE_PATTERNS.find(([, pattern]) => pattern.test(String(label || '').trim()))?.[0] || null;
+
+/**
+ * The board's panels regrouped into one beat per song section, in song order:
+ * consecutive analyzed sections with the same name are one section, and each
+ * panel goes where its fitted shot starts. A panel with no shot follows the
+ * panel before it (the first section when it leads). Each new beat is named
+ * after its section and keeps the story fields (and, the first time, the id)
+ * of the old beat most of its panels came from. Panels keep their ids and
+ * order. Null without sections.
+ */
+export function songSectionBeats(board, project) {
+  const song = storyboardFitSong(project);
+  const raw = song?.sections || [];
+  if (!raw.length) return null;
+  const sections = [];
+  for (const section of raw) {
+    const last = sections.at(-1);
+    if (last && last.label === section.label) last.endSec = section.endSec;
+    else sections.push({ label: section.label, startSec: section.startSec, endSec: section.endSec });
+  }
+  const startOf = new Map((project.scenes || []).filter((scene) => scene.panelId && Number.isFinite(scene.startSec))
+    .map((scene) => [scene.panelId, scene.startSec]));
+  const groups = sections.map(() => []);
+  let current = 0;
+  for (const beat of board.beats) {
+    for (const panel of beat.panels) {
+      if (startOf.has(panel.id)) current = sectionAt(sections, startOf.get(panel.id)) ?? 0;
+      groups[current].push({ panel, beat });
+    }
+  }
+  const usedIds = new Set();
+  return groups.flatMap((group, index) => {
+    if (!group.length) return [];
+    const counts = new Map();
+    for (const { beat } of group) counts.set(beat, (counts.get(beat) || 0) + 1);
+    const source = [...counts.entries()].sort((a, b) => b[1] - a[1])[0][0];
+    const label = sections[index].label || `Section ${index + 1}`;
+    const id = usedIds.has(source.id) ? newStoryboardEntityId('beat') : source.id;
+    usedIds.add(id);
+    return [{
+      ...source,
+      id,
+      title: label,
+      musicalRole: sectionMusicalRole(label) || source.musicalRole || null,
+      sectionHint: label,
+      pin: null,
+      panels: group.map(({ panel }) => panel),
+    }];
+  });
 }

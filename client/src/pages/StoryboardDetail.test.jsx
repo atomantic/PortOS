@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation, useParams } from 'react-router';
 import StoryboardDetail from './StoryboardDetail';
 import StoryboardEditor from '../components/storyboards/StoryboardEditor';
@@ -78,6 +78,35 @@ beforeEach(() => {
 });
 
 describe('StoryboardDetail', () => {
+  // Uniquely catches the embedded editor losing its board-first view, or the side panel's previous / next panel.
+  it('opens a music video\'s board as the panel grid and steps between panels in the side panel', async () => {
+    api.getStoryboard.mockResolvedValue(board({ beats: [
+      { id: 'beat-1', title: 'Intro', what: '', why: '', emotion: '', musicalRole: 'intro', sectionHint: '', panels: [panel('panel-1')] },
+      { id: 'beat-2', title: 'Chorus', what: '', why: '', emotion: '', musicalRole: 'chorus', sectionHint: '', panels: [panel('panel-2')] },
+    ] }));
+    function Embedded() {
+      const { panelId } = useParams();
+      return <StoryboardEditor embedded boardId="sb-1" panelId={panelId} boardPath="/music-video/mv-1/board" />;
+    }
+    render(
+      <MemoryRouter initialEntries={['/music-video/mv-1/board/panel/panel-1']}>
+        <Routes>
+          <Route path="/music-video/:projectId/board" element={<Embedded />} />
+          <Route path="/music-video/:projectId/board/panel/:panelId" element={<Embedded />} />
+        </Routes>
+        <LocationProbe />
+      </MemoryRouter>,
+    );
+    const panelDialog = await screen.findByRole('dialog', { name: 'Panel 1' });
+    expect(screen.getByRole('tab', { name: /Board/ })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.queryByLabelText('Logline')).toBeNull();
+    expect(within(panelDialog).getByRole('button', { name: 'Previous panel' })).toBeDisabled();
+    fireEvent.click(within(panelDialog).getByRole('button', { name: 'Next panel' }));
+    await waitFor(() => expect(screen.getByTestId('location').textContent).toBe('/music-video/mv-1/board/panel/panel-2'));
+    expect(await screen.findByRole('dialog', { name: 'Panel 2' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Next panel' })).toBeDisabled();
+  });
+
   it('edits a music video\'s board in place: panels open under the step and keep its query', async () => {
     api.getStoryboard.mockResolvedValue(board());
     function Embedded() {
@@ -304,7 +333,7 @@ describe('StoryboardDetail', () => {
     expect(api.startStoryboardMakeEmpty).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole('button', { name: 'Make' }));
-    await waitFor(() => expect(api.startStoryboardMakeEmpty).toHaveBeenCalledWith('sb-1'));
+    await waitFor(() => expect(api.startStoryboardMakeEmpty).toHaveBeenCalledWith('sb-1', {}));
     expect(await screen.findByText('0 of 2')).toBeInTheDocument();
 
     const onBatch = socketMock.on.mock.calls.findLast(([event]) => event === 'storyboard:make-batch')[1];
@@ -312,6 +341,32 @@ describe('StoryboardDetail', () => {
     expect(screen.getByText('1 of 2')).toBeInTheDocument();
     act(() => onBatch({ storyboardId: 'sb-1', status: 'done', total: 2, done: 2, failed: 0 }));
     expect(await screen.findByRole('button', { name: 'Make empty panels' })).toBeInTheDocument();
+  });
+
+  // Uniquely catches Redraw all losing its own count, its one-frame redraw, or the "Select the new drawings" choice.
+  it('redraws every panel with one frame each, selecting the new drawings unless unticked', async () => {
+    api.getStoryboard.mockResolvedValue(board());
+    api.getStoryboardMakeEmpty.mockResolvedValue({
+      batch: null,
+      panelCount: 0,
+      allCount: 3,
+      steps: [
+        { nodeId: 'node-writer', title: 'Prompt writer', type: 'llm', model: 'Example · example-model', frames: 0 },
+        { nodeId: 'node-image', title: 'Image', type: 'image', model: 'Default image model', frames: 4 },
+      ],
+    });
+    api.startStoryboardMakeEmpty.mockResolvedValue({ batch: { storyboardId: 'sb-1', status: 'running', redraw: true, total: 3, done: 0, failed: 0 } });
+    renderAt('/storyboards/sb-1');
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Redraw all' }));
+    const confirm = await screen.findByLabelText('Redraw all panels');
+    expect(confirm.textContent).toContain('Redraw all 3 panels? Prompt writer rewrites each prompt on Example · example-model; Image makes 1 frame each with Default image model.');
+    const select = screen.getByLabelText('Select the new drawings');
+    expect(select).toBeChecked();
+    fireEvent.click(select);
+    fireEvent.click(screen.getByRole('button', { name: 'Redraw' }));
+    await waitFor(() => expect(api.startStoryboardMakeEmpty).toHaveBeenCalledWith('sb-1', { redraw: true, selectNew: false }));
+    expect(await screen.findByLabelText('Redrawing panels')).toBeInTheDocument();
   });
 
   it('saves the recipe to the library and loads a saved one onto the board as a copy', async () => {

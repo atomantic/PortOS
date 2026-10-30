@@ -260,6 +260,34 @@ describe('storyboard panel maker', () => {
     expect((await api('get', `/${id}/make-empty`)).body.batch).toBeNull();
   });
 
+  it('redraws every panel: rewrites each prompt, draws one frame, and selects it when asked', async () => {
+    const { id, panelId: framed } = await boardWithPanel({ action: 'Doors' });
+    const beatId = (await api('get', `/${id}`)).body.beats[0].id;
+    await api('post', `/${id}/panels/${framed}/takes`, { source: 'upload', image: 'still.png' });
+    await api('patch', `/${id}/panels/${framed}/make/node-writer`, { text: 'An old photographic prompt' });
+    const blank = (await api('post', `/${id}/beats/${beatId}/panels`, { action: 'Gym floor' })).body.panelId;
+    expect((await api('get', `/${id}/make-empty`)).body).toMatchObject({ panelCount: 1, allCount: 2 });
+
+    const finished = new Promise((resolve) => { onBatchEvent = (event) => { if (event.status === 'done') resolve(event); }; });
+    const start = await api('post', `/${id}/make-empty`, { redraw: true, selectNew: true });
+    expect(start.status).toBe(202);
+    expect(start.body.batch).toMatchObject({ redraw: true, total: 2 });
+    expect(await finished).toMatchObject({ done: 2, failed: 0 });
+    // Both prompts were rewritten, and each panel got one frame.
+    expect(runPrompt).toHaveBeenCalledTimes(2);
+    expect(enqueue.mock.calls.map((call) => call[0].params.storyboardPanelRender.panelId)).toEqual([framed, blank]);
+
+    const tag = (n) => enqueue.mock.calls[n][0].params.storyboardPanelRender;
+    await attachPanelFrame({ ...tag(0), jobId: 'job-1', filename: 'drawn-a.png' });
+    await attachPanelFrame({ ...tag(1), jobId: 'job-2', filename: 'drawn-b.png' });
+    const { body: board } = await api('get', `/${id}`);
+    const [a, b] = board.beats[0].panels;
+    // The new drawing is the art; the old still stays as a take.
+    expect(a.takes.map((t) => t.image)).toEqual(['still.png', 'drawn-a.png']);
+    expect(a.selectedTakeId).toBe(a.takes[1].id);
+    expect(b.takes.find((t) => t.id === b.selectedTakeId).image).toBe('drawn-b.png');
+  });
+
   it('keeps a library of named recipes any board can load as a copy', async () => {
     const recipe = { nodes: [{ id: 'node-a', type: 'text', settings: { source: 'panel' } }, { id: 'node-b', type: 'image', settings: { count: 2 } }],
       edges: [{ from: 'node-a', to: 'node-b', toPort: 'prompt' }] };
