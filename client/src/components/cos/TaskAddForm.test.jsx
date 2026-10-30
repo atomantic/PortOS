@@ -785,6 +785,21 @@ describe('TaskAddForm federated instance picker (#4520)', () => {
     expect(api.addCosTask.mock.calls[1][0].targetInstanceId).toBe(PEER);
   });
 
+  it('names the picked instance in the execution summary, not its raw id', async () => {
+    const user = userEvent.setup();
+    apiSystem.getAssignableInstances.mockResolvedValue({
+      instances: [
+        { instanceId: 'self-instance-id', name: 'workstation', isSelf: true },
+        { instanceId: PEER, name: 'render-box', isSelf: false },
+      ],
+    });
+    render(<TaskAddForm queueFirst providers={[]} apps={[]} onTaskAdded={vi.fn()} />);
+    await user.click(screen.getByRole('button', { name: 'Task configuration' }));
+    await user.selectOptions(await screen.findByLabelText('Run on'), PEER);
+    expect(screen.getByLabelText('Task execution summary')).toHaveTextContent('Instance: render-box');
+    expect(screen.getByLabelText('Task execution summary')).not.toHaveTextContent(PEER);
+  });
+
   it('says so when the instance list fails to load, and Retry restores the picker', async () => {
     const user = userEvent.setup();
     apiSystem.getAssignableInstances.mockRejectedValueOnce(new Error('offline'));
