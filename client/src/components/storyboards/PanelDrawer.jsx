@@ -134,7 +134,7 @@ function ArtSection({ panel, aspectRatio, sketchNonce, moodBoardId, busy, onAddT
   );
 }
 
-function ShotTab({ board, found, panelNumber, sketchNonce, busy, handlers }) {
+function ShotTab({ board, found, panelNumber, sketchNonce, busy, handlers, timing }) {
   const { panel, beat, beatIndex, index } = found;
   const [confirmDelete, setConfirmDelete] = useState(false);
   // A panel made from a production's scene or shot can send its art back there.
@@ -153,6 +153,15 @@ function ShotTab({ board, found, panelNumber, sketchNonce, busy, handlers }) {
     }
     if (next !== panel.seconds) handlers.onPatch({ seconds: next });
   };
+
+  // The drawing prompt carries it as "Camera: …"; a still shows it with motion arrows.
+  const cameraField = (
+    <div>
+      <label htmlFor={fieldId('camera')} className={labelClass}>Camera move</label>
+      <CommitField id={fieldId('camera')} value={panel.camera} maxLength={STORYBOARD_LIMITS.camera}
+        placeholder="e.g. slow push in" onCommit={(camera) => handlers.onPatch({ camera })} />
+    </div>
+  );
 
   return (
     <div className="space-y-3">
@@ -175,30 +184,30 @@ function ShotTab({ board, found, panelNumber, sketchNonce, busy, handlers }) {
         <CommitField id={fieldId('action')} multiline value={panel.action} maxLength={STORYBOARD_LIMITS.panelText}
           placeholder="What we see" onCommit={(action) => handlers.onPatch({ action })} />
       </div>
-      <div>
-        <label htmlFor={fieldId('dialogue')} className={labelClass}>Dialogue or lyric</label>
-        <CommitField id={fieldId('dialogue')} multiline value={panel.dialogue} maxLength={STORYBOARD_LIMITS.panelText}
-          onCommit={(dialogue) => handlers.onPatch({ dialogue })} />
-      </div>
+      {timing ? (
+        <div>
+          <label htmlFor={fieldId('dialogue')} className={labelClass}>Dialogue or lyric</label>
+          <CommitField id={fieldId('dialogue')} multiline value={panel.dialogue} maxLength={STORYBOARD_LIMITS.panelText}
+            onCommit={(dialogue) => handlers.onPatch({ dialogue })} />
+        </div>
+      ) : null}
       <div>
         <span id={fieldId('framing')} className={labelClass}>Framing</span>
         <FramingPicker value={panel.framing} labelId={fieldId('framing')}
           onChange={(framing) => handlers.onPatch({ framing })} />
       </div>
-      <div className="grid grid-cols-2 gap-2">
-        <div>
-          <label htmlFor={fieldId('seconds')} className={labelClass}>Seconds (estimate)</label>
-          <input id={fieldId('seconds')} type="number" inputMode="decimal" min="0.01" step="0.01" max={STORYBOARD_LIMITS.panelSecondsMax}
-            value={secondsDraft} onChange={(event) => setSecondsDraft(event.target.value)} onBlur={commitSeconds}
-            onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); }}
-            className="w-full min-h-[44px] bg-port-bg border border-port-border rounded px-2 text-sm text-white tabular-nums" />
+      {timing ? (
+        <div className="grid grid-cols-2 gap-2">
+          <div>
+            <label htmlFor={fieldId('seconds')} className={labelClass}>Seconds (estimate)</label>
+            <input id={fieldId('seconds')} type="number" inputMode="decimal" min="0.01" step="0.01" max={STORYBOARD_LIMITS.panelSecondsMax}
+              value={secondsDraft} onChange={(event) => setSecondsDraft(event.target.value)} onBlur={commitSeconds}
+              onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); }}
+              className="w-full min-h-[44px] bg-port-bg border border-port-border rounded px-2 text-sm text-white tabular-nums" />
+          </div>
+          {cameraField}
         </div>
-        <div>
-          <label htmlFor={fieldId('camera')} className={labelClass}>Camera</label>
-          <CommitField id={fieldId('camera')} value={panel.camera} maxLength={STORYBOARD_LIMITS.camera}
-            placeholder="e.g. slow push in" onCommit={(camera) => handlers.onPatch({ camera })} />
-        </div>
-      </div>
+      ) : cameraField}
       <DrawPanelButton panel={panel} onDraw={handlers.onDraw} disabled={busy} />
       <div className="flex flex-wrap items-center gap-2 border-t border-port-border pt-3">
         <button type="button" className={iconButton} onClick={() => handlers.onMove({ index: index - 1 })} disabled={index === 0} aria-label="Move panel earlier">
@@ -313,7 +322,7 @@ function CastTab({ panel, onPatch }) {
  * panel in story order (`onStep(delta, true)` only asks whether there is one).
  * Every field saves on its own; the parent applies the board each write returns.
  */
-export default function PanelDrawer({ open, board, found, panelNumber, sketchNonce, busy, onClose, onStep, handlers }) {
+export default function PanelDrawer({ open, board, found, panelNumber, sketchNonce, busy, onClose, onStep, handlers, timing = true }) {
   const [activeTab, setActiveTab] = useDrawerTab('panelTab', 'shot', TAB_IDS);
   const [searchParams] = useSearchParams();
   // The recipe canvas (desktop) needs the room; every other tab stays a column.
@@ -354,7 +363,7 @@ export default function PanelDrawer({ open, board, found, panelNumber, sketchNon
             maxLength={STORYBOARD_LIMITS.notes} onCommit={(notes) => handlers.onPatch({ notes })} />
         </div>
       ) : (
-        <ShotTab board={board} found={found} panelNumber={panelNumber} sketchNonce={sketchNonce} busy={busy} handlers={handlers} />
+        <ShotTab board={board} found={found} panelNumber={panelNumber} sketchNonce={sketchNonce} busy={busy} handlers={handlers} timing={timing} />
       )}
     </Drawer>
   );

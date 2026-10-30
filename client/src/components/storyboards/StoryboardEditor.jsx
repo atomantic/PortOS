@@ -437,6 +437,7 @@ export default function StoryboardEditor({ boardId: id, panelId, boardPath, embe
         onClose={closePanel}
         onStep={stepPanel}
         handlers={panelHandlers}
+        timing={!embedded}
       />
     </div>
   );
