@@ -1144,6 +1144,20 @@ type's redesign fields are accepted. Voice media, execution/session bindings,
 approvals and export consent are excluded. Production uses and inter-character
 links are not copied.
 
+Casting > Design rounds (characters only; refused on a locked record):
+`POST /api/catalog/ingredients/:id/design/spread` accepts `{ idea, count,
+formId?, providerId, model?, effort? }` and returns `{ lines }`, one face
+design per take written by the chosen provider. `POST
+/api/catalog/ingredients/:id/design/render` queues one round and returns
+`{ roundId, jobs: [{ jobId, line }] }`. `mode` is `open` (`lines`, `note?`,
+`framing`, `seedImageFiles?`; text only), `refine` (`baseImageFile`, `note`,
+`count`), `feature` (`baseImageFile`, `feature`: 8 takes of one feature),
+`blend` (`baseImageFile`, `blendImageFile`, `features?`: 4 steps toward the
+second face) or `age` (`baseImageFile`, `formId`, `count`). Rounds never send
+the record's other references as guides. Each take lands as a reference with
+role `design:<roundId>:<n>`, left out of likeness until it is made an anchor.
+Both routes have a `/compose` preview that queues nothing.
+
 The existing `/ingredients/:id/link` API manages membership. Universe canon
 roles populate/remove compatibility projections through serialized mutations;
 new cross-universe placement requires a fork. Removing membership preserves the

@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
-import { catalogPrimitiveOwnerSchema, catalogPrimitiveForkSchema, catalogRefinementSchema, catalogMediaRefineSchema } from '../lib/catalogValidation.js';
+import { catalogPrimitiveOwnerSchema, catalogPrimitiveForkSchema, catalogRefinementSchema, catalogMediaRefineSchema, catalogDesignSpreadSchema, catalogDesignRenderSchema } from '../lib/catalogValidation.js';
 import { getIngredient } from '../services/catalogDB/ingredients.js';
 import { getPrimitiveContext, setPrimitiveOwner, forkPrimitive } from '../services/catalogPrimitives.js';
 
@@ -16,6 +16,25 @@ router.post('/media/refine', asyncHandler(async (req, res) => {
   const body = validateRequest(catalogMediaRefineSchema, req.body);
   const { refineCatalogMedia } = await import('../services/catalogMediaRefinement.js');
   res.json(await refineCatalogMedia(req.params.id, body));
+}));
+
+// Casting > Design rounds: a provider writes face lines, then a round renders.
+const design = () => import('../services/catalogDesign.js');
+router.post('/design/spread/compose', asyncHandler(async (req, res) => {
+  const body = validateRequest(catalogDesignSpreadSchema, req.body);
+  res.json(await (await design()).spreadCatalogDesign(req.params.id, body, { preview: true }));
+}));
+router.post('/design/spread', asyncHandler(async (req, res) => {
+  const body = validateRequest(catalogDesignSpreadSchema, req.body);
+  res.json(await (await design()).spreadCatalogDesign(req.params.id, body));
+}));
+router.post('/design/render/compose', asyncHandler(async (req, res) => {
+  const body = validateRequest(catalogDesignRenderSchema, req.body);
+  res.json(await (await design()).renderCatalogDesign(req.params.id, body, { preview: true }));
+}));
+router.post('/design/render', asyncHandler(async (req, res) => {
+  const body = validateRequest(catalogDesignRenderSchema, req.body);
+  res.json(await (await design()).renderCatalogDesign(req.params.id, body));
 }));
 
 router.get('/universe-context', asyncHandler(async (req, res) => {

@@ -1036,6 +1036,8 @@ migration with explicit recognition of the outgoing shipped defaults.
 
 | `providerExecutionOptions.js` | Read-only runtime capabilities and per-dispatch execution-option preparation. |
 
+| `catalogDesign.js` | Casting Design rounds: `design:<roundId>:<n>` take roles (`designTakeRole`, `designRoundId`, `designTakeIndex`), framings, feature grids (`featureLines`) and blend steps (`blendLines`). |
+
 | `catalogRedesign.js` | Shared editable redesign fields and per-field limits for catalog creative conversations. |
 
 | `releasePublication.js` | Validated request for forge-verified release publication milestones. |

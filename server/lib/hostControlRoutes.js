@@ -1098,6 +1098,10 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/catalog/stories/draft',
   'POST /api/catalog/ingredients/:id/refine',
   'POST /api/catalog/ingredients/:id/media/refine',
+  // Design rounds: a caller-chosen provider writes face lines; renders queue
+  // the same image backend as refinement.
+  'POST /api/catalog/ingredients/:id/design/spread',
+  'POST /api/catalog/ingredients/:id/design/render',
 
   // Importer, Brain and analytics AI (#11036): caller text, stored reference
   // data and a caller-chosen provider reach a non-tool-free runner. Authorize
