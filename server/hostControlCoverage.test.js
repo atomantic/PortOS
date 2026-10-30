@@ -1308,6 +1308,7 @@ const REVIEWED_OPEN_MUTATIONS = [
   ['PATCH /api/video-timeline/projects/:id', RECORDS],
   // /api/voice
   ['PUT /api/voice/config', HANDLER_GATED],
+  ['DELETE /api/voice/profiles/:id', REMOVES_RECORD],
   ['POST /api/voice/profiles/:id/assign', RECORDS],
   ['POST /api/voice/profiles/:id/benchmark', LOCAL_TTS],
   ['POST /api/voice/profiles/:id/benchmark-interactive', LOCAL_TTS],
