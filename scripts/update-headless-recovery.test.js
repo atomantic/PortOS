@@ -36,7 +36,7 @@ const STUB_SCRIPTS = [
  */
 async function makeSandbox({
   origin = true, failAfterDelete = true, npmShim = 'ok',
-  forceClean = false, pm2OnPath = false, healthy = true, stallDelete = false, nodeVersion = null, originAhead = false, peerTarget = false
+  forceClean = false, pm2OnPath = false, healthy = true, stallDelete = false, nodeVersion = null, originAhead = false, peerTarget = false, aheadRefusesInCheckout = false
 } = {}) {
   const { scratch, repo } = await makeGitSandbox({ origin, prefix: 'portos-update-guard-' });
   const bin = join(scratch, 'bin');
@@ -134,7 +134,14 @@ if (${stallDelete} && args.startsWith('delete')) {
   let aheadSha = null;
   if (originAhead) {
     writeFileSync(join(repo, 'ahead.txt'), 'ahead\n');
-    execFileSync('git', ['add', 'ahead.txt'], { cwd: repo });
+    if (aheadRefusesInCheckout) {
+      // Passes when the pre-pull archive evaluates it (ahead.txt is not
+      // archived) and refuses once the pull has put ahead.txt in the checkout —
+      // the post-pull gate catching a revision the pre-check let through.
+      writeFileSync(join(repo, 'scripts', 'checkNodeVersion.js'),
+        "import { existsSync } from 'fs';\nif (existsSync('ahead.txt')) { console.error('Node.js ^99.0.0 required'); process.exit(1); }\n");
+    }
+    execFileSync('git', ['add', '-A'], { cwd: repo });
     execFileSync('git', ['commit', '-m', 'ahead'], { cwd: repo, stdio: 'ignore' });
     aheadSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf8' }).trim();
     execFileSync('git', ['push', 'origin', 'main'], { cwd: repo, stdio: 'ignore' });
@@ -198,6 +205,9 @@ describe.skipIf(process.platform === 'win32' || SKIP_HEAVY_INTEGRATION)('update.
       // both the upstream and the peer-target (ff-only merge) paths.
       oldNodeAhead: { nodeVersion: '22.12.0', origin: true, originAhead: true },
       oldNodePeer: { nodeVersion: '22.12.0', origin: true, originAhead: true, peerTarget: true },
+      // The pre-pull archive gate passes, the pull lands, and only the post-pull
+      // gate refuses: the checkout must be rolled back with apps untouched.
+      postPullRefusal: { origin: true, originAhead: true, aheadRefusesInCheckout: true },
       cleanAhead: { nodeVersion: null, failAfterDelete: false, origin: true, originAhead: true },
       // The failure the guard's own comment names: both npm installs fail, and
       // safe_install wiped root node_modules — pm2 included — on the way.
@@ -303,6 +313,37 @@ describe.skipIf(process.platform === 'win32' || SKIP_HEAVY_INTEGRATION)('update.
     expect(pm2Calls(sandboxes[name])).toEqual([]);
   });
 
+  it('rolls the checkout back to the pre-pull commit when only the post-pull Node gate refuses', () => {
+    const { repo, headSha } = sandboxes.postPullRefusal;
+    const { status, stdout } = results.postPullRefusal;
+    expect(status).toBe(1);
+    expect(stdout).toContain('STEP:git-pull:done:');
+    expect(stdout).toContain('STEP:runtime-preflight:failed:');
+    expect(stdout).toContain('checkout rolled back');
+    expect(stdout).not.toContain('STEP:pm2-stop:');
+    expect(stdout).not.toContain('STEP:restart:');
+    expect(execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf8' }).trim()).toBe(headSha);
+    expect(existsSync(join(repo, 'ahead.txt'))).toBe(false);
+    expect(execFileSync('git', ['status', '--porcelain'], { cwd: repo, encoding: 'utf8' }).trim()).toBe('');
+    expect(pm2Calls(sandboxes.postPullRefusal)).toEqual([]);
+  });
+
+  it('never resets to an unknown pre-pull commit on the post-pull refusal path', () => {
+    const sh = readFileSync(UPDATE_SH, 'utf8');
+    const gate = sh.indexOf('node_gate_output=$(node scripts/checkNodeVersion.js');
+    const exitAt = sh.indexOf('exit 1', gate);
+    const refusal = sh.slice(gate, exitAt);
+    expect(gate).toBeGreaterThan(-1);
+    const guardAt = refusal.indexOf('[ -n "$pre_pull_sha" ]');
+    expect(guardAt).toBeGreaterThan(-1);
+    expect(refusal.indexOf('git reset --hard "$pre_pull_sha"')).toBeGreaterThan(guardAt);
+    // Only the guarded branch may reset; the empty-sha branch must not.
+    const emptyBranch = refusal.slice(refusal.lastIndexOf('else\n'));
+    expect(emptyBranch).not.toContain('git reset');
+    expect(refusal).not.toContain('git clean');
+    expect(refusal).not.toMatch(/pm2/i);
+  });
+
   it('still pulls and updates when the target supports the runtime', () => {
     const { repo, aheadSha } = sandboxes.cleanAhead;
     expect(results.cleanAhead.status, results.cleanAhead.stdout).toBe(0);
@@ -372,7 +413,22 @@ describe('update.ps1 headless-install guard', () => {
     expect(gate).toBeGreaterThan(-1);
     expect(gate).toBeLessThan(lineOf('pm2 delete ecosystem.config.cjs --silent'));
     expect(gate).toBeLessThan(lineOf('Safe-Install -Dir "."'));
-    expect(ps1.slice(gate, gate + 8).join('\n')).toContain('Stop-UpdateScript 1');
+    expect(ps1.slice(gate, gate + 40).join('\n')).toContain('Stop-UpdateScript 1');
+  });
+
+  it('rolls the checkout back to $prePullSha before Stop-UpdateScript when the post-pull gate refuses', () => {
+    const gate = lineOf('if (Test-Path "scripts/checkNodeVersion.js")');
+    const stop = ps1.findIndex((line, i) => i > gate && line.includes('Stop-UpdateScript 1'));
+    const block = ps1.slice(gate, stop + 1).join('\n');
+    const guardAt = block.indexOf('if ($prePullSha) {');
+    expect(guardAt).toBeGreaterThan(-1);
+    const resetAt = block.indexOf('Invoke-Logged git reset --hard $prePullSha');
+    expect(resetAt).toBeGreaterThan(guardAt);
+    expect(resetAt).toBeLessThan(block.indexOf('Stop-UpdateScript 1'));
+    expect(block).toContain('Invoke-Logged git submodule update --init --recursive');
+    expect(block).not.toContain('git clean');
+    // The reset sits inside the $prePullSha guard: nothing resets after it closes.
+    expect(block.slice(block.indexOf('if ($rolledBack)'))).not.toContain('git reset');
   });
 
   it('evaluates the target Node gate from git archive before HEAD moves', () => {
