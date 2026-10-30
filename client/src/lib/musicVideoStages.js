@@ -22,15 +22,15 @@ import { coldOpenScenes, normalizePreMusic, songScenes } from '../../../server/l
  * The steps of a music video, in the order the director decides them: the
  * story is planned shot by shot before the Look is cast. The
  * ids are the route's `:stage` values and stay stable across the relabel
- * (#10297 follow-up): Song is `setup`, Look is `cast-sets`, Plan (once
- * Storyboard) is `board`, Shots (once Make) is `produce` — each shot's still,
+ * (#10297 follow-up): Song is `setup`, Look is `cast-sets`, Storyboard (once
+ * Plan) is `board`, Shots (once Make) is `produce` — each shot's still,
  * clip and locks, then the composition over them — and Final render is
  * `review`. `doneWhen` is the one line a step shows under its title.
  */
 export const MUSIC_VIDEO_STAGES = [
   { id: 'setup', label: 'Song', title: 'Song', doneWhen: 'Done when the track is analyzed and every lyric word is timed to the vocal.' },
   { id: 'story', label: 'Story', title: 'Story', optional: true, doneWhen: 'Done when the story direction is ready; this step is optional.' },
-  { id: 'board', label: 'Plan', title: 'Plan', doneWhen: 'Done when timed shots cover the whole song, each with its action, staging, camera and lyric.' },
+  { id: 'board', label: 'Storyboard', title: 'Storyboard', doneWhen: 'Done when timed shots cover the whole song, each with its action, staging, camera and lyric.' },
   { id: 'cast-sets', label: 'Look', title: 'Look', doneWhen: 'Done when the art direction is written, a visual guide is chosen, and you approve it.' },
   { id: 'produce', label: 'Shots', title: 'Shots', doneWhen: 'Done when every shot is locked (a video shot: its still, then its clip) and the composition is ready.' },
   { id: 'review', label: 'Final render', title: 'Final render', doneWhen: 'Done when the full video is rendered from the approved plan and is up to date.' },
@@ -47,7 +47,7 @@ export const MUSIC_VIDEO_PAGES = [
 ];
 
 // Old links name the Compose tab, which is now part of Shots; the new names work as links too.
-const LEGACY_STAGE_IDS = { compose: 'produce', plan: 'board', shots: 'produce' };
+const LEGACY_STAGE_IDS = { compose: 'produce', plan: 'board', storyboard: 'board', shots: 'produce' };
 
 
 export const isStageId = (value) => MUSIC_VIDEO_STAGES.some((stage) => stage.id === value);
@@ -652,7 +652,7 @@ export function deriveNextAction(project, {
   const needs = approvalNeeds(project, readiness, run);
   const resumable = !!run && RESUMABLE_RUN_STATUSES.has(run.status);
   const busy = renderActive || kickoffRunning;
-  if (needs.planUnfinished && !busy && !resumable) return { id: 'finish-plan', kind: 'goto', stage: 'board', label: 'Finish the plan', shortLabel: 'Plan' };
+  if (needs.planUnfinished && !busy && !resumable) return { id: 'finish-plan', kind: 'goto', stage: 'board', label: 'Finish the storyboard', shortLabel: 'Storyboard' };
   if (shouldJumpToReview(project, { run, art: needs.art, board: needs.board, pilotParked: needs.pilotParked, busy, ownAction: needs.ownAction })) {
     return reviewProductionAction(needs);
   }
@@ -1116,7 +1116,7 @@ function produceChecklist({ project, readiness, scenes, draft, mode }) {
     ...(reviewed.action && !reviewed.action.run ? { action: { ...reviewed.action, label: 'Lock the stills' } } : {}) };
   const lookOpen = !planOpen && !reviewed.stale && (readiness?.storyboard?.problems || []).some((text) => ART_APPROVAL_PROBLEM.test(text));
   items.push(reviewed.done ? stills
-    : planOpen ? { ...stills, detail: 'Finish the plan first.', action: { label: 'Open the plan', stage: 'board' } }
+    : planOpen ? { ...stills, detail: 'Finish the storyboard first.', action: { label: 'Open the storyboard', stage: 'board' } }
       : lookOpen ? { ...stills, detail: 'Approve the Look first.', action: { label: 'Open Look', stage: 'cast-sets', anchor: APPROVAL_ANCHORS.art } }
         : stills);
   const lockClips = clipLockItem(readiness);

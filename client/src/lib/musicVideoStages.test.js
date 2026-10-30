@@ -361,7 +361,8 @@ describe('stage route param', () => {
     expect(resolveStageParam('compose')).toBe('produce');
     expect(resolveStageParam('shots')).toBe('produce');
     expect(resolveStageParam('plan')).toBe('board');
-    expect(MUSIC_VIDEO_STAGES.map((stage) => stage.label)).toEqual(['Song', 'Story', 'Plan', 'Look', 'Shots', 'Final render', 'Publish']);
+    expect(resolveStageParam('storyboard')).toBe('board');
+    expect(MUSIC_VIDEO_STAGES.map((stage) => stage.label)).toEqual(['Song', 'Story', 'Storyboard', 'Look', 'Shots', 'Final render', 'Publish']);
     expect(deriveStages({ trackId: 't1', audioAnalysis: ANALYSIS, ...LYRICS }).current).toBe('board');
     for (const stage of MUSIC_VIDEO_STAGES) expect(stage.doneWhen).toMatch(/^Done when /);
   });
@@ -512,7 +513,7 @@ describe('stageChecklist', () => {
     expect(stageChecklist('produce', castProject({ scenes: [scene()] }), NOT_APPROVED).find((i) => i.id === 'approve-storyboard'))
       .toMatchObject({ done: false, detail: 'Approve the Look first.', action: { stage: 'cast-sets', anchor: 'mv-review-art' } });
     expect(stageChecklist('produce', castProject({ scenes: [scene()] }), { ...NOT_APPROVED, storyboard: { approved: false, problems: ['Storyboard shots must cover the master without unintended gaps or overlaps.'] } })
-      .find((i) => i.id === 'approve-storyboard')).toMatchObject({ detail: 'Finish the plan first.', action: { stage: 'board' } });
+      .find((i) => i.id === 'approve-storyboard')).toMatchObject({ detail: 'Finish the storyboard first.', action: { stage: 'board' } });
     expect(stageChecklist('produce', castProject({ scenes: [scene(), scene({ sceneId: 's2', videoHistoryId: null })] }), APPROVED)[0])
       .toMatchObject({ id: 'footage', label: 'Footage for every shot (1 of 2)', done: false,
         action: { label: 'Make the footage', anchor: 'mv-generation' } });
@@ -540,7 +541,7 @@ describe('stageChecklist', () => {
     expect(items.some((i) => i.id === 'board-timing')).toBe(false);
     // Shots' approval row sends an unfinished plan back to Plan instead of repeating its first problem.
     const shots = stageChecklist('produce', castProject({ scenes: [scene()] }), readiness);
-    expect(shots.find((i) => i.id === 'approve-storyboard')).toMatchObject({ detail: 'Finish the plan first.' });
+    expect(shots.find((i) => i.id === 'approve-storyboard')).toMatchObject({ detail: 'Finish the storyboard first.' });
     // A stale approval keeps naming what changed, even with an art problem listed on Plan.
     const stale = { ...readiness, storyboard: { approved: false, problems: ['Review and approve the current art direction first.'], stale: { changedFields: ['art direction', 'cast'] } } };
     expect(stageChecklist('produce', castProject({ scenes: [scene()] }), stale).find((i) => i.id === 'approve-storyboard').detail).toMatch(/changed since: art direction, cast/);

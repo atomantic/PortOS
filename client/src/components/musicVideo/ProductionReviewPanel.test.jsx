@@ -412,7 +412,7 @@ describe('Approval problems with unsaved edits', () => {
   });
 
   // Uniquely catches the lock card pointing at "items above" that live on another step.
-  it('names the open Plan items and their shots on the storyboard card, with a link to the Plan step', () => {
+  it('names the open Storyboard items and their shots on the storyboard card, with a link to the Storyboard step', () => {
     const review = reviewFixture();
     const board = { ...project, composition: { mode: 'concat' }, scenes: [{ sceneId: 's-a', label: 'Verse', startSec: 0, endSec: 4 }, { sceneId: 's-b', label: 'Chorus', startSec: 3.5, endSec: 8 }] };
     review.readiness.storyboard = { approved: false,
@@ -420,10 +420,10 @@ describe('Approval problems with unsaved edits', () => {
       coverage: [{ sceneId: 's-b', issue: 'overlap', startSec: 3.5, endSec: 4 }], incompleteShots: [{ sceneId: 's-b', missing: ['staging'] }] };
     const onNavigate = vi.fn();
     render(<ProductionReviewPanel project={board} review={review} onOpenArtifact={vi.fn()} stage="storyboard" onNavigate={onNavigate} />);
-    expect(screen.getByText('Finish these 2 items on the Plan step first:')).toBeTruthy();
-    expect(screen.getByRole('list', { name: 'Open Plan items' }).textContent).toBe('Shot coverage (shot 2)Shot details (shot 2)');
+    expect(screen.getByText('Finish these 2 items on the Storyboard step first:')).toBeTruthy();
+    expect(screen.getByRole('list', { name: 'Open Storyboard items' }).textContent).toBe('Shot coverage (shot 2)Shot details (shot 2)');
     expect(screen.queryByText(/without unintended gaps/)).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'Open the Plan step' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Open the Storyboard step' }));
     expect(onNavigate).toHaveBeenCalledWith('board');
   });
 });

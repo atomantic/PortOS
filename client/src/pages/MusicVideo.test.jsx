@@ -387,7 +387,7 @@ const selectProject = async (projectId) => {
 // control is only on screen while its step is open, so tests say which one.
 // Compose is part of Shots now; Plan holds the planning tools. The phone's step bar is the tablist.
 const STAGE_TABS = {
-  setup: /^Song/, story: /^Story/, 'cast-sets': /^Look/, board: /^Plan/, produce: /^Shots/, compose: /^Shots/, review: /^Final render/, publish: /^Publish/,
+  setup: /^Song/, story: /^Story(?!board)/, 'cast-sets': /^Look/, board: /^Storyboard/, produce: /^Shots/, compose: /^Shots/, review: /^Final render/, publish: /^Publish/,
 };
 // Project settings (render style, audio tools, autopilot, files) is a drawer over the step.
 const openSettings = async (tab = 'Project') => {
@@ -523,7 +523,7 @@ describe('MusicVideo project load recovery (#9761)', () => {
       expect(screen.getByTestId('mv-project-grid')).toHaveTextContent(PROJECT_NO_CLIP.name);
     } else {
       expect(screen.getByRole('heading', { level: 2, name: PROJECT_NO_CLIP.name })).toBeInTheDocument();
-      expect(screen.getByRole('tab', { name: /^Plan/ })).toHaveAttribute('aria-selected', 'true');
+      expect(screen.getByRole('tab', { name: /^Storyboard/ })).toHaveAttribute('aria-selected', 'true');
     }
   });
 
@@ -3109,7 +3109,7 @@ describe('MusicVideo stage tabs (#9243)', () => {
 
     fireEvent.click(screen.getByRole('tab', { name: STAGE_TABS.board }));
     await waitFor(() => expect(screen.getByTestId('loc').textContent).toBe('/music-video/mv-1/board'));
-    expect(selectedTab()).toHaveTextContent(/^Plan/);
+    expect(selectedTab()).toHaveTextContent(/^Storyboard/);
     expect(screen.getByRole('button', { name: /AI Plan/ })).toBeTruthy();
   });
 
