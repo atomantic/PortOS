@@ -61,7 +61,9 @@ const withoutTombstones = ({ [ROW_TOMBSTONES_KEY]: _tombstones, ...rest }) => re
 // `createdAt` — a random id plus a clock would no longer match that copy.
 // A non-array payload is left untouched (a malformed file must not be rewritten).
 async function loadLocalRowUnionQueued(file, arrayKey) {
-  const data = await readJSONFile(file, { [arrayKey]: [] });
+  // Strict: a present-but-unreadable file must throw, not become the empty
+  // default that writeLocal would persist. An absent file still returns the default.
+  const data = await readJSONFile(file, { [arrayKey]: [] }, { strict: true });
   if (!Array.isArray(data?.[arrayKey])) return data;
   const normalized = normalizeLegacyRows(data[arrayKey]);
   if (!normalized.changed) return data;
@@ -72,7 +74,7 @@ async function loadLocalRowUnionQueued(file, arrayKey) {
 }
 
 async function readNormalizedRowUnion(file, arrayKey) {
-  const data = await readJSONFile(file, { [arrayKey]: [] });
+  const data = await readJSONFile(file, { [arrayKey]: [] }, { strict: true });
   if (!Array.isArray(data?.[arrayKey])) return data;
   if (normalizeLegacyRows(data[arrayKey]).changed) {
     return withoutTombstones(await queueHealthWrite(() => loadLocalRowUnionQueued(file, arrayKey)));

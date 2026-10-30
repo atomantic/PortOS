@@ -785,6 +785,7 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Dom
 | `/api/api-docs` | Generated HTTP/event catalogs, OpenAPI 3.0.3 documents, AsyncAPI 3 document, and the minimized semantic tool resource |
 | `/api/data` | Data manager/sync |
 | `/api/datadog`, `/api/jira`, `/api/github`, `/api/telegram` | External integrations |
+| `/api/apple-health` | Delete one imported Apple Health day (`DELETE /days/:date`); metrics, ingest, and XML import stay on `/api/health` |
 | `/api/health` | Apple Health metrics, ingest, and XML import |
 | `/api/human-actions` | Scheduled steps only the human can take, as Brain threads with reminders ([Human Actions](#human-actions)) |
 | `/api/insights` | Cross-domain insights |
