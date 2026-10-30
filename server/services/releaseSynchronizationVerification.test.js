@@ -383,6 +383,37 @@ it('recognizes an independently captured swarm child without trusting the coordi
   expect(await validateLegacyReleaseRetirement(release, { archiveProofs: proofs })).toBe(false);
 });
 
+it('recognizes a later release candidate seeded by a publisher in the primary checkout', async () => {
+  const id = (await import('node:crypto')).randomBytes(32).toString('hex');
+  const source = await addTask({ description: 'Legacy primary publisher', app: 'example-app' });
+  const legacyPublication = { ...publication, identity: id, tag: `v8.8.8-${id}` };
+  delete legacyPublication.candidateBranch;
+  const publisher = { ...f.agents[0], id: 'primary-publisher', taskId: source.id,
+    metadata: { workspacePath: '/example/repo', releasePublication: legacyPublication } };
+  await ensureReleaseSynchronization(publisher);
+  f.agents.push(publisher);
+  f.promotion = { number: 12, merged: true, merge_commit_sha: legacyPublication.promotionMerge,
+    head: { ref: 'old-candidate', sha: legacyPublication.candidateHead, repo: { full_name: legacyPublication.repository } },
+    base: { ref: 'release', repo: { full_name: legacyPublication.repository } } };
+  const release = independentRelease('/example/repo', 'codex/later-release');
+  const later = f.agents.at(-1);
+  Object.assign(later.metadata, { workspacePath: release.repoPath, isWorktree: false, configClaimFlow: false,
+    taskAnalysisType: 'do-release', instanceId: 'example-instance', releasePublication: {
+      status: 'verified', candidateBranch: release.branch, candidateHead: release.head } });
+
+  expect(await retainReleaseSynchronizationReview(release)).toBe(true);
+  const proofs = await prepareLegacyReleaseRetirement(release);
+  expect(await validateLegacyReleaseRetirement(release, { archiveProofs: proofs })).toBe(true);
+
+  later.metadata.releasePublication.candidateHead = '0'.repeat(40);
+  expect(await retainReleaseSynchronizationReview(release)).toBe(false);
+  expect(await validateLegacyReleaseRetirement(release, { archiveProofs: proofs })).toBe(false);
+  later.metadata.releasePublication.candidateHead = release.head;
+  later.metadata.instanceId = 'another-instance';
+  expect(await retainReleaseSynchronizationReview(release)).toBe(false);
+  expect(await validateLegacyReleaseRetirement(release, { archiveProofs: proofs })).toBe(false);
+});
+
 it('holds locally aliased candidates and changed or ambiguous independent generations', async () => {
   const id = '5'.repeat(64), source = await addTask({ description: 'Unseeded aliased publisher', app: 'example-app' });
   const legacyPublication = { ...publication, identity: id, tag: `v5.5.5-${id}` };

@@ -406,13 +406,14 @@ async function independentLegacyCheckout(entry, release, agents) {
   const { completedCheckoutReceiptValid } = await import('./completedCheckoutEvidence.js');
   const bindings = [];
   for (const agent of agents) {
-    // A swarm coordinator runs in the primary checkout while the server records
-    // each claimed child checkout on that same agent. Do not discard its exact
-    // seed and completion capture merely because its workspace is the parent.
-    let coordinatorOwnsChild = agent.metadata?.isWorktree === false && agent.metadata?.configClaimFlow === true
-      && samePath(agent.metadata.workspacePath, release.repoPath)
-      && [agent.metadata.claimBranches, agent.metadata.claimReleasedBranches]
-        .some(branches => Array.isArray(branches) && branches.includes(release.branch));
+    // Swarm coordinators and release publishers can run in the primary checkout
+    // while the server records their separate, seeded child checkout.
+    const publication = agent.metadata?.releasePublication;
+    let coordinatorOwnsChild = agent.metadata?.isWorktree === false && samePath(agent.metadata.workspacePath, release.repoPath)
+      && ((agent.metadata.configClaimFlow === true && [agent.metadata.claimBranches, agent.metadata.claimReleasedBranches]
+        .some(branches => Array.isArray(branches) && branches.includes(release.branch)))
+        || (agent.metadata.taskAnalysisType === 'do-release' && publication?.status === 'verified'
+          && publication.candidateBranch === release.branch && publication.candidateHead === release.head));
     if (coordinatorOwnsChild) {
       const { getInstanceId, UNKNOWN_INSTANCE_ID } = await import('./instanceIdentity.js');
       const instance = await getInstanceId().catch(() => null);
