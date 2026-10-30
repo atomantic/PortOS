@@ -86,7 +86,7 @@ function currentStage(project, readiness, run) {
   const done = {
     setup: Boolean(project.trackId || project.uploadedAudioFilename) && Boolean(project.audioAnalysis) && lyricsReady(project, readiness),
     'cast-sets': Boolean(readiness?.art?.approved),
-    board: planned || (scenes.length > 0 && Boolean(readiness) && !(readiness.storyboard?.problems || []).some((text) => !ART_APPROVAL_PROBLEM.test(text))),
+    board: !project.storyboardReopenedAt && (planned || (scenes.length > 0 && Boolean(readiness) && !(readiness.storyboard?.problems || []).some((text) => !ART_APPROVAL_PROBLEM.test(text)))),
     // Make needs footage and the composition over it; the animated proof is optional (mirrors the client's deriveStages).
     produce: planned && footageReady && composeDone(project, mode),
     // A render made before later scene edits no longer counts as the final video — mirrors the client's isFinalRenderStale.

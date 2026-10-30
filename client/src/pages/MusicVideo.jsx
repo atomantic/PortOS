@@ -1395,22 +1395,12 @@ function ProjectWorkspace({
     if (unfoldToAnchor(el)) requestAnimationFrame(land);
     else land();
   }, [activeStage, location.key, selectedId, !!selected]);
-  // Edit shot (from the preview player) opens that shot's card on Shots and
-  // scrolls it into view, also when the card was already open.
-  const [editShotRequest, setEditShotRequest] = useState(null);
+  // Edit shot (from the preview player) opens that shot's card on Shots, in the side panel.
   const editShot = (sceneId) => {
     if (!selected) return;
     const search = searchParams.toString();
     navigate(`/music-video/${encodeURIComponent(selected.id)}/produce/scene/${encodeURIComponent(sceneId)}${search ? `?${search}` : ''}`, { replace: activeStage === 'produce' });
-    setEditShotRequest({ sceneId });
   };
-  // The card mounts once the navigation lands, so this waits for it.
-  useEffect(() => {
-    const card = editShotRequest && document.getElementById(`scene-${editShotRequest.sceneId}`);
-    if (!card) return;
-    card.scrollIntoView?.({ behavior: 'smooth', block: 'center' });
-    setEditShotRequest(null);
-  }, [editShotRequest, location.key]);
   const goToStage = (stage, anchor = null, params = null) => {
     // Preserve search params (e.g. ?play=, ?new=, ?sheet=) across tabs; `params` sets more (e.g. ?scenes=missing).
     const next = new URLSearchParams(searchParams);

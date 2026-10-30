@@ -10,22 +10,24 @@ import { beatSeconds, MUSICAL_ROLE_LABELS } from './storyboardArt';
 const iconButton = 'min-h-[44px] min-w-[44px] inline-flex items-center justify-center rounded text-gray-400 hover:text-white hover:bg-port-border/50 disabled:opacity-30 disabled:pointer-events-none';
 
 /**
- * One story beat: its title and musical role, a horizontal strip of panels,
- * and (behind the sliders toggle) what happens, why it matters, and the
- * emotion — the brief the song gets written from.
+ * One story beat: its title and musical role, its panels (a horizontal strip,
+ * or with `grid` a storyboard sheet that wraps), and (behind the sliders
+ * toggle) what happens, why it matters, and the emotion — the brief the song
+ * gets written from.
  */
 export default function BeatSection({
   beat, beatIndex, beatCount, firstPanelNumber, aspectRatio, selectedPanelId, sketchNonce,
-  onUpdate, onMove, onDelete, onAddPanel, onOpenPanel, addingPanel = false, pinOptions = [],
+  onUpdate, onMove, onDelete, onAddPanel, onOpenPanel, addingPanel = false, pinOptions = [], grid = false,
 }) {
   const [showDetails, setShowDetails] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const seconds = beatSeconds(beat);
   const fieldId = (name) => `beat-${beat.id}-${name}`;
+  const itemClass = grid ? 'min-w-0' : 'snap-start shrink-0 w-36 sm:w-44';
   const pin = beat.pin ? pinOptions.find((option) => option.id === beat.pin) : null;
 
   return (
-    <section className="rounded-xl border border-port-border bg-port-card/60" aria-label={beat.title || `Beat ${beatIndex + 1}`}>
+    <section className={`${grid ? '@container ' : ''}rounded-xl border border-port-border bg-port-card/60`} aria-label={beat.title || `Beat ${beatIndex + 1}`}>
       {confirmDelete ? (
         <InlineConfirmRow
           variant="separator"
@@ -112,9 +114,9 @@ export default function BeatSection({
         </div>
       ) : null}
 
-      <ol className="flex gap-2 overflow-x-auto overscroll-x-contain snap-x p-2" aria-label="Panels">
+      <ol className={grid ? 'grid grid-cols-2 items-start gap-2 p-2 @2xl:grid-cols-3 @5xl:grid-cols-4' : 'flex gap-2 overflow-x-auto overscroll-x-contain snap-x p-2'} aria-label="Panels">
         {beat.panels.map((panel, index) => (
-          <li key={panel.id} className="snap-start shrink-0 w-36 sm:w-44">
+          <li key={panel.id} className={itemClass}>
             <PanelCard
               panel={panel}
               number={firstPanelNumber + index}
@@ -125,12 +127,12 @@ export default function BeatSection({
             />
           </li>
         ))}
-        <li className="snap-start shrink-0 w-36 sm:w-44">
+        <li className={itemClass}>
           <button
             type="button"
             onClick={onAddPanel}
             disabled={addingPanel}
-            className="w-full h-full min-h-[5rem] rounded-lg border border-dashed border-port-border text-gray-400 hover:text-white hover:border-port-accent/60 inline-flex flex-col items-center justify-center gap-1 text-xs disabled:opacity-50"
+            className={`w-full h-full min-h-[5rem] rounded-lg border border-dashed border-port-border text-gray-400 hover:text-white hover:border-port-accent/60 inline-flex flex-col items-center justify-center gap-1 text-xs disabled:opacity-50`}
           >
             <Plus size={18} aria-hidden="true" />
             Panel

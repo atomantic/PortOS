@@ -263,7 +263,7 @@ export const panelNodeState = (panel, nodeId) => panel?.make?.nodes?.[nodeId] ||
 
 const EMPTY_NODE_STATE = Object.freeze({
   text: '', status: 'idle', error: '', sentPrompt: '', promptAdditions: [], providerId: '', model: '',
-  runId: '', frameCount: 0, jobIds: [], failedJobIds: [], takeIds: [], excludedRefs: [], extraRefs: [], sentRefs: [], runAt: null,
+  runId: '', frameCount: 0, jobIds: [], failedJobIds: [], takeIds: [], excludedRefs: [], extraRefs: [], sentRefs: [], selectOnLand: false, runAt: null,
 });
 
 /**
@@ -327,6 +327,9 @@ function sanitizeNodeState(raw, takeIds) {
     extraRefs: imageList(raw.extraRefs),
     // The reference images an image run sent, beside its exact prompt.
     sentRefs: imageList(raw.sentRefs),
+    // A redraw-all run selects its frame when it lands. Transient: a peer
+    // that drops it only leaves the selection where it was.
+    selectOnLand: raw.selectOnLand === true,
     runAt: typeof raw.runAt === 'string' && Number.isFinite(Date.parse(raw.runAt)) ? raw.runAt : null,
   };
 }
