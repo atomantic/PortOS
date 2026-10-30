@@ -7,7 +7,9 @@ import { claimCheckoutOwnerReason } from '../lib/claimContinuation.js';
 // Pinned checkout recovery for unbound pending merges. The pending-merge sweep
 // stopped creating these targets when the merged-tree guard stopped gating
 // merges (#14184); review follow-ups persisted with one still revalidate it
-// here at dispatch and launch.
+// here at dispatch and launch. Compatibility-only: the producer
+// (`mergeGuardTarget` on spawnReviewLoopFollowUp) was removed after v2.107.0;
+// retire this path once installs holding such queued tasks have upgraded.
 export async function preparePendingMergeRecovery({ app, entry, headSha, launchTaskId = null }) {
   if (!/^[a-f0-9]{40}$/.test(headSha || '')) return { blocked: 'recovery-head-unreadable' };
   const { readClaimOwnershipAgents } = await import('./cosClaimOwnershipState.js');
