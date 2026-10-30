@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { listThreejsModelFamilies } from '../services/api';
 
 /**
@@ -30,18 +30,33 @@ export const resolveFamilyId = (families, value) => (
 );
 
 /**
- * The Three.js subject-family options. A failed fetch yields an empty list, and
- * callers hide the picker rather than rendering an empty select — generation
- * still works and simply gets the general-purpose prompt.
+ * The Three.js subject-family options, with the read's status so a picker can
+ * tell "still loading" from "failed" from "served an empty list".
+ *
+ * `status` is `loading`, `ready`, or `error`; `retry()` re-issues the read. A
+ * failure never blocks create or refine — callers fall back to the general
+ * family, which `resolveFamilyId` already handles.
  */
 export default function useThreejsModelFamilies() {
-  const [families, setFamilies] = useState([]);
+  const [state, setState] = useState({ status: 'loading', families: [] });
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
+    let active = true;
     listThreejsModelFamilies({ silent: true })
-      .then((options) => setFamilies(Array.isArray(options) ? options : []))
-      .catch(() => setFamilies([]));
+      .then((options) => {
+        if (active) setState({ status: 'ready', families: Array.isArray(options) ? options : [] });
+      })
+      .catch(() => {
+        if (active) setState({ status: 'error', families: [] });
+      });
+    return () => { active = false; };
+  }, [attempt]);
+
+  const retry = useCallback(() => {
+    setState({ status: 'loading', families: [] });
+    setAttempt((count) => count + 1);
   }, []);
 
-  return families;
+  return { families: state.families, status: state.status, retry };
 }
