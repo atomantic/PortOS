@@ -42,6 +42,8 @@ import SceneFrameFit from './SceneFrameFit.jsx';
 import SceneCutEffect from './SceneCutEffect.jsx';
 import { plannedTransitions } from '../../lib/musicVideoCutEffects.js';
 import SceneGlitches from './SceneGlitches.jsx';
+import ScenePreMusic from './ScenePreMusic.jsx';
+import { isPreMusicShot, normalizePreMusic, preMusicSoundSummary } from '../../../../server/lib/musicVideoColdOpen.js';
 import SceneLyricType from './SceneLyricType.jsx';
 import SceneTransitions from './SceneTransitions.jsx';
 import SceneImageEffect from './SceneImageEffect.jsx';
@@ -215,9 +217,12 @@ export default function SceneCard({
   const endFrames = Boolean(onGenerateEndFrame) && (layer === 'footage' || (stillPicture && isEndFrameImageEffect(scene.imageEffect)));
   const shotModeValue = performance ? (scene.performanceStyle === 'music' ? 'music' : 'performance') : 'cutaway';
   // The collapsed Shot settings row says what is set, so it rarely needs opening.
+  // A shot before the song has a length of its own instead of a span of the song.
+  const preMusic = isPreMusicShot(scene);
   const settingsSummary = [
     layer === 'footage' ? SHOT_MODE_LABELS[shotModeValue] : LAYER_LABELS[layer],
-    typeof scene.startSec === 'number' && typeof scene.endSec === 'number' ? `${scene.startSec.toFixed(2)}–${scene.endSec.toFixed(2)}s (${frameSpan(scene)})` : null,
+    preMusic ? `before the song · ${normalizePreMusic(scene.preMusic).durationSec.toFixed(2)}s · ${preMusicSoundSummary(scene.preMusic).toLowerCase()}` : null,
+    !preMusic && typeof scene.startSec === 'number' && typeof scene.endSec === 'number' ? `${scene.startSec.toFixed(2)}–${scene.endSec.toFixed(2)}s (${frameSpan(scene)})` : null,
     scene.beatAligned ? 'beat-aligned' : null,
     layer === 'footage' && loops && !performance ? 'loops' : null,
     layer !== 'footage' && scene.camera?.move ? `camera ${scene.camera.move}` : null,
@@ -234,14 +239,16 @@ export default function SceneCard({
   );
   const shotSettings = (
     <>
+        {/* Whether the shot plays before the song (the cold open), with its own length and sound. */}
+        <ScenePreMusic fieldId={fieldId} scene={scene} onChange={applyPatch} />
         {/* Move the cut before this shot a frame at a time; the shot before ends where this one starts. */}
-        {onMoveStart && sceneHasAuthoredSpan(scene) && (
+        {!preMusic && onMoveStart && sceneHasAuthoredSpan(scene) && (
           <SceneStartFrame id={fieldId('start-frame')} scene={scene} joinsPrevious={(scene.order ?? index) > 0} onMove={onMoveStart}
             disabled={shotLock?.clip === 'locked'} disabledReason={shotLock?.clip === 'locked' ? 'Video locked. Unlock the video to retime it.' : null} />
         )}
         {/* What this shot's render covers and costs, and what blocks it, stays in view. */}
-        <SceneTimingPlan timing={timing} sceneId={scene.sceneId} lipSyncBackend={renderLane} onSplit={onSplit} onMergeNext={onMergeNext} onMergePrevious={onMergePrevious}
-          span={sceneHasAuthoredSpan(scene) ? { startSec: scene.startSec, endSec: scene.endSec } : null} />
+        {!preMusic && <SceneTimingPlan timing={timing} sceneId={scene.sceneId} lipSyncBackend={renderLane} onSplit={onSplit} onMergeNext={onMergeNext} onMergePrevious={onMergePrevious}
+          span={sceneHasAuthoredSpan(scene) ? { startSec: scene.startSec, endSec: scene.endSec } : null} />}
         {/* A VHS glitch riding on the cut into or out of this shot; never moves the cut. */}
         <SceneTransitions fieldId={fieldId} scene={scene} onChange={applyPatch} />
         {/* How this shot hands over to the next: a cut, beat toggle, dissolve or fade, as its storyboard row plans until one is picked. */}
@@ -250,7 +257,7 @@ export default function SceneCard({
         {/* Glitches at moments inside the shot, set and moved on a slider; they add no time. */}
         <SceneGlitches fieldId={fieldId} scene={scene} onChange={applyPatch} />
         {/* Where the lyrics over this shot sit, their style and size, whenever the render draws lyrics (a card draws its own text). */}
-        {(documentComposition || (layer !== 'card' && composedDrawsLyrics(project))) && <SceneLyricType fieldId={fieldId} scene={scene} onChange={applyPatch} />}
+        {!preMusic && (documentComposition || (layer !== 'card' && composedDrawsLyrics(project))) && <SceneLyricType fieldId={fieldId} scene={scene} onChange={applyPatch} />}
         {/* Everything set once and rarely revisited: timing, shot mode, layer, and a non-footage shot's camera. */}
         <details className="group/settings rounded border border-port-border">
           <summary className="flex min-h-[44px] cursor-pointer items-center gap-2 px-2 text-xs marker:content-none sm:min-h-[32px] [&::-webkit-details-marker]:hidden">
@@ -260,7 +267,7 @@ export default function SceneCard({
           </summary>
           <div className="space-y-2 p-2 pt-0">
         <div className="flex flex-wrap gap-2 items-center text-xs">
-          {SCENE_TIME_FIELDS.map(([labelText, key]) => {
+          {!preMusic && SCENE_TIME_FIELDS.map(([labelText, key]) => {
             const toValue = (v) => (v === '' ? null : Number(v));
             return (
               <label key={key} className="flex items-center gap-1">{labelText}

@@ -3,6 +3,7 @@ import { Plus, X } from 'lucide-react';
 import {
   MUSIC_VIDEO_GLITCH_LENGTHS, MUSIC_VIDEO_SHOT_GLITCH_LIMIT, MUSIC_VIDEO_TRANSITIONS, MUSIC_VIDEO_TRANSITION_LABELS,
 } from '../../lib/musicVideoTransitions.js';
+import { normalizePreMusic } from '../../../../server/lib/musicVideoColdOpen.js';
 
 // The time slider moves a frame at a time on the render's 24 fps grid.
 const STEP_SEC = 1 / 24;
@@ -53,7 +54,9 @@ function GlitchRow({ fieldId, index, glitch, spanSec, onCommit, onRemove, disabl
  */
 export default function SceneGlitches({ fieldId, scene, onChange, disabled = false }) {
   const glitches = Array.isArray(scene.glitches) ? scene.glitches : [];
-  const spanSec = Number.isFinite(scene.startSec) && Number.isFinite(scene.endSec) && scene.endSec > scene.startSec
+  // A shot before the song spans its own length, not its old place on the song.
+  const coldOpen = normalizePreMusic(scene.preMusic);
+  const spanSec = coldOpen ? coldOpen.durationSec : Number.isFinite(scene.startSec) && Number.isFinite(scene.endSec) && scene.endSec > scene.startSec
     ? round3(scene.endSec - scene.startSec) : 10;
   const save = (next) => onChange({ glitches: next.length ? next : null });
   // A new glitch lands halfway through the shot, where it is easy to find and move.

@@ -321,6 +321,10 @@ export const musicVideoShotRenderUrl = (id, name) =>
   `/api/music-video/${encodeURIComponent(id)}/shot-renders/${encodeURIComponent(name)}`;
 // The shots rendered so far stitched in order with the song (`light`: a phone copy):
 // { name, light, durationSec, shots, totalShots, complete }. Play it at musicVideoShotRenderUrl(id, name).
+// Mix the cold open's sound (shots before the song) and name the WAV to play before the song.
+export const mixMusicVideoColdOpenAudio = (id, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/cold-open/audio`, { method: 'POST', body: JSON.stringify({}), ...options });
+export const musicVideoColdOpenAudioUrl = (id, name) => `/api/music-video/${encodeURIComponent(id)}/cold-open/${encodeURIComponent(name)}`;
 export const buildMusicVideoRenderPreview = (id, { light = false } = {}, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/shot-renders/preview`, { method: 'POST', body: JSON.stringify({ light }), ...options });
 // The video-wide film looks cached over the current takes:

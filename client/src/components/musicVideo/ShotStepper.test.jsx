@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
-import ShotStepper, { shotSteps } from './ShotStepper.jsx';
+import ShotStepper, { shotNumbers, shotSteps } from './ShotStepper.jsx';
 import { ShotLockContext } from './ShotLock.jsx';
 
 const scenes = [{ startSec: 4 }, { startSec: 0 }, { startSec: 8.5 }, { startSec: null }];
@@ -16,6 +16,12 @@ describe('shotSteps', () => {
 
   it('keeps a rendered excerpt to the shots inside it', () => {
     expect(shotSteps(scenes, 5, { startSec: 4, endSec: 8 })).toEqual({ back: 4, next: null, index: 1, count: 1 });
+  });
+
+  it('leaves a shot moved before the song off the song clock, even with its old start time', () => {
+    const board = [{ sceneId: 'a', startSec: 0, preMusic: { durationSec: 3 } }, { sceneId: 'b', startSec: 0 }, { sceneId: 'c', startSec: 4 }];
+    expect(shotSteps(board, 1)).toEqual({ back: 0, next: 4, index: 1, count: 2 });
+    expect([...shotNumbers(board)]).toEqual([['b', 1], ['c', 2]]);
   });
 });
 

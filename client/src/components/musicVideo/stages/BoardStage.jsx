@@ -11,6 +11,7 @@ import ShotEffectsCard, { SceneEffectBadges } from '../ShotEffectsCard.jsx';
 import { ShotLockContext, SHOT_LOCK_LABELS, overallShotLock, shotUnlocked } from '../ShotLock.jsx';
 import { shotNumbers } from '../ShotStepper.jsx';
 import { previousShot, shotHandoffSource } from '../../../../../server/lib/musicVideoHandoffFrame.js';
+import { coldOpenScenes } from '../../../../../server/lib/musicVideoColdOpen.js';
 import { isLayeredComposition } from '../../../lib/musicVideoLayers.js';
 import { musicVideoAspect } from '../../../lib/musicVideoAspect.js';
 import { plannedTransitions } from '../../../lib/musicVideoCutEffects.js';
@@ -121,7 +122,9 @@ export default function BoardStage({ board }) {
   const codesById = new Map(scenes.map((scene) => [scene.sceneId, sceneAttention(scene, { ...attentionCtx,
     locked: shotLocks[scene.sceneId] === 'locked', unlocked: shotUnlocked(lockValue, scene.sceneId) })]));
   const numbers = shotNumbers(scenes);
-  const shotName = (scene) => [numbers.has(scene.sceneId) ? `Shot ${numbers.get(scene.sceneId)}` : null,
+  const coldNumbers = new Map(coldOpenScenes(project).map((scene, i) => [scene.sceneId, i + 1]));
+  const shotName = (scene) => [coldNumbers.has(scene.sceneId) ? `Cold open ${coldNumbers.get(scene.sceneId)}`
+    : numbers.has(scene.sceneId) ? `Shot ${numbers.get(scene.sceneId)}` : null,
     scene.sectionLabel || scene.label].filter(Boolean).join(' · ') || `Scene ${scene.order + 1}`;
   const counts = { all: scenes.length, attention: 0, missing: 0 };
   for (const codes of codesById.values()) {
@@ -155,8 +158,11 @@ export default function BoardStage({ board }) {
       : inspectorRef.current?.querySelector('summary');
     if (target) { target.focus({ preventScroll: true }); focusAfterNavigation.current = null; }
   }, [activeSceneId]);
-  // The open card's Previous / Next shot buttons walk every shot in song order, filter or not.
-  const songOrder = [...scenes].sort((a, b) => (numbers.get(a.sceneId) ?? Infinity) - (numbers.get(b.sceneId) ?? Infinity));
+  // The open card's Previous / Next shot buttons walk every shot in play order (the cold open
+  // first, then the song), filter or not.
+  const playOrder = (scene) => (coldNumbers.has(scene.sceneId) ? coldNumbers.get(scene.sceneId) - coldNumbers.size
+    : numbers.get(scene.sceneId) ?? Infinity);
+  const songOrder = [...scenes].sort((a, b) => playOrder(a) - playOrder(b));
   const openShot = (scene) => scene && (() => {
     focusAfterNavigation.current = { target: 'inspector' };
     board.seekToScene?.(scene);
