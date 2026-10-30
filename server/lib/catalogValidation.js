@@ -336,6 +336,11 @@ export const catalogPrimitiveOwnerSchema = z.object({
 export const catalogPrimitiveForkSchema = catalogPrimitiveOwnerSchema.extend({
   name: z.string().trim().min(1).max(BIBLE_LIMITS.NAME_MAX).optional(),
   copyImages: z.boolean().default(false),
+  // Seed images picked from the source's portraits/references (media keys). Set
+  // = only these are reused, keeping their age/look tags; overrides copyImages.
+  seedImages: z.array(z.string().trim().min(1).max(512)).max(200).optional(),
+  // Redesign assistant proposal saved onto the fork (keys checked per type).
+  fields: z.record(z.string().min(1).max(64), z.string().max(20_000)).optional(),
   operationKey: z.string().uuid(),
 }).strict();
 

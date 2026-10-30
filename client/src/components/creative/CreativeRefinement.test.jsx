@@ -55,7 +55,8 @@ describe('creative draft conversation', () => {
   it('preserves the turn on failure and blocks apply when its host becomes read-only', async () => {
     const converse = vi.fn().mockRejectedValueOnce(new Error('Provider unavailable')).mockResolvedValueOnce({ reply: 'Draft', draft: { description: 'New' } });
     const apply = vi.fn();
-    render(<CreativeRefinement initialDraft={{ description: 'Old' }} converse={converse} onApply={apply} disabled />);
+    const fork = vi.fn();
+    render(<CreativeRefinement initialDraft={{ description: 'Old' }} converse={converse} onApply={apply} onFork={fork} disabled />);
     fireEvent.change(screen.getByLabelText('Direction or follow-up question'), { target: { value: 'Direction' } });
     fireEvent.click(screen.getByText('Send direction'));
     await screen.findByRole('alert');
@@ -63,6 +64,9 @@ describe('creative draft conversation', () => {
     fireEvent.click(screen.getByText('Send direction'));
     await waitFor(() => expect(screen.getByText('Apply proposal to editor')).toBeDisabled());
     expect(apply).not.toHaveBeenCalled();
+    // A locked source can still be redesigned onto a fork.
+    fireEvent.click(screen.getByText('Save as fork…'));
+    expect(fork).toHaveBeenCalledWith({ description: 'New' });
   });
   it('requires a fresh choice before replacing a newer edit to a proposed field', async () => {
     const converse = vi.fn().mockResolvedValue({ reply: 'Revised', draft: { description: 'Silver design', prompt: 'New prompt' } });
