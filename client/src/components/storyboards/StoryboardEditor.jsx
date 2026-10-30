@@ -23,7 +23,7 @@ import toast from '../ui/Toast';
 import socket from '../../services/socket';
 import {
   addStoryboardBeat, addStoryboardPanel, addStoryboardPanelTake, correctStoryboardPanel, createBlankSketch, deleteStoryboardBeat,
-  deleteStoryboardPanel, getStoryboard, listMoodBoardNames, moveStoryboardBeat, moveStoryboardPanel,
+  deleteStoryboardPanel, drawStoryboardPanel, getStoryboard, listMoodBoardNames, moveStoryboardBeat, moveStoryboardPanel,
   removeStoryboardPanelTake, runStoryboardPanelNode, selectStoryboardPanelTake, sendStoryboardPanelToFableLoom, updateStoryboard, updateStoryboardBeat,
   updateStoryboardPanel, updateStoryboardPanelNode, updateStoryboardRecipe,
 } from '../../services/api';
@@ -151,7 +151,15 @@ export default function StoryboardEditor({ boardId: id, panelId, boardPath, embe
   }, [id]);
 
   // The request helper toasts a failure; null tells the caller it failed.
-  const write = useCallback((call) => call().then(apply).catch(() => null), [apply]);
+  // Every write in flight, so a draw waits for a field committed on blur (the
+  // tap on Draw panel blurs the field first) and draws from the saved words.
+  const inFlight = useRef(new Set());
+  const write = useCallback((call) => {
+    const pendingWrite = call().then(apply).catch(() => null);
+    inFlight.current.add(pendingWrite);
+    pendingWrite.finally(() => inFlight.current.delete(pendingWrite));
+    return pendingWrite;
+  }, [apply]);
 
   // Marks on the temp track a beat can be pinned to (Play starts the beat there).
   const pinOptions = useMemo(() => {
@@ -212,6 +220,11 @@ export default function StoryboardEditor({ boardId: id, panelId, boardPath, embe
     onSendToScene: async () => {
       const res = await write(() => sendStoryboardPanelToFableLoom(id, panelId));
       if (res) toast.success(board.source?.kind === 'pipeline' ? 'Shot start frame updated in the pipeline' : 'Scene art updated in FableLoom');
+    },
+    // Resolves once the frame is queued; it lands on `storyboard:make` as the panel's art.
+    onDraw: async () => {
+      await Promise.all([...inFlight.current]);
+      return write(() => drawStoryboardPanel(id, panelId));
     },
     // Resolves true once the corrected frames are queued (a failure toasts, or shows on the writer's card).
     onCorrect: async (body) => {

@@ -51,17 +51,20 @@ describe('storyboards routes', () => {
   });
 
   it('restyles a saved recipe on an art style change, keeping an edited style prompt', async () => {
-    const { defaultStoryboardSystemPrompt } = await import('../lib/storyboardRecipe.js');
+    const { defaultStoryboardStyle, defaultStoryboardSystemPrompt } = await import('../lib/storyboardRecipe.js');
     const { body: board } = await api('post', '/', { name: 'Styles', artStyle: 'production-sketch' });
     const recipe = (nodes) => ({ nodes, edges: [] });
     const style = (id, text) => ({ id, type: 'system', title: 'Style', x: 0, y: 0, text, settings: {} });
     await api('put', `/${board.id}/recipe`, { recipe: recipe([
       style('node-system', defaultStoryboardSystemPrompt('production-sketch')),
+      style('node-style', defaultStoryboardStyle('production-sketch')),
       style('node-mine', 'My own style'),
     ]) });
     const changed = await api('patch', `/${board.id}`, { artStyle: 'clean-line' });
     expect(changed.body.artStyle).toBe('clean-line');
-    expect(changed.body.recipe.nodes.map((node) => node.text)).toEqual([defaultStoryboardSystemPrompt('clean-line'), 'My own style']);
+    expect(changed.body.recipe.nodes.map((node) => node.text)).toEqual([
+      defaultStoryboardSystemPrompt('clean-line'), defaultStoryboardStyle('clean-line'), 'My own style',
+    ]);
   });
 
   it('moves a panel to another beat and keeps the order', async () => {

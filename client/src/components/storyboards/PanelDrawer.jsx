@@ -14,13 +14,14 @@ import { SHOT_TYPES, SHOT_TYPE_LABELS } from '../../lib/shotGrammar';
 import { STORYBOARD_LIMITS } from '../../../../server/lib/storyboardVocabulary.js';
 import CommitField from './CommitField';
 import MoodBoardPinPicker from './MoodBoardPinPicker';
+import DrawPanelButton from './DrawPanelButton';
 import PanelCorrection from './PanelCorrection';
 import PanelMakeTab from './PanelMakeTab';
 import { aspectClass, selectedTake, takeSrc } from './storyboardArt';
 
 const TABS = [
   { id: 'shot', label: 'Shot', icon: Clapperboard },
-  { id: 'make', label: 'Make', icon: Wand2 },
+  { id: 'make', label: 'Prompts', icon: Wand2 },
   { id: 'cast', label: 'Cast & sets', icon: Users },
   { id: 'notes', label: 'Notes', icon: StickyNote },
 ];
@@ -202,6 +203,7 @@ function ShotTab({ board, found, panelNumber, sketchNonce, busy, handlers }) {
             placeholder="e.g. slow push in" onCommit={(camera) => handlers.onPatch({ camera })} />
         </div>
       </div>
+      <DrawPanelButton panel={panel} onDraw={handlers.onDraw} disabled={busy} />
       <div className="flex flex-wrap items-center gap-2 border-t border-port-border pt-3">
         <button type="button" className={iconButton} onClick={() => handlers.onMove({ index: index - 1 })} disabled={index === 0} aria-label="Move panel earlier">
           <ChevronLeft size={18} />

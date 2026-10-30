@@ -292,7 +292,9 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // only a panel edited since reads as changed); a v6 peer would drop it.
   // v8 = the `production-sketch` art style; a v7 peer would read it as
   // `pencil` and write that back.
-  storyboards: 8,
+  // v9 = an image node's `style` input (the style text sent after the shot,
+  // with no prompt writer in between); a v8 peer would drop the edge.
+  storyboards: 9,
   // v1 = author personas (PostgreSQL `authors` table) federated via the
   // per-record peer-sync push pipeline (record kind `author`, sync category
   // `authors`). A brand-NEW synced record type like `storyBuilder` below, so it

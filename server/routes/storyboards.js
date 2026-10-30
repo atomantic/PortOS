@@ -18,7 +18,7 @@ import {
   updateStoryboard,
 } from '../services/storyboards/index.js';
 import {
-  correctPanel, getMakeEmptyPlan, getPanelMake, runPanelNode, startMakeEmpty, updatePanelNode, updateRecipe,
+  correctPanel, drawPanel, getMakeEmptyPlan, getPanelMake, runPanelNode, startMakeEmpty, updatePanelNode, updateRecipe,
 } from '../services/storyboards/make.js';
 import { fitMusicVideoToStoryboard, groupStoryboardBySong, updateShotFromPanel, sendShotStillToPanel } from '../services/storyboards/fitMusicVideo.js';
 import { makeStoryboardFromMusicVideo } from '../services/storyboards/fromMusicVideo.js';
@@ -180,6 +180,12 @@ router.patch('/:id/panels/:panelId/make/:nodeId', asyncHandler(async (req, res) 
 // frames are queued (storyboard:make follows each frame).
 router.post('/:id/panels/:panelId/make/:nodeId/run', asyncHandler(async (req, res) => {
   res.json(await runPanelNode(req.params.id, req.params.panelId, req.params.nodeId));
+}));
+
+// Draw a panel: the writer rewrites its prompt, then one frame is queued and
+// becomes the panel's art (answers once it's queued).
+router.post('/:id/panels/:panelId/draw', asyncHandler(async (req, res) => {
+  res.json(await drawPanel(req.params.id, req.params.panelId));
 }));
 
 // Correct a frame: the writer redoes its prompt with the note, then the image

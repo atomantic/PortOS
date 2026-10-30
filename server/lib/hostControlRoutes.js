@@ -996,11 +996,12 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   // including local Python (#13055), like generate above.
   'POST /api/mood-boards/:id/items/:itemId/render',
   // Storyboards (#12952): the plot and saved node prompts reach a
-  // caller-chosen, non-tool-free provider; node runs, frame corrections and
-  // make-empty also queue image renders.
+  // caller-chosen, non-tool-free provider; node runs, frame corrections, panel
+  // draws and make-empty also queue image renders.
   'POST /api/storyboards/:id/beats/extract',
   'POST /api/storyboards/:id/panels/:panelId/make/:nodeId/run',
   'POST /api/storyboards/:id/panels/:panelId/correct',
+  'POST /api/storyboards/:id/panels/:panelId/draw',
   'POST /api/storyboards/:id/make-empty',
   'POST /api/cos/tasks/enhance',
   // Music Video cover design/generation and promotion planning, and POST LLM

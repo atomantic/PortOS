@@ -7,10 +7,10 @@ const actionButton = 'min-h-[44px] inline-flex items-center justify-center gap-1
 
 /**
  * Correct the selected frame: draw on it (the annotate page, which returns
- * here), say what to change, and Redraw. The prompt writer redoes its prompt
- * with the note and the image node makes new frames from the marked-up frame;
- * they land as takes. The writer's and image node's cards on Make show the
- * exact prompt and references sent.
+ * here), say what to change, and Redraw. The image node makes new frames from
+ * the marked-up frame with the note after the shot (a prompt enhancer, when
+ * one is wired in, rewrites its prompt with the note instead); they land as
+ * takes. The Prompts tab shows the exact prompt and references sent.
  */
 export default function PanelCorrection({ take, sketchNonce, onCorrect, onClose }) {
   const location = useLocation();
