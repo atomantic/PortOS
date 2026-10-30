@@ -22,6 +22,7 @@ import {
   getCatalogIngredientDetails,
   updateCatalogIngredient,
   deleteCatalogIngredient,
+  linkCatalogIngredient,
   linkCatalogIngredientRelation,
   unlinkCatalogIngredientRelation,
   listCatalogIngredientRevisions,
@@ -206,22 +207,34 @@ function IngredientEditor() {
   const [ownerEntryId, setOwnerEntryId] = useState(null);
   const [ownerUniverse, setOwnerUniverse] = useState(null);
   const [ownerContextError, setOwnerContextError] = useState(null);
+  // Owned by a universe but not in its cast: re-reading the context cannot help,
+  // so the page offers to add the record to that cast instead of a retry.
+  const [ownerCanonMissing, setOwnerCanonMissing] = useState(false);
+  const [joiningCanon, setJoiningCanon] = useState(false);
   const [contextVersion, setContextVersion] = useState(0);
   const [contextRequested, setContextRequested] = useState(false);
   const onCharacterPageChange = useCallback(page => { if (page === 'story' || page === 'voice') setContextRequested(true); }, []);
   const ownerUniverseId = record?.universeContext?.owner?.refId || null;
   useEffect(() => {
     let active = true;
-    setOwnerUniverse(null); setOwnerEntryId(null); setOwnerContextError(null);
+    setOwnerUniverse(null); setOwnerEntryId(null); setOwnerContextError(null); setOwnerCanonMissing(false);
     if (!ownerUniverseId || !contextRequested && record?.type !== 'object') return;
     const load = record.type === 'character'
       ? getCanonCatalogContext(ownerUniverseId, record.id, record.type, { silent: true })
       : getUniverse(ownerUniverseId, { silent: true }).then(universe => ({ universe }));
     load.then(({ universe, entry }) => { if (active) { setOwnerUniverse(universe); setOwnerEntryId(entry?.id || null);
-      if (record.type === 'character' && !entry) setOwnerContextError('No writable canon binding is available for this character in its owning universe.'); } })
+      if (record.type === 'character' && !entry) setOwnerCanonMissing(true); } })
       .catch(error => { if (active) setOwnerContextError(error.message || 'Could not load the owning universe’s character context.'); });
     return () => { active = false; };
   }, [ownerUniverseId, contextRequested, contextVersion, record?.type, record?.id]);
+  const joinOwnerCanon = useCallback(() => {
+    if (!record?.id || !ownerUniverseId) return;
+    setJoiningCanon(true);
+    linkCatalogIngredient(record.id, { refKind: 'universe', refId: ownerUniverseId, role: `canon-${record.type}` })
+      .then(() => setContextVersion(previous => previous + 1))
+      .catch(() => {})
+      .finally(() => setJoiningCanon(false));
+  }, [record?.id, record?.type, ownerUniverseId]);
   const applyUniverseContext = useCallback((context) => {
     setRecord((current) => current ? { ...current, universeContext: context, refs: context.refs } : current);
   }, []);
@@ -1015,6 +1028,10 @@ function IngredientEditor() {
                   <fieldset disabled={identityReadOnly || characterActionBusy}><TagPicker id="ingredient-tags" value={tags} onChange={setTags} /></fieldset></div>
                 {ownerUniverseId && !contextRequested && <button type="button" onClick={() => setContextRequested(true)}
                   className="min-h-11 text-xs text-port-accent">Load universe creative tools</button>}
+                {ownerCanonMissing && <p role="alert" className="text-xs text-port-warning">
+                  {name || 'This character'} isn’t in {ownerUniverse?.name || 'its universe'}’s cast, so its story, voice and sheet tools are off.
+                  {!identityReadOnly && <button type="button" disabled={joiningCanon} onClick={joinOwnerCanon}
+                    className="ml-1 min-h-11 underline disabled:opacity-50">{joiningCanon ? 'Adding…' : 'Add to cast'}</button>}</p>}
                 {ownerContextError && <p role="alert" className="text-xs text-port-warning">{ownerContextError}
                   <button type="button" onClick={() => setContextVersion(previous => previous + 1)} className="ml-1 underline">Retry context</button></p>}
                 {ownerCharacter && <CharacterCanonActions key={ownerCharacter.id} universe={ownerUniverse} entry={ownerCharacter}

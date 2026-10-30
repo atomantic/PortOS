@@ -68,6 +68,7 @@ vi.mock('../services/apiCatalog', () => ({
   setCatalogIngredientLock: vi.fn(),
   getCatalogIngredientCards: vi.fn(async () => []),
   deleteCatalogIngredient: vi.fn(),
+  linkCatalogIngredient: vi.fn(async () => ({ success: true })),
   linkCatalogIngredientRelation: vi.fn(),
   unlinkCatalogIngredientRelation: vi.fn(),
   listCatalogIngredientRevisions: vi.fn(async () => ({ items: [] })),
@@ -626,6 +627,22 @@ describe('CatalogIngredient — character sheet', () => {
     fireEvent.click(screen.getByRole('button', { name: /^Generate$/ }));
     await screen.findByPlaceholderText(/Describe the image to render/);
     expect(getUniverse).not.toHaveBeenCalled();
+  });
+
+  it('offers to add an owned character missing from its universe cast, then loads its canon tools', async () => {
+    const { getUniverse } = await import('../services/apiUniverseBuilder');
+    const { linkCatalogIngredient } = await import('../services/apiCatalog');
+    const ownerOnly = { ...CHAR_FIXTURE, refs: CHAR_FIXTURE.refs.filter((ref) => ref.role === 'owner') };
+    getCatalogIngredientDetails.mockResolvedValue(detailsOf(ownerOnly));
+    getUniverse.mockResolvedValue({ id: 'u-1', name: 'Example World', characters: [] });
+    await renderPage('/casting/cat-chr-1');
+    await act(async () => fireEvent.click(screen.getByRole('tab', { name: 'Story' })));
+    expect(await screen.findByText(/isn’t in Example World’s cast/)).toBeInTheDocument();
+    getUniverse.mockResolvedValue({ id: 'u-1', name: 'Example World', characters: [{ id: 'character-1', ingredientId: ownerOnly.id, name: ownerOnly.name }] });
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Add to cast' })));
+    expect(linkCatalogIngredient).toHaveBeenCalledWith(ownerOnly.id, { refKind: 'universe', refId: 'u-1', role: 'canon-character' });
+    await waitFor(() => expect(screen.queryByText(/isn’t in Example World’s cast/)).not.toBeInTheDocument());
+    getUniverse.mockResolvedValue({ id: 'u-1' });
   });
 
   it('retains the union of story, appearance, voice and evidence while a lock protects creative actions', async () => {
