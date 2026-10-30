@@ -7,9 +7,14 @@ const formLabel = (form) => [form.label || 'Age', Number.isInteger(form.age) ? `
 // Tap the source's references to seed a fork. Grouped by age so a v2 can start
 // from a few canonical images per age; nothing is picked until tapped.
 export default function CatalogForkSeedPicker({ candidates, forms = [], selected, onChange, disabled = false, loading = false, error = '', onRetry }) {
-  const images = [];
-  const seen = new Set();
-  for (const m of candidates || []) if (!seen.has(m.mediaKey)) { seen.add(m.mediaKey); images.push(m); }
+  // One tile per file. A set-primary portrait row is often untagged beside the
+  // age-tagged reference row of the same file, so the tagged row wins.
+  const byKey = new Map();
+  for (const m of candidates || []) {
+    const prior = byKey.get(m.mediaKey);
+    if (!prior || (!prior.library?.variant?.formId && m.library?.variant?.formId)) byKey.set(m.mediaKey, m);
+  }
+  const images = [...byKey.values()];
   const known = new Set(forms.map((form) => form.id));
   const groups = [{ id: '', label: 'Canonical' }, ...forms.map((form) => ({ id: form.id, label: formLabel(form) }))]
     .map((group) => ({ ...group, items: images.filter((m) => {

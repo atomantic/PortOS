@@ -193,19 +193,19 @@ describe('creative primitive ownership and forks', () => {
 
   it('seeds a redesign fork with only the picked images, their ages re-keyed, and the redesigned fields', async () => {
     const source = db.state.ingredients['cat-chr-source'];
-    source.payload.imageRefs = ['coat.png', 'young.png'];
+    source.payload.imageRefs = ['coat.png', 'young.png', 'canon-only.png'];
     db.state.media.push(
       { ingredientId: 'cat-chr-source', mediaKey: 'young.png', kind: 'reference', role: 'upload', caption: 'At seven',
         library: { variant: { formId: 'older', age: 7, wardrobeId: 'outfit' }, likeness: false, review: { status: 'good' }, tags: ['rink'] } },
       { ingredientId: 'cat-chr-source', mediaKey: 'teen.png', kind: 'reference', role: 'upload', library: { variant: { age: 17 } } },
     );
     const before = structuredClone(db.state.ingredients['cat-chr-source']);
-    const response = await request(app).post(`${path}/fork`).send({ universeId: 'first', name: 'Courier v2', seedImages: ['young.png'],
+    const response = await request(app).post(`${path}/fork`).send({ universeId: 'first', name: 'Courier v2', seedImages: ['young.png', 'canon-only.png'],
       fields: { physicalDescription: 'A red coat.' }, operationKey });
     expect(response.status).toBe(201);
     const fork = response.body;
     expect(fork.payload.physicalDescription).toBe('A red coat.');
-    expect(fork.payload.imageRefs).toEqual(['young.png']);
+    expect(fork.payload.imageRefs).toEqual(['young.png', 'canon-only.png']);
     expect(fork.payload.primaryImageRef).toBe('young.png');
     expect(fork.payload.identityPack?.assets ?? []).toEqual([]);
     expect(db.state.media.filter((media) => media.ingredientId === fork.id)).toEqual([{ ingredientId: fork.id, mediaKey: 'young.png', kind: 'reference',

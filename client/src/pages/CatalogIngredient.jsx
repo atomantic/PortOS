@@ -816,8 +816,11 @@ function IngredientEditor() {
   const referenceKeys = new Set(media.filter((m) => m.kind === 'reference').map((m) => m.mediaKey));
   const lookCandidates = media.filter((m) => (m.kind === 'reference' && isReferenceTabRow(m))
     || (m.kind === 'portrait' && !referenceKeys.has(m.mediaKey)));
-  const forkSeed = { candidates: media.filter((m) => !m.deleted && (m.kind === 'portrait' || (m.kind === 'reference' && isReferenceTabRow(m)))),
-    forms: Array.isArray(ingredientPayload(record.payload).forms) ? record.payload.forms : [], ready: mediaReady, error: mediaError, load: refreshMedia };
+  const savedPayload = ingredientPayload(record.payload);
+  const forkSeed = { candidates: [...media.filter((m) => !m.deleted && (m.kind === 'portrait' || (m.kind === 'reference' && isReferenceTabRow(m)))),
+    ...[savedPayload.primaryImageRef, ...(Array.isArray(savedPayload.imageRefs) ? savedPayload.imageRefs : [])]
+      .filter((ref) => typeof ref === 'string' && ref.trim()).map((mediaKey) => ({ mediaKey, kind: 'reference' }))],
+    forms: Array.isArray(savedPayload.forms) ? savedPayload.forms : [], ready: mediaReady, error: mediaError, load: refreshMedia };
   const coverUrl = ingredientCoverUrl({
     ...record,
     thumbnailKey: media.find((m) => m.kind === 'portrait')?.mediaKey || (!mediaReady && record.coverMedia?.portraitKey) || record.thumbnailKey,

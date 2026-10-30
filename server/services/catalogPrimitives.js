@@ -299,7 +299,10 @@ export async function forkPrimitive(sourceId, { universeId, name, copyImages = f
         FROM catalog_identity_read_media WHERE ingredient_id = ANY(catalog_identity_member_ids($1))
           AND deleted = false AND kind IN ('portrait', 'reference')`, [source.id]);
       images = seedSet ? rows.filter((row) => seedSet.has(row.media_key)) : rows;
-      const missing = seeds?.filter((key) => !images.some((row) => row.media_key === key)) || [];
+      // Canon pointers (e.g. a Universe Builder "set as reference") can exist
+      // without a media row; they seed through the kept payload imageRefs.
+      const canonRefs = new Set([source.payload?.primaryImageRef, ...(Array.isArray(source.payload?.imageRefs) ? source.payload.imageRefs : [])]);
+      const missing = seeds?.filter((key) => !canonRefs.has(key) && !images.some((row) => row.media_key === key)) || [];
       if (missing.length) fail(`${missing.length} picked image${missing.length === 1 ? ' is' : 's are'} no longer on ${source.name}`, 'CATALOG_FORK_SEED_MISSING');
     }
     const fork = await createIngredient({ id: `cat-${ingredientIdPrefix(source.type)}-${randomUUID()}`,

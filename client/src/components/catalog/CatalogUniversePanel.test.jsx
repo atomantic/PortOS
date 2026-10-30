@@ -78,7 +78,8 @@ describe('primitive ownership and fork controls', () => {
     const load = vi.fn();
     const owner = { refKind: 'universe', refId: 'first', role: 'owner', refName: 'First world', resolved: true };
     const seed = { ready: true, error: null, load, forms: [{ id: 'form-young', label: 'Child', age: 7 }],
-      candidates: [{ mediaKey: 'adult.png', kind: 'portrait' }, { mediaKey: 'young-a.png', kind: 'reference', library: { variant: { formId: 'form-young' } } },
+      candidates: [{ mediaKey: 'adult.png', kind: 'portrait' }, { mediaKey: 'young-a.png', kind: 'portrait' },
+        { mediaKey: 'young-a.png', kind: 'reference', library: { variant: { formId: 'form-young' } } },
         { mediaKey: 'young-b.png', kind: 'reference', library: { variant: { formId: 'form-young' } } }] };
     function SeedHarness() {
       const [context, setContext] = useState({ status: 'owned', owner, refs: [owner] });
