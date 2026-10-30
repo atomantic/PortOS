@@ -205,6 +205,17 @@ describe('deriveStages / deriveNextAction', () => {
     expect(deriveStages({ ...doc, composition: { mode: 'document', document: { directory: 'd' } } }).current).toBe('review');
   });
 
+  // Uniquely catches a reopened storyboard still reading as done, or losing its Approve storyboard row.
+  it('holds a reopened storyboard open until it is approved again', () => {
+    const planned = { id: 'p', trackId: 't1', audioAnalysis: ANALYSIS, ...LYRICS, scenes: [scene()],
+      productionReadiness: { art: { approved: false }, storyboard: { approved: false, problems: [] } } };
+    const reopened = { ...planned, storyboardReopenedAt: '2026-10-30T00:00:00.000Z' };
+    expect(stateOf(reopened).board).not.toBe('done');
+    expect(stageChecklist('board', reopened).map((i) => [i.id, i.done])).toEqual([['shots', true], ['storyboard-approved', false]]);
+    expect(stageChecklist('board', reopened)[1].action).toEqual({ label: 'Approve storyboard', anchor: 'mv-board-approve' });
+    expect(stateOf({ ...reopened, storyboardReopenedAt: null }).board).toBe('done');
+  });
+
   it('requires art review for hands-on projects too, once the shots are planned', () => {
     const planned = { id: 'p', trackId: 't1', audioAnalysis: ANALYSIS, ...LYRICS, scenes: [scene()] };
     expect(stateOf({ ...planned, productionReadiness: { art: { approved: false }, storyboard: { approved: false, problems: [] } } })).toMatchObject({ board: 'done', 'cast-sets': 'active' });

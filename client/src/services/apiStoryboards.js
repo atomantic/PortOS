@@ -60,9 +60,13 @@ export const correctStoryboardPanel = (id, panelId, body, options) =>
 
 // Make empty panels. GET → { batch, panelCount, steps: [{ nodeId, title, type, model, frames }] }.
 export const getStoryboardMakeEmpty = (id, options) => request(`/storyboards/${enc(id)}/make-empty`, options);
-// → { batch } at once; `storyboard:make-batch` reports progress.
-export const startStoryboardMakeEmpty = (id, options) =>
-  request(`/storyboards/${enc(id)}/make-empty`, { method: 'POST', ...options });
+// → { batch } at once; `storyboard:make-batch` reports progress. `body`:
+// { redraw, selectNew } redraws every panel instead of only the empty ones.
+export const startStoryboardMakeEmpty = (id, body = {}, options) =>
+  request(`/storyboards/${enc(id)}/make-empty`, { ...json('POST', body), ...options });
+// Regroup a music video's linked board into one beat per song section.
+export const groupStoryboardBySong = (projectId, options) =>
+  request(`/storyboards/group-by-song/${enc(projectId)}`, { ...json('POST', {}), ...options });
 
 // The saved recipe library, shared by every board. A load copies the graph onto a board.
 export const listStoryboardRecipes = (options) => request('/storyboards/recipes', options);

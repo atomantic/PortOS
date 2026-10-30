@@ -130,4 +130,30 @@ describe('fit a music video to its storyboard', () => {
     expect(gone.status).toBe(409);
     expect(gone.body.code).toBe('PANEL_MISSING');
   });
+
+  it('groups the board by song sections, placing each panel where its shot starts', async () => {
+    const sections = [
+      { label: 'Intro', startSec: 0, endSec: 8 }, { label: 'Verse 1', startSec: 8, endSec: 20 },
+      { label: 'Verse 1', startSec: 20, endSec: 24 }, { label: 'Chorus', startSec: 24, endSec: 40 },
+    ];
+    const { project, board } = await linkedProject({ audioAnalysis: { ...analysis, sections } });
+    const [p1, p2] = board.beats[0].panels;
+    const [p3] = board.beats[1].panels;
+    // The first panel's shot starts in the verse, the third's in the chorus; the second has no shot and follows the first.
+    await projects.mutateProjectRecord(project.id, (record) => ({ project: { ...record, scenes: [
+      { sceneId: 'mvs-1', order: 0, startSec: 9, endSec: 14, panelId: p1.id, takes: [] },
+      { sceneId: 'mvs-3', order: 1, startSec: 26, endSec: 34, panelId: p3.id, takes: [] },
+    ] } }));
+    const res = await request(app).post(`/api/storyboards/group-by-song/${project.id}`);
+    expect(res.status).toBe(200);
+    expect(res.body.beats.map((beat) => [beat.title, beat.musicalRole, beat.panels.map((p) => p.id)])).toEqual([
+      ['Verse 1', 'verse', [p1.id, p2.id]],
+      ['Chorus', 'chorus', [p3.id]],
+    ]);
+    // The verse keeps the old beat that held its panels.
+    expect(res.body.beats[0].id).toBe(board.beats[0].id);
+
+    const bare = await projects.createProject({ name: 'Unlinked' });
+    expect((await request(app).post(`/api/storyboards/group-by-song/${bare.id}`)).status).toBe(409);
+  });
 });

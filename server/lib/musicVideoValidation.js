@@ -1603,6 +1603,8 @@ export const musicVideoProjectUpdateSchema = z.object({
   creditsOutro: musicVideoCreditsOutroSchema.nullable().optional(),
   // The Create › Storyboards board this video is planned from; null unlinks.
   storyboardId: z.string().regex(STORYBOARD_ID_PATTERN, 'storyboardId must be a storyboard id').nullable().optional(),
+  // When the storyboard was reopened for rework (the step reads not done); null = approved again.
+  storyboardReopenedAt: z.string().datetime().nullable().optional(),
 }).strict();
 
 // Mark a project finished outside PortOS (or clear the marker). The server

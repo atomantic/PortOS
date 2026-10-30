@@ -8,7 +8,7 @@ import SceneRejectUnused from './SceneRejectUnused.jsx';
 import ShotFinalRender from './ShotFinalRender.jsx';
 import ShotStoryboardPanel from './ShotStoryboardPanel.jsx';
 import { MUSIC_VIDEO_MEDIUM_LABELS } from '../../../../server/lib/musicVideoMediumPlan.js';
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import { Trash2, Activity, ArrowUp, ArrowDown, ChevronLeft, ChevronRight, Video, AlertTriangle, Clapperboard, Shuffle } from 'lucide-react';
 import OverflowMenu from '../ui/OverflowMenu.jsx';
 import SceneTakePicker from './SceneTakePicker.jsx';
@@ -131,12 +131,6 @@ export default function SceneCard({
   storyboardId = null, storyboardShot = null, onStoryboardBoard = null,
 }) {
   const detailsRef = useRef(null);
-
-  useEffect(() => {
-    if (expanded && detailsRef.current) {
-      detailsRef.current.scrollIntoView?.({ behavior: 'smooth', block: 'center' });
-    }
-  }, [expanded]);
 
   // Keep playback mounted even when this shot shows a still or performance evidence.
   const clipPlayback = useSceneClipPlayback(scene);

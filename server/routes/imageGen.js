@@ -131,7 +131,11 @@ const generateSchema = z.object({
   // prompt arrives as `undefined`; default it to '' rather than rejecting.
   prompt: noNulPrompt.optional().default(''),
   negativePrompt: noNulPrompt.optional(),
-  visualProfileOverride: universeVisualProfileSchema.nullable().optional(),
+  // A multipart form sends the profile as one JSON string field.
+  visualProfileOverride: z.preprocess((value) => {
+    if (typeof value !== 'string') return value;
+    try { return JSON.parse(value); } catch { return value; }
+  }, universeVisualProfileSchema.nullable().optional()),
   // Per-request backend override. If omitted, the dispatcher uses
   // `imageGen.mode` from settings.json.
   mode: z.enum(IMAGE_GEN_MODES).optional(),

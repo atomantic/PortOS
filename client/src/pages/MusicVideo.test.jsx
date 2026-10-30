@@ -2882,23 +2882,19 @@ describe('MusicVideo stage tabs (#9243)', () => {
     await waitFor(() => expect(document.getElementById('mv-auto-edit')).toHaveFocus());
   });
 
-  // Uniquely catches Edit shot losing its route (Shots, the shot's card) or its scroll to the card.
-  it('opens the shot playing in the preview on Shots and scrolls to its card', async () => {
+  // Uniquely catches Edit shot losing its route (Shots) or the shot's card not opening in the side panel.
+  it('opens the shot playing in the preview on Shots in the side panel', async () => {
     listMusicVideoProjects.mockResolvedValue([{ ...PROJECT_WITH_CLIP, scenes: [{ ...PROJECT_WITH_CLIP.scenes[0], startSec: 0 }] }]);
-    const scrolled = [];
-    const scroll = vi.spyOn(Element.prototype, 'scrollIntoView').mockImplementation(function record() { scrolled.push(this.id); });
     renderAt('/music-video/mv-1/cast-sets');
     await screen.findByRole('heading', { level: 2, name: PROJECT_WITH_CLIP.name });
     const dock = screen.getByRole('complementary', { name: 'Preview' });
     fireEvent.click(within(dock).getByRole('button', { name: 'Edit shot' }));
     await waitFor(() => expect(screen.getByTestId('loc')).toHaveTextContent('/music-video/mv-1/produce/scene/s1'));
     expect(selectedTab()).toHaveAccessibleName(STAGE_TABS.produce);
-    await waitFor(() => expect(scrolled).toContain('scene-s1'));
-    // Already open, the card still comes back into view (Shots leads with the player, so the dock moved).
-    scrolled.length = 0;
-    fireEvent.click(within(screen.getByRole('complementary', { name: 'Preview' })).getByRole('button', { name: 'Edit shot' }));
-    await waitFor(() => expect(scrolled).toContain('scene-s1'));
-    scroll.mockRestore();
+    const panel = await screen.findByRole('dialog');
+    expect(panel.querySelector('#scene-s1')).not.toBeNull();
+    fireEvent.click(within(panel).getByRole('button', { name: 'Close shot' }));
+    await waitFor(() => expect(screen.getByTestId('loc')).toHaveTextContent(/\/music-video\/mv-1\/produce$/));
   });
 
   // Uniquely catches the player coming back on Plan, which is checked by reading; watching is on Shots.
