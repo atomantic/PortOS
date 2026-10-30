@@ -27,6 +27,7 @@ import {
   createVoiceDesignCandidate,
   createClonedVoiceCandidate,
   promoteVoiceProfile,
+  deleteVoiceProfile,
 } from '../services/voice/profiles.js';
 import { renderProfileBenchmark, benchmarkProfileInteractive, completeProfileInteractiveBenchmark } from '../services/voice/profileBenchmarks.js';
 import { getQwen3RuntimeStatus, downloadQwen3Model, DEFAULT_DESIGN_MODEL } from '../services/voice/qwen3TtsRuntime.js';
@@ -406,6 +407,13 @@ router.post('/profiles/clone', asyncHandler(async (req, res) => {
     audioBuffer,
   });
   res.status(201).json({ profile });
+}));
+
+// DELETE /api/voice/profiles/:id — withdraw consent: remove row, transcript and source recording
+router.delete('/profiles/:id', asyncHandler(async (req, res) => {
+  const { id: profileId } = validateRequest(profileIdParamsSchema, req.params);
+  const result = await deleteVoiceProfile(profileId);
+  res.json({ deleted: true, id: result.id });
 }));
 
 // POST /api/voice/profiles/:id/promote — explicitly promote candidate profile

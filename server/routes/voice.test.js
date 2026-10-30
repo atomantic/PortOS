@@ -38,6 +38,7 @@ vi.mock('../services/voice/profiles.js', async (importActual) => ({
   createVoiceDesignCandidate: vi.fn(),
   createClonedVoiceCandidate: vi.fn(),
   promoteVoiceProfile: vi.fn(),
+  deleteVoiceProfile: vi.fn(),
 }));
 vi.mock('../services/voice/profileBenchmarks.js', () => ({
   renderProfileBenchmark: vi.fn(),
@@ -191,6 +192,14 @@ describe('Voice Routes', () => {
         transcript: 'sample transcript',
         performerConsentConfirmed: true,
       }));
+    });
+
+    it('deletes a profile and returns only its id', async () => {
+      voiceProfiles.deleteVoiceProfile.mockResolvedValue({ id: 'voice-clone-1' });
+      const res = await request(buildApp()).delete('/api/voice/profiles/voice-clone-1');
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ deleted: true, id: 'voice-clone-1' });
+      expect(voiceProfiles.deleteVoiceProfile).toHaveBeenCalledWith('voice-clone-1');
     });
 
     it('promotes candidate profile and sets routes', async () => {
