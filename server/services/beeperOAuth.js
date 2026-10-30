@@ -33,6 +33,7 @@ import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
 import { readResponseJson } from '../lib/readResponseJson.js';
 import { describeFetchError } from '../lib/fetchErrorChain.js';
 import { isPlainObject } from '../lib/objects.js';
+import { isLoopbackHostname } from '../../lib/portosAuthCore.js';
 import {
   BeeperApiError, getAccounts, getInfo, probeBeeperInfo, resolveBeeperBaseUrl,
 } from './beeperClient.js';
@@ -105,8 +106,7 @@ function oauthError(message, code, { status = 502 } = {}) {
 // spellings — #11 decision 5 defaults the base URL to `127.0.0.1` precisely
 // because a dual-stack box may resolve `localhost` to `::1` first, so treating
 // them as different origins here would reject Beeper's own metadata.
-const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
-const sameHost = (a, b) => a === b || (LOOPBACK_HOSTS.has(a) && LOOPBACK_HOSTS.has(b));
+const sameHost = (a, b) => a === b || (isLoopbackHostname(a) && isLoopbackHostname(b));
 
 /**
  * Resolve one advertised endpoint against the configured base URL, and refuse
@@ -131,7 +131,7 @@ function resolveEndpoint(value, baseUrl, field) {
   }
   const base = new URL(baseUrl);
   const url = new URL(value.trim(), base);
-  const bothLoopback = LOOPBACK_HOSTS.has(url.hostname) && LOOPBACK_HOSTS.has(base.hostname);
+  const bothLoopback = isLoopbackHostname(url.hostname) && isLoopbackHostname(base.hostname);
   if (
     !['http:', 'https:'].includes(url.protocol)
     || !sameHost(url.hostname, base.hostname)
