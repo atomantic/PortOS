@@ -50,6 +50,43 @@ export function extractIssuePriority(labels = []) {
   return null;
 }
 
+const FORGE_PAGE_LIMIT = 100;
+const FORGE_LIST_CEILING = 500;
+
+/**
+ * Read every row of a forge issue listing, or null when the read failed OR the
+ * listing may be incomplete. gh takes one `--limit 500` call; glab caps a page at
+ * 100 so pages are walked until a short one. A page still full at the ceiling is
+ * treated like a failed read, so callers suppress filing rather than dedupe
+ * against a partial set. `[]` (empty stdout) stays distinct from null.
+ */
+async function readForgeRows({ cli, cwd, env, exec, ghArgs, glabArgs }) {
+  const run = (args) => exec(cli, args, { cwd, env });
+  const parse = ({ code, stdout }) => {
+    if (code !== 0) return null;
+    if (!stdout.trim()) return [];
+    const parsed = safeJSONParse(stdout, null, { logError: false });
+    return Array.isArray(parsed) ? parsed : null;
+  };
+  if (cli !== 'glab') {
+    const rows = parse(await run([...ghArgs, '--limit', String(FORGE_LIST_CEILING)]));
+    return rows && rows.length >= FORGE_LIST_CEILING ? incomplete(cli, rows.length) : rows;
+  }
+  const all = [];
+  for (let page = 1; all.length < FORGE_LIST_CEILING; page += 1) {
+    const rows = parse(await run(withGlabJson([...glabArgs, '--per-page', String(FORGE_PAGE_LIMIT), '--page', String(page)])));
+    if (!rows) return null;
+    all.push(...rows);
+    if (rows.length < FORGE_PAGE_LIMIT) return all;
+  }
+  return incomplete(cli, all.length);
+}
+
+function incomplete(cli, count) {
+  console.log(`⏭️ ${cli} issue listing reached the ${count}-row ceiling; treating the tracker read as incomplete`);
+  return null;
+}
+
 /**
  * List issues on a forge. Defaults to the layered-intelligence set (open +
  * recently closed) for the reasoner + dedup guard; `label`/`state` are
@@ -64,14 +101,12 @@ export function extractIssuePriority(labels = []) {
 export async function listForgeIssues({ cli, cwd, env, label = LI_LABEL, state = 'all', exec = runCli } = {}) {
   // glab lists open issues by default and needs `--all` to widen to every state;
   // gh takes the state explicitly.
-  const args = cli === 'glab'
-    ? withGlabJson(['issue', 'list', '--label', label, ...(state === 'all' ? ['--all'] : []), '-P', '100'])
-    : ['issue', 'list', '--label', label, '--state', state, '--limit', '100', '--json', 'number,title,body,state,stateReason,closedAt,url,labels,comments,closedByPullRequestsReferences'];
-  const { code, stdout } = await exec(cli, args, { cwd, env });
-  if (code !== 0) return { ok: false, issues: [] };
-  if (!stdout.trim()) return { ok: true, issues: [] };
-  const parsed = safeJSONParse(stdout, null, { logError: false });
-  if (!Array.isArray(parsed)) return { ok: false, issues: [] };
+  const parsed = await readForgeRows({
+    cli, cwd, env, exec,
+    glabArgs: ['issue', 'list', '--label', label, ...(state === 'all' ? ['--all'] : [])],
+    ghArgs: ['issue', 'list', '--label', label, '--state', state, '--json', 'number,title,body,state,stateReason,closedAt,url,labels,comments,closedByPullRequestsReferences'],
+  });
+  if (!parsed) return { ok: false, issues: [] };
   return {
     ok: true,
     issues: parsed.map(i => ({
@@ -199,14 +234,12 @@ export function extractClosingComment(comments) {
  * `{ ok, issues }` with the same failed-vs-empty distinction as listForgeIssues.
  */
 export async function listBlockingIssues({ cli, cwd, env, exec = runCli } = {}) {
-  const args = cli === 'glab'
-    ? withGlabJson(['issue', 'list', '--label', LI_BLOCKING_LABEL, '-P', '100'])
-    : ['issue', 'list', '--label', LI_BLOCKING_LABEL, '--state', 'open', '--limit', '100', '--json', 'number,title,state'];
-  const { code, stdout } = await exec(cli, args, { cwd, env });
-  if (code !== 0) return { ok: false, issues: [] };
-  if (!stdout.trim()) return { ok: true, issues: [] };
-  const parsed = safeJSONParse(stdout, null, { logError: false });
-  if (!Array.isArray(parsed)) return { ok: false, issues: [] };
+  const parsed = await readForgeRows({
+    cli, cwd, env, exec,
+    glabArgs: ['issue', 'list', '--label', LI_BLOCKING_LABEL],
+    ghArgs: ['issue', 'list', '--label', LI_BLOCKING_LABEL, '--state', 'open', '--json', 'number,title,state'],
+  });
+  if (!parsed) return { ok: false, issues: [] };
   return {
     ok: true,
     issues: parsed.map(i => ({
