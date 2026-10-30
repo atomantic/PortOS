@@ -37,6 +37,7 @@ import { prepareGenerateParams, quickEditCompositionDigest, resolveLocalImageMod
 import { IMAGE_REFERENCE_REQUEST_LIMIT } from '../lib/imageGenCapabilities.js';
 import { applyImageClean, applyWatermarkRemoval, applyLightRegenVariant } from '../services/imageGen/variants.js';
 import { applyFilmLookBake, readFilmLookSource } from '../services/imageGen/filmLookBake.js';
+import { musicVideoCastInputsSchema } from '../lib/musicVideoValidation.js';
 import { universeVisualProfileSchema } from '../lib/universeVisualProfileValidation.js';
 import { previewImagePrompt, previewQuickImageEdit } from '../services/imageGen/promptPreview.js';
 import { assertReviewedReference } from '../services/imageGen/reviewedReference.js';
@@ -271,6 +272,10 @@ const generateSchema = z.object({
     fromFrame: z.boolean().optional(),
     refine: z.boolean().optional(),
     greyboxImageId: galleryImageFilenameSchema('greybox capture').optional(),
+    // The guides and sheets this submit actually sent (#14154). The completion
+    // hook copies them onto the take; it does not look them up again.
+    castInputs: musicVideoCastInputsSchema.optional(),
+    replaceSelection: z.boolean().optional(),
   }).optional(),
   // File the render into this music video's media collection even when no shot
   // keeps it (sheets, tests, alternates): musicVideoCollectionHook for the

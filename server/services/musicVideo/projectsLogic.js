@@ -1039,6 +1039,37 @@ function joinScenes(project, idx, { keep, backend }) {
  * Tombstone-aware purely via `updatedAt`: deleteProject stamps a fresh
  * `updatedAt`, so a tombstone beats an older live copy and can't be resurrected.
  */
+/**
+ * An older peer rebuilds takes from an explicit field list and drops
+ * `castInputs`. Copy it back onto a take that peer still sends, before newest
+ * `updatedAt` wins, so the loss is not written back. A take the peer omitted
+ * entirely stays omitted. A body that includes the field keeps its own value.
+ */
+function preserveOmittedTakeCastInputs(local, remote) {
+  const kept = new Map();
+  for (const scene of local?.scenes || []) {
+    if (!scene?.sceneId || !Array.isArray(scene.takes)) continue;
+    for (const take of scene.takes) {
+      if (take?.takeId && Object.hasOwn(take, 'castInputs')) kept.set(`${scene.sceneId}\0${take.takeId}`, take.castInputs);
+    }
+  }
+  if (!kept.size || !Array.isArray(remote.scenes)) return remote;
+  let scenesChanged = false;
+  const scenes = remote.scenes.map((scene) => {
+    if (!scene?.sceneId || !Array.isArray(scene.takes)) return scene;
+    let takesChanged = false;
+    const takes = scene.takes.map((take) => {
+      if (!take?.takeId || Object.hasOwn(take, 'castInputs') || !kept.has(`${scene.sceneId}\0${take.takeId}`)) return take;
+      takesChanged = true;
+      return { ...take, castInputs: structuredClone(kept.get(`${scene.sceneId}\0${take.takeId}`)) };
+    });
+    if (!takesChanged) return scene;
+    scenesChanged = true;
+    return { ...scene, takes };
+  });
+  return scenesChanged ? { ...remote, scenes } : remote;
+}
+
 export function mergeProjectRecord(local, remoteRaw) {
   let remote = sanitizeProjectForSync(remoteRaw);
   if (!remote) return { next: null, inserted: false, remoteWins: false, changed: false };
@@ -1082,6 +1113,7 @@ export function mergeProjectRecord(local, remoteRaw) {
       ...(local.composition.documentDraft ? { documentDraft: local.composition.documentDraft } : {}),
     };
   }
+  remote = preserveOmittedTakeCastInputs(local, remote);
   if (local.videoSettings && typeof local.videoSettings === 'object'
     && !Array.isArray(local.videoSettings) && ['backend', 'renderPool'].some((key) => Object.hasOwn(local.videoSettings, key))) {
     const remoteVideoSettings = remote.videoSettings && typeof remote.videoSettings === 'object'

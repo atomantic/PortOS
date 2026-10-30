@@ -90,6 +90,11 @@ describe('production scene dispatch (#9066)', () => {
       const params = enqueueJob.mock.calls.at(-1)[0].params;
       expect(params.referenceImagePaths.map((path) => basename(path))).toEqual(['character.png', `${plate}.png`]);
       expect(params.referenceImageStrengths).toEqual([1, 1]);
+      expect(params.musicVideo.castInputs).toEqual({
+        ingredientId: null,
+        guides: [],
+        sheets: [{ id: 'mvr-cs-character', imageId: 'character.png' }, { id: `mvr-cs-set-${plate}`, imageId: `${plate}.png` }],
+      });
     }
   });
 

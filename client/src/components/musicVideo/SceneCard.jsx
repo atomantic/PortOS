@@ -462,7 +462,7 @@ export default function SceneCard({
           onOpenPreview={onOpenPreview} takeBusy={takeBusy} onSelectTake={onSelectTake} onReviewTake={onReviewTake}
           onSwap={onPlacePoolItem ? setSwapKind : null} onSwapFrames={onSwapFrames ? () => onSwapFrames(scene) : null} onImportTake={onImportTake}
           onContinueFromPrevious={layer === 'footage' && index > 0 ? onContinueFromPrevious : null} previousHasClip={previousHasClip}
-          clipLocked={shotLock?.clip === 'locked'} assetMarks={project?.assetMarks} onMarkTake={onMarkTake} />
+          clipLocked={shotLock?.clip === 'locked'} stillLocked={shotLock?.still === 'locked'} assetMarks={project?.assetMarks} onMarkTake={onMarkTake} />
         {/* Clip: the motion prompt, where this shot renders and what it costs, then its clip (Phase 1). */}
         <section aria-label="Render" className="min-w-0 space-y-2">
           <h4 className="text-xs font-medium">Clip</h4>

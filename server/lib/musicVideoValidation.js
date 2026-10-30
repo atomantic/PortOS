@@ -341,6 +341,14 @@ const providerSlug = z.string().min(1).max(40).regex(/^[a-z0-9][a-z0-9._-]*$/i, 
 // external-tool import, or a synchronous-lane render the client already holds.
 // `assetId` is validated against its kind (gallery basename / history id) and
 // then existence-checked by the route before it can reach the record.
+// Guides and Cast & Sets sheets a still was conditioned on (#14154). Optional:
+// a take that omits it is an older frame and reads as unknown, not stale.
+export const musicVideoCastInputsSchema = z.object({
+  ingredientId: z.string().min(1).max(200).nullable(),
+  guides: z.array(galleryImageName).max(8),
+  sheets: z.array(z.object({ id: z.string().min(1).max(80), imageId: galleryImageName }).strict()).max(8),
+}).strict();
+
 export const musicVideoTakeInputSchema = z.object({
   kind: z.enum(MUSIC_VIDEO_TAKE_KINDS),
   assetId: z.string().min(1).max(256),
@@ -351,6 +359,11 @@ export const musicVideoTakeInputSchema = z.object({
   sourceImageId: galleryImageName.optional(),
   inputAssets: z.array(z.object({ role: z.enum(['crop', 'mask']), assetId: galleryImageName, revision: z.number().int().min(1).max(1000000) }).strict()).max(4).optional(),
   use: z.enum(MUSIC_VIDEO_TAKE_USES).optional(),
+  castInputs: musicVideoCastInputsSchema.optional(),
+  // One-tap re-render of a filled still. The new image becomes the selection
+  // unless the take is already stale. A locked still is reverted by the
+  // generation-completion lock, which keeps the new take as a candidate.
+  replaceSelection: z.boolean().optional(),
 }).strict().superRefine((take, ctx) => {
   const check = take.kind === 'video' ? videoHistoryIdSchema : galleryImageName;
   const parsed = check.safeParse(take.assetId);
