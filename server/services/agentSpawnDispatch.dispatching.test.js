@@ -68,6 +68,7 @@ import { prepareAgentWorkspace } from './agentWorkspacePrep.js';
 import { updateTask } from './cosTaskStore.js';
 import { registerAgent } from './cosAgentLifecycle.js';
 import { withCheckoutPublication } from '../lib/checkoutRetirementAdmission.js';
+import { markHostShuttingDown, resetHostShutdownFlagForTests } from '../lib/hostShutdown.js';
 
 const task = { id: 'task-example', taskType: 'user', description: 'example', metadata: {} };
 const newContext = () => ({
@@ -180,6 +181,23 @@ describe('dispatchAgentRun ownership window', () => {
     expect(context.claimAcquired).toBe(false);
     expect(context.spawnWorktree).toBeNull();
     expect(f.publicationActive).toBe(false);
+  });
+
+  it('refuses before registration and the in_progress claim when host shutdown lands during preparation (#14170)', async () => {
+    prepareAgentWorkspace.mockImplementationOnce(async ({ onPrepared }) => {
+      markHostShuttingDown();
+      return onPrepared(f.prep);
+    });
+    const context = newContext();
+    try {
+      expect(await dispatchAgentRun(context)).toBeNull();
+    } finally { resetHostShutdownFlagForTests(); }
+    expect(context.cleanupOnError).toHaveBeenCalledWith('PortOS is shutting down');
+    expect(createAgentRun).not.toHaveBeenCalled();
+    expect(registerAgent).not.toHaveBeenCalled();
+    expect(updateTask).not.toHaveBeenCalled();
+    expect(spawnDirectly).not.toHaveBeenCalled();
+    expect(getActiveAgentIds()).not.toContain('agent-x');
   });
 
   it('releases the agent when workspace prep blocks the dispatch', async () => {
