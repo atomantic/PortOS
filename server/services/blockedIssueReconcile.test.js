@@ -196,23 +196,104 @@ describe('gatherBlockedIssueState (GitHub)', () => {
     const result = await gatherBlockedIssueState('/repo');
     expect(result).toBeNull();
   });
+
+  it('returns null and warns when the blocked list fills the cap', async () => {
+    const list = Array.from({ length: 200 }, (_, i) => ({ ...blockedIssue('Blocked by #10'), number: i + 1 }));
+    mockGh(list, { 10: { state: 'closed' } });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      expect(await gatherBlockedIssueState('/repo')).toBeNull();
+      expect(warn).toHaveBeenCalledWith(expect.stringMatching(/incomplete/i));
+      expect(execGhMock.mock.calls[0][0]).toEqual(expect.arrayContaining(['--limit', '200']));
+      expect(execGhMock.mock.calls.some(([args]) => args[0] === 'api')).toBe(false);
+    } finally {
+      warn.mockRestore();
+    }
+  });
 });
 
 describe('gatherBlockedIssueState (GitLab)', () => {
+  const glIssue = (iid, description = '') => ({ iid, title: `Issue ${iid}`, description, web_url: 'u' });
+  const fullPage = (start) => Array.from({ length: 100 }, (_, i) => glIssue(start + i));
+
   beforeEach(() => {
     getOriginInfo.mockResolvedValue({ isGithub: false, host: 'gitlab.com', fullName: 'group/proj' });
     readOriginRemoteUrl.mockResolvedValue('git@gitlab.com:group/proj.git');
   });
 
-  it('resolves a blocked issue whose named blocker is now closed', async () => {
-    execGlabJsonMock
-      .mockResolvedValueOnce({ rows: [{ iid: 5, title: 'Feature X', description: 'Blocked by #10', web_url: 'u' }], reason: 'ok' })
-      .mockResolvedValueOnce({ rows: [{ iid: 10, state: 'closed' }, { iid: 5, state: 'opened' }], reason: 'ok' });
+  it('unblocks from glab issue view when the closed blocker is past the first list page', async () => {
+    execGlabJsonMock.mockResolvedValueOnce({
+      rows: [glIssue(5, 'Blocked by #250')],
+      reason: 'ok',
+    });
+    execGlabMock.mockResolvedValueOnce(JSON.stringify({ iid: 250, state: 'closed' }));
     const result = await gatherBlockedIssueState('/repo');
     expect(result.forge).toBe('gitlab');
     expect(result.ready).toEqual([
-      expect.objectContaining({ number: 5, closedBlockers: [10], openBlockers: [] }),
+      expect.objectContaining({ number: 5, closedBlockers: [250], openBlockers: [] }),
     ]);
+    expect(execGlabJsonMock.mock.calls.map(([args]) => args)).toEqual([
+      ['issue', 'list', '--label', 'blocked', '--per-page', '100', '--page', '1'],
+    ]);
+    expect(execGlabJsonMock.mock.calls.some(([args]) => args.includes('--all'))).toBe(false);
+    expect(execGlabMock).toHaveBeenCalledWith(
+      ['issue', 'view', '250', '--output', 'json'],
+      '/repo',
+    );
+  });
+
+  it('reads the next blocked page when the first page is full', async () => {
+    execGlabJsonMock
+      .mockResolvedValueOnce({ rows: fullPage(1), reason: 'ok' })
+      .mockResolvedValueOnce({ rows: [glIssue(250, 'Blocked by #900')], reason: 'ok' });
+    execGlabMock.mockResolvedValueOnce(JSON.stringify({ iid: 900, state: 'closed' }));
+    const result = await gatherBlockedIssueState('/repo');
+    expect(result.ready).toEqual([
+      expect.objectContaining({ number: 250, closedBlockers: [900], openBlockers: [] }),
+    ]);
+    expect(execGlabJsonMock.mock.calls.map(([args]) => args[args.indexOf('--page') + 1])).toEqual(['1', '2']);
+  });
+
+  it('leaves the issue blocked when glab issue view fails', async () => {
+    execGlabJsonMock.mockResolvedValueOnce({
+      rows: [glIssue(5, 'Blocked by #10, #11')],
+      reason: 'ok',
+    });
+    execGlabMock.mockImplementation(async (args) => (
+      args[2] === '10' ? JSON.stringify({ iid: 10, state: 'closed' }) : null
+    ));
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const result = await gatherBlockedIssueState('/repo');
+      expect(result.ready).toEqual([]);
+      expect(error).toHaveBeenCalledWith(expect.stringMatching(/blocker view #11 unavailable/));
+    } finally {
+      error.mockRestore();
+    }
+  });
+
+  it('returns null and warns when a full page still fills the cap', async () => {
+    execGlabJsonMock
+      .mockResolvedValueOnce({ rows: fullPage(1).map((row) => ({ ...row, description: 'Blocked by #10' })), reason: 'ok' })
+      .mockResolvedValueOnce({ rows: fullPage(101).map((row) => ({ ...row, description: 'Blocked by #11' })), reason: 'ok' });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      expect(await gatherBlockedIssueState('/repo')).toBeNull();
+      expect(warn).toHaveBeenCalledWith(expect.stringMatching(/incomplete/i));
+      expect(execGlabMock).not.toHaveBeenCalled();
+      expect(execGlabJsonMock).toHaveBeenCalledTimes(2);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('returns null when a later blocked page cannot be read', async () => {
+    execGlabJsonMock
+      .mockResolvedValueOnce({ rows: fullPage(1), reason: 'ok' })
+      .mockResolvedValueOnce({ rows: null, reason: 'cli-failed' });
+    const result = await gatherBlockedIssueState('/repo');
+    expect(result).toBeNull();
+    expect(execGlabMock).not.toHaveBeenCalled();
   });
 
   it('returns null when glab cannot answer', async () => {
