@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync } from 'fs';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, existsSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import migration from './339-claude-ollama-num-ctx.js';
@@ -32,6 +32,7 @@ describe('migration 339 — claude-ollama context window pin', () => {
 
   it('skips a fresh install with no providers.json (data.reference already ships the window)', async () => {
     await expect(migration.up({ rootDir, env: {} })).resolves.toEqual({ ok: false, reason: 'no-file', updated: 0 });
+    expect(existsSync(providersPath)).toBe(false);
   });
 
   it('pins 131072 on a record that carries no numCtx', async () => {
@@ -136,5 +137,6 @@ describe('migration 339 — claude-ollama context window pin', () => {
     writeFileSync(providersPath, '{ not json');
 
     await expect(migration.up({ rootDir, env: {} })).resolves.toEqual({ ok: false, reason: 'unreadable', updated: 0 });
+    expect(readFileSync(providersPath, 'utf-8')).toBe('{ not json');
   });
 });
