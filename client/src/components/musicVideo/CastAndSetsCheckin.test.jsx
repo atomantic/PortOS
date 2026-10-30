@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { MemoryRouter } from 'react-router';
-import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import CastSetsStage from './stages/CastSetsStage.jsx';
 import useMusicVideoCastAndSets from '../../hooks/useMusicVideoCastAndSets';
@@ -162,11 +162,13 @@ describe('Cast & Sets direction editing', () => {
   });
   const review = (dir, extra = {}) => ({ id: 'example-project', castAndSets: { revision: 1, status: 'review', plan: {}, images: {}, direction: dir, ...extra } });
 
-  it('offers the editor only for a procedural direction waiting in review', () => {
+  it('offers the editor only for a procedural direction waiting in review', async () => {
     const view = render(<Harness initial={review(direction())} locked={false} />);
+    await act(async () => {});
     expect(screen.queryByRole('button', { name: /Edit direction/ })).toBeNull();
     view.unmount();
     render(<Harness initial={review(direction('procedural'), { status: 'approved' })} locked={false} />);
+    await act(async () => {});
     expect(screen.queryByRole('button', { name: /Edit direction/ })).toBeNull();
   });
 
@@ -474,6 +476,47 @@ describe('Cast & Sets per-image actions', () => {
     expect(api.regenerateMusicVideoCastAndSets).toHaveBeenLastCalledWith('example-project',
       { notes: [{ text: 'Add Zora to the cast from Casting, each with a cast sheet.' }] }, { silent: true });
     expect(api.discardMusicVideoCastAndSets).not.toHaveBeenCalled();
+  });
+
+  // A failed Casting re-read must not read as "nothing changed": the last good notice stays, Retry re-reads.
+  it('keeps the Casting notice through a failed re-read, and Retry loads the next answer', async () => {
+    api.getMusicVideoCastAndSetsCastingChanges.mockResolvedValue({ changes: { images: [{ key: 'character', label: 'June' }], cast: [] } });
+    render(<Harness initial={sheet('approved')} locked={false} />);
+    expect(await screen.findByText(/New Casting images for June\./)).toBeInTheDocument();
+    api.getMusicVideoCastAndSetsCastingChanges.mockRejectedValue(new Error('network down'));
+    await act(async () => { selectProject(sheet('review', { revision: 2 })); });
+    expect(await screen.findByRole('button', { name: /Retry/ })).toBeInTheDocument();
+    expect(screen.getByText(/New Casting images for June\./)).toBeInTheDocument();
+    api.getMusicVideoCastAndSetsCastingChanges.mockResolvedValue({ changes: null });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Retry/ })); });
+    await waitFor(() => expect(screen.queryByRole('button', { name: /Retry/ })).toBeNull());
+    expect(screen.queryByText(/Casting changed since this sheet was built/)).toBeNull();
+  });
+
+  it('shows Retry and no changes notice when the first Casting read fails', async () => {
+    api.getMusicVideoCastAndSetsCastingChanges.mockRejectedValueOnce(new Error('network down'));
+    render(<Harness initial={sheet('approved')} locked={false} />);
+    expect(await screen.findByRole('button', { name: /Retry/ })).toBeInTheDocument();
+    expect(screen.queryByText(/Casting changed since this sheet was built/)).toBeNull();
+    api.getMusicVideoCastAndSetsCastingChanges.mockResolvedValueOnce({ changes: { images: [{ key: 'character', label: 'June' }], cast: [] } });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Retry/ })); });
+    expect(await screen.findByText(/New Casting images for June\./)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Retry/ })).toBeNull();
+  });
+
+  // Switching projects must not carry the previous project's notice or failure into the new one.
+  it('drops the previous project\'s Casting notice while the next project reads, and does not reuse its changes after a failure', async () => {
+    api.getMusicVideoCastAndSetsCastingChanges.mockResolvedValue({ changes: { images: [{ key: 'character', label: 'June' }], cast: [] } });
+    render(<Harness initial={sheet('approved')} locked={false} />);
+    expect(await screen.findByText(/New Casting images for June\./)).toBeInTheDocument();
+    let fail;
+    api.getMusicVideoCastAndSetsCastingChanges.mockReturnValueOnce(new Promise((_, reject) => { fail = reject; }));
+    await act(async () => { selectProject({ ...sheet('approved'), id: 'other-project' }); });
+    expect(api.getMusicVideoCastAndSetsCastingChanges).toHaveBeenLastCalledWith('other-project', { silent: true });
+    expect(screen.queryByText(/Casting changed since this sheet was built/)).toBeNull();
+    await act(async () => { fail(new Error('network down')); });
+    expect(await screen.findByRole('button', { name: /Retry/ })).toBeInTheDocument();
+    expect(screen.queryByText(/Casting changed since this sheet was built/)).toBeNull();
   });
 
   it('hides card actions while working and starts over only after confirming', async () => {

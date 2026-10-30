@@ -40,7 +40,7 @@ export const directionSummary = (project) => {
 export default function CastSetsStage({ board }) {
   const { project, locked, castSets, kickoff } = board;
   const subjects = project.concept?.subjects || [];
-  const castingChanges = useMusicVideoCastingChanges(project);
+  const { changes: castingChanges, loadError: castingChangesError, retry: retryCastingChanges } = useMusicVideoCastingChanges(project);
   return (
     <div className="min-w-0 space-y-3">
       <p id="mv-setup-direction" className="px-1 text-xs text-port-text-muted" style={ANCHOR_STYLE}>
@@ -68,6 +68,8 @@ export default function CastSetsStage({ board }) {
           stale={board.productionReadiness?.castAndSets?.stale || null}
           storyStale={board.productionReadiness?.castAndSets?.storyStale || null}
           castingChanges={castingChanges}
+          castingChangesError={castingChangesError}
+          onRetryCastingChanges={retryCastingChanges}
           busy={locked || castSets.busy || kickoff.running}
           onOpenSheet={board.openArtifact}
           onOpenPreview={board.openPreview}
