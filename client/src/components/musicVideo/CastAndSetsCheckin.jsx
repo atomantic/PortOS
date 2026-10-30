@@ -146,6 +146,7 @@ export default function CastAndSetsCheckin({ id, project, stale = null, storySta
       ))}
       {stage.greyboxPending && <p role="status" className="text-xs text-port-warning">Greybox selection saved. Regenerate to render the set plates with it.</p>}
       <CastAndSetsReferenceProgress stage={stage} onOpenPreview={onOpenPreview}
+        subjects={project.concept?.subjects || []} olderLookKeys={(castingChanges?.images || []).map((i) => i.key)}
         actions={!working && stage.direction && stage.status !== 'skipped' && onRegenerateImages && onEditDirection
           ? { projectId: project.id, busy, formSubjects, onRegenerate: onRegenerateImages, onEdit: onEditDirection, onRefresh } : null} />
       <div className="flex flex-wrap gap-2">

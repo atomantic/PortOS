@@ -151,7 +151,9 @@ function IngredientEditor() {
   const library = libraryForPathname(pathname);
   const detailView = library ? 'profile' : undefined;
   const requestedBack = new URLSearchParams(search).get('returnTo') || '';
-  const backPath = /^\/(?:casting(?:\?|$)|universes\/[^/?#]+(?:\?|$))/.test(requestedBack) ? requestedBack : library?.path || '/catalog';
+  // A music video's Cast & Sets links here to revise a look and comes back to its stage.
+  const backToVideo = /^\/music-video\/[^/?#]+(?:\/[^/?#]+)?(?:\?|#|$)/.test(requestedBack);
+  const backPath = backToVideo || /^\/(?:casting(?:\?|$)|universes\/[^/?#]+(?:\?|$))/.test(requestedBack) ? requestedBack : library?.path || '/catalog';
   const profileActive = !library || resolveDetailTab(library, tabParam) === 'profile';
   const [profileVisited, setProfileVisited] = useState(profileActive);
   useEffect(() => { if (profileActive) setProfileVisited(true); }, [profileActive]);
@@ -854,7 +856,7 @@ function IngredientEditor() {
       <header className="shrink-0 px-3 py-2 sm:px-4 sm:py-3 border-b border-port-border">
         <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
           <div className="flex items-center gap-2 sm:gap-3 min-w-0">
-            <Link to={backPath} aria-label={`Back to ${library?.label || 'Catalog'}`} title="Back"
+            <Link to={backPath} aria-label={`Back to ${backToVideo ? 'music video' : library?.label || 'Catalog'}`} title="Back"
               className="shrink-0 inline-flex items-center justify-center min-w-[40px] min-h-[40px] -ml-2 rounded-lg text-gray-400 hover:text-white">
               <ArrowLeft size={18} aria-hidden="true" />
             </Link>

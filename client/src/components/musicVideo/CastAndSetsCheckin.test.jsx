@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { MemoryRouter } from 'react-router';
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import CastSetsStage from './stages/CastSetsStage.jsx';
@@ -39,7 +40,9 @@ function Harness({ initial, locked = true, openPreview = vi.fn() }) {
   const [value, setValue] = useState(initial);
   selectProject = setValue;
   const actions = useMusicVideoCastAndSets({ project: value, replaceProject: setValue });
-  return <CastSetsStage board={{ project: value, locked, castSets: actions, kickoff: { running: locked }, devArtifacts: { busy: false }, openArtifact: vi.fn(), openPreview, approveCastAndSets: actions.approve, skipCastAndSets: actions.skip, ...DRAFTS }} />;
+  return <MemoryRouter initialEntries={['/music-video/example-project/cast-sets']}>
+    <CastSetsStage board={{ project: value, locked, castSets: actions, kickoff: { running: locked }, devArtifacts: { busy: false }, openArtifact: vi.fn(), openPreview, approveCastAndSets: actions.approve, skipCastAndSets: actions.skip, ...DRAFTS }} />
+  </MemoryRouter>;
 }
 const stage = (next) => emit('music-video:cast-and-sets', { projectId: next.id, project: next });
 const card = (name) => within(screen.getByRole('article', { name }));
@@ -269,6 +272,7 @@ describe('Cast & Sets per-image actions', () => {
     api.editMusicVideoCastAndSetsDirection.mockResolvedValue({ project: linked });
     render(<Harness initial={linked} locked={false} />);
     expect(card('June · Age 7').getByText(/no longer cast in this video/)).toBeInTheDocument();
+    expect(card('June · Age 7').queryByRole('link', { name: 'Revise look' })).toBeNull();
     fireEvent.click(card('June · Age 7').getByRole('button', { name: 'Edit June · Age 7' }));
     const subject = card('June · Age 7').getByLabelText('Catalog reference for this age');
     expect([...subject.options].map((o) => o.value)).toEqual(['', 'mvc-child']);
@@ -424,6 +428,23 @@ describe('Cast & Sets per-image actions', () => {
     expect(api.startMusicVideoCastAndSets).toHaveBeenCalledWith('example-project', {}, { silent: true });
     // While the new direction is written, the banner gives way to progress.
     expect(screen.queryByRole('button', { name: /Rebuild from story/ })).toBeNull();
+  });
+
+  // A face revised in Casting mid-production: each linked card links back to
+  // that record's Design tab (returning here) and names the cards it outdated.
+  it('links linked cards to Casting Design and marks the ones built from an older look', async () => {
+    api.getMusicVideoCastAndSetsCastingChanges.mockResolvedValue({ changes: { images: [{ key: 'character', label: 'June' }], cast: [] } });
+    const linked = { ...sheet('approved'), concept: { subjects: [
+      { id: 'mvc-june', kind: 'character', name: 'June', role: 'protagonist', ingredientId: 'cat-june' },
+      { id: 'mvc-dad', kind: 'character', name: 'Dad', ingredientId: 'cat-dad' },
+    ] } };
+    render(<Harness initial={linked} locked={false} />);
+    expect(await card('June').findByText(/Older look/)).toBeInTheDocument();
+    expect(card('Dad').queryByText(/Older look/)).toBeNull();
+    const back = new URLSearchParams({ returnTo: '/music-video/example-project/cast-sets' });
+    expect(card('June').getByRole('link', { name: 'Revise look' })).toHaveAttribute('href', `/casting/cat-june/design?${back}`);
+    expect(card('Dad').getByRole('link', { name: 'Revise look' })).toHaveAttribute('href', `/casting/cat-dad/design?${back}`);
+    expect(card('June · moods').queryByRole('link', { name: 'Revise look' })).toBeNull();
   });
 
   it('offers to update the images whose Casting references changed (with their dependents), then to add a newly linked character', async () => {
