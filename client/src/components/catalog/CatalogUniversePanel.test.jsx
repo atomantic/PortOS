@@ -62,15 +62,44 @@ describe('primitive ownership and fork controls', () => {
     await screen.findByRole('option', { name: 'First world (same universe · redesign)' });
     expect(screen.getByRole('button', { name: 'Create fork' })).toBeDisabled();
     fireEvent.change(screen.getByLabelText('Destination universe'), { target: { value: 'second' } });
-    fireEvent.click(screen.getByLabelText('Reuse image files as independent references on the fork'));
     fireEvent.click(screen.getByRole('button', { name: 'Create fork' }));
     await waitFor(() => expect(forkCatalogIngredient).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(screen.getByRole('button', { name: 'Create fork' })).toBeEnabled());
     fireEvent.click(screen.getByRole('button', { name: 'Create fork' }));
     await waitFor(() => expect(navigate).toHaveBeenCalledWith('/casting/cat-chr-fork'));
     const first = forkCatalogIngredient.mock.calls[0][1];
-    expect(first).toMatchObject({ universeId: 'second', name: 'Example courier', copyImages: true });
+    expect(first).toEqual({ universeId: 'second', name: 'Example courier', operationKey: expect.any(String) });
     expect(forkCatalogIngredient.mock.calls[1][1].operationKey).toBe(first.operationKey);
+  });
+
+  it('seeds the fork with only the tapped images, grouped by age, and saves a redesign onto the fork', async () => {
+    forkCatalogIngredient.mockResolvedValue({ id: 'cat-chr-fork', type: 'character' });
+    const clear = vi.fn();
+    const load = vi.fn();
+    const owner = { refKind: 'universe', refId: 'first', role: 'owner', refName: 'First world', resolved: true };
+    const seed = { ready: true, error: null, load, forms: [{ id: 'form-young', label: 'Child', age: 7 }],
+      candidates: [{ mediaKey: 'adult.png', kind: 'portrait' }, { mediaKey: 'young-a.png', kind: 'portrait' },
+        { mediaKey: 'young-a.png', kind: 'reference', library: { variant: { formId: 'form-young' } } },
+        { mediaKey: 'young-b.png', kind: 'reference', library: { variant: { formId: 'form-young' } } }] };
+    function SeedHarness() {
+      const [context, setContext] = useState({ status: 'owned', owner, refs: [owner] });
+      return <CatalogUniversePanel ingredient={{ id: 'cat-chr-1', type: 'character', name: 'Example courier' }} context={context} onContextChange={setContext}
+        seed={seed} redesign={{ fields: { physicalDescription: 'A red coat.' }, clear }} />;
+    }
+    render(<MemoryRouter><SeedHarness /></MemoryRouter>);
+    await screen.findByRole('option', { name: 'First world (same universe · redesign)' });
+    expect(screen.getByText(/The fork gets the redesigned physical description/)).toBeInTheDocument();
+    expect(screen.getByText('Child · 7')).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Destination universe'), { target: { value: 'first' } });
+    fireEvent.change(screen.getByLabelText('Fork name'), { target: { value: 'Example courier v2' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Seed young-b.png (Child · 7)' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Seed adult.png (Canonical)' }));
+    expect(screen.getByRole('button', { name: 'Seed young-a.png (Child · 7)' })).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.click(screen.getByRole('button', { name: 'Create fork' }));
+    await waitFor(() => expect(navigate).toHaveBeenCalledWith('/casting/cat-chr-fork'));
+    expect(forkCatalogIngredient.mock.calls[0][1]).toEqual({ universeId: 'first', name: 'Example courier v2', seedImages: ['adult.png', 'young-b.png'],
+      fields: { physicalDescription: 'A red coat.' }, operationKey: expect.any(String) });
+    expect(clear).toHaveBeenCalled();
   });
 });
 

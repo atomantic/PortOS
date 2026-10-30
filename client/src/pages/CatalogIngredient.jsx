@@ -191,6 +191,8 @@ function IngredientEditor() {
   const [mediaReady, setMediaReady] = useState(false);
   const [mediaLoading, setMediaLoading] = useState(false);
   const [mediaError, setMediaError] = useState(null);
+  // A redesign-assistant proposal waiting to be saved onto a new fork.
+  const [redesignFork, setRedesignFork] = useState(null);
   const mediaSequence = useRef(0);
   const sheetPointerSequence = useRef(0);
   const mediaReadyRef = useRef(false);
@@ -814,6 +816,11 @@ function IngredientEditor() {
   const referenceKeys = new Set(media.filter((m) => m.kind === 'reference').map((m) => m.mediaKey));
   const lookCandidates = media.filter((m) => (m.kind === 'reference' && isReferenceTabRow(m))
     || (m.kind === 'portrait' && !referenceKeys.has(m.mediaKey)));
+  const savedPayload = ingredientPayload(record.payload);
+  const forkSeed = { candidates: [...media.filter((m) => !m.deleted && (m.kind === 'portrait' || (m.kind === 'reference' && isReferenceTabRow(m)))),
+    ...[savedPayload.primaryImageRef, ...(Array.isArray(savedPayload.imageRefs) ? savedPayload.imageRefs : [])]
+      .filter((ref) => typeof ref === 'string' && ref.trim()).map((mediaKey) => ({ mediaKey, kind: 'reference' }))],
+    forms: Array.isArray(savedPayload.forms) ? savedPayload.forms : [], ready: mediaReady, error: mediaError, load: refreshMedia };
   const coverUrl = ingredientCoverUrl({
     ...record,
     thumbnailKey: media.find((m) => m.kind === 'portrait')?.mediaKey || (!mediaReady && record.coverMedia?.portraitKey) || record.thumbnailKey,
@@ -923,10 +930,11 @@ function IngredientEditor() {
             className="ml-2 text-port-accent hover:underline">Discard local edits and load latest</button>
         </div>}
         <CatalogUniversePanel key={`universe-${record.id}`} ingredient={record} context={record.universeContext}
-          onContextChange={applyUniverseContext} readOnly={identityReadOnly} forkBlocked={record.sharedIdentity?.reason === 'CATALOG_IDENTITY_FENCED'} unsaved={isDirty || saving || lookSaving} />
+          onContextChange={applyUniverseContext} readOnly={identityReadOnly} forkBlocked={record.sharedIdentity?.reason === 'CATALOG_IDENTITY_FENCED'} unsaved={isDirty || saving || lookSaving}
+          seed={forkSeed} redesign={redesignFork ? { fields: redesignFork, clear: () => setRedesignFork(null) } : null} />
 
         <CatalogRedesign ingredient={record} payload={payload} disabled={identityReadOnly || payload.locked === true || saving || lookSaving || !!externalDetails}
-          onApply={patch => setPayload(previous => ({ ...previous, ...patch }))} />
+          onApply={patch => setPayload(previous => ({ ...previous, ...patch }))} onFork={setRedesignFork} />
 
         {profileVisited && (
           <div hidden={activeTab !== 'profile'} className="space-y-4">

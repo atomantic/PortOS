@@ -1131,12 +1131,18 @@ for atomic owned creation and retry-safe identity. Legacy callers can still
 create records staged for ownership review.
 
 `POST /api/catalog/ingredients/:id/fork` accepts `{ universeId, operationKey,
-name?, copyImages? }`. The UUID operation key is required. Replays return the
+name?, seedImages?, fields?, copyImages? }`. The UUID operation key is required. Replays return the
 original new primitive; changed input with the same key returns 409. A fork has
 fresh identity, initial revision and `forked-from` lineage. Image reuse defaults
-off. When enabled, attachment rows are independent and reuse immutable managed
-image files; voice media, execution/session bindings, approvals and export
-consent are excluded. Production uses and inter-character links are not copied.
+off. `seedImages` lists the source portrait/reference media keys to reuse (a key
+no longer on the source refuses the fork with `CATALOG_FORK_SEED_MISSING`);
+`copyImages: true` reuses all of them. Reused attachment rows are independent,
+point at the same immutable managed image files, and keep their age/look tags
+re-keyed to the fork's new forms and wardrobes (review ratings stay with the
+source). `fields` saves a redesign-assistant proposal onto the fork; only that
+type's redesign fields are accepted. Voice media, execution/session bindings,
+approvals and export consent are excluded. Production uses and inter-character
+links are not copied.
 
 The existing `/ingredients/:id/link` API manages membership. Universe canon
 roles populate/remove compatibility projections through serialized mutations;
