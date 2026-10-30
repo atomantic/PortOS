@@ -13,6 +13,7 @@ import {
   mergeNextScene,
   mergePreviousScene,
   splitScene,
+  replaceScenes,
   mirrorStatus,
   sanitizeProjectForSync,
   mergeProjectRecord,
@@ -1110,6 +1111,7 @@ describe('create-schema parity', () => {
     panelRev: 'abc123',
     panelArt: 'panel-art.png',
     setReference: { subjectId: 'set-example', greyboxShotId: 'wide' },
+    preMusic: { durationSec: 3.5, clipVolume: 0.8, layers: [{ effect: 'play-button', atSec: 3, durationSec: null, volume: 1 }] },
   };
 
   it('stores every accepted video setting key on the project record', () => {
@@ -1147,4 +1149,19 @@ it('round-trips lyric overlay visibility without choosing a renderer or changing
   expect(mergeProjectRecord(null, sanitizeProjectForSync(project)).next.lyricOverlayEnabled).toBe(false);
   expect(baseProject()).not.toHaveProperty('lyricOverlayEnabled');
   expect(() => musicVideoProjectUpdateSchema.parse({ lyricOverlayEnabled: 'false' })).toThrow();
+});
+
+describe('shots before the song', () => {
+  // Uniquely catches AI Plan "Replace" wiping a cold open it never plans, or a split cutting one on song time.
+  it('keeps the cold open in front through a re-plan, and will not split it on song time', () => {
+    const { project: added, scene } = addScene(baseProject(), { startSec: 0, endSec: 4, prompt: 'Booth operator presses play' });
+    const { project: marked, updated } = applySceneUpdate(added, scene.sceneId, { preMusic: { durationSec: 3, layers: [{ effect: 'play-button', atSec: 2.6 }] } });
+    expect(updated.preMusic).toEqual({ durationSec: 3, clipVolume: null, layers: [{ effect: 'play-button', atSec: 2.6, durationSec: null, volume: 1 }] });
+    const { project: replanned, scenes } = replaceScenes(marked, [{ startSec: 0, endSec: 6, prompt: 'Rink lights' }]);
+    expect(replanned.scenes.map((s) => [s.sceneId === scene.sceneId, s.order, !!s.preMusic])).toEqual([[true, 0, true], [false, 1, false]]);
+    expect(scenes.map((s) => s.prompt)).toEqual(['Rink lights']);
+    expect(() => splitScene(replanned, scene.sceneId, { atSec: 1 })).toThrow(/no song time to split/);
+    const { updated: back } = applySceneUpdate(replanned, scene.sceneId, { preMusic: null });
+    expect(back.preMusic).toBeNull();
+  });
 });

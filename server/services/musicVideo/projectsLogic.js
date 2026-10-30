@@ -47,6 +47,7 @@ import { remapTreatmentForClone, scenesFingerprint } from './treatment.js';
 import { anchorShotsToSungLyrics, carryStoryboardApproval, dropStaleStoryboardRows } from './productionReview.js';
 import { cuesSungWithin, sungLyricTextWithin } from '../../lib/musicVideoLyricAnchors.js';
 import { normalizeMusicVideoAutomation } from '../../lib/musicVideoAutomation.js';
+import { coldOpenScenes, isPreMusicShot, normalizePreMusic, songScenes } from '../../lib/musicVideoColdOpen.js';
 
 export { sanitizeProjectForSync } from '../../lib/projectStoreKit.js';
 
@@ -555,6 +556,7 @@ function buildScene(input, { order }) {
     ...(input.textZone ? { textZone: input.textZone } : {}),
     ...(input.lyricRole ? { lyricRole: input.lyricRole } : {}),
     ...(input.lyricSize ? { lyricSize: input.lyricSize } : {}),
+    ...(input.preMusic ? { preMusic: normalizePreMusic(input.preMusic) } : {}),
     // #8977: cutaway (any image-to-video lane) unless the director asks for a
     // lip-synced performance shot, which only a source-audio provider renders.
     shotMode: input.shotMode ?? 'cutaway',
@@ -619,7 +621,9 @@ export function addScenes(project, sceneInputs) {
  */
 export function replaceScenes(project, sceneInputs) {
   const list = Array.isArray(sceneInputs) ? sceneInputs : [];
-  const existing = project.scenes || [];
+  // A plan covers the song; the cold open before it stays as it is, in front.
+  const coldOpen = coldOpenScenes(project);
+  const existing = songScenes(project);
   const claimed = new Set();
   const sameSpan = (a, b) => typeof a === 'number' && typeof b === 'number' && Math.abs(a - b) < 0.01;
   const scenes = list.map((input, order) => {
@@ -654,7 +658,8 @@ export function replaceScenes(project, sceneInputs) {
     };
   });
   // Rows bound to shots the new plan dropped go with them.
-  return { project: dropStaleStoryboardRows(touch(project, { scenes })), scenes, replaced: existing.length };
+  const board = [...coldOpen, ...scenes].map((scene, order) => (scene.order === order ? scene : { ...scene, order }));
+  return { project: dropStaleStoryboardRows(touch(project, { scenes: board })), scenes: board.slice(coldOpen.length), replaced: existing.length };
 }
 
 // Scene fields a director edits within an approved shot (its span, wording, selected
@@ -662,7 +667,7 @@ export function replaceScenes(project, sceneInputs) {
 // adding a shot or lyric the storyboard approval did not cover.
 const SCENE_SHOT_EDIT_FIELDS = ['startSec', 'endSec', 'beatAligned', 'label', 'prompt', 'framePrompt', 'visualIntent',
   'referenceImageId', 'videoHistoryId', 'endImageId', 'codeClip', 'frameFit', 'speedFps', 'offsetFrames', 'reverse', 'holdLastFrame', 'filmLook', 'transitionIn', 'transitionOut', 'glitches', 'cutEffect',
-  'visualLayer', 'stillMove', 'imageEffect', 'imageEffectSec', 'frameReferenceIds', 'setReference', 'characterVariant', 'panelId', 'panelRev', 'panelArt'];
+  'visualLayer', 'stillMove', 'imageEffect', 'imageEffectSec', 'frameReferenceIds', 'setReference', 'characterVariant', 'panelId', 'panelRev', 'panelArt', 'preMusic'];
 
 /**
  * Apply a patch to a single scene. Returns `{ project, updated }`. Throws if the
@@ -671,7 +676,8 @@ const SCENE_SHOT_EDIT_FIELDS = ['startSec', 'endSec', 'beatAligned', 'label', 'p
 export function applySceneUpdate(project, sceneId, patch) {
   const parsed = parseSceneOrThrow(musicVideoSceneUpdateSchema, patch);
   // A shot's own look is stored complete; null returns it to the video's look.
-  const data = 'filmLook' in parsed ? { ...parsed, filmLook: parsed.filmLook ? normalizeFilmLook(parsed.filmLook) : null } : parsed;
+  const looked = 'filmLook' in parsed ? { ...parsed, filmLook: parsed.filmLook ? normalizeFilmLook(parsed.filmLook) : null } : parsed;
+  const data = 'preMusic' in looked ? { ...looked, preMusic: normalizePreMusic(looked.preMusic) } : looked;
   const scenes = project.scenes || [];
   const idx = scenes.findIndex((s) => s.sceneId === sceneId);
   if (idx < 0) throw new ServerError('Scene not found', { status: 404, code: 'NOT_FOUND' });
@@ -802,6 +808,9 @@ export function splitScene(project, sceneId, { backend = null, atSec = null } = 
   const idx = scenes.findIndex((s) => s.sceneId === sceneId);
   if (idx < 0) throw new ServerError('Scene not found', { status: 404, code: 'NOT_FOUND' });
   const scene = scenes[idx];
+  if (isPreMusicShot(scene)) {
+    throw new ServerError('A shot before the song has no song time to split at. Set its length instead.', { status: 400, code: 'MUSIC_VIDEO_SPLIT_PRE_MUSIC' });
+  }
   const plan = atSec != null ? splitAtTime(scene, atSec) : planShotSplit({
     startSec: scene.startSec,
     endSec: scene.endSec,

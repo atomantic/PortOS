@@ -16,6 +16,7 @@ import { unlockedShots } from './musicVideoSceneAttention.js';
 import { latestMusicVideoReviewDraft } from '../../../server/lib/musicVideoReviewDraft.js';
 import { supersededStillsCheckpoint } from '../../../server/lib/musicVideoAutonomous.js';
 import { FINISHED_OUTSIDE_RERENDER_NOTE, finishedOutside, finishedOutsideCovers } from '../../../server/lib/musicVideoFinishedOutside.js';
+import { coldOpenScenes, normalizePreMusic, songScenes } from '../../../server/lib/musicVideoColdOpen.js';
 
 /**
  * The steps of a music video, in the order the director decides them. The
@@ -939,14 +940,18 @@ export function planShotRows(project, readiness = project?.productionReadiness) 
   }
   const rows = new Map((storyboard.shots || []).map((row) => [row.sceneId, row]));
   // Untimed shots (a new scene before its timing is set) follow the timed ones, unnumbered, so their problems stay visible.
-  const scenes = project?.scenes || [];
+  // Shots before the song (the cold open) lead, in play order, numbered on their own (`coldOpen`).
+  const coldOpen = coldOpenScenes(project);
+  const scenes = songScenes(project);
   const timed = scenes.filter((scene) => Number.isFinite(scene?.startSec)).sort((a, b) => a.startSec - b.startSec);
   const untimed = scenes.filter((scene) => scene && !Number.isFinite(scene.startSec));
-  return [...timed, ...untimed]
-    .map((scene, i) => {
+  return [...coldOpen, ...timed, ...untimed]
+    .map((scene, at) => {
       const row = rows.get(scene.sceneId);
+      const i = at - coldOpen.length;
       return {
-        scene, number: i < timed.length ? i + 1 : null,
+        scene, number: i >= 0 && i < timed.length ? i + 1 : null,
+        ...(i < 0 ? { coldOpen: at + 1, durationSec: normalizePreMusic(scene.preMusic).durationSec } : {}),
         lyric: typeof scene.lyricText === 'string' ? scene.lyricText.trim() : '',
         action: row?.action || scene.visualIntent || scene.prompt || '',
         camera: row?.camera || '',

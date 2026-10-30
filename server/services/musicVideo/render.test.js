@@ -545,6 +545,29 @@ describe('partial-board production pilot rendering (#9351)', () => {
   });
 });
 
+describe('cold open before the song', () => {
+  const take = (id, numFrames) => ({ id, filename: `${id}.mp4`, numFrames, fps: 24, width: 768, height: 512 });
+  const project = (preMusic) => ({ id: 'mv-cold', uploadedAudioFilename: 'example.wav', audioAnalysis: { durationSec: 8, beats: [0.5, 1, 1.5] },
+    scenes: [
+      { sceneId: 'song', order: 0, startSec: 0, endSec: 4, beatAligned: true, videoHistoryId: 'song-take', loop: false },
+      { sceneId: 'booth', order: 1, startSec: 4, endSec: 8, videoHistoryId: 'booth-take', loop: false, preMusic },
+    ] });
+
+  // Uniquely catches a cold-open shot leaking onto the song's clock, or its length coming from song time.
+  it('cuts the marked shots on their own length and leaves the song timeline to the rest', async () => {
+    loadHistory.mockResolvedValue([take('song-take', 96), take('booth-take', 72)]);
+    const plan = await planMusicVideoRender(project({ durationSec: 2.5 }));
+    expect(plan.clips.map((c) => [c.sceneId, c.outSec - c.inSec])).toEqual([['song', 4]]);
+    expect(plan.coldOpen.clips.map((c) => [c.sceneId, c.outSec - c.inSec])).toEqual([['booth', 2.5]]);
+  });
+
+  it('refuses a cold-open shot longer than its clip, naming it as a cold-open shot', async () => {
+    loadHistory.mockResolvedValue([take('song-take', 96), take('booth-take', 24)]);
+    await expect(planMusicVideoRender(project({ durationSec: 3 }))).rejects.toMatchObject({
+      code: 'INSUFFICIENT_CLIP_COVERAGE', message: expect.stringMatching(/^Cold open shot 1 \(2s short\): longer than its clip/) });
+  });
+});
+
 describe('clips made from frames that changed since', () => {
   // Uniquely catches a locked clip still blocking the render, or the refusal not naming its shots.
   it('names the shots in song order, and lets a locked clip render as it is', () => {

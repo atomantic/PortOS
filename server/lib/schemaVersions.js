@@ -809,7 +809,10 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // No backfill. New receivers preserve a packet omitted by an older sender.
   // v33 = the film credits ending (`creditsOutro`), which a v32 strict project
   // schema rejects and its normalizer drops on save. Optional, no backfill.
-  musicVideoProjects: 33,
+  // v34 = a shot moved before the song (`scene.preMusic`: its cold-open length
+  // and sound), which a v33 strict scene schema rejects with a 400 and a v33
+  // re-plan drops. Optional, no backfill: a shot without it plays on the song.
+  musicVideoProjects: 34,
   // v1 = Creative Commission FEEDBACK federation (PostgreSQL `commission_feedback`)
   // via the per-record peer-sync push pipeline (record kind `commissionFeedback`,
   // sync category `commissionFeedback`, #2686 — split-record follow-up to #2657).

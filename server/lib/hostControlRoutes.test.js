@@ -641,6 +641,7 @@ describe('Music Video agent workflow policy (#9869)', () => {
       'POST /api/music-video/:id/render',
       'POST /api/music-video/:id/shots/:sceneId/render',
       'POST /api/music-video/:id/shot-renders/preview',
+      'POST /api/music-video/:id/cold-open/audio',
       'POST /api/music-video/:id/excerpt',
       'POST /api/music-video/:id/publish-kit/build',
     ];

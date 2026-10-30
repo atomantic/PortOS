@@ -59,6 +59,7 @@ import { CLIP_OFFSET_FRAMES_RANGE, CLIP_SPEED_FPS_RANGE, MUSIC_VIDEO_FRAME_FITS,
 import { MUSIC_VIDEO_SHOT_GLITCH_LIMIT, MUSIC_VIDEO_TRANSITIONS } from './musicVideoTransitions.js';
 import { BEAT_TOGGLE_OVERLAP, BEAT_TOGGLE_RATES, MUSIC_VIDEO_CUT_EFFECTS } from './musicVideoCutEffects.js';
 import { IMAGE_EFFECT_SEC_RANGE, MUSIC_VIDEO_IMAGE_EFFECTS } from './musicVideoImageEffects.js';
+import { PRE_MUSIC_DURATION_RANGE, PRE_MUSIC_EFFECT_IDS, PRE_MUSIC_LAYER_LIMIT, PRE_MUSIC_VOLUME_RANGE } from './musicVideoColdOpen.js';
 import { CAMERA_FRAMINGS, CAMERA_MOVEMENT_VALUES, CAMERA_SPEEDS } from './cameraMovements.js';
 import { CAST_ERAS } from './catalogMediaLibrary.js';
 import { STORYBOARD_ID_PATTERN } from './storyboardVocabulary.js';
@@ -103,6 +104,8 @@ export const musicVideoRenderCleanupSchema = z.object({ unusedLooks: z.boolean()
 
 // The rendered-so-far player: `light` asks for the lighter phone copy.
 export const musicVideoRenderPreviewSchema = z.object({ light: z.boolean().optional() }).strict();
+// Mix the cold open's sound for the animatic; nothing to choose.
+export const musicVideoColdOpenAudioSchema = z.object({}).strict();
 export const musicVideoSongStyleSunoSchema = z.object({ url: z.string().trim().min(1).max(2000) });
 
 // Optional global visual direction for the whole video.
@@ -664,6 +667,20 @@ export const musicVideoSceneSetReferenceSchema = z.object({
   greyboxShotId: z.string().min(1).max(51).regex(/^[A-Za-z][A-Za-z0-9_-]*$/).optional(),
 }).strict();
 
+const musicVideoPreMusicLayerSchema = z.object({
+  effect: z.enum(PRE_MUSIC_EFFECT_IDS).optional(),
+  trackId: z.string().trim().min(1).max(128).optional(),
+  atSec: z.number().min(0).max(PRE_MUSIC_DURATION_RANGE.max).optional(),
+  durationSec: z.number().positive().max(PRE_MUSIC_DURATION_RANGE.max).nullable().optional(),
+  volume: z.number().min(PRE_MUSIC_VOLUME_RANGE.min).max(PRE_MUSIC_VOLUME_RANGE.max).optional(),
+}).strict().refine((layer) => !!layer.effect !== !!layer.trackId, 'a sound layer is one effect or one library track');
+
+export const musicVideoPreMusicSchema = z.object({
+  durationSec: z.number().min(PRE_MUSIC_DURATION_RANGE.min).max(PRE_MUSIC_DURATION_RANGE.max),
+  clipVolume: z.number().min(PRE_MUSIC_VOLUME_RANGE.min).max(PRE_MUSIC_VOLUME_RANGE.max).nullable().optional(),
+  layers: z.array(musicVideoPreMusicLayerSchema).max(PRE_MUSIC_LAYER_LIMIT).optional(),
+}).strict();
+
 // Per-scene visual layer (#8985) — footage, a moved still, or a title card;
 // see musicVideoLayers.js. Only a composed render honors a non-footage layer.
 const sceneLayerFields = {
@@ -711,6 +728,9 @@ const sceneLayerFields = {
   // Footage whose clip was rendered from code (an uploaded code render): the board labels it Code.
   codeClip: z.boolean().optional(),
   cardColor: z.string().regex(/^#[0-9a-f]{6}$/i, 'card color is #rrggbb').nullable().optional(),
+  // The shot plays before the song, in the cold open (lib/musicVideoColdOpen.js), with
+  // its own length and sound: the clip's audio and/or sound layers. null returns it to the song.
+  preMusic: musicVideoPreMusicSchema.nullable().optional(),
   // #10583: where a composition document's lyric type may sit in this shot, and the role of its lines.
   textZone: z.enum(MUSIC_VIDEO_TEXT_ZONES).nullable().optional(),
   lyricRole: z.enum(MUSIC_VIDEO_LYRIC_ROLES).nullable().optional(),

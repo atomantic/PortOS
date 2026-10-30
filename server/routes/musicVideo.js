@@ -14,10 +14,11 @@ import { activeDcp, startDcp, attachDcp, cancelDcp, dcpArtifactPaths } from '../
 import { existsSync } from 'fs';
 import { unlink } from 'fs/promises';
 import { pipeline } from 'stream/promises';
+import { basename } from 'path';
 import { Router } from 'express';
 import storyRoutes from './musicVideoStory.js';
 import festivalPacketRoutes from './musicVideoFestivalPacket.js';
-import { musicVideoRenderCleanupSchema, musicVideoRenderPreviewSchema, musicVideoSongStyleSunoSchema, musicVideoProjectListQuerySchema, musicVideoFinishedOutsideSchema, musicVideoProductionDraftSchema, musicVideoProductionApprovalSchema, musicVideoShotLockSchema, musicVideoProductionProofSchema, musicVideoProductionImportSchema, musicVideoContinueShotSchema, musicVideoPoolUseSchema, musicVideoPoolMarkSchema, musicVideoPoolSearchQuerySchema, musicVideoPoolDeleteSchema, musicVideoPoolImportSchema, musicVideoLibrarySearchQuerySchema, musicVideoPoolAddSchema, musicVideoProductionFeedbackSchema, musicVideoProductionFeedbackResolutionSchema, musicVideoLyricAnchorSyncSchema, musicVideoProductionReviseSchema, musicVideoProductionRevertSchema } from '../lib/musicVideoValidation.js';
+import { musicVideoColdOpenAudioSchema, musicVideoRenderCleanupSchema, musicVideoRenderPreviewSchema, musicVideoSongStyleSunoSchema, musicVideoProjectListQuerySchema, musicVideoFinishedOutsideSchema, musicVideoProductionDraftSchema, musicVideoProductionApprovalSchema, musicVideoShotLockSchema, musicVideoProductionProofSchema, musicVideoProductionImportSchema, musicVideoContinueShotSchema, musicVideoPoolUseSchema, musicVideoPoolMarkSchema, musicVideoPoolSearchQuerySchema, musicVideoPoolDeleteSchema, musicVideoPoolImportSchema, musicVideoLibrarySearchQuerySchema, musicVideoPoolAddSchema, musicVideoProductionFeedbackSchema, musicVideoProductionFeedbackResolutionSchema, musicVideoLyricAnchorSyncSchema, musicVideoProductionReviseSchema, musicVideoProductionRevertSchema } from '../lib/musicVideoValidation.js';
 import { productionReadiness } from '../services/musicVideo/productionReview.js';
 import { presentMusicVideoDependencies } from '../lib/musicVideoDependencies.js';
 import { finishedOutsideBlocker } from '../lib/musicVideoFinishedOutside.js';
@@ -793,6 +794,22 @@ router.get('/:id/film-looks', asyncHandler(async (req, res) => {
 router.delete('/:id/film-looks/:lookId', asyncHandler(async (req, res) => {
   const { deleteFilmLook } = await import('../services/musicVideo/shotSegments.js');
   res.json(await deleteFilmLook(req.params.id, req.params.lookId));
+}));
+// The cold open's sound (shots before the song), mixed for the animatic to play
+// before the song: the same mix the final render lays in front of it.
+router.post('/:id/cold-open/audio', asyncHandler(async (req, res) => {
+  validateRequest(musicVideoColdOpenAudioSchema, req.body ?? {});
+  const [{ coldOpenPreviewAudio }, { requireProject }] = await Promise.all([
+    import('../services/musicVideo/coldOpen.js'), import('../services/musicVideo/requireProject.js')]);
+  const path = await coldOpenPreviewAudio(await requireProject(req.params.id));
+  if (!path) throw new ServerError('No shot plays before the song', { status: 409, code: 'NO_COLD_OPEN' });
+  res.json({ name: basename(path) });
+}));
+router.get('/:id/cold-open/:name', asyncHandler(async (req, res) => {
+  const { coldOpenAudioFile } = await import('../services/musicVideo/coldOpen.js');
+  const path = coldOpenAudioFile(req.params.id, req.params.name);
+  if (!path) throw new ServerError('Cold open sound not found', { status: 404, code: 'NOT_FOUND' });
+  res.type('audio/wav').sendFile(path);
 }));
 router.get('/:id/shot-renders/:name', asyncHandler(async (req, res) => {
   const { shotSegmentFile } = await import('../services/musicVideo/shotSegments.js');
