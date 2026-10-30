@@ -257,6 +257,22 @@ export function hasReviewerOverride(metadata) {
     && REVIEWER_LIST_OVERRIDE_KEYS.some((key) => key in metadata);
 }
 
+// Display mirror of the server's resolveOptionalReviewers + taskPinnedReviewerTokens:
+// a task's `optionalReviewers` decides only the reviewers the task itself pins;
+// a reviewer inherited from the Code Review Defaults keeps the defaults' `~opt`.
+export function resolveTaskOptionalReviewers(metadata, defaultOptional) {
+  const defaults = Array.isArray(defaultOptional) ? defaultOptional : [];
+  const own = metadata?.optionalReviewers;
+  if (!Array.isArray(own)) return defaults;
+  const key = (token) => String(token).trim().toLowerCase();
+  const pinnedList = Array.isArray(metadata.reviewers) ? metadata.reviewers
+    : (typeof metadata.reviewer === 'string' && metadata.reviewer ? [metadata.reviewer] : []);
+  const pinnedUsers = Array.isArray(metadata.usernames) ? normalizeReviewUsernames(metadata.usernames).map((user) => `@${user}`) : [];
+  const pinned = new Set([...pinnedList, ...pinnedUsers].map(key));
+  const ownKeys = new Set(own.map(key));
+  return [...own, ...defaults.filter((token) => !pinned.has(key(token)) && !ownKeys.has(key(token)))];
+}
+
 // Resolve task metadata to an ordered, deduped reviewer list (mirror of the
 // server's normalizeReviewers): prefers `reviewers`, falls back to the legacy
 // single `reviewer`, defaults to DEFAULT_REVIEWERS.

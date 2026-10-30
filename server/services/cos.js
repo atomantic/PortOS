@@ -65,7 +65,7 @@ import { runHealthCheck } from './cosHealthMonitor.js';
 // dequeueNextTask so the spawn-side logic stays here, not in the store.
 import { getPendingTaskIds as readPendingTaskIds, getUserTasks, getCosTasks, getAllTasks, getTaskById, addTask, updateTask, sweepResolvedFailureTasks } from './cosTaskStore.js';
 import { ensureInstanceId } from './instanceIdentity.js';
-import { isHeldByOther, buildRenewal, buildClaim, getClaimOwner } from './cosTaskClaim.js';
+import { isHeldByOther, buildRenewal, buildClaim, getClaimOwner, isLeaseLive } from './cosTaskClaim.js';
 import { retryTasksResolvedByInvestigation } from './investigationRetry.js';
 import { spawnBudgetHoldReason } from './spawnBudgetProof.js';
 import { handBackBlockedPrRemediation } from './blockedPrRemediation.js';
@@ -830,6 +830,9 @@ export async function forceSpawnTask(taskId, { resetSpawnBudget = false } = {}) 
   if (budgetHold && !resetSpawnBudget) return { error: `${budgetHold}. Inspect dispatch history or explicitly reset the spawn budget before running.` };
   if (resetSpawnBudget) {
     if (!budgetHold) return { error: 'Spawn budget is already verified; no reset is needed' };
+    // The store refuses a reset under a live claim lease; say so instead of the
+    // generic "changed" refusal, and when the lease frees up.
+    if (isLeaseLive(task.metadata)) return { error: `A claim lease on this task is live until ${task.metadata.leaseExpiresAt}; reset after it expires` };
     const orphan = resetStopped ? await import('./explicitSpawnBudgetReset.js')
       .then(({ prepareExplicitOrphanBudgetReset }) => prepareExplicitOrphanBudgetReset(task)) : null;
     if (orphan?.error) return { error: orphan.error };

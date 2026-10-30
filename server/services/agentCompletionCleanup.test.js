@@ -136,6 +136,20 @@ describe('handlePipelineProgression', () => {
     expect(nextTask.metadata.pipeline.previousStageAgentId).toBe('agent-1');
   });
 
+  it('gives the next stage a fresh dispatch budget instead of the prior stage\'s accounting and lease', async () => {
+    const task = { id: 't', taskType: 'internal', metadata: {
+      app: 'app-1', totalSpawnCount: 1, lastSpawnedAt: '2026-01-01T00:00:00.000Z', lastAgentId: 'agent-1',
+      claimedBy: 'instance-1', claimedAt: '2026-01-01T00:00:00.000Z', leaseExpiresAt: '2099-01-01T00:00:00.000Z',
+      failureCount: 0, orphanRetryCount: 0, pipeline: runningPipeline(),
+    } };
+    await handlePipelineProgression(task, 'agent-1', true);
+    const { metadata } = addTask.mock.calls[0][0];
+    for (const key of ['totalSpawnCount', 'lastSpawnedAt', 'lastAgentId', 'claimedBy', 'claimedAt', 'leaseExpiresAt', 'failureCount', 'orphanRetryCount']) {
+      expect(metadata).not.toHaveProperty(key);
+    }
+    expect(metadata.app).toBe('app-1');
+  });
+
   // Both are the pipeline working as designed, so they log at info: stderr is for faults.
   it('reports a failed stage precondition at info after marking the pipeline failed', async () => {
     checkStagePrecondition.mockReturnValueOnce({ passed: false, reason: 'REVIEW.md already exists' });
