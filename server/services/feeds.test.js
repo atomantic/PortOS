@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { makePathsProxy } from '../lib/mockPathsDataRoot.js';
+import { Dispatcher1Wrapper } from 'undici';
 
 let tmpRoot;
 
@@ -227,14 +228,14 @@ describe('addFeed', () => {
     expect(result.error).toBeUndefined();
     expect(fetchMock).toHaveBeenCalledTimes(1);
     // Connection is pinned to the vetted address (undici would otherwise re-resolve).
-    expect(fetchMock.mock.calls[0][1].dispatcher).toBeDefined();
+    expect(fetchMock.mock.calls[0][1].dispatcher).toBeInstanceOf(Dispatcher1Wrapper);
   });
 
   it('pins the connection to the vetted address (rebinding TOCTOU closed)', async () => {
     fetchMock.mockResolvedValue(makeResponse({ body: RSS_FIXTURE }));
     lookupMock.mockResolvedValue({ address: '93.184.216.34', family: 4 });
     await feeds.addFeed('https://rebind.example.com/rss');
-    expect(fetchMock.mock.calls[0][1].dispatcher).toBeDefined();
+    expect(fetchMock.mock.calls[0][1].dispatcher).toBeInstanceOf(Dispatcher1Wrapper);
   });
 
   it('follows a single safe redirect to the new URL', async () => {
