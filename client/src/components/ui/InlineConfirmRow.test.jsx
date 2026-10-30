@@ -64,13 +64,13 @@ describe('InlineConfirmRow', () => {
     expect(screen.getByRole('button', { name: 'Cancel' }).getAttribute('type')).toBe('button');
   });
 
-  it('stacks the question above equal-width actions on narrow screens', () => {
+  it('stacks the question above equal-width actions in narrow containers', () => {
     render(<InlineConfirmRow question="Delete this image?" />);
     const wrapper = screen.getByText('Delete this image?').closest('div');
     const actions = screen.getByRole('button', { name: 'Delete' }).parentElement;
 
     expect(wrapper.className).toContain('flex-col');
-    expect(wrapper.className).toContain('sm:flex-row');
+    expect(wrapper.className).toContain('@md:flex-row');
     expect(actions.className).toContain('grid-cols-2');
     expect(screen.getByRole('button', { name: 'Delete' }).className).toContain('min-h-9');
     expect(screen.getByRole('button', { name: 'Cancel' }).className).toContain('min-h-9');
