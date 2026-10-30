@@ -310,11 +310,12 @@ function CastTab({ panel, onPatch }) {
 }
 
 /**
- * The open panel, deep-linked at `/storyboards/:id/panel/:panelId` with the
- * tab in `?panelTab=`. Every field saves on its own; the parent applies the
- * board each write returns.
+ * The open panel in the side panel, deep-linked at `<boardPath>/panel/:panelId`
+ * with the tab in `?panelTab=`; `onStep(delta)` opens the previous or next
+ * panel in story order (`onStep(delta, true)` only asks whether there is one).
+ * Every field saves on its own; the parent applies the board each write returns.
  */
-export default function PanelDrawer({ open, board, found, panelNumber, sketchNonce, busy, onClose, handlers }) {
+export default function PanelDrawer({ open, board, found, panelNumber, sketchNonce, busy, onClose, onStep, handlers }) {
   const [activeTab, setActiveTab] = useDrawerTab('panelTab', 'shot', TAB_IDS);
   const [searchParams] = useSearchParams();
   // The recipe canvas (desktop) needs the room; every other tab stays a column.
@@ -331,6 +332,16 @@ export default function PanelDrawer({ open, board, found, panelNumber, sketchNon
       activeTab={activeTab}
       onTabChange={setActiveTab}
       closeLabel="Close panel"
+      headerActions={onStep ? (
+        <>
+          <button type="button" className={iconButton} aria-label="Previous panel" disabled={!onStep(-1, true)} onClick={() => onStep(-1)}>
+            <ChevronLeft size={18} aria-hidden="true" />
+          </button>
+          <button type="button" className={iconButton} aria-label="Next panel" disabled={!onStep(1, true)} onClick={() => onStep(1)}>
+            <ChevronRight size={18} aria-hidden="true" />
+          </button>
+        </>
+      ) : null}
     >
       {!found ? (
         <p className="text-sm text-gray-400">This panel is no longer on the storyboard.</p>

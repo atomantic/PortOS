@@ -9,7 +9,7 @@ import { asyncHandler } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
 import {
   storyboardBeatCreateSchema, storyboardBeatUpdateSchema, storyboardCreateSchema, storyboardMoveSchema,
-  storyboardPanelCorrectSchema, storyboardPanelCreateSchema, storyboardPanelMoveSchema, storyboardPanelNodeUpdateSchema, storyboardPanelUpdateSchema,
+  storyboardMakeEmptySchema, storyboardPanelCorrectSchema, storyboardPanelCreateSchema, storyboardPanelMoveSchema, storyboardPanelNodeUpdateSchema, storyboardPanelUpdateSchema,
   storyboardBeatsAddSchema, storyboardFitSchema, storyboardFromFableLoomSchema, storyboardPipelineUpdateSchema, storyboardVideoStartSchema, storyboardPlotExtractSchema, storyboardRecipeSchema, storyboardSavedRecipeSchema, storyboardTakeCreateSchema, storyboardUpdateSchema,
 } from '../lib/storyboardValidation.js';
 import {
@@ -20,7 +20,7 @@ import {
 import {
   correctPanel, getMakeEmptyPlan, getPanelMake, runPanelNode, startMakeEmpty, updatePanelNode, updateRecipe,
 } from '../services/storyboards/make.js';
-import { fitMusicVideoToStoryboard, updateShotFromPanel, sendShotStillToPanel } from '../services/storyboards/fitMusicVideo.js';
+import { fitMusicVideoToStoryboard, groupStoryboardBySong, updateShotFromPanel, sendShotStillToPanel } from '../services/storyboards/fitMusicVideo.js';
 import { makeStoryboardFromMusicVideo } from '../services/storyboards/fromMusicVideo.js';
 import { makeStoryboardFromFableLoom } from '../services/storyboards/fromFableLoom.js';
 import { openStoryboardForPipelineIssue, pipelineStoryboardChanges, updatePipelineShotsFromBoard } from '../services/storyboards/fromPipeline.js';
@@ -67,6 +67,11 @@ router.post('/pipeline/:issueId/update-from-board', asyncHandler(async (req, res
 // Fit to song: write the video's shots from its linked board, as previewed.
 router.post('/fit-music-video/:projectId', asyncHandler(async (req, res) => {
   res.json(await fitMusicVideoToStoryboard(req.params.projectId, validateRequest(storyboardFitSchema, req.body || {})));
+}));
+
+// Group the linked board's beats by the song's sections (panels unchanged).
+router.post('/group-by-song/:projectId', asyncHandler(async (req, res) => {
+  res.json(await groupStoryboardBySong(req.params.projectId));
 }));
 
 // A fitted shot and its panel: Update takes the edited panel's action; panel art sends the still back.
@@ -200,7 +205,7 @@ router.get('/:id/make-empty', asyncHandler(async (req, res) => {
 }));
 
 router.post('/:id/make-empty', asyncHandler(async (req, res) => {
-  res.status(202).json(await startMakeEmpty(req.params.id));
+  res.status(202).json(await startMakeEmpty(req.params.id, validateRequest(storyboardMakeEmptySchema, req.body ?? {})));
 }));
 
 export default router;

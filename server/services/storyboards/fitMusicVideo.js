@@ -16,8 +16,8 @@
 import { ServerError } from '../../lib/errorHandler.js';
 import { localImageFilename } from '../../lib/localImageFilename.js';
 import { sungLyricTextWithin } from '../../lib/musicVideoLyricAnchors.js';
-import { fitStoryboardToSong, storyboardFitSong, storyboardPanelArt, storyboardPanelRev, storyboardShotPanel } from '../../lib/storyboardFit.js';
-import { addPanelTake, getStoryboard, selectPanelTake } from './index.js';
+import { fitStoryboardToSong, songSectionBeats, storyboardFitSong, storyboardPanelArt, storyboardPanelRev, storyboardShotPanel } from '../../lib/storyboardFit.js';
+import { addPanelTake, getStoryboard, mutateStoryboard, selectPanelTake } from './index.js';
 
 export async function fitMusicVideoToStoryboard(projectId, { boardUpdatedAt, starts = {} } = {}) {
   const [{ getProject, mutateProjectRecord }, { replaceScenes }, { shotLocks }] = await Promise.all([
@@ -96,4 +96,23 @@ export async function sendShotStillToPanel(projectId, sceneId) {
   const updated = await updateScene(projectId, sceneId, { panelArt: image });
   console.log(`🎬 Shot ${sceneId} still → storyboard ${board.id} panel ${panel.id}`);
   return { board: next, scene: updated };
+}
+
+/**
+ * Group by song sections: the linked board's beats become the song's sections
+ * (songSectionBeats). Panels and their art are unchanged; only which beat holds
+ * them, and the beats' names, change. Runs only on the user's tap.
+ */
+export async function groupStoryboardBySong(projectId) {
+  const { getProject } = await import('../musicVideo/projects.js');
+  const project = await getProject(projectId);
+  if (!project) throw new ServerError('Music video not found', { status: 404, code: 'NOT_FOUND' });
+  if (!project.storyboardId) throw new ServerError('Link a storyboard first.', { status: 409, code: 'STORYBOARD_NOT_LINKED' });
+  const { board } = await mutateStoryboard(project.storyboardId, (draft) => {
+    const beats = songSectionBeats(draft, project);
+    if (!beats) throw new ServerError('Analyze the song first; its sections name the beats.', { status: 409, code: 'SONG_NOT_ANALYZED' });
+    draft.beats = beats;
+  });
+  console.log(`🎬 Storyboard ${board.id} grouped by song sections of ${projectId}: ${board.beats.length} beat(s)`);
+  return board;
 }
