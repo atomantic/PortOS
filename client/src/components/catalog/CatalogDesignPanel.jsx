@@ -91,6 +91,14 @@ export default function CatalogDesignPanel({ ingredientId, name, forms = [], med
   };
   const dropPending = useCallback((jobId) => setPending((prev) => prev.filter((p) => p.jobId !== jobId)), []);
 
+  // Surface why the take died on the panel alert before its thumb unmounts.
+  const failPending = useCallback((jobId, status, reason) => {
+    setError(reason || (status === 'canceled'
+      ? 'This take was canceled. Render it again if you still want it.'
+      : 'This take failed. Render it again if you still want it.'));
+    dropPending(jobId);
+  }, [dropPending]);
+
   // The anchor becomes the one guide for its age; the old face stops guiding.
   const makeAnchor = async (take) => {
     if (inFlight.current) return;
@@ -143,7 +151,7 @@ export default function CatalogDesignPanel({ ingredientId, name, forms = [], med
         })}
         {waiting.filter((p) => p.roundId === round.id).map((p) => <div key={p.jobId} className="min-w-0 space-y-1">
           <MediaJobThumb jobId={p.jobId} label="Take" size="sm" onFilename={() => onChanged?.()}
-            onStatus={(status) => { if (status === 'failed' || status === 'canceled') dropPending(p.jobId); }} />
+            onStatus={(status, reason) => { if (status === 'failed' || status === 'canceled') failPending(p.jobId, status, reason); }} />
           {p.line && <p className="text-[11px] text-gray-400 line-clamp-2">{p.line}</p>}
         </div>)}
       </div>
