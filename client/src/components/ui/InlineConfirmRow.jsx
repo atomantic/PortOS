@@ -41,6 +41,7 @@ export default function InlineConfirmRow({
   variant = 'box',
   className = '',
   autoFocus = false,
+  stacked = false,
   ...rest
 }) {
   const t = TONES[tone] || TONES.error;
@@ -57,18 +58,15 @@ export default function InlineConfirmRow({
     if (autoFocus) rowRef.current?.focus();
   }, [autoFocus]);
 
-  // Stack/side-by-side follows the row's own width (container query), not the
-  // viewport: a narrow card in a wide window must still stack.
   return (
-    <div className="@container">
     <div
       ref={rowRef}
       tabIndex={autoFocus ? -1 : undefined}
-      className={`flex flex-col items-stretch gap-2 @md:flex-row @md:items-center ${v.frame} ${t.wrapper} focus:outline-hidden focus:ring-2 focus:ring-port-accent ${className}`.trim()}
+      className={`flex flex-col items-stretch gap-2 ${stacked ? '' : 'sm:flex-row sm:items-center'} ${v.frame} ${t.wrapper} focus:outline-hidden focus:ring-2 focus:ring-port-accent ${className}`.trim()}
       {...rest}
     >
       <span className={`${v.question} text-white flex-1 min-w-0`}>{question}</span>
-      <div className="grid grid-cols-2 gap-2 @md:flex @md:shrink-0">
+      <div className={`grid grid-cols-2 gap-2 ${stacked ? '' : 'sm:flex sm:shrink-0'}`}>
         <button
           type="button"
           onClick={onConfirm}
@@ -86,7 +84,6 @@ export default function InlineConfirmRow({
           {cancelText}
         </button>
       </div>
-    </div>
     </div>
   );
 }
