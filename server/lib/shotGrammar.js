@@ -44,6 +44,15 @@ export const SHOT_ANGLES = Object.freeze([
   'dutch',      // camera rolled so the horizon tilts
 ]);
 
+// Which way the subject's body faces relative to the camera.
+export const SHOT_FACINGS = Object.freeze([
+  'front',              // square to the lens, facing it
+  'three-quarter',      // turned about 45° from the lens
+  'profile',            // side-on, 90°
+  'three-quarter-back', // turned away, over-the-shoulder side of the back
+  'back',               // seen from directly behind
+]);
+
 // On-screen direction the subject faces / moves. `neutral` = head-on or
 // ambiguous (no axis to cross); `left`/`right` are the screen-relative sides the
 // 180°-rule check tracks for axis reversals between continuity-linked shots.

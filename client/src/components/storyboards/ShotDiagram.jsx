@@ -45,6 +45,19 @@ const StandingSubject = () => (
   </>
 );
 
+// Top view for the facing diagrams: shoulders, head and nose, turned `deg`
+// away from the camera at the bottom of the frame.
+const TopDownSubject = ({ deg }) => (
+  <>
+    <Camera x={80} y={80} aimX={80} aimY={52} />
+    <g transform={`translate(80 36) rotate(${deg}) scale(1.4)`} className="fill-port-card stroke-current" strokeWidth="1.5" strokeLinejoin="round">
+      <ellipse rx="24" ry="8" />
+      <circle r="9" />
+      <path d="M-3.5 8L0 14L3.5 8" />
+    </g>
+  </>
+);
+
 const SCENES = {
   'extreme-wide': () => (
     <>
@@ -115,6 +128,12 @@ const SCENES = {
   low: () => (<><StandingSubject /><Camera x={36} y={74} aimX={112} aimY={40} /></>),
   'birds-eye': () => (<><StandingSubject /><Camera x={112} y={11} aimX={112} aimY={40} /></>),
   'worms-eye': () => (<><StandingSubject /><Camera x={70} y={78} aimX={112} aimY={30} /></>),
+  // Facings: which way the subject turns, seen from above.
+  front: () => <TopDownSubject deg={0} />,
+  'three-quarter': () => <TopDownSubject deg={45} />,
+  profile: () => <TopDownSubject deg={90} />,
+  'three-quarter-back': () => <TopDownSubject deg={135} />,
+  back: () => <TopDownSubject deg={180} />,
   dutch: () => (
     <g transform="rotate(-14 80 45)">
       <path className="stroke-gray-500" strokeWidth="1" fill="none" d="M-40 70H200" />
@@ -126,7 +145,8 @@ const SCENES = {
 /**
  * Code-drawn concept sketch of a storyboard framing (a `SHOT_TYPES` value: what
  * the camera sees at that distance) or angle (a `SHOT_ANGLES` value: where the
- * camera sits, seen from the side). An unknown kind draws an empty frame.
+ * camera sits, seen from the side) or facing (a `SHOT_FACINGS` value: which
+ * way the subject turns, seen from above). An unknown kind draws an empty frame.
  */
 export default function ShotDiagram({ kind, className = '' }) {
   const Scene = SCENES[kind];

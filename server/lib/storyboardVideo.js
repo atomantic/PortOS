@@ -28,15 +28,19 @@ const ANGLE_WORDS = Object.freeze({
   'eye-level': 'Eye-level angle', high: 'High angle', low: 'Low angle',
   'birds-eye': "Bird's-eye view", 'worms-eye': "Worm's-eye view", dutch: 'Dutch angle',
 });
+const FACING_WORDS = Object.freeze({
+  front: 'Subject faces the camera head-on', 'three-quarter': 'Subject in three-quarter view', profile: 'Subject in side profile',
+  'three-quarter-back': 'Subject turned mostly away from the camera', back: 'Subject seen from behind, facing away from the camera',
+});
 
 const clip = (text, max) => String(text || '').trim().slice(0, max);
 const sentence = (text) => (/[.!?…]["')\]]?$/.test(text) ? text : `${text}.`);
 const beatTitle = (beat, index) => clip(beat.title || STORYBOARD_MUSICAL_ROLE_LABELS[beat.musicalRole] || `Beat ${index + 1}`, 120);
 
-/** A panel's Video prompt: its action, framing, angle and camera move, as written on the panel. */
+/** A panel's Video prompt: its action, framing, angle, facing and camera move, as written on the panel. */
 function storyboardVideoPrompt(panel, fallback) {
   const action = clip(panel?.action, 4000) || clip(fallback, 4000);
-  return [action, FRAMING_WORDS[panel?.framing], ANGLE_WORDS[panel?.angle], panel?.camera ? `Camera: ${clip(panel.camera, 400)}` : null]
+  return [action, FRAMING_WORDS[panel?.framing], ANGLE_WORDS[panel?.angle], FACING_WORDS[panel?.facing], panel?.camera ? `Camera: ${clip(panel.camera, 400)}` : null]
     .filter(Boolean).map(sentence).join(' ');
 }
 
