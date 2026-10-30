@@ -1607,3 +1607,59 @@ describe('socketAuthGate middleware', () => {
     expect(err.data).toEqual({ code: 'CROSS_ORIGIN_BLOCKED' });
   });
 });
+
+describe('authGate loopback status bypass', () => {
+  const enable = async () => {
+    const auth = await import('./auth.js');
+    await auth.setPassword({ newPassword: 'correct-horse' });
+  };
+  const probe = (overrides = {}) => ({
+    method: 'GET', path: '/api/cos/mind/runtime', headers: {},
+    socket: { remoteAddress: '127.0.0.1' }, ...overrides,
+  });
+
+  it('lets a direct loopback GET read each allowlisted status endpoint', async () => {
+    await enable();
+    const { authGate } = await import('./authGate.js');
+    for (const path of ['/api/cos/mind', '/api/cos/mind/runtime', '/api/cos/mind/visibility', '/api/eidoverse/world/status']) {
+      for (const remoteAddress of ['127.0.0.1', '::1', '::ffff:127.0.0.1']) {
+        const result = await runGate(authGate, probe({ path, socket: { remoteAddress } }));
+        expect(result.called, `${path} from ${remoteAddress}`).toBe(true);
+      }
+    }
+  });
+
+  it.each([
+    ['a non-loopback socket', probe({ socket: { remoteAddress: '100.64.0.5' } })],
+    ['X-Forwarded-For', probe({ headers: { 'x-forwarded-for': '127.0.0.1' } })],
+    ['Forwarded', probe({ headers: { forwarded: 'for=127.0.0.1' } })],
+    ['X-Real-IP', probe({ headers: { 'x-real-ip': '127.0.0.1' } })],
+    ['a non-GET method', probe({ method: 'POST' })],
+    ['a path outside the allowlist', probe({ path: '/api/cos/mind/journal' })],
+    ['a sub-path of an allowlisted path', probe({ path: '/api/cos/mind/runtime/x' })],
+  ])('still requires auth for %s', async (_label, req) => {
+    await enable();
+    const { authGate } = await import('./authGate.js');
+    const result = await runGate(authGate, req);
+    expect(result.called).toBe(false);
+    expect(result.res.statusCode).toBe(401);
+  });
+
+  it('refuses a loopback request the Tailcat ingress marked remote', async () => {
+    await enable();
+    const { authGate } = await import('./authGate.js');
+    const { remoteRequestHandler } = await import('../lib/requestOrigin.js');
+    const req = probe();
+    remoteRequestHandler(() => {})(req, {});
+    const result = await runGate(authGate, req);
+    expect(result.called).toBe(false);
+    expect(result.res.statusCode).toBe(401);
+  });
+
+  it('refuses a request relayed through the dev proxy for a remote client', async () => {
+    await enable();
+    const { authGate } = await import('./authGate.js');
+    const result = await runGate(authGate, probe({ headers: { [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '100.64.0.5' } }));
+    expect(result.called).toBe(false);
+  });
+});
