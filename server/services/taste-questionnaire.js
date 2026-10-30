@@ -19,9 +19,12 @@ import { isPlainObject } from '../lib/objects.js';
 // provider to the prompt runner must keep using the API-only resolver (#5590).
 import { resolveTextProvider, callProviderAISimple } from './aiProvider.js';
 import { ServerError } from '../lib/errorHandler.js';
-import { digitalTwinEvents } from './digital-twin-meta.js';
+import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
+import { digitalTwinEvents, loadMeta, saveMeta, withMetaLock } from './digital-twin-meta.js';
+import { ensureDocumentInMeta } from './digital-twin-helpers.js';
 
 const DIGITAL_TWIN_DIR = PATHS.digitalTwin;
+const AESTHETICS_DOC = 'AESTHETICS.md';
 const TASTE_PROFILE_FILE = join(DIGITAL_TWIN_DIR, 'taste-profile.json');
 const NO_API_PROVIDER_HINT = 'No API-based AI provider is configured. Open AI Providers (e.g. LM Studio, OpenAI, Anthropic) and add one — CLI providers like Claude Code can\'t run this analysis.';
 
@@ -1067,8 +1070,21 @@ function findQuestionDef(sectionId, questionId) {
   return null;
 }
 
-async function appendToAestheticsDoc(sectionId, config, questionId, answer) {
-  const targetPath = join(DIGITAL_TWIN_DIR, 'AESTHETICS.md');
+// Peer sync replaces a document body whose peer stamp is strictly newer, so every
+// AESTHETICS.md write must stamp its meta entry in the same meta-locked section
+// (lock order: taste queue → backup lease → meta lock; sync takes the taste
+// queue outside the meta lock).
+const publishAestheticsDoc = (write) => withBackupAssetPublication(() => withMetaLock(async () => {
+  await write();
+  const meta = await loadMeta();
+  ensureDocumentInMeta(meta, AESTHETICS_DOC, 'Aesthetic Preferences', 'creative');
+  await saveMeta(meta);
+}));
+
+const appendToAestheticsDoc = (...args) => publishAestheticsDoc(() => appendToAestheticsFile(...args));
+
+async function appendToAestheticsFile(sectionId, config, questionId, answer) {
+  const targetPath = join(DIGITAL_TWIN_DIR, AESTHETICS_DOC);
   let content = '';
 
   if (existsSync(targetPath)) {
@@ -1103,8 +1119,10 @@ async function appendToAestheticsDoc(sectionId, config, questionId, answer) {
   await atomicWrite(targetPath, content);
 }
 
-async function writeAestheticsDocument(profileSummary, completedSections) {
-  const targetPath = join(DIGITAL_TWIN_DIR, 'AESTHETICS.md');
+const writeAestheticsDocument = (...args) => publishAestheticsDoc(() => writeAestheticsFile(...args));
+
+async function writeAestheticsFile(profileSummary, completedSections) {
+  const targetPath = join(DIGITAL_TWIN_DIR, AESTHETICS_DOC);
 
   let content = '# Aesthetic Preferences\n\n';
   content += '## Taste Profile Summary\n\n';
