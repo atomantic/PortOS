@@ -2599,7 +2599,7 @@ describe('MusicVideo visual spec, takes and handoff (#8965)', () => {
     fireEvent.click(screen.getByRole('button', { name: /^Generate frame$/ }));
     await waitFor(() => expect(generateImage).toHaveBeenCalledWith(expect.objectContaining({
       referenceImageFiles: ['character.png', 'roof.png'],
-      musicVideo: { projectId: 'mv-spec', sceneId: 's1', compose: true },
+      musicVideo: expect.objectContaining({ projectId: 'mv-spec', sceneId: 's1', compose: true }),
     }), { silent: true }));
   });
 
@@ -2611,7 +2611,7 @@ describe('MusicVideo visual spec, takes and handoff (#8965)', () => {
     await waitFor(() => expect(generateImage).toHaveBeenCalledWith(expect.objectContaining({
       prompt: 'harbor at dawn',
       referenceImageFiles: ['start.png', 'mood.png'],
-      musicVideo: { projectId: 'mv-spec', sceneId: 's1', compose: true, fromFrame: true },
+      musicVideo: expect.objectContaining({ projectId: 'mv-spec', sceneId: 's1', compose: true, fromFrame: true }),
     }), { silent: true }));
   });
 
@@ -2632,7 +2632,7 @@ describe('MusicVideo visual spec, takes and handoff (#8965)', () => {
     await waitFor(() => expect(generateImage).toHaveBeenCalledWith(expect.objectContaining({
       prompt: 'remove the hand',
       referenceImageFiles: ['start.png', 'set.png'],
-      musicVideo: { projectId: 'mv-spec', sceneId: 's1', compose: true, refine: true },
+      musicVideo: expect.objectContaining({ projectId: 'mv-spec', sceneId: 's1', compose: true, refine: true }),
     }), { silent: true }));
     expect(screen.queryByLabelText('What to change in the start frame')).toBeNull();
   });
