@@ -405,7 +405,7 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
     // workflow.
     id: 'digital-twin-documents-and-genome',
     status: 'admitted',
-    modules: ['services/digital-twin-documents.js', 'services/digital-twin-enrichment.js', 'services/digital-twin-sync.js', 'services/genome.js'],
+    modules: ['services/digital-twin-documents.js', 'services/digital-twin-enrichment.js', 'services/digital-twin-sync.js', 'services/genome.js', 'services/taste-questionnaire.js'],
   },
   {
     // Explicit file cleanup can leave external references by design, but one

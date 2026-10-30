@@ -292,13 +292,14 @@ export function textNodeValue(node, { beat, panel } = {}) {
   if (source === 'custom') return node.text || '';
   if (source === 'beat') return [beat?.what, beat?.why].filter((v) => v && v.trim()).join('\n');
   // Words a picture can show: the dialogue or lyric stays off, since the
-  // image would letter it.
+  // image would letter it. The stored camera move stays off too: imported
+  // boards carry free text there ("a loose wide shot") that fought the
+  // framing and angle the user picked.
   return [
     panel?.action,
     panel?.framing ? `Framing: ${FRAMING_WORDS[panel.framing] || panel.framing}.` : '',
     panel?.angle ? `Angle: ${ANGLE_WORDS[panel.angle] || panel.angle}.` : '',
     panel?.facing ? `Subject: ${FACING_WORDS[panel.facing] || panel.facing}.` : '',
-    panel?.camera ? `Camera: ${panel.camera}` : '',
   ].filter((v) => v && v.trim()).join('\n');
 }
 
