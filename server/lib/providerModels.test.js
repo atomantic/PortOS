@@ -825,6 +825,14 @@ describe('providerModels', () => {
         ...codexModels,
       ])).toEqual(codexModels);
     });
+
+    it('leaves every current Antigravity fallback choice available to server pickers', () => {
+      const agyModels = SHIPPED_PROVIDERS.providers['antigravity-cli'].models;
+      expect(agyModels).toContain('gemini-4-argon-medium');
+      expect(filterSelectableModels(agyModels)).toEqual(
+        agyModels.filter((id) => id !== ANTIGRAVITY_CONFIGURED_DEFAULT),
+      );
+    });
   });
 
   describe('hasModelFlag', () => {
