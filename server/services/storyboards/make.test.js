@@ -104,6 +104,64 @@ describe('storyboard panel maker', () => {
     expect(nodeState(board, 'node-image')).toMatchObject({ status: 'done', takeIds: panel.takes.slice(1).map((t) => t.id), failedJobIds: ['job-4'] });
   });
 
+  it('corrects a frame: the writer redoes its prompt with the note, then new frames start from the marked-up frame', async () => {
+    const { mkdir, writeFile } = await import('node:fs/promises');
+    const { join } = await import('node:path');
+    const { PATHS } = await import('../../lib/fileUtils.js');
+    await mkdir(join(PATHS.data, 'media-sketches'), { recursive: true });
+    const markup = join(PATHS.data, 'media-sketches', 'composite.png');
+    await writeFile(markup, Buffer.from('89504e470d0a1a0a', 'hex'));
+    __setDepsForTests({ markupPath: async (key) => (key === 'image:frame-a.png' ? markup : null) });
+
+    const { id, panelId } = await boardWithPanel({ action: 'Doors' });
+    const marked = (await api('post', `/${id}/panels/${panelId}/takes`, { source: 'upload', image: 'frame-a.png' })).body.takeId;
+    const plain = (await api('post', `/${id}/panels/${panelId}/takes`, { source: 'upload', image: 'frame-b.png' })).body.takeId;
+    await api('patch', `/${id}/panels/${panelId}/make/node-writer`, { text: 'A wide frame of the doors' });
+
+    const res = await api('post', `/${id}/panels/${panelId}/correct`, { takeId: marked, note: 'Move her to the left third' });
+    expect(res.status).toBe(200);
+    const sent = runPrompt.mock.calls[0][0].prompt;
+    expect(sent).toContain('A wide frame of the doors');
+    expect(sent).toContain('asks for this change: "Move her to the left third"');
+    const writer = nodeState(res.body, 'node-writer');
+    expect(writer.promptAdditions.map((a) => a.id)).toEqual(['creative-latitude', 'system-prompt', 'correction']);
+    expect(writer.text).toBe('A wide pencil frame of gym doors');
+
+    const image = nodeState(res.body, 'node-image');
+    expect(image.sentPrompt).toBe('A wide pencil frame of gym doors');
+    expect(image.sentRefs[0]).toEqual({ image: expect.stringMatching(/^ref-[0-9a-f-]+\.png$/), label: 'Marked-up frame' });
+    expect(enqueue.mock.calls[0][0].params.referenceImagePaths[0]).toMatch(/image-refs\/ref-[0-9a-f-]+\.png$/);
+    // The selection is not moved by a correction.
+    expect(res.body.beats[0].panels[0].selectedTakeId).toBe(plain);
+
+    // A writer that fails stops the correction before any frame is queued.
+    runPrompt.mockRejectedValueOnce(new Error('Provider offline'));
+    const calls = enqueue.mock.calls.length;
+    const failed = await api('post', `/${id}/panels/${panelId}/correct`, { takeId: plain, note: 'Darker' });
+    expect(failed.status).toBe(502);
+    expect(failed.body.error).toContain('Provider offline');
+    expect(enqueue.mock.calls.length).toBe(calls);
+
+    // A frame with no markup starts from the frame itself.
+    const again = await api('post', `/${id}/panels/${panelId}/correct`, { takeId: plain, note: 'Darker' });
+    expect(nodeState(again.body, 'node-image').sentRefs[0]).toEqual({ image: 'frame-b.png', label: 'Current frame' });
+  });
+
+  it('refuses to correct a sketch take or a recipe with no prompt writer', async () => {
+    const { id, panelId } = await boardWithPanel({ action: 'Doors' });
+    const sketch = (await api('post', `/${id}/panels/${panelId}/takes`, { source: 'sketch', sketchKey: 'sketch:abc-123' })).body.takeId;
+    expect((await api('post', `/${id}/panels/${panelId}/correct`, { takeId: sketch, note: 'Wider' })).status).toBe(400);
+    const frame = (await api('post', `/${id}/panels/${panelId}/takes`, { source: 'upload', image: 'frame-a.png' })).body.takeId;
+    await api('put', `/${id}/recipe`, { recipe: { nodes: [
+      { id: 'node-a', type: 'text', settings: { source: 'panel' } },
+      { id: 'node-d', type: 'image', settings: { count: 1 } },
+    ], edges: [{ from: 'node-a', to: 'node-d', toPort: 'prompt' }] } });
+    const res = await api('post', `/${id}/panels/${panelId}/correct`, { takeId: frame, note: 'Wider' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('prompt writer');
+    expect(runPrompt).not.toHaveBeenCalled();
+  });
+
   it('refuses an over-limit image prompt with its count rather than cutting it', async () => {
     const { id, panelId } = await boardWithPanel();
     await api('patch', `/${id}/panels/${panelId}/make/node-writer`, { text: 'x'.repeat(4001) });

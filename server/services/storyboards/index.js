@@ -12,6 +12,7 @@
 
 import { ServerError } from '../../lib/errorHandler.js';
 import { sanitizeStoryboard, sanitizeTake, summarizeStoryboard } from '../../lib/storyboardRecord.js';
+import { defaultStoryboardSystemPrompt } from '../../lib/storyboardRecipe.js';
 import {
   isValidStoryboardId, newStoryboardEntityId, newStoryboardId, STORYBOARD_LIMITS,
 } from '../../lib/storyboardVocabulary.js';
@@ -90,8 +91,21 @@ export async function mutateStoryboard(id, mutate) {
   return outcome;
 }
 
+// A new art style restyles a saved recipe's style nodes that still hold the
+// old style's default; a style prompt the user edited is theirs and stays.
+function restyleRecipe(draft, artStyle) {
+  if (!artStyle || artStyle === draft.artStyle || !Array.isArray(draft.recipe?.nodes)) return;
+  const previous = defaultStoryboardSystemPrompt(draft.artStyle);
+  for (const node of draft.recipe.nodes) {
+    if (node?.type === 'system' && node.text === previous) node.text = defaultStoryboardSystemPrompt(artStyle);
+  }
+}
+
 export async function updateStoryboard(id, patch) {
-  const { board } = await mutateStoryboard(id, (draft) => { Object.assign(draft, pickFields(patch, BOARD_FIELDS)); });
+  const { board } = await mutateStoryboard(id, (draft) => {
+    restyleRecipe(draft, patch?.artStyle);
+    Object.assign(draft, pickFields(patch, BOARD_FIELDS));
+  });
   return board;
 }
 

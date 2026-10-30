@@ -120,6 +120,12 @@ export const storyboardPanelNodeUpdateSchema = z.object({
   extraRefs: z.array(recipeImage).max(R.images).optional(),
 }).strict();
 
+// A frame correction: the take it starts from and the director's note.
+export const storyboardPanelCorrectSchema = z.object({
+  takeId: entityId,
+  note: z.string().trim().min(1).max(L.panelText),
+}).strict();
+
 // Beats from a plot summary: the plot and the LLM pick (blank = the active provider).
 const llmField = z.string().trim().max(256).optional();
 export const storyboardPlotExtractSchema = z.object({

@@ -17,7 +17,10 @@ export const STORYBOARD_RECIPE_ID_PATTERN = /^sbr-[A-Za-z0-9-]{1,80}$/;
 export const isValidStoryboardRecipeId = (id) => typeof id === 'string' && STORYBOARD_RECIPE_ID_PATTERN.test(id);
 
 export const STORYBOARD_ASPECT_RATIOS = Object.freeze(['16:9', '9:16', '1:1', '4:5', '2.39:1']);
-export const STORYBOARD_ART_STYLES = Object.freeze(['pencil', 'clean-line', 'grey-marker', 'color']);
+export const STORYBOARD_ART_STYLES = Object.freeze(['pencil', 'clean-line', 'grey-marker', 'production-sketch', 'color']);
+export const STORYBOARD_ART_STYLE_LABELS = Object.freeze({
+  pencil: 'Pencil', 'clean-line': 'Clean line', 'grey-marker': 'Grey marker', 'production-sketch': 'Production sketch', color: 'Color',
+});
 // Song-structure vocabulary for a beat before (or without) a song. Matches how
 // a songwriter names sections, not the music-video treatment's arc roles.
 export const STORYBOARD_MUSICAL_ROLES = Object.freeze([
