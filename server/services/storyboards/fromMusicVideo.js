@@ -3,7 +3,8 @@
  * shots, then linked to the project (`project.storyboardId`). One beat per run
  * of shots in the same song section; one panel per shot, carrying its action,
  * sung line, camera move, length, cast and selected still. The shots are not
- * changed. Runs only on the user's tap; no model call.
+ * changed. The board draws in the production sketch style. Runs only on the
+ * user's tap; no model call.
  */
 
 import { ServerError } from '../../lib/errorHandler.js';
@@ -55,6 +56,7 @@ export async function makeStoryboardFromMusicVideo(projectId) {
   const board = await createStoryboard({
     name: trimTo(project.name, L.name) || 'Untitled storyboard',
     aspectRatio: STORYBOARD_ASPECT_RATIOS.includes(aspect) ? aspect : '16:9',
+    artStyle: 'production-sketch',
     moodBoardId: project.visualSpec?.moodBoardId || null,
   }, { beats: beatsFromScenes(scenes) });
   const linked = await updateProject(projectId, { storyboardId: board.id });

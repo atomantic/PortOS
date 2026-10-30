@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
+import { MemoryRouter, Route, Routes, useLocation, useParams } from 'react-router';
 import StoryboardDetail from './StoryboardDetail';
+import StoryboardEditor from '../components/storyboards/StoryboardEditor';
 import { updateStoryboardBeat } from '../services/api';
 
 const api = vi.hoisted(() => ({
@@ -76,6 +77,37 @@ beforeEach(() => {
 });
 
 describe('StoryboardDetail', () => {
+  it('edits a music video\'s board in place: panels open under the step and keep its query', async () => {
+    api.getStoryboard.mockResolvedValue(board());
+    function Embedded() {
+      const { panelId } = useParams();
+      return <StoryboardEditor embedded boardId="sb-1" panelId={panelId} boardPath="/music-video/mv-1/board" />;
+    }
+    render(
+      <MemoryRouter initialEntries={['/music-video/mv-1/board?mvPanel=render&view=board']}>
+        <Routes>
+          <Route path="/music-video/:projectId/board" element={<Embedded />} />
+          <Route path="/music-video/:projectId/board/panel/:panelId" element={<Embedded />} />
+        </Routes>
+        <LocationProbe />
+      </MemoryRouter>,
+    );
+    fireEvent.click(await screen.findByRole('button', { name: /^Open panel 1/ }));
+    await waitFor(() => expect(screen.getByTestId('location').textContent).toBe('/music-video/mv-1/board/panel/panel-1?mvPanel=render&view=board'));
+    expect(screen.getByRole('link', { name: 'Open in Storyboards' }).getAttribute('href')).toBe('/storyboards/sb-1');
+    expect(screen.queryByRole('button', { name: /Song brief/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Make video/ })).toBeNull();
+  });
+
+  it('changes the board\'s art style', async () => {
+    api.getStoryboard.mockResolvedValue(board());
+    api.updateStoryboard.mockResolvedValue(board({ artStyle: 'production-sketch', updatedAt: '2026-10-22T00:00:02.000Z' }));
+    renderAt('/storyboards/sb-1');
+    fireEvent.change(await screen.findByLabelText('Art style'), { target: { value: 'production-sketch' } });
+    await waitFor(() => expect(api.updateStoryboard).toHaveBeenCalledWith('sb-1', { artStyle: 'production-sketch' }));
+    expect(screen.getByLabelText('Art style').value).toBe('production-sketch');
+  });
+
   it('keeps the newest board when an earlier save answers last', async () => {
     api.getStoryboard.mockResolvedValue(board());
     let resolveOlder;
