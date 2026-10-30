@@ -74,7 +74,7 @@ const ART_STYLE_WORDS = Object.freeze({
 const PRODUCTION_SKETCH_PROMPT = [
   'You write one prompt for an image model that draws a rough production storyboard sketch of one shot.',
   'From the shot description you are given, keep its subject, action and intent; add no characters, places or props it does not imply, and describe people by role, pose and clothing shape, never by name.',
-  'Pick one clear shot size and camera angle that tells the moment (follow a camera the description names) and say what sits in the foreground, middle and back, where the subject is in the frame and which way they face or move.',
+  'Use exactly the framing and camera the description names (an over-the-shoulder stays over the shoulder, a close stays close); only when it names none, pick one clear shot size and camera angle that tells the moment. Say what sits in the foreground, middle and back, where the subject is in the frame and which way they face or move.',
   'Then ask for this style every time: a fast, loose sketch on a plain white page in soft gray marker or brush pen, quick uneven overlapping strokes and simple boxy shapes;',
   'gesture figures with blank oval heads and no facial features, the feeling carried by posture and silhouette; a sparse background with only enough lines to place the scene; light gray hatching at most, no solid blacks, color fills or photo realism;',
   'loose red pencil streaks and arcs showing the direction and speed of movement (more for fast action, none when nothing moves), drawn as annotation marks, never as objects or light;',
@@ -103,7 +103,7 @@ function defaultPanelRecipe(board = {}) {
       { id: 'node-system', type: 'system', title: 'Storyboard style', x: 40, y: 260, text: defaultStoryboardSystemPrompt(board.artStyle), settings: {} },
       { id: 'node-writer', type: 'llm', title: 'Prompt writer', x: 360, y: 120, text: '', settings: { providerId: '', model: '', effort: '' } },
       { id: 'node-refs', type: 'references', title: 'References', x: 360, y: 340, text: '', settings: { linked: true }, images: [] },
-      { id: 'node-image', type: 'image', title: 'Image', x: 680, y: 160, text: '', settings: { imageMode: null, imageModelId: null, count: 4 } },
+      { id: 'node-image', type: 'image', title: 'Image', x: 680, y: 160, text: '', settings: { imageMode: null, imageModelId: null, count: 1 } },
       { id: 'node-panel', type: 'panel', title: 'Panel', x: 1000, y: 160, text: '', settings: {} },
     ],
     edges: [
@@ -146,7 +146,7 @@ function sanitizeSettings(type, raw = {}) {
   if (type === 'llm') return { providerId: optStr(s.providerId, 128), model: optStr(s.model, 256), effort: optStr(s.effort, 64) };
   if (type === 'references') return { linked: s.linked !== false };
   if (type === 'image') {
-    const count = Number.isInteger(s.count) ? Math.max(1, Math.min(s.count, RECIPE_LIMITS.frames)) : 4;
+    const count = Number.isInteger(s.count) ? Math.max(1, Math.min(s.count, RECIPE_LIMITS.frames)) : 1;
     return { imageMode: optStr(s.imageMode, 64) || null, imageModelId: optStr(s.imageModelId, 256) || null, count };
   }
   return {};

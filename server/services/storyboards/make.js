@@ -356,8 +356,9 @@ const RUNNABLE_TYPES = new Set(['llm', 'image']);
 const IN_FLIGHT = new Set(['running', 'queued']);
 
 const runnableSteps = (board) => recipeRunOrder(effectiveRecipe(board)).filter((node) => RUNNABLE_TYPES.has(node.type));
+const isPanelDrawing = (panel, steps) => steps.some((node) => IN_FLIGHT.has(panelNodeState(panel, node.id).status));
 // A panel with no art and no frames on the way.
-const isEmptyPanel = (panel, steps) => !panel.takes.length && !steps.some((node) => IN_FLIGHT.has(panelNodeState(panel, node.id).status));
+const isEmptyPanel = (panel, steps) => !panel.takes.length && !isPanelDrawing(panel, steps);
 const emptyPanelIds = (board, steps) => board.beats.flatMap((beat) => beat.panels).filter((panel) => isEmptyPanel(panel, steps)).map((p) => p.id);
 const batchView = (storyboardId, batch) => (batch ? { storyboardId, ...batch } : null);
 
@@ -373,7 +374,7 @@ async function stepLabel(node) {
 
 // Every panel with no frames on the way (Redraw all).
 const idlePanelIds = (board, steps) => board.beats.flatMap((beat) => beat.panels)
-  .filter((panel) => !steps.some((node) => IN_FLIGHT.has(panelNodeState(panel, node.id).status))).map((p) => p.id);
+  .filter((panel) => !isPanelDrawing(panel, steps)).map((p) => p.id);
 
 /**
  * What "Make empty panels" or "Redraw all" would do, for the confirm that
@@ -431,26 +432,54 @@ async function runBatch(storyboardId, panelIds, batch, options) {
   }
 }
 
+/**
+ * Run the recipe's steps on one panel, in order. Redrawing reruns every
+ * writer and draws one frame (selected on landing with `selectNew`);
+ * otherwise a prompt already written is kept and the image node makes its
+ * usual count. Resolves to the board; a failed step throws its reason.
+ */
+async function runPanelSteps(storyboardId, panelId, steps, { redraw = false, selectNew = false } = {}) {
+  let next = await getStoryboard(storyboardId);
+  for (const node of steps) {
+    if (!redraw && node.type === 'llm' && panelNodeState(locate(next, panelId).panel, node.id).text.trim()) continue;
+    next = redraw && node.type === 'image'
+      ? await runImageNode(await getStoryboard(storyboardId), panelId, node, { count: 1, selectOnLand: selectNew })
+      : await runPanelNode(storyboardId, panelId, node.id);
+    const state = panelNodeState(locate(next, panelId).panel, node.id);
+    if (state.status === 'failed') throw refuse(`${node.title} failed: ${state.error || 'no reason given'}`, 'STORYBOARD_DRAW_FAILED', 502);
+  }
+  return next;
+}
+
 /** One panel's run; false when it was skipped or a node failed. A deleted board ends the batch. */
-async function makePanel(storyboardId, panelId, { redraw = false, selectNew = false } = {}) {
+async function makePanel(storyboardId, panelId, options = {}) {
   const board = await getStoryboard(storyboardId);
   const steps = runnableSteps(board);
   const panel = board.beats.flatMap((beat) => beat.panels).find((p) => p.id === panelId);
   // Removed, or given art (or, redrawing, a run) since the batch started.
-  if (!panel || (redraw ? steps.some((node) => IN_FLIGHT.has(panelNodeState(panel, node.id).status)) : !isEmptyPanel(panel, steps))) return false;
-  for (const node of steps) {
-    if (!redraw && node.type === 'llm' && panelNodeState(panel, node.id).text.trim()) continue;
-    try {
-      const next = redraw && node.type === 'image'
-        ? await runImageNode(await getStoryboard(storyboardId), panelId, node, { count: 1, selectOnLand: selectNew })
-        : await runPanelNode(storyboardId, panelId, node.id);
-      const state = panelNodeState(locate(next, panelId).panel, node.id);
-      if (state.status === 'failed') return false;
-    } catch (err) {
-      if (err?.code === 'NOT_FOUND' && err.message.startsWith('Storyboard')) throw err;
-      console.log(`🚫 Storyboard ${storyboardId.slice(0, 11)} panel ${panelId.slice(0, 12)} ${node.title} skipped: ${err.message}`);
-      return false;
-    }
+  if (!panel || (options.redraw ? isPanelDrawing(panel, steps) : !isEmptyPanel(panel, steps))) return false;
+  try {
+    await runPanelSteps(storyboardId, panelId, steps, options);
+    return true;
+  } catch (err) {
+    if (err?.code === 'NOT_FOUND' && err.message.startsWith('Storyboard')) throw err;
+    console.log(`🚫 Storyboard ${storyboardId.slice(0, 11)} panel ${panelId.slice(0, 12)} skipped: ${err.message}`);
+    return false;
   }
-  return true;
+}
+
+/**
+ * Draw one panel: the recipe's prompt writer rewrites its prompt from the
+ * panel's shot, then the image node draws one frame, which becomes the
+ * panel's selected art (earlier takes stay). Resolves once the frame is
+ * queued; `storyboard:make` follows it.
+ */
+export async function drawPanel(storyboardId, panelId) {
+  const board = await getStoryboard(storyboardId);
+  const steps = runnableSteps(board);
+  if (!steps.some((node) => node.type === 'image')) throw refuse('The recipe has no Image node, so there is nothing to draw.');
+  if (isPanelDrawing(locate(board, panelId).panel, steps)) throw refuse('This panel is already drawing.', 'STORYBOARD_PANEL_BUSY', 409);
+  const next = await runPanelSteps(storyboardId, panelId, steps, { redraw: true, selectNew: true });
+  console.log(`✏️ Storyboard ${storyboardId.slice(0, 11)} panel ${panelId.slice(0, 12)} drawing`);
+  return next;
 }

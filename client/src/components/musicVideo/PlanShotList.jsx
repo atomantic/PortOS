@@ -9,10 +9,10 @@ import { preMusicSoundSummary } from '../../../../server/lib/musicVideoColdOpen.
 const FILTERS = [['all', 'All'], ['fix', 'Needs a fix']];
 
 /**
- * Plan's timing check: every shot in song order, read rather than watched —
+ * The timing check on Shots: every shot in song order, read rather than watched —
  * its start and length, its storyboard panel (else its frame), the lyric it was
  * planned on, its action and camera, and each storyboard problem on its own
- * row; untimed shots follow, unnumbered. A row opens that shot on Shots, where
+ * row; untimed shots follow, unnumbered. A row opens that shot's card, where
  * it is fixed and made. Shots before the song (the cold open) lead the list with
  * their length and sound. `?shots=fix` narrows the list to the shots with a problem.
  */
@@ -34,7 +34,7 @@ export default function PlanShotList({ project, readiness, onOpenShot }) {
   const songSec = project.audioAnalysis?.durationSec;
   const covered = !(readiness?.storyboard?.coverage?.length);
 
-  if (!rows.length) return <p className="text-sm text-port-text-muted">No shots yet. Run AI Plan under Planning tools, or fit a storyboard to the song.</p>;
+  if (!rows.length) return <p className="text-sm text-port-text-muted">No shots yet. Make them from the storyboard, or run AI Plan below.</p>;
   return (
     <section aria-label="Shot list" className="min-w-0 space-y-2">
       <div className="flex flex-wrap items-center gap-1.5 text-xs">
@@ -64,7 +64,7 @@ export default function PlanShotList({ project, readiness, onOpenShot }) {
       <ol className="min-w-0 space-y-1.5">
         {listed.map(({ scene, number, coldOpen, durationSec, lyric, action, camera, flags }) => (
           <li key={scene.sceneId}>
-            <button type="button" onClick={() => onOpenShot(scene.sceneId)} aria-label={`Open ${coldOpen ? `cold open shot ${coldOpen}` : number ? `Shot ${number}` : `untimed shot ${scene.label || scene.sceneId}`} on Shots`}
+            <button type="button" onClick={() => onOpenShot(scene.sceneId)} aria-label={`Edit ${coldOpen ? `cold open shot ${coldOpen}` : number ? `Shot ${number}` : `untimed shot ${scene.label || scene.sceneId}`}`}
               className={`grid w-full min-w-0 grid-cols-[3.75rem_4.5rem_minmax(0,1fr)_1rem] items-center gap-2 rounded border p-1.5 text-left ${flags.length ? 'border-port-warning bg-port-warning/5' : 'border-port-border bg-port-card'}`}>
               <span className="text-xs tabular-nums text-port-text-muted">
                 <span className="block font-medium text-port-text">{coldOpen ? 'Before song' : number ? formatTimecode(scene.startSec) : 'Untimed'}</span>

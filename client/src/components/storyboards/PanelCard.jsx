@@ -1,13 +1,14 @@
-import { ImageIcon } from 'lucide-react';
+import { ImageIcon, Loader2 } from 'lucide-react';
 import { SHOT_TYPE_LABELS } from '../../lib/shotGrammar';
 import { aspectClass, formatPanelSeconds, selectedTake, takeSrc } from './storyboardArt';
 
-/** One panel thumbnail: its selected art (or its action as text) and a footer line. */
+/** One panel thumbnail: its selected art (or its action as text), a mark while it draws, and a footer line. */
 export default function PanelCard({ panel, number, aspectRatio, selected = false, sketchNonce, onOpen, caption }) {
   const take = selectedTake(panel);
   const src = takeSrc(take, sketchNonce?.(take?.sketchKey));
   const seconds = formatPanelSeconds(panel.seconds);
   const framing = panel.framing ? SHOT_TYPE_LABELS[panel.framing] : null;
+  const drawing = Object.values(panel.make?.nodes || {}).some((state) => state?.status === 'running' || state?.status === 'queued');
 
   return (
     <button
@@ -25,6 +26,11 @@ export default function PanelCard({ panel, number, aspectRatio, selected = false
         ) : (
           <ImageIcon className="w-6 h-6 text-gray-600" aria-hidden="true" />
         )}
+        {drawing ? (
+          <span className="port-media-overlay-strong absolute right-1 bottom-1 inline-flex items-center gap-1 rounded px-1 text-[10px]">
+            <Loader2 size={11} className="animate-spin" aria-hidden="true" /> Drawing
+          </span>
+        ) : null}
         {caption ? (
           <span className="port-media-overlay-strong absolute left-1 top-1 rounded px-1 text-[10px] max-w-[90%] truncate">{caption}</span>
         ) : null}

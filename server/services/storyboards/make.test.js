@@ -2,6 +2,7 @@ import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
 import { errorMiddleware } from '../../lib/errorHandler.js';
 import { request } from '../../lib/testHelper.js';
+import { effectiveRecipe } from '../../lib/storyboardRecipe.js';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 
 vi.mock('../../lib/fileUtils.js', async (importOriginal) =>
@@ -83,6 +84,10 @@ describe('storyboard panel maker', () => {
     const { id, panelId } = await boardWithPanel({ action: 'Doors', castIds: ['cat-example-1'] });
     await api('post', `/${id}/panels/${panelId}/takes`, { source: 'upload', image: 'chosen.png' });
     await api('patch', `/${id}/panels/${panelId}/make/node-writer`, { text: 'A wide frame' });
+    // The default recipe draws one frame; this board asks for four.
+    const recipe = effectiveRecipe((await api('get', `/${id}`)).body);
+    recipe.nodes.find((node) => node.id === 'node-image').settings.count = 4;
+    await api('put', `/${id}/recipe`, { recipe });
 
     const run = await api('post', `/${id}/panels/${panelId}/make/node-image/run`);
     expect(run.status).toBe(200);
@@ -232,7 +237,7 @@ describe('storyboard panel maker', () => {
     const plan = await api('get', `/${id}/make-empty`);
     expect(plan.body).toMatchObject({ batch: null, panelCount: 2 });
     expect(plan.body.steps.map((step) => [step.nodeId, step.model, step.frames])).toEqual([
-      ['node-writer', 'Example · example-model', 0], ['node-image', 'Default image model', 4],
+      ['node-writer', 'Example · example-model', 0], ['node-image', 'Default image model', 1],
     ]);
 
     // Signals from the mocks themselves, so the test never polls against a wall-clock budget on a slow runner.
@@ -255,7 +260,7 @@ describe('storyboard panel maker', () => {
     expect(runPrompt).toHaveBeenCalledTimes(1);
     expect(runPrompt.mock.calls[0][0].prompt).toContain('Gym floor');
     expect(enqueue.mock.calls.map((call) => [call[0].params.prompt, call[0].params.storyboardPanelRender.panelId])).toEqual([
-      ...Array(4).fill(['My hallway prompt', written]), ...Array(4).fill(['A gym floor frame', blank]),
+      ['My hallway prompt', written], ['A gym floor frame', blank],
     ]);
     expect((await api('get', `/${id}/make-empty`)).body.batch).toBeNull();
   });
@@ -286,6 +291,23 @@ describe('storyboard panel maker', () => {
     expect(a.takes.map((t) => t.image)).toEqual(['still.png', 'drawn-a.png']);
     expect(a.selectedTakeId).toBe(a.takes[1].id);
     expect(b.takes.find((t) => t.id === b.selectedTakeId).image).toBe('drawn-b.png');
+  });
+
+  // Uniquely catches Draw panel skipping the prompt rewrite, drawing more than one frame, not selecting it, or stacking runs.
+  it('draws one panel: rewrites its prompt, queues one frame that becomes its art, and refuses while it is drawing', async () => {
+    const { id, panelId } = await boardWithPanel({ action: 'Doors' });
+    await api('post', `/${id}/panels/${panelId}/takes`, { source: 'upload', image: 'still.png' });
+    await api('patch', `/${id}/panels/${panelId}/make/node-writer`, { text: 'An old photographic prompt' });
+
+    const drawn = await api('post', `/${id}/panels/${panelId}/draw`);
+    expect(drawn.status).toBe(200);
+    expect(runPrompt).toHaveBeenCalledTimes(1);
+    expect(enqueue).toHaveBeenCalledTimes(1);
+    expect((await api('post', `/${id}/panels/${panelId}/draw`)).status).toBe(409);
+
+    await attachPanelFrame({ ...enqueue.mock.calls[0][0].params.storyboardPanelRender, jobId: 'job-1', filename: 'drawn.png' });
+    const [panel] = (await api('get', `/${id}`)).body.beats[0].panels;
+    expect(panel.takes.find((t) => t.id === panel.selectedTakeId).image).toBe('drawn.png');
   });
 
   it('keeps a library of named recipes any board can load as a copy', async () => {

@@ -825,7 +825,7 @@ const STORYBOARD_PROBLEM_GROUPS = [
   { id: 'lyrics', label: 'Lyrics', test: /lyrics|instrumental/i, action: { label: 'Import lyrics', stage: 'setup', anchor: 'mv-lyrics-import' } },
   // The per-shot count lines ("3 shots missing timing, …") mention timing too; they belong to Shot details.
   { id: 'timing', label: 'Lyric timing', test: /^(?!\d+ shots? ).*(alignment|timing|vocal|master song)/i, action: { label: 'Verify timing', stage: 'setup', anchor: 'mv-lyric-timing' } },
-  { id: 'coverage', label: 'Shot coverage', test: /cover the master|gaps or overlaps|create a timed/i, action: { label: 'Open the treatment', anchor: 'mv-board-treatment' } },
+  { id: 'coverage', label: 'Shot coverage', test: /cover the master|gaps or overlaps|create a timed/i, action: { label: 'Open the treatment', stage: 'produce', anchor: 'mv-board-treatment' } },
   { id: 'shots', label: 'Shot details', test: /./, action: { label: 'Edit the storyboard', anchor: APPROVAL_ANCHORS.storyboard } },
 ];
 
@@ -1060,8 +1060,8 @@ function boardChecklist({ project, readiness, scenes, draft }) {
   const feedback = feedbackItem(project, 'storyboard', readiness);
   const problems = [...storyboardProblemItems(readiness, scenes), ...(feedback ? [feedback] : [])];
   return [
-    { id: 'shots', label: 'Shots planned', done: planned, detail: planned ? null : 'Run AI Plan under Planning tools, or add shots by hand on Shots.',
-      action: planned ? null : { label: 'Open planning tools', anchor: 'mv-board-plan' } },
+    { id: 'shots', label: 'Shots planned', done: planned, detail: planned ? null : 'Fit the panels to the song under Make shots, or run AI Plan under Shot timing on Shots.',
+      action: planned ? null : project?.storyboardId ? { label: 'Make shots', anchor: 'mv-board-fit' } : { label: 'Open shot timing', stage: 'produce', anchor: 'mv-board-plan' } },
     ...(project?.storyboardReopenedAt ? [{ id: 'storyboard-approved', label: 'Storyboard approved', done: false,
       detail: 'Reopened for rework. Approve it once the panels are right.', action: { label: 'Approve storyboard', anchor: 'mv-board-approve' } }] : []),
     ...problems,

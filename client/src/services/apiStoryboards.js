@@ -55,6 +55,9 @@ export const updateStoryboardPanelNode = (id, panelId, nodeId, patch, options) =
 export const runStoryboardPanelNode = (id, panelId, nodeId, options) =>
   request(`/storyboards/${enc(id)}/panels/${enc(panelId)}/make/${enc(nodeId)}/run`, { method: 'POST', ...options });
 // body: `{ takeId, note }` → the board once the corrected frames are queued.
+// Draw a panel: the recipe rewrites its prompt and queues one frame, which becomes its art.
+export const drawStoryboardPanel = (id, panelId, options) =>
+  request(`/storyboards/${enc(id)}/panels/${enc(panelId)}/draw`, { ...json('POST', {}), ...options });
 export const correctStoryboardPanel = (id, panelId, body, options) =>
   request(`/storyboards/${enc(id)}/panels/${enc(panelId)}/correct`, { ...json('POST', body), ...options });
 

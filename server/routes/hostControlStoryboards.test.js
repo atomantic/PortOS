@@ -47,21 +47,23 @@ vi.mock('../services/storyboards/make.js', async (importOriginal) => ({
   ...await importOriginal(),
   runPanelNode: vi.fn(async () => ({ ok: true })),
   correctPanel: vi.fn(async () => ({ ok: true })),
+  drawPanel: vi.fn(async () => ({ ok: true })),
   startMakeEmpty: vi.fn(async () => ({ status: 'running' })),
 }));
 
 const { authGate, hostControlRouteGate } = await import('../services/authGate.js');
 const { createSession } = await import('../services/auth.js');
-const { correctPanel, runPanelNode, startMakeEmpty } = await import('../services/storyboards/make.js');
+const { correctPanel, drawPanel, runPanelNode, startMakeEmpty } = await import('../services/storyboards/make.js');
 const { default: storyboardRoutes } = await import('./storyboards.js');
 
 const GATED = [
   'POST /api/storyboards/:id/beats/extract',
   'POST /api/storyboards/:id/make-empty',
   'POST /api/storyboards/:id/panels/:panelId/correct',
+  'POST /api/storyboards/:id/panels/:panelId/draw',
   'POST /api/storyboards/:id/panels/:panelId/make/:nodeId/run',
 ];
-const effects = [sink.runPromptThroughProvider, sink.enqueueJob, runPanelNode, correctPanel, startMakeEmpty];
+const effects = [sink.runPromptThroughProvider, sink.enqueueJob, runPanelNode, correctPanel, drawPanel, startMakeEmpty];
 
 const appFor = (address = '192.0.2.10') => {
   const app = express();
@@ -90,6 +92,7 @@ const operations = (id) => [
   [`/api/storyboards/${id}/beats/extract`, { plot: 'Example plot', providerId: cliProvider.id }, 200],
   [`/api/storyboards/${id}/panels/panel-example/make/node-example/run`, {}, 200],
   [`/api/storyboards/${id}/panels/panel-example/correct`, { takeId: 'take-example', note: 'Wider' }, 200],
+  [`/api/storyboards/${id}/panels/panel-example/draw`, {}, 200],
   [`/api/storyboards/${id}/make-empty`, {}, 202],
 ];
 const expectNoEffects = () => {
@@ -102,7 +105,7 @@ beforeEach(() => {
 });
 
 describe('Storyboards agent runs require operator authority (#12952)', () => {
-  it('gates exactly the four runs; every other Storyboards mutation stores records and stays open', () => {
+  it('gates exactly the five runs; every other Storyboards mutation stores records and stays open', () => {
     const mutations = scanRouteGraph().routes
       .filter((route) => route.mountPath === '/api/storyboards' && route.method !== 'GET')
       .map(({ method, path }) => `${method} ${path}`);
@@ -177,6 +180,7 @@ describe('Storyboards agent runs require operator authority (#12952)', () => {
     }));
     expect(runPanelNode).toHaveBeenCalledTimes(3);
     expect(correctPanel).toHaveBeenCalledTimes(3);
+    expect(drawPanel).toHaveBeenCalledTimes(3);
     expect(startMakeEmpty).toHaveBeenCalledTimes(3);
   });
 });

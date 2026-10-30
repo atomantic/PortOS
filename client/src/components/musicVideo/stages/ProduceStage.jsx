@@ -1,4 +1,5 @@
 import BoardStage from './BoardStage.jsx';
+import ShotTimingTools from '../ShotTimingTools.jsx';
 import ContactSheetButton from '../ContactSheetButton.jsx';
 import StageSection from '../StageSection.jsx';
 import { GenerationActions } from '../ProjectActionGroups.jsx';
@@ -9,7 +10,8 @@ import { FOOTAGE_OPTIONAL_MODES } from '../../../lib/musicVideoStages.js';
 
 /**
  * Shots: the scene board, where each shot's still and clip are made and locked
- * (a video shot locks its still, then its clip), the footage tools for making
+ * (a video shot locks its still, then its clip), the shot timing tools (folded),
+ * the footage tools for making
  * many at once, then the composition over them. A render style that draws its
  * own picture (code, document, Eidoverse) keeps the footage tools folded, since
  * footage is optional there. The approvals sit at the bottom of the page (Lock
@@ -24,6 +26,7 @@ export default function ProduceStage({ board }) {
   return (
     <div className="min-w-0 space-y-3">
       <BoardStage board={board} />
+      <ShotTimingTools board={board} />
       <fieldset disabled={locked} className="min-w-0 space-y-3">
           <StageSection id="mv-generation" title="Footage" defaultOpen={!footageOptional}
             summary={footageOptional ? 'Optional for this render style: frames and clips the composition can use' : 'Make the frames and clips each shot still needs'}>

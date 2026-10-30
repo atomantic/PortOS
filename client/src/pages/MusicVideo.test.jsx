@@ -1634,7 +1634,7 @@ describe('MusicVideo audio preview + download', () => {
 
 describe('MusicVideo musical timeline', () => {
   it('renders waveform, beat evidence, legend, and the detected rhythmic window', async () => {
-    await openProject(PROJECT_ANALYZED, 'board');
+    await openProject(PROJECT_ANALYZED, 'produce');
     expect(screen.getByRole('img', { name: /audio waveform overview with 4 beats and 1 downbeats/i })).toBeTruthy();
     expect(screen.getByText(/waveform, sections, and 4\/4 beat-grid assumption/i)).toBeTruthy();
     expect(screen.getByText(/detected near 0:40\.00–1:10\.00/i)).toBeTruthy();
@@ -1682,7 +1682,7 @@ describe('MusicVideo audio → MIDI transcription (MuScriptor)', () => {
 
 describe('MusicVideo autonomous shot planner (#1855)', () => {
   it('disables AI Plan until the track is analyzed', async () => {
-    await openProject(PROJECT_NO_CLIP, 'board');
+    await openProject(PROJECT_NO_CLIP, 'produce');
     const planBtn = await screen.findByRole('button', { name: /AI Plan/i });
     expect(planBtn).toHaveProperty('disabled', true);
   });
@@ -1691,7 +1691,7 @@ describe('MusicVideo autonomous shot planner (#1855)', () => {
     const plannedProject = { ...PROJECT_ANALYZED, scenes: [{ sceneId: 's1', order: 0, prompt: 'p' }] };
     planMusicVideoProject.mockResolvedValue({ project: plannedProject, scenesAdded: 1, promptsSeeded: false, promptsSkippedReason: 'no-provider' });
 
-    await openProject({ ...PROJECT_ANALYZED, scenes: [] }, 'board');
+    await openProject({ ...PROJECT_ANALYZED, scenes: [] }, 'produce');
     const planBtn = await screen.findByRole('button', { name: /AI Plan/i });
     expect(planBtn).toHaveProperty('disabled', false);
 
@@ -1706,7 +1706,7 @@ describe('MusicVideo AI Plan on a board that already has scenes (#10144)', () =>
   it('sends no plan request until the director chooses Replace or Add', async () => {
     planMusicVideoProject.mockClear();
     planMusicVideoProject.mockResolvedValue({ project: withScenes, scenesAdded: 1, promptsSeeded: false });
-    await openProject(withScenes, 'board');
+    await openProject(withScenes, 'produce');
     fireEvent.click(await screen.findByRole('button', { name: /AI Plan/i }));
     expect(await screen.findByRole('button', { name: /Replace 2 shots/ })).toBeTruthy();
     expect(planMusicVideoProject).not.toHaveBeenCalled();
@@ -2907,8 +2907,8 @@ describe('MusicVideo stage tabs (#9243)', () => {
     expect(screen.getByRole('complementary', { name: 'Preview' })).toBeInTheDocument();
   });
 
-  // Uniquely catches Plan losing its read-through: shots in song order with their lyric, action and own problems, opening on Shots.
-  it('checks every shot on Plan in song order with its problems on its row, and opens a shot on Shots', async () => {
+  // Uniquely catches the shot list losing its read-through: shots in song order with their lyric, action and own problems, opening each shot.
+  it('checks every shot on Shots in song order with its problems on its row, and opens a shot', async () => {
     listMusicVideoProjects.mockResolvedValue([{ ...PROJECT_WITH_CLIP,
       audioAnalysis: { ...PROJECT_ANALYZED.audioAnalysis, durationSec: 12 },
       scenes: [
@@ -2921,12 +2921,12 @@ describe('MusicVideo stage tabs (#9243)', () => {
           shots: [{ sceneId: 's1', action: 'Close on the skates', camera: 'Low dolly' }],
           lyricAnchors: [{ sceneId: 's2', sung: ['Second example line'], anchored: [] }] } },
     }]);
-    renderAt('/music-video/mv-1/board');
+    renderAt('/music-video/mv-1/produce');
     await screen.findByRole('heading', { level: 2, name: PROJECT_WITH_CLIP.name });
     const list = screen.getByRole('region', { name: 'Shot list' });
-    const rows = within(list).getAllByRole('button', { name: /^Open .* on Shots$/ });
+    const rows = within(list).getAllByRole('button', { name: /^Edit / });
     // A new shot with no timing yet stays listed, last and unnumbered, with its problem.
-    expect(rows.map((row) => row.getAttribute('aria-label'))).toEqual(['Open Shot 1 on Shots', 'Open Shot 2 on Shots', 'Open untimed shot New shot on Shots']);
+    expect(rows.map((row) => row.getAttribute('aria-label'))).toEqual(['Edit Shot 1', 'Edit Shot 2', 'Edit untimed shot New shot']);
     expect(rows[2]).toHaveTextContent('Untimed');
     expect(rows[2]).toHaveTextContent('Missing timing');
     expect(rows[0]).toHaveTextContent('Instrumental');
@@ -2938,18 +2938,18 @@ describe('MusicVideo stage tabs (#9243)', () => {
     expect(within(list).getByText('2 need a fix')).toBeInTheDocument();
 
     fireEvent.click(within(list).getByRole('button', { name: 'Needs a fix (2)' }));
-    expect(within(list).getAllByRole('button', { name: /^Open .* on Shots$/ })).toHaveLength(2);
-    fireEvent.click(within(list).getByRole('button', { name: 'Open Shot 2 on Shots' }));
+    expect(within(list).getAllByRole('button', { name: /^Edit / })).toHaveLength(2);
+    fireEvent.click(within(list).getByRole('button', { name: 'Edit Shot 2' }));
     await waitFor(() => expect(screen.getByTestId('loc')).toHaveTextContent('/music-video/mv-1/produce/scene/s2'));
   });
 
   // Uniquely catches a lingering ?shots=fix emptying the list once nothing needs a fix (its filter buttons are gone).
-  it('lists every shot on Plan when the fix filter is left on but nothing needs a fix', async () => {
+  it('lists every shot when the fix filter is left on but nothing needs a fix', async () => {
     listMusicVideoProjects.mockResolvedValue([{ ...PROJECT_WITH_CLIP, scenes: [{ sceneId: 's1', order: 0, startSec: 0, endSec: 4 }] }]);
-    renderAt('/music-video/mv-1/board?shots=fix');
+    renderAt('/music-video/mv-1/produce?shots=fix');
     await screen.findByRole('heading', { level: 2, name: PROJECT_WITH_CLIP.name });
     const list = screen.getByRole('region', { name: 'Shot list' });
-    expect(within(list).getByRole('button', { name: 'Open Shot 1 on Shots' })).toBeInTheDocument();
+    expect(within(list).getByRole('button', { name: 'Edit Shot 1' })).toBeInTheDocument();
     expect(within(list).queryByRole('group', { name: 'Filter shots' })).toBeNull();
   });
 
@@ -3106,7 +3106,7 @@ describe('MusicVideo stage tabs (#9243)', () => {
     fireEvent.click(screen.getByRole('tab', { name: STAGE_TABS.board }));
     await waitFor(() => expect(screen.getByTestId('loc').textContent).toBe('/music-video/mv-1/board'));
     expect(selectedTab()).toHaveTextContent(/^Storyboard/);
-    expect(screen.getByRole('button', { name: /AI Plan/ })).toBeTruthy();
+    expect(screen.getByText('Start the storyboard')).toBeTruthy();
   });
 
   it('falls back to the stage the project is in when the URL names no stage or an unknown one', async () => {
@@ -3141,9 +3141,10 @@ describe('MusicVideo stage tabs (#9243)', () => {
       },
       story: { Concept: (root) => root.queryByRole('textbox', { name: 'Concept' }) },
       'cast-sets': { 'Cast & Sets check-in': (root) => root.queryByLabelText('Cast & Sets check-in') },
-      board: { 'AI Plan': (root) => root.queryByRole('button', { name: /AI Plan/ }) },
-      // Shots: the scene board, the footage, then the composition over it.
-      produce: { 'Add scene': (root) => root.queryByRole('button', { name: /Add scene/ }), 'Shot prompt': (root) => root.queryByLabelText('Shot prompt'),
+      board: { 'Start the storyboard': (root) => root.queryByText('Start the storyboard') },
+      // Shots: the scene board, its timing tools, the footage, then the composition over it.
+      produce: { 'Add scene': (root) => root.queryByRole('button', { name: /Add scene/ }), 'AI Plan': (root) => root.queryByRole('button', { name: /AI Plan/ }),
+        'Shot prompt': (root) => root.queryByLabelText('Shot prompt'),
         Footage: () => document.getElementById('mv-generation'), Typography: (root) => root.queryByText(/^Typography —/) },
       review: { 'Render final': (root) => root.queryByRole('button', { name: /^Render final$/ }), 'Render excerpt': (root) => root.queryByRole('button', { name: /Render excerpt/ }) },
     };

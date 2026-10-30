@@ -16,6 +16,7 @@ const api = vi.hoisted(() => ({
   createBlankSketch: vi.fn(),
   runStoryboardPanelNode: vi.fn(),
   correctStoryboardPanel: vi.fn(),
+  drawStoryboardPanel: vi.fn(),
   updateStoryboardRecipe: vi.fn(),
   getStoryboardMakeEmpty: vi.fn(),
   startStoryboardMakeEmpty: vi.fn(),
@@ -235,7 +236,7 @@ describe('StoryboardDetail', () => {
     expect(await screen.findByText('This panel is no longer on the storyboard.')).toBeTruthy();
   });
 
-  it('runs a recipe node from the Make tab and duplicates a node from its right-click menu', async () => {
+  it('runs a recipe node from the Prompts tab and duplicates a node from its right-click menu', async () => {
     api.getStoryboard.mockResolvedValue(board({ beats: [{ ...board().beats[0], panels: [panel('panel-1', { action: 'Doors swing open' })] }] }));
     api.runStoryboardPanelNode.mockResolvedValue(board({
       updatedAt: '2026-10-22T00:00:02.000Z',
@@ -259,7 +260,7 @@ describe('StoryboardDetail', () => {
     await waitFor(() => expect(api.updateStoryboardRecipe).toHaveBeenCalled());
     const [, recipe] = api.updateStoryboardRecipe.mock.calls[0];
     const copy = recipe.nodes.find((n) => n.title === 'Image copy');
-    expect(copy).toMatchObject({ type: 'image', settings: { count: 4 } });
+    expect(copy).toMatchObject({ type: 'image', settings: { count: 1 } });
     // The copy keeps the original's inputs.
     expect(recipe.edges.filter((e) => e.to === copy.id).map((e) => e.toPort).sort()).toEqual(['images', 'prompt']);
   });
@@ -341,6 +342,18 @@ describe('StoryboardDetail', () => {
     expect(screen.getByText('1 of 2')).toBeInTheDocument();
     act(() => onBatch({ storyboardId: 'sb-1', status: 'done', total: 2, done: 2, failed: 0 }));
     expect(await screen.findByRole('button', { name: 'Make empty panels' })).toBeInTheDocument();
+  });
+
+  // Uniquely catches a panel losing its one-tap Draw, or the button not showing the panel is drawing.
+  it('draws one panel from its side panel and shows it drawing until the frame lands', async () => {
+    api.getStoryboard.mockResolvedValue(board());
+    api.drawStoryboardPanel.mockResolvedValue(board({ updatedAt: '2026-10-22T00:00:02.000Z', beats: [{ ...board().beats[0],
+      panels: [panel('panel-1', { make: { nodes: { 'node-image': { status: 'queued' } } } })] }] }));
+    renderAt('/storyboards/sb-1/panel/panel-1');
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Draw panel' }));
+    await waitFor(() => expect(api.drawStoryboardPanel).toHaveBeenCalledWith('sb-1', 'panel-1'));
+    expect(await screen.findByRole('button', { name: /Drawing/ })).toBeDisabled();
   });
 
   // Uniquely catches Redraw all losing its own count, its one-frame redraw, or the "Select the new drawings" choice.

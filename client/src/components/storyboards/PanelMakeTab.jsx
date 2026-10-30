@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Plus, Play, RotateCcw, X } from 'lucide-react';
+import { Plus, RotateCcw, X } from 'lucide-react';
 import GalleryImagePicker from '../imageGen/GalleryImagePicker';
 import RecordRenderPinRow from '../imageGen/RecordRenderPinRow';
 import MusicVideoLlmPicker from '../musicVideo/MusicVideoLlmPicker';
@@ -19,6 +19,7 @@ import RecipeCanvas from './RecipeCanvas';
 import RecipeLibrary from './RecipeLibrary';
 import RecipeNodeCard, { NODE_ICONS } from './RecipeNodeCard';
 import { takeSrc } from './storyboardArt';
+import DrawPanelButton from './DrawPanelButton';
 
 const labelClass = 'block text-[11px] text-gray-500 mb-0.5';
 const selectClass = 'min-h-[44px] w-full bg-port-bg border border-port-border rounded px-2 text-sm text-white';
@@ -100,7 +101,6 @@ export default function PanelMakeTab({ board, found, sketchNonce, handlers }) {
   const [linkedRefs, setLinkedRefs] = useState([]);
   const [linkedError, setLinkedError] = useState(false);
   const [runningId, setRunningId] = useState(null);
-  const [runningAll, setRunningAll] = useState(false);
   const [pickingRefsFor, setPickingRefsFor] = useState(null);
   const [adding, setAdding] = useState(false);
   const [confirmReset, setConfirmReset] = useState(false);
@@ -162,13 +162,6 @@ export default function PanelMakeTab({ board, found, sketchNonce, handlers }) {
     const ok = await handlers.onRunNode(node.id);
     setRunningId(null);
     return ok;
-  };
-  const runAll = async () => {
-    setRunningAll(true);
-    for (const node of order.filter((n) => RUNNABLE.has(n.type))) {
-      if (!(await run(node))) break;
-    }
-    setRunningAll(false);
   };
 
   const bodyFor = (node) => {
@@ -355,23 +348,23 @@ export default function PanelMakeTab({ board, found, sketchNonce, handlers }) {
 
   return (
     <div className="space-y-3">
-      <div className="flex flex-wrap items-center gap-2">
-        <button type="button" onClick={runAll} disabled={runningAll || !!runningId} className={`${actionButton} bg-port-accent/20 border-port-accent/50`}>
-          <Play size={16} aria-hidden="true" /> {runningAll ? 'Running…' : 'Run all'}
+      <p className="text-sm text-gray-300">
+        How this board draws a panel: the prompt writer turns the shot into a prompt, then the image node draws it.
+        Draw panel runs them in order; here you can read the exact prompt sent, edit a step, or rerun one.
+      </p>
+      <DrawPanelButton panel={panel} onDraw={handlers.onDraw} />
+      {board.recipe && !confirmReset && (
+        <button type="button" onClick={() => setConfirmReset(true)} className={actionButton}>
+          <RotateCcw size={16} aria-hidden="true" /> Default recipe
         </button>
-        {board.recipe && !confirmReset && (
-          <button type="button" onClick={() => setConfirmReset(true)} className={actionButton}>
-            <RotateCcw size={16} aria-hidden="true" /> Default recipe
-          </button>
-        )}
-      </div>
+      )}
       {confirmReset && (
         <InlineConfirmRow autoFocus aria-label="Restore the default recipe" confirmText="Restore" tone="warning"
           question="Restore the default recipe? This board's node edits and wiring are replaced."
           onConfirm={() => { setConfirmReset(false); saveRecipe(null); }} onCancel={() => setConfirmReset(false)} />
       )}
       <RecipeLibrary recipe={recipe} onLoad={saveRecipe} />
-      <p className="text-[11px] text-gray-500">The recipe is shared by every panel on this board. Each node runs only when you tap it.</p>
+      <p className="text-[11px] text-gray-500">The recipe is shared by every panel on this board.</p>
       <div className="hidden lg:block">
         <TabPills tabs={VIEW_TABS} activeTab={canvas ? 'canvas' : 'chain'} variant="pills" size="sm" ariaLabel="Recipe view"
           onChange={(next) => updateParams({ makeView: next === 'canvas' ? 'canvas' : null }, { replace: true })} />
