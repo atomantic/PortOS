@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 
 vi.mock('../../services/apiPipeline', () => ({
   getComparativeRank: vi.fn(),
@@ -34,5 +34,20 @@ describe('ComparativeRankView partial rankings', () => {
     expect(screen.getByText(/These standings are not used to choose an autopilot revision priority/)).toBeTruthy();
     expect(screen.queryByText('revision priority')).toBeNull();
     expect(screen.queryByRole('columnheader', { name: 'Elo' })).toBeNull();
+  });
+});
+
+describe('ComparativeRankView failed read', () => {
+  it('shows an error with Retry instead of "Not ranked yet", and recovers on retry', async () => {
+    getComparativeRank.mockRejectedValueOnce(new Error('boom'));
+    render(<ComparativeRankView seriesId="ser-1" hasContent />);
+
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toMatch(/Could not load the ranking/));
+    expect(screen.queryByText(/Not ranked yet/)).toBeNull();
+
+    getComparativeRank.mockResolvedValueOnce({ status: 'insufficient' });
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+    expect(screen.getByText(/Need at least two drafted issues/)).toBeTruthy();
   });
 });
