@@ -98,6 +98,8 @@ export default function BrainGraph() {
   const [searchIndex, setSearchIndex] = useState([]);
   const [searchError, setSearchError] = useState(false);
   const searchRequest = useRef(0);
+  // Generation for every writer of graphData after the overview: a newer view load invalidates older ones.
+  const viewRequest = useRef(0);
   const [searchValue, setSearchValue] = useState('');
   const [embeddingError, setEmbeddingError] = useState(false);
   const embeddingRequest = useRef(0);
@@ -180,8 +182,10 @@ export default function BrainGraph() {
   // Load a bounded view (overview when focusId is null, else that node's
   // neighborhood) and reconcile the breadcrumb trail.
   const loadView = useCallback(async (targetFocusId, { trail } = {}) => {
+    const request = ++viewRequest.current;
     setSubLoading(true);
     const data = await api.getBrainGraph(targetFocusId ? { focus: targetFocusId } : {}, { silent: true }).catch(() => null);
+    if (request !== viewRequest.current) return false;
     setSubLoading(false);
     if (!data || data.notFound) {
       toast.error('Could not load those connections');
@@ -297,6 +301,8 @@ export default function BrainGraph() {
   const handleSync = async ({ refresh = false, onlyMissing = false } = {}) => {
     setSyncing(true);
     setConfirmingRefresh(false);
+    const viewAtStart = viewRequest.current;
+    const focusAtStart = focusId;
     // The server has no progress stream for this, so a persistent loading toast
     // is the only honest signal that work is in flight. A fixed id lets the
     // success/error call swap the same toast in place.
@@ -321,8 +327,8 @@ export default function BrainGraph() {
       // Refresh the missing-embeddings count and reload the current view to pick
       // up the new edges.
       loadEmbeddingStatus();
-      const fresh = await api.getBrainGraph(focusId ? { focus: focusId } : {}).catch(() => null);
-      if (fresh) setGraphData(fresh);
+      const fresh = await api.getBrainGraph(focusAtStart ? { focus: focusAtStart } : {}).catch(() => null);
+      if (fresh && viewAtStart === viewRequest.current) setGraphData(fresh);
     }
   };
 
