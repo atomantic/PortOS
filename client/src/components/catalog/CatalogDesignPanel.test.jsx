@@ -8,7 +8,10 @@ vi.mock('../../hooks/useModelInputPreview', () => ({ useModelInputPreview: () =>
 vi.mock('../../hooks/useProviderModels', () => ({ default: () => ({ providers: [], selectedProviderId: 'example-api', availableModels: [], loading: false,
   setSelectedProviderId: vi.fn(), setSelectedModel: vi.fn() }) }));
 vi.mock('../ProviderModelSelector', () => ({ default: () => null }));
-vi.mock('../pipeline/MediaJobThumb', () => ({ default: ({ label }) => <div>{label} rendering</div> }));
+vi.mock('../pipeline/MediaJobThumb', () => ({ default: ({ label, jobId, onStatus }) => <div>{label} rendering
+  <button type="button" onClick={() => onStatus('failed', 'Runtime is down')}>fail {jobId}</button>
+  <button type="button" onClick={() => onStatus('canceled')}>cancel {jobId}</button>
+  <button type="button" onClick={() => onStatus('failed')}>blank {jobId}</button></div> }));
 vi.mock('../IngredientPicker', () => ({ default: () => null }));
 import CatalogDesignPanel from './CatalogDesignPanel';
 import { renderCatalogDesign, updateCatalogIngredientMediaLibrary } from '../../services/apiCatalog';
@@ -78,5 +81,20 @@ describe('Casting design rounds', () => {
     expect(await screen.findByText('Queued 1 of 8 takes — queue is full')).toBeTruthy();
     expect(await screen.findByText('Take rendering')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Render 8 takes' })).toBeTruthy();
+  });
+
+  describe.each([
+    ['fail', 'Runtime is down'],
+    ['cancel', 'This take was canceled. Render it again if you still want it.'],
+    ['blank', 'This take failed. Render it again if you still want it.'],
+  ])('a pending take that ends via %s', (action, message) => {
+    it('shows why on the panel alert and forgets the job', async () => {
+      sessionStorage.setItem('catalog_design_pending_cast', JSON.stringify([{ jobId: 'job-7', roundId: 'r5', line: 'x', startedAt: 1 }]));
+      mount();
+      fireEvent.click(await screen.findByRole('button', { name: `${action} job-7` }));
+      expect((await screen.findByRole('alert')).textContent).toBe(message);
+      await waitFor(() => expect(screen.queryByText('Take rendering')).toBeNull());
+      expect(sessionStorage.getItem('catalog_design_pending_cast')).toBeNull();
+    });
   });
 });
