@@ -9,6 +9,8 @@ import { getIngredient } from './catalogDB/ingredients.js';
 import { listMediaForIngredient } from './catalogDB/media.js';
 import { assertCatalogIdentityWritable } from './catalogDB/identityAccess.js';
 import { catalogImageBackend, enqueueCatalogImage, readEditSourceDimensions, resolveCatalogImageTarget } from './catalogMediaRefinement.js';
+import { assertMediaQueueRoom } from './mediaJobQueue/index.js';
+import { partialBatchAdmissionError } from './mediaJobQueue/admission.js';
 import { runCreativeRefinement } from './creativeRefinement.js';
 import { previewImagePrompt } from './imageGen/promptPreview.js';
 
@@ -124,16 +126,29 @@ export async function renderCatalogDesign(id, input, { preview = false } = {}) {
   const media = input.mode === 'open' ? [] : await listMediaForIngredient(id);
   const base = media.find((m) => !m.deleted && ['portrait', 'reference'].includes(m.kind) && m.mediaKey === input.baseImageFile);
   const roundId = randomBytes(4).toString('hex');
+  // A round that cannot fit is refused whole, before any take is queued.
+  assertMediaQueueRoom(lines.length);
   const jobs = [];
   for (const [index, line] of lines.entries()) {
-    const job = await enqueueCatalogImage(takeBody(input, line, context), {
-      settings: resolved.settings, local: resolved.local, cloud: resolved.cloud,
-      catalogAttach: { ingredientId: id, kind: 'reference', role: designTakeRole(roundId, index),
-        library: { variant: target.variant, guide: false, likeness: false,
-          review: { status: 'unreviewed', feedback: [input.note, line].filter(Boolean).join('\n') },
-          ...(base ? { derivedFrom: { mediaKey: base.mediaKey, kind: base.kind } } : {}) } },
-    });
-    jobs.push({ jobId: job.jobId, line });
+    try {
+      const job = await enqueueCatalogImage(takeBody(input, line, context), {
+        settings: resolved.settings, local: resolved.local, cloud: resolved.cloud,
+        catalogAttach: { ingredientId: id, kind: 'reference', role: designTakeRole(roundId, index),
+          library: { variant: target.variant, guide: false, likeness: false,
+            review: { status: 'unreviewed', feedback: [input.note, line].filter(Boolean).join('\n') },
+            ...(base ? { derivedFrom: { mediaKey: base.mediaKey, kind: base.kind } } : {}) } },
+      });
+      jobs.push({ jobId: job.jobId, line });
+    } catch (err) {
+      if (!jobs.length) throw err;
+      // Takes already queued keep running; tell the caller which ones landed.
+      const partial = partialBatchAdmissionError(err, { admitted: jobs.length, total: lines.length, noun: 'takes' });
+      throw new ServerError(partial === err ? `Queued ${jobs.length} of ${lines.length} takes — ${err.message}` : partial.message, {
+        status: err.status || 503,
+        code: err.code,
+        context: { ...(err.context || {}), roundId, jobs },
+      });
+    }
   }
   return { roundId, jobs };
 }

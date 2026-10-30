@@ -4,7 +4,7 @@ import express from 'express';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 
-const state = vi.hoisted(() => ({ get: vi.fn(), media: vi.fn(), enqueue: vi.fn(), writable: vi.fn(), run: vi.fn(), mode: 'codex' }));
+const state = vi.hoisted(() => ({ get: vi.fn(), media: vi.fn(), enqueue: vi.fn(), writable: vi.fn(), run: vi.fn(), room: vi.fn(), mode: 'codex' }));
 vi.mock('../services/catalogDB/ingredients.js', () => ({ getIngredient: state.get }));
 vi.mock('../services/catalogDB/media.js', () => ({ listMediaForIngredient: state.media }));
 vi.mock('../services/catalogDB/identityAccess.js', () => ({ assertCatalogIdentityWritable: state.writable }));
@@ -19,7 +19,7 @@ vi.mock('../lib/mediaModels.js', async original => ({ ...await original(), getIm
 ] }));
 vi.mock('../services/universeBuilder/crud.js', () => ({ getUniverse: vi.fn(), getUniverseRenderPin: vi.fn() }));
 vi.mock('../services/imageGen/regen.js', () => ({ readImageDimensions: async () => ({ width: 832, height: 1216 }) }));
-vi.mock('../services/mediaJobQueue/index.js', () => ({ enqueueJob: state.enqueue, assertMediaQueueRoom: vi.fn() }));
+vi.mock('../services/mediaJobQueue/index.js', () => ({ enqueueJob: state.enqueue, assertMediaQueueRoom: state.room }));
 vi.mock('../services/promptRunner.js', () => ({
   resolveProviderAndModel: async () => ({ provider: { id: 'example-api', enabled: true }, selectedModel: 'example-model' }),
   assertProvider: () => {}, runPromptThroughProvider: state.run,
@@ -72,6 +72,33 @@ describe('Casting design rounds', () => {
         library: { variant: { age: 27 }, guide: false, likeness: false, review: { status: 'unreviewed' } } });
     }
     expect(params()[1].prompt).toContain('A round face.');
+  });
+
+  it('keeps takes already queued when a later take is refused, reporting them on the error', async () => {
+    const full = Object.assign(new Error('Media queue is full'), { status: 503, code: 'MEDIA_QUEUE_FULL' });
+    state.enqueue.mockClear();
+    state.enqueue.mockResolvedValueOnce({ jobId: 'job-a' }).mockRejectedValueOnce(full);
+    const body = { mode: 'open', lines: ['A long face.', 'A round face.'] };
+    const result = await post('render', body);
+    expect(result.status).toBe(503);
+    expect(result.body.error).toMatch(/^Queued 1 of 2 takes/);
+    expect(result.body.context.jobs).toEqual([{ jobId: 'job-a', line: 'A long face.' }]);
+    expect(result.body.context.roundId).toBeTruthy();
+    state.enqueue.mockClear();
+    state.enqueue.mockResolvedValueOnce({ jobId: 'job-b' }).mockRejectedValueOnce(new Error('disk exploded'));
+    const other = await post('render', body);
+    expect(other.body.error).toMatch(/^Queued 1 of 2 takes — disk exploded/);
+    expect(other.body.context.jobs).toHaveLength(1);
+    state.enqueue.mockClear();
+    state.enqueue.mockRejectedValueOnce(full);
+    expect((await post('render', body)).body.context?.jobs).toBeUndefined();
+  });
+
+  it('refuses a round that does not fit before queueing any take', async () => {
+    state.room.mockImplementationOnce(() => { throw Object.assign(new Error('Too big'), { status: 503, code: 'MEDIA_BATCH_TOO_LARGE' }); });
+    const result = await post('render', { mode: 'open', lines: ['A long face.', 'A round face.'] });
+    expect(result.status).toBe(503);
+    expect(state.enqueue).not.toHaveBeenCalled();
   });
 
   it('varies one feature of the picked take from its image alone, recording lineage', async () => {
