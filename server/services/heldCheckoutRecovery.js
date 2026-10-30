@@ -91,9 +91,10 @@ const isPristineMediaRegistry = async file => {
 // the same folder stays protected.
 const PYCACHE_FILE = /(?:^|\/)__pycache__\/[^/]+\.cpython-\d+\.pyc$/;
 const TEST_DIAGNOSTICS_FILE = /^\.cache\/test-process-diagnostics\/[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\.json$/;
-// The quality-snapshot publisher's own retention receipt (appQualitySnapshotMerge.js).
-// It only records guard output for resuming a deferred merge, so it can never be
-// the sole copy of anything once the checkout is being retired.
+// The retention receipt the quality-snapshot publisher's guarded merge wrote
+// before #14184 (appQualitySnapshotMerge.js still reads it to find legacy
+// checkouts). It only recorded guard output, so it is never the sole copy of
+// anything once the checkout is being retired.
 const SNAPSHOT_MERGE_RECEIPT = '.cache/quality-snapshot-merge.json';
 const disposableRuntimeArtifact = rel => PYCACHE_FILE.test(rel) || TEST_DIAGNOSTICS_FILE.test(rel) || rel === SNAPSHOT_MERGE_RECEIPT;
 

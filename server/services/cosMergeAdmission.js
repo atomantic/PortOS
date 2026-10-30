@@ -183,7 +183,9 @@ async function inactive(lease, state) {
 
 // A preparation turn orders only ready participants' guards and merge attempts.
 // It is not admission: final ownership/head/base/check gates remain mandatory.
-// Legacy callers join at acquire, behind any preparation already requested.
+// Legacy callers and the pending-merge sweep join at acquire, behind any
+// preparation already requested. `pending:` rows and a sweep lease carrying a
+// `preparationKey` exist only in state written before #14184.
 const preparationOwner = owner => owner.kind === 'agent'
   ? `agent:${owner.agentId}:${owner.startedAt}:${owner.taskId}`
   : owner.kind === 'external' ? `external:${owner.externalOwner}`
@@ -249,8 +251,8 @@ async function admit(state, save, repository, owner, measure) {
   const held = state.mergeAdmissions[repository];
   if (Object.hasOwn(state.mergeAdmissions, repository) && !validLease(held, repository)) return refuse('lease-unreadable');
   const available = !held || await measure('ownerRecovery', () => inactive(held, state));
-  // Old sweeps have no retained receipt turn and must not leave ghost waiters.
-  if (owner.kind === 'sweep' && !owner.preparationKey && !available) return refuse('owner-active-or-unverified');
+  // A sweep reserves no turn: refuse a busy lease rather than leave a ghost waiter.
+  if (owner.kind === 'sweep' && !available) return refuse('owner-active-or-unverified');
   if (held && available) finishPreparation(state, repository, held);
   // Persist the turn and lease together on a grant. Refused waiters still keep
   // their durable place; no second whole-state write is needed on acquisition.
@@ -597,11 +599,11 @@ export async function externalMergeAdmission(input, resolveOwner) {
 }
 
 /** A sweep holds admission only around its final read/assessment/merge attempt. */
-export async function withPendingMergeAdmission(origin, work, preparationKey = null) {
+export async function withPendingMergeAdmission(origin, work) {
   const repository = repositoryKey(origin);
   if (!repository) return refuse('repository-unreadable');
   const admission = await transaction((state, save, measure) => admit(state, save, repository, {
-    kind: 'sweep', serverOwner, pid: process.pid, ...(preparationKey ? { preparationKey } : {}),
+    kind: 'sweep', serverOwner, pid: process.pid,
   }, measure), 'sweep-acquire');
   if (!admission.admitted) return admission;
   let result;
@@ -614,7 +616,7 @@ export async function withPendingMergeAdmission(origin, work, preparationKey = n
         const lease = state.mergeAdmissions[repository];
         if (!validLease(lease, repository) || lease.token !== admission.token) return refuse('lease-owner-mismatch');
         delete state.mergeAdmissions[repository];
-        if (!result?.merge?.guardDeferred) finishPreparation(state, repository, lease);
+        finishPreparation(state, repository, lease);
         await saveLeaseState(state, save, repository);
         return { released: true };
       }, 'sweep-release');
@@ -627,10 +629,10 @@ export async function withPendingMergeAdmission(origin, work, preparationKey = n
   }
 }
 
-/** Internal pending-receipt scheduling, without transferring ownership. */
-export async function preparePendingMergeAdmission(origin, key, { yieldTurn = false } = {}) {
+/** Releases a turn a pending receipt reserved before #14184; never requests one. */
+export async function yieldPendingMergePreparation(origin, key) {
   const repository = repositoryKey(origin);
   if (!repository) return refuse('repository-unreadable');
-  return transaction((state, save) => prepare(state, save, repository, { kind: 'pending', key }, { yieldTurn }),
-    yieldTurn ? 'pending-yield' : 'pending-prepare');
+  return transaction((state, save) => prepare(state, save, repository, { kind: 'pending', key }, { yieldTurn: true }),
+    'pending-yield');
 }

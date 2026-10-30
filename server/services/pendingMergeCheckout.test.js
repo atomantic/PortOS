@@ -2,7 +2,7 @@ import { expect, it, vi } from 'vitest';
 
 vi.mock('../lib/execGit.js', () => ({ execGit: vi.fn() }));
 import { execGit } from '../lib/execGit.js';
-import { verifyPendingMergeCheckout } from './pendingMergeGuard.js';
+import { verifyPendingMergeCheckout } from './pendingMergeCheckout.js';
 
 it('retains checkout ownership until every Git probe settles after one probe rejects', async () => {
   const status = Promise.withResolvers();

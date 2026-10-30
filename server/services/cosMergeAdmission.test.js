@@ -13,7 +13,7 @@ vi.mock('../lib/gitRemote.js', () => ({
     fullName: path === '/repos/other' ? 'example/other' : 'Example/Repo' }),
 }));
 vi.mock('./cosAgentLifecycle.js', () => ({ readAgentRecordOrUnreadable: async () => fixture.archived }));
-import { AGENT_LEASE_MAX_HOLD_MS, MERGE_PREPARATION_MAX_HOLD_MS, claimMergeAdmission, preparePendingMergeAdmission, withPendingMergeAdmission } from './cosMergeAdmission.js';
+import { AGENT_LEASE_MAX_HOLD_MS, MERGE_PREPARATION_MAX_HOLD_MS, claimMergeAdmission, withPendingMergeAdmission, yieldPendingMergePreparation } from './cosMergeAdmission.js';
 const origin = { host: 'github.com', fullName: 'example/repo' };
 const parent = (id, sourceWorkspace = '/repos/example') => ({ id, taskId: `task-${id}`, status: 'running',
   startedAt: '2026-01-01T00:00:00Z', metadata: { sourceWorkspace, claimPicksOwnBranch: true } });
@@ -186,20 +186,30 @@ describe('ready merge preparation ordering', () => {
   const prepare = agentId => claimMergeAdmission({ agentId, action: 'prepare' });
   const yieldTurn = agentId => claimMergeAdmission({ agentId, action: 'yield' });
 
-  it('orders guard preparation before admission across parents, pending receipts and legacy acquires', async () => {
+  it('orders preparation before admission across parents, the pending-merge sweep and legacy acquires', async () => {
     const a = await prepare('a');
     expect(a.prepared).toBe(true);
     expect(fixture.state.mergeAdmissions).toEqual({});
-    expect(await preparePendingMergeAdmission(origin, 'receipt:1')).toMatchObject({ prepared: false });
+    const merge = vi.fn(async () => 'merged');
+    // The sweep requests no turn of its own; it joins at acquire like a legacy caller.
+    expect(await withPendingMergeAdmission(origin, merge)).toMatchObject({ admitted: false, reason: 'preparation-waiting' });
+    expect(merge).not.toHaveBeenCalled();
     expect(await acquire('b')).toMatchObject({ admitted: false, reason: 'preparation-waiting' });
     expect((await prepare('a')).preparationToken).toBe(a.preparationToken);
     expect((await acquire('c')).admitted).toBe(true); // Another repository progresses.
     expect(await yieldTurn('a')).toEqual({ yielded: true });
-    expect((await acquire('b')).admitted).toBe(false); // Cannot overtake the receipt.
-    expect((await preparePendingMergeAdmission(origin, 'receipt:1')).prepared).toBe(true);
-    const merge = vi.fn(async () => 'merged');
-    expect(await withPendingMergeAdmission(origin, merge, 'receipt:1')).toMatchObject({ admitted: true });
+    expect(await withPendingMergeAdmission(origin, merge)).toMatchObject({ admitted: true });
     expect(merge).toHaveBeenCalledOnce();
+    expect((await acquire('b')).admitted).toBe(true);
+  });
+
+  it('releases a turn a pending receipt reserved before the merged-tree guard was retired', async () => {
+    const now = Date.now();
+    fixture.state.mergePreparations = { 'github.com/example/repo': [{ owner: 'pending:receipt:1', target: null,
+      token: 'legacy-turn', requestedAt: now, seenAt: now, grantedAt: now }] };
+    persist();
+    expect(await acquire('b')).toMatchObject({ admitted: false, reason: 'preparation-waiting' });
+    expect(await yieldPendingMergePreparation(origin, 'receipt:1')).toEqual({ yielded: true });
     expect((await acquire('b')).admitted).toBe(true);
   });
 

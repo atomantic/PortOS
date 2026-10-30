@@ -199,22 +199,18 @@ memo rules, required stages and worker caps remain the same. Downgraded full
 plans and `--guards-only` run the guard selection once; `--full` runs it before
 the full suites.
 
-The fixed `pregate:merged` package script advertises support for
-`node scripts/pregate.js --guards-only --merged-with <base-sha>` to the quality
-snapshot publisher. It validates the exact published head and fetched default
-SHA before merge admission, then rechecks both inputs inside admission and pins
-the GitHub merge to that head. New and reused snapshot PRs use detached checkouts.
-Failed guards, moved/unreadable inputs, or refused merges retain the PR, checkout,
-and `.cache/quality-snapshot-merge.json` evidence for a later publish cycle;
-they do not enter the generic pending-merge queue. Guard-capable GitLab MRs stay
-open until a supported pinned validation path is available. Retained checkouts
-are located through Git's durable worktree inventory and reused for the same head
-on retry. After a verified merge, every retained attempt for that PR is archived
-and verified through checkout preservation before retirement; changed ownership,
-locks, or archive failures retain the checkout and report the remaining paths.
-Repositories without
-this capability retain their existing snapshot merge behavior; arbitrary scripts
-are never executed as a substitute.
+`npm run pregate:merged -- --merged-with <base-ref>` (the same as
+`node scripts/pregate.js --guards-only --merged-with <base-ref>`) runs the
+structural guards on HEAD merged with a fetched base in an isolated temporary
+repository. It is an opt-in diagnostic for investigating an integration break,
+not a merge precondition: no PortOS merge path runs it. The pending-merge sweep
+and the quality-snapshot publisher merge when the forge reports the PR mergeable
+with its required checks green, pinned to the recorded or published head. CI
+already tests each pull request on its merge ref, skips every runner for a
+`.quality.json`-only change because no guard reads that file, and scheduled CI
+on `main` publishes `Full CI Gate` as the post-merge backstop. Snapshot
+checkouts a guarded merge retained before this change are retired once their PR
+is merged or closed.
 
 
 ### Pregate attestation
