@@ -370,6 +370,8 @@ export function buildFormData(fields) {
     // A list of records (promptAdditions) travels as one JSON field the route parses.
     else if (Array.isArray(v) && v.some((item) => item !== null && typeof item === 'object')) fd.append(k, JSON.stringify(v));
     else if (Array.isArray(v)) v.forEach((item) => fd.append(k, String(item)));
+    // A plain record (visualProfileOverride) travels as one JSON field the route parses.
+    else if (typeof v === 'object') fd.append(k, JSON.stringify(v));
     else fd.append(k, String(v));
   }
   return fd;
