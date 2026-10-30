@@ -33,7 +33,7 @@ vi.mock('./apps.js', () => ({ getAppById: async (id) => (injected.app?.id === id
 
 import { describeHeldCheckoutRecovery, setExternal, it, beforeEach, scratch, repo, external, noOwners, registered, lockText, retire, archives, addProofOrigin, reviewedCheckout } from './_heldCheckoutRecoveryFixture.js';
 const { retireInventoriedCheckout, prepareInventoriedCheckoutRetirement } = await import('./heldCheckoutRecovery.js');
-const { recordBranchReconcileOutcome, getBranchReconcileOutcome, recordHeldCheckoutRetirement } = await import('./taskSchedule.js');
+const { recordBranchReconcileOutcome, getBranchReconcileOutcome, recordHeldCheckoutRetirement } = await import('./branchReconcileOutcome.js');
 
 describeHeldCheckoutRecovery(() => {
   // Each contract keeps a fresh physical registration and the five-second

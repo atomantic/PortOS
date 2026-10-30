@@ -58,7 +58,7 @@ vi.mock('../lib/windowsAgentProcess.js', () => ({ readWindowsAgentSettlement: as
 } }));
 vi.mock('../lib/processCwdProbe.js', () => ({ hasProcessCwdInside: async () => f.busy }));
 vi.mock('./repoCleanupObservation.js', () => ({ readCheckoutPathPresence: async () => f.present, readLocalBranchPresence: async () => f.present }));
-vi.mock('./taskSchedule.js', () => ({ getBranchReconcileOutcome: async () => {
+vi.mock('./branchReconcileOutcome.js', () => ({ getBranchReconcileOutcome: async () => {
   if (f.retirementUnavailable) throw new Error('synthetic retirement transport failure');
   return { retired: f.receipts };
 } }));

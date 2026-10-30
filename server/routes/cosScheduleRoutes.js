@@ -217,8 +217,8 @@ function pickScheduleSettings(body, executionFields, taskType) {
 
 // GET /api/cos/schedule - Get full schedule status
 router.get('/schedule', asyncHandler(async (req, res) => {
-  const status = await taskSchedule.getScheduleStatus();
-  res.json(status);
+  const { annotateMissingCheckouts } = await import('../services/branchReconcileOutcome.js');
+  res.json(await annotateMissingCheckouts(await taskSchedule.getScheduleStatus()));
 }));
 
 // GET /api/cos/upcoming - Get upcoming tasks preview

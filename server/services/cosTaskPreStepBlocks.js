@@ -430,6 +430,7 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
   if (taskType !== 'branch-reconcile') return { skip: false, block: '' };
   const { reconcile, filterActionable, limitBranchesForAgent, formatInFlightForPrompt, actionableSignature, describeIdleReconcilePark, buildActiveOwnerIds } = await import('./branchReconcile.js');
   const { formatSupersededForPrompt } = await import('./supersededLedger.js');
+  const { recordBranchReconcileOutcome, getBranchReconcileOutcome } = await import('./branchReconcileOutcome.js');
   const { getActiveAgentIds } = await import('./agentState.js');
   const { readClaimOwnershipAgents } = await import('./cosClaimOwnership.js');
   // A saved receipt already owns its PR. Wake that exact local successor before
@@ -486,14 +487,14 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
   // A failed scan is treated as transient (git/gh blip) — skip WITHOUT parking
   // so the next tick retries instead of waiting out a full recheck cadence.
   if (!result) {
-    await taskSchedule.recordBranchReconcileOutcome(app.id, { status: 'incomplete', reason: 'scan-unavailable', nextAction: 'Restore repository access and run branch reconciliation again.' });
+    await recordBranchReconcileOutcome(app.id, { status: 'incomplete', reason: 'scan-unavailable', nextAction: 'Restore repository access and run branch reconciliation again.' });
     return { skip: true };
   }
   // Same treatment for a cycle the reconciler skipped because `gh` was unreadable
   // (#3358): its empty in-flight set is "we could not ask", not "nothing to do",
   // so parking on it would sit out a full recheck cadence over a network blip.
   if (result.forgeUnavailable) {
-    await taskSchedule.recordBranchReconcileOutcome(app.id, { status: 'incomplete', reason: 'forge-unavailable', nextAction: 'Restore forge access and run branch reconciliation again.' });
+    await recordBranchReconcileOutcome(app.id, { status: 'incomplete', reason: 'forge-unavailable', nextAction: 'Restore forge access and run branch reconciliation again.' });
     emitLog('info', `🔀 branch-reconcile skipped for ${app.name}: forge unreachable (gh ${result.forgeStatus || 'error'})`, { appId: app.id, analysisType: taskType });
     return { skip: true };
   }
@@ -503,7 +504,7 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
   // rather than parking. Merged branches were still cleaned (git truth), so log
   // that before bailing.
   if (result.prStateUnavailable) {
-    await taskSchedule.recordBranchReconcileOutcome(app.id, { status: 'incomplete', reason: 'pr-state-unavailable', nextAction: 'Restore pull request access and run branch reconciliation again.' });
+    await recordBranchReconcileOutcome(app.id, { status: 'incomplete', reason: 'pr-state-unavailable', nextAction: 'Restore pull request access and run branch reconciliation again.' });
     emitLog('info', `🔀 branch-reconcile deferred for ${app.name}: PR state unreadable this cycle (cleaned ${result.cleaned.length} merged branch(es))`, { appId: app.id, analysisType: taskType });
     return { skip: true };
   }
@@ -531,7 +532,7 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
   const detachedSuffix = countSuffix(result.detachedWorktrees, 'detached worktree(s) held back', (d) => d.reason);
   // Publish the exact release rows before preparing the live preview. Proof
   // objects may be fetched, but only a reviewed digest authorizes retirement.
-  const observedOutcome = await taskSchedule.getBranchReconcileOutcome(app.id);
+  const observedOutcome = await getBranchReconcileOutcome(app.id);
   const { reconcileLegacyRetirementRecords } = await import('./legacyRetirementReconciliation.js');
   const previousOutcome = await reconcileLegacyRetirementRecords(app.id, observedOutcome).catch(() => observedOutcome);
   const unresolved = unresolvedRetirements(previousOutcome);
@@ -545,12 +546,12 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
       wip: result.wip, worktreeInventory: result.worktreeInventory,
       detachedWorktrees: result.detachedWorktrees, superseded: result.superseded,
     });
-    const prepOutcome = await taskSchedule.recordBranchReconcileOutcome(app.id, {
+    const prepOutcome = await recordBranchReconcileOutcome(app.id, {
       status: 'running', reason: 'preparing-retirement-reviews', remaining: [...inventory.remaining, ...absentObligations],
       nextAction: 'Review completed local work before verified archival retirement.',
     });
     retirementReviews = await prepareReconcileRetirements(app, result);
-    const latestOutcome = (await taskSchedule.getBranchReconcileOutcome(app.id)) || prepOutcome || previousOutcome;
+    const latestOutcome = (await getBranchReconcileOutcome(app.id)) || prepOutcome || previousOutcome;
     latestAbsentObligations = unresolvedRetirements(latestOutcome)
       .filter(release => !result.worktreeInventory?.some(tree => sameRetirementCheckout(tree, release)));
   }
@@ -605,7 +606,7 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
   });
   // This is a scan outcome, not the coordinator's success flag or a claim that
   // the repository contains only its default branch. Keep known holds visible.
-  const dispatchedOutcome = await taskSchedule.recordBranchReconcileOutcome(app.id, {
+  const dispatchedOutcome = await recordBranchReconcileOutcome(app.id, {
     status: 'running', reason: 'batch-pending',
     // Shared-origin branches without a local ref/checkout may belong to another
     // install. Keep their report visible without making local completion wait

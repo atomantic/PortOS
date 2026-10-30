@@ -149,12 +149,6 @@ import {
   isPerpetualParkActive,
   getPerpetualDrainState,
   recordPerpetualDispatch,
-  recordBranchReconcileOutcome,
-  recordLegacyRetirementResolutions,
-  getBranchReconcileOutcome,
-  recordInitializedRetirementRecovery,
-  recordHeldCheckoutRetirement,
-  recordWorkspaceCheckoutRetirement,
   applyOnDemandRunResets,
   queuePerpetualRefill,
   acknowledgeSwarmCleanupRefill,
@@ -183,6 +177,15 @@ import {
   REFERENCE_WATCH_AUDITED_VERSION,
   boundParkedUntil
 } from './taskSchedule.js'
+import {
+  annotateMissingCheckouts,
+  getBranchReconcileOutcome,
+  recordBranchReconcileOutcome,
+  recordHeldCheckoutRetirement,
+  recordInitializedRetirementRecovery,
+  recordLegacyRetirementResolutions,
+  recordWorkspaceCheckoutRetirement
+} from './branchReconcileOutcome.js'
 import { cosEvents, emitLog } from './cosEvents.js'
 import { recordUserAction } from './userActions.js'
 
@@ -2620,13 +2623,13 @@ describe('taskSchedule', () => {
       } });
       getAppById.mockResolvedValue({ id: 'app-1', repoPath: '/example' });
       findGoneInventoryRows.mockResolvedValueOnce([row]);
-      const status = await getScheduleStatus();
+      const status = await annotateMissingCheckouts(await getScheduleStatus());
       expect(status.tasks['branch-reconcile'].reconcileOutcomes['app-1']).toMatchObject({
         status: 'incomplete', remaining: [{ ...row, checkoutMissing: true }], retirementObligations: [row],
       });
       expect(await getBranchReconcileOutcome('app-1')).toEqual(outcome);
       findGoneInventoryRows.mockRejectedValueOnce(new Error('inventory unavailable'));
-      const unknown = await getScheduleStatus();
+      const unknown = await annotateMissingCheckouts(await getScheduleStatus());
       expect(unknown.tasks['branch-reconcile'].reconcileOutcomes['app-1'].remaining).toEqual([row]);
     });
 
@@ -3416,7 +3419,7 @@ describe('taskSchedule', () => {
         ];
         await recordBranchReconcileOutcome('app-1', { status: 'running', remaining: rows });
         findGoneInventoryRows.mockResolvedValueOnce(rows);
-        const outcome = (await getScheduleStatus()).tasks['branch-reconcile'].reconcileOutcomes['app-1'];
+        const outcome = (await annotateMissingCheckouts(await getScheduleStatus())).tasks['branch-reconcile'].reconcileOutcomes['app-1'];
         expect(outcome).toMatchObject({ status: 'incomplete', reason: 'retirement-provenance-unverified',
           retirementObligations: rows.map(row => ({ ...row, reason: 'retirement-provenance-unverified', createdAt: expect.any(String) })),
         });

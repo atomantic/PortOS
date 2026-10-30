@@ -64,7 +64,7 @@ const drain = _createInitializedRecoverySweep({
   discover: async () => (await import('./initializedCheckoutRecovery.js')).discoverInitializedCheckoutRecoveries(),
   recover: async (...args) => (await import('./initializedCheckoutRecovery.js')).recoverInitializedCheckoutAutomatically(...args),
   report: async row => {
-    const { recordInitializedRetirementRecovery } = await import('./taskSchedule.js');
+    const { recordInitializedRetirementRecovery } = await import('./branchReconcileOutcome.js');
     const { appId, ...observation } = row;
     await recordInitializedRetirementRecovery(appId || null, observation);
     // No paths, native diagnostics, patches, or raw metadata in daemon logs.

@@ -45,7 +45,7 @@ vi.mock('./agentCompletionData.js', () => ({ readCompletionData: vi.fn() }));
 vi.mock('./agentCompletionCleanup.js', () => ({ replayAgentCompletionCleanup: vi.fn(async () => {}) }));
 vi.mock('./cosAgentLifecycle.js', async original => ({ recordHistoricalCleanupReconciliation: vi.fn(async () => true), recordInheritedCheckoutRetirement: vi.fn(async () => true), recordSeededCheckoutRetirement: vi.fn(async () => true), isSettleableCompletionReceipt: (await original()).isSettleableCompletionReceipt, recordSuccessorCheckoutRetirement: vi.fn(async () => true), settleAbsentTaskCompletion: vi.fn(async () => true), retryCompletionCheckoutCapture: vi.fn(async () => false), reserveRepoCleanupRecovery: vi.fn(async () => ({ admitted: true, attempt: 1 })), recordRepoCleanupRecovery: vi.fn(async () => true), recordCleanupOutcome: vi.fn(async () => true), recordSwarmCleanupDelivery: vi.fn(async () => true), updateAgent: vi.fn().mockResolvedValue({}), recordRepoStateRecovery: vi.fn().mockResolvedValue(true), recordRepoStateVerification: vi.fn().mockResolvedValue(true), getAgentRecord: vi.fn(async () => null), recordCompletionCleanup: vi.fn(async () => true) }));
 vi.mock('./cosClaimOwnership.js', () => ({ readClaimOwnershipAgents: vi.fn().mockResolvedValue([]), withClaimOwnershipLock: fn => fn() }));
-vi.mock('./taskSchedule.js', () => ({ recordBranchReconcileOutcome: vi.fn().mockResolvedValue({}) }));
+vi.mock('./branchReconcileOutcome.js', () => ({ recordBranchReconcileOutcome: vi.fn().mockResolvedValue({}) }));
 vi.mock('./taskScheduleStore.js', () => ({ loadSchedule: vi.fn(async () => ({})) }));
 vi.mock('node:fs/promises', async original => { const actual = await original(); return { ...actual, lstat: vi.fn(actual.lstat) }; });
 vi.mock('./heldCheckoutRecovery.js', () => ({
@@ -107,7 +107,7 @@ import { assertAutomaticRetirementAllowed } from './branchReconcileRetirement.js
 import { releaseRetryHold } from './agentWorktreeCleanup.js';
 import { verifyCleanupClaimDisposition } from './claimDisposition.js';
 import { getTaskById, updateTask } from './cosTaskStore.js';
-import { recordBranchReconcileOutcome } from './taskSchedule.js';
+import { recordBranchReconcileOutcome } from './branchReconcileOutcome.js';
 import { loadSchedule } from './taskScheduleStore.js';
 import { lstat } from 'node:fs/promises';
 import { findMissingCheckoutPreservation, prepareInventoriedCheckoutRetirement, retireInventoriedCheckout } from './heldCheckoutRecovery.js';

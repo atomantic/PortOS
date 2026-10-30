@@ -1497,7 +1497,7 @@ async function refillPerpetualForCompletedAgent(agent) {
   const branchSweep = agentScheduledType(agent) === 'branch-reconcile';
   const interrupted = async (reason) => {
     if (!branchSweep) return;
-    const { recordBranchReconcileOutcome } = await import('./taskSchedule.js');
+    const { recordBranchReconcileOutcome } = await import('./branchReconcileOutcome.js');
     await recordBranchReconcileOutcome(agent?.metadata?.taskApp || null, {
       status: 'incomplete', reason, nextAction: 'Resolve the interruption, then run branch reconciliation again.',
     });

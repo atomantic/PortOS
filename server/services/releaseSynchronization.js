@@ -130,7 +130,7 @@ export function resetReleaseSynchronization(identity, reason, actor, checkouts =
         if (!originalCommon || !activeCommon || samePath(originalCommon, activeCommon)) refuse('A release or synchronization is still active');
       }
       if (checkouts.length) {
-        const { getBranchReconcileOutcome } = await import('./taskSchedule.js');
+        const { getBranchReconcileOutcome } = await import('./branchReconcileOutcome.js');
         const inventory = await getBranchReconcileOutcome(entry.task.metadata.app);
         if (!checkouts.every(checkout => inventory?.remaining?.some(row => ['path', 'branch', 'head', 'checkoutIdentity']
           .every(key => row[key] === checkout[key])))) refuse('Selected checkout is not in the current inventory');

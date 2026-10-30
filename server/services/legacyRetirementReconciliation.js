@@ -178,7 +178,7 @@ export async function reconcileLegacyRetirementRecords(appId, outcome) {
   if (!reconciliationCandidates(outcome).length) return outcome;
   const [{ getAppById }, { readClaimOwnershipAgents, withClaimOwnershipLock }, { listWorktrees },
     store] = await Promise.all([
-    import('./apps.js'), import('./cosClaimOwnership.js'), import('./worktreeManager.js'), import('./taskSchedule.js'),
+    import('./apps.js'), import('./cosClaimOwnership.js'), import('./worktreeManager.js'), import('./branchReconcileOutcome.js'),
   ]);
   const app = await getAppById(appId);
   if (!app?.repoPath) return outcome;

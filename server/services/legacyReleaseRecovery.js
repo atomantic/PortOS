@@ -40,7 +40,7 @@ export async function inspectLegacyPublisher(entry, agents, { unlocked = false, 
   if (!capture) hold('legacy-publisher-generation-unverified');
   const [{ getAppById }, { getBranchReconcileOutcome }, { readAgentsStateForSafetyCheck }, { inspectLegacyReleaseArchive },
     { readRetirementForgeEvidence }, { readCheckoutPathPresence, readLocalBranchPresence }, { listWorktrees }, { listRemoteHeads }, { execGit }, { readCompletedCheckoutIdentity }] = await Promise.all([
-    import('./apps.js'), import('./taskSchedule.js'), import('./cosState.js'), import('./heldCheckoutRecovery.js'),
+    import('./apps.js'), import('./branchReconcileOutcome.js'), import('./cosState.js'), import('./heldCheckoutRecovery.js'),
     import('./heldCheckoutReview.js'), import('./repoCleanupObservation.js'), import('./worktreeManager.js'), import('./branchReconcile.js'), import('../lib/execGit.js'), import('./completedCheckoutEvidence.js'),
   ]);
   const app = await getAppById(entry.task.metadata.app);

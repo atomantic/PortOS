@@ -588,7 +588,7 @@ export async function recoverMissingCheckoutPreservations({ appId, repoPath, out
       observations.push(row);
     }
     if (!observations.length) return outcome;
-    const { recordRecoveredCheckoutPreservations } = await import('./taskSchedule.js');
+    const { recordRecoveredCheckoutPreservations } = await import('./branchReconcileOutcome.js');
     return await withClaimOwnershipLock(() => recordRecoveredCheckoutPreservations(appId, expected, observations, async () => {
       const { getAppById } = await import('./apps.js');
       if ((await getAppById(appId))?.repoPath !== repoPath) return false;
@@ -1025,7 +1025,7 @@ async function previewCurrentCheckout(input, opts) {
 
 /** Host-control-gated preview of one inventory row; may fetch missing proof objects. */
 export async function prepareInventoriedCheckoutRetirement({ appId, release, prUrl, kind }, opts = {}) {
-  const [{ getAppById }, { getBranchReconcileOutcome }] = await Promise.all([import('./apps.js'), import('./taskSchedule.js')]);
+  const [{ getAppById }, { getBranchReconcileOutcome }] = await Promise.all([import('./apps.js'), import('./branchReconcileOutcome.js')]);
   const app = await getAppById(appId);
   if (!app?.repoPath) return { ok: false, reason: 'app-not-found' };
   const outcome = await getBranchReconcileOutcome(appId);
@@ -1461,7 +1461,7 @@ async function recoveryObjectHeads(administration, { repoPath, tree, missingRoot
  * receipt before the caller can remove anything under the retirement fence.
  */
 export async function preserveSupersededCheckout({ appId, repoPath, tree, defaultBranch, cosDir }) {
-  const [{ getAppById }, schedule] = await Promise.all([import('./apps.js'), import('./taskSchedule.js')]);
+  const [{ getAppById }, outcomes] = await Promise.all([import('./apps.js'), import('./branchReconcileOutcome.js')]);
   const app = appId && await getAppById(appId);
   if (!app?.repoPath || resolve(app.repoPath) !== resolve(repoPath)) throw new Error('retirement-receipt-scope-unavailable');
   if (!tree?.path || !tree.branch || tree.locked) throw new Error('retirement-checkout-unavailable');
@@ -1472,13 +1472,13 @@ export async function preserveSupersededCheckout({ appId, repoPath, tree, defaul
   if (!identity) throw new Error('checkout-incarnation-unavailable');
   const checkoutIdentity = await readRetirementCheckoutIdentity(tree.path);
   if (!checkoutIdentity) throw new Error('checkout-incarnation-unavailable');
-  const previous = await schedule.getBranchReconcileOutcome(appId);
+  const previous = await outcomes.getBranchReconcileOutcome(appId);
   if (unresolvedRetirements(previous).some(row => sameRelease(row, release)
     && JSON.stringify(row.checkoutIncarnation) !== JSON.stringify(identity.incarnation))) {
     throw new Error('retirement-checkout-generation-unverified');
   }
   const identityCurrent = async () => JSON.stringify(await readCompletedCheckoutIdentity(target)) === JSON.stringify(identity);
-  const pending = await schedule.recordBranchReconcileOutcome(appId, {
+  const pending = await outcomes.recordBranchReconcileOutcome(appId, {
     status: 'incomplete', reason: 'retirement-receipt-unverified',
     retirementObligations: [{ ...release, checkoutIdentity, checkoutIncarnation: identity.incarnation, reason: 'retirement-review-pending' }],
     nextAction: 'Require complete preservation and an exact retirement receipt for the checkout.',
@@ -1488,14 +1488,14 @@ export async function preserveSupersededCheckout({ appId, repoPath, tree, defaul
   if (JSON.stringify(obligation.checkoutIncarnation) !== JSON.stringify(identity.incarnation)) throw new Error('retirement-checkout-generation-unverified');
   // Invalidate any earlier attempt's prepared receipt without dropping its
   // obligation. A crash must never let an older snapshot stand in for this one.
-  await schedule.recordHeldCheckoutPreservation(appId, { ...release, createdAt: obligation.createdAt, archiveDir: null, incarnation: identity.incarnation });
+  await outcomes.recordHeldCheckoutPreservation(appId, { ...release, createdAt: obligation.createdAt, archiveDir: null, incarnation: identity.incarnation });
   const archive = await preserveMergedCheckout(repoPath, tree, defaultBranch, { cosDir });
   if (!await identityCurrent()) throw new Error('checkout-incarnation-changed');
-  await schedule.recordHeldCheckoutPreservation(appId, { ...release, createdAt: obligation.createdAt, archiveDir: archive.archiveDir, incarnation: identity.incarnation });
+  await outcomes.recordHeldCheckoutPreservation(appId, { ...release, createdAt: obligation.createdAt, archiveDir: archive.archiveDir, incarnation: identity.incarnation });
   const receiptCurrent = async () => {
     const currentApp = await getAppById(appId);
     if (!currentApp?.repoPath || resolve(currentApp.repoPath) !== resolve(repoPath)) return false;
-    const current = await schedule.getBranchReconcileOutcome(appId);
+    const current = await outcomes.getBranchReconcileOutcome(appId);
     return current?.retirementObligations?.some(row => sameRelease(row, release)
       && row.createdAt === obligation.createdAt && row.preservationReceipt?.status === 'preserved'
       && row.preservationReceipt.archiveDir === archive.archiveDir
@@ -1511,7 +1511,7 @@ export async function preserveSupersededCheckout({ appId, repoPath, tree, defaul
       if (!await receiptCurrent()) throw new Error('retirement-preservation-receipt-changed');
       const ref = await execGit(['rev-parse', '--verify', '--quiet', `refs/heads/${release.branch}`], repoPath, { ignoreExitCode: true });
       if (ref.exitCode !== 1 || !await historicalCheckoutAbsent(release, await listWorktrees(repoPath))) throw new Error('retirement-checkout-recreated');
-      const outcome = await schedule.recordHeldCheckoutRetirement(appId, { ...release, checkoutIdentity, branchDeleted: true, archiveDir: archive.archiveDir });
+      const outcome = await outcomes.recordHeldCheckoutRetirement(appId, { ...release, checkoutIdentity, branchDeleted: true, archiveDir: archive.archiveDir });
       if (!outcome?.retired?.some(row => sameRelease(row, release) && row.branchDeleted === true
         && row.archiveDir === archive.archiveDir && Date.parse(row.retiredAt) >= Date.parse(obligation.createdAt))) {
         throw new Error('retirement-receipt-unverified');
@@ -2002,7 +2002,7 @@ export async function retirePendingMergeCheckout({ repoPath, release, prUrl, exp
     review: { prUrl, digest: prepared.review.digest, acceptSuperseded: false },
   }, receiptOptions);
   if (result.ok) {
-    const { recordWorkspaceCheckoutRetirement } = await import('./taskSchedule.js');
+    const { recordWorkspaceCheckoutRetirement } = await import('./branchReconcileOutcome.js');
     await recordWorkspaceCheckoutRetirement(repoPath, {
       path: release.path, branch: release.branch ?? null, head: release.head,
       branchDeleted: result.branchDeleted, ...(result.archiveDir && { archiveDir: result.archiveDir }), checkoutIdentity: result.checkoutIdentity,
@@ -2017,29 +2017,29 @@ export async function retirePendingMergeCheckout({ repoPath, release, prUrl, exp
  * last persisted inventory exactly, so it binds to evidence the operator saw.
  */
 export async function retireInventoriedCheckout({ appId, release, review }, opts) {
-  const [{ getAppById }, taskSchedule] = await Promise.all([import('./apps.js'), import('./taskSchedule.js')]);
+  const [{ getAppById }, outcomes] = await Promise.all([import('./apps.js'), import('./branchReconcileOutcome.js')]);
   const app = await getAppById(appId);
   if (!app?.repoPath) return { ok: false, reason: 'app-not-found' };
-  const outcome = await taskSchedule.getBranchReconcileOutcome(appId);
+  const outcome = await outcomes.getBranchReconcileOutcome(appId);
   const retired = bindRemovedCheckoutRelease(outcome, release);
   if (retired) return finalizeRemovedCheckoutBranch({ appId, release: retired, review }, opts);
   release = bindInventoriedRelease(outcome, release);
   if (!release) return { ok: false, reason: 'release-not-in-inventory' };
-  const inventoryCurrent = async () => (await taskSchedule.getBranchReconcileOutcome(appId))?.remaining?.some(entry => sameRelease(entry, release)) === true;
+  const inventoryCurrent = async () => (await outcomes.getBranchReconcileOutcome(appId))?.remaining?.some(entry => sameRelease(entry, release)) === true;
   const result = await retireHeldCheckout({ repoPath: app.repoPath, release, review }, { ...opts, inventoryCurrent, forgeAccount: app.forgeAccount ?? null,
-    preserveSupersession: async prepared => taskSchedule.recordSupersededCheckoutPreservation(appId, release, prepared),
+    preserveSupersession: async prepared => outcomes.recordSupersededCheckoutPreservation(appId, release, prepared),
   });
   // A missing original cannot be archived retroactively. Retain its exact
   // identity for provenance recovery rather than equating absence with success.
   if (!result.ok && result.reason === 'checkout-not-found') {
     const gone = await findGoneInventoryRows(app.repoPath, [release]).catch(() => []);
     if (gone.length) {
-      await taskSchedule.recordMissingInventoryRows(appId, gone);
+      await outcomes.recordMissingInventoryRows(appId, gone);
       return { ok: false, reason: 'retirement-provenance-unverified' };
     }
   }
   if (result.ok) {
-    await taskSchedule.recordHeldCheckoutRetirement(appId, {
+    await outcomes.recordHeldCheckoutRetirement(appId, {
       path: release.path, branch: release.branch ?? null, head: release.head, branchDeleted: result.branchDeleted,
       ...(result.validationEvidence && { validationEvidence: result.validationEvidence }),
       ...(!release.branch && { checkoutOnly: true }),
@@ -2077,7 +2077,7 @@ function bindRemovedCheckoutRelease(outcome, release) {
 async function reviewRemovedCheckoutBranch({ appId, release, prUrl, kind }, opts = {}) {
   if (kind) return { ok: false, reason: 'retirement-exact-delivery-required' };
   const [{ getAppById }, { getBranchReconcileOutcome }, { buildCheckoutRetirementReview, readRetirementForgeEvidence }] = await Promise.all([
-    import('./apps.js'), import('./taskSchedule.js'), import('./heldCheckoutReview.js'),
+    import('./apps.js'), import('./branchReconcileOutcome.js'), import('./heldCheckoutReview.js'),
   ]);
   const app = await getAppById(appId);
   if (!app?.repoPath) return { ok: false, reason: 'app-not-found' };
@@ -2151,7 +2151,7 @@ async function finalizeRemovedCheckoutBranch({ appId, release, review }, opts = 
       return fresh;
     };
     const record = async kind => {
-      const { recordRetiredCheckoutBranchFinalization } = await import('./taskSchedule.js');
+      const { recordRetiredCheckoutBranchFinalization } = await import('./branchReconcileOutcome.js');
       await recordRetiredCheckoutBranchFinalization(appId, release, kind);
     };
     let branchDeleted = false;

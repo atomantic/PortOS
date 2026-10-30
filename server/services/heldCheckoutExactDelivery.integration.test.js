@@ -36,7 +36,8 @@ vi.mock('./github.js', () => ({ execGh: async args => {
   throw new Error('Historical capped scope must not be enumerated');
 } }));
 vi.mock('./branchCompletionPolicy.js', async original => ({ ...await original(), readBranchCompletionPolicies: async () => fixture.policies }));
-vi.mock('./taskScheduleStore.js', () => ({
+vi.mock('./taskScheduleStore.js', async importOriginal => ({
+  ...(await importOriginal()),
   loadSchedule: async () => JSON.parse(await readFile(fixture.schedulePath, 'utf8')),
   updateSchedule: async mutate => {
     const schedule = JSON.parse(await readFile(fixture.schedulePath, 'utf8'));
@@ -49,7 +50,7 @@ const { listWorktrees } = await import('./worktreeManager.js');
 const { readCompletedCheckoutIdentity } = await import('./completedCheckoutEvidence.js');
 const { prepareInventoriedCheckoutRetirement, retireInventoriedCheckout, inspectCheckoutRetirementOwnership } = await import('./heldCheckoutRecovery.js');
 const { _createInitializedCheckoutRecovery } = await import('./initializedCheckoutRecovery.js');
-const { recordBranchReconcileOutcome, getBranchReconcileOutcome } = await import('./taskSchedule.js');
+const { recordBranchReconcileOutcome, getBranchReconcileOutcome } = await import('./branchReconcileOutcome.js');
 const owned = ownFixtureWork();
 const it = owned.tests(vitestIt);
 let scratch;

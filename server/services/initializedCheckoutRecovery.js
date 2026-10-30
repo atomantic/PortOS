@@ -158,7 +158,7 @@ async function readJournal(directory, { bounded = false, budget } = {}) {
 }
 
 async function defaultContext(appId, release) {
-  const [{ getAppById }, { getBranchReconcileOutcome }] = await Promise.all([import('./apps.js'), import('./taskSchedule.js')]);
+  const [{ getAppById }, { getBranchReconcileOutcome }] = await Promise.all([import('./apps.js'), import('./branchReconcileOutcome.js')]);
   const app = await getAppById(appId);
   if (!app?.repoPath) fail('app-not-found');
   if (release) {
@@ -291,7 +291,7 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
         const deleteRef = deps.deleteRef || (await import('./worktreeManager.js')).deleteCompletedLocalBranch;
         branchDeleted = await deleteRef(ctx.repoPath, input.release.branch, input.release.head, {}) === true;
       }
-      const record = deps.recordRetirement || (await import('./taskSchedule.js')).recordHeldCheckoutRetirement;
+      const record = deps.recordRetirement || (await import('./branchReconcileOutcome.js')).recordHeldCheckoutRetirement;
       let outcome = null;
       try {
         outcome = await record(input.appId, {
@@ -395,7 +395,7 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
         const branchDeleted = await deleteRef(ctx.repoPath, input.release.branch, input.release.head, {}) === true;
         if (!branchDeleted) fail('retirement-branch-delete-refused-or-uncertain');
         state = await appendStep(directory, state, 'locked-branch-retired', { branchDeleted });
-        const record = deps.recordRetirement || (await import('./taskSchedule.js')).recordHeldCheckoutRetirement;
+        const record = deps.recordRetirement || (await import('./branchReconcileOutcome.js')).recordHeldCheckoutRetirement;
         const outcome = await record(input.appId, { path: input.release.path, branch: input.release.branch, head: input.release.head,
           branchDeleted, checkoutIdentity, validationEvidence });
         if (!outcome?.retired?.some(row => row.path === input.release.path && row.branch === input.release.branch
@@ -512,7 +512,7 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
         await verify();
         await beforeMutation();
         if (state.phase === 'branch-retired') {
-          const record = deps.recordRetirement || (await import('./taskSchedule.js')).recordHeldCheckoutRetirement;
+          const record = deps.recordRetirement || (await import('./branchReconcileOutcome.js')).recordHeldCheckoutRetirement;
           await record(state.appId, { path: state.release.path, branch: state.release.branch,
             head: state.release.head, branchDeleted: true, archiveDir: directory,
             ...(state.review.checkoutIdentity && { checkoutIdentity: state.review.checkoutIdentity }) });
@@ -582,7 +582,7 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
         if (!receiverAuthorized) fail('retirement-branch-receiver-intent-missing');
         state = await appendStep(directory, state, 'branch-retired', { branchDeleted: true, branchRetainedReason: null });
         await beforeMutation();
-        const record = deps.recordRetirement || (await import('./taskSchedule.js')).recordHeldCheckoutRetirement;
+        const record = deps.recordRetirement || (await import('./branchReconcileOutcome.js')).recordHeldCheckoutRetirement;
         await record(state.appId, { path: state.release.path, branch: state.release.branch,
           head: state.release.head, branchDeleted: true, archiveDir: directory,
           ...(state.review.checkoutIdentity && { checkoutIdentity: state.review.checkoutIdentity }) });
@@ -1205,13 +1205,13 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
           && row.checkoutIdentity === state.review.checkoutIdentity && row.validationEvidence?.source === evidence.source
           && row.validationEvidence?.prUrl === evidence.prUrl && row.validationEvidence?.prHead === evidence.prHead
           && row.validationEvidence?.mergeCommit === evidence.mergeCommit);
-        const getOutcome = deps.getOutcome || (await import('./taskSchedule.js')).getBranchReconcileOutcome;
+        const getOutcome = deps.getOutcome || (await import('./branchReconcileOutcome.js')).getBranchReconcileOutcome;
         let outcome = await getOutcome(state.appId);
         if (state.phase === 'locked-branch-retired') {
           if (!matches(outcome)) {
             await beforeMutation();
             executor.assertHeld();
-            const record = deps.recordRetirement || (await import('./taskSchedule.js')).recordHeldCheckoutRetirement;
+            const record = deps.recordRetirement || (await import('./branchReconcileOutcome.js')).recordHeldCheckoutRetirement;
             outcome = await record(state.appId, { path: state.release.path, branch: state.release.branch, head: state.release.head,
               branchDeleted: true, checkoutIdentity: state.review.checkoutIdentity, validationEvidence: evidence });
           }

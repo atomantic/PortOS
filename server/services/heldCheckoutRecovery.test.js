@@ -39,7 +39,8 @@ vi.mock('./apps.js', () => ({ getAppById: async (id) => (injected.app?.id === id
 import { describeHeldCheckoutRecovery, setRepo, setReceiptWork, it, beforeEach, scratch, repo, external, cosDir, receiptWork, noOwners, heldCheckout, registered, lockText, retire, archives, makeClean, historicalArchive, supersededCheckout, reapSuperseded, reviewedCheckout } from './_heldCheckoutRecoveryFixture.js';
 const { retireInventoriedCheckout, prepareInventoriedCheckoutRetirement, heldCheckoutArchiveRoot, preserveMergedCheckout, recoverMissingCheckoutPreservations, findMissingCheckoutPreservation, inspectLegacyReleaseArchive } = await import('./heldCheckoutRecovery.js');
 const { sha256File } = await import('../lib/fileUtils.js');
-const { recordBranchReconcileOutcome, getBranchReconcileOutcome, recordHeldCheckoutRetirement, parkPerpetual } = await import('./taskSchedule.js');
+const { recordBranchReconcileOutcome, getBranchReconcileOutcome, recordHeldCheckoutRetirement } = await import('./branchReconcileOutcome.js');
+const { parkPerpetual } = await import('./taskSchedule.js');
 const { withClaimOwnershipLock, checkReconcileOwnership } = await import('./cosClaimOwnership.js');
 
 describeHeldCheckoutRecovery(() => {
@@ -1005,7 +1006,7 @@ describeHeldCheckoutRecovery(() => {
       expect(outcome.retired || []).toEqual([]);
     };
     review.acceptSuperseded = true;
-    const { recordSupersededCheckoutPreservation } = await import('./taskSchedule.js');
+    const { recordSupersededCheckoutPreservation } = await import('./branchReconcileOutcome.js');
     // Abandoned preparations have no receipt and no current inventory holder;
     // they must not grow the schedule on every future preparation.
     injected.schedule.executions['task:branch-reconcile'].perApp['app-1'].branchReconcileOutcome.supersededSourceEvidence = {

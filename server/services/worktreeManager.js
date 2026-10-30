@@ -1866,7 +1866,7 @@ async function removeWorktreeNow(agentId, sourceWorkspace, branchName, options, 
       // branch helper checks them again before its leased local deletion.
       const branchCleaned = await detachedCheckout() || await cleanupBranch(preservation.head);
       if (branchCleaned) console.log(`🌳 Removed worktree for ${agentId}${merged ? ' (merged)' : ''}`);
-      const { recordWorkspaceCheckoutRetirement } = await import('./taskSchedule.js');
+      const { recordWorkspaceCheckoutRetirement } = await import('./branchReconcileOutcome.js');
       // A completed cleanup attempt may retain a moved or newly held branch.
       const ref = preservation.branch && await execGit(['show-ref', '--verify', '--quiet', `refs/heads/${preservation.branch}`],
         sourceWorkspace, { ignoreExitCode: true }).catch(() => null);
@@ -2329,7 +2329,7 @@ export async function reapMergedWorktrees(sourceWorkspace, {
         const branchDeleted = holders && !holders.some(holder => holder.branch === wt.branch)
           && await deleteCompletedLocalBranch(sourceWorkspace, branchName, wt.head);
         if (branchDeleted && appId) {
-          const { recordHeldCheckoutRetirement } = await import('./taskSchedule.js');
+          const { recordHeldCheckoutRetirement } = await import('./branchReconcileOutcome.js');
           const recorded = await recordHeldCheckoutRetirement(appId, {
             path: wt.path, branch: branchName, head: wt.head, branchDeleted: true,
             ...(checkoutIdentity && { checkoutIdentity }),
@@ -2456,7 +2456,7 @@ async function cleanupExternalRepoWorktrees(readActiveIds, alreadyHandled, readO
           console.warn(`⚠️ External branch ${branchName} retained: head changed, new holder, or deletion refused`);
         }
         if (ok) {
-          const { recordWorkspaceCheckoutRetirement } = await import('./taskSchedule.js');
+          const { recordWorkspaceCheckoutRetirement } = await import('./branchReconcileOutcome.js');
           await recordWorkspaceCheckoutRetirement(parentRepo, {
             path: wt.path, branch: branchName, head: wt.head, branchDeleted: Boolean(deleted),
             ...(preservation?.checkoutIdentity && { checkoutIdentity: preservation.checkoutIdentity }),

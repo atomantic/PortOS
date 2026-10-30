@@ -9,7 +9,7 @@ vi.mock('node:fs/promises', async original => {
 });
 vi.mock('./completedCheckoutEvidence.js', async original => ({ ...await original(), readCompletedCheckoutIdentity: async () => f.current }));
 vi.mock('./apps.js', () => ({ getAppById: async () => ({ id: 'app', repoPath: '/example/repo' }) }));
-vi.mock('./taskSchedule.js', () => ({ getBranchReconcileOutcome: async () => f.outcome }));
+vi.mock('./branchReconcileOutcome.js', () => ({ getBranchReconcileOutcome: async () => f.outcome }));
 vi.mock('./cosState.js', () => ({ readAgentsStateForSafetyCheck: async () => ({ trusted: true, agents: Object.fromEntries(f.live.map(a => [a.id, a])) }) }));
 vi.mock('./heldCheckoutRecovery.js', () => ({ inspectLegacyReleaseArchive: async () => {
   if (!f.archive) throw new Error('archive-unavailable');

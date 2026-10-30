@@ -24,7 +24,7 @@ import { cleanupTempDataRoots, lazyTempDataRoot } from '../lib/mockPathsDataRoot
 import { PATHS } from '../lib/paths.js';
 import { owned, receiptTiming, retirementFaults, injected, SYMLINKS } from './_heldCheckoutRecoveryMocks.js';
 import { retireInventoriedCheckout, prepareInventoriedCheckoutRetirement, retirePendingMergeCheckout, heldCheckoutArchiveRoot, preserveMergedCheckout } from './heldCheckoutRecovery.js';
-import { recordBranchReconcileOutcome } from './taskSchedule.js';
+import { recordBranchReconcileOutcome } from './branchReconcileOutcome.js';
 
 export const it = owned.tests(vitestIt);
 export const beforeEach = (body, ...options) => vitestBeforeEach(owned.wrap('setup', body), ...options);

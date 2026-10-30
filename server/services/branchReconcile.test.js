@@ -120,7 +120,7 @@ vi.mock('../lib/fileUtils.js', async () => {
   };
 });
 
-vi.mock('./taskSchedule.js', () => ({
+vi.mock('./branchReconcileOutcome.js', () => ({
   recordWorkspaceCheckoutRetirement: vi.fn(async () => null),
   recordHeldCheckoutRetirement: vi.fn(async (_appId, receipt) => ({ retired: [{ ...receipt, archiveDir: null }] })),
 }));
@@ -139,7 +139,7 @@ import {
 import * as git from './git.js';
 import * as wt from './worktreeManager.js';
 import { preserveMergedCheckout, releaseCheckoutWithoutArchive } from './heldCheckoutRecovery.js';
-import { recordHeldCheckoutRetirement, recordWorkspaceCheckoutRetirement } from './taskSchedule.js';
+import { recordHeldCheckoutRetirement, recordWorkspaceCheckoutRetirement } from './branchReconcileOutcome.js';
 import { withClaimOwnershipLock, checkoutRetirementFenceReason } from './cosClaimOwnership.js';
 import { hasCompletedCheckoutEvidence } from './completedCheckoutEvidence.js';
 import { execGit } from '../lib/execGit.js';
