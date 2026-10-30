@@ -15,6 +15,7 @@ const api = vi.hoisted(() => ({
   addStoryboardPanelTake: vi.fn(),
   createBlankSketch: vi.fn(),
   runStoryboardPanelNode: vi.fn(),
+  correctStoryboardPanel: vi.fn(),
   updateStoryboardRecipe: vi.fn(),
   getStoryboardMakeEmpty: vi.fn(),
   startStoryboardMakeEmpty: vi.fn(),
@@ -97,6 +98,26 @@ describe('StoryboardDetail', () => {
     expect(screen.getByRole('link', { name: 'Open in Storyboards' }).getAttribute('href')).toBe('/storyboards/sb-1');
     expect(screen.queryByRole('button', { name: /Song brief/ })).toBeNull();
     expect(screen.queryByRole('button', { name: /Make video/ })).toBeNull();
+  });
+
+  it('corrects the selected frame with a note, linking to markup that returns to the open form', async () => {
+    const framed = board({ beats: [{ ...board().beats[0], panels: [panel('panel-1', {
+      takes: [{ id: 'take-1', source: 'generated', image: 'frame-a.png' }], selectedTakeId: 'take-1',
+    })] }] });
+    api.getStoryboard.mockResolvedValue(framed);
+    api.correctStoryboardPanel.mockResolvedValue({ ...framed, updatedAt: '2026-10-22T00:00:02.000Z' });
+    renderAt('/storyboards/sb-1/panel/panel-1');
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Correct' }));
+    await waitFor(() => expect(screen.getByTestId('location').textContent).toBe('/storyboards/sb-1/panel/panel-1?correct=open'));
+    expect(screen.getByRole('link', { name: /Edit markup/ }).getAttribute('href'))
+      .toBe(`/media/annotate/image%3Aframe-a.png?returnTo=${encodeURIComponent('/storyboards/sb-1/panel/panel-1?correct=open')}`);
+    const redraw = screen.getByRole('button', { name: 'Redraw' });
+    expect(redraw).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('What to change'), { target: { value: 'Move her to the left third' } });
+    fireEvent.click(redraw);
+    await waitFor(() => expect(api.correctStoryboardPanel).toHaveBeenCalledWith('sb-1', 'panel-1', { takeId: 'take-1', note: 'Move her to the left third' }));
+    await waitFor(() => expect(screen.getByTestId('location').textContent).toBe('/storyboards/sb-1/panel/panel-1'));
   });
 
   it('changes the board\'s art style', async () => {

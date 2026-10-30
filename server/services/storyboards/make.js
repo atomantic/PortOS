@@ -15,8 +15,9 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { join } from 'node:path';
 import { ServerError } from '../../lib/errorHandler.js';
-import { resolveImageInputPath } from '../../lib/fileUtils.js';
+import { copyFileGuarded, ensureDir, PATHS, resolveImageInputPath } from '../../lib/fileUtils.js';
 import { promptAddition } from '../../lib/modelInput.js';
 import { CREATIVE_LATITUDE_ADDITION, withCreativeLatitude } from '../../lib/creativeLatitude.js';
 import {
@@ -37,6 +38,7 @@ const deps = {
     settings, route, common, { what: 'storyboard panels', code: 'STORYBOARD_RENDER_UNAVAILABLE' },
   ),
   enqueue: async (job) => (await import('../mediaJobQueue/index.js')).enqueueJob(job),
+  markupPath: async (key) => (await import('../mediaSketches.js')).getSketchPngPath(key),
   linkedMedia: async (ids) => (await import('../catalogDB/media.js')).listMediaForIngredients(ids),
   ingredient: async (id) => (await import('../catalogDB/ingredients.js')).getIngredient(id),
   emit: (payload) => import('../socket.js')
@@ -142,13 +144,24 @@ function inputContext(board, panelId, linkedRefs = []) {
   return { beat, panel, linkedRefs };
 }
 
-async function runLlmNode(board, panelId, node) {
+// A correction asks the writer to redo its own prompt with the director's
+// note; the note is quoted as written and the whole block is a listed addition.
+function correctionText({ current, note }) {
+  return [
+    ...(current ? ['The current frame was drawn from this prompt:', current, ''] : []),
+    `The director marked up the current frame and asks for this change: "${note}"`,
+    'Rewrite the prompt with that change. Keep everything the note does not mention, and say plainly where things now sit in the frame.',
+  ].join('\n');
+}
+
+async function runLlmNode(board, panelId, node, { correction = null } = {}) {
   const recipe = effectiveRecipe(board);
   const context = inputContext(board, panelId);
   const prompt = nodeInputValue(recipe, node.id, 'prompt', context).trim();
   if (!prompt) throw refuse(`${node.title} has no prompt: write the shot in the panel, or wire a text node into its Prompt.`);
   const system = nodeInputValue(recipe, node.id, 'system', context).trim();
   const systemNode = upstreamNode(recipe, node.id, 'system');
+  const correcting = correction ? correctionText(correction) : '';
 
   const { provider, selectedModel } = await deps.resolveProvider({ providerId: node.settings.providerId || null, model: node.settings.model || null });
   if (!provider) throw refuse('No AI provider is set up; pick one in the node settings.', 'NO_PROVIDER', 503);
@@ -156,10 +169,12 @@ async function runLlmNode(board, panelId, node) {
 
   // The system prompt leads the one text the model reads; both blocks are
   // listed beside the user's words so Show full prompt names each.
-  const sentPrompt = withCreativeLatitude(system ? `${system}\n\n---\n\n${prompt}` : prompt);
+  const userText = correcting ? `${prompt}\n\n${correcting}` : prompt;
+  const sentPrompt = withCreativeLatitude(system ? `${system}\n\n---\n\n${userText}` : userText);
   const promptAdditions = [
     CREATIVE_LATITUDE_ADDITION,
     system ? promptAddition('system-prompt', `System prompt (${systemNode?.title || 'node'})`, system) : null,
+    correcting ? promptAddition('correction', 'Correction', correcting) : null,
   ].filter(Boolean);
   const runId = randomUUID();
   await mutateStoryboard(board.id, (draft) => patchNodeState(draft, panelId, node.id, {
@@ -188,7 +203,7 @@ async function runLlmNode(board, panelId, node) {
   return next;
 }
 
-async function runImageNode(board, panelId, node) {
+async function runImageNode(board, panelId, node, { frameRef = null } = {}) {
   const recipe = effectiveRecipe(board);
   const { panel } = locate(board, panelId);
   const context = inputContext(board, panelId, await resolveLinkedRefs(panel));
@@ -201,8 +216,9 @@ async function runImageNode(board, panelId, node) {
   if (panel.takes.length + count > STORYBOARD_LIMITS.takes) {
     throw refuse(`This panel keeps at most ${STORYBOARD_LIMITS.takes} takes and has ${panel.takes.length}; remove some before making ${count} more.`, 'STORYBOARD_LIMIT', 409);
   }
-  const refs = nodeInputValue(recipe, node.id, 'images', context);
-  const referenceImagePaths = refs.map((ref) => resolveImageInputPath(ref.image)).filter(Boolean);
+  const wired = nodeInputValue(recipe, node.id, 'images', context);
+  const refs = frameRef ? [frameRef, ...wired.filter((ref) => ref.image !== frameRef.image)].slice(0, RECIPE_LIMITS.images) : wired;
+  const referenceImagePaths = refs.map((ref) => (ref === frameRef && frameRef.path) || resolveImageInputPath(ref.image)).filter(Boolean);
   const runId = randomUUID();
   const settings = await deps.getSettings();
   const common = {
@@ -237,6 +253,50 @@ async function runImageNode(board, panelId, node) {
   }
   announce(board.id, panelId, node.id, 'queued');
   console.log(`🖼️ Storyboard ${board.id.slice(0, 11)} panel ${panelId.slice(0, 12)} → ${jobIds.length} image job(s)`);
+  return next;
+}
+
+/**
+ * The frame a correction starts from: the take's saved markup (the image with
+ * the strokes drawn on it), else the take as it is. The markup is copied into
+ * the image-refs root as a staged `ref-<uuid>` input, so a later re-draw can't
+ * change what this run sent and the refs GC keeps it while a render names it.
+ */
+async function correctionFrame(image) {
+  const markup = await deps.markupPath(`image:${image}`);
+  if (!markup) return { image, label: 'Current frame' };
+  await ensureDir(PATHS.imageRefs);
+  const staged = `ref-${randomUUID()}.png`;
+  const path = join(PATHS.imageRefs, staged);
+  await copyFileGuarded(markup, path);
+  return { image: staged, label: 'Marked-up frame', path };
+}
+
+/**
+ * Correct a panel's frame: the prompt writer feeding the recipe's Image node
+ * rewrites its prompt with the note, then the Image node makes new frames with
+ * the marked-up frame as the first reference. New frames land as takes; the
+ * selection is unchanged. Resolves to the board once the frames are queued; a
+ * writer failure is refused (its node card keeps the reason).
+ */
+export async function correctPanel(storyboardId, panelId, { takeId, note }) {
+  const board = await getStoryboard(storyboardId);
+  const recipe = effectiveRecipe(board);
+  const { panel } = locate(board, panelId);
+  const take = panel.takes.find((t) => t.id === takeId);
+  if (!take) throw notFound('Take');
+  if (!take.image) throw refuse('Only a frame image can be corrected; this take is a sketch you can draw on directly.');
+  const imageNode = recipeRunOrder(recipe).find((n) => n.type === 'image');
+  if (!imageNode) throw refuse('The recipe has no Image node, so there is nothing to redraw.');
+  const writer = upstreamNode(recipe, imageNode.id, 'prompt');
+  if (writer?.type !== 'llm') throw refuse(`A correction rewrites the prompt, so ${imageNode.title} needs a prompt writer wired into its Prompt.`);
+  const frameRef = await correctionFrame(take.image);
+  const current = panelNodeState(panel, writer.id).text.trim();
+  const written = await runLlmNode(board, panelId, writer, { correction: { current, note } });
+  const writerState = panelNodeState(locate(written, panelId).panel, writer.id);
+  if (writerState.status === 'failed') throw refuse(`${writer.title} could not rewrite the prompt: ${writerState.error}`, 'STORYBOARD_CORRECTION_FAILED', 502);
+  const next = await runImageNode(written, panelId, imageNode, { frameRef });
+  console.log(`✏️ Storyboard ${storyboardId.slice(0, 11)} panel ${panelId.slice(0, 12)} corrected from ${frameRef.label.toLowerCase()}`);
   return next;
 }
 

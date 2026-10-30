@@ -54,6 +54,9 @@ export const updateStoryboardPanelNode = (id, panelId, nodeId, patch, options) =
   request(`/storyboards/${enc(id)}/panels/${enc(panelId)}/make/${enc(nodeId)}`, { ...json('PATCH', patch), ...options });
 export const runStoryboardPanelNode = (id, panelId, nodeId, options) =>
   request(`/storyboards/${enc(id)}/panels/${enc(panelId)}/make/${enc(nodeId)}/run`, { method: 'POST', ...options });
+// body: `{ takeId, note }` → the board once the corrected frames are queued.
+export const correctStoryboardPanel = (id, panelId, body, options) =>
+  request(`/storyboards/${enc(id)}/panels/${enc(panelId)}/correct`, { ...json('POST', body), ...options });
 
 // Make empty panels. GET → { batch, panelCount, steps: [{ nodeId, title, type, model, frames }] }.
 export const getStoryboardMakeEmpty = (id, options) => request(`/storyboards/${enc(id)}/make-empty`, options);

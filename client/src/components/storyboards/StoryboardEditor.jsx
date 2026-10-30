@@ -19,7 +19,7 @@ import TabPills from '../ui/TabPills';
 import toast from '../ui/Toast';
 import socket from '../../services/socket';
 import {
-  addStoryboardBeat, addStoryboardPanel, addStoryboardPanelTake, createBlankSketch, deleteStoryboardBeat,
+  addStoryboardBeat, addStoryboardPanel, addStoryboardPanelTake, correctStoryboardPanel, createBlankSketch, deleteStoryboardBeat,
   deleteStoryboardPanel, getStoryboard, listMoodBoardNames, moveStoryboardBeat, moveStoryboardPanel,
   removeStoryboardPanelTake, runStoryboardPanelNode, selectStoryboardPanelTake, sendStoryboardPanelToFableLoom, updateStoryboard, updateStoryboardBeat,
   updateStoryboardPanel, updateStoryboardPanelNode, updateStoryboardRecipe,
@@ -45,7 +45,7 @@ const VIEW_TABS = [
 const VIEW_IDS = new Set(VIEW_TABS.map((tab) => tab.id));
 // The editor's own query keys; opening or closing a panel clears them and keeps
 // the rest (the view, and a host page's own keys).
-const EDITOR_PARAMS = ['panelTab', 'makeView', 'node', 'plot', 'brief', 'video'];
+const EDITOR_PARAMS = ['panelTab', 'makeView', 'node', 'plot', 'brief', 'video', 'correct'];
 
 const selectClass = 'min-h-[44px] bg-port-bg border border-port-border rounded px-2 text-sm text-white';
 const headerButton = 'min-h-[44px] inline-flex items-center gap-1.5 rounded border border-port-border px-3 text-sm text-gray-200 hover:border-port-accent/60 hover:text-white';
@@ -200,6 +200,12 @@ export default function StoryboardEditor({ boardId: id, panelId, boardPath, embe
     onSendToScene: async () => {
       const res = await write(() => sendStoryboardPanelToFableLoom(id, panelId));
       if (res) toast.success(board.source?.kind === 'pipeline' ? 'Shot start frame updated in the pipeline' : 'Scene art updated in FableLoom');
+    },
+    // Resolves true once the corrected frames are queued (a failure toasts, or shows on the writer's card).
+    onCorrect: async (body) => {
+      const res = await write(() => correctStoryboardPanel(id, panelId, body));
+      if (res) toast.success('Redrawing: the new frames land as takes');
+      return !!res;
     },
     onRecipe: (recipe) => write(() => updateStoryboardRecipe(id, recipe)),
     onNodePatch: (nodeId, patch) => write(() => updateStoryboardPanelNode(id, panelId, nodeId, patch)),

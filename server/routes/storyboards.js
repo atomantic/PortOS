@@ -9,7 +9,7 @@ import { asyncHandler } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
 import {
   storyboardBeatCreateSchema, storyboardBeatUpdateSchema, storyboardCreateSchema, storyboardMoveSchema,
-  storyboardPanelCreateSchema, storyboardPanelMoveSchema, storyboardPanelNodeUpdateSchema, storyboardPanelUpdateSchema,
+  storyboardPanelCorrectSchema, storyboardPanelCreateSchema, storyboardPanelMoveSchema, storyboardPanelNodeUpdateSchema, storyboardPanelUpdateSchema,
   storyboardBeatsAddSchema, storyboardFitSchema, storyboardFromFableLoomSchema, storyboardPipelineUpdateSchema, storyboardVideoStartSchema, storyboardPlotExtractSchema, storyboardRecipeSchema, storyboardSavedRecipeSchema, storyboardTakeCreateSchema, storyboardUpdateSchema,
 } from '../lib/storyboardValidation.js';
 import {
@@ -18,7 +18,7 @@ import {
   updateStoryboard,
 } from '../services/storyboards/index.js';
 import {
-  getMakeEmptyPlan, getPanelMake, runPanelNode, startMakeEmpty, updatePanelNode, updateRecipe,
+  correctPanel, getMakeEmptyPlan, getPanelMake, runPanelNode, startMakeEmpty, updatePanelNode, updateRecipe,
 } from '../services/storyboards/make.js';
 import { fitMusicVideoToStoryboard, updateShotFromPanel, sendShotStillToPanel } from '../services/storyboards/fitMusicVideo.js';
 import { makeStoryboardFromMusicVideo } from '../services/storyboards/fromMusicVideo.js';
@@ -175,6 +175,12 @@ router.patch('/:id/panels/:panelId/make/:nodeId', asyncHandler(async (req, res) 
 // frames are queued (storyboard:make follows each frame).
 router.post('/:id/panels/:panelId/make/:nodeId/run', asyncHandler(async (req, res) => {
   res.json(await runPanelNode(req.params.id, req.params.panelId, req.params.nodeId));
+}));
+
+// Correct a frame: the writer redoes its prompt with the note, then the image
+// node queues new frames from the marked-up frame (answers once they're queued).
+router.post('/:id/panels/:panelId/correct', asyncHandler(async (req, res) => {
+  res.json(await correctPanel(req.params.id, req.params.panelId, validateRequest(storyboardPanelCorrectSchema, req.body ?? {})));
 }));
 
 // Beats from a plot summary: extract answers with a preview (the board only
