@@ -29,7 +29,7 @@ import { EFFORT_LEVELS } from './providerModels.js';
 
 import { isTruthyMeta } from './metadataFlags.js';
 import { STORY_DRAFT_LIMITS } from './catalogStoryDraft.js';
-import { DESIGN_FEATURES, DESIGN_FRAMINGS, DEFAULT_DESIGN_FRAMING, DESIGN_LINE_MAX, DESIGN_MAX_TAKES, DESIGN_NOTE_MAX } from './catalogDesign.js';
+import { BLEND_MAX_STRENGTH_TAKES, DESIGN_FEATURES, DESIGN_FRAMINGS, DEFAULT_DESIGN_FRAMING, DESIGN_LINE_MAX, DESIGN_MAX_BLEND_REFS, DESIGN_MAX_TAKES, DESIGN_NOTE_MAX } from './catalogDesign.js';
 // Derived from the shared type registry (`catalogTypes.js`) — adding a SYSTEM
 // type there flows through to consumers automatically. Kept as a frozen
 // re-export so existing `import { INGREDIENT_TYPES }` callers are unaffected.
@@ -1010,9 +1010,17 @@ export const catalogDesignRenderSchema = z.discriminatedUnion('mode', [
     count: z.number().int().min(1).max(DESIGN_MAX_TAKES).default(4), formId: designFormId }).strict(),
   z.object({ mode: z.literal('feature'), note: designText(DESIGN_NOTE_MAX).optional(), baseImageFile: designImageFile,
     feature: z.enum(Object.keys(DESIGN_FEATURES)), formId: designFormId }).strict(),
+  // `blendImageFile` (a single face) is the older shape a cached
+  // client may still send; the service folds it into `blendImageFiles`. `count`
+  // applies only with a `strength`; without one the round spreads over BLEND_STEPS.
   z.object({ mode: z.literal('blend'), note: designText(DESIGN_NOTE_MAX).optional(), baseImageFile: designImageFile,
-    blendImageFile: designImageFile, features: z.array(z.enum(Object.keys(DESIGN_FEATURES))).max(10).default([]),
-    formId: designFormId }).strict(),
+    blendImageFile: designImageFile.optional(), blendImageFiles: z.array(designImageFile).min(1).max(DESIGN_MAX_BLEND_REFS).optional(),
+    features: z.array(z.enum(Object.keys(DESIGN_FEATURES))).max(10).default([]),
+    strength: z.number().int().min(5).max(100).optional(),
+    count: z.number().int().min(1).max(BLEND_MAX_STRENGTH_TAKES).default(2),
+    formId: designFormId }).strict()
+    .refine(v => !(v.blendImageFile && v.blendImageFiles), 'Send blendImageFiles only')
+    .refine(v => v.blendImageFile || v.blendImageFiles, 'Pick a face to blend toward'),
   z.object({ mode: z.literal('age'), note: designText(DESIGN_NOTE_MAX).optional(), baseImageFile: designImageFile,
     count: z.number().int().min(1).max(DESIGN_MAX_TAKES).default(4), formId: z.string().trim().regex(FORM_ID_PATTERN) }).strict(),
 ]);

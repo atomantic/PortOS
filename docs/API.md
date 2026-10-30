@@ -1153,8 +1153,9 @@ design per take written by the chosen provider. `POST
 `{ roundId, jobs: [{ jobId, line }] }`. `mode` is `open` (`lines`, `note?`,
 `framing`, `seedImageFiles?`; text only), `refine` (`baseImageFile`, `note`,
 `count`), `feature` (`baseImageFile`, `feature`: 8 takes of one feature),
-`blend` (`baseImageFile`, `blendImageFile`, `features?`: 4 steps toward the
-second face) or `age` (`baseImageFile`, `formId`, `count`). Rounds never send
+`blend` (`baseImageFile`, `blendImageFiles`: 1–3 reference faces, `note?`,
+`features?`; 4 steps toward them, or `strength` (5–100%) with `count` 1–4
+takes at that strength; the older single `blendImageFile` is still accepted) or `age` (`baseImageFile`, `formId`, `count`). Rounds never send
 the record's other references as guides. Each take lands as a reference with
 role `design:<roundId>:<n>`, left out of likeness until it is made an anchor.
 Both routes have a `/compose` preview that queues nothing.

@@ -50,12 +50,31 @@ describe('Casting design rounds', () => {
     updateCatalogIngredientMediaLibrary.mockResolvedValue({});
     mount({ onSetPortrait });
     fireEvent.click(screen.getAllByRole('button', { name: 'Pick' })[0]);
-    fireEvent.click(screen.getByRole('button', { name: 'Make anchor' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Make canon' }));
     await waitFor(() => expect(onSetPortrait).toHaveBeenCalledWith('first.png'));
     expect(updateCatalogIngredientMediaLibrary.mock.calls.map(([, body]) => body)).toEqual([
       { mediaKey: 'old-face.png', kind: 'portrait', guide: false },
       { mediaKey: 'first.png', kind: 'reference', likeness: true, guide: true },
     ]);
+  });
+
+  // Redesign starts from the current canon with no prior pick: several
+  // reference faces, a note, and one chosen strength.
+  it('redesigns from the current canon toward several faces at a chosen strength', async () => {
+    renderCatalogDesign.mockResolvedValue({ roundId: 'r4', jobs: [{ jobId: 'job-2', line: 'x' }] });
+    mount();
+    fireEvent.click(screen.getByRole('button', { name: 'Redesign from canon' }));
+    expect(new URLSearchParams(location.search).get('take')).toBe('old-face.png');
+    expect(screen.getByText('Current canon')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Make canon' })).toBeNull();
+    const faces = screen.getAllByRole('button', { name: 'Blend face option' });
+    fireEvent.click(faces[1]); fireEvent.click(faces[2]);
+    fireEvent.change(screen.getByLabelText('How far toward them'), { target: { value: '50' } });
+    fireEvent.change(screen.getByLabelText('Takes'), { target: { value: '3' } });
+    fireEvent.change(screen.getByLabelText('Note (optional)'), { target: { value: 'Keep the hair, change the face structure.' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Render 3 takes' }));
+    await waitFor(() => expect(renderCatalogDesign).toHaveBeenCalledWith('cast', { mode: 'blend', baseImageFile: 'old-face.png',
+      note: 'Keep the hair, change the face structure.', blendImageFiles: ['second.png', 'first.png'], features: [], strength: 50, count: 3 }, { silent: true }));
   });
 
   it('queues a feature grid from the picked take and shows its pending takes', async () => {

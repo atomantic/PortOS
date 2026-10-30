@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router';
-import { Anchor, Check } from 'lucide-react';
+import { Anchor, Check, Wand2 } from 'lucide-react';
 import {
-  DESIGN_FEATURES, DESIGN_FRAMINGS, DEFAULT_DESIGN_FRAMING, DESIGN_MAX_TAKES, designRoundId, designTakeIndex, featureLines, blendLines,
+  BLEND_MAX_STRENGTH_TAKES, DESIGN_FEATURES, DESIGN_FRAMINGS, DEFAULT_DESIGN_FRAMING, DESIGN_MAX_BLEND_REFS, DESIGN_MAX_TAKES, designRoundId, designTakeIndex, featureLines, blendLines,
 } from '../../../../server/lib/catalogDesign.js';
 import { getCatalogIngredientDetails, renderCatalogDesign, spreadCatalogDesign, updateCatalogIngredientMediaLibrary } from '../../services/apiCatalog';
 import { useModelInputPreview } from '../../hooks/useModelInputPreview';
@@ -26,8 +26,9 @@ const formKey = (m) => m?.library?.variant?.formId || '';
 
 // Casting > Design: rounds of face takes. The picked take lives in the URL
 // (`?take=<file>`); pending renders survive a reload in session storage until
-// their image lands on the record.
-export default function CatalogDesignPanel({ ingredientId, name, forms = [], media, blockedReason, onChanged, onSetPortrait }) {
+// their image lands on the record. The current canon (portrait, else the
+// canonical-age anchor) heads the tab so a redesign can start from it.
+export default function CatalogDesignPanel({ ingredientId, name, forms = [], media, blockedReason, onChanged, onSetPortrait, GalleryPicker = null }) {
   const mounted = useMounted();
   const inFlight = useRef(false);
   const [params, setParams] = useSearchParams();
@@ -60,6 +61,8 @@ export default function CatalogDesignPanel({ ingredientId, name, forms = [], med
   }, [takes, waiting]);
   const images = media.filter((m) => IMAGE_KINDS.has(m.kind) && !m.deleted);
   const picked = images.find((m) => m.mediaKey === pickedKey) || null;
+  const canon = images.find((m) => m.kind === 'portrait') || images.find((m) => m.library?.guide === true && !formKey(m)) || null;
+  const pickedIsCanon = !!picked && picked.mediaKey === canon?.mediaKey;
   const pick = (key) => setParams((prev) => {
     const next = new URLSearchParams(prev);
     if (key && key !== pickedKey) next.set('take', key); else next.delete('take');
@@ -121,9 +124,17 @@ export default function CatalogDesignPanel({ ingredientId, name, forms = [], med
 
   return <section aria-label="Design this cast member" className="space-y-4 min-w-0">
     {blockedReason && <p role="status" className="text-sm text-port-warning">{blockedReason}</p>}
+    {canon && !pickedIsCanon && <div className="flex items-center gap-3 rounded border border-port-border p-3">
+      <img src={`/data/images/${encodeURIComponent(canon.mediaKey)}`} alt={`${name} current canon`} className="h-24 w-24 shrink-0 rounded object-cover" />
+      <div className="min-w-0 space-y-2">
+        <p className="text-sm font-semibold">Current canon</p>
+        <button type="button" onClick={() => pick(canon.mediaKey)} disabled={!!blockedReason} className={`${buttonClass} inline-flex items-center gap-1`}>
+          <Wand2 size={14} aria-hidden="true" /> Redesign from canon</button>
+      </div>
+    </div>}
     <OpenRound ingredientId={ingredientId} forms={forms} disabled={busy || !!blockedReason} onRender={queue} />
     {error && <p role="alert" className="text-sm text-port-error">{error}</p>}
-    {picked && <PickedActions key={picked.mediaKey} ingredientId={ingredientId} take={picked} forms={forms} images={images}
+    {picked && <PickedActions key={picked.mediaKey} ingredientId={ingredientId} take={picked} isCanon={pickedIsCanon} forms={forms} images={images} GalleryPicker={GalleryPicker}
       disabled={busy || !!blockedReason} onRender={queue} onAnchor={() => makeAnchor(picked)} onClose={() => pick(null)} />}
     {rounds.length === 0 && <p className="text-sm text-gray-400">No takes yet. Describe an idea above to cast the first faces.</p>}
     {rounds.map((round) => <div key={round.id} className="space-y-2">
@@ -245,42 +256,51 @@ function OpenRound({ ingredientId, forms, disabled, onRender }) {
 }
 
 const ACTIONS = [['refine', 'Refine'], ['feature', 'Vary a feature'], ['blend', 'Blend toward'], ['age', 'Carry to an age']];
+const BLEND_STRENGTHS = [25, 50, 75];
 
-function PickedActions({ ingredientId, take, forms, images, disabled, onRender, onAnchor, onClose }) {
+function PickedActions({ ingredientId, take, isCanon, forms, images, GalleryPicker, disabled, onRender, onAnchor, onClose }) {
   const id = useId();
-  const [action, setAction] = useState('refine');
+  const [action, setAction] = useState(isCanon ? 'blend' : 'refine');
   const [note, setNote] = useState('');
   const [count, setCount] = useState(4);
   const [feature, setFeature] = useState('noseSize');
-  const [blendFile, setBlendFile] = useState('');
+  const [blendFiles, setBlendFiles] = useState([]);
   const [blendFeatures, setBlendFeatures] = useState([]);
+  const [strength, setStrength] = useState('');
+  const [strengthCount, setStrengthCount] = useState(2);
+  const [galleryPicks, setGalleryPicks] = useState([]);
+  const [pickingGallery, setPickingGallery] = useState(false);
   const [ageFormId, setAgeFormId] = useState(forms[0]?.id || '');
   const [otherCast, setOtherCast] = useState(null);
   const [pickingCast, setPickingCast] = useState(false);
   const base = { baseImageFile: take.mediaKey, ...(note.trim() ? { note: note.trim() } : {}) };
   const body = action === 'refine' ? { mode: 'refine', ...base, count, ...(formKey(take) ? { formId: formKey(take) } : {}) }
     : action === 'feature' ? { mode: 'feature', ...base, feature, ...(formKey(take) ? { formId: formKey(take) } : {}) }
-    : action === 'blend' ? { mode: 'blend', ...base, blendImageFile: blendFile, features: blendFeatures, ...(formKey(take) ? { formId: formKey(take) } : {}) }
+    : action === 'blend' ? { mode: 'blend', ...base, blendImageFiles: blendFiles, features: blendFeatures,
+      ...(strength ? { strength: Number(strength), count: strengthCount } : {}), ...(formKey(take) ? { formId: formKey(take) } : {}) }
     : { mode: 'age', ...base, count, formId: ageFormId };
-  const ready = action === 'refine' ? !!note.trim() : action === 'blend' ? !!blendFile : action === 'age' ? !!ageFormId : true;
+  const ready = action === 'refine' ? !!note.trim() : action === 'blend' ? blendFiles.length > 0 : action === 'age' ? !!ageFormId : true;
   const fetchPreview = useCallback((input, options) => renderCatalogDesign(ingredientId, input, { ...options, preview: true }), [ingredientId]);
   const preview = useModelInputPreview(fetchPreview, body, { enabled: ready });
-  const lines = action === 'feature' ? featureLines(feature) : action === 'blend' ? blendLines(blendFeatures) : [];
+  const lines = action === 'feature' ? featureLines(feature) : action === 'blend'
+    ? blendLines(blendFeatures, { refCount: Math.max(blendFiles.length, 1), strength: strength ? Number(strength) : undefined, count: strengthCount }) : [];
+  const toggleBlend = (key) => setBlendFiles((prev) => (prev.includes(key) ? prev.filter((k) => k !== key)
+    : prev.length < DESIGN_MAX_BLEND_REFS ? [...prev, key] : prev));
   const loadCast = async (ingredient) => {
     setPickingCast(false);
     const details = await getCatalogIngredientDetails(ingredient.id, { view: 'media', silent: true }).catch(() => null);
     setOtherCast({ name: ingredient.name, images: (details?.media || []).filter((m) => IMAGE_KINDS.has(m.kind) && !m.deleted) });
   };
-  const blendChoices = [...images.filter((m) => m.mediaKey !== take.mediaKey), ...(otherCast?.images || [])]
+  const blendChoices = [...galleryPicks, ...images.filter((m) => m.mediaKey !== take.mediaKey), ...(otherCast?.images || [])]
     .filter((m, i, all) => all.findIndex((x) => x.mediaKey === m.mediaKey) === i);
   return <div className="rounded border border-port-accent/50 p-3 space-y-3">
     <div className="flex items-start gap-3">
       <img src={`/data/images/${encodeURIComponent(take.mediaKey)}`} alt="Picked take" className="h-20 w-20 shrink-0 rounded object-cover" />
       <div className="min-w-0 flex-1 space-y-2">
-        <p className="text-sm font-semibold">Picked take</p>
+        <p className="text-sm font-semibold">{isCanon ? 'Current canon' : 'Picked take'}</p>
         <div className="flex flex-wrap gap-2">
-          <button type="button" onClick={onAnchor} disabled={disabled} className="min-h-11 inline-flex items-center gap-1 rounded bg-port-accent px-3 text-sm text-white disabled:opacity-40">
-            <Anchor size={14} aria-hidden="true" /> Make anchor</button>
+          {!isCanon && <button type="button" onClick={onAnchor} disabled={disabled} className="min-h-11 inline-flex items-center gap-1 rounded bg-port-accent px-3 text-sm text-white disabled:opacity-40">
+            <Anchor size={14} aria-hidden="true" /> {formKey(take) ? 'Make anchor for this age' : 'Make canon'}</button>}
           <button type="button" onClick={onClose} className="min-h-11 px-3 text-sm text-gray-400">Unpick</button>
         </div>
       </div>
@@ -293,15 +313,31 @@ function PickedActions({ ingredientId, take, forms, images, disabled, onRender, 
       </select>
     </label>}
     {action === 'blend' && <div className="space-y-2">
-      <p className="text-xs text-gray-400">Face to blend toward</p>
+      <p className="text-xs text-gray-400">Faces to blend toward (up to {DESIGN_MAX_BLEND_REFS}){blendFiles.length ? `: ${blendFiles.length} picked` : ''}</p>
       <div className="flex gap-2 overflow-x-auto pb-1">
-        {blendChoices.map((m) => <button key={m.mediaKey} type="button" aria-pressed={blendFile === m.mediaKey} onClick={() => setBlendFile(m.mediaKey)}
+        {blendChoices.map((m) => <button key={m.mediaKey} type="button" aria-pressed={blendFiles.includes(m.mediaKey)} onClick={() => toggleBlend(m.mediaKey)}
           className="shrink-0 rounded border-2 border-transparent aria-pressed:border-port-accent">
           <img src={`/data/images/${encodeURIComponent(m.mediaKey)}`} alt="Blend face option" loading="lazy" className="h-16 w-16 rounded object-cover" />
         </button>)}
       </div>
-      <button type="button" onClick={() => setPickingCast(true)} className="min-h-11 text-sm text-port-accent underline">
-        {otherCast ? `Showing ${otherCast.name}'s images. Pick another cast member` : 'Use another cast member’s image'}</button>
+      <div className="flex flex-wrap gap-x-4">
+        <button type="button" onClick={() => setPickingCast(true)} className="min-h-11 text-sm text-port-accent underline">
+          {otherCast ? `Showing ${otherCast.name}'s images. Pick another cast member` : 'Use another cast member’s image'}</button>
+        {GalleryPicker && <button type="button" onClick={() => setPickingGallery(true)} className="min-h-11 text-sm text-port-accent underline">Pick from gallery</button>}
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        <label htmlFor={`${id}-strength`} className="min-w-0 space-y-1 text-xs"><span>How far toward them</span>
+          <select id={`${id}-strength`} value={strength} disabled={disabled} onChange={(e) => setStrength(e.target.value)} className={fieldClass}>
+            <option value="">4 takes, a fifth to four fifths</option>
+            {BLEND_STRENGTHS.map((n) => <option key={n} value={n}>{n}%</option>)}
+          </select>
+        </label>
+        {strength && <label htmlFor={`${id}-strength-count`} className="min-w-0 space-y-1 text-xs"><span>Takes</span>
+          <select id={`${id}-strength-count`} value={strengthCount} disabled={disabled} onChange={(e) => setStrengthCount(Number(e.target.value))} className={fieldClass}>
+            {Array.from({ length: BLEND_MAX_STRENGTH_TAKES }, (_, i) => i + 1).map((n) => <option key={n} value={n}>{n}</option>)}
+          </select>
+        </label>}
+      </div>
       <fieldset className="space-y-1"><legend className="text-xs text-gray-400">Only these features (none = the whole face)</legend>
         <div className="flex flex-wrap gap-2">
           {Object.entries(DESIGN_FEATURES).filter(([key]) => !['noseShape', 'eyeShape'].includes(key)).map(([key, f]) => <label key={key} htmlFor={`${id}-bf-${key}`} className="min-h-11 inline-flex items-center gap-1 text-xs">
@@ -311,6 +347,11 @@ function PickedActions({ ingredientId, take, forms, images, disabled, onRender, 
         </div>
       </fieldset>
       <IngredientPicker open={pickingCast} onClose={() => setPickingCast(false)} onSelect={loadCast} type="character" />
+      {GalleryPicker && pickingGallery && <GalleryPicker pickLabel="Blend toward" onClose={() => setPickingGallery(false)} onPick={(filename) => {
+        setPickingGallery(false);
+        setGalleryPicks((prev) => (prev.some((m) => m.mediaKey === filename) ? prev : [{ mediaKey: filename }, ...prev]));
+        setBlendFiles((prev) => (prev.includes(filename) || prev.length >= DESIGN_MAX_BLEND_REFS ? prev : [...prev, filename]));
+      }} />}
     </div>}
     {action === 'age' && <AgeSelect id={`${id}-age`} forms={forms} value={ageFormId} onChange={setAgeFormId} disabled={disabled} label="Age to carry to" includeCanonical={false} />}
     {(action === 'refine' || action === 'age') && <label htmlFor={`${id}-count`} className="block space-y-1 text-xs"><span>Takes</span>
@@ -320,8 +361,8 @@ function PickedActions({ ingredientId, take, forms, images, disabled, onRender, 
     </label>}
     <label htmlFor={`${id}-note`} className="block text-xs">{action === 'refine' ? 'What to change' : 'Note (optional)'}</label>
     <textarea id={`${id}-note`} value={note} maxLength={2000} rows={2} disabled={disabled} onChange={(e) => setNote(e.target.value)}
-      placeholder={action === 'refine' ? 'Less hooded eyes, keep the nose' : ''} className="w-full rounded border border-port-border bg-port-bg p-2 text-sm" />
-    {lines.length > 0 && <p className="text-xs text-gray-400">{lines.length} takes: {lines[0]} … {lines[lines.length - 1]}</p>}
+      placeholder={action === 'refine' ? 'Less hooded eyes, keep the nose' : action === 'blend' ? 'Keep the hair, change the face structure' : ''} className="w-full rounded border border-port-border bg-port-bg p-2 text-sm" />
+    {lines.length > 0 && <p className="text-xs text-gray-400">{lines.length} {lines.length === 1 ? 'take' : 'takes'}: {new Set(lines).size === 1 ? lines[0] : `${lines[0]} … ${lines[lines.length - 1]}`}</p>}
     <button type="button" onClick={async () => { if (await onRender(body)) setNote(''); }} disabled={disabled || !ready || !preview.preview}
       className={buttonClass}>Render {lines.length || count} takes</button>
     {ready && <ModelInputPreview preview={preview} prompt={note} />}
