@@ -154,6 +154,25 @@ describe('discoverAuthorizationServer', () => {
     });
   });
 
+  it('treats any 127.x base and 127.0.0.1 metadata as the same loopback host, scheme mismatch included', async () => {
+    vi.mocked(fetchWithTimeout).mockResolvedValue(mockJsonResponse({
+      ...METADATA, token_endpoint: 'http://127.0.0.1:23373/oauth/token',
+    }));
+    for (const baseUrl of ['http://127.0.0.5:23373', 'https://127.0.0.5:23373']) {
+      await expect(discoverAuthorizationServer({ baseUrl })).resolves.toMatchObject({
+        tokenEndpoint: 'http://127.0.0.1:23373/oauth/token',
+      });
+    }
+  });
+
+  it('refuses non-loopback metadata under a 127.x base', async () => {
+    vi.mocked(fetchWithTimeout).mockResolvedValue(mockJsonResponse({
+      ...METADATA, token_endpoint: 'http://128.0.0.1:23373/oauth/token',
+    }));
+    await expect(discoverAuthorizationServer({ baseUrl: 'http://127.0.0.5:23373' }))
+      .rejects.toMatchObject({ code: 'OAUTH_DISCOVERY_INVALID' });
+  });
+
   it('refuses a server that advertises PKCE without S256', async () => {
     vi.mocked(fetchWithTimeout).mockResolvedValue(mockJsonResponse({
       ...METADATA, code_challenge_methods_supported: ['plain'],

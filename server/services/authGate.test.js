@@ -380,7 +380,7 @@ describe('authGate middleware', () => {
     const auth = await import('./auth.js');
     const { token } = await auth.setPassword({ newPassword: 'correct-horse' });
     const { authGate } = await import('./authGate.js');
-    for (const origin of ['http://localhost:3000', 'http://127.0.0.1:8080', 'http://[::1]:4173']) {
+    for (const origin of ['http://localhost:3000', 'http://127.0.0.1:8080', 'http://[::1]:4173', 'http://127.0.0.2:8080', 'http://127.999.1.1:5554']) {
       const result = await runGate(authGate, {
         path: '/api/cos',
         headers: { host: 'localhost:5555', origin, cookie: `portos_auth=${token}` },
@@ -398,6 +398,7 @@ describe('authGate middleware', () => {
       ['127.0.0.1:5555', 'http://localhost:5555'],
       ['localhost:5560', 'http://localhost:5555'],
       ['localhost:5555', 'http://localhost:5553'],
+      ['127.0.0.1:5555', 'http://127.0.0.2:5554'],
     ]) {
       const result = await runGate(authGate, { path: '/api/cos', headers: { host, origin, cookie: `portos_auth=${token}` } });
       expect(result.called, `${origin} -> ${host}`).toBe(true);
