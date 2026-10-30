@@ -122,6 +122,7 @@ vi.mock('./quotaBurnCompletions.js', () => ({
 }));
 
 const { normalizeQuotaBurnConfig } = await import('../lib/quotaBurnConfig.js');
+const { markHostShuttingDown, resetHostShutdownFlagForTests } = await import('../lib/hostShutdown.js');
 const { countQuotaBurnStepPending, invokeQuotaBurnStep } = await import('./quotaBurnInvoke.js');
 const { getQuotaBurnStatus, runQuotaBurnCycle, rotatePlanAfter, __tickQuotaBurn, __onBurnAgentCompleted, __resetQuotaBurnRunner } = await import('./quotaBurnRunner.js');
 
@@ -171,7 +172,7 @@ beforeEach(() => {
   __resetQuotaBurnRunner();
 });
 
-afterEach(() => { vi.clearAllMocks(); });
+afterEach(() => { vi.clearAllMocks(); resetHostShutdownFlagForTests(); });
 
 describe('runQuotaBurnCycle', () => {
   it('stays silent when the master switch is off and the trigger is scheduled', async () => {
@@ -639,6 +640,31 @@ describe('completion continuation', () => {
 
     await runQuotaBurnCycle({ trigger: 'manual', familyId: 'claude' });
     expect(state.invoked.map((entry) => entry.familyId)).toEqual(['claude', 'agy']);
+  });
+
+  it('dispatches no continuation once host shutdown latches, without cancelling the cycle in flight (#14170)', async () => {
+    // A dispatch made while the server exits registers an owner the shutdown
+    // marker never saw. The plan is durable, so the next process resumes it.
+    state.config = normalizeQuotaBurnConfig({
+      enabled: true,
+      families: {
+        claude: { enabled: true, resetWithinHours: 24, jobs: [{ id: 'c1', enabled: true, taskRef: { kind: 'builtin', taskType: 'ux', appId: 'app-1' } }] },
+        agy: { enabled: true, resetWithinHours: 24, jobs: [{ id: 'a1', enabled: true, taskRef: { kind: 'builtin', taskType: 'ux', appId: 'app-1' } }] },
+      },
+    });
+    state.quotas = [card('claude'), card('agy')];
+    state.invokePending = { c1: { count: 1 }, a1: { count: 1 } };
+    invokeQuotaBurnStep.mockImplementationOnce(async ({ step, family, candidate }) => {
+      state.invoked.push({ stepId: step.id, familyId: family.id, charge: candidate.charge });
+      markHostShuttingDown();
+      await expect(__onBurnAgentCompleted({ taskId: 'agy-done', result: { success: true }, metadata: { taskQuotaBurnFamily: 'agy' } }))
+        .resolves.toEqual({ skipped: 'host-shutdown' });
+      return { dispatched: true, summary: `ran ${step.id}` };
+    });
+
+    await expect(runQuotaBurnCycle({ trigger: 'manual', familyId: 'claude' })).resolves.toMatchObject({ dispatched: true });
+    expect(state.invoked.map((entry) => entry.familyId)).toEqual(['claude']);
+    await expect(runQuotaBurnCycle({ trigger: 'manual' })).resolves.toEqual({ skipped: 'host-shutdown' });
   });
 
   it('neither files a denial nor walks the plan when a burn agent is RELAUNCHED', async () => {

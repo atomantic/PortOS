@@ -60,6 +60,7 @@ import { WAIT } from '../lib/staleWhileRevalidate.js';
 import { cosEvents } from './cosEvents.js';
 import { nextQuotaBurnSequenceJob, completeQuotaBurnSequenceStep } from './quotaBurnSequence.js';
 import { burnPlanOwnsAgent } from '../lib/quotaBurnOrigin.js';
+import { isHostShuttingDown } from '../lib/hostShutdown.js';
 
 const TICK_MS = 60_000;
 
@@ -227,6 +228,11 @@ async function dispatchFromCandidate(candidate, { jobId = null, force = false, a
  * gates.
  */
 export async function runQuotaBurnCycle(options = {}) {
+  // A dispatch made while the server exits registers an owner the shutdown
+  // marker never saw, so the next boot charges it as a genuine orphan (#14170).
+  // The plan is durable and resumes from its last dispatch. Checked before the
+  // deferral below too, so a draining cycle's continuations cannot dispatch.
+  if (isHostShuttingDown()) return { skipped: 'host-shutdown' };
   if (running) {
     // A continuation that lands mid-cycle is REMEMBERED, not dropped. Two burn
     // agents from different families finishing within the same cycle is ordinary

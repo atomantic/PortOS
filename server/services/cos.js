@@ -1,4 +1,5 @@
 import { maintenance } from '../lib/maintenanceAdmission.js';
+import { isHostShuttingDown } from '../lib/hostShutdown.js';
 import { mergePersistentMindMaintainer } from '../lib/persistentMindMaintainer.js';
 /**
  * Chief of Staff (CoS) Service
@@ -738,6 +739,9 @@ export async function isPaused() {
  */
 export async function forceSpawnTask(taskId, { resetSpawnBudget = false } = {}) {
   maintenance.assertOpen();
+  // Before the budget-reset write and the `task:ready` emit: an owner registered
+  // after the shutdown marker snapshot is charged as an orphan next boot (#14170).
+  if (isHostShuttingDown()) return { error: 'PortOS is shutting down — run the task again after it restarts' };
   let task = await getTaskById(taskId);
   if (!task) return { error: 'Task not found' };
   if (task.metadata?.preflight?.requestId) return { error: 'Preflight progress cards cannot be spawned' };
@@ -1062,6 +1066,7 @@ async function isRunnerHolding() {
  * This bypasses the evaluation interval for user-submitted tasks so they start instantly.
  */
 async function tryImmediateSpawn(task) {
+  if (isHostShuttingDown()) return;
   if (!isDaemonRunning()) return;
 
   const paused = await isPaused();
@@ -1278,6 +1283,10 @@ const scheduleDequeue = (options = {}) => setImmediate(() => {
 export async function dequeueNextTask({ ignoreTaskId = null } = {}) {
   if (maintenance.held()) return;
   if (!isDaemonRunning()) return;
+  // Same reason as the runner gate below: the tiers' side effects cannot be
+  // taken back, and an agent registered after the shutdown marker snapshot is
+  // charged as a genuine orphan on the next boot (#14170).
+  if (isHostShuttingDown()) return;
 
   // In runner mode the cos-runner app owns every agent process, so a cycle run
   // while it is down can only produce holds. Bail before the tiers rather than
@@ -1599,7 +1608,9 @@ export async function init() {
           await recoverBlockedSystemTask(agent.taskId);
         })
         .catch(err => console.error(`❌ Blocked-system investigation recovery failed: ${err.message}`))
-        .then(() => refillPerpetualForCompletedAgent(agent))
+        // A run that finished as the server exits still finalizes, but admits
+        // nothing next (#14170). The hourly improvement check resumes the drain.
+        .then(() => (isHostShuttingDown() ? null : refillPerpetualForCompletedAgent(agent)))
         .catch(err => console.error(`❌ Perpetual refill after ${agent?.id} failed: ${err.message}`))
         // Same window as the refill above: this runs before the completing
         // task's `updateTask` settles it, so the idle tier's generator must

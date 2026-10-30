@@ -1,6 +1,7 @@
 import { EXECUTION_OPTIONS_ERROR } from '../lib/executionOptions.js';
 import { PROVIDER_CONFIG_BLOCKED_CATEGORY } from '../lib/taskBlockCategories.js';
 import { maintenance } from '../lib/maintenanceAdmission.js';
+import { isHostShuttingDown } from '../lib/hostShutdown.js';
 import { isPrivateSecurityTask } from '../lib/privateSecurityPolicy.js';
 /**
  * Agent Lifecycle
@@ -85,6 +86,12 @@ const AGENTS_DIR = PATHS.cosAgents;
  * bypasses the listener is still gated.
  */
 export async function spawnAgentForTask(task) {
+  // Last-line host-shutdown gate (#14170), before preparation claims the task;
+  // the primary hold is the `task:ready` listener, for the same #989 reason.
+  if (isHostShuttingDown()) {
+    console.log(`⏸️ Holding task ${task.id} — PortOS is shutting down`);
+    return null;
+  }
   const outcome = await withUpdateInProgressGuard(isUpdateInProgress, () =>
     withSpawnDedupGuard(spawningTasks, task.id, () => runAgentSpawn(task)));
   if (outcome === SPAWN_UPDATE_SKIP) {
