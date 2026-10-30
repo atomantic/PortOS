@@ -2573,7 +2573,12 @@ describe('MusicVideo visual spec, takes and handoff (#8965)', () => {
       width: 1536,
       height: 864,
       referenceImageFiles: ['mood.png'],
-      musicVideo: { projectId: 'mv-spec', sceneId: 's1', compose: true },
+      musicVideo: {
+        projectId: 'mv-spec',
+        sceneId: 's1',
+        compose: true,
+        castInputs: { ingredientId: null, guides: [], sheets: [] },
+      },
     }, { silent: true }));
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith(
       expect.stringMatching(/can't condition on 1 reference image: Reference images are only supported/),
