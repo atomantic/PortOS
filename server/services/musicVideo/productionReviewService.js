@@ -91,6 +91,31 @@ export async function importDocumentShots(id, input) {
   return changed(project);
 }
 
+/** Stills render from framePrompt alone, so it must carry who and what, not only where.
+ * Cast is free prose; structured entries (JSON array of {id|name, age, description}) are
+ * attached only when the shot text names them, never guessed from prose. */
+function composeShotFramePrompt(shot, cast) {
+  const action = (shot.action || '').trim();
+  const staging = (shot.staging || '').trim();
+  const text = `${action} ${staging}`.toLowerCase();
+  let entries = [];
+  try { const parsed = JSON.parse(cast || ''); entries = Array.isArray(parsed) ? parsed : []; } catch { /* prose cast: nothing structured to match */ }
+  const named = entries.filter(e => e && typeof e === 'object').flatMap(e => {
+    const name = String(e.name || e.id || '').trim();
+    if (!name || !text.includes(name.toLowerCase())) return [];
+    const detail = [e.age != null && e.age !== '' ? `age ${e.age}` : '', typeof e.description === 'string' ? e.description.trim() : ''].filter(Boolean).join(', ');
+    return [detail ? `${name} (${detail})` : name];
+  });
+  const parts = [];
+  if (action) parts.push(action);
+  if (staging && !action.toLowerCase().includes(staging.toLowerCase())) {
+    if (action && staging.toLowerCase().includes(action.toLowerCase())) parts.pop();
+    parts.push(staging);
+  }
+  if (named.length) parts.push(`In frame: ${named.join('; ')}`);
+  return parts.join(' ');
+}
+
 /** Explicitly create and bind an unbound draft shot, under the project write lock. */
 export async function bindProductionShot(id, shotId) {
   const { addScene } = await import('./projectsLogic.js');
@@ -101,7 +126,7 @@ export async function bindProductionShot(id, shotId) {
     if (!shot) throw new ServerError('Draft shot not found', { status: 404, code: 'NOT_FOUND' });
     if (shot.sceneId) throw new ServerError('This draft shot is already bound. Edit its existing Board scene.', { status: 409, code: 'SHOT_ALREADY_BOUND' });
     const out = addScene(current, { label: shot.id, startSec: shot.startSec ?? null, endSec: shot.endSec ?? null,
-      visualIntent: shot.action, prompt: [shot.action, shot.camera, shot.transition].join('\n'), framePrompt: shot.staging });
+      visualIntent: shot.action, prompt: [shot.action, shot.camera, shot.transition].join('\n'), framePrompt: composeShotFramePrompt(shot, draft.cast) });
     out.project.productionReview = { ...current.productionReview, draft: { ...draft,
       storyboard: draft.storyboard.map(s => s === shot ? { ...s, sceneId: out.scene.sceneId } : s) } };
     return { project: out.project };
