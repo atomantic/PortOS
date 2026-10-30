@@ -56,9 +56,23 @@ export function featureLines(featureKey) {
 
 export const BLEND_STEPS = Object.freeze(['a little (about a fifth of the way)', 'about a third of the way', 'halfway', 'mostly (about four fifths of the way)']);
 
-/** The variation lines for a blend toward a second face, optionally limited to some features. */
-export function blendLines(featureKeys = []) {
+export const DESIGN_MAX_BLEND_REFS = 3;
+export const BLEND_MAX_STRENGTH_TAKES = 4;
+
+/** Where the reference faces sit in the attached images (the base is always first). */
+function blendTarget(refCount) {
+  return refCount > 1 ? `a blend of the faces in images 2 to ${refCount + 1}` : 'the face in the second image';
+}
+
+/**
+ * The variation lines for a blend toward one or more reference faces,
+ * optionally limited to some features. Without a strength the round spreads
+ * across BLEND_STEPS; with one, every take moves that far.
+ */
+export function blendLines(featureKeys = [], { refCount = 1, strength, count = 2 } = {}) {
   const nouns = [...new Set(featureKeys.map((key) => DESIGN_FEATURES[key]?.noun).filter(Boolean))];
   const only = nouns.length ? ` Change only the ${nouns.join(', ')}.` : '';
-  return BLEND_STEPS.map((step) => `Move the face ${step} toward the face in the second image.${only}`);
+  const target = blendTarget(refCount);
+  if (strength) return Array.from({ length: count }, () => `Move the face about ${strength}% of the way toward ${target}.${only}`);
+  return BLEND_STEPS.map((step) => `Move the face ${step} toward ${target}.${only}`);
 }

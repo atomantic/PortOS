@@ -1097,6 +1097,7 @@ function IngredientEditor() {
             key={record.id}
             ingredientId={record.id}
             name={name}
+            GalleryPicker={GalleryPickerModal}
             forms={formsOf(record.payload)}
             media={media.map(protectMedia)}
             blockedReason={renderBlockedReason('design round')}
@@ -1775,7 +1776,8 @@ function MediaPanel({ canonRemoval = null, readOnly = false, referenceLibrary = 
 // Modal that lists the existing media gallery (history) so the user can attach
 // or set-portrait from already-generated assets — the "scoped to existing media
 // history" requirement. Never uploads; it only references library keys.
-export function GalleryPickerModal({ onClose, onPick }) {
+// `pickLabel` swaps Attach/Portrait for one button (onPick gets the filename only).
+export function GalleryPickerModal({ onClose, onPick, pickLabel = null }) {
   const [query, setQuery] = useState('');
   const page = useGalleryPage({ q: query });
   const items = page.loading && page.items.length === 0 ? null : page.items;
@@ -1809,10 +1811,13 @@ export function GalleryPickerModal({ onClose, onPick }) {
                   <MediaImage src={it.path || `/data/images/${it.filename}`} alt={it.filename}
                     className="w-full aspect-square object-cover" />
                   <div className="absolute inset-x-0 bottom-0 flex opacity-100 sm:opacity-0 sm:group-hover:opacity-100 focus-within:opacity-100 [@media(hover:none)]:opacity-100 transition-opacity">
-                    <button type="button" onClick={() => onPick(it.filename, false)}
-                      className="flex-1 min-w-0 min-h-[44px] text-[10px] bg-black/70 text-gray-200 hover:text-white">Attach</button>
-                    <button type="button" onClick={() => onPick(it.filename, true)}
-                      className="flex-1 min-w-0 min-h-[44px] text-[10px] bg-black/70 text-gray-200 hover:text-port-warning">Portrait</button>
+                    {pickLabel ? <button type="button" onClick={() => onPick(it.filename)}
+                      className="flex-1 min-w-0 min-h-[44px] text-[10px] bg-black/70 text-gray-200 hover:text-white">{pickLabel}</button> : <>
+                      <button type="button" onClick={() => onPick(it.filename, false)}
+                        className="flex-1 min-w-0 min-h-[44px] text-[10px] bg-black/70 text-gray-200 hover:text-white">Attach</button>
+                      <button type="button" onClick={() => onPick(it.filename, true)}
+                        className="flex-1 min-w-0 min-h-[44px] text-[10px] bg-black/70 text-gray-200 hover:text-port-warning">Portrait</button>
+                    </>}
                   </div>
                 </div>
               ))}

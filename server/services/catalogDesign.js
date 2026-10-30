@@ -18,7 +18,7 @@ import { previewImagePrompt } from './imageGen/promptPreview.js';
 // record's other references as identity guides: the point is a new face, and
 // the old guides pull every take back to it. An open round is text only (plus
 // optional hair/clothing seeds); refine, feature, blend and age rounds edit
-// one picked image and send nothing else but the blend's second face.
+// one picked image and send nothing else but the blend's reference faces.
 
 const OPEN_SIZE = { width: 1024, height: 1024 };
 
@@ -71,15 +71,19 @@ export async function spreadCatalogDesign(id, input, { preview = false } = {}) {
   return { lines: lines.map((l) => l.trim()), runId: result.runId, sentPrompt, promptAdditions: additions };
 }
 
+const blendFiles = (input) => input.blendImageFiles || (input.blendImageFile ? [input.blendImageFile] : []);
+
 function takeLines(input) {
   if (input.mode === 'open') return input.lines;
   if (input.mode === 'refine' || input.mode === 'age') return Array.from({ length: input.count }, () => '');
   if (input.mode === 'feature') return featureLines(input.feature);
-  return blendLines(input.features);
+  return blendLines(input.features, { refCount: blendFiles(input).length, strength: input.strength, count: input.count });
 }
 
 const EDIT_INSTRUCTIONS = 'Edit the FIRST attached image as a new photograph of the same person. Keep the framing, pose, light, hair, clothing and photographic treatment. Change only what the note and variation ask. No text or watermark.';
-const BLEND_INSTRUCTIONS = 'The SECOND attached image is a face reference only. Do not copy its hair, clothing, framing or light.';
+const blendInstructions = (refCount) => (refCount > 1
+  ? 'Every attached image after the first is a face reference only. Do not copy their hair, clothing, framing or light.'
+  : 'The SECOND attached image is a face reference only. Do not copy its hair, clothing, framing or light.');
 const OPEN_INSTRUCTIONS = 'A casting photograph of one person. Invent the face exactly as the variation describes; do not make it more conventionally attractive. Natural, unretouched skin. No text or watermark.';
 const AGE_INSTRUCTIONS = 'Show the person in the FIRST attached image at the age below. Keep the same bone structure, nose, eyes, brows and mouth so they read as the same person; change only what age changes, plus the hair and clothing described. Keep the framing and light. No text or watermark.';
 const SEED_INSTRUCTIONS = 'The attached images show hair, clothing and setting only. Do not copy their face.';
@@ -89,7 +93,7 @@ function takeBody(input, line, { target, backend, universe, dimensions }) {
   const additions = [
     input.mode === 'age' ? promptAddition('design-instructions', 'Age instructions', AGE_INSTRUCTIONS)
       : promptAddition('design-instructions', edit ? 'Design edit instructions' : 'Design instructions', edit ? EDIT_INSTRUCTIONS : OPEN_INSTRUCTIONS),
-    input.mode === 'blend' ? promptAddition('design-blend', 'Blend reference', BLEND_INSTRUCTIONS) : null,
+    input.mode === 'blend' ? promptAddition('design-blend', 'Blend reference', blendInstructions(blendFiles(input).length)) : null,
     input.mode === 'open' && input.seedImageFiles?.length ? promptAddition('design-seeds', 'Seed images', SEED_INSTRUCTIONS) : null,
     promptAddition('design-variation', 'Variation', line),
     input.mode === 'open' ? promptAddition('design-framing', 'Framing', DESIGN_FRAMINGS[input.framing].text) : null,
@@ -102,7 +106,7 @@ function takeBody(input, line, { target, backend, universe, dimensions }) {
     ...backend,
     prompt: [lead.text, input.note, ...rest.map((a) => a.text)].filter(Boolean).join('\n\n'), promptAdditions: additions,
     ...(edit ? { initImageFile: input.baseImageFile } : {}),
-    ...(input.mode === 'blend' ? { referenceImageFiles: [input.blendImageFile] }
+    ...(input.mode === 'blend' ? { referenceImageFiles: blendFiles(input) }
       : input.mode === 'open' && input.seedImageFiles?.length ? { referenceImageFiles: input.seedImageFiles } : {}),
     ...dimensions,
   };
@@ -112,14 +116,14 @@ function takeBody(input, line, { target, backend, universe, dimensions }) {
 export async function renderCatalogDesign(id, input, { preview = false } = {}) {
   const target = await loadDesignTarget(id, input.formId);
   const resolved = await resolveCatalogImageTarget(id);
-  const extraImages = input.mode === 'blend' ? 1 : input.mode === 'open' ? input.seedImageFiles?.length || 0 : 0;
+  const extraImages = input.mode === 'blend' ? blendFiles(input).length : input.mode === 'open' ? input.seedImageFiles?.length || 0 : 0;
   if (extraImages > resolved.maxGuides) {
-    throw new ServerError(extraImages === 1 && input.mode === 'blend'
-      ? 'The image backend in Settings cannot take a second face image. Pick a backend that accepts reference images to blend.'
-      : `The image backend in Settings takes at most ${resolved.maxGuides} seed images`, { status: 400 });
+    throw new ServerError(input.mode !== 'blend' ? `The image backend in Settings takes at most ${resolved.maxGuides} seed images`
+      : resolved.maxGuides === 0 ? 'The image backend in Settings cannot take a second face image. Pick a backend that accepts reference images to blend.'
+      : `The image backend in Settings takes at most ${resolved.maxGuides} reference ${resolved.maxGuides === 1 ? 'face' : 'faces'} to blend toward`, { status: 400 });
   }
   const dimensions = input.mode === 'open' ? OPEN_SIZE : await readEditSourceDimensions(input.baseImageFile);
-  if (input.mode === 'blend') await readEditSourceDimensions(input.blendImageFile);
+  for (const file of input.mode === 'blend' ? blendFiles(input) : []) await readEditSourceDimensions(file);
   const lines = takeLines(input);
   const context = { target, backend: catalogImageBackend(resolved), universe: resolved.universe, dimensions };
   if (preview) return { lines, ...(await previewImagePrompt(takeBody(input, lines[0], context))) };

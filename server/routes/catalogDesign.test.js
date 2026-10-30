@@ -126,6 +126,23 @@ describe('Casting design rounds', () => {
     expect(state.enqueue).not.toHaveBeenCalled();
   });
 
+  it('redesigns from canon toward several faces at a chosen strength, with the note as written', async () => {
+    const note = 'Keep the hair, but update the face structure toward these references.';
+    const body = { mode: 'blend', baseImageFile: 'old-guide.png', blendImageFiles: ['face-a.png', 'face-b.png'], strength: 50, count: 3, note };
+    const result = await post('render', body);
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    expect(params()).toHaveLength(3);
+    for (const p of params()) {
+      expect(basename(p.initImagePath)).toBe('old-guide.png');
+      expect(p.referenceImagePaths.map(r => basename(r))).toEqual(['face-a.png', 'face-b.png']);
+      expect(p.prompt).toContain(note);
+      expect(p.prompt).toContain('about 50% of the way toward a blend of the faces in images 2 to 3.');
+      expect(p.prompt).toContain('Every attached image after the first is a face reference only.');
+      expect(p.catalogAttach.library.derivedFrom).toEqual({ mediaKey: 'old-guide.png', kind: 'reference' });
+    }
+    expect((await post('render', { ...body, blendImageFile: 'face-c.png' })).status).toBe(400);
+  });
+
   it('carries a take to another age with that age’s hair and clothing', async () => {
     const result = await post('render', { mode: 'age', baseImageFile: 'take.png', formId: 'form-child01', count: 2 });
     expect(result.status, JSON.stringify(result.body)).toBe(200);
