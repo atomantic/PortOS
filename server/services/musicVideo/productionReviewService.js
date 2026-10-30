@@ -94,7 +94,7 @@ export async function importDocumentShots(id, input) {
 /** Stills render from framePrompt alone, so it must carry who and what, not only where.
  * Cast is free prose; structured entries (JSON array of {id|name, age, description}) are
  * attached only when the shot text names them, never guessed from prose. */
-export function composeShotFramePrompt(shot, cast) {
+function composeShotFramePrompt(shot, cast) {
   const action = (shot.action || '').trim();
   const staging = (shot.staging || '').trim();
   const text = `${action} ${staging}`.toLowerCase();
