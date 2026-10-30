@@ -76,7 +76,7 @@ const nodeState = (board, nodeId) => board.beats[0].panels[0].make?.nodes?.[node
 describe('storyboard panel maker', () => {
   // Uniquely catches the default recipe calling an LLM, or the style reaching the model unlisted or out of order.
   it('draws from the shot as written with the style after it, listed, and no LLM call', async () => {
-    const { id, panelId } = await boardWithPanel({ action: 'She pushes open the gym doors', framing: 'over-the-shoulder', angle: 'low', camera: 'slow push in', dialogue: 'Example lyric' }, { writer: false });
+    const { id, panelId } = await boardWithPanel({ action: 'She pushes open the gym doors', framing: 'over-the-shoulder', angle: 'low', facing: 'back', camera: 'slow push in', dialogue: 'Example lyric' }, { writer: false });
     const drawn = await api('post', `/${id}/panels/${panelId}/draw`);
     expect(drawn.status).toBe(200);
     expect(runPrompt).not.toHaveBeenCalled();
@@ -84,7 +84,7 @@ describe('storyboard panel maker', () => {
     const state = nodeState(drawn.body, 'node-image');
     const [style] = state.promptAdditions;
     expect(style).toMatchObject({ id: 'style', label: 'Style (Storyboard style)' });
-    expect(prompt).toBe(`She pushes open the gym doors\nFraming: over-the-shoulder shot.\nAngle: low angle looking up.\nCamera: slow push in\n\n${style.text}`);
+    expect(prompt).toBe(`She pushes open the gym doors\nFraming: over-the-shoulder shot.\nAngle: low angle looking up.\nSubject: rear view from directly behind, the subject faces away from the camera, only their back and the back of the head visible, no face.\nCamera: slow push in\n\n${style.text}`);
     expect(prompt).not.toContain('Example lyric');
     expect(state.sentPrompt).toBe(prompt);
 

@@ -273,6 +273,15 @@ const ANGLE_WORDS = Object.freeze({
   'eye-level': 'eye-level angle', high: 'high angle looking down', low: 'low angle looking up',
   'birds-eye': "bird's-eye view straight down", 'worms-eye': "worm's-eye view from the ground", dutch: 'Dutch angle, tilted horizon',
 });
+// Image models drift to a 3/4 view, so each facing names the view and what
+// the camera does and doesn't see.
+const FACING_WORDS = Object.freeze({
+  front: 'front view, the subject faces the camera head-on, body square to the lens, both shoulders and the whole face toward the viewer, not turned to the side',
+  'three-quarter': 'three-quarter view, the subject turned about 45 degrees from the camera, one side of the face toward the viewer',
+  profile: 'side profile, the subject turned 90 degrees from the camera, seen exactly side-on',
+  'three-quarter-back': 'three-quarter rear view, the subject turned mostly away from the camera, the back of the head and one shoulder toward the viewer, face barely visible',
+  back: 'rear view from directly behind, the subject faces away from the camera, only their back and the back of the head visible, no face',
+});
 
 /**
  * The words a text node carries for one panel: the panel's own fields (each
@@ -288,6 +297,7 @@ export function textNodeValue(node, { beat, panel } = {}) {
     panel?.action,
     panel?.framing ? `Framing: ${FRAMING_WORDS[panel.framing] || panel.framing}.` : '',
     panel?.angle ? `Angle: ${ANGLE_WORDS[panel.angle] || panel.angle}.` : '',
+    panel?.facing ? `Subject: ${FACING_WORDS[panel.facing] || panel.facing}.` : '',
     panel?.camera ? `Camera: ${panel.camera}` : '',
   ].filter((v) => v && v.trim()).join('\n');
 }

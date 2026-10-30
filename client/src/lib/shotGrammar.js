@@ -7,7 +7,7 @@
  * `storyboardShotSchema` accepts. The label maps below are client-only
  * presentation, keyed off those two enums.
  */
-export { SHOT_ANGLES, SHOT_TYPES, SCREEN_DIRECTIONS } from '../../../server/lib/shotGrammar.js';
+export { SHOT_ANGLES, SHOT_FACINGS, SHOT_TYPES, SCREEN_DIRECTIONS } from '../../../server/lib/shotGrammar.js';
 
 export const SHOT_TYPE_LABELS = Object.freeze({
   'extreme-wide': 'Extreme wide',
@@ -56,6 +56,22 @@ export const SHOT_ANGLE_HINTS = Object.freeze({
   'birds-eye': 'Straight down from overhead',
   'worms-eye': 'From the ground, looking steeply up',
   dutch: 'Camera rolled so the horizon tilts: unease',
+});
+
+export const SHOT_FACING_LABELS = Object.freeze({
+  front: 'Front',
+  'three-quarter': '3/4',
+  profile: 'Profile',
+  'three-quarter-back': '3/4 back',
+  back: 'Back',
+});
+
+export const SHOT_FACING_HINTS = Object.freeze({
+  front: 'Facing the camera head-on',
+  'three-quarter': 'Turned about 45° from the camera',
+  profile: 'Side-on to the camera',
+  'three-quarter-back': 'Turned mostly away, face barely seen',
+  back: 'From behind, facing away',
 });
 
 export const SCREEN_DIRECTION_LABELS = Object.freeze({

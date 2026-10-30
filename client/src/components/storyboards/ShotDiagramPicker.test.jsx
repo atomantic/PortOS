@@ -1,17 +1,19 @@
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import {
-  SHOT_ANGLES, SHOT_ANGLE_HINTS, SHOT_ANGLE_LABELS, SHOT_TYPES, SHOT_TYPE_HINTS, SHOT_TYPE_LABELS,
+  SHOT_ANGLES, SHOT_ANGLE_HINTS, SHOT_ANGLE_LABELS, SHOT_FACINGS, SHOT_FACING_HINTS, SHOT_FACING_LABELS,
+  SHOT_TYPES, SHOT_TYPE_HINTS, SHOT_TYPE_LABELS,
 } from '../../lib/shotGrammar';
 import ShotDiagramPicker from './ShotDiagramPicker';
 
 const FRAMING = { options: SHOT_TYPES, labels: SHOT_TYPE_LABELS, hints: SHOT_TYPE_HINTS };
 const ANGLE = { options: SHOT_ANGLES, labels: SHOT_ANGLE_LABELS, hints: SHOT_ANGLE_HINTS };
+const FACING = { options: SHOT_FACINGS, labels: SHOT_FACING_LABELS, hints: SHOT_FACING_HINTS };
 
 describe('ShotDiagramPicker', () => {
   // A value the server accepts but the picker can't draw or label would show an
   // empty frame or a raw id.
-  it.each([['framing', FRAMING], ['angle', ANGLE]])('draws and labels every %s the server accepts', (_name, set) => {
+  it.each([['framing', FRAMING], ['angle', ANGLE], ['facing', FACING]])('draws and labels every %s the server accepts', (_name, set) => {
     render(<ShotDiagramPicker {...set} value={null} onChange={() => {}} />);
     for (const type of set.options) {
       expect(set.hints[type]).toBeTruthy();

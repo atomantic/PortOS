@@ -298,7 +298,8 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // with no prompt writer in between); a v8 peer would drop the edge.
   // v10 = panel framings `full`, `medium-wide`, `medium-close`, `insert`, and a
   // panel's camera `angle`; a v9 peer would null or drop them.
-  storyboards: 10,
+  // v11 = a panel's `facing` (subject to camera); a v10 peer would drop it.
+  storyboards: 11,
   // v1 = author personas (PostgreSQL `authors` table) federated via the
   // per-record peer-sync push pipeline (record kind `author`, sync category
   // `authors`). A brand-NEW synced record type like `storyBuilder` below, so it

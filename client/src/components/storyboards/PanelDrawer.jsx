@@ -12,7 +12,8 @@ import useDrawerTab from '../../hooks/useDrawerTab';
 import { listCatalogIngredientsByIds } from '../../services/api';
 import { STORYBOARD_LIMITS } from '../../../../server/lib/storyboardVocabulary.js';
 import {
-  SHOT_ANGLES, SHOT_ANGLE_HINTS, SHOT_ANGLE_LABELS, SHOT_TYPES, SHOT_TYPE_HINTS, SHOT_TYPE_LABELS,
+  SHOT_ANGLES, SHOT_ANGLE_HINTS, SHOT_ANGLE_LABELS, SHOT_FACINGS, SHOT_FACING_HINTS, SHOT_FACING_LABELS,
+  SHOT_TYPES, SHOT_TYPE_HINTS, SHOT_TYPE_LABELS,
 } from '../../lib/shotGrammar';
 import CommitField from './CommitField';
 import ShotDiagramPicker from './ShotDiagramPicker';
@@ -203,6 +204,11 @@ function ShotTab({ board, found, panelNumber, sketchNonce, busy, handlers, timin
         <span id={fieldId('angle')} className={labelClass}>Angle</span>
         <ShotDiagramPicker options={SHOT_ANGLES} labels={SHOT_ANGLE_LABELS} hints={SHOT_ANGLE_HINTS}
           value={panel.angle} labelId={fieldId('angle')} onChange={(angle) => handlers.onPatch({ angle })} />
+      </div>
+      <div>
+        <span id={fieldId('facing')} className={labelClass}>Subject to camera</span>
+        <ShotDiagramPicker options={SHOT_FACINGS} labels={SHOT_FACING_LABELS} hints={SHOT_FACING_HINTS}
+          value={panel.facing} labelId={fieldId('facing')} onChange={(facing) => handlers.onPatch({ facing })} />
       </div>
       {timing ? (
         <div className="grid grid-cols-2 gap-2">
