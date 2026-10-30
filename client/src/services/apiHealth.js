@@ -31,3 +31,7 @@ export const uploadAppleHealthXml = (file, options = {}) => {
 
 // Genome / Health Correlations
 export const getGenomeHealthCorrelations = () => request('/insights/genome-health');
+export const deleteAppleHealthDay = (date, options = {}) => request(`/apple-health/days/${encodeURIComponent(date)}`, {
+  method: 'DELETE',
+  ...options
+});

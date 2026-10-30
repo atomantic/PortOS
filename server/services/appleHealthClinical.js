@@ -6,13 +6,9 @@
  * into blood-tests.json.
  */
 
-import { atomicWrite, safeJSONParse } from '../lib/fileUtils.js';
-import { getBloodTests } from './meatspaceHealth.js';
-import { join } from 'path';
-import { PATHS, ensureDir } from '../lib/fileUtils.js';
+import { safeJSONParse } from '../lib/fileUtils.js';
+import { commitClinicalBloodImport } from './meatspaceHealth.js';
 import { POLLUTING_KEYS } from '../lib/objects.js';
-
-const BLOOD_TESTS_FILE = join(PATHS.meatspace, 'blood-tests.json');
 
 // === LOINC Code → Key Mapping ===
 
@@ -278,27 +274,17 @@ export async function importClinicalRecords(jsonStrings, io) {
   io?.emit?.('health:import:progress', { stage: 'clinical', message: `Processing ${jsonStrings.length} clinical records...` });
 
   const fhirData = processClinicalRecords(jsonStrings);
-  const existing = await getBloodTests();
-  const existingDates = new Set(existing.tests.map(t => t.date));
-
-  const merged = mergeBloodTests(existing, fhirData);
-
-  // Count what changed
-  const newDates = merged.tests.filter(t => !existingDates.has(t.date)).length;
-  const _newValues = fhirData.totalParsed;
-
-  await ensureDir(PATHS.meatspace);
-  await atomicWrite(BLOOD_TESTS_FILE, merged);
+  const merged = await commitClinicalBloodImport(fhirData, mergeBloodTests);
 
   const summary = {
     clinicalRecords: jsonStrings.length,
     labsParsed: fhirData.totalParsed,
     labsSkipped: fhirData.totalSkipped,
-    newDates,
+    newDates: merged.newDates,
     totalDates: merged.tests.length
   };
 
-  console.log(`🧪 Clinical records imported: ${fhirData.totalParsed} labs from ${fhirData.tests.length} dates (${newDates} new)`);
+  console.log(`🧪 Clinical records imported: ${fhirData.totalParsed} labs from ${fhirData.tests.length} dates (${merged.newDates} new)`);
   io?.emit?.('health:import:progress', { stage: 'clinical_done', ...summary });
 
   return summary;

@@ -54,3 +54,7 @@ export const healthIngestSchema = z.object({
 export const appleHealthLatestMetricsQuerySchema = z.object({
   metrics: z.string().max(2000).optional()
 });
+
+export const appleHealthDayParamSchema = z.object({
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
+});
