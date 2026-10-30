@@ -37,8 +37,11 @@ function pinSnapshotExpression(pinUrl) {
     const fromSrcset = (img) => (img?.getAttribute('srcset') || '').split(',')
       .map((entry) => entry.trim().split(/\\s+/)[0]).filter(Boolean).reverse();
     // Pinterest renames its closeup test ids; fall back from the known ids to
-    // the largest content image outside the related-pin grid, then page metadata.
+    // page metadata, then the largest content image outside the related-pin grid.
     const findCloseupImages = () => {
+      const inRelated = (node) => Boolean(node.closest(
+        '[data-test-id="masonry-container"], [data-test-id="carousel-pin"], [data-test-id="pin"], [data-test-id="related-pins-grid"]',
+      ));
       const named = [
         '[data-test-id="pin-closeup-image"]',
         '[data-test-id="closeup-image"]',
@@ -46,23 +49,24 @@ function pinSnapshotExpression(pinUrl) {
         '[data-test-id="closeup-body"]',
         '[data-test-id="closeup-container"]',
       ].flatMap((selector) => [...document.querySelectorAll(selector)])
-        .flatMap((node) => (node.matches('img') ? [node] : [...node.querySelectorAll('img')]));
-      const outsideGrid = [...document.querySelectorAll('img')].filter((node) => !node.closest(
-        '[data-test-id="masonry-container"], [data-test-id="carousel-pin"], [data-test-id="pin"], [data-test-id="related-pins-grid"], header, nav',
-      ));
+        .flatMap((node) => (node.matches('img') ? [node] : [...node.querySelectorAll('img')]))
+        .filter((node) => !inRelated(node));
+      const outsideGrid = [...document.querySelectorAll('img')].filter((node) => !inRelated(node) && !node.closest('header, nav'));
       const area = (node) => (node.naturalWidth || node.width || 0) * (node.naturalHeight || node.height || 0);
-      return [...named, ...outsideGrid.sort((a, b) => area(b) - area(a))];
+      return { named, loose: outsideGrid.sort((a, b) => area(b) - area(a)) };
     };
     const read = () => {
       const loginRequired = /^\\/(?:login|session\\/login)(?:\\/|$)/i.test(location.pathname)
         || Boolean(document.querySelector('input[type="password"]'));
-      const imgs = findCloseupImages();
+      const { named, loose } = findCloseupImages();
       const metaImages = ['meta[property="og:image"]', 'meta[name="twitter:image"]', 'meta[name="twitter:image:src"]', 'link[rel="image_src"]']
         .map((selector) => document.querySelector(selector))
         .map((node) => node?.content || node?.getAttribute('href'));
       const candidates = [
-        ...imgs.flatMap((img) => [...fromSrcset(img), img.currentSrc, img.src]),
+        ...named.flatMap((img) => [...fromSrcset(img), img.currentSrc, img.src]),
         ...metaImages,
+        // Last resort: unlabeled page images, after trustworthy metadata.
+        ...loose.flatMap((img) => [...fromSrcset(img), img.currentSrc, img.src]),
       ];
       const imageUrl = candidates
         .filter((raw) => raw && isPinImage(raw))

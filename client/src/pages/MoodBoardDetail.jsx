@@ -1156,6 +1156,7 @@ function MoodBoardEditor({ id }) {
                       {confirmingItemId === item.id ? (
                         <InlineConfirmRow
                           question="Remove this item?"
+                          stacked
                           confirmText="Remove"
                           onConfirm={() => handleRemoveItem(item.id)}
                           onCancel={() => setConfirmingItemId(null)}

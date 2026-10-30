@@ -64,16 +64,25 @@ describe('InlineConfirmRow', () => {
     expect(screen.getByRole('button', { name: 'Cancel' }).getAttribute('type')).toBe('button');
   });
 
-  it('stacks the question above equal-width actions in narrow containers', () => {
+  it('stacks the question above equal-width actions on narrow screens', () => {
     render(<InlineConfirmRow question="Delete this image?" />);
     const wrapper = screen.getByText('Delete this image?').closest('div');
     const actions = screen.getByRole('button', { name: 'Delete' }).parentElement;
 
     expect(wrapper.className).toContain('flex-col');
-    expect(wrapper.className).toContain('@md:flex-row');
+    expect(wrapper.className).toContain('sm:flex-row');
     expect(actions.className).toContain('grid-cols-2');
     expect(screen.getByRole('button', { name: 'Delete' }).className).toContain('min-h-9');
     expect(screen.getByRole('button', { name: 'Cancel' }).className).toContain('min-h-9');
+  });
+
+  it('stays stacked at every width when a narrow host opts in with stacked', () => {
+    render(<InlineConfirmRow question="Remove this item?" stacked />);
+    const wrapper = screen.getByText('Remove this item?').closest('div');
+    const actions = screen.getByRole('button', { name: 'Delete' }).parentElement;
+
+    expect(wrapper.className).not.toContain('sm:flex-row');
+    expect(actions.className).not.toContain('sm:flex');
   });
 
   it('forwards passthrough props (data-*/aria-*) to the root like sibling primitives', () => {
