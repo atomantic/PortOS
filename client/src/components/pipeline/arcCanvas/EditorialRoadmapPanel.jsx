@@ -4,12 +4,13 @@ import { useSeriesEditorial } from '../../../hooks/useSeriesEditorial';
 import { dominant } from '../../../lib/editorialRoadmap';
 import ArcRoadmapChart from './ArcRoadmapChart.jsx';
 import RoadmapMetric from './RoadmapMetric.jsx';
+import ListLoadError from '../../ui/ListLoadError';
 
 export default function EditorialRoadmapPanel({ series, seasons, issues }) {
   const seasonCount = seasons.length;
   const issueCount = issues.length;
   const {
-    aggregate, loading, running, starting,
+    aggregate, loading, loadError, noDraftedContent, reload, running, starting,
     startAnalysis, cancelAnalysis, coverage, analyzedPoints, progressText,
   } = useSeriesEditorial(series.id);
 
@@ -55,13 +56,17 @@ export default function EditorialRoadmapPanel({ series, seasons, issues }) {
         ) : (
           <div className="h-full flex flex-col items-center justify-center text-center gap-2 px-3">
             <p className="text-xs text-gray-500 italic">
-              {coverage.withContent === 0
+              {noDraftedContent
                 ? 'No drafted content yet — write or generate prose/scripts, then run analysis.'
-                : 'Not analyzed yet. Run the reader analysis to map plot, character, and reader emotion from the actual content.'}
+                : !aggregate && loadError
+                  ? 'The roadmap could not be loaded.'
+                  : 'Not analyzed yet. Run the reader analysis to map plot, character, and reader emotion from the actual content.'}
             </p>
           </div>
         )}
       </div>
+
+      {loadError ? <ListLoadError what="the editorial roadmap" error={loadError} onRetry={reload} /> : null}
 
       <div className="grid grid-cols-3 gap-2">
         <RoadmapMetric
@@ -101,9 +106,9 @@ export default function EditorialRoadmapPanel({ series, seasons, issues }) {
           <button
             type="button"
             onClick={startAnalysis}
-            disabled={starting || coverage.withContent === 0}
+            disabled={starting || noDraftedContent}
             className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded bg-port-accent/15 border border-port-accent/40 text-port-accent hover:bg-port-accent/25 disabled:opacity-40 disabled:cursor-not-allowed"
-            title={coverage.withContent === 0 ? 'No drafted content to analyze yet' : 'Run an LLM pass over each issue to map reader emotion, plot tension, and character arcs'}
+            title={noDraftedContent ? 'No drafted content to analyze yet' : 'Run an LLM pass over each issue to map reader emotion, plot tension, and character arcs'}
           >
             {starting ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
             {coverage.analyzed > 0 ? 'Re-run reader map' : 'Interpret reader map'}

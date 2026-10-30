@@ -22,6 +22,7 @@ import { ArcRoadmapChart } from '../components/pipeline/ArcCanvas';
 import ReaderPanelView from '../components/pipeline/ReaderPanelView';
 import ComparativeRankView from '../components/pipeline/ComparativeRankView';
 import TabPills from '../components/ui/TabPills';
+import ListLoadError from '../components/ui/ListLoadError';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import {
   getPipelineSeries, getIssueEditorial, analyzeIssueEditorial, getSeriesJudge,
@@ -241,7 +242,7 @@ export default function PipelineSeriesRoadmap() {
   // Shared editorial-roadmap state + batch lifecycle (load, re-attach, SSE,
   // start/cancel, reload). The EditorialRoadmapPanel uses the same hook.
   const {
-    aggregate, reload, running, starting,
+    aggregate, reload, loadError, noDraftedContent, running, starting,
     startAnalysis, cancelAnalysis, coverage, roadmap, analyzedPoints, progressText,
   } = useSeriesEditorial(seriesId);
 
@@ -310,9 +311,9 @@ export default function PipelineSeriesRoadmap() {
             <button
               type="button"
               onClick={startAnalysis}
-              disabled={starting || coverage.withContent === 0}
+              disabled={starting || noDraftedContent}
               className="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded bg-port-accent/15 border border-port-accent/40 text-port-accent hover:bg-port-accent/25 disabled:opacity-40 disabled:cursor-not-allowed"
-              title={coverage.withContent === 0 ? 'No drafted content to analyze yet' : 'Run an LLM pass over each issue with content'}
+              title={noDraftedContent ? 'No drafted content to analyze yet' : 'Run an LLM pass over each issue with content'}
             >
               {starting ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
               {coverage.analyzed > 0 ? 'Re-run all' : 'Run analysis'}
@@ -330,10 +331,14 @@ export default function PipelineSeriesRoadmap() {
         mobileCompact
       />
 
+      {loadError ? (
+        <ListLoadError what="the reader map" error={loadError} onRetry={reload} />
+      ) : null}
+
       {activeTab === 'panel' ? (
-        <ReaderPanelView seriesId={seriesId} hasContent={coverage.withContent > 0} />
+        <ReaderPanelView seriesId={seriesId} hasContent={!noDraftedContent} />
       ) : activeTab === 'rank' ? (
-        <ComparativeRankView seriesId={seriesId} hasContent={coverage.withContent > 0} />
+        <ComparativeRankView seriesId={seriesId} hasContent={!noDraftedContent} />
       ) : (
       <>
       <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1.4fr)_minmax(300px,0.6fr)] gap-4 items-start">
@@ -351,9 +356,11 @@ export default function PipelineSeriesRoadmap() {
               <ArcRoadmapChart points={analyzedPoints} />
             ) : (
               <div className="h-full flex items-center justify-center text-center text-xs text-gray-500 italic px-4">
-                {coverage.withContent === 0
+                {noDraftedContent
                   ? 'No drafted content yet. Write or generate prose/scripts, then run the analysis.'
-                  : 'Not analyzed yet. Run the analysis to map the reader’s journey from the content.'}
+                  : !aggregate && loadError
+                    ? 'The reader map could not be loaded. Retry above.'
+                    : 'Not analyzed yet. Run the analysis to map the reader’s journey from the content.'}
               </div>
             )}
           </div>
@@ -388,9 +395,9 @@ export default function PipelineSeriesRoadmap() {
               />
             ))}
           </ul>
-        ) : (
+        ) : aggregate || !loadError ? (
           <p className="text-xs text-gray-500 italic">This series has no issues yet.</p>
-        )}
+        ) : null}
       </section>
       </>
       )}

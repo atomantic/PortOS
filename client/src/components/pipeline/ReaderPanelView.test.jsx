@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { PANEL_PERSONAS, PANEL_QUESTIONS } from '../../../../server/lib/editorial/panelDisagreement.js';
 
@@ -26,5 +26,27 @@ describe('ReaderPanelView', () => {
       expect(screen.getAllByText(q.label, { exact: false }).length).toBeGreaterThan(0);
     }
     for (const p of PANEL_PERSONAS) expect(screen.getAllByText(p.label).length).toBeGreaterThan(0);
+  });
+});
+
+describe('ReaderPanelView load states', () => {
+  const base = { loading: false, running: false, starting: false, convene: vi.fn(), cancel: vi.fn(), progressText: '' };
+
+  it('shows an error with Retry for a failed read, not the "hasn\'t met yet" empty copy', () => {
+    const reload = vi.fn();
+    useReaderPanel.mockReturnValue({ ...base, panel: null, loadError: new Error('boom'), reload });
+    render(<MemoryRouter><ReaderPanelView seriesId="s1" hasContent /></MemoryRouter>);
+    expect(screen.queryByText(/hasn’t met yet/)).toBeNull();
+    expect(screen.getByRole('alert').textContent).toMatch(/Could not load the reader panel/);
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('button', { name: 'Convene panel' }).disabled).toBe(false);
+  });
+
+  it('keeps the empty copy for a successful empty read', () => {
+    useReaderPanel.mockReturnValue({ ...base, panel: null, loadError: null, reload: vi.fn() });
+    render(<MemoryRouter><ReaderPanelView seriesId="s1" hasContent /></MemoryRouter>);
+    expect(screen.getByText(/hasn’t met yet/)).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 });

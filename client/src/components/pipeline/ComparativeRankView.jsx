@@ -15,22 +15,27 @@ import { Loader2, Trophy, Swords, AlertTriangle } from 'lucide-react';
 import BrailleSpinner from '../BrailleSpinner';
 import { getComparativeRank, runComparativeRank } from '../../services/apiPipeline';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
+import ListLoadError from '../ui/ListLoadError';
 
 const fmtRating = (r) => (Number.isFinite(r) ? Math.round(r) : '—');
 
 export default function ComparativeRankView({ seriesId, hasContent }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(null);
 
+  // A failed read keeps any ranking already on screen and is reported apart
+  // from "not ranked yet" so the user can retry.
   const load = useCallback(async () => {
     setLoading(true);
     // The view owns its empty/error UI, so silence the shared toast.
-    const res = await getComparativeRank(seriesId, { silent: true }).catch(() => null);
-    setData(res);
+    await getComparativeRank(seriesId, { silent: true })
+      .then((res) => { setData(res); setLoadError(null); })
+      .catch((err) => setLoadError(err ?? new Error('Request failed')));
     setLoading(false);
   }, [seriesId]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { setData(null); load(); }, [load]);
 
   const [run, running] = useAsyncAction(async () => {
     const res = await runComparativeRank(seriesId, {}, { silent: true });
@@ -75,9 +80,11 @@ export default function ComparativeRankView({ seriesId, hasContent }) {
         </div>
       </div>
 
+      {loadError ? <ListLoadError what="the ranking" error={loadError} onRetry={load} /> : null}
+
       {loading ? (
         <p className="text-xs"><BrailleSpinner text="Loading…" /></p>
-      ) : status === 'insufficient' ? (
+      ) : loadError && !data ? null : status === 'insufficient' ? (
         <p className="text-xs text-gray-500 italic">
           Need at least two drafted issues to run a head-to-head ranking.
         </p>
