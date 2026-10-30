@@ -269,6 +269,10 @@ const FRAMING_WORDS = Object.freeze({
   'medium-wide': 'medium wide shot, knees up', medium: 'medium shot', 'medium-close': 'medium close-up, chest up', close: 'close-up',
   'extreme-close': 'extreme close-up', insert: 'insert shot of a detail', 'over-the-shoulder': 'over-the-shoulder shot', 'two-shot': 'two-shot', pov: 'point-of-view shot',
 });
+const ANGLE_WORDS = Object.freeze({
+  'eye-level': 'eye-level angle', high: 'high angle looking down', low: 'low angle looking up',
+  'birds-eye': "bird's-eye view straight down", 'worms-eye': "worm's-eye view from the ground", dutch: 'Dutch angle, tilted horizon',
+});
 
 /**
  * The words a text node carries for one panel: the panel's own fields (each
@@ -283,6 +287,7 @@ export function textNodeValue(node, { beat, panel } = {}) {
   return [
     panel?.action,
     panel?.framing ? `Framing: ${FRAMING_WORDS[panel.framing] || panel.framing}.` : '',
+    panel?.angle ? `Angle: ${ANGLE_WORDS[panel.angle] || panel.angle}.` : '',
     panel?.camera ? `Camera: ${panel.camera}` : '',
   ].filter((v) => v && v.trim()).join('\n');
 }

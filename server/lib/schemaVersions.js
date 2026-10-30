@@ -296,8 +296,8 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // `pencil` and write that back.
   // v9 = an image node's `style` input (the style text sent after the shot,
   // with no prompt writer in between); a v8 peer would drop the edge.
-  // v10 = panel framings `full`, `medium-wide`, `medium-close`, `insert`; a v9
-  // peer would null them.
+  // v10 = panel framings `full`, `medium-wide`, `medium-close`, `insert`, and a
+  // panel's camera `angle`; a v9 peer would null or drop them.
   storyboards: 10,
   // v1 = author personas (PostgreSQL `authors` table) federated via the
   // per-record peer-sync push pipeline (record kind `author`, sync category

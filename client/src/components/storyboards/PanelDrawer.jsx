@@ -11,8 +11,11 @@ import IngredientPicker from '../IngredientPicker';
 import useDrawerTab from '../../hooks/useDrawerTab';
 import { listCatalogIngredientsByIds } from '../../services/api';
 import { STORYBOARD_LIMITS } from '../../../../server/lib/storyboardVocabulary.js';
+import {
+  SHOT_ANGLES, SHOT_ANGLE_HINTS, SHOT_ANGLE_LABELS, SHOT_TYPES, SHOT_TYPE_HINTS, SHOT_TYPE_LABELS,
+} from '../../lib/shotGrammar';
 import CommitField from './CommitField';
-import FramingPicker from './FramingPicker';
+import ShotDiagramPicker from './ShotDiagramPicker';
 import MoodBoardPinPicker from './MoodBoardPinPicker';
 import DrawPanelButton from './DrawPanelButton';
 import PanelCorrection from './PanelCorrection';
@@ -182,8 +185,13 @@ function ShotTab({ board, found, panelNumber, sketchNonce, busy, handlers }) {
       </div>
       <div>
         <span id={fieldId('framing')} className={labelClass}>Framing</span>
-        <FramingPicker value={panel.framing} labelId={fieldId('framing')}
-          onChange={(framing) => handlers.onPatch({ framing })} />
+        <ShotDiagramPicker options={SHOT_TYPES} labels={SHOT_TYPE_LABELS} hints={SHOT_TYPE_HINTS}
+          value={panel.framing} labelId={fieldId('framing')} onChange={(framing) => handlers.onPatch({ framing })} />
+      </div>
+      <div>
+        <span id={fieldId('angle')} className={labelClass}>Angle</span>
+        <ShotDiagramPicker options={SHOT_ANGLES} labels={SHOT_ANGLE_LABELS} hints={SHOT_ANGLE_HINTS}
+          value={panel.angle} labelId={fieldId('angle')} onChange={(angle) => handlers.onPatch({ angle })} />
       </div>
       <div className="grid grid-cols-2 gap-2">
         <div>

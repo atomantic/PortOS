@@ -34,6 +34,16 @@ export const SHOT_TYPES = Object.freeze([
 ]);
 const SHOT_TYPE_SET = new Set(SHOT_TYPES);
 
+// Camera angle / height relative to the subject, independent of framing.
+export const SHOT_ANGLES = Object.freeze([
+  'eye-level',  // level with the subject's eyes
+  'high',       // above, looking down
+  'low',        // below, looking up
+  'birds-eye',  // straight down from overhead
+  'worms-eye',  // from the ground, looking steeply up
+  'dutch',      // camera rolled so the horizon tilts
+]);
+
 // On-screen direction the subject faces / moves. `neutral` = head-on or
 // ambiguous (no axis to cross); `left`/`right` are the screen-relative sides the
 // 180°-rule check tracks for axis reversals between continuity-linked shots.

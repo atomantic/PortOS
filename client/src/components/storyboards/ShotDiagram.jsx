@@ -1,6 +1,6 @@
 // One stick figure in "figure units": 100 tall, centered on x=0, head top at y=0,
 // waist at y=55, feet at y=100. Each framing places it with a scale and offset so
-// every diagram draws the same person at a different distance.
+// every framing draws the same person at a different distance.
 function Figure({ x, top, scale, back = false }) {
   return (
     <g transform={`translate(${x} ${top}) scale(${scale})`}
@@ -21,6 +21,28 @@ function Figure({ x, top, scale, back = false }) {
 
 const Horizon = ({ y }) => (
   <path className="stroke-gray-500" strokeWidth="1" fill="none" d={`M0 ${y}H160`} />
+);
+
+// Side view for the angle diagrams: a small movie camera at (x, y) aimed at a
+// point on the standing figure, with its sight line dashed.
+function Camera({ x, y, aimX, aimY }) {
+  const deg = (Math.atan2(aimY - y, aimX - x) * 180) / Math.PI;
+  return (
+    <>
+      <path className="stroke-gray-500" strokeWidth="1" strokeDasharray="3 3" fill="none" d={`M${x} ${y}L${aimX} ${aimY}`} />
+      <g transform={`translate(${x} ${y}) rotate(${deg})`} className="fill-port-accent/30 stroke-port-accent" strokeWidth="1.5" strokeLinejoin="round">
+        <rect x="-11" y="-5" width="12" height="10" rx="1.5" />
+        <path d="M1 -3L8 -6V6L1 3Z" />
+      </g>
+    </>
+  );
+}
+
+const StandingSubject = () => (
+  <>
+    <Horizon y={84} />
+    <Figure x={112} top={24} scale={0.6} />
+  </>
 );
 
 const SCENES = {
@@ -86,14 +108,28 @@ const SCENES = {
       </g>
     </>
   ),
+
+  // Angles: where the camera sits relative to the subject.
+  'eye-level': () => (<><StandingSubject /><Camera x={32} y={29} aimX={112} aimY={29} /></>),
+  high: () => (<><StandingSubject /><Camera x={36} y={10} aimX={112} aimY={40} /></>),
+  low: () => (<><StandingSubject /><Camera x={36} y={74} aimX={112} aimY={40} /></>),
+  'birds-eye': () => (<><StandingSubject /><Camera x={112} y={11} aimX={112} aimY={40} /></>),
+  'worms-eye': () => (<><StandingSubject /><Camera x={70} y={78} aimX={112} aimY={30} /></>),
+  dutch: () => (
+    <g transform="rotate(-14 80 45)">
+      <path className="stroke-gray-500" strokeWidth="1" fill="none" d="M-40 70H200" />
+      <Figure x={80} top={14} scale={1.2} />
+    </g>
+  ),
 };
 
 /**
- * Code-drawn concept sketch of a storyboard framing (a `SHOT_TYPES` value): what
- * the camera sees at that distance. Unknown or empty framing draws an empty frame.
+ * Code-drawn concept sketch of a storyboard framing (a `SHOT_TYPES` value: what
+ * the camera sees at that distance) or angle (a `SHOT_ANGLES` value: where the
+ * camera sits, seen from the side). An unknown kind draws an empty frame.
  */
-export default function FramingDiagram({ framing, className = '' }) {
-  const Scene = SCENES[framing];
+export default function ShotDiagram({ kind, className = '' }) {
+  const Scene = SCENES[kind];
   // The svg viewport clips the oversized close-up figures.
   return (
     <svg viewBox="0 0 160 90" className={className} aria-hidden="true" focusable="false">
