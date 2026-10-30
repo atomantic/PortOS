@@ -15,6 +15,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { PATHS } from '../lib/fileUtils.js';
+import { isInsideRealDataRoot } from '../lib/testDataIsolation.js';
 import { listUserActions, recordUserAction } from './userActions.js';
 
 const REAL_EVENTS_FILE = join(PATHS.data, 'user-action-events.json');
@@ -45,7 +46,11 @@ afterEach(() => {
   }
 });
 
-describe('user-action ledger — data-root guard (#5605)', () => {
+// A CoS worktree's own data/ is deliberately exempt from the guard (#14074), so the
+// unredirected PATHS.data is never 'inside the real root' there and the probe cannot fire.
+const describeGuarded = isInsideRealDataRoot(PATHS.data) ? describe : describe.skip;
+
+describeGuarded('user-action ledger — data-root guard (#5605)', () => {
   it('recordUserAction throws instead of writing into the real data/ tree', async () => {
     await expect(recordUserAction({
       type: 'cos.task.create',
