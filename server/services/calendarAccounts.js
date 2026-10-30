@@ -69,7 +69,7 @@ export async function createAccount(data) {
       accounts[id].syncMethod = authStatus.hasTokens ? 'google-api' : 'claude-mcp';
     }
     await saveAccounts(accounts);
-    console.log(`📅 Calendar account created: ${data.name} (${data.type})`);
+    console.log(`📅 Calendar account created: ${id} (${data.type})`);
     return accounts[id];
   });
 }
@@ -116,7 +116,7 @@ export async function updateSubcalendars(id, subcalendars) {
     }));
     accounts[id].updatedAt = new Date().toISOString();
     await saveAccounts(accounts);
-    console.log(`📅 Updated subcalendars for account ${accounts[id].name}: ${subcalendars.length} calendars`);
+    console.log(`📅 Updated subcalendars for account ${id}: ${subcalendars.length} calendars`);
     return accounts[id];
   });
 }

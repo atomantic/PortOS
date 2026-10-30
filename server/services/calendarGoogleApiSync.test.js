@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // The direct Google API path projects each `events.list` item into a smaller
 // object before handing it to `pushSyncEvents`. That projection is a real
@@ -297,5 +297,48 @@ describe('apiSyncAccount conference-metadata projection (#6289)', () => {
       vi.useRealTimers();
       calendar.mockReset();
     }
+  });
+});
+
+// #14157: account and calendar display names (often mailbox addresses) and raw
+// provider error text must stay out of the forwarded log stream.
+describe('apiSyncAccount log privacy (#14157)', () => {
+  let lines;
+  beforeEach(() => {
+    vi.clearAllMocks();
+    lines = [];
+    const sink = (...args) => { lines.push(args.join(' ')); };
+    vi.spyOn(console, 'log').mockImplementation(sink);
+    vi.spyOn(console, 'error').mockImplementation(sink);
+    vi.spyOn(console, 'warn').mockImplementation(sink);
+    getAccount.mockResolvedValue({
+      ...accountWithCalendars(),
+      name: 'zz-marker-owner@example.com',
+      subcalendars: [
+        { calendarId: 'zz-marker-cal-a@example.com', name: 'zz-marker-cal-a-name', enabled: true, dormant: false },
+        { calendarId: 'zz-marker-cal-b@example.com', name: 'zz-marker-cal-b-name', enabled: true, dormant: false },
+      ],
+    });
+  });
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  const expectNoMarkers = () => {
+    const out = lines.join('\n');
+    expect(out).toContain(ACCOUNT_ID);
+    expect(out).not.toContain('zz-marker');
+    return out;
+  };
+
+  it('logs account id and status on success without names', async () => {
+    mockListPage([apiItem()]);
+    await apiSyncAccount(ACCOUNT_ID, null);
+    expect(expectNoMarkers()).toContain('sync success');
+  });
+
+  it('logs the failure without the provider message or calendar names', async () => {
+    const list = vi.fn().mockRejectedValue(new Error('no access to zz-marker-cal-a@example.com'));
+    calendar.mockReturnValue({ events: { list } });
+    await expect(apiSyncAccount(ACCOUNT_ID, null)).rejects.toThrow();
+    expect(expectNoMarkers()).toContain('sync failed');
   });
 });

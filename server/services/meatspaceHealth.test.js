@@ -57,6 +57,7 @@ import {
   addBodyEntry,
   getBloodPressureHistory,
   addBloodPressureReading,
+  addWorkout,
   addEyeExam,
   getEyeExams,
   updateEyeExam,
@@ -321,5 +322,41 @@ describe('eye exams by id', () => {
     expect((await getEyeExams()).exams[0].id).toBe(exam.id);
     const updated = await updateEyeExam(exam.id, { leftSphere: -2 });
     expect(updated.updatedAt).toEqual(expect.any(String));
+  });
+});
+
+// =============================================================================
+// LOG PRIVACY (#14157): the log stream is forwarded to every logs:line subscriber
+// and outlives the record, so health values must never be interpolated into it.
+// =============================================================================
+
+describe('health write logging', () => {
+  const captureConsole = () => {
+    const lines = [];
+    const sink = (...args) => { lines.push(args.join(' ')); };
+    vi.spyOn(console, 'log').mockImplementation(sink);
+    vi.spyOn(console, 'error').mockImplementation(sink);
+    vi.spyOn(console, 'warn').mockImplementation(sink);
+    return lines;
+  };
+
+  it('keeps blood-pressure numbers out of the log on save', async () => {
+    const lines = captureConsole();
+    readJSONFile.mockResolvedValue({ entries: [] });
+    await addBloodPressureReading({ date: '2024-02-01', systolic: 173, diastolic: 107 });
+    const out = lines.join('\n');
+    expect(out).toContain('Blood pressure reading logged for 2024-02-01');
+    expect(out).not.toMatch(/173|107/);
+    vi.restoreAllMocks();
+  });
+
+  it('keeps the workout type text out of the log on save', async () => {
+    const lines = captureConsole();
+    readJSONFile.mockResolvedValue({ workouts: [] });
+    await addWorkout({ date: '2024-02-01', type: 'zz-synthetic-workout-marker', durationMinutes: 30 });
+    const out = lines.join('\n');
+    expect(out).toContain('Workout logged for 2024-02-01');
+    expect(out).not.toContain('zz-synthetic-workout-marker');
+    vi.restoreAllMocks();
   });
 });

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // The CLI exit-status contract (#5302): runCliProviderPrompt hands back stdout
 // even when the child exited non-zero, flagged `partial`. These tests pin the
@@ -697,5 +697,48 @@ describe('Google participant snapshot reconciliation (#8838)', () => {
     const result = await pushSyncEvents(ACCOUNT_ID, CAL_ID, 'Work', [rawEvent('kept-in-window', 'Kept')], null, { dateRange });
     expect(result.pruned).toBe(1);
     expect(savedCache().events.map(e => e.id).sort()).toEqual(['ends-at-start', 'far', 'kept-in-window', 'old', 'starts-at-end']);
+  });
+});
+
+// #14157: the MCP sync and push-sync logs reach every logs:line subscriber, so
+// account and calendar display names must not be interpolated into them.
+describe('mcpSyncAccount log privacy (#14157)', () => {
+  let lines;
+  beforeEach(() => {
+    vi.clearAllMocks();
+    lines = [];
+    const sink = (...args) => { lines.push(args.join(' ')); };
+    vi.spyOn(console, 'log').mockImplementation(sink);
+    vi.spyOn(console, 'error').mockImplementation(sink);
+    vi.spyOn(console, 'warn').mockImplementation(sink);
+    getAccount.mockResolvedValue({
+      ...account(),
+      name: 'zz-marker-owner@example.com',
+      subcalendars: [{ calendarId: 'zz-marker-cal@example.com', name: 'zz-marker-cal-name', enabled: true, dormant: false }],
+    });
+    loadCache.mockResolvedValue({ events: [] });
+  });
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  it('logs account id and counts on success without names', async () => {
+    runCliProviderPrompt.mockImplementation(cliReply([{
+      calendarId: 'zz-marker-cal@example.com',
+      calendarName: 'zz-marker-cal-name',
+      events: [rawEvent('upstream-9', 'Design review')],
+    }]));
+    await mcpSyncAccount(ACCOUNT_ID, null);
+    const out = lines.join('\n');
+    expect(out).toContain(ACCOUNT_ID);
+    expect(out).toContain('MCP sync complete');
+    expect(out).not.toContain('zz-marker');
+  });
+
+  it('logs account id without the provider message on failure', async () => {
+    runCliProviderPrompt.mockRejectedValue(new Error('cannot read zz-marker-cal@example.com'));
+    await expect(mcpSyncAccount(ACCOUNT_ID, null)).rejects.toThrow();
+    const out = lines.join('\n');
+    expect(out).toContain(ACCOUNT_ID);
+    expect(out).toContain('MCP sync failed');
+    expect(out).not.toContain('zz-marker');
   });
 });

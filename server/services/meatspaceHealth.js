@@ -301,7 +301,7 @@ export async function addWorkout({ date, type, durationMinutes, intensity, notes
     data.workouts.sort(byDate);
     await writeLocal(WORKOUTS_FILE, data);
   });
-  console.log(`🏋️ Workout logged: ${trimmedType}${entry.durationMinutes ? ` (${entry.durationMinutes}min)` : ''} for ${targetDate}`);
+  console.log(`🏋️ Workout logged for ${targetDate}$1`);
   return entry;
 }
 
@@ -337,7 +337,7 @@ export async function addBloodPressureReading({ date, systolic, diastolic }) {
 
   if (await isMortalLoomEnabled()) {
     await mlUpsertHealthMetricByDate(targetDate, patch);
-    console.log(`🩺 Blood pressure ${systolic}/${diastolic} logged for ${targetDate} (MortalLoom)`);
+    console.log(`🩺 Blood pressure reading logged for ${targetDate} (MortalLoom)`);
     return { date: targetDate, systolic, diastolic };
   }
 
@@ -350,6 +350,6 @@ export async function addBloodPressureReading({ date, systolic, diastolic }) {
     log.entries.sort(byDate);
     await writeLocal(HEALTH_METRICS_FILE, log);
   });
-  console.log(`🩺 Blood pressure ${systolic}/${diastolic} logged for ${targetDate}`);
+  console.log(`🩺 Blood pressure reading logged for ${targetDate}`);
   return { date: targetDate, systolic, diastolic };
 }
