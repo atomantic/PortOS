@@ -209,7 +209,10 @@ export default function useTaskAddForm({
 
   const setField = (field, value) => dispatch({ type: 'patch', patch: { [field]: value } });
   const setTaskField = (field, value) => dispatch({ type: 'task', patch: { [field]: value } });
-  const { instances: assignableInstances, isFederated } = useAssignableInstances();
+  const {
+    instances: assignableInstances, isFederated, error: instancesError,
+    loading: instancesLoading, refresh: refreshInstances,
+  } = useAssignableInstances();
   const { isFeatureEnabled } = useInstanceFeatures();
   const quickTemplatesEnabled = isFeatureEnabled('cos-task-templates');
   const reviewerModelOptions = useReviewerModelOptions();
@@ -767,6 +770,9 @@ export default function useTaskAddForm({
     descriptionRef,
     assignableInstances,
     isFederated,
+    instancesError,
+    instancesLoading,
+    refreshInstances,
     quickTemplatesEnabled,
     reviewerModelOptions,
     enabledProviders,

@@ -105,7 +105,7 @@ export default function TasksTab({ completedRevision = 0, tasks, agents = [], ag
 
   // Fetched once for the whole list (#4520) — every row renders its instance pin
   // from this, so a long backlog never issues one request per task.
-  const { instances: assignableInstances, loading: instancesLoading, refresh: refreshInstances } = useAssignableInstances();
+  const { instances: assignableInstances, loading: instancesLoading, error: instancesError, refresh: refreshInstances } = useAssignableInstances();
 
   // Fetch task duration estimates
   useEffect(() => {
@@ -169,11 +169,11 @@ export default function TasksTab({ completedRevision = 0, tasks, agents = [], ag
     if (!agentsLoaded) return 'Agent status is loading; current activity is unconfirmed.';
     if (task.metadata?.claimedBy && task.metadata.claimedBy !== selfInstanceId) {
       return selfInstanceId ? 'A different instance claimed this task; its current activity is unconfirmed here.'
-        : assignableInstances === null ? 'This instance’s identity is loading; current activity is unconfirmed.'
+        : assignableInstances === null && !instancesError ? 'This instance’s identity is loading; current activity is unconfirmed.'
           : 'The owner instance could not be identified; current activity is unconfirmed.';
     }
     return null;
-  }, [agentsError, agentsLoaded, assignableInstances, isWorking, selfInstanceId]);
+  }, [agentsError, agentsLoaded, assignableInstances, instancesError, isWorking, selfInstanceId]);
   const isWaiting = useCallback((task) => ['pending', 'in_progress'].includes(task.status)
     && !isWorking(task) && !unconfirmedReason(task), [isWorking, unconfirmedReason]);
 
@@ -339,7 +339,7 @@ export default function TasksTab({ completedRevision = 0, tasks, agents = [], ag
         waiting: section === 'pending' && task.status === 'in_progress',
         unconfirmed: section === 'unconfirmed' ? unconfirmedReason(task) : null,
         retryIdentity: section === 'unconfirmed' && agentsLoaded && !agentsError && !selfInstanceId
-          && assignableInstances !== null && task.metadata?.claimedBy && !task.metadata?.preflight?.requestId ? refreshInstances : null,
+          && (assignableInstances !== null || instancesError) && task.metadata?.claimedBy && !task.metadata?.preflight?.requestId ? refreshInstances : null,
         retryIdentityLoading: instancesLoading,
         selected: isTaskSelected(task, source), onRefresh: section === 'completed' ? refreshHistory : onRefresh,
         onTaskUnblocked, onTaskDeleted: handleTaskDeleted, providers, providersLoaded, durations, apps, instances: assignableInstances };
