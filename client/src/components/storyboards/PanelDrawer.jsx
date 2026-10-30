@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useSearchParams } from 'react-router';
+import { useLocation, useNavigate, useSearchParams } from 'react-router';
 import {
   ChevronLeft, ChevronRight, Clapperboard, Drama, ImagePlus, ImageUp, Loader2, Mountain, Package, Palette, PenLine, Plus,
   RefreshCw, StickyNote, Trash2, Users, Wand2, X,
@@ -57,6 +57,17 @@ function ArtSection({ panel, aspectRatio, sketchNonce, moodBoardId, busy, onAddT
   const [confirmRemove, setConfirmRemove] = useState(false);
   const take = selectedTake(panel);
   const src = takeSrc(take, sketchNonce(take?.sketchKey));
+  const location = useLocation();
+  const navigate = useNavigate();
+  const canCorrect = !!(onCorrect && take?.image);
+  // Draw straight on the selected frame; the annotate page returns to the open
+  // correction form, where the note goes.
+  const drawOnFrame = () => {
+    const next = new URLSearchParams(location.search);
+    next.set('correct', 'open');
+    const returnTo = `${location.pathname}?${next}`;
+    navigate(`/media/annotate/${encodeURIComponent(`image:${take.image}`)}?returnTo=${encodeURIComponent(returnTo)}`);
+  };
 
   return (
     <div className="space-y-2">
@@ -93,17 +104,25 @@ function ArtSection({ panel, aspectRatio, sketchNonce, moodBoardId, busy, onAddT
         <button type="button" className={actionButton} onClick={() => setGalleryOpen(true)} disabled={busy}>
           <ImagePlus size={16} aria-hidden="true" /> Pick or upload
         </button>
-        <button type="button" className={actionButton} onClick={onSketch} disabled={busy}>
-          {busy ? <Loader2 size={16} className="animate-spin" aria-hidden="true" /> : <PenLine size={16} aria-hidden="true" />} Sketch
-        </button>
+        {canCorrect ? (
+          <>
+            <button type="button" className={actionButton} onClick={drawOnFrame} disabled={busy}>
+              <PenLine size={16} aria-hidden="true" /> Draw on frame
+            </button>
+            {!correcting ? (
+              <button type="button" className={actionButton} onClick={() => setCorrecting(true)} disabled={busy}>
+                <RefreshCw size={16} aria-hidden="true" /> Describe a change
+              </button>
+            ) : null}
+          </>
+        ) : (
+          <button type="button" className={actionButton} onClick={onSketch} disabled={busy}>
+            {busy ? <Loader2 size={16} className="animate-spin" aria-hidden="true" /> : <PenLine size={16} aria-hidden="true" />} Sketch
+          </button>
+        )}
         {moodBoardId ? (
           <button type="button" className={actionButton} onClick={() => setPinsOpen(true)} disabled={busy}>
             <Palette size={16} aria-hidden="true" /> Mood board
-          </button>
-        ) : null}
-        {onCorrect && take?.image && !correcting ? (
-          <button type="button" className={actionButton} onClick={() => setCorrecting(true)} disabled={busy}>
-            <RefreshCw size={16} aria-hidden="true" /> Correct
           </button>
         ) : null}
         {onSendToScene && take?.image ? (
@@ -118,7 +137,7 @@ function ArtSection({ panel, aspectRatio, sketchNonce, moodBoardId, busy, onAddT
           </button>
         ) : null}
       </div>
-      {onCorrect && take?.image && correcting ? (
+      {canCorrect && correcting ? (
         <PanelCorrection key={`${take.id}:${sketchNonce(`image:${take.image}`)}`} take={take} sketchNonce={sketchNonce}
           onCorrect={onCorrect} onClose={() => setCorrecting(false)} />
       ) : null}
@@ -229,8 +248,16 @@ function ShotTab({ board, found, panelNumber, sketchNonce, busy, handlers, timin
             </select>
           </>
         ) : null}
-        <button type="button" className={`${iconButton} ml-auto hover:text-port-error`} onClick={() => setConfirmDelete(true)} aria-label="Delete panel">
-          <Trash2 size={18} />
+      </div>
+      <div className="flex flex-wrap gap-2">
+        <button type="button" className={actionButton} onClick={() => handlers.onInsert(index)} disabled={busy}>
+          <Plus size={16} aria-hidden="true" /> Insert before
+        </button>
+        <button type="button" className={actionButton} onClick={() => handlers.onInsert(index + 1)} disabled={busy}>
+          <Plus size={16} aria-hidden="true" /> Insert after
+        </button>
+        <button type="button" className={`${actionButton} ml-auto hover:text-port-error`} onClick={() => setConfirmDelete(true)}>
+          <Trash2 size={16} aria-hidden="true" /> Delete panel
         </button>
       </div>
       {confirmDelete ? (

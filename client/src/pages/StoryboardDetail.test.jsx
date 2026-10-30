@@ -142,7 +142,9 @@ describe('StoryboardDetail', () => {
     api.correctStoryboardPanel.mockResolvedValue({ ...framed, updatedAt: '2026-10-22T00:00:02.000Z' });
     renderAt('/storyboards/sb-1/panel/panel-1');
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Correct' }));
+    expect(await screen.findByRole('button', { name: 'Draw on frame' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Sketch' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Describe a change' }));
     await waitFor(() => expect(screen.getByTestId('location').textContent).toBe('/storyboards/sb-1/panel/panel-1?correct=open'));
     expect(screen.getByRole('link', { name: /Edit markup/ }).getAttribute('href'))
       .toBe(`/media/annotate/image%3Aframe-a.png?returnTo=${encodeURIComponent('/storyboards/sb-1/panel/panel-1?correct=open')}`);
@@ -152,6 +154,19 @@ describe('StoryboardDetail', () => {
     fireEvent.click(redraw);
     await waitFor(() => expect(api.correctStoryboardPanel).toHaveBeenCalledWith('sb-1', 'panel-1', { takeId: 'take-1', note: 'Move her to the left third' }));
     await waitFor(() => expect(screen.getByTestId('location').textContent).toBe('/storyboards/sb-1/panel/panel-1'));
+  });
+
+  // Uniquely catches drawing on a framed panel starting a blank sketch instead of marking up its frame.
+  it('draws on the selected frame and returns to the open correction form', async () => {
+    api.getStoryboard.mockResolvedValue(board({ beats: [{ ...board().beats[0], panels: [panel('panel-1', {
+      takes: [{ id: 'take-1', source: 'generated', image: 'frame-a.png' }], selectedTakeId: 'take-1',
+    })] }] }));
+    renderAt('/storyboards/sb-1/panel/panel-1?tab=shot');
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Draw on frame' }));
+    await waitFor(() => expect(screen.getByTestId('location').textContent)
+      .toBe(`/media/annotate/image%3Aframe-a.png?returnTo=${encodeURIComponent('/storyboards/sb-1/panel/panel-1?tab=shot&correct=open')}`));
+    expect(api.createBlankSketch).not.toHaveBeenCalled();
   });
 
   it('changes the board\'s art style', async () => {
@@ -180,6 +195,22 @@ describe('StoryboardDetail', () => {
 
     await act(async () => { resolveOlder(board({ name: 'First', updatedAt: '2026-10-22T00:00:02.000Z' })); });
     expect(name.value).toBe('Second');
+  });
+
+  // Uniquely catches the side panel losing insert before/after (at the right index) or its labeled delete.
+  it('inserts a panel beside the open one and opens it, and deletes from the side panel', async () => {
+    api.getStoryboard.mockResolvedValue(board({ beats: [{ ...board().beats[0], panels: [panel('panel-1'), panel('panel-2')] }] }));
+    api.addStoryboardPanel.mockResolvedValue({
+      board: board({ updatedAt: '2026-10-22T00:00:02.000Z', beats: [{ ...board().beats[0], panels: [panel('panel-1'), panel('panel-new'), panel('panel-2')] }] }),
+      panelId: 'panel-new',
+    });
+    renderAt('/storyboards/sb-1/panel/panel-1');
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Insert after' }));
+    await waitFor(() => expect(api.addStoryboardPanel).toHaveBeenCalledWith('sb-1', 'beat-1', { index: 1 }));
+    await waitFor(() => expect(screen.getByTestId('location').textContent).toBe('/storyboards/sb-1/panel/panel-new'));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete panel' }));
+    expect(screen.getByText('Delete panel 2 from beat 1?')).toBeInTheDocument();
   });
 
   it('opens a new panel at its deep link and saves its action on blur', async () => {

@@ -217,6 +217,12 @@ export default function StoryboardEditor({ boardId: id, panelId, boardPath, embe
     onSelectTake: (takeId) => write(() => selectStoryboardPanelTake(id, panelId, takeId)),
     onRemoveTake: (takeId) => write(() => removeStoryboardPanelTake(id, panelId, takeId)),
     onMove: (target) => write(() => moveStoryboardPanel(id, panelId, target)),
+    // A blank panel at `index` in this panel's beat, opened for editing.
+    onInsert: async (index) => {
+      if (!found) return;
+      const res = await write(() => addStoryboardPanel(id, found.beat.id, { index }));
+      if (res?.panelId) openPanel(res.panelId);
+    },
     onSendToScene: async () => {
       const res = await write(() => sendStoryboardPanelToFableLoom(id, panelId));
       if (res) toast.success(board.source?.kind === 'pipeline' ? 'Shot start frame updated in the pipeline' : 'Scene art updated in FableLoom');
