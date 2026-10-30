@@ -521,6 +521,18 @@ describe('digital-twin.js', () => {
       const savedMeta = atomicWrite.mock.calls[0][1];
       expect(savedMeta.documents[0].id).toBe('doc-1');
     });
+
+    it('keeps every document when a later priority sorts to the front', async () => {
+      const doc1 = makeDocMeta({ id: 'doc-1', priority: 10 });
+      const doc2 = makeDocMeta({ id: 'doc-2', filename: 'OTHER.md', priority: 50 });
+      const meta = makeMeta({ documents: [doc1, doc2] });
+      await setupMetaFile(meta);
+
+      await updateDocument('doc-2', { priority: 1 });
+
+      const savedMeta = atomicWrite.mock.calls[0][1];
+      expect(savedMeta.documents.map((doc) => doc.id)).toEqual(['doc-2', 'doc-1']);
+    });
   });
 
   describe('deleteDocument', () => {

@@ -112,7 +112,8 @@ async function createDocumentLeased(data) {
 }
 
 async function updateDocumentLeased(id, updates) {
-  const meta = await loadMeta();
+  // loadMeta shares its cached object; publish these changes only after saveMeta succeeds.
+  const meta = structuredClone(await loadMeta());
   const docIndex = documentRecords(meta).findIndex(d => usableDocument(d) && d.id === id);
 
   if (docIndex === -1) return null;
@@ -120,9 +121,15 @@ async function updateDocumentLeased(id, updates) {
   const docMeta = meta.documents[docIndex];
   const filePath = documentWritePath(docMeta.filename);
 
-  // Update file content if provided
+  // Keep the previous body so a failed meta write can put it back. The new
+  // bytes must not stay on disk under the old updatedAt: a peer tombstone newer
+  // than that stamp would reap the edit (#3530, #14158).
+  let previousContent = null;
+  let wroteContent = false;
   if (updates.content) {
+    if (existsSync(filePath)) previousContent = await readFile(filePath, 'utf-8');
     await atomicWrite(filePath, updates.content);
+    wroteContent = true;
     docMeta.version = extractVersion(updates.content);
   }
 
@@ -131,6 +138,8 @@ async function updateDocumentLeased(id, updates) {
   if (updates.enabled !== undefined) docMeta.enabled = updates.enabled;
   if (updates.priority !== undefined) {
     docMeta.priority = updates.priority;
+    // Sort the same objects in place. Writing docMeta back at the pre-sort
+    // index would duplicate it and drop whichever document moved there.
     meta.documents.sort((a, b) => a.priority - b.priority);
   }
   if (updates.weight !== undefined) docMeta.weight = updates.weight;
@@ -140,15 +149,25 @@ async function updateDocumentLeased(id, updates) {
   // merge keeps whichever of create/edit/delete happened last (#3530).
   docMeta.updatedAt = new Date().toISOString();
 
-  meta.documents[docIndex] = docMeta;
-  await saveMeta(meta);
+  await saveMeta(meta).catch(async (err) => {
+    if (wroteContent) {
+      if (previousContent === null) await unlink(filePath).catch(() => {});
+      else {
+        await atomicWrite(filePath, previousContent).catch((restoreErr) => {
+          console.error(`❌ Digital twin document restore failed for ${docMeta.filename}: ${restoreErr.message}`);
+        });
+      }
+    }
+    throw err;
+  });
 
   console.log(`🧬 Updated soul document: ${docMeta.filename}`);
   return await getDocumentById(id);
 }
 
 async function deleteDocumentLeased(id) {
-  const meta = await loadMeta();
+  // loadMeta shares its cached object; publish these changes only after saveMeta succeeds.
+  const meta = structuredClone(await loadMeta());
   const docIndex = documentRecords(meta).findIndex(d => usableDocument(d) && d.id === id);
 
   if (docIndex === -1) return false;
@@ -156,17 +175,16 @@ async function deleteDocumentLeased(id) {
   const docMeta = meta.documents[docIndex];
   const filePath = join(DIGITAL_TWIN_DIR, docMeta.filename);
 
-  // Delete file
-  if (existsSync(filePath)) {
-    await unlink(filePath);
-  }
-
-  // Remove from meta and tombstone the filename so peer sync — which unions
-  // documents add-only — can't resurrect it from a machine that still has the
-  // file (#3530). The tombstone also propagates the delete to those peers.
+  // Tombstone before unlinking, same order as peer apply. A crash between them
+  // leaves the delete durable; the leftover file is hidden because meta no
+  // longer lists it, and reapTombstonedDocuments can remove it later (#14158).
   meta.documents.splice(docIndex, 1);
   meta.deletedDocuments = recordTombstone(meta.deletedDocuments, docMeta.filename, { keyField: 'filename' });
   await saveMeta(meta);
+
+  if (existsSync(filePath)) {
+    await unlink(filePath);
+  }
 
   console.log(`🧬 Deleted soul document: ${docMeta.filename}`);
   return true;
