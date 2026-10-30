@@ -612,54 +612,81 @@ export function addScenes(project, sceneInputs) {
   return { project: next, scenes: ids.map((id) => scenes.find((s) => s.sceneId === id)) };
 }
 
+// What a shot replaced by a new plan keeps from the one it takes the place of: its id, picked media and finish.
+function carryOver(prior, fresh) {
+  return {
+    ...fresh,
+    sceneId: prior.sceneId,
+    referenceImageId: prior.referenceImageId ?? null,
+    videoHistoryId: prior.videoHistoryId ?? null,
+    ...(prior.setReference ? { setReference: prior.setReference } : {}),
+    ...(prior.endImageId ? { endImageId: prior.endImageId } : {}),
+    ...(prior.endFramePrompt ? { endFramePrompt: prior.endFramePrompt } : {}),
+    ...(prior.frameFit ? { frameFit: prior.frameFit } : {}),
+    ...(prior.speedFps ? { speedFps: prior.speedFps } : {}),
+    ...(prior.offsetFrames ? { offsetFrames: prior.offsetFrames } : {}),
+    ...(prior.reverse ? { reverse: true } : {}),
+    ...(prior.holdLastFrame ? { holdLastFrame: true } : {}),
+    ...(prior.filmLook ? { filmLook: prior.filmLook } : {}),
+    ...(prior.transitionIn ? { transitionIn: prior.transitionIn } : {}),
+    ...(prior.transitionOut ? { transitionOut: prior.transitionOut } : {}),
+    ...(prior.glitches?.length ? { glitches: prior.glitches } : {}),
+    ...(prior.cutEffect ? { cutEffect: prior.cutEffect } : {}),
+    // A still playing an image effect stays one: the effect is the shot's picture.
+    ...(prior.imageEffect && prior.visualLayer === 'still' ? { visualLayer: 'still', imageEffect: prior.imageEffect,
+      ...(prior.imageEffectSec ? { imageEffectSec: prior.imageEffectSec } : {}) } : {}),
+    takes: prior.takes || [],
+    ...(prior.direction ? { direction: prior.direction } : {}),
+  };
+}
+
 /**
  * Replace the whole board with freshly planned scenes (AI Plan "Replace").
  * A new shot whose time span matches an old scene (within 10 ms) inherits that
  * scene's id, direction, reference frame, selected clip and takes, so the
  * generated work and treatment direction keyed to the id survive the re-plan.
- * Returns `{ project, scenes, replaced }` (`replaced` = the old scene count).
+ * Shots before the song (`preMusic`) match an old one by panel, else by place.
+ * Returns `{ project, scenes, replaced }` (`replaced` = the old shots it replaced).
  */
 export function replaceScenes(project, sceneInputs) {
   const list = Array.isArray(sceneInputs) ? sceneInputs : [];
-  // A plan covers the song; the cold open before it stays as it is, in front.
-  const coldOpen = coldOpenScenes(project);
+  // A plan covers the song. Shots before it come in front: from the plan when
+  // it has some (a storyboard's opening beats), else the cold open stays,
+  // minus any shot whose panel the plan now puts on the song.
+  const parsed = list.map((input) => buildScene(parseSceneOrThrow(musicVideoSceneCreateSchema, input), { order: 0 }));
+  const coldInputs = parsed.filter(isPreMusicShot);
+  const songInputs = parsed.filter((scene) => !isPreMusicShot(scene));
+  const priorCold = coldOpenScenes(project);
   const existing = songScenes(project);
+  const songPanels = new Set(songInputs.map((scene) => scene.panelId).filter(Boolean));
+  let coldOpen = priorCold.filter((scene) => !scene.panelId || !songPanels.has(scene.panelId));
+  if (coldInputs.length) {
+    const claimedCold = new Set();
+    coldOpen = coldInputs.map((fresh, index) => {
+      const prior = priorCold.find((old) => !claimedCold.has(old.sceneId) && old.panelId && old.panelId === fresh.panelId)
+        || (!fresh.panelId && priorCold[index] && !claimedCold.has(priorCold[index].sceneId) ? priorCold[index] : null);
+      if (!prior) return fresh;
+      claimedCold.add(prior.sceneId);
+      // The length is the plan's; the sound picked for the shot stays.
+      return { ...carryOver(prior, fresh), preMusic: normalizePreMusic({ ...prior.preMusic, durationSec: fresh.preMusic.durationSec }) };
+    });
+  }
   const claimed = new Set();
   const sameSpan = (a, b) => typeof a === 'number' && typeof b === 'number' && Math.abs(a - b) < 0.01;
-  const scenes = list.map((input, order) => {
-    const fresh = buildScene(parseSceneOrThrow(musicVideoSceneCreateSchema, input), { order });
+  const scenes = songInputs.map((fresh) => {
     const prior = existing.find((old) => !claimed.has(old.sceneId)
       && sameSpan(old.startSec, fresh.startSec) && sameSpan(old.endSec, fresh.endSec));
     if (!prior) return fresh;
     claimed.add(prior.sceneId);
-    return {
-      ...fresh,
-      sceneId: prior.sceneId,
-      referenceImageId: prior.referenceImageId ?? null,
-      videoHistoryId: prior.videoHistoryId ?? null,
-      ...(prior.setReference ? { setReference: prior.setReference } : {}),
-      ...(prior.endImageId ? { endImageId: prior.endImageId } : {}),
-      ...(prior.endFramePrompt ? { endFramePrompt: prior.endFramePrompt } : {}),
-      ...(prior.frameFit ? { frameFit: prior.frameFit } : {}),
-      ...(prior.speedFps ? { speedFps: prior.speedFps } : {}),
-      ...(prior.offsetFrames ? { offsetFrames: prior.offsetFrames } : {}),
-      ...(prior.reverse ? { reverse: true } : {}),
-      ...(prior.holdLastFrame ? { holdLastFrame: true } : {}),
-      ...(prior.filmLook ? { filmLook: prior.filmLook } : {}),
-      ...(prior.transitionIn ? { transitionIn: prior.transitionIn } : {}),
-      ...(prior.transitionOut ? { transitionOut: prior.transitionOut } : {}),
-      ...(prior.glitches?.length ? { glitches: prior.glitches } : {}),
-      ...(prior.cutEffect ? { cutEffect: prior.cutEffect } : {}),
-      // A still playing an image effect stays one: the effect is the shot's picture.
-      ...(prior.imageEffect && prior.visualLayer === 'still' ? { visualLayer: 'still', imageEffect: prior.imageEffect,
-        ...(prior.imageEffectSec ? { imageEffectSec: prior.imageEffectSec } : {}) } : {}),
-      takes: prior.takes || [],
-      ...(prior.direction ? { direction: prior.direction } : {}),
-    };
+    return carryOver(prior, fresh);
   });
   // Rows bound to shots the new plan dropped go with them.
   const board = [...coldOpen, ...scenes].map((scene, order) => (scene.order === order ? scene : { ...scene, order }));
-  return { project: dropStaleStoryboardRows(touch(project, { scenes: board })), scenes: board.slice(coldOpen.length), replaced: existing.length };
+  return {
+    project: dropStaleStoryboardRows(touch(project, { scenes: board })),
+    scenes: coldInputs.length ? board : board.slice(coldOpen.length),
+    replaced: existing.length + (coldInputs.length ? priorCold.length : priorCold.length - coldOpen.length),
+  };
 }
 
 // Scene fields a director edits within an approved shot (its span, wording, selected

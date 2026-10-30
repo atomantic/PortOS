@@ -83,6 +83,38 @@ describe('fit a music video to its storyboard', () => {
     expect((await request(app).post(`/api/storyboards/fit-music-video/${project.id}`).send({ boardUpdatedAt: '2000-01-01T00:00:00.000Z' })).status).toBe(409);
   });
 
+  it('puts beats marked before the song in front as shots before it, and keeps their sound on a refit', async () => {
+    const { project, board } = await linkedProject();
+    const opening = await request(app).post(`/api/storyboards/${board.id}/beats`).send({ title: 'Booth', beforeSong: true, index: 0 });
+    expect(opening.status).toBe(201);
+    const beatId = opening.body.beatId;
+    await request(app).post(`/api/storyboards/${board.id}/beats/${beatId}/panels`).send({ action: 'He presses play on the deck', seconds: 2.5 });
+    // Only the opening run can be before the song: a flag on a later beat does not stick.
+    const later = board.beats[1].id;
+    await request(app).patch(`/api/storyboards/${board.id}/beats/${later}`).send({ beforeSong: true });
+    const marked = (await request(app).get(`/api/storyboards/${board.id}`)).body;
+    expect(marked.beats.map((beat) => beat.beforeSong === true)).toEqual([true, false, false]);
+
+    const fit = async (current) => request(app).post(`/api/storyboards/fit-music-video/${project.id}`).send({ boardUpdatedAt: current.updatedAt });
+    const res = await fit(marked);
+    expect(res.status).toBe(200);
+    expect(res.body.shots).toBe(4);
+    const rows = (scenes) => scenes.map((s) => [s.label, s.preMusic?.durationSec ?? null, s.startSec ?? null, s.endSec ?? null, s.lyricText ?? null]);
+    // The song beats still fill the whole song from its first note.
+    expect(rows(res.body.project.scenes)).toEqual([
+      ['Booth', 2.5, null, null, null],
+      ['Arrival · 1/2', null, 0, 10, null],
+      ['Arrival · 2/2', null, 10, 20, null],
+      ['Lift off', null, 20, 40, 'Here we go'],
+    ]);
+
+    const [cold] = res.body.project.scenes;
+    await projects.updateScene(project.id, cold.sceneId, { preMusic: { durationSec: 2.5, layers: [{ effect: 'tape-hiss', atSec: 0, volume: 0.5 }] } });
+    const refit = await fit((await request(app).get(`/api/storyboards/${board.id}`)).body);
+    expect(refit.body.project.scenes[0]).toMatchObject({ sceneId: cold.sceneId, preMusic: { durationSec: 2.5, layers: [{ effect: 'tape-hiss' }] } });
+    expect(refit.body.project.scenes).toHaveLength(4);
+  });
+
   it('never replaces locked shots and needs an analyzed song', async () => {
     const { project, board } = await linkedProject({
       scenes: [{ sceneId: 'mvs-kept', order: 0, startSec: 0, endSec: 40, prompt: '', takes: [] }],

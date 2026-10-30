@@ -17,11 +17,13 @@ const STAGE_WIDTH = { '9:16': 'max-w-[22rem]', '4:5': 'max-w-md', '1:1': 'max-w-
 /**
  * Play: the animatic. Each panel holds for its estimated seconds (or the
  * default), and a beat pinned to a song marker starts there; the beat and the
- * lyric line (or the panel's line) show in small type. A temp track, when
- * attached, plays under it and is the clock while it sounds.
+ * lyric line (or the panel's line) show in small type. The sound is `song`
+ * when given (a music video's own song, `{ src, name, lines }` with its timed
+ * lines), else the board's temp track when attached; it is the clock while it
+ * sounds. Beats before the song play first, and the sound starts after them.
  */
-export default function StoryboardPlayer({ board, sketchNonce, onTempTrack }) {
-  const { panels: timeline, end: panelsEnd } = useMemo(() => storyboardTimeline(board), [board]);
+export default function StoryboardPlayer({ board, sketchNonce, onTempTrack, song = null }) {
+  const { panels: timeline, end: panelsEnd, songStartSec } = useMemo(() => storyboardTimeline(board), [board]);
   const [time, setTime] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [audioDuration, setAudioDuration] = useState(0);
@@ -31,27 +33,43 @@ export default function StoryboardPlayer({ board, sketchNonce, onTempTrack }) {
   const audioRef = useRef(null);
   const clockRef = useRef({ base: 0, at: 0 });
   const timeRef = useRef(0);
+  const startingRef = useRef(false);
   const track = board.tempTrack;
-  const duration = Math.max(panelsEnd, audioMissing ? 0 : audioDuration);
+  const audioSrc = song?.src || (track ? getUploadUrl(track.filename) : null);
+  const lines = song ? song.lines || [] : track?.lines || [];
+  const audible = !!audioSrc && !audioMissing && audioDuration > 0;
+  const soundEnd = audible ? songStartSec + audioDuration : 0;
+  const duration = Math.max(panelsEnd, soundEnd);
 
   useEffect(() => {
     setAudioDuration(0);
     setAudioMissing(false);
-  }, [track?.filename]);
+  }, [audioSrc]);
+
+  // The sound at board time `t`: playing from the matching song time while
+  // the song runs, waiting at its start before it.
+  const cueAudio = useCallback((t, start) => {
+    const audio = audioRef.current;
+    if (!audio || !audible) return;
+    if (t >= songStartSec && t < soundEnd) {
+      audio.currentTime = t - songStartSec;
+      if (start && audio.paused && !startingRef.current) {
+        startingRef.current = true;
+        audio.play().catch(() => {}).finally(() => { startingRef.current = false; });
+      }
+    } else {
+      audio.pause();
+      if (t < songStartSec) audio.currentTime = 0;
+    }
+  }, [audible, songStartSec, soundEnd]);
 
   const seek = useCallback((t) => {
     const next = Math.max(0, Math.min(t, duration));
     timeRef.current = next;
     clockRef.current = { base: next, at: performance.now() };
     setTime(next);
-    const audio = audioRef.current;
-    if (audio && !audioMissing && audioDuration) {
-      if (next < audioDuration) {
-        audio.currentTime = next;
-        if (playing && audio.paused) audio.play().catch(() => {});
-      } else audio.pause();
-    }
-  }, [duration, audioMissing, audioDuration, playing]);
+    cueAudio(next, playing);
+  }, [duration, cueAudio, playing]);
 
   useEffect(() => {
     if (!playing) return undefined;
@@ -59,13 +77,15 @@ export default function StoryboardPlayer({ board, sketchNonce, onTempTrack }) {
     const tick = (now) => {
       const audio = audioRef.current;
       let t;
-      // While the temp track sounds it is the clock; past its end (or with
-      // none) the panels keep time on their own.
+      // While the sound plays it is the clock; before it starts, past its
+      // end (or with none) the panels keep time on their own.
       if (audio && !audio.paused && !audio.ended) {
-        t = audio.currentTime;
+        t = songStartSec + audio.currentTime;
         clockRef.current = { base: t, at: now };
       } else {
         t = clockRef.current.base + (now - clockRef.current.at) / 1000;
+        // The prelude has run out: the song starts here.
+        if (audio && audible && audio.paused && !startingRef.current && t >= songStartSec && t < soundEnd && audio.currentTime === 0) cueAudio(t, true);
       }
       if (t >= duration) {
         timeRef.current = duration;
@@ -79,7 +99,7 @@ export default function StoryboardPlayer({ board, sketchNonce, onTempTrack }) {
     };
     frame = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(frame);
-  }, [playing, duration]);
+  }, [playing, duration, songStartSec, soundEnd, audible, cueAudio]);
 
   const play = () => {
     const from = timeRef.current >= duration ? 0 : timeRef.current;
@@ -87,10 +107,11 @@ export default function StoryboardPlayer({ board, sketchNonce, onTempTrack }) {
     clockRef.current = { base: from, at: performance.now() };
     setTime(from);
     const audio = audioRef.current;
-    if (audio && !audioMissing && (!audioDuration || from < audioDuration)) {
-      audio.currentTime = from;
-      audio.play().catch(() => {});
-    }
+    if (audio && audible && from < songStartSec) {
+      // Phones only let sound start from a tap: unlock it now, silently, for when the song comes in.
+      audio.muted = true;
+      audio.play().then(() => { audio.pause(); audio.currentTime = 0; }).catch(() => {}).finally(() => { audio.muted = false; });
+    } else cueAudio(from, true);
     setPlaying(true);
   };
 
@@ -132,15 +153,16 @@ export default function StoryboardPlayer({ board, sketchNonce, onTempTrack }) {
   const nextSrc = takeSrc(nextTake, sketchNonce?.(nextTake?.sketchKey));
   const role = current?.beat.musicalRole ? MUSICAL_ROLE_LABELS[current.beat.musicalRole] : null;
   // The stamped lyric line sounding now, else the panel's own line.
-  const stamped = (track?.lines || []).filter((line) => line.at !== null);
+  const stamped = lines.filter((line) => line.at !== null);
+  const songTime = time - songStartSec;
   const lyric = stamped.length
-    ? stamped.reduce((found, line) => (line.at <= time && (!found || line.at >= found.at) ? line : found), null)?.text || ''
+    ? (songTime >= 0 && stamped.reduce((found, line) => (line.at <= songTime && (!found || line.at >= found.at) ? line : found), null)?.text) || ''
     : current?.panel.dialogue || '';
 
   return (
     <div className="mx-auto w-full max-w-3xl space-y-2">
-      {track && (
-        <audio ref={audioRef} src={getUploadUrl(track.filename)} preload="auto"
+      {audioSrc && (
+        <audio ref={audioRef} src={audioSrc} preload="auto"
           onLoadedMetadata={(e) => setAudioDuration(Number.isFinite(e.currentTarget.duration) ? e.currentTarget.duration : 0)}
           onError={() => setAudioMissing(true)} />
       )}
@@ -184,7 +206,13 @@ export default function StoryboardPlayer({ board, sketchNonce, onTempTrack }) {
       </div>
 
       <div className="flex flex-wrap items-center gap-2 text-sm">
-        {track ? (
+        {song ? (
+          <>
+            <Music size={16} className="shrink-0 text-gray-400" aria-hidden="true" />
+            <span className="min-w-0 flex-1 truncate text-gray-300" title={song.name}>{song.name}</span>
+            {songStartSec > 0 && <span className="shrink-0 text-xs text-gray-400 tabular-nums">starts at {formatTimecode(songStartSec)}</span>}
+          </>
+        ) : track ? (
           <>
             <Music size={16} className="shrink-0 text-gray-400" aria-hidden="true" />
             <span className="min-w-0 flex-1 truncate text-gray-300" title={track.name}>{track.name}</span>
@@ -201,14 +229,14 @@ export default function StoryboardPlayer({ board, sketchNonce, onTempTrack }) {
             <Music size={16} aria-hidden="true" /> {uploading ? 'Uploading…' : 'Add temp track'}
           </FilePickerButton>
         )}
-        {audioMissing && <p role="alert" className="basis-full text-xs text-port-warning">The temp track can't be played on this machine. Replace it to hear it here.</p>}
+        {audioMissing && <p role="alert" className="basis-full text-xs text-port-warning">{song ? "The song can't be played on this machine." : "The temp track can't be played on this machine. Replace it to hear it here."}</p>}
         {confirmRemove && (
           <InlineConfirmRow autoFocus aria-label="Remove temp track" className="basis-full" confirmText="Remove"
             question={`Remove the temp track? Its ${marks} section and lyric mark${marks === 1 ? '' : 's'} go with it, and beats pinned to them are unpinned.`}
             onConfirm={() => { setConfirmRemove(false); remove(); }} onCancel={() => setConfirmRemove(false)} />
         )}
       </div>
-      {track && <SongMarkers track={track} time={time} onSeek={seek} onChange={onTempTrack} />}
+      {track && !song && <SongMarkers track={track} time={Math.max(0, songTime)} onSeek={(at) => seek(songStartSec + at)} onChange={onTempTrack} />}
     </div>
   );
 }

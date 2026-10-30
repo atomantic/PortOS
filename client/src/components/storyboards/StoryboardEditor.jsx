@@ -52,7 +52,7 @@ const EDITOR_PARAMS = ['panelTab', 'makeView', 'node', 'plot', 'brief', 'video',
 const selectClass = 'min-h-[44px] bg-port-bg border border-port-border rounded px-2 text-sm text-white';
 const headerButton = 'min-h-[44px] inline-flex items-center gap-1.5 rounded border border-port-border px-3 text-sm text-gray-200 hover:border-port-accent/60 hover:text-white';
 
-export default function StoryboardEditor({ boardId: id, panelId, boardPath, embedded = false, onBoard, refreshKey = 0, actions = null }) {
+export default function StoryboardEditor({ boardId: id, panelId, boardPath, embedded = false, onBoard, refreshKey = 0, actions = null, song = null }) {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const defaultView = embedded ? 'board' : 'beats';
@@ -383,7 +383,7 @@ export default function StoryboardEditor({ boardId: id, panelId, boardPath, embe
             </button>
           </div>
         ) : view === 'play' ? (
-          <StoryboardPlayer board={board} sketchNonce={sketchNonce}
+          <StoryboardPlayer board={board} sketchNonce={sketchNonce} song={song}
             onTempTrack={(tempTrack) => write(() => updateStoryboard(id, { tempTrack }))} />
         ) : (
           <div className="space-y-3">
@@ -407,6 +407,7 @@ export default function StoryboardEditor({ boardId: id, panelId, boardPath, embe
                   onAddPanel={() => addPanel(beat.id)}
                   onOpenPanel={openPanel}
                   pinOptions={pinOptions}
+                  canPlayBeforeSong={beatIndex === 0 || board.beats[beatIndex - 1].beforeSong === true}
                   grid={view === 'board'}
                 />
               );
