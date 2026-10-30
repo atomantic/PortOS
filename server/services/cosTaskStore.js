@@ -3,7 +3,7 @@ import { isForgeMaintenanceTask, hasCurrentForgeMaintenanceEvidence, LEGACY_FORG
 import { getSkipReason } from './cosTaskClaim.js';
 import { isDeepStrictEqual } from 'node:util';
 import { RELEASE_SYNC_FROZEN_METADATA_KEYS } from '../lib/releaseSynchronization.js';
-import { matchesSpawnBudgetProof, newSpawnBudgetEpisode, validSpawnBudgetEpisode, spawnBudgetCount } from './spawnBudgetProof.js';
+import { matchesSpawnBudgetProof, newSpawnBudgetEpisode, validSpawnBudgetEpisode, spawnBudgetCount, SPAWN_HISTORY_METADATA_KEYS } from './spawnBudgetProof.js';
 /**
  * CoS Task Store Module
  *
@@ -670,9 +670,7 @@ async function addTaskAttempt(taskData, taskType, { raw = false, ignoreTaskId = 
   const initialMetadata = { ...(newTask.metadata || {}) };
   delete initialMetadata.spawnBudgetProof;
   delete initialMetadata.spawnBudgetReconciledHold;
-  const pristine = newTask.status === 'pending' && ['totalSpawnCount', 'lastSpawnedAt', 'claimedBy', 'claimedAt',
-    'failureCount', 'orphanRetryCount', 'lastAgentId', 'failedAgentId', 'deliveryDecisionAgentId']
-    .every(key => initialMetadata[key] == null);
+  const pristine = newTask.status === 'pending' && SPAWN_HISTORY_METADATA_KEYS.every(key => initialMetadata[key] == null);
   newTask = { ...newTask, metadata: { ...initialMetadata, ...(pristine ? { spawnBudgetProof: newSpawnBudgetEpisode() } : {}) } };
 
   // Add task to top or bottom based on position parameter

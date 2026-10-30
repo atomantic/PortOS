@@ -39,6 +39,7 @@ import {
   normalizeOptionalReviewers,
   resolveReviewUsernames,
   resolveOptionalReviewers,
+  taskPinnedReviewerTokens,
   normalizeReviewerMaxRounds,
   resolveReviewerMaxRounds,
   reviewerEffortsFromDefaults,
@@ -495,8 +496,9 @@ export async function resolveReviewLoopOptions(metadata, { normalize = normalize
   // global default; only fall back to the Code Review Defaults when the task
   // didn't pin its own. Mirrors the reviewers precedence.
   const usernames = resolveReviewUsernames(metadata?.usernames, defaults?.usernames)
-  // Optional (non-blocking, `~opt`) reviewers: same task-over-default precedence.
-  const optionalReviewers = resolveOptionalReviewers(metadata?.optionalReviewers, defaults?.optionalReviewers)
+  // Optional (non-blocking, `~opt`) reviewers: task-over-default precedence for
+  // the reviewers the task pins; inherited reviewers keep the defaults' marks.
+  const optionalReviewers = resolveOptionalReviewers(metadata?.optionalReviewers, defaults?.optionalReviewers, { taskReviewers: taskPinnedReviewerTokens(metadata) })
   // Per-reviewer iteration caps (`~max=<n>`): same task-over-default precedence.
   const reviewerMaxRounds = resolveReviewerMaxRounds(metadata?.reviewerMaxRounds, defaults?.reviewerMaxRounds)
   const reviewStopMode = metadata?.reviewStopMode || defaults?.stopMode || DEFAULT_REVIEW_STOP_MODE
