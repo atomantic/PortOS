@@ -20,6 +20,18 @@ export const SHOT_TYPE_LABELS = Object.freeze({
   pov: 'POV',
 });
 
+// One line on what each framing puts on screen, shown under the framing diagrams.
+export const SHOT_TYPE_HINTS = Object.freeze({
+  'extreme-wide': 'Tiny figure, the whole place around them',
+  wide: 'Head to toe, with the room or setting',
+  medium: 'Waist up',
+  close: 'Head and shoulders, the face fills the frame',
+  'extreme-close': 'One detail: the eyes, a hand, an object',
+  'over-the-shoulder': 'Past one person\'s shoulder onto the other',
+  'two-shot': 'Two people side by side in one frame',
+  pov: 'What the character sees, through their eyes',
+});
+
 export const SCREEN_DIRECTION_LABELS = Object.freeze({
   left: 'Faces screen-left',
   right: 'Faces screen-right',

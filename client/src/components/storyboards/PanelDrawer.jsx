@@ -10,9 +10,9 @@ import GalleryImagePicker from '../imageGen/GalleryImagePicker';
 import IngredientPicker from '../IngredientPicker';
 import useDrawerTab from '../../hooks/useDrawerTab';
 import { listCatalogIngredientsByIds } from '../../services/api';
-import { SHOT_TYPES, SHOT_TYPE_LABELS } from '../../lib/shotGrammar';
 import { STORYBOARD_LIMITS } from '../../../../server/lib/storyboardVocabulary.js';
 import CommitField from './CommitField';
+import FramingPicker from './FramingPicker';
 import MoodBoardPinPicker from './MoodBoardPinPicker';
 import PanelCorrection from './PanelCorrection';
 import PanelMakeTab from './PanelMakeTab';
@@ -179,16 +179,12 @@ function ShotTab({ board, found, panelNumber, sketchNonce, busy, handlers }) {
         <CommitField id={fieldId('dialogue')} multiline value={panel.dialogue} maxLength={STORYBOARD_LIMITS.panelText}
           onCommit={(dialogue) => handlers.onPatch({ dialogue })} />
       </div>
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-        <div>
-          <label htmlFor={fieldId('framing')} className={labelClass}>Framing</label>
-          <select id={fieldId('framing')} value={panel.framing || ''}
-            onChange={(event) => handlers.onPatch({ framing: event.target.value || null })}
-            className="w-full min-h-[44px] bg-port-bg border border-port-border rounded px-2 text-sm text-white">
-            <option value="">Not set</option>
-            {SHOT_TYPES.map((type) => <option key={type} value={type}>{SHOT_TYPE_LABELS[type] || type}</option>)}
-          </select>
-        </div>
+      <div>
+        <span id={fieldId('framing')} className={labelClass}>Framing</span>
+        <FramingPicker value={panel.framing} labelId={fieldId('framing')}
+          onChange={(framing) => handlers.onPatch({ framing })} />
+      </div>
+      <div className="grid grid-cols-2 gap-2">
         <div>
           <label htmlFor={fieldId('seconds')} className={labelClass}>Seconds (estimate)</label>
           <input id={fieldId('seconds')} type="number" inputMode="decimal" min="0.01" step="0.01" max={STORYBOARD_LIMITS.panelSecondsMax}
@@ -196,7 +192,7 @@ function ShotTab({ board, found, panelNumber, sketchNonce, busy, handlers }) {
             onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); }}
             className="w-full min-h-[44px] bg-port-bg border border-port-border rounded px-2 text-sm text-white tabular-nums" />
         </div>
-        <div className="col-span-2 sm:col-span-1">
+        <div>
           <label htmlFor={fieldId('camera')} className={labelClass}>Camera</label>
           <CommitField id={fieldId('camera')} value={panel.camera} maxLength={STORYBOARD_LIMITS.camera}
             placeholder="e.g. slow push in" onCommit={(camera) => handlers.onPatch({ camera })} />
