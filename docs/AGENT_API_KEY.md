@@ -81,27 +81,24 @@ invalidates its authority; an interrupted holder remains reserved until the
 five-minute maximum hold elapses. This is the same bounded coordination as CoS
 leases, not a forge-side fence against a merge already in flight at expiry.
 
-Before requesting a preparation turn, finish all configured reviews and required
-CI for the exact PR head. Send the target request shown below with `action: prepare`
-before running combined-tree guards. Only `prepared: true` grants a preparation
-turn; save its `preparationToken` and `expiresAt` privately. Poll a waiting turn
-at `retryAfterMs`, preserving the original workflow wait budget. A turn lasts at
-most 20 minutes, without renewal, and schedules guard preparation across agents,
-external operators, and pending receipts; it is not merge authority.
+Before acquiring, finish all configured reviews and required CI for the exact PR
+head. The worktree-private `portos-review-status` file must name that exact
+`REVIEW_HEAD` and the workflow's `REVIEW_STATUS=clean`, or
+`optional-inconclusive` when all configured reviewers are optional and
+unavailable. The latter records an attempted head, never a clean reviewer
+verdict. The outside operator remains responsible for satisfying its configured
+review policy; admission is coordination, not CI certification.
 
-With your turn, run this repository's combined-tree structural guards **outside**
-the final admission lease. Keep the checked head and base SHAs and the base branch name. The worktree-private
-`portos-review-status` file must name that exact `REVIEW_HEAD` and the workflow's
-`REVIEW_STATUS=clean`, or `optional-inconclusive` when all configured reviewers
-are optional and unavailable. The latter records an attempted head, never a
-clean reviewer verdict. The outside operator remains responsible for satisfying
-its configured review policy; admission is coordination, not CI certification.
+No combined-tree guard run or preparation turn is required before merging: the
+forge's required checks on the merge ref and a merge pinned to the CI-verified
+head are the gate. `node scripts/pregate.js --guards-only --merged-with <ref>`
+remains available as an optional diagnosis of an integration break.
 
-Start with a preparation target in a private JSON file (mode `0600`). For example:
+Write the target in a private JSON file (mode `0600`). For example:
 
 ```json
 {
-  "action": "prepare",
+  "action": "acquire",
   "appId": "example-app",
   "worktreePath": "/example/repository-worktree",
   "prUrl": "https://github.com/example/repo/pull/7",
@@ -115,10 +112,7 @@ Start with a preparation target in a private JSON file (mode `0600`). For exampl
 node <portos-root>/scripts/portos-api.js post /api/cos/merge-admission/external @admission-target.json
 ```
 
-After `prepared: true`, fetch the actual base and run the combined-tree guards.
-When they pass, send the same private target with `action: acquire` and the
-checked head/base. Require `admitted: true` before final live checks and merging.
-Do not start guard work with a legacy direct acquisition request.
+Require `admitted: true` before final live checks and merging.
 
 The app must already exist in the local app registry. The server verifies its
 origin and the checkout's real Git common directory, separate linked checkout,
@@ -126,7 +120,8 @@ branch, identity, local review receipt, live same-repository open PR, head and
 base branch/SHA. The base SHA is the live `refs/heads/<baseBranch>` commit,
 not GitHub's historical PR `baseRefOid`. Acquire and check read that ref with
 the PR's repository, base branch and head through the app's authorized forge
-transport; a moved or missing ref withholds admission until guards are rerun.
+transport; a moved or missing ref withholds admission until the target names
+the live base SHA.
 An active/uncertain CoS owner, checkout lock, retirement fence, changed
 proof or unreadable state withholds admission. Fork PRs and detached/primary
 checkouts are outside this bounded flow. Repository keys are shared with CoS
@@ -165,25 +160,17 @@ a running parent, or borrow another owner's token. After expiry, an old holder
 must reacquire and repeat final live checks; its old token cannot release a
 successor's lease.
 
-Preparation turns preserve FIFO position across base-only refreshes, without
-renewing the deadline. If the live base changes, refresh the target's `baseSha`,
-repeat `prepare`, require the same unexpired preparation token, and rerun guards.
-If a different token is returned, the old turn expired and the fresh guard run
-belongs to the new turn. Head/checkout changes join at the tail. Yield before
-substantive remediation, a guard failure, or leaving open without a final lease:
-
-```json
-{"action":"yield","token":"<preparation UUID>"}
-```
-
-A `resync` final release retains the bounded preparation position for base-only
-guard refresh; yield separately before substantive remediation. `merged` and
-`leave-open` release both lease and turn. Existing clients can still acquire
-directly: they join the same order at acquisition and cannot overtake participants
-already preparing. Their earlier guard work cannot benefit from preparation
-ordering until they adopt `prepare`. A live lease granted before an upgrade
-keeps its original bounded lifetime. Scheduling does not enable pending handoff,
-change CI/review requirements, or permit stale-base evidence.
+Compatible clients may still send the same target with `action: prepare` to
+hold a bounded FIFO position (at most 20 minutes, without renewal) ahead of
+acquisition; only `prepared: true` grants one, and it is scheduling, never merge
+authority. Release a held position with `{"action":"yield","token":"<preparation UUID>"}`
+before substantive remediation or leaving open without a final lease. A
+`resync` final release retains it for a base-only refresh; `merged` and
+`leave-open` release both lease and position. Clients that acquire directly
+join the same order at acquisition and cannot overtake participants already
+holding a position. A live lease granted before an upgrade keeps its original
+bounded lifetime. Scheduling does not enable pending handoff, change CI/review
+requirements, or permit stale-base evidence.
 
 Fair position retention applies to ready participants that actively poll. An
 ungranted waiting position expires after three idle minutes, including positions

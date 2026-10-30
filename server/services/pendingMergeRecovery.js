@@ -4,8 +4,10 @@ import { PR_COMPLETIONS, leavesPrForHuman, resolvePrCompletion } from '../lib/pr
 import { isTruthyMeta } from '../lib/metadataFlags.js';
 import { claimCheckoutOwnerReason } from '../lib/claimContinuation.js';
 
-// Legacy producers recorded a source, not a handed-off checkout. Recover their
-// current authority instead of inventing a receipt or merging without guards.
+// Pinned checkout recovery for unbound pending merges. The pending-merge sweep
+// stopped creating these targets when the merged-tree guard stopped gating
+// merges (#14184); review follow-ups persisted with one still revalidate it
+// here at dispatch and launch.
 export async function preparePendingMergeRecovery({ app, entry, headSha, launchTaskId = null }) {
   if (!/^[a-f0-9]{40}$/.test(headSha || '')) return { blocked: 'recovery-head-unreadable' };
   const { readClaimOwnershipAgents } = await import('./cosClaimOwnershipState.js');
@@ -66,7 +68,7 @@ export async function validatePendingMergeRecovery({ target, workspacePath, requ
   if (view?.state !== 'OPEN' || view.isDraft !== false || view.isCrossRepository !== false
     || view.headRefName !== target.branch || view.headRefOid !== target.headSha) return 'recovery-head-moved';
   if (requireCheckout) {
-    const { verifyPendingMergeCheckout } = await import('./pendingMergeGuard.js');
+    const { verifyPendingMergeCheckout } = await import('./pendingMergeCheckout.js');
     if (!await verifyPendingMergeCheckout(app.repoPath, workspacePath, target.branch, target.headSha)) return 'recovery-checkout-changed';
   } else if (resolve(workspacePath) !== resolve(app.repoPath)) return 'recovery-repository-changed';
   // A policy edit or an owner starting during the forge reads wins the race.
