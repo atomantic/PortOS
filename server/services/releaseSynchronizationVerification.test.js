@@ -129,8 +129,7 @@ beforeEach(async () => {
     head: { sha: 'c'.repeat(40), ref: seed.branch, repo: { full_name: 'example/repo' } }, base: { ref: 'main', repo: { full_name: 'example/repo' } } };
   f.agents = [publisher, { id: seed.agentId, taskId, startedAt: seed.startedAt, status: 'running',
     metadata: { workspacePath: seed.path, sourceWorkspace: seed.repoPath, isWorktree: true, worktreeBranch: seed.branch,
-      checkoutSeeds: [seed], mergeAdmissionHistory: [{ repository: 'github.com/example/repo', outcome: 'merged',
-        acquiredAt: '2026-01-01T01:09:50Z', releasedAt: '2026-01-01T01:10:05Z' }] } }];
+      checkoutSeeds: [seed] } }];
   f.review = { reusable: true, receipt: { version: 1, status: 'clean', reviewedHead: 'c'.repeat(40), prUrl: 'https://github.com/example/repo/pull/42' } };
   f.reviews = [{ id: 1, user: { login: 'example-reviewer' }, commit_id: f.pr.head.sha, state: 'APPROVED', submitted_at: '2026-01-01T01:08:00Z' }];
   f.checks = [{ name: 'CI Gate', status: 'completed', conclusion: 'success', completed_at: '2026-01-01T01:09:00Z' }];
@@ -520,7 +519,6 @@ it('accepts provider-confirmed merge without a second review, CI or admission ce
   f.review = null;
   f.reviews = [];
   f.checks = [{ conclusion: 'failure' }];
-  f.agents[1].metadata.mergeAdmissionHistory = [];
   await verifyReleaseSynchronizationTask(taskId);
   const saved = await getReleaseSynchronization(identity);
   expect(saved.synchronization.status).toBe('verified');
