@@ -157,15 +157,6 @@ function ShotTab({ board, found, panelNumber, sketchNonce, busy, handlers, timin
     if (next !== panel.seconds) handlers.onPatch({ seconds: next });
   };
 
-  // The drawing prompt carries it as "Camera: …"; a still shows it with motion arrows.
-  const cameraField = (
-    <div>
-      <label htmlFor={fieldId('camera')} className={labelClass}>Camera move</label>
-      <CommitField id={fieldId('camera')} value={panel.camera} maxLength={STORYBOARD_LIMITS.camera}
-        placeholder="e.g. slow push in" onCommit={(camera) => handlers.onPatch({ camera })} />
-    </div>
-  );
-
   return (
     <div className="space-y-3">
       <ArtSection
@@ -205,17 +196,14 @@ function ShotTab({ board, found, panelNumber, sketchNonce, busy, handlers, timin
           value={panel.angle} labelId={fieldId('angle')} onChange={(angle) => handlers.onPatch({ angle })} />
       </div>
       {timing ? (
-        <div className="grid grid-cols-2 gap-2">
-          <div>
-            <label htmlFor={fieldId('seconds')} className={labelClass}>Seconds (estimate)</label>
-            <input id={fieldId('seconds')} type="number" inputMode="decimal" min="0.01" step="0.01" max={STORYBOARD_LIMITS.panelSecondsMax}
-              value={secondsDraft} onChange={(event) => setSecondsDraft(event.target.value)} onBlur={commitSeconds}
-              onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); }}
-              className="w-full min-h-[44px] bg-port-bg border border-port-border rounded px-2 text-sm text-white tabular-nums" />
-          </div>
-          {cameraField}
+        <div>
+          <label htmlFor={fieldId('seconds')} className={labelClass}>Seconds (estimate)</label>
+          <input id={fieldId('seconds')} type="number" inputMode="decimal" min="0.01" step="0.01" max={STORYBOARD_LIMITS.panelSecondsMax}
+            value={secondsDraft} onChange={(event) => setSecondsDraft(event.target.value)} onBlur={commitSeconds}
+            onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); }}
+            className="w-full max-w-[10rem] min-h-[44px] bg-port-bg border border-port-border rounded px-2 text-sm text-white tabular-nums" />
         </div>
-      ) : cameraField}
+      ) : null}
       <DrawPanelButton panel={panel} onDraw={handlers.onDraw} disabled={busy} />
       <div className="flex flex-wrap items-center gap-2 border-t border-port-border pt-3">
         <button type="button" className={iconButton} onClick={() => handlers.onMove({ index: index - 1 })} disabled={index === 0} aria-label="Move panel earlier">

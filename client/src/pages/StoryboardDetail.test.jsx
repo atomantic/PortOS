@@ -80,7 +80,7 @@ beforeEach(() => {
 
 describe('StoryboardDetail', () => {
   // Uniquely catches the embedded editor losing its board-first view, the side panel's previous / next panel,
-  // or the music video's panel growing back timing and dialogue fields its shots own.
+  // or the music video's panel growing back timing, dialogue or camera fields its shots own.
   it('opens a music video\'s board as the panel grid and steps between panels in the side panel', async () => {
     api.getStoryboard.mockResolvedValue(board({ beats: [
       { id: 'beat-1', title: 'Intro', what: '', why: '', emotion: '', musicalRole: 'intro', sectionHint: '', panels: [panel('panel-1')] },
@@ -102,7 +102,7 @@ describe('StoryboardDetail', () => {
     const panelDialog = await screen.findByRole('dialog', { name: 'Panel 1' });
     expect(screen.getByRole('tab', { name: /Board/ })).toHaveAttribute('aria-selected', 'true');
     expect(screen.queryByLabelText('Logline')).toBeNull();
-    expect(within(panelDialog).getByLabelText('Camera move')).toBeInTheDocument();
+    expect(within(panelDialog).queryByLabelText('Camera move')).toBeNull();
     expect(within(panelDialog).queryByLabelText('Seconds (estimate)')).toBeNull();
     expect(within(panelDialog).queryByLabelText('Dialogue or lyric')).toBeNull();
     expect(within(panelDialog).getByRole('button', { name: 'Previous panel' })).toBeDisabled();
