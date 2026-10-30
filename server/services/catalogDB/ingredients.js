@@ -461,7 +461,8 @@ async function decorateIngredientPage(ids) {
          FROM (SELECT catalog_canonical_ingredient_id(ingredient_id) AS cid, media_key, kind, role, created_at
                  FROM catalog_identity_read_media
                 WHERE deleted = false AND kind IN ('portrait', 'reference')
-                  AND (role IS NULL OR NOT (role LIKE 'look:%' OR role LIKE 'archive:%' OR role = 'plate'))) m
+                  AND (role IS NULL OR NOT (role LIKE 'look:%' OR role LIKE 'archive:%' OR role = 'plate'
+                    OR (role LIKE 'design:%' AND COALESCE(library->>'guide', '') <> 'true')))) m
         WHERE ${inSet('m.cid', 'SELECT id FROM page')}
         ORDER BY m.cid, (m.kind = 'portrait') DESC, COALESCE(m.role LIKE 'sheet:%', false), m.created_at DESC
      )

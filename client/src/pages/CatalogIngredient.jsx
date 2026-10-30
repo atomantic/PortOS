@@ -10,7 +10,7 @@
 import CatalogReferenceLibrary from '../components/catalog/CatalogReferenceLibrary.jsx';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams, useLocation, Link } from 'react-router';
-import { Save, Trash2, ArrowLeft, Loader2, Plus, X, History, RotateCcw, Image as ImageIcon, ChevronDown, Upload, Mic, Square, UserRound, LayoutGrid, Images, Clapperboard, Shirt, Box } from 'lucide-react';
+import { Save, Trash2, ArrowLeft, Loader2, Plus, X, History, RotateCcw, Image as ImageIcon, ChevronDown, Upload, Mic, Square, UserRound, LayoutGrid, Images, Clapperboard, Shirt, Box, Wand2 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import FilePickerButton from '../components/ui/FilePickerButton';
 import Modal from '../components/ui/Modal.jsx';
@@ -57,6 +57,7 @@ import CatalogUnlockNotice from '../components/catalog/CatalogUnlockNotice';
 import CatalogPlatesPanel from '../components/catalog/CatalogPlatesPanel';
 import GreyboxPanel from '../components/catalog/GreyboxPanel';
 import CatalogLooksPanel from '../components/catalog/CatalogLooksPanel';
+import CatalogDesignPanel from '../components/catalog/CatalogDesignPanel';
 import CharacterDetailEditor from '../components/universe/CharacterDetailEditor';
 import { RevealTimingField } from '../components/pipeline/CanonCard';
 import CanonReferenceRemoval from '../components/catalog/CanonReferenceRemoval';
@@ -77,7 +78,7 @@ import useUnsavedChangesGuard from '../hooks/useUnsavedChangesGuard';
 import { getCatalogType, CATALOG_BADGE_BY_ID, RELATION_KINDS, getRelationKind, isFamilyRelationKind } from '../lib/catalogTypes';
 import {
   libraryForPathname, ingredientPath, ingredientCoverUrl, resolveDetailTab, detailTabPath,
-  isSheetMedia, isPlateMedia, isReferenceTabMedia, lookIdOf,
+  isSheetMedia, isPlateMedia, isDesignMedia, isReferenceTabMedia, lookIdOf,
 } from '../lib/creativeLibraries';
 import { useCatalogTypes } from '../hooks/useCatalogTypes.jsx';
 import { timeAgo, formatDateTime } from '../utils/formatters';
@@ -95,6 +96,7 @@ import { safeReadJsonSession, safeWriteJsonSession, safeRemoveSession } from '..
 // order; that is not an edit the user needs to save.
 const DETAIL_TAB_ICONS = {
   profile: UserRound,
+  design: Wand2,
   sheets: LayoutGrid,
   looks: Shirt,
   plates: Clapperboard,
@@ -149,7 +151,9 @@ function IngredientEditor() {
   const library = libraryForPathname(pathname);
   const detailView = library ? 'profile' : undefined;
   const requestedBack = new URLSearchParams(search).get('returnTo') || '';
-  const backPath = /^\/(?:casting(?:\?|$)|universes\/[^/?#]+(?:\?|$))/.test(requestedBack) ? requestedBack : library?.path || '/catalog';
+  // A music video's Cast & Sets links here to revise a look and comes back to its stage.
+  const backToVideo = /^\/music-video\/[^/?#]+(?:\/[^/?#]+)?(?:\?|#|$)/.test(requestedBack);
+  const backPath = backToVideo || /^\/(?:casting(?:\?|$)|universes\/[^/?#]+(?:\?|$))/.test(requestedBack) ? requestedBack : library?.path || '/catalog';
   const profileActive = !library || resolveDetailTab(library, tabParam) === 'profile';
   const [profileVisited, setProfileVisited] = useState(profileActive);
   useEffect(() => { if (profileActive) setProfileVisited(true); }, [profileActive]);
@@ -825,7 +829,7 @@ function IngredientEditor() {
     ...record,
     thumbnailKey: media.find((m) => m.kind === 'portrait')?.mediaKey || (!mediaReady && record.coverMedia?.portraitKey) || record.thumbnailKey,
     payload,
-  }) || ingredientCoverUrl({ thumbnailKey: media.find((m) => m.kind === 'reference' && !m.role?.startsWith('archive:'))?.mediaKey || (!mediaReady && record.coverMedia?.referenceKey) });
+  }) || ingredientCoverUrl({ thumbnailKey: media.find((m) => m.kind === 'reference' && !m.role?.startsWith('archive:') && (!isDesignMedia(m) || m.library?.guide === true))?.mediaKey || (!mediaReady && record.coverMedia?.referenceKey) });
   const renderBlockedReason = (subject) => identityReason || (record.payload?.locked === true
     ? 'Unlock this record above before rendering.'
     : saving || lookSaving || characterActionBusy || unlocking
@@ -852,7 +856,7 @@ function IngredientEditor() {
       <header className="shrink-0 px-3 py-2 sm:px-4 sm:py-3 border-b border-port-border">
         <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
           <div className="flex items-center gap-2 sm:gap-3 min-w-0">
-            <Link to={backPath} aria-label={`Back to ${library?.label || 'Catalog'}`} title="Back"
+            <Link to={backPath} aria-label={`Back to ${backToVideo ? 'music video' : library?.label || 'Catalog'}`} title="Back"
               className="shrink-0 inline-flex items-center justify-center min-w-[40px] min-h-[40px] -ml-2 rounded-lg text-gray-400 hover:text-white">
               <ArrowLeft size={18} aria-hidden="true" />
             </Link>
@@ -1062,7 +1066,7 @@ function IngredientEditor() {
           </div>
         )}
 
-        <div hidden={activeTab !== 'sheets' && activeTab !== 'looks'}>
+        <div hidden={activeTab !== 'sheets' && activeTab !== 'looks' && activeTab !== 'design'}>
           <CatalogUnlockNotice key={record.id} record={record} disabled={saving || lookSaving || unlocking || characterActionBusy || identityReadOnly} onPendingChange={setUnlocking}
             onUnlocked={applyLock} />
         </div>
@@ -1085,6 +1089,19 @@ function IngredientEditor() {
             onRemovePointerSheet={identityReadOnly ? undefined : handleRemovePointerSheet}
             removingPointerSheet={removingPointerSheet}
             onMediaChanged={identityReadOnly ? undefined : refreshMedia}
+          />
+        )}
+
+        {activeTab === 'design' && mediaReady && (
+          <CatalogDesignPanel
+            key={record.id}
+            ingredientId={record.id}
+            name={name}
+            forms={formsOf(record.payload)}
+            media={media.map(protectMedia)}
+            blockedReason={renderBlockedReason('design round')}
+            onChanged={refreshMedia}
+            onSetPortrait={handleSetPortrait}
           />
         )}
 

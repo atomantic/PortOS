@@ -1,5 +1,6 @@
 import { Sparkles, Drama, Mountain, Package } from 'lucide-react';
 import { GREYBOX_SHOT_ROLE_PREFIX } from '../../../server/lib/greyboxVocabulary.js';
+import { isDesignRole } from '../../../server/lib/catalogDesign.js';
 
 // Casting, Environments and Objects: focused library pages over the catalog's
 // character, place and object ingredients. The catalog row stays the single
@@ -21,7 +22,7 @@ const SHEETS = tab('sheets', 'Sheets');
 export const CREATIVE_LIBRARIES = Object.freeze([
   Object.freeze({
     id: 'casting', type: 'character', path: '/casting', label: 'Casting', singular: 'cast member', empty: 'No cast yet.',
-    detailTabs: Object.freeze([PROFILE, SHEETS, tab('looks', 'Looks'), tab('references', 'References')]),
+    detailTabs: Object.freeze([PROFILE, tab('design', 'Design'), SHEETS, tab('looks', 'Looks'), tab('references', 'References')]),
   }),
   Object.freeze({
     id: 'environments', type: 'place', path: '/environments', label: 'Environments', singular: 'environment', empty: 'No environments yet.',
@@ -63,7 +64,7 @@ export function detailTabPath(library, id, tabId) {
 
 // Catalog media roles that belong to their own tab rather than References:
 // rendered sheets (`sheet:<variant>`), wardrobe looks (`look:<id>`) and set
-// plates (`plate`). Greybox shot captures (`greybox-shot:<id>`) live on the
+// plates (`plate`), Design takes (`design:<roundId>`). Greybox shot captures (`greybox-shot:<id>`) live on the
 // Greybox tab beside the camera that made them.
 export const SHEET_ROLE_PREFIX = 'sheet:';
 export const LOOK_ROLE_PREFIX = 'look:';
@@ -71,6 +72,9 @@ export const PLATE_ROLE = 'plate';
 const roleOf = (m) => (typeof m?.role === 'string' ? m.role : '');
 export const isSheetMedia = (m) => roleOf(m).startsWith(SHEET_ROLE_PREFIX);
 export const isPlateMedia = (m) => roleOf(m) === PLATE_ROLE;
+// Casting > Design takes (`design:<roundId>:<n>`) live on the Design tab;
+// an anchored one (a render guide) also shows on References.
+export const isDesignMedia = (m) => isDesignRole(roleOf(m));
 export const isGreyboxShotMedia = (m) => roleOf(m).startsWith(GREYBOX_SHOT_ROLE_PREFIX);
 const greyboxShotIdOf = (m) => roleOf(m).slice(GREYBOX_SHOT_ROLE_PREFIX.length);
 // The wardrobe id a `look:<id>` media row belongs to, or null.
@@ -80,7 +84,7 @@ export const lookIdOf = (m) => (roleOf(m).startsWith(LOOK_ROLE_PREFIX) ? roleOf(
 // `liveShotIds` (the greybox's shot ids) does the same for a capture whose shot
 // was removed.
 export const isReferenceTabMedia = (m, liveLookIds = null, liveShotIds = null) => {
-  if (isSheetMedia(m) || isPlateMedia(m)) return false;
+  if (isSheetMedia(m) || isPlateMedia(m) || (isDesignMedia(m) && m.library?.guide !== true)) return false;
   if (isGreyboxShotMedia(m)) return !liveShotIds?.has(greyboxShotIdOf(m));
   const lookId = lookIdOf(m);
   return lookId === null || (liveLookIds ? !liveLookIds.has(lookId) : false);

@@ -46,6 +46,9 @@ describe('creativeLibraries', () => {
       expect(isReferenceTabMedia({ role: 'plate' })).toBe(false);
       expect(isReferenceTabMedia({ role: 'look:w1' }, new Set(['w1']))).toBe(false);
       expect(isReferenceTabMedia({ role: 'look:w1' }, new Set(['w2']))).toBe(true);
+      // A Design take stays on the Design tab until it is made an anchor.
+      expect(isReferenceTabMedia({ role: 'design:r1:0', library: { likeness: false } })).toBe(false);
+      expect(isReferenceTabMedia({ role: 'design:r1:0', library: { guide: true } })).toBe(true);
     });
   });
 });

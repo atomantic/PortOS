@@ -1013,6 +1013,7 @@ export * from './videoLoraStageValidation.js';
 
 export * from './musicVideoGreybox.js';
 export * from './catalogRedesign.js';
+export * from './catalogDesign.js';
 
 export * from './testCacheRetirementProof.js';
 export * from './realityStarterV2.js';

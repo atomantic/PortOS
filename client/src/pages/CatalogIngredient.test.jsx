@@ -1988,6 +1988,12 @@ it('returns to an allowed Universe Cast context while retaining compact page que
   expect(screen.getByRole('link', { name: 'Back to Casting' })).toHaveAttribute('href', back);
 });
 
+it('returns to the music video that opened a cast member to revise its look', async () => {
+  const back = '/music-video/example-project/cast-sets';
+  await renderPage(`/casting/cat-chr-1?${new URLSearchParams({ returnTo: back })}`);
+  expect(screen.getByRole('link', { name: 'Back to music video' })).toHaveAttribute('href', back);
+});
+
 it('adds a card with rendering animation placeholder when editing an image from the casting catalog and live updates when completed', async () => {
   const { generateImage } = await import('../services/apiSystem');
   const { attachCatalogIngredientGeneratedImage } = await import('../services/apiCatalog');

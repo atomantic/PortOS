@@ -40,31 +40,9 @@ export async function refineCatalogMedia(id, input, { preview = false } = {}) {
   const appearance = catalogAppearance(item.type, item.payload || {}, form);
   const age = /^\d+$/.test(String(appearance.age).trim()) ? Number(appearance.age) : undefined;
   const want = { ...variant, ...(age !== undefined ? { age } : {}), ...(form ? { formId: form.id, era: undefined } : {}) };
-  const sourcePath = resolveImageInputPath(source.mediaKey);
-  if (!sourcePath) throw new ServerError('Reference image is not available on this machine', { status: 422 });
-  const dimensions = await readImageDimensions(sourcePath);
-  if (!dimensions) throw new ServerError('Could not read the source image dimensions', { status: 422 });
-  if (dimensions.width > MAX_IMAGE_EDGE || dimensions.height > MAX_IMAGE_EDGE
-    || dimensions.width * dimensions.height > MAX_IMAGE_PIXELS || dimensions.width < 64 || dimensions.height < 64) {
-    throw new ServerError('Source dimensions exceed image generation limits. Use a smaller reference image before refining.', { status: 422 });
-  }
-  const ownership = await getPrimitiveContext(id, { includeDerived: false });
-  if (ownership.status === 'conflict') throw new ServerError('Resolve universe ownership before refining', { status: 409 });
-  const { getUniverse } = await import('./universeBuilder/crud.js');
-  const universe = ownership.owner ? await getUniverse(ownership.owner.refId) : null;
-  const settings = await getSettings();
-  const pin = recordRenderPin(universe || {});
-  const target = resolveRenderTargetConfig(settings, RENDER_TARGET.UNIVERSE_CHARACTER_SHEET, {
-    recordMode: pin.mode, recordModel: pin.modelId,
-    fallbackMode: IMAGE_GEN_MODE.LOCAL,
-  });
-  if (!QUEUEABLE_IMAGE_MODES.includes(target.mode)) throw new ServerError('Choose a queueable image backend in Settings before refining references', { status: 400 });
-  const cloud = target.cloud;
-  if (cloud && !cloud.enabled) throw cloud.disabledError;
-  const local = target.mode === IMAGE_GEN_MODE.LOCAL
-    ? selectLocalImageModelFromSettings(settings, undefined, undefined, target.modelCandidates) : null;
-  const supportsGuides = !local || isFlux2(local) || local.pipelineClass === 'QwenImage21Pipeline';
-  const maxGuides = supportsGuides ? Math.max(0, Math.min(3, (maxInputImages(target.mode, cloud?.modelId) ?? 4) - 1)) : 0;
+  const dimensions = await readEditSourceDimensions(source.mediaKey);
+  const target = await resolveCatalogImageTarget(id);
+  const { universe, settings, local, cloud, maxGuides } = target;
   const rejected = rejectedReferenceKeys(media);
   const guides = pickGuideMedia(media.filter(m => m.mediaKey !== source.mediaKey && !rejected.has(m.mediaKey)
     && !/^(?:archive:|sheet:|look:)/.test(m.role || '')), want, maxGuides);
@@ -87,20 +65,66 @@ export async function refineCatalogMedia(id, input, { preview = false } = {}) {
     promptAddition('reference-style', 'Universe visual style', universe ? universeAestheticLine(universe) : ''),
   ].filter(Boolean);
   const body = {
-    mode: target.mode, ...(local ? { modelId: local.id } : {}),
-    ...(cloud ? { cloudModel: cloud.modelId, cloudModelIsShippedDefault: cloud.modelIsShippedDefault === true } : {}),
+    ...catalogImageBackend(target),
     prompt: [additions[0].text, input.feedback, ...additions.slice(1).map(a => a.text)].join('\n\n'), promptAdditions: additions,
     initImageFile: source.mediaKey, referenceImageFiles: guides.map(m => m.mediaKey),
     ...dimensions,
   };
   if (preview) return previewImagePrompt(body);
+  return enqueueCatalogImage(body, { settings, local, cloud, catalogAttach: { ingredientId: id, kind: 'reference', role: 'refinement',
+    library: { ...(source.library || {}), variant: want, guide: false, review: { status: 'unreviewed', feedback: input.feedback },
+      derivedFrom: { mediaKey: source.mediaKey, kind: source.kind } } } });
+}
+
+/** An edit source's dimensions, refused when the file is missing or outside generation limits. */
+export async function readEditSourceDimensions(filename) {
+  const sourcePath = resolveImageInputPath(filename);
+  if (!sourcePath) throw new ServerError('Reference image is not available on this machine', { status: 422 });
+  const dimensions = await readImageDimensions(sourcePath);
+  if (!dimensions) throw new ServerError('Could not read the source image dimensions', { status: 422 });
+  if (dimensions.width > MAX_IMAGE_EDGE || dimensions.height > MAX_IMAGE_EDGE
+    || dimensions.width * dimensions.height > MAX_IMAGE_PIXELS || dimensions.width < 64 || dimensions.height < 64) {
+    throw new ServerError('Source dimensions exceed image generation limits. Use a smaller reference image before refining.', { status: 422 });
+  }
+  return dimensions;
+}
+
+// The record's render target (its universe's pin, else the character-sheet
+// default) and how many identity guides that backend takes beside an init image.
+export async function resolveCatalogImageTarget(id) {
+  const ownership = await getPrimitiveContext(id, { includeDerived: false });
+  if (ownership.status === 'conflict') throw new ServerError('Resolve universe ownership before refining', { status: 409 });
+  const { getUniverse } = await import('./universeBuilder/crud.js');
+  const universe = ownership.owner ? await getUniverse(ownership.owner.refId) : null;
+  const settings = await getSettings();
+  const pin = recordRenderPin(universe || {});
+  const target = resolveRenderTargetConfig(settings, RENDER_TARGET.UNIVERSE_CHARACTER_SHEET, {
+    recordMode: pin.mode, recordModel: pin.modelId,
+    fallbackMode: IMAGE_GEN_MODE.LOCAL,
+  });
+  if (!QUEUEABLE_IMAGE_MODES.includes(target.mode)) throw new ServerError('Choose a queueable image backend in Settings before refining references', { status: 400 });
+  const cloud = target.cloud;
+  if (cloud && !cloud.enabled) throw cloud.disabledError;
+  const local = target.mode === IMAGE_GEN_MODE.LOCAL
+    ? selectLocalImageModelFromSettings(settings, undefined, undefined, target.modelCandidates) : null;
+  const supportsGuides = !local || isFlux2(local) || local.pipelineClass === 'QwenImage21Pipeline';
+  const maxGuides = supportsGuides ? Math.max(0, Math.min(3, (maxInputImages(target.mode, cloud?.modelId) ?? 4) - 1)) : 0;
+  return { universe, settings, mode: target.mode, local, cloud, maxGuides };
+}
+
+/** The request body's backend fields for a resolved target. */
+export const catalogImageBackend = ({ mode, local, cloud }) => ({
+  mode, ...(local ? { modelId: local.id } : {}),
+  ...(cloud ? { cloudModel: cloud.modelId, cloudModelIsShippedDefault: cloud.modelIsShippedDefault === true } : {}),
+});
+
+/** Queue one image render whose result the catalog attach hook files on the record. */
+export async function enqueueCatalogImage(body, { settings, local, cloud, catalogAttach }) {
   const { data: params } = await prepareGenerateParams({ data: body, referenceImageFields: [] });
   delete params.cloudModel;
   delete params.cloudModelIsShippedDefault;
   const localParams = local ? resolveLocalImageModel(settings, params) : null;
-  params.catalogAttach = { ingredientId: id, kind: 'reference', role: 'refinement',
-    library: { ...(source.library || {}), variant: want, guide: false, review: { status: 'unreviewed', feedback: input.feedback },
-      derivedFrom: { mediaKey: source.mediaKey, kind: source.kind } } };
+  params.catalogAttach = catalogAttach;
   return enqueueJob({ kind: 'image', params: { ...(cloud?.jobParams || {}), ...params,
     ...(localParams ? { pythonPath: localParams.pythonPath, modelId: localParams.selectedModel.id } : {}) } });
 }

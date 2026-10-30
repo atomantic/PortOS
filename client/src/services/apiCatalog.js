@@ -298,6 +298,13 @@ export const updateCatalogIngredientMediaLibrary = (id, body, options) =>
 export const refineCatalogMedia = (id, body, { preview = false, ...options } = {}) =>
   request(`/catalog/ingredients/${enc(id)}/media/refine${preview ? '/compose' : ''}`, { method: 'POST', body: JSON.stringify(body), ...options });
 
+// Casting > Design: provider-written face lines, then one round of takes.
+export const spreadCatalogDesign = (id, body, { preview = false, ...options } = {}) =>
+  request(`/catalog/ingredients/${enc(id)}/design/spread${preview ? '/compose' : ''}`, { method: 'POST', body: JSON.stringify(body), ...options });
+
+export const renderCatalogDesign = (id, body, { preview = false, ...options } = {}) =>
+  request(`/catalog/ingredients/${enc(id)}/design/render${preview ? '/compose' : ''}`, { method: 'POST', body: JSON.stringify(body), ...options });
+
 export const attachCatalogIngredientMediaFromMoodBoard = (id, body, options) =>
   request(`/catalog/ingredients/${enc(id)}/media/from-mood-board`, { method: 'POST', body: JSON.stringify(body), ...options });
 
