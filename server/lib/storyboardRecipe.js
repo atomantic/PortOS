@@ -1,9 +1,10 @@
 /**
  * Storyboard panel recipes — the node graph the panel maker runs (Make tab).
  *
- * A recipe is a small graph: input nodes (the panel's own words, a system
- * prompt, reference images) feed LLM nodes (prompt writer / enhancer) that
- * feed an image node, whose frames land on the panel as takes. The recipe is
+ * A recipe is a small graph: input nodes (the panel's own words, a style,
+ * reference images) feed an image node, whose frames land on the panel as
+ * takes. The default sends the shot as written with the style after it; an
+ * LLM node (prompt enhancer) is optional, wired in between. The recipe is
  * the board's template (`board.recipe`, null = the default below); what a run
  * produced for one panel — the written prompt, the frames, the exact text sent
  * — lives on that panel as `panel.make.nodes[nodeId]`.
@@ -28,11 +29,11 @@ export const RECIPE_NODE_PORTS = Object.freeze({
   system: { inputs: {}, output: 'text' },
   llm: { inputs: { prompt: 'text', system: 'text' }, output: 'text' },
   references: { inputs: {}, output: 'images' },
-  image: { inputs: { prompt: 'text', images: 'images' }, output: 'frames' },
+  image: { inputs: { prompt: 'text', style: 'text', images: 'images' }, output: 'frames' },
   panel: { inputs: { frames: 'frames' }, output: null },
 });
 
-export const RECIPE_PORT_LABELS = Object.freeze({ prompt: 'Prompt', system: 'System prompt', images: 'References', frames: 'Frames' });
+export const RECIPE_PORT_LABELS = Object.freeze({ prompt: 'Prompt', system: 'System prompt', style: 'Style', images: 'References', frames: 'Frames' });
 
 export const RECIPE_TYPE_TITLES = Object.freeze({
   text: 'Text', system: 'System prompt', llm: 'Prompt writer', references: 'References', image: 'Image', panel: 'Panel',
@@ -83,7 +84,27 @@ const PRODUCTION_SKETCH_PROMPT = [
   'Write one paragraph of 70 to 120 words, scene and framing first, then the style. Answer with the prompt only.',
 ].join(' ');
 
-/** The default system prompt for a board's art style (shown and editable in its node). */
+// The style the image model reads after the shot, in its own words: no LLM
+// rewrites the shot first.
+const PRODUCTION_SKETCH_STYLE = [
+  'Rough production storyboard sketch on a plain white page: fast, loose soft gray marker strokes and simple boxy shapes;',
+  'gesture figures with blank oval heads and no facial features; a sparse background with only enough lines to place the scene;',
+  'light gray hatching at most, no solid blacks, color fills or photo realism;',
+  'loose red pencil streaks showing the direction of movement; a loose blue horizon line and a few blue perspective guide lines.',
+  'No text, letters, numbers, labels, arrows, logos, borders or panels: one drawing filling the frame.',
+].join(' ');
+
+/** The default style text for a board's art style (its own node, sent after the shot as written). */
+export function defaultStoryboardStyle(artStyle) {
+  if (artStyle === 'production-sketch') return PRODUCTION_SKETCH_STYLE;
+  return `Storyboard frame, ${ART_STYLE_WORDS[artStyle] || ART_STYLE_WORDS.pencil}. No text, labels or borders: one drawing filling the frame.`;
+}
+
+/**
+ * The system prompt a prompt enhancer gets for a board's art style. Recipes
+ * saved before the style node existed still carry it, so a style change can
+ * recognize and swap it.
+ */
 export function defaultStoryboardSystemPrompt(artStyle) {
   if (artStyle === 'production-sketch') return PRODUCTION_SKETCH_PROMPT;
   const style = ART_STYLE_WORDS[artStyle] || ART_STYLE_WORDS.pencil;
@@ -95,21 +116,22 @@ export function defaultStoryboardSystemPrompt(artStyle) {
   ].join(' ');
 }
 
-/** Text → Prompt writer (with System prompt) → Image (with References) → Panel. */
+/**
+ * Shot description → Image, with the Storyboard style and References wired in
+ * → Panel. No LLM: the image model reads the shot as written, then the style.
+ */
 function defaultPanelRecipe(board = {}) {
   return {
     nodes: [
       { id: 'node-text', type: 'text', title: 'Shot description', x: 40, y: 40, text: '', settings: { source: 'panel' } },
-      { id: 'node-system', type: 'system', title: 'Storyboard style', x: 40, y: 260, text: defaultStoryboardSystemPrompt(board.artStyle), settings: {} },
-      { id: 'node-writer', type: 'llm', title: 'Prompt writer', x: 360, y: 120, text: '', settings: { providerId: '', model: '', effort: '' } },
-      { id: 'node-refs', type: 'references', title: 'References', x: 360, y: 340, text: '', settings: { linked: true }, images: [] },
-      { id: 'node-image', type: 'image', title: 'Image', x: 680, y: 160, text: '', settings: { imageMode: null, imageModelId: null, count: 1 } },
-      { id: 'node-panel', type: 'panel', title: 'Panel', x: 1000, y: 160, text: '', settings: {} },
+      { id: 'node-system', type: 'system', title: 'Storyboard style', x: 40, y: 260, text: defaultStoryboardStyle(board.artStyle), settings: {} },
+      { id: 'node-refs', type: 'references', title: 'References', x: 40, y: 480, text: '', settings: { linked: true }, images: [] },
+      { id: 'node-image', type: 'image', title: 'Image', x: 400, y: 200, text: '', settings: { imageMode: null, imageModelId: null, count: 1 } },
+      { id: 'node-panel', type: 'panel', title: 'Panel', x: 720, y: 200, text: '', settings: {} },
     ],
     edges: [
-      { from: 'node-text', to: 'node-writer', toPort: 'prompt' },
-      { from: 'node-system', to: 'node-writer', toPort: 'system' },
-      { from: 'node-writer', to: 'node-image', toPort: 'prompt' },
+      { from: 'node-text', to: 'node-image', toPort: 'prompt' },
+      { from: 'node-system', to: 'node-image', toPort: 'style' },
       { from: 'node-refs', to: 'node-image', toPort: 'images' },
       { from: 'node-image', to: 'node-panel', toPort: 'frames' },
     ],
@@ -242,6 +264,11 @@ export function recipeRunOrder(recipe) {
   return order;
 }
 
+const FRAMING_WORDS = Object.freeze({
+  'extreme-wide': 'extreme wide shot', wide: 'wide establishing shot', medium: 'medium shot', close: 'close-up',
+  'extreme-close': 'extreme close-up insert', 'over-the-shoulder': 'over-the-shoulder shot', 'two-shot': 'two-shot', pov: 'point-of-view shot',
+});
+
 /**
  * The words a text node carries for one panel: the panel's own fields (each
  * on a labeled line), the beat's description, or the node's custom text.
@@ -250,11 +277,12 @@ export function textNodeValue(node, { beat, panel } = {}) {
   const source = node?.settings?.source;
   if (source === 'custom') return node.text || '';
   if (source === 'beat') return [beat?.what, beat?.why].filter((v) => v && v.trim()).join('\n');
+  // Words a picture can show: the dialogue or lyric stays off, since the
+  // image would letter it.
   return [
     panel?.action,
-    panel?.framing ? `Framing: ${panel.framing}` : '',
+    panel?.framing ? `Framing: ${FRAMING_WORDS[panel.framing] || panel.framing}.` : '',
     panel?.camera ? `Camera: ${panel.camera}` : '',
-    panel?.dialogue ? `Dialogue or lyric: ${panel.dialogue}` : '',
   ].filter((v) => v && v.trim()).join('\n');
 }
 
@@ -292,6 +320,23 @@ export function nodeInputValue(recipe, nodeId, port, context) {
   const value = nodeOutputValue(recipe, from, context);
   if (value !== null) return value;
   return RECIPE_NODE_PORTS[recipe.nodes.find((n) => n.id === nodeId)?.type]?.inputs[port] === 'text' ? '' : [];
+}
+
+/**
+ * What an image node sends: the shot (its Prompt input) as written, then a
+ * correction note, then the style (its Style input). Each block PortOS adds
+ * is listed (`additions`), so the run and its preview show the same text.
+ */
+export function imageNodePrompt(recipe, nodeId, context, { note = '' } = {}) {
+  const shot = nodeInputValue(recipe, nodeId, 'prompt', context).trim();
+  const style = nodeInputValue(recipe, nodeId, 'style', context).trim();
+  const styleNode = upstreamNode(recipe, nodeId, 'style');
+  const correction = note.trim() ? `Redraw the first reference frame with this change: ${note.trim()}` : '';
+  const additions = [
+    correction ? { id: 'correction', label: 'Correction', text: correction } : null,
+    style ? { id: 'style', label: `Style (${styleNode?.title || 'node'})`, text: style } : null,
+  ].filter(Boolean);
+  return { shot, prompt: shot ? [shot, correction, style].filter(Boolean).join('\n\n') : '', additions };
 }
 
 function sanitizeAdditions(value) {

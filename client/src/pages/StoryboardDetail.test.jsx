@@ -237,8 +237,18 @@ describe('StoryboardDetail', () => {
   });
 
   it('runs a recipe node from the Prompts tab and duplicates a node from its right-click menu', async () => {
-    api.getStoryboard.mockResolvedValue(board({ beats: [{ ...board().beats[0], panels: [panel('panel-1', { action: 'Doors swing open' })] }] }));
+    // A board that wired the optional prompt enhancer between the shot and the image.
+    const wired = {
+      nodes: [
+        { id: 'node-text', type: 'text', title: 'Shot description', settings: { source: 'panel' }, x: 0, y: 0 },
+        { id: 'node-writer', type: 'llm', title: 'Prompt writer', settings: {}, x: 260, y: 0 },
+        { id: 'node-image', type: 'image', title: 'Image', settings: { count: 1 }, x: 520, y: 0 },
+      ],
+      edges: [{ from: 'node-text', to: 'node-writer', toPort: 'prompt' }, { from: 'node-writer', to: 'node-image', toPort: 'prompt' }],
+    };
+    api.getStoryboard.mockResolvedValue(board({ recipe: wired, beats: [{ ...board().beats[0], panels: [panel('panel-1', { action: 'Doors swing open' })] }] }));
     api.runStoryboardPanelNode.mockResolvedValue(board({
+      recipe: wired,
       updatedAt: '2026-10-22T00:00:02.000Z',
       beats: [{ ...board().beats[0], panels: [panel('panel-1', {
         action: 'Doors swing open',
@@ -262,18 +272,18 @@ describe('StoryboardDetail', () => {
     const copy = recipe.nodes.find((n) => n.title === 'Image copy');
     expect(copy).toMatchObject({ type: 'image', settings: { count: 1 } });
     // The copy keeps the original's inputs.
-    expect(recipe.edges.filter((e) => e.to === copy.id).map((e) => e.toPort).sort()).toEqual(['images', 'prompt']);
+    expect(recipe.edges.filter((e) => e.to === copy.id).map((e) => e.toPort)).toEqual(['prompt']);
   });
 
   it('opens the recipe canvas at its deep link and selects a node into the URL', async () => {
     api.getStoryboard.mockResolvedValue(board());
     renderAt('/storyboards/sb-1/panel/panel-1?panelTab=make&makeView=canvas&node=node-image');
     expect(await screen.findByRole('region', { name: 'Image node' })).toBeInTheDocument();
-    expect(screen.queryByRole('region', { name: 'Prompt writer node' })).toBeNull();
+    expect(screen.queryByRole('region', { name: 'Storyboard style node' })).toBeNull();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Prompt writer (llm)' }));
-    await waitFor(() => expect(screen.getByTestId('location').textContent).toContain('node=node-writer'));
-    expect(await screen.findByRole('region', { name: 'Prompt writer node' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Storyboard style (system)' }));
+    await waitFor(() => expect(screen.getByTestId('location').textContent).toContain('node=node-system'));
+    expect(await screen.findByRole('region', { name: 'Storyboard style node' })).toBeInTheDocument();
   });
 
   it('refuses a canvas wire that would close a cycle, keeping the input wired', async () => {
@@ -396,7 +406,7 @@ describe('StoryboardDetail', () => {
     await waitFor(() => expect(api.saveStoryboardRecipe).toHaveBeenCalled());
     const [name, sent] = api.saveStoryboardRecipe.mock.calls[0];
     expect(name).toBe('Pencil frames');
-    expect(sent.nodes.map((n) => n.id)).toEqual(['node-text', 'node-system', 'node-writer', 'node-refs', 'node-image', 'node-panel']);
+    expect(sent.nodes.map((n) => n.id)).toEqual(['node-text', 'node-system', 'node-refs', 'node-image', 'node-panel']);
 
     fireEvent.click(screen.getByRole('button', { name: 'Load…' }));
     expect(await screen.findByLabelText('Saved recipe')).toHaveValue('sbr-2');

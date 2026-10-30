@@ -9,7 +9,7 @@ import { getStoryboardPanelMake } from '../../services/api';
 import { formatCount } from '../../utils/formatters';
 import { newStoryboardEntityId } from '../../../../server/lib/storyboardVocabulary.js';
 import {
-  effectiveRecipe, nodeInputValue, panelNodeState, RECIPE_LIMITS, RECIPE_NODE_PORTS, RECIPE_PORT_LABELS, RECIPE_TYPE_TITLES,
+  effectiveRecipe, imageNodePrompt, nodeInputValue, panelNodeState, RECIPE_LIMITS, RECIPE_NODE_PORTS, RECIPE_PORT_LABELS, RECIPE_TYPE_TITLES,
   recipeRunOrder, textNodeValue, upstreamNode,
 } from '../../../../server/lib/storyboardRecipe.js';
 import TabPills from '../ui/TabPills';
@@ -238,7 +238,7 @@ export default function PanelMakeTab({ board, found, sketchNonce, handlers }) {
       );
     }
     if (node.type === 'image') {
-      const prompt = nodeInputValue(recipe, node.id, 'prompt', context);
+      const { prompt, additions } = imageNodePrompt(recipe, node.id, context);
       const over = prompt.length > RECIPE_LIMITS.imagePrompt;
       const settled = state.takeIds.length + state.failedJobIds.length;
       return (
@@ -249,7 +249,8 @@ export default function PanelMakeTab({ board, found, sketchNonce, handlers }) {
           </p>
           {state.status === 'queued' && <p className="text-xs text-gray-300" role="status">{settled} of {state.jobIds.length} frames back</p>}
           {state.error && <p className="text-xs text-port-error" role="alert">{state.error}</p>}
-          <SentPromptPanel prompt={prompt} sentPrompt={state.sentPrompt || null} additions={[]} />
+          <SentPromptPanel prompt={nodeInputValue(recipe, node.id, 'prompt', context)} sentPrompt={state.sentPrompt || prompt || null}
+            additions={state.sentPrompt ? state.promptAdditions : additions} />
           {state.sentRefs.length > 0 && <ImageStrip label="References sent" images={state.sentRefs} />}
         </>
       );
@@ -349,8 +350,8 @@ export default function PanelMakeTab({ board, found, sketchNonce, handlers }) {
   return (
     <div className="space-y-3">
       <p className="text-sm text-gray-300">
-        How this board draws a panel: the prompt writer turns the shot into a prompt, then the image node draws it.
-        Draw panel runs them in order; here you can read the exact prompt sent, edit a step, or rerun one.
+        How this board draws a panel: the image model reads the shot as you wrote it, then the storyboard style, with the references beside it.
+        No LLM rewrites it unless you add a Prompt enhancer between the shot and the image. Here you can read the exact prompt sent and edit the style.
       </p>
       <DrawPanelButton panel={panel} onDraw={handlers.onDraw} />
       {board.recipe && !confirmReset && (

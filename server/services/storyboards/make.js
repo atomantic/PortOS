@@ -21,7 +21,7 @@ import { copyFileGuarded, ensureDir, PATHS, resolveImageInputPath } from '../../
 import { promptAddition } from '../../lib/modelInput.js';
 import { CREATIVE_LATITUDE_ADDITION, withCreativeLatitude } from '../../lib/creativeLatitude.js';
 import {
-  effectiveRecipe, nodeInputValue, panelNodeState, RECIPE_LIMITS, recipeRunOrder, sanitizeRecipe, STORYBOARD_RENDER_SIZES,
+  effectiveRecipe, imageNodePrompt, nodeInputValue, panelNodeState, RECIPE_LIMITS, recipeRunOrder, sanitizeRecipe, STORYBOARD_RENDER_SIZES,
   upstreamNode,
 } from '../../lib/storyboardRecipe.js';
 import { newStoryboardEntityId, STORYBOARD_LIMITS } from '../../lib/storyboardVocabulary.js';
@@ -203,12 +203,17 @@ async function runLlmNode(board, panelId, node, { correction = null } = {}) {
   return next;
 }
 
-async function runImageNode(board, panelId, node, { frameRef = null, count: frames = null, selectOnLand = false } = {}) {
+/**
+ * Queue an image node's frames. The model reads the shot (its Prompt input)
+ * as written, then a correction note when there is one, then the style (its
+ * Style input); each block PortOS adds is listed with the sent prompt.
+ */
+async function runImageNode(board, panelId, node, { frameRef = null, count: frames = null, selectOnLand = false, note = '' } = {}) {
   const recipe = effectiveRecipe(board);
   const { panel } = locate(board, panelId);
   const context = inputContext(board, panelId, await resolveLinkedRefs(panel));
-  const prompt = nodeInputValue(recipe, node.id, 'prompt', context).trim();
-  if (!prompt) throw refuse(`${node.title} has no prompt: run the prompt writer first, or wire a text node into its Prompt.`);
+  const { shot, prompt, additions: promptAdditions } = imageNodePrompt(recipe, node.id, context, { note });
+  if (!shot) throw refuse(`${node.title} has no prompt: write the shot in the panel, or wire a text node into its Prompt.`);
   if (prompt.length > RECIPE_LIMITS.imagePrompt) {
     throw refuse(`The prompt is ${prompt.length.toLocaleString()} characters; image models take at most ${RECIPE_LIMITS.imagePrompt.toLocaleString()}. Shorten it in the node it comes from.`, 'PROMPT_TOO_LONG');
   }
@@ -232,7 +237,7 @@ async function runImageNode(board, panelId, node, { frameRef = null, count: fram
   // fails at once is already counted against this run.
   await mutateStoryboard(board.id, (draft) => patchNodeState(draft, panelId, node.id, {
     status: 'queued', error: '', runId, frameCount: count, jobIds: [], failedJobIds: [], takeIds: [], sentPrompt: prompt,
-    sentRefs: refs, promptAdditions: [], providerId: node.settings.imageMode || '', model: node.settings.imageModelId || '',
+    sentRefs: refs, promptAdditions, providerId: node.settings.imageMode || '', model: node.settings.imageModelId || '',
     selectOnLand, runAt: new Date().toISOString(),
   }));
   const jobIds = [];
@@ -273,9 +278,9 @@ async function correctionFrame(image) {
 }
 
 /**
- * Correct a panel's frame: the prompt writer feeding the recipe's Image node
- * rewrites its prompt with the note, then the Image node makes new frames with
- * the marked-up frame as the first reference. New frames land as takes; the
+ * Correct a panel's frame: the Image node makes new frames with the
+ * marked-up frame as the first reference and the note after the shot; with a
+ * prompt writer wired in, the writer rewrites its prompt with the note instead. New frames land as takes; the
  * selection is unchanged. Resolves to the board once the frames are queued; a
  * writer failure is refused (its node card keeps the reason).
  */
@@ -289,8 +294,12 @@ export async function correctPanel(storyboardId, panelId, { takeId, note }) {
   const imageNode = recipeRunOrder(recipe).find((n) => n.type === 'image');
   if (!imageNode) throw refuse('The recipe has no Image node, so there is nothing to redraw.');
   const writer = upstreamNode(recipe, imageNode.id, 'prompt');
-  if (writer?.type !== 'llm') throw refuse(`A correction rewrites the prompt, so ${imageNode.title} needs a prompt writer wired into its Prompt.`);
   const frameRef = await correctionFrame(take.image);
+  if (writer?.type !== 'llm') {
+    const next = await runImageNode(board, panelId, imageNode, { frameRef, note });
+    console.log(`✏️ Storyboard ${storyboardId.slice(0, 11)} panel ${panelId.slice(0, 12)} corrected from ${frameRef.label.toLowerCase()}`);
+    return next;
+  }
   const current = panelNodeState(panel, writer.id).text.trim();
   const written = await runLlmNode(board, panelId, writer, { correction: { current, note } });
   const writerState = panelNodeState(locate(written, panelId).panel, writer.id);
@@ -469,9 +478,9 @@ async function makePanel(storyboardId, panelId, options = {}) {
 }
 
 /**
- * Draw one panel: the recipe's prompt writer rewrites its prompt from the
- * panel's shot, then the image node draws one frame, which becomes the
- * panel's selected art (earlier takes stay). Resolves once the frame is
+ * Draw one panel: the recipe runs on the panel's shot (an optional prompt
+ * enhancer rewrites it first), and the image node draws one frame, which
+ * becomes the panel's selected art (earlier takes stay). Resolves once the frame is
  * queued; `storyboard:make` follows it.
  */
 export async function drawPanel(storyboardId, panelId) {

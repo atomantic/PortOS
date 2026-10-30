@@ -12,7 +12,7 @@
 
 import { ServerError } from '../../lib/errorHandler.js';
 import { sanitizeStoryboard, sanitizeTake, summarizeStoryboard } from '../../lib/storyboardRecord.js';
-import { defaultStoryboardSystemPrompt } from '../../lib/storyboardRecipe.js';
+import { defaultStoryboardStyle, defaultStoryboardSystemPrompt } from '../../lib/storyboardRecipe.js';
 import {
   isValidStoryboardId, newStoryboardEntityId, newStoryboardId, STORYBOARD_LIMITS,
 } from '../../lib/storyboardVocabulary.js';
@@ -95,9 +95,10 @@ export async function mutateStoryboard(id, mutate) {
 // old style's default; a style prompt the user edited is theirs and stays.
 function restyleRecipe(draft, artStyle) {
   if (!artStyle || artStyle === draft.artStyle || !Array.isArray(draft.recipe?.nodes)) return;
-  const previous = defaultStoryboardSystemPrompt(draft.artStyle);
+  const defaults = [defaultStoryboardStyle, defaultStoryboardSystemPrompt];
   for (const node of draft.recipe.nodes) {
-    if (node?.type === 'system' && node.text === previous) node.text = defaultStoryboardSystemPrompt(artStyle);
+    const kind = node?.type === 'system' ? defaults.find((text) => node.text === text(draft.artStyle)) : null;
+    if (kind) node.text = kind(artStyle);
   }
 }
 

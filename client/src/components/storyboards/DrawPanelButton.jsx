@@ -5,8 +5,8 @@ import { selectedTake } from './storyboardArt';
 const DRAWING = new Set(['running', 'queued']);
 
 /**
- * Draw panel: the board's recipe rewrites the panel's prompt from its shot and
- * draws one frame, which becomes its art. Sits beside what the director edits
+ * Draw panel: the board's recipe draws one frame from the panel's shot (as
+ * written, unless a prompt enhancer is wired in), which becomes its art. Sits beside what the director edits
  * (the shot words, the prompts) so a change is redrawn in place; it reads
  * "Drawing…" while a prompt is written or a frame is on its way (here, or from
  * Redraw all).
