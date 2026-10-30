@@ -256,8 +256,22 @@ log ""
 step "runtime-preflight" "running" "Checking Node.js against the updated requirements..."
 if [ -f scripts/checkNodeVersion.js ] && ! node_gate_output=$(node scripts/checkNodeVersion.js 2>&1); then
   log "$node_gate_output"
-  log "❌ Update stopped before changing running apps: upgrade Node.js, then re-run the update. The checkout is already on the pulled revision."
-  step "runtime-preflight" "failed" "Unsupported Node.js runtime; PortOS apps were left running"
+  # The apps stay up on the tree they were already running, so a checkout left
+  # on the rejected revision would crash-loop the next restart (memory limit,
+  # crash, reboot). Put the tree back; untracked files are the
+  # user's, so nothing is cleaned. An unknown pre-pull sha is never reset to.
+  if [ -n "$pre_pull_sha" ] && git cat-file -e "${pre_pull_sha}^{commit}" 2>/dev/null; then
+    if run git reset --hard "$pre_pull_sha" && run git submodule sync --recursive && run git submodule update --init --recursive; then
+      log "❌ Update stopped before changing running apps: upgrade Node.js, then re-run the update. The checkout was rolled back to the revision PortOS was already running."
+      step "runtime-preflight" "failed" "Unsupported Node.js runtime; checkout rolled back and PortOS apps were left running"
+    else
+      log "❌ Update stopped before changing running apps: upgrade Node.js, then re-run the update. Rolling the checkout back to ${pre_pull_sha} failed — run 'git reset --hard ${pre_pull_sha} && git submodule update --init --recursive' before restarting PortOS."
+      step "runtime-preflight" "failed" "Unsupported Node.js runtime; checkout rollback failed, PortOS apps were left running"
+    fi
+  else
+    log "❌ Update stopped before changing running apps: upgrade Node.js, then re-run the update. The checkout is already on the pulled revision (no pre-pull commit was recorded to roll back to)."
+    step "runtime-preflight" "failed" "Unsupported Node.js runtime; PortOS apps were left running"
+  fi
   exit 1
 fi
 step "runtime-preflight" "done" "Node.js runtime supported"
