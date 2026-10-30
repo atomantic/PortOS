@@ -66,17 +66,22 @@ export default function CatalogDesignPanel({ ingredientId, name, forms = [], med
     return next;
   }, { replace: true });
 
+  const recordPending = (roundId, jobs) => {
+    if (!mounted.current) return;
+    setPending((prev) => [...prev, ...jobs.map((job) => ({ jobId: job.jobId, roundId, line: job.line, startedAt: Date.now() }))]);
+  };
+
   const queue = async (body) => {
     if (inFlight.current || blockedReason) return false;
     inFlight.current = true; setBusy(true); setError('');
     try {
       const result = await renderCatalogDesign(ingredientId, body, { silent: true });
       if (!result?.jobs?.length) throw new Error('The round queued no renders');
-      if (mounted.current) {
-        setPending((prev) => [...prev, ...result.jobs.map((job) => ({ jobId: job.jobId, roundId: result.roundId, line: job.line, startedAt: Date.now() }))]);
-      }
+      recordPending(result.roundId, result.jobs);
       return true;
     } catch (err) {
+      // A partly admitted round keeps its landed takes running: show them.
+      if (Array.isArray(err.context?.jobs) && err.context.jobs.length) recordPending(err.context.roundId, err.context.jobs);
       if (mounted.current) setError(err.message || 'Could not start the round');
       return false;
     } finally {

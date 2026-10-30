@@ -67,4 +67,16 @@ describe('Casting design rounds', () => {
     expect(await screen.findByText('Take rendering')).toBeTruthy();
     expect(within(screen.getByLabelText('Design this cast member')).getByText('Make the nose far smaller.')).toBeTruthy();
   });
+
+  it('records the takes that landed when a later take is refused and keeps the composer', async () => {
+    renderCatalogDesign.mockRejectedValue(Object.assign(new Error('Queued 1 of 8 takes — queue is full'),
+      { context: { roundId: 'r3', jobs: [{ jobId: 'job-9', line: 'Make the chin far smaller.' }] } }));
+    mount();
+    fireEvent.click(screen.getAllByRole('button', { name: 'Pick' })[0]);
+    fireEvent.click(screen.getByRole('tab', { name: 'Vary a feature' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Render 8 takes' }));
+    expect(await screen.findByText('Queued 1 of 8 takes — queue is full')).toBeTruthy();
+    expect(await screen.findByText('Take rendering')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Render 8 takes' })).toBeTruthy();
+  });
 });
