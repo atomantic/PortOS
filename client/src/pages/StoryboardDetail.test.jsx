@@ -197,6 +197,22 @@ describe('StoryboardDetail', () => {
     expect(name.value).toBe('Second');
   });
 
+  // Uniquely catches the side panel losing insert before/after (at the right index) or its labeled delete.
+  it('inserts a panel beside the open one and opens it, and deletes from the side panel', async () => {
+    api.getStoryboard.mockResolvedValue(board({ beats: [{ ...board().beats[0], panels: [panel('panel-1'), panel('panel-2')] }] }));
+    api.addStoryboardPanel.mockResolvedValue({
+      board: board({ updatedAt: '2026-10-22T00:00:02.000Z', beats: [{ ...board().beats[0], panels: [panel('panel-1'), panel('panel-new'), panel('panel-2')] }] }),
+      panelId: 'panel-new',
+    });
+    renderAt('/storyboards/sb-1/panel/panel-1');
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Insert after' }));
+    await waitFor(() => expect(api.addStoryboardPanel).toHaveBeenCalledWith('sb-1', 'beat-1', { index: 1 }));
+    await waitFor(() => expect(screen.getByTestId('location').textContent).toBe('/storyboards/sb-1/panel/panel-new'));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete panel' }));
+    expect(screen.getByText('Delete panel 2 from beat 1?')).toBeInTheDocument();
+  });
+
   it('opens a new panel at its deep link and saves its action on blur', async () => {
     api.getStoryboard.mockResolvedValue(board());
     const withPanel = board({

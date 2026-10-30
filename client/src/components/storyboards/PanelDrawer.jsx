@@ -248,8 +248,16 @@ function ShotTab({ board, found, panelNumber, sketchNonce, busy, handlers, timin
             </select>
           </>
         ) : null}
-        <button type="button" className={`${iconButton} ml-auto hover:text-port-error`} onClick={() => setConfirmDelete(true)} aria-label="Delete panel">
-          <Trash2 size={18} />
+      </div>
+      <div className="flex flex-wrap gap-2">
+        <button type="button" className={actionButton} onClick={() => handlers.onInsert(index)} disabled={busy}>
+          <Plus size={16} aria-hidden="true" /> Insert before
+        </button>
+        <button type="button" className={actionButton} onClick={() => handlers.onInsert(index + 1)} disabled={busy}>
+          <Plus size={16} aria-hidden="true" /> Insert after
+        </button>
+        <button type="button" className={`${actionButton} ml-auto hover:text-port-error`} onClick={() => setConfirmDelete(true)}>
+          <Trash2 size={16} aria-hidden="true" /> Delete panel
         </button>
       </div>
       {confirmDelete ? (
