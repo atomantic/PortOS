@@ -44,6 +44,13 @@ describe('retrying instance identity on an unconfirmed cleanup task', () => {
     expect(api.recheckCosAgentCleanup).not.toHaveBeenCalled();
   });
 
+  it('words a failed identity read as unidentified, not still loading', async () => {
+    identityApi.getAssignableInstances.mockRejectedValueOnce(new Error('offline'));
+    renderQueue();
+    expect(await screen.findByRole('button', { name: 'Retry instance identity' })).toBeInTheDocument();
+    expect(screen.queryByText(/identity is loading/)).toBeNull();
+  });
+
   it('keeps a differently claimed task unconfirmed after identity is recovered', async () => {
     identityApi.getAssignableInstances.mockResolvedValueOnce({ instances: [] })
       .mockResolvedValueOnce({ instances: [{ instanceId: 'other-id', isSelf: true }] });

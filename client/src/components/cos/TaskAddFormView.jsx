@@ -212,6 +212,9 @@ function TaskTypeFields({ form, compact, queueFirst }) {
     providerModelNote,
     isFederated,
     assignableInstances,
+    instancesError,
+    instancesLoading,
+    refreshInstances,
     handleAppChange,
     handleProviderChange,
     handleSelectOrchestrationProfile,
@@ -393,6 +396,19 @@ function TaskTypeFields({ form, compact, queueFirst }) {
           onChange={(value) => setField('targetInstanceId', value)}
           instances={assignableInstances}
         />
+      )}
+      {!isFederated && instancesError && (
+        <div role="alert" className="flex flex-wrap items-center gap-2 py-1 text-sm text-port-warning">
+          <span>Could not load the instance list, so “Run on” is unavailable. This task will run on any instance.</span>
+          <button
+            type="button"
+            onClick={refreshInstances}
+            disabled={instancesLoading}
+            className="rounded border border-port-border px-2 py-1 text-gray-200 hover:border-port-accent focus:outline-hidden focus:border-port-accent disabled:opacity-60"
+          >
+            {instancesLoading ? 'Retrying…' : 'Retry'}
+          </button>
+        </div>
       )}
     </>
   );
