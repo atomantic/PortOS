@@ -295,10 +295,7 @@ describe('pending-merge handoff', () => {
   it('persists the verified binding and merges only that head once a concurrent lease releases, across a restart', async () => {
     const result = await handedOff();
     expect(result).toMatchObject({ queued: true, receipt: { appId: 'app1', prNumber: 7, headSha: HEAD, repository: 'github.com/example/repo' } });
-    // The merge-gate audit (#12549) exempts exactly this head from the run's own record.
-    expect(f.state.agents['agent-1'].metadata.mergeHandoffReceipts).toEqual([
-      expect.objectContaining({ receiptId: result.receipt.id, prUrl: PR_URL, headSha: HEAD }),
-    ]);
+    expect(f.state.agents['agent-1'].metadata.mergeHandoffReceipts).toBeUndefined();
     // The receipt's immediate sweep found CI pending and spent no tick budget.
     expect(mergePrMock).not.toHaveBeenCalled();
     expect(pending()).toEqual([expect.objectContaining({
@@ -322,15 +319,6 @@ describe('pending-merge handoff', () => {
     expect(await restarted.processPendingMergePrs(f.apps.get('app1'))).toMatchObject({ merged: 1 });
     expect(mergePrMock).toHaveBeenCalledWith('/repos/source', 7, { forgeAccount: null, expectedHeadSha: HEAD });
     expect(pending()).toEqual([]);
-    expect(f.state.agents['agent-1'].metadata.mergeHandoffReceipts[0].coordinatorMergedAt).toEqual(expect.any(String));
-  });
-
-  it('marks a receipt coordinator-merged only for its own merge, never for a PR that turned up merged', async () => {
-    await handedOff();
-    f.pr.state = 'MERGED';
-    await processPendingMergePrs(f.apps.get('app1'));
-    expect(mergePrMock).not.toHaveBeenCalled();
-    expect(f.state.agents['agent-1'].metadata.mergeHandoffReceipts[0].coordinatorMergedAt).toBeUndefined();
   });
 
   it.each([

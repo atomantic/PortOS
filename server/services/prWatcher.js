@@ -729,7 +729,7 @@ async function attemptAdmittedMerge(entry, binding, prView, ctx) {
     return { step: { outcome: retained, tally: { waiting: 1 } } };
   }
   const retained = guard.evidence ? { ...entry, mergedTreeGuard: guard.evidence } : entry;
-  const { withPendingMergeAdmission, markMergeHandoffMerged } = await import('./cosMergeAdmission.js');
+  const { withPendingMergeAdmission } = await import('./cosMergeAdmission.js');
   const admitted = await withPendingMergeAdmission(ctx.origin, () => mergeAssessedHead(entry, binding, ctx, guard.evidence), preparationKey);
   if (!admitted.admitted) {
     console.log(`⏳ Pending merge deferred for PR #${entry.prNumber}: ${admitted.reason}`);
@@ -742,11 +742,6 @@ async function attemptAdmittedMerge(entry, binding, prView, ctx) {
     return { step: await holdForOwner(ctx.app, entry, binding, merge.ownerBlocked, held) };
   }
   if (merge.success) {
-    // The post-merge gate audit (#12549) exempts only a merge made here.
-    if (binding) {
-      await markMergeHandoffMerged({ agentId: binding.agentId, receiptId: binding.receiptId, headSha: binding.headSha })
-        .catch((err) => console.warn(`⚠️ Could not mark PR #${entry.prNumber} as coordinator-merged: ${err.message}`));
-    }
     // Admission has released before potentially slow archival cleanup.
     return { step: { outcome: await finishMergedReceipt(ctx.app, entry, binding), tally: { merged: 1 } } };
   }

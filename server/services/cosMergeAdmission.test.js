@@ -62,7 +62,7 @@ describe('repository final merge workflow', () => {
     validate('a'); forge.prs.a.state = 'DIRTY';
     const a2 = await acquire('a');
     expect(await release('a', a2.token, 'resync')).toMatchObject({ released: true, outcome: 'resync' });
-    expect(fixture.state.agents.a.metadata.lastMergeAdmission.outcome).toBe('resync');
+    expect(fixture.state.agents.a.metadata.lastMergeAdmission).toBeUndefined();
     expect(fixture.state.mergeAdmissions).toEqual({});
     const revalidated = validate('a');
     const a3 = await acquire('a');
@@ -141,11 +141,8 @@ describe('repository final merge workflow', () => {
     const next = await acquire('a');
     expect((await release('a', a.token)).released).not.toBe(true);
     expect(await release('a', next.token)).toMatchObject({ released: true });
-    expect(fixture.state.agents.a.metadata.lastMergeAdmission.outcome).toBe('merged');
-    // The merge-gate audit (#12549) needs the held interval, not just the last release time.
-    expect(fixture.state.agents.a.metadata.mergeAdmissionHistory.at(-1)).toMatchObject({
-      repository: 'github.com/example/repo', outcome: 'merged', acquiredAt: expect.any(String), releasedAt: expect.any(String),
-    });
+    expect(fixture.state.agents.a.metadata.lastMergeAdmission).toBeUndefined();
+    expect(fixture.state.agents.a.metadata.mergeAdmissionHistory).toBeUndefined();
     const last = await acquire('a');
     expect(await release('a', last.token, 'abandoned')).toMatchObject({ admitted: false, reason: 'outcome-required' });
     expect(fixture.state.mergeAdmissions['github.com/example/repo'].token).toBe(last.token);
