@@ -104,6 +104,8 @@ const REVIEWED_OPEN_MUTATIONS = [
   ['POST /api/albums', RECORDS],
   ['DELETE /api/albums/:id', REMOVES_RECORD],
   ['PATCH /api/albums/:id', RECORDS],
+  // /api/apple-health
+  ['DELETE /api/apple-health/days/:date', REMOVES_RECORD],
   // /api/apps
   ['DELETE /api/apps/:id', REMOVES_RECORD],
   ['POST /api/apps/:id/archive', RECORDS],
@@ -707,10 +709,14 @@ const REVIEWED_OPEN_MUTATIONS = [
   ['PUT /api/meatspace/alcohol/log/:date/:index', RECORDS],
   ['PUT /api/meatspace/birth-date', RECORDS],
   ['POST /api/meatspace/blood', RECORDS],
+  ['DELETE /api/meatspace/blood/:id', REMOVES_RECORD],
   ['POST /api/meatspace/blood-pressure', RECORDS],
+  ['DELETE /api/meatspace/blood-pressure/:date', REMOVES_RECORD],
   ['POST /api/meatspace/body', RECORDS],
+  ['DELETE /api/meatspace/body/:id', REMOVES_RECORD],
   ['PUT /api/meatspace/config', RECORDS],
   ['POST /api/meatspace/epigenetic', RECORDS],
+  ['DELETE /api/meatspace/epigenetic/:id', REMOVES_RECORD],
   ['POST /api/meatspace/eyes', RECORDS],
   ['DELETE /api/meatspace/eyes/:id', REMOVES_RECORD],
   ['PUT /api/meatspace/eyes/:id', RECORDS],
@@ -737,6 +743,7 @@ const REVIEWED_OPEN_MUTATIONS = [
   ['POST /api/meatspace/post/training', RECORDS],
   ['POST /api/meatspace/post/training/runs', RECORDS],
   ['POST /api/meatspace/workouts', RECORDS],
+  ['DELETE /api/meatspace/workouts/:id', REMOVES_RECORD],
   // /api/meatspace/genome
   ['DELETE /api/meatspace/genome', REMOVES_RECORD],
   ['DELETE /api/meatspace/genome/clinvar', REMOVES_RECORD],

@@ -20,6 +20,7 @@ import { isSmokeBoot } from './lib/runtimeEnv.js';
 import { installUpgradeFallback } from './lib/upgradeFallback.js';
 
 import alertsRoutes from './routes/alerts.js';
+import appleHealthDaysRoutes from './routes/appleHealthDays.js';
 import appleHealthRoutes from './routes/appleHealth.js';
 import avatarRoutes from './routes/avatar.js';
 import systemHealthRoutes from './routes/systemHealth.js';
@@ -446,6 +447,7 @@ app.use('/api/browser', browserRoutes);
 app.use('/api/data', dataManagerRoutes);
 app.use('/api/datadog', datadogRoutes);
 app.use('/api/jira', jiraRoutes);
+app.use('/api/apple-health', appleHealthDaysRoutes);
 app.use('/api/health', appleHealthRoutes);
 app.use('/api/insights', insightsRoutes);
 app.use('/api/instances', instancesRoutes);

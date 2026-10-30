@@ -7,7 +7,7 @@
 
 import { invalidateMeatspace } from './meatspaceEvents.js';
 import { join } from 'path';
-import { atomicWrite, PATHS, ensureDir, readJSONFile } from '../lib/fileUtils.js';
+import { atomicWrite, PATHS, ensureDir, readJSONFile, unlinkGuarded } from '../lib/fileUtils.js';
 import { createKeyedFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { healthPointKey } from '../lib/appleHealthPoints.js';
 
@@ -126,6 +126,28 @@ export function dedupKey(metricName, dateString) {
 export async function readDayFile(dateStr) {
   const filePath = join(PATHS.health, `${dateStr}.json`);
   return readJSONFile(filePath, { date: dateStr, metrics: {} }, { strict: true });
+}
+
+/**
+ * Unlink one day file, including a file dated today. Does not archive it.
+ * Returns null when the file is already gone.
+ */
+export async function deleteHealthDay(dateStr) {
+  const filePath = join(PATHS.health, `${dateStr}.json`);
+  const removed = await queueHealthDayMutation(dateStr, async () => {
+    try {
+      await unlinkGuarded(filePath);
+      return { date: dateStr };
+    } catch (err) {
+      if (err?.code === 'ENOENT') return null;
+      throw err;
+    }
+  });
+  if (removed) {
+    invalidateMeatspace(['healthBody']);
+    console.log(`🗑️ Apple Health day removed: ${dateStr}`);
+  }
+  return removed;
 }
 
 /**

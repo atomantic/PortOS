@@ -560,6 +560,20 @@ export async function mlRemoveById(key, id, { expectedDate } = {}) {
   });
 }
 
+/** Remove every record in `key` for which `predicate` is true. Returns the removed rows. */
+export async function mlRemoveWhere(key, predicate) {
+  return updateStore(store => {
+    if (!Array.isArray(store[key])) return [];
+    const removed = [];
+    store[key] = store[key].filter(row => {
+      if (!predicate(row)) return true;
+      removed.push(row);
+      return false;
+    });
+    return removed;
+  });
+}
+
 export async function mlReplace(key, array) {
   await updateStore(store => { store[key] = array; });
 }
@@ -611,6 +625,67 @@ export async function mlUpsertHealthMetricByDate(date, patch) {
     const created = { id: newMortalLoomId(), date, ...patch };
     store.healthMetrics.push(created);
     return created;
+  });
+}
+
+/**
+ * Delete health-metric fields outright. `mlUpsertHealthMetricByDate` skips
+ * null, so a clear has to remove the keys. An entry left with nothing but
+ * `id` and `date` is dropped.
+ */
+export async function mlClearHealthMetricFields(date, keys) {
+  return updateStore(store => {
+    const existing = store.healthMetrics.find(row => row.date === date);
+    if (!existing) return null;
+    const removed = {};
+    for (const key of keys) {
+      if (existing[key] !== undefined && existing[key] !== null) {
+        removed[key] = existing[key];
+        delete existing[key];
+      }
+    }
+    if (Object.keys(removed).length === 0) return null;
+    const leftover = Object.keys(existing).filter(key => key !== 'id' && key !== 'date');
+    if (leftover.length === 0) {
+      store.healthMetrics.splice(store.healthMetrics.indexOf(existing), 1);
+    }
+    return { date, ...removed };
+  });
+}
+
+/**
+ * Fold FHIR lab rows into `bloodTests` by date. Existing marker keys are kept.
+ * A new date is minted with an id and `createdAt`.
+ */
+export async function mlMergeClinicalBloodTests(fhirTests) {
+  return updateStore(store => {
+    let newDates = 0;
+    for (const fhirTest of Array.isArray(fhirTests) ? fhirTests : []) {
+      if (!isPlainObject(fhirTest) || typeof fhirTest.date !== 'string') continue;
+      const { date, id: _id, createdAt: _createdAt, updatedAt: _updatedAt, aliasIds: _aliasIds, markers: _markers, ...values } = fhirTest;
+      const existing = store.bloodTests.find(row => row.date === date);
+      if (existing) {
+        const markers = isPlainObject(existing.markers) ? existing.markers : {};
+        for (const [key, value] of Object.entries(values)) {
+          if (markers[key] === undefined && existing[key] === undefined) markers[key] = value;
+        }
+        existing.markers = markers;
+      } else {
+        store.bloodTests.push({
+          id: newMortalLoomId(),
+          date,
+          createdAt: new Date().toISOString(),
+          markers: values,
+        });
+        newDates += 1;
+      }
+    }
+    const tests = store.bloodTests.map(({ id, markers, ...rest }) => ({
+      ...rest,
+      ...(isPlainObject(markers) ? markers : {}),
+      ...(id ? { id } : {}),
+    }));
+    return { newDates, tests };
   });
 }
 
