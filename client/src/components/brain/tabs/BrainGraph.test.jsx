@@ -433,3 +433,44 @@ describe('selection detail identity', () => {
     expect(screen.queryByText('Goal detail')).not.toBeInTheDocument();
   });
 });
+
+describe('neighborhood load ownership', () => {
+  const hood = (id) => ({ ...GRAPH, nodes: [{ ...GRAPH.nodes[0], id, label: `Hood ${id}` }], edges: [] });
+  const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
+
+  it('keeps the newer focus when an older neighborhood resolves last', async () => {
+    const a = deferred();
+    const b = deferred();
+    await renderGraph();
+    api.getBrainGraph.mockReturnValueOnce(a.promise).mockReturnValueOnce(b.promise);
+    await act(async () => { sceneElement.props.onFocus({ id: 'a', label: 'Node A' }); });
+    await act(async () => { sceneElement.props.onFocus({ id: 'b', label: 'Node B' }); });
+    await act(async () => { b.resolve(hood('b')); });
+    await act(async () => { a.resolve(hood('a')); });
+    expect(sceneElement.props.graph.simNodes.map(n => n.id)).toEqual(['b']);
+    expect(screen.getByText('Node B')).toBeInTheDocument();
+    expect(screen.queryByText('Node A')).not.toBeInTheDocument();
+  });
+
+  it('does not let a Sync reload overwrite a focus chosen during the sync', async () => {
+    const sync = deferred();
+    const reload = deferred();
+    api.getBrainGraph.mockResolvedValueOnce({ ...GRAPH, hasEmbeddings: false });
+    api.syncBrainData.mockReturnValue(sync.promise);
+    const user = userEvent.setup();
+    await renderGraph();
+    await user.click(screen.getAllByRole('button', { name: /sync now/i })[0]);
+    api.getBrainGraph.mockResolvedValueOnce(hood("b")).mockReturnValueOnce(reload.promise);
+    await act(async () => { sceneElement.props.onFocus({ id: 'b', label: 'Node B' }); });
+    await act(async () => { sync.resolve({ synced: 1, skipped: 0 }); });
+    await act(async () => { reload.resolve(hood('stale')); });
+    expect(sceneElement.props.graph.simNodes.map(n => n.id)).toEqual(['b']);
+  });
+
+  it('toasts and keeps the previous graph when a neighborhood load fails', async () => {
+    await renderGraph();
+    api.getBrainGraph.mockRejectedValueOnce(new Error('down'));
+    await act(async () => { sceneElement.props.onFocus({ id: 'a', label: 'Node A' }); });
+    expect(sceneElement.props.graph.simNodes.map(n => n.id)).toEqual(['n1', 'n2']);
+  });
+});
