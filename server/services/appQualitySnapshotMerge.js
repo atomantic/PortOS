@@ -34,12 +34,12 @@ async function retireSnapshotTrees(app, deps, trees) {
       admit: async () => await ownership()
         ? { fence: { repoPath: app.repoPath, path: tree.path, branch: null } }
         : { result: { removed: false } },
-      // The removal boundary also checks ignored local content.
+      // The receipt binds this detached tree to `tree.head`; a MERGED PR (`mergedHead`) makes uncommitted files disposable.
       archive: async () => ({ archive: {
         verify: async holder => {
           if (!holder || holder.head !== tree.head || holder.branch || holder.detached !== true) return 'snapshot-checkout-changed';
           const status = await execGit(['status', '--porcelain'], tree.path).then(r => r.stdout, () => null);
-          return status !== null && classifyWorktreeDirt(status).clean ? null : 'worktree-dirty';
+          return status !== null && (classifyWorktreeDirt(status).clean || tree.mergedHead === holder.head) ? null : 'worktree-dirty';
         },
       } }),
       finish: async (_admitted, archive) => forceRemoveWorktreeDir(app.repoPath, tree.path, {
@@ -68,12 +68,18 @@ export async function sweepSettledSnapshotCheckouts(app, git, deps) {
   const isSettled = async prUrl => {
     if (!settled.has(prUrl)) {
       settled.set(prUrl, execGh(['pr', 'view', prUrl, '--json', 'state'], undefined, { cwd: app.repoPath, env })
-        .then(raw => ['MERGED', 'CLOSED'].includes(JSON.parse(raw)?.state), () => false));
+        .then(raw => {
+          const state = JSON.parse(raw)?.state;
+          return ['MERGED', 'CLOSED'].includes(state) ? { merged: state === 'MERGED' } : null;
+        }, () => null));
     }
     return settled.get(prUrl);
   };
   const done = [];
-  for (const tree of trees) if (await isSettled(tree.prUrl)) done.push(tree);
+  for (const tree of trees) {
+    const state = await isSettled(tree.prUrl);
+    if (state) done.push({ ...tree, mergedHead: state.merged ? tree.head : null });
+  }
   const held = new Set(await retireSnapshotTrees(app, deps, done));
   return done.map(tree => tree.path).filter(path => !held.has(path));
 }

@@ -34,6 +34,8 @@ vi.mock('../lib/execGit.js', async importOriginal => mockExecGit(await importOri
 vi.mock('./forgeExecOptions.js', () => ({ resolveForgeExecOptions: async () => ({ env: { ...process.env, GH_TOKEN: 'synthetic-account-token' } }) }));
 vi.mock('./branchCompletionPolicy.js', async importOriginal => mockBranchCompletionPolicy(await importOriginal()));
 vi.mock('./taskScheduleStore.js', async importOriginal => mockTaskScheduleStore(await importOriginal()));
+const mergedPrHeads = new Set();
+vi.mock('./prProbe.js', async importOriginal => ({ ...await importOriginal(), isMergedPrHead: async (_repo, branch, head) => mergedPrHeads.has(`${branch}@${head}`) }));
 vi.mock('./apps.js', () => ({ getAppById: async (id) => (injected.app?.id === id ? injected.app : null) }));
 
 import { describeHeldCheckoutRecovery, setRepo, setReceiptWork, it, beforeEach, scratch, repo, external, cosDir, receiptWork, noOwners, heldCheckout, registered, lockText, retire, archives, makeClean, historicalArchive, supersededCheckout, reapSuperseded, reviewedCheckout } from './_heldCheckoutRecoveryFixture.js';
@@ -884,6 +886,20 @@ describeHeldCheckoutRecovery(() => {
     expect(await retire(release)).toEqual({ ok: false, reason: 'worktree-dirty' });
     expect(await readFile(join(path, 'late.txt'), 'utf8')).toBe('late work\n');
     expect(await lockText(release.path)).toBe('synthetic external owner');
+    expect(await archives()).toEqual([]);
+  });
+
+  it('retires a dirty checkout whose PR merged at its exact head, and keeps one whose head differs', async () => {
+    const { path, release } = await heldCheckout('merged-dirty', { branch: 'feature/merged-dirty' });
+    await writeFile(join(path, 'scratch.txt'), 'unsaved\n');
+    mergedPrHeads.add(`${release.branch}@${'0'.repeat(40)}`);
+    expect(await retire(release)).toEqual({ ok: false, reason: 'worktree-dirty' });
+    expect(existsSync(join(path, 'scratch.txt'))).toBe(true);
+
+    mergedPrHeads.add(`${release.branch}@${release.head}`);
+    expect(await retire(release)).toMatchObject({ ok: true });
+    mergedPrHeads.clear();
+    expect(existsSync(path)).toBe(false);
     expect(await archives()).toEqual([]);
   });
 

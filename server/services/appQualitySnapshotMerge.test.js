@@ -1,5 +1,5 @@
 // Real git: a merged snapshot checkout is retired even with ignored output, but
-// untracked (non-ignored) work still holds it.
+// untracked (non-ignored) work holds it only while its PR is not merged.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { existsSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
@@ -44,11 +44,18 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('sweepSettledSnapshotCheckouts', () => {
     expect(existsSync(path)).toBe(false);
   });
 
-  it('keeps a snapshot checkout with untracked work', async () => {
+  it('retires a merged snapshot checkout holding untracked work', async () => {
     const path = await snapshotCheckout('dirty');
     await writeFile(join(path, 'wanted.txt'), 'local work');
-    expect(await sweepSettledSnapshotCheckouts({ id: 'app', repoPath: sandbox.repo }, {}, mergedForge)).toEqual([]);
-    expect(existsSync(path)).toBe(true);
+    expect(await sweepSettledSnapshotCheckouts({ id: 'app', repoPath: sandbox.repo }, {}, mergedForge)).toHaveLength(1);
+    expect(existsSync(path)).toBe(false);
+  });
+
+  it('keeps a closed-unmerged snapshot checkout with untracked work', async () => {
+    const path = await snapshotCheckout('closed-dirty');
+    await writeFile(join(path, 'wanted.txt'), 'local work');
+    const closedForge = { ...mergedForge, execGh: async () => JSON.stringify({ state: 'CLOSED' }) };
+    expect(await sweepSettledSnapshotCheckouts({ id: 'app', repoPath: sandbox.repo }, {}, closedForge)).toEqual([]);
     expect(existsSync(join(path, 'wanted.txt'))).toBe(true);
   });
 

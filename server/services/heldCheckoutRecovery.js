@@ -1652,6 +1652,15 @@ async function retireHeldCheckout({ repoPath, release, review }, opts = {}) {
   const legacyProofs = await prepareLegacyReleaseRetirement(scopedRelease).catch(() => null);
   if (!legacyProofs) return { ok: false, reason: 'legacy-release-recovery-changed' };
   opts = { ...opts, legacyProofs };
+  // A merged PR at the release's exact head makes uncommitted and untracked files
+  // disposable. Asked before taking the ownership lock (a forge call); each gate
+  // below re-binds the answer to the head it observes.
+  if (branch && release.head) {
+    const { isMergedPrHead } = await import('./prProbe.js');
+    if (await isMergedPrHead(repoPath, branch, release.head)) opts = { ...opts, disposableHead: String(release.head).toLowerCase() };
+  }
+  const isDisposable = (head, porcelain) => classifyWorktreeDirt(porcelain).clean
+    || (opts.disposableHead && String(head).toLowerCase() === opts.disposableHead);
 
   // Every ownership check queues behind the claim-ownership lock with a short
   // budget, so the archive runs between two critical sections (#12682).
@@ -1676,7 +1685,7 @@ async function retireHeldCheckout({ repoPath, release, review }, opts = {}) {
       // Status must not refresh the private index bound into the review digest.
       const porcelain = await getStatusPorcelain(tree.path).catch(() => null);
       if (porcelain === null) return refuse('worktree-status-unavailable');
-      if (!classifyWorktreeDirt(porcelain).clean) return refuse('worktree-dirty');
+      if (!isDisposable(tree.head, porcelain)) return refuse('worktree-dirty');
       const reviewed = review ? await reviewCurrentCheckout({ repoPath, release, prUrl: review.prUrl, kind: review.kind }, opts) : null;
       if (reviewed && (!reviewed.ok || reviewed.review.digest !== review.digest)) return refuse(reviewed.reason || 'retirement-review-changed', reviewed.archiveLimit, reviewed.nextAction);
       const disposition = reviewed?.review.comparison.disposition;
@@ -1696,7 +1705,7 @@ async function retireHeldCheckout({ repoPath, release, review }, opts = {}) {
         if (opts.signal?.aborted) throw new Error('retirement-archive-cancelled');
         const status = await getStatusPorcelain(tree.path).catch(() => null);
         if (status === null) throw new Error('worktree-status-unavailable');
-        if (!classifyWorktreeDirt(status).clean) throw new Error('worktree-dirty');
+        if (!isDisposable(tree.head, status)) throw new Error('worktree-dirty');
         const mergedNow = branch
           ? await hasBranchMergeEvidence(repoPath, branch, defaultBranch).catch(() => false)
           : await isAncestor(repoPath, tree.head, defaultBranch);
@@ -1763,7 +1772,7 @@ async function finishHeldCheckoutRetirement({ repoPath, release, review, reviewe
     if (fresh && fresh.review.digest !== review.digest) return 'retirement-review-changed';
     if (acceptedPreservedSupersession(review, fresh?.review)
       && !await opts.preserveSupersession?.(fresh.review)) return 'retirement-source-preservation-unavailable';
-    if (porcelain === null || !classifyWorktreeDirt(porcelain).clean) return 'worktree-dirty';
+    if (porcelain === null || !(classifyWorktreeDirt(porcelain).clean || (opts.disposableHead && tree.head.toLowerCase() === opts.disposableHead))) return 'worktree-dirty';
     const locallyMerged = branch
       ? await hasBranchMergeEvidence(repoPath, branch, defaultBranch).catch(() => false)
       : await isAncestor(repoPath, tree.head, defaultBranch);

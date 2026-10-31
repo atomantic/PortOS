@@ -2297,7 +2297,11 @@ export async function reapMergedWorktrees(sourceWorkspace, {
     // instead be an existing checkout with a broken .git pointer and unique work.
     const status = await readWorktreeStatus(wt.path);
     if (status === null) { hold('status-failed'); continue; }
-    if (!classifyWorktreeDirt(status).clean) { hold('uncommitted'); continue; }
+    // A merged PR at this exact head makes uncommitted and untracked files disposable.
+    const dirty = !classifyWorktreeDirt(status).clean;
+    const { isMergedPrHead } = await import('./prProbe.js');
+    const disposableHead = dirty && await isMergedPrHead(sourceWorkspace, branchName, wt.head);
+    if (dirty && !disposableHead) { hold('uncommitted'); continue; }
 
     // Gate 2: branch fully merged into the default branch (regular, squash, or rebase).
     const hasMergeEvidence = await hasBranchMergeEvidence(sourceWorkspace, branchName, target).catch(() => false);
@@ -2318,7 +2322,7 @@ export async function reapMergedWorktrees(sourceWorkspace, {
       if (reason) return reason;
       const freshStatus = await readWorktreeStatus(wt.path);
       if (freshStatus === null) return 'worktree-status-unavailable';
-      if (!classifyWorktreeDirt(freshStatus).clean) return 'worktree-dirty';
+      if (!classifyWorktreeDirt(freshStatus).clean && !(disposableHead && holder.head?.toLowerCase() === wt.head.toLowerCase())) return 'worktree-dirty';
       return await hasBranchMergeEvidence(sourceWorkspace, branchName, target).catch(() => false) ? null : 'unmerged';
     };
     await retireWithUnlockedArchive({
@@ -2425,7 +2429,10 @@ async function cleanupExternalRepoWorktrees(readActiveIds, alreadyHandled, readO
     const defaultBranch = await getDefaultBranch(parentRepo, { strict: true }).catch(() => null);
     if (!defaultBranch || PROTECTED_BRANCHES.includes(branchName) || branchName === defaultBranch) continue;
     const status = await execGit(['status', '--porcelain'], worktreePath).then(r => r.stdout).catch(() => null);
-    if (status === null || !classifyWorktreeDirt(status).clean) continue;
+    if (status === null) continue;
+    const { isMergedPrHead } = await import('./prProbe.js');
+    const externalDisposable = !classifyWorktreeDirt(status).clean && await isMergedPrHead(parentRepo, branchName, wt.head);
+    if (!classifyWorktreeDirt(status).clean && !externalDisposable) continue;
     const target = await resolveMergeTarget(parentRepo, defaultBranch);
     const merged = await hasBranchMergeEvidence(parentRepo, branchName, target).catch(() => false);
     if (!merged) continue;
@@ -2451,7 +2458,7 @@ async function cleanupExternalRepoWorktrees(readActiveIds, alreadyHandled, readO
             verify: async (latest) => {
               if (!latest || latest.head !== wt.head || latest.branch !== wt.branch) return 'worktree-holder-changed';
               const status = await execGit(['status', '--porcelain'], worktreePath).then(r => r.stdout, () => null);
-              if (status === null || !classifyWorktreeDirt(status).clean) return 'worktree-dirty';
+              if (status === null || (!classifyWorktreeDirt(status).clean && !(externalDisposable && latest.head.toLowerCase() === wt.head.toLowerCase()))) return 'worktree-dirty';
               if (!await hasBranchMergeEvidence(parentRepo, wt.head, target).catch(() => false)) return 'unmerged';
               return null;
             },
@@ -2465,7 +2472,7 @@ async function cleanupExternalRepoWorktrees(readActiveIds, alreadyHandled, readO
           || !await hasBranchMergeEvidence(parentRepo, wt.head, target).catch(() => false)) return false;
         const { readBranchCompletionHold } = await import('./branchCompletionPolicy.js');
         if (await readBranchCompletionHold({ repoPath: parentRepo, branch: branchName, retirement: true })) return false;
-        const ok = await execGit(['worktree', 'remove', worktreePath], parentRepo).then(() => true).catch(err => {
+        const ok = await execGit(['worktree', 'remove', ...(externalDisposable ? ['--force'] : []), worktreePath], parentRepo).then(() => true).catch(err => {
           console.warn(`⚠️ Preserved external worktree ${entry.name}: ${err.message}`);
           return false;
         });

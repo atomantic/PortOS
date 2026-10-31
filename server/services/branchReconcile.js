@@ -1348,6 +1348,16 @@ async function retireBranch(repoPath, b, opts) {
   // under the lock binding takes: a bind lands before this check or after the
   // removal, never between them.
   if (b.claimOwnerReason) return { ok: false, reason: b.claimOwnerReason };
+  // A merged PR at the branch's exact head makes uncommitted and untracked files
+  // disposable. Asked here, outside the ownership lock (a forge call); admission
+  // and removal re-bind the answer to the head they observe.
+  if (opts.mergedRetirement && opts.requireCleanWorktree !== false && b.worktreePath) {
+    const head = (await execGit(['rev-parse', '--verify', `refs/heads/${b.branch}`], repoPath).catch(() => null))?.stdout?.trim();
+    if (head && await isWorktreeDirty(b.worktreePath) !== false) {
+      const { isMergedPrHead } = await import('./prProbe.js');
+      if (await isMergedPrHead(repoPath, b.branch, head)) opts = { ...opts, disposableHead: head };
+    }
+  }
   // A merged checkout's archive runs between two ownership critical sections
   // (#12682) so it cannot starve the shared queue; removal re-proves everything.
   return retireWithUnlockedArchive({
@@ -1384,7 +1394,7 @@ async function retireBranch(repoPath, b, opts) {
 }
 
 /** Every gate before the archive. Returns `{ result }` to stop, else the context removal needs. */
-async function admitBranchRetirement(repoPath, b, { activeAgentIds, staleClaimIdleMs = STALE_CLAIM_IDLE_MS, allowLiveClaim = false, label, requireCleanWorktree = true, unmanagedIdleMs, prepare, claimOwners, mergedRetirement = false, mergeTarget, forgeAccount = null, appId = null }) {
+async function admitBranchRetirement(repoPath, b, { activeAgentIds, staleClaimIdleMs = STALE_CLAIM_IDLE_MS, allowLiveClaim = false, label, requireCleanWorktree = true, unmanagedIdleMs, prepare, claimOwners, mergedRetirement = false, mergeTarget, forgeAccount = null, appId = null, disposableHead = null }) {
   const stop = result => ({ result });
   if (PROTECTED_BRANCHES.includes(b.branch)) return stop({ ok: false, reason: 'protected-branch' });
   const defaultBranch = await getDefaultBranch(repoPath, { strict: true }).catch(() => null);
@@ -1441,7 +1451,7 @@ async function admitBranchRetirement(repoPath, b, { activeAgentIds, staleClaimId
     }
     const dirty = await isWorktreeDirty(b.worktreePath);
     if (dirty === null) return stop({ ok: false, reason: 'worktree-status-unavailable' });
-    if (requireCleanWorktree && dirty) return stop({ ok: false, reason: 'worktree-dirty' });
+    if (requireCleanWorktree && dirty && disposableHead !== expectedHead) return stop({ ok: false, reason: 'worktree-dirty' });
   }
   if (mergedRetirement && b.worktreePath) {
     if (isHumanClaimWorktree(worktreeAgentId(b.worktreePath))) {
@@ -1467,7 +1477,7 @@ async function admitBranchRetirement(repoPath, b, { activeAgentIds, staleClaimId
     if (!tree || tree.head !== expectedHead) return stop({ ok: false, reason: 'worktree-holder-changed' });
     archiveTree = tree;
   }
-  return { b, expectedHead, readPolicyHold, archiveTree, mergeTarget, label, requireCleanWorktree, prepare, claimOwners, mergedRetirement, claimCompletion, appId };
+  return { b, expectedHead, readPolicyHold, archiveTree, mergeTarget, label, requireCleanWorktree: requireCleanWorktree && disposableHead !== expectedHead, prepare, claimOwners, mergedRetirement, claimCompletion, appId };
 }
 
 /**
