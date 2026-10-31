@@ -42,6 +42,7 @@ vi.mock('../lib/platform.js', async () => ({
 }));
 vi.mock('../services/peerCatalogInstaller.js', async () => ({
   ...await vi.importActual('../services/peerCatalogInstaller.js'), installPeerCatalog: execution.install,
+  describePeerCatalogReview: async input => ({ ...input, sourceRepo: 'example/model-GGUF' }),
 }));
 
 const { authGate, hostControlRouteGate } = await import('../services/authGate.js');
@@ -232,6 +233,13 @@ describe('bounded administration through the real authority boundary', () => {
       restoreArch();
       restorePlatform();
     }
+  });
+
+  it('describes a local catalog review for a shipped key with version dots', async () => {
+    const response = await request(app).get('/api/peer-administration/catalog-review?backend=lmstudio&catalogKey=qwen2.5-7b-instruct')
+      .set('Authorization', 'Bearer test-operator');
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({ catalogKey: 'qwen2.5-7b-instruct' });
   });
 
   it('cannot dispatch or interrupt active work because all executors remain unavailable', async () => {
