@@ -5,6 +5,7 @@ import {Fingerprint, Dna, Clock, Activity, Palette, Target,
   Heart, DollarSign, Lightbulb, Users, Flame, Link2,
   AlertTriangle, CheckCircle, Info} from 'lucide-react';
 import BrailleSpinner from '../../BrailleSpinner';
+import ListLoadError from '../../ui/ListLoadError';
 import * as api from '../../../services/api';
 
 const SECTION_CONFIG = {
@@ -57,6 +58,14 @@ const CATEGORY_LABELS = {
   goals: 'Goals'
 };
 
+// One label per read in loadData's Promise.allSettled, in the same order.
+const IDENTITY_READS = ['identity status', 'chronotype', 'longevity', 'taste profile', 'goals', 'cross-insights'];
+
+// A card whose own read failed says so instead of its "not set up yet" copy.
+function ReadFailedNote({ what }) {
+  return <p className="text-sm text-port-error">Could not load {what}.</p>;
+}
+
 export default function IdentityTab({ onRefresh }) {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
@@ -68,24 +77,37 @@ export default function IdentityTab({ onRefresh }) {
   const [crossInsights, setCrossInsights] = useState(null);
   const [derivingChronotype, setDerivingChronotype] = useState(false);
   const [derivingLongevity, setDerivingLongevity] = useState(false);
+  // Labels from IDENTITY_READS whose last read rejected. A failed read must not
+  // render as "not set up": the cards would claim 0/5 sections and offer setup.
+  const [failedReads, setFailedReads] = useState([]);
+  const [retrying, setRetrying] = useState(false);
 
   const loadData = useCallback(async () => {
-    const [identityData, chronoData, longData, tasteData, goalsData, insightsData] = await Promise.all([
-      api.getIdentityStatus().catch(() => null),
-      api.getChronotype().catch(() => null),
-      api.getLongevity().catch(() => null),
-      api.getTasteProfile().catch(() => null),
-      api.getGoals().catch(() => null),
-      api.getCrossInsights().catch(() => null)
+    const reads = await Promise.allSettled([
+      api.getIdentityStatus({ silent: true }),
+      api.getChronotype({ silent: true }),
+      api.getLongevity({ silent: true }),
+      api.getTasteProfile({ silent: true }),
+      api.getGoals({ silent: true }),
+      api.getCrossInsights({ silent: true })
     ]);
+    const [identityData, chronoData, longData, tasteData, goalsData, insightsData] = reads
+      .map((read) => (read.status === 'fulfilled' ? read.value : null));
     setIdentity(identityData);
     setChronotype(chronoData);
     setLongevity(longData);
     setTaste(tasteData);
     setGoals(goalsData);
     setCrossInsights(insightsData);
+    setFailedReads(IDENTITY_READS.filter((_, i) => reads[i].status === 'rejected'));
     setLoading(false);
   }, []);
+
+  const retryLoad = async () => {
+    setRetrying(true);
+    await loadData();
+    setRetrying(false);
+  };
 
   useEffect(() => { loadData(); }, [loadData]);
 
@@ -117,10 +139,16 @@ export default function IdentityTab({ onRefresh }) {
   const sectionKeys = ['genome', 'chronotype', 'longevity', 'aesthetics', 'goals'];
   const activeCount = sectionKeys.filter(k => sections[k]?.status === 'active').length;
   const percentage = Math.round((activeCount / sectionKeys.length) * 100);
+  const readFailed = (what) => failedReads.includes(what);
 
   return (
     <div className="space-y-6">
-      {/* Completeness Header */}
+      {failedReads.length > 0 && (
+        <ListLoadError what={failedReads.join(', ')} onRetry={retryLoad} retrying={retrying} />
+      )}
+
+      {/* Completeness Header — derived from identity status, so a failed read has no count to show */}
+      {!readFailed('identity status') && (
       <div className="bg-port-card border border-port-border rounded-lg p-4">
         <div className="flex items-center gap-3 mb-3">
           <Fingerprint className="w-5 h-5 text-port-accent" />
@@ -162,6 +190,7 @@ export default function IdentityTab({ onRefresh }) {
           })}
         </div>
       </div>
+      )}
 
       {/* Summary Cards */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -196,6 +225,8 @@ export default function IdentityTab({ onRefresh }) {
                 </p>
               )}
             </div>
+          ) : readFailed('identity status') ? (
+            <ReadFailedNote what="genome status" />
           ) : (
             <p className="text-sm text-gray-500">
               Upload genome data to enable genetic analysis.
@@ -280,6 +311,8 @@ export default function IdentityTab({ onRefresh }) {
                 </div>
               )}
             </div>
+          ) : readFailed('chronotype') ? (
+            <ReadFailedNote what="chronotype" />
           ) : (
             <div className="space-y-2">
               <p className="text-sm text-gray-500">
@@ -348,6 +381,8 @@ export default function IdentityTab({ onRefresh }) {
                 </span>
               </div>
             </div>
+          ) : readFailed('longevity') ? (
+            <ReadFailedNote what="longevity" />
           ) : (
             <div className="space-y-2">
               <p className="text-sm text-gray-500">
@@ -418,6 +453,8 @@ export default function IdentityTab({ onRefresh }) {
                 </div>
               )}
             </div>
+          ) : readFailed('taste profile') ? (
+            <ReadFailedNote what="taste profile" />
           ) : (
             <p className="text-sm text-gray-500">
               Complete the taste questionnaire to map your aesthetic preferences.
@@ -484,6 +521,8 @@ export default function IdentityTab({ onRefresh }) {
                   )}
                 </div>
               </div>
+            ) : readFailed('goals') ? (
+              <ReadFailedNote what="goals" />
             ) : (
               <p className="text-sm text-gray-500">
                 No goals set yet. Add mortality-aware goals with urgency scoring.

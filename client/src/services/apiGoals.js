@@ -1,12 +1,12 @@
 import { request } from './apiCore.js';
 
 // Digital Twin - Identity & Goals
-export const getIdentityStatus = () => request('/digital-twin/identity');
-export const getCrossInsights = () => request('/digital-twin/identity/cross-insights');
+export const getIdentityStatus = (options) => request('/digital-twin/identity', options);
+export const getCrossInsights = (options) => request('/digital-twin/identity/cross-insights', options);
 export const getChronotype = (options) => request('/digital-twin/identity/chronotype', options);
 export const getChronotypeEnergySchedule = () => request('/digital-twin/identity/chronotype/energy-schedule');
 export const deriveChronotype = () => request('/digital-twin/identity/chronotype/derive', { method: 'POST' });
-export const getLongevity = () => request('/digital-twin/identity/longevity');
+export const getLongevity = (options) => request('/digital-twin/identity/longevity', options);
 export const deriveLongevity = () => request('/digital-twin/identity/longevity/derive', { method: 'POST' });
 export const getGoals = (options) => request('/digital-twin/identity/goals', options);
 export const setBirthDate = (birthDate) => request('/digital-twin/identity/goals/birth-date', {
