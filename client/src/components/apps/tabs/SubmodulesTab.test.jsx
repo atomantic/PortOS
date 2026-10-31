@@ -98,4 +98,15 @@ describe('SubmodulesTab', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not load submodules');
     expect(screen.getByText('dep')).toBeInTheDocument();
   });
+  it('does not keep another repo\'s submodules when the read for a new repo path fails', async () => {
+    const { rerender } = render(<SubmodulesTab repoPath={REPO} />);
+    await screen.findByText('dep');
+    mockGetSubmodules.mockRejectedValueOnce(new Error('not a git repo'));
+
+    rerender(<SubmodulesTab repoPath="/Users/me/other" />);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load submodules — not a git repo');
+    expect(screen.queryByText('dep')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Update' })).not.toBeInTheDocument();
+  });
 });

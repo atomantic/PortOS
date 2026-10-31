@@ -270,7 +270,8 @@ export default function GsdTab({ appId, repoPath }) {
 
     // Fetch GSD status from documents endpoint (silent, no toast)
     const docsData = await api.getAppDocuments(appId, { silent: true }).catch(recordFailure);
-    const gsd = docsData?.gsd;
+    // Only a rejected read is unknown; a response without `gsd` (no repo path) means no project.
+    const gsd = docsData ? (docsData.gsd || {}) : null;
     if (gsd) setGsdStatus(gsd);
 
     // Only fetch project data if we have a roadmap + state (full project)

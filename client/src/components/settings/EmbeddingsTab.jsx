@@ -41,6 +41,9 @@ export default function EmbeddingsTab() {
   // the model failure keeps the last list beside a retryable error.
   const [settingsFailed, setSettingsFailed] = useState(false);
   const [modelsError, setModelsError] = useState(null);
+  // A reachable status endpoint still reports a backend whose model list failed
+  // as `modelsError` beside an empty `models` array.
+  const [backendListErrors, setBackendListErrors] = useState({});
 
   const refreshModels = async () => {
     setModelsLoading(true);
@@ -50,10 +53,16 @@ export default function EmbeddingsTab() {
     });
     if (status) {
       setModelsError(null);
-      setModels({
-        ollama: (status.ollama?.models || []).map((m) => m.id || m.name),
-        lmstudio: (status.lmstudio?.models || []).map((m) => m.id || m.name),
-      });
+      const listErrors = {
+        ollama: status.ollama?.modelsError || null,
+        lmstudio: status.lmstudio?.modelsError || null,
+      };
+      setBackendListErrors(listErrors);
+      const listed = (backend) => (status[backend]?.models || []).map((m) => m.id || m.name);
+      setModels((prev) => ({
+        ollama: listErrors.ollama ? prev.ollama : listed('ollama'),
+        lmstudio: listErrors.lmstudio ? prev.lmstudio : listed('lmstudio'),
+      }));
     }
     setModelsLoading(false);
   };
@@ -89,6 +98,9 @@ export default function EmbeddingsTab() {
     }
     return out;
   }, [provider, models]);
+
+  const modelsLoadError = modelsError
+    || (backendListErrors[provider] ? new Error(String(backendListErrors[provider])) : null);
 
   const dirty = provider !== saved.provider || (model || '') !== (saved.model || '');
 
@@ -180,10 +192,10 @@ export default function EmbeddingsTab() {
               <option key={m} value={m} />
             ))}
           </datalist>
-          {modelsError && (
-            <ListLoadError what="installed models" error={modelsError} onRetry={refreshModels} retrying={modelsLoading} />
+          {modelsLoadError && (
+            <ListLoadError what="installed models" error={modelsLoadError} onRetry={refreshModels} retrying={modelsLoading} />
           )}
-          {candidateModels.length === 0 && !modelsLoading && !modelsError && (
+          {candidateModels.length === 0 && !modelsLoading && !modelsLoadError && (
             <div className="flex items-start gap-2 text-xs text-amber-400">
               <AlertTriangle size={14} className="mt-0.5 flex-shrink-0" />
               <span>

@@ -64,4 +64,15 @@ describe('EmbeddingsTab', () => {
     await waitFor(() => expect(document.querySelector('option[value="custom-embed:latest"]')).toBeTruthy());
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
+  it('keeps the last installed models and reports a backend whose model list failed', async () => {
+    getLocalLlmStatus.mockResolvedValueOnce({ ollama: { models: [{ id: 'custom-embed:latest' }], modelsError: null }, lmstudio: { models: [] } })
+      .mockResolvedValueOnce({ ollama: { models: [], modelsError: 'Ollama model list (/api/tags) returned no data' }, lmstudio: { models: [] } });
+    render(<MemoryRouter><EmbeddingsTab /></MemoryRouter>);
+    await waitFor(() => expect(document.querySelector('option[value="custom-embed:latest"]')).toBeTruthy());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load installed models — Ollama model list (/api/tags) returned no data');
+    expect(document.querySelector('option[value="custom-embed:latest"]')).toBeTruthy();
+  });
 });

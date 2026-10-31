@@ -91,4 +91,15 @@ describe('GsdTab read failures', () => {
     await waitFor(() => expect(api.addCosTask).toHaveBeenCalled());
     expect(toast.success).not.toHaveBeenCalled();
   });
+  it('drops a loaded project when the documents read succeeds without GSD status', async () => {
+    renderTab();
+    await screen.findByText('Phase cards');
+    api.getAppDocuments.mockResolvedValueOnce({ documents: [], docs: [], hasPlanning: false });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Project header refresh' }));
+
+    expect(await screen.findByText('GSD Project Setup')).toBeInTheDocument();
+    expect(screen.queryByText('Phase cards')).not.toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
 });

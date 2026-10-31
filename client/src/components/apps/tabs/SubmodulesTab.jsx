@@ -53,6 +53,9 @@ export default function SubmodulesTab({ repoPath }) {
   // A failed read is not "no submodules": the last good list stays beside a
   // retryable error row.
   const [loadError, setLoadError] = useState(null);
+  // The repo the listed submodules belong to: a failed read for a different repo
+  // must not leave the old repo's paths behind its Update buttons.
+  const listedRepoRef = useRef(null);
   const batchUpdating = useRef(false);
 
   const loadSubmodules = useCallback(async (showSpinner = true) => {
@@ -66,9 +69,11 @@ export default function SubmodulesTab({ repoPath }) {
     setLoading(false);
     setRefreshing(false);
     if (!data) {
+      if (listedRepoRef.current !== repoPath) setSubmodules([]);
       setLoadError(failure instanceof Error ? failure : new Error('Request failed'));
       return;
     }
+    listedRepoRef.current = repoPath;
     setLoadError(null);
     setSubmodules(data.submodules || []);
     if (data.defaultBranch) setDefaultBranch(data.defaultBranch);
