@@ -14,7 +14,7 @@
  */
 
 import { useEffect, useMemo, useState } from 'react';
-import { ChevronDown, ChevronRight, SlidersHorizontal, Sparkles } from 'lucide-react';
+import { Sparkles } from 'lucide-react';
 import {
   getSettings, listImageModels, getProviders,
 } from '../../../services/api';
@@ -24,6 +24,7 @@ import {
 } from '../../../lib/imageGenBackends';
 import BackendChipStrip from '../../media/BackendChipStrip';
 import ProviderModelSelector from '../../ProviderModelSelector';
+import ListLoadError from '../../ui/ListLoadError';
 
 // Non-destructive image-prompt fan-out (issue #904). MAX mirrors the
 // server's IMAGE_PROMPT_CANDIDATE_MAX in refineHelpers.js — keep the two in
@@ -52,28 +53,14 @@ const MODE_BLURB = {
   local: 'Renders locally via mflux/diffusers. Pick the model below.',
 };
 
-// Cache the three session-stable lookups (settings, image models, providers)
-// at module scope so every Comic/Storyboard stage mount on the same Pipeline
-// page (or after a remount) reuses the result instead of re-fetching. Stored
-// as the in-flight Promise so concurrent mounts don't race. The cache is
-// cleared when ANY underlying request failed so a transient error during
-// settings/provider startup doesn't lock the panel into stale fallbacks for
-// the rest of the SPA session — the next mount retries.
-let lookupCache = null;
-const loadLookups = () => {
-  if (lookupCache) return lookupCache;
-  let anyFailed = false;
-  const promise = Promise.all([
-    getSettings().catch(() => { anyFailed = true; return null; }),
-    listImageModels().catch(() => { anyFailed = true; return []; }),
-    getProviders().catch(() => { anyFailed = true; return { providers: [] }; }),
-  ]).then((vals) => {
-    if (anyFailed) lookupCache = null;
-    return vals;
-  });
-  lookupCache = promise;
-  return promise;
-};
+// Each read is settled on its own so one failure doesn't blank the others,
+// but a failed read is reported as failed — never as "no providers" / "codex
+// disabled" — and the panel offers a Retry.
+const LOOKUPS = [
+  { key: 'settings', label: 'settings', read: () => getSettings({ silent: true }) },
+  { key: 'imageModels', label: 'image models', read: () => listImageModels({ silent: true }) },
+  { key: 'providers', label: 'providers', read: () => getProviders({ silent: true }) },
+];
 
 // The "Auto →" label in this panel resolves through the SAME shared ladder
 // the server dispatches through — `pickUsableMode` + `imageModeCandidates`
@@ -93,23 +80,12 @@ const autoModeLabel = (mode, s) => {
   return modeLabel(mode);
 };
 
-const summarizeMode = (cfg, autoResolution) => {
-  if (cfg.imageMode === 'auto' && !cfg.imageModelId && !cfg.refineProvider) {
-    return `Auto → ${autoResolution.toLowerCase()}`;
-  }
-  const head = cfg.imageMode === 'auto'
-    ? `auto → ${autoResolution.toLowerCase()}`
-    : cfg.imageMode;
-  const tail = cfg.imageMode === IMAGE_GEN_MODE.LOCAL && cfg.imageModelId ? ` / ${cfg.imageModelId}` : '';
-  return `Pinned: ${head}${tail}`;
-};
-
-// The actual settings panel body. Extracted so the same controls can live
-// either inside a self-contained accordion (legacy inline placement) or
-// chromelessly inside a parent-owned container like a settings modal.
-function VisualGenSettingsBody({ cfg, update, stageLabel, systemSettings, imageModels, providers, providersLoaded, refineModels, availableBackends, blurb }) {
+function VisualGenSettingsBody({ cfg, update, stageLabel, systemSettings, settingsLoaded, imageModels, providers, providersLoaded, refineModels, availableBackends, blurb, loadFailures, retryLoad }) {
   return (
     <div className="space-y-3">
+      {loadFailures.length > 0 && (
+        <ListLoadError what={loadFailures.join(', ')} onRetry={retryLoad} />
+      )}
       <div>
         <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-1">
           Image backend
@@ -123,7 +99,7 @@ function VisualGenSettingsBody({ cfg, update, stageLabel, systemSettings, imageM
           titlePrefix="Render images via"
         />
         <p className="text-[10px] text-gray-500 mt-1">{blurb}</p>
-        {cfg.imageMode === IMAGE_GEN_MODE.CODEX && !systemSettings?.imageGen?.codex?.enabled && (
+        {cfg.imageMode === IMAGE_GEN_MODE.CODEX && settingsLoaded && !systemSettings?.imageGen?.codex?.enabled && (
           <p className="text-[10px] text-port-warning mt-1">
             Codex Imagegen is disabled in Settings — renders will fall back to local diffusion.
           </p>
@@ -222,37 +198,43 @@ function VisualGenSettingsBody({ cfg, update, stageLabel, systemSettings, imageM
   );
 }
 
-// Internal hook: all the shared loads (settings / image models / providers)
-// plus the derived state every flavor of the panel needs. Returns the
-// "props bundle" callers feed straight into <VisualGenSettingsBody>.
-// `refreshOnMount` — when true, busts the module-level cache on each mount so
-// the panel always fetches fresh settings/providers. Used by VisualGenSettingsPanel
-// (mounted inside a Modal that is freshly constructed each open) so users who
-// enable Codex or swap providers in Settings see the change immediately on the
-// next modal open without reloading the SPA.
+// All the loads (settings / image models / providers) plus the derived state
+// the panel body needs. The Drawer unmounts the panel on close, so each open
+// fetches fresh values — a provider enabled in Settings shows up on reopen.
 // `series` — the owning series record, threaded through to `imageModeCandidates`
 // so the "Auto →" label honors a series-level render pin (#6815) the same way
 // the server's resolver does. Optional: omit it for a caller with no series in
 // scope, which just means that candidate never contributes a pin.
-function useVisualGenSettings(value, stageLabel, { refreshOnMount = false, series = null } = {}) {
+function useVisualGenSettings(value, stageLabel, { series = null } = {}) {
   const cfg = { ...DEFAULT_CONFIG, ...(value || {}) };
-  const [systemSettings, setSystemSettings] = useState(null);
-  const [imageModels, setImageModels] = useState([]);
-  const [providers, setProviders] = useState([]);
-  const [providersLoaded, setProvidersLoaded] = useState(false);
+  const [lookups, setLookups] = useState(null);
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
-    if (refreshOnMount) lookupCache = null;
-    loadLookups().then(([s, modelList, providerResp]) => {
+    setLookups(null);
+    Promise.allSettled(LOOKUPS.map(({ read }) => read())).then((results) => {
       if (cancelled) return;
-      setSystemSettings(s);
-      setImageModels(Array.isArray(modelList) ? modelList : []);
-      setProviders((providerResp?.providers || []).filter((p) => p.enabled));
-      setProvidersLoaded(true);
+      const next = { failed: [] };
+      results.forEach((result, i) => {
+        const { key, label } = LOOKUPS[i];
+        if (result.status === 'fulfilled') next[key] = result.value;
+        else next.failed.push(label);
+      });
+      setLookups(next);
     });
     return () => { cancelled = true; };
-  }, []);
+  }, [attempt]);
+
+  const systemSettings = lookups?.settings ?? null;
+  const settingsLoaded = !!lookups && lookups.settings !== undefined;
+  const imageModels = Array.isArray(lookups?.imageModels) ? lookups.imageModels : [];
+  const providersLoaded = !!lookups && lookups.providers !== undefined;
+  const providers = useMemo(
+    () => (lookups?.providers?.providers || []).filter((p) => p.enabled),
+    [lookups],
+  );
+  const loadFailures = lookups?.failed || [];
 
   const baseBackends = useMemo(
     () => deriveAvailableBackends(systemSettings, { excludeExternal: true }),
@@ -265,16 +247,18 @@ function useVisualGenSettings(value, stageLabel, { refreshOnMount = false, serie
     return p ? filterSelectableModels(p.models || [p.defaultModel]) : [];
   }, [providers, cfg.refineProvider]);
 
+  // Without the settings there is no "currently X" to name.
   const autoMode = pickUsableMode(systemSettings, imageModeCandidates(systemSettings, RENDER_TARGET.PIPELINE_VISUAL, series));
-  const autoResolution = autoModeLabel(autoMode, systemSettings);
-  const summary = summarizeMode(cfg, autoResolution);
-  const blurb = cfg.imageMode === 'auto'
-    ? `Auto follows the server default — currently ${autoResolution}.`
-    : MODE_BLURB[cfg.imageMode];
+  const blurb = cfg.imageMode !== 'auto'
+    ? MODE_BLURB[cfg.imageMode]
+    : settingsLoaded
+      ? `Auto follows the server default — currently ${autoModeLabel(autoMode, systemSettings)}.`
+      : MODE_BLURB.auto;
 
   return {
-    cfg, stageLabel, systemSettings, imageModels, providers, providersLoaded,
-    availableBackends, refineModels, summary, blurb,
+    cfg, stageLabel, systemSettings, settingsLoaded, imageModels, providers, providersLoaded,
+    availableBackends, refineModels, blurb, loadFailures,
+    retryLoad: () => setAttempt((n) => n + 1),
   };
 }
 
@@ -285,51 +269,9 @@ function useVisualGenSettings(value, stageLabel, { refreshOnMount = false, serie
 export function VisualGenSettingsPanel({
   value, onChange, stageLabel = 'Visual stage', series = null,
 }) {
-  const bag = useVisualGenSettings(value, stageLabel, { refreshOnMount: true, series });
-  const update = (patch) => onChange?.({ ...bag.cfg, ...patch });
-  return <VisualGenSettingsBody {...bag} update={update} />;
-}
-
-/**
- * Summarize the current genConfig in a short line ("Auto → codex",
- * "Pinned: local / flux-1", etc). Exported so a settings trigger button
- * elsewhere can show the same one-liner as the legacy accordion header.
- */
-export function summarizeGenConfig(cfg) {
-  const merged = { ...DEFAULT_CONFIG, ...(cfg || {}) };
-  // We don't have systemSettings on the synchronous call path — the
-  // accordion shows "Auto → codex/local"; without the lookups we surface a
-  // generic "Auto" instead and let the modal body fill in detail.
-  return summarizeMode(merged, 'server default');
-}
-
-export default function VisualGenSettings({
-  value, onChange, stageLabel = 'Visual stage', series = null,
-}) {
   const bag = useVisualGenSettings(value, stageLabel, { series });
   const update = (patch) => onChange?.({ ...bag.cfg, ...patch });
-  const [open, setOpen] = useState(false);
-
-  return (
-    <div className="rounded-lg border border-port-border bg-port-card">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="w-full flex items-center gap-2 px-3 py-2 text-left text-xs text-gray-300 hover:text-white"
-      >
-        {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-        <SlidersHorizontal size={14} className="text-gray-500" />
-        <span className="font-medium">Generation settings</span>
-        <span className="ml-2 text-[10px] text-gray-500">{bag.summary}</span>
-      </button>
-
-      {open && (
-        <div className="px-3 pb-3 pt-1 border-t border-port-border">
-          <VisualGenSettingsBody {...bag} update={update} />
-        </div>
-      )}
-    </div>
-  );
+  return <VisualGenSettingsBody {...bag} update={update} />;
 }
 
 /**

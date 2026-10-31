@@ -11,7 +11,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 
 vi.mock('../../../services/api', () => ({
   getSettings: vi.fn(),
@@ -64,5 +64,33 @@ describe('VisualGenSettings — "Auto →" label (#6815)', () => {
     getSettings.mockResolvedValue({ imageGen: {} });
     render(<VisualGenSettingsPanel value={null} onChange={vi.fn()} />);
     expect(await screen.findByText(/currently Local diffusion \(not configured\)\./)).toBeInTheDocument();
+  });
+});
+
+describe('VisualGenSettings — failed lookups', () => {
+  it('reports a failed provider read with Retry instead of "No enabled providers", and recovers', async () => {
+    getSettings.mockResolvedValue({ imageGen: CODEX_ONLY });
+    getProviders
+      .mockRejectedValueOnce(new Error('registry down'))
+      .mockResolvedValueOnce({ providers: [{ id: 'p1', name: 'P1', enabled: true, models: ['m1'], defaultModel: 'm1' }] });
+    render(<VisualGenSettingsPanel value={null} onChange={vi.fn()} />);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load providers');
+    expect(screen.queryByText(/No enabled providers/)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByRole('checkbox', { name: 'Override default' })).toBeEnabled();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('does not claim Codex is disabled or name an Auto backend when the settings read failed', async () => {
+    getSettings.mockRejectedValue(new Error('settings down'));
+    const { rerender } = render(<VisualGenSettingsPanel value={null} onChange={vi.fn()} />);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load settings');
+    expect(screen.getByText('Auto follows the server default.')).toBeInTheDocument();
+
+    rerender(<VisualGenSettingsPanel value={{ imageMode: 'codex' }} onChange={vi.fn()} />);
+    expect(screen.queryByText(/Codex Imagegen is disabled/)).not.toBeInTheDocument();
   });
 });
