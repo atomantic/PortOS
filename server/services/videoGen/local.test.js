@@ -3571,6 +3571,18 @@ describe('generateVideo — MiniMax H3 MLX contract', () => {
     expect(args[args.indexOf('--text-encoder-final-norm-key') + 1]).toBe('model.norm.weight');
   });
 
+  it('records the requested text encoder on the history row only when swapped', async () => {
+    const seen = [];
+    const onStarted = (e) => seen.push(e);
+    videoGenEvents.on('started', onStarted);
+    try {
+      await renderToTerminal({ jobId: 'h3-rec-encoder', modelId: 'minimax_h3_8bit', prompt: 'a fox', mode: 'text', textEncoderId: 'heretic-bf16' });
+      await renderToTerminal({ jobId: 'h3-rec-stock', modelId: 'minimax_h3_8bit', prompt: 'a fox', mode: 'text' });
+    } finally { videoGenEvents.off('started', onStarted); }
+    expect(seen.find((e) => e.generationId === 'h3-rec-encoder').textEncoderId).toBe('heretic-bf16');
+    expect('textEncoderId' in seen.find((e) => e.generationId === 'h3-rec-stock')).toBe(false);
+  });
+
   // An upstream conditioner arrives as several shards, and the loader globs the
   // shim directory — so every pinned shard has to reach the helper. Forwarding
   // just the first would load a module tree with most of its layers missing.
@@ -4704,7 +4716,7 @@ describe('generateVideo — IC-LoRA remix arg threading (#3100)', () => {
 
     await generateVideo({
       ...baseIcRender, jobId: 'ic-history-stamp',
-      icStrength: 0.6, icSkipStage2: true,
+      icStrength: 0.6, icAttentionStrength: 0.4, icSkipStage2: true,
     });
 
     videoGenEvents.off('started', onStarted);
@@ -4713,6 +4725,7 @@ describe('generateVideo — IC-LoRA remix arg threading (#3100)', () => {
     expect(meta.mode).toBe('ic-control');
     expect(meta.icStrength).toBe(0.6);
     expect(meta.icSkipStage2).toBe(true);
+    expect(meta.icAttentionStrength).toBe(0.4);
     // BASENAME only — the absolute staging path is machine-specific and never
     // belongs in a user-facing history record.
     expect(meta.icReferenceNames).toEqual(['depth.mp4']);
@@ -6200,6 +6213,40 @@ describe('generateVideo — LTX-2.5 speed profile (#4875)', () => {
     it('stamps nothing when the profile was declined', async () => {
       const meta = await metaFor('sp-meta-declined', { speedProfileId: 'turbo' });
       expect(meta.speedProfileId).toBeUndefined();
+    });
+
+    // Optional record fields are written only when they applied, so every
+    // other history row stays byte-identical; each is read back on Remix/resume.
+    it('records visualConditioning and hidden only when supplied', async () => {
+      const visualConditioning = { render: { parameters: { aspectRatio: '16:9' } } };
+      const meta = await metaFor('rec-visual-hidden', { visualConditioning, hidden: true });
+      expect(meta.visualConditioning).toEqual(visualConditioning);
+      expect(meta.hidden).toBe(true);
+      const plain = await metaFor('rec-visual-hidden-off', {});
+      expect('visualConditioning' in plain).toBe(false);
+      expect('hidden' in plain).toBe(false);
+    });
+
+    it('stamps the two-stage T2V experiment only when the knob applied', async () => {
+      process.env.PORTOS_T2V_TWO_STAGE = '1';
+      try {
+        const on = await metaFor('rec-twostage-on', { modelId: 'ltx2_unified', mode: undefined });
+        expect(on.twoStageT2v).toBe(true);
+        expect(on.stage2Steps).toBe(3);
+      } finally { delete process.env.PORTOS_T2V_TWO_STAGE; }
+      const off = await metaFor('rec-twostage-off', { modelId: 'ltx2_unified', mode: undefined });
+      expect('twoStageT2v' in off).toBe(false);
+    });
+
+    it('records the LoRA license sidecar on the provenance sources', async () => {
+      loraSidecarState.byFilename = { 'lic.safetensors': { license: ' CC-BY-4.0 ', name: 'Lic' } };
+      try {
+        const meta = await metaFor('rec-lora-license', {
+          modelId: 'ltx2_unified', loras: [{ filename: 'lic.safetensors', scale: 1 }],
+        });
+        const source = meta.provenance.sources.find((x) => x.id === 'lic.safetensors');
+        expect(source.license).toBe('CC-BY-4.0');
+      } finally { loraSidecarState.byFilename = {}; }
     });
   });
 });
