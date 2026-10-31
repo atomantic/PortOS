@@ -96,6 +96,25 @@ describe('storyboardShotSyncPlan', () => {
     expect(held.counts.held).toBe(1);
   });
 
+  it('returns a cold-open shot to the song when its panel moves onto it', () => {
+    const b = board();
+    const pre = b.beats[0].panels[0];
+    const scenes = [shot('p', null, null, { order: 0, preMusic: { durationSec: 2 }, panelId: pre.id, panelRev: storyboardPanelRev(pre), panelArt: null })];
+    b.beats[1].panels.unshift(b.beats[0].panels.pop());
+    b.beats[1].panels[1].seconds = 4; // keep the board within the song
+    const plan = storyboardShotSyncPlan(b, { scenes }, { song });
+    const moved = plan.shots.find((s) => s.panelId === pre.id);
+    expect(moved.patch).toMatchObject({ preMusic: null, startSec: 0 });
+  });
+
+  it('reports an overrun instead of a backwards last panel that starts after the song ends', () => {
+    const b = { beats: [beat('v', 'Verse', [panel('a', 20.2), panel('b', 0.3)])] };
+    const spans = storyboardPanelSpans(b, song);
+    expect(spans.overrunSec).toBeGreaterThan(0);
+    expect(spans.panels.every((p) => p.endSec > p.startSec)).toBe(true);
+    expect(storyboardShotSyncPlan(b, { scenes: [] }, { song }).problem).toMatch(/past the end of the song/);
+  });
+
   it('never moves a shot whose video is locked, and removes a locked shot only when asked', () => {
     const scenes = [shot('1', 0, 5.5), shot('2', 6, 12), shot('3', 12, 20), shot('x', 20, 20)];
     const clipLocks = { 'mvs-1': 'locked' };

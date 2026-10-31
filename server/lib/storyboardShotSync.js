@@ -92,7 +92,8 @@ export function storyboardPanelSpans(board, song = null) {
   let gapSec = 0;
   if (songEnd && songPanels.length) {
     const last = songPanels.at(-1);
-    if (Math.abs(songEnd - last.endSec) <= STORYBOARD_SYNC_END_SLACK_SEC) last.endSec = songEnd;
+    // Snap only when the last panel still starts before the song ends; otherwise it is an overrun.
+    if (Math.abs(songEnd - last.endSec) <= STORYBOARD_SYNC_END_SLACK_SEC && songEnd > last.startSec + SAME_SEC) last.endSec = songEnd;
     else if (last.endSec < songEnd) gapSec = round(songEnd - last.endSec);
     else overrunSec = round(last.endSec - songEnd);
   }
@@ -190,6 +191,8 @@ export function storyboardShotSyncPlan(board, project, { song = null, locks = nu
       ...(content ? { visualIntent: clip(panel.action, TEXT_MAX) || null, panelRev: rev, panelArt: art } : {}),
     };
     if (span.beforeSong && !blocked) patch.preMusic = { ...scene.preMusic, durationSec: span.durationSec };
+    // A cold-open shot whose panel moved onto the song stops being a cold-open shot.
+    else if (!span.beforeSong && !blocked && isPreMusicShot(scene)) patch.preMusic = null;
     const delta = Object.fromEntries(Object.entries(patch).filter(([key, value]) => JSON.stringify(scene[key] ?? null) !== JSON.stringify(value ?? null)));
     const moved = (scene.order ?? 0) !== order;
     if (retimed && !blocked) counts.retimed += 1;
