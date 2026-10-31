@@ -238,6 +238,18 @@ describe('recoverInFlightProjects', () => {
     expect(mockAdvance).toHaveBeenCalledWith('cd-1');
   });
 
+  it('leaves a peer replica alone: no resume and no step reset pushed back to its sender', async () => {
+    mockListProjects.mockResolvedValue([
+      { id: 'cd-peer', status: 'planning', peerReplica: true, directive: { goal: 'g' }, plan: { steps: [{ stepId: 'a', status: 'running' }] }, treatment: null },
+      { id: 'cd-local', status: 'planning', directive: { goal: 'g' }, treatment: null },
+    ]);
+    const result = await recoverInFlightProjects();
+    expect(result.resumed).toBe(1);
+    expect(mockAdvancePlanStep).toHaveBeenCalledTimes(1);
+    expect(mockAdvancePlanStep).toHaveBeenCalledWith('cd-local');
+    expect(mockUpdatePlanStep).not.toHaveBeenCalled();
+  });
+
   it('resumes stitching-state projects (final concat interrupted) by flipping back to rendering first', async () => {
     // advanceAfterSceneSettled bails out early when status === 'stitching'
     // (its in-flight stitch dedup guard), so without flipping the status

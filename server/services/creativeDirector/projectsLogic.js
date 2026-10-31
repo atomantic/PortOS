@@ -354,7 +354,7 @@ export function startingImageFilename(startingImageFile) {
  * LWW merge decision for one incoming project record against the local copy —
  * mirrors `mergeAuthorRecord` (services/authors/logic.js):
  *   - remote sanitized here (drop-on-floor on a malformed payload → `next: null`).
- *   - No local counterpart → insert the remote verbatim (`inserted: true`).
+ *   - No local counterpart → insert the remote as a replica (`inserted: true`).
  *   - Both present → newer `updatedAt` wins (`compareNewerWins`: epoch-ms,
  *     unparseable-loses, tie → local). Tombstones ride the same path.
  * Returns `{ next, inserted, remoteWins, changed }`; `changed` is false when the
@@ -365,10 +365,9 @@ export function startingImageFilename(startingImageFile) {
 export function mergeProjectRecord(local, remoteRaw) {
   const remote = sanitizeProjectForSync(remoteRaw);
   if (!remote) return { next: null, inserted: false, remoteWins: false, changed: false };
-  if (!local) return { next: remote.workspace === 'video' ? { ...remote, videoReplica: true, videoExecution: null } : remote, inserted: true, remoteWins: true, changed: true };
+  if (!local) return { next: asPeerReplica(remote), inserted: true, remoteWins: true, changed: true };
   // Video owner records cannot acquire approvals or execution through a peer.
   if (local.workspace === 'video' && local.videoReplica !== true) return { next: local, inserted: false, remoteWins: false, changed: false };
-  if (remote.workspace === 'video') { remote.videoReplica = true; remote.videoExecution = null; }
   const remoteWins = compareNewerWins(remote.updatedAt, local.updatedAt);
   // `commissionId` is machine-local — syncWire strips it, so a winning remote
   // never carries one. Re-attach the receiver's own value (mirrors
@@ -376,10 +375,20 @@ export function mergeProjectRecord(local, remoteRaw) {
   // project from the commission that owns it, leaving it unstoppable from the
   // commission page and stuck on the provider it was dispatched with.
   const next = remoteWins
-    ? { ...remote, ...(local.commissionId ? { commissionId: local.commissionId } : {}) }
+    ? { ...asPeerReplica(remote), ...(local.commissionId ? { commissionId: local.commissionId } : {}) }
     : local;
   const changed = JSON.stringify(next) !== JSON.stringify(local);
   return { next, inserted: false, remoteWins, changed };
+}
+
+// A peer-won record's status, directive, plan and runs are the sender's
+// execution state, and the planner it resumes is a writable CoS agent. Both
+// replica markers are machine-local (syncWire strips them), so boot recovery
+// leaves the record alone until a local start or status change here.
+function asPeerReplica(remote) {
+  return remote.workspace === 'video'
+    ? { ...remote, videoReplica: true, videoExecution: null }
+    : { ...remote, peerReplica: true };
 }
 
 /** Merge a project metadata patch, validating status. Returns the next record. */
@@ -394,6 +403,9 @@ export function applyProjectPatch(project, patch) {
     throw new ServerError('The project workspace cannot be changed', { status: 409, code: 'INVALID_STATE' });
   }
   const next = { ...project, ...patch, updatedAt: new Date().toISOString() };
+  // A local status change (start, resume, pause, a step this machine ran) takes
+  // over the run state that `peerReplica` held back from boot recovery.
+  if ('status' in patch) delete next.peerReplica;
   if ('videoDraft' in patch) next.videoDraft = creativeDirectorVideoDraftSchema.parse(patch.videoDraft);
   if (next.workspace === 'video' && next.videoDraft && ('videoDraft' in patch || 'targetDurationSeconds' in patch)) {
     const { min, max } = next.videoDraft.durationRange;

@@ -466,6 +466,19 @@ describe('mergeProjectRecord (LWW, tombstone-aware)', () => {
   it('drops a malformed remote (next null)', () => {
     expect(mergeProjectRecord(at('2026-06-23T00:00:00.000Z'), { name: 'no id' }).next).toBeNull();
   });
+  it('holds a peer-won run state as a replica whatever the sender claims', () => {
+    // Boot recovery would otherwise resume the sender's planning project and
+    // start its directive as a writable CoS agent on this machine.
+    const pushed = at('2026-06-23T01:00:00.000Z', { status: 'planning', directive: { goal: 'g' }, peerReplica: false });
+    expect(mergeProjectRecord(null, pushed).next.peerReplica).toBe(true);
+    expect(mergeProjectRecord(at('2026-06-23T00:00:00.000Z'), pushed).next.peerReplica).toBe(true);
+    expect(mergeProjectRecord(at('2026-06-23T02:00:00.000Z'), pushed).next).not.toHaveProperty('peerReplica');
+  });
+  it('a local status change adopts the replica run state; other edits keep holding it', () => {
+    const replica = at('2026-06-23T00:00:00.000Z', { status: 'planning', peerReplica: true });
+    expect(applyProjectPatch(replica, { name: 'Renamed' }).peerReplica).toBe(true);
+    expect(applyProjectPatch(replica, { status: 'planning' })).not.toHaveProperty('peerReplica');
+  });
 });
 
 // =============================================================================

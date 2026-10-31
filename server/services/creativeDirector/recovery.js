@@ -87,6 +87,10 @@ export async function recoverInFlightProjects() {
       await reconcileVideoExecution(project.id, { restarting: true });
       continue;
     }
+    // Another machine's run state (mergeProjectRecord): resuming it would start
+    // its planner here, and resetting its steps would push back over the
+    // sender's live run.
+    if (project.peerReplica) continue;
     // CDO Phase 2 (#2184): a directive-driven project's plan steps stuck in
     // `running` lost their in-memory dispatch/job listener when the process
     // died — reset them to `pending` so the advance loop re-dispatches. (Their
