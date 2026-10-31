@@ -251,6 +251,7 @@ export * from './filmStyleGrammars.js';
 export * from './grokVideoClip.js';
 export * from './fontMetadata.js';
 export * from './musicVideoCoverOverlay.js';
+export * from './musicVideoSequenceCoverage.js';
 export * from './musicVideoShotTiming.js';
 export * from './reactorStartingFrame.js';
 export * from './runwayVideoModels.js';
