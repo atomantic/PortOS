@@ -4,6 +4,8 @@ import { VIDEO_RENDER_MODES, modeLabel } from '../../lib/imageGenBackends.js';
 import { RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL, getRunwayVideoModel } from '../../lib/runwayVideoModels.js';
 import { useEffect, useMemo, useState } from 'react';
 import Drawer from '../Drawer.jsx';
+import useListResource from '../../hooks/useListResource.js';
+import ListLoadError from '../ui/ListLoadError.jsx';
 import useDrawerTab from '../../hooks/useDrawerTab.js';
 import toast from '../ui/Toast';
 import { createCreativeDirectorProject, updateCreativeDirectorProject } from '../../services/apiCreativeDirector.js';
@@ -20,6 +22,10 @@ import { listVideoModels } from '../../services/apiImageVideo.js';
 import { Clapperboard, FileText, Library } from 'lucide-react';
 
 const TABS = [{ id: 'brief', label: 'Brief', icon: FileText }, { id: 'production', label: 'Production', icon: Clapperboard }, { id: 'sources', label: 'Sources', icon: Library }];
+// Module-level so each fetcher identity is stable for useListResource.
+const fetchTracks = () => listTracks({ silent: true }).then(data => Array.isArray(data) ? data : data?.tracks || []);
+const fetchEngines = () => listMusicEngines({ silent: true }).then(data => data?.engines || []);
+const fetchModels = () => listVideoModels({ silent: true }).then(m => m || []);
 const fieldClass = 'w-full mt-1 bg-port-bg border border-port-border rounded px-2 py-2 text-sm';
 
 // `storyboard` starts a new draft from that board: its panels become the shots and set the length.
@@ -27,9 +33,12 @@ export default function VideoDraftDrawer({ open, onClose, project, onSaved, cata
   const [tab, setTab] = useDrawerTab('videoDraftTab', 'brief', TABS.map(t => t.id));
   const [form, setForm] = useState({});
   const runwayCatalog = useRunwayCatalog(open && form.videoMode === 'runway');
-  const [models, setModels] = useState([]);
-  const [engines, setEngines] = useState([]);
-  const [tracks, setTracks] = useState([]);
+  const modelsRes = useListResource(fetchModels, { enabled: open });
+  const enginesRes = useListResource(fetchEngines, { enabled: open });
+  const tracksRes = useListResource(fetchTracks, { enabled: open });
+  const { items: models } = modelsRes;
+  const { items: engines } = enginesRes;
+  const { items: tracks } = tracksRes;
   const [sourceOptions, setSourceOptions] = useState({});
   const [sourceKind, setSourceKind] = useState('universe');
   const [sourceId, setSourceId] = useState('');
@@ -48,16 +57,14 @@ export default function VideoDraftDrawer({ open, onClose, project, onSaved, cata
       min: draft?.durationRange?.min || 30, max: draft?.durationRange?.max || 60,
       reviewPolicy: draft?.reviewPolicy || 'review', transition: draft?.transition || 'cut', audioMode: draft?.audio?.mode || 'native', trackId: draft?.audio?.trackId || '', audioPrompt: draft?.audio?.prompt || '', audioProvider: draft?.audio?.providerId || '', audioModel: draft?.audio?.model || '',
       sources: draft?.sources || catalogIngredientIds.map(id => ({ kind: 'catalog', id })) });
-    listTracks({ silent: true }).then(data => { if (active) setTracks(Array.isArray(data) ? data : data?.tracks || []); }).catch(() => {});
-    listMusicEngines({ silent: true }).then(data => { if (active) setEngines(data?.engines || []); }).catch(() => {});
     const rows = data => Array.isArray(data) ? data : data?.items || data?.series || data?.universes || [];
     Promise.all([listUniverseNames({ silent: true }), listPipelineSeriesNames({ silent: true }), listCatalogIngredients({ limit: 100, silent: true })]).then(([u, s, c]) => { if (active) setSourceOptions({ universe: rows(u), series: rows(s), catalog: rows(c) }); }).catch(() => { if (active) toast.error('Unable to load source choices. Close and reopen to retry.'); });
-    listVideoModels({ silent: true }).then(m => { if (active) setModels(m || []); }).catch(() => {});
     return () => { active = false; };
   }, [open, project?.id, storyboard?.id]);
   const change = (key, value) => setForm(prev => ({ ...prev, [key]: value }));
   const input = (key, label, options = {}) => <label htmlFor={`video-draft-${key}`} className="block text-sm">{label}<input id={`video-draft-${key}`} className={fieldClass} value={form[key] ?? ''} onChange={e => change(key, e.target.value)} {...options} /></label>;
-  const select = (key, label, choices) => <label htmlFor={`video-draft-${key}`} className="block text-sm">{label}<select id={`video-draft-${key}`} className={fieldClass} value={form[key] || ''} onChange={e => change(key, e.target.value)}>{choices.map(([value, text]) => <option key={value} value={value}>{text}</option>)}</select></label>;
+  const loadError = (res, what) => res.state === 'error' ? <ListLoadError className="mt-1" what={what} error={res.error} onRetry={res.retry} /> : null;
+  const select = (key, label, choices, loadFailure = null) => <><label htmlFor={`video-draft-${key}`} className="block text-sm">{label}<select id={`video-draft-${key}`} className={fieldClass} value={form[key] || ''} onChange={e => change(key, e.target.value)}>{choices.map(([value, text]) => <option key={value} value={value}>{text}</option>)}</select></label>{loadFailure}</>;
   const exactTarget = plan ? plan.totalSeconds : Math.min(Number(form.max), Math.max(Number(form.min), project?.targetDurationSeconds ?? Number(form.max)));
   const save = async () => {
     if (!form.name?.trim()) { setTab('brief'); toast.error('Name is required'); return; }
@@ -93,7 +100,7 @@ export default function VideoDraftDrawer({ open, onClose, project, onSaved, cata
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">{select('aspectRatio', 'Aspect ratio', ['16:9', '9:16', '1:1'].map(x => [x, x]))}{select('quality', 'Quality', ['draft', 'standard', 'high'].map(x => [x, x]))}</div>
         <h3 className="font-medium">Cognitive models</h3><p className="text-sm text-port-text-muted">Inherit Creative Director defaults. After saving, use Models to select providers and models separately for treatment, production planning, and evaluation.</p>
         <label htmlFor="video-draft-videoMode" className="block text-sm">Media backend<select id="video-draft-videoMode" className={fieldClass} value={form.videoMode || 'local'} onChange={e => { change('videoMode', e.target.value); change('backendModelId', ''); }}>{!VIDEO_RENDER_MODES.includes(form.videoMode) && form.videoMode && <option value={form.videoMode}>{form.videoMode} (saved backend)</option>}{VIDEO_RENDER_MODES.map(mode => <option key={mode} value={mode}>{modeLabel(mode)}</option>)}</select></label>
-        {form.videoMode === 'local' ? select('modelId', 'Media model', [['', 'Choose before production'], ...(form.modelId && !models.some(m => m.id === form.modelId) ? [[form.modelId, `${form.modelId} (saved model unavailable)`]] : []), ...models.map(m => [m.id, m.name || m.id])])
+        {form.videoMode === 'local' ? select('modelId', 'Media model', [['', 'Choose before production'], ...(form.modelId && !models.some(m => m.id === form.modelId) ? [[form.modelId, `${form.modelId} (saved model unavailable)`]] : []), ...models.map(m => [m.id, m.name || m.id])], loadError(modelsRes, 'media models'))
           : form.videoMode === 'fal' ? input('backendModelId', 'fal.ai model (optional)', { placeholder: 'Use configured fal.ai default', maxLength: 64 })
           : form.videoMode === 'runway' ? select('backendModelId', 'Runway model', [['', `${getRunwayVideoModel(RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL).label} (backend default)`], ...(form.backendModelId && !runwayCatalog.videoModels.some((m) => m.id === form.backendModelId) ? [[form.backendModelId, `${form.backendModelId} (saved model unavailable)`]] : []), ...runwayCatalog.videoModels.map(m => [m.id, m.label])])
           : select('backendModelId', 'Media model', [['', form.videoMode === 'reactor' ? 'fast-h3 (backend default)' : 'Backend default'], ...(form.backendModelId ? [[form.backendModelId, `${form.backendModelId} (saved model)`]] : [])])}
@@ -101,10 +108,10 @@ export default function VideoDraftDrawer({ open, onClose, project, onSaved, cata
         {select('transition', 'Shot joins', [['cut', 'Straight cuts'], ['fade', 'Fade through black (no overlap)']])}
         <h3 className="font-medium">Soundtrack</h3>
         {select('audioMode', 'Audio contract', [['silent', 'Silent (remove audio)'], ['native', 'Native audio from every clip'], ['imported', 'Existing Music track'], ['generated', 'Generate one soundtrack bed']])}
-        {form.audioMode === 'imported' && select('trackId', 'Soundtrack track', [['', 'Choose a track'], ...tracks.filter(track => track.audioFilename).map(track => [track.id, track.title || track.id])])}
+        {form.audioMode === 'imported' && select('trackId', 'Soundtrack track', [['', 'Choose a track'], ...tracks.filter(track => track.audioFilename).map(track => [track.id, track.title || track.id])], loadError(tracksRes, 'soundtrack tracks'))}
         {form.audioMode === 'generated' && input('audioPrompt', 'Soundtrack description', { maxLength: 1000 })}
         <p className="text-sm text-port-text-muted">Native audio requires audio in every clip; it does not guarantee dialogue or lip sync. Soundtracks replace clip audio and repeat to fill the cut. Generated audio uses one bounded job unless you authorize a retry.</p>
-        {form.audioMode === 'generated' && <div className="grid grid-cols-1 sm:grid-cols-2 gap-3"><label htmlFor="video-draft-audioProvider" className="block text-sm">Audio engine<select id="video-draft-audioProvider" className={fieldClass} value={form.audioProvider || ''} onChange={e => { change('audioProvider', e.target.value); change('audioModel', ''); }}><option value="">Choose before production</option>{engines.map(engine => <option key={engine.id} value={engine.id}>{engine.name || engine.id}</option>)}</select></label>{select('audioModel', 'Audio model', [['', 'Engine default'], ...(engines.find(e => e.id === form.audioProvider)?.models || []).map(m => [m.id, m.name || m.id])])}</div>}
+        {form.audioMode === 'generated' && <div className="grid grid-cols-1 sm:grid-cols-2 gap-3"><div><label htmlFor="video-draft-audioProvider" className="block text-sm">Audio engine<select id="video-draft-audioProvider" className={fieldClass} value={form.audioProvider || ''} onChange={e => { change('audioProvider', e.target.value); change('audioModel', ''); }}><option value="">Choose before production</option>{engines.map(engine => <option key={engine.id} value={engine.id}>{engine.name || engine.id}</option>)}</select></label>{loadError(enginesRes, 'audio engines')}</div>{select('audioModel', 'Audio model', [['', 'Engine default'], ...(engines.find(e => e.id === form.audioProvider)?.models || []).map(m => [m.id, m.name || m.id])])}</div>}
         {select('reviewPolicy', 'Review policy', [['review', 'Review at checkpoints'], ['autonomous', 'Autonomous after production is enabled']])}
         <p className="text-sm text-port-text-muted">Checkpoints: script and shot plan, references, rough cut, final cut. Start authorizes the displayed provider choices and limits. Creative changes require a fresh review.</p>
       </>}
