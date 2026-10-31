@@ -98,7 +98,10 @@ export const mockExecGit = actual => ({ ...actual,
   } });
 
 export const mockBranchCompletionPolicy = actual => ({
-  ...actual, readBranchCompletionPolicies: async () => injected.policies, readBranchCompletionHold: input => actual.readBranchCompletionHold(input, {
+  ...actual, readBranchCompletionPolicies: async () => injected.policies,
+  // Records the identity scope each policy evaluation received (#14458).
+  reviewedRetirementPolicy: input => { injected.policyInputs?.push(input); return actual.reviewedRetirementPolicy(input); },
+  readBranchCompletionHold: input => actual.readBranchCompletionHold(input, {
     readPolicies: async () => injected.policies,
   }),
 });

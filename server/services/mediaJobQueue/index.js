@@ -985,6 +985,141 @@ async function announceTerminalTransition(job, onDurable = () => {}) {
   runOutsideBackupAssetPublication(() => mediaJobEvents.emit(job.status, job));
 }
 
+// Staged multipart inputs a job owns under data/uploads. safeUnlinkUpload
+// constrains each delete to PATHS.uploads, so a corrupted path never removes a
+// file the job merely referenced. audioFilePath is the same kind of upload.
+async function releaseStagedUploads(params) {
+  await Promise.all([params?.uploadedTempPath, params?.audioFilePath, ...normalizeTempPaths(params?.uploadedTempPaths)]
+    .map(path => safeUnlinkUpload(path)));
+}
+
+// The same training job, flagged to re-attach, when its detached trainer survived.
+const reattachSurvivingTrainer = async j => (j.kind === 'training' && j.params?.runId && await jobHasSurvivingTrainer(j.params.runId)
+  ? { ...j, status: 'queued', params: { ...j.params, reattach: true } } : null);
+
+// What one persisted job becomes after a restart. Applies it to the queue or
+// archive and returns { failedId } / { canceled } / { reattach } for the init
+// body's SSE pre-seed and re-attach ordering. Arm order is load-bearing: a
+// maintenance hold wins over the video-production fail, and remote reconcile
+// (in restoreInterruptedRunningJob) wins over the generic interrupted fail.
+async function restorePersistedJob(persisted) {
+  // An uncertain terminal observer result is not a terminal peer result.
+  // Reconcile the original idempotency key while preserving its peer slot.
+  const j = isRemoteMediaJob(persisted) && persisted.params?.remotePeerReservation === true
+    && ['failed', 'canceled'].includes(persisted.status) ? { ...persisted, status: 'running' } : persisted;
+  if (j.status === 'running' && j.durabilityPending?.status === 'completed') {
+    // This optional receipt is private queue state, not a published result.
+    // Legacy snapshots have no receipt and retain their existing recovery.
+    const receipt = j.durabilityPending;
+    const permit = maintenance.recoverOwned('media', j.id);
+    archive.push(j);
+    stageTerminalTransition(j, target => Object.assign(target, receipt), () => permit.run(async () => {
+      videoHolds.recordTerminal(j);
+      videoHolds.updateQueued(queue);
+      await announceTerminalTransition(j);
+      // A receipt proves completion, not remote executor teardown or input
+      // cleanup. finish deliberately retains any uncertain ownership.
+      await permit.finish();
+    }));
+    return {};
+  }
+  // Never dispatch a queued trainer after upgrade. A verified survivor below
+  // is observed to completion without launching a replacement process.
+  if (j.kind === 'training' && j.status === 'queued' && !j.params?.reattach) {
+    archive.push({ ...j, status: 'canceled', error: TRAINING_RETIRED_MESSAGE, completedAt: new Date().toISOString() });
+    return { failedId: j.id };
+  }
+  if (j.status === 'running' && maintenance.held()) {
+    maintenance.recoverOwned('media', j.id);
+    const reattach = await reattachSurvivingTrainer(j);
+    if (reattach) {
+      recoveringJobs.add(j.id);
+      return { reattach };
+    }
+    // Preserve uncertain work and staged inputs; no paid replay or orphan
+    // kill is safe merely because the observer process restarted.
+    archive.push({ ...j, params: restoredParams(j) });
+    return {};
+  }
+  // Explicit Video Start grants one process lifetime. Restored jobs wait for
+  // project reconciliation; replaying an unknown paid submit could charge twice.
+  if (j.params?.videoProduction && ['queued', 'running'].includes(j.status)) {
+    archive.push({ ...j, status: 'failed', error: 'Video production paused after restart', completedAt: new Date().toISOString(),
+      params: { ...restoredParams(j), videoProduction: { ...j.params.videoProduction, submissionUncertain: j.status === 'running' } } });
+    return { failedId: j.id };
+  }
+  if (j.status === 'running') return restoreInterruptedRunningJob(j);
+  if (j.status === 'queued') queue.push({ ...j, params: restoredParams(j) });
+  // The archive needs terminal rows too: a rolled-back build restores these rows,
+  // shows them in the Render Queue's recent reel, and its Retry hands the
+  // stored params straight to a local render.
+  else archive.push({ ...j, params: restoredParams(j) });
+  return {};
+}
+
+// A job that was running when the previous process stopped.
+async function restoreInterruptedRunningJob(j) {
+  if (isTopazUpscale(j)) {
+    queue.push({ ...j, status: 'queued', params: { ...j.params, topazRecovery: true } });
+    return {};
+  }
+  // A canceled finish already has its original image. When no remote
+  // reservation remains, no provider needs reconciliation on restart.
+  if (j.kind === 'image' && j.cancelRequested === true && j.params?.visualProfile && j.params?.visualProfileSource
+    && (!isRemoteMediaJob(j) || j.params?.remotePeerReservation !== true)) {
+    const error = 'Canceled during film finishing; original image retained';
+    archive.push({ ...j, status: 'canceled', result: j.params.visualProfileSource, error, completedAt: new Date().toISOString() });
+    void releaseStagedUploads(j.params);
+    return { canceled: { id: j.id, error } };
+  }
+  // A remote provider job survives this process: its local queue id is
+  // also the stable Idempotency-Key. Re-enqueue the same record and let
+  // the remote adapter replay the submission, recover the provider job,
+  // and continue polling (or deliver a persisted cancellation intent).
+  if (isRemoteMediaJob(j)) {
+    maintenance.recoverOwned('media', j.id);
+    const marker = j.params?.remoteMedia;
+    queue.push({
+      ...j,
+      status: 'queued',
+      cancelRequested: marker?.cancelRequested === true,
+      params: restoredParams({
+        ...j,
+        params: {
+          ...j.params,
+          remoteMedia: {
+            ...(marker && typeof marker === 'object' && !Array.isArray(marker) ? marker : {}),
+            reconcile: true,
+          },
+        },
+      }),
+    });
+    console.log(`🔁 media-job [${j.id.slice(0, 8)}] remote ${j.kind} interrupted — re-enqueued for reconciliation`);
+    return {};
+  }
+  // #1332: a LoRA trainer is a detached child (spawnDetached) that can
+  // SURVIVE this restart. If its run still has a live (or just-finished-
+  // but-unprocessed) trainer, re-enqueue the SAME job flagged for
+  // re-attach instead of failing it — runTraining({reattach:true}) tails
+  // the survivor's output and finalizes it, so a run that completed during
+  // the downtime still registers its LoRA. The probe lives in loraTraining
+  // (it owns the run's on-disk layout); lazy-imported to avoid a static
+  // cycle. Falls through to the fail path when nothing survived.
+  const reattach = await reattachSurvivingTrainer(j);
+  if (reattach) {
+    console.log(`🔁 media-job [${j.id.slice(0, 8)}] training survived restart — re-enqueued for re-attach`);
+    return { reattach };
+  }
+  if (j.kind === 'video-sharing') {
+    const { cleanupInterruptedSharingCopy } = await import('../musicVideo/sharingCopy.js');
+    await cleanupInterruptedSharingCopy(j.id).catch(err => console.error(`❌ Interrupted sharing copy cleanup failed: ${err.message}`));
+  }
+  archive.push({ ...j, status: 'failed', error: 'interrupted by restart', completedAt: new Date().toISOString() });
+  // The failed job never reaches the worker's cleanup, so its staged uploads would leak.
+  void releaseStagedUploads(j.params);
+  return { failedId: j.id };
+}
+
 export async function initMediaJobQueue({ deferCompletionRecovery = false } = {}) {
   installVideoExecutionRecorder();
   if (initPromise) return initPromise;
@@ -1044,139 +1179,10 @@ export async function initMediaJobQueue({ deferCompletionRecovery = false } = {}
       : await reapAndCleanDetachedDirs(join(PATHS.videos, '.detached')).catch(() => ({ reaped: 0 }));
     if (videoReap.reaped) console.log(`🧹 reaped ${videoReap.reaped} surviving render(s) on boot`);
     for (const persisted of persistedJobs) {
-      // An uncertain terminal observer result is not a terminal peer result.
-      // Reconcile the original idempotency key while preserving its peer slot.
-      const j = isRemoteMediaJob(persisted) && persisted.params?.remotePeerReservation === true
-        && ['failed', 'canceled'].includes(persisted.status) ? { ...persisted, status: 'running' } : persisted;
-      if (j.status === 'running' && j.durabilityPending?.status === 'completed') {
-        // This optional receipt is private queue state, not a published result.
-        // Legacy snapshots have no receipt and retain their existing recovery.
-        const receipt = j.durabilityPending;
-        const permit = maintenance.recoverOwned('media', j.id);
-        archive.push(j);
-        stageTerminalTransition(j, target => Object.assign(target, receipt), () => permit.run(async () => {
-          videoHolds.recordTerminal(j);
-          videoHolds.updateQueued(queue);
-          await announceTerminalTransition(j);
-          // A receipt proves completion, not remote executor teardown or input
-          // cleanup. finish deliberately retains any uncertain ownership.
-          await permit.finish();
-        }));
-        continue;
-      }
-      // Never dispatch a queued trainer after upgrade. A verified survivor below
-      // is observed to completion without launching a replacement process.
-      if (j.kind === 'training' && j.status === 'queued' && !j.params?.reattach) {
-        archive.push({ ...j, status: 'canceled', error: TRAINING_RETIRED_MESSAGE, completedAt: new Date().toISOString() });
-        restartedFailedIds.push(j.id);
-        continue;
-      }
-      if (j.status === 'running' && maintenance.held()) {
-        maintenance.recoverOwned('media', j.id);
-        if (j.kind === 'training' && j.params?.runId && await jobHasSurvivingTrainer(j.params.runId)) {
-          recoveringJobs.add(j.id);
-          reattachJobs.push({ ...j, status: 'queued', params: { ...j.params, reattach: true } });
-        } else {
-          // Preserve uncertain work and staged inputs; no paid replay or orphan
-          // kill is safe merely because the observer process restarted.
-          archive.push({ ...j, params: restoredParams(j) });
-        }
-        continue;
-      }
-      // Explicit Video Start grants one process lifetime. Restored jobs wait for
-      // project reconciliation; replaying an unknown paid submit could charge twice.
-      if (j.params?.videoProduction && ['queued', 'running'].includes(j.status)) {
-        archive.push({ ...j, status: 'failed', error: 'Video production paused after restart', completedAt: new Date().toISOString(),
-          params: { ...restoredParams(j), videoProduction: { ...j.params.videoProduction, submissionUncertain: j.status === 'running' } } });
-        restartedFailedIds.push(j.id);
-        continue;
-      }
-      if (j.status === 'running') {
-        if (isTopazUpscale(j)) {
-          queue.push({ ...j, status: 'queued', params: { ...j.params, topazRecovery: true } });
-          continue;
-        }
-        // A canceled finish already has its original image. When no remote
-        // reservation remains, no provider needs reconciliation on restart.
-        if (j.kind === 'image' && j.cancelRequested === true && j.params?.visualProfile && j.params?.visualProfileSource
-          && (!isRemoteMediaJob(j) || j.params?.remotePeerReservation !== true)) {
-          const error = 'Canceled during film finishing; original image retained';
-          archive.push({ ...j, status: 'canceled', result: j.params.visualProfileSource, error, completedAt: new Date().toISOString() });
-          restartedCanceled.push({ id: j.id, error });
-          void safeUnlinkUpload(j.params?.uploadedTempPath);
-          void safeUnlinkUpload(j.params?.audioFilePath);
-          for (const p of normalizeTempPaths(j.params?.uploadedTempPaths)) void safeUnlinkUpload(p);
-          continue;
-        }
-        // A remote provider job survives this process: its local queue id is
-        // also the stable Idempotency-Key. Re-enqueue the same record and let
-        // the remote adapter replay the submission, recover the provider job,
-        // and continue polling (or deliver a persisted cancellation intent).
-        if (isRemoteMediaJob(j)) {
-          maintenance.recoverOwned('media', j.id);
-          const marker = j.params?.remoteMedia;
-          queue.push({
-            ...j,
-            status: 'queued',
-            cancelRequested: marker?.cancelRequested === true,
-            params: restoredParams({
-              ...j,
-              params: {
-                ...j.params,
-                remoteMedia: {
-                  ...(marker && typeof marker === 'object' && !Array.isArray(marker) ? marker : {}),
-                  reconcile: true,
-                },
-              },
-            }),
-          });
-          console.log(`🔁 media-job [${j.id.slice(0, 8)}] remote ${j.kind} interrupted — re-enqueued for reconciliation`);
-          continue;
-        }
-        // #1332: a LoRA trainer is a detached child (spawnDetached) that can
-        // SURVIVE this restart. If its run still has a live (or just-finished-
-        // but-unprocessed) trainer, re-enqueue the SAME job flagged for
-        // re-attach instead of failing it — runTraining({reattach:true}) tails
-        // the survivor's output and finalizes it, so a run that completed during
-        // the downtime still registers its LoRA. The probe lives in loraTraining
-        // (it owns the run's on-disk layout); lazy-imported to avoid a static
-        // cycle. Falls through to the fail path when nothing survived.
-        if (j.kind === 'training' && j.params?.runId && await jobHasSurvivingTrainer(j.params.runId)) {
-          reattachJobs.push({ ...j, status: 'queued', params: { ...j.params, reattach: true } });
-          console.log(`🔁 media-job [${j.id.slice(0, 8)}] training survived restart — re-enqueued for re-attach`);
-          continue;
-        }
-        const failed = {
-          ...j,
-          status: 'failed',
-          error: 'interrupted by restart',
-          completedAt: new Date().toISOString(),
-        };
-        if (j.kind === 'video-sharing') {
-          const { cleanupInterruptedSharingCopy } = await import('../musicVideo/sharingCopy.js');
-          await cleanupInterruptedSharingCopy(j.id).catch(err => console.error(`❌ Interrupted sharing copy cleanup failed: ${err.message}`));
-        }
-        archive.push(failed);
-        restartedFailedIds.push(failed.id);
-        // The failed job will never reach the worker's cleanup, so any
-        // multipart upload it staged into data/uploads would leak forever.
-        // safeUnlinkUpload constrains the delete to PATHS.uploads so we
-        // never delete a file the job merely referenced (gallery image,
-        // prior render, etc). audioFilePath is the same kind of staged
-        // upload (a2v/voice/video jobs) — needs the same cleanup.
-        void safeUnlinkUpload(j.params?.uploadedTempPath);
-        void safeUnlinkUpload(j.params?.audioFilePath);
-        for (const p of normalizeTempPaths(j.params?.uploadedTempPaths)) {
-          void safeUnlinkUpload(p);
-        }
-      } else if (j.status === 'queued') {
-        queue.push({ ...j, params: restoredParams(j) });
-      } else {
-        // The archive needs it too: a rolled-back build restores these rows,
-        // shows them in the Render Queue's recent reel, and its Retry hands the
-        // stored params straight to a local render.
-        archive.push({ ...j, params: restoredParams(j) });
-      }
+      const { failedId, canceled, reattach } = await restorePersistedJob(persisted);
+      if (failedId) restartedFailedIds.push(failedId);
+      if (canceled) restartedCanceled.push(canceled);
+      if (reattach) reattachJobs.push(reattach);
     }
     // Re-attach jobs resume ahead of everything else (they were mid-flight), so
     // unshift them to the front. At most one (single GPU lane), but spread keeps
@@ -1439,13 +1445,11 @@ async function settleQueuedJob(job, { status, error }) {
     j.completedAt = new Date().toISOString();
   }, () => {
     trackTerminalOperation((async () => {
-      await safeUnlinkUpload(job.params?.uploadedTempPath);
-      await safeUnlinkUpload(job.params?.audioFilePath);
+      await releaseStagedUploads(job.params);
       if (isTopazUpscale(job)) {
         const { cleanupPreparedTopaz } = await import('../videoGen/topazJob.js');
         await cleanupPreparedTopaz(job.params.preparedId);
       }
-      for (const p of normalizeTempPaths(job.params?.uploadedTempPaths)) await safeUnlinkUpload(p);
       const entry = ensureSseEntry(job.id);
       broadcastSse(entry, status === 'canceled'
         ? { type: 'canceled', reason: error } : { type: 'error', error });
@@ -2206,13 +2210,7 @@ async function runJobLifecycle(job, markDispatched, permit, finalizeLane) {
       // Tracked from the first microtask of the rejection, so a drain that saw
       // the dispatch window close cannot miss this failure (#9029).
       await trackTerminalOperation((async () => {
-        if (!isRemoteReconcile(job)) {
-          await safeUnlinkUpload(job.params?.uploadedTempPath);
-          await safeUnlinkUpload(job.params?.audioFilePath);
-          for (const p of normalizeTempPaths(job.params?.uploadedTempPaths)) {
-            await safeUnlinkUpload(p);
-          }
-        }
+        if (!isRemoteReconcile(job)) await releaseStagedUploads(job.params);
         handlers.failed({ error: err.message, code: err.code,
           remoteInputsDisposable: isRemoteMediaJob(job) && job.providerInvoked !== true && job.params?.remoteMedia?.reconcile !== true });
       })());

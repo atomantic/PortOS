@@ -2021,6 +2021,66 @@ describe('mediaJobQueue', () => {
     expect(stubs.generateVideoFal).not.toHaveBeenCalled();
   });
 
+  // #14440: restart arms that no other replay test pinned.
+  it('boot recovery: a film-finishing cancel keeps its original image and releases its staged uploads', async () => {
+    const id = '00000000-0000-4000-8000-000000000101';
+    const uploads = join(tempDataDir, 'uploads');
+    mkdirSync(uploads, { recursive: true });
+    const staged = ['example-frame.png', 'example-audio.wav', 'example-extra.png'].map(name => join(uploads, name));
+    for (const path of staged) writeFileSync(path, 'staged');
+    writeFileSync(join(tempDataDir, 'media-jobs.json'), JSON.stringify({ jobs: [{
+      id, kind: 'image', status: 'running', cancelRequested: true,
+      queuedAt: '2026-04-30T10:00:00.000Z', startedAt: '2026-04-30T10:00:01.000Z',
+      params: { prompt: 'finish', visualProfile: { version: 1 }, visualProfileSource: { filename: 'example-source.png' },
+        uploadedTempPath: staged[0], audioFilePath: staged[1], uploadedTempPaths: [staged[2]] },
+    }] }));
+
+    await importFresh();
+    await mediaJobQueue.initMediaJobQueue();
+
+    expect(mediaJobQueue.getJob(id)).toMatchObject({ status: 'canceled', result: { filename: 'example-source.png' },
+      error: 'Canceled during film finishing; original image retained' });
+    await waitFor(() => staged.every(path => !existsSync(path)));
+  });
+
+  it('boot recovery: an interrupted sharing export fails and cleans its partial copy', async () => {
+    const id = '00000000-0000-4000-8000-000000000102';
+    writeFileSync(join(tempDataDir, 'media-jobs.json'), JSON.stringify({ jobs: [{
+      id, kind: 'video-sharing', status: 'running',
+      queuedAt: '2026-04-30T10:00:00.000Z', startedAt: '2026-04-30T10:00:01.000Z', params: {},
+    }] }));
+
+    await importFresh();
+    await mediaJobQueue.initMediaJobQueue();
+
+    expect(mediaJobQueue.getJob(id)).toMatchObject({ status: 'failed', error: 'interrupted by restart' });
+    const { cleanupInterruptedSharingCopy } = await import('../musicVideo/sharingCopy.js');
+    expect(cleanupInterruptedSharingCopy).toHaveBeenCalledWith(id);
+  });
+
+  it('boot recovery: a running job under a maintenance hold is archived with its inputs, never failed or replayed', async () => {
+    const id = '00000000-0000-4000-8000-000000000103';
+    const uploads = join(tempDataDir, 'uploads');
+    mkdirSync(uploads, { recursive: true });
+    const staged = join(uploads, 'held-frame.png');
+    writeFileSync(staged, 'staged');
+    writeFileSync(join(tempDataDir, 'media-jobs.json'), JSON.stringify({ jobs: [{
+      id, kind: 'video', status: 'running',
+      queuedAt: '2026-04-30T10:00:00.000Z', startedAt: '2026-04-30T10:00:01.000Z',
+      params: { prompt: 'held render', uploadedTempPath: staged },
+    }] }));
+    const { maintenance } = await import('../../lib/maintenanceAdmission.js');
+    const { hold } = maintenance.begin({ reason: 'Restart under maintenance', owner: 'Operator' });
+    try {
+      await importFresh();
+      await mediaJobQueue.initMediaJobQueue();
+      expect(mediaJobQueue.getJob(id)).toMatchObject({ status: 'running' });
+      expect(mediaJobQueue.getJob(id).error).toBeUndefined();
+      expect(existsSync(staged)).toBe(true);
+      expect(stubs.generateVideo).not.toHaveBeenCalled();
+    } finally { maintenance.resume({ id: hold.id, revision: hold.revision }); }
+  });
+
   it('boot recovery (#1332): a "running" training job whose trainer survived is re-enqueued for re-attach', async () => {
     const runId = 'run-survivor-1';
     const trainingId = '00000000-0000-4000-8000-000000000010';
