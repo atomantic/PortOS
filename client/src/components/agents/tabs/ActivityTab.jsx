@@ -18,7 +18,10 @@ export default function ActivityTab({ agentId }) {
   // switching it while Load More is in flight, never shows or appends another
   // filter's rows under the current one.
   const listGenerationRef = useRef(0);
-  const loadingMoreRef = useRef(false);
+  // Generation of the in-flight Load More (null when none): single-flight per
+  // list, so a Load More left over from the previous filter never blocks the
+  // current one.
+  const loadingMoreGenerationRef = useRef(null);
 
   const fetchData = useCallback(async () => {
     const generation = ++listGenerationRef.current;
@@ -46,16 +49,16 @@ export default function ActivityTab({ agentId }) {
   };
 
   const loadMore = async () => {
-    if (activities.length === 0 || loadingMoreRef.current) return;
-    loadingMoreRef.current = true;
     const generation = listGenerationRef.current;
+    if (activities.length === 0 || loadingMoreGenerationRef.current === generation) return;
+    loadingMoreGenerationRef.current = generation;
 
     const lastTimestamp = activities[activities.length - 1].timestamp;
     // The API helper toasts a failure; the loaded rows stay and Load More stays available.
     const moreData = await api.getAgentActivityTimeline(
       PAGE_SIZE, [agentId], lastTimestamp, actionFilter || null
     ).catch(() => null);
-    loadingMoreRef.current = false;
+    if (loadingMoreGenerationRef.current === generation) loadingMoreGenerationRef.current = null;
     if (!moreData || generation !== listGenerationRef.current) return;
 
     if (moreData.length < PAGE_SIZE) {

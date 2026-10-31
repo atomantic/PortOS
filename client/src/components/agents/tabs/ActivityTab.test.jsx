@@ -91,4 +91,23 @@ describe('ActivityTab', () => {
     await act(async () => { resolveMore(page('vote', 50, 'late')); });
     expect(screen.queryByText('vote')).toBeNull();
   });
+
+  it('lets Load More run for the new filter while the previous filter\'s Load More is still pending', async () => {
+    api.getAgentActivityTimeline.mockImplementation(async (_l, _a, before, action) => {
+      if (before && action === null) return new Promise(() => {});
+      if (before) return page('comment', 1, 'more');
+      return action === 'comment' ? page('comment', 50, 'c') : page('vote', 50, 'v');
+    });
+
+    render(<ActivityTab agentId="agent-1" />);
+    const loadMoreButton = await screen.findByRole('button', { name: 'Load More' });
+    await act(async () => { fireEvent.click(loadMoreButton); });
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText('Filter by action'), { target: { value: 'comment' } });
+    });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Load More' })); });
+    expect(api.getAgentActivityTimeline).toHaveBeenLastCalledWith(
+      50, ['agent-1'], '2026-08-23T00:10:00.000Z', 'comment'
+    );
+  });
 });
