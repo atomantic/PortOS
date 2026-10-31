@@ -34,6 +34,9 @@ import {
 import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
 import BrailleSpinner from '../../BrailleSpinner';
+import useLatestRequest from '../../../hooks/useLatestRequest';
+import ListLoadError from '../../ui/ListLoadError';
+import LoadFailedState from '../../ui/LoadFailedState';
 import { formatDurationMin, formatDateTime, formatDateNumeric } from '../../../utils/formatters';
 import { pluralize } from '../../../lib/textUtils';
 
@@ -110,6 +113,8 @@ export function FeedbackSummary({ feedback }) {
   );
 }
 
+const LEARNING_LABEL = 'learning summary';
+
 export default function LearningTab() {
   const [learning, setLearning] = useState(null);
   const [performance, setPerformance] = useState(null);
@@ -121,6 +126,9 @@ export default function LearningTab() {
   const [dismissed, setDismissed] = useState([]);
   const [showDismissed, setShowDismissed] = useState(false);
   const [loading, setLoading] = useState(true);
+  // Labels of the reads that failed on the last load. A failed read renders as
+  // an error, never as "no learning data yet" or a measured zero.
+  const [loadFailures, setLoadFailures] = useState([]);
   const [backfilling, setBackfilling] = useState(false);
   const [resettingType, setResettingType] = useState(null);
   const [expandedSections, setExpandedSections] = useState({
@@ -134,18 +142,30 @@ export default function LearningTab() {
     standing: true
   });
 
+  // Refresh, Retry and the post-mutation reloads can overlap; only the newest
+  // batch may write, or an older failure replaces a newer successful read.
+  const beginLoad = useLatestRequest();
+
   const loadData = useCallback(async () => {
+    const isCurrent = beginLoad();
     setLoading(true);
+    const failures = [];
+    const read = (label, fetcher) => fetcher({ silent: true }).catch(() => {
+      failures.push(label);
+      return null;
+    });
     const [learningData, performanceData, skippedData, durationsData, routingData, confidenceData, feedbackData, dismissedData] = await Promise.all([
-      api.getCosLearning().catch(() => null),
-      api.getCosLearningPerformance().catch(() => null),
-      api.getCosLearningSkipped().catch(() => null),
-      api.getCosLearningDurations().catch(() => null),
-      api.getCosLearningRouting().catch(() => null),
-      api.getCosLearningConfidence().catch(() => null),
-      api.getCosFeedbackStats({ silent: true }).catch(() => null),
-      api.getDismissedCosRecommendations().catch(() => null)
+      read(LEARNING_LABEL, api.getCosLearning),
+      read('performance', api.getCosLearningPerformance),
+      read('skipped tasks', api.getCosLearningSkipped),
+      read('durations', api.getCosLearningDurations),
+      read('model routing', api.getCosLearningRouting),
+      read('confidence', api.getCosLearningConfidence),
+      read('feedback', api.getCosFeedbackStats),
+      read('dismissed recommendations', api.getDismissedCosRecommendations)
     ]);
+    if (!isCurrent()) return;
+    setLoadFailures(failures);
     setLearning(learningData);
     setPerformance(performanceData);
     setSkipped(skippedData);
@@ -155,7 +175,7 @@ export default function LearningTab() {
     setFeedback(feedbackData);
     setDismissed(dismissedData?.dismissed || []);
     setLoading(false);
-  }, []);
+  }, [beginLoad]);
 
   const handleDismissRec = useCallback(async (rec) => {
     // Optimistic update — remove from active recommendations immediately
@@ -257,6 +277,10 @@ export default function LearningTab() {
   const sortedDurations = useMemo(() => taskTypeDurationRows(durations), [durations]);
 
   const hasData = learning?.totals?.completed > 0;
+  const learningFailed = loadFailures.includes(LEARNING_LABEL);
+  const sectionFailures = loadFailures.filter((label) => label !== LEARNING_LABEL);
+  const skippedFailed = sectionFailures.includes('skipped tasks');
+  const performanceFailed = sectionFailures.includes('performance');
 
   return (
     <div className="space-y-6">
@@ -267,7 +291,7 @@ export default function LearningTab() {
           <h3 className="text-lg font-semibold text-white">Learning Analytics</h3>
         </div>
         <div className="flex gap-2">
-          {!hasData && !loading && (
+          {!hasData && !loading && !learningFailed && (
             <button
               onClick={handleBackfill}
               disabled={backfilling}
@@ -288,10 +312,16 @@ export default function LearningTab() {
         </div>
       </div>
 
+      {!loading && !learningFailed && sectionFailures.length > 0 && (
+        <ListLoadError what={`some learning sections (${sectionFailures.join(', ')})`} onRetry={loadData} />
+      )}
+
       {loading ? (
         <div className="flex items-center justify-center py-12">
           <BrailleSpinner text="Loading" />
         </div>
+      ) : learningFailed ? (
+        <LoadFailedState title="Could not load learning analytics" hint="Your learning history was not read, so nothing is shown here." onRetry={loadData} />
       ) : !hasData ? (
         <div className="bg-port-card border border-port-border rounded-lg p-8 text-center">
           <Brain className="w-12 h-12 text-gray-600 mx-auto mb-3" />
@@ -346,9 +376,9 @@ export default function LearningTab() {
                 <span className="text-xs text-gray-500">Skipped Types</span>
               </div>
               <div className={`text-2xl font-bold ${skipped?.skippedCount > 0 ? 'text-port-warning' : 'text-gray-500'}`}>
-                {skipped?.skippedCount || 0}
+                {skippedFailed ? '—' : (skipped?.skippedCount || 0)}
               </div>
-              <div className="text-xs text-gray-500">due to low success</div>
+              <div className="text-xs text-gray-500">{skippedFailed ? 'not loaded' : 'due to low success'}</div>
             </div>
           </div>
 
@@ -577,7 +607,9 @@ export default function LearningTab() {
               <BarChart2 size={16} className="text-port-accent" />
               <span className="font-medium text-white">Task Type Performance</span>
               <span className="text-xs text-gray-500">
-                ({performance?.topPerformers?.length || 0} top, {performance?.needsAttention?.length || 0} need attention)
+                {performanceFailed
+                  ? '(not loaded)'
+                  : `(${performance?.topPerformers?.length || 0} top, ${performance?.needsAttention?.length || 0} need attention)`}
               </span>
             </button>
             {expandedSections.taskTypes && (

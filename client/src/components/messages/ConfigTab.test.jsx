@@ -57,6 +57,25 @@ beforeEach(() => {
 });
 
 describe('Messages Gmail OAuth setup', () => {
+  // A failed status read must not offer the credential form or automated setup
+  // (saving there replaces a working OAuth client) nor badge the account pending.
+  it('shows a failed OAuth status read with Retry instead of the setup flow', async () => {
+    api.getGoogleAuthStatus
+      .mockRejectedValueOnce(new Error('Synthetic status failure'))
+      .mockResolvedValueOnce({ hasCredentials: true, hasTokens: true, needsScopeUpgrade: false });
+    renderConfig();
+
+    expect(await screen.findByText(/Could not load Google OAuth status/)).toBeInTheDocument();
+    expect(screen.queryByText('Google OAuth setup required')).not.toBeInTheDocument();
+    expect(screen.queryByText('Set up with PortOS Browser')).not.toBeInTheDocument();
+    expect(screen.queryByText('Pending authorization')).not.toBeInTheDocument();
+    expect(api.getGoogleAuthStatus).toHaveBeenCalledWith({ silent: true });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('Google OAuth authorized')).toBeInTheDocument();
+    expect(screen.queryByText(/Could not load Google OAuth status/)).not.toBeInTheDocument();
+  });
+
   it('accepts OAuth credentials in Messages and starts authorization there', async () => {
     api.getGoogleAuthStatus.mockResolvedValue({
       hasCredentials: false,
