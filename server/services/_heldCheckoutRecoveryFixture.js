@@ -23,7 +23,7 @@ import { materializeGitRepo, SKIP_HEAVY_INTEGRATION } from '../lib/gitTestRepo.j
 import { cleanupTempDataRoots, lazyTempDataRoot } from '../lib/mockPathsDataRoot.js';
 import { PATHS } from '../lib/paths.js';
 import { owned, receiptTiming, retirementFaults, injected, SYMLINKS } from './_heldCheckoutRecoveryMocks.js';
-import { retireInventoriedCheckout, prepareInventoriedCheckoutRetirement, retirePendingMergeCheckout, heldCheckoutArchiveRoot, preserveMergedCheckout } from './heldCheckoutRecovery.js';
+import { retireInventoriedCheckout, prepareInventoriedCheckoutRetirement, retirePendingMergeCheckout, heldCheckoutArchiveRoot, _writeHistoricalCheckoutArchive } from './heldCheckoutRecovery.js';
 import { recordBranchReconcileOutcome } from './branchReconcileOutcome.js';
 
 export const it = owned.tests(vitestIt);
@@ -35,7 +35,6 @@ export let external;
 export let cosDir;
 export let receiptWork;
 let pristineRepo;
-export const setRepo = value => (repo = value);
 export const setExternal = value => (external = value);
 export const setReceiptWork = value => (receiptWork = value);
 export const noOwners = async () => [];
@@ -190,7 +189,7 @@ export async function historicalArchive(prepare = unchangedHistory) {
   await prepare(path);
   const release = { path, branch, head: (await execGit(['rev-parse', 'HEAD'], path)).stdout.trim(), locked: false, lockReason: null };
   await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [{ ...release, reason: 'retirement-review-pending' }] });
-  const saved = await preserveMergedCheckout(repo, { ...release, branch: `refs/heads/${branch}` }, 'main', { cosDir: PATHS.cos });
+  const saved = await _writeHistoricalCheckoutArchive(repo, { ...release, branch: `refs/heads/${branch}` }, 'main', { cosDir: PATHS.cos });
   await execGit(['worktree', 'remove', '--force', path], repo);
   if (fixture) {
     await cp(fixture.source, fixture.snapshot, { recursive: true });

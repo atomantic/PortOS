@@ -10,10 +10,7 @@ import { dirname, join } from 'path';
 // this is where a test pauses or perturbs the window between the two critical sections.
 const observeIdentityMock = vi.fn(async () => null);
 vi.mock('../lib/retirementCheckoutObservation.js', () => ({ readRetirementCheckoutIdentity: (...args) => observeIdentityMock(...args) }));
-const preserveCheckoutMock = vi.fn(async () => ({ archiveDir: '/archive', verify: async () => null }));
-vi.mock('./heldCheckoutRecovery.js', () => ({
-  preserveMergedCheckout: (...args) => preserveCheckoutMock(...args),
-}));
+vi.mock('./heldCheckoutRecovery.js', () => ({}));
 const retirementReceiptMock = vi.hoisted(() => vi.fn(async () => null));
 vi.mock('./branchReconcileOutcome.js', () => ({ recordWorkspaceCheckoutRetirement: retirementReceiptMock }));
 const completionOwnersMock = vi.fn(async () => []);
@@ -870,7 +867,6 @@ describe('removeWorktree identity, dirt and branch preservation', () => {
 
   beforeEach(() => {
     observeIdentityMock.mockReset().mockResolvedValue(null);
-    preserveCheckoutMock.mockReset().mockResolvedValue({ archiveDir: '/archive', checkoutIdentity: 'original', verify: async () => null });
     retirementReceiptMock.mockClear();
     completionHoldMock.mockReset().mockResolvedValue(null);
     completionOwnersMock.mockReset().mockResolvedValue([]);
@@ -1220,7 +1216,6 @@ describe('removeWorktree identity, dirt and branch preservation', () => {
     const result = await removeWorktree('agent-x', '/repo', branch, { merge: true });
     expect(result.removed).toBe(false);
     expect(result.warnings.join(' ')).toContain(reason);
-    expect(preserveCheckoutMock).not.toHaveBeenCalled();
     expect(execGitMock.mock.calls.some(([args]) => ['merge', 'push', 'checkout'].includes(args[0])
       || (args[0] === 'worktree' && ['remove', 'prune'].includes(args[1])))).toBe(false);
   });

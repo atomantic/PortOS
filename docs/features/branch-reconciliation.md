@@ -73,13 +73,12 @@ copy the checkout, its ignored files, or its commit history. The lock is
 released only after a second fresh match, and ownership, HEAD and cleanliness
 are rechecked immediately before removal; if that recheck refuses, the original
 lock is restored. A retired row leaves the inventory and appears under
-*Recently retired*; only the next sweep can report convergence. Older copies
-under `data/cos/held-checkout-archives/`,
+*Recently retired*; only the next sweep can report convergence. No retirement
+path writes a checkout archive. Setup migrations 442 and 454 remove the
+historical `data/cos/held-checkout-archives/`,
 `data/cos/branch-retirement-archives/`, and
-`data/cos/initialized-checkout-retirements/` are not written anymore. Setup
-migration 442 preserves those directories: they may contain the only unpublished
-files or originals held by unfinished recovery transactions. Existing restore
-and verification workflows remain available after setup.
+`data/cos/initialized-checkout-retirements/` directories (a symlinked directory
+is left alone); the archive verifiers below only read what an install still has.
 
 ### Explicit delivery reviews
 
