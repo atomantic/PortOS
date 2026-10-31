@@ -71,7 +71,8 @@ export default function Game() {
   const [integrityFor, setIntegrityFor] = useState(null);
   const [integrityFetching, setIntegrityFetching] = useState(false);
   const integrityRequest = useRef(0);
-  const [compileError, setCompileError] = useState('');
+  // Keyed by game for the same reason: a failed build on A is not B's error.
+  const [compileErrorFor, setCompileErrorFor] = useState(null);
   const [loading, setLoading] = useState(true);
   const [loadFailed, setLoadFailed] = useState(false);
   const [busy, setBusy] = useState('');
@@ -103,7 +104,14 @@ export default function Game() {
 
   useEffect(() => { load(); }, [load]);
 
+  // A compile, bind or publish started on another game can finish after the
+  // route moved on; its refresh must not take the generation from this game's
+  // read. Declared before the effect below so the id is current when it runs.
+  const routeGameId = useRef(id);
+  useEffect(() => { routeGameId.current = id; }, [id]);
+
   const refreshIntegrity = useCallback(async () => {
+    if (id !== routeGameId.current) return;
     const request = ++integrityRequest.current;
     if (!id) {
       setIntegrityFor(null);
@@ -134,6 +142,10 @@ export default function Game() {
   const integrityLoading = integrityFetching || !matchesGame;
 
   const game = useMemo(() => games.find((entry) => entry.id === id) || null, [games, id]);
+  // Stamped with the game this render's handlers act on, so a build that
+  // finishes after the route moved on files its error under its own game.
+  const setCompileError = (message) => setCompileErrorFor(message ? { gameId: game?.id, message } : null);
+  const compileError = compileErrorFor && compileErrorFor.gameId === id ? compileErrorFor.message : '';
 
   const artworkFilenamesKey = useMemo(() => (
     (game?.artworkBindings || []).map((binding) => binding.imageFilename).join(',')
