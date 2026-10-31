@@ -8,7 +8,8 @@ const onUpdateMusic = vi.fn();
 const onPublishMusic = vi.fn();
 const onDismissMusicOverwrite = vi.fn();
 
-const renderBindings = (props = {}) => render(
+// Each call mints fresh binding objects, as every Game page mutation does.
+const bindingsTree = (props = {}) => (
   <MemoryRouter>
     <GameBindings
       game={{
@@ -93,8 +94,9 @@ const renderBindings = (props = {}) => render(
       onUnbindArtwork={noop}
       {...props}
     />
-  </MemoryRouter>,
+  </MemoryRouter>
 );
+const renderBindings = (props = {}) => render(bindingsTree(props));
 
 const musicSection = () => screen.getByRole('heading', { name: 'Music assets' }).closest('section');
 
@@ -131,6 +133,16 @@ describe('GameBindings', () => {
     expect(screen.getByRole('link', { name: 'Generate for this role' }))
       .toHaveAttribute('href', expect.stringContaining('/media/image?prompt='));
     expect(screen.getAllByRole('option', { name: 'Game logo' })).toHaveLength(2);
+  });
+
+  it('keeps an artwork edit in progress when an unrelated mutation re-renders the game', () => {
+    const { rerender } = renderBindings();
+    const field = () => document.getElementById('art-label-artwork-1');
+    fireEvent.change(field(), { target: { value: 'Draft Name' } });
+
+    rerender(bindingsTree());
+
+    expect(field()).toHaveValue('Draft Name');
   });
 
   it('edits the music destination and keeps publishing behind the saved path', () => {

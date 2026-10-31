@@ -340,11 +340,12 @@ function ArtworkCard({
   const [label, setLabel] = useState(binding.label || '');
   const [role, setRole] = useState(binding.role || '');
   const [destinationPath, setDestinationPath] = useState(binding.destinationPath || '');
+  // Persisted values, not the object — same trap as the music row above.
   useEffect(() => {
     setLabel(binding.label || '');
     setRole(binding.role || '');
     setDestinationPath(binding.destinationPath || '');
-  }, [binding]);
+  }, [binding.id, binding.label, binding.role, binding.destinationPath]);
   const dirty = (label || '').trim() !== (binding.label || '')
     || role !== binding.role
     || (destinationPath || '').trim() !== (binding.destinationPath || '');
