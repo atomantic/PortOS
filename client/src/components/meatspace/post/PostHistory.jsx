@@ -181,7 +181,7 @@ export default function PostHistory({ onBack }) {
                   <Line type="monotone" dataKey="score" stroke={chartColors.accent} strokeWidth={2} dot={{ r: 3 }} />
                 </LineChart>
               </ResponsiveContainer>
-            ) : (
+            ) : load.failed.includes('sessions') ? null : (
               <div className="text-center text-gray-500 py-12 text-sm">
                 Complete more sessions to chart your trend.
               </div>

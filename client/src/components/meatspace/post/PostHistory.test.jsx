@@ -107,6 +107,7 @@ describe('PostHistory analytics dashboard', () => {
     renderHistory();
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not load POST sessions');
     expect(screen.queryByText('No sessions found for this range.')).toBeNull();
+    expect(screen.queryByText('Complete more sessions to chart your trend.')).toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     expect(await screen.findByText('2026-06-01')).toBeTruthy();
