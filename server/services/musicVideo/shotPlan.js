@@ -209,6 +209,9 @@ function phraseFor(phrases, startSec, endSec) {
  * @param {object} options
  * @param {number[]} [options.beats]
  * @param {number[]} [options.downbeats]
+ * @param {'use'|'ignore'|null} [options.gridDecision] — the analysis' verdict on its
+ *   automatic grid (#14240); `'ignore'` drops the grid so cuts follow lyrics and
+ *   section energy and no shot claims `beatAligned`
  * @param {Array<object>} [options.lyricCues]
  * @param {Array<object>} [options.phrases]
  * @param {object} [options.pacing] — the project's `pacing` (nullable)
@@ -219,11 +222,12 @@ function phraseFor(phrases, startSec, endSec) {
  *   startSec, endSec, beatAligned, lyricText, phraseLabel, visualIntent, hook }`
  */
 export function planShots(sections, {
-  beats = [], downbeats = [], lyricCues = [], phrases = [], pacing = null,
+  beats: rawBeats = [], downbeats: rawDownbeats = [], gridDecision = null, lyricCues = [], phrases = [], pacing = null,
   clipCapacitySec = DEFAULT_LOCAL_CLIP_CAPACITY_SEC, toleranceSec, minSceneSec,
 } = {}) {
-  const beatGrid = sortedGrid(beats);
-  const downbeatGrid = sortedGrid(downbeats);
+  const gridIgnored = gridDecision === 'ignore';
+  const beatGrid = gridIgnored ? [] : sortedGrid(rawBeats);
+  const downbeatGrid = gridIgnored ? [] : sortedGrid(rawDownbeats);
   const hasGrid = beatGrid.length > 0 || downbeatGrid.length > 0;
   const resolved = resolvePacing(pacing, clipCapacitySec);
   const cues = timedCues(lyricCues);
@@ -259,7 +263,8 @@ export function planShots(sections, {
         shotCount: spans.length,
         startSec: round3(span.startSec),
         endSec: round3(span.endSec),
-        beatAligned: !!(startOk && endOk),
+        // An ignored grid was never consulted, so nothing here is grid-aligned.
+        beatAligned: !gridIgnored && !!(startOk && endOk),
         lyricText: lyricsFor(cues, span.startSec, span.endSec),
         phraseLabel: phrase?.label || null,
         visualIntent: phrase?.intent || null,

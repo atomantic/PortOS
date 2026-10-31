@@ -39,7 +39,7 @@ import { PATHS } from '../../lib/fileUtils.js';
 import { htmlCompositionContractSchemaFor } from '../../lib/validation.js';
 import { selectedPerformanceInstruction } from '../../lib/musicVideoShotTiming.js';
 import { clipSpeedRate, clipOffsetSec, documentSceneVisualLayer, MUSIC_VIDEO_LYRIC_ROLES, MUSIC_VIDEO_LYRIC_SIZES, MUSIC_VIDEO_TEXT_ZONES } from '../../lib/musicVideoLayers.js';
-import { musicVideoAspect } from '../../lib/musicVideoAspect.js';
+import { musicVideoAspect, musicVideoLyricLayout } from '../../lib/musicVideoAspect.js';
 import { documentDirectoryForRender } from './compositionDocument.js';
 import { musicVideoSongDocument } from './compositionRender.js';
 import { buildSongDocument } from './codeTimeline.js';
@@ -254,7 +254,7 @@ export function buildDocumentData(project, { media = new Map(), frame, clock, so
   const composition = project?.composition || {};
   return {
     version: 1,
-    project: { id: project?.id ?? null, name: project?.name ?? '', aspect: documentAspect(project) },
+    project: { id: project?.id ?? null, name: project?.name ?? '', aspect: documentAspect(project), lyricLayout: musicVideoLyricLayout(project) },
     render: { width: frame.width, height: frame.height, fps: clock.fps, frames: clock.frames, durationSec: clock.durationSec },
     song: {
       durationSec: songDurationSec,
@@ -481,6 +481,23 @@ function documentMuxArgs(videoPath, audioPath, outputPath, { startSec, durationS
 }
 
 /**
+ * Refuse a render whose lyric lines cannot fit the social-safe band of a portrait frame, naming each
+ * cue's time, rather than drawing them over the platform controls. Documents whose engine has no
+ * `lyricFit` hook keep rendering as before.
+ */
+async function assertLyricsFitSocialBand(page, { startSec, durationSec }) {
+  const unfit = await page.evaluate(`(async () => {
+    const c = globalThis.portosComposition;
+    return typeof c.lyricFit === 'function' ? c.lyricFit({ startSec: ${startSec}, endSec: ${startSec + durationSec} }) : [];
+  })()`);
+  if (!Array.isArray(unfit) || !unfit.length) return;
+  const cues = unfit.slice(0, 5).map((line) => `${round3(line.startSec)}s "${String(line.text).slice(0, 40)}"`).join('; ');
+  throw new ServerError(`Lyrics do not fit the social-safe area of the vertical frame (clear of the Shorts, Reels and TikTok controls) at ${cues}${unfit.length > 5 ? ` and ${unfit.length - 5} more` : ''}. Shorten the line, or set the treatment brief's lyricLayout to cinematic for a vertical film.`, {
+    status: 422, code: 'LYRIC_SOCIAL_SAFE_OVERFLOW', context: { cues: unfit.slice(0, 20).map((line) => ({ startSec: round3(line.startSec), text: String(line.text).slice(0, 80) })) },
+  });
+}
+
+/**
  * Stage, open, capture and mux one document render (full song or a window).
  * Resolves `{ width, height, fps, durationSec, startSec, boundaryTimes }`.
  */
@@ -547,6 +564,7 @@ export async function encodeDocumentComposition({
     if (target.width !== parsed.data.width || target.height !== parsed.data.height) {
       await page.evaluate(`globalThis.portosComposition.layout({ width: ${target.width}, height: ${target.height} })`);
     }
+    await assertLyricsFitSocialBand(page, window);
     const footageVisibility = [];
     for (const scene of data.scenes.filter(s => collectFootageVisibility && s.visualLayer === 'footage' && s.startSec < window.startSec + window.durationSec && s.endSec > window.startSec)) {
       const start = Math.max(scene.startSec, window.startSec);

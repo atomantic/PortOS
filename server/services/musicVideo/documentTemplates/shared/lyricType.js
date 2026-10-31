@@ -214,12 +214,44 @@ const ZONE_FLIP = Object.freeze({
 });
 const ZONE_FALLBACKS = Object.freeze(['upper-right', 'upper-left', 'lower-right', 'lower-left']);
 
-/** The pixel box a text zone allows on a width × height frame (null for `none`). */
-function zoneRect(zone, width, height) {
+// The strict edges of the Shorts, Reels and TikTok control bands, as fractions of a portrait frame:
+// one rectangle clears all three. Only the type moves; the picture stays full-bleed.
+const SOCIAL_SAFE = Object.freeze({ top: 0.15, bottom: 0.35, left: 0.06, right: 0.18 });
+
+// Each zone keeps its own shape and anchor, moved into the social-safe band.
+function socialZoneRect(zone, width, height) {
+  const x = width * SOCIAL_SAFE.left;
+  const w = width * (1 - SOCIAL_SAFE.left - SOCIAL_SAFE.right);
+  const top = height * SOCIAL_SAFE.top;
+  const bottom = height * (1 - SOCIAL_SAFE.bottom);
+  const h = height * 0.3;
+  const upper = (name, align) => ({ zone: name, x, y: top, w, h, align, anchor: 'top', social: true });
+  const lower = (name, align) => ({ zone: name, x, y: bottom - h, w, h, align, anchor: 'bottom', social: true });
+  switch (zone) {
+    case 'none': return null;
+    case 'center': {
+      const ch = height * 0.4;
+      return { zone, x, y: top + (bottom - top - ch) / 2, w, h: ch, align: 'center', anchor: 'middle', social: true };
+    }
+    case 'upper': return upper(zone, 'center');
+    case 'lower': return lower(zone, 'center');
+    case 'upper-right': return upper(zone, 'right');
+    case 'upper-left': return upper(zone, 'left');
+    case 'lower-right': return lower(zone, 'right');
+    default: return lower('lower-left', 'left');
+  }
+}
+
+/**
+ * The pixel box a text zone allows on a width × height frame (null for `none`). A portrait frame
+ * uses the social-safe band unless `layout` is `cinematic`; other frames keep the framed insets.
+ */
+function zoneRect(zone, width, height, { layout = 'social' } = {}) {
+  const portrait = height > width;
+  if (portrait && layout !== 'cinematic') return socialZoneRect(zone, width, height);
   const unit = Math.min(width, height) / 1080;
   const insetX = Math.max(72 * unit, width * 0.06);
   const insetY = Math.max(72 * unit, height * 0.07);
-  const portrait = height > width;
   switch (zone) {
     case 'none': return null;
     case 'center':
@@ -320,6 +352,7 @@ export function createLyricType(mv = globalThis.PORTOS_MV, options = {}) {
     overrides: options.overrides,
   });
   const sectionRoles = options.sectionRoles || {};
+  const lyricLayout = options.lyricLayout || mv?.project?.lyricLayout || 'social';
   const timed = source.map((line, index) => {
     const words = wordsForLine(line, songWords);
     if (!words.length) return null;
@@ -428,7 +461,7 @@ export function createLyricType(mv = globalThis.PORTOS_MV, options = {}) {
 
   /** Layout of a line in its zone: rows of words with x/y, font size (pure given measure). */
   function layout(line, width, height, measure) {
-    const rect = zoneRect(line.zone, width, height);
+    const rect = zoneRect(line.zone, width, height, { layout: lyricLayout });
     if (!rect) return null;
     const unit = Math.min(width, height) / 1080;
     const floor = (line.role === 'data' ? 40 : T.minPx) * unit;
@@ -468,7 +501,26 @@ export function createLyricType(mv = globalThis.PORTOS_MV, options = {}) {
         x += widths[k];
       });
     });
-    return { rect, px, rows: rows.length, words: placed };
+    // At the legibility floor a line can still overflow its box: a single word wider than the box
+    // or more rows than it is tall. The shrink above stops there, so say so instead of drawing over the band.
+    const widest = Math.max(0, ...rows.map((row) => row.reduce((w, item) => w + measure(`${item.text} `, fontFor(line.role, px)), 0) - measure(' ', fontFor(line.role, px))));
+    const fits = blockH <= rect.h + 1e-6 && widest <= rect.w + 1e-6;
+    return { rect, px, rows: rows.length, words: placed, fits };
+  }
+
+  /**
+   * The lines in the social-safe band that cannot fit it, as `{ startSec, endSec, text }`, optionally
+   * only those showing in [window.startSec, window.endSec). Empty on any frame that keeps the framed insets.
+   */
+  function unfit(ctx, { width = ctx.canvas?.width, height = ctx.canvas?.height, startSec = -Infinity, endSec = Infinity } = {}) {
+    const measure = (str, font) => { ctx.font = font; return ctx.measureText(str).width; };
+    return lines.filter((line) => {
+      const from = line.words[0].startSec;
+      const until = line.words[line.words.length - 1].endSec ?? from;
+      if (!(from < endSec && until > startSec)) return false;
+      const placed = layout(line, width, height, measure);
+      return !!placed?.rect.social && !placed.fits;
+    }).map((line) => ({ startSec: line.words[0].startSec, endSec: line.words[line.words.length - 1].endSec ?? line.words[0].startSec, text: line.text }));
   }
 
   function boilOffset(seed, t, unit) {
@@ -554,8 +606,8 @@ export function createLyricType(mv = globalThis.PORTOS_MV, options = {}) {
     ? Promise.all(faces.map((face) => document.fonts.load(face))).then(() => true)
     : Promise.resolve(true);
 
-  return { lines, linesAt, wordStates, layout, draw, ready, palette, fonts };
+  return { lines, linesAt, wordStates, layout, unfit, draw, ready, palette, fonts };
 }
 
 // Classic-script templates (the layered engine) reach the module through this global.
-if (typeof globalThis !== 'undefined') globalThis.PORTOS_LYRIC_TYPE = { createLyricType, zoneRect, LYRIC_ROLES, TEXT_ZONES, LYRIC_FIT, LYRIC_SIZE_SCALE };
+if (typeof globalThis !== 'undefined') globalThis.PORTOS_LYRIC_TYPE = { createLyricType, zoneRect, SOCIAL_SAFE, LYRIC_ROLES, TEXT_ZONES, LYRIC_FIT, LYRIC_SIZE_SCALE };

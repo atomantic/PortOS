@@ -20,7 +20,10 @@ export default function SentPromptPanel({
   const asWritten = !additions.length && !sentNegativePrompt && sentPrompt.trim() === (prompt || '').trim();
   if (asWritten) return <p className="text-[11px] text-gray-500">{asWrittenText}</p>;
 
-  const fullText = sentNegativePrompt ? `${sentPrompt}\n\nNegative prompt: ${sentNegativePrompt}` : sentPrompt;
+  const base = sentNegativePrompt ? `${sentPrompt}\n\nNegative prompt: ${sentNegativePrompt}` : sentPrompt;
+  // A request setting (not prose) travels with the copied text so the copy matches the request.
+  const expansion = additions.find((addition) => addition.id === 'prompt-expansion');
+  const fullText = expansion ? `${base}\n\n${expansion.text}` : base;
   const opened = additions.find((addition) => addition.id === openChip);
 
   return (

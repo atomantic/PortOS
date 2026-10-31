@@ -26,6 +26,7 @@ import { createProject as createCDProject, setTreatment as setCDTreatment } from
 import { requestCreativeDirectorProjectStart } from '../creativeDirector/projectStartSink.js';
 import { getDefaultVideoModelId, getVideoModels } from '../../lib/mediaModels.js';
 import { buildPlaceByKey } from '../../lib/scenePrompt.js';
+import { appendPreviousShotNote } from '../../lib/previousShotNote.js';
 import { getSettings } from '../settings.js';
 import { codedError } from '../../lib/codedError.js';
 
@@ -52,23 +53,28 @@ function buildCdScene({ sceneId, intent, prompt, durationSecondsRaw, useContinua
   };
 }
 
-// Map one storyboard scene's shots[] to N CD scenes. Within-scene shots chain
-// by default (natural i2v continuation); the LLM can also flag an explicit
-// continuity ref to chain across a scene boundary (deliberate match cut).
+// Map one storyboard scene's shots[] to N CD scenes. A shot is a new angle, so
+// it starts from its own plate; it chains from the prior last frame only when
+// the storyboard says so (continuityFromShotId or handoff: 'continue'). A fresh
+// later shot carries the prior shot's ending as one prompt sentence instead.
 function expandShotsToCdScenes(scene, sceneIdx, shortIssueId, baselinePrompt) {
   const shots = Array.isArray(scene.shots) ? scene.shots : [];
   return shots.map((shot, sIdx) => {
     const description = (shot.description || '').trim() || scene.description;
-    const chainsWithinScene = sIdx > 0;
-    const explicitContinuity = !!shot.continuityFromShotId;
+    const chains = !!shot.continuityFromShotId || shot.handoff === 'continue';
+    const basePrompt = baselinePrompt(description, scene.slugline);
+    const previous = sIdx > 0 ? shots[sIdx - 1] : null;
+    const prompt = chains || !previous
+      ? basePrompt
+      : appendPreviousShotNote(basePrompt, previous.description || scene.description, { maxLength: 8000 });
     return buildCdScene({
       sceneId: `iss-${shortIssueId}-s${sceneIdx + 1}-sh${sIdx + 1}`,
       intent: scene.slugline
         ? `${scene.slugline} — shot ${sIdx + 1}`
         : `Scene ${sceneIdx + 1} Shot ${sIdx + 1}`,
-      prompt: baselinePrompt(description, scene.slugline),
+      prompt,
       durationSecondsRaw: shot.durationSeconds,
-      useContinuationFromPrior: chainsWithinScene || explicitContinuity,
+      useContinuationFromPrior: chains,
     });
   });
 }
@@ -76,8 +82,8 @@ function expandShotsToCdScenes(scene, sceneIdx, shortIssueId, baselinePrompt) {
 /**
  * Build the CD treatment from a pipeline issue's storyboards stage. The
  * mapping rules:
- *   - Scene with shots[] → N CD scenes (one per shot); shots chain within
- *     the scene, the first shot of each scene starts a fresh angle.
+ *   - Scene with shots[] → N CD scenes (one per shot); every shot starts a
+ *     fresh angle unless it sets continuityFromShotId / handoff: 'continue'.
  *   - Scene without shots[] → one CD scene (legacy behavior); subsequent
  *     legacy scenes chain via useContinuationFromPrior=true.
  *

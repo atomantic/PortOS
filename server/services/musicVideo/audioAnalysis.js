@@ -38,6 +38,10 @@ import {
   estimateTempo,
   fitBeats,
   pickDownbeats,
+  measureBeatGrid,
+  stereoPhaseCancellation,
+  decideBeatGrid,
+  PHASE_PROBE_SEC,
 } from '../../lib/audioBeatDsp.js';
 
 // Re-exported so existing callers/tests keep one import point for the shared
@@ -190,7 +194,8 @@ function deriveSections(samples, sampleRate, hop) {
 
 // Persisted audioAnalysis shape version. A cached analysis without `version`
 // predates the feature track (implicitly 1) and reads as "features not analyzed".
-export const ANALYSIS_VERSION = 2;
+// 3 adds the beat-grid trust fields (beatContrast, beatSpread, phaseCancellation, gridDecision, gridReason).
+export const ANALYSIS_VERSION = 3;
 
 export const FEATURE_ENVELOPE_FPS = 30;
 export const FEATURE_BANDS = Object.freeze({
@@ -349,18 +354,26 @@ function computeSongFeatures(samples, sampleRate, { truncatedAtSec = null } = {}
 }
 
 
+// Beat-grid trust fields for an analysis with no automatic grid to judge.
+const NO_GRID_TRUST = Object.freeze({
+  beatContrast: null, beatSpread: null, phaseCancellation: false, gridDecision: null, gridReason: null,
+});
+// A director-set tempo is never second-guessed by the automatic gate.
+const MANUAL_GRID_TRUST = Object.freeze({ ...NO_GRID_TRUST, gridDecision: 'use' });
+
 /**
  * Pure DSP core: analyze a mono PCM buffer and return the `audioAnalysis`
  * shape. Deterministic and ffmpeg-free, so it is unit-tested directly.
  *
  * @param {Float32Array} samples mono PCM
  * @param {number} sampleRate
- * @param {{ hop?: number, truncatedAtSec?: number|null }} [opts]
+ * @param {{ hop?: number, truncatedAtSec?: number|null, phaseCancellation?: boolean }} [opts]
+ *   `phaseCancellation` comes from the stereo probe (`analyzeAudioFile`); the mono buffer cannot reveal it.
  * @returns {{ version: number, features: object|null, bpm: number|null, beats: number[], downbeats: number[], waveform: number[],
  *   sections: Array<{label:string,startSec:number,endSec:number,energy:number}>,
  *   durationSec: number }}
  */
-export function analyzePcm(samples, sampleRate, { hop = ONSET_HOP, truncatedAtSec = null } = {}) {
+export function analyzePcm(samples, sampleRate, { hop = ONSET_HOP, truncatedAtSec = null, phaseCancellation = false } = {}) {
   const durationSec = samples?.length ? samples.length / sampleRate : 0;
   const roundedDuration = Number(durationSec.toFixed(3));
   const { sections, waveform, onset, fps } = deriveSections(samples, sampleRate, hop);
@@ -377,6 +390,7 @@ export function analyzePcm(samples, sampleRate, { hop = ONSET_HOP, truncatedAtSe
       tempoSource: null,
       tempoConfidence: null,
       tempoWindow: null,
+      ...NO_GRID_TRUST,
     };
   }
 
@@ -384,6 +398,16 @@ export function analyzePcm(samples, sampleRate, { hop = ONSET_HOP, truncatedAtSe
   const roundedBpm = bpm == null ? null : Number(bpm.toFixed(2));
   const beats = roundedBpm == null ? [] : fitBeats(onset, fps, bpm, durationSec);
   const downbeats = roundedBpm == null ? [] : pickDownbeats(beats, onset, fps);
+  const tempoConfidence = confidence == null ? null : Number(Math.max(0, Math.min(1, confidence)).toFixed(3));
+  // A windowed tempo only describes its window; beats elsewhere (an ambient
+  // intro) carry no accents and would drag the measurements down.
+  const measured = window ? beats.filter((t) => t >= window.startSec && t <= window.endSec) : beats;
+  const quality = measureBeatGrid(onset, fps, measured);
+  const trust = {
+    ...quality,
+    phaseCancellation: !!phaseCancellation,
+    ...decideBeatGrid({ tempoSource: source, hasBeats: beats.length > 0, tempoConfidence, ...quality, phaseCancellation }),
+  };
   return {
     version: ANALYSIS_VERSION,
     features: computeSongFeatures(samples, sampleRate, { truncatedAtSec }),
@@ -394,10 +418,11 @@ export function analyzePcm(samples, sampleRate, { hop = ONSET_HOP, truncatedAtSe
     sections,
     durationSec: roundedDuration,
     tempoSource: source,
-    tempoConfidence: confidence == null ? null : Number(Math.max(0, Math.min(1, confidence)).toFixed(3)),
+    tempoConfidence,
     tempoWindow: window
       ? { startSec: Number(window.startSec.toFixed(3)), endSec: Number(Math.min(durationSec, window.endSec).toFixed(3)) }
       : null,
+    ...trust,
   };
 }
 
@@ -420,7 +445,12 @@ const truncatedAtSecFor = ({ samples, sampleRate }) => {
 export async function analyzeAudioFile(audioPath, { signal } = {}) {
   const decoded = await decodeAudioToPcm(audioPath, { signal });
   if (!decoded) return null;
-  return analyzePcm(decoded.samples, decoded.sampleRate, { truncatedAtSec: truncatedAtSecFor(decoded) });
+  // A short stereo probe, because the mono mix below cannot show cancellation.
+  const probe = await decodeAudioToPcm(audioPath, { signal, maxDurationSec: PHASE_PROBE_SEC, channels: 2 });
+  return analyzePcm(decoded.samples, decoded.sampleRate, {
+    truncatedAtSec: truncatedAtSecFor(decoded),
+    phaseCancellation: probe ? stereoPhaseCancellation(probe.samples) : false,
+  });
 }
 
 // Manual-tempo fallback (see `estimateTempo`'s TEMPO_PEAK_MIN/MIN_BPM/MAX_BPM
@@ -463,6 +493,7 @@ export function buildManualAnalysisFromCached({ sections, durationSec, waveform 
     tempoSource: 'manual',
     tempoConfidence: null,
     tempoWindow: null,
+    ...MANUAL_GRID_TRUST,
   };
 }
 
@@ -493,6 +524,7 @@ export function buildManualAnalysis(samples, sampleRate, { bpm, offsetSec = 0, h
     tempoSource: 'manual',
     tempoConfidence: null,
     tempoWindow: null,
+    ...MANUAL_GRID_TRUST,
   };
 }
 

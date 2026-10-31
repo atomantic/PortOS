@@ -412,6 +412,20 @@ export function describeFalVideoRate(modelId, resolution) {
   return `$${perSec}/s${res ? ` at ${res}` : ''}${long ? ` (×${long.factor} over ${long.overSec}s)` : ''}${min}`;
 }
 
+const PROMPT_EXPANSION_MODES = ['disabled', 'balanced'];
+
+/** The `promptExpansion` override a model can take (it has a fixed `prompt_expansion_mode`), else null. */
+export const falPromptExpansionMode = (model, promptExpansion) => (
+  PROMPT_EXPANSION_MODES.includes(promptExpansion) && model?.fixed && 'prompt_expansion_mode' in model.fixed
+    ? promptExpansion : null);
+
+/** The labeled prompt addition naming the expansion mode a request sends. */
+export const falPromptExpansionAddition = (mode) => (mode ? {
+  id: 'prompt-expansion',
+  label: 'Prompt expansion',
+  text: `Prompt expansion: ${mode}${mode === 'disabled' ? ' (the provider sends the prompt unchanged)' : ''}`,
+} : null);
+
 /**
  * Build the fal queue request body for a curated model, or return null for an
  * uncurated id (the caller keeps its legacy body). Returns `{ body, model,
@@ -430,7 +444,7 @@ export function describeFalVideoRate(modelId, resolution) {
 export function buildFalVideoRequest({
   modelId, prompt = '', negativePrompt = '', seconds, audioSec, aspectRatio, width, height, resolution,
   imageUrl = null, endImageUrl = null, referenceImageUrls = [], audioUrl = null, referenceAudioUrls = [],
-  generateAudio = false, enableTranscription = false, seed,
+  generateAudio = false, enableTranscription = false, seed, promptExpansion,
 } = {}) {
   const model = getFalVideoModel(modelId);
   if (!model) return null;
@@ -493,6 +507,9 @@ export function buildFalVideoRequest({
   if (model.audio) body[model.audio.param] = wantsAudio;
   if (model.seed && Number.isInteger(seed) && seed >= 0) body[model.seed] = seed;
   Object.assign(body, model.fixed || {});
+  // A caller that must send its prose unchanged (a music-video shot) overrides the model's default after the fixed assign.
+  const expansion = falPromptExpansionMode(model, promptExpansion);
+  if (expansion) body.prompt_expansion_mode = expansion;
 
   return {
     body,

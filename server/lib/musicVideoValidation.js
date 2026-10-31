@@ -759,6 +759,7 @@ const sceneLayerFields = {
 // routes edit it (never the generic project PATCH) so every write carries the
 // revision it was based on. See services/musicVideo/treatment.js.
 export const MUSIC_VIDEO_ASPECT_RATIOS = ['16:9', '9:16', '1:1', '4:5', '2.39:1'];
+export const MUSIC_VIDEO_LYRIC_LAYOUTS = ['social', 'cinematic'];
 export const MUSIC_VIDEO_BEAT_ROLES = ['opening', 'build', 'contrast', 'payoff', 'release'];
 // Treatment shot categories (the arc's balance axis). Distinct from the scene's
 // render-facing `shotMode` (#8977: cutaway | performance) — Apply maps a
@@ -784,6 +785,7 @@ export const musicVideoTreatmentBriefSchema = z.object({
   audience: z.string().max(500).optional(),
   destination: z.string().max(200).optional(),
   aspectRatio: z.enum(MUSIC_VIDEO_ASPECT_RATIOS).nullable().optional(),
+  lyricLayout: z.enum(MUSIC_VIDEO_LYRIC_LAYOUTS).nullable().optional(),
   emotion: z.string().max(500).optional(),
   premise: z.string().max(2000).optional(),
   hookObjective: z.string().max(1000).optional(),
@@ -1900,6 +1902,13 @@ export const musicVideoAudioAnalysisSchema = z.object({
     startSec: z.number().min(0),
     endSec: z.number().min(0),
   }).nullable().optional(),
+  // Beat-grid trust (#14240). `gridDecision: 'ignore'` stops the automatic grid
+  // from snapping cuts; `gridReason` is shown beside the manual BPM control.
+  beatContrast: z.number().min(0).nullable().optional(),
+  beatSpread: z.number().min(0).nullable().optional(),
+  phaseCancellation: z.boolean().optional(),
+  gridDecision: z.enum(['use', 'ignore']).nullable().optional(),
+  gridReason: z.string().max(200).nullable().optional(),
 }).strict();
 
 export const musicVideoPerformanceRepairSchema = z.object({

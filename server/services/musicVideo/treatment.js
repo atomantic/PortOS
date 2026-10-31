@@ -47,6 +47,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { trimTo, isNonBlankStr } from '../../lib/textUtils.js';
 import {
   MUSIC_VIDEO_ASPECT_RATIOS as ASPECT_RATIOS,
+  MUSIC_VIDEO_LYRIC_LAYOUTS as LYRIC_LAYOUTS,
   MUSIC_VIDEO_BEAT_ROLES as BEAT_ROLES,
   MUSIC_VIDEO_TREATMENT_SHOT_MODES as SHOT_MODES,
   MUSIC_VIDEO_SHOT_ROUTES as SHOT_ROUTES,
@@ -108,6 +109,7 @@ export function normalizeBrief(patch, base = null, now = new Date().toISOString(
     audience: text(merged.audience, 500),
     destination: text(merged.destination, 200),
     aspectRatio: pick(merged.aspectRatio, ASPECT_RATIOS, null),
+    lyricLayout: pick(merged.lyricLayout, LYRIC_LAYOUTS, null),
     emotion: text(merged.emotion, 500),
     premise: text(merged.premise, 2000),
     hookObjective: text(merged.hookObjective, 1000),

@@ -582,6 +582,30 @@ Here is my answer:
     expect(prompt).toMatch(/whispered lines play as intimate close-ups/);
   });
 
+  // Uniquely catches a section edge snapped onto an automatic grid the analysis refused to trust (#14240),
+  // and a manual tempo losing the snap.
+  it.each([
+    ['ignored automatic grid', 'ignore', 10.3, false],
+    ['trusted or manual grid', 'use', 10.5, true],
+  ])('plans against a %s', async (_name, gridDecision, secondStart, aligned) => {
+    getProject.mockResolvedValue(makeProject({
+      audioAnalysis: {
+        bpm: 120, beats: BEATS, downbeats: DOWNBEATS, durationSec: 30, gridDecision,
+        sections: [
+          { label: 'A', startSec: 0, endSec: 10.3, energy: 0.2 },
+          { label: 'B', startSec: 10.3, endSec: 30, energy: 0.9 },
+        ],
+      },
+    }));
+    addProjectScenes.mockResolvedValue(freshProjectResult());
+
+    await planProject('mv-1', { seedPrompts: false });
+
+    const seededInputs = addProjectScenes.mock.calls[0][1];
+    expect(seededInputs.find((i) => i.sectionIndex === 1).startSec).toBe(secondStart);
+    expect(seededInputs.every((i) => i.beatAligned === aligned)).toBe(true);
+  });
+
   it('still honors the planned spans when the cached analysis has no beat grid', async () => {
     getProject.mockResolvedValue(makeProject({
       audioAnalysis: { bpm: null, beats: [], downbeats: [], sections: SECTIONS, durationSec: 30 },

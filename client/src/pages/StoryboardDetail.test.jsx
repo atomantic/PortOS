@@ -14,6 +14,8 @@ const api = vi.hoisted(() => ({
   updateStoryboardPanel: vi.fn(),
   addStoryboardPanelTake: vi.fn(),
   createBlankSketch: vi.fn(),
+  getMediaSketch: vi.fn(),
+  saveMediaSketch: vi.fn(),
   runStoryboardPanelNode: vi.fn(),
   correctStoryboardPanel: vi.fn(),
   drawStoryboardPanel: vi.fn(),
@@ -134,39 +136,33 @@ describe('StoryboardDetail', () => {
     expect(screen.queryByRole('button', { name: /Make video/ })).toBeNull();
   });
 
-  it('corrects the selected frame with a note, linking to markup that returns to the open form', async () => {
+  // Uniquely catches drawing on a frame leaving the panel (or starting a blank sketch), or the marks not
+  // being saved as the frame's markup before the correction runs.
+  it('draws on the selected frame in place, then saves the marks and redraws with the note', async () => {
     const framed = board({ beats: [{ ...board().beats[0], panels: [panel('panel-1', {
       takes: [{ id: 'take-1', source: 'generated', image: 'frame-a.png' }], selectedTakeId: 'take-1',
     })] }] });
     api.getStoryboard.mockResolvedValue(framed);
+    api.getMediaSketch.mockResolvedValue({ sketch: null });
+    api.saveMediaSketch.mockResolvedValue({ sketch: {} });
     api.correctStoryboardPanel.mockResolvedValue({ ...framed, updatedAt: '2026-10-22T00:00:02.000Z' });
     renderAt('/storyboards/sb-1/panel/panel-1');
 
-    expect(await screen.findByRole('button', { name: 'Draw on frame' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Sketch' })).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'Describe a change' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Draw on frame' }));
     await waitFor(() => expect(screen.getByTestId('location').textContent).toBe('/storyboards/sb-1/panel/panel-1?correct=open'));
-    expect(screen.getByRole('link', { name: /Edit markup/ }).getAttribute('href'))
-      .toBe(`/media/annotate/image%3Aframe-a.png?returnTo=${encodeURIComponent('/storyboards/sb-1/panel/panel-1?correct=open')}`);
+    expect(api.createBlankSketch).not.toHaveBeenCalled();
+    expect(api.getMediaSketch).toHaveBeenCalledWith('image:frame-a.png', { silent: true });
+    fireEvent.load(screen.getByAltText('Media being annotated'));
+    expect(screen.getByRole('toolbar', { name: 'Drawing tools' })).toBeInTheDocument();
     const redraw = screen.getByRole('button', { name: 'Redraw' });
     expect(redraw).toBeDisabled();
     fireEvent.change(screen.getByLabelText('What to change'), { target: { value: 'Move her to the left third' } });
     fireEvent.click(redraw);
     await waitFor(() => expect(api.correctStoryboardPanel).toHaveBeenCalledWith('sb-1', 'panel-1', { takeId: 'take-1', note: 'Move her to the left third' }));
+    expect(api.saveMediaSketch).toHaveBeenCalledWith('image:frame-a.png', expect.objectContaining({ strokes: [] }));
+    expect(api.saveMediaSketch.mock.invocationCallOrder[0]).toBeLessThan(api.correctStoryboardPanel.mock.invocationCallOrder[0]);
     await waitFor(() => expect(screen.getByTestId('location').textContent).toBe('/storyboards/sb-1/panel/panel-1'));
-  });
-
-  // Uniquely catches drawing on a framed panel starting a blank sketch instead of marking up its frame.
-  it('draws on the selected frame and returns to the open correction form', async () => {
-    api.getStoryboard.mockResolvedValue(board({ beats: [{ ...board().beats[0], panels: [panel('panel-1', {
-      takes: [{ id: 'take-1', source: 'generated', image: 'frame-a.png' }], selectedTakeId: 'take-1',
-    })] }] }));
-    renderAt('/storyboards/sb-1/panel/panel-1?tab=shot');
-
-    fireEvent.click(await screen.findByRole('button', { name: 'Draw on frame' }));
-    await waitFor(() => expect(screen.getByTestId('location').textContent)
-      .toBe(`/media/annotate/image%3Aframe-a.png?returnTo=${encodeURIComponent('/storyboards/sb-1/panel/panel-1?tab=shot&correct=open')}`));
-    expect(api.createBlankSketch).not.toHaveBeenCalled();
   });
 
   it('changes the board\'s art style', async () => {

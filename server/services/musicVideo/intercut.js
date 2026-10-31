@@ -31,6 +31,8 @@ import { cueWordOnsets, hookKey, hookLines } from './hookTypography.js';
 const EPS = 1e-6;
 const MIN_PIECE_SEC = 0.4;
 const WORD_SNAP_SEC = 0.08;
+// Pacing period when the analysis grid is ignored and no tempo is trusted.
+const IGNORED_GRID_PERIOD_SEC = 0.5;
 // Energy rank (0 = quietest section, 1 = loudest) → shot length in beats.
 const TIERS = Object.freeze([[0.75, 2], [0.4, 3], [0.15, 4], [0, 8]]);
 
@@ -197,16 +199,19 @@ function sliceClip(clip, offset, length) {
  * order). `scenes` supply each clip's shot mode; `sections` (with `energy`),
  * `beats`/`bpm` and sung `words` (`[{ startSec }]`) drive the pacing.
  * Returns a new clip list; the input is returned as-is when there is no beat
- * grid to cut on.
+ * grid to cut on. `gridDecision: 'ignore'` (#14240) drops an untrustworthy
+ * beat grid: pacing still follows section energy and sung words at the
+ * analysis tempo (else a 120 BPM default), but no cut is placed on a beat.
  */
-export function intercutClips(clips, { scenes = [], sections = [], beats = [], bpm = null, words = [], lyricCues = [], graphicCards = false, accentColor = null, lockedSceneIds = [], loudTierEverywhere = false } = {}) {
+export function intercutClips(clips, { scenes = [], sections = [], beats = [], bpm = null, gridDecision = null, words = [], lyricCues = [], graphicCards = false, accentColor = null, lockedSceneIds = [], loudTierEverywhere = false } = {}) {
   const locked = new Set(lockedSceneIds);
   const list = Array.isArray(clips) ? clips : [];
-  const grid = (Array.isArray(beats) ? beats : []).filter(finite).sort((a, b) => a - b);
-  const period = beatPeriod(bpm, grid);
+  const gridIgnored = gridDecision === 'ignore';
+  const grid = gridIgnored ? [] : (Array.isArray(beats) ? beats : []).filter(finite).sort((a, b) => a - b);
+  const period = gridIgnored ? (finite(bpm) && bpm > 0 ? 60 / bpm : IGNORED_GRID_PERIOD_SEC) : beatPeriod(bpm, grid);
   // The beat-graphic medium (#14244) cuts every section on the loud tier.
   const ranked = sectionRanks(Array.isArray(sections) ? sections : []).map((s) => (loudTierEverywhere ? { ...s, rank: 1 } : s));
-  if (!period || !grid.length || !ranked.length || !list.length) return list;
+  if (!period || (!grid.length && !gridIgnored) || !ranked.length || !list.length) return list;
   const halfGrid = [];
   for (let i = 0; i < grid.length; i += 1) {
     halfGrid.push(grid[i]);

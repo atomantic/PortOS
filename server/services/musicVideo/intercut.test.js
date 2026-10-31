@@ -95,6 +95,20 @@ describe('intercutClips (#9290)', () => {
     expect(out[0].outSec - out[0].inSec).toBeCloseTo(1.13, 2);
   });
 
+  // Uniquely catches intercut cutting on beats of a grid the analysis refused to trust (#14240).
+  it('keeps energy pacing but cuts off the beat when the grid is ignored', () => {
+    const offBeat = beats.map((b) => b + 0.13); // an untrusted grid whose beats sit off the real accents
+    const one = [footage('a', 0, 12, 12), footage('b', 0, 4, 10)];
+    const loud = [{ startSec: 0, endSec: 12, energy: 1 }, { startSec: 12, endSec: 16, energy: 0 }];
+    const trusted = intercutClips(one, { scenes: [], sections: loud, beats: offBeat, bpm, gridDecision: 'use' });
+    const ignored = intercutClips(one, { scenes: [], sections: loud, beats: offBeat, bpm, gridDecision: 'ignore' });
+    const cutTimesOf = (list) => list.slice(0, -1).map((_, i) => spanOf(list.slice(0, i + 1)));
+    expect(cutTimesOf(trusted).some((t) => Math.abs((t - 0.13) / 0.25 - Math.round((t - 0.13) / 0.25)) < 1e-6)).toBe(true);
+    expect(ignored.length).toBeGreaterThan(2);
+    expect(spanOf(ignored)).toBeCloseTo(spanOf(one), 2);
+    expect(cutTimesOf(ignored).every((t) => Math.abs((t - 0.13) / 0.25 - Math.round((t - 0.13) / 0.25)) > 1e-6)).toBe(true);
+  });
+
   it('passes cards through, and does nothing without a beat grid', () => {
     const card = { sceneId: 'card', layer: 'card', inSec: 0, outSec: 12, duration: 12, cardText: 'X', cardColor: '#000000' };
     expect(intercutClips([card], { scenes, sections, beats, bpm })).toEqual([card]);

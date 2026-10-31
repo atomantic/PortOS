@@ -107,6 +107,7 @@ const queue = {
 };
 const dispatch = vi.fn();
 const reviewPlate = vi.fn();
+const reviewPlateStrip = vi.fn();
 const resolvePlateReviewer = vi.fn();
 const planProject = vi.fn();
 const startCastAndSets = vi.fn();
@@ -219,6 +220,10 @@ beforeEach(() => {
     await beforeExecute();
     return plateReviewEvidence(scene, assetId, runId, JSON.stringify({ checks: plateRequirements(scene).map(({ id }) => ({ id, status: 'pass', note: 'Visible starting state' })) }));
   });
+  reviewPlateStrip.mockImplementation(async ({ strip, beforeExecute }) => {
+    await beforeExecute();
+    return { findings: strip.slice(1).map((scene) => ({ sceneId: scene.sceneId, verdict: 'pass', note: 'Matches the previous frame' })), providerId: 'reviewer-example', model: 'vision-example' };
+  });
   planProject.mockResolvedValue({ scenesAdded: 0 });
   startAutoReview.mockImplementation(async (projectId, input) => {
     const pilot = input.productionPilotSceneId;
@@ -231,7 +236,7 @@ beforeEach(() => {
   });
   service.__setProductionDepsForTests({
     loadEnv: async () => env,
-    reviewPlate, resolvePlateReviewer,
+    reviewPlate, reviewPlateStrip, resolvePlateReviewer,
     dispatch,
     queue: async () => queue,
     planProject,
@@ -1259,6 +1264,54 @@ describe('authored plate preflight', () => {
     await settle();
     expect(theRun()).toMatchObject({ status: 'canceled', usage: { generations: 1 } });
     expect(dispatch).not.toHaveBeenCalled();
+  });
+});
+
+describe('adjacent plate preflight (#14242)', () => {
+  const contract = { version: 1, purpose: 'A shot', actions: [{ startSec: 0, endSec: 2, subject: 'Person A', description: 'walks' }], reactions: [] };
+  // 'camera' and 'cutaway' are separate pilot classes, so neither clip waits behind the other's pilot.
+  const camera = { actionContract: { ...contract, cameraConstraints: ['static frame'] } };
+  const shot = (sceneId, i, extra = {}) => ({ sceneId, label: sceneId, startSec: i * 4, endSec: i * 4 + 4, framePrompt: 'frame', prompt: 'motion', referenceImageId: `${sceneId}.png`,
+    direction: { actionContract: contract }, takes: [{ takeId: `take-${sceneId}`, kind: 'image', assetId: `${sceneId}.png`, status: 'candidate' }], ...extra });
+  const clipScenes = () => dispatch.mock.calls.filter(([args]) => args.stepKind === 'clip').map(([args]) => args.scene.sceneId);
+
+  it('fails the later scene that flips screen side and reserves no video step for it', async () => {
+    seedProject({ scenes: [shot('mvs-a', 0, { direction: camera }), shot('mvs-b', 1)] });
+    reviewPlateStrip.mockImplementation(async ({ strip }) => ({ findings: strip.slice(1).map((scene) => ({ sceneId: scene.sceneId, verdict: 'fail', note: 'Person A moved from screen left to screen right' })), providerId: 'reviewer-example', model: 'vision-example' }));
+    await start();
+    expect(reviewPlateStrip).toHaveBeenCalledTimes(1);
+    expect(clipScenes()).toEqual(['mvs-a']);
+    expect(dispatch.mock.calls.map(([args]) => `${args.stepKind}:${args.scene.sceneId}`)).toContain('frame:mvs-b');
+    expect(current().scenes[1].takes[0].plateEvidence.adjacency).toMatchObject({ verdict: 'fail', key: 'mvs-a.png>mvs-b.png' });
+  });
+
+  it('stops a scene whose repaired plate disagrees again, and never repairs twice', async () => {
+    seedProject({ scenes: [shot('mvs-a', 0, { direction: camera }), shot('mvs-b', 1)] });
+    reviewPlateStrip.mockImplementation(async ({ strip }) => ({ findings: strip.slice(1).map((scene) => ({ sceneId: scene.sceneId, verdict: 'fail', note: 'Wardrobe changed' })), providerId: 'reviewer-example', model: 'vision-example' }));
+    await start();
+    await completeJobThroughHook('job-2');
+    await settle();
+    expect(reviewPlateStrip).toHaveBeenCalledTimes(2);
+    expect(dispatch.mock.calls.filter(([args]) => args.stepKind === 'frame')).toHaveLength(1);
+    expect(clipScenes()).not.toContain('mvs-b');
+    expect(theRun().status).toBe('blocked');
+  });
+
+  it('ignores a code shot between two footage shots and compares their frames directly', async () => {
+    seedProject({
+      treatment: { shotDirections: [{ sceneId: 'mvs-code', medium: 'code' }] },
+      scenes: [shot('mvs-a', 0), shot('mvs-code', 1), shot('mvs-c', 2)],
+    });
+    await start();
+    expect(reviewPlateStrip).toHaveBeenCalledTimes(1);
+    expect(reviewPlateStrip.mock.calls[0][0].strip.map((scene) => scene.sceneId)).toEqual(['mvs-a', 'mvs-c']);
+  });
+
+  it('makes no strip call for a single-scene run', async () => {
+    seedProject({ scenes: [shot('mvs-a', 0)] });
+    await start();
+    expect(reviewPlateStrip).not.toHaveBeenCalled();
+    expect(clipScenes()).toEqual(['mvs-a']);
   });
 });
 

@@ -38,7 +38,7 @@ vi.mock('../videoGen/local.js', () => ({ defaultVideoModelId: () => 'ltxv-defaul
 const local = await import('./local.js');
 const { createWork, updateWork, getWork } = local;
 const {
-  suggestContinuation, reserveRenderPreview, suggestCdBridge, sendToCreativeDirector,
+  suggestContinuation, reserveRenderPreview, suggestCdBridge, sendToCreativeDirector, bridgeScenesToTreatmentScenes, shapeProposal,
   ERR_LIVE_MODE_OFF, ERR_BUDGET_EXCEEDED,
 } = await import('./liveDirector.js');
 
@@ -340,6 +340,20 @@ describe('sendToCreativeDirector', () => {
     ],
   };
 
+  liveDirectorTest('chains a scene only when the proposal sets continueFromPrior: true', () => {
+    const scenes = bridgeScenesToTreatmentScenes([
+      { intent: 'a', prompt: 'Wide shot', durationSeconds: 5 },
+      { intent: 'b', prompt: 'Push in', durationSeconds: 5, continueFromPrior: true },
+      { intent: 'c', prompt: 'Cutaway', durationSeconds: 5 },
+    ]);
+    expect(scenes.map((s) => s.useContinuationFromPrior)).toEqual([false, true, false]);
+    expect(scenes[1].prompt).toBe('Push in');
+    expect(scenes[2].prompt).toContain('Previous shot ended with: Push in.');
+    expect(shapeProposal({ logline: 'l', synopsis: 's', scenes: [
+      { intent: 'a', prompt: 'p' }, { intent: 'b', prompt: 'q', continueFromPrior: true },
+    ] }).scenes[1].continueFromPrior).toBe(true);
+  });
+
   liveDirectorTest('creates a project, seeds the treatment, resets to draft, and records the manifest link', async () => {
     createProject.mockResolvedValue({ id: 'cd-1', collectionId: 'col-1' });
     setTreatment.mockImplementation(async (id, treatment) => ({ id, treatment, status: 'rendering' }));
@@ -355,7 +369,9 @@ describe('sendToCreativeDirector', () => {
     // Treatment scenes carry the runtime fields the schema needs.
     const [, treatment] = setTreatment.mock.calls[0];
     expect(treatment.scenes[0]).toMatchObject({ sceneId: 'sc-1', order: 0, useContinuationFromPrior: false });
-    expect(treatment.scenes[1]).toMatchObject({ sceneId: 'sc-2', order: 1, useContinuationFromPrior: true });
+    // Wide -> tracking is a new angle: no chain, and the prompt names how the wide shot ended.
+    expect(treatment.scenes[1]).toMatchObject({ sceneId: 'sc-2', order: 1, useContinuationFromPrior: false });
+    expect(treatment.scenes[1].prompt).toBe('Tracking shot Previous shot ended with: Wide shot.');
     // setTreatment forces 'rendering' but the bridge resets to 'draft' so the
     // user can Start it deliberately — the returned project reflects the reset.
     expect(updateProject).toHaveBeenCalledWith('cd-1', { status: 'draft' });

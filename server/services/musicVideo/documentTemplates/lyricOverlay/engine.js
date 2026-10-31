@@ -38,6 +38,10 @@
     height: H,
     formats: ['1920x1080', '1080x1920', '1080x1080'],
     layout({ width, height }) { resize(width, height); },
+    async lyricFit({ startSec, endSec } = {}) {
+      const lyricType = await ready;
+      return lyricType.unfit(ctx, { width: W, height: H, startSec, endSec });
+    },
     async seek(t) {
       const lyricType = await ready;
       ctx.clearRect(0, 0, W, H);

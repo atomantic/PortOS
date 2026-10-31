@@ -85,7 +85,8 @@ describe('produceVideoFromIssue (#2185)', () => {
     const scenes = mockSetTreatment.mock.calls[0][1].scenes;
     expect(scenes).toHaveLength(2);
     expect(scenes[0]).toMatchObject({ sceneId: 'sc-1', order: 0, useContinuationFromPrior: false });
-    expect(scenes[1]).toMatchObject({ sceneId: 'sc-2', order: 1, useContinuationFromPrior: true });
+    // A new angle starts from its own plate unless the proposal opts in.
+    expect(scenes[1]).toMatchObject({ sceneId: 'sc-2', order: 1, useContinuationFromPrior: false });
 
     // Shared cast/canon + explicit start.
     expect(mockApplyAutoCast).toHaveBeenCalledWith('cd-9', expect.objectContaining({ brief: expect.stringContaining('Noir Nights') }));

@@ -1,4 +1,4 @@
-import { falHearsAudioReference, getFalVideoModel } from '../../lib/falVideoModels.js';
+import { falHearsAudioReference, falPromptExpansionAddition, falPromptExpansionMode, getFalVideoModel } from '../../lib/falVideoModels.js';
 import { falSceneTake, runwaySceneTake } from '../../lib/musicVideoShotTiming.js';
 import { getRunwayVideoModel } from '../../lib/runwayVideoModels.js';
 import { shotActionContractProblem } from '../../../../server/lib/musicVideoActionContract.js';
@@ -55,10 +55,12 @@ export function shotCardRenderRequest({
   const contract = scene?.direction?.actionContract;
   const contractProblem = contract != null ? shotActionContractProblem(contract, scene) : null;
   const authored = authoredShotPrompt(scene);
-  const { prompt, promptAdditions } = musicVideoShotModelInput(contractProblem ? null : project, scene, {
+  const { prompt, promptAdditions: composedAdditions } = musicVideoShotModelInput(contractProblem ? null : project, scene, {
     greybox, authored, asTyped: true, hears, backend: settings.backend, audioReactive,
     audioReferenceModelId: performance && falHearsAudioReference(falModel) ? falModel.id : null,
   });
+  // The server sends music-video fal takes with provider expansion disabled (fal.js).
+  const promptAdditions = [...composedAdditions, falPromptExpansionAddition(falPromptExpansionMode(falModel, 'disabled'))].filter(Boolean);
 
   let endFrame = null;
   if (scene?.endImageId) {
