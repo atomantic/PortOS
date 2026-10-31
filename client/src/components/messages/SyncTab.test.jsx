@@ -178,3 +178,22 @@ describe('SyncTab saved selectors read', () => {
     expect(api.getMessageSelectors).toHaveBeenLastCalledWith({ silent: true });
   });
 });
+
+describe('SyncTab selector save followed by a failed refresh', () => {
+  it('keeps the saved values and editing after the post-save reload fails', async () => {
+    api.getMessageSelectors.mockResolvedValueOnce({ outlook: { inbox: '.old-inbox' } });
+    api.updateMessageSelectors = vi.fn().mockResolvedValue({ inbox: '.new-inbox' });
+    renderTab();
+    expect(await screen.findByText('.old-inbox')).toBeTruthy();
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Edit selectors' })[0]);
+    fireEvent.change(screen.getByDisplayValue('.old-inbox'), { target: { value: '.new-inbox' } });
+    api.getMessageSelectors.mockRejectedValueOnce(new Error('Synthetic reload failure'));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    expect(await screen.findByText('.new-inbox')).toBeTruthy();
+    await waitFor(() => expect(api.getMessageSelectors).toHaveBeenCalledTimes(2));
+    expect(screen.queryByText(/Failed to load saved selectors/)).toBeNull();
+    for (const edit of screen.getAllByRole('button', { name: 'Edit selectors' })) expect(edit).not.toBeDisabled();
+  });
+});

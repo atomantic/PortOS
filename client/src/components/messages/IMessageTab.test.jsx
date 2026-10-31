@@ -126,3 +126,17 @@ describe('IMessageTab — failed list reads', () => {
     expect(screen.getByText(/2 events/)).toBeTruthy();
   });
 });
+
+describe('IMessageTab — failed stats refresh', () => {
+  it('replaces earlier counts with the error instead of showing them as current', async () => {
+    api.getImessageStats.mockResolvedValueOnce({ eventCount: 2, conversationCount: 1, blockedCount: 0 });
+    renderTab();
+    expect(await screen.findByText(/2 events/)).toBeTruthy();
+
+    api.getImessageStats.mockRejectedValueOnce(new Error('Synthetic stats refresh failure'));
+    fireEvent.click(screen.getByRole('button', { name: 'Sync now' }));
+
+    expect(await screen.findByText(/Could not load iMessage stats/)).toBeTruthy();
+    expect(screen.queryByText(/2 events/)).toBeNull();
+  });
+});

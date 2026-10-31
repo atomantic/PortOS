@@ -502,7 +502,6 @@ export default function IMessageTab() {
       settle(api.getImessageConversations({ q: debouncedQ || undefined, silent: true })),
     ]);
     if (!isCurrent()) return;
-    // A failed refresh keeps the last good stats; the error row shows only when none ever loaded.
     if (!statsErr) setStats(statsRes);
     setStatsError(statsErr);
     // Rows from an earlier query would mislabel this one, so a failure clears them
@@ -598,7 +597,9 @@ export default function IMessageTab() {
     loadList();
   };
 
-  const hasMore = stats?.sync?.state?.lastResult?.hasMore;
+  // The latest stats read is authoritative: after a failed refresh, older counts are not shown.
+  const statsReady = Boolean(stats) && !statsError;
+  const hasMore = statsReady && stats.sync?.state?.lastResult?.hasMore;
   const showDetailMobile = !!selectedKey;
 
   // Rendered in both branches so a ?settings=1 deep link opens the drawer
@@ -652,10 +653,10 @@ export default function IMessageTab() {
         </div>
       </div>
 
-      {statsError && !stats && (
+      {statsError && (
         <ListLoadError what="iMessage stats" error={statsError} onRetry={loadList} retrying={listLoading} className="shrink-0" />
       )}
-      {stats && (
+      {statsReady && (
         <div className="flex flex-wrap gap-2 text-xs text-gray-400 shrink-0">
           <span className="rounded border border-port-border bg-port-card px-2 py-1">
             {formatCount(stats?.eventCount, { fallback: '0' })} events
@@ -679,7 +680,7 @@ export default function IMessageTab() {
         </div>
       )}
 
-      {stats?.eventCount === 0 && (
+      {statsReady && stats.eventCount === 0 && (
         <div className="shrink-0 rounded border border-dashed border-port-border px-4 py-3 text-sm text-gray-500">
           Nothing ingested yet. Grant Full Disk Access if needed, then open{' '}
           <button type="button" onClick={openSettings} className="text-port-accent hover:underline">Settings</button>

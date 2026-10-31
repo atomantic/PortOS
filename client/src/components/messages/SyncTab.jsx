@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { RefreshCw, AlertCircle, CheckCircle2, Settings, Globe, Mail, MailOpen } from 'lucide-react';
 import toast from '../ui/Toast';
 import { FormField } from '../ui/FormField';
@@ -44,13 +44,22 @@ export default function SyncTab({ accounts, onRefresh }) {
     ])
   );
 
+  const selectorsRequestRef = useRef(0);
+  const selectorsLoadedRef = useRef(false);
   const fetchSelectors = useCallback(async () => {
+    const requestId = ++selectorsRequestRef.current;
     const data = await api.getMessageSelectors({ silent: true }).catch(() => null);
+    if (requestId !== selectorsRequestRef.current) return;
     if (!data || typeof data !== 'object' || Array.isArray(data)) {
-      setSelectorsState('error');
-      setEditingSelector(null);
+      // Once a read has succeeded, the shown values are saved ones (plus this tab's own
+      // confirmed writes), so a failed refresh does not shut editing.
+      if (!selectorsLoadedRef.current) {
+        setSelectorsState('error');
+        setEditingSelector(null);
+      }
       return;
     }
+    selectorsLoadedRef.current = true;
     setRawSelectors(data);
     setSelectorsState('ready');
   }, []);
@@ -76,6 +85,7 @@ export default function SyncTab({ accounts, onRefresh }) {
     if (selectorsState !== 'ready') return;
     const result = await api.updateMessageSelectors(provider, selectorForm).catch(() => null);
     if (!result) return;
+    setRawSelectors((prev) => ({ ...prev, [provider]: result }));
     toast.success(`${provider} selectors updated`);
     setEditingSelector(null);
     fetchSelectors();
