@@ -155,7 +155,7 @@ function VisualGenSettingsBody({ cfg, update, stageLabel, systemSettings, settin
                   type="checkbox"
                   checked={!!cfg.refineProvider}
                   disabled={!providersLoaded || providers.length === 0}
-                  title={!providersLoaded ? 'Loading providers…' : undefined}
+                  title={!providersLoaded && !loadFailures.includes('providers') ? 'Loading providers…' : undefined}
                   onChange={(e) => {
                     if (e.target.checked) {
                       const first = providers[0];

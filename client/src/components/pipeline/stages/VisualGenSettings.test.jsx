@@ -77,6 +77,7 @@ describe('VisualGenSettings — failed lookups', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not load providers');
     expect(screen.queryByText(/No enabled providers/)).not.toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: 'Override default' })).not.toHaveAttribute('title');
 
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     expect(await screen.findByRole('checkbox', { name: 'Override default' })).toBeEnabled();
