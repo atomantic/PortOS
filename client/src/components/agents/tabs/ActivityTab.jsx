@@ -22,6 +22,10 @@ export default function ActivityTab({ agentId }) {
   // list, so a Load More left over from the previous filter never blocks the
   // current one.
   const loadingMoreGenerationRef = useRef(null);
+  // Generation whose first page is on screen. Until the current generation's
+  // first page lands, `activities` (and its cursor) belongs to the previous
+  // filter, so Load More must wait.
+  const appliedGenerationRef = useRef(0);
 
   const fetchData = useCallback(async () => {
     const generation = ++listGenerationRef.current;
@@ -30,6 +34,7 @@ export default function ActivityTab({ agentId }) {
       .catch(() => null);
     if (generation !== listGenerationRef.current) return;
     if (activitiesData) {
+      appliedGenerationRef.current = generation;
       setActivities(activitiesData);
       setHasMore(activitiesData.length >= PAGE_SIZE);
     } else {
@@ -50,7 +55,8 @@ export default function ActivityTab({ agentId }) {
 
   const loadMore = async () => {
     const generation = listGenerationRef.current;
-    if (activities.length === 0 || loadingMoreGenerationRef.current === generation) return;
+    if (activities.length === 0 || appliedGenerationRef.current !== generation
+      || loadingMoreGenerationRef.current === generation) return;
     loadingMoreGenerationRef.current = generation;
 
     const lastTimestamp = activities[activities.length - 1].timestamp;

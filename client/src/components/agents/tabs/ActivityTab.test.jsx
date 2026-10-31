@@ -110,4 +110,23 @@ describe('ActivityTab', () => {
       50, ['agent-1'], '2026-08-23T00:10:00.000Z', 'comment'
     );
   });
+  it('does not page the new filter with the previous filter\'s cursor before its first page arrives', async () => {
+    let resolveComment;
+    api.getAgentActivityTimeline.mockImplementation(async (_l, _a, _before, action) => {
+      if (action === 'comment') return new Promise((resolve) => { resolveComment = resolve; });
+      return page('vote', 50, 'v');
+    });
+
+    render(<ActivityTab agentId="agent-1" />);
+    const loadMoreButton = await screen.findByRole('button', { name: 'Load More' });
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText('Filter by action'), { target: { value: 'comment' } });
+    });
+    const callsBeforeClick = api.getAgentActivityTimeline.mock.calls.length;
+    await act(async () => { fireEvent.click(loadMoreButton); });
+    expect(api.getAgentActivityTimeline).toHaveBeenCalledTimes(callsBeforeClick);
+
+    await act(async () => { resolveComment(page('comment', 1, 'c')); });
+    expect(screen.getByText('comment')).toBeInTheDocument();
+  });
 });
