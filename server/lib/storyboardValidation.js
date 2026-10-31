@@ -176,6 +176,17 @@ export const storyboardFitSchema = z.object({
     .refine((starts) => Object.keys(starts).length <= L.beats, { message: `At most ${L.beats} picked starts` }).optional(),
 }).strict();
 
+// Sync shots: the board and shot revisions the preview was built from, and
+// whether locked shots no panel keeps go too.
+export const storyboardShotSyncSchema = z.object({
+  boardUpdatedAt: z.string().min(1).max(64),
+  projectUpdatedAt: z.string().min(1).max(64).optional(),
+  removeLocked: z.boolean().optional(),
+}).strict();
+
+// Keep a video's shots in sync with its board after each edit (on), or stop (off).
+export const storyboardShotSyncAutoSchema = z.object({ on: z.boolean() }).strict();
+
 // Update a pipeline issue's shots from its board: every edited panel, or one shot's.
 export const storyboardPipelineUpdateSchema = z.object({
   shotId: z.string().trim().min(1).max(80).optional(),

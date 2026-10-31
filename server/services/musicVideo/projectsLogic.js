@@ -696,6 +696,46 @@ export function replaceScenes(project, sceneInputs) {
   };
 }
 
+/**
+ * Apply a storyboard sync plan (lib/storyboardShotSync.js): each panel's shot
+ * in board order, an existing one patched in place (so everything the shot
+ * owns stays) and a new one built from the panel, then the shots the plan
+ * removes dropped. A shot the plan could not remove stays where its time puts
+ * it. The draft rows follow their shots' new spans and sung lines. Returns
+ * `{ project, scenes, added, removed }`.
+ */
+export function applyStoryboardShotSync(project, plan) {
+  const byId = new Map((project.scenes || []).map((scene) => [scene.sceneId, scene]));
+  const added = [];
+  const synced = plan.shots.map((shot) => {
+    if (!shot.sceneId) {
+      const fresh = buildScene(parseSceneOrThrow(musicVideoSceneCreateSchema, shot.input), { order: 0 });
+      added.push(fresh.sceneId);
+      return fresh;
+    }
+    const prior = byId.get(shot.sceneId);
+    if (!prior) throw new ServerError('A shot changed since the sync was planned. Check it again.', { status: 409, code: 'SHOTS_CHANGED' });
+    const patch = 'preMusic' in shot.patch ? { ...shot.patch, preMusic: normalizePreMusic(shot.patch.preMusic) } : shot.patch;
+    return { ...prior, ...patch };
+  });
+  const removing = new Set(plan.removed.filter((shot) => !shot.blocked).map((shot) => shot.sceneId));
+  const kept = plan.removed.filter((shot) => shot.blocked).map((shot) => byId.get(shot.sceneId)).filter(Boolean);
+  const cold = [...synced.filter(isPreMusicShot), ...kept.filter(isPreMusicShot)];
+  const song = [...synced.filter((scene) => !isPreMusicShot(scene)), ...kept.filter((scene) => !isPreMusicShot(scene))]
+    .map((scene, index) => ({ scene, index }))
+    .sort((a, b) => (a.scene.startSec ?? Infinity) - (b.scene.startSec ?? Infinity) || a.index - b.index)
+    .map(({ scene }) => scene);
+  const scenes = [...cold, ...song].map((scene, order) => (scene.order === order ? scene : { ...scene, order }));
+  const retimed = plan.shots.filter((shot) => shot.sceneId && shot.retimed).map((shot) => shot.sceneId);
+  const next = dropStaleStoryboardRows(touch(project, { scenes }));
+  return {
+    project: retimed.length ? anchorShotsToSungLyrics(next, retimed) : next,
+    scenes,
+    added,
+    removed: [...removing],
+  };
+}
+
 // Scene fields a director edits within an approved shot (its span, wording, selected
 // takes, and whether it plays as a clip or its still with an image effect) without
 // adding a shot or lyric the storyboard approval did not cover.

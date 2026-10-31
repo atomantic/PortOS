@@ -1194,6 +1194,8 @@ const REVIEWED_OPEN_MUTATIONS = [
   ['POST /api/storyboards/:id/video', RECORDS],
   ['POST /api/storyboards/fit-music-video/:projectId', RECORDS],
   ['POST /api/storyboards/group-by-song/:projectId', RECORDS],
+  ['POST /api/storyboards/sync-music-video/:projectId', RECORDS],
+  ['PUT /api/storyboards/sync-music-video/:projectId/auto', RECORDS],
   ['POST /api/storyboards/from-fableloom/:loomId/:episodeId', RECORDS],
   ['POST /api/storyboards/from-music-video/:projectId', RECORDS],
   ['POST /api/storyboards/from-pipeline/:issueId', RECORDS],

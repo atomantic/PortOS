@@ -11,6 +11,7 @@ import {
   storyboardBeatCreateSchema, storyboardBeatUpdateSchema, storyboardCreateSchema, storyboardMoveSchema,
   storyboardMakeEmptySchema, storyboardPanelCorrectSchema, storyboardPanelCreateSchema, storyboardPanelMoveSchema, storyboardPanelNodeUpdateSchema, storyboardPanelUpdateSchema,
   storyboardBeatsAddSchema, storyboardFitSchema, storyboardFromFableLoomSchema, storyboardPipelineUpdateSchema, storyboardVideoStartSchema, storyboardPlotExtractSchema, storyboardRecipeSchema, storyboardSavedRecipeSchema, storyboardTakeCreateSchema, storyboardUpdateSchema,
+  storyboardShotSyncAutoSchema, storyboardShotSyncSchema,
 } from '../lib/storyboardValidation.js';
 import {
   addBeat, addPanel, addPanelTake, createStoryboard, deleteBeat, deletePanel, deleteStoryboard, getStoryboard,
@@ -21,6 +22,7 @@ import {
   correctPanel, drawPanel, getMakeEmptyPlan, getPanelMake, runPanelNode, startMakeEmpty, updatePanelNode, updateRecipe,
 } from '../services/storyboards/make.js';
 import { fitMusicVideoToStoryboard, groupStoryboardBySong, updateShotFromPanel, sendShotStillToPanel } from '../services/storyboards/fitMusicVideo.js';
+import { setMusicVideoShotSync, syncMusicVideoShots } from '../services/storyboards/syncMusicVideo.js';
 import { makeStoryboardFromMusicVideo } from '../services/storyboards/fromMusicVideo.js';
 import { makeStoryboardFromFableLoom } from '../services/storyboards/fromFableLoom.js';
 import { openStoryboardForPipelineIssue, pipelineStoryboardChanges, updatePipelineShotsFromBoard } from '../services/storyboards/fromPipeline.js';
@@ -67,6 +69,14 @@ router.post('/pipeline/:issueId/update-from-board', asyncHandler(async (req, res
 // Fit to song: write the video's shots from its linked board, as previewed.
 router.post('/fit-music-video/:projectId', asyncHandler(async (req, res) => {
   res.json(await fitMusicVideoToStoryboard(req.params.projectId, validateRequest(storyboardFitSchema, req.body || {})));
+}));
+
+// Sync shots: one shot per panel at the panel's own time, kept 1:1 after each board edit.
+router.post('/sync-music-video/:projectId', asyncHandler(async (req, res) => {
+  res.json(await syncMusicVideoShots(req.params.projectId, validateRequest(storyboardShotSyncSchema, req.body || {})));
+}));
+router.put('/sync-music-video/:projectId/auto', asyncHandler(async (req, res) => {
+  res.json(await setMusicVideoShotSync(req.params.projectId, validateRequest(storyboardShotSyncAutoSchema, req.body || {}).on));
 }));
 
 // Group the linked board's beats by the song's sections (panels unchanged).

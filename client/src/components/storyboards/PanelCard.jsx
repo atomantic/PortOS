@@ -1,9 +1,13 @@
 import { ImageIcon, Loader2 } from 'lucide-react';
 import { SHOT_TYPE_LABELS } from '../../lib/shotGrammar';
+import { formatTimecode } from '../../utils/formatters';
 import { aspectClass, formatPanelSeconds, selectedTake, takeSrc } from './storyboardArt';
 
-/** One panel thumbnail: its selected art (or its action as text), a mark while it draws, and a footer line. */
-export default function PanelCard({ panel, number, aspectRatio, selected = false, sketchNonce, onOpen, caption }) {
+/**
+ * One panel thumbnail: its selected art (or its action as text), a mark while it draws, and a footer line.
+ * With its place on a song (`span`, lib/storyboardShotSync.js) the footer also shows when it plays and the line sung over it.
+ */
+export default function PanelCard({ panel, number, aspectRatio, selected = false, sketchNonce, onOpen, caption, span = null }) {
   const take = selectedTake(panel);
   const src = takeSrc(take, sketchNonce?.(take?.sketchKey));
   const seconds = formatPanelSeconds(panel.seconds);
@@ -40,6 +44,14 @@ export default function PanelCard({ panel, number, aspectRatio, selected = false
         {framing ? <span className="truncate">{framing}</span> : null}
         {seconds ? <span className="ml-auto tabular-nums shrink-0">{seconds}</span> : null}
       </div>
+      {span ? (
+        <div className="px-2 pb-1 -mt-0.5 text-[11px] text-gray-500 min-w-0">
+          <span className={`tabular-nums ${span.pastSong ? 'text-port-warning' : ''}`}>
+            {span.beforeSong ? 'Before the song' : `${formatTimecode(span.startSec)}–${formatTimecode(span.endSec)}`}
+          </span>
+          {span.lyricText ? <p className="truncate italic text-gray-400" title={span.lyricText}>{span.lyricText}</p> : null}
+        </div>
+      ) : null}
     </button>
   );
 }

@@ -138,7 +138,7 @@ const roleMatches = (role, label) => {
 };
 
 // A panel before the song keeps its hold as its length, inside what a shot before the song allows.
-const preludeSec = (panel) => round(Math.min(PRE_MUSIC_DURATION_RANGE.max, Math.max(PRE_MUSIC_DURATION_RANGE.min, holdSeconds(panel))));
+export const storyboardPreludeShotSec = (panel) => round(Math.min(PRE_MUSIC_DURATION_RANGE.max, Math.max(PRE_MUSIC_DURATION_RANGE.min, holdSeconds(panel))));
 
 /** The beats before the song: one shot before the song per panel, at its hold. */
 function fitPrelude(beats) {
@@ -150,7 +150,7 @@ function fitPrelude(beats) {
     let durationSec = 0;
     panels.forEach((panel, p) => {
       const suffix = panels.length > 1 ? ` · ${p + 1}/${panels.length}` : '';
-      const length = preludeSec(panel);
+      const length = storyboardPreludeShotSec(panel);
       durationSec += length;
       shots.push({
         beatId: beat.id,
