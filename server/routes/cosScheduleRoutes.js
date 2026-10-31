@@ -10,7 +10,7 @@ import { z } from 'zod';
 import * as taskSchedule from '../services/taskSchedule.js';
 import { logCosScheduleUpdate } from '../services/userActionScheduleLog.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { sanitizeTaskMetadata, taskDataInputsSchema, validateRequest, parsePagination, cosScheduleTargetBodySchema, cosScheduleTriggerBodySchema, heldCheckoutRetireBodySchema, heldCheckoutReviewBodySchema, legacyReleaseRecoveryReviewSchema, legacyReleaseRecoveryAcceptSchema, releaseSynchronizationResetBodySchema } from '../lib/validation.js';
+import { sanitizeTaskMetadata, taskDataInputsSchema, validateRequest, parsePagination, cosScheduleTargetBodySchema, cosScheduleTriggerBodySchema, heldCheckoutRetireBodySchema, heldCheckoutReviewBodySchema, releaseSynchronizationResetBodySchema } from '../lib/validation.js';
 import { promptSourceSchema, PROMPT_SOURCES, scheduleExecutionFieldsSchema } from '../lib/cosValidation.js';
 import { EFFORT_LEVELS } from '../lib/providerModels.js';
 import { INTERVAL_TYPES, decodeIntervalType, isCronExpression, isKnownIntervalType } from '../services/taskScheduleConstants.js';
@@ -299,25 +299,6 @@ router.post('/schedule/trigger', asyncHandler(async (req, res) => {
     throw new ServerError(request.error, { status: 409, code: 'TRIGGER_REJECTED' });
   }
   res.json({ success: true, request });
-}));
-
-// A review observes existing preservation; it never creates an archive.
-const legacyRecoveryCall = operation => operation().catch(error => {
-  if (error instanceof ServerError) throw error;
-  const reason = /^[a-z][a-z0-9-]+$/.test(error.code || '') ? error.code : 'legacy-recovery-evidence-unavailable';
-  throw new ServerError('Legacy release recovery evidence is unavailable', { status: 409, code: 'LEGACY_RELEASE_RECOVERY_REFUSED', context: { reason } });
-});
-router.post('/schedule/release-synchronization/legacy/review', asyncHandler(async (req, res) => {
-  const { identity } = validateRequest(legacyReleaseRecoveryReviewSchema, req.body);
-  const { reviewLegacyReleaseRecovery } = await import('../services/releaseSynchronization.js');
-  res.json(await legacyRecoveryCall(() => reviewLegacyReleaseRecovery(identity)));
-}));
-
-router.post('/schedule/release-synchronization/legacy/accept', asyncHandler(async (req, res) => {
-  const { identity, digest } = validateRequest(legacyReleaseRecoveryAcceptSchema, req.body);
-  const { acceptLegacyReleaseRecovery } = await import('../services/releaseSynchronization.js');
-  const receipt = await legacyRecoveryCall(() => acceptLegacyReleaseRecovery(identity, digest));
-  res.json({ identity, digest: receipt.digest, acceptedAt: receipt.acceptedAt });
 }));
 
 // This is an explicit operator decision, not a successful synchronization.

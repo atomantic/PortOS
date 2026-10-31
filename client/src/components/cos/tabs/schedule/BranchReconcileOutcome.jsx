@@ -16,7 +16,7 @@ function InventoryEntry({ appId, entry, onRetired }) {
     <li className="break-words border-t border-port-border pt-2">
       <p className="text-gray-300">{entry.branch || (entry.detached ? 'Detached checkout' : entry.issue ? `Issue #${entry.issue}` : 'Repository scan')}: {entry.reason}</p>
       {entry.path && <p className="break-all">{entry.path}</p>}
-      {(entry.checkoutMissing || entry.branchMissing) && <p>Original checkout or branch no longer exists. Its historical archive evidence is unresolved and retained separately from current local work.</p>}
+      {(entry.checkoutMissing || entry.branchMissing) && <p>Original checkout or branch no longer exists. It stays unresolved, separate from current local work, until retirement evidence explains it.</p>}
       {entry.head && <p className="break-all">HEAD: {entry.head}</p>}
       {entry.locked && <p>Lock: {entry.lockReason || 'No reason recorded'}</p>}
       {entry.managed === false && <p>Outside managed worktree roots</p>}
@@ -150,7 +150,7 @@ export default function BranchReconcileOutcome({ outcomes, apps }) {
               {apps?.find(app => app.id === appId)?.name || (appId === 'null' ? 'Repository' : appId)}
               {' · '}{incompleteEmptyInventory ? 'No remaining recorded work' : STATUS_LABELS[outcome.status] || 'Outcome unavailable'}
               {remaining && ` · ${formatCount(remaining.length)} remaining`}
-              {historical.length > 0 && ` · ${formatCount(historical.length)} unresolved archive records`}
+              {historical.length > 0 && ` · ${formatCount(historical.length)} unresolved missing checkouts`}
             </summary>
             <div className="mt-2 space-y-2 text-gray-400">
               <p>{outcome.observedAt ? `Last inventory: ${formatDateTime(outcome.observedAt)}` : 'No readable inventory yet.'}</p>
@@ -158,7 +158,7 @@ export default function BranchReconcileOutcome({ outcomes, apps }) {
                 <button type="button" className="rounded border border-port-border px-2 py-1 disabled:opacity-50" disabled={refreshStatus[appId]?.pending} onClick={() => refresh(appId)}>
                   {refreshStatus[appId]?.pending ? 'Refreshing inventory…' : 'Refresh inventory'}
                 </button>
-                <p>Rescan this repository without deleting checkouts or starting an AI agent. Missing archive evidence is retained.</p>
+                <p>Rescan this repository without deleting checkouts or starting an AI agent. Missing-checkout records are retained.</p>
                 {refreshStatus[appId]?.error && <p role="alert" className="break-words text-port-error">{refreshStatus[appId].error}</p>}
               </div>}
               {incompleteEmptyInventory && <p>Last sweep: Incomplete</p>}
@@ -180,7 +180,7 @@ export default function BranchReconcileOutcome({ outcomes, apps }) {
                 {(remaining || []).map((entry, index) => <InventoryEntry key={`${entry.path || entry.branch || entry.issue || entry.reason}:${index}`} appId={appId} entry={entry} onRetired={markRetired} />)}
               </ul>
               {historical.length > 0 && <details>
-                <summary className="cursor-pointer">Archive history · {formatCount(historical.length)} unresolved</summary>
+                <summary className="cursor-pointer">Missing checkouts · {formatCount(historical.length)} unresolved</summary>
                 <p>These records describe missing originals, not current branches or checkouts. Refreshing does not verify their preservation or clear their evidence.</p>
                 <ul className="mt-2 max-h-64 space-y-2 overflow-y-auto">
                   {historical.map((entry, index) => <InventoryEntry key={`${entry.path || entry.branch}:${index}`} appId={appId} entry={entry} onRetired={markRetired} />)}

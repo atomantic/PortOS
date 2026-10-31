@@ -3043,9 +3043,7 @@ export const cosScheduleTriggerBodySchema = z.object({
   targetModels: z.array(nonEmptyString).nullable().optional(),
   targetPullRequest: z.union([z.number(), z.string()]).nullable().optional(),
 });
-export const legacyReleaseRecoveryReviewSchema = z.object({ identity: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
-export const legacyReleaseRecoveryAcceptSchema = legacyReleaseRecoveryReviewSchema.extend({ digest: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
-export const releaseSynchronizationResetBodySchema = legacyReleaseRecoveryReviewSchema.extend({
+export const releaseSynchronizationResetBodySchema = z.object({ identity: z.string().regex(/^[a-f0-9]{64}$/),
   reason: z.string().trim().min(1).max(1000),
   checkouts: z.array(releaseSynchronizationResetCheckoutSchema).max(10).default([]),
 }).strict();

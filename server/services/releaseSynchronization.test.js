@@ -6,7 +6,7 @@ import { retirementCheckoutIdentityFromPointer } from '../lib/retirementCheckout
 vi.mock('../lib/fileUtils.js', async original => makePathsProxy(await original(), { dataRoot: lazyTempDataRoot('release-sync-workflow-') }));
 vi.mock('./cosState.js', () => ({ loadState: async () => ({ agents: {} }), withStateLock: createFileWriteQueue() }));
 const settlement = vi.hoisted(() => vi.fn(async () => true));
-vi.mock('./legacyReleaseRecovery.js', () => ({ legacyProcessesSettled: settlement }));
+vi.mock('./releaseProcessSettlement.js', () => ({ publisherProcessesSettled: settlement }));
 vi.mock('./branchCompletionPolicy.js', () => ({ readBranchCompletionPolicies: async () => [] }));
 vi.mock('./instanceIdentity.js', () => ({ getInstanceId: async () => 'example-instance', UNKNOWN_INSTANCE_ID: 'unknown' }));
 vi.mock('./codeReview.js', () => ({ getCodeReviewDefaults: async () => ({}),

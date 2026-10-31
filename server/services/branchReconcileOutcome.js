@@ -77,19 +77,6 @@ export async function recordBranchReconcileOutcome(appId, { status, reason, rema
     };
     return { result: record.branchReconcileOutcome, changed: true };
   });
-  if (!appId || !unresolvedRetirements(outcome).length) return outcome;
-  const app = await getAppById(appId).catch(() => null);
-  if (!app?.repoPath) return outcome;
-  // Compatibility for stores that have not yet run migration 443. Upgraded and
-  // fresh stores always have the transition marker and never require archives.
-  if (!outcome.legacyRetirementTransition) {
-    const missing = await findGoneInventoryRows(app.repoPath, unresolvedRetirements(outcome), { includeObligations: true }).catch(() => []);
-    if (!missing.length) return outcome;
-    const { recoverMissingCheckoutPreservations } = await import('./heldCheckoutRecovery.js');
-    return recoverMissingCheckoutPreservations({ appId, repoPath: app.repoPath, outcome });
-  }
-  // Writers are also called while a checkout retirement owns the claim lock.
-  // The scan entry points run historical proof work after that lock is released.
   return outcome;
 }
 
@@ -102,52 +89,6 @@ export async function recordLegacyRetirementResolutions(appId, expected, resolut
     const outcome = applyLegacyRetirementResolutions(expected, resolutions, new Date().toISOString());
     record.branchReconcileOutcome = outcome;
     return { result: outcome, changed: outcome !== expected };
-  });
-}
-
-/** Compare the whole observed inventory and its generation inside the schedule
- * writer. A verifier result never authorizes a newer/recreated checkout.
- */
-export async function recordRecoveredCheckoutPreservations(appId, expected, observations, stillAbsent, discovery) {
-  return updateSchedule(async schedule => {
-    const record = ensureExecutionRecord(schedule, 'branch-reconcile', appId);
-    const outcome = record.branchReconcileOutcome;
-    if (JSON.stringify(outcome) !== JSON.stringify(expected) || !await stillAbsent()) return { result: outcome, changed: false };
-    const now = new Date().toISOString();
-    const recoveredPreservations = [...(outcome.recoveredPreservations || [])];
-    const diagnosed = unresolvedRetirements(outcome).map(release => {
-      const observation = observations.find(row => sameRetirementCheckout(row.release, release) && row.release.createdAt === release.createdAt);
-      if (!observation) return release;
-      const accepted = observation.proof && recoveredPreservations.length < 1000;
-      const { recheck: _recheck, releaseFence: _releaseFence, ...proof } = observation.proof || {};
-      if (accepted) recoveredPreservations.push({
-        branch: release.branch, path: release.path, head: release.head,
-        obligationCreatedAt: release.createdAt, ...proof, verified: true, verifiedAt: now,
-      });
-      return { ...release, preservationEvidence: { status: 'unresolved',
-        reason: observation.proof && !accepted ? 'preservation-receipt-budget-exceeded' : observation.reason,
-        checkedAt: now, archives: observation.evidence, ...(observation.coverage && { coverage: observation.coverage }), nextAction: observation.nextAction } };
-    });
-    const retirementObligations = unresolvedRetirements({ retirementObligations: diagnosed, recoveredPreservations });
-    const remaining = (outcome.remaining || []).flatMap(row => {
-      const diagnosedRow = diagnosed.find(release => sameRetirementCheckout(row, release) && row.createdAt === release.createdAt);
-      return diagnosedRow ? retirementObligations.filter(release => sameRetirementCheckout(release, diagnosedRow)) : [row];
-    });
-    const historical = retirementObligations.find(row => row.preservationEvidence);
-    // Recovery proves preservation, not repository convergence. Retire the old
-    // diagnosis and let the next sweep establish the aggregate completion state.
-    const diagnosis = historical
-      ? { status: 'incomplete', reason: 'historical-preservation-unresolved', nextAction: historical.preservationEvidence.nextAction }
-      : ['historical-preservation-unresolved', 'retirement-provenance-unverified'].includes(outcome.reason)
-        ? { status: 'incomplete', reason: remaining.length ? 'remaining-holds' : 'preservation-recovered',
-          nextAction: remaining.length ? 'Resolve the remaining holds, then run branch reconciliation again.'
-            : 'Historical preservation verified; run branch reconciliation again to confirm repository completion.' }
-        : {};
-    record.branchReconcileOutcome = { ...outcome, retirementObligations, recoveredPreservations, remaining, updatedAt: now,
-      ...(discovery && { preservationDiscovery: discovery }),
-      ...diagnosis,
-    };
-    return { result: record.branchReconcileOutcome, changed: true };
   });
 }
 

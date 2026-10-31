@@ -344,32 +344,12 @@ reviewed lock as part of its fenced removal. Its initialized-submodule and
 whole-checkout counterpart currently refuses locked checkouts; retain that lock
 and the checkout as an explicit synchronization hold until service-owned lock
 recovery is available. A missing publisher seed cannot be recreated from a branch
-name or a later filesystem observation. A legacy publisher can instead be reviewed
-when its original run retains one exact v1 completion capture, the matching
-promotion PR, a revision-bound private lifecycle file, and a complete, independently
-verified existing checkout archive. A surviving checkout also needs the existing
-preservation receipt for that exact physical generation; an already absent checkout
-needs its exact service retirement receipt. Missing or conflicting evidence leaves
-the synchronization blocked. Recovery does not create a new archive or copy private
-Git state.
-
-For a publication identity from the synchronization status, an operator or authorized
-agent can POST `{ "identity": "<identity>" }` to
-`/api/cos/schedule/release-synchronization/legacy/review`. The response identifies the
-capture, preservation digest, promotion PR, lock and historical lifecycle fields. After
-inspecting it, POST the same identity and returned `digest` to the sibling `/accept`
-endpoint. Acceptance records a separate contemporary recovery receipt and reruns the
-normal independent synchronization obligations; it does not change the publication
-receipt or tag. Repeating acceptance is idempotent only while the evidence still
-matches. For a surviving checkout, use the ordinary exact checkout review and retirement
-service after acceptance. Its owner, process, generation, content and forge rechecks
-still apply. The initialized-checkout service continues to hold locked candidates.
-
-The preserved lifecycle's recorded head and status are historical metadata, not proof
-that a reviewer actually inspected the published candidate or approved it. The recovery
-records that candidate inspection is unverified; the hosting provider's merged PR is
-the delivery evidence. Keep missing lifecycle files, changed generations, active owners,
-unique content, and any unverified preservation or retirement as explicit holds.
+name, a later filesystem observation or a historical checkout archive, so a
+publication without one stays blocked on `publisher-candidate-checkout-unverified`.
+Its checkpoint is retired with the operator reset below. Earlier installs could
+accept an archive-backed legacy recovery; those receipts stay readable on the
+outbox entry, but they no longer bind a checkout, and the entry is treated like
+any other unseeded publication.
 
 When an operator has decided to abandon a stale synchronization checkpoint and
 start a fresh release from `main`, POST `{ "identity": "<identity>", "reason":

@@ -77,7 +77,6 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('outside reconciliation retirement recei
     const first = await getBranchReconcileOutcome('app-1');
     expect(first.retired).toEqual([expect.objectContaining({ branch: release.branch, path: release.path, head: release.head,
       checkoutIdentity: release.checkoutIdentity, branchDeleted: true, archiveDir: null })]);
-    expect(existsSync(join(PATHS.cos, 'held-checkout-archives'))).toBe(false);
     expect(existsSync(join(PATHS.cos, 'branch-retirement-archives'))).toBe(false);
     expect(existsSync(join(PATHS.cos, 'initialized-checkout-retirements'))).toBe(false);
     const next = await recordBranchReconcileOutcome('app-1', { status: 'complete', remaining: [] });
@@ -116,7 +115,6 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('outside reconciliation retirement recei
     expect(entryPoint === 'Git UI' ? result.deleted : result.mergedReaped).toEqual(entryPoint === 'Git UI' ? [] : 0);
     if (entryPoint === 'daily cleanup') expect(result.worktreesReaped).toBe(0);
     expect(existsSync(release.path)).toBe(false);
-    expect(existsSync(join(PATHS.cos, 'held-checkout-archives'))).toBe(false);
     expect(existsSync(join(PATHS.cos, 'branch-retirement-archives'))).toBe(false);
     expect((await execGit(['rev-parse', '--verify', '--quiet', `refs/heads/${release.branch}`], repo, { ignoreExitCode: true })).exitCode).toBe(1);
     expect((await getBranchReconcileOutcome('app-1')).retired || []).toEqual([]);
@@ -133,7 +131,6 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('outside reconciliation retirement recei
     expect(await run()).toMatchObject({ mergedReaped: 0, worktreesReaped: 0 });
     expect(existsSync(release.path)).toBe(false);
     expect((await getBranchReconcileOutcome('app-1')).retired || []).toEqual([]);
-    expect(existsSync(join(PATHS.cos, 'held-checkout-archives'))).toBe(false);
   });
 
   it('keeps an unverified daily removal out of orphan cleanup when that inventory read fails', async () => {
@@ -147,7 +144,6 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('outside reconciliation retirement recei
     expect(existsSync(release.path)).toBe(false);
     expect((await execGit(['rev-parse', '--verify', '--quiet', `refs/heads/${release.branch}`], repo, { ignoreExitCode: true })).exitCode).toBe(1);
     expect((await getBranchReconcileOutcome('app-1')).retired || []).toEqual([]);
-    expect(existsSync(join(PATHS.cos, 'held-checkout-archives'))).toBe(false);
     expect(existsSync(join(PATHS.cos, 'branch-retirement-archives'))).toBe(false);
   });
 
@@ -177,7 +173,6 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('outside reconciliation retirement recei
     }));
     expect(next.retirementObligations).toContainEqual(expect.objectContaining({ branch: unrelated.branch }));
     expect(existsSync(release.path)).toBe(true);
-    expect(existsSync(join(PATHS.cos, 'held-checkout-archives'))).toBe(false);
     expect(existsSync(join(PATHS.cos, 'branch-retirement-archives'))).toBe(false);
   });
 
@@ -212,7 +207,6 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('outside reconciliation retirement recei
     expect(first.retired[0]).not.toHaveProperty('branch');
     const next = await recordBranchReconcileOutcome('app-1', { status: 'complete', remaining: [] });
     expect(next.retirementObligations).toEqual([expect.objectContaining({ branch: unrelated.branch })]);
-    expect(existsSync(join(PATHS.cos, 'held-checkout-archives'))).toBe(false);
   });
 
   it('leaves a directly removed detached checkout unsettled when its receipt cannot be stored', async () => {
