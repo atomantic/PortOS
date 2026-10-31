@@ -659,7 +659,7 @@ export function buildMergeAdmissionSection(agentId, { review = true } = {}) {
     'GitHub/GitLab repository rules decide merge eligibility. Complete the target repository’s documented validation and requested reviews, then use its normal merge API/CLI pinned to the current PR head (--match-head-commit <sha> on GitHub). Do not use admin/bypass flags or require a second PortOS admission, attestation, preparation turn, configuration switch or merged-tree certificate. An empty provider-required check set is not itself a failure; do not invent expected workflows beyond repository policy.',
     'Main may move continuously. Do not rebase, push, repeat CI or restart review merely because the base advanced. Resolve actual conflicts or an enforced up-to-date requirement; validate substantive changes and retain applicable review evidence.',
     'Native provider auto-merge is allowed when the API accepts it. Enabled/queued is pending, not MERGED: retain responsibility and observe the provider’s final result. A confirmed MERGED state for the exact repository/PR establishes delivery, including auto-merge; API errors or unreadable state never establish success.',
-    'After confirmed delivery, use the supported cleanup service for the exact local target. Preserve active owners, dirty/untracked/unique content and protected refs. Release any coordination lease actually held; do not require one as merge certification. Never infer local removal from a remote branch deletion.',
+    'After confirmed delivery, use the supported cleanup service for the exact local target. Preserve active owners, dirty/untracked/unique content and protected refs. PortOS holds no merge lease for this run. Never infer local removal from a remote branch deletion.',
   ].join('\n');
 }
 

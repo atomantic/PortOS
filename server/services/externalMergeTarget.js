@@ -20,7 +20,7 @@ const EXTERNAL_MERGE_QUERY = `query($owner:String!,$name:String!,$number:Int!,$b
 }`;
 
 export async function inspectExternalMergeCheckout(input, agents) {
-  const [{ getAppById }, { repositoryKey }] = await Promise.all([import('./apps.js'), import('./cosMergeAdmission.js')]);
+  const [{ getAppById }, { repositoryKey }] = await Promise.all([import('./apps.js'), import('./mergeHandoffOwner.js')]);
   const app = await getAppById(input.appId).catch(() => null);
   const [repoPath, worktreePath] = await Promise.all([canonical(app?.repoPath), canonical(input.worktreePath)]);
   if (app?.id !== input.appId || !repoPath || !worktreePath || repoPath === worktreePath) return refused('external-checkout-unverified');
@@ -88,7 +88,7 @@ export async function inspectExternalMergeTarget(input, agents) {
   if (proof.reason) return proof;
   const { repository, target } = proof;
   const { repoPath, branch, headSha: head } = target;
-  const [{ getAppById }, { repositoryKey }] = await Promise.all([import('./apps.js'), import('./cosMergeAdmission.js')]);
+  const [{ getAppById }, { repositoryKey }] = await Promise.all([import('./apps.js'), import('./mergeHandoffOwner.js')]);
   const app = await getAppById(input.appId);
   const pr = parsePullRequestUrl(input.prUrl);
   const [{ execGh }, { resolveForgeExecOptions }] = await Promise.all([import('./github.js'), import('./forgeExecOptions.js')]);

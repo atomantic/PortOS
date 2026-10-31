@@ -562,7 +562,7 @@ function addTally(result, tally) {
 async function validateHandoffBinding(entry, origin) {
   const binding = readHandoffBinding(entry);
   if (!binding || binding === INVALID_HANDOFF) return binding;
-  const { repositoryKey } = await import('./cosMergeAdmission.js');
+  const { repositoryKey } = await import('./mergeHandoffOwner.js');
   return binding.repository === repositoryKey(origin) ? binding : INVALID_HANDOFF;
 }
 
@@ -628,7 +628,7 @@ async function escalatePrFailure(entry, binding, { failure, headMoved }, { app }
 
 // The last assessment withheld for this exact head and configuration. While
 // neither has changed a retry cannot succeed, so the sweep skips the classifier
-// run and the repository's merge-admission lease; the entry stays in attention.
+// run; the entry stays in attention.
 async function unchangedAssessmentHold(entry, prView) {
   const held = entry.assessmentWithheld;
   if (!held) return null;
@@ -657,7 +657,7 @@ async function describeWithheldAssessment(assessment, expectedHeadSha) {
   return { reason, hold: policy ? { headSha: String(expectedHeadSha).toLowerCase(), code: detail, policy, reason } : null };
 }
 
-// Runs inside merge admission. Answers the merge attempt (or owner policy) plus
+// Answers the merge attempt (or owner policy) plus
 // the withheld-assessment evidence the settle path records.
 async function mergeAssessedHead(entry, binding, { app, origin, repoSpec, forgeExec }) {
   const currentPr = await readPendingPullRequest(repoSpec, entry.prNumber, forgeExec);
@@ -680,8 +680,8 @@ async function mergeAssessedHead(entry, binding, { app, origin, repoSpec, forgeE
     ], undefined, { ...forgeExec, backoffKey: repoSpec }).catch(() => null), null),
   }).catch(() => ({ ok: false, code: 'security-action-assessment-error' }));
   const assessed = assessment.ok ? NOT_ASSESSED : await describeWithheldAssessment(assessment, expectedHeadSha);
-  // Re-read the durable owner's policy inside admission, after remote
-  // assessment and immediately before merge. Waiting CI is not authority to
+  // Re-read the durable owner's policy after remote assessment and
+  // immediately before merge. Waiting CI is not authority to
   // ignore a later manual hold or a changed review requirement.
   const ownerPolicy = await currentHandoffOwnerPolicy(binding);
   if (ownerPolicy) return { merge: ownerPolicy, assessed };
@@ -695,25 +695,18 @@ async function mergeAssessedHead(entry, binding, { app, origin, repoSpec, forgeE
 
 // Answers `{ step }` when the entry is finished this sweep, otherwise
 // `{ assessed }` for the settle path.
-async function attemptAdmittedMerge(entry, binding, prView, ctx) {
+async function attemptMerge(entry, binding, prView, ctx) {
   const ownerPolicy = await currentHandoffOwnerPolicy(binding);
   if (ownerPolicy) return { step: await holdForOwner(ctx.app, entry, binding, ownerPolicy.ownerBlocked) };
   // GitHub's required checks on the merge ref are the merge gate; the merge is
-  // pinned to the handed-off (or assessed) head inside the short lease. A
-  // local merged-tree guard is an opt-in diagnostic, never a precondition.
-  const { withPendingMergeAdmission } = await import('./cosMergeAdmission.js');
-  const admitted = await withPendingMergeAdmission(ctx.origin, () => mergeAssessedHead(entry, binding, ctx));
-  if (!admitted.admitted) {
-    console.log(`⏳ Pending merge deferred for PR #${entry.prNumber}: ${admitted.reason}`);
-    return { step: { outcome: entry, tally: { waiting: 1 } } };
-  }
-  const { merge, assessed } = admitted.result;
+  // pinned to the handed-off (or assessed) head. A local merged-tree guard is
+  // an opt-in diagnostic, never a precondition.
+  const { merge, assessed } = await mergeAssessedHead(entry, binding, ctx);
   if (merge.ownerDeferred || merge.ownerBlocked) {
     const held = assessed.hold ? { ...entry, assessmentWithheld: assessed.hold } : entry;
     return { step: await holdForOwner(ctx.app, entry, binding, merge.ownerBlocked, held) };
   }
   if (merge.success) {
-    // Admission has released before potentially slow archival cleanup.
     return { step: { outcome: await finishMergedReceipt(ctx.app, entry, binding), tally: { merged: 1 } } };
   }
   console.error(`❌ Deterministic merge failed for PR #${entry.prNumber}: ${merge.error || 'unknown error'}`);
@@ -726,7 +719,7 @@ async function mergeOrSettle(entry, binding, prView, ctx) {
   const cachedHold = ready ? await unchangedAssessmentHold(entry, prView) : null;
   let assessed = { reason: cachedHold?.reason, hold: cachedHold };
   if (ready && !cachedHold) {
-    const attempt = await attemptAdmittedMerge(entry, binding, prView, ctx);
+    const attempt = await attemptMerge(entry, binding, prView, ctx);
     if (attempt.step) return attempt.step;
     assessed = attempt.assessed;
   }
@@ -761,14 +754,10 @@ const isMergedTreeRefusal = value => typeof value === 'string' && value.startsWi
 // Receipts persisted before #14184 may hold a merged-tree preparation turn and
 // refusals only that guard produced. Release the turn and drop those refusals
 // so the receipt proceeds on its remaining gates; other holds stay.
-async function retireLegacyMergeGuardState(entry, origin) {
+function retireLegacyMergeGuardState(entry) {
   if (!entry.mergePreparationKey && !entry.mergedTreeGuard
     && !isMergedTreeRefusal(entry.recoveryBlocked) && !isMergedTreeRefusal(entry.attention)) return entry;
-  const { mergePreparationKey, mergedTreeGuard: _guard, ...rest } = entry;
-  if (mergePreparationKey) {
-    const { yieldPendingMergePreparation } = await import('./cosMergeAdmission.js');
-    await yieldPendingMergePreparation(origin, mergePreparationKey);
-  }
+  const { mergePreparationKey: _turn, mergedTreeGuard: _guard, ...rest } = entry;
   if (isMergedTreeRefusal(rest.recoveryBlocked)) delete rest.recoveryBlocked;
   if (isMergedTreeRefusal(rest.attention)) delete rest.attention;
   return rest;
@@ -776,7 +765,7 @@ async function retireLegacyMergeGuardState(entry, origin) {
 
 async function processPendingMergeEntry(stored, ctx) {
   if (Date.now() < (stored.cleanup?.retryAt || 0)) return { outcome: stored, tally: {} };
-  const entry = await retireLegacyMergeGuardState(stored, ctx.origin);
+  const entry = retireLegacyMergeGuardState(stored);
   const binding = await validateHandoffBinding(entry, ctx.origin);
   if (binding === INVALID_HANDOFF) {
     if (!entry.recoveryBlocked) await notifyPendingMergeTimeout(ctx.app, entry, null,

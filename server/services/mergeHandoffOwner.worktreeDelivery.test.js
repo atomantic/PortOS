@@ -3,8 +3,8 @@ import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { generateTasksMarkdown, parseTasksMarkdown } from '../lib/taskParser.js';
 
 // Generic, operator-configured CoS PR delivery (#11435): a live worktree run
-// whose prompt told it to open and merge its own PR participates in repository
-// merge admission through its spawn-time binding, never a caller claim.
+// whose prompt told it to open and merge its own PR may hand a pending merge to
+// the server through its spawn-time binding, never a caller claim.
 const f = vi.hoisted(() => ({ state: null, disk: null, tasks: {}, branch: 'cos/task-1/agent-1', workspaceRepo: 'example/repo' }));
 vi.mock('./cosState.js', () => ({
   AGENTS_DIR: '/synthetic/agents',
@@ -19,14 +19,13 @@ vi.mock('../lib/gitRemote.js', () => ({ getOriginInfo: async path => ({ host: 'g
 vi.mock('../lib/execGit.js', () => ({ execGit: async () => ({ stdout: f.branch, exitCode: 0 }) }));
 import { buildAgentRegistration } from '../lib/agentRegistrationRecord.js';
 import { registerAgent } from './cosAgentLifecycle.js';
-import { claimMergeAdmission, withPendingMergeAdmission } from './cosMergeAdmission.js';
+import { resolveMergeHandoffOwner } from './mergeHandoffOwner.js';
 
 const BRANCH = 'cos/task-1/agent-1';
-const admission = (action, token, extra = {}) => claimMergeAdmission({ agentId: 'agent-1', action, token, ...extra });
 const persist = () => { f.disk = structuredClone(f.state); };
 
 // The task round-trips through TASKS.md like a real queue entry, so metadata
-// arrives with the string scalars admission must still interpret correctly.
+// arrives with the string scalars the owner proof must still interpret correctly.
 async function launch({ metadata = {}, mergesOwnPr = true, prOpenedBy = 'agent-slashdo' } = {}) {
   const [task] = parseTasksMarkdown(generateTasksMarkdown([{ id: 'task-1', status: 'in_progress', priority: 'MEDIUM',
     description: 'Fix the example', metadata: { openPR: true, prCompletion: 'merge-on-green', ...metadata } }]));
@@ -42,52 +41,25 @@ beforeEach(() => {
   f.tasks = {}; f.branch = BRANCH; f.workspaceRepo = 'example/repo'; persist();
 });
 
-describe('generic worktree PR delivery merge admission', () => {
-  it.each(['agent-slashdo', 'agent-inline'])('an authorized %s run acquires, checks and releases admission for its own PR', async prOpenedBy => {
+describe('generic worktree PR delivery handoff owner', () => {
+  it.each(['agent-slashdo', 'agent-inline'])('an authorized %s run resolves as the owner of its own PR branch only', async prOpenedBy => {
     await launch({ prOpenedBy });
     const agent = f.state.agents['agent-1'];
     expect(agent.metadata.prDeliveryTarget).toEqual({ branch: BRANCH, workspacePath: '/repos/worktree' });
     expect(agent.metadata.claimBranch).toBeUndefined();
-    const lease = await admission('acquire');
-    expect(lease).toMatchObject({ admitted: true, repository: 'github.com/example/repo' });
-    expect(await admission('check', lease.token)).toMatchObject({ admitted: true });
-    f.branch = 'main'; // gh may switch away after deleting the merged branch.
-    expect(await admission('release', lease.token, { outcome: 'merged' })).toMatchObject({ released: true });
-    expect(f.disk.mergeAdmissions).toEqual({});
-    // Admission never promoted the generic run to claim authority.
+    const owner = await resolveMergeHandoffOwner('agent-1');
+    expect(owner).toMatchObject({ repository: 'github.com/example/repo', workspacePath: '/repos/worktree' });
+    expect(owner.owns(BRANCH)).toBe(true);
+    expect(owner.owns('another/branch')).toBe(false);
+    // The generic run never gains claim authority.
     expect(f.state.agents['agent-1'].metadata.claimPicksOwnBranch).toBeUndefined();
-  });
-
-  it('excludes and is excluded by active claim and sweep leases', async () => {
-    await launch();
-    f.state.agents.claim = { id: 'claim', taskId: 'claim-task', status: 'running', startedAt: new Date().toISOString(),
-      metadata: { claimPicksOwnBranch: true, sourceWorkspace: '/repos/source' } }; persist();
-    const claim = await claimMergeAdmission({ agentId: 'claim', action: 'acquire' });
-    expect(await admission('acquire')).toMatchObject({ admitted: false, reason: 'owner-active-or-unverified' });
-    await claimMergeAdmission({ agentId: 'claim', action: 'release', token: claim.token, outcome: 'merged' });
-    await withPendingMergeAdmission({ host: 'github.com', fullName: 'example/repo' }, async () => {
-      expect(await admission('acquire')).toMatchObject({ admitted: false, reason: 'owner-active-or-unverified' });
-    });
-    const generic = await admission('acquire');
-    expect(generic.admitted).toBe(true);
-    expect((await claimMergeAdmission({ agentId: 'claim', action: 'acquire' })).admitted).toBe(false);
-    expect((await withPendingMergeAdmission({ host: 'github.com', fullName: 'example/repo' }, vi.fn())).admitted).toBe(false);
-  });
-
-  it('refuses a check after the run has stopped verifying, even with its own token', async () => {
-    const task = await launch();
-    const lease = await admission('acquire');
-    task.status = 'completed';
-    expect(await admission('check', lease.token)).toMatchObject({ admitted: false, reason: 'claim-owner-unverified' });
-    // Releasing an owned token stays possible so the lease cannot strand.
-    expect(await admission('release', lease.token, { outcome: 'leave-open' })).toMatchObject({ released: true });
   });
 
   it.each([
     'absent-agent', 'completed-agent', 'absent-task', 'completed-task', 'other-task', 'unbound', 'portos-owned',
     'open-pr-revoked', 'leave-open', 'human-handoff', 'review-follow-up', 'fork', 'changed-registration',
     'moved-workspace', 'source-as-worktree', 'unrelated-workspace', 'changed-checkout', 'unreadable-checkout',
-  ])('refuses %s despite caller-supplied repository and branch claims', async mode => {
+  ])('refuses %s as a handoff owner', async mode => {
     const task = await launch(mode === 'unbound' ? { mergesOwnPr: false } : mode === 'portos-owned' ? { prOpenedBy: 'portos' } : {});
     const agent = f.state.agents['agent-1'];
     if (mode === 'absent-agent') delete f.state.agents['agent-1'];
@@ -107,8 +79,8 @@ describe('generic worktree PR delivery merge admission', () => {
     if (mode === 'changed-checkout') f.branch = 'another/branch';
     if (mode === 'unreadable-checkout') f.branch = '';
     persist();
-    expect(await admission('acquire', undefined, { repository: 'github.com/example/repo', branch: BRANCH, prUrl: 'https://github.com/example/repo/pull/1' }))
-      .toMatchObject({ admitted: false, reason: 'claim-owner-unverified' });
-    expect(f.disk.mergeAdmissions).toEqual({});
+    const owner = await resolveMergeHandoffOwner('agent-1');
+    expect(owner.refused).toEqual(mode === 'fork' ? 'fork-target-unsupported' : 'handoff-owner-unverified');
+    expect(owner.owns).toBeUndefined();
   });
 });

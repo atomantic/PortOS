@@ -4,7 +4,7 @@ import { mockPathsDataRoot, mockTestIdentity } from '../lib/mockPathsDataRoot.js
 import { destroyGitSandbox, makeGitSandbox, SKIP_HEAVY_INTEGRATION } from '../lib/gitTestRepo.js';
 import { execGit } from '../lib/execGit.js';
 
-const f = vi.hoisted(() => ({ state: { agents: {}, mergeAdmissions: {} }, disk: null, task: null, pr: null }));
+const f = vi.hoisted(() => ({ state: { agents: {} }, disk: null, task: null, pr: null }));
 const { makeProxy, cleanup } = mockPathsDataRoot({ prefix: 'portos-detached-admission-' });
 vi.mock('../lib/fileUtils.js', async importOriginal => makeProxy(await importOriginal()));
 vi.mock('./instanceIdentity.js', () => mockTestIdentity());
@@ -20,11 +20,11 @@ vi.mock('./github.js', () => ({ execGh: async () => JSON.stringify(f.pr) }));
 vi.mock('./forgeExecOptions.js', () => ({ resolveForgeExecOptions: async cwd => ({ cwd, env: {} }) }));
 vi.mock('./cosTaskStore.js', () => ({ getTaskById: async () => f.task }));
 const { createWorktree } = await import('./worktreeManager.js');
-const { claimMergeAdmission } = await import('./cosMergeAdmission.js');
+const { resolveMergeHandoffOwner } = await import('./mergeHandoffOwner.js');
 const { buildAgentRegistration } = await import('../lib/agentRegistrationRecord.js');
 afterAll(cleanup);
 
-it.skipIf(SKIP_HEAVY_INTEGRATION)('admits a real detached default-head checkout without switching the primary branch, and refuses a moved head', async () => {
+it.skipIf(SKIP_HEAVY_INTEGRATION)('resolves a real detached default-head checkout as handoff owner without switching the primary branch, and refuses a moved head', async () => {
   const sandbox = await makeGitSandbox({ origin: true, prefix: 'portos-detached-merge-' });
   try {
     await execGit(['push', 'origin', 'main'], sandbox.repo);
@@ -43,14 +43,11 @@ it.skipIf(SKIP_HEAVY_INTEGRATION)('admits a real detached default-head checkout 
     f.disk = structuredClone(f.state);
     f.pr = { url: f.task.metadata.reviewLoopPRUrl, number: 42, state: 'OPEN', headRefName: 'main',
       headRefOid: head, isCrossRepository: false };
-    const admission = (action, token, outcome) => claimMergeAdmission({ agentId: 'agent-review', action, token, outcome });
-    const lease = await admission('acquire');
-    expect(lease).toMatchObject({ admitted: true });
-    expect(await admission('check', lease.token)).toMatchObject({ admitted: true });
+    const owner = await resolveMergeHandoffOwner('agent-review');
+    expect(owner).toMatchObject({ repository: 'github.com/example/repo' });
+    expect(owner.owns('main')).toBe(true);
     await execGit(['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '--allow-empty', '-m', 'Moved head'], info.worktreePath);
-    expect(await admission('check', lease.token)).toMatchObject({ admitted: false, retryable: false,
-      reason: 'detached-review-target-unverified' });
-    expect(await admission('release', lease.token, 'resync')).toMatchObject({ released: true });
+    expect(await resolveMergeHandoffOwner('agent-review')).toEqual({ refused: 'handoff-owner-unverified' });
     expect((await execGit(['symbolic-ref', '--short', 'HEAD'], sandbox.repo)).stdout.trim()).toBe('main');
     expect((await execGit(['rev-parse', 'HEAD'], sandbox.repo)).stdout.trim()).toBe(head);
   } finally {

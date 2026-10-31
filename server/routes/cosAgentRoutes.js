@@ -57,19 +57,6 @@ router.post('/agents/:id/release-candidate', asyncHandler(async (req, res) => {
   res.json(await updateReleaseCandidateOwnership(req.params.id, input.action));
 }));
 
-const mergeAdmissionSchema = z.object({
-  agentId: z.string().min(1).max(200),
-  action: z.enum(['prepare', 'yield', 'acquire', 'check', 'release']),
-  token: z.string().uuid().optional(),
-  // Mirrors MERGE_ADMISSION_OUTCOMES; the service stays lazily imported.
-  outcome: z.enum(['merged', 'leave-open', 'resync']).optional(),
-});
-router.post('/merge-admission', asyncHandler(async (req, res) => {
-  const input = validateRequest(mergeAdmissionSchema, req.body ?? {});
-  const { claimMergeAdmission } = await import('../services/cosMergeAdmission.js');
-  res.json(await claimMergeAdmission(input));
-}));
-
 // Outside operators have no CoS agent record. A per-run secret separates
 // sessions sharing the agent-key credential; only its principal-bound hash is
 // persisted. Neither an agentId nor a PR's prose can select another owner.
