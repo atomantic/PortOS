@@ -2758,6 +2758,22 @@ describe('pipeline routes', () => {
       });
     });
 
+    it('POST /tts/preview keeps the façade status: unknown voice is 400, an internal fault stays 500', async () => {
+      const voiceTts = await import('../services/voice/tts.js');
+      const { ServerError } = await import('../lib/errorHandler.js');
+      vi.mocked(voiceTts.synthesize)
+        .mockRejectedValueOnce(new ServerError('unknown piper voice: nope', { status: 400, code: 'UNKNOWN_VOICE' }))
+        .mockRejectedValueOnce(new Error('unknown voice asset kind: weights'));
+      const app = makeApp();
+
+      const unknownVoice = await request(app).post('/api/pipeline/tts/preview').send({ voiceId: 'piper:nope' });
+      expect(unknownVoice.status).toBe(400);
+      expect(unknownVoice.body.code).toBe('UNKNOWN_VOICE');
+
+      const internal = await request(app).post('/api/pipeline/tts/preview').send({ voiceId: 'piper:nope' });
+      expect(internal.status).toBe(500);
+    });
+
     it('POST /audio/extract-lines populates lines[] from storyboards dialogue', async () => {
       const app = makeApp();
       const iss = await seedIssueWithStoryboards(app);
