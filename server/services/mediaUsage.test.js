@@ -25,8 +25,12 @@ const tables = {
     },
   }],
   storyboards: [{
-    id: 'sb-1', title: 'Board', data: { beats: [{ panels: [{ id: 'p-1' }] }, { panels: [{ id: 'p-2', image: '/data/images/still-a.png?v=2' }] }] },
+    id: 'sb-1', title: 'Board', data: { beats: [
+      { panels: [{ id: 'p-1', selectedTakeId: 't-2', takes: [{ id: 't-1', image: 'draft-take.png' }, { id: 't-2', image: 'chosen-take.png' }] }] },
+      { panels: [{ id: 'p-2', image: '/data/images/still-a.png?v=2' }] },
+    ] },
   }],
+  decks: [{ id: 'deck-1', title: 'Deck', data: { deck: {}, cards: [{ primaryImageRef: 'card-art.png', imageRefs: ['card-art.png'] }] } }],
   mood_boards: [{
     id: 'mb-1', title: 'Mood', data: { items: [{ mediaKey: 'video:clip-2.mp4' }, { imageUrl: '/data/image-thumbnails/still-a.webp' }, { imageUrl: 'https://example.com/pin.jpg' }] },
   }],
@@ -63,7 +67,13 @@ describe('media usage index', () => {
     expect(index['video:vid-1'].map((u) => u.role)).toEqual(['Final render', 'Shot 2']);
     expect(index['video:vid-2'].map((u) => [u.source, u.href])).toEqual([['mood-board', '/mood-boards/mb-1'], ['video-timeline', '/media/timeline/tl-1']]);
     expect(index['image:set.png'][0].href).toBe('/environments/cat-plc-1/plates');
+    // A panel's chosen take and deck card art are uses.
+    expect(index['image:chosen-take.png']).toEqual([
+      { source: 'storyboard', label: 'Storyboard', id: 'sb-1', title: 'Board', role: 'Panel 1', href: '/storyboards/sb-1/panel/p-1' },
+    ]);
+    expect(index['image:card-art.png'].map((u) => [u.source, u.href])).toEqual([['deck', '/decks/deck-1']]);
     // Unused takes, marks, thumbnails and outside URLs are not uses.
+    expect(index['image:draft-take.png']).toBeUndefined();
     expect(index['image:pool-only.png']).toBeUndefined();
     expect(index['image:marked.png']).toBeUndefined();
     expect(index['image:still-a.webp']).toBeUndefined();

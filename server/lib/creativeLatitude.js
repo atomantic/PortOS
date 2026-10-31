@@ -96,6 +96,8 @@ export const CREATIVE_PREFIXES = Object.freeze([
 
 /** Creative stages/runs whose names don't carry a domain prefix. */
 export const CREATIVE_NAMES = Object.freeze([
+  'catalog-design', // Casting face-design spreads from the user's idea
+  'creative-refinement', // creative draft conversations (Casting, universe identity)
   'agent-content-post', // original Moltbook posts — no third-party text in the prompt
   'sandbox-delegation-creative',
   'catalog-extract',

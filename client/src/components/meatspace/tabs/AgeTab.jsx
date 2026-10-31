@@ -242,7 +242,7 @@ export default function AgeTab() {
                           confirmIcon={Trash2}
                           ariaLabel={`Confirm delete epigenetic test ${test.date}`}
                           onConfirm={() => confirmDelete(async () => {
-                            const removed = await api.removeEpigeneticTest(test.id, { silent: true }).catch(() => null);
+                            const removed = await api.removeEpigeneticTest(test.id).catch(() => null);
                             if (removed) setRemovingId(test.id);
                           })}
                           onCancel={cancelDelete}

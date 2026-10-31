@@ -243,7 +243,7 @@ export default function BloodPressureCard() {
                         confirmIcon={Trash2}
                         ariaLabel={`Confirm delete blood pressure ${reading.date}`}
                         onConfirm={() => confirmDelete(async () => {
-                          const removed = await api.removeBloodPressure(reading.date, { silent: true }).catch(() => null);
+                          const removed = await api.removeBloodPressure(reading.date).catch(() => null);
                           if (removed) setRemovingDate(reading.date);
                         })}
                         onCancel={cancelDelete}

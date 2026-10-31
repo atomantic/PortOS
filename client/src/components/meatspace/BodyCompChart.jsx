@@ -154,7 +154,7 @@ export default function BodyCompChart() {
                     confirmIcon={Trash2}
                     ariaLabel={`Confirm delete body entry ${entry.date}`}
                     onConfirm={() => confirmDelete(async () => {
-                      const removed = await api.removeBodyEntry(id, { silent: true }).catch(() => null);
+                      const removed = await api.removeBodyEntry(id).catch(() => null);
                       if (removed) setRemovingId(id);
                     })}
                     onCancel={cancelDelete}

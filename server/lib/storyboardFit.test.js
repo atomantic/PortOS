@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { fitStoryboardToSong, storyboardFitSong, storyboardShotPanel } from './storyboardFit.js';
+import { fitStoryboardToSong, songSectionBeats, storyboardFitSong, storyboardShotPanel } from './storyboardFit.js';
 
 const panel = (id, seconds, action = `Panel ${id}`) => ({ id: `panel-${id}`, action, dialogue: '', framing: null, camera: '', seconds, castIds: [], environmentIds: [], objectIds: [] });
 const beat = (id, musicalRole, panels, extra = {}) => ({ id: `beat-${id}`, title: '', what: '', musicalRole, panels, ...extra });
@@ -132,5 +132,20 @@ describe('fitStoryboardToSong', () => {
   it('needs an analyzed song', () => {
     expect(storyboardFitSong({})).toBeNull();
     expect(fitStoryboardToSong(board, null)).toEqual({ beats: [], shots: [] });
+  });
+});
+
+describe('songSectionBeats', () => {
+  const project = {
+    audioAnalysis: { durationSec: 60, beats: [], downbeats: [], sections: [{ label: 'Verse 1', startSec: 0, endSec: 30 }, { label: 'Chorus 1', startSec: 30, endSec: 60 }] },
+    lyricCues: [],
+    scenes: [{ panelId: 'panel-v1', startSec: 0 }, { panelId: 'panel-k1', startSec: 30 }],
+  };
+  it('regroups song panels by section and leaves the cold-open beats before the song', () => {
+    const cold = beat('pre', null, [panel('p1', 2)], { beforeSong: true });
+    const beats = songSectionBeats({ beats: [cold, beat('v', 'verse', [panel('v1', 3), panel('v2', 3)]), beat('k', 'chorus', [panel('k1', 6)])] }, project);
+    expect(beats.map((b) => [b.id, b.beforeSong === true, b.panels.map((p) => p.id)])).toEqual([
+      ['beat-pre', true, ['panel-p1']], ['beat-v', false, ['panel-v1', 'panel-v2']], ['beat-k', false, ['panel-k1']],
+    ]);
   });
 });

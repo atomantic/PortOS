@@ -29,7 +29,7 @@
  */
 
 import { sungLyricTextWithin } from './musicVideoLyricAnchors.js';
-import { isPreMusicShot } from './musicVideoColdOpen.js';
+import { coldOpenPlan, isPreMusicShot } from './musicVideoColdOpen.js';
 import { storyboardPreludeShotSec, storyboardPanelArt, storyboardPanelRev } from './storyboardFit.js';
 import { STORYBOARD_DEFAULT_HOLD_SEC, storyboardPreludeCount } from './storyboardSongBrief.js';
 import { STORYBOARD_MUSICAL_ROLE_LABELS } from './storyboardVocabulary.js';
@@ -92,7 +92,8 @@ export function storyboardPanelSpans(board, song = null) {
   let gapSec = 0;
   if (songEnd && songPanels.length) {
     const last = songPanels.at(-1);
-    if (Math.abs(songEnd - last.endSec) <= STORYBOARD_SYNC_END_SLACK_SEC) last.endSec = songEnd;
+    // Snap only when the last panel still starts before the song ends; otherwise it is an overrun.
+    if (Math.abs(songEnd - last.endSec) <= STORYBOARD_SYNC_END_SLACK_SEC && songEnd > last.startSec + SAME_SEC) last.endSec = songEnd;
     else if (last.endSec < songEnd) gapSec = round(songEnd - last.endSec);
     else overrunSec = round(last.endSec - songEnd);
   }
@@ -156,7 +157,18 @@ export function storyboardShotSyncPlan(board, project, { song = null, locks = nu
     return best ? { scene: best.scene, link: 'overlap' } : null;
   };
 
+  // Where each cold-open shot plays now, and where its panel would put it: a reorder
+  // or a longer shot ahead moves it without changing its own length.
+  const coldOpenAt = new Map(coldOpenPlan(project || {}).map(({ scene, startSec }) => [scene.sceneId, startSec]));
+  const preludeAt = new Map();
+  let preludeClock = 0;
+  for (const span of spans.panels) {
+    if (!span.beforeSong) continue;
+    preludeAt.set(span.panelId, round(preludeClock));
+    preludeClock += span.durationSec;
+  }
   const counts = { ...empty.counts };
+  let lockedColdOpenMoves = false;
   const shots = spans.panels.map((span, order) => {
     const panel = panelById.get(span.panelId);
     const rev = storyboardPanelRev(panel);
@@ -177,9 +189,10 @@ export function storyboardShotSyncPlan(board, project, { song = null, locks = nu
     claimed.add(scene.sceneId);
     counts.linked += 1;
     const retimed = span.beforeSong
-      ? !same(scene.preMusic?.durationSec, span.durationSec)
+      ? !same(scene.preMusic?.durationSec, span.durationSec) || !same(coldOpenAt.get(scene.sceneId), preludeAt.get(span.panelId))
       : !same(scene.startSec, span.startSec) || !same(scene.endSec, span.endSec);
     const blocked = retimed && clipLocked(scene) ? 'Its video is locked; unlock the video to move it.' : null;
+    if (blocked && span.beforeSong && !same(coldOpenAt.get(scene.sceneId), preludeAt.get(span.panelId))) lockedColdOpenMoves = true;
     // The first link keeps the shot's own words and frames as the panel's.
     const changed = link === 'panel' && (rev !== scene.panelRev || art !== (scene.panelArt ?? null));
     const held = changed && STILL_HELD.has(stillOf(scene));
@@ -190,6 +203,8 @@ export function storyboardShotSyncPlan(board, project, { song = null, locks = nu
       ...(content ? { visualIntent: clip(panel.action, TEXT_MAX) || null, panelRev: rev, panelArt: art } : {}),
     };
     if (span.beforeSong && !blocked) patch.preMusic = { ...scene.preMusic, durationSec: span.durationSec };
+    // A cold-open shot whose panel moved onto the song stops being a cold-open shot.
+    else if (!span.beforeSong && !blocked && isPreMusicShot(scene)) patch.preMusic = null;
     const delta = Object.fromEntries(Object.entries(patch).filter(([key, value]) => JSON.stringify(scene[key] ?? null) !== JSON.stringify(value ?? null)));
     const moved = (scene.order ?? 0) !== order;
     if (retimed && !blocked) counts.retimed += 1;
@@ -199,6 +214,10 @@ export function storyboardShotSyncPlan(board, project, { song = null, locks = nu
     return { panelId: span.panelId, sceneId: scene.sceneId, link, retimed: retimed && !blocked, moved, content, held, blocked, patch: delta };
   });
 
+  // The cold open plays in shot order, so a locked shot cannot keep its place while others move around it.
+  if (lockedColdOpenMoves) {
+    return { ...empty, problem: 'A shot before the song has a locked video and would move; unlock its video to reorder the cold open.' };
+  }
   const removed = scenes.filter((scene) => !claimed.has(scene.sceneId)).map((scene) => {
     const videoLocked = clipLocked(scene);
     const locked = STILL_HELD.has(stillOf(scene)) || videoLocked;

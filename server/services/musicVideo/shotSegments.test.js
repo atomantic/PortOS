@@ -403,6 +403,14 @@ describe.skipIf(!hasFfmpeg)('cold open before the song', () => {
     const low = 'lowpass=f=900,lowpass=f=900,lowpass=f=900,';
     expect(level(out, 0.2, 0.8, high)).toBeGreaterThan(level(out, 0.2, 0.8, low) + 20);
     expect(level(out, 2, 2, low)).toBeGreaterThan(level(out, 2, 2, high) + 20);
+
+    // A sound-only cold-open edit renames no segment but must remix the preview.
+    fixture.project = cold;
+    const before = await buildRenderPreview(cold.id);
+    fixture.project = { ...cold, scenes: cold.scenes.map((sc) => (sc.preMusic ? { ...sc, preMusic: { ...sc.preMusic, clipVolume: 0.4 } } : sc)) };
+    const quieter = await planShotSegments(fixture.project);
+    expect(quieter.segments.map((sg) => sg.path)).toEqual(plan.segments.map((sg) => sg.path));
+    expect((await buildRenderPreview(cold.id)).name).not.toBe(before.name);
   }, 60000);
 
   it('is silent when a shot has no sound chosen', async () => {

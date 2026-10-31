@@ -12,6 +12,7 @@
  */
 
 import { ServerError } from '../../lib/errorHandler.js';
+import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
 import { storyboardFitSong } from '../../lib/storyboardFit.js';
 import { storyboardShotSyncPlan } from '../../lib/storyboardShotSync.js';
 import { getStoryboard } from './index.js';
@@ -83,13 +84,25 @@ export async function setMusicVideoShotSync(projectId, on) {
   return { project: outcome.project, counts: outcome.plan.counts };
 }
 
+// Board edits release their write lock before this runs, so two edits' syncs can overlap.
+// One sync per board at a time, each from the board as it is now, so an older edit's
+// snapshot never lands after a newer one.
+const boardSyncs = createKeyCachedQueue();
+
 /**
  * After a board edit: each live video linked to the board with sync on takes
  * the edit. A video whose sync cannot run (the board runs past the song, a
  * locked video) keeps its shots; the Storyboard step shows why.
  */
-export async function syncShotsAfterBoardEdit(board) {
-  if (!board?.id || board.deleted) return;
+export function syncShotsAfterBoardEdit(edited) {
+  if (!edited?.id || edited.deleted) return Promise.resolve();
+  return boardSyncs(edited.id, async () => {
+    const board = await getStoryboard(edited.id).catch((err) => (err?.status === 404 ? null : Promise.reject(err)));
+    if (board && !board.deleted) await syncBoard(board);
+  });
+}
+
+async function syncBoard(board) {
   const deps = await syncDeps();
   const videos = (await deps.listProjects()).filter((p) => p && !p.deleted && p.storyboardId === board.id && p.storyboardSync === true);
   for (const video of videos) {

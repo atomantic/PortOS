@@ -5,7 +5,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { execFileSync, spawnSync } from 'child_process';
-import { existsSync, mkdirSync } from 'fs';
+import { existsSync, mkdirSync, utimesSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 
@@ -39,6 +39,14 @@ describe.skipIf(!hasFfmpeg)('ensureColdOpenAudio', () => {
     const second = await ensureColdOpenAudio([{ durationSec: 0.5, clip: null, layers: [] }], dir);
     expect(duration(second, 'a:0')).toBeCloseTo(0.5, 2);
     expect(existsSync(first)).toBe(false);
+    // A mix an overlapping request finished after this one started is the client's newer one: kept.
+    const newer = join(dir, `cold-open-${'a'.repeat(32)}.wav`);
+    writeFileSync(newer, '');
+    const later = new Date(Date.now() + 60_000);
+    utimesSync(newer, later, later);
+    await ensureColdOpenAudio([{ durationSec: 0.25, clip: null, layers: [] }], dir);
+    expect(existsSync(newer)).toBe(true);
+    expect(existsSync(second)).toBe(false);
   });
 });
 
