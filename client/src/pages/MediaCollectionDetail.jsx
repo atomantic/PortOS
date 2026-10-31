@@ -26,6 +26,7 @@ import useMediaPreviewActions from '../hooks/useMediaPreviewActions';
 import usePreviewRoute from '../hooks/usePreviewRoute';
 import { useGalleryPage } from '../hooks/useGalleryPage';
 import useListResource from '../hooks/useListResource';
+import { refreshMediaUsages } from '../hooks/useMediaUsages';
 
 const loadCollections = () => listMediaCollections({ silent: true });
 
@@ -211,15 +212,17 @@ function MediaCollectionDetailContent() {
   // it in select-mode and uses the bulk "Remove" action. Dropping the file
   // from the loaded page removes it immediately; refreshing then restores
   // a contiguous page after the server changes its ordering.
-  const handleDelete = useCallback(async (item) => {
+  const handleDelete = useCallback(async (item, { force = false } = {}) => {
     const ok = await (item.kind === 'image'
-      ? deleteImage(item.filename, { silent: true })
-      : deleteVideoHistoryItem(item.id, { silent: true })
+      ? deleteImage(item.filename, { silent: true, force })
+      : deleteVideoHistoryItem(item.id, { silent: true, force })
     ).catch((err) => {
+      if (err.code === 'MEDIA_IN_USE') void refreshMediaUsages();
       toast.error(err.message || 'Delete failed');
       return null;
     });
     if (!ok) return;
+    void refreshMediaUsages();
     const matches = row => row.kind === item.kind && (row.kind === 'image' ? row.data.filename === item.filename : row.data.id === item.id);
     const outcome = mediaDeleteOutcome(ok, item.kind);
     // A delete that waits on, or did not reach, this machine's copy keeps the row.

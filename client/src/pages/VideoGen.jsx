@@ -128,6 +128,7 @@ import ResolutionField from '../components/media/ResolutionField';
 import { isMiniMaxH3SpeedProfile, VIDEO_EDGE_BOUNDS, videoEdgeBoundsForModel, IC_LORA_MODES } from '../lib/videoGenParams.js';
 import { finishTargetForRecord, isDeliveryVideoModel } from '../lib/videoFinish.js';
 import { peerModelRequiresInput } from '../lib/federatedMediaReadiness.js';
+import { refreshMediaUsages } from '../hooks/useMediaUsages';
 const MODES = [
   { id: 'text',   label: 'Text',   icon: Type,       desc: 'Text-to-video' },
   { id: 'image',  label: 'Image',  icon: ImageIcon,  desc: 'Image-to-video (start frame)' },
@@ -475,11 +476,16 @@ export default function VideoGen() {
     const { pendingDelete: _previous, ...rest } = v; // eslint-disable-line no-unused-vars
     return pendingDelete ? { ...rest, pendingDelete } : rest;
   })), []);
-  const handleDeleteHistory = useCallback(async (item) => {
+  const handleDeleteHistory = useCallback(async (item, { force = false } = {}) => {
     const raw = item?.raw || item;
-    const result = await deleteVideoHistoryItem(raw.id, { silent: true })
-      .catch((err) => { toast.error(err.message || 'Delete failed'); return null; });
+    const result = await deleteVideoHistoryItem(raw.id, { silent: true, force })
+      .catch((err) => {
+        if (err.code === 'MEDIA_IN_USE') void refreshMediaUsages();
+        toast.error(err.message || 'Delete failed');
+        return null;
+      });
     if (!result) return;
+    void refreshMediaUsages();
     const outcome = mediaDeleteOutcome(result, 'video');
     // A delete that waits on, or did not reach, this machine's copy keeps the row.
     if (!outcome.remove) {

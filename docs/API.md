@@ -761,6 +761,7 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Dom
 | `/api/dashboard/daily-actions` | Dashboard daily action tracking |
 | `/api/media/collections`, `/api/media/annotations`, `/api/media/sketches` | Media library collections/annotations/sketches |
 | `/api/media/holders` | Which machines hold each media file (`GET`) and Make primary (`POST /primary` `{ kind, filename, instanceId }`): keep that holder's copy and release the others |
+| `/api/media/usages` | Where each media file is used (`GET`): `{ items: { '<kind>:<ref>': [{ source, label, id, title, role, href }] } }`. `DELETE /api/image-gen/:filename` and `DELETE /api/video-gen/history/:id` refuse a used file with `409 MEDIA_IN_USE` (usages in `context.usages`) unless `?force=1` |
 | `/api/client-errors` | Client-side error reporting |
 | `/api/backup` | Backup snapshots + restore |
 | `/api/legacy-export` | Legacy data export |

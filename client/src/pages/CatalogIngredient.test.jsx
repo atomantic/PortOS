@@ -14,6 +14,7 @@ import { createMemoryRouter, RouterProvider } from 'react-router';
 // load effect's dependency identity every render and re-fire the fetch, which
 // races the second test in this file into a stuck "loading" state.
 const { navigateMock } = vi.hoisted(() => ({ navigateMock: () => {} }));
+vi.mock('../hooks/useMediaUsages', () => ({ useMediaUsages: () => ({}), refreshMediaUsages: () => Promise.resolve() }));
 vi.mock('react-router', async (io) => {
   const actual = await io();
   return { ...actual, useNavigate: () => navigateMock };

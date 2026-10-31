@@ -25,6 +25,9 @@ import { IMAGE_GEN_MODE } from '../../lib/imageGenBackends';
 import { formatDateTime, formatDateNumeric, formatDurationMs, formatBytes } from '../../utils/formatters';
 import SentPromptPanel from './SentPromptPanel';
 import ContinuationDetails from '../videoGen/ContinuationDetails';
+import MediaUsageList from './MediaUsageList';
+import { mediaAnnotationKey } from './mediaDetail';
+import { useMediaUsages } from '../../hooks/useMediaUsages';
 
 // Intentionally NOT migrated to <ui/Modal> or <components/Drawer>. The
 // prev/next buttons sit as viewport-edge siblings of the card (not children
@@ -582,6 +585,18 @@ function PeerNotes({ others }) {
   );
 }
 
+// Where this file is used, each row a link there (the shot, panel or record tab).
+function UsedIn({ item, onClose }) {
+  const usages = useMediaUsages()[mediaAnnotationKey(item)];
+  if (!usages?.length) return null;
+  return (
+    <div>
+      <span className="block mb-1 text-gray-500 uppercase tracking-wide">Used in</span>
+      <MediaUsageList usages={usages} onNavigate={onClose} />
+    </div>
+  );
+}
+
 function SettingsPane({
   item, meta, isVideo,
   onClose, onRemix, onSendToImage, onSendToVideo, onSendTo3d, onContinue, onClean, onRegenerate, onRemoveWatermark, regenAvailable, regenBounds,
@@ -761,6 +776,7 @@ function SettingsPane({
       <div className="min-h-0 flex-1 overflow-y-auto roomy-viewport:overflow-hidden roomy-viewport:flex roomy-viewport:flex-col">
       <div className="p-3 space-y-3 text-xs roomy-viewport:min-h-0 roomy-viewport:flex-1 roomy-viewport:overflow-y-auto">
         {pageActions && <div data-testid="page-actions">{pageActions}</div>}
+        <UsedIn item={item} onClose={onClose} />
         {item.compact ? (
           <div>
             <span className="block mb-1 text-gray-500 uppercase tracking-wide">Prompt</span>

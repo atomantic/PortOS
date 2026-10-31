@@ -3187,6 +3187,10 @@ export const peerMediaReleaseSchema = z.object({
   primaryAt: isoTimestampSchema,
 }).strict();
 
+// DELETE /api/image-gen/:filename, /api/video-gen/history/:id — `force=1` deletes
+// a file records still use (services/mediaUsage.js); without it a used file is refused.
+export const mediaDeleteQuerySchema = z.object({ force: z.enum(['0', '1']).optional() }).passthrough();
+
 // POST /api/media/holders/primary — keep one holder's copy, release the others.
 export const mediaMakePrimarySchema = z.object({
   kind: z.enum(['video', 'image']),

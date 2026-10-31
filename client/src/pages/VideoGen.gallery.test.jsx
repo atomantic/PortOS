@@ -43,7 +43,7 @@ describe('VideoGen gallery deletion', () => {
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Delete' })); });
 
     await waitFor(() => expect(screen.queryByRole('button', { name: record.prompt })).not.toBeInTheDocument());
-    expect(api.deleteVideoHistoryItem).toHaveBeenLastCalledWith(record.id, { silent: true });
+    expect(api.deleteVideoHistoryItem).toHaveBeenLastCalledWith(record.id, { silent: true, force: false });
   });
 
   // Uniquely catches the Video Gen strip dropping the pending marker/Cancel for a

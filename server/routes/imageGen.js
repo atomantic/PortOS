@@ -18,7 +18,7 @@ import { fableLoomMultipartUnsupported, prepareFableLoomImageParams } from '../s
 import { finishVisualProfileImage } from '../services/imageGen/finishVisualProfile.js';
 import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.js';
 import {
-  validateRequest, modelDownloadQuerySchema, modelDownloadParamsSchema, imageCancelBodySchema, imageVisibilityBodySchema, imageEdgeSchema, refineImagePixelCap, PIXEL_CAP_MESSAGE,
+  validateRequest, mediaDeleteQuerySchema, modelDownloadQuerySchema, modelDownloadParamsSchema, imageCancelBodySchema, imageVisibilityBodySchema, imageEdgeSchema, refineImagePixelCap, PIXEL_CAP_MESSAGE,
 } from '../lib/validation.js';
 import { optionalUploadFields, optionalUpload } from '../lib/multipart.js';
 import * as imageGen from '../services/imageGen/index.js';
@@ -52,6 +52,7 @@ import {
 import { getSketchPngPath, isValidKey as isValidSketchKey } from '../services/mediaSketches.js';
 import { itemKey } from '../lib/mediaItemKey.js';
 import { deleteMediaAnywhere, cancelPendingDelete } from '../services/mediaRemoteDelete.js';
+import { assertMediaDeletable } from '../services/mediaUsage.js';
 import * as characterService from '../services/character.js';
 import { randomUUID } from 'crypto';
 import { buildUniverseRunTag } from '../services/universeRunTag.js';
@@ -969,6 +970,8 @@ router.post('/cancel', asyncHandler(async (req, res) => {
 // and style references) inside the same backup admission as the file removal.
 router.delete('/:filename', asyncHandler(async (req, res) => {
   local.assertGalleryFilename(req.params.filename);
+  const { force } = validateRequest(mediaDeleteQuerySchema, req.query ?? {});
+  await assertMediaDeletable(`image:${req.params.filename}`, { force: force === '1' });
   res.json({ ok: true, ...(await deleteMediaAnywhere('image', req.params.filename)) });
 }));
 

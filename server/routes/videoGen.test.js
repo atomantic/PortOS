@@ -37,6 +37,8 @@ vi.mock('../services/fableLoom/visualConditioning.js', () => ({
   fableLoomVideoCapabilities,
 }));
 vi.mock('../services/fableLoom/records.js', () => ({ getLoom }));
+const mediaUsage = vi.hoisted(() => ({ assertMediaDeletable: vi.fn(async () => {}) }));
+vi.mock('../services/mediaUsage.js', () => mediaUsage);
 vi.mock('../services/mediaRemoteDelete.js', () => ({
   deleteMediaAnywhere: vi.fn(async () => ({ status: 'deleted' })),
   cancelPendingDelete: vi.fn(async () => ({ ok: true, cancelled: true })),
@@ -3276,6 +3278,9 @@ describe('videoGen routes', () => {
       expect(r.status).toBe(200);
       expect(r.body).toMatchObject({ ok: true, status: 'pending' });
       expect(mediaRemoteDelete.deleteMediaAnywhere).toHaveBeenCalledWith('video', 'abc');
+      expect(mediaUsage.assertMediaDeletable).toHaveBeenLastCalledWith('video:abc', { force: false });
+      await request(app).delete('/api/video-gen/history/abc?force=1');
+      expect(mediaUsage.assertMediaDeletable).toHaveBeenLastCalledWith('video:abc', { force: true });
     });
 
     it('deletes a legitimate non-UUID federated id', async () => {
