@@ -687,6 +687,30 @@ describe('recovery output-hook dispatch (#3182)', () => {
     } finally { isProgrammaticIoTaskType.mockReturnValue(true); }
   });
 
+  it('keeps a replayed finalize of its own cleanup handoff pending and recovery-owned', async () => {
+    isProgrammaticIoTaskType.mockReturnValue(false);
+    persistedAgent.metadata = { isWorktree: true };
+    const task = { ...TASK, status: 'in_progress', metadata: { ...TASK.metadata,
+      deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-example' } };
+    try {
+      await finalizeAgent({ agentId: 'agent-example', task, success: true, exitCode: 0, outputBuffer: '' });
+      expect(completeAgent).toHaveBeenLastCalledWith('agent-example', expect.objectContaining({
+        deliveryRecoveryOwned: true, cleanupPending: true }));
+    } finally { isProgrammaticIoTaskType.mockReturnValue(true); }
+  });
+
+  it('fails a cleanly exited run the provider refused and records the interruption', async () => {
+    isProgrammaticIoTaskType.mockReturnValue(false);
+    try {
+      await finalizeAgent({ agentId: 'agent-example', task: { id: TASK.id, taskType: 'user', metadata: {} },
+        success: true, exitCode: 0, outputBuffer: '',
+        errorAnalysis: { category: 'content-refusal', origin: 'provider', permanent: true, actionable: false } });
+      expect(persistedAgent.metadata.executionInterruption).toEqual({ category: 'content-refusal', source: 'provider' });
+      expect(completeAgent).toHaveBeenLastCalledWith('agent-example', expect.objectContaining({ success: false }));
+      expect(updateTask).not.toHaveBeenCalledWith(TASK.id, expect.objectContaining({ status: 'completed' }), 'user');
+    } finally { isProgrammaticIoTaskType.mockReturnValue(true); }
+  });
+
   it.each(['saved', 'pinned-claim'])('retains a %s cleanup handoff when its run is recovered after a crash', async mode => {
     const { mkdtemp, writeFile, rm } = await import('node:fs/promises');
     const { tmpdir } = await import('node:os');
