@@ -287,7 +287,7 @@ describeHeldCheckoutRecovery(() => {
       expect(outcome.preservationDiscovery.details).toContainEqual(expect.objectContaining({ reason: 'archive-discovery-budget-exceeded' }));
     });
 
-    it.each(['ambiguous', 'unreadable-metadata', 'missing-discovery', 'truncated-discovery'])(
+    it.each(['ambiguous', 'unreadable-metadata', 'truncated-discovery'])(
       'retains an explicit hold for %s despite a complete matching archive', async failure => {
         const { saved } = await historicalArchive();
         const root = heldCheckoutArchiveRoot(PATHS.cos);
@@ -298,7 +298,6 @@ describeHeldCheckoutRecovery(() => {
             await writeFile(join(root, `broken-metadata-${i}`, 'manifest.json'), '{');
           }
         }
-        if (failure === 'missing-discovery') await writeFile(join(PATHS.cos, 'initialized-checkout-retirements'), 'unreadable archive root');
         if (failure === 'truncated-discovery') {
           for (let i = 0; i < 1001; i++) await writeFile(join(root, `entry-${i}`), '');
         }

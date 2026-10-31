@@ -34,7 +34,7 @@ export default function AgentResultLine({ agent, className = '' }) {
     && typeof followUp.prUrl === 'string' && !!followUp.prUrl && followUp.prUrl === agent.metadata?.reviewLoopMergeTarget?.url;
   // A completed cleanup audit supersedes the old cleanup-only handoff, while
   // unrelated delivery decisions and execution failures keep their own verdict.
-  const cleanupResolved = cleanupComplete && merged && (outcome?.recovery?.mode === 'cleanup'
+  const cleanupResolved = cleanupComplete && (outcome?.recovery?.mode === 'cleanup'
     || (executionSuccess && agent.metadata?.repoStateVerification?.deliveryVerified === true));
   const deliveryHeld = ['blocked', 'incomplete'].includes(outcome?.status) && !cleanupResolved;
   const deliveryComplete = isTaskDeliveryComplete(agent) || cleanupResolved;
@@ -51,7 +51,7 @@ export default function AgentResultLine({ agent, className = '' }) {
       ) : deliveryHeld && executionSuccess ? (
         <><AlertCircle size={14} aria-hidden="true" /> {outcome.status === 'blocked' ? 'Task blocked' : 'Task incomplete'}</>
       ) : executionSuccess ? (
-        <><CheckCircle size={14} aria-hidden="true" /> {incomplete || !deliveryComplete ? 'Execution completed' : outcome.status === 'no-action-needed' ? 'No action needed' : 'Completed successfully'}</>
+        <><CheckCircle size={14} aria-hidden="true" /> {incomplete || !deliveryComplete ? 'Execution completed' : outcome?.status === 'no-action-needed' ? 'No action needed' : 'Completed successfully'}</>
       ) : (
         <><AlertCircle size={14} aria-hidden="true" /> {agent.result.error || 'Failed'}</>
       )}
@@ -59,10 +59,10 @@ export default function AgentResultLine({ agent, className = '' }) {
       {!handoff && cleanupTracked && (assignedPrMerged && (!merged || cleanupPending) ? <>
         <div>Assigned pull request merged.</div>
         <div>Later local work may still need delivery verification.</div>
-      </> : <div>{merged ? 'Code merged.' : deliveryComplete ? 'Delivery verified.' : 'Code delivery still needs verification.'}</div>)}
+      </> : <div>{merged ? 'Code merged.' : cleanupComplete ? 'Local worktree cleaned up.' : deliveryComplete ? 'Delivery verified.' : 'Cleanup pending.'}</div>)}
       {!handoff && outcome?.reason && (!cleanupTracked || outcome.recovery?.mode === 'approval') && <div>{outcome.reason}</div>}
       {interruption && <div>Execution interrupted: {interruption.category === 'content-refusal' ? 'provider safety refusal; automatic retry stopped' : interruption.category}</div>}
-      {!handoff && cleanupTracked && <CleanupStatus cleanup={cleanup} outcome={outcome} assignedPrMerged={assignedPrMerged} />}
+      {!handoff && cleanupTracked && <CleanupStatus cleanup={cleanup} outcome={outcome} />}
       <SecurityScanEvidence scanner={scanner} control={agent.metadata?.securityScanControl} />
       {!handoff && assessment && <div>{assessment.status === 'recorded' ? 'Assessment saved' : assessment.status === 'persistence-failed' ? 'Assessment could not be saved' : assessment.status === 'not-attempted' ? 'Assessment not attempted' : 'Assessment not verified as saved'}</div>}
       {!handoff && validationFailed && <div>Delivery validation failed</div>}
@@ -72,27 +72,23 @@ export default function AgentResultLine({ agent, className = '' }) {
 }
 
 function isCleanupComplete(cleanup) {
-  return cleanup?.status === 'verified' && (cleanup.unresolved == null || cleanup.unresolved === 0);
+  return (cleanup?.status === 'verified' || cleanup?.status === 'already-absent')
+    && (cleanup.unresolved == null || cleanup.unresolved === 0);
 }
 
-function CleanupStatus({ cleanup, outcome, assignedPrMerged }) {
+function CleanupStatus({ cleanup, outcome }) {
   const verified = isCleanupComplete(cleanup);
   const mergedAbsent = cleanup?.reason === 'already-absent-merged'
     || (cleanup?.status === 'already-absent' && cleanup.committedIntegrationVerified === true);
   const absent = cleanup?.status === 'already-absent';
-  const blocked = cleanup?.status === 'blocked';
   const owners = Array.isArray(cleanup?.owners) && cleanup.owners.length > 0;
   return (
     <div>
-      <div>{verified ? mergedAbsent ? 'Local worktree already removed; merged delivery confirmed.' : 'Local cleanup confirmed; preservation verified.'
-        : absent ? mergedAbsent && cleanup.total > 1 ? 'Other repository cleanup still needs verification.'
-          : mergedAbsent || assignedPrMerged ? 'The local worktree is already gone; preservation still needs verification.' : 'The local worktree is already gone; code delivery still needs verification.'
-          : blocked ? 'Local cleanup is blocked. PortOS has not confirmed safe removal.'
-            : 'Local cleanup is pending; preservation and removal are not yet confirmed.'}</div>
-      {!verified && <div>{owners ? <>Next: wait for the current owner to finish.<CleanupHolders owners={cleanup.owners} /></>
-        : cleanup?.taskId ? <>Next: the <Link className="underline" to={`/cos/tasks?task=${encodeURIComponent(cleanup.taskId)}&source=internal`}>cleanup recovery task</Link> must verify preservation and finish cleanup.</>
-          : absent ? 'Next: PortOS must verify the remaining delivery and cleanup state.'
-            : 'Next: PortOS must resolve the cleanup hold and verify preservation before removal.'}</div>}
+      <div>{verified ? mergedAbsent ? 'Local worktree already removed; merged delivery confirmed.' : absent ? 'Local worktree already removed.' : 'Local worktree cleaned up.'
+        : absent && cleanup.total > 1 ? 'Other repository cleanup is pending.'
+          : 'Local worktree cleanup is pending.'}</div>
+      {!verified && (owners || cleanup?.taskId) && <div>{owners ? <>Next: wait for the current owner to finish.<CleanupHolders owners={cleanup.owners} /></>
+        : <>Next: the <Link className="underline" to={`/cos/tasks?task=${encodeURIComponent(cleanup.taskId)}&source=internal`}>cleanup recovery task</Link> will finish cleanup.</>}</div>}
       <details className="mt-1 text-port-text-muted">
         <summary className="cursor-pointer">Cleanup diagnostics</summary>
         <pre className="whitespace-pre-wrap break-words text-xs">{JSON.stringify({ cleanup: cleanup || null, reportedOutcome: outcome }, null, 2)}</pre>

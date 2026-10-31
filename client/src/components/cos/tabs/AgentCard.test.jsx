@@ -1468,11 +1468,11 @@ it('keeps the runner transcript separate when no completion summary was saved', 
 it('keeps the current cleanup verdict primary and labels stale report and warnings as historical', async () => {
   const current = { ...agent, result: { success: true, cleanupPending: true, warnings: ['Cleanup queued: old-internal-code'] },
     metadata: { ...agent.metadata, taskSummary: 'Cleanup is queued with the checkout preserved.',
-      cleanupOutcome: { status: 'already-absent', reason: 'already-absent-preservation-unverified', committedIntegrationVerified: true } } };
+      cleanupOutcome: { status: 'already-absent', reason: 'already-absent-merged', committedIntegrationVerified: true } } };
   api.getCosAgent.mockResolvedValue({ ...current, output: [] });
   render(<MemoryRouter><AgentCard agent={current} completed /></MemoryRouter>);
   expect(screen.getByText('Code merged.')).toBeInTheDocument();
-  expect(screen.getByText('The local worktree is already gone; preservation still needs verification.')).toBeInTheDocument();
+  expect(screen.getByText('Local worktree already removed; merged delivery confirmed.')).toBeInTheDocument();
   expect(screen.getByText('Cleanup queued: old-internal-code').closest('details')).not.toHaveAttribute('open');
   expect(screen.queryByText('Cleanup is queued with the checkout preserved.')).not.toBeInTheDocument();
   await userEvent.click(screen.getByRole('button', { name: 'Show', exact: true }));
@@ -1490,7 +1490,7 @@ it('shows the assigned merge and outstanding local-work warning on a completed a
   render(<MemoryRouter><AgentCard agent={current} completed /></MemoryRouter>);
   expect(screen.getByText('Assigned pull request merged.')).toBeInTheDocument();
   expect(screen.getByText('Later local work may still need delivery verification.')).toBeInTheDocument();
-  expect(screen.getByText('Local cleanup is blocked. PortOS has not confirmed safe removal.')).toBeInTheDocument();
+  expect(screen.getByText('Local worktree cleanup is pending.')).toBeInTheDocument();
   expect(screen.queryByText('Delivery verified.')).not.toBeInTheDocument();
 });
 

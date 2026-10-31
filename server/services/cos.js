@@ -535,17 +535,6 @@ async function bootDaemon(state) {
     },
     metadata: { description: 'Resume runtime verification after a verified boot' },
   });
-  const { INITIALIZED_RECOVERY_INTERVAL_MS, sweepInitializedCheckoutRecoveries } = await import('./initializedCheckoutRecoverySweep.js');
-  scheduleEvent({
-    id: 'cos-initialized-retirement-recovery',
-    type: 'interval',
-    intervalMs: INITIALIZED_RECOVERY_INTERVAL_MS,
-    handler: async () => {
-      await sweepInitializedCheckoutRecoveries(pendingMergeSweepBlocked)
-        .catch(error => console.warn(`⚠️ Initialized retirement recovery deferred: ${error.message}`));
-    },
-    metadata: { description: 'Resume verified initialized retirement journals' },
-  });
   const { PENDING_MERGE_SWEEP_INTERVAL_MS, setHandoffFollowUpGate } = await import('./prWatcher.js');
   setHandoffFollowUpGate(pendingMergeSweepBlocked);
   scheduleEvent({

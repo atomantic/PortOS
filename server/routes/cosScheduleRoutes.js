@@ -10,7 +10,7 @@ import { z } from 'zod';
 import * as taskSchedule from '../services/taskSchedule.js';
 import { logCosScheduleUpdate } from '../services/userActionScheduleLog.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { sanitizeTaskMetadata, taskDataInputsSchema, validateRequest, parsePagination, cosScheduleTargetBodySchema, cosScheduleTriggerBodySchema, heldCheckoutRetireBodySchema, heldCheckoutReviewBodySchema, initializedCheckoutRetireBodySchema, initializedCheckoutTransactionSchema, initializedCheckoutRestoreSchema, initializedCheckoutBranchRetireSchema, initializedCheckoutMetadataRestoreSchema, initializedCheckoutFinalizationSchema, initializedCheckoutQuarantineResumptionSchema, legacyReleaseRecoveryReviewSchema, legacyReleaseRecoveryAcceptSchema, releaseSynchronizationResetBodySchema } from '../lib/validation.js';
+import { sanitizeTaskMetadata, taskDataInputsSchema, validateRequest, parsePagination, cosScheduleTargetBodySchema, cosScheduleTriggerBodySchema, heldCheckoutRetireBodySchema, heldCheckoutReviewBodySchema, legacyReleaseRecoveryReviewSchema, legacyReleaseRecoveryAcceptSchema, releaseSynchronizationResetBodySchema } from '../lib/validation.js';
 import { promptSourceSchema, PROMPT_SOURCES, scheduleExecutionFieldsSchema } from '../lib/cosValidation.js';
 import { EFFORT_LEVELS } from '../lib/providerModels.js';
 import { INTERVAL_TYPES, decodeIntervalType, isCronExpression, isKnownIntervalType } from '../services/taskScheduleConstants.js';
@@ -340,9 +340,6 @@ router.post('/schedule/branch-reconcile/checkouts/review', asyncHandler(async (r
   const { appId, prUrl, kind, ...release } = validateRequest(heldCheckoutReviewBodySchema, req.body);
   const { prepareInventoriedCheckoutRetirement } = await import('../services/heldCheckoutRecovery.js');
   const result = await prepareInventoriedCheckoutRetirement({ appId, release, prUrl, ...(kind && { kind }) });
-  if (!result.ok && result.reason === 'retirement-submodule-not-uninitialized' && !result.nextAction) {
-    result.nextAction = 'This checkout has initialized Git submodules. Request its exact review through /api/cos/schedule/branch-reconcile/initialized-checkouts/review; do not deinitialize or remove modules to bypass this refusal.';
-  }
   if (!result.ok) throw new ServerError(`Checkout review refused: ${result.reason}`, {
     status: 409, code: 'CHECKOUT_REVIEW_REFUSED', context: { reason: result.reason, ...(result.archiveLimit && { archiveLimit: result.archiveLimit }), ...(result.nextAction && { nextAction: result.nextAction }) },
   });
@@ -361,114 +358,6 @@ router.post('/schedule/branch-reconcile/checkouts/retire', asyncHandler(async (r
     });
   }
   res.json(result);
-}));
-
-// Initial retirement remains explicit. Only existing proof-bound journals can be
-// continued by the deterministic daemon; ordinary cleanup keeps its module guard.
-router.post('/schedule/branch-reconcile/initialized-checkouts/review', asyncHandler(async (req, res) => {
-  const { appId, prUrl, ...release } = validateRequest(heldCheckoutReviewBodySchema.omit({ kind: true }).strict(), req.body);
-  const { reviewInitializedCheckout } = await import('../services/initializedCheckoutRecovery.js');
-  const result = await reviewInitializedCheckout({ appId, release, prUrl });
-  res.status(result.ok ? 200 : 409).json(result);
-}));
-
-router.post('/schedule/branch-reconcile/initialized-checkouts/retire', asyncHandler(async (req, res) => {
-  const { appId, review, ...release } = validateRequest(initializedCheckoutRetireBodySchema, req.body);
-  const { retireInitializedCheckout } = await import('../services/initializedCheckoutRecovery.js');
-  const result = await retireInitializedCheckout({ appId, release, review });
-  res.status(result.ok ? 200 : 409).json(result);
-}));
-
-// Explicit whole-checkout preservation uses the same journal, byte/capacity
-// bounds, metadata proof, quarantine and recovery as initialized modules. The
-// ordinary archive limits and existing initialized-only endpoint stay intact.
-router.post('/schedule/branch-reconcile/whole-checkouts/review', asyncHandler(async (req, res) => {
-  const { appId, prUrl, ...release } = validateRequest(heldCheckoutReviewBodySchema.omit({ kind: true }).strict(), req.body);
-  const { reviewInitializedCheckout } = await import('../services/initializedCheckoutRecovery.js');
-  const result = await reviewInitializedCheckout({ appId, release, prUrl, wholeCheckout: true });
-  res.status(result.ok ? 200 : 409).json(result);
-}));
-
-router.post('/schedule/branch-reconcile/whole-checkouts/retire', asyncHandler(async (req, res) => {
-  const { appId, review, ...release } = validateRequest(initializedCheckoutRetireBodySchema, req.body);
-  const { retireInitializedCheckout } = await import('../services/initializedCheckoutRecovery.js');
-  const result = await retireInitializedCheckout({ appId, release, review, wholeCheckout: true });
-  res.status(result.ok ? 200 : 409).json(result);
-}));
-
-router.get('/schedule/branch-reconcile/initialized-checkouts/status', asyncHandler(async (req, res) => {
-  const input = validateRequest(initializedCheckoutTransactionSchema, req.query);
-  const { initializedCheckoutStatus } = await import('../services/initializedCheckoutRecovery.js');
-  res.json(await initializedCheckoutStatus(input));
-}));
-
-router.post('/schedule/branch-reconcile/initialized-checkouts/restore', asyncHandler(async (req, res) => {
-  const input = validateRequest(initializedCheckoutRestoreSchema, req.body);
-  const { restoreInitializedCheckout } = await import('../services/initializedCheckoutRecovery.js');
-  const result = await restoreInitializedCheckout(input);
-  res.status(result.ok ? 200 : 409).json(result);
-}));
-
-router.post('/schedule/branch-reconcile/initialized-checkouts/review-metadata-restore', asyncHandler(async (req, res) => {
-  const input = validateRequest(initializedCheckoutRestoreSchema, req.body);
-  const { reviewInitializedCheckoutMetadataRestore } = await import('../services/initializedCheckoutRecovery.js');
-  const result = await reviewInitializedCheckoutMetadataRestore(input);
-  res.status(result.ok ? 200 : 409).json(result);
-}));
-
-router.post('/schedule/branch-reconcile/initialized-checkouts/restore-metadata', asyncHandler(async (req, res) => {
-  const input = validateRequest(initializedCheckoutMetadataRestoreSchema, req.body);
-  const { restoreInitializedCheckoutMetadata } = await import('../services/initializedCheckoutRecovery.js');
-  const result = await restoreInitializedCheckoutMetadata(input);
-  res.status(result.ok ? 200 : 409).json(result);
-}));
-
-router.post('/schedule/branch-reconcile/initialized-checkouts/review-restored-finalization', asyncHandler(async (req, res) => {
-  const input = validateRequest(initializedCheckoutRestoreSchema, req.body);
-  const { reviewInitializedCheckoutRestoredFinalization } = await import('../services/initializedCheckoutRecovery.js');
-  const result = await reviewInitializedCheckoutRestoredFinalization(input);
-  res.status(result.ok ? 200 : 409).json(result);
-}));
-
-router.post('/schedule/branch-reconcile/initialized-checkouts/finalize-restored', asyncHandler(async (req, res) => {
-  const input = validateRequest(initializedCheckoutFinalizationSchema, req.body);
-  const { finalizeInitializedCheckoutRestored } = await import('../services/initializedCheckoutRecovery.js');
-  const result = await finalizeInitializedCheckoutRestored(input);
-  res.status(result.ok ? 200 : 409).json(result);
-}));
-
-router.post('/schedule/branch-reconcile/initialized-checkouts/review-quarantine-resumption', asyncHandler(async (req, res) => {
-  const input = validateRequest(initializedCheckoutRestoreSchema, req.body);
-  const { reviewInitializedCheckoutQuarantineResumption } = await import('../services/initializedCheckoutRecovery.js');
-  const result = await reviewInitializedCheckoutQuarantineResumption(input);
-  res.status(result.ok ? 200 : 409).json(result);
-}));
-
-router.post('/schedule/branch-reconcile/initialized-checkouts/resume-quarantine', asyncHandler(async (req, res) => {
-  const input = validateRequest(initializedCheckoutQuarantineResumptionSchema, req.body);
-  const { resumeInitializedCheckoutQuarantine } = await import('../services/initializedCheckoutRecovery.js');
-  const result = await resumeInitializedCheckoutQuarantine(input);
-  res.status(result.ok ? 200 : 409).json(result);
-}));
-
-router.post('/schedule/branch-reconcile/initialized-checkouts/verify-archive', asyncHandler(async (req, res) => {
-  const input = validateRequest(initializedCheckoutRestoreSchema, req.body);
-  const { verifyInitializedCheckoutArchive } = await import('../services/initializedCheckoutRecovery.js');
-  res.json(await verifyInitializedCheckoutArchive(input));
-}));
-
-router.post('/schedule/branch-reconcile/initialized-checkouts/review-branch', asyncHandler(async (req, res) => {
-  const input = validateRequest(initializedCheckoutRestoreSchema, req.body);
-  const { reviewInitializedCheckoutBranch } = await import('../services/initializedCheckoutRecovery.js');
-  const result = await reviewInitializedCheckoutBranch(input);
-  res.status(result.ok ? 200 : 409).json(result);
-}));
-
-router.post('/schedule/branch-reconcile/initialized-checkouts/retire-branch', asyncHandler(async (req, res) => {
-  const input = validateRequest(initializedCheckoutBranchRetireSchema, req.body);
-  const { retireInitializedCheckoutBranch } = await import('../services/initializedCheckoutRecovery.js');
-  const result = await retireInitializedCheckoutBranch(input);
-  res.status(result.ok ? 200 : 409).json(result);
 }));
 
 // Manual maintenance runs — the Schedule tab's "Run maintenance now"; see

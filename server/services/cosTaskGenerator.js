@@ -893,14 +893,6 @@ export async function evaluateTasks(options) {
   // meters agent RUNS — a deterministic merge spawns nothing and consumes none
   // of it — while the mode is the user's "may PortOS act on its own" switch.
   if (!paused && getDomainMode(state.config, 'cos') === 'execute') {
-    const { sweepInitializedCheckoutRecoveries } = await import('./initializedCheckoutRecoverySweep.js');
-    // This drain has its own cadence/single-flight guard and rechecks autonomy
-    // between stages, including after native archive verification.
-    void sweepInitializedCheckoutRecoveries(async () => {
-      if (!isDaemonRunning()) return 'daemon-stopped';
-      const current = await loadState();
-      return current.paused ? 'daemon-paused' : getDomainMode(current.config, 'cos') !== 'execute' ? 'autonomy-not-execute' : null;
-    }).catch(error => console.warn(`⚠️ Initialized retirement recovery deferred: ${error.message}`));
     const prWatcher = await import('./prWatcher.js');
     const sweep = await prWatcher.sweepPendingMergePrs();
     if (sweep.merged || sweep.escalated || sweep.timedOut) {

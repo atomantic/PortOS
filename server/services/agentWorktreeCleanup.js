@@ -183,14 +183,26 @@ async function worktreeCleanupContext(agentId, options) {
   const { getAgent } = await import('./cosAgentLifecycle.js');
   const agentState = await getAgent(agentId).catch(() => null);
   const metadata = agentState?.metadata;
-  if (!metadata?.isWorktree || metadata.isPersistentWorktree) return { isWorktree: false };
+  const claimBranches = [...new Set([
+    ...(Array.isArray(metadata?.claimBranches) ? metadata.claimBranches : []),
+    metadata?.claimBranch,
+  ].filter(b => typeof b === 'string' && b.trim()))];
+  if (!metadata?.isWorktree || metadata.isPersistentWorktree) {
+    return {
+      isWorktree: false,
+      claimBranches,
+      sourceWorkspace: metadata?.sourceWorkspace || metadata?.workspacePath || null,
+    };
+  }
   const { sourceWorkspace, worktreeBranch } = metadata;
-  if (!sourceWorkspace || !worktreeBranch) return { isWorktree: false };
+  if (!sourceWorkspace || !worktreeBranch) {
+    return { isWorktree: false, claimBranches, sourceWorkspace: sourceWorkspace || metadata?.workspacePath || null };
+  }
   const normalized = cleanupOptions(options);
   return {
     ...normalized,
     ...(normalized.originalTask?.metadata?.prCompletion === PR_COMPLETIONS.DRAFT ? { prCompletion: PR_COMPLETIONS.LEAVE_OPEN, skipMerge: true } : {}),
-    isWorktree: true, agentId, sourceWorkspace, worktreeBranch,
+    isWorktree: true, agentId, sourceWorkspace, worktreeBranch, claimBranches,
     discardWorktree: isTruthyMeta(normalized.originalTask?.metadata?.discardWorktree),
     worktreePath: metadata.workspacePath || join(PATHS.worktrees, agentId),
     publicationValidation: publicationHolds.get(agentId) || metadata.publicationValidation,
@@ -202,6 +214,43 @@ async function worktreeCleanupContext(agentId, options) {
     securityScanControl: metadata.securityScanControl,
     warnings: [],
   };
+}
+
+async function cleanupClaimBranchWorktrees(agentId, { sourceWorkspace, claimBranches }) {
+  if (!sourceWorkspace || !Array.isArray(claimBranches) || !claimBranches.length) return [];
+  const worktrees = await listWorktrees(sourceWorkspace).catch(() => []);
+  const defaultBranch = await git.getDefaultBranch(sourceWorkspace).catch(() => 'main');
+  const { probePrForBranch } = await import('./prProbe.js');
+  for (const branch of claimBranches) {
+    const holder = worktrees.find(wt => (wt.branch || '').replace(/^refs\/heads\//, '') === branch && wt.path !== sourceWorkspace) || null;
+    const probe = await probePrForBranch(sourceWorkspace, branch).catch(() => null);
+    const prMerged = probe?.prState === 'MERGED';
+    let cleanEmptyBranch = false;
+    if (!prMerged) {
+      const commitsAhead = await git.getCommitsAhead(sourceWorkspace, defaultBranch, branch).catch(() => null);
+      if (commitsAhead === 0) {
+        if (holder?.path && existsSync(holder.path)) {
+          const status = await execGit(['status', '--porcelain'], holder.path, { ignoreExitCode: true }).catch(() => null);
+          cleanEmptyBranch = status?.exitCode === 0 && !status.stdout.trim();
+        } else {
+          cleanEmptyBranch = true;
+        }
+      }
+    }
+    if (!prMerged && !cleanEmptyBranch) continue;
+    if (holder?.path) {
+      await execGit(['worktree', 'unlock', holder.path], sourceWorkspace, { ignoreExitCode: true }).catch(() => null);
+      await removeWorktree(sourceWorkspace, holder.path, { deleteBranch: true, force: true }).catch(() => null);
+    }
+    await execGit(['branch', '-D', branch], sourceWorkspace, { ignoreExitCode: true }).catch(() => null);
+    if (prMerged) {
+      await execGit(['push', 'origin', '--delete', branch], sourceWorkspace, { ignoreExitCode: true }).catch(() => null);
+    }
+    emitLog('info', `🌳 Cleaned up claim branch ${branch} for ${agentId} (${prMerged ? 'PR merged' : 'empty clean branch'})`, {
+      agentId, branchName: branch,
+    });
+  }
+  return [];
 }
 
 async function probeWorktreePr(context, success) {
@@ -261,7 +310,7 @@ async function runCleanupAgentWorktree(agentId, success, options = {}) {
   reportWorktreeDisposition(context, disposition, verdict);
   switch (disposition.disposition) {
     case 'not-a-worktree':
-      return [];
+      return cleanupClaimBranchWorktrees(agentId, context);
     case 'discard':
       return discardAgentWorktree(context);
     case 'open-pr':
