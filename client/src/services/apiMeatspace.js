@@ -192,7 +192,7 @@ export const submitPostSession = (data, options = {}) => request('/meatspace/pos
   body: JSON.stringify(data),
   ...options
 });
-export const getPostStats = (days) => request(`/meatspace/post/stats${days != null ? `?days=${days}` : ''}`);
+export const getPostStats = (days, options = {}) => request(`/meatspace/post/stats${days != null ? `?days=${days}` : ''}`, options);
 export const getPostProgress = (days, options = {}) => request(
   `/meatspace/post/progress${days != null ? `?days=${days}` : ''}`,
   options

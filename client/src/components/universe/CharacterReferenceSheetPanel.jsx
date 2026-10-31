@@ -212,10 +212,10 @@ function getVariantCatalog() {
     })
     .catch((err) => {
       console.error(`❌ Failed to load reference-sheet variant catalog: ${err?.message || err}`);
-      // Fallback to the legacy standard-only catalog so the panel still
-      // works against an older server that hasn't shipped the registry yet.
-      _variantCache = [{ id: LEGACY_SHEET_VARIANT_ID, label: 'Reference sheet', description: '' }];
-      return _variantCache;
+      // Fall back to the standard-only catalog so the panel still works, but
+      // leave the cache empty: a transient failure must not hide the other
+      // variants for the rest of the page session — the next mount retries.
+      return [{ id: LEGACY_SHEET_VARIANT_ID, label: 'Reference sheet', description: '' }];
     })
     .finally(() => { _variantInflight = null; });
   return _variantInflight;

@@ -10,6 +10,7 @@ import useUserTimezone from '../../../hooks/useUserTimezone.js';
 import { todayKeyInTimezone, shiftDayKey } from '../../../utils/timezone.js';
 import { DRILL_TO_DOMAIN, DRILL_LABELS, domainLabel } from './constants';
 import { clickableProps } from '../../../lib/a11yKeyboard.js';
+import ListLoadError from '../../ui/ListLoadError';
 
 const RANGES = [
   { label: '7d', days: 7 },
@@ -41,6 +42,8 @@ export default function PostHistory({ onBack }) {
   const timezone = useUserTimezone();
   const [sessions, setSessions] = useState([]);
   const [stats, setStats] = useState(null);
+  // 'loading' | 'ready' | 'error' — a failed read must not read as "No sessions".
+  const [load, setLoad] = useState({ state: 'loading', failed: [] });
   const [range, setRange] = useState(30);
   // Generation guard: `timezone` resolves async (browser zone → configured zone),
   // so mount fires one load with the browser-derived floor and a second once the
@@ -56,13 +59,16 @@ export default function PostHistory({ onBack }) {
     const from = range > 0
       ? shiftDayKey(todayKeyInTimezone(timezone), -range)
       : undefined;
-    const [s, st] = await Promise.all([
-      getPostSessions(from).catch(err => { console.warn('⚠️ Failed to load POST sessions: ' + err.message); return []; }),
-      getPostStats(range).catch(err => { console.warn('⚠️ Failed to load POST stats: ' + err.message); return null; })
+    const [sessionsResult, statsResult] = await Promise.allSettled([
+      getPostSessions(from, undefined, { silent: true }),
+      getPostStats(range, { silent: true }),
     ]);
     if (gen !== loadGenRef.current) return; // a newer load superseded this one
-    setSessions((s || []).slice().reverse());
-    setStats(st);
+    const ok = (result) => result.status === 'fulfilled';
+    setSessions(ok(sessionsResult) ? (sessionsResult.value || []).slice().reverse() : []);
+    setStats(ok(statsResult) ? statsResult.value : null);
+    const failed = [!ok(sessionsResult) && 'sessions', !ok(statsResult) && 'stats'].filter(Boolean);
+    setLoad({ state: failed.length ? 'error' : 'ready', failed });
   }, [range, timezone]);
 
   useEffect(() => {
@@ -133,6 +139,10 @@ export default function PostHistory({ onBack }) {
         </div>
       </div>
 
+      {load.state === 'error' && (
+        <ListLoadError what={`POST ${load.failed.join(' and ')}`} onRetry={loadData} />
+      )}
+
       {/* Stat summary cards */}
       {hasStats && (
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4">
@@ -171,7 +181,7 @@ export default function PostHistory({ onBack }) {
                   <Line type="monotone" dataKey="score" stroke={chartColors.accent} strokeWidth={2} dot={{ r: 3 }} />
                 </LineChart>
               </ResponsiveContainer>
-            ) : (
+            ) : load.failed.includes('sessions') ? null : (
               <div className="text-center text-gray-500 py-12 text-sm">
                 Complete more sessions to chart your trend.
               </div>
@@ -281,7 +291,7 @@ export default function PostHistory({ onBack }) {
             })}
           </tbody>
         </table>
-        {sessions.length === 0 && (
+        {load.state === 'ready' && sessions.length === 0 && (
           <div className="text-center text-gray-500 py-8">No sessions found for this range.</div>
         )}
       </div>

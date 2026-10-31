@@ -503,7 +503,9 @@ function BibleSidebar({ series, universes, universesError, universesRetry, patch
         />
       </Field>
 
-      <StyleGuideSection series={series} patchSeries={patchSeries} onFlushPending={onFlushPending} />
+      {/* Keyed so discovered passages and an in-flight discovery stay with the
+          series they were written for — the page stays mounted across a switch. */}
+      <StyleGuideSection key={series.id} series={series} patchSeries={patchSeries} onFlushPending={onFlushPending} />
 
       <FactReferenceSection series={series} patchSeries={patchSeries} />
 
