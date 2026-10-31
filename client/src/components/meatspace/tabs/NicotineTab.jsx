@@ -57,7 +57,11 @@ export default function NicotineTab() {
     const ok = Array.isArray(buttons);
     setProductButtons(ok ? buttons : null);
     setButtonsFailed(!ok);
-    if (!ok) setEditingButtonIdx(null);
+    if (!ok) {
+      // The edit row and the Add form share this draft; drop it with the edit.
+      setEditingButtonIdx(null);
+      setButtonForm({ name: '', mgPerUnit: '' });
+    }
   }, []);
 
   const fetchData = useCallback(async () => {

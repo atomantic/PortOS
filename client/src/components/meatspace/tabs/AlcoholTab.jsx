@@ -83,7 +83,12 @@ export default function AlcoholTab() {
     const ok = Array.isArray(buttons);
     setDrinkButtons(ok ? buttons : null);
     setButtonsFailed(!ok);
-    if (!ok) setEditingButtonIdx(null);
+    if (!ok) {
+      // The edit row and the Add form share this draft; drop it with the edit.
+      setEditingButtonIdx(null);
+      setButtonForm({ name: '', oz: '', abv: '' });
+      setButtonVolumeUnit('oz');
+    }
   }, []);
 
   const fetchData = useCallback(async () => {
