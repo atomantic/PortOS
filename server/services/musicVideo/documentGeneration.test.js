@@ -864,3 +864,107 @@ it('refuses ambient Three.js random helpers and their aliases while allowing det
   expect((await manifestAt(candidate.document)).renderer).toBe('three');
   expect(JSON.parse(await readFile(join(PATHS.data, candidate.document.directory, 'preview-playback.json'), 'utf8'))).toEqual({ version: 1, contract: 'portos-complete-frame-v1' });
 });
+
+describe('revision and checkpoint admission', () => {
+  const checkpointPath = (id) => join(PATHS.data, 'cache', 'music-video-authoring', `${id}.json`);
+  // Leaves a checkpoint whose basis matches the next identical local run.
+  async function failedLocalRun(id) {
+    await generateMixedMediaDocument(id, { providerId: 'stub-provider' });
+    const budget = h.prompt.length - 200;
+    h.provider = { id: 'ollama', type: 'api' };
+    let calls = 0;
+    h.onSubmit = async () => {
+      if (++calls === 2) throw new Error('Later batch failed');
+      h.response = response({ intro: '#010203', still: '#010203', clip: '#010203' });
+    };
+    await expect(generateMixedMediaDocument(id, { providerId: 'ollama', promptBudgetChars: budget })).rejects.toThrow('Later batch failed');
+    h.onSubmit = null;
+    h.calls = 0;
+    return { budget, checkpoint: JSON.parse(await readFile(checkpointPath(id), 'utf8')) };
+  }
+
+  it('refuses a section the candidate does not have before any provider call', async () => {
+    const id = await fixture();
+    const first = (await generateMixedMediaDocument(id)).document;
+    h.calls = 0;
+    await expect(regenerateMixedMediaSection(id, 'missing', { expectedDraft: first.directory })).rejects.toMatchObject({ code: 'SECTION_NOT_FOUND', status: 404 });
+    expect(h.calls).toBe(0);
+  });
+
+  it('refuses a section regenerate once the approved plan no longer matches the candidate', async () => {
+    const id = await fixture();
+    const first = (await generateMixedMediaDocument(id)).document;
+    await projects.mutateProjectRecord(id, (current) => ({ project: { ...current, treatment: { ...current.treatment, revision: 2 } } }));
+    h.calls = 0;
+    await expect(regenerateMixedMediaSection(id, 'still', { expectedDraft: first.directory })).rejects.toMatchObject({ code: 'COMPOSITION_DRAFT_STALE', message: expect.stringContaining('treatment or selected media') });
+    expect(h.calls).toBe(0);
+  });
+
+  it('refuses a section regenerate after the active document under the candidate changed', async () => {
+    const id = await fixture();
+    const first = (await generateMixedMediaDocument(id)).document;
+    await importDocumentTemplate(id);
+    expect((await projects.getProject(id)).composition.documentDraft.directory).toBe(first.directory);
+    h.calls = 0;
+    await expect(regenerateMixedMediaSection(id, 'still', { expectedDraft: first.directory })).rejects.toMatchObject({ code: 'COMPOSITION_DRAFT_STALE', message: expect.stringContaining('selected document changed') });
+    expect(h.calls).toBe(0);
+  });
+
+  it('reuses the candidate shared style contract when regenerating a section', async () => {
+    const id = await fixture();
+    const first = (await generateMixedMediaDocument(id)).document;
+    const manifest = await manifestAt(first);
+    manifest.sharedStyle = { ...manifest.sharedStyle, styleLines: ['Synthetic retained style line'] };
+    await writeFile(join(PATHS.data, first.directory, 'manifest.json'), JSON.stringify(manifest));
+    h.response = response({ still: '#00ff00' });
+    const second = (await regenerateMixedMediaSection(id, 'still', { expectedDraft: first.directory })).document;
+    expect(h.prompt).toContain('Synthetic retained style line');
+    expect((await manifestAt(second)).sharedStyle.styleLines).toEqual(['Synthetic retained style line']);
+  });
+
+  it('keeps the accepted song and accumulates changed sections across revisions of one candidate', async () => {
+    const id = await fixture();
+    const accepted = (await generateMixedMediaDocument(id)).document;
+    await acceptMixedMediaDocument(id, accepted.directory);
+    const acceptedSong = (await manifestAt(accepted)).song;
+    const current = await projects.getProject(id);
+    await projects.updateProject(id, { composition: { ...current.composition, narrativeEvents: [{ id: 'reveal', name: 'Reveal', kind: 'reveal',
+      anchor: { kind: 'time', atSec: 1 }, durationSec: 1, narrativeFunction: 'Introduce the kite', mediumRationale: 'Exact graphic' }] } });
+    h.response = response({ intro: '#00ff00' });
+    const revised = (await reviseMixedMediaEvents(id, { expectedDraft: accepted.directory })).document;
+    const revisedManifest = await manifestAt(revised);
+    expect(revisedManifest.changedSectionIds).toEqual(['intro']);
+    expect(revisedManifest.beforeSong).toEqual(acceptedSong);
+    h.response = response({ clip: '#0000ff' });
+    const third = await manifestAt((await regenerateMixedMediaSection(id, 'clip', { expectedDraft: revised.directory })).document);
+    expect(third.changedSectionIds).toEqual(['intro', 'clip']);
+    expect(third.beforeSong).toEqual(acceptedSong);
+    expect(third.beforeSong).not.toEqual(third.song);
+  });
+
+  for (const [label, write] of [
+    ['unreadable', (id) => writeFile(checkpointPath(id), '{ not json')],
+    ['unsupported-version', (id, checkpoint) => writeFile(checkpointPath(id), JSON.stringify({ ...checkpoint, version: 2 }))],
+    ['malformed', (id, checkpoint) => writeFile(checkpointPath(id), JSON.stringify({ ...checkpoint, sections: 'intro' }))],
+    ['providerless', (id, checkpoint) => writeFile(checkpointPath(id), JSON.stringify({ ...checkpoint, run: null }))],
+  ]) {
+    it(`refuses an ${label} local authoring checkpoint before any provider call`, async () => {
+      const id = await fixture();
+      const { budget, checkpoint } = await failedLocalRun(id);
+      await write(id, checkpoint);
+      await expect(generateMixedMediaDocument(id, { providerId: 'ollama', promptBudgetChars: budget })).rejects.toMatchObject({ code: 'COMPOSITION_CHECKPOINT_INVALID' });
+      expect(h.calls).toBe(0);
+    });
+  }
+
+  it('ignores checkpoint sections the requested song does not have', async () => {
+    const id = await fixture();
+    const { budget, checkpoint } = await failedLocalRun(id);
+    await writeFile(checkpointPath(id), JSON.stringify({ ...checkpoint,
+      sections: [...checkpoint.sections, { id: 'retired', source: 'function render(ctx) { ctx.fillRect(Math.random(), 0, 1, 1); }' }],
+    }));
+    h.response = response({ intro: '#aabbcc', still: '#aabbcc', clip: '#aabbcc' });
+    const { document } = await generateMixedMediaDocument(id, { providerId: 'ollama', promptBudgetChars: budget });
+    expect((await manifestAt(document)).sections.map((section) => section.id)).toEqual(['intro', 'still', 'clip']);
+  });
+});
