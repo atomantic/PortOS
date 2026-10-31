@@ -460,7 +460,7 @@ export const resolveInfluences = (raw) => sanitizeInfluences(
 // `fresh` (the LLM output), falling back to `fallback` ONLY when the LLM
 // omitted that list (key absent). An explicit `[]` is applied so the user
 // can intentionally clear an unlocked list. Mirrors `mergeInfluencesWithLocks`
-// in client/services/apiUniverseBuilder.js.
+// in client/src/services/apiUniverseBuilder.js.
 export const mergeInfluencesWithLocks = (locked, fresh, fallback) => {
   const freshSafe = sanitizeInfluences(fresh);
   const fallbackSafe = sanitizeInfluences(fallback);

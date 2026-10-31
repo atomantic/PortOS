@@ -289,7 +289,7 @@ export const isInfluenceLockField = (key) => WORLD_INFLUENCE_LOCK_FIELDS.include
 // unlocked lists take from `fresh` (the LLM output), falling back to
 // `fallback` only when the LLM omitted that list (key absent). An explicit
 // `[]` is applied so the user can intentionally clear an unlocked list.
-// Mirrors the server-side mergeInfluencesWithLocks in universeBuilder.js.
+// Mirrors the server-side mergeInfluencesWithLocks in server/services/universeBuilder/sanitize.js.
 export const mergeInfluencesWithLocks = (locked, fresh, fallback) => {
   const freshSafe = ensureInfluences(fresh);
   const fallbackSafe = ensureInfluences(fallback);
