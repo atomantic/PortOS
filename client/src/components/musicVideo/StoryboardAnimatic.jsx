@@ -527,6 +527,8 @@ function useColdOpen({ project, songRef }) {
     return request;
   }, [project.id]);
   useEffect(() => {
+    // A playing cold open stops with its now-stale mix, so it cannot hand over to the song later.
+    audioRef.current?.pause?.();
     setSrc(null);
     setActive(false);
     mixing.current = null;

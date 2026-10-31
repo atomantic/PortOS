@@ -55,6 +55,12 @@ describe('StoryboardAnimatic cold open', () => {
     await act(async () => { answers[0]({ name: 'cold-open-old.wav' }); });
     await act(async () => { fireEvent.play(screen.getByLabelText('Song for the storyboard animatic')); });
     await waitFor(() => expect(screen.getByLabelText('Sound before the song').getAttribute('src')).toBe('/api/music-video/p/cold-open/cold-open-new.wav'));
+    // Changing the sound while it plays stops the stale mix instead of letting it hand over to the song.
+    const pause = vi.spyOn(window.HTMLMediaElement.prototype, 'pause').mockImplementation(() => {});
+    const louder = { ...faster, scenes: faster.scenes.map((sc) => (sc.preMusic ? { ...sc, preMusic: { ...sc.preMusic, clipVolume: 0.5 } } : sc)) };
+    rerender(<StoryboardAnimatic project={louder} audioUrl="/song.mp3" />);
+    await waitFor(() => expect(pause).toHaveBeenCalled());
+    pause.mockRestore();
     play.mockRestore();
   });
 });
