@@ -78,3 +78,22 @@ export const mediaJobExecutionLane = ({ kind, mode, remote } = {}) => {
   if (kind === 'video' && CLOUD_VIDEO_GEN_MODES.includes(mode)) return 'cloud';
   return 'gpu';
 };
+
+/**
+ * THE media-queue swim lane: the unit that owns its own slots and its own
+ * queue positions, so one provider's backlog never holds another's work.
+ *
+ * Within the cloud lane every provider (codex, grok, fal, …) is its own swim
+ * lane; each federated peer is its own swim lane; this machine's accelerator is
+ * one swim lane because local image and video renders share the MLX runtime.
+ * The execution lane still decides HOW a job runs; the swim lane decides WHO it
+ * waits behind.
+ *
+ * @returns {string} `<lane>:<owner>`, e.g. `cloud:grok`, `remote:<peerId>`, `gpu:local`
+ */
+export const mediaJobSwimlane = ({ kind, mode, remote, peerId } = {}) => {
+  const lane = mediaJobExecutionLane({ kind, mode, remote });
+  if (lane === 'cloud') return `cloud:${mode}`;
+  if (lane === 'remote') return `remote:${peerId || 'unknown'}`;
+  return 'gpu:local';
+};

@@ -387,8 +387,12 @@ against that lane's configured concurrency plus how deep its queue is.
 | Lane | Concurrency | What runs there |
 |------|-------------|-----------------|
 | Local GPU | 1 (serialized) | local image/video/audio/training renders |
-| Cloud CLI | `imageGen.codex.parallelLimit` | codex/grok/agy renders — external quota, no local GPU |
-| Federated | 20 | outgoing proxy jobs rendering on a peer |
+| Cloud CLI | `imageGen.codex.parallelLimit` per provider | codex/grok/agy/fal/… renders — external quota, no local GPU |
+| Federated | 1 per peer, 20 total | outgoing proxy jobs rendering on a peer |
+
+Slots and queue positions belong to swim lanes (`mediaJobSwimlane` in
+`server/lib/generationModes.js`): each cloud provider, each peer, and the local
+GPU wait only behind their own work, so one provider's backlog never delays another.
 
 CUDA is reported with the same three states the wire uses — `available`,
 `absent`, and `unknown` — and the card labels them distinctly. A probe that

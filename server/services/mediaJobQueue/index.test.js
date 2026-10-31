@@ -915,9 +915,10 @@ describe('mediaJobQueue', () => {
       expect(mediaJobQueue.laneConcurrencyFor({
         kind: 'image', params: { mode: IMAGE_GEN_MODE.CODEX },
       })).toBe(lanes.cloud.limit);
+      // A peer runs one job at a time; the remote total bounds all peers.
       expect(mediaJobQueue.laneConcurrencyFor({
         kind: 'audio', params: { remoteMedia: remoteMediaParams() },
-      })).toBe(mediaJobQueue.REMOTE_MEDIA_PARALLEL_LIMIT);
+      })).toBe(1);
     });
 
     it('tracks the cloud lane limit as configured rather than a snapshot of it', () => {
@@ -3011,6 +3012,28 @@ describe('Codex lane', () => {
 
     imageGenEvents.emit('failed', { generationId: codex1.jobId, error: 'cleanup' });
     imageGenEvents.emit('failed', { generationId: codex2.jobId, error: 'cleanup' });
+    await flush();
+  });
+
+  it('gives each cloud provider its own swim lane so a Codex backlog never holds Grok', async () => {
+    mediaJobQueue.setCodexParallelLimit(1);
+    stubs.generateImageCodex.mockImplementation(() => new Promise(() => {}));
+    stubs.generateVideoGrok.mockImplementation(() => new Promise(() => {}));
+
+    const codex1 = await mediaJobQueue.enqueueJob({ kind: 'image', params: { prompt: 'codex first', mode: 'codex' } });
+    await waitFor(() => stubs.generateImageCodex.mock.calls.length === 1);
+    const codex2 = await mediaJobQueue.enqueueJob({ kind: 'image', params: { prompt: 'codex second', mode: 'codex' } });
+    expect(mediaJobQueue.getJob(codex2.jobId)).toMatchObject({ status: 'queued', position: 2 });
+
+    const grok = await mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'grok', mode: IMAGE_GEN_MODE.GROK } });
+    expect(grok.position).toBe(1);
+    await waitFor(() => stubs.generateVideoGrok.mock.calls.length === 1);
+    expect(mediaJobQueue.getJob(grok.jobId).status).toBe('running');
+    expect(mediaJobQueue.getJob(codex2.jobId)).toMatchObject({ status: 'queued', position: 2 });
+
+    imageGenEvents.emit('failed', { generationId: codex1.jobId, error: 'cleanup' });
+    imageGenEvents.emit('failed', { generationId: codex2.jobId, error: 'cleanup' });
+    videoGenEvents.emit('failed', { generationId: grok.jobId, error: 'cleanup' });
     await flush();
   });
 
