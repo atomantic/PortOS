@@ -1,19 +1,16 @@
 /** Eidoverse is an optional independent AGPL runtime, never host eval. */
-import { mkdtemp, mkdir, writeFile, rm, lstat, realpath, readdir, chmod, access } from 'node:fs/promises';
-import { constants } from 'node:fs';
+import { mkdtemp, mkdir, writeFile, rm, lstat, realpath, readdir, chmod } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { ServerError } from '../../lib/errorHandler.js';
-import { bufferedSpawn } from '../../lib/bufferedSpawn.js';
 import { runStreamingCommand } from '../../lib/streamingSpawn.js';
-import { whichFirst } from '../../lib/processEnv.js';
+import { resolveDockerEngine } from '../dockerEngine.js';
 import { musicVideoEidoverseSceneSchema } from '../../lib/musicVideoValidation.js';
 import { codeFrameSize, quantizeSongDuration } from './codeTimeline.js';
 import { musicVideoAspect } from '../../lib/musicVideoAspect.js';
 
 const EIDOVERSE_RENDER_IMAGE = 'portos-eidoverse-video:1';
-const DOCKER_FALLBACKS = ['/usr/local/bin/docker', '/opt/homebrew/bin/docker', '/Applications/Docker.app/Contents/Resources/bin/docker'];
 const OUTPUT_LIMIT = 2 * 1024 ** 3;
 const WALL_MS = 30 * 60 * 1000;
 
@@ -22,16 +19,15 @@ export async function prepareEidoverseRender(project) {
   if (!scene.success) throw new ServerError('Save an Eidoverse scene before rendering.', { status: 422, code: 'EIDOVERSE_SCENE_REQUIRED' });
   const duration = project.audioAnalysis?.durationSec;
   if (!(duration > 0)) throw new ServerError('Analyze the master song before rendering Eidoverse.', { status: 422, code: 'NO_TIMELINE' });
-  let docker = await whichFirst('docker');
-  for (const candidate of DOCKER_FALLBACKS) {
-    if (docker) break;
-    if (await access(candidate, constants.X_OK).then(() => true, () => false)) docker = candidate;
-  }
-  if (!docker) throw new ServerError('Eidoverse Video requires Docker and the optional render image. See docs/EIDOVERSE_VIDEO.md.', { status: 422, code: 'EIDOVERSE_RUNTIME_MISSING' });
-  const image = await bufferedSpawn(docker, ['image', 'inspect', '--format', '{{.Id}}', EIDOVERSE_RENDER_IMAGE], { timeoutMs: 15000 });
+  const engine = await resolveDockerEngine();
+  if (!engine.ready) throw new ServerError(engine.message, { status: 422, code: 'EIDOVERSE_RUNTIME_MISSING', context: { state: engine.state } });
+  const image = await engine.cli.capture(['image', 'inspect', '--format', '{{.Id}}', EIDOVERSE_RENDER_IMAGE]);
   const imageId = image.stdout?.trim();
-  if (!image.success || !/^sha256:[a-f0-9]{64}$/.test(imageId || '')) throw new ServerError('Build the optional Eidoverse Video render image first. See docs/EIDOVERSE_VIDEO.md.', { status: 422, code: 'EIDOVERSE_RUNTIME_MISSING' });
-  return { scene: scene.data, docker, imageId, ...codeFrameSize(musicVideoAspect(project)),
+  if (!image.success || !/^sha256:[a-f0-9]{64}$/.test(imageId || '')) {
+    const where = [engine.engine.label, engine.engine.context && `context ${engine.engine.context}`].filter(Boolean).join(', ');
+    throw new ServerError(`Build the optional Eidoverse Video render image first (checked ${where}). See docs/EIDOVERSE_VIDEO.md.`, { status: 422, code: 'EIDOVERSE_RUNTIME_MISSING', context: { state: engine.state } });
+  }
+  return { scene: scene.data, dockerCli: engine.cli, imageId, ...codeFrameSize(musicVideoAspect(project)),
     fps: 24, durationSec: quantizeSongDuration(duration, 24).durationSec };
 }
 
@@ -70,6 +66,7 @@ export async function encodeEidoverseComposition({ plan, project, audioPath, out
   signal?.throwIfAborted();
   const root = await realpath(await mkdtemp(join(tmpdir(), 'portos-eidoverse-')));
   const name = `portos-mv-eido-${randomUUID()}`;
+  const cli = plan.dockerCli;
   let removed = false;
   let quotaExceeded = false;
   let quotaTimer;
@@ -91,14 +88,14 @@ export async function encodeEidoverseComposition({ plan, project, audioPath, out
       outputOverLimit(join(root, 'output')).then(over => { quotaExceeded ||= over; })
         .catch(() => { quotaExceeded = true; }).finally(() => { checking = false; });
     }, 500);
-    const render = await runStreamingCommand(plan.docker, eidoverseContainerArgs({ name, root, imageId: plan.imageId }), (line) => {
+    const render = await runStreamingCommand(cli.bin, [...cli.globalArgs, ...eidoverseContainerArgs({ name, root, imageId: plan.imageId })], (line) => {
       const frame = line.match(/^\[render_scene\] frame (\d+)\/(\d+)/);
       if (frame && Number(frame[2]) > 0) onProgress?.(Math.min(0.9, Number(frame[1]) / Number(frame[2]) * 0.9));
     },
-      { timeoutMs: WALL_MS, isCancelled: () => Boolean(signal?.aborted) || quotaExceeded });
+      { env: cli.env, timeoutMs: WALL_MS, isCancelled: () => Boolean(signal?.aborted) || quotaExceeded });
     // Killing docker's client does not kill its container. Confirm teardown
     // before touching any worker output, even after normal completion.
-    const cleanup = await bufferedSpawn(plan.docker, ['rm', '--force', name], { timeoutMs: 30000 });
+    const cleanup = await cli.capture(['rm', '--force', name], { timeoutMs: 30000 });
     removed = cleanup.success || /no such container/i.test(cleanup.stderr || '');
     if (!removed) throw new ServerError('Eidoverse container cleanup failed; inspect Docker before retrying.', { status: 500, code: 'EIDOVERSE_CLEANUP_FAILED' });
     signal?.throwIfAborted();
@@ -128,7 +125,7 @@ export async function encodeEidoverseComposition({ plan, project, audioPath, out
   } finally {
     clearInterval(quotaTimer);
     if (!removed) {
-      const cleanup = await bufferedSpawn(plan.docker, ['rm', '--force', name], { timeoutMs: 30000 });
+      const cleanup = await cli.capture(['rm', '--force', name], { timeoutMs: 30000 });
       removed = cleanup.success || /no such container/i.test(cleanup.stderr || '');
     }
     if (removed) await rm(root, { recursive: true, force: true });
