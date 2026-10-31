@@ -62,9 +62,6 @@ export default function NextActionBanner({ gaps, status, traits, onRefresh }) {
   // A rejected question read is not "category exhausted" (a null answer is):
   // keep the gap and offer Retry instead of skipping to the next category.
   const [questionError, setQuestionError] = useState(null);
-  // The category whose structured questions ran out on an automatic load: a
-  // generated question needs the user's click (no silent provider call, #14445).
-  const [exhaustedCategory, setExhaustedCategory] = useState(null);
   const [providerName, setProviderName] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [skippedIndices, setSkippedIndices] = useState([]);
@@ -87,7 +84,6 @@ export default function NextActionBanner({ gaps, status, traits, onRefresh }) {
     setCurrentGapIdx(0);
     setQuestion(null);
     setQuestionError(null);
-    setExhaustedCategory(null);
   }, [gapKey]);
 
   // Guards against an older in-flight request overwriting state after a newer
@@ -98,13 +94,13 @@ export default function NextActionBanner({ gaps, status, traits, onRefresh }) {
   // on top of handleSubmit's own load — two question requests (and, once the
   // structured questions run out, two provider calls) per answer.
   const gapsRef = useRef(gaps);
+  const providerNameRef = useRef('');
   useEffect(() => { gapsRef.current = gaps; }, [gaps]);
 
   const loadQuestion = useCallback(async (category, skipList = [], { generate = false } = {}) => {
     const requestId = ++requestIdRef.current;
     setLoading(true);
     setQuestionError(null);
-    setExhaustedCategory(null);
     const result = await api.getDigitalTwinEnrichQuestion(category, undefined, undefined, skipList.length ? skipList : undefined, { silent: true, structuredOnly: !generate })
       .then((q) => ({ q, error: null }), (error) => ({ q: null, error }));
     if (requestId !== requestIdRef.current) return; // stale response — a newer request superseded this one
@@ -115,12 +111,10 @@ export default function NextActionBanner({ gaps, status, traits, onRefresh }) {
       return;
     }
     const q = result.q;
-    if (q?.exhausted) {
-      setQuestion(null);
-      setExhaustedCategory(category);
-      setLoading(false);
-      api.getActiveProvider({ silent: true }).then((provider) => setProviderName(provider?.name || ''), () => setProviderName(''));
-      return;
+    // Structured questions ran out on an automatic load: a generated question
+    // waits for the user's click (no silent provider call, #14445).
+    if (q?.exhausted && !providerNameRef.current) {
+      api.getActiveProvider({ silent: true }).then((provider) => { providerNameRef.current = provider?.name || ''; setProviderName(providerNameRef.current); }, () => {});
     }
     if (!q) {
       // Category exhausted — advance to the next gap with available questions
@@ -371,7 +365,7 @@ export default function NextActionBanner({ gaps, status, traits, onRefresh }) {
               onRetry={() => loadQuestion(questionError.category, questionError.skipList, { generate: questionError.generate })}
               className="my-2"
             />
-          ) : exhaustedCategory === activeCategory ? (
+          ) : question?.exhausted ? (
             <div className="flex flex-wrap items-center justify-between gap-2 py-2">
               <button
                 type="button"

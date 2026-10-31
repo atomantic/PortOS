@@ -227,17 +227,21 @@ async function runImageNode(board, panelId, node, { frameRef = null, count: fram
   const wired = nodeInputValue(recipe, node.id, 'images', context);
   const refs = frameRef ? [frameRef, ...wired.filter((ref) => ref.image !== frameRef.image)].slice(0, RECIPE_LIMITS.images) : wired;
   const pathOf = (ref) => (ref === frameRef && frameRef.path) || resolveImageInputPath(ref.image);
-  const referenceImagePaths = refs.map(pathOf).filter(Boolean);
   const runId = randomUUID();
   const settings = await deps.getSettings();
   const common = {
     prompt,
     ...STORYBOARD_RENDER_SIZES[board.aspectRatio],
-    ...(referenceImagePaths.length ? { referenceImagePaths, referenceImageStrengths: referenceImagePaths.map(() => 1) } : {}),
+    ...referencePayload(refs, pathOf),
     [STORYBOARD_PANEL_RENDER_TAG]: { storyboardId: board.id, panelId, nodeId: node.id, runId },
   };
   const resolvedParams = await deps.imageParams(settings, { mode: node.settings.imageMode, model: node.settings.imageModelId }, common);
-  const { params, sentRefs } = capReferences(resolvedParams, refs, pathOf);
+  // Keep the leading refs the resolved backend accepts, so the run records what
+  // was sent rather than relying on the queue's silent backstop trim (#14381).
+  const cap = maxInputImages(resolvedParams.mode, resolvedParams.modelId ?? resolvedParams.model ?? null);
+  const sentRefs = cap != null && refs.length > cap ? refs.slice(0, cap) : refs;
+  const { referenceImagePaths: _paths, referenceImageStrengths: _strengths, ...unreferenced } = resolvedParams;
+  const params = sentRefs === refs ? resolvedParams : { ...unreferenced, ...referencePayload(sentRefs, pathOf) };
   // The run id lands before any job is queued, so a frame that finishes or
   // fails at once is already counted against this run.
   await mutateStoryboard(board.id, (draft) => patchNodeState(draft, panelId, node.id, {
@@ -266,18 +270,9 @@ async function runImageNode(board, panelId, node, { frameRef = null, count: fram
   return next;
 }
 
-// Keep the leading refs the resolved backend accepts, so the run records what
-// was sent rather than relying on the queue's silent backstop trim (#14381).
-function capReferences(params, refs, pathOf) {
-  const cap = maxInputImages(params.mode, params.modelId ?? params.model ?? null);
-  if (cap == null || refs.length <= cap) return { params, sentRefs: refs };
-  const sentRefs = refs.slice(0, cap);
-  const referenceImagePaths = sentRefs.map(pathOf).filter(Boolean);
-  const { referenceImagePaths: _paths, referenceImageStrengths: _strengths, ...rest } = params;
-  return {
-    params: referenceImagePaths.length ? { ...rest, referenceImagePaths, referenceImageStrengths: referenceImagePaths.map(() => 1) } : rest,
-    sentRefs,
-  };
+function referencePayload(refs, pathOf) {
+  const referenceImagePaths = refs.map(pathOf).filter(Boolean);
+  return referenceImagePaths.length ? { referenceImagePaths, referenceImageStrengths: referenceImagePaths.map(() => 1) } : {};
 }
 
 /**
