@@ -132,8 +132,10 @@ async function rejudgeAndBill(issueId, stageId, judgeLlm) {
 
 // Keep/revert gate: re-judge the revised issue and keep only if the composite
 // qualityScore did not regress, else restore the pre-revision text. Returns
-// { decision, postScore }, or { halt } with the budget pause to return.
-async function applyKeepRevertGate(record, { weakestId, stageId, preState, preScore }) {
+// { decision, postScore }, or { halt } with the budget pause to return. Nothing
+// applied leaves nothing to judge: the cycle keeps the pre-revision score.
+async function applyKeepRevertGate(record, { weakestId, stageId, preState, preScore, applied }) {
+  if (applied === 0) return { decision: 'keep', postScore: preScore };
   const postIssue = await getIssue(weakestId).catch(() => null);
   const appliedOutput = postIssue?.stages?.[stageId]?.output || '';
   const before = await budgetPause();
@@ -236,14 +238,10 @@ export async function runRevisionCycle(sId, record) {
     applied = cutResult.applied || 0;
   }
 
-  // 6. Keep/revert gate (only when a cut was applied).
-  let decision = 'keep';
-  let postScore = preScore;
-  if (applied > 0) {
-    const gate = await applyKeepRevertGate(record, { weakestId, stageId, preState, preScore });
-    if (gate.halt) return gate.halt;
-    ({ decision, postScore } = gate);
-  }
+  // 6. Keep/revert gate.
+  const gate = await applyKeepRevertGate(record, { weakestId, stageId, preState, preScore, applied });
+  if (gate.halt) return gate.halt;
+  const { decision, postScore } = gate;
 
   // 7. Record the cycle: post-cycle mean drives the plateau detector; the ledger
   //    line is the experiment log (single emoji line per the AGENTS.md convention).

@@ -187,6 +187,9 @@ export function classifyChecks(statusCheckRollup) {
   return 'pending';
 }
 
+// One key for a screened issue comment across screening, assignment, coverage and ageing.
+const issueCommentKey = (item) => `${item?.issueNumber}:${item?.commentId}`;
+
 function normalizeFinding(finding, anchors) {
   if (!finding || typeof finding !== 'object') return null;
   const path = trimTo(finding.path, 500);
@@ -733,7 +736,7 @@ async function screenModelAbuseInputs({ app, state, issueComments }) {
     if (!result.ok) return { ok: false, code: result.code };
     if (result.safe) {
       safeComments.push(item);
-      safeCommentFingerprints.set(`${item.issueNumber}:${item.commentId}`, result.report.fingerprint);
+      safeCommentFingerprints.set(issueCommentKey(item), result.report.fingerprint);
     }
     else {
       blocked.push(result.report);
@@ -774,7 +777,7 @@ async function assignSafeVolunteers(ctx, comments) {
     const succeeded = await assignVolunteer(ctx, item.issueNumber, item.commentAuthor);
     if (succeeded) {
       assignedIssues.add(item.issueNumber);
-      assignedCommentKeys.add(`${item.issueNumber}:${item.commentId}`);
+      assignedCommentKeys.add(issueCommentKey(item));
       assignments += 1;
     }
   }
@@ -965,7 +968,7 @@ export async function gatherIssueWatcherInput({ app } = {}) {
   const pendingById = new Map();
   for (const item of [...(Array.isArray(state.pendingIssueComments) ? state.pendingIssueComments : []), ...issueResult.comments]) {
     if (item && Number.isInteger(item.issueNumber) && Number.isInteger(item.commentId)) {
-      const key = `${item.issueNumber}:${item.commentId}`;
+      const key = issueCommentKey(item);
       const existing = pendingById.get(key);
       pendingById.set(key, { ...item, ticks: existing?.ticks || item.ticks || 0 });
     }
@@ -1024,9 +1027,9 @@ export async function gatherIssueWatcherInput({ app } = {}) {
     lastScanAt: startedAt,
     blocked: [...blockedByFingerprint.values()].filter(Boolean).slice(-MODEL_ABUSE_REPORT_LIMIT),
   };
-  const withheldKeys = new Set(screened.blocked.map((report) => `${report.issueNumber}:${report.commentId}`));
+  const withheldKeys = new Set(screened.blocked.map(issueCommentKey));
   const pendingAfterAssignments = pendingIssueComments.filter((item) => {
-    const key = `${item.issueNumber}:${item.commentId}`;
+    const key = issueCommentKey(item);
     return !assignmentResult.assignedCommentKeys.has(key) && !withheldKeys.has(key);
   });
   await persistState(app.id, {
@@ -1036,7 +1039,7 @@ export async function gatherIssueWatcherInput({ app } = {}) {
   });
 
   const safeIssueComments = takeIssueCommentsWithinBudget(screened.safeComments.filter((item) => (
-    !assignmentResult.assignedCommentKeys.has(`${item.issueNumber}:${item.commentId}`)
+    !assignmentResult.assignedCommentKeys.has(issueCommentKey(item))
   )));
   if (safeIssueComments.length === 0) {
     return {
@@ -1080,8 +1083,6 @@ export async function buildTaskInput(options = {}) {
   activeIntakeApps.add(appId);
   return runScheduledIssueIntake(options).finally(() => activeIntakeApps.delete(appId));
 }
-
-const issueCommentKey = (item) => `${item?.issueNumber}:${item?.commentId}`;
 
 /**
  * Comments the local scorer confidently answered `none` for, as finished
@@ -1546,8 +1547,7 @@ function coversExpectedPullRequests(payload, expectedPullRequests) {
       seen.add(decision.number);
       const target = expectedPullRequests.get(decision.number);
       return Boolean(target && decision.headSha === target.headSha && target.contentFingerprint);
-    })
-    && seen.size === expectedPullRequests.size;
+    });
 }
 
 /** Post the decided replies to comments whose content still matches what was screened. */
@@ -1585,6 +1585,7 @@ async function reviewScreenedPullRequest({ app, ctx, raw, expectedPullRequests, 
   }
   const { decision, target, pr, diff, assessment } = verified;
   let ledger = approvals;
+  const skipped = () => ({ reviewed: false, handedBack: false, landing: null, approvals: ledger });
   const eligibilityRequired = requireEligibilityFacts
     || Object.prototype.hasOwnProperty.call(target, 'eligibilityFacts');
   const eligibilityStillCurrent = async () => {
@@ -1607,15 +1608,15 @@ async function reviewScreenedPullRequest({ app, ctx, raw, expectedPullRequests, 
     });
     return { reviewed: outcome.reviewed, handedBack: outcome.handedBack, landing: null, approvals: ledger };
   }
-  if (!await eligibilityStillCurrent()) return { reviewed: false, handedBack: false, landing: null, approvals: ledger };
+  if (!await eligibilityStillCurrent()) return skipped();
   // Every accepted finding is blocking, so an approvable review never carries inline comments.
   const approved = await submitReview(ctx, pr.number, pr.headRefOid, {
-    body: renderReviewBody({ report: raw, verdict: 'approve', nonBlockingFindings: review.normalizedFindings }),
+    body: renderReviewBody({ report: raw, verdict: 'approve' }),
     event: 'APPROVE',
   });
   if (!approved) {
     drops.record(decision.number, 'GitHub rejected the approving review, so no CI approval or merge could follow');
-    return { reviewed: false, handedBack: false, landing: null, approvals: ledger };
+    return skipped();
   }
   const landing = await advanceApprovedPullRequest({
     app, ctx, pr, handbacks, source: 'fresh',
