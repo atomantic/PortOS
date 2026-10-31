@@ -17,7 +17,7 @@ import NicotineTab from './NicotineTab';
 
 beforeEach(() => {
   api.getNicotineSummary.mockResolvedValue(null);
-  api.getCustomNicotineProducts.mockResolvedValue(null);
+  api.getCustomNicotineProducts.mockResolvedValue([]);
   api.getAppleHealthCorrelation.mockResolvedValue(null);
 });
 afterEach(cleanup);
@@ -46,4 +46,19 @@ it('sends the rendered event identity when editing and deleting a history row', 
   fireEvent.click(await screen.findByRole('button', { name: 'Delete', exact: true }));
   fireEvent.click(screen.getByRole('button', { name: 'Remove', exact: true }));
   await waitFor(() => expect(api.removeNicotineEntry).toHaveBeenCalledWith('2024-06-01', 0, 'event-id'));
+});
+
+it('hides Manage when the product button read fails and recovers on retry', async () => {
+  api.getDailyNicotine.mockResolvedValue([]);
+  api.getCustomNicotineProducts.mockRejectedValueOnce(new Error('boom'));
+  render(<NicotineTab />);
+  expect(await screen.findByRole('alert')).toHaveTextContent('Could not load your quick-add product buttons');
+  expect(screen.queryByRole('button', { name: /Manage/ })).toBeNull();
+  expect(api.getCustomNicotineProducts).toHaveBeenLastCalledWith({ silent: true });
+
+  api.getCustomNicotineProducts.mockResolvedValueOnce([{ name: 'Example Pouch', mgPerUnit: 6 }]);
+  fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+  expect(await screen.findByRole('button', { name: /Example Pouch/ })).toBeTruthy();
+  expect(screen.getByRole('button', { name: /Manage/ })).toBeTruthy();
+  expect(screen.queryByRole('alert')).toBeNull();
 });

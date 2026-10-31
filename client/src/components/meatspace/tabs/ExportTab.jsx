@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Printer, ClipboardCopy, FileText } from 'lucide-react';
 
 import * as api from '../../../services/api';
@@ -12,14 +12,19 @@ import { formatDateTime } from '../../../utils/formatters';
 export default function ExportTab() {
   const [report, setReport] = useState(null);
   const [loading, setLoading] = useState(true);
+  const loadSeq = useRef(0);
 
   const fetchData = useCallback(async () => {
+    const seq = ++loadSeq.current;
     const [blood, config] = await Promise.all([
       api.getBloodTests({ silent: true }).catch(() => null),
-      api.getMeatspaceConfig().catch(() => null),
+      api.getMeatspaceConfig({ silent: true }).catch(() => null),
     ]);
-    // A failed blood read must not become an empty report that can be printed.
-    setReport(blood === null ? null : buildClinicianReport({ tests: blood?.tests || [], config }));
+    // A repeated Retry must not let an older attempt replace a newer result.
+    if (seq !== loadSeq.current) return;
+    // A failed read must not become a printable report: no blood means an empty
+    // panel, no config means a blank profile and lifestyle section.
+    setReport(blood === null || config === null ? null : buildClinicianReport({ tests: blood?.tests || [], config }));
     setLoading(false);
   }, []);
 
