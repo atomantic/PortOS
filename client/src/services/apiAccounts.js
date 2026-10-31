@@ -48,7 +48,7 @@ export const getAgentRelevantPosts = ({ agentId, accountId, maxResults }) => {
   if (maxResults) params.set('maxResults', maxResults);
   return request(`/agents/tools/relevant-posts?${params}`);
 };
-export const getAgentSubmolts = (accountId) => request(`/agents/tools/submolts?accountId=${accountId}`);
+export const getAgentSubmolts = (accountId, options = {}) => request(`/agents/tools/submolts?accountId=${accountId}`, options);
 export const getAgentPost = (accountId, postId) => request(`/agents/tools/post/${postId}?accountId=${accountId}`);
 export const getAgentRateLimits = (accountId) => request(`/agents/tools/rate-limits?accountId=${accountId}`);
 export const getAgentPublished = ({ agentId, accountId, days = 7 }, options = {}) =>
