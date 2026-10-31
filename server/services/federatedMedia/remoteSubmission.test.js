@@ -37,6 +37,8 @@ describe('negotiateVideoConstraints', () => {
     };
 
     expect(negotiateVideoConstraints({ numFrames: 40 }, capability).numFrames).toBe(33);
+    // An off-grid maximum clamps down onto the stride grid, not to the maximum itself.
+    expect(negotiateVideoConstraints({ numFrames: 40 }, { frameStride: 4, maxNumFrames: 30 }).numFrames).toBe(29);
   });
 
   it('leaves numFrames untouched when capability has null or absent frameStride and maxNumFrames', () => {
@@ -190,6 +192,46 @@ describe('negotiateVideoConstraints', () => {
 
     expect(() => negotiateVideoConstraints({ numFrames: -5 }, capability))
       .toThrow(/invalid/);
+  });
+
+  it('bounds an fps rescale by the wire ceiling and keeps at least one frame', () => {
+    // maxNumFrames 0 is "no provider maximum", not a zero-frame ceiling.
+    expect(negotiateVideoConstraints({ numFrames: 1000, fps: 12 }, { fpsOptions: [24], maxNumFrames: 0 }))
+      .toEqual({ numFrames: 1024, fps: 24 });
+    expect(negotiateVideoConstraints({ numFrames: 1, fps: 60 }, { fpsOptions: [24] }))
+      .toEqual({ numFrames: 1, fps: 24 });
+  });
+
+  it('snaps fps without rescaling frames when the requested fps is not positive', () => {
+    expect(negotiateVideoConstraints({ numFrames: 48, fps: 0 }, { fpsOptions: [24] }))
+      .toEqual({ numFrames: 48, fps: 24 });
+  });
+
+  it('ignores fps options outside 1-60', () => {
+    expect(negotiateVideoConstraints({ numFrames: 100, fps: 100 }, { fpsOptions: [90, 60] }))
+      .toEqual({ numFrames: 60, fps: 60 });
+  });
+
+  it('ignores frame options above the wire ceiling and breaks ties toward the shorter option', () => {
+    expect(negotiateVideoConstraints({ numFrames: 1024 }, { frameOptions: [1100, 900] }).numFrames).toBe(900);
+    expect(negotiateVideoConstraints({ numFrames: 116 }, { frameOptions: [124, 108] }).numFrames).toBe(108);
+  });
+
+  it('prefers the closer area when aspect ratios differ by under 0.001', () => {
+    const capability = { resolutionOptions: [{ w: 1286, h: 723 }, { w: 1920, h: 1080 }] };
+    expect(negotiateVideoConstraints({ width: 1280, height: 720 }, capability))
+      .toEqual({ width: 1286, height: 723 });
+  });
+
+  it('ignores resolution options below the 64px wire minimum', () => {
+    const capability = { resolutionOptions: [{ w: 48, h: 27 }, { w: 1280, h: 720 }] };
+    expect(negotiateVideoConstraints({ width: 100, height: 56 }, capability))
+      .toEqual({ width: 1280, height: 720 });
+  });
+
+  it('refuses a negotiated request the wire schema rejects instead of substituting values', () => {
+    expect(() => negotiateVideoConstraints({ width: 4096 }, {})).toThrow(/violate schema/);
+    expect(() => negotiateVideoConstraints({ fps: 'abc' }, { fpsOptions: [24] })).toThrow(/violate schema/);
   });
 });
 
