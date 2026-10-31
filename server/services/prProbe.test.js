@@ -19,7 +19,7 @@ import { execGit } from '../lib/execGit.js';
 import { resolveForgeForRepo } from './git.js';
 import { findPullRequestForBranch, getPullRequestState } from './github.js';
 import { findMergeRequestForBranch } from './gitlab.js';
-import { isBranchTipMergedByPr, probeChangeRequestState, probePrForBranch } from './prProbe.js';
+import { readMergedPrTip, probeChangeRequestState, probePrForBranch } from './prProbe.js';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -114,24 +114,24 @@ describe('probePrForBranch', () => {
   });
 });
 
-// Authorizes discarding a checkout's uncommitted work, so every non-exact answer is false.
-describe('isBranchTipMergedByPr', () => {
+// Authorizes discarding a checkout's uncommitted work, so every non-exact answer is null.
+describe('readMergedPrTip', () => {
   it.each([
-    ['merged at the local tip', { status: 'found', detail: 'MERGED', headRefOid: 'published-head' }, true],
-    ['merged at an older head', { status: 'found', detail: 'MERGED', headRefOid: 'older-head' }, false],
-    ['merged without a head', { status: 'found', detail: 'MERGED' }, false],
-    ['still open', { status: 'found', detail: 'OPEN', headRefOid: 'published-head' }, false],
-    ['no PR', { status: 'none', detail: null }, false],
-    ['unreadable forge', { status: 'unavailable', detail: 'gh failed' }, false],
+    ['merged at the local tip', { status: 'found', detail: 'MERGED', headRefOid: 'Published-Head' }, 'published-head'],
+    ['merged at an older head', { status: 'found', detail: 'MERGED', headRefOid: 'older-head' }, null],
+    ['merged without a head', { status: 'found', detail: 'MERGED' }, null],
+    ['still open', { status: 'found', detail: 'OPEN', headRefOid: 'published-head' }, null],
+    ['no PR', { status: 'none', detail: null }, null],
+    ['unreadable forge', { status: 'unavailable', detail: 'gh failed' }, null],
   ])('answers %s', async (_name, found, expected) => {
     findPullRequestForBranch.mockResolvedValue(found);
-    expect(await isBranchTipMergedByPr('/repo', 'my-branch')).toBe(expected);
+    expect(await readMergedPrTip('/repo', 'my-branch')).toBe(expected);
   });
 
-  it('answers false for a missing local branch', async () => {
+  it('answers null for a missing local branch', async () => {
     execGit.mockResolvedValue({ exitCode: 1, stdout: '' });
     findPullRequestForBranch.mockResolvedValue({ status: 'found', detail: 'MERGED', headRefOid: '' });
-    expect(await isBranchTipMergedByPr('/repo', 'my-branch')).toBe(false);
+    expect(await readMergedPrTip('/repo', 'my-branch')).toBe(null);
   });
 });
 

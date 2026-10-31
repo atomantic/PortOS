@@ -58,8 +58,8 @@ vi.mock('./git.js', () => ({
   getDefaultBranch: (...args) => getDefaultBranchMock(...args),
   hasBranchMergeEvidence: (...args) => hasBranchMergeEvidenceMock(...args),
 }));
-const isBranchTipMergedByPrMock = vi.fn().mockResolvedValue(false);
-vi.mock('./prProbe.js', () => ({ isBranchTipMergedByPr: (...args) => isBranchTipMergedByPrMock(...args) }));
+const readMergedPrTipMock = vi.fn().mockResolvedValue(null);
+vi.mock('./prProbe.js', () => ({ readMergedPrTip: (...args) => readMergedPrTipMock(...args) }));
 
 const {
   shouldRefuseDefaultBranchMerge,
@@ -1537,14 +1537,26 @@ describe('removeWorktree identity, dirt and branch preservation', () => {
 
   it('removes a worktree whose PR merged at its tip, discarding uncommitted and untracked files', async () => {
     hasBranchMergeEvidenceMock.mockResolvedValue(true);
-    isBranchTipMergedByPrMock.mockResolvedValueOnce(true);
+    readMergedPrTipMock.mockResolvedValueOnce('a'.repeat(40));
     scriptGit({ porcelain: ' M src/index.js\n?? notes.md' });
 
     const result = await removeWorktree('agent-x', '/repo', 'cos/task-1/agent-x', { merge: false });
 
-    expect(isBranchTipMergedByPrMock).toHaveBeenCalledWith('/repo', 'cos/task-1/agent-x');
+    expect(readMergedPrTipMock).toHaveBeenCalledWith('/repo', 'cos/task-1/agent-x');
     expect(result.removed).toBe(true);
     expect(result.warnings).toEqual([]);
+  });
+
+  // Delivery is bound to the merged commit: a checkout observed at another head keeps its edits.
+  it('keeps uncommitted work when the observed head is not the merged PR tip', async () => {
+    hasBranchMergeEvidenceMock.mockResolvedValue(true);
+    readMergedPrTipMock.mockResolvedValueOnce('b'.repeat(40));
+    scriptGit({ porcelain: ' M src/index.js' });
+
+    const result = await removeWorktree('agent-x', '/repo', 'cos/task-1/agent-x', { merge: false });
+
+    expect(result.removed).toBe(false);
+    expect(result.warnings.join(' ')).toContain('worktree-dirty');
   });
 
   // An empty branch "contains" its base, so local merge evidence alone is not delivery.

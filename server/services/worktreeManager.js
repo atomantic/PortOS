@@ -1611,7 +1611,7 @@ async function removeWorktreeNow(agentId, sourceWorkspace, branchName, options, 
         if (!detached && holder.branch !== tree.branch) return 'worktree-holder-changed';
         const again = await checkHold(tree.head);
         if (again) return again;
-        if (delivered || !existsSync(tree.path)) return null;
+        if ((deliveredHead && tree.head.toLowerCase() === deliveredHead) || !existsSync(tree.path)) return null;
         const status = await execGit(['status', '--porcelain'], tree.path).then(r => r.stdout, () => null);
         if (status === null) return 'worktree-status-unavailable';
         const dirt = classifyWorktreeDirt(status, { ignoredPaths, preserveLockfiles: options.preserveLockfiles === true });
@@ -1657,11 +1657,11 @@ async function removeWorktreeNow(agentId, sourceWorkspace, branchName, options, 
   }
   // Once the branch's PR merged at this exact tip, its checkout is disposable:
   // uncommitted and untracked files go with it. Asked before the lock (a forge
-  // call); removal still re-proves merge evidence against the observed head.
-  const { isBranchTipMergedByPr } = await import('./prProbe.js');
-  // A detached follow-up never inherits its primary branch's delivery.
-  const delivered = existsSync(worktreePath)
-    && await isBranchTipMergedByPr(sourceWorkspace, branchName).catch(() => false) && !await detachedCheckout();
+  // call), so removal skips the dirt check only while the observed head is still
+  // that commit. A detached follow-up never inherits its primary branch's delivery.
+  const { readMergedPrTip } = await import('./prProbe.js');
+  const mergedTip = existsSync(worktreePath) ? await readMergedPrTip(sourceWorkspace, branchName).catch(() => null) : null;
+  const deliveredHead = mergedTip && !await detachedCheckout() ? mergedTip : null;
 
   const inspected = await withClaimOwnershipLock(async () => {
     const { getDefaultBranch } = await import('./git.js');
@@ -1701,7 +1701,7 @@ async function removeWorktreeNow(agentId, sourceWorkspace, branchName, options, 
 
     // A merged delivery's uncommitted and ignored files are discarded with its
     // checkout; only an unmerged checkout is held for them.
-    if (delivered) return {};
+    if (deliveredHead) return {};
 
     // Safety check: abort removal when uncommitted changes are detected.
     // Also fail closed if git status itself fails — treat unknown state as dirty.

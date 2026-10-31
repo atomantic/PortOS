@@ -88,17 +88,18 @@ export async function probePrForBranch(sourceWorkspace, branchName, resolvedForg
 }
 
 /**
- * Was this branch delivered? True only when the forge reports its pull/merge
- * request MERGED at the local branch's exact tip. An empty branch trivially
- * "contains" its base, so local ancestry alone cannot answer this; an
- * unreadable forge, no PR, or later local commits all answer false.
+ * Was this branch delivered? Returns the local branch tip (lowercase SHA) only
+ * when the forge reports its pull/merge request MERGED at exactly that commit,
+ * else null. An empty branch trivially "contains" its base, so local ancestry
+ * alone cannot answer this; an unreadable forge, no PR, or later local commits
+ * all answer null. Callers bind the answer to this SHA, not to the branch name.
  */
-export async function isBranchTipMergedByPr(sourceWorkspace, branchName) {
+export async function readMergedPrTip(sourceWorkspace, branchName) {
   const local = await execGit(['rev-parse', '--verify', `refs/heads/${branchName}`], sourceWorkspace, { ignoreExitCode: true })
     .then(result => result.exitCode === 0 ? result.stdout.trim().toLowerCase() : null).catch(() => null);
-  if (!local) return false;
+  if (!local) return null;
   const probe = await probePrForBranch(sourceWorkspace, branchName).catch(() => null);
-  return probe?.readable === true && probe.prState === 'MERGED' && probe.prHead === local;
+  return probe?.readable === true && probe.prState === 'MERGED' && probe.prHead === local ? local : null;
 }
 
 /**
