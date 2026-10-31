@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PR_COMPLETIONS, PR_CREATION, prClaimWasVerified, resolvePrCompletion, resolvePrCreation } from './prDisposition.js';
+import { PR_COMPLETIONS, PR_CREATION, prClaimWasVerified, resolvePrCompletion, resolvePrCreation, prHeldForOperator } from './prDisposition.js';
 
 describe('resolvePrCompletion', () => {
   it('prefers an explicit valid disposition', () => {
@@ -82,5 +82,21 @@ describe('prClaimWasVerified (#3733)', () => {
     expect(prClaimWasVerified({ ok: false, branch: 'b', category: 'forge-unreachable' })).toBe(false);
     expect(prClaimWasVerified(undefined)).toBe(false);
     expect(prClaimWasVerified(null)).toBe(false);
+  });
+});
+
+describe('prHeldForOperator (#14408)', () => {
+  it.each([
+    ['merge-on-green task', { prCompletion: 'merge-on-green' }, false],
+    ['review-then-merge task', { prCompletion: 'review-then-merge' }, false],
+    ['no metadata', undefined, false],
+    ['leave-open policy', { prCompletion: 'leave-open' }, true],
+    ['legacy draft policy', { prCompletion: 'draft' }, true],
+    ['JIRA hand-off', { prCompletion: 'merge-on-green', jiraTicketId: 'ABC-1' }, true],
+    ['exempt task type', { analysisType: 'jira-sprint-manager' }, true],
+    ['read-only task', { prCompletion: 'merge-on-green', readOnly: 'true' }, true],
+    ['review loop left open', { prCompletion: 'review-then-merge', reviewLoopLeaveOpen: true }, true],
+  ])('%s', (_label, metadata, held) => {
+    expect(prHeldForOperator(metadata === undefined ? {} : { metadata })).toBe(held);
   });
 });

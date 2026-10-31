@@ -23,7 +23,7 @@ import { execGit } from '../lib/execGit.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
 import { isPlainObject } from '../lib/objects.js';
 import { isTruthyMeta } from '../lib/metadataFlags.js';
-import { PR_COMPLETIONS, leavesPrForHuman, resolvePrCompletion } from '../lib/prDisposition.js';
+import { PR_COMPLETIONS, prHeldForOperator, resolvePrCompletion } from '../lib/prDisposition.js';
 
 const SHA_PATTERN = /^[0-9a-f]{40}$/;
 // Transient: the caller may retry the same handoff. Everything else means the
@@ -89,9 +89,7 @@ export async function validateCleanupReviewTarget({ target, workspacePath, requi
   if (!repoSpec) return 'review-forge-unsupported';
   const { getTaskById } = await import('./cosTaskStore.js');
   const ownerTask = await getTaskById(target.ownerTaskId).catch(() => null);
-  if (!ownerTask || leavesPrForHuman(ownerTask) || isTruthyMeta(ownerTask.metadata?.readOnly)
-    || isTruthyMeta(ownerTask.metadata?.reviewLoopLeaveOpen)
-    || resolvePrCompletion(ownerTask.metadata) === PR_COMPLETIONS.LEAVE_OPEN
+  if (!ownerTask || prHeldForOperator(ownerTask)
     || resolvePrCompletion(ownerTask.metadata) !== target.prCompletion) return 'review-policy-held';
   if (ownerTask.status !== 'completed' && !(ownerTask.id === launchTaskId && ['pending', 'in_progress'].includes(ownerTask.status))) return 'review-task-not-completed';
   const { getAppById } = await import('./apps.js');
@@ -114,15 +112,11 @@ export async function validateCleanupReviewTarget({ target, workspacePath, requi
   // an operator hold arriving while those reads run must win before dispatch.
   const currentOwnerTask = await getTaskById(target.ownerTaskId).catch(() => null);
   if (!currentOwnerTask || currentOwnerTask.status !== ownerTask.status || currentOwnerTask.metadata?.app !== ownerTask.metadata?.app
-    || leavesPrForHuman(currentOwnerTask) || isTruthyMeta(currentOwnerTask.metadata?.readOnly)
-    || isTruthyMeta(currentOwnerTask.metadata?.reviewLoopLeaveOpen)
-    || resolvePrCompletion(currentOwnerTask.metadata) !== target.prCompletion) return 'review-policy-held';
+    || prHeldForOperator(currentOwnerTask) || resolvePrCompletion(currentOwnerTask.metadata) !== target.prCompletion) return 'review-policy-held';
   if (launchTaskId) {
     const launchTask = await getTaskById(launchTaskId).catch(() => null);
     const saved = launchTask?.metadata?.cleanupReviewTarget;
-    if (!launchTask || !['pending', 'in_progress'].includes(launchTask.status) || leavesPrForHuman(launchTask)
-      || isTruthyMeta(launchTask.metadata?.readOnly) || isTruthyMeta(launchTask.metadata?.reviewLoopLeaveOpen)
-      || resolvePrCompletion(launchTask.metadata) === PR_COMPLETIONS.LEAVE_OPEN
+    if (!launchTask || !['pending', 'in_progress'].includes(launchTask.status) || prHeldForOperator(launchTask)
       || !isPlainObject(saved) || Object.keys(target).some(key => saved[key] !== target[key])) return 'review-launch-task-changed';
   }
   return null;
@@ -177,8 +171,7 @@ export async function inspectCompletedOwnerReview({ agentId = null, repoPath, br
   if (!task || task.id !== agent.taskId || task.status !== 'completed') return held('review-task-not-completed');
   const policy = resolvePrCompletion(task.metadata);
   if (agent.metadata?.prCompletionPolicy === PR_COMPLETIONS.LEAVE_OPEN) return held('review-policy-held');
-  if (![PR_COMPLETIONS.REVIEW_THEN_MERGE, PR_COMPLETIONS.MERGE_ON_GREEN].includes(policy) || leavesPrForHuman(task)
-    || isTruthyMeta(task.metadata?.readOnly) || isTruthyMeta(task.metadata?.reviewLoopLeaveOpen)) return held('review-policy-held');
+  if (prHeldForOperator(task)) return held('review-policy-held');
   const policyHold = await readBranchCompletionHold({ repoPath, branch, prUrl, tip: headSha, agents });
   if (policyHold !== (policy === PR_COMPLETIONS.REVIEW_THEN_MERGE ? 'pr-completion-review-required' : null)) return held('review-policy-unproven');
   const { repositoryKey } = await import('./mergeHandoffOwner.js');
@@ -259,8 +252,7 @@ export async function handoffPendingMerge({ agentId, prUrl, headSha, worktreePat
   if (!repoSpec) return refuse('forge-unsupported');
 
   const policy = resolvePrCompletion(task.metadata);
-  if (policy === PR_COMPLETIONS.LEAVE_OPEN || agent.metadata?.prCompletionPolicy === PR_COMPLETIONS.LEAVE_OPEN
-    || leavesPrForHuman(task) || isTruthyMeta(task.metadata?.reviewLoopLeaveOpen) || isTruthyMeta(task.metadata?.readOnly)) {
+  if (prHeldForOperator(task) || agent.metadata?.prCompletionPolicy === PR_COMPLETIONS.LEAVE_OPEN) {
     return refuse('completion-policy-leaves-open');
   }
 

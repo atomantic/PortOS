@@ -1,7 +1,6 @@
 import { resolve } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
-import { PR_COMPLETIONS, leavesPrForHuman, resolvePrCompletion } from '../lib/prDisposition.js';
-import { isTruthyMeta } from '../lib/metadataFlags.js';
+import { PR_COMPLETIONS, prHeldForOperator, resolvePrCompletion } from '../lib/prDisposition.js';
 import { claimCheckoutOwnerReason } from '../lib/claimContinuation.js';
 
 // Pinned checkout recovery for unbound pending merges. The pending-merge sweep
@@ -32,8 +31,7 @@ export async function preparePendingMergeRecovery({ app, entry, headSha, launchT
     if (!task || task.metadata?.app !== app.id) return { blocked: 'recovery-owner-unreadable' };
     if (['pending', 'in_progress'].includes(task.status) && task.id !== launchTaskId) return { deferred: true };
     if (task.status !== 'completed' && !(task.id === launchTaskId && ['pending', 'in_progress'].includes(task.status))) return { blocked: 'recovery-owner-not-completed' };
-    if (leavesPrForHuman(task) || isTruthyMeta(task.metadata?.readOnly) || isTruthyMeta(task.metadata?.reviewLoopLeaveOpen)
-      || resolvePrCompletion(task.metadata) === PR_COMPLETIONS.LEAVE_OPEN) return { blocked: 'recovery-owner-policy-held' };
+    if (prHeldForOperator(task)) return { blocked: 'recovery-owner-policy-held' };
   }
   const policy = snapshot ? PR_COMPLETIONS.MERGE_ON_GREEN : resolvePrCompletion(task.metadata);
   const { followUpRoster } = await import('./mergeFollowUpPolicy.js');
@@ -79,8 +77,7 @@ export async function validatePendingMergeRecovery({ target, workspacePath, requ
   if (launchTaskId) {
     const { getTaskById } = await import('./cosTaskStore.js');
     const launch = await getTaskById(launchTaskId).catch(() => null);
-    if (!launch || !['pending', 'in_progress'].includes(launch.status) || leavesPrForHuman(launch)
-      || isTruthyMeta(launch.metadata?.readOnly) || isTruthyMeta(launch.metadata?.reviewLoopLeaveOpen)
+    if (!launch || !['pending', 'in_progress'].includes(launch.status) || prHeldForOperator(launch)
       || resolvePrCompletion(launch.metadata) !== target.prCompletion
       || launch.metadata?.reviewLoopPRUrl !== target.prUrl || launch.metadata?.reviewLoopPRBranch !== target.branch
       || !isDeepStrictEqual(launch.metadata?.pendingMergeGuardTarget, target)) return 'recovery-launch-task-changed';
