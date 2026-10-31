@@ -41,6 +41,66 @@ import { cardIdForRequest, finishPreflightCard, finishPreflightDispatch, reportP
 import { beginPreflightActivity } from './preflightActivity.js';
 
 /**
+ * Build the task for a claimed request that targets a managed app.
+ * `reviewStartedApps` dedupes the cooldown advance per app per cycle.
+ */
+async function prepareAppRequestTask({ request, targetApp, state, cardId, lane, reviewStartedApps, taskScheduleMod, prepareManagedAppImprovementTask }) {
+  emitLog('info', `Processing on-demand improvement: ${request.taskType} for ${targetApp.name}${lane}`, { requestId: request.id, appId: targetApp.id });
+  // Advance the cooldown eagerly (deduped per app per cycle), but defer
+  // binding the active agent until a task is produced — a null result
+  // here must not strand `activeAgentId` (issue #978).
+  if (!reviewStartedApps.has(targetApp.id)) {
+    await markAppReviewCooldown(targetApp.id);
+    reviewStartedApps.add(targetApp.id);
+  }
+  const prepared = await prepareManagedAppImprovementTask(request.taskType, targetApp, state, {
+    skipPreconditions: true,
+    onDemand: true,
+    targetPullRequest: request.targetPullRequest ?? null,
+    // The deterministic pre-agent work reports into the user's card as it
+    // runs — this is the whole reason the card exists early.
+    preflightCardId: cardId,
+    providerOverride: request.providerOverride ?? null,
+    // A quota-burn step's per-invocation run parameters. They must reach
+    // the PROMPT, so unlike the provider/model/effort pins they cannot
+    // ride the post-generation `onDemandRequestMetadata` stamp in the drain loop —
+    // the generator overlays them before it picks the mode banner.
+    // `normalizeQuotaBurnProvenance` (lib/quotaBurnOrigin.js) has to keep
+    // `overrides.params` for a step to reach this; it drops them today,
+    // so a burn currently runs the task's SAVED mode, which is correct
+    // for every step until the migration starts pinning one.
+    runOverrides: request.burn?.overrides?.params ?? null
+  });
+  if (prepared.task) {
+    await taskScheduleMod.recordExecution(`task:${request.taskType}`, targetApp.id);
+    await bindAppReviewAgent(targetApp.id, `on-demand-${Date.now()}`);
+  }
+  return prepared;
+}
+
+/** Build the task for a claimed install-wide (app-less) request. */
+async function prepareInstallRequestTask({ request, state, lane, taskScheduleMod, generateSelfImprovementTaskForType }) {
+  emitLog('info', `Processing on-demand improvement: ${request.taskType}${lane}`, { requestId: request.id });
+  await taskScheduleMod.recordExecution(`task:${request.taskType}`);
+  await withStateLock(async () => {
+    const s = await loadState();
+    s.stats.lastSelfImprovement = new Date().toISOString();
+    s.stats.lastSelfImprovementType = request.taskType;
+    await saveState(s);
+  });
+  const drainOptions = (request.providerOverride || request.targetModels)
+    ? {
+        providerOverride: request.providerOverride ?? null,
+        targetModels: request.targetModels ?? null,
+      }
+    : undefined;
+  const task = drainOptions
+    ? await generateSelfImprovementTaskForType(request.taskType, state, drainOptions)
+    : await generateSelfImprovementTaskForType(request.taskType, state);
+  return { task, pendingPerpetualDispatch: null, skip: null };
+}
+
+/**
  * Drain the on-demand request queue, generating + persisting a task per request
  * and handing each admitted task to the caller's `adapter.emitSpawn`.
  *
@@ -261,61 +321,22 @@ export async function drainOnDemandRequests(ctx, adapter) {
       const userInitiated = await taskScheduleMod.applyOnDemandRunResets(request, targetApp?.id ?? null);
       const lane = userInitiated ? '' : ' (drain refill)';
 
-      if (targetApp) {
-        emitLog('info', `Processing on-demand improvement: ${request.taskType} for ${targetApp.name}${lane}`, { requestId: request.id, appId: targetApp.id });
-        // Advance the cooldown eagerly (deduped per app per cycle), but defer
-        // binding the active agent until a task is produced — a null result
-        // here must not strand `activeAgentId` (issue #978).
-        if (!reviewStartedApps.has(targetApp.id)) {
-          await markAppReviewCooldown(targetApp.id);
-          reviewStartedApps.add(targetApp.id);
-        }
-        const prepared = await prepareManagedAppImprovementTask(request.taskType, targetApp, state, {
-          skipPreconditions: true,
-          onDemand: true,
-          targetPullRequest: request.targetPullRequest ?? null,
-          // The deterministic pre-agent work reports into the user's card as it
-          // runs — this is the whole reason the card exists early.
-          preflightCardId: cardId,
-          providerOverride: request.providerOverride ?? null,
-          // A quota-burn step's per-invocation run parameters. They must reach
-          // the PROMPT, so unlike the provider/model/effort pins they cannot
-          // ride the post-generation `onDemandRequestMetadata` stamp below —
-          // the generator overlays them before it picks the mode banner.
-          // `normalizeQuotaBurnProvenance` (lib/quotaBurnOrigin.js) has to keep
-          // `overrides.params` for a step to reach this; it drops them today,
-          // so a burn currently runs the task's SAVED mode, which is correct
-          // for every step until the migration starts pinning one.
-          runOverrides: request.burn?.overrides?.params ?? null
-        });
-        task = prepared.task;
-        pendingPerpetualDispatch = prepared.pendingPerpetualDispatch;
-        skip = prepared.skip;
-        if (task) {
-          await taskScheduleMod.recordExecution(`task:${request.taskType}`, targetApp.id);
-          await bindAppReviewAgent(targetApp.id, `on-demand-${Date.now()}`);
-        }
-      } else {
-        emitLog('info', `Processing on-demand improvement: ${request.taskType}${lane}`, { requestId: request.id });
-        await taskScheduleMod.recordExecution(`task:${request.taskType}`);
-        await withStateLock(async () => {
-          const s = await loadState();
-          s.stats.lastSelfImprovement = new Date().toISOString();
-          s.stats.lastSelfImprovementType = request.taskType;
-          await saveState(s);
-        });
-        const drainOptions = (request.providerOverride || request.targetModels)
-          ? {
-              providerOverride: request.providerOverride ?? null,
-              targetModels: request.targetModels ?? null,
-            }
-          : undefined;
-        task = drainOptions
-          ? await generateSelfImprovementTaskForType(request.taskType, state, drainOptions)
-          : await generateSelfImprovementTaskForType(request.taskType, state);
-      }
+      ({ task, pendingPerpetualDispatch, skip } = targetApp
+        ? await prepareAppRequestTask({ request, targetApp, state, cardId, lane, reviewStartedApps, taskScheduleMod, prepareManagedAppImprovementTask })
+        : await prepareInstallRequestTask({ request, state, lane, taskScheduleMod, generateSelfImprovementTaskForType }));
 
       applyOnDemandConsent(task);
+      // The new-task and revived-twin arms below hand off identically; one helper
+      // keeps the perpetual record, spawn and card transfer in the same order.
+      const handOff = async (spawnTask) => {
+        await recordDeferredPerpetualDispatch(pendingPerpetualDispatch, taskScheduleMod);
+        handoffAttempted = true;
+        emitSpawn(spawnTask);
+        if (cardId && deferPreflightDispatch) {
+          deferPreflightDispatch(spawnTask.id, { cardId, resultTaskId: acceptedTaskId, endPreflight, persisted: true });
+          preflightTransferred = true;
+        } else await finishPreflightDispatch(cardId, acceptedTaskId);
+      };
       // Priority 0 is a COMMITTED tier: the request is already cleared and the
       // marker bound, and this branch is the only thing that persists the task, so
       // a denial would discard the user's "Run". See canSpawnCommitted (#4834).
@@ -342,13 +363,7 @@ export async function drainOnDemandRequests(ctx, adapter) {
         if (persisted?.error) throw new Error(persisted.error);
         if (!persisted?.duplicate) {
           acceptedTaskId = persisted?.id || task.id;
-          await recordDeferredPerpetualDispatch(pendingPerpetualDispatch, taskScheduleMod);
-          handoffAttempted = true;
-          emitSpawn(task);
-          if (cardId && deferPreflightDispatch) {
-            deferPreflightDispatch(task.id, { cardId, resultTaskId: acceptedTaskId, endPreflight, persisted: true });
-            preflightTransferred = true;
-          } else await finishPreflightDispatch(cardId, acceptedTaskId);
+          await handOff(task);
         } else if (persisted.status === 'blocked' && !request.cleanupSourceAgentId) {
           // Explicit user Run colliding with a failure-blocked twin (#2614):
           // revive the existing task instead of silently dropping the Run and
@@ -360,16 +375,9 @@ export async function drainOnDemandRequests(ctx, adapter) {
             continue;
           }
           acceptedTaskId = stored?.id || persisted.id;
-          await recordDeferredPerpetualDispatch(pendingPerpetualDispatch, taskScheduleMod);
           // Deep resumes need the persisted branch pointer and original audit text,
           // not a freshly rendered snapshot of volatile issue/PR preload data.
-          const revived = isLegacyDeepAudit(task.metadata) ? stored : { ...task, id: persisted.id };
-          handoffAttempted = true;
-          emitSpawn(revived);
-          if (cardId && deferPreflightDispatch) {
-            deferPreflightDispatch(revived.id, { cardId, resultTaskId: acceptedTaskId, endPreflight, persisted: true });
-            preflightTransferred = true;
-          } else await finishPreflightDispatch(cardId, acceptedTaskId);
+          await handOff(isLegacyDeepAudit(task.metadata) ? stored : { ...task, id: persisted.id });
           emitLog('info', `🔁 On-demand ${request.taskType} revived blocked task ${persisted.id}`, { taskId: persisted.id });
         } else if (!claim || quotaBurnProvenance(persisted.metadata).requestId === request.id
           || (request.cleanupSourceAgentId && persisted.id === task.id)) {

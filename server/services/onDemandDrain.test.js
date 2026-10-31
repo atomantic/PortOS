@@ -486,6 +486,14 @@ describe.each(ENGINES)('%s — app-review marker discipline (#978)', (_name, mak
     expect(mocks.markAppReviewCooldown).toHaveBeenCalledTimes(1);
     expect(mocks.bindAppReviewAgent).not.toHaveBeenCalled();
   });
+
+  it('records the execution and binds the active agent when the app request produces a task', async () => {
+    mocks.getOnDemandRequests.mockResolvedValue([appRequest()]);
+    const { adapter } = makeAdapter();
+    await drainOnDemandRequests({ state: STATE }, adapter);
+    expect(mocks.recordExecution).toHaveBeenCalledWith('task:code-quality', 'acme');
+    expect(mocks.bindAppReviewAgent).toHaveBeenCalledWith('acme', expect.stringMatching(/^on-demand-/));
+  });
 });
 
 describe.each(ENGINES)('%s — skip gates', (_name, makeAdapter) => {
@@ -532,6 +540,15 @@ describe.each(ENGINES)('%s — skip gates', (_name, makeAdapter) => {
     await drainOnDemandRequests({ state: STATE }, adapter);
     expect(mocks.generateSelfImprovementTaskForType).toHaveBeenCalledWith('code-quality', STATE);
     expect(mocks.markAppReviewCooldown).not.toHaveBeenCalled();
+    expect(spawned).toHaveLength(1);
+  });
+
+  it('forwards an app-less request\'s provider and model pins to the self-improvement generator', async () => {
+    const providerOverride = { provider: 'example-provider', model: 'example-model' };
+    mocks.getOnDemandRequests.mockResolvedValue([appRequest({ appId: null, providerOverride })]);
+    const { spawned, adapter } = makeAdapter();
+    await drainOnDemandRequests({ state: STATE }, adapter);
+    expect(mocks.generateSelfImprovementTaskForType).toHaveBeenCalledWith('code-quality', STATE, { providerOverride, targetModels: null });
     expect(spawned).toHaveLength(1);
   });
 });
