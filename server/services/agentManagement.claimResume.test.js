@@ -117,7 +117,7 @@ import { completeAgent, updateAgent } from './cosAgentLifecycle.js';
 import { spawnDirectly } from './agentCliSpawning.js';
 import { setUseRunner } from './agentState.js';
 import { updateClaimOwnership } from './cosClaimOwnership.js';
-import { claimMergeAdmission } from './cosMergeAdmission.js';
+import { resolveMergeHandoffOwner } from './mergeHandoffOwner.js';
 
 const CLAIM_PROSE = 'Resume the claim swarm, preserve the worktrees, and ship all issues.';
 const reviewers = ['provider:antigravity-cli'];
@@ -129,7 +129,7 @@ beforeEach(() => {
     metadata: { claimFlow: true, swarmCount: 6, ...reviewConfig, reviewLoop: true, useWorktree: false, openPR: false,
       prompt: CLAIM_PROSE, blockedCategory: 'agent-paused', pausedAgentId: 'prior', app: 'example' } } };
   f.state = { agents: { prior: { id: 'prior', taskId: 'original', status: 'paused',
-    metadata: { configClaimFlow: true, workspacePath: '/repos/example', taskType: 'user' } } }, mergeAdmissions: {} };
+    metadata: { configClaimFlow: true, workspacePath: '/repos/example', taskType: 'user' } } } };
   persist();
   forceSpawnTask.mockImplementation(async taskId => {
     await dispatchAgentRun({ task: f.tasks[taskId], agentId: 'replacement-agent', instanceId: 'instance-example',
@@ -142,7 +142,7 @@ beforeEach(() => {
 });
 
 describe('claim resume contract through spawn', () => {
-  it.each(['blocked', 'completed', 'legacy'])('preserves an unpinned %s swarm through registration and admission', async kind => {
+  it.each(['blocked', 'completed', 'legacy'])('preserves an unpinned %s swarm through registration and handoff ownership', async kind => {
     if (kind === 'completed') f.tasks.original.status = 'completed';
     if (kind === 'legacy') {
       delete f.tasks.original.metadata.claimFlow;
@@ -160,9 +160,7 @@ describe('claim resume contract through spawn', () => {
     expect(f.prompt).not.toContain('/api/cos/merge-admission');
     expect(f.prompt).toContain('antigravity');
     expect(await updateClaimOwnership({ agentId: registered.id, action: 'bind', branch: 'claim/issue-42' })).toMatchObject({ bound: true });
-    const lease = await claimMergeAdmission({ agentId: registered.id, action: 'acquire' });
-    expect(lease.admitted).toBe(true);
-    expect(await claimMergeAdmission({ agentId: registered.id, action: 'release', token: lease.token, outcome: 'leave-open' })).toMatchObject({ released: true });
+    expect((await resolveMergeHandoffOwner(registered.id)).owns('claim/issue-42')).toBe(true);
 
     // A separate live owner remains protected even after the trusted replacement launches.
     f.state.agents.other = { ...registered, id: 'other', metadata: { ...registered.metadata, claimBranches: ['claim/issue-43'], claimSelectionPending: false } };
@@ -187,7 +185,7 @@ describe('claim resume contract through spawn', () => {
     expect(f.state.agents['replacement-agent'].metadata.configClaimFlow).toBe(false);
     expect(f.prompt).not.toContain('"action":"acquire"');
     expect(await updateClaimOwnership({ agentId: 'replacement-agent', action: 'bind', branch: 'claim/issue-42' })).toEqual({ bound: false, reason: 'claim-owner-unverified' });
-    expect(await claimMergeAdmission({ agentId: 'replacement-agent', action: 'acquire' })).toMatchObject({ admitted: false, reason: 'claim-owner-unverified' });
+    expect(await resolveMergeHandoffOwner('replacement-agent')).toEqual({ refused: 'handoff-owner-unverified' });
   });
 
   it.each(['missing-task', 'legacy-missing-task', 'lost-contract', 'unreadable-task'])('blocks %s before retiring or spawning', async kind => {

@@ -17,11 +17,7 @@
  * published or inspected; the forge's rules decide whether it may land, with a
  * merge-on-green fallback when they refuse an immediate merge. No local
  * merged-tree guard runs (#14184): CI skips every guard for a `.quality.json`-
- * only change because none reads that file. That merge is the one step that
- * advances the default branch, so it runs under this install's repository merge
- * admission (`cosMergeAdmission.js`)
- * like every other final merge. A busy lease leaves the PR recoverable for
- * a later admitted attempt. Reads never write. A v1 file or historical
+ * only change because none reads that file. Reads never write. A v1 file or historical
  * `quality-snapshot.json` is explicit legacy input. Before publication, live
  * review ownership and non-snapshot branch changes defer replacement; the push
  * lease pins only the exact head this invocation inspected.
@@ -339,7 +335,7 @@ async function landOrReuse(app, git, defaultBranch, deps, next, count, options =
   if (!next) return skipped(app, 'invalid-evidence');
   if (sameSnapshot(onBranch, next) && legacyOnBranch.status === 'absent') {
     const reused = await reuseOpenSnapshotPr(app, git, defaultBranch, deps, guard.remoteSha);
-    if (reused.published) rememberPublished(app, next, reused);
+    if (reused.published) lastPublishedBody.set(app.repoPath, next);
     return reused;
   }
   let result;
@@ -374,17 +370,8 @@ async function landOrReuse(app, git, defaultBranch, deps, next, count, options =
       ...options, leaseRetry: true,
     });
   }
-  rememberPublished(app, next, result);
+  if (result.published === true) lastPublishedBody.set(app.repoPath, next);
   return result;
-}
-
-// A merge deferred by admission with nothing queued to land it (GitLab) must
-// stay retryable: remembering the body would turn the next unchanged cycle
-// into a 'no-changes' skip and strand the open PR.
-function rememberPublished(app, body, result) {
-  if (result.published !== true) return;
-  if (result.deferredMerge === true && result.queuedMerge !== true) return;
-  lastPublishedBody.set(app.repoPath, body);
 }
 
 async function reuseOpenSnapshotPr(app, git, defaultBranch, deps, expectedHeadSha) {
@@ -556,43 +543,21 @@ function decoratePr(git, created) {
 const mergeOutcomeFields = outcome => ({
   merged: outcome.merged === true,
   queuedMerge: outcome.queued === true,
-  ...(outcome.deferred === true ? { deferredMerge: true } : {}),
 });
 
 /**
- * The immediate attempt needs this install's repository merge admission. When
- * another owner holds it (or ownership cannot be verified) the merge is
- * deferred. Only GitHub repositories use the local pending-merge queue; a
- * GitLab admission refusal stays open for retry.
+ * Merge immediately, pinned to the published head; when the forge refuses,
+ * fall back to merge-on-green (the local pending-merge queue on GitHub).
  *
- * @returns {{merged: boolean, queued: boolean, deferred?: boolean}} — merged
- *   and queued are never both true.
+ * @returns {{merged: boolean, queued: boolean}} — merged and queued are never
+ *   both true.
  */
 async function mergeSnapshotPr(app, pr, deps, git, expectedHeadSha) {
   if (!pr?.url || !pr?.number) return { merged: false, queued: false };
   const pinned = /^[a-f0-9]{40}$/i.test(expectedHeadSha || '') ? expectedHeadSha : undefined;
-  const attempt = await withSnapshotMergeAdmission(app, deps, () => tryImmediateMerge(app, pr, deps, git, pinned));
-  if (attempt.deferred) {
-    const queued = pr.cli === 'glab' ? false : await queueMergeWhenGreenFallback(app, pr, deps);
-    return { merged: false, queued: queued === true, deferred: true };
-  }
-  if (attempt.result) return { merged: true, queued: false };
+  if (await tryImmediateMerge(app, pr, deps, git, pinned)) return { merged: true, queued: false };
   const queued = await queueMergeWhenGreenFallback(app, pr, deps);
   return { merged: false, queued: queued === true };
-}
-
-async function withSnapshotMergeAdmission(app, deps, work) {
-  const readOrigin = deps.getOriginInfo || (await import('../lib/gitRemote.js')).getOriginInfo;
-  const withAdmission = deps.withMergeAdmission
-    || (await import('./cosMergeAdmission.js')).withPendingMergeAdmission;
-  const origin = await readOrigin(app.repoPath).catch(() => null);
-  const admitted = await withAdmission(origin, work)
-    .catch(err => ({ admitted: false, reason: err?.message || 'admission-error' }));
-  if (admitted.admitted !== true) {
-    console.log(`⏳ Quality snapshot merge deferred for app ${app.id}: ${admitted.reason || 'admission refused'}`);
-    return { deferred: true, reason: admitted.reason || 'admission-refused' };
-  }
-  return { deferred: false, result: admitted.result === true };
 }
 
 async function tryImmediateMerge(app, pr, deps, git, expectedHeadSha) {

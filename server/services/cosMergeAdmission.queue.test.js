@@ -1,17 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import express from 'express';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
-import { request } from '../lib/testHelper.js';
-import { errorMiddleware } from '../lib/errorHandler.js';
 
 const fixture = vi.hoisted(() => ({ state: null, disk: null, queue: null, enqueued: null, read: null, origin: null, save: null }));
-vi.mock('../services/cosAgentArchive.js', () => ({}));
-vi.mock('../services/cosAgentFeedback.js', () => ({}));
-vi.mock('../services/cosAgentIndex.js', () => ({}));
-vi.mock('../services/cosAgentLifecycle.js', () => ({}));
-vi.mock('../services/cosHealthMonitor.js', () => ({}));
-vi.mock('../services/agentOrchestrator.js', () => ({}));
-vi.mock('../services/cosState.js', () => ({
+vi.mock('./cosState.js', () => ({
   withStateLock: (fn) => { const result = fixture.queue(fn); fixture.enqueued?.(); return result; },
   loadState: async () => fixture.state,
   readMergeAdmissionStateForSafetyCheck: async () => {
@@ -24,34 +15,34 @@ vi.mock('../services/cosState.js', () => ({
     fixture.state = state;
   },
 }));
-vi.mock('../lib/gitRemote.js', () => ({ getOriginInfo: async () => {
-  await fixture.origin?.();
-  return { host: 'github.com', fullName: 'example/repo' };
-} }));
-import routes from './cosAgentRoutes.js';
-import { ADMISSION_QUEUE_TIMEOUT_MS, claimMergeAdmission } from '../services/cosMergeAdmission.js';
+vi.mock('./externalMergeTarget.js', () => {
+  const proof = (input) => ({ repository: 'github.com/example/repo', target: { appId: 'repo', repoPath: '/repos/repo',
+    worktreePath: '/worktrees/repo', gitDir: '/git/dir', commonDir: '/git/common', checkoutIdentity: 'identity', branch: 'feature',
+    prUrl: input.prUrl, baseBranch: input.baseBranch, headSha: input.headSha, baseSha: input.baseSha } });
+  // The in-transaction recheck is the phase the 'origin' hook stalls.
+  return { inspectExternalMergeTarget: async input => proof(input),
+    inspectExternalMergeCheckout: async (input) => { await fixture.origin?.(); return proof(input); } };
+});
+import { ADMISSION_QUEUE_TIMEOUT_MS, externalMergeAdmission } from './cosMergeAdmission.js';
 
 const repository = 'github.com/example/repo';
-const agentId = 'synthetic-parent';
+const session = 'a'.repeat(64);
+const target = { appId: 'repo', worktreePath: '/worktrees/repo', baseBranch: 'main',
+  prUrl: 'https://github.com/example/repo/pull/7', headSha: 'c'.repeat(40), baseSha: 'd'.repeat(40) };
 const deferred = () => {
   let resolve;
   let reject;
   const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
   return { promise, resolve, reject };
 };
-const input = (action, token) => ({ agentId, action, ...(token && { token }), ...(action === 'release' && { outcome: 'merged' }) });
-const call = (action, token) => claimMergeAdmission(input(action, token));
-const app = express();
-app.use(express.json());
-app.use('/api/cos', routes);
-app.use(errorMiddleware);
-const post = (action, token) => Promise.resolve(request(app).post('/api/cos/merge-admission').send(input(action, token)));
+const input = (action, token) => ({ action, ...(['acquire', 'prepare'].includes(action) ? target : { token }),
+  ...(action === 'release' && { outcome: 'merged' }) });
+const call = (action, token) => externalMergeAdmission(input(action, token), async () => session);
 
 beforeEach(() => {
   fixture.queue = createFileWriteQueue();
   fixture.enqueued = fixture.read = fixture.origin = fixture.save = null;
-  fixture.state = { agents: { [agentId]: { id: agentId, taskId: 'synthetic-task', status: 'running',
-    startedAt: '2026-01-01T00:00:00Z', metadata: { sourceWorkspace: '/repos/example', claimPicksOwnBranch: true } } }, mergeAdmissions: {} };
+  fixture.state = { agents: {}, mergeAdmissions: {} };
   fixture.disk = structuredClone(fixture.state);
   vi.spyOn(console, 'log').mockImplementation(() => {});
   vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -61,19 +52,17 @@ beforeEach(() => {
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
 describe('merge admission state queue deadline', () => {
-  it.each(['acquire', 'check', 'release'])('returns a bounded HTTP refusal and fences a queued %s', async (action) => {
+  it.each(['acquire', 'check', 'release'])('returns a bounded refusal and fences a queued %s', async (action) => {
     const holder = action === 'acquire' ? null : await call('acquire');
     const before = structuredClone(fixture.disk);
     const gate = deferred();
     const blocked = fixture.queue(() => gate.promise);
     const enqueued = deferred();
     fixture.enqueued = enqueued.resolve;
-    const response = post(action, holder?.token);
+    const response = call(action, holder?.token);
     await enqueued.promise;
     await vi.advanceTimersByTimeAsync(ADMISSION_QUEUE_TIMEOUT_MS);
-    const res = await response;
-    expect(res.status).toBe(200);
-    expect(res.body).toEqual({ admitted: false, reason: 'state-queue-timeout', retryAfterMs: 5000 });
+    expect(await response).toEqual({ admitted: false, reason: 'state-queue-timeout', retryAfterMs: 5000 });
     expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('phase=queue phaseMs=15000'));
     gate.resolve();
     await blocked;
@@ -143,9 +132,9 @@ describe('merge admission state queue deadline', () => {
     const admission = await response;
     const logs = [...console.log.mock.calls, ...console.warn.mock.calls].flat();
     for (const line of logs) {
-      expect(line).toMatch(/^🚦 Merge admission operation=acquire status=(pending|settled) phase=(trustedState|origin|persistence) phaseMs=\d+ totalMs=\d+ queueMs=\d+ trustedStateMs=\d+ stateLoadMs=\d+ originMs=\d+ ownerRecoveryMs=\d+ persistenceMs=\d+ readMs=\d+ parseMs=\d+ prepareMs=\d+ agentsMs=\d+ serializeMs=\d+ writeMs=\d+ replaceMs=\d+ dirSyncMs=\d+ loopLagMs=\d+ loopLagMaxMs=\d+ queueLagMs=\d+ trustedStateLagMs=\d+ persistenceLagMs=\d+ timerLateMs=\d+( cpuMs=\d+ load1=\d+(\.\d+)? cpus=\d+ gcMs=\d+ invCtx=\d+)?$/);
+      expect(line).toMatch(/^🚦 Merge admission operation=external-acquire status=(pending|settled) phase=(trustedState|stateLoad|origin|persistence) phaseMs=\d+ totalMs=\d+ queueMs=\d+ trustedStateMs=\d+ stateLoadMs=\d+ originMs=\d+ persistenceMs=\d+ readMs=\d+ parseMs=\d+ prepareMs=\d+ agentsMs=\d+ serializeMs=\d+ writeMs=\d+ replaceMs=\d+ dirSyncMs=\d+ loopLagMs=\d+ loopLagMaxMs=\d+ queueLagMs=\d+ trustedStateLagMs=\d+ persistenceLagMs=\d+ timerLateMs=\d+( cpuMs=\d+ load1=\d+(\.\d+)? cpus=\d+ gcMs=\d+ invCtx=\d+)?$/);
       expect(line).not.toContain(admission.token);
-      expect(line).not.toContain(agentId);
+      expect(line).not.toContain(session);
       expect(line).not.toContain('/repos');
     }
   });
@@ -154,17 +143,18 @@ describe('merge admission state queue deadline', () => {
 // #12738: the stored agent rows come back in insertion order, which a cached map
 // that deleted and re-added an id does not keep. Ownership compares per record.
 describe('merge admission ownership comparison', () => {
+  const running = { id: 'synthetic-running', taskId: 'synthetic-task', status: 'running' };
   const other = { id: 'synthetic-other', taskId: 'synthetic-task-2', status: 'completed' };
 
   it('admits when the stored records match the cache in a different order', async () => {
-    fixture.state.agents = { [agentId]: fixture.state.agents[agentId], [other.id]: other };
-    fixture.disk = { agents: { [other.id]: other, [agentId]: fixture.state.agents[agentId] }, mergeAdmissions: {} };
+    fixture.state.agents = { [running.id]: running, [other.id]: other };
+    fixture.disk = { agents: { [other.id]: other, [running.id]: running }, mergeAdmissions: {} };
     expect(await call('acquire')).toMatchObject({ admitted: true });
   });
 
   it('refuses when a stored record differs from the cached one', async () => {
-    fixture.state.agents = { [agentId]: fixture.state.agents[agentId], [other.id]: other };
-    fixture.disk = { agents: { [agentId]: fixture.state.agents[agentId], [other.id]: { ...other, status: 'running' } }, mergeAdmissions: {} };
+    fixture.state.agents = { [running.id]: running, [other.id]: other };
+    fixture.disk = { agents: { [running.id]: running, [other.id]: { ...other, status: 'running' } }, mergeAdmissions: {} };
     expect(await call('acquire')).toMatchObject({ admitted: false, reason: 'ownership-stale' });
   });
 });

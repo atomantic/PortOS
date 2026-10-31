@@ -55,9 +55,6 @@ const testDeps = (overrides = {}) => ({
   addWorktree: vi.fn(async () => true),
   queuePendingMerge: vi.fn(async () => true),
   checkSnapshotPublicationOwnership: vi.fn(async () => ({ admitted: true })),
-  // Admission itself is pinned in appQualitySnapshotAdmission.test.js.
-  getOriginInfo: vi.fn(async () => ({ host: 'github.com', fullName: 'example/app' })),
-  withMergeAdmission: vi.fn(async (_origin, work) => ({ admitted: true, result: await work() })),
   probePrForBranch: vi.fn(async () => ({ prState: null, prUrl: null, prNumber: null, readable: true })),
   ...overrides,
 });
@@ -930,7 +927,6 @@ it.each([false, true])('merges an advertised-guard snapshot pinned to its head w
   const { deps, head } = advertisedGuardPublication(reused);
   expect(await publishAppQualitySnapshot(app, deps)).toMatchObject({ published: true, merged: true, queuedMerge: false });
   expect(deps.git.mergePR).toHaveBeenCalledWith(app.repoPath, 42, { forgeAccount: null, expectedHeadSha: head });
-  expect(deps.withMergeAdmission).toHaveBeenCalledTimes(1);
   expect(deps.queuePendingMerge).not.toHaveBeenCalled();
   expect(spawnedGuard(deps)).toBe(false);
   // The reused PR needs no checkout; a new publication removes its temporary one.
@@ -938,10 +934,9 @@ it.each([false, true])('merges an advertised-guard snapshot pinned to its head w
   expect(deps.rm).toHaveBeenCalledTimes(reused ? 0 : 1);
 });
 
-it.each(['admission', 'merge'])('falls back to merge-on-green when %s refuses the immediate merge and retains no checkout', async refused => {
+it('falls back to merge-on-green when the forge refuses the immediate merge and retains no checkout', async () => {
   const { deps } = advertisedGuardPublication();
-  if (refused === 'admission') deps.withMergeAdmission.mockResolvedValue({ admitted: false, reason: 'active-owner' });
-  else deps.git.mergePR.mockResolvedValue({ success: false, error: 'required checks pending' });
+  deps.git.mergePR.mockResolvedValue({ success: false, error: 'required checks pending' });
   expect(await publishAppQualitySnapshot(app, deps)).toMatchObject({ published: true, merged: false, queuedMerge: true });
   expect(deps.queuePendingMerge).toHaveBeenCalledWith(app.id, expect.objectContaining({ prUrl, prBranch: QUALITY_SNAPSHOT_BRANCH }));
   expect(spawnedGuard(deps)).toBe(false);

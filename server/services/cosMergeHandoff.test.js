@@ -65,7 +65,6 @@ vi.mock('./heldCheckoutRecovery.js', () => ({ retirePendingMergeCheckout: (...ar
 
 import { handoffPendingMerge, hasQueuedMergeHandoff } from './cosMergeHandoff.js';
 import { processPendingMergePrs, readPendingMergePrs, nudgeLocalPendingMergePrs } from './prWatcher.js';
-import { claimMergeAdmission } from './cosMergeAdmission.js';
 import { addTask } from './cosTaskStore.js';
 
 const HEAD = 'a'.repeat(40);
@@ -94,7 +93,7 @@ beforeEach(async () => {
   (await import('./prWatcher.js')).cancelHandoffFollowUps();
   (await import('./prWatcher.js')).setHandoffFollowUpGate(async () => null);
   cleanupMock.mockReset().mockResolvedValue({ ok: true, branchDeleted: true, archiveDir: '/archives/example' });
-  f.state = { agents: { 'agent-1': claimAgent('agent-1', 'claim/issue-1'), 'agent-2': claimAgent('agent-2', 'claim/issue-2') }, mergeAdmissions: {} };
+  f.state = { agents: { 'agent-1': claimAgent('agent-1', 'claim/issue-1'), 'agent-2': claimAgent('agent-2', 'claim/issue-2') } };
   f.tasks = Object.fromEntries(['agent-1', 'agent-2'].map((id) => [`task-${id}`, {
     id: `task-${id}`, status: 'in_progress', taskType: 'user', priority: 'MEDIUM', description: 'Example change',
     metadata: { app: 'app1', prCompletion: 'review-then-merge' },
@@ -296,15 +295,7 @@ describe('pending-merge handoff', () => {
       handoff: expect.objectContaining({ receiptId: result.receipt.id, headSha: HEAD, prCompletion: 'review-then-merge', reviewStatus: 'clean' }),
     })]);
 
-    // Another run holds repository admission: the coordinator waits without
-    // spending its budget and never merges around the lease.
     greenChecks();
-    const lease = await claimMergeAdmission({ agentId: 'agent-2', action: 'acquire' });
-    expect(lease.admitted).toBe(true);
-    expect(await processPendingMergePrs(f.apps.get('app1'))).toMatchObject({ waiting: 1, merged: 0 });
-    expect(mergePrMock).not.toHaveBeenCalled();
-    expect(pending()[0].ticks).toBe(0);
-    await claimMergeAdmission({ agentId: 'agent-2', action: 'release', token: lease.token, outcome: 'merged' });
 
     // A fresh server process drives the persisted queue entry to a pinned merge.
     vi.resetModules();
@@ -450,11 +441,8 @@ describe('pending-merge handoff', () => {
     expect(notifyMock).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps merged cleanup owned and bounded after an archival refusal, without holding merge admission', async () => {
-    cleanupMock.mockImplementation(async () => {
-      expect(Object.keys(f.state.mergeAdmissions)).toHaveLength(0);
-      return { ok: false, reason: 'retirement-forge-unreadable' };
-    });
+  it('keeps merged cleanup owned and bounded after an archival refusal', async () => {
+    cleanupMock.mockResolvedValue({ ok: false, reason: 'retirement-forge-unreadable' });
     await handedOff();
     greenChecks();
     await processPendingMergePrs(f.apps.get('app1'));

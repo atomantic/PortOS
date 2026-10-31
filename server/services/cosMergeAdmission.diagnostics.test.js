@@ -19,17 +19,23 @@ vi.mock('./cosState.js', () => ({
     fixture.state = state;
   },
 }));
-vi.mock('../lib/gitRemote.js', () => ({ getOriginInfo: async () => ({ host: 'github.com', fullName: 'example/repo' }) }));
-import { claimMergeAdmission, __setMergeAdmissionClockForTests, withPendingMergeAdmission } from './cosMergeAdmission.js';
+vi.mock('./externalMergeTarget.js', () => {
+  const proof = (input) => ({ repository: 'github.com/example/repo', target: { appId: 'repo', repoPath: '/repos/repo',
+    worktreePath: '/worktrees/repo', gitDir: '/git/dir', commonDir: '/git/common', checkoutIdentity: 'identity', branch: 'feature',
+    prUrl: input.prUrl, baseBranch: input.baseBranch, headSha: input.headSha, baseSha: input.baseSha } });
+  return { inspectExternalMergeTarget: async input => proof(input), inspectExternalMergeCheckout: async target => proof(target) };
+});
+import { __setMergeAdmissionClockForTests, externalMergeAdmission } from './cosMergeAdmission.js';
 
 const deferred = () => {
   let resolve;
   const promise = new Promise((yes) => { resolve = yes; });
   return { promise, resolve };
 };
-const agentId = 'synthetic-parent';
-const acquire = () => claimMergeAdmission({ agentId, action: 'acquire' });
-const origin = { host: 'github.com', fullName: 'example/repo' };
+const session = 'a'.repeat(64);
+const input = { appId: 'repo', worktreePath: '/worktrees/repo', baseBranch: 'main',
+  prUrl: 'https://github.com/example/repo/pull/7', headSha: 'c'.repeat(40), baseSha: 'd'.repeat(40) };
+const acquire = () => externalMergeAdmission({ action: 'acquire', ...input }, async () => session);
 const LINE = /^🚦 Merge admission operation=[a-z-]+ status=[a-z-]+ phase=[A-Za-z]+( [A-Za-z]+Ms=\d+)+( cpuMs=\d+ load1=\d+(\.\d+)? cpus=\d+ gcMs=\d+ invCtx=\d+)?$/;
 const reported = () => [...console.log.mock.calls, ...console.warn.mock.calls, ...console.error.mock.calls].flat();
 const fields = (line) => Object.fromEntries([...line.matchAll(/ ([A-Za-z]+)=(\S+)/g)]
@@ -57,8 +63,7 @@ beforeEach(() => {
   __setMergeAdmissionClockForTests(clock);
   fixture.queue = createFileWriteQueue();
   fixture.save = null;
-  fixture.state = { agents: { [agentId]: { id: agentId, taskId: 'synthetic-task', status: 'running',
-    startedAt: '2026-01-01T00:00:00Z', metadata: { sourceWorkspace: '/repos/example', claimPicksOwnBranch: true } } }, mergeAdmissions: {} };
+  fixture.state = { agents: {}, mergeAdmissions: {} };
   fixture.disk = structuredClone(fixture.state);
   vi.spyOn(console, 'log').mockImplementation(() => {});
   vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -70,7 +75,7 @@ describe('merge admission slow-operation diagnostics', () => {
   it('stays silent for a fast settle and reports an ordinary blocked queue as lag-free queue wait', async () => {
     const fast = await acquire();
     expect(reported()).toEqual([]);
-    await claimMergeAdmission({ agentId, action: 'release', token: fast.token, outcome: 'merged' });
+    await externalMergeAdmission({ action: 'release', token: fast.token, outcome: 'merged' }, async () => session);
 
     const gate = deferred();
     const holder = fixture.queue(() => gate.promise);
@@ -79,7 +84,7 @@ describe('merge admission slow-operation diagnostics', () => {
     gate.resolve();
     await holder;
     expect((await pending).admitted).toBe(true);
-    expect(onlyLine()).toMatchObject({ operation: 'acquire', status: 'settled', totalMs: 5000,
+    expect(onlyLine()).toMatchObject({ operation: 'external-acquire', status: 'settled', totalMs: 5000,
       queueMs: 5000, queueLagMs: 0, loopLagMs: 0, persistenceMs: 0, timerLateMs: 0 });
     expect(reported()[0]).not.toContain('cpuMs=');
   });
@@ -116,22 +121,20 @@ describe('merge admission slow-operation diagnostics', () => {
       persistenceLagMs: 5900, loopLagMs: 5900, loopLagMaxMs: 5900, cpuMs: expect.any(Number), invCtx: expect.any(Number) });
   });
 
-  it('identifies a deadline delivered late by a blocked loop, and the expired sweep never mutates', async () => {
+  it('identifies a deadline delivered late by a blocked loop, and the expired acquire never mutates', async () => {
     const gate = deferred();
     const holder = fixture.queue(() => gate.promise);
     const before = structuredClone(fixture.disk);
-    const work = vi.fn();
-    const { result: pending } = await enqueue(() => withPendingMergeAdmission(origin, work));
+    const { result: pending } = await enqueue(acquire);
     clock.advance(10_000);
     clock.stall(14_448);
     clock.advance(0);
     expect(await pending).toMatchObject({ admitted: false, reason: 'state-queue-timeout' });
-    expect(onlyLine()).toMatchObject({ operation: 'sweep-acquire', status: 'queue-timeout', phase: 'queue',
+    expect(onlyLine()).toMatchObject({ operation: 'external-acquire', status: 'queue-timeout', phase: 'queue',
       totalMs: 24_448, queueMs: 24_448, timerLateMs: 9448, queueLagMs: 14_348, loopLagMaxMs: 14_348 });
     gate.resolve();
     await holder;
     await fixture.queue(() => {});
-    expect(work).not.toHaveBeenCalled();
     expect(fixture.disk).toEqual(before);
   });
 });

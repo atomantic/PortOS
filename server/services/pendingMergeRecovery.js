@@ -56,7 +56,7 @@ export async function validatePendingMergeRecovery({ target, workspacePath, requ
   if (current.blocked || current.deferred || !isDeepStrictEqual(current.target, target)) return current.blocked || 'recovery-owner-changed';
   const [{ getOriginInfo }, { parsePullRequestUrl }, { githubRepoSpec }, { resolveForgeExecOptions }, { execGh }, { repositoryKey }] = await Promise.all([
     import('../lib/gitRemote.js'), import('../lib/gitForge.js'), import('../lib/workTracker.js'),
-    import('./forgeExecOptions.js'), import('./github.js'), import('./cosMergeAdmission.js'),
+    import('./forgeExecOptions.js'), import('./github.js'), import('./mergeHandoffOwner.js'),
   ]);
   const origin = await getOriginInfo(app.repoPath).catch(() => null);
   const pr = parsePullRequestUrl(target.prUrl);

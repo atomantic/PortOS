@@ -1,17 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-// Real admission logic over a serialized synthetic runtime store.
-const admissionState = vi.hoisted(() => ({ state: { agents: {}, mergeAdmissions: {} } }));
-vi.mock('./cosState.js', async () => {
-  const { createFileWriteQueue } = await import('../lib/fileWriteQueue.js');
-  return {
-    withStateLock: createFileWriteQueue(),
-    loadState: async () => admissionState.state,
-    saveState: async state => { admissionState.state = state; },
-    readMergeAdmissionStateForSafetyCheck: async () => ({ trusted: true, ...structuredClone(admissionState.state) }),
-  };
-});
-
 // ─── mocks (must precede the import under test) ──────────────────────────────
 
 const execGhMock = vi.fn();
@@ -259,7 +247,6 @@ function installPendingEvidence() {
 
 describe('merge-only PR watcher', () => {
   beforeEach(() => {
-    admissionState.state = { agents: {}, mergeAdmissions: {} };
     getOriginInfoMock.mockResolvedValue({ hasOrigin: true, isGithub: true, host: 'github.com', fullName: 'o/r' });
   });
 
@@ -283,23 +270,6 @@ describe('merge-only PR watcher', () => {
     expect(isPendingMergeReady({
       state: 'OPEN', mergeStateStatus: 'CLEAN', statusCheckRollup: [{ status: 'IN_PROGRESS' }]
     })).toBe(false);
-  });
-
-  it('defers a pending merge without consuming retries while a live parent holds admission', async () => {
-    const { claimMergeAdmission } = await import('./cosMergeAdmission.js');
-    admissionState.state.agents.parent = { id: 'parent', taskId: 'task-parent', startedAt: '2026-01-01', status: 'running',
-      metadata: { sourceWorkspace: '/repos/app1', claimPicksOwnBranch: true } };
-    const lease = await claimMergeAdmission({ agentId: 'parent', action: 'acquire' });
-    expect(lease.admitted).toBe(true);
-    const app = pendingApp();
-    mockApps.set(app.id, app);
-    installPendingEvidence();
-    expect(await processPendingMergePrs(app)).toMatchObject({ waiting: 1, merged: 0 });
-    expect(mergePrMock).not.toHaveBeenCalled();
-    expect(readPendingMergePrs(mockApps.get(app.id))[0].ticks).toBe(0);
-    await claimMergeAdmission({ agentId: 'parent', action: 'release', token: lease.token, outcome: 'leave-open' });
-    mergePrMock.mockResolvedValue({ success: true });
-    expect(await processPendingMergePrs(app)).toMatchObject({ merged: 1 });
   });
 
   it('merges a green pending PR without spawning a follow-up agent', async () => {
@@ -390,17 +360,10 @@ describe('merge-only PR watcher', () => {
       expect(screenMock).toHaveBeenCalledTimes(1);
       expect(readPendingMergePrs(mockApps.get(app.id))[0].assessmentWithheld).toMatchObject({ headSha: head, policy: 'policy-1' });
 
-      // A live parent holding the lease would defer any entry that asked for it.
-      const { claimMergeAdmission } = await import('./cosMergeAdmission.js');
-      admissionState.state.agents.parent = { id: 'parent', taskId: 'task-parent', startedAt: '2026-01-01', status: 'running',
-        metadata: { sourceWorkspace: '/repos/app1', claimPicksOwnBranch: true } };
-      const lease = await claimMergeAdmission({ agentId: 'parent', action: 'acquire' });
-      expect(lease.admitted).toBe(true);
       const held = await processPendingMergePrs(mockApps.get(app.id));
       expect(held.waiting || 0).toBe(0);
       expect(screenMock).toHaveBeenCalledTimes(1);
       expect(readPendingMergePrs(mockApps.get(app.id))[0].ticks).toBe(2);
-      await claimMergeAdmission({ agentId: 'parent', action: 'release', token: lease.token, outcome: 'leave-open' });
     });
 
     it('re-arms a bound entry when the policy is saved again without a fingerprint change', async () => {
@@ -681,13 +644,12 @@ describe('merge-only PR watcher', () => {
       return { app, evidence: installPendingEvidence() };
     };
 
-    it('merges a mergeable green receipt pinned to its head with no guard run or preparation turn', async () => {
+    it('merges a mergeable green receipt pinned to its head with no guard run', async () => {
       const { app } = setup();
       mergePrMock.mockResolvedValue({ success: true });
       expect(await processPendingMergePrs(app)).toMatchObject({ merged: 1 });
       expect(mergePrMock).toHaveBeenCalledWith(app.repoPath, 88, { forgeAccount: 'other-account', expectedHeadSha: headSha });
       expect(pregateSpawns).toEqual([]);
-      expect(Object.values(admissionState.state.mergePreparations || {}).flat()).toEqual([]);
       expect(readPendingMergePrs(mockApps.get(app.id))).toEqual([]);
     });
 
@@ -703,17 +665,11 @@ describe('merge-only PR watcher', () => {
       expect(pregateSpawns).toEqual([]);
     });
 
-    it('releases a pre-upgrade guard refusal and its preparation turn, then merges', async () => {
-      const { yieldPendingMergePreparation } = await import('./cosMergeAdmission.js');
-      const now = Date.now();
-      admissionState.state.mergePreparations = { 'github.com/o/r': [{ owner: 'pending:legacy-receipt', target: null,
-        token: 'legacy-turn', requestedAt: now, seenAt: now, grantedAt: now }] };
+    it('drops a pre-upgrade guard refusal and its preparation key, then merges', async () => {
       const { app } = setup({ mergePreparationKey: 'legacy-receipt', recoveryBlocked: 'merged-tree-guards-failed',
         attention: 'merged-tree-guards-failed', mergedTreeGuard: { headSha, reason: 'merged-tree-guards-failed' } });
       mergePrMock.mockResolvedValue({ success: true });
       expect(await processPendingMergePrs(app)).toMatchObject({ merged: 1 });
-      expect(admissionState.state.mergePreparations['github.com/o/r']).toEqual([]);
-      expect(await yieldPendingMergePreparation({ host: 'github.com', fullName: 'o/r' }, 'legacy-receipt')).toEqual({ yielded: true });
     });
 
     it('keeps a pre-upgrade hold that the guard did not produce', async () => {

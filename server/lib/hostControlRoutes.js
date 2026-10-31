@@ -472,7 +472,6 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
 
   // CoS: queue, release or steer an agent that runs shell commands in a
   // worktree, or a job that runs a shell command directly.
-  'POST /api/cos/merge-admission',
   'POST /api/cos/merge-admission/external',
   'POST /api/cos/merge-handoff',
   'POST /api/cos/claim-ownership',
