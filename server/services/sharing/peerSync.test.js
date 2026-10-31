@@ -330,7 +330,7 @@ import { getBackendName } from '../memoryBackend.js';
 import { getCatalogBundleForRef, getLocalIngredientRefOwnership } from '../catalogDB.js';
 import { applyRemoteChanges as applyCatalogRemoteChanges } from '../catalogSync.js';
 import { listCursors, __drainForTests as __drainCursors } from './peerTombstoneCursors.js';
-import { contentHashForRecord, __resetBaseHashCacheForTests } from '../../lib/conflictJournal.js';
+import { contentHashForRecord, getSyncBaseHash, __resetBaseHashCacheForTests } from '../../lib/conflictJournal.js';
 
 // A chunked body with no Content-Length that never ends; only the streaming
 // cap in readPeerBody can stop it.
@@ -2584,6 +2584,51 @@ describe('peerSync', () => {
       expect(listIssuesForSeries).toHaveBeenCalledWith('ser-1', { includeDeleted: true });
     });
 
+    it('stamps a conflict-journal base hash for every bundled issue after a series push lands', async () => {
+      vi.mocked(getSeries).mockResolvedValue({ id: 'ser-1', name: 'Series' });
+      vi.mocked(listIssuesForSeries).mockResolvedValue([
+        { id: 'i1', seriesId: 'ser-1', number: 1 },
+        { id: 'i2', seriesId: 'ser-1', number: 2 },
+      ]);
+      let captured = null;
+      vi.mocked(peerFetch).mockImplementation(async (_url, opts) => {
+        captured = JSON.parse(opts.body);
+        return { ok: true, json: async () => ({}) };
+      });
+      await pushRecordToPeer({ id: 's', peerId: 'peer-a', recordKind: 'series', recordId: 'ser-1' });
+      for (const issue of captured.issues) {
+        expect(await getSyncBaseHash('issue', issue.id)).toBe(contentHashForRecord('issue', issue));
+      }
+      expect(await getSyncBaseHash('series', 'ser-1')).toBe(contentHashForRecord('series', captured.record));
+    });
+
+    it('withholds lastPushedHash while the receiver still owes Writers Room draft bodies', async () => {
+      vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Foo' });
+      vi.mocked(peerFetch).mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({ missingAssets: [], missingDraftBodies: [{ workId: 'w1', draftId: 'd1' }] }),
+      });
+      const sub = await subscribePeer({
+        peerId: 'peer-a', recordKind: 'universe', recordId: 'u1',
+      }, { adoptedFromReverse: true });
+      const result = await pushRecordToPeer(sub);
+      expect(result.pushed).toBe(true);
+      const after = await findPeerSubscription('peer-a', 'universe', 'u1');
+      expect(after.lastPushedHash).toBeFalsy();
+      expect(after.lastConfirmedPushedAt).toBeGreaterThan(0);
+    });
+
+    it.each([
+      ['a missing peerId', { recordKind: 'universe', recordId: 'u1' }],
+      ['a blank recordKind', { peerId: 'peer-a', recordKind: ' ', recordId: 'u1' }],
+      ['a missing recordId', { peerId: 'peer-a', recordKind: 'universe' }],
+    ])('refuses a subscription with %s before touching the network', async (_label, fields) => {
+      const result = await pushRecordToPeer({ id: 's', ...fields });
+      expect(result).toEqual({ pushed: false, reason: 'invalid-subscription' });
+      expect(peerFetch).not.toHaveBeenCalled();
+    });
+
     it('bundles the manuscript review with a series push so review-only edits propagate', async () => {
       vi.mocked(getSeries).mockResolvedValue({ id: 'ser-1', name: 'Series' });
       vi.mocked(getReview).mockResolvedValue({
@@ -3321,6 +3366,19 @@ describe('peerSync', () => {
       await pushRecordToPeer(sub);
       const refreshed = await findPeerSubscription('peer-a', 'musicVideoProject', 'mv-13');
       expect(refreshed.lastConfirmedTrackBundleAtMs).toBeGreaterThanOrEqual(before);
+    });
+
+    it('never stamps the bundled-track floor on a subscription that carries no linkedTrack (non-musicVideoProject)', async () => {
+      vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Foo' });
+      vi.mocked(peerFetch).mockResolvedValue({ ok: true, json: async () => ({ missingAssets: [] }) });
+      const sub = await subscribePeer(
+        { peerId: 'peer-a', recordKind: 'universe', recordId: 'u1' },
+        { adoptedFromReverse: true },
+      );
+      await pushRecordToPeer(sub);
+      const refreshed = await findPeerSubscription('peer-a', 'universe', 'u1');
+      expect(refreshed.lastConfirmedPushedAt).toBeGreaterThan(0);
+      expect(refreshed.lastConfirmedTrackBundleAtMs ?? null).toBeNull();
     });
 
     it('omits linkedTrack when the project has no linked track', async () => {
@@ -4946,9 +5004,51 @@ describe('peerSync', () => {
         expect(after.blockedBySchema).toBeDefined();
         expect(after.blockedBySchema.ahead).toEqual([{ category: 'universes', senderV: 5, receiverV: 4 }]);
         expect(after.blockedBySchema.peerPortosVersion).toBe('2.5.0');
+        expect(after.blockedBySchema.peerSchemaVersions).toEqual({ universes: 4 });
         expect(typeof after.blockedBySchema.detectedAt).toBe('string');
         // lastPushedHash must NOT have advanced — the record didn't land.
         expect(after.lastPushedHash).toBeFalsy();
+      });
+
+      it('persists the receiver-side gap (`behind`) the 409 reports', async () => {
+        vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Foo' });
+        vi.mocked(peerFetch).mockResolvedValue({
+          ok: false,
+          status: 409,
+          json: async () => ({
+            code: 'PEER_SYNC_SCHEMA_VERSION_AHEAD',
+            context: {
+              details: {
+                ahead: [{ category: 'universes', senderV: 5, receiverV: 4 }],
+                behind: [{ category: 'series', senderV: 2, receiverV: 3 }],
+              },
+            },
+          }),
+        });
+        const sub = await subscribePeer({
+          peerId: 'peer-a', recordKind: 'universe', recordId: 'u1',
+        }, { adoptedFromReverse: true });
+        await pushRecordToPeer(sub);
+        const after = await findPeerSubscription('peer-a', 'universe', 'u1');
+        expect(after.blockedBySchema.behind).toEqual([{ category: 'series', senderV: 2, receiverV: 3 }]);
+        expect(after.blockedBySchema.peerPortosVersion).toBeNull();
+        expect(after.blockedBySchema.peerSchemaVersions).toBeNull();
+      });
+
+      it('reports a 409 without the schema code as a plain http-409 (no schema block)', async () => {
+        vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Foo' });
+        vi.mocked(peerFetch).mockResolvedValue({
+          ok: false,
+          status: 409,
+          json: async () => ({ code: 'SOME_OTHER_CONFLICT', error: 'conflict' }),
+        });
+        const sub = await subscribePeer({
+          peerId: 'peer-a', recordKind: 'universe', recordId: 'u1',
+        }, { adoptedFromReverse: true });
+        const result = await pushRecordToPeer(sub);
+        expect(result).toEqual({ pushed: false, reason: 'http-409' });
+        const after = await findPeerSubscription('peer-a', 'universe', 'u1');
+        expect(after.blockedBySchema).toBeUndefined();
       });
 
       it('short-circuits subsequent pushes for blocked subs within the cooldown window', async () => {
