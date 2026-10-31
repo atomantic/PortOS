@@ -88,6 +88,7 @@ vi.mock('../services/api', () => ({
   getApps: vi.fn(() => Promise.resolve([])),
   listPipelineSeriesNames: vi.fn(() => Promise.resolve([])),
   listUniverseNames: vi.fn(() => Promise.resolve([])),
+  listMusicVideoProjectNames: vi.fn(() => Promise.resolve([])),
   getReviewQueue: vi.fn(() => new Promise(() => {})),
   getInstanceFeatures: vi.fn(() => Promise.resolve({ features: featureMock.features })),
 }));
@@ -232,6 +233,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   api.listPipelineSeriesNames.mockResolvedValue([]);
   api.listUniverseNames.mockResolvedValue([]);
+  api.listMusicVideoProjectNames.mockResolvedValue([]);
 });
 
 describe('Layout — pinned single nav rows', () => {
@@ -627,6 +629,20 @@ describe('Layout — dynamic third-level navigation', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Expand Universes' }));
     expect(screen.getByRole('link', { name: 'Example Series' })).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Example Universe' })).toBeTruthy();
+  });
+
+  it('lists music video projects under Music Video and highlights the open project', async () => {
+    api.listMusicVideoProjectNames.mockResolvedValue([{ id: 'mv-1', name: 'Example Video' }, { id: 'mv-2', name: null }]);
+
+    await renderLayout('/music-video/mv-1/shots');
+
+    const project = await screen.findByRole('link', { name: 'Example Video' });
+    expect(project).toHaveAttribute('href', '/music-video/mv-1');
+    expect(project).toHaveAttribute('aria-current', 'page');
+    expect(screen.getByRole('link', { name: '(untitled music video)' })).toHaveAttribute('href', '/music-video/mv-2');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse Music Video' }));
+    expect(screen.queryByRole('link', { name: 'Example Video' })).toBeNull();
   });
 
   it('renders Casting, Environments, and Objects as 3rd-level sub-pages under Catalog in Create', async () => {

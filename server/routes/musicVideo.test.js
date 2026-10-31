@@ -14,6 +14,7 @@ import { sharingCopyDownload } from '../services/musicVideo/sharingCopy.js';
 
 vi.mock('../services/musicVideo/projects.js', () => ({
   listProjects: vi.fn(async () => [{ id: 'mv-1', name: 'A' }]),
+  listProjectNames: vi.fn(async () => [{ id: 'mv-1', name: 'A' }]),
   listProjectPage: vi.fn(),
   getProject: vi.fn(),
   createProject: vi.fn(async (d) => ({ id: 'mv-new', ...d })),
@@ -129,6 +130,13 @@ describe('musicVideo routes', () => {
     expect(r.body).toHaveLength(1);
     expect(r.body[0]).toMatchObject({ id: 'mv-1', name: 'A' });
     expect(r.body[0].productionReadiness).toMatchObject({ readyForProduction: false, art: { approved: false } });
+  });
+
+  it('GET /names serves sidebar rows instead of treating "names" as a project id', async () => {
+    const r = await request(app).get('/api/music-video/names');
+    expect(r.status).toBe(200);
+    expect(r.body).toEqual([{ id: 'mv-1', name: 'A' }]);
+    expect(svc.getProject).not.toHaveBeenCalled();
   });
 
   it('GET /:id carries server-computed productionReadiness so stages derive from one record (#10136)', async () => {

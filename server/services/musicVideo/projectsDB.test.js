@@ -200,6 +200,13 @@ describe.skipIf(!runDb)('music video projects DB adapter', () => {
     }
   });
 
+  it('lists live project names without the record bodies', async () => {
+    const live = await db.createProject({ name: 'Example Video' });
+    const gone = await db.createProject({ name: 'Deleted Video' });
+    await db.deleteProject(gone.id);
+    expect(await db.listProjectNames()).toEqual([{ id: live.id, name: 'Example Video' }]);
+  });
+
   it('rejects persistence when the project id is missing', async () => {
     await expect(db.persist(query, { name: 'Missing id' })).rejects.toMatchObject({ code: 'PROJECT_ID_MISSING' });
   });

@@ -110,6 +110,7 @@ import { isSupportedMusicUpload, MUSIC_UPLOAD_MAX_BYTES } from '../services/pipe
 import { attachVocalStem, detachVocalStem } from '../services/musicVideo/vocalStem.js';
 import {
   listProjects,
+  listProjectNames,
   listProjectPage,
   getProject,
   createProject,
@@ -291,6 +292,11 @@ router.get('/', asyncHandler(async (req, res) => {
     return res.json({ ...page, items, ...(summary ? { nextCursor: next < page.total ? String(next) : null } : {}) });
   }
   res.json(await Promise.all((await listProjects()).map((project) => presentProjectForRead(project))));
+}));
+
+// Sidebar sub-nav rows; registered before /:id so "names" is not read as an id.
+router.get('/names', asyncHandler(async (_req, res) => {
+  res.json(await listProjectNames());
 }));
 
 // Bounded projection for the Tracks page MIDI read-through (#10203): the newest

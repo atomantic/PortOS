@@ -247,6 +247,7 @@ export * from './useNavWorkingSet.js';
 export * from './useFocusRefreshedList.js';
 export * from './useInstanceFeatures.js';
 export * from './useSidebarApps.js';
+export * from './useSidebarMusicVideos.js';
 export * from './useSidebarSeries.js';
 export * from './useSidebarUniverses.js';
 

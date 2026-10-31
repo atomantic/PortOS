@@ -20,7 +20,7 @@ const store = createProjectDbStore({
 const { withLockedProject, rowToProject } = store;
 
 export const {
-  persist, listProjects, listProjectPage, getProject, getProjectsByIds, listProjectIds,
+  persist, listProjects, listProjectPage, getProject, getProjectsByIds, listProjectIds, listProjectNames,
 } = store;
 
 async function cloneProjectUnqueued(id, options = {}) {
