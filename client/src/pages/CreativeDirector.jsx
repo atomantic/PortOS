@@ -14,8 +14,6 @@ import {
 } from '../services/apiCreativeDirector.js';
 import { listCatalogIngredientsByIds } from '../services/apiCatalog.js';
 import { listVideoModels } from '../services/apiImageVideo.js';
-import { listUniverseNames } from '../services/apiUniverseBuilder.js';
-import { listPipelineSeriesNames } from '../services/apiPipeline.js';
 import ModelSelect from '../components/ModelSelect';
 import PageHeader from '../components/PageHeader';
 import PageSkeleton from '../components/ui/PageSkeleton';
@@ -63,8 +61,6 @@ export default function CreativeDirector({ basePath = '/creative-director', brow
   const [directiveName, setDirectiveName] = useState('');
   const [directiveDraft, setDirectiveDraft] = useState(EMPTY_DIRECTIVE);
   const [creatingDirective, setCreatingDirective] = useState(false);
-  const [universes, setUniverses] = useState([]);
-  const [series, setSeries] = useState([]);
   // Catalog "Remix into… → Creative Director" handoff (#1808). The ingredient
   // ids arrive in the generic `location.state.remix.ingredientIds`; we hydrate
   // them for the chip list and forward the ids on create so the server folds
@@ -199,8 +195,6 @@ export default function CreativeDirector({ basePath = '/creative-director', brow
     setDirectiveName('');
     setDirectiveDraft(EMPTY_DIRECTIVE);
     setSearchParams((prev) => { const n = new URLSearchParams(prev); n.set('new', 'directive'); return n; }, { replace: true });
-    if (!universes.length) listUniverseNames({ silent: true }).then((u) => setUniverses(Array.isArray(u) ? u : (u?.items || []))).catch(() => {});
-    if (!series.length) listPipelineSeriesNames({ silent: true }).then((s) => setSeries(Array.isArray(s) ? s : (s?.items || []))).catch(() => {});
   };
   const closeDirective = () => {
     setSearchParams((prev) => { const n = new URLSearchParams(prev); n.delete('new'); return n; }, { replace: true });
@@ -577,8 +571,7 @@ export default function CreativeDirector({ basePath = '/creative-director', brow
         <DirectiveComposer
           directive={directiveDraft}
           onChange={setDirectiveDraft}
-          universes={universes}
-          series={series}
+          enabled={directiveOpen}
           idPrefix="new-directive"
           disabled={creatingDirective}
         />

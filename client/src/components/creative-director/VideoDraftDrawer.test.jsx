@@ -14,6 +14,8 @@ vi.mock('../../services/apiImageVideo.js', () => ({ listVideoModels: vi.fn(() =>
 vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
 import { createCreativeDirectorProject, updateCreativeDirectorProject } from '../../services/apiCreativeDirector.js';
 import { startVideoFromStoryboard } from '../../services/apiStoryboards.js';
+import { listVideoModels } from '../../services/apiImageVideo.js';
+import { listTracks } from '../../services/apiTracks.js';
 import VideoDraftDrawer from './VideoDraftDrawer.jsx';
 it('edits the same draft without changing workspace or losing source revisions', async () => {
   const user = userEvent.setup();
@@ -75,4 +77,17 @@ it('holds a storyboard too short for a Video and says why', async () => {
   await act(async () => {});
   expect(screen.getByRole('alert')).toHaveTextContent('needs at least 5 s');
   expect(screen.getByRole('button', { name: 'Save draft' })).toBeDisabled();
+});
+
+it('shows a retryable error beside a failed picker read and fills it on retry', async () => {
+  const user = userEvent.setup();
+  listVideoModels.mockRejectedValueOnce(new Error('boom')).mockResolvedValueOnce([{ id: 'model-a', name: 'Model A' }]);
+  listTracks.mockRejectedValueOnce(new Error('tracks down'));
+  render(<MemoryRouter initialEntries={['/?videoDraftTab=production']}><VideoDraftDrawer open onClose={vi.fn()} onSaved={vi.fn()} /></MemoryRouter>);
+  expect(await screen.findByText(/Could not load media models — boom/)).toBeInTheDocument();
+  const calls = listTracks.mock.calls.length;
+  await user.click(screen.getByRole('button', { name: 'Retry' }));
+  expect(await screen.findByRole('option', { name: 'Model A' })).toBeInTheDocument();
+  expect(screen.queryByText(/Could not load media models/)).not.toBeInTheDocument();
+  expect(listTracks.mock.calls.length).toBe(calls);
 });
