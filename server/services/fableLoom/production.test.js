@@ -360,6 +360,92 @@ describe('fableLoom production service', () => {
     }));
   });
 
+  it('queues fal without render geometry and Grok with its provider parameters and geometry', async () => {
+    const loom = structuredClone(sampleLoom);
+    loom.episodes[0].nodes.forEach(node => { node.image = 'example-frame.png'; });
+    records.getLoom.mockResolvedValue(loom);
+    const prompt = 'A lantern sways over the river.';
+    visualConditioningMocks.compileFableLoomVisualRequest.mockResolvedValue({
+      prompt, promptAdditions: [{ id: 'style' }], sourceImagePath: '/example/frame.png',
+      visualConditioning: { compiledPrompt: prompt },
+    });
+    const options = { assetTypes: ['video_entry'], nodeIds: ['node-1'] };
+    const fableLoom = { loomId: 'loom-1', episodeId: 'ep-1', nodeId: 'node-1', role: 'entry' };
+
+    settingsMocks.getSettings.mockResolvedValue({ videoGen: { fal: { apiKey: 'example-key' } } });
+    const falRun = await startEpisodeProductionBatch('loom-1', 'ep-1', { ...options, videoMode: 'fal' });
+    await vi.waitFor(() => expect(queueMocks.enqueueJob).toHaveBeenCalled());
+    const videoAsset = (run) => getEpisodeProductionBatch(run.id).assets.find(asset => asset.id === 'asset-node-1-video-entry');
+    expect(videoAsset(falRun)).toMatchObject({ provider: 'fal', modelId: null });
+    expect(visualConditioningMocks.fableLoomVideoCapabilities).toHaveBeenCalledWith({
+      backend: 'fal', model: { id: 'fal-video', supportedModes: ['text', 'image'] },
+    });
+    const [falJob] = queueMocks.enqueueJob.mock.calls[0];
+    expect(falJob.kind).toBe('video');
+    expect(falJob.params).toEqual({
+      mode: 'fal', videoMode: 'image', prompt, promptAdditions: [{ id: 'style' }], negativePrompt: '',
+      sourceImagePath: '/example/frame.png',
+      visualConditioning: expect.objectContaining({ compiledPrompt: prompt }),
+      fableLoom,
+    });
+
+    _resetProductionBatchRuns();
+    queueMocks.enqueueJob.mockClear();
+    settingsMocks.getSettings.mockResolvedValue({ imageGen: { grok: { enabled: true } }, videoGen: {} });
+    const grokRun = await startEpisodeProductionBatch('loom-1', 'ep-1', { ...options, videoMode: 'grok' });
+    await vi.waitFor(() => expect(queueMocks.enqueueJob).toHaveBeenCalled());
+    expect(videoAsset(grokRun)).toMatchObject({ provider: 'grok', modelId: 'grok-imagegen' });
+    expect(visualConditioningMocks.fableLoomVideoCapabilities).toHaveBeenLastCalledWith({
+      backend: 'grok', model: { id: 'grok-video', supportedModes: ['image'] },
+    });
+    const [grokJob] = queueMocks.enqueueJob.mock.calls[0];
+    expect(grokJob.kind).toBe('video');
+    expect(grokJob.params).toMatchObject({
+      mode: 'grok', videoMode: 'image', prompt, negativePrompt: '',
+      width: 1024, height: 576, aspectRatio: '16:9', sourceImagePath: '/example/frame.png', fableLoom,
+    });
+  });
+
+  it('sends an edit-only local image model its lead reference as the init image, not twice', async () => {
+    mediaModelMocks.isEditOnly.mockReturnValue(true);
+    visualConditioningMocks.compileFableLoomVisualRequest.mockResolvedValue({
+      prompt: 'p', referenceImagePaths: ['/example/lead.png', '/example/second.png'], referenceImageStrengths: [0.4, 0.6],
+    });
+    await startEpisodeProductionBatch('loom-1', 'ep-1', { assetTypes: ['image'], nodeIds: ['node-1'] });
+    await vi.waitFor(() => expect(queueMocks.enqueueJob).toHaveBeenCalled());
+    expect(queueMocks.enqueueJob.mock.calls[0][0].params).toMatchObject({
+      initImagePath: '/example/lead.png',
+      referenceImagePaths: ['/example/second.png'],
+      referenceImageStrengths: [0.6],
+    });
+
+    _resetProductionBatchRuns();
+    queueMocks.enqueueJob.mockClear();
+    mediaModelMocks.isEditOnly.mockReturnValue(false);
+    await startEpisodeProductionBatch('loom-1', 'ep-1', { assetTypes: ['image'], nodeIds: ['node-1'] });
+    await vi.waitFor(() => expect(queueMocks.enqueueJob).toHaveBeenCalled());
+    const params = queueMocks.enqueueJob.mock.calls[0][0].params;
+    expect(params).not.toHaveProperty('initImagePath');
+    expect(params).toMatchObject({
+      referenceImagePaths: ['/example/lead.png', '/example/second.png'],
+      referenceImageStrengths: [0.4, 0.6],
+    });
+  });
+
+  it('fails a local video render whose model cannot take the resolved input mode', async () => {
+    const loom = structuredClone(sampleLoom);
+    loom.episodes[0].nodes.forEach(node => { node.image = 'example-frame.png'; });
+    records.getLoom.mockResolvedValue(loom);
+    videoModelMocks.resolveVideoModel.mockReturnValue({ id: 'video-model', supportedModes: ['image'] });
+    visualConditioningMocks.compileFableLoomVisualRequest.mockResolvedValue({ prompt: 'p', sourceImagePath: null });
+    const run = await startEpisodeProductionBatch('loom-1', 'ep-1', {
+      videoMode: 'local', assetTypes: ['video_entry'], nodeIds: ['node-1'],
+    });
+    await vi.waitFor(() => expect(getEpisodeProductionBatch(run.id).status).toBe('failed'));
+    expect(getEpisodeProductionBatch(run.id).error).toBe('Video model "video-model" does not support text-to-video renders.');
+    expect(queueMocks.enqueueJob).not.toHaveBeenCalled();
+  });
+
   it('queues Reactor with its compact compiled script and fails oversized scripts before queueing', async () => {
     const loom = structuredClone(sampleLoom);
     loom.episodes[0].nodes.forEach((node) => { node.image = 'example-frame.png'; });
