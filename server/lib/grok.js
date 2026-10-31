@@ -106,6 +106,47 @@ export function ensureGrokHeadlessArgs(baseArgs = [], model, { toolFree = false 
   return out;
 }
 
+// `--output-format plain` concatenates every assistant text chunk of the run with
+// no separator, so the "I'll inspect the code first." narration grok writes
+// before a tool call lands glued to the answer (`…first.{"verdict":…}`), and a
+// strict-JSON caller (the code reviewer) can never parse the reply (#14391).
+// `streaming-json` keeps tool calls as their own events, which marks where the
+// final message starts.
+export const GROK_STREAMING_JSON_FORMAT = 'grok-streaming-json';
+
+/**
+ * Point a built grok argv at `--output-format streaming-json`, replacing any
+ * format already present. Pair with `extractGrokFinalMessage`.
+ * @param {string[]} args
+ * @returns {string[]}
+ */
+export function withGrokStreamingJsonOutput(args = []) {
+  const out = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--output-format' || args[i] === '-o') i++;
+    else if (!args[i].startsWith('--output-format=')) out.push(args[i]);
+  }
+  return [...out, '--output-format', 'streaming-json'];
+}
+
+/**
+ * Reduce a grok `streaming-json` transcript to its final message: the `text`
+ * chunks after the last tool call. Thought, usage and command-listing events
+ * and unparseable lines are ignored. Returns '' when the run produced no text.
+ * @param {string} streamText - raw JSONL stdout
+ * @returns {string}
+ */
+export function extractGrokFinalMessage(streamText) {
+  let message = '';
+  for (const line of String(streamText ?? '').split('\n')) {
+    let event;
+    try { event = JSON.parse(line); } catch { continue; }
+    if (event?.type === 'tool_call') message = '';
+    else if (event?.type === 'text' && typeof event.data === 'string') message += event.data;
+  }
+  return message.trim();
+}
+
 /**
  * Ensure the interactive Grok TUI argv auto-approves tool executions so a
  * file-writing agent isn't stranded on an approval prompt (mirrors the codex

@@ -109,6 +109,8 @@ import {
   ensureGrokTuiArgs,
   ensureGrokHeadlessArgs,
   prepareGrokPromptFile,
+  withGrokStreamingJsonOutput,
+  GROK_STREAMING_JSON_FORMAT,
 } from './grok.js';
 import { isKimiCommand, ensureKimiTuiArgs, ensureKimiHeadlessArgs, prepareKimiPrompt } from './kimi.js';
 import {
@@ -696,6 +698,10 @@ function grokCliArgs(baseArgs, { model, toolFree }) {
   return ensureGrokHeadlessArgs(baseArgs, model, { toolFree });
 }
 
+function grokCodeReviewSpawnConfig(config) {
+  return { ...config, args: withGrokStreamingJsonOutput(config.args), streamFormat: GROK_STREAMING_JSON_FORMAT };
+}
+
 const GROK = {
   id: 'grok',
   idFragment: 'grok',
@@ -706,6 +712,10 @@ const GROK = {
   cliArgs: grokCliArgs,
   spawnArgs: defaultSpawnArgs(grokCliArgs, 'grok'),
   toolFreeOneShot: { matchCommand: isGrokCommand, toolFreeArgs: grokToolFreeArgs },
+  // The code reviewer parses a strict JSON envelope from the reply, so it needs
+  // grok's final message alone, not plain output's gluing of pre-tool narration
+  // onto it (#14391). Pipeline public-review stages keep plain text.
+  codeReviewSpawnConfig: grokCodeReviewSpawnConfig,
   publicReview: {
     [PUBLIC_REVIEW_NO_TOOL_POSTURE]: {
       spawnArgs: grokPublicReviewSpawnArgs,
@@ -1402,8 +1412,10 @@ function readOnlyReviewRecipe(provider) {
  * mode and the caller must fall back to its ordinary argv.
  */
 export function buildCodeReviewSpawnConfig(provider, ctx) {
-  if (supportsPublicReviewProvider(provider)) return buildVendorSpawnConfig(provider, ctx);
-  return readOnlyReviewRecipe(provider)?.spawnArgs(provider, ctx) || null;
+  if (!supportsPublicReviewProvider(provider)) return readOnlyReviewRecipe(provider)?.spawnArgs(provider, ctx) || null;
+  const config = buildVendorSpawnConfig(provider, ctx);
+  const reshape = PROVIDER_VENDORS.find((vendor) => vendor.codeReviewSpawnConfig && matchesProvider(vendor, provider))?.codeReviewSpawnConfig;
+  return reshape ? reshape(config) : config;
 }
 
 /** Whether a provider can run the sandboxed final public-review stage. */

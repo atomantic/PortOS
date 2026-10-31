@@ -26,6 +26,7 @@ import { filterCallerModeEligible } from './callerModePolicy.js';
 import { buildCodeReviewSpawnConfig, buildVendorSpawnConfig, supportsPublicReviewProvider, toolFreeOneShotArgs } from './providerVendors.js';
 import { isPublicReviewNoToolProfile } from './agentExecutionProfiles.js';
 import { resolveCliModel, stripProviderPinArgs } from './providerModels.js';
+import { GROK_STREAMING_JSON_FORMAT, extractGrokFinalMessage } from './grok.js';
 import { resolveCliSpawn, needsProcessGroup, trackDetachedGroup } from './credentialBootstrap.js';
 
 // How much stderr to hand back to callers. Enough to carry a rate-limit banner
@@ -274,6 +275,11 @@ export function runCliProviderPrompt(args = {}) {
       // caller can refuse to treat a possibly-truncated payload as complete.
       if (code !== 0 && !text) {
         return done({ error: (stderr.trim().slice(0, STDERR_TAIL_LIMIT) || `${provider.command} exited with code ${code}`), exitCode: code, stderr, stderrTail });
+      }
+      // grok's transcript is reduced here to its final message; the other
+      // stream formats stay raw for the caller to settle.
+      if (streamFormat === GROK_STREAMING_JSON_FORMAT) {
+        return done({ text: extractGrokFinalMessage(text), exitCode: code, stderr, partial: code !== 0, stderrTail });
       }
       done({ text, exitCode: code, stderr, partial: code !== 0, stderrTail,
         ...(streamFormat ? { streamFormat } : {}),

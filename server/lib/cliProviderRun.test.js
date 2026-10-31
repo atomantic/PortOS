@@ -149,6 +149,31 @@ describe('runCliProviderPrompt', () => {
     expect(argv).toContain('pinned-model');
   });
 
+  // #14391: grok narrates before its tool calls; the reviewer must receive only
+  // the final message so the strict verdict parser sees bare JSON.
+  it.skipIf(process.platform === 'win32')('hands the code reviewer only the final message of a grok transcript', async () => {
+    const { mkdtemp, writeFile, rm } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const dir = await mkdtemp(join(tmpdir(), 'review-grok-test-'));
+    const command = join(dir, 'grok');
+    const events = [
+      { type: 'text', data: "I'll check the callers first." },
+      { type: 'tool_call', toolName: 'grep' },
+      { type: 'text', data: '{"verdict":"clean",' },
+      { type: 'text', data: '"findings":[]}' },
+      { type: 'end', stopReason: 'end_turn' },
+    ];
+    await writeFile(command, `#!/usr/bin/env node\nconst format = process.argv[process.argv.indexOf('--output-format') + 1];\nprocess.stdin.resume(); process.stdin.on('end', () => process.stdout.write(format === 'streaming-json' ? ${JSON.stringify(events.map((event) => JSON.stringify(event)).join('\n'))} : 'plain'));`, { mode: 0o755 });
+    const result = await runCliProviderPrompt({
+      provider: { ...cli('grok-cli'), command },
+      model: 'grok-4.7', prompt: 'untrusted diff', cwd: dir, safetyProfile: 'public-review-gate', codeReview: true,
+    }).finally(() => rm(dir, { recursive: true, force: true }));
+    expect(result.error).toBeUndefined();
+    expect(result.text).toBe('{"verdict":"clean","findings":[]}');
+    expect(result.streamFormat).toBeUndefined();
+  });
+
   it.skipIf(process.platform === 'win32')('enforces the shared no-tool argv and environment on an actual child', async () => {
     const { mkdtemp, writeFile, rm } = await import('node:fs/promises');
     const { tmpdir } = await import('node:os');
