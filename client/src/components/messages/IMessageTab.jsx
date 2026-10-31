@@ -54,7 +54,7 @@ function ConfirmBar({ message, confirmLabel, onConfirm, onCancel, danger }) {
   );
 }
 
-function ConversationList({ conversations, selectedKey, onSelect, query, onQueryChange, loading }) {
+function ConversationList({ conversations, selectedKey, onSelect, query, onQueryChange, loading, error, onRetry }) {
   return (
     <div className="flex h-full min-h-0 flex-col border border-port-border bg-port-card rounded-lg overflow-hidden">
       <div className="border-b border-port-border p-2">
@@ -72,7 +72,9 @@ function ConversationList({ conversations, selectedKey, onSelect, query, onQuery
         </div>
       </div>
       <div className="flex-1 overflow-y-auto">
-        {loading ? (
+        {error ? (
+          <ListLoadError what="conversations" error={error} onRetry={onRetry} retrying={loading} className="m-2" />
+        ) : loading ? (
           <div className="py-10 text-center text-sm"><BrailleSpinner text="Loading…" /></div>
         ) : conversations.length === 0 ? (
           <div className="px-4 py-10 text-center text-sm text-gray-500">
@@ -465,6 +467,9 @@ export default function IMessageTab() {
   const [stats, setStats] = useState(null);
   const [conversations, setConversations] = useState([]);
   const [listLoading, setListLoading] = useState(true);
+  // A failed read must not render as "No conversations yet" / "0 events".
+  const [listError, setListError] = useState(null);
+  const [statsError, setStatsError] = useState(null);
   const [query, setQuery] = useState('');
   const [debouncedQ, setDebouncedQ] = useState('');
   const [events, setEvents] = useState([]);
@@ -491,13 +496,19 @@ export default function IMessageTab() {
   const loadList = useCallback(async () => {
     const isCurrent = beginListRequest();
     setListLoading(true);
-    const [statsRes, convRes] = await Promise.all([
-      api.getImessageStats({ silent: true }).catch(() => null),
-      api.getImessageConversations({ q: debouncedQ || undefined, silent: true }).catch(() => null),
+    const settle = (promise) => promise.then((value) => [value, null], (err) => [null, err instanceof Error ? err : new Error('Request failed')]);
+    const [[statsRes, statsErr], [convRes, convErr]] = await Promise.all([
+      settle(api.getImessageStats({ silent: true })),
+      settle(api.getImessageConversations({ q: debouncedQ || undefined, silent: true })),
     ]);
     if (!isCurrent()) return;
-    setStats(statsRes);
-    setConversations(convRes?.conversations || []);
+    // Keep the last good stats on a failed refresh; the chips say when there are none.
+    if (!statsErr) setStats(statsRes);
+    setStatsError(statsErr);
+    // Rows from an earlier query would mislabel this one, so a failure clears them
+    // and the error row stands in for the list.
+    setConversations(convErr ? [] : (convRes?.conversations || []));
+    setListError(convErr);
     setListLoading(false);
   }, [debouncedQ, beginListRequest]);
 
@@ -641,27 +652,32 @@ export default function IMessageTab() {
         </div>
       </div>
 
-      <div className="flex flex-wrap gap-2 text-xs text-gray-400 shrink-0">
-        <span className="rounded border border-port-border bg-port-card px-2 py-1">
-          {formatCount(stats?.eventCount, { fallback: '0' })} events
-        </span>
-        <span className="rounded border border-port-border bg-port-card px-2 py-1">
-          {formatCount(stats?.conversationCount, { fallback: '0' })} conversations
-        </span>
-        <span className="rounded border border-port-border bg-port-card px-2 py-1">
-          {formatCount(stats?.blockedCount, { fallback: '0' })} blocked
-        </span>
-        {stats?.earliestAt && (
+      {statsError && !stats && (
+        <ListLoadError what="iMessage stats" error={statsError} onRetry={loadList} retrying={listLoading} className="shrink-0" />
+      )}
+      {stats && (
+        <div className="flex flex-wrap gap-2 text-xs text-gray-400 shrink-0">
           <span className="rounded border border-port-border bg-port-card px-2 py-1">
-            {formatDateNumeric(stats.earliestAt)} → {formatDateNumeric(stats.latestAt, '—')}
+            {formatCount(stats?.eventCount, { fallback: '0' })} events
           </span>
-        )}
-        {hasMore && (
-          <span className="rounded border border-port-warning/40 bg-port-warning/10 px-2 py-1 text-port-warning">
-            More history remains — run Sync more
+          <span className="rounded border border-port-border bg-port-card px-2 py-1">
+            {formatCount(stats?.conversationCount, { fallback: '0' })} conversations
           </span>
-        )}
-      </div>
+          <span className="rounded border border-port-border bg-port-card px-2 py-1">
+            {formatCount(stats?.blockedCount, { fallback: '0' })} blocked
+          </span>
+          {stats?.earliestAt && (
+            <span className="rounded border border-port-border bg-port-card px-2 py-1">
+              {formatDateNumeric(stats.earliestAt)} → {formatDateNumeric(stats.latestAt, '—')}
+            </span>
+          )}
+          {hasMore && (
+            <span className="rounded border border-port-warning/40 bg-port-warning/10 px-2 py-1 text-port-warning">
+              More history remains — run Sync more
+            </span>
+          )}
+        </div>
+      )}
 
       {stats?.eventCount === 0 && (
         <div className="shrink-0 rounded border border-dashed border-port-border px-4 py-3 text-sm text-gray-500">
@@ -682,6 +698,8 @@ export default function IMessageTab() {
             query={query}
             onQueryChange={setQuery}
             loading={listLoading}
+            error={listError}
+            onRetry={loadList}
           />
         </div>
         <div className={`min-h-0 ${showDetailMobile ? 'block' : 'hidden md:block'} h-[min(50vh,28rem)] md:h-auto`}>

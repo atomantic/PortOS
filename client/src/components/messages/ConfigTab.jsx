@@ -7,6 +7,7 @@ import * as api from '../../services/api';
 import ProviderModelSelector from '../ProviderModelSelector';
 import useProviderModels from '../../hooks/useProviderModels';
 import InlineConfirmRow from '../ui/InlineConfirmRow';
+import SettingsLoadError from '../ui/SettingsLoadError';
 import { FormField } from '../ui/FormField';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 import { useGoogleAutoConfigProgress } from '../../hooks/useGoogleAutoConfigProgress';
@@ -48,6 +49,8 @@ export default function ConfigTab({ accounts, setAccounts }) {
   const [config, setConfig] = useState(null);
   const [configLoading, setConfigLoading] = useState(true);
   const [configDirty, setConfigDirty] = useState(false);
+  // Defaults shown after a failed read are not the saved config; Save stays shut.
+  const [configLoadError, setConfigLoadError] = useState(false);
 
   // Separate provider/model selectors for triage and reply
   const triage = useProviderModels();
@@ -66,8 +69,16 @@ export default function ConfigTab({ accounts, setAccounts }) {
   } = reply;
 
   const loadConfig = useCallback(async () => {
-    const settings = await api.getSettings().catch(() => ({}));
-    const msgConfig = settings?.messages || {};
+    setConfigLoading(true);
+    const settings = await api.getSettings({ silent: true }).catch(() => null);
+    if (!settings || typeof settings !== 'object') {
+      setConfigLoadError(true);
+      setConfigLoading(false);
+      return;
+    }
+    setConfigLoadError(false);
+    setConfigDirty(false);
+    const msgConfig = settings.messages || {};
     const triageConfig = msgConfig.triage || {};
     const replyConfig = msgConfig.reply || {};
     setConfig({
@@ -170,6 +181,7 @@ export default function ConfigTab({ accounts, setAccounts }) {
   };
 
   const handleSaveConfig = async () => {
+    if (!config || configLoadError) return;
     const patch = {
       messages: {
         triage: {
@@ -594,6 +606,11 @@ export default function ConfigTab({ accounts, setAccounts }) {
           Email analysis requires a local text API provider. Configure screening and dedicated source overrides in <a href="/models/llms/abuse" className="text-port-accent underline">Abuse Guard</a>; those overrides take priority over the selections below.
         </p>
         <div className="space-y-3">
+          {configLoadError && (
+            <SettingsLoadError onRetry={loadConfig}>
+              Failed to load saved message settings. The provider, tone and template shown are not your saved configuration, so saving is disabled.
+            </SettingsLoadError>
+          )}
           {renderProviderSection(
             'Triage',
             'Classifies emails as reply/archive/delete/review with priority. A fast, cheap model works well here.',
@@ -621,8 +638,10 @@ export default function ConfigTab({ accounts, setAccounts }) {
               </div>
             </div>
             <button
-              onClick={() => { setConfig(prev => ({ ...prev, voiceMode: !prev.voiceMode })); setConfigDirty(true); }}
-              className={`px-3 py-1.5 rounded text-xs font-medium transition-colors shrink-0 self-start sm:self-auto ${
+              type="button"
+              disabled={!config}
+              onClick={() => { setConfig(prev => (prev ? { ...prev, voiceMode: !prev.voiceMode } : prev)); setConfigDirty(true); }}
+              className={`px-3 py-1.5 rounded text-xs font-medium transition-colors shrink-0 self-start sm:self-auto disabled:opacity-50 ${
                 config?.voiceMode
                   ? 'bg-port-accent-2/20 text-port-accent-2'
                   : 'bg-gray-700 text-gray-400'
@@ -643,6 +662,8 @@ export default function ConfigTab({ accounts, setAccounts }) {
         </p>
         {configLoading ? (
           <RefreshCw size={16} className="text-port-accent animate-spin" />
+        ) : configLoadError || !config ? (
+          <p className="text-sm text-gray-500">Saved templates are unavailable until settings load.</p>
         ) : (
           <div className="space-y-4">
             <FormField

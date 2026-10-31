@@ -105,3 +105,24 @@ describe('IMessageTab — blocked handles read', () => {
     expect(screen.queryByText(/Could not load blocked handles/)).toBeNull();
   });
 });
+
+describe('IMessageTab — failed list reads', () => {
+  it('shows a retryable error instead of "No conversations yet" and zero counts', async () => {
+    api.getImessageStats.mockRejectedValueOnce(new Error('Synthetic stats failure'));
+    api.getImessageConversations.mockRejectedValueOnce(new Error('Synthetic list failure'));
+    renderTab();
+
+    expect(await screen.findByText(/Could not load conversations/)).toBeTruthy();
+    expect(screen.getByText(/Could not load iMessage stats/)).toBeTruthy();
+    expect(screen.queryByText('No conversations yet.')).toBeNull();
+    expect(screen.queryByText(/\b0 events\b/)).toBeNull();
+
+    api.getImessageConversations.mockResolvedValueOnce({
+      conversations: [{ chatKey: 'chat-1', title: 'Example Chat', eventCount: 1 }],
+    });
+    fireEvent.click(screen.getAllByRole('button', { name: 'Retry' })[0]);
+    expect(await screen.findByText('Example Chat')).toBeTruthy();
+    expect(screen.queryByText(/Could not load conversations/)).toBeNull();
+    expect(screen.getByText(/2 events/)).toBeTruthy();
+  });
+});

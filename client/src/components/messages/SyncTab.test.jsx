@@ -162,3 +162,19 @@ describe('Messages sync actions by provider capability (#9968)', () => {
     expect(screen.getAllByRole('button', { name: 'Full Sync' })).toHaveLength(3);
   });
 });
+
+describe('SyncTab saved selectors read', () => {
+  it('disables selector editing after a failed read, then re-enables it on Retry', async () => {
+    api.getMessageSelectors.mockRejectedValueOnce(new Error('Synthetic selectors failure'));
+    renderTab();
+
+    expect(await screen.findByText(/Failed to load saved selectors/)).toBeTruthy();
+    for (const edit of screen.getAllByRole('button', { name: 'Edit selectors' })) expect(edit).toBeDisabled();
+
+    api.getMessageSelectors.mockResolvedValueOnce({ outlook: { inbox: '.saved-inbox' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(screen.queryByText(/Failed to load saved selectors/)).toBeNull());
+    for (const edit of screen.getAllByRole('button', { name: 'Edit selectors' })) expect(edit).not.toBeDisabled();
+    expect(api.getMessageSelectors).toHaveBeenLastCalledWith({ silent: true });
+  });
+});

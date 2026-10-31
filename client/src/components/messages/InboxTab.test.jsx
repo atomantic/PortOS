@@ -461,3 +461,37 @@ it('retains the requested inbox row and displays the actionable identity conflic
   expect(screen.getByText(row.subject)).toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Delete', exact: true })).not.toBeDisabled();
 });
+
+describe('InboxTab deep-linked message read failures', () => {
+  const message = {
+    id: 'message-1',
+    accountId: neverSyncedAccount.id,
+    subject: 'A message to inspect',
+    bodyText: 'Message body',
+    from: { name: 'Example Sender' },
+    date: '2026-08-16T00:00:00.000Z',
+    source: 'gmail',
+  };
+  const route = `/messages/inbox?message=${message.id}&account=${message.accountId}`;
+  const httpError = (status) => Object.assign(new Error(`HTTP ${status}`), { status });
+
+  it('keeps the selection and offers Retry when the detail read fails', async () => {
+    api.getMessageDetail.mockRejectedValueOnce(httpError(503)).mockResolvedValueOnce(message);
+    renderInboxWithLocation([neverSyncedAccount], { route });
+
+    expect(await screen.findByText('Could not load this message')).toBeInTheDocument();
+    expect(screen.getByTestId('location')).toHaveTextContent(`message=${message.id}`);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('Message body')).toBeInTheDocument();
+    expect(api.getMessageDetail).toHaveBeenCalledTimes(2);
+  });
+
+  it('drops a link that names a message the server no longer has', async () => {
+    api.getMessageDetail.mockReset().mockRejectedValue(httpError(404));
+    renderInboxWithLocation([neverSyncedAccount], { route });
+
+    await waitFor(() => expect(screen.getByTestId('location')).not.toHaveTextContent('message='));
+    expect(screen.queryByText('Could not load this message')).not.toBeInTheDocument();
+  });
+});
