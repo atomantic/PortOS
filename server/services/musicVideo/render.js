@@ -466,7 +466,7 @@ function stackedPhotoChain(c, inputRefs, sequence, { coverW, coverH, fps, frames
   const id = inputRefs.clip;
   const inputs = [id, ...(inputRefs.photos || [])];
   const offset = Math.round((c.photoAtSec ?? c.effectAtSec ?? 0) * fps);
-  const arrivals = photoSequenceArrivals(sequence, Math.max(0, offset), offset + frames + 1);
+  const arrivals = photoSequenceArrivals(sequence, Math.max(0, offset), offset + frames);
   if (arrivals.length > PHOTO_STACK_RENDER_LIMIT) {
     throw new ServerError(`This photo sequence overlaps ${arrivals.length} photo arrivals in one shot; the render supports ${PHOTO_STACK_RENDER_LIMIT}. Shorten the overlap, lengthen the interval or split the shot.`, {
       status: 422, code: 'PHOTO_STACK_TOO_DEEP', context: { sceneId: c.sceneId, arrivals: arrivals.length, limit: PHOTO_STACK_RENDER_LIMIT },

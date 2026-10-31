@@ -32,6 +32,7 @@ function photoLayerStyle(layout) {
  */
 export default function ImageEffectStill({ src, endSrc = null, effect, sequence = null, startSec, time, playing = false, getTime = null, fps = 24 }) {
   const imgRefs = useRef([]);
+  const stackRef = useRef(null);
   const endRef = useRef(null);
   const fogRef = useRef(null);
   const flashRef = useRef(null);
@@ -48,8 +49,11 @@ export default function ImageEffectStill({ src, endSrc = null, effect, sequence 
         const url = photoUrl(sequence.imageIds[layer.index]);
         if (img.getAttribute('src') !== url) img.setAttribute('src', url);
         Object.assign(img.style, photoLayerStyle(layer.layout));
-        img.style.filter = `contrast(${state.contrast}) saturate(${state.saturation})`;
+        // The glitch overlay recomposes the stack from these (TransitionGlitch).
+        img.dataset.layout = layer.layout ? ['x', 'y', 'scale', 'rotation', 'opacity'].map(key => layer.layout[key]).join(',') : '';
       });
+      // Like the renders, the develop curves act on the composed stack, black ground included.
+      if (stackRef.current) stackRef.current.style.filter = `contrast(${state.contrast}) saturate(${state.saturation})`;
     } else {
       const selected = sequence ? photoSequenceIndex(sequence, t, { fps }) : 0;
       imgRefs.current.forEach((img, i) => {
@@ -82,12 +86,16 @@ export default function ImageEffectStill({ src, endSrc = null, effect, sequence 
     return () => cancelAnimationFrame(handle);
   }, [playing, getTime, paint]);
   return (
-    <div className={`relative h-full w-full${sequence?.stacked ? ' overflow-hidden bg-black' : ''}`} data-testid="animatic-image-effect">
+    <div className="relative h-full w-full" data-testid="animatic-image-effect">
       {/* The start frame comes first, so a plain `img` lookup (Save frame) still finds the shot's still. */}
-      {sequence?.stacked ? Array.from({ length: photoSequenceMaxLayers(sequence) }, (_, i) => (
-        <img key={i} ref={el => { imgRefs.current[i] = el; }} src={photoUrl(sequence.imageIds[0])} alt=""
-          data-shown={i === 0 ? 'true' : 'false'} style={{ display: i === 0 ? undefined : 'none' }} className="absolute h-full w-full object-cover" />
-      )) : (sequence ? sequence.imageIds.map(photoUrl) : [src]).map((url, i) => (
+      {sequence?.stacked ? (
+        <div ref={stackRef} data-photo-stack="true" className="absolute inset-0 overflow-hidden bg-black">
+          {Array.from({ length: photoSequenceMaxLayers(sequence) }, (_, i) => (
+            <img key={i} ref={el => { imgRefs.current[i] = el; }} src={photoUrl(sequence.imageIds[0])} alt=""
+              data-shown={i === 0 ? 'true' : 'false'} data-layout="" style={{ display: i === 0 ? undefined : 'none' }} className="absolute h-full w-full object-cover" />
+          ))}
+        </div>
+      ) : (sequence ? sequence.imageIds.map(photoUrl) : [src]).map((url, i) => (
         <img key={`${i}:${url}`} ref={el => { imgRefs.current[i] = el; }} src={url} alt=""
           data-shown={i === 0 ? 'true' : 'false'} style={{ opacity: i === 0 ? 1 : 0 }}
           className="absolute inset-0 h-full w-full object-cover" />

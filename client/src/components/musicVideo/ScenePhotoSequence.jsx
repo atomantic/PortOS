@@ -39,11 +39,14 @@ export default function ScenePhotoSequence({ scene, fieldId, onChange, disabled 
     const next = [...entries];
     [next[index], next[index + direction]] = [next[index + direction], next[index]];
     saveEntries(next);
+    // The editor stays on its photo, whichever side of the swap it was on.
     if (editing === index) setEditing(index + direction);
+    else if (editing === index + direction) setEditing(index);
   };
   const remove = (index) => {
     saveEntries(entries.filter((_, i) => i !== index));
     if (editing === index) setEditing(null);
+    else if (editing > index) setEditing(editing - 1);
   };
   const add = (filename) => saveEntries([...entries, {
     id: filename,
