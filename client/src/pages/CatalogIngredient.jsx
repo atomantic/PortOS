@@ -13,7 +13,6 @@ import { useNavigate, useParams, useLocation, Link } from 'react-router';
 import { Save, Trash2, ArrowLeft, Loader2, Plus, X, History, RotateCcw, Image as ImageIcon, ChevronDown, Upload, Mic, Square, UserRound, LayoutGrid, Images, Clapperboard, Shirt, Box, Wand2 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import FilePickerButton from '../components/ui/FilePickerButton';
-import Modal from '../components/ui/Modal.jsx';
 import ConfirmButtonPair from '../components/ui/ConfirmButtonPair.jsx';
 import UnsavedChangesConfirm from '../components/ui/UnsavedChangesConfirm.jsx';
 import PageSkeleton from '../components/ui/PageSkeleton';
@@ -38,14 +37,13 @@ import {
 } from '../services/apiCatalog';
 import { arrayBufferToBase64 } from '../lib/audioRecorder';
 import useMemoRecorder from '../hooks/useMemoRecorder';
-import { useGalleryPage } from '../hooks/useGalleryPage';
 import socket from '../services/socket';
 import AddToThreadButton from '../components/threads/AddToThreadButton';
 import { getCanonCatalogContext } from '../services/canonCatalogContext';
 import { getUniverse } from '../services/apiUniverseBuilder';
 import useMounted from '../hooks/useMounted';
 import IngredientPicker from '../components/IngredientPicker';
-import MediaImage from '../components/MediaImage';
+import GalleryImagePicker from '../components/imageGen/GalleryImagePicker';
 import GenerateImageControl from '../components/catalog/GenerateImageControl';
 import MediaJobThumb from '../components/pipeline/MediaJobThumb';
 import { buildGenerationPromptSeed } from '../lib/catalogImagePrompt';
@@ -1114,7 +1112,6 @@ function IngredientEditor() {
             key={record.id}
             ingredientId={record.id}
             name={name}
-            GalleryPicker={GalleryPickerModal}
             forms={formsOf(record.payload)}
             media={media.map(protectMedia)}
             blockedReason={renderBlockedReason('design round')}
@@ -1776,73 +1773,9 @@ function MediaPanel({ canonRemoval = null, readOnly = false, referenceLibrary = 
         <p className="text-xs text-gray-500">No media yet. Attach a generated portrait, a mood/reference image, an uploaded file, or a recorded voice memo.</p>
       )}
 
-      {pickerOpen && (
-        <GalleryPickerModal
-          onClose={() => setPickerOpen(false)}
-          onPick={(filename, asPortrait) => {
-            if (asPortrait) onSetPortrait(filename);
-            else onAttach(filename, 'reference');
-            setPickerOpen(false);
-          }}
-        />
-      )}
+      <GalleryImagePicker open={pickerOpen} allowUpload onClose={() => setPickerOpen(false)}
+        onSelect={(item) => { if (item?.filename) onAttach(item.filename, 'reference'); }} />
     </section>
-  );
-}
-
-// Modal that lists the existing media gallery (history) so the user can attach
-// or set-portrait from already-generated assets — the "scoped to existing media
-// history" requirement. Never uploads; it only references library keys.
-// `pickLabel` swaps Attach/Portrait for one button (onPick gets the filename only).
-export function GalleryPickerModal({ onClose, onPick, pickLabel = null }) {
-  const [query, setQuery] = useState('');
-  const page = useGalleryPage({ q: query });
-  const items = page.loading && page.items.length === 0 ? null : page.items;
-
-  return (
-    <Modal open onClose={onClose} size="lg" ariaLabelledBy="gallery-picker-title"
-      panelClassName="bg-port-card border border-port-border rounded-lg overflow-hidden flex flex-col">
-      {/* Header + scroll area must be DIRECT flex children of the panel (a
-          fragment, not a wrapping <div>) so the panel's clamped flex
-          column constrains the scroll region's height — an intervening
-          content-sized <div> would leave `overflow-y-auto` unbounded and clip
-          long galleries. */}
-      <>
-        <div className="flex items-center justify-between p-3 border-b border-port-border shrink-0">
-          <h3 id="gallery-picker-title" className="text-sm font-semibold text-white">Pick from media gallery</h3>
-          <button type="button" onClick={onClose} className="text-gray-400 hover:text-white min-h-[44px] min-w-[44px] flex items-center justify-center" aria-label="Close">
-            <X size={16} />
-          </button>
-        </div>
-        <div className="p-3 overflow-y-auto flex-1 min-h-0">
-          <label htmlFor="catalog-gallery-search" className="sr-only">Search gallery</label>
-          <input id="catalog-gallery-search" value={query} onChange={event => setQuery(event.target.value)} placeholder="Search gallery…" className="w-full mb-3 p-2 bg-port-bg border border-port-border rounded" />
-          {page.error && <p role="alert">{page.error} <button type="button" onClick={page.retry}>Retry</button></p>}
-          {page.hasMore && <button type="button" disabled={page.loading} onClick={page.loadMore} className="min-h-[44px] text-port-accent">Show more ({page.total - page.items.length} remaining)</button>}
-          {items === null && <p className="text-xs text-gray-500">Loading gallery…</p>}
-          {items?.length === 0 && <p className="text-xs text-gray-500">No images in the gallery yet. Generate one in Image Gen first.</p>}
-          {items && items.length > 0 && (
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
-              {items.map((it) => (
-                <div key={it.filename} className="relative group rounded border border-port-border overflow-hidden">
-                  <MediaImage src={it.path || `/data/images/${it.filename}`} alt={it.filename}
-                    className="w-full aspect-square object-cover" />
-                  <div className="absolute inset-x-0 bottom-0 flex opacity-100 sm:opacity-0 sm:group-hover:opacity-100 focus-within:opacity-100 [@media(hover:none)]:opacity-100 transition-opacity">
-                    {pickLabel ? <button type="button" onClick={() => onPick(it.filename)}
-                      className="flex-1 min-w-0 min-h-[44px] text-[10px] bg-black/70 text-gray-200 hover:text-white">{pickLabel}</button> : <>
-                      <button type="button" onClick={() => onPick(it.filename, false)}
-                        className="flex-1 min-w-0 min-h-[44px] text-[10px] bg-black/70 text-gray-200 hover:text-white">Attach</button>
-                      <button type="button" onClick={() => onPick(it.filename, true)}
-                        className="flex-1 min-w-0 min-h-[44px] text-[10px] bg-black/70 text-gray-200 hover:text-port-warning">Portrait</button>
-                    </>}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      </>
-    </Modal>
   );
 }
 
