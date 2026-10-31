@@ -47,6 +47,18 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+it('keeps the shown briefing and says a refresh failed', async () => {
+  const user = userEvent.setup();
+  api.getCosLatestBriefing
+    .mockResolvedValueOnce({ date: '2026-09-11', content: '# Today\n## Focus\nAn existing briefing' })
+    .mockRejectedValueOnce(new Error('Server unavailable'));
+  renderTab();
+  expect(await screen.findByText('Today')).toBeInTheDocument();
+  await user.click(screen.getByRole('button', { name: 'Refresh' }));
+  expect(await screen.findByText(/Could not load the latest briefing — Server unavailable/)).toBeInTheDocument();
+  expect(screen.getByText('Today')).toBeInTheDocument();
+});
+
 describe('BriefingTab empty state', () => {
   it('shows a retryable error instead of offering generation when the read fails', async () => {
     const user = userEvent.setup();

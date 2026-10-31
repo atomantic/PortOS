@@ -40,6 +40,15 @@ describe('MusicVideoAutopilotBlocker (#10156)', () => {
     expect(screen.queryByText(/Could not load/)).toBeNull();
   });
 
+  it('keeps the failed-check notice while a retry is still pending', async () => {
+    list.mockRejectedValueOnce(new Error('Server unavailable')).mockReturnValueOnce(new Promise(() => {}));
+    renderIt();
+    expect(await screen.findByText(/Could not load whether a music video run is parked/)).toBeTruthy();
+    act(() => { screen.getByRole('button', { name: 'Retry' }).click(); });
+    await waitFor(() => expect(list).toHaveBeenCalledTimes(2));
+    expect(screen.getByText(/Could not load whether a music video run is parked/)).toBeTruthy();
+  });
+
   it('renders nothing when no scheduled run is parked', async () => {
     list.mockResolvedValue({ items: [{ id: 'mv-1', name: 'Done', runStatus: 'completed', runOrigin: 'schedule' }] });
     const { container } = renderIt();

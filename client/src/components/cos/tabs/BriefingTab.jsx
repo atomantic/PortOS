@@ -19,6 +19,7 @@ import BrailleSpinner from '../../BrailleSpinner';
 import { formatWeekdayDate } from '../../../utils/formatters';
 import EmptyState from '../../EmptyState';
 import LoadFailedState from '../../ui/LoadFailedState';
+import ListLoadError from '../../ui/ListLoadError';
 import { useAsyncAction } from '../../../hooks/useAsyncAction';
 import { useSocketResource } from '../../../hooks/useSocketResource';
 
@@ -293,6 +294,10 @@ export default function BriefingTab() {
         </div>
       ) : (
         <>
+          {/* A failed refresh keeps the shown briefing; say it may be stale. */}
+          {error && (
+            <ListLoadError what="the latest briefing" error={error} onRetry={() => refetch()} />
+          )}
           {/* Briefing Title */}
           {parsed.title && (
             <div className="bg-gradient-to-r from-port-accent/10 to-transparent border border-port-accent/20 rounded-lg p-4">

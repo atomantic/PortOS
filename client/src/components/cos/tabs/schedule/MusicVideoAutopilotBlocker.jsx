@@ -20,7 +20,6 @@ export default function MusicVideoAutopilotBlocker() {
 
   useEffect(() => {
     let live = true;
-    setLoadError(null);
     const apply = (project) => setBlockers((prev) => {
       const next = { ...prev };
       const blocker = scheduledRunBlocker(project);
@@ -29,7 +28,8 @@ export default function MusicVideoAutopilotBlocker() {
       return next;
     });
     listMusicVideoProjectSummaries({ limit: 200 }, { silent: true })
-      .then((page) => { if (live) (page?.items || []).forEach(apply); })
+      // Clear the error only on success, so a slow retry keeps its notice.
+      .then((page) => { if (!live) return; setLoadError(null); (page?.items || []).forEach(apply); })
       .catch((err) => { if (live) setLoadError(err); });
     const onRun = (data) => { if (data?.project) apply(data.project); };
     socket.on('music-video:autonomous', onRun);
