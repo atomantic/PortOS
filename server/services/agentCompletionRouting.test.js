@@ -64,6 +64,7 @@ vi.mock('./agentWorktreeCleanup.js', () => ({
 vi.mock('./agentCompletionCleanup.js', () => ({
   runAgentCompletionCleanup: vi.fn().mockResolvedValue(undefined),
   removeCompletionSentinel: vi.fn().mockResolvedValue(undefined),
+  replayAgentCompletionCleanup: vi.fn().mockResolvedValue(undefined),
 }));
 
 import { handleAgentCompletion } from './agentLifecycle.js';
@@ -195,6 +196,18 @@ describe('handleAgentCompletion — post-restart recovery hand-off', () => {
 
     expect(completeAgent).not.toHaveBeenCalled();
     expect(handleOrphanedTask).not.toHaveBeenCalled();
+  });
+
+  // The orphan sweep may already have finalized this run from the runner's
+  // completion receipt (#14261); the late broadcast must not finalize it again.
+  it('ignores a late completion for an agent already finalized from its receipt', async () => {
+    getAgent.mockResolvedValueOnce({ id: 'agent-done', status: 'completed', taskId: 'task-9', metadata: {} });
+
+    await handleAgentCompletion('agent-done', 143, false, 500);
+
+    expect(retireDeadAgent).not.toHaveBeenCalled();
+    expect(handleOrphanedTask).not.toHaveBeenCalled();
+    expect(updateTask).not.toHaveBeenCalled();
   });
 
   it('ignores a completion for an agent with no persisted cos record', async () => {
