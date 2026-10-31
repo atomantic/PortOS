@@ -127,6 +127,7 @@ import { PRIORITY_VALUES, generateTasksMarkdown, parseTasksMarkdown } from '../l
 import { getTaskPrompt, getTaskContextNote } from '../lib/cosTaskPrompt.js';
 import { AGENT_PAUSED_CATEGORY, PAUSE_METADATA_KEYS, registerPauseReleaseAdapter, __resetPauseReleaseAdapter } from '../lib/taskPauseHold.js';
 import { MAX_TOTAL_SPAWNS } from '../lib/cosValidation.js';
+import { activeAgents, runnerAgents } from './agentState.js';
 
 const baseState = () => ({ agents: {} });
 
@@ -312,6 +313,65 @@ it('preserves failure history when an explicitly reset blocked task is requeued'
   expect(saved).toMatchObject({ status: 'pending', metadata: { failureCount: '3', lastErrorCategory: 'test-failure',
     lastFailureAt: '2026-01-01T00:00:00.000Z', existingBranch: 'fix/example', resumedFromAgentId: 'agent-original' } });
   expect(saved.metadata.totalSpawnCount).toBeUndefined();
+});
+
+it('holds a reconciled spawn budget until an explicit reset, even against stale metadata', async () => {
+  const task = await addTask({ id: 'sys-reconcile-hold', description: 'Reconcile fixture' }, 'internal');
+  const reconciled = await updateTask(task.id, { metadata: { totalSpawnCount: 2 } }, 'internal',
+    { spawnBudgetOperation: { kind: 'reconcile' } });
+  expect(reconciled.metadata.spawnBudgetReconciledHold).toBe('true');
+  const stale = await updateTask(task.id, { metadata: { ...task.metadata, spawnBudgetReconciledHold: undefined } }, 'internal');
+  expect(stale.metadata.spawnBudgetReconciledHold).toBe('true');
+  const reset = await updateTask(task.id, { metadata: { totalSpawnCount: undefined } }, 'internal',
+    { spawnBudgetOperation: { kind: 'reset' } });
+  expect(reset.metadata.spawnBudgetReconciledHold).toBeUndefined();
+});
+
+describe('in-memory runner agents count as competing task owners', () => {
+  afterEach(() => { activeAgents.clear(); runnerAgents.clear(); });
+
+  it('refuses an inactive-required recovery while the owner itself still runs in memory', async () => {
+    await seed('user', [{ id: 'task-inactive-mem', status: 'pending', priority: 'MEDIUM', description: 'Work', metadata: {} }]);
+    const options = { recoveryOwner: { id: 'agent-owner', startedAt: null, requireInactive: true } };
+    runnerAgents.set('agent-owner', { taskId: 'task-inactive-mem' });
+    expect(await updateTask('task-inactive-mem', { description: 'Edit' }, 'user', options)).toMatchObject({ statusChanged: true });
+    runnerAgents.clear();
+    activeAgents.set('agent-owner', { task: { id: 'task-inactive-mem' } });
+    expect(await updateTask('task-inactive-mem', { description: 'Edit' }, 'user', options)).toMatchObject({ statusChanged: true });
+    activeAgents.clear();
+    expect(await updateTask('task-inactive-mem', { description: 'Edit' }, 'user', options)).toMatchObject({ description: 'Edit' });
+  });
+
+  it('refuses a recovery-owner write while another in-memory runner holds the task', async () => {
+    await seed('user', [{ id: 'task-competing-mem', status: 'pending', priority: 'MEDIUM', description: 'Work', metadata: {} }]);
+    const options = { recoveryOwner: { id: 'agent-owner', startedAt: 'start' } };
+    runnerAgents.set('agent-owner', { taskId: 'task-competing-mem' });
+    runnerAgents.set('agent-other', { task: { id: 'task-competing-mem' } });
+    expect(await updateTask('task-competing-mem', { description: 'Edit' }, 'user', options)).toMatchObject({ statusChanged: true });
+    runnerAgents.delete('agent-other');
+    expect(await updateTask('task-competing-mem', { description: 'Edit' }, 'user', options)).toMatchObject({ description: 'Edit' });
+  });
+
+  it('refuses dispatch and completion proofs while another in-memory runner holds the task', async () => {
+    const task = await addTask({ id: 'sys-proof-mem', description: 'Proof fixture' }, 'internal');
+    const at = '2026-01-01T00:00:00.000Z';
+    const claim = { status: 'in_progress', metadata: { totalSpawnCount: 1, claimedBy: 'instance-example', claimedAt: at, lastSpawnedAt: at } };
+    const dispatch = { spawnBudgetOperation: { kind: 'dispatch', agentId: 'agent-first', startedAt: at } };
+    mock.state.agents['agent-first'] = { id: 'agent-first', taskId: task.id, status: 'running', startedAt: at };
+    runnerAgents.set('agent-first', { taskId: task.id });
+    runnerAgents.set('agent-other', { taskId: task.id });
+    expect(await updateTask(task.id, claim, 'internal', dispatch)).toEqual({ error: 'Cannot establish spawn budget dispatch proof' });
+    runnerAgents.delete('agent-other');
+    const latest = await updateTask(task.id, claim, 'internal', dispatch);
+    const proof = latest.metadata.spawnBudgetProof;
+    mock.state.agents['agent-first'].metadata = { completionTaskDispatch: { taskId: task.id, taskType: 'internal', spawnBudgetEpoch: proof.epoch,
+      spawnBudgetStartedAt: at, expected: ['claimedBy', 'claimedAt', 'lastSpawnedAt', 'totalSpawnCount'].map(key => [key, latest.metadata[key]]) } };
+    const completion = { expectedStatus: 'in_progress', spawnBudgetOperation: { kind: 'completion', agentId: 'agent-first', epoch: proof.epoch } };
+    activeAgents.set('agent-other', { task: { id: task.id } });
+    expect(await updateTask(task.id, { status: 'completed' }, 'internal', completion)).toMatchObject({ statusChanged: true, task: { status: 'in_progress' } });
+    activeAgents.clear();
+    expect(await updateTask(task.id, { status: 'completed' }, 'internal', completion)).toMatchObject({ status: 'completed' });
+  });
 });
 
 it('wakes the exact local parent from a persisted completed-follow-up edit', async () => {
