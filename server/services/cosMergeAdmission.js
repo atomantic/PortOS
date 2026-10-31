@@ -39,7 +39,7 @@ const validLease = (lease, repository) => isPlainObject(lease) && lease.reposito
   && typeof lease.token === 'string' && lease.token.length > 0 && Number.isFinite(Date.parse(lease.acquiredAt))
   && lease.kind === 'external' && /^[a-f0-9]{64}$/.test(lease.externalOwner || '') && validExternalMergeTarget(lease.target);
 const expired = (lease) => Date.now() - Date.parse(lease.acquiredAt) >= AGENT_LEASE_MAX_HOLD_MS;
-// Agent and sweep leases (and their preparation rows) persisted before #14319
+// Agent and sweep leases persisted before #14319 (their preparation rows just age out)
 // have no holder any more; drop them on the next save instead of refusing on them.
 const withoutLegacyLeases = (leases) => Object.fromEntries(
   Object.entries(leases).filter(([, lease]) => !(isPlainObject(lease) && ['agent', 'sweep'].includes(lease.kind))));
