@@ -16,7 +16,7 @@
 
 import { isAbsolute, resolve } from 'path';
 import { isPlainObject } from './objects.js';
-import { prStaysOpen } from './prDisposition.js';
+import { prHeldForOperator } from './prDisposition.js';
 import { isPathInsideDir } from './pathSafety.js';
 import { isHumanClaimWorktree, worktreeAgentId } from './worktreeOwnership.js';
 import { hasClaimFlowContract } from './claimFlowTaskTypes.js';
@@ -201,8 +201,8 @@ export function reconcileAssignedTarget(agent, task, target, { bindCheckout = fa
 /** Assignment scope is not merge permission: retirement/review/handoff stay held. */
 export function reconcileMergeTarget(agent, task, target) {
   const proof = reconcileAssignedTarget(agent, task, target);
-  return proof?.target.merge && proof.target.workspacePath && !agent.metadata.configReadOnly && !isTruthyMeta(task.metadata.readOnly)
-    && agent.metadata.prCompletionPolicy !== 'leave-open' && !prStaysOpen(task) && !isTruthyMeta(task.metadata.reviewLoopLeaveOpen)
+  return proof?.target.merge && proof.target.workspacePath && !agent.metadata.configReadOnly
+    && agent.metadata.prCompletionPolicy !== 'leave-open' && !prHeldForOperator(task)
     && ![false, 'false'].includes(task.metadata.autoMerge) ? proof : null;
 }
 

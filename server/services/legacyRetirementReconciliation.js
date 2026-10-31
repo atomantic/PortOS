@@ -6,6 +6,7 @@ import { execGit } from '../lib/execGit.js';
 import { readGitCommonDirectory } from '../lib/gitRepositoryIdentity.js';
 import { explicitPrCompletion, PR_COMPLETIONS } from '../lib/prDisposition.js';
 import { legacyRetirementKey } from '../lib/legacyRetirementTransition.js';
+import { retirementArchiveRecorded } from '../lib/reconcileRetirementEvidence.js';
 import { readCheckoutPathPresence, readLocalBranchPresence } from './repoCleanupObservation.js';
 
 const oid = value => typeof value === 'string' && /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(value);
@@ -85,7 +86,7 @@ export async function reconcileRecordedReceiptObservations(appId, outcome) {
     const observed = Math.max(Date.parse(observation.createdAt), Date.parse(observation.observedAt || observation.createdAt));
     const echoed = echoedRefPlaceholder(observation);
     const candidates = [...new Map(receipts.filter(row => row.branch === observation.branch && row.branchDeleted === true
-      && (row.archiveDir == null || (typeof row.archiveDir === 'string' && row.archiveDir.length > 0))
+      && retirementArchiveRecorded(row)
       && (!observation.checkoutIdentity || observation.checkoutIdentity === row.checkoutIdentity)
       && typeof row.path === 'string' && isAbsolute(row.path) && oid(row.head) && /^[a-f0-9]{64}$/.test(row.checkoutIdentity || '')
       && (!echoed || samePath(observation.path, row.path))

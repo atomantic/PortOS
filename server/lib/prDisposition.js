@@ -138,6 +138,17 @@ export function prStaysOpen(task) {
   return resolvePrCompletion(task?.metadata) === PR_COMPLETIONS.LEAVE_OPEN || leavesPrForHuman(task);
 }
 
+/**
+ * True when an operator hold keeps every automated path (merge, handoff, recovery,
+ * cleanup review) off this task's PR: `prStaysOpen`, a read-only task, or a review
+ * loop told to leave the PR open. Add a new hold signal here, never at a guard.
+ * @param {Object|null} task - the CoS task (or its metadata holder).
+ * @returns {boolean}
+ */
+export function prHeldForOperator(task) {
+  return prStaysOpen(task) || isTruthyMeta(task?.metadata?.readOnly) || isTruthyMeta(task?.metadata?.reviewLoopLeaveOpen);
+}
+
 /** Explicit task authority only: defaults must never release a human handoff. */
 export function explicitPrCompletion(task) {
   const metadata = task?.metadata || {};

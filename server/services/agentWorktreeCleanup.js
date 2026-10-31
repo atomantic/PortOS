@@ -32,7 +32,7 @@ import { resolveTaskTargetBranch, resolveTaskRemoteBranch, shouldStripTaskTarget
 import { ServerError } from '../lib/errorHandler.js';
 import { detectForgeCli } from '../lib/gitForge.js';
 import { normalizeForkHead } from '../lib/forkHead.js';
-import { PR_COMPLETIONS, resolvePrCompletion, PR_COMPLETION_VALUES, PR_CREATION, PR_MISSING_CATEGORY, leavesPrForHuman, prClaimWasVerified } from '../lib/prDisposition.js';
+import { PR_COMPLETIONS, resolvePrCompletion, PR_COMPLETION_VALUES, PR_CREATION, PR_MISSING_CATEGORY, leavesPrForHuman, prClaimWasVerified, prHeldForOperator } from '../lib/prDisposition.js';
 import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, MODEL_SELECTABLE_REVIEWERS, EFFORT_SELECTABLE_REVIEWERS, isProviderReviewer, normalizeReviewers, normalizeReviewUsernames, normalizeOptionalReviewers, normalizeReviewerMaxRounds, prioritizeToolFreeReviewers } from '../lib/reviewerConfig.js';
 
 // In-flight cleanup per agentId, so two completion paths racing to clean the
@@ -1543,8 +1543,7 @@ async function resumeReviewLoopCoordinator(taskId, prUrl, prBranch, reviewTarget
     || task.metadata.reviewLoopPRUrl !== prUrl || task.metadata.reviewLoopPRBranch !== prBranch) {
     return { id: taskId, blocked: 'Review coordinator identity could not be verified' };
   }
-  if (leavesPrForHuman(task) || resolvePrCompletion(task.metadata) === PR_COMPLETIONS.LEAVE_OPEN
-    || isTruthyMeta(task.metadata.readOnly) || isTruthyMeta(task.metadata.reviewLoopLeaveOpen)) {
+  if (prHeldForOperator(task)) {
     return { id: taskId, blocked: 'Review coordinator leaves this PR for its human owner' };
   }
   // Finalization can mark the task complete before its worker finishes cleanup.
