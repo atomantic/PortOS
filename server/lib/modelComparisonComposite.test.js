@@ -71,3 +71,46 @@ it('keeps the standard first-party price when a newer long-context tier shares t
   const providers = [{ id: 'xai', name: 'xAI', models: [{ model: 'grok-4.7', efforts: [] }] }];
   expect(buildModelComparisonComposite([standard, long], providers).rows[0].blendedPerMillion.value).toBe(2);
 });
+
+it('refuses calibrations from estimated, inverted or noisy pairs and clamps in-range values to the anchor scale', () => {
+  const anchorRows = values => ['a', 'b', 'c'].map((model, i) => observation(model, 'high', values[i]));
+  const otherRows = (values, extra = {}) => ['a', 'b', 'c', 'd'].map((model, i) => observation(model, 'high', values[i], { id: `other-${model}`, benchmark: 'Other evaluation v1', ...extra }));
+  const qualityOfD = observations => buildModelComparisonComposite(observations, inventory('d', ['high'])).rows[0].quality;
+  const estimate = row => ({ ...row, quality: { ...row.quality, source: { ...row.quality.source, methodology: 'PortOS estimate: placeholder' } } });
+  expect(qualityOfD([...anchorRows([20, 30, 40]), ...otherRows([100, 200, 300, 150])]).value).toBe(25);
+  expect(qualityOfD([...anchorRows([20, 30, 40]).map((row, i) => i ? row : estimate(row)), ...otherRows([100, 200, 300, 150])])).toBeNull();
+  expect(qualityOfD([...anchorRows([20, 30, 40]), ...otherRows([100, 200, 300, 150]).map((row, i) => i ? row : estimate(row))])).toBeNull();
+  expect(qualityOfD([...anchorRows([40, 30, 20]), ...otherRows([100, 200, 300, 150])])).toBeNull();
+  expect(qualityOfD([...anchorRows([0, 60, 10]), ...otherRows([100, 200, 300, 150])])).toBeNull();
+  expect(qualityOfD([...anchorRows([20, 30, 40]), ...otherRows([100, 200, 300, 50])])).toBeNull();
+  expect(qualityOfD([...anchorRows([0, 0, 30]), ...otherRows([1, 2, 3, 1])]).value).toBe(0);
+});
+
+it('falls back from a missing effort to same-model evidence before family rows of the same effort', () => {
+  const sameModel = buildModelComparisonComposite([observation('example', 'low', 20), observation('example', 'high', 40)], inventory('example', ['unspecified'])).rows[0];
+  expect(sameModel.quality).toMatchObject({ value: 30, estimated: true });
+  expect(sameModel.quality.method).toContain('Same-model configuration baseline');
+  const family = buildModelComparisonComposite([observation('gpt-5-luna', 'high', 30), observation('gpt-6-luna', 'low', 10)], inventory('gpt-7-luna', ['high'])).rows[0];
+  expect(family.quality.value).toBe(30);
+});
+
+it('keeps specialist and routing endpoints unscored and relabels local builds of a public model', () => {
+  const observations = [observation('text-embed-large', 'high', 30), observation('auto', 'high', 30), observation('example', 'high', 30)];
+  const providers = [{ id: 'cloud', name: 'Example', models: [{ model: 'text-embed-large', efforts: ['high'] }, { model: 'auto', efforts: ['high'] }] },
+    { id: 'local', name: 'Local', localInference: true, models: [{ model: 'example', efforts: ['high'] }] }];
+  const [embed, route, local] = buildModelComparisonComposite(observations, providers).rows;
+  expect([embed.quality, route.quality, embed.costPerTask]).toEqual([null, null, null]);
+  expect(embed.incomparableReason).toContain('Specialist endpoint');
+  expect(route.incomparableReason).toContain('Routing or undisclosed model');
+  expect(embed.blendedPerMillion.value).toBe(2);
+  expect(local.quality).toMatchObject({ value: 30, estimated: true });
+  expect(local.quality.method).toContain('local build');
+  expect(local.blendedPerMillion.value).toBe(0);
+});
+
+it('scores from the newest anchor result and interns each shared source once', () => {
+  const older = observation('example', 'high', 20, { id: 'older', quality: { value: 20, source: { url: 'https://example.com/old', retrievedAt: '2026-08-01T00:00:00Z', methodology: 'Published result' } } });
+  const { rows, sources } = buildModelComparisonComposite([observation('example', 'high', 40), older], inventory('example', ['high', 'max']));
+  expect(rows.map(row => row.quality.value)).toEqual([40, 40]);
+  expect(sources.map(source => source.url)).toEqual(['https://example.com/results']);
+});
