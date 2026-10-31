@@ -69,4 +69,73 @@ describe('IssueJudgePanel', () => {
     render(<IssueJudgePanel issue={proseIssue()} stageId="prose" />);
     await waitFor(() => expect(screen.getByText('stale')).toBeInTheDocument());
   });
+  it("drops the previous issue's score on an issue switch and shows a failed read with a retry", async () => {
+    getIssueJudge
+      .mockResolvedValueOnce(completeJudge())
+      .mockRejectedValueOnce(new Error('server down'))
+      .mockResolvedValueOnce(completeJudge({ qualityScore: 8.2, overall: 9 }));
+    const { rerender } = render(<IssueJudgePanel issue={proseIssue()} stageId="prose" />);
+    await waitFor(() => expect(screen.getByText('5.5')).toBeInTheDocument());
+
+    rerender(<IssueJudgePanel issue={{ ...proseIssue(), id: 'iss-2' }} stageId="prose" />);
+    expect(screen.queryByText('5.5')).toBeNull();
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(/server down/));
+    expect(screen.queryByText('not judged yet')).toBeNull();
+    expect(screen.queryByText('5.5')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(screen.getByText('8.2')).toBeInTheDocument());
+    expect(getIssueJudge).toHaveBeenLastCalledWith('iss-2', { silent: true });
+  });
+
+  it('does not apply a judge verdict to the issue the user switched to', async () => {
+    getIssueJudge.mockResolvedValue(null);
+    let resolveJudge;
+    judgeIssue.mockImplementationOnce(() => new Promise((resolve) => { resolveJudge = resolve; }));
+    const { rerender } = render(<IssueJudgePanel issue={proseIssue()} stageId="prose" />);
+    await waitFor(() => expect(screen.getByText('not judged yet')).toBeInTheDocument());
+    fireEvent.click(screen.getByText(/Judge quality/));
+    await waitFor(() => expect(judgeIssue).toHaveBeenCalled());
+
+    rerender(<IssueJudgePanel issue={{ ...proseIssue(), id: 'iss-2' }} stageId="prose" />);
+    await waitFor(() => expect(getIssueJudge).toHaveBeenLastCalledWith('iss-2', { silent: true }));
+    await act(async () => { resolveJudge(completeJudge()); });
+
+    expect(screen.queryByText('5.5')).toBeNull();
+    expect(screen.getByText('not judged yet')).toBeInTheDocument();
+  });
+  it('keeps a fresh verdict when a stored-score read started before it lands afterwards', async () => {
+    const pending = [];
+    getIssueJudge.mockImplementation(() => new Promise((resolve) => { pending.push(resolve); }));
+    let resolveJudge;
+    judgeIssue.mockImplementationOnce(() => new Promise((resolve) => { resolveJudge = resolve; }));
+    const { rerender } = render(<IssueJudgePanel issue={proseIssue()} stageId="prose" />);
+    await act(async () => { pending.shift()(null); });
+    fireEvent.click(screen.getByText(/Judge quality/));
+    await waitFor(() => expect(judgeIssue).toHaveBeenCalled());
+
+    // Away and back while the judge runs: a new stored-score read for iss-1 starts.
+    rerender(<IssueJudgePanel issue={{ ...proseIssue(), id: 'iss-2' }} stageId="prose" />);
+    rerender(<IssueJudgePanel issue={proseIssue()} stageId="prose" />);
+    await act(async () => { resolveJudge(completeJudge()); });
+    expect(screen.getByText('5.5')).toBeInTheDocument();
+
+    // The post-verdict re-read returns the saved snapshot; the pre-judge read
+    // that started earlier lands after it and must not replace the verdict.
+    const reread = pending.pop();
+    await act(async () => { reread(completeJudge()); });
+    await act(async () => { pending.forEach((resolve) => resolve(null)); });
+    expect(screen.getByText('5.5')).toBeInTheDocument();
+  });
+
+  it('re-reads the stored score when the judged draft changes so a stale score says so', async () => {
+    getIssueJudge.mockResolvedValueOnce(completeJudge()).mockResolvedValueOnce(completeJudge({ stale: true }));
+    const { rerender } = render(<IssueJudgePanel issue={proseIssue()} stageId="prose" />);
+    await waitFor(() => expect(screen.getByText('5.5')).toBeInTheDocument());
+    expect(screen.queryByText('stale')).toBeNull();
+
+    rerender(<IssueJudgePanel issue={proseIssue('An edited draft.')} stageId="prose" />);
+    await waitFor(() => expect(screen.getByText('stale')).toBeInTheDocument());
+    expect(screen.getByText('5.5')).toBeInTheDocument();
+  });
 });
