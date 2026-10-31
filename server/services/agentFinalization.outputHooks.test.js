@@ -657,7 +657,7 @@ describe('recovery output-hook dispatch (#3182)', () => {
     expect(addTask).not.toHaveBeenCalled();
   });
 
-  it.each(['worktree', 'pinned-claim'])('hands %s cleanup-only work to completion recovery without another agent or success claim', async mode => {
+  it.each(['worktree', 'pinned-claim'])('normalizes %s cleanup-only work on successful execution to completed', async mode => {
     const taskOutcome = { status: 'incomplete', reason: 'Verified delivery; owner still holds checkout.', recovery: { mode: 'cleanup' } };
     isProgrammaticIoTaskType.mockReturnValue(false);
     persistedAgent.metadata = mode === 'worktree' ? { isWorktree: true }
@@ -665,9 +665,9 @@ describe('recovery output-hook dispatch (#3182)', () => {
     try {
       await finalizeAgent({ agentId: 'agent-example', task: { id: TASK.id, taskType: 'user', metadata: {} },
         success: true, exitCode: 0, finalSummary: JSON.stringify({ summary: 'Cleanup handed off.', taskOutcome }) });
-      expect(updateTask).toHaveBeenLastCalledWith(TASK.id, expect.objectContaining({ status: 'in_progress',
-        metadata: expect.objectContaining({ deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-example' }) }), 'user');
-      expect(completeAgent).toHaveBeenLastCalledWith('agent-example', expect.objectContaining({ success: false, cleanupPending: true }));
+      expect(updateTask).toHaveBeenLastCalledWith(TASK.id, expect.objectContaining({ status: 'completed',
+        metadata: expect.objectContaining({ taskOutcome: { status: 'completed', reason: taskOutcome.reason } }) }), 'user');
+      expect(completeAgent).toHaveBeenLastCalledWith('agent-example', expect.objectContaining({ success: true }));
       expect(addTask).not.toHaveBeenCalled();
     } finally { isProgrammaticIoTaskType.mockReturnValue(true); }
   });

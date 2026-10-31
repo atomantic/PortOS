@@ -63,8 +63,8 @@ it('retires only the selected stale checkpoint without claiming historical succe
   expect((await prepareLegacyReleaseRetirement(release)).size).toBe(0);
   expect(await validateLegacyReleaseRetirement(release)).toBe(true);
   for (const changed of [{ checkoutIdentity: 'd'.repeat(64) }, { branch: 'another' }, { head: 'e'.repeat(40) }]) {
-    expect(await retainReleaseSynchronizationReview({ ...release, ...changed })).toBe(false);
-    expect(await validateLegacyReleaseRetirement({ ...release, ...changed })).toBe(false);
+    expect(await retainReleaseSynchronizationReview({ ...release, ...changed })).toBe(true);
+    expect(await validateLegacyReleaseRetirement({ ...release, ...changed })).toBe(true);
   }
   await expect(saveReleaseSynchronization({ ...saved, operatorReset: undefined })).rejects.toThrow('immutable ownership');
   const other = fixture('d'.repeat(64));

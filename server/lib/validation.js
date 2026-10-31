@@ -3067,24 +3067,6 @@ export const heldCheckoutRetireBodySchema = z.object({
   }).optional(),
 });
 export const heldCheckoutReviewBodySchema = heldCheckoutRetireBodySchema.omit({ review: true }).extend({ prUrl: z.string().url(), kind: z.enum(['source-supersession', 'preserved-supersession']).optional() });
-export const initializedCheckoutRetireBodySchema = heldCheckoutRetireBodySchema.extend({
-  review: heldCheckoutRetireBodySchema.shape.review.unwrap(),
-}).strict();
-export const initializedCheckoutTransactionSchema = z.object({ appId: nonEmptyString, transactionId: z.string().uuid() }).strict();
-export const initializedCheckoutRestoreSchema = initializedCheckoutTransactionSchema.extend({
-  journalDigest: z.string().regex(/^[a-f0-9]{64}$/),
-}).strict();
-
-export const initializedCheckoutBranchRetireSchema = initializedCheckoutRestoreSchema.extend({
-  review: heldCheckoutRetireBodySchema.shape.review.unwrap(),
-}).strict();
-export const initializedCheckoutMetadataRestoreSchema = initializedCheckoutRestoreSchema.extend({
-  review: z.object({ digest: z.string().regex(/^[a-f0-9]{64}$/) }).strict(),
-}).strict();
-export const initializedCheckoutFinalizationSchema = initializedCheckoutMetadataRestoreSchema;
-export const initializedCheckoutQuarantineResumptionSchema = initializedCheckoutRestoreSchema.extend({
-  review: z.object({ digest: z.string().regex(/^[a-f0-9]{64}$/), acceptSuperseded: z.boolean().optional() }).strict(),
-}).strict();
 
 // Per-app task-type overrides (routes/apps/taskTypes.js)
 export const appTaskTypeToggleBodySchema = z.object({ enabled: z.boolean() });

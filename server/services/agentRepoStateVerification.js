@@ -1108,7 +1108,7 @@ async function reconcileReleasedSelectionHistory(agents) {
     const owners = await readClaimOwnershipAgents().catch(() => null);
     if (!trees || !owners) continue;
     for (const branch of new Set(branches)) {
-      if (claimCheckoutOwner({ branchName: branch, sourceWorkspace, agents: owners })
+      if (claimCheckoutOwner({ branchName: branch, sourceWorkspace, agents: owners, ignoreIds: [agent.id || agent.agentId] })
         || trees.some(tree => tree.branch?.replace(/^refs\/heads\//, '') === branch)
         || await readLocalBranchPresence(sourceWorkspace, branch).catch(() => null) !== false) continue;
       await settleReleasedSelectionHistory(agent.id || agent.agentId, meta, branch, trees)
@@ -1343,7 +1343,7 @@ async function verifyRunBranches(input) {
     const { readClaimOwnershipAgents } = await import('./cosClaimOwnership.js');
     const { claimCheckoutOwner } = await import('../lib/claimContinuation.js');
     const agents = await readClaimOwnershipAgents().catch(() => null);
-    const owner = claimCheckoutOwner({ branchName: branch, sourceWorkspace, agents });
+    const owner = claimCheckoutOwner({ branchName: branch, sourceWorkspace, agents, ignoreIds: [input.agentId] });
     if (owner) {
       results.push(await holdBranch(branch, owner.reason, { owners: owner.owners }, captures.length === 1 ? captures[0].path : null));
       continue;
@@ -1358,8 +1358,8 @@ async function verifyRunBranches(input) {
     // owns no delivery obligation when no local artifact ever remains. Keep
     // captured/seeded checkouts and current bindings on the full proof path;
     // release alone must not erase evidence of actual work.
-    const releasedSelection = absent && meta.claimReleasedBranches?.includes(branch)
-      && !meta.claimBranches?.includes(branch) && meta.checkoutCapture?.status === 'captured'
+    const releasedSelection = absent && (meta.claimReleasedBranches?.includes(branch) || (meta.claimBranches?.length > 1 && !original?.path))
+      && (!meta.claimBranches?.includes(branch) || !meta.claimReleasedBranches?.includes(branch)) && meta.checkoutCapture?.status === 'captured'
       && !meta.checkoutSeeds?.some(row => row.branch === branch)
       && meta.completedCheckouts?.some(row => row.branch !== branch
         && completedCheckoutReceiptValid(input.agentState, row)
@@ -1437,7 +1437,7 @@ async function verifyAgentBranchState({ agentId, task, agentState, success, prEx
   const expectation = resolveRepoStateExpectation({ ...structural, prExpected: prExpected || !!originalPrUrl, enabled, followUpPending: owned });
   if (!expectation.verify) return skipped(expectation.skipReason);
 
-  const hold = await resolveCheckoutIncarnation({ metadata, sourceWorkspace, branchName, worktreePath });
+  const hold = await resolveCheckoutIncarnation({ agentId, metadata, sourceWorkspace, branchName, worktreePath });
   if (hold) return blockWith(hold.reason, { record: hold.record });
   const observed = await probeRepoState({
     sourceWorkspace,
@@ -1453,7 +1453,7 @@ async function verifyAgentBranchState({ agentId, task, agentState, success, prEx
   if (!observed) return blockWith('probe-incomplete', { skipReason: REPO_STATE_SKIPS.PROBE_INCOMPLETE });
 
   if (observed.worktreePresent === false && observed.localBranchPresent === false) {
-    return settleAbsentCheckout({ agentState, metadata, app, sourceWorkspace, branchName, worktreePath, originalPrUrl, observed, record, staysOpen: expectation.staysOpen, recheckCleanup });
+    return settleAbsentCheckout({ agentId, agentState, metadata, app, sourceWorkspace, branchName, worktreePath, originalPrUrl, observed, record, staysOpen: expectation.staysOpen, recheckCleanup });
   }
   if (originTaskAbsent) return skipped('removed-task-checkout-still-present');
   const issues = classifyRepoStateIssues(expectation, { ...observed, branchName });
@@ -1486,7 +1486,7 @@ async function verifyAgentBranchState({ agentId, task, agentState, success, prEx
  *
  * @returns {Promise<{reason: string, record?: object}|null>} the hold, or null when this run still owns the checkout
  */
-async function resolveCheckoutIncarnation({ metadata, sourceWorkspace, branchName, worktreePath }) {
+async function resolveCheckoutIncarnation({ agentId, metadata, sourceWorkspace, branchName, worktreePath }) {
   const inventory = await listWorktrees(sourceWorkspace).catch(() => null);
   if (!inventory) return { reason: 'checkout-inventory-unavailable' };
   const holders = inventory.filter(tree => tree.branch?.replace(/^refs\/heads\//, '') === branchName);
@@ -1511,12 +1511,13 @@ async function resolveCheckoutIncarnation({ metadata, sourceWorkspace, branchNam
   const { readClaimOwnershipAgents } = await import('./cosClaimOwnership.js');
   const { claimCheckoutOwner } = await import('../lib/claimContinuation.js');
   const owner = claimCheckoutOwner({ branchName, sourceWorkspace,
-    agents: await readClaimOwnershipAgents().catch(() => null) });
+    agents: await readClaimOwnershipAgents().catch(() => null),
+    ignoreIds: agentId ? [agentId] : [] });
   return owner ? { reason: owner.reason, record: { owners: owner.owners } } : null;
 }
 
 /** Already removed checkouts need delivery proof, not a retroactive backup. */
-async function settleAbsentCheckout({ agentState, metadata, app, sourceWorkspace, branchName, worktreePath, originalPrUrl, observed, record, staysOpen, recheckCleanup }) {
+async function settleAbsentCheckout({ agentId, agentState, metadata, app, sourceWorkspace, branchName, worktreePath, originalPrUrl, observed, record, staysOpen, recheckCleanup }) {
   const { readRetirementForgeEvidence } = await import('./heldCheckoutReview.js');
   // Opening a PR need not have been requested by the original task. A run
   // can nevertheless have delivered one itself. Its immutable capture permits
@@ -1558,7 +1559,7 @@ async function settleAbsentCheckout({ agentState, metadata, app, sourceWorkspace
     const verified = await withClaimOwnershipLock(async () => {
       await recheckCleanup?.();
       if ((preservation && !await preservation.recheck())
-        || await resolveCheckoutIncarnation({ metadata, sourceWorkspace, branchName, worktreePath })
+        || await resolveCheckoutIncarnation({ agentId, metadata, sourceWorkspace, branchName, worktreePath })
         || (worktreePath && await readCheckoutPathPresence(worktreePath) !== false)
         || await readLocalBranchPresence(sourceWorkspace, branchName) !== false) return false;
       return await record('verified', 'already-absent-merged', { prUrl: proofUrl, committedIntegrationVerified: true }) === true;
@@ -1602,7 +1603,7 @@ async function settleDivergedBranch(ctx) {
   return fileDivergenceRecovery({ ...ctx, appId: prepared.appId }, prepared.retirement);
 }
 
-async function retireIntegratedCheckout({ appId, observed, issues, record, blockWith, recheckCleanup, manualCleanupOnly, metadata, sourceWorkspace, branchName, worktreePath }, retirement) {
+async function retireIntegratedCheckout({ agentId, appId, observed, issues, record, blockWith, recheckCleanup, manualCleanupOnly, metadata, sourceWorkspace, branchName, worktreePath }, retirement) {
   const { retireInventoriedCheckout } = await import('./heldCheckoutRecovery.js');
   const { assertAutomaticRetirementAllowed } = await import('./branchReconcileRetirement.js');
   const result = await retireInventoriedCheckout({ appId, release: retirement.release,
@@ -1612,7 +1613,7 @@ async function retireIntegratedCheckout({ appId, observed, issues, record, block
       if (!manualCleanupOnly) await assertAutomaticRetirementAllowed();
       await recheckCleanup?.();
       if (recheckCleanup) {
-        const hold = await resolveCheckoutIncarnation({ metadata, sourceWorkspace, branchName, worktreePath });
+        const hold = await resolveCheckoutIncarnation({ agentId, metadata, sourceWorkspace, branchName, worktreePath });
         if (hold) throw new Error(hold.reason);
       }
     } }).catch(error => ({ reason: (error.message.startsWith('historical-cleanup-') || ['daemon-stopped', 'automatic-retirement-disabled', 'checkout-incarnation-changed', 'claim-owner-active', 'claim-owner-ambiguous', 'cleanup-owner-changed', 'cleanup-provenance-unverified', 'swarm-continuation-pending', 'completion-stages-pending', 'checkout-capture-unverified'].includes(error.message)) ? error.message : 'retirement-outcome-uncertain' }));
@@ -1651,7 +1652,14 @@ async function settleUndeliveredBranch({ agentId, app, sourceWorkspace, branchNa
   return blockWith(review?.reason || delivery.reason || 'completed-review-target-unverified', { issues, observed });
 }
 
-async function fileDivergenceRecovery({ agentId, task, appId, metadata, sourceWorkspace, branchName, worktreePath, observed, issues }, retirement) {
+async function fileDivergenceRecovery({ agentId, task, appId, metadata, sourceWorkspace, branchName, worktreePath, observed, issues, record }, retirement) {
+  const { loadState } = await import('./cosState.js');
+  const stateConfig = (await loadState().catch(() => null))?.config;
+  if (stateConfig && stateConfig.autoApproveInvestigations !== true) {
+    emitLog('info', `🔎 Diverged branch ${branchName} after ${agentId} deferred to scheduled branch-reconcile`, { agentId, branchName, taskId: task?.id });
+    if (record) await record('verified', 'deferred-to-branch-reconcile', { unresolved: 0 });
+    return { verified: true, skipReason: 'deferred-to-branch-reconcile', issues, observed, recoveryTaskId: null };
+  }
   // The recovery task filed below is the investigation, so this line only records the divergence; filing failures still warn.
   emitLog('info', `🔎 Repo state diverged after ${agentId}: ${issues.map(i => i.code).join(', ')}`, { agentId, branchName, taskId: task?.id });
 
@@ -1700,7 +1708,7 @@ async function prepareRecoveryRetirement({ agentId, appId, app: taskApp, sourceW
   // has finished teardown. Preserve the durable obligation until its exact
   // execution owner has actually left the local active maps.
   const { getActiveAgentIds } = await import('./agentState.js');
-  if (getActiveAgentIds().includes(agentId)) return { reason: 'completion-execution-active' };
+  if (getActiveAgentIds().filter(id => id !== agentId).includes(agentId)) return { reason: 'completion-execution-active' };
   if (release.locked) {
     await recordBranchReconcileOutcome(app.id, { status: 'incomplete', reason: 'retirement-worktree-locked',
       nextAction: 'Keep the checkout locked; its owner must explicitly release it before another preview.' });
@@ -1775,6 +1783,10 @@ async function fileRepoStateRecoveryTask({ agentId, task, branchName, sourceWork
     observed.prUrl ? `Change request: ${observed.prUrl} (${observed.prState || 'state unknown'})` : 'Change request: none found',
     `Original agent: ${agentId}`,
     `Original task: ${task?.description || 'unknown'}`,
+    '',
+    'Your mission has TWO required parts:',
+    '1. Resolve the diverged branch/worktree: finish and merge the PR if it contains valid task work, or clean up the worktree and branch if the work is already superseded or unneeded.',
+    `2. Investigate WHY the original agent (${agentId}) exited without completing delivery/cleanup cleanly, and fix or file an issue for the underlying PortOS pipeline cause so it does not happen again.`,
     '',
     'What diverged:',
     ...issues.map((i, n) => `${n + 1}. ${i.message}`),

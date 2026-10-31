@@ -424,7 +424,7 @@ const archiveIdentityKey = row => row && [row.repoPath, row.path, row.head].ever
 
 /** Metadata only selects work; every selected archive is independently verified. */
 async function discoverRecoveryArchives(cosDir, signal) {
-  const roots = [heldCheckoutArchiveRoot(cosDir), join(cosDir || PATHS.cos, 'initialized-checkout-retirements')];
+  const roots = [heldCheckoutArchiveRoot(cosDir)];
   const index = new Map();
   const byDirectory = new Map();
   const coverage = { entriesRead: 0, candidates: 0, indexed: 0, metadataBytes: 0, missingRoots: 0,
@@ -509,8 +509,7 @@ export async function recoverMissingCheckoutPreservations({ appId, repoPath, out
       for (const candidate of scopedCandidates) {
         row.coverage.attempted++;
         try {
-          const verifiedProof = candidate.kind === 'held' ? await verifyHeldArchive(repoPath, candidate.dir, release, archiveWork(opts.signal))
-            : await (await import('./initializedCheckoutRecovery.js')).verifyMissingInitializedCheckoutPreservation({ appId, repoPath, release, archiveDir: candidate.dir });
+          const verifiedProof = await verifyHeldArchive(repoPath, candidate.dir, release, archiveWork(opts.signal));
           if (verifiedProof.releaseFence) evidenceFences.push(verifiedProof.releaseFence);
           verified++;
           proof = verifiedProof;

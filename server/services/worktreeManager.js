@@ -1532,6 +1532,30 @@ async function cleanupWorktreeBranch(sourceWorkspace, branchName, {
  *   run, forever. ONLY the discard path may pass this.
  */
 export async function removeWorktree(agentId, sourceWorkspace, branchName, options = {}) {
+  if (typeof branchName === 'object' && branchName !== null) {
+    const repoPath = agentId;
+    const worktreePath = sourceWorkspace;
+    const directOptions = branchName;
+    const entries = await listWorktrees(repoPath).catch(() => []);
+    const holder = worktreePath ? entries.find(wt => canonicalPath(wt.path) === canonicalPath(worktreePath)) || null : null;
+    const resolvedBranch = holder?.branch ? holder.branch.replace(/^refs\/heads\//, '') : directOptions.branchName || null;
+    if (directOptions.force && worktreePath) {
+      await execGit(['worktree', 'unlock', worktreePath], repoPath, { ignoreExitCode: true }).catch(() => null);
+    }
+    const removal = worktreePath
+      ? await forceRemoveWorktreeDir(repoPath, worktreePath, { label: `Direct worktree cleanup for ${worktreePath}` })
+      : { removed: true };
+    if (directOptions.deleteBranch && resolvedBranch && !PROTECTED_BRANCHES.includes(resolvedBranch)) {
+      await execGit(['branch', directOptions.force ? '-D' : '-d', resolvedBranch], repoPath, { ignoreExitCode: true }).catch(() => null);
+    }
+    return {
+      merged: false,
+      removed: removal.removed !== false,
+      cleanupIncomplete: removal.removed === false,
+      uncommittedSaved: false,
+      warnings: removal.warning ? [removal.warning] : [],
+    };
+  }
   const { readClaimOwnershipAgents } = await import('./cosClaimOwnershipState.js');
   const ownershipHold = async () => claimCheckoutOwnerReason({
     branchName, holderPath: join(WORKTREES_DIR, agentId), sourceWorkspace,

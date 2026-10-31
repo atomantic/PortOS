@@ -474,7 +474,7 @@ export function retainReleaseSynchronizationReview(release) {
     const { readBranchCompletionPolicies } = await import('./branchCompletionPolicy.js');
     const agents = await readBranchCompletionPolicies({ repairIndex: false });
     for (const entry of entries) {
-      if (resetReleasesCheckout(entry, release)) continue;
+      if (releaseSynchronizationReset(entry) || resetReleasesCheckout(entry, release)) continue;
       // A branch name alone cannot exclude a locally aliased publisher checkout.
       const [releaseRepo, ownerRepo] = release.repoPath
         ? await Promise.all([realpath(release.repoPath).catch(() => null), realpath(entry.owner.workspace).catch(() => null)]) : [null, null];
@@ -484,12 +484,12 @@ export function retainReleaseSynchronizationReview(release) {
         const candidate = binding && await legacyPromotionBranch(entry, releaseRepo).catch(() => null);
         if (candidate && candidate !== release.branch) sameRepository = false;
       }
+      const target = publisherCandidateTarget(entry);
       if (sameRepository && !publisherCandidateSeed(entry)
-        && (!entry.publication.candidateBranch || entry.publication.candidateBranch === release.branch)) {
+        && target && target.branch === release.branch && target.path === release.path) {
         const legacy = legacyPublisherRecovery(entry);
-        const target = publisherCandidateTarget(entry);
-        if (!legacy || legacy.evidence.mode !== 'present' || !target || target.branch !== release.branch
-          || target.path !== release.path || target.head !== release.head || target.checkoutIdentity !== release.checkoutIdentity) return false;
+        if (!legacy || legacy.evidence.mode !== 'present'
+          || target.head !== release.head || target.checkoutIdentity !== release.checkoutIdentity) return false;
         await verifyEntry(entry, agents);
         if (entry.obligations.localReview.status !== 'verified' || entry.obligations.processSettlement.status !== 'verified'
           || !entry.obligations.retirement.evidence?.checkouts?.some(row => isDeepStrictEqual(row, target))) return false;
@@ -630,7 +630,7 @@ export async function prepareLegacyReleaseRetirement(release) {
   const { inspectLegacyPublisher } = await import('./legacyReleaseRecovery.js');
   const agents = await readBranchCompletionPolicies({ repairIndex: false });
   for (const entry of entries) {
-    if (resetReleasesCheckout(entry, release)) continue;
+    if (releaseSynchronizationReset(entry) || resetReleasesCheckout(entry, release)) continue;
     const legacy = legacyPublisherRecovery(entry);
     const target = publisherCandidateTarget(entry);
     if (legacy?.evidence.mode === 'present' && target?.path === release.path && target.branch === release.branch
@@ -660,7 +660,7 @@ export async function validateLegacyReleaseRetirement(release, { unlocked = fals
   const { inspectLegacyPublisher, legacyProcessesSettled } = await import('./legacyReleaseRecovery.js');
   const agents = await readBranchCompletionPolicies({ repairIndex: false });
   for (const entry of entries) {
-    if (resetReleasesCheckout(entry, release)) continue;
+    if (releaseSynchronizationReset(entry) || resetReleasesCheckout(entry, release)) continue;
     if (entry.publication.candidateBranch && entry.publication.candidateBranch !== release.branch) continue;
     const [ownerRepo, targetRepo] = await Promise.all([realpath(entry.owner.workspace).catch(() => null), realpath(release.repoPath).catch(() => null)]);
     if (!targetRepo) return false;
@@ -674,7 +674,8 @@ export async function validateLegacyReleaseRetirement(release, { unlocked = fals
     }
     if (!ownerRepo) return false;
     const legacy = legacyPublisherRecovery(entry), target = publisherCandidateTarget(entry);
-    if (!legacy || legacy.evidence.mode !== 'present' || !target || target.path !== release.path || target.branch !== release.branch
+    if (!target || target.path !== release.path || target.branch !== release.branch) continue;
+    if (!legacy || legacy.evidence.mode !== 'present'
       || target.head !== release.head || target.checkoutIdentity !== release.checkoutIdentity
       || entry.obligations.localReview.status !== 'verified' || entry.obligations.processSettlement.status !== 'verified') return false;
     const archiveProof = archiveProofs.get(entry.identity);

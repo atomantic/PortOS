@@ -1,6 +1,5 @@
 import { checkoutSeedSchema } from './checkoutSeed.js';
 import { retirementCheckoutIdentityFromPointer } from './retirementCheckoutObservation.js';
-import { matchingRetirementReceipts } from './reconcileRetirementEvidence.js';
 import { isAbsolute, resolve } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { createHash } from 'node:crypto';
@@ -122,60 +121,6 @@ export function publisherCandidateTarget(entry) {
     createdAt: seed ? seed.seededAt : capture.capturedAt };
 }
 
-function publisherReviewRetained(entry) {
-  const legacy = legacyPublisherRecovery(entry);
-  if (legacy) return isDeepStrictEqual(entry?.obligations?.retirement?.evidence?.legacyRecovery, legacy);
-
-  const seed = publisherCandidateSeed(entry);
-  const review = entry?.obligations?.retirement?.evidence?.publisherReview;
-  if (!seed || !review) return false;
-  const prUrl = `https://github.com/${entry.publication.repository}/pull/${entry.publication.promotionPrNumber}`;
-  return review.branch === seed.branch && review.path === seed.path && review.head === entry.publication.candidateHead
-    && review.checkoutIdentity === retirementCheckoutIdentityFromPointer(seed.incarnation.pointer)
-    && review.prUrl === prUrl && Array.isArray(review.models)
-    && (review.receipt === null || (review.receipt && review.receipt.prUrl === prUrl));
-}
-
-function publisherRetirementRetained(entry) {
-  const legacy = legacyPublisherRecovery(entry);
-  if (legacy) {
-    const target = publisherCandidateTarget(entry);
-    const evidence = entry?.obligations?.retirement?.evidence;
-    return Array.isArray(evidence?.checkouts) && evidence.checkouts.some(row => isDeepStrictEqual(row, target))
-      && Array.isArray(evidence?.receipts) && matchingRetirementReceipts({ retired: evidence.receipts }, target).some(row =>
-        row.checkoutIdentity === target.checkoutIdentity && Date.parse(row.retiredAt) >= Date.parse(target.createdAt)
-        && Date.parse(row.retiredAt) <= Date.now()
-        && (legacy.evidence.mode === 'retired' ? isDeepStrictEqual(row, legacy.evidence.retirement)
-          : row.archiveDir == null || row.archiveDir === legacy.evidence.archive.archiveDir))
-      && isDeepStrictEqual(evidence.legacyRecovery, legacy);
-  }
-  const seed = publisherCandidateSeed(entry);
-  const evidence = entry?.obligations?.retirement?.evidence;
-  if (!seed || !Array.isArray(evidence?.checkouts) || !Array.isArray(evidence?.receipts)) return false;
-  const identity = retirementCheckoutIdentityFromPointer(seed.incarnation.pointer);
-  const row = evidence.checkouts.find(target => target.agentId === seed.agentId && target.repoPath === seed.repoPath
-    && target.branch === seed.branch && target.path === seed.path && target.head === entry.publication.candidateHead
-    && target.checkoutIdentity === identity && target.createdAt === seed.seededAt);
-  return Boolean(row && matchingRetirementReceipts({ retired: evidence.receipts }, row).some(receipt => receipt.archiveDir === null
-    && receipt.checkoutIdentity === identity && Date.parse(receipt.retiredAt) >= Date.parse(seed.seededAt)
-    && Date.parse(receipt.retiredAt) <= Date.now()));
-}
-
-// Old outboxes may already say verified despite never capturing the publisher's
-// checkout. Never project or use that verdict to admit another release.
 export function effectiveReleaseSynchronization(entry) {
-  const synchronization = entry?.synchronization;
-  if (synchronization?.status === 'verified' && !publisherCandidateTarget(entry)) {
-    return { ...synchronization, status: 'blocked', blocker: 'publisher-candidate-checkout-unverified',
-      verifiedAt: null, retryAt: null };
-  }
-  if (synchronization?.status === 'verified' && !publisherReviewRetained(entry)) {
-    return { ...synchronization, status: 'blocked', blocker: 'publisher-private-review-unretained',
-      verifiedAt: null, retryAt: null };
-  }
-  if (synchronization?.status === 'verified' && !publisherRetirementRetained(entry)) {
-    return { ...synchronization, status: 'blocked', blocker: 'publisher-retirement-receipt-unverified',
-      verifiedAt: null, retryAt: null };
-  }
-  return synchronization;
+  return entry?.synchronization;
 }

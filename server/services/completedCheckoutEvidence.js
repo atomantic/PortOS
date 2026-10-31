@@ -241,9 +241,9 @@ export async function captureCompletedCheckouts(agent, { success, strict = false
     if (typeof branch !== 'string' || !branch) continue;
     const holders = trees.filter(tree => shortBranch(tree.branch) === branch);
     if (holders.length !== 1) {
-      // A claimed branch with no checkout (retired, or never created) has
+      // A claimed or worktree branch with no checkout (retired, or never created) has
       // nothing to preserve; only ambiguous holders make the capture unknown.
-      if (holders.length === 0 && claim) continue;
+      if (holders.length === 0 && (claim || meta.isWorktree === true)) continue;
       if (!allowUncreated || holders.length > 1) { incomplete = true; unknown = true; }
       continue;
     }

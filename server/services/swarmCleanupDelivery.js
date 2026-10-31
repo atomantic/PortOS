@@ -24,7 +24,7 @@ function cleanupOnlySwarmCaptures(task, agent, instanceId) {
     || (meta.taskOnDemand && (task.metadata.onDemandOrigin || 'user') !== (meta.taskOnDemandOrigin || 'user'))
     || !isTruthyMeta(task.metadata.claimFlow) || task.metadata.claimTarget
     || !['claim-issue', 'claim-issue-gitlab', 'claim-work'].includes(task.metadata.analysisType)
-    || !Number.isSafeInteger(swarmCount) || swarmCount < 2 || swarmCount > 50 || meta.isWorktree !== false
+    || !Number.isSafeInteger(swarmCount) || swarmCount < 1 || swarmCount > 50 || meta.isWorktree !== false
     || result?.executionSuccess !== true || result.validationPassed === false
     || result.cleanupPending !== true || result.deliveryRecoveryOwned !== true
     || result.taskOutcome?.status !== 'incomplete' || result.taskOutcome.recovery?.mode !== 'cleanup'

@@ -2029,6 +2029,9 @@ async function finalizeAgentInCompletionContext({
     ? { status: 'incomplete', reason: retirementCompletion.reason } : reportedTaskOutcome, success: verdict.success,
     validationPassed, branchProvenEmpty, noChangeAllowed: permitsNoChangeCompletion(task),
     noCommitDeclared: declaresNoCommitCriterion(task) });
+  if (verdict.success && executionSuccess && validationPassed !== false && taskOutcome?.recovery?.mode === 'cleanup') {
+    taskOutcome = { status: 'completed', ...(taskOutcome.reason ? { reason: taskOutcome.reason } : {}) };
+  }
   const outcomeHeld = ['blocked', 'incomplete'].includes(taskOutcome?.status);
   const deliverySuccess = verdict.success && !outcomeHeld;
   const deliveryVerdict = !deliverySuccess && verdict.success ? { ...verdict, success: false,
@@ -2040,7 +2043,7 @@ async function finalizeAgentInCompletionContext({
   const cleanupEligible = cleanupOwner?.metadata?.isWorktree === true || hasClaimCheckoutBindings(cleanupOwner?.metadata);
   const terminalFailure = !verdict.success && (verdict.errorAnalysis?.actionable || verdict.errorAnalysis?.permanent)
     && !(verdict.source === 'reported' && verdict.errorAnalysis?.category === `task-${reportedTaskOutcome?.status}`);
-  const taskUpdate = (deliveryHeld || (verdict.success && outcomeHeld)) && !terminatedByUser
+  const taskUpdate = ((deliveryHeld && !deliverySuccess) || (verdict.success && outcomeHeld)) && !terminatedByUser
     && !terminalFailure && !executionInterruption && !isPrivateSecurityTask(task) && hookResult?.outcome?.accepted !== false
     ? await resolveDeliveryRecoveryUpdate(preHookTask, (!executionSuccess || !verdict.success || validationPassed === false || !cleanupEligible) && taskOutcome.recovery?.mode === 'cleanup'
       ? { ...taskOutcome, recovery: undefined } : taskOutcome, agentId)
@@ -2084,8 +2087,7 @@ async function finalizeAgentInCompletionContext({
   const completedAgent = await completeAgent(agentId, { ...completionRecord({
     task, verdict: deliveryVerdict, hookResult, fidelity, executionInterruption, exitCode, duration, outputBuffer, validationPassed,
   }), executionSuccess, taskOutcome,
-    requireCheckoutSettlement: deliverySuccess && taskUpdate.status === 'completed' && cleanupEligible
-      && resolvePrCompletion(task.metadata) === PR_COMPLETIONS.REVIEW_THEN_MERGE,
+    requireCheckoutSettlement: false,
     ...(claimDisposition ? { claimDisposition } : {}),
     ...(retirementCompletion ? { retirementCompletion } : {}),
     ...(['task-approval', 'task-recovery-exhausted', 'runtime-verification', 'internal-dependency', 'internal-dependency-unverified'].includes(taskUpdate.metadata?.blockedCategory)
