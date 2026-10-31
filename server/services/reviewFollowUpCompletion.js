@@ -4,12 +4,13 @@
  */
 import { isTruthyMeta } from '../lib/metadataFlags.js';
 import { parsePullRequestUrl } from '../lib/gitForge.js';
-import { PR_COMPLETIONS, resolvePrCompletion } from '../lib/prDisposition.js';
+import { prHeldForOperator } from '../lib/prDisposition.js';
 
 export async function verifyMergedReviewFollowUp(task, workspacePath) {
   const meta = task?.metadata;
   if (task?.taskType !== 'internal' || !isTruthyMeta(meta?.reviewLoopFollowUp)
-    || isTruthyMeta(meta.reviewLoopLeaveOpen) || resolvePrCompletion(meta) === PR_COMPLETIONS.LEAVE_OPEN || !workspacePath
+    // A held PR's follow-up was never assigned the merge, so a merge cannot discharge it.
+    || prHeldForOperator(task) || !workspacePath
     || typeof meta.reviewLoopPRBranch !== 'string' || !meta.reviewLoopPRBranch.trim()) return null;
   const target = parsePullRequestUrl(meta.reviewLoopPRUrl);
   if (!target) return null;

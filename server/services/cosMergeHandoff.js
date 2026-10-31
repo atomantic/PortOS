@@ -23,7 +23,7 @@ import { execGit } from '../lib/execGit.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
 import { isPlainObject } from '../lib/objects.js';
 import { isTruthyMeta } from '../lib/metadataFlags.js';
-import { PR_COMPLETIONS, prHeldForOperator, resolvePrCompletion } from '../lib/prDisposition.js';
+import { PR_COMPLETIONS, agentPrHeldForOperator, prHeldForOperator, resolvePrCompletion } from '../lib/prDisposition.js';
 
 const SHA_PATTERN = /^[0-9a-f]{40}$/;
 // Transient: the caller may retry the same handoff. Everything else means the
@@ -170,7 +170,7 @@ export async function inspectCompletedOwnerReview({ agentId = null, repoPath, br
   const task = await getTaskById(agent.taskId).catch(() => null);
   if (!task || task.id !== agent.taskId || task.status !== 'completed') return held('review-task-not-completed');
   const policy = resolvePrCompletion(task.metadata);
-  if (agent.metadata?.prCompletionPolicy === PR_COMPLETIONS.LEAVE_OPEN || prHeldForOperator(task)) return held('review-policy-held');
+  if (agentPrHeldForOperator(agent, task)) return held('review-policy-held');
   const policyHold = await readBranchCompletionHold({ repoPath, branch, prUrl, tip: headSha, agents });
   if (policyHold !== (policy === PR_COMPLETIONS.REVIEW_THEN_MERGE ? 'pr-completion-review-required' : null)) return held('review-policy-unproven');
   const { repositoryKey } = await import('./mergeHandoffOwner.js');
@@ -251,7 +251,7 @@ export async function handoffPendingMerge({ agentId, prUrl, headSha, worktreePat
   if (!repoSpec) return refuse('forge-unsupported');
 
   const policy = resolvePrCompletion(task.metadata);
-  if (prHeldForOperator(task) || agent.metadata?.prCompletionPolicy === PR_COMPLETIONS.LEAVE_OPEN) {
+  if (agentPrHeldForOperator(agent, task)) {
     return refuse('completion-policy-leaves-open');
   }
 

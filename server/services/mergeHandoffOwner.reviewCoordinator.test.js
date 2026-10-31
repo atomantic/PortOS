@@ -98,7 +98,7 @@ describe('registered review-loop merge coordinator', () => {
   });
 
   it.each(['absent-agent', 'completed-agent', 'absent-task', 'completed-task', 'user-task', 'unregistered-target',
-    'changed-target', 'unrelated-pr', 'unrelated-workspace', 'changed-checkout', 'changed-registration', 'leave-open', 'leave-open-policy'])
+    'changed-target', 'unrelated-pr', 'unrelated-workspace', 'changed-checkout', 'changed-registration', 'leave-open', 'leave-open-policy', 'read-only'])
   ('refuses %s as a handoff owner', async mode => {
     const task = await launch();
     const agent = f.state.agents['review-agent'];
@@ -119,6 +119,7 @@ describe('registered review-loop merge coordinator', () => {
     if (mode === 'changed-registration') agent.metadata.worktreeBranch = 'another/branch';
     if (mode === 'leave-open') task.metadata.reviewLoopLeaveOpen = true;
     if (mode === 'leave-open-policy') task.metadata.prCompletion = 'leave-open';
+    if (mode === 'read-only') task.metadata.readOnly = true;
     persist();
     expect(await resolveOwner()).toEqual({ refused: 'handoff-owner-unverified' });
   });

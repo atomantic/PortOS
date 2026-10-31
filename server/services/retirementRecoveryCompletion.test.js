@@ -180,7 +180,7 @@ describe('retirement recovery public completion flow', () => {
     expect(getTaskById).toHaveBeenCalled();
   });
 
-  it.each(['missing', 'mismatching-head', 'stale-generation', 'unreadable', 'checkout', 'recreated-checkout', 'local-ref', 'remote-ref', 'active-owner', 'unbound', 'handoff'])('retains %s evidence gaps despite a success summary and unrelated primary commits', async fault => {
+  it.each(['missing', 'mismatching-head', 'stale-generation', 'unreadable', 'checkout', 'recreated-checkout', 'local-ref', 'remote-ref', 'active-owner', 'unbound', 'handoff', 'review-hold'])('retains %s evidence gaps despite a success summary and unrelated primary commits', async fault => {
     await retire();
     const outcome = store.schedule.executions['task:branch-reconcile'].perApp[store.app.id].branchReconcileOutcome;
     if (fault === 'missing') { outcome.retired = []; outcome.retirementReceiptEvidence = {}; }
@@ -200,6 +200,7 @@ describe('retirement recovery public completion flow', () => {
     if (fault === 'active-owner') store.owners = [{ id: 'example-owner', status: 'running', metadata: { sourceWorkspace: repo, claimBranches: [release.branch] } }];
     if (fault === 'unbound') store.parent.metadata = {};
     if (fault === 'handoff') store.parent.metadata.prCompletionPolicy = 'leave-open';
+    if (fault === 'review-hold') store.task.metadata.reviewLoopLeaveOpen = true;
     await execGit(['commit', '--allow-empty', '-m', 'test: unrelated activity'], repo);
     const proof = await verifyRetirementRecoveryCompletion(store.task);
     expect(proof).toMatchObject({ status: 'unverified', reason: expect.any(String) });

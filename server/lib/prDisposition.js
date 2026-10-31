@@ -149,6 +149,11 @@ export function prHeldForOperator(task) {
   return prStaysOpen(task) || isTruthyMeta(task?.metadata?.readOnly) || isTruthyMeta(task?.metadata?.reviewLoopLeaveOpen);
 }
 
+/** `prHeldForOperator`, plus the leave-open policy an agent pinned at spawn. */
+export function agentPrHeldForOperator(agent, task) {
+  return agent?.metadata?.prCompletionPolicy === PR_COMPLETIONS.LEAVE_OPEN || prHeldForOperator(task);
+}
+
 /** Explicit task authority only: defaults must never release a human handoff. */
 export function explicitPrCompletion(task) {
   const metadata = task?.metadata || {};
