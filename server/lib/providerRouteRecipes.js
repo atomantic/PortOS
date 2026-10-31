@@ -403,6 +403,62 @@ export function materializeRoute(input) {
 }
 
 /**
+ * Where a binding points its program: the env var, inline config or CLI flag
+ * that carries the service's base URL, and the `endpoint` the record keeps.
+ * `{ error }` when the binding needs a base URL the instance does not declare.
+ */
+function resolveRouteEndpoint(binding, instance, definition) {
+  const protocol = binding.protocol || null;
+  const baseUrl = protocol ? instance.transports[protocol]?.baseUrl ?? null : null;
+  if (protocol && !baseUrl) {
+    return { error: { code: 'SERVICE_ENDPOINT_REQUIRED', message: `${definition.label} declares no ${protocol} endpoint; set its base URL first.` } };
+  }
+  const env = {};
+  const args = [];
+  switch (binding.baseUrl?.via) {
+    case 'env': env[binding.baseUrl.name] = baseUrl; break;
+    case 'opencodeConfig':
+      env.OPENCODE_CONFIG_CONTENT = opencodeProviderConfig({
+        namespace: opencodeNamespace(serviceConnectionKind(instance)), label: definition.label, baseUrl, builtin: binding.baseUrl.builtin === true,
+      });
+      break;
+    case 'piProvider': args.push(binding.baseUrl.flag, definition.piProvider); break;
+    default: break;
+  }
+  // A binding that writes an endpoint also records it on the record: as
+  // `endpoint` for a program that reads that field, and beside an env var,
+  // inline config or provider name as every shipped wrapper sample does — the
+  // readiness probe and the catalog refresh read it off the record. A binding
+  // that writes none (the program signs in itself) records none.
+  // `endpoint` is the OpenAI-compatible URL everywhere it is read (catalog
+  // probes, the local-runtime classifier), so an Anthropic-only service records
+  // none.
+  const endpoint = !binding.baseUrl ? null
+    : binding.baseUrl.via === 'field' ? baseUrl : instance.transports.openai?.baseUrl ?? null;
+  return { env, args, endpoint };
+}
+
+/**
+ * How a binding hands the program its key: `via` (`field` / `env` /
+ * `gatewayEnv`), the env var it lands under, and whether the program refuses
+ * to start without one. A bootstrap-credentialed instance is never "required"
+ * (its key is minted at spawn), nor is a plan the binding starts keyless on.
+ */
+function resolveRouteCredential(binding, instance, definition) {
+  const credential = binding.credential || null;
+  // A `gatewayEnv` credential lands under the gateway's own variable (what the
+  // spawner exports for OpenCode); on a service that is not a gateway it lands
+  // on the record's `apiKey`, which the inline-config builder attaches at spawn.
+  const via = credential?.via === 'gatewayEnv' && !definition.gateway ? 'field' : credential?.via;
+  const envName = via === 'gatewayEnv'
+    ? definition.gateway.apiKeyEnv
+    : via === 'env' ? credential.name ?? definition.credential.envVars[0] ?? null : null;
+  const required = credential?.required === true && instance.credentialVia !== 'bootstrap'
+    && !credential.optionalOnPlans?.includes(instance.plan);
+  return { via, envName, required };
+}
+
+/**
  * {@link materializeRoute} as a VERDICT: `{ record }` when the composition is
  * runnable, `{ error }` (the same typed 400) when it is not. The composite
  * resolver (#7564) reads refusals as reasons to show beside a saved selection,
@@ -432,59 +488,24 @@ export function materializeRouteOutcome({
   }
 
   const recipe = harness.recipe;
-  const envVars = {};
-  const secretEnvVars = [];
-  const fields = {};
-  const args = [...(recipe?.modes?.[method]?.args || [])];
   const apiKey = typeof instance.credentials.apiKey === 'string' ? instance.credentials.apiKey : '';
-
-  // --- endpoint --------------------------------------------------------------
-  const protocol = binding.protocol || null;
-  const baseUrl = protocol ? instance.transports[protocol]?.baseUrl ?? null : null;
-  if (protocol && !baseUrl) {
-    return refuse('SERVICE_ENDPOINT_REQUIRED', `${definition.label} declares no ${protocol} endpoint; set its base URL first.`);
-  }
-  switch (binding.baseUrl?.via) {
-    case 'env': envVars[binding.baseUrl.name] = baseUrl; break;
-    case 'opencodeConfig':
-      envVars.OPENCODE_CONFIG_CONTENT = opencodeProviderConfig({
-        namespace: opencodeNamespace(serviceConnectionKind(instance)), label: definition.label, baseUrl, builtin: binding.baseUrl.builtin === true,
-      });
-      break;
-    case 'piProvider': args.push(binding.baseUrl.flag, definition.piProvider); break;
-    default: break;
-  }
-  // A binding that writes an endpoint also records it on the record: as
-  // `endpoint` for a program that reads that field, and beside an env var,
-  // inline config or provider name as every shipped wrapper sample does — the
-  // readiness probe and the catalog refresh read it off the record. A binding
-  // that writes none (the program signs in itself) records none.
-  // `endpoint` is the OpenAI-compatible URL everywhere it is read (catalog
-  // probes, the local-runtime classifier), so an Anthropic-only service records
-  // none.
-  const endpoint = !binding.baseUrl ? null
-    : binding.baseUrl.via === 'field' ? baseUrl : instance.transports.openai?.baseUrl ?? null;
-  if (endpoint) fields.endpoint = endpoint;
-
-  // --- credential ------------------------------------------------------------
-  const credential = binding.credential || null;
-  // A `gatewayEnv` credential lands under the gateway's own variable (what the
-  // spawner exports for OpenCode); on a service that is not a gateway it lands
-  // on the record's `apiKey`, which the inline-config builder attaches at spawn.
-  const credentialVia = credential?.via === 'gatewayEnv' && !definition.gateway ? 'field' : credential?.via;
-  const credentialEnvName = credentialVia === 'gatewayEnv'
-    ? definition.gateway.apiKeyEnv
-    : credentialVia === 'env' ? credential.name ?? definition.credential.envVars[0] ?? null : null;
-  const credentialRequired = credential?.required === true && instance.credentialVia !== 'bootstrap'
-    && !credential.optionalOnPlans?.includes(instance.plan);
-  if (credentialRequired && apiKey === '') {
+  const endpoint = resolveRouteEndpoint(binding, instance, definition);
+  if (endpoint.error) return refuse(endpoint.error.code, endpoint.error.message);
+  const credential = resolveRouteCredential(binding, instance, definition);
+  if (credential.required && apiKey === '') {
     return refuse('SERVICE_CREDENTIAL_REQUIRED',
-      `${harness.label} will not start without a ${credentialEnvName || 'key'} for ${definition.label}. Set one first — any non-empty value works for a local daemon that ignores it.`);
+      `${harness.label} will not start without a ${credential.envName || 'key'} for ${definition.label}. Set one first — any non-empty value works for a local daemon that ignores it.`);
   }
-  if (credentialVia === 'field') fields.apiKey = apiKey;
-  if (credentialEnvName && (apiKey !== '' || credentialRequired)) {
-    envVars[credentialEnvName] = apiKey;
-    secretEnvVars.push(credentialEnvName);
+
+  const envVars = { ...endpoint.env };
+  const secretEnvVars = [];
+  const fields = endpoint.endpoint ? { endpoint: endpoint.endpoint } : {};
+  const args = [...(recipe?.modes?.[method]?.args || []), ...endpoint.args];
+  if (credential.via === 'field') fields.apiKey = apiKey;
+  // A required key is already refused above when empty, so a set key is the only export case.
+  if (credential.envName && apiKey !== '') {
+    envVars[credential.envName] = apiKey;
+    secretEnvVars.push(credential.envName);
   }
   Object.assign(envVars, binding.env || {});
 
