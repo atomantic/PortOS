@@ -64,15 +64,32 @@ describe('queueNotificationResolveTask', () => {
     expect(addTask).toHaveBeenCalledTimes(1);
   });
 
-  it('gives a CI failure its own steps, limited to runs the operator triggered, and reports a duplicate run', async () => {
+  it('bounds a CI failure to the run the notification is about, using the forge update time, and limits it to runs the operator triggered', async () => {
     vi.mocked(addTask).mockResolvedValue({ id: 'task-9', duplicate: true });
-    const ciRow = { ...row, reason: 'ci_activity', subject_type: 'CheckSuite', subject_api_url: null, trust: 'unknown' };
+    const ciRow = { ...row, reason: 'ci_activity', subject_type: 'CheckSuite', subject_api_url: null, trust: 'unknown', gh_updated_at: '2026-10-30T12:00:00Z' };
     expect(await queueNotificationResolveTask({ account, row: ciRow })).toEqual({ duplicate: true, taskId: 'task-9' });
+    const { description } = vi.mocked(addTask).mock.calls[0][0];
     // An outside fork PR's failed run carries logs its author wrote; it must not be listable.
-    expect(vi.mocked(addTask).mock.calls[0][0].description).toContain('gh run list --repo acme/app --user octocat --status failure');
+    expect(description).toContain('gh run list --repo acme/app --user octocat --status failure --limit 10 --json databaseId,updatedAt,headBranch,conclusion');
+    expect(description).toContain('The notification was last updated at 2026-10-30T12:00:00.000Z.');
+    expect(description).toContain('no later than 2026-10-30T12:00:00.000Z and no earlier than three hours before it');
+    expect(description).toContain('report that no run matches this notification, and stop');
+    expect(description).not.toContain(INJECTED_TITLE);
     await queueNotificationResolveTask({ account: { ...account, login: 'bad login' }, row: ciRow });
     expect(vi.mocked(addTask).mock.calls[1][0].description)
       .toContain('gh run list --repo acme/app --user "$(gh api --hostname github.com user --jq .login)" --status failure');
+  });
+
+  it('stops a CI failure without a usable update time instead of choosing among the failed runs', async () => {
+    const ciRow = { ...row, reason: 'ci_activity', subject_type: 'CheckSuite', subject_api_url: null, trust: 'unknown' };
+    for (const gh_updated_at of [undefined, null, 'not a date']) {
+      await queueNotificationResolveTask({ account, row: { ...ciRow, gh_updated_at } });
+      const { description } = vi.mocked(addTask).mock.lastCall[0];
+      expect(description).toContain('No run can be tied to this notification');
+      expect(description).toContain('Report that no run can be identified for this notification, and stop.');
+      expect(description).not.toContain('gh run list');
+      expect(description).not.toContain(INJECTED_TITLE);
+    }
   });
 
   it('retains the selected account identity for a security-fix launch', async () => {
