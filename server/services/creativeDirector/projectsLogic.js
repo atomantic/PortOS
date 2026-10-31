@@ -384,14 +384,32 @@ export function mergeProjectRecord(local, remoteRaw) {
 // A peer-won record's status, directive, plan and runs are the sender's
 // execution state, and the planner it resumes is a writable CoS agent. Both
 // replica markers are machine-local (syncWire strips them), so boot recovery
-// leaves the record alone until a local status change (applyProjectPatch).
-// Adoption is deliberately not a write in the advance loops: a status re-write
-// there can undo a concurrent pause, and its newer updatedAt would mark the
-// sender's live copy as a replica.
+// leaves the record alone until a local status change (applyProjectPatch) or
+// an operator Start takes it over. Adoption is deliberately not a write in the
+// advance loops: a status re-write there can undo a concurrent pause, and its
+// newer updatedAt would mark the sender's live copy as a replica.
 function asPeerReplica(remote) {
   return remote.workspace === 'video'
     ? { ...remote, videoReplica: true, videoExecution: null }
     : { ...remote, peerReplica: true };
+}
+
+// The sender's in-flight steps, scenes and runs have no process on this machine.
+// Release them the way boot recovery would, so the advance loop can dispatch
+// instead of waiting on the sender's work.
+function releasePeerRunState(project) {
+  const released = {};
+  if (Array.isArray(project.plan?.steps)) {
+    released.plan = { ...project.plan, steps: project.plan.steps.map((s) => (s.status === 'running' ? { ...s, status: 'pending' } : s)) };
+  }
+  if (Array.isArray(project.treatment?.scenes)) {
+    released.treatment = { ...project.treatment, scenes: project.treatment.scenes.map((s) => (s.status === 'rendering' || s.status === 'evaluating' ? { ...s, status: 'pending' } : s)) };
+  }
+  if (Array.isArray(project.runs)) {
+    const completedAt = new Date().toISOString();
+    released.runs = project.runs.map((r) => (r.status === 'running' ? { ...r, status: 'failed', completedAt, failureReason: 'Taken over from another machine' } : r));
+  }
+  return released;
 }
 
 /** Merge a project metadata patch, validating status. Returns the next record. */
@@ -408,7 +426,10 @@ export function applyProjectPatch(project, patch) {
   const next = { ...project, ...patch, updatedAt: new Date().toISOString() };
   // A local status change (start, resume, pause, a step this machine ran) takes
   // over the run state that `peerReplica` held back from boot recovery.
-  if ('status' in patch) delete next.peerReplica;
+  if ('status' in patch && project.peerReplica) {
+    delete next.peerReplica;
+    Object.assign(next, releasePeerRunState(next));
+  }
   if ('videoDraft' in patch) next.videoDraft = creativeDirectorVideoDraftSchema.parse(patch.videoDraft);
   if (next.workspace === 'video' && next.videoDraft && ('videoDraft' in patch || 'targetDurationSeconds' in patch)) {
     const { min, max } = next.videoDraft.durationRange;

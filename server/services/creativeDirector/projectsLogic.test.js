@@ -474,10 +474,24 @@ describe('mergeProjectRecord (LWW, tombstone-aware)', () => {
     expect(mergeProjectRecord(at('2026-06-23T00:00:00.000Z'), pushed).next.peerReplica).toBe(true);
     expect(mergeProjectRecord(at('2026-06-23T02:00:00.000Z'), pushed).next).not.toHaveProperty('peerReplica');
   });
-  it('a local status change adopts the replica run state; other edits keep holding it', () => {
-    const replica = at('2026-06-23T00:00:00.000Z', { status: 'planning', peerReplica: true });
+  it('a local status change takes over a replica and releases the sender\'s in-flight work', () => {
+    const inFlight = {
+      status: 'rendering',
+      plan: { steps: [{ stepId: 'a', status: 'running' }, { stepId: 'b', status: 'done' }] },
+      treatment: { scenes: [{ sceneId: 's1', status: 'rendering' }, { sceneId: 's2', status: 'accepted' }] },
+      runs: [{ runId: 'r1', status: 'running' }, { runId: 'r2', status: 'completed' }],
+    };
+    const replica = at('2026-06-23T00:00:00.000Z', { ...inFlight, peerReplica: true });
     expect(applyProjectPatch(replica, { name: 'Renamed' }).peerReplica).toBe(true);
-    expect(applyProjectPatch(replica, { status: 'planning' })).not.toHaveProperty('peerReplica');
+    const taken = applyProjectPatch(replica, { status: 'rendering' });
+    expect(taken).not.toHaveProperty('peerReplica');
+    expect(taken.plan.steps.map((s) => s.status)).toEqual(['pending', 'done']);
+    expect(taken.treatment.scenes.map((s) => s.status)).toEqual(['pending', 'accepted']);
+    expect(taken.runs.map((r) => r.status)).toEqual(['failed', 'completed']);
+    // This machine's own run keeps its live markers through ordinary status writes.
+    const own = applyProjectPatch(at('2026-06-23T00:00:00.000Z', inFlight), { status: 'rendering' });
+    expect(own.plan.steps[0].status).toBe('running');
+    expect(own.runs[0].status).toBe('running');
   });
 });
 
