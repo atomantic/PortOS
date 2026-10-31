@@ -13,6 +13,7 @@ import {
   getAuditScheduleMetadata,
   FILE_ISSUES_MODE_CONTRACT,
   DO_WORK_MODE_CONTRACT,
+  OUT_OF_SCOPE_FINDINGS_RULE,
   isAuditTaskType,
   defaultFileIssuesFor,
   auditDoWorkRequiresWorktree,
@@ -228,7 +229,7 @@ describe('mode contracts + wrapper', () => {
     expect(FILE_ISSUES_MODE_CONTRACT).toContain('do not idle to fill time or exceed the run budget');
     expect(FILE_ISSUES_MODE_CONTRACT).toContain('any unreviewed inventory');
     expect(FILE_ISSUES_MODE_CONTRACT).toContain('Zero or one issue is valid when the reviewed evidence supports it');
-    expect(modeContractFor(true)).toBe(FILE_ISSUES_MODE_CONTRACT);
+    expect(modeContractFor(true)).toBe(`${FILE_ISSUES_MODE_CONTRACT}\n\n${OUT_OF_SCOPE_FINDINGS_RULE}`);
   });
 
   it('do-work contract requires fixes or tracked dispositions and rejects theoretical findings on ephemeral state', () => {
@@ -238,7 +239,7 @@ describe('mode contracts + wrapper', () => {
     expect(DO_WORK_MODE_CONTRACT).toContain('Theoretical multi-writer, crash-recovery, or state-preservation findings on ephemeral/regenerable state (git worktrees, caches, agent runs, in-memory locks) are NOT accepted findings');
     expect(DO_WORK_MODE_CONTRACT).toContain('rejected as `not-applicable`');
     expect(DO_WORK_MODE_CONTRACT).not.toContain('Do not create tracker issues');
-    expect(modeContractFor(false)).toBe(DO_WORK_MODE_CONTRACT);
+    expect(modeContractFor(false)).toBe(`${DO_WORK_MODE_CONTRACT}\n\n${OUT_OF_SCOPE_FINDINGS_RULE}`);
   });
 
   it('prepends the banner when the stored prompt has no placeholder', () => {
@@ -484,6 +485,17 @@ describe('banner-owned rules are not restated by mission bodies (#12080)', () =>
     expect(count('`AGENTS.md`')).toBe(1);
     expect(count('Every accepted finding requires resolution')).toBe(fileIssues ? 0 : 1);
     expect(count('cheap repository-wide signal scan')).toBe(1);
+  });
+});
+
+// Out-of-lane findings used to end as summary notes; both banners carry this
+// rule (see the banner equality tests), and each owner must keep its metric
+// label, which is what lane health attributes on.
+describe('out-of-scope findings', () => {
+  it('names every owning lane with its full label set', () => {
+    for (const [type, { filing }] of Object.entries(AUDIT_DEFINITIONS)) {
+      expect(OUT_OF_SCOPE_FINDINGS_RULE).toContain(`${type}=${[filing.issueLabel, ...filing.extraLabels].join('+')}`);
+    }
   });
 });
 
