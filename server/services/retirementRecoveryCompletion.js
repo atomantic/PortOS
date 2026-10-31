@@ -3,8 +3,7 @@ import { resolve } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { matchingRetirementReceipts } from '../lib/reconcileRetirementEvidence.js';
 import { retirementCheckoutIdentityFromPointer } from '../lib/retirementCheckoutObservation.js';
-import { isTruthyMeta } from '../lib/metadataFlags.js';
-import { PR_COMPLETIONS, prStaysOpen } from '../lib/prDisposition.js';
+import { PR_COMPLETIONS, prHeldForOperator, prStaysOpen } from '../lib/prDisposition.js';
 
 // A delivery-repair recovery still owns its PR/review/commit gates.
 const hasRetirementTarget = task => task?.taskType === 'internal'
@@ -37,7 +36,7 @@ async function verifyCurrentRetirement(input) {
     if (!appId || !release?.branch || !release.path || !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(release.head || '')
       || !/^[a-f0-9]{64}$/.test(release.checkoutIdentity || '') || !Number.isFinite(Date.parse(createdAt))
       || Date.parse(createdAt) > Date.now()) return unverified('retirement-target-unverified', target);
-    if (prStaysOpen(task) || isTruthyMeta(task.metadata.readOnly)) return unverified('retirement-human-handoff', target);
+    if (prHeldForOperator(task)) return unverified('retirement-human-handoff', target);
     const { getAgentRecord } = await import('./cosAgentLifecycle.js');
     const origin = task.metadata.recoveryOrigin;
     const parent = await getAgentRecord(origin.parentAgentId);

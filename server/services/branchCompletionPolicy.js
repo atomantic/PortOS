@@ -8,7 +8,7 @@ import { isAbsolute, join, resolve } from 'node:path';
 import { PATHS } from '../lib/fileUtils.js';
 import { isPlainObject } from '../lib/objects.js';
 import { isTruthyMeta } from '../lib/metadataFlags.js';
-import { PR_COMPLETIONS, explicitPrCompletion } from '../lib/prDisposition.js';
+import { PR_COMPLETIONS, explicitPrCompletion, prHeldForOperator } from '../lib/prDisposition.js';
 import { parsePullRequestUrl } from '../lib/gitForge.js';
 import { checkoutSeedSchema, completedCheckoutReceiptValid, sameTaskRetirementBinding } from './completedCheckoutEvidence.js';
 import { isDeepStrictEqual } from 'node:util';
@@ -155,7 +155,7 @@ export function reviewedDeliveryHandoffValid(input, agents, handoff, agentId) {
     || review[0] !== agentId || source.at(-1) !== meta?.sourceAgentId
     || task?.status !== 'completed' || !isTruthyMeta(meta?.reviewLoopFollowUp)
     || meta.reviewLoopPRUrl !== input.prUrl || meta.reviewLoopPRBranch !== input.branch
-    || isTruthyMeta(meta.reviewLoopLeaveOpen)
+    || prHeldForOperator(task)
     || !meta.sourceTaskId || task.id === meta.sourceTaskId) return false;
   const byId = new Map(agents.map(agent => [agent?.id, agent]));
   const ids = [...review, ...source];

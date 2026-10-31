@@ -83,7 +83,7 @@ describe('moved same-generation completed-owner retirement policy (real Git)', (
 
 describe('persisted interleaved review-task handoff (real Git)', () => {
   it.each(['delivered-review-chain', 'wrong-target', 'wrong-source', 'wrong-instance', 'active-reviewer',
-    'undelivered-review-head', 'missing-task', 'unrelated-review-task'])('retains exact handoff guards: %s', async mode => {
+    'undelivered-review-head', 'missing-task', 'unrelated-review-task', 'held-review-task'])('retains exact handoff guards: %s', async mode => {
     const { agents, input, owner, successor } = fixture();
     const reviewers = [0, 1, 2].map(index => {
       const agent = structuredClone(owner);
@@ -107,6 +107,7 @@ describe('persisted interleaved review-task handoff (real Git)', () => {
     if (mode === 'active-reviewer') reviewers[1].status = 'running';
     if (mode === 'undelivered-review-head') reviewers[0].metadata.completedCheckouts[0].head = unrelated;
     if (mode === 'unrelated-review-task') task.metadata.sourceTaskId = 'unrelated-task';
+    if (mode === 'held-review-task') task.metadata.readOnly = 'true';
     const original = structuredClone(agents);
     const deliveryContinuations = await readCheckoutDeliveryContinuations(input, agents,
       { getTaskById: async id => mode !== 'missing-task' && id === task.id ? task : null });

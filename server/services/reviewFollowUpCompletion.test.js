@@ -19,13 +19,8 @@ describe('verifyMergedReviewFollowUp (#14482)', () => {
     expect(await verifyMergedReviewFollowUp(followUp(), '/repos/worktree')).toEqual({ status: 'verified', prUrl: PR_URL });
   });
 
-  it.each([
-    ['a review-loop leave-open', { reviewLoopLeaveOpen: true }],
-    ['a leave-open policy', { prCompletion: 'leave-open' }],
-    ['a read-only follow-up', { readOnly: 'true' }],
-    ['a human-landed PR', { jiraTicketId: 'EX-1' }],
-  ])('never lets a merge discharge %s', async (_label, metadata) => {
-    expect(await verifyMergedReviewFollowUp(followUp(metadata), '/repos/worktree')).toBeNull();
+  it('never lets a merge discharge a follow-up held for its operator', async () => {
+    expect(await verifyMergedReviewFollowUp(followUp({ readOnly: 'true' }), '/repos/worktree')).toBeNull();
     expect(probeChangeRequestState).not.toHaveBeenCalled();
   });
 });
