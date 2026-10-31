@@ -3,13 +3,20 @@ import ShotDiagram from './ShotDiagram';
 
 /**
  * One panel shot choice (framing, angle, facing, composition) as tappable concept diagrams, so each
- * option shows what it looks like. Tapping the picked tile again clears it.
+ * option shows what it looks like. Tapping the picked tile again clears it. The heading carries the
+ * picked option's hint on the same line, and tiles fill the width at a fixed size from `sm` up, so a
+ * wide side panel shows more of them per row instead of bigger ones.
  */
-export default function ShotDiagramPicker({ options, labels, hints, value, onChange, labelId }) {
+export default function ShotDiagramPicker({ label, options, labels, hints, value, onChange, labelId }) {
   const current = value || null;
+  const hint = current ? hints[current] || labels[current] || current : 'Not set';
   return (
     <div>
-      <div role="group" aria-labelledby={labelId} className="grid grid-cols-4 sm:grid-cols-6 gap-1">
+      <div className="mb-0.5 flex flex-wrap items-baseline gap-x-2 text-[11px] sm:flex-nowrap">
+        <span id={labelId} className="shrink-0 text-gray-500">{label}</span>
+        <span className={`min-w-0 sm:truncate ${current ? 'text-gray-300' : 'text-gray-500'}`} title={hint}>{hint}</span>
+      </div>
+      <div role="group" aria-labelledby={labelId} className="grid grid-cols-4 sm:grid-cols-[repeat(auto-fill,minmax(4rem,1fr))] gap-1">
         {options.map((type) => {
           const checked = current === type;
           return (
@@ -24,16 +31,13 @@ export default function ShotDiagramPicker({ options, labels, hints, value, onCha
               </span>
               <span className={`mt-0.5 block px-0.5 text-[10px] leading-tight ${checked ? 'font-semibold' : ''}`}>{labels[type] || type}</span>
               {checked && (
-                <Check size={14} strokeWidth={3} aria-hidden="true"
-                  className="absolute right-1 top-1 rounded-full bg-port-accent p-0.5 text-white" />
+                <Check size={12} strokeWidth={3} aria-hidden="true"
+                  className="absolute right-0.5 top-0.5 rounded-full bg-port-accent p-0.5 text-white" />
               )}
             </button>
           );
         })}
       </div>
-      <p className="mt-1 text-xs text-gray-400">
-        {current ? hints[current] || labels[current] || current : 'Not set. Tap one to pick it, tap it again to clear.'}
-      </p>
     </div>
   );
 }
