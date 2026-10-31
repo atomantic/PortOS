@@ -7,7 +7,7 @@
  * where the issue stands and the one next action.
  */
 
-import { useEffect, useRef, useState, useMemo } from 'react';
+import { useCallback, useEffect, useRef, useState, useMemo } from 'react';
 import { Link, useParams, useNavigate, useSearchParams } from 'react-router';
 import {
   ArrowLeft, Sparkles, Loader2, Lightbulb, BookOpen, FileText, Film as FilmIcon,
@@ -120,6 +120,11 @@ export default function PipelineIssue() {
   const [arcRoleSaving, setArcRoleSaving] = useState(false);
   const [genConfigSaving, setGenConfigSaving] = useState(false);
   const { latest, frames } = usePipelineProgress(pipelineAutoRunSseUrl, [issueId], { enabled: autoRunActive });
+  // The page stays mounted across an issue switch, so a PATCH answered after
+  // the route moved on must not paint the previous issue under the new URL.
+  const applyIssueUpdate = useCallback((updated) => {
+    if (updated && updated.id === issueIdRef.current) setIssue(updated);
+  }, []);
 
   useEffect(() => {
     let canceled = false;
@@ -194,7 +199,7 @@ export default function PipelineIssue() {
   const handleLengthChange = async (patch) => {
     setLengthProfileSaving(true);
     updatePipelineIssue(issueId, patch, { silent: true })
-      .then((updated) => { if (updated) setIssue(updated); })
+      .then(applyIssueUpdate)
       .catch((err) => { toast.error(err.message || 'Save failed'); })
       .finally(() => setLengthProfileSaving(false));
   };
@@ -202,7 +207,7 @@ export default function PipelineIssue() {
   const handleArcRoleChange = async (arcRole) => {
     setArcRoleSaving(true);
     updatePipelineIssue(issueId, { arcRole }, { silent: true })
-      .then((updated) => { if (updated) setIssue(updated); })
+      .then(applyIssueUpdate)
       .catch((err) => { toast.error(err.message || 'Save failed'); })
       .finally(() => setArcRoleSaving(false));
   };
@@ -218,7 +223,7 @@ export default function PipelineIssue() {
       toast.error(err.message || 'Save failed');
       return null;
     }).finally(() => setGenConfigSaving(false));
-    if (updated) setIssue(updated);
+    applyIssueUpdate(updated);
   };
 
   const activeLockStageIds = useMemo(() => lockStageIdsForTab(stageId), [stageId]);
@@ -236,7 +241,7 @@ export default function PipelineIssue() {
       const stages = Object.fromEntries(activeLockStageIds.map((id) => [id, { locked: next }]));
       return updatePipelineIssue(issueId, { stages }, { silent: true });
     },
-    onSuccess: (updated) => setIssue(updated),
+    onSuccess: applyIssueUpdate,
     lockedMessage: `${PIPELINE_STAGE_LABELS[stageId]} locked — regeneration is now blocked`,
     unlockedMessage: `${PIPELINE_STAGE_LABELS[stageId]} unlocked`,
     errorMessage: `${PIPELINE_STAGE_LABELS[stageId]} lock update failed`,
@@ -246,12 +251,14 @@ export default function PipelineIssue() {
     toggleStageLock(activeStageLocked);
   };
 
-  const handleStageUpdate = (id, updatedStage, updatedIssue) => {
+  // `forIssueId` is bound at render, so a stage-only result from a run that
+  // started on another issue is not merged into this one.
+  const handleStageUpdate = (forIssueId, id, updatedStage, updatedIssue) => {
     if (updatedIssue) {
-      setIssue(updatedIssue);
+      applyIssueUpdate(updatedIssue);
       return;
     }
-    setIssue((prev) => prev ? ({
+    setIssue((prev) => prev && prev.id === forIssueId ? ({
       ...prev,
       stages: { ...prev.stages, [id]: updatedStage },
     }) : prev);
@@ -474,7 +481,7 @@ export default function PipelineIssue() {
           <StageComponent
             issue={issue}
             series={series}
-            onStageUpdate={handleStageUpdate}
+            onStageUpdate={(id, updatedStage, updatedIssue) => handleStageUpdate(issue.id, id, updatedStage, updatedIssue)}
             onSeriesUpdate={setSeries}
             actionsGated={arcRoleSaving || lengthProfileSaving || genConfigSaving}
           />
