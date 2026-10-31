@@ -993,6 +993,98 @@ for (const event of TERMINAL_JOB_EVENTS) {
   });
 }
 
+function recordedVideoIssue(capability, settings) {
+  if (!VIDEO_GEN_MODES.includes(capability.backend)) {
+    return `Recorded visual conditioning names unsupported video backend "${capability.backend || 'unknown'}".`;
+  }
+  return capability.backend === VIDEO_GEN_MODE.GROK && settings.imageGen?.grok?.enabled !== true
+    ? 'Recorded visual conditioning requires Grok video, which is disabled in Settings → Image Gen.'
+    : null;
+}
+
+function recordedImageIssue(capability, settings) {
+  if (!QUEUEABLE_IMAGE_MODES.includes(capability.backend)) {
+    return `Recorded visual conditioning names unsupported image backend "${capability.backend || 'unknown'}".`;
+  }
+  if (capability.backend === IMAGE_GEN_MODE.LOCAL) return null;
+  const provider = resolveRenderTargetConfig(settings, RENDER_TARGET.FABLELOOM_PRODUCTION, {
+    mode: capability.backend,
+  }).cloud;
+  return provider && !provider.enabled ? provider.disabledError.message : null;
+}
+
+/** The message when this machine cannot run the backend a manifest recorded, else null. */
+function recordedEnvironmentIssue(capability, settings) {
+  return capability.kind === 'video'
+    ? recordedVideoIssue(capability, settings)
+    : recordedImageIssue(capability, settings);
+}
+
+/** Audit every node's recorded conditioning for exact-input reproduction; returns plan.exactInputIssues entries. */
+async function collectExactInputIssues(episode, settings) {
+  const issues = [];
+  const addError = (nodeId, error) => issues.push({ nodeId, errors: [error], warnings: [] });
+  const seenEnvironmentIssues = new Set();
+  for (const node of episode.nodes || []) {
+    const manifests = [
+      node.visualConditioning,
+      ...Object.values(node.playbackAssets?.visualConditioningByAsset || {}),
+    ].filter((manifest) => manifest && typeof manifest === 'object');
+    for (const manifest of manifests) {
+      const unverifiable = unverifiableCanonMessage(manifest);
+      if (unverifiable) addError(node.id, unverifiable);
+      if (typeof manifest.authoredPrompt === 'string') {
+        if (typeof manifest.authoredNegativePrompt !== 'string') {
+          addError(node.id, 'Recorded authored negative prompt is unavailable.');
+        }
+        const restored = await restoreRequestInputs(manifest);
+        if (restored.error) addError(node.id, restored.error);
+        if (manifest.capability?.backend === IMAGE_GEN_MODE.LOCAL && typeof manifest.renderedPrompt !== 'string') {
+          addError(node.id, 'Recorded local image has no executed prompt to verify.');
+        }
+      }
+      const capability = manifest.capability || {};
+      const issue = recordedEnvironmentIssue(capability, settings);
+      const key = `${node.id}:${capability.kind || 'media'}:${capability.backend || 'unknown'}:${capability.modelId || 'unknown'}:${issue}`;
+      if (issue && !seenEnvironmentIssues.has(key)) {
+        seenEnvironmentIssues.add(key);
+        addError(node.id, issue);
+      }
+    }
+  }
+  return issues;
+}
+
+/** Planning issues for the requested render backends/models this machine cannot run. */
+function renderEnvironmentIssues(render, settings) {
+  const issues = [];
+  if (render.imageMode && render.imageMode !== IMAGE_GEN_MODE.LOCAL) {
+    const imageProvider = resolveRenderTargetConfig(settings, RENDER_TARGET.FABLELOOM_PRODUCTION, {
+      mode: render.imageMode,
+    }).cloud;
+    if (imageProvider && !imageProvider.enabled) {
+      issues.push(`${render.imageMode} image generation is disabled in Settings → Image Gen.`);
+    }
+  }
+  if (render.imageMode === IMAGE_GEN_MODE.LOCAL || render.imageModel) {
+    const imageModelId = render.imageModel || selectLocalImageModelFromSettings(settings)?.id;
+    if (imageModelId && !getImageModels().some((model) => model.id === imageModelId)) {
+      issues.push(`Image model "${imageModelId}" is not available on this machine.`);
+    }
+  }
+  if (render.videoMode === VIDEO_GEN_MODE.GROK
+    && settings.imageGen?.grok?.enabled !== true) {
+    issues.push('Grok video is disabled in Settings → Image Gen.');
+  }
+  if (render.videoMode === VIDEO_GEN_MODE.LOCAL || render.videoModel) {
+    const videoModelId = render.videoModel || settings.videoGen?.defaultModelId;
+    if (videoModelId && !listVideoModels().some((model) => model.id === videoModelId)) {
+      issues.push(`Video model "${videoModelId}" is not available on this machine.`);
+    }
+  }
+  return issues;
+}
+
 /** Plan production assets and topological execution for an episode. */
 export async function planEpisodeProduction(loomId, episodeId, options = {}) {
   const { mode = FABLELOOM_PRODUCTION_MODE_DEFAULT } = options;
@@ -1034,75 +1126,8 @@ export async function planEpisodeProduction(loomId, episodeId, options = {}) {
     plan.planningIssues.push(`Story arc: ${issue.message}`);
   }
   const settings = await getSettings();
-  if (plan.mode === 'exact_inputs') {
-    const exactEnvironmentIssues = new Set();
-    for (const node of episode.nodes || []) {
-      const manifests = [
-        node.visualConditioning,
-        ...Object.values(node.playbackAssets?.visualConditioningByAsset || {}),
-      ].filter((manifest) => manifest && typeof manifest === 'object');
-      for (const manifest of manifests) {
-        const unverifiable = unverifiableCanonMessage(manifest);
-        if (unverifiable) plan.exactInputIssues.push({ nodeId: node.id, errors: [unverifiable], warnings: [] });
-        if (typeof manifest.authoredPrompt === 'string') {
-          if (typeof manifest.authoredNegativePrompt !== 'string') {
-            plan.exactInputIssues.push({ nodeId: node.id, errors: ['Recorded authored negative prompt is unavailable.'], warnings: [] });
-          }
-          const restored = await restoreRequestInputs(manifest);
-          if (restored.error) plan.exactInputIssues.push({ nodeId: node.id, errors: [restored.error], warnings: [] });
-          if (manifest.capability?.backend === IMAGE_GEN_MODE.LOCAL && typeof manifest.renderedPrompt !== 'string') {
-            plan.exactInputIssues.push({ nodeId: node.id, errors: ['Recorded local image has no executed prompt to verify.'], warnings: [] });
-          }
-        }
-        const capability = manifest.capability || {};
-        const key = `${node.id}:${capability.kind || 'media'}:${capability.backend || 'unknown'}:${capability.modelId || 'unknown'}`;
-        let issue = null;
-        if (capability.kind === 'video') {
-          if (!VIDEO_GEN_MODES.includes(capability.backend)) {
-            issue = `Recorded visual conditioning names unsupported video backend "${capability.backend || 'unknown'}".`;
-          } else if (capability.backend === VIDEO_GEN_MODE.GROK
-            && settings.imageGen?.grok?.enabled !== true) {
-            issue = 'Recorded visual conditioning requires Grok video, which is disabled in Settings → Image Gen.';
-          }
-        } else if (!QUEUEABLE_IMAGE_MODES.includes(capability.backend)) {
-          issue = `Recorded visual conditioning names unsupported image backend "${capability.backend || 'unknown'}".`;
-        } else if (capability.backend !== IMAGE_GEN_MODE.LOCAL) {
-          const provider = resolveRenderTargetConfig(settings, RENDER_TARGET.FABLELOOM_PRODUCTION, {
-            mode: capability.backend,
-          }).cloud;
-          if (provider && !provider.enabled) issue = provider.disabledError.message;
-        }
-        if (issue && !exactEnvironmentIssues.has(`${key}:${issue}`)) {
-          exactEnvironmentIssues.add(`${key}:${issue}`);
-          plan.exactInputIssues.push({ nodeId: node.id, errors: [issue], warnings: [] });
-        }
-      }
-    }
-  }
-  if (render.imageMode && render.imageMode !== IMAGE_GEN_MODE.LOCAL) {
-    const imageProvider = resolveRenderTargetConfig(settings, RENDER_TARGET.FABLELOOM_PRODUCTION, {
-      mode: render.imageMode,
-    }).cloud;
-    if (imageProvider && !imageProvider.enabled) {
-      plan.planningIssues.push(`${render.imageMode} image generation is disabled in Settings → Image Gen.`);
-    }
-  }
-  if (render.imageMode === IMAGE_GEN_MODE.LOCAL || render.imageModel) {
-    const imageModelId = render.imageModel || selectLocalImageModelFromSettings(settings)?.id;
-    if (imageModelId && !getImageModels().some((model) => model.id === imageModelId)) {
-      plan.planningIssues.push(`Image model "${imageModelId}" is not available on this machine.`);
-    }
-  }
-  if (render.videoMode === VIDEO_GEN_MODE.GROK
-    && settings.imageGen?.grok?.enabled !== true) {
-    plan.planningIssues.push('Grok video is disabled in Settings → Image Gen.');
-  }
-  if (render.videoMode === VIDEO_GEN_MODE.LOCAL || render.videoModel) {
-    const videoModelId = render.videoModel || settings.videoGen?.defaultModelId;
-    if (videoModelId && !listVideoModels().some((model) => model.id === videoModelId)) {
-      plan.planningIssues.push(`Video model "${videoModelId}" is not available on this machine.`);
-    }
-  }
+  if (plan.mode === 'exact_inputs') plan.exactInputIssues.push(...await collectExactInputIssues(episode, settings));
+  plan.planningIssues.push(...renderEnvironmentIssues(render, settings));
   plan.isFullyReady = plan.blockedAssetsCount === 0
     && plan.exactInputIssues.length === 0
     && plan.planningIssues.length === 0;
