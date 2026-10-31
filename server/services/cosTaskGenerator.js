@@ -63,7 +63,8 @@ import { isRecoveryTask } from './recoveryTasks.js';
 import { getCodeReviewDefaults } from './codeReview.js';
 import { getSkipReason } from './cosTaskClaim.js';
 import { ensureInstanceId } from './instanceIdentity.js';
-import { PR_COMPLETIONS, resolveAppPrCompletion } from '../lib/prDisposition.js';
+import { resolveAppPrCompletion } from '../lib/prDisposition.js';
+import { applyStageExecution } from '../lib/pipelineStageExecution.js';
 import { resolveTrackerFilingBlock } from '../lib/workTracker.js';
 import {
   isAuditTaskType,
@@ -1805,29 +1806,13 @@ function initializePipelineMetadata(metadata) {
   if (stage0.readOnly !== undefined) {
     metadata.readOnly = stage0.readOnly;
   }
-  // Propagate stage 0's provider/model/effort so the first agent uses per-stage config
-  if (stage0.model) metadata.model = stage0.model;
-  if (stage0.providerId) {
-    metadata.provider = stage0.providerId;
-    metadata.providerId = stage0.providerId;
-  }
-  if (stage0.effort) metadata.effort = stage0.effort;
-  if (stage0.executionOptions !== undefined) metadata.executionOptions = stage0.executionOptions;
-  // Save task-level defaults and apply stage 0 overrides in one pass
-  // Read-only stages default flags to false to prevent worktree/PR/simplify on review-only stages
-  metadata.pipeline.taskDefaults = {};
-  const stageReadOnly = stage0.readOnly ?? false;
+  // Snapshot the task-level flags before stage 0's overrides land on them.
+  const taskDefaults = {};
   for (const flag of PIPELINE_STAGE_BEHAVIOR_FLAGS) {
-    if (metadata[flag] !== undefined) metadata.pipeline.taskDefaults[flag] = metadata[flag];
-    // Draft delivery constrains the whole run, including read-only stages whose
-    // audit output could otherwise publish an automatically merged snapshot.
-    if (flag === 'prCompletion' && metadata.pipeline.taskDefaults.prCompletion === PR_COMPLETIONS.DRAFT) continue;
-    if (flag in stage0) {
-      metadata[flag] = stage0[flag];
-    } else if (stageReadOnly) {
-      metadata[flag] = false;
-    }
+    if (metadata[flag] !== undefined) taskDefaults[flag] = metadata[flag];
   }
+  metadata.pipeline.taskDefaults = taskDefaults;
+  applyStageExecution(metadata, stage0, { taskDefaults });
 }
 
 // Apply app-level worktree/PR defaults only when not already set by task-type metadata.

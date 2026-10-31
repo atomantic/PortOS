@@ -22,7 +22,7 @@
 import { MODEL_ABUSE_GUARD_ID, issuePrerequisiteWaived, normalizeEligibilityFacts } from '../lib/modelAbuseGuard.js';
 import { isScreenedPullRequestFingerprint } from '../lib/prReviewContent.js';
 import { PUBLIC_REVIEW_GATE_EXECUTION_PROFILE } from '../lib/agentExecutionProfiles.js';
-import { PIPELINE_STAGE_BEHAVIOR_FLAGS } from '../lib/cosValidation.js';
+import { applyStageExecution } from '../lib/pipelineStageExecution.js';
 import { createPrReviewerDefaultStages } from './taskScheduleRegistry.js';
 import { getCosTasks } from './cosTaskStore.js';
 import { emitLog } from './cosEvents.js';
@@ -99,6 +99,30 @@ function securityScanReports(scan) {
   if (Array.isArray(scan?.reports)) return scan.reports
   if (Array.isArray(scan?.reviewedPrs)) return scan.reviewedPrs
   return []
+}
+
+// The guard identity the stage-0 summary and the securityScan record both carry.
+const scanGuardFacts = (scan) => ({
+  guardId: scan.guardId || MODEL_ABUSE_GUARD_ID,
+  guardModel: scan.guardModel || null,
+  guardRevision: scan.guardRevision || null,
+  code: scan.code || null,
+});
+
+// The strict coverage list the issue-watcher stage must answer for: only safe PRs.
+function issueWatcherPullRequests(safeReports, reviewInputs) {
+  const inputByNumber = new Map(reviewInputs.map((input) => [input.number, input]));
+  return safeReports.map((report) => {
+    const input = inputByNumber.get(report.number);
+    return {
+      number: report.number,
+      headSha: report.headRefOid,
+      authorLogin: input?.authorLogin || null,
+      eligibilityFacts: input?.eligibilityFacts || null,
+      diffTruncated: false,
+      contentFingerprint: report.contentFingerprint,
+    };
+  });
 }
 
 const reportIsSafe = (report) => report?.safe === true
@@ -324,15 +348,19 @@ export async function runPrReviewerSecurityPreflight(taskType, app, metadata, ta
   }
 
   const status = !scan.ok ? 'unavailable' : (scan.passed ? 'passed' : 'findings');
-  const flagged = reports.filter((report) => !reportIsSafe(report)).length;
+  const findingCount = reports.filter((report) => !reportIsSafe(report)).length;
+  const reviewedScanKey = scan.scanKey || scanKey;
+  const repoFullName = scan.repoFullName || target.repoFullName;
+  const defaultBranch = scan.defaultBranch || target.defaultBranch;
+  const reviewInputs = scan.reviewInputs || [];
   await step('security-scan', {
     status: 'done',
-    detail: `Scan ${status} — ${reports.length} screened, ${flagged} flagged`,
+    detail: `Scan ${status} — ${reports.length} screened, ${findingCount} flagged`,
   });
   await step('snapshot');
   const snapshotWritten = await writePublicReviewInputSnapshot({
-    scanKey: scan.scanKey || scanKey,
-    pullRequests: scan.ok ? (scan.reviewInputs || []) : [],
+    scanKey: reviewedScanKey,
+    pullRequests: scan.ok ? reviewInputs : [],
   });
   if (!snapshotWritten) {
     const reason = 'public-review-input-snapshot-failed';
@@ -355,12 +383,9 @@ export async function runPrReviewerSecurityPreflight(taskType, app, metadata, ta
       success: scan.ok,
       completedAt: new Date().toISOString(),
       summary: {
-        guardId: scan.guardId || MODEL_ABUSE_GUARD_ID,
-        guardModel: scan.guardModel || null,
-        guardRevision: scan.guardRevision || null,
-        code: scan.code || null,
+        ...scanGuardFacts(scan),
         reviewedPrCount: reports.length,
-        findingCount: reports.filter((report) => !reportIsSafe(report)).length,
+        findingCount,
         reportStatus: status,
       },
     }],
@@ -370,63 +395,38 @@ export async function runPrReviewerSecurityPreflight(taskType, app, metadata, ta
       usedLargeInputFallback: scan.usedLargeInputFallback === true,
       completed: scan.ok,
       status,
-      code: scan.code || null,
-      guardId: scan.guardId || MODEL_ABUSE_GUARD_ID,
-      guardModel: scan.guardModel || null,
-      guardRevision: scan.guardRevision || null,
+      ...scanGuardFacts(scan),
       layers: scan.layers || null,
-      repoFullName: scan.repoFullName || target.repoFullName,
-      defaultBranch: scan.defaultBranch || target.defaultBranch,
-      scanKey: scan.scanKey || scanKey,
+      repoFullName,
+      defaultBranch,
+      scanKey: reviewedScanKey,
       reviewedPrCount: reports.length,
-      findingCount: reports.filter((report) => !reportIsSafe(report)).length,
+      findingCount,
       reports,
       noActionsTaken: true,
       safePrCount: safeReports.length,
     },
   };
-  const safeInputByNumber = new Map((scan.reviewInputs || []).map((input) => [input.number, input]));
   metadata.issueWatcher = {
-    repoFullName: scan.repoFullName || target.repoFullName,
-    defaultBranch: scan.defaultBranch || target.defaultBranch,
+    repoFullName,
+    defaultBranch,
     issueComments: [],
-    pullRequests: safeReports.map((report) => ({
-      number: report.number,
-      headSha: report.headRefOid,
-      authorLogin: safeInputByNumber.get(report.number)?.authorLogin || null,
-      eligibilityFacts: safeInputByNumber.get(report.number)?.eligibilityFacts || null,
-      diffTruncated: false,
-      contentFingerprint: report.contentFingerprint,
-    })),
+    pullRequests: issueWatcherPullRequests(safeReports, reviewInputs),
     strictPullRequestCoverage: true,
   };
   metadata.executionProfile = nextStage.executionProfile || null;
-  metadata.pipeline.reviewInputKey = scan.scanKey || scanKey;
+  metadata.pipeline.reviewInputKey = reviewedScanKey;
   metadata.context = formatSecurityScanContext(scan, reports, status);
 
-  // Apply the next stage's provider/model/effort and behavior flags exactly as
-  // the ordinary agent-completion hand-off does. Keeping this in the generator
-  // makes the synthetic stage-0 result indistinguishable from a real one to
-  // the rest of task creation.
+  // Hand the synthetic stage-0 result to stage 1 through the same helper the
+  // ordinary agent-completion hand-off uses, so the rest of task creation
+  // cannot tell it from a real one.
   metadata.readOnly = nextStage.readOnly ?? false;
-  if (nextStage.model) metadata.model = nextStage.model;
-  if (nextStage.providerId) {
-    metadata.provider = nextStage.providerId;
-    metadata.providerId = nextStage.providerId;
-  }
   if (scan.usedLargeInputFallback) delete metadata.effort;
-  if (nextStage.effort) metadata.effort = nextStage.effort;
-  const nextStageReadOnly = nextStage.readOnly ?? false;
-  const taskDefaults = metadata.pipeline.taskDefaults || {};
-  for (const flag of PIPELINE_STAGE_BEHAVIOR_FLAGS) {
-    if (flag in nextStage) {
-      metadata[flag] = nextStage[flag];
-    } else if (nextStageReadOnly) {
-      metadata[flag] = false;
-    } else if (flag in taskDefaults) {
-      metadata[flag] = taskDefaults[flag];
-    }
-  }
+  applyStageExecution(metadata, nextStage, {
+    taskDefaults: metadata.pipeline.taskDefaults,
+    clearInheritedExecutionOptions: true,
+  });
 
   // No forced human approval here. The pipeline's own gates bound what an
   // external PR can do: Stage 1 already screened it, the Eligibility Gate is

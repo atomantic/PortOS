@@ -40,7 +40,8 @@ import { updateTask, addTask, reviveBlockedTask } from './cosTaskStore.js';
 import { SPAWN_HISTORY_METADATA_KEYS } from './spawnBudgetProof.js';
 import { CLAIM_METADATA_KEYS } from './cosTaskClaim.js';
 import { checkStagePrecondition } from './cosTaskGenerator.js';
-import { PIPELINE_STAGE_BEHAVIOR_FLAGS, normalizeReviewers } from '../lib/validation.js';
+import { normalizeReviewers } from '../lib/validation.js';
+import { applyStageExecution } from '../lib/pipelineStageExecution.js';
 import { PATHS, tryReadFile } from '../lib/fileUtils.js';
 import { DONE_SENTINEL_NAME, doneSentinelName, doneSentinelPath as resolveDoneSentinelPath } from '../lib/agentSentinel.js';
 import * as jiraService from './jira.js';
@@ -48,7 +49,7 @@ import * as git from './git.js';
 import { isFalsyMeta, isTruthyMeta } from './agentState.js';
 import { resolveReviewLoopOptions } from './codeReview.js';
 import { cleanupAgentWorktree, spawnMergeRecoveryTask, releaseRetryHold } from './agentWorktreeCleanup.js';
-import { PR_COMPLETIONS, PR_CREATION, resolvePrCompletion, resolvePrCreation } from '../lib/prDisposition.js';
+import { PR_CREATION, resolvePrCompletion, resolvePrCreation } from '../lib/prDisposition.js';
 import { resolvePrOpenedBy, PR_OPENED_BY } from '../lib/slashdoInvocation.js';
 import { isPublicReviewRestrictedProfile, publicReviewPostureForProfile } from '../lib/agentExecutionProfiles.js';
 import { acknowledgeCompletionSentinel, completionSentinelPresent } from './agentCompletionSentinel.js';
@@ -173,7 +174,7 @@ export async function handlePipelineProgression(task, agentId, success) {
     },
     autoApproved: true
   };
-  // Provider/model/effort are SET-only (never cleared) on hand-off: a stage
+  // Provider/model/effort are SET-only (never cleared) on hand-off (applyStageExecution): a stage
   // without its own pin inherits the value carried in `...task.metadata` — either
   // the task-level pin (interval config) or the prior stage's. Clearing an unset
   // stage's effort here would wipe a task-level effort from stage 1+.
@@ -197,34 +198,14 @@ export async function handlePipelineProgression(task, agentId, success) {
   // budget proof, so dispatch held every later stage, and the inherited live
   // lease refused the explicit budget reset too.
   for (const key of [...SPAWN_HISTORY_METADATA_KEYS, ...CLAIM_METADATA_KEYS, 'lastOrphanedAt', 'worktreeBusyAttempts']) delete nextTask.metadata[key];
-  if (nextStage.model) nextTask.metadata.model = nextStage.model;
-  if (nextStage.providerId) {
-    nextTask.metadata.provider = nextStage.providerId;
-    nextTask.metadata.providerId = nextStage.providerId;
-  }
-  if (nextStage.providerId) delete nextTask.metadata.executionOptions;
-  if (nextStage.executionOptions !== undefined) nextTask.metadata.executionOptions = nextStage.executionOptions;
-  if (nextStage.effort) nextTask.metadata.effort = nextStage.effort;
-  // The profile, unlike the pins above, is SET-OR-CLEARED (see the guard at the
+  // The profile, unlike the pins applied below, is SET-OR-CLEARED (see the guard at the
   // top of the hand-off): each stage runs under exactly the contract it
   // declares, never the previous stage's.
   nextTask.metadata.executionProfile = nextStage.executionProfile || null;
-  // Apply per-stage overrides for agent behavior flags
-  const stageReadOnly = nextStage.readOnly ?? false;
-  const taskDefaults = pipeline.taskDefaults || {};
-  for (const flag of PIPELINE_STAGE_BEHAVIOR_FLAGS) {
-    // A stage may choose its work posture, but cannot relax a run's draft-only
-    // publication policy. Keep it even while the stage performs no code work.
-    if (flag === 'prCompletion' && taskDefaults.prCompletion === PR_COMPLETIONS.DRAFT) {
-      nextTask.metadata.prCompletion = PR_COMPLETIONS.DRAFT;
-    } else if (flag in nextStage) {
-      nextTask.metadata[flag] = nextStage[flag];
-    } else if (stageReadOnly) {
-      nextTask.metadata[flag] = false;
-    } else if (flag in taskDefaults) {
-      nextTask.metadata[flag] = taskDefaults[flag];
-    }
-  }
+  applyStageExecution(nextTask.metadata, nextStage, {
+    taskDefaults: pipeline.taskDefaults,
+    clearInheritedExecutionOptions: true,
+  });
 
   const persisted = await addTask(nextTask, 'internal', { raw: true });
   if (persisted?.duplicate) {
