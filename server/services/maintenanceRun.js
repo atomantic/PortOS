@@ -1,4 +1,4 @@
-import { isLegacyDeepAudit, EXTENDED_AUDIT_WORKFLOW } from '../lib/auditWorkflow.js';
+import { isLegacyDeepAudit, deepAuditProof, EXTENDED_AUDIT_WORKFLOW } from '../lib/auditWorkflow.js';
 /**
  * Manual maintenance runs — the Schedule tab's "Run maintenance now".
  *
@@ -494,7 +494,7 @@ function onMaintenanceAgentCompleted(agent) {
       if (isLegacyDeepAudit(run)) {
         return perRun(id, async () => {
           const current = await getMaintenanceRun(id);
-          const proof = agent.result?.deepAudit || agent.metadata?.deepAudit || { complete: false, reason: 'Deep checkpoint missing' };
+          const proof = deepAuditProof(agent) || { complete: false, reason: 'Deep checkpoint missing' };
           // Duplicate events cannot stop a resumed run or regress its newer proof.
           if (agent.id && current.deepCheckpointAgentIds?.includes(agent.id)) return { skipped: 'checkpoint already recorded' };
           return patchRun(id, { status: MAINTENANCE_RUN_STATUS.STOPPED, active: null,

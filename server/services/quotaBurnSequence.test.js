@@ -11,7 +11,7 @@ import { detectActionableWork } from './perpetualWork.js';
 import { resolveQuotaBurnStep } from './quotaBurnInvoke.js';
 import { getQuotaBurnConfig } from './quotaBurnStore.js';
 import { recordQuotaBurnJobCompletion } from './quotaBurnCompletions.js';
-import { nextQuotaBurnSequenceJob, completeQuotaBurnSequenceStep } from './quotaBurnSequence.js';
+import { nextQuotaBurnSequenceJob, completeQuotaBurnSequenceStep, heldForDeepCheckpoint } from './quotaBurnSequence.js';
 const audit = { id: 'audit', runOnce: true, taskRef: { kind: 'builtin', taskType: 'simplify', appId: 'app-1' } };
 const drain = { id: 'drain', runOnce: true, taskRef: { kind: 'builtin', taskType: 'claim-issue', appId: 'app-1' }, drain: true, overrides: { params: {} } };
 const docs = { id: 'docs', runOnce: true, taskRef: { kind: 'builtin', taskType: 'documentation', appId: 'app-1' } };
@@ -74,7 +74,16 @@ describe('maintenance sequence workflow', () => {
 });
 
 
-it.each([undefined, { complete: false }])('never advances Deep quota sequences with absent or partial proof: %j', async deepAudit => {
+it.each([undefined, { complete: false }])('never advances historical Deep certifications with absent or partial proof: %j', async deepAudit => {
   await completeQuotaBurnSequenceStep({ result: { success: true, deepAudit }, metadata: { taskAuditDepth: 'deep', taskQuotaBurnFamily: 'codex', taskQuotaBurnStepId: 'audit' } });
   expect(recordQuotaBurnJobCompletion).not.toHaveBeenCalled();
+});
+
+// A single-agent extended Deep run has no ledger proof; holding on one left the
+// step uncompleted, so every later cycle re-dispatched the same audit.
+it('advances an extended Deep audit after its one successful agent run', async () => {
+  const agent = { result: { success: true }, metadata: { taskAuditDepth: 'deep', auditWorkflow: 'extended-v1', taskQuotaBurnFamily: 'codex', taskQuotaBurnStepId: 'audit' } };
+  expect(heldForDeepCheckpoint(agent)).toBeNull();
+  await completeQuotaBurnSequenceStep(agent);
+  expect(recordQuotaBurnJobCompletion).toHaveBeenCalledWith('codex', 'audit');
 });
