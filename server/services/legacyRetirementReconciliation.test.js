@@ -112,6 +112,54 @@ describe('legacy retirement transition at the persisted reconciliation boundary'
     expect(await readFile(join(path, 'unique.txt'), 'utf8')).toBe('keep me');
   });
 
+  describe('absent checkouts whose head is preserved', () => {
+    const transition = () => ({ version: 1, observations: [], resolutions: [] });
+    const plan = (row, extra = {}) => {
+      const outcome = { remaining: [row], retirementObligations: [row], legacyRetirementTransition: transition(), ...extra };
+      return _planLegacyRetirementReconciliation({ repoPath: repo, outcome, agents: [], trees: [] });
+    };
+
+    it('settles an unlocked receipt-unverified row whose head is on the default branch', async () => {
+      const head = await git('rev-parse', 'HEAD');
+      const row = { path: join(root, 'gone'), branch: 'claim/issue-1', head, reason: 'retirement-receipt-unverified',
+        createdAt: '2026-01-02T00:00:00.000Z' };
+      expect(await plan(row)).toMatchObject([{ disposition: 'absent-head-preserved', removalVerified: false,
+        evidence: { kind: 'absent-head-preserved', preservationVerified: true } }]);
+    });
+
+    it('settles a locked absent row only when a retained-source ref preserves its head', async () => {
+      await git('checkout', '-b', 'abandoned');
+      await writeFile(join(repo, 'abandoned.txt'), 'x\n');
+      await git('add', '.'); await git('commit', '-m', 'abandoned work');
+      const head = await git('rev-parse', 'HEAD');
+      await git('checkout', 'main');
+      await git('branch', '-D', 'abandoned');
+      const row = { path: join(root, 'gone'), branch: 'codex/release-agent', head, locked: true,
+        reason: 'retirement-provenance-unverified', createdAt: '2026-01-02T00:00:00.000Z' };
+      expect(await plan(row)).toEqual([]);
+      await git('update-ref', `refs/portos/retained-checkout-source/${head}`, head);
+      expect(await plan(row)).toMatchObject([{ disposition: 'absent-head-preserved' }]);
+      const saved = applyLegacyRetirementResolutions({ remaining: [row], retirementObligations: [row],
+        legacyRetirementTransition: transition() }, await plan(row), '2026-01-04T00:00:00.000Z');
+      expect(saved.remaining).toEqual([]);
+      expect(saved.retirementObligations).toEqual([]);
+    });
+
+    it('holds a row whose checkout, local ref or remote-tracking ref still exists', async () => {
+      const head = await git('rev-parse', 'HEAD');
+      const row = { path: join(root, 'gone'), branch: 'claim/issue-2', head, locked: true,
+        reason: 'retirement-receipt-unverified', createdAt: '2026-01-02T00:00:00.000Z' };
+      await mkdir(row.path);
+      expect(await plan(row)).toEqual([]);
+      await rm(row.path, { recursive: true });
+      await git('update-ref', 'refs/remotes/origin/claim/issue-2', head);
+      expect(await plan(row)).toEqual([]);
+      await git('update-ref', '-d', 'refs/remotes/origin/claim/issue-2');
+      await git('branch', row.branch);
+      expect(await plan(row)).toEqual([]);
+    });
+  });
+
   it('migration freezes only existing records, survives replay, and changes no task policy or worktree', async () => {
     const { row } = await historicalRow();
     const path = join(root, 'data/cos/task-schedule.json');
