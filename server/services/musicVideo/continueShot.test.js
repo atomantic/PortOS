@@ -16,7 +16,7 @@ vi.mock('../../lib/fileUtils.js', async (importOriginal) => {
   return { ...actual, PATHS: { ...actual.PATHS, videos: join(ROOT, 'videos'), images: join(ROOT, 'images') } };
 });
 vi.mock('../instanceIdentity.js', () => ({ UNKNOWN_INSTANCE_ID: 'unknown', getInstanceId: async () => 'local-inst' }));
-vi.mock('../videoGen/history.js', () => ({ getHistoryItem: vi.fn(async (id) => (id === 'clip-a' ? { id, filename: 'clip-a.mp4' } : null)) }));
+vi.mock('../videoGen/history.js', () => ({ getHistoryItem: vi.fn(async (id) => (['clip-a', 'clip-30'].includes(id) ? { id, filename: `${id}.mp4` } : null)) }));
 vi.mock('./projects.js', () => ({
   getProject: vi.fn(async () => mocks.project),
   appendSceneTakes: vi.fn(async (_id, _sceneId, inputs) => {
@@ -36,6 +36,8 @@ describe.skipIf(!ffmpeg)('continueFromPreviousShot', () => {
     // A 3 s clip under a 1 s shot.
     const made = await runFfmpegProcess({ bin: ffmpeg, args: ['-y', '-loglevel', 'error', '-f', 'lavfi', '-i', 'testsrc=size=320x180:rate=24:duration=3', '-pix_fmt', 'yuv420p', join(ROOT, 'videos', 'clip-a.mp4')] });
     expect(made.ok).toBe(true);
+    const thirty = await runFfmpegProcess({ bin: ffmpeg, args: ['-y', '-loglevel', 'error', '-f', 'lavfi', '-i', 'testsrc=size=320x180:rate=30:duration=1', '-pix_fmt', 'yuv420p', join(ROOT, 'videos', 'clip-30.mp4')] });
+    expect(thirty.ok).toBe(true);
   });
   afterAll(() => rmSync(ROOT, { recursive: true, force: true }));
 
@@ -103,5 +105,17 @@ describe.skipIf(!ffmpeg)('continueFromPreviousShot', () => {
     mocks.project = { id: 'mv-1', scenes: [{ sceneId: 'a', startSec: 0, endSec: 1 }, { sceneId: 'b', startSec: 1, endSec: 2 }] };
     await expect(continueFromPreviousShot('mv-1', 'a')).rejects.toMatchObject({ code: 'MUSIC_VIDEO_NO_PREVIOUS_SHOT' });
     await expect(continueFromPreviousShot('mv-1', 'b')).rejects.toMatchObject({ code: 'MUSIC_VIDEO_PREVIOUS_CLIP_MISSING' });
+  });
+
+  it('uses the composed render frame rate when continuing a photo sequence', async () => {
+    mocks.appended.length = 0; mocks.selected.length = 0;
+    mocks.project = { id: 'mv-1', composition: { mode: 'composed' }, scenes: [
+      { sceneId: 'lead', order: 0, startSec: 0, endSec: 0.5, videoHistoryId: 'clip-30' },
+      { sceneId: 'photos', order: 1, startSec: 0.5, endSec: 1.5, visualLayer: 'still',
+        photoSequence: { imageIds: ['one.png', 'two.png', 'three.png', 'four.png', 'five.png'], intervalFrames: 6 } },
+      { sceneId: 'next', order: 2, startSec: 1.5, endSec: 3 },
+    ] };
+    const { frame } = await continueFromPreviousShot('mv-1', 'next');
+    expect(frame).toEqual({ imageId: 'five.png', atSec: null, fromSceneId: 'photos' });
   });
 });

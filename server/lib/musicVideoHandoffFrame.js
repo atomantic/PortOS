@@ -59,12 +59,12 @@ export function sceneClipOutFrameSec(scene, clipDurationSec, fps = 24) {
  * or a missing picture). A still shot's clip, left from before it became a
  * still, is never on screen, so it is never read.
  */
-export function shotHandoffSource(project, shot) {
+export function shotHandoffSource(project, shot, { fps = 24 } = {}) {
   if (!shot) return null;
   const layer = sceneVisualLayer(shot, { layered: isLayeredComposition(project) });
   if (layer === 'still') {
-    const sequence = sceneHasAuthoredSpan(shot) ? scenePhotoSequence(shot, { beats: project.audioAnalysis?.beats || [] }) : null;
-    const lastPhoto = sequence?.imageIds[photoSequenceIndex(sequence, (Math.round(shot.endSec * 24) - 1) / 24)];
+    const sequence = sceneHasAuthoredSpan(shot) ? scenePhotoSequence(shot, { fps, beats: project.audioAnalysis?.beats || [] }) : null;
+    const lastPhoto = sequence?.imageIds[photoSequenceIndex(sequence, (Math.round(shot.endSec * fps) - 1) / fps, { fps })];
     const imageId = isEndFrameImageEffect(shot.imageEffect) && shot.endImageId ? shot.endImageId : sequence ? lastPhoto : shot.referenceImageId;
     return imageId ? { imageId } : null;
   }

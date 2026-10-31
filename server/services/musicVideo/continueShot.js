@@ -19,6 +19,8 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { ensureDir, PATHS } from '../../lib/fileUtils.js';
 import { findFfmpeg, probeVideoGeometry, runFfmpegProcess, safeUnder } from '../../lib/ffmpeg.js';
 import { previousShot, sceneClipOutFrameSec, shotHandoffSource } from '../../lib/musicVideoHandoffFrame.js';
+import { isLayeredComposition, sceneVisualLayer } from '../../lib/musicVideoLayers.js';
+import { songScenes } from '../../lib/musicVideoColdOpen.js';
 import { getHistoryItem } from '../videoGen/history.js';
 import { writeLocalImageSidecarIfMissing } from '../imageGen/imageRecords.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
@@ -39,7 +41,21 @@ export async function continueFromPreviousShot(projectId, sceneId, { keepStillAs
   assertClipUnlocked(project, sceneId);
   const previous = previousShot(project, sceneId);
   if (!previous) throw refuse('This is the first shot, so there is no previous shot to continue from', 'MUSIC_VIDEO_NO_PREVIOUS_SHOT');
-  const source = shotHandoffSource(project, previous);
+  let fps = 24;
+  if (isLayeredComposition(project) && project.composition?.mode !== 'document' && previous.visualLayer === 'still'
+    && previous.photoSequence && previous.photoSequence.enabled !== false) {
+    const lead = songScenes(project).slice().sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+      .find(s => s.videoHistoryId && sceneVisualLayer(s, { layered: true }) === 'footage');
+    if (lead) {
+      const entry = await getHistoryItem(lead.videoHistoryId);
+      const path = entry?.filename ? safeUnder(PATHS.videos, entry.filename) : null;
+      if (!path || !existsSync(path)) throw refuse('Could not read the render frame rate for this photo sequence', 'MUSIC_VIDEO_PREVIOUS_CLIP_UNREADABLE', 422);
+      const geometry = entry.numFrames && entry.fps && entry.width && entry.height ? entry : { ...entry, ...(await probeVideoGeometry(path)) };
+      if (!Number.isFinite(geometry.fps) || geometry.fps <= 0) throw refuse('Could not read the render frame rate for this photo sequence', 'MUSIC_VIDEO_PREVIOUS_CLIP_UNREADABLE', 422);
+      fps = geometry.fps;
+    }
+  }
+  const source = shotHandoffSource(project, previous, { fps });
   // A still shot hands over the picture the cut ends on, as it is: there is no clip on screen to read.
   if (source?.imageId) return startFromFrame(projectId, scene, source.imageId, { keepStillAsEnd,
     prompt: 'The picture the previous shot ends on', frame: { imageId: source.imageId, atSec: null, fromSceneId: previous.sceneId } });
