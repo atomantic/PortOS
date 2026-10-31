@@ -1895,6 +1895,13 @@ export const musicVideoAudioAnalysisSchema = z.object({
     startSec: z.number().min(0),
     endSec: z.number().min(0),
   }).nullable().optional(),
+  // Beat-grid trust (#14240). `gridDecision: 'ignore'` stops the automatic grid
+  // from snapping cuts; `gridReason` is shown beside the manual BPM control.
+  beatContrast: z.number().min(0).nullable().optional(),
+  beatSpread: z.number().min(0).nullable().optional(),
+  phaseCancellation: z.boolean().optional(),
+  gridDecision: z.enum(['use', 'ignore']).nullable().optional(),
+  gridReason: z.string().max(200).nullable().optional(),
 }).strict();
 
 export const musicVideoPerformanceRepairSchema = z.object({
