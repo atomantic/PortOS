@@ -136,4 +136,42 @@ describe('PovRewritePanel', () => {
     await waitFor(() => expect(deletePipelinePerspectiveRewrite).toHaveBeenCalledWith('iss-1', 'pov-1'));
     await waitFor(() => expect(screen.queryByText('Ada')).not.toBeInTheDocument());
   });
+  it('shows a retryable error instead of "draft prose first" when the read fails', async () => {
+    getPipelinePerspectiveRewrites
+      .mockRejectedValueOnce(new Error('server down'))
+      .mockResolvedValue({ cast: [{ id: 'char-ada', name: 'Ada' }], rewrites: [REWRITE], hasContent: true });
+
+    render(<PovRewritePanel issue={ISSUE} series={{}} />);
+
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(/server down/));
+    expect(screen.queryByText(/Draft prose/i)).toBeNull();
+    expect(screen.queryByText(/No alternate-POV rewrites yet/i)).toBeNull();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(screen.getByText('(protagonist)')).toBeInTheDocument());
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it("never paints a generate that finishes after an issue switch under the next issue", async () => {
+    const cast = [{ id: 'char-ada', name: 'Ada', role: 'protagonist' }];
+    let resolveCreate;
+    createPipelinePerspectiveRewrite.mockImplementationOnce(() => new Promise((resolve) => { resolveCreate = resolve; }));
+    getPipelinePerspectiveRewrites.mockImplementation((issueId) => Promise.resolve(issueId === 'iss-1'
+      ? { cast, rewrites: resolveCreate ? [REWRITE] : [], hasContent: true }
+      : { cast, rewrites: [], hasContent: true }));
+
+    const { rerender } = render(<PovRewritePanel issue={ISSUE} series={{}} />);
+    await waitFor(() => expect(screen.getByRole('button', { name: /Rewrite in another POV/i })).toBeEnabled());
+    await userEvent.click(screen.getByRole('button', { name: /Rewrite in another POV/i }));
+    await waitFor(() => expect(createPipelinePerspectiveRewrite).toHaveBeenCalled());
+
+    rerender(<PovRewritePanel issue={{ ...ISSUE, id: 'iss-2' }} series={{}} />);
+    await waitFor(() => expect(getPipelinePerspectiveRewrites).toHaveBeenLastCalledWith('iss-2', { silent: true }));
+    await act(async () => { resolveCreate({ status: 'complete', rewrite: REWRITE }); });
+
+    await waitFor(() => expect(getPipelinePerspectiveRewrites).toHaveBeenLastCalledWith('iss-1', { silent: true }));
+    await act(async () => {});
+    expect(screen.queryByText('(protagonist)')).toBeNull();
+    expect(screen.getByText(/No alternate-POV rewrites yet/i)).toBeInTheDocument();
+  });
 });

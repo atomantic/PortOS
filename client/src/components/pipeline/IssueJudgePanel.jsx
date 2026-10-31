@@ -11,10 +11,11 @@
  * user action (AI-provider policy).
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Scale, RefreshCw, AlertTriangle } from 'lucide-react';
 import { getIssueJudge, judgeIssue } from '../../services/apiPipeline';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
+import ListLoadError from '../ui/ListLoadError';
 import { timeAgo } from '../../utils/formatters';
 
 // The 9 rubric dimensions in display order + short labels (mirrors the server's
@@ -60,31 +61,43 @@ const dimTone = (v) => {
 };
 
 export default function IssueJudgePanel({ issue, stageId }) {
-  const [judge, setJudge] = useState(null);
-  const [loaded, setLoaded] = useState(false);
+  // The stored score is tagged with the issue it describes: PipelineIssue stays
+  // mounted across an issue switch, so an untagged score would keep showing the
+  // previous issue's verdict until (or, on a failed read, instead of) the new one.
+  const [read, setRead] = useState({ issueId: null, status: 'loading', judge: null, error: null });
+  const [readAttempt, setReadAttempt] = useState(0);
+  const [judgingFor, setJudgingFor] = useState(null);
   const [open, setOpen] = useState(false);
+  const issueId = issue?.id;
+  const issueIdRef = useRef(issueId);
+  issueIdRef.current = issueId;
 
   const judgeStageId = resolveJudgeStage(issue, stageId);
 
-  // Load any stored score whenever the target issue changes.
   useEffect(() => {
+    if (!issueId) return undefined;
     let canceled = false;
-    setLoaded(false);
-    if (!issue?.id) return undefined;
-    getIssueJudge(issue.id, { silent: true })
-      .then((res) => { if (!canceled) { setJudge(res && res.status !== 'none' ? res : null); setLoaded(true); } })
-      .catch(() => { if (!canceled) setLoaded(true); });
+    getIssueJudge(issueId, { silent: true })
+      .then((res) => { if (!canceled) setRead({ issueId, status: 'ready', judge: res && res.status !== 'none' ? res : null, error: null }); })
+      .catch((error) => { if (!canceled) setRead({ issueId, status: 'error', judge: null, error }); });
     return () => { canceled = true; };
-  }, [issue?.id]);
+  }, [issueId, readAttempt]);
 
   const [runJudge, running] = useAsyncAction(async () => {
-    const res = await judgeIssue(issue.id, judgeStageId ? { stageId: judgeStageId, force: true } : { force: true }, { silent: true });
-    if (res && res.status !== 'no-content') {
-      setJudge(res);
+    const forIssue = issueId;
+    setJudgingFor(forIssue);
+    const res = await judgeIssue(forIssue, judgeStageId ? { stageId: judgeStageId, force: true } : { force: true }, { silent: true });
+    // A judge run outlives an issue switch; its verdict belongs to the issue it scored.
+    if (issueIdRef.current === forIssue && res && res.status !== 'no-content') {
+      setRead({ issueId: forIssue, status: 'ready', judge: res, error: null });
       setOpen(true);
     }
     return res;
   }, { errorMessage: 'Failed to judge issue' });
+
+  const current = read.issueId === issueId ? read : { status: 'loading', judge: null, error: null };
+  const judge = current.judge;
+  const judgingHere = running && judgingFor === issueId;
 
   // Nothing drafted yet on any text stage → no judge surface.
   if (!judgeStageId) return null;
@@ -107,7 +120,9 @@ export default function IssueJudgePanel({ issue, stageId }) {
               <span className="text-[10px] font-normal text-gray-400">/ 10</span>
             </span>
           ) : (
-            <span className="text-xs text-gray-500">{loaded ? 'not judged yet' : 'loading…'}</span>
+            <span className="text-xs text-gray-500">
+              {current.status === 'ready' ? 'not judged yet' : current.status === 'error' ? 'score unavailable' : 'loading…'}
+            </span>
           )}
           {scored && judge.stale ? (
             <span className="inline-flex items-center gap-1 text-[11px] text-port-warning" title="The draft changed since it was judged">
@@ -119,12 +134,17 @@ export default function IssueJudgePanel({ issue, stageId }) {
           type="button"
           onClick={() => runJudge()}
           disabled={running}
+          title={running && !judgingHere ? 'Another issue is still being judged' : undefined}
           className="inline-flex items-center gap-1.5 rounded-md border border-port-border px-2.5 py-1 text-xs text-gray-200 hover:bg-port-bg disabled:opacity-50"
         >
-          <RefreshCw size={12} className={running ? 'animate-spin' : ''} />
-          {running ? 'Judging…' : scored ? 'Re-judge' : 'Judge quality'}
+          <RefreshCw size={12} className={judgingHere ? 'animate-spin' : ''} />
+          {judgingHere ? 'Judging…' : scored ? 'Re-judge' : 'Judge quality'}
         </button>
       </div>
+
+      {current.status === 'error' ? (
+        <ListLoadError what="the stored quality score" error={current.error} onRetry={() => setReadAttempt((n) => n + 1)} />
+      ) : null}
 
       {scored ? (
         <div className="text-xs text-gray-400 flex items-center gap-3 flex-wrap">

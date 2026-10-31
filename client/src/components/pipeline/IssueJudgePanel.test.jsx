@@ -69,4 +69,39 @@ describe('IssueJudgePanel', () => {
     render(<IssueJudgePanel issue={proseIssue()} stageId="prose" />);
     await waitFor(() => expect(screen.getByText('stale')).toBeInTheDocument());
   });
+  it("drops the previous issue's score on an issue switch and shows a failed read with a retry", async () => {
+    getIssueJudge
+      .mockResolvedValueOnce(completeJudge())
+      .mockRejectedValueOnce(new Error('server down'))
+      .mockResolvedValueOnce(completeJudge({ qualityScore: 8.2, overall: 9 }));
+    const { rerender } = render(<IssueJudgePanel issue={proseIssue()} stageId="prose" />);
+    await waitFor(() => expect(screen.getByText('5.5')).toBeInTheDocument());
+
+    rerender(<IssueJudgePanel issue={{ ...proseIssue(), id: 'iss-2' }} stageId="prose" />);
+    expect(screen.queryByText('5.5')).toBeNull();
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(/server down/));
+    expect(screen.queryByText('not judged yet')).toBeNull();
+    expect(screen.queryByText('5.5')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(screen.getByText('8.2')).toBeInTheDocument());
+    expect(getIssueJudge).toHaveBeenLastCalledWith('iss-2', { silent: true });
+  });
+
+  it('does not apply a judge verdict to the issue the user switched to', async () => {
+    getIssueJudge.mockResolvedValue(null);
+    let resolveJudge;
+    judgeIssue.mockImplementationOnce(() => new Promise((resolve) => { resolveJudge = resolve; }));
+    const { rerender } = render(<IssueJudgePanel issue={proseIssue()} stageId="prose" />);
+    await waitFor(() => expect(screen.getByText('not judged yet')).toBeInTheDocument());
+    fireEvent.click(screen.getByText(/Judge quality/));
+    await waitFor(() => expect(judgeIssue).toHaveBeenCalled());
+
+    rerender(<IssueJudgePanel issue={{ ...proseIssue(), id: 'iss-2' }} stageId="prose" />);
+    await waitFor(() => expect(getIssueJudge).toHaveBeenLastCalledWith('iss-2', { silent: true }));
+    await act(async () => { resolveJudge(completeJudge()); });
+
+    expect(screen.queryByText('5.5')).toBeNull();
+    expect(screen.getByText('not judged yet')).toBeInTheDocument();
+  });
 });
