@@ -49,4 +49,30 @@ describe('WorldTab activity history', () => {
       30, ['agent-1'], '2026-08-23T00:30:00.000Z', 'mw_think'
     );
   });
+  it('reads history once per filter change and keeps the newest filter when an earlier one answers late', async () => {
+    let resolveThink;
+    api.getAgentActivityTimeline.mockImplementation(async (_l, _a, _before, actions) => {
+      if (actions === 'mw_think') return new Promise((resolve) => { resolveThink = resolve; });
+      if (actions === 'mw_build') return [{ id: 'b-1', action: 'mw_build', status: 'completed', timestamp: '2026-08-23T00:00:00.000Z' }];
+      return rows(1, 'all');
+    });
+
+    render(<WorldTab agentId="agent-1" />);
+    await screen.findByText('Activity History');
+    await act(async () => {});
+    expect(api.getAgentActivityTimeline).toHaveBeenCalledTimes(1);
+    expect(api.moltworldStatus).toHaveBeenCalledTimes(1);
+
+    const filter = screen.getByLabelText('Filter history');
+    await act(async () => { fireEvent.change(filter, { target: { value: 'mw_think' } }); });
+    await act(async () => { fireEvent.change(filter, { target: { value: 'mw_build' } }); });
+    expect(await screen.findByText('build')).toBeInTheDocument();
+    expect(api.getAgentActivityTimeline).toHaveBeenCalledTimes(3);
+    expect(api.moltworldStatus).toHaveBeenCalledTimes(1);
+    expect(api.moltworldGetQueue).toHaveBeenCalledTimes(1);
+
+    await act(async () => { resolveThink(rows(1, 'late')); });
+    expect(screen.getByText('build')).toBeInTheDocument();
+    expect(screen.queryByText('think')).toBeNull();
+  });
 });

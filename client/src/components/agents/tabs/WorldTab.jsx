@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import toast from '../../ui/Toast';
 import { FormField } from '../../ui/FormField';
 import ConnectionStatusDot from '../../ui/ConnectionStatusDot';
@@ -125,6 +125,10 @@ export default function WorldTab({ agentId }) {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyHasMore, setHistoryHasMore] = useState(false);
   const [historyFilter, setHistoryFilter] = useState('');
+  // Bumped by every first-page history load; an older answer (first page or
+  // Load More) is dropped so a quick filter change never shows or appends
+  // another filter's rows under the selected one.
+  const historyGenerationRef = useRef(0);
 
   // Action Queue state
   const [queue, setQueue] = useState([]);
@@ -175,9 +179,11 @@ export default function WorldTab({ agentId }) {
 
   // Fetch activity history
   const fetchHistory = useCallback(async (append = false, before = null) => {
+    const generation = append ? historyGenerationRef.current : ++historyGenerationRef.current;
     setHistoryLoading(true);
     const mwActions = historyFilter || MW_HISTORY_ACTIONS;
     const data = await api.getAgentActivityTimeline(HISTORY_PAGE_SIZE, [agentId], before, mwActions).catch(() => null);
+    if (generation !== historyGenerationRef.current) return;
     if (data) {
       const items = Array.isArray(data) ? data : [];
       if (append) {
@@ -199,17 +205,17 @@ export default function WorldTab({ agentId }) {
     setQueueLoading(false);
   }, [agentId]);
 
-  // Fetch status + rate limits + history + queue when account resolves
+  // Fetch status + rate limits + queue when account resolves. History has its
+  // own effect below so a filter change re-reads only the history.
   useEffect(() => {
     if (!accountId) return;
     fetchStatus();
     fetchRateLimits();
-    fetchHistory();
     fetchQueue();
-  }, [accountId, fetchStatus, fetchRateLimits, fetchHistory, fetchQueue]);
+  }, [accountId, fetchStatus, fetchRateLimits, fetchQueue]);
 
-  // Re-fetch history when filter changes (fetchHistory already captures accountId + historyFilter
-  // via useCallback, so adding it to deps here ensures a fresh version runs when accountId changes)
+  // History loads once the account resolves and again on every filter change
+  // (fetchHistory is re-created when historyFilter changes).
   useEffect(() => {
     if (accountId) fetchHistory();
   }, [accountId, historyFilter, fetchHistory]);
