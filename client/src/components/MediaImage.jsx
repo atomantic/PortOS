@@ -13,6 +13,7 @@
  *
  * Props:
  *   src: string                  — same as <img>; expected to be `/data/...`
+ *   thumbnail?: boolean          — show a gallery PNG's 512px WebP derivative first, `src` as its fallback
  *   fallbackSrc?: string|string[] — originals to try in order if `src` fails (e.g. a thumbnail)
  *   fallbackVideoSrc?: string    — video to preview if its poster is unavailable
  *   assetSrc?: string            — original URL whose filename peer sync reports
@@ -29,6 +30,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Cloud } from 'lucide-react';
 import socket from '../services/socket';
+import { imageThumbnailSrc } from '../lib/imageThumbnailSrc';
 
 function basenameOf(src) {
   if (typeof src !== 'string') return null;
@@ -45,6 +47,7 @@ function cacheBust(src, nonce) {
 
 export default function MediaImage({
   src,
+  thumbnail = false,
   fallbackSrc,
   fallbackVideoSrc,
   assetSrc = src,
@@ -57,7 +60,9 @@ export default function MediaImage({
   const [showVideo, setShowVideo] = useState(false);
   // -1 = `src`; otherwise the index into `fallbacks` currently shown.
   const [fallbackIndex, setFallbackIndex] = useState(-1);
-  const fallbacks = [fallbackSrc].flat().filter((f) => typeof f === 'string' && f && f !== src);
+  const thumbSrc = thumbnail ? imageThumbnailSrc(src) : null;
+  const firstSrc = thumbSrc || src;
+  const fallbacks = [thumbSrc ? src : null, fallbackSrc].flat().filter((f) => typeof f === 'string' && f && f !== firstSrc);
   // Bumping `nonce` forces the <img> to re-fetch (cache-busted) when the
   // socket says our asset arrived — without it the browser would serve the
   // cached 404 forever.
@@ -123,7 +128,7 @@ export default function MediaImage({
   // The cache-buster appears only after the first arrival event; the very
   // first load (before any 404) uses the bare src so HTTP caching still
   // works the way the rest of the UI expects.
-  const displaySrc = fallbacks[fallbackIndex] ?? src;
+  const displaySrc = fallbacks[fallbackIndex] ?? firstSrc;
   const cacheBustedSrc = cacheBust(displaySrc, nonce);
   // Spread `rest` FIRST so the explicit `onError` below wins over a caller-
   // provided one — we still forward the event by capturing the caller's

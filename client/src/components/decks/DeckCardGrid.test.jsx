@@ -222,7 +222,7 @@ describe('DeckCardGrid', () => {
 
     // Click preview on the thumbnail should open v2
     const thumbImg = screen.getByRole('img', { name: 'Card f' });
-    expect(thumbImg).toHaveAttribute('src', '/data/images/f2.png');
+    expect(thumbImg).toHaveAttribute('src', '/data/image-thumbnails/f2.webp');
     fireEvent.click(thumbImg);
     expect(onPreview).toHaveBeenCalledWith(expect.objectContaining({ id: 'f' }), 'f2.png');
 

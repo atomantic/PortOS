@@ -34,6 +34,15 @@ describe('MediaImage', () => {
     expect(img.getAttribute('src')).toBe('/data/images/foo.png');
   });
 
+  it('shows the WebP derivative first and falls back to the original with `thumbnail`', () => {
+    render(<MediaImage thumbnail src="/data/images/tile.png" alt="tile" />);
+    expect(screen.getByAltText('tile').getAttribute('src')).toBe('/data/image-thumbnails/tile.webp');
+    fireEvent.error(screen.getByAltText('tile'));
+    expect(screen.getByAltText('tile').getAttribute('src')).toBe('/data/images/tile.png');
+    fireEvent.error(screen.getByAltText('tile'));
+    expect(screen.queryByAltText('tile')).toBeNull();
+  });
+
   // Catches a thumbnail miss stranding a sheet that lives only under image-refs.
   it('walks a fallback chain in order before showing the placeholder', () => {
     render(<MediaImage src="/data/image-thumbnails/s.webp" fallbackSrc={['/data/images/s.png', '/data/image-refs/s.png']} alt="sheet" />);

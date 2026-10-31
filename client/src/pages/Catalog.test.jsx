@@ -45,9 +45,12 @@ vi.mock('../services/apiCatalogTypes', () => ({
 
 // MediaImage pulls in the socket service; stub it to a plain <img> so the card
 // thumbnail's src/alt are assertable without the socket wiring.
-vi.mock('../components/MediaImage', () => ({
-  default: ({ src, alt, ...rest }) => <img src={src} alt={alt} {...rest} />,
-}));
+vi.mock('../components/MediaImage', async () => {
+  const { imageThumbnailSrc } = await import('../lib/imageThumbnailSrc');
+  return {
+    default: ({ src, thumbnail, alt, ...rest }) => <img src={(thumbnail && imageThumbnailSrc(src)) || src} alt={alt} {...rest} />,
+  };
+});
 
 import Catalog from './Catalog';
 import {

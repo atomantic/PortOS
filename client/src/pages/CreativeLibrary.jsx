@@ -106,7 +106,7 @@ function LibraryTile({ ingredient }) {
       >
         <div className="aspect-[3/4] w-full bg-port-bg flex items-center justify-center overflow-hidden">
           {cover ? (
-            <MediaImage src={cover} alt={name} className="w-full h-full object-cover" loading="lazy" />
+            <MediaImage thumbnail src={cover} alt={name} className="w-full h-full object-cover" loading="lazy" />
           ) : (
             <Sparkles size={22} className="text-gray-600" aria-hidden="true" />
           )}

@@ -13,6 +13,7 @@ import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useParams, useNavigate, useSearchParams, useLocation, Link } from 'react-router';
 import { ArrowLeft, ImageIcon, FileText, Trash2, Plus, Save, Link2, Unlink, RefreshCw, Images, Film, Play, ScanEye, Copy, AtSign, Download, Sparkles, Clapperboard, Paintbrush, Wand2, GalleryHorizontal, Palette, LayoutGrid, X } from 'lucide-react';
 import PageSkeleton from '../components/ui/PageSkeleton';
+import MediaImage from '../components/MediaImage';
 import toast from '../components/ui/Toast';
 import TabPills from '../components/ui/TabPills';
 import InlineConfirmRow from '../components/ui/InlineConfirmRow';
@@ -853,7 +854,7 @@ function MoodBoardEditor({ id }) {
           className="w-11 h-11 shrink-0 rounded overflow-hidden border border-port-border bg-port-bg flex items-center justify-center text-gray-600"
         >
           {posterSrc
-            ? <img src={posterSrc} alt="" className="w-full h-full object-cover" />
+            ? <MediaImage thumbnail src={posterSrc} alt="" className="w-full h-full object-cover" />
             : <ImageIcon className="w-5 h-5" aria-hidden="true" />}
         </button>
         <div className="min-w-0 flex-[1_1_14rem]">
@@ -978,7 +979,7 @@ function MoodBoardEditor({ id }) {
                             aria-label="Preview image"
                             className="block w-full h-full cursor-zoom-in"
                           >
-                            <img src={src} alt={displayText} loading="lazy" className="w-full h-full object-cover bg-port-bg" />
+                            <MediaImage thumbnail src={src} alt={displayText} loading="lazy" className="w-full h-full object-cover bg-port-bg" />
                           </button>
                         ) : (
                           <div className="w-full h-full flex items-center justify-center bg-port-bg text-gray-600">
