@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
 const api = vi.hoisted(() => ({
@@ -57,9 +57,15 @@ describe('GitHubAuditTab', () => {
     expect(await screen.findByText(/Could not load the last audit/)).toBeTruthy();
     expect(screen.queryByText(/Nothing changes until you tap Apply/)).toBeNull();
 
-    api.getGitHubAudit.mockResolvedValue({ audit });
+    let resolveRetry;
+    api.getGitHubAudit.mockReturnValueOnce(new Promise((resolve) => { resolveRetry = resolve; }));
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
 
+    // An in-flight read is neither an error nor "no audit yet".
+    expect(await screen.findByText('Loading the last audit…')).toBeTruthy();
+    expect(screen.queryByText(/Nothing changes until you tap Apply/)).toBeNull();
+
+    await act(async () => { resolveRetry({ audit }); });
     expect(await screen.findByText(/12 notifications in 3 repos/)).toBeTruthy();
     expect(screen.queryByText(/Could not load the last audit/)).toBeNull();
   });

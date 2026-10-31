@@ -73,7 +73,8 @@ export default function GitHubAuditTab() {
   // A failed read must not read as "no audit yet" / "None yet": the first
   // invites a slow re-audit, the second hides Undo for repos it unwatched.
   const [changesFailed, setChangesFailed] = useState(false);
-  const [auditFailed, setAuditFailed] = useState(false);
+  // 'loading' | 'ready' | 'error' for the stored-audit read of the selected account.
+  const [auditState, setAuditState] = useState('loading');
   const [auditAttempt, setAuditAttempt] = useState(0);
   const changesRequestRef = useRef(0);
   const [undoingId, setUndoingId] = useState(null);
@@ -93,10 +94,14 @@ export default function GitHubAuditTab() {
     if (!accountId) return undefined;
     let active = true;
     setAudit(null);
-    setAuditFailed(false);
+    setAuditState('loading');
     getGitHubAudit(accountId, { silent: true })
-      .then((result) => { if (active) setAudit(result.audit); })
-      .catch(() => { if (active) setAuditFailed(true); });
+      .then((result) => {
+        if (!active) return;
+        setAudit(result?.audit ?? null);
+        setAuditState('ready');
+      })
+      .catch(() => { if (active) setAuditState('error'); });
     return () => { active = false; };
   }, [accountId, auditAttempt]);
 
@@ -106,7 +111,7 @@ export default function GitHubAuditTab() {
     setRunning(false);
     if (result) {
       setAudit(result.audit);
-      setAuditFailed(false);
+      setAuditState('ready');
       setSkipped(new Set());
     }
   };
@@ -178,8 +183,9 @@ export default function GitHubAuditTab() {
           </p>
         )}
         {audit && !audit.watchedListed && <p className="text-xs text-port-warning">GitHub did not list your watched repos, so there are no unwatch suggestions this time.</p>}
-        {!audit && !running && auditFailed && <ListLoadError what="the last audit" onRetry={() => setAuditAttempt((n) => n + 1)} />}
-        {!audit && !running && !auditFailed && <p className="text-xs text-gray-500">Nothing changes until you tap Apply on a suggestion.</p>}
+        {!audit && !running && auditState === 'loading' && accountId && <p className="text-xs text-gray-500">Loading the last audit…</p>}
+        {!audit && !running && auditState === 'error' && <ListLoadError what="the last audit" onRetry={() => setAuditAttempt((n) => n + 1)} />}
+        {!audit && !running && auditState === 'ready' && <p className="text-xs text-gray-500">Nothing changes until you tap Apply on a suggestion.</p>}
         <div className="flex items-center gap-2">
           <input
             id="github-audit-monthly"
