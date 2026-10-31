@@ -1213,3 +1213,20 @@ describe('shots before the song', () => {
     expect(back.preMusic).toBeNull();
   });
 });
+
+// Uniquely catches a cue-list edit leaving section markers on the wrong line (#14380).
+describe('applyProjectPatch lyric marker remap', () => {
+  it('keeps each marker on the cue it heads when cues are removed without a new marker list', () => {
+    const cue = (id) => ({ id, text: `Line ${id}`, startSec: null, endSec: null });
+    const project = { ...baseProject(), lyricCues: ['a', 'b', 'c', 'd'].map(cue), lyricMarkers: [
+      { type: 'section', label: 'Verse 1', kind: 'verse', line: 0 },
+      { type: 'section', label: 'Chorus', kind: 'chorus', line: 2 },
+      { type: 'direction', label: 'Shouts', kind: 'shouted', line: 3 },
+      { type: 'section', label: 'Outro', kind: 'outro', line: 4 },
+    ] };
+    const next = applyProjectPatch(project, { lyricCues: ['b', 'c', 'd'].map(cue) });
+    expect(next.lyricMarkers.map((m) => [m.label, m.line])).toEqual([['Verse 1', 0], ['Chorus', 1], ['Shouts', 2], ['Outro', 3]]);
+    const sent = [{ type: 'section', label: 'Bridge', kind: 'bridge', line: 1 }];
+    expect(applyProjectPatch(project, { lyricCues: ['b'].map(cue), lyricMarkers: sent }).lyricMarkers).toEqual(sent);
+  });
+});
