@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Globe } from 'lucide-react';
 import { PUBLISH_TARGETS } from './PublishPostingPanel.jsx';
 import PublishCard from './PublishCard.jsx';
+import ListLoadError from '../ui/ListLoadError.jsx';
 
 function historyLine(h) {
   if (!h?.posts) return 'No posts yet';
@@ -27,8 +28,16 @@ function AccountInput({ id, label, initial, placeholder, onSave, disabled }) {
  * were received, across every project, so you can learn what is worth it.
  */
 export default function PublishPlatformsPanel({ projectId, publishing }) {
-  const { platforms, history, setPlatform } = publishing;
-  if (!platforms) return null;
+  const { platforms, platformsError, retryPlatforms, history, setPlatform } = publishing;
+  if (!platforms) {
+    if (!platformsError) return null;
+    // Outside PublishCard: a fold the director remembered for this card must not hide the failure.
+    return (
+      <section aria-label="Where you post" className="rounded-lg border border-port-border bg-port-card p-3 text-xs">
+        <ListLoadError what="where you post" error={platformsError} onRetry={retryPlatforms} />
+      </section>
+    );
+  }
   const enabledCount = Object.values(platforms).filter((p) => p?.enabled).length;
   return (
     <PublishCard projectId={projectId} cardId="platforms" label="Where you post" icon={Globe}

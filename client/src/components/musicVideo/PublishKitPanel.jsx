@@ -83,10 +83,13 @@ export default function PublishKitPanel({ project, publishKit, enabledTargets })
   const kit = project?.publishKit || {};
   const hasCopy = Object.values(kit.copy || {}).some((fields) => fields && Object.values(fields).some((v) => (Array.isArray(v) ? v.length : !!v)));
   // Copy only for where the director posts (#9287); Suno's caption reuses the YouTube description.
-  const copyFields = enabledTargets
+  // `null` = the saved choice is not known yet (loading, or the read failed): show no platform's
+  // copy rather than every platform's or "none on". `undefined` (no publishing settings) shows all.
+  const platformsUnknown = enabledTargets === null;
+  const copyFields = Array.isArray(enabledTargets)
     ? PUBLISH_FIELDS.filter(({ platform }) => enabledTargets.includes(platform) || (platform === 'youtube' && enabledTargets.includes('suno')))
-    : PUBLISH_FIELDS;
-  const noPlatforms = !!enabledTargets && copyFields.length === 0;
+    : (platformsUnknown ? [] : PUBLISH_FIELDS);
+  const noPlatforms = Array.isArray(enabledTargets) && copyFields.length === 0;
   const idFor = (s) => `mv-publish-${project?.id}-${s}`;
   const [notes, setNotes] = useState(kit.notes || '');
   const [youtubeUrl, setYoutubeUrl] = useState(kit.links?.youtube || '');
@@ -291,7 +294,7 @@ export default function PublishKitPanel({ project, publishKit, enabledTargets })
               label="Writer" compact alwaysShowModel modelDisabled={availableModels.length === 0}
               emptyProviderOption="Active provider (default)" emptyModelOption="Default model" disabled={publishKit.drafting} />
           )}
-          <button type="button" onClick={onDraft} disabled={publishKit.drafting || publishKit.saving || noPlatforms || confirmReplace}
+          <button type="button" onClick={onDraft} disabled={publishKit.drafting || publishKit.saving || platformsUnknown || noPlatforms || confirmReplace}
             className="flex items-center gap-1 bg-port-accent/20 text-port-accent disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0">
             <Sparkles size={13} /> {publishKit.drafting ? 'Drafting…' : (kit.copy ? 'Redraft copy' : 'Draft copy')}
           </button>
@@ -306,7 +309,7 @@ export default function PublishKitPanel({ project, publishKit, enabledTargets })
           </div>
         )}
         {noPlatforms && <p className="text-port-text-muted">Turn on a platform under Where you post to draft its copy.</p>}
-        {!noPlatforms && (
+        {!noPlatforms && !platformsUnknown && (
           <div className="space-y-3" key={kit.copyDraftedAt || 'copy'}>
             {copyFields.map(({ platform, label, fields }) => (
               <fieldset key={platform} className="space-y-1.5 rounded border border-port-border p-2">

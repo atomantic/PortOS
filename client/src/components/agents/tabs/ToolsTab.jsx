@@ -20,6 +20,8 @@ export default function ToolsTab({ agentId, agent }) {
 
   // Post composer state
   const [submolts, setSubmolts] = useState([]);
+  const [submoltsError, setSubmoltsError] = useState(null);
+  const [submoltsAttempt, setSubmoltsAttempt] = useState(0);
   const [selectedSubmolt, setSelectedSubmolt] = useState('general');
   const [postTitle, setPostTitle] = useState('');
   const [postContent, setPostContent] = useState('');
@@ -69,7 +71,7 @@ export default function ToolsTab({ agentId, agent }) {
     return () => { live = false; };
   }, [agentId]);
 
-  // Load rate limits + submolts when account resolves
+  // Load rate limits when account resolves
   useEffect(() => {
     if (!selectedAccountId) {
       setRateLimits(null);
@@ -77,13 +79,22 @@ export default function ToolsTab({ agentId, agent }) {
     }
     let live = true;
     api.getAgentRateLimits(selectedAccountId).then(data => { if (live) setRateLimits(data); }).catch(err => console.warn('⚠️ Failed to refresh rate limits: ' + err.message));
-    api.getAgentSubmolts(selectedAccountId).then(data => {
-      if (!live) return;
-      const list = data.submolts || data || [];
-      setSubmolts(Array.isArray(list) ? list : []);
-    }).catch(err => console.warn('⚠️ Failed to load submolts: ' + err.message));
     return () => { live = false; };
   }, [selectedAccountId]);
+
+  // A failed submolt read stays visible with Retry rather than leaving only "general" in the picker.
+  useEffect(() => {
+    if (!selectedAccountId) return undefined;
+    let live = true;
+    // The error clears only on success, so a slow retry never reads as "only general".
+    api.getAgentSubmolts(selectedAccountId, { silent: true }).then(data => {
+      if (!live) return;
+      setSubmoltsError(null);
+      const list = data.submolts || data || [];
+      setSubmolts(Array.isArray(list) ? list : []);
+    }).catch(err => { if (live) setSubmoltsError(err); });
+    return () => { live = false; };
+  }, [selectedAccountId, submoltsAttempt]);
 
   // Calculate cooldown end timestamps from rate limit data
   useEffect(() => {
@@ -612,6 +623,9 @@ export default function ToolsTab({ agentId, agent }) {
                   {generating ? 'Generating...' : 'Generate Post'}
                 </button>
               </div>
+              {submoltsError && (
+                <ListLoadError what="submolts" error={submoltsError} onRetry={() => setSubmoltsAttempt(n => n + 1)} className="mb-3" />
+              )}
 
               <input
                 type="text"
