@@ -35,6 +35,12 @@ describe('buildFalVideoRequest — per-family wire bodies', () => {
     expect(build('minimax/h3-max-turbo/image-to-video', { seconds: 40 }).body.duration).toBe(15);
   });
 
+  it('MiniMax H3: a promptExpansion override replaces the fixed mode; other models and unknown modes ignore it', () => {
+    expect(build('minimax/h3-max/image-to-video', { promptExpansion: 'disabled' }).body.prompt_expansion_mode).toBe('disabled');
+    expect(build('minimax/h3-max/image-to-video', { promptExpansion: 'bogus' }).body.prompt_expansion_mode).toBe('balanced');
+    expect(build('fal-ai/kling-video/v3/pro/image-to-video', { promptExpansion: 'disabled' }).body).not.toHaveProperty('prompt_expansion_mode');
+  });
+
   it('Kling v3 Pro: start_image_url, string duration, native negative prompt, provider audio off unless asked', () => {
     expect(build('fal-ai/kling-video/v3/pro/image-to-video', { seconds: 4.2, negativePrompt: 'text overlay' }).body).toEqual({
       prompt: 'a lighthouse at dusk', negative_prompt: 'text overlay', start_image_url: 'data:image/png;base64,AA==',
