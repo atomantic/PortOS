@@ -20,6 +20,7 @@ import * as tailcatServe from '../services/tailcatServe.js';
 import { getTailscaleStatus } from '../lib/tailscale.js';
 import { federatedMediaPeerSettingsSchema, optionalBooleanMap, validateRequest } from '../lib/validation.js';
 import { tailcatDeviceApprovalSchema, tailcatDeviceEnforcementSchema } from '../lib/tailcatValidation.js';
+import { isBlockedIngestHost } from '../lib/catalogValidation.js';
 import { PEER_INSTANCE_HEADER } from '../lib/peerHttpClient.js';
 import { isPeerBasicBootstrapRequest } from '../lib/apiAccessPolicy.js';
 import { requestHasHostControl } from '../services/authGate.js';
@@ -72,7 +73,7 @@ const peerAuthSchema = z.object({
 const addPeerSchema = z.object({
   address: z.string()
     .regex(/^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/, 'Must be a valid IP address')
-    .refine(ip => !ip.startsWith('127.') && !ip.startsWith('169.254.'), 'Loopback and link-local addresses are not allowed'),
+    .refine(ip => !isBlockedIngestHost(ip), 'Loopback, unspecified and link-local addresses are not allowed'),
   port: z.number().int().min(1).max(65535).default(DEFAULT_PEER_PORT),
   name: z.string().optional(),
   host: z.string().optional(),
