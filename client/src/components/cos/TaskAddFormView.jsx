@@ -100,7 +100,7 @@ function TaskTemplates({ form }) {
               {!template.isBuiltin && (
                 <button
                   onClick={(event) => deleteTemplate(template.id, event)}
-                  className="flex [@media(hover:hover)]:md:opacity-0 md:group-hover:opacity-100 focus-visible:opacity-100 transition-opacity absolute -top-3 -right-3 w-11 h-11 items-center justify-center"
+                  className="flex [@media(hover:hover)]:md:opacity-0 [@media(hover:hover)]:md:pointer-events-none md:group-hover:opacity-100 md:group-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto transition-opacity absolute -top-3 -right-3 w-11 h-11 items-center justify-center"
                   aria-label="Delete template"
                 >
                   <span className="flex w-4 h-4 bg-port-error rounded-full items-center justify-center">
@@ -159,7 +159,7 @@ function TaskUploadPreviews({ form }) {
               <button
                 type="button"
                 onClick={() => removeScreenshot(screenshot.id)}
-                className="absolute -top-3 -right-3 w-11 h-11 flex items-center justify-center [@media(hover:hover)]:md:opacity-0 md:group-hover:opacity-100 focus-visible:opacity-100 md:focus-visible:opacity-100 transition-opacity"
+                className="absolute -top-2 -right-2 w-5 h-5 pointer-coarse:-top-3 pointer-coarse:-right-3 pointer-coarse:w-11 pointer-coarse:h-11 flex items-center justify-center [@media(hover:hover)]:md:opacity-0 md:group-hover:opacity-100 focus-visible:opacity-100 md:focus-visible:opacity-100 transition-opacity"
                 aria-label={`Remove screenshot ${screenshot.filename}`}
               >
                 <span className="flex w-5 h-5 bg-port-error rounded-full items-center justify-center"><X size={12} aria-hidden="true" /></span>

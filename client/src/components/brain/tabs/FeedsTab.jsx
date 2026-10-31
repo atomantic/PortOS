@@ -252,7 +252,7 @@ export default function FeedsTab({ onRefresh }) {
               <div key={feed.id} className="group relative">
                 <button
                   onClick={() => setSelectedFeedId(selectedFeedId === feed.id ? null : feed.id)}
-                  className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors flex items-center gap-2 ${
+                  className={`w-full text-left px-3 pr-24 [@media(hover:hover)]:sm:pr-3 py-2 rounded-lg text-sm transition-colors flex items-center gap-2 ${
                     selectedFeedId === feed.id
                       ? 'bg-port-accent/20 text-port-accent'
                       : 'text-gray-400 hover:text-white hover:bg-port-card'

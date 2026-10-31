@@ -389,7 +389,7 @@ function WorkRow({ work, isActive, confirming, onSelect, onRequestDelete, onConf
         </button>
         <button
           onClick={onSelect}
-          className={`flex-1 flex items-center gap-2 px-2 py-1.5 rounded text-left text-sm transition-colors min-w-0 ${
+          className={`flex-1 flex items-center gap-2 px-2 pr-11 [@media(hover:hover)]:sm:pr-2 py-1.5 rounded text-left text-sm transition-colors min-w-0 ${
             isActive ? 'bg-port-accent/20 text-port-accent' : 'text-gray-300 hover:bg-port-card hover:text-white'
           }`}
         >
