@@ -940,7 +940,7 @@ async function resolveIcReferencePaths({
 // Chain-only request knobs, resolved against the final chunk count.
 function resolveChainSettings({ body, effectiveChunks, effectiveModel }) {
   // Per-chunk prompt beats (#3695) — only meaningful once the RESOLVED request
-  // really chains, so a single-chunk render (or an a2v/IC one pinned to 1 above)
+  // really chains, so a single-chunk render (or an a2v/IC one the caller pinned to 1)
   // drops the list entirely rather than persisting a stale array into job params
   // that a resume would replay into the form.
   //
