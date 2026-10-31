@@ -171,12 +171,36 @@ describe('Autofixer log child lifecycle', () => {
     proc.unref = vi.fn();
     return proc;
   };
-  const openLogs = () => {
-    const req = Object.assign(new EventEmitter(), { query: {} });
+  const openLogs = (query = {}) => {
+    const req = Object.assign(new EventEmitter(), { query });
     const res = Object.assign(new EventEmitter(), response(), { write: vi.fn(), end: vi.fn() });
+    res.status = (code) => { res.statusCode = code; return res; };
+    res.json = (body) => { res.body = body; return res; };
     const done = harness.routes.get('/logs')[0](req, res);
     return { req, res, done };
   };
+
+  it('refuses an option-shaped or repeated process name before spawning pm2', async () => {
+    await loadUi();
+    for (const name of ['--no-daemon', '-s', ['example-process', '--json']]) {
+      const { res, done } = openLogs({ process: name });
+      await done;
+      expect(res.statusCode).toBe(400);
+      expect(res.body).toMatchObject({ code: 'INVALID_PROCESS_NAME' });
+      expect(res.write).not.toHaveBeenCalled();
+    }
+    expect(harness.spawn).not.toHaveBeenCalled();
+  });
+
+  it('streams a named process as the positional pm2 argument', async () => {
+    await loadUi();
+    const initial = child();
+    harness.spawn.mockReturnValue(initial);
+    const { done } = openLogs({ process: 'example-process' });
+    initial.emit('close', 1);
+    await done;
+    expect(harness.spawn.mock.calls[0][1].slice(0, 3)).toEqual(['example-pm2', 'logs', 'example-process']);
+  });
 
   it('reports an initial spawn error and ends SSE without starting a live stream', async () => {
     await loadUi();
