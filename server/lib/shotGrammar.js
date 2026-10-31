@@ -53,6 +53,16 @@ export const SHOT_FACINGS = Object.freeze([
   'back',               // seen from directly behind
 ]);
 
+// Where the subject sits in the frame.
+export const SHOT_COMPOSITIONS = Object.freeze([
+  'center',      // centered, symmetrical
+  'left-third',  // on the left third, open space right
+  'right-third', // on the right third, open space left
+  'cut-left',    // at the left edge, partly out of frame
+  'cut-right',   // at the right edge, partly out of frame
+  'low-in-frame', // low in the frame, big empty space above
+]);
+
 // On-screen direction the subject faces / moves. `neutral` = head-on or
 // ambiguous (no axis to cross); `left`/`right` are the screen-relative sides the
 // 180°-rule check tracks for axis reversals between continuity-linked shots.

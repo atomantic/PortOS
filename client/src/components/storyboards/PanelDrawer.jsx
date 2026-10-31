@@ -12,7 +12,8 @@ import useDrawerTab from '../../hooks/useDrawerTab';
 import { listCatalogIngredientsByIds } from '../../services/api';
 import { STORYBOARD_LIMITS } from '../../../../server/lib/storyboardVocabulary.js';
 import {
-  SHOT_ANGLES, SHOT_ANGLE_HINTS, SHOT_ANGLE_LABELS, SHOT_FACINGS, SHOT_FACING_HINTS, SHOT_FACING_LABELS,
+  SHOT_ANGLES, SHOT_ANGLE_HINTS, SHOT_ANGLE_LABELS, SHOT_COMPOSITIONS, SHOT_COMPOSITION_HINTS, SHOT_COMPOSITION_LABELS,
+  SHOT_FACINGS, SHOT_FACING_HINTS, SHOT_FACING_LABELS,
   SHOT_TYPES, SHOT_TYPE_HINTS, SHOT_TYPE_LABELS,
 } from '../../lib/shotGrammar';
 import CommitField from './CommitField';
@@ -202,6 +203,11 @@ function ShotTab({ board, found, panelNumber, sketchNonce, busy, handlers, timin
         <span id={fieldId('facing')} className={labelClass}>Subject to camera</span>
         <ShotDiagramPicker options={SHOT_FACINGS} labels={SHOT_FACING_LABELS} hints={SHOT_FACING_HINTS}
           value={panel.facing} labelId={fieldId('facing')} onChange={(facing) => handlers.onPatch({ facing })} />
+      </div>
+      <div>
+        <span id={fieldId('composition')} className={labelClass}>Composition</span>
+        <ShotDiagramPicker options={SHOT_COMPOSITIONS} labels={SHOT_COMPOSITION_LABELS} hints={SHOT_COMPOSITION_HINTS}
+          value={panel.composition} labelId={fieldId('composition')} onChange={(composition) => handlers.onPatch({ composition })} />
       </div>
       {timing ? (
         <div>

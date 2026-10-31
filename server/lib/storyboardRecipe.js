@@ -283,6 +283,15 @@ const FACING_WORDS = Object.freeze({
   back: 'rear view from directly behind, the subject faces away from the camera, only their back and the back of the head visible, no face',
 });
 
+const COMPOSITION_WORDS = Object.freeze({
+  center: 'the subject centered in the frame, symmetrical composition',
+  'left-third': 'the subject on the left third of the frame, open space on the right',
+  'right-third': 'the subject on the right third of the frame, open space on the left',
+  'cut-left': 'the subject at the left edge of the frame, partly cut off by the edge, the rest of the frame open',
+  'cut-right': 'the subject at the right edge of the frame, partly cut off by the edge, the rest of the frame open',
+  'low-in-frame': 'the subject low in the frame, a large empty space above them',
+});
+
 /**
  * The words a text node carries for one panel: the panel's own fields (each
  * on a labeled line), the beat's description, or the node's custom text.
@@ -300,6 +309,7 @@ export function textNodeValue(node, { beat, panel } = {}) {
     panel?.framing ? `Framing: ${FRAMING_WORDS[panel.framing] || panel.framing}.` : '',
     panel?.angle ? `Angle: ${ANGLE_WORDS[panel.angle] || panel.angle}.` : '',
     panel?.facing ? `Subject: ${FACING_WORDS[panel.facing] || panel.facing}.` : '',
+    panel?.composition ? `Composition: ${COMPOSITION_WORDS[panel.composition] || panel.composition}.` : '',
   ].filter((v) => v && v.trim()).join('\n');
 }
 

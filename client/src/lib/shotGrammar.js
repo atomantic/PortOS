@@ -7,13 +7,13 @@
  * `storyboardShotSchema` accepts. The label maps below are client-only
  * presentation, keyed off those two enums.
  */
-export { SHOT_ANGLES, SHOT_FACINGS, SHOT_TYPES, SCREEN_DIRECTIONS } from '../../../server/lib/shotGrammar.js';
+export { SHOT_ANGLES, SHOT_COMPOSITIONS, SHOT_FACINGS, SHOT_TYPES, SCREEN_DIRECTIONS } from '../../../server/lib/shotGrammar.js';
 
 export const SHOT_TYPE_LABELS = Object.freeze({
   'extreme-wide': 'Extreme wide',
-  wide: 'Wide / establishing',
+  wide: 'Wide',
   full: 'Full',
-  'medium-wide': 'Medium wide / cowboy',
+  'medium-wide': 'Medium wide',
   medium: 'Medium',
   'medium-close': 'Medium close-up',
   close: 'Close-up',
@@ -27,9 +27,9 @@ export const SHOT_TYPE_LABELS = Object.freeze({
 // One line on what each framing puts on screen, shown under the framing diagrams.
 export const SHOT_TYPE_HINTS = Object.freeze({
   'extreme-wide': 'Tiny figure, the whole place around them',
-  wide: 'The setting first, people small but readable',
+  wide: 'Establishing: the setting first, people small but readable',
   full: 'Head to toe, the body fills the frame',
-  'medium-wide': 'Knees up',
+  'medium-wide': 'Knees up (cowboy shot)',
   medium: 'Waist up',
   'medium-close': 'Chest up',
   close: 'Head and shoulders, the face fills the frame',
@@ -72,6 +72,24 @@ export const SHOT_FACING_HINTS = Object.freeze({
   profile: 'Side-on to the camera',
   'three-quarter-back': 'Turned mostly away, face barely seen',
   back: 'From behind, facing away',
+});
+
+export const SHOT_COMPOSITION_LABELS = Object.freeze({
+  center: 'Center',
+  'left-third': 'Left third',
+  'right-third': 'Right third',
+  'cut-left': 'Half off left',
+  'cut-right': 'Half off right',
+  'low-in-frame': 'Low in frame',
+});
+
+export const SHOT_COMPOSITION_HINTS = Object.freeze({
+  center: 'Centered, symmetrical',
+  'left-third': 'On the left third, open space to the right',
+  'right-third': 'On the right third, open space to the left',
+  'cut-left': 'At the left edge, partly cut off by the frame',
+  'cut-right': 'At the right edge, partly cut off by the frame',
+  'low-in-frame': 'Low in the frame, lots of empty space above',
 });
 
 export const SCREEN_DIRECTION_LABELS = Object.freeze({

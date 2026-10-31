@@ -4,7 +4,7 @@
  * Kept free of node-only imports so the client can import it directly.
  */
 
-import { SHOT_ANGLES, SHOT_FACINGS, SHOT_TYPES } from './shotGrammar.js';
+import { SHOT_ANGLES, SHOT_COMPOSITIONS, SHOT_FACINGS, SHOT_TYPES } from './shotGrammar.js';
 
 export const STORYBOARD_ID_PATTERN = /^sb-[A-Za-z0-9-]{1,80}$/;
 export const isValidStoryboardId = (id) => typeof id === 'string' && STORYBOARD_ID_PATTERN.test(id);
@@ -33,6 +33,7 @@ export const STORYBOARD_MUSICAL_ROLE_LABELS = Object.freeze({
 export const STORYBOARD_PANEL_FRAMINGS = SHOT_TYPES;
 export const STORYBOARD_PANEL_ANGLES = SHOT_ANGLES;
 export const STORYBOARD_PANEL_FACINGS = SHOT_FACINGS;
+export const STORYBOARD_PANEL_COMPOSITIONS = SHOT_COMPOSITIONS;
 export const STORYBOARD_TAKE_SOURCES = Object.freeze(['upload', 'gallery', 'catalog', 'moodBoard', 'sketch', 'generated']);
 
 export const STORYBOARD_LIMITS = Object.freeze({
