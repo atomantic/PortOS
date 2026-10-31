@@ -1432,6 +1432,15 @@ export async function applyRemoteRecord(type, id, record, op) {
 }
 
 /**
+ * True when a stored file exists for the id: a live record, an archived one, or
+ * a tombstone. False only when nothing is stored at all (never created here, or
+ * its tombstone was pruned).
+ */
+export async function hasStoredRecord(type, id) {
+  return !!(await storeFor(type).loadOne(id));
+}
+
+/**
  * Hard-prune tombstones older than `cutoffMs` (a Date.now()-style epoch ms).
  * Called by the brain tombstone GC sweep on the orchestrator's interval.
  * Per-id re-check inside the write queue so a tombstone a concurrent apply just
@@ -1451,6 +1460,9 @@ export async function pruneTombstones(type, cutoffMs) {
     if (Number.isFinite(deletedAt) && deletedAt < cutoffMs) {
       await store.deleteOneNow(id);
       emitRecordChanged(type, id);
+      // Past the grace window a peer can no longer un-delete this record, so the
+      // bridge uses this signal to purge its own archived memory copy.
+      brainEvents.emit('tombstone:pruned', { type, id });
       return true;
     }
     return false;

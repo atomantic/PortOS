@@ -446,6 +446,15 @@ export async function syncAllBrainData({ dryRun = false, refresh = false, onlyMi
         ? await getJournal(id)
         : await brainStorage.getById(type, id);
       if (record && !record.archived) continue; // still live — already re-embedded above
+      // No stored file at all (tombstone pruned): nothing can resurrect it, so
+      // purge instead of archiving. A tombstone or archived record still archives.
+      if (!(await brainStorage.hasStoredRecord(type, id))) {
+        await hardDeleteMappedMemory(type, id).catch(err => {
+          console.error(`❌ Failed to purge orphaned ${type}/${id}: ${err.message}`);
+          stats.errors++;
+        });
+        continue;
+      }
       const archived = await archiveMappedMemory(type, id).catch(err => {
         console.error(`❌ Failed to archive stale ${type}/${id}: ${err.message}`);
         stats.errors++;
@@ -818,6 +827,15 @@ export function initBridge() {
   // archive. Debounced + sequential so a large catch-up doesn't saturate the
   // embedding backend.
   brainEvents.on('sync:applied', ({ records } = {}) => queueResync(records));
+
+  // A pruned tombstone can no longer be un-deleted by a peer, so the archived
+  // memory copy (text + embedding) kept for resurrection is purged now.
+  brainEvents.on('tombstone:pruned', ({ type, id } = {}) => {
+    if (!id || !RECONCILABLE_TYPES.includes(type)) return;
+    hardDeleteMappedMemory(type, id).catch((err) => {
+      console.error(`❌ Brain bridge tombstone purge failed for ${type}/${id}: ${err.message}`);
+    });
+  });
 
   console.log('🧠🔗 Brain→Memory bridge initialized');
 }
