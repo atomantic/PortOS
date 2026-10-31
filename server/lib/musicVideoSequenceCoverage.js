@@ -22,8 +22,6 @@
 import { getFalVideoModel } from './falVideoModels.js';
 import { isPerformanceScene } from './musicVideoShotTiming.js';
 
-export const MUSIC_VIDEO_COVERAGE_MODES = Object.freeze(['per-shot', 'sequence']);
-
 const EPS = 1e-6;
 const round3 = (n) => Math.round(n * 1000) / 1000;
 
@@ -31,7 +29,7 @@ const round3 = (n) => Math.round(n * 1000) / 1000;
 export const SEQUENCE_PROMPT_EXPANSION = 'disabled';
 
 /** Why `model` cannot cover a sequence, or null when it can. */
-export function sequenceCoverageBlockedReason(modelId) {
+function sequenceCoverageBlockedReason(modelId) {
   const model = getFalVideoModel(modelId);
   if (!model) return 'The selected model is not in the curated fal catalog';
   if (model.kind !== 'ref2v') {
@@ -41,10 +39,9 @@ export function sequenceCoverageBlockedReason(modelId) {
 }
 
 /** The longest sequence one request of `modelId` can hold, in seconds (null when ineligible). */
-export const sequenceMaxSec = (modelId) => (sequenceCoverageBlockedReason(modelId) ? null : getFalVideoModel(modelId).duration.max);
+const sequenceMaxSec = (modelId) => (sequenceCoverageBlockedReason(modelId) ? null : getFalVideoModel(modelId).duration.max);
 
 const sceneKey = (scene) => scene.sceneId ?? scene.id;
-const spanOf = (scene) => (scene.endSec - scene.startSec);
 const sameId = (a, b) => (a?.id ?? a ?? null) === (b?.id ?? b ?? null);
 
 function ineligibleReason(scene) {
@@ -111,7 +108,7 @@ export function planSequenceCoverage(scenes, { modelId } = {}) {
 }
 
 /** The model's spelling of its nth reference image ("Image 2" / "@Image2"), or null when it takes none. */
-export function referenceImageName(modelId, n) {
+function referenceImageName(modelId, n) {
   const name = getFalVideoModel(modelId)?.referenceImages?.promptName ?? (getFalVideoModel(modelId)?.referenceImages ? 'Image 1' : null);
   return name ? name.replace(/1$/, String(n)) : null;
 }

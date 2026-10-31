@@ -65,6 +65,9 @@ import {
   resolveRunwayVideoResolution,
 } from './runwayVideoModels.js';
 
+/** How a scene is generated (#14241): `sequence` joins its run of cutaway footage shots into one timed request. */
+export const MUSIC_VIDEO_COVERAGE_MODES = Object.freeze(['per-shot', 'sequence']);
+
 export const MUSIC_VIDEO_SHOT_MODES = Object.freeze(['cutaway', 'performance']);
 
 /**

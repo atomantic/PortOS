@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  planSequenceCoverage, composeSequencePrompt, sequenceClipSpans, sequenceCoverageBlockedReason, SEQUENCE_PROMPT_EXPANSION,
+  planSequenceCoverage, composeSequencePrompt, sequenceClipSpans, SEQUENCE_PROMPT_EXPANSION,
 } from './musicVideoSequenceCoverage.js';
 import { buildFalVideoRequest } from './falVideoModels.js';
 
@@ -53,10 +53,10 @@ describe('planSequenceCoverage', () => {
 
   it('keeps Kling per-shot with the reason recorded', () => {
     const kling = 'fal-ai/kling-video/v3/pro/image-to-video';
-    expect(sequenceCoverageBlockedReason(kling)).toMatch(/multi_prompt/);
     const { groups, perShot } = planSequenceCoverage([shot('a', 0, 3), shot('b', 3, 6)], { modelId: kling });
     expect(groups).toEqual([]);
     expect(perShot).toHaveLength(2);
+    expect(perShot[0].reason).toMatch(/multi_prompt/);
   });
 });
 
