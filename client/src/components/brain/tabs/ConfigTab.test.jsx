@@ -106,3 +106,40 @@ describe('brain ConfigTab provider list failure', () => {
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 });
+
+describe('brain ConfigTab settings read failures', () => {
+  it('shows a retryable error instead of default-valued controls when brain settings fail, and recovers', async () => {
+    api.getBrainSettings
+      .mockRejectedValueOnce(new Error('settings down'))
+      .mockResolvedValue({ defaultProvider: 'local', defaultModel: 'llama3.2:latest', confidenceThreshold: 0.8, scheduledReviewsEnabled: false, dailyDigestTime: '07:30', weeklyReviewDay: 'friday', weeklyReviewTime: '18:00' });
+    render(<ConfigTab />);
+
+    const alerts = await screen.findAllByRole('alert');
+    expect(alerts).toHaveLength(3);
+    expect(alerts[0]).toHaveTextContent('Could not load Brain settings');
+    expect(screen.queryByLabelText('Daily Digest Time')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Default Provider')).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getAllByRole('button', { name: 'Retry' })[0]);
+
+    expect(await screen.findByLabelText('Daily Digest Time')).toHaveValue('07:30');
+    expect(screen.getByLabelText('Default Provider')).toHaveValue('local');
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('shows a retryable error instead of an empty embedding provider when the CoS config fails, and recovers', async () => {
+    api.getCosConfig
+      .mockRejectedValueOnce(new Error('cos down'))
+      .mockResolvedValue({ embeddingProviderId: 'local', embeddingModel: 'nomic-embed-text' });
+    render(<ConfigTab />);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load CoS config');
+    expect(screen.queryByLabelText('Embedding Provider')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save embedding config' })).toBeDisabled();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Retry' }));
+
+    expect(await screen.findByLabelText('Embedding Provider')).toHaveValue('local');
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+});
