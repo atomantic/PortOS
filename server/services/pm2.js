@@ -280,7 +280,7 @@ async function spawnPm2Cli(action, name, pm2Home) {
 }
 
 /** Each operation owns its native client, including deadline teardown. */
-async function connectAndRun(action, timeoutMs = COMMAND_TIMEOUT_MS) {
+async function connectAndRun(action, timeoutMs = COMMAND_TIMEOUT_MS, { existingOnly = false } = {}) {
   // Importing PM2 constructs its singleton and probes the interactor socket.
   // Merely loading a reconciliation/peer-sync dependency must not contact it.
   const { default: pm2 } = await import('pm2');
@@ -288,6 +288,15 @@ async function connectAndRun(action, timeoutMs = COMMAND_TIMEOUT_MS) {
     const client = new pm2.custom();
     let settled = false;
     const disconnect = () => new Promise(resolveCleanup => {
+      // launchRPC can be left reconnecting to a vanished daemon. Close that
+      // socket directly: PM2's disconnectRPC rejects without closing it while
+      // disconnected, which would leak a retrying handle after our deadline.
+      const socket = existingOnly ? client.Client?.client_sock : null;
+      if (socket && socket.connected === false) {
+        try { socket.close(); } catch { /* already closed */ }
+        resolveCleanup(null);
+        return;
+      }
       let cleaned = false;
       const done = error => {
         if (cleaned) return;
@@ -325,7 +334,9 @@ async function connectAndRun(action, timeoutMs = COMMAND_TIMEOUT_MS) {
         return action(client);
       }).then(result => finish(null, result), finish);
     };
-    try { client.connect(onConnect); }
+    // PM2's connect() starts a daemon when none is reachable. Status reads
+    // used by background checks must never have that side effect.
+    try { if (existingOnly) client.Client.launchRPC(onConnect); else client.connect(onConnect); }
     catch (error) { finish(error); }
   });
 }
@@ -573,9 +584,15 @@ export async function listProcessesStrict(pm2Home = null) {
  * @returns {Promise<{pm2Version: string|null, nodeVersion: string|null}|null>} null when unreachable
  */
 export async function getDaemonIdentity() {
+  const rpcPath = process.env.PM2_DAEMON_RPC_PORT || join(process.env.PM2_HOME || join(homedir(), '.pm2'), 'rpc.sock');
+  if (!IS_WIN && !existsSync(rpcPath)) return null;
   const report = await connectAndRun(client => new Promise((resolve, reject) => {
-    client.Client.executeRemote('getReport', {}, (error, value) => error ? reject(error) : resolve(value));
-  }), JLIST_TIMEOUT_MS).catch(() => null);
+    // executeRemote() silently calls start() if its connection has disappeared;
+    // use the established RPC directly so a read cannot launch a daemon.
+    const rpc = client.Client.client;
+    if (!rpc?.call) { reject(new Error('PM2 daemon connection unavailable')); return; }
+    rpc.call('getReport', {}, (error, value) => error ? reject(error) : resolve(value));
+  }), JLIST_TIMEOUT_MS, { existingOnly: true }).catch(() => null);
   if (!report) return null;
   const text = (value) => (typeof value === 'string' && value && value !== 'N/A' ? value : null);
   return { pm2Version: text(report.pm2_version), nodeVersion: text(report.node_version) };

@@ -604,6 +604,9 @@ runBootSequence({ io, httpServer, localHttpServer, httpsEnabled, port: PORT, hos
 // Opt-in listener only: restores host configuration without generating tokens.
 // The boot smoke (#8343) opens no listener beyond the API server it probes.
 if (!isSmokeBoot()) {
+  // Local runtime probes and public release metadata only; no installer or AI calls.
+  import('./services/runtimeUpdateReview.js').then(({ startRuntimeUpdateReview }) => startRuntimeUpdateReview())
+    .catch((err) => console.error(`❌ Runtime update checks could not start: ${err.message}`));
   // Event-driven notifications for parked Music Video runs (#10156); zero provider calls.
   import('./services/musicVideo/attentionNotifier.js').then(({ initMusicVideoAttentionNotifier }) => initMusicVideoAttentionNotifier())
     .catch((err) => console.error(`❌ Music video attention notifier could not start: ${err.message}`));

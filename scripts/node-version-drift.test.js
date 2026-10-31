@@ -15,6 +15,7 @@ import { fileURLToPath } from 'url';
 import {
   MIN_NODE,
   MIN_NODE_24,
+  NODE_SECURITY_MINIMUMS,
   SUPPORTED_NODE_RANGE,
   parseVersion,
   satisfiesMinNode,
@@ -126,6 +127,15 @@ describe('Node version contract has exactly one owner (issue #3863)', () => {
       expect(workflow).toContain(`node-version: ${MIN_NODE}`);
       expect(workflow).toContain('name: Node minimum compatibility');
     });
+
+    it('setup and CI enforce the recorded security floor without changing the compatibility job', () => {
+      expect(read('package.json')).toContain('node scripts/checkNodeVersion.js --security');
+      expect(read('setup.sh')).toContain('node scripts/checkNodeVersion.js --security');
+      expect(read('setup.ps1')).toContain('node scripts/checkNodeVersion.js --security');
+      const workflow = read('.github/workflows/ci.yml');
+      expect(workflow).toContain(`node-version: ${NODE_SECURITY_MINIMUMS[22]}`);
+      expect(workflow).toContain('node scripts/checkNodeVersion.js --security');
+    });
   });
 
   describe('the advertised range covers required dependency engines', () => {
@@ -150,7 +160,7 @@ describe('Node version contract has exactly one owner (issue #3863)', () => {
       'the root `%s` script runs the version check first',
       (name) => {
         expect(readJson('package.json').scripts[name]).toMatch(
-          /^node scripts\/checkNodeVersion\.js &&/
+          /^node scripts\/checkNodeVersion\.js(?: --security)? &&/
         );
       }
     );

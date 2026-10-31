@@ -12,7 +12,9 @@ import {
   MIN_NODE_24,
   SUPPORTED_NODE_RANGE,
   assertNodeVersion,
+  assertNodeSecurity,
   compareVersions,
+  nodeSecurityBaseline,
   parseVersion,
   satisfiesVersionRequirement,
   satisfiesMinNode,
@@ -29,6 +31,27 @@ describe('parseVersion', () => {
     ['22.22.2-nightly20240101', [22, 22, 2]],
   ])('parses %s', (input, expected) => {
     expect(parseVersion(input)).toEqual(expected);
+  });
+});
+
+describe('the security baseline is separate from compatibility', () => {
+  it.each([
+    ['22.23.3', '22.23.4', false], ['22.23.4', '22.23.4', true],
+    ['24.22.0', '24.22.1', false], ['24.22.1', '24.22.1', true],
+    ['26.12.0', '26.12.1', false], ['26.13.0', '26.12.1', true],
+  ])('checks %s against its own line', (version, minimum, compliant) => {
+    expect(nodeSecurityBaseline(version)).toEqual({ minimum, compliant });
+    expect(satisfiesMinNode(version)).toBe(true);
+  });
+
+  it('fails setup below a known floor and reports unrecorded lines as unknown', () => {
+    const onFail = vi.fn();
+    const onUnknown = vi.fn();
+    expect(assertNodeSecurity({ version: '26.0.0', onFail, onUnknown })).toBe(false);
+    expect(onFail).toHaveBeenCalledWith(expect.stringContaining('26.12.1'));
+    expect(nodeSecurityBaseline('27.0.0')).toEqual({ minimum: null, compliant: null });
+    expect(assertNodeSecurity({ version: '27.0.0', onFail, onUnknown })).toBe(true);
+    expect(onUnknown).toHaveBeenCalledOnce();
   });
 });
 

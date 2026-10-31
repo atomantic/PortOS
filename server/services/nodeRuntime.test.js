@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { posix } from 'path';
 import { __testing } from './nodeRuntime.js';
 
-const { getStartupStatus, resolveNvm, rewriteLaunchAgent, summarizeNodeReleases } = __testing;
+const { getStartupStatus, globalPm2Status, resolveNvm, rewriteLaunchAgent, summarizeNodeReleases } = __testing;
 
 // Shape of https://nodejs.org/dist/index.json entries (only the fields read).
 const release = (version, { lts = false, security = false, date = '2026-10-01' } = {}) => ({ version, lts, security, date });
@@ -25,6 +25,8 @@ describe('summarizeNodeReleases', () => {
       ['v26.12.1', 'Latest release'],
     ]);
     expect(summary.securityUpdate).toBe(true);
+    expect(summary.latestSecurity.version).toBe('v24.22.1');
+    expect(summary.securityVerified).toBe(true);
     expect(summary.latestLts.version).toBe('v24.22.1');
   });
 
@@ -45,6 +47,11 @@ describe('summarizeNodeReleases', () => {
   it('does not call a newer non-security patch a security update', () => {
     expect(summarizeNodeReleases(INDEX, 'v22.22.2').securityUpdate).toBe(false);
   });
+
+  it('does not claim security metadata was verified if a newer release omits it', () => {
+    const summary = summarizeNodeReleases([{ version: 'v26.14.0', lts: false }], 'v26.13.0');
+    expect(summary.securityVerified).toBe(false);
+  });
 });
 
 describe('resolveNvm', () => {
@@ -58,6 +65,15 @@ describe('resolveNvm', () => {
     expect(resolveNvm({ env: {}, home: '/home/example', exists: () => false })).toBeNull();
     expect(resolveNvm({ env: {}, home: '/home/example', exists: (path) => path === '/home/example/.nvm' })).toBeNull();
   });
+});
+
+it('distinguishes a missing global pm2 CLI from an unreadable installation', () => {
+  const node = '/example/node/bin/node';
+  const readError = (code) => () => { throw Object.assign(new Error(code), { code }); };
+  expect(globalPm2Status(node, { isWindows: false, readText: () => '{"version":"7.1.0"}' })).toEqual({ state: 'available', version: '7.1.0' });
+  expect(globalPm2Status(node, { isWindows: false, readText: readError('ENOENT') })).toEqual({ state: 'missing', version: null });
+  expect(globalPm2Status(node, { isWindows: false, readText: readError('EACCES') })).toEqual({ state: 'unverified', version: null });
+  expect(globalPm2Status(node, { isWindows: false, readText: () => '{broken' })).toEqual({ state: 'unverified', version: null });
 });
 
 describe('getStartupStatus', () => {
