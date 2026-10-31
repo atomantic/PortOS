@@ -7,7 +7,7 @@
 import { z } from 'zod';
 import {
   STORYBOARD_ART_STYLES, STORYBOARD_ASPECT_RATIOS, STORYBOARD_LIMITS as L, STORYBOARD_MUSICAL_ROLES,
-  STORYBOARD_PANEL_ANGLES, STORYBOARD_PANEL_FACINGS, STORYBOARD_PANEL_FRAMINGS, STORYBOARD_TAKE_SOURCES,
+  STORYBOARD_PANEL_ANGLES, STORYBOARD_PANEL_COMPOSITIONS, STORYBOARD_PANEL_FACINGS, STORYBOARD_PANEL_FRAMINGS, STORYBOARD_TAKE_SOURCES,
 } from './storyboardVocabulary.js';
 import { RECIPE_LIMITS as R, RECIPE_NODE_TYPES, RECIPE_PORT_LABELS } from './storyboardRecipe.js';
 import { BEAT_EXTRACT_LIMITS } from './storyboardBeatExtract.js';
@@ -62,6 +62,7 @@ const panelFields = {
   framing: z.enum(STORYBOARD_PANEL_FRAMINGS).nullable().optional(),
   angle: z.enum(STORYBOARD_PANEL_ANGLES).nullable().optional(),
   facing: z.enum(STORYBOARD_PANEL_FACINGS).nullable().optional(),
+  composition: z.enum(STORYBOARD_PANEL_COMPOSITIONS).nullable().optional(),
   camera: text(L.camera).optional(),
   seconds: z.number().positive().max(L.panelSecondsMax).nullable().optional(),
   castIds: refs.optional(),

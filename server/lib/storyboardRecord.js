@@ -25,7 +25,7 @@ import { UPLOAD_AUDIO_EXTENSIONS } from './mimeTypes.js';
 import { sanitizeSoftDeleteFields } from './syncWire.js';
 import {
   isValidStoryboardId, isValidStoryboardRecipeId, newStoryboardEntityId, STORYBOARD_ART_STYLES, STORYBOARD_ASPECT_RATIOS, STORYBOARD_LIMITS,
-  STORYBOARD_MUSICAL_ROLES, STORYBOARD_PANEL_ANGLES, STORYBOARD_PANEL_FACINGS, STORYBOARD_PANEL_FRAMINGS, STORYBOARD_TAKE_SOURCES,
+  STORYBOARD_MUSICAL_ROLES, STORYBOARD_PANEL_ANGLES, STORYBOARD_PANEL_COMPOSITIONS, STORYBOARD_PANEL_FACINGS, STORYBOARD_PANEL_FRAMINGS, STORYBOARD_TAKE_SOURCES,
 } from './storyboardVocabulary.js';
 import { RECIPE_LIMITS, sanitizePanelMake, sanitizeRecipe } from './storyboardRecipe.js';
 import { BEAT_EXTRACT_LIMITS } from './storyboardBeatExtract.js';
@@ -39,6 +39,7 @@ const ROLE_SET = new Set(STORYBOARD_MUSICAL_ROLES);
 const FRAMING_SET = new Set(STORYBOARD_PANEL_FRAMINGS);
 const ANGLE_SET = new Set(STORYBOARD_PANEL_ANGLES);
 const FACING_SET = new Set(STORYBOARD_PANEL_FACINGS);
+const COMPOSITION_SET = new Set(STORYBOARD_PANEL_COMPOSITIONS);
 const SOURCE_SET = new Set(STORYBOARD_TAKE_SOURCES);
 
 // A temp track is an audio file in the uploads bucket, named as POST
@@ -130,6 +131,7 @@ function sanitizePanel(raw) {
     framing: pick(raw.framing, FRAMING_SET),
     angle: pick(raw.angle, ANGLE_SET),
     facing: pick(raw.facing, FACING_SET),
+    composition: pick(raw.composition, COMPOSITION_SET),
     camera: trimTo(raw.camera, STORYBOARD_LIMITS.camera),
     seconds: sanitizePanelSeconds(raw.seconds),
     castIds: refList(raw.castIds),

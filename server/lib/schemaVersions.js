@@ -300,7 +300,8 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // panel's camera `angle`; a v9 peer would null or drop them.
   // v11 = a panel's `facing` (subject to camera); a v10 peer would drop it.
   // v12 = a beat's `beforeSong` (plays before the song starts); a v11 peer would drop it.
-  storyboards: 12,
+  // v13 = a panel's `composition` (where the subject sits); a v12 peer would drop it.
+  storyboards: 13,
   // v1 = author personas (PostgreSQL `authors` table) federated via the
   // per-record peer-sync push pipeline (record kind `author`, sync category
   // `authors`). A brand-NEW synced record type like `storyBuilder` below, so it

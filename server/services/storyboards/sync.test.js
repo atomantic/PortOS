@@ -36,7 +36,7 @@ async function boardWithArt() {
 
 describe('storyboard federation', () => {
   it('declares its own version-gated sync category', () => {
-    expect(PORTOS_SCHEMA_VERSIONS.storyboards).toBe(12);
+    expect(PORTOS_SCHEMA_VERSIONS.storyboards).toBe(13);
   });
 
   it('emits a record event on create, edit and delete so subscribed peers get each revision', async () => {

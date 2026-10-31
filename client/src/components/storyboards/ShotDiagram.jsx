@@ -58,6 +58,15 @@ const TopDownSubject = ({ deg }) => (
   </>
 );
 
+// Frame view for the composition diagrams: rule-of-thirds guides and a
+// waist-up figure placed at `x` (and `top`, for low in frame).
+const Placed = ({ x, top = 12 }) => (
+  <>
+    <path className="stroke-gray-600" strokeWidth="0.75" strokeDasharray="2 3" fill="none" d="M53.3 0V90M106.7 0V90M0 30H160M0 60H160" />
+    <Figure x={x} top={top} scale={1.4} />
+  </>
+);
+
 const SCENES = {
   'extreme-wide': () => (
     <>
@@ -128,6 +137,13 @@ const SCENES = {
   low: () => (<><StandingSubject /><Camera x={36} y={74} aimX={112} aimY={40} /></>),
   'birds-eye': () => (<><StandingSubject /><Camera x={112} y={11} aimX={112} aimY={40} /></>),
   'worms-eye': () => (<><StandingSubject /><Camera x={70} y={78} aimX={112} aimY={30} /></>),
+  // Compositions: where the subject sits in the frame.
+  center: () => <Placed x={80} />,
+  'left-third': () => <Placed x={53.3} />,
+  'right-third': () => <Placed x={106.7} />,
+  'cut-left': () => <Placed x={6} />,
+  'cut-right': () => <Placed x={154} />,
+  'low-in-frame': () => <Placed x={80} top={50} />,
   // Facings: which way the subject turns, seen from above.
   front: () => <TopDownSubject deg={0} />,
   'three-quarter': () => <TopDownSubject deg={45} />,
@@ -146,7 +162,8 @@ const SCENES = {
  * Code-drawn concept sketch of a storyboard framing (a `SHOT_TYPES` value: what
  * the camera sees at that distance) or angle (a `SHOT_ANGLES` value: where the
  * camera sits, seen from the side) or facing (a `SHOT_FACINGS` value: which
- * way the subject turns, seen from above). An unknown kind draws an empty frame.
+ * way the subject turns, seen from above) or composition (a `SHOT_COMPOSITIONS`
+ * value: where the subject sits in the frame). An unknown kind draws an empty frame.
  */
 export default function ShotDiagram({ kind, className = '' }) {
   const Scene = SCENES[kind];
