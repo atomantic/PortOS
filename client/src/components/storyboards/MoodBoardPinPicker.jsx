@@ -7,8 +7,9 @@ import { getMoodBoard } from '../../services/api';
 import { moodBoardItemAnalysisSource, moodBoardItemSrc } from '../../lib/moodBoardItemSrc';
 
 /**
- * Pick one image pin from the storyboard's linked mood board. Only pins that
- * are local gallery images are offered: a panel take stores a gallery filename.
+ * Pick one image pin from a mood board (a storyboard's linked board, a cast
+ * member's blend faces). Only pins that are local gallery images are offered:
+ * callers store a gallery filename.
  */
 export default function MoodBoardPinPicker({ open, moodBoardId, onClose, onSelect }) {
   const fetchPins = useCallback(async () => {

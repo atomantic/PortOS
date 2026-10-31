@@ -4,6 +4,7 @@ import { Anchor, Check, Wand2 } from 'lucide-react';
 import {
   BLEND_MAX_STRENGTH_TAKES, DESIGN_FEATURES, DESIGN_FRAMINGS, DEFAULT_DESIGN_FRAMING, DESIGN_MAX_BLEND_REFS, DESIGN_MAX_TAKES, designRoundId, designTakeIndex, featureLines, blendLines,
 } from '../../../../server/lib/catalogDesign.js';
+import { listMoodBoardNames } from '../../services/api';
 import { getCatalogIngredientDetails, renderCatalogDesign, spreadCatalogDesign, updateCatalogIngredientMediaLibrary } from '../../services/apiCatalog';
 import { useModelInputPreview } from '../../hooks/useModelInputPreview';
 import useProviderModels from '../../hooks/useProviderModels';
@@ -15,6 +16,8 @@ import ModelInputPreview from '../media/ModelInputPreview';
 import SentPromptPanel from '../media/SentPromptPanel';
 import MediaJobThumb from '../pipeline/MediaJobThumb';
 import IngredientPicker from '../IngredientPicker';
+import GalleryImagePicker from '../imageGen/GalleryImagePicker';
+import MoodBoardPinPicker from '../storyboards/MoodBoardPinPicker';
 import TabPills from '../ui/TabPills';
 import CatalogImagePreview from './CatalogImagePreview';
 
@@ -28,7 +31,7 @@ const formKey = (m) => m?.library?.variant?.formId || '';
 // (`?take=<file>`); pending renders survive a reload in session storage until
 // their image lands on the record. The current canon (portrait, else the
 // canonical-age anchor) heads the tab so a redesign can start from it.
-export default function CatalogDesignPanel({ ingredientId, name, forms = [], media, blockedReason, onChanged, onSetPortrait, GalleryPicker = null }) {
+export default function CatalogDesignPanel({ ingredientId, name, forms = [], media, blockedReason, onChanged, onSetPortrait }) {
   const mounted = useMounted();
   const inFlight = useRef(false);
   const [params, setParams] = useSearchParams();
@@ -134,7 +137,7 @@ export default function CatalogDesignPanel({ ingredientId, name, forms = [], med
     </div>}
     <OpenRound ingredientId={ingredientId} forms={forms} disabled={busy || !!blockedReason} onRender={queue} />
     {error && <p role="alert" className="text-sm text-port-error">{error}</p>}
-    {picked && <PickedActions key={picked.mediaKey} ingredientId={ingredientId} take={picked} isCanon={pickedIsCanon} forms={forms} images={images} GalleryPicker={GalleryPicker}
+    {picked && <PickedActions key={picked.mediaKey} ingredientId={ingredientId} take={picked} isCanon={pickedIsCanon} forms={forms} images={images}
       disabled={busy || !!blockedReason} onRender={queue} onAnchor={() => makeAnchor(picked)} onClose={() => pick(null)} />}
     {rounds.length === 0 && <p className="text-sm text-gray-400">No takes yet. Describe an idea above to cast the first faces.</p>}
     {rounds.map((round) => <div key={round.id} className="space-y-2">
@@ -258,7 +261,7 @@ function OpenRound({ ingredientId, forms, disabled, onRender }) {
 const ACTIONS = [['refine', 'Refine'], ['feature', 'Vary a feature'], ['blend', 'Blend toward'], ['age', 'Carry to an age']];
 const BLEND_STRENGTHS = [25, 50, 75];
 
-function PickedActions({ ingredientId, take, isCanon, forms, images, GalleryPicker, disabled, onRender, onAnchor, onClose }) {
+function PickedActions({ ingredientId, take, isCanon, forms, images, disabled, onRender, onAnchor, onClose }) {
   const id = useId();
   const [action, setAction] = useState(isCanon ? 'blend' : 'refine');
   const [note, setNote] = useState('');
@@ -268,8 +271,11 @@ function PickedActions({ ingredientId, take, isCanon, forms, images, GalleryPick
   const [blendFeatures, setBlendFeatures] = useState([]);
   const [strength, setStrength] = useState('');
   const [strengthCount, setStrengthCount] = useState(2);
-  const [galleryPicks, setGalleryPicks] = useState([]);
+  const [extraPicks, setExtraPicks] = useState([]);
   const [pickingGallery, setPickingGallery] = useState(false);
+  const [boards, setBoards] = useState(null);
+  const [boardError, setBoardError] = useState('');
+  const [boardId, setBoardId] = useState('');
   const [ageFormId, setAgeFormId] = useState(forms[0]?.id || '');
   const [otherCast, setOtherCast] = useState(null);
   const [pickingCast, setPickingCast] = useState(false);
@@ -286,12 +292,23 @@ function PickedActions({ ingredientId, take, isCanon, forms, images, GalleryPick
     ? blendLines(blendFeatures, { refCount: Math.max(blendFiles.length, 1), strength: strength ? Number(strength) : undefined, count: strengthCount }) : [];
   const toggleBlend = (key) => setBlendFiles((prev) => (prev.includes(key) ? prev.filter((k) => k !== key)
     : prev.length < DESIGN_MAX_BLEND_REFS ? [...prev, key] : prev));
+  // A face from the gallery or a mood board joins the choices already picked.
+  const addPick = (filename) => {
+    if (!filename) return;
+    setExtraPicks((prev) => (prev.some((m) => m.mediaKey === filename) ? prev : [{ mediaKey: filename }, ...prev]));
+    setBlendFiles((prev) => (prev.includes(filename) || prev.length >= DESIGN_MAX_BLEND_REFS ? prev : [...prev, filename]));
+  };
+  const loadBoards = async () => {
+    setBoardError('');
+    const rows = await listMoodBoardNames({ silent: true }).catch((err) => { setBoardError(err.message || 'Could not load mood boards'); return null; });
+    if (rows) setBoards(Array.isArray(rows) ? rows : []);
+  };
   const loadCast = async (ingredient) => {
     setPickingCast(false);
     const details = await getCatalogIngredientDetails(ingredient.id, { view: 'media', silent: true }).catch(() => null);
     setOtherCast({ name: ingredient.name, images: (details?.media || []).filter((m) => IMAGE_KINDS.has(m.kind) && !m.deleted) });
   };
-  const blendChoices = [...galleryPicks, ...images.filter((m) => m.mediaKey !== take.mediaKey), ...(otherCast?.images || [])]
+  const blendChoices = [...extraPicks, ...images.filter((m) => m.mediaKey !== take.mediaKey), ...(otherCast?.images || [])]
     .filter((m, i, all) => all.findIndex((x) => x.mediaKey === m.mediaKey) === i);
   return <div className="rounded border border-port-accent/50 p-3 space-y-3">
     <div className="flex items-start gap-3">
@@ -323,8 +340,16 @@ function PickedActions({ ingredientId, take, isCanon, forms, images, GalleryPick
       <div className="flex flex-wrap gap-x-4">
         <button type="button" onClick={() => setPickingCast(true)} className="min-h-11 text-sm text-port-accent underline">
           {otherCast ? `Showing ${otherCast.name}'s images. Pick another cast member` : 'Use another cast member’s image'}</button>
-        {GalleryPicker && <button type="button" onClick={() => setPickingGallery(true)} className="min-h-11 text-sm text-port-accent underline">Pick from gallery</button>}
+        <button type="button" onClick={() => setPickingGallery(true)} className="min-h-11 text-sm text-port-accent underline">Pick from gallery</button>
+        {!boards && <button type="button" onClick={loadBoards} className="min-h-11 text-sm text-port-accent underline">Pick from mood board</button>}
       </div>
+      {boardError && <p role="alert" className="text-xs text-port-error">{boardError}</p>}
+      {boards && (boards.length ? <label htmlFor={`${id}-board`} className="block space-y-1 text-xs"><span>Mood board</span>
+        <select id={`${id}-board`} value={boardId} onChange={(e) => setBoardId(e.target.value)} className={fieldClass}>
+          <option value="">Choose a mood board</option>
+          {boards.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+        </select>
+      </label> : <p className="text-xs text-gray-400">No mood boards yet.</p>)}
       <div className="grid grid-cols-2 gap-2">
         <label htmlFor={`${id}-strength`} className="min-w-0 space-y-1 text-xs"><span>How far toward them</span>
           <select id={`${id}-strength`} value={strength} disabled={disabled} onChange={(e) => setStrength(e.target.value)} className={fieldClass}>
@@ -347,11 +372,8 @@ function PickedActions({ ingredientId, take, isCanon, forms, images, GalleryPick
         </div>
       </fieldset>
       <IngredientPicker open={pickingCast} onClose={() => setPickingCast(false)} onSelect={loadCast} type="character" />
-      {GalleryPicker && pickingGallery && <GalleryPicker pickLabel="Blend toward" onClose={() => setPickingGallery(false)} onPick={(filename) => {
-        setPickingGallery(false);
-        setGalleryPicks((prev) => (prev.some((m) => m.mediaKey === filename) ? prev : [{ mediaKey: filename }, ...prev]));
-        setBlendFiles((prev) => (prev.includes(filename) || prev.length >= DESIGN_MAX_BLEND_REFS ? prev : [...prev, filename]));
-      }} />}
+      <GalleryImagePicker open={pickingGallery} allowUpload onClose={() => setPickingGallery(false)} onSelect={(item) => addPick(item?.filename)} />
+      <MoodBoardPinPicker open={!!boardId} moodBoardId={boardId} onClose={() => setBoardId('')} onSelect={(pin) => addPick(pin.filename)} />
     </div>}
     {action === 'age' && <AgeSelect id={`${id}-age`} forms={forms} value={ageFormId} onChange={setAgeFormId} disabled={disabled} label="Age to carry to" includeCanonical={false} />}
     {(action === 'refine' || action === 'age') && <label htmlFor={`${id}-count`} className="block space-y-1 text-xs"><span>Takes</span>

@@ -13,6 +13,11 @@ vi.mock('../pipeline/MediaJobThumb', () => ({ default: ({ label, jobId, onStatus
   <button type="button" onClick={() => onStatus('canceled')}>cancel {jobId}</button>
   <button type="button" onClick={() => onStatus('failed')}>blank {jobId}</button></div> }));
 vi.mock('../IngredientPicker', () => ({ default: () => null }));
+vi.mock('../../services/api', () => ({ listMoodBoardNames: vi.fn(async () => [{ id: 'board-1', name: 'Example board' }]) }));
+vi.mock('../imageGen/GalleryImagePicker', () => ({ default: ({ open, allowUpload, onSelect }) => (open
+  ? <button type="button" onClick={() => onSelect({ filename: 'gallery-face.png' })}>gallery pick{allowUpload ? ' with upload' : ''}</button> : null) }));
+vi.mock('../storyboards/MoodBoardPinPicker', () => ({ default: ({ open, moodBoardId, onSelect, onClose }) => (open
+  ? <button type="button" onClick={() => { onSelect({ filename: `${moodBoardId}-face.png` }); onClose(); }}>board pick</button> : null) }));
 import CatalogDesignPanel from './CatalogDesignPanel';
 import { renderCatalogDesign, updateCatalogIngredientMediaLibrary } from '../../services/apiCatalog';
 
@@ -75,6 +80,20 @@ describe('Casting design rounds', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Render 3 takes' }));
     await waitFor(() => expect(renderCatalogDesign).toHaveBeenCalledWith('cast', { mode: 'blend', baseImageFile: 'old-face.png',
       note: 'Keep the hair, change the face structure.', blendImageFiles: ['second.png', 'first.png'], features: [], strength: 50, count: 3 }, { silent: true }));
+  });
+
+  it('adds blend faces from the standard gallery picker (with upload) and from a mood board', async () => {
+    renderCatalogDesign.mockResolvedValue({ roundId: 'r6', jobs: [{ jobId: 'job-3', line: 'x' }] });
+    mount();
+    fireEvent.click(screen.getByRole('button', { name: 'Redesign from canon' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Pick from gallery' }));
+    fireEvent.click(screen.getByRole('button', { name: 'gallery pick with upload' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Pick from mood board' }));
+    fireEvent.change(await screen.findByLabelText('Mood board'), { target: { value: 'board-1' } });
+    fireEvent.click(screen.getByRole('button', { name: 'board pick' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Render 4 takes' }));
+    await waitFor(() => expect(renderCatalogDesign).toHaveBeenCalledWith('cast', expect.objectContaining({
+      mode: 'blend', baseImageFile: 'old-face.png', blendImageFiles: ['gallery-face.png', 'board-1-face.png'] }), { silent: true }));
   });
 
   it('queues a feature grid from the picked take and shows its pending takes', async () => {
