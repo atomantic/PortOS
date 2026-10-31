@@ -245,7 +245,8 @@ export default function SceneCard({
   // from the start frame to the end frame needs both.
   const endFrames = Boolean(onGenerateEndFrame) && (layer === 'footage' || (stillPicture && isEndFrameImageEffect(scene.imageEffect)));
   // The editor shows one picture at a time: the frames, or the clip (the still stands in until it has one).
-  const [view, setView] = useState(() => (scene.videoHistoryId || scene.referenceImageId || stillPicture ? 'clip' : 'frames'));
+  // A shot that leads with Clip from storyboard opens on the clip, where that action lives.
+  const [view, setView] = useState(() => (scene.videoHistoryId || scene.referenceImageId || stillPicture || storyboardDefault ? 'clip' : 'frames'));
   const views = [['frames', endFrames ? 'Frames' : 'Still'], ['clip', stillPicture ? 'Picture' : 'Clip']];
   const shotModeValue = performance ? (scene.performanceStyle === 'music' ? 'music' : 'performance') : 'cutaway';
   // A shot before the song has a length of its own instead of a span of the song.
