@@ -31,7 +31,7 @@
 import { join } from 'path';
 import { PATHS } from '../../lib/fileUtils.js';
 import { createCollectionStore } from '../../lib/collectionStore.js';
-import { createPgFileFacade, resolvePgBackend, isFileBackend } from '../../lib/pgFileFacade.js';
+import { createPgFileFacade, resolvePgBackend, isFileBackend, POSTGRES_SETUP_HINT } from '../../lib/pgFileFacade.js';
 import { createFileWriteQueue, createRecordWriteQueue } from '../../lib/fileWriteQueue.js';
 import { bumpChangeToken, getChangeToken } from '../changeToken.js';
 
@@ -209,7 +209,7 @@ function makePgBackend(db) {
 // pull can call in BEFORE that gate's ensureSchema() runs — so resolvePgBackend
 // brings the schema up (idempotent) and runs the one-time file→DB import first.
 const pgBackend = () => resolvePgBackend({
-  requirement: 'Universe Builder requires PostgreSQL — run `npm run setup:db` (dev/test only: set MEMORY_BACKEND=file for the unsupported file backend)',
+  requirement: `Universe Builder requires PostgreSQL — ${POSTGRES_SETUP_HINT}`,
   migrate: async () => {
     const { migrateUniversesToDB } = await import('../../scripts/migrateUniversesToDB.js');
     await migrateUniversesToDB();

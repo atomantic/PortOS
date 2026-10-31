@@ -26,7 +26,7 @@ import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { PATHS } from '../../lib/fileUtils.js';
 import { createCollectionStore } from '../../lib/collectionStore.js';
-import { createPgFileFacade, resolvePgBackend } from '../../lib/pgFileFacade.js';
+import { createPgFileFacade, resolvePgBackend, POSTGRES_SETUP_HINT } from '../../lib/pgFileFacade.js';
 import { createRecordWriteQueue } from '../../lib/fileWriteQueue.js';
 import {
   contentHashForRecord,
@@ -106,7 +106,7 @@ function makePgBackend(db) {
 }
 
 const pgBackend = () => resolvePgBackend({
-  requirement: 'Creative Commission feedback requires PostgreSQL — run `npm run setup:db` (dev/test only: set MEMORY_BACKEND=file for the unsupported file backend)',
+  requirement: `Creative Commission feedback requires PostgreSQL — ${POSTGRES_SETUP_HINT}`,
   loadDb: () => import('./feedbackDb.js'),
   makePg: makePgBackend,
 });
