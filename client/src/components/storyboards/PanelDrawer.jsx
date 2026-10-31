@@ -13,7 +13,9 @@ import { listCatalogIngredientsByIds } from '../../services/api';
 import { STORYBOARD_LIMITS } from '../../../../server/lib/storyboardVocabulary.js';
 import {
   SHOT_ANGLES, SHOT_ANGLE_HINTS, SHOT_ANGLE_LABELS, SHOT_COMPOSITIONS, SHOT_COMPOSITION_HINTS, SHOT_COMPOSITION_LABELS,
-  SHOT_FACINGS, SHOT_FACING_HINTS, SHOT_FACING_LABELS,
+  SHOT_EYELINES, SHOT_EYELINE_HINTS, SHOT_EYELINE_LABELS, SHOT_FACINGS, SHOT_FACING_HINTS, SHOT_FACING_LABELS,
+  SHOT_FOCUSES, SHOT_FOCUS_HINTS, SHOT_FOCUS_LABELS, SHOT_LENSES, SHOT_LENS_HINTS, SHOT_LENS_LABELS,
+  SHOT_MOVES, SHOT_MOVE_HINTS, SHOT_MOVE_LABELS,
   SHOT_TYPES, SHOT_TYPE_HINTS, SHOT_TYPE_LABELS,
 } from '../../lib/shotGrammar';
 import CommitField from './CommitField';
@@ -205,9 +207,29 @@ function ShotTab({ board, found, panelNumber, sketchNonce, busy, handlers, timin
           value={panel.facing} labelId={fieldId('facing')} onChange={(facing) => handlers.onPatch({ facing })} />
       </div>
       <div>
+        <span id={fieldId('eyeline')} className={labelClass}>Eyeline</span>
+        <ShotDiagramPicker options={SHOT_EYELINES} labels={SHOT_EYELINE_LABELS} hints={SHOT_EYELINE_HINTS}
+          value={panel.eyeline} labelId={fieldId('eyeline')} onChange={(eyeline) => handlers.onPatch({ eyeline })} />
+      </div>
+      <div>
         <span id={fieldId('composition')} className={labelClass}>Composition</span>
         <ShotDiagramPicker options={SHOT_COMPOSITIONS} labels={SHOT_COMPOSITION_LABELS} hints={SHOT_COMPOSITION_HINTS}
           value={panel.composition} labelId={fieldId('composition')} onChange={(composition) => handlers.onPatch({ composition })} />
+      </div>
+      <div>
+        <span id={fieldId('lens')} className={labelClass}>Lens</span>
+        <ShotDiagramPicker options={SHOT_LENSES} labels={SHOT_LENS_LABELS} hints={SHOT_LENS_HINTS}
+          value={panel.lens} labelId={fieldId('lens')} onChange={(lens) => handlers.onPatch({ lens })} />
+      </div>
+      <div>
+        <span id={fieldId('focus')} className={labelClass}>Focus</span>
+        <ShotDiagramPicker options={SHOT_FOCUSES} labels={SHOT_FOCUS_LABELS} hints={SHOT_FOCUS_HINTS}
+          value={panel.focus} labelId={fieldId('focus')} onChange={(focus) => handlers.onPatch({ focus })} />
+      </div>
+      <div>
+        <span id={fieldId('move')} className={labelClass}>Camera move (video)</span>
+        <ShotDiagramPicker options={SHOT_MOVES} labels={SHOT_MOVE_LABELS} hints={SHOT_MOVE_HINTS}
+          value={panel.move} labelId={fieldId('move')} onChange={(move) => handlers.onPatch({ move })} />
       </div>
       {timing ? (
         <div>
