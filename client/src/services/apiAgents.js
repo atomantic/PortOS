@@ -318,16 +318,16 @@ export const getCosWhileAwayActivity = (since, options) =>
   request(`/cos/activity/while-away${since ? `?since=${encodeURIComponent(since)}` : ''}`, options);
 
 // CoS Learning
-export const getCosLearning = () => request('/cos/learning');
-export const getCosLearningDurations = () => request('/cos/learning/durations');
-export const getCosLearningSkipped = () => request('/cos/learning/skipped');
-export const getCosLearningPerformance = () => request('/cos/learning/performance');
-export const getCosLearningRouting = () => request('/cos/learning/routing');
+export const getCosLearning = (options = {}) => request('/cos/learning', options);
+export const getCosLearningDurations = (options = {}) => request('/cos/learning/durations', options);
+export const getCosLearningSkipped = (options = {}) => request('/cos/learning/skipped', options);
+export const getCosLearningPerformance = (options = {}) => request('/cos/learning/performance', options);
+export const getCosLearningRouting = (options = {}) => request('/cos/learning/routing', options);
 export const getCosLearningSummary = (options) => request('/cos/learning/summary', options);
-export const getCosLearningConfidence = () => request('/cos/learning/confidence');
+export const getCosLearningConfidence = (options = {}) => request('/cos/learning/confidence', options);
 export const backfillCosLearning = () => request('/cos/learning/backfill', { method: 'POST' });
 export const resetCosTaskTypeLearning = (taskType) => request(`/cos/learning/reset/${encodeURIComponent(taskType)}`, { method: 'POST' });
-export const getDismissedCosRecommendations = () => request('/cos/learning/recommendations/dismissed');
+export const getDismissedCosRecommendations = (options = {}) => request('/cos/learning/recommendations/dismissed', options);
 export const dismissCosRecommendation = (id, snapshot) => request('/cos/learning/recommendations/dismiss', {
   method: 'POST',
   body: JSON.stringify({ id, snapshot })
