@@ -78,3 +78,17 @@ describe('RoundEditor header', () => {
     expect(row.contains(screen.getByRole('link', { name: /Guide/ }))).toBe(true);
   });
 });
+
+describe('RoundEditor failed read', () => {
+  it('offers Retry for a failed read instead of saying the round was not found', async () => {
+    api.getRound.mockReset()
+      .mockRejectedValueOnce(Object.assign(new Error('Server unavailable'), { status: 503 }))
+      .mockResolvedValueOnce({ round: song('a', 'Song A') });
+    api.listRounds.mockReset().mockResolvedValue({ rounds: [song('a', 'Song A')] });
+    render(<MemoryRouter initialEntries={['/rounds/a']}><Harness /></MemoryRouter>);
+    expect(await screen.findByText('Couldn’t load this round')).toBeTruthy();
+    expect(screen.queryByText('Round not found.')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByRole('heading', { level: 1, name: 'Song A' })).toBeTruthy();
+  });
+});
