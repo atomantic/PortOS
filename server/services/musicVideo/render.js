@@ -66,7 +66,7 @@ import { rendersIntercut, usesLoudTierEverywhere } from '../../lib/musicVideoPro
 import { cutEffectCuts, plannedTransitions, sceneCutEffect } from '../../lib/musicVideoCutEffects.js';
 import { imageEffectGlitchFrames, mergeGlitchFrames, musicVideoTransitionFilter, sceneTransitions, shotGlitchFrames, transitionGlitchFrames } from '../../lib/musicVideoTransitions.js';
 import { stillMoveForCamera } from '../../lib/cameraMovements.js';
-import { isEndFrameImageEffect, musicVideoImageEffectFilter, sceneImageEffect, scenePhotoSequence } from '../../lib/musicVideoImageEffects.js';
+import { isEndFrameImageEffect, musicVideoImageEffectFilter, photoSequenceArrivals, sceneImageEffect, scenePhotoSequence } from '../../lib/musicVideoImageEffects.js';
 import { trackedRenderMap } from '../renderActivity.js';
 
 // Per-project render mutex (keyed by projectId so two projects can render in
@@ -453,6 +453,51 @@ function footageFrameFit(scene) {
 const DEFAULT_CANVAS = Object.freeze({ width: 1280, height: 720, fps: 24 });
 const evenPx = (n) => Math.max(2, Math.round(n / 2) * 2);
 
+// One overlay per photo arrival is the exact stacking order; past this many in
+// one rendered section the graph is refused rather than thinned.
+const PHOTO_STACK_RENDER_LIMIT = 240;
+
+// #14277: a stacked photo sequence. Every arrival visible in this section is
+// overlaid in sequence order onto a black ground at the still's cover size, then
+// the shot's Move plays over the composed picture as it does over one still.
+// A laid-out photo is fitted whole, scaled, faded and turned about its centre;
+// a photo without a layout is cover-cropped like an ordinary still.
+function stackedPhotoChain(c, inputRefs, sequence, { coverW, coverH, fps, frames, after }) {
+  const id = inputRefs.clip;
+  const inputs = [id, ...(inputRefs.photos || [])];
+  const offset = Math.round((c.photoAtSec ?? c.effectAtSec ?? 0) * fps);
+  const arrivals = photoSequenceArrivals(sequence, Math.max(0, offset), offset + frames + 1);
+  if (arrivals.length > PHOTO_STACK_RENDER_LIMIT) {
+    throw new ServerError(`This photo sequence overlaps ${arrivals.length} photo arrivals in one shot; the render supports ${PHOTO_STACK_RENDER_LIMIT}. Shorten the overlap, lengthen the interval or split the shot.`, {
+      status: 422, code: 'PHOTO_STACK_TOO_DEEP', context: { sceneId: c.sceneId, arrivals: arrivals.length, limit: PHOTO_STACK_RENDER_LIMIT },
+    });
+  }
+  const frame = `max(0,t*${fps}+${offset}+0.000001)`;
+  const copies = new Map();
+  for (const arrival of arrivals) copies.set(arrival.index, (copies.get(arrival.index) || 0) + 1);
+  const parts = [...copies].map(([index, count]) => {
+    const layout = sequence.layouts[index];
+    const labels = Array.from({ length: count }, (_, n) => `[stk${id}p${index}_${n}]`).join('');
+    if (!layout) return `[${inputs[index]}:v]fps=${fps},scale=${coverW}:${coverH}:force_original_aspect_ratio=increase,crop=${coverW}:${coverH},setsar=1,split=${count}${labels}`;
+    const angle = Number((layout.rotation * Math.PI / 180).toFixed(6));
+    return `[${inputs[index]}:v]fps=${fps},scale=${Math.max(2, Math.round(coverW * layout.scale))}:${Math.max(2, Math.round(coverH * layout.scale))}:force_original_aspect_ratio=decrease,setsar=1,format=rgba`
+      + (layout.opacity < 1 ? `,colorchannelmixer=aa=${layout.opacity}` : '')
+      + (angle ? `,rotate=${angle}:c=none:ow=rotw(${angle}):oh=roth(${angle})` : '')
+      + `,split=${count}${labels}`;
+  });
+  parts.push(`color=c=black:s=${coverW}x${coverH}:r=${fps},setsar=1[stk${id}_0]`);
+  const used = new Map();
+  arrivals.forEach((arrival, k) => {
+    const n = used.get(arrival.index) || 0;
+    used.set(arrival.index, n + 1);
+    const layout = sequence.layouts[arrival.index];
+    const at = layout ? `x='(W-w)/2+${Number((layout.x * coverW).toFixed(3))}':y='(H-h)/2+${Number((layout.y * coverH).toFixed(3))}'` : 'x=0:y=0';
+    const end = Number.isFinite(arrival.end) ? `*lt(${frame},${arrival.end})` : '';
+    parts.push(`[stk${id}_${k}][stk${id}p${arrival.index}_${n}]overlay=${at}:enable='gte(${frame},${arrival.start})${end}'[stk${id}_${k + 1}]`);
+  });
+  return `${parts.join(';')};[stk${id}_${arrivals.length}]${after}`;
+}
+
 // One section's video chain (without its output label). A footage clip is
 // fitted, letterboxed and trimmed; a still (#8985) is cover-cropped and moved
 // deterministically (every frame is a pure function of its frame number); a
@@ -482,9 +527,13 @@ function sectionChain(c, inputRefs, { canonW, canonH, fps, frames, frameGrid, be
       + `${move}format=yuv420p,${trim},setpts=PTS-STARTPTS`;
     const id = inputRefs.clip;
     const end = inputRefs.end != null ? `${fitted(inputRefs.end)}[fxend${id}];` : '';
-    let picture = fitted(id);
-    if (inputRefs.photos?.length) {
-      const sequence = scenePhotoSequence({ visualLayer: 'still', photoSequence: c.photoSequence, startSec: c.photoStartSec, endSec: c.photoEndSec }, { fps, beats });
+    const sequence = c.photoSequence
+      ? scenePhotoSequence({ visualLayer: 'still', photoSequence: c.photoSequence, startSec: c.photoStartSec, endSec: c.photoEndSec }, { fps, beats })
+      : null;
+    let picture = sequence?.stacked
+      ? stackedPhotoChain(c, inputRefs, sequence, { coverW, coverH, fps, frames, after: `${move}format=yuv420p,${trim},setpts=PTS-STARTPTS` })
+      : fitted(id);
+    if (inputRefs.photos?.length && !sequence?.stacked) {
       const frame = `max(0,t*${fps}+${Math.round((c.photoAtSec ?? c.effectAtSec ?? 0) * fps)}+0.000001)`;
       const step = sequence.switchFrames ? (sequence.switchFrames.map(f => `gte(${frame},${f})`).join('+') || '0') : `floor(${frame}/${sequence.intervalFrames})`;
       inputRefs.photos.forEach((photo, i) => {

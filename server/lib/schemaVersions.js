@@ -841,7 +841,9 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // strict film-look schema rejects) and in-shot effect strength, repeats and
   // light-leak color/edge (`glitches[].strength`/`count`/`everySec`/`color`/`edge`,
   // which a v37 scene schema strips on save). Optional, no backfill: absent plays as before.
-  musicVideoProjects: 38,
+  // v39 = overlapping photo-sequence layers (`photoSequence.overlapFrames`/`layouts`),
+  // which a v38 strict photo-sequence schema rejects. Optional, no backfill: absent is a plain sequence.
+  musicVideoProjects: 39,
   // v1 = Creative Commission FEEDBACK federation (PostgreSQL `commission_feedback`)
   // via the per-record peer-sync push pipeline (record kind `commissionFeedback`,
   // sync category `commissionFeedback`, #2686 — split-record follow-up to #2657).

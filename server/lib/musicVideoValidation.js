@@ -61,7 +61,7 @@ import {
   MUSIC_VIDEO_GLITCH_EDGES, MUSIC_VIDEO_GLITCH_REPEAT_LIMIT, MUSIC_VIDEO_GLITCH_REPEAT_SEC, MUSIC_VIDEO_SHOT_GLITCH_LIMIT, MUSIC_VIDEO_TRANSITIONS,
 } from './musicVideoTransitions.js';
 import { BEAT_TOGGLE_OVERLAP, BEAT_TOGGLE_RATES, MUSIC_VIDEO_CUT_EFFECTS } from './musicVideoCutEffects.js';
-import { IMAGE_EFFECT_SEC_RANGE, MUSIC_VIDEO_IMAGE_EFFECTS, PHOTO_SEQUENCE_LIMIT, PHOTO_SEQUENCE_RATES } from './musicVideoImageEffects.js';
+import { IMAGE_EFFECT_SEC_RANGE, MUSIC_VIDEO_IMAGE_EFFECTS, PHOTO_LAYOUT_RANGES, PHOTO_SEQUENCE_LIMIT, PHOTO_SEQUENCE_OVERLAP_MAX_FRAMES, PHOTO_SEQUENCE_RATES } from './musicVideoImageEffects.js';
 import { PRE_MUSIC_DURATION_RANGE, PRE_MUSIC_EFFECT_IDS, PRE_MUSIC_LAYER_LIMIT, PRE_MUSIC_VOLUME_RANGE } from './musicVideoColdOpen.js';
 import { CAMERA_FRAMINGS, CAMERA_MOVEMENT_VALUES, CAMERA_SPEEDS } from './cameraMovements.js';
 import { CAST_ERAS } from './catalogMediaLibrary.js';
@@ -749,7 +749,12 @@ const sceneLayerFields = {
     imageIds: z.array(z.string().min(1).max(256).regex(/^[^/\\\\]+$/)).max(PHOTO_SEQUENCE_LIMIT),
     intervalFrames: z.number().int().min(1).max(720),
     rate: z.enum(PHOTO_SEQUENCE_RATES).optional(),
-  }).strict().nullable().optional(),
+    // #14277: how long an outgoing photo stays beneath the next, and per-photo
+    // layouts parallel to imageIds (null = full frame).
+    overlapFrames: z.number().int().min(0).max(PHOTO_SEQUENCE_OVERLAP_MAX_FRAMES).optional(),
+    layouts: z.array(z.object(Object.fromEntries(Object.entries(PHOTO_LAYOUT_RANGES)
+      .map(([key, range]) => [key, z.number().min(range.min).max(range.max)]))).strict().nullable()).max(PHOTO_SEQUENCE_LIMIT).optional(),
+  }).strict().refine(s => !s.layouts || s.layouts.length <= s.imageIds.length, { message: 'A photo layout needs its photo', path: ['layouts'] }).nullable().optional(),
   cardText: z.string().max(500).nullable().optional(),
   // #10302: footage that the composition also draws code over; still counts as footage.
   codeOverlay: z.boolean().optional(),
