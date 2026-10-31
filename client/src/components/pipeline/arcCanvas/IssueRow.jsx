@@ -100,7 +100,7 @@ export default function IssueRow({ issue, seasons, onIssuesUpdate }) {
             onChange={(e) => handleReassign(e.target.value)}
             disabled={reassigning}
             title="Move to a different season"
-            className="min-w-0 flex-1 text-[10px] bg-port-card border border-port-border rounded text-gray-300 opacity-70 group-hover:opacity-100 focus:opacity-100"
+            className="min-w-0 flex-1 pointer-coarse:min-h-11 text-[10px] bg-port-card border border-port-border rounded text-gray-300 opacity-70 group-hover:opacity-100 focus:opacity-100"
           >
             <option value="">— ungrouped —</option>
             {seasons.map((s) => (

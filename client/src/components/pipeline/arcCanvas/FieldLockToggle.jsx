@@ -34,7 +34,7 @@ export default function FieldLockToggle({ series, field, label, onSeriesUpdate }
         ? `${label} is locked — click to unlock`
         : `Lock ${label} to preserve it through regenerate / auto-resolve`}
       aria-label={locked ? `Unlock ${label}` : `Lock ${label}`}
-      className={`inline-flex items-center justify-center w-4 h-4 rounded transition-colors disabled:opacity-40 ${
+      className={`inline-flex items-center justify-center w-4 h-4 pointer-coarse:w-11 pointer-coarse:h-11 rounded transition-colors disabled:opacity-40 ${
         locked ? 'text-port-warning hover:text-port-warning/80' : 'text-gray-600 hover:text-gray-300'
       }`}
     >

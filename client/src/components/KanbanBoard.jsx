@@ -241,7 +241,7 @@ const DraggableTicket = memo(function DraggableTicket({ ticket, disabled, appId,
           ref={handleActivatorRef}
           {...listeners}
           {...attributes}
-          className={`flex items-center px-1 text-gray-600 hover:text-gray-400 shrink-0 ${disabled ? 'cursor-not-allowed opacity-50' : 'cursor-grab active:cursor-grabbing'}`}
+          className={`flex items-center px-1 touch-none text-gray-600 hover:text-gray-400 shrink-0 ${disabled ? 'cursor-not-allowed opacity-50' : 'cursor-grab active:cursor-grabbing'}`}
           aria-label={`Drag ${ticket.key}`}
           disabled={disabled}
           aria-disabled={disabled}

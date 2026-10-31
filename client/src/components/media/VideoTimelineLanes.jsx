@@ -81,7 +81,7 @@ export const TimelineBlock = memo(function TimelineBlock({
     <div
       ref={setNodeRef}
       style={style}
-      className={`relative shrink-0 h-20 rounded-md border-2 cursor-pointer transition-colors group ${
+      className={`relative shrink-0 h-20 rounded-md border-2 cursor-pointer select-none transition-colors group ${
         isMissing
           ? 'bg-port-error/20 border-port-error'
           : isSelected
