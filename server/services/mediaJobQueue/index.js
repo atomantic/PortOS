@@ -104,6 +104,11 @@ export const VISUAL_PROFILE_FINISH_TIMEOUT_MS = 3 * 60 * 1000;
 const isLocalFinishReplay = (job) => job.kind === 'image' && job.params?.visualProfile && job.params?.visualProfileSource
   && !job.params?.remoteMedia?.reconcile && job.params?.remotePeerReservation !== true;
 
+// A restored remote submission reconnecting to peer work it already admitted.
+const isRemoteReconcile = (job) => isRemoteMediaJob(job) && job.params?.remoteMedia?.reconcile === true;
+
+const isTopazUpscale = (job) => job.kind === 'video-upscale' && job.params?.mode === 'topaz';
+
 const jobLane = (job) => isLocalFinishReplay(job) ? 'gpu' : mediaJobExecutionLane({
   kind: job.kind,
   mode: job.params?.mode,
@@ -1059,7 +1064,7 @@ export async function initMediaJobQueue({ deferCompletionRecovery = false } = {}
         continue;
       }
       if (j.status === 'running') {
-        if (j.kind === 'video-upscale' && j.params?.mode === 'topaz') {
+        if (isTopazUpscale(j)) {
           queue.push({ ...j, status: 'queued', params: { ...j.params, topazRecovery: true } });
           continue;
         }
@@ -1289,7 +1294,7 @@ function startLaneJob(job, { lane }) {
   delete job.peerHold;
   const permit = recoveringJobs.has(job.id)
     ? maintenance.recoverOwned('media', job.id)
-    : maintenance.tryAdmit('media', job.id, { reconnect: isRemoteMediaJob(job) && job.params?.remoteMedia?.reconcile === true });
+    : maintenance.tryAdmit('media', job.id, { reconnect: isRemoteReconcile(job) });
   if (!permit) return false;
   queue.splice(idx, 1);
   job.status = 'running';
@@ -1416,7 +1421,7 @@ async function settleQueuedJob(job, { status, error }) {
     trackTerminalOperation((async () => {
       await safeUnlinkUpload(job.params?.uploadedTempPath);
       await safeUnlinkUpload(job.params?.audioFilePath);
-      if (job.kind === 'video-upscale' && job.params?.mode === 'topaz') {
+      if (isTopazUpscale(job)) {
         const { cleanupPreparedTopaz } = await import('../videoGen/topazJob.js');
         await cleanupPreparedTopaz(job.params.preparedId);
       }
@@ -1731,6 +1736,68 @@ async function runJob(job, permit, finalizeLane) {
   }
 }
 
+// The provider-dispatch copy of job.params; the retained job stays unchanged.
+// Thread #1 (pre-gen sanitizer): even though safeUnlinkUpload guards the
+// *delete* path, the gen module receives this spread and could itself act on a
+// corrupted path from a hand-edited media-jobs.json. Null any upload path that
+// doesn't resolve under PATHS.uploads so the constraint holds end-to-end.
+function buildDispatchParams(job) {
+  const safeParams = { ...job.params };
+  if (job.params?.reviewedReferenceRequest) {
+    const request = job.params.reviewedReferenceRequest;
+    // JSON drops undefined properties. Restore those absences explicitly so
+    // the top-level downgrade placeholders do not override provider defaults.
+    Object.assign(safeParams, request, { prompt: request.prompt, modelId: request.modelId, pythonPath: request.pythonPath });
+  }
+  // Freeze only the dispatch copy to the default whose cohort passed the hold
+  // check. The retained job's original parameters stay unchanged.
+  if (job.videoCohort && (safeParams.modelId === undefined || safeParams.modelId === '')) {
+    safeParams.modelId = job.videoCohort.modelId;
+  }
+  for (const key of ['uploadedTempPath', 'audioFilePath']) {
+    const value = safeParams[key];
+    if (value && (typeof value !== 'string' || !isUnderUploadsRoot(value))) {
+      console.log(`⚠️ media-job [${job.id.slice(0, 8)}] ${key} outside PATHS.uploads — nulled before gen invoke: ${value}`);
+      safeParams[key] = null;
+    }
+  }
+  safeParams.uploadedTempPaths = normalizeTempPaths(safeParams.uploadedTempPaths).filter((p) => {
+    if (isUnderUploadsRoot(p)) return true;
+    console.log(`⚠️ media-job [${job.id.slice(0, 8)}] uploadedTempPaths entry outside PATHS.uploads — rejected before gen invoke: ${p}`);
+    return false;
+  });
+  // Clamp chunks to the same 1-8 bound the route enforces on new submissions.
+  // Replayed jobs read params from media-jobs.json which could be hand-edited
+  // to an out-of-range value, bypassing the route-layer Zod validation.
+  safeParams.chunks = boundedVideoChunks(safeParams.chunks);
+  return safeParams;
+}
+
+// The dispatch must carry the exact snapshot admitted for this job, and claim
+// it (reserved → invoked) before the provider starts. Only a reconciling remote
+// recovery may re-dispatch an already-invoked snapshot.
+async function assertReviewedReferenceDispatch(job, safeParams) {
+  if (safeParams.reviewedReferenceRequest && !safeParams.reviewedReferenceSnapshot) {
+    throw new ServerError('Reviewed reference ownership is missing', { status: 409, code: 'REVIEWED_REFERENCE_CHANGED' });
+  }
+  if (!safeParams.reviewedReferenceSnapshot) return;
+  const { readOwnedSnapshot, markSnapshotState, withReviewedSnapshotLock, isReviewedReferenceList } = await import('../imageGen/reviewedReference.js');
+  const snapshot = safeParams.reviewedReferenceSnapshot;
+  const { path, record } = await readOwnedSnapshot(snapshot);
+  const remoteAssets = safeParams.remoteMedia?.inputAssets;
+  const remoteMismatch = isRemoteMediaJob(job) && (safeParams.remoteMedia?.wireVersion !== 2
+    || JSON.stringify(safeParams.remoteMedia.reviewedReferenceSnapshot) !== JSON.stringify(snapshot)
+    || !Array.isArray(remoteAssets) || remoteAssets.some(asset => asset?.role !== 'referenceImages')
+    || !isReviewedReferenceList(remoteAssets.map(asset => asset.path), path));
+  if (snapshot.jobId !== job.id || safeParams.initImagePath || !isReviewedReferenceList(safeParams.referenceImagePaths, path) || remoteMismatch) {
+    throw new ServerError('Reviewed reference ownership does not match the queued job', { status: 409, code: 'REVIEWED_REFERENCE_CHANGED' });
+  }
+  if (record.state === 'reserved') await withReviewedSnapshotLock(() => markSnapshotState(snapshot, 'invoked'));
+  else if (!(record.state === 'invoked' && isRemoteMediaJob(job) && safeParams.remoteMedia?.reconcile === true)) {
+    throw new ServerError('Reviewed reference is not available for dispatch', { status: 409, code: 'REVIEWED_REFERENCE_CHANGED' });
+  }
+}
+
 async function runJobLifecycle(job, markDispatched, permit, finalizeLane) {
   const sseEntry = ensureSseEntry(job.id);
   let resolveTerminalState;
@@ -1939,7 +2006,7 @@ async function runJobLifecycle(job, markDispatched, permit, finalizeLane) {
       // If cancelJob() flagged this job before the underlying gen reported
       // failure, treat the SIGTERM-induced failure as a clean cancel rather
       // than an error so /api/media-jobs?status=canceled works.
-      if (job.cancelRequested && !(job.kind === 'video-upscale' && job.params?.mode === 'topaz' && payload.remoteCancellationConfirmed !== true)) {
+      if (job.cancelRequested && !(isTopazUpscale(job) && payload.remoteCancellationConfirmed !== true)) {
         trackTerminalOperation(
           terminate('canceled', (j) => {
             // Persist the reason so a late SSE reconnect after the live entry
@@ -1967,40 +2034,7 @@ async function runJobLifecycle(job, markDispatched, permit, finalizeLane) {
     },
   };
 
-  // Thread #1: sanitize uploadedTempPath before passing params to the gen
-  // module. Even though safeUnlinkUpload guards the *delete* path, the gen
-  // module receives the raw job.params spread and could itself act on a
-  // corrupted path from a hand-edited media-jobs.json. Null it out here if
-  // it doesn't resolve under PATHS.uploads so the constraint holds end-to-end.
-  const safeParams = { ...job.params };
-  if (job.params?.reviewedReferenceRequest) {
-    const request = job.params.reviewedReferenceRequest;
-    // JSON drops undefined properties. Restore those absences explicitly so
-    // the top-level downgrade placeholders do not override provider defaults.
-    Object.assign(safeParams, request, { prompt: request.prompt, modelId: request.modelId, pythonPath: request.pythonPath });
-  }
-  // Freeze only the dispatch copy to the default whose cohort passed the hold
-  // check. The retained job's original parameters stay unchanged.
-  if (job.videoCohort && (safeParams.modelId === undefined || safeParams.modelId === '')) {
-    safeParams.modelId = job.videoCohort.modelId;
-  }
-  if (safeParams.uploadedTempPath && (typeof safeParams.uploadedTempPath !== 'string' || !isUnderUploadsRoot(safeParams.uploadedTempPath))) {
-    console.log(`⚠️ media-job [${job.id.slice(0, 8)}] uploadedTempPath outside PATHS.uploads — nulled before gen invoke: ${safeParams.uploadedTempPath}`);
-    safeParams.uploadedTempPath = null;
-  }
-  if (safeParams.audioFilePath && (typeof safeParams.audioFilePath !== 'string' || !isUnderUploadsRoot(safeParams.audioFilePath))) {
-    console.log(`⚠️ media-job [${job.id.slice(0, 8)}] audioFilePath outside PATHS.uploads — nulled before gen invoke: ${safeParams.audioFilePath}`);
-    safeParams.audioFilePath = null;
-  }
-  safeParams.uploadedTempPaths = normalizeTempPaths(safeParams.uploadedTempPaths).filter((p) => {
-    if (isUnderUploadsRoot(p)) return true;
-    console.log(`⚠️ media-job [${job.id.slice(0, 8)}] uploadedTempPaths entry outside PATHS.uploads — rejected before gen invoke: ${p}`);
-    return false;
-  });
-  // Clamp chunks to the same 1-8 bound the route enforces on new submissions.
-  // Replayed jobs read params from media-jobs.json which could be hand-edited
-  // to an out-of-range value, bypassing the route-layer Zod validation.
-  safeParams.chunks = boundedVideoChunks(safeParams.chunks);
+  const safeParams = buildDispatchParams(job);
 
   await resolveLiveParams(job, safeParams);
 
@@ -2129,33 +2163,14 @@ async function runJobLifecycle(job, markDispatched, permit, finalizeLane) {
       // Recheck the captured bytes and request at the last provider boundary;
       // recovery/finish replays must not start another render.
       if (job.kind === 'image' && safeParams.fableLoom && !isLocalFinishReplay(job)
-        && !(isRemoteMediaJob(job) && job.params?.remoteMedia?.reconcile === true)) {
+        && !isRemoteReconcile(job)) {
         const { assertFableLoomDispatchInputs } = await import('../fableLoom/requestInputs.js');
         await assertFableLoomDispatchInputs(safeParams);
       }
-      if (safeParams.reviewedReferenceRequest && !safeParams.reviewedReferenceSnapshot) {
-        throw new ServerError('Reviewed reference ownership is missing', { status: 409, code: 'REVIEWED_REFERENCE_CHANGED' });
-      }
-      if (safeParams.reviewedReferenceSnapshot) {
-        const { readOwnedSnapshot, markSnapshotState, withReviewedSnapshotLock, isReviewedReferenceList } = await import('../imageGen/reviewedReference.js');
-        const snapshot = safeParams.reviewedReferenceSnapshot;
-        const { path, record } = await readOwnedSnapshot(snapshot);
-        const remoteAssets = safeParams.remoteMedia?.inputAssets;
-        const remoteMismatch = isRemoteMediaJob(job) && (safeParams.remoteMedia?.wireVersion !== 2
-          || JSON.stringify(safeParams.remoteMedia.reviewedReferenceSnapshot) !== JSON.stringify(snapshot)
-          || !Array.isArray(remoteAssets) || remoteAssets.some(asset => asset?.role !== 'referenceImages')
-          || !isReviewedReferenceList(remoteAssets.map(asset => asset.path), path));
-        if (snapshot.jobId !== job.id || safeParams.initImagePath || !isReviewedReferenceList(safeParams.referenceImagePaths, path) || remoteMismatch) {
-          throw new ServerError('Reviewed reference ownership does not match the queued job', { status: 409, code: 'REVIEWED_REFERENCE_CHANGED' });
-        }
-        if (record.state === 'reserved') await withReviewedSnapshotLock(() => markSnapshotState(snapshot, 'invoked'));
-        else if (!(record.state === 'invoked' && isRemoteMediaJob(job) && safeParams.remoteMedia?.reconcile === true)) {
-          throw new ServerError('Reviewed reference is not available for dispatch', { status: 409, code: 'REVIEWED_REFERENCE_CHANGED' });
-        }
-      }
+      await assertReviewedReferenceDispatch(job, safeParams);
       // Remote recovery must still reach its adapter to cancel an existing render.
       // Local cancellation before dispatch owns no provider process to stop.
-      if (job.cancelRequested && !isRemoteMediaJob(job) && !(job.kind === 'video-upscale' && job.params?.mode === 'topaz' && job.params?.topazRecovery)) {
+      if (job.cancelRequested && !isRemoteMediaJob(job) && !(isTopazUpscale(job) && job.params?.topazRecovery)) {
         throw new Error('Canceled before provider dispatch');
       }
       // A watchdog can win during the awaited policy/module preparation above.
@@ -2168,7 +2183,7 @@ async function runJobLifecycle(job, markDispatched, permit, finalizeLane) {
         // Transient, like terminating: no await between this flag and invocation.
         job.providerInvoked = true;
         const request = { ...safeParams, jobId: job.id,
-          ...(job.kind === 'video-upscale' && job.params?.mode === 'topaz' ? { topazCancelRequested: job.cancelRequested === true } : {}),
+          ...(isTopazUpscale(job) ? { topazCancelRequested: job.cancelRequested === true } : {}),
           ...(job.kind === 'video' && jobLane(job) === 'gpu' && Number(safeParams.chunks) > 1 ? { executionQueueJobId: job.id } : {}) };
         const kickoff = (runtime?.invoke ?? MEDIA_JOB_RUNTIME.image.invoke)(mod, request, safeParams);
         markDispatched();
@@ -2178,7 +2193,7 @@ async function runJobLifecycle(job, markDispatched, permit, finalizeLane) {
     } catch (err) {
       // Policy/auth refusal still stands, but it cannot prove a previously
       // admitted peer render finished before this recovery attempt.
-      if (isRemoteMediaJob(job) && job.params?.remoteMedia?.reconcile === true) maintenance.markCurrentUnsettled();
+      if (isRemoteReconcile(job)) maintenance.markCurrentUnsettled();
       // generateVideo / generateChainedVideo / generateImage threw before
       // reaching their proc.on cleanup hooks (e.g. PYTHON not configured,
       // validation fail). Clean up multipart upload temp files the route
@@ -2189,7 +2204,7 @@ async function runJobLifecycle(job, markDispatched, permit, finalizeLane) {
       // Tracked from the first microtask of the rejection, so a drain that saw
       // the dispatch window close cannot miss this failure (#9029).
       await trackTerminalOperation((async () => {
-        if (!(isRemoteMediaJob(job) && job.params?.remoteMedia?.reconcile === true)) {
+        if (!isRemoteReconcile(job)) {
           await safeUnlinkUpload(job.params?.uploadedTempPath);
           await safeUnlinkUpload(job.params?.audioFilePath);
           for (const p of normalizeTempPaths(job.params?.uploadedTempPaths)) {
@@ -2443,7 +2458,7 @@ export async function cancelJob(jobId) {
   const queueIdx = queue.findIndex((j) => j.id === jobId);
   if (queueIdx >= 0) {
     const job = queue[queueIdx];
-    if (job.kind === 'video-upscale' && job.params?.mode === 'topaz' && job.params?.topazRecovery) {
+    if (isTopazUpscale(job) && job.params?.topazRecovery) {
       job.cancelRequested = true;
       await persist();
       return { ok: true, status: 'canceling' };
@@ -2479,7 +2494,7 @@ export async function cancelJob(jobId) {
       await persist();
       return { ok: true, status: 'canceling' };
     }
-    if (isRemoteMediaJob(runningJob) || (runningJob.kind === 'video-upscale' && runningJob.params?.mode === 'topaz')) {
+    if (isRemoteMediaJob(runningJob) || isTopazUpscale(runningJob)) {
       // Durable intent precedes the adapter call so boot recovery resumes
       // cancellation rather than silently resurrecting the remote render.
       await persist();
