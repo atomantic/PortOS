@@ -139,6 +139,8 @@ const remoteDelete = vi.hoisted(() => ({
   cancelPendingDelete: vi.fn(async () => ({ ok: true, cancelled: true })),
 }));
 vi.mock('../services/mediaRemoteDelete.js', () => remoteDelete);
+const mediaUsage = vi.hoisted(() => ({ assertMediaDeletable: vi.fn(async () => {}) }));
+vi.mock('../services/mediaUsage.js', () => mediaUsage);
 
 // The /generate route resolves an optional universeRun collection target via
 // findOrCreateUniverseCollection. Mock it so the universeRun test asserts the
@@ -241,6 +243,23 @@ describe('Image Gen Routes', () => {
     const cancel = await request(app).post('/api/image-gen/fox.png/cancel-delete');
     expect(cancel.body).toEqual({ ok: true, cancelled: true });
     expect(remoteDelete.cancelPendingDelete).toHaveBeenCalledWith('image', 'fox.png');
+  });
+
+  it('refuses to delete an image records still use until the user forces it', async () => {
+    const { ServerError } = await import('../lib/errorHandler.js');
+    const usages = [{ source: 'music-video', label: 'Music video', id: 'mv-1', title: 'Example', role: 'Shot 1', href: '/music-video/mv-1/scene/s-1' }];
+    mediaUsage.assertMediaDeletable.mockImplementation(async (key, { force }) => {
+      if (!force) throw new ServerError('In use', { status: 409, code: 'MEDIA_IN_USE', context: { usages } });
+    });
+    const refused = await request(app).delete('/api/image-gen/fox.png');
+    expect(refused.status).toBe(409);
+    expect(refused.body).toMatchObject({ code: 'MEDIA_IN_USE', context: { usages } });
+    expect(remoteDelete.deleteMediaAnywhere).not.toHaveBeenCalled();
+    const forced = await request(app).delete('/api/image-gen/fox.png?force=1');
+    expect(forced.status).toBe(200);
+    expect(mediaUsage.assertMediaDeletable).toHaveBeenLastCalledWith('image:fox.png', { force: true });
+    expect(remoteDelete.deleteMediaAnywhere).toHaveBeenCalledWith('image', 'fox.png');
+    mediaUsage.assertMediaDeletable.mockImplementation(async () => {});
   });
 
   it('binds quick-edit preview to provider defaults and persists the exact composition without changing authored text', async () => {

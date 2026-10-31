@@ -6,6 +6,7 @@ import { useMediaAnnotations } from './useMediaAnnotations';
 import { useRecentImageGallery } from './useRecentImageGallery';
 import toast from '../components/ui/Toast';
 import { mediaDeleteOutcome } from '../lib/mediaDeleteOutcome';
+import { refreshMediaUsages } from './useMediaUsages';
 import {
   cancelImagePendingDelete,
   cleanGalleryImage,
@@ -79,11 +80,15 @@ export function useImageGenGallery({ previewParam }) {
     return pendingDelete ? { ...rest, pendingDelete } : rest;
   })), [setGallery]);
 
-  const handleDelete = useCallback(async (item) => {
+  const handleDelete = useCallback(async (item, { force = false } = {}) => {
     const filename = item?.filename;
     if (!filename) return;
-    const result = await deleteImage(filename).catch(() => null);
+    const result = await deleteImage(filename, { force }).catch((err) => {
+      if (err?.code === 'MEDIA_IN_USE') void refreshMediaUsages();
+      return null;
+    });
     if (!result) return;
+    void refreshMediaUsages();
     const outcome = mediaDeleteOutcome(result, 'image');
     // A delete that waits on, or did not reach, this machine's copy keeps the image.
     if (!outcome.remove) {

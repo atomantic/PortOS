@@ -3,6 +3,7 @@ import { act, render, screen, fireEvent, waitFor, within } from '@testing-librar
 import { useState } from 'react';
 import { MemoryRouter } from 'react-router';
 
+vi.mock('../../hooks/useMediaUsages', () => ({ useMediaUsages: () => ({}), refreshMediaUsages: () => Promise.resolve() }));
 vi.mock('../../services/apiCatalog', () => ({
   updateCatalogIngredientMediaLibrary: vi.fn(async () => ({})),
   attachCatalogIngredientMediaFromMoodBoard: vi.fn(async () => ({ attached: [], skipped: [] })),
