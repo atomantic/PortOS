@@ -12,7 +12,6 @@ import { useState } from 'react';
 import { Link } from 'react-router';
 import { Sparkles, Trash2 } from 'lucide-react';
 import MediaImage from '../MediaImage';
-import { imageThumbnailSrc } from '../../lib/imageThumbnailSrc';
 import InlineConfirmRow from '../ui/InlineConfirmRow';
 import CatalogImageAction from './CatalogImageAction';
 import { payloadSnippet } from '../../lib/catalogTypes';
@@ -39,9 +38,8 @@ function CardThumb({ src, alt }) {
     <div className="w-14 h-14 shrink-0 rounded-md overflow-hidden border border-port-border bg-port-bg flex items-center justify-center">
       {src ? (
         <MediaImage
-          src={imageThumbnailSrc(src) || src}
-          fallbackSrc={src}
-          assetSrc={src}
+          thumbnail
+          src={src}
           alt={alt}
           className="w-full h-full object-cover"
           loading="lazy"

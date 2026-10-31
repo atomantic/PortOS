@@ -57,7 +57,7 @@ describe('CompositeSheetsEditor', () => {
       />,
     );
     const img = screen.getByAltText('Pitch render');
-    expect(img).toHaveAttribute('src', '/data/images/newest.png');
+    expect(img).toHaveAttribute('src', '/data/image-thumbnails/newest.webp');
   });
 
   it('clicking a rendered thumbnail opens the preview with the visible filename', async () => {

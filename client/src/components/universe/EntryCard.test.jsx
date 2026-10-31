@@ -154,7 +154,7 @@ describe('EntryCard — thumbnail fallback', () => {
       />,
     ));
     const img = container.querySelector('img');
-    expect(img.getAttribute('src')).toBe('/data/images/render-3.png');
+    expect(img.getAttribute('src')).toBe('/data/image-thumbnails/render-3.webp');
   });
 
   it('walks back through fallbackRefs on image error', () => {
@@ -171,12 +171,16 @@ describe('EntryCard — thumbnail fallback', () => {
         }}
       />,
     ));
-    const img = container.querySelector('img');
-    expect(img.getAttribute('src')).toBe('/data/images/newest.png');
-    fireEvent.error(img);
-    expect(container.querySelector('img').getAttribute('src')).toBe('/data/images/middle.png');
-    fireEvent.error(container.querySelector('img'));
-    expect(container.querySelector('img').getAttribute('src')).toBe('/data/images/oldest.png');
+    // Each filename tries its small WebP derivative, then its original.
+    const srcAfterErrors = (n) => {
+      for (let i = 0; i < n; i += 1) fireEvent.error(container.querySelector('img'));
+      return container.querySelector('img').getAttribute('src');
+    };
+    expect(srcAfterErrors(0)).toBe('/data/image-thumbnails/newest.webp');
+    expect(srcAfterErrors(1)).toBe('/data/images/newest.png');
+    expect(srcAfterErrors(1)).toBe('/data/image-thumbnails/middle.webp');
+    expect(srcAfterErrors(2)).toBe('/data/image-thumbnails/oldest.webp');
+    expect(srcAfterErrors(1)).toBe('/data/images/oldest.png');
   });
 
   it('collapses to nothing when every candidate fails to load', () => {
@@ -186,8 +190,8 @@ describe('EntryCard — thumbnail fallback', () => {
         thumbnail={{ filename: 'only.png', alt: 'avatar', fallbackRefs: [] }}
       />,
     ));
-    const img = container.querySelector('img');
-    fireEvent.error(img);
+    fireEvent.error(container.querySelector('img'));
+    fireEvent.error(container.querySelector('img'));
     expect(container.querySelector('img')).toBeNull();
   });
 
@@ -207,7 +211,11 @@ describe('EntryCard — thumbnail fallback', () => {
     // Initial click previews the newest visible filename.
     fireEvent.click(container.querySelector('button'));
     expect(onClick).toHaveBeenLastCalledWith('newest.png');
-    // After the newest fails, the click should preview the now-visible fallback.
+    // A failed thumbnail retries the same file's original, still the newest.
+    fireEvent.error(container.querySelector('img'));
+    fireEvent.click(container.querySelector('button'));
+    expect(onClick).toHaveBeenLastCalledWith('newest.png');
+    // After the newest original fails too, the click previews the fallback.
     fireEvent.error(container.querySelector('img'));
     fireEvent.click(container.querySelector('button'));
     expect(onClick).toHaveBeenLastCalledWith('old.png');

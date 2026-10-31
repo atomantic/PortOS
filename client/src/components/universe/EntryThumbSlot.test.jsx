@@ -41,7 +41,7 @@ describe('EntryThumbSlot — three-state thumbnail', () => {
       />,
     );
     const img = screen.getByRole('img', { name: 'Var B render' });
-    expect(img).toHaveAttribute('src', '/data/images/render-aaa.png');
+    expect(img).toHaveAttribute('src', '/data/image-thumbnails/render-aaa.webp');
   });
 
   it('shows MediaJobThumb (spinner / step counter) when inFlightJobId is set', () => {
@@ -168,6 +168,6 @@ describe('EntryThumbSlot — three-state thumbnail', () => {
       />,
     );
     const img = screen.getByRole('img', { name: 'Multi version card' });
-    expect(img).toHaveAttribute('src', '/data/images/v1.png');
+    expect(img).toHaveAttribute('src', '/data/image-thumbnails/v1.webp');
   });
 });

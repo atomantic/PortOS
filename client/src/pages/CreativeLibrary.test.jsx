@@ -33,9 +33,12 @@ vi.mock('../components/catalog/GenerateImageControl', () => ({
 vi.mock('../services/apiCatalogTypes', () => ({ listCatalogTypes: vi.fn() }));
 vi.mock('../services/apiUniverseBuilder', () => ({ listUniverseNames: vi.fn(async () => [{ id: 'u-1', name: 'Example Universe' }]) }));
 vi.mock('../components/ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
-vi.mock('../components/MediaImage', () => ({
-  default: ({ src, alt, ...rest }) => <img src={src} alt={alt} {...rest} />,
-}));
+vi.mock('../components/MediaImage', async () => {
+  const { imageThumbnailSrc } = await import('../lib/imageThumbnailSrc');
+  return {
+    default: ({ src, thumbnail, alt, ...rest }) => <img src={(thumbnail && imageThumbnailSrc(src)) || src} alt={alt} {...rest} />,
+  };
+});
 
 import CreativeLibrary from './CreativeLibrary';
 import { listCatalogIngredients, createCatalogIngredient, getCatalogFacets, setCatalogIngredientLock, getCatalogIngredientCards, getCatalogIngredientDetails, attachCatalogIngredientGeneratedImage, listCatalogStories, joinCatalogStory } from '../services/apiCatalog';
@@ -70,8 +73,8 @@ describe('CreativeLibrary', () => {
 
     const ada = await screen.findByRole('link', { name: /Ada/ });
     expect(ada).toHaveAttribute('href', '/casting/cat-chr-1?returnTo=%2Fcasting');
-    expect(screen.getByRole('img', { name: 'Ada' })).toHaveAttribute('src', '/data/images/ada.png');
-    expect(screen.getByRole('img', { name: 'Bo' })).toHaveAttribute('src', '/data/images/bo.png');
+    expect(screen.getByRole('img', { name: 'Ada' })).toHaveAttribute('src', '/data/image-thumbnails/ada.webp');
+    expect(screen.getByRole('img', { name: 'Bo' })).toHaveAttribute('src', '/data/image-thumbnails/bo.webp');
     expect(screen.getByText('1 universe · 2 videos')).toBeInTheDocument();
     expect(screen.getByText('No linked containers')).toBeInTheDocument();
     expect(listCatalogIngredients).toHaveBeenCalledWith(expect.objectContaining({ type: 'character', offset: 0 }));
@@ -97,7 +100,7 @@ describe('CreativeLibrary', () => {
     await screen.findByRole('link', { name: 'Open Example 0' });
     fireEvent.click(screen.getByRole('button', { name: 'Load more' }));
     await screen.findByRole('link', { name: 'Open Fresh name' });
-    expect(screen.getByRole('img', { name: 'Fresh name' })).toHaveAttribute('src', '/data/images/fresh.png');
+    expect(screen.getByRole('img', { name: 'Fresh name' })).toHaveAttribute('src', '/data/image-thumbnails/fresh.webp');
     expect(screen.getByText('Universe: Fresh universe')).toBeInTheDocument();
     expect(getCatalogIngredientCards).not.toHaveBeenCalled();
   });
@@ -112,9 +115,9 @@ describe('CreativeLibrary', () => {
     renderLibrary('casting', '/casting');
     fireEvent.click(await screen.findByRole('button', { name: 'Lock Example' }));
     await act(async () => socketEvents.get('catalog:primitive-changed')({ ingredientId: item.id }));
-    expect(screen.getByRole('img', { name: 'Example' })).toHaveAttribute('src', '/data/images/chosen.png');
+    expect(screen.getByRole('img', { name: 'Example' })).toHaveAttribute('src', '/data/image-thumbnails/chosen.webp');
     await act(async () => lock.resolve({ ...item, payload: { locked: true } }));
-    expect(screen.getByRole('img', { name: 'Example' })).toHaveAttribute('src', '/data/images/chosen.png');
+    expect(screen.getByRole('img', { name: 'Example' })).toHaveAttribute('src', '/data/image-thumbnails/chosen.webp');
     expect(screen.getByRole('button', { name: 'Unlock Example' })).toBeInTheDocument();
     await act(async () => after.resolve([{ ...item, payload: { locked: true }, thumbnailKey: 'chosen.png' }]));
     expect(getCatalogIngredientCards).toHaveBeenCalledWith([item.id], { silent: true });
@@ -140,11 +143,11 @@ describe('CreativeLibrary', () => {
     getCatalogIngredientDetails.mockResolvedValue({ ingredient: item, media: [{ kind: 'reference', mediaKey: 'previous-reference.png' }] });
     attachCatalogIngredientGeneratedImage.mockResolvedValue({ media: { mediaKey: 'new-cover.png', kind: 'portrait' }, kind: 'portrait', attached: true });
     renderLibrary(library, `/${library}`);
-    expect(await screen.findByRole('img', { name: item.name })).toHaveAttribute('src', '/data/images/previous-reference.png');
+    expect(await screen.findByRole('img', { name: item.name })).toHaveAttribute('src', '/data/image-thumbnails/previous-reference.webp');
 
     fireEvent.click(screen.getByRole('button', { name: `Generate image for ${item.name}` }));
 
-    await waitFor(() => expect(screen.getByRole('img', { name: item.name })).toHaveAttribute('src', '/data/images/new-cover.png'));
+    await waitFor(() => expect(screen.getByRole('img', { name: item.name })).toHaveAttribute('src', '/data/image-thumbnails/new-cover.webp'));
     expect(attachCatalogIngredientGeneratedImage).toHaveBeenCalledWith(item.id, { mediaKey: 'new-cover.png' }, { silent: true });
   });
 
@@ -156,12 +159,12 @@ describe('CreativeLibrary', () => {
     getCatalogIngredientDetails.mockResolvedValue({ ingredient: item, media: [{ kind: 'reference', mediaKey: 'previous-reference.png' }] });
     attachCatalogIngredientGeneratedImage.mockResolvedValue({ media: { mediaKey: 'new-cover.png', kind: 'reference' }, kind: 'reference', attached: true });
     renderLibrary('environments', '/environments');
-    expect(await screen.findByRole('img', { name: item.name })).toHaveAttribute('src', '/data/images/previous-reference.png');
+    expect(await screen.findByRole('img', { name: item.name })).toHaveAttribute('src', '/data/image-thumbnails/previous-reference.webp');
 
     fireEvent.click(screen.getByRole('button', { name: `Generate image for ${item.name}` }));
 
     await waitFor(() => expect(attachCatalogIngredientGeneratedImage).toHaveBeenCalledWith(item.id, { mediaKey: 'new-cover.png' }, { silent: true }));
-    expect(screen.getByRole('img', { name: item.name })).toHaveAttribute('src', '/data/images/previous-reference.png');
+    expect(screen.getByRole('img', { name: item.name })).toHaveAttribute('src', '/data/image-thumbnails/previous-reference.webp');
   });
 
   it.each([['environments', 'place'], ['casting', 'character']])('yields a generated cover to a newer authoritative portrait in %s', async (library, type) => {
@@ -172,9 +175,9 @@ describe('CreativeLibrary', () => {
     renderLibrary(library, `/${library}`);
     await screen.findByRole('img', { name: 'Example 0' });
     fireEvent.click(screen.getByRole('button', { name: 'Generate image for Example 0' }));
-    await waitFor(() => expect(screen.getByRole('img', { name: 'Example 0' })).toHaveAttribute('src', '/data/images/new-cover.png'));
+    await waitFor(() => expect(screen.getByRole('img', { name: 'Example 0' })).toHaveAttribute('src', '/data/image-thumbnails/new-cover.webp'));
     fireEvent.click(screen.getByRole('button', { name: 'Load more' }));
-    await waitFor(() => expect(screen.getByRole('img', { name: 'Example 0' })).toHaveAttribute('src', '/data/images/chosen-portrait.png'));
+    await waitFor(() => expect(screen.getByRole('img', { name: 'Example 0' })).toHaveAttribute('src', '/data/image-thumbnails/chosen-portrait.webp'));
   });
 
   it('creates a record of its type and opens it', async () => {

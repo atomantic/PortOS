@@ -19,7 +19,7 @@ export default function CharacterCard({ ingredient, to = null, onUpdated, action
   const description = [ingredient.payload?.physicalDescription, ingredient.payload?.description].find(value => typeof value === 'string' && value) || 'No description yet.';
   const content = <>
     <div className="aspect-[3/4] w-full bg-port-bg flex items-center justify-center overflow-hidden">
-      {cover ? <MediaImage src={cover} alt={name} className="w-full h-full object-cover" loading="lazy" />
+      {cover ? <MediaImage thumbnail src={cover} alt={name} className="w-full h-full object-cover" loading="lazy" />
         : <Sparkles size={22} className="text-gray-500" aria-hidden="true" />}
     </div>
     <div className="p-3 space-y-1 min-w-0">
