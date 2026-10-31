@@ -25,7 +25,7 @@ describe('renderReviewBody', () => {
         verified: ['update.sh always ends on main — update.sh:132-143'],
         concerns: ['The Windows entry point is not mentioned.'],
       },
-      blockingFindings: [finding('docs/SELF_UPDATE.md', 108, 'Bare npm install dirties tracked lockfiles')],
+      findings: [finding('docs/SELF_UPDATE.md', 108, 'Bare npm install dirties tracked lockfiles')],
     });
 
     expect(body).toContain('🔴 **Changes requested**');
@@ -207,7 +207,7 @@ describe('PR_REVIEW_DECISION_CONTRACT', () => {
     for (const field of ['summary', 'scope', 'testEvidence', 'verified', 'concerns', 'findings']) {
       expect(PR_REVIEW_DECISION_CONTRACT, field).toContain(`"${field}"`);
     }
-    for (const field of ['path', 'line', 'side', 'blocking', 'title', 'body', 'suggestion']) {
+    for (const field of ['path', 'line', 'side', 'title', 'body', 'suggestion']) {
       expect(PR_REVIEW_DECISION_CONTRACT, field).toContain(`"${field}"`);
     }
     // Derived from the real list: a status the normalizer accepts but the

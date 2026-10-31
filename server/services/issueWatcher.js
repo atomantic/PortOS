@@ -195,8 +195,6 @@ function normalizeFinding(finding, anchors) {
   const path = trimTo(finding.path, 500);
   const side = String(finding.side || '').toUpperCase();
   const line = Number(finding.line);
-  // Every accepted finding blocks: a legacy blocking:false is a severity hint,
-  // never permission to merge past a finding.
   const rendered = renderFinding(finding);
   if (!path || side !== 'RIGHT' || !Number.isInteger(line) || line < 1 || !rendered) return null;
   if (!anchors.has(`${path}\u0000${side}\u0000${line}`)) return null;
@@ -1397,11 +1395,11 @@ function reviewPlanFor(decision, diff, target) {
     normalizedFindings,
     findings: normalizedFindings.map(({ comment }) => comment),
     hasInvalidFinding,
-    // An approval cannot override an accepted finding, whatever its severity.
+    // Every finding blocks, valid or not: a legacy blocking:false is a severity
+    // hint, never permission to approve past a finding.
     canApprove: decision.verdict === 'approve'
-      && !hasInvalidFinding
       && !diffInsufficient
-      && normalizedFindings.length === 0,
+      && decision.findings.length === 0,
   };
 }
 
@@ -1413,13 +1411,11 @@ async function postNonApprovingReview({ app, ctx, pr, raw, decision, review, tar
   const { normalizedFindings, findings, hasInvalidFinding } = review;
   if (!await recheck()) return { reviewed: false, handedBack: false };
   const downgraded = hasInvalidFinding && decision.verdict !== 'request_changes';
-  const shouldRequestChanges = decision.verdict === 'request_changes'
-    || hasInvalidFinding
-    || normalizedFindings.length > 0;
+  const shouldRequestChanges = decision.verdict === 'request_changes' || decision.findings.length > 0;
   const summary = renderReviewBody({
     report: raw,
     verdict: shouldRequestChanges ? 'request_changes' : 'defer',
-    blockingFindings: normalizedFindings,
+    findings: normalizedFindings,
     downgraded,
   });
   const posted = shouldRequestChanges
