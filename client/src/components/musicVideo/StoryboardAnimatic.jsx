@@ -507,20 +507,24 @@ function useColdOpen({ project, songRef }) {
   const plan = useMemo(() => coldOpenPlan(project), [project]);
   const scenes = useMemo(() => plan.map(({ scene, startSec, endSec }) => ({ ...scene, startSec, endSec })), [plan]);
   const seconds = plan.length ? plan[plan.length - 1].endSec : 0;
-  // The mix follows the shots' lengths and sound; a change asks for it again on the next play.
-  const mixKey = JSON.stringify(plan.map(({ scene, preMusic }) => [scene.sceneId, scene.videoHistoryId || null, preMusic]));
+  // The mix follows the shots' lengths, sound and playback (speed, in-point, reverse, performance
+  // edit); the whole shot is the key, and the server returns its cached WAV when nothing it uses changed.
+  const mixKey = JSON.stringify(plan.map(({ scene, preMusic }) => [scene, preMusic]));
   // The mix is made ahead (ffmpeg, cached on the server) so Play can start it inside the tap,
   // which a phone requires before it plays sound.
   const mixing = useRef(null);
   const mix = useCallback(() => {
-    mixing.current ||= mixMusicVideoColdOpenAudio(project.id, { silent: true })
+    if (mixing.current) return mixing.current;
+    const request = mixMusicVideoColdOpenAudio(project.id, { silent: true })
       .then((mixed) => {
         const url = mixed?.name ? musicVideoColdOpenAudioUrl(project.id, mixed.name) : null;
-        setSrc(url);
+        // A request superseded by a newer edit must not replace the newer mix.
+        if (mixing.current === request) setSrc(url);
         return url;
       })
-      .catch((err) => { mixing.current = null; throw err; });
-    return mixing.current;
+      .catch((err) => { if (mixing.current === request) mixing.current = null; throw err; });
+    mixing.current = request;
+    return request;
   }, [project.id]);
   useEffect(() => {
     setSrc(null);

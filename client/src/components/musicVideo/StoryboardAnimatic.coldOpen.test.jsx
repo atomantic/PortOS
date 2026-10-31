@@ -40,4 +40,21 @@ describe('StoryboardAnimatic cold open', () => {
     expect(screen.getByRole('button', { name: /Cold open/ }).getAttribute('aria-pressed')).toBe('false');
     play.mockRestore();
   });
+
+  // Uniquely catches a playback-only edit keeping the old mix, and a superseded mix answering last.
+  it('mixes again after a playback edit and keeps the newer mix when the older one answers late', async () => {
+    const answers = [];
+    mixMusicVideoColdOpenAudio.mockImplementation(() => new Promise((resolve) => answers.push(resolve)));
+    const play = vi.spyOn(window.HTMLMediaElement.prototype, 'play').mockImplementation(() => Promise.resolve());
+    const { rerender } = render(<StoryboardAnimatic project={project} audioUrl="/song.mp3" />);
+    await waitFor(() => expect(answers).toHaveLength(1));
+    const faster = { ...project, scenes: project.scenes.map((sc) => (sc.preMusic ? { ...sc, speedFps: 48 } : sc)) };
+    rerender(<StoryboardAnimatic project={faster} audioUrl="/song.mp3" />);
+    await waitFor(() => expect(answers).toHaveLength(2));
+    await act(async () => { answers[1]({ name: 'cold-open-new.wav' }); });
+    await act(async () => { answers[0]({ name: 'cold-open-old.wav' }); });
+    await act(async () => { fireEvent.play(screen.getByLabelText('Song for the storyboard animatic')); });
+    await waitFor(() => expect(screen.getByLabelText('Sound before the song').getAttribute('src')).toBe('/api/music-video/p/cold-open/cold-open-new.wav'));
+    play.mockRestore();
+  });
 });
