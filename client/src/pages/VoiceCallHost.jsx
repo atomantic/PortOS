@@ -81,6 +81,10 @@ export default function VoiceCallHost() {
   const audio = useRef({ context: null, stream: null, node: null, source: null, playing: new Set(), outputId: null, pending: [] });
   const lockRelease = useRef(null);
   const startGenRef = useRef(0);
+  // True from the moment start() stores its devices until teardown(). The
+  // server's hostAttached is global to every tab, so only a tab that owns a
+  // session may render as attached or react to a refusal by releasing.
+  const ownsSessionRef = useRef(false);
 
   const releaseLock = useCallback(() => {
     lockRelease.current?.();
@@ -96,6 +100,7 @@ export default function VoiceCallHost() {
     current.stream?.getTracks?.().forEach((track) => track.stop());
     current.context?.close?.();
     audio.current = { context: null, stream: null, node: null, source: null, playing: new Set(), outputId: current.outputId, pending: [] };
+    ownsSessionRef.current = false;
     setLevel(0);
   }, []);
 
@@ -255,6 +260,7 @@ export default function VoiceCallHost() {
       }
     };
     audio.current = { context, stream, node, source, playing: new Set(), outputId: output?.deviceId ?? null, pending: [] };
+    ownsSessionRef.current = true;
     // Two literal emits, not a computed event name — a computed
     // `socket.emit(x ? 'a' : 'b')` is invisible to the static
     // socket-event inventory scan (`server/lib/socketEventInventory.js`),
@@ -274,33 +280,45 @@ export default function VoiceCallHost() {
   }, [releaseLock, teardown]);
 
   useEffect(() => {
-    const onCallState = (snapshot) => {
-      if (snapshot?.error === 'host-taken') {
-        setBlocked('Another tab owns the call host.');
-        setAttached(false);
-        return;
-      }
-      if (snapshot?.error === 'capture-active') {
-        setBlocked('Meeting capture is running on this tab — stop it before attaching a call.');
-        setAttached(false);
-        return;
-      }
-      setCallState(snapshot);
-      setAttached(Boolean(snapshot?.hostAttached));
+    // The server refused (or never accepted) the attach this tab already
+    // opened devices for: release everything so a retry can take the lock
+    // again. No detach/stop emit; the server holds nothing for this socket.
+    // Only the session's own mode counts: the other mode's broadcast says
+    // nothing about this tab.
+    const releaseRefused = (kind, message) => {
+      if (!ownsSessionRef.current || modeRef.current !== kind) return false;
+      startGenRef.current += 1;
+      teardown();
+      releaseLock();
+      setAttached(false);
+      if (message) setBlocked(message);
+      return true;
     };
-    const onCaptureState = (snapshot) => {
-      if (snapshot?.error === 'host-taken') {
-        setBlocked('Another tab is already capturing a meeting.');
+    const applySnapshot = (kind, snapshot, setState, refusals) => {
+      const refusal = refusals[snapshot?.error];
+      if (refusal) {
+        if (!releaseRefused(kind, refusal)) setBlocked(refusal);
         setAttached(false);
         return;
       }
-      if (snapshot?.error === 'call-active') {
-        setBlocked('A FaceTime call is active on this tab — hang up before starting a capture.');
-        setAttached(false);
-        return;
-      }
-      setCaptureState(snapshot);
-      setAttached(Boolean(snapshot?.hostAttached));
+      setState(snapshot);
+      const owns = ownsSessionRef.current && modeRef.current === kind;
+      if (owns && !snapshot?.hostAttached) releaseRefused(kind);
+      else setAttached(owns && Boolean(snapshot?.hostAttached));
+    };
+    const onCallState = (snapshot) => applySnapshot('call', snapshot, setCallState, {
+      'host-taken': 'Another tab owns the call host.',
+      'capture-active': 'Meeting capture is running on this tab — stop it before attaching a call.',
+    });
+    const onCaptureState = (snapshot) => applySnapshot('capture', snapshot, setCaptureState, {
+      'host-taken': 'Another tab is already capturing a meeting.',
+      'call-active': 'A FaceTime call is active on this tab — hang up before starting a capture.',
+    });
+    const onVoiceError = ({ stage, message } = {}) => {
+      if (stage !== 'call' && stage !== 'capture') return;
+      releaseRefused(stage, message === 'voice mode disabled'
+        ? 'Voice mode is off — enable it in Settings > Voice, then attach again.'
+        : (message || 'The server refused the audio host.'));
     };
     const onTts = ({ wav }) => { if (wav) playToCall(wav); };
     const onTtsCancel = () => {
@@ -310,12 +328,14 @@ export default function VoiceCallHost() {
     };
     socket.on('voice:call:state', onCallState);
     socket.on('voice:capture:state', onCaptureState);
+    socket.on('voice:error', onVoiceError);
     socket.on('voice:call:tts', onTts);
     socket.on('voice:tts:cancel', onTtsCancel);
     return () => {
       startGenRef.current += 1;
       socket.off('voice:call:state', onCallState);
       socket.off('voice:capture:state', onCaptureState);
+      socket.off('voice:error', onVoiceError);
       socket.off('voice:call:tts', onTts);
       socket.off('voice:tts:cancel', onTtsCancel);
       if (modeRef.current === 'call') socket.emit('voice:call:detach');

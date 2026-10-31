@@ -63,6 +63,21 @@ const audioContext = ({ addModule = () => Promise.resolve() } = {}) => {
   return { close };
 };
 
+// Opens a full session (stream, context, lock) the way a real attach does, so
+// server snapshots are received by the tab that owns the devices.
+const startSession = async (label = 'Attach call host') => {
+  exclusiveLock();
+  navigator.mediaDevices.enumerateDevices.mockResolvedValue(devices);
+  const track = { stop: vi.fn() };
+  navigator.mediaDevices.getUserMedia.mockResolvedValue({ getTracks: () => [track] });
+  const { close } = audioContext();
+  const view = render(<VoiceCallHost />, {
+    wrapper: ({ children }) => <MemoryRouter initialEntries={[label === 'Start capture' ? '/?mode=capture' : '/']}>{children}</MemoryRouter>,
+  });
+  await act(async () => { fireEvent.click(screen.getByText(label)); });
+  return { track, close, ...view };
+};
+
 beforeEach(() => {
   vi.clearAllMocks();
   grantCapabilities();
@@ -203,7 +218,7 @@ describe('VoiceCallHost', () => {
   });
 
   it('reflects live call state once the server reports it attached', async () => {
-    render(<VoiceCallHost />, { wrapper: MemoryRouter });
+    await startSession();
 
     act(() => socket.__fire('voice:call:state', { hostAttached: true, state: 'listening', active: true, turns: 2 }));
 
@@ -264,11 +279,75 @@ describe('VoiceCallHost', () => {
     expect(document.activeElement).toBe(capture);
     expect(await screen.findByText('Start capture')).toBeTruthy();
 
-    // Once a host is attached the mode is locked: both tabs leave the tab
-    // order AND the arrow-key order rather than being focused.
-    act(() => socket.__fire('voice:capture:state', { hostAttached: true, active: true, turns: 1 }));
-    expect(call).toBeDisabled();
-    expect(capture).toBeDisabled();
+  });
+
+  it('locks both mode tabs while this tab owns an attached host (#7244)', async () => {
+    await startSession();
+    act(() => socket.__fire('voice:call:state', { hostAttached: true, state: 'listening' }));
+    expect(screen.getByRole('tab', { name: 'Call' })).toBeDisabled();
+    expect(screen.getByRole('tab', { name: 'Capture system audio' })).toBeDisabled();
+  });
+
+  describe('server refusal after start() (#14257)', () => {
+    it('releases stream, context and lock on host-taken so a second Attach reaches getUserMedia', async () => {
+      const { track, close } = await startSession();
+      expect(socket.emit).toHaveBeenCalledWith('voice:call:attach');
+
+      await act(async () => socket.__fire('voice:call:state', { error: 'host-taken' }));
+
+      expect(track.stop).toHaveBeenCalledTimes(1);
+      expect(close).toHaveBeenCalledTimes(1);
+      expect(socket.emit).not.toHaveBeenCalledWith('voice:call:detach');
+      await act(async () => { fireEvent.click(screen.getByText('Attach call host')); });
+      expect(navigator.mediaDevices.getUserMedia).toHaveBeenCalledTimes(2);
+      expect(screen.queryByText(/Another tab owns the call host\. Close it/)).toBeNull();
+    });
+
+    it('releases on a capture-mode call-active refusal', async () => {
+      const { track, close } = await startSession('Start capture');
+      expect(socket.emit).toHaveBeenCalledWith('voice:capture:start');
+
+      await act(async () => socket.__fire('voice:capture:state', { error: 'call-active' }));
+
+      expect(track.stop).toHaveBeenCalledTimes(1);
+      expect(close).toHaveBeenCalledTimes(1);
+      await act(async () => { fireEvent.click(screen.getByText('Start capture')); });
+      expect(navigator.mediaDevices.getUserMedia).toHaveBeenCalledTimes(2);
+    });
+
+    it('releases and shows the server message when voice mode is disabled', async () => {
+      const { track, close } = await startSession();
+
+      act(() => socket.__fire('voice:error', { stage: 'call', message: 'voice mode disabled' }));
+
+      expect(track.stop).toHaveBeenCalledTimes(1);
+      expect(close).toHaveBeenCalledTimes(1);
+      expect((await screen.findByRole('alert')).textContent).toMatch(/Voice mode is off/);
+      await act(async () => { fireEvent.click(screen.getByText('Attach call host')); });
+      expect(navigator.mediaDevices.getUserMedia).toHaveBeenCalledTimes(2);
+    });
+
+    it('releases when a snapshot reports the host detached while this tab owns a session', async () => {
+      const { track } = await startSession();
+      act(() => socket.__fire('voice:call:state', { hostAttached: false, state: 'idle' }));
+      expect(track.stop).toHaveBeenCalledTimes(1);
+    });
+
+    it('ignores the other mode\'s snapshot and unrelated voice errors', async () => {
+      const { track } = await startSession();
+      act(() => socket.__fire('voice:capture:state', { hostAttached: false }));
+      act(() => socket.__fire('voice:error', { stage: 'turn', message: 'audio is required' }));
+      expect(track.stop).not.toHaveBeenCalled();
+    });
+
+    it('never renders a tab that opened no device as attached to another tab\'s host', () => {
+      render(<VoiceCallHost />, { wrapper: MemoryRouter });
+
+      act(() => socket.__fire('voice:call:state', { hostAttached: true, state: 'listening' }));
+
+      expect(screen.getByText(/Not attached/)).toBeTruthy();
+      expect(screen.getByText('Attach call host')).toBeEnabled();
+    });
   });
 });
 
@@ -330,7 +409,7 @@ describe('VoiceCallHost — meeting capture mode', () => {
   });
 
   it('reflects live capture state once the server reports it attached', async () => {
-    renderCapturing();
+    await startSession('Start capture');
 
     act(() => socket.__fire('voice:capture:state', { hostAttached: true, active: true, turns: 3 }));
 
