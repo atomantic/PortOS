@@ -7,7 +7,7 @@
  */
 
 import { createHash } from 'node:crypto';
-import { unresolvedRetirements, retainRetirementObligations, sameRetirementCheckout, sameRetirementObservation, matchingRetirementReceipts, hasRetirementReceipt, retirementReceiptSettles } from '../lib/reconcileRetirementEvidence.js';
+import { unresolvedRetirements, retainRetirementObligations, sameRetirementCheckout, sameRetirementObservation, matchingRetirementReceipts, hasRetirementReceipt, retirementArchiveRecorded, retirementReceiptSettles } from '../lib/reconcileRetirementEvidence.js';
 import { applyLegacyRetirementResolutions } from '../lib/legacyRetirementTransition.js';
 import { readCheckoutPathPresence, readLocalBranchPresence } from './repoCleanupObservation.js';
 import { isCurrentRetirementCheckout } from '../lib/retirementCheckoutObservation.js';
@@ -234,12 +234,9 @@ async function repairReceiptObservations(appId, outcome) {
   return reconcileRecordedReceiptObservations(appId, outcome).catch(() => outcome);
 }
 
-// A receipt's archive is kept when it was removed in place (null) or moved to a named directory.
-const isKeptArchive = archiveDir => archiveDir == null || (typeof archiveDir === 'string' && archiveDir.length > 0);
-
 // A physical removal whose branch survives: durable evidence that does not settle the ref.
 const isUnsettledPhysicalRemoval = ({ branchDeleted, branch, checkoutIdentity, archiveDir }) =>
-  branchDeleted === false && Boolean(branch) && Boolean(checkoutIdentity) && isKeptArchive(archiveDir);
+  branchDeleted === false && Boolean(branch) && Boolean(checkoutIdentity) && retirementArchiveRecorded({ archiveDir });
 
 // A replayed retirement keeps its original receipt: only repaired observations may persist.
 async function settleReplay(appId, record, outcome, receipts, evidence) {
@@ -278,7 +275,7 @@ export async function recordHeldCheckoutRetirement(appId, { path, branch, branch
     const evidence = { ...(outcome.retirementReceiptEvidence || {}) };
     for (const receipt of outcome.retired || []) {
       const settles = retirementReceiptSettles(receipt);
-      if (receipt.retiredAt && isKeptArchive(receipt.archiveDir) && (settles || isUnsettledPhysicalRemoval(receipt))) {
+      if (receipt.retiredAt && retirementArchiveRecorded(receipt) && (settles || isUnsettledPhysicalRemoval(receipt))) {
         const normalized = { ...receipt, archiveDir: receipt.archiveDir ?? null };
         if (settles) receipts[identity(normalized)] ??= receipt.retiredAt;
         evidence[identity(normalized)] ??= normalized;
@@ -286,7 +283,7 @@ export async function recordHeldCheckoutRetirement(appId, { path, branch, branch
     }
     const recordedArchive = archiveDir ?? null;
     const unsettledRemoval = isUnsettledPhysicalRemoval({ branchDeleted, branch, checkoutIdentity, archiveDir });
-    const receiptId = (branchDeleted === true || checkoutOnlyReceipt) && isKeptArchive(archiveDir)
+    const receiptId = (branchDeleted === true || checkoutOnlyReceipt) && retirementArchiveRecorded({ archiveDir })
       ? identity({ path, branch, head, archiveDir: recordedArchive, branchDeleted, checkoutIdentity, checkoutOnly: checkoutOnlyReceipt }) : null;
     if (unsettledRemoval
       && [...(outcome.retired || []), ...Object.values(evidence)].some(row => sameRetirementCheckout(row, { path, branch, head })

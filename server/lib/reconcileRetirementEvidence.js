@@ -8,7 +8,8 @@ export const sameRetirementObservation = (left, right) => sameRetirementCheckout
 export const isRetirementObligation = row => ['retirement-review-pending', 'retirement-receipt-unverified',
   'retirement-provenance-unverified'].includes(row?.reason);
 
-const retirementArchiveRecorded = row => row?.archiveDir == null
+// A receipt's archive is recorded when it was removed in place (null) or moved to a named directory.
+export const retirementArchiveRecorded = row => row?.archiveDir == null
   || (typeof row.archiveDir === 'string' && row.archiveDir.length > 0);
 
 /** A receipt settles a checkout by deleting its branch, or — for a detached

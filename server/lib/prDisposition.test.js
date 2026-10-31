@@ -97,6 +97,6 @@ describe('prHeldForOperator (#14408)', () => {
     ['read-only task', { prCompletion: 'merge-on-green', readOnly: 'true' }, true],
     ['review loop left open', { prCompletion: 'review-then-merge', reviewLoopLeaveOpen: true }, true],
   ])('%s', (_label, metadata, held) => {
-    expect(prHeldForOperator(metadata === undefined ? {} : { metadata })).toBe(held);
+    expect(prHeldForOperator({ metadata })).toBe(held);
   });
 });
