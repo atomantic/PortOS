@@ -32,6 +32,7 @@ import { RENDER_TARGET } from '../../lib/renderTargets.js';
 import { falSceneTake, falTakeRequestFields, grokCoverage, runwaySceneTake, runwayTakeRequestFields } from '../../lib/musicVideoShotTiming.js';
 import { authoredShotPrompt, musicVideoFrameModelInput } from '../../lib/musicVideoShotPrompt.js';
 import { sceneEndFrameRequestFields } from '../../lib/musicVideoEndFrame.js';
+import { preMusicClipSound } from '../../lib/musicVideoColdOpen.js';
 import { conditioningReferences, falRouteVideoSettings, runwayRouteVideoSettings } from './productionPool.js';
 import { loadSceneCastMedia } from './castGuideMedia.js';
 import { castInputsFromReferences } from '../../lib/musicVideoCastLook.js';
@@ -133,7 +134,7 @@ async function dispatchClip({ project, scene, route, tag }) {
   const fixes = typeof scene.clipFixes?.text === 'string' ? scene.clipFixes.text : '';
   const byBackend = {
     // A supplied-audio route animates the frame from its shot's own song window.
-    local: route.audio === 'supplied' ? { modelId: route.model, mode: 'a2v', _suppliedAudio: true } : { modelId: route.model, disableAudio: true },
+    local: route.audio === 'supplied' ? { modelId: route.model, mode: 'a2v', _suppliedAudio: true } : { modelId: route.model, disableAudio: !preMusicClipSound(scene) },
     grok: { grokDuration: spanSec != null ? grokCoverage(spanSec).requestSec : (project.videoSettings?.grokDuration || 10), disableAudio: true },
     fal: falClipParams(project, scene, route),
     reactor: { disableAudio: true },
