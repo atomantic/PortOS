@@ -272,6 +272,8 @@ export default function LearningTab() {
   const hasData = learning?.totals?.completed > 0;
   const learningFailed = loadFailures.includes(LEARNING_LABEL);
   const sectionFailures = loadFailures.filter((label) => label !== LEARNING_LABEL);
+  const skippedFailed = sectionFailures.includes('skipped tasks');
+  const performanceFailed = sectionFailures.includes('performance');
 
   return (
     <div className="space-y-6">
@@ -367,9 +369,9 @@ export default function LearningTab() {
                 <span className="text-xs text-gray-500">Skipped Types</span>
               </div>
               <div className={`text-2xl font-bold ${skipped?.skippedCount > 0 ? 'text-port-warning' : 'text-gray-500'}`}>
-                {skipped?.skippedCount || 0}
+                {skippedFailed ? '—' : (skipped?.skippedCount || 0)}
               </div>
-              <div className="text-xs text-gray-500">due to low success</div>
+              <div className="text-xs text-gray-500">{skippedFailed ? 'not loaded' : 'due to low success'}</div>
             </div>
           </div>
 
@@ -598,7 +600,9 @@ export default function LearningTab() {
               <BarChart2 size={16} className="text-port-accent" />
               <span className="font-medium text-white">Task Type Performance</span>
               <span className="text-xs text-gray-500">
-                ({performance?.topPerformers?.length || 0} top, {performance?.needsAttention?.length || 0} need attention)
+                {performanceFailed
+                  ? '(not loaded)'
+                  : `(${performance?.topPerformers?.length || 0} top, ${performance?.needsAttention?.length || 0} need attention)`}
               </span>
             </button>
             {expandedSections.taskTypes && (

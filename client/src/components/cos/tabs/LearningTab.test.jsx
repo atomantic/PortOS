@@ -54,6 +54,8 @@ describe('LearningTab failed reads', () => {
     renderTab();
 
     expect(await screen.findByText(/Could not load some learning sections \(skipped tasks\)/)).toBeInTheDocument();
+    expect(screen.getByText('not loaded')).toBeInTheDocument();
+    expect(screen.queryByText('due to low success')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     expect(await screen.findByText('Tasks Analyzed')).toBeInTheDocument();
     expect(screen.queryByText(/Could not load some learning sections/)).not.toBeInTheDocument();
