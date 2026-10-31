@@ -137,6 +137,35 @@ describe('completion policy across lifecycle and reconciliation boundaries', () 
     expect(await recheck()).toEqual({ admitted: false, reason: 'pr-completion-review-required' });
   });
 
+  describe('review runs on a reused publisher branch', () => {
+    const reviewRun = (id, url, extra = {}) => ({ id, status: 'completed', startedAt: '2026-01-01T00:00:00Z', result: { success: true },
+      metadata: { sourceWorkspace: repoPath, workspacePath: `/synthetic/worktrees/${id}`, worktreeBranch: branch,
+        prCompletionPolicy: 'review-then-merge', reviewLoopMergeTarget: { url, branch }, ...extra } });
+    const hold = (agents, input = {}) => readBranchCompletionHold({ repoPath, branch, prUrl, tip: runtime.tip, agents, ...input });
+    const verified = url => ({ mergedReviewFollowUp: { status: 'verified', prUrl: url } });
+
+    it('binds an older review run to its own PR, not every later PR on the branch', async () => {
+      expect(await hold([reviewRun('agent-old', `${prUrl}0`)])).toBeNull();
+      expect(await hold([reviewRun('agent-current', prUrl)])).toBe('pr-completion-review-required');
+    });
+
+    it('discharges a completed review run whose assigned PR was verified merged', async () => {
+      expect(await hold([reviewRun('agent-merged', prUrl, verified(prUrl))])).toBeNull();
+      expect(await hold([reviewRun('agent-merged', prUrl, verified(prUrl))], { prUrl: undefined })).toBeNull();
+    });
+
+    it('keeps the obligation without exact verified-merge proof for the same PR', async () => {
+      expect(await hold([reviewRun('agent-other-proof', prUrl, verified(`${prUrl}0`))])).toBe('pr-completion-review-required');
+      expect(await hold([reviewRun('agent-unverified', prUrl, { mergedReviewFollowUp: { status: 'pending', prUrl } })])).toBe('pr-completion-review-required');
+      expect(await hold([{ ...reviewRun('agent-running', prUrl, verified(prUrl)), status: 'running' }])).toBe('pr-completion-review-required');
+    });
+
+    it('never discharges a human handoff on a merged PR', async () => {
+      const handoff = reviewRun('agent-handoff', prUrl, { ...verified(prUrl), prCompletionPolicy: 'leave-open' });
+      expect(await hold([handoff])).toBe('pr-completion-human-handoff');
+    });
+  });
+
   describe('retirement of a review-then-merge branch that never opened a PR', () => {
     const retire = () => readBranchCompletionHold({ repoPath, branch, retirement: true });
 
