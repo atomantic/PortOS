@@ -331,7 +331,9 @@ httpServer.listen(PORT, '0.0.0.0', () => {
 export default defineConfig({
   test: {
     globals: true,
-    environment: 'node'
+    environment: 'node',
+    // A new app has no tests yet; without this \`vitest run\` exits 1 and fails CI.
+    passWithNoTests: true
   }
 });
 `);
