@@ -123,6 +123,25 @@ describe('FeatureAgentDetail load race', () => {
     await waitFor(() => expect(screen.getByText('Agent Alpha')).toBeInTheDocument());
   });
 
+  it('shows not-found when a refresh finds the shown agent deleted', async () => {
+    const socket = (await import('../services/socket')).default;
+    render(
+      <MemoryRouter initialEntries={['/feature-agents/agent-a/overview']}>
+        <Harness />
+      </MemoryRouter>,
+    );
+    await act(async () => {
+      deferreds['agent-a'].resolve({ id: 'agent-a', name: 'Agent Alpha', appId: 'app1' });
+    });
+    await waitFor(() => expect(screen.getByText('Agent Alpha')).toBeInTheDocument());
+
+    api.getFeatureAgent.mockImplementationOnce(() => Promise.reject(Object.assign(new Error('Feature agent not found'), { status: 404 })));
+    const statusHandler = socket.on.mock.calls.find(([event]) => event === 'cos:feature-agent:status')[1];
+    await act(async () => { statusHandler({ id: 'agent-a' }); });
+    await waitFor(() => expect(screen.getByText('Feature agent not found')).toBeInTheDocument());
+    expect(screen.queryByText('Agent Alpha')).not.toBeInTheDocument();
+  });
+
   it('still renders the agent under StrictMode (mount→cleanup→remount must not strand the mounted guard)', async () => {
     render(
       <StrictMode>

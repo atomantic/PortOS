@@ -189,9 +189,11 @@ function MoodBoardEditor({ id }) {
   const mountedRef = useMounted();
   const loadSeqRef = useRef(0);
   const boardLoadedRef = useRef(false);
+  const loadInFlightRef = useRef(false);
 
   const load = useCallback(async () => {
     const seq = ++loadSeqRef.current;
+    loadInFlightRef.current = true;
     setLoading(true);
     let error = null;
     const data = await getMoodBoard(id, { silent: true }).catch((err) => { error = err; return null; });
@@ -221,6 +223,7 @@ function MoodBoardEditor({ id }) {
       setBoard(null);
       if (!error || error.status === 404) toast.error('Mood board not found');
     }
+    loadInFlightRef.current = false;
     setLoading(false);
   }, [id]);
 
@@ -235,14 +238,22 @@ function MoodBoardEditor({ id }) {
     let sequence = 0;
     const onRender = async (evt) => {
       if (evt?.boardId !== id) return;
+      const reportRenderFailure = () => {
+        if (evt.itemId && evt.status === 'failed' && evt.error && renderRequestRef.current !== evt.itemId) toast.error(`Render failed: ${evt.error}`);
+      };
       // With no board loaded yet (first read failed or still pending) only a
-      // full load also seeds the name/description fields.
-      if (!boardLoadedRef.current) { load(); return; }
+      // full load also seeds the name/description fields. A pending read
+      // already returns the current board, so let it finish.
+      if (!boardLoadedRef.current) {
+        reportRenderFailure();
+        if (!loadInFlightRef.current) load();
+        return;
+      }
       const current = ++sequence;
       const fresh = await getMoodBoard(id, { silent: true }).catch(() => null);
       if (!active || current !== sequence || !mountedRef.current || !fresh) return;
       setBoard((prev) => (prev ? { ...prev, items: fresh.items, updatedAt: fresh.updatedAt } : prev));
-      if (evt.itemId && evt.status === 'failed' && evt.error && renderRequestRef.current !== evt.itemId) toast.error(`Render failed: ${evt.error}`);
+      reportRenderFailure();
     };
     socket.on('mood-board:item-render', onRender);
     socket.on('mood-board:generate', onRender);

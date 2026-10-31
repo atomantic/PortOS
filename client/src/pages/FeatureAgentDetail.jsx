@@ -54,8 +54,16 @@ export default function FeatureAgentDetail() {
       setLoading(false);
     }).catch((err) => {
       if (!isCurrent()) return;
-      if (shownIdRef.current === id) toast.error(`Couldn’t refresh feature agent: ${err.message}`);
-      else setLoadError(err.status === 404 ? null : err);
+      if (err?.status === 404) {
+        // Deleted, possibly while on screen: show the not-found view.
+        shownIdRef.current = null;
+        setAgent(null);
+        setLoadError(null);
+      } else if (shownIdRef.current === id) {
+        toast.error(`Couldn’t refresh feature agent: ${err?.message || 'Request failed'}`);
+      } else {
+        setLoadError(err);
+      }
       setLoading(false);
     });
   }, [id, isCreate]);

@@ -325,6 +325,19 @@ describe('MoodBoardDetail failed read', () => {
   });
 });
 
+describe('MoodBoardDetail render event during the first load', () => {
+  it('lets the pending first read finish instead of restarting it', async () => {
+    const first = deferred();
+    mockGetMoodBoard.mockReturnValueOnce(first.promise);
+    renderPage();
+    await act(async () => { socketHandlers.get('mood-board:item-render')({ boardId: 'a', itemId: 'i1', status: 'failed', error: 'GPU busy' }); });
+    expect(mockGetMoodBoard).toHaveBeenCalledTimes(1);
+    expect(mockToastError).toHaveBeenCalledWith('Render failed: GPU busy');
+    await act(async () => { first.resolve({ id: 'a', name: 'Board A', items: [] }); });
+    await waitFor(() => expect(boardNameValue()).toBe('Board A'));
+  });
+});
+
 describe('MoodBoardDetail private Pinterest import', () => {
   it('imports a single Pin through the signed-in PortOS browser action', async () => {
     const boardUrl = 'https://www.pinterest.com/pin/9999999999999999999/';
