@@ -539,9 +539,10 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
   const absentObligations = unresolved.filter(release => !result.worktreeInventory?.some(tree => sameRetirementCheckout(tree, release)));
   let retirementReviews = { candidates: [], held: [] };
   const { prepareReconcileRetirements, retainedMergedClaims } = await import('./branchReconcileRetirement.js');
+  const { releaseCandidateTrees } = await import('./branchReconcileReleaseCandidates.js');
   let latestAbsentObligations = absentObligations;
   if (actions.cleanupMerged !== false && (result.wip?.some(branch => branch.rule === 'completion-policy' && branch.completionPolicyReason === 'pr-completion-review-required')
-    || retainedMergedClaims(result).length)) {
+    || retainedMergedClaims(result).length || releaseCandidateTrees(result).length)) {
     const inventory = describeIdleReconcilePark(result.skipped || [], heldLive, {
       wip: result.wip, worktreeInventory: result.worktreeInventory,
       detachedWorktrees: result.detachedWorktrees, superseded: result.superseded,
