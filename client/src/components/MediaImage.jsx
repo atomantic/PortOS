@@ -32,11 +32,13 @@ import { Cloud } from 'lucide-react';
 import socket from '../services/socket';
 import { imageThumbnailSrc } from '../lib/imageThumbnailSrc';
 
+// Peer sync reports the decoded on-disk name, so decode an encoded URL segment.
 function basenameOf(src) {
   if (typeof src !== 'string') return null;
   const last = src.split('/').pop();
-  if (!last) return null;
-  return last.split('?')[0] || null;
+  const bare = last ? last.split(/[?#]/)[0] : '';
+  if (!bare) return null;
+  try { return decodeURIComponent(bare); } catch { return bare; }
 }
 
 function cacheBust(src, nonce) {

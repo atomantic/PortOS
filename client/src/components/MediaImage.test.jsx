@@ -52,6 +52,15 @@ describe('MediaImage', () => {
     expect(screen.getByAltText('pin').getAttribute('src')).toBe('https://example.com/pin.jpg');
   });
 
+  it('swaps in a percent-encoded asset when peer sync reports its decoded filename', () => {
+    render(<MediaImage src="/data/images/board%20poster.png" alt="poster" />);
+    fireEvent.error(screen.getByAltText('poster'));
+    expect(screen.getByText(/Syncing/i)).toBeTruthy();
+    act(() => { emitAssetArrived({ filename: 'board poster.png' }); });
+    expect(screen.queryByText(/Syncing/i)).toBeNull();
+    expect(screen.getByAltText('poster').getAttribute('src')).toMatch(/^\/data\/images\/board%20poster\.png\?_t=/);
+  });
+
   it('still shows Syncing for a peer-hosted /data/ asset on another origin', () => {
     render(<MediaImage src="https://peer.example.com:5555/data/images/far.png" alt="far" />);
     fireEvent.error(screen.getByAltText('far'));
