@@ -1,21 +1,25 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router';
 import { CheckCircle2, ListMusic, Loader2, RotateCcw } from 'lucide-react';
 import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import toast from '../../ui/Toast';
-import { groupStoryboardBySong } from '../../../services/api';
+import { getMusicVideoProject, groupStoryboardBySong } from '../../../services/api';
+import { storyboardFitSong } from '../../../../../server/lib/storyboardFit.js';
 import StageSection from '../StageSection.jsx';
 import StoryboardLinkPanel, { useStoryboardLink } from '../StoryboardLinkPanel.jsx';
 import StoryboardFitPanel from '../StoryboardFitPanel.jsx';
+import StoryboardSyncPanel from '../StoryboardSyncPanel.jsx';
 import StoryboardEditor from '../../storyboards/StoryboardEditor';
 
 /**
  * Storyboard: the video's linked Create › Storyboards board, edited in place
  * (beats, panels, sketch frames, the animatic played with the song), with its open panel in the URL
  * at `/music-video/:projectId/board/panel/:panelId`. With no board linked yet
- * the step offers to start one. Below it, Make shots fits the panels to the
- * song as timed shots; the shots are timed and finished on Shots (shot list,
- * AI Plan, pacing, beat timeline and treatment live there).
+ * the step offers to start one. Each panel shows its time on the song and the
+ * line sung over it. Below the board, Make shots syncs one shot per panel at
+ * the panel's own time and keeps them in sync after each board edit
+ * (StoryboardSyncPanel), or fits the panels to the song in proportion (Fit to
+ * song); the shots are finished on Shots (transitions, effects, takes).
  *
  * The editor's toolbar also carries this step's own actions: Group by song
  * sections (one beat per section of the analyzed song, panels kept), and
@@ -35,6 +39,17 @@ export default function PlanStage({ board }) {
   const [grouping, setGrouping] = useState(false);
   const sections = project.audioAnalysis?.sections || [];
   const reopened = !!project.storyboardReopenedAt;
+  const timingSong = useMemo(() => storyboardFitSong(project), [project]);
+  // A board edit syncs the shots on the server before it answers: read them again.
+  const syncOn = project.storyboardSync === true;
+  const boardSeen = useRef(null);
+  useEffect(() => {
+    if (!shownBoard) return;
+    const seen = boardSeen.current;
+    boardSeen.current = shownBoard.updatedAt;
+    if (!syncOn || !seen || seen === shownBoard.updatedAt) return;
+    getMusicVideoProject(project.id, { silent: true }).then((next) => { if (next?.id === project.id) board.replaceProject(next); }).catch(() => {});
+  }, [shownBoard?.updatedAt, syncOn, project.id]); // `board` is a fresh object each render
   // Play on the board plays this video's own song, with its timed lines.
   const lyricCues = project.lyricCues;
   const song = useMemo(() => (board.audioUrl ? {
@@ -87,7 +102,7 @@ export default function PlanStage({ board }) {
         <section id="mv-board-storyboard" aria-label="Storyboard" className="min-w-0">
           <StoryboardEditor key={linkedId} embedded boardId={linkedId} panelId={panelId}
             boardPath={`/music-video/${encodeURIComponent(project.id)}/board`} onBoard={setStoryboard} refreshKey={staleReads}
-            actions={storyboardActions} song={song} />
+            actions={storyboardActions} song={song} timingSong={timingSong} />
         </section>
       ) : (
         <StageSection id="mv-board-storyboard" title="Start the storyboard" defaultOpen
@@ -99,9 +114,17 @@ export default function PlanStage({ board }) {
 
       {shownBoard && shownBoard.beats.some((beat) => beat.panels.length) && (
         <StageSection id="mv-board-fit" title="Make shots" defaultOpen={scenes.length === 0}
-          summary={scenes.length ? `${scenes.length} shot${scenes.length === 1 ? '' : 's'} on Shots; refit after reworking the panels` : 'Fit the panels to the song as timed shots'}>
-          <StoryboardFitPanel project={project} board={shownBoard} disabled={locked || busy.planning || busy.arranging}
+          summary={syncOn ? `${scenes.length} shot${scenes.length === 1 ? '' : 's'} on Shots, kept in sync with the panels`
+            : scenes.length ? `${scenes.length} shot${scenes.length === 1 ? '' : 's'} on Shots; sync them to the panels` : 'One shot per panel, at its time on the song'}>
+          <StoryboardSyncPanel project={project} board={shownBoard} disabled={locked || busy.planning || busy.arranging}
+            onSynced={(saved) => board.replaceProject(saved)} onBoardStale={() => setStaleReads((n) => n + 1)} />
+          {!syncOn && (
+            <details className="mt-2">
+              <summary className="min-h-[44px] flex items-center cursor-pointer text-xs text-gray-400">Or fit the panels to the song in proportion</summary>
+              <StoryboardFitPanel project={project} board={shownBoard} disabled={locked || busy.planning || busy.arranging}
             onFitted={(saved) => board.editProjectLocal(saved)} onBoardStale={() => setStaleReads((n) => n + 1)} />
+            </details>
+          )}
         </StageSection>
       )}
     </div>

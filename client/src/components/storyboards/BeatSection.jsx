@@ -15,15 +15,18 @@ const iconButton = 'min-h-[44px] min-w-[44px] inline-flex items-center justify-c
  * toggle) what happens, why it matters, and the emotion — the brief the song
  * gets written from. An opening beat can play before the song starts (a
  * music video's cold open, `canPlayBeforeSong`): then it has no song marker.
+ * On a music video's board (`spanOf`, each panel's place on the song) the
+ * beat shows where it starts and each panel when it plays and what is sung.
  */
 export default function BeatSection({
   beat, beatIndex, beatCount, firstPanelNumber, aspectRatio, selectedPanelId, sketchNonce,
   onUpdate, onMove, onDelete, onAddPanel, onOpenPanel, addingPanel = false, pinOptions = [], grid = false,
-  canPlayBeforeSong = false,
+  canPlayBeforeSong = false, spanOf = null,
 }) {
   const [showDetails, setShowDetails] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const seconds = beatSeconds(beat);
+  const firstSpan = spanOf && beat.panels.length ? spanOf(beat.panels[0].id) : null;
   const fieldId = (name) => `beat-${beat.id}-${name}`;
   const itemClass = grid ? 'min-w-0' : 'snap-start shrink-0 w-36 sm:w-44';
   const beforeSong = beat.beforeSong === true;
@@ -63,7 +66,13 @@ export default function BeatSection({
           <option value="">No section</option>
           {STORYBOARD_MUSICAL_ROLES.map((role) => <option key={role} value={role}>{MUSICAL_ROLE_LABELS[role] || role}</option>)}
         </select>
-        <span className="text-xs text-gray-500 tabular-nums" title="Estimated length of this beat">{formatTimecode(seconds)}</span>
+        {firstSpan && !firstSpan.beforeSong ? (
+          <span className="text-xs text-gray-500 tabular-nums" title="Where this beat starts on the song, and its length">
+            {formatTimecode(firstSpan.startSec)} · {formatTimecode(seconds)}
+          </span>
+        ) : (
+          <span className="text-xs text-gray-500 tabular-nums" title="Estimated length of this beat">{formatTimecode(seconds)}</span>
+        )}
         {(beforeSong || canPlayBeforeSong) && (
           <button type="button" role="switch" aria-checked={beforeSong} onClick={() => onUpdate({ beforeSong: !beforeSong })}
             className={`min-h-[44px] inline-flex items-center rounded border px-2 text-xs sm:min-h-[28px] ${beforeSong ? 'border-port-accent text-port-accent' : 'border-port-border text-gray-400 hover:text-white'}`}>
@@ -133,6 +142,7 @@ export default function BeatSection({
               selected={panel.id === selectedPanelId}
               sketchNonce={sketchNonce}
               onOpen={() => onOpenPanel(panel.id)}
+              span={spanOf?.(panel.id) || null}
             />
           </li>
         ))}

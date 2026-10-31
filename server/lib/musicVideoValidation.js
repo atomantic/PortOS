@@ -1631,6 +1631,8 @@ export const musicVideoProjectUpdateSchema = z.object({
   storyboardId: z.string().regex(STORYBOARD_ID_PATTERN, 'storyboardId must be a storyboard id').nullable().optional(),
   // When the storyboard was reopened for rework (the step reads not done); null = approved again.
   storyboardReopenedAt: z.string().datetime().nullable().optional(),
+  // Keep the shots 1:1 with the linked storyboard's panels after each board edit (lib/storyboardShotSync.js).
+  storyboardSync: z.boolean().optional(),
 }).strict();
 
 // Mark a project finished outside PortOS (or clear the marker). The server

@@ -94,6 +94,14 @@ export const makeStoryboardFromMusicVideo = (projectId, options) =>
 export const fitMusicVideoToStoryboard = (projectId, input, options) =>
   request(`/storyboards/fit-music-video/${enc(projectId)}`, { ...json('POST', input), ...options });
 
+// Sync shots: one shot per panel at the panel's own time (lib/storyboardShotSync.js), then kept
+// in sync after each board edit → { project, counts }. 409 when the board or shots changed since the preview.
+export const syncMusicVideoShots = (projectId, input, options) =>
+  request(`/storyboards/sync-music-video/${enc(projectId)}`, { ...json('POST', input), ...options });
+// Keep the shots in sync after each board edit (on syncs once), or stop → { project, counts? }.
+export const setMusicVideoShotSync = (projectId, on, options) =>
+  request(`/storyboards/sync-music-video/${enc(projectId)}/auto`, { ...json('PUT', { on }), ...options });
+
 // A fitted shot and its panel: Update → { scene } (the panel's action as the shot's intent);
 // panel art → { board } (the shot's still as the panel's selected take).
 export const updateShotFromStoryboardPanel = (projectId, sceneId, options) =>

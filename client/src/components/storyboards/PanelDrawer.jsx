@@ -24,6 +24,7 @@ import MoodBoardPinPicker from './MoodBoardPinPicker';
 import DrawPanelButton from './DrawPanelButton';
 import PanelCorrection from './PanelCorrection';
 import PanelMakeTab from './PanelMakeTab';
+import PanelSongTiming from './PanelSongTiming';
 import { aspectClass, selectedTake, takeSrc } from './storyboardArt';
 
 const TABS = [
@@ -143,7 +144,7 @@ function ArtSection({ panel, aspectRatio, sketchNonce, moodBoardId, busy, onAddT
   );
 }
 
-function ShotTab({ board, found, panelNumber, sketchNonce, busy, handlers, timing }) {
+function ShotTab({ board, found, panelNumber, sketchNonce, busy, handlers, timing, songTiming }) {
   const { panel, beat, beatIndex, index } = found;
   const [confirmDelete, setConfirmDelete] = useState(false);
   // A panel made from a production's scene or shot can send its art back there.
@@ -184,6 +185,9 @@ function ShotTab({ board, found, panelNumber, sketchNonce, busy, handlers, timin
         <CommitField id={fieldId('action')} multiline value={panel.action} maxLength={STORYBOARD_LIMITS.panelText}
           placeholder="What we see" onCommit={(action) => handlers.onPatch({ action })} />
       </div>
+      {songTiming?.span ? (
+        <PanelSongTiming panel={panel} span={songTiming.span} lyricCues={songTiming.lyricCues} onPatch={handlers.onPatch} />
+      ) : null}
       {timing ? (
         <div>
           <label htmlFor={fieldId('dialogue')} className={labelClass}>Dialogue or lyric</label>
@@ -361,8 +365,10 @@ function CastTab({ panel, onPatch }) {
  * with the tab in `?panelTab=`; `onStep(delta)` opens the previous or next
  * panel in story order (`onStep(delta, true)` only asks whether there is one).
  * Every field saves on its own; the parent applies the board each write returns.
+ * On a music video's board `songTiming` (`{ span, lyricCues }`) shows the
+ * panel's time on the song and the line sung over it, and sets its length.
  */
-export default function PanelDrawer({ open, board, found, panelNumber, sketchNonce, busy, onClose, onStep, handlers, timing = true }) {
+export default function PanelDrawer({ open, board, found, panelNumber, sketchNonce, busy, onClose, onStep, handlers, timing = true, songTiming = null }) {
   const [activeTab, setActiveTab] = useDrawerTab('panelTab', 'shot', TAB_IDS);
 
   return (
@@ -400,7 +406,7 @@ export default function PanelDrawer({ open, board, found, panelNumber, sketchNon
             maxLength={STORYBOARD_LIMITS.notes} onCommit={(notes) => handlers.onPatch({ notes })} />
         </div>
       ) : (
-        <ShotTab board={board} found={found} panelNumber={panelNumber} sketchNonce={sketchNonce} busy={busy} handlers={handlers} timing={timing} />
+        <ShotTab board={board} found={found} panelNumber={panelNumber} sketchNonce={sketchNonce} busy={busy} handlers={handlers} timing={timing} songTiming={songTiming} />
       )}
     </Drawer>
   );

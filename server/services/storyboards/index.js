@@ -88,6 +88,9 @@ export async function mutateStoryboard(id, mutate) {
     return { board: next, result };
   });
   (outcome.board.deleted ? emitRecordDeleted : emitRecordUpdated)(STORYBOARD_KIND, id);
+  // A video keeping its shots in sync with this board takes the edit before the write answers.
+  const { syncShotsAfterBoardEdit } = await import('./syncMusicVideo.js');
+  await syncShotsAfterBoardEdit(outcome.board).catch((err) => console.error(`❌ Storyboard ${id} shot sync: ${err.message}`));
   return outcome;
 }
 

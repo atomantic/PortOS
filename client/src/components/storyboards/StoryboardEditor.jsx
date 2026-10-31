@@ -12,7 +12,10 @@
  * edits can't land out of order. `embedded` drops the page chrome (back link,
  * full height, song brief and Make video) for a host page that has its own,
  * opens on the board view, folds the board settings behind a toggle, and shows
- * the host's `actions` beside the editor's own.
+ * the host's `actions` beside the editor's own. A music video's Storyboard
+ * step passes its `timingSong` (lib/storyboardFit.js storyboardFitSong): each
+ * panel then shows when it plays on the song and the line sung over it, and
+ * its drawer sets its exact length (lib/storyboardShotSync.js).
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -28,6 +31,7 @@ import {
   updateStoryboardPanel, updateStoryboardPanelNode, updateStoryboardRecipe,
 } from '../../services/api';
 import { formatTimecode } from '../../utils/formatters';
+import { storyboardPanelSpans } from '../../../../server/lib/storyboardShotSync.js';
 import { STORYBOARD_ART_STYLE_LABELS, STORYBOARD_ART_STYLES, STORYBOARD_ASPECT_RATIOS, STORYBOARD_LIMITS } from '../../../../server/lib/storyboardVocabulary.js';
 import BeatSection from './BeatSection';
 import CommitField from './CommitField';
@@ -52,7 +56,7 @@ const EDITOR_PARAMS = ['panelTab', 'makeView', 'node', 'plot', 'brief', 'video',
 const selectClass = 'min-h-[44px] bg-port-bg border border-port-border rounded px-2 text-sm text-white';
 const headerButton = 'min-h-[44px] inline-flex items-center gap-1.5 rounded border border-port-border px-3 text-sm text-gray-200 hover:border-port-accent/60 hover:text-white';
 
-export default function StoryboardEditor({ boardId: id, panelId, boardPath, embedded = false, onBoard, refreshKey = 0, actions = null, song = null }) {
+export default function StoryboardEditor({ boardId: id, panelId, boardPath, embedded = false, onBoard, refreshKey = 0, actions = null, song = null, timingSong = null }) {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const defaultView = embedded ? 'board' : 'beats';
@@ -170,6 +174,13 @@ export default function StoryboardEditor({ boardId: id, panelId, boardPath, embe
       ...(track.lines || []).map((line) => ({ id: line.id, label: `“${line.text}” · ${line.at === null ? 'not stamped' : formatTimecode(line.at)}` })),
     ];
   }, [board?.tempTrack]);
+
+  // Each panel's place on the song, when the host has one.
+  const spans = useMemo(() => {
+    if (!board || !timingSong) return null;
+    return new Map(storyboardPanelSpans(board, timingSong).panels.map((span) => [span.panelId, span]));
+  }, [board, timingSong]);
+  const spanOf = spans ? (pid) => spans.get(pid) || null : null;
 
   const panelNumbers = useMemo(() => {
     const numbers = new Map();
@@ -415,6 +426,7 @@ export default function StoryboardEditor({ boardId: id, panelId, boardPath, embe
                   pinOptions={pinOptions}
                   canPlayBeforeSong={beatIndex === 0 || board.beats[beatIndex - 1].beforeSong === true}
                   grid={view === 'board'}
+                  spanOf={spanOf}
                 />
               );
             })}
@@ -445,6 +457,7 @@ export default function StoryboardEditor({ boardId: id, panelId, boardPath, embe
         onStep={stepPanel}
         handlers={panelHandlers}
         timing={!embedded}
+        songTiming={found && spanOf?.(found.panel.id) ? { span: spanOf(found.panel.id), lyricCues: timingSong.lyricCues } : null}
       />
     </div>
   );
