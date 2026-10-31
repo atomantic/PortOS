@@ -25,6 +25,30 @@ describe('musicVideoFrameModelInput', () => {
     for (const item of input.promptAdditions) expect(input.prompt).toContain(item.text);
   });
 
+  // Uniquely catches a panel-linked still losing the storyboard's action, picks or sketch role (Here to Dance, cold-open shot 1).
+  it('leads a panel-linked still with the panel\'s action, shot picks and sketch, and names only its cast', () => {
+    const cast = { ...project, concept: { ...project.concept, subjects: [
+      { id: 'a', kind: 'character', name: 'Example Nora', ingredientId: 'cat-a' },
+      { id: 'b', kind: 'character', name: 'Example Frank', ingredientId: 'cat-b' },
+      { id: 'p', kind: 'place', name: 'Example rink', ingredientId: 'cat-p' },
+    ] } };
+    const panel = { action: 'Nora laces her skates alone', framing: 'wide', facing: 'front', camera: 'a loose wide shot', castIds: ['cat-a'], environmentIds: ['cat-other'] };
+    const input = musicVideoFrameModelInput(cast, { sceneId: 's2' }, { panel, panelReference: 3 });
+    expect(input.prompt.startsWith('Nora laces her skates alone\nFraming: wide establishing shot.\nSubject: front view')).toBe(true);
+    expect(input.prompt).toContain('\nReference image 3 is the storyboard sketch for this shot: copy its camera angle, framing and where each person is');
+    expect(input.prompt).not.toContain('a loose wide shot');
+    expect(input.prompt).toContain('Example Nora');
+    expect(input.prompt).not.toContain('Example Frank');
+    expect(input.prompt).toContain('Example rink');
+    expect(ids(input).slice(0, 3)).toEqual(['storyboard-action', 'storyboard-shot', 'storyboard-sketch']);
+    for (const item of input.promptAdditions) expect(input.prompt).toContain(item.text);
+
+    const authored = musicVideoFrameModelInput(cast, { sceneId: 's2', framePrompt: 'her own words' }, { panel });
+    expect(authored.prompt.startsWith('her own words\nFraming: wide establishing shot.')).toBe(true);
+    expect(ids(authored).slice(0, 2)).toEqual(['storyboard-shot', 'project-style']);
+    expect(ids(musicVideoFrameModelInput(cast, scene, { panel, fromFrame: true }))).not.toContain('storyboard-shot');
+  });
+
   it('adds the rework line for a picked frame and the run\'s repair notes', () => {
     const input = musicVideoFrameModelInput(project, scene, { fromFrame: true, repairs: ['hand: six fingers', 'hand: six fingers'], fixes: 'too dark' });
     expect(input.prompt).toContain('\nStart from the first reference image and rework it to match this prompt.');
