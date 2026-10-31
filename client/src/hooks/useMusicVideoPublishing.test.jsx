@@ -130,7 +130,8 @@ describe('music-video publish platforms read', () => {
 
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Retry' })); });
     expect(screen.queryByText(/Could not load where you post/)).toBeNull();
-    expect(screen.getByRole('checkbox', { name: 'YouTube' })).toBeChecked();
+    // The loaded card takes its own fold default (folded once platforms are on), not the error card's open state.
+    expect(screen.getByRole('heading', { name: 'Where you post 2 on' })).toBeInTheDocument();
     expect(screen.getByText(rowLabel('YouTube'))).toBeInTheDocument();
   });
 
