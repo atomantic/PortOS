@@ -246,6 +246,7 @@ export * from './greyboxScene.js';
 export * from './greyboxStarters.js';
 export * from './greyboxVocabulary.js';
 export * from './grok.js';
+export * from './grokModelCatalog.js';
 export * from './falVideoModels.js';
 export * from './filmStyleGrammars.js';
 export * from './grokVideoClip.js';
