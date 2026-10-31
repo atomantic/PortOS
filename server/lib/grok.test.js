@@ -14,6 +14,8 @@ import {
   ensureGrokHeadlessArgs,
   ensureGrokTuiArgs,
   prepareGrokPromptFile,
+  extractGrokFinalMessage,
+  withGrokStreamingJsonOutput,
 } from './grok.js';
 
 describe('grok — constants', () => {
@@ -177,5 +179,39 @@ describe('grok — prepareGrokPromptFile', () => {
       rmSync(file, { recursive: true, force: true });
     }
     expect(() => result.cleanup({ throwOnError: true })).not.toThrow();
+  });
+});
+
+describe('grok — streaming-json final message', () => {
+  const line = (event) => JSON.stringify(event);
+  const text = (...chunks) => chunks.map((data) => line({ type: 'text', data }));
+
+  // #14391: plain output returned `narration{"verdict":…}` as one string.
+  it('drops narration before a tool call and keeps the answer chunks after it', () => {
+    const transcript = [
+      line({ type: 'available_commands', tools: [] }),
+      ...text("I'll inspect", ' the code.'),
+      line({ type: 'thought', data: 'thinking' }),
+      line({ type: 'tool_call', toolName: 'grep' }),
+      line({ type: 'tool_call_update', status: 'completed' }),
+      'not json',
+      ...text('{"verdict":', '"clean","findings":[]}'),
+      line({ type: 'usage', usage: {} }),
+      line({ type: 'end', stopReason: 'end_turn' }),
+    ].join('\n');
+    expect(extractGrokFinalMessage(transcript)).toBe('{"verdict":"clean","findings":[]}');
+  });
+
+  it('returns a tool-free run whole and an empty string when nothing was said', () => {
+    expect(extractGrokFinalMessage(text('{"a":', '1}').join('\n'))).toBe('{"a":1}');
+    expect(extractGrokFinalMessage(line({ type: 'end' }))).toBe('');
+    expect(extractGrokFinalMessage(undefined)).toBe('');
+  });
+
+  it('replaces any pinned output format with streaming-json', () => {
+    for (const pinned of [['--output-format', 'plain'], ['-o', 'json'], ['--output-format=json']]) {
+      expect(withGrokStreamingJsonOutput(['--model', 'm', ...pinned, '--prompt-file', '/dev/stdin']))
+        .toEqual(['--model', 'm', '--prompt-file', '/dev/stdin', '--output-format', 'streaming-json']);
+    }
   });
 });
