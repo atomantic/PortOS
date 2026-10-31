@@ -20,7 +20,7 @@ export default function ToggleSwitch({ enabled, onChange, disabled, ariaLabel, s
       enabled ? s.on : s.off
     }`} />
   );
-  const trackClass = `relative inline-flex ${s.track} items-center rounded-full transition-colors shrink-0 ${
+  const trackClass = `relative inline-flex ${s.track} items-center pointer-coarse:before:absolute pointer-coarse:before:-inset-2 rounded-full transition-colors shrink-0 ${
     enabled ? activeColor : 'port-toggle-track-off'
   } border border-port-border/60 shadow-sm ${disabled ? 'opacity-50' : ''} ${className}`;
 

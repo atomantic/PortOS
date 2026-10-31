@@ -562,7 +562,7 @@ export default function RhetoricTrainer({ mode, onSelectMode, onExitMode, onBack
   if (!selectedMode) {
     return (
       <div className="max-w-5xl mx-auto space-y-6">
-        <button type="button" onClick={onBack} className="flex items-center gap-2 text-sm text-gray-400 hover:text-white"><ArrowLeft size={16} /> POST launcher</button>
+        <button type="button" onClick={onBack} className="flex items-center gap-2 pointer-coarse:min-h-11 text-sm text-gray-400 hover:text-white"><ArrowLeft size={16} /> POST launcher</button>
         <div>
           <div className="flex items-center gap-3"><Feather className="text-port-accent" size={28} /><h2 className="text-2xl font-bold text-white">Rhetoric practice</h2></div>
           <p className="mt-2 text-gray-400 max-w-2xl">Train the small structures that make language memorable. Each round gives you five prompts, a compact craft checklist, and space to make the attempt your own.</p>
@@ -609,7 +609,7 @@ export default function RhetoricTrainer({ mode, onSelectMode, onExitMode, onBack
   const roundComplete = completed >= ROUND_SIZE;
   return <div className="max-w-3xl mx-auto space-y-5">
     <div className="flex items-center justify-between gap-3">
-      <button type="button" onClick={onExitMode} className="flex items-center gap-2 text-sm text-gray-400 hover:text-white"><ArrowLeft size={16} /> All rhetoric exercises</button>
+      <button type="button" onClick={onExitMode} className="flex items-center gap-2 pointer-coarse:min-h-11 text-sm text-gray-400 hover:text-white"><ArrowLeft size={16} /> All rhetoric exercises</button>
       <span className="text-xs text-gray-500">{completed}/{ROUND_SIZE} attempts</span>
     </div>
     <div className="bg-port-card border border-port-border rounded-xl p-5">

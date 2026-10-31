@@ -90,7 +90,7 @@ function CleanupStatus({ cleanup, outcome }) {
       {!verified && (owners || cleanup?.taskId) && <div>{owners ? <>Next: wait for the current owner to finish.<CleanupHolders owners={cleanup.owners} /></>
         : <>Next: the <Link className="underline" to={`/cos/tasks?task=${encodeURIComponent(cleanup.taskId)}&source=internal`}>cleanup recovery task</Link> will finish cleanup.</>}</div>}
       <details className="mt-1 text-port-text-muted">
-        <summary className="cursor-pointer">Cleanup diagnostics</summary>
+        <summary className="cursor-pointer pointer-coarse:min-h-11">Cleanup diagnostics</summary>
         <pre className="whitespace-pre-wrap break-words text-xs">{JSON.stringify({ cleanup: cleanup || null, reportedOutcome: outcome }, null, 2)}</pre>
       </details>
     </div>
