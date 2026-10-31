@@ -123,25 +123,27 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
     } finally { await closeFixture(); }
   }, 35000);
 
-  // Catches dropped multi-photo assets, wrong Canvas switching boundaries and
-  // excerpt-relative phase resets by comparing live and encoded frame pixels.
-  it('plays five photos identically in the document preview, export and mid-sequence excerpt', async () => {
+  // Five solid photos as one still shot: the encoded full render and a
+  // mid-shot excerpt, plus a live preview page whose `pixel(frame, x, y)` reads
+  // the Canvas at frame centre offsets (fractions of the frame, 64x36 readback).
+  const SEQUENCE_COLORS = ['#ee2222', '#22ee22', '#2222ee', '#eeee22', '#ee22ee'];
+  const rgbOf = hex => hex.slice(1).match(/../g).map(part => parseInt(part, 16));
+  async function renderPhotoSequence(label, photoSequence, run) {
     await mkdir(PATHS.images, { recursive: true });
-    const names = ['sequence-red.png', 'sequence-green.png', 'sequence-blue.png', 'sequence-yellow.png', 'sequence-magenta.png'];
-    const colors = ['#ee2222', '#22ee22', '#2222ee', '#eeee22', '#ee22ee'];
-    const photos = await Promise.all(colors.map(background => sharp({ create: { width: 64, height: 36, channels: 3, background } }).png().toBuffer()));
+    const names = SEQUENCE_COLORS.map((_, i) => `${label}-${i}.png`);
+    const photos = await Promise.all(SEQUENCE_COLORS.map(background => sharp({ create: { width: 64, height: 36, channels: 3, background } }).png().toBuffer()));
     await Promise.all(names.map((name, i) => writeFile(join(PATHS.images, name), photos[i])));
-    const created = await projects.createProject({ name: 'Synthetic five-photo passage' });
+    const created = await projects.createProject({ name: `Synthetic ${label}` });
     await projects.mutateProjectRecord(created.id, current => ({ project: { ...current,
       audioAnalysis: { durationSec: 2, beats: [0, 0.5, 1, 1.5, 2], sections: [] },
       scenes: [{ sceneId: 'photos', order: 0, startSec: 0, endSec: 2, visualLayer: 'still', stillMove: 'hold',
-        photoSequence: { enabled: true, imageIds: names, intervalFrames: 6, rate: 'half' } }],
+        photoSequence: { enabled: true, imageIds: names, ...photoSequence } }],
     } }));
     await importDocumentTemplate(created.id);
     const project = await projects.getProject(created.id);
     await mkdir(PATHS.music, { recursive: true });
     await mkdir(PATHS.videos, { recursive: true });
-    const audio = join(PATHS.music, 'sequence.wav');
+    const audio = join(PATHS.music, `${label}.wav`);
     execFileSync(ffmpeg, ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'sine=frequency=220:duration=2', audio]);
     const encode = async (name, windowStart, windowEnd) => {
       const output = join(PATHS.videos, name);
@@ -149,11 +151,15 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
         audioPath: audio, outputPath: output, windowStart, windowEnd });
       return execFileSync(ffmpeg, ['-v', 'error', '-i', output, '-vf', 'scale=64:36', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-'], { maxBuffer: 8 * 1024 * 1024 });
     };
-    const full = await encode('photo-sequence-full.mp4', 0, 2);
-    const excerpt = await encode('photo-sequence-excerpt.mp4', 9 / 24, 33 / 24);
+    const full = await encode(`${label}-full.mp4`, 0, 2);
+    const excerpt = await encode(`${label}-excerpt.mp4`, 9 / 24, 33 / 24);
     const frameBytes = 64 * 36 * 3;
     expect(full.length).toBe(48 * frameBytes);
     expect(excerpt.length).toBe(24 * frameBytes);
+    const encodedAt = (raw, frame, x = 0, y = 0) => {
+      const at = frame * frameBytes + (Math.round(18 + y * 36) * 64 + Math.round(32 + x * 64)) * 3;
+      return [...raw.subarray(at, at + 3)];
+    };
     const preview = await buildDocumentPreview(project);
     const assets = preview.assets.filter(asset => asset.url.startsWith('/data/images/')).map(asset => ({
       key: asset.key, encoded: photos[names.indexOf(decodeURIComponent(asset.url.split('/').at(-1)))].toString('base64'),
@@ -172,25 +178,51 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
         window.postMessage({ type: 'portos-mv:manifest', keys: assets.map(asset => asset.key) }, '*');
       }, assets);
       await page.waitForFunction(() => globalThis.portosComposition);
+      const live = (frame, x = 0, y = 0) => page.evaluate(async ({ t, x, y }) => {
+        await globalThis.portosComposition.seek(t);
+        const canvas = document.getElementById('stage');
+        return [...canvas.getContext('2d').getImageData(Math.round(canvas.width * (0.5 + x)), Math.round(canvas.height * (0.5 + y)), 1, 1).data].slice(0, 3);
+      }, { t: frame / 24, x, y });
+      await run({ full: (frame, x, y) => encodedAt(full, frame, x, y), excerpt: (frame, x, y) => encodedAt(excerpt, frame - 9, x, y), live });
+    } finally { await page.close(); }
+  }
+  const near = (actual, expected, tolerance) => actual.forEach((v, i) => expect(Math.abs(v - expected[i])).toBeLessThan(tolerance));
+
+  // Catches dropped multi-photo assets, wrong Canvas switching boundaries and
+  // excerpt-relative phase resets by comparing live and encoded frame pixels.
+  it('plays five photos identically in the document preview, export and mid-sequence excerpt', async () => {
+    await renderPhotoSequence('photo-sequence', { intervalFrames: 6, rate: 'half' }, async ({ full, excerpt, live }) => {
       for (const frame of [0, 5, 6, 11, 12, 18, 24, 29, 30, 35, 36, 6]) {
-        const live = await page.evaluate(async t => {
-          await globalThis.portosComposition.seek(t);
-          const canvas = document.getElementById('stage');
-          return [...canvas.getContext('2d').getImageData(canvas.width / 2, canvas.height / 2, 1, 1).data].slice(0, 3);
-        }, frame / 24);
-        const at = frame * frameBytes + (18 * 64 + 32) * 3;
-        const encoded = [...full.subarray(at, at + 3)];
-        encoded.forEach((v, i) => expect(Math.abs(v - live[i])).toBeLessThan(16));
+        const shown = await live(frame);
+        near(full(frame), shown, 16);
         // Verify the expected image independently of the shared selector.
-        const expected = colors[Math.floor(frame / 6) % 5].slice(1).match(/../g).map(hex => parseInt(hex, 16));
-        live.forEach((v, i) => expect(Math.abs(v - expected[i])).toBeLessThan(35));
-        if (frame >= 9 && frame < 33) {
-          const excerptAt = (frame - 9) * frameBytes + (18 * 64 + 32) * 3;
-          [...excerpt.subarray(excerptAt, excerptAt + 3)].forEach((v, i) => expect(Math.abs(v - encoded[i])).toBeLessThan(12));
+        near(shown, rgbOf(SEQUENCE_COLORS[Math.floor(frame / 6) % 5]), 35);
+        if (frame >= 9 && frame < 33) near(excerpt(frame), full(frame), 12);
+      }
+    });
+  }, 60000);
+
+  // #14277: catches a document engine that drops earlier photos during the
+  // overlap, ignores layouts, or composes differently in preview and export.
+  it('keeps overlapping laid-out photos in place identically in the document preview, export and excerpt', async () => {
+    // Prints far enough apart that video chroma subsampling never bleeds between them.
+    const spots = [[-0.3, -0.25], [0, -0.25], [0.3, -0.25], [-0.15, 0.25], [0.15, 0.25]];
+    const layouts = spots.map(([x, y]) => ({ x, y, scale: 0.2, rotation: 0, opacity: 1 }));
+    await renderPhotoSequence('photo-stack', { intervalFrames: 6, rate: 'frames', overlapFrames: 12, layouts }, async ({ full, excerpt, live }) => {
+      for (const frame of [0, 5, 6, 13, 17, 18, 24, 30, 35]) {
+        // Independent of the shared layer list: step k shows from 6k until 6(k+1) + 12.
+        const visible = new Set([0, 1, 2, 3, 4, 5].filter(k => frame >= 6 * k && frame < 6 * (k + 1) + 12).map(k => k % 5));
+        for (const [i, [x, y]] of spots.entries()) {
+          const shown = await live(frame, x, y);
+          near(full(frame, x, y), shown, 24);
+          const dominant = rgbOf(SEQUENCE_COLORS[i]).map(v => v > 128);
+          if (visible.has(i)) shown.forEach((v, c) => expect(dominant[c] ? v > 110 : v < 110, `frame ${frame} photo ${i}`).toBe(true));
+          else expect(Math.max(...shown), `frame ${frame} photo ${i} hidden`).toBeLessThan(70);
+          if (frame >= 9 && frame < 33) near(excerpt(frame, x, y), full(frame, x, y), 12);
         }
       }
-    } finally { await page.close(); }
-  }, 60000);
+    });
+  }, 90000);
 
   // Uniquely catches dropped effect data, missing staged modules and preview/export curve drift.
   it('develops a still from white in the encoded document render and live preview', async () => {

@@ -239,7 +239,7 @@ export function cloneProjectRecord(source, {
     referenceImageId: includeGeneratedMedia ? (scene.referenceImageId ?? null) : null,
     videoHistoryId: includeGeneratedMedia ? (scene.videoHistoryId ?? null) : null,
     endImageId: includeGeneratedMedia ? (scene.endImageId ?? null) : null,
-    ...(scene.photoSequence ? { photoSequence: includeGeneratedMedia ? scene.photoSequence : { ...scene.photoSequence, enabled: false, imageIds: [] } } : {}),
+    ...(scene.photoSequence ? { photoSequence: includeGeneratedMedia ? scene.photoSequence : { ...scene.photoSequence, enabled: false, imageIds: [], ...(scene.photoSequence.layouts ? { layouts: [] } : {}) } } : {}),
     // Takes are immutable pointers to shared media, so a media-keeping clone
     // carries the whole candidate history; a clean clone starts empty.
     takes: includeGeneratedMedia ? ensureSceneTakes(scene, now) : [],
