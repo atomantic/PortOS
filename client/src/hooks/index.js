@@ -300,6 +300,7 @@ export * from './useCalendarWindowEvents.js';
 export * from './useMusicVideoReviewDraft.js';
 
 export * from './useGoogleAutoConfigProgress.js';
+export * from './useGoogleAuthStatus.js';
 
 export * from './useRunwayCatalog.js';
 

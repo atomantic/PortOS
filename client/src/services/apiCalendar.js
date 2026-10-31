@@ -17,7 +17,7 @@ export const clearCalendarToken = (provider) => request('/calendar/debug/clear-t
 export const updateSubcalendars = (accountId, data, options = {}) => request(`/calendar/accounts/${accountId}/subcalendars`, { method: 'PUT', body: JSON.stringify(data), ...options });
 export const mcpSyncGoogleCalendar = (accountId, options = {}) => request(`/calendar/sync/${accountId}/google`, { method: 'POST', ...options });
 export const mcpDiscoverCalendars = (accountId) => request(`/calendar/sync/${accountId}/discover`, { method: 'POST' });
-export const getGoogleAuthStatus = () => request('/calendar/google/auth/status');
+export const getGoogleAuthStatus = (options = {}) => request('/calendar/google/auth/status', options);
 export const saveGoogleAuthCredentials = (data, options = {}) => request('/calendar/google/auth/credentials', { method: 'POST', body: JSON.stringify(data), ...options });
 export const getGoogleAuthUrl = ({ returnTo, ...options } = {}) => {
   const query = returnTo ? `?returnTo=${encodeURIComponent(returnTo)}` : '';
