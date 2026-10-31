@@ -40,13 +40,14 @@ import { applyFilmLookFinish } from './filmLookFinish.js';
 import { getMusicVideoOutroStats, renderStatsOutroClip } from './statsOutro.js';
 import { nameShots } from './productionReview.js';
 import { coldOpenAudioShots, ensureColdOpenAudio } from './coldOpen.js';
+import { SHOT_SEGMENT_DIR, shotSegmentDir } from './shotSegmentPaths.js';
 import { requireProject } from './requireProject.js';
 import { assertRenderCleanupIdle, withRenderCleanupReservation } from './renderCleanupActivity.js';
 import { musicVideoEvents } from './events.js';
 import { maintenance } from '../../lib/maintenanceAdmission.js';
 import { trackedRenderMap } from '../renderActivity.js';
 
-export const SHOT_SEGMENT_DIR = 'music-video-segments';
+export { SHOT_SEGMENT_DIR, shotSegmentDir };
 // Bump when a segment's encode changes in a way its key cannot see.
 export const SHOT_SEGMENT_VERSION = 1;
 const segmentOwnerWrites = createKeyCachedQueue();
@@ -73,11 +74,6 @@ const hash = (value) => createHash('sha256').update(JSON.stringify(value)).diges
 // and the (normalized) look, so any look's files can be found again from the plan.
 const segmentLookKey = ({ baseKey, startSec }, look, fps) => hash({ v: SHOT_SEGMENT_VERSION, baseKey, look, startSec, fps });
 const segmentLookPath = (plan, segment, look) => join(plan.dir, `${segment.outro ? 'outro-' : ''}${segment.baseKey}-${segmentLookKey(segment, look, plan.fps)}.mp4`);
-const safeProjectId = (projectId) => {
-  if (typeof projectId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(projectId)) throw new ServerError('Invalid project id', { status: 400, code: 'VALIDATION_ERROR' });
-  return projectId;
-};
-export const shotSegmentDir = (projectId) => join(PATHS.data, SHOT_SEGMENT_DIR, safeProjectId(projectId));
 
 const hasOwnLook = (scene) => !!(scene?.filmLook && typeof scene.filmLook === 'object');
 
