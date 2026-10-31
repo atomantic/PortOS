@@ -67,6 +67,14 @@ describe('PublishKitPanel copy per platform (#9287)', () => {
     expect(screen.queryByText('Reddit', { selector: 'legend' })).toBeNull();
   });
 
+  it('shows no platform copy and holds the draft while the saved platforms are unknown', () => {
+    render(<PublishKitPanel project={project} publishKit={kitHook} enabledTargets={null} />);
+    expandAll();
+    expect(screen.queryByText('YouTube', { selector: 'legend' })).toBeNull();
+    expect(screen.queryByText(/Turn on a platform under Where you post/)).toBeNull();
+    expect(screen.getByRole('button', { name: /Redraft copy/ })).toBeDisabled();
+  });
+
   it('holds the copy draft until a platform is on', () => {
     render(<PublishKitPanel project={project} publishKit={kitHook} enabledTargets={[]} />);
     expandAll();
