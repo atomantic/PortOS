@@ -440,6 +440,192 @@ export function buildLiExecutionVerdict({ liProposal, success, validationPassed,
 }
 
 /**
+ * Routing can never flag the unknown tier or a non-routable learned tier
+ * (minimal/low), so a "predicted safe" sample for one would encode "no routable
+ * prediction" as a true-negative and skew the correlation gauge.
+ */
+function isRoutablePredictionTier(modelTier) {
+  return Boolean(modelTier) && modelTier !== 'unknown' && !isNonRoutableLearnedTier(modelTier);
+}
+
+/**
+ * Fold a non-environmental completion into every aggregate the routing, skip and
+ * approval decisions read: the task-type bucket and its recency ring, the
+ * execution-scoped duration bucket, the model-tier bucket, and the
+ * taskType × modelTier routing-accuracy cell. Mutates `data`.
+ */
+function foldRoutableCompletion(data, { agent, telemetry, taskType, modelTier, outcomeSuccess, duration }) {
+  // Bounded recency ring (issue #2460) — feeds the windowed rate LI reads.
+  if (!data.byTaskType[taskType]) data.byTaskType[taskType] = { ...emptyDurationBucket(), recentOutcomes: [] };
+  if (!data.byModelTier[modelTier]) {
+    data.byModelTier[modelTier] = {
+      completed: 0,
+      succeeded: 0,
+      failed: 0,
+      totalDurationMs: 0,
+      successDurationMs: 0,
+      avgDurationMs: 0
+    };
+  }
+
+  const typeMetrics = foldDurationOutcome(data.byTaskType[taskType], { success: outcomeSuccess, duration });
+  // The lifetime counters above never decay; the ring lets LI read a
+  // recency-windowed rate so a since-resolved failure burst ages out. Prefer the
+  // runner's measured duration; fall back to the wall split so a coordinator that
+  // never stamped `result.duration` still feeds the short-lived-burst detector.
+  // Absent both → `null` (not 0).
+  const durationMs = Number.isFinite(agent.result?.duration)
+    ? agent.result.duration
+    : telemetry.latency?.executionMs;
+  appendRecentOutcome(typeMetrics, {
+    success: outcomeSuccess,
+    at: typeMetrics.lastCompleted,
+    durationMs: Number.isFinite(durationMs) ? durationMs : null
+  });
+
+  // Execution-scoped bucket (issue #8001): task type × the provider/model/effort
+  // this run executed on, stamped with the task-type bucket's `lastCompleted` so
+  // the prune sweep sees one clock. `?? null` on effort: a provider with no effort
+  // control is genuinely absent, and the key builder maps that to its own sentinel.
+  recordExecutionDuration(data, {
+    key: executionDurationKey({
+      taskType,
+      providerId: agent.metadata?.providerId,
+      model: agent.metadata?.model,
+      effort: agent.metadata?.effort ?? null
+    }),
+    success: outcomeSuccess,
+    duration,
+    at: typeMetrics.lastCompleted
+  });
+
+  const tierMetrics = data.byModelTier[modelTier];
+  tierMetrics.completed++;
+  if (outcomeSuccess) {
+    tierMetrics.succeeded++;
+    tierMetrics.successDurationMs = (tierMetrics.successDurationMs || 0) + duration;
+  } else {
+    tierMetrics.failed++;
+  }
+  tierMetrics.totalDurationMs += duration;
+  tierMetrics.avgDurationMs = calculateDurationETA(tierMetrics).avgDurationMs;
+
+  if (!data.routingAccuracy) data.routingAccuracy = {};
+  if (!data.routingAccuracy[taskType]) data.routingAccuracy[taskType] = {};
+  if (!data.routingAccuracy[taskType][modelTier]) {
+    data.routingAccuracy[taskType][modelTier] = { succeeded: 0, failed: 0, lastAttempt: null };
+  }
+  const routing = data.routingAccuracy[taskType][modelTier];
+  if (outcomeSuccess) routing.succeeded++;
+  else routing.failed++;
+  routing.lastAttempt = new Date().toISOString();
+}
+
+/**
+ * Count a failed run's error category and the task type that produced it. An
+ * `unknown` category also keeps a bounded sample (the last 20) so missing
+ * ERROR_PATTERNS entries stay diagnosable. Mutates `data`.
+ */
+function recordErrorPattern(data, { agent, taskType, errorCategory }) {
+  if (!data.errorPatterns[errorCategory]) {
+    data.errorPatterns[errorCategory] = { count: 0, taskTypes: {}, lastOccurred: null };
+  }
+  const pattern = data.errorPatterns[errorCategory];
+  pattern.count++;
+  pattern.lastOccurred = new Date().toISOString();
+  if (!pattern.taskTypes[taskType]) pattern.taskTypes[taskType] = 0;
+  pattern.taskTypes[taskType]++;
+
+  if (errorCategory !== 'unknown') return;
+  const errorAnalysis = agent.result?.errorAnalysis || {};
+  if (!data.recentUnknownErrors) data.recentUnknownErrors = [];
+  data.recentUnknownErrors.push({
+    taskType,
+    message: (errorAnalysis.message || '').substring(0, 200),
+    details: (errorAnalysis.details || '').substring(0, 500),
+    agentId: agent.agentId || agent.id,
+    recordedAt: new Date().toISOString()
+  });
+  if (data.recentUnknownErrors.length > 20) data.recentUnknownErrors = data.recentUnknownErrors.slice(-20);
+}
+
+/**
+ * Fold a recurring failure category into a standing, provenance-stamped insight
+ * (issue #2443) when its recurrence count lands on a milestone, so it escalates
+ * instead of spamming. Appended inline (not via recordLearningInsight) because
+ * the caller already holds the non-reentrant store lock and persists `data`.
+ * Privacy: buildRecurrenceInsight uses only controlled fields — no raw error
+ * message (which could embed a path/PII).
+ */
+function recordRecurrenceInsight(data, { agent, taskType, errorCategory }) {
+  const recurrenceCount = data.errorPatterns[errorCategory]?.count || 0;
+  if (!recurrenceMilestoneReached(recurrenceCount)) return;
+  appendInsight(data, buildRecurrenceInsight({
+    category: errorCategory,
+    count: recurrenceCount,
+    taskType,
+    agentId: agent.agentId || agent.id || null,
+    failureSignatures: data.failureSignatures
+  }));
+  emitLog('info', `📚 Auto-recorded recurring-failure insight: "${errorCategory}" ×${recurrenceCount} (${taskType})`, {
+    category: errorCategory,
+    recurrenceCount,
+    taskType
+  }, '[TaskLearning]');
+}
+
+/** Fold a non-environmental completion into the overall totals. Mutates `totals`. */
+function foldTotals(totals, { outcomeSuccess, duration }) {
+  totals.completed++;
+  if (outcomeSuccess) {
+    totals.succeeded++;
+    totals.successDurationMs = (totals.successDurationMs || 0) + duration;
+    totals.successMaxDurationMs = Math.max(totals.successMaxDurationMs || 0, duration);
+  } else {
+    totals.failed++;
+  }
+  totals.totalDurationMs += duration;
+  Object.assign(totals, calculateDurationETA(totals));
+}
+
+/**
+ * The label reflects the validation-authoritative learning OUTCOME: a run that
+ * exited clean but missed its declared criterion reads `failed:validation-miss`,
+ * not the `success` the raw exit code would show (#2344).
+ */
+function completionOutcomeLabel({ outcomeSuccess, success, errorCategory, isEnvironmentalFailure }) {
+  if (outcomeSuccess) return 'success';
+  const reason = errorCategory || (success ? 'validation-miss' : 'uncategorized');
+  return `failed:${reason}${isEnvironmentalFailure ? ' environmental' : ''}`;
+}
+
+function logRecordedCompletion({ telemetry, taskType, modelTier, outcomeSuccess, errorCategory, isEnvironmentalFailure, duration }) {
+  const { success } = telemetry;
+  const { provider, model, component, routingReason } = telemetry.executionContext;
+  const { wallMs, queueMs } = telemetry.latency;
+  const wallSecs = Math.round((wallMs ?? duration) / 1000);
+  const outcomeLabel = completionOutcomeLabel({ outcomeSuccess, success, errorCategory, isEnvironmentalFailure });
+  emitLog('debug', `Recorded task completion: ${taskType} (${outcomeLabel}) via ${provider || '?'}/${model || '?'}@${modelTier} [${component || '?'}] wall=${wallSecs}s`, {
+    taskType,
+    modelTier,
+    provider,
+    model,
+    component,
+    routingReason,
+    success,
+    validationPassed: telemetry.validationPassed,
+    outcomeSuccess,
+    errorCategory,
+    environmental: isEnvironmentalFailure,
+    failurePosition: telemetry.failureSignature?.failurePosition ?? null,
+    wallMs,
+    queueMs,
+    executionMs: telemetry.latency.executionMs,
+    duration: Math.round(duration / 1000) + 's'
+  }, '[TaskLearning]');
+}
+
+/**
  * Record a completed task for learning.
  *
  * Returns the persisted learning data, or `null` when the run was SKIPPED or its
@@ -488,7 +674,6 @@ export async function recordTaskCompletion(agent, task) {
 
   const taskType = telemetry.taskType;
   const modelTier = agent.metadata?.modelTier || 'unknown';
-  const success = telemetry.success;
   // Validation-authoritative learning outcome (issue #2344) — computed once in
   // buildTaskTelemetryContext so aggregates, the correlation window, and failure
   // telemetry all key off the same value. A clean exit that produced no committed
@@ -497,6 +682,9 @@ export async function recordTaskCompletion(agent, task) {
   // `success` (so legacy completions/tests are unchanged).
   const outcomeSuccess = telemetry.outcomeSuccess;
   const duration = agent.result?.duration || 0;
+  // failureSignature is null on a successful outcome, so a category means this run
+  // failed by the validation-authoritative verdict: a commit-found run is never
+  // logged as an error, and a criterion-miss is.
   const errorCategory = telemetry.failureSignature?.category || null;
   // `?? null` preserves a malformed falsy origin ('') so the gate's allowlist
   // rejects it, rather than `|| null` collapsing it into the back-compat null (#2642).
@@ -527,10 +715,7 @@ export async function recordTaskCompletion(agent, task) {
   // run's own outcome into its own prediction and inflate the gauge. Uses the
   // signal's BASE sensitivity (default aggressive bar) as a fixed predictor —
   // measuring the gate against its own correlation-gated output would be circular.
-  // Skipped for the unknown tier AND non-routable learned tiers (minimal/low):
-  // routing can never flag those, so recording them as "predicted safe" would
-  // encode "no routable prediction" as a true-negative and skew the gauge.
-  const correlationPredictedRisk = (modelTier && modelTier !== 'unknown' && !isNonRoutableLearnedTier(modelTier))
+  const correlationPredictedRisk = isRoutablePredictionTier(modelTier)
     ? deriveFailureSignalAvoidance(data, taskType).avoidTiers.includes(modelTier)
     : null;
 
@@ -542,216 +727,35 @@ export async function recordTaskCompletion(agent, task) {
     // never grows an empty aggregate entry.
     recordEnvironmentalFailure(data, { category: errorCategory, taskType });
   } else {
-    // Initialize task type bucket if needed
-    if (!data.byTaskType[taskType]) {
-      data.byTaskType[taskType] = {
-        ...emptyDurationBucket(),
-        // Bounded recency ring (issue #2460) — feeds the windowed rate LI reads.
-        recentOutcomes: []
-      };
-    }
-
-    // Initialize model tier bucket if needed
-    if (!data.byModelTier[modelTier]) {
-      data.byModelTier[modelTier] = {
-        completed: 0,
-        succeeded: 0,
-        failed: 0,
-        totalDurationMs: 0,
-        successDurationMs: 0,
-        avgDurationMs: 0
-      };
-    }
-
-    // Update task type metrics
-    const typeMetrics = foldDurationOutcome(data.byTaskType[taskType], { success: outcomeSuccess, duration });
-    // Append this run to the bounded recency ring (issue #2460). The lifetime
-    // counters above never decay; the ring lets LI read a recency-windowed rate so
-    // a since-resolved failure burst ages out of the "is work needed" signal
-    // instead of depressing it forever. Stamped with the same `lastCompleted` time.
-    // Prefer the runner's measured duration; fall back to the wall split so a
-    // coordinator that never stamped `result.duration` still contributes to the
-    // short-lived-burst detector. Absent both → omit `d` (not 0).
-    const durationMs = Number.isFinite(agent.result?.duration)
-      ? agent.result.duration
-      : telemetry.latency?.executionMs;
-    appendRecentOutcome(typeMetrics, {
-      success: outcomeSuccess,
-      at: typeMetrics.lastCompleted,
-      durationMs: Number.isFinite(durationMs) ? durationMs : null
-    });
-
-    // Fold the same duration into the execution-scoped bucket (issue #8001) —
-    // task type × the provider/model/effort this run actually executed on, which
-    // is what makes a local-Ollama release check and a cloud one two estimates
-    // instead of one wrong average. Stamped with the SAME `lastCompleted` the
-    // task-type bucket just took so the prune sweep sees one consistent clock.
-    // `?? null` (not `||`) on effort: a provider with no effort control is
-    // genuinely absent, and the key builder maps that to its own sentinel.
-    recordExecutionDuration(data, {
-      key: executionDurationKey({
-        taskType,
-        providerId: agent.metadata?.providerId,
-        model: agent.metadata?.model,
-        effort: agent.metadata?.effort ?? null
-      }),
-      success: outcomeSuccess,
-      duration,
-      at: typeMetrics.lastCompleted
-    });
-
-    // Update model tier metrics
-    const tierMetrics = data.byModelTier[modelTier];
-    tierMetrics.completed++;
-    if (outcomeSuccess) {
-      tierMetrics.succeeded++;
-      tierMetrics.successDurationMs = (tierMetrics.successDurationMs || 0) + duration;
-    } else {
-      tierMetrics.failed++;
-    }
-    tierMetrics.totalDurationMs += duration;
-    tierMetrics.avgDurationMs = calculateDurationETA(tierMetrics).avgDurationMs;
-
-    // Track routing accuracy: taskType × modelTier cross-reference
-    if (!data.routingAccuracy) data.routingAccuracy = {};
-    if (!data.routingAccuracy[taskType]) data.routingAccuracy[taskType] = {};
-    if (!data.routingAccuracy[taskType][modelTier]) {
-      data.routingAccuracy[taskType][modelTier] = { succeeded: 0, failed: 0, lastAttempt: null };
-    }
-    const routing = data.routingAccuracy[taskType][modelTier];
-    if (outcomeSuccess) {
-      routing.succeeded++;
-    } else {
-      routing.failed++;
-    }
-    routing.lastAttempt = new Date().toISOString();
+    foldRoutableCompletion(data, { agent, telemetry, taskType, modelTier, outcomeSuccess, duration });
   }
 
-  // Track error patterns — gated on the validation-authoritative outcome so a
-  // commit-found run isn't logged as an error and a criterion-miss is (#2344).
-  if (!outcomeSuccess && errorCategory) {
-    if (!data.errorPatterns[errorCategory]) {
-      data.errorPatterns[errorCategory] = {
-        count: 0,
-        taskTypes: {},
-        lastOccurred: null
-      };
-    }
-    data.errorPatterns[errorCategory].count++;
-    data.errorPatterns[errorCategory].lastOccurred = new Date().toISOString();
-
-    // Track which task types produce this error
-    if (!data.errorPatterns[errorCategory].taskTypes[taskType]) {
-      data.errorPatterns[errorCategory].taskTypes[taskType] = 0;
-    }
-    data.errorPatterns[errorCategory].taskTypes[taskType]++;
-
-    // Store recent unknown error samples for diagnosability
-    // This helps identify missing patterns that should be added to ERROR_PATTERNS
-    if (errorCategory === 'unknown') {
-      const errorAnalysis = agent.result?.errorAnalysis || {};
-      if (!data.recentUnknownErrors) data.recentUnknownErrors = [];
-      data.recentUnknownErrors.push({
-        taskType,
-        message: (errorAnalysis.message || '').substring(0, 200),
-        details: (errorAnalysis.details || '').substring(0, 500),
-        agentId: agent.agentId || agent.id,
-        recordedAt: new Date().toISOString()
-      });
-      // Keep only last 20 samples to avoid unbounded growth
-      if (data.recentUnknownErrors.length > 20) {
-        data.recentUnknownErrors = data.recentUnknownErrors.slice(-20);
-      }
-    }
-  }
+  if (errorCategory) recordErrorPattern(data, { agent, taskType, errorCategory });
 
   // Correlation-quality window (issue #2344): pair the pre-mutation prediction
-  // snapshot (captured above, before any of this run's aggregates were folded in)
-  // with the actual outcome. Reuses the same validation-authoritative
-  // `outcomeSuccess` the aggregates above learn from, so the correlation `bad`
-  // label and the routing counts can never disagree about a single run.
-  // Environmental failures are excluded (issue #2618): the window measures how
-  // well the routing signal predicts task/model outcomes, and an outage-shaped
-  // `bad` sample would grade the predictor on something it can't predict.
+  // snapshot with the actual outcome, using the same `outcomeSuccess` the
+  // aggregates learn from so the `bad` label and the routing counts can never
+  // disagree about a run. Environmental failures are excluded (issue #2618): an
+  // outage-shaped `bad` sample would grade the predictor on something it can't predict.
   if (correlationPredictedRisk !== null && !isEnvironmentalFailure) {
     recordCorrelationSample(data, { taskType, tier: modelTier, predictedRisk: correlationPredictedRisk, bad: !outcomeSuccess });
   }
 
   // Aggregate the enriched failure signature (category + snippet + position +
-  // execution context + latency) — a no-op on success (issue #2329).
+  // execution context + latency) — a no-op on success (issue #2329). It runs
+  // before the recurrence insight, which reads the updated failureSignatures.
   recordFailureSignature(data, telemetry);
 
-  // Fold a recurring failure category into a standing, provenance-stamped
-  // human-readable insight (issue #2443) — turns a machine aggregate into an
-  // operating note the user can read in the CoS UI, without a manual API call.
-  // Fires only when the per-category recurrence count lands on a milestone so it
-  // escalates instead of spamming. Appended inline (not via recordLearningInsight)
-  // because we already hold the non-reentrant store lock and `data` is about to
-  // be persisted below. Privacy: buildRecurrenceInsight uses only controlled
-  // fields — no raw error message (which could embed a path/PII).
-  if (!outcomeSuccess && errorCategory) {
-    const recurrenceCount = data.errorPatterns[errorCategory]?.count || 0;
-    if (recurrenceMilestoneReached(recurrenceCount)) {
-      appendInsight(data, buildRecurrenceInsight({
-        category: errorCategory,
-        count: recurrenceCount,
-        taskType,
-        agentId: agent.agentId || agent.id || null,
-        failureSignatures: data.failureSignatures
-      }));
-      emitLog('info', `📚 Auto-recorded recurring-failure insight: "${errorCategory}" ×${recurrenceCount} (${taskType})`, {
-        category: errorCategory,
-        recurrenceCount,
-        taskType
-      }, '[TaskLearning]');
-    }
-  }
+  if (errorCategory) recordRecurrenceInsight(data, { agent, taskType, errorCategory });
 
-  // Update totals — environmental failures stay out (issue #2618): the overall
+  // Environmental failures stay out of the totals (issue #2618): the overall
   // success rate is a rate aggregate too, and an outage must not dent it.
-  if (!isEnvironmentalFailure) {
-    data.totals.completed++;
-    if (outcomeSuccess) {
-      data.totals.succeeded++;
-      data.totals.successDurationMs = (data.totals.successDurationMs || 0) + duration;
-      data.totals.successMaxDurationMs = Math.max(data.totals.successMaxDurationMs || 0, duration);
-    } else {
-      data.totals.failed++;
-    }
-    data.totals.totalDurationMs += duration;
-    Object.assign(data.totals, calculateDurationETA(data.totals));
-  }
+  if (!isEnvironmentalFailure) foldTotals(data.totals, { outcomeSuccess, duration });
 
   markAgentCounted(data, countedAgentId);
   await saveLearningData(data);
 
-  const { provider, model, component, routingReason } = telemetry.executionContext;
-  const { wallMs, queueMs } = telemetry.latency;
-  const wallSecs = Math.round((wallMs ?? duration) / 1000);
-  // Label reflects the learning OUTCOME (validation-authoritative). A run that
-  // exited clean but missed its declared criterion reads as `failed:validation-miss`
-  // rather than the misleading `success` the raw exit code would show (#2344).
-  const outcomeLabel = outcomeSuccess
-    ? 'success'
-    : `failed:${errorCategory || (success ? 'validation-miss' : 'uncategorized')}${isEnvironmentalFailure ? ' environmental' : ''}`;
-  emitLog('debug', `Recorded task completion: ${taskType} (${outcomeLabel}) via ${provider || '?'}/${model || '?'}@${modelTier} [${component || '?'}] wall=${wallSecs}s`, {
-    taskType,
-    modelTier,
-    provider,
-    model,
-    component,
-    routingReason,
-    success,
-    validationPassed: telemetry.validationPassed,
-    outcomeSuccess,
-    errorCategory,
-    environmental: isEnvironmentalFailure,
-    failurePosition: telemetry.failureSignature?.failurePosition ?? null,
-    wallMs,
-    queueMs,
-    executionMs: telemetry.latency.executionMs,
-    duration: Math.round(duration / 1000) + 's'
-  }, '[TaskLearning]');
+  logRecordedCompletion({ telemetry, taskType, modelTier, outcomeSuccess, errorCategory, isEnvironmentalFailure, duration });
 
   return data;
   });

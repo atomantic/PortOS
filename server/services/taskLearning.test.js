@@ -1715,3 +1715,115 @@ describe('TaskLearning - recommendation dismissal', () => {
     }
   });
 });
+
+describe('TaskLearning - recordTaskCompletion aggregate folds', () => {
+  let savedData;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    clearLearningCache();
+    savedData = null;
+    atomicWrite.mockImplementation(async (_path, data) => {
+      savedData = data;
+    });
+  });
+
+  const task = { description: 'Fix UI', taskType: 'user', metadata: {} };
+  const failedAgent = (errorAnalysis, overrides = {}) => ({
+    id: 'agent-fold',
+    metadata: { modelTier: 'heavy', taskDescription: 'Fix UI' },
+    result: { success: false, duration: 30000, errorAnalysis },
+    ...overrides
+  });
+
+  it('folds a success into the model tier and totals with success-only ETA fields', async () => {
+    readFile.mockResolvedValue(JSON.stringify(makeLearningData({ byModelTier: {}, totals: { completed: 0, succeeded: 0, failed: 0, totalDurationMs: 0 } })));
+
+    await recordTaskCompletion({ id: 'agent-ok', metadata: { modelTier: 'medium' }, result: { success: true, duration: 40000 } }, task);
+
+    expect(savedData.byModelTier.medium).toEqual({
+      completed: 1, succeeded: 1, failed: 0, totalDurationMs: 40000, successDurationMs: 40000, avgDurationMs: 40000
+    });
+    expect(savedData.totals).toMatchObject({
+      completed: 1, succeeded: 1, failed: 0, totalDurationMs: 40000,
+      successDurationMs: 40000, successMaxDurationMs: 40000, avgDurationMs: 40000, maxDurationMs: 40000
+    });
+    expect(savedData.routingAccuracy['user-task'].medium.lastAttempt).toEqual(expect.any(String));
+  });
+
+  it('falls back to the wall-minus-queue execution split for the recency sample when the runner stamped no duration', async () => {
+    readFile.mockResolvedValue(JSON.stringify(makeLearningData()));
+
+    await recordTaskCompletion({
+      id: 'agent-wall',
+      startedAt: '2026-01-26T00:00:00.000Z',
+      completedAt: '2026-01-26T00:02:00.000Z',
+      metadata: { modelTier: 'medium' },
+      result: { success: true }
+    }, { ...task, createdAt: '2026-01-25T23:59:00.000Z' });
+
+    expect(savedData.byTaskType['user-task'].recentOutcomes.at(-1)).toMatchObject({ s: true, d: 60000 });
+  });
+
+  it('counts an error pattern with its time and keeps a trimmed sample only for unknown failures', async () => {
+    readFile.mockResolvedValue(JSON.stringify(makeLearningData({ errorPatterns: {} })));
+
+    await recordTaskCompletion(failedAgent({ category: 'unknown', message: 'm'.repeat(300), details: 'd'.repeat(600) }), task);
+
+    expect(savedData.errorPatterns.unknown).toEqual({ count: 1, taskTypes: { 'user-task': 1 }, lastOccurred: expect.any(String) });
+    expect(savedData.recentUnknownErrors).toEqual([{
+      taskType: 'user-task',
+      message: 'm'.repeat(200),
+      details: 'd'.repeat(500),
+      agentId: 'agent-fold',
+      recordedAt: expect.any(String)
+    }]);
+
+    clearLearningCache();
+    readFile.mockResolvedValue(JSON.stringify(makeLearningData({ errorPatterns: {} })));
+    await recordTaskCompletion(failedAgent({ category: 'timeout', message: 'slow' }), task);
+    expect(savedData.recentUnknownErrors).toBeUndefined();
+  });
+
+  it('keeps only the last 20 unknown-error samples', async () => {
+    const earlier = Array.from({ length: 20 }, (_, i) => ({ taskType: 'user-task', message: `old-${i}`, details: '', agentId: `a-${i}`, recordedAt: '2026-01-01T00:00:00.000Z' }));
+    readFile.mockResolvedValue(JSON.stringify(makeLearningData({ recentUnknownErrors: earlier })));
+
+    await recordTaskCompletion(failedAgent({ category: 'unknown', message: 'newest' }), task);
+
+    expect(savedData.recentUnknownErrors).toHaveLength(20);
+    expect(savedData.recentUnknownErrors[0].message).toBe('old-1');
+    expect(savedData.recentUnknownErrors.at(-1).message).toBe('newest');
+  });
+
+  it('records a recurrence insight only when the category count lands on a milestone', async () => {
+    // The fixture's `unknown` pattern sits at 10; a third occurrence of a fresh
+    // category reaches the first milestone (3).
+    readFile.mockResolvedValue(JSON.stringify(makeLearningData({
+      errorPatterns: { timeout: { count: 2, taskTypes: { 'user-task': 2 }, lastOccurred: null } }
+    })));
+    await recordTaskCompletion(failedAgent({ category: 'timeout', message: 'slow' }), task);
+    expect(savedData.insights).toEqual([expect.objectContaining({ origin: 'auto-incident', originatingAgentId: 'agent-fold' })]);
+
+    clearLearningCache();
+    readFile.mockResolvedValue(JSON.stringify(makeLearningData({
+      errorPatterns: { timeout: { count: 3, taskTypes: { 'user-task': 3 }, lastOccurred: null } }
+    })));
+    await recordTaskCompletion(failedAgent({ category: 'timeout', message: 'slow' }), task);
+    expect(savedData.insights ?? []).toEqual([]);
+  });
+
+  it('samples the correlation window only for routable tiers', async () => {
+    for (const modelTier of [undefined, 'minimal']) {
+      clearLearningCache();
+      readFile.mockResolvedValue(JSON.stringify(makeLearningData()));
+      await recordTaskCompletion({ id: `agent-${modelTier}`, metadata: { modelTier }, result: { success: true, duration: 1000 } }, task);
+      expect(savedData.correlationWindow ?? []).toEqual([]);
+    }
+
+    clearLearningCache();
+    readFile.mockResolvedValue(JSON.stringify(makeLearningData()));
+    await recordTaskCompletion({ id: 'agent-heavy', metadata: { modelTier: 'heavy' }, result: { success: true, duration: 1000 } }, task);
+    expect(savedData.correlationWindow).toEqual([expect.objectContaining({ taskType: 'user-task', tier: 'heavy', bad: false })]);
+  });
+});
