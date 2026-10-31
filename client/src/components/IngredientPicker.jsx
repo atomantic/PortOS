@@ -27,6 +27,7 @@ import { listCatalogIngredients } from '../services/apiCatalog';
 import { CATALOG_BADGE_BY_ID, payloadSnippet } from '../lib/catalogTypes';
 import { clickableProps, onActivateKeyDown } from '../lib/a11yKeyboard';
 import { ingredientPath, usageSummary } from '../lib/creativeLibraries';
+import ListLoadError from './ui/ListLoadError';
 
 // Type chip color comes from the shared registry. Snippet uses the registry's
 // per-type fallback chain at a slightly longer cap for the picker rows.
@@ -44,6 +45,10 @@ export default function IngredientPicker({
   const [q, setQ] = useState('');
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(false);
+  // A failed read is not an empty catalog: keep it distinct so the picker
+  // offers Retry instead of "No matching ingredients" + create-new.
+  const [loadError, setLoadError] = useState(null);
+  const [retryCount, setRetryCount] = useState(0);
   const [selectedIds, setSelectedIds] = useState(() => new Set());
   // Track in-flight fetch generation so a late response from a stale query
   // can't overwrite the current results.
@@ -73,6 +78,7 @@ export default function IngredientPicker({
     if (!open) return undefined;
     const gen = ++generationRef.current;
     setLoading(true);
+    setLoadError(null);
     listCatalogIngredients({
       type: type || undefined,
       q: q || undefined,
@@ -84,13 +90,14 @@ export default function IngredientPicker({
         setItems(Array.isArray(data?.items) ? data.items : []);
         setLoading(false);
       })
-      .catch(() => {
+      .catch((err) => {
         if (gen !== generationRef.current) return;
         setItems([]);
+        setLoadError(err instanceof Error ? err : new Error('Request failed'));
         setLoading(false);
       });
     return undefined;
-  }, [open, q, type]);
+  }, [open, q, type, retryCount]);
 
   // Exclusion set lookup — Set is O(1), array .includes is O(n) per row.
   const excludeSet = useMemo(() => new Set(excludeIds || []), [excludeIds]);
@@ -172,6 +179,12 @@ export default function IngredientPicker({
             <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />
             Searching…
           </div>
+        ) : loadError ? (
+          <ListLoadError
+            what="ingredients"
+            error={loadError}
+            onRetry={() => setRetryCount((n) => n + 1)}
+          />
         ) : filtered.length === 0 ? (
           <div className="text-sm text-gray-400 space-y-2">
             <p>No matching ingredients.</p>

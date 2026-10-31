@@ -261,4 +261,19 @@ describe('VoiceTab LLM / code-agent pickers', () => {
     await screen.findByRole('combobox', { name: 'Coding agent' });
     expect(screen.queryByRole('option', { name: /not a coding agent/ })).toBeNull();
   });
+
+  it('shows a load error with Retry beside the provider pickers, and a successful retry fills them', async () => {
+    getProviders
+      .mockRejectedValueOnce(new Error('registry 500'))
+      .mockResolvedValueOnce({
+        providers: [{ id: 'lmstudio', type: 'api', name: 'LM Studio', models: ['some-model'] }],
+      });
+    render(<MemoryRouter><VoiceTab /></MemoryRouter>);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('registry 500');
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+
+    expect(await screen.findAllByRole('option', { name: 'some-model' })).not.toHaveLength(0);
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
 });
