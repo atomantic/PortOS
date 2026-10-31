@@ -2,9 +2,6 @@ import { matchingRetirementReceipts } from '../lib/reconcileRetirementEvidence.j
 import { readRetirementCheckoutIdentity } from '../lib/retirementCheckoutObservation.js';
 import { WORKSPACE_TEST_CACHE_ROOTS } from '../lib/workspaceTestCacheRoots.js';
 import { VITEST_CACHE_TAG, VITEST_MODULE_CACHE_ROOTS, moduleCacheName, moduleCacheMetadata } from '../lib/testCacheRetirementProof.js';
-import { isAgentScratchPath, matchesScratchRoot } from '../lib/agentScratchPaths.js';
-import { WORKTREE_NODE_MODULES_MARKER } from '../lib/worktreeNodeModules.js';
-import { createNpmRetirementVerifier } from '../lib/npmRetirementPayload.js';
 /**
  * Operator-scoped retirement of a merged checkout that branch reconciliation
  * reported but cannot retire on its own (#12002): one outside the managed
@@ -38,87 +35,6 @@ import { kebabCase } from '../lib/textUtils.js';
 import { listWorktrees, forceRemoveWorktreeDir, deleteCompletedLocalBranch, classifyWorktreeDirt } from './worktreeManager.js';
 import { getDefaultBranch, getStatusPorcelain, hasBranchMergeEvidence } from './git.js';
 import { withClaimOwnershipLock, readClaimOwnershipAgents, retireWithUnlockedArchive } from './cosClaimOwnership.js';
-
-/** Ignored payload must be disposable or match bytes already durably preserved. */
-export async function releaseCheckoutWithoutArchive(context, prepare) {
-  const prepared = await prepare();
-  await assertNoUniqueIgnoredCheckoutPayload(context.path, execGit, context.ignoredPaths, context.preservedFiles, context.repoPath);
-  return prepared;
-}
-
-/** Git cleanliness alone omits ignored files. Links retain their target bytes. */
-export async function assertNoUniqueIgnoredCheckoutPayload(path, runGit = execGit, ignoredPaths = [], preservedFiles = [], primaryRepoPath = null) {
-  const present = await lstat(path).catch(error => {
-    if (error.code === 'ENOENT') return null;
-    throw error;
-  });
-  if (!present) return;
-  const result = await runGit(['ls-files', '--others', '--ignored', '--exclude-standard', '-z'], path,
-    { maxBuffer: GIT_OUTPUT_BYTES, bufferOutput: true });
-  if ((result.exitCode !== undefined && result.exitCode !== 0)
-    || (!Buffer.isBuffer(result.stdout) && typeof result.stdout !== 'string')) throw new Error('worktree-status-unavailable');
-  const ignored = new Set(zLines(Buffer.isBuffer(result.stdout) ? archiveText(result.stdout) : result.stdout));
-  const work = archiveWork();
-  const verifiedCaches = new Map();
-  const npmPayload = createNpmRetirementVerifier(path, primaryRepoPath, work);
-  for (const listed of ignored) {
-    const { rel, info } = await listedContentEntry(path, listed, work);
-    if (info.isSymbolicLink() || isAgentScratchPath(rel) || matchesScratchRoot(rel, ignoredPaths)) continue;
-    if (rel === `node_modules/${WORKTREE_NODE_MODULES_MARKER}` && info.isFile() && info.size === 0) continue;
-    if (info.isFile() && (disposableRuntimeArtifact(rel) || await disposableTestCache(path, rel, ignored, verifiedCaches, work))) continue;
-    if (info.isFile() && await npmPayload(rel).catch(cacheInspectionFailure)) continue;
-    if (rel === 'data/media-models.json' && info.isFile() && await isPristineMediaRegistry(join(path, rel))) continue;
-    if (info.isFile() && await isPristineTwinDefault(join(path, rel), rel)) continue;
-    const preserved = preservedFiles.find(file => file.scope === 'content' && file.path === rel);
-    if (info.isFile() && typeof preserved?.data === 'string') {
-      const bytes = Buffer.from(preserved.data, 'base64');
-      if (info.size === bytes.length && evidenceHash(bytes) === preserved.sha256
-        && await archiveHash(join(path, rel), work, bytes.length) === preserved.sha256) continue;
-    }
-    throw Object.assign(new Error('checkout-ignored-payload-unverified'), { path: rel });
-  }
-}
-
-// A registry file lazily seeded by any process that loaded the media models
-// with the default data dir; identical to the seed means nothing user-owned.
-const isPristineMediaRegistry = async file => {
-  const { isPristineRegistrySeed } = await import('../lib/mediaModels.js');
-  return isPristineRegistrySeed(await readFile(file, 'utf8').catch(() => null));
-};
-
-// Digital-twin files a test run lazily writes into a worktree's default data
-// dir (see #14177's checkout). Recognized only while they hold the empty
-// defaults a fresh load derives — any real document, marker or score stays held.
-const isEmptyObject = value => value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === 0;
-const PRISTINE_TWIN_DEFAULTS = {
-  'data/digital-twin/meta.json': twin => ['documents', 'deletedDocuments', 'testHistory', 'valuesTestHistory',
-    'adversarialTestHistory', 'multiTurnTestHistory', 'personas', 'deletedPersonas']
-    .every(key => twin[key] === undefined || (Array.isArray(twin[key]) && twin[key].length === 0))
-    && (twin.enrichment?.completedCategories ?? []).length === 0,
-  'data/digital-twin/chronotype.json': twin => twin.confidence === 0 && isEmptyObject(twin.geneticMarkers)
-    && isEmptyObject(twin.caffeineMarkers) && twin.behavioralData === null,
-  'data/digital-twin/longevity.json': twin => twin.confidence === 0 && twin.longevityScore === 0
-    && isEmptyObject(twin.longevityMarkers) && isEmptyObject(twin.cardiovascularMarkers) && twin.timeHorizons === null,
-};
-const isPristineTwinDefault = async (file, rel) => {
-  const matches = PRISTINE_TWIN_DEFAULTS[rel];
-  if (!matches) return false;
-  const twin = await readFile(file, 'utf8').then(JSON.parse, () => null);
-  return Boolean(twin) && typeof twin === 'object' && matches(twin);
-};
-
-// Regenerable byproducts of running the repo's own tests. Matched by exact
-// producer shape (CPython's interpreter-tagged .pyc, the test-process
-// diagnostics receipt named by UUID), never by directory, so a stray file in
-// the same folder stays protected.
-const PYCACHE_FILE = /(?:^|\/)__pycache__\/[^/]+\.cpython-\d+\.pyc$/;
-const TEST_DIAGNOSTICS_FILE = /^\.cache\/test-process-diagnostics\/[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\.json$/;
-// The retention receipt the quality-snapshot publisher's guarded merge wrote
-// before #14184 (appQualitySnapshotMerge.js still reads it to find legacy
-// checkouts). It only recorded guard output, so it is never the sole copy of
-// anything once the checkout is being retired.
-const SNAPSHOT_MERGE_RECEIPT = '.cache/quality-snapshot-merge.json';
-const disposableRuntimeArtifact = rel => PYCACHE_FILE.test(rel) || TEST_DIAGNOSTICS_FILE.test(rel) || rel === SNAPSHOT_MERGE_RECEIPT;
 
 /**
  * Branch name to a filesystem-safe, collision-free directory name. The hash
@@ -1778,28 +1694,21 @@ async function retireHeldCheckout({ repoPath, release, review }, opts = {}) {
         if (preservedSupersession) {
           if (!await opts.preserveSupersession?.(reviewed.review)) throw new Error('retirement-source-preservation-unavailable');
         }
-        const recheck = async () => {
-          if (opts.signal?.aborted) throw new Error('retirement-archive-cancelled');
-          const status = await getStatusPorcelain(tree.path).catch(() => null);
-          if (status === null) throw new Error('worktree-status-unavailable');
-          if (!classifyWorktreeDirt(status).clean) throw new Error('worktree-dirty');
-          const mergedNow = branch
-            ? await hasBranchMergeEvidence(repoPath, branch, defaultBranch).catch(() => false)
-            : await isAncestor(repoPath, tree.head, defaultBranch);
-          // Finish re-reads the review. A forge-integrated detached or lagging
-          // checkout is not an ancestor of local main yet.
-          if (!mergedNow && !review) throw new Error('not-merged-on-recheck');
-          return null;
-        };
-        await releaseCheckoutWithoutArchive({ repoPath, path: tree.path, branch,
-          preservedFiles: preservedSupersession ? reviewed.review.preservedSource.files : [] }, recheck);
+        if (opts.signal?.aborted) throw new Error('retirement-archive-cancelled');
+        const status = await getStatusPorcelain(tree.path).catch(() => null);
+        if (status === null) throw new Error('worktree-status-unavailable');
+        if (!classifyWorktreeDirt(status).clean) throw new Error('worktree-dirty');
+        const mergedNow = branch
+          ? await hasBranchMergeEvidence(repoPath, branch, defaultBranch).catch(() => false)
+          : await isAncestor(repoPath, tree.head, defaultBranch);
+        // Finish re-reads the review. A forge-integrated detached or lagging
+        // checkout is not an ancestor of local main yet.
+        if (!mergedNow && !review) throw new Error('not-merged-on-recheck');
         return { archive: { disposable: true } };
       } catch (error) {
-        const reason = ['worktree-dirty', 'not-merged-on-recheck', 'worktree-status-unavailable', 'retirement-archive-cancelled', 'checkout-ignored-payload-unverified'].includes(error.message)
+        const reason = ['worktree-dirty', 'not-merged-on-recheck', 'worktree-status-unavailable', 'retirement-archive-cancelled'].includes(error.message)
           ? error.message : 'checkout-not-disposable';
-        // The blocking path (not its contents) tells the operator what pins the checkout.
-        const detail = reason === 'checkout-not-disposable' ? error.message : error.path;
-        return { result: { ok: false, reason, ...(detail && { detail }) } };
+        return { result: { ok: false, reason, ...(reason === 'checkout-not-disposable' && { detail: error.message }) } };
       }
     },
     finish: async ({ tree, reviewed, checkoutIdentity }) => {
@@ -1869,7 +1778,6 @@ async function finishHeldCheckoutRetirement({ repoPath, release, review, reviewe
   };
   const removal = await forceRemoveWorktreeDir(repoPath, tree.path, {
     label: '🧹 held-checkout recovery: remove checkout', log: 'all', verifyRemoval,
-    preservedFiles: acceptedPreservedSupersession(review, reviewed?.review) ? reviewed.review.preservedSource.files : [],
     beforeMutation: async () => {
       await opts.beforeMutation?.();
       // The removal helper also calls this hook before pruning registration.

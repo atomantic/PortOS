@@ -263,7 +263,7 @@ it.each(['all-merged', 'all-retired', 'one-open', 'manual-merged'])('wakes a cle
   listWorktrees.mockResolvedValue(branches.map((branch, index) => ({ branch: `refs/heads/${branch}`, path: `/tree/${index}`, head: heads[index] })));
   readCompletedCheckoutIdentity.mockImplementation(async ({ branch }) => agent.metadata.completedCheckouts.find(row => row.branch === branch));
   readCheckoutPathPresence.mockResolvedValue(true);
-  prepareInventoriedCheckoutRetirement.mockResolvedValue({ ok: false, reason: 'checkout-ignored-payload-unverified' });
+  prepareInventoriedCheckoutRetirement.mockResolvedValue({ ok: false, reason: 'worktree-dirty' });
   findPullRequestForBranch.mockImplementation(async branch => {
     const index = branches.indexOf(branch);
     return { status: 'found', number: index + 1, url: urls[index],
@@ -1595,7 +1595,7 @@ describe('verifyAgentRepoState — divergent runs', () => {
         return release.branch === branches[0]
           ? { ok: true, review: { digest: 'a'.repeat(64), forge: { prHead: HEAD },
             comparison: { disposition: 'integrated', localPatch: '', difference: '' } } }
-          : { ok: false, reason: 'checkout-ignored-payload-unverified' };
+          : { ok: false, reason: 'worktree-dirty' };
       });
       retireInventoriedCheckout.mockImplementation(async ({ release }, options) => {
         await options.beforeMutation();
@@ -1610,7 +1610,7 @@ describe('verifyAgentRepoState — divergent runs', () => {
       expect(getAgentRecord).toHaveBeenCalledWith('unrelated-owner');
       releasePreview();
       const result = await checking;
-      expect(result).toMatchObject({ ok: true, verified: false, reasons: ['checkout-ignored-payload-unverified'] });
+      expect(result).toMatchObject({ ok: true, verified: false, reasons: ['worktree-dirty'] });
       expect(seenCapture).toHaveBeenCalled();
       expect(seenRetirement).toHaveBeenCalledOnce();
       expect(replayAgentCompletionCleanup).not.toHaveBeenCalled();

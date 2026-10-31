@@ -18,10 +18,8 @@ vi.mock('./branchCompletionPolicy.js', async () => ({
  */
 
 vi.mock('./heldCheckoutRecovery.js', () => ({
-  assertNoUniqueIgnoredCheckoutPayload: async () => {},
   preserveSupersededCheckout: vi.fn(async () => ({ archiveDir: '/archive', verify: async () => null, recordRetirement: async () => {} })),
   preserveMergedCheckout: vi.fn(async () => ({ archiveDir: '/archive', verify: async () => null })),
-  releaseCheckoutWithoutArchive: vi.fn(async (_context, prepare) => prepare()),
 }));
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { join } from 'node:path';
@@ -138,7 +136,7 @@ import {
 } from './branchReconcile.js';
 import * as git from './git.js';
 import * as wt from './worktreeManager.js';
-import { preserveMergedCheckout, releaseCheckoutWithoutArchive } from './heldCheckoutRecovery.js';
+import { preserveMergedCheckout } from './heldCheckoutRecovery.js';
 import { recordHeldCheckoutRetirement, recordWorkspaceCheckoutRetirement } from './branchReconcileOutcome.js';
 import { withClaimOwnershipLock, checkoutRetirementFenceReason } from './cosClaimOwnership.js';
 import { hasCompletedCheckoutEvidence } from './completedCheckoutEvidence.js';
@@ -164,7 +162,6 @@ beforeEach(() => {
   vi.clearAllMocks();
   hasCompletedCheckoutEvidence.mockReset().mockImplementation(async records => records.some(agent => agent.result?.success === true));
   preserveMergedCheckout.mockImplementation(async () => ({ archiveDir: '/archive', verify: async () => null }));
-  releaseCheckoutWithoutArchive.mockImplementation(async (_context, prepare) => prepare());
   // Ancient by default, so age-indifferent tests keep their pre-window behavior;
   // a test that pins a specific age must not leak it into the next one.
   worktreeMtimeMs = 0;
@@ -485,7 +482,6 @@ describe('cleanupMerged', () => {
     const worktreePath = '/repo/.claude/worktrees/next-2190';
     const res = await cleanupMerged('/repo', 'main', [{ branch: 'next/issue-2190', worktreePath }]);
     expect(res.cleaned).toEqual(['next/issue-2190']);
-    expect(releaseCheckoutWithoutArchive).not.toHaveBeenCalled();
   });
 
   it('deletes a merged branch with no worktree', async () => {
@@ -1999,7 +1995,6 @@ describe('reconcile — detached-HEAD worktrees (#10825)', () => {
     expect(wt.forceRemoveWorktreeDir).toHaveBeenCalledWith('/repo', path, expect.any(Object));
     expect(res.detachedWorktrees).toEqual([]);
     expect(preserveMergedCheckout).not.toHaveBeenCalled();
-    expect(releaseCheckoutWithoutArchive).not.toHaveBeenCalled();
   });
 
   it('removes a clean detached tree without copying it', async () => {

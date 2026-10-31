@@ -1318,18 +1318,6 @@ const writeRegistryAtomic = (reg) => {
 export const isSeedSuppressed = (registryFile = REGISTRY_FILE, explicit = process.env.PORTOS_MEDIA_MODELS_FILE) =>
   !explicit && isWorktreeRoot(registryFile);
 
-/**
- * True when `text` is a registry nobody has edited: the shipped defaults plus the
- * `_shippedDefaults` bookkeeping the first load adds. Such a file is regenerable.
- */
-export const isPristineRegistrySeed = (text) => {
-  let parsed;
-  try { parsed = JSON.parse(text); } catch { return false; }
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return false;
-  const { _shippedDefaults, ...rest } = parsed;
-  return JSON.stringify(rest) === JSON.stringify(DEFAULT_REGISTRY);
-};
-
 const seedIfMissing = () => {
   if (existsSync(REGISTRY_FILE) || isSeedSuppressed()) return;
   ensureDir(REGISTRY_FILE);

@@ -1,6 +1,5 @@
-// Real git: checkouts a pre-#14184 guarded snapshot merge retained stay when
-// ignored or untracked local content cannot be proved disposable, even after
-// their PR merges.
+// Real git: a merged snapshot checkout is retired even with ignored output, but
+// untracked (non-ignored) work still holds it.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { existsSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
@@ -37,11 +36,12 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('sweepSettledSnapshotCheckouts', () => {
     expect(existsSync(path)).toBe(false);
   });
 
-  it('retains unverified ignored output in a merged snapshot checkout', async () => {
+  it('retires a merged snapshot checkout holding other ignored output', async () => {
     const path = await snapshotCheckout('ignored');
     await writeFile(join(path, '.cache', 'unique-output.bin'), 'only copy');
-    expect(await sweepSettledSnapshotCheckouts({ id: 'app', repoPath: sandbox.repo }, {}, mergedForge)).toEqual([]);
-    expect(existsSync(join(path, '.cache', 'unique-output.bin'))).toBe(true);
+    const swept = await sweepSettledSnapshotCheckouts({ id: 'app', repoPath: sandbox.repo }, {}, mergedForge);
+    expect(swept).toHaveLength(1);
+    expect(existsSync(path)).toBe(false);
   });
 
   it('keeps a snapshot checkout with untracked work', async () => {

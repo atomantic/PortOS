@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest';
-import { mkdtemp, rm, writeFile, readFile, lstat, mkdir } from 'fs/promises';
+import { mkdtemp, rm, writeFile, lstat, mkdir } from 'fs/promises';
 import { existsSync, realpathSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -101,16 +101,16 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('forceRemoveWorktreeDir', () => {
     expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('cleanup incomplete'));
   });
 
-  it('preserves ignored content created during removal preparation', async () => {
+  // Callers retire only merged deliveries or throwaway checkouts: ignored files go with them.
+  it('discards ignored files with the checkout', async () => {
     const path = await addWorktree();
     await writeFile(join(repo, '.git', 'info', 'exclude'), '*.png\n');
-    const image = join(path, 'reference.png');
     const outcome = await forceRemoveWorktreeDir(repo, path, {
-      beforeMutation: () => writeFile(image, 'new user image'),
+      beforeMutation: () => writeFile(join(path, 'reference.png'), 'generated image'),
     });
-    expect(outcome).toMatchObject({ removed: false, reason: 'checkout-ignored-payload-unverified' });
-    expect(await registered(path)).toBe(true);
-    expect(await readFile(image, 'utf8')).toBe('new user image');
+    expect(outcome.removed).toBe(true);
+    expect(existsSync(path)).toBe(false);
+    expect(await registered(path)).toBe(false);
   });
 
   it('preserves a locked directory and registration', async () => {

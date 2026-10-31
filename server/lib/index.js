@@ -1012,7 +1012,6 @@ export * from './executionOptions.js';
 export * from './providerExecutionOptions.js';
 export * from './catalogUniverseContext.js';
 
-export * from './npmRetirementPayload.js';
 export * from './videoLoraStageValidation.js';
 
 export * from './musicVideoGreybox.js';
