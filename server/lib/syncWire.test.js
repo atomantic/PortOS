@@ -65,6 +65,11 @@ describe('syncWire', () => {
       });
       expect(wire).toMatchObject({ id: 'cd-1', name: 'P', treatment: { logline: 'l' } });
     });
+
+    it('strips the peerReplica marker so both machines hash the same content', () => {
+      const wire = sanitizeRecordForWire('creativeDirectorProject', { id: 'cd-1', name: 'P', peerReplica: true });
+      expect(wire).not.toHaveProperty('peerReplica');
+    });
   });
 
   describe('sanitizeRecordForWire', () => {

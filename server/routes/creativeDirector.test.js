@@ -450,6 +450,15 @@ describe('creativeDirector routes', () => {
       expect(hook.startCreativeDirectorProject).toHaveBeenCalledWith('cd-1');
     });
 
+    it('takes over an in-flight peer replica with a status write', async () => {
+      cdService.getProject.mockResolvedValue({ id: 'cd-1', name: 'A', status: 'rendering', peerReplica: true });
+      cdService.updateProject.mockResolvedValue({});
+      const r = await request(app).post('/api/creative-director/cd-1/start');
+      expect(r.status).toBe(200);
+      expect(cdService.updateProject).toHaveBeenCalledWith('cd-1', { status: 'rendering' });
+      expect(hook.startCreativeDirectorProject).toHaveBeenCalledWith('cd-1');
+    });
+
     it('logs a rejected background kick to stderr with the project id and stack, and still answers 200', async () => {
       cdService.getProject.mockResolvedValue({ id: 'cd-1', name: 'A', status: 'draft' });
       cdService.updateProject.mockResolvedValue({});
