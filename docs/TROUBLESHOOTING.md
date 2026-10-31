@@ -583,25 +583,23 @@ cat data/apps.json | jq .
 2. **Many apps**: Pagination added in recent versions
 3. **Network latency**: Use local access when possible
 
-### Agents Page or Merge Admission Stalls (Slow CoS State Operations)
+### Agents Page Stalls (Slow CoS State Operations)
 
-**Symptom**: the Agents page is slow or unavailable while merge admission refuses with `state-queue-timeout`, PM2 reads time out, or peer probes fail around the same time.
+**Symptom**: the Agents page is slow or unavailable while PM2 reads time out or peer probes fail around the same time.
 
 CoS runtime records share one serialized state queue (`withStateLock` in `server/services/cosState.js`). Slow operations on it log bounded numbers only: no records, tokens, paths, hostnames or task text.
 
 | Line | When |
 |------|------|
-| `🚦 Merge admission operation=… status=settled …` | a settled admission transaction that took 1 s or more |
-| `🚦 Merge admission … status=queue-timeout\|pending\|failed …` | always |
 | `❌ PM2 read failed (home=…): pm2 RPC timed out; … wallMs=… cpuMs=… load1=… cpus=… gcMs=… invCtx=…` | the first timed-out PM2 process-list read of a failure streak |
 | `🐢 CoS state write slow outcome=… totalMs=… prepareMs agentsMs serializeMs writeMs replaceMs dirSyncMs loopLagMs loopLagMaxMs sizeKiB` | any `saveState` of 1 s or more |
 | `🐢 CoS state queue slow hold heldMs=… waitMs=… loopLagMs=… loopLagMaxMs=…` | any operation that held the queue for 1 s or more |
 
 Elapsed time inside an awaited phase is asynchronous wait plus delayed scheduling. While an instrumented operation is open, a 100 ms tick measures how long timers sat overdue (`server/lib/eventLoopLagProbe.js`) and charges that to the current phase as `…LagMs`. Read each slow phase as lag versus the rest:
 
-- **`queueMs` high, `queueLagMs` near 0** — the state queue was held by other operations while the loop stayed responsive. Look for `🐢 CoS state queue slow hold` lines in the same window.
-- **`persistenceMs` (or `trustedStateMs`) high, its `…LagMs` near 0** — asynchronous I/O wait: storage or fsync latency, or libuv threadpool queueing behind other file work. `agentsMs` (the changed `cos_agents` rows, written in one transaction), `writeMs` (temp write + file flush), `replaceMs` (rename) and `dirSyncMs` (directory flush) locate it; `readMs`/`parseMs` split the ownership read.
-- **`…LagMs` close to the phase time, or `timerLateMs` well above 0** — the event loop could not run: blocking JavaScript, garbage collection, host CPU starvation or process suspension. The attribution fields below tell those apart.
+- **Queue hold high (`🐢 CoS state queue slow hold`, `heldMs`/`waitMs`), `loopLagMs` near 0** — other operations held the state queue while the loop stayed responsive.
+- **Write phases high (`🐢 CoS state write slow`), `…LagMs` near 0** — asynchronous I/O wait: storage or fsync latency, or libuv threadpool queueing behind other file work. `agentsMs` (the changed `cos_agents` rows, written in one transaction), `writeMs` (temp write + file flush), `replaceMs` (rename) and `dirSyncMs` (directory flush) locate it.
+- **`loopLagMs` close to the phase time** — the event loop could not run: blocking JavaScript, garbage collection, host CPU starvation or process suspension. The attribution fields below tell those apart.
 
 **Lag attribution (#12852).** When an operation is charged more than 1,000 ms of loop lag, its line ends with `cpuMs=… load1=… cpus=… gcMs=… invCtx=…` measured over the same span. The PM2 timeout line carries them over the read, with `wallMs` as its span. Compare `cpuMs` with the span's wall time (`totalMs`, `heldMs` or `wallMs`):
 
@@ -614,7 +612,7 @@ Elapsed time inside an awaited phase is asynchronous wait plus delayed schedulin
 
 `cpuMs` is this process's user plus system time, so worker threads can push it above the wall time. `load1` is the host's one-minute load average and trails a sudden spike. `gcMs` counts collections by when they started, and one finishing in a span's last loop turn may be missed. A span charged 1,000 ms of lag or less prints none of these fields.
 
-Lag resolves to about one tick: the first 100 ms of a stall and any overdue stretch of 20 ms or less are not counted. `timerLateMs` is how late the 15 s admission deadline fired; anything beyond a few milliseconds of timer jitter proves scheduling delay on its own.
+Lag resolves to about one tick: the first 100 ms of a stall and any overdue stretch of 20 ms or less are not counted.
 
 **Baseline.** In an isolated synthetic run (a temp directory, a ~1 MiB state-shaped document, real `atomicWrite`, no induced load), a full state write took 14 ms median and 35 ms worst over 20 runs (serialize ~2 ms, write ≤ 20 ms, directory flush ≤ 8 ms) with no measurable lag, and parsing took ~1–2 ms. Multi-second phases are therefore not explained by the size of the document.
 

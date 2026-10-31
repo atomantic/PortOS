@@ -95,10 +95,7 @@ run; the remaining exposure is a semantic conflict between two individually
 green PRs, which post-merge default-branch CI catches, the same exposure manual
 and cross-install merges already carry.
 
-The one remaining lease is the legacy outside-agent API
-(`POST /api/cos/merge-admission/external`, see
-[Outside-agent merge admission](../AGENT_API_KEY.md#outside-agent-merge-admission),
-`server/services/cosMergeAdmission.js`).
+No lease remains. The legacy outside-agent lease API (`POST /api/cos/merge-admission/external`) was retired (#14320): it answers 404, and an outside client merges directly on the forge, pinned to the verified head.
 
 Which registered run may hand a pending merge to the server
 (`server/services/mergeHandoffOwner.js`, used by the merge handoff below) is
@@ -312,38 +309,6 @@ Locks, initialized submodules, changed checkout identity and supersession need
 explicit recovery and remain held. No worker waits for this cleanup, no lock is
 silently released, and no initialized submodule is discarded. Older receipts
 without a checkout binding retain the existing branch-reconciliation fallback.
-
-Outside-agent leases extend the existing machine-local CoS runtime ownership in
-`data/cos/state.json` (the agent records they bind are `cos_agents` rows),
-under its existing write queue; there is no new store,
-seed, migration, or federation payload. Admission waits at most 15 seconds to
-start its state-queue callback; an expired waiter returns `admitted: false`,
-`reason: state-queue-timeout`, and `retryAfterMs: 5000`. Its fenced callback
-cannot later grant or release a lease. A refused check grants no merge authority;
-retry and require a fresh successful check. Once a transaction starts, it retains
-the queue until its actual result settles, including persistence failures.
-The deadline then logs the pending phase rather than reporting an incomplete
-write as a refusal or successful release. Diagnostics contain fixed operation
-and phase names plus numeric timings for queue wait, trusted-state read, cached
-state load, origin lookup, and persistence; no owner, token,
-repository, or path is logged. Unreadable, mismatched or stale ownership
-refuses admission. A lease is recoverable by any session once its 5-minute hold
-deadline (`AGENT_LEASE_MAX_HOLD_MS`, measured from `acquiredAt`) has passed
-even while its owner is still running. An expired holder's `check` is refused
-with `lease-expired`, and because every merge is pinned to the CI-verified
-head, a reclaimed holder cannot land an unverified head — the worst case is one
-redundant resync. The lease is not a forge-side fence: a holder whose merge
-request was already in flight when its deadline passed can still complete it
-while the next holder merges. Both merges are pinned and forge-checked, so this
-is the same semantic-conflict exposure as two consecutive `CLEAN` merges.
-Agent and sweep leases persisted before #14319 have no holder and are dropped
-on the next admission write.
-
-This coordinates outside sessions on **one install**. Manual merges, other
-installs and PortOS's own merges can still move the base; the forge's merge
-state reflects that at the merge instant. Admission does not grant permission to
-adopt another owner's branch or checkout, does not replace reviews/CI, and
-does not make queued auto-merge a completed merge.
 
 ## Claim branch ownership
 

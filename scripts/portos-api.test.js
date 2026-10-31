@@ -129,25 +129,6 @@ describe('API request lifecycle', () => {
     expect(seen).toEqual({ method: 'DELETE', body: '{"key":"value"}' });
   });
 
-  it('sends the per-run secret only to external admission and rejects malformed secrets locally', async () => {
-    vi.spyOn(console, 'log').mockImplementation(() => {});
-    const seen = [];
-    server = createServer((request, response) => {
-      seen.push({ path: request.url, secret: request.headers['x-portos-admission-session'] });
-      response.end('{}');
-    });
-    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-    const env = { PORTOS_URL: `http://127.0.0.1:${server.address().port}`,
-      PORTOS_AGENT_KEY_FILE: join(tmpdir(), 'portos-missing-key.json'), PORTOS_ADMISSION_SESSION: 'a'.repeat(64) };
-    await main(['post', '/cos/merge-admission/external', '{}'], env);
-    await main(['whoami'], env);
-    expect(seen).toEqual([{ path: '/api/cos/merge-admission/external', secret: env.PORTOS_ADMISSION_SESSION },
-      { path: '/api/auth/whoami', secret: undefined }]);
-    await expect(main(['post', '/cos/merge-admission/external', '{}'], { ...env, PORTOS_ADMISSION_SESSION: 'caller-id' }))
-      .rejects.toThrow('PORTOS_ADMISSION_SESSION must be');
-    expect(seen).toHaveLength(2);
-  });
-
   it('reports a refusal and missing credentials without presenting it as a transport failure', async () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {});
     server = createServer((_request, response) => {
