@@ -61,6 +61,14 @@ async function requireCompletedJob(id) {
   return job;
 }
 
+// Re-read before saving. A job deleted while the track/render was starting must
+// stay deleted, so a missing row is a 404 rather than a fallback to the stale copy.
+async function reloadJob(id) {
+  const latest = await getCodeAnimationJobRecord(id);
+  if (!latest) throw fail(404, 'NOT_FOUND', 'Code Animation job not found');
+  return latest;
+}
+
 const createSoundtrackTrack = (job, deps) => deps.createTrack({ title: `${job.title || 'Code animation'} soundtrack`.slice(0, 200) });
 
 /**
@@ -78,7 +86,7 @@ export async function ensureCodeAnimationSoundtrackTrack(id, overrides = {}) {
   try {
     const track = await createSoundtrackTrack(job, deps);
     const now = new Date().toISOString();
-    const latest = await getCodeAnimationJobRecord(id) || job;
+    const latest = await reloadJob(id);
     await saveCodeAnimationJobRecord({ ...latest, soundtrack: { trackId: track.id, mediaJobId: null, requestedAt: now }, updatedAt: now });
     emitCodeAnimationChanged(id);
     return { trackId: track.id };
@@ -135,7 +143,7 @@ export async function startCodeAnimationSoundtrack(id, request, overrides = {}) 
       requestedAt: now,
     };
     // Re-read so a field written while the render was being queued survives.
-    const latest = await getCodeAnimationJobRecord(id) || job;
+    const latest = await reloadJob(id);
     await saveCodeAnimationJobRecord({ ...latest, soundtrack, updatedAt: now });
     emitCodeAnimationChanged(id);
     console.log(`🎵 Code animation ${id.slice(0, 8)} soundtrack queued on ${engine.id} (${durationSec}s) as ${queued.jobId}`);
