@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router';
 import { ExternalLink, Search, Undo2 } from 'lucide-react';
 import Pill from '../ui/Pill';
@@ -70,12 +70,22 @@ export default function GitHubAuditTab() {
   const [skipped, setSkipped] = useState(() => new Set());
   const [applyingId, setApplyingId] = useState(null);
   const [changes, setChanges] = useState([]);
+  // A failed read must not read as "no audit yet" / "None yet": the first
+  // invites a slow re-audit, the second hides Undo for repos it unwatched.
+  const [changesFailed, setChangesFailed] = useState(false);
+  const [auditFailed, setAuditFailed] = useState(false);
+  const [auditAttempt, setAuditAttempt] = useState(0);
+  const changesRequestRef = useRef(0);
   const [undoingId, setUndoingId] = useState(null);
   const [savingReport, setSavingReport] = useState(false);
 
   const loadChanges = useCallback(async () => {
+    const request = ++changesRequestRef.current;
     const result = await getGitHubAuditChanges({ silent: true }).catch(() => null);
-    if (result) setChanges(result.changes);
+    if (request !== changesRequestRef.current) return;
+    const ok = Array.isArray(result?.changes);
+    setChangesFailed(!ok);
+    if (ok) setChanges(result.changes);
   }, []);
 
   useEffect(() => { loadChanges(); }, [loadChanges]);
@@ -83,11 +93,12 @@ export default function GitHubAuditTab() {
     if (!accountId) return undefined;
     let active = true;
     setAudit(null);
+    setAuditFailed(false);
     getGitHubAudit(accountId, { silent: true })
       .then((result) => { if (active) setAudit(result.audit); })
-      .catch(() => {});
+      .catch(() => { if (active) setAuditFailed(true); });
     return () => { active = false; };
-  }, [accountId]);
+  }, [accountId, auditAttempt]);
 
   const run = async () => {
     setRunning(true);
@@ -95,6 +106,7 @@ export default function GitHubAuditTab() {
     setRunning(false);
     if (result) {
       setAudit(result.audit);
+      setAuditFailed(false);
       setSkipped(new Set());
     }
   };
@@ -166,7 +178,8 @@ export default function GitHubAuditTab() {
           </p>
         )}
         {audit && !audit.watchedListed && <p className="text-xs text-port-warning">GitHub did not list your watched repos, so there are no unwatch suggestions this time.</p>}
-        {!audit && !running && <p className="text-xs text-gray-500">Nothing changes until you tap Apply on a suggestion.</p>}
+        {!audit && !running && auditFailed && <ListLoadError what="the last audit" onRetry={() => setAuditAttempt((n) => n + 1)} />}
+        {!audit && !running && !auditFailed && <p className="text-xs text-gray-500">Nothing changes until you tap Apply on a suggestion.</p>}
         <div className="flex items-center gap-2">
           <input
             id="github-audit-monthly"
@@ -198,8 +211,9 @@ export default function GitHubAuditTab() {
 
       <section className="space-y-2 rounded-lg border border-port-border bg-port-card p-4" aria-label="Applied audit changes">
         <h2 className="font-semibold text-white">Applied changes</h2>
+        {changesFailed && <ListLoadError what="applied changes" onRetry={loadChanges} />}
         {changes.length === 0 ? (
-          <p className="text-xs text-gray-500">None yet.</p>
+          !changesFailed && <p className="text-xs text-gray-500">None yet.</p>
         ) : (
           <ul className="divide-y divide-port-border">
             {changes.map((change) => (
