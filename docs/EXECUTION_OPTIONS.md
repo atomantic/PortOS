@@ -39,6 +39,7 @@ Every shared-selector consumer below uses the legacy reference bridge unless it 
 | `client/src/components/apps/tabs/PullRequestsTab.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/brain/tabs/ConfigTab.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/brain/tabs/DailyLogTab.jsx` | Shared structured options or saved provider reference |
+| `client/src/components/catalog/CatalogDesignPanel.jsx` | Request-local provider reference forwarded unchanged to the face-design writing request; nothing is persisted |
 | `client/src/components/codeAnimation/CodeAnimationCodeScore.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/codeAnimation/ProductionProjectForm.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/cos/AgentJobProviderFields.jsx` | Shared structured options or saved provider reference |
