@@ -113,6 +113,22 @@ describe('API request lifecycle', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it('delivers a JSON body on DELETE', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    let seen;
+    server = createServer((request, response) => {
+      const chunks = [];
+      request.on('data', chunk => chunks.push(chunk));
+      request.on('end', () => { seen = { method: request.method, body: Buffer.concat(chunks).toString('utf8') }; response.writeHead(204); response.end(); });
+    });
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    await expect(main(['delete', '/api/example', '{"key":"value"}'], {
+      PORTOS_URL: `http://127.0.0.1:${server.address().port}`,
+      PORTOS_AGENT_KEY_FILE: join(tmpdir(), 'portos-missing-key.json'),
+    })).resolves.toBe(0);
+    expect(seen).toEqual({ method: 'DELETE', body: '{"key":"value"}' });
+  });
+
   it('sends the per-run secret only to external admission and rejects malformed secrets locally', async () => {
     vi.spyOn(console, 'log').mockImplementation(() => {});
     const seen = [];
