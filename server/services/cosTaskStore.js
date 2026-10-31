@@ -755,6 +755,10 @@ async function preparePauseRelease(taskId, updates) {
   return { agentId, metadata: { ...pointer, ...(updates.metadata || {}) } };
 }
 
+// The charged failure budget: cleared on leaving `blocked` unless a verified
+// release or a preserving recovery keeps it.
+const RETRY_BUDGET_KEYS = Object.freeze(['failureCount', 'lastErrorCategory', 'lastFailureAt']);
+
 /**
  * Metadata a status transition RETIRES, as `[transition field, keys]` rows applied
  * in order by `writeTaskUpdate`. One row per subsystem the transition releases —
@@ -784,7 +788,7 @@ const TRANSITION_METADATA_CLEARS = Object.freeze([
   // still-paused agent record then read its own pause as spent and spawned a SECOND
   // agent on a fresh task. The failure counters go too, or the revived task
   // re-blocks on the budget it blocked with.
-  ['leavesBlocked', ['blocker', 'blockedReason', 'blockedCategory', 'blockedAt', 'deliveryDecisionAgentId', 'failureCount', 'lastErrorCategory', 'lastFailureAt', ...PAUSE_METADATA_KEYS]],
+  ['leavesBlocked', ['blocker', 'blockedReason', 'blockedCategory', 'blockedAt', 'deliveryDecisionAgentId', ...RETRY_BUDGET_KEYS, ...PAUSE_METADATA_KEYS]],
   // A retry hold (#3373) only means anything while the task is `in_progress` waiting
   // on a cleanup to resolve its resume pointer. Any other status the task reaches —
   // terminal, or a requeue some other path performed — retires it, so drop the marker
@@ -832,6 +836,145 @@ async function writeTaskUpdate(taskId, updates, taskType, options) {
   return withStateLock(() => writeTaskUpdateLocked(taskId, updates, taskType, options));
 }
 
+const LIVE_OWNER_STATUSES = ['running', 'paused'];
+const DEPENDENCY_RELEASE_BINDING_KEYS = ['sourceAgentId', 'sourceStartedAt', 'ownerAgentId', 'ownerStartedAt', 'ownerTaskId', 'instanceId', 'repoPath', 'prUrl'];
+const COMMIT_SHA_PATTERN = /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/;
+
+// A live registered agent or an in-memory agent other than `exceptAgentId` holds the task.
+function hasCompetingTaskOwner({ owners, taskId, exceptAgentId = null }) {
+  return Object.values(owners.agents || {}).some(agent => agent.id !== exceptAgentId
+    && agent.taskId === taskId && LIVE_OWNER_STATUSES.includes(agent.status))
+    || [activeAgents, runnerAgents].some(entries => [...entries].some(([id, agent]) => id !== exceptAgentId
+      && (agent.taskId || agent.task?.id) === taskId));
+}
+
+const trustedAgent = (owners, agentId) => (owners.trusted ? owners.agents?.[agentId] : null);
+
+async function isStaleRecoveryOwner({ taskId, recoveryOwner }) {
+  const owners = await readAgentsStateForSafetyCheck();
+  if (!owners.trusted) return true;
+  if (recoveryOwner.requireInactive && hasCompetingTaskOwner({ owners, taskId })) return true;
+  const registered = owners.agents?.[recoveryOwner.id];
+  if (recoveryOwner.requireRegistered && (!registered || registered.taskId !== taskId || registered.status !== 'completed'
+    || registered.startedAt !== recoveryOwner.startedAt
+    || !isDeepStrictEqual(registered.metadata, recoveryOwner.expectedOwnerMetadata))) return true;
+  return hasCompetingTaskOwner({ owners, taskId, exceptAgentId: recoveryOwner.id })
+    || (!!registered && registered.startedAt !== recoveryOwner.startedAt);
+}
+
+function acceptsCompletionProof({ owners, current, taskId, taskType, priorProof, nextCount, spawnBudgetOperation }) {
+  const agent = trustedAgent(owners, spawnBudgetOperation.agentId);
+  return validSpawnBudgetEpisode(priorProof) && spawnBudgetOperation.epoch === priorProof.epoch
+    && !!agent && ['running', 'completed'].includes(agent.status) && !!agent.startedAt
+    && !hasCompetingTaskOwner({ owners, taskId, exceptAgentId: agent.id })
+    && matchesSpawnBudgetProof({ ...current, taskType }, agent)
+    && nextCount !== null && !(nextCount > spawnBudgetCount(priorProof.dispatch.totalSpawnCount));
+}
+
+function acceptsDispatchProof({ owners, agent, current, taskId, updatedMetadata, spawnBudgetOperation }) {
+  const count = spawnBudgetCount(updatedMetadata.totalSpawnCount);
+  const before = spawnBudgetCount(current.metadata?.totalSpawnCount ?? 0);
+  return !!agent && agent.id === spawnBudgetOperation.agentId && agent.taskId === taskId && agent.status === 'running'
+    && !!agent.startedAt && agent.startedAt === spawnBudgetOperation.startedAt
+    && !hasCompetingTaskOwner({ owners, taskId, exceptAgentId: agent.id })
+    && count !== null && before !== null && count === before + 1
+    && !!updatedMetadata.claimedBy && !!updatedMetadata.claimedAt && !!updatedMetadata.lastSpawnedAt;
+}
+
+// Store-owned spawn-budget provenance. Mutates `updatedMetadata`; returns a
+// refusal for the caller to return, or null to continue the write.
+async function applySpawnBudgetOperation({ current, taskId, taskType, updatedMetadata, spawnBudgetOperation }) {
+  // Provenance is owned by the store, not by callers carrying task snapshots.
+  delete updatedMetadata.spawnBudgetProof;
+  const priorProof = current.metadata?.spawnBudgetProof;
+  if (validSpawnBudgetEpisode(priorProof)) updatedMetadata.spawnBudgetProof = priorProof;
+  // A reconciliation never grants a retry. Keep the hold until an explicit
+  // reset, including when a stale completion supplies its older metadata.
+  delete updatedMetadata.spawnBudgetReconciledHold;
+  if (current.metadata?.spawnBudgetReconciledHold === 'true') updatedMetadata.spawnBudgetReconciledHold = 'true';
+  const kind = spawnBudgetOperation?.kind;
+  if (kind === 'reconcile') updatedMetadata.spawnBudgetReconciledHold = 'true';
+  const oldCount = spawnBudgetCount(current.metadata?.totalSpawnCount ?? 0);
+  const nextCount = spawnBudgetCount(updatedMetadata.totalSpawnCount ?? 0);
+  if (kind === 'completion') {
+    const owners = await readAgentsStateForSafetyCheck();
+    if (!acceptsCompletionProof({ owners, current, taskId, taskType, priorProof, nextCount, spawnBudgetOperation })) {
+      return { statusChanged: true, task: current };
+    }
+  }
+  // A generic counter edit may be an operator decision. It cannot be evidence
+  // that the current episode survived unchanged.
+  if (!spawnBudgetOperation && oldCount !== nextCount) delete updatedMetadata.spawnBudgetProof;
+  if (kind === 'reset') {
+    if (nextCount === null) delete updatedMetadata.spawnBudgetProof;
+    else updatedMetadata.spawnBudgetProof = newSpawnBudgetEpisode(nextCount);
+    delete updatedMetadata.spawnBudgetReconciledHold;
+  }
+  if (kind === 'dispatch' && validSpawnBudgetEpisode(priorProof)) {
+    const owners = await readAgentsStateForSafetyCheck();
+    const agent = trustedAgent(owners, spawnBudgetOperation.agentId);
+    if (!acceptsDispatchProof({ owners, agent, current, taskId, updatedMetadata, spawnBudgetOperation })) {
+      return { error: 'Cannot establish spawn budget dispatch proof' };
+    }
+    const history = [...(priorProof.history || []), ...(priorProof.dispatch ? [priorProof.dispatch] : [])];
+    updatedMetadata.spawnBudgetProof = { ...priorProof, history, dispatch: { agentId: spawnBudgetOperation.agentId, startedAt: agent.startedAt,
+      claimedBy: updatedMetadata.claimedBy, claimedAt: updatedMetadata.claimedAt,
+      lastSpawnedAt: updatedMetadata.lastSpawnedAt, totalSpawnCount: spawnBudgetCount(updatedMetadata.totalSpawnCount) } };
+  }
+  return null;
+}
+
+function isVerifiedDependencyRelease({ current, updates, expectedStatus, expectedTask, recoveryOwner, preserveRetryBudget }) {
+  const dependencyWait = current.metadata?.investigationDependencyWait;
+  const dependencyReady = updates.metadata?.investigationDependencyWait;
+  return !!(preserveRetryBudget && expectedStatus === 'blocked' && expectedTask && recoveryOwner
+    && current.metadata?.blockedCategory === 'internal-dependency' && updates.status === 'pending'
+    && dependencyWait?.version === 1 && dependencyWait.phase === 'waiting' && dependencyReady?.phase === 'ready'
+    && dependencyWait.sourceAgentId === recoveryOwner.id && dependencyWait.sourceStartedAt === recoveryOwner.startedAt
+    && DEPENDENCY_RELEASE_BINDING_KEYS.every(key => dependencyWait[key] === dependencyReady[key])
+    && COMMIT_SHA_PATTERN.test(dependencyReady.proof?.head || '')
+    && COMMIT_SHA_PATTERN.test(dependencyReady.proof?.mergeCommit || ''));
+}
+
+// The metadata a preserved retry budget is copied from, or null. The three
+// rules require different target statuses, so at most one applies.
+function retainedRetryBudgetSource({ current, updates, transition, expectedStatus, expectedTask, recoveryOwner, preserveRetryBudget, spawnBudgetOperation }) {
+  if (!preserveRetryBudget || expectedStatus !== 'blocked' || !expectedTask) return null;
+  if (spawnBudgetOperation?.kind === 'reset' && spawnBudgetOperation.requireInactive
+    && recoveryOwner?.requireInactive && updates.status === 'pending') return current.metadata || {};
+  // Automatic delivery recovery continues the charged attempt, unlike an
+  // explicit human revive. Persist its budget in the same write as its hold.
+  if (transition.leavesBlocked && updates.status === 'in_progress'
+    && typeof updates.metadata?.retryPendingCleanup === 'string') return updates.metadata;
+  // Receipt-only completion is not a human revive. Keep the charged failure
+  // history when the original cleanup owner settles an exhausted dispatch.
+  if (recoveryOwner && updates.status === 'completed' && current.metadata?.blockedCategory === 'task-recovery-exhausted'
+    && current.metadata.deliveryRecovery === 'cleanup' && current.metadata.deliveryRecoveryAgentId === recoveryOwner.id) return current.metadata;
+  return null;
+}
+
+function deepAuditRequeueError({ current, updates, expectedStatus, expectedMetadata }) {
+  if (updates.status !== 'pending') return null;
+  if (isLegacyDeepAudit(current.metadata)) return 'Historical Deep certification tasks are read-only; start a new Deep audit';
+  if (current.metadata?.auditDepth !== 'deep' || !isRetryHeld(current.metadata)) return null;
+  // Extended audits retry normally after cleanup. Only the guarded release of
+  // this exact persisted hold may make one spawnable; a bare Resume/Run must
+  // still wait, and legacy certification records remain read-only above.
+  const releasesCurrentHold = expectedStatus === 'in_progress'
+    && expectedMetadata?.[RETRY_HOLD_KEY] === current.metadata[RETRY_HOLD_KEY]
+    && Object.hasOwn(updates.metadata || {}, RETRY_HOLD_KEY)
+    && updates.metadata[RETRY_HOLD_KEY] === undefined;
+  return releasesCurrentHold ? null : 'Deep checkpoint cleanup is still pending; resume after cleanup finishes';
+}
+
+const isRuntimeVerificationHeld = (task) => task.status === 'blocked' && task.metadata?.blockedCategory === 'runtime-verification';
+
+function isRuntimeVerificationRelease({ current, updates, expectedStatus, expectedMetadata }) {
+  return isRuntimeVerificationHeld(current) && updates.status === 'pending'
+    && expectedStatus === 'blocked' && expectedMetadata?.runtimeVerificationId === current.metadata.runtimeVerificationId
+    && updates.metadata?.runtimeVerification?.status === 'resumed';
+}
+
 // Caller holds withStateLock, including its status and ownership decision.
 async function writeTaskUpdateLocked(taskId, updates, taskType, { now, suppressDequeue = false, suppressCompletionWake = false, expectedStatus = null, expectedMetadata = null, expectedTask = null, recoveryOwner = null, preserveRetryBudget = false, spawnBudgetOperation = null }) {
   const tasks = await readTaskFile(taskType);
@@ -873,104 +1016,22 @@ async function writeTaskUpdateLocked(taskId, updates, taskType, { now, suppressD
   if (expectedTask && Object.entries(expectedTask).some(([key, value]) => !isDeepStrictEqual(current[key], value))) {
     return { statusChanged: true, task: current };
   }
-  if (recoveryOwner) {
-    const owners = await readAgentsStateForSafetyCheck();
-    if (!owners.trusted) return { statusChanged: true, task: current };
-    if (recoveryOwner.requireInactive) {
-      if (Object.values(owners.agents || {}).some(agent => agent.taskId === taskId
-        && ['running', 'paused'].includes(agent.status))
-        || [activeAgents, runnerAgents].some(entries => [...entries.values()].some(agent => (agent.taskId || agent.task?.id) === taskId))) {
-        return { statusChanged: true, task: current };
-      }
-    }
-    const registered = owners.agents?.[recoveryOwner.id];
-    if (recoveryOwner.requireRegistered && (!registered || registered.taskId !== taskId || registered.status !== 'completed'
-      || registered.startedAt !== recoveryOwner.startedAt
-      || !isDeepStrictEqual(registered.metadata, recoveryOwner.expectedOwnerMetadata))) return { statusChanged: true, task: current };
-    const competing = Object.values(owners.agents || {}).some(agent => agent.id !== recoveryOwner.id
-      && agent.taskId === taskId && ['running', 'paused'].includes(agent.status))
-      || [activeAgents, runnerAgents].some(entries => [...entries].some(([id, agent]) => id !== recoveryOwner.id
-        && (agent.taskId || agent.task?.id) === taskId));
-    if (competing || (registered && registered.startedAt !== recoveryOwner.startedAt)) return { statusChanged: true, task: current };
-  }
+  if (recoveryOwner && await isStaleRecoveryOwner({ taskId, recoveryOwner })) return { statusChanged: true, task: current };
   if (expectedMetadata && Object.entries(expectedMetadata).some(([key, value]) => current.metadata?.[key] !== value)) {
     return { statusChanged: true, task: current };
   }
 
-  if (updates.status === 'pending' && isLegacyDeepAudit(current.metadata)) return { error: 'Historical Deep certification tasks are read-only; start a new Deep audit' };
-  if (updates.status === 'pending' && current.metadata?.auditDepth === 'deep' && isRetryHeld(current.metadata)) {
-    // Extended audits retry normally after cleanup. Only the guarded release of
-    // this exact persisted hold may make one spawnable; a bare Resume/Run must
-    // still wait, and legacy certification records remain read-only above.
-    const releasesCurrentHold = expectedStatus === 'in_progress'
-      && expectedMetadata?.[RETRY_HOLD_KEY] === current.metadata[RETRY_HOLD_KEY]
-      && Object.hasOwn(updates.metadata || {}, RETRY_HOLD_KEY)
-      && updates.metadata[RETRY_HOLD_KEY] === undefined;
-    if (!releasesCurrentHold) return { error: 'Deep checkpoint cleanup is still pending; resume after cleanup finishes' };
-  }
+  const deepAuditError = deepAuditRequeueError({ current, updates, expectedStatus, expectedMetadata });
+  if (deepAuditError) return { error: deepAuditError };
 
-  const runtimeHeld = current.status === 'blocked' && current.metadata?.blockedCategory === 'runtime-verification';
-  const runtimeRelease = runtimeHeld && updates.status === 'pending'
-    && expectedStatus === 'blocked' && expectedMetadata?.runtimeVerificationId === current.metadata.runtimeVerificationId
-    && updates.metadata?.runtimeVerification?.status === 'resumed';
-  if (runtimeHeld && updates.status && updates.status !== 'blocked' && !runtimeRelease) {
+  const runtimeRelease = isRuntimeVerificationRelease({ current, updates, expectedStatus, expectedMetadata });
+  if (isRuntimeVerificationHeld(current) && updates.status && updates.status !== 'blocked' && !runtimeRelease) {
     return { error: 'Runtime verification prerequisite must be released by its server coordinator' };
   }
   const updatedMetadata = mergeUpdateMetadata(tasks[taskIndex].metadata, updates);
 
-  // Provenance is owned by the store, not by callers carrying task snapshots.
-  delete updatedMetadata.spawnBudgetProof;
-  const priorProof = current.metadata?.spawnBudgetProof;
-  if (validSpawnBudgetEpisode(priorProof)) updatedMetadata.spawnBudgetProof = priorProof;
-  // A reconciliation never grants a retry. Keep the hold until an explicit
-  // reset, including when a stale completion supplies its older metadata.
-  delete updatedMetadata.spawnBudgetReconciledHold;
-  if (current.metadata?.spawnBudgetReconciledHold === 'true') updatedMetadata.spawnBudgetReconciledHold = 'true';
-  if (spawnBudgetOperation?.kind === 'reconcile') updatedMetadata.spawnBudgetReconciledHold = 'true';
-  const oldCount = spawnBudgetCount(current.metadata?.totalSpawnCount ?? 0);
-  const nextCount = spawnBudgetCount(updatedMetadata.totalSpawnCount ?? 0);
-  if (spawnBudgetOperation?.kind === 'completion') {
-    const owners = await readAgentsStateForSafetyCheck();
-    const agent = owners.trusted ? owners.agents?.[spawnBudgetOperation.agentId] : null;
-    if (!validSpawnBudgetEpisode(priorProof) || spawnBudgetOperation.epoch !== priorProof.epoch
-      || !agent || !['running', 'completed'].includes(agent.status) || !agent.startedAt
-      || Object.values(owners.agents || {}).some(other => other.id !== agent.id && other.taskId === taskId
-        && ['running', 'paused'].includes(other.status))
-      || [activeAgents, runnerAgents].some(entries => [...entries].some(([id, other]) => id !== agent.id
-        && (other.taskId || other.task?.id) === taskId))
-      || !matchesSpawnBudgetProof({ ...current, taskType }, agent)
-      || nextCount === null || nextCount > spawnBudgetCount(priorProof.dispatch.totalSpawnCount)) {
-      return { statusChanged: true, task: current };
-    }
-  }
-  // A generic counter edit may be an operator decision. It cannot be evidence
-  // that the current episode survived unchanged.
-  if (!spawnBudgetOperation && oldCount !== nextCount) delete updatedMetadata.spawnBudgetProof;
-  if (spawnBudgetOperation?.kind === 'reset') {
-    if (nextCount === null) delete updatedMetadata.spawnBudgetProof;
-    else updatedMetadata.spawnBudgetProof = newSpawnBudgetEpisode(nextCount);
-    delete updatedMetadata.spawnBudgetReconciledHold;
-  }
-  if (spawnBudgetOperation?.kind === 'dispatch' && validSpawnBudgetEpisode(priorProof)) {
-    const count = spawnBudgetCount(updatedMetadata.totalSpawnCount);
-    const before = spawnBudgetCount(current.metadata?.totalSpawnCount ?? 0);
-    const owners = await readAgentsStateForSafetyCheck();
-    const agent = owners.trusted ? owners.agents?.[spawnBudgetOperation.agentId] : null;
-    if (!agent || agent.id !== spawnBudgetOperation.agentId || agent.taskId !== taskId || agent.status !== 'running'
-      || !agent.startedAt || agent.startedAt !== spawnBudgetOperation.startedAt
-      || Object.values(owners.agents || {}).some(other => other.id !== agent.id && other.taskId === taskId
-        && ['running', 'paused'].includes(other.status))
-      || [activeAgents, runnerAgents].some(entries => [...entries].some(([id, other]) => id !== agent.id
-        && (other.taskId || other.task?.id) === taskId))
-      || count === null || before === null || count !== before + 1
-      || !updatedMetadata.claimedBy || !updatedMetadata.claimedAt || !updatedMetadata.lastSpawnedAt) {
-      return { error: 'Cannot establish spawn budget dispatch proof' };
-    }
-    const history = [...(priorProof.history || []), ...(priorProof.dispatch ? [priorProof.dispatch] : [])];
-    updatedMetadata.spawnBudgetProof = { ...priorProof, history, dispatch: { agentId: spawnBudgetOperation.agentId, startedAt: agent.startedAt,
-      claimedBy: updatedMetadata.claimedBy, claimedAt: updatedMetadata.claimedAt,
-      lastSpawnedAt: updatedMetadata.lastSpawnedAt, totalSpawnCount: count } };
-  }
+  const spawnBudgetRefusal = await applySpawnBudgetOperation({ current, taskId, taskType, updatedMetadata, spawnBudgetOperation });
+  if (spawnBudgetRefusal) return spawnBudgetRefusal;
 
   // Ask "what status transition is this?" ONCE. Every lifecycle rule below reads a
   // field off this descriptor instead of re-deriving an answer from
@@ -981,48 +1042,20 @@ async function writeTaskUpdateLocked(taskId, updates, taskType, { now, suppressD
   const previousStatus = tasks[taskIndex].status;
   const transition = resolveTaskStatusTransition(previousStatus, updates.status);
 
-  const dependencyWait = current.metadata?.investigationDependencyWait;
-  const dependencyReady = updates.metadata?.investigationDependencyWait;
-  const dependencyRelease = preserveRetryBudget && expectedStatus === 'blocked' && expectedTask && recoveryOwner
-    && current.metadata?.blockedCategory === 'internal-dependency' && updates.status === 'pending'
-    && dependencyWait?.version === 1 && dependencyWait.phase === 'waiting' && dependencyReady?.phase === 'ready'
-    && dependencyWait.sourceAgentId === recoveryOwner.id && dependencyWait.sourceStartedAt === recoveryOwner.startedAt
-    && ['sourceAgentId', 'sourceStartedAt', 'ownerAgentId', 'ownerStartedAt', 'ownerTaskId', 'instanceId', 'repoPath', 'prUrl']
-      .every(key => dependencyWait[key] === dependencyReady[key])
-    && /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(dependencyReady.proof?.head || '')
-    && /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(dependencyReady.proof?.mergeCommit || '');
+  const dependencyRelease = isVerifiedDependencyRelease({ current, updates, expectedStatus, expectedTask, recoveryOwner, preserveRetryBudget });
 
   // Retire the metadata this transition releases. Ordered — see the table's note on
   // the `blockedCategory` clear feeding the resume-pointer check below.
   for (const [field, keys] of TRANSITION_METADATA_CLEARS) {
     if (!transition[field]) continue;
     for (const key of keys) {
-      if ((runtimeRelease || dependencyRelease) && ['failureCount', 'lastErrorCategory', 'lastFailureAt'].includes(key)) continue;
+      if ((runtimeRelease || dependencyRelease) && RETRY_BUDGET_KEYS.includes(key)) continue;
       delete updatedMetadata[key];
     }
   }
-  if (preserveRetryBudget && spawnBudgetOperation?.kind === 'reset' && spawnBudgetOperation.requireInactive
-    && expectedStatus === 'blocked' && expectedTask && recoveryOwner?.requireInactive && updates.status === 'pending') {
-    for (const key of ['failureCount', 'lastErrorCategory', 'lastFailureAt']) {
-      if (Object.hasOwn(current.metadata || {}, key)) updatedMetadata[key] = current.metadata[key];
-    }
-  }
-  // Automatic delivery recovery continues the charged attempt, unlike an
-  // explicit human revive. Persist its budget in the same write as its hold.
-  if (preserveRetryBudget && expectedStatus === 'blocked' && expectedTask && transition.leavesBlocked
-    && updates.status === 'in_progress' && typeof updates.metadata?.retryPendingCleanup === 'string') {
-    for (const key of ['failureCount', 'lastErrorCategory', 'lastFailureAt']) {
-      if (Object.hasOwn(updates.metadata, key)) updatedMetadata[key] = updates.metadata[key];
-    }
-  }
-  // Receipt-only completion is not a human revive. Keep the charged failure
-  // history when the original cleanup owner settles an exhausted dispatch.
-  if (preserveRetryBudget && expectedStatus === 'blocked' && expectedTask && recoveryOwner
-    && updates.status === 'completed' && current.metadata?.blockedCategory === 'task-recovery-exhausted'
-    && current.metadata.deliveryRecovery === 'cleanup' && current.metadata.deliveryRecoveryAgentId === recoveryOwner.id) {
-    for (const key of ['failureCount', 'lastErrorCategory', 'lastFailureAt']) {
-      if (Object.hasOwn(current.metadata, key)) updatedMetadata[key] = current.metadata[key];
-    }
+  const retainedBudget = retainedRetryBudgetSource({ current, updates, transition, expectedStatus, expectedTask, recoveryOwner, preserveRetryBudget, spawnBudgetOperation });
+  for (const key of retainedBudget ? RETRY_BUDGET_KEYS : []) {
+    if (Object.hasOwn(retainedBudget, key)) updatedMetadata[key] = retainedBudget[key];
   }
 
   // Drop the resume pointer once the task reaches a terminal state. `existingBranch`
