@@ -12,31 +12,30 @@ const exists = path => lstat(path).then(() => true, error => {
 });
 
 beforeEach(async () => {
-  rootDir = await mkdtemp(join(tmpdir(), 'portos-remove-cos-archives-'));
+  rootDir = await mkdtemp(join(tmpdir(), 'portos-remove-cos-archives-442-'));
 });
 afterEach(async () => { await rm(rootDir, { recursive: true, force: true }); });
 
-describe('historical checkout recovery preservation', () => {
-  it('keeps sole unpublished bytes and unfinished quarantine journals, including sibling checkouts', async () => {
-    const sentinels = [];
-    for (const name of ['held-checkout-archives', 'branch-retirement-archives', 'initialized-checkout-retirements']) {
-      const directory = data('cos', name, 'interrupted', 'quarantine');
+describe('442-remove-cos-checkout-archives', () => {
+  it('deletes legacy checkout archive directories while leaving sibling worktrees intact', async () => {
+    const names = ['held-checkout-archives', 'branch-retirement-archives', 'initialized-checkout-retirements'];
+    for (const name of names) {
+      const directory = data('cos', name, 'nested');
       await mkdir(directory, { recursive: true });
-      const path = join(directory, 'unpublished.bin');
-      const bytes = Buffer.from([0, 255, 128, 42]);
-      await writeFile(path, bytes);
-      const journal = data('cos', name, 'interrupted', 'journal.json');
-      const state = JSON.stringify({ phase: 'quarantined', recoveryComplete: false });
-      await writeFile(journal, state);
-      sentinels.push([path, bytes], [journal, Buffer.from(state)]);
+      await writeFile(join(directory, 'artifact.json'), JSON.stringify({ legacy: true }));
     }
     await mkdir(data('cos', 'worktrees'), { recursive: true });
     await writeFile(data('cos', 'worktrees', 'keep.txt'), 'live checkout');
-    for (let attempt = 0; attempt < 2; attempt++) {
-      await migration.up({ rootDir });
-      for (const [path, bytes] of sentinels) expect(await readFile(path)).toEqual(bytes);
-      expect(await readFile(data('cos', 'worktrees', 'keep.txt'), 'utf8')).toBe('live checkout');
+
+    const first = await migration.up({ rootDir });
+    expect(first).toEqual({ removed: names });
+    for (const name of names) {
+      expect(await exists(data('cos', name))).toBe(false);
     }
+    expect(await readFile(data('cos', 'worktrees', 'keep.txt'), 'utf8')).toBe('live checkout');
+
+    const second = await migration.up({ rootDir });
+    expect(second).toEqual({ removed: [] });
   });
 
   it('does not create archive roots on a fresh install', async () => {
@@ -44,12 +43,13 @@ describe('historical checkout recovery preservation', () => {
     expect(await readdir(rootDir)).toEqual([]);
   });
 
-  it('ignores a missing directory and does not follow a symlink at an archive path', async () => {
+  it('ignores a missing directory and does not follow or remove a symlink at an archive path', async () => {
     const target = data('cos', 'worktrees');
     await mkdir(target, { recursive: true });
     await writeFile(join(target, 'keep.txt'), 'live checkout');
     await symlink(target, data('cos', 'held-checkout-archives'), 'dir');
-    await migration.up({ rootDir });
+    const result = await migration.up({ rootDir });
+    expect(result).toEqual({ removed: [] });
     expect(await exists(data('cos', 'held-checkout-archives'))).toBe(true);
     expect(await exists(join(target, 'keep.txt'))).toBe(true);
   });

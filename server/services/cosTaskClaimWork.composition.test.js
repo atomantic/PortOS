@@ -59,7 +59,8 @@ describe('assembled forge claim prompts', () => {
     expect(prompt).toContain('Before assigning a contributor or decomposing an epic');
     expect(prompt.indexOf('Before assigning a contributor')).toBeLessThan(prompt.indexOf('git worktree add --no-track'));
     expect(prompt).toContain('Repeat the binding and require bound:true');
-    expect(prompt).toContain('branch-reconcile/checkouts/retire');
+    expect(prompt).toContain('PortOS cleans up the managed worktree and branch automatically after completion');
+    expect(prompt).not.toContain('branch-reconcile/checkouts/retire');
     expect(prompt).not.toContain('Run each LOCAL reviewer');
     expect(prompt).not.toContain('REVIEW_ATTEMPTED_HEAD=');
     expect(prompt).not.toContain('Required-review publication rule');
@@ -85,11 +86,13 @@ describe('assembled forge claim prompts', () => {
     expect(prompt).toContain('REVIEW_STATUS=review-blocked');
     if (policy === 'review-then-merge') {
       expect(prompt).toContain('--match-head-commit');
-      expect(prompt).toContain('branch-reconcile/checkouts/retire');
+      expect(prompt).toContain('PortOS cleans up the managed worktree and branch automatically after completion');
+      expect(prompt).not.toContain('branch-reconcile/checkouts/retire');
     } else {
       expect(prompt).toContain('leave the PR open for human handoff');
       expect(prompt).not.toContain('gh pr merge');
       expect(prompt).not.toContain('gh issue close');
+      expect(prompt).not.toContain('PortOS cleans up the managed worktree and branch automatically after completion');
       expect(prompt).not.toContain('branch-reconcile/checkouts/retire');
       if (policy === 'draft') {
         expect(prompt).toContain('gh pr create --draft');
