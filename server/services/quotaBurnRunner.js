@@ -58,7 +58,7 @@ import { applyQuotaBurnAvailability } from '../lib/quotaBurnTaskRef.js';
 import { windowLabelOf } from '../lib/quotaWindows.js';
 import { WAIT } from '../lib/staleWhileRevalidate.js';
 import { cosEvents } from './cosEvents.js';
-import { nextQuotaBurnSequenceJob, completeQuotaBurnSequenceStep } from './quotaBurnSequence.js';
+import { nextQuotaBurnSequenceJob, completeQuotaBurnSequenceStep, heldForDeepCheckpoint } from './quotaBurnSequence.js';
 import { burnPlanOwnsAgent } from '../lib/quotaBurnOrigin.js';
 import { isHostShuttingDown } from '../lib/hostShutdown.js';
 
@@ -716,9 +716,9 @@ function onBurnAgentCompleted(agent) {
   // a manual maintenance run's agent spends this family's window — so the
   // denial ledger still hears about it — but its completion advances that run,
   // never this plan.
-  const deepAudit = agent?.result?.deepAudit || agent?.metadata?.deepAudit;
-  const walkPlan = () => (agent?.metadata?.taskAuditDepth === 'deep' || deepAudit) && deepAudit?.complete !== true
-    ? Promise.resolve({ skipped: 'deep-audit-checkpoint', reason: deepAudit.reason })
+  const deepHold = heldForDeepCheckpoint(agent);
+  const walkPlan = () => deepHold
+    ? Promise.resolve({ skipped: 'deep-audit-checkpoint', reason: deepHold.reason })
     : completeQuotaBurnSequenceStep(agent)
     .then(() => runQuotaBurnCycle({ trigger: 'continuation', familyId, ignoreTaskId: agent?.result?.success ? agent?.taskId : null }));
   return recordBurnAgentCompletion(agent)

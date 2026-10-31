@@ -16,6 +16,8 @@ export function auditWorkflow(meta = {}) {
 }
 export const isLegacyDeepAudit = (meta) => auditWorkflow(meta) === 'legacy';
 export const isExtendedDeepAudit = (meta) => auditWorkflow(meta) === EXTENDED_AUDIT_WORKFLOW;
+/** A historical Deep agent's certification proof, from its result or metadata. */
+export const deepAuditProof = (agent) => agent?.result?.deepAudit || agent?.metadata?.deepAudit || null;
 
 /** Only call at creation boundaries, never when loading or resuming saved work. */
 export function newAuditMetadata(meta = {}) {

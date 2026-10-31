@@ -5,6 +5,7 @@ import { burnPlanOwnsAgent, burnPlanOwnsTask, quotaBurnProvenance } from '../lib
 import { MAINTENANCE_DRAIN_TASK } from '../lib/maintenanceSequence.js';
 import { jobIsSpent, quotaBurnJobKey } from '../lib/quotaBurnConfig.js';
 import { recordQuotaBurnJobCompletion } from './quotaBurnCompletions.js';
+import { deepAuditProof, isLegacyDeepAudit } from '../lib/auditWorkflow.js';
 
 /** A task the sequence still has to wait on. */
 export const ACTIVE_TASK_STATUSES = new Set(['pending', 'in_progress', 'blocked']);
@@ -101,10 +102,20 @@ export async function nextQuotaBurnSequenceJob(family, { completions, reservatio
   return { reason: 'maintenance sequence complete' };
 }
 
+/**
+ * Only a historical multi-pass Deep certification waits on a ledger proof. An
+ * extended Deep audit is one agent run, so its completion advances the plan
+ * like any other audit instead of being re-dispatched.
+ */
+export function heldForDeepCheckpoint(agent) {
+  const proof = deepAuditProof(agent);
+  if (!proof && !isLegacyDeepAudit({ auditDepth: agent?.metadata?.taskAuditDepth, auditWorkflow: agent?.metadata?.auditWorkflow })) return null;
+  return proof?.complete === true ? null : { reason: proof?.reason || 'Deep checkpoint missing' };
+}
+
 export async function completeQuotaBurnSequenceStep(agent) {
   if (!burnPlanOwnsAgent(agent)) return;
-  const deepAudit = agent?.result?.deepAudit || agent?.metadata?.deepAudit;
-  if ((agent?.metadata?.taskAuditDepth === 'deep' || deepAudit) && deepAudit?.complete !== true) return;
+  if (heldForDeepCheckpoint(agent)) return;
   const familyId = agent.metadata.taskQuotaBurnFamily;
   const jobId = agent.metadata.taskQuotaBurnStepId;
   if (!jobId) return;
