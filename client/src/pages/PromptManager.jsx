@@ -1467,143 +1467,142 @@ export default function PromptManager() {
         backdropClassName="bg-black/50"
         closeOnBackdrop={false}
         ariaLabelledBy="create-stage-title"
+        panelClassName="bg-port-card border border-port-border rounded-xl p-6 overflow-y-auto [--dvh-cap:90dvh]"
       >
-        <div className="bg-port-card border border-port-border rounded-xl p-6 max-h-[90vh] overflow-y-auto">
-          <div className="flex items-center justify-between mb-4">
-            <h3 id="create-stage-title" className="text-lg font-medium text-white">Create New Stage</h3>
-            <button
-              onClick={() => setCreatingStage(false)}
-              aria-label="Close"
-              className="text-gray-400 hover:text-white min-h-[44px] min-w-[44px] flex items-center justify-center"
-            >
-              ✕
-            </button>
-          </div>
+        <div className="flex items-center justify-between mb-4">
+          <h3 id="create-stage-title" className="text-lg font-medium text-white">Create New Stage</h3>
+          <button
+            onClick={() => setCreatingStage(false)}
+            aria-label="Close"
+            className="text-gray-400 hover:text-white min-h-[44px] min-w-[44px] flex items-center justify-center"
+          >
+            ✕
+          </button>
+        </div>
 
-            <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
-                <FormField label="Stage Key *">
-                  <input
-                    type="text"
-                    value={newStageForm.stageName}
-                    onChange={(e) => setNewStageForm({ ...newStageForm, stageName: e.target.value })}
-                    placeholder="my-stage"
-                    className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
-                  />
-                  <p className="text-xs text-gray-500 mt-1">Lowercase, hyphens only</p>
-                </FormField>
-                <FormField label="Display Name *">
-                  <input
-                    type="text"
-                    value={newStageForm.name}
-                    onChange={(e) => setNewStageForm({ ...newStageForm, name: e.target.value })}
-                    placeholder="Pipeline — My Stage"
-                    className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
-                  />
-                  <p className="text-xs text-gray-500 mt-1">
-                    Name it <span className="text-gray-400">Family — Specific</span> to file it under an existing group
-                  </p>
-                </FormField>
-              </div>
-
-              <FormField label="Description">
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-4">
+              <FormField label="Stage Key *">
                 <input
                   type="text"
-                  value={newStageForm.description}
-                  onChange={(e) => setNewStageForm({ ...newStageForm, description: e.target.value })}
-                  placeholder="What this stage does"
+                  value={newStageForm.stageName}
+                  onChange={(e) => setNewStageForm({ ...newStageForm, stageName: e.target.value })}
+                  placeholder="my-stage"
                   className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
                 />
+                <p className="text-xs text-gray-500 mt-1">Lowercase, hyphens only</p>
               </FormField>
-
-              <div className="space-y-4">
-                <div>
-                  <div className="flex items-center gap-2 mb-2">
-                    <span className="text-sm text-gray-400">Model</span>
-                    <div className="flex gap-1">
-                      <button
-                        type="button"
-                        onClick={() => setNewStageForm({ ...newStageForm, provider: undefined, model: 'default' })}
-                        className={`px-2 py-1 text-xs rounded transition-colors ${!newStageForm.provider ? 'bg-port-accent text-white' : 'bg-port-border text-gray-400 hover:text-white'}`}
-                      >
-                        Tier
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (newStageForm.provider) return;
-                          const first = providers[0];
-                          setNewStageForm({ ...newStageForm, provider: first?.id || '', model: first?.defaultModel || '' });
-                        }}
-                        disabled={providers.length === 0}
-                        className={`px-2 py-1 text-xs rounded transition-colors ${newStageForm.provider ? 'bg-port-accent text-white' : 'bg-port-border text-gray-400 hover:text-white'} disabled:opacity-50`}
-                      >
-                        Specific
-                      </button>
-                    </div>
-                  </div>
-                  {!newStageForm.provider ? (
-                    <select
-                      aria-label="Model tier"
-                      value={canonicalStageModelTier(newStageForm.model) || 'default'}
-                      onChange={(e) => setNewStageForm({ ...newStageForm, model: e.target.value })}
-                      className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
-                    >
-                      {STAGE_MODEL_TIER_OPTIONS.map(({ value, label }) => (
-                        <option key={value} value={value}>{label}</option>
-                      ))}
-                    </select>
-                  ) : (
-                    <ProviderModelSelector
-                      providers={providers}
-                      selectedProviderId={newStageForm.provider}
-                      selectedModel={newStageForm.model}
-                      availableModels={getModelsForProvider(newStageForm.provider)}
-                      onProviderChange={(id) => {
-                        const p = providers.find(pr => pr.id === id);
-                        setNewStageForm({ ...newStageForm, provider: id, model: p?.defaultModel || '' });
-                      }}
-                      onModelChange={(model) => setNewStageForm({ ...newStageForm, model })}
-                    />
-                  )}
-                </div>
-                <div>
-                  <label className="flex items-center gap-2 text-sm text-gray-400">
-                    <input
-                      type="checkbox"
-                      checked={newStageForm.returnsJson}
-                      onChange={(e) => setNewStageForm({ ...newStageForm, returnsJson: e.target.checked })}
-                      className="rounded"
-                    />
-                    Returns JSON
-                  </label>
-                </div>
-              </div>
-
-              <FormField label="Template">
-                <textarea
-                  value={newStageForm.template}
-                  onChange={(e) => setNewStageForm({ ...newStageForm, template: e.target.value })}
-                  className="w-full h-64 px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white font-mono text-sm focus:border-port-accent focus:outline-hidden"
-                  placeholder="Enter your prompt template here..."
+              <FormField label="Display Name *">
+                <input
+                  type="text"
+                  value={newStageForm.name}
+                  onChange={(e) => setNewStageForm({ ...newStageForm, name: e.target.value })}
+                  placeholder="Pipeline — My Stage"
+                  className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
                 />
+                <p className="text-xs text-gray-500 mt-1">
+                  Name it <span className="text-gray-400">Family — Specific</span> to file it under an existing group
+                </p>
               </FormField>
+            </div>
 
-              <div className="flex gap-2 justify-end">
-                <button
-                  onClick={() => setCreatingStage(false)}
-                  className="px-4 py-2 text-gray-400 hover:text-white"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={createStage}
-                  disabled={saving || !newStageForm.stageName || !newStageForm.name}
-                  className="flex items-center gap-1 px-4 py-2 bg-port-accent hover:bg-port-accent/80 text-white rounded disabled:opacity-50"
-                >
-                  <Save size={14} /> Create Stage
-                </button>
+            <FormField label="Description">
+              <input
+                type="text"
+                value={newStageForm.description}
+                onChange={(e) => setNewStageForm({ ...newStageForm, description: e.target.value })}
+                placeholder="What this stage does"
+                className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
+              />
+            </FormField>
+
+            <div className="space-y-4">
+              <div>
+                <div className="flex items-center gap-2 mb-2">
+                  <span className="text-sm text-gray-400">Model</span>
+                  <div className="flex gap-1">
+                    <button
+                      type="button"
+                      onClick={() => setNewStageForm({ ...newStageForm, provider: undefined, model: 'default' })}
+                      className={`px-2 py-1 text-xs rounded transition-colors ${!newStageForm.provider ? 'bg-port-accent text-white' : 'bg-port-border text-gray-400 hover:text-white'}`}
+                    >
+                      Tier
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (newStageForm.provider) return;
+                        const first = providers[0];
+                        setNewStageForm({ ...newStageForm, provider: first?.id || '', model: first?.defaultModel || '' });
+                      }}
+                      disabled={providers.length === 0}
+                      className={`px-2 py-1 text-xs rounded transition-colors ${newStageForm.provider ? 'bg-port-accent text-white' : 'bg-port-border text-gray-400 hover:text-white'} disabled:opacity-50`}
+                    >
+                      Specific
+                    </button>
+                  </div>
+                </div>
+                {!newStageForm.provider ? (
+                  <select
+                    aria-label="Model tier"
+                    value={canonicalStageModelTier(newStageForm.model) || 'default'}
+                    onChange={(e) => setNewStageForm({ ...newStageForm, model: e.target.value })}
+                    className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
+                  >
+                    {STAGE_MODEL_TIER_OPTIONS.map(({ value, label }) => (
+                      <option key={value} value={value}>{label}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <ProviderModelSelector
+                    providers={providers}
+                    selectedProviderId={newStageForm.provider}
+                    selectedModel={newStageForm.model}
+                    availableModels={getModelsForProvider(newStageForm.provider)}
+                    onProviderChange={(id) => {
+                      const p = providers.find(pr => pr.id === id);
+                      setNewStageForm({ ...newStageForm, provider: id, model: p?.defaultModel || '' });
+                    }}
+                    onModelChange={(model) => setNewStageForm({ ...newStageForm, model })}
+                  />
+                )}
               </div>
+              <div>
+                <label className="flex items-center gap-2 text-sm text-gray-400">
+                  <input
+                    type="checkbox"
+                    checked={newStageForm.returnsJson}
+                    onChange={(e) => setNewStageForm({ ...newStageForm, returnsJson: e.target.checked })}
+                    className="rounded"
+                  />
+                  Returns JSON
+                </label>
+              </div>
+            </div>
+
+            <FormField label="Template">
+              <textarea
+                value={newStageForm.template}
+                onChange={(e) => setNewStageForm({ ...newStageForm, template: e.target.value })}
+                className="w-full h-64 px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white font-mono text-sm focus:border-port-accent focus:outline-hidden"
+                placeholder="Enter your prompt template here..."
+              />
+            </FormField>
+
+            <div className="flex gap-2 justify-end">
+              <button
+                onClick={() => setCreatingStage(false)}
+                className="px-4 py-2 text-gray-400 hover:text-white"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={createStage}
+                disabled={saving || !newStageForm.stageName || !newStageForm.name}
+                className="flex items-center gap-1 px-4 py-2 bg-port-accent hover:bg-port-accent/80 text-white rounded disabled:opacity-50"
+              >
+                <Save size={14} /> Create Stage
+              </button>
             </div>
           </div>
       </Modal>

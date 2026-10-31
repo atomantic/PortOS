@@ -294,17 +294,15 @@ export function CognitiveDrillTutorialPreview({ type, drillConfig, cognitiveProg
     // themes) would otherwise become the fixed overlay's containing block.
     // Sized `md` to match the card body's own `max-w-lg`, so there is no dead
     // gutter inside the panel.
-    <Modal open onClose={onClose} size="md" usePortal ariaLabel={`How ${label} works`}>
-      <div className="bg-port-card border border-port-border rounded-xl p-5 max-h-[85vh] overflow-y-auto">
-        <CognitiveDrillTutorial
-          drill={drill}
-          tut={tut}
-          onAction={onClose}
-          actionLabel="Got it"
-          ActionIcon={Check}
-          footNote="Preview only — nothing is timed or scored here."
-        />
-      </div>
+    <Modal open onClose={onClose} size="md" usePortal ariaLabel={`How ${label} works`} panelClassName="bg-port-card border border-port-border rounded-xl p-5 overflow-y-auto [--dvh-cap:85dvh]">
+      <CognitiveDrillTutorial
+        drill={drill}
+        tut={tut}
+        onAction={onClose}
+        actionLabel="Got it"
+        ActionIcon={Check}
+        footNote="Preview only — nothing is timed or scored here."
+      />
     </Modal>
   );
 }

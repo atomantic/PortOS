@@ -17,6 +17,12 @@ import { fileURLToPath } from 'url';
  * A caller that genuinely wants a *shorter* panel sets the cap instead:
  * `panelClassName="… [--dvh-cap:60dvh]"`, which still resolves against the
  * dynamic viewport.
+ *
+ * The same clamp re-added on the card a caller wraps its content in (a
+ * `bg-port-card … max-h-[85vh]` child of `<Modal>`) is the identical defect one
+ * level down: the card overflows the clamped panel by the gap between 85vh and
+ * the visible viewport, so its pinned footer starts below the bottom edge. Put
+ * the card classes on `panelClassName` instead.
  */
 
 const SRC_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -101,6 +107,20 @@ describe('Modal panel heights', () => {
     // Reach check on the extracted values (not merely on files mentioning the
     // prop), so a parser that stopped matching fails loudly here.
     expect(scanned).toBeGreaterThan(20);
+    expect(offenders).toEqual([]);
+  });
+
+  it('has no Modal content card re-adding a raw viewport-height clamp', () => {
+    const offenders = [];
+    for (const file of collectSourceFiles(SRC_ROOT)) {
+      const source = readFileSync(file, 'utf8');
+      if (!source.includes('<Modal')) continue;
+      source.split('\n').forEach((line, i) => {
+        if (line.includes('bg-port-card') && RAW_VH_RE.test(line)) {
+          offenders.push(`${relative(SRC_ROOT, file)}:${i + 1}`);
+        }
+      });
+    }
     expect(offenders).toEqual([]);
   });
 });

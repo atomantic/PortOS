@@ -76,83 +76,81 @@ export default function ProcessLogModal({ open, onClose, processName, title = 'S
   }, [open, selected, loadLogs]);
 
   return (
-    <Modal open={open} onClose={onClose} size="3xl" align="top" ariaLabel={title}>
-      <div className="bg-port-card border border-port-border rounded-xl overflow-hidden flex flex-col max-h-[80vh]">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-4 sm:px-6 py-3 border-b border-port-border">
-          <span className="text-base sm:text-lg font-medium text-white">{title}</span>
-          <div className="flex flex-wrap items-center gap-2 sm:gap-3">
-            <div className="flex items-center gap-1.5">
-              <label htmlFor="log-process" className="text-xs text-gray-500">Process</label>
-              <select
-                id="log-process"
-                value={selected}
-                onChange={(e) => setSelected(e.target.value)}
-                className="px-2 py-1 text-xs bg-port-bg border border-port-border rounded text-white max-w-[10rem]"
-              >
-                {/* Keep the caller's hinted process selectable even if PM2 isn't
-                    reporting it (e.g. dev server not under PM2) so the fetch can
-                    still surface a helpful error. */}
-                {selected && !processes.some((p) => p.name === selected) && (
-                  <option value={selected}>{selected}</option>
-                )}
-                {processes.map((p) => (
-                  <option key={p.name} value={p.name}>{p.name}</option>
-                ))}
-              </select>
-            </div>
-            <div className="flex items-center gap-1.5">
-              <label htmlFor="log-tail" className="text-xs text-gray-500">Tail</label>
-              <select
-                id="log-tail"
-                value={tailLines}
-                onChange={(e) => setTailLines(Number(e.target.value))}
-                className="px-2 py-1 text-xs bg-port-bg border border-port-border rounded text-white"
-              >
-                {TAIL_OPTIONS.map((n) => (
-                  <option key={n} value={n}>{n}</option>
-                ))}
-              </select>
-            </div>
-            <button
-              onClick={loadLogs}
-              disabled={loading || !selected}
-              className="p-1.5 text-gray-400 hover:text-white transition-colors disabled:opacity-50 min-h-[44px] min-w-[44px] flex items-center justify-center"
-              title="Refresh logs"
-              aria-label="Refresh logs"
+    <Modal open={open} onClose={onClose} size="3xl" align="top" ariaLabel={title} panelClassName="bg-port-card border border-port-border rounded-xl overflow-hidden flex flex-col [--dvh-cap:80dvh]">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-4 sm:px-6 py-3 border-b border-port-border">
+        <span className="text-base sm:text-lg font-medium text-white">{title}</span>
+        <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+          <div className="flex items-center gap-1.5">
+            <label htmlFor="log-process" className="text-xs text-gray-500">Process</label>
+            <select
+              id="log-process"
+              value={selected}
+              onChange={(e) => setSelected(e.target.value)}
+              className="px-2 py-1 text-xs bg-port-bg border border-port-border rounded text-white max-w-[10rem]"
             >
-              <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
-            </button>
-            <button
-              onClick={() => copyToClipboard(logs, 'Logs copied')}
-              disabled={loading || !logs}
-              className="px-2 text-xs text-gray-400 hover:text-white transition-colors disabled:opacity-50 disabled:hover:text-gray-400 min-h-[44px]"
-            >
-              Copy logs
-            </button>
-            <button
-              onClick={onClose}
-              className="p-1.5 text-gray-400 hover:text-white transition-colors min-h-[44px] min-w-[44px] flex items-center justify-center"
-              title="Close"
-              aria-label="Close logs"
-            >
-              <X size={18} />
-            </button>
+              {/* Keep the caller's hinted process selectable even if PM2 isn't
+                  reporting it (e.g. dev server not under PM2) so the fetch can
+                  still surface a helpful error. */}
+              {selected && !processes.some((p) => p.name === selected) && (
+                <option value={selected}>{selected}</option>
+              )}
+              {processes.map((p) => (
+                <option key={p.name} value={p.name}>{p.name}</option>
+              ))}
+            </select>
           </div>
+          <div className="flex items-center gap-1.5">
+            <label htmlFor="log-tail" className="text-xs text-gray-500">Tail</label>
+            <select
+              id="log-tail"
+              value={tailLines}
+              onChange={(e) => setTailLines(Number(e.target.value))}
+              className="px-2 py-1 text-xs bg-port-bg border border-port-border rounded text-white"
+            >
+              {TAIL_OPTIONS.map((n) => (
+                <option key={n} value={n}>{n}</option>
+              ))}
+            </select>
+          </div>
+          <button
+            onClick={loadLogs}
+            disabled={loading || !selected}
+            className="p-1.5 text-gray-400 hover:text-white transition-colors disabled:opacity-50 min-h-[44px] min-w-[44px] flex items-center justify-center"
+            title="Refresh logs"
+            aria-label="Refresh logs"
+          >
+            <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
+          </button>
+          <button
+            onClick={() => copyToClipboard(logs, 'Logs copied')}
+            disabled={loading || !logs}
+            className="px-2 text-xs text-gray-400 hover:text-white transition-colors disabled:opacity-50 disabled:hover:text-gray-400 min-h-[44px]"
+          >
+            Copy logs
+          </button>
+          <button
+            onClick={onClose}
+            className="p-1.5 text-gray-400 hover:text-white transition-colors min-h-[44px] min-w-[44px] flex items-center justify-center"
+            title="Close"
+            aria-label="Close logs"
+          >
+            <X size={18} />
+          </button>
         </div>
-        {processesState === 'error' && (
-          <ListLoadError what="the process list" error={processesError} onRetry={retryProcesses} className="mx-4 sm:mx-6 my-2" />
+      </div>
+      {processesState === 'error' && (
+        <ListLoadError what="the process list" error={processesError} onRetry={retryProcesses} className="mx-4 sm:mx-6 my-2" />
+      )}
+      <div className="flex-1 overflow-auto bg-port-bg p-3 sm:p-4 min-h-[16rem]">
+        {loading && !logs ? (
+          <BrailleSpinner text="Loading logs" />
+        ) : error ? (
+          <div className="text-sm text-port-error font-mono">{error}</div>
+        ) : logs ? (
+          <pre className="text-xs text-gray-300 font-mono whitespace-pre-wrap break-all">{logs}</pre>
+        ) : (
+          <div className="text-sm text-gray-500">No log output.</div>
         )}
-        <div className="flex-1 overflow-auto bg-port-bg p-3 sm:p-4 min-h-[16rem]">
-          {loading && !logs ? (
-            <BrailleSpinner text="Loading logs" />
-          ) : error ? (
-            <div className="text-sm text-port-error font-mono">{error}</div>
-          ) : logs ? (
-            <pre className="text-xs text-gray-300 font-mono whitespace-pre-wrap break-all">{logs}</pre>
-          ) : (
-            <div className="text-sm text-gray-500">No log output.</div>
-          )}
-        </div>
       </div>
     </Modal>
   );
