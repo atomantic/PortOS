@@ -91,15 +91,24 @@ describe('GsdTab read failures', () => {
     await waitFor(() => expect(api.addCosTask).toHaveBeenCalled());
     expect(toast.success).not.toHaveBeenCalled();
   });
-  it('drops a loaded project when the documents read succeeds without GSD status', async () => {
+  it('reports a missing repo checkout instead of the setup guide, keeping a loaded project', async () => {
     renderTab();
     await screen.findByText('Phase cards');
+    // The documents route omits `gsd` when the app's repo path is unset or missing on disk.
     api.getAppDocuments.mockResolvedValueOnce({ documents: [], docs: [], hasPlanning: false });
 
     fireEvent.click(screen.getByRole('button', { name: 'Project header refresh' }));
 
-    expect(await screen.findByText('GSD Project Setup')).toBeInTheDocument();
-    expect(screen.queryByText('Phase cards')).not.toBeInTheDocument();
-    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(await screen.findByRole('alert')).toHaveTextContent("repository path is not set or not found");
+    expect(screen.getByText('Phase cards')).toBeInTheDocument();
+    expect(screen.queryByText('GSD Project Setup')).not.toBeInTheDocument();
+  });
+
+  it('does not offer GSD setup for an app whose repo checkout is missing', async () => {
+    api.getAppDocuments.mockResolvedValue({ documents: [], docs: [], hasPlanning: false });
+    renderTab();
+
+    expect(await screen.findByRole('alert')).toHaveTextContent("repository path is not set or not found");
+    expect(screen.queryByText('GSD Project Setup')).not.toBeInTheDocument();
   });
 });

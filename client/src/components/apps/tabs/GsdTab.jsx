@@ -270,8 +270,12 @@ export default function GsdTab({ appId, repoPath }) {
 
     // Fetch GSD status from documents endpoint (silent, no toast)
     const docsData = await api.getAppDocuments(appId, { silent: true }).catch(recordFailure);
-    // Only a rejected read is unknown; a response without `gsd` (no repo path) means no project.
-    const gsd = docsData ? (docsData.gsd || {}) : null;
+    // The server omits `gsd` when the app's repo path is unset or missing on disk.
+    // That is not an uninitialized project (Run would queue mapping agents
+    // against a missing checkout), so it is reported like a failed read.
+    const hasGsd = Boolean(docsData) && Object.hasOwn(docsData, 'gsd');
+    if (docsData && !hasGsd) recordFailure(new Error("The app's repository path is not set or not found"));
+    const gsd = hasGsd ? (docsData.gsd || {}) : null;
     if (gsd) setGsdStatus(gsd);
 
     // Only fetch project data if we have a roadmap + state (full project)

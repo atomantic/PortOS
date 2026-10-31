@@ -75,4 +75,16 @@ describe('EmbeddingsTab', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not load installed models — Ollama model list (/api/tags) returned no data');
     expect(document.querySelector('option[value="custom-embed:latest"]')).toBeTruthy();
   });
+  it('treats a stopped backend as an unlisted one, not as having no models', async () => {
+    getSettings.mockResolvedValueOnce({ embeddings: { provider: 'lmstudio', model: '' } });
+    getLocalLlmStatus.mockResolvedValueOnce({ ollama: { models: [] }, lmstudio: { available: true, models: [{ id: 'example/custom-embedding' }], modelsError: null } })
+      .mockResolvedValueOnce({ ollama: { models: [] }, lmstudio: { available: false, models: [], modelsError: null } });
+    render(<MemoryRouter><EmbeddingsTab /></MemoryRouter>);
+    await waitFor(() => expect(document.querySelector('option[value="example/custom-embedding"]')).toBeTruthy());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load installed models — LM Studio is not running');
+    expect(document.querySelector('option[value="example/custom-embedding"]')).toBeTruthy();
+  });
 });

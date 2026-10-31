@@ -53,16 +53,24 @@ export default function EmbeddingsTab() {
     });
     if (status) {
       setModelsError(null);
+      // A stopped backend (`available: false`) lists nothing without setting
+      // `modelsError`; both are "couldn't list", not "none installed".
       const listErrors = {
-        ollama: status.ollama?.modelsError || null,
-        lmstudio: status.lmstudio?.modelsError || null,
+        ollama: status.ollama?.modelsError || (status.ollama?.available === false ? 'Ollama is not running' : null),
+        lmstudio: status.lmstudio?.modelsError || (status.lmstudio?.available === false ? 'LM Studio is not running' : null),
       };
       setBackendListErrors(listErrors);
-      const listed = (backend) => (status[backend]?.models || []).map((m) => m.id || m.name);
-      setModels((prev) => ({
-        ollama: listErrors.ollama ? prev.ollama : listed('ollama'),
-        lmstudio: listErrors.lmstudio ? prev.lmstudio : listed('lmstudio'),
-      }));
+      const listed = (backend) => (status[backend]?.models || []).map((m) => m.id || m.name).filter(Boolean);
+      setModels((prev) => {
+        const next = { ...prev };
+        for (const backend of ['ollama', 'lmstudio']) {
+          const fresh = listed(backend);
+          // Keep the last list only when a failure came back empty; a partial
+          // (fallback) list is still the newest answer.
+          if (fresh.length > 0 || !listErrors[backend]) next[backend] = fresh;
+        }
+        return next;
+      });
     }
     setModelsLoading(false);
   };

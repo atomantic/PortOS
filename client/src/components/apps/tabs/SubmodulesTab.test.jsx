@@ -109,4 +109,22 @@ describe('SubmodulesTab', () => {
     expect(screen.queryByText('dep')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Update' })).not.toBeInTheDocument();
   });
+  it('ignores a slower read for the previous repo path once a newer read has answered', async () => {
+    let failOldRead;
+    const { rerender } = render(<SubmodulesTab repoPath={REPO} />);
+    await screen.findByText('dep');
+    mockGetSubmodules
+      .mockImplementationOnce(() => new Promise((_, reject) => { failOldRead = reject; }))
+      .mockResolvedValueOnce({ submodules: [{ ...BEHIND, name: 'other-dep', path: 'lib/other' }], defaultBranch: 'main' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    rerender(<SubmodulesTab repoPath="/Users/me/other" />);
+    expect(await screen.findByText('other-dep')).toBeInTheDocument();
+
+    failOldRead(new Error('stale refresh failed'));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(screen.getByText('other-dep')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
 });

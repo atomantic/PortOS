@@ -56,16 +56,21 @@ export default function SubmodulesTab({ repoPath }) {
   // The repo the listed submodules belong to: a failed read for a different repo
   // must not leave the old repo's paths behind its Update buttons.
   const listedRepoRef = useRef(null);
+  // Each read owns a generation; a refresh superseded by a newer read (or a
+  // repo path change) must not overwrite what that newer read shows.
+  const loadGenerationRef = useRef(0);
   const batchUpdating = useRef(false);
 
   const loadSubmodules = useCallback(async (showSpinner = true) => {
     if (!repoPath) return;
+    const generation = ++loadGenerationRef.current;
     if (showSpinner) setLoading(true);
     else setRefreshing(true);
     // One call carries both the list and the branch a commit would land on, so
     // the toggle names the same branch the server's commit guard checks.
     let failure = null;
     const data = await api.getSubmodules(repoPath, { silent: true }).catch((error) => { failure = error; return null; });
+    if (generation !== loadGenerationRef.current) return;
     setLoading(false);
     setRefreshing(false);
     if (!data) {
