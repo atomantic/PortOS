@@ -608,6 +608,8 @@ describe('processTaskOutput', () => {
   ])('does not review or merge when %s after the eligibility pass', async (_description, issue) => {
     installDefaultGhMock({ issueDetails: { 101: issue } });
     mergePrMock.mockResolvedValue({ success: true });
+    // An approval still queued from an earlier pass is discarded with the fresh one.
+    apps.set(APP.id, { ...APP, issueWatcherState: { approvedPullRequests: [{ number: 7, headSha: 'a'.repeat(40), ticks: 0 }] } });
     const payload = {
       issueComments: [],
       pullRequests: [{
@@ -626,6 +628,7 @@ describe('processTaskOutput', () => {
 
     expect(result).toMatchObject({ reviewed: 0, merged: 0 });
     expect(execGhMock.mock.calls.some(([args]) => args.includes('/reviews'))).toBe(false);
+    expect(apps.get(APP.id).issueWatcherState.approvedPullRequests).toEqual([]);
     expect(mergePrMock).not.toHaveBeenCalled();
   });
 
@@ -1313,6 +1316,58 @@ describe('processTaskOutput', () => {
       link: pending.commentUrl,
       metadata: { appId: APP.id, issueWatcherCommentCount: 1 },
     }));
+  });
+
+  describe('envelope coverage (#14441)', () => {
+    const forgeMustNotBeCalled = () => execGhMock.mockImplementation(async (args) => {
+      throw new Error(`forge called before coverage passed: ${args.join(' ')}`);
+    });
+    const comment = (issueNumber, commentId, action = 'none') => ({ issueNumber, commentId, action, body: '' });
+    const issueMetadata = {
+      issueWatcher: {
+        ...metadata.issueWatcher,
+        strictIssueCoverage: true,
+        pullRequests: [],
+        issueComments: [{ issueNumber: 12, commentId: 99 }, { issueNumber: 13, commentId: 0 }],
+      },
+    };
+
+    it.each([
+      ['a missing comment', [comment(12, 99)]],
+      ['a duplicated comment', [comment(12, 99), comment(12, 99)]],
+      ['a comment it was not handed', [comment(12, 99), comment(14, 1)]],
+      ['a decision outside the schema', [comment(12, 99), comment(13, 0, 'close')]],
+    ])('refuses strict issue coverage with %s before any forge call', async (_label, issueComments) => {
+      forgeMustNotBeCalled();
+      const result = await processTaskOutput({
+        appId: APP.id, success: true, payload: { issueComments, pullRequests: [] }, task: { metadata: issueMetadata },
+      });
+      expect(result).toEqual({ action: 'no-op', reason: 'incomplete-issue-response' });
+      expect(execGhMock).not.toHaveBeenCalled();
+    });
+
+    const second = { number: 8, headSha: 'c'.repeat(40), contentFingerprint: 'sha256:example' };
+    const prMetadata = (pullRequests = [metadata.issueWatcher.pullRequests[0], second]) => ({
+      issueWatcher: { ...metadata.issueWatcher, strictPullRequestCoverage: true, pullRequests },
+    });
+    const decision = (number, headSha) => ({
+      number, headSha, verdict: 'approve', summary: 'No material issues found.', findings: [], rebaseRequired: false, ciPolicy: 'required',
+    });
+    const both = [decision(7, 'a'.repeat(40)), decision(8, 'c'.repeat(40))];
+
+    it.each([
+      ['an issue comment alongside the reviews', { issueComments: [comment(12, 99)], pullRequests: both }, prMetadata()],
+      ['a missing pull request', { issueComments: [], pullRequests: [both[0]] }, prMetadata()],
+      ['a duplicated pull request', { issueComments: [], pullRequests: [both[0], both[0]] }, prMetadata()],
+      ['a review of another head commit', { issueComments: [], pullRequests: [both[0], decision(8, 'd'.repeat(40))] }, prMetadata()],
+      ['a target with no screened fingerprint', { issueComments: [], pullRequests: both },
+        prMetadata([metadata.issueWatcher.pullRequests[0], { ...second, contentFingerprint: '' }])],
+    ])('refuses strict pull request coverage with %s before any forge call', async (_label, payload, taskMetadata) => {
+      forgeMustNotBeCalled();
+      const result = await processTaskOutput({ appId: APP.id, success: true, payload, task: { metadata: taskMetadata } });
+      expect(result).toEqual({ action: 'no-op', reason: 'incomplete-pull-request-response' });
+      expect(execGhMock).not.toHaveBeenCalled();
+    });
   });
 });
 
