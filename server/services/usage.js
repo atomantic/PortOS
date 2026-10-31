@@ -307,6 +307,15 @@ const countFields = [
 
 const zeroCounts = () => Object.fromEntries(countFields.map((field) => [field, 0]));
 
+// Every counter the usage report carries per provider, model and total; the
+// single list the report builder zero-inits, accumulates and projects from.
+const USAGE_COUNTER_FIELDS = ['sessions', ...countFields];
+const emptyUsageCounters = () => Object.fromEntries(USAGE_COUNTER_FIELDS.map((field) => [field, 0]));
+const addUsageCounters = (target, source) => {
+  for (const field of USAGE_COUNTER_FIELDS) target[field] += source[field] || 0;
+};
+const pickUsageCounters = (source) => Object.fromEntries(USAGE_COUNTER_FIELDS.map((field) => [field, source[field]]));
+
 const recordTotals = (records) => (Array.isArray(records) ? records : [records]).reduce((total, record) => {
   for (const field of countFields) total[field] += Math.max(0, record?.[field] || 0);
   return total;
@@ -1031,19 +1040,7 @@ export function buildUsageReport(dailyActivity, { from = null, to = null, provid
     if (!agg.has(pid)) {
       agg.set(pid, {
         name,
-        sessions: 0,
-        messages: 0,
-        tokensIn: 0,
-        tokensOut: 0,
-        cacheReadTokens: 0,
-        cacheWriteTokens: 0,
-        longTokensIn: 0,
-        longTokensOut: 0,
-        longCacheReadTokens: 0,
-        longCacheWriteTokens: 0,
-        images: 0,
-        videoSeconds: 0,
-        inputImages: 0,
+        ...emptyUsageCounters(),
         source: null,
         byModel: new Map()
       });
@@ -1062,19 +1059,7 @@ export function buildUsageReport(dailyActivity, { from = null, to = null, provid
     for (const [pid, pDay] of Object.entries(bucket.byProvider || {})) {
       const normalized = normalizeProvider(pid, pDay.name);
       const p = ensureAggregate(normalized.id, normalized.name);
-      p.sessions += pDay.sessions || 0;
-      p.messages += pDay.messages || 0;
-      p.tokensIn += pDay.tokensIn || 0;
-      p.tokensOut += pDay.tokensOut || 0;
-      p.cacheReadTokens += pDay.cacheReadTokens || 0;
-      p.cacheWriteTokens += pDay.cacheWriteTokens || 0;
-      p.longTokensIn += pDay.longTokensIn || 0;
-      p.longTokensOut += pDay.longTokensOut || 0;
-      p.longCacheReadTokens += pDay.longCacheReadTokens || 0;
-      p.longCacheWriteTokens += pDay.longCacheWriteTokens || 0;
-      p.images += pDay.images || 0;
-      p.videoSeconds += pDay.videoSeconds || 0;
-      p.inputImages += pDay.inputImages || 0;
+      addUsageCounters(p, pDay);
       // A bucket with counts but no `source` predates the field — those counts
       // are estimates, so fold it in as such rather than leaving the row
       // unlabeled and letting the UI imply it was measured.
@@ -1089,37 +1074,10 @@ export function buildUsageReport(dailyActivity, { from = null, to = null, provid
       representedTokensOut += pDay.tokensOut || 0;
       for (const [model, mDay] of Object.entries(pDay.byModel || {})) {
         if (!p.byModel.has(model)) {
-          p.byModel.set(model, {
-            sessions: 0,
-            messages: 0,
-            tokensIn: 0,
-            tokensOut: 0,
-            cacheReadTokens: 0,
-            cacheWriteTokens: 0,
-            longTokensIn: 0,
-            longTokensOut: 0,
-            longCacheReadTokens: 0,
-            longCacheWriteTokens: 0,
-            images: 0,
-            videoSeconds: 0,
-            inputImages: 0,
-            source: null
-          });
+          p.byModel.set(model, { ...emptyUsageCounters(), source: null });
         }
         const m = p.byModel.get(model);
-        m.sessions += mDay.sessions || 0;
-        m.messages += mDay.messages || 0;
-        m.tokensIn += mDay.tokensIn || 0;
-        m.tokensOut += mDay.tokensOut || 0;
-        m.cacheReadTokens += mDay.cacheReadTokens || 0;
-        m.cacheWriteTokens += mDay.cacheWriteTokens || 0;
-        m.longTokensIn += mDay.longTokensIn || 0;
-        m.longTokensOut += mDay.longTokensOut || 0;
-        m.longCacheReadTokens += mDay.longCacheReadTokens || 0;
-        m.longCacheWriteTokens += mDay.longCacheWriteTokens || 0;
-        m.images += mDay.images || 0;
-        m.videoSeconds += mDay.videoSeconds || 0;
-        m.inputImages += mDay.inputImages || 0;
+        addUsageCounters(m, mDay);
         m.source = mergeSource(m.source, mDay.source || (hasUsageCounts(mDay) ? 'estimate' : null));
       }
     }
@@ -1183,22 +1141,7 @@ export function buildUsageReport(dailyActivity, { from = null, to = null, provid
     }
   }
 
-  const totals = {
-    sessions: 0,
-    messages: 0,
-    tokensIn: 0,
-    tokensOut: 0,
-    cacheReadTokens: 0,
-    cacheWriteTokens: 0,
-    longTokensIn: 0,
-    longTokensOut: 0,
-    longCacheReadTokens: 0,
-    longCacheWriteTokens: 0,
-    images: 0,
-    videoSeconds: 0,
-    inputImages: 0,
-    estimatedCost: 0
-  };
+  const totals = { ...emptyUsageCounters(), estimatedCost: 0 };
   const providerRows = [];
 
   for (const [pid, p] of agg.entries()) {
@@ -1224,19 +1167,7 @@ export function buildUsageReport(dailyActivity, { from = null, to = null, provid
       providerCost += cost;
       models.push({
         model,
-        sessions: m.sessions,
-        messages: m.messages,
-        tokensIn: m.tokensIn,
-        tokensOut: m.tokensOut,
-        cacheReadTokens: m.cacheReadTokens,
-        cacheWriteTokens: m.cacheWriteTokens,
-        longTokensIn: m.longTokensIn,
-        longTokensOut: m.longTokensOut,
-        longCacheReadTokens: m.longCacheReadTokens,
-        longCacheWriteTokens: m.longCacheWriteTokens,
-        images: m.images,
-        videoSeconds: m.videoSeconds,
-        inputImages: m.inputImages,
+        ...pickUsageCounters(m),
         source: m.source || 'estimate',
         estimatedCost: roundCents(cost),
         rateModel: rates?.rateModel ?? null,
@@ -1278,19 +1209,7 @@ export function buildUsageReport(dailyActivity, { from = null, to = null, provid
       }, providerRates, false);
     }
 
-    totals.sessions += p.sessions;
-    totals.messages += p.messages;
-    totals.tokensIn += p.tokensIn;
-    totals.tokensOut += p.tokensOut;
-    totals.cacheReadTokens += p.cacheReadTokens;
-    totals.cacheWriteTokens += p.cacheWriteTokens;
-    totals.longTokensIn += p.longTokensIn;
-    totals.longTokensOut += p.longTokensOut;
-    totals.longCacheReadTokens += p.longCacheReadTokens;
-    totals.longCacheWriteTokens += p.longCacheWriteTokens;
-    totals.images += p.images;
-    totals.videoSeconds += p.videoSeconds;
-    totals.inputImages += p.inputImages;
+    addUsageCounters(totals, p);
     totals.estimatedCost += providerCost;
 
     providerRows.push({
@@ -1302,19 +1221,7 @@ export function buildUsageReport(dailyActivity, { from = null, to = null, provid
       // cost (lib/subscriptionSavings.js) groups rows without rebuilding this
       // provider-id → config map. Null for a row no plan covers.
       family: familyForProvider(config),
-      sessions: p.sessions,
-      messages: p.messages,
-      tokensIn: p.tokensIn,
-      tokensOut: p.tokensOut,
-      cacheReadTokens: p.cacheReadTokens,
-      cacheWriteTokens: p.cacheWriteTokens,
-      longTokensIn: p.longTokensIn,
-      longTokensOut: p.longTokensOut,
-      longCacheReadTokens: p.longCacheReadTokens,
-      longCacheWriteTokens: p.longCacheWriteTokens,
-      images: p.images,
-      videoSeconds: p.videoSeconds,
-      inputImages: p.inputImages,
+      ...pickUsageCounters(p),
       source: p.source || 'estimate',
       estimatedCost: roundCents(providerCost),
       rateMatch: pid === LEGACY_PROVIDER_ID
