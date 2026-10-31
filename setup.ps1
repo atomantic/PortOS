@@ -20,7 +20,7 @@ if (-not $nodeCommand) {
 # Keep the pre-install check on the same owner as npm run setup/start/dev.
 # The Node script handles excluded release lines (23/25) as well as patch
 # floors, without a second semver implementation in PowerShell.
-node scripts/checkNodeVersion.js
+node scripts/checkNodeVersion.js --security
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 $nodeVersion = (node -v) -replace '^v', ''
 if (-not $nodeVersion) {

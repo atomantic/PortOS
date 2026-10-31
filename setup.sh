@@ -21,7 +21,7 @@ fi
 # Keep the pre-install check on the same owner as npm run setup/start/dev.
 # Running the Node script here handles excluded release lines (23/25) as well
 # as patch floors, without a second semver implementation in shell.
-if ! node scripts/checkNodeVersion.js; then
+if ! node scripts/checkNodeVersion.js --security; then
     exit 1
 fi
 

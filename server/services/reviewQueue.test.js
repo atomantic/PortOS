@@ -29,6 +29,7 @@ const stackerNews = { listPendingReviewActions: vi.fn() };
 const x = { listPendingReviewActions: vi.fn() };
 const githubNotifications = { listActionableNotifications: vi.fn() };
 const userTimezone = { getUserTimezone: vi.fn() };
+const runtimeUpdateReview = { getRuntimeUpdateReviewItems: vi.fn() };
 const reviewQueueTriageStore = {
   listReviewQueueTriage: vi.fn(),
   upsertReviewQueueTriage: vi.fn(),
@@ -66,6 +67,7 @@ vi.mock('./stackerNews.js', () => stackerNews);
 vi.mock('./x.js', () => x);
 vi.mock('./githubNotifications.js', () => githubNotifications);
 vi.mock('./userTimezone.js', () => userTimezone);
+vi.mock('./runtimeUpdateReview.js', () => runtimeUpdateReview);
 vi.mock('./reviewQueueTriageStore.js', () => reviewQueueTriageStore);
 
 const {
@@ -108,6 +110,7 @@ function resetEmpty() {
   x.listPendingReviewActions.mockResolvedValue([]);
   githubNotifications.listActionableNotifications.mockResolvedValue([]);
   userTimezone.getUserTimezone.mockResolvedValue('UTC');
+  runtimeUpdateReview.getRuntimeUpdateReviewItems.mockReturnValue([]);
   reviewQueueTriageStore.listReviewQueueTriage.mockResolvedValue([]);
   reviewQueueTriageStore.upsertReviewQueueTriage.mockResolvedValue(undefined);
   reviewQueueTriageStore.removeReviewQueueTriage.mockResolvedValue(undefined);
@@ -134,6 +137,23 @@ describe('reviewQueue.buildQueue', () => {
     expect(queue.items).toEqual([]);
     expect(queue.counts.total).toBe(0);
     expect(queue.sources.brain.total).toBe(0);
+  });
+
+  it('publishes required update actions and a newer security revision escapes an older snooze', async () => {
+    const alert = {
+      id: 'node', title: 'Node.js security update needed', summary: 'Running v26.0.0; target v26.12.1.',
+      revision: 'security:v26.12.1', severity: 'high', priority: 'HIGH', required: true,
+      drillTo: '/apps/portos-default/update', operations: [],
+    };
+    runtimeUpdateReview.getRuntimeUpdateReviewItems.mockReturnValue([alert]);
+    const first = (await buildQueue()).items.find((item) => item.source === 'updates');
+    expect(first).toMatchObject({ id: 'updates:node', actionKind: 'software.update', sourceRef: 'node', required: true, severity: 'high', drillTo: alert.drillTo });
+    const snooze = { ...queueActionIdentity(first), snoozedUntil: '2030-01-01T00:00:00Z' };
+    expect(applyQueueTriage([first], [snooze], new Date('2026-10-31')).length).toBe(0);
+    runtimeUpdateReview.getRuntimeUpdateReviewItems.mockReturnValue([{ ...alert, revision: 'security:v26.14.0' }]);
+    const newer = (await buildQueue()).items.find((item) => item.source === 'updates');
+    expect(applyQueueTriage([newer], [snooze], new Date('2026-10-31'))).toHaveLength(1);
+    expect(newer.triageOperations.map((operation) => operation.id)).toEqual(['snooze']);
   });
 
   it('normalizes each producer into the common row shape', async () => {

@@ -102,7 +102,7 @@ export default function NotificationDropdown({
   const partialCount = actionQueue.data?.partial || Boolean(actionQueue.error);
   const actionCountLabel = requiredCount == null
     ? (actionQueue.error ? 'actions unavailable' : 'loading actions')
-    : `${partialCount ? 'at least ' : ''}${formatCount(requiredCount)} required actions`;
+    : `${partialCount ? 'at least ' : ''}${formatCount(requiredCount)} required action${requiredCount === 1 ? '' : 's'}`;
   const [isOpen, setIsOpen] = useState(false);
   const [showAll, setShowAll] = useState(false);
   const containerRef = useRef(null);

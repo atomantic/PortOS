@@ -44,6 +44,7 @@ describe('provider runtime installer', () => {
       command: 'opencode',
       vendor: 'opencode',
       installed: true,
+      probeState: 'available',
       version: '1.18.27',
       method: 'npm',
       installable: true,
@@ -66,6 +67,13 @@ describe('provider runtime installer', () => {
     await getProviderRuntimeStatus('codex', { findCommand: async () => '/example/codex', probeCommand });
 
     expect(probeCommand).toHaveBeenCalledWith('/example/codex', ['--version'], { timeoutMs: 15_000 });
+  });
+
+  it('distinguishes an absent executable from one whose version probe failed', async () => {
+    const absent = await getProviderRuntimeStatus('codex', { fresh: true, findCommand: async () => null, probeCommand: async () => null });
+    const unavailable = await getProviderRuntimeStatus('codex', { fresh: true, findCommand: async () => '/example/codex', probeCommand: async () => null });
+    expect(absent).toMatchObject({ installed: false, probeState: 'missing' });
+    expect(unavailable).toMatchObject({ installed: false, probeState: 'unavailable' });
   });
 
   // npm installs into ITS OWN global bin directory, which is not necessarily

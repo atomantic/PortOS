@@ -32,6 +32,7 @@ const installer = vi.hoisted(() => ({
 vi.mock('./providerRuntimeInstaller.js', () => installer);
 
 import { streamHarnessAction, __resetHarnessActionGuard } from './harnessActionStream.js';
+import { runtimeUpdateEvents } from './runtimeUpdateEvents.js';
 
 const makeChild = () => {
   const child = new EventEmitter();
@@ -74,6 +75,8 @@ beforeEach(() => {
 
 describe('streamHarnessAction — update', () => {
   it('reports the version transition the update actually produced', async () => {
+    const changed = vi.fn();
+    runtimeUpdateEvents.once('changed', changed);
     installer.getProviderRuntimeStatus
       .mockResolvedValueOnce(statusOf('opencode'))
       .mockResolvedValueOnce(statusOf('opencode', { version: '1.19.0' }));
@@ -83,6 +86,7 @@ describe('streamHarnessAction — update', () => {
     expect(installer.spawnRuntimeInstaller).toHaveBeenCalledWith('opencode', { action: 'update' });
     expect(response.text).toContain('OpenCode CLI updated: 1.18.27 → 1.19.0.');
     expect(response.text).toContain('upgraded');
+    expect(changed).toHaveBeenCalledOnce();
   });
 
   // "Up to date" asserted from an exit code alone contradicts the row behind the
@@ -141,13 +145,16 @@ describe('streamHarnessAction — update', () => {
 
 describe('streamHarnessAction — uninstall', () => {
   it('confirms removal only when the binary is really gone', async () => {
+    const changed = vi.fn();
+    runtimeUpdateEvents.once('changed', changed);
     installer.getProviderRuntimeStatus
       .mockResolvedValueOnce(statusOf('opencode'))
-      .mockResolvedValueOnce(statusOf('opencode', { installed: false }));
+      .mockResolvedValueOnce(statusOf('opencode', { installed: false, probeState: 'missing' }));
 
     const response = await runAction('runtime=opencode&action=uninstall');
 
     expect(response.text).toContain('has been removed');
+    expect(changed).toHaveBeenCalledWith({ removedHarness: 'opencode' });
   });
 
   // "npm said ok" is not "PortOS can no longer run it": a Homebrew or vendor

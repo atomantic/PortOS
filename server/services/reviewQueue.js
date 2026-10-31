@@ -99,6 +99,7 @@ const ACTION_KINDS = Object.freeze({
   feedback: 'cos.feedback',
   github: 'github.notification',
   product: 'product.recommendation',
+  updates: 'software.update',
 });
 
 const OPERATION_LABELS = Object.freeze({
@@ -804,6 +805,17 @@ const PRODUCERS = [
         ...(alertType ? { meta: { alertType } } : {})
       };
     }
+  },
+  {
+    source: 'updates',
+    label: 'Software updates',
+    async gather() {
+      const { getRuntimeUpdateReviewItems } = await import('./runtimeUpdateReview.js');
+      return getRuntimeUpdateReviewItems();
+    },
+    map(entry) {
+      return { ...entry, id: `updates:${entry.id}` };
+    },
   },
   {
     source: 'backup',

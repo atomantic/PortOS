@@ -312,6 +312,9 @@ async function probeRuntimeStatus(runtime, findCommand, probeCommand, skipRealSp
     // card can find its runtime without a client-side copy of the vendor table.
     vendor: runtime.vendor,
     installed,
+    // A discovered executable that cannot answer --version is not proof that
+    // an earlier update alert has been resolved.
+    probeState: skipRealSpawn ? 'unprobed' : !resolved ? 'missing' : installed ? 'available' : 'unavailable',
     // `null` = the banner did not parse (or the probe answered a bare boolean),
     // NOT "0.0.0". Every version comparison bails on it rather than reporting a
     // perfectly current harness as out of date.

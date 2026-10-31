@@ -37,6 +37,17 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('canonical action previews', () => {
+  it('shows software updates as required actions in the hub and notification bell', async () => {
+    const update = { id: 'updates:node', source: 'updates', required: true, severity: 'high', title: 'Node.js security update needed', reason: 'Running v26.0.0; target v26.13.0.' };
+    mock.getReviewQueue.mockResolvedValue(envelope([update]));
+    show();
+    const bell = await screen.findByRole('button', { name: 'Notifications (1 required action)' });
+    expect(within(screen.getByRole('region', { name: 'Actions' })).getByText(update.title)).toBeInTheDocument();
+    fireEvent.click(bell);
+    const panel = screen.getByRole('region', { name: 'Notifications' });
+    expect(within(panel).getByRole('link', { name: /Node.js security update needed/ })).toHaveAttribute('href', '/review/updates%3Anode?view=today');
+  });
+
   it('shares IDs and required counts across the bell and saved widgets; history controls cannot complete actions', async () => {
     show();
     const bell = await screen.findByRole('button', { name: 'Notifications (2 required actions)' });
@@ -77,7 +88,7 @@ describe('canonical action previews', () => {
     show();
     expect(screen.queryByText('All caught up!')).not.toBeInTheDocument();
     await act(async () => finish(envelope([required], true)));
-    expect(screen.getByRole('button', { name: /at least 1 required actions/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /at least 1 required action\)/ })).toBeInTheDocument();
     expect(screen.getAllByText(/Action counts are incomplete/)).toHaveLength(3);
     mock.getReviewQueue.mockRejectedValue(new Error('offline'));
     act(() => window.dispatchEvent(new Event(ACTION_QUEUE_CHANGED)));

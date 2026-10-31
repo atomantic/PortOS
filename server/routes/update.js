@@ -5,6 +5,7 @@ import { validateRequest } from '../lib/validation.js';
 import { UPSTREAM_FULL_NAME } from '../lib/gitRemote.js';
 import * as updateChecker from '../services/updateChecker.js';
 import { getNodeRuntimeStatus, repairStartup, startNodeUpdate, startPm2Update } from '../services/nodeRuntime.js';
+import { runtimeUpdateEvents } from '../services/runtimeUpdateEvents.js';
 import { startPortosSelfUpdate } from '../services/portosSelfUpdate.js';
 import {
   AUTO_UPDATE_MIN_INTERVAL_HOURS_MAX,
@@ -219,6 +220,7 @@ router.post('/node-runtime/startup', asyncHandler(async (req, res) => {
     throw new ServerError('Start-on-boot can\'t be updated from PortOS here. Run the command shown instead.', { status: 409, code: 'STARTUP_NOT_FIXABLE' });
   }
   req.app.get('io')?.emit('portos:node-runtime:changed', { reason: 'startup' });
+  runtimeUpdateEvents.emit('changed');
   res.json({ fixed });
 }));
 
