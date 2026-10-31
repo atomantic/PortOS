@@ -1,7 +1,7 @@
 /**
  * The machine-readable receipt `npm run pregate` leaves behind.
  *
- * A later step (an attestation posted to the pull request, a merge gate) needs
+ * A later step (a merge gate) needs
  * to know three things a terminal transcript cannot prove: which stages ran
  * and passed, which suites were NOT run and why, and the exact working tree
  * that was validated. The tree hash is the seam: it covers untracked and
@@ -23,8 +23,8 @@ export const PREGATE_REPORT_PATH = '.cache/pregate/report.json';
 /**
  * Version 3 adds validationMode: focused receipts never attest CI suites.
  * Version 2 added `plan.downgraded`: whether a full plan was replaced by the
- * always-run guards. `scripts/pregate-attest.js` refuses a receipt without it,
- * because a downgraded server stage passing is not CI's server selection passing.
+ * always-run guards, because a downgraded server stage passing is not CI's
+ * server selection passing.
  */
 export const PREGATE_REPORT_VERSION = 3;
 

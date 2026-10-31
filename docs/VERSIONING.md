@@ -65,7 +65,7 @@ git push
 
 The default pregate is lint/formatting, structural guards and focused tests.
 Hosted CI owns broad validation; use `npm run pregate -- --full` only when
-explicitly needed locally. Focused receipts never attest unrun CI suites.
+explicitly needed locally. Focused receipts are local evidence only.
 
 A conflict-free feature branch may merge behind `main` once its current-head
 required checks and configured reviews pass. Do not restart validation solely
@@ -247,8 +247,7 @@ candidate validation. Record candidate-only fixes for forward-porting to `main`.
 
 #### 4. Promote the exact validated candidate
 
-Push the candidate after pregate and run `node scripts/pregate-attest.js`; an
-attestation refusal leaves full CI in charge. Create the PR with
+Push the candidate after pregate. Create the PR with
 `--head "$CANDIDATE_BRANCH" --base release`, including the cutoff identities,
 previous-tag comparison, chosen version/name and amendment ledger. A PR targeting
 `release` forces full CI regardless of its head branch; require both `CI Gate`

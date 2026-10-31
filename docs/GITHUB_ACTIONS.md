@@ -213,113 +213,6 @@ checkouts a guarded merge retained before this change are retired once their PR
 is merged or closed.
 
 
-### Pregate attestation
-
-Default local pregate is focused validation, not a local CI run. Version 3 focused receipts cannot produce CI-skipping attestations. The following mechanism applies only to explicit `npm run pregate -- --full` validation and compatible legacy receipts. Hosted CI remains authoritative for broad coverage on ordinary pushes; do not rerun locally merely to obtain an attestation.
-
-
-A green pregate on this machine runs the same planner, runners, environment
-and `portos_test` database the Linux jobs do, so repeating those stages in CI
-for the install's own pull requests buys queue time and nothing else (design
-record: `docs/plans/2026-10-18-ci-local-first-merge-gate.md`). After the push,
-`node scripts/pregate-attest.js` turns the receipt into a commit status on the
-pushed head, and the impact planner skips what it attests to:
-
-- **What is attested.** Only receipt stages that ran and passed: the
-  hidden-content scan, lint, server and client tests, the client build,
-  the boot smoke, the browser suites and the DB suite, and the
-  shipped prompt-history guard. A suite pregate reported as not run — skipped
-  by a `--skip-*` flag, left to CI by a downgraded full plan, or missing a
-  prerequisite — is not attested, and a downgraded full plan never attests
-  its server or client stage (it ran the always-run guards, not CI's
-  selection). A receipt planned with `--base` against anything other than the
-  default branch's merge base attests no server, client or lint stage either:
-  its diff-selected plan was narrower than CI's. The vocabulary is
-  `ATTESTABLE_STAGES` in `scripts/lib/pregateAttestation.js`.
-- **The tree binding.** The status description is
-  `tree=<40-hex> os=<platform> node=<major> stages=<list>`: the receipt's
-  `git write-tree` hash of the exact working tree pregate validated, untracked
-  and uncommitted files included, plus the platform and Node major the stages
-  ran on. `pregate-attest.js` refuses unless `<commit>^{tree}` equals the
-  receipt's tree — anything changed after pregate means a rerun — and the
-  planner compares it with the head commit's tree on the PR. A SHA is never
-  compared, for the same reason `scripts/verify-ci-status.js` compares trees:
-  the content is what was tested. The commit must already be on the upstream
-  remote (the one `branch.<name>.remote` names). Local tracking containment is
-  checked first; if stale after a URL/path push, exact advertised branch tips
-  are checked through that remote without fetching or changing the checkout.
-  Unreadable or malformed remote evidence refuses publication verification.
-  GitHub only accepts a status
-  on a commit it has, which is why attesting is a step after `git push`, not a
-  pregate flag.
-- **The merge ref is not the head tree.** The receipt vouches for the head
-  commit's tree; CI tests the merge ref, that tree plus whatever `main`
-  gained since the branch forked. The planner reads that base-side diff
-  (`git diff --name-only HEAD^2 HEAD`) and refuses the attestation **per
-  stage** when it contains a test file the plan selected for that runner, a
-  non-test source under the runner's roots (`server/`, `scripts/`, `lib/`,
-  `autofixer/` for the server stages; `client/src/` for the client ones), or a
-  runner config, setup, workflow or dependency-manifest file (which refuses
-  every stage). Docs-only movement, or movement in the other runner, keeps
-  the attestation. Each refusal names the path in `suite_reasons` and in the
-  `attestation` output's `driftRefused`. In practice the local workflow
-  re-syncs the branch onto `main` before pregate, so the drift is usually
-  empty.
-- **Who can post one.** A commit status on this repository can only be created
-  by an actor with write access, and the planner honors only the newest
-  `pregate` status — of any state — when it is a success whose
-  `creator.login` is the repository owner. The `GITHUB_TOKEN` of a
-  `pull_request` run from a fork is read-only and cannot create one; a
-  Dependabot pull request is refused by author; a status by anyone else is
-  ignored, and a newer one by anyone else blocks the owner's older success.
-  The impact job holds `statuses: read` and nothing more (`release.yml`
-  grants the same scope to the called workflow). CI is still the authority
-  for every outsider.
-- **Revocation.** `node scripts/pregate-attest.js --revoke "<reason>"` posts a
-  `failure` status on the commit; because the newest status decides, every
-  earlier attestation on that commit is withdrawn and the next run plans as
-  if none existed. Use it when a local result turns out to be wrong (a flaky
-  pass, a suite that was not really run).
-- **Platform.** A macOS pregate may attest the Linux jobs: per the project's
-  policy, other platforms are checked only when a change could plausibly
-  break them, and the Windows job is the one platform-specific proof CI keeps.
-  The one Linux-only failure a case-insensitive filesystem cannot see — a
-  relative import whose case differs from the tracked path — is closed by
-  `scripts/check-import-case.js`, which the impact job runs on every pull
-  request before any stage can be skipped (it resolves every relative
-  `import`, `import()` literal and `new URL(…, import.meta.url)` in the
-  changed modules against `git ls-files` with exact spelling). The platform
-  and Node major of the attesting run are in the status and in the plan
-  summary's `Pregate attestation` line.
-- **When it applies.** Only a same-repository pull request into a non-`release`
-  base that was not forced full. The planner verifies the merge-ref checkout's
-  second parent is the event's head (so the attested tree is compared with
-  the right commit) and reads `repos/{repo}/commits/{head}/statuses`.
-  Statuses are read once: a missing or late attestation immediately leaves
-  broad hosted coverage enabled. Focused pushes intentionally post no
-  attestation, so the planner never waits for one.
-  When you open the pull request yourself, the order is push, attest, then
-  `gh pr create`, so the status precedes the `pull_request` event. Any
-  failure — API error, unreadable description, tree mismatch, wrong creator,
-  a non-success newest status — leaves the plan exactly as computed and
-  records the reason.
-- **What CI still runs.** The impact job — its hidden-content scan, the
-  import-case check, `npm ci --prefix autofixer` and the `node --check` of
-  the server entry point (both moved here from the server job so an attested
-  run cannot skip them) — the Windows job, the Linux worker-containment job,
-  the Node-minimum check and the `CI Gate` itself always run as planned. The
-  server job stays when its boot smoke is selected but not attested, because
-  the smoke runs on that job. An attested run reports `full: false`, so
-  `Full CI Gate` is never published on the strength of a receipt.
-- **How to inspect it.** The impact job's summary prints a `Pregate
-  attestation` line (`attested`, the head and tree, the platform and Node,
-  the stages, `driftRefused`, or the reason none applied) and `suite_reasons`
-  names each skipped suite as attested and each refused one with its path.
-  On the commit: `gh api repos/<owner>/<repo>/commits/<sha>/statuses` lists
-  every `pregate` status with its creator, state, description and timestamp;
-  `node scripts/pregate-attest.js --dry-run` shows what would be posted for
-  the current receipt and HEAD without posting it.
-
 ### Browser workload partition
 
 The browser job uses two runners. Each receives the complete planner selection
@@ -632,7 +525,7 @@ The selected work is split across parallel jobs:
   `npm run smoke` behaves the same on a clean checkout and on a live install. The install
   and the native-addon rebuild are skipped when a `server/node_modules` cache is
   restored and its trusted-rebuild mark checks out. The impact job (which
-  always runs, even when a pregate attestation skips this one) runs
+  always runs, even when the planner skips the server job) runs
   `npm ci --prefix autofixer` — uncached and never skipped, because resolving
   that workspace's tracked lockfile *is* the check — and `node --check
   server/index.js`. It is the only CI step that installs `autofixer/`, which
@@ -732,14 +625,12 @@ The selected work is split across parallel jobs:
   them: `scripts/ci-gate-report.js` says *cancelled, not failed* and names the
   cancelled jobs when nothing actually failed — as far as the gate job itself
   runs, which a run-wide cancel prevents. See "External cancellation and one
-  automatic retry" below. A job the planner skipped on a pregate attestation
-  counts as passing here like any other skipped job; the impact summary and
-  `suite_reasons` say which ones, and why (see "Pregate attestation").
+  automatic retry" below. A job the planner skipped
+  counts as passing here; the impact summary and `suite_reasons` say which
+  ones, and why.
 - **Full CI Gate** — published only when the plan chose the complete suite and
   the supported native Windows contracts, with the full browser profile executed in hosted CI.
-  Ordinary PR smoke runs cannot publish it, and neither can a run that skipped
-  any stage on a pregate attestation — the planner reports `full: false` for
-  those. It mirrors `CI Gate`'s result. This is the check the release workflow
+  Ordinary PR smoke runs cannot publish it, and neither can any run whose plan is not full. It mirrors `CI Gate`'s result. This is the check the release workflow
   looks for; see "Reusing the release PR's CI run" below.
 
 ### Browser fidelity cases
@@ -1486,7 +1377,7 @@ running work can finish during cancellation; its later output is **unverified**,
 not additional independent regressions. Failed assertions are candidates for
 investigation, not proof that failures are independent or predate an amendment.
 Capped, interrupted, unsafe or missing-evidence runs remain red and cannot write
-green memo entries or support CI-skipping attestation. First-cause run evidence
+green memo entries. First-cause run evidence
 and process-settlement refusals remain in each attempt's diagnostics directory.
 
 `invocation.json` binds policy, candidate head, tested checkout, actual checkout

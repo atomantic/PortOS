@@ -5,7 +5,7 @@
  * and directly owned tests. Hosted CI keeps its broad impact plan.
  * `--full` opts into that CI plan locally, including selected resource suites.
  * `--guards-only [--merged-with <ref>]` retains current-base merge safety.
- * Receipts describe the exact tree and coverage; focused results never attest
+ * Receipts describe the exact tree and coverage; focused results are local evidence only and never replace
  * CI suites. Cancellation still settles every owned stage process group.
  */
 
@@ -454,7 +454,7 @@ async function withMergedPregateTree(repoRoot, mergedWith, run) {
 export const USAGE = `Usage: node scripts/pregate.js [--base <ref>] [--full] [--skip-lint] [--plan-only]
                               [--skip-db] [--skip-browser] [--skip-build] [--skip-smoke]
 
-  --guards-only  run only always-run and diff-selected structural guards (no attestation receipt)
+  --guards-only  run only always-run and diff-selected structural guards
   --merged-with <ref>  validate HEAD merged with this fetched ref in an isolated temporary repository
   --base <ref>    compare against <ref> instead of the remote default branch
   --full          opt into CI-selected broad suites locally

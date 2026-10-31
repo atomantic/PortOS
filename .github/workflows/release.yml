@@ -55,12 +55,9 @@ jobs:
     # so this grants what ci.yml's gate jobs read (`actions: read`, to name a
     # failed step) and scopes full-ci DOWN from the workflow-level
     # `contents: write` the release job needs; ci.yml only ever checks out.
-    # `statuses: read` is what the impact job declares to read a head's
-    # pregate attestation; a called job cannot hold a scope the caller lacks.
     permissions:
       contents: read
       actions: read
-      statuses: read
     uses: ./.github/workflows/ci.yml
     with:
       full: true
