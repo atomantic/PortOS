@@ -79,6 +79,13 @@ describe('still photo sequence authoring and scrubbing', () => {
     expect(last().layouts[0]).toEqual({ ...second, opacity: 0.5 });
     fireEvent.change(screen.getByLabelText('Size'), { target: { value: '400' } });
     expect(last().layouts[0].scale).toBe(second.scale);
+    // The open editor follows its photo when a neighbour moves past it.
+    fireEvent.click(screen.getByRole('button', { name: 'Move photo 2 earlier' }));
+    expect(screen.getByText('Photo 2 layout')).toBeTruthy();
+    fireEvent.change(screen.getByLabelText('Turn'), { target: { value: '7' } });
+    expect(last().layouts[1]).toEqual({ ...second, opacity: 0.5, rotation: 7 });
+    fireEvent.click(screen.getByRole('button', { name: 'Move photo 1 later' }));
+    expect(screen.getByText('Photo 1 layout')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Full frame' }));
     expect(last().layouts[0]).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Remove photo 1' }));
@@ -105,6 +112,11 @@ describe('still photo sequence authoring and scrubbing', () => {
     expect(visible()[1].style.opacity).toBe('0.5');
     expect(visible()[1].style.transform).toBe(`rotate(${layouts[1].rotation}deg)`);
     expect(visible()[0].style.width).toBe(`${layouts[0].scale * 100}%`);
+    // A develop effect filters the composed stack (black ground included), as the renders do.
+    rerender(<ImageEffectStill src="/unused.png" sequence={sequence} effect={{ effect: 'flash-develop', developSec: 1 }} startSec={0} time={13 / 24} />);
+    expect(container.querySelector('[data-photo-stack]').style.filter).toMatch(/^contrast\(/);
+    expect(visible().every(img => !img.style.filter)).toBe(true);
+    expect(visible()[1].dataset.layout).toBe([layouts[1].x, layouts[1].y, layouts[1].scale, layouts[1].rotation, 0.5].join(','));
     // Frame 18: photo a has left; b stays beneath c.
     rerender(<ImageEffectStill src="/unused.png" sequence={sequence} effect={null} startSec={0} time={18 / 24} />);
     expect(visible().map(img => img.getAttribute('src'))).toEqual(['/data/images/b.png', '/data/images/c.png', '/data/images/d.png']);

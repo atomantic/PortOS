@@ -185,10 +185,14 @@ it('saves, validates and fingerprints overlap and per-photo layouts', async () =
 it('refuses a stacked shot with more arrivals than the render supports', async () => {
   await mkdir(PATHS.images, { recursive: true });
   await Promise.all(ids.map(id => writeFile(join(PATHS.images, id), 'synthetic')));
-  const shot = { ...scene, endSec: 11, photoSequence: { ...sequence, intervalFrames: 1, overlapFrames: 1 } };
-  const clips = await resolveSceneClips({ scenes: [shot] }, { layered: true });
-  expect(() => buildMusicVideoFfmpegArgs(clips, '/tmp/a.wav', '/tmp/out.mp4', { audioDurationSec: 11, canvas: { width: 96, height: 64, fps: 24 } }))
-    .toThrow(expect.objectContaining({ code: 'PHOTO_STACK_TOO_DEEP' }));
+  // One arrival per frame: exactly 240 frames is the limit, one more frame is refused.
+  const plan = async (frames) => {
+    const shot = { ...scene, endSec: frames / 24, photoSequence: { ...sequence, intervalFrames: 1, overlapFrames: 1 } };
+    const clips = await resolveSceneClips({ scenes: [shot] }, { layered: true });
+    return () => buildMusicVideoFfmpegArgs(clips, '/tmp/a.wav', '/tmp/out.mp4', { audioDurationSec: frames / 24, canvas: { width: 96, height: 64, fps: 24 } });
+  };
+  expect(await plan(240)).not.toThrow();
+  expect(await plan(241)).toThrow(expect.objectContaining({ code: 'PHOTO_STACK_TOO_DEEP' }));
 });
 
 // Catches a document engine that predates stacks silently showing one photo at a time.
