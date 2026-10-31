@@ -812,7 +812,7 @@ describe('AgentCard transcript truncation (#3498)', () => {
 
     await user.click(screen.getByRole('button', { name: 'Show' }));
 
-    await waitFor(() => expect(api.getCosAgent).toHaveBeenCalledWith(agent.id));
+    await waitFor(() => expect(api.getCosAgent).toHaveBeenCalledWith(agent.id, { silent: true }));
     expect(screen.queryByText(/Showing the last/)).not.toBeInTheDocument();
   });
 });
@@ -1453,6 +1453,72 @@ it('loads prior pipeline stage output through the full transcript disclosure', a
   expect(await screen.findByText('Prior planning transcript')).toBeInTheDocument();
 });
 
+
+// History rows carry no `output`, so a failed transcript read used to cache an
+// empty transcript: the card claimed "No output captured" and never re-read.
+it('shows a retryable error when the full transcript read fails', async () => {
+  const completedAgent = { ...agent, metadata: { ...agent.metadata, taskSummary: 'Done' } };
+  api.getCosAgent.mockRejectedValueOnce(new Error('Server unavailable'))
+    .mockResolvedValueOnce({ ...completedAgent, output: [{ line: 'Recovered transcript' }] });
+  render(<MemoryRouter><AgentCard agent={completedAgent} completed /></MemoryRouter>);
+  await userEvent.click(screen.getByRole('button', { name: 'Show', exact: true }));
+  await userEvent.click(screen.getByRole('button', { name: 'Show full transcript' }));
+  expect(await screen.findByText(/Could not load the transcript — Server unavailable/)).toBeInTheDocument();
+  expect(screen.queryByText('No output captured')).not.toBeInTheDocument();
+  expect(api.getCosAgent).toHaveBeenCalledTimes(1);
+  await userEvent.click(screen.getByRole('button', { name: 'Retry' }));
+  expect(await screen.findByText('Recovered transcript')).toBeInTheDocument();
+  expect(api.getCosAgent).toHaveBeenCalledTimes(2);
+});
+
+it('shows a retryable error when a prior pipeline stage read fails', async () => {
+  const record = { ...agent, metadata: { ...agent.metadata, taskSummary: 'Pipeline complete', pipeline: {
+    stages: [{ name: 'Plan' }, { name: 'Implement' }], currentStage: 1,
+    stageResults: [{ stage: 0, agentId: 'prior-stage', success: true }],
+  } }, output: [{ line: 'Implementation transcript' }] };
+  let stageReads = 0;
+  api.getCosAgent.mockImplementation(async id => {
+    if (id !== 'prior-stage') return record;
+    stageReads += 1;
+    if (stageReads === 1) throw new Error('Stage read failed');
+    return { output: [{ line: 'Prior planning transcript' }] };
+  });
+  render(<MemoryRouter><AgentCard agent={record} completed /></MemoryRouter>);
+  await userEvent.click(screen.getByRole('button', { name: 'Show', exact: true }));
+  await userEvent.click(screen.getByRole('button', { name: 'Show full transcript' }));
+  await userEvent.click(await screen.findByRole('button', { name: /Plan/ }));
+  expect(await screen.findByText(/Could not load this stage's output — Stage read failed/)).toBeInTheDocument();
+  expect(screen.queryByText('No output captured for this stage')).not.toBeInTheDocument();
+  expect(stageReads).toBe(1);
+  await userEvent.click(screen.getByRole('button', { name: 'Retry' }));
+  expect(await screen.findByText('Prior planning transcript')).toBeInTheDocument();
+  expect(stageReads).toBe(2);
+});
+
+it('retries a failed stage while another stage read is still in flight', async () => {
+  const record = { ...agent, metadata: { ...agent.metadata, taskSummary: 'Pipeline complete', pipeline: {
+    stages: [{ name: 'Plan' }, { name: 'Research' }, { name: 'Implement' }], currentStage: 2,
+    stageResults: [{ stage: 0, agentId: 'plan-stage', success: true }, { stage: 1, agentId: 'research-stage', success: true }],
+  } }, output: [{ line: 'Implementation transcript' }] };
+  let planReads = 0;
+  api.getCosAgent.mockImplementation(id => {
+    if (id === 'research-stage') return new Promise(() => {});
+    if (id !== 'plan-stage') return Promise.resolve(record);
+    planReads += 1;
+    return planReads === 1 ? Promise.reject(new Error('Stage read failed')) : Promise.resolve({ output: [{ line: 'Plan transcript' }] });
+  });
+  render(<MemoryRouter><AgentCard agent={record} completed /></MemoryRouter>);
+  await userEvent.click(screen.getByRole('button', { name: 'Show', exact: true }));
+  await userEvent.click(screen.getByRole('button', { name: 'Show full transcript' }));
+  await userEvent.click(await screen.findByRole('button', { name: /Plan/ }));
+  expect(await screen.findByText(/Could not load this stage's output/)).toBeInTheDocument();
+  await userEvent.click(screen.getByRole('button', { name: /Research/ }));
+  expect(await screen.findByText('Loading stage output...')).toBeInTheDocument();
+  await userEvent.click(screen.getByRole('button', { name: /Plan/ }));
+  await userEvent.click(screen.getByRole('button', { name: 'Retry' }));
+  expect(await screen.findByText('Plan transcript')).toBeInTheDocument();
+  expect(planReads).toBe(2);
+});
 
 it('keeps the runner transcript separate when no completion summary was saved', async () => {
   const completedAgent = { ...agent, metadata: {}, output: [{ line: 'exec: example tool output' }] };

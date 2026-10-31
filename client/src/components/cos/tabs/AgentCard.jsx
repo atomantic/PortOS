@@ -43,6 +43,7 @@ import { useTimeTick } from '../../../hooks/useTimeTick';
 import useStickToBottom from '../../../hooks/useStickToBottom';
 
 import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
+import ListLoadError from '../../ui/ListLoadError';
 import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
 import { AgentProgress, AgentRuntimeStatus } from './AgentRuntimeStatus';
 import AgentMemoriesUsed from './AgentMemoriesUsed';
@@ -416,10 +417,17 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
   const [fullOutput, setFullOutput] = useState(null);
   const [fullMetadata, setFullMetadata] = useState(null);
   const [loadingOutput, setLoadingOutput] = useState(false);
+  // A failed transcript read. History rows carry no `output`, so caching an
+  // empty transcript on failure would read as "No output captured" for good.
+  const [outputError, setOutputError] = useState(null);
   // Pipeline stage output: track which stage tab is active and cached outputs per stage agentId
   const [activeStageTab, setActiveStageTab] = useState(null);
   const [stageOutputs, setStageOutputs] = useState({});
-  const [loadingStageId, setLoadingStageId] = useState(null);
+  // Per-stage in-flight reads: a shared "one stage loading" flag swallowed a
+  // Retry on one stage while another stage's read was still pending.
+  const [loadingStageIds, setLoadingStageIds] = useState(() => new Set());
+  const stageInFlightRef = useRef(new Set());
+  const [stageErrors, setStageErrors] = useState({});
   const [pausing, setPausing] = useState(false);
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
   const [killing, setKilling] = useState(false);
@@ -557,7 +565,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
 
   // Fetch full output when expanded for completed agents (skip for remote)
   useEffect(() => {
-    if (!(expanded && inactive && !fullOutput && !loadingOutput && !remote)) return;
+    if (!(expanded && inactive && !fullOutput && !loadingOutput && !outputError && !remote)) return;
     // A request-generation ref, not a `let active` flag: `loadingOutput` is in this
     // effect's own dependency array, so the write below re-runs the effect
     // immediately and a lifetime-scoped flag would be flipped by its own
@@ -567,19 +575,27 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
     const req = ++outputRequestRef.current;
     const current = () => req === outputRequestRef.current;
     setLoadingOutput(true);
-    api.getCosAgent(agent.id)
+    api.getCosAgent(agent.id, { silent: true })
       .then(data => {
         if (current()) {
           setFullOutput(toTranscript(data));
           setFullMetadata(data.metadata || null);
         }
       })
-      .catch(() => {
-        // Fall back to agent's stored output
-        if (current()) setFullOutput(toTranscript(agent));
+      .catch(err => {
+        if (!current()) return;
+        // A live-list record may still hold its streamed output; a history row
+        // never does, so without one the failure has to stay visible.
+        if (agent.output?.length > 0) setFullOutput(toTranscript(agent));
+        else setOutputError(err?.message || 'Request failed');
       })
       .finally(() => { if (current()) setLoadingOutput(false); });
-  }, [expanded, inactive, agent.id, fullOutput, loadingOutput, remote, agent.output]);
+  }, [expanded, inactive, agent.id, fullOutput, loadingOutput, outputError, remote, agent.output]);
+
+  const reloadOutput = useCallback(() => {
+    setOutputError(null);
+    setFullOutput(null);
+  }, []);
 
   const duration = agent.completedAt
     ? new Date(agent.completedAt) - new Date(agent.startedAt)
@@ -719,21 +735,31 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
 
   // Fetch output for a prior pipeline stage agent
   const fetchStageOutput = useCallback(async (stageAgentId) => {
-    if (!stageAgentId || stageOutputs[stageAgentId] || loadingStageId) return;
-    setLoadingStageId(stageAgentId);
-    const data = await api.getCosAgent(stageAgentId).catch(() => null);
-    setStageOutputs(prev => ({ ...prev, [stageAgentId]: toTranscript(data) }));
-    setLoadingStageId(null);
-  }, [stageOutputs, loadingStageId]);
+    if (!stageAgentId || stageOutputs[stageAgentId] || stageInFlightRef.current.has(stageAgentId)) return;
+    stageInFlightRef.current.add(stageAgentId);
+    setLoadingStageIds(new Set(stageInFlightRef.current));
+    setStageErrors(({ [stageAgentId]: _cleared, ...rest }) => rest);
+    let failure = null;
+    const data = await api.getCosAgent(stageAgentId, { silent: true }).catch(err => {
+      failure = err?.message || 'Request failed';
+      return null;
+    });
+    // Only a successful read is cached: a cached empty transcript would claim
+    // the stage captured nothing and suppress every later fetch.
+    if (failure) setStageErrors(prev => ({ ...prev, [stageAgentId]: failure }));
+    else setStageOutputs(prev => ({ ...prev, [stageAgentId]: toTranscript(data) }));
+    stageInFlightRef.current.delete(stageAgentId);
+    setLoadingStageIds(new Set(stageInFlightRef.current));
+  }, [stageOutputs]);
 
   // Auto-fetch stage output when switching to a prior stage tab
   useEffect(() => {
     if (!pipelineStages || activeStageTab === null) return;
     const stage = pipelineStages[activeStageTab];
-    if (!stage?.isCurrent && stage?.agentId && !stageOutputs[stage.agentId]) {
+    if (!stage?.isCurrent && stage?.agentId && !stageOutputs[stage.agentId] && !stageErrors[stage.agentId]) {
       fetchStageOutput(stage.agentId);
     }
-  }, [activeStageTab, pipelineStages, stageOutputs, fetchStageOutput]);
+  }, [activeStageTab, pipelineStages, stageOutputs, stageErrors, fetchStageOutput]);
 
   return (
     <div className={`min-w-0 bg-port-card border rounded-lg overflow-hidden ${completed && expanded ? 'col-span-full' : ''} ${
@@ -1318,7 +1344,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
               {agent.metadata?.taskSummaryTruncated && !fullMetadata?.taskSummary && (
                 <p className="mt-1 text-xs text-port-text-muted">
                   Summary preview. {!remote && <button type="button" className="text-port-accent hover:underline" disabled={loadingOutput}
-                    onClick={() => { setFullOutput(null); setExpanded(true); }}>Load full summary</button>}
+                    onClick={() => { reloadOutput(); setExpanded(true); }}>Load full summary</button>}
                 </p>
               )}
 
@@ -1375,12 +1401,21 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
               const activeStage = pipelineStages?.[activeStageTab];
               if (activeStage && !activeStage.isCurrent && activeStage.agentId) {
                 const stageOut = stageOutputs[activeStage.agentId];
-                if (loadingStageId === activeStage.agentId) {
+                if (loadingStageIds.has(activeStage.agentId)) {
                   return (
                     <div className="flex items-center gap-2 text-gray-500 text-sm">
                       <Loader2 size={14} aria-hidden="true" className="animate-spin" />
                       Loading stage output...
                     </div>
+                  );
+                }
+                if (stageErrors[activeStage.agentId]) {
+                  return (
+                    <ListLoadError
+                      what="this stage's output"
+                      error={{ message: stageErrors[activeStage.agentId] }}
+                      onRetry={() => fetchStageOutput(activeStage.agentId)}
+                    />
                   );
                 }
                 // A truncated transcript whose tail window yielded no renderable
@@ -1408,6 +1443,9 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
                     Loading full output...
                   </div>
                 );
+              }
+              if (inactive && outputError) {
+                return <ListLoadError what="the transcript" error={{ message: outputError }} onRetry={reloadOutput} />;
               }
               const truncated = inactive && fullOutput?.truncated;
               if (output.length > 0 || truncated) {

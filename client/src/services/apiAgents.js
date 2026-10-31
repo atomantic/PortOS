@@ -306,9 +306,9 @@ export const sendCosAgentBtw = (id, message, options = {}) => request(`/cos/agen
 export const getCosFeedbackStats = (options = {}) => request('/cos/feedback/stats', options);
 
 // CoS Briefings
-export const getCosBriefings = () => request('/cos/briefings');
-export const getCosLatestBriefing = () => request('/cos/briefings/latest');
-export const getCosBriefing = (date) => request(`/cos/briefings/${date}`);
+export const getCosBriefings = (options = {}) => request('/cos/briefings', options);
+export const getCosLatestBriefing = (options = {}) => request('/cos/briefings/latest', options);
+export const getCosBriefing = (date, options = {}) => request(`/cos/briefings/${date}`, options);
 
 // CoS Activity
 export const getCosTodayActivity = () => request('/cos/activity/today');
