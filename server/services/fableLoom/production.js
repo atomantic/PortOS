@@ -517,6 +517,47 @@ function conditionRequest(run, asset, kind, capability, sourceImagePath = null) 
   });
 }
 
+function jobProvenanceFields(run, asset, conditioned) {
+  return {
+    visualConditioning: conditioned?.visualConditioning || null,
+    fableLoom: productionTag(run, asset),
+  };
+}
+
+function isAuthoredExactReplay(run, recordedConditioning) {
+  return run.mode === 'exact_inputs' && typeof recordedConditioning?.authoredPrompt === 'string';
+}
+
+// Rebuild the recorded authored request byte-for-byte; a changed input file or a
+// changed adapter activation prompt refuses rather than rendering something else.
+async function replayAuthoredImageInputs(run, asset, recordedConditioning, { mode, settings, requestedModel }) {
+  const replayInputs = await restoreRequestInputs(recordedConditioning);
+  if (replayInputs.error) throw exactInputError(`Exact-input reproduction refused: ${replayInputs.error}`);
+  const params = {
+    fableLoom: productionTag(run, asset),
+    prompt: recordedConditioning.authoredPrompt,
+    negativePrompt: recordedConditioning.authoredNegativePrompt,
+    modelId: requestedModel,
+    cloudModel: recordedConditioning.capability.modelId,
+    referenceImagePaths: replayInputs.refs,
+    referenceImageStrengths: replayInputs.strengths,
+    loraPaths: replayInputs.adapters,
+    loraScales: replayInputs.scales,
+    ...(replayInputs.init ? { initImagePath: replayInputs.init } : {}),
+    ...(replayInputs.initStrength != null ? { initImageStrength: replayInputs.initStrength } : {}),
+    ...(hasOwn(recordedConditioning, 'visualProfileOverride')
+      ? { visualProfileOverride: recordedConditioning.visualProfileOverride } : {}),
+  };
+  const conditioned = await prepareFableLoomImageParams({ params, mode, settings });
+  if (typeof recordedConditioning.renderedPrompt === 'string' && mode === IMAGE_GEN_MODE.LOCAL) {
+    const names = [...conditioned.loraFilenames, ...conditioned.loraPaths];
+    const words = await readTriggerWordsByFilename(names);
+    const sent = weaveLoraTriggers(conditioned.prompt, names.map(name => words[basename(name)])).prompt;
+    if (sent !== recordedConditioning.renderedPrompt) throw exactInputError('Exact-input reproduction refused: the recorded adapter activation prompt changed.');
+  }
+  return { replayInputs, conditioned };
+}
+
 async function prepareImageJob(run, asset) {
   const settings = await getSettings();
   const recordedConditioning = await loadRecordedConditioning(run, asset);
@@ -536,36 +577,9 @@ async function prepareImageJob(run, asset) {
     model: mode === IMAGE_GEN_MODE.LOCAL ? provisionalModel : { id: cloud?.modelId || null },
     inputBudget: maxInputImages(mode, cloud?.modelId) || 4,
   });
-  let replayInputs = null;
-  let conditioned;
-  if (run.mode === 'exact_inputs' && typeof recordedConditioning?.authoredPrompt === 'string') {
-    replayInputs = await restoreRequestInputs(recordedConditioning);
-    if (replayInputs.error) throw exactInputError(`Exact-input reproduction refused: ${replayInputs.error}`);
-    const params = {
-      fableLoom: productionTag(run, asset),
-      prompt: recordedConditioning.authoredPrompt,
-      negativePrompt: recordedConditioning.authoredNegativePrompt,
-      modelId: requestedModel,
-      cloudModel: recordedConditioning.capability.modelId,
-      referenceImagePaths: replayInputs.refs,
-      referenceImageStrengths: replayInputs.strengths,
-      loraPaths: replayInputs.adapters,
-      loraScales: replayInputs.scales,
-      ...(replayInputs.init ? { initImagePath: replayInputs.init } : {}),
-      ...(replayInputs.initStrength != null ? { initImageStrength: replayInputs.initStrength } : {}),
-      ...(hasOwn(recordedConditioning, 'visualProfileOverride')
-        ? { visualProfileOverride: recordedConditioning.visualProfileOverride } : {}),
-    };
-    conditioned = await prepareFableLoomImageParams({ params, mode, settings });
-    if (typeof recordedConditioning.renderedPrompt === 'string' && mode === IMAGE_GEN_MODE.LOCAL) {
-      const names = [...conditioned.loraFilenames, ...conditioned.loraPaths];
-      const words = await readTriggerWordsByFilename(names);
-      const sent = weaveLoraTriggers(conditioned.prompt, names.map(name => words[basename(name)])).prompt;
-      if (sent !== recordedConditioning.renderedPrompt) throw exactInputError('Exact-input reproduction refused: the recorded adapter activation prompt changed.');
-    }
-  } else {
-    conditioned = await conditionRequest(run, asset, 'image', capability);
-  }
+  const { replayInputs, conditioned } = isAuthoredExactReplay(run, recordedConditioning)
+    ? await replayAuthoredImageInputs(run, asset, recordedConditioning, { mode, settings, requestedModel })
+    : { replayInputs: null, conditioned: await conditionRequest(run, asset, 'image', capability) };
   if (run.mode === 'exact_inputs') assertExactConditioning(recordedConditioning, conditioned?.visualConditioning);
   const referenceImagePaths = conditioned?.referenceImagePaths || [];
   const localInitImagePath = replayInputs ? replayInputs.init : conditioned?.sourceImagePath || referenceImagePaths[0] || null;
@@ -584,6 +598,9 @@ async function prepareImageJob(run, asset) {
       });
     }
     const selectedIsEditOnly = isEditOnly(local.selectedModel);
+    // An edit-only model takes the lead reference as its init image, so a fresh
+    // (non-replay) render must not send that frame twice.
+    const dropLeadReference = !replayInputs && selectedIsEditOnly;
     return {
       kind: 'image',
       provider: mode,
@@ -605,15 +622,12 @@ async function prepareImageJob(run, asset) {
         ...replayParameters,
         ...((replayInputs || selectedIsEditOnly) && localInitImagePath ? { initImagePath: localInitImagePath } : {}),
         ...(replayInputs?.initStrength != null ? { initImageStrength: replayInputs.initStrength } : {}),
-        referenceImagePaths: !replayInputs && selectedIsEditOnly ? referenceImagePaths.slice(1) : referenceImagePaths,
-        referenceImageStrengths: !replayInputs && selectedIsEditOnly
-          ? (conditioned?.referenceImageStrengths || []).slice(1)
-          : (conditioned?.referenceImageStrengths || []),
+        referenceImagePaths: dropLeadReference ? referenceImagePaths.slice(1) : referenceImagePaths,
+        referenceImageStrengths: (conditioned?.referenceImageStrengths || []).slice(dropLeadReference ? 1 : 0),
         loraFilenames: conditioned?.loraFilenames || [],
         loraPaths: conditioned?.loraPaths || [],
         loraScales: conditioned?.loraScales || [],
-        visualConditioning: conditioned?.visualConditioning || null,
-        fableLoom: productionTag(run, asset),
+        ...jobProvenanceFields(run, asset, conditioned),
       }, conditioned?.visualProfile),
     };
   }
@@ -650,9 +664,114 @@ async function prepareImageJob(run, asset) {
       loraFilenames: conditioned?.loraFilenames || [],
       loraPaths: conditioned?.loraPaths || [],
       loraScales: conditioned?.loraScales || [],
-      visualConditioning: conditioned?.visualConditioning || null,
-      fableLoom: productionTag(run, asset),
+      ...jobProvenanceFields(run, asset, conditioned),
     }, conditioned?.visualProfile),
+  };
+}
+
+// Cloud video lanes carry no model pick of their own: the capability compiler sees
+// a fixed lane id. Grok renders image-to-video only.
+const CLOUD_VIDEO_CAPABILITY_MODELS = Object.freeze({
+  [VIDEO_GEN_MODE.FAL]: { id: 'fal-video', supportedModes: ['text', 'image'] },
+  [VIDEO_GEN_MODE.REACTOR]: { id: 'reactor-video', supportedModes: ['text', 'image'] },
+  [VIDEO_GEN_MODE.RUNWAY]: { id: 'runway-video', supportedModes: ['text', 'image'] },
+  [VIDEO_GEN_MODE.GROK]: { id: 'grok-video', supportedModes: ['image'] },
+});
+
+function videoCapabilityModel(backend, localModel) {
+  if (backend === VIDEO_GEN_MODE.LOCAL) return localModel;
+  const lane = CLOUD_VIDEO_CAPABILITY_MODELS[backend] || CLOUD_VIDEO_CAPABILITY_MODELS[VIDEO_GEN_MODE.GROK];
+  return { id: lane.id, supportedModes: [...lane.supportedModes] };
+}
+
+function videoPromptFields(conditioned, asset) {
+  return {
+    prompt: conditioned?.prompt || asset.prompt,
+    ...(conditioned?.promptAdditions?.length ? { promptAdditions: conditioned.promptAdditions } : {}),
+    negativePrompt: conditioned?.negativePrompt || '',
+  };
+}
+
+function geometryFields(geometry) {
+  return { width: geometry.width, height: geometry.height, aspectRatio: geometry.aspectRatio };
+}
+
+function localVideoJob({ run, asset, settings, model, conditioned, sourceImagePath, geometry, replayParameters }) {
+  const supportedModes = Array.isArray(model.supportedModes) ? model.supportedModes : [];
+  const videoMode = sourceImagePath ? 'image' : 'text';
+  if (!supportedModes.includes(videoMode)) {
+    throw new ServerError(`Video model "${model.id}" does not support ${videoMode}-to-video renders.`, {
+      status: 409,
+      code: 'VIDEO_MODEL_UNSUPPORTED_MODE',
+    });
+  }
+  return {
+    kind: 'video',
+    provider: VIDEO_GEN_MODE.LOCAL,
+    modelId: model.id,
+    modelRevision: model.revision || null,
+    params: {
+      pythonPath: settings.imageGen?.local?.pythonPath || null,
+      ...videoPromptFields(conditioned, asset),
+      modelId: model.id,
+      ...geometryFields(geometry),
+      numFrames: model.defaultFrames || DEFAULT_NUM_FRAMES,
+      fps: model.defaultFps || model.fpsOptions?.[0] || 24,
+      steps: model.steps,
+      guidanceScale: model.guidance,
+      seed: randomInt(0, 2_147_483_647),
+      tiling: 'auto',
+      disableAudio: false,
+      sourceImagePath,
+      mode: videoMode,
+      ...replayParameters,
+      ...jobProvenanceFields(run, asset, conditioned),
+    },
+  };
+}
+
+async function reactorVideoJob({ run, asset, capability, conditioned, sourceImagePath, replayParameters }) {
+  const loom = await loadRunLoom(run);
+  const node = findEpisode(loom, run.episodeId)?.nodes.find((candidate) => candidate.id === asset.nodeId);
+  // The compiler owns prompt compaction; never truncate dialogue at this boundary.
+  const request = validateReactorRequest({
+    prompt: conditioned?.prompt || asset.prompt,
+    ...(conditioned?.promptAdditions?.length ? { promptAdditions: conditioned.promptAdditions } : {}),
+    seconds: replayParameters.seconds ?? node?.shot?.durationSeconds ?? 6,
+    seed: replayParameters.seed,
+  });
+  return {
+    kind: 'video', provider: VIDEO_GEN_MODE.REACTOR, modelId: 'reactor:fast-h3',
+    modelRevision: capability.modelRevision || null,
+    params: {
+      mode: VIDEO_GEN_MODE.REACTOR, videoMode: sourceImagePath ? 'image' : 'text',
+      ...request, sourceImagePath,
+      ...jobProvenanceFields(run, asset, conditioned),
+    },
+  };
+}
+
+// fal, Runway and Grok share one job shape; they differ only in the model id,
+// provider parameters, and whether the lane takes explicit render geometry.
+function cloudVideoJob({
+  backend, mode, modelId, providerParams, geometry, run, asset, capability, conditioned,
+  sourceImagePath, replayParameters,
+}) {
+  return {
+    kind: 'video',
+    provider: backend,
+    modelId,
+    modelRevision: capability.modelRevision || null,
+    params: {
+      mode,
+      videoMode: sourceImagePath ? 'image' : 'text',
+      ...providerParams,
+      ...videoPromptFields(conditioned, asset),
+      ...(geometry ? geometryFields(geometry) : {}),
+      ...replayParameters,
+      sourceImagePath,
+      ...jobProvenanceFields(run, asset, conditioned),
+    },
   };
 }
 
@@ -671,128 +790,30 @@ async function prepareVideoJob(run, asset) {
       code: 'VIDEO_GEN_UNKNOWN_MODEL',
     });
   }
-  const capability = fableLoomVideoCapabilities({
-    backend,
-    model: backend === VIDEO_GEN_MODE.LOCAL
-      ? model
-      : backend === VIDEO_GEN_MODE.FAL
-        ? { id: 'fal-video', supportedModes: ['text', 'image'] }
-        : backend === VIDEO_GEN_MODE.REACTOR
-          ? { id: 'reactor-video', supportedModes: ['text', 'image'] }
-          : backend === VIDEO_GEN_MODE.RUNWAY
-            ? { id: 'runway-video', supportedModes: ['text', 'image'] }
-            : { id: 'grok-video', supportedModes: ['image'] },
-  });
+  const capability = fableLoomVideoCapabilities({ backend, model: videoCapabilityModel(backend, model) });
   const requestedSourceImagePath = imageInputForNode(run, asset);
   const conditioned = await conditionRequest(run, asset, 'video', capability, requestedSourceImagePath);
   if (run.mode === 'exact_inputs') assertExactConditioning(recordedConditioning, conditioned?.visualConditioning);
-  const sourceImagePath = conditioned ? conditioned.sourceImagePath : requestedSourceImagePath;
+  const job = {
+    run,
+    asset,
+    capability,
+    conditioned,
+    sourceImagePath: conditioned ? conditioned.sourceImagePath : requestedSourceImagePath,
+    replayParameters: exactRenderParameters(run, recordedConditioning),
+  };
   const geometry = renderGeometry(run, recordedConditioning);
-  const replayParameters = exactRenderParameters(run, recordedConditioning);
 
-  if (backend === VIDEO_GEN_MODE.LOCAL) {
-    const supportedModes = Array.isArray(model.supportedModes) ? model.supportedModes : [];
-    const videoMode = sourceImagePath ? 'image' : 'text';
-    if (!supportedModes.includes(videoMode)) {
-      throw new ServerError(`Video model "${model.id}" does not support ${videoMode}-to-video renders.`, {
-        status: 409,
-        code: 'VIDEO_MODEL_UNSUPPORTED_MODE',
-      });
-    }
-    return {
-      kind: 'video',
-      provider: backend,
-      modelId: model.id,
-      modelRevision: model.revision || null,
-      params: {
-        pythonPath: settings.imageGen?.local?.pythonPath || null,
-        prompt: conditioned?.prompt || asset.prompt,
-        ...(conditioned?.promptAdditions?.length ? { promptAdditions: conditioned.promptAdditions } : {}),
-        negativePrompt: conditioned?.negativePrompt || '',
-        modelId: model.id,
-        width: geometry.width,
-        height: geometry.height,
-        aspectRatio: geometry.aspectRatio,
-        numFrames: model.defaultFrames || DEFAULT_NUM_FRAMES,
-        fps: model.defaultFps || model.fpsOptions?.[0] || 24,
-        steps: model.steps,
-        guidanceScale: model.guidance,
-        seed: randomInt(0, 2_147_483_647),
-        tiling: 'auto',
-        disableAudio: false,
-        sourceImagePath,
-        mode: videoMode,
-        ...replayParameters,
-        visualConditioning: conditioned?.visualConditioning || null,
-        fableLoom: productionTag(run, asset),
-      },
-    };
-  }
-
-  if (backend === VIDEO_GEN_MODE.REACTOR) {
-    const loom = await loadRunLoom(run);
-    const node = findEpisode(loom, run.episodeId)?.nodes.find((candidate) => candidate.id === asset.nodeId);
-    // The compiler owns prompt compaction; never truncate dialogue at this boundary.
-    const request = validateReactorRequest({
-      prompt: conditioned?.prompt || asset.prompt,
-      ...(conditioned?.promptAdditions?.length ? { promptAdditions: conditioned.promptAdditions } : {}),
-      seconds: replayParameters.seconds ?? node?.shot?.durationSeconds ?? 6,
-      seed: replayParameters.seed,
-    });
-    return {
-      kind: 'video', provider: backend, modelId: 'reactor:fast-h3',
-      modelRevision: capability.modelRevision || null,
-      params: {
-        mode: backend, videoMode: sourceImagePath ? 'image' : 'text',
-        ...request, sourceImagePath,
-        visualConditioning: conditioned?.visualConditioning || null,
-        fableLoom: productionTag(run, asset),
-      },
-    };
-  }
-
+  if (backend === VIDEO_GEN_MODE.LOCAL) return localVideoJob({ ...job, settings, model, geometry });
+  if (backend === VIDEO_GEN_MODE.REACTOR) return reactorVideoJob(job);
   if (backend === VIDEO_GEN_MODE.FAL) {
-    return {
-      kind: 'video',
-      provider: backend,
-      modelId: recordedConditioning?.capability?.modelId || null,
-      modelRevision: capability.modelRevision || null,
-      params: {
-        mode: VIDEO_GEN_MODE.FAL,
-        videoMode: sourceImagePath ? 'image' : 'text',
-        prompt: conditioned?.prompt || asset.prompt,
-        ...(conditioned?.promptAdditions?.length ? { promptAdditions: conditioned.promptAdditions } : {}),
-        negativePrompt: conditioned?.negativePrompt || '',
-        ...replayParameters,
-        sourceImagePath,
-        visualConditioning: conditioned?.visualConditioning || null,
-        fableLoom: productionTag(run, asset),
-      },
-    };
+    return cloudVideoJob({
+      ...job, backend, mode: VIDEO_GEN_MODE.FAL, modelId: recordedConditioning?.capability?.modelId || null,
+    });
   }
-
   if (backend === VIDEO_GEN_MODE.RUNWAY) {
     // As with fal, the model is the lane's catalog default: a cloud video backend carries no model pick here.
-    return {
-      kind: 'video',
-      provider: backend,
-      modelId: null,
-      modelRevision: capability.modelRevision || null,
-      params: {
-        mode: VIDEO_GEN_MODE.RUNWAY,
-        videoMode: sourceImagePath ? 'image' : 'text',
-        prompt: conditioned?.prompt || asset.prompt,
-        ...(conditioned?.promptAdditions?.length ? { promptAdditions: conditioned.promptAdditions } : {}),
-        negativePrompt: conditioned?.negativePrompt || '',
-        width: geometry.width,
-        height: geometry.height,
-        aspectRatio: geometry.aspectRatio,
-        ...replayParameters,
-        sourceImagePath,
-        visualConditioning: conditioned?.visualConditioning || null,
-        fableLoom: productionTag(run, asset),
-      },
-    };
+    return cloudVideoJob({ ...job, backend, mode: VIDEO_GEN_MODE.RUNWAY, modelId: null, geometry });
   }
 
   const cloud = resolveRenderTargetConfig(settings, RENDER_TARGET.FABLELOOM_PRODUCTION, {
@@ -805,27 +826,9 @@ async function prepareVideoJob(run, asset) {
       code: 'GROK_VIDEO_DISABLED',
     });
   }
-  return {
-    kind: 'video',
-    provider: backend,
-    modelId: cloud.modelId,
-    modelRevision: capability.modelRevision || null,
-    params: {
-      mode: VIDEO_GEN_MODE.GROK,
-      videoMode: sourceImagePath ? 'image' : 'text',
-      ...cloud.providerParams,
-      prompt: conditioned?.prompt || asset.prompt,
-      ...(conditioned?.promptAdditions?.length ? { promptAdditions: conditioned.promptAdditions } : {}),
-      negativePrompt: conditioned?.negativePrompt || '',
-      width: geometry.width,
-      height: geometry.height,
-      aspectRatio: geometry.aspectRatio,
-      ...replayParameters,
-      sourceImagePath,
-      visualConditioning: conditioned?.visualConditioning || null,
-      fableLoom: productionTag(run, asset),
-    },
-  };
+  return cloudVideoJob({
+    ...job, backend, mode: VIDEO_GEN_MODE.GROK, modelId: cloud.modelId, providerParams: cloud.providerParams, geometry,
+  });
 }
 
 async function prepareJob(run, asset) {
