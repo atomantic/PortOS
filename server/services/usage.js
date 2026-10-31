@@ -385,6 +385,11 @@ export function getSiblingReconciledUsageRunIds() {
 export async function markUsageRunReconciled(runId, { siblings = false } = {}) {
   if (!runId) return;
   if (!usageData) await loadUsage();
+  if (setReconciledMarkers(runId, siblings)) await saveUsage();
+}
+
+/** In-memory half of {@link markUsageRunReconciled}; true when a marker was added. */
+function setReconciledMarkers(runId, siblings) {
   usageData.reconciledRuns ??= {};
   usageData.siblingReconciledRuns ??= {};
   const now = new Date().toISOString();
@@ -397,7 +402,26 @@ export async function markUsageRunReconciled(runId, { siblings = false } = {}) {
     usageData.siblingReconciledRuns[runId] = now;
     changed = true;
   }
-  if (changed) await saveUsage();
+  return changed;
+}
+
+/**
+ * Interactive-scan state `{ watermarks, sidechainRepairedAt }`, or null when
+ * this ledger has never committed one (the caller then adopts the legacy
+ * `usage-interactive-scan.json`). Lives in usage.json so a watermark and the
+ * counts it covers commit in one atomic write. Local bookkeeping: never in the digest.
+ */
+export async function getInteractiveScanState() {
+  if (!usageData) await loadUsage();
+  const state = usageData.interactiveScan;
+  return state && typeof state === 'object' ? structuredClone(state) : null;
+}
+
+/** Commit scan state alone, for a family whose watermark moved with no corrections. */
+export async function setInteractiveScanState(interactiveScan) {
+  if (!usageData) await loadUsage();
+  usageData.interactiveScan = structuredClone(interactiveScan);
+  await saveUsage();
 }
 
 /**
@@ -456,7 +480,7 @@ function addUsageRecord(day, record) {
   }
 }
 
-export async function applyHistoricalUsageCorrections(corrections = []) {
+export async function applyHistoricalUsageCorrections(corrections = [], { interactiveScan = null } = {}) {
   if (!usageData) await loadUsage();
   usageData.reconciledRuns ??= {};
   // Additive: absent on every install that predates the sibling scan, which
@@ -603,7 +627,10 @@ export async function applyHistoricalUsageCorrections(corrections = []) {
       : null;
   }
 
-  if (corrected > 0) await saveUsage();
+  // The scan watermark rides the same write as the counts it covers, so a crash
+  // cannot leave billed counts without the watermark that stops a re-bill.
+  if (interactiveScan) usageData.interactiveScan = structuredClone(interactiveScan);
+  if (corrected > 0 || interactiveScan) await saveUsage();
   return { corrected, correctedRunIds };
 }
 
@@ -773,13 +800,13 @@ export async function recordMessages(providerId, model, messageCount, outputToke
  *   cacheWriteTokens?: number, source?: 'measured'|'estimate' }
  *   | Array<object>} record
  */
-export async function recordRunUsage(record) {
+export async function recordRunUsage(record, { reconciledRunId = null, siblings = false } = {}) {
   // A single run can produce several records when its session switched models
   // mid-flight (see usageReconciler.reconcileRunUsage). Apply the full batch
   // in memory before saving so every model is priced independently without
   // rewriting the complete usage file once per entry.
   const records = Array.isArray(record) ? record.flat(Infinity) : [record];
-  if (records.length === 0) return;
+  if (records.length === 0 && !reconciledRunId) return;
   if (!usageData) await loadUsage();
 
   for (const entry of records) {
@@ -810,6 +837,9 @@ export async function recordRunUsage(record) {
     });
   }
 
+  // Marker and counts share one write: a crash between two saves would leave
+  // counts that a later backfill treats as unrecorded and adds again.
+  if (reconciledRunId) setReconciledMarkers(reconciledRunId, siblings);
   await saveUsage();
 }
 

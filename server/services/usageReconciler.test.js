@@ -544,8 +544,10 @@ describe('recordCompletedRunUsage', () => {
       providers: [{ id: 'grok-cli', type: 'cli', command: 'grok', enabled: true }]
     });
 
-    expect(markUsageRunReconciled).toHaveBeenCalledWith('run-example-live', { siblings: false });
-    expect(markUsageRunReconciled).toHaveBeenCalledWith('run-example-scanned', { siblings: true });
+    // The marker travels with the counts, so both commit in one usage.json write.
+    expect(recordRunUsage).toHaveBeenCalledWith(expect.anything(), { reconciledRunId: 'run-example-live', siblings: false });
+    expect(recordRunUsage).toHaveBeenCalledWith(expect.anything(), { reconciledRunId: 'run-example-scanned', siblings: true });
+    expect(markUsageRunReconciled).not.toHaveBeenCalled();
   });
 
   it('records the estimate when no transcript exists rather than recording nothing', async () => {

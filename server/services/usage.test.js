@@ -22,6 +22,7 @@ tryReadFile: vi.fn().mockResolvedValue(null),
 import { atomicWrite, readJSONFile } from '../lib/fileUtils.js';
 import {
   applyHistoricalUsageCorrections,
+  buildUsageDigest,
   buildUsageReport,
   getFirstActivityDay,
   getLimitBlocks,
@@ -908,6 +909,28 @@ describe('usage.js — cache tiers and measured/estimate provenance (#3124 Phase
       cacheReadTokens: 400,
       source: 'mixed'
     });
+  });
+
+  it('commits the reconciled marker and the interactive-scan watermark in the same write as their counts', async () => {
+    readJSONFile.mockResolvedValueOnce(makeUsage({}));
+    await loadUsage();
+    vi.clearAllMocks();
+
+    await recordRunUsage({ providerId: 'claude-code', model: 'claude-opus-5', tokensOut: 5, source: 'measured' }, {
+      reconciledRunId: 'run-example-1', siblings: true
+    });
+    expect(atomicWrite).toHaveBeenCalledTimes(1);
+    expect(atomicWrite.mock.calls[0][1]).toMatchObject({
+      reconciledRuns: { 'run-example-1': expect.any(String) },
+      siblingReconciledRuns: { 'run-example-1': expect.any(String) }
+    });
+
+    vi.clearAllMocks();
+    const scan = { watermarks: { claude: 123 }, sidechainRepairedAt: null };
+    await applyHistoricalUsageCorrections([], { interactiveScan: scan });
+    expect(atomicWrite).toHaveBeenCalledTimes(1);
+    expect(atomicWrite.mock.calls[0][1].interactiveScan).toEqual(scan);
+    expect(buildUsageDigest(getUsage())).not.toHaveProperty('interactiveScan');
   });
 
   it('defaults recordMessages to an estimate source with no cache tokens', async () => {
