@@ -8,7 +8,7 @@ export default function ShotDiagramPicker({ options, labels, hints, value, onCha
   const current = value || null;
   return (
     <div>
-      <div role="group" aria-labelledby={labelId} className="grid grid-cols-6 gap-1">
+      <div role="group" aria-labelledby={labelId} className="grid grid-cols-4 sm:grid-cols-6 gap-1">
         {options.map((type) => {
           const checked = current === type;
           return (
