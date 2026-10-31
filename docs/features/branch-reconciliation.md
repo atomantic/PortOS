@@ -78,7 +78,8 @@ path writes a checkout archive. Setup migrations 442 and 454 remove the
 historical `data/cos/held-checkout-archives/`,
 `data/cos/branch-retirement-archives/`, and
 `data/cos/initialized-checkout-retirements/` directories (a symlinked directory
-is left alone); the archive verifiers below only read what an install still has.
+is left alone), and nothing reads them. A merged checkout is disposable; a
+missing original generation is never recovered from an archive.
 
 ### Explicit delivery reviews
 
@@ -156,74 +157,39 @@ and recovery evidence; old Git registration pointers/locks must never be copied
 into a recreated checkout as if it were the previous incarnation. The published
 source branch is retained; local retirement does not delete it remotely.
 
-### Held archive work budgets
+### Review work budgets
 
-Review fingerprints still apply these byte budgets and can refuse with
-`retirement-archive-limit-exceeded`. That refusal keeps the checkout and does
-not write an archive directory. Historical archives that already exist are
-checked with the same budgets.
+Review fingerprints apply byte budgets and can refuse with
+`retirement-archive-limit-exceeded`. That refusal keeps the checkout; review
+never writes an archive directory.
 
-Patch capture preserves original Git output bytes, including non-UTF-8 content. Metadata names and symlink targets must round-trip losslessly through UTF-8; unsupported encodings refuse preservation before removal.
+Patch capture preserves original Git output bytes, including non-UTF-8 content. Metadata names and symlink targets must round-trip losslessly through UTF-8; unsupported encodings refuse before removal.
 
-Held archives use resource contract `1`, recorded as `resourceContract` in the
-manifest. File count is not admission policy: every ignored/untracked content
-file and worktree-private Git file remains included. Hashing and copying use
-64 KiB chunks, with one copy at a time and at most two concurrent snapshot
-file streams. Git snapshot queries keep their existing finite fan-out: seven
-content queries plus the private Git directory lookup. A source growing during a copy aborts rather than expanding disk use.
+File count is not admission policy; the byte and metadata budgets below bound
+each snapshot, and independently recognized disposable test caches do not count
+against them. Hashing uses 64 KiB chunks with at most two concurrent
+snapshot file streams. Git snapshot queries keep a finite fan-out: seven content
+queries plus the private Git directory lookup.
 
-The existing limits remain 25 MiB per raw file, 250 MiB combined content and
-private administration, 16 MiB serialized manifest, and the existing Git output
-buffer of `64 * 1024 * 1024` JavaScript code units. Git output overflow and command timeout retain measured usage and recovery guidance, without changing either existing limit. Patch verification bounds its
-raw byte representation at three bytes per decoded code unit (192 MiB), preserving older multibyte
-patch admission. Metadata is charged incrementally against the same 16 MiB ceiling,
-including file entries, symlink targets and gitlinks; this also bounds
-zero-byte-file trees. Transient sorted directory names have a separate 16 MiB
-scan budget, so directory traversal cannot allocate unbounded name lists. These
-byte ceilings retain the prior safety envelope instead of estimating work from a count. A snapshot, archive write (both source
-passes included), or independent verification has a ten-minute elapsed work
-budget. This is a conservative ceiling of twenty existing 30-second Git command
-timeouts; it allows ordinary many-small-file archives while bounding repeated
-filesystem work. Checks run between filesystem operations and 64 KiB chunks;
-a running Git command retains its existing 30-second timeout. Kernel I/O may
-finish before cancellation is observed. No new global setting is written.
+The limits are 25 MiB per raw file, 250 MiB combined content and private
+administration, and the Git output buffer of `64 * 1024 * 1024` JavaScript code
+units. Git output overflow and command timeout report measured usage and recovery
+guidance. Metadata is charged incrementally against a 16 MiB ceiling, including
+file entries, symlink targets and gitlinks; this also bounds zero-byte-file trees.
+Transient sorted directory names have a separate 16 MiB scan budget, so directory
+traversal cannot allocate unbounded name lists. A snapshot has a ten-minute
+elapsed work budget, a conservative ceiling of twenty 30-second Git command
+timeouts. Checks run between filesystem operations and 64 KiB chunks; a running
+Git command retains its 30-second timeout. Kernel I/O may finish before
+cancellation is observed. No global setting is written.
 
 Internal callers may pass an `AbortSignal` as `opts.signal`. Cancellation or a
-resource refusal keeps the original checkout, ref and outstanding obligations;
-partial archives and temporary bundle refs are cleaned up. A new attempt starts
-from fresh snapshots rather than treating partial work as preservation evidence.
-After a process crash, an archive without a complete manifest cannot prove
-preservation; an existing completed archive still needs the full independent
-hash and isolated Git object proof. No historical receipt is synthesized.
-
-Capacity responses include measured bytes, Git output code units, or elapsed
-milliseconds. Recover by
-freeing resources or preserving large outputs separately, then retrying the exact
-checkout with fresh evidence; do not remove it or raise global limits to clear a
-refusal. Existing unversioned archives follow an explicit compatibility path
-through the same bounded verification and complete content/private-Git proof.
-Unknown contract versions fail closed. The real-Git benchmark at `d200ec77d2`
-measured 16.9–20.9 seconds for cancellation/cleanup/retry and 20.2 seconds for
-the 1,100-plus-file restore. Integration fixture construction, retirement or
-confirmation, and independent proof retain separate existing 30-second phase
-budgets; cumulative case duration includes its hooks. Existing tests retain their
-default timeout. This does not change initialized-checkout archives or their
-separate operational budgets.
-
-Historical held-checkout archives must also prove that their staged patch
-reconstructs the preserved private index. Verification imports the bundle into
-a fresh, isolated Git repository, starts from the recorded HEAD, applies
-`index.diff` to a new index, and compares every path, mode, stage and object ID
-with the archived index. Split-index support uses only validated archived index
-files; archived Git configuration, pointers and object stores are never execution
-targets. Matching patch hashes alone cannot establish this proof: an older writer
-could have hashed bytes already damaged during decoding.
-
-A missing, unsupported or mismatched index retains the historical preservation
-obligation with `archive-index-reconstruction-failed`. Locate a complete archive
-for that exact checkout generation or recover the original data from backup, then
-retry reconciliation. Failure never fabricates a retirement receipt or authorizes
-deletion of a checkout, branch or archive.
+resource refusal keeps the original checkout, ref and outstanding obligations. A
+new attempt starts from fresh snapshots rather than treating partial work as
+evidence. Capacity responses include measured bytes, Git output code units, or
+elapsed milliseconds. Recover by freeing resources or preserving large outputs
+separately, then retrying the exact checkout with fresh evidence; do not remove it
+or raise global limits to clear a refusal.
 
 ## Completing a merged job
 

@@ -12,18 +12,16 @@
  * through the setters.
  */
 import { describe, it as vitestIt, beforeEach as vitestBeforeEach, afterEach, afterAll } from 'vitest';
-import { cp, mkdtemp, mkdir, rm, writeFile, readdir, symlink } from 'fs/promises';
-import { existsSync, realpathSync } from 'fs';
+import { cp, mkdtemp, mkdir, rm, writeFile, symlink } from 'fs/promises';
+import { realpathSync } from 'fs';
 import { tmpdir } from 'os';
 import { createHash } from 'node:crypto';
 import { join } from 'path';
 import { execGit } from '../lib/execGit.js';
-import { assertTempPath } from '../lib/tempPathGuard.js';
 import { materializeGitRepo, SKIP_HEAVY_INTEGRATION } from '../lib/gitTestRepo.js';
 import { cleanupTempDataRoots, lazyTempDataRoot } from '../lib/mockPathsDataRoot.js';
-import { PATHS } from '../lib/paths.js';
 import { owned, receiptTiming, retirementFaults, injected, SYMLINKS } from './_heldCheckoutRecoveryMocks.js';
-import { retireInventoriedCheckout, prepareInventoriedCheckoutRetirement, retirePendingMergeCheckout, heldCheckoutArchiveRoot, _writeHistoricalCheckoutArchive } from './heldCheckoutRecovery.js';
+import { retireInventoriedCheckout, prepareInventoriedCheckoutRetirement, retirePendingMergeCheckout } from './heldCheckoutRecovery.js';
 import { recordBranchReconcileOutcome } from './branchReconcileOutcome.js';
 
 export const it = owned.tests(vitestIt);
@@ -132,7 +130,6 @@ export async function retire(release, opts = {}) {
   await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [{ ...release, reason: 'worktree-locked' }] });
   return retireInventoriedCheckout({ appId: 'app-1', release }, { cosDir, readAgents: noOwners, ...opts });
 }
-export const archives = async () => (existsSync(heldCheckoutArchiveRoot(cosDir)) ? readdir(heldCheckoutArchiveRoot(cosDir)) : []);
 export async function addProofOrigin() {
   // Keep forge identity synthetic while default-branch discovery stays local.
   // Only the explicitly intercepted proof fetch may read the private remote.
@@ -144,60 +141,6 @@ export const makeClean = async (path) => {
   await execGit(['checkout', '--', '.'], path);
   await execGit(['clean', '-fdx'], path);
 };
-
-const unchangedHistory = async () => {};
-let historicalFixture;
-export async function historicalArchive(prepare = unchangedHistory) {
-  const reusable = prepare === unchangedHistory;
-  if (reusable && historicalFixture) {
-    const fixture = historicalFixture;
-    // beforeEach/owned.prepare settled the prior case. Restore immutable
-    // historical inputs at their original paths, never a verification result.
-    await owned.run('archive-copy', async () => {
-      assertTempPath(fixture.source, 'historical fixture restore');
-      assertTempPath(PATHS.data, 'historical evidence reset');
-      await rm(fixture.source, { recursive: true, force: true });
-      await cp(fixture.snapshot, fixture.source, { recursive: true });
-      await rm(PATHS.data, { recursive: true, force: true });
-      await cp(fixture.archive, fixture.archiveDir, { recursive: true });
-    });
-    repo = fixture.repo;
-    external = fixture.external;
-    injected.app.repoPath = repo;
-    injected.schedule = structuredClone(fixture.schedule);
-    return { release: { ...fixture.release }, saved: { archiveDir: fixture.archiveDir } };
-  }
-  let fixture;
-  if (reusable) {
-    const root = await mkdtemp(join(lazyTempDataRoot('portos-held-historical-inputs-'), 'fixture-'));
-    const source = join(root, 'source');
-    await mkdir(source);
-    const safeRepo = join(source, 'repo');
-    await cp(repo, safeRepo, { recursive: true });
-    repo = (await execGit(['rev-parse', '--show-toplevel'], safeRepo)).stdout.trim();
-    external = join(source, 'elsewhere');
-    await mkdir(external);
-    injected.app.repoPath = repo;
-    fixture = { source, repo, external, snapshot: join(root, 'snapshot'), archive: join(root, 'archive') };
-  }
-  const path = join(external, 'historical');
-  const branch = 'feature/historical';
-  await execGit(['worktree', 'add', '-b', branch, path, 'main'], repo);
-  await writeFile(join(path, 'initial.txt'), 'staged historical work\n');
-  await execGit(['add', 'initial.txt'], path);
-  await writeFile(join(path, 'private.txt'), 'synthetic private bytes');
-  await prepare(path);
-  const release = { path, branch, head: (await execGit(['rev-parse', 'HEAD'], path)).stdout.trim(), locked: false, lockReason: null };
-  await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [{ ...release, reason: 'retirement-review-pending' }] });
-  const saved = await _writeHistoricalCheckoutArchive(repo, { ...release, branch: `refs/heads/${branch}` }, 'main', { cosDir: PATHS.cos });
-  await execGit(['worktree', 'remove', '--force', path], repo);
-  if (fixture) {
-    await cp(fixture.source, fixture.snapshot, { recursive: true });
-    await cp(saved.archiveDir, fixture.archive, { recursive: true });
-    historicalFixture = { ...fixture, release: { ...release }, archiveDir: saved.archiveDir, schedule: structuredClone(injected.schedule) };
-  }
-  return { release, saved };
-}
 
 export async function supersededCheckout({ clean = false } = {}) {
   const { release } = await heldCheckout('superseded', { branch: 'feature/superseded' });

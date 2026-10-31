@@ -22,8 +22,7 @@ vi.mock('./cosTaskStore.js', () => ({ getTaskById: async id => ownership.task?.i
   addTask: async () => { throw new Error('Unexpected retired continuation registration'); } }));
 
 import { readReleaseSynchronizationOutbox, saveReleaseSynchronization } from './releaseSynchronizationStore.js';
-import { resetReleaseSynchronization, releaseTaskDispatchDisposition, retainReleaseSynchronizationReview, recoverReleaseSynchronizationHandoffs,
-  prepareLegacyReleaseRetirement, validateLegacyReleaseRetirement } from './releaseSynchronization.js';
+import { resetReleaseSynchronization, releaseTaskDispatchDisposition, retainReleaseSynchronizationReview, recoverReleaseSynchronizationHandoffs } from './releaseSynchronization.js';
 
 afterAll(cleanupTempDataRoots);
 beforeEach(() => { ownership.agents = []; ownership.active = []; ownership.runner = []; ownership.task = null; ownership.updates = []; ownership.updateResult = null; ownership.inventory = []; ownership.current = true; });
@@ -60,11 +59,8 @@ it('retires only the selected stale checkpoint without claiming historical succe
   expect(await releaseTaskDispatchDisposition(saved.task)).toBe('retired-continuation');
   const release = { repoPath: tmpdir(), ...checkout };
   expect(await retainReleaseSynchronizationReview(release)).toBe(true);
-  expect((await prepareLegacyReleaseRetirement(release)).size).toBe(0);
-  expect(await validateLegacyReleaseRetirement(release)).toBe(true);
   for (const changed of [{ checkoutIdentity: 'd'.repeat(64) }, { branch: 'another' }, { head: 'e'.repeat(40) }]) {
     expect(await retainReleaseSynchronizationReview({ ...release, ...changed })).toBe(true);
-    expect(await validateLegacyReleaseRetirement({ ...release, ...changed })).toBe(true);
   }
   await expect(saveReleaseSynchronization({ ...saved, operatorReset: undefined })).rejects.toThrow('immutable ownership');
   const other = fixture('d'.repeat(64));

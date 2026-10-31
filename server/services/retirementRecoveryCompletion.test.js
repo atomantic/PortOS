@@ -131,7 +131,6 @@ async function retire() {
   }), error => ({ registrationError: error.code || error.name }));
   expect(result, JSON.stringify({ result, diagnostics })).toMatchObject({ ok: true, branchDeleted: true });
   expect(existsSync(release.path)).toBe(false);
-  expect(existsSync(join(scratch, 'cos', 'held-checkout-archives'))).toBe(false);
 }
 
 async function finish(report, mode = 'direct') {

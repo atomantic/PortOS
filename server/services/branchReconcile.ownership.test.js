@@ -406,7 +406,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('branch-reconcile worktree ownership (re
       expect(await branches()).not.toContain(shipped.branch);
       // #13519 replaced archival with archive-free merged cleanup. The exact
       // completed ref still protects recovery inside the original repository.
-      for (const directory of ['held-checkout-archives', 'branch-retirement-archives', 'initialized-checkout-retirements']) {
+      for (const directory of ['branch-retirement-archives', 'initialized-checkout-retirements']) {
         expect(existsSync(join(PATHS.cos, directory))).toBe(false);
       }
       expect((await execGit(['rev-parse', `refs/portos/completed/${shipped.head}`], repo)).stdout.trim()).toBe(shipped.head);

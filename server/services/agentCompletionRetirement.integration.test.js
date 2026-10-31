@@ -214,7 +214,6 @@ describe('completion to in-place retirement (real Git and persisted service stat
     const outcome = await getBranchReconcileOutcome(fixture.app.id); expect(outcome.retirementObligations).toEqual([]);
     expect(outcome.retired).toHaveLength(1); const receipt = outcome.retired[0];
     expect(receipt).toMatchObject({ path, branch, head, branchDeleted: true, archiveDir: null });
-    expect(existsSync(join(PATHS.cos, 'held-checkout-archives'))).toBe(false);
     const { listWorktrees } = await import('./worktreeManager.js');
     expect((await listWorktrees(repo)).some(tree => resolve(tree.path) === resolve(path))).toBe(false);
     expect((await execGit(['rev-parse', '--verify', `refs/heads/${branch}`], repo, { ignoreExitCode: true })).exitCode).not.toBe(0);
