@@ -16,7 +16,7 @@
 import { join } from 'path';
 import { stat } from 'fs/promises';
 import { query } from '../lib/db.js';
-import { isTestRunner } from '../lib/runtimeEnv.js';
+import { isFileBackend } from '../lib/pgFileFacade.js';
 import { PATHS } from '../lib/fileUtils.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { threadRefUrl } from '../lib/threadRefKinds.js';
@@ -253,7 +253,7 @@ let building = null;
 export async function getMediaUsageIndex() {
   // The file backend and test runners have no Postgres to scan (the same
   // escape hatch as mediaAssetIndex), so nothing reads as used there.
-  if (process.env.MEMORY_BACKEND === 'file' || isTestRunner()) return {};
+  if (isFileBackend()) return {};
   const stamp = await fingerprint();
   if (cached?.stamp === stamp) return cached.index;
   if (building?.stamp === stamp) return building.promise;

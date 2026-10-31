@@ -8,7 +8,6 @@ import { join } from 'path';
 import { atomicWrite, ensureDir, PATHS, readJSONFile } from '../lib/fileUtils.js';
 import { isPlainObject } from '../lib/objects.js';
 import { createPgFileFacade, resolvePgBackend, POSTGRES_SETUP_HINT } from '../lib/pgFileFacade.js';
-import { isTestRunner } from '../lib/runtimeEnv.js';
 import {
   getScoredSession as getScoredSessionDb,
   listScoredSessions as listScoredSessionsDb,
@@ -115,9 +114,6 @@ const pgBackend = () => resolvePgBackend({
 });
 
 const facade = createPgFileFacade({
-  // Vitest's VITEST marker is the resilient test signal when a wrapper drops
-  // NODE_ENV; never let a focused suite fall through to the live Postgres DB.
-  isFile: () => process.env.MEMORY_BACKEND === 'file' || isTestRunner(),
   makeFile: makeFileBackend,
   makePg: pgBackend,
 });

@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const db = vi.hoisted(() => ({ query: vi.fn(), stamp: 'a' }));
 vi.mock('../lib/db.js', () => ({ query: db.query }));
-vi.mock('../lib/runtimeEnv.js', async (original) => ({ ...await original(), isTestRunner: () => false }));
+vi.mock('../lib/pgFileFacade.js', () => ({ isFileBackend: () => false }));
 vi.mock('./videoGen/history.js', () => ({
   loadHistory: async () => [{ id: 'vid-1', filename: 'clip-1.mp4' }, { id: 'vid-2', filename: 'clip-2.mp4' }],
 }));

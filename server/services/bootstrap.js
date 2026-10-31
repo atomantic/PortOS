@@ -26,7 +26,7 @@ import { noteReadinessChanged } from './readinessSignal.js';
  * queue an AI provider call. Boot only loads on-disk state and ARMS schedulers;
  * every scheduler here is off by default or user-configured.
  */
-import { isTestRunner, isSmokeBoot } from '../lib/runtimeEnv.js';
+import { isSmokeBoot } from '../lib/runtimeEnv.js';
 import { readPortosEnvValue } from '../lib/portosEnv.js';
 import { join } from 'path';
 import { resolveInstallRoot } from '../lib/dataRoot.js';
@@ -804,10 +804,11 @@ const initMediaJobDependentHooks = () => {
 const runDatabaseBootPhase = () => runDatabasePhase({
   gate: async () => {
     const { checkHealth, ensureSchema } = await import('../lib/db.js');
+    const { isFileBackend } = await import('../lib/pgFileFacade.js');
     const { dbReady } = await gateOnDatabase({
       checkHealth,
       ensureSchema,
-      escapeHatch: process.env.MEMORY_BACKEND === 'file' || isTestRunner()
+      escapeHatch: isFileBackend()
     });
     // ensureSchema is threaded through to the migrations below so the phase
     // resolves the db.js module exactly once.
