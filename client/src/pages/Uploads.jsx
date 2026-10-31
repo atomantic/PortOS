@@ -260,7 +260,7 @@ export default function Uploads() {
                 </div>
 
                 {/* Actions */}
-                <div className="flex items-center gap-2 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+                <div className="flex items-center gap-2 opacity-100 [@media(hover:hover)]:sm:opacity-0 sm:group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
                   <a
                     href={api.getUploadUrl(file.filename)}
                     target="_blank"

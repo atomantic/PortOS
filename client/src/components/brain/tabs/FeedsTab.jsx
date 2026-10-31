@@ -268,7 +268,7 @@ export default function FeedsTab({ onRefresh }) {
                   )}
                 </button>
                 {/* Feed actions on hover */}
-                <div className="absolute right-0 top-0 h-full flex items-center gap-0.5 pr-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+                <div className="absolute right-0 top-0 h-full flex items-center gap-0.5 pr-1 opacity-100 [@media(hover:hover)]:sm:opacity-0 sm:group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
                   <button
                     onClick={(e) => { e.stopPropagation(); handleRefreshFeed(feed.id); }}
                     className="min-h-[44px] min-w-[44px] flex items-center justify-center p-1 text-gray-500 hover:text-white rounded"

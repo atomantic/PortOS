@@ -202,10 +202,10 @@ export default function ResumeAgentModal({ agent, taskType = 'user', providers, 
                     <button
                       type="button"
                       onClick={() => removeScreenshot(s.id)}
-                      className="absolute -top-2 -right-2 w-5 h-5 bg-port-error rounded-full flex items-center justify-center md:opacity-0 md:group-hover:opacity-100 focus-visible:opacity-100 md:focus-visible:opacity-100 transition-opacity"
+                      className="absolute -top-3 -right-3 w-11 h-11 flex items-center justify-center [@media(hover:hover)]:md:opacity-0 md:group-hover:opacity-100 focus-visible:opacity-100 md:focus-visible:opacity-100 transition-opacity"
                       aria-label={`Remove screenshot ${s.filename}`}
                     >
-                      <X size={12} aria-hidden="true" />
+                      <span className="flex w-5 h-5 bg-port-error rounded-full items-center justify-center"><X size={12} aria-hidden="true" /></span>
                     </button>
                   </div>
                 ))}

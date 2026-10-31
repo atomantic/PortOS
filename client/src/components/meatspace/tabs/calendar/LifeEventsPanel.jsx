@@ -83,7 +83,7 @@ export default function LifeEventsPanel({ events, onAdd, onToggle, onRemove }) {
                   </button>
                   <button
                     onClick={() => onRemove(event.id)}
-                    className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center opacity-40 sm:opacity-0 sm:group-hover:opacity-100 focus-visible:opacity-100 transition-opacity text-gray-600 hover:text-port-error p-0.5"
+                    className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center opacity-40 [@media(hover:hover)]:sm:opacity-0 sm:group-hover:opacity-100 focus-visible:opacity-100 transition-opacity text-gray-600 hover:text-port-error p-0.5"
                     title="Remove" aria-label="Remove"
                   >
                     <Trash2 size={12} />
