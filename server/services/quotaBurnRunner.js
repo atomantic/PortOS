@@ -716,11 +716,15 @@ function onBurnAgentCompleted(agent) {
   // a manual maintenance run's agent spends this family's window — so the
   // denial ledger still hears about it — but its completion advances that run,
   // never this plan.
-  const deepHold = heldForDeepCheckpoint(agent);
-  const walkPlan = () => deepHold
-    ? Promise.resolve({ skipped: 'deep-audit-checkpoint', reason: deepHold.reason })
-    : completeQuotaBurnSequenceStep(agent)
-    .then(() => runQuotaBurnCycle({ trigger: 'continuation', familyId, ignoreTaskId: agent?.result?.success ? agent?.taskId : null }));
+  // Evaluated inside the chain: an unsupported audit-workflow marker throws,
+  // and a synchronous throw here would escape the emitter listener.
+  const walkPlan = () => {
+    const deepHold = heldForDeepCheckpoint(agent);
+    return deepHold
+      ? { skipped: 'deep-audit-checkpoint', reason: deepHold.reason }
+      : completeQuotaBurnSequenceStep(agent)
+        .then(() => runQuotaBurnCycle({ trigger: 'continuation', familyId, ignoreTaskId: agent?.result?.success ? agent?.taskId : null }));
+  };
   return recordBurnAgentCompletion(agent)
     .catch((err) => console.error(`⚠️ Quota-burn denial ledger for ${familyId}: ${err.message}`))
     .then(() => (burnPlanOwnsAgent(agent) ? walkPlan() : { skipped: 'maintenance-run' }))
