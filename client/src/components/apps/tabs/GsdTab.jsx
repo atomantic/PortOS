@@ -3,6 +3,7 @@ import { useSearchParams, useNavigate } from 'react-router';
 import { RefreshCw, Compass, CheckCircle, ArrowRight, FolderSearch, FileText, Map as MapIcon, Play, Terminal } from 'lucide-react';
 import toast from '../../ui/Toast';
 import BrailleSpinner from '../../BrailleSpinner';
+import ListLoadError from '../../ui/ListLoadError';
 import GsdProjectHeader from '../../gsd/GsdProjectHeader';
 import PhaseCardList from '../../gsd/PhaseCardList';
 import GsdConcernsPanel from '../../cos/tabs/GsdConcernsPanel';
@@ -54,11 +55,16 @@ function GsdSetupGuide({ gsd, appId, repoPath, onRefresh }) {
 
   const handleRunStep = async (step) => {
     setRunningStep(step.id);
-    await api.addCosTask({
+    // The request helper toasts a failure itself; only a created task is a success.
+    const created = await api.addCosTask({
       description: STEP_DESCRIPTIONS[step.id],
       app: appId,
       priority: 'MEDIUM',
     }).catch(() => null);
+    if (!created) {
+      setRunningStep(null);
+      return;
+    }
     toast.success('Agent task created');
     setTimeout(() => setRunningStep(null), 2000);
   };
@@ -225,6 +231,10 @@ export default function GsdTab({ appId, repoPath }) {
   const [pendingActions, setPendingActions] = useState([]);
   const [gsdStatus, setGsdStatus] = useState(null);
   const [loading, setLoading] = useState(true);
+  // A failed read must not render an existing GSD project as uninitialized
+  // (the setup guide invites re-running the mapping agents), so it is kept
+  // apart from "no project" and the last good project stays on screen.
+  const [loadError, setLoadError] = useState(null);
 
   const expandedPhase = searchParams.get('phase') || null;
   const selectedDoc = searchParams.get('doc') || null;
@@ -255,25 +265,28 @@ export default function GsdTab({ appId, repoPath }) {
 
   const fetchData = useCallback(async () => {
     setLoading(true);
+    let failure = null;
+    const recordFailure = (error) => { failure ??= error; return null; };
 
     // Fetch GSD status from documents endpoint (silent, no toast)
-    const docsData = await api.getAppDocuments(appId, { silent: true }).catch(() => null);
-    const gsd = docsData?.gsd || {};
-    setGsdStatus(gsd);
+    const docsData = await api.getAppDocuments(appId, { silent: true }).catch(recordFailure);
+    const gsd = docsData?.gsd;
+    if (gsd) setGsdStatus(gsd);
 
     // Only fetch project data if we have a roadmap + state (full project)
-    if (gsd.hasRoadmap && gsd.hasState) {
+    if (gsd?.hasRoadmap && gsd?.hasState) {
       const [projectData, phasesData] = await Promise.all([
-        api.getGsdProject(appId, { silent: true }).catch(() => null),
-        api.getGsdPhases(appId, { silent: true }).catch(() => null),
+        api.getGsdProject(appId, { silent: true }).catch(recordFailure),
+        api.getGsdPhases(appId, { silent: true }).catch(recordFailure),
       ]);
       if (projectData) setProject(projectData);
       if (phasesData) setPendingActions(phasesData.pendingActions || []);
-    } else {
+    } else if (gsd) {
       setProject(null);
       setPendingActions([]);
     }
 
+    setLoadError(failure ? (failure instanceof Error ? failure : new Error('Request failed')) : null);
     setLoading(false);
   }, [appId]);
 
@@ -285,6 +298,14 @@ export default function GsdTab({ appId, repoPath }) {
     return <BrailleSpinner text="Loading GSD project" />;
   }
 
+  const loadErrorRow = loadError && (
+    <ListLoadError what="the GSD project" error={loadError} onRetry={fetchData} />
+  );
+
+  if (!project && loadError) {
+    return <div className="max-w-5xl">{loadErrorRow}</div>;
+  }
+
   // Show setup guide if project isn't fully initialized
   if (!project) {
     return <GsdSetupGuide gsd={gsdStatus || {}} appId={appId} repoPath={repoPath} onRefresh={fetchData} />;
@@ -292,6 +313,8 @@ export default function GsdTab({ appId, repoPath }) {
 
   return (
     <div className="max-w-5xl space-y-6">
+      {loadErrorRow}
+
       {/* Project Header */}
       <GsdProjectHeader
         project={project}

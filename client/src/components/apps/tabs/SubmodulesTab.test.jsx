@@ -75,4 +75,27 @@ describe('SubmodulesTab', () => {
     expect(await screen.findByRole('button', { name: 'Update' })).toBeDisabled();
     expect(screen.queryByRole('button', { name: /Update All/ })).not.toBeInTheDocument();
   });
+  it('shows a failed read as an error with Retry, not as a repo without submodules', async () => {
+    mockGetSubmodules.mockRejectedValueOnce(new Error('git exited 128'));
+
+    render(<SubmodulesTab repoPath={REPO} />);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load submodules — git exited 128');
+    expect(screen.queryByText(/No git submodules found/)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('dep')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('keeps the listed submodules when a refresh fails', async () => {
+    render(<SubmodulesTab repoPath={REPO} />);
+    await screen.findByText('dep');
+    mockGetSubmodules.mockRejectedValueOnce(new Error('timeout'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load submodules');
+    expect(screen.getByText('dep')).toBeInTheDocument();
+  });
 });

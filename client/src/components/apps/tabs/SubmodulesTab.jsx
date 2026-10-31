@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { RefreshCw, ArrowUpCircle, GitBranch, ExternalLink, Check, GitCommit } from 'lucide-react';
 import toast from '../../ui/Toast';
 import Pill from '../../ui/Pill';
+import ListLoadError from '../../ui/ListLoadError';
 import ToggleSwitch from '../../ToggleSwitch';
 import BrailleSpinner from '../../BrailleSpinner';
 import * as api from '../../../services/api';
@@ -49,6 +50,9 @@ export default function SubmodulesTab({ repoPath }) {
   const [refreshing, setRefreshing] = useState(false);
   const [updating, setUpdating] = useState(null);
   const [commitAfterUpdate, setCommitAfterUpdate] = useState(false);
+  // A failed read is not "no submodules": the last good list stays beside a
+  // retryable error row.
+  const [loadError, setLoadError] = useState(null);
   const batchUpdating = useRef(false);
 
   const loadSubmodules = useCallback(async (showSpinner = true) => {
@@ -57,11 +61,17 @@ export default function SubmodulesTab({ repoPath }) {
     else setRefreshing(true);
     // One call carries both the list and the branch a commit would land on, so
     // the toggle names the same branch the server's commit guard checks.
-    const data = await api.getSubmodules(repoPath, { silent: true }).catch(() => null);
-    setSubmodules(data?.submodules || []);
-    if (data?.defaultBranch) setDefaultBranch(data.defaultBranch);
+    let failure = null;
+    const data = await api.getSubmodules(repoPath, { silent: true }).catch((error) => { failure = error; return null; });
     setLoading(false);
     setRefreshing(false);
+    if (!data) {
+      setLoadError(failure instanceof Error ? failure : new Error('Request failed'));
+      return;
+    }
+    setLoadError(null);
+    setSubmodules(data.submodules || []);
+    if (data.defaultBranch) setDefaultBranch(data.defaultBranch);
   }, [repoPath]);
 
   useEffect(() => { loadSubmodules(); }, [loadSubmodules]);
@@ -156,10 +166,16 @@ export default function SubmodulesTab({ repoPath }) {
         </div>
       </div>
 
+      {loadError && (
+        <ListLoadError what="submodules" error={loadError} onRetry={() => loadSubmodules(false)} retrying={refreshing} />
+      )}
+
       {submodules.length === 0 ? (
-        <div className="bg-port-card border border-port-border rounded-lg p-8 text-center text-gray-400">
-          No git submodules found in this repository.
-        </div>
+        loadError ? null : (
+          <div className="bg-port-card border border-port-border rounded-lg p-8 text-center text-gray-400">
+            No git submodules found in this repository.
+          </div>
+        )
       ) : (
         <div className="grid gap-4">
           {submodules.map(sub => (

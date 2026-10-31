@@ -275,6 +275,7 @@ function PickedActions({ ingredientId, take, isCanon, forms, images, disabled, o
   const [pickingGallery, setPickingGallery] = useState(false);
   const [boards, setBoards] = useState(null);
   const [boardError, setBoardError] = useState('');
+  const [castError, setCastError] = useState('');
   const [boardId, setBoardId] = useState('');
   const [ageFormId, setAgeFormId] = useState(forms[0]?.id || '');
   const [otherCast, setOtherCast] = useState(null);
@@ -305,8 +306,12 @@ function PickedActions({ ingredientId, take, isCanon, forms, images, disabled, o
   };
   const loadCast = async (ingredient) => {
     setPickingCast(false);
-    const details = await getCatalogIngredientDetails(ingredient.id, { view: 'media', silent: true }).catch(() => null);
-    setOtherCast({ name: ingredient.name, images: (details?.media || []).filter((m) => IMAGE_KINDS.has(m.kind) && !m.deleted) });
+    setCastError('');
+    // A failed read is not a cast member with no images: say so and keep the current choices.
+    const details = await getCatalogIngredientDetails(ingredient.id, { view: 'media', silent: true })
+      .catch((err) => { setCastError(err.message || `Could not load ${ingredient.name}'s images`); return null; });
+    if (!details) return;
+    setOtherCast({ name: ingredient.name, images: (details.media || []).filter((m) => IMAGE_KINDS.has(m.kind) && !m.deleted) });
   };
   const blendChoices = [...extraPicks, ...images.filter((m) => m.mediaKey !== take.mediaKey), ...(otherCast?.images || [])]
     .filter((m, i, all) => all.findIndex((x) => x.mediaKey === m.mediaKey) === i);
@@ -343,6 +348,7 @@ function PickedActions({ ingredientId, take, isCanon, forms, images, disabled, o
         <button type="button" onClick={() => setPickingGallery(true)} className="min-h-11 text-sm text-port-accent underline">Pick from gallery</button>
         {!boards && <button type="button" onClick={loadBoards} className="min-h-11 text-sm text-port-accent underline">Pick from mood board</button>}
       </div>
+      {castError && <p role="alert" className="text-xs text-port-error">{castError}</p>}
       {boardError && <p role="alert" className="text-xs text-port-error">{boardError}</p>}
       {boards && (boards.length ? <label htmlFor={`${id}-board`} className="block space-y-1 text-xs"><span>Mood board</span>
         <select id={`${id}-board`} value={boardId} onChange={(e) => setBoardId(e.target.value)} className={fieldClass}>

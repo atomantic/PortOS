@@ -17,6 +17,8 @@ vi.mock('../ui/Toast', () => ({
 }));
 
 import EmbeddingsTab from './EmbeddingsTab.jsx';
+import { getSettings, updateSettings } from '../../services/apiSystem';
+import { getLocalLlmStatus } from '../../services/apiLocalLlm';
 
 describe('EmbeddingsTab', () => {
   it('reads installed embedding choices from the public models field for both backends', async () => {
@@ -34,5 +36,32 @@ describe('EmbeddingsTab', () => {
     fireEvent.change(screen.getByLabelText('Provider'), { target: { value: 'lmstudio' } });
     fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
     await waitFor(() => expect(datalist().querySelector('option[value="example/custom-embedding"]')).toBeTruthy());
+  });
+
+  it('blocks the form instead of showing "Disabled" when the settings read fails', async () => {
+    getSettings.mockRejectedValueOnce(new Error('Server unavailable'));
+    getLocalLlmStatus.mockResolvedValue({ ollama: { models: [] }, lmstudio: { models: [] } });
+    render(<MemoryRouter><EmbeddingsTab /></MemoryRouter>);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load embeddings settings');
+    expect(screen.queryByText(/Saved: Disabled/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument();
+    expect(updateSettings).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByLabelText('Provider')).toHaveValue('ollama');
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('shows a failed installed-model read as a retryable error', async () => {
+    getLocalLlmStatus.mockRejectedValueOnce(new Error('Ollama unreachable'))
+      .mockResolvedValueOnce({ ollama: { models: [{ id: 'custom-embed:latest' }] }, lmstudio: { models: [] } });
+    render(<MemoryRouter><EmbeddingsTab /></MemoryRouter>);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load installed models — Ollama unreachable');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(document.querySelector('option[value="custom-embed:latest"]')).toBeTruthy());
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 });
