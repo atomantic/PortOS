@@ -1154,6 +1154,7 @@ describe('create-schema parity', () => {
     shotMode: 'performance',
     performanceSpeaker: 'Singer',
     performanceStyle: 'music',
+    coverage: 'sequence',
     panelId: 'panel-example-1',
     panelRev: 'abc123',
     panelArt: 'panel-art.png',

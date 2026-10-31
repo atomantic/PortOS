@@ -66,7 +66,7 @@ import { PRE_MUSIC_DURATION_RANGE, PRE_MUSIC_EFFECT_IDS, PRE_MUSIC_LAYER_LIMIT, 
 import { CAMERA_FRAMINGS, CAMERA_MOVEMENT_VALUES, CAMERA_SPEEDS } from './cameraMovements.js';
 import { CAST_ERAS } from './catalogMediaLibrary.js';
 import { STORYBOARD_ID_PATTERN } from './storyboardVocabulary.js';
-import { MUSIC_VIDEO_PERFORMANCE_STYLES, MUSIC_VIDEO_SHOT_MODES, SOURCE_AUDIO_LIPSYNC } from './musicVideoShotTiming.js';
+import { MUSIC_VIDEO_COVERAGE_MODES, MUSIC_VIDEO_PERFORMANCE_STYLES, MUSIC_VIDEO_SHOT_MODES, SOURCE_AUDIO_LIPSYNC } from './musicVideoShotTiming.js';
 import {
   MUSIC_VIDEO_AUTOMATION_BUDGET_MAX_USD,
   MUSIC_VIDEO_AUTOMATION_GUIDANCE_MAX,
@@ -1748,6 +1748,8 @@ export const musicVideoSceneCreateSchema = z.object({
   // recording (only a verified source-audio provider can render it); absent or
   // `cutaway` = the ordinary image-to-video shot. See lib/musicVideoShotTiming.js.
   shotMode: z.enum(MUSIC_VIDEO_SHOT_MODES).optional(),
+  // #14241: `sequence` generates a run of cutaway footage shots in one timed request.
+  coverage: z.enum(MUSIC_VIDEO_COVERAGE_MODES).optional(),
   performanceSpeaker: z.string().trim().max(120).nullable().optional(),
   // How a performance follows the song: lip-sync (absent/null) or music-driven motion.
   performanceStyle: z.enum(MUSIC_VIDEO_PERFORMANCE_STYLES).nullable().optional(),
@@ -1789,6 +1791,8 @@ export const musicVideoSceneUpdateSchema = z.object({
   // recording (only a verified source-audio provider can render it); absent or
   // `cutaway` = the ordinary image-to-video shot. See lib/musicVideoShotTiming.js.
   shotMode: z.enum(MUSIC_VIDEO_SHOT_MODES).optional(),
+  // #14241: `sequence` generates a run of cutaway footage shots in one timed request.
+  coverage: z.enum(MUSIC_VIDEO_COVERAGE_MODES).optional(),
   performanceSpeaker: z.string().trim().max(120).nullable().optional(),
   // How a performance follows the song: lip-sync (absent/null) or music-driven motion.
   performanceStyle: z.enum(MUSIC_VIDEO_PERFORMANCE_STYLES).nullable().optional(),
