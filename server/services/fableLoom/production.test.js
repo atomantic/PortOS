@@ -492,6 +492,52 @@ describe('fableLoom production service', () => {
       .rejects.toMatchObject({ code: 'EXACT_INPUTS_REFUSED', status: 409 });
   });
 
+  describe('exact-input recorded environment audit', () => {
+    const planWithManifests = async (manifests) => {
+      const exactLoom = structuredClone(sampleLoom);
+      const [first, ...rest] = manifests;
+      exactLoom.episodes[0].nodes[0].visualConditioning = first;
+      exactLoom.episodes[0].nodes[0].playbackAssets = {
+        visualConditioningByAsset: Object.fromEntries(rest.map((manifest, index) => [`extra-${index}`, manifest])),
+      };
+      records.getLoom.mockResolvedValue(exactLoom);
+      const plan = await planEpisodeProduction('loom-1', 'ep-1', { mode: 'exact_inputs' });
+      return plan.exactInputIssues
+        .filter((issue) => issue.nodeId === 'node-1')
+        .flatMap((issue) => issue.errors)
+        .filter((error) => /names unsupported|requires Grok|is disabled/.test(error));
+    };
+    const manifest = (capability) => ({ version: 1, status: 'locked', capability });
+
+    it.each([
+      ['an unsupported video backend', { kind: 'video', backend: 'mystery', modelId: 'm' },
+        {}, 'Recorded visual conditioning names unsupported video backend "mystery".'],
+      ['a recorded Grok video while Grok is disabled', { kind: 'video', backend: 'grok', modelId: 'm' },
+        { imageGen: { grok: { enabled: false } } },
+        'Recorded visual conditioning requires Grok video, which is disabled in Settings → Image Gen.'],
+      ['an unsupported image backend', { kind: 'image', backend: 'mystery', modelId: 'm' },
+        {}, 'Recorded visual conditioning names unsupported image backend "mystery".'],
+      ['a disabled cloud image provider', { kind: 'image', backend: 'fal', modelId: 'm' },
+        { imageGen: { fal: { enabled: false } } }, 'is disabled'],
+    ])('reports %s', async (_label, capability, settings, expected) => {
+      settingsMocks.getSettings.mockResolvedValue({ videoGen: {}, ...settings });
+      const errors = await planWithManifests([manifest(capability)]);
+      expect(errors).toHaveLength(1);
+      expect(errors[0]).toContain(expected);
+    });
+
+    it('reports one message when two manifests on a node share a capability key', async () => {
+      const capability = { kind: 'image', backend: 'mystery', modelId: 'm' };
+      const errors = await planWithManifests([manifest(capability), manifest(capability)]);
+      expect(errors).toEqual(['Recorded visual conditioning names unsupported image backend "mystery".']);
+    });
+
+    it('reports nothing for a recorded local image backend', async () => {
+      const errors = await planWithManifests([manifest({ kind: 'image', backend: 'local', modelId: 'image-model' })]);
+      expect(errors).toEqual([]);
+    });
+  });
+
   it('replays the complete recorded image parameter tuple in exact-input mode', async () => {
     const exactLoom = structuredClone(sampleLoom);
     const recorded = (assetId) => ({
