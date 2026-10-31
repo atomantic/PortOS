@@ -17,6 +17,7 @@
  * Browser-safe: no node-only imports.
  */
 
+import { lyricSectionSpans } from './lyricSectionSpans.js';
 import { PRE_MUSIC_DURATION_RANGE } from './musicVideoColdOpen.js';
 import { STORYBOARD_DEFAULT_HOLD_SEC, storyboardPreludeCount } from './storyboardSongBrief.js';
 import { newStoryboardEntityId, STORYBOARD_MUSICAL_ROLE_LABELS } from './storyboardVocabulary.js';
@@ -36,15 +37,43 @@ const nearest = (list, at, within) => list.reduce((best, item) => {
   return gap <= within && (!best || gap < Math.abs(best.at - at)) ? item : best;
 }, null);
 
-/** The song a fit lands on, from a music video's analysis and timed lyric cues; null before analysis. */
+// A gap shorter than this before the first sung section (or after the last)
+// stays part of it rather than becoming its own Intro / Outro.
+const LYRIC_EDGE_MIN_SEC = 1;
+
+/**
+ * The song's sections as the lyric sheet names and times them: one per
+ * `[Verse]`/`[Chorus]` marker with a timed line, plus Intro / Outro for the
+ * unsung stretches at either end. Null when the sheet has no timed sections,
+ * so the audio analysis's own sections are used.
+ */
+function lyricSheetSections(project, end) {
+  const spans = lyricSectionSpans(project?.lyricCues, project?.lyricMarkers)
+    .map((span) => ({ label: span.label, startSec: Math.max(0, span.startSec), endSec: Math.min(end, span.endSec) }))
+    .filter((span) => span.endSec > span.startSec);
+  if (!spans.length) return null;
+  if (spans[0].startSec < LYRIC_EDGE_MIN_SEC) spans[0].startSec = 0;
+  else spans.unshift({ label: 'Intro', startSec: 0, endSec: spans[0].startSec });
+  const last = spans.at(-1);
+  if (end - last.endSec < LYRIC_EDGE_MIN_SEC) last.endSec = end;
+  else spans.push({ label: 'Outro', startSec: last.endSec, endSec: end });
+  return spans;
+}
+
+/**
+ * The song a fit lands on, from a music video's analysis and timed lyric cues;
+ * null before analysis. Sections follow the lyric sheet when it marks and times
+ * them (the analysis's detected boundaries rarely match the written song),
+ * else the analysis's.
+ */
 export function storyboardFitSong(project) {
   const analysis = project?.audioAnalysis;
-  const sections = (analysis?.sections || []).filter((s) => Number.isFinite(s.startSec) && Number.isFinite(s.endSec));
-  const end = Number.isFinite(analysis?.durationSec) && analysis.durationSec > 0 ? analysis.durationSec : sections.at(-1)?.endSec;
+  const detected = (analysis?.sections || []).filter((s) => Number.isFinite(s.startSec) && Number.isFinite(s.endSec));
+  const end = Number.isFinite(analysis?.durationSec) && analysis.durationSec > 0 ? analysis.durationSec : detected.at(-1)?.endSec;
   if (!(end > 0)) return null;
   return {
     durationSec: end,
-    sections,
+    sections: lyricSheetSections(project, end) || detected,
     downbeats: (analysis.downbeats || []).filter(Number.isFinite),
     beats: (analysis.beats || []).filter(Number.isFinite),
     lyricCues: (project.lyricCues || []).filter((cue) => Number.isFinite(cue?.startSec) && cue.text),

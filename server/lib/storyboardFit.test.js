@@ -103,6 +103,32 @@ describe('fitStoryboardToSong', () => {
     expect(storyboardShotPanel(board, { sceneId: 'mvs-hand' })).toBeNull();
   });
 
+  // Uniquely catches the board's song sections following the audio detector's boundaries instead of the lyric sheet.
+  it('takes the song sections from the timed lyric sheet, with Intro and Outro for the unsung ends', () => {
+    const project = {
+      audioAnalysis: { durationSec: 60, sections: [{ label: 'A', startSec: 0, endSec: 30 }, { label: 'B', startSec: 30, endSec: 60 }] },
+      lyricCues: [
+        { text: 'first verse line', startSec: 8, endSec: 12 },
+        { text: 'second verse line', startSec: 14, endSec: 20 },
+        { text: 'chorus line', startSec: 24, endSec: 30 },
+        { text: 'last chorus line', startSec: 33, endSec: 50 },
+      ],
+      lyricMarkers: [
+        { type: 'section', label: 'Verse 1', kind: 'verse', line: 0 },
+        { type: 'section', label: 'Chorus', kind: 'chorus', line: 2 },
+      ],
+    };
+    expect(storyboardFitSong(project).sections).toEqual([
+      { label: 'Intro', startSec: 0, endSec: 8 },
+      { label: 'Verse 1', startSec: 8, endSec: 24 },
+      { label: 'Chorus', startSec: 24, endSec: 50 },
+      { label: 'Outro', startSec: 50, endSec: 60 },
+    ]);
+    // An untimed sheet keeps the analysis sections.
+    const untimed = { ...project, lyricCues: project.lyricCues.map(({ text }) => ({ text })) };
+    expect(storyboardFitSong(untimed).sections.map((section) => section.label)).toEqual(['A', 'B']);
+  });
+
   it('needs an analyzed song', () => {
     expect(storyboardFitSong({})).toBeNull();
     expect(fitStoryboardToSong(board, null)).toEqual({ beats: [], shots: [] });

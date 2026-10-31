@@ -18,6 +18,9 @@
  */
 
 import { trimTo } from '../../lib/textUtils.js';
+import { lastTimedCueEnd, lyricSectionSpans } from '../../lib/lyricSectionSpans.js';
+
+const isTime = (value) => typeof value === 'number' && Number.isFinite(value);
 
 export const LYRIC_MARKER_LABEL_MAX = 120;
 export const LYRIC_MARKER_KIND_MAX = 32;
@@ -149,45 +152,6 @@ export function normalizeLyricMarkers(markers, cueCount = Infinity) {
 /** Shift every marker's line by `offset` (appending an imported sheet after existing lines). */
 export const offsetLyricMarkers = (markers, offset) => (markers || []).map((m) => ({ ...m, line: m.line + offset }));
 
-const isTime = (value) => typeof value === 'number' && Number.isFinite(value);
-
-// First timed cue at or after `line` and before `stop`.
-function firstTimed(cues, line, stop) {
-  for (let i = line; i < Math.min(stop, cues.length); i++) if (isTime(cues[i]?.startSec)) return cues[i];
-  return null;
-}
-
-function lastTimedEnd(cues, from, stop) {
-  for (let i = Math.min(stop, cues.length) - 1; i >= from; i--) {
-    const cue = cues[i];
-    if (isTime(cue?.endSec)) return cue.endSec;
-    if (isTime(cue?.startSec)) return cue.startSec;
-  }
-  return null;
-}
-
-/**
- * Time spans of the sheet's sections once its lines are timed. A section runs
- * from its first timed line to the next section's first timed line (the last
- * one to its last timed line). Sections with no timed line are left out.
- */
-function lyricSectionSpans(cues, markers) {
-  const list = Array.isArray(cues) ? cues : [];
-  const sections = (markers || []).filter((m) => m?.type === 'section');
-  const spans = [];
-  sections.forEach((section, index) => {
-    const stop = index + 1 < sections.length ? sections[index + 1].line : list.length;
-    const first = firstTimed(list, section.line, stop);
-    if (!first) return;
-    spans.push({ label: section.label, kind: section.kind, startSec: first.startSec, stop, line: section.line });
-  });
-  return spans.map((span, index) => {
-    const next = spans[index + 1];
-    const endSec = next ? next.startSec : lastTimedEnd(list, span.line, span.stop);
-    return { label: span.label, kind: span.kind, startSec: span.startSec, endSec: isTime(endSec) && endSec > span.startSec ? endSec : span.startSec };
-  }).filter((span) => span.endSec > span.startSec);
-}
-
 // An analysis section takes the sheet's name when at least this share of it
 // lies inside one lyric section.
 const RELABEL_MIN_SHARE = 0.45;
@@ -243,7 +207,7 @@ export function deliveryNotesWithin(cues, markers, startSec, endSec) {
   for (const marker of markers || []) {
     if (marker?.type !== 'direction') continue;
     const cue = list[marker.line];
-    const at = cue && isTime(cue.startSec) ? cue.startSec : (marker.line >= list.length ? lastTimedEnd(list, 0, list.length) : null);
+    const at = cue && isTime(cue.startSec) ? cue.startSec : (marker.line >= list.length ? lastTimedCueEnd(list, 0, list.length) : null);
     if (!isTime(at) || at < startSec || at >= endSec) continue;
     if (!notes.includes(marker.label)) notes.push(marker.label);
   }
