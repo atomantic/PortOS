@@ -60,6 +60,7 @@ const STRUCTURALLY_SELECTED = new Map([
   ['client/src/a11yConventions.test.js', 'structuralTestsFor: client/src/**.jsx'],
   ['client/src/apiWrapperOptionsConventions.test.js', 'structuralTestsFor: client/src/**.js(x)'],
   ['client/src/asyncEffectDisposalConventions.test.js', 'structuralTestsFor: client/src/**.js(x)'],
+  ['client/src/dragHandleTouchConventions.test.js', 'structuralTestsFor: client/src/**.js(x)'],
   ['client/src/globalShadowConventions.test.js', 'structuralTestsFor: client/src/**.js(x)'],
   ['client/src/headingTruncationConventions.test.js', 'structuralTestsFor: client/src/**.js(x)'],
   ['client/src/hooks/mountedRefConventions.test.js', 'structuralTestsFor: client/src/**.js(x)'],

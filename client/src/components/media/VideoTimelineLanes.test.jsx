@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 
-const dndPointerDown = vi.hoisted(() => vi.fn());
+// The editor's MouseSensor / TouchSensor activators.
+const dndMouseDown = vi.hoisted(() => vi.fn());
+const dndTouchStart = vi.hoisted(() => vi.fn());
 
 vi.mock('@dnd-kit/sortable', async () => {
   const actual = await vi.importActual('@dnd-kit/sortable');
@@ -9,7 +11,7 @@ vi.mock('@dnd-kit/sortable', async () => {
     ...actual,
     useSortable: () => ({
       attributes: {},
-      listeners: { onPointerDown: dndPointerDown },
+      listeners: { onMouseDown: dndMouseDown, onTouchStart: dndTouchStart },
       setNodeRef: () => {},
       transform: null,
       transition: null,
@@ -42,7 +44,8 @@ const renderBlock = (props = {}) => {
 };
 
 beforeEach(() => {
-  dndPointerDown.mockClear();
+  dndMouseDown.mockClear();
+  dndTouchStart.mockClear();
 });
 
 describe('TimelineBlock — remove control', () => {
@@ -64,10 +67,12 @@ describe('TimelineBlock — remove control', () => {
     const { onSelect, onRemove } = renderBlock();
     const remove = screen.getByRole('button', { name: 'Remove A dramatic sunrise from timeline' });
 
-    fireEvent.pointerDown(remove);
+    fireEvent.mouseDown(remove);
+    fireEvent.touchStart(remove);
     fireEvent.click(remove);
 
-    expect(dndPointerDown).not.toHaveBeenCalled();
+    expect(dndMouseDown).not.toHaveBeenCalled();
+    expect(dndTouchStart).not.toHaveBeenCalled();
     expect(onSelect).not.toHaveBeenCalled();
     expect(onRemove).toHaveBeenCalledOnce();
     expect(onRemove).toHaveBeenCalledWith('clip-key');

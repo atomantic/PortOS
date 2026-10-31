@@ -186,7 +186,7 @@ function SortableChip({ token, toneClass, onRemove }) {
         type="button"
         {...attributes}
         {...listeners}
-        className="cursor-grab active:cursor-grabbing text-current/60 hover:text-current focus:outline-none focus-visible:ring-1 focus-visible:ring-port-accent rounded"
+        className="inline-flex items-center justify-center pointer-coarse:min-w-11 pointer-coarse:min-h-11 touch-none cursor-grab active:cursor-grabbing text-current/60 hover:text-current focus:outline-none focus-visible:ring-1 focus-visible:ring-port-accent rounded"
         aria-label={`Drag ${token} to reorder`}
         title="Drag to reorder"
       >
@@ -197,7 +197,7 @@ function SortableChip({ token, toneClass, onRemove }) {
         type="button"
         onClick={onRemove}
         onPointerDown={(e) => e.stopPropagation()}
-        className="text-current/70 hover:text-current"
+        className="inline-flex items-center justify-center pointer-coarse:min-w-11 pointer-coarse:min-h-11 text-current/70 hover:text-current"
         aria-label={`Remove ${token}`}
       >
         <X size={11} />

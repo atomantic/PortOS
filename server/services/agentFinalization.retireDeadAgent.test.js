@@ -44,6 +44,9 @@ vi.mock('./taskTypeHooks.js', () => ({
 }));
 vi.mock('./agentErrorAnalysis.js', async importOriginal => ({ ...(await importOriginal()), resolveFailedTaskUpdate: vi.fn(), resolveTypeFailureSignal: vi.fn() }));
 vi.mock('./agentWorktreeCleanup.js', () => ({ releaseRetryHold: vi.fn(async () => ({})) }));
+vi.mock('./reviewFollowUpCompletion.js', () => ({
+  verifyMergedReviewFollowUp: vi.fn(async () => null),
+}));
 vi.mock('./agentCompletion.js', () => ({ processAgentCompletion: vi.fn(async () => null) }));
 vi.mock('./investigationTaskProducer.js', () => ({
   investigationCircuitOpen: vi.fn(() => false),
@@ -60,6 +63,7 @@ vi.mock('./codeReview.js', async (importOriginal) => ({
   getGoalFidelityConfig: vi.fn(async () => null),
 }));
 
+import { verifyMergedReviewFollowUp } from './reviewFollowUpCompletion.js';
 import { releaseRetryHold } from './agentWorktreeCleanup.js';
 import { completeAgent } from './cosAgentLifecycle.js';
 import { updateTask } from './cosTaskStore.js';
@@ -141,6 +145,19 @@ describe('retireDeadAgent (#8440)', () => {
     expect(updateTask).toHaveBeenCalledWith(TASK.id, expect.objectContaining({ status: 'blocked',
       metadata: expect.objectContaining({ deliveryDecisionAgentId: AGENT.id }) }), 'user', expect.objectContaining({ expectedTask: { description: TASK.description, priority: TASK.priority, metadata: TASK.metadata } }));
     expect(releaseRetryHold).toHaveBeenCalledWith({ agentId: AGENT.id, task: TASK, success: false, agentMetadata: AGENT.metadata });
+  });
+
+  it('keeps a recorded failed validation when a merged review follow-up is also verified, and passes it when none was recorded', async () => {
+    verifyMergedReviewFollowUp.mockResolvedValue({ prUrl: 'https://example.com/acme/repo/pull/1' });
+    const recover = validationPassed => retireDeadAgent({
+      agent: { ...AGENT, result: validationPassed === undefined ? undefined : { validationPassed } },
+      task: TASK, success: true, exitCode: 0, duration: 1, errorMessage: 'orphaned', category: 'orphaned',
+    });
+    await recover(false);
+    expect(completeAgent).toHaveBeenLastCalledWith('agent-dead', expect.objectContaining({ validationPassed: false }));
+    await recover(undefined);
+    expect(completeAgent).toHaveBeenLastCalledWith('agent-dead', expect.objectContaining({ validationPassed: true }));
+    verifyMergedReviewFollowUp.mockResolvedValue(null);
   });
 
   it.each([false, true])('retires only the dead run when the guarded recovery write loses task ownership (cleanup=%s)', async cleanup => {
