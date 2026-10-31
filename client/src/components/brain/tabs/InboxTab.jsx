@@ -575,7 +575,7 @@ export default function InboxTab({ onRefresh, settings }) {
                   >
                     <div className="flex items-start justify-between gap-2 mb-2">
                       {editingId === entry.id ? (
-                        <div className="flex-1 flex gap-2">
+                        <div className="flex-1 min-w-0 flex gap-2">
                           <textarea
                             aria-label="Edit item text"
                             value={editText}
@@ -603,7 +603,7 @@ export default function InboxTab({ onRefresh, settings }) {
                         </div>
                       ) : (
                         <>
-                          <p className="text-white flex-1">{entry.capturedText}</p>
+                          <p className="text-white flex-1 min-w-0 break-words">{entry.capturedText}</p>
                           <div className="flex gap-2">
                             <button
                               onClick={() => handleEdit(entry)}
@@ -719,7 +719,7 @@ export default function InboxTab({ onRefresh, settings }) {
                   className="p-3 bg-port-card border border-port-accent/30 rounded-lg"
                 >
                   <div className="flex items-start justify-between gap-2">
-                    <p className="text-white flex-1">{entry.capturedText}</p>
+                    <p className="text-white flex-1 min-w-0 break-words">{entry.capturedText}</p>
                     <div className="flex items-center gap-2">
                       <BrailleSpinner />
                       <span className="text-xs text-gray-500 whitespace-nowrap">
@@ -749,7 +749,7 @@ export default function InboxTab({ onRefresh, settings }) {
                 >
                   <div className="flex items-start justify-between gap-2 mb-1">
                     {editingId === entry.id ? (
-                      <div className="flex-1 flex gap-2">
+                      <div className="flex-1 min-w-0 flex gap-2">
                         <textarea
                           aria-label="Edit item text"
                           value={editText}
@@ -777,7 +777,7 @@ export default function InboxTab({ onRefresh, settings }) {
                       </div>
                     ) : (
                       <>
-                        <p className="text-white flex-1">{entry.capturedText}</p>
+                        <p className="text-white flex-1 min-w-0 break-words">{entry.capturedText}</p>
                         <div className="flex gap-2">
                           <button
                             onClick={() => handleEdit(entry)}
@@ -850,7 +850,7 @@ export default function InboxTab({ onRefresh, settings }) {
                     }`}
                   >
                     <div className="flex items-start justify-between gap-2 mb-2">
-                      <div className="flex-1">
+                      <div className="flex-1 min-w-0 break-words">
                         <p className="text-white">
                           {entry.creative && (
                             <Sparkles className="inline w-3.5 h-3.5 text-port-accent-2 mr-1.5 -mt-0.5" aria-label="Creative note" />
@@ -1011,7 +1011,7 @@ export default function InboxTab({ onRefresh, settings }) {
                       className="p-3 bg-port-card border border-port-border/50 rounded-lg opacity-60"
                     >
                       <div className="flex items-start justify-between gap-2 mb-2">
-                        <div className="flex-1">
+                        <div className="flex-1 min-w-0 break-words">
                           <p className="text-gray-400 line-through">{entry.capturedText}</p>
                           {entry.classification?.title && (
                             <p className="text-sm text-gray-500 mt-1">

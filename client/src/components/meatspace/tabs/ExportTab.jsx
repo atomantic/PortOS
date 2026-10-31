@@ -137,7 +137,7 @@ export default function ExportTab() {
                   )}
                 </div>
                 {test.categories.map(({ category, markers }) => (
-                  <div key={category}>
+                  <div key={category} className="overflow-x-auto print:overflow-visible">
                     <h5 className="text-xs font-medium text-gray-500 print:text-gray-700 uppercase mb-1">
                       {category}
                     </h5>

@@ -626,12 +626,12 @@ export default function ProviderCard({
             );
           })()}
           {(provider.lightModel || provider.mediumModel || provider.heavyModel || provider.ultraModel) && (
-            <p className="text-xs">
+            <p className="text-xs flex flex-wrap gap-x-1">
               Tiers:
-              {provider.lightModel && <span className="ml-1 text-port-success">{provider.lightModel}</span>}
-              {provider.mediumModel && <span className="ml-1 text-port-warning">{provider.mediumModel}</span>}
-              {provider.heavyModel && <span className="ml-1 text-port-error">{provider.heavyModel}</span>}
-              {provider.ultraModel && <span className="ml-1 text-purple-400">Ultra: {provider.ultraModel}</span>}
+              {provider.lightModel && <span className="text-port-success break-all">{provider.lightModel}</span>}
+              {provider.mediumModel && <span className="text-port-warning break-all">{provider.mediumModel}</span>}
+              {provider.heavyModel && <span className="text-port-error break-all">{provider.heavyModel}</span>}
+              {provider.ultraModel && <span className="text-purple-400 break-all">Ultra: {provider.ultraModel}</span>}
             </p>
           )}
           {provider.headlessArgs?.length > 0 && (
