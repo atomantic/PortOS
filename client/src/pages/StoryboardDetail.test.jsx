@@ -385,6 +385,66 @@ describe('StoryboardDetail', () => {
     expect(await screen.findByRole('button', { name: 'Make empty panels' })).toBeInTheDocument();
   });
 
+  // Uniquely catches the progress bar outliving its batch: a `done` missed while the
+  // socket was down, or a server restart that dropped the batch, until a reload.
+  it('re-reads the empty-panel batch on reconnect and drops a finished one', async () => {
+    api.getStoryboard.mockResolvedValue(board());
+    api.getStoryboardMakeEmpty.mockResolvedValue({ batch: { storyboardId: 'sb-1', status: 'running', total: 3, done: 1, failed: 0 }, panelCount: 0, steps: [] });
+    renderAt('/storyboards/sb-1');
+    expect(await screen.findByText('1 of 3')).toBeInTheDocument();
+
+    api.getStoryboardMakeEmpty.mockResolvedValue({ batch: null, panelCount: 0, steps: [] });
+    const onConnect = socketMock.on.mock.calls.filter(([event]) => event === 'connect').map(([, fn]) => fn);
+    await act(async () => { for (const fn of onConnect) fn(); });
+    expect(await screen.findByRole('button', { name: 'Make empty panels' })).toBeInTheDocument();
+    expect(screen.queryByText('1 of 3')).toBeNull();
+  });
+
+  // Uniquely catches the opening read restoring a batch a newer socket event already finished.
+  it('keeps a finished batch finished when the opening read answers after the done event', async () => {
+    api.getStoryboard.mockResolvedValue(board());
+    let answer;
+    api.getStoryboardMakeEmpty.mockReturnValue(new Promise((resolve) => { answer = resolve; }));
+    renderAt('/storyboards/sb-1');
+    expect(await screen.findByRole('button', { name: 'Make empty panels' })).toBeInTheDocument();
+    const onBatch = socketMock.on.mock.calls.findLast(([event]) => event === 'storyboard:make-batch')[1];
+    act(() => onBatch({ storyboardId: 'sb-1', status: 'done', total: 2, done: 2, failed: 0 }));
+    await act(async () => { answer({ batch: { storyboardId: 'sb-1', status: 'running', total: 2, done: 1, failed: 0 }, panelCount: 0, steps: [] }); });
+    expect(screen.queryByText('1 of 2')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Make empty panels' })).toBeInTheDocument();
+  });
+
+  // Uniquely catches a failed read being reported as a deleted board with no way to retry.
+  it('offers a retry when the board read fails, and says a 404 board is gone', async () => {
+    api.getStoryboard.mockRejectedValueOnce(Object.assign(new Error('HTTP 503'), { status: 503 }));
+    api.getStoryboard.mockResolvedValue(board());
+    const { unmount } = renderAt('/storyboards/sb-1');
+    expect(await screen.findByText('Could not load this storyboard')).toBeInTheDocument();
+    expect(screen.queryByText(/doesn't exist or was deleted/)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByLabelText('Storyboard name')).toBeInTheDocument();
+    unmount();
+
+    api.getStoryboard.mockRejectedValueOnce(Object.assign(new Error('Storyboard not found'), { status: 404 }));
+    renderAt('/storyboards/sb-1');
+    expect(await screen.findByText(/doesn't exist or was deleted/)).toBeInTheDocument();
+  });
+
+  // Uniquely catches a failed mood board list read relabeling the linked mood board as missing.
+  it('shows a retryable error, not "Missing mood board", when the mood board list fails', async () => {
+    api.getStoryboard.mockResolvedValue(board({ moodBoardId: 'mb-1' }));
+    api.listMoodBoardNames.mockRejectedValueOnce(new Error('HTTP 500'));
+    api.listMoodBoardNames.mockResolvedValue([{ id: 'mb-1', name: 'Neon Rain' }]);
+    renderAt('/storyboards/sb-1');
+    const picker = await screen.findByLabelText('Mood board');
+    expect(await screen.findByText(/Could not load mood boards/)).toBeInTheDocument();
+    expect(within(picker).queryByRole('option', { name: 'Missing mood board' })).toBeNull();
+    expect(picker).toHaveValue('mb-1');
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await within(picker).findByRole('option', { name: 'Neon Rain' })).toBeInTheDocument();
+    expect(screen.queryByText(/Could not load mood boards/)).toBeNull();
+  });
+
   // Uniquely catches a panel losing its one-tap Draw, or the button not showing the panel is drawing.
   it('draws one panel from its side panel and shows it drawing until the frame lands', async () => {
     api.getStoryboard.mockResolvedValue(board());

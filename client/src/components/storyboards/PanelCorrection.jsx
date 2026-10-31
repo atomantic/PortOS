@@ -28,11 +28,14 @@ export default function PanelCorrection({ take, onCorrect, onClose }) {
   const tool = useMemo(() => ({ color, size: DEFAULT_SIZE, mode }), [color, mode]);
   const fieldId = `panel-correction-${take.id}`;
 
-  // Earlier marks on this frame come back, so a correction can be refined.
+  // Earlier marks on this frame come back, so a correction can be refined;
+  // a read that lands after the user started drawing keeps the new strokes.
   useEffect(() => {
     let active = true;
     getMediaSketch(markupKey, { silent: true })
-      .then((res) => { if (active && Array.isArray(res?.sketch?.strokes)) setStrokes(res.sketch.strokes); })
+      .then((res) => {
+        if (active && Array.isArray(res?.sketch?.strokes)) setStrokes((prev) => (prev.length ? prev : res.sketch.strokes));
+      })
       .catch(() => {});
     return () => { active = false; };
   }, [markupKey]);

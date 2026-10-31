@@ -36,12 +36,21 @@ export default function MakeEmptyPanels({ boardId }) {
 
   useEffect(() => {
     let active = true;
-    // A batch started in another tab, or before a reload, is still shown.
-    getStoryboardMakeEmpty(boardId, { silent: true })
-      .then((res) => { if (active) setBatch(res?.batch || null); })
-      .catch(() => {});
+    // Counts batch events: a read issued before the newest one is older than it.
+    let events = 0;
+    // A batch started in another tab, or before a reload, is still shown. Re-read
+    // on reconnect: a `done` missed while offline, or a server restart that
+    // dropped the batch, would otherwise leave the progress bar up for good.
+    const read = () => {
+      const seen = events;
+      getStoryboardMakeEmpty(boardId, { silent: true })
+        .then((res) => { if (active && seen === events) setBatch(res?.batch || null); })
+        .catch(() => {});
+    };
+    read();
     const onBatch = (evt) => {
       if (evt?.storyboardId !== boardId) return;
+      events += 1;
       if (evt.status !== 'done') { setBatch(evt); return; }
       setBatch(null);
       const made = evt.done - evt.failed;
@@ -50,9 +59,11 @@ export default function MakeEmptyPanels({ boardId }) {
       else toast.success(`${verb} ${plural(made, 'panel')}.`);
     };
     socket.on('storyboard:make-batch', onBatch);
+    socket.on('connect', read);
     return () => {
       active = false;
       socket.off('storyboard:make-batch', onBatch);
+      socket.off('connect', read);
     };
   }, [boardId]);
 
