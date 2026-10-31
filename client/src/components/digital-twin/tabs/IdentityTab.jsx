@@ -465,7 +465,8 @@ export default function IdentityTab({ onRefresh }) {
             onClick={() => navigate('/digital-twin/taste')}
             className="flex items-center gap-1 mt-3 text-sm text-port-accent hover:text-white transition-colors"
           >
-            {taste?.completedCount > 0 ? 'Continue Taste Questionnaire' : 'Start Taste Questionnaire'}
+            {readFailed('taste profile') ? 'Open Taste Questionnaire'
+              : taste?.completedCount > 0 ? 'Continue Taste Questionnaire' : 'Start Taste Questionnaire'}
             <ChevronRight className="w-4 h-4" />
           </button>
         </div>

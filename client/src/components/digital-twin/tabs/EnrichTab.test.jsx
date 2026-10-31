@@ -79,6 +79,8 @@ describe('EnrichTab question load', () => {
     expect(screen.queryByText(/All questions for this category have been answered/)).toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    // While the retry is in flight the session stays open; the category grid is not shown.
+    expect(screen.queryByRole('button', { name: /Favorite Books/ })).toBeNull();
     expect(await screen.findByText('Describe a formative memory.')).toBeInTheDocument();
     expect(api.getDigitalTwinEnrichQuestion).toHaveBeenLastCalledWith('core_memories', undefined, undefined, undefined, { silent: true });
   });
@@ -91,4 +93,26 @@ describe('EnrichTab question load', () => {
     expect(await screen.findByText(/All questions for this category have been answered/)).toBeInTheDocument();
     expect(screen.queryByRole('alert')).toBeNull();
   });
+
+  it('drops a question that lands after the user left for another category', async () => {
+    let resolveSkip;
+    api.getDigitalTwinEnrichQuestion
+      .mockResolvedValueOnce({ questionId: 'q1', question: 'Describe a formative memory.', questionIndex: 0 })
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveSkip = resolve; }))
+      .mockResolvedValueOnce({ questionId: 'q3', question: 'How do you prefer to communicate?', questionIndex: 0 });
+    render(<MemoryRouter><EnrichTab /></MemoryRouter>);
+
+    fireEvent.click(await screen.findByRole('button', { name: /Core Memories/ }));
+    await screen.findByText('Describe a formative memory.');
+    fireEvent.click(screen.getByRole('button', { name: /Skip/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Back to categories/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /^Communication/ }));
+    expect(await screen.findByText('How do you prefer to communicate?')).toBeInTheDocument();
+
+    resolveSkip({ questionId: 'q2', question: 'A stale memory question.', questionIndex: 1 });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(screen.queryByText('A stale memory question.')).toBeNull();
+    expect(screen.getByText('How do you prefer to communicate?')).toBeInTheDocument();
+  });
 });
+

@@ -38,6 +38,9 @@ export default function EnrichTab({ onRefresh }) {
   const [loadingQuestion, setLoadingQuestion] = useState(false);
   // A rejected question read is not "all questions answered" (a null answer is).
   const [questionError, setQuestionError] = useState(null);
+  // Only the newest question request may apply: a retry or another category
+  // started while one is in flight supersedes it.
+  const questionRequestRef = useRef(0);
   const [skippedIndices, setSkippedIndices] = useState([]);
 
   // Writing sample analysis.
@@ -146,10 +149,12 @@ export default function EnrichTab({ onRefresh }) {
   };
 
   const loadQuestion = useCallback(async (categoryId, skipList = []) => {
+    const requestId = ++questionRequestRef.current;
     setLoadingQuestion(true);
     setQuestionError(null);
     const result = await api.getDigitalTwinEnrichQuestion(categoryId, undefined, undefined, skipList.length ? skipList : undefined, { silent: true })
       .then((question) => ({ question, error: null }), (error) => ({ question: null, error }));
+    if (requestId !== questionRequestRef.current) return;
     setCurrentQuestion(result.question);
     if (result.error) {
       setQuestionError({ error: result.error instanceof Error ? result.error : new Error('Request failed'), categoryId, skipList });
@@ -238,6 +243,8 @@ export default function EnrichTab({ onRefresh }) {
   };
 
   const exitCategory = () => {
+    questionRequestRef.current += 1;
+    setLoadingQuestion(false);
     setActiveCategory(null);
     setCurrentQuestion(null);
     setQuestionError(null);
@@ -271,6 +278,16 @@ export default function EnrichTab({ onRefresh }) {
         selectedProvider={selectedProvider}
         setSelectedProvider={setSelectedProvider}
       />
+    );
+  }
+
+  // First question (or a retry) still loading: stay in the session rather than
+  // falling back to the category grid, where another click would race this one.
+  if (activeCategory && !currentQuestion && loadingQuestion) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <BrailleSpinner text="Loading question" />
+      </div>
     );
   }
 
@@ -345,7 +362,7 @@ export default function EnrichTab({ onRefresh }) {
           <div className="mt-4">
             <div className="flex items-center justify-between text-sm mb-1">
               <span className="text-gray-400">
-                Question {categoryProgress?.answered + 1 || 1}
+                Question {currentQuestion.questionNumber || categoryProgress?.answered + 1 || 1}
                 {currentQuestion.totalQuestions && ` of ${currentQuestion.totalQuestions}`}
               </span>
               {!progressError && (
