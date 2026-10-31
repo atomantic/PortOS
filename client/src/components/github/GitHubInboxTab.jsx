@@ -104,6 +104,7 @@ export default function GitHubInboxTab() {
   const [removing, setRemoving] = useState(() => new Set());
   const [syncTick, setSyncTick] = useState(0);
   const requestRef = useRef(0);
+  const syncRequestRef = useRef(0);
 
   const keyOf = (row) => `${row.accountId}/${row.threadId}`;
 
@@ -121,10 +122,13 @@ export default function GitHubInboxTab() {
   }, [accountId, view]);
 
   const refresh = useCallback(async () => {
+    const request = ++syncRequestRef.current;
     setSyncing(true);
     // Per-account failures come back in the results and are shown from the
     // stored sync state, so this never toasts.
     await syncGitHubNotifications(accountId, { silent: true }).catch(() => null);
+    // A newer sync (account switched mid-check) owns the spinner and the reload.
+    if (request !== syncRequestRef.current) return;
     setSyncing(false);
     setSyncTick((tick) => tick + 1);
   }, [accountId]);
