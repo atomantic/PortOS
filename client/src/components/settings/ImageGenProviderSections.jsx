@@ -366,7 +366,7 @@ export default function ImageGenProviderSections({ mediaTab, setMediaTab, form, 
                 className="w-24 bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent"
               />
               <p className="text-xs text-gray-500 mt-1">
-                How many Codex renders the queue runs in parallel. Default <code>{formatCount(parallelBounds.default)}</code>.
+                How many renders each cloud provider (Codex, Grok, Agy, …) runs in parallel; providers never wait on each other. Default <code>{formatCount(parallelBounds.default)}</code>.
                 Higher values let large batches finish faster, subject to your provider&apos;s rate limits, and increase simultaneous usage.
                 {codexParallelLimit > 5 && (
                   <span className="block mt-1 text-port-warning">

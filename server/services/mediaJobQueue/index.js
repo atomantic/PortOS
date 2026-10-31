@@ -11,8 +11,10 @@ import { maintenance } from '../../lib/maintenanceAdmission.js';
  * an immediate `queued` ack and watch progress via SSE.
  *
  * Lanes: GPU jobs drain serially through `running`; cloud CLI jobs use the
- * bounded `cloudRunning` lane; federated audio/image/video use `remoteRunning`
- * so work on another machine never occupies this machine's GPU slot.
+ * parallel `cloudRunning` lane; federated audio/image/video use `remoteRunning`
+ * so work on another machine never occupies this machine's GPU slot. Slots and
+ * queue positions belong to swim lanes (`jobSwimlane`): one per cloud provider,
+ * one per peer, one for the local accelerator.
  *
  * Scope: gates `videoGen/local#generateVideo` (always),
  * `imageGen/local#generateImage` (when imageGen mode === 'local'), and
@@ -52,7 +54,7 @@ import { audioGenEvents } from '../audioGen/events.js';
 import { getSettings } from '../settings.js';
 import { IMAGE_GEN_MODE, CLOUD_IMAGE_GEN_MODES } from '../imageGen/modes.js';
 import { parseQuotaDeferral, formatDeferral } from '../../lib/imageQuotaSignal.js';
-import { VIDEO_GEN_MODE, CLOUD_VIDEO_GEN_MODES, mediaJobExecutionLane } from '../../lib/generationModes.js';
+import { VIDEO_GEN_MODE, CLOUD_VIDEO_GEN_MODES, mediaJobExecutionLane, mediaJobSwimlane } from '../../lib/generationModes.js';
 import { REMOTE_MEDIA_MODULES, isRemoteMediaJob } from './remoteMediaJob.js';
 import { createVideoHolds } from './videoHolds.js';
 import { importedArchiveRow } from './importedJob.js';
@@ -78,13 +80,12 @@ export {
   partialBatchAdmissionError,
 } from './admission.js';
 
-// Cloud-CLI jobs (Codex/Grok/Agy images, Grok videos) share one parallel lane —
-// each render
-// shells out to its own external child spending remote quota, so they don't
-// serialize on the MLX runtime the way GPU jobs do. The lane's slot count is
-// `codexParallelLimit` (settings key `imageGen.codex.parallelLimit`, kept
-// under the codex name for backward compat — it now bounds every cloud CLI
-// renders combined).
+// Cloud-CLI jobs (Codex/Grok/Agy images, Grok videos) run in the parallel cloud
+// lane — each render shells out to its own external child spending remote
+// quota, so they don't serialize on the MLX runtime the way GPU jobs do. Each
+// provider is its own swim lane (see jobSwimlane) with `codexParallelLimit`
+// slots (settings key `imageGen.codex.parallelLimit`, kept under the codex name
+// for backward compat), so a Codex backlog never holds a Grok render.
 const isCloudImageJob = (j) =>
   mediaJobExecutionLane({ kind: j.kind, mode: j.params?.mode }) === 'cloud';
 
@@ -109,11 +110,17 @@ const isRemoteReconcile = (job) => isRemoteMediaJob(job) && job.params?.remoteMe
 
 const isTopazUpscale = (job) => job.kind === 'video-upscale' && job.params?.mode === 'topaz';
 
-const jobLane = (job) => isLocalFinishReplay(job) ? 'gpu' : mediaJobExecutionLane({
+const laneInput = (job) => ({
   kind: job.kind,
   mode: job.params?.mode,
   remote: isRemoteMediaJob(job),
+  peerId: job.params?.remoteMedia?.peerId,
 });
+const jobLane = (job) => isLocalFinishReplay(job) ? 'gpu' : mediaJobExecutionLane(laneInput(job));
+// The unit that owns slots and queue positions: one per cloud provider, one per
+// federated peer, one for this machine's accelerator. Work waits only behind
+// work in its own swim lane.
+const jobSwimlane = (job) => isLocalFinishReplay(job) ? 'gpu:local' : mediaJobSwimlane(laneInput(job));
 
 // Boot restoration is the second way a job enters the queue, so it needs the
 // same routed-job normalization enqueueJob applies (#4683). A job written by a
@@ -365,7 +372,7 @@ mediaJobEvents.setMaxListeners(100);
 
 // GPU lane: serialized — `running` holds at most one job. Cloud CLI and remote
 // provider lanes are parallel because neither consumes the local GPU. `queue`
-// preserves submission order across lanes; positions are lane-scoped.
+// preserves submission order across lanes; positions are swim-lane-scoped.
 const queue = [];
 let running = null;
 const cloudRunning = [];
@@ -551,17 +558,37 @@ export function getRunningJob() {
   return running;
 }
 
-// One definition of each lane's slot count, shared by getQueueCapacity and
-// laneConcurrencyFor so a caller can never read a limit this module has moved.
+// One definition of each lane's per-swim-lane slot count, shared by the
+// dispatcher, getQueueCapacity and laneConcurrencyFor so a caller can never read
+// a limit this module has moved. Cloud providers each get `codexParallelLimit`;
+// a federated peer runs one job at a time, and REMOTE_MEDIA_PARALLEL_LIMIT
+// bounds all peers together.
 const laneLimits = () => ({
   gpu: 1,
   cloud: codexParallelLimit,
-  remote: REMOTE_MEDIA_PARALLEL_LIMIT,
+  remote: 1,
 });
+const laneTotalLimits = () => ({ gpu: 1, cloud: Infinity, remote: REMOTE_MEDIA_PARALLEL_LIMIT });
+
+const runningJobs = () => [...(running ? [running] : []), ...cloudRunning, ...remoteRunning];
+
+// Queue position of every waiting job within its own swim lane: running work in
+// the swim lane holds the first slots, then queued work in submission order.
+function swimlanePositions() {
+  const counts = new Map();
+  const bump = (job) => {
+    const key = jobSwimlane(job);
+    const n = (counts.get(key) || 0) + 1;
+    counts.set(key, n);
+    return n;
+  };
+  runningJobs().forEach(bump);
+  return new Map(queue.map((job) => [job, bump(job)]));
+}
 
 /**
- * How many jobs like `job` run at once here — the slot count of the lane
- * `jobLane` would route it to.
+ * How many jobs like `job` run at once here — the slot count of the swim lane
+ * `jobSwimlane` would route it to.
  *
  * Exported for the same reason `getQueueCapacity` is: the lane split is private
  * to this module, so a caller asking "how fast would this drain?" must not
@@ -585,7 +612,8 @@ export function laneConcurrencyFor(job) {
  * drift from it the first time a new cloud mode is added. Capacity questions
  * are answered here for the same reason `isRemoteMediaJob` has one definition.
  *
- * `limit` is the lane's configured concurrency, NOT a queue bound: work over
+ * `limit` is the lane's configured concurrency (per provider for `cloud`, all
+ * peers together for `remote`), NOT a queue bound: work over
  * the limit waits rather than being rejected. Waiting work is bounded once,
  * across all lanes, by MAX_PENDING_MEDIA_JOBS (see assertMediaQueueRoom). The
  * federated-provider admission bound is a separate setting (see
@@ -601,7 +629,7 @@ export function getQueueCapacity() {
   const lanes = {
     gpu: { running: running ? 1 : 0, queued: 0, limit: limits.gpu },
     cloud: { running: cloudRunning.length, queued: 0, limit: limits.cloud },
-    remote: { running: remoteRunning.length, queued: 0, limit: limits.remote },
+    remote: { running: remoteRunning.length, queued: 0, limit: laneTotalLimits().remote },
   };
   // Seed every known kind so a lane with no work reports 0 rather than being
   // absent — an absent key and a zero read identically in a UI, and only one
@@ -614,7 +642,7 @@ export function getQueueCapacity() {
     lanes[jobLane(job)].queued += 1;
     if (byKind[job.kind]) byKind[job.kind].queued += 1;
   }
-  for (const job of [...(running ? [running] : []), ...cloudRunning, ...remoteRunning]) {
+  for (const job of runningJobs()) {
     if (byKind[job.kind]) byKind[job.kind].running += 1;
   }
   return {
@@ -1162,15 +1190,9 @@ export async function initMediaJobQueue({ deferCompletionRecovery = false } = {}
     // The persisted `position` reflects the previous process' queue layout
     // (which may have included a now-failed running job). Recompute against
     // the current queue so /api/media-jobs and the initial SSE `queued`
-    // event report accurate slots. Positions are lane-scoped: Codex image
-    // jobs and GPU jobs each get their own counter so a queued Codex job
-    // behind a running GPU job is restored as position 1 (not position 2).
-    const counters = { cloud: 0, gpu: 0, remote: 0 };
-    for (const q of queue) {
-      const lane = jobLane(q);
-      counters[lane] += 1;
-      q.position = counters[lane];
-    }
+    // event report accurate slots. Positions are swim-lane-scoped, so a
+    // queued Grok job behind a Codex backlog is restored as position 1.
+    for (const [q, position] of swimlanePositions()) q.position = position;
     if (persistedJobs.length) {
       console.log(`📦 mediaJobQueue restored: ${queue.length} queued, ${archive.length} archived`);
     }
@@ -1269,7 +1291,6 @@ function startLaneJob(job, { lane }) {
     console.log(`⚠️ media-job [${job.id.slice(0, 8)}] startLaneJob: already removed from queue, skipping`);
     return false;
   }
-  if (lane === 'remote' && remoteRunning.some((active) => active.params?.remoteMedia?.peerId === job.params?.remoteMedia?.peerId)) return false;
   if (lane === 'remote') {
     // Reconciliation occupies the peer slot while it waits for admission. Read
     // the live queue: an in-process requeue can land mid-pass, after the
@@ -1479,12 +1500,18 @@ async function drainLoop() {
     if (dispatchQuiesced) break;
     videoHolds.updateQueued(queue);
     // Single queue scan, promoting work independently into each open lane.
+    // Each swim lane has its own slots, and each lane its own total bound, so
+    // a full swim lane only skips its own work.
     const limits = laneLimits();
-    const slots = {
-      gpu: limits.gpu - Number(Boolean(running)),
-      cloud: limits.cloud - cloudRunning.length,
-      remote: limits.remote - remoteRunning.length,
+    const totals = laneTotalLimits();
+    const laneSlots = {
+      gpu: totals.gpu - Number(Boolean(running)),
+      cloud: totals.cloud - cloudRunning.length,
+      remote: totals.remote - remoteRunning.length,
     };
+    const swimSlots = new Map();
+    const freeSwimSlots = (job) => swimSlots.get(jobSwimlane(job)) ?? limits[jobLane(job)];
+    for (const active of runningJobs()) swimSlots.set(jobSwimlane(active), freeSwimSlots(active) - 1);
     let quotaWaitChanged = false;
     for (const job of candidates) {
       if (job.status !== 'queued' || job.hold || job.admitting) continue;
@@ -1502,12 +1529,12 @@ async function drainLoop() {
         continue;
       }
       const lane = jobLane(job);
-      if (slots[lane] <= 0) continue;
-      // One GPU job per peer initially. Different peers and this Mac remain
-      // independent. Reconciliation occupies the same slot until settled.
+      const free = freeSwimSlots(job);
+      if (laneSlots[lane] <= 0 || free <= 0) continue;
+      // Reconciliation occupies a peer's slot until settled (startLaneJob).
       if (!startLaneJob(job, { lane })) continue;
-      slots[lane] -= 1;
-      if (Object.values(slots).every((remaining) => remaining <= 0)) break;
+      laneSlots[lane] -= 1;
+      swimSlots.set(jobSwimlane(job), free - 1);
     }
     // One snapshot for every hold this scan changed, not one per job.
     if (quotaWaitChanged) {
@@ -1597,36 +1624,12 @@ export function runJobNow(jobId) {
 // frame even after the line ahead of it cleared.
 function recomputeQueuePositions() {
   videoHolds.updateQueued(queue);
-  const cloudJobs = queue.filter(isCloudImageJob);
-  const remoteJobs = queue.filter(isRemoteMediaJob);
-  const gpuJobs = queue.filter((j) => jobLane(j) === 'gpu');
-
-  cloudJobs.forEach((q, i) => {
-    const newPosition = i + 1 + cloudRunning.length;
-    if (q.position !== newPosition) {
-      q.position = newPosition;
-      const entry = sseJobs.get(q.id);
-      if (entry) broadcastSse(entry, { type: 'queued', position: newPosition });
-    }
-  });
-
-  remoteJobs.forEach((q, i) => {
-    const newPosition = i + 1 + remoteRunning.length;
-    if (q.position !== newPosition) {
-      q.position = newPosition;
-      const entry = sseJobs.get(q.id);
-      if (entry) broadcastSse(entry, { type: 'queued', position: newPosition });
-    }
-  });
-
-  gpuJobs.forEach((q, i) => {
-    const newPosition = i + 1 + (running ? 1 : 0);
-    if (q.position !== newPosition) {
-      q.position = newPosition;
-      const entry = sseJobs.get(q.id);
-      if (entry) broadcastSse(entry, { type: 'queued', position: newPosition });
-    }
-  });
+  for (const [q, newPosition] of swimlanePositions()) {
+    if (q.position === newPosition) continue;
+    q.position = newPosition;
+    const entry = sseJobs.get(q.id);
+    if (entry) broadcastSse(entry, { type: 'queued', position: newPosition });
+  }
 }
 
 // Filter videoGenEvents/imageGenEvents down to a single jobId and translate
@@ -2361,16 +2364,11 @@ async function enqueueJobLocked({ kind, params, owner = null }) {
     status: 'queued',
     queuedAt: new Date().toISOString(),
     params: safeParams,
-    // position counts "where you sit in your lane" — a running job in the
-    // same lane occupies slot 1, then same-lane queued jobs follow.
+    // position counts "where you sit in your swim lane" — running and queued
+    // work in the same swim lane come first.
     position: (() => {
-      const candidate = { kind, params: safeParams };
-      const lane = jobLane(candidate);
-      const laneQueue = queue.filter((j) => jobLane(j) === lane);
-      const liveCount = lane === 'cloud'
-        ? cloudRunning.length
-        : lane === 'remote' ? remoteRunning.length : (running ? 1 : 0);
-      return laneQueue.length + liveCount + 1;
+      const key = jobSwimlane({ kind, params: safeParams });
+      return [...runningJobs(), ...queue].filter((j) => jobSwimlane(j) === key).length + 1;
     })(),
   };
   assertRetiredDataAvailable();
