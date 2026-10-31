@@ -815,8 +815,8 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
       meta.omittedInputImages = omittedInputs.map(input => ({ ...input, reason: 'unsupported-render-path' }));
     }
     meta.inputProvenance = 'provider-inputs';
-    if (reviewedReferenceSnapshot && (providerInputs.referenceImagePaths.length !== 1 || providerInputs.referenceImagePaths[0] !== validReferenceImagePaths[0])) {
-      throw new ServerError('The selected local render path cannot apply the reviewed reference', { status: 400, code: 'REVIEWED_REFERENCE_UNSUPPORTED' });
+    if (reviewedReferenceSnapshot && (providerInputs.referenceImagePaths.length !== validReferenceImagePaths.length || providerInputs.referenceImagePaths[0] !== validReferenceImagePaths[0])) {
+      throw new ServerError('The selected local render path cannot apply every reference of this edit', { status: 400, code: 'REVIEWED_REFERENCE_UNSUPPORTED' });
     }
     meta.referenceImageFilenames = providerInputs.referenceImagePaths.map(path => basename(path));
     meta.referenceImageStrengths = validReferenceImageStrengths.filter((_, index) => providerInputs.referenceImagePaths.includes(validReferenceImagePaths[index]));

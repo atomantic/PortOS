@@ -1,19 +1,38 @@
 import { useState } from 'react';
-import { Pencil } from 'lucide-react';
+import { Images, Pencil, Plus, X } from 'lucide-react';
 import toast from '../ui/Toast';
 import { generateImage, previewImagePrompt } from '../../services/api';
 import { useModelInputPreview } from '../../hooks/useModelInputPreview';
 import { formatCount } from '../../utils/formatters';
 import ModelInputPreview from './ModelInputPreview';
 import { IMAGE_GEN_MODE } from '../../lib/imageGenBackends';
+import GalleryImagePicker from '../imageGen/GalleryImagePicker';
+
+// Extra pictures to draw from (a place, a prop, a face) beside the edited image.
+export const QUICK_EDIT_MAX_REFERENCES = 3;
+const thumbUrl = (filename) => `/data/images/${encodeURIComponent(filename)}`;
 
 /**
  * One-step "change this about the image" action: sends the image as the
  * reference plus a short instruction through the default image render, no
  * prompt rewriting or form detour. The wrapper text is shown beside the input.
+ * Further gallery images can ride along as visual references; `referenceChoices`
+ * are the viewer's other items (e.g. the record's references), offered first.
  */
-export default function QuickImageEdit({ item, onDone, generateParams }) {
+export default function QuickImageEdit({ item, onDone, generateParams, referenceChoices = [] }) {
   const [instruction, setInstruction] = useState('');
+  const [references, setReferences] = useState([]);
+  const [choosing, setChoosing] = useState(false);
+  const [galleryOpen, setGalleryOpen] = useState(false);
+  const atMax = references.length >= QUICK_EDIT_MAX_REFERENCES;
+  const pageChoices = [...new Set(referenceChoices
+    .filter((choice) => choice?.kind === 'image' && choice.filename && choice.filename !== item.filename)
+    .map((choice) => choice.filename))];
+  const addReference = (filename) => {
+    if (!filename || filename === item.filename) return;
+    setReferences((prev) => (prev.includes(filename) || prev.length >= QUICK_EDIT_MAX_REFERENCES ? prev : [...prev, filename]));
+  };
+  const removeReference = (filename) => setReferences((prev) => prev.filter((f) => f !== filename));
   const [busy, setBusy] = useState(false);
   const [previewRevision, setPreviewRevision] = useState(0);
   const request = {
@@ -21,7 +40,7 @@ export default function QuickImageEdit({ item, onDone, generateParams }) {
     ...(generateParams || {}),
     prompt: instruction,
     quickEdit: true,
-    referenceImageFiles: [item.filename],
+    referenceImageFiles: [item.filename, ...references],
   };
   const modelInputPreview = useModelInputPreview(previewImagePrompt, { ...request, reviewReference: true }, { enabled: Boolean(instruction.trim()), revision: previewRevision });
   const { preview } = modelInputPreview;
@@ -68,11 +87,53 @@ export default function QuickImageEdit({ item, onDone, generateParams }) {
           <Pencil className="w-3.5 h-3.5" /> {busy ? 'Sending…' : 'Edit'}
         </button>
       </div>
-      {preview?.reviewedReferenceImage && <img src={preview.reviewedReferenceImage} alt="Reference for this edit" className="max-h-32 max-w-full object-contain" />}
+      <div className="flex flex-wrap items-end gap-2">
+        {preview?.reviewedReferenceImage && <img src={preview.reviewedReferenceImage} alt="Reference for this edit" className="max-h-32 max-w-full object-contain" />}
+        {references.map((filename, index) => (
+          <div key={filename} className="relative shrink-0">
+            <img src={thumbUrl(filename)} alt={`Reference image ${index + 2}`} loading="lazy" className="h-16 w-16 rounded object-cover border border-port-border" />
+            <span className="absolute bottom-0.5 left-0.5 rounded bg-black/70 px-1 text-[10px] text-white">{index + 2}</span>
+            <button type="button" onClick={() => removeReference(filename)} disabled={busy}
+              aria-label={`Remove reference image ${index + 2}`}
+              className="absolute -top-2 -right-2 w-6 h-6 rounded-full bg-port-card border border-port-border text-gray-300 hover:text-white flex items-center justify-center">
+              <X className="w-3 h-3" />
+            </button>
+          </div>
+        ))}
+        {!atMax && (
+          <button type="button" onClick={() => (pageChoices.length ? setChoosing((open) => !open) : setGalleryOpen(true))} disabled={busy}
+            aria-expanded={pageChoices.length ? choosing : undefined}
+            className="min-h-[44px] inline-flex items-center gap-1 rounded border border-dashed border-port-border px-2 text-xs text-gray-300 hover:border-port-accent hover:text-white disabled:opacity-50">
+            <Plus className="w-3.5 h-3.5" /> Add reference
+          </button>
+        )}
+      </div>
+      {choosing && !atMax && pageChoices.length > 0 && (
+        <div className="space-y-1">
+          <div className="flex gap-1.5 overflow-x-auto pb-1">
+            {pageChoices.map((filename, choiceIndex) => {
+              const picked = references.includes(filename);
+              return (
+                <button key={filename} type="button" aria-pressed={picked} disabled={busy}
+                  onClick={() => (picked ? removeReference(filename) : addReference(filename))}
+                  aria-label={`Page image ${choiceIndex + 1}`}
+                  className={`shrink-0 rounded border-2 ${picked ? 'border-port-accent' : 'border-transparent hover:border-port-border'}`}>
+                  <img src={thumbUrl(filename)} alt="" loading="lazy" className="h-14 w-14 rounded object-cover" />
+                </button>
+              );
+            })}
+          </div>
+          <button type="button" onClick={() => setGalleryOpen(true)} disabled={busy}
+            className="min-h-[36px] inline-flex items-center gap-1 text-xs text-port-accent hover:text-white">
+            <Images className="w-3.5 h-3.5" /> Pick from gallery
+          </button>
+        </div>
+      )}
+      <GalleryImagePicker open={galleryOpen} onClose={() => setGalleryOpen(false)} onSelect={(picked) => addReference(picked?.filename)} />
       <p className="text-[10px] text-gray-500">Instruction: {formatCount(instruction.length)} characters{preview?.sentPrompt ? ` · Full prompt: ${formatCount(preview.sentPrompt.length)} characters` : ''}</p>
       <ModelInputPreview preview={modelInputPreview} prompt={instruction} />
       <p className="text-[10px] leading-snug text-gray-500">
-        Sends this image as the reference with your instruction to the default image render, keeping everything else. Creates a new image; the original is kept.
+        Sends this image as the reference with your instruction to the default image render, keeping everything else.{references.length ? ' Added images go along as visual references; name them by number (image 2, image 3).' : ''} Creates a new image; the original is kept.
       </p>
     </form>
   );

@@ -524,7 +524,7 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
 
   await prepareFableLoomImageParams({ params, mode, settings });
 
-  if (data.quickEdit && (!data.reviewedReferenceDigest || data.reviewedPromptDigest !== quickEditCompositionDigest({ params, mode, settings }))) {
+  if (data.quickEdit && (!data.reviewedReferenceDigest || data.reviewedPromptDigest !== await quickEditCompositionDigest({ params, mode, settings }))) {
     throw new ServerError('Image settings or prompt changed. Review the refreshed full prompt before editing.', { status: 409, code: 'REVIEWED_PROMPT_CHANGED' });
   }
 
@@ -534,8 +534,8 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
   }
 
   if (data.reviewedReferenceDigest) {
-    if (params.initImagePath || params.referenceImagePaths?.length !== 1 || (!params.mediaProviderPeerId && mode === IMAGE_GEN_MODE.EXTERNAL)) {
-      throw new ServerError('Reviewed quick edits require one reference on a supported image backend', { status: 400, code: 'REVIEWED_REFERENCE_UNSUPPORTED' });
+    if (params.initImagePath || !params.referenceImagePaths?.length || (!data.quickEdit && params.referenceImagePaths.length !== 1) || (!params.mediaProviderPeerId && mode === IMAGE_GEN_MODE.EXTERNAL)) {
+      throw new ServerError('Reviewed quick edits require the edited image as the first reference on a supported image backend', { status: 400, code: 'REVIEWED_REFERENCE_UNSUPPORTED' });
     }
     await assertReviewedReference(params.referenceImagePaths[0], data.reviewedReferenceDigest);
     params.reviewedReferenceDigest = data.reviewedReferenceDigest;

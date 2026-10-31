@@ -50,6 +50,7 @@ import { hardwareUnavailableReason, isHardwareCompatible } from '../../lib/syste
 import { usesDiffusersRunner } from '../../lib/runners.js';
 import { promptAddition } from '../../lib/modelInput.js';
 import { IMAGE_REFERENCE_REQUEST_LIMIT } from '../../lib/imageGenCapabilities.js';
+import { reviewedReferenceDigest } from './reviewedReference.js';
 
 // The job tags that name the record owning a render, each mapped to the record
 // loader and the render target whose `renderDefaults` pin backs it. A generate
@@ -138,11 +139,16 @@ export const previewUploadLabel = (index) => `(uploaded image ${index + 1})`;
 export async function prepareGenerateParams({ data, files, referenceImageFields, preview = false }) {
   if (data.quickEdit) {
     const authoredPrompt = data.prompt;
-    const prefix = 'Edit the reference image: ';
+    // Named references after the first are pictures to draw from (a place, a
+    // prop, a face), never images to edit.
+    const extraReferences = Math.max(0, (data.referenceImageFiles?.length || 0) - 1);
+    const prefix = extraReferences ? 'Edit the first reference image: ' : 'Edit the reference image: ';
+    const referencesLine = extraReferences ? '. Use the other reference images only as visual references for this change' : '';
     const preservation = '. Keep everything else exactly as it is: composition, framing, subject, lighting, color and film look.';
-    data = { ...data, authoredPrompt, prompt: `${prefix}${authoredPrompt}${preservation}`,
+    data = { ...data, authoredPrompt, prompt: `${prefix}${authoredPrompt}${referencesLine}${preservation}`,
       promptAdditions: [...(data.promptAdditions || []),
         { id: 'quick-edit-prefix', label: 'Reference edit instruction', text: prefix },
+        ...(referencesLine ? [{ id: 'quick-edit-references', label: 'Other references', text: referencesLine }] : []),
         { id: 'quick-edit-preservation', label: 'Preserve the rest', text: preservation }],
     };
   }
@@ -560,11 +566,17 @@ export function resolveLocalImageModel(settings, params) {
   return { pythonPath, selectedModel };
 }
 
-/** Bind the reviewed composition and provider defaults, independently of reference bytes. */
-export function quickEditCompositionDigest({ params, mode, settings }) {
+/**
+ * Bind the reviewed composition and provider defaults. The edited image's bytes
+ * are pinned separately (the reviewed snapshot); the bytes of any further
+ * references are bound here, so a reference replaced after review is refused.
+ */
+export async function quickEditCompositionDigest({ params, mode, settings }) {
   const keys = ['prompt', 'negativePrompt', 'promptAdditions', 'width', 'height', 'modelId', 'cloudModel', 'effort', 'initImagePath', 'referenceImagePaths', 'referenceImageStrengths', 'mediaProviderPeerId', 'visualProfileRevision'];
+  const extraReferenceDigests = await Promise.all((params.referenceImagePaths || []).slice(1).map(reviewedReferenceDigest));
   return createHash('sha256').update(JSON.stringify({
     mode, imageGen: settings.imageGen,
     input: Object.fromEntries(keys.map(key => [key, params[key]])),
+    ...(extraReferenceDigests.length ? { extraReferenceDigests } : {}),
   })).digest('hex');
 }

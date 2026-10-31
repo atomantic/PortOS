@@ -167,6 +167,7 @@ export default function MediaLightbox({
   ratingControl = null,
   quickEditParams = null,
   onQuickEditQueued = null,
+  quickEditReferenceChoices = null,
 }) {
   const [fullScreen, setFullScreen] = useState(false);
   const [refineOpen, setRefineOpen] = useState(false);
@@ -545,6 +546,7 @@ export default function MediaLightbox({
             onFilmLook={filmLookAvailable ? () => setFilmLookOpen(true) : undefined}
             quickEditParams={quickEditParams}
             onQuickEditQueued={onQuickEditQueued}
+            quickEditReferenceChoices={quickEditReferenceChoices}
           />
         )}
       </div>
@@ -586,7 +588,7 @@ function SettingsPane({
   copy, onRefine, onPromptFrom,
   annotation, onAnnotationChange, onPromptChange, onPosterChange, getPlayhead, onTrimStart, videoRef,
   variantGroup, onSelectVariant, onFilmLook, pageActions, rating,
-  quickEditParams, onQuickEditQueued,
+  quickEditParams, onQuickEditQueued, quickEditReferenceChoices,
 }) {
   const [posterSaving, setPosterSaving] = useState(false);
   const [posterError, setPosterError] = useState(null);
@@ -934,6 +936,7 @@ function SettingsPane({
           <QuickImageEdit
             item={item}
             generateParams={quickEditParams}
+            referenceChoices={quickEditReferenceChoices || []}
             onDone={(result, editInfo) => {
               setQuickEditOpen(false);
               onClose?.();

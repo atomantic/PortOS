@@ -1,7 +1,7 @@
 /** Reviewed quick-edit references: a job-bound copy and its durable ownership record. */
 import { createHash, randomUUID } from 'node:crypto';
 import { readFile, writeFile, mkdir, lstat, link } from 'node:fs/promises';
-import { extname, join } from 'node:path';
+import { basename, extname, join } from 'node:path';
 import { PATHS, atomicWrite } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 
@@ -105,8 +105,18 @@ export async function assertSnapshotForAdapter(identity, jobId, initImagePath, r
   }
   const { record, path, bytes } = await readOwnedSnapshot(identity);
   if (record.state !== 'invoked' || identity.jobId !== jobId || initImagePath
-    || referenceImagePaths?.length !== 1 || referenceImagePaths[0] !== path) throw invalid();
+    || !isReviewedReferenceList(referenceImagePaths, path)) throw invalid();
   return bytes;
+}
+
+/**
+ * A reviewed edit's references: the job's own snapshot (the image being
+ * edited) leads, and any further references are ordinary inputs, never another
+ * snapshot.
+ */
+export function isReviewedReferenceList(referenceImagePaths, snapshotPath) {
+  return Array.isArray(referenceImagePaths) && referenceImagePaths[0] === snapshotPath
+    && !referenceImagePaths.slice(1).some(path => typeof path !== 'string' || basename(path).startsWith('snapshot-'));
 }
 
 let snapshotLock = Promise.resolve();
