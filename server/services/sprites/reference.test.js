@@ -1226,6 +1226,123 @@ describe('lockReference', () => {
   });
 });
 
+describe('lockReference — refusals and per-target outcomes', () => {
+  it('locks an ambient record\'s single main identity root and completes the set', async () => {
+    const id = `crates-${++seq}`;
+    await records.createRecord({ kind: 'props', name: 'Crates', chromaKey: '#0000FF' }, id);
+    const turnaround = await placeCandidate(id, 'turnaround', 'turnaround-candidate-01.png');
+    await expect(lockReference(id, { target: 'turnaround', candidate: turnaround }))
+      .rejects.toMatchObject({ status: 400, code: 'INVALID_TARGET' });
+    // Ambient candidates are named main-*, never after the walk-south anchor.
+    const walkNamed = await placeCandidate(id, 'main', 'walk-south-candidate-01.png');
+    await expect(lockReference(id, { target: 'main', candidate: walkNamed }))
+      .rejects.toMatchObject({ status: 400, code: 'CANDIDATE_TARGET_MISMATCH' });
+
+    const rel = await placeCandidate(id, 'main', 'main-candidate-01.png');
+    const result = await lockReference(id, { target: 'main', candidate: rel });
+    expect(result.manifest.mainReference.path).toBe(`reference/${id}-ambient-main-v1.png`);
+    expect(result.manifest.status).toBe('complete');
+    expect(result.manifest.chromaKey).toBe('#0000FF');
+    expect(result.manifest.chromaKeyAutoSelected).toBe(false);
+    const record = await records.getRecord(id);
+    expect(record.status).toBe('reference-complete');
+    expect(record.chromaKey).toBe('#0000FF');
+  });
+
+  it('404s a candidate that is not on disk', async () => {
+    const id = newId();
+    await createCharacter(id);
+    await expect(lockReference(id, { target: 'turnaround', candidate: 'reference/candidates/turnaround-candidate-09.png' }))
+      .rejects.toMatchObject({ status: 404, code: 'CANDIDATE_NOT_FOUND' });
+  });
+
+  it('refuses a candidate whose sidecar names another target even when the filename matches', async () => {
+    const id = newId();
+    await createCharacter(id);
+    await lockMain(id);
+    const rel = await placeCandidate(id, 'east', 'walk-west-candidate-01.png');
+    await expect(lockReference(id, { target: 'west', candidate: rel }))
+      .rejects.toMatchObject({ status: 400, code: 'CANDIDATE_TARGET_MISMATCH', message: expect.stringContaining('generated for target "east"') });
+  });
+
+  it('keeps a legacy main\'s frozen key and records the sheet\'s clip warning on backfill', async () => {
+    const id = newId();
+    await createCharacter(id);
+    await legacyLockedMain(id);
+    const rel = await placeCandidate(id, 'turnaround', 'turnaround-candidate-01.png', {
+      fg: { r: 255, g: 80, b: 230 }, // would auto-select away from magenta if reselected
+    });
+    const result = await lockReference(id, { target: 'turnaround', candidate: rel, acceptClipRisk: true });
+    expect(result.manifest.chromaKey).toBe('#FF00FF');
+    expect(result.manifest.turnaround.clipWarning).toMatch(/generation key #FF00FF/);
+  });
+
+  it('surfaces an accepted sheet clip risk as the manifest key warning', async () => {
+    const id = newId();
+    await createCharacter(id);
+    const rel = await placeCandidate(id, 'turnaround', 'turnaround-candidate-01.png', {
+      fg: { r: 255, g: 80, b: 230 },
+    });
+    const result = await lockReference(id, { target: 'turnaround', candidate: rel, acceptClipRisk: true });
+    expect(result.manifest.chromaKeyWarning).toMatch(/generation key #FF00FF/);
+    // The sheet chose the key itself, so the warning lives on the manifest, not the sheet.
+    expect(result.manifest.turnaround.clipWarning).toBeUndefined();
+  });
+
+  it('records a main-first pin as an explicit (not auto-selected) key', async () => {
+    const id = newId();
+    await createCharacter(id, { chromaKey: '#0000FF' });
+    const rel = await placeCandidate(id, 'main', 'walk-south-candidate-01.png');
+    const result = await lockReference(id, { target: 'main', candidate: rel });
+    expect(result.manifest.chromaKey).toBe('#0000FF');
+    expect(result.manifest.chromaKeyAutoSelected).toBe(false);
+  });
+
+  it('refuses an anchor before the main locks, a relock, and a direction the manifest lacks', async () => {
+    const id = newId();
+    await createCharacter(id);
+    await lockTurnaround(id);
+    const east = await placeCandidate(id, 'east', 'walk-east-candidate-01.png');
+    await expect(lockReference(id, { target: 'east', candidate: east }))
+      .rejects.toMatchObject({ status: 409, code: 'MAIN_NOT_LOCKED' });
+
+    const rel = await placeCandidate(id, 'main', 'walk-south-candidate-01.png');
+    await lockReference(id, { target: 'main', candidate: rel });
+    await lockReference(id, { target: 'east', candidate: east });
+    const again = await placeCandidate(id, 'east', 'walk-east-candidate-02.png');
+    await expect(lockReference(id, { target: 'east', candidate: again }))
+      .rejects.toMatchObject({ status: 409, code: 'REFERENCE_LOCKED' });
+
+    // A phase-1 import can carry a partial anchor list.
+    const imported = newId();
+    await createCharacter(imported);
+    const refDir = join(TEST_ROOT, 'sprites', imported, 'reference');
+    await mkdir(refDir, { recursive: true });
+    await writeCandidatePng(join(refDir, `${imported}-walk-south-v1.png`));
+    await writeFile(join(refDir, `${imported}-reference-set-v1.json`), JSON.stringify({
+      schemaVersion: 1,
+      status: 'in-progress',
+      chromaKey: '#FF00FF',
+      mainReference: { path: `reference/${imported}-walk-south-v1.png`, locked: true },
+      anchors: [{ id: 'walk-south', direction: 'south', status: 'locked', path: `reference/${imported}-walk-south-v1.png` }],
+    }));
+    const west = await placeCandidate(imported, 'west', 'walk-west-candidate-01.png');
+    await expect(lockReference(imported, { target: 'west', candidate: west }))
+      .rejects.toMatchObject({ status: 400, code: 'INVALID_TARGET', message: 'Unknown anchor: walk-west' });
+  });
+
+  it('gates an anchor on clip risk against the canonical key, not just the generation key', async () => {
+    const id = newId();
+    await createCharacter(id, { chromaKey: '#0000FF' });
+    await lockMain(id);
+    const rel = await placeCandidate(id, 'east', 'walk-east-candidate-01.png', {
+      fg: { r: 40, g: 60, b: 230 }, // blue detail against the pinned blue canvas key
+    });
+    await expect(lockReference(id, { target: 'east', candidate: rel }))
+      .rejects.toMatchObject({ status: 409, code: 'CHROMA_CLIP_RISK', message: expect.stringContaining('selected key #0000FF') });
+  });
+});
+
 describe('turnaround i2i seed sources', () => {
   it('seeds the turnaround from a gallery image (initImageGalleryFile)', async () => {
     const id = newId();
