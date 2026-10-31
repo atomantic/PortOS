@@ -75,9 +75,10 @@ export const PRIORITY_VALUES = {
  *
  * These exist because `generateTasksMarkdown` can only REPRESENT these values:
  * a status outside the set lands in no section and a priority outside it fails
- * `matchTaskLine`'s regex on the next read. TASKS.md is the only store for a
- * queued task, so an unrepresentable value used to delete the task and its
- * `metadata.prompt` outright (#7239). Validate against these at every boundary
+ * `matchTaskLine`'s regex on the next read. Every stored `cos_tasks` row is
+ * normalized through that round-trip, and when TASKS.md was the queue store an
+ * unrepresentable value deleted the task and its `metadata.prompt` outright
+ * (#7239). Validate against these at every boundary
  * that can set a status or priority — the HTTP schemas (cosValidation.js) and
  * the peer wire schema (peerSyncValidation.js) both read them from here.
  */
@@ -118,7 +119,7 @@ export function toRepresentableTask(task) {
   const repairs = [];
   if (!statusOk) repairs.push(`status \`${String(task?.status)}\` -> ${REPAIRED_STATUS}`);
   if (!priorityOk) repairs.push(`priority \`${String(task?.priority)}\` -> ${REPAIRED_PRIORITY}`);
-  console.warn(`⚠️ Task ${task?.id} is not representable in TASKS.md; repairing ${repairs.join(', ')}`);
+  console.warn(`⚠️ Task ${task?.id} is not representable in the task format; repairing ${repairs.join(', ')}`);
 
   return {
     ...task,

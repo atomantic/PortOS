@@ -198,7 +198,7 @@ export default function UpdateTab() {
   const release = status?.latestRelease;
   const hasUpdate = status?.updateAvailable;
   const remote = status?.remoteInfo;
-  const upstreamName = status?.upstream?.fullName || 'atomantic/PortOS';
+  const upstreamName = status?.upstream?.fullName;
   const isFork = !!remote?.isFork;
   const lastForkSync = status?.lastForkSync;
   // Server is the source of truth for the freshness window — don't
