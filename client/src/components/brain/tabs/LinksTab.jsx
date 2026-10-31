@@ -1196,7 +1196,7 @@ function LinkDragHandle({ link, disabled }) {
       {...attributes}
       {...listeners}
       disabled={disabled}
-      className={`shrink-0 mt-0.5 flex items-center justify-center text-gray-600 hover:text-gray-400 ${
+      className={`shrink-0 mt-0.5 flex items-center justify-center touch-none text-gray-600 hover:text-gray-400 ${
         disabled ? 'cursor-not-allowed opacity-50' : 'cursor-grab active:cursor-grabbing'
       } ${isDragging ? 'opacity-30' : ''}`}
       aria-label={`Drag ${link.title} to a bucket`}

@@ -991,7 +991,7 @@ function CharacterArcsSection({ series, universes, patchSeries }) {
                 <button
                   type="button"
                   onClick={() => removeArc(i)}
-                  className="text-gray-500 hover:text-port-error shrink-0"
+                  className="inline-flex items-center justify-center pointer-coarse:min-w-11 pointer-coarse:min-h-11 text-gray-500 hover:text-port-error shrink-0"
                   title="Remove this character arc" aria-label="Remove this character arc"
                 >
                   <Trash2 size={14} />
@@ -1058,7 +1058,7 @@ function CharacterArcsSection({ series, universes, patchSeries }) {
                       <button
                         type="button"
                         onClick={() => removeTransition(i, j)}
-                        className="text-gray-500 hover:text-port-error shrink-0"
+                        className="inline-flex items-center justify-center pointer-coarse:min-w-11 pointer-coarse:min-h-11 text-gray-500 hover:text-port-error shrink-0"
                         title="Remove this transition" aria-label="Remove this transition"
                       >
                         <Trash2 size={12} />

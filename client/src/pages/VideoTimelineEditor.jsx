@@ -4,7 +4,8 @@ import { useParams, useNavigate } from 'react-router';
 import {
   DndContext,
   KeyboardSensor,
-  PointerSensor,
+  MouseSensor,
+  TouchSensor,
   useSensor,
   useSensors,
   closestCenter,
@@ -179,8 +180,12 @@ function TimelineProjectEditor({ projectId }) {
 
   // Reordering segments by dragging is the only clip-reorder path on this page,
   // so the KeyboardSensor is what makes the timeline orderable without a mouse.
+  // A segment block is its own drag source inside the horizontally scrolling
+  // lane, so it cannot take `touch-action: none` without losing touch panning;
+  // touch instead picks a block up on a long press, and a swipe still scrolls.
   const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(MouseSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 250, tolerance: 5 } }),
     useSensor(KeyboardSensor, {
       coordinateGetter: sortableKeyboardCoordinates,
       keyboardCodes: TIMELINE_KEYBOARD_CODES,
