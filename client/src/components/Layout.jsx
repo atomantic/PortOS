@@ -58,6 +58,7 @@ import {
   SECTIONS_BELOW_MORE,
 } from '../lib/navPresentation.js';
 import { isFullWidthRoute } from '../lib/layoutRoutes.js';
+import { PORTS } from '../lib/ports.js';
 import { getNavCommandForPath, getSectionNavGroups, getSectionNavTabForPath, NAV_COMMANDS } from '../../../server/lib/navManifest.js';
 import { useSidebarApps } from '../hooks/useSidebarApps.js';
 import { useSidebarSeries } from '../hooks/useSidebarSeries.js';
@@ -113,7 +114,7 @@ const SECTION_ORDER = [...SECTIONS_BEFORE_GOALS, ...SECTIONS_AFTER_GOALS, ...SEC
 // data back into the presentation map.
 const LOCAL_SECTION_ROWS = {
   'Dev Tools': [
-    { href: '//:5560', label: 'Autofixer', icon: Wrench, external: true, dynamicHost: true, localOnly: true },
+    { href: `//:${PORTS.AUTOFIXER_UI}`, label: 'Autofixer', icon: Wrench, external: true, dynamicHost: true, localOnly: true },
   ],
 };
 
