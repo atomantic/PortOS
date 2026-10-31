@@ -7,6 +7,9 @@ const generateImage = vi.fn();
 const previewImagePrompt = vi.fn();
 vi.mock('../../services/api', () => ({ generateImage: (...a) => generateImage(...a), previewImagePrompt: (...a) => previewImagePrompt(...a) }));
 vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../imageGen/GalleryImagePicker', () => ({
+  default: ({ open, onSelect }) => (open ? <button type="button" onClick={() => onSelect({ filename: 'gallery.png' })}>Pick gallery.png</button> : null),
+}));
 
 import QuickImageEdit from './QuickImageEdit';
 
@@ -42,6 +45,25 @@ describe('QuickImageEdit', () => {
       height: 768,
     });
     expect(body.modelId).toBeUndefined();
+  });
+
+  it('sends picked page and gallery images as further references after the edited image', async () => {
+    generateImage.mockResolvedValue({ position: 1 });
+    const choices = [{ kind: 'image', filename: 'a.png' }, { kind: 'image', filename: 'rink.png' }, { kind: 'video', filename: 'clip.mp4' }];
+    render(<QuickImageEdit item={{ filename: 'a.png' }} referenceChoices={choices} />);
+    fireEvent.change(screen.getByLabelText('What should change?'), { target: { value: 'put her in the rink from image 2' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add reference' }));
+    expect(screen.getAllByRole('button', { name: /^Page image/ })).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Page image 1' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Pick from gallery' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Pick gallery.png' }));
+    expect(screen.getByRole('img', { name: 'Reference image 3' })).toHaveAttribute('src', '/data/images/gallery.png');
+    await waitFor(() => expect(previewImagePrompt).toHaveBeenLastCalledWith(expect.objectContaining({ referenceImageFiles: ['a.png', 'rink.png', 'gallery.png'] }), expect.anything()));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove reference image 3' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: /^edit$/i })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: /^edit$/i }));
+    await waitFor(() => expect(generateImage).toHaveBeenCalled());
+    expect(generateImage.mock.calls[0][0].referenceImageFiles).toEqual(['a.png', 'rink.png']);
   });
 
   it('preserves the instruction whitespace in the sent prompt', async () => {

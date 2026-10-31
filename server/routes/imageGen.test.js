@@ -269,6 +269,37 @@ describe('Image Gen Routes', () => {
     getSettings.mockResolvedValue({ imageGen: { mode: 'external' } });
   });
 
+  it('sends further references after the edited image and refuses one replaced after review', async () => {
+    await fileUtils.ensureDir(fileUtils.PATHS.images);
+    const extra = pathJoin(fileUtils.PATHS.images, 'quick-edit-place.png');
+    await writeFile(pathJoin(fileUtils.PATHS.images, 'quick-edit-subject.png'), 'subject bytes');
+    await writeFile(extra, 'place bytes');
+    const body = { prompt: 'Put her in the rink from image 2', quickEdit: true, referenceImageFiles: ['quick-edit-subject.png', 'quick-edit-place.png'] };
+    const settings = { imageGen: { mode: 'codex', codex: { enabled: true } } };
+    getSettings.mockResolvedValue(settings);
+    const preview = await request(app).post('/api/image-gen/prompt-preview').send({ ...body, reviewReference: true });
+    expect(preview.status).toBe(200);
+    expect(preview.body.sentPrompt).toContain('Edit the first reference image: Put her in the rink from image 2. Use the other reference images only as visual references for this change. Keep everything else');
+    expect(preview.body.promptAdditions.map(a => a.id).slice(0, 3)).toEqual(['quick-edit-prefix', 'quick-edit-references', 'quick-edit-preservation']);
+    expect(preview.body.referenceImages.map(r => r.source)).toEqual(['Input image 1 · Image to edit', 'Input image 2 · Visual reference']);
+    expect(preview.body.reviewedReferenceImage).toContain(Buffer.from('subject bytes').toString('base64'));
+    const reviewed = { ...body, reviewedReferenceDigest: preview.body.reviewedReferenceDigest, reviewedPromptDigest: preview.body.reviewedPromptDigest };
+    const sent = await request(app).post('/api/image-gen/generate').send(reviewed);
+    expect(sent.status).toBe(200);
+    expect(mediaJobQueue.enqueueJob.mock.calls.at(-1)[0].params.referenceImagePaths.map(p => p.split(/[/\\]/).pop())).toEqual(['quick-edit-subject.png', 'quick-edit-place.png']);
+    await writeFile(extra, 'replacement bytes');
+    const stale = await request(app).post('/api/image-gen/generate').send(reviewed);
+    expect(stale.status).toBe(409);
+    expect(stale.body.code).toBe('REVIEWED_PROMPT_CHANGED');
+    getSettings.mockResolvedValue({ imageGen: { mode: 'agy', agy: { enabled: true } } });
+    const files = ['a', 'b', 'c', 'd'].map(name => `quick-edit-many-${name}.png`);
+    for (const file of files) await writeFile(pathJoin(fileUtils.PATHS.images, file), file);
+    const over = await request(app).post('/api/image-gen/prompt-preview').send({ ...body, referenceImageFiles: files, reviewReference: true });
+    expect(over.status).toBe(400);
+    expect(over.body.code).toBe('TOO_MANY_INPUT_IMAGES');
+    getSettings.mockResolvedValue({ imageGen: { mode: 'external' } });
+  });
+
   it('refuses complete quick-edit prompts over the limit with a count before queue admission', async () => {
     await fileUtils.ensureDir(fileUtils.PATHS.images);
     await writeFile(pathJoin(fileUtils.PATHS.images, 'quick-edit-limit.png'), 'reviewed bytes');

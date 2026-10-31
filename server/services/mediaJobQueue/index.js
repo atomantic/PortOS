@@ -2137,14 +2137,15 @@ async function runJobLifecycle(job, markDispatched, permit, finalizeLane) {
         throw new ServerError('Reviewed reference ownership is missing', { status: 409, code: 'REVIEWED_REFERENCE_CHANGED' });
       }
       if (safeParams.reviewedReferenceSnapshot) {
-        const { readOwnedSnapshot, markSnapshotState, withReviewedSnapshotLock } = await import('../imageGen/reviewedReference.js');
+        const { readOwnedSnapshot, markSnapshotState, withReviewedSnapshotLock, isReviewedReferenceList } = await import('../imageGen/reviewedReference.js');
         const snapshot = safeParams.reviewedReferenceSnapshot;
         const { path, record } = await readOwnedSnapshot(snapshot);
+        const remoteAssets = safeParams.remoteMedia?.inputAssets;
         const remoteMismatch = isRemoteMediaJob(job) && (safeParams.remoteMedia?.wireVersion !== 2
           || JSON.stringify(safeParams.remoteMedia.reviewedReferenceSnapshot) !== JSON.stringify(snapshot)
-          || safeParams.remoteMedia.inputAssets?.length !== 1 || safeParams.remoteMedia.inputAssets[0]?.role !== 'referenceImages'
-          || safeParams.remoteMedia.inputAssets[0]?.path !== path);
-        if (snapshot.jobId !== job.id || safeParams.initImagePath || safeParams.referenceImagePaths?.length !== 1 || safeParams.referenceImagePaths[0] !== path || remoteMismatch) {
+          || !Array.isArray(remoteAssets) || remoteAssets.some(asset => asset?.role !== 'referenceImages')
+          || !isReviewedReferenceList(remoteAssets.map(asset => asset.path), path));
+        if (snapshot.jobId !== job.id || safeParams.initImagePath || !isReviewedReferenceList(safeParams.referenceImagePaths, path) || remoteMismatch) {
           throw new ServerError('Reviewed reference ownership does not match the queued job', { status: 409, code: 'REVIEWED_REFERENCE_CHANGED' });
         }
         if (record.state === 'reserved') await withReviewedSnapshotLock(() => markSnapshotState(snapshot, 'invoked'));
@@ -2298,31 +2299,34 @@ async function enqueueJobLocked({ kind, params, owner = null }) {
   let preparedParams = params;
   if (kind === 'image' && params?.reviewedReferenceDigest) {
     if (persistBlocked) throw new ServerError('Reviewed edits require a writable media queue', { status: 503, code: MEDIA_QUEUE_PERSIST_FAILED });
-    if (params.initImagePath || params.referenceImagePaths?.length !== 1) {
-      throw new ServerError('Reviewed quick edit requires one local reference', { status: 400, code: 'REVIEWED_REFERENCE_UNSUPPORTED' });
+    if (params.initImagePath || !params.referenceImagePaths?.length) {
+      throw new ServerError('Reviewed quick edit requires a local reference', { status: 400, code: 'REVIEWED_REFERENCE_UNSUPPORTED' });
     }
     const { stageReviewedReference } = await import('../imageGen/reviewedReference.js');
     const snapshot = await stageReviewedReference(id, params.referenceImagePaths[0], params.reviewedReferenceDigest);
     const snapshotPath = join(PATHS.imageRefs, snapshot.filename);
+    // The edited image is replaced by its snapshot; further references follow it unchanged.
+    const referenceImagePaths = [snapshotPath, ...params.referenceImagePaths.slice(1)];
     let remoteMedia = params.remoteMedia;
     if (isRemoteMediaJob({ kind, params })) {
       const assets = remoteMedia?.inputAssets;
-      if (!Array.isArray(assets) || assets.length !== 1 || assets[0].role !== 'referenceImages' || assets[0].path !== params.referenceImagePaths[0]) {
+      if (!Array.isArray(assets) || assets.length !== params.referenceImagePaths.length
+        || assets.some((asset, index) => asset.role !== 'referenceImages' || asset.path !== params.referenceImagePaths[index])) {
         throw new ServerError('Reviewed reference does not match the remote input', { status: 400, code: 'REVIEWED_REFERENCE_UNSUPPORTED' });
       }
       // Marker v2 is a local downgrade gate: older adapters refuse it instead
       // of replaying the snapshot path without the ownership check. The peer's
       // independent image wire request remains on its negotiated version.
-      remoteMedia = { ...remoteMedia, wireVersion: 2, reviewedReferenceSnapshot: snapshot, inputAssets: [{ ...assets[0], path: snapshotPath }] };
+      remoteMedia = { ...remoteMedia, wireVersion: 2, reviewedReferenceSnapshot: snapshot, inputAssets: [{ ...assets[0], path: snapshotPath }, ...assets.slice(1)] };
     }
-    preparedParams = { ...params, ...(remoteMedia ? { remoteMedia } : {}), reviewedReferenceSnapshot: snapshot, referenceImagePaths: [snapshotPath] };
+    preparedParams = { ...params, ...(remoteMedia ? { remoteMedia } : {}), reviewedReferenceSnapshot: snapshot, referenceImagePaths };
     if (!remoteMedia) {
       // Older queue workers know nothing about snapshot proof. Keep their
       // top-level request unrenderable, as routed jobs already do, and restore
       // these fields only in the current verified dispatcher.
       preparedParams.reviewedReferenceRequest = {
         prompt: params.prompt, modelId: params.modelId, pythonPath: params.pythonPath,
-        referenceImagePaths: [snapshotPath],
+        referenceImagePaths,
       };
       Object.assign(preparedParams, { prompt: '', modelId: null, pythonPath: null, referenceImagePaths: [] });
     }

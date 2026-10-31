@@ -329,6 +329,23 @@ describe('mediaJobQueue', () => {
     await waitFor(() => mediaJobQueue.getJob(job.jobId).status === 'failed');
   });
 
+  it('snapshots only the edited image and keeps further references in order', async () => {
+    const source = join(tempDataDir, 'images', 'reviewed.png');
+    const extra = join(tempDataDir, 'images', 'place.png');
+    mkdirSync(join(tempDataDir, 'images'), { recursive: true });
+    writeFileSync(source, 'reviewed bytes');
+    writeFileSync(extra, 'place bytes');
+    const digest = createHash('sha256').update('reviewed bytes').digest('hex');
+    stubs.generateImage.mockResolvedValue({});
+    const job = await mediaJobQueue.enqueueJob({ kind: 'image', params: { prompt: 'edit', referenceImagePaths: [source, extra], reviewedReferenceDigest: digest } });
+    await waitFor(() => stubs.generateImage.mock.calls.length === 1);
+    const request = stubs.generateImage.mock.calls[0][0];
+    expect(readFileSync(request.referenceImagePaths[0], 'utf8')).toBe('reviewed bytes');
+    expect(request.referenceImagePaths.slice(1)).toEqual([extra]);
+    imageGenEvents.emit('failed', { generationId: job.jobId, error: 'synthetic failure', inputProcessSettled: true });
+    await waitFor(() => mediaJobQueue.getJob(job.jobId).status === 'failed');
+  });
+
   it('replays a durably queued reviewed snapshot after restart', async () => {
     const source = join(tempDataDir, 'images', 'reviewed.png');
     mkdirSync(join(tempDataDir, 'images'), { recursive: true });
