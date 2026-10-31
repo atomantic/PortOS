@@ -2,7 +2,7 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 import { isAuthEnabled, verifyPassword, verifyRequestSession } from './auth.js';
 // Shared with sidecar processes (lib/sidecarAuthGate.js) so the Autofixer UI
 // on :5560 applies byte-identical credential extraction and CSRF rules.
-import { browserRequestRefusal, isLocalConnection, extractBasicPassword } from '../../lib/portosAuthCore.js';
+import { browserRequestRefusal, isLocalConnection, isOriginlessCrossSiteBrowserRequest, extractBasicPassword } from '../../lib/portosAuthCore.js';
 import { getSettings, settingsEvents } from './settings.js';
 import { getVoiceConfig } from './voice/config.js';
 import { isRegistryPublic } from '../lib/apiRegistry.js';
@@ -279,7 +279,10 @@ const requestIsLocalConnection = (req) => !isRemoteRequest(req)
   && isLocalConnection(req.socket?.remoteAddress, req.headers);
 
 // Server-derived HTTP authority; never read caller-provided body fields.
-export const requestHasHostControl = (req) => hasHostControl(req.portosAuthContext, requestIsLocalConnection(req));
+// A cross-site no-Origin browser request (an <img> load or navigation another
+// page started) is never the operator, even over a loopback socket or a Lax cookie.
+export const requestHasHostControl = (req) => !isOriginlessCrossSiteBrowserRequest(req)
+  && hasHostControl(req.portosAuthContext, requestIsLocalConnection(req));
 
 // Re-check at tool dispatch, after any STT/LLM wait. A handshake/session that
 // was valid when a turn started is not a durable grant to execute later.
