@@ -37,7 +37,7 @@ export const receiptTiming = {
 
 export const SYMLINKS = process.platform !== 'win32';
 export const retirementFaults = { onRemove: null, onBranchDelete: null, scheduleWrites: 0, failScheduleWrite: null };
-export const injected = { policies: [], schedule: null, app: null, fetchRemote: null, fetches: [], onBundle: null, onArchiveRef: null, onEvidence: null, onProof: null, proofFailures: [], onOtherFiles: null, policyInputs: [] };
+export const injected = { policies: [], schedule: null, app: null, fetchRemote: null, fetches: [], onBundle: null, onArchiveRef: null, onEvidence: null, onProof: null, proofFailures: [], onOtherFiles: null };
 
 // Local branch deletion archives the common reflog using PATHS.cos, independently
 // of the checkout archive's explicit cosDir option.
@@ -100,7 +100,7 @@ export const mockExecGit = actual => ({ ...actual,
 export const mockBranchCompletionPolicy = actual => ({
   ...actual, readBranchCompletionPolicies: async () => injected.policies,
   // Records the identity scope each policy evaluation received (#14458).
-  reviewedRetirementPolicy: input => { injected.policyInputs.push(input); return actual.reviewedRetirementPolicy(input); },
+  reviewedRetirementPolicy: input => { injected.policyInputs?.push(input); return actual.reviewedRetirementPolicy(input); },
   readBranchCompletionHold: input => actual.readBranchCompletionHold(input, {
     readPolicies: async () => injected.policies,
   }),

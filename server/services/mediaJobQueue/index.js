@@ -989,10 +989,13 @@ async function announceTerminalTransition(job, onDurable = () => {}) {
 // constrains each delete to PATHS.uploads, so a corrupted path never removes a
 // file the job merely referenced. audioFilePath is the same kind of upload.
 async function releaseStagedUploads(params) {
-  await safeUnlinkUpload(params?.uploadedTempPath);
-  await safeUnlinkUpload(params?.audioFilePath);
-  for (const p of normalizeTempPaths(params?.uploadedTempPaths)) await safeUnlinkUpload(p);
+  await Promise.all([params?.uploadedTempPath, params?.audioFilePath, ...normalizeTempPaths(params?.uploadedTempPaths)]
+    .map(path => safeUnlinkUpload(path)));
 }
+
+// The same training job, flagged to re-attach, when its detached trainer survived.
+const reattachSurvivingTrainer = async j => (j.kind === 'training' && j.params?.runId && await jobHasSurvivingTrainer(j.params.runId)
+  ? { ...j, status: 'queued', params: { ...j.params, reattach: true } } : null);
 
 // What one persisted job becomes after a restart. Applies it to the queue or
 // archive and returns { failedId } / { canceled } / { reattach } for the init
@@ -1028,9 +1031,10 @@ async function restorePersistedJob(persisted) {
   }
   if (j.status === 'running' && maintenance.held()) {
     maintenance.recoverOwned('media', j.id);
-    if (j.kind === 'training' && j.params?.runId && await jobHasSurvivingTrainer(j.params.runId)) {
+    const reattach = await reattachSurvivingTrainer(j);
+    if (reattach) {
       recoveringJobs.add(j.id);
-      return { reattach: { ...j, status: 'queued', params: { ...j.params, reattach: true } } };
+      return { reattach };
     }
     // Preserve uncertain work and staged inputs; no paid replay or orphan
     // kill is safe merely because the observer process restarted.
@@ -1101,9 +1105,10 @@ async function restoreInterruptedRunningJob(j) {
   // the downtime still registers its LoRA. The probe lives in loraTraining
   // (it owns the run's on-disk layout); lazy-imported to avoid a static
   // cycle. Falls through to the fail path when nothing survived.
-  if (j.kind === 'training' && j.params?.runId && await jobHasSurvivingTrainer(j.params.runId)) {
+  const reattach = await reattachSurvivingTrainer(j);
+  if (reattach) {
     console.log(`🔁 media-job [${j.id.slice(0, 8)}] training survived restart — re-enqueued for re-attach`);
-    return { reattach: { ...j, status: 'queued', params: { ...j.params, reattach: true } } };
+    return { reattach };
   }
   if (j.kind === 'video-sharing') {
     const { cleanupInterruptedSharingCopy } = await import('../musicVideo/sharingCopy.js');
@@ -1440,13 +1445,11 @@ async function settleQueuedJob(job, { status, error }) {
     j.completedAt = new Date().toISOString();
   }, () => {
     trackTerminalOperation((async () => {
-      await safeUnlinkUpload(job.params?.uploadedTempPath);
-      await safeUnlinkUpload(job.params?.audioFilePath);
+      await releaseStagedUploads(job.params);
       if (isTopazUpscale(job)) {
         const { cleanupPreparedTopaz } = await import('../videoGen/topazJob.js');
         await cleanupPreparedTopaz(job.params.preparedId);
       }
-      for (const p of normalizeTempPaths(job.params?.uploadedTempPaths)) await safeUnlinkUpload(p);
       const entry = ensureSseEntry(job.id);
       broadcastSse(entry, status === 'canceled'
         ? { type: 'canceled', reason: error } : { type: 'error', error });
