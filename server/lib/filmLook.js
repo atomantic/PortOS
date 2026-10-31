@@ -23,7 +23,9 @@ export const FILM_LOOK_GROUPS = Object.freeze([
   { id: 'focus', label: 'Focus & glow' },
   { id: 'color', label: 'Color' },
   { id: 'texture', label: 'Texture' },
-  { id: 'frame', label: 'Frame & motion' },
+  { id: 'frame', label: 'Frame & leak' },
+  { id: 'motion', label: 'Continuous film motion',
+    hint: 'Runs under every frame. Timed film events (gate jumps, shutter blinks, a leak at a moment) are set on each shot\'s Effects.' },
 ]);
 
 // Each control: a slider (`min`/`max`/`step`, `def` default), a color, or a
@@ -121,12 +123,18 @@ export const FILM_LOOK_CONTROLS = Object.freeze([
     hint: 'Light sneaking into the camera body fogs one side of the frame; on video it drifts slowly.',
     words: () => 'light leak, fogged edge of frame' },
   { id: 'leakColor', group: 'frame', label: 'Leak color', term: 'leak hue', type: 'color', def: '#ff7a2a', hint: 'Real leaks are orange-red, from light through the film base.' },
-  { id: 'weave', group: 'frame', label: 'Gate weave', term: 'gate weave · frame jitter', min: 0, max: 1, step: 0.01, def: 0,
+  { id: 'weave', group: 'motion', label: 'Gate weave', term: 'gate weave · frame jitter', min: 0, max: 1, step: 0.01, def: 0,
     hint: 'The frame drifts a few pixels as film shuffles through the projector gate. Stills ignore it.',
     words: () => 'projected film gate weave, slight frame jitter' },
-  { id: 'flicker', group: 'frame', label: 'Flicker', term: 'projector flicker · exposure flicker', min: 0, max: 1, step: 0.01, def: 0,
+  // Rates only reshape time: every value is a function of the song frame, so a
+  // slower or faster drift never moves a shot or the audio. 1 is the original speed.
+  { id: 'weaveRate', group: 'motion', label: 'Weave speed', term: 'weave rate', min: 0.25, max: 3, step: 0.05, def: 1, modifier: 'weave',
+    hint: 'How fast the frame drifts. Slow reads as a loose home projector; fast as a hand-cranked camera.' },
+  { id: 'flicker', group: 'motion', label: 'Flicker', term: 'projector flicker · exposure flicker', min: 0, max: 1, step: 0.01, def: 0,
     hint: 'Frame-to-frame brightness wobble of a projector or a hand-cranked camera. Stills ignore it.',
     words: () => 'flickering projector exposure' },
+  { id: 'flickerRate', group: 'motion', label: 'Flicker speed', term: 'flicker rate', min: 0.1, max: 1, step: 0.05, def: 1, modifier: 'flicker',
+    hint: 'How often the exposure changes. Full speed changes every frame; lower glides between changes like a slow projector lamp.' },
 ]);
 
 export const FILM_LOOK_CONTROL_IDS = Object.freeze(FILM_LOOK_CONTROLS.map((control) => control.id));
@@ -150,6 +158,9 @@ export const FILM_LOOK_PRESETS = Object.freeze([
     values: { version: 2, smear: 0.6, bleed: 0.65, chroma: 0.15, diffusion: 0.15, contrast: -0.05, fade: 0.12, saturation: 0.05, tint: 0.06, grain: 0.12, grainSize: 0.15, grainColor: true, tracking: 0.3, tapeNoise: 0.08, vignette: 0.1 } },
   { id: 'super8', label: 'Super 8', summary: 'Coarse grain, warm faded color, gate weave and projector flicker.',
     values: { defocus: 0.15, halation: 0.35, contrast: -0.1, fade: 0.25, saturation: 0.1, warmth: 0.35, grain: 0.75, grainSize: 0.7, vignette: 0.5, leak: 0.2, weave: 0.6, flicker: 0.4 } },
+  // Restrained on purpose: a slow, gentle weave and a breathing flicker, never a strobe.
+  { id: 'home-movie', label: 'Home movie', summary: 'Old family film, gently: slow weave, a soft breathing flicker, warm faded color, coarse grain and a faint leak.',
+    values: { defocus: 0.08, halation: 0.15, contrast: -0.06, fade: 0.22, saturation: -0.05, warmth: 0.25, grain: 0.4, grainSize: 0.6, vignette: 0.3, leak: 0.12, weave: 0.3, weaveRate: 0.6, flicker: 0.15, flickerRate: 0.5 } },
   { id: '16mm', label: '16mm', summary: 'Documentary film: visible grain, honest color, a gentle vignette.',
     values: { halation: 0.25, contrast: 0.05, fade: 0.1, saturation: -0.05, grain: 0.45, grainSize: 0.4, vignette: 0.25, weave: 0.15 } },
   { id: 'soft-analog', label: 'Soft analog', summary: 'A light hand: a little diffusion, fine grain, a touch of warmth.',
@@ -317,8 +328,10 @@ export function filmLookFilterMarkup(look, { frame = 0, width = 1920, height = 1
 
   const weave = v('weave');
   if (weave > 0) {
-    const dx = weave * 0.004 * w * (Math.sin(f * 0.37) + 0.6 * Math.sin(f * 1.13)) / 1.6;
-    const dy = weave * 0.004 * h * (Math.cos(f * 0.29) + 0.6 * Math.sin(f * 0.91)) / 1.6;
+    // A rate of 1 is the original drift, byte for byte.
+    const p = f * v('weaveRate', 1);
+    const dx = weave * 0.004 * w * (Math.sin(p * 0.37) + 0.6 * Math.sin(p * 1.13)) / 1.6;
+    const dy = weave * 0.004 * h * (Math.cos(p * 0.29) + 0.6 * Math.sin(p * 0.91)) / 1.6;
     emit(`<feOffset in="${cur}" dx="${n(dx)}" dy="${n(dy)}" result=""/>`);
   }
   const defocus = v('defocus');
@@ -388,7 +401,11 @@ export function filmLookFilterMarkup(look, { frame = 0, width = 1920, height = 1
   const warmth = v('warmth');
   const tint = v('tint');
   if (exposure || contrast || fade || flicker || warmth || tint) {
-    const e = Math.pow(2, exposure) * (1 + flicker * 0.12 * (hash(f) * 2 - 1));
+    // Below full speed the exposure glides from one frame's random value to the next; at 1 it is the per-frame hash.
+    const at = f * v('flickerRate', 1);
+    const i = Math.floor(at);
+    const wobble = hash(i) + (hash(i + 1) - hash(i)) * (at - i);
+    const e = Math.pow(2, exposure) * (1 + flicker * 0.12 * (wobble * 2 - 1));
     const c = 1 + contrast * 0.8;
     const s = 1 - 0.28 * fade;
     const slope = e * c * s;
@@ -544,8 +561,11 @@ function filmLookMotionMarkup(settings, { frame = 0, width = 1920, height = 1080
   // The render's per-channel transfer v' = slope·v + intercept, as brightness(b) then
   // contrast(k): k·b·v + (1 − k)/2, so k = 1 − 2·intercept and b = slope / k.
   const exposure = v('exposure'); const contrast = v('contrast'); const fade = v('fade'); const flicker = v('flicker');
+  const rate = (key) => (Number.isFinite(settings[key]) ? settings[key] : 1);
   if (exposure || contrast || fade || flicker) {
-    const e = Math.pow(2, exposure) * (1 + flicker * 0.12 * (frameHash(f) * 2 - 1));
+    const at = f * rate('flickerRate');
+    const i = Math.floor(at);
+    const e = Math.pow(2, exposure) * (1 + flicker * 0.12 * ((frameHash(i) + (frameHash(i + 1) - frameHash(i)) * (at - i)) * 2 - 1));
     const c = 1 + contrast * 0.8;
     const s = 1 - 0.28 * fade;
     const slope = e * c * s;
@@ -556,8 +576,9 @@ function filmLookMotionMarkup(settings, { frame = 0, width = 1920, height = 1080
   const saturation = v('saturation');
   if (saturation) filter.push(`saturate(${n(Math.max(0, 1 + saturation))})`);
   const weave = v('weave');
+  const p = f * rate('weaveRate');
   const transform = weave > 0
-    ? `translate(${n(weave * 0.004 * w * (Math.sin(f * 0.37) + 0.6 * Math.sin(f * 1.13)) / 1.6)}px, ${n(weave * 0.004 * h * (Math.cos(f * 0.29) + 0.6 * Math.sin(f * 0.91)) / 1.6)}px)`
+    ? `translate(${n(weave * 0.004 * w * (Math.sin(p * 0.37) + 0.6 * Math.sin(p * 1.13)) / 1.6)}px, ${n(weave * 0.004 * h * (Math.cos(p * 0.29) + 0.6 * Math.sin(p * 0.91)) / 1.6)}px)`
     : null;
 
   const overlays = [];

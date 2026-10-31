@@ -384,6 +384,22 @@ by `toString()` into sandboxed pages, which is why `filmLookFilterMarkup` must
 stay self-contained; the runtime wraps `portosComposition.seek()` to advance
 the frame before the page paints. A neutral look emits no filter at all.
 
+**Continuous film motion vs timed film events.** The look's *Continuous film
+motion* group holds gate weave and flicker plus their speeds (`weaveRate`,
+0.25–3, and `flickerRate`, 0.1–1, both defaulting to 1): a speed multiplies the
+song frame the drift is computed from, so it never moves a shot or the audio,
+and a look saved without them draws exactly as before. The *Home movie* preset
+is the restrained starting recipe (slow weave, a breathing flicker). Timed film
+events are each shot's **Effects** (`scene.glitches`, `musicVideoTransitions.js`):
+a gate jump, shutter, film burn, light leak or any glitch at a moment, each with
+an optional `strength` (0 switches it off, 1 or absent is the style as declared),
+a repeat (`count` plays, `everySec` apart on the song clock, never past the
+shot), and for a light leak a `color` and entry `edge`. `glitchFrameParams` turns
+those into the frame both the animatic canvas and the ffmpeg chain paint, so a
+scrub, an excerpt and the full render meet each repeat on the same song frame.
+The shot card's **Home-movie events** adds a half-strength gate jump every 3 s
+and one soft warm leak.
+
 Each control names its effect in photography terms, and the **In a prompt**
 box rewrites the current settings as the words that ask a model for the same
 qualities (`describeFilmLook`), so tuning a look also teaches the vocabulary

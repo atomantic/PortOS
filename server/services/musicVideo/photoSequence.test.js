@@ -111,3 +111,45 @@ describe.skipIf(!ffmpeg)('photo sequences through real ffmpeg', () => {
     }
   });
 });
+
+describe.skipIf(!ffmpeg)('timed film events across a photo sequence', () => {
+  // Catches repeated events drifting off the song clock (an excerpt that does
+  // not reproduce the full render's frames), adding time, painting outside
+  // their frames, or a half-strength shutter closing all the way.
+  it('repeats gate jumps and a half shutter over the sequence, and an excerpt reproduces those frames', async () => {
+    await mkdir(PATHS.images, { recursive: true });
+    const colors = [[230, 30, 30], [30, 230, 30], [30, 30, 230], [230, 230, 30], [230, 30, 230]];
+    await Promise.all(ids.map((id, i) => sharp({ create: { width: 96, height: 64, channels: 3, background: { r: colors[i][0], g: colors[i][1], b: colors[i][2] } } }).png().toFile(join(PATHS.images, id))));
+    const glitches = [
+      { atSec: 0.25, style: 'gate-jump', count: 3, everySec: 0.5 },
+      { atSec: 0.5, style: 'shutter', strength: 0.5, count: 2, everySec: 1 },
+    ];
+    const audio = join(PATHS.data, 'events.wav');
+    execFileSync(ffmpeg, ['-v', 'error', '-f', 'lavfi', '-i', 'sine=frequency=220:duration=2', '-y', audio]);
+    const encode = async (name, shot, excerpt = null) => {
+      const clips = await resolveSceneClips({ scenes: [shot] }, { layered: true });
+      const output = join(PATHS.data, name);
+      const plan = buildMusicVideoFfmpegArgs(clips, audio, output, { excerpt, audioDurationSec: 2, canvas: { width: 96, height: 64, fps: 24 } });
+      execFileSync(ffmpeg, ['-v', 'error', ...plan.args.filter((arg, i) => !(arg === '-progress' || plan.args[i - 1] === '-progress'))], { stdio: 'pipe' });
+      return execFileSync(ffmpeg, ['-v', 'error', '-i', output, '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-'], { maxBuffer: 8 * 1024 * 1024 });
+    };
+    const clean = await encode('events-clean.mp4', scene);
+    const full = await encode('events.mp4', { ...scene, glitches });
+    const excerpt = await encode('events-excerpt.mp4', { ...scene, glitches }, { startSec: 9 / 24, endSec: 33 / 24 });
+    const bytes = 96 * 64 * 3;
+    expect(full.length).toBe(48 * bytes);
+    expect(excerpt.length).toBe(24 * bytes);
+    const differs = (a, b) => a.some((v, i) => Math.abs(v - b[i]) > 24);
+    const frame = (raw, f) => raw.subarray(f * bytes, (f + 1) * bytes);
+    const changed = Array.from({ length: 48 }, (_, f) => f).filter((f) => differs(frame(full, f), frame(clean, f)));
+    // Gate jumps from frames 6, 18 and 30 (five frames each); shutters from 12 and 36 (six each).
+    const windows = [[6, 11], [18, 23], [30, 35], [12, 18], [36, 42]];
+    expect(changed.every((f) => windows.some(([a, b]) => f >= a && f < b))).toBe(true);
+    for (const [a, b] of windows) expect(changed.some((f) => f >= a && f < b), `${a}-${b}`).toBe(true);
+    // The shutter's widest frame at half strength blacks a quarter from each edge, not half.
+    const row = (f, y) => [...full.subarray(f * bytes + (y * 96 + 48) * 3, f * bytes + (y * 96 + 48) * 3 + 3)];
+    expect(Math.max(...row(14, 4))).toBeLessThan(40);
+    expect(Math.max(...row(14, 24))).toBeGreaterThan(150);
+    for (let f = 9; f < 33; f++) expect(differs(frame(excerpt, f - 9), frame(full, f)), `frame ${f}`).toBe(false);
+  });
+});

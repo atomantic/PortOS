@@ -5,7 +5,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { findFfmpeg, findFfprobe } from '../../lib/ffmpeg.js';
 import { FILTER_GRAPH_ARG_LIMIT, filterGraphViaFile } from '../../lib/ffmpegFilterGraph.js';
-import { MUSIC_VIDEO_TRANSITION_STYLES, sceneTransitions, shotGlitchFrames, transitionGlitchFrames } from '../../lib/musicVideoTransitions.js';
+import {
+  MUSIC_VIDEO_TRANSITION_STYLES, glitchFrameParams, sceneTransitions, shotGlitchFrames, transitionFrameAt, transitionGlitchFrames,
+} from '../../lib/musicVideoTransitions.js';
 import { buildMusicVideoFfmpegArgs } from './render.js';
 import { applySceneUpdate } from './projectsLogic.js';
 
@@ -87,6 +89,36 @@ describe('shotGlitchFrames', () => {
     const other = { sceneId: 'b', startSec: 4, endSec: 8, glitches: [{ atSec: 1, style: 'vhs-dropout' }] };
     const pieces = [{ ...piece(shot), endFrame: 36 }, { ...piece(other, { partner: true }), startFrame: 36, endFrame: 48 }, { ...piece(shot), startFrame: 48, endFrame: 96 }];
     expect(framesOf(pieces)).toEqual(['24:0', '25:1']);
+  });
+
+  // Uniquely catches a repeat drifting off the song clock, spilling past the
+  // shot, or counting as many effects; and strength 0 still painting.
+  it('repeats an effect on the song clock inside its shot, and strength 0 switches it off', () => {
+    const shot = { sceneId: 'a', startSec: 10, endSec: 12, glitches: [{ atSec: 0.5, style: 'vhs-dropout', count: 5, everySec: 0.5, strength: 0.4 }] };
+    expect(framesOf([piece(shot)])).toEqual(['252:0', '253:1', '264:0', '265:1', '276:0', '277:1']);
+    expect(shotGlitchFrames([piece(shot)], FPS24).every((g) => g.strength === 0.4)).toBe(true);
+    // One stored effect stays one effect on the shot, however often it plays.
+    expect(sceneTransitions(shot).shotGlitches).toHaveLength(1);
+    expect(sceneTransitions({ ...shot, glitches: [{ ...shot.glitches[0], strength: 0 }] })).toEqual({});
+    // An effect saved before these controls plays exactly as it did.
+    expect(sceneTransitions({ ...shot, glitches: [{ atSec: 0.5, style: 'vhs-dropout' }] }).shotGlitches).toEqual([{ atSec: 10.5, style: 'vhs-dropout' }]);
+  });
+
+  it('gives only a light leak its color and edge, and leaves a full-strength effect as declared', () => {
+    const shot = { sceneId: 'a', startSec: 0, endSec: 4, glitches: [
+      { atSec: 1, style: 'light-leak', color: '#00FF00', edge: 'bottom' },
+      { atSec: 3, style: 'film-burn', color: '#00ff00', edge: 'bottom' },
+    ] };
+    const frames = shotGlitchFrames([piece(shot)], FPS24);
+    const leak = transitionFrameAt(frames, 24).params;
+    expect(leak.glows.map((g) => [g.side, g.color])).toEqual([['bottom', '00ff00'], ['bottom', '73ff73']]);
+    expect(transitionFrameAt(frames, 72).params).toBe(MUSIC_VIDEO_TRANSITION_STYLES['film-burn'].frames[0]);
+    // A gate jump at half strength rolls half as far and its frame line follows the roll.
+    const half = glitchFrameParams({ style: 'gate-jump', index: 1, strength: 0.5 });
+    expect(half.roll).toBeCloseTo(0.225);
+    expect(half.blocks[0]).toMatchObject({ y: expect.closeTo(0.205), alpha: 1 });
+    const shutter = glitchFrameParams({ style: 'shutter', index: 2, strength: 0.5 });
+    expect(shutter.blocks.map((b) => [b.y, b.h])).toEqual([[0, 0.25], [0.75, 0.25]]);
   });
 });
 
@@ -266,6 +298,38 @@ describe.skipIf(!ffmpeg)('a color block glitch inside a shot in the final render
   });
 });
 
+// Uniquely catches a leak's color or entry edge reaching the animatic but not
+// the export, and a strength that does not weaken the exported wash.
+describe.skipIf(!ffmpeg)('a light leak inside a shot in the final render', () => {
+  const renderLeak = (name, glitch) => {
+    const song = join(dir, 'song.wav');
+    run(['-f', 'lavfi', '-i', 'sine=frequency=440:duration=1', '-y', song]);
+    const videoPath = join(dir, 'leak-shot.mp4');
+    run(['-f', 'lavfi', '-i', `color=0x404040:s=${W}x${H}:r=${FPS}:d=1`, '-pix_fmt', 'yuv420p', '-y', videoPath]);
+    const scene = { sceneId: 's0', startSec: 0, endSec: 1, glitches: [{ atSec: 0.1, style: 'light-leak', ...glitch }] };
+    const clips = [{ sceneId: 's0', videoPath, width: W, height: H, fps: FPS, duration: 1, sourceSec: 1, loop: false, inSec: 0, outSec: 1, frameFit: 'fill', ...sceneTransitions(scene) }];
+    const output = join(dir, `${name}.mp4`);
+    const plan = buildMusicVideoFfmpegArgs(clips, song, output, { audioDurationSec: 1, frameGrid: true });
+    run(plan.args.filter((arg, i) => !(arg === '-progress' || plan.args[i - 1] === '-progress')));
+    const raw = run(['-i', output, '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-']);
+    // The wash peaks on the style's fifth frame (0.1 s in at 12 fps is frame 1).
+    const frame = raw.subarray(5 * W * H * 3, 6 * W * H * 3);
+    const at = (x, y) => [...frame.subarray((y * W + x) * 3, (y * W + x) * 3 + 3)];
+    return { left: at(2, H / 2), right: at(W - 3, H / 2) };
+  };
+  it('washes in from the chosen edge in the chosen color, weaker at a lower strength', () => {
+    const corner = renderLeak('leak-default', {});
+    // The default leak still pours in from the left and top.
+    expect(corner.left[0]).toBeGreaterThan(corner.right[0] + 20);
+    const green = renderLeak('leak-green-right', { color: '#00ff00', edge: 'right' });
+    expect(green.right[1]).toBeGreaterThan(green.left[1] + 20);
+    expect(green.right[1]).toBeGreaterThan(green.right[0] + 20);
+    const faint = renderLeak('leak-green-right-faint', { color: '#00ff00', edge: 'right', strength: 0.3 });
+    expect(faint.right[1]).toBeLessThan(green.right[1] - 10);
+    expect(faint.right[1]).toBeGreaterThan(faint.left[1]);
+  });
+});
+
 // Uniquely catches the scene PATCH refusing the new fields, keeping a cleared one, or taking an unknown style.
 describe('a shot\'s transitions on the board', () => {
   const project = { id: 'mv-1', scenes: [{ sceneId: 's1', order: 0, startSec: 0, endSec: 4, takes: [] }] };
@@ -283,5 +347,13 @@ describe('a shot\'s transitions on the board', () => {
     expect(set.scenes[0].glitches).toEqual(glitches);
     expect(applySceneUpdate(set, 's1', { glitches: null }).project.scenes[0].glitches).toBeNull();
     expect(() => applySceneUpdate(project, 's1', { glitches: [{ atSec: 1, style: 'crossfade' }] })).toThrow();
+  });
+
+  it('saves an effect\'s strength, repeats and leak color and edge, and refuses them out of range', () => {
+    const glitches = [{ atSec: 0.5, style: 'light-leak', strength: 0.6, count: 4, everySec: 0.75, color: '#ffb36b', edge: 'right' }];
+    expect(applySceneUpdate(project, 's1', { glitches }).project.scenes[0].glitches).toEqual(glitches);
+    for (const bad of [{ strength: 1.5 }, { count: 0 }, { count: 65 }, { everySec: 0.01 }, { color: 'orange' }, { edge: 'middle' }]) {
+      expect(() => applySceneUpdate(project, 's1', { glitches: [{ atSec: 1, style: 'gate-jump', ...bad }] }), JSON.stringify(bad)).toThrow();
+    }
   });
 });
