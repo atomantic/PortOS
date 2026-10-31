@@ -110,6 +110,7 @@ export * from './videoGenParams.js';
 export * from './videoGenResolutions.js';
 export * from './videoGenSubmission.js';
 export * from './videoReferenceModes.js';
+export * from './videoResolution.js';
 export * from './videoRenderPhase.js';
 export * from './videoStreamingMode.js';
 export * from './videoTilingOptions.js';

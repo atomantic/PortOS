@@ -282,6 +282,19 @@ describe('MediaCard render-time chip', () => {
   });
 });
 
+describe('low-res video chip', () => {
+  // Uniquely catches a sub-720p clip (grok's 480p default, #14491) reading the
+  // same as a 720p one in history, and a small still being mislabeled.
+  it('flags a video under 720p only', () => {
+    const { rerender } = render(<MediaCard item={normalizeVideo({ ...imageItem, id: 'example-clip', width: 720, height: 416 })} />);
+    expect(screen.getByText('low-res')).toBeInTheDocument();
+    rerender(<MediaCard item={normalizeVideo({ ...imageItem, id: 'example-clip', width: 1280, height: 720 })} />);
+    expect(screen.queryByText('low-res')).not.toBeInTheDocument();
+    rerender(<MediaCard item={normalizeImage({ ...imageItem, width: 720, height: 416 })} />);
+    expect(screen.queryByText('low-res')).not.toBeInTheDocument();
+  });
+});
+
 describe('shared media-card file size', () => {
   it.each(['image', 'video'])('shows the actual %s file size beside the geometry chips', kind => {
     const normalize = kind === 'image' ? normalizeImage : normalizeVideo;

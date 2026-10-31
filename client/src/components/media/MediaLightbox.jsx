@@ -28,6 +28,7 @@ import ContinuationDetails from '../videoGen/ContinuationDetails';
 import MediaUsageList from './MediaUsageList';
 import { mediaAnnotationKey } from './mediaDetail';
 import { useMediaUsages } from '../../hooks/useMediaUsages';
+import { isLowResVideo } from '../../lib/videoResolution.js';
 
 // Intentionally NOT migrated to <ui/Modal> or <components/Drawer>. The
 // prev/next buttons sit as viewport-edge siblings of the card (not children
@@ -326,7 +327,7 @@ export default function MediaLightbox({
     ['Kind', entryKindLabel],
     ['Category', item.entryCategory],
     ['Model', item.modelId],
-    ['Resolution', item.width && item.height ? `${item.width}×${item.height}` : null],
+    ['Resolution', item.width && item.height ? `${item.width}×${item.height}${isVideo && isLowResVideo(item) ? ' · under 720p' : ''}` : null],
     ['Speed profile', speedProfileLabel],
     ['Decode', draftDecodeLabel],
     ['Steps', item.steps],

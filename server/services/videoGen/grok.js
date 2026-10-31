@@ -39,9 +39,10 @@ import { videoGenEvents } from './events.js';
 import { discardUnpublishedVideo, finalizeGeneratedVideo, emitCloudRenderStatus, CLOUD_RENDER_PHASE } from './generateVideoHelpers.js';
 import { mutateVideoHistory } from './history.js';
 import { noImageReason, deriveAspectRatio, GROK_ASPECT_RATIOS } from '../imageGen/grok.js';
-import { grokVideoBillableUnits, resolveGrokDuration } from '../../lib/grokVideoClip.js';
+import { grokVideoBillableUnits, grokVideoResolution, resolveGrokDuration } from '../../lib/grokVideoClip.js';
+import { isLowResVideo } from '../../lib/videoResolution.js';
 import { withSpawnCwdEnv } from '../../lib/spawnCwd.js';
-import { probeVideoDuration } from '../../lib/ffmpeg.js';
+import { probeVideoDuration, probeVideoStreamInfo } from '../../lib/ffmpeg.js';
 import { maintenance } from '../../lib/maintenanceAdmission.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { agentInstructionsAddition, carriedPromptAdditions, sentPromptRecord } from '../../lib/modelInput.js';
@@ -125,7 +126,7 @@ const isMp4Header = (buf) =>
 // the references (the look), saved as first-frame.png, which image_to_video then
 // animates. grok's image_gen takes no image, so the panel routes to image_edit.
 export function buildGrokVideoPrompt({
-  prompt, negativePrompt, aspectRatio, duration, stagingPath, sourceImagePath, scratchDir,
+  prompt, negativePrompt, aspectRatio, duration, resolution = null, stagingPath, sourceImagePath, scratchDir,
   guidanceImagePath = null, referenceImagePaths = [],
 }) {
   const avoid = negativePrompt?.trim() ? `\nAvoid: ${negativePrompt.trim()}` : '';
@@ -145,7 +146,9 @@ export function buildGrokVideoPrompt({
   } else {
     steps = `First, use your built-in image_gen tool to generate one base image for this prompt and save it as ${join(scratchDir, 'base.png')}:\n${prompt.trim()}${avoid}${ratio}\nThen use your built-in image_to_video tool to animate that base image for ${duration} seconds, using the same prompt as the motion description.`;
   }
-  return `${steps}\nSave the resulting video as an MP4 file at exactly this path: ${stagingPath}\nDo not create any other files, do not modify any code, and do not run any other tools beyond what is needed to generate the image/video and write the MP4 to that path. When the file is written, you are done.`;
+  // The tool defaults to 480p unless asked, so name the resolution the request needs (#14491).
+  const size = resolution ? `\nCall image_to_video with resolution_name "${resolution}".` : '';
+  return `${steps}${size}\nSave the resulting video as an MP4 file at exactly this path: ${stagingPath}\nDo not create any other files, do not modify any code, and do not run any other tools beyond what is needed to generate the image/video and write the MP4 to that path. When the file is written, you are done.`;
 }
 
 // Where a storyboard-guided render's first frame is directed, so it can be kept beside the clip.
@@ -162,8 +165,9 @@ export function grokVideoSentPrompt({
   const effectiveDuration = resolveGrokDuration(duration);
   const configured = GROK_ASPECT_RATIOS.includes(aspectRatio) ? aspectRatio : null;
   const effectiveRatio = deriveAspectRatio(width, height) || configured;
+  const resolution = grokVideoResolution(width, height);
   const buildWith = (text) => buildGrokVideoPrompt({
-    prompt: text, negativePrompt, aspectRatio: effectiveRatio, duration: effectiveDuration,
+    prompt: text, negativePrompt, aspectRatio: effectiveRatio, duration: effectiveDuration, resolution,
     stagingPath: join(scratchDir, 'output.mp4'), sourceImagePath, scratchDir, guidanceImagePath, referenceImagePaths,
   });
   const fullPrompt = buildWith(prompt);
@@ -171,7 +175,7 @@ export function grokVideoSentPrompt({
     ? storyboardGuidanceAddition(storyboardGuidanceText({ guidance: guidanceImagePath, references: referenceImagePaths }))
     : null;
   return {
-    fullPrompt, effectiveRatio, effectiveDuration,
+    fullPrompt, effectiveRatio, effectiveDuration, resolution,
     record: sentPromptRecord({ sentPrompt: fullPrompt, carried: carriedPromptAdditions({ promptAdditions }),
       added: [guidance, agentInstructionsAddition('Grok video tool instructions', buildWith)] }),
   };
@@ -210,7 +214,7 @@ async function generateVideoPrepared({
   const stagingPath = join(scratchDir, 'output.mp4');
   await mkdir(scratchDir, { recursive: true });
 
-  const { fullPrompt, effectiveRatio, effectiveDuration, record: sentRecord } = grokVideoSentPrompt({
+  const { fullPrompt, effectiveRatio, effectiveDuration, resolution, record: sentRecord } = grokVideoSentPrompt({
     prompt, negativePrompt, aspectRatio, width, height, duration, sourceImagePath, scratchDir, promptAdditions,
     guidanceImagePath, referenceImagePaths,
   });
@@ -221,7 +225,8 @@ async function generateVideoPrepared({
 
   // History/meta shape mirrors local.js's fields that the Media History
   // consumers (normalize.js, the lightbox) actually read; grok has no
-  // seed/steps/fps knobs so those stay absent. `modelId: 'grok'` tags the
+  // seed/steps knobs, and its size and fps are probed from the delivered
+  // clip after the run. `modelId: 'grok'` tags the
   // record's engine for the grid badge and keeps Remix from offering
   // local-only dials.
   const meta = {
@@ -231,6 +236,7 @@ async function generateVideoPrepared({
     modelId: 'grok',
     duration: effectiveDuration,
     ...(effectiveRatio ? { aspectRatio: effectiveRatio } : {}),
+    ...(resolution ? { resolution } : {}),
     filename,
     createdAt: new Date().toISOString(),
     mode: sourceImagePath ? 'image' : 'text',
@@ -363,14 +369,26 @@ async function runGrokVideo(job, jobId, bin, args, {
         return finalizeJobFailure(job, jobId, proc, `${prefix}${noVideoReason(stdoutTail)}`);
       }
       await copyFileGuarded(stagingPath, outputPath);
-      // grok's agent picks its own image_to_video length (see grokVideoClip.js),
-      // so record what it actually delivered and flag a clip that came back
-      // short: that is how a 15 s request is confirmed through the CLI.
-      const deliveredSec = await probeVideoDuration(outputPath).catch(() => null);
+      // grok's agent picks its own image_to_video arguments (see grokVideoClip.js),
+      // so record what it actually delivered — length, size and frame rate — and
+      // flag a clip that came back short or under the 720p it was asked for.
+      // Each axis is independently nullable, so an unreadable frame rate never
+      // costs the measured length the usage ledger bills.
+      const [stream, deliveredSec] = await Promise.all([
+        probeVideoStreamInfo(outputPath).catch(() => ({})),
+        probeVideoDuration(outputPath).catch(() => null),
+      ]);
       if (Number.isFinite(deliveredSec)) {
         meta.deliveredSec = Math.round(deliveredSec * 100) / 100;
         if (deliveredSec < meta.duration - 1) console.warn(`⚠️ grok delivered ${meta.deliveredSec}s for a ${meta.duration}s request [${jobId.slice(0, 8)}]`);
       }
+      if (stream.width && stream.height) {
+        Object.assign(meta, { width: stream.width, height: stream.height });
+        if (meta.resolution === '720p' && isLowResVideo(stream)) console.warn(`⚠️ grok delivered ${stream.width}x${stream.height} for a 720p request [${jobId.slice(0, 8)}]`);
+      }
+      if (stream.fps) meta.fps = stream.fps;
+      const numFrames = stream.frameCount || (stream.fps && Number.isFinite(deliveredSec) ? Math.round(deliveredSec * stream.fps) : null);
+      if (numFrames) meta.numFrames = numFrames;
       try {
         const units = grokVideoBillableUnits({
           requestedSeconds: meta.duration,
