@@ -467,6 +467,33 @@ describe('mediaJobQueue', () => {
     expect(readFileSync(snapshot, 'utf8')).toBe('reviewed bytes');
   });
 
+  it.each([
+    ['local', 'a missing snapshot', /ownership is missing/, async (params) => { delete params.reviewedReferenceSnapshot; }],
+    ['remote', 'a remote input that is not the snapshot', /ownership does not match/, async (params) => { params.remoteMedia.inputAssets[0].role = 'sourceImage'; }],
+    ['local', 'an already-invoked snapshot', /not available for dispatch/, async (params) => {
+      const { markSnapshotState } = await import('../imageGen/reviewedReference.js');
+      await markSnapshotState(params.reviewedReferenceSnapshot, 'invoked');
+    }],
+  ])('refuses %s replay of %s without invoking the provider', async (route, _label, error, corrupt) => {
+    const source = join(tempDataDir, 'images', 'reviewed.png');
+    mkdirSync(join(tempDataDir, 'images'), { recursive: true });
+    writeFileSync(source, 'reviewed bytes');
+    const digest = createHash('sha256').update('reviewed bytes').digest('hex');
+    mediaJobQueue.quiesceMediaJobQueue();
+    const remoteMedia = route === 'remote' ? { remoteMedia: { ...remoteImageMediaParams(), inputAssets: [{ role: 'referenceImages', path: source }] } } : {};
+    const job = await mediaJobQueue.enqueueJob({ kind: 'image', params: { prompt: 'edit', referenceImagePaths: [source], reviewedReferenceDigest: digest, ...remoteMedia } });
+    const jobsPath = join(tempDataDir, 'media-jobs.json');
+    const store = JSON.parse(readFileSync(jobsPath, 'utf8'));
+    await corrupt(store.jobs.find(row => row.id === job.jobId).params);
+    writeFileSync(jobsPath, JSON.stringify(store));
+    await importFresh();
+    await mediaJobQueue.initMediaJobQueue();
+    await waitFor(() => mediaJobQueue.getJob(job.jobId).status === 'failed');
+    expect(mediaJobQueue.getJob(job.jobId).error).toMatch(error);
+    expect(stubs.generateImage).not.toHaveBeenCalled();
+    expect(stubs.generateImageRemote).not.toHaveBeenCalled();
+  });
+
   it('blocks guide generation and rechecks media policy before delayed provider dispatch', async () => {
     const { getProject } = await import('../musicVideo/projects.js');
     const request = { kind: 'image', params: { prompt: 'Synthetic guide', musicVideo: { projectId: 'mv-example', castAndSets: { key: 'guide' } } } };
