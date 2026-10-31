@@ -13,3 +13,12 @@ describe('musicVideoAspect', () => {
     expect(musicVideoFrameGenSize({ treatment: { brief: { aspectRatio: '9:16' } } })).toEqual({ width: 864, height: 1536 });
   });
 });
+
+describe('musicVideoLyricLayout', () => {
+  it('is social unless the brief asks for cinematic', async () => {
+    const { musicVideoLyricLayout } = await import('./musicVideoAspect.js');
+    expect(musicVideoLyricLayout({})).toBe('social');
+    expect(musicVideoLyricLayout({ treatment: { brief: { lyricLayout: 'cinematic' } } })).toBe('cinematic');
+    expect(musicVideoLyricLayout({ treatment: { brief: { lyricLayout: 'bogus' } } })).toBe('social');
+  });
+});

@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { installLayeredPreviewPlayback } from './previewPlaybackRuntime.js';
 
 const ROOT = fileURLToPath(new URL('./documentTemplates/', import.meta.url));
-const ENGINE_SHA256 = '20fff73949a37d069f1de4cf2dab4d185049f799fe4bb129747cc3bf678d9e4f';
+const ENGINE_SHA256 = '2844a20f3d6ad57022e97ae79705a9296479ff5a59cdebeaa9e48246d3d7a086';
 const digest = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const read = (directory, name) => readFile(join(directory, name));
 

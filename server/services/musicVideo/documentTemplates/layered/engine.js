@@ -323,6 +323,7 @@
         if (hooks.linesAt(t).length) hooks.draw(target, t, size);
         else sung.draw(target, t, size);
       },
+      unfit: (target, window) => [...hooks.unfit(target, window), ...sung.unfit(target, window)],
     };
   }
 
@@ -571,6 +572,11 @@
     formats: ['1920x1080', '1080x1920', '1080x1080'],
     layout({ width, height }) { resize(width, height); },
     get footageVisibility() { return footageVisibility; },
+    // Lyric lines that overflow the social-safe band (portrait frames) inside [startSec, endSec).
+    async lyricFit({ startSec, endSec } = {}) {
+      await ready;
+      return lyricType.unfit(ctx, { width: W, height: H, startSec, endSec });
+    },
     async seek(t, { reviewFootage = false } = {}) {
       await ready;
       const state = eventState(t);

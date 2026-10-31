@@ -8,6 +8,14 @@
  */
 export const MUSIC_VIDEO_ASPECTS = Object.freeze(['16:9', '9:16', '1:1']);
 
+/**
+ * Where lyrics and titles sit on a portrait frame (brief `lyricLayout`): `social`, the default, keeps
+ * the type clear of the Shorts/Reels/TikTok control bands; `cinematic` is a vertical film, not a phone post.
+ */
+export function musicVideoLyricLayout(project) {
+  return project?.treatment?.brief?.lyricLayout === 'cinematic' ? 'cinematic' : 'social';
+}
+
 /** The project's aspect ratio (brief), defaulting to 16:9. */
 export function musicVideoAspect(project) {
   const aspect = project?.treatment?.brief?.aspectRatio;
