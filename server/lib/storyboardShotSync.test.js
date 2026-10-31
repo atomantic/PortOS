@@ -115,7 +115,18 @@ describe('storyboardShotSyncPlan', () => {
     expect(storyboardShotSyncPlan(b, { scenes: [] }, { song }).problem).toMatch(/past the end of the song/);
   });
 
-  it('never moves a shot whose video is locked, and removes a locked shot only when asked', () => {
+  it('refuses to reorder the cold open around a shot whose video is locked', () => {
+    const [x, y] = [panel('x', 2), panel('y', 2)];
+    const b = { beats: [beat('pre', 'Cold open', [x, y], { beforeSong: true }), beat('v', 'Verse', [panel('a', 10), panel('b', 10)])] };
+    const linked = (p, order) => shot(p.id, null, null, { order, preMusic: { durationSec: 2 }, panelId: p.id, panelRev: storyboardPanelRev(p), panelArt: null });
+    const project = { scenes: [linked(x, 0), linked(y, 1)] };
+    b.beats[0].panels.reverse();
+    expect(storyboardShotSyncPlan(b, project, { song, clipLocks: { [`mvs-${x.id}`]: 'locked' } }).problem).toMatch(/locked video and would move/);
+    // Unlocked, the swap moves both shots.
+    expect(storyboardShotSyncPlan(b, project, { song }).problem).toBeNull();
+  });
+
+    it('never moves a shot whose video is locked, and removes a locked shot only when asked', () => {
     const scenes = [shot('1', 0, 5.5), shot('2', 6, 12), shot('3', 12, 20), shot('x', 20, 20)];
     const clipLocks = { 'mvs-1': 'locked' };
     const locks = { 'mvs-x': 'locked' };
