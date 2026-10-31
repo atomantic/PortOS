@@ -71,6 +71,21 @@ describe('PageHeader', () => {
     expect(button.closest('div').parentElement).toBe(heading.closest('div').parentElement.parentElement);
   });
 
+  // A wide actions group (e.g. GitHub's five-tab RouteTabsHeader) must be able
+  // to shrink to the row width so its own scroller takes over; without min-w-0
+  // it keeps min-content width and clips off-screen on phones.
+  it('lets the actions group shrink to the header width so its own scroller can take over', () => {
+    render(
+      <PageHeader
+        title="GitHub"
+        actions={<div data-testid="wide-actions">tabs</div>}
+      />
+    );
+    const cls = screen.getByTestId('wide-actions').parentElement.getAttribute('class');
+    expect(cls).toContain('min-w-0');
+    expect(cls).toContain('max-w-full');
+  });
+
   it('keeps the standardized padding + border on the outer container', () => {
     const { container } = render(<PageHeader title="Goals" />);
     const cls = container.firstChild.getAttribute('class');

@@ -1,9 +1,10 @@
 import { useNavigate } from 'react-router';
 import TabPills from './TabPills';
 
-// Above this many tabs, a phone-width pill row with labels no longer fits, so
-// the bar collapses to TabPills' compact treatment. Six fits 375px; larger
-// sections such as Models do not.
+// Above this many tabs, the bar collapses to TabPills' compact treatment. Six
+// labelled tabs do not reliably fit 375px, so below this count the header's
+// own scroller (TabPills overflow-x-auto with edge chevrons) is the safety net
+// for a phone-width row.
 const MOBILE_COMPACT_THRESHOLD = 6;
 
 const selectIdFor = (ariaLabel) => `${String(ariaLabel || 'section').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}-select`;
