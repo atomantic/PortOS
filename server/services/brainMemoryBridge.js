@@ -17,6 +17,7 @@ import * as brainStorage from './brainStorage.js';
 import * as memory from './memoryBackend.js';
 import * as embeddings from './memoryEmbeddings.js';
 import { atomicWrite, ensureDir, PATHS } from '../lib/fileUtils.js';
+import { BRAIN_BRIDGE_SOURCE_AGENT_ID } from '../lib/brainBridgeSource.js';
 import { iterateJournals, getJournal } from './brainJournal.js';
 
 const BRIDGE_MAP_PATH = join(PATHS.brain, 'memory-bridge-map.json');
@@ -253,7 +254,7 @@ export function brainRecordToMemory(brainType, record) {
     confidence: 1.0,
     importance: 0.6,
     sourceAppId: 'brain',
-    sourceAgentId: 'brain-bridge'
+    sourceAgentId: BRAIN_BRIDGE_SOURCE_AGENT_ID
   };
 }
 
