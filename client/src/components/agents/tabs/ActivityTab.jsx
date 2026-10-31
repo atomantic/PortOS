@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import * as api from '../../../services/api';
 import BrailleSpinner from '../../BrailleSpinner';
 import ListLoadError from '../../ui/ListLoadError';
@@ -13,16 +13,34 @@ export default function ActivityTab({ agentId }) {
   const [actionFilter, setActionFilter] = useState('');
   const [hasMore, setHasMore] = useState(true);
   const [loadError, setLoadError] = useState(false);
+  // Bumped by every first-page load. A response (first page or Load More) from
+  // an earlier generation is dropped, so switching the filter twice quickly, or
+  // switching it while Load More is in flight, never shows or appends another
+  // filter's rows under the current one.
+  const listGenerationRef = useRef(0);
+  // Generation of the in-flight Load More (null when none): single-flight per
+  // list, so a Load More left over from the previous filter never blocks the
+  // current one.
+  const loadingMoreGenerationRef = useRef(null);
+  // Generation whose first page is on screen. Until the current generation's
+  // first page lands, `activities` (and its cursor) belongs to the previous
+  // filter, so Load More must wait.
+  const appliedGenerationRef = useRef(0);
 
   const fetchData = useCallback(async () => {
+    const generation = ++listGenerationRef.current;
     setLoadError(false);
-    await api.getAgentActivityTimeline(PAGE_SIZE, [agentId], null, actionFilter || null, { silent: true })
-      .then((activitiesData) => {
-        setActivities(activitiesData);
-        setHasMore(activitiesData.length >= PAGE_SIZE);
-      })
-      .catch(() => setLoadError(true))
-      .finally(() => setLoading(false));
+    const activitiesData = await api.getAgentActivityTimeline(PAGE_SIZE, [agentId], null, actionFilter || null, { silent: true })
+      .catch(() => null);
+    if (generation !== listGenerationRef.current) return;
+    if (activitiesData) {
+      appliedGenerationRef.current = generation;
+      setActivities(activitiesData);
+      setHasMore(activitiesData.length >= PAGE_SIZE);
+    } else {
+      setLoadError(true);
+    }
+    setLoading(false);
   }, [agentId, actionFilter]);
 
   useEffect(() => {
@@ -36,12 +54,18 @@ export default function ActivityTab({ agentId }) {
   };
 
   const loadMore = async () => {
-    if (activities.length === 0) return;
+    const generation = listGenerationRef.current;
+    if (activities.length === 0 || appliedGenerationRef.current !== generation
+      || loadingMoreGenerationRef.current === generation) return;
+    loadingMoreGenerationRef.current = generation;
 
     const lastTimestamp = activities[activities.length - 1].timestamp;
+    // The API helper toasts a failure; the loaded rows stay and Load More stays available.
     const moreData = await api.getAgentActivityTimeline(
       PAGE_SIZE, [agentId], lastTimestamp, actionFilter || null
-    );
+    ).catch(() => null);
+    if (loadingMoreGenerationRef.current === generation) loadingMoreGenerationRef.current = null;
+    if (!moreData || generation !== listGenerationRef.current) return;
 
     if (moreData.length < PAGE_SIZE) {
       setHasMore(false);

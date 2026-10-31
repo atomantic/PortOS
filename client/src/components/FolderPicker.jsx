@@ -17,6 +17,10 @@ export default function FolderPicker({ value, onChange, defaultPath, mode = 'dir
   // wasted round trip (and the server-side 400 it logs). Ref-not-state because
   // changing it must not re-trigger the open effect.
   const defaultPathUnavailableRef = useRef(false);
+  // Home, drive and parent buttons stay clickable while a listing loads, so a
+  // slow earlier listing must not land after a newer one and move the picker
+  // (and the path "Select" returns) back to the folder the user left.
+  const listingRequestRef = useRef(0);
 
   // Load directory contents. When fallbackToDefault is true and the requested
   // path fails BECAUSE IT DOESN'T EXIST (e.g. iCloud Obsidian folder absent),
@@ -32,6 +36,7 @@ export default function FolderPicker({ value, onChange, defaultPath, mode = 'dir
     const isPathAbsentError = (err) => (
       err?.status === 400 && (err.code === 'INVALID_PATH' || err.code === 'NOT_A_DIRECTORY')
     );
+    const generation = ++listingRequestRef.current;
     setLoading(true);
     setError(null);
     const applyResult = (result) => {
@@ -46,6 +51,7 @@ export default function FolderPicker({ value, onChange, defaultPath, mode = 'dir
       lastError = err;
       return null;
     });
+    if (generation !== listingRequestRef.current) return;
     if (!result && fallbackToDefault && path != null && isPathAbsentError(lastError)) {
       defaultPathUnavailableRef.current = true;
       lastError = null;
@@ -53,6 +59,7 @@ export default function FolderPicker({ value, onChange, defaultPath, mode = 'dir
         lastError = err;
         return null;
       });
+      if (generation !== listingRequestRef.current) return;
     }
     if (result) {
       applyResult(result);
