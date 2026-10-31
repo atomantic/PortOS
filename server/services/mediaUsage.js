@@ -8,7 +8,9 @@
  * media file (a bare filename, an app path such as `/data/images/<file>`, a
  * `<kind>:<ref>` media key or a video history id), so a new field holding a
  * file is covered without registering it here. Snapshot and pool fields
- * (unused takes, revisions, histories) are not uses and are skipped.
+ * (unused takes, revisions, histories) are not uses and are skipped; a record
+ * that names its chosen take with `selectedTakeId` (a storyboard panel) still
+ * counts that one take.
  *
  * Built on demand and cached until a source table or file changes (a cheap
  * count/updated_at fingerprint), so repeat reads cost one small query.
@@ -78,7 +80,13 @@ const USAGE_SOURCES = Object.freeze([
   { source: 'sprite', label: 'Sprite', ...table('sprite_records', { titleSql: "NULLIF(data->>'name', '')" }), href: (id) => `/sprites/${enc(id)}` },
   { source: 'code-animation', label: 'Code animation', ...table('code_animation_projects', { titleSql: 'title', liveSql: 'TRUE' }),
     href: (id) => `/code-animation/production/${enc(id)}` },
-  { source: 'deck', label: 'Deck', ...table('decks', { dataSql: 'definition' }), href: (id) => `/decks/${enc(id)}` },
+  // Card art lives on each deck_cards row, so a card edit must move the fingerprint too.
+  { source: 'deck', label: 'Deck', ...table('decks', {
+    dataSql: "jsonb_build_object('deck', definition, 'cards', (SELECT COALESCE(jsonb_agg(c.definition ORDER BY c.position), '[]'::jsonb) FROM deck_cards c WHERE c.deck_id = decks.id))",
+  }),
+  fingerprint: `SELECT (SELECT count(*) || ':' || COALESCE(max(updated_at)::text, '') FROM decks WHERE deleted = FALSE)
+    || '|' || (SELECT count(*) || ':' || COALESCE(max(c.updated_at)::text, '') FROM deck_cards c JOIN decks d ON d.id = c.deck_id WHERE d.deleted = FALSE)`,
+  href: (id) => `/decks/${enc(id)}` },
   { source: 'creative-commission', label: 'Commission', ...table('creative_commissions'), href: (id) => `/creative-commission/${enc(id)}` },
   { source: 'catalog', label: 'Catalog', ...table('catalog_ingredients', { titleSql: 'name', dataSql: "jsonb_build_object('type', type, 'payload', payload)" }),
     href: () => null, catalog: true },
@@ -152,6 +160,10 @@ function collectMediaRefs(data, videos) {
     }
     for (const [k, child] of Object.entries(value)) {
       if (!SKIP_KEYS.has(k)) walk(child, [...path, k]);
+    }
+    if (Array.isArray(value.takes) && typeof value.selectedTakeId === 'string') {
+      const at = value.takes.findIndex((take) => take?.id === value.selectedTakeId);
+      if (at >= 0) walk(value.takes[at], [...path, 'takes', at]);
     }
   };
   walk(data, []);
