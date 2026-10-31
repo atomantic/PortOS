@@ -283,6 +283,9 @@ export async function advanceAfterSceneSettled(projectId, opts = {}) {
     if (!await videoReviewAllowsDispatch(projectId, [])) return;
   }
   if (project.status === 'paused' || project.status === 'failed') return;
+  // Advancing here runs the project on this machine; adopt a peer replica's
+  // run state so a later restart resumes it (recovery skips replicas).
+  if (project.peerReplica) await updateProject(projectId, { status: project.status });
 
   // No treatment yet → enqueue treatment task.
   if (!project.treatment || (project.workspace === 'video' && project.treatment.artifact?.stale)) {
@@ -636,8 +639,6 @@ export async function startCreativeDirectorProject(projectId) {
     const { videoReviewAllowsDispatch } = await import('./videoReview.js');
     if (!await videoReviewAllowsDispatch(projectId, [])) return;
   }
-  // Starting here adopts a peer replica's run state, so a later restart resumes it.
-  if (project?.peerReplica) await updateProject(projectId, { status: project.status });
   if (project?.directive && (project.workspace !== 'video' || (project.treatment && !project.treatment.artifact?.stale))) return advanceAfterPlanStepSettled(projectId);
   return advanceAfterSceneSettled(projectId);
 }
