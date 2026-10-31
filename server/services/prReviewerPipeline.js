@@ -101,6 +101,30 @@ function securityScanReports(scan) {
   return []
 }
 
+// The guard identity the stage-0 summary and the securityScan record both carry.
+const scanGuardFacts = (scan) => ({
+  guardId: scan.guardId || MODEL_ABUSE_GUARD_ID,
+  guardModel: scan.guardModel || null,
+  guardRevision: scan.guardRevision || null,
+  code: scan.code || null,
+});
+
+// The strict coverage list the issue-watcher stage must answer for: only safe PRs.
+function issueWatcherPullRequests(safeReports, reviewInputs) {
+  const inputByNumber = new Map(reviewInputs.map((input) => [input.number, input]));
+  return safeReports.map((report) => {
+    const input = inputByNumber.get(report.number);
+    return {
+      number: report.number,
+      headSha: report.headRefOid,
+      authorLogin: input?.authorLogin || null,
+      eligibilityFacts: input?.eligibilityFacts || null,
+      diffTruncated: false,
+      contentFingerprint: report.contentFingerprint,
+    };
+  });
+}
+
 const reportIsSafe = (report) => report?.safe === true
 
 const reportFindingCount = (report) => (
@@ -328,7 +352,7 @@ export async function runPrReviewerSecurityPreflight(taskType, app, metadata, ta
   const reviewedScanKey = scan.scanKey || scanKey;
   const repoFullName = scan.repoFullName || target.repoFullName;
   const defaultBranch = scan.defaultBranch || target.defaultBranch;
-  const guardId = scan.guardId || MODEL_ABUSE_GUARD_ID;
+  const reviewInputs = scan.reviewInputs || [];
   await step('security-scan', {
     status: 'done',
     detail: `Scan ${status} — ${reports.length} screened, ${findingCount} flagged`,
@@ -336,7 +360,7 @@ export async function runPrReviewerSecurityPreflight(taskType, app, metadata, ta
   await step('snapshot');
   const snapshotWritten = await writePublicReviewInputSnapshot({
     scanKey: reviewedScanKey,
-    pullRequests: scan.ok ? (scan.reviewInputs || []) : [],
+    pullRequests: scan.ok ? reviewInputs : [],
   });
   if (!snapshotWritten) {
     const reason = 'public-review-input-snapshot-failed';
@@ -359,10 +383,7 @@ export async function runPrReviewerSecurityPreflight(taskType, app, metadata, ta
       success: scan.ok,
       completedAt: new Date().toISOString(),
       summary: {
-        guardId,
-        guardModel: scan.guardModel || null,
-        guardRevision: scan.guardRevision || null,
-        code: scan.code || null,
+        ...scanGuardFacts(scan),
         reviewedPrCount: reports.length,
         findingCount,
         reportStatus: status,
@@ -374,10 +395,7 @@ export async function runPrReviewerSecurityPreflight(taskType, app, metadata, ta
       usedLargeInputFallback: scan.usedLargeInputFallback === true,
       completed: scan.ok,
       status,
-      code: scan.code || null,
-      guardId,
-      guardModel: scan.guardModel || null,
-      guardRevision: scan.guardRevision || null,
+      ...scanGuardFacts(scan),
       layers: scan.layers || null,
       repoFullName,
       defaultBranch,
@@ -389,19 +407,11 @@ export async function runPrReviewerSecurityPreflight(taskType, app, metadata, ta
       safePrCount: safeReports.length,
     },
   };
-  const safeInputByNumber = new Map((scan.reviewInputs || []).map((input) => [input.number, input]));
   metadata.issueWatcher = {
     repoFullName,
     defaultBranch,
     issueComments: [],
-    pullRequests: safeReports.map((report) => ({
-      number: report.number,
-      headSha: report.headRefOid,
-      authorLogin: safeInputByNumber.get(report.number)?.authorLogin || null,
-      eligibilityFacts: safeInputByNumber.get(report.number)?.eligibilityFacts || null,
-      diffTruncated: false,
-      contentFingerprint: report.contentFingerprint,
-    })),
+    pullRequests: issueWatcherPullRequests(safeReports, reviewInputs),
     strictPullRequestCoverage: true,
   };
   metadata.executionProfile = nextStage.executionProfile || null;
