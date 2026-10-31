@@ -452,6 +452,200 @@ describe('fableLoom hostedSession', () => {
     });
   });
 
+  describe('turn stages', () => {
+    const stay = (narration = 'The forest waits.') => ({ action: 'stay', narration, node: { id: 'node-start' } });
+
+    const listen = async (io = makeIo(), loom = mockLoom) => {
+      vi.mocked(records.getLoom).mockResolvedValue(loom);
+      const { session } = await createHostedSession('loom-1', 'ep-1');
+      await startHostedListening(session.id, { io });
+      return { session, io };
+    };
+
+    it('wraps raw PCM frames in a WAV container and passes encoded audio through unchanged', async () => {
+      const { session } = await listen();
+      vi.spyOn(weave, 'playTurn').mockResolvedValue(stay());
+
+      await processHostedUtterance(session.id, { audioBuffer: new Int16Array([0, 1200, -1200, 0]) });
+      const [pcmPayload] = stt.transcribe.mock.calls[0];
+      expect(Buffer.isBuffer(pcmPayload)).toBe(true);
+      expect(pcmPayload.subarray(0, 4).toString('ascii')).toBe('RIFF');
+
+      await startHostedListening(session.id);
+      const encoded = Buffer.from('already-encoded-wav');
+      vi.mocked(stt.transcribe).mockResolvedValueOnce({ text: '  I go north  ' });
+      await processHostedUtterance(session.id, { audioBuffer: encoded });
+      expect(stt.transcribe.mock.calls[1][0]).toBe(encoded);
+      expect(weave.playTurn.mock.calls[1][2].message).toBe('I go north');
+    });
+
+    it('uses a typed message instead of transcribing audio that arrived with it', async () => {
+      const { session } = await listen();
+      vi.spyOn(weave, 'playTurn').mockResolvedValue(stay());
+
+      await processHostedUtterance(session.id, { audioBuffer: Buffer.from('audio'), textMessage: 'open the gate' });
+
+      expect(stt.transcribe).not.toHaveBeenCalled();
+      expect(weave.playTurn).toHaveBeenCalledWith('loom-1', 'ep-1', expect.objectContaining({ message: 'open the gate' }));
+    });
+
+    it.each([
+      ['a failed transcription', () => vi.mocked(stt.transcribe).mockRejectedValue(new Error('stt offline'))],
+      ['a blank transcription', () => vi.mocked(stt.transcribe).mockResolvedValue({ text: '   ' })],
+      ['a transcription without text', () => vi.mocked(stt.transcribe).mockResolvedValue({})],
+    ])('returns to listening without a story turn after %s', async (_label, arrange) => {
+      const { session, io } = await listen();
+      arrange();
+      vi.spyOn(weave, 'playTurn');
+
+      await expect(processHostedUtterance(session.id, { audioBuffer: Buffer.from('audio'), io }))
+        .resolves.toEqual({ ok: true, ignored: true });
+
+      expect(weave.playTurn).not.toHaveBeenCalled();
+      expect(getHostedSession(session.id).turnPhase).toBe('listening');
+      expect(io.emits.at(-1)).toMatchObject({
+        event: 'hosted:turn:phase', payload: { phase: 'listening', note: 'ignored-echo-or-empty' },
+      });
+    });
+
+    it('ignores the room hearing its own narration back on the next turn', async () => {
+      const { session } = await listen();
+      vi.spyOn(weave, 'playTurn').mockResolvedValue(stay('The lantern flickers in the wind.'));
+
+      await processHostedUtterance(session.id, { textMessage: 'what do I see' });
+      expect(getHostedSession(session.id).turnPhase).toBe('listening');
+
+      await expect(processHostedUtterance(session.id, { textMessage: 'The lantern flickers in the wind.' }))
+        .resolves.toEqual({ ok: true, ignored: true });
+      expect(weave.playTurn).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps the latest 50 transcript items and hands the story turn reader/narrator roles', async () => {
+      const { session } = await listen();
+      const internal = _getInternalSession(session.id);
+      internal.transcript = Array.from({ length: 50 }, (_, i) => ({
+        id: `t-${i}`, role: i % 2 ? 'protagonist' : 'audience', text: `line ${i}`,
+      }));
+      vi.spyOn(weave, 'playTurn').mockResolvedValue(stay('Onward.'));
+
+      await processHostedUtterance(session.id, { textMessage: 'newest line' });
+
+      const sent = weave.playTurn.mock.calls[0][2].transcript;
+      expect(sent).toHaveLength(50);
+      expect(sent[0]).toEqual({ role: 'narrator', text: 'line 1' });
+      expect(sent.at(-2)).toEqual({ role: 'narrator', text: 'line 49' });
+      expect(sent.at(-1)).toEqual({ role: 'reader', text: 'newest line' });
+      expect(internal.transcript).toHaveLength(50);
+      expect(internal.transcript.at(-1)).toMatchObject({ role: 'protagonist', text: 'Onward.', audioTarget: 'host' });
+      expect(internal.transcript.at(-2)).toMatchObject({ role: 'audience', text: 'newest line' });
+    });
+
+    it.each([
+      ['the scene prose', 'You stand at the edge of the dark forest.', 'You stand at the edge of the dark forest.'],
+      ['the first 200 characters of long prose', 'a'.repeat(260), 'a'.repeat(200)],
+      ['a generic line for a scene without prose', '', "I hear you. Let's see what happens next."],
+    ])('narrates %s when the story turn fails', async (_label, prose, expected) => {
+      const loom = structuredClone(mockLoom);
+      loom.episodes[0].nodes[0].prose = prose;
+      const { session } = await listen(makeIo(), loom);
+      vi.spyOn(weave, 'playTurn').mockRejectedValue(new Error('provider down'));
+
+      const result = await processHostedUtterance(session.id, { textMessage: 'hello' });
+
+      expect(result.playResult).toMatchObject({ action: 'stay', narration: expected, ended: false, node: { id: 'node-start' } });
+      expect(tts.synthesize).toHaveBeenCalledWith(expected, expect.any(Object));
+    });
+
+    it('speaks a generic line when the story turn narrates nothing', async () => {
+      const { session } = await listen();
+      vi.spyOn(weave, 'playTurn').mockResolvedValue(stay('   '));
+
+      await processHostedUtterance(session.id, { textMessage: 'hello' });
+
+      expect(tts.synthesize).toHaveBeenCalledWith("Let's continue.", expect.any(Object));
+      expect(_getInternalSession(session.id).transcript.at(-1).text).toBe("Let's continue.");
+    });
+
+    it.each([
+      ['a move without a transition', { action: 'move', narration: 'Hmm.', node: { id: 'node-2' } }],
+      ['a stay that names a transition', { action: 'stay', transitionId: 'tr-1', narration: 'Hmm.', node: { id: 'node-2' } }],
+    ])('keeps the current scene for %s', async (_label, playResult) => {
+      const { session, io } = await listen();
+      vi.spyOn(weave, 'playTurn').mockResolvedValue(playResult);
+
+      await processHostedUtterance(session.id, { textMessage: 'go', io });
+
+      expect(io.emits.some(({ event }) => event === 'hosted:story:transition')).toBe(false);
+      expect(getHostedSession(session.id)).toMatchObject({ currentNodeId: 'node-start', turnPhase: 'listening' });
+    });
+
+    it.each([
+      ['its own code', Object.assign(new Error('loom vanished'), { code: 'LOOM_GONE' }), 'LOOM_GONE'],
+      ['the generic code', new Error('disk read failed'), 'TURN_FAILED'],
+    ])('reports a mid-turn failure to the room with %s and resets the turn', async (_label, failure, code) => {
+      const { session, io } = await listen();
+      vi.mocked(records.getLoom).mockRejectedValueOnce(failure);
+
+      await expect(processHostedUtterance(session.id, { textMessage: 'hello', io }))
+        .rejects.toMatchObject({ message: failure.message, hostedReported: true });
+
+      expect(io.emits.slice(-2)).toEqual([
+        { room: `session:${session.id}`, event: 'hosted:error', payload: { code, message: failure.message } },
+        { room: `session:${session.id}`, event: 'hosted:turn:phase', payload: { phase: 'idle', turnId: expect.any(String) } },
+      ]);
+      expect(getHostedSession(session.id).turnPhase).toBe('idle');
+      expect(_getInternalSession(session.id).activeTurn).toBeNull();
+    });
+
+    it('swallows a failure that lands after teardown instead of reporting it behind ended', async () => {
+      const { session, io } = await listen();
+      const loomRead = deferred();
+      vi.mocked(records.getLoom).mockImplementationOnce(() => loomRead.promise);
+      vi.spyOn(weave, 'playTurn');
+
+      const pending = processHostedUtterance(session.id, { textMessage: 'hello', io });
+      await vi.waitFor(() => expect(io.emits.some(({ event }) => event === 'hosted:turn:transcript')).toBe(true));
+      endHostedSession(session.id, { reason: 'user_ended', io });
+      loomRead.reject(new Error('late failure'));
+
+      await expect(pending).resolves.toMatchObject({ ok: true, aborted: true });
+      expect(weave.playTurn).not.toHaveBeenCalled();
+      expect(io.emits.at(-1).event).toBe('hosted:session:ended');
+    });
+
+    it('starts no story turn when the session ends while the loom loads', async () => {
+      const { session, io } = await listen();
+      const loomRead = deferred();
+      vi.mocked(records.getLoom).mockImplementationOnce(() => loomRead.promise);
+      vi.spyOn(weave, 'playTurn');
+
+      const pending = processHostedUtterance(session.id, { textMessage: 'hello', io });
+      await vi.waitFor(() => expect(io.emits.some(({ event }) => event === 'hosted:turn:transcript')).toBe(true));
+      endHostedSession(session.id, { reason: 'user_ended', io });
+      loomRead.resolve(mockLoom);
+
+      await expect(pending).resolves.toMatchObject({ aborted: true });
+      expect(weave.playTurn).not.toHaveBeenCalled();
+      expect(io.emits.at(-1).event).toBe('hosted:session:ended');
+    });
+
+    it('starts no synthesis when the session ends while the voice resolves', async () => {
+      const { session, io } = await listen();
+      vi.spyOn(weave, 'playTurn').mockResolvedValue(stay());
+      const voice = deferred();
+      vi.spyOn(voiceProfiles, 'resolveCharacterVoice').mockImplementation(() => voice.promise);
+
+      const pending = processHostedUtterance(session.id, { textMessage: 'hello', io });
+      await vi.waitFor(() => expect(voiceProfiles.resolveCharacterVoice).toHaveBeenCalled());
+      endHostedSession(session.id, { reason: 'user_ended', io });
+      voice.resolve({ voiceId: 'kokoro:af_heart' });
+
+      await expect(pending).resolves.toMatchObject({ aborted: true });
+      expect(tts.synthesize).not.toHaveBeenCalled();
+      expect(io.emits.at(-1).event).toBe('hosted:session:ended');
+    });
+  });
+
   describe('speech completion before commitment', () => {
     const move = {
       action: 'move',
