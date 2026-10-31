@@ -231,9 +231,11 @@ export default function PovRewritePanel({ issue, series }) {
     // pruned (which would then refuse to delete). The refetch also carries the
     // authoritative stale flags. Generate doesn't touch issue.stages, so the
     // source-change effect won't fire on its own.
+    // Claim the sequence before the await: a source-edit read that starts
+    // during this refetch is newer and must win over it.
+    const seq = ++readSeqRef.current;
     const res = await getPipelinePerspectiveRewrites(forIssue, { silent: true }).catch(() => null);
-    if (res && issueIdRef.current === forIssue) {
-      readSeqRef.current++;
+    if (res && issueIdRef.current === forIssue && seq === readSeqRef.current) {
       setRead({ issueId: forIssue, data: res, error: null });
     }
   };

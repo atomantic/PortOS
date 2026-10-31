@@ -120,8 +120,22 @@ describe('IssueJudgePanel', () => {
     await act(async () => { resolveJudge(completeJudge()); });
     expect(screen.getByText('5.5')).toBeInTheDocument();
 
-    // The pre-judge snapshot lands late and must not replace the verdict.
+    // The post-verdict re-read returns the saved snapshot; the pre-judge read
+    // that started earlier lands after it and must not replace the verdict.
+    const reread = pending.pop();
+    await act(async () => { reread(completeJudge()); });
     await act(async () => { pending.forEach((resolve) => resolve(null)); });
+    expect(screen.getByText('5.5')).toBeInTheDocument();
+  });
+
+  it('re-reads the stored score when the judged draft changes so a stale score says so', async () => {
+    getIssueJudge.mockResolvedValueOnce(completeJudge()).mockResolvedValueOnce(completeJudge({ stale: true }));
+    const { rerender } = render(<IssueJudgePanel issue={proseIssue()} stageId="prose" />);
+    await waitFor(() => expect(screen.getByText('5.5')).toBeInTheDocument());
+    expect(screen.queryByText('stale')).toBeNull();
+
+    rerender(<IssueJudgePanel issue={proseIssue('An edited draft.')} stageId="prose" />);
+    await waitFor(() => expect(screen.getByText('stale')).toBeInTheDocument());
     expect(screen.getByText('5.5')).toBeInTheDocument();
   });
 });

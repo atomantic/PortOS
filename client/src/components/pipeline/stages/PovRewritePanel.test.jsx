@@ -199,4 +199,24 @@ describe('PovRewritePanel', () => {
     await act(async () => { resolveSourceRead({ cast, rewrites: [], hasContent: true }); });
     expect(screen.getByText('(protagonist)')).toBeInTheDocument();
   });
+  it('lets a source-edit read that starts during the post-generate refetch win', async () => {
+    const cast = [{ id: 'char-ada', name: 'Ada', role: 'protagonist' }];
+    let resolveRefetch;
+    createPipelinePerspectiveRewrite.mockResolvedValueOnce({ status: 'complete', rewrite: REWRITE });
+    getPipelinePerspectiveRewrites
+      .mockResolvedValueOnce({ cast, rewrites: [], hasContent: true })
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveRefetch = resolve; }))
+      .mockResolvedValueOnce({ cast, rewrites: [{ ...REWRITE, stale: true }], hasContent: true });
+
+    const { rerender } = render(<PovRewritePanel issue={ISSUE} series={{}} />);
+    await waitFor(() => expect(screen.getByRole('button', { name: /Rewrite in another POV/i })).toBeEnabled());
+    await userEvent.click(screen.getByRole('button', { name: /Rewrite in another POV/i }));
+    await waitFor(() => expect(getPipelinePerspectiveRewrites).toHaveBeenCalledTimes(2));
+
+    rerender(<PovRewritePanel issue={{ ...ISSUE, stages: { prose: { output: 'Edited prose.', status: 'ready' } } }} series={{}} />);
+    await waitFor(() => expect(screen.getByText('stale')).toBeInTheDocument());
+
+    await act(async () => { resolveRefetch({ cast, rewrites: [REWRITE], hasContent: true }); });
+    expect(screen.getByText('stale')).toBeInTheDocument();
+  });
 });

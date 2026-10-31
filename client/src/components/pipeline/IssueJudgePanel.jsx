@@ -77,6 +77,9 @@ export default function IssueJudgePanel({ issue, stageId }) {
   const readSeqRef = useRef(0);
 
   const judgeStageId = resolveJudgeStage(issue, stageId);
+  // `stale` is computed server-side on the stored read only (the judge POST
+  // returns none), so re-read whenever the judged draft changes.
+  const judgedText = judgeStageId ? stageText(issue?.stages?.[judgeStageId]) : '';
 
   useEffect(() => {
     if (!issueId) return undefined;
@@ -85,9 +88,12 @@ export default function IssueJudgePanel({ issue, stageId }) {
     const isLatest = () => !canceled && seq === readSeqRef.current;
     getIssueJudge(issueId, { silent: true })
       .then((res) => { if (isLatest()) setRead({ issueId, status: 'ready', judge: res && res.status !== 'none' ? res : null, error: null }); })
-      .catch((error) => { if (isLatest()) setRead({ issueId, status: 'error', judge: null, error }); });
+      // A failed refresh keeps the score this issue already shows; the error row says it may be out of date.
+      .catch((error) => {
+        if (isLatest()) setRead((prev) => ({ issueId, status: 'error', judge: prev.issueId === issueId ? prev.judge : null, error }));
+      });
     return () => { canceled = true; };
-  }, [issueId, readAttempt]);
+  }, [issueId, readAttempt, judgedText]);
 
   const [runJudge, running] = useAsyncAction(async () => {
     const forIssue = issueId;
@@ -98,6 +104,9 @@ export default function IssueJudgePanel({ issue, stageId }) {
       readSeqRef.current++;
       setRead({ issueId: forIssue, status: 'ready', judge: res, error: null });
       setOpen(true);
+      // Re-read the snapshot the POST just saved: it carries the authoritative
+      // `stale` flag for a draft that changed while the judge ran.
+      setReadAttempt((n) => n + 1);
     }
     return res;
   }, { errorMessage: 'Failed to judge issue' });
