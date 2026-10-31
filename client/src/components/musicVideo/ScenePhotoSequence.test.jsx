@@ -112,6 +112,7 @@ describe('still photo sequence authoring and scrubbing', () => {
     expect(visible()[1].style.opacity).toBe('0.5');
     expect(visible()[1].style.transform).toBe(`rotate(${layouts[1].rotation}deg)`);
     expect(visible()[0].style.width).toBe(`${layouts[0].scale * 100}%`);
+    expect(visible()[0].style.maxWidth).toBe('none');
     // A develop effect filters the composed stack (black ground included), as the renders do.
     rerender(<ImageEffectStill src="/unused.png" sequence={sequence} effect={{ effect: 'flash-develop', developSec: 1 }} startSec={0} time={13 / 24} />);
     expect(container.querySelector('[data-photo-stack]').style.filter).toMatch(/^contrast\(/);

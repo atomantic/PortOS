@@ -6,8 +6,10 @@ const photoUrl = id => `/data/images/${encodeURIComponent(id)}`;
 // #14277: one stacked layer as the render draws it — a laid-out photo fitted whole,
 // scaled, turned and faded about its centre; otherwise cover-fitted to the frame.
 function photoLayerStyle(layout) {
-  if (!layout) return { left: '0%', top: '0%', width: '100%', height: '100%', objectFit: 'cover', transform: 'none', opacity: '1' };
+  // Sizes above 100% must not be capped by the base stylesheet's img max-width.
+  if (!layout) return { left: '0%', top: '0%', width: '100%', height: '100%', maxWidth: 'none', maxHeight: 'none', objectFit: 'cover', transform: 'none', opacity: '1' };
   return {
+    maxWidth: 'none', maxHeight: 'none',
     left: `${50 + layout.x * 100 - layout.scale * 50}%`, top: `${50 + layout.y * 100 - layout.scale * 50}%`,
     width: `${layout.scale * 100}%`, height: `${layout.scale * 100}%`, objectFit: 'contain',
     transform: layout.rotation ? `rotate(${layout.rotation}deg)` : 'none', opacity: String(layout.opacity),
