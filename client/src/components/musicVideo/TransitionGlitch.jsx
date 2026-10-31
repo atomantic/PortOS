@@ -146,8 +146,10 @@ function paintGlitch(canvas, figure, params, frame) {
   const base = cur.getContext('2d');
   base.fillStyle = '#000';
   base.fillRect(0, 0, width, height);
-  const stack = figure?.querySelector('[data-photo-stack]');
-  const still = stack ? null : figure?.querySelector('img[data-shown="true"]') || figure?.querySelector('img');
+  // An end frame that has replaced a photo stack (an end-frame image effect) is what shows.
+  const endFrame = [...(figure?.querySelectorAll('img[data-shown="true"]') || [])].find(img => !img.closest('[data-photo-stack]'));
+  const stack = endFrame ? null : figure?.querySelector('[data-photo-stack]');
+  const still = stack ? null : endFrame || figure?.querySelector('img[data-shown="true"]') || figure?.querySelector('img');
   const clip = figure?.querySelector('video[data-ready="true"]:not([aria-hidden="true"])');
   const stillReady = stack ? drawPhotoStack(base, stack, width, height) : !!still?.complete && still.naturalWidth > 0;
   const clipReady = !!clip && clip.readyState >= 2;

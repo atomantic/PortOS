@@ -243,6 +243,7 @@ describe.skipIf(!ffmpeg)('overlapping photo stacks through real ffmpeg', () => {
 
   // Catches a newer full-frame photo landing beneath an older one.
   it('lays a newer photo over the older one it overlaps', async () => {
+    await mkdir(PATHS.images, { recursive: true });
     const colors = [[230, 30, 30], [30, 230, 30], [30, 30, 230], [230, 230, 30], [230, 30, 230]];
     await Promise.all(ids.map((id, i) => sharp({ create: { width: 96, height: 64, channels: 3, background: { r: colors[i][0], g: colors[i][1], b: colors[i][2] } } }).png().toFile(join(PATHS.images, id))));
     // The first photo is a small print; every later one fills the frame over it.
@@ -261,5 +262,29 @@ describe.skipIf(!ffmpeg)('overlapping photo stacks through real ffmpeg', () => {
     // Frame 8: photo 0 is still inside its overlap, but photo 1 lies on top of it.
     centre(8).forEach((v, c) => expect(Math.abs(v - colors[1][c])).toBeLessThan(24));
     corner(8).forEach((v, c) => expect(Math.abs(v - colors[1][c])).toBeLessThan(24));
+  });
+
+  // Catches a stacked shot rendering black while an incoming dissolve fades it in:
+  // the preroll's frames precede the shot and must show its first photo.
+  it('fades the first photo of a stack in during an incoming dissolve', async () => {
+    await mkdir(PATHS.images, { recursive: true });
+    const colors = [[230, 30, 30], [30, 230, 30], [30, 30, 230], [230, 230, 30], [230, 30, 230]];
+    await Promise.all(ids.map((id, i) => sharp({ create: { width: 96, height: 64, channels: 3, background: { r: colors[i][0], g: colors[i][1], b: colors[i][2] } } }).png().toFile(join(PATHS.images, id))));
+    await sharp({ create: { width: 96, height: 64, channels: 3, background: { r: 0, g: 0, b: 0 } } }).png().toFile(join(PATHS.images, 'outgoing-black.png'));
+    const outgoing = { sceneId: 'out', order: 0, startSec: 0, endSec: 1, visualLayer: 'still', stillMove: 'hold', referenceImageId: 'outgoing-black.png',
+      cutEffect: { style: 'dissolve', enabled: true, overlapSec: 0.5 } };
+    const incoming = { ...scene, order: 1, startSec: 1, endSec: 2, photoSequence: { ...sequence, overlapFrames: 12, layouts: [{ ...prints[2], scale: 0.6 }] } };
+    const clips = await resolveSceneClips({ scenes: [outgoing, incoming] }, { layered: true });
+    const audio = join(PATHS.data, 'preroll.wav');
+    execFileSync(ffmpeg, ['-v', 'error', '-f', 'lavfi', '-i', 'sine=frequency=220:duration=2', '-y', audio]);
+    const output = join(PATHS.data, 'preroll.mp4');
+    const plan = buildMusicVideoFfmpegArgs(clips, audio, output, { audioDurationSec: 2, canvas: { width: 96, height: 64, fps: 24 } });
+    execFileSync(ffmpeg, ['-v', 'error', ...plan.args.filter((arg, i) => !(arg === '-progress' || plan.args[i - 1] === '-progress'))], { stdio: 'pipe' });
+    const raw = execFileSync(ffmpeg, ['-v', 'error', '-i', output, '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-'], { maxBuffer: 8 * 1024 * 1024 });
+    const red = f => raw[f * 96 * 64 * 3 + (32 * 96 + 48) * 3];
+    expect(red(4)).toBeLessThan(24);
+    // Late in the dissolve (frames 12-23) the incoming first photo is mostly faded in.
+    expect(red(22)).toBeGreaterThan(120);
+    expect(red(26)).toBeGreaterThan(200);
   });
 });
