@@ -134,6 +134,7 @@ export function PreMusicSound({ fieldId, scene, onChange, disabled = false }) {
       <div className="flex flex-wrap items-center gap-2">
         <button type="button" role="switch" aria-checked={settings.clipVolume != null && settings.clipVolume > 0} disabled={disabled}
           onClick={() => save({ clipVolume: settings.clipVolume > 0 ? null : 1 })}
+          title="Play this clip's own sound. While it is on, a new fal.ai or local render of this shot asks the model for sound (on Kling at its audio-on rate)."
           className={`inline-flex min-h-[44px] items-center rounded border px-2 sm:min-h-[28px] disabled:opacity-50 ${settings.clipVolume > 0 ? 'border-port-accent text-port-accent' : 'border-port-border text-port-text-muted'}`}>
           Clip sound
         </button>

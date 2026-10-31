@@ -3,6 +3,7 @@ import { musicVideoGreyboxReference } from '../../../server/lib/musicVideoGreybo
 import { shotActionContractProblem } from '../../../server/lib/musicVideoActionContract.js';
 import { isOutsideMusicVideoReference, musicVideoConditioningReferences, musicVideoFrameReferenceFiles, musicVideoStoryboardClipInputs, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES } from '../../../server/lib/musicVideoConditioning.js';
 import { storyboardClipBlockedReason } from '../../../server/lib/storyboardGuidance.js';
+import { preMusicClipSound } from '../../../server/lib/musicVideoColdOpen.js';
 import { sceneEndFrameRequestFields } from '../../../server/lib/musicVideoEndFrame.js';
 import { authoredFramePromptText, authoredShotPrompt, musicVideoFrameModelInput, visualDirection } from '../../../server/lib/musicVideoShotPrompt.js';
 import { useEffect, useRef, useState } from 'react';
@@ -426,6 +427,8 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
     const runwayFields = settings.backend === 'runway'
       ? runwayTakeRequestFields(runwaySceneTake({ scene, videoSettings: settings }))
       : null;
+    // Only a cold-open shot playing its clip's own sound renders with sound (fal asks via falSceneTake).
+    const disableAudio = !preMusicClipSound(scene);
     videoLane.startScene(scene.sceneId);
     return generateVideo({
       prompt,
@@ -445,11 +448,11 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
           ? falFields || runwayFields
           : settings.backend === 'local'
             // A scene card's pick names its model and length; else the saved model at the model's default length.
-            ? { modelId: settings.modelId || undefined, ...(target?.numFrames ? { numFrames: target.numFrames } : {}), disableAudio: true }
+            ? { modelId: settings.modelId || undefined, ...(target?.numFrames ? { numFrames: target.numFrames } : {}), disableAudio }
             // A named model is local-only machinery at the server boundary and
             // would force the resolver off a Grok install default. Keep the
             // shared pin saved, but omit it until this peer chooses Local.
-            : { grokDuration: settings.grokDuration, disableAudio: true }),
+            : { grokDuration: settings.grokDuration, disableAudio }),
       mode,
       ...(guided || {}),
       ...(guided ? {} : { sourceImageFile: scene.referenceImageId }),
