@@ -872,7 +872,8 @@ export async function buildRenderPreview(projectId, { light = false } = {}) {
   }
   if (lead.length === plan.segments.length && plan.outro && segmentRendered(plan.outro)) lead.push(plan.outro);
   if (!lead.length) throw new ServerError('No shot is rendered yet: the first shot plays here once it is done', { status: 409, code: 'NO_SHOTS_RENDERED' });
-  const key = hash({ parts: lead.map((s) => s.path), audio: plan.audioPath, bed: plan.soundBed || null });
+  // The cold open's mix is part of the sound: a volume or layer edit alone changes no segment path.
+  const key = hash({ parts: lead.map((s) => s.path), audio: plan.audioPath, bed: plan.soundBed || null, coldOpen: plan.coldOpen?.audio || null });
   const name = `preview-${key}${light ? '-light' : ''}.mp4`;
   const path = join(plan.dir, name);
   const shots = new Set(lead.filter((s) => !s.outro).map((s) => s.sceneId)).size;
