@@ -916,6 +916,96 @@ export function releaseHostedSpeechOutput(sessionId, socketId, { io } = {}) {
   return { released: true };
 }
 
+const HOSTED_TRANSCRIPT_LIMIT = 50;
+
+function appendTranscriptItem(session, role, text, extra = {}) {
+  const item = { id: randomUUID(), role, text, timestamp: new Date().toISOString(), ...extra };
+  session.transcript.push(item);
+  if (session.transcript.length > HOSTED_TRANSCRIPT_LIMIT) session.transcript.shift();
+  return item;
+}
+
+// Raw PCM frames (any typed-array view other than a Buffer) arrive from the
+// browser mic; encoded audio arrives as a Buffer and is passed through.
+const isRawPcmFrame = (audio) => ArrayBuffer.isView(audio) && !(audio instanceof Buffer);
+
+/** Resolves to the trimmed transcript, or null when the turn was cancelled. */
+async function transcribeTurnAudio(audioBuffer, signal) {
+  const wavPayload = isRawPcmFrame(audioBuffer)
+    ? pcmToWavBuffer(pcmToFloat(audioBuffer), { sampleRate: 16000 })
+    : audioBuffer;
+  const sttResult = await transcribe(wavPayload, { signal }).catch((err) => {
+    // A torn-down turn aborts this signal. That is a cancellation, not a
+    // successful empty transcription, and must not fall through as one.
+    if (signal.aborted) return null;
+    console.warn(`⚠️ [HostedPlay] STT transcription failed: ${err.message}`);
+    return { text: '' };
+  });
+  return sttResult ? (sttResult.text || '').trim() : null;
+}
+
+/** Resolves to `{ playResult }`, or null when the turn died while the story turn ran. */
+async function playStoryTurn(session, { loom, node, message, signal, isLive }) {
+  try {
+    const playResult = await playTurn(session.loomId, session.episodeId, {
+      nodeId: session.currentNodeId,
+      message,
+      signal,
+      callerPolicy: 'direct-api',
+      transcript: session.transcript.map((t) => ({
+        role: t.role === 'audience' ? 'reader' : 'narrator',
+        text: t.text,
+      })),
+    });
+    return { playResult };
+  } catch (err) {
+    // A cancelled turn has no one left to narrate to — the authored fallback
+    // would only produce a reply for a room that already saw `ended`.
+    if (!isLive()) return null;
+    console.warn(`⚠️ [HostedPlay] LLM turn error, using authored fallback: ${err?.message}`);
+    return {
+      playResult: {
+        action: 'stay',
+        narration: node?.prose?.slice(0, 200) || "I hear you. Let's see what happens next.",
+        node: node ? publicNode(node, loom) : null,
+        ended: false,
+      },
+    };
+  }
+}
+
+async function resolveProtagonistVoice(loom) {
+  const universe = loom.universeId ? await getUniverse(loom.universeId).catch(() => null) : null;
+  const char = protagonistVoiceCharacter(loom, universe);
+  return resolveCharacterVoice({
+    universeId: loom.universeId,
+    characterId: char?.id,
+    characterVoiceId: char?.voiceId,
+    route: 'interactive',
+  }).catch(() => null);
+}
+
+/** Resolves to the narration WAV, or null when synthesis failed or was cancelled. */
+async function synthesizeNarration(narration, resolved, signal) {
+  const { engine, voice } = parseVoiceId(resolved?.voiceId);
+  const synth = await synthesize(narration, {
+    engine: engine || undefined,
+    profileId: resolved?.profileId || undefined,
+    route: 'interactive',
+    signal,
+    voice: voice || undefined,
+  }).catch((err) => {
+    if (!signal.aborted) console.warn(`⚠️ [HostedPlay] Protagonist TTS synthesis failed: ${err.message}`);
+    return null;
+  });
+  return synth?.wav || null;
+}
+
+function moveTargetNode(playResult, episode) {
+  if (playResult.action !== 'move' || !playResult.transitionId || !episode) return null;
+  return episode.nodes?.find((node) => node.id === playResult.node?.id) || null;
+}
+
 /**
  * Process a completed audience utterance (audio or text) through STT -> LLM -> TTS -> State Transition.
  */
@@ -937,13 +1027,14 @@ export async function processHostedUtterance(sessionId, {
   const turn = session.activeTurn || { id: randomUUID(), abortController: new AbortController(), startedAt: Date.now() };
   session.activeTurn = turn;
   session.turnPhase = 'thinking';
+  const { signal } = turn.abortController;
 
   // This function holds `session` and `turn` across every provider await, but a
   // teardown landing mid-turn (host "end", DELETE /sessions/:id, or the TTL
   // sweep) aborts the controller, clears `activeTurn` and drops the map entry.
   // Re-derive liveness at each boundary so no provider work starts — and no
   // frame is emitted — after the terminal `hosted:session:ended` (#5786).
-  const isLive = () => !turn.abortController.signal.aborted
+  const isLive = () => !signal.aborted
     && activeSessions.get(sessionId) === session
     && session.status === 'active'
     && session.activeTurn === turn;
@@ -965,20 +1056,9 @@ export async function processHostedUtterance(sessionId, {
 
     // 1. Transcribe audio if supplied
     if (audioBuffer && !message.trim()) {
-      let wavPayload = audioBuffer;
-      if (audioBuffer instanceof Int16Array || (ArrayBuffer.isView(audioBuffer) && !(audioBuffer instanceof Buffer))) {
-        const floatPcm = pcmToFloat(audioBuffer);
-        wavPayload = pcmToWavBuffer(floatPcm, { sampleRate: 16000 });
-      }
-      const sttResult = await transcribe(wavPayload, { signal: turn.abortController.signal }).catch((err) => {
-        // A torn-down turn aborts this signal. That is a cancellation, not a
-        // successful empty transcription, and must not fall through as one.
-        if (turn.abortController.signal.aborted) return null;
-        console.warn(`⚠️ [HostedPlay] STT transcription failed: ${err.message}`);
-        return { text: '' };
-      });
-      if (!sttResult || !isLive()) return abandonTurn('transcription');
-      message = (sttResult.text || '').trim();
+      const transcript = await transcribeTurnAudio(audioBuffer, signal);
+      if (transcript === null || !isLive()) return abandonTurn('transcription');
+      message = transcript;
     }
 
     // Check for echo / empty message
@@ -992,17 +1072,7 @@ export async function processHostedUtterance(sessionId, {
       return { ok: true, ignored: true };
     }
 
-    // Append audience transcript item
-    const audienceItem = {
-      id: randomUUID(),
-      role: 'audience',
-      text: message,
-      timestamp: new Date().toISOString(),
-    };
-    session.transcript.push(audienceItem);
-    if (session.transcript.length > 50) session.transcript.shift();
-
-    emitIfLive('hosted:turn:transcript', audienceItem);
+    emitIfLive('hosted:turn:transcript', appendTranscriptItem(session, 'audience', message));
 
     // 2. Run LLM Play Turn
     const loom = await getLoom(session.loomId);
@@ -1010,44 +1080,12 @@ export async function processHostedUtterance(sessionId, {
     const episode = loom.episodes?.find((e) => e.id === session.episodeId) || null;
     const node = episode?.nodes?.find((n) => n.id === session.currentNodeId) || null;
 
-    let playResult;
-    try {
-      playResult = await playTurn(session.loomId, session.episodeId, {
-        nodeId: session.currentNodeId,
-        message,
-        signal: turn.abortController.signal,
-        callerPolicy: 'direct-api',
-        transcript: session.transcript.map((t) => ({
-          role: t.role === 'audience' ? 'reader' : 'narrator',
-          text: t.text,
-        })),
-      });
-    } catch (err) {
-      // A cancelled turn has no one left to narrate to — the authored fallback
-      // would only produce a reply for a room that already saw `ended`.
-      if (!isLive()) return abandonTurn('story turn');
-      console.warn(`⚠️ [HostedPlay] LLM turn error, using authored fallback: ${err?.message}`);
-      playResult = {
-        action: 'stay',
-        narration: node?.prose?.slice(0, 200) || "I hear you. Let's see what happens next.",
-        node: node ? publicNode(node, loom) : null,
-        ended: false,
-      };
-    }
-    if (!isLive()) return abandonTurn('story turn');
+    const story = await playStoryTurn(session, { loom, node, message, signal, isLive });
+    if (!story || !isLive()) return abandonTurn('story turn');
+    const { playResult } = story;
 
     const narration = (playResult?.narration || '').trim() || "Let's continue.";
-
-    // Append protagonist transcript item
-    const protagonistItem = {
-      id: randomUUID(),
-      role: 'protagonist',
-      text: narration,
-      timestamp: new Date().toISOString(),
-      audioTarget: session.audioTarget,
-    };
-    session.transcript.push(protagonistItem);
-    if (session.transcript.length > 50) session.transcript.shift();
+    const protagonistItem = appendTranscriptItem(session, 'protagonist', narration, { audioTarget: session.audioTarget });
 
     // 3. Synthesize Protagonist Voice
     session.turnPhase = 'speaking';
@@ -1056,52 +1094,24 @@ export async function processHostedUtterance(sessionId, {
     emitIfLive('hosted:turn:phase', { phase: 'speaking', turnId: turn.id, text: narration });
     emitIfLive('hosted:turn:transcript', protagonistItem);
 
-    // Resolve character voice
     let ttsAudio = null;
     try {
-      let universe = null;
-      if (loom.universeId) {
-        universe = await getUniverse(loom.universeId).catch(() => null);
-      }
-      const char = protagonistVoiceCharacter(loom, universe);
-      const resolved = await resolveCharacterVoice({
-        universeId: loom.universeId,
-        characterId: char?.id,
-        characterVoiceId: char?.voiceId,
-        route: 'interactive',
-      }).catch(() => null);
+      const resolved = await resolveProtagonistVoice(loom);
       if (!isLive()) return abandonTurn('voice resolution');
-      const { engine, voice } = parseVoiceId(resolved?.voiceId);
-
-      const synth = await synthesize(narration, {
-        engine: engine || undefined,
-        profileId: resolved?.profileId || undefined,
-        route: 'interactive',
-        signal: turn.abortController.signal,
-        voice: voice || undefined,
-      }).catch((err) => {
-        if (turn.abortController.signal.aborted) return null;
-        console.warn(`⚠️ [HostedPlay] Protagonist TTS synthesis failed: ${err.message}`);
-        return null;
-      });
-      if (synth?.wav) {
-        ttsAudio = synth.wav;
-      }
+      ttsAudio = await synthesizeNarration(narration, resolved, signal);
     } catch (err) {
       console.warn(`⚠️ [HostedPlay] Protagonist TTS synthesis failed: ${err.message}`);
     }
     if (!isLive()) return abandonTurn('speech synthesis');
 
-    const targetNode = playResult.action === 'move' && playResult.transitionId && episode
-      ? episode.nodes?.find((node) => node.id === playResult.node?.id) || null
-      : null;
+    const targetNode = moveTargetNode(playResult, episode);
 
     // 4. Dispatch audio to the designated output. While that socket is
     // connected, the move stays pending: committing here is what let the
     // scene change under audio that was still playing.
     if (ttsAudio) {
       emitIfLive('hosted:turn:tts', {
-        audio: Buffer.isBuffer(ttsAudio) ? ttsAudio.toString('base64') : Buffer.from(ttsAudio).toString('base64'),
+        audio: Buffer.from(ttsAudio).toString('base64'),
         mimeType: 'audio/wav',
         target: session.audioTarget,
         turnId: turn.id,
@@ -1127,15 +1137,14 @@ export async function processHostedUtterance(sessionId, {
     }
     return { ok: true, playResult };
   } catch (err) {
+    takePendingSpeech(session);
     // A failure that lands after teardown has no room left to tell: the session
     // already emitted its terminal frame, so log and swallow rather than
     // emitting `hosted:error` behind it.
     if (!isLive()) {
-      takePendingSpeech(session);
       console.warn(`⚠️ [HostedPlay] Hosted turn ${turn.id} failed after teardown: ${err?.message || err}`);
       return abandonedResult;
     }
-    takePendingSpeech(session);
     // Emit BEFORE clearing `activeTurn` — clearing it first makes the turn
     // non-live and would suppress the very error frame the client needs.
     emitIfLive('hosted:error', {
