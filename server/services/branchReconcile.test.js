@@ -323,6 +323,13 @@ describe('classifyBranches rule ids and wipParkCause', () => {
     const rule = (over) => { const { state, rule: id } = classifyBranches([{ ...base, ...over }])[0]; return [state, id]; };
     expect(rule({ openPr: { isDraft: true }, completionPolicyReason: 'pr-completion-review-required' })).toEqual(['WIP', 'draft']);
     expect(rule({ completionPolicyReason: 'pr-completion-review-required', isMerged: true })).toEqual(['WIP', 'completion-policy']);
+    // An unshipped review obligation falls through to the ordinary rules, but a
+    // merged pointer, an open PR and a live owner keep their holds.
+    const unshipped = { completionPolicyReason: 'pr-completion-review-required', completionReviewUnshipped: true, hasUpstream: false, hasOrigin: true, ahead: 2 };
+    expect(rule(unshipped)).toEqual(['NEEDS_PR', 'needs-pr']);
+    expect(rule({ ...unshipped, isMerged: true })).toEqual(['WIP', 'completion-policy']);
+    expect(rule({ ...unshipped, openPr: { mergeable: 'MERGEABLE' } })).toEqual(['WIP', 'completion-policy']);
+    expect(rule({ ...unshipped, liveOwnerReason: 'active-agent' })).toEqual(['WIP', 'live-owner']);
     expect(rule({ prStateUnavailable: true, hasUpstream: false })).toEqual(['WIP', 'pr-state-unavailable']);
     expect(rule({ hasUpstream: false })).toEqual(['WIP', 'bare-pointer']);
     expect(rule({ isMerged: true })).toEqual(['MERGED', 'merged']);

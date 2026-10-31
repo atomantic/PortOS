@@ -156,6 +156,10 @@ const PR_LIST_LIMIT = 200;
  *   completion-policy  WIP            policy hold. Sits BEFORE merged so a merged pointer is not
  *                                     deleted by cleanupMerged without the review proof that
  *                                     prepareReconcileRetirements requires (it scans these rows).
+ *                                     Except an UNSHIPPED review obligation (no PR ever recorded,
+ *                                     none open, commits not on the default branch): the run died
+ *                                     before delivery, so the hold falls through to the rules below
+ *                                     and normally lands NEEDS_PR. Review still gates the merge.
  *   abandoned-wip      ABANDONED_WIP  dirty tree of an INACTIVE run, no live owner → agent finishes it.
  *                                     Before merged: a dead agent that never committed leaves its
  *                                     pointer on an old default-branch commit, which reads as MERGED
@@ -181,7 +185,8 @@ const PR_LIST_LIMIT = 200;
  */
 const CLASSIFY_RULES = [
   { id: 'draft', state: 'WIP', when: ({ openPr }) => Boolean(openPr?.isDraft) },
-  { id: 'completion-policy', state: 'WIP', when: ({ completionPolicyReason }) => Boolean(completionPolicyReason) },
+  { id: 'completion-policy', state: 'WIP', when: ({ completionPolicyReason, completionReviewUnshipped, isMerged, openPr }) => Boolean(completionPolicyReason)
+    && !(completionReviewUnshipped && !isMerged && !openPr) },
   { id: 'abandoned-wip', state: 'ABANDONED_WIP', when: ({ worktreeDirty, liveOwnerReason, abandonedAgentWorktree, abandonedClaimWorktree }) => Boolean(worktreeDirty && !liveOwnerReason && (abandonedAgentWorktree || abandonedClaimWorktree)) },
   { id: 'merged', state: 'MERGED', when: ({ isMerged }) => Boolean(isMerged) },
   { id: 'live-owner', state: 'WIP', when: ({ liveOwnerReason }) => Boolean(liveOwnerReason) },
@@ -205,7 +210,7 @@ const CLASSIFY_RULES = [
  *                dirty tree, unreadable forge, or bare pointer. It is NOT "never touch":
  *                completion-policy rows are still scanned for review-gated retirement.
  *
- * @param {{ hasUpstream:boolean, ahead?:number|null, hasOrigin?:boolean, isMerged:boolean, worktreeDirty:boolean, abandonedAgentWorktree?:boolean, abandonedClaimWorktree?:boolean, liveOwnerReason?:string|null, completionPolicyReason?:string|null, openPr:({mergeable?:string, isDraft?:boolean}|null), prStateUnavailable?:boolean }} input
+ * @param {{ hasUpstream:boolean, ahead?:number|null, hasOrigin?:boolean, isMerged:boolean, worktreeDirty:boolean, abandonedAgentWorktree?:boolean, abandonedClaimWorktree?:boolean, liveOwnerReason?:string|null, completionPolicyReason?:string|null, completionReviewUnshipped?:boolean, openPr:({mergeable?:string, isDraft?:boolean}|null), prStateUnavailable?:boolean }} input
  *   `ahead` is the branch's own commit count over the default branch (null =
  *   unreadable), and `hasOrigin` says the repo has a remote to push that work to.
  *   `hasOrigin` defaults to FALSE (fail-closed): a caller that cannot vouch for a
@@ -956,7 +961,7 @@ export async function gatherBranchState(repoPath, { defaultBranch, activeAgentId
     (b) => !b.isDefault && !b.current && !protectedSet.has(b.name)
   );
 
-  const { readBranchCompletionPolicies, readBranchCompletionHold } = await import('./branchCompletionPolicy.js');
+  const { readBranchCompletionPolicies, readBranchCompletionHoldDetail } = await import('./branchCompletionPolicy.js');
   const completionPolicies = candidates.length ? await readBranchCompletionPolicies().catch(() => null) : [];
 
   const inputs = [];
@@ -987,11 +992,13 @@ export async function gatherBranchState(repoPath, { defaultBranch, activeAgentId
     // -circuit when the cheap check already proved it merged.
     const hasMergeEvidence = b.merged || await hasBranchMergeEvidence(repoPath, b.name, defaultBranch);
     const claimOwnerReason = resolveClaimOwnerReason({ branch: b.name, path: worktreePath, claimOwners, sourceWorkspace: repoPath });
-    const completionPolicyReason = await readBranchCompletionHold({ repoPath, branch: b.name, prUrl: prsByHead.get(b.name)?.url, tip, agents: completionPolicies, retirement: hasMergeEvidence });
+    const completionHold = await readBranchCompletionHoldDetail({ repoPath, branch: b.name, prUrl: prsByHead.get(b.name)?.url, tip, agents: completionPolicies, retirement: hasMergeEvidence });
+    const completionPolicyReason = completionHold.reason;
     inputs.push({
       branch: b.name,
       tip,
       completionPolicyReason,
+      completionReviewUnshipped: completionHold.unshipped === true,
       ...(completionPolicyReason ? { completionPolicyWorkflow: completionPolicyReason === 'pr-completion-review-required'
         ? 'Resume the configured review workflow; delivery success does not prove review passed.'
         : completionPolicyReason === 'pr-completion-human-handoff'

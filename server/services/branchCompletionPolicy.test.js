@@ -179,6 +179,18 @@ describe('completion policy across lifecycle and reconciliation boundaries', () 
       expect(await retire()).toBe('pr-completion-review-required');
     });
 
+    // A claim run killed after committing but before pushing left a review
+    // obligation with no PR. The hold must not hide the unshipped work from the
+    // coordinator; review still gates the merge once the PR exists.
+    it('dispatches an unshipped review branch as NEEDS_PR, and holds it again once a PR is recorded', async () => {
+      register('agent-claim', 'review-then-merge');
+      runtime.prState = 'CLOSED';
+      const gathered = async () => classifyBranches(await gatherBranchState(repoPath, { defaultBranch: 'main', claimOwners: { agents: [] } }))[0];
+      expect(await gathered()).toMatchObject({ state: 'NEEDS_PR', completionPolicyReason: 'pr-completion-review-required', completionReviewUnshipped: true });
+      runtime.agents['agent-claim'].metadata.branchCompletionPolicy = { branch, prUrl, completion: 'review-then-merge', tip: null };
+      expect(await gathered()).toMatchObject({ state: 'WIP', rule: 'completion-policy', completionReviewUnshipped: false });
+    });
+
     it('keeps a leave-open handoff and a recorded PR held even when the tip is merged', async () => {
       runtime.merged = true;
       const handoff = register('agent-human', 'leave-open');
