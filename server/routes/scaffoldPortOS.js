@@ -4,6 +4,10 @@ import { atomicWrite, ensureDir, ensureDirs } from '../lib/fileUtils.js';
 import { writeAgentInstructions } from '../lib/agentInstructionsFile.js';
 import { CORS_SNIPPET } from '../lib/scaffoldSnippets.js';
 
+// A caret on a 0.x range admits only patch releases (^0.1.0 never reaches 0.2.0),
+// so this must name the current published minor when the toolkit releases one.
+const AI_TOOLKIT_RANGE = '^0.8.4';
+
 export async function scaffoldPortOS({ repoPath, name, dirName, uiPort, apiPort, addStep }) {
   const clientDir = join(repoPath, 'client');
   const serverDir = join(repoPath, 'server');
@@ -46,7 +50,7 @@ export async function scaffoldPortOS({ repoPath, name, dirName, uiPort, apiPort,
     },
     dependencies: {
       'lucide-react': '^0.562.0',
-      'portos-ai-toolkit': '^0.1.0',
+      'portos-ai-toolkit': AI_TOOLKIT_RANGE,
       'react': '^18.3.1',
       'react-dom': '^18.3.1',
       'react-hot-toast': '^2.6.0',
@@ -262,7 +266,7 @@ export default function AIProvidersPage() {
     },
     dependencies: {
       'express': '^4.21.2',
-      'portos-ai-toolkit': '^0.1.0',
+      'portos-ai-toolkit': AI_TOOLKIT_RANGE,
       'socket.io': '^4.8.3',
       'zod': '^3.24.1'
     },
@@ -275,8 +279,14 @@ export default function AIProvidersPage() {
   // === Server index.js ===
   await writeFile(join(serverDir, 'index.js'), `import express from 'express';
 import { createServer } from 'http';
+import { dirname, join } from 'path';
+import { fileURLToPath } from 'url';
 import { Server } from 'socket.io';
 import { createAIToolkit } from 'portos-ai-toolkit/server';
+
+// Anchored to the repo root, not the cwd: PM2 starts this from the root while
+// \`npm run dev\` / \`npm start\` start it from server/.
+const DATA_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'data');
 
 const app = express();
 const httpServer = createServer(app);
@@ -291,7 +301,8 @@ app.use(express.json());
 
 // Initialize AI Toolkit with routes for providers, runs, and prompts
 const aiToolkit = createAIToolkit({
-  dataDir: './data',
+  dataDir: DATA_DIR,
+  screenshotsDir: join(DATA_DIR, 'screenshots'),
   io
 });
 aiToolkit.mountRoutes(app);
@@ -320,7 +331,9 @@ httpServer.listen(PORT, '0.0.0.0', () => {
 export default defineConfig({
   test: {
     globals: true,
-    environment: 'node'
+    environment: 'node',
+    // A new app has no tests yet; without this \`vitest run\` exits 1 and fails CI.
+    passWithNoTests: true
   }
 });
 `);
@@ -340,9 +353,9 @@ export default defineConfig({
         type: 'cli',
         command: 'claude',
         args: ['--print'],
-        models: ['claude-haiku-4-5', 'claude-sonnet-5', 'claude-opus-5-5', 'claude-opus-5'],
+        models: ['claude-haiku-5-5', 'claude-sonnet-5', 'claude-opus-5-5', 'claude-opus-5'],
         defaultModel: 'claude-opus-5-5',
-        lightModel: 'claude-haiku-4-5',
+        lightModel: 'claude-haiku-5-5',
         mediumModel: 'claude-sonnet-5',
         heavyModel: 'claude-opus-5-5',
         timeout: 300000,
