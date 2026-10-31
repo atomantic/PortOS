@@ -15,6 +15,8 @@ export default function AnalysisPanel({ audioAnalysis, scenes, tempo, onReanalyz
   const averageCutSec = authoredCutDurations.length > 0
     ? authoredCutDurations.reduce((sum, duration) => sum + duration, 0) / authoredCutDurations.length
     : null;
+  // #14240: an untrustworthy automatic grid is not used for cuts; offer the manual tempo beside the reason.
+  const gridIgnored = audioAnalysis?.gridDecision === 'ignore' && audioAnalysis.tempoSource !== 'manual';
   const longCutCount = authoredCutDurations.filter((duration) => duration > 10).length;
   return (
     <>
@@ -56,9 +58,15 @@ export default function AnalysisPanel({ audioAnalysis, scenes, tempo, onReanalyz
           Add more shots, then Auto-arrange: higher-energy sections receive shorter cuts and every boundary stays music-led.
         </p>
       )}
-      {audioAnalysis && !audioAnalysis.bpm && (
+      {audioAnalysis && (!audioAnalysis.bpm || gridIgnored) && (
         <div className="mt-2 flex flex-wrap items-end gap-2 text-xs bg-port-bg border border-port-border rounded-lg p-2">
-          <span className="text-port-text-muted w-full">No tempo detected — set it by ear to unlock the beat grid:</span>
+          {gridIgnored ? (
+            <span data-testid="grid-ignored" className="text-port-warning w-full">
+              Beat grid not used for cuts: {audioAnalysis.gridReason || 'the detected grid is unreliable'}. Set the tempo by ear to snap cuts to a grid:
+            </span>
+          ) : (
+            <span className="text-port-text-muted w-full">No tempo detected — set it by ear to unlock the beat grid:</span>
+          )}
           <div>
             <label htmlFor="mv-manual-bpm" className="block text-port-text-muted mb-1">BPM</label>
             <input id="mv-manual-bpm" type="number" min={20} max={300} step={1} value={tempo.bpm}

@@ -446,6 +446,7 @@ function directedShotPlan(project, sections) {
   const { shots, pacing } = planShots(sections, {
     downbeats: project.audioAnalysis?.downbeats,
     beats: project.audioAnalysis?.beats,
+    gridDecision: project.audioAnalysis?.gridDecision,
     lyricCues: project.lyricCues,
     phrases: project.phrases,
     pacing: project.pacing,

@@ -13,6 +13,7 @@ import {
   ANALYSIS_SAMPLE_RATE,
 } from './audioAnalysis.js';
 import { findFfmpeg } from '../../lib/ffmpeg.js';
+import { stereoPhaseCancellation } from '../../lib/audioBeatDsp.js';
 
 /**
  * Synthesize a mono click track: a short decaying 1kHz burst on every beat at
@@ -395,6 +396,69 @@ function grid120({ durationSec = 40 } = {}) {
 }
 
 const spans = (sections) => sections.map((s) => [s.startSec, s.endSec]);
+
+// Beat-grid trust gate (#14240).
+describe('beat grid trust', () => {
+  // Alternating long/short gaps (a hard swing): a tempo is found, but the even grid it implies
+  // only lands on every other click.
+  function irregularClicks({ durationSec = 30, sampleRate = ANALYSIS_SAMPLE_RATE } = {}) {
+    const out = new Float32Array(Math.round(durationSec * sampleRate));
+    const burstLen = Math.round(0.04 * sampleRate);
+    for (let t = 0.2, i = 0; t < durationSec - 0.2; t += i++ % 2 ? 0.3 : 0.7) {
+      const start = Math.round(t * sampleRate);
+      for (let k = 0; k < burstLen; k++) out[start + k] += Math.exp(-k / (burstLen / 4)) * Math.sin((2 * Math.PI * 1000 * k) / sampleRate);
+    }
+    return out;
+  }
+
+  it('trusts a steady click track', () => {
+    const result = analyzePcm(clickTrack({ bpm: 120, durationSec: 20 }), ANALYSIS_SAMPLE_RATE);
+    expect(result).toMatchObject({ gridDecision: 'use', gridReason: null, phaseCancellation: false, version: ANALYSIS_VERSION });
+    expect(result.beatContrast).toBeGreaterThanOrEqual(1.2);
+    expect(result.beatSpread).toBeLessThanOrEqual(0.15);
+  });
+
+  it('does not let a beatless intro sink an otherwise steady grid', () => {
+    const result = analyzePcm(lateClickTrack({ bpm: 108, introSec: 45, rhythmicSec: 30 }), ANALYSIS_SAMPLE_RATE);
+    expect(result.gridDecision).toBe('use');
+  });
+
+  it('ignores an irregular-gap fixture and explains why', () => {
+    const result = analyzePcm(irregularClicks(), ANALYSIS_SAMPLE_RATE);
+    expect(result.beats.length).toBeGreaterThan(0);
+    expect(result.gridDecision).toBe('ignore');
+    expect(result.gridReason).toMatch(/\S/);
+  });
+
+  it('ignores the grid when the stereo probe says the channels cancel', () => {
+    const result = analyzePcm(clickTrack({ bpm: 120, durationSec: 20 }), ANALYSIS_SAMPLE_RATE, { phaseCancellation: true });
+    expect(result).toMatchObject({ gridDecision: 'ignore', phaseCancellation: true });
+    expect(result.gridReason).toMatch(/cancel/i);
+  });
+
+  it('keeps a manual tempo on the same fixture', () => {
+    const fixture = irregularClicks();
+    const manual = buildManualAnalysis(fixture, ANALYSIS_SAMPLE_RATE, { bpm: 120 });
+    expect(manual).toMatchObject({ tempoSource: 'manual', gridDecision: 'use', gridReason: null });
+    const cached = buildManualAnalysisFromCached(analyzePcm(fixture, ANALYSIS_SAMPLE_RATE), { bpm: 120 });
+    expect(cached.gridDecision).toBe('use');
+  });
+
+  it('detects phase cancellation only when the mono mix drops more than 10 dB under the louder channel', () => {
+    const frames = 4000;
+    const tone = (i) => Math.sin(i / 7) * 0.5;
+    const build = (rightGain) => {
+      const pcm = new Float32Array(frames * 2);
+      for (let i = 0; i < frames; i++) { pcm[i * 2] = tone(i); pcm[i * 2 + 1] = tone(i) * rightGain; }
+      return pcm;
+    };
+    expect(stereoPhaseCancellation(build(-1))).toBe(true);
+    expect(stereoPhaseCancellation(build(-0.9))).toBe(true); // mono is 20 dB down
+    expect(stereoPhaseCancellation(build(1))).toBe(false);
+    expect(stereoPhaseCancellation(build(0))).toBe(false); // hard-panned, mono -6 dB
+    expect(stereoPhaseCancellation(new Float32Array(200))).toBe(false); // silence
+  });
+});
 
 describe('snapSectionsToGrid', () => {
   const { beats, downbeats } = grid120();

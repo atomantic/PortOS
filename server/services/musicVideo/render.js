@@ -860,7 +860,9 @@ export async function planMusicVideoRender(project, { draft = false, decode = tr
   const coldOpen = await resolveColdOpenClips(project, { layered: composed, stillForMissingClip: draft });
   const rawClips = await resolveSceneClips(song, { layered: composed, stillForMissingClip: draft });
   const audioDurationSec = await probeVideoDuration(audioPath).catch(() => null);
-  const beats = project.audioAnalysis?.beats;
+  const gridDecision = project.audioAnalysis?.gridDecision;
+  // #14240: an untrustworthy automatic grid must not move cuts either.
+  const beats = gridDecision === 'ignore' ? [] : project.audioAnalysis?.beats;
   const snapped = beatSnapClips(rawClips, beats, { scenes: song.scenes });
   // #8964: a new (non-looping) shot must never silently repeat footage to
   // fill its span. Refuse the render and name the shots that need a trim,
@@ -873,6 +875,7 @@ export async function planMusicVideoRender(project, { draft = false, decode = tr
       scenes: song.scenes,
       sections: project.audioAnalysis?.sections,
       beats,
+      gridDecision,
       bpm: project.audioAnalysis?.bpm,
       words: (project.lyricCues || []).flatMap((cue) => (Array.isArray(cue?.words) ? cue.words : [])),
       lyricCues: project.lyricCues,

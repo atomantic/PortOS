@@ -27,3 +27,19 @@ describe('AnalysisPanel song features (#9073)', () => {
     expect(screen.queryByRole('button', { name: 'Re-analyze' })).toBeNull();
   });
 });
+
+describe('AnalysisPanel ignored beat grid (#14240)', () => {
+  it('shows why the grid is not used, next to the manual tempo control', () => {
+    const analysis = { ...BASE, gridDecision: 'ignore', gridReason: 'Tempo is not steady (beat spread 0.31)' };
+    render(<AnalysisPanel audioAnalysis={analysis} scenes={[]} tempo={TEMPO} />);
+    expect(screen.getByTestId('grid-ignored').textContent).toMatch(/Tempo is not steady \(beat spread 0\.31\)/);
+    expect(screen.getByLabelText('BPM')).toBeTruthy();
+  });
+
+  it('stays quiet for a trusted grid and for a director-set tempo', () => {
+    const { rerender } = render(<AnalysisPanel audioAnalysis={{ ...BASE, gridDecision: 'use' }} scenes={[]} tempo={TEMPO} />);
+    expect(screen.queryByTestId('grid-ignored')).toBeNull();
+    rerender(<AnalysisPanel audioAnalysis={{ ...BASE, gridDecision: 'ignore', tempoSource: 'manual' }} scenes={[]} tempo={TEMPO} />);
+    expect(screen.queryByTestId('grid-ignored')).toBeNull();
+  });
+});
