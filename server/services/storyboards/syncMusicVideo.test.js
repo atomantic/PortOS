@@ -95,6 +95,18 @@ describe('sync a music video\'s shots to its storyboard', () => {
     expect(c).toMatchObject({ startSec: 10, endSec: 20, visualIntent: 'Crowd lifts her up' });
   });
 
+  // An older edit's sync can finish after a newer edit's; it must not apply its stale board.
+  it('syncs from the board as it is now, not from a late edit\'s older snapshot', async () => {
+    const { project, board } = await linkedProject();
+    await request(app).post(`/api/storyboards/sync-music-video/${project.id}`).send({ boardUpdatedAt: board.updatedAt });
+    const stale = (await request(app).get(`/api/storyboards/${board.id}`)).body;
+    await request(app).patch(`/api/storyboards/${board.id}/panels/${board.beats[0].panels[0].id}`).send({ seconds: 3 });
+    const { syncShotsAfterBoardEdit } = await import('./syncMusicVideo.js');
+    await syncShotsAfterBoardEdit(stale);
+    expect(spans((await projects.getProject(project.id)).scenes).map(([start, end]) => [start, end]))
+      .toEqual([[0, 3], [3, 8], [8, 18]]);
+  });
+
   it('refuses a stale preview', async () => {
     const { project } = await linkedProject();
     const res = await request(app).post(`/api/storyboards/sync-music-video/${project.id}`).send({ boardUpdatedAt: '2000-01-01T00:00:00.000Z' });
