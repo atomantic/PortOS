@@ -56,7 +56,7 @@ export default function StageHistoryModal({
   };
 
   return (
-    <Modal open={open} onClose={onClose} size="3xl" ariaLabel="Stage version history" panelClassName="bg-port-card border border-port-border rounded-lg overflow-hidden flex flex-col [--dvh-cap:85dvh]">
+    <Modal open={open} onClose={onClose} size="3xl" ariaLabel="Stage version history" panelClassName="bg-port-card border border-port-border rounded-lg flex flex-col [--dvh-cap:85dvh]">
       <div className="flex items-center justify-between px-5 py-3 border-b border-port-border">
         <div className="flex items-center gap-2">
           <History size={16} className="text-port-accent" />

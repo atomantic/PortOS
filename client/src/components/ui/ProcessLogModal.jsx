@@ -76,7 +76,7 @@ export default function ProcessLogModal({ open, onClose, processName, title = 'S
   }, [open, selected, loadLogs]);
 
   return (
-    <Modal open={open} onClose={onClose} size="3xl" align="top" ariaLabel={title} panelClassName="bg-port-card border border-port-border rounded-xl overflow-hidden flex flex-col [--dvh-cap:80dvh]">
+    <Modal open={open} onClose={onClose} size="3xl" align="top" ariaLabel={title} panelClassName="bg-port-card border border-port-border rounded-xl flex flex-col [--dvh-cap:80dvh]">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-4 sm:px-6 py-3 border-b border-port-border">
         <span className="text-base sm:text-lg font-medium text-white">{title}</span>
         <div className="flex flex-wrap items-center gap-2 sm:gap-3">
