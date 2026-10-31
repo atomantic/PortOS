@@ -15,7 +15,7 @@ import { parseHarnessModels } from './harnessOutput.js';
  * @param {string|null|undefined} stdout
  * @returns {{ ids: string[], defaultModel: string|null }}
  */
-export function parseGrokModelCatalog(stdout) {
+function parseGrokModelCatalog(stdout) {
   const text = typeof stdout === 'string' ? stdout : '';
   const ids = parseHarnessModels('grok', text);
   const defaultModel = text.match(/^Default model:\s*(\S+)\s*$/m)?.[1] || null;

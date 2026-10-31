@@ -167,7 +167,7 @@ export function ensureGrokTuiArgs(args = []) {
 }
 
 /** Flat catalog id Grok Build lists beside a base when that base has a fast tier. */
-export const GROK_BUILD_FAST_SUFFIX = '-build-fast';
+const GROK_BUILD_FAST_SUFFIX = '-build-fast';
 
 const GROK_FAST_SETTING = /\[fast=(?:true|false)\]$/;
 
@@ -177,7 +177,7 @@ const GROK_FAST_SETTING = /\[fast=(?:true|false)\]$/;
  * @param {unknown} model
  * @returns {string}
  */
-export function stripGrokFastSetting(model) {
+function stripGrokFastSetting(model) {
   return typeof model === 'string' ? model.replace(GROK_FAST_SETTING, '') : '';
 }
 
