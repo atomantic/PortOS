@@ -36,6 +36,9 @@ export default function ConfigTab({ onRefresh }) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [settings, setSettings] = useState(null);
+  // A failed read must not render hard-coded defaults as the stored values.
+  const [settingsFailed, setSettingsFailed] = useState(false);
+  const [cosConfigFailed, setCosConfigFailed] = useState(false);
   const { items: providers, state: providersState, error: providersError, retry: retryProviders } = useListResource(fetchProviders);
   const [selectedProvider, setSelectedProvider] = useState('');
   const [selectedModel, setSelectedModel] = useState('');
@@ -61,10 +64,13 @@ export default function ConfigTab({ onRefresh }) {
 
   const fetchData = async () => {
     const [settingsData, cosConfig, embStatus] = await Promise.all([
-      api.getBrainSettings().catch(() => null),
-      api.getCosConfig().catch(() => null),
+      api.getBrainSettings({ silent: true }).catch(() => null),
+      api.getCosConfig({ silent: true }).catch(() => null),
       api.getEmbeddingStatus().catch(() => null)
     ]);
+
+    setSettingsFailed(!settingsData);
+    setCosConfigFailed(!cosConfig);
 
     if (settingsData) {
       setSettings(settingsData);
@@ -201,6 +207,7 @@ export default function ConfigTab({ onRefresh }) {
 
   // One list backs both pickers, so a failed read replaces both rather than
   // offering a provider list that looks empty.
+  const settingsLoadError = <ListLoadError what="Brain settings" onRetry={fetchData} />;
   const providerLoadError = (
     <ListLoadError what="AI providers" error={providersError} onRetry={retryProviders} />
   );
@@ -253,7 +260,7 @@ export default function ConfigTab({ onRefresh }) {
 
         <div className="space-y-4">
           <div>
-            {providersState === 'error' ? providerLoadError : (
+            {settingsFailed ? settingsLoadError : providersState === 'error' ? providerLoadError : (
               <ProviderModelSelector
                 id="provider"
                 providers={providers}
@@ -312,7 +319,7 @@ export default function ConfigTab({ onRefresh }) {
 
         <div className="space-y-4">
           <div>
-            {providersState === 'error' ? providerLoadError : (
+            {cosConfigFailed ? <ListLoadError what="CoS config" onRetry={fetchData} /> : providersState === 'error' ? providerLoadError : (
               <ProviderModelSelector
                 id="embeddingProvider"
                 providers={providers}
@@ -340,7 +347,7 @@ export default function ConfigTab({ onRefresh }) {
           <div className="flex flex-wrap items-center gap-2 pt-1">
             <button
               onClick={handleSaveEmbedding}
-              disabled={!embeddingDirty() || savingEmbedding}
+              disabled={cosConfigFailed || !embeddingDirty() || savingEmbedding}
               className="flex items-center gap-2 px-3 py-2 bg-port-accent text-white rounded-lg text-sm hover:bg-port-accent/80 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {savingEmbedding ? <BrailleSpinner /> : <Save size={14} />}
@@ -348,7 +355,7 @@ export default function ConfigTab({ onRefresh }) {
             </button>
             <button
               onClick={handleReprocess}
-              disabled={reprocessing || embeddingDirty()}
+              disabled={reprocessing || cosConfigFailed || embeddingDirty()}
               title={embeddingDirty() ? 'Save the embedding config first' : 'Re-embed every brain record'}
               className="flex items-center gap-2 px-3 py-2 bg-port-bg border border-port-border text-white rounded-lg text-sm hover:bg-port-card disabled:opacity-50 disabled:cursor-not-allowed"
             >
@@ -369,6 +376,7 @@ export default function ConfigTab({ onRefresh }) {
           <h3 className="text-md font-semibold text-white">Classification Settings</h3>
         </div>
 
+        {settingsFailed ? settingsLoadError : (
         <div>
           <label htmlFor="confidence" className="block text-sm font-medium text-gray-300 mb-2">
             Confidence Threshold: {formatPercent(confidenceThreshold * 100, { decimals: 0 })}
@@ -392,6 +400,7 @@ export default function ConfigTab({ onRefresh }) {
             Thoughts classified below this confidence level will require manual review
           </p>
         </div>
+        )}
       </section>
 
       {/* YouTube ingest — owns its own load/save (like the embeddings block
@@ -405,6 +414,7 @@ export default function ConfigTab({ onRefresh }) {
           <h3 className="text-md font-semibold text-white">Schedule Settings</h3>
         </div>
 
+        {settingsFailed ? settingsLoadError : (
         <div className="space-y-4">
           <div>
             <label htmlFor="scheduledReviewsEnabled" className="flex items-center gap-2 text-sm font-medium text-gray-300">
@@ -482,6 +492,7 @@ export default function ConfigTab({ onRefresh }) {
             </p>
           </div>
         </div>
+        )}
       </section>
 
       {/* Current Schedule Summary */}
