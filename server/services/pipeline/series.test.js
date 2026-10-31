@@ -172,6 +172,20 @@ describe('pipeline series service', () => {
     expect(updated.updatedAt >= s.updatedAt).toBe(true);
   });
 
+  it('updateSeries clears passthrough fields with empty values and preserves omitted ones', async () => {
+    const s = await svc.createSeries({ name: 'Salt Run', styleNotes: 'S1', logline: 'L1' });
+    const seeded = await svc.updateSeries(s.id, {
+      characterArcs: [{ name: 'Mara', arc: 'Grows brave' }],
+      locked: { arc: true },
+    });
+    expect(seeded.locked.arc).toBe(true);
+    const cleared = await svc.updateSeries(s.id, { styleNotes: '', characterArcs: [], locked: {} });
+    expect(cleared.styleNotes).toBe('');
+    expect(cleared.characterArcs).toEqual([]);
+    expect(cleared.locked).toEqual({});
+    expect(cleared.logline).toBe('L1');
+  });
+
   it('defaults fact-checking fields off (#1588) and round-trips an opt-in + reference', async () => {
     const off = await svc.createSeries({ name: 'Fantasy' });
     expect(off.factCritical).toBe(false);
