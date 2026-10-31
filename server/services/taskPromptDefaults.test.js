@@ -361,7 +361,7 @@ describe('taskPromptDefaults integrity snapshot', () => {
       expect(prompt).toContain('for MERGE_METHOD in merge squash rebase');
       expect(prompt).not.toContain('--delete-branch');
       expect(prompt).toContain('matching persisted retirement receipt');
-      expect(prompt).toContain('untracked and ignored bytes');
+      expect(prompt).toContain('MERGED at its exact head is disposable');
       expect(prompt).toContain('"--$MERGE_METHOD" --match-head-commit "$CI_VERIFIED_HEAD"');
       expect(prompt).toContain('never a shell fallback');
     }
