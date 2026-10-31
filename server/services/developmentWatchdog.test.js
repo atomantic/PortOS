@@ -366,3 +366,185 @@ describe('development watchdog authorization grants', () => {
     expect(m.adds).toHaveLength(want.create ? 1 : 0);
   });
 });
+
+describe('development watchdog scan bookkeeping', () => {
+  const mergedFollowUp = () => ({
+    id: 'sys-rl-merged', status: 'pending',
+    metadata: {
+      app: 'app', reviewLoopFollowUp: true, reviewLoopPRNumber: '5', reviewLoopPRHost: 'github.com',
+      reviewLoopPROwner: 'atomantic', reviewLoopPRRepo: 'example', reviewLoopPRUrl: 'https://github.com/atomantic/example/pull/5',
+    },
+  });
+
+  it('counts paused agents and pending tasks against free slots before dispatching', async () => {
+    m.backlog = [{ ref: '42' }];
+    m.state.agents = { a: { status: 'paused', taskId: 'x' }, b: { status: 'running', taskId: 'y' } };
+    m.tasks = [{ id: 'p', status: 'pending', metadata: { app: 'other' } }];
+    const receipt = await runDevelopmentWatchdog({ force: true });
+    expect(receipt.availableSlots).toBe(0);
+    expect(receipt.decisions).toEqual([expect.objectContaining({ kind: 'issue', outcome: 'capacity-full' })]);
+    expect(receipt.counts.deferred).toBe(1);
+    expect(m.adds).toEqual([]);
+  });
+
+  it('caps dispatch at the per-project limit and spends one global slot per queued item', async () => {
+    m.backlog = [{ ref: '42' }];
+    Object.assign(m.state.config, { maxConcurrentAgents: 5, maxConcurrentAgentsPerProject: 1 });
+    m.tasks = [{ id: 'p', status: 'pending', metadata: { app: 'app' } }];
+    let receipt = await runDevelopmentWatchdog({ force: true });
+    expect(receipt.availableSlots).toBe(4);
+    expect(receipt.decisions[0].outcome).toBe('capacity-full');
+    m.tasks = []; delete m.state.config.maxConcurrentAgentsPerProject; m.state.config.maxConcurrentAgents = 3;
+    receipt = await runDevelopmentWatchdog({ force: true });
+    expect(receipt.decisions[0].outcome).toBe('queued');
+    expect(receipt.availableSlots).toBe(2);
+  });
+
+  it('a dry run spends a slot per would-queue item while a deferred dispatch spends none', async () => {
+    m.state.config.maxConcurrentAgents = 1;
+    m.prs = [orphan]; m.backlog = [{ ref: '42' }];
+    let receipt = await runDevelopmentWatchdog({ dryRun: true });
+    expect(receipt.decisions.map(d => [d.kind, d.outcome])).toEqual([['pr', 'would-queue'], ['issue', 'capacity-full']]);
+    m.prs = [{ ...orphan, headBranch: 'fix' }]; m.dependencies = [10]; m.dependencyOpen = true;
+    receipt = await runDevelopmentWatchdog({ force: true });
+    expect(receipt.decisions.map(d => [d.kind, d.outcome, d.reason])).toEqual([['pr', 'deferred', 'open-dependency'], ['issue', 'queued', undefined]]);
+  });
+
+  it('records a dispatch that throws as a deferred, source-unavailable decision', async () => {
+    m.backlog = [{ ref: '42' }];
+    m.prepare.mockRejectedValue(new Error('boom'));
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const receipt = await runDevelopmentWatchdog({ force: true });
+    spy.mockRestore();
+    expect(receipt.decisions[0]).toMatchObject({ outcome: 'deferred', reason: 'dispatch-source-unavailable' });
+  });
+
+  it('marks a queued PR for resolution and keeps that task id while its evidence is unchanged', async () => {
+    m.prs = [orphan];
+    let receipt = await runDevelopmentWatchdog({ force: true });
+    expect(receipt.apps[0].pullRequests[0]).toMatchObject({ disposition: 'queued-for-resolution', taskId: 'resolution' });
+    receipt = await runDevelopmentWatchdog({ force: true });
+    expect(receipt.apps[0].pullRequests[0]).toMatchObject({ disposition: 'blocked', reason: 'unchanged-after-dispatch', taskId: 'resolution' });
+  });
+
+  it('an active agent owns its PR even when its task record is gone or already terminal', async () => {
+    m.prs = [orphan];
+    m.state.agents = { a: { status: 'running', taskId: 'done' } };
+    m.tasks = [{ id: 'done', status: 'completed', metadata: { app: 'app', reviewLoopPRUrl: orphan.url } }];
+    let receipt = await runDevelopmentWatchdog({ force: true });
+    expect(receipt.apps[0].pullRequests[0].disposition).toBe('actively-owned');
+    m.tasks = [];
+    m.state.agents = { a: { status: 'running', taskId: 'gone', metadata: { app: 'app', reviewLoopPRUrl: orphan.url } } };
+    receipt = await runDevelopmentWatchdog({ force: true });
+    expect(receipt.apps[0].pullRequests[0].disposition).toBe('actively-owned');
+    expect(m.adds).toEqual([]);
+  });
+
+  it('lists readable recovery work by kind', async () => {
+    m.tasks = [
+      { id: 'r1', status: 'pending', metadata: { app: 'app', reviewLoopFollowUp: true, sourceAgentId: 'agent-1', sourceTaskId: 'task-1' } },
+      { id: 'i1', status: 'completed', metadata: { app: 'app', isInvestigation: true } },
+      { id: 'd1', status: 'blocked', metadata: { taskApp: 'app', diagnostics: { exitCode: 1 }, blockedCategory: 'max-spawns' } },
+      { id: 'o1', status: 'pending', metadata: { app: 'elsewhere', sourceAgentId: 'agent-2' } },
+      { id: 'n1', status: 'pending', metadata: { app: 'app' } },
+    ];
+    const receipt = await runDevelopmentWatchdog({ force: true });
+    expect(receipt.recovery).toEqual([
+      { taskId: 'r1', status: 'pending', sourceAgentId: 'agent-1', sourceTaskId: 'task-1', kind: 'review-follow-up', blockedReason: null },
+      { taskId: 'i1', status: 'completed', sourceAgentId: null, sourceTaskId: null, kind: 'investigation', blockedReason: null },
+      { taskId: 'd1', status: 'blocked', sourceAgentId: null, sourceTaskId: null, kind: 'recovery', blockedReason: 'max-spawns' },
+    ]);
+  });
+
+  it('retires terminal follow-ups only on a mutating scan with complete peer ownership', async () => {
+    m.prStates['5'] = { status: 'known', state: 'MERGED' };
+    m.tasks = [mergedFollowUp()];
+    await runDevelopmentWatchdog({ dryRun: true });
+    m.peers = [{ id: 'peer', fullSync: true }];
+    await runDevelopmentWatchdog({ force: true });
+    expect(m.updates).toEqual([]);
+    expect(m.tasks[0].status).toBe('pending');
+  });
+
+  it('records no decisions while participating peer ownership is unknown', async () => {
+    m.backlog = [{ ref: '42' }]; m.peers = [{ id: 'peer', fullSync: true }];
+    const receipt = await runDevelopmentWatchdog({ force: true });
+    expect(receipt.decisions).toEqual([]);
+    expect(receipt.apps[0].complete).toBe(true);
+  });
+
+  it('keeps when a PR was first observed across scans', async () => {
+    m.prs = [{ ...orphan, headBranch: 'fix', checks: [{ status: 'PENDING' }] }];
+    const first = await runDevelopmentWatchdog({ force: true });
+    first.apps[0].pullRequests[0].firstObservedAt = '2020-01-01T00:00:00.000Z';
+    expect((await runDevelopmentWatchdog({ force: true })).apps[0].pullRequests[0].firstObservedAt).toBe('2020-01-01T00:00:00.000Z');
+    const prior = m.state.developmentWatchdog.latest;
+    delete prior.apps[0].pullRequests[0].firstObservedAt; prior.checkedAt = '2019-01-01T00:00:00.000Z';
+    expect((await runDevelopmentWatchdog({ force: true })).apps[0].pullRequests[0].firstObservedAt).toBe('2019-01-01T00:00:00.000Z');
+  });
+
+  it('counts owned skips and prevented duplicate admissions', async () => {
+    m.backlog = [{ ref: '42' }]; m.branch = 'abcdef\trefs/heads/claim/issue-42';
+    expect((await runDevelopmentWatchdog({ force: true })).counts.ownedSkips).toBe(1);
+    m.branch = ''; m.duplicate = true;
+    expect((await runDevelopmentWatchdog({ force: true })).counts.duplicateAdmissionsPrevented).toBe(1);
+  });
+
+  it('marks an unreadable scope incomplete and still persists a disabled scan over a prior receipt', async () => {
+    m.state.config.persistentMindCapabilities.allowedAppIds = [];
+    const scoped = await runDevelopmentWatchdog({ force: true });
+    expect(scoped).toMatchObject({ complete: false, blockers: ['no-readable-maintainer-scope'] });
+    m.state.config.persistentMindMaintainer.enabled = false;
+    const disabled = await runDevelopmentWatchdog({ force: true });
+    expect(await readDevelopmentWatchdogSnapshot()).toBe(disabled);
+  });
+
+  it('reports a granted-out app in a partly readable scope without inspecting it', async () => {
+    m.backlog = [{ ref: '42' }];
+    m.state.config.persistentMindMaintainer.appIds = ['app', 'other'];
+    m.state.config.persistentMindCapabilities.allowedAppIds = ['other'];
+    const receipt = await runDevelopmentWatchdog({ force: true });
+    expect(receipt.apps.find(app => app.appId === 'app')).toMatchObject({ complete: false, blockers: ['app-unavailable-or-not-granted'] });
+    expect(receipt.decisions).toEqual([]);
+  });
+
+  it('prunes the dispatch ledger only for PRs a complete scan no longer sees', async () => {
+    m.prs = [orphan];
+    await runDevelopmentWatchdog({ force: true });
+    expect(Object.keys(m.state.developmentWatchdog.dispatches)).toEqual(['app:pr:5']);
+    m.prs = []; m.issueTruncated = true;
+    await runDevelopmentWatchdog({ force: true });
+    expect(Object.keys(m.state.developmentWatchdog.dispatches)).toEqual(['app:pr:5']);
+    m.issueTruncated = false;
+    await runDevelopmentWatchdog({ force: true });
+    expect(m.state.developmentWatchdog.dispatches).toEqual({});
+  });
+
+  it('leaves a terminal follow-up alone when an agent picks it up after the scan began', async () => {
+    m.tasks = [mergedFollowUp()];
+    m.prStates = { get 5() {
+      m.state.agents = { a: { status: 'running', taskId: 'sys-rl-merged' } };
+      return { status: 'known', state: 'MERGED' };
+    } };
+    const receipt = await runDevelopmentWatchdog({ force: true });
+    expect(m.updates).toEqual([]);
+    expect(receipt.apps[0].retiredReviewFollowUps).toEqual([]);
+  });
+
+  it('defers a dispatch when agents fill the slots after the scan measured capacity', async () => {
+    m.backlog = [{ ref: '42' }];
+    m.metadata.mockImplementation(async () => {
+      m.state.agents = { a: { status: 'running' }, b: { status: 'running' }, c: { status: 'queued' } };
+      return { metadata: {} };
+    });
+    const receipt = await runDevelopmentWatchdog({ force: true });
+    expect(receipt.decisions[0]).toMatchObject({ outcome: 'deferred', reason: 'capacity-changed' });
+    expect(m.adds).toEqual([]);
+  });
+
+  it('bounds receipt history to the latest 24 scans', async () => {
+    for (let i = 0; i < 26; i++) await runDevelopmentWatchdog({ force: true });
+    expect(m.state.developmentWatchdog.history).toHaveLength(24);
+    expect(m.state.developmentWatchdog.history.at(-1)).toBe(m.state.developmentWatchdog.latest);
+  });
+});
