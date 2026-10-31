@@ -39,7 +39,9 @@ const CLIENT_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 // variant (`disabled:`, `group-focus:`) is not a hover-dependent hide.
 const HIDE = /^(?:(?:sm|md|lg|xl|2xl):)*(?:opacity-0|hidden|invisible)$/;
 const HOVER_GATED_HIDE = /^\[@media\(hover:hover\)\]:/;
-const HOVER_REVEAL = /(?:^|:)(?:group|peer)-hover(?:\/[\w-]+)?:/;
+// Only a hover variant that SHOWS something is a reveal; `group-hover:text-white`
+// beside a plain responsive `hidden md:inline` is not.
+const HOVER_REVEAL = /(?:^|:)(?:group|peer)-hover(?:\/[\w-]+)?:(?:opacity-\d+|visible|flex|block|inline|inline-flex|inline-block|grid)$/;
 const TOUCH_RESTORE = /^(?:pointer-coarse|\[@media\(hover:none\)\]):(?:opacity-100|flex|block|inline-flex|visible)$/;
 
 function violationsIn(rawSource, file) {
@@ -80,6 +82,7 @@ describe('hover-reveal touch conventions', () => {
     expect(flagged('opacity-40 group-hover:opacity-100 disabled:opacity-0')).toBe(0);
     // A hide with no hover reveal is a plain responsive hide.
     expect(flagged('hidden sm:flex')).toBe(0);
+    expect(flagged('hidden md:inline group-hover:text-white')).toBe(0);
     expect(violationsIn('// e.g. "sm:opacity-0 sm:group-hover:opacity-100"', 'probe.jsx')).toEqual([]);
   });
 
