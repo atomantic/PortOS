@@ -111,7 +111,7 @@ export const TimelineBlock = memo(function TimelineBlock({
         type="button"
         onClick={(e) => { e.stopPropagation(); onRemove(clip._key); }}
         onPointerDown={(e) => e.stopPropagation()}
-        className="absolute top-0 right-0 inline-flex min-w-[44px] min-h-[44px] items-start justify-end p-1 rounded opacity-40 lg:opacity-0 lg:group-hover:opacity-100 focus-visible:opacity-100 transition-opacity text-white group/remove"
+        className="absolute top-0 right-0 inline-flex min-w-[44px] min-h-[44px] items-start justify-end p-1 rounded opacity-40 [@media(hover:hover)]:lg:opacity-0 lg:group-hover:opacity-100 focus-visible:opacity-100 transition-opacity text-white group/remove"
         title="Remove from timeline"
         aria-label={`Remove ${removeLabel} from timeline`}
       >

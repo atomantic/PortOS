@@ -9,7 +9,7 @@ export default function ThemePickerPanel({ compact = false }) {
   const { themeId, setTheme } = useThemeContext();
 
   return (
-    <div className={compact ? 'grid gap-2' : 'grid gap-3 sm:grid-cols-2 xl:grid-cols-2'}>
+    <div className={compact ? 'grid gap-2' : 'grid grid-cols-1 gap-3 sm:grid-cols-2'}>
       {FAMILIES.map(group => {
         const Icon = getFamilyIcon(group.family);
         const activeMode = themeId === group.day?.id ? 'day' : themeId === group.night?.id ? 'night' : null;

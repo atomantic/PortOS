@@ -10,7 +10,7 @@ export default function FavoritesFilterChip({ active, onToggle, size = 'sm' }) {
     <button
       type="button"
       onClick={onToggle}
-      className={`flex items-center gap-1 ${padding} rounded-full border text-xs ${
+      className={`flex items-center gap-1 min-h-[44px] sm:min-h-0 ${padding} rounded-full border text-xs ${
         active
           ? 'bg-port-warning/20 border-port-warning text-port-warning'
           : 'border-port-border text-gray-400 hover:text-white hover:bg-port-border/50'

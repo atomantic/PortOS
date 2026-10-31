@@ -49,7 +49,7 @@ function PointerSheetFigure({ variant, filename, bad = false, remove = null }) {
         {variant}
       </figcaption>
       {remove && (
-        <div className={`port-media-overlay absolute top-1 right-1 flex gap-1 rounded transition-opacity ${bad || remove.armed ? 'opacity-100' : 'opacity-100 sm:opacity-0 sm:group-hover:opacity-100 focus-within:opacity-100'}`}>
+        <div className={`port-media-overlay absolute top-1 right-1 flex gap-1 rounded transition-opacity ${bad || remove.armed ? 'opacity-100' : 'opacity-100 [@media(hover:hover)]:sm:opacity-0 sm:group-hover:opacity-100 focus-within:opacity-100'}`}>
           {remove.armed ? (
             <ConfirmButtonPair prompt="Remove sheet?" confirmText="Remove" cancelText="Cancel" ariaLabel="Confirm sheet removal"
               busy={remove.busy} busyText="Removing…" onConfirm={remove.onConfirm} onCancel={remove.onCancel} largeTouchTargets />

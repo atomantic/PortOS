@@ -63,7 +63,7 @@ export default function CatalogMediaTile({
         </div>
       )}
       {m.readOnly && <p className="text-xs text-gray-500 p-2 break-words">Read-only provenance · {m.ingredientId || 'retained media'}</p>}
-      {!m.readOnly && <div className={`port-media-overlay absolute top-1 right-1 flex gap-1 rounded transition-opacity ${pinActions ? 'opacity-100' : 'opacity-100 sm:opacity-0 sm:group-hover:opacity-100 focus-within:opacity-100'}`}>
+      {!m.readOnly && <div className={`port-media-overlay absolute top-1 right-1 flex gap-1 rounded transition-opacity ${pinActions ? 'opacity-100' : 'opacity-100 [@media(hover:hover)]:sm:opacity-0 sm:group-hover:opacity-100 focus-within:opacity-100'}`}>
         {extraActions}
         {onDetach && (armedDetach === tileKey ? (
           <ConfirmButtonPair prompt="Detach?" confirmText="Detach" cancelText="Cancel"

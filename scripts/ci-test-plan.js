@@ -841,6 +841,7 @@ export const structuralTestsFor = (changedFiles, trackedSet) => {
     add('client/src/globalShadowConventions.test.js');
     add('client/src/headingTruncationConventions.test.js');
     add('client/src/hooks/mountedRefConventions.test.js');
+    add('client/src/hoverRevealConventions.test.js');
     add('client/src/listFetchConventions.test.js');
     add('client/src/moduleContractConventions.test.js');
     add('client/src/numberFormattingConventions.test.js');

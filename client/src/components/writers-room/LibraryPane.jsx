@@ -389,7 +389,7 @@ function WorkRow({ work, isActive, confirming, onSelect, onRequestDelete, onConf
         </button>
         <button
           onClick={onSelect}
-          className={`flex-1 flex items-center gap-2 px-2 py-1.5 rounded text-left text-sm transition-colors min-w-0 ${
+          className={`flex-1 flex items-center gap-2 px-2 pr-11 [@media(hover:hover)]:sm:pr-2 py-1.5 rounded text-left text-sm transition-colors min-w-0 ${
             isActive ? 'bg-port-accent/20 text-port-accent' : 'text-gray-300 hover:bg-port-card hover:text-white'
           }`}
         >
@@ -410,7 +410,7 @@ function WorkRow({ work, isActive, confirming, onSelect, onRequestDelete, onConf
       ) : (
         <button
           onClick={onRequestDelete}
-          className="absolute right-0 top-1/2 -translate-y-1/2 flex items-center justify-center min-w-[44px] min-h-[44px] transition-opacity opacity-40 sm:opacity-0 group-hover:opacity-100 focus:opacity-100 text-gray-500 hover:text-port-error"
+          className="absolute right-0 top-1/2 -translate-y-1/2 flex items-center justify-center min-w-[44px] min-h-[44px] transition-opacity opacity-40 [@media(hover:hover)]:sm:opacity-0 group-hover:opacity-100 focus:opacity-100 text-gray-500 hover:text-port-error"
           aria-label={`Delete ${work.title}`}
           title="Delete"
         >
@@ -475,7 +475,7 @@ function FolderRow({ folder, partial, works, isOpen, isDragging, confirming, onT
           <>
             <button
               onClick={onCreateWork}
-              className="flex items-center justify-center min-w-[44px] min-h-[44px] text-gray-500 hover:text-port-accent transition-opacity opacity-40 sm:opacity-0 group-hover/folder:opacity-100 focus:opacity-100"
+              className="flex items-center justify-center min-w-[44px] min-h-[44px] text-gray-500 hover:text-port-accent transition-opacity opacity-40 [@media(hover:hover)]:sm:opacity-0 group-hover/folder:opacity-100 focus:opacity-100"
               aria-label="Add work to folder"
               title="New work in folder"
             >
@@ -483,7 +483,7 @@ function FolderRow({ folder, partial, works, isOpen, isDragging, confirming, onT
             </button>
             <button
               onClick={onRequestDelete}
-              className="flex items-center justify-center min-w-[44px] min-h-[44px] transition-opacity opacity-40 sm:opacity-0 group-hover/folder:opacity-100 focus:opacity-100 text-gray-500 hover:text-port-error"
+              className="flex items-center justify-center min-w-[44px] min-h-[44px] transition-opacity opacity-40 [@media(hover:hover)]:sm:opacity-0 group-hover/folder:opacity-100 focus:opacity-100 text-gray-500 hover:text-port-error"
               aria-label={`Delete folder ${folder.name}`}
               title="Delete folder"
             >

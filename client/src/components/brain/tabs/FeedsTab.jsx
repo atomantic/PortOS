@@ -252,7 +252,7 @@ export default function FeedsTab({ onRefresh }) {
               <div key={feed.id} className="group relative">
                 <button
                   onClick={() => setSelectedFeedId(selectedFeedId === feed.id ? null : feed.id)}
-                  className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors flex items-center gap-2 ${
+                  className={`w-full text-left px-3 pr-24 [@media(hover:hover)]:sm:pr-3 py-2 rounded-lg text-sm transition-colors flex items-center gap-2 ${
                     selectedFeedId === feed.id
                       ? 'bg-port-accent/20 text-port-accent'
                       : 'text-gray-400 hover:text-white hover:bg-port-card'
@@ -268,7 +268,7 @@ export default function FeedsTab({ onRefresh }) {
                   )}
                 </button>
                 {/* Feed actions on hover */}
-                <div className="absolute right-0 top-0 h-full flex items-center gap-0.5 pr-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+                <div className="absolute right-0 top-0 h-full flex items-center gap-0.5 pr-1 opacity-100 [@media(hover:hover)]:sm:opacity-0 sm:group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
                   <button
                     onClick={(e) => { e.stopPropagation(); handleRefreshFeed(feed.id); }}
                     className="min-h-[44px] min-w-[44px] flex items-center justify-center p-1 text-gray-500 hover:text-white rounded"

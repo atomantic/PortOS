@@ -924,7 +924,7 @@ export default function LearningTab() {
                             <tr key={`${entry.taskType}-${tier.tier}`} className="border-t border-port-border">
                               {tIdx === 0 ? (
                                 <td className="p-3 text-gray-300 max-w-[200px] align-top" rowSpan={entry.tiers.length}>
-                                  <div className="truncate">{entry.taskType}</div>
+                                  <div className="[overflow-wrap:anywhere]">{entry.taskType}</div>
                                   {entry.suggestion && (
                                     <div className="text-xs text-gray-500 mt-1" title={entry.suggestion.reason || undefined}>
                                       {entry.suggestion.tier && <>Suggests <span className="text-port-accent">{entry.suggestion.tier}</span></>}

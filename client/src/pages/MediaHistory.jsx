@@ -241,13 +241,13 @@ export default function MediaHistory() {
             )}
           </div>
         </div>
-        <div className="flex items-center gap-1 text-xs">
+        <div className="flex items-center gap-1 flex-wrap text-xs">
           {FILTERS.map((f) => (
             <button
               key={f.id}
               type="button"
               onClick={() => setFilter(f.id)}
-              className={`px-2.5 py-1 rounded-full border ${
+              className={`min-h-[44px] sm:min-h-0 px-2.5 py-1 rounded-full border ${
                 filter === f.id
                   ? 'bg-port-accent/20 border-port-accent text-port-accent'
                   : 'border-port-border text-gray-400 hover:text-white hover:bg-port-border/50'

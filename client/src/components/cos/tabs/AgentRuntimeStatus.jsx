@@ -137,7 +137,7 @@ export function AgentRuntimeStatus({
       {!remote && (
         <button
           onClick={onOpenPrompt}
-          className="flex items-center gap-1 px-2 py-0.5 rounded bg-port-border/40 text-gray-400 hover:bg-port-border/60 hover:text-white whitespace-nowrap"
+          className="flex items-center gap-1 px-2 py-0.5 pointer-coarse:min-h-11 rounded bg-port-border/40 text-gray-400 hover:bg-port-border/60 hover:text-white whitespace-nowrap"
           title="View the prompt this agent was given at spawn"
         >
           <MessageSquare size={10} aria-hidden="true" className="shrink-0" />

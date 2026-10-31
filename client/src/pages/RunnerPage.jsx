@@ -451,9 +451,9 @@ ${prompt.trim()}`;
               <button
                 aria-label="Remove screenshot"
                 onClick={() => removeScreenshot(s.id)}
-                className="absolute -top-2 -right-2 w-5 h-5 bg-port-error rounded-full flex items-center justify-center opacity-100 sm:opacity-0 sm:group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity"
+                className="absolute -top-2 -right-2 w-5 h-5 pointer-coarse:-top-3 pointer-coarse:-right-3 pointer-coarse:w-11 pointer-coarse:h-11 flex items-center justify-center opacity-100 [@media(hover:hover)]:sm:opacity-0 sm:group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity"
               >
-                <X size={12} />
+                <span className="flex w-5 h-5 bg-port-error rounded-full items-center justify-center"><X size={12} aria-hidden="true" /></span>
               </button>
             </div>
           ))}
