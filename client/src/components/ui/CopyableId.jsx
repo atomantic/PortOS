@@ -17,7 +17,7 @@ export default function CopyableId({ id, chars = 8, className = '' }) {
       onClick={(e) => { e.stopPropagation(); copyToClipboard(id, 'ID copied'); }}
       title={`Copy id: ${id}`}
       aria-label={`Copy id ${id}`}
-      className={`inline-flex items-center gap-1 font-mono text-[10px] text-gray-500 hover:text-gray-300 transition-colors ${className}`.trim()}
+      className={`inline-flex items-center gap-1 pointer-coarse:min-h-11 font-mono text-[10px] text-gray-500 hover:text-gray-300 transition-colors ${className}`.trim()}
     >
       <span>{short}</span>
       <Copy size={10} aria-hidden="true" className="shrink-0" />
