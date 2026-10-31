@@ -53,4 +53,42 @@ describe('ActivityTab', () => {
     expect(await screen.findByRole('heading', { name: 'Activity Log' })).toBeInTheDocument();
     expect(api.getAgentActivityTimeline).toHaveBeenCalledTimes(2);
   });
+  it('keeps the newest filter when an earlier filter answers late', async () => {
+    let resolvePost;
+    api.getAgentActivityTimeline.mockImplementation(async (_l, _a, _before, action) => {
+      if (action === 'post') return new Promise((resolve) => { resolvePost = resolve; });
+      if (action === 'comment') return page('comment', 1, 'c');
+      return page('vote', 1, 'v');
+    });
+
+    render(<ActivityTab agentId="agent-1" />);
+    await screen.findByText('vote');
+    const filter = screen.getByLabelText('Filter by action');
+    await act(async () => { fireEvent.change(filter, { target: { value: 'post' } }); });
+    await act(async () => { fireEvent.change(filter, { target: { value: 'comment' } }); });
+    expect(await screen.findByText('comment')).toBeInTheDocument();
+
+    await act(async () => { resolvePost(page('post', 1, 'p')); });
+    expect(screen.getByText('comment')).toBeInTheDocument();
+    expect(screen.queryByText('post')).toBeNull();
+  });
+
+  it('drops a Load More page that resolves after the filter changed', async () => {
+    let resolveMore;
+    api.getAgentActivityTimeline.mockImplementation(async (_l, _a, before, action) => {
+      if (before) return new Promise((resolve) => { resolveMore = resolve; });
+      return action === 'comment' ? page('comment', 1, 'c') : page('vote', 50, 'v');
+    });
+
+    render(<ActivityTab agentId="agent-1" />);
+    const loadMoreButton = await screen.findByRole('button', { name: 'Load More' });
+    await act(async () => { fireEvent.click(loadMoreButton); });
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText('Filter by action'), { target: { value: 'comment' } });
+    });
+    expect(await screen.findByText('comment')).toBeInTheDocument();
+
+    await act(async () => { resolveMore(page('vote', 50, 'late')); });
+    expect(screen.queryByText('vote')).toBeNull();
+  });
 });

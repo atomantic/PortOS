@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import * as api from '../../../services/api';
 import BrailleSpinner from '../../BrailleSpinner';
 import ListLoadError from '../../ui/ListLoadError';
@@ -13,16 +13,26 @@ export default function ActivityTab({ agentId }) {
   const [actionFilter, setActionFilter] = useState('');
   const [hasMore, setHasMore] = useState(true);
   const [loadError, setLoadError] = useState(false);
+  // Bumped by every first-page load. A response (first page or Load More) from
+  // an earlier generation is dropped, so switching the filter twice quickly, or
+  // switching it while Load More is in flight, never shows or appends another
+  // filter's rows under the current one.
+  const listGenerationRef = useRef(0);
+  const loadingMoreRef = useRef(false);
 
   const fetchData = useCallback(async () => {
+    const generation = ++listGenerationRef.current;
     setLoadError(false);
-    await api.getAgentActivityTimeline(PAGE_SIZE, [agentId], null, actionFilter || null, { silent: true })
-      .then((activitiesData) => {
-        setActivities(activitiesData);
-        setHasMore(activitiesData.length >= PAGE_SIZE);
-      })
-      .catch(() => setLoadError(true))
-      .finally(() => setLoading(false));
+    const activitiesData = await api.getAgentActivityTimeline(PAGE_SIZE, [agentId], null, actionFilter || null, { silent: true })
+      .catch(() => null);
+    if (generation !== listGenerationRef.current) return;
+    if (activitiesData) {
+      setActivities(activitiesData);
+      setHasMore(activitiesData.length >= PAGE_SIZE);
+    } else {
+      setLoadError(true);
+    }
+    setLoading(false);
   }, [agentId, actionFilter]);
 
   useEffect(() => {
@@ -36,12 +46,17 @@ export default function ActivityTab({ agentId }) {
   };
 
   const loadMore = async () => {
-    if (activities.length === 0) return;
+    if (activities.length === 0 || loadingMoreRef.current) return;
+    loadingMoreRef.current = true;
+    const generation = listGenerationRef.current;
 
     const lastTimestamp = activities[activities.length - 1].timestamp;
+    // The API helper toasts a failure; the loaded rows stay and Load More stays available.
     const moreData = await api.getAgentActivityTimeline(
       PAGE_SIZE, [agentId], lastTimestamp, actionFilter || null
-    );
+    ).catch(() => null);
+    loadingMoreRef.current = false;
+    if (!moreData || generation !== listGenerationRef.current) return;
 
     if (moreData.length < PAGE_SIZE) {
       setHasMore(false);
