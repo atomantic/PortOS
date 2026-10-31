@@ -16,6 +16,8 @@ import {
   prepareGrokPromptFile,
   extractGrokFinalMessage,
   withGrokStreamingJsonOutput,
+  grokSpeedTarget,
+  grokServiceTierModel,
 } from './grok.js';
 
 describe('grok — constants', () => {
@@ -213,5 +215,40 @@ describe('grok — streaming-json final message', () => {
       expect(withGrokStreamingJsonOutput(['--model', 'm', ...pinned, '--prompt-file', '/dev/stdin']))
         .toEqual(['--model', 'm', '--prompt-file', '/dev/stdin', '--output-format', 'streaming-json']);
     }
+  });
+});
+
+describe('grok — speed pairing', () => {
+  const ids = ['grok-4.7', 'grok-4.7-build-fast', 'grok-4.6', 'grok-code-fast-1'];
+
+  it('advertises both tiers only when the catalog lists the base and its -build-fast sibling', () => {
+    expect(grokSpeedTarget('grok-4.7', ids)).toEqual({
+      model: 'grok-4.7', modelBase: 'grok-4.7', values: ['standard', 'fast'], reason: null,
+    });
+    expect(grokSpeedTarget('grok-4.7-build-fast', ids)).toEqual({
+      model: 'grok-4.7-build-fast', modelBase: 'grok-4.7', values: ['standard', 'fast'], reason: null,
+    });
+  });
+
+  it('does not treat a generic -fast id, or a model with no sibling, as a fast tier', () => {
+    expect(grokSpeedTarget('grok-code-fast-1', ids).values).toEqual([]);
+    expect(grokSpeedTarget('grok-code-fast-1', ids).reason).toMatch(/did not advertise/);
+    expect(grokSpeedTarget('grok-4.6', ids).modelBase).toBeNull();
+    expect(grokSpeedTarget('grok-configured-default', ['grok-4.6'], null).reason).toMatch(/explicit model/);
+  });
+
+  it('uses the catalog default for the configured-default sentinel', () => {
+    expect(grokSpeedTarget('grok-configured-default', ids, 'grok-4.7-build-fast')).toMatchObject({
+      model: 'grok-4.7-build-fast', modelBase: 'grok-4.7', values: ['standard', 'fast'],
+    });
+  });
+
+  it('requests fast and standard as a model setting and does not guess a flat fast id', () => {
+    expect(grokServiceTierModel('grok-4.7', 'fast', 'grok-4.7')).toBe('grok-4.7[fast=true]');
+    expect(grokServiceTierModel('grok-4.7-build-fast', 'standard', 'grok-4.7')).toBe('grok-4.7[fast=false]');
+    expect(grokServiceTierModel(null, 'fast', 'grok-4.7')).toBe('grok-4.7[fast=true]');
+    expect(grokServiceTierModel('grok-4.7-build-fast', 'fast', null)).toBeNull();
+    expect(grokServiceTierModel('grok-configured-default', 'standard', null)).toBeNull();
+    expect(grokServiceTierModel('grok-code-fast-1', null, null)).toBe('grok-code-fast-1');
   });
 });

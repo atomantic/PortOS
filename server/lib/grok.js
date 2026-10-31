@@ -18,7 +18,9 @@
  *
  * Dependency-light on purpose: imports only `providerModels.js` helpers and node
  * builtins, mirroring `cliProviderArgs.js` so it stays importable from the
- * standalone autofixer process.
+ * standalone autofixer process. Speed pairing stays in this file; the
+ * `grok models` probe lives in `grokModelCatalog.js` so this module does not
+ * spawn a process.
  */
 
 import { isCliProvider, isTuiProvider } from './providerTypes.js';
@@ -26,7 +28,7 @@ import os from 'os';
 import { writeFileSync, unlinkSync } from 'fs';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
-import { argvHasFlag, hasModelFlag, commandBasename } from './providerModels.js';
+import { argvHasFlag, hasModelFlag, commandBasename, GROK_CONFIGURED_DEFAULT } from './providerModels.js';
 
 const NOOP_CLEANUP = () => {};
 
@@ -162,6 +164,88 @@ export function ensureGrokTuiArgs(args = []) {
     out.push('--permission-mode', 'bypassPermissions');
   }
   return out;
+}
+
+/** Flat catalog id Grok Build lists beside a base when that base has a fast tier. */
+export const GROK_BUILD_FAST_SUFFIX = '-build-fast';
+
+const GROK_FAST_SETTING = /\[fast=(?:true|false)\]$/;
+
+/**
+ * Drop a trailing `[fast=true]` / `[fast=false]` setting. A generic `-fast`
+ * suffix is a different model (`grok-code-fast-1`) and is left intact.
+ * @param {unknown} model
+ * @returns {string}
+ */
+export function stripGrokFastSetting(model) {
+  return typeof model === 'string' ? model.replace(GROK_FAST_SETTING, '') : '';
+}
+
+/**
+ * True when saved argv already names a model, including a baked fast setting
+ * or a flat `-build-fast` id. Speed must not append a second `--model`.
+ * @param {unknown} args
+ * @returns {boolean}
+ */
+export function grokSpeedArgsConflict(args) {
+  if (hasModelFlag(args)) return true;
+  if (!Array.isArray(args)) return false;
+  return args.some((arg) => typeof arg === 'string' && (arg.includes('[fast=') || arg.includes(GROK_BUILD_FAST_SUFFIX)));
+}
+
+/**
+ * Pair a selected model with a `grok models` listing. Fast is available only
+ * when that listing contains both the base id and `${base}-build-fast`. A
+ * selected flat fast id maps back to the base only when the base is present.
+ * The configured-default sentinel uses `defaultModelId` from that listing.
+ * @param {string|null|undefined} model
+ * @param {string[]} [catalogIds]
+ * @param {string|null} [defaultModelId]
+ * @returns {{ model: string|null, modelBase: string|null, values: string[], reason: string|null }}
+ */
+export function grokSpeedTarget(model, catalogIds = [], defaultModelId = null) {
+  const ids = Array.isArray(catalogIds) ? catalogIds.filter((id) => typeof id === 'string' && id) : [];
+  const explicit = model && model !== GROK_CONFIGURED_DEFAULT ? stripGrokFastSetting(model) : '';
+  const selected = explicit || stripGrokFastSetting(defaultModelId || '');
+  if (!selected) {
+    return { model: null, modelBase: null, values: [], reason: 'Choose an explicit model before changing speed.' };
+  }
+  const siblingBase = selected.endsWith(GROK_BUILD_FAST_SUFFIX)
+    ? selected.slice(0, -GROK_BUILD_FAST_SUFFIX.length)
+    : '';
+  const modelBase = siblingBase && ids.includes(siblingBase) ? siblingBase : selected;
+  const fastId = `${modelBase}${GROK_BUILD_FAST_SUFFIX}`;
+  if (!ids.includes(modelBase) || !ids.includes(fastId)) {
+    return { model: selected, modelBase: null, values: [], reason: 'This model did not advertise a fast serving tier.' };
+  }
+  return { model: selected, modelBase, values: ['standard', 'fast'], reason: null };
+}
+
+/**
+ * The `--model` value for an explicit speed, or null when the base cannot be
+ * named. Null does not throw: the caller raises `executionOptionsError`.
+ * `modelBase` is the catalog base recorded by capability inspection. Without
+ * it, a flat `-build-fast` id is not guessed back to a base.
+ * @param {string|null|undefined} model
+ * @param {string|null|undefined} tier
+ * @param {string|null|undefined} modelBase
+ * @returns {string|null}
+ */
+export function grokServiceTierModel(model, tier, modelBase) {
+  if (tier !== 'fast' && tier !== 'standard') return model || null;
+  const confirmed = typeof modelBase === 'string' ? stripGrokFastSetting(modelBase) : '';
+  const base = confirmed && confirmed !== GROK_CONFIGURED_DEFAULT
+    ? confirmed
+    : inferUnconfirmedGrokSpeedBase(model);
+  if (!base || base === GROK_CONFIGURED_DEFAULT) return null;
+  return `${base}[fast=${tier === 'fast' ? 'true' : 'false'}]`;
+}
+
+function inferUnconfirmedGrokSpeedBase(model) {
+  const stripped = stripGrokFastSetting(model);
+  if (!stripped || stripped === GROK_CONFIGURED_DEFAULT) return null;
+  if (stripped.endsWith(GROK_BUILD_FAST_SUFFIX)) return null;
+  return stripped;
 }
 
 /**

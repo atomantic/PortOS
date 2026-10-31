@@ -111,6 +111,8 @@ import {
   prepareGrokPromptFile,
   withGrokStreamingJsonOutput,
   GROK_STREAMING_JSON_FORMAT,
+  grokServiceTierModel,
+  grokSpeedArgsConflict,
 } from './grok.js';
 import { isKimiCommand, ensureKimiTuiArgs, ensureKimiHeadlessArgs, prepareKimiPrompt } from './kimi.js';
 import {
@@ -436,12 +438,14 @@ function grokPublicReviewActionsSpawnArgs(provider, ctx) {
 }
 
 function grokPublicReviewArgs(provider, { effectiveModel, effort } = {}, postureArgs) {
-  const args = ensureGrokHeadlessArgs([
+  const base = [
     ...postureArgs,
     '--no-subagents',
     '--disable-web-search',
-  ], effectiveModel);
-  args.push(...buildEffortArgs(effort, provider, args, effectiveModel));
+  ];
+  const tiered = grokExecutionModel(effectiveModel, provider, base);
+  const args = ensureGrokHeadlessArgs(base, tiered);
+  args.push(...buildEffortArgs(effort, provider, args, grokEffortModel(provider, effectiveModel)));
   // `ensureGrokHeadlessArgs` appends the GROK_STDIN_PROMPT_PATH prompt-file
   // sentinel that `prepareGrokPromptFile` rewrites on Windows; keep it present.
   return { command: provider?.command || 'grok', args, stdinMode: 'prompt' };
@@ -694,8 +698,30 @@ const OPENCHAMBER = {
 
 // ─── grok ───────────────────────────────────────────────────────────────────
 
-function grokCliArgs(baseArgs, { model, toolFree }) {
-  return ensureGrokHeadlessArgs(baseArgs, model, { toolFree });
+/**
+ * `--model` value for an explicit Grok speed. Unset speed returns `model`
+ * unchanged, so a flat fast id still launches until the user picks Standard
+ * or Fast. Grok Build CLI 1.0.70 takes the tier as `name[fast=true|false]`,
+ * not a `--fast` flag and not Codex `service_tier`.
+ */
+function grokExecutionModel(model, provider, baseArgs) {
+  const tier = provider?.executionOptions?.serviceTier;
+  if (!tier) return model;
+  if (grokSpeedArgsConflict(baseArgs)) {
+    throw executionOptionsError('Execution speed conflicts with provider args; remove the baked model pin');
+  }
+  const pinned = grokServiceTierModel(model, tier, provider?.executionOptionSupport?.modelBase);
+  if (!pinned) throw executionOptionsError('Choose an explicit model before changing Grok speed');
+  return pinned;
+}
+
+/** Effort ladders stay keyed on the catalog id, not the `[fast=]` argv value. */
+function grokEffortModel(provider, model) {
+  return provider?.executionOptionSupport?.modelBase || model;
+}
+
+function grokCliArgs(baseArgs, { model, toolFree, provider }) {
+  return ensureGrokHeadlessArgs(baseArgs, grokExecutionModel(model, provider, baseArgs), { toolFree });
 }
 
 function grokCodeReviewSpawnConfig(config) {
@@ -1475,6 +1501,12 @@ export function injectTuiModelAndEffort(command, baseArgs, provider, model, effo
       resolveCliEffort(effort, { id: provider?.id, command })
     );
     return (cursorModel && !hasModelFlag(baseArgs)) ? [...baseArgs, '--model', cursorModel] : baseArgs;
+  }
+  if (isGrokCommand(command)) {
+    const effectiveModel = resolveCliModel(model);
+    const tiered = grokExecutionModel(effectiveModel, provider, baseArgs);
+    const withModel = tiered && !hasModelFlag(baseArgs) ? [...baseArgs, '--model', tiered] : baseArgs;
+    return [...withModel, ...buildEffortArgs(effort, { id: provider?.id, command }, withModel, grokEffortModel(provider, effectiveModel))];
   }
   const effectiveModel = resolveCliModel(model);
   const shouldInject = !!effectiveModel && !hasModelFlag(baseArgs);

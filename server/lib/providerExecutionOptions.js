@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto';
 import { buildCodexAuthModeArgs, isCodexCommand } from './codex.js';
+import { isGrokCommand, grokSpeedArgsConflict, grokSpeedTarget } from './grok.js';
+import { probeGrokModelCatalog } from './grokModelCatalog.js';
 import { codexOssLocalProvider, extractBakedModel } from './providerModels.js';
 import { EXECUTION_OPTION_DEFINITIONS, resolveExecutionOptions, executionOptionsError } from './executionOptions.js';
 import { probeCodexModelsViaAppServer } from './aiToolkit/internal/codexModelListProbe.js';
@@ -7,6 +9,7 @@ import { prepareCliSpawn } from './bufferedSpawn.js';
 
 /** A read-only runtime probe; never sends a prompt or starts a model turn. */
 async function inspectExecutionOptionCapabilities(provider, model, context = {}) {
+  if (isGrokCommand(provider?.command)) return inspectGrokExecutionOptionCapabilities(provider, model, context);
   const descriptor = { version: 1, options: isCodexCommand(provider?.command) && ['cli', 'tui'].includes(provider?.type) ? [{ ...EXECUTION_OPTION_DEFINITIONS.serviceTier, values: [] }] : [], reason: null };
   if (provider?.enabled === false || provider?.unavailableReason) return { ...descriptor, reason: provider.unavailableReason || 'This provider is disabled.' };
   if ((provider?.args || []).some((arg) => /service_tier|features\.(?:fast_mode|ultrafast_mode)|fast_default_opt_out/.test(arg))) return { ...descriptor, reason: 'Speed conflicts with provider args; remove the baked speed setting before selecting an override.' };
@@ -49,6 +52,43 @@ async function inspectExecutionOptionCapabilities(provider, model, context = {})
     values: fast ? ['standard', 'fast'] : ['standard'] }] };
 }
 
+/**
+ * Grok Build speed is a serving tier on the model id, advertised by `grok models`
+ * listing both `<base>` and `<base>-build-fast`. The public API provider is a
+ * different harness and never reaches this probe.
+ */
+async function inspectGrokExecutionOptionCapabilities(provider, model, context = {}) {
+  const cliRoute = ['cli', 'tui'].includes(provider?.type);
+  const descriptor = {
+    version: 1,
+    options: cliRoute ? [{ ...EXECUTION_OPTION_DEFINITIONS.serviceTier, values: [] }] : [],
+    reason: null,
+  };
+  if (provider?.enabled === false || provider?.unavailableReason) {
+    return { ...descriptor, reason: provider.unavailableReason || 'This provider is disabled.' };
+  }
+  if (!cliRoute || provider.gatewayBacked || provider.credentialBootstrap || provider.credentialBootstrapId) {
+    return { ...descriptor, reason: 'Speed requires a Grok Build CLI or TUI route.' };
+  }
+  if (grokSpeedArgsConflict(provider.args)) {
+    return { ...descriptor, reason: 'Speed conflicts with provider args; remove the baked model pin before selecting an override.' };
+  }
+  const timeoutMs = Number.isFinite(context.timeoutMs) ? Math.max(1, Math.min(15_000, context.timeoutMs)) : 15_000;
+  const details = await probeGrokModelCatalog(provider, { cwd: context.cwd, timeoutMs }).catch(() => null);
+  if (!details) {
+    return { ...descriptor, reason: 'This runtime could not verify speed capabilities. Refresh capabilities or update Grok.' };
+  }
+  const target = grokSpeedTarget(model, details.ids, details.defaultModel);
+  if (!target.values.length) return { ...descriptor, model: target.model, reason: target.reason };
+  return {
+    ...descriptor,
+    model: target.model,
+    modelBase: target.modelBase,
+    authMode: 'grok',
+    options: [{ ...EXECUTION_OPTION_DEFINITIONS.serviceTier, values: target.values }],
+  };
+}
+
 const capabilityReads = new Map();
 export async function getExecutionOptionCapabilities(provider, model, { fresh = false, cwd, timeoutMs } = {}) {
   const key = createHash('sha256').update(JSON.stringify([provider?.id, provider?.command, provider?.type,
@@ -78,7 +118,11 @@ export async function prepareExecutionOptions(provider, model, options, source =
   }
   attribution.model = capabilities.model;
   const copy = { ...provider, ...(capabilities.model ? { defaultModel: capabilities.model } : {}), executionOptions: attribution.requested,
-    executionOptionSupport: { ...Object.fromEntries(capabilities.options.map((option) => [option.key, option.values])), authMode: capabilities.authMode },
+    executionOptionSupport: {
+      ...Object.fromEntries(capabilities.options.map((option) => [option.key, option.values])),
+      authMode: capabilities.authMode,
+      ...(capabilities.modelBase ? { modelBase: capabilities.modelBase } : {}),
+    },
     executionOptionAttribution: attribution };
   if (provider.apiKey) Object.defineProperty(copy, 'apiKey', { value: provider.apiKey, enumerable: false });
   return { provider: copy, attribution };
