@@ -193,7 +193,7 @@ describe('buildMusicVideoAssetManifest — scene takes + visual spec (#8965)', (
   });
 
   it('ships every take and moodboard reference a peer may select, not only the selected slot', async () => {
-    for (const name of ['selected.png', 'candidate.png', 'mood.png', 'style.png']) writeImage(name, Buffer.from(name));
+    for (const name of ['selected.png', 'candidate.png', 'mood.png', 'style.png', 'sequence.png']) writeImage(name, Buffer.from(name));
     writeVideo('clip-a.mp4', Buffer.from('a'));
     writeVideo('clip-b.mp4', Buffer.from('b'));
     const manifest = await buildMusicVideoAssetManifest({
@@ -204,6 +204,7 @@ describe('buildMusicVideoAssetManifest — scene takes + visual spec (#8965)', (
       scenes: [{
         sceneId: 's1',
         referenceImageId: 'selected.png',
+        photoSequence: { imageIds: ['selected.png', 'sequence.png'], intervalFrames: 6 },
         videoHistoryId: 'clip-a',
         takes: [
           { kind: 'image', assetId: 'selected.png' },
@@ -215,7 +216,7 @@ describe('buildMusicVideoAssetManifest — scene takes + visual spec (#8965)', (
     });
     const keys = manifest.map((m) => `${m.kind}:${m.filename}`).sort();
     expect(keys).toEqual([
-      'image:candidate.png', 'image:mood.png', 'image:selected.png', 'image:style.png',
+      'image:candidate.png', 'image:mood.png', 'image:selected.png', 'image:sequence.png', 'image:style.png',
       'video:clip-a.mp4', 'video:clip-b.mp4',
     ]);
   });

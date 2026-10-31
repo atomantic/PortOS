@@ -216,6 +216,7 @@ describe('locking shots one at a time', () => {
     const video = setShotLocks(rendered, { sceneIds: ['s2'], locked: true, stage: 'video' });
     expect(productionReadiness(video).storyboard).toMatchObject({ clipLocks: { s2: 'locked' }, clipsUnlocked: ['s1'] });
     expect(() => assertClipUnlocked(video, 's2', { prompt: 'New motion' })).toThrow(/video is locked/);
+    expect(() => assertClipUnlocked(video, 's2', { photoSequence: { imageIds: ['photo.png'], intervalFrames: 6 } })).toThrow(/video is locked/);
     expect(() => assertClipUnlocked(video, 's2', { textZone: 'upper' })).not.toThrow();
     expect(() => assertClipUnlocked(video, 's1')).not.toThrow();
     // Unlocking the still takes the clip lock with it.

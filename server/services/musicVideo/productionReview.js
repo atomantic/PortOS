@@ -45,8 +45,9 @@ export const overlayTextBasis = project => hash({
   ...(project.lyricOverlayEnabled === false ? { lyricOverlayEnabled: false } : {}),
   document: project.composition?.document?.directory || null, aspect: musicVideoAspect(project), source: source(project),
   textCues: project.composition?.textCues ?? null, overlay: project.composition?.overlay ?? null, style: project.composition?.style ?? null,
-  scenes: (project.scenes || []).map(({ sceneId, startSec, endSec, textZone, lyricRole, lyricSize, lyricText, cardText, referenceImageId, videoHistoryId, performanceEdit, visualLayer }) =>
-    ({ sceneId, startSec, endSec, textZone, lyricRole, lyricSize, lyricText, cardText, referenceImageId, videoHistoryId, performanceEdit, visualLayer })),
+  scenes: (project.scenes || []).map(({ sceneId, startSec, endSec, textZone, lyricRole, lyricSize, lyricText, cardText, referenceImageId, videoHistoryId, performanceEdit, visualLayer, photoSequence }) =>
+    ({ sceneId, startSec, endSec, textZone, lyricRole, lyricSize, lyricText, cardText, referenceImageId, videoHistoryId, performanceEdit, visualLayer,
+      ...(photoSequence && photoSequence.enabled !== false ? { photoSequence } : {}) })),
 });
 
 // Share the evidence contract between new decisions and persisted approvals:
@@ -241,7 +242,7 @@ export function nameShots(project, entries) {
 
 /** What a locked clip freezes: the inputs it was rendered from, and the selected clip itself. */
 const CLIP_LOCKED_FIELDS = ['prompt', 'framePrompt', 'visualIntent', 'camera', 'direction', 'startSec', 'endSec', 'lyricText',
-  'referenceImageId', 'endImageId', 'shotMode', 'performanceSpeaker', 'performanceStyle', 'visualLayer', 'loop', 'videoHistoryId', 'codeClip', 'speedFps', 'offsetFrames', 'reverse'];
+  'referenceImageId', 'endImageId', 'photoSequence', 'shotMode', 'performanceSpeaker', 'performanceStyle', 'visualLayer', 'loop', 'videoHistoryId', 'codeClip', 'speedFps', 'offsetFrames', 'reverse'];
 
 /**
  * Refuse a change to a shot whose video is locked: `patch` is a scene patch
@@ -507,8 +508,9 @@ export function productionReviewBasis(project) {
     ...(project.lyricOverlayEnabled === false ? { lyricOverlayEnabled: false } : {}),
     window: window && { startSec: window.startSec, endSec: window.endSec },
     scenes: (project.scenes || []).filter(s => !window || s.startSec < window.endSec && s.endSec > window.startSec)
-      .map(({ sceneId, referenceImageId, videoHistoryId, performanceEdit, direction, visualLayer, preMusic }) =>
-        ({ sceneId, referenceImageId, videoHistoryId, performanceEdit, direction, visualLayer, ...(preMusic ? { preMusic } : {}) })),
+      .map(({ sceneId, referenceImageId, videoHistoryId, performanceEdit, direction, visualLayer, preMusic, photoSequence }) =>
+        ({ sceneId, referenceImageId, videoHistoryId, performanceEdit, direction, visualLayer, ...(preMusic ? { preMusic } : {}),
+          ...(photoSequence && photoSequence.enabled !== false ? { photoSequence } : {}) })),
     soundBed: project.soundBed, videoSettings: project.videoSettings });
   return { art, storyboard, storyboardShots, proof };
 }
@@ -538,8 +540,9 @@ function productionApprovalInputs(project) {
   const window = project.productionReview?.proof;
   const proof = { ...storyboard, composition: h(project.composition), 'proof window': h(window && [window.startSec, window.endSec]),
     ...(project.lyricOverlayEnabled === false ? { 'automatic lyric overlays': h(false) } : {}),
-    takes: h((project.scenes || []).map(({ sceneId, referenceImageId, videoHistoryId, performanceEdit, direction, visualLayer }) =>
-      ({ sceneId, referenceImageId, videoHistoryId, performanceEdit, direction, visualLayer }))),
+    takes: h((project.scenes || []).map(({ sceneId, referenceImageId, videoHistoryId, performanceEdit, direction, visualLayer, photoSequence }) =>
+      ({ sceneId, referenceImageId, videoHistoryId, performanceEdit, direction, visualLayer,
+        ...(photoSequence && photoSequence.enabled !== false ? { photoSequence } : {}) }))),
     'sound bed': h(project.soundBed), 'video settings': h(project.videoSettings) };
   return { art, storyboard, proof };
 }

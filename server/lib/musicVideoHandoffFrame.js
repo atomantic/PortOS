@@ -13,7 +13,7 @@
  *    ends on an earlier frame (its first frame when the shot outlasts it).
  * The returned time is the last displayed frame, one frame before the out-point.
  */
-import { isEndFrameImageEffect } from './musicVideoImageEffects.js';
+import { isEndFrameImageEffect, scenePhotoSequence, photoSequenceIndex } from './musicVideoImageEffects.js';
 import { clipOffsetSec, clipReversed, clipSpeedRate, isLayeredComposition, sceneHasAuthoredSpan, sceneVisualLayer } from './musicVideoLayers.js';
 import { selectedPerformanceInstruction } from './musicVideoShotTiming.js';
 
@@ -63,7 +63,9 @@ export function shotHandoffSource(project, shot) {
   if (!shot) return null;
   const layer = sceneVisualLayer(shot, { layered: isLayeredComposition(project) });
   if (layer === 'still') {
-    const imageId = isEndFrameImageEffect(shot.imageEffect) && shot.endImageId ? shot.endImageId : shot.referenceImageId;
+    const sequence = sceneHasAuthoredSpan(shot) ? scenePhotoSequence(shot, { beats: project.audioAnalysis?.beats || [] }) : null;
+    const lastPhoto = sequence?.imageIds[photoSequenceIndex(sequence, (Math.round(shot.endSec * 24) - 1) / 24)];
+    const imageId = isEndFrameImageEffect(shot.imageEffect) && shot.endImageId ? shot.endImageId : sequence ? lastPhoto : shot.referenceImageId;
     return imageId ? { imageId } : null;
   }
   return layer === 'footage' && shot.videoHistoryId ? { clip: true } : null;

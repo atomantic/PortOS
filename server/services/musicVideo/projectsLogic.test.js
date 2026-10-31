@@ -1143,6 +1143,7 @@ describe('create-schema parity', () => {
     cutEffect: { style: 'dissolve' },
     imageEffect: 'end-fade',
     imageEffectSec: 2,
+    photoSequence: { enabled: true, imageIds: ['photo-example.png'], intervalFrames: 6, rate: 'frames' },
     cardText: 'Card',
     codeOverlay: true,
     codeClip: true,

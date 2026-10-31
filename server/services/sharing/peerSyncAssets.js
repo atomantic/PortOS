@@ -655,6 +655,7 @@ export async function referenceMusicVideoAssetManifest(project, { linkedTrack } 
     ...takeIds('image'),
     // Style-break end frames (#11173) are gallery stills too.
     ...scenes.map((s) => (isStr(s?.endImageId) ? s.endImageId : null)).filter(Boolean),
+    ...scenes.flatMap(s => s?.photoSequence?.imageIds || []).filter(isStr),
     ...takeIds('endImage'),
     ...scenes.flatMap((scene) => (scene.takes || []).flatMap((take) => [take.sourceImageId, ...(take.inputAssets || []).map((input) => input.assetId)]).filter(isStr)),
     ...specRefs.map((r) => (isStr(r?.imageId) ? r.imageId : null)).filter(Boolean),

@@ -87,6 +87,18 @@ describe.skipIf(!ffmpeg)('continueFromPreviousShot', () => {
     expect(mocks.appended.map((t) => [t.kind, t.assetId])).toEqual([['image', 'end.png']]);
   });
 
+  it('continues from the last displayed photo in a repeating still sequence', async () => {
+    mocks.appended.length = 0; mocks.selected.length = 0;
+    mocks.project = { id: 'mv-1', composition: { mode: 'composed' }, scenes: [
+      { sceneId: 'a', startSec: 0, endSec: 1, visualLayer: 'still', referenceImageId: 'unused.png',
+        photoSequence: { imageIds: ['one.png', 'two.png', 'three.png', 'four.png', 'five.png'], intervalFrames: 6 } },
+      { sceneId: 'b', startSec: 1, endSec: 3 },
+    ] };
+    const { frame } = await continueFromPreviousShot('mv-1', 'b');
+    expect(frame).toEqual({ imageId: 'four.png', atSec: null, fromSceneId: 'a' });
+    expect(mocks.appended.map(t => [t.kind, t.assetId])).toEqual([['image', 'four.png']]);
+  });
+
   it('refuses the first shot and a previous shot without a clip', async () => {
     mocks.project = { id: 'mv-1', scenes: [{ sceneId: 'a', startSec: 0, endSec: 1 }, { sceneId: 'b', startSec: 1, endSec: 2 }] };
     await expect(continueFromPreviousShot('mv-1', 'a')).rejects.toMatchObject({ code: 'MUSIC_VIDEO_NO_PREVIOUS_SHOT' });

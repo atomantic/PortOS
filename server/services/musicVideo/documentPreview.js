@@ -305,6 +305,10 @@ export async function buildDocumentPreview(project, { draft = false, files: give
     if (!m) continue;
     const name = m.path.split(/[\\/]/).pop();
     assets.push({ key: scene.media.src, url: `/data/${m.kind === 'video' ? 'videos' : 'images'}/${encodeURIComponent(name)}`, bytes: null });
+    (m.photos || []).forEach((photo, i) => {
+      const photoName = photo.path.split(/[\\\\/]/).pop();
+      assets.push({ key: scene.media.photos[i].src, url: `/data/images/${encodeURIComponent(photoName)}`, bytes: null });
+    });
   }
   for (const [rel, file] of givenFiles ? [] : files) {
     // Media is posted even when CSS or an <img> tag already inlined it as data:, because document code

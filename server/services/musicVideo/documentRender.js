@@ -1,5 +1,5 @@
 import { assertMusicVideoMediaSelections, musicVideoMediaMode } from '../../lib/musicVideoMediaPolicy.js';
-import { isEndFrameImageEffect, sceneImageEffect } from '../../lib/musicVideoImageEffects.js';
+import { isEndFrameImageEffect, sceneImageEffect, scenePhotoSequence } from '../../lib/musicVideoImageEffects.js';
 import { musicVideoGradeFilter } from '../../lib/musicVideoGrade.js';
 import { filmLookRuntimeSource, isFilmLookNeutral } from '../../lib/filmLook.js';
 import { titleCardVisible, titleCardWindows } from '../../lib/musicVideoTitleCard.js';
@@ -137,6 +137,18 @@ export async function resolveSceneMedia(project, { history = [], probe = async (
     const layer = documentSceneVisualLayer(project, scene, { generated: strictLayers });
     // A code shot (#10297) is drawn by the document itself; it is handed no media.
     if (layer === 'code' || (strictLayers && layer === 'card')) continue;
+    const sequence = scenePhotoSequence(scene);
+    if (sequence) {
+      const photos = sequence.imageIds.map(id => ({ path: safeUnder(PATHS.images, id), ext: (/\.([a-z0-9]{2,5})$/i.exec(id)?.[1] || 'png').toLowerCase() }));
+      if (!photos.length || photos.some(photo => !photo.path || !existsSync(photo.path))) {
+        throw new ServerError('A selected sequence photo is missing. Pick the missing photos before rendering.', {
+          status: 404, code: 'MISSING_SEQUENCE_PHOTOS', context: { sceneId: scene.sceneId,
+            imageIds: sequence.imageIds.filter((id, i) => !photos[i].path || !existsSync(photos[i].path)) },
+        });
+      }
+      out.set(scene.sceneId, { kind: 'image', ...photos[0], photos, inSec: null, outSec: null, fps: null, width: null, height: null });
+      continue;
+    }
     const entry = scene.videoHistoryId ? byId.get(scene.videoHistoryId) : null;
     const videoPath = entry?.filename ? safeUnder(PATHS.videos, entry.filename) : null;
     if ((!strictLayers || layer === 'footage') && videoPath && existsSync(videoPath)) {
@@ -225,6 +237,7 @@ export function buildDocumentData(project, { media = new Map(), frame, clock, so
         visualLayer: documentSceneVisualLayer(project, scene, { generated }),
         // A document has no end-frame media yet, so a start-to-end effect plays its still.
         imageEffect: documentImageEffect(scene),
+        ...(m?.photos ? { photoSequence: scenePhotoSequence(scene, { fps: clock.fps, beats: analysis.beats || [] }) } : {}),
         stillMove: typeof scene.stillMove === 'string' ? scene.stillMove : null,
         // #10589: the planned camera move the template's camera rig follows (only when planned).
         ...(typeof scene.camera?.move === 'string' ? { camera: structuredClone(scene.camera) } : {}),
@@ -238,6 +251,7 @@ export function buildDocumentData(project, { media = new Map(), frame, clock, so
         direction: sceneDirection(project, scene.sceneId),
         media: m ? {
           kind: m.kind, src: mediaSrc(scene.sceneId, m),
+          ...(m.photos ? { photos: m.photos.map((photo, i) => ({ src: mediaSrc(`${scene.sceneId}-photo-${i}`, photo) })) } : {}),
           inSec: m.inSec, outSec: m.outSec, fps: m.fps, width: m.width, height: m.height,
           // Raw-asset previews only: seek source time = startSec + max(0, local - leadSec) * rate.
           ...(m.timing ? { timing: m.timing } : {}),
@@ -308,6 +322,10 @@ async function stageDocumentData(compositionDir, data, media, signal) {
   for (const scene of data.scenes) {
     const m = scene.media && media.get(scene.sceneId);
     if (!m) continue;
+    for (const [i, photo] of (m.photos || []).entries()) {
+      signal?.throwIfAborted();
+      await copyFile(photo.path, join(compositionDir, scene.media.photos[i].src), fsConstants.COPYFILE_EXCL | fsConstants.COPYFILE_FICLONE);
+    }
     const target = join(compositionDir, scene.media.src);
     signal?.throwIfAborted();
     if (m.kind === 'video' && m.rate != null) {

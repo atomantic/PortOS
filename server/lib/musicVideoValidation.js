@@ -59,7 +59,7 @@ import { MUSIC_VIDEO_MEDIA } from './musicVideoMediumPlan.js';
 import { CLIP_OFFSET_FRAMES_RANGE, CLIP_SPEED_FPS_RANGE, MUSIC_VIDEO_FRAME_FITS, MUSIC_VIDEO_LYRIC_ROLES, MUSIC_VIDEO_LYRIC_SIZES, MUSIC_VIDEO_STILL_MOVES, MUSIC_VIDEO_TEXT_ZONES, MUSIC_VIDEO_VISUAL_LAYERS } from './musicVideoLayers.js';
 import { MUSIC_VIDEO_SHOT_GLITCH_LIMIT, MUSIC_VIDEO_TRANSITIONS } from './musicVideoTransitions.js';
 import { BEAT_TOGGLE_OVERLAP, BEAT_TOGGLE_RATES, MUSIC_VIDEO_CUT_EFFECTS } from './musicVideoCutEffects.js';
-import { IMAGE_EFFECT_SEC_RANGE, MUSIC_VIDEO_IMAGE_EFFECTS } from './musicVideoImageEffects.js';
+import { IMAGE_EFFECT_SEC_RANGE, MUSIC_VIDEO_IMAGE_EFFECTS, PHOTO_SEQUENCE_LIMIT, PHOTO_SEQUENCE_RATES } from './musicVideoImageEffects.js';
 import { PRE_MUSIC_DURATION_RANGE, PRE_MUSIC_EFFECT_IDS, PRE_MUSIC_LAYER_LIMIT, PRE_MUSIC_VOLUME_RANGE } from './musicVideoColdOpen.js';
 import { CAMERA_FRAMINGS, CAMERA_MOVEMENT_VALUES, CAMERA_SPEEDS } from './cameraMovements.js';
 import { CAST_ERAS } from './catalogMediaLibrary.js';
@@ -736,6 +736,12 @@ const sceneLayerFields = {
   // it takes to finish; null clears it.
   imageEffect: z.enum(MUSIC_VIDEO_IMAGE_EFFECTS).nullable().optional(),
   imageEffectSec: z.number().min(IMAGE_EFFECT_SEC_RANGE.min).max(IMAGE_EFFECT_SEC_RANGE.max).nullable().optional(),
+  photoSequence: z.object({
+    enabled: z.boolean().optional(),
+    imageIds: z.array(z.string().min(1).max(256).regex(/^[^/\\\\]+$/)).max(PHOTO_SEQUENCE_LIMIT),
+    intervalFrames: z.number().int().min(1).max(720),
+    rate: z.enum(PHOTO_SEQUENCE_RATES).optional(),
+  }).strict().nullable().optional(),
   cardText: z.string().max(500).nullable().optional(),
   // #10302: footage that the composition also draws code over; still counts as footage.
   codeOverlay: z.boolean().optional(),
