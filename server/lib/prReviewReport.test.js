@@ -26,14 +26,12 @@ describe('renderReviewBody', () => {
         concerns: ['The Windows entry point is not mentioned.'],
       },
       blockingFindings: [finding('docs/SELF_UPDATE.md', 108, 'Bare npm install dirties tracked lockfiles')],
-      nonBlockingFindings: [finding('docs/SELF_UPDATE.md', 112, 'Ordering rationale is downstream of line 108')],
     });
 
     expect(body).toContain('🔴 **Changes requested**');
     expect(body).toContain('**Scope:** docs-only change to two files under docs/');
     expect(body).toContain('#### ⛔ Blocking (1)');
     expect(body).toContain('- `docs/SELF_UPDATE.md:108` — Bare npm install dirties tracked lockfiles');
-    expect(body).toContain('#### 💡 Non-blocking (1)');
     expect(body).toContain('#### Test evidence');
     expect(body).toContain('- ✅ `npm test -w server` — 412 passed');
     expect(body).toContain('- ⏭️ `npx vitest` — no node_modules in the disposable worktree');
@@ -146,9 +144,9 @@ describe('renderFinding', () => {
     });
   });
 
-  it('labels a non-blocking finding, omits an absent suggestion, and falls back to the body for the index label', () => {
-    expect(renderFinding({ body: 'Consider naming Windows too.' }, { blocking: false })).toEqual({
-      body: '💡 **Non-blocking**\n\nConsider naming Windows too.',
+  it('omits an absent suggestion and falls back to the body for the index label', () => {
+    expect(renderFinding({ body: 'Consider naming Windows too.' })).toEqual({
+      body: '⛔ **Blocking**\n\nConsider naming Windows too.',
       label: 'Consider naming Windows too.',
     });
   });

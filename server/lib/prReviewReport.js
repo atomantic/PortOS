@@ -214,10 +214,10 @@ export function reviewReportText(raw) {
  * review body's finding index shows for it. Returns null when the finding
  * carries no usable body.
  */
-export function renderFinding(raw, { blocking = true } = {}) {
+export function renderFinding(raw) {
   const { title, body, suggestion } = normalizeFindingPresentation(raw);
   if (!body) return null;
-  const marker = blocking ? '⛔ **Blocking**' : '💡 **Non-blocking**';
+  const marker = '⛔ **Blocking**';
   // An odd number of fences in the body leaves one open, which would swallow
   // the suggestion block below and render it as inert text instead of an
   // applyable change. Drop the suggestion rather than emit a dead one.
@@ -256,7 +256,6 @@ export function renderReviewBody({
   report,
   verdict,
   blockingFindings = [],
-  nonBlockingFindings = [],
   downgraded = false,
 } = {}) {
   const normalized = normalizeReviewReport(report);
@@ -265,7 +264,6 @@ export function renderReviewBody({
     normalized.summary || VERDICT_DEFAULT_SUMMARY[verdict] || VERDICT_DEFAULT_SUMMARY.defer,
     normalized.scope && `**Scope:** ${normalized.scope}`,
     findingsIndex(blockingFindings, 'Blocking', '⛔'),
-    findingsIndex(nonBlockingFindings, 'Non-blocking', '💡'),
     listSection('#### Test evidence', normalized.testEvidence, (item) => {
       const head = item.command ? `\`${item.command}\`` : item.detail;
       const tail = item.command && item.detail ? ` — ${item.detail}` : '';
