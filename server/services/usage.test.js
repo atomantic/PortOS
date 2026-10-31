@@ -1163,7 +1163,7 @@ describe('usage.js — historical transcript corrections (#3156)', () => {
     await loadUsage();
   });
 
-  it('skips a correction whose provider or model names a prototype key', async () => {
+  it('skips a correction missing an id or naming a prototype key', async () => {
     const correction = (overrides) => ({
       runId: 'run-example-proto', day: dayKey, providerId, model,
       estimate: { messages: 1, tokensIn: 20, tokensOut: 50 },
@@ -1171,11 +1171,19 @@ describe('usage.js — historical transcript corrections (#3156)', () => {
       ...overrides,
     });
     const before = structuredClone(getUsage());
+    atomicWrite.mockClear();
     expect(await applyHistoricalUsageCorrections([
       correction({ measured: [{ providerId, model: '__proto__', messages: 2, tokensOut: 200 }] }),
       correction({ siblings: [{ providerId: '__proto__', model, messages: 1, tokensOut: 5 }], siblingScanned: true }),
       correction({ model: 'constructor' }),
+      correction({ runId: undefined }),
+      correction({
+        day: '__proto__', estimate: null, measured: null, siblingScanned: true,
+        siblings: [{ providerId: 'grok-cli', model: 'example-grok-model', messages: 1, tokensOut: 5 }],
+      }),
     ])).toMatchObject({ corrected: 0 });
+    expect(Object.hasOwn(Object.prototype, 'byProvider')).toBe(false);
+    expect(atomicWrite).not.toHaveBeenCalled();
     expect(Object.hasOwn(Object.prototype, 'messages')).toBe(false);
     expect(Object.hasOwn(Object.prototype, 'tokensOut')).toBe(false);
     const after = getUsage();
@@ -1218,6 +1226,7 @@ describe('usage.js — historical transcript corrections (#3156)', () => {
       cacheWriteTokens: 10,
       source: 'measured'
     });
+    expect(day.byProvider[providerId].byModel[model].source).toBe('measured');
     expect(day.byProvider['claude-code']).toBeUndefined();
 
     const report = buildUsageReport(getUsage().dailyActivity, {
@@ -1302,6 +1311,117 @@ describe('usage.js — historical transcript corrections (#3156)', () => {
     expect(day.byProvider[providerId]).toBeUndefined();
     expect(day.byProvider['antigravity-cli']).toMatchObject({ tokensIn: 100, tokensOut: 50, source: 'estimate' });
     expect(day).toMatchObject({ messages: 1, tokensOut: 50, tokens: 50 });
+  });
+
+  it('records the earliest activity day when a sibling correction creates an older day', async () => {
+    expect(getFirstActivityDay()).toBe(dayKey);
+    await applyHistoricalUsageCorrections([{
+      runId: 'run-example-3', day: '2026-06-01', providerId, model, estimate: null, measured: null,
+      siblings: [{ providerId: 'grok-cli', model: 'example-grok-model', messages: 1, tokensOut: 5, source: 'measured' }],
+      siblingScanned: true,
+    }]);
+    expect(getFirstActivityDay()).toBe('2026-06-01');
+  });
+
+  it('clears the source of a bucket whose whole estimate is replaced by nothing', async () => {
+    expect(await applyHistoricalUsageCorrections([{
+      runId: 'run-example-4', day: dayKey, providerId, model,
+      estimate: { messages: 1, tokensIn: 20, tokensOut: 50 },
+      measured: [],
+    }])).toMatchObject({ corrected: 1 });
+    const providerDay = getUsage().dailyActivity[dayKey].byProvider[providerId];
+    expect(providerDay).toMatchObject({ messages: 0, tokensIn: 0, tokensOut: 0, source: null });
+    expect(providerDay.byModel[model]).toMatchObject({ messages: 0, tokensOut: 0, source: null });
+  });
+});
+
+describe('usage.js — partial historical corrections and all-time rollups', () => {
+  const dayKey = '2026-07-01';
+  const providerId = 'claude-code-tui';
+  const estimatedModel = 'claude-opus-5';
+  const measuredModel = 'claude-sonnet-5';
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    readJSONFile.mockResolvedValueOnce(makeUsage({
+      [dayKey]: {
+        sessions: 2,
+        messages: 3,
+        tokens: 150,
+        byProvider: {
+          [providerId]: {
+            name: 'Claude Code TUI', sessions: 2, messages: 3, tokensIn: 60, tokensOut: 150,
+            cacheReadTokens: 0, cacheWriteTokens: 0, source: 'estimate',
+            byModel: {
+              [estimatedModel]: { sessions: 1, messages: 2, tokensIn: 40, tokensOut: 100, source: 'estimate' },
+              [measuredModel]: { sessions: 1, messages: 1, tokensIn: 20, tokensOut: 50, source: 'estimate' },
+            }
+          }
+        }
+      }
+    }, {
+      totalSessions: 2,
+      totalMessages: 3,
+      totalTokens: { input: 60, output: 150 },
+      byProvider: { [providerId]: { name: 'Claude Code TUI', sessions: 2, messages: 3, tokens: 150 } },
+      byModel: {
+        [estimatedModel]: { sessions: 1, messages: 2, tokens: 100 },
+        [measuredModel]: { sessions: 1, messages: 1, tokens: 50 },
+      }
+    }));
+    await loadUsage();
+    vi.clearAllMocks();
+  });
+
+  // One of two estimated runs is reconciled, and its transcript names a
+  // different model than the estimate was booked under.
+  const correction = {
+    runId: 'run-example-partial',
+    day: dayKey,
+    providerId,
+    model: estimatedModel,
+    estimate: { messages: 1, tokensIn: 20, tokensOut: 50 },
+    measured: {
+      providerId, model: measuredModel, messages: 2, tokensIn: 30, tokensOut: 70,
+      cacheReadTokens: 5, cacheWriteTokens: 5, source: 'measured'
+    },
+    repairIds: ['repair-parent'],
+    siblings: [
+      { model: 'example-model', messages: 4, tokensOut: 400, repairIds: ['repair-unrouted'] },
+      { providerId: 'grok-cli', model: 'example-grok-model', messages: 1, tokensOut: 9, source: 'measured', repairIds: ['repair-sibling'] },
+    ],
+    siblingScanned: false,
+  };
+
+  it('keeps the remaining estimate visible as mixed and moves the all-time rollups by the delta', async () => {
+    expect(await applyHistoricalUsageCorrections([correction])).toEqual({
+      corrected: 1, correctedRunIds: ['run-example-partial']
+    });
+    expect(atomicWrite).toHaveBeenCalledTimes(1);
+
+    const usage = getUsage();
+    const providerDay = usage.dailyActivity[dayKey].byProvider[providerId];
+    expect(providerDay).toMatchObject({
+      messages: 4, tokensIn: 70, tokensOut: 170, cacheReadTokens: 5, cacheWriteTokens: 5, source: 'mixed'
+    });
+    expect(providerDay.byModel[estimatedModel]).toMatchObject({ messages: 1, tokensIn: 20, tokensOut: 50, source: 'mixed' });
+    expect(providerDay.byModel[measuredModel]).toMatchObject({
+      messages: 3, tokensIn: 50, tokensOut: 120, cacheReadTokens: 5, cacheWriteTokens: 5, source: 'mixed'
+    });
+    expect(usage.dailyActivity[dayKey].byProvider['grok-cli']).toMatchObject({ messages: 1, tokensOut: 9, source: 'measured' });
+    expect(usage.dailyActivity[dayKey]).toMatchObject({ messages: 5, tokensIn: 70, tokensOut: 179, tokens: 179 });
+
+    // Input carries the measured cache tiers; the unrouted sibling adds nothing.
+    expect(usage.totalMessages).toBe(5);
+    expect(usage.totalTokens).toEqual({ input: 80, output: 179 });
+    expect(usage.byProvider[providerId]).toMatchObject({ messages: 4, tokens: 170 });
+    expect(usage.byProvider['grok-cli']).toMatchObject({ messages: 1, tokens: 9 });
+    expect(usage.byModel[estimatedModel]).toMatchObject({ messages: 1, tokens: 50 });
+    expect(usage.byModel[measuredModel]).toMatchObject({ messages: 3, tokens: 120 });
+
+    expect(usage.grokRepairIds).toEqual(['repair-sibling', 'repair-parent']);
+    expect(usage.reconciledRuns).toHaveProperty('run-example-partial');
+    expect(usage.siblingReconciledRuns).not.toHaveProperty('run-example-partial');
   });
 });
 
