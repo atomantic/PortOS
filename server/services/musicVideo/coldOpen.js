@@ -16,7 +16,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { findFfmpeg, hasAudioStream, runFfmpegProcess, safeUnder } from '../../lib/ffmpeg.js';
 import { coldOpenPlan, coldOpenScenes, normalizePreMusic, preMusicEffect } from '../../lib/musicVideoColdOpen.js';
 import { nameShots } from './productionReview.js';
-import { shotSegmentDir } from './shotSegments.js';
+import { shotSegmentDir } from './shotSegmentPaths.js';
 
 const RATE = 48000;
 const FORMAT = `aresample=${RATE},aformat=sample_fmts=fltp:channel_layouts=stereo`;
