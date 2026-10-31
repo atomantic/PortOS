@@ -171,7 +171,7 @@ function IdleWindowField({ id, value, onSave, busy, note }) {
 
   const fieldId = `idle-window-${id}`;
   return (
-    <div className="flex items-center gap-1.5">
+    <div className="flex flex-wrap items-center gap-1.5">
       <label htmlFor={fieldId} className="text-xs text-gray-500 whitespace-nowrap">
         Idle release
       </label>
