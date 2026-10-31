@@ -247,8 +247,8 @@ function useVisualGenSettings(value, stageLabel, { series = null } = {}) {
     return p ? filterSelectableModels(p.models || [p.defaultModel]) : [];
   }, [providers, cfg.refineProvider]);
 
-  // Without the settings there is no "currently X" to name.
   const autoMode = pickUsableMode(systemSettings, imageModeCandidates(systemSettings, RENDER_TARGET.PIPELINE_VISUAL, series));
+  // Without the settings there is no "currently X" to name.
   const blurb = cfg.imageMode !== 'auto'
     ? MODE_BLURB[cfg.imageMode]
     : settingsLoaded
