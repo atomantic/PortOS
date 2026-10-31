@@ -231,10 +231,12 @@ describe('mode contracts + wrapper', () => {
     expect(modeContractFor(true)).toBe(FILE_ISSUES_MODE_CONTRACT);
   });
 
-  it('do-work contract requires fixes or tracked dispositions', () => {
+  it('do-work contract requires fixes or tracked dispositions and rejects theoretical findings on ephemeral state', () => {
     expect(DO_WORK_MODE_CONTRACT).toContain('Implement all accepted fixes');
     expect(DO_WORK_MODE_CONTRACT).toContain('{trackerInstructions}');
     expect(DO_WORK_MODE_CONTRACT).toContain('Every actionable finding');
+    expect(DO_WORK_MODE_CONTRACT).toContain('Theoretical multi-writer, crash-recovery, or state-preservation findings on ephemeral/regenerable state (git worktrees, caches, agent runs, in-memory locks) are NOT accepted findings');
+    expect(DO_WORK_MODE_CONTRACT).toContain('rejected as `not-applicable`');
     expect(DO_WORK_MODE_CONTRACT).not.toContain('Do not create tracker issues');
     expect(modeContractFor(false)).toBe(DO_WORK_MODE_CONTRACT);
   });

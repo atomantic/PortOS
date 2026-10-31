@@ -44,7 +44,6 @@ vi.mock('../lib/paths.js', async importOriginal => makePathsProxy(await importOr
 afterAll(cleanupTempDataRoots);
 import { PATHS } from '../lib/paths.js';
 import { PATHS as FILE_PATHS } from '../lib/fileUtils.js';
-import { preserveBranchRetirement } from '../lib/branchRetirementArchive.js';
 import { hasBranchMergeEvidence, getStatus, getStatusPorcelain } from './git.js';
 import { reapMergedWorktrees, cleanupOrphanedWorktrees, deleteCompletedLocalBranch, readWorktreeStatus } from './worktreeManager.js';
 vi.mock('./branchCompletionPolicy.js', () => ({ readBranchCompletionHold: async () => null }));
@@ -312,38 +311,6 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('local completed ref retirement', () => 
     expect(await deleteCompletedLocalBranch(dir, 'done', head)).toBe(true);
     expect(await refGone(dir, 'done')).toBe(true);
     expect(await archiveIds()).toEqual(before);
-  });
-
-  it('refuses a changed shared reflog even when the branch tip is unchanged', async () => {
-    await execGit(['branch', 'done'], dir);
-    const head = (await execGit(['rev-parse', 'done'], dir)).stdout.trim();
-    const common = (await execGit(['rev-parse', '--path-format=absolute', '--git-common-dir'], dir)).stdout.trim();
-    const preserved = await preserveBranchRetirement(dir, common, 'done', head);
-    expect(await preserved.verify()).toBe(true);
-    const log = join(common, 'logs', 'refs', 'heads', 'done');
-    await writeFile(log, `${await readFile(log, 'utf8')}${head} ${head} Test <test@example.com> 1 +0000\tnew recovery evidence\n`);
-    expect(await preserved.verify()).toBe(false);
-    expect((await execGit(['rev-parse', 'done'], dir)).stdout.trim()).toBe(head);
-  });
-
-  it.each(['reflog', 'commits.bundle', 'manifest.json', 'config', 'config.retired'])('refuses an archive whose %s changes before retirement', async name => {
-    await execGit(['branch', 'done'], dir);
-    const head = (await execGit(['rev-parse', 'done'], dir)).stdout.trim();
-    const common = (await execGit(['rev-parse', '--path-format=absolute', '--git-common-dir'], dir)).stdout.trim();
-    const preserved = await preserveBranchRetirement(dir, common, 'done', head);
-    await writeFile(join(preserved.archiveDir, name), 'changed after archival');
-    expect(await preserved.verify()).toBe(false);
-    expect((await execGit(['rev-parse', 'done'], dir)).stdout.trim()).toBe(head);
-  });
-
-  it('holds the branch on archive storage failure', async () => {
-    await execGit(['branch', 'done'], dir);
-    const head = (await execGit(['rev-parse', 'done'], dir)).stdout.trim();
-    const common = (await execGit(['rev-parse', '--path-format=absolute', '--git-common-dir'], dir)).stdout.trim();
-    const blocked = join(dir, 'not-a-directory');
-    await writeFile(blocked, 'keep');
-    await expect(preserveBranchRetirement(dir, common, 'done', head, { cosDir: blocked })).rejects.toThrow();
-    expect((await execGit(['rev-parse', 'done'], dir)).stdout.trim()).toBe(head);
   });
 
   it('preserves the repository receiver deletion policy', async () => {

@@ -532,10 +532,10 @@ describe('generic own-PR delivery retains assigned scope under provider merge au
     expect(prompt).toContain('agent-1');
     expect(prompt).toContain('--match-head-commit <sha>');
     expect(prompt).not.toContain('--delete-branch');
-    expect(prompt).toContain('Local teardown is API-only');
-    expect(prompt).toContain('/api/cos/schedule/branch-reconcile/checkouts/review');
-    expect(prompt).toContain('/api/cos/schedule/branch-reconcile/checkouts/retire');
-    expect(prompt).toContain('Require ok:true and branchDeleted:true plus the matching persisted retirement receipt');
+    expect(prompt).toContain('PortOS cleans up the managed worktree and branch automatically after completion');
+    expect(prompt).toContain('do not report a cleanup hold or create checkout archives');
+    expect(prompt).not.toContain('/api/cos/schedule/branch-reconcile/checkouts/review');
+    expect(prompt).not.toContain('/api/cos/schedule/branch-reconcile/checkouts/retire');
     expect(prompt).not.toContain('git worktree remove');
     expect(prompt).not.toContain('git branch -d');
     expect(prompt).toMatch(/gh pr merge "[^"]+" --merge --match-head-commit <verified-head>/);

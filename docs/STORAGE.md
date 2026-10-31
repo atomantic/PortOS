@@ -1232,22 +1232,15 @@ readable and Gmail/API IDs retain their existing meaning.
 PortOS no longer writes `data/cos/held-checkout-archives/`,
 `data/cos/branch-retirement-archives/`, or
 `data/cos/initialized-checkout-retirements/`. The forge is the source of truth
-for merged work. Git status guards uncommitted and untracked work, while an
-independent check protects ignored local content: an unverified file retains the
-checkout and branch, including after a merge. This covers completed agent,
-merged and detached reconciliation, external worktree, quality-snapshot and
-reviewed held/initialized checkout removal; initialized modules are checked too.
-Recognized Vitest and npm caches and links whose bytes remain outside the
-checkout can still be removed. Unverified local validation reports also hold the
-checkout; the service does not copy them into `.git/portos-retirement-validation`.
-A reviewed integrated retirement receipt may name the merged PR as
-`validationEvidence: { source: "forge-pr", prUrl, prHead, mergeCommit }`.
-Earlier receipts and proofs under `.git/portos-retirement-validation` remain.
-Migration 442 preserves all three historical roots and sibling checkouts such
-as `data/cos/worktrees/` and `data/cos/agents/`. Historical archives can contain
-the only unpublished bytes, quarantined originals or unfinished recovery
-journals. Stopping new archive writes does not authorize deleting that data;
-historical restore helpers remain available without a setup-time purge. See
+for merged work. Once a branch's PR is confirmed merged at the local tip and no
+active agent owns the checkout, its worktree (including ignored, untracked, and
+uncommitted files) and branch are disposable and removed directly without creating
+local archive copies. For unmerged checkouts, git status guards uncommitted and
+untracked work; git-ignored local files never hold a merged checkout. Migrations
+442 and 454 remove `data/cos/held-checkout-archives/`,
+`data/cos/branch-retirement-archives/`, and
+`data/cos/initialized-checkout-retirements/` while leaving sibling checkouts such
+as `data/cos/worktrees/` intact. See
 [branch reconciliation](./features/branch-reconciliation.md#retiring-a-held-checkout).
 
 `<canonical-common-git-dir>/portos-checkout-admission/` is a separate file-primary

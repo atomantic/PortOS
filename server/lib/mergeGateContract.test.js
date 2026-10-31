@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { mergeGateOwed, summaryStatesLeaveOpen, resolveMergeGateVerdict, buildMergeGateReprompt } from './mergeGateContract.js';
+import {
+  mergeGateOwed,
+  summaryStatesLeaveOpen,
+  resolveMergeGateVerdict,
+  buildMergeGateReprompt,
+  MANAGED_WORKTREE_CLEANUP_CONTRACT,
+  MANAGED_WORKTREE_COMPLETION_HANDOFF,
+} from './mergeGateContract.js';
 
 describe('mergeGateOwed', () => {
   it('is owed only when the task asked for a PR, the agent owns the workflow, and nobody hands it to a human', () => {
@@ -105,5 +112,16 @@ describe('buildMergeGateReprompt', () => {
     expect(text).toContain('https://example.com/pr/1');
     expect(text).toContain('Merge Gate');
     expect(text.toLowerCase()).toContain('merged');
+  });
+});
+
+describe('MANAGED_WORKTREE_CLEANUP_CONTRACT', () => {
+  it('directs normal completion after confirmed MERGED without API retirement review or cleanup holds', () => {
+    expect(MANAGED_WORKTREE_COMPLETION_HANDOFF).toBe(MANAGED_WORKTREE_CLEANUP_CONTRACT);
+    expect(MANAGED_WORKTREE_CLEANUP_CONTRACT).toContain('First verify the hosting provider reports the exact PR as MERGED.');
+    expect(MANAGED_WORKTREE_CLEANUP_CONTRACT).toContain('PortOS cleans up the managed worktree and branch automatically after completion');
+    expect(MANAGED_WORKTREE_CLEANUP_CONTRACT).toContain('do not report a cleanup hold or create checkout archives');
+    expect(MANAGED_WORKTREE_CLEANUP_CONTRACT).not.toContain('checkouts/review');
+    expect(MANAGED_WORKTREE_CLEANUP_CONTRACT).not.toContain('checkouts/retire');
   });
 });
