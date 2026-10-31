@@ -89,9 +89,9 @@ describe('PostHistory analytics dashboard', () => {
 
   it('reloads stats when the range selector changes', async () => {
     renderHistory();
-    await waitFor(() => expect(getPostStats).toHaveBeenCalledWith(30));
+    await waitFor(() => expect(getPostStats).toHaveBeenCalledWith(30, { silent: true }));
     fireEvent.click(screen.getByText('7d'));
-    await waitFor(() => expect(getPostStats).toHaveBeenCalledWith(7));
+    await waitFor(() => expect(getPostStats).toHaveBeenCalledWith(7, { silent: true }));
   });
 
   it('shows an empty state when no sessions are in range', async () => {
@@ -100,6 +100,17 @@ describe('PostHistory analytics dashboard', () => {
     renderHistory();
     await waitFor(() => expect(screen.getByText('No sessions found for this range.')).toBeTruthy());
     expect(screen.queryByText('Drill Breakdown')).toBeNull();
+  });
+
+  it('reports a failed session read with Retry instead of "No sessions found", and recovers', async () => {
+    getPostSessions.mockRejectedValueOnce(new Error('db down'));
+    renderHistory();
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load POST sessions');
+    expect(screen.queryByText('No sessions found for this range.')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('2026-06-01')).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 });
 
