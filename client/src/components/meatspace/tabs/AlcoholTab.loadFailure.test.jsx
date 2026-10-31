@@ -18,7 +18,7 @@ import AlcoholTab from './AlcoholTab';
 
 beforeEach(() => {
   api.getAlcoholSummary.mockResolvedValue(null);
-  api.getCustomDrinks.mockResolvedValue(null);
+  api.getCustomDrinks.mockResolvedValue([]);
   api.getAppleHealthCorrelation.mockResolvedValue(null);
 });
 afterEach(cleanup);
@@ -47,4 +47,20 @@ it('sends the rendered event identity when editing and deleting a history row', 
   fireEvent.click(await screen.findByRole('button', { name: 'Remove drink', exact: true }));
   fireEvent.click(screen.getByRole('button', { name: 'Remove', exact: true }));
   await waitFor(() => expect(api.removeAlcoholDrink).toHaveBeenCalledWith('2024-06-01', 0, 'event-id'));
+});
+
+it('hides quick-add buttons and Manage when the button read fails, so a positional edit cannot hit a different stored button', async () => {
+  api.getDailyAlcohol.mockResolvedValue([]);
+  api.getCustomDrinks.mockRejectedValueOnce(new Error('boom'));
+  render(<AlcoholTab />);
+  expect(await screen.findByRole('alert')).toHaveTextContent('Could not load your quick-add drink buttons');
+  expect(screen.queryByRole('button', { name: /Manage/ })).toBeNull();
+  expect(screen.queryByRole('button', { name: /Modelo/ })).toBeNull();
+  expect(api.getCustomDrinks).toHaveBeenLastCalledWith({ silent: true });
+
+  api.getCustomDrinks.mockResolvedValueOnce([{ name: 'Example Stout', oz: 12, abv: 5 }]);
+  fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+  expect(await screen.findByRole('button', { name: /Example Stout/ })).toBeTruthy();
+  expect(screen.getByRole('button', { name: /Manage/ })).toBeTruthy();
+  expect(screen.queryByRole('alert')).toBeNull();
 });

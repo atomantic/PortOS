@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Cigarette, Plus, Trash2, Pencil, Check, X, Settings } from 'lucide-react';
 import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
@@ -25,7 +25,10 @@ export default function NicotineTab() {
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
 
   // Custom product buttons
-  const [productButtons, setProductButtons] = useState([]);
+  // null = not loaded or the read failed.
+  const [productButtons, setProductButtons] = useState(null);
+  const [buttonsFailed, setButtonsFailed] = useState(false);
+  const buttonsReadSeq = useRef(0);
   const [managingButtons, setManagingButtons] = useState(false);
   const [editingButtonIdx, setEditingButtonIdx] = useState(null);
   const [buttonForm, setButtonForm] = useState({ name: '', mgPerUnit: '' });
@@ -44,11 +47,17 @@ export default function NicotineTab() {
   const [chartView, setChartView] = useState('30d');
   const [correlationData, setCorrelationData] = useState(null);
 
+  // Buttons are edited and removed by position, so a failed read must not leave
+  // a stale list whose positions differ from the stored one, and an older read
+  // must not land after a newer one.
   const fetchProductButtons = useCallback(async () => {
-    const buttons = await api.getCustomNicotineProducts().catch(() => null);
-    if (Array.isArray(buttons)) {
-      setProductButtons(buttons);
-    }
+    const seq = ++buttonsReadSeq.current;
+    const buttons = await api.getCustomNicotineProducts({ silent: true }).catch(() => null);
+    if (seq !== buttonsReadSeq.current) return;
+    const ok = Array.isArray(buttons);
+    setProductButtons(ok ? buttons : null);
+    setButtonsFailed(!ok);
+    if (!ok) setEditingButtonIdx(null);
   }, []);
 
   const fetchData = useCallback(async () => {
@@ -246,7 +255,7 @@ export default function NicotineTab() {
       <div className="bg-port-card border border-port-border rounded-xl p-4">
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-sm font-medium text-gray-400 uppercase tracking-wider">Log Nicotine</h3>
-          <button
+          {productButtons && <button
             onClick={() => setManagingButtons(!managingButtons)}
             className={`flex items-center gap-1 px-2 py-1 text-xs rounded-lg transition-colors ${
               managingButtons ? 'bg-port-accent/20 text-port-accent' : 'text-gray-500 hover:text-gray-300'
@@ -255,10 +264,16 @@ export default function NicotineTab() {
           >
             <Settings size={14} />
             {managingButtons ? 'Done' : 'Manage'}
-          </button>
+          </button>}
         </div>
 
-        {managingButtons ? (
+        {buttonsFailed && (
+          <div className="mb-3">
+            <LoadFailureNotice message="Could not load your quick-add product buttons." onRetry={fetchProductButtons} />
+          </div>
+        )}
+
+        {productButtons && managingButtons ? (
           <div className="space-y-2">
             {productButtons.map((btn, idx) => (
               <div key={idx} className="flex items-center gap-2">
@@ -334,7 +349,7 @@ export default function NicotineTab() {
           <>
             {/* Quick-add buttons */}
             <div className="flex flex-wrap gap-2 mb-3">
-              {productButtons.map((btn, idx) => (
+              {productButtons?.map((btn, idx) => (
                 <button
                   key={idx}
                   onClick={() => handleQuickAdd(btn)}

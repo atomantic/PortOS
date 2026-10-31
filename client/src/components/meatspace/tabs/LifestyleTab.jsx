@@ -3,6 +3,7 @@ import { ClipboardList, Save } from 'lucide-react';
 import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
 import BrailleSpinner from '../../BrailleSpinner';
+import LoadFailureNotice from '../LoadFailureNotice';
 
 const SMOKING_OPTIONS = [
   { value: 'never', label: 'Never' },
@@ -35,12 +36,21 @@ export default function LifestyleTab() {
   const [sex, setSex] = useState(null);
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [loadFailed, setLoadFailed] = useState(false);
 
   const fetchData = useCallback(async () => {
-    const data = await api.getMeatspaceConfig().catch(() => null);
+    const data = await api.getMeatspaceConfig({ silent: true }).catch(() => null);
+    // Save sends sex and every lifestyle field, so a form seeded with defaults
+    // after a failed read would overwrite the stored profile (and MortalLoom's).
+    if (!data) {
+      setLoadFailed(true);
+      setLoading(false);
+      return;
+    }
+    setLoadFailed(false);
     setConfig(data);
-    setSex(data?.sex ?? null);
-    setLifestyle(data?.lifestyle || {
+    setSex(data.sex ?? null);
+    setLifestyle(data.lifestyle || {
       smokingStatus: 'never',
       exerciseMinutesPerWeek: 150,
       sleepHoursPerNight: 7.5,
@@ -83,6 +93,10 @@ export default function LifestyleTab() {
         <BrailleSpinner text="Loading lifestyle data" />
       </div>
     );
+  }
+
+  if (loadFailed) {
+    return <LoadFailureNotice message="Could not load your lifestyle profile." onRetry={fetchData} />;
   }
 
   return (

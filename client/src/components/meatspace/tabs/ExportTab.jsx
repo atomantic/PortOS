@@ -16,10 +16,11 @@ export default function ExportTab() {
   const fetchData = useCallback(async () => {
     const [blood, config] = await Promise.all([
       api.getBloodTests({ silent: true }).catch(() => null),
-      api.getMeatspaceConfig().catch(() => null),
+      api.getMeatspaceConfig({ silent: true }).catch(() => null),
     ]);
-    // A failed blood read must not become an empty report that can be printed.
-    setReport(blood === null ? null : buildClinicianReport({ tests: blood?.tests || [], config }));
+    // A failed read must not become a printable report: no blood means an empty
+    // panel, no config means a blank profile and lifestyle section.
+    setReport(blood === null || config === null ? null : buildClinicianReport({ tests: blood?.tests || [], config }));
     setLoading(false);
   }, []);
 

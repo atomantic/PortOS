@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Beer, Plus, Trash2, AlertTriangle, TrendingDown, TrendingUp, Pencil, Check, X, Settings } from 'lucide-react';
 import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
@@ -14,14 +14,6 @@ import { dayOfWeek } from '../constants';
 import { localDateKey } from '../../../utils/formatters';
 
 const ML_PER_OZ = 29.5735;
-
-const DEFAULT_DRINKS = [
-  { name: 'Modelo Especial (12oz)', oz: 12, abv: 4.4 },
-  { name: 'Nitro Guinness (14.9oz)', oz: 14.9, abv: 4.2 },
-  { name: 'Old Fashioned (2oz)', oz: 2, abv: 40 },
-  { name: 'Guinness 0 (14.9oz)', oz: 14.9, abv: 0.4 },
-  { name: 'N/A Beer (12oz)', oz: 12, abv: 0.4 }
-];
 
 const toOz = (value, unit) => unit === 'ml' ? value / ML_PER_OZ : value;
 
@@ -55,7 +47,10 @@ export default function AlcoholTab() {
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
 
   // Custom drink buttons
-  const [drinkButtons, setDrinkButtons] = useState(DEFAULT_DRINKS);
+  // null = not loaded or the read failed; the server seeds its own defaults.
+  const [drinkButtons, setDrinkButtons] = useState(null);
+  const [buttonsFailed, setButtonsFailed] = useState(false);
+  const buttonsReadSeq = useRef(0);
   const [managingButtons, setManagingButtons] = useState(false);
   const [editingButtonIdx, setEditingButtonIdx] = useState(null);
   const [buttonForm, setButtonForm] = useState({ name: '', oz: '', abv: '' });
@@ -78,13 +73,17 @@ export default function AlcoholTab() {
   const [chartView, setChartView] = useState('30d');
   const [correlationData, setCorrelationData] = useState(null);
 
+  // Buttons are edited and removed by position, so a failed read must not leave
+  // a list (built-in or stale) whose positions differ from the stored one, and an
+  // older read must not land after a newer one.
   const fetchDrinkButtons = useCallback(async () => {
-    const buttons = await api.getCustomDrinks().catch(() => null);
-    if (Array.isArray(buttons)) {
-      setDrinkButtons(buttons);
-    } else {
-      setDrinkButtons(DEFAULT_DRINKS);
-    }
+    const seq = ++buttonsReadSeq.current;
+    const buttons = await api.getCustomDrinks({ silent: true }).catch(() => null);
+    if (seq !== buttonsReadSeq.current) return;
+    const ok = Array.isArray(buttons);
+    setDrinkButtons(ok ? buttons : null);
+    setButtonsFailed(!ok);
+    if (!ok) setEditingButtonIdx(null);
   }, []);
 
   const fetchData = useCallback(async () => {
@@ -324,7 +323,7 @@ export default function AlcoholTab() {
       <div className="bg-port-card border border-port-border rounded-xl p-4">
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-sm font-medium text-gray-400 uppercase tracking-wider">Log a Drink</h3>
-          <button
+          {drinkButtons && <button
             onClick={() => setManagingButtons(v => !v)}
             className={`flex items-center gap-1 px-2 py-1 text-xs rounded-lg transition-colors ${
               managingButtons ? 'bg-port-accent/20 text-port-accent' : 'text-gray-500 hover:text-gray-300'
@@ -333,11 +332,17 @@ export default function AlcoholTab() {
           >
             <Settings size={14} />
             {managingButtons ? 'Done' : 'Manage'}
-          </button>
+          </button>}
         </div>
 
+        {buttonsFailed && (
+          <div className="mb-4">
+            <LoadFailureNotice message="Could not load your quick-add drink buttons." onRetry={fetchDrinkButtons} />
+          </div>
+        )}
+
         {/* Quick-add buttons */}
-        {!managingButtons && (
+        {drinkButtons && !managingButtons && (
           <div className="flex flex-wrap gap-2 mb-4">
             {drinkButtons.map((drink, idx) => (
               <button
@@ -354,7 +359,7 @@ export default function AlcoholTab() {
         )}
 
         {/* Manage quick-add buttons */}
-        {managingButtons && (
+        {drinkButtons && managingButtons && (
           <div className="mb-4 space-y-2">
             {drinkButtons.map((drink, idx) => (
               <div key={`manage-${idx}`} className="flex items-center gap-2">
