@@ -1600,6 +1600,47 @@ describe('arcPlanner — resolveVerifyIssues', () => {
     expect(out.series.arc.readerMap?.hooks?.[0]?.label).toBe('why is the foundry silent');
   });
 
+  // Uniquely catches an arc merge that wipes a stored field the resolve response omits (#14421).
+  it('keeps every stored arc field the resolve response omits', async () => {
+    const s = await setupSeries();
+    const foreshadowing = [{ label: 'A cracked bell', plantIssue: 1, payoffIssue: 3 }];
+    const seriesDesign = { mode: 'finite', episodeActivity: 'Investigate the case.', endingCondition: 'Solve the central case.' };
+    await seriesSvc.updateSeries(s.id, {
+      arc: { logline: 'L', summary: 'S', themes: ['duty'], protagonistArc: 'Learns to ask for help', shape: 'man-in-hole', foreshadowing, seriesDesign },
+    });
+    const stored = (await seriesSvc.getSeries(s.id)).arc;
+    expect(stored.foreshadowing).toHaveLength(1);
+    expect(stored.seriesDesign).toBeTruthy();
+    stageRunnerSpy = vi.fn(async () => ({
+      content: { arc: { logline: 'L2' }, seasons: [], notes: '' },
+      runId: 'r', providerId: 'p', model: 'm',
+    }));
+    const out = await planner.resolveVerifyIssues(s.id, { findings: [{ severity: 'medium', problem: 'X', suggestion: 'Y' }] });
+    expect(out.applied).toBe(true);
+    expect(out.series.arc).toMatchObject({ logline: 'L2', summary: 'S', themes: ['duty'], protagonistArc: 'Learns to ask for help', shape: 'man-in-hole' });
+    expect(out.series.arc.foreshadowing).toEqual(stored.foreshadowing);
+    expect(out.series.arc.seriesDesign).toEqual(stored.seriesDesign);
+  });
+
+  // Uniquely catches the exact-text tally dropping a rejected summary or protagonist-arc edit (#14421).
+  it('counts rejected exact-text edits on both the summary and the protagonist arc', async () => {
+    const s = await setupSeries();
+    await seriesSvc.updateSeries(s.id, { arc: { logline: 'L', summary: 'The city sleeps.', protagonistArc: 'She stays.' } });
+    stageRunnerSpy = vi.fn(async () => ({
+      content: {
+        patchMode: 'exact-text-v1',
+        arc: {
+          resolves: ['f1'],
+          summaryEdits: [{ find: 'Not in the summary.', replace: 'x' }],
+          protagonistArcEdits: [{ find: 'Not in the arc.', replace: 'y' }],
+        },
+      },
+      runId: 'r', providerId: 'p', model: 'm',
+    }));
+    const out = await planner.resolveVerifyIssues(s.id, { findings: [{ id: 'f1', severity: 'medium', problem: 'X' }] });
+    expect(out.rejectedExactEdits).toBe(2);
+  });
+
   it('preserves series.arc.tickingClock when the resolve LLM does not author one', async () => {
     // Sparse countdown repairs must preserve a clock omitted by the model.
     const s = await setupSeries();
