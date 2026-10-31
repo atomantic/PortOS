@@ -31,3 +31,20 @@ describe('LifestyleTab profile load', () => {
     expect(api.updateMeatspaceConfig).toHaveBeenCalledTimes(1);
   });
 });
+
+it('keeps a loaded profile when an older Retry read fails after a newer one succeeded', async () => {
+  api.getMeatspaceConfig.mockRejectedValueOnce(new Error('boom'));
+  render(<LifestyleTab />);
+  const retry = await screen.findByRole('button', { name: 'Retry' });
+
+  let rejectOlder;
+  api.getMeatspaceConfig.mockImplementationOnce(() => new Promise((_, reject) => { rejectOlder = reject; }));
+  fireEvent.click(retry);
+  api.getMeatspaceConfig.mockResolvedValueOnce({ sex: 'female', lifestyle: {} });
+  fireEvent.click(retry);
+  expect(await screen.findByRole('button', { name: /Save/ })).toBeTruthy();
+
+  await act(async () => { rejectOlder(new Error('late')); });
+  expect(screen.queryByRole('alert')).toBeNull();
+  expect(screen.getByRole('button', { name: /Save/ })).toBeTruthy();
+});
