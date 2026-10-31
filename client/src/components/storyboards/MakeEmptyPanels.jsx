@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Loader2, RefreshCw, Wand2 } from 'lucide-react';
 import InlineConfirmRow from '../ui/InlineConfirmRow';
 import ProgressBar from '../ui/ProgressBar';
@@ -33,24 +33,25 @@ export default function MakeEmptyPanels({ boardId }) {
   const [loading, setLoading] = useState(false);
   const [note, setNote] = useState('');
   const [selectNew, setSelectNew] = useState(true);
+  // Bumped by every batch event and every read or start issued: an answer
+  // applies only while nothing newer has been heard or asked since it was sent.
+  const epoch = useRef(0);
 
   useEffect(() => {
     let active = true;
-    // Counts batch events: a read issued before the newest one is older than it.
-    let events = 0;
     // A batch started in another tab, or before a reload, is still shown. Re-read
     // on reconnect: a `done` missed while offline, or a server restart that
     // dropped the batch, would otherwise leave the progress bar up for good.
     const read = () => {
-      const seen = events;
+      const seen = ++epoch.current;
       getStoryboardMakeEmpty(boardId, { silent: true })
-        .then((res) => { if (active && seen === events) setBatch(res?.batch || null); })
+        .then((res) => { if (active && seen === epoch.current) setBatch(res?.batch || null); })
         .catch(() => {});
     };
     read();
     const onBatch = (evt) => {
       if (evt?.storyboardId !== boardId) return;
-      events += 1;
+      epoch.current += 1;
       if (evt.status !== 'done') { setBatch(evt); return; }
       setBatch(null);
       const made = evt.done - evt.failed;
@@ -71,10 +72,11 @@ export default function MakeEmptyPanels({ boardId }) {
     setLoading(redraw ? 'redraw' : 'empty');
     setNote('');
     setPlan(null);
+    const seen = ++epoch.current;
     const next = await getStoryboardMakeEmpty(boardId).catch(() => null);
     setLoading(false);
     if (!next) return;
-    if (next.batch) { setBatch(next.batch); return; }
+    if (next.batch) { if (seen === epoch.current) setBatch(next.batch); return; }
     if (!(redraw ? next.allCount : next.panelCount)) { setNote(redraw ? 'Every panel is already drawing.' : 'Every panel already has art.'); return; }
     if (!next.steps.some((step) => step.type === 'image')) { setNote('The recipe has no Image node, so there is nothing to make.'); return; }
     setPlan({ ...next, redraw });
@@ -83,8 +85,10 @@ export default function MakeEmptyPanels({ boardId }) {
   const start = async () => {
     const { redraw } = plan;
     setPlan(null);
+    const seen = ++epoch.current;
     const res = await startStoryboardMakeEmpty(boardId, redraw ? { redraw: true, selectNew } : {}).catch(() => null);
-    if (res?.batch) setBatch(res.batch);
+    // The server emits the batch's events before this answers; a fast batch may already be done.
+    if (res?.batch && seen === epoch.current) setBatch(res.batch);
   };
   const buttonClass = 'min-h-[44px] inline-flex items-center gap-1.5 rounded border border-port-border px-3 text-sm text-gray-200 hover:border-port-accent/60 hover:text-white disabled:opacity-40';
 

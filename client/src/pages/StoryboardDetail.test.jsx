@@ -414,6 +414,22 @@ describe('StoryboardDetail', () => {
     expect(screen.getByRole('button', { name: 'Make empty panels' })).toBeInTheDocument();
   });
 
+  // Uniquely catches the opening read, answering after a reconnect read, restoring a batch the newer read cleared.
+  it('lets the newest batch read win when an older one answers last', async () => {
+    api.getStoryboard.mockResolvedValue(board());
+    const answers = [];
+    api.getStoryboardMakeEmpty.mockImplementation(() => new Promise((resolve) => { answers.push(resolve); }));
+    renderAt('/storyboards/sb-1');
+    expect(await screen.findByRole('button', { name: 'Make empty panels' })).toBeInTheDocument();
+    const onConnect = socketMock.on.mock.calls.filter(([event]) => event === 'connect').map(([, fn]) => fn);
+    act(() => { for (const fn of onConnect) fn(); });
+    const [opening, reconnect] = answers;
+    await act(async () => { reconnect({ batch: null, panelCount: 0, steps: [] }); });
+    await act(async () => { opening({ batch: { storyboardId: 'sb-1', status: 'running', total: 2, done: 1, failed: 0 }, panelCount: 0, steps: [] }); });
+    expect(screen.queryByText('1 of 2')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Make empty panels' })).toBeInTheDocument();
+  });
+
   // Uniquely catches a failed read being reported as a deleted board with no way to retry.
   it('offers a retry when the board read fails, and says a 404 board is gone', async () => {
     api.getStoryboard.mockRejectedValueOnce(Object.assign(new Error('HTTP 503'), { status: 503 }));
