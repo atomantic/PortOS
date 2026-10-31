@@ -522,7 +522,6 @@ function CapabilityTestDrawer({
                 {liveLines.map((line, i) => (
                   // Lines are append-only and never reordered, so the index is a
                   // stable key here; the model's own text has no id to key on.
-                  // eslint-disable-next-line react/no-array-index-key
                   <div key={i} className="text-[11px] font-mono text-gray-400 whitespace-pre-wrap leading-relaxed">{line}</div>
                 ))}
               </div>

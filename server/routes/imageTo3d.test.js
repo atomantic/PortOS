@@ -528,7 +528,6 @@ describe('image-to-3d model records', () => {
     // 0 scales the subject out of existence; above 1 crops it — which is the exact
     // failure the knob exists to prevent, so it must not be reachable by accident.
     for (const subjectScale of [0, -0.5, 1.5]) {
-      // eslint-disable-next-line no-await-in-loop
       const bad = await request(makeApp())
         .post('/api/image-to-3d/models/image3d-1/generate')
         .send({ subjectScale });

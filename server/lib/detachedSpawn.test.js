@@ -69,10 +69,8 @@ const WAIT_POLL_MS = 5;
 const waitUntil = async (predicate, { timeoutMs = 5000 } = {}) => {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
-    // eslint-disable-next-line no-await-in-loop
     if (await predicate()) return true;
     if (Date.now() >= deadline) return false;
-    // eslint-disable-next-line no-await-in-loop
     await new Promise((r) => setTimeout(r, WAIT_POLL_MS));
   }
 };

@@ -67,7 +67,7 @@ export default function CoverLetteringPanel({ project, art, source, title, tag, 
   const fonts = lettering.fonts || [];
   const styles = lettering.styles || [];
   const fontTick = usePreviewFonts(lettering.fonts);
-  const saved = useMemo(() => normalizeCoverDesign(art.design, { fonts }), [art.design, lettering.fonts]); // eslint-disable-line react-hooks/exhaustive-deps
+  const saved = useMemo(() => normalizeCoverDesign(art.design, { fonts }), [art.design, lettering.fonts]); // Dependency list is intentionally partial.
   const [edits, setEdits] = useState({});
   const design = normalizeCoverDesign({ ...saved, ...edits }, { fonts });
   const dirty = JSON.stringify(design) !== JSON.stringify(saved);
@@ -81,7 +81,7 @@ export default function CoverLetteringPanel({ project, art, source, title, tag, 
   const svg = useMemo(() => {
     const widths = canvasCoverWidths(design, { title, tag, size: COVER_ART_SIZE }, fonts);
     return coverOverlaySvg({ title, tag, design, widths, fonts });
-  }, [designKey, title, tag, lettering.fonts, fontTick]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [designKey, title, tag, lettering.fonts, fontTick]); // Dependency list is intentionally partial.
 
   const choices = (key) => (key === 'typeface' ? coverTypefaceChoices(fonts) : COVER_DESIGN_OPTIONS[key]);
   const choiceLabel = (key, value) => (key === 'typeface' ? (fonts.find((f) => `font:${f.id}` === value)?.family || humanize(value)) : humanize(value));

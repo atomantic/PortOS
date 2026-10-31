@@ -4,7 +4,7 @@ import { tmpdir } from 'os';
 import { join, dirname } from 'path';
 import { makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
-var tempRoot; // eslint-disable-line no-var
+var tempRoot;
 function getTempRoot() {
   if (!tempRoot) tempRoot = mkdtempSync(join(tmpdir(), 'idealoom-lists-test-'));
   return tempRoot;

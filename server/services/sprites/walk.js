@@ -197,7 +197,7 @@ async function loadRunRecord(recordId, runId) {
 async function resolveRunAt(recordId, runDirRel) {
   const candidates = [runDirRel, altRunLayoutPath(runDirRel)].filter(Boolean);
   for (const rel of candidates) {
-    // eslint-disable-next-line no-await-in-loop -- ordered preference: stop at the layout that exists
+    // ordered preference: stop at the layout that exists
     const run = await loadRunRecordAt(recordId, rel);
     if (run) return { run, runDirRel: rel };
   }
@@ -478,7 +478,7 @@ async function loadRedrawRun(recordId, direction, entry) {
   let stripStat = null;
   for (const field of REDRAW_STRIP_FIELDS) {
     const rel = toRecordRelativeAssetPath(recordId, cycle[field]);
-    // eslint-disable-next-line no-await-in-loop -- ordered preference: stop at the first strip that exists
+    // ordered preference: stop at the first strip that exists
     const found = rel && await stat(join(spriteDir(recordId), rel)).catch(() => null);
     if (found) {
       stripPath = rel;
@@ -1964,7 +1964,7 @@ export async function unlockDirectionalAnchor(recordId, { direction }) {
 async function invalidateAnchorDependentTracks(recordId, direction) {
   const tracksInvalidated = {};
   for (const row of anchorSeededTracks()) {
-    // eslint-disable-next-line no-await-in-loop -- ordered: each track's selection write settles before the next
+    // ordered: each track's selection write settles before the next
     tracksInvalidated[row.id] = await invalidateTrackDirectionForAnchorRevision(row.id, recordId, { direction });
   }
   return { tracksInvalidated, scannerInvalidated: tracksInvalidated[SCANNER_TRACK] ?? false };
@@ -2010,7 +2010,7 @@ export async function unlockTurnaroundReference(recordId) {
   // track may keep an approval descended from the old sheet.
   const tracksInvalidatedDirections = {};
   for (const row of anchorSeededTracks()) {
-    // eslint-disable-next-line no-await-in-loop -- ordered: each track's selection write settles before the next
+    // ordered: each track's selection write settles before the next
     tracksInvalidatedDirections[row.id] = await invalidateTrackForTurnaroundRevision(row.id, recordId);
   }
   const reference = await unlockReferenceTurnaround(recordId);

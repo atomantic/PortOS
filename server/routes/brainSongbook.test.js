@@ -11,7 +11,7 @@ import { makePathsProxy } from '../lib/mockPathsDataRoot.js';
 // Redirect the attachment bytes directory at a per-suite temp dir. `var` +
 // function declaration are hoisted (no TDZ) so the hoisted vi.mock factory can
 // call getTempRoot() safely.
-var tempRoot; // eslint-disable-line no-var
+var tempRoot;
 function getTempRoot() {
   if (!tempRoot) tempRoot = mkdtempSync(join(tmpdir(), 'songbook-route-test-'));
   return tempRoot;

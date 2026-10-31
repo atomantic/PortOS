@@ -726,13 +726,11 @@ export async function verifyPostCompletionOutputs({ outputPaths, completedOutput
     if (!Number.isFinite(stats.mtimeMs) || stats.mtimeMs < startedAtMs - OUTPUT_MTIME_SLACK_MS) {
       return { ok: false, reason: `${label} predates this render` };
     }
-    // eslint-disable-next-line no-await-in-loop
     const frames = await probeFrameCount(outputPath);
     if (!Number.isFinite(frames)) return { ok: false, reason: `${label} could not be probed for frames` };
     if (Math.abs(frames - expectedFrames) > frameTolerance(expectedFrames)) {
       return { ok: false, reason: `${label} carries ${frames} frames, not the ${expectedFrames} requested` };
     }
-    // eslint-disable-next-line no-await-in-loop
     const seconds = await probeVideoDuration(outputPath);
     if (!Number.isFinite(seconds)) return { ok: false, reason: `${label} could not be probed for duration` };
     if (Math.abs(seconds - expectedSeconds) > durationToleranceSeconds(expectedSeconds)) {

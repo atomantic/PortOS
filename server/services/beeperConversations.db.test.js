@@ -84,7 +84,7 @@ beforeAll(async () => {
     const nullActivity = i >= 9;
     const lastActivity = nullActivity ? null : new Date(now - i * 60_000).toISOString();
     const createdAt = nullActivity ? new Date(now + (100 + i) * 60_000).toISOString() : null;
-    // eslint-disable-next-line no-await-in-loop -- deterministic seed order
+    // deterministic seed order
     const { rows } = await query(
       `INSERT INTO beeper_conversations
          (account_id, network, source_chat_id, title, type, last_activity, created_at)
@@ -98,7 +98,7 @@ beforeAll(async () => {
       // Message j is more recent as j increases (msg 3 is the latest), so the
       // conversation's "last message" preview is deterministic.
       const ts = new Date(now - i * 60_000 + j * 1_000).toISOString();
-      // eslint-disable-next-line no-await-in-loop -- deterministic seed order
+      // deterministic seed order
       await query(
         `INSERT INTO beeper_messages (id, conversation_id, sender_id, body, sent_at, created_at)
          VALUES ($1, $2, 'user-1', $3, $4, $4)`,
@@ -251,7 +251,7 @@ describe.skipIf(!runDb)('beeper conversation/message list query plans (audit clu
     const seen = [];
     let cursor;
     for (let guard = 0; guard < MESSAGES_PER_CONV + 1; guard += 1) {
-      // eslint-disable-next-line no-await-in-loop -- exercising real pagination
+      // exercising real pagination
       const page = await listMessages(targetConv, { limit: 2, cursor });
       seen.push(...page.messages.map((m) => m.id));
       if (!page.nextCursor) break;

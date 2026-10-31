@@ -199,7 +199,7 @@ async function applyVllmApiKeyToProviders(apiKey, emit) {
     // A failed provider write must not undo a successful 30 GB provision — this
     // is a convenience (the key is in `.env` either way), so it reports and
     // carries on rather than throwing out of the whole run.
-    // eslint-disable-next-line no-await-in-loop -- two seeded records, each a serialized file write
+    // two seeded records, each a serialized file write
     const written = await updateProvider(provider.id, { apiKey }).then(() => true, (err) => {
       emit(`Could not store the API key on ${provider.id} (${err.message}) — paste it from .env onto that provider yourself.`);
       return false;

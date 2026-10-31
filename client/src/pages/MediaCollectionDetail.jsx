@@ -236,7 +236,7 @@ function MediaCollectionDetailContent() {
       }));
       page.setItems(rows => rows.map((row) => {
         if (!matches(row)) return row;
-        const { pendingDelete: _previous, ...data } = row.data; // eslint-disable-line no-unused-vars
+        const { pendingDelete: _previous, ...data } = row.data;
         return { ...row, data: outcome.pendingDelete ? { ...data, pendingDelete: outcome.pendingDelete } : data };
       }));
       toast(outcome.notice);

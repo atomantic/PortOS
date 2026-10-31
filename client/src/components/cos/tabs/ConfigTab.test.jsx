@@ -422,7 +422,7 @@ describe('render loop guard (#8348)', () => {
     let settledCount = providerHook.renderCount;
     let settled = false;
     for (let attempt = 0; attempt < 8; attempt += 1) {
-      // eslint-disable-next-line no-await-in-loop -- sequential settle-detection, not parallelizable
+      // sequential settle-detection, not parallelizable
       await act(async () => {});
       const nextCount = providerHook.renderCount;
       if (nextCount === settledCount) {

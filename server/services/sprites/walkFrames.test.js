@@ -93,8 +93,8 @@ async function makeFrames(id, {
     const bytes = customFrameBytes?.[i] ?? defaultFrameBytes;
     const fileRel = `${fileLayout}/${runId}/generated/frames/f${i}.png`;
     const abs = join(TEST_ROOT, 'sprites', id, fileRel);
-    await mkdir(join(abs, '..'), { recursive: true }); // eslint-disable-line no-await-in-loop
-    await writeFile(abs, bytes); // eslint-disable-line no-await-in-loop
+    await mkdir(join(abs, '..'), { recursive: true });
+    await writeFile(abs, bytes);
     const declaredRel = `${declaredLayout}/${runId}/generated/frames/f${i}.png`;
     frames.push({
       outputIndex: i,

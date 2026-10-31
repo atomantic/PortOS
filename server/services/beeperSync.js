@@ -371,7 +371,7 @@ async function fetchNewMessages(chatId, storedCursor, clientOptions) {
   let truncated = false;
 
   for (let pageIndex = 0; pageIndex < maxPages; pageIndex++) {
-    // eslint-disable-next-line no-await-in-loop -- cursor pagination is inherently sequential
+    // cursor pagination is inherently sequential
     const page = await listMessagesPage(chatId, { cursor, direction, ...clientOptions });
     assertPagedShape(page, `/v1/chats/{chatID}/messages`);
     messages.push(...page.items);
@@ -410,7 +410,7 @@ async function refreshAccounts(clientOptions) {
   const accounts = (await getJoinedAccounts(clientOptions)).map(normalizeAccountRow)
     .filter((account) => account.accountId);
   for (const account of accounts) {
-    // eslint-disable-next-line no-await-in-loop -- one roster, a handful of rows
+    // one roster, a handful of rows
     await query(
       `INSERT INTO beeper_accounts (account_id, network, display_name, status, bridge_id, last_seen_at)
        VALUES ($1, $2, $3, $4, $5, NOW())
@@ -509,7 +509,7 @@ export async function upsertMirroredMessage(client, conversationId, message, att
   // A stale observation or tombstone must not rewrite attachment references.
   if (result.rowCount === 0 || message.unsentAt) return;
   for (const attachment of attachments) {
-    // eslint-disable-next-line no-await-in-loop -- same transaction, ordered after its message
+    // same transaction, ordered after its message
     await client.query(
       `INSERT INTO beeper_attachments (conversation_id, message_id, idx, mxc_id, mime_type,
          byte_length, file_name, width, height)
@@ -530,7 +530,7 @@ export async function upsertMirroredMessage(client, conversationId, message, att
 async function commitMessages({ conversationId, accountId, sourceChatId, rows, cursor, lastActivity }) {
   return withTransaction(async (client) => {
     for (const { message, attachments } of rows) {
-      // eslint-disable-next-line no-await-in-loop -- ordered writes inside one transaction
+      // ordered writes inside one transaction
       await upsertMirroredMessage(client, conversationId, message, attachments);
     }
 
@@ -646,7 +646,7 @@ async function sweepChat({
   // `upsertParticipant`'s phone-match fallback would reload and reindex every
   // Tribe person once per participant, in every chat, on every pass.
   for (const participant of normalizeParticipants(chat)) {
-    // eslint-disable-next-line no-await-in-loop -- at most 20 per chat (the list endpoint truncates there)
+    // at most 20 per chat (the list endpoint truncates there)
     await upsertParticipant({
       conversationId, ...participant, observedVia: 'participant-list', personIndex,
     });
@@ -661,7 +661,7 @@ async function sweepChat({
   for (const { message, raw } of rows) {
     if (!message.senderId || seenSenders.has(message.senderId)) continue;
     seenSenders.add(message.senderId);
-    // eslint-disable-next-line no-await-in-loop -- one row per distinct sender in this window
+    // one row per distinct sender in this window
     await upsertParticipant({
       conversationId,
       sourceUserId: message.senderId,
@@ -748,7 +748,7 @@ async function sweepAccount(account, clientOptions, observedAt, personIndex) {
 
   for (let pageIndex = 0; pageIndex < MAX_CHAT_PAGES_PER_ACCOUNT; pageIndex++) {
     const requestCursor = refreshHead ? undefined : cursor;
-    // eslint-disable-next-line no-await-in-loop -- cursor pagination is inherently sequential
+    // cursor pagination is inherently sequential
     const page = await listChatsPage({
       cursor: requestCursor, direction: 'before', accountIDs: [account.accountId], ...clientOptions,
     }).catch(async (err) => {
@@ -771,7 +771,7 @@ async function sweepAccount(account, clientOptions, observedAt, personIndex) {
         // enumerated chat without refetching history or rewriting unchanged rows.
         const normalized = normalizeChatRow(chat);
         if (normalized.accountId && normalized.sourceChatId) {
-          // eslint-disable-next-line no-await-in-loop -- one mirrored chat at a time
+          // one mirrored chat at a time
           await query(
             `UPDATE beeper_conversations SET snooze_until = $3, updated_at = NOW()
               WHERE account_id = $1 AND source_chat_id = $2
@@ -784,7 +784,7 @@ async function sweepAccount(account, clientOptions, observedAt, personIndex) {
         }
         continue;
       }
-      // eslint-disable-next-line no-await-in-loop -- one chat at a time; each is its own transaction
+      // one chat at a time; each is its own transaction
       const result = await sweepChat({
         chat, stored, clientOptions, observedAt, personIndex,
       }).catch((err) => {
@@ -812,7 +812,7 @@ async function sweepAccount(account, clientOptions, observedAt, personIndex) {
     cursor = page.hasMore ? page.oldestCursor : null;
     // Only advance after all work on this page was attempted. A crash or write
     // failure replays this page through the existing idempotent message writes.
-    // eslint-disable-next-line no-await-in-loop -- checkpoint follows page work
+    // checkpoint follows page work
     await query('UPDATE beeper_accounts SET chat_cursor = $2 WHERE account_id = $1', [account.accountId, cursor]);
     continuationPending = Boolean(page.hasMore);
     if (!continuationPending) break;
@@ -872,12 +872,12 @@ async function reconcileStoredMessages(accountId, clientOptions) {
     [accountId, position.message_id, RECONCILE_LIMIT, position.upper_bound],
   );
   for (const row of result.rows) {
-    // eslint-disable-next-line no-await-in-loop -- bounded sequential upstream work
+    // bounded sequential upstream work
     await reconcileStoredRow(row, clientOptions).catch(() => {
       console.warn('🫧 Beeper reconciliation deferred a message until the next rotation');
     });
     // Progress commits after persistence; a crash before this repeats harmlessly.
-    // eslint-disable-next-line no-await-in-loop -- durable checkpoint follows each attempt
+    // durable checkpoint follows each attempt
     await query(
       `UPDATE beeper_reconcile_cursors SET message_id = $2 WHERE account_id = $1`,
       [accountId, row.id],
@@ -908,14 +908,14 @@ async function drainReconciliationEvents() {
   while (pendingReconciliations.size) {
     const [key, item] = pendingReconciliations.entries().next().value;
     pendingReconciliations.delete(key);
-    // eslint-disable-next-line no-await-in-loop -- recheck ingestion consent for queued work
+    // recheck ingestion consent for queued work
     const config = await getBeeperSyncConfig();
-    // eslint-disable-next-line no-await-in-loop -- credential/feature gate
+    // credential/feature gate
     if (!config.enabled || !await isBeeperIngestionArmed()) {
       pendingReconciliations.clear();
       return;
     }
-    // eslint-disable-next-line no-await-in-loop -- one transport request at a time
+    // one transport request at a time
     await (async () => {
       const result = await query(
         `SELECT m.id, m.conversation_id, c.source_chat_id
@@ -987,7 +987,7 @@ async function executeSweep(reason) {
     let unfinishedAccounts = 0;
     let cursorRestarts = 0;
     for (const account of accounts) {
-      // eslint-disable-next-line no-await-in-loop -- accounts are swept in order; each owns its own cursors
+      // accounts are swept in order; each owns its own cursors
       const result = await sweepAccount(account, clientOptions, observedAt, personIndex).catch((err) => {
         failedAccounts++;
         console.error(`❌ ${LOG_PREFIX}: account ${account.accountId} failed: ${err.message}`);

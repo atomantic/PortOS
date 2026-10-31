@@ -57,7 +57,7 @@ export default function PersistentMindThinkingPresets({
   // would re-run this on every render — and each run replaces the draft object,
   // which re-renders. That is an unbounded loop whenever the parent's fetch has
   // not settled, which is exactly when the panel is first mounted.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+  // Dependency list is intentionally partial.
   useEffect(() => {
     if (editingPresetId === null) {
       setDraft(emptyDraft());

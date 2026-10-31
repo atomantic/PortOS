@@ -281,7 +281,7 @@ async function validateForCompileWithTracks(recordId, animationTracks) {
   const loaded = {};
   for (const row of registryRows) {
     const setPath = row.id === WALK_TRACK ? walkSetRelPath(recordId) : trackSetRelPath(row.id, recordId);
-    // eslint-disable-next-line no-await-in-loop -- registry order is the compiled span order
+    // registry order is the compiled span order
     const setBytes = await readFile(join(dir, setPath)).catch(() => null);
     if (!setBytes) {
       if (row.id !== primary.id) continue;
@@ -318,7 +318,7 @@ async function validateForCompileWithTracks(recordId, animationTracks) {
         );
       }
     }
-    // eslint-disable-next-line no-await-in-loop -- validate each set before its run graph
+    // validate each set before its run graph
     await readVerified(set.selectionPath, set.selectionSha256, `${row.label} selection file`);
     loaded[row.id] = {
       id: row.id,
@@ -344,7 +344,7 @@ async function validateForCompileWithTracks(recordId, animationTracks) {
       if (!anchor || anchor.status !== 'locked' || !anchor.path) {
         throw compileError(`Anchor for ${direction} is not locked`);
       }
-      // eslint-disable-next-line no-await-in-loop -- read-once evidence verification
+      // read-once evidence verification
       const bytes = await readVerified(anchor.path, anchor.sha256, `Anchor for ${direction}`);
       anchors[direction] = { ...anchor, bytes };
     }
@@ -372,7 +372,7 @@ async function validateForCompileWithTracks(recordId, animationTracks) {
       if (!entry || entry.status !== 'approved') {
         throw compileError(`${row.label} direction ${direction} is not approved`);
       }
-      // eslint-disable-next-line no-await-in-loop -- evidence chain is ordered per facing
+      // evidence chain is ordered per facing
       const manifestBytes = await readVerified(
         entry.runManifest,
         entry.runManifestSha256,
@@ -407,7 +407,7 @@ async function validateForCompileWithTracks(recordId, animationTracks) {
     const runs = {};
     for (const direction of track.directions) {
       const { entry, manifest } = pendingRuns[direction];
-      // eslint-disable-next-line no-await-in-loop -- read-once frame verification
+      // read-once frame verification
       const { frameBytes } = await verifyPackagedFrames(recordId, manifest, {
         bytes: true,
         track: row.id,
@@ -461,7 +461,7 @@ async function prepareTrackCells(track, direction, validated, geometry, split) {
   const run = track.runs[direction];
   const sources = [];
   for (const bytes of run.frameBytes) {
-    // eslint-disable-next-line no-await-in-loop -- sharp transforms preserve frame order
+    // sharp transforms preserve frame order
     sources.push(await decodeTransparentSpriteSource(bytes, split, validated.chromaKey));
   }
   const dims = sources.map((source, index) => occupiedDimensions(
@@ -480,7 +480,7 @@ async function prepareTrackCells(track, direction, validated, geometry, split) {
     : (Number(run.manifest.alignment?.cellSize) || sources[0].width) / 2;
   const scaled = [];
   for (let index = 0; index < sources.length; index++) {
-    // eslint-disable-next-line no-await-in-loop -- frame order is the atlas order
+    // frame order is the atlas order
     scaled.push(await scaleForCell(
       sources[index],
       scale,
@@ -520,7 +520,7 @@ async function compileTrackRow(direction, validated, geometry) {
   const prepared = [];
   for (const track of Object.values(validated.tracks)) {
     if (!track.runs[direction]) continue;
-    // eslint-disable-next-line no-await-in-loop -- preserve registry and cell order
+    // preserve registry and cell order
     prepared.push(await prepareTrackCells(track, direction, validated, geometry, split));
   }
   const primary = prepared.find((item) => item.track.id === validated.primaryTrackId) || prepared[0];

@@ -71,7 +71,7 @@ export async function verifyPackagedFrames(recordId, manifest, {
     // Re-anchor drift-tolerantly, matching the clip/strip resolvers. A path that
     // cannot be re-anchored (rel === null) is a fault, counted in `total`.
     const rel = toRecordRelativeAssetPath(recordId, frame?.path);
-    // eslint-disable-next-line no-await-in-loop -- per-frame verification is ordered (read-once, in gait-phase sequence)
+    // per-frame verification is ordered (read-once, in gait-phase sequence)
     const found = rel ? await resolveDriftTolerantRel(dir, rel) : null;
     if (!found) {
       if (!bytes) { missing += 1; continue; }
@@ -82,7 +82,7 @@ export async function verifyPackagedFrames(recordId, manifest, {
     if (frame.phase !== labels[i] || frame.outputIndex !== i) {
       throw compileFrameError(`Direction ${manifest?.direction} frame ${i} is out of gait-phase order`);
     }
-    // eslint-disable-next-line no-await-in-loop -- see above; each frame read exactly once for verify-in-memory
+    // see above; each frame read exactly once for verify-in-memory
     const buf = await readFile(resolveSpriteAssetPath(recordId, found));
     if (sha256Buffer(buf) !== frame.sha256) {
       throw compileFrameError(`Direction ${manifest?.direction} frame ${frame.phase} no longer matches its recorded sha256`);

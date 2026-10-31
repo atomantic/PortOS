@@ -12,7 +12,7 @@ import { makePathsProxy } from '../lib/mockPathsDataRoot.js';
 // PATHS.brain at import time, before any top-level test assignment would run.
 // `var` + a function declaration are hoisted (no TDZ), so the hoisted vi.mock
 // factory can reference them safely.
-var tempRoot; // eslint-disable-line no-var
+var tempRoot;
 function getTempRoot() {
   if (!tempRoot) tempRoot = mkdtempSync(join(tmpdir(), 'brainsynclog-test-'));
   return tempRoot;

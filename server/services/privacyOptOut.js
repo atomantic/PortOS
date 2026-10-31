@@ -201,7 +201,6 @@ function extractLinkHosts(text) {
   const hosts = new Set();
   const re = /https?:\/\/([^/\s"'>)]+)/gi;
   let m;
-  // eslint-disable-next-line no-cond-assign
   while ((m = re.exec(String(text || ''))) !== null) {
     hosts.add(m[1].toLowerCase().replace(/^www\./, ''));
   }

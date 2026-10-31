@@ -396,7 +396,7 @@ function usePostPreview({ open, target, options, project, publishing }) {
     }, 400);
     return () => { active = false; clearTimeout(timer); };
     // `options` is keyed by its JSON; the hook's functions are stable enough per project.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // Dependency list is intentionally partial.
   }, [open, target, optionsKey, stamp, project?.id]);
   return preview;
 }
@@ -461,7 +461,7 @@ function TargetRow({ project, kit, entry, publishing, excerpts }) {
     publishing.setPlatform('distrokid', { defaults: legacy }).then((saved) => { if (saved) safeRemoveStorage(SONGWRITER_KEY); });
     // Once the platforms have loaded (rows only render after that, since they
     // come from enabledTargets); the settings answer wins from then on.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // Dependency list is intentionally partial.
   }, [target, !!publishing.platforms?.distrokid]);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const [confirmAgain, setConfirmAgain] = useState(false);

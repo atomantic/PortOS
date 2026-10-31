@@ -36,7 +36,6 @@ import {
 // and cap length so a giant pasted lyric can't blow the context budget.
 // Newlines and tabs are PRESERVED — lyric line breaks carry meaning here.
 const PROMPT_FIELD_MAX = 4000;
-// eslint-disable-next-line no-control-regex
 const CONTROL_CHARS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g;
 const clean = (v) =>
   (typeof v === 'string' ? v.replace(CONTROL_CHARS, '').slice(0, PROMPT_FIELD_MAX) : '');

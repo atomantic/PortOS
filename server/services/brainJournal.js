@@ -162,7 +162,6 @@ async function putEntry(date, transform) {
     const loc = await getObsidianLocation(date);
     const entry = await transform(existing ? { ...existing, ...loc } : null);
     if (!entry) return null;
-    // eslint-disable-next-line no-unused-vars
     const { id: _id, obsidianPath: _op, obsidianVaultId: _ov, ...rest } = entry;
     return rest;
   }, { emitEvent: false });

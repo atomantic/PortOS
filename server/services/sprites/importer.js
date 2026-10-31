@@ -313,9 +313,9 @@ async function repinDirectionRunManifests(destDir, characterId, directions) {
     if (typeof entry.runManifest !== 'string') continue;
     entry.runManifest = canonicalizeImportedRunPathValue(characterId, entry.runManifest);
     const rel = toRecordRelativeAssetPath(characterId, entry.runManifest);
-    // eslint-disable-next-line no-await-in-loop -- an imported set has at most eight directions.
+    // an imported set has at most eight directions.
     if (rel && await pathExists(join(destDir, rel))) {
-      // eslint-disable-next-line no-await-in-loop -- each hash reads one small run record.
+      // each hash reads one small run record.
       entry.runManifestSha256 = await sha256File(join(destDir, rel));
     }
   }

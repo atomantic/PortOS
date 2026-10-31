@@ -997,7 +997,6 @@ describe('realtime', () => {
             fn({ kind: 'message.upserted', chatID: 'chat-example-1', ids: [`m${i}`], seq: i + 1 });
           }
         });
-        // eslint-disable-next-line no-await-in-loop
         await act(async () => { await vi.advanceTimersByTimeAsync(200); });
       }
 

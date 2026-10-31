@@ -818,12 +818,12 @@ describe('runaway breaker', () => {
     markPriorSend();
     const entries = [];
     for (let i = 0; i < BREAKER_MAX_SENDS_IN_WINDOW + 1; i += 1) {
-      // eslint-disable-next-line no-await-in-loop -- the loop under test is sequential
+      // the loop under test is sequential
       entries.push(await approvedEntry(`message ${i}`));
     }
 
     for (let i = 0; i < BREAKER_MAX_SENDS_IN_WINDOW; i += 1) {
-      // eslint-disable-next-line no-await-in-loop -- ordered sends inside the same window
+      // ordered sends inside the same window
       await sendOutboxEntry(entries[i].id);
     }
     expect(getOutboxBreakerState().tripped).toBe(false);
@@ -847,9 +847,8 @@ describe('runaway breaker', () => {
     markPriorSend();
     sendMessage.mockRejectedValue(new BeeperApiError('Beeper request failed', { status: 0, code: 'NETWORK_ERROR' }));
     for (let i = 0; i < BREAKER_MAX_CONSECUTIVE_FAILURES; i += 1) {
-      // eslint-disable-next-line no-await-in-loop -- ordered failures
+      // ordered failures
       const entry = await approvedEntry(`attempt ${i}`);
-      // eslint-disable-next-line no-await-in-loop
       await expect(sendOutboxEntry(entry.id)).resolves.toMatchObject({
         state: 'awaiting-confirmation', errorCode: DELIVERY_UNCONFIRMED_CODE,
       });
@@ -868,9 +867,8 @@ describe('runaway breaker', () => {
   it('stays closed when the same count of sends is spread beyond the window', async () => {
     markPriorSend();
     for (let i = 0; i <= BREAKER_MAX_SENDS_IN_WINDOW; i += 1) {
-      // eslint-disable-next-line no-await-in-loop -- ordered sends, one per window
+      // ordered sends, one per window
       const entry = await approvedEntry(`message ${i}`);
-      // eslint-disable-next-line no-await-in-loop
       await sendOutboxEntry(entry.id);
       clock.advance(BREAKER_WINDOW_MS + 1);
     }

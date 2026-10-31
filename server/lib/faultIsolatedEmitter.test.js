@@ -40,7 +40,6 @@ describe('makeEmitterFaultIsolating', () => {
     const emitter = makeEmitterFaultIsolating(new EventEmitter());
     const secondListener = vi.fn();
     emitter.on('completed', () => {
-      // eslint-disable-next-line no-throw-literal
       throw 'plain string failure';
     });
     emitter.on('completed', secondListener);

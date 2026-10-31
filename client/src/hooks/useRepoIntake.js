@@ -69,7 +69,7 @@ export function useRepoIntake(text, note = '') {
       study.setStudyContext(note.trim());
     }
     prevLearnRef.current = learn;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // Dependency list is intentionally partial.
   }, [learn, repoKey]);
 
   const options = useMemo(() => ({ malwareScan, learn }), [malwareScan, learn]);

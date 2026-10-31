@@ -1141,7 +1141,6 @@ export async function initMediaJobQueue({ deferCompletionRecovery = false } = {}
         // the downtime still registers its LoRA. The probe lives in loraTraining
         // (it owns the run's on-disk layout); lazy-imported to avoid a static
         // cycle. Falls through to the fail path when nothing survived.
-        // eslint-disable-next-line no-await-in-loop
         if (j.kind === 'training' && j.params?.runId && await jobHasSurvivingTrainer(j.params.runId)) {
           reattachJobs.push({ ...j, status: 'queued', params: { ...j.params, reattach: true } });
           console.log(`🔁 media-job [${j.id.slice(0, 8)}] training survived restart — re-enqueued for re-attach`);

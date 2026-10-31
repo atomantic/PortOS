@@ -354,7 +354,6 @@ export async function generateChainedVideo({ chunks, chunkPrompts, contextFrames
         await finishFail('Canceled mid-chain');
         return;
       }
-      // eslint-disable-next-line no-await-in-loop
       const completed = await runChunk(i).catch((err) => ({ error: err.message, failure: normalizeVideoFailure(err, failureOptions) }));
       if (chainState.stopped) {
         await setHistoryItemsHidden(chunkIds, true);
@@ -376,7 +375,6 @@ export async function generateChainedVideo({ chunks, chunkPrompts, contextFrames
         // count stays valid for both — worth keeping to one call because
         // probeFrameCount falls back to a full decode pass when the container
         // header carries no nb_frames.
-        // eslint-disable-next-line no-await-in-loop
         const frames = await probeFrameCount(chunkPath);
         if (chainState.stopped) throw new ServerError('Canceled mid-chain', { status: 499, code: 'VIDEO_GEN_CANCELED' });
         if (!Number.isInteger(frames) || frames <= 0) {
@@ -426,7 +424,6 @@ export async function generateChainedVideo({ chunks, chunkPrompts, contextFrames
           const contextPath = join(tmpdir(), `chaincontext-${chunkId}.mp4`);
           const startFrame = Math.max(contextPrefix, tailWindowStartFrame({ totalFrames: frames, frames: windowFrames }));
           contextClipPaths.push(contextPath);
-          // eslint-disable-next-line no-await-in-loop
           const cut = await trimVideoFromFrame(chunkPath, contextPath, {
             // Floored at the echo the stitch is going to drop: the window must
             // come from this chunk's OWN footage, never from the replay of the
@@ -454,7 +451,6 @@ export async function generateChainedVideo({ chunks, chunkPrompts, contextFrames
       } else if (i < totalChunks - 1) {
         // extractLastFrame caches by id, so re-clicks (e.g. from gallery
         // "Continue") don't re-spawn ffmpeg.
-        // eslint-disable-next-line no-await-in-loop
         const frame = await extractLastFrame(chunkId).catch((err) => ({ error: err.message }));
         if (frame?.error) {
           await setHistoryItemsHidden(chunkIds, true);
