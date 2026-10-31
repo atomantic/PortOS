@@ -893,6 +893,36 @@ async function reconcileDraftParentUniverse(universeId) {
     });
 }
 
+// Fields a PATCH replaces wholesale: key present (even empty/null) = apply the
+// clear, key absent = preserve. `arc`, `exportSettings` and `llm` merge
+// per-field in updateSeries and are not listed. The sanitizer normalizes each value.
+const SERIES_PATCH_PASSTHROUGH_FIELDS = [
+  'name', 'logline', 'premise', 'universeId', 'writersRoomWorkId', 'seasons',
+  // `characterArcs: []` clears all arcs; sanitizeCharacterArcList drops empties + dedupes by identity.
+  'characterArcs',
+  // `locked: {}` clears every lock.
+  'locked',
+  'styleNotes',
+  // Fact-checking opt-in + author fact reference (#1588). `factReference: ''` clears it;
+  // the sanitizer normalizes a non-true `factCritical` back to false.
+  'factCritical', 'factReference',
+  // sanitizeStyleGuide normalizes an empty object back to null (clear).
+  'styleGuide',
+  'titleLogo', 'author', 'authorId', 'stylePromptOverride', 'stylePromptOverrideMode',
+  // Per-record render pin (#3231 Phase 3): 'auto'/null clears (sanitizeSeries drops the field).
+  'imageMode', 'imageModelId',
+  'targetFormat', 'primaryManuscriptType', 'issueCountTarget', 'origin',
+  // Local-only "don't sync" marker; non-true normalizes to absent.
+  'ephemeral',
+  // Importer-orphan marker (#727); commitImport clears it via { importDraft: false }.
+  'importDraft',
+  // Server-set autopilot run marker; a non-object normalizes to absent.
+  'autopilot',
+  // Per-series editorial-check overrides (#1591) and autopilot severity config (#1616):
+  // `{}`/`null` clears; the sanitizer drops malformed entries and normalizes to `{}`.
+  'editorialCheckConfig', 'severityWeights', 'blockingSeverities',
+];
+
 export async function updateSeries(id, patchOrMutator = {}, { updatedAt: incomingUpdatedAt = null } = {}) {
   // `patchOrMutator` overloads (mirrors updateUniverse in
   // server/services/universeBuilder/crud.js):
@@ -976,67 +1006,16 @@ export async function updateSeries(id, patchOrMutator = {}, { updatedAt: incomin
         ? null
         : { ...(cur.exportSettings || {}), ...(patch.exportSettings || {}) })
       : cur.exportSettings;
+    const overrides = {};
+    for (const key of SERIES_PATCH_PASSTHROUGH_FIELDS) if (key in patch) overrides[key] = patch[key];
     const next = sanitizeSeries({
       ...cur,
-      ...('name' in patch ? { name: patch.name } : {}),
-      ...('logline' in patch ? { logline: patch.logline } : {}),
-      ...('premise' in patch ? { premise: patch.premise } : {}),
-      ...('universeId' in patch ? { universeId: patch.universeId } : {}),
-      ...('writersRoomWorkId' in patch ? { writersRoomWorkId: patch.writersRoomWorkId } : {}),
+      ...overrides,
       ...('arc' in patch ? { arc: patch.arc && !Object.hasOwn(patch.arc, 'seriesDesign') && Object.hasOwn(cur.arc || {}, 'seriesDesign')
         ? { ...patch.arc, seriesDesign: cur.arc.seriesDesign } : patch.arc } : {}),
-      ...('seasons' in patch ? { seasons: patch.seasons } : {}),
-      // Wholesale replace — `characterArcs: []` clears all arcs; omission
-      // preserves. sanitizeCharacterArcList drops empties + dedupes by identity.
-      ...('characterArcs' in patch ? { characterArcs: patch.characterArcs } : {}),
-      // Wholesale replace — `locked: {}` clears every lock; omission preserves.
-      ...('locked' in patch ? { locked: patch.locked } : {}),
-      ...('styleNotes' in patch ? { styleNotes: patch.styleNotes } : {}),
-      // Fact-checking opt-in + author fact reference (#1588). `factReference: ''`
-      // clears the reference; omission preserves. Sanitizer normalizes a
-      // non-true `factCritical` back to false.
-      ...('factCritical' in patch ? { factCritical: patch.factCritical } : {}),
-      ...('factReference' in patch ? { factReference: patch.factReference } : {}),
-      // Wholesale replace — sanitizeStyleGuide normalizes an empty object back
-      // to null (clear); omission preserves. Mirrors the arc/readerMap pattern.
-      ...('styleGuide' in patch ? { styleGuide: patch.styleGuide } : {}),
-      // Per-series prose-export settings (#2181). Per-field merge (see
-      // mergedExportSettings above) — a partial PATCH tunes one knob; `null`
-      // clears (defaults apply); omission preserves.
-      // sanitizeProseExportSettings normalizes an all-default object back to null.
+      // Per-series prose-export settings (#2181): per-field merge (see
+      // mergedExportSettings above); `null` clears; omission preserves.
       ...('exportSettings' in patch ? { exportSettings: mergedExportSettings } : {}),
-      ...('titleLogo' in patch ? { titleLogo: patch.titleLogo } : {}),
-      ...('author' in patch ? { author: patch.author } : {}),
-      ...('authorId' in patch ? { authorId: patch.authorId } : {}),
-      ...('stylePromptOverride' in patch ? { stylePromptOverride: patch.stylePromptOverride } : {}),
-      ...('stylePromptOverrideMode' in patch ? { stylePromptOverrideMode: patch.stylePromptOverrideMode } : {}),
-      // Per-record render pin (#3231 Phase 3). Key-present with 'auto'/null
-      // clears (sanitizeSeries drops the field); key-absent preserves.
-      ...('imageMode' in patch ? { imageMode: patch.imageMode } : {}),
-      ...('imageModelId' in patch ? { imageModelId: patch.imageModelId } : {}),
-      ...('targetFormat' in patch ? { targetFormat: patch.targetFormat } : {}),
-      ...('primaryManuscriptType' in patch ? { primaryManuscriptType: patch.primaryManuscriptType } : {}),
-      ...('issueCountTarget' in patch ? { issueCountTarget: patch.issueCountTarget } : {}),
-      ...('origin' in patch ? { origin: patch.origin } : {}),
-      // Local-only "don't sync" marker — sanitizer normalizes anything
-      // non-true back to absent.
-      ...('ephemeral' in patch ? { ephemeral: patch.ephemeral } : {}),
-      // Importer-orphan marker (issue #727) — commitImport clears it via
-      // `{ importDraft: false }`; sanitizer normalizes non-true back to absent.
-      ...('importDraft' in patch ? { importDraft: patch.importDraft } : {}),
-      // Autopilot run marker — server-set by seriesAutopilot.js (and the
-      // boot-recovery demotion). Wholesale replace; sanitizer normalizes a
-      // non-object back to absent.
-      ...('autopilot' in patch ? { autopilot: patch.autopilot } : {}),
-      // Per-series editorial-check config overrides (#1591). Wholesale replace —
-      // `{}`/`null` clears every override; omission preserves. The sanitizer drops
-      // empty/malformed entries and normalizes to `{}` (always present).
-      ...('editorialCheckConfig' in patch ? { editorialCheckConfig: patch.editorialCheckConfig } : {}),
-      // Per-series autopilot severity config (#1616). Wholesale replace —
-      // `{}`/`null` clears the override (defaults apply); omission preserves. The
-      // sanitizer drops malformed values and normalizes to `{}` (always present).
-      ...('severityWeights' in patch ? { severityWeights: patch.severityWeights } : {}),
-      ...('blockingSeverities' in patch ? { blockingSeverities: patch.blockingSeverities } : {}),
       llm: mergedLlm,
       updatedAt: isNonBlankStr(incomingUpdatedAt) ? incomingUpdatedAt : new Date().toISOString(),
     });
