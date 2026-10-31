@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import { Plus, Save, X } from 'lucide-react';
 import toast from '../../ui/Toast';
 import FormField from '../../ui/FormField';
+import ListLoadError from '../../ui/ListLoadError';
 import useUserTimezone from '../../../hooks/useUserTimezone.js';
 import * as api from '../../../services/api';
 import { parseCronToRecurrence, buildCronFromRecurrence } from '../../../utils/cronHelpers';
@@ -174,12 +175,21 @@ export default function CustomTasksSection({ appId, appName, providerCatalog, ac
     [rawProviders, tasks]
   );
 
+  // A failed read is not "no custom tasks": it keeps the last good list (this
+  // also runs after every mutation) and shows a retryable error row instead.
+  const [loadError, setLoadError] = useState(null);
+
   const fetchTasks = useCallback(async () => {
-    const data = await api.getCosJobs({ silent: true }).catch(() => null);
-    const appTasks = (data?.jobs || []).filter(j => j.appId === appId);
-    setTasks(appTasks);
-    setDataInputCatalog(data?.dataInputCatalog || []);
+    let failure = null;
+    const data = await api.getCosJobs({ silent: true }).catch((error) => { failure = error; return null; });
     setLoading(false);
+    if (!data) {
+      setLoadError(failure instanceof Error ? failure : new Error('Request failed'));
+      return;
+    }
+    setLoadError(null);
+    setTasks((data.jobs || []).filter(j => j.appId === appId));
+    setDataInputCatalog(data.dataInputCatalog || []);
   }, [appId]);
 
   useEffect(() => { fetchTasks(); }, [fetchTasks]);
@@ -289,10 +299,14 @@ export default function CustomTasksSection({ appId, appName, providerCatalog, ac
         />
       )}
 
+      {loadError && (
+        <ListLoadError what="custom tasks" error={loadError} onRetry={fetchTasks} />
+      )}
+
       {loading ? (
         <div className="text-sm text-gray-500 py-4">Loading custom tasks…</div>
       ) : tasks.length === 0 ? (
-        !showCreate && (
+        !showCreate && !loadError && (
           <div className="bg-port-card border border-port-border rounded-lg p-6 text-center text-gray-500 text-sm">
             No custom tasks yet. Create one to run a prompt on a schedule for {appName}.
           </div>

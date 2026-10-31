@@ -12,14 +12,15 @@ vi.mock('../pipeline/MediaJobThumb', () => ({ default: ({ label, jobId, onStatus
   <button type="button" onClick={() => onStatus('failed', 'Runtime is down')}>fail {jobId}</button>
   <button type="button" onClick={() => onStatus('canceled')}>cancel {jobId}</button>
   <button type="button" onClick={() => onStatus('failed')}>blank {jobId}</button></div> }));
-vi.mock('../IngredientPicker', () => ({ default: () => null }));
+vi.mock('../IngredientPicker', () => ({ default: ({ open, onSelect }) => (open
+  ? <button type="button" onClick={() => onSelect({ id: 'other-cast', name: 'Example understudy' })}>cast pick</button> : null) }));
 vi.mock('../../services/api', () => ({ listMoodBoardNames: vi.fn(async () => [{ id: 'board-1', name: 'Example board' }]) }));
 vi.mock('../imageGen/GalleryImagePicker', () => ({ default: ({ open, allowUpload, onSelect }) => (open
   ? <button type="button" onClick={() => onSelect({ filename: 'gallery-face.png' })}>gallery pick{allowUpload ? ' with upload' : ''}</button> : null) }));
 vi.mock('../storyboards/MoodBoardPinPicker', () => ({ default: ({ open, moodBoardId, onSelect, onClose }) => (open
   ? <button type="button" onClick={() => { onSelect({ filename: `${moodBoardId}-face.png` }); onClose(); }}>board pick</button> : null) }));
 import CatalogDesignPanel from './CatalogDesignPanel';
-import { renderCatalogDesign, updateCatalogIngredientMediaLibrary } from '../../services/apiCatalog';
+import { getCatalogIngredientDetails, renderCatalogDesign, updateCatalogIngredientMediaLibrary } from '../../services/apiCatalog';
 
 const take = (file, role, extra = {}) => ({ mediaKey: file, kind: 'reference', role, createdAt: '2026-10-30T00:00:00Z',
   library: { likeness: false, review: { status: 'unreviewed', feedback: `Line for ${file}` }, ...extra } });
@@ -94,6 +95,27 @@ describe('Casting design rounds', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Render 4 takes' }));
     await waitFor(() => expect(renderCatalogDesign).toHaveBeenCalledWith('cast', expect.objectContaining({
       mode: 'blend', baseImageFile: 'old-face.png', blendImageFiles: ['gallery-face.png', 'board-1-face.png'] }), { silent: true }));
+  });
+
+  it('reports a failed cast-member image read instead of showing that member with no faces', async () => {
+    getCatalogIngredientDetails.mockRejectedValueOnce(new Error('Catalog unavailable'))
+      .mockResolvedValueOnce({ media: [{ mediaKey: 'understudy.png', kind: 'portrait' }] });
+    mount();
+    fireEvent.click(screen.getByRole('button', { name: 'Redesign from canon' }));
+    const faceCount = screen.getAllByRole('button', { name: 'Blend face option' }).length;
+
+    fireEvent.click(screen.getByRole('button', { name: /another cast member/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'cast pick' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Catalog unavailable');
+    expect(screen.queryByText(/Showing Example understudy's images/)).toBeNull();
+    expect(screen.getAllByRole('button', { name: 'Blend face option' })).toHaveLength(faceCount);
+
+    fireEvent.click(screen.getByRole('button', { name: /another cast member/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'cast pick' }));
+    expect(await screen.findByText(/Showing Example understudy's images/)).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.getAllByRole('button', { name: 'Blend face option' })).toHaveLength(faceCount + 1);
   });
 
   it('queues a feature grid from the picked take and shows its pending takes', async () => {

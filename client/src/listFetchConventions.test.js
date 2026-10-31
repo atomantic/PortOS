@@ -22,7 +22,11 @@
  *
  * ## What this guard CANNOT see
  *
- * It is a source grep, not an AST pass:
+ * It is a source grep, not an AST pass. Besides the one-expression spellings it
+ * catches the two-step `const x = await read().catch(() => null);` followed,
+ * within the next few lines, by `setX(x?.field || [])` with no `!x` /
+ * `x === null` check (#12591's sweep missed exactly that shape).
+ *
  *   - A catch whose body does more than clear the list after its leading
  *     statements (`{ setX([]); setLoading(false); }`) is not matched; so is a
  *     `.catch` passed a named function.
@@ -94,7 +98,24 @@ const EXEMPT = Object.freeze({
 
 const allowedIn = (file) => (KNOWN[file] || 0) + (EXEMPT[file] || 0);
 
-const countIn = (source) => (source.match(LIST_COLLAPSE) || []).length;
+const NULL_CATCH_READ = /const\s+(\w+)\s*=\s*await\s+[^;]*?\.catch\(\s*\(\s*\)\s*=>\s*null\s*\)\s*;/g;
+const TWO_STEP_WINDOW_LINES = 6;
+
+/** The two-step collapse: a null-on-failure read whose list is then defaulted to `[]`. */
+const countTwoStepIn = (source) => {
+  let count = 0;
+  for (const match of source.matchAll(NULL_CATCH_READ)) {
+    const name = match[1];
+    const after = source.slice(match.index + match[0].length).split('\n').slice(0, TWO_STEP_WINDOW_LINES + 1).join('\n');
+    const defaultsToEmpty = new RegExp(String.raw`set[A-Z]\w*\(\s*\(?\s*${name}\?\.[\w?.]+\s*(?:\|\||\?\?)\s*\[\]`).test(after)
+      || new RegExp(String.raw`\(\s*${name}\?\.[\w?.]+\s*(?:\|\||\?\?)\s*\[\]\s*\)\s*\.(?:filter|map|slice)\(`).test(after);
+    const handlesFailure = new RegExp(String.raw`!\s*${name}\b|\b${name}\s*===?\s*null\b`).test(after);
+    if (defaultsToEmpty && !handlesFailure) count += 1;
+  }
+  return count;
+};
+
+const countIn = (source) => (source.match(LIST_COLLAPSE) || []).length + countTwoStepIn(source);
 
 describe('page list fetches keep a failed read distinct from an empty list', () => {
   it('matches the collapse spellings it is meant to catch, and not a handled failure', () => {
@@ -110,6 +131,8 @@ describe('page list fetches keep a failed read distinct from an empty list', () 
       'getChunks().catch(err => {\n        console.warn(\'x: \' + err.message);\n        if (active) setChunkMastery([]);\n      })',
       'listCheckpoints(id).catch((e) => setCheckpoints([]))',
       'listShareActivity(id).catch(() => { setActivityByBucket((m) => ({ ...m, [id]: [] })); })',
+      'const data = await api.getSubmodules(p, { silent: true }).catch(() => null);\n    setSubmodules(data?.submodules || []);',
+      'const data = await api.getCosJobs().catch(() => null);\n    const mine = (data?.jobs || []).filter(j => j.appId === id);\n    setTasks(mine);',
     ]) expect(countIn(sample), sample).toBe(1);
     for (const sample of [
       'listTracks().catch(() => setLoadError(true))',
@@ -123,11 +146,14 @@ describe('page list fetches keep a failed read distinct from an empty list', () 
       'load().catch(error => ({ key, data: [], error }))',
       'load().catch((err) => ({ error: err.message, posts: [] }))',
       'load().catch(() => ({ providers: [], error: true }))'.replace('[], error', 'x, error'),
+      'const data = await api.getReadings().catch(() => null);\n    setFailed(data === null);\n    setReadings(data?.readings || []);',
+      'const data = await api.getSubmodules(p).catch(() => null);\n    if (!data) { setLoadError(true); return; }\n    setSubmodules(data.submodules || []);',
+      'const result = await api.startApp(id).catch(() => null);\n    if (result?.ok) toast.success(`Started`);',
     ]) expect(countIn(sample), sample).toBe(0);
   });
 
   it('keeps the app detail tabs off the baseline', () => {
-    for (const tab of ['TasksTab', 'AutomationTab', 'GitTab']) {
+    for (const tab of ['TasksTab', 'AutomationTab', 'GitTab', 'GsdTab', 'SubmodulesTab', 'CustomTasksSection']) {
       expect(KNOWN, tab).not.toHaveProperty(['src/components/apps/tabs/' + tab + '.jsx']);
     }
   });

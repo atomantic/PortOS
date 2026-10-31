@@ -75,4 +75,56 @@ describe('SubmodulesTab', () => {
     expect(await screen.findByRole('button', { name: 'Update' })).toBeDisabled();
     expect(screen.queryByRole('button', { name: /Update All/ })).not.toBeInTheDocument();
   });
+  it('shows a failed read as an error with Retry, not as a repo without submodules', async () => {
+    mockGetSubmodules.mockRejectedValueOnce(new Error('git exited 128'));
+
+    render(<SubmodulesTab repoPath={REPO} />);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load submodules — git exited 128');
+    expect(screen.queryByText(/No git submodules found/)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('dep')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('keeps the listed submodules when a refresh fails', async () => {
+    render(<SubmodulesTab repoPath={REPO} />);
+    await screen.findByText('dep');
+    mockGetSubmodules.mockRejectedValueOnce(new Error('timeout'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load submodules');
+    expect(screen.getByText('dep')).toBeInTheDocument();
+  });
+  it('does not keep another repo\'s submodules when the read for a new repo path fails', async () => {
+    const { rerender } = render(<SubmodulesTab repoPath={REPO} />);
+    await screen.findByText('dep');
+    mockGetSubmodules.mockRejectedValueOnce(new Error('not a git repo'));
+
+    rerender(<SubmodulesTab repoPath="/Users/me/other" />);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load submodules — not a git repo');
+    expect(screen.queryByText('dep')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Update' })).not.toBeInTheDocument();
+  });
+  it('ignores a slower read for the previous repo path once a newer read has answered', async () => {
+    let failOldRead;
+    const { rerender } = render(<SubmodulesTab repoPath={REPO} />);
+    await screen.findByText('dep');
+    mockGetSubmodules
+      .mockImplementationOnce(() => new Promise((_, reject) => { failOldRead = reject; }))
+      .mockResolvedValueOnce({ submodules: [{ ...BEHIND, name: 'other-dep', path: 'lib/other' }], defaultBranch: 'main' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    rerender(<SubmodulesTab repoPath="/Users/me/other" />);
+    expect(await screen.findByText('other-dep')).toBeInTheDocument();
+
+    failOldRead(new Error('stale refresh failed'));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(screen.getByText('other-dep')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
 });
