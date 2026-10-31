@@ -73,11 +73,12 @@ const KIND_STEPS = {
     `Read the pull request, its diff and its discussion: \`gh pr view ${link} --comments\`, \`gh pr diff ${link}\`.`,
     `Review it, then submit the review: \`gh pr review ${link} --approve\` when it is ready, otherwise \`--request-changes\` with a body naming each problem.`,
   ],
-  // GitHub notifies only a run's triggering actor, so listing just the
-  // operator's runs loses nothing; another actor's run (an outside fork PR)
-  // has logs that actor wrote, which never reach this unscreened lane.
+  // `--user` filters on the run's actor, the user who triggered the initial
+  // run (a re-run or fork approval keeps it). Another actor's run, such as an
+  // outside fork PR, has logs that actor wrote, which never reach this
+  // unscreened lane.
   ci: ({ repoArg, actorArg }) => [
-    `Find the failed workflow run this is about among the runs you triggered: \`gh run list --repo ${repoArg} --user ${actorArg} --status failure --limit 10\`, and the default branch with \`gh repo view ${repoArg} --json defaultBranchRef\`. Read the failed logs with \`gh run view <run-id> --repo ${repoArg} --log-failed\`, only for a run from that list; never read the logs of a run someone else triggered.`,
+    `Find the failed workflow run this is about among the runs you triggered: \`gh run list --repo ${repoArg} --user ${actorArg} --status failure --limit 10\`, and the default branch with \`gh repo view ${repoArg} --json defaultBranchRef\`. Read the failed logs with \`gh run view <run-id> --repo ${repoArg} --log-failed\`, only for a run from that list; never read the logs of a run someone else triggered. If that list has no failed run, report that and stop.`,
     `If the run failed on the default branch, diagnose it. When it is flaky (a timeout, a runner or network fault), rerun it with \`gh run rerun <run-id> --repo ${repoArg} --failed\`; otherwise fix it on a new branch and open a pull request into the default branch. If it failed on another branch, report which run failed and why, and stop.`,
   ],
   issue: ({ link }) => [
