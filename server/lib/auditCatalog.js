@@ -818,6 +818,20 @@ export function getAuditFilingPreset(taskType) {
   return AUDIT_DEFINITIONS[normalizeAuditTaskType(taskType)]?.filing || null;
 }
 
+// Owner labels as `task-type=labels`: the lane metric label is what lane
+// health attributes on, so an out-of-lane item carries the owner's full set.
+const OWNER_LABELS = Object.entries(AUDIT_DEFINITIONS)
+  .map(([type, { filing }]) => `${type}=${[filing.issueLabel, ...filing.extraLabels].join('+')}`)
+  .join(', ');
+
+/**
+ * Both banners carry it: a verified finding outside the audit's category or
+ * reviewed slice is still tracked, under its owning lane, never left as a note.
+ */
+export const OUT_OF_SCOPE_FINDINGS_RULE = `## Findings outside this audit's category or slice
+
+Track every verified defect you encounter outside this audit's category or reviewed slice as its own item, using the tracker instructions above — never only in the summary, a recommendations list or a closing note. Mission advice that a problem belongs to a sibling audit means do not score, fix or deep-investigate it here; it does not mean leave it untracked. Cite path:line and a concrete impact, de-duplicate as usual, name the owning audit task type, and label it with the owner's labels (task-type=labels: ${OWNER_LABELS}) instead of this category's. Report an unverified suspicion as unconfirmed with its next verification step. List every such item filed or matched in the final report.`;
+
 /**
  * Return the appropriate mode banner contract string for the given execution mode.
  *
@@ -825,7 +839,7 @@ export function getAuditFilingPreset(taskType) {
  * @returns {string} The contract text defining the operating constraints for the agent
  */
 export function modeContractFor(fileIssues) {
-  return fileIssues ? FILE_ISSUES_MODE_CONTRACT : DO_WORK_MODE_CONTRACT;
+  return `${fileIssues ? FILE_ISSUES_MODE_CONTRACT : DO_WORK_MODE_CONTRACT}\n\n${OUT_OF_SCOPE_FINDINGS_RULE}`;
 }
 
 /**

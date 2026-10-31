@@ -2,6 +2,8 @@
 
 Deep is an extended regular audit, independent of **File issues** or **Audit and fix** delivery. Quick remains unchanged.
 
+Each Deep audit is exactly one agent run per selected check, which may take several hours (the policy text is `EXTENDED_AUDIT_INSTRUCTIONS` in `server/lib/auditWorkflow.js`); a batch of several checks runs them one after another.
+
 Choose Deep for extra investigation of high-risk paths, deeper caller/dependency and failure-case tracing, and multiple worthwhile fixes where evidence supports them. Each run aims to finish useful investigation and its authorized delivery. It does not require every repository file, a fixed file batch, or four separate review invocations. Existing resource limits, tests, independent review and PR policy still apply. Deep never grants merge or deployment permission by itself.
 
 The final summary reports what was investigated, findings/fixes, actual validation, delivery and remaining risks or untested areas. Partial coverage is valid: successful task completion means the run finished its useful work, not that the repository is certified defect-free. Missing or invalid assessments still produce the normal warning. Interrupted work retains the ordinary failure, cleanup and worktree recovery behavior.
