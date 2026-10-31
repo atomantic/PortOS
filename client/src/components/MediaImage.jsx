@@ -67,7 +67,10 @@ export default function MediaImage({
   // socket says our asset arrived — without it the browser would serve the
   // cached 404 forever.
   const [nonce, setNonce] = useState(0);
-  const filename = basenameOf(assetSrc);
+  // Only a served `/data/` asset (local or on a peer's origin) can arrive from a
+  // peer; an external or inline URL that fails keeps the browser's broken image.
+  const tracksPeerAsset = typeof assetSrc === 'string' && /^(?:https?:\/\/[^/]+)?\/data\//i.test(assetSrc);
+  const filename = tracksPeerAsset ? basenameOf(assetSrc) : null;
   const filenameRef = useRef(filename);
   filenameRef.current = filename;
 
@@ -147,7 +150,7 @@ export default function MediaImage({
         // still allowing the original image or video to be streamed.
         if (fallbackIndex + 1 < fallbacks.length) setFallbackIndex(fallbackIndex + 1);
         else if (fallbackVideoSrc) setShowVideo(true);
-        else setErrored(true);
+        else if (tracksPeerAsset) setErrored(true);
         callerOnError?.(e);
       }}
     />

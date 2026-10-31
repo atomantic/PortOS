@@ -43,6 +43,21 @@ describe('MediaImage', () => {
     expect(screen.queryByAltText('tile')).toBeNull();
   });
 
+  it('leaves a failed external URL as an image instead of the Syncing placeholder', () => {
+    render(<MediaImage src="https://example.com/pin.jpg" alt="pin" />);
+    fireEvent.error(screen.getByAltText('pin'));
+    expect(screen.getByAltText('pin').getAttribute('src')).toBe('https://example.com/pin.jpg');
+    expect(screen.queryByText(/Syncing/i)).toBeNull();
+    act(() => { emitAssetArrived({ filename: 'pin.jpg' }); });
+    expect(screen.getByAltText('pin').getAttribute('src')).toBe('https://example.com/pin.jpg');
+  });
+
+  it('still shows Syncing for a peer-hosted /data/ asset on another origin', () => {
+    render(<MediaImage src="https://peer.example.com:5555/data/images/far.png" alt="far" />);
+    fireEvent.error(screen.getByAltText('far'));
+    expect(screen.getByText(/Syncing/i)).toBeTruthy();
+  });
+
   // Catches a thumbnail miss stranding a sheet that lives only under image-refs.
   it('walks a fallback chain in order before showing the placeholder', () => {
     render(<MediaImage src="/data/image-thumbnails/s.webp" fallbackSrc={['/data/images/s.png', '/data/image-refs/s.png']} alt="sheet" />);
