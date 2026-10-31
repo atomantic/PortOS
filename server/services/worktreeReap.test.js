@@ -48,6 +48,8 @@ import { preserveBranchRetirement } from '../lib/branchRetirementArchive.js';
 import { hasBranchMergeEvidence, getStatus, getStatusPorcelain } from './git.js';
 import { reapMergedWorktrees, cleanupOrphanedWorktrees, deleteCompletedLocalBranch, readWorktreeStatus } from './worktreeManager.js';
 vi.mock('./branchCompletionPolicy.js', () => ({ readBranchCompletionHold: async () => null }));
+const mergedPrHeads = new Set();
+vi.mock('./prProbe.js', () => ({ isMergedPrHead: async (_repo, branch, head) => mergedPrHeads.has(`${branch}@${head}`) }));
 vi.mock('./cosState.js', () => ({ readAgentsStateForSafetyCheck: async () => ({ trusted: true, agents: {} }) }));
 
 /**
@@ -634,6 +636,26 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('reapMergedWorktrees', () => {
     expect(result.reaped.map(r => r.branch)).not.toContain('dirty-br');
     expect(skipReason(result, path)).toBe('uncommitted');
     expect(existsSync(path)).toBe(true);
+  });
+
+  it('reaps a dirty worktree whose PR merged at its exact head, and holds one whose head moved', async () => {
+    const path = await addWorktree(dir, 'disposable', 'disposable-br');
+    await execGit(['merge', '--no-ff', 'disposable-br', '--no-edit'], dir);
+    const moved = await addWorktree(dir, 'moved', 'moved-br');
+    await execGit(['merge', '--no-ff', 'moved-br', '--no-edit'], dir);
+    await writeFile(join(path, 'scratch.txt'), 'unsaved\n');
+    await writeFile(join(moved, 'scratch.txt'), 'unsaved\n');
+    const head = async p => (await execGit(['rev-parse', 'HEAD'], p)).stdout.trim();
+    mergedPrHeads.add(`disposable-br@${await head(path)}`);
+    mergedPrHeads.add(`moved-br@${'0'.repeat(40)}`);
+
+    const result = await reapMergedWorktrees(dir, { includeClaudeTrees: true });
+    mergedPrHeads.clear();
+
+    expect(result.reaped.map(r => r.branch), JSON.stringify(result.skipped)).toContain('disposable-br');
+    expect(existsSync(path)).toBe(false);
+    expect(skipReason(result, moved)).toBe('uncommitted');
+    expect(existsSync(moved)).toBe(true);
   });
 
   it('preserves a fresh-from-main worktree with uncommitted changes', async () => {

@@ -19,7 +19,7 @@ import { execGit } from '../lib/execGit.js';
 import { resolveForgeForRepo } from './git.js';
 import { findPullRequestForBranch, getPullRequestState } from './github.js';
 import { findMergeRequestForBranch } from './gitlab.js';
-import { readMergedPrTip, probeChangeRequestState, probePrForBranch } from './prProbe.js';
+import { readMergedPrTip, isMergedPrHead, probeChangeRequestState, probePrForBranch } from './prProbe.js';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -132,6 +132,19 @@ describe('readMergedPrTip', () => {
     execGit.mockResolvedValue({ exitCode: 1, stdout: '' });
     findPullRequestForBranch.mockResolvedValue({ status: 'found', detail: 'MERGED', headRefOid: '' });
     expect(await readMergedPrTip('/repo', 'my-branch')).toBe(null);
+  });
+});
+
+describe('isMergedPrHead', () => {
+  it.each([
+    ['merged at the observed head', { status: 'found', detail: 'MERGED', headRefOid: 'ABC' }, 'abc', true],
+    ['merged at another head', { status: 'found', detail: 'MERGED', headRefOid: 'older' }, 'abc', false],
+    ['still open', { status: 'found', detail: 'OPEN', headRefOid: 'abc' }, 'abc', false],
+    ['unreadable forge', { status: 'unavailable', detail: 'gh failed' }, 'abc', false],
+    ['no observed head', { status: 'found', detail: 'MERGED', headRefOid: 'abc' }, '', false],
+  ])('answers %s', async (_name, found, head, expected) => {
+    findPullRequestForBranch.mockResolvedValue(found);
+    expect(await isMergedPrHead('/repo', 'my-branch', head)).toBe(expected);
   });
 });
 

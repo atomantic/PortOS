@@ -112,7 +112,8 @@ describe.skipIf(process.platform === 'win32')('managed merge shell preservation 
 
 it('the shared cleanup contract requires API review and receipts rather than an executable deletion recipe', () => {
   expect(MANAGED_WORKTREE_CLEANUP_CONTRACT).toContain('review:{prUrl,digest:<fresh review.digest>,acceptSuperseded:<reviewed boolean>}');
-  expect(MANAGED_WORKTREE_CLEANUP_CONTRACT).toContain('private Git state, refs, reflogs and recoverable objects');
+  expect(MANAGED_WORKTREE_CLEANUP_CONTRACT).toContain('Private Git state, refs, reflogs and recoverable objects stay in the repository');
+  expect(MANAGED_WORKTREE_CLEANUP_CONTRACT).toContain('MERGED at its exact head is disposable');
   expect(MANAGED_WORKTREE_CLEANUP_CONTRACT).toContain('an uncertain response needs receipt/inventory readback before retry');
   expect(MANAGED_WORKTREE_CLEANUP_CONTRACT).toContain('If a supported retirement endpoint is unavailable or a separate branch-only remnant remains, retain it with the precise blocker for branch reconciliation.');
   expect(MANAGED_WORKTREE_CLEANUP_CONTRACT).toContain('Do not enqueue another cleanup coordinator against your own active checkout.');
@@ -125,6 +126,6 @@ it('completion merges preserve the checkout for the PortOS cleanup owner', () =>
   expect(text).toContain('--match-head-commit <verified-head>');
   expect(text).toContain('Local teardown is API-only');
   expect(text).toContain('A refusal keeps an unresolved retirement obligation');
-  expect(text).toContain('tracked, untracked and ignored bytes, private Git state, refs, reflogs');
+  expect(text).toContain('MERGED at its exact head is disposable');
   expect(text).toContain("service's exact-head lease");
 });

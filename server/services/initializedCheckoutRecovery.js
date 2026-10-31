@@ -267,8 +267,9 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
       const status = await runGit(['status', '--porcelain'], input.release.path,
         { ignoreExitCode: true, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' } }).catch(() => null);
       if (!status || status.exitCode !== 0) return { ok: false, reason: 'worktree-status-unavailable' };
-      if (String(status.stdout || '').trim()) return { ok: false, reason: 'worktree-dirty' };
       const { forgeValidationEvidence } = await import('./heldCheckoutRecovery.js');
+      // Merged at the release's exact head (the forge evidence is head-bound) makes local files disposable.
+      if (String(status.stdout || '').trim() && !forgeValidationEvidence(prepared.review)) return { ok: false, reason: 'worktree-dirty' };
       const legacyCurrent = deps.validateLegacyReleaseRetirement || (await import('./releaseSynchronization.js')).validateLegacyReleaseRetirement;
       if (!await legacyCurrent({ ...input.release, repoPath: ctx.repoPath, checkoutIdentity }, { archiveProofs }).catch(() => false)) {
         return { ok: false, reason: 'legacy-release-recovery-changed' };

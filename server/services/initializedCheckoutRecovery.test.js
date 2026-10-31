@@ -455,18 +455,16 @@ describe('initialized checkout removal', () => {
     expect(await readdir(root)).toEqual([]);
   });
 
-  it('keeps a dirty checkout and does not delete its branch', async () => {
+  it('retires a dirty checkout whose PR merged at its exact head', async () => {
     fixture.deps.execGit.mockImplementation(async (args) => {
-      if (args[0] === 'status') return { exitCode: 0, stdout: ' M dirty.js\n' };
+      if (args[0] === 'status') return { exitCode: 0, stdout: ' M dirty.js\n?? scratch.txt\n' };
       return { exitCode: 0, stdout: '' };
     });
     fixture.deps.deleteRef.mockImplementation(async () => true);
-    expect(await fixture.service.retire(await reviewed())).toEqual({ ok: false, reason: 'worktree-dirty' });
-    expect(fixture.deps.deleteRef).not.toHaveBeenCalled();
-    expect(fixture.deps.execGit).not.toHaveBeenCalledWith(
+    expect(await fixture.service.retire(await reviewed())).toMatchObject({ ok: true, branchDeleted: true });
+    expect(fixture.deps.execGit).toHaveBeenCalledWith(
       ['worktree', 'remove', '--force', release.path], expect.anything(), expect.anything(),
     );
-    expect(await readdir(root)).toEqual([]);
   });
 
   it('does not delete the branch when status cannot be read', async () => {

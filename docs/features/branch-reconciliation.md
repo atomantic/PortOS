@@ -56,11 +56,19 @@ persisted inventory and a fresh Git read still matches it — a changed lock,
 HEAD or branch is an ownership change. It then requires merge evidence on the
 default branch and no live owner, claim binding or manual completion handoff.
 
-A merged, clean checkout is removed at its original path. Its git-ignored
-files (build output, caches, dependency links, seeded data) are discarded with
-it: they are never the delivered work, which merge evidence already places on
-the default branch. Dirty, unmerged, protected, and live-owner checkouts stay
-where they are. Retirement does not
+A merged checkout is removed at its original path. **Merged ⇒ disposable:** a
+checkout whose branch PR the forge reports MERGED at the observed head loses its
+uncommitted, untracked and git-ignored files with it (build output, caches,
+dependency links, seeded data, scratch edits). They are never the delivered
+work, which the merged PR already places on the default branch. The skip is bound
+to that exact SHA and re-checked against the head observed at the removal
+boundary, so a later local commit keeps the hold. Every retirement path applies
+the same predicate: the branch-reconcile merged retirement, the merged-worktree
+reaper (including external-repo checkouts), held-checkout and legacy-release
+retirement, and quality-snapshot checkouts (merged PR). A dirty checkout with no
+merged PR at its head, an unmerged, protected, or live-owner checkout stays
+where it is; an empty branch trivially "contains" main, so local ancestry alone
+never makes a dirty checkout disposable. Retirement does not
 copy the checkout, its ignored files, or its commit history. The lock is
 released only after a second fresh match, and ownership, HEAD and cleanliness
 are rechecked immediately before removal; if that recheck refuses, the original

@@ -28,6 +28,7 @@ vi.mock('./git.js', () => ({
   getBranches: vi.fn(),
   deleteMergedRemoteBranches: vi.fn(async (_repo, names) => ({ deleted: names, skipped: [] })),
   getDefaultBranch: vi.fn(async () => 'main'),
+  resolveForgeForRepo: vi.fn(async () => null),
   hasBranchMergeEvidence: vi.fn(),
   deleteBranch: vi.fn(async () => ({ branch: 'x', results: { local: 'deleted' } }))
 }));
@@ -118,6 +119,9 @@ vi.mock('../lib/fileUtils.js', async () => {
   };
 });
 
+const isMergedPrHeadMock = vi.fn(async () => false);
+vi.mock('./prProbe.js', () => ({ isMergedPrHead: (...args) => isMergedPrHeadMock(...args) }));
+
 vi.mock('./branchReconcileOutcome.js', () => ({
   recordWorkspaceCheckoutRetirement: vi.fn(async () => null),
   recordHeldCheckoutRetirement: vi.fn(async (_appId, receipt) => ({ retired: [{ ...receipt, archiveDir: null }] })),
@@ -160,6 +164,7 @@ async function cleanupMerged(repo, target, branches, options) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  isMergedPrHeadMock.mockReset().mockResolvedValue(false);
   hasCompletedCheckoutEvidence.mockReset().mockImplementation(async records => records.some(agent => agent.result?.success === true));
   preserveMergedCheckout.mockImplementation(async () => ({ archiveDir: '/archive', verify: async () => null }));
   // Ancient by default, so age-indifferent tests keep their pre-window behavior;
@@ -475,6 +480,18 @@ describe('cleanupMerged', () => {
     expect(res.skipped).toEqual([{ branch: 'next/issue-2196', path: '/repo/.claude/worktrees/next-2196', reason: 'worktree-dirty' }]);
     expect(wt.forceRemoveWorktreeDir).not.toHaveBeenCalled();
     expect(git.deleteBranch).not.toHaveBeenCalled();
+  });
+
+  it('retires a dirty checkout whose PR merged at the observed head', async () => {
+    git.hasBranchMergeEvidence.mockResolvedValue(true);
+    isMergedPrHeadMock.mockResolvedValue(true);
+    execGit.mockImplementation(gitFixtureResult(' M server/index.js\n?? scratch.txt\n', 0));
+    const res = await cleanupMerged('/repo', 'main', [{ branch: 'next/issue-2196', worktreePath: '/repo/.claude/worktrees/next-2196' }]);
+    expect(isMergedPrHeadMock).toHaveBeenCalledWith('/repo', 'next/issue-2196', RETIRE_HEAD);
+    expect(res.cleaned).toEqual(['next/issue-2196']);
+    expect(wt.forceRemoveWorktreeDir).toHaveBeenCalled();
+    const { verifyRemoval } = wt.forceRemoveWorktreeDir.mock.calls[0][2];
+    expect(await verifyRemoval({ branch: 'refs/heads/next/issue-2196', head: 'b'.repeat(40) })).toBe('worktree-holder-changed');
   });
 
   it('uses the guarded removal path for a merged checkout', async () => {

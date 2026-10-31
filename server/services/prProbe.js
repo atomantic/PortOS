@@ -97,13 +97,25 @@ export async function probePrForBranch(sourceWorkspace, branchName, resolvedForg
 export async function readMergedPrTip(sourceWorkspace, branchName) {
   const local = await execGit(['rev-parse', '--verify', `refs/heads/${branchName}`], sourceWorkspace, { ignoreExitCode: true })
     .then(result => result.exitCode === 0 ? result.stdout.trim().toLowerCase() : null).catch(() => null);
-  if (!local) return null;
+  return local && await isMergedPrHead(sourceWorkspace, branchName, local) ? local : null;
+}
+
+/**
+ * Did the forge deliver `branchName` at exactly `head`? The merged-checkout
+ * disposal predicate every retirement path shares: a checkout whose branch PR is
+ * MERGED at the observed head is disposable, so its uncommitted and untracked
+ * files never hold it. Bound to the SHA, not the branch name — a later local
+ * commit, an unreadable forge, or no PR all answer false.
+ */
+export async function isMergedPrHead(sourceWorkspace, branchName, head) {
+  const observed = String(head || '').toLowerCase();
+  if (!observed || !branchName) return false;
   // Awaited without `resolveForge`'s abandon-on-timeout race: removal follows this
   // answer, so no forge lookup may still be running git in the checkout afterwards.
   const forge = await git.resolveForgeForRepo(sourceWorkspace).catch(() => null);
-  if (!forge?.cli) return null;
+  if (!forge?.cli) return false;
   const probe = await probePrForBranch(sourceWorkspace, branchName, forge).catch(() => null);
-  return probe?.readable === true && probe.prState === 'MERGED' && probe.prHead === local ? local : null;
+  return probe?.readable === true && probe.prState === 'MERGED' && probe.prHead === observed;
 }
 
 /**
