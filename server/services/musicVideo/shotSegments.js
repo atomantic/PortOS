@@ -175,6 +175,8 @@ export async function planShotSegments(project, options) {
   return {
     project, ffmpeg, audioPath, soundBed, clips, common, cues, style, lyricWindows,
     width, height, fps, totalDuration, songSec, outro, dir,
+    // The song's shot spans (sceneId = the clip's own shot, partners included), for the stepped hold.
+    sections,
     // The cold open's shots lead the cut, on song time before 0.
     segments: opening ? [...opening.segments, ...segments] : segments,
     coldOpen: opening,

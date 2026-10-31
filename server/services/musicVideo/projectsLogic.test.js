@@ -24,6 +24,19 @@ import { musicVideoProjectCreateSchema, musicVideoProjectUpdateSchema, musicVide
 
 const baseProject = () => buildProjectRecord({ name: 'Test MV' }, { id: 'mv-1', now: '2026-01-01T00:00:00.000Z' });
 
+// Uniquely catches an unvalidated medium reaching the record, or a new project gaining the key (#14244).
+describe('productionMedium', () => {
+  it('is validated, stored on patch, cleared by null, and absent from a new project', () => {
+    expect(baseProject()).not.toHaveProperty('productionMedium');
+    expect(musicVideoProjectUpdateSchema.safeParse({ productionMedium: 'claymation' }).success).toBe(false);
+    expect(musicVideoProjectCreateSchema.safeParse({ name: 'A', productionMedium: 'stepped' }).success).toBe(true);
+    const stepped = applyProjectPatch(baseProject(), { productionMedium: 'stepped' });
+    expect(stepped.productionMedium).toBe('stepped');
+    expect(applyProjectPatch(stepped, { productionMedium: null }).productionMedium).toBeNull();
+    expect(buildProjectRecord({ name: 'B', productionMedium: 'beat-graphic' }, { id: 'mv-2', now: 'n' }).productionMedium).toBe('beat-graphic');
+  });
+});
+
 describe('buildProjectRecord', () => {
   // Uniquely catches a footage project created in document mode with no document, which no render can use.
   it('composes a footage project and leaves a code-first one to its document', () => {

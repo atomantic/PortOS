@@ -39,6 +39,7 @@ import { ensureSceneTakes, keepCodeClipWithItsClip, TAKE_SLOT } from './takes.js
 import { normalizeComposition, invalidateCompositionTiming, withStoredCompositionDocument } from './composition.js';
 import { normalizeSoundBed } from './soundBed.js';
 import { normalizeFilmLook } from '../../lib/filmLook.js';
+import { normalizeProductionMedium } from '../../lib/musicVideoProductionMedium.js';
 import { stillMoveForCamera } from '../../lib/cameraMovements.js';
 import { normalizeTitleCard } from '../../lib/musicVideoTitleCard.js';
 import { normalizeStatsOutro } from '../../lib/musicVideoStatsOutro.js';
@@ -182,6 +183,8 @@ export function buildProjectRecord(input, { id, now }) {
     soundBed: input.soundBed ? normalizeSoundBed(input.soundBed) : null,
     // The finishing film look every preview, render and baked still is viewed through; null = none.
     filmLook: input.filmLook ? normalizeFilmLook(input.filmLook) : null,
+    // The handmade medium (stepped holds, compositor-only lettering); null = none.
+    ...(normalizeProductionMedium(input.productionMedium) ? { productionMedium: normalizeProductionMedium(input.productionMedium) } : {}),
     // The opening title card (song, artist, year over the opener); null = none.
     titleCard: normalizeTitleCard(input.titleCard),
     // The cutting room floor outro after the song; null = off.
@@ -397,6 +400,7 @@ export function applyProjectPatch(project, patch) {
     ...('soundBed' in patch ? { soundBed: normalizeSoundBed(patch.soundBed) } : {}),
     // The film look is replaced whole (one bounded record); null clears it.
     ...('filmLook' in patch ? { filmLook: normalizeFilmLook(patch.filmLook) } : {}),
+    ...('productionMedium' in patch ? { productionMedium: normalizeProductionMedium(patch.productionMedium) } : {}),
     // The title card is replaced whole (one bounded record); null clears it.
     ...('titleCard' in patch ? { titleCard: normalizeTitleCard(patch.titleCard) } : {}),
     // The outro after the song is replaced whole; null turns it off.

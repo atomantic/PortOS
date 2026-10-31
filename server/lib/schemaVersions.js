@@ -825,7 +825,10 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // (`take.castInputs`). An older peer that rebuilds a take from an explicit
   // field list drops the field and a newer `updatedAt` would LWW that loss
   // back. Optional, no backfill: a take without it reads as unknown, not stale.
-  musicVideoProjects: 35,
+  // v36 = the project's handmade production medium (`productionMedium`), which a
+  // v35 strict project schema rejects with a 400 and its normalizer drops on
+  // save. Optional, no backfill: absent = no medium.
+  musicVideoProjects: 36,
   // v1 = Creative Commission FEEDBACK federation (PostgreSQL `commission_feedback`)
   // via the per-record peer-sync push pipeline (record kind `commissionFeedback`,
   // sync category `commissionFeedback`, #2686 — split-record follow-up to #2657).

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { musicVideoFrameModelInput } from './musicVideoShotPrompt.js';
+import { musicVideoFrameModelInput, musicVideoShotModelInput } from './musicVideoShotPrompt.js';
 
 const project = {
   concept: {
@@ -63,5 +63,30 @@ describe('musicVideoFrameModelInput', () => {
     expect(musicVideoFrameModelInput(project, { sceneId: 's2' }, { slot: 'end' })).toEqual({ prompt: '', promptAdditions: [] });
     expect(musicVideoFrameModelInput(project, scene, { authored: ' ', refine: true })).toEqual({ prompt: '', promptAdditions: [] });
     expect(musicVideoFrameModelInput(null, { sceneId: 's2' })).toEqual({ prompt: '', promptAdditions: [] });
+  });
+});
+
+// Uniquely catches the medium's ban reaching a shot or frame as text the card does not list,
+// or leaking into a project with no medium or a typed-as-is render (#14244).
+describe('production medium chip', () => {
+  const stepped = { ...project, productionMedium: 'stepped' };
+  const graphic = { ...project, productionMedium: 'beat-graphic' };
+  const shot = { sceneId: 's1', startSec: 0, endSec: 4, prompt: 'a lantern swings' };
+
+  it('lists one production-medium chip on a clip and on a frame, and sends its text', () => {
+    const clip = musicVideoShotModelInput(stepped, shot, { hears: false });
+    const chip = clip.promptAdditions.find((item) => item.id === 'production-medium');
+    expect(chip.text).toContain('no motion blur');
+    expect(clip.prompt).toContain(chip.text);
+    const frame = musicVideoFrameModelInput(graphic, scene);
+    const lettering = frame.promptAdditions.find((item) => item.id === 'production-medium');
+    expect(lettering.text).toContain('compositor');
+    expect(frame.prompt).toContain(lettering.text);
+  });
+
+  it('adds nothing without a medium and nothing to a prompt sent as typed', () => {
+    expect(musicVideoShotModelInput(project, shot).promptAdditions.map((item) => item.id)).not.toContain('production-medium');
+    expect(musicVideoFrameModelInput(project, scene).promptAdditions.map((item) => item.id)).not.toContain('production-medium');
+    expect(musicVideoShotModelInput(stepped, shot, { asTyped: true }).promptAdditions.map((item) => item.id)).not.toContain('production-medium');
   });
 });

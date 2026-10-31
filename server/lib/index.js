@@ -912,6 +912,7 @@ export * from './musicVideoConditioning.js';
 export * from './musicVideoCastLook.js';
 export * from './musicVideoAspect.js';
 export * from './musicVideoMotion.js';
+export * from './musicVideoProductionMedium.js';
 export * from './musicVideoShotPrompt.js';
 
 export * from './musicVideoMediumPlan.js';

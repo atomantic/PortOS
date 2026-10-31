@@ -203,13 +203,14 @@ function sliceClip(clip, offset, length) {
  * beat grid: pacing still follows section energy and sung words at the
  * analysis tempo (else a 120 BPM default), but no cut is placed on a beat.
  */
-export function intercutClips(clips, { scenes = [], sections = [], beats = [], bpm = null, gridDecision = null, words = [], lyricCues = [], graphicCards = false, accentColor = null, lockedSceneIds = [] } = {}) {
+export function intercutClips(clips, { scenes = [], sections = [], beats = [], bpm = null, gridDecision = null, words = [], lyricCues = [], graphicCards = false, accentColor = null, lockedSceneIds = [], loudTierEverywhere = false } = {}) {
   const locked = new Set(lockedSceneIds);
   const list = Array.isArray(clips) ? clips : [];
   const gridIgnored = gridDecision === 'ignore';
   const grid = gridIgnored ? [] : (Array.isArray(beats) ? beats : []).filter(finite).sort((a, b) => a - b);
   const period = gridIgnored ? (finite(bpm) && bpm > 0 ? 60 / bpm : IGNORED_GRID_PERIOD_SEC) : beatPeriod(bpm, grid);
-  const ranked = sectionRanks(Array.isArray(sections) ? sections : []);
+  // The beat-graphic medium (#14244) cuts every section on the loud tier.
+  const ranked = sectionRanks(Array.isArray(sections) ? sections : []).map((s) => (loudTierEverywhere ? { ...s, rank: 1 } : s));
   if (!period || (!grid.length && !gridIgnored) || !ranked.length || !list.length) return list;
   const halfGrid = [];
   for (let i = 0; i < grid.length; i += 1) {

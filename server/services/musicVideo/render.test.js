@@ -568,6 +568,29 @@ describe('cold open before the song', () => {
   });
 });
 
+describe('beat-graphic medium cutting (#14244)', () => {
+  const beats = Array.from({ length: 40 }, (_, i) => i * 0.5);
+  const project = (extra) => ({ id: 'mv-bg', uploadedAudioFilename: 'example.wav',
+    audioAnalysis: { durationSec: 20, bpm: 120, beats, sections: [{ startSec: 0, endSec: 10, energy: 0.1 }, { startSec: 10, endSec: 20, energy: 0.9 }] },
+    scenes: [
+      { sceneId: 'quiet', order: 0, startSec: 0, endSec: 10, beatAligned: true, videoHistoryId: 'quiet-take', loop: false },
+      { sceneId: 'loud', order: 1, startSec: 10, endSec: 20, beatAligned: true, videoHistoryId: 'loud-take', loop: false },
+    ], ...extra });
+  const take = (id) => ({ id, filename: `${id}.mp4`, numFrames: 480, fps: 24, width: 768, height: 512 });
+  const quietPieces = (plan) => plan.clips.filter((c, i) => plan.clips.slice(0, i).reduce((sum, p) => sum + p.outSec - p.inSec, 0) < 10 - 1e-6).length;
+
+  // Uniquely catches the medium failing to reach the render's cut, or a project with no medium changing its cut.
+  it('cuts the quietest section at two beats, and leaves a project without a medium as it was', async () => {
+    loadHistory.mockResolvedValue([take('quiet-take'), take('loud-take')]);
+    const plain = await planMusicVideoRender(project({ composition: { mode: 'concat', cutting: 'intercut' } }));
+    const graphic = await planMusicVideoRender(project({ productionMedium: 'beat-graphic', composition: { mode: 'concat', cutting: 'intercut' } }));
+    const scene = await planMusicVideoRender(project({ productionMedium: 'beat-graphic', composition: { mode: 'concat', cutting: 'scene' } }));
+    expect(quietPieces(plain)).toBeLessThanOrEqual(3);
+    expect(quietPieces(graphic)).toBeGreaterThanOrEqual(8);
+    expect(scene.clips).toHaveLength(2);
+  });
+});
+
 describe('clips made from frames that changed since', () => {
   // Uniquely catches a locked clip still blocking the render, or the refusal not naming its shots.
   it('names the shots in song order, and lets a locked clip render as it is', () => {

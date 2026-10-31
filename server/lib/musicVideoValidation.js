@@ -2,6 +2,7 @@ import { festivalPacketSchema } from './musicVideoFestivalPacket.js';
 import { MUSIC_VIDEO_MEDIA_MODES } from './musicVideoMediaPolicy.js';
 import { MUSIC_VIDEO_GRADE_PRESETS, MUSIC_VIDEO_GRADE_MAX_GRAIN } from './musicVideoGrade.js';
 import { filmLookSchema } from './filmLookValidation.js';
+import { PRODUCTION_MEDIUMS } from './musicVideoProductionMedium.js';
 import { TITLE_CARD_FONTS, TITLE_CARD_LIMITS, TITLE_CARD_POSITIONS, TITLE_CARD_STYLES } from './musicVideoTitleCard.js';
 import { STATS_OUTRO_LIMITS, STATS_OUTRO_LINES } from './musicVideoStatsOutro.js';
 import { CREDITS_OUTRO_LAYOUTS, CREDITS_OUTRO_LIMITS } from './musicVideoCreditsOutro.js';
@@ -1562,6 +1563,8 @@ export const musicVideoProjectCreateSchema = z.object({
   soundBed: musicVideoSoundBedSchema.nullable().optional(),
   // The finishing film look (lib/filmLook.js); null = none.
   filmLook: filmLookSchema.nullable().optional(),
+  // The handmade production medium (lib/musicVideoProductionMedium.js); null = none.
+  productionMedium: z.enum(PRODUCTION_MEDIUMS).nullable().optional(),
   // The opening title card (lib/musicVideoTitleCard.js); null = none.
   titleCard: musicVideoTitleCardSchema.nullable().optional(),
   // The cutting room floor outro after the song (lib/musicVideoStatsOutro.js); null = off.
@@ -1597,6 +1600,8 @@ export const musicVideoProjectUpdateSchema = z.object({
   soundBed: musicVideoSoundBedSchema.nullable().optional(),
   // The finishing film look (lib/filmLook.js); null = none.
   filmLook: filmLookSchema.nullable().optional(),
+  // The handmade production medium (lib/musicVideoProductionMedium.js); null = none.
+  productionMedium: z.enum(PRODUCTION_MEDIUMS).nullable().optional(),
   // The opening title card (lib/musicVideoTitleCard.js); null = none.
   titleCard: musicVideoTitleCardSchema.nullable().optional(),
   // The cutting room floor outro after the song (lib/musicVideoStatsOutro.js); null = off.
