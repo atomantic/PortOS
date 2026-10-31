@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import JobsTab from './JobsTab';
 import { findEnabledByRole } from '../../../test/enabledBarrier.js';
 
@@ -55,6 +55,20 @@ it('shows a retryable error when the provider read fails instead of hiding the p
   fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
   await waitFor(() => expect(screen.queryByText(/Could not load AI providers/)).not.toBeInTheDocument());
   expect(api.getProviders).toHaveBeenCalledTimes(2);
+});
+
+it('keeps the provider pickers when an older provider retry fails after a newer one succeeded', async () => {
+  let rejectSlow;
+  api.getProviders.mockRejectedValueOnce(new Error('Server unavailable'))
+    .mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectSlow = reject; }))
+    .mockResolvedValueOnce({ providers: [] });
+  render(<JobsTab apps={[]} providers={[]} />);
+  const retry = await screen.findByRole('button', { name: 'Retry' });
+  fireEvent.click(retry);
+  fireEvent.click(retry);
+  await waitFor(() => expect(screen.queryByText(/Could not load AI providers/)).not.toBeInTheDocument());
+  await act(async () => rejectSlow(new Error('Late failure')));
+  expect(screen.queryByText(/Could not load AI providers/)).not.toBeInTheDocument();
 });
 
 describe('JobsTab / JobCard Run Now disable behavior (#4036)', () => {

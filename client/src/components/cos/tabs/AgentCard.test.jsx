@@ -1495,6 +1495,31 @@ it('shows a retryable error when a prior pipeline stage read fails', async () =>
   expect(stageReads).toBe(2);
 });
 
+it('retries a failed stage while another stage read is still in flight', async () => {
+  const record = { ...agent, metadata: { ...agent.metadata, taskSummary: 'Pipeline complete', pipeline: {
+    stages: [{ name: 'Plan' }, { name: 'Research' }, { name: 'Implement' }], currentStage: 2,
+    stageResults: [{ stage: 0, agentId: 'plan-stage', success: true }, { stage: 1, agentId: 'research-stage', success: true }],
+  } }, output: [{ line: 'Implementation transcript' }] };
+  let planReads = 0;
+  api.getCosAgent.mockImplementation(id => {
+    if (id === 'research-stage') return new Promise(() => {});
+    if (id !== 'plan-stage') return Promise.resolve(record);
+    planReads += 1;
+    return planReads === 1 ? Promise.reject(new Error('Stage read failed')) : Promise.resolve({ output: [{ line: 'Plan transcript' }] });
+  });
+  render(<MemoryRouter><AgentCard agent={record} completed /></MemoryRouter>);
+  await userEvent.click(screen.getByRole('button', { name: 'Show', exact: true }));
+  await userEvent.click(screen.getByRole('button', { name: 'Show full transcript' }));
+  await userEvent.click(await screen.findByRole('button', { name: /Plan/ }));
+  expect(await screen.findByText(/Could not load this stage's output/)).toBeInTheDocument();
+  await userEvent.click(screen.getByRole('button', { name: /Research/ }));
+  expect(await screen.findByText('Loading stage output...')).toBeInTheDocument();
+  await userEvent.click(screen.getByRole('button', { name: /Plan/ }));
+  await userEvent.click(screen.getByRole('button', { name: 'Retry' }));
+  expect(await screen.findByText('Plan transcript')).toBeInTheDocument();
+  expect(planReads).toBe(2);
+});
+
 it('keeps the runner transcript separate when no completion summary was saved', async () => {
   const completedAgent = { ...agent, metadata: {}, output: [{ line: 'exec: example tool output' }] };
   api.getCosAgent.mockResolvedValue(completedAgent);

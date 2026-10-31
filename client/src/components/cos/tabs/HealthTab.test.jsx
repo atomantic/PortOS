@@ -1,5 +1,5 @@
 import { beforeEach, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 const api = vi.hoisted(() => ({
@@ -32,4 +32,17 @@ it('shows a retryable error when the learning read fails', async () => {
   await user.click(screen.getByRole('button', { name: 'Retry' }));
   expect(await screen.findByText('Tasks Tracked')).toBeInTheDocument();
   expect(screen.getByText('75%')).toBeInTheDocument();
+});
+
+it('keeps a newer learning read when an older one fails last', async () => {
+  const user = userEvent.setup();
+  let rejectFirst;
+  api.getCosLearning.mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectFirst = reject; }))
+    .mockResolvedValueOnce({ totals: { completed: 5, successRate: 60, avgDurationMin: 2, failed: 2 }, insights: {} });
+  render(<HealthTab health={null} onCheck={vi.fn()} />);
+  await user.click(screen.getByRole('button', { name: 'Refresh' }));
+  expect(await screen.findByText('60%')).toBeInTheDocument();
+  await act(async () => rejectFirst(new Error('Late failure')));
+  expect(screen.getByText('60%')).toBeInTheDocument();
+  expect(screen.queryByText(/Could not load learning data/)).not.toBeInTheDocument();
 });

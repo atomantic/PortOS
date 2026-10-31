@@ -423,7 +423,10 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
   // Pipeline stage output: track which stage tab is active and cached outputs per stage agentId
   const [activeStageTab, setActiveStageTab] = useState(null);
   const [stageOutputs, setStageOutputs] = useState({});
-  const [loadingStageId, setLoadingStageId] = useState(null);
+  // Per-stage in-flight reads: a shared "one stage loading" flag swallowed a
+  // Retry on one stage while another stage's read was still pending.
+  const [loadingStageIds, setLoadingStageIds] = useState(() => new Set());
+  const stageInFlightRef = useRef(new Set());
   const [stageErrors, setStageErrors] = useState({});
   const [pausing, setPausing] = useState(false);
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
@@ -732,8 +735,9 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
 
   // Fetch output for a prior pipeline stage agent
   const fetchStageOutput = useCallback(async (stageAgentId) => {
-    if (!stageAgentId || stageOutputs[stageAgentId] || loadingStageId) return;
-    setLoadingStageId(stageAgentId);
+    if (!stageAgentId || stageOutputs[stageAgentId] || stageInFlightRef.current.has(stageAgentId)) return;
+    stageInFlightRef.current.add(stageAgentId);
+    setLoadingStageIds(new Set(stageInFlightRef.current));
     setStageErrors(({ [stageAgentId]: _cleared, ...rest }) => rest);
     let failure = null;
     const data = await api.getCosAgent(stageAgentId, { silent: true }).catch(err => {
@@ -744,8 +748,9 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
     // the stage captured nothing and suppress every later fetch.
     if (failure) setStageErrors(prev => ({ ...prev, [stageAgentId]: failure }));
     else setStageOutputs(prev => ({ ...prev, [stageAgentId]: toTranscript(data) }));
-    setLoadingStageId(null);
-  }, [stageOutputs, loadingStageId]);
+    stageInFlightRef.current.delete(stageAgentId);
+    setLoadingStageIds(new Set(stageInFlightRef.current));
+  }, [stageOutputs]);
 
   // Auto-fetch stage output when switching to a prior stage tab
   useEffect(() => {
@@ -1396,7 +1401,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
               const activeStage = pipelineStages?.[activeStageTab];
               if (activeStage && !activeStage.isCurrent && activeStage.agentId) {
                 const stageOut = stageOutputs[activeStage.agentId];
-                if (loadingStageId === activeStage.agentId) {
+                if (loadingStageIds.has(activeStage.agentId)) {
                   return (
                     <div className="flex items-center gap-2 text-gray-500 text-sm">
                       <Loader2 size={14} aria-hidden="true" className="animate-spin" />
