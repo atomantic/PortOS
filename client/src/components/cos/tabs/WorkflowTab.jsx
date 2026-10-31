@@ -480,7 +480,7 @@ export default function WorkflowTab({ apps, providers, providersLoaded }) {
           <div className={`grid items-start gap-4 ${selectedNode ? 'lg:grid-cols-[minmax(0,1fr)_20rem]' : ''}`}>
             <section className="min-w-0 overflow-hidden rounded-lg border border-port-border/60 bg-port-card/30">
               <div className="flex flex-wrap items-center justify-between gap-2 border-b border-port-border/60 px-3 py-2 text-[10px] text-gray-500">
-                <div className="flex items-center gap-3">
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
                   <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-purple-400" /> pinned</span>
                   <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-cyan-400" /> interval job</span>
                   <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rotate-45 rounded-sm bg-amber-300" /> reset/recheck</span>
