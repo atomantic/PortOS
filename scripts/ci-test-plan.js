@@ -458,6 +458,12 @@ export const ALWAYS_RUN_TESTS = [
   'server/services/orphanedPartialGc.test.js',
   'server/services/providers.shape.test.js',
   'server/services/taskPromptDefaults.test.js',
+  // Whole-tree scanners over server/services import edges (#14327): a PR that
+  // closes a static cycle never imports these guards, so they must run on every PR.
+  'server/services/agentImportCycles.test.js',
+  'server/services/meatspacePostImportCycles.test.js',
+  'server/services/serviceImportCycles.test.js',
+  'server/services/twinImportCycles.test.js',
   // Base-relative retired history guard: JSON edits have no import edge here.
   // Pregate and CI forward the planner's exact CI_BASE_SHA.
   'server/services/taskPromptDefaults/integritySnapshot.guard.test.js',
