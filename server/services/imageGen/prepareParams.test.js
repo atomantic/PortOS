@@ -336,7 +336,11 @@ it('sends the live greybox capture before set plates, retains the edited frame f
   const tag = { projectId: 'mv-1', sceneId: 's1', compose: true };
   const rendered = await run({ prompt: 'A wide shot', referenceImageFiles: ['plate.png'], musicVideo: tag });
   expect(rendered.data.referenceImagePaths.map((p) => p.split(/[\\/]/).at(-1))).toEqual(['layout.png', 'plate.png']);
-  expect(rendered.data.promptAdditions).toContainEqual(expect.objectContaining({ id: 'greybox-figure-0' }));
+  expect(rendered.data.promptAdditions.filter((item) => item.id === 'greybox-figure-0')).toHaveLength(1);
+  // Without the composer, the greybox blocking text is appended to the authored prompt once.
+  const uncomposed = await run({ prompt: 'A wide shot', referenceImageFiles: ['plate.png'], musicVideo: { projectId: 'mv-1', sceneId: 's1' } });
+  expect(uncomposed.data.prompt).toMatch(/^A wide shot\n.*Singer stands at the "rail" mark, waving/s);
+  expect(uncomposed.data.promptAdditions.filter((item) => item.id === 'greybox-figure-0')).toHaveLength(1);
   const refined = await run({ prompt: 'Raise the hand', referenceImageFiles: ['edit.png', 'plate.png'], musicVideo: { ...tag, refine: true } });
   expect(refined.data.referenceImagePaths.map((p) => p.split(/[\\/]/).at(-1))).toEqual(['edit.png', 'layout.png', 'plate.png']);
   expect(refined.data.prompt).toContain('Singer stands at the "rail" mark, waving');
