@@ -227,12 +227,17 @@ describe('brainMemoryBridge — tombstone:pruned purge', () => {
   it('ignores unbridged types and unmapped ids', async () => {
     const bridge = await loadBridge();
     const { brainEvents } = await import('./brainStorage.js');
+    bridgeFileContents = JSON.stringify({
+      [bridge.bridgeKey('links', 'l1')]: 'mem-link',
+      [bridge.bridgeKey('people', 'p1')]: 'mem-sentinel',
+    });
     bridge.initBridge();
 
     brainEvents.emit('tombstone:pruned', { type: 'links', id: 'l1' });
     brainEvents.emit('tombstone:pruned', { type: 'people', id: 'unmapped' });
-    await new Promise(r => setTimeout(r, 20));
-    expect(purgeMemory).not.toHaveBeenCalled();
+    brainEvents.emit('tombstone:pruned', { type: 'people', id: 'p1' });
+    await vi.waitFor(() => expect(purgeMemory).toHaveBeenCalledWith('mem-sentinel'));
+    expect(purgeMemory).toHaveBeenCalledTimes(1);
   });
 
   it('an archived (not deleted) record never triggers a purge via sync:applied', async () => {
