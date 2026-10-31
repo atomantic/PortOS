@@ -6,11 +6,12 @@ import { z } from 'zod';
 import { canonicalStringify } from '../lib/objects.js';
 import { assertNotRealDataWrite } from '../lib/testDataIsolation.js';
 import { assertPeerExecutionCapability } from '../lib/maintenanceExclusive.js';
+import { PEER_CATALOG_KEY_RE, peerCatalogKeySchema } from '../lib/peerAdminValidation.js';
 
 const digest = z.string().regex(/^[a-f0-9]{64}$/);
 const bytes = z.number().int().min(16).max(512 * 1024 ** 3).safe();
 export const peerCatalogReviewTargetSchema = z.object({ backend: z.literal('lmstudio'),
-  catalogKey: z.string().min(1).max(100).regex(/^[a-z0-9][a-z0-9-]*$/) }).strict();
+  catalogKey: peerCatalogKeySchema }).strict();
 export const peerCatalogReviewSchema = peerCatalogReviewTargetSchema.extend({
   sourceRevision: z.string().regex(/^[a-f0-9]{40}$/),
   fileName: z.string().max(180).regex(/^[A-Za-z0-9][A-Za-z0-9_.-]*\.gguf$/)
@@ -23,7 +24,7 @@ const hash = value => createHash('sha256').update(canonicalStringify(value)).dig
 const fail = (code, message) => { throw Object.assign(new Error(message), { code, status: 409 }); };
 const sourceFor = entry => {
   const repo = entry?.lmstudio?.split('@')[0];
-  if (!entry || !/^[a-z0-9][a-z0-9-]*$/.test(entry.key) || entry.gated || entry.appleSiliconOnly || entry.format === 'mlx'
+  if (!entry || !PEER_CATALOG_KEY_RE.test(entry.key) || entry.gated || entry.appleSiliconOnly || entry.format === 'mlx'
     || entry.capabilities?.includes('vision') || !/^[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(repo ?? '')
     || repo.includes('..') || !/gguf/i.test(repo)) return null;
   return repo;

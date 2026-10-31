@@ -20,6 +20,7 @@ import {
 } from '../../lib/sseUtils.js';
 import { hfChildEnv } from '../hfToken.js';
 import { safeChildProcessEnv } from '../../lib/processEnv.js';
+import { isAppleSilicon } from '../../lib/platform.js';
 import {
   makeVideoGenLineHandler,
   finalizeGeneratedVideo,
@@ -947,7 +948,7 @@ export async function spawnAndWatchVideo({
       childEnv.TRANSFORMERS_OFFLINE = '1';
     }
     const operatorBufferCaps = Object.keys(METAL_BUFFER_RETRY_ENV).some(key => Object.hasOwn(process.env, key) || Object.hasOwn(childEnv, key));
-    const metalEligible = process.platform === 'darwin' && process.arch === 'arm64' && runtimeUsesMlx(model.runtime);
+    const metalEligible = isAppleSilicon() && runtimeUsesMlx(model.runtime);
     if (metalEligible) reportMetalPolicy(operatorBufferCaps ? 'operator' : 'stock', 'not-eligible', operatorBufferCaps ? 'Using operator Metal buffer settings' : 'Using stock Metal buffer settings');
     if (metalEligible && !operatorBufferCaps) {
       try {
