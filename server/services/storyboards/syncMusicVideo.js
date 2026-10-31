@@ -84,16 +84,16 @@ export async function setMusicVideoShotSync(projectId, on) {
   return { project: outcome.project, counts: outcome.plan.counts };
 }
 
-/**
- * After a board edit: each live video linked to the board with sync on takes
- * the edit. A video whose sync cannot run (the board runs past the song, a
- * locked video) keeps its shots; the Storyboard step shows why.
- */
 // Board edits release their write lock before this runs, so two edits' syncs can overlap.
 // One sync per board at a time, each from the board as it is now, so an older edit's
 // snapshot never lands after a newer one.
 const boardSyncs = createKeyCachedQueue();
 
+/**
+ * After a board edit: each live video linked to the board with sync on takes
+ * the edit. A video whose sync cannot run (the board runs past the song, a
+ * locked video) keeps its shots; the Storyboard step shows why.
+ */
 export function syncShotsAfterBoardEdit(edited) {
   if (!edited?.id || edited.deleted) return Promise.resolve();
   return boardSyncs(edited.id, async () => {
