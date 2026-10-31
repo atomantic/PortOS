@@ -268,14 +268,7 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
         { ignoreExitCode: true, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' } }).catch(() => null);
       if (!status || status.exitCode !== 0) return { ok: false, reason: 'worktree-status-unavailable' };
       if (String(status.stdout || '').trim()) return { ok: false, reason: 'worktree-dirty' };
-      // A merged commit cannot account for ignored files in the parent or modules.
-      const { assertNoUniqueIgnoredCheckoutPayload, forgeValidationEvidence } = await import('./heldCheckoutRecovery.js');
-      const paths = [input.release.path, ...(prepared.review.snapshot.modules || []).map(module => join(input.release.path, module.path))];
-      for (const path of paths) {
-        const hold = await assertNoUniqueIgnoredCheckoutPayload(path, runGit, [], [], path === input.release.path ? ctx.repoPath : null)
-          .then(() => null, error => error.message || 'checkout-not-disposable');
-        if (hold) return { ok: false, reason: hold };
-      }
+      const { forgeValidationEvidence } = await import('./heldCheckoutRecovery.js');
       const legacyCurrent = deps.validateLegacyReleaseRetirement || (await import('./releaseSynchronization.js')).validateLegacyReleaseRetirement;
       if (!await legacyCurrent({ ...input.release, repoPath: ctx.repoPath, checkoutIdentity }, { archiveProofs }).catch(() => false)) {
         return { ok: false, reason: 'legacy-release-recovery-changed' };

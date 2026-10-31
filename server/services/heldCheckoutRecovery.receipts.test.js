@@ -238,11 +238,10 @@ describeHeldCheckoutRecovery(() => {
       retired = await owned.run('many-file-confirm', () => c.confirm(prepared.review));
     });
 
-    it('retains more than 1000 ignored files in the merged checkout', async () => {
-      expect(retired, JSON.stringify(retired)).toMatchObject({ ok: false, reason: 'checkout-ignored-payload-unverified' });
-      expect(await readdir(join(c.path, 'private-files'))).toHaveLength(1050);
-      expect(await readFile(join(c.path, 'private-files', 'item-1049'), 'utf8')).toBe('retained ignored bytes\n');
-      expect(await registered(c.path)).toBe(true);
+    it('retires a merged checkout holding more than 1000 ignored files', async () => {
+      expect(retired, JSON.stringify(retired)).toMatchObject({ ok: true });
+      expect(existsSync(c.path)).toBe(false);
+      expect(await registered(c.path)).toBe(false);
       expect(await archives()).toEqual([]);
     });
   });

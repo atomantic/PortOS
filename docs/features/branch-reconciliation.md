@@ -56,14 +56,11 @@ persisted inventory and a fresh Git read still matches it — a changed lock,
 HEAD or branch is an ownership change. It then requires merge evidence on the
 default branch and no live owner, claim binding or manual completion handoff.
 
-A merged, clean checkout is removed at its original path only when its ignored
-content is also safe to discard. Merge evidence says the committed work is on
-the default branch; it says nothing about ignored files. For merged and
-superseded checkouts, `checkout-ignored-payload-unverified` retains the checkout
-and branch until wanted files have been recovered or their disposal resolved.
-Recognized disposable Vitest caches, private npm copies and links whose target
-bytes remain outside the checkout retain their existing removal policy.
-Dirty, unmerged, protected, and live-owner checkouts stay where they are. Retirement does not
+A merged, clean checkout is removed at its original path. Its git-ignored
+files (build output, caches, dependency links, seeded data) are discarded with
+it: they are never the delivered work, which merge evidence already places on
+the default branch. Dirty, unmerged, protected, and live-owner checkouts stay
+where they are. Retirement does not
 copy the checkout, its ignored files, or its commit history. The lock is
 released only after a second fresh match, and ownership, HEAD and cleanliness
 are rechecked immediately before removal; if that recheck refuses, the original
@@ -253,9 +250,8 @@ Git layouts fail closed. It does not deinitialize a module.
    `acceptSuperseded` decision after reviewing the full comparison.
 2. `POST /retire` accepts that tuple plus `review: {prUrl, digest,
    acceptSuperseded}`. It repeats the review. When the disposition is `integrated`
-   and `git status --porcelain` is empty, it checks ignored files in the parent
-   checkout and each initialized module before requesting `git worktree remove
-   --force`. Unverified ignored content keeps the checkout. The merged PR is
+   and `git status --porcelain` is empty, it requests `git worktree remove
+   --force`; ignored files are discarded with the checkout. The merged PR is
    recorded as the receipt's `validationEvidence`;
    a Git refusal preserves the directory and branch with `checkout-not-removed`.
    After successful removal it deletes the local branch with the same exact-head

@@ -46,7 +46,7 @@ const resolveForge = (sourceWorkspace) => withTimeout(
  * @param {string} branchName
  * @param {{cli: string, env: object|null}|null} [resolvedForge] - a forge a
  *   delegating caller already resolved, so the `gh auth` probe chain runs once.
- * @returns {Promise<{prState: string|null, prUrl: string|null, prNumber: number|string|null, cli: string|null, readable: boolean}>}
+ * @returns {Promise<{prState: string|null, prUrl: string|null, prNumber: number|string|null, prHead: string|null, cli: string|null, readable: boolean}>}
  */
 export async function probePrForBranch(sourceWorkspace, branchName, resolvedForge = null) {
   const forge = resolvedForge || await resolveForge(sourceWorkspace);
@@ -79,11 +79,26 @@ export async function probePrForBranch(sourceWorkspace, branchName, resolvedForg
     // merge` line needs the IID, and emitting a literal `<iid>` placeholder
     // hands a caller a command it cannot run.
     prNumber: found.number ?? null,
+    prHead: typeof found.headRefOid === 'string' && found.headRefOid ? found.headRefOid.toLowerCase() : null,
     cli,
     readable: !!found.detail,
     ...(published && found.autoMergeEnabled === true ? { autoMergeEnabled: true } : {}),
     ...(mergeHandoffQueued ? { mergeHandoffQueued: true } : {}),
   };
+}
+
+/**
+ * Was this branch delivered? True only when the forge reports its pull/merge
+ * request MERGED at the local branch's exact tip. An empty branch trivially
+ * "contains" its base, so local ancestry alone cannot answer this; an
+ * unreadable forge, no PR, or later local commits all answer false.
+ */
+export async function isBranchTipMergedByPr(sourceWorkspace, branchName) {
+  const local = await execGit(['rev-parse', '--verify', `refs/heads/${branchName}`], sourceWorkspace, { ignoreExitCode: true })
+    .then(result => result.exitCode === 0 ? result.stdout.trim().toLowerCase() : null).catch(() => null);
+  if (!local) return false;
+  const probe = await probePrForBranch(sourceWorkspace, branchName).catch(() => null);
+  return probe?.readable === true && probe.prState === 'MERGED' && probe.prHead === local;
 }
 
 /**

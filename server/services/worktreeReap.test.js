@@ -613,21 +613,11 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('reapMergedWorktrees', () => {
     expect(branches).toContain('pending-br');
   });
 
-  it('keeps ignored user data in a merged checkout but removes a recognized test cache', async () => {
+  it('reaps a merged checkout together with its ignored files', async () => {
     const mergedPath = await addWorktree(dir, 'ignored-output', 'ignored-output-br');
     await execGit(['merge', '--no-ff', 'ignored-output-br', '--no-edit'], dir);
-    await writeFile(join(dir, '.git', 'info', 'exclude'), '*.png\nserver/.cache/\n');
-    const image = join(mergedPath, 'reference.png');
-    await writeFile(image, 'sole user image');
-    const cache = join(mergedPath, 'server', '.cache', 'vitest', 'modules');
-    await mkdir(cache, { recursive: true });
-    await writeFile(join(cache, 'CACHEDIR.TAG'), 'Signature: 8a477f597d28d172789f06886806bc55\n# This file is a cache directory tag created by Vitest.\n');
-    await writeFile(join(cache, '_metadata.json'), JSON.stringify({ lockfileHash: 'abcdef12' }));
-    await writeFile(join(cache, 'a'.repeat(40)), 'compiled test module');
-    const retained = await reapMergedWorktrees(dir, { includeClaudeTrees: true });
-    expect(skipReason(retained, mergedPath)).toBe('checkout-ignored-payload-unverified');
-    expect(await readFile(image, 'utf8')).toBe('sole user image');
-    await rm(image);
+    await writeFile(join(dir, '.git', 'info', 'exclude'), '*.png\n');
+    await writeFile(join(mergedPath, 'reference.png'), 'generated image');
     const reaped = await reapMergedWorktrees(dir, { includeClaudeTrees: true });
     expect(reaped.reaped.map(r => r.branch), JSON.stringify(reaped.skipped)).toContain('ignored-output-br');
     expect(existsSync(mergedPath)).toBe(false);
