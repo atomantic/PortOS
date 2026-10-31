@@ -38,6 +38,7 @@ import { recordSceneLastFailure } from './musicVideo/sceneFailure.js';
 import { alignPerformanceInstruction } from './musicVideo/takeAudioAlignment.js';
 import { getHistoryItem } from './videoGen/history.js';
 import { PATHS } from '../lib/fileUtils.js';
+import { storyboardFirstFrameFile } from '../lib/storyboardGuidance.js';
 import { safeUnder } from '../lib/ffmpeg.js';
 
 // #11210: a provider that pads the clip's start (fal OmniHuman) would sing
@@ -80,7 +81,14 @@ const hook = createMediaJobImageHook({
   // takes, and none of them can displace a selection.
   describe: ({ projectId, sceneId }) => `${projectId}/${sceneId}`,
   // A deleted project/scene 404s here, so a late completion can't resurrect it.
-  attach: async ({ projectId, sceneId, videoHistoryId, job }) => appendSceneTakes(projectId, sceneId, [{
+  attach: async ({ projectId, sceneId, videoHistoryId, job }) => {
+    const firstFrame = storyboardFirstFrameFile(job.result);
+    return appendSceneTakes(projectId, sceneId, [
+    // A clip rendered from a storyboard panel files the first frame it was animated
+    // from as a still take too (a new take fills only an empty slot).
+    ...(firstFrame ? [{ kind: 'image', assetId: firstFrame, source: 'generated', provider: 'portos',
+      jobId: typeof job.id === 'string' ? job.id : null, prompt: typeof job.params?.prompt === 'string' ? job.params.prompt : null }] : []),
+    {
     kind: 'video',
     assetId: videoHistoryId,
     source: 'generated',
@@ -89,7 +97,7 @@ const hook = createMediaJobImageHook({
     prompt: typeof job.params?.prompt === 'string' ? job.params.prompt : null,
     // The frame this clip was generated from — a basename only; job params
     // carry the server's absolute path, which never belongs on a synced record.
-    sourceImageId: typeof job.params?.sourceImagePath === 'string' ? basename(job.params.sourceImagePath) : null,
+    sourceImageId: firstFrame || (typeof job.params?.sourceImagePath === 'string' ? basename(job.params.sourceImagePath) : null),
     // #8977: a performance take keeps the immutable record of the song slice,
     // edit in/out points and capability it was generated against — the
     // renderer places the take by it, so a later retime can't misalign lips.
@@ -100,8 +108,16 @@ const hook = createMediaJobImageHook({
     costUsd: job.params?.musicVideoCostUsd ?? null,
     costModelId: job.params?.musicVideoCostModelId ?? null,
     spendKind: job.params?.musicVideo?.revisionId ? 'autoReview' : 'manual',
-  }]),
+  }]);
+  },
   onAttached: ({ projectId, sceneId, videoHistoryId }, { scene, appended }) => {
+    const still = appended.find((take) => take.kind === 'image');
+    if (still) {
+      musicVideoEvents.emit('scene-image', {
+        projectId, sceneId, referenceImageId: scene.referenceImageId ?? null, endImageId: scene.endImageId ?? null,
+        takes: scene.takes, lastFailure: scene.lastFailure ?? null, takeId: still.takeId,
+      });
+    }
     musicVideoEvents.emit('scene-video', {
       projectId,
       sceneId,
@@ -109,7 +125,7 @@ const hook = createMediaJobImageHook({
       takes: scene.takes,
       // A landed clip retires this lane's recorded failure (takes.js).
       lastFailure: scene.lastFailure ?? null,
-      takeId: appended[0]?.takeId ?? null,
+      takeId: appended.find((take) => take.kind === 'video')?.takeId ?? null,
     });
     console.log(`🎬 music-video scene clip take ${projectId.slice(0, 8)}/${sceneId} ← ${videoHistoryId.slice(0, 8)}`);
   },

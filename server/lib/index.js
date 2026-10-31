@@ -162,6 +162,7 @@ export * from './storyboardScenes.js';
 export * from './previousShotNote.js';
 export * from './storyboardBeatExtract.js';
 export * from './storyboardFit.js';
+export * from './storyboardGuidance.js';
 export * from './storyboardShotSync.js';
 export * from './storyboardRecipe.js';
 export * from './storyboardRecord.js';

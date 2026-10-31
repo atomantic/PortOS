@@ -24,6 +24,7 @@
  */
 
 import { createMediaJobPreparation } from '../../lib/mediaJobPreparation.js';
+import { storyboardGuidanceMeta } from './storyboardGuidance.js';
 import { randomUUID } from 'crypto';
 import { readFile, writeFile, unlink } from 'fs/promises';
 import { join, relative, resolve, isAbsolute } from 'path';
@@ -54,6 +55,7 @@ import {
   readCompletedFalResult, resolveFalApiKey, submitFalRequest,
 } from '../falQueue.js';
 import { carriedPromptAdditions, promptAddition, sentPromptRecord } from '../../lib/modelInput.js';
+import { falReferenceImageName, storyboardGuidanceAddition, storyboardGuidanceText } from '../../lib/storyboardGuidance.js';
 
 // The queue transport (submit / poll / retrieve / cancel) is shared with the
 // fal.ai image backend in `services/falQueue.js`. Re-exported so existing
@@ -156,15 +158,21 @@ function buildRequestBody({ prompt, negativePrompt, duration, aspectRatio, image
  * history records. Returns the plan with the record of the text fal receives
  * (#11317); the Video Gen form's preview calls it with the same inputs.
  */
-export function falVideoSentPrompt({ hasImage = false, hasEndImage = false, hasAudio = false, promptAdditions = [], ...spec }) {
+export function falVideoSentPrompt({ hasImage = false, hasEndImage = false, hasAudio = false, guidanceReferences = null, promptAdditions = [], ...spec }) {
   const modelId = spec.modelId || (hasImage ? FAL_DEFAULT_IMAGE_MODEL : FAL_DEFAULT_TEXT_MODEL);
-  const { prompt = '', negativePrompt } = spec;
+  const { negativePrompt } = spec;
+  // A storyboard-guided render (`guidanceReferences`: how many reference images
+  // join the panel) sends the panel as reference 1, never as a start frame, and
+  // names each reference's role after the director's text.
+  const guidance = guidanceReferences == null ? null : falStoryboardGuidance(getFalVideoModel(modelId), guidanceReferences);
+  const prompt = guidance ? [spec.prompt?.trim(), guidance.addition.text].filter(Boolean).join('\n') : (spec.prompt ?? '');
   // A reference model hears the audio as a prompt-named reference ("Audio 1").
   const audioAsReference = hasAudio && falHearsAudioReference(getFalVideoModel(modelId));
   let planned = null;
   try {
     planned = buildFalVideoRequest({
-      ...spec, modelId,
+      ...spec, modelId, prompt,
+      ...(guidance ? { referenceImageUrls: guidance.placeholders } : {}),
       imageUrl: hasImage ? 'pending:image' : null,
       endImageUrl: hasEndImage ? 'pending:end-image' : null,
       audioUrl: hasAudio && !audioAsReference ? 'pending:audio' : null,
@@ -183,11 +191,21 @@ export function falVideoSentPrompt({ hasImage = false, hasEndImage = false, hasA
     sentNegativePrompt: planned?.body.negative_prompt ?? null,
     carried: carriedPromptAdditions({ promptAdditions }),
     added: [
+      guidance?.addition ?? null,
       falPromptExpansionAddition(falPromptExpansionMode(planned?.model, spec.promptExpansion)),
       (!planned || planned.model.negativePrompt === 'fold') && planned?.model.prompt !== 'none'
       ? promptAddition('avoid', 'Negative prompt, sent as "Avoid:"', negativePrompt) : null],
   });
-  return { planned, record };
+  return { planned, record, prompt };
+}
+
+// The panel is @Image1 / "Image 1"; the references follow it in order.
+function falStoryboardGuidance(model, referenceCount) {
+  const names = Array.from({ length: referenceCount + 1 }, (_, i) => falReferenceImageName(model, i));
+  return {
+    placeholders: names.map((_, i) => `pending:guidance-${i}`),
+    addition: storyboardGuidanceAddition(storyboardGuidanceText({ guidance: names[0], references: names.slice(1) })),
+  };
 }
 
 export const generateVideo = (params) => preparations.run(params, generateVideoPrepared);
@@ -199,6 +217,7 @@ async function generateVideoPrepared({
   audioFilePath = null, lipSync = null, shotInstruction = null,
   uploadedTempPath = null, uploadedTempPaths = [],
   resolution = null, generateAudio = false, frameAspect = null, promptAdditions = [], musicVideo = null,
+  guidanceImagePath = null, referenceImagePaths = [],
 }) {
   await ensureDir(PATHS.videos);
   const renderStartedAtMs = Date.now();
@@ -250,10 +269,14 @@ async function generateVideoPrepared({
     // A shot card shows the text that is sent, so the provider may not rewrite it.
     ...(musicVideo ? { promptExpansion: 'disabled' } : {}),
   };
-  const { planned, record: sentRecord } = falVideoSentPrompt({
+  const guidanceImages = guidanceImagePath ? [guidanceImagePath, ...referenceImagePaths] : [];
+  const { planned, record: sentRecord, prompt: guidedPrompt } = falVideoSentPrompt({
     ...requestSpec, promptAdditions,
     hasImage: !!sourceImagePath, hasEndImage: !!lastImagePath, hasAudio: !!audioFilePath,
+    guidanceReferences: guidanceImagePath ? referenceImagePaths.length : null,
   });
+  // The guided render sends the prompt with its role lines, exactly as the record shows.
+  if (guidanceImagePath) requestSpec.prompt = guidedPrompt;
 
   const meta = {
     id: jobId,
@@ -278,6 +301,7 @@ async function generateVideoPrepared({
     filename,
     createdAt: new Date().toISOString(),
     mode: sourceImagePath ? 'image' : 'text',
+    ...storyboardGuidanceMeta(guidanceImagePath, referenceImagePaths),
     // A lip-sync take syncs a mouth; an audio-to-video take moves the whole frame to the audio.
     ...(audioFilePath ? (catalogModel?.kind === 'a2v' || audioAsReference ? { audioDriven: true } : { lipSync: true }) : {}),
     ...(shotInstruction?.audioWindow ? { audioWindow: shotInstruction.audioWindow } : {}),
@@ -294,7 +318,7 @@ async function generateVideoPrepared({
   runFalVideo(job, jobId, {
     apiKey, modelId, prompt, negativePrompt, duration, aspectRatio: effectiveAspectRatio, sourceImagePath, lastImagePath, outputPath, filename, meta,
     audioFilePath, uploadedTempPath, uploadedTempPaths, enableTranscription: lipSync?.enableTranscription === true,
-    requestSpec: planned ? requestSpec : null, frameAspect,
+    requestSpec: planned ? requestSpec : null, frameAspect, guidanceImages,
   })
     .catch((err) => {
       console.error(`❌ fal video run failed [${jobId.slice(0, 8)}]: ${err?.message}`);
@@ -324,7 +348,7 @@ function audioMimeType(path) {
 async function runFalVideo(job, jobId, {
   apiKey, modelId, prompt, negativePrompt, duration, aspectRatio, sourceImagePath, lastImagePath, outputPath, filename, meta,
   audioFilePath = null, uploadedTempPath = null, uploadedTempPaths = [], enableTranscription = false, requestSpec = null,
-  frameAspect = null,
+  frameAspect = null, guidanceImages = [],
 }) {
   const entry = createFalRequestEntry(apiKey);
   entry.aborted = preparations.take(jobId);
@@ -370,12 +394,14 @@ async function runFalVideo(job, jobId, {
     // Most routes read inputs inline; a model that downloads them gets fal-hosted URLs.
     const hosted = getFalVideoModel(modelId)?.hostedInputs === true;
     const host = (dataUri, name) => (hosted && dataUri ? hostFalDataUri({ apiKey, dataUri, fileName: `${jobId}-${name}` }) : dataUri);
-    const [imageUrl, endImageUrl, audioUrl] = await Promise.all([
+    const [imageUrl, endImageUrl, audioUrl, ...referenceImageUrls] = await Promise.all([
       host(imageDataUri, 'start'), host(endImageDataUri, 'end'), host(audioDataUri, 'audio'),
+      // A storyboard panel and its references go in uncropped: none is a frame of the clip.
+      ...guidanceImages.map(async (path, i) => host((await frameDataUriAtAspect(path, null)).dataUri, `reference-${i + 1}`)),
     ]);
     const audioInputs = falHearsAudioReference(getFalVideoModel(modelId)) ? { referenceAudioUrls: audioUrl ? [audioUrl] : [] } : { audioUrl };
     const body = requestSpec
-      ? buildFalVideoRequest({ ...requestSpec, imageUrl, endImageUrl, ...audioInputs }).body
+      ? buildFalVideoRequest({ ...requestSpec, imageUrl, endImageUrl, ...audioInputs, ...(referenceImageUrls.length ? { referenceImageUrls } : {}) }).body
       : audioFilePath
         ? buildLipSyncRequestBody({ imageDataUri: imageUrl, audioDataUri: audioUrl, enableTranscription })
         : buildRequestBody({ prompt, negativePrompt, duration, aspectRatio, imageDataUri: imageUrl });

@@ -224,6 +224,8 @@ describe('human-reviewed Music Video workflow', () => {
     expect((await approve('art')).status).toBe(200);
     await expect(assertMusicVideoSceneReview(tag, 'image')).resolves.toBeUndefined();
     await expect(assertMusicVideoSceneReview(tag, 'video')).rejects.toMatchObject({ code: 'MUSIC_VIDEO_APPROVAL_REQUIRED' });
+    // A clip from the storyboard panel makes its own first frame: it has no still to lock.
+    await expect(assertMusicVideoSceneReview(tag, 'video', { storyboardGuided: true })).resolves.toBeUndefined();
     await expect(assertMusicVideoSceneReview({ ...tag, productionRunId: 'run-example' }, 'image')).rejects.toMatchObject({ code: 'MUSIC_VIDEO_APPROVAL_REQUIRED' });
     await expect(assertMusicVideoSceneReview({ ...tag, sceneId: 'scene-missing' }, 'image')).rejects.toMatchObject({ code: 'MUSIC_VIDEO_APPROVAL_REQUIRED' });
     expect((await approve('storyboard')).status).toBe(200);

@@ -20,19 +20,22 @@ export const getProductionReview = async id => present(await requireProject(id))
 
 /**
  * The approval a scene's media job needs. A still is how the director reviews
- * the storyboard, so a still for a planned shot needs only the art direction;
+ * the storyboard, so a still (or a clip from the storyboard panel, which makes
+ * its own first frame) for a planned shot needs only the art direction;
  * a Board shot's own clip needs that shot locked (or the whole storyboard
  * approved); anything a production run submits waits for the storyboard. A
  * production run's bulk work also waits for the animated proof, except the
  * stills of a run that stops before clips: the proof is made from clips.
  */
-export async function assertMusicVideoSceneReview(tag, kind = null) {
+export async function assertMusicVideoSceneReview(tag, kind = null, { storyboardGuided = false } = {}) {
   if (!tag?.projectId || !tag.sceneId) return;
   const project = await requireProject(tag.projectId);
   const boardShot = !tag.productionRunId && (project.scenes || []).some(scene => scene.sceneId === tag.sceneId);
   // A locked video is final: no new still or clip for that shot, from the director or a run.
   assertClipUnlocked(project, tag.sceneId);
-  if (boardShot && kind === 'image') assertProductionApproval(project, 'art');
+  // A clip from the storyboard panel makes its own first frame, so like a still it
+  // needs only the art direction: there is no still to lock before it.
+  if (boardShot && (kind === 'image' || storyboardGuided)) assertProductionApproval(project, 'art');
   else if (boardShot) assertShotApproval(project, tag.sceneId);
   else assertProductionApproval(project, 'storyboard');
   if (tag.productionRunId) {

@@ -64,6 +64,7 @@ vi.mock('../../lib/maintenanceAdmission.js', async importOriginal => ({
 vi.mock('../../lib/fileUtils.js', async () => {
   const actual = await vi.importActual('../../lib/fileUtils.js');
   actual.PATHS.videos = FAKE_VIDEOS_DIR;
+  actual.PATHS.images = join(TEST_ROOT, 'data-images');
   actual.PATHS.data = FAKE_DATA_DIR;
   actual.PATHS.videoThumbnails = join(TEST_ROOT, 'thumbnails');
   return {
@@ -234,6 +235,30 @@ describe('videoGen/grok — harvest and finalize', () => {
     expect(recordGrokVideoUsage).toHaveBeenCalledWith(expect.objectContaining({
       jobId: job.jobId, videoSeconds: 6, images: 1, inputImages: 1,
     }));
+  });
+
+  it('builds a photographic first frame from the storyboard panel and references, then keeps it beside the clip', async () => {
+    const completed = vi.fn();
+    videoGenEvents.on('completed', completed);
+    const job = await grok.generateVideo({ prompt: 'she laces her skates', guidanceImagePath: '/gallery/panel.png', referenceImagePaths: ['/gallery/cast.png'] });
+    const prompt = promptOf();
+    expect(prompt).toContain('image_edit');
+    expect(prompt).toContain('in this order: /gallery/panel.png, /gallery/cast.png');
+    expect(prompt).toContain('/gallery/panel.png is a storyboard panel');
+    expect(prompt).toContain('never the storyboard panel');
+    expect(prompt).not.toContain('animate the source image');
+    const scratch = scratchDirFor(job.jobId);
+    await mkdir(scratch, { recursive: true });
+    const sharp = (await import('sharp')).default;
+    await sharp({ create: { width: 4, height: 4, channels: 3, background: '#336699' } }).png().toFile(join(scratch, 'first-frame.png'));
+    await writeFile(stagingPathFor(job.jobId), MP4_BYTES);
+    await closeChild(0, 0);
+    expect(completed.mock.calls[0][0]).toMatchObject({ firstFrameFile: `${job.jobId}-first-frame.png` });
+    expect(existsSync(join(TEST_ROOT, 'data-images', `${job.jobId}-first-frame.png`))).toBe(true);
+    const [entry] = await loadHistory();
+    expect(entry).toMatchObject({ mode: 'text', firstFrameFile: `${job.jobId}-first-frame.png`,
+      storyboardGuidance: { guidanceImageFile: 'panel.png', referenceImageFiles: ['cast.png'] } });
+    expect(entry.promptAdditions.map((a) => a.id)).toEqual(['storyboard-guidance', 'agent-instructions']);
   });
 
   it('records the delivered length and warns when a 15 s request comes back short', async () => {

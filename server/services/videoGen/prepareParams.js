@@ -59,6 +59,7 @@ import { getTrack } from '../tracks/index.js';
 import { CLOUD_VIDEO_GEN_MODES, VIDEO_GEN_MODE, resolveVideoMode } from './modes.js';
 import { getFalVideoModel } from '../../lib/falVideoModels.js';
 import { HOSTED_VIDEO_SUBMISSIONS } from './hostedSubmission.js';
+import { resolveStoryboardGuidanceInputs, storyboardGuidanceRequestError } from './storyboardGuidance.js';
 import { isDefaultI2vReferenceMode } from '../../lib/videoReferenceModes.js';
 import {
   listVideoModels,
@@ -299,7 +300,8 @@ export function resolveRequestedVideoBackend({ body, uploads, settings, localOnl
     && !uploads.lastImage && !body.lastImageFile
     && !uploads.audioFile
     && !uploads.icReference && !body.icReferenceVideoIds?.length && !body.icReferenceImageFiles?.length
-    && !body.referenceImageFiles?.length && !body.referenceVideoIds?.length
+    // A storyboard panel's references are the guided render's own inputs (storyboardGuidance.js).
+    && (body.guidanceImageFile || !body.referenceImageFiles?.length) && !body.referenceVideoIds?.length
     && !REFERENCE_AUDIO_FIELDS.some((field) => uploads[field])
     && !body.extendFromVideoId
     && !body.keyframes?.length
@@ -340,6 +342,11 @@ export async function prepareVideoGenParams({ body, uploads, localOnlyParamKeys 
     throw new ServerError('Explicit continuation strategy requires a local video backend.', {
       status: 400, code: 'VIDEO_CONTINUITY_UNSUPPORTED',
     });
+  }
+  const guidanceError = storyboardGuidanceRequestError({ body, uploads, backend });
+  if (guidanceError) {
+    await cleanupMultipartTemp(uploads);
+    throw guidanceError;
   }
   const runwaySpecial = backend === VIDEO_GEN_MODE.RUNWAY && RUNWAY_SPECIAL_VIDEO_MODES.includes(body.mode);
   if (!runwaySpecial && (RUNWAY_SPECIAL_VIDEO_MODES.includes(body.mode) || uploads.runwayVideo || uploads.runwayCharacterVideo)) {
@@ -476,7 +483,7 @@ export async function prepareVideoGenParams({ body, uploads, localOnlyParamKeys 
   // Reference inputs condition a local reference-to-video model only; a hosted
   // lane would enqueue an ordinary render that silently ignores them.
   if (backend !== VIDEO_GEN_MODE.LOCAL
-    && (body.referenceImageFiles?.length || body.referenceVideoIds?.length
+    && ((body.referenceImageFiles?.length && !body.guidanceImageFile) || body.referenceVideoIds?.length
       || REFERENCE_AUDIO_FIELDS.some((field) => uploads[field]))) {
     await cleanupMultipartTemp(uploads);
     throw new ServerError(
@@ -1158,6 +1165,14 @@ async function resolvePreparedParams({
     throw frameCountError;
   }
 
+  // A missing panel or reference refuses before any upload is staged.
+  let guidance;
+  try {
+    guidance = resolveStoryboardGuidanceInputs(body);
+  } catch (error) {
+    await cleanupStaged();
+    throw error;
+  }
   let sourceImagePath = null;
   let lastImagePath = null;
   let icReferenceUploadPath = null;
@@ -1206,7 +1221,7 @@ async function resolvePreparedParams({
   // otherwise fall through to a text-to-video render — silently attaching a clip
   // that ignores the frame the director chose. Reject instead, so a stale/deleted
   // reference frame surfaces as a clear error rather than a wrong-looking clip.
-  if (body.musicVideo && !sourceImagePath) {
+  if (body.musicVideo && !sourceImagePath && !body.guidanceImageFile) {
     await cleanupStaged();
     throw new ServerError(
       'Music Video scene render needs a resolvable reference frame (sourceImageFile) — the scene\'s frame is missing or could not be resolved.',
@@ -1241,6 +1256,7 @@ async function resolvePreparedParams({
       sourceImagePath,
       uploadedTempPath,
       ...staged,
+      ...guidance,
       discardSourceImage,
       cleanupStaged,
     };

@@ -903,7 +903,9 @@ export async function finalizeGeneratedVideo({ job, jobId, outputPath, filename,
   console.log(`✅ Video generated [${jobId.slice(0, 8)}]: ${filename}`);
   if (terminal) {
     broadcastSse(job, { type: 'complete', result: { filename, seed: actualSeed, thumbnail, path: `/data/videos/${filename}` } });
-    videoGenEvents.emit('completed', { generationId: jobId, filename, path: `/data/videos/${filename}`, thumbnail });
+    // A storyboard-guided clip's kept first frame rides along so its Music Video take can file it (grok.js).
+    videoGenEvents.emit('completed', { generationId: jobId, filename, path: `/data/videos/${filename}`, thumbnail,
+      ...(meta?.firstFrameFile ? { firstFrameFile: meta.firstFrameFile } : {}) });
   }
   return thumbnail;
 }

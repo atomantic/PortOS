@@ -9,6 +9,7 @@ import ShotFinalRender from './ShotFinalRender.jsx';
 import ShotStoryboardPanel from './ShotStoryboardPanel.jsx';
 import ShotEditorGroup from './ShotEditorGroup.jsx';
 import TabPills from '../ui/TabPills.jsx';
+import SceneStoryboardClip, { storyboardClipOffered } from './SceneStoryboardClip.jsx';
 import { MUSIC_VIDEO_MEDIUM_LABELS } from '../../../../server/lib/musicVideoMediumPlan.js';
 import { useRef, useState } from 'react';
 import { Trash2, Activity, ArrowUp, ArrowDown, ChevronLeft, ChevronRight, Video, AlertTriangle, Clapperboard, Shuffle, Lock } from 'lucide-react';
@@ -116,12 +117,13 @@ const frameSpan = (scene) => `fr ${frameAt(scene.startSec)}–${frameAt(scene.en
 // the persisted scene (and its speaker), so an unsaved or failed speaker edit
 // must hold back every video entry point — Generate video and the failure Retry.
 // Returns the refusal reason, or null when the render may go ahead.
-function videoGenerationRefusal({ settingsSaving, speakerUnsaved, referenceImageId, generatingVideo, videoBlockedReason, performanceBlocked }) {
+// A clip from the storyboard panel (`needsStill: false`) makes its own first frame.
+function videoGenerationRefusal({ settingsSaving, speakerUnsaved, referenceImageId, generatingVideo, videoBlockedReason, performanceBlocked, needsStill = true }) {
   if (videoBlockedReason) return videoBlockedReason;
   if (performanceBlocked) return performanceBlocked;
   if (speakerUnsaved) return 'Save the speaker / singer edit first';
   if (settingsSaving) return 'Saving settings…';
-  if (!referenceImageId) return 'Generate a reference frame first';
+  if (needsStill && !referenceImageId) return 'Generate a reference frame first';
   if (generatingVideo) return 'A video is already generating';
   return null;
 }
@@ -198,11 +200,12 @@ export default function SceneCard({
   const cardRequest = shotCardRenderRequest({ project, scene, greybox, settings: renderSettings || {}, performance, endFramePlan,
     models: videoModels, defaultModel: defaultVideoModel, inputs: renderInputs, plan: timing.plan });
   const greyboxRefusal = greyboxSaving ? 'Saving greybox reference…' : greybox?.error;
-  const otherRefusal = videoGenerationRefusal({
+  const refusalInputs = {
     settingsSaving, speakerUnsaved: performance && (speakerDirty || speakerSaving),
     referenceImageId: scene.referenceImageId, generatingVideo, performanceBlocked,
     videoBlockedReason: renderOverrides && videoBlockedReasonFor ? videoBlockedReasonFor(renderSettings) : videoBlockedReason,
-  }) || shotCardRequestProblem(cardRequest);
+  };
+  const otherRefusal = videoGenerationRefusal(refusalInputs) || shotCardRequestProblem(cardRequest);
   const videoRefusal = greyboxRefusal || lockBlocked || otherRefusal;
   // A still waiting only on its lock renders in one tap: Render locks it first.
   const stillLockPending = Boolean(shotLock && shotLock.clip !== 'locked' && shotLock.still !== 'locked');
@@ -224,6 +227,17 @@ export default function SceneCard({
     if (lockThenRender && !(await shotLock.toggle(true, 'still'))) return;
     sendRender();
   };
+  // A shot fitted from a storyboard panel, with no locked still, leads with a clip from the panel.
+  const storyboardDefault = storyboardClipOffered({ scene, layer, performance, stillLocked: shotLock?.still === 'locked' });
+  // Only a locked video holds it back: there is no still to lock first.
+  const storyboardRefusal = storyboardDefault ? greyboxRefusal || (shotLock?.clip === 'locked' ? lockBlocked : null)
+    || videoGenerationRefusal({ ...refusalInputs, needsStill: false }) : null;
+  // The regular Render stays beside it once the shot has a still to animate.
+  const showRender = !storyboardDefault || !!scene.referenceImageId;
+  const generateStoryboardClip = () => {
+    if (storyboardRefusal) return;
+    onGenerateVideo?.(scene, { ...(renderOverrides ? { target: renderOverrides } : {}), card: { prompt: cardRequest.authored }, fromStoryboard: true });
+  };
   const renderCost = performance ? performanceCost : timing.falCost;
   // A composed still shows its picture (the still, or the still playing its image effect) in place of a clip.
   const stillPicture = layered && layer === 'still';
@@ -231,7 +245,8 @@ export default function SceneCard({
   // from the start frame to the end frame needs both.
   const endFrames = Boolean(onGenerateEndFrame) && (layer === 'footage' || (stillPicture && isEndFrameImageEffect(scene.imageEffect)));
   // The editor shows one picture at a time: the frames, or the clip (the still stands in until it has one).
-  const [view, setView] = useState(() => (scene.videoHistoryId || scene.referenceImageId || stillPicture ? 'clip' : 'frames'));
+  // A shot that leads with Clip from storyboard opens on the clip, where that action lives.
+  const [view, setView] = useState(() => (scene.videoHistoryId || scene.referenceImageId || stillPicture || storyboardDefault ? 'clip' : 'frames'));
   const views = [['frames', endFrames ? 'Frames' : 'Still'], ['clip', stillPicture ? 'Picture' : 'Clip']];
   const shotModeValue = performance ? (scene.performanceStyle === 'music' ? 'music' : 'performance') : 'cutaway';
   // A shot before the song has a length of its own instead of a span of the song.
@@ -552,15 +567,19 @@ export default function SceneCard({
             onReview={(take, review) => onReviewTake?.(scene, take, review)}
             onOpenPreview={onOpenPreview} marks={project?.assetMarks} onMark={onMarkTake} />
           <div className="flex flex-wrap items-center gap-2">
-            <button onClick={generateVideo}
+            {storyboardDefault && (
+              <SceneStoryboardClip backend={renderLane} refusal={storyboardRefusal} generatingVideo={!!generatingVideo} generatingFrame={!!generatingFrame}
+                hasStill={!!scene.referenceImageId} onClip={generateStoryboardClip} onStill={onGenerateFrame ? () => onGenerateFrame(scene) : null} />
+            )}
+            {showRender && <button onClick={generateVideo}
               disabled={renderBlocked}
-              className={PRIMARY_BUTTON}
+              className={storyboardDefault ? SECONDARY_BUTTON : PRIMARY_BUTTON}
               title={lockThenRender ? 'Lock this still, then render its clip from it'
                 : videoRefusal || (performance ? `${capability.style === 'music' ? "Animate this scene's frame to the song" : "Lip-sync this scene's frame to the song"} via ${capability.label} — ${performanceCost}`
                   : "Render this shot's clip from its still")}>
               {generatingVideo ? <Activity size={14} className="animate-spin" /> : lockThenRender ? <Lock size={14} /> : <Video size={14} />}
               {generatingVideo ? 'Rendering…' : `${lockThenRender ? 'Lock still & render' : 'Render'}${scene.videoHistoryId ? ' again' : ''}`}
-            </button>
+            </button>}
             {onPlacePoolItem && (
               <button type="button" onClick={() => setSwapKind('video')} disabled={takeBusy || shotLock?.clip === 'locked'} className={SECONDARY_BUTTON}
                 title={shotLock?.clip === 'locked' ? 'Video locked. Unlock the video to change it.' : "Pick a clip made for this video that no shot uses: this shot's other takes, other shots', or the floor"}>
@@ -585,7 +604,7 @@ export default function SceneCard({
             )}
           </div>
           {/* Why Render is off, on the card itself: a tooltip never shows on a phone. */}
-          {videoRefusal && !lockThenRender && videoRefusal !== performanceBlocked && !generatingVideo && layer === 'footage' && (
+          {videoRefusal && !lockThenRender && videoRefusal !== performanceBlocked && !generatingVideo && layer === 'footage' && showRender && (
             <div className="flex flex-wrap items-center gap-2 text-[11px] text-port-warning" data-testid="render-refusal">
               <span>{videoRefusal}</span>
               {stillLockPending && <ShotLockButton scene={scene} />}
