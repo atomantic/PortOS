@@ -77,6 +77,20 @@ describe('planGrokUsageRepairFromDisk', () => {
     expect(plan.notes[0]).toMatch(/no Grok usage scan has run yet/);
     await expect(readFile(join(dataDir, 'usage.json'), 'utf8')).resolves.toBe(JSON.stringify({ grokRepairIds: [] }));
   });
+
+  it('honors the grok watermark from the ledger and from the legacy scan file', async () => {
+    const watermark = Date.parse('2026-10-10T00:00:00.000Z');
+    await writeFile(join(dataDir, 'usage.json'), JSON.stringify({
+      grokRepairIds: [], interactiveScan: { watermarks: { grok: watermark } },
+    }));
+    const fromLedger = await planGrokUsageRepairFromDisk({ home, dataDir });
+    expect(fromLedger.notes.join(' ')).not.toMatch(/no Grok usage scan has run yet/);
+
+    await writeFile(join(dataDir, 'usage.json'), JSON.stringify({ grokRepairIds: [] }));
+    await writeFile(join(dataDir, 'usage-interactive-scan.json'), JSON.stringify({ watermarks: { grok: watermark } }));
+    const fromLegacy = await planGrokUsageRepairFromDisk({ home, dataDir });
+    expect(fromLegacy.notes.join(' ')).not.toMatch(/no Grok usage scan has run yet/);
+  });
 });
 
 describe('applyGrokUsageRepair', () => {

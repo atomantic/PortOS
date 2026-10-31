@@ -183,11 +183,14 @@ export async function planGrokUsageRepairFromDisk({
   repairIds = null,
   providerId = null,
 } = {}) {
-  const scan = await readJson(join(dataDir, 'usage-interactive-scan.json'), { watermarks: {} }, {
+  const ledger = await readJson(join(dataDir, 'usage.json'), {}, { strict: true });
+  // The watermark lives in the ledger; an install that has not scanned since the
+  // move still has it only in the legacy file.
+  const scan = ledger?.interactiveScan ?? await readJson(join(dataDir, 'usage-interactive-scan.json'), { watermarks: {} }, {
     label: 'usage-interactive-scan.json',
   });
   const watermarkMs = typeof scan?.watermarks?.grok === 'number' ? scan.watermarks.grok : null;
-  const storedIds = repairIds ?? (await readJson(join(dataDir, 'usage.json'), {}, { strict: true }))?.grokRepairIds;
+  const storedIds = repairIds ?? ledger?.grokRepairIds;
   const sessions = await collectSessions(home);
   return planGrokUsageRepair({
     turns: sessions.turns,

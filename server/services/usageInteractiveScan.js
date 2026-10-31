@@ -1,7 +1,7 @@
 import { readdir, stat } from 'fs/promises';
 import { homedir } from 'os';
 import { basename, join } from 'path';
-import { atomicWrite, PATHS, readJSONFile, tryReadFile } from '../lib/fileUtils.js';
+import { PATHS, readJSONFile, tryReadFile } from '../lib/fileUtils.js';
 import { createMutex } from '../lib/asyncMutex.js';
 import {
   UNKNOWN_MODEL,
@@ -22,7 +22,12 @@ import {
   recordsFromMeasured,
   resolveFamilyProvider
 } from './usageReconciler.js';
-import { applyHistoricalUsageCorrections, forgetSiblingReconciledUsageRuns } from './usage.js';
+import {
+  applyHistoricalUsageCorrections,
+  forgetSiblingReconciledUsageRuns,
+  getInteractiveScanState,
+  setInteractiveScanState
+} from './usage.js';
 import { grokTurnRepairId } from './grokUsageRepair.js';
 
 /**
@@ -52,6 +57,9 @@ import { grokTurnRepairId } from './grokUsageRepair.js';
  * instead of dumping a month onto today.
  */
 
+// Legacy home of the scan state. It now lives in usage.json (`interactiveScan`) so
+// a watermark commits atomically with its counts; this file is only read, once,
+// to adopt an older install's watermarks, and is left on disk.
 export const INTERACTIVE_SCAN_FILE = join(PATHS.data, 'usage-interactive-scan.json');
 
 const FAMILIES = ['claude', 'codex', 'grok', 'agy'];
@@ -256,7 +264,7 @@ const isSidechainPath = (path) => /[\\/]subagents[\\/]/.test(path);
  * inside the windows of runs reconciled before `cutoff`. Runs reconciled since
  * (or not yet) read sidechains themselves, so their windows are carved out.
  */
-async function repairSettledSidechains({ home, runsDir, providerList, now, cutoff, to }) {
+async function repairSettledSidechains({ home, runsDir, providerList, now, cutoff, to, commitState }) {
   const from = now - FIRST_SCAN_LOOKBACK_DAYS * DAY_MS;
   const settledBefore = (metadata) => metadata.usageReconciled === true
     && Date.parse(metadata.usageReconciledAt || '') < cutoff;
@@ -294,9 +302,13 @@ async function repairSettledSidechains({ home, runsDir, providerList, now, cutof
       repairIds: [],
     });
   }
+  // Marked repaired in the same write as its corrections; with none to apply,
+  // the marker alone is committed so the repair is never re-run on a later boot.
   if (corrections.length) {
-    await applyHistoricalUsageCorrections(corrections);
+    await applyHistoricalUsageCorrections(corrections, { interactiveScan: commitState() });
     await forgetSiblingReconciledUsageRuns(corrections.map((c) => c.runId));
+  } else {
+    await setInteractiveScanState(commitState());
   }
   return corrections.reduce((sum, c) => sum + c.siblings.reduce((n, r) => n + (r.tokensOut || 0), 0), 0);
 }
@@ -313,8 +325,10 @@ async function repairSettledSidechains({ home, runsDir, providerList, now, cutof
 // caller, and tests drive it directly with a fixture home/runs dir.
 export const refreshInteractiveUsage = ({ home = homedir(), runsDir = PATHS.runs, providers = null, now = Date.now() } = {}) => (
   withLock(async () => {
-    // Strict: a damaged watermark must fail the scan, not read as empty and re-bill 35 days.
-    const state = await readJSONFile(INTERACTIVE_SCAN_FILE, { watermarks: {} }, { strict: true });
+    // Strict legacy read: a damaged watermark file must fail the scan, not read as
+    // empty and re-bill 35 days. Only consulted until usage.json holds the state.
+    const state = await getInteractiveScanState()
+      ?? await readJSONFile(INTERACTIVE_SCAN_FILE, { watermarks: {} }, { strict: true });
     const watermarks = { ...(state?.watermarks || {}) };
     const to = now - SETTLE_MS;
     // Not caught: a provider-list failure must surface, not read as "none configured".
@@ -323,11 +337,17 @@ export const refreshInteractiveUsage = ({ home = homedir(), runsDir = PATHS.runs
     const byCwd = await loadRunWindows(runsDir, now - FIRST_SCAN_LOOKBACK_DAYS * DAY_MS, now);
 
     let sidechainRepairedAt = state?.sidechainRepairedAt ?? null;
+    // Snapshot handed to each commit: the state as it would stand once that write lands.
+    const snapshot = () => ({ watermarks: { ...watermarks }, sidechainRepairedAt, updatedAt: new Date(now).toISOString() });
     if (!sidechainRepairedAt && resolveFamilyProvider(providerList, 'claude')) {
       // Process start, not `now`: a run reconciled after boot already ran the fixed reader.
       const cutoff = now - process.uptime() * 1000;
-      const outputTokens = await repairSettledSidechains({ home, runsDir, providerList, now, cutoff, to });
-      sidechainRepairedAt = new Date(now).toISOString();
+      const repairedAt = new Date(now).toISOString();
+      const outputTokens = await repairSettledSidechains({
+        home, runsDir, providerList, now, cutoff, to,
+        commitState: () => ({ ...snapshot(), sidechainRepairedAt: repairedAt })
+      });
+      sidechainRepairedAt = repairedAt;
       summary.sidechainRepair = { tokensOut: outputTokens };
       if (outputTokens > 0) console.log(`💸 Settled Claude subagent usage billed: ${outputTokens} output tokens`);
     }
@@ -374,17 +394,19 @@ export const refreshInteractiveUsage = ({ home = homedir(), runsDir = PATHS.runs
           repairIds: totals.repairIds || [],
         });
       }
+      // The family's watermark commits in the same write as its counts.
+      watermarks[family] = to;
       if (corrections.length) {
-        await applyHistoricalUsageCorrections(corrections);
+        await applyHistoricalUsageCorrections(corrections, { interactiveScan: snapshot() });
         // The watermark, not these ids, prevents re-billing — don't leave a key per scan behind.
         await forgetSiblingReconciledUsageRuns(corrections.map((c) => c.runId));
+      } else {
+        await setInteractiveScanState(snapshot());
       }
-      watermarks[family] = to;
       summary.families[family] = { days: corrections.length, tokens };
       if (tokens > 0) console.log(`💸 Interactive ${family} usage billed: ${tokens} tokens over ${corrections.length} day(s)`);
     }
 
-    await atomicWrite(INTERACTIVE_SCAN_FILE, { watermarks, sidechainRepairedAt, updatedAt: new Date(now).toISOString() });
     return summary;
   })
 );
