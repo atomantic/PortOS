@@ -437,6 +437,27 @@ it('opens an agent deep link even after it has left the recent agent list', asyn
   expect(api.getCosAgent).toHaveBeenCalledWith('archived-example', { silent: true });
 });
 
+it('keeps a retry on an agent deep link whose read failed, and reports a 404 as not found', async () => {
+  const user = userEvent.setup();
+  api.getCosAgent.mockRejectedValueOnce(Object.assign(new Error('Server unavailable'), { status: 503 }))
+    .mockResolvedValueOnce({ id: 'archived-example', status: 'completed', metadata: { taskDescription: 'Example maintenance audit' } });
+  const { unmount } = render(<MemoryRouter initialEntries={['/cos/agents/archived-example']}><Routes>
+    <Route path="/cos/:tab/:agentId" element={<AgentsTab agents={[]} onRefresh={vi.fn()} liveOutputs={{}} providers={[]} apps={[]} />} />
+  </Routes></MemoryRouter>);
+  expect(await screen.findByText(/Could not load this agent — Server unavailable/)).toBeInTheDocument();
+  expect(screen.queryByText('Agent not found or unavailable.')).not.toBeInTheDocument();
+  await user.click(screen.getByRole('button', { name: 'Retry' }));
+  expect(await screen.findByTestId('agent-archived-example')).toBeInTheDocument();
+  unmount();
+
+  api.getCosAgent.mockRejectedValueOnce(Object.assign(new Error('Agent not found'), { status: 404 }));
+  render(<MemoryRouter initialEntries={['/cos/agents/missing-example']}><Routes>
+    <Route path="/cos/:tab/:agentId" element={<AgentsTab agents={[]} onRefresh={vi.fn()} liveOutputs={{}} providers={[]} apps={[]} />} />
+  </Routes></MemoryRouter>);
+  expect(await screen.findByText('Agent not found or unavailable.')).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
+});
+
 describe('AgentsTab bounded archive loading', () => {
   it('loads a bounded first page and preserves rows and cursor after a failed next page', async () => {
     const user = userEvent.setup();

@@ -48,6 +48,22 @@ afterEach(() => {
 });
 
 describe('BriefingTab empty state', () => {
+  it('shows a retryable error instead of offering generation when the read fails', async () => {
+    const user = userEvent.setup();
+    api.getCosLatestBriefing
+      .mockRejectedValueOnce(new Error('Server unavailable'))
+      .mockResolvedValueOnce({ date: '2026-09-11', content: '# Today\n## Focus\nAn existing briefing' });
+    renderTab();
+
+    expect(await screen.findByText('Could not load the daily briefing.')).toBeInTheDocument();
+    expect(screen.queryByText('No briefing yet')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Generate today’s briefing' })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('Today')).toBeInTheDocument();
+    expect(api.triggerCosJob).not.toHaveBeenCalled();
+  });
+
   it('offers generation and the Daily Briefing job settings link', async () => {
     const user = userEvent.setup();
     renderTab();
@@ -154,7 +170,7 @@ it('keeps the selected historical briefing when a daily job completes', async ()
   await act(async () => socket.receive('cos:agent:completed', { metadata: { jobId: 'job-daily-briefing' } }));
   expect(screen.getByText('Historical')).toBeInTheDocument();
   expect(api.getCosLatestBriefing).toHaveBeenCalledTimes(1);
-  expect(api.getCosBriefing).toHaveBeenLastCalledWith('2026-09-11');
+  expect(api.getCosBriefing).toHaveBeenLastCalledWith('2026-09-11', { silent: true });
 });
 
 it('reconciles completion received while the post-trigger read is still pending', async () => {

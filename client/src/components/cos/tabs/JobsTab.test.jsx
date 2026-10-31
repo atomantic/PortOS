@@ -47,6 +47,16 @@ beforeEach(() => {
   api.getSettings.mockResolvedValue({ timezone: 'UTC' });
 });
 
+it('shows a retryable error when the provider read fails instead of hiding the provider pickers', async () => {
+  api.getProviders.mockRejectedValueOnce(new Error('Server unavailable'))
+    .mockResolvedValueOnce({ providers: [] });
+  render(<JobsTab apps={[]} providers={[]} />);
+  expect(await screen.findByText(/Could not load AI providers for the job provider pickers — Server unavailable/)).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+  await waitFor(() => expect(screen.queryByText(/Could not load AI providers/)).not.toBeInTheDocument());
+  expect(api.getProviders).toHaveBeenCalledTimes(2);
+});
+
 describe('JobsTab / JobCard Run Now disable behavior (#4036)', () => {
   it('surfaces a deliberate skipped trigger without claiming the job ran', async () => {
     api.triggerCosJob.mockResolvedValue({

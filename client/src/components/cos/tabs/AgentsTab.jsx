@@ -3,6 +3,7 @@ import { useParams, useSearchParams } from 'react-router';
 import { Trash2, Search, X, MessageSquare } from 'lucide-react';
 import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
+import ListLoadError from '../../ui/ListLoadError';
 import AgentCard from './AgentCard';
 import ResumeAgentModal from './ResumeAgentModal';
 import RelaunchAgentModal from './RelaunchAgentModal';
@@ -45,15 +46,20 @@ export default function AgentsTab({ agentsLoaded = true, agentsError = null, onR
   const [deletedIds, setDeletedIds] = useState(() => new Set());
   const [focusedAgent, setFocusedAgent] = useState(null);
   const [focusLoading, setFocusLoading] = useState(false);
+  // Only a 404 means the run is gone; any other failure keeps a Retry.
+  const [focusError, setFocusError] = useState(null);
+  const [focusAttempt, setFocusAttempt] = useState(0);
   useEffect(() => {
     if (!agentId) return;
     let cancelled = false;
     setFocusedAgent(null);
+    setFocusError(null);
     setFocusLoading(true);
     api.getCosAgent(agentId, { silent: true }).then(agent => { if (!cancelled) setFocusedAgent(agent); })
-      .catch(() => {}).finally(() => { if (!cancelled) setFocusLoading(false); });
+      .catch(err => { if (!cancelled && err?.status !== 404) setFocusError(err?.message || 'Request failed'); })
+      .finally(() => { if (!cancelled) setFocusLoading(false); });
     return () => { cancelled = true; };
-  }, [agentId]);
+  }, [agentId, focusAttempt]);
   const [searchParams, setSearchParams] = useSearchParams();
   const [resumingAgent, setResumingAgent] = useState(null);
   const [relaunchingAgent, setRelaunchingAgent] = useState(null);
@@ -266,7 +272,9 @@ export default function AgentsTab({ agentsLoaded = true, agentsError = null, onR
           paused={selectedAgent.status === 'paused'} durations={durations} onFeedbackChange={handleFeedbackChange}
           onPause={handlePause} onKill={handleKill} onResume={selectedAgent.deliveryPending ? undefined : handleResumeClick}
           onDelete={selectedAgent.deliveryPending ? undefined : handleDelete} onRelaunch={handleRelaunchClick} />
-          : <p role="status">{focusLoading ? 'Loading agent…' : 'Agent not found or unavailable.'}</p>}
+          : focusError && !focusLoading && !deletedIds.has(agentId)
+            ? <ListLoadError what="this agent" error={{ message: focusError }} onRetry={() => setFocusAttempt(n => n + 1)} />
+            : <p role="status">{focusLoading ? 'Loading agent…' : 'Agent not found or unavailable.'}</p>}
       </section>}
       {/* Active Agents */}
       <div>

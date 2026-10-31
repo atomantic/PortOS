@@ -76,12 +76,15 @@ export default function JobsTab() {
 
   useEffect(() => { fetchJobs(); }, [fetchJobs]);
 
-  useEffect(() => {
-    api.getProviders({ silent: true }).then(data => {
-      setRawProviders(data?.providers || []);
-      setActiveProviderId(data?.activeProvider || '');
-    }).catch(() => {});
-  }, []);
+  // A failed read would otherwise hide every provider picker, leaving new and
+  // edited agent jobs on the default provider with no sign anything went wrong.
+  const [providersError, setProvidersError] = useState(null);
+  const loadProviders = useCallback(() => api.getProviders({ silent: true }).then(data => {
+    setRawProviders(data?.providers || []);
+    setActiveProviderId(data?.activeProvider || '');
+    setProvidersError(null);
+  }).catch(err => setProvidersError(err)), []);
+  useEffect(() => { loadProviders(); }, [loadProviders]);
 
   const providers = useMemo(
     () => filterRunnableProviders(rawProviders, jobs.map(job => job.providerId)),
@@ -225,6 +228,9 @@ export default function JobsTab() {
 
       {appsState === 'error' && (
         <ListLoadError what="apps for the job scope pickers" error={appsError} onRetry={retryApps} />
+      )}
+      {providersError && (
+        <ListLoadError what="AI providers for the job provider pickers" error={providersError} onRetry={loadProviders} />
       )}
 
       {showCreate && (
