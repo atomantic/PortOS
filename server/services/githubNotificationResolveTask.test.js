@@ -64,11 +64,15 @@ describe('queueNotificationResolveTask', () => {
     expect(addTask).toHaveBeenCalledTimes(1);
   });
 
-  it('gives a CI failure its own steps and reports a duplicate run', async () => {
+  it('gives a CI failure its own steps, limited to runs the operator triggered, and reports a duplicate run', async () => {
     vi.mocked(addTask).mockResolvedValue({ id: 'task-9', duplicate: true });
-    expect(await queueNotificationResolveTask({ account, row: { ...row, reason: 'ci_activity', subject_type: 'CheckSuite', subject_api_url: null, trust: 'unknown' } }))
-      .toEqual({ duplicate: true, taskId: 'task-9' });
-    expect(vi.mocked(addTask).mock.calls[0][0].description).toContain('gh run list --repo acme/app --status failure');
+    const ciRow = { ...row, reason: 'ci_activity', subject_type: 'CheckSuite', subject_api_url: null, trust: 'unknown' };
+    expect(await queueNotificationResolveTask({ account, row: ciRow })).toEqual({ duplicate: true, taskId: 'task-9' });
+    // An outside fork PR's failed run carries logs its author wrote; it must not be listable.
+    expect(vi.mocked(addTask).mock.calls[0][0].description).toContain('gh run list --repo acme/app --user octocat --status failure');
+    await queueNotificationResolveTask({ account: { ...account, login: 'bad login' }, row: ciRow });
+    expect(vi.mocked(addTask).mock.calls[1][0].description)
+      .toContain('gh run list --repo acme/app --user "$(gh api --hostname github.com user --jq .login)" --status failure');
   });
 
   it('retains the selected account identity for a security-fix launch', async () => {
