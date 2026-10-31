@@ -1108,12 +1108,28 @@ async function unlockReferenceTurnaroundImpl(recordId) {
   return getReferenceSet(recordId);
 }
 
-async function lockReferenceImpl(recordId, { target, candidate, acceptClipRisk = false }) {
-  const record = await requireTrack(recordId);
-  const directional = kindSupportsTrack(record.kind, WALK_TRACK, getEffectiveAnimationTracks());
-  // Seed on demand — a candidate may predate the manifest (e.g. files placed
-  // by an import or a crash-recovered tree); the lock is what makes it real.
-  const manifest = (await loadManifest(recordId)) || seedManifest(recordId, { directional });
+// The filename prefix a candidate for `target` must carry. Checked as well as
+// the sidecar: a crash between the PNG copy and the sidecar write leaves a
+// sidecarless candidate whose target would otherwise be unverifiable.
+function expectedCandidatePrefix(target, directional) {
+  if (target === TURNAROUND_ID) return `${TURNAROUND_ID}-candidate-`;
+  if (target === 'main' && !directional) return 'main-candidate-';
+  return `${anchorIdForDirection(target === 'main' ? 'south' : target)}-candidate-`;
+}
+
+// A clip-risk lock is irreversible (the frozen root may already be missing
+// exact-key details) — refuse unless the caller explicitly accepts, so the
+// user learns BEFORE the 409 wall goes up, not after.
+function assertClipRiskAccepted(clipWarning, acceptClipRisk) {
+  if (clipWarning && !acceptClipRisk) {
+    throw new ServerError(`${clipWarning}. Re-send with acceptClipRisk to lock anyway.`, { status: 409, code: 'CHROMA_CLIP_RISK' });
+  }
+}
+
+// Validates the candidate a lock would freeze and resolves the key it was
+// GENERATED against (its actual background), which may differ from the key
+// selected at lock time.
+async function resolveLockCandidate(recordId, record, { target, candidate, directional }) {
   if (!directional && target !== 'main') {
     throw new ServerError('Ambient references use one main identity root; they have no turnaround or directional anchors', { status: 400, code: 'INVALID_TARGET' });
   }
@@ -1124,167 +1140,173 @@ async function lockReferenceImpl(recordId, { target, candidate, acceptClipRisk =
   if (!await pathExists(candAbs)) {
     throw new ServerError(`Candidate not found: ${candidate}`, { status: 404, code: 'CANDIDATE_NOT_FOUND' });
   }
-  const refDir = join(spriteDir(recordId), 'reference');
   const sidecar = await loadCandidateSidecar(candAbs);
   // A candidate generated for one facing must not land in another slot — a
-  // misclick would freeze the wrong pose as immutable evidence. The filename
-  // prefix is checked as well as the sidecar: a crash between the PNG copy
-  // and the sidecar write leaves a sidecarless candidate whose target would
-  // otherwise be unverifiable.
+  // misclick would freeze the wrong pose as immutable evidence.
   if (sidecar?.target && sidecar.target !== target) {
     throw new ServerError(`Candidate was generated for target "${sidecar.target}", not "${target}"`, { status: 400, code: 'CANDIDATE_TARGET_MISMATCH' });
   }
-  const expectedPrefix = target === TURNAROUND_ID
-    ? `${TURNAROUND_ID}-candidate-`
-    : target === 'main' && !directional
-      ? 'main-candidate-'
-      : `${anchorIdForDirection(target === 'main' ? 'south' : target)}-candidate-`;
+  const expectedPrefix = expectedCandidatePrefix(target, directional);
   if (!candidate.slice('reference/candidates/'.length).startsWith(expectedPrefix)) {
     throw new ServerError(`Candidate filename does not match target "${target}" (expected ${expectedPrefix}*)`, { status: 400, code: 'CANDIDATE_TARGET_MISMATCH' });
   }
-  // Mask on the key the candidate was GENERATED against (its actual
-  // background), which may differ from the key selected at lock time.
-  const maskKey = sidecar?.chromaKey || record.chromaKey || DEFAULT_CHROMA_KEY;
-  const now = new Date().toISOString();
+  return { candAbs, maskKey: sidecar?.chromaKey || record.chromaKey || DEFAULT_CHROMA_KEY };
+}
 
-  if (target === TURNAROUND_ID) {
-    if (manifest.turnaround?.locked) {
-      throw new ServerError('Turnaround sheet is already locked', { status: 409, code: 'REFERENCE_LOCKED' });
-    }
-    const analysis = await analyzeForeground(candAbs, maskKey);
-    const palette = paletteFromAnalysis(analysis);
-    // Turnaround-first records choose the canonical key HERE, off a holistic
-    // palette: a key-colored item only visible from behind is counted up front
-    // instead of surfacing as a surprise clip 409 at anchor-lock time. A legacy
-    // record froze its key at main lock — inherit it, never reselect.
-    const { frozenKey, pinnedKey, auto, selectedKey } = resolveLockKey(manifest, record, palette, manifest.mainReference.locked);
-    const clipWarning = combinedClipWarning(palette, maskKey, selectedKey);
-    if (clipWarning && !acceptClipRisk) {
-      throw new ServerError(`${clipWarning}. Re-send with acceptClipRisk to lock anyway.`, { status: 409, code: 'CHROMA_CLIP_RISK' });
-    }
-    const rel = `reference/${await nextVersionPath(refDir, `${recordId}-${TURNAROUND_ID}`)}`;
-    const destAbs = join(spriteDir(recordId), rel);
-    // Re-key, don't reframe: the single-figure geometry normalizeFromAnalysis
-    // applies is meaningless for a multi-figure sheet, but the sheet is the
-    // init image for every later render whose prompt names the canonical key.
-    await recompositeOnKey(analysis, candAbs, destAbs, selectedKey);
-    const sha256 = await sha256File(destAbs);
-    if (!frozenKey) {
-      manifest.chromaKey = selectedKey;
-      manifest.chromaKeyAutoSelected = !pinnedKey;
-      manifest.chromaKeyWarning = [auto?.warning, clipWarning].filter(Boolean).join(' — ') || null;
-    }
-    manifest.turnaround = {
-      ...(manifest.turnaround || {}),
-      path: rel,
-      role: 'identity-root',
-      background: 'chroma-key',
-      views: manifest.turnaround?.views || TURNAROUND_VIEWS,
-      locked: true,
-      lockedFrom: candidate,
-      lockedAt: now,
-      sha256,
-      ...(frozenKey && clipWarning ? { clipWarning } : {}),
-    };
-    if (!manifest.mainReference.locked) manifest.status = 'needs-main-reference';
-    // Record BEFORE manifest, same rationale as the main lock below. A legacy
-    // backfill inherits an already-frozen key and an already-set record status,
-    // so it touches the record not at all.
-    if (!frozenKey) await updateRecord(recordId, { chromaKey: selectedKey, status: 'reference' });
-    await saveManifest(recordId, manifest);
-  } else if (target === 'main') {
-    if (manifest.mainReference.locked) {
-      throw new ServerError('Main reference is already locked', { status: 409, code: 'REFERENCE_LOCKED' });
-    }
-    // Dynamic key selection (#2895): histogram the character's own palette
-    // and pick the standard key farthest from it in hue — unless the user
-    // already pinned a key on the record, or the turnaround lock already froze
-    // one (#2979). One analyzeForeground decode feeds the palette and the
-    // composite; the palette is computed even when pinned/frozen because the
-    // clip warning below needs it.
-    const analysis = await analyzeForeground(candAbs, maskKey);
-    const palette = paletteFromAnalysis(analysis);
-    const { frozenKey, pinnedKey, auto, selectedKey } = resolveLockKey(manifest, record, palette, manifest.turnaround?.locked);
-    // Selection only sees pixels that SURVIVED the generation-key mask —
-    // exact-key details (magenta garment on the magenta default) are already
-    // gone from the palette — and a pinned key can collide with the palette
-    // that DID survive. Surface both risks instead of silently locking a
-    // clipped identity root.
-    const clipWarning = combinedClipWarning(palette, maskKey, selectedKey);
-    // A clip-risk lock is irreversible (the frozen root may already be
-    // missing exact-key details) — refuse unless the caller explicitly
-    // accepts, so the user learns BEFORE the 409 wall goes up, not after.
-    if (clipWarning && !acceptClipRisk) {
-      throw new ServerError(`${clipWarning}. Re-send with acceptClipRisk to lock anyway.`, { status: 409, code: 'CHROMA_CLIP_RISK' });
-    }
-    const stem = `${recordId}-${directional ? 'walk-south' : 'ambient-main'}`;
-    const rel = `reference/${await nextVersionPath(refDir, stem)}`;
-    const destAbs = join(spriteDir(recordId), rel);
-    await normalizeFromAnalysis(analysis, candAbs, destAbs, selectedKey);
-    const sha256 = await sha256File(destAbs);
-    if (!frozenKey) {
-      manifest.chromaKey = selectedKey;
-      manifest.chromaKeyAutoSelected = !pinnedKey;
-      manifest.chromaKeyWarning = [auto?.warning, clipWarning].filter(Boolean).join(' — ') || null;
-    }
-    manifest.mainReference = {
-      ...manifest.mainReference,
-      path: rel,
-      background: 'chroma-key',
-      locked: true,
-      lockedFrom: candidate,
-      lockedAt: now,
-      sha256,
-      ...(frozenKey && clipWarning ? { clipWarning } : {}),
-    };
-    const south = findAnchor(manifest, anchorIdForDirection('south'));
-    if (south) Object.assign(south, { status: 'locked', path: rel, lockedFrom: candidate, sha256 });
-    manifest.status = directional ? 'in-progress' : 'complete';
-    // Record BEFORE manifest: a crash between the two leaves the record
-    // updated but the manifest unlocked — recoverable by re-locking. The
-    // reverse order would wedge (locked manifest + stale record, with both
-    // relock and key PATCH returning 409 forever). Skipped entirely when the
-    // turnaround lock already froze the key and set the status.
-    if (!frozenKey) await updateRecord(recordId, {
-      chromaKey: selectedKey, status: directional ? 'reference' : 'reference-complete',
-    });
-    else if (!directional) await updateRecord(recordId, { status: 'reference-complete' });
-    await saveManifest(recordId, manifest);
-  } else {
-    if (!ANCHOR_DIRECTIONS.includes(target)) {
-      throw new ServerError(`Unknown reference target: ${target}`, { status: 400, code: 'INVALID_TARGET' });
-    }
-    if (!manifest.mainReference.locked) {
-      throw new ServerError('Lock the main reference first', { status: 409, code: 'MAIN_NOT_LOCKED' });
-    }
-    const anchorId = anchorIdForDirection(target);
-    const anchor = findAnchor(manifest, anchorId);
-    if (!anchor) throw new ServerError(`Unknown anchor: ${anchorId}`, { status: 400, code: 'INVALID_TARGET' });
-    if (anchor.status === 'locked') {
-      throw new ServerError(`Anchor ${anchorId} is already locked`, { status: 409, code: 'REFERENCE_LOCKED' });
-    }
-    // Manifest key is canonical after main lock — see startReferenceGeneration.
-    const canvasKey = manifest.chromaKey || record.chromaKey || DEFAULT_CHROMA_KEY;
-    // A direction can reveal key-colored detail the front view never showed
-    // (a green backpack on a green key) — anchors get the same clip gate as
-    // the main.
-    const analysis = await analyzeForeground(candAbs, maskKey);
-    const clipWarning = combinedClipWarning(paletteFromAnalysis(analysis), maskKey, canvasKey);
-    if (clipWarning && !acceptClipRisk) {
-      throw new ServerError(`${clipWarning}. Re-send with acceptClipRisk to lock anyway.`, { status: 409, code: 'CHROMA_CLIP_RISK' });
-    }
-    const rel = `reference/${await nextVersionPath(refDir, `${recordId}-${anchorId}`)}`;
-    const destAbs = join(spriteDir(recordId), rel);
-    await normalizeFromAnalysis(analysis, candAbs, destAbs, canvasKey);
-    Object.assign(anchor, {
-      status: 'locked', path: rel, lockedFrom: candidate, lockedAt: now, sha256: await sha256File(destAbs),
-      ...(clipWarning ? { clipWarning } : {}),
-    });
-    const allLocked = manifest.anchors.every((a) => a.status === 'locked');
-    if (allLocked) manifest.status = 'complete';
-    await saveManifest(recordId, manifest);
-    if (allLocked) await updateRecord(recordId, { status: 'reference-complete' });
+/**
+ * The shared half of the two identity-root locks (turnaround and main): decode
+ * the candidate once, pick or inherit the canonical key off its palette, gate on
+ * clip risk, composite it with `composite`, and — when this lock is the one
+ * choosing the key — freeze that choice into the manifest. Returns the fields
+ * the caller's lock entry and record patch need.
+ *
+ * Selection only sees pixels that SURVIVED the generation-key mask — exact-key
+ * details (magenta garment on the magenta default) are already gone from the
+ * palette — and a pinned key can collide with the palette that DID survive, so
+ * both risks surface instead of silently locking a clipped identity root.
+ */
+async function lockIdentityRoot(recordId, record, manifest, { candAbs, maskKey, alreadyFrozen, stem, composite, acceptClipRisk }) {
+  const analysis = await analyzeForeground(candAbs, maskKey);
+  const palette = paletteFromAnalysis(analysis);
+  const { frozenKey, pinnedKey, auto, selectedKey } = resolveLockKey(manifest, record, palette, alreadyFrozen);
+  const clipWarning = combinedClipWarning(palette, maskKey, selectedKey);
+  assertClipRiskAccepted(clipWarning, acceptClipRisk);
+  const rel = `reference/${await nextVersionPath(join(spriteDir(recordId), 'reference'), stem)}`;
+  const destAbs = join(spriteDir(recordId), rel);
+  await composite(analysis, candAbs, destAbs, selectedKey);
+  const sha256 = await sha256File(destAbs);
+  if (!frozenKey) {
+    manifest.chromaKey = selectedKey;
+    manifest.chromaKeyAutoSelected = !pinnedKey;
+    manifest.chromaKeyWarning = [auto?.warning, clipWarning].filter(Boolean).join(' — ') || null;
   }
+  return { frozenKey, selectedKey, rel, sha256, lockedClipWarning: frozenKey && clipWarning ? { clipWarning } : {} };
+}
+
+async function lockTurnaround(recordId, record, manifest, { candidate, candAbs, maskKey, now, acceptClipRisk }) {
+  if (manifest.turnaround?.locked) {
+    throw new ServerError('Turnaround sheet is already locked', { status: 409, code: 'REFERENCE_LOCKED' });
+  }
+  // Turnaround-first records choose the canonical key HERE, off a holistic
+  // palette: a key-colored item only visible from behind is counted up front
+  // instead of surfacing as a surprise clip 409 at anchor-lock time. A legacy
+  // record froze its key at main lock — inherit it, never reselect.
+  // Re-key, don't reframe: the single-figure geometry normalizeFromAnalysis
+  // applies is meaningless for a multi-figure sheet, but the sheet is the
+  // init image for every later render whose prompt names the canonical key.
+  const { frozenKey, selectedKey, rel, sha256, lockedClipWarning } = await lockIdentityRoot(recordId, record, manifest, {
+    candAbs, maskKey, acceptClipRisk,
+    alreadyFrozen: manifest.mainReference.locked,
+    stem: `${recordId}-${TURNAROUND_ID}`,
+    composite: recompositeOnKey,
+  });
+  manifest.turnaround = {
+    ...(manifest.turnaround || {}),
+    path: rel,
+    role: 'identity-root',
+    background: 'chroma-key',
+    views: manifest.turnaround?.views || TURNAROUND_VIEWS,
+    locked: true,
+    lockedFrom: candidate,
+    lockedAt: now,
+    sha256,
+    ...lockedClipWarning,
+  };
+  if (!manifest.mainReference.locked) manifest.status = 'needs-main-reference';
+  // Record BEFORE manifest, same rationale as the main lock below. A legacy
+  // backfill inherits an already-frozen key and an already-set record status,
+  // so it touches the record not at all.
+  if (!frozenKey) await updateRecord(recordId, { chromaKey: selectedKey, status: 'reference' });
+  await saveManifest(recordId, manifest);
+}
+
+async function lockMain(recordId, record, manifest, { candidate, candAbs, maskKey, now, directional, acceptClipRisk }) {
+  if (manifest.mainReference.locked) {
+    throw new ServerError('Main reference is already locked', { status: 409, code: 'REFERENCE_LOCKED' });
+  }
+  // Dynamic key selection (#2895): histogram the character's own palette and
+  // pick the standard key farthest from it in hue — unless the user already
+  // pinned a key on the record, or the turnaround lock already froze one
+  // (#2979). The palette is computed even when pinned/frozen because the clip
+  // warning needs it.
+  const { frozenKey, selectedKey, rel, sha256, lockedClipWarning } = await lockIdentityRoot(recordId, record, manifest, {
+    candAbs, maskKey, acceptClipRisk,
+    alreadyFrozen: manifest.turnaround?.locked,
+    stem: `${recordId}-${directional ? 'walk-south' : 'ambient-main'}`,
+    composite: normalizeFromAnalysis,
+  });
+  manifest.mainReference = {
+    ...manifest.mainReference,
+    path: rel,
+    background: 'chroma-key',
+    locked: true,
+    lockedFrom: candidate,
+    lockedAt: now,
+    sha256,
+    ...lockedClipWarning,
+  };
+  const south = findAnchor(manifest, anchorIdForDirection('south'));
+  if (south) Object.assign(south, { status: 'locked', path: rel, lockedFrom: candidate, sha256 });
+  manifest.status = directional ? 'in-progress' : 'complete';
+  // Record BEFORE manifest: a crash between the two leaves the record
+  // updated but the manifest unlocked — recoverable by re-locking. The
+  // reverse order would wedge (locked manifest + stale record, with both
+  // relock and key PATCH returning 409 forever). Skipped entirely when the
+  // turnaround lock already froze the key and set the status.
+  if (!frozenKey) await updateRecord(recordId, {
+    chromaKey: selectedKey, status: directional ? 'reference' : 'reference-complete',
+  });
+  else if (!directional) await updateRecord(recordId, { status: 'reference-complete' });
+  await saveManifest(recordId, manifest);
+}
+
+async function lockAnchor(recordId, record, manifest, { target, candidate, candAbs, maskKey, now, acceptClipRisk }) {
+  if (!ANCHOR_DIRECTIONS.includes(target)) {
+    throw new ServerError(`Unknown reference target: ${target}`, { status: 400, code: 'INVALID_TARGET' });
+  }
+  if (!manifest.mainReference.locked) {
+    throw new ServerError('Lock the main reference first', { status: 409, code: 'MAIN_NOT_LOCKED' });
+  }
+  const anchorId = anchorIdForDirection(target);
+  const anchor = findAnchor(manifest, anchorId);
+  if (!anchor) throw new ServerError(`Unknown anchor: ${anchorId}`, { status: 400, code: 'INVALID_TARGET' });
+  if (anchor.status === 'locked') {
+    throw new ServerError(`Anchor ${anchorId} is already locked`, { status: 409, code: 'REFERENCE_LOCKED' });
+  }
+  // Manifest key is canonical after main lock — see startReferenceGeneration.
+  const canvasKey = manifest.chromaKey || record.chromaKey || DEFAULT_CHROMA_KEY;
+  // A direction can reveal key-colored detail the front view never showed
+  // (a green backpack on a green key) — anchors get the same clip gate as
+  // the main.
+  const analysis = await analyzeForeground(candAbs, maskKey);
+  const clipWarning = combinedClipWarning(paletteFromAnalysis(analysis), maskKey, canvasKey);
+  assertClipRiskAccepted(clipWarning, acceptClipRisk);
+  const rel = `reference/${await nextVersionPath(join(spriteDir(recordId), 'reference'), `${recordId}-${anchorId}`)}`;
+  const destAbs = join(spriteDir(recordId), rel);
+  await normalizeFromAnalysis(analysis, candAbs, destAbs, canvasKey);
+  Object.assign(anchor, {
+    status: 'locked', path: rel, lockedFrom: candidate, lockedAt: now, sha256: await sha256File(destAbs),
+    ...(clipWarning ? { clipWarning } : {}),
+  });
+  const allLocked = manifest.anchors.every((a) => a.status === 'locked');
+  if (allLocked) manifest.status = 'complete';
+  await saveManifest(recordId, manifest);
+  if (allLocked) await updateRecord(recordId, { status: 'reference-complete' });
+}
+
+const LOCK_BY_TARGET = new Map([[TURNAROUND_ID, lockTurnaround], ['main', lockMain]]);
+
+async function lockReferenceImpl(recordId, { target, candidate, acceptClipRisk = false }) {
+  const record = await requireTrack(recordId);
+  const directional = kindSupportsTrack(record.kind, WALK_TRACK, getEffectiveAnimationTracks());
+  // Seed on demand — a candidate may predate the manifest (e.g. files placed
+  // by an import or a crash-recovered tree); the lock is what makes it real.
+  const manifest = (await loadManifest(recordId)) || seedManifest(recordId, { directional });
+  const { candAbs, maskKey } = await resolveLockCandidate(recordId, record, { target, candidate, directional });
+  const lock = LOCK_BY_TARGET.get(target) || lockAnchor;
+  await lock(recordId, record, manifest, {
+    target, candidate, candAbs, maskKey, directional, acceptClipRisk, now: new Date().toISOString(),
+  });
   console.log(`🔒 sprite reference locked ${recordId}/${target} from ${candidate}`);
   return getReferenceSet(recordId);
 }
