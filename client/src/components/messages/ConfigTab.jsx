@@ -77,7 +77,6 @@ export default function ConfigTab({ accounts, setAccounts }) {
       return;
     }
     setConfigLoadError(false);
-    setConfigDirty(false);
     const msgConfig = settings.messages || {};
     const triageConfig = msgConfig.triage || {};
     const replyConfig = msgConfig.reply || {};

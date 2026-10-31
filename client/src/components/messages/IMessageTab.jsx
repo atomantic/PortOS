@@ -502,7 +502,7 @@ export default function IMessageTab() {
       settle(api.getImessageConversations({ q: debouncedQ || undefined, silent: true })),
     ]);
     if (!isCurrent()) return;
-    // Keep the last good stats on a failed refresh; the chips say when there are none.
+    // A failed refresh keeps the last good stats; the error row shows only when none ever loaded.
     if (!statsErr) setStats(statsRes);
     setStatsError(statsErr);
     // Rows from an earlier query would mislabel this one, so a failure clears them
