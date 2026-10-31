@@ -19,6 +19,7 @@
  * than sending a body the endpoint may not accept.
  */
 
+import { falReferenceImageName } from './storyboardGuidance.js';
 import { getFalVideoModel } from './falVideoModels.js';
 import { isPerformanceScene } from './musicVideoShotTiming.js';
 
@@ -108,10 +109,7 @@ export function planSequenceCoverage(scenes, { modelId } = {}) {
 }
 
 /** The model's spelling of its nth reference image ("Image 2" / "@Image2"), or null when it takes none. */
-function referenceImageName(modelId, n) {
-  const name = getFalVideoModel(modelId)?.referenceImages?.promptName ?? (getFalVideoModel(modelId)?.referenceImages ? 'Image 1' : null);
-  return name ? name.replace(/1$/, String(n)) : null;
-}
+const referenceImageName = (modelId, n) => falReferenceImageName(getFalVideoModel(modelId), n - 1);
 
 const fmtSec = (n) => `${round3(n)}`;
 

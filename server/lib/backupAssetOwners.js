@@ -362,6 +362,9 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
       'services/imageGen/grok.js', 'services/imageGen/fal.js', 'services/imageGen/runway.js', 'services/imageGen/external.js',
       'services/imageGen/remote.js', 'services/imageGen/variants.js', 'services/mediaSketches.js',
       'services/imageGen/publication.js', 'services/imageGen/index.js',
+      // A storyboard-guided Grok clip files the first frame it built into the
+      // gallery (image plus sidecar) before its scratch dir is removed.
+      'services/videoGen/grok.js',
     ],
   },
   {

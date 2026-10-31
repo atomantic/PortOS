@@ -13,6 +13,7 @@ import { isDefaultI2vReferenceMode } from '../../lib/videoReferenceModes.js';
 import { VIDEO_GEN_MODE, isVideoModeUsable } from './modes.js';
 import { getRunwaySpecialVideoModel, buildRunwaySpecialVideoRequest } from '../../lib/runwaySpecialVideoModels.js';
 import { validateRunwayVideoInput } from './runwayVideoInputs.js';
+import { storyboardGuidanceJobParams } from './storyboardGuidance.js';
 
 // Every hosted backend anchors a reference image as frame one, so a loose
 // reference mode is a local-runtime promise it can never keep. Submission
@@ -158,6 +159,7 @@ export const HOSTED_VIDEO_SUBMISSIONS = {
       width: body.width,
       height: body.height,
       duration: body.grokDuration,
+      ...storyboardGuidanceJobParams(prepared),
     }),
   },
   [VIDEO_GEN_MODE.FAL]: {
@@ -182,6 +184,7 @@ export const HOSTED_VIDEO_SUBMISSIONS = {
       duration: body.falDuration,
       ...(body.falResolution ? { resolution: body.falResolution } : {}),
       ...(body.falGenerateAudio === true ? { generateAudio: true } : {}),
+      ...storyboardGuidanceJobParams(prepared),
     }),
   },
   [VIDEO_GEN_MODE.RUNWAY]: {

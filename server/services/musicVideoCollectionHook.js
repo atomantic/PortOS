@@ -16,6 +16,7 @@ import { basename } from 'path';
 import { mediaJobEvents } from './mediaJobQueue/index.js';
 import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 import { createKeyCachedQueue } from '../lib/createKeyCachedQueue.js';
+import { storyboardFirstFrameFile } from '../lib/storyboardGuidance.js';
 
 /** The project and asset a completed job files, or null when it names no music video. */
 function musicVideoCollectionTarget(job) {
@@ -25,10 +26,16 @@ function musicVideoCollectionTarget(job) {
   if (typeof projectId !== 'string' || !projectId) return null;
   const ref = job.kind === 'image' ? job.result?.filename : (job.result?.generationId || job.id);
   if (typeof ref !== 'string' || !ref) return null;
-  const sourceImageId = job.kind === 'video' && typeof params.sourceImagePath === 'string' ? basename(params.sourceImagePath) : null;
+  const sceneId = params.musicVideo?.sceneId || null;
+  // A clip from a storyboard panel files the first frame it built too (videoGen/grok.js).
+  const firstFrame = job.kind === 'video' ? storyboardFirstFrameFile(job.result) : null;
+  const sourceImageId = firstFrame || (job.kind === 'video' && typeof params.sourceImagePath === 'string' ? basename(params.sourceImagePath) : null);
   return {
     projectId,
-    asset: { kind: job.kind, ref, sceneId: params.musicVideo?.sceneId || null, take: sourceImageId ? { sourceImageId } : null },
+    assets: [
+      ...(firstFrame ? [{ kind: 'image', ref: firstFrame, sceneId, take: null }] : []),
+      { kind: job.kind, ref, sceneId, take: sourceImageId ? { sourceImageId } : null },
+    ],
   };
 }
 
@@ -53,7 +60,7 @@ export function initMusicVideoCollectionHook() {
     const target = musicVideoCollectionTarget(job);
     if (!target) return;
     const handled = withBackupAssetPublication(() => serialize(target.projectId,
-      () => fileIntoMusicVideoCollection(target.projectId, [target.asset])))
+      () => fileIntoMusicVideoCollection(target.projectId, target.assets)))
       .catch((err) => console.error(`❌ music-video collection hook failed for ${target.projectId}: ${err?.message || err}`));
     inFlight.add(handled);
     handled.finally(() => inFlight.delete(handled));

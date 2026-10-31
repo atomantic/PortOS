@@ -189,6 +189,22 @@ export function musicVideoConditioningReferences(project, scene, castMedia = nul
     .slice(0, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES);
 }
 
+/**
+ * A clip from the shot's storyboard panel: the panel as layout guidance and the
+ * shot's other references as the look (lib/storyboardGuidance.js). A greybox
+ * capture joins server-side (greyboxReferences.js), so it keeps one slot. Null
+ * without sendable panel art.
+ */
+export function musicVideoStoryboardClipInputs(project, scene, castMedia = null, { greybox = false } = {}) {
+  const panel = musicVideoPanelArtReferences(scene)[0];
+  if (!panel) return null;
+  const looks = baseConditioningReferences(project, scene, castMedia).map((ref) => ref.imageId).filter((id) => id !== panel.imageId);
+  return {
+    guidanceImageFile: panel.imageId,
+    referenceImageFiles: [...new Set(looks)].slice(0, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES - (greybox ? 1 : 0)),
+  };
+}
+
 /** A frame being edited leads; the chosen shot references fill the remaining slots. */
 export function musicVideoFrameReferenceFiles(leadImageId, references) {
   return [...(leadImageId ? [leadImageId] : []), ...references.map((ref) => ref.imageId).filter((id) => id !== leadImageId)]

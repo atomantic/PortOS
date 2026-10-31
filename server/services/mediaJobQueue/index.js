@@ -2163,7 +2163,7 @@ async function runJobLifecycle(job, markDispatched, permit, finalizeLane) {
       }
       if (job.params?.musicVideo?.sceneId && !(job.cancelRequested && isRemoteMediaJob(job))) {
         const { assertMusicVideoSceneReview } = await import('../musicVideo/productionReviewService.js');
-        await assertMusicVideoSceneReview(job.params.musicVideo, job.kind);
+        await assertMusicVideoSceneReview(job.params.musicVideo, job.kind, { storyboardGuided: Boolean(job.params.guidanceImagePath) });
       }
       // The user may edit a referenced file while this job waits in the queue.
       // Recheck the captured bytes and request at the last provider boundary;
@@ -2304,7 +2304,7 @@ async function enqueueJobLocked({ kind, params, owner = null }) {
   await assertMusicVideoJobPolicy(kind, params);
   if (params?.musicVideo?.sceneId) {
     const { assertMusicVideoSceneReview } = await import('../musicVideo/productionReviewService.js');
-    await assertMusicVideoSceneReview(params.musicVideo, kind);
+    await assertMusicVideoSceneReview(params.musicVideo, kind, { storyboardGuided: Boolean(params.guidanceImagePath) });
   }
   if (!JOB_KINDS.includes(kind)) {
     throw new Error(`enqueueJob: invalid kind '${kind}'`);

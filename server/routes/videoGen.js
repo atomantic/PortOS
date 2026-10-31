@@ -18,7 +18,7 @@ import os from 'os';
 import { z } from 'zod';
 import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.js';
 import { createVideoHistoryItemRead, historyRecordIdSchema } from './videoHistoryRead.js';
-import { uploadFields, optionalUpload } from '../lib/multipart.js';
+import { uploadFields, optionalUpload, optionalUploadFields } from '../lib/multipart.js';
 import {
   validateRequest, mediaDeleteQuerySchema, modelDownloadQuerySchema, modelDownloadParamsSchema,
   icLoraDownloadParamsSchema, textEncoderDownloadParamsSchema, videoCancelBodySchema, videoModelTermsSchema,
@@ -388,6 +388,9 @@ const generateBodySchema = z.object({
   // clobber the settings-level default with a stale false.
   displaySleep: z.union([z.boolean(), z.literal('true'), z.literal('false')]).optional(),
   sourceImageFile: z.string().max(512).optional(),
+  // A storyboard panel used as layout guidance, never the start frame; its
+  // `referenceImageFiles` set the look (services/videoGen/storyboardGuidance.js).
+  guidanceImageFile: z.string().min(1).max(512).optional(),
   // Gallery-pick filename for the FFLF end-frame. The end-frame can also
   // arrive as a multipart `lastImage` upload (handled below) — when both
   // are present the upload wins, mirroring the sourceImage/sourceImageFile
@@ -1049,7 +1052,7 @@ router.post('/text-encoder/download', asyncHandler(async (req, res) => {
 }));
 
 // What Generate would send to the model, built by the render's own code (#11317).
-router.post('/prompt-preview', uploadFields([]), asyncHandler(async (req, res) => {
+router.post('/prompt-preview', optionalUploadFields([]), asyncHandler(async (req, res) => {
   res.json(await previewVideoPrompt(validateRequest(promptPreviewBodySchema, req.body ?? {})));
 }));
 

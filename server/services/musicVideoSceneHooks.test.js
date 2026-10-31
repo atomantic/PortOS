@@ -68,11 +68,11 @@ describe('music-video scene completion hooks → takes', () => {
     // hook tests on that boundary, including direct selection of source plates.
     mkdirSync(join(TEST_DATA_ROOT, 'images'), { recursive: true });
     for (const name of ['newer', 'older', 'first', 'second', 'third', 'one', 'two', 'three',
-      'frame-a', 'frame-b', 'start', 'sketch', 'late', 'kept', 'frame', 'recast']) {
+      'frame-a', 'frame-b', 'start', 'sketch', 'late', 'kept', 'frame', 'recast', 'clip-guided-first-frame']) {
       writeFileSync(join(TEST_DATA_ROOT, 'images', `${name}.png`), 'synthetic image');
     }
     mkdirSync(join(TEST_DATA_ROOT, 'videos'), { recursive: true });
-    const clips = ['clip-1', 'clip-2', 'clip-old', 'late-clip', 'clip-ok'];
+    const clips = ['clip-1', 'clip-2', 'clip-old', 'late-clip', 'clip-ok', 'clip-guided'];
     for (const id of clips) writeFileSync(join(TEST_DATA_ROOT, 'videos', `${id}.mp4`), 'synthetic clip');
     writeFileSync(join(TEST_DATA_ROOT, 'video-history.json'), JSON.stringify(clips.map(id => ({ id, filename: `${id}.mp4` }))));
     imageHook.__testing.reset();
@@ -189,6 +189,23 @@ describe('music-video scene completion hooks → takes', () => {
       ['video', 'clip-2', 'frame-a.png'],
     ]);
     expect(emitted[1]).toMatchObject({ event: 'scene-video', videoHistoryId: 'clip-1' });
+  });
+
+  it('files a storyboard clip\'s first frame as the still it was animated from, filling the empty still slot', async () => {
+    const job = videoJob(project.id, scene.sceneId, 'clip-guided');
+    delete job.params.sourceImagePath;
+    // As submitted: a guided clip depends on no plate (submissionGuards.captureDependencies).
+    Object.assign(job.params, { guidanceImagePath: '/abs/server/path/images/panel.png', musicVideoDependencies: { version: 1, references: [] } });
+    job.result.firstFrameFile = 'clip-guided-first-frame.png';
+    mediaJobEvents.emit('completed', job);
+    await waitFor(() => emitted.some((e) => e.event === 'scene-video'));
+    const stored = await sceneOf(project.id, scene.sceneId);
+    expect(stored).toMatchObject({ referenceImageId: 'clip-guided-first-frame.png', videoHistoryId: 'clip-guided' });
+    expect(stored.takes.map((t) => [t.kind, t.assetId, t.sourceImageId])).toEqual([
+      ['image', 'clip-guided-first-frame.png', null],
+      ['video', 'clip-guided', 'clip-guided-first-frame.png'],
+    ]);
+    expect(emitted.find((e) => e.event === 'scene-image')).toMatchObject({ referenceImageId: 'clip-guided-first-frame.png' });
   });
 
   it('keeps a late clip as a historical candidate when its source plate was replaced', async () => {
