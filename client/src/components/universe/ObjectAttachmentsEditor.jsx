@@ -64,7 +64,7 @@ function AttachmentRow({ attachment, idx, characters, onUpdate, onRemove, disabl
         <button
           type="button" onClick={onRemove} disabled={disabled}
           title="Remove attachment" aria-label={`remove attachment ${idx + 1}`}
-          className="shrink-0 text-gray-500 hover:text-port-error disabled:opacity-30"
+          className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 shrink-0 text-gray-500 hover:text-port-error disabled:opacity-30"
         >
           <Trash2 size={12} />
         </button>

@@ -453,7 +453,7 @@ export default function BrainGraph() {
               onClick={goBack}
               title="Back"
               aria-label="Back"
-              className="flex items-center gap-1 shrink-0 px-2 py-1 text-gray-400 hover:text-white rounded transition-colors"
+              className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 flex items-center gap-1 shrink-0 px-2 py-1 text-gray-400 hover:text-white rounded transition-colors"
             >
               <ArrowLeft size={13} />
             </button>

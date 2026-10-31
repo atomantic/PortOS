@@ -1048,8 +1048,8 @@ function PeerHostEditor({ peer, onRefresh, tailnetInfo }) {
           className="bg-port-bg border border-port-border rounded px-2 py-0.5 text-xs text-white font-mono focus:outline-hidden focus:border-port-accent flex-1 min-w-[180px]"
           autoFocus
         />
-        <button onClick={save} disabled={saving} aria-label="Save hostname" className="text-port-success hover:text-port-success/80 disabled:opacity-50"><Check size={14} /></button>
-        <button onClick={() => setEditing(false)} aria-label="Cancel" className="text-gray-500 hover:text-white"><X size={14} /></button>
+        <button onClick={save} disabled={saving} aria-label="Save hostname" className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 text-port-success hover:text-port-success/80 disabled:opacity-50"><Check size={14} /></button>
+        <button onClick={() => setEditing(false)} aria-label="Cancel" className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 text-gray-500 hover:text-white"><X size={14} /></button>
         {suggestion && suggestion !== value && (
           <button
             onClick={applySuggestion}
@@ -1164,8 +1164,8 @@ function PeerAuthEditor({ peer, onRefresh }) {
           className="bg-port-bg border border-port-border rounded px-2 py-0.5 text-xs text-white focus:outline-hidden focus:border-port-accent flex-1 min-w-[120px]"
           autoFocus
         />
-        <button onClick={save} disabled={saving || !password} aria-label="Save credentials" className="text-port-success hover:text-port-success/80 disabled:opacity-50"><Check size={14} /></button>
-        <button onClick={() => setEditing(false)} aria-label="Cancel" className="text-gray-500 hover:text-white"><X size={14} /></button>
+        <button onClick={save} disabled={saving || !password} aria-label="Save credentials" className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 text-port-success hover:text-port-success/80 disabled:opacity-50"><Check size={14} /></button>
+        <button onClick={() => setEditing(false)} aria-label="Cancel" className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 text-gray-500 hover:text-white"><X size={14} /></button>
         {hasAuth && (
           <button onClick={clear} disabled={saving} className="text-[10px] text-gray-500 hover:text-port-error underline disabled:opacity-50">remove</button>
         )}

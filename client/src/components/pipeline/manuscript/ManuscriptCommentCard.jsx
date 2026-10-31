@@ -439,7 +439,7 @@ export default function ManuscriptCommentCard({
                 aria-pressed={diffStyle === 'side'}
                 aria-label="Side-by-side diff"
                 title="Side-by-side diff"
-                className={`px-1.5 py-0.5 ${diffStyle === 'side' ? 'bg-port-accent text-white' : 'text-gray-400 hover:text-white'}`}
+                className={`pointer-coarse:min-h-11 pointer-coarse:min-w-11 px-1.5 py-0.5 ${diffStyle === 'side' ? 'bg-port-accent text-white' : 'text-gray-400 hover:text-white'}`}
               >
                 <Columns2 size={12} />
               </button>
@@ -449,7 +449,7 @@ export default function ManuscriptCommentCard({
                 aria-pressed={diffStyle === 'inline'}
                 aria-label="Stacked inline diff"
                 title="Stacked inline diff"
-                className={`px-1.5 py-0.5 ${diffStyle === 'inline' ? 'bg-port-accent text-white' : 'text-gray-400 hover:text-white'}`}
+                className={`pointer-coarse:min-h-11 pointer-coarse:min-w-11 px-1.5 py-0.5 ${diffStyle === 'inline' ? 'bg-port-accent text-white' : 'text-gray-400 hover:text-white'}`}
               >
                 <Rows2 size={12} />
               </button>

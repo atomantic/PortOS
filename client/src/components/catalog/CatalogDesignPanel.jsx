@@ -20,6 +20,7 @@ import GalleryImagePicker from '../imageGen/GalleryImagePicker';
 import MoodBoardPinPicker from '../storyboards/MoodBoardPinPicker';
 import TabPills from '../ui/TabPills';
 import CatalogImagePreview from './CatalogImagePreview';
+import MediaImage from '../MediaImage';
 
 const fieldClass = 'min-h-11 w-full rounded border border-port-border bg-port-bg px-2 text-sm';
 const buttonClass = 'min-h-11 rounded border border-port-accent px-3 py-2 text-sm text-port-accent hover:bg-port-accent/10 disabled:opacity-40';
@@ -128,7 +129,7 @@ export default function CatalogDesignPanel({ ingredientId, name, forms = [], med
   return <section aria-label="Design this cast member" className="space-y-4 min-w-0">
     {blockedReason && <p role="status" className="text-sm text-port-warning">{blockedReason}</p>}
     {canon && !pickedIsCanon && <div className="flex items-center gap-3 rounded border border-port-border p-3">
-      <img src={`/data/images/${encodeURIComponent(canon.mediaKey)}`} alt={`${name} current canon`} className="h-24 w-24 shrink-0 rounded object-cover" />
+      <MediaImage thumbnail src={`/data/images/${encodeURIComponent(canon.mediaKey)}`} alt={`${name} current canon`} className="h-24 w-24 shrink-0 rounded object-cover" />
       <div className="min-w-0 space-y-2">
         <p className="text-sm font-semibold">Current canon</p>
         <button type="button" onClick={() => pick(canon.mediaKey)} disabled={!!blockedReason} className={`${buttonClass} inline-flex items-center gap-1`}>
@@ -142,7 +143,7 @@ export default function CatalogDesignPanel({ ingredientId, name, forms = [], med
     {rounds.length === 0 && <p className="text-sm text-gray-400">No takes yet. Describe an idea above to cast the first faces.</p>}
     {rounds.map((round) => <div key={round.id} className="space-y-2">
       <div className="flex items-center gap-2">
-        {round.from && <img src={`/data/images/${encodeURIComponent(round.from)}`} alt="Round made from this take" className="h-8 w-8 rounded object-cover" />}
+        {round.from && <MediaImage thumbnail src={`/data/images/${encodeURIComponent(round.from)}`} alt="Round made from this take" className="h-8 w-8 rounded object-cover" />}
         <h3 className="text-xs uppercase tracking-wider text-gray-500">{round.from ? 'From this take' : 'New faces'}</h3>
       </div>
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
@@ -317,7 +318,7 @@ function PickedActions({ ingredientId, take, isCanon, forms, images, disabled, o
     .filter((m, i, all) => all.findIndex((x) => x.mediaKey === m.mediaKey) === i);
   return <div className="rounded border border-port-accent/50 p-3 space-y-3">
     <div className="flex items-start gap-3">
-      <img src={`/data/images/${encodeURIComponent(take.mediaKey)}`} alt="Picked take" className="h-20 w-20 shrink-0 rounded object-cover" />
+      <MediaImage thumbnail src={`/data/images/${encodeURIComponent(take.mediaKey)}`} alt="Picked take" className="h-20 w-20 shrink-0 rounded object-cover" />
       <div className="min-w-0 flex-1 space-y-2">
         <p className="text-sm font-semibold">{isCanon ? 'Current canon' : 'Picked take'}</p>
         <div className="flex flex-wrap gap-2">
@@ -338,8 +339,8 @@ function PickedActions({ ingredientId, take, isCanon, forms, images, disabled, o
       <p className="text-xs text-gray-400">Faces to blend toward (up to {DESIGN_MAX_BLEND_REFS}){blendFiles.length ? `: ${blendFiles.length} picked` : ''}</p>
       <div className="flex gap-2 overflow-x-auto pb-1">
         {blendChoices.map((m) => <button key={m.mediaKey} type="button" aria-pressed={blendFiles.includes(m.mediaKey)} onClick={() => toggleBlend(m.mediaKey)}
-          className="shrink-0 rounded border-2 border-transparent aria-pressed:border-port-accent">
-          <img src={`/data/images/${encodeURIComponent(m.mediaKey)}`} alt="Blend face option" loading="lazy" className="h-16 w-16 rounded object-cover" />
+          className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 shrink-0 rounded border-2 border-transparent aria-pressed:border-port-accent">
+          <MediaImage thumbnail src={`/data/images/${encodeURIComponent(m.mediaKey)}`} alt="Blend face option" loading="lazy" className="h-16 w-16 rounded object-cover" />
         </button>)}
       </div>
       <div className="flex flex-wrap gap-x-4">

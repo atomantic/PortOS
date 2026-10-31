@@ -188,7 +188,7 @@ function TimelineRow({ node, occurrences, windows, timeline, hours, timezone, se
               aria-expanded={expanded}
               aria-label={`${expanded ? 'Hide' : 'Show'} per-app options for ${node.label}`}
               title={countTitle}
-              className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-gray-500 hover:bg-white/10 hover:text-gray-300"
+              className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 flex h-5 w-5 shrink-0 items-center justify-center rounded text-gray-500 hover:bg-white/10 hover:text-gray-300"
             >
               <ChevronRight className={`h-3.5 w-3.5 transition-transform ${expanded ? 'rotate-90' : ''}`} />
             </button>

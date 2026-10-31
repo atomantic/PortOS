@@ -122,7 +122,7 @@ function DrumTransportBar({
           onClick={() => setShowSetup((v) => !v)}
           aria-expanded={showSetup}
           aria-controls="drum-setup-controls"
-          className={`${ctrlBtnClass} sm:hidden ml-auto ${showSetup ? activeCtrlClass : ''}`}
+          className={`pointer-coarse:min-h-11 pointer-coarse:min-w-11 ${ctrlBtnClass} sm:hidden ml-auto ${showSetup ? activeCtrlClass : ''}`}
           aria-label={showSetup ? 'Hide practice settings' : 'Show practice settings'}
           title="Practice speed, count-in, loop"
         >
@@ -162,7 +162,7 @@ function DrumTransportBar({
             type="button"
             onClick={() => onLoopToggle(!loopEnabled)}
             aria-pressed={loopEnabled}
-            className={`${ctrlBtnClass} ${loopEnabled ? activeCtrlClass : ''}`}
+            className={`pointer-coarse:min-h-11 pointer-coarse:min-w-11 ${ctrlBtnClass} ${loopEnabled ? activeCtrlClass : ''}`}
             aria-label={loopEnabled ? 'Disable loop' : 'Enable loop'}
             title="Loop a bar range ([ and ] set the ends)"
           >

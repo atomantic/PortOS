@@ -688,7 +688,7 @@ function FastCodeAnimation() {
                     <li key={ref.filename} className="flex items-center gap-2">
                       <img src={ref.url} alt={ref.label} className="h-12 w-12 shrink-0 rounded object-cover" />
                       <input aria-label={`Note for ${ref.label}`} value={ref.note} maxLength={limits?.referenceNoteMax} onChange={(event) => updateReference(ref.filename, { note: event.target.value })} placeholder="What to take from it (palette, silhouette…)" className={`${inputClass} min-w-0`} />
-                      <button type="button" aria-label={`Remove ${ref.label}`} onClick={() => update({ referenceImages: draft.referenceImages.filter((item) => item.filename !== ref.filename) })} className="shrink-0 text-gray-500 hover:text-port-error"><X className="h-4 w-4" /></button>
+                      <button type="button" aria-label={`Remove ${ref.label}`} onClick={() => update({ referenceImages: draft.referenceImages.filter((item) => item.filename !== ref.filename) })} className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 shrink-0 text-gray-500 hover:text-port-error"><X className="h-4 w-4" /></button>
                     </li>
                   ))}
                 </ul>
@@ -702,7 +702,7 @@ function FastCodeAnimation() {
                     ? <img src={draft.referenceVideo.previewUrl} alt="" className="h-12 w-20 shrink-0 rounded object-cover" />
                     : <Film className="h-5 w-5 shrink-0 text-gray-500" aria-hidden="true" />}
                   <input aria-label={`Note for ${draft.referenceVideo.label}`} value={draft.referenceVideo.note} maxLength={limits?.referenceNoteMax} onChange={(event) => update({ referenceVideo: { ...draft.referenceVideo, note: event.target.value } })} placeholder={`${draft.referenceVideo.label}: what to match (cut rhythm, depth of field, grade…)`} className={`${inputClass} min-w-0`} />
-                  <button type="button" aria-label="Remove reference video" onClick={() => update({ referenceVideo: null })} className="shrink-0 text-gray-500 hover:text-port-error"><X className="h-4 w-4" /></button>
+                  <button type="button" aria-label="Remove reference video" onClick={() => update({ referenceVideo: null })} className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 shrink-0 text-gray-500 hover:text-port-error"><X className="h-4 w-4" /></button>
                 </div>
               ) : (
                 <button type="button" onClick={() => setVideoPickerOpen(true)} disabled={!videoRoom} title={videoRoom ? undefined : `A reference video needs ${limits?.referenceVideoImageSlots ?? 3} free reference slots`} className="inline-flex items-center gap-1.5 rounded border border-port-border px-2.5 py-1.5 text-xs text-gray-200 hover:border-port-accent disabled:opacity-50">
@@ -722,7 +722,7 @@ function FastCodeAnimation() {
                     <span className="rounded bg-port-card-hover px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-gray-400">
                       {draft.audio.source === 'track' ? 'Library track' : 'Upload'}
                     </span>
-                    <button type="button" aria-label="Remove audio track" onClick={() => update({ audio: null })} className="ml-auto text-gray-500 hover:text-port-error"><X className="h-4 w-4" /></button>
+                    <button type="button" aria-label="Remove audio track" onClick={() => update({ audio: null })} className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 ml-auto text-gray-500 hover:text-port-error"><X className="h-4 w-4" /></button>
                   </div>
                   <textarea aria-label="Audio notes" rows={2} value={draft.audio.notes} maxLength={limits?.audioNotesMax} onChange={(event) => update({ audio: { ...draft.audio, notes: event.target.value } })} placeholder="120 BPM; soft intro, drop at 0:16, fade at 0:40" className={`${inputClass} resize-y`} />
                 </div>

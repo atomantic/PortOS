@@ -138,7 +138,7 @@ function ThreadRow({ thread, onOpen, onDone, onTag }) {
         <button
           type="button"
           onClick={() => onDone(thread)}
-          className="mt-0.5 shrink-0 w-5 h-5 rounded border border-port-border text-transparent hover:text-port-success hover:border-port-success flex items-center justify-center"
+          className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 mt-0.5 shrink-0 w-5 h-5 rounded border border-port-border text-transparent hover:text-port-success hover:border-port-success flex items-center justify-center"
           aria-label={`Mark "${thread.title}" done`}
           title="Mark done"
         >

@@ -54,7 +54,7 @@ export default function ThreejsClipTransport({
         aria-label="Stop clip"
         disabled={!playing && time === 0}
         onClick={onStop}
-        className="port-media-overlay-item rounded px-1.5 py-1 disabled:cursor-not-allowed disabled:opacity-40"
+        className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 port-media-overlay-item rounded px-1.5 py-1 disabled:cursor-not-allowed disabled:opacity-40"
       >
         <Square className="h-3 w-3" />
       </button>

@@ -191,7 +191,7 @@ export default function EntryThumbSlot({
       disabled={!onRender || !canRender}
       title={hint} aria-label={hint}
       style={emptyBox.style}
-      className={`${emptyBox.className} flex items-center justify-center ${rounded ? 'rounded' : ''} border border-dashed border-port-border bg-port-bg/40 text-gray-500 hover:border-port-accent/50 hover:text-port-accent hover:bg-port-accent/5 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:border-port-border disabled:hover:text-gray-500 disabled:hover:bg-port-bg/40 transition-colors`}
+      className={`pointer-coarse:min-h-11 pointer-coarse:min-w-11 ${emptyBox.className} flex items-center justify-center ${rounded ? 'rounded' : ''} border border-dashed border-port-border bg-port-bg/40 text-gray-500 hover:border-port-accent/50 hover:text-port-accent hover:bg-port-accent/5 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:border-port-border disabled:hover:text-gray-500 disabled:hover:bg-port-bg/40 transition-colors`}
     >
       <EmptyIcon size={iconSize} />
     </button>

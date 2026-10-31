@@ -1875,6 +1875,13 @@ input[type="color"],
   summary {
     align-content: center;
   }
+  /* A bare disclosure renders at its text height (15–20px), too small to tap;
+     on a coarse pointer every <summary> gets the 44px touch target (#14416). */
+  @media (pointer: coarse) {
+    summary {
+      min-height: 2.75rem;
+    }
+  }
 }
 
 @layer base {

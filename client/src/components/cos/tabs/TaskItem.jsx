@@ -440,7 +440,7 @@ export default function TaskItem({ task, agent = null, liveOutput, isSystem, spa
         {dragHandleProps && !isSystem && (
           <button
             {...dragHandleProps}
-            className="mt-0.5 cursor-grab active:cursor-grabbing text-gray-500 hover:text-gray-300 transition-colors touch-none"
+            className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 mt-0.5 cursor-grab active:cursor-grabbing text-gray-500 hover:text-gray-300 transition-colors touch-none"
             title="Drag to reorder"
             aria-label="Drag to reorder"
           >

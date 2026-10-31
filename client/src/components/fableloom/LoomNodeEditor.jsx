@@ -40,6 +40,7 @@ import {
   resolveFableLoomProtagonistPresence,
 } from '../../../../server/lib/fableLoomPlayback.js';
 import { FABLELOOM_AUDIENCE_CONNECTION_STATES } from '../../../../server/lib/fableLoomParticipation.js';
+import MediaImage from '../MediaImage';
 
 const toRow = (t) => ({ ...t, triggersText: (t.triggers || []).join('; ') });
 const rowToPatch = ({ targetNodeId, intent, triggersText, description }) => ({
@@ -854,7 +855,7 @@ export default function LoomNodeEditor({
                     )}
                     {appearance && form.visualCanon.mode === 'draft' && (
                       <div className="flex items-center gap-2 text-xs">
-                        {appearance.referenceImage && <img src={`/data/images/${appearance.referenceImage}`} alt={`${character.name} draft reference`} className="h-14 w-14 rounded object-cover" />}
+                        {appearance.referenceImage && <MediaImage thumbnail src={`/data/images/${appearance.referenceImage}`} alt={`${character.name} draft reference`} className="h-14 w-14 rounded object-cover" />}
                         <button type="button" className="min-h-11 text-port-accent hover:underline" onClick={() => setReferenceCharacterId(character.id)}>Choose draft character reference</button>
                       </div>
                     )}
@@ -1062,7 +1063,7 @@ export default function LoomNodeEditor({
                 <button
                   type="button"
                   onClick={() => removeTransition(tr)}
-                  className="text-port-text-muted hover:text-port-error shrink-0"
+                  className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 text-port-text-muted hover:text-port-error shrink-0"
                   aria-label="Remove path"
                 >
                   <Trash2 size={14} />

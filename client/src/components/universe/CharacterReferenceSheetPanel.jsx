@@ -139,7 +139,7 @@ function VariantRow({
                   title={locked
                     ? `Unlock ${entry.name} to delete this sheet`
                     : `Delete the ${variant.label.toLowerCase()}`}
-                  className="inline-flex items-center gap-1 px-2 py-1 text-[10px] rounded border border-port-border text-gray-400 hover:border-port-error/60 hover:text-port-error disabled:opacity-40"
+                  className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 inline-flex items-center gap-1 px-2 py-1 text-[10px] rounded border border-port-border text-gray-400 hover:border-port-error/60 hover:text-port-error disabled:opacity-40"
                   aria-label={`Delete ${variant.label} for ${entry.name}`}
                 >
                   <Trash2 size={10} />

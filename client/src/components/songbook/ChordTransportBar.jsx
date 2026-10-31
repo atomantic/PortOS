@@ -92,7 +92,7 @@ function ChordTransportBar({
           onClick={() => setShowSetup((v) => !v)}
           aria-expanded={showSetup}
           aria-controls="chord-setup-controls"
-          className={`${ctrlBtnClass} sm:hidden ml-auto ${showSetup ? activeCtrlClass : ''}`}
+          className={`pointer-coarse:min-h-11 pointer-coarse:min-w-11 ${ctrlBtnClass} sm:hidden ml-auto ${showSetup ? activeCtrlClass : ''}`}
           aria-label={showSetup ? 'Hide practice settings' : 'Show practice settings'}
           title="Practice speed, beats per chord, count-in"
         >

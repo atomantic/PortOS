@@ -124,7 +124,7 @@ function AssetCard({ recordId, asset, actions, corrections, onCorrectionChange, 
               onClick={trim.onClick}
               title="Edit in Loop Trimmer"
               aria-label={`Edit ${name} in Loop Trimmer`}
-              className="px-1.5 py-0.5 text-[10px] bg-port-card border border-port-border rounded text-gray-300 hover:border-port-accent"
+              className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 px-1.5 py-0.5 text-[10px] bg-port-card border border-port-border rounded text-gray-300 hover:border-port-accent"
             >
               <Scissors className="w-3 h-3" />
             </button>

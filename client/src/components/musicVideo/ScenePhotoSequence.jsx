@@ -5,6 +5,7 @@ import {
 } from '../../lib/musicVideoImageEffects.js';
 import { BEAT_TOGGLE_RATES, BEAT_TOGGLE_RATE_LABELS } from '../../lib/musicVideoCutEffects.js';
 import { formatCount } from '../../utils/formatters.js';
+import MediaImage from '../MediaImage';
 
 const CONTROL = 'min-h-[44px] rounded border border-port-border bg-port-bg px-2 py-1 text-xs disabled:opacity-50 sm:min-h-0';
 
@@ -71,7 +72,7 @@ export default function ScenePhotoSequence({ scene, fieldId, onChange, disabled 
       {enabled && <>
         <ol className="flex flex-wrap gap-2">
           {entries.map(({ id, layout }, i) => <li key={`${i}:${id}`} className={`w-28 min-w-0 space-y-1 rounded border p-1 ${editing === i ? 'border-port-accent' : 'border-port-border'}`}>
-            <img src={`/data/images/${encodeURIComponent(id)}`} alt={`Photo ${i + 1}`} className="aspect-video w-full object-cover"
+            <MediaImage thumbnail src={`/data/images/${encodeURIComponent(id)}`} alt={`Photo ${i + 1}`} className="aspect-video w-full object-cover"
               onError={() => setMissing(prev => ({ ...prev, [id]: true }))} onLoad={() => setMissing(prev => prev[id] ? { ...prev, [id]: false } : prev)} />
             <span className="block truncate text-[11px]" title={id}>{formatCount(i + 1)} · {id}</span>
             {missing[id] && <span role="alert" className="text-xs text-port-error">Missing photo</span>}

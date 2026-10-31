@@ -84,7 +84,7 @@ function ModeSwitch({ group, activeMode, onPick }) {
         aria-label={`Use ${group.night?.label ?? 'night'} mode`}
         aria-pressed={activeMode === 'night'}
         disabled={!has('night')}
-        className={`${buttonClass} ${
+        className={`pointer-coarse:min-h-11 pointer-coarse:min-w-11 ${buttonClass} ${
           activeMode === 'night'
             ? 'bg-port-accent text-port-on-accent'
             : 'text-port-text-muted hover:text-port-text disabled:opacity-40'
@@ -98,7 +98,7 @@ function ModeSwitch({ group, activeMode, onPick }) {
         aria-label={`Use ${group.day?.label ?? 'day'} mode`}
         aria-pressed={activeMode === 'day'}
         disabled={!has('day')}
-        className={`${buttonClass} ${
+        className={`pointer-coarse:min-h-11 pointer-coarse:min-w-11 ${buttonClass} ${
           activeMode === 'day'
             ? 'bg-port-accent text-port-on-accent'
             : 'text-port-text-muted hover:text-port-text disabled:opacity-40'

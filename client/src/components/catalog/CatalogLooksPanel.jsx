@@ -200,7 +200,7 @@ function LookCard({
             <Pencil size={12} aria-hidden="true" />
           </button>
           <button type="button" onClick={() => toggle('delete')} disabled={editLocked}
-            className={`${smallButton} hover:text-port-error`} aria-label={`Delete ${wardrobe.name}`} title="Delete">
+            className={`pointer-coarse:min-h-11 pointer-coarse:min-w-11 ${smallButton} hover:text-port-error`} aria-label={`Delete ${wardrobe.name}`} title="Delete">
             <Trash2 size={12} aria-hidden="true" />
           </button>
         </div>

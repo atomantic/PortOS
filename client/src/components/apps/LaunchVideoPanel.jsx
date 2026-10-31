@@ -140,7 +140,7 @@ function LaunchVideoForm({ appId, onQueued }) {
             ? <img src={reference.previewUrl} alt="" className="h-12 w-12 rounded object-cover" />
             : <div className="flex h-12 w-12 items-center justify-center rounded bg-port-bg text-xs text-port-text-muted">{reference.kind === 'video' ? 'Video' : 'Image'}</div>}
           <span className="min-w-0 flex-1 truncate text-sm text-port-text">{reference.label}</span>
-          <button type="button" aria-label="Clear style reference" onClick={() => setReference(null)} className="text-port-text-muted hover:text-port-error"><X size={16} /></button>
+          <button type="button" aria-label="Clear style reference" onClick={() => setReference(null)} className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 text-port-text-muted hover:text-port-error"><X size={16} /></button>
         </div>
       ) : (
         <div className="flex flex-wrap gap-2">

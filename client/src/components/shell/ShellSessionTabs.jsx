@@ -56,7 +56,7 @@ export default function ShellSessionTabs({ sessions, activeSessionId, onSwitch, 
             <span className="text-[10px] opacity-60 shrink-0">{age}</span>
             <button
               onClick={(e) => { e.stopPropagation(); onKill(s.sessionId); }}
-              className={`shrink-0 ml-0.5 p-0.5 rounded transition-colors ${
+              className={`pointer-coarse:min-h-11 pointer-coarse:min-w-11 shrink-0 ml-0.5 p-0.5 rounded transition-colors ${
                 isActive ? 'text-port-accent/60 hover:text-port-error' : 'text-gray-600 hover:text-port-error'
               }`}
               title={isRun ? 'Stop run' : 'Kill session'} aria-label={isRun ? 'Stop run' : 'Kill session'}

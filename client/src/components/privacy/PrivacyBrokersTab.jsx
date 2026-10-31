@@ -369,7 +369,7 @@ export default function PrivacyBrokersTab({ subjectId, consentScopes, onManageCo
                   {manualCaseActions(item.state, item.allowedTransitions).map((action) => {
                     const Icon = ACTION_ICONS[action.icon] || CheckCircle2;
                     return (
-                      <button key={action.target} onClick={() => doTransition({ id: item.caseId }, action.target)} disabled={caseBusy} title={action.label} aria-label={action.label} className={`p-1.5 rounded ${ACTION_TONES[action.tone]?.chip || ''} disabled:opacity-50`}>
+                      <button key={action.target} onClick={() => doTransition({ id: item.caseId }, action.target)} disabled={caseBusy} title={action.label} aria-label={action.label} className={`pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-1.5 rounded ${ACTION_TONES[action.tone]?.chip || ''} disabled:opacity-50`}>
                         <Icon size={15} />
                       </button>
                     );

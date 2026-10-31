@@ -231,7 +231,7 @@ function ChatGPTWizard({ onExit, navigate }) {
           icon={AlertCircle}
           className="mb-4"
           actions={
-            <button className="text-gray-400 hover:text-white" onClick={() => setError(null)} aria-label="Dismiss">
+            <button className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 text-gray-400 hover:text-white" onClick={() => setError(null)} aria-label="Dismiss">
               <X size={14} />
             </button>
           }

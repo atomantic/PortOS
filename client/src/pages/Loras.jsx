@@ -1094,7 +1094,7 @@ function VideoSuggestionCard({ card, installedHfKeys, installingVideoKey, instal
             <button
               type="button"
               onClick={() => setShowPreview(true)}
-              className="absolute inset-0 flex items-center justify-center bg-black/20 hover:bg-black/40 text-white/90 hover:text-white transition-colors"
+              className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 absolute inset-0 flex items-center justify-center bg-black/20 hover:bg-black/40 text-white/90 hover:text-white transition-colors"
               aria-label="Play example clip"
               title="Play example clip"
             >

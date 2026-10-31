@@ -889,7 +889,7 @@ export default function Layout() {
             <button
               type="button"
               onClick={() => setCollapsed(false)}
-              className="hidden lg:block opacity-95 transition-opacity hover:opacity-80"
+              className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 hidden lg:block opacity-95 transition-opacity hover:opacity-80"
               title="Expand sidebar"
               aria-label="Expand sidebar"
             >

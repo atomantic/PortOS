@@ -696,7 +696,7 @@ export function BackupTab() {
                 {excludePaths.map((path, i) => (
                   <span key={i} className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-port-bg border border-port-border rounded-lg text-sm text-gray-300">
                     <code className="text-xs break-all">{path}</code>
-                    <button onClick={() => removeExclude(i)} aria-label="Dismiss" className="text-gray-500 hover:text-port-error transition-colors">
+                    <button onClick={() => removeExclude(i)} aria-label="Dismiss" className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 text-gray-500 hover:text-port-error transition-colors">
                       <X size={14} />
                     </button>
                   </span>

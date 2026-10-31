@@ -87,7 +87,7 @@ export default function SongMarkers({ track, time, onSeek, onChange }) {
                 <button type="button" onClick={() => setSections(sections.map((s) => (s.id === section.id ? { ...s, at: now } : s)))}
                   className={iconButton} aria-label={`Move ${section.label} to the playhead`}><Timer size={16} aria-hidden="true" /></button>
                 <button type="button" onClick={() => setSections(sections.filter((s) => s.id !== section.id))}
-                  className={`${iconButton} hover:text-port-error`} aria-label={`Delete ${section.label}`}><X size={16} aria-hidden="true" /></button>
+                  className={`pointer-coarse:min-h-11 pointer-coarse:min-w-11 ${iconButton} hover:text-port-error`} aria-label={`Delete ${section.label}`}><X size={16} aria-hidden="true" /></button>
               </li>
             ))}
           </ol>

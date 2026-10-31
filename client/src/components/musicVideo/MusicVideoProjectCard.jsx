@@ -114,7 +114,7 @@ export default function MusicVideoProjectCard({
                   onClick={() => onVersionStep?.(1)}
                   disabled={versionIndex >= versionCount - 1}
                   aria-label="Older version"
-                  className="disabled:opacity-30"
+                  className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 disabled:opacity-30"
                 ><ChevronLeft size={12} aria-hidden="true" /></button>
                 <span>v{project.version || 1} of {versionCount}</span>
                 <button
@@ -122,7 +122,7 @@ export default function MusicVideoProjectCard({
                   onClick={() => onVersionStep?.(-1)}
                   disabled={versionIndex <= 0}
                   aria-label="Newer version"
-                  className="disabled:opacity-30"
+                  className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 disabled:opacity-30"
                 ><ChevronRight size={12} aria-hidden="true" /></button>
               </span>
             ) : (

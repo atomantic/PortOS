@@ -140,7 +140,7 @@ export function SongLinksEditor({ links, onChange }) {
                 <button
                   type="button"
                   onClick={() => remove(i)}
-                  className="p-1 shrink-0 text-gray-500 hover:text-port-error"
+                  className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-1 shrink-0 text-gray-500 hover:text-port-error"
                   aria-label={`Remove link to ${text}`}
                 >
                   <X size={14} />

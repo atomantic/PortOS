@@ -1121,7 +1121,7 @@ export default function SongBookViewer() {
                         <button
                           type="button"
                           onClick={() => requestDelete(att.filename)}
-                          className="p-1.5 shrink-0 text-gray-500 hover:text-port-error"
+                          className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-1.5 shrink-0 text-gray-500 hover:text-port-error"
                           aria-label={`Delete attachment ${att.label || att.filename}`}
                         >
                           <Trash2 size={14} />

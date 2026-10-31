@@ -121,7 +121,7 @@ export default function OverviewTab({ vaultId, stats, notes, allNotes, onRefresh
         <div className="bg-port-card border border-port-border rounded-lg">
           <div className="px-4 py-3 border-b border-port-border flex items-center justify-between">
             <h2 className="text-sm font-medium text-white">Recent Activity</h2>
-            <button onClick={onRefresh} aria-label="Refresh" className="text-gray-500 hover:text-white">
+            <button onClick={onRefresh} aria-label="Refresh" className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 text-gray-500 hover:text-white">
               <RefreshCw size={14} />
             </button>
           </div>

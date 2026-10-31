@@ -329,7 +329,7 @@ export default function SongBook() {
                   <button
                     type="button"
                     onClick={() => requestDelete(song.id)}
-                    className="p-1.5 text-gray-500 hover:text-port-error"
+                    className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-1.5 text-gray-500 hover:text-port-error"
                     aria-label={`Delete ${song.title}`}
                     title="Delete song"
                   >

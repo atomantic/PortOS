@@ -539,7 +539,7 @@ export default function CreativeDirector({ basePath = '/creative-director', brow
                     <Play className="w-3 h-3" /> Start
                   </button>
                 )}
-                {!browseOnly && <button onClick={() => handleDelete(p.id)} aria-label="Delete" className="ml-auto flex items-center gap-1 px-2 py-1 bg-port-bg border border-port-border rounded text-xs hover:bg-port-error/20 hover:text-port-error">
+                {!browseOnly && <button onClick={() => handleDelete(p.id)} aria-label="Delete" className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 ml-auto flex items-center gap-1 px-2 py-1 bg-port-bg border border-port-border rounded text-xs hover:bg-port-error/20 hover:text-port-error">
                   <Trash2 className="w-3 h-3" />
                 </button>}
               </div>
