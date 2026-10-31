@@ -43,12 +43,8 @@ jobs:
     # Still live despite the removed push trigger: a called workflow inherits
     # the caller's event, and release.yml calls this one from a push.
     if: github.event_name != 'push' || !contains(github.event.head_commit.message, '[skip ci]')
-    # `statuses: read` lets the planner read the head's `pregate` commit status
-    # (docs/GITHUB_ACTIONS.md "Pregate attestation"). Read only: nothing in
-    # this job may create a status, and a fork's token could not anyway.
     permissions:
       contents: read
-      statuses: read
     outputs:
       full: ${{ steps.plan.outputs.full }}
       reason: ${{ steps.plan.outputs.reason }}
@@ -83,11 +79,6 @@ jobs:
       client_shards: ${{ steps.plan.outputs.client_shards }}
       windows_shards: ${{ steps.plan.outputs.windows_shards }}
       suite_reasons: ${{ steps.plan.outputs.suite_reasons }}
-      # The pregate attestation honored for this head (JSON), and the stages it
-      # let the plan skip. Informational: every leaf job already gates on the
-      # mode/flag outputs above, which the planner cleared for attested stages.
-      attestation: ${{ steps.plan.outputs.attestation }}
-      attested_stages: ${{ steps.plan.outputs.attested_stages }}
       node_minimum: ${{ steps.node-minimum.outputs.run }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -117,10 +108,9 @@ jobs:
       - name: Scan the diff for hidden content
         run: node scripts/ci-impact-diagnostics.js hidden-content -- node scripts/scan-diff-hidden-content.js
 
-      # Linux resolves `./Foo.js` only as spelled; macOS and Windows do not. A
-      # pregate attestation lets a macOS run stand in for the Linux test jobs,
-      # so the one Linux-only failure it cannot see is checked here, on every
-      # pull request, before any job is skipped on its strength.
+      # Linux resolves `./Foo.js` only as spelled; macOS and Windows do not, so
+      # a macOS-only run cannot see that failure. Checked here on every pull
+      # request.
       - name: Check relative imports match the tracked path case
         run: node scripts/ci-impact-diagnostics.js import-case -- node scripts/check-import-case.js
 
@@ -135,17 +125,6 @@ jobs:
           # The planner turns a PR into `release` into a full plan: that PR is
           # the single gate a release ships behind, so it never runs scoped.
           CI_BASE_REF: ${{ github.base_ref }}
-          # Pregate attestation inputs. The planner honors a `pregate` commit
-          # status on the head only for a same-repository, non-bot pull request
-          # whose status the repository owner created and whose attested tree
-          # is the head's tree; everything else leaves the plan as computed.
-          CI_EVENT_NAME: ${{ github.event_name }}
-          CI_REPOSITORY: ${{ github.repository }}
-          CI_REPOSITORY_OWNER: ${{ github.repository_owner }}
-          CI_PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
-          CI_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          CI_PR_AUTHOR: ${{ github.event.pull_request.user.login }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: node scripts/ci-impact-diagnostics.js plan -- node scripts/ci-test-plan.js
 
       # The Node-minimum job proves the lockfiles install and the runtime gate
@@ -188,7 +167,6 @@ jobs:
           CLIENT_SHARDS: ${{ steps.plan.outputs.client_shards }}
           WINDOWS_SHARDS: ${{ steps.plan.outputs.windows_shards }}
           SUITE_REASONS: ${{ steps.plan.outputs.suite_reasons }}
-          ATTESTATION: ${{ steps.plan.outputs.attestation }}
         run: |
           node scripts/ci-impact-diagnostics.js summary -- bash --noprofile --norc -e -o pipefail -s <<'PORTOS_IMPACT_SCRIPT'
           {
@@ -210,7 +188,6 @@ jobs:
             echo "- Node minimum compatibility: \`${NODE_MINIMUM_MODE}\`"
             echo "- Windows server tests: \`${WINDOWS_MODE}\` (\`${WINDOWS_TEST_MODE}\`, shards \`${WINDOWS_SHARDS}\`)"
             echo "- Suite selection reasons: \`${SUITE_REASONS}\`"
-            echo "- Pregate attestation: \`${ATTESTATION}\`"
           } >> "$GITHUB_STEP_SUMMARY"
           PORTOS_IMPACT_SCRIPT
 
@@ -223,9 +200,8 @@ jobs:
       # server/dependency-overrides.test.js are static — they parse the JSON;
       # only `npm ci` proves the tree still resolves.
       #
-      # Here rather than on the server job because this job always runs: a
-      # pregate attestation can skip the server job, and this check must never
-      # go with it. Deliberately uncached and ungated: a cache hit that skipped
+      # Here rather than on the server job because this job always runs
+      # and this check must never be skipped with it. Deliberately uncached and ungated: a cache hit that skipped
       # the install would skip the very check this step exists for. 67
       # packages, well under a second, on the runner's own Node (no setup-node
       # in this job; the lockfile resolves the same on any supported major).

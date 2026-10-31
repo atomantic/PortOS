@@ -1,7 +1,6 @@
 /**
- * The import-case guard is what lets a macOS pregate attestation stand in for
- * the Linux jobs without hiding the one Linux-only module failure a
- * case-insensitive filesystem cannot see. It must flag a specifier that
+ * The import-case guard catches the one Linux-only module failure a
+ * case-insensitive filesystem (a macOS pregate run) cannot see. It must flag a specifier that
  * matches a tracked path only by case, in every import shape, and leave alone
  * both exact matches and paths git does not track at all.
  */
@@ -136,7 +135,7 @@ describe('checkImportCase against a repository', () => {
     }
   });
 
-  it('is wired into the impact job before any job can be skipped on an attestation', () => {
+  it('is wired into the impact job before the planner runs', () => {
     const workflow = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', '.github', 'workflows', 'ci.yml'), 'utf8');
     const impact = workflow.slice(workflow.indexOf('\n  impact:\n'), workflow.indexOf('\n  prompt-history:\n'));
     expect(impact).toContain('run: node scripts/ci-impact-diagnostics.js import-case -- node scripts/check-import-case.js');

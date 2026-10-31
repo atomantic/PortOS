@@ -152,7 +152,7 @@ cleanup as well as later sweeps.
 
 `npm run pregate -- --full` on POSIX or `node scripts/pregate.js --full` on Windows explicitly runs the broad CI plan locally, including selected browser/DB/build/smoke stages when prerequisites are present. Missing prerequisites and `--skip-*` options remain explicit in the receipt. DB stages run last against `portos_test` only. Required hosted checks and configured reviews remain mandatory.
 
-The receipt at `.cache/pregate/report.json` records `validationMode` (`focused` or `ci`), exact tree/base/head, stage outcomes/durations and omitted suites. Focused mode marks server/client results as reduced coverage and cannot attest CI suites. Structural guard reuse remains confined to an unchanged snapshot within one invocation. `--guards-only --merged-with origin/<base>` is available for focused integration diagnosis; hosting-provider repository rules remain the merge authority.
+The receipt at `.cache/pregate/report.json` records `validationMode` (`focused` or `ci`), exact tree/base/head, stage outcomes/durations and omitted suites. Focused mode marks server/client results as reduced coverage and is local evidence only. Structural guard reuse remains confined to an unchanged snapshot within one invocation. `--guards-only --merged-with origin/<base>` is available for focused integration diagnosis; hosting-provider repository rules remain the merge authority.
 
 Interrupting pregate (Ctrl-C or SIGTERM) does not leave tests running behind
 it: the running stage — including the test runner's npm and Vitest
@@ -173,24 +173,6 @@ cmd's current-directory lookup is enabled. Hardened agent environments may set
 shim; run `node scripts/pregate.js` directly instead (or
 `node scripts/pregate.js --full` for CI's plan). This Windows form does not
 change the POSIX signal behavior.
-
-The default focused receipt is local evidence only: do not invoke `pregate-attest.js` or rerun solely to attest it. After explicit `--full` validation, after the push (and, when you open the pull request yourself, before
-`gh pr create`), `node scripts/pregate-attest.js` posts that receipt as a
-`pregate` commit status on the pushed head, bound to the validated tree and
-naming the platform and Node it ran on, and the pull request's impact planner
-skips the stages it attests to (only stages that ran and passed; never
-Windows, Linux containment, SuperCollider live containment or the Node-minimum check; and, per stage, never
-one that a change `main` gained since the branch forked could reach). It
-refuses — saying what to rerun — when the receipt did not pass, the tree
-changed after pregate, the commit is not on the upstream remote yet, or
-nothing attestable ran, and it attests no server, client or lint stage from
-a receipt planned with `--base` against something other than the default
-branch's merge base; a refusal just means CI runs everything as before.
-`--dry-run` prints the status without posting it; `--revoke "<reason>"`
-withdraws every earlier attestation on the commit. Only a repository writer
-can create the status and only the repository owner's newest one counts, so
-fork and Dependabot pull requests are unaffected. Contract and inspection:
-[Pregate attestation](GITHUB_ACTIONS.md#pregate-attestation).
 
 PRs run the browser suites' smoke profile; the `[fidelity]` cases run nightly
 and on the release PR. To check them on a rendering PR before merging, run
@@ -397,8 +379,6 @@ state are never memoized. `PORTOS_TEST_MEMO=off` disables it, and
 
 Pull requests into `main` run the tests for affected feature directories, with
 conservative fallbacks to the runner's related-test mode or the complete suite; a
-same-repository pull request whose pushed head carries a pregate attestation
-skips the stages that receipt proved (see the Git Workflow section). The
 pull request into `release`, nightly CI, and manual CI runs always run the
 complete server, client, DB, lint, build, and smoke checks. Pushes to `main`
 run nothing — the pull request gate already covered that tree. Release

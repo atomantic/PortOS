@@ -71,8 +71,6 @@ npm run pregate                  # POSIX: BEFORE EVERY PUSH — focused local ga
 # Windows: node scripts/pregate.js [--full] (cmd may not find the exec.cmd shim when current-directory lookup is disabled)
 # Local focused tests and CI skip test files whose every input already passed (the test
 # memo, docs/GITHUB_ACTIONS.md "Test memo"); PORTOS_TEST_MEMO=off runs them all.
-node scripts/pregate-attest.js   # Only after explicit --full validation and the push: posts the green receipt as a `pregate` commit status bound to the
-                                 # validated tree so the PR's CI skips the attested stages; a refusal means full CI as before
 ```
 
 **Run `npm run pregate` on POSIX, or `node scripts/pregate.js` on Windows, before every push and again after rebasing onto a moved base.** For CI's plan, use `npm run pregate -- --full` on POSIX or `node scripts/pregate.js --full` on Windows. On Windows, cmd may not find the repository-root `exec.cmd` shim when `NoDefaultCurrentDirectoryInExePath=1` disables current-directory lookup. The direct Node invocation keeps the gate available without changing the POSIX `exec` signal behavior. Pregate uses CI's planner and runners, including tree-wide guards for import boundaries, catalog merges, and generated manifests. The local plan includes both committed and uncommitted changes, including untracked files.
@@ -81,7 +79,7 @@ The default local gate runs lint/format checks, always-run and diff-selected str
 
 `npm run pregate -- --full` (POSIX) or `node scripts/pregate.js --full` (Windows) explicitly opts into CI's selected broad suites locally. Database tests remain pinned to `portos_test`; full runs retain prerequisite, isolation and process-cleanup guards. Hosting-provider-enforced checks and reviews remain mandatory; never bypass repository protections. A lightweight local pass never substitutes for hosted broad coverage.
 
-Every run records its exact tree, stages, skipped suites and `validationMode` in `.cache/pregate/report.json`. Focused receipts cannot produce CI-skipping attestations; do not run `pregate-attest.js` after the default gate or rerun validation solely to attest. Explicit full-validation and legacy receipts retain their bounded stage-proof semantics; only stages actually run may be attested, subject to the existing tree/base/trust checks. Combined-tree structural guards remain available for investigating integration changes; they are not a second merge-eligibility authority.
+Every run records its exact tree, stages and skipped suites in `.cache/pregate/report.json`; it is local evidence only and never replaces hosted CI. Combined-tree structural guards remain available for investigating integration changes; they are not a second merge-eligibility authority.
 
 ## Test Strategy: Value Over Assertion Count
 

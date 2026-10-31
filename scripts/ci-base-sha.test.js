@@ -77,15 +77,7 @@ describe('ci.yml checkout depth', () => {
     }
   });
 
-  it('gives the planner the head commit the attestation tree is read from', () => {
-    // The pregate attestation compares the attested tree with `<head>^{tree}`.
-    // At depth 2 the merge-ref checkout carries the head as HEAD^2, which is
-    // the only reason the planner can resolve it without a wider fetch — so
-    // the planner pins the event head to that parent, and the impact job must
-    // keep passing the head and keep the depth that makes it present.
-    const planner = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'ci-test-plan.js'), 'utf8');
-    expect(planner).toContain("['rev-parse', '--verify', '--quiet', 'HEAD^2']");
-    expect(jobs.impact).toContain('CI_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}');
+  it('keeps the impact job at the depth-2 merge-ref checkout the planner diffs against', () => {
     expect(jobs.impact).toMatch(/fetch-depth:\s*2\b/);
     expect(jobs.impact).not.toMatch(/fetch-depth:\s*0\b/);
   });
@@ -246,9 +238,8 @@ describe('ci.yml autofixer workspace install', () => {
     // on every user's machine. When no CI job ran `npm ci` against it, a
     // lockfile that stopped resolving shipped green and failed at setup time
     // instead — the static parity checks in dependency-overrides.test.js only
-    // parse the JSON. It lived on the server job until a pregate attestation
-    // could skip that job; the impact job is the one that always runs, so the
-    // install and the `node --check` of the entry point moved there.
+    // parse the JSON. The impact job is the one that always runs, so the
+    // install and the `node --check` of the entry point live there.
     // Named, so the loop below is never vacuously green on a deleted step.
     expect(jobs.impact).toMatch(/- name: Install autofixer dependencies\n {8}run: node scripts\/ci-impact-diagnostics\.js autofixer-install -- npm ci --prefix autofixer/);
     expect(jobs.impact).toMatch(/- name: Check server entry-point syntax\n {8}run: node scripts\/ci-impact-diagnostics\.js syntax -- node --check server\/index\.js/);
