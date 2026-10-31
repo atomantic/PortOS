@@ -35,6 +35,8 @@ import {
   FAL_DEFAULT_IMAGE_VIDEO_MODEL,
   FAL_DEFAULT_TEXT_VIDEO_MODEL,
   buildFalVideoRequest,
+  falPromptExpansionAddition,
+  falPromptExpansionMode,
   falHearsAudioReference,
   getFalVideoModel,
 } from '../../lib/falVideoModels.js';
@@ -180,7 +182,9 @@ export function falVideoSentPrompt({ hasImage = false, hasEndImage = false, hasA
     sentPrompt: planned ? (planned.body.prompt ?? '') : buildRequestBody({ prompt, negativePrompt }).prompt,
     sentNegativePrompt: planned?.body.negative_prompt ?? null,
     carried: carriedPromptAdditions({ promptAdditions }),
-    added: [(!planned || planned.model.negativePrompt === 'fold') && planned?.model.prompt !== 'none'
+    added: [
+      falPromptExpansionAddition(falPromptExpansionMode(planned?.model, spec.promptExpansion)),
+      (!planned || planned.model.negativePrompt === 'fold') && planned?.model.prompt !== 'none'
       ? promptAddition('avoid', 'Negative prompt, sent as "Avoid:"', negativePrompt) : null],
   });
   return { planned, record };
@@ -194,7 +198,7 @@ async function generateVideoPrepared({
   sourceImagePath = null, lastImagePath = null, jobId: providedJobId = null,
   audioFilePath = null, lipSync = null, shotInstruction = null,
   uploadedTempPath = null, uploadedTempPaths = [],
-  resolution = null, generateAudio = false, frameAspect = null, promptAdditions = [],
+  resolution = null, generateAudio = false, frameAspect = null, promptAdditions = [], musicVideo = null,
 }) {
   await ensureDir(PATHS.videos);
   const renderStartedAtMs = Date.now();
@@ -243,6 +247,8 @@ async function generateVideoPrepared({
   const requestSpec = {
     modelId, prompt, negativePrompt, seconds: audioAsReference ? (duration ?? audioSec) : duration, audioSec, aspectRatio, width, height, resolution,
     generateAudio: generateAudio === true, enableTranscription: lipSync?.enableTranscription === true,
+    // A shot card shows the text that is sent, so the provider may not rewrite it.
+    ...(musicVideo ? { promptExpansion: 'disabled' } : {}),
   };
   const { planned, record: sentRecord } = falVideoSentPrompt({
     ...requestSpec, promptAdditions,

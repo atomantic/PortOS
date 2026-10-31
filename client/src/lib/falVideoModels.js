@@ -18,6 +18,8 @@ export {
   estimateFalVideoCostUsd,
   falHearsAudioReference,
   falImageVideoQuotes,
+  falPromptExpansionAddition,
+  falPromptExpansionMode,
   falVideoClipQuote,
   falVideoResolutions,
   getFalVideoModel,
