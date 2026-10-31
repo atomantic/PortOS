@@ -5,6 +5,7 @@ import { MemoryRouter } from 'react-router';
 vi.mock('../../services/api', () => ({
   getDigitalTwinEnrichQuestion: vi.fn(),
   submitSoulEnrichAnswer: vi.fn(),
+  getActiveProvider: vi.fn(),
 }));
 vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
 
@@ -38,7 +39,7 @@ describe('NextActionBanner question load', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     expect(await screen.findByText('Describe a formative memory.')).toBeInTheDocument();
-    expect(api.getDigitalTwinEnrichQuestion).toHaveBeenLastCalledWith('core_memories', undefined, undefined, undefined, { silent: true });
+    expect(api.getDigitalTwinEnrichQuestion).toHaveBeenLastCalledWith('core_memories', undefined, undefined, undefined, { silent: true, structuredOnly: true });
   });
 
   it('still advances to the next gap when the category is exhausted (null answer)', async () => {
@@ -48,7 +49,7 @@ describe('NextActionBanner question load', () => {
     renderBanner();
 
     expect(await screen.findByText('What do you value most?')).toBeInTheDocument();
-    await waitFor(() => expect(api.getDigitalTwinEnrichQuestion).toHaveBeenLastCalledWith('values', undefined, undefined, undefined, { silent: true }));
+    await waitFor(() => expect(api.getDigitalTwinEnrichQuestion).toHaveBeenLastCalledWith('values', undefined, undefined, undefined, { silent: true, structuredOnly: true }));
     expect(screen.queryByRole('alert')).toBeNull();
   });
 
@@ -71,5 +72,22 @@ describe('NextActionBanner question load', () => {
     expect(await screen.findByText('Second question?')).toBeInTheDocument();
     expect(onRefresh).toHaveBeenCalledTimes(1);
     expect(api.getDigitalTwinEnrichQuestion).toHaveBeenCalledTimes(2);
+  });
+
+  // Uniquely catches the Overview starting a provider call nobody asked for (#14445).
+  it('stops at the structured questions on load and generates one only on a click naming the provider', async () => {
+    api.getActiveProvider.mockResolvedValue({ id: 'example', name: 'Example Provider' });
+    api.getDigitalTwinEnrichQuestion
+      .mockResolvedValueOnce({ category: 'core_memories', exhausted: true })
+      .mockResolvedValueOnce({ questionId: 'g1', question: 'A generated follow-up?', isGenerated: true });
+    renderBanner();
+
+    const generate = await screen.findByRole('button', { name: 'Generate a follow-up question with Example Provider' });
+    expect(api.getDigitalTwinEnrichQuestion).toHaveBeenCalledTimes(1);
+    expect(api.getDigitalTwinEnrichQuestion).toHaveBeenLastCalledWith('core_memories', undefined, undefined, undefined, { silent: true, structuredOnly: true });
+
+    fireEvent.click(generate);
+    expect(await screen.findByText('A generated follow-up?')).toBeInTheDocument();
+    expect(api.getDigitalTwinEnrichQuestion).toHaveBeenLastCalledWith('core_memories', undefined, undefined, undefined, { silent: true, structuredOnly: false });
   });
 });

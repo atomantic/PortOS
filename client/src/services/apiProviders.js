@@ -65,7 +65,7 @@ export const getProviders = (options = {}) => {
     throw error;
   });
 };
-export const getActiveProvider = () => request('/providers/active');
+export const getActiveProvider = (options) => request('/providers/active', options);
 export const setActiveProvider = (id) => request('/providers/active', {
   method: 'PUT',
   body: JSON.stringify({ id })

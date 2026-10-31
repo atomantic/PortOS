@@ -57,9 +57,9 @@ export const runMultiTurnTests = (providerId, model, testIds = null, personaId =
 });
 export const getMultiTurnTestHistory = (limit = 10, options = {}) => request(`/digital-twin/multi-turn-tests/history?limit=${limit}`, options);
 export const getDigitalTwinEnrichProgress = (options) => request('/digital-twin/enrich/progress', options);
-export const getDigitalTwinEnrichQuestion = (category, providerOverride, modelOverride, skipIndices, options = {}) => request('/digital-twin/enrich/question', {
+export const getDigitalTwinEnrichQuestion = (category, providerOverride, modelOverride, skipIndices, { structuredOnly, ...options } = {}) => request('/digital-twin/enrich/question', {
   method: 'POST',
-  body: JSON.stringify({ category, providerOverride, modelOverride, ...(skipIndices?.length ? { skipIndices } : {}) }),
+  body: JSON.stringify({ category, providerOverride, modelOverride, ...(skipIndices?.length ? { skipIndices } : {}), ...(structuredOnly ? { structuredOnly: true } : {}) }),
   ...options
 });
 const submitDigitalTwinEnrichAnswer = (data, options = {}) => request('/digital-twin/enrich/answer', {

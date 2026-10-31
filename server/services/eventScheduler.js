@@ -106,7 +106,9 @@ function walkCron(cronExpr, from = new Date(), timezone = 'UTC', { stepMs, until
   boundary.setFullYear(boundary.getFullYear() + (direction > 0 ? 2 : -2))
   const maxDate = direction > 0 && until instanceof Date && until < boundary ? until : boundary
 
-  const useLocal = timezone !== 'UTC'
+  // 'UTC' reads UTC fields; host-local getters would make a UTC cron fire at
+  // the host's wall-clock time on any non-UTC machine (#14461).
+  const isUtc = timezone === 'UTC'
 
   let iterations = 0
   while (direction > 0 ? cursor < maxDate : cursor > maxDate) {
@@ -116,12 +118,12 @@ function walkCron(cronExpr, from = new Date(), timezone = 'UTC', { stepMs, until
     }
 
     let month, day, dow, hour, minute
-    if (useLocal) {
+    if (isUtc) {
+      month = cursor.getUTCMonth() + 1; day = cursor.getUTCDate(); dow = cursor.getUTCDay()
+      hour = cursor.getUTCHours(); minute = cursor.getUTCMinutes()
+    } else {
       const lp = getLocalParts(cursor, timezone)
       month = lp.month; day = lp.day; dow = lp.dayOfWeek; hour = lp.hour; minute = lp.minute
-    } else {
-      month = cursor.getMonth() + 1; day = cursor.getDate(); dow = cursor.getDay()
-      hour = cursor.getHours(); minute = cursor.getMinutes()
     }
 
     // Normalize DOW: cron allows 7 for Sunday, but JS getDay() returns 0

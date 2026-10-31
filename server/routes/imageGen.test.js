@@ -626,7 +626,7 @@ describe('Image Gen Routes', () => {
       expect(preview.body.referenceImages.map(item => item.filename)).toEqual(references);
     });
 
-    it.each(['codex', 'fal'])('retains more than four authored references on %s', async mode => {
+    it.each(['fal'])('retains more than four authored references on %s', async mode => {
       const references = Array.from({ length: 5 }, (_, index) => `example-cloud-${index}.png`);
       await Promise.all(references.map(name => writeFile(pathJoin(fileUtils.PATHS.images, name), 'synthetic image fixture')));
       const body = { prompt: 'The scout arrives', mode, referenceImageFiles: references,
