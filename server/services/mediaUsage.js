@@ -16,6 +16,7 @@
 import { join } from 'path';
 import { stat } from 'fs/promises';
 import { query } from '../lib/db.js';
+import { isTestRunner } from '../lib/runtimeEnv.js';
 import { PATHS } from '../lib/fileUtils.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { threadRefUrl } from '../lib/threadRefKinds.js';
@@ -250,8 +251,9 @@ let building = null;
 
 /** `{ '<kind>:<ref>': [{ source, label, id, title, role, href }] }` for every used media file. */
 export async function getMediaUsageIndex() {
-  // MEMORY_BACKEND=file (dev/test escape hatch) has no Postgres to scan.
-  if (process.env.MEMORY_BACKEND === 'file') return {};
+  // The file backend and test runners have no Postgres to scan (the same
+  // escape hatch as mediaAssetIndex), so nothing reads as used there.
+  if (process.env.MEMORY_BACKEND === 'file' || isTestRunner()) return {};
   const stamp = await fingerprint();
   if (cached?.stamp === stamp) return cached.index;
   if (building?.stamp === stamp) return building.promise;
