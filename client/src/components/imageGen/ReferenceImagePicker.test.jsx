@@ -44,6 +44,15 @@ describe('ReferenceImagePicker', () => {
     expect(onBrowse).toHaveBeenCalledWith(2);
   });
 
+  it('gives the Gallery and Remove controls phone-sized touch targets', () => {
+    const slots = fourEmpty();
+    slots[0] = { file: null, previewUrl: 'blob:one', strength: 0.5 };
+    render(<ReferenceImagePicker referenceImages={slots} onPick={vi.fn()} onClear={vi.fn()} onStrengthChange={vi.fn()} onBrowse={vi.fn()} />);
+    // Phones get a 44px Gallery target and a 32px Remove chip; desktop keeps the 20px bars.
+    expect(screen.getAllByText('Gallery')[1].className).toContain('min-h-[44px]');
+    expect(screen.getByTitle('Remove reference 1').className).toContain('max-sm:w-8');
+  });
+
   it('omits the Gallery button when onBrowse is absent', () => {
     render(<ReferenceImagePicker referenceImages={fourEmpty()} onPick={vi.fn()} onClear={vi.fn()} onStrengthChange={vi.fn()} />);
     expect(screen.queryByText('Gallery')).toBeNull();
