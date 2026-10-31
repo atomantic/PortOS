@@ -67,6 +67,17 @@ describe('storyboards routes', () => {
     ]);
   });
 
+  // Uniquely catches a board saved with an earlier shipped style default keeping the old look after an update.
+  it('reads an untouched earlier default style as the current one, keeping an edited style', async () => {
+    const { RETIRED_STORYBOARD_STYLES, defaultStoryboardStyle, effectiveRecipe } = await import('../lib/storyboardRecipe.js');
+    const { body: board } = await api('post', '/', { name: 'Old style', artStyle: 'production-sketch' });
+    const style = (id, text) => ({ id, type: 'system', title: 'Style', x: 0, y: 0, text, settings: {} });
+    const saved = await api('put', `/${board.id}/recipe`, { recipe: { nodes: [
+      style('node-old', RETIRED_STORYBOARD_STYLES['production-sketch'][0]), style('node-mine', 'My own style'),
+    ], edges: [] } });
+    expect(effectiveRecipe(saved.body).nodes.map((node) => node.text)).toEqual([defaultStoryboardStyle('production-sketch'), 'My own style']);
+  });
+
   it('moves a panel to another beat and keeps the order', async () => {
     const { body: board } = await api('post', '/', { name: 'Moves' });
     const a = (await api('post', `/${board.id}/beats`, { title: 'A' })).body.beatId;

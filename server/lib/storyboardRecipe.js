@@ -77,22 +77,38 @@ const PRODUCTION_SKETCH_PROMPT = [
   'From the shot description you are given, keep its subject, action and intent; add no characters, places or props it does not imply, and describe people by role, pose and clothing shape, never by name.',
   'Use exactly the framing and camera the description names (an over-the-shoulder stays over the shoulder, a close stays close); only when it names none, pick one clear shot size and camera angle that tells the moment. Say what sits in the foreground, middle and back, where the subject is in the frame and which way they face or move.',
   'Then ask for this style every time: a fast, loose sketch on a plain white page in soft gray marker or brush pen, quick uneven overlapping strokes and simple boxy shapes;',
-  'gesture figures with blank oval heads and no facial features, the feeling carried by posture and silhouette; a sparse background with only enough lines to place the scene; light gray hatching at most, no solid blacks, color fills or photo realism;',
-  'loose red pencil streaks and arcs showing the direction and speed of movement (more for fast action, none when nothing moves), drawn as annotation marks, never as objects or light;',
+  'simple greybox placeholder figures with blank faces and no likeness, the action and feeling carried by pose and body language; a sparse background with only enough lines to place the scene; light gray hatching at most, no solid blacks, color fills or photo realism;',
+  'bold red arrows and speed lines showing which way people, objects and the camera move (more for fast action, none when nothing moves), drawn as annotation marks, never as objects or light;',
   'a loose blue horizon line and a few blue lines to the vanishing point, left visible like a drawing guide; everything else gray.',
-  'The picture has no text, letters, numbers, labels, arrows, logos, borders or panels: one drawing filling the frame.',
+  'The picture has no text, letters, numbers, labels, logos, borders or panels: one drawing filling the frame.',
   'Write one paragraph of 70 to 120 words, scene and framing first, then the style. Answer with the prompt only.',
 ].join(' ');
 
 // The style the image model reads after the shot, in its own words: no LLM
-// rewrites the shot first.
+// rewrites the shot first. A classic greybox board: placeholders that show
+// camera, action, emotion and direction, never likeness or detail.
 const PRODUCTION_SKETCH_STYLE = [
-  'Rough production storyboard sketch on a plain white page: fast, loose soft gray marker strokes and simple boxy shapes;',
-  'gesture figures with blank oval heads and no facial features; a sparse background with only enough lines to place the scene;',
-  'light gray hatching at most, no solid blacks, color fills or photo realism;',
-  'loose red pencil streaks showing the direction of movement; a loose blue horizon line and a few blue perspective guide lines.',
-  'No text, letters, numbers, labels, arrows, logos, borders or panels: one drawing filling the frame.',
+  'Classic rough storyboard frame on a plain white page: fast, loose gray pencil lines and quick tonal shading, unfinished like a working sketch.',
+  'People are simple greybox placeholder figures with blank faces and no likeness, hair or costume detail: pose, gesture and body language carry the action and the emotion.',
+  'Treat any reference images only as notes on who is where and how the place is laid out, never as a likeness to copy.',
+  'Props and the set are plain blocked-in shapes, with only enough background to place the scene.',
+  'The camera is clear: the shot size and angle read at a glance, with thin blue perspective lines running to the vanishing point.',
+  'Bold red arrows and speed lines show which way people, objects and the camera move.',
+  'No color fills or photo realism; no text, letters, numbers, labels, logos, borders or panels: one drawing filling the frame.',
 ].join(' ');
+
+// Earlier shipped defaults of the style above. A saved recipe whose style
+// node still holds one of these is an untouched default, so it reads as the
+// current one; text the user edited is theirs and stays.
+export const RETIRED_STORYBOARD_STYLES = Object.freeze({
+  'production-sketch': [[
+    'Rough production storyboard sketch on a plain white page: fast, loose soft gray marker strokes and simple boxy shapes;',
+    'gesture figures with blank oval heads and no facial features; a sparse background with only enough lines to place the scene;',
+    'light gray hatching at most, no solid blacks, color fills or photo realism;',
+    'loose red pencil streaks showing the direction of movement; a loose blue horizon line and a few blue perspective guide lines.',
+    'No text, letters, numbers, labels, arrows, logos, borders or panels: one drawing filling the frame.',
+  ].join(' ')],
+});
 
 /** The default style text for a board's art style (its own node, sent after the shot as written). */
 export function defaultStoryboardStyle(artStyle) {
@@ -237,7 +253,18 @@ function reaches(edges, start, target) {
 }
 
 /** The recipe a board runs: its own, else the default for its art style. */
-export const effectiveRecipe = (board) => sanitizeRecipe(board?.recipe) || defaultPanelRecipe(board);
+/** Whether `text` is a shipped default style (current or earlier) for `artStyle`. */
+export const isDefaultStoryboardStyle = (text, artStyle) =>
+  text === defaultStoryboardStyle(artStyle) || (RETIRED_STORYBOARD_STYLES[artStyle] || []).includes(text);
+
+export function effectiveRecipe(board) {
+  const saved = sanitizeRecipe(board?.recipe);
+  if (!saved) return defaultPanelRecipe(board);
+  for (const node of saved.nodes) {
+    if (node.type === 'system' && isDefaultStoryboardStyle(node.text, board.artStyle)) node.text = defaultStoryboardStyle(board.artStyle);
+  }
+  return saved;
+}
 
 /** The node wired into `nodeId`'s `port`, or null. */
 export function upstreamNode(recipe, nodeId, port) {
