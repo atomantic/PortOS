@@ -49,6 +49,7 @@ const beatFields = {
   musicalRole: z.enum(STORYBOARD_MUSICAL_ROLES).nullable().optional(),
   sectionHint: text(L.sectionHint).optional(),
   pin: entityId.nullable().optional(),
+  beforeSong: z.boolean().optional(),
 };
 
 export const storyboardBeatCreateSchema = z.object({ ...beatFields, index: position.optional() }).strict();

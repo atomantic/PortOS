@@ -2,6 +2,7 @@
  * Fit to song: writes a music video's shots from its linked storyboard, each
  * beat placed on the analyzed song and each panel a shot that keeps the
  * panel's id (lib/storyboardFit.js, the same fit the Plan step previews).
+ * Beats marked before the song become the shots before it (the cold open).
  * Replaces the shots, so it refuses while any shot is locked; a shot whose
  * span is unchanged keeps its frames and clips (replaceScenes). Runs only on
  * the user's tap; no model call.
@@ -49,7 +50,7 @@ export async function fitMusicVideoToStoryboard(projectId, { boardUpdatedAt, sta
     const inputs = fit.shots.map(({ beatId: _beatId, ...shot }) => ({
       ...shot,
       loop: false,
-      lyricText: timedLyrics ? sungLyricTextWithin(current.lyricCues, shot.startSec, shot.endSec) : null,
+      lyricText: timedLyrics && !shot.preMusic ? sungLyricTextWithin(current.lyricCues, shot.startSec, shot.endSec) : null,
     }));
     return { ...replaceScenes(current, inputs), fit };
   });

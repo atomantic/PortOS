@@ -167,6 +167,8 @@ function sanitizeBeat(raw, budget = { panels: STORYBOARD_LIMITS.panelsTotal }) {
     sectionHint: trimTo(raw.sectionHint, STORYBOARD_LIMITS.sectionHint),
     // A song section or lyric line on the temp track this beat starts at.
     pin: trimTo(raw.pin, STORYBOARD_LIMITS.refId) || null,
+    // Plays before the song starts (a music video's cold open); only opening beats can.
+    ...(raw.beforeSong === true ? { beforeSong: true } : {}),
     panels,
   };
 }
@@ -190,6 +192,12 @@ export function sanitizeStoryboard(raw) {
   // A pin outlives neither its marker nor the track (markers live on it).
   const markerIds = new Set([...(tempTrack?.sections || []), ...(tempTrack?.lines || [])].map((marker) => marker.id));
   for (const beat of beats) if (beat.pin && !markerIds.has(beat.pin)) beat.pin = null;
+  // Only the opening run of beats plays before the song, and a song marker is no place for one.
+  let opening = true;
+  for (const beat of beats) {
+    if (!beat.beforeSong) { opening = false; continue; }
+    if (opening) beat.pin = null; else delete beat.beforeSong;
+  }
   return {
     id: raw.id,
     name: trimTo(raw.name, STORYBOARD_LIMITS.name) || 'Untitled storyboard',

@@ -11,11 +11,14 @@
  * director picked wins. Panels split their beat in proportion to their holds,
  * cuts on the beat grid. A beat with no panels still gets one shot from its
  * own words, so no beat is dropped; shots under the minimum length are named.
+ * Beats marked before the song stay off it: each of their panels becomes a
+ * shot before the song (`preMusic`) at its own hold, and the rest fill the song.
  *
  * Browser-safe: no node-only imports.
  */
 
-import { STORYBOARD_DEFAULT_HOLD_SEC } from './storyboardSongBrief.js';
+import { PRE_MUSIC_DURATION_RANGE } from './musicVideoColdOpen.js';
+import { STORYBOARD_DEFAULT_HOLD_SEC, storyboardPreludeCount } from './storyboardSongBrief.js';
 import { newStoryboardEntityId, STORYBOARD_MUSICAL_ROLE_LABELS } from './storyboardVocabulary.js';
 
 export const STORYBOARD_FIT_MIN_SHOT_SEC = 2;
@@ -105,15 +108,56 @@ const roleMatches = (role, label) => {
   return !!name && String(label || '').toLowerCase().startsWith(name.toLowerCase());
 };
 
+// A panel before the song keeps its hold as its length, inside what a shot before the song allows.
+const preludeSec = (panel) => round(Math.min(PRE_MUSIC_DURATION_RANGE.max, Math.max(PRE_MUSIC_DURATION_RANGE.min, holdSeconds(panel))));
+
+/** The beats before the song: one shot before the song per panel, at its hold. */
+function fitPrelude(beats) {
+  const fitBeats = [];
+  const shots = [];
+  beats.forEach((beat, i) => {
+    const title = clip(beat.title || STORYBOARD_MUSICAL_ROLE_LABELS[beat.musicalRole] || `Beat ${i + 1}`, LABEL_MAX);
+    const panels = beat.panels.length ? beat.panels : [null];
+    let durationSec = 0;
+    panels.forEach((panel, p) => {
+      const suffix = panels.length > 1 ? ` · ${p + 1}/${panels.length}` : '';
+      const length = preludeSec(panel);
+      durationSec += length;
+      shots.push({
+        beatId: beat.id,
+        panelId: panel?.id || null,
+        panelRev: panel ? storyboardPanelRev(panel) : null,
+        panelArt: storyboardPanelArt(panel),
+        label: `${title.slice(0, LABEL_MAX - suffix.length)}${suffix}`,
+        sectionIndex: null,
+        sectionLabel: null,
+        preMusic: { durationSec: length },
+        visualIntent: clip(panel ? panel.action : beat.what || beat.title, TEXT_MAX) || null,
+      });
+    });
+    fitBeats.push({ beatId: beat.id, title, beforeSong: true, durationSec: round(durationSec), shots: panels.length, short: 0, noPanels: !beat.panels.length });
+  });
+  return { beats: fitBeats, shots };
+}
+
 /**
  * The fit: `beats` (each beat's place, section and length change, with the
- * starts the director can pick from) and `shots` (scene inputs in song order,
- * each carrying its `beatId` and `panelId`). `starts` maps a beat id to a
+ * starts the director can pick from; a beat before the song has
+ * `beforeSong` and its `durationSec` instead) and `shots` (scene inputs in
+ * play order, each carrying its `beatId` and `panelId`; the ones before the
+ * song carry `preMusic` and no song time). `starts` maps a beat id to a
  * picked start time; a pick that would run time backwards is ignored.
  */
-export function fitStoryboardToSong(board, song, { starts = {}, minShotSec = STORYBOARD_FIT_MIN_SHOT_SEC } = {}) {
-  const beats = board?.beats || [];
-  if (!song || !beats.length) return { beats: [], shots: [] };
+export function fitStoryboardToSong(board, song, options = {}) {
+  if (!song || !board?.beats?.length) return { beats: [], shots: [] };
+  const prelude = storyboardPreludeCount(board);
+  const opening = fitPrelude(board.beats.slice(0, prelude));
+  const fitted = fitSongBeats(board.beats.slice(prelude), song, options);
+  return { beats: [...opening.beats, ...fitted.beats], shots: [...opening.shots, ...fitted.shots] };
+}
+
+function fitSongBeats(beats, song, { starts = {}, minShotSec = STORYBOARD_FIT_MIN_SHOT_SEC } = {}) {
+  if (!beats.length) return { beats: [], shots: [] };
   const songEnd = song.durationSec;
   const holds = beats.map((beat) => (beat.panels.length ? beat.panels.reduce((sum, panel) => sum + holdSeconds(panel), 0) : STORYBOARD_DEFAULT_HOLD_SEC));
   const total = holds.reduce((sum, hold) => sum + hold, 0);

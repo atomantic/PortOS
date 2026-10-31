@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useParams } from 'react-router';
 import { CheckCircle2, ListMusic, Loader2, RotateCcw } from 'lucide-react';
 import InlineConfirmRow from '../../ui/InlineConfirmRow';
@@ -11,7 +11,7 @@ import StoryboardEditor from '../../storyboards/StoryboardEditor';
 
 /**
  * Storyboard: the video's linked Create › Storyboards board, edited in place
- * (beats, panels, sketch frames, the animatic), with its open panel in the URL
+ * (beats, panels, sketch frames, the animatic played with the song), with its open panel in the URL
  * at `/music-video/:projectId/board/panel/:panelId`. With no board linked yet
  * the step offers to start one. Below it, Make shots fits the panels to the
  * song as timed shots; the shots are timed and finished on Shots (shot list,
@@ -35,6 +35,13 @@ export default function PlanStage({ board }) {
   const [grouping, setGrouping] = useState(false);
   const sections = project.audioAnalysis?.sections || [];
   const reopened = !!project.storyboardReopenedAt;
+  // Play on the board plays this video's own song, with its timed lines.
+  const lyricCues = project.lyricCues;
+  const song = useMemo(() => (board.audioUrl ? {
+    src: board.audioUrl,
+    name: project.name || 'The song',
+    lines: (lyricCues || []).filter((cue) => Number.isFinite(cue?.startSec) && cue.text).map((cue) => ({ id: cue.id, text: cue.text, at: cue.startSec })),
+  } : null), [board.audioUrl, project.name, lyricCues]);
   const setReopened = (on) => {
     const storyboardReopenedAt = on ? new Date().toISOString() : null;
     board.editProjectLocal({ storyboardReopenedAt });
@@ -80,7 +87,7 @@ export default function PlanStage({ board }) {
         <section id="mv-board-storyboard" aria-label="Storyboard" className="min-w-0">
           <StoryboardEditor key={linkedId} embedded boardId={linkedId} panelId={panelId}
             boardPath={`/music-video/${encodeURIComponent(project.id)}/board`} onBoard={setStoryboard} refreshKey={staleReads}
-            actions={storyboardActions} />
+            actions={storyboardActions} song={song} />
         </section>
       ) : (
         <StageSection id="mv-board-storyboard" title="Start the storyboard" defaultOpen
