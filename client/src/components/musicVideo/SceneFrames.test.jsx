@@ -79,12 +79,14 @@ it('shows the selected greybox capture, inspectable figure additions and a missi
   } } }, media: [{ kind: 'reference', mediaKey: 'layout.png', role: 'greybox-shot:wide' }] } };
   const props = { project, scene: selected, greyboxPlaces, index: 0, onEditLocal: vi.fn(), onSave: vi.fn() };
   const { rerender } = render(<SceneFrames {...props} />);
-  expect(screen.getByRole('img', { name: 'Example Rink · Wide' }).getAttribute('src')).toContain('layout.png');
   const capture = screen.getByRole('img', { name: 'Example Rink · Wide' });
+  expect(capture.getAttribute('src')).toBe('/data/image-thumbnails/layout.webp');
+  // The thumbnail falls back to the capture itself; only that failing flags it missing.
+  fireEvent.error(capture);
+  expect(screen.queryByRole('alert')).toBeNull();
+  expect(capture.getAttribute('src')).toContain('layout.png');
   fireEvent.error(capture);
   expect(screen.getByRole('alert').textContent).toMatch(/capture file could not be loaded/);
-  fireEvent.load(capture);
-  expect(screen.queryByRole('alert')).toBeNull();
   fireEvent.click(await screen.findByRole('button', { name: '+ Greybox figure 1' }));
   expect(screen.getByText('Singer stands at the "rail" mark, waving')).toBeTruthy();
   fireEvent.click(screen.getByRole('button', { name: 'Show full prompt' }));

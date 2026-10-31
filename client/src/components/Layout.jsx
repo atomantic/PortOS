@@ -715,7 +715,7 @@ export default function Layout() {
               type="button"
               aria-label={expandedSections[item.label] ? `Collapse ${item.label}` : `Expand ${item.label}`}
               onClick={() => toggleSection(item.label)}
-              className="px-2 text-gray-400 hover:text-white hover:bg-port-border/50 rounded-lg"
+              className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 px-2 text-gray-400 hover:text-white hover:bg-port-border/50 rounded-lg"
             >
               {expandedSections[item.label]
                 ? <ChevronDown size={16} />
@@ -788,7 +788,7 @@ export default function Layout() {
                         aria-label={grandChildrenExpanded ? `Collapse ${child.label}` : `Expand ${child.label}`}
                         aria-expanded={grandChildrenExpanded}
                         onClick={() => toggleSubSection(child.to)}
-                        className="px-2 py-2 text-gray-500 hover:text-white hover:bg-port-border/50 rounded-lg"
+                        className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 px-2 py-2 text-gray-500 hover:text-white hover:bg-port-border/50 rounded-lg"
                       >
                         {grandChildrenExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                       </button>

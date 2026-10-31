@@ -195,7 +195,7 @@ export default function StoryboardPlayer({ board, sketchNonce, onTempTrack, song
 
       <div className="flex items-center gap-1.5">
         <button type="button" onClick={() => jump(-1)} disabled={!timeline.length} aria-label="Previous panel" className={controlButton}><SkipBack size={16} aria-hidden="true" /></button>
-        <button type="button" onClick={playing ? pause : play} disabled={!duration} aria-label={playing ? 'Pause' : 'Play'} className={`${controlButton} bg-port-accent/20 border-port-accent/50`}>
+        <button type="button" onClick={playing ? pause : play} disabled={!duration} aria-label={playing ? 'Pause' : 'Play'} className={`pointer-coarse:min-h-11 pointer-coarse:min-w-11 ${controlButton} bg-port-accent/20 border-port-accent/50`}>
           {playing ? <Pause size={16} aria-hidden="true" /> : <Play size={16} aria-hidden="true" />}
         </button>
         <button type="button" onClick={() => jump(1)} disabled={!timeline.length} aria-label="Next panel" className={controlButton}><SkipForward size={16} aria-hidden="true" /></button>

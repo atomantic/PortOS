@@ -722,7 +722,7 @@ export default function LoomPlayPanel({ loom, episode: initialEpisode, onClose }
               onClick={send}
               disabled={sending || !message.trim()}
               aria-label="Send"
-              className="px-3 py-2 rounded bg-port-accent text-white disabled:opacity-50"
+              className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 px-3 py-2 rounded bg-port-accent text-white disabled:opacity-50"
             >
               {sending ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
             </button>

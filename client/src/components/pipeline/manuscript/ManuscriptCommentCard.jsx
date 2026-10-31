@@ -551,7 +551,7 @@ export default function ManuscriptCommentCard({
               type="button"
               onClick={generate}
               disabled={generating || accepting}
-              className="inline-flex items-center gap-1 px-2 py-1 rounded text-[12px] text-gray-400 hover:text-white disabled:opacity-40"
+              className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 inline-flex items-center gap-1 px-2 py-1 rounded text-[12px] text-gray-400 hover:text-white disabled:opacity-40"
               aria-label="Regenerate the suggested fix"
               title="Regenerate the suggested fix"
             >

@@ -848,7 +848,7 @@ export default function IssuesTab({ appId, appName }) {
                     onClick={() => toggleExpanded(issue.number)}
                     aria-expanded={isOpen}
                     aria-label={`${isOpen ? 'Collapse' : 'Expand'} description for issue ${issue.number}`}
-                    className="flex text-gray-500 hover:text-white transition-colors mt-0.5 shrink-0"
+                    className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 flex text-gray-500 hover:text-white transition-colors mt-0.5 shrink-0"
                   >
                     {isOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
                   </button>

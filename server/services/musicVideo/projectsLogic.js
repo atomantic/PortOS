@@ -368,8 +368,9 @@ export function applyProjectPatch(project, patch) {
   // Edited cue/phrase lists replace the stored list whole, normalized so every
   // entry persists a stable id and a forward time range (timedText.js). A
   // `visualSpec` patch merges per sub-field the same way (#8965).
-  const nextLyricCues = Array.isArray(patch.lyricCues) ? normalizeLyricCues(patch.lyricCues).map((cue) => {
-    const previous = project.lyricCues?.find((entry) => entry.id === cue.id);
+  const previousCues = Array.isArray(patch.lyricCues) ? new Map((project.lyricCues || []).map((cue) => [cue.id, cue])) : null;
+  const nextLyricCues = previousCues ? normalizeLyricCues(patch.lyricCues).map((cue) => {
+    const previous = previousCues.get(cue.id);
     if (previous && previous.text !== cue.text) {
       delete cue.matched;
       delete cue.suspect;

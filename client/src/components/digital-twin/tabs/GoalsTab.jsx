@@ -428,7 +428,7 @@ export default function GoalsTab({ onRefresh }) {
                                 <button
                                   onClick={() => !ms.completedAt && handleCompleteMilestone(goal.id, ms.id)}
                                   aria-label={ms.completedAt ? `${ms.title} — completed` : `Mark ${ms.title} complete`}
-                                  className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 ${
+                                  className={`pointer-coarse:min-h-11 pointer-coarse:min-w-11 w-4 h-4 rounded border flex items-center justify-center shrink-0 ${
                                     ms.completedAt
                                       ? 'bg-port-success/20 border-port-success text-port-success'
                                       : 'border-gray-600 hover:border-port-accent'

@@ -66,7 +66,7 @@ function ChordTransportBar({
           type="button"
           onClick={() => onClickToggle(!clickEnabled)}
           aria-pressed={clickEnabled}
-          className={`${ctrlBtnClass} ${clickEnabled ? activeCtrlClass : ''}`}
+          className={`pointer-coarse:min-h-11 pointer-coarse:min-w-11 ${ctrlBtnClass} ${clickEnabled ? activeCtrlClass : ''}`}
           aria-label={clickEnabled ? 'Turn the metronome off' : 'Turn the metronome on'}
           title={clickEnabled
             ? 'Mute the metronome click — the count-in still sounds'

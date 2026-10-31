@@ -352,7 +352,7 @@ function MediaCard({
                 <button
                   type="button"
                   onClick={() => onToggleHidden(item)}
-                  className={`${FILE_BTN} ${TONE.neutral}`}
+                  className={`pointer-coarse:min-h-11 pointer-coarse:min-w-11 ${FILE_BTN} ${TONE.neutral}`}
                   aria-label={item.hidden ? 'Unhide (move out of hidden section)' : 'Hide (move to hidden section)'}
                   title={item.hidden ? 'Unhide (move out of hidden section)' : 'Hide (move to hidden section)'}
                 >

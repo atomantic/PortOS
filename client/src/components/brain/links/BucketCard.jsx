@@ -115,7 +115,7 @@ export default function BucketCard({
                   key={key}
                   type="button"
                   onClick={() => setForm({ ...form, color: key })}
-                  className={`w-5 h-5 rounded-full ${BUCKET_COLORS[key].dot} flex items-center justify-center`}
+                  className={`pointer-coarse:min-h-11 pointer-coarse:min-w-11 w-5 h-5 rounded-full ${BUCKET_COLORS[key].dot} flex items-center justify-center`}
                   title={key}
                   aria-label={`Color ${key}`}
                 >

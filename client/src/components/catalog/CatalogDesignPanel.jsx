@@ -338,7 +338,7 @@ function PickedActions({ ingredientId, take, isCanon, forms, images, disabled, o
     {action === 'blend' && <div className="space-y-2">
       <p className="text-xs text-gray-400">Faces to blend toward (up to {DESIGN_MAX_BLEND_REFS}){blendFiles.length ? `: ${blendFiles.length} picked` : ''}</p>
       <div className="flex gap-2 overflow-x-auto pb-1">
-        {blendChoices.map((m) => <button key={m.mediaKey} type="button" aria-pressed={blendFiles.includes(m.mediaKey)} onClick={() => toggleBlend(m.mediaKey)}
+        {blendChoices.map((m) => <button key={m.mediaKey} type="button" aria-label="Blend face option" aria-pressed={blendFiles.includes(m.mediaKey)} onClick={() => toggleBlend(m.mediaKey)}
           className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 shrink-0 rounded border-2 border-transparent aria-pressed:border-port-accent">
           <MediaImage thumbnail src={`/data/images/${encodeURIComponent(m.mediaKey)}`} alt="Blend face option" loading="lazy" className="h-16 w-16 rounded object-cover" />
         </button>)}
