@@ -68,6 +68,7 @@ export async function assertNoUniqueIgnoredCheckoutPayload(path, runGit = execGi
     if (info.isFile() && (disposableRuntimeArtifact(rel) || await disposableTestCache(path, rel, ignored, verifiedCaches, work))) continue;
     if (info.isFile() && await npmPayload(rel).catch(cacheInspectionFailure)) continue;
     if (rel === 'data/media-models.json' && info.isFile() && await isPristineMediaRegistry(join(path, rel))) continue;
+    if (info.isFile() && await isPristineTwinDefault(join(path, rel), rel)) continue;
     const preserved = preservedFiles.find(file => file.scope === 'content' && file.path === rel);
     if (info.isFile() && typeof preserved?.data === 'string') {
       const bytes = Buffer.from(preserved.data, 'base64');
@@ -83,6 +84,27 @@ export async function assertNoUniqueIgnoredCheckoutPayload(path, runGit = execGi
 const isPristineMediaRegistry = async file => {
   const { isPristineRegistrySeed } = await import('../lib/mediaModels.js');
   return isPristineRegistrySeed(await readFile(file, 'utf8').catch(() => null));
+};
+
+// Digital-twin files a test run lazily writes into a worktree's default data
+// dir (see #14177's checkout). Recognized only while they hold the empty
+// defaults a fresh load derives — any real document, marker or score stays held.
+const isEmptyObject = value => value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === 0;
+const PRISTINE_TWIN_DEFAULTS = {
+  'data/digital-twin/meta.json': twin => ['documents', 'deletedDocuments', 'testHistory', 'valuesTestHistory',
+    'adversarialTestHistory', 'multiTurnTestHistory', 'personas', 'deletedPersonas']
+    .every(key => twin[key] === undefined || (Array.isArray(twin[key]) && twin[key].length === 0))
+    && (twin.enrichment?.completedCategories ?? []).length === 0,
+  'data/digital-twin/chronotype.json': twin => twin.confidence === 0 && isEmptyObject(twin.geneticMarkers)
+    && isEmptyObject(twin.caffeineMarkers) && twin.behavioralData === null,
+  'data/digital-twin/longevity.json': twin => twin.confidence === 0 && twin.longevityScore === 0
+    && isEmptyObject(twin.longevityMarkers) && isEmptyObject(twin.cardiovascularMarkers) && twin.timeHorizons === null,
+};
+const isPristineTwinDefault = async (file, rel) => {
+  const matches = PRISTINE_TWIN_DEFAULTS[rel];
+  if (!matches) return false;
+  const twin = await readFile(file, 'utf8').then(JSON.parse, () => null);
+  return Boolean(twin) && typeof twin === 'object' && matches(twin);
 };
 
 // Regenerable byproducts of running the repo's own tests. Matched by exact

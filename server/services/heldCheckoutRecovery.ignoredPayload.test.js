@@ -40,6 +40,15 @@ describe('assertNoUniqueIgnoredCheckoutPayload runtime byproducts', () => {
     await expect(assertNoUniqueIgnoredCheckoutPayload(dir)).rejects.toThrow('checkout-ignored-payload-unverified');
   });
 
+  it('accepts empty lazily-written digital-twin defaults but keeps a populated one', async () => {
+    await put('data/digital-twin/meta.json', JSON.stringify({ documents: [], testHistory: [], enrichment: { completedCategories: [] } }));
+    await put('data/digital-twin/chronotype.json', JSON.stringify({ confidence: 0, geneticMarkers: {}, caffeineMarkers: {}, behavioralData: null }));
+    await put('data/digital-twin/longevity.json', JSON.stringify({ confidence: 0, longevityScore: 0, longevityMarkers: {}, cardiovascularMarkers: {}, timeHorizons: null }));
+    await expect(assertNoUniqueIgnoredCheckoutPayload(dir)).resolves.toBeUndefined();
+    await put('data/digital-twin/meta.json', JSON.stringify({ documents: [{ id: 'soul' }] }));
+    await expect(assertNoUniqueIgnoredCheckoutPayload(dir)).rejects.toMatchObject({ path: 'data/digital-twin/meta.json' });
+  });
+
   it('accepts the quality-snapshot publisher retention receipt', async () => {
     await put('.cache/quality-snapshot-merge.json', '{}');
     await expect(assertNoUniqueIgnoredCheckoutPayload(dir)).resolves.toBeUndefined();
