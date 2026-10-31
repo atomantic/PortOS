@@ -82,6 +82,9 @@ describe('verified swarm delivery while retirement is held', () => {
     task.status = 'completed';
     delete task.metadata.deliveryRecovery;
     delete task.metadata.deliveryRecoveryAgentId;
+    // Settling the task clears its claim fields; the refill must still recognize it.
+    delete task.metadata.claimedBy;
+    delete task.metadata.claimedAt;
     expect(cleanupRefillSourceMatches(task, agent, 'local')).toBe(true);
     task.metadata.totalSpawnCount = '2';
     expect(cleanupRefillSourceMatches(task, agent, 'local')).toBe(false);
