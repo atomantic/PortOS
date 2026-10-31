@@ -22,7 +22,7 @@
 import { MODEL_ABUSE_GUARD_ID, issuePrerequisiteWaived, normalizeEligibilityFacts } from '../lib/modelAbuseGuard.js';
 import { isScreenedPullRequestFingerprint } from '../lib/prReviewContent.js';
 import { PUBLIC_REVIEW_GATE_EXECUTION_PROFILE } from '../lib/agentExecutionProfiles.js';
-import { PIPELINE_STAGE_BEHAVIOR_FLAGS } from '../lib/cosValidation.js';
+import { applyStageExecution } from '../lib/pipelineStageExecution.js';
 import { createPrReviewerDefaultStages } from './taskScheduleRegistry.js';
 import { getCosTasks } from './cosTaskStore.js';
 import { emitLog } from './cosEvents.js';
@@ -324,14 +324,18 @@ export async function runPrReviewerSecurityPreflight(taskType, app, metadata, ta
   }
 
   const status = !scan.ok ? 'unavailable' : (scan.passed ? 'passed' : 'findings');
-  const flagged = reports.filter((report) => !reportIsSafe(report)).length;
+  const findingCount = reports.filter((report) => !reportIsSafe(report)).length;
+  const reviewedScanKey = scan.scanKey || scanKey;
+  const repoFullName = scan.repoFullName || target.repoFullName;
+  const defaultBranch = scan.defaultBranch || target.defaultBranch;
+  const guardId = scan.guardId || MODEL_ABUSE_GUARD_ID;
   await step('security-scan', {
     status: 'done',
-    detail: `Scan ${status} — ${reports.length} screened, ${flagged} flagged`,
+    detail: `Scan ${status} — ${reports.length} screened, ${findingCount} flagged`,
   });
   await step('snapshot');
   const snapshotWritten = await writePublicReviewInputSnapshot({
-    scanKey: scan.scanKey || scanKey,
+    scanKey: reviewedScanKey,
     pullRequests: scan.ok ? (scan.reviewInputs || []) : [],
   });
   if (!snapshotWritten) {
@@ -355,12 +359,12 @@ export async function runPrReviewerSecurityPreflight(taskType, app, metadata, ta
       success: scan.ok,
       completedAt: new Date().toISOString(),
       summary: {
-        guardId: scan.guardId || MODEL_ABUSE_GUARD_ID,
+        guardId,
         guardModel: scan.guardModel || null,
         guardRevision: scan.guardRevision || null,
         code: scan.code || null,
         reviewedPrCount: reports.length,
-        findingCount: reports.filter((report) => !reportIsSafe(report)).length,
+        findingCount,
         reportStatus: status,
       },
     }],
@@ -371,15 +375,15 @@ export async function runPrReviewerSecurityPreflight(taskType, app, metadata, ta
       completed: scan.ok,
       status,
       code: scan.code || null,
-      guardId: scan.guardId || MODEL_ABUSE_GUARD_ID,
+      guardId,
       guardModel: scan.guardModel || null,
       guardRevision: scan.guardRevision || null,
       layers: scan.layers || null,
-      repoFullName: scan.repoFullName || target.repoFullName,
-      defaultBranch: scan.defaultBranch || target.defaultBranch,
-      scanKey: scan.scanKey || scanKey,
+      repoFullName,
+      defaultBranch,
+      scanKey: reviewedScanKey,
       reviewedPrCount: reports.length,
-      findingCount: reports.filter((report) => !reportIsSafe(report)).length,
+      findingCount,
       reports,
       noActionsTaken: true,
       safePrCount: safeReports.length,
@@ -387,8 +391,8 @@ export async function runPrReviewerSecurityPreflight(taskType, app, metadata, ta
   };
   const safeInputByNumber = new Map((scan.reviewInputs || []).map((input) => [input.number, input]));
   metadata.issueWatcher = {
-    repoFullName: scan.repoFullName || target.repoFullName,
-    defaultBranch: scan.defaultBranch || target.defaultBranch,
+    repoFullName,
+    defaultBranch,
     issueComments: [],
     pullRequests: safeReports.map((report) => ({
       number: report.number,
@@ -401,32 +405,18 @@ export async function runPrReviewerSecurityPreflight(taskType, app, metadata, ta
     strictPullRequestCoverage: true,
   };
   metadata.executionProfile = nextStage.executionProfile || null;
-  metadata.pipeline.reviewInputKey = scan.scanKey || scanKey;
+  metadata.pipeline.reviewInputKey = reviewedScanKey;
   metadata.context = formatSecurityScanContext(scan, reports, status);
 
-  // Apply the next stage's provider/model/effort and behavior flags exactly as
-  // the ordinary agent-completion hand-off does. Keeping this in the generator
-  // makes the synthetic stage-0 result indistinguishable from a real one to
-  // the rest of task creation.
+  // Hand the synthetic stage-0 result to stage 1 through the same helper the
+  // ordinary agent-completion hand-off uses, so the rest of task creation
+  // cannot tell it from a real one.
   metadata.readOnly = nextStage.readOnly ?? false;
-  if (nextStage.model) metadata.model = nextStage.model;
-  if (nextStage.providerId) {
-    metadata.provider = nextStage.providerId;
-    metadata.providerId = nextStage.providerId;
-  }
   if (scan.usedLargeInputFallback) delete metadata.effort;
-  if (nextStage.effort) metadata.effort = nextStage.effort;
-  const nextStageReadOnly = nextStage.readOnly ?? false;
-  const taskDefaults = metadata.pipeline.taskDefaults || {};
-  for (const flag of PIPELINE_STAGE_BEHAVIOR_FLAGS) {
-    if (flag in nextStage) {
-      metadata[flag] = nextStage[flag];
-    } else if (nextStageReadOnly) {
-      metadata[flag] = false;
-    } else if (flag in taskDefaults) {
-      metadata[flag] = taskDefaults[flag];
-    }
-  }
+  applyStageExecution(metadata, nextStage, {
+    taskDefaults: metadata.pipeline.taskDefaults,
+    clearInheritedExecutionOptions: true,
+  });
 
   // No forced human approval here. The pipeline's own gates bound what an
   // external PR can do: Stage 1 already screened it, the Eligibility Gate is

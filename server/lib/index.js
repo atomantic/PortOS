@@ -662,6 +662,7 @@ export * from './providerRouteSettings.js';
 export * from './personaTraitBlend.js';
 export * from './pipelineIds.js';
 export * from './pipelineIssueOrder.js';
+export * from './pipelineStageExecution.js';
 export * from './pipelineStages.js';
 export * from './postAdaptive.js';
 export * from './postAppliedNumeracy.js';

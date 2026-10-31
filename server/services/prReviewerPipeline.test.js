@@ -644,6 +644,19 @@ describe('runPrReviewerSecurityPreflight', () => {
     });
   });
 
+  it("keeps a draft-only run draft and swaps inherited execution options for the next stage's provider", async () => {
+    listed(externalPr(12, HEAD_12));
+    const reports = [report(12, HEAD_12, true)];
+    securityMock.runPrReviewerSecurityScan.mockResolvedValue(scanResult({ reports, reviewedPrs: reports, reviewInputs: [reviewInput(12, HEAD_12)] }));
+    const metadata = preflightMetadata();
+    metadata.pipeline.taskDefaults = { prCompletion: 'draft' };
+    metadata.executionOptions = { fast: true };
+    await runPrReviewerSecurityPreflight('pr-reviewer', APP, metadata, null, schedule());
+    expect(metadata.prCompletion).toBe('draft');
+    expect(metadata.providerId).toBe('gate-provider');
+    expect(metadata).not.toHaveProperty('executionOptions');
+  });
+
   // A partial/unavailable scan is never a usable allowlist: keeping the
   // safe-looking reports would let a later stage review a subset while the
   // remaining PRs had no completed safety verdict.
