@@ -59,7 +59,7 @@ const loadShutdown = (loadModule) => {
     stopIdleReaper: noop, stopHostedSessionSweep: noop, stopBeeperSocket: noop,
     activeAgents: new Map([['example-agent', {}]]), dispatchingAgentIds: new Set(),
     writeHostShutdownMarker: marker, signalDetachedGroups: noop, stopCodexAppServer: async () => {},
-    flushIdeaLoomAutoSync: async () => {}, flushMediaJobQueue: flush,
+    flushIdeaLoomAutoSync: async () => {}, flushCatalogUniverseFiling: async () => {}, flushMediaJobQueue: flush,
     quiesceSharingForExit: noop, drainPeerSyncOperations: async () => {},
     logBootstrapFailure: noop,
     loadModule: (path) => path === '../lib/db.js' ? Promise.resolve({ close }) : loadModule(path),
@@ -228,6 +228,28 @@ describe('shutdown handler — IdeaLoom auto-sync flush (#11756)', () => {
 
   it('keeps the flush grace within the DB close grace so the ceiling is unchanged', () => {
     const flushGrace = Number(code.match(/withGrace\('IdeaLoom auto-sync flush', (\d+)/)?.[1]);
+    const dbGrace = Number(code.match(/withGrace\('DB pool', (\d+)/)?.[1]);
+    expect(flushGrace).toBeLessThanOrEqual(dbGrace);
+  });
+});
+
+// Issue #14262: debounced catalog universe filing is in memory, so shutdown must
+// flush it after the servers close, bounded by a grace, and await it before the
+// DB pool closes (the pass reads and writes through the DB).
+describe('shutdown handler — catalog universe filing flush (#14262)', () => {
+  const code = stripCommentsAndNormalize(extractDeclaration(SRC, 'shutdown') || '');
+
+  it('flushes filing under a bounded grace after the servers close and awaits it before the pool', () => {
+    const flushAt = code.indexOf('flushCatalogUniverseFiling()');
+    expect(flushAt, 'flushCatalogUniverseFiling() is not called in shutdown()').toBeGreaterThan(-1);
+    expect(code).toMatch(/const catalogFilingFlushed = withGrace\('Catalog universe filing flush', \d+,/);
+    expect(flushAt).toBeGreaterThan(code.indexOf('closeServer('));
+    expect(code.indexOf('await catalogFilingFlushed')).toBeGreaterThan(-1);
+    expect(code.indexOf('await catalogFilingFlushed')).toBeLessThan(code.indexOf("withGrace('DB pool'"));
+  });
+
+  it('keeps the filing grace within the DB close grace so the ceiling is unchanged', () => {
+    const flushGrace = Number(code.match(/withGrace\('Catalog universe filing flush', (\d+)/)?.[1]);
     const dbGrace = Number(code.match(/withGrace\('DB pool', (\d+)/)?.[1]);
     expect(flushGrace).toBeLessThanOrEqual(dbGrace);
   });
