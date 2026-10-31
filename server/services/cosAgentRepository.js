@@ -16,7 +16,7 @@
 
 import { join } from 'node:path';
 import { atomicWrite, PATHS, readJSONFileStrict } from '../lib/fileUtils.js';
-import { createPgFileFacade, resolvePgBackend } from '../lib/pgFileFacade.js';
+import { createPgFileFacade, resolvePgBackend, POSTGRES_SETUP_HINT } from '../lib/pgFileFacade.js';
 import { isTestRunner } from '../lib/runtimeEnv.js';
 import { agentRowColumns, planAgentSave } from '../lib/cosAgentRows.js';
 
@@ -114,7 +114,7 @@ async function makeMemoryBackend({ persist }) {
 const backendFacade = createPgFileFacade({
   makeFile: () => makeMemoryBackend({ persist: !isTestRunner() }),
   makePg: () => resolvePgBackend({
-    requirement: 'The CoS agent records require PostgreSQL — run `npm run setup:db` (dev/test only: set MEMORY_BACKEND=file for the file escape hatch)',
+    requirement: `The CoS agent records require PostgreSQL — ${POSTGRES_SETUP_HINT}`,
     loadDb: () => import('../lib/db.js'),
     makePg: makePgBackend,
   }),

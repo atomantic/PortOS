@@ -12,7 +12,7 @@ import { join } from 'path';
 import { PATHS } from '../../lib/fileUtils.js';
 import { createCollectionStore } from '../../lib/collectionStore.js';
 import { createFileWriteQueue, createRecordWriteQueue } from '../../lib/fileWriteQueue.js';
-import { createPgFileFacade, resolvePgBackend } from '../../lib/pgFileFacade.js';
+import { createPgFileFacade, resolvePgBackend, POSTGRES_SETUP_HINT } from '../../lib/pgFileFacade.js';
 
 const TYPE_SCHEMA_VERSION = 1;
 const ID_PATTERN = /^loom-[A-Za-z0-9-]{1,80}$/;
@@ -91,7 +91,7 @@ function makePgBackend(db) {
 const facade = createPgFileFacade({
   makeFile: makeFileBackend,
   makePg: () => resolvePgBackend({
-    requirement: 'FableLoom requires PostgreSQL — run `npm run setup:db` (dev/test only: set MEMORY_BACKEND=file for the unsupported file backend)',
+    requirement: `FableLoom requires PostgreSQL — ${POSTGRES_SETUP_HINT}`,
     loadDb: () => import('./db.js'),
     makePg: makePgBackend,
   }),

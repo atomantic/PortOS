@@ -10,7 +10,7 @@
  * federate when peers enable the Albums sync category.
  */
 
-import { createRecordStoreBackendSelector } from '../../lib/pgFileFacade.js';
+import { createRecordStoreBackendSelector, POSTGRES_SETUP_HINT } from '../../lib/pgFileFacade.js';
 import { withMusicMutation, musicMutationClient, afterMusicCommit } from '../musicMembershipMutation.js';
 import { emitRecordUpdated, emitRecordDeleted, autoSubscribeRecordToAllPeers } from '../sharing/recordEvents.js';
 
@@ -35,7 +35,7 @@ const { selectBackend, getBackendName, reset } = createRecordStoreBackendSelecto
   label: 'Albums',
   loadFileBackend: () => import('./file.js'),
   loadDbBackend: () => import('./db.js'),
-  requireDbMessage: 'Albums require PostgreSQL — run `npm run setup:db` (dev/test only: set MEMORY_BACKEND=file in .env for the unsupported file backend)',
+  requireDbMessage: `Albums require PostgreSQL — ${POSTGRES_SETUP_HINT}`,
 });
 
 // The shared mutation boundary prepares both stores before reserving a client.

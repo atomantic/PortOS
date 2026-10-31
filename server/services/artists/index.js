@@ -12,7 +12,7 @@
  * artists federate when peers enable the Artists sync category.
  */
 
-import { createRecordStoreBackendSelector } from '../../lib/pgFileFacade.js';
+import { createRecordStoreBackendSelector, POSTGRES_SETUP_HINT } from '../../lib/pgFileFacade.js';
 import { emitRecordUpdated, emitRecordDeleted, autoSubscribeRecordToAllPeers } from '../sharing/recordEvents.js';
 
 export {
@@ -36,7 +36,7 @@ const { selectBackend, getBackendName, reset } = createRecordStoreBackendSelecto
   label: 'Artists',
   loadFileBackend: () => import('./file.js'),
   loadDbBackend: () => import('./db.js'),
-  requireDbMessage: 'Artists require PostgreSQL — run `npm run setup:db` (dev/test only: set MEMORY_BACKEND=file in .env for the unsupported file backend)',
+  requireDbMessage: `Artists require PostgreSQL — ${POSTGRES_SETUP_HINT}`,
 });
 
 /** Name of the active backend, or null before first call (for diagnostics/tests). */

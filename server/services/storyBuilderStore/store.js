@@ -30,7 +30,7 @@
 import { join } from 'path';
 import { PATHS } from '../../lib/fileUtils.js';
 import { createCollectionStore } from '../../lib/collectionStore.js';
-import { createPgFileFacade, resolvePgBackend, isFileBackend } from '../../lib/pgFileFacade.js';
+import { createPgFileFacade, resolvePgBackend, isFileBackend, POSTGRES_SETUP_HINT } from '../../lib/pgFileFacade.js';
 import { createRecordWriteQueue } from '../../lib/fileWriteQueue.js';
 import { bumpChangeToken, getChangeToken } from '../changeToken.js';
 
@@ -100,7 +100,7 @@ function makePgBackend(db, sanitizeRecord) {
 }
 
 const pgBackend = (sanitizeRecord) => resolvePgBackend({
-  requirement: 'Story Builder requires PostgreSQL — run `npm run setup:db` (dev/test only: set MEMORY_BACKEND=file for the unsupported file backend)',
+  requirement: `Story Builder requires PostgreSQL — ${POSTGRES_SETUP_HINT}`,
   migrate: async () => {
     const { migrateStoryBuilderToDB } = await import('../../scripts/migrateStoryBuilderToDB.js');
     await migrateStoryBuilderToDB();

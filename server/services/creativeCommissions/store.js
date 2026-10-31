@@ -57,7 +57,7 @@ import { randomUUID } from 'crypto';
 import { EventEmitter } from 'events';
 import { PATHS } from '../../lib/fileUtils.js';
 import { createCollectionStore } from '../../lib/collectionStore.js';
-import { createPgFileFacade, resolvePgBackend, isFileBackend } from '../../lib/pgFileFacade.js';
+import { createPgFileFacade, resolvePgBackend, isFileBackend, POSTGRES_SETUP_HINT } from '../../lib/pgFileFacade.js';
 import { createRecordWriteQueue } from '../../lib/fileWriteQueue.js';
 import { isValidCron, isValidRecurrence } from '../eventScheduler.js';
 import { compareNewerWins } from '../../lib/lwwTimestamp.js';
@@ -489,7 +489,7 @@ function makePgBackend(db) {
 // No file→DB migration: commissions are a brand-new record kind that never
 // shipped on the file backend.
 const pgBackend = () => resolvePgBackend({
-  requirement: 'Creative Commissions require PostgreSQL — run `npm run setup:db` (dev/test only: set MEMORY_BACKEND=file for the unsupported file backend)',
+  requirement: `Creative Commissions require PostgreSQL — ${POSTGRES_SETUP_HINT}`,
   loadDb: () => import('./db.js'),
   makePg: makePgBackend,
 });

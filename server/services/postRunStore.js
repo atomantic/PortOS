@@ -7,7 +7,7 @@
 import { join } from 'path';
 import { atomicWrite, ensureDir, PATHS, readJSONFile } from '../lib/fileUtils.js';
 import { isPlainObject } from '../lib/objects.js';
-import { createPgFileFacade, resolvePgBackend } from '../lib/pgFileFacade.js';
+import { createPgFileFacade, resolvePgBackend, POSTGRES_SETUP_HINT } from '../lib/pgFileFacade.js';
 import { isTestRunner } from '../lib/runtimeEnv.js';
 import {
   getScoredSession as getScoredSessionDb,
@@ -105,7 +105,7 @@ function makePgBackend(db) {
 }
 
 const pgBackend = () => resolvePgBackend({
-  requirement: 'MeatSpace POST history requires PostgreSQL — run `npm run setup:db` (dev/test only: set MEMORY_BACKEND=file)',
+  requirement: `MeatSpace POST history requires PostgreSQL — ${POSTGRES_SETUP_HINT}`,
   migrate: async () => {
     const { migratePostRunsToDB } = await import('../scripts/migratePostRunsToDB.js');
     await migratePostRunsToDB();
