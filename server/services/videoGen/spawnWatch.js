@@ -503,6 +503,62 @@ export async function spawnAndWatchVideo({
       stderrReader.push(chunk);
     });
 
+    // Cancel/ownership recheck shared by both sides of the learning probe: a new
+    // cancel source must be added here once, or a canceled render could teach a profile.
+    const renderStillOwned = (cancelEpochAtClose) => ownershipSettled
+      && videoJobState.cancelEpoch === cancelEpochAtClose && !preparation?.wasCanceled();
+
+    // Did the runner actually apply the requested speed profile / draft decoder?
+    const profileConfirmed = () => (!speedProfileId || (job.speedProfile?.id === speedProfileId && job.speedProfile.degraded?.length === 0))
+      && (!args.includes('--draft-decoder-id') || job.draftDecode?.applied === true);
+
+    // A Metal recovery profile is learned only from a clean, fully published,
+    // verified, still-owned render that ran under the reactive retry.
+    const learnReactiveMetalProfile = async ({ code, signal, cancelEpochAtClose }) => {
+      if (!(reactiveRecovery && metalProfile && profileConfirmed() && code === 0 && !signal && !proc.killed
+        && renderStillOwned(cancelEpochAtClose)
+        && [...publications.values()].every(publication => publication.committed))) return;
+      const verified = await verifyPostCompletionOutputs({ outputPaths: expectedOutputPaths, completedOutputs,
+        startedAtMs: job.renderStartedAtMs, expectedFrames: parsedNumFrames, fps: meta?.fps });
+      if (!verified.ok || !renderStillOwned(cancelEpochAtClose)) return;
+      await getMetalBufferProfiles().learn(metalProfile).then(result => {
+        if (!result.learned) reportMetalPolicy('reactive-retry', result.diagnostic, 'Metal buffer recovery completed; profile was not retained');
+      }).catch(cacheDiagnostic);
+    };
+
+    // Failure reason for a child that died unforgiven: missing Python module,
+    // signal death, or exit code, plus the batch progress suffix.
+    const describeChildFailure = async ({ code, signal, failure }) => {
+      let reason;
+      if (missingPyModule) {
+        const runtimeInfo = BYOV_RUNTIME_INFO[model.runtime];
+        if (runtimeInfo) {
+          // The probe believed the venv was ready but a runtime import
+          // disagreed — drop the cached "ready" so the next /runtime-status
+          // re-probes and the install banner re-appears.
+          invalidateByovReadyCache(runtimeInfo.id);
+          reason = `Python module '${missingPyModule}' is missing from the ${runtimeInfo.label} runtime. Use Install / Repair in Video Gen's model setup panel.`;
+        } else {
+          reason = `Python module '${missingPyModule}' is missing. Install it into the configured Python environment and retry.`;
+        }
+      } else if (signal) {
+        // Signal → actionable cause (SIGABRT = the macOS Metal command-buffer
+        // watchdog only when stderr proves it, SIGBUS/SIGSEGV = a native MLX/Metal crash;
+        // SIGKILL alone does not prove OOM),
+        // stamped with the runtime fingerprint that died so the report is
+        // self-documenting. See describeSignalDeath in generateVideoHelpers.js.
+        reason = describeSignalDeath(signal, {
+          fingerprint: await pickDeathFingerprint({ emitted: job.runtime, runtimeId: model.runtime }),
+          stderr: stderrTail.join('\n'),
+          mlxRuntime: runtimeUsesMlx(model.runtime),
+        });
+      } else {
+        const diagnostic = failure?.summary || failure?.cause;
+        reason = `Exit code ${code}${diagnostic ? `: ${diagnostic}` : ''}`;
+      }
+      return batch ? `${reason} (${batchResults.length}/${batch.length} videos saved to history)` : reason;
+    };
+
     const handleChildClose = async (code, signal) => {
       if (closeHandled) return;
       closeHandled = true;
@@ -587,35 +643,8 @@ export async function spawnAndWatchVideo({
         if (unforgivenExit && !teardownRecovered) {
           await discardFailedOutputs();
           job.status = 'error';
-          let reason;
           const failure = diagnostics.failure({ prompts: [meta?.prompt, meta?.negativePrompt] });
-          if (missingPyModule) {
-            const runtimeInfo = BYOV_RUNTIME_INFO[model.runtime];
-            if (runtimeInfo) {
-              // The probe believed the venv was ready but a runtime import
-              // disagreed — drop the cached "ready" so the next /runtime-status
-              // re-probes and the install banner re-appears.
-              invalidateByovReadyCache(runtimeInfo.id);
-              reason = `Python module '${missingPyModule}' is missing from the ${runtimeInfo.label} runtime. Use Install / Repair in Video Gen's model setup panel.`;
-            } else {
-              reason = `Python module '${missingPyModule}' is missing. Install it into the configured Python environment and retry.`;
-            }
-          } else if (signal) {
-            // Signal → actionable cause (SIGABRT = the macOS Metal command-buffer
-            // watchdog only when stderr proves it, SIGBUS/SIGSEGV = a native MLX/Metal crash;
-            // SIGKILL alone does not prove OOM),
-            // stamped with the runtime fingerprint that died so the report is
-            // self-documenting. See describeSignalDeath in generateVideoHelpers.js.
-            reason = describeSignalDeath(signal, {
-              fingerprint: await pickDeathFingerprint({ emitted: job.runtime, runtimeId: model.runtime }),
-              stderr: stderrTail.join('\n'),
-              mlxRuntime: runtimeUsesMlx(model.runtime),
-            });
-          } else {
-            const diagnostic = failure?.summary || failure?.cause;
-            reason = `Exit code ${code}${diagnostic ? `: ${diagnostic}` : ''}`;
-          }
-          if (batch) reason += ` (${batchResults.length}/${batch.length} videos saved to history)`;
+          const reason = await describeChildFailure({ code, signal, failure });
           console.error(`❌ Video generation failed [${jobId.slice(0, 8)}]: ${reason}`);
           await persistTermination(code, signal, preparation?.wasCanceled() || videoJobState.cancelEpoch !== cancelEpochAtStart ? 'canceled' : 'failed');
           broadcastSse(job, { type: 'error', error: `Generation failed: ${reason}` });
@@ -643,19 +672,7 @@ export async function spawnAndWatchVideo({
             }
             thumbnail = await finalizeGeneratedVideo({ job, jobId, outputPath, filename, meta, actualSeed, terminal: false, mutateHistory: mutateVideoHistory, publication: publications.get(outputPath) });
           }
-          const effectiveProfileConfirmed = (!speedProfileId || (job.speedProfile?.id === speedProfileId && job.speedProfile.degraded?.length === 0))
-            && (!args.includes('--draft-decoder-id') || job.draftDecode?.applied === true);
-          if (reactiveRecovery && metalProfile && effectiveProfileConfirmed && code === 0 && !signal && !proc.killed && ownershipSettled
-            && videoJobState.cancelEpoch === cancelEpochAtClose && !preparation?.wasCanceled()
-            && [...publications.values()].every(publication => publication.committed)) {
-            const verified = await verifyPostCompletionOutputs({ outputPaths: expectedOutputPaths, completedOutputs,
-              startedAtMs: job.renderStartedAtMs, expectedFrames: parsedNumFrames, fps: meta?.fps });
-            if (verified.ok && ownershipSettled && videoJobState.cancelEpoch === cancelEpochAtClose && !preparation?.wasCanceled()) {
-              await getMetalBufferProfiles().learn(metalProfile).then(result => {
-                if (!result.learned) reportMetalPolicy('reactive-retry', result.diagnostic, 'Metal buffer recovery completed; profile was not retained');
-              }).catch(cacheDiagnostic);
-            }
-          }
+          await learnReactiveMetalProfile({ code, signal, cancelEpochAtClose });
           // Complete only after learning settles, so a completion listener's
           // next matching render can observe the successful policy.
           job.status = 'complete';
