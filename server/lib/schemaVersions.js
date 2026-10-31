@@ -95,7 +95,10 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // profile's finishing look; an older normalizer drops the controls.
   // v18 = canon `forms[]` entries may carry a `height` (a character's height at
   // that age). A <=v17 sanitizer strips it and would LWW the loss back.
-  universes: 18,
+  // v19 = film look weave and flicker speed (`weaveRate`/`flickerRate`). An older
+  // strict film-look schema refuses the profile's finishing look; an older
+  // normalizer drops the rates. Optional, no backfill: absent = original speed.
+  universes: 19,
   // v1 = post-split. Migrations 035/036 introduced the pipeline collection
   // layout for issues and series.
   // v2 = `stages.audio.audioMode` + `stages.audio.cues[]` added (whole-episode
@@ -834,7 +837,11 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // v35 strict project schema rejects with a 400 and its normalizer drops on
   // save. Optional, no backfill: absent = no medium.
   // v37 = ordered still-photo sequences and cadence; older scene writers drop them.
-  musicVideoProjects: 37,
+  // v38 = film look weave/flicker speed (`weaveRate`/`flickerRate`, which a v37
+  // strict film-look schema rejects) and in-shot effect strength, repeats and
+  // light-leak color/edge (`glitches[].strength`/`count`/`everySec`/`color`/`edge`,
+  // which a v37 scene schema strips on save). Optional, no backfill: absent plays as before.
+  musicVideoProjects: 38,
   // v1 = Creative Commission FEEDBACK federation (PostgreSQL `commission_feedback`)
   // via the per-record peer-sync push pipeline (record kind `commissionFeedback`,
   // sync category `commissionFeedback`, #2686 — split-record follow-up to #2657).

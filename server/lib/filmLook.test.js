@@ -251,3 +251,48 @@ describe('film look motion layers', () => {
     expect(filmLookMotionLayers(null)).toBeNull();
   });
 });
+
+// Uniquely catches a weave/flicker speed that re-times the picture instead of
+// reshaping its drift, a saved look changing when it predates the speeds, and
+// the cheap playing layers drifting at a different speed from the exact filter.
+describe('continuous film motion speed', () => {
+  const offset = (look, frame) => /<feOffset [^>]*dx="([^"]+)" dy="([^"]+)"/.exec(filmLookFilterMarkup(normalizeFilmLook(look), { frame }).filter).slice(1);
+  const slope = (look, frame) => /slope="([^"]+)"/.exec(filmLookFilterMarkup(normalizeFilmLook(look), { frame }).filter)[1];
+
+  it('keeps a look saved before the speeds drawing what it always drew', () => {
+    // Pinned from the renderer before the speed controls existed.
+    expect(offset({ weave: 0.4 }, 7)).toEqual(['2.1564', '-0.4225']);
+    expect(slope({ flicker: 0.5 }, 7)).toBe('1.0406');
+    expect(normalizeFilmLook({ weave: 0.4 })).toMatchObject({ weaveRate: 1, flickerRate: 1 });
+  });
+
+  it('scales time, not the song: half speed reaches frame n\'s drift on frame 2n, in the filter and the playing layers', () => {
+    expect(offset({ weave: 0.4, weaveRate: 0.5 }, 20)).toEqual(offset({ weave: 0.4 }, 10));
+    expect(offset({ weave: 0.4, weaveRate: 2 }, 5)).toEqual(offset({ weave: 0.4 }, 10));
+    expect(filmLookMotionLayers({ weave: 0.4, weaveRate: 0.5 }, { frame: 20 }).transform).toBe(filmLookMotionLayers({ weave: 0.4 }, { frame: 10 }).transform);
+    // A slow flicker holds each frame's exposure at every other frame and glides between them.
+    expect(slope({ flicker: 0.5, flickerRate: 0.5 }, 14)).toBe(slope({ flicker: 0.5 }, 7));
+    const between = Number(slope({ flicker: 0.5, flickerRate: 0.5 }, 15));
+    const [a, b] = [slope({ flicker: 0.5 }, 7), slope({ flicker: 0.5 }, 8)].map(Number).sort((x, y) => x - y);
+    expect(between).toBeGreaterThanOrEqual(a);
+    expect(between).toBeLessThanOrEqual(b);
+    expect(filmLookMotionLayers({ flicker: 0.5, flickerRate: 0.5 }, { frame: 14 }).filter).toBe(filmLookMotionLayers({ flicker: 0.5 }, { frame: 7 }).filter);
+  });
+
+  it('is off at zero strength whatever the speed, keeps the speed through the strength slider, and bounds it at the schema', () => {
+    expect(isFilmLookNeutral({ weaveRate: 3, flickerRate: 0.1 })).toBe(true);
+    expect(filmLookFilterMarkup(normalizeFilmLook({ weave: 0, weaveRate: 2 })).active).toBe(false);
+    expect(scaleFilmLook({ weave: 0.6, weaveRate: 0.5 }, 0.5)).toMatchObject({ weave: 0.3, weaveRate: 0.5 });
+    expect(filmLookSchema.safeParse({ weave: 0.3, weaveRate: 0.6, flicker: 0.2, flickerRate: 0.5 }).success).toBe(true);
+    expect(filmLookSchema.safeParse({ weaveRate: 0 }).success).toBe(false);
+    expect(filmLookSchema.safeParse({ flickerRate: 2 }).success).toBe(false);
+  });
+
+  it('starts a home movie gently: slow weave and a breathing flicker, never a strobe', () => {
+    const look = filmLookPreset('home-movie');
+    expect(look.weave).toBeGreaterThan(0);
+    expect(look.weaveRate).toBeLessThan(1);
+    expect(look.flicker).toBeLessThanOrEqual(0.2);
+    expect(look.flickerRate).toBeLessThan(1);
+  });
+});

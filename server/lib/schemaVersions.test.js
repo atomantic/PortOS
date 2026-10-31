@@ -28,7 +28,8 @@ describe('PORTOS_SCHEMA_VERSIONS', () => {
     // cannot strip-then-LWW them.
     // v15 adds an optional place `greybox` layout; additive + version-gated.
     // v18 adds an optional `height` on canon forms.
-    expect(PORTOS_SCHEMA_VERSIONS.universes).toBe(18);
+    // v19 adds the film look weave/flicker speed a visual profile can carry.
+    expect(PORTOS_SCHEMA_VERSIONS.universes).toBe(19);
   });
 
   it('declares pipeline collection layout versions', () => {
@@ -101,17 +102,17 @@ describe('PORTOS_SCHEMA_VERSIONS', () => {
 });
 
 describe('buildPortosMeta', () => {
-  it('rejects photo sequences, production mediums, cold-open shots, credits endings, festival packets, subject age forms and earlier music-video metadata on older peers', async () => {
+  it('rejects film motion rates and effect repeats, photo sequences, production mediums, cold-open shots, credits endings, festival packets, subject age forms and earlier music-video metadata on older peers', async () => {
     const meta = await buildPortosMeta();
-    expect(meta.schemaVersions.musicVideoProjects).toBe(37);
+    expect(meta.schemaVersions.musicVideoProjects).toBe(38);
     // Older builds re-normalize the newer fields away; the gate must stop that peer receiving them.
-    for (const receiverV of [13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36]) {
+    for (const receiverV of [13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37]) {
       expect(compareSchemaVersions(meta.schemaVersions, { ...meta.schemaVersions, musicVideoProjects: receiverV }).ahead)
-        .toContainEqual({ category: 'musicVideoProjects', senderV: 37, receiverV });
+        .toContainEqual({ category: 'musicVideoProjects', senderV: 38, receiverV });
     }
     const olderPeer = { ...meta.schemaVersions, musicVideoProjects: 24 };
     expect(scopeVersionDiff(compareSchemaVersions(meta.schemaVersions, olderPeer), RECORD_KIND_SCHEMA_CATEGORIES.musicVideoProject))
-      .toMatchObject({ compatible: false, ahead: [{ category: 'musicVideoProjects', senderV: 37, receiverV: 24 }] });
+      .toMatchObject({ compatible: false, ahead: [{ category: 'musicVideoProjects', senderV: 38, receiverV: 24 }] });
   });
 
   it('advertises lyric provenance to pause track transfers to caption-only peers', async () => {
@@ -132,14 +133,14 @@ describe('buildPortosMeta', () => {
   it('returns { portosVersion, schemaVersions } with the live registry', async () => {
     const meta = await buildPortosMeta();
     expect(meta.portosVersion).toMatch(/^\d+\.\d+\.\d+/);
-    expect(meta.schemaVersions.universes).toBe(18);
+    expect(meta.schemaVersions.universes).toBe(19);
     expect(meta.schemaVersions.pipelineIssues).toBe(6);
     expect(meta.schemaVersions.pipelineSeries).toBe(14);
   });
 
   it('overrides merge into schemaVersions', async () => {
     const meta = await buildPortosMeta({ schemaVersions: { future: 1 } });
-    expect(meta.schemaVersions.universes).toBe(18);
+    expect(meta.schemaVersions.universes).toBe(19);
     expect(meta.schemaVersions.future).toBe(1);
   });
 });

@@ -163,19 +163,19 @@ describe('dataSync — universe category', () => {
     const snap = await dataSync.getSnapshot('universe');
     expect(snap.portosMeta).toBeDefined();
     expect(typeof snap.portosMeta.portosVersion).toBe('string');
-    expect(snap.portosMeta.schemaVersions.universes).toBe(18);
+    expect(snap.portosMeta.schemaVersions.universes).toBe(19);
   });
 
   it('applyRemote rejects when sender schemaVersions are AHEAD of local code', async () => {
     writeUniverseState({ universes: [], runs: [] });
     const result = await dataSync.applyRemote('universe', {
       universes: [{ id: 'u-new', name: 'Foundry', updatedAt: '2026-05-17T10:00:00Z' }],
-    }, { portosMeta: { portosVersion: '99.0.0', schemaVersions: { universes: 19 } } });
+    }, { portosMeta: { portosVersion: '99.0.0', schemaVersions: { universes: 20 } } });
     expect(result.applied).toBe(false);
     expect(result.count).toBe(0);
     expect(result.blockedBySchema).toBeDefined();
     expect(result.blockedBySchema.ahead).toEqual([
-      { category: 'universes', senderV: 19, receiverV: 18 },
+      { category: 'universes', senderV: 20, receiverV: 19 },
     ]);
     expect(result.blockedBySchema.senderPortosVersion).toBe('99.0.0');
     // Nothing was written.

@@ -57,7 +57,9 @@ import { shotActionContractProblem } from './musicVideoActionContract.js';
 import { NARRATIVE_EVENT_KINDS } from './musicVideoNarrativeEvents.js';
 import { MUSIC_VIDEO_MEDIA } from './musicVideoMediumPlan.js';
 import { CLIP_OFFSET_FRAMES_RANGE, CLIP_SPEED_FPS_RANGE, MUSIC_VIDEO_FRAME_FITS, MUSIC_VIDEO_LYRIC_ROLES, MUSIC_VIDEO_LYRIC_SIZES, MUSIC_VIDEO_STILL_MOVES, MUSIC_VIDEO_TEXT_ZONES, MUSIC_VIDEO_VISUAL_LAYERS } from './musicVideoLayers.js';
-import { MUSIC_VIDEO_SHOT_GLITCH_LIMIT, MUSIC_VIDEO_TRANSITIONS } from './musicVideoTransitions.js';
+import {
+  MUSIC_VIDEO_GLITCH_EDGES, MUSIC_VIDEO_GLITCH_REPEAT_LIMIT, MUSIC_VIDEO_GLITCH_REPEAT_SEC, MUSIC_VIDEO_SHOT_GLITCH_LIMIT, MUSIC_VIDEO_TRANSITIONS,
+} from './musicVideoTransitions.js';
 import { BEAT_TOGGLE_OVERLAP, BEAT_TOGGLE_RATES, MUSIC_VIDEO_CUT_EFFECTS } from './musicVideoCutEffects.js';
 import { IMAGE_EFFECT_SEC_RANGE, MUSIC_VIDEO_IMAGE_EFFECTS, PHOTO_SEQUENCE_LIMIT, PHOTO_SEQUENCE_RATES } from './musicVideoImageEffects.js';
 import { PRE_MUSIC_DURATION_RANGE, PRE_MUSIC_EFFECT_IDS, PRE_MUSIC_LAYER_LIMIT, PRE_MUSIC_VOLUME_RANGE } from './musicVideoColdOpen.js';
@@ -719,11 +721,17 @@ const sceneLayerFields = {
   // A VHS glitch over the cut into / out of this shot (musicVideoTransitions.js); null clears it.
   transitionIn: z.enum(MUSIC_VIDEO_TRANSITIONS).nullable().optional(),
   transitionOut: z.enum(MUSIC_VIDEO_TRANSITIONS).nullable().optional(),
-  // Glitches at moments inside the shot: `atSec` from the shot's start, `lengthSec` stretching the style; null clears them.
+  // Glitches at moments inside the shot: `atSec` from the shot's start, `lengthSec` stretching the style,
+  // `strength` (0 = off), `count` repeats `everySec` apart, and a light leak's `color`/`edge`; null clears them.
   glitches: z.array(z.object({
     atSec: z.number().min(0).max(3600),
     style: z.enum(MUSIC_VIDEO_TRANSITIONS),
     lengthSec: z.number().positive().max(4).nullable().optional(),
+    strength: z.number().min(0).max(1).nullable().optional(),
+    count: z.number().int().min(1).max(MUSIC_VIDEO_GLITCH_REPEAT_LIMIT).nullable().optional(),
+    everySec: z.number().min(MUSIC_VIDEO_GLITCH_REPEAT_SEC.min).max(MUSIC_VIDEO_GLITCH_REPEAT_SEC.max).nullable().optional(),
+    color: z.string().regex(/^#[0-9a-f]{6}$/i, 'color is #rrggbb').nullable().optional(),
+    edge: z.enum(MUSIC_VIDEO_GLITCH_EDGES).nullable().optional(),
   })).max(MUSIC_VIDEO_SHOT_GLITCH_LIMIT).nullable().optional(),
   // An effect across the cut out of this shot (musicVideoCutEffects.js), kept with its settings while switched off; null clears it.
   cutEffect: z.object({

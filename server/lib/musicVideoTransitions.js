@@ -38,10 +38,20 @@ export const MUSIC_VIDEO_TRANSITION_LABELS = Object.freeze({
 });
 
 // A shot also carries glitches at any moment inside it (`scene.glitches`):
-// `{ atSec, style, lengthSec? }`, `atSec` counted from the shot's start and
-// `lengthSec` stretching the style's frames (unset plays them once).
+// `{ atSec, style, lengthSec?, strength?, everySec?, count?, color?, edge? }`,
+// `atSec` counted from the shot's start and `lengthSec` stretching the style's
+// frames (unset plays them once). `strength` (0..1, absent = 1) scales the
+// effect and 0 switches it off; `count` plays it that many times `everySec`
+// apart on the song's clock, never past the shot. A light leak also takes a
+// `color` (#rrggbb) and the `edge` it washes in from. Every one of these is
+// optional, so an effect saved before them plays exactly as it did.
 export const MUSIC_VIDEO_SHOT_GLITCH_LIMIT = 8;
 export const MUSIC_VIDEO_GLITCH_LENGTHS = Object.freeze([0.125, 0.25, 0.5, 1, 2]);
+export const MUSIC_VIDEO_GLITCH_REPEAT_LIMIT = 64;
+export const MUSIC_VIDEO_GLITCH_REPEAT_SEC = Object.freeze({ min: 0.125, max: 30 });
+export const MUSIC_VIDEO_GLITCH_EDGES = Object.freeze(['left', 'right', 'top', 'bottom']);
+// The styles that take a color and an entry edge.
+export const MUSIC_VIDEO_TINTED_GLITCHES = Object.freeze(['light-leak']);
 
 // Each style's frames, in order, and how many of them come before the cut
 // (`lead`, the outgoing shot's last frames). Per frame:
@@ -182,8 +192,8 @@ export const MUSIC_VIDEO_TRANSITION_STYLES = Object.freeze({
     lead: 2,
     frames: [
       { roll: 0.06, bright: 0.95 },
-      { roll: 0.45, blocks: [{ x: 0, y: 0.43, w: 1, h: 0.05, color: '000000', alpha: 1 }], bright: 0.9, noise: 0.1 },
-      { roll: -0.25, blocks: [{ x: 0, y: 0.73, w: 1, h: 0.05, color: '000000', alpha: 1 }], bright: 0.95 },
+      { roll: 0.45, blocks: [{ x: 0, y: 0.43, w: 1, h: 0.05, color: '000000', alpha: 1, seam: true }], bright: 0.9, noise: 0.1 },
+      { roll: -0.25, blocks: [{ x: 0, y: 0.73, w: 1, h: 0.05, color: '000000', alpha: 1, seam: true }], bright: 0.95 },
       { roll: 0.05 },
       { bright: 1.05, chroma: 0.002 },
     ],
@@ -192,7 +202,7 @@ export const MUSIC_VIDEO_TRANSITION_STYLES = Object.freeze({
   shutter: {
     lead: 3,
     frames: [0.18, 0.38, 0.5, 0.5, 0.32, 0.12].map((v) => ({
-      blocks: [{ x: 0, y: 0, w: 1, h: v, color: '000000', alpha: 1 }, { x: 0, y: 1 - v, w: 1, h: v, color: '000000', alpha: 1 }],
+      blocks: [{ x: 0, y: 0, w: 1, h: v, color: '000000', alpha: 1, anchor: 'top' }, { x: 0, y: 1 - v, w: 1, h: v, color: '000000', alpha: 1, anchor: 'bottom' }],
     })),
   },
   // Worn print: thin scratches run down the frame, dust specks flash and the exposure flickers.
@@ -235,12 +245,73 @@ function shotGlitchesOnSong(scene) {
   return scene.glitches
     .filter((g) => g && isTransition(g.style) && Number.isFinite(g.atSec))
     .slice(0, MUSIC_VIDEO_SHOT_GLITCH_LIMIT)
-    .map((g) => ({
-      atSec: scene.startSec + Math.min(Math.max(0, g.atSec), Math.max(0, span - 0.001)),
-      style: g.style,
-      ...(Number.isFinite(g.lengthSec) && g.lengthSec > 0 ? { lengthSec: g.lengthSec } : {}),
-    }));
+    .map((g) => {
+      const strength = Number.isFinite(g.strength) ? Math.min(1, Math.max(0, g.strength)) : 1;
+      const repeats = Number.isInteger(g.count) && g.count > 1 && Number.isFinite(g.everySec) && g.everySec >= MUSIC_VIDEO_GLITCH_REPEAT_SEC.min;
+      const tinted = MUSIC_VIDEO_TINTED_GLITCHES.includes(g.style);
+      return {
+        atSec: scene.startSec + Math.min(Math.max(0, g.atSec), Math.max(0, span - 0.001)),
+        style: g.style,
+        ...(Number.isFinite(g.lengthSec) && g.lengthSec > 0 ? { lengthSec: g.lengthSec } : {}),
+        ...(strength < 1 ? { strength } : {}),
+        ...(repeats ? { count: Math.min(g.count, MUSIC_VIDEO_GLITCH_REPEAT_LIMIT), everySec: Math.min(g.everySec, MUSIC_VIDEO_GLITCH_REPEAT_SEC.max) } : {}),
+        ...(tinted && typeof g.color === 'string' && /^#[0-9a-f]{6}$/i.test(g.color) ? { color: g.color.slice(1).toLowerCase() } : {}),
+        ...(tinted && MUSIC_VIDEO_GLITCH_EDGES.includes(g.edge) ? { edge: g.edge } : {}),
+      };
+    })
+    // Strength zero switches an effect off without losing its other settings.
+    .filter((g) => g.strength !== 0);
 }
+
+/** A hex `rrggbb` moved `amount` of the way toward white. */
+const lighten = (color, amount) => [0, 2, 4]
+  .map((i) => Math.round(parseInt(color.slice(i, i + 2), 16) + (255 - parseInt(color.slice(i, i + 2), 16)) * amount).toString(16).padStart(2, '0')).join('');
+
+// A style frame at a fraction of its strength: every slip, roll, fringe, snow and
+// wash moves toward a clean frame, and shapes keep their place. A gate jump's
+// frame line follows its smaller roll; a shutter closes less far.
+function scaledGlitchParams(p, k) {
+  const out = { ...p };
+  for (const key of ['shift', 'roll', 'chroma', 'noise', 'lines']) if (p[key] != null) out[key] = p[key] * k;
+  for (const key of ['bright', 'sat']) if (p[key] != null) out[key] = 1 + (p[key] - 1) * k;
+  const faded = (list) => list.map((x) => ({ ...x, alpha: x.alpha * k }));
+  if (p.tears) out.tears = p.tears.map((t) => ({ ...t, shift: t.shift * k }));
+  if (p.smears) out.smears = p.smears.map((sm) => ({ ...sm, shift: sm.shift * k, blur: (sm.blur || 0) * k }));
+  if (p.bar) out.bar = { ...p.bar, alpha: p.bar.alpha * k };
+  if (p.bars) out.bars = faded(p.bars);
+  if (p.glows) out.glows = faded(p.glows);
+  if (p.blocks) {
+    out.blocks = p.blocks.map((b) => {
+      if (b.seam) return { ...b, y: Math.max(0, (out.roll > 0 ? out.roll : 1 + out.roll) - b.h * 0.4) };
+      if (b.anchor) return { ...b, h: b.h * k, y: b.anchor === 'bottom' ? 1 - b.h * k : 0 };
+      return { ...b, alpha: b.alpha * k };
+    });
+  }
+  return out;
+}
+
+/**
+ * The parameters one glitch frame paints (`{ frame, style, index, strength?,
+ * color?, edge? }`): the style's frame as declared, with a light leak's color
+ * and entry edge applied and scaled by its strength. Both players paint this.
+ */
+export function glitchFrameParams(g) {
+  const base = MUSIC_VIDEO_TRANSITION_STYLES[g?.style]?.frames[g.index];
+  if (!base) return null;
+  let p = base;
+  if ((g.color || g.edge) && p.glows) {
+    // The leak's own color at its strongest wash and a paler core beside it, both from its edge.
+    p = { ...p, glows: p.glows.map((glow, i) => ({ ...glow, ...(g.edge ? { side: g.edge } : {}), ...(g.color ? { color: i === 0 ? g.color : lighten(g.color, 0.45) } : {}) })) };
+  }
+  return Number.isFinite(g.strength) && g.strength < 1 ? scaledGlitchParams(p, Math.max(0, g.strength)) : p;
+}
+
+// The look keys a glitch frame carries past its style and index, kept on every repeated frame.
+const glitchLook = (g) => ({
+  ...(g.strength != null ? { strength: g.strength } : {}),
+  ...(g.color ? { color: g.color } : {}),
+  ...(g.edge ? { edge: g.edge } : {}),
+});
 
 /**
  * A scene's chosen glitches, only the ones that are set:
@@ -299,7 +370,7 @@ export function transitionGlitchFrames(sections, { totalFrames = null } = {}) {
 /** The glitch parameters to paint on `frame`, or null when that frame plays clean. */
 export function transitionFrameAt(glitches, frame) {
   const hit = (glitches || []).find((g) => g.frame === frame);
-  return hit ? { ...hit, params: MUSIC_VIDEO_TRANSITION_STYLES[hit.style].frames[hit.index] } : null;
+  return hit ? { ...hit, params: glitchFrameParams(hit) } : null;
 }
 
 /**
@@ -392,8 +463,8 @@ export function musicVideoTransitionFilter(glitches, { width, height }) {
   if (!Array.isArray(glitches) || glitches.length === 0) return null;
   const groups = new Map();
   for (const g of glitches) {
-    const key = `${g.style}:${g.index}`;
-    if (!groups.has(key)) groups.set(key, { params: MUSIC_VIDEO_TRANSITION_STYLES[g.style].frames[g.index], frames: [] });
+    const key = `${g.style}:${g.index}:${g.strength ?? 1}:${g.color || ''}:${g.edge || ''}`;
+    if (!groups.has(key)) groups.set(key, { params: glitchFrameParams(g), frames: [] });
     groups.get(key).frames.push(g.frame);
   }
   const chain = [];
@@ -486,7 +557,8 @@ export function sceneImageEffectGlitchFrames(scenes, fps, { layered = false, end
  * `sceneTransitions`) and `startFrame`/`endFrame`; a glitch paints only on
  * its own shot's pieces, so it never spills into the next shot or over an
  * intercut partner, and a partner borrowing the shot's footage adds none. A `lengthSec` stretches
- * the style's frames over that many frames, holding each a little longer.
+ * the style's frames over that many frames, holding each a little longer; a `count` plays it again
+ * every `everySec`, and its `strength`, `color` and `edge` ride on each frame for `glitchFrameParams`.
  */
 export function shotGlitchFrames(pieces, fps) {
   // Each shot's own pieces: a glitch paints only while the shot is on screen.
@@ -504,10 +576,14 @@ export function shotGlitchFrames(pieces, fps) {
       if (!style) continue;
       const count = style.frames.length;
       const length = g.lengthSec ? Math.max(1, Math.round(g.lengthSec * fps)) : count;
-      // The frame showing at that moment, as the player counts it.
-      const start = Math.floor(g.atSec * fps + 1e-6);
-      for (let i = 0; i < length; i++) {
-        if (onScreen(start + i)) out.push({ frame: start + i, style: g.style, index: Math.floor((i * count) / length) });
+      const look = glitchLook(g);
+      // Each repeat lands on the song clock, so an excerpt or a scrub meets it on the full render's frame.
+      for (let r = 0; r < (g.count || 1); r++) {
+        // The frame showing at that moment, as the player counts it.
+        const start = Math.floor((g.atSec + r * (g.everySec || 0)) * fps + 1e-6);
+        for (let i = 0; i < length; i++) {
+          if (onScreen(start + i)) out.push({ frame: start + i, style: g.style, index: Math.floor((i * count) / length), ...look });
+        }
       }
     }
   }
