@@ -18,6 +18,7 @@ const mock = vi.hoisted(() => ({
   resolveLocalPromptBudget: vi.fn(),
   toolPromptPadding: '',
   realToolExposure: false,
+  toolPromptOptions: [],
   recipeCatalog: [],
   realRegistry: null,
   createPersistentMindMemoryFromCandidate: vi.fn(async ({ candidateId, ...candidate }) => ({
@@ -85,6 +86,7 @@ vi.mock('./cosToolRegistry.js', async (importOriginal) => {
     readPersistentMindRecipeCatalog: vi.fn(async () => mock.realToolExposure ? mock.recipeCatalog : []),
     // Honors maxChars like the real builder, so local-window narrowing is visible.
     buildPersistentMindToolPrompt: (capabilities, recipes, options = {}) => {
+      mock.toolPromptOptions.push(options);
       if (mock.realToolExposure) return actual.buildPersistentMindToolPrompt(capabilities, recipes, options);
       const { readPortos, writePortos } = capabilities;
       const { maxChars = Infinity } = options;
@@ -119,6 +121,7 @@ beforeEach(() => {
   mock.resolveLocalPromptBudget.mockResolvedValue(null);
   mock.toolPromptPadding = '';
   mock.realToolExposure = false;
+  mock.toolPromptOptions = [];
   mock.recipeCatalog = [];
   mock.root.persistentMind = { toolActivation: { leases: {}, lastAgedTurnId: null } };
   mock.runPrompt.mockResolvedValue({ text: JSON.stringify({
@@ -318,6 +321,20 @@ describe('persistent mind adapter', () => {
       .toEqual(Array.from({ length: 5 }, (_, index) => `turn-protected-cleanup:${index}`));
     expect(result.events.filter((event) => event.kind === 'mind.memory.created')).toHaveLength(5);
     expect(result.events.find((event) => event.kind === 'mind.reply').data.displayText).toContain('additional memories were not saved');
+  });
+
+  it('saves a repeated memory candidate once across provider rounds', async () => {
+    const first = { content: 'Lasting fact one' };
+    mock.runPrompt
+      .mockResolvedValueOnce({ text: JSON.stringify({ memoryCandidates: [first, first], toolCalls: [{ name: 'catalog.search', arguments: {} }] }) })
+      .mockResolvedValueOnce({ text: JSON.stringify({ message: 'Done.', memoryCandidates: [first, { content: 'Lasting fact two' }] }) });
+    mock.executeToolCall.mockResolvedValueOnce({ state: 'completed', result: { ok: true } });
+    await createPersistentMindTurnAdapter().run({
+      turnId: 'turn-dedupe', wake: { kind: 'message', message: { id: 'message-dedupe', text: 'Remember.' } },
+      ...profile, context: { text: '# Context' },
+    });
+    expect(mock.createPersistentMindMemoryFromCandidate.mock.calls.map(([candidate]) => candidate.candidateId))
+      .toEqual(['turn-dedupe:0', 'turn-dedupe:1']);
   });
 
   it('refuses cleanup when its preceding memory save fails', async () => {
@@ -1164,6 +1181,39 @@ describe('targeted activation through the public turn adapter', () => {
   });
 });
 
+
+describe('requested tool names across continuation rounds', () => {
+  it.each(['tools.activate', 'tools_activate'])('keeps a %s target requested until its own call completes', async (activateName) => {
+    const replies = [
+      { toolCalls: [{ requestId: 'activate', name: activateName, arguments: {} }] },
+      { toolCalls: [{ requestId: 'build', name: 'recipe.build', arguments: {} }] },
+      { message: 'Finished.', toolCalls: [] },
+    ];
+    mock.runPrompt.mockImplementation(async () => ({ text: JSON.stringify(replies.shift()) }));
+    mock.executeToolCall.mockImplementation(async ({ call }) => call.name === activateName
+      ? { state: 'completed', name: call.name, result: { activated: ['recipes'], requestedToolNames: ['recipe.build'], targetFamilies: { 'recipe.build': 'recipes' } } }
+      : { state: 'completed', name: call.name, result: { ok: true } });
+    await createPersistentMindTurnAdapter().run({ ...profile, turnId: 'requested-names', wake: { kind: 'self' }, context: { text: 'Example request.' } });
+    const continuations = mock.toolPromptOptions.filter((options) => options.requiredToolNames);
+    expect(continuations.map((options) => options.requestedToolNames)).toEqual([['recipe.build'], []]);
+    expect(continuations[0].activatedFamilies).toEqual(['recipes']);
+  });
+
+  it('forgets requested targets and families once their family is deactivated', async () => {
+    const replies = [
+      { toolCalls: [{ requestId: 'activate', name: 'tools.activate', arguments: {} }] },
+      { toolCalls: [{ requestId: 'deactivate', name: 'tools_deactivate', arguments: {} }] },
+      { message: 'Finished.', toolCalls: [] },
+    ];
+    mock.runPrompt.mockImplementation(async () => ({ text: JSON.stringify(replies.shift()) }));
+    mock.executeToolCall.mockImplementation(async ({ call }) => call.name === 'tools.activate'
+      ? { state: 'completed', name: call.name, result: { activated: ['recipes'], requestedToolNames: ['recipe.build'], targetFamilies: { 'recipe.build': 'recipes' } } }
+      : { state: 'completed', name: call.name, result: { deactivated: ['recipes'] } });
+    await createPersistentMindTurnAdapter().run({ ...profile, turnId: 'deactivated-names', wake: { kind: 'self' }, context: { text: 'Example request.' } });
+    const continuations = mock.toolPromptOptions.filter((options) => options.requiredToolNames);
+    expect(continuations.map((options) => [options.requestedToolNames, options.activatedFamilies])).toEqual([[['recipe.build'], ['recipes']], [[], []]]);
+  });
+});
 
 describe('family activation through the public turn adapter', () => {
   const namesIn = (prompt) => prompt.includes('Semantic tool access is OFF.') ? [] : JSON.parse(prompt.split('# PortOS semantic tools\n')[1].split('\n\n')[1]).map(({ name }) => name);
