@@ -37,6 +37,7 @@ From the prose around the cursor, propose a short Creative Director **treatment*
    - `intent`: the dramatic purpose / the beat or alternate-scene direction (1–2 sentences).
    - `prompt`: a concrete visual shot description an image/video model could render — subject, action, framing, setting. Write it as a vivid prompt, not a sentence of narration.
    - `durationSeconds`: how long the shot should run, an integer from 1 to 10.
+   - `continueFromPrior` (optional): set to `true` ONLY when the scene is the same unbroken shot as the one before it — same subject, setting, and camera position carrying straight on, so it should start from the prior shot's last frame. Omit it for a new angle, location, time jump, or cutaway; every scene starts from its own fresh plate unless you set it. The first scene never sets it.
 
 Stay faithful to the established setting, tone, and characters. Prefer concrete, visual moves over abstract description. If the selected passage is non-empty, treat it as the focus and build the sequence around it.
 
@@ -50,7 +51,7 @@ Return ONLY valid JSON matching this shape — no prose, no markdown fence, no c
   "synopsis": "string",
   "styleSpec": "string",
   "scenes": [
-    { "intent": "string", "prompt": "string", "durationSeconds": 5 }
+    { "intent": "string", "prompt": "string", "durationSeconds": 5, "continueFromPrior": false }
   ]
 }
 ```
