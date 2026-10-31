@@ -102,4 +102,15 @@ describe('receiver-reviewed pinned GGUF installation', () => {
     await expect(f.adapters.prepare(intent)).rejects.toMatchObject({ code: 'PEER_EXECUTION_DESTINATION_CHANGED' });
     expect(f.fetchImpl).not.toHaveBeenCalled();
   });
+
+  it('offers and reviews shipped catalog keys that carry version dots', async () => {
+    let rows = [];
+    const service = _createPeerCatalogInstaller({ catalog: [{ key: 'example2.5-7b', name: 'Example 2.5', lmstudio: 'example/model-2.5-GGUF' }],
+      readReviews: async () => rows, writeReviews: async next => { rows = next; },
+      inspectRuntime: async () => ({ modelsRoot: tmpdir(), runtime: 'fixture-runtime' }) });
+    expect((await service.list()).candidates).toEqual([{ catalogKey: 'example2.5-7b', backend: 'lmstudio', name: 'Example 2.5' }]);
+    await service.save({ ...reviewInput(), catalogKey: 'example2.5-7b' }, 'operator-session');
+    expect(rows).toMatchObject([{ catalogKey: 'example2.5-7b', sourceRepo: 'example/model-2.5-GGUF' }]);
+    expect(peerCatalogReviewSchema.safeParse({ ...reviewInput(), catalogKey: '.hidden' }).success).toBe(false);
+  });
 });

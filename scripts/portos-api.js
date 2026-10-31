@@ -209,7 +209,12 @@ export const main = async (argv = process.argv.slice(2), env = process.env) => {
     if (!/^[a-f0-9]{64}$/.test(env.PORTOS_ADMISSION_SESSION)) throw new Error('PORTOS_ADMISSION_SESSION must be 32 random bytes encoded as lowercase hex');
     headers['X-PortOS-Admission-Session'] = env.PORTOS_ADMISSION_SESSION;
   }
-  if (body !== null) headers['Content-Type'] = 'application/json';
+  // Node's http client never chunks a DELETE body, so without a length the server
+  // reads it as empty and the route rejects the request.
+  if (body !== null) {
+    headers['Content-Type'] = 'application/json';
+    headers['Content-Length'] = Buffer.byteLength(body);
+  }
   const deadline = Date.now() + (parsed.timeoutMs ?? DEFAULT_TIMEOUT_MS);
   let { status, text, bytes } = await requestApi(`${url}${parsed.path}`, { method: parsed.method, headers, body, timeoutMs: parsed.timeoutMs ?? DEFAULT_TIMEOUT_MS })
     .catch((error) => {

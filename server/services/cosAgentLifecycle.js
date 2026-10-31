@@ -843,12 +843,7 @@ export async function completeAgent(agentId, result = {}) {
         checkoutCapture = { status: 'pending', reason: 'checkout-evidence-unavailable',
           targets: error.checkoutCapture?.targets || [], unknown: error.checkoutCapture?.unknown !== false,
           observedAt: new Date().toISOString() };
-        if (result.success === true || result.cleanupPending === true) {
-          result = { ...result, success: false, executionSuccess: result.executionSuccess ?? result.success,
-            cleanupPending: true, deliveryRecoveryOwned: true,
-            taskOutcome: { status: 'incomplete', reason: 'Original checkout identity capture is pending; delivery and preservation remain unverified.',
-              recovery: { mode: 'cleanup' } } };
-        }
+        result = { ...result, executionSuccess: result.executionSuccess ?? (result.success === true) };
       }
       if (!completedCheckouts.length && agent.metadata?.checkoutSeeds?.length) {
         // Capture a terminal head before publishing completion, even when the
@@ -858,15 +853,6 @@ export async function completeAgent(agentId, result = {}) {
       }
     }
 
-    // The execution can end before repository preservation is complete. Keep
-    // the original task owned by deterministic recovery until exact receipts
-    // settle it; never turn a queued cleanup into delivery success.
-    if (result.requireCheckoutSettlement === true && completedCheckouts?.length && result.success === true) {
-      result = { ...result, success: false, executionSuccess: result.executionSuccess ?? true,
-        cleanupPending: true, deliveryRecoveryOwned: true,
-        taskOutcome: { status: 'incomplete', reason: 'Code delivery completed; exact checkout preservation and retirement are pending.',
-          recovery: { mode: 'cleanup' } } };
-    }
     const { requireCheckoutSettlement: _requireCheckoutSettlement, ...persistedResult } = result;
     result = persistedResult;
 

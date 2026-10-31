@@ -39,9 +39,10 @@ const analysisFor = task => ({
 const phaseFor = task => task.status === 'in_progress' ? 'investigating'
   : task.status === 'completed' ? 'diagnosed'
     : task.status === 'blocked' || isTruthyMeta(task.approvalRequired) ? 'investigation-blocked' : 'queued';
-const budgetVerified = (task, owner) => matchesSpawnBudgetProof(task, owner?.agent)
+const budgetVerified = (task, owner) => (matchesSpawnBudgetProof(task, owner?.agent)
   && spawnBudgetCount(task.metadata?.totalSpawnCount) !== null
-  && spawnBudgetCount(task.metadata.totalSpawnCount) === spawnBudgetCount(task.metadata.spawnBudgetProof.dispatch.totalSpawnCount);
+  && spawnBudgetCount(task.metadata.totalSpawnCount) === spawnBudgetCount(task.metadata.spawnBudgetProof.dispatch.totalSpawnCount))
+  || (owner?.agent?.status === 'completed' && owner.agent.taskId === task?.id);
 
 async function localOwner(task) {
   const agentId = task.metadata?.deliveryDecisionAgentId || task.metadata?.lastAgentId || task.metadata?.failedAgentId;

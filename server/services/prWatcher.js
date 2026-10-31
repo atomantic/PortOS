@@ -443,6 +443,9 @@ async function recoverHeldCleanup(app, entry, binding) {
       ? { ...entry, cleanup: { ...entry.cleanup, status: 'pending', retryAt: 0, recoveryCompleted: true } } : entry;
   }
   if (await currentHandoffOwnerPolicy(binding, { recovery: true })) return entry;
+  const { loadState } = await import('./cosState.js');
+  const stateConfig = (await loadState().catch(() => null))?.config;
+  if (stateConfig && stateConfig.autoApproveInvestigations !== true) return entry;
   const { addTask } = await import('./cosTaskStore.js');
   const task = await addTask({
     description: `[Recovery] Prepare retained checkout for coordinator retirement: ${entry.prBranch} in ${app.name || app.id}`,
@@ -458,6 +461,13 @@ Repair only the blocker for this checkout and leave removal to the retirement se
   return task?.id ? { ...entry, cleanup: { ...entry.cleanup, recoveryTaskId: task.id } } : entry;
 }
 
+const DIRECT_MERGED_CLEANUP_REASONS = new Set([
+  'receipt-pr-head-changed',
+  'receipt-checkout-locked',
+  'checkout-head-changed',
+  'checkout-lock-changed',
+]);
+
 async function finishMergedReceipt(app, entry, binding) {
   // Legacy queue records did not bind a checkout. Their existing branch
   // reconciliation remains the cleanup owner; never infer a deletion target.
@@ -472,6 +482,18 @@ async function finishMergedReceipt(app, entry, binding) {
   if (result.ok && result.branchDeleted) {
     console.log(`🧹 Pending PR #${entry.prNumber}: merged checkout removed`);
     return null;
+  }
+  if (result.reason === 'checkout-not-found') {
+    console.log(`🧹 Pending PR #${entry.prNumber}: checkout already absent`);
+    return null;
+  }
+  if (DIRECT_MERGED_CLEANUP_REASONS.has(result.reason)) {
+    const { removeWorktree } = await import('./worktreeManager.js');
+    const removed = await removeWorktree(app.repoPath, binding.worktreePath, { deleteBranch: true, force: true }).catch(() => null);
+    if (removed?.removed) {
+      console.log(`🧹 Pending PR #${entry.prNumber}: merged checkout directly removed (${result.reason})`);
+      return null;
+    }
   }
   const attempts = (entry.cleanup?.attempts || 0) + 1;
   const reason = result.reason || result.branchRetainedReason || 'branch-retained';

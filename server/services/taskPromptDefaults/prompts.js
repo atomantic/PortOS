@@ -417,8 +417,10 @@ traffic only; live UI load and idle transfer stay UNVERIFIED.
 
 Do not claim UI performance passed from source inspection or a small/empty
 fixture alone. If browser access, an authorized session, or usable large-fixture
-evidence is unavailable, explicitly mark UI load/idle transfer UNVERIFIED and
-file a deduplicated coverage-gap issue with the missing check and next step.
+evidence is unavailable during a headless audit, explicitly mark UI load/idle
+transfer \`UNVERIFIED\` in your assessment summary and inspect static bundle and
+polling code, without filing a tracker issue for missing audit-environment
+browser access.
 Never copy live personal records, hostnames, tokens, or raw private HAR bodies
 into reports; report redacted endpoint patterns and aggregate measurements.
 
@@ -1154,7 +1156,14 @@ keyboard-inaccessible icon") — and file it as the UX finding, not as the a11y 
   'data-safety': `[Improvement: {appName}] Data and upgrade-safety audit
 
 Audit {appName} for changes and operations that could corrupt, lose, or strand
-data across upgrades, deployments, environments, and machines.
+durable user-authored creative, personal, and configuration records (PostgreSQL
+primary tables and \`file-primary\` user data) across upgrades, deployments,
+environments, and machines.
+
+**Scope boundary:** Ephemeral runtime artifacts, git worktrees/branches,
+build/test caches, and finished CoS agent scratch state are disposable (git and
+GitHub/GitLab already preserve committed/pushed code) and must NOT be treated as
+user data requiring dry-runs, undo journals, or preservation archives.
 
 Repository: {repoPath}
 
@@ -1179,12 +1188,13 @@ Hunt specifically for:
 - **Backups that would not restore** — a backup that omits a store the
   application needs, has never been restored by any script or test, or restores
   into a shape the current code rejects.
-- **Bulk and backfill operations without a safety net** — a mass update, delete,
-  reprocessing, or backfill job with no dry run, no bounded scope, no batching,
-  and no way to resume or undo when it stops halfway.
+- **Non-idempotent bulk and backfill operations** — a mass update, delete,
+  reprocessing, or backfill job on primary user records with no bounded scope
+  or idempotency (\`ON CONFLICT DO NOTHING\` / deterministic keys) so an
+  interrupted batch cannot simply be re-run cleanly.
 - **Retention and lifecycle rules that reach live data** — an expiry,
-  compaction, or cleanup rule whose predicate or path can match data that is
-  still in use.
+  compaction, or cleanup rule whose predicate or path can match primary user
+  data that is still in use.
 - **Long-lived data formats** — datasets, archives, or exported files written in
   a shape the next version cannot read, with no version marker or reader for
   the old shape.
@@ -2203,18 +2213,26 @@ or a coverage/required-check failure.`,
 
   'data-integrity': `[Improvement: {appName}] Data integrity and pipeline audit
 
-Audit whether the data {appName} ingests, transforms, stores, and serves stays
-correct — no duplicates, no silent loss, no quietly wrong results — under the
-retries, redeliveries, crashes, and concurrency it will actually see.
+Audit whether the durable user data {appName} ingests, transforms, stores, and
+serves stays correct — no duplicates, no silent loss, no quietly wrong results
+— under the retries, redeliveries, crashes, and concurrency it will actually
+see.
+
+**Proportionality boundary (single-user local install + explicit peer sync):**
+Do NOT recommend distributed commit protocols, multi-writer CAS/optimistic-locking
+ceremonies, hardlink inode anchors, or SHA-256 transfer manifests for local
+internal state where a PostgreSQL transaction or \`writeJsonAtomic\` suffices.
+Ephemeral runtime state, git worktrees, and caches are out of scope.
 
 Repository: {repoPath}
 
 {modeInstructions}
 
-Inventory every write path first: request handlers that persist, ingestion and
-import entry points, queue and stream consumers, batch, backfill, and
-compaction jobs, and the formats data is stored in. Then trace what happens
-when each one runs twice, stops halfway, or runs concurrently with itself.
+Inventory every durable write path first: request handlers that persist user
+records, ingestion and import entry points, queue and stream consumers, batch,
+backfill, and compaction jobs, and the formats durable data is stored in. Then
+trace what happens when each one runs twice, stops halfway, or runs concurrently
+with itself.
 
 ## Hunt for
 
@@ -2222,17 +2240,17 @@ when each one runs twice, stops halfway, or runs concurrently with itself.
   at-least-once queue, a retried request, or a re-run job that inserts again
   instead of upserting by a natural or idempotency key, producing duplicates.
 - **Partial writes visible to readers** — a multi-object or multi-table write
-  with no transaction, commit protocol, manifest, or atomic rename, so a crash
-  or a concurrent reader sees half a batch as if it were whole.
-- **Lost updates** — read-modify-write on shared records with no transaction,
-  row version, conditional write, or serialization, where two writers race.
+  with no database transaction or atomic file rename (\`writeJsonAtomic\`), so a
+  crash or a concurrent reader sees half a write as if it were whole.
+- **Lost updates** — read-modify-write on shared records with no transaction or
+  in-process write serialization where two local paths race.
 - **Validation missing at the boundary** — records accepted from an upstream
   source with no schema check, so one malformed batch poisons everything
   downstream of it.
-- **Schema evolution that breaks old data** — a stored format (table, column
-  family, Parquet/Avro/JSON document, event payload) changed in a way readers
-  of already-written data cannot handle: a renamed or retyped field, a new
-  required field with no default, a partition layout change with no rewrite.
+- **Schema evolution that breaks old data** — a stored format (PostgreSQL table,
+  JSON document, or federated sync payload) changed in a way readers of
+  already-written data cannot handle: a renamed or retyped field, or a new
+  required field with no default.
 - **Semantic corruption** — time zones and naive timestamps mixed, floating
   point for money, NULL collapsed into empty or zero, truncation or precision
   loss on conversion, a join or aggregation that double-counts.
@@ -2241,9 +2259,10 @@ when each one runs twice, stops halfway, or runs concurrently with itself.
   timestamps, a sync cursor that loses records written during a read.
 - **Deletion and retention that miss or overreach** — a retention job whose
   range or predicate can match live data, or a delete that leaves derived
-  copies (indexes, caches, aggregates, replicas) inconsistent with the source.
-- **Missing integrity checks on transfer** — a copy, upload, or replication with
-  no checksum or row-count reconciliation, so truncation goes unnoticed.
+  copies (indexes, caches, aggregates) inconsistent with the source.
+- **Missing integrity checks on cross-machine transfer** — a cross-machine peer
+  federation sync or backup/restore transfer with no checksum or row-count
+  reconciliation, so truncation goes unnoticed.
 
 ## Not yours
 
@@ -2261,8 +2280,8 @@ record), and exactly what the stored data looks like afterward. Cite
   'reliability': `[Improvement: {appName}] Reliability and operability audit
 
 Audit how {appName} behaves as a running service: when it starts, when it is
-stopped or restarted, when load exceeds capacity, when it runs as more than one
-instance, and when a deploy puts old and new versions side by side.
+stopped or restarted, when load exceeds capacity, and when a deploy or upgrade
+restarts the server.
 
 Repository: {repoPath}
 
@@ -2272,31 +2291,34 @@ Inventory the process entry points, signal handling, health endpoints, queues
 and worker pools, scheduled and background jobs, and the deployment shape the
 repository describes (single process, replicas, serverless, a process manager).
 Judge against that shape — a single-user tool on one machine does not need
-leader election, and the project's documented deployment model is binding.
+leader election or multi-instance leases, and the project's documented
+deployment model is binding.
 
 ## Hunt for
 
-- **Work dropped on shutdown** — no SIGTERM handling, or a handler that exits
-  without draining in-flight requests, finishing or checkpointing jobs, and
-  flushing buffered writes, so every deploy or restart loses work.
+- **Work dropped on shutdown that corrupts primary data** — a shutdown path that
+  leaves durable user records corrupted or double-charges a paid external API.
+  Restarting an interrupted background job from the beginning (or marking an
+  interrupted agent/render run retryable on boot) is the preferred, simple
+  design when the work is idempotent or regenerable; do not flag missing
+  shutdown job checkpointing or multi-instance leases on single-install
+  background jobs unless an interrupted run would corrupt primary user data or
+  double-charge a paid external API.
 - **Health checks that lie or amplify** — a readiness check that reports ready
   before dependencies are usable, or a liveness check that fails when a
   dependency is down, so the orchestrator restart-loops a healthy process.
 - **Unbounded intake** — an in-memory queue, buffer, fan-out, or worker pool
   with no bound or backpressure, so a burst turns into memory exhaustion instead
   of rejected or delayed work.
-- **Jobs that run twice or never resume** — a scheduled job with no lock or
-  lease when more than one instance can run it, or a long job with no
-  checkpoint, so a crash restarts it from zero or leaves it half-done.
 - **Startup fragility** — a process that crashes permanently when a dependency
   is briefly unavailable at boot instead of retrying, or that starts with
   invalid configuration and fails on the first request instead of at startup.
 - **Mixed-version hazards** — a message, job payload, cache entry, or stored
-  record whose shape changed such that the old and new versions running during a
-  rolling deploy (or a rollback) misread each other.
+  record whose shape changed such that the old and new versions across an
+  upgrade or peer sync misread each other.
 - **Single points of failure the design did not choose** — process-local state
   (sessions, locks, rate counters, caches treated as truth) in a service that
-  is deployed or scaled as multiple instances.
+  is explicitly deployed or scaled as multiple instances.
 - **Self-inflicted overload** — synchronized timers or cron jobs that all fire
   at once, a thundering herd after a restart, a cache stampede on expiry.
 
@@ -2598,10 +2620,6 @@ can be repeated.
 - **A migration that fails or no-ops on a real older shape** — a crash, a
   derive skipped because its output was seeded first, a result that differs
   from what the migration's own test asserts.
-- **A ledger or lock that misbehaves under a second runner** — start the
-  runner twice against one root and compare the applied list.
-- **A write that leaves a torn file** — stop the runner mid-migration and
-  check what the next run finds.
 - **A restore that does not round-trip** — a file the manifest records but
   the restore skips, a hash mismatch, a restored record the booted server
   rejects.
@@ -2629,26 +2647,33 @@ the shapes it covered.`,
 
   'workflow-recovery': `[Improvement: {appName}] Workflow completion and recovery audit
 
-Find the multi-step workflows in {appName} that can stop halfway and leave the
-user with no visible way to finish, resume, or cancel them.
+Find the long-running, multi-minute or paid generation workflows in {appName}
+(such as full media renders, database cutovers, or multi-stage pipelines) that
+can stop halfway and leave the user's record with no visible way to finish,
+resume, or cancel them.
+
+**Scope boundary:** Exclude short request-bound operations, git worktree
+cleanup, and in-memory re-entrancy guards from needing 3-exit persisted
+recovery ledgers or reattach UIs; a simple timeout or clean reset on server
+restart is sufficient for those.
 
 Repository: {repoPath}
 
 {modeInstructions}
 
 A page walk exercises one click on a fresh page. This audit exercises the
-sequence: a request that opens a revision, then a second step that finalizes
-it; a job started in one tab and watched from another; a run that waits for an
-event. The defect lives in the gap between steps, so it is invisible until a
-step fails, a tab reloads, or the server restarts.
+long-running sequence: a multi-stage generation or cutover started in one tab
+and watched from another, or a paid render job that waits for an external
+completion event. The defect lives in the gap between steps, so it is invisible
+until a step fails, a tab reloads, or the server restarts.
 
 ## Work from server state, not from views
 
-1. **Inventory every in-progress state the server can hold:** persisted
-   statuses (open, pending, running, rendering, generating, awaiting review),
-   in-memory locks and in-flight maps, leases and claims, and every response
-   that refuses work because something is "already in progress".
-2. **For each state, check three exits:**
+1. **Inventory long-running in-progress states the server persists for user workflows:**
+   persisted statuses on user records (rendering, generating, awaiting review,
+   cutover in progress) and long-running job claims that refuse new user runs
+   because a multi-minute workflow is "already in progress".
+2. **For each long-running user workflow state, check three exits:**
    - The page that owns the record detects the state on load and shows it in
      a visible, expanded place, not only inside a collapsed panel or another
      tab.
@@ -2676,9 +2701,11 @@ code that enters it and every path that leaves it.
 
 ## Not yours
 
-Per-call timeouts and retries belong to the failure-path work; process restart
-and shutdown draining to the reliability work; duplicate writes under
-redelivery to the data-integrity work; a feature that was never finished to the
+Short request-bound operations, git worktree cleanup, and in-memory re-entrancy
+guards do not need persisted recovery ledgers or reattach UIs. Per-call timeouts
+and retries belong to the failure-path work; process restart and shutdown
+draining to the reliability work; duplicate writes under redelivery to the
+data-integrity work; a feature that was never finished to the
 incomplete-feature work. Name the overlap if it is the cause.
 
 ## The bar
@@ -3114,8 +3141,6 @@ This phase runs only after the PR was merged via Phase 6. If you exited via Phas
 
 ${MANAGED_WORKTREE_CLEANUP_CONTRACT}
 
-From the source repository, follow only the API review/retirement protocol above. Preserve the checkout and refs on any refusal or missing receipt; no shell cleanup fallback.
-
 **Do NOT \`git pull\` from inside this phase** (no \`--rebase\`, no \`--autostash\`, no plain \`pull\`). The agent's work is already integrated on GitHub via \`gh pr merge\`; pulling locally provides no functional benefit and risks rebasing the user's in-progress branch / shuffling their uncommitted changes through stash if the source repo HEAD happens to be on a tracking feature branch when the agent runs. Leave the user's working tree alone.
 
 _(Phase 3b is defined above, right after Phase 3 — see the "alternative exit from Phase 3" section.)_`,
@@ -3277,8 +3302,6 @@ ${buildManagedGithubMergeScript()}
 This phase runs only after the PR was merged via Phase 6. If you exited via Phase 3b instead, you retained the checkout for clarification — do NOT also run Phase 7.
 
 ${MANAGED_WORKTREE_CLEANUP_CONTRACT}
-
-From the source repository, follow only the API review/retirement protocol above. Preserve the checkout and refs on any refusal or missing receipt; no shell cleanup fallback.
 
 **Do NOT \`git pull\` from inside this phase** (no \`--rebase\`, no \`--autostash\`, no plain \`pull\`). The agent's work is already integrated on GitHub via \`gh pr merge\`; pulling locally provides no functional benefit and risks rebasing the user's in-progress branch / shuffling their uncommitted changes through stash if the source repo HEAD happens to be on a tracking feature branch when the agent runs. Leave the user's working tree alone.
 
@@ -3518,8 +3541,6 @@ This phase runs only after the PR merged via Phase 6.
 
 ${MANAGED_WORKTREE_CLEANUP_CONTRACT}
 
-From the source repository, follow only the API review/retirement protocol above. Preserve the checkout and refs on any refusal or missing receipt; no shell cleanup fallback.
-
 **Reconcile the issue — did this PR FULLY satisfy its scope?**
 - **Yes (full)** — the \`Closes #\${NUM}\` trailer already auto-closed it; if it's somehow still open, close it (\`gh issue close "\${NUM}"\`) and remove the label (\`gh issue edit "\${NUM}" --remove-label in-progress\`).
 - **No — the remainder is a clean, separable chunk** — close THIS issue with a summarizing comment (shipped ✓ / moved to #NEW), remove \`in-progress\`, and file ONE tightly-scoped follow-up for the remainder: \`gh issue create --title "…" --label plan ${formatOptionalIssueLabelFlags('--label model:<tier> --label effort:<level>')} --body "…\\n\\nRefs #\${NUM}"\` (carry over any \`area:*\` labels the issue had; apply the required dispatch axes and choose contributor labels under the shared contract — a leftover mechanical sweep is not a good first issue).
@@ -3661,8 +3682,6 @@ const CLAIM_GITLAB_CLEANUP = `## Phase 7 — Clean up (post-merge ONLY)
 This phase runs only after the MR merged via Phase 6.
 
 ${MANAGED_WORKTREE_CLEANUP_CONTRACT}
-
-If the retirement service does not support this forge, retain the exact checkout and refs with that explicit blocker; no CLI deletion fallback.
 
 **Reconcile the issue — did this MR FULLY satisfy its scope?**
 - **Yes (full)** — the \`Closes #\${NUM}\` line already auto-closed it on merge to the default branch; if it's somehow still open, close it (\`glab issue close "\${NUM}"\`) and remove the label (\`glab issue update "\${NUM}" --unlabel in-progress\`).
@@ -4502,17 +4521,17 @@ This task runs on a schedule and generates status reports summarizing:
 - Recently completed tickets (last 7 days)
 - Priority distribution`,
 
-  'branch-cleanup': `[Improvement: {appName}] Branch Cleanup — Preserve and Retire Completed Work
+  'branch-cleanup': `[Improvement: {appName}] Branch Cleanup — Clean Up Completed Work
 
 Repository: {repoPath}
 
-Delegate cleanup to the supported branch-reconcile workflow: resolve this managed app's exact appId and POST /api/cos/schedule/trigger with {taskType:"branch-reconcile",appId} using authenticated PortOS API transport. Read back its outcome; a trigger acknowledgment or merged badge is not completed cleanup. Report retained branches, exact hold reasons and any pending review obligation. Preserve active agents, manual handoffs, locks, dirty/untracked/ignored content and unmerged work.
+Delegate cleanup to the supported branch-reconcile workflow: resolve this managed app's exact appId and POST /api/cos/schedule/trigger with {taskType:"branch-reconcile",appId} using authenticated PortOS API transport. Read back its outcome; a trigger acknowledgment or merged badge is not completed cleanup. Once a branch's PR is merged at its tip and no live agent owns the worktree, its worktree (including ignored, untracked, and uncommitted files) and branch ref are disposable. Preserve active agents, manual handoffs, locks, and unmerged work.
 
 ${MANAGED_WORKTREE_CLEANUP_CONTRACT}`,
 
   'branch-reconcile': `[Improvement: {appName}] Branch & PR Reconciliation
 
-You are the coordinator for finishing {appName}'s unfinished local git work. The scheduler has run deterministic cleanup and handed you only local branches that need judgment. REVIEW_RETIREMENT entries are completed merged work with unresolved historical review obligations: read their exact preview and original/current code, then use their digest-bound live retirement API. Their work is not complete until the service returns ok:true and branchDeleted:true and no archive directory was created. Preserve active owners, intentional human handoffs, locks, and every refusal. Never remove a checkout with shell commands or bypass the retirement service.
+You are the coordinator for finishing {appName}'s unfinished local git work. The scheduler has run deterministic cleanup and handed you only local branches that need judgment. Merged or superseded checkouts with no active owner are removed cleanly. Preserve active owners, intentional human handoffs, and locks.
 
 Repository: {repoPath}
 
@@ -4520,7 +4539,7 @@ Each branch listed below is a LOCAL branch in THIS clone of {appName}. On a mach
 
 {inFlightBranches}
 
-Spawn ONE sub-agent per branch (they are independent — run them in parallel) to carry out that branch's "Do:" instruction, each working in the branch's existing worktree when it has one, except REVIEW_RETIREMENT reviewers, who read from the source repository and follow their API-only instructions. **Dispatch each sub-agent at ITS OWN branch's recommended model and effort** — a branch's block above names one when its issue carries \`model:\`/\`effort:\` labels; a batch is one partition decision, not one routing decision, and two branches in the same run routinely deserve different capability. Name the model/effort you used for each branch in your final summary.
+Spawn ONE sub-agent per branch (they are independent — run them in parallel) to carry out that branch's "Do:" instruction, each working in the branch's existing worktree when it has one. **Dispatch each sub-agent at ITS OWN branch's recommended model and effort** — a branch's block above names one when its issue carries \`model:\`/\`effort:\` labels; a batch is one partition decision, not one routing decision, and two branches in the same run routinely deserve different capability. Name the model/effort you used for each branch in your final summary.
 
 ${DISPATCH_HINT_FANOUT_GUIDANCE}
 
@@ -4533,7 +4552,7 @@ ${DISPATCH_HINT_FANOUT_GUIDANCE}
 - **A branch whose "Do:" line ends in a merge is not finished until it IS merged.** Its sub-agent stays alive through CI — waiting out the check run, fixing what goes red, then merging — and reports back only when the PR is merged or a specific check/review is blocking it. "PR opened, left open for review" is a completed STEP, not a completed branch: the PR just sits green until the next run re-drives it. Do not end your own run while a sub-agent is still waiting on CI.
 - Merging is gated by the "Do:" line itself — required CI green, MERGEABLE, and the review that branch's flow ran (\`/do:pr\`'s reviewer loop for a PR this task opens; the named review for one already in review). That gate, not a blanket ban, is what keeps unreviewed work out of the default branch. Merge only via \`gh pr merge\`, never a local \`git merge\` into the default branch.
 - If a sub-agent reports a branch is incomplete, superseded, or blocked, leave it as-is and note it in your summary.
-- Summarize what each branch ended up doing (merged / PR opened but blocked on <what> / conflicts resolved / superseded / left incomplete). For REVIEW_RETIREMENT, record the exact reviewed digest and source-backed supersession decision before calling the live retirement API; never substitute a generic SUPERSEDED verdict. For other SUPERSEDED branches, record the verdict; the deterministic pass backs the branch up and retires it, so do not delete it yourself. Name the file(s) and what on the default branch replaced it in your summary. When a PR is left open, name the check or review that blocked it.`,
+- Summarize what each branch ended up doing (merged / PR opened but blocked on <what> / conflicts resolved / superseded / left incomplete). For SUPERSEDED branches, record the verdict; the deterministic pass removes the superseded branch and checkout cleanly, so do not delete it yourself. Name the file(s) and what on the default branch replaced it in your summary. When a PR is left open, name the check or review that blocked it.`,
 
   'issue-reconcile': `[Improvement: {appName}] Trusted Issue Reconciliation
 

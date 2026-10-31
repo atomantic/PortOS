@@ -2350,25 +2350,15 @@ describe('desiredEndState', () => {
 
   // branch-reconcile runs against ANY managed app; a repo that disallows merge
   // commits would strand the branch on a hardcoded `--merge`.
-  it('pins every method fallback and preserves the worktree through archive checks', () => {
+  it('pins every method fallback and uses the simplified cleanup contract', () => {
     const instruction = desiredEndState('IN_REVIEW', {});
     expect(instruction).toContain('--squash --match-head-commit <verified-head>');
     expect(instruction).toContain('--rebase --match-head-commit <verified-head>');
     expect(instruction).not.toContain('--delete-branch');
-    // Cleanup must cross the fresh preview/review/retirement service boundary;
-    // descriptive preservation prose cannot authorize shell teardown.
-    const cleanupSteps = [
-      'hosting provider reports the exact PR as MERGED',
-      '/checkouts/review',
-      'Inspect the returned local identity',
-      '/checkouts/retire',
-      'Require ok:true and branchDeleted:true',
-    ].map(step => instruction.indexOf(step));
-    expect(cleanupSteps.every(position => position >= 0)).toBe(true);
-    expect(cleanupSteps).toEqual([...cleanupSteps].sort((a, b) => a - b));
-    expect(instruction).toContain('never a shell fallback');
-    expect(instruction).not.toContain('git worktree remove');
-    expect(instruction).not.toContain('git branch -d');
+    expect(instruction).toContain('hosting provider reports the exact PR as MERGED');
+    expect(instruction).toContain('PortOS cleans up the managed worktree and branch automatically after completion');
+    expect(instruction).not.toContain('/checkouts/review');
+    expect(instruction).not.toContain('/checkouts/retire');
   });
 
   it('names the real PR number when the branch already has one', () => {

@@ -23,7 +23,7 @@ import { sceneFrameFit } from './SceneFrameFit.jsx';
 import TransitionGlitch from './TransitionGlitch.jsx';
 import ImageEffectStill from './ImageEffectStill.jsx';
 import { clipOffsetSec, clipReversed, clipSpeedRate, isLayeredComposition, sceneVisualLayer, stillFrameTransform } from '../../lib/musicVideoLayers.js';
-import { sceneImageEffect } from '../../lib/musicVideoImageEffects.js';
+import { sceneImageEffect, scenePhotoSequence } from '../../lib/musicVideoImageEffects.js';
 import { plannedTransitions, sceneCutEffects } from '../../lib/musicVideoCutEffects.js';
 
 const timedShots = (scenes) => scenes.filter((scene) => Number.isFinite(scene?.startSec)).sort((a, b) => a.startSec - b.startSec);
@@ -398,8 +398,9 @@ function useSongFrames(audioRef, apply) {
   }, [audioRef, apply]);
 }
 
-function StillShot({ scene, audioRef, time, effect = null, fps, startSec = scene.startSec, endSec = scene.endSec }) {
+function StillShot({ scene, audioRef, time, effect = null, fps, beats = [], startSec = scene.startSec, endSec = scene.endSec }) {
   const ref = useRef(null);
+  const sequence = useMemo(() => scenePhotoSequence(scene, { fps, beats }), [scene, fps, beats]);
   const getTime = useCallback(() => audioRef.current?.currentTime || 0, [audioRef]);
   const apply = useCallback((t) => {
     if (ref.current) ref.current.style.transform = stillFrameTransform(scene, t, { fps, startSec, endSec });
@@ -409,7 +410,7 @@ function StillShot({ scene, audioRef, time, effect = null, fps, startSec = scene
   return (
     <div className="h-full w-full overflow-hidden">
       <div ref={ref} data-testid="animatic-still" className="h-full w-full">
-        {effect ? <ImageEffectStill src={`/data/images/${scene.referenceImageId}`} effect={effect}
+        {effect || sequence ? <ImageEffectStill src={`/data/images/${scene.referenceImageId}`} effect={effect} sequence={sequence}
           endSrc={scene.endImageId ? `/data/images/${scene.endImageId}` : null}
           startSec={startSec} time={time} playing={!!audioRef.current && !audioRef.current.paused} getTime={getTime} fps={fps} />
           : <img src={`/data/images/${scene.referenceImageId}`} alt="" className="h-full w-full object-cover" />}
@@ -432,7 +433,7 @@ const incomingOpacity = (effect, t, fps) => {
  * before its in-point, and shows on the toggle's frames or fades in over the
  * dissolve's, as the final render overlays it. A shot without a clip shows its still.
  */
-function ToggleClip({ scene, toggle, audioRef, time, layered, fps }) {
+function ToggleClip({ scene, toggle, audioRef, time, layered, fps, beats = [] }) {
   const mediaRef = useRef(null);
   const still = sceneVisualLayer(scene, { layered }) === 'still';
   const file = useVideoFileSrc(!still ? scene.videoHistoryId || null : null);
@@ -464,9 +465,9 @@ function ToggleClip({ scene, toggle, audioRef, time, layered, fps }) {
     return <PreviewVideo key={src} videoRef={mediaRef} audioRef={audioRef} active={time >= toggle.windowStartSec && time < toggle.cutSec} src={src} muted playsInline preload="auto" onLoadedMetadata={() => apply(audioRef.current?.currentTime || 0)}
       data-testid="beat-toggle-clip" style={{ opacity: 0 }} className={className} />;
   }
-  if (!scene.referenceImageId) return null;
+  if (!scene.referenceImageId && !scenePhotoSequence(scene)?.imageIds.length) return null;
   if (layered) return <div ref={mediaRef} data-testid="beat-toggle-clip" style={{ opacity: 0 }} className={className}>
-    <StillShot scene={scene} audioRef={audioRef} time={time} fps={fps} effect={sceneImageEffect(scene, { layered })}
+    <StillShot scene={scene} audioRef={audioRef} time={time} fps={fps} beats={beats} effect={sceneImageEffect(scene, { layered })}
       startSec={toggle.windowStartSec} endSec={toggle.cutSec} />
   </div>;
   return <img ref={mediaRef} src={`/data/images/${scene.referenceImageId}`} alt="" data-testid="beat-toggle-clip" style={{ opacity: 0 }} className={className} />;
@@ -597,7 +598,7 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
   const lead = scenes.slice().sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
     .find((scene) => scene.videoHistoryId && sceneVisualLayer(scene, { layered }) === 'footage');
   const leadFile = useVideoFileSrc(layered ? lead?.videoHistoryId : null, { geometry: true });
-  const stillFps = leadFile.fps || ANIMATIC_FPS;
+  const stillFps = project.composition?.mode === 'document' ? ANIMATIC_FPS : leadFile.fps || ANIMATIC_FPS;
   const lyricsAvailable = project.lyricOverlayEnabled !== false && hasTimedLyrics(project);
   const { overlay, failed, capture: captureLyrics } = useLyricOverlay({ project, enabled: lyricsAvailable && lyricsOn, audioRef, time });
   // The ending (cutting room floor, then credits): it plays when the song ends, and Ending plays it straight away; playing or seeking the song leaves it.
@@ -719,8 +720,8 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
         {/* The project's film look, as the final render applies it over the whole picture, lyrics included. */}
         <FilmLookFrame look={lookOn ? project.filmLook : null} frame={Math.round((outro.active ? songEndSec + outro.t : cold.active ? cold.time - cold.seconds : time) * ANIMATIC_FPS)}
           playing={playing || cold.active || (outro.active && !outro.paused && outro.t < outro.seconds)} className="h-full w-full">
-        {shot?.referenceImageId && stillShot ? (
-          <StillShot key={shot.sceneId} scene={shot} audioRef={clock.ref} time={clock.time} fps={stillFps} effect={shotEffect} />
+        {(shot?.referenceImageId || scenePhotoSequence(shot)?.imageIds.length) && stillShot ? (
+          <StillShot key={shot.sceneId} scene={shot} audioRef={clock.ref} time={clock.time} fps={stillFps} beats={beats} effect={shotEffect} />
         ) : shot?.referenceImageId ? (
           // Behind a VHS-edged clip the still stands in, blurred and faded, for the render's blur of the clip.
           <img src={`/data/images/${shot.referenceImageId}`} alt=""
@@ -737,7 +738,7 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
         ))}
         {nearToggles.map((toggle) => {
           const incoming = scenes.find((scene) => scene.sceneId === toggle.toSceneId);
-          return incoming ? <ToggleClip key={`toggle:${toggle.toSceneId}:${incoming.videoHistoryId || ''}`} scene={incoming} toggle={toggle} audioRef={audioRef} time={time} layered={layered} fps={stillFps} /> : null;
+          return incoming ? <ToggleClip key={`toggle:${toggle.toSceneId}:${incoming.videoHistoryId || ''}`} scene={incoming} toggle={toggle} audioRef={audioRef} time={time} layered={layered} fps={stillFps} beats={beats} /> : null;
         })}
         {nearFades.map((fade) => <FadeBlack key={`fade:${fade.fromSceneId}`} fade={fade} audioRef={audioRef} time={time} />)}
         {/* The shots' VHS glitches on their cuts, on the frames the final render repaints. */}

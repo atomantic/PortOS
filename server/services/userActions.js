@@ -47,7 +47,7 @@ import { atomicWrite, ensureDir, PATHS, readJSONFile } from '../lib/fileUtils.js
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { isPlainObject } from '../lib/objects.js';
 import { isSecretKey } from '../lib/secretKeys.js';
-import { createPgFileFacade, resolvePgBackend } from '../lib/pgFileFacade.js';
+import { createPgFileFacade, resolvePgBackend, POSTGRES_SETUP_HINT } from '../lib/pgFileFacade.js';
 import { isTestRunner, isVitestRunner } from '../lib/runtimeEnv.js';
 import { isUserActionActor, isUserActionType } from '../lib/userActionTypes.js';
 import { insertUserActionEvent, listUserActionEvents, pruneUserActionEvents } from './userActionsDb.js';
@@ -356,7 +356,7 @@ const facade = createPgFileFacade({
   isFile: () => process.env.MEMORY_BACKEND === 'file' || isTestRunner(),
   makeFile: makeFileBackend,
   makePg: () => resolvePgBackend({
-    requirement: 'The operator-action ledger requires PostgreSQL — run `npm run setup:db` (dev/test only: set MEMORY_BACKEND=file)',
+    requirement: `The operator-action ledger requires PostgreSQL — ${POSTGRES_SETUP_HINT}`,
     loadDb: () => import('../lib/db.js'),
     makePg: makePgBackend,
   }),

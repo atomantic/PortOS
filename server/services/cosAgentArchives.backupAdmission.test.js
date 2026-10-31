@@ -136,10 +136,9 @@ it('retains publisher and continuation history until the outbox verifies synchro
   entry.obligations = Object.fromEntries(RELEASE_SYNC_OBLIGATIONS.map(name => [name, {
     status: 'verified', verifiedAt: '2001-01-01T03:00:00Z', evidence: { receipt: name },
   }]));
-  entry.synchronization = { status: 'verified', attempts: 1, checkedAt: '2001-01-01T03:00:00Z',
-    verifiedAt: '2001-01-01T03:00:00Z', retryAt: null, blocker: null };
+  entry.synchronization = { status: 'blocked', attempts: 1, checkedAt: '2001-01-01T03:00:00Z',
+    verifiedAt: null, retryAt: null, blocker: 'publisher-candidate-checkout-unverified' };
   await saveReleaseSynchronization(entry);
-  // A stale verified status cannot release history without publisher evidence.
   expect(await api.clearCompletedAgents()).toEqual({ cleared: 0, retained: 3 });
   await assertIndexedTrees();
   const target = { agentId: publisher, repoPath: seed.repoPath, branch: seed.branch, path: seed.path, head: candidateHead,
@@ -150,6 +149,8 @@ it('retains publisher and continuation history until the outbox verifies synchro
     publisherReview: { branch: seed.branch, path: seed.path, head: candidateHead, checkoutIdentity: target.checkoutIdentity,
       prUrl: 'https://github.com/example/repo/pull/12', receipt: null, models: [] },
   };
+  entry.synchronization = { status: 'verified', attempts: 1, checkedAt: '2001-01-01T03:00:00Z',
+    verifiedAt: '2001-01-01T03:00:00Z', retryAt: null, blocker: null };
   await saveReleaseSynchronization(entry);
   expect(await api.clearCompletedAgents()).toEqual({ cleared: 3, retained: 0 });
 });

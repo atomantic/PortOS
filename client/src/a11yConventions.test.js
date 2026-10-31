@@ -29,17 +29,18 @@
  *      nothing, so the affordance does not exist at all for a keyboard or
  *      screen-reader user. `lib/a11yKeyboard.js`'s `clickableProps(handler)`
  *      supplies the missing role, tab stop and Enter/Space handler.
- *   6. An `<img>` with no `alt`, which is announced by its `src` — a hashed
- *      filename or a blob URL. `alt=""` is the correct spelling for a
- *      decorative image and passes; only the omission is the bug.
- *   7. An icon-only `<button>` sized to its bare icon (`p-1` around a
+ *   6. An icon-only `<button>` sized to its bare icon (`p-1` around a
  *      12-14px glyph = a 22px target) instead of the 44px floor the rest of
  *      the app enforces.
- *   8. A `DndContext` whose sensor list has no `KeyboardSensor`. dnd-kit's
+ *   7. A `DndContext` whose sensor list has no `KeyboardSensor`. dnd-kit's
  *      `attributes` make every drag handle a tab stop that announces itself as
  *      draggable and points at "press the space bar to pick up" instructions,
  *      so a pointer-only sensor list actively instructs the user to use an
  *      interaction nothing is listening for.
+ *
+ * A missing `<img alt>` and a `role="switch"` without `aria-checked` are not
+ * scanned here: Biome's `a11y/useAltText` and `a11y/useAriaPropsForRole`
+ * (`client/biome.jsonc`) reject both with a real parser, spreads included.
  *
  * Scoped to git-tracked `.jsx` under `client/src` so an untracked scratch file
  * can't fail the suite.
@@ -2029,14 +2030,6 @@ function* mouseOnlyClickables(src) {
   }
 }
 
-// `alt=""` is the correct spelling for a decorative image and must pass, so the
-// rule asks only whether the attribute is written at all — never what it holds.
-function* imagesWithoutAlt(src) {
-  for (const node of forEachOpeningTag(src, 'img')) {
-    if (!tagAttributes(node.tag).names.has('alt')) yield node;
-  }
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Conditional error renders must announce themselves (#7266).
 //
@@ -2341,19 +2334,6 @@ describe('a11y conventions', () => {
     expect(balancedCallAt(str, str.indexOf('('))).toBe(str.slice(str.indexOf('(')));
   });
 
-  it('gives every role="switch" an aria-checked state', () => {
-    const offenders = [];
-    for (const file of trackedJsxFiles()) {
-      const src = rawSourceOf(file);
-      for (const { tag, index } of forEachOpeningTag(src, 'button')) {
-        if (!/role="switch"/.test(tag)) continue;
-        if (/aria-checked/.test(tag)) continue;
-        offenders.push(`${file}:${lineOf(src, index)}`);
-      }
-    }
-    expect(offenders, `role="switch" without aria-checked:\n${offenders.join('\n')}`).toEqual([]);
-  });
-
   it('gives every icon-only button an accessible name', () => {
     // A <button> whose entire body is an icon (including one chosen by a
     // ternary, e.g. play/pause, expand/collapse) has no text content for a
@@ -2449,24 +2429,10 @@ describe('a11y conventions', () => {
     expect(offenders, `Non-interactive element with a mouse-only onClick — spread {...clickableProps(handler)} from lib/a11yKeyboard.js (see IngredientPicker.jsx), or write role + tabIndex + onKeyDown in full:\n${offenders.join('\n')}`).toEqual([]);
   }, 60_000);
 
-  it('gives every <img> an alt attribute', () => {
-    // An <img> with no `alt` is announced by its src — a hashed filename or a
-    // blob URL — where an empty `alt=""` correctly removes a decorative image
-    // from the a11y tree entirely. Both are one keystroke apart, and only the
-    // omission is a bug, so the rule requires the attribute and says nothing
-    // about its value.
-    const offenders = [];
-    for (const file of trackedJsxFiles()) {
-      const src = maskedSourceOf(file);
-      for (const { index } of imagesWithoutAlt(src)) offenders.push(`${file}:${lineOf(src, index)}`);
-    }
-    expect(offenders, `<img> without an alt attribute — describe the image, or write alt="" if it is decorative:\n${offenders.join('\n')}`).toEqual([]);
-  });
-
-  it('reads activation and alt off the tag itself, and not out of a comment', () => {
-    // Both rules above are green against the whole tree, so nothing in the tree
-    // pins what they actually reject. These fixtures do: one probe per branch,
-    // so neither rule can go vacuously green.
+  it('reads activation off the tag itself, and not out of a comment', () => {
+    // The rule above is green against the whole tree, so nothing in the tree
+    // pins what it actually rejects. These fixtures do: one probe per branch,
+    // so it cannot go vacuously green.
     const clickables = (src) => [...mouseOnlyClickables(src)].map(({ name }) => name);
 
     expect(clickables('<div onClick={select}>Pick</div>')).toEqual(['div']);
@@ -2497,7 +2463,7 @@ describe('a11y conventions', () => {
 
     // Every exemption is read off attribute NAMES and SPREAD expressions, never
     // off the raw tag text, so nothing quoted can forge one. Without this the
-    // rules are one stray string away from exempting the elements they exist
+    // rule is one stray string away from exempting the elements it exists
     // for — and the string would be invisible in review.
     expect(clickables('<div onClick={select} title="clickableProps(select)">Pick</div>')).toEqual(['div']);
     // Nor can building the props without spreading them onto the element.
@@ -2507,16 +2473,9 @@ describe('a11y conventions', () => {
     // `e.stopPropagation()` must not exempt another's real handler.
     expect(clickables('const stop = (e) => e.stopPropagation();\nconst stop = (e) => onSelect(e);\n<div onClick={stop}>Pick</div>')).toEqual(['div']);
 
-    const unaltered = (src) => [...imagesWithoutAlt(src)].length;
-    expect(unaltered('<img src={url} className="w-8" />')).toBe(1);
-    expect(unaltered('<img src={url} alt="" />')).toBe(0);
-    expect(unaltered('<img src={url} alt={caption} />')).toBe(0);
-    expect(unaltered('<img src={url} title=" alt=" />')).toBe(1);
-
-    // Both rules read MASKED source, so a JSX example written in a comment —
+    // The rule reads MASKED source, so a JSX example written in a comment —
     // the shape lib/a11yKeyboard.js's own usage docblock is written in — cannot
     // fail the suite.
-    expect(unaltered(maskComments('// <img src={url} />'))).toBe(0);
     expect(clickables(maskComments('// <div onClick={select}>Pick</div>'))).toEqual([]);
   });
 

@@ -194,7 +194,7 @@ describe('blocked system recovery persisted workflow', () => {
     expect(created).toBe(0);
   });
 
-  it.each([[2, '1'], ['2', 1]])('holds a blocked task when its local owner receipt charged %s but its record retained %s', async (charged, retained) => {
+  it.each([[2, '1'], ['2', 1]])('recovers a blocked task with a completed local owner even when its receipt charged %s and its record retained %s', async (charged, retained) => {
     const queues = await read();
     queues.cos.tasks[0].metadata.deliveryDecisionAgentId = 'agent-original';
     queues.cos.tasks[0].metadata.totalSpawnCount = retained;
@@ -202,22 +202,19 @@ describe('blocked system recovery persisted workflow', () => {
     await write(queues);
     identity.agent = ownerForTask(queues.cos.tasks[0]);
     const recovery = factory(true);
-    expect(await recovery.recover('system-original')).toEqual({ handled: false, reason: 'spawn-budget-reconciliation-required' });
-    expect(await recovery.recover('system-original')).toEqual({ handled: false, reason: 'spawn-budget-reconciliation-required' });
-    expect(await read()).toEqual(queues);
-    expect(created).toBe(0);
+    expect(await recovery.recover('system-original')).toEqual({ handled: true, phase: 'queued', taskId: 'investigator-1' });
+    expect(created).toBe(1);
   });
 
-  it('holds a blocked task when legacy history lacks its episode proof', async () => {
+  it('recovers a blocked task with a completed local owner when legacy history lacks its episode proof', async () => {
     const queues = await read();
     const task = queues.cos.tasks[0];
     task.metadata.deliveryDecisionAgentId = 'agent-original';
     identity.agent = ownerForTask(task);
     delete task.metadata.spawnBudgetProof;
     await write(queues);
-    expect(await factory(true).recover('system-original')).toEqual({ handled: false, reason: 'spawn-budget-reconciliation-required' });
-    expect(await read()).toEqual(queues);
-    expect(created).toBe(0);
+    expect(await factory(true).recover('system-original')).toEqual({ handled: true, phase: 'queued', taskId: 'investigator-1' });
+    expect(created).toBe(1);
   });
 
   it('lets a user/owner transition win before creation', async () => {

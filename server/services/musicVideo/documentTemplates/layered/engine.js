@@ -16,6 +16,7 @@
  * (title cards, diagrams, outros) in CARDS below and key them from scene labels.
  */
 // portos-lyric-overlay-visibility: 1
+// portos-photo-sequence: 1
 (() => {
   'use strict';
   const MV = window.PORTOS_MV;
@@ -229,7 +230,8 @@
       if (!timing) return seekVideo(v, media, (media.inSec || 0) + local);
       return seekVideo(v, { ...media, inSec: timing.startSec }, timing.startSec + Math.max(0, local - timing.leadSec) * timing.rate);
     }
-    return loadImage(media.src);
+    const photo = scene.photoSequence && media.photos?.[imageEffects.photoSequenceIndex(scene.photoSequence, t, { fps: FPS })];
+    return loadImage(photo?.src || media.src);
   }
 
   // ---------- drawing helpers ----------
@@ -558,7 +560,7 @@
     if (window.PORTOS_MV_ASSETS) assetUrls = await window.PORTOS_MV_ASSETS;
     await Promise.all([F.stencil(40), F.mono(20), F.mono(20, 600), F.cond(20), F.cond(20, 700)].map((font) => document.fonts.load(font)));
     await buildLyricType();
-    if (SCENES.some(scene => scene.imageEffect && scene.visualLayer === 'still')) {
+    if (SCENES.some(scene => (scene.imageEffect || scene.photoSequence) && scene.visualLayer === 'still')) {
       imageEffects = await documentModule('PORTOS_MV_IMAGE_EFFECTS', 'musicVideoImageEffects.js');
     }
     buildGrain();

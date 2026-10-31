@@ -11,7 +11,7 @@
 import { join } from 'node:path';
 import { atomicWrite, PATHS, readJSONFile } from '../lib/fileUtils.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
-import { createPgFileFacade, resolvePgBackend } from '../lib/pgFileFacade.js';
+import { createPgFileFacade, resolvePgBackend, POSTGRES_SETUP_HINT } from '../lib/pgFileFacade.js';
 
 const triageFile = () => join(PATHS.data, 'review-queue-triage.json');
 const queueFileWrite = createFileWriteQueue();
@@ -143,7 +143,7 @@ function makePgBackend(db) {
 const backendFacade = createPgFileFacade({
   makeFile: makeFileBackend,
   makePg: () => resolvePgBackend({
-    requirement: 'Review queue triage requires PostgreSQL — run `npm run setup:db` (dev/test only: set MEMORY_BACKEND=file for the file escape hatch)',
+    requirement: `Review queue triage requires PostgreSQL — ${POSTGRES_SETUP_HINT}`,
     loadDb: () => import('../lib/db.js'),
     makePg: makePgBackend,
   }),

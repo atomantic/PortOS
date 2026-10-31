@@ -18,6 +18,7 @@ import { derivePeerAuthToken, PEER_AUTH_HEADER, PEER_INSTANCE_HEADER } from '../
 import { isPairedPeer } from '../lib/peerPairing.js';
 import { PEER_ADMIN_ACTIONS, PEER_ADMIN_SCOPE, peerAdminActionSchema } from '../lib/peerAdminValidation.js';
 import { LOCAL_LLM_CATALOG, catalogSizeBytes } from '../lib/localLlmCatalog.js';
+import { isAppleSilicon } from '../lib/platform.js';
 
 const PREFLIGHT_TTL_MS = 60_000;
 const PLAN_TTL_MS = 5 * 60_000;
@@ -159,7 +160,7 @@ function catalogTarget(intent) {
   if (intent.action !== 'catalog.install') return null;
   const entry = LOCAL_LLM_CATALOG.find(model => model.key === intent.catalogKey && model[intent.backend]);
   if (!entry) refuse('PEER_ADMIN_UNKNOWN_MODEL', 'Choose an existing catalog entry for this backend', 400);
-  if (entry.gated || entry.ollamaImport || entry.appleSiliconOnly && (process.platform !== 'darwin' || process.arch !== 'arm64')) {
+  if (entry.gated || entry.ollamaImport || entry.appleSiliconOnly && !isAppleSilicon()) {
     refuse('PEER_ADMIN_MODEL_UNSUPPORTED', 'This catalog entry requires local setup or source review', 409);
   }
   return {

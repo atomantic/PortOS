@@ -4,7 +4,7 @@ import { writeFileSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import express from 'express';
 import { EventEmitter } from 'node:events';
-import { request } from '../lib/testHelper.js';
+import { request, pinArch, pinPlatform } from '../lib/testHelper.js';
 import { mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
 
 const { tempRoot, makeProxy, cleanup } = mockPathsDataRoot({ prefix: 'peer-admin-' });
@@ -35,8 +35,14 @@ vi.mock('../services/portosSelfUpdate.js', () => ({ startPortosSelfUpdate: execu
 vi.mock('../lib/detachedSpawn.js', async () => ({
   ...await vi.importActual('../lib/detachedSpawn.js'), spawnDetached: execution.restart,
 }));
+// Hardware truth is the sysctl probe behind isAppleSilicon(), not process.arch.
+const hardware = vi.hoisted(() => ({ appleSilicon: false }));
+vi.mock('../lib/platform.js', async () => ({
+  ...await vi.importActual('../lib/platform.js'), isAppleSilicon: () => hardware.appleSilicon,
+}));
 vi.mock('../services/peerCatalogInstaller.js', async () => ({
   ...await vi.importActual('../services/peerCatalogInstaller.js'), installPeerCatalog: execution.install,
+  describePeerCatalogReview: async input => ({ ...input, sourceRepo: 'example/model-GGUF' }),
 }));
 
 const { authGate, hostControlRouteGate } = await import('../services/authGate.js');
@@ -209,6 +215,31 @@ describe('bounded administration through the real authority boundary', () => {
     expect(model.model).toMatchObject({ modelId: 'phi4-mini', sourceLicenseReview: 'required-locally' });
     expect(model.resources).toMatchObject({ destinationDiskChecked: false, runtimeMemoryChecked: false });
     expect(model.blockers).toContain('MODEL_SOURCE_LICENSE_REVIEW_REQUIRED');
+  });
+
+  it('offers Apple-Silicon-only catalog entries by hardware, including a Rosetta-launched server', async () => {
+    const restorePlatform = pinPlatform('darwin');
+    const restoreArch = pinArch('x64');
+    try {
+      await grant('catalog.install');
+      const mlx = { action: 'catalog.install', backend: 'ollama', catalogKey: 'qwen3.8-27b-mlx-4bit' };
+      hardware.appleSilicon = false;
+      expect((await peerRequest('preflight', { protocolVersion: 1, challenge: randomUUID(), intent: mlx })).body.code)
+        .toBe('PEER_ADMIN_MODEL_UNSUPPORTED');
+      hardware.appleSilicon = true;
+      expect((await preflight(mlx)).model).toMatchObject({ modelId: 'qwen3.8:27b-mlx' });
+    } finally {
+      hardware.appleSilicon = false;
+      restoreArch();
+      restorePlatform();
+    }
+  });
+
+  it('describes a local catalog review for a shipped key with version dots', async () => {
+    const response = await request(app).get('/api/peer-administration/catalog-review?backend=lmstudio&catalogKey=qwen2.5-7b-instruct')
+      .set('Authorization', 'Bearer test-operator');
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({ catalogKey: 'qwen2.5-7b-instruct' });
   });
 
   it('cannot dispatch or interrupt active work because all executors remain unavailable', async () => {

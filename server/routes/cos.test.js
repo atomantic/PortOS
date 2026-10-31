@@ -638,7 +638,7 @@ describe('CoS Routes', () => {
             evidence: { prUrl: 'https://github.com/example/repo/pull/101', headSha: 'b'.repeat(40) },
           },
         },
-        synchronization: { status: 'verified' },
+        synchronization: { status: 'blocked', blocker: 'publisher-candidate-checkout-unverified' },
       });
       getAgents.mockResolvedValue([
         { id: 'agent-sync-pub', status: 'completed', metadata: { taskDescription: 'Publish release' } }

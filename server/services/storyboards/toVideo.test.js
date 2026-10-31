@@ -47,6 +47,7 @@ async function board(beats, firstPanel = {}) {
 }
 
 describe('start a Video from a storyboard', () => {
+  // A picked move replacing the free-text camera note uniquely catches the two fighting in one prompt.
   it('creates a linked Video draft whose shots are the panels', async () => {
     const b = await board([
       { title: 'Arrival', panels: [
@@ -54,7 +55,7 @@ describe('start a Video from a storyboard', () => {
         { action: 'The town square', seconds: 14 },
       ] },
       { title: 'Home', what: 'She finds the house empty', panels: [] },
-    ], { castIds: ['ing-hero', 'ing-gone'] });
+    ], { castIds: ['ing-hero', 'ing-gone'], lens: 'telephoto', eyeline: 'off-left', move: 'static' });
     const res = await request(app).post(`/api/storyboards/${b.id}/video`).send({ boardUpdatedAt: b.updatedAt, project: choices });
     expect([res.status, res.body.error]).toEqual([201, undefined]);
     const { project } = res.body;
@@ -65,7 +66,7 @@ describe('start a Video from a storyboard', () => {
     expect(project.cast.map((member) => member.ingredientId)).toEqual(['ing-hero']);
     expect(project.treatment.logline).toBe('A girl comes home.');
     expect(project.treatment.scenes.map((s) => [s.intent, s.prompt, s.durationSeconds, (s.cast || []).map((c) => c.name)])).toEqual([
-      ['She steps off the bus', 'She steps off the bus. Wide shot. Camera: slow push in.', 4, ['Example Hero']],
+      ['She steps off the bus', 'She steps off the bus. Wide shot. Telephoto lens. Subject looks off to the left. Static camera, no movement.', 4, ['Example Hero']],
       ['The town square', 'The town square.', 10, []],
       ['She finds the house empty', 'She finds the house empty.', 3, []],
     ]);

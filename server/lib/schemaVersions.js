@@ -114,7 +114,8 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // Older sanitizers strip it; gate transfers to keep execution ownership intact.
   // v5 = shot framings `full`, `medium-wide`, `medium-close`, `insert`; a v4
   // sanitizer would null a shot's shotType and LWW that back.
-  pipelineIssues: 5,
+  // v6 = shot framing `group`, for the same reason.
+  pipelineIssues: 6,
   // v2 = `series.arc.readerMap` added (Unified Story Builder). Additive +
   // gracefully-degrading, but version-gated so a not-yet-upgraded peer can't
   // round-trip a series through its readerMap-unaware sanitizer and LWW-strip
@@ -301,7 +302,9 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // v11 = a panel's `facing` (subject to camera); a v10 peer would drop it.
   // v12 = a beat's `beforeSong` (plays before the song starts); a v11 peer would drop it.
   // v13 = a panel's `composition` (where the subject sits); a v12 peer would drop it.
-  storyboards: 13,
+  // v14 = a panel's `move`, `lens`, `focus` and `eyeline`, and the framing `group`,
+  // angle `ground-level` and two compositions; a v13 peer would drop them.
+  storyboards: 14,
   // v1 = author personas (PostgreSQL `authors` table) federated via the
   // per-record peer-sync push pipeline (record kind `author`, sync category
   // `authors`). A brand-NEW synced record type like `storyBuilder` below, so it
@@ -830,7 +833,8 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // v36 = the project's handmade production medium (`productionMedium`), which a
   // v35 strict project schema rejects with a 400 and its normalizer drops on
   // save. Optional, no backfill: absent = no medium.
-  musicVideoProjects: 36,
+  // v37 = ordered still-photo sequences and cadence; older scene writers drop them.
+  musicVideoProjects: 37,
   // v1 = Creative Commission FEEDBACK federation (PostgreSQL `commission_feedback`)
   // via the per-record peer-sync push pipeline (record kind `commissionFeedback`,
   // sync category `commissionFeedback`, #2686 — split-record follow-up to #2657).

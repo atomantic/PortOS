@@ -188,7 +188,7 @@ function insertGraphicCards(clips, ranked, period, lyricCues, accentColor, locke
 function sliceClip(clip, offset, length) {
   const duration = round3(length);
   // A still's image effect picks up where the piece before it left off.
-  if (clip.layer === 'still') return { ...clip, inSec: 0, outSec: duration, duration, sourceSec: duration, ...(clip.effect ? { effectAtSec: round3((clip.effectAtSec || 0) + offset) } : {}) };
+  if (clip.layer === 'still') return { ...clip, inSec: 0, outSec: duration, duration, sourceSec: duration, ...(clip.effect || clip.photoSequence ? { effectAtSec: round3((clip.effectAtSec || 0) + offset) } : {}) };
   const inSec = round3(clip.inSec + offset);
   return { ...clip, inSec, outSec: round3(inSec + duration), duration,
     ...(clip.loop === false ? { sourceSec: round3(clip.inSec + (clip.sourceSec ?? clip.duration) - inSec) } : {}) };
@@ -269,7 +269,7 @@ export function intercutClips(clips, { scenes = [], sections = [], beats = [], b
       const len = round3(bounds[k + 1] - a);
       const partner = k % 2 === 1 ? takePartner(host, len, bounds[k + 1]) : null;
       if (partner) { out.push(partner); continue; }
-      if (still) { out.push({ ...clip, inSec: 0, outSec: len, duration: len, sourceSec: len, ...(clip.effect ? { effectAtSec: round3(a - t0) } : {}) }); continue; }
+      if (still) { out.push({ ...clip, inSec: 0, outSec: len, duration: len, sourceSec: len, ...(clip.effect || clip.photoSequence ? { effectAtSec: round3(a - t0) } : {}) }); continue; }
       // The host keeps its own continuous time (a performance stays in sync).
       const inSec = round3(clip.inSec + (a - t0));
       out.push({ ...clip, inSec, outSec: round3(inSec + len), duration: len, ...(clip.loop === false ? { sourceSec: round3(clip.inSec + (clip.sourceSec ?? clip.duration) - inSec) } : {}) });

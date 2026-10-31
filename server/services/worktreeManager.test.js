@@ -11,9 +11,6 @@ import { dirname, join } from 'path';
 const observeIdentityMock = vi.fn(async () => null);
 vi.mock('../lib/retirementCheckoutObservation.js', () => ({ readRetirementCheckoutIdentity: (...args) => observeIdentityMock(...args) }));
 const preserveCheckoutMock = vi.fn(async () => ({ archiveDir: '/archive', verify: async () => null }));
-const preservedBranch = () => ({ archiveDir: '/branch-archive', verify: async () => true, retire: work => work() });
-const preserveBranchMock = vi.fn(async () => preservedBranch());
-vi.mock('../lib/branchRetirementArchive.js', () => ({ preserveBranchRetirement: (...args) => preserveBranchMock(...args) }));
 vi.mock('./heldCheckoutRecovery.js', () => ({
   preserveMergedCheckout: (...args) => preserveCheckoutMock(...args),
 }));
@@ -96,10 +93,6 @@ describe('completed branch archival boundary', () => {
       stdout: args.includes('--git-common-dir') ? '/repo/.git' : '', exitCode: 0,
     }));
     getDefaultBranchMock.mockResolvedValue('main');
-    preserveBranchMock.mockReset().mockResolvedValue(preservedBranch());
-  });
-  afterEach(() => {
-    preserveBranchMock.mockReset().mockResolvedValue(preservedBranch());
   });
   it('runs the trusted receiver guard before deletion and preserves its refusal reason without pushing', async () => {
     execGitMock.mockImplementation(async args => {
@@ -110,7 +103,6 @@ describe('completed branch archival boundary', () => {
     const beforeMutation = vi.fn(async () => { throw new Error('daemon-paused'); });
     await expect(deleteCompletedLocalBranch('/repo', 'done', head, { beforeMutation })).rejects.toThrow('daemon-paused');
     expect(beforeMutation).toHaveBeenCalledOnce();
-    expect(preserveBranchMock).not.toHaveBeenCalled();
     expect(execGitMock.mock.calls.some(([args]) => args[0] === 'push')).toBe(false);
   });
   it('checks automatic permission after final registration refresh before checkout removal', async () => {
@@ -172,7 +164,6 @@ describe('completed branch archival boundary', () => {
       return { stdout: '', exitCode: 0 };
     });
     expect(await deleteCompletedLocalBranch('/repo', 'done', head)).toBe(true);
-    expect(preserveBranchMock).not.toHaveBeenCalled();
     expect(execGitMock.mock.calls.some(([args]) => args[0] === 'push')).toBe(true);
     expect(execGitMock.mock.calls.some(([args]) => args[0] === 'config' && args.includes('--remove-section'))).toBe(true);
   });

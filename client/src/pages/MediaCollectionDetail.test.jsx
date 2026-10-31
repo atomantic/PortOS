@@ -3,7 +3,7 @@ vi.mock('../services/apiMedia', () => batchApi);
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter, Route, Routes } from 'react-router';
+import { MemoryRouter, Route, Routes, useNavigate } from 'react-router';
 
 // ── Mocks must be declared before any imports that use them ──────────────────
 
@@ -275,6 +275,38 @@ describe('MediaCollectionDetail — regular collection view', () => {
     renderReal();
     await waitFor(() => screen.getByText('My Collection'));
     expect(screen.queryByRole('button', { name: /pull missing prompts/i })).toBeNull();
+  });
+});
+
+describe('MediaCollectionDetail — switching collections', () => {
+  it('keeps the newer collection when the previous one answers late', async () => {
+    const COL_A = { id: 'col-a', name: 'Alpha Collection', items: [] };
+    const COL_B = { id: 'col-b', name: 'Beta Collection', items: [] };
+    let resolveA;
+    const slowA = new Promise((resolve) => { resolveA = resolve; });
+    mockGetMediaCollection.mockImplementation((collectionId) => {
+      if (collectionId === 'col-a') return slowA;
+      if (collectionId === 'col-b') return Promise.resolve(COL_B);
+      return Promise.resolve({ items: [] });
+    });
+    let navigateTo;
+    function NavigateCapture() {
+      navigateTo = useNavigate();
+      return null;
+    }
+    render(
+      <MemoryRouter initialEntries={['/media/collections/col-a']}>
+        <NavigateCapture />
+        <Routes>
+          <Route path="/media/collections/:id" element={<MediaCollectionDetail />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    act(() => navigateTo('/media/collections/col-b'));
+    await waitFor(() => screen.getByText('Beta Collection'));
+    await act(async () => { resolveA(COL_A); await slowA; });
+    expect(screen.getByText('Beta Collection')).toBeInTheDocument();
+    expect(screen.queryByText('Alpha Collection')).toBeNull();
   });
 });
 

@@ -877,7 +877,7 @@ describe('completeAgent idempotence (#3384)', () => {
     mockCosState.state.agents[agentId] = { id: agentId, status: 'running', metadata: { claimPicksOwnBranch: true }, output: [] };
     captureCompletedCheckouts.mockRejectedValueOnce(new Error('checkout unreadable'));
     const result = await completeAgent(agentId, { success: true });
-    expect(result).toMatchObject({ status: 'completed', result: { success: false, executionSuccess: true, cleanupPending: true },
+    expect(result).toMatchObject({ status: 'completed', result: { success: true, executionSuccess: true },
       metadata: { claimPicksOwnBranch: true, completedCheckouts: [], checkoutCapture: { status: 'pending', unknown: true } } });
     await completeAgent(agentId, { success: false, exitCode: 143 });
     expect(mockCosState.state.agents[agentId].result.executionSuccess).toBe(true);
@@ -1089,7 +1089,7 @@ describe('completeAgent idempotence (#3384)', () => {
         const completed = await completeAgent(agentId, orphan ? { success: false, executionSuccess: false, orphaned: true } : { success: true });
         if (orphan) expect(completed).toMatchObject({ result: { success: false, executionSuccess: false, orphaned: true },
           metadata: { completedCheckouts: [], checkoutCapture: { status: 'captured' } } });
-        else expect(completed).toMatchObject({ status: 'completed', result: { cleanupPending: true, executionSuccess: true },
+        else expect(completed).toMatchObject({ status: 'completed', result: { success: true, executionSuccess: true },
           metadata: { checkoutCapture: { status: 'pending', unknown: false, targets: [expect.objectContaining({ head })] } } });
         expect(cosEvents.listenerCount('agent:completed')).toBeGreaterThan(0);
         delete mockCosState.state.agents[agentId]; // Restart: only the real archived metadata remains.

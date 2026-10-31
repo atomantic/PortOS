@@ -48,8 +48,7 @@ vi.mock('./taskScheduleStore.js', async importOriginal => ({
 }));
 const { listWorktrees } = await import('./worktreeManager.js');
 const { readCompletedCheckoutIdentity } = await import('./completedCheckoutEvidence.js');
-const { prepareInventoriedCheckoutRetirement, retireInventoriedCheckout, inspectCheckoutRetirementOwnership } = await import('./heldCheckoutRecovery.js');
-const { _createInitializedCheckoutRecovery } = await import('./initializedCheckoutRecovery.js');
+const { prepareInventoriedCheckoutRetirement, retireInventoriedCheckout } = await import('./heldCheckoutRecovery.js');
 const { recordBranchReconcileOutcome, getBranchReconcileOutcome } = await import('./branchReconcileOutcome.js');
 const owned = ownFixtureWork();
 const it = owned.tests(vitestIt);
@@ -112,7 +111,7 @@ async function seededScratch(prefix, key, build) {
 }
 
 describe('exact delivered head retirement with capped historical API (real Git)', () => {
-  it.each(['exact', 'exact-initialized', 'named-sibling', 'named-sibling-unrelated', 'same-task-seeded', 'precreation', 'precreation-dirty', 'precreation-untracked', 'precreation-active', 'precreation-uncertain', 'precreation-late', 'wrong-head', 'unpublished', 'wrong-base', 'wrong-target', 'wrong-merge-proof', 'missing-object', 'remote-change', 'dirty', 'active', 'supersession'])(
+  it.each(['exact', 'named-sibling', 'named-sibling-unrelated', 'same-task-seeded', 'precreation', 'precreation-dirty', 'precreation-untracked', 'precreation-active', 'precreation-uncertain', 'precreation-late', 'wrong-head', 'unpublished', 'wrong-base', 'wrong-target', 'wrong-merge-proof', 'missing-object', 'remote-change', 'dirty', 'active', 'supersession'])(
     'retains all existing retirement gates: %s', async scenario => {
       const branch = scenario.startsWith('precreation') ? 'claim/issue-42' : 'delivery/candidate';
       const { repo, remote, head, merge, main } = await seededScratch('exact-delivery-', branch, async ({ repo }) => {
@@ -222,15 +221,6 @@ describe('exact delivered head retirement with capped historical API (real Git)'
       await recordBranchReconcileOutcome(fixture.app.id, { status: 'incomplete', remaining: [{ ...release, reason: 'pr-completion-review-required' }] });
       const opts = { cosDir: join(scratch, 'cos'), readAgents: async () => fixture.owners };
       await mkdir(opts.cosDir);
-      const initialized = _createInitializedCheckoutRecovery({
-        ownership: input => inspectCheckoutRetirementOwnership(input, opts),
-        native: async input => {
-          if (input.command !== 'inspect') throw new Error('Unexpected native operation');
-          const digest = bytes => createHash('sha256').update(bytes).digest('hex');
-          return { fingerprint: digest(await readFile(join(path, 'feature.txt'))),
-            administrationFingerprint: digest(await readFile(join(path, '.git'))) };
-        },
-      });
       const input = { appId: fixture.app.id, release, prUrl: fixture.pr.url,
         ...(scenario === 'supersession' && { kind: 'source-supersession' }) };
       if (scenario === 'same-task-seeded') {
@@ -250,9 +240,8 @@ describe('exact delivered head retirement with capped historical API (real Git)'
         }
         fixture.policies = original;
       }
-      const prepared = scenario === 'exact-initialized' ? await initialized.review(input)
-        : await prepareInventoriedCheckoutRetirement(input, opts);
-      if (['exact', 'exact-initialized', 'named-sibling', 'same-task-seeded', 'precreation', 'precreation-dirty', 'precreation-untracked', 'remote-change', 'dirty'].includes(scenario)) {
+      const prepared = await prepareInventoriedCheckoutRetirement(input, opts);
+      if (['exact', 'named-sibling', 'same-task-seeded', 'precreation', 'precreation-dirty', 'precreation-untracked', 'remote-change', 'dirty'].includes(scenario)) {
         expect(prepared, JSON.stringify(prepared)).toMatchObject({ ok: true, review: { forge: { scopeProof: 'exact-delivered-head' },
           comparison: { disposition: 'integrated', exactMergedDelivery: true } } });
         expect(fixture.calls.some(args => args.includes('--paginate'))).toBe(false);
@@ -261,8 +250,8 @@ describe('exact delivered head retirement with capped historical API (real Git)'
         if (scenario === 'precreation-untracked') await writeFile(join(path, 'wanted.txt'), 'wanted untracked work\n');
         const confirmation = { appId: fixture.app.id, release,
           review: { prUrl: fixture.pr.url, digest: prepared.review.digest, acceptSuperseded: false } };
-        const retired = scenario === 'exact-initialized' ? await initialized.retire(confirmation) : await retireInventoriedCheckout(confirmation, opts);
-        if (['exact', 'exact-initialized', 'named-sibling', 'same-task-seeded', 'precreation'].includes(scenario)) {
+        const retired = await retireInventoriedCheckout(confirmation, opts);
+        if (['exact', 'named-sibling', 'same-task-seeded', 'precreation'].includes(scenario)) {
           expect(retired, JSON.stringify(retired)).toMatchObject({ ok: true, branchDeleted: true });
           const outcome = await getBranchReconcileOutcome(fixture.app.id);
           expect(outcome.retired).toEqual(expect.arrayContaining([expect.objectContaining({ path, branch, head, branchDeleted: true })]));

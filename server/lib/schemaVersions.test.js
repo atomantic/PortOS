@@ -33,7 +33,7 @@ describe('PORTOS_SCHEMA_VERSIONS', () => {
 
   it('declares pipeline collection layout versions', () => {
     // pipelineIssues v4 preserves text-stage generation ownership.
-    expect(PORTOS_SCHEMA_VERSIONS.pipelineIssues).toBe(5);
+    expect(PORTOS_SCHEMA_VERSIONS.pipelineIssues).toBe(6);
     // pipelineSeries bumped to 14 for authored arc.seriesDesign; v13 added characterArcs[].evolution
     // (#6440) (v2 = readerMap, v3 = tickingClock, v4 = styleGuide,
     // v5 = coverImage, v6 = characterArcs, v7 = factCritical + factReference,
@@ -101,17 +101,17 @@ describe('PORTOS_SCHEMA_VERSIONS', () => {
 });
 
 describe('buildPortosMeta', () => {
-  it('rejects production mediums, cold-open shots, credits endings, festival packets, subject age forms and earlier music-video metadata on older peers', async () => {
+  it('rejects photo sequences, production mediums, cold-open shots, credits endings, festival packets, subject age forms and earlier music-video metadata on older peers', async () => {
     const meta = await buildPortosMeta();
-    expect(meta.schemaVersions.musicVideoProjects).toBe(36);
+    expect(meta.schemaVersions.musicVideoProjects).toBe(37);
     // Older builds re-normalize the newer fields away; the gate must stop that peer receiving them.
-    for (const receiverV of [13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35]) {
+    for (const receiverV of [13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36]) {
       expect(compareSchemaVersions(meta.schemaVersions, { ...meta.schemaVersions, musicVideoProjects: receiverV }).ahead)
-        .toContainEqual({ category: 'musicVideoProjects', senderV: 36, receiverV });
+        .toContainEqual({ category: 'musicVideoProjects', senderV: 37, receiverV });
     }
     const olderPeer = { ...meta.schemaVersions, musicVideoProjects: 24 };
     expect(scopeVersionDiff(compareSchemaVersions(meta.schemaVersions, olderPeer), RECORD_KIND_SCHEMA_CATEGORIES.musicVideoProject))
-      .toMatchObject({ compatible: false, ahead: [{ category: 'musicVideoProjects', senderV: 36, receiverV: 24 }] });
+      .toMatchObject({ compatible: false, ahead: [{ category: 'musicVideoProjects', senderV: 37, receiverV: 24 }] });
   });
 
   it('advertises lyric provenance to pause track transfers to caption-only peers', async () => {
@@ -133,7 +133,7 @@ describe('buildPortosMeta', () => {
     const meta = await buildPortosMeta();
     expect(meta.portosVersion).toMatch(/^\d+\.\d+\.\d+/);
     expect(meta.schemaVersions.universes).toBe(18);
-    expect(meta.schemaVersions.pipelineIssues).toBe(5);
+    expect(meta.schemaVersions.pipelineIssues).toBe(6);
     expect(meta.schemaVersions.pipelineSeries).toBe(14);
   });
 

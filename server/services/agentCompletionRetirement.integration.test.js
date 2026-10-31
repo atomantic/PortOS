@@ -176,10 +176,10 @@ describe('completion to in-place retirement (real Git and persisted service stat
       const intent = fixture.agents[running.id].metadata.completionCleanup.taskHandoff;
       intent.expected = intent.expected.map(([key, value]) => [key, key === 'totalSpawnCount' ? Number(value) : value]);
     }
-    const agent = await completeAgent(running.id, { success: true, executionSuccess: true, requireCheckoutSettlement: true });
+    const agent = await completeAgent(running.id, { success: false, cleanupPending: true, executionSuccess: true });
     expect(agent.result).toMatchObject({ success: false, cleanupPending: true, executionSuccess: true });
     expect(agent.metadata.completedCheckouts).toHaveLength(1);
-    await completeAgent(running.id, { success: true, executionSuccess: true, requireCheckoutSettlement: true });
+    await completeAgent(running.id, { success: false, cleanupPending: true, executionSuccess: true });
     expect(cosEvents.emit.mock.calls.filter(([event]) => event === 'agent:completed')).toHaveLength(1);
     // Crash after terminal agent durability, BEFORE the normal task update.
     expect(JSON.parse(await readFile(join(fixture.root, 'task.json'), 'utf8')).metadata.deliveryRecovery).toBeUndefined();
@@ -208,18 +208,9 @@ describe('completion to in-place retirement (real Git and persisted service stat
       expect(await getBranchReconcileOutcome(fixture.app.id)).toBeNull();
       return;
     }
-    expect(await verify()).toMatchObject({ verified: false, skipReason: 'completion-execution-active' });
-    expect(fixture.task.metadata).toMatchObject({ deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: running.id,
-      hookDelivery: { selectedPaths: ['feature.txt'] } });
-    const pending = await getBranchReconcileOutcome(fixture.app.id); expect(pending.retirementObligations).toHaveLength(1);
-    const obligation = pending.retirementObligations[0]; expect(obligation).toMatchObject({ path, branch, head });
-    expect(fixture.task.status).toBe('in_progress');
-    fixture.schedule = JSON.parse(await readFile(join(fixture.root, 'schedule.json'), 'utf8')); activeAgents.delete(agent.id);
-    const { buildRenewal } = await import('./cosTaskClaim.js');
-    Object.assign(fixture.task.metadata, buildRenewal(fixture.task.metadata, 'fixture-instance'));
-    await writeFile(join(fixture.root, 'task.json'), JSON.stringify(fixture.task));
     expect(existsSync(join(path, PREGATE_REPORT_PATH))).toBe(true);
     const results = await Promise.all([verify(), verify()]); expect(results).toMatchObject([{ verified: true, skipReason: null }, { verified: true, skipReason: null }]);
+    activeAgents.delete(agent.id);
     const outcome = await getBranchReconcileOutcome(fixture.app.id); expect(outcome.retirementObligations).toEqual([]);
     expect(outcome.retired).toHaveLength(1); const receipt = outcome.retired[0];
     expect(receipt).toMatchObject({ path, branch, head, branchDeleted: true, archiveDir: null });

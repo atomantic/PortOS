@@ -7,7 +7,9 @@
  * `storyboardShotSchema` accepts. The label maps below are client-only
  * presentation, keyed off those two enums.
  */
-export { SHOT_ANGLES, SHOT_COMPOSITIONS, SHOT_FACINGS, SHOT_TYPES, SCREEN_DIRECTIONS } from '../../../server/lib/shotGrammar.js';
+export {
+  SHOT_ANGLES, SHOT_COMPOSITIONS, SHOT_EYELINES, SHOT_FACINGS, SHOT_FOCUSES, SHOT_LENSES, SHOT_MOVES, SHOT_TYPES, SCREEN_DIRECTIONS,
+} from '../../../server/lib/shotGrammar.js';
 
 export const SHOT_TYPE_LABELS = Object.freeze({
   'extreme-wide': 'Extreme wide',
@@ -21,6 +23,7 @@ export const SHOT_TYPE_LABELS = Object.freeze({
   insert: 'Insert',
   'over-the-shoulder': 'Over-the-shoulder',
   'two-shot': 'Two-shot',
+  group: 'Group',
   pov: 'POV',
 });
 
@@ -37,6 +40,7 @@ export const SHOT_TYPE_HINTS = Object.freeze({
   insert: 'A detail cut in: a hand, an object, a sign',
   'over-the-shoulder': 'Past one person\'s shoulder onto the other',
   'two-shot': 'Two people side by side in one frame',
+  group: 'Three or more people in one frame',
   pov: 'What the character sees, through their eyes',
 });
 
@@ -46,6 +50,7 @@ export const SHOT_ANGLE_LABELS = Object.freeze({
   low: 'Low angle',
   'birds-eye': "Bird's eye",
   'worms-eye': "Worm's eye",
+  'ground-level': 'Ground level',
   dutch: 'Dutch tilt',
 });
 
@@ -55,6 +60,7 @@ export const SHOT_ANGLE_HINTS = Object.freeze({
   low: 'Camera below, looking up: they feel bigger',
   'birds-eye': 'Straight down from overhead',
   'worms-eye': 'From the ground, looking steeply up',
+  'ground-level': 'Lens just above the floor, looking level: feet, wheels, floors',
   dutch: 'Camera rolled so the horizon tilts: unease',
 });
 
@@ -81,6 +87,8 @@ export const SHOT_COMPOSITION_LABELS = Object.freeze({
   'cut-left': 'Half off left',
   'cut-right': 'Half off right',
   'low-in-frame': 'Low in frame',
+  'frame-within-frame': 'Frame in frame',
+  'foreground-object': 'Foreground',
 });
 
 export const SHOT_COMPOSITION_HINTS = Object.freeze({
@@ -90,6 +98,70 @@ export const SHOT_COMPOSITION_HINTS = Object.freeze({
   'cut-left': 'At the left edge, partly cut off by the frame',
   'cut-right': 'At the right edge, partly cut off by the frame',
   'low-in-frame': 'Low in the frame, lots of empty space above',
+  'frame-within-frame': 'Seen through a doorway or window that frames them',
+  'foreground-object': 'Something close and blurred in front of them',
+});
+
+export const SHOT_MOVE_LABELS = Object.freeze({
+  static: 'Static',
+  'push-in': 'Push in',
+  'pull-out': 'Pull out',
+  pan: 'Pan',
+  tilt: 'Tilt',
+  tracking: 'Tracking',
+  handheld: 'Handheld',
+  crane: 'Crane',
+  orbit: 'Orbit',
+});
+
+export const SHOT_MOVE_HINTS = Object.freeze({
+  static: 'Locked off, the camera does not move',
+  'push-in': 'Moves slowly toward them: tension, focus',
+  'pull-out': 'Moves slowly away: reveal, isolation',
+  pan: 'Turns side to side from one spot',
+  tilt: 'Turns up or down from one spot',
+  tracking: 'Travels alongside them as they move',
+  handheld: 'Loose and shaky, in the moment',
+  crane: 'Rises up and away',
+  orbit: 'Circles around them',
+});
+
+export const SHOT_LENS_LABELS = Object.freeze({
+  'wide-angle': 'Wide-angle',
+  normal: 'Normal',
+  telephoto: 'Telephoto',
+});
+
+export const SHOT_LENS_HINTS = Object.freeze({
+  'wide-angle': 'Short lens: deep space, close things look big',
+  normal: 'About what the eye sees',
+  telephoto: 'Long lens: flat, the background pulled close',
+});
+
+export const SHOT_FOCUS_LABELS = Object.freeze({
+  'shallow-focus': 'Shallow',
+  'deep-focus': 'Deep',
+});
+
+export const SHOT_FOCUS_HINTS = Object.freeze({
+  'shallow-focus': 'Subject sharp, background blurred',
+  'deep-focus': 'Everything sharp, near and far',
+});
+
+export const SHOT_EYELINE_LABELS = Object.freeze({
+  'into-lens': 'Into lens',
+  'off-left': 'Off left',
+  'off-right': 'Off right',
+  'looking-down': 'Down',
+  'looking-up': 'Up',
+});
+
+export const SHOT_EYELINE_HINTS = Object.freeze({
+  'into-lens': 'Eye contact with the viewer',
+  'off-left': 'Looking past the camera, to the left',
+  'off-right': 'Looking past the camera, to the right',
+  'looking-down': 'Eyes cast down',
+  'looking-up': 'Looking up',
 });
 
 export const SCREEN_DIRECTION_LABELS = Object.freeze({

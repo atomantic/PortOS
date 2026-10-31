@@ -12,7 +12,7 @@ import { PATHS } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { createCollectionStore } from '../../lib/collectionStore.js';
 import { createRecordWriteQueue } from '../../lib/fileWriteQueue.js';
-import { createPgFileFacade, resolvePgBackend } from '../../lib/pgFileFacade.js';
+import { createPgFileFacade, resolvePgBackend, POSTGRES_SETUP_HINT } from '../../lib/pgFileFacade.js';
 import { sanitizeSavedRecipe } from '../../lib/storyboardRecord.js';
 import {
   isValidStoryboardRecipeId, newStoryboardEntityId, STORYBOARD_RECIPE_ID_PATTERN,
@@ -44,7 +44,7 @@ function makeFileBackend() {
 const facade = createPgFileFacade({
   makeFile: makeFileBackend,
   makePg: () => resolvePgBackend({
-    requirement: 'Storyboard recipes require PostgreSQL — run `npm run setup:db` (dev/test only: set MEMORY_BACKEND=file for the unsupported file backend)',
+    requirement: `Storyboard recipes require PostgreSQL — ${POSTGRES_SETUP_HINT}`,
     loadDb: () => import('./recipeDb.js'),
     makePg: (db) => ({ name: 'postgres', readRaw: db.readRaw, listRaw: db.listRaw, writeRaw: db.writeRaw }),
   }),

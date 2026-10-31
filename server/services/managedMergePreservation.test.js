@@ -16,7 +16,7 @@ afterEach(async () => {
   sandbox = null;
 });
 
-it('pins every managed GitHub merge attempt and defers removal until preservation', () => {
+it('pins every managed GitHub merge attempt and delegates cleanup without checkout archives', () => {
   const rendered = [
     ...['plan-task', 'plan-task-claim', 'claim-issue'].map(key => DEFAULT_TASK_PROMPTS[key]),
     driveToMerge('42'),
@@ -29,12 +29,17 @@ it('pins every managed GitHub merge attempt and defers removal until preservatio
       expect(command).not.toContain('--delete-branch');
       expect(command).toContain('--match-head-commit');
     }
-    const proofOrder = ['hosting provider reports the exact PR as MERGED', 'Release any coordination lease actually held', 'Recheck live claim/worktree ownership', 'checkouts/review', 'Inspect the returned local identity', 'checkouts/retire', 'matching persisted retirement receipt'];
+    const proofOrder = [
+      'hosting provider reports the exact PR as MERGED',
+      'Do not checkout or pull the default branch in the primary workspace',
+      'PortOS cleans up the managed worktree and branch automatically after completion',
+      'do not report a cleanup hold or create checkout archives',
+    ];
     const positions = proofOrder.map(marker => text.indexOf(marker, text.indexOf('**Managed-worktree')));
     expect(positions.every(at => at >= 0)).toBe(true);
     expect(positions).toEqual([...positions].sort((a, b) => a - b));
-    expect(text).toContain('A refusal keeps an unresolved retirement obligation, never a shell fallback');
-    expect(text).not.toMatch(/git (?:worktree (?:remove|unlock|prune)|branch -[dD]|push[^\n]*--delete)/);
+    expect(text).not.toContain('checkouts/review');
+    expect(text).not.toContain('checkouts/retire');
   }
 });
 
@@ -110,22 +115,17 @@ describe.skipIf(process.platform === 'win32')('managed merge shell preservation 
 });
 
 
-it('the shared cleanup contract requires API review and receipts rather than an executable deletion recipe', () => {
-  expect(MANAGED_WORKTREE_CLEANUP_CONTRACT).toContain('review:{prUrl,digest:<fresh review.digest>,acceptSuperseded:<reviewed boolean>}');
-  expect(MANAGED_WORKTREE_CLEANUP_CONTRACT).toContain('Private Git state, refs, reflogs and recoverable objects stay in the repository');
-  expect(MANAGED_WORKTREE_CLEANUP_CONTRACT).toContain('MERGED at its exact head is disposable');
-  expect(MANAGED_WORKTREE_CLEANUP_CONTRACT).toContain('an uncertain response needs receipt/inventory readback before retry');
-  expect(MANAGED_WORKTREE_CLEANUP_CONTRACT).toContain('If a supported retirement endpoint is unavailable or a separate branch-only remnant remains, retain it with the precise blocker for branch reconciliation.');
-  expect(MANAGED_WORKTREE_CLEANUP_CONTRACT).toContain('Do not enqueue another cleanup coordinator against your own active checkout.');
-  expect(MANAGED_WORKTREE_CLEANUP_CONTRACT).not.toMatch(/`git |git worktree remove|git branch -[dD]/);
+it('the shared cleanup contract delegates post-merge worktree cleanup to PortOS without checkout archives or cleanup holds', () => {
+  expect(MANAGED_WORKTREE_CLEANUP_CONTRACT).toContain('Once the PR is confirmed MERGED (or when no code changes were needed), PortOS cleans up the managed worktree and branch automatically after completion');
+  expect(MANAGED_WORKTREE_CLEANUP_CONTRACT).toContain('Report normal completion in your completion sentinel; do not report a cleanup hold or create checkout archives.');
+  expect(MANAGED_WORKTREE_CLEANUP_CONTRACT).not.toContain('/api/cos/schedule/branch-reconcile/checkouts/review');
+  expect(MANAGED_WORKTREE_CLEANUP_CONTRACT).not.toContain('/api/cos/schedule/branch-reconcile/checkouts/retire');
 });
 
 it('completion merges preserve the checkout for the PortOS cleanup owner', () => {
   const text = buildCiMergeGateSteps(1, { prRef: '42' }).lines.join('\n');
   expect(text).not.toContain('--delete-branch');
   expect(text).toContain('--match-head-commit <verified-head>');
-  expect(text).toContain('Local teardown is API-only');
-  expect(text).toContain('A refusal keeps an unresolved retirement obligation');
-  expect(text).toContain('MERGED at its exact head is disposable');
-  expect(text).toContain("service's exact-head lease");
+  expect(text).toContain('Once the PR is confirmed MERGED (or when no code changes were needed), PortOS cleans up the managed worktree and branch automatically after completion');
+  expect(text).toContain('do not report a cleanup hold or create checkout archives');
 });

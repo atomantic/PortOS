@@ -41,6 +41,7 @@ vi.mock('./forgeExecOptions.js', () => ({ resolveForgeExecOptions: vi.fn(async (
 vi.mock('./heldCheckoutReview.js', () => ({ readRetirementForgeEvidence: vi.fn(async () => ({ prHead: '1'.repeat(40), mergeCommit: '3'.repeat(40), defaultHead: '2'.repeat(40) })) }));
 vi.mock('./completedCheckoutEvidence.js', async original => ({ ...await original(), readCompletedCheckoutIdentity: vi.fn() }));
 vi.mock('./cos.js', () => ({}));
+vi.mock('./cosState.js', () => ({ getConfig: vi.fn(async () => ({ autoApproveInvestigations: true })) }));
 vi.mock('./agentCompletionData.js', () => ({ readCompletionData: vi.fn() }));
 vi.mock('./agentCompletionCleanup.js', () => ({ replayAgentCompletionCleanup: vi.fn(async () => {}) }));
 vi.mock('./cosAgentLifecycle.js', async original => ({ recordHistoricalCleanupReconciliation: vi.fn(async () => true), recordInheritedCheckoutRetirement: vi.fn(async () => true), recordSeededCheckoutRetirement: vi.fn(async () => true), isSettleableCompletionReceipt: (await original()).isSettleableCompletionReceipt, recordSuccessorCheckoutRetirement: vi.fn(async () => true), settleAbsentTaskCompletion: vi.fn(async () => true), retryCompletionCheckoutCapture: vi.fn(async () => false), reserveRepoCleanupRecovery: vi.fn(async () => ({ admitted: true, attempt: 1 })), recordRepoCleanupRecovery: vi.fn(async () => true), recordCleanupOutcome: vi.fn(async () => true), recordSwarmCleanupDelivery: vi.fn(async () => true), updateAgent: vi.fn().mockResolvedValue({}), recordRepoStateRecovery: vi.fn().mockResolvedValue(true), recordRepoStateVerification: vi.fn().mockResolvedValue(true), getAgentRecord: vi.fn(async () => null), recordCompletionCleanup: vi.fn(async () => true) }));
@@ -91,6 +92,13 @@ vi.mock('./notifications.js', () => ({
 vi.mock('./brainTaskThreads.js', () => ({ ensureTaskThread: vi.fn().mockResolvedValue({}), reconcileCleanupThreads: vi.fn(async () => ({ candidates: 0, archived: 0 })) }));
 vi.mock('../lib/execGit.js', () => ({ execGit: vi.fn() }));
 vi.mock('fs', () => ({ existsSync: vi.fn().mockReturnValue(false) }));
+vi.mock('./cosState.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    loadState: vi.fn(async () => ({ config: { autoApproveInvestigations: true } })),
+  };
+});
 
 import { inspectOrQueueCompletedReview } from './repoCleanupRecovery.js';
 import { readLocalBranchPresence, readCheckoutPathPresence } from './repoCleanupObservation.js';

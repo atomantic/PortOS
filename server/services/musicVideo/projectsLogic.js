@@ -239,6 +239,7 @@ export function cloneProjectRecord(source, {
     referenceImageId: includeGeneratedMedia ? (scene.referenceImageId ?? null) : null,
     videoHistoryId: includeGeneratedMedia ? (scene.videoHistoryId ?? null) : null,
     endImageId: includeGeneratedMedia ? (scene.endImageId ?? null) : null,
+    ...(scene.photoSequence ? { photoSequence: includeGeneratedMedia ? scene.photoSequence : { ...scene.photoSequence, enabled: false, imageIds: [] } } : {}),
     // Takes are immutable pointers to shared media, so a media-keeping clone
     // carries the whole candidate history; a clean clone starts empty.
     takes: includeGeneratedMedia ? ensureSceneTakes(scene, now) : [],
@@ -556,6 +557,7 @@ function buildScene(input, { order }) {
     ...(input.cutEffect ? { cutEffect: input.cutEffect } : {}),
     ...(input.imageEffect ? { imageEffect: input.imageEffect } : {}),
     ...(input.imageEffectSec ? { imageEffectSec: input.imageEffectSec } : {}),
+    ...(input.photoSequence ? { photoSequence: input.photoSequence } : {}),
     cardColor: input.cardColor ?? null,
     ...(input.textZone ? { textZone: input.textZone } : {}),
     ...(input.lyricRole ? { lyricRole: input.lyricRole } : {}),
@@ -639,6 +641,7 @@ function carryOver(prior, fresh) {
     // A still playing an image effect stays one: the effect is the shot's picture.
     ...(prior.imageEffect && prior.visualLayer === 'still' ? { visualLayer: 'still', imageEffect: prior.imageEffect,
       ...(prior.imageEffectSec ? { imageEffectSec: prior.imageEffectSec } : {}) } : {}),
+    ...(prior.photoSequence ? { photoSequence: prior.photoSequence, ...(prior.visualLayer === 'still' ? { visualLayer: 'still' } : {}) } : {}),
     takes: prior.takes || [],
     ...(prior.direction ? { direction: prior.direction } : {}),
   };
@@ -698,7 +701,7 @@ export function replaceScenes(project, sceneInputs) {
 // adding a shot or lyric the storyboard approval did not cover.
 const SCENE_SHOT_EDIT_FIELDS = ['startSec', 'endSec', 'beatAligned', 'label', 'prompt', 'framePrompt', 'visualIntent',
   'referenceImageId', 'videoHistoryId', 'endImageId', 'codeClip', 'frameFit', 'speedFps', 'offsetFrames', 'reverse', 'holdLastFrame', 'filmLook', 'transitionIn', 'transitionOut', 'glitches', 'cutEffect',
-  'visualLayer', 'stillMove', 'imageEffect', 'imageEffectSec', 'frameReferenceIds', 'setReference', 'characterVariant', 'panelId', 'panelRev', 'panelArt', 'preMusic'];
+  'visualLayer', 'stillMove', 'imageEffect', 'imageEffectSec', 'photoSequence', 'frameReferenceIds', 'setReference', 'characterVariant', 'panelId', 'panelRev', 'panelArt', 'preMusic'];
 
 /**
  * Apply a patch to a single scene. Returns `{ project, updated }`. Throws if the
@@ -886,6 +889,7 @@ export function splitScene(project, sceneId, { backend = null, atSec = null } = 
         visualIntent: scene.visualIntent ?? null,
         visualLayer: scene.visualLayer ?? 'footage',
         ...(scene.stillMove ? { stillMove: scene.stillMove } : {}),
+        ...(scene.photoSequence ? { photoSequence: scene.photoSequence } : {}),
         shotMode: scene.shotMode ?? 'cutaway',
         performanceSpeaker: scene.performanceSpeaker ?? null,
         performanceStyle: scene.performanceStyle ?? null,

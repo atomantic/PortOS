@@ -180,14 +180,15 @@ describe('taskPromptDefaults integrity snapshot', () => {
 
   // v6: 'Required' coverage sections made a single-process app pad its report
   // with 'checked, not applicable' lines (#12078).
-  it('performance v7 scopes platform-specific coverage to what the app has', () => {
+  it('performance v8 scopes platform-specific coverage to what the app has and does not file issues for missing browser access', () => {
     const perf = DEFAULT_TASK_PROMPTS.performance;
-    expect(PROMPT_VERSIONS.performance).toBe(7);
+    expect(PROMPT_VERSIONS.performance).toBe(8);
     expect(perf).not.toMatch(/^## Required/m);
     expect(perf.match(/^## Where present:/gm)).toHaveLength(2);
     expect(perf.match(/skip the rest silently/g)).toHaveLength(2);
     expect(perf).not.toContain('apps/providers');
     expect(perf).toContain('**Stable reference data re-downloaded**');
+    expect(perf).toContain('without filing a tracker issue for missing audit-environment\nbrowser access');
   });
 
   it('ui-bugs v4 hunts unhappy paths and statically provable crashes', () => {
@@ -200,11 +201,11 @@ describe('taskPromptDefaults integrity snapshot', () => {
   });
 
   it.each([
-    ['feature-completeness', ['Stubs reachable from the interface', 'Decide, do not defer', 'Static evidence is enough']],
-    ['workflow-recovery', ['Work from server state, not from views', 'Disabled controls say why', 'id of what holds it']],
-  ])('%s v1 states what makes it its own lane', (key, markers) => {
+    ['feature-completeness', 1, ['Stubs reachable from the interface', 'Decide, do not defer', 'Static evidence is enough']],
+    ['workflow-recovery', 2, ['Work from server state, not from views', 'Disabled controls say why', 'id of what holds it', 'long-running, multi-minute or paid generation workflows']],
+  ])('%s v%i states what makes it its own lane', (key, version, markers) => {
     const current = DEFAULT_TASK_PROMPTS[key];
-    expect(PROMPT_VERSIONS[key]).toBe(1);
+    expect(PROMPT_VERSIONS[key]).toBe(version);
     expect(current).toContain('{modeInstructions}');
     for (const marker of markers) expect(current, key).toContain(marker);
   });
@@ -223,9 +224,9 @@ describe('taskPromptDefaults integrity snapshot', () => {
 
   // v4 (#13933): restore receipts are target-local and media_assets is rebuilt,
   // so their observed counts must be reported without requiring parity.
-  it('upgrade-rehearsal v4 separates expected local and rebuilt table counts', () => {
+  it('upgrade-rehearsal v6 separates expected local and rebuilt table counts without crash/concurrent-runner fault injection', () => {
     const current = DEFAULT_TASK_PROMPTS['upgrade-rehearsal'];
-    expect(PROMPT_VERSIONS['upgrade-rehearsal']).toBe(5);
+    expect(PROMPT_VERSIONS['upgrade-rehearsal']).toBe(6);
     expect(current).toContain('{modeInstructions}');
     for (const marker of [
       'Build a synthetic older install',
@@ -360,10 +361,9 @@ describe('taskPromptDefaults integrity snapshot', () => {
       expect(prompt).toContain('[ "$STATE" = "MERGED" ]');
       expect(prompt).toContain('for MERGE_METHOD in merge squash rebase');
       expect(prompt).not.toContain('--delete-branch');
-      expect(prompt).toContain('matching persisted retirement receipt');
-      expect(prompt).toContain('MERGED at its exact head is disposable');
+      expect(prompt).toContain('PortOS cleans up the managed worktree and branch automatically after completion');
+      expect(prompt).toContain('do not report a cleanup hold or create checkout archives');
       expect(prompt).toContain('"--$MERGE_METHOD" --match-head-commit "$CI_VERIFIED_HEAD"');
-      expect(prompt).toContain('never a shell fallback');
     }
 
     const gitlab = DEFAULT_TASK_PROMPTS['claim-issue-gitlab'];
@@ -373,7 +373,7 @@ describe('taskPromptDefaults integrity snapshot', () => {
     expect(gitlab).toContain('--yes --sha \"$CI_VERIFIED_HEAD\"');
     expect(gitlab).toContain('do not retry a failed mutation using another method');
     expect(gitlab).not.toContain('--remove-source-branch');
-    expect(gitlab).toContain('never a shell fallback');
+    expect(gitlab).toContain('PortOS cleans up the managed worktree and branch automatically after completion');
   });
 
   it.each(['plan-task', 'plan-task-claim', 'claim-issue', 'claim-issue-gitlab', 'claim-issue-jira', 'branch-cleanup'])(
@@ -1010,12 +1010,13 @@ describe('taskPromptDefaults integrity snapshot', () => {
   // issue labels — the same per-issue routing DISPATCH_HINT_FANOUT_GUIDANCE
   // already gives the claim swarm's Phase B, imported verbatim rather than
   // retyped so the two consumers can't drift on vocabulary.
-  it('branch-reconcile v11 routes each fan-out sub-agent by its own branch\'s dispatch labels and leaves superseded retirement to the deterministic pass', () => {
+  it('branch-reconcile v13 routes each fan-out sub-agent by its own branch\'s dispatch labels and leaves superseded cleanup to the deterministic pass', () => {
     const current = DEFAULT_TASK_PROMPTS['branch-reconcile'];
-    expect(PROMPT_VERSIONS['branch-reconcile']).toBe(12);
+    expect(PROMPT_VERSIONS['branch-reconcile']).toBe(13);
     expect(current).toContain('focused changed-behavior tests');
     expect(current).toContain('focused results never attest unrun suites');
-    expect(current).toContain('the deterministic pass backs the branch up and retires it');
+    expect(current).toContain('the deterministic pass removes the superseded branch and checkout cleanly');
+    expect(current).not.toContain('REVIEW_RETIREMENT');
     expect(current).not.toContain('a verdict alone does not authorize removal');
     expect(current).toContain('Base movement alone does not require a rebase or another CI run');
     expect(current).toContain('after changing the head, rerun affected validation and required reviews/checks');

@@ -10,10 +10,10 @@
     "better-runtime-safety": "730600eda10659de8877efd28a865202",
     "better-structural-drift": "ce8b7ba26e5567275b7667d082c3125a",
     "better-test-quality": "8e305f986e9c9066da5db2aee76fc024",
-    "branch-cleanup": "9dcd9efba49e112021049ab5d6e9b7b2",
-    "branch-reconcile": "fe0a7f976e7ffb8d70dac58233b9b093",
-    "claim-issue": "04d9960e65ac66d393852c0fd718fafc",
-    "claim-issue-gitlab": "33a8d23734040207cd440a867a385b1b",
+    "branch-cleanup": "3ae50eec50fe2dea33575c5ab6d56716",
+    "branch-reconcile": "84e3e34112ed761c85df1f58c8c6faed",
+    "claim-issue": "526e5bef525d70c37dbb5dabe1ea6eab",
+    "claim-issue-gitlab": "1551a0567c1049d7c08926c2558523e2",
     "claim-issue-jira": "42dba9e163d5f6912e2d1df2722bf9c4",
     "code-quality": "175fab48fc713b71b4f0574b7cc5fe0b",
     "code-reviewer-implement": "f8cb11be6796874018d0a4d776c8931d",
@@ -21,8 +21,8 @@
     "console-errors": "5a7f6fd0b119db9d0e01c7f44a7a061c",
     "copy": "6a0959e898d37fb4d4d7445dfc8008c9",
     "cost-efficiency": "239bad18c51b50c80599d30b2fb0ad15",
-    "data-integrity": "5fcc4f5044101e89da5bbf4890c11a1c",
-    "data-safety": "25e79bc34cfadeab3cc3969a6c3421c2",
+    "data-integrity": "0b361db688338b9cd0fa70cfedd28e56",
+    "data-safety": "9e930585587a475901a4673427c9d87f",
     "dependency-updates": "8ce4e7e33c5c7554b89af7d35a471c31",
     "design": "118ab916feb90ff079f6e6449f60e7fe",
     "do-release": "0770a37985af6fd232ff275b983e36b0",
@@ -41,10 +41,10 @@
     "module-hygiene": "1637fd164737e20db284fe5c2b440453",
     "observability": "243e58bcfae2759f82caf3ff6c8fc9c5",
     "over-engineering": "fadf29ccd1bad774a5b8918ac21fa8d1",
-    "performance": "b5a221d23042b7751d5ece776399b403",
+    "performance": "199e7e4cc0429f8d96380b31563400dc",
     "plan-feature": "7f859397ff16889ffc0cf5a8ba6bddab",
-    "plan-task": "05794e44d4b89f2c655a9ee753519350",
-    "plan-task-claim": "b1a5439e2c08347f2afeeb86634e95f7",
+    "plan-task": "9c52dfc57d3205c07fa3c7b4a5ad9961",
+    "plan-task-claim": "9110a3922ccfbb1064a012490d7b1ef1",
     "pr-reviewer": "de9c295018df7c403a722a9ac2e780af",
     "pr-reviewer-eligibility": "a5652f7bcb7e2e50b1cfb9a54a6fabe0",
     "pr-reviewer-review": "511b26a376439cc6cb268a736897fefd",
@@ -53,7 +53,7 @@
     "privacy": "71fd4422a7d1c67e405eb6cfb3acc426",
     "reference-watch": "bc92833dd816f0f66759de8c0db1e758",
     "refresh-local-llm-catalog": "9741ca6a8419fcdea2743e3b64781a8b",
-    "reliability": "2a99be77b8f34653f4b926db0a773ea5",
+    "reliability": "f2468e63d460d435448e2a013fb9438d",
     "repo-sync": "0a648d35d43b023b758226b9c709c8ea",
     "security": "a66f5ec9d0ed0b42b6e59087783eb9fb",
     "simplify": "6b74e0f8b20935ef7ccc143316ffb397",
@@ -62,10 +62,10 @@
     "typing": "bd7cb874b2784395280b116369c7e7ac",
     "ui-bugs": "06baf650e41fce12aaa59c66030c0357",
     "ui-lifecycle": "d156882c73593a54c0fd5754eb4c6fa0",
-    "upgrade-rehearsal": "a86ee94bf5e13362e67380fae3dfe4d2",
+    "upgrade-rehearsal": "7c6106afde09d7606dea62a5db372fe9",
     "user-action-review": "28c1b49e5ca806568077f56fe982ce08",
     "ux": "7a717ced5a1c8df4d76c1f6987747792",
-    "workflow-recovery": "628d2ec51c3cd3d8bbd76eacb212dada"
+    "workflow-recovery": "005985edd090c7adc0a4a287bdda31eb"
   },
   "PROMPT_VERSIONS": {
     "accessibility": 5,
@@ -79,7 +79,7 @@
     "better-structural-drift": 2,
     "better-test-quality": 2,
     "branch-cleanup": 4,
-    "branch-reconcile": 12,
+    "branch-reconcile": 13,
     "claim-issue": 56,
     "claim-issue-gitlab": 50,
     "claim-issue-jira": 28,
@@ -89,8 +89,8 @@
     "console-errors": 4,
     "copy": 1,
     "cost-efficiency": 1,
-    "data-integrity": 1,
-    "data-safety": 3,
+    "data-integrity": 2,
+    "data-safety": 4,
     "dependency-updates": 9,
     "design": 1,
     "do-release": 23,
@@ -109,7 +109,7 @@
     "module-hygiene": 3,
     "observability": 2,
     "over-engineering": 1,
-    "performance": 7,
+    "performance": 8,
     "plan-feature": 6,
     "plan-task": 29,
     "plan-task-claim": 6,
@@ -118,7 +118,7 @@
     "privacy": 2,
     "reference-watch": 5,
     "refresh-local-llm-catalog": 4,
-    "reliability": 1,
+    "reliability": 2,
     "repo-sync": 1,
     "security": 6,
     "simplify": 4,
@@ -127,10 +127,10 @@
     "typing": 3,
     "ui-bugs": 4,
     "ui-lifecycle": 3,
-    "upgrade-rehearsal": 5,
+    "upgrade-rehearsal": 6,
     "user-action-review": 3,
     "ux": 9,
-    "workflow-recovery": 1
+    "workflow-recovery": 2
   },
   "REFERENCE_WATCH_AUDITED_VERSION": 5,
   "PREVIOUS_DEFAULT_PROMPTS": {
@@ -193,7 +193,8 @@
       "90acf7a56c0de2147cf7463ba338a099",
       "4c69ed43b274ffee3a08a8da980be2bd",
       "234e23b6c8adc108b5a0cabeafcb8dfd",
-      "a70dae89a9ff1f0dfa0804b5ae24b00d"
+      "a70dae89a9ff1f0dfa0804b5ae24b00d",
+      "fe0a7f976e7ffb8d70dac58233b9b093"
     ],
     "claim-issue": [
       "37949d1b1fa8d461a15658f8f4192d97",
@@ -345,9 +346,13 @@
       "2b6ed595287f0742bed9ecba6788afe6",
       "eec33a9293f9393019917a6632dd964e"
     ],
+    "data-integrity": [
+      "5fcc4f5044101e89da5bbf4890c11a1c"
+    ],
     "data-safety": [
       "86b07f51abdbcbe7016f840b5bb0cd9b",
-      "eb97988dfc16d4c655f1834acc91d665"
+      "eb97988dfc16d4c655f1834acc91d665",
+      "25e79bc34cfadeab3cc3969a6c3421c2"
     ],
     "dependency-updates": [
       "020d66b93698341c556eca1eee851bee",
@@ -458,7 +463,8 @@
       "d7e3a80f42903fbf90be0efc9b559c0b",
       "b69bf4cbd2b3c272b5650608c62cede3",
       "8b297d723f9f39154c9cf6d501738494",
-      "4f8ddada54d7c6f31b7fb35aeb0f29db"
+      "4f8ddada54d7c6f31b7fb35aeb0f29db",
+      "b5a221d23042b7751d5ece776399b403"
     ],
     "plan-feature": [
       "9fbc2a2ded8f4533d1f0f6b9cb780b34",
@@ -524,6 +530,9 @@
       "a9dce67bb9f0837ba904f3412b03637f",
       "ca7324a0f2251a66b46ea534940c9da8"
     ],
+    "reliability": [
+      "2a99be77b8f34653f4b926db0a773ea5"
+    ],
     "security": [
       "b199739b21a8c45ed3778b2339ebf55f",
       "d0f54c1fbe62d067b1a23ee0a9f3528c",
@@ -563,7 +572,8 @@
       "ef9d54fa653d6639abd4707b4f392d8d",
       "e53a4cb57cdc7b5876d709bcd8a68132",
       "9fddc216c6de8385d4d1dda42fd70cb9",
-      "eed59316cc30bbaf033869065cd0889b"
+      "eed59316cc30bbaf033869065cd0889b",
+      "a86ee94bf5e13362e67380fae3dfe4d2"
     ],
     "user-action-review": [
       "945a716d446d26a03e2805d28bd1ae16",
@@ -578,6 +588,9 @@
       "bb8670c1e6eb28434ad2d45b6dc62177",
       "41b02e644f3dc5dcb713700c56a56454",
       "14d790bd65e540d00786ecb4e787a61e"
+    ],
+    "workflow-recovery": [
+      "628d2ec51c3cd3d8bbd76eacb212dada"
     ]
   }
 }

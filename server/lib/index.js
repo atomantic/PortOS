@@ -985,7 +985,6 @@ export * from './credentialEnvVars.js';
 export * from './brainLinkLocalFields.js';
 export * from './brainBridgeSource.js';
 
-export * from './branchRetirementArchive.js';
 export * from './reconcileRetirementEvidence.js';
 export * from './legacyRetirementTransition.js';
 export * from './retirementCheckoutObservation.js';

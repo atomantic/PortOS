@@ -66,7 +66,7 @@ import { rendersIntercut, usesLoudTierEverywhere } from '../../lib/musicVideoPro
 import { cutEffectCuts, plannedTransitions, sceneCutEffect } from '../../lib/musicVideoCutEffects.js';
 import { imageEffectGlitchFrames, mergeGlitchFrames, musicVideoTransitionFilter, sceneTransitions, shotGlitchFrames, transitionGlitchFrames } from '../../lib/musicVideoTransitions.js';
 import { stillMoveForCamera } from '../../lib/cameraMovements.js';
-import { isEndFrameImageEffect, musicVideoImageEffectFilter, sceneImageEffect } from '../../lib/musicVideoImageEffects.js';
+import { isEndFrameImageEffect, musicVideoImageEffectFilter, sceneImageEffect, scenePhotoSequence } from '../../lib/musicVideoImageEffects.js';
 import { trackedRenderMap } from '../renderActivity.js';
 
 // Per-project render mutex (keyed by projectId so two projects can render in
@@ -236,7 +236,15 @@ function sectionClip(scene, layer, planned, { layered }) {
 }
 
 function stillClip(scene, section, { layered }) {
-  const imagePath = scene.referenceImageId ? safeUnder(PATHS.images, scene.referenceImageId) : null;
+  const sequence = layered && scenePhotoSequence(scene);
+  const photoPaths = sequence ? sequence.imageIds.map(id => safeUnder(PATHS.images, id)) : null;
+  if (sequence && (!photoPaths.length || photoPaths.some(path => !path || !existsSync(path)))) {
+    throw new ServerError('A selected sequence photo is missing. Pick the missing photos before rendering.', {
+      status: 404, code: 'MISSING_SEQUENCE_PHOTOS', context: { sceneId: scene.sceneId,
+        imageIds: sequence.imageIds.filter((id, i) => !photoPaths[i] || !existsSync(photoPaths[i])) },
+    });
+  }
+  const imagePath = photoPaths?.[0] || (scene.referenceImageId ? safeUnder(PATHS.images, scene.referenceImageId) : null);
   if (!imagePath || !existsSync(imagePath)) return { problem: 'missing-still' };
   // The shot's Move plays as set; a planned camera move (#10589) only seeds it when the shot is made.
   // An image effect (a camera flash that develops, musicVideoImageEffects.js) plays over the still.
@@ -245,6 +253,7 @@ function stillClip(scene, section, { layered }) {
   const endImagePath = effect && isEndFrameImageEffect(effect.effect) ? safeUnder(PATHS.images, scene.endImageId) : null;
   const playable = effect && (!isEndFrameImageEffect(effect.effect) || (endImagePath && existsSync(endImagePath)));
   return { clip: { ...section, imagePath, move: scene.stillMove || stillMoveForCamera(scene.camera) || 'hold',
+    ...(sequence ? { photoPaths, photoSequence: scene.photoSequence, photoStartSec: scene.startSec, photoEndSec: scene.endSec } : {}),
     ...(playable ? { effect, ...(endImagePath ? { endImagePath } : {}) } : {}) } };
 }
 
@@ -450,7 +459,7 @@ const evenPx = (n) => Math.max(2, Math.round(n / 2) * 2);
 // card is a solid colour the typography layer writes its text over. On the
 // frame grid every section is cut to an exact frame count. `inputRefs` names
 // the allocated ffmpeg inputs: clip (null for a card), optional end or still.
-function sectionChain(c, inputRefs, { canonW, canonH, fps, frames, frameGrid }) {
+function sectionChain(c, inputRefs, { canonW, canonH, fps, frames, frameGrid, beats = [] }) {
   // On the frame grid a footage in-point (a performance edit, an intercut
   // piece #9290) is a start frame; stills and cards always start at 0.
   const startFrame = !c.layer && c.inSec > 0 ? Math.round(c.inSec * fps) : 0;
@@ -473,7 +482,16 @@ function sectionChain(c, inputRefs, { canonW, canonH, fps, frames, frameGrid }) 
       + `${move}format=yuv420p,${trim},setpts=PTS-STARTPTS`;
     const id = inputRefs.clip;
     const end = inputRefs.end != null ? `${fitted(inputRefs.end)}[fxend${id}];` : '';
-    return end + fitted(id)
+    let picture = fitted(id);
+    if (inputRefs.photos?.length) {
+      const sequence = scenePhotoSequence({ visualLayer: 'still', photoSequence: c.photoSequence, startSec: c.photoStartSec, endSec: c.photoEndSec }, { fps, beats });
+      const frame = `max(0,t*${fps}+${Math.round((c.photoAtSec ?? c.effectAtSec ?? 0) * fps)}+0.000001)`;
+      const step = sequence.switchFrames ? (sequence.switchFrames.map(f => `gte(${frame},${f})`).join('+') || '0') : `floor(${frame}/${sequence.intervalFrames})`;
+      inputRefs.photos.forEach((photo, i) => {
+        picture += `[seq${id}_${i}];${fitted(photo)}[photo${id}_${i}];[seq${id}_${i}][photo${id}_${i}]overlay=shortest=1:enable='eq(mod(${step},${sequence.imageIds.length}),${i + 1})'`;
+      });
+    }
+    return end + picture
       + musicVideoImageEffectFilter(c.effect, { width: canonW, height: canonH, fps, key: id, atSec: c.effectAtSec || 0, end: end ? `fxend${id}` : null });
   }
   // A non-looping shot a hair longer than its source holds the last frame for
@@ -623,10 +641,15 @@ export function buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioD
     const clipInput = nextInput++;
     if (c.layer === 'still') {
       inputs.push('-loop', '1', '-framerate', String(fps), '-i', c.imagePath);
+      const photos = (c.photoPaths || []).slice(1).map(path => {
+        inputs.push('-loop', '1', '-framerate', String(fps), '-i', path);
+        return nextInput++;
+      });
       if (c.endImagePath) {
         inputs.push('-loop', '1', '-framerate', String(fps), '-i', c.endImagePath);
-        return { clip: clipInput, end: nextInput++ };
+        return { clip: clipInput, end: nextInput++, photos };
       }
+      return { clip: clipInput, photos };
     } else {
       if (c.loop !== false) inputs.push('-stream_loop', '-1');
       inputs.push('-i', c.videoPath);
@@ -657,7 +680,7 @@ export function buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioD
     const windowSec = t.windowFrames / fps;
     const { leadSec = 0, ...shot } = c;
     const inSec = Math.max(0, c.inSec - windowSec);
-    const clip = c.layer ? { ...c, outSec: c.inSec + windowSec } : {
+    const clip = c.layer ? { ...c, outSec: c.inSec + windowSec, ...(c.photoSequence ? { photoAtSec: (c.effectAtSec || 0) - windowSec } : {}) } : {
       ...shot,
       inSec,
       outSec: inSec + windowSec,
@@ -672,7 +695,7 @@ export function buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioD
   // One section's chain, ending on `out`; an incoming cut effect lays the next shot's preroll over its end.
   const sectionFilters = (i, input, preroll, out) => {
     const { c, frames, startSec } = plan[i];
-    const head = `${sectionChain(c, input, { canonW, canonH, fps, frames, frameGrid })}${fadeChain(i, frames)}`;
+    const head = `${sectionChain(c, input, { canonW, canonH, fps, frames, frameGrid, beats })}${fadeChain(i, frames)}`;
     if (!preroll) return [`${head}[${out}]`];
     const start = sectionFrame(startSec);
     const pad = Math.max(0, frames - preroll.windowFrames);
@@ -681,7 +704,7 @@ export function buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioD
     const fadeIn = preroll.style === 'dissolve' ? `format=yuva420p,fade=t=in:s=0:n=${preroll.windowFrames + 1}:alpha=1,` : '';
     return [
       `${head}[vraw${i}]`,
-      `${sectionChain(preroll.clip, preroll.input, { canonW, canonH, fps, frames: preroll.windowFrames, frameGrid })}[pre${i}]`,
+      `${sectionChain(preroll.clip, preroll.input, { canonW, canonH, fps, frames: preroll.windowFrames, frameGrid, beats })}[pre${i}]`,
       `[pre${i}]${fadeIn}tpad=start=${pad}:color=black,setpts=N/(${fps}*TB)[prepad${i}]`,
       `[vraw${i}][prepad${i}]overlay=eof_action=pass:enable='${shown}'[${out}]`,
     ];

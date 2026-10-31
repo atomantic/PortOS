@@ -12,6 +12,7 @@ import { pipelineEditorialChecksSettingsSchema } from './pipelineValidation.js';
 import { loraTrainingConfigSchema } from './mediaValidation.js';
 import { ServerError } from './errorHandler.js';
 import { isSafeGitRef } from './gitArgs.js';
+import { PM2_PROCESS_NAME_MAX, PM2_PROCESS_NAME_RE } from '../../lib/pm2ProcessName.js';
 import { releaseSynchronizationResetCheckoutSchema } from './releaseSynchronization.js';
 import { partialWithoutDefaults, emptyToUndefined, emptyToNull, optionalBooleanMap, presetProviderIdSchema, providerRefSchema } from './zodCompat.js';
 import { WORK_TRACKERS } from './workTracker.js';
@@ -136,8 +137,8 @@ export {
 export const processListQuerySchema = z.object({ appId: z.string().min(1).optional() });
 
 // Reject option-shaped names before PM2 interprets positional arguments.
-export const pm2ProcessNameSchema = z.string().min(1).max(120)
-  .regex(/^[A-Za-z0-9_][A-Za-z0-9._-]*$/, 'Must start with an alphanumeric character or underscore');
+export const pm2ProcessNameSchema = z.string().min(1).max(PM2_PROCESS_NAME_MAX)
+  .regex(PM2_PROCESS_NAME_RE, 'Must start with an alphanumeric character or underscore');
 
 export const logsQuerySchema = z.object({
   lines: z.coerce.number().int().min(1).max(5000).default(100),
@@ -3067,24 +3068,6 @@ export const heldCheckoutRetireBodySchema = z.object({
   }).optional(),
 });
 export const heldCheckoutReviewBodySchema = heldCheckoutRetireBodySchema.omit({ review: true }).extend({ prUrl: z.string().url(), kind: z.enum(['source-supersession', 'preserved-supersession']).optional() });
-export const initializedCheckoutRetireBodySchema = heldCheckoutRetireBodySchema.extend({
-  review: heldCheckoutRetireBodySchema.shape.review.unwrap(),
-}).strict();
-export const initializedCheckoutTransactionSchema = z.object({ appId: nonEmptyString, transactionId: z.string().uuid() }).strict();
-export const initializedCheckoutRestoreSchema = initializedCheckoutTransactionSchema.extend({
-  journalDigest: z.string().regex(/^[a-f0-9]{64}$/),
-}).strict();
-
-export const initializedCheckoutBranchRetireSchema = initializedCheckoutRestoreSchema.extend({
-  review: heldCheckoutRetireBodySchema.shape.review.unwrap(),
-}).strict();
-export const initializedCheckoutMetadataRestoreSchema = initializedCheckoutRestoreSchema.extend({
-  review: z.object({ digest: z.string().regex(/^[a-f0-9]{64}$/) }).strict(),
-}).strict();
-export const initializedCheckoutFinalizationSchema = initializedCheckoutMetadataRestoreSchema;
-export const initializedCheckoutQuarantineResumptionSchema = initializedCheckoutRestoreSchema.extend({
-  review: z.object({ digest: z.string().regex(/^[a-f0-9]{64}$/), acceptSuperseded: z.boolean().optional() }).strict(),
-}).strict();
 
 // Per-app task-type overrides (routes/apps/taskTypes.js)
 export const appTaskTypeToggleBodySchema = z.object({ enabled: z.boolean() });

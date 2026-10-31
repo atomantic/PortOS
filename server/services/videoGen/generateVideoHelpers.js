@@ -17,6 +17,7 @@ import {
 import { formatBytes, PATHS, unlinkGuarded } from '../../lib/fileUtils.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { renderTimingFields } from '../../lib/renderTiming.js';
+import { isAppleSilicon } from '../../lib/platform.js';
 import { videoGenEvents } from './events.js';
 import { extendMasterPath } from './extendMaster.js';
 
@@ -474,7 +475,7 @@ function abortCause(stderr, { platform, arch, mlxRuntime }) {
   const text = typeof stderr === 'string' ? stderr : '';
   if (/kIOGPUCommandBufferCallbackErrorOutOfMemory/i.test(text)) return OOM_ABORT_CAUSE;
   if (/kIOGPUCommandBufferCallbackErrorInnocentVictim/i.test(text)) return VICTIM_ABORT_CAUSE;
-  if (METAL_WATCHDOG_RE.test(text) && platform === 'darwin' && arch === 'arm64' && mlxRuntime) return WATCHDOG_ABORT_CAUSE;
+  if (METAL_WATCHDOG_RE.test(text) && isAppleSilicon({ platform, arch }) && mlxRuntime) return WATCHDOG_ABORT_CAUSE;
   if (NATIVE_ASSERTION_RE.test(text)) return ASSERTION_ABORT_CAUSE;
   return UNEXPLAINED_ABORT_CAUSE;
 }
@@ -577,7 +578,7 @@ export const METAL_BUFFER_RETRY_ENV = Object.freeze({
  * @returns {{ env: Record<string, string> }|null}
  */
 export function planMetalBufferRetry({ signal = null, stderr = '', retriesUsed = 0, platform = process.platform, arch = process.arch, mlxRuntime = false } = {}) {
-  if (platform !== 'darwin' || arch !== 'arm64' || !mlxRuntime) return null;
+  if (!isAppleSilicon({ platform, arch }) || !mlxRuntime) return null;
   if (!Number.isInteger(retriesUsed) || retriesUsed > 0) return null;
   if (signal !== 'SIGABRT') return null;
   const text = typeof stderr === 'string' ? stderr : '';

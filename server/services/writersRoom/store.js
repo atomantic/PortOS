@@ -30,7 +30,7 @@
 
 import { readFile, readdir } from 'fs/promises';
 import { atomicWrite, ensureDir, readJSONFile, safeJSONParse } from '../../lib/fileUtils.js';
-import { createPgFileFacade, resolvePgBackend } from '../../lib/pgFileFacade.js';
+import { createPgFileFacade, resolvePgBackend, POSTGRES_SETUP_HINT } from '../../lib/pgFileFacade.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import {
   maybeJournalBeforeOverwrite, setSyncBaseHash, contentHashForRecord, flushBaseHashes,
@@ -305,7 +305,7 @@ function makePgBackend(db) {
 }
 
 const pgBackend = () => resolvePgBackend({
-  requirement: 'Writers Room requires PostgreSQL — run `npm run setup:db` (dev/test only: set MEMORY_BACKEND=file for the unsupported file backend)',
+  requirement: `Writers Room requires PostgreSQL — ${POSTGRES_SETUP_HINT}`,
   migrate: async () => {
     const { migrateWritersRoomToDB } = await import('../../scripts/migrateWritersRoomToDB.js');
     await migrateWritersRoomToDB();

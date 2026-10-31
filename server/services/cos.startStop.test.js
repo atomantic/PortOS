@@ -20,7 +20,6 @@ vi.mock('./eventScheduler.js', async (importOriginal) => ({
   cancel: vi.fn((id) => scheduled.delete(id)),
 }));
 
-const recoveryDrain = vi.hoisted(() => ({ calls: [] }));
 const completionWake = vi.hoisted(() => ({ held: false, run: vi.fn(async () => ({ checked: 3 })) }));
 vi.mock('../lib/maintenanceAdmission.js', async original => {
   const actual = await original();
@@ -30,14 +29,6 @@ vi.mock('./agentRepoStateVerification.js', () => ({
   sweepRepoStateVerifications: (...args) => completionWake.run(...args),
   resumeDeferredRepoStateVerifications: async blocked => { const reason = await blocked(); return reason ? { checked: 0, skipReason: reason } : completionWake.run(); },
   bindCompletionRetirementEvents: () => () => {},
-}));
-vi.mock('./initializedCheckoutRecoverySweep.js', () => ({
-  INITIALIZED_RECOVERY_INTERVAL_MS: 30 * 60_000,
-  sweepInitializedCheckoutRecoveries: async blocked => {
-    const reason = await blocked();
-    if (!reason) recoveryDrain.calls.push('replay');
-    return { skipped: reason };
-  },
 }));
 let persisted = { running: false, paused: false, agents: {}, config: { healthCheckIntervalMs: 900000 } };
 vi.mock('./cosState.js', async (importOriginal) => ({
@@ -238,25 +229,6 @@ describe('CoS daemon start/stop lifecycle (#11860)', () => {
 
     await stop();
     expect(handoffFollowUp.gate).toBe(null);
-  });
-
-  it('arms journal recovery independently of agent slots and branch tasks, and enforces live autonomy on every timer', async () => {
-    recoveryDrain.calls.length = 0;
-    persisted = { ...persisted, paused: false, config: { ...persisted.config, maxConcurrentAgents: 0, domainAutonomy: { cos: 'execute' } } };
-    const starting = start();
-    await waitFor(() => typeof releaseRecovery === 'function');
-    releaseRecovery(); await starting;
-    expect(cosEventIds()).toContain('cos-initialized-retirement-recovery');
-    const tick = handlers.get('cos-initialized-retirement-recovery');
-    await tick();
-    expect(recoveryDrain.calls).toEqual(['replay']);
-    persisted.paused = true; await tick();
-    persisted.paused = false;
-    for (const mode of ['off', 'dry-run']) { persisted.config.domainAutonomy.cos = mode; await tick(); }
-    expect(recoveryDrain.calls).toEqual(['replay']);
-    await stop(); await tick();
-    expect(recoveryDrain.calls).toEqual(['replay']);
-    expect(cosEventIds()).not.toContain('cos-initialized-retirement-recovery');
   });
 
   it('a boot step that throws rolls the daemon back so the next start() succeeds', async () => {

@@ -33,6 +33,7 @@ describe('normalizeShotType', () => {
     expect(normalizeShotType('cowboy')).toBe('medium-wide');
     expect(normalizeShotType('full shot')).toBe('full');
     expect(normalizeShotType('point of view')).toBe('pov');
+    expect(normalizeShotType('ensemble')).toBe('group');
   });
 
   it('returns null for unknown / non-string / empty', () => {

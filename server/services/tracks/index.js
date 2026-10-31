@@ -11,7 +11,7 @@
  */
 
 import { randomUUID } from 'crypto';
-import { createRecordStoreBackendSelector } from '../../lib/pgFileFacade.js';
+import { createRecordStoreBackendSelector, POSTGRES_SETUP_HINT } from '../../lib/pgFileFacade.js';
 import { withMusicMutation, musicMutationClient, afterMusicCommit } from '../musicMembershipMutation.js';
 import { emitRecordUpdated, emitRecordDeleted, autoSubscribeRecordToAllPeers } from '../sharing/recordEvents.js';
 import { makeRender as makeRenderLogic } from './logic.js';
@@ -45,7 +45,7 @@ const { selectBackend, getBackendName, reset } = createRecordStoreBackendSelecto
   label: 'Tracks',
   loadFileBackend: () => import('./file.js'),
   loadDbBackend: () => import('./db.js'),
-  requireDbMessage: 'Tracks require PostgreSQL — run `npm run setup:db` (dev/test only: set MEMORY_BACKEND=file in .env for the unsupported file backend)',
+  requireDbMessage: `Tracks require PostgreSQL — ${POSTGRES_SETUP_HINT}`,
 });
 
 /**

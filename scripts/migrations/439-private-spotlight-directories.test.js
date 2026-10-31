@@ -2,7 +2,6 @@ import { chmod, lstat, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { _createInitializedCheckoutRecovery } from '../../server/services/initializedCheckoutRecovery.js';
 import { excludeFromSpotlight, SPOTLIGHT_EXCLUDED_DIRS } from '../lib/spotlightExclude.js';
 import migration from './439-private-spotlight-directories.js';
 
@@ -13,18 +12,15 @@ beforeEach(async () => { rootDir = await mkdtemp(join(tmpdir(), 'private-spotlig
 afterEach(() => rm(rootDir, { recursive: true, force: true }));
 
 describe.skipIf(process.platform === 'win32')('macOS Spotlight directory repair', () => {
-  it('repairs an existing Spotlight-marked install so initialized recovery can discover journals', async () => {
+  it('repairs an existing Spotlight-marked install so private directories are 0o700', async () => {
     excludeFromSpotlight(join(rootDir, 'data'), { platform: 'darwin' });
     for (const rel of SPOTLIGHT_EXCLUDED_DIRS) await chmod(directory(rel), 0o755);
-    const recovery = _createInitializedCheckoutRecovery({ root: () => directory('cos/initialized-checkout-retirements') });
-    await expect(recovery.discover()).rejects.toThrow('retirement-journal-directory-unsafe');
 
     await migration.up({ rootDir, platform: 'darwin' });
 
     for (const rel of SPOTLIGHT_EXCLUDED_DIRS) expect(await mode(directory(rel)), rel).toBe(0o700);
-    expect(await recovery.discover()).toEqual({ ok: true, transactions: [] });
     await migration.up({ rootDir, platform: 'darwin' });
-    expect(await recovery.discover()).toEqual({ ok: true, transactions: [] });
+    for (const rel of SPOTLIGHT_EXCLUDED_DIRS) expect(await mode(directory(rel)), rel).toBe(0o700);
   });
 
   it('leaves symlinks, non-directories, absent paths and more restrictive modes untouched', async () => {

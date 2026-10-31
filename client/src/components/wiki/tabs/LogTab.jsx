@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import * as api from '../../../services/api';
+import useLatestRequest from '../../../hooks/useLatestRequest';
 import { RefreshCw, Clock } from 'lucide-react';
 import { formatCount, timeAgo } from '../../../utils/formatters';
 import BrailleSpinner from '../../BrailleSpinner';
@@ -9,18 +10,27 @@ export default function LogTab({ vaultId, allNotes }) {
   const [loading, setLoading] = useState(true);
 
   const logExists = allNotes?.some(n => n.path === 'wiki/log.md');
-
-  useEffect(() => {
-    if (logExists) loadLog();
-    else { setLog(null); setLoading(false); }
-  }, [vaultId, logExists]);
+  // Wiki.jsx keeps this tab mounted across a vault switch, so a read for the
+  // previous vault must not land after (or instead of) the current vault's log.
+  const beginLoad = useLatestRequest();
 
   const loadLog = async () => {
+    const isCurrent = beginLoad();
     setLoading(true);
     const data = await api.getNote(vaultId, 'wiki/log.md').catch(() => null);
+    if (!isCurrent()) return;
     setLog(data?.error ? null : data);
     setLoading(false);
   };
+
+  useEffect(() => {
+    if (logExists) loadLog();
+    else {
+      beginLoad();
+      setLog(null);
+      setLoading(false);
+    }
+  }, [vaultId, logExists]);
 
   // Hooks must run unconditionally — compute entries first (defaulting to []
   // when log is not yet loaded) and branch into loading/empty states afterwards.

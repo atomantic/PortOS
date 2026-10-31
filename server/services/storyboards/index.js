@@ -27,7 +27,7 @@ const tooMany = (message) => new ServerError(message, { status: 409, code: 'STOR
 
 const BOARD_FIELDS = ['name', 'logline', 'aspectRatio', 'artStyle', 'universeId', 'moodBoardId', 'plot', 'tempTrack'];
 const BEAT_FIELDS = ['title', 'what', 'why', 'emotion', 'musicalRole', 'sectionHint', 'pin', 'beforeSong'];
-const PANEL_FIELDS = ['action', 'dialogue', 'framing', 'angle', 'facing', 'composition', 'camera', 'seconds', 'castIds', 'environmentIds', 'objectIds', 'notes'];
+const PANEL_FIELDS = ['action', 'dialogue', 'framing', 'angle', 'facing', 'composition', 'move', 'lens', 'focus', 'eyeline', 'camera', 'seconds', 'castIds', 'environmentIds', 'objectIds', 'notes'];
 
 const pickFields = (patch, fields) => Object.fromEntries(
   fields.filter((key) => Object.hasOwn(patch || {}, key)).map((key) => [key, patch[key]]),

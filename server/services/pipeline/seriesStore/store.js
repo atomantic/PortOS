@@ -37,7 +37,7 @@
 import { join } from 'path';
 import { PATHS } from '../../../lib/fileUtils.js';
 import { createCollectionStore } from '../../../lib/collectionStore.js';
-import { createPgFileFacade, resolvePgBackend, isFileBackend } from '../../../lib/pgFileFacade.js';
+import { createPgFileFacade, resolvePgBackend, isFileBackend, POSTGRES_SETUP_HINT } from '../../../lib/pgFileFacade.js';
 import { createRecordWriteQueue } from '../../../lib/fileWriteQueue.js';
 import { bumpPipelineMutationEpoch } from '../syncEpoch.js';
 
@@ -126,7 +126,7 @@ function makePgBackend(db, sanitizeRecord) {
 }
 
 const pgBackend = (sanitizeRecord) => resolvePgBackend({
-  requirement: 'Pipeline series require PostgreSQL — run `npm run setup:db` (dev/test only: set MEMORY_BACKEND=file for the unsupported file backend)',
+  requirement: `Pipeline series require PostgreSQL — ${POSTGRES_SETUP_HINT}`,
   migrate: async () => {
     const { migrateSeriesToDB } = await import('../../../scripts/migrateSeriesToDB.js');
     await migrateSeriesToDB();
