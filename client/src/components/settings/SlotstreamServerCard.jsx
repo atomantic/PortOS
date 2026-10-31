@@ -3,6 +3,7 @@ import { HardDrive, RefreshCw, Save, Square, Download, Terminal, X } from 'lucid
 import BrailleSpinner from '../BrailleSpinner';
 import ProgressBar from '../ui/ProgressBar';
 import { formatBytes } from '../../utils/formatters';
+import { PORTS } from '../../lib/ports.js';
 
 /**
  * Slotstream launcher — the same shape as the MTPLX launcher above it: a PM2
@@ -197,7 +198,7 @@ export default function SlotstreamServerCard({
                   id="slotstream-port"
                   type="number"
                   value={port}
-                  placeholder={String(status?.port ?? 5564)}
+                  placeholder={String(status?.port ?? PORTS.SLOTSTREAM)}
                   onChange={(e) => setPort(e.target.value)}
                   className="w-full bg-port-card border border-port-border rounded px-2 py-1.5 text-xs text-white"
                 />

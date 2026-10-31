@@ -19,6 +19,7 @@ import toast from '../components/ui/Toast';
 import { FormField } from '../components/ui/FormField';
 import { formatBytes, formatDateTime, formatDurationMs } from '../utils/formatters';
 import { pluralize } from '../lib/textUtils';
+import { PORTS } from '../lib/ports.js';
 
 const STATUS_EVENTS = ['browser:changed'];
 // Mirrors HOST_CONTROL_FORBIDDEN_MESSAGE; the status read stays open but omits
@@ -208,7 +209,7 @@ export default function BrowserPage() {
               <input
                 type="number"
                 value={configDraft.cdpPort}
-                onChange={e => setConfigDraft(d => ({ ...d, cdpPort: parseInt(e.target.value, 10) || 5556 }))}
+                onChange={e => setConfigDraft(d => ({ ...d, cdpPort: parseInt(e.target.value, 10) || PORTS.CDP }))}
                 className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm focus:outline-hidden focus:border-port-accent"
               />
             </FormField>
@@ -224,7 +225,7 @@ export default function BrowserPage() {
               <input
                 type="number"
                 value={configDraft.healthPort}
-                onChange={e => setConfigDraft(d => ({ ...d, healthPort: parseInt(e.target.value, 10) || 5557 }))}
+                onChange={e => setConfigDraft(d => ({ ...d, healthPort: parseInt(e.target.value, 10) || PORTS.CDP_HEALTH }))}
                 className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm focus:outline-hidden focus:border-port-accent"
               />
             </FormField>
@@ -687,7 +688,7 @@ export default function BrowserPage() {
           <div className="bg-port-card border border-port-border rounded-xl p-4">
             <h3 className="font-semibold text-white mb-3">CDP Endpoint</h3>
             <div className="bg-port-bg rounded-lg p-3 font-mono text-xs text-port-accent break-all">
-              {status?.cdpEndpoint || `ws://127.0.0.1:5556`}
+              {status?.cdpEndpoint || `ws://127.0.0.1:${PORTS.CDP}`}
             </div>
             <p className="text-xs text-gray-500 mt-2">
               Use this endpoint to connect Playwright or other CDP clients to the running browser instance.

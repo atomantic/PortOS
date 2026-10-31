@@ -117,6 +117,15 @@ describe('AddPeerForm tailcat path', () => {
     await waitFor(() => expect(getTailcatServe).toHaveBeenCalled());
     expect(screen.getAllByText(new RegExp(String(DEFAULT_TAILCAT_LOCAL_PORT))).length).toBeGreaterThan(0);
   });
+
+  it('names the remote port the forward will actually dial in the tailcat hint', async () => {
+    render(<AddPeerForm onAdd={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Tailcat' }));
+    await waitFor(() => expect(getTailcatServe).toHaveBeenCalled());
+    expect(screen.getByText(`:${DEFAULT_TAILCAT_REMOTE_PORT}`)).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Remote Tailcat port'), { target: { value: '5555' } });
+    expect(screen.getByText(':5555')).toBeInTheDocument();
+  });
 });
 
 // Regression: on a phone the mode toggles, fields, disclosure and submit measured

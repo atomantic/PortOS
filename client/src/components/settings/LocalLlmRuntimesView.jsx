@@ -5,6 +5,7 @@ import toast from '../ui/Toast';
 import FormField from '../ui/FormField';
 import BrailleSpinner from '../BrailleSpinner';
 import { formatBytes } from '../../utils/formatters';
+import { PORTS } from '../../lib/ports.js';
 import useDownloadPreflightConfirm from '../../hooks/useDownloadPreflightConfirm';
 import useLocalLlmStatus from '../../hooks/useLocalLlmStatus';
 import { migrateLocalLlmBackend, controlOllamaService, patchSettingsSlice, getLlamaServerStatus, getLlamaServerUpdateStatus, startLlamaServer, stopLlamaServer, installLlamaServer, upgradeLlamaServer, downloadSpecDecodeModel, cancelSpecDecodeModelDownload, removeSpecDecodeModel, previewLocalLlmDownload, controlLmStudioService, getMtplxServerStatus, startMtplxServer, stopMtplxServer, installMtplx, searchMtplxModels, pullMtplxModel, removeMtplxModel, getSlotstreamServerStatus, startSlotstreamServer, stopSlotstreamServer, installSlotstream, downloadSlotstreamModel, cancelSlotstreamModelDownload, saveRuntimeStartupList } from '../../services/api';
@@ -41,10 +42,10 @@ const specWeightEntries = (preset) => [preset?.model, preset?.draftModel, preset
 // Defaults for the advanced numeric fields. They are applied when the server is
 // launched rather than on every keystroke: a controlled number input that coerces
 // as you type snaps back to its default the moment you clear it to retype.
-// Keep the launcher default aligned with server/lib/ports.js. 8080 is a common
+// The launcher port comes from the shared PORTS map. 8080 is a common
 // IPFS / Tomcat / local-dashboard port and is not a safe default for a managed
 // daemon.
-const LLAMA_NUMBER_DEFAULTS = { port: 5568, ctxSize: 32768, nGpuLayers: 99, parallel: 1 };
+const LLAMA_NUMBER_DEFAULTS = { port: PORTS.LLAMA_SERVER, ctxSize: 32768, nGpuLayers: 99, parallel: 1 };
 // Optional llama.cpp tuning flags — unlike the fields above these have NO
 // PortOS default: an untouched one is stripped from the launch payload so
 // llama.cpp applies its own. Mirrors `server/lib/localModelTuning.js`.
@@ -112,7 +113,7 @@ export default function LocalLlmRuntimesView({ view } = {}) {
     // preset with no projector launches.
     projector: '',
     specType: 'draft-dspark',
-    port: 5568,
+    port: LLAMA_NUMBER_DEFAULTS.port,
     host: '127.0.0.1',
     ctxSize: 32768,
     nGpuLayers: 99,
