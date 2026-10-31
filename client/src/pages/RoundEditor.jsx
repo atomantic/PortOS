@@ -34,13 +34,14 @@ import RoundReadView from '../components/songs/RoundReadView';
 import { TEMP_ID_RE } from '../lib/roundDraft.js';
 import PageHeader from '../components/PageHeader';
 import PageSkeleton from '../components/ui/PageSkeleton';
+import LoadFailedState from '../components/ui/LoadFailedState';
 
 export default function RoundEditor() {
   const { id } = useParams();
   const navigate = useNavigate();
   const { editing, setMode, stackOpen, setStack, analyzeId, setAnalyze } = useRoundViewParams();
   const {
-    song, setSong, loading, baseDirty,
+    song, setSong, loading, loadError, reload, baseDirty,
     setField, save, saving, refreshTemplate, refreshing, applyGenerated,
   } = useRoundDraft({ id, analyzeId, setAnalyze });
   const rows = useRoundRows({ song, setSong });
@@ -60,6 +61,14 @@ export default function RoundEditor() {
         cards={2}
         sidebar={false}
       />
+    );
+  }
+  if (!song && loadError) {
+    return (
+      <div className="p-6">
+        <LoadFailedState title="Couldn’t load this round" hint={loadError.message} onRetry={reload} />
+        <Link to="/rounds" className="text-port-accent hover:underline">← Back to Rounds</Link>
+      </div>
     );
   }
   if (!song) {

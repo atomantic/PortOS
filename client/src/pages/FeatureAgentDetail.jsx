@@ -14,6 +14,7 @@ import RunsTab from '../components/feature-agents/RunsTab';
 import OutputTab from '../components/feature-agents/OutputTab';
 import GitTab from '../components/feature-agents/GitTab';
 import PageSkeleton from '../components/ui/PageSkeleton';
+import LoadFailedState from '../components/ui/LoadFailedState';
 
 export default function FeatureAgentDetail() {
   const { id } = useParams();
@@ -23,6 +24,10 @@ export default function FeatureAgentDetail() {
 
   const [agent, setAgent] = useState(null);
   const [loading, setLoading] = useState(!isCreate);
+  // Only a 404 means the agent is gone; any other failed first read keeps a Retry.
+  const [loadError, setLoadError] = useState(null);
+  // The id whose record is on screen, so a failed background refresh keeps it.
+  const shownIdRef = useRef(null);
   const [apps, setApps] = useState([]);
 
   // Unmount guard (StrictMode-safe: resets to true on mount) so an async agent
@@ -41,17 +46,24 @@ export default function FeatureAgentDetail() {
     if (isCreate) return;
     const seq = ++fetchSeqRef.current;
     const isCurrent = () => mountedRef.current && seq === fetchSeqRef.current;
-    api.getFeatureAgent(id).then(data => {
+    api.getFeatureAgent(id, { silent: true }).then(data => {
       if (!isCurrent()) return;
+      shownIdRef.current = id;
       setAgent(data);
+      setLoadError(null);
       setLoading(false);
-    }).catch(() => { if (isCurrent()) setLoading(false); });
+    }).catch((err) => {
+      if (!isCurrent()) return;
+      if (shownIdRef.current === id) toast.error(`Couldn’t refresh feature agent: ${err.message}`);
+      else setLoadError(err.status === 404 ? null : err);
+      setLoading(false);
+    });
   }, [id, isCreate]);
 
   useEffect(() => {
     // On an A→B switch, drop A's record and show the spinner immediately so a
     // stale agent never flashes under the new id while B is still loading.
-    if (!isCreate) { setAgent(null); setLoading(true); }
+    if (!isCreate) { setAgent(null); setLoadError(null); setLoading(true); shownIdRef.current = null; }
     fetchAgent();
     const handler = (data) => { if (data.id === id) fetchAgent(); };
     socket.on('cos:feature-agent:status', handler);
@@ -109,6 +121,15 @@ export default function FeatureAgentDetail() {
         cards={3}
         sidebar={false}
       />
+    );
+  }
+
+  if (!isCreate && !agent && loadError) {
+    return (
+      <div className="flex flex-col h-full items-center justify-center">
+        <LoadFailedState title="Couldn’t load this feature agent" hint={loadError.message} onRetry={() => { setLoading(true); fetchAgent(); }} />
+        <Link to="/feature-agents" className="text-port-accent text-sm hover:underline">Back to list</Link>
+      </div>
     );
   }
 

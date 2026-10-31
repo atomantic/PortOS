@@ -24,6 +24,7 @@ import TabPills from '../components/ui/TabPills';
 import Pill from '../components/ui/Pill';
 import InlineConfirmRow from '../components/ui/InlineConfirmRow';
 import ListLoadError from '../components/ui/ListLoadError';
+import LoadFailedState from '../components/ui/LoadFailedState';
 import EmptyState from '../components/EmptyState';
 import toast from '../components/ui/Toast';
 import MediaPreview from '../components/media/MediaPreview';
@@ -66,6 +67,8 @@ function DeckEditor({ id }) {
   const universesResource = useListResource(fetchUniverses);
   const { items: universes } = universesResource;
   const [loading, setLoading] = useState(true);
+  // Only a 404 means the deck is gone; any other failed read keeps a Retry.
+  const [loadError, setLoadError] = useState(null);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [rendering, setRendering] = useState(false);
@@ -86,10 +89,12 @@ function DeckEditor({ id }) {
   const load = useCallback(async () => {
     const seq = ++loadSeqRef.current;
     setLoading(true);
-    const data = await getDeck(id, { silent: true }).catch(() => null);
+    let error = null;
+    const data = await getDeck(id, { silent: true }).catch((err) => { error = err; return null; });
     if (!mountedRef.current || seq !== loadSeqRef.current) return;
     setDeck(data);
-    if (!data) toast.error('Deck not found');
+    setLoadError(error && error.status !== 404 ? error : null);
+    if (!data && (!error || error.status === 404)) toast.error('Deck not found');
     setLoading(false);
   }, [id, mountedRef]);
 
@@ -322,6 +327,16 @@ function DeckEditor({ id }) {
   };
 
   if (loading) return <PageSkeleton header="none" label="Loading deck" cards={4} sidebar={false} />;
+  if (!deck && loadError) {
+    return (
+      <div className="max-w-4xl mx-auto">
+        <LoadFailedState title="Couldn’t load this deck" hint={loadError.message} onRetry={load} />
+        <div className="text-center">
+          <Link to="/decks" className="text-port-accent hover:underline">Back to decks</Link>
+        </div>
+      </div>
+    );
+  }
   if (!deck) {
     return (
       <EmptyState title="Deck not found" message="This deck may have been deleted." actionTo="/decks" actionLabel="Back to decks" />

@@ -288,7 +288,7 @@ describe('MoodBoardDetail stale-response guards', () => {
     currentId = 'missing';
     rerender(<MemoryRouter><MoodBoardDetail /></MemoryRouter>);
     expect(screen.queryByLabelText('Name')).not.toBeInTheDocument();
-    await act(async () => { nextLoad.reject(new Error('Not found')); });
+    await act(async () => { nextLoad.reject(Object.assign(new Error('Not found'), { status: 404 })); });
     expect(screen.getByText('This mood board doesn’t exist.')).toBeInTheDocument();
     expect(screen.queryByLabelText('Name')).not.toBeInTheDocument();
     expect(mockToastError).toHaveBeenCalledExactlyOnceWith('Mood board not found');
@@ -296,6 +296,32 @@ describe('MoodBoardDetail stale-response guards', () => {
     await act(async () => { oldSync.reject(new Error('Sync failed')); });
     expect(mockToastError).toHaveBeenCalledExactlyOnceWith('Mood board not found');
     expect(mockToastSuccess).not.toHaveBeenCalled();
+  });
+});
+
+describe('MoodBoardDetail failed read', () => {
+  it('offers Retry for a failed read instead of saying the board does not exist', async () => {
+    mockGetMoodBoard
+      .mockRejectedValueOnce(Object.assign(new Error('Server unavailable'), { status: 503 }))
+      .mockResolvedValueOnce({ id: 'a', name: 'Board A', items: [] });
+    renderPage();
+    await waitFor(() => expect(screen.getByText('Couldn’t load this mood board')).toBeInTheDocument());
+    expect(screen.queryByText('This mood board doesn’t exist.')).not.toBeInTheDocument();
+    expect(mockToastError).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(boardNameValue()).toBe('Board A'));
+  });
+
+  it('reloads the whole board when a render event arrives after a failed read', async () => {
+    mockGetMoodBoard
+      .mockRejectedValueOnce(Object.assign(new Error('Server unavailable'), { status: 503 }))
+      .mockResolvedValueOnce({ id: 'a', name: 'Board A', items: [] });
+    renderPage();
+    await waitFor(() => expect(screen.getByText('Couldn’t load this mood board')).toBeInTheDocument());
+
+    await act(async () => { socketHandlers.get('connect')(); });
+    await waitFor(() => expect(boardNameValue()).toBe('Board A'));
   });
 });
 

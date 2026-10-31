@@ -28,6 +28,10 @@ import { buildRoundPatch } from '../lib/roundDraft.js';
 export default function useRoundDraft({ id, analyzeId, setAnalyze }) {
   const [song, setSong] = useState(null);
   const [loading, setLoading] = useState(true);
+  // A failed read other than 404 — the page offers Retry instead of "not found".
+  const [loadError, setLoadError] = useState(null);
+  const [loadAttempt, setLoadAttempt] = useState(0);
+  const reload = useCallback(() => setLoadAttempt((n) => n + 1), []);
   const [savedBase, setSavedBase] = useState({ score: '', key: '' });
 
   // Adopt a server-canonical song: set the draft AND snapshot its saved base.
@@ -45,12 +49,13 @@ export default function useRoundDraft({ id, analyzeId, setAnalyze }) {
     // hides the editor (and its Save button) until the new song arrives.
     setLoading(true);
     setSong(null);
+    setLoadError(null);
     getRound(id, { silent: true })
       .then((data) => { if (!cancelled) setServerSong(data?.round || null); })
-      .catch((err) => { if (!cancelled) toast.error(err?.message || 'Failed to load round'); })
+      .catch((err) => { if (!cancelled && err?.status !== 404) setLoadError(err); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [id, setServerSong]);
+  }, [id, setServerSong, loadAttempt]);
 
   // Field setters merge into the in-memory draft; nothing persists until Save.
   const setField = useCallback((key, value) => {
@@ -118,7 +123,7 @@ export default function useRoundDraft({ id, analyzeId, setAnalyze }) {
   );
 
   return {
-    song, setSong, loading, savedBase, baseDirty,
+    song, setSong, loading, loadError, reload, savedBase, baseDirty,
     setField, save, saving, refreshTemplate, refreshing, applyGenerated,
   };
 }

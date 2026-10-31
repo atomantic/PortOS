@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes, Link, useLocation } from 'react-router';
 
@@ -366,5 +366,22 @@ describe('CreativeDirectorDetail status line', () => {
     expect(await screen.findByRole('region', { name: 'Assembled video' })).toBeInTheDocument();
     expect(statusLine()).toHaveTextContent('Cut ready · waiting for your review');
     expect(screen.getByRole('button', { name: 'Review the cut' })).toBeInTheDocument();
+  });
+});
+
+describe('CreativeDirectorDetail failed read', () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  it('offers Retry for a failed read instead of saying the project was not found', async () => {
+    cdApi.getCreativeDirectorProject.mockRejectedValueOnce(Object.assign(new Error('Server unavailable'), { status: 503 })).mockResolvedValueOnce(PROJECT);
+    render(
+      <MemoryRouter initialEntries={['/creative-director/cd-example/overview']}>
+        <Routes><Route path="/creative-director/:id/:tab" element={<CreativeDirectorDetail />} /></Routes>
+      </MemoryRouter>,
+    );
+    expect(await screen.findByText('Couldn’t load this project')).toBeInTheDocument();
+    expect(screen.queryByText('Project not found.')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByRole('heading', { name: PROJECT.name })).toBeInTheDocument();
   });
 });
