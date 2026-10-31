@@ -153,9 +153,9 @@ export function reviewedDeliveryHandoffValid(input, agents, handoff, agentId) {
   if (!Array.isArray(agents) || !Array.isArray(review) || !Array.isArray(source)
     || !review.length || !source.length || review.length + source.length > 25
     || review[0] !== agentId || source.at(-1) !== meta?.sourceAgentId
-    || task?.status !== 'completed' || ![true, 'true'].includes(meta?.reviewLoopFollowUp)
+    || task?.status !== 'completed' || !isTruthyMeta(meta?.reviewLoopFollowUp)
     || meta.reviewLoopPRUrl !== input.prUrl || meta.reviewLoopPRBranch !== input.branch
-    || meta.reviewLoopLeaveOpen === true || meta.reviewLoopLeaveOpen === 'true'
+    || isTruthyMeta(meta.reviewLoopLeaveOpen)
     || !meta.sourceTaskId || task.id === meta.sourceTaskId) return false;
   const byId = new Map(agents.map(agent => [agent?.id, agent]));
   const ids = [...review, ...source];
