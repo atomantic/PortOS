@@ -3623,6 +3623,35 @@ describe('taskSchedule', () => {
         expect(outcome().retired.some(entry => entry.branch === row.branch)).toBe(false);
       });
 
+      it('records a physical removal once as evidence and does not rewrite the schedule on its replay (#14433)', async () => {
+        let saved = { version: 2, tasks: {}, executions: {}, templates: [] };
+        readJSONFile.mockImplementation(async () => structuredClone(saved));
+        writeFile.mockImplementation(async (_path, contents) => { saved = JSON.parse(contents); });
+        const outcome = () => saved.executions['task:branch-reconcile'].perApp['app-1'].branchReconcileOutcome;
+        const removal = { branch: 'fix/example', path: '/example/checkout', head: 'a'.repeat(40),
+          checkoutIdentity: 'original', branchDeleted: false, archiveDir: null };
+        await recordHeldCheckoutRetirement('app-1', removal);
+        expect(Object.values(outcome().retirementReceiptEvidence)).toEqual([expect.objectContaining({ checkoutIdentity: 'original' })]);
+        expect(outcome().retirementReceiptIdentities).toEqual({});
+        const writes = writeFile.mock.calls.length;
+        await recordHeldCheckoutRetirement('app-1', removal);
+        expect(writeFile.mock.calls.length).toBe(writes);
+        expect(outcome().retired).toHaveLength(1);
+      });
+
+      it('keeps no evidence for a removal it cannot identify or an archive with no location (#14433)', async () => {
+        let saved = { version: 2, tasks: {}, executions: {}, templates: [] };
+        readJSONFile.mockImplementation(async () => structuredClone(saved));
+        writeFile.mockImplementation(async (_path, contents) => { saved = JSON.parse(contents); });
+        const outcome = () => saved.executions['task:branch-reconcile'].perApp['app-1'].branchReconcileOutcome;
+        const row = { branch: 'fix/example', path: '/example/checkout', head: 'a'.repeat(40) };
+        await recordHeldCheckoutRetirement('app-1', { ...row, branchDeleted: false, archiveDir: null });
+        await recordHeldCheckoutRetirement('app-1', { ...row, head: 'b'.repeat(40), branchDeleted: true, archiveDir: '' });
+        expect(outcome().retired).toHaveLength(2);
+        expect(outcome().retirementReceiptEvidence).toEqual({});
+        expect(outcome().retirementReceiptIdentities).toEqual({});
+      });
+
       it('persists branch attempts through cap parks and manual resets, clearing only on sweep exhaustion', async () => {
         let saved = { version: 2, tasks: { 'branch-reconcile': { enabled: true, type: 'on-demand', perpetual: true } }, executions: {}, templates: [] };
         readJSONFile.mockImplementation(async () => JSON.parse(JSON.stringify(saved)));
