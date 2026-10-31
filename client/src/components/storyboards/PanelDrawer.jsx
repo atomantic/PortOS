@@ -41,6 +41,18 @@ const REF_GROUPS = [
   { field: 'objectIds', label: 'Objects', type: 'object', icon: Package },
 ];
 
+// Shot pickers in panel order. `half` pickers have few options, so two share a row once there is width.
+const SHOT_PICKERS = [
+  { field: 'framing', label: 'Framing', options: SHOT_TYPES, labels: SHOT_TYPE_LABELS, hints: SHOT_TYPE_HINTS },
+  { field: 'angle', label: 'Angle', options: SHOT_ANGLES, labels: SHOT_ANGLE_LABELS, hints: SHOT_ANGLE_HINTS },
+  { field: 'facing', label: 'Subject to camera', options: SHOT_FACINGS, labels: SHOT_FACING_LABELS, hints: SHOT_FACING_HINTS },
+  { field: 'eyeline', label: 'Eyeline', options: SHOT_EYELINES, labels: SHOT_EYELINE_LABELS, hints: SHOT_EYELINE_HINTS },
+  { field: 'composition', label: 'Composition', options: SHOT_COMPOSITIONS, labels: SHOT_COMPOSITION_LABELS, hints: SHOT_COMPOSITION_HINTS },
+  { field: 'lens', label: 'Lens', options: SHOT_LENSES, labels: SHOT_LENS_LABELS, hints: SHOT_LENS_HINTS, half: true },
+  { field: 'focus', label: 'Focus', options: SHOT_FOCUSES, labels: SHOT_FOCUS_LABELS, hints: SHOT_FOCUS_HINTS, half: true },
+  { field: 'move', label: 'Camera move (video)', options: SHOT_MOVES, labels: SHOT_MOVE_LABELS, hints: SHOT_MOVE_HINTS },
+];
+
 const actionButton = 'min-h-[44px] inline-flex items-center justify-center gap-1.5 rounded-lg border border-port-border px-3 text-sm text-gray-200 hover:border-port-accent/60 hover:text-white disabled:opacity-40';
 const iconButton = 'min-h-[44px] min-w-[44px] inline-flex items-center justify-center rounded text-gray-400 hover:text-white hover:bg-port-border/50 disabled:opacity-30 disabled:pointer-events-none';
 const labelClass = 'block text-[11px] text-gray-500 mb-0.5';
@@ -164,125 +176,100 @@ function ShotTab({ board, found, panelNumber, sketchNonce, busy, handlers, timin
     if (next !== panel.seconds) handlers.onPatch({ seconds: next });
   };
 
+  // A phone stacks everything in one column (art, words, pickers, then the rest);
+  // a wide side panel puts the art and words beside the pickers so the whole shot fits.
   return (
-    <div className="space-y-3">
-      <ArtSection
-        panel={panel}
-        aspectRatio={board.aspectRatio}
-        sketchNonce={sketchNonce}
-        moodBoardId={board.moodBoardId}
-        busy={busy}
-        onAddTake={handlers.onAddTake}
-        onSelectTake={handlers.onSelectTake}
-        onRemoveTake={handlers.onRemoveTake}
-        onSketch={handlers.onSketch}
-        onCorrect={handlers.onCorrect}
-        onSendToScene={sendLabel ? handlers.onSendToScene : null}
-        sendLabel={sendLabel}
-      />
-      <div>
-        <label htmlFor={fieldId('action')} className={labelClass}>Action</label>
-        <CommitField id={fieldId('action')} multiline value={panel.action} maxLength={STORYBOARD_LIMITS.panelText}
-          placeholder="What we see" onCommit={(action) => handlers.onPatch({ action })} />
-      </div>
-      {songTiming?.span ? (
-        <PanelSongTiming panel={panel} span={songTiming.span} lyricCues={songTiming.lyricCues} onPatch={handlers.onPatch} />
-      ) : null}
-      {timing ? (
+    <div className="flex flex-col gap-3 lg:grid lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)] lg:grid-rows-[auto_1fr] lg:items-start lg:gap-x-5">
+      <div className="contents lg:col-start-1 lg:row-start-1 lg:block lg:space-y-3">
+        <ArtSection
+          panel={panel}
+          aspectRatio={board.aspectRatio}
+          sketchNonce={sketchNonce}
+          moodBoardId={board.moodBoardId}
+          busy={busy}
+          onAddTake={handlers.onAddTake}
+          onSelectTake={handlers.onSelectTake}
+          onRemoveTake={handlers.onRemoveTake}
+          onSketch={handlers.onSketch}
+          onCorrect={handlers.onCorrect}
+          onSendToScene={sendLabel ? handlers.onSendToScene : null}
+          sendLabel={sendLabel}
+        />
         <div>
-          <label htmlFor={fieldId('dialogue')} className={labelClass}>Dialogue or lyric</label>
-          <CommitField id={fieldId('dialogue')} multiline value={panel.dialogue} maxLength={STORYBOARD_LIMITS.panelText}
-            onCommit={(dialogue) => handlers.onPatch({ dialogue })} />
+          <label htmlFor={fieldId('action')} className={labelClass}>Action</label>
+          <CommitField id={fieldId('action')} multiline value={panel.action} maxLength={STORYBOARD_LIMITS.panelText}
+            placeholder="What we see" onCommit={(action) => handlers.onPatch({ action })} />
         </div>
-      ) : null}
-      <div>
-        <span id={fieldId('framing')} className={labelClass}>Framing</span>
-        <ShotDiagramPicker options={SHOT_TYPES} labels={SHOT_TYPE_LABELS} hints={SHOT_TYPE_HINTS}
-          value={panel.framing} labelId={fieldId('framing')} onChange={(framing) => handlers.onPatch({ framing })} />
-      </div>
-      <div>
-        <span id={fieldId('angle')} className={labelClass}>Angle</span>
-        <ShotDiagramPicker options={SHOT_ANGLES} labels={SHOT_ANGLE_LABELS} hints={SHOT_ANGLE_HINTS}
-          value={panel.angle} labelId={fieldId('angle')} onChange={(angle) => handlers.onPatch({ angle })} />
-      </div>
-      <div>
-        <span id={fieldId('facing')} className={labelClass}>Subject to camera</span>
-        <ShotDiagramPicker options={SHOT_FACINGS} labels={SHOT_FACING_LABELS} hints={SHOT_FACING_HINTS}
-          value={panel.facing} labelId={fieldId('facing')} onChange={(facing) => handlers.onPatch({ facing })} />
-      </div>
-      <div>
-        <span id={fieldId('eyeline')} className={labelClass}>Eyeline</span>
-        <ShotDiagramPicker options={SHOT_EYELINES} labels={SHOT_EYELINE_LABELS} hints={SHOT_EYELINE_HINTS}
-          value={panel.eyeline} labelId={fieldId('eyeline')} onChange={(eyeline) => handlers.onPatch({ eyeline })} />
-      </div>
-      <div>
-        <span id={fieldId('composition')} className={labelClass}>Composition</span>
-        <ShotDiagramPicker options={SHOT_COMPOSITIONS} labels={SHOT_COMPOSITION_LABELS} hints={SHOT_COMPOSITION_HINTS}
-          value={panel.composition} labelId={fieldId('composition')} onChange={(composition) => handlers.onPatch({ composition })} />
-      </div>
-      <div>
-        <span id={fieldId('lens')} className={labelClass}>Lens</span>
-        <ShotDiagramPicker options={SHOT_LENSES} labels={SHOT_LENS_LABELS} hints={SHOT_LENS_HINTS}
-          value={panel.lens} labelId={fieldId('lens')} onChange={(lens) => handlers.onPatch({ lens })} />
-      </div>
-      <div>
-        <span id={fieldId('focus')} className={labelClass}>Focus</span>
-        <ShotDiagramPicker options={SHOT_FOCUSES} labels={SHOT_FOCUS_LABELS} hints={SHOT_FOCUS_HINTS}
-          value={panel.focus} labelId={fieldId('focus')} onChange={(focus) => handlers.onPatch({ focus })} />
-      </div>
-      <div>
-        <span id={fieldId('move')} className={labelClass}>Camera move (video)</span>
-        <ShotDiagramPicker options={SHOT_MOVES} labels={SHOT_MOVE_LABELS} hints={SHOT_MOVE_HINTS}
-          value={panel.move} labelId={fieldId('move')} onChange={(move) => handlers.onPatch({ move })} />
-      </div>
-      {timing ? (
-        <div>
-          <label htmlFor={fieldId('seconds')} className={labelClass}>Seconds (estimate)</label>
-          <input id={fieldId('seconds')} type="number" inputMode="decimal" min="0.01" step="0.01" max={STORYBOARD_LIMITS.panelSecondsMax}
-            value={secondsDraft} onChange={(event) => setSecondsDraft(event.target.value)} onBlur={commitSeconds}
-            onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); }}
-            className="w-full max-w-[10rem] min-h-[44px] bg-port-bg border border-port-border rounded px-2 text-sm text-white tabular-nums" />
-        </div>
-      ) : null}
-      <DrawPanelButton panel={panel} onDraw={handlers.onDraw} disabled={busy} />
-      <div className="flex flex-wrap items-center gap-2 border-t border-port-border pt-3">
-        <button type="button" className={iconButton} onClick={() => handlers.onMove({ index: index - 1 })} disabled={index === 0} aria-label="Move panel earlier">
-          <ChevronLeft size={18} />
-        </button>
-        <span className="text-xs text-gray-500 tabular-nums">Panel {panelNumber}</span>
-        <button type="button" className={iconButton} onClick={() => handlers.onMove({ index: index + 1 })} disabled={index >= beat.panels.length - 1} aria-label="Move panel later">
-          <ChevronRight size={18} />
-        </button>
-        {board.beats.length > 1 ? (
-          <>
-            <label htmlFor={fieldId('beat')} className="sr-only">Beat</label>
-            <select id={fieldId('beat')} value={beat.id}
-              onChange={(event) => handlers.onMove({ beatId: event.target.value, index: 10_000 })}
-              className="min-h-[44px] max-w-[12rem] bg-port-bg border border-port-border rounded px-2 text-sm text-white">
-              {board.beats.map((b, i) => <option key={b.id} value={b.id}>{`Beat ${i + 1}${b.title ? ` · ${b.title}` : ''}`}</option>)}
-            </select>
-          </>
+        {songTiming?.span ? (
+          <PanelSongTiming panel={panel} span={songTiming.span} lyricCues={songTiming.lyricCues} onPatch={handlers.onPatch} />
+        ) : null}
+        {timing ? (
+          <div>
+            <label htmlFor={fieldId('dialogue')} className={labelClass}>Dialogue or lyric</label>
+            <CommitField id={fieldId('dialogue')} multiline value={panel.dialogue} maxLength={STORYBOARD_LIMITS.panelText}
+              onCommit={(dialogue) => handlers.onPatch({ dialogue })} />
+          </div>
         ) : null}
       </div>
-      <div className="flex flex-wrap gap-2">
-        <button type="button" className={actionButton} onClick={() => handlers.onInsert(index)} disabled={busy}>
-          <Plus size={16} aria-hidden="true" /> Insert before
-        </button>
-        <button type="button" className={actionButton} onClick={() => handlers.onInsert(index + 1)} disabled={busy}>
-          <Plus size={16} aria-hidden="true" /> Insert after
-        </button>
-        <button type="button" className={`${actionButton} ml-auto hover:text-port-error`} onClick={() => setConfirmDelete(true)}>
-          <Trash2 size={16} aria-hidden="true" /> Delete panel
-        </button>
+      <div className="order-1 grid grid-cols-2 gap-x-3 gap-y-2 lg:order-none lg:col-start-2 lg:row-span-2 lg:row-start-1">
+        {SHOT_PICKERS.map(({ field, label, options, labels, hints, half }) => (
+          <div key={field} className={half ? 'col-span-2 sm:col-span-1' : 'col-span-2'}>
+            <ShotDiagramPicker label={label} options={options} labels={labels} hints={hints}
+              value={panel[field]} labelId={fieldId(field)} onChange={(next) => handlers.onPatch({ [field]: next })} />
+          </div>
+        ))}
       </div>
-      {confirmDelete ? (
-        <InlineConfirmRow
-          question={`Delete panel ${panelNumber} from beat ${beatIndex + 1}?`}
-          onConfirm={() => { setConfirmDelete(false); handlers.onDelete(); }}
-          onCancel={() => setConfirmDelete(false)}
-          autoFocus
-        />
-      ) : null}
+      {/* Seconds, Draw panel and the panel's place: under the pickers on a phone, under the art on desktop. */}
+      <div className="order-2 space-y-3 lg:order-none lg:col-start-1 lg:row-start-2">
+        {timing ? (
+          <div>
+            <label htmlFor={fieldId('seconds')} className={labelClass}>Seconds (estimate)</label>
+            <input id={fieldId('seconds')} type="number" inputMode="decimal" min="0.01" step="0.01" max={STORYBOARD_LIMITS.panelSecondsMax}
+              value={secondsDraft} onChange={(event) => setSecondsDraft(event.target.value)} onBlur={commitSeconds}
+              onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); }}
+              className="w-full max-w-[10rem] min-h-[44px] bg-port-bg border border-port-border rounded px-2 text-sm text-white tabular-nums" />
+          </div>
+        ) : null}
+        <DrawPanelButton panel={panel} onDraw={handlers.onDraw} disabled={busy} />
+        <div className="flex flex-wrap items-center gap-2 border-t border-port-border pt-3">
+          <button type="button" className={iconButton} onClick={() => handlers.onMove({ index: index - 1 })} disabled={index === 0} aria-label="Move panel earlier">
+            <ChevronLeft size={18} />
+          </button>
+          <span className="text-xs text-gray-500 tabular-nums">Panel {panelNumber}</span>
+          <button type="button" className={iconButton} onClick={() => handlers.onMove({ index: index + 1 })} disabled={index >= beat.panels.length - 1} aria-label="Move panel later">
+            <ChevronRight size={18} />
+          </button>
+          {board.beats.length > 1 ? (
+            <>
+              <label htmlFor={fieldId('beat')} className="sr-only">Beat</label>
+              <select id={fieldId('beat')} value={beat.id}
+                onChange={(event) => handlers.onMove({ beatId: event.target.value, index: 10_000 })}
+                className="min-h-[44px] max-w-[12rem] bg-port-bg border border-port-border rounded px-2 text-sm text-white">
+                {board.beats.map((b, i) => <option key={b.id} value={b.id}>{`Beat ${i + 1}${b.title ? ` · ${b.title}` : ''}`}</option>)}
+              </select>
+            </>
+          ) : null}
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <button type="button" className={actionButton} onClick={() => handlers.onInsert(index)} disabled={busy}>
+            <Plus size={16} aria-hidden="true" /> Insert before
+          </button>
+          <button type="button" className={actionButton} onClick={() => handlers.onInsert(index + 1)} disabled={busy}>
+            <Plus size={16} aria-hidden="true" /> Insert after
+          </button>
+          <button type="button" className={`${actionButton} ml-auto hover:text-port-error`} onClick={() => setConfirmDelete(true)}>
+            <Trash2 size={16} aria-hidden="true" /> Delete panel
+          </button>
+        </div>
+        {confirmDelete ? (
+          <InlineConfirmRow
+            question={`Delete panel ${panelNumber} from beat ${beatIndex + 1}?`}
+            onConfirm={() => { setConfirmDelete(false); handlers.onDelete(); }}
+            onCancel={() => setConfirmDelete(false)}
+            autoFocus
+          />
+        ) : null}
+      </div>
     </div>
   );
 }
