@@ -1,4 +1,12 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdir, writeFile } from 'fs/promises';
+import { join } from 'path';
+
+// The completion-receipt reader reads PATHS.cosAgents; keep it off the live install.
+vi.mock('../lib/fileUtils.js', async importOriginal => {
+  const { makePathsProxy, lazyTempDataRoot } = await import('../lib/mockPathsDataRoot.js');
+  return makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-runner-receipt-') });
+});
 
 const recoveredPty = {
   onData: vi.fn(),
@@ -51,7 +59,11 @@ import { connectTuiSessionViaRunner, getActiveAgentsFromRunner, terminateAgentVi
 import * as shellService from './shell.js';
 import { AGENT_RECORD_UNREADABLE, readAgentRecordOrUnreadable } from './cosAgentLifecycle.js';
 import { activeAgents, runnerAgents, spawningTasks } from './agentState.js';
-import { syncRunnerAgents } from './agentRunnerSync.js';
+import { readRunnerCompletionReceipt, syncRunnerAgents } from './agentRunnerSync.js';
+import { PATHS } from '../lib/fileUtils.js';
+import { cleanupTempDataRoots } from '../lib/mockPathsDataRoot.js';
+
+afterAll(cleanupTempDataRoots);
 
 describe('syncRunnerAgents runner-owned TUI recovery', () => {
   beforeEach(() => {
@@ -314,5 +326,41 @@ describe('syncRunnerAgents — reconnect boundary (#4540)', () => {
     expect(runnerAgents.has('agent-1')).toBe(false);
     expect(terminateAgentViaRunner).not.toHaveBeenCalled();
     expect(shellService.registerExternalSession).not.toHaveBeenCalled();
+  });
+});
+
+// The runner writes this receipt before its fire-and-forget `agent:completed`;
+// the orphan sweep trusts it only when it proves a completion of THIS run (#14261).
+describe('readRunnerCompletionReceipt', () => {
+  const record = { taskId: 'task-1', startedAt: '2026-01-01T00:00:01.000Z' };
+  const receipt = { agentId: 'agent-r', taskId: 'task-1', completedAt: '2026-01-01T00:05:00.000Z', exitCode: 0, success: true, duration: 299000 };
+  const writeReceipt = async (agentId, content) => {
+    await mkdir(join(PATHS.cosAgents, agentId), { recursive: true });
+    await writeFile(join(PATHS.cosAgents, agentId, 'metadata.json'), typeof content === 'string' ? content : JSON.stringify(content));
+  };
+
+  it.each([
+    ['success', receipt, { exitCode: 0, success: true, duration: 299000 }],
+    ['failure', { ...receipt, exitCode: 2, success: false }, { exitCode: 2, success: false, duration: 299000 }],
+    ['no duration', { ...receipt, duration: undefined }, { exitCode: 0, success: true, duration: 299000 }],
+  ])('returns the verdict of a %s receipt', async (name, content, expected) => {
+    await writeReceipt(`agent-${name.replace(/ /g, '-')}`, content);
+    await expect(readRunnerCompletionReceipt(`agent-${name.replace(/ /g, '-')}`, record)).resolves.toEqual(expected);
+  });
+
+  it.each([
+    ['corrupt', '{not json'],
+    ['paused (no verdict)', { agentId: 'agent-r', outputSize: 10 }],
+    ['another task', { ...receipt, taskId: 'task-2' }],
+    ['an earlier run', { ...receipt, completedAt: '2025-12-31T23:59:59.000Z' }],
+    ['a string exit code', { ...receipt, exitCode: '0' }],
+  ])('rejects a receipt from %s', async (name, content) => {
+    const agentId = `agent-bad-${name.replace(/\W+/g, '-')}`;
+    await writeReceipt(agentId, content);
+    await expect(readRunnerCompletionReceipt(agentId, record)).resolves.toBeNull();
+  });
+
+  it('returns null when no receipt exists', async () => {
+    await expect(readRunnerCompletionReceipt('agent-missing', record)).resolves.toBeNull();
   });
 });

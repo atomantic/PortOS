@@ -149,7 +149,9 @@ vi.mock('../lib/maintenanceAdmission.js', async (importOriginal) => {
   const admission = actual.createMaintenanceAdmission(maintenanceTestDir, { assertWrite: () => {} });
   return { ...actual, maintenance: new Proxy(admission, { get: (target, key) => key === 'finishResource' ? finishResource : target[key] }) };
 });
-vi.mock('./agentRunnerSync.js', () => ({ syncRunnerAgents: vi.fn().mockResolvedValue(0) }));
+vi.mock('./agentRunnerSync.js', () => ({ syncRunnerAgents: vi.fn().mockResolvedValue(0), readRunnerCompletionReceipt: vi.fn().mockResolvedValue(null) }));
+// The sweep defers this import for a receipt-backed completion (#14261).
+vi.mock('./agentLifecycle.js', () => ({ handleAgentCompletion: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('./agentRunnerOutputBatchers.js', () => ({ flushRunnerOutputBatcher: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('./worktreeManager.js', () => ({ cleanupOrphanedWorktrees: vi.fn() }));
 vi.mock('./creativeDirector/local.js', () => ({
@@ -173,6 +175,8 @@ import { pauseAgentViaRunner, terminateAgentViaRunner, getActiveAgentsFromRunner
 import * as shellService from './shell.js';
 import { readHostShutdownMarker, clearHostShutdownMarker } from '../lib/hostShutdown.js';
 import { committedDuringRun } from '../lib/gitCommitProbe.js';
+import { readRunnerCompletionReceipt } from './agentRunnerSync.js';
+import { handleAgentCompletion } from './agentLifecycle.js';
 import { activeAgents, runnerAgents, completingAgents, spawningTasks, pausedAgents, consumePausedAgentExit } from './agentState.js';
 
 // Build the server-owned task/agent evidence used by a real dispatch. Legacy
@@ -373,6 +377,69 @@ describe('cleanupOrphanedAgents — startup recovery coordination', () => {
       agent: expect.objectContaining({ id: 'agent-stale' }),
       success: false,
     }));
+  });
+
+  // The runner forgets an agent once it exits, so an exit inside a server
+  // restart leaves only its on-disk receipt behind (#14261).
+  describe('runner completion receipt', () => {
+    const exitedRunnerAgent = {
+      id: 'agent-exited',
+      status: 'running',
+      pid: 2147483646,
+      taskId: 'task-1',
+      startedAt: '2026-01-01T00:00:01.000Z',
+      metadata: { useRunner: true, executionMode: 'runner' },
+    };
+    const sweep = async () => {
+      getAgents.mockResolvedValueOnce([{ ...exitedRunnerAgent, metadata: { ...exitedRunnerAgent.metadata } }]);
+      getActiveAgentsFromRunner.mockResolvedValueOnce([]);
+      getTaskById.mockResolvedValue({ id: 'task-1', taskType: 'user', status: 'in_progress', metadata: {} });
+      await cleanupOrphanedAgents();
+    };
+    const orphanCharges = () => updateTask.mock.calls.filter(([, update]) =>
+      update?.metadata?.orphanRetryCount !== undefined || update?.metadata?.lastOrphanedAt !== undefined);
+
+    it.each([
+      [{ exitCode: 0, success: true, duration: 4200 }],
+      [{ exitCode: 2, success: false, duration: 4200 }],
+    ])('finalizes through the normal completion path with the receipt verdict %o', async (receipt) => {
+      readRunnerCompletionReceipt.mockResolvedValueOnce(receipt);
+
+      await sweep();
+
+      expect(readRunnerCompletionReceipt).toHaveBeenCalledWith('agent-exited', {
+        taskId: 'task-1', startedAt: '2026-01-01T00:00:01.000Z',
+      });
+      expect(handleAgentCompletion).toHaveBeenCalledExactlyOnceWith('agent-exited', receipt.exitCode, receipt.success, 4200);
+      expect(retireDeadAgent).not.toHaveBeenCalled();
+      expect(orphanCharges()).toEqual([]);
+      expect(appendRunEvent).not.toHaveBeenCalledWith(expect.objectContaining({ kind: 'run.orphan-recovered' }));
+    });
+
+    it('keeps orphan retirement when there is no usable receipt', async () => {
+      readRunnerCompletionReceipt.mockResolvedValueOnce(null);
+
+      await sweep();
+
+      expect(handleAgentCompletion).not.toHaveBeenCalled();
+      expect(retireDeadAgent).toHaveBeenCalledWith(expect.objectContaining({
+        agent: expect.objectContaining({ id: 'agent-exited' }),
+        success: false,
+        exitCode: 1,
+        category: 'orphaned',
+      }));
+    });
+
+    it('never consults a receipt for a direct-mode record', async () => {
+      getAgents.mockResolvedValueOnce([{ ...exitedRunnerAgent, metadata: {} }]);
+      getActiveAgentsFromRunner.mockResolvedValueOnce([]);
+      getTaskById.mockResolvedValue({ id: 'task-1', taskType: 'user', status: 'in_progress', metadata: {} });
+
+      await cleanupOrphanedAgents();
+
+      expect(readRunnerCompletionReceipt).not.toHaveBeenCalled();
+      expect(retireDeadAgent).toHaveBeenCalledWith(expect.objectContaining({ category: 'orphaned' }));
+    });
   });
 
   // A hard kill (`pm2 restart`, SIGKILL, reboot) never reaches completion
