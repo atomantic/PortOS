@@ -435,6 +435,33 @@ describe('configured provider reviewers', () => {
     } finally { clock.mockRestore(); }
   });
 
+  it('gives a CLI reviewer the remote budget unless the provider or caller sets one', async () => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(100);
+    try {
+      const cli = { ...provider, type: 'cli', command: 'claude' };
+      getProviderById.mockResolvedValue(cli);
+      runCliProviderPrompt.mockResolvedValue({ text: 'NO FINDINGS', partial: false });
+      const diff = 'x'.repeat(42 * 1024);
+      const budgetOf = () => runCliProviderPrompt.mock.lastCall[0].timeoutMs;
+
+      await runLocalCodeReview({ backend, diff });
+      expect(budgetOf()).toBe(REMOTE_CODE_REVIEW_TIMEOUT_DEFAULT_MS);
+      expect(budgetOf()).toBeGreaterThan(getLocalCodeReviewTimeoutMs(diff));
+
+      getProviderById.mockResolvedValue({ ...cli, timeout: 90_000 });
+      await runLocalCodeReview({ backend, diff });
+      expect(budgetOf()).toBe(90_000);
+
+      await runLocalCodeReview({ backend, diff, timeoutMs: 5_000 });
+      expect(budgetOf()).toBe(5_000);
+
+      getProviderById.mockResolvedValue({ ...cli, timeout: 90_000 });
+      runCliProviderPrompt.mockResolvedValue({ error: 'Process timed out after 90000ms' });
+      const result = await runLocalCodeReview({ backend, diff });
+      expect(result.error).toContain('timed out after 90000ms');
+    } finally { clock.mockRestore(); }
+  });
+
   it('names the effective remote budget and the diff size in a timeout failure', async () => {
     getProviderById.mockResolvedValue({ ...provider, timeout: 450_000 });
     callProviderAISimple.mockResolvedValue({ error: 'Provider request failed: This operation was aborted' });

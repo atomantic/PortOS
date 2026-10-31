@@ -1004,9 +1004,10 @@ async function runConfiguredProviderCompletion({ backend, model: pinnedModel, me
   const workspace = resolveReviewWorkspace({ transport, isolateFromCheckout, cwd: reviewCwd })
   const prompt = reviewMessages({ messages, userMessage, systemPromptFor }, workspace).map(message => message.content).join('\n\n')
   let result
-  let budgetMs = timeoutMs
+  // API and CLI reviewers front remote reasoning models; the diff-size formula only suits local backends.
+  const isRemoteTransport = transport.transport === 'api' || transport.transport === 'cli'
+  let budgetMs = !timeoutExplicit && isRemoteTransport ? getRemoteCodeReviewTimeoutMs(provider) : timeoutMs
   if (transport.transport === 'api') {
-    if (!timeoutExplicit) budgetMs = getRemoteCodeReviewTimeoutMs(provider)
     if (!model) return { ok: false, code: 'NO_MODEL', error: 'Select a model for the reviewer provider.' }
     const { callProviderAISimple } = await import('./aiProvider.js')
     budgetMs = takeCodeReviewCallBudget(reviewBudget, budgetMs)
@@ -1032,10 +1033,10 @@ async function runConfiguredProviderCompletion({ backend, model: pinnedModel, me
     const cwd = isolatedCwd || reviewCwd
     result = await Promise.resolve().then(async () => {
       const { resolveBootstrapEnv } = await import('../lib/credentialBootstrap.js')
-      const preparationMs = reviewBudget ? reviewBudget.deadline - Date.now() : timeoutMs
+      const preparationMs = reviewBudget ? reviewBudget.deadline - Date.now() : budgetMs
       if (preparationMs <= 0) return { error: 'The configured review budget is exhausted.', code: 'REVIEW_BUDGET_EXHAUSTED' }
       const bootstrapEnv = await withAbortTimeout(preparationMs, signal => awaitWithAbort(resolveBootstrapEnv(provider, { safetyProfile, signal, timeoutMs: preparationMs }), signal))
-      const remainingMs = takeCodeReviewCallBudget(reviewBudget, timeoutMs)
+      const remainingMs = takeCodeReviewCallBudget(reviewBudget, budgetMs)
       if (remainingMs === null) return { error: 'The configured review budget is exhausted.', code: 'REVIEW_BUDGET_EXHAUSTED' }
       return runCliProviderPrompt({ provider, model, prompt, cwd, timeoutMs: remainingMs, bootstrapEnv, exactPins: true,
         safetyProfile, codeReview: true })
@@ -1254,7 +1255,7 @@ export async function runLocalCodeReview(options = {}) {
   let selectedModel = model || providerSnapshot?.defaultModel
   const selectedEffort = effort ?? providerSnapshot?.effort ?? null
   const budgetMs = Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs
-    : providerSnapshot && (await resolveProviderReviewTransport(providerSnapshot, { allowUnconfined: true })).transport === 'api' ? getRemoteCodeReviewTimeoutMs(providerSnapshot) : getLocalCodeReviewTimeoutMs(diff)
+    : providerSnapshot && ['api', 'cli'].includes((await resolveProviderReviewTransport(providerSnapshot, { allowUnconfined: true })).transport) ? getRemoteCodeReviewTimeoutMs(providerSnapshot) : getLocalCodeReviewTimeoutMs(diff)
   const result = await runCodeReviewBatches({ diff, headSha, budgetMs, maxBatchBytes, maxBatches, startedAt,
     runBatch: async (batch, remainingMs, reviewBudget) => {
       const result = await runSingleCodeReview({ ...options, model: selectedModel, effort: selectedEffort, diff: batch,

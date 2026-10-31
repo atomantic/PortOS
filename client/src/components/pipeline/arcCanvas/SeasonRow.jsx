@@ -213,7 +213,7 @@ export default function SeasonRow({ series, season, seasons, issues, onSeriesUpd
                     type="button"
                     onClick={() => toggleSeasonLock(seasonLocked)}
                     disabled={lockBusy}
-                    className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs border disabled:opacity-50 ${
+                    className={`inline-flex items-center gap-1 px-2 py-0.5 pointer-coarse:min-h-11 rounded text-xs border disabled:opacity-50 ${
                       seasonLocked
                         ? 'border-port-warning/40 text-port-warning hover:bg-port-warning/10'
                         : 'border-port-border text-gray-400 hover:text-white'

@@ -1212,6 +1212,52 @@ async function completionClaimOutcome(agentId, reportedOutcome, claimDisposition
 }
 
 /**
+ * Validation verdict for a recovered run: the retirement / programmatic-I/O /
+ * saved verdict first, then a merged-review or claim disposition. A disposition
+ * never erases a recorded failed delivery gate, but a saved pass cannot replace a
+ * fresh selected-issue proof on no-op recovery.
+ */
+function resolveRecoveredValidation({ task, agent, effectiveSuccess, recoveredHook, retirementCompletion, mergedReviewFollowUp, claimDisposition }) {
+  let recovered;
+  if (retirementCompletion) recovered = retirementCompletion.status === 'verified';
+  else if (isProgrammaticIoTaskType(resolveTaskHookType(task))) {
+    recovered = resolveProgrammaticIoVerdict({ success: effectiveSuccess, hookResult: recoveredHook });
+  } else recovered = agent.result?.validationPassed ?? null;
+  if (recovered === false || !(mergedReviewFollowUp || claimDisposition)) return recovered;
+  return mergedReviewFollowUp || claimDisposition.status === 'verified' ? true : null;
+}
+
+/** Run-record output for a recovered agent: its transcript, else buffered lines; redacted for private security. */
+async function recoveredRunOutput(agent, isPrivateSecurity) {
+  if (isPrivateSecurity) return 'Private security assessment interrupted; inspect its local assessment archive.';
+  const bufferedOutput = Array.isArray(agent.output)
+    ? agent.output.map((entry) => typeof entry === 'string' ? entry : entry?.line).filter(Boolean).join('\n')
+    : '';
+  return await tryReadFile(join(PATHS.cosAgents, agent.id, 'output.txt')) ?? bufferedOutput;
+}
+
+/**
+ * Fenced write of a recovery task update. Returns the update still owned by this
+ * agent (null once another owner changed the task's status) and whether ownership was lost.
+ */
+async function persistRecoveredTaskUpdate({ task, agent, recoveryUpdate }) {
+  if (!recoveryUpdate) return { recoveryUpdate, recoveryOwnershipLost: false };
+  const update = await updateTask(task.id, recoveryUpdate, task.taskType || 'user', {
+    expectedStatus: task.status || null, expectedTask: { description: task.description, priority: task.priority, metadata: task.metadata },
+    recoveryOwner: { id: agent.id, startedAt: agent.startedAt },
+    // Runtime resolution reloads the dispatch; guard its fresh snapshot rather
+    // than the older task initially supplied to this recovered run.
+    ...runtimeRecoveryFence(recoveryUpdate)[0],
+  });
+  if (update?.error) throw new Error(`Could not persist recovered task outcome: ${update.error}`);
+  if (update?.statusChanged && recoveryUpdate.metadata?.blockedCategory === 'runtime-verification') {
+    throw new Error('Could not persist recovered task outcome: task ownership changed');
+  }
+  if (update?.statusChanged) return { recoveryUpdate: null, recoveryOwnershipLost: true };
+  return { recoveryUpdate, recoveryOwnershipLost: false };
+}
+
+/**
  * Retire an agent whose process is gone — the one step list both recovery
  * paths now share (issue #8440). Before this, the orphan sweep
  * (`runCleanupOrphanedAgents`) and the post-restart recovery
@@ -1260,12 +1306,13 @@ export async function retireDeadAgent({ agent, task, success, exitCode, duration
   let reportedOutcome = !isPrivateSecurity && !refused
     ? await persistCompletionSummary(agent.id, { workspacePath: agent.metadata?.workspacePath, existingRecord: agent }) : null;
   const executionSuccess = success && exitCode === 0;
+  const recoveryEligible = executionSuccess && !isPrivateSecurity && !interruption;
   const mergedReviewFollowUp = await completionReviewFollowUp({ task, agentId: agent.id,
     workspacePath: agent.metadata?.workspacePath, reportedOutcome,
-    eligible: executionSuccess && !isPrivateSecurity && !interruption });
+    eligible: recoveryEligible });
   if (mergedReviewFollowUp) reportedOutcome = mergedReviewFollowUp.taskOutcome;
   const claimDisposition = await completionClaimDisposition({ task, agent, reportedOutcome,
-    success: executionSuccess && !isPrivateSecurity && !interruption && agent.result?.validationPassed !== false });
+    success: recoveryEligible && agent.result?.validationPassed !== false });
   reportedOutcome = await completionClaimOutcome(agent.id, reportedOutcome, claimDisposition);
   // Only an explicit hold suppresses orphan recovery; a failed delivery check
   // must retain the caller's normal failure/retry handling.
@@ -1286,15 +1333,8 @@ export async function retireDeadAgent({ agent, task, success, exitCode, duration
 
   if (Number(task?.metadata?.auditDispositionVersion) === 1 && recoveredHook?.auditDisposition?.status !== 'complete') effectiveSuccess = false;
   const retirementCompletion = isRetirementOnlyRecovery(task) ? await verifyRetirementRecoveryCompletion(task) : null;
-  const recoveredValidation = retirementCompletion ? retirementCompletion.status === 'verified'
-    : isProgrammaticIoTaskType(resolveTaskHookType(task))
-    ? resolveProgrammaticIoVerdict({ success: effectiveSuccess, hookResult: recoveredHook })
-    : agent.result?.validationPassed ?? null;
-  // A disposition never erases a recorded failed delivery gate. A saved pass,
-  // however, cannot replace a fresh selected-issue proof on no-op recovery.
-  const validationPassed = recoveredValidation !== false && (mergedReviewFollowUp || claimDisposition)
-    ? mergedReviewFollowUp || claimDisposition.status === 'verified' ? true : null
-    : recoveredValidation;
+  const validationPassed = resolveRecoveredValidation({ task, agent, effectiveSuccess, recoveredHook,
+    retirementCompletion, mergedReviewFollowUp, claimDisposition });
   let taskOutcome = reportedOutcome || retirementCompletion ? resolveTaskOutcome({ reported: retirementCompletion?.status === 'unverified'
     ? { status: 'incomplete', reason: retirementCompletion.reason } : reportedOutcome,
     success: effectiveSuccess, validationPassed, noCommitDeclared: declaresNoCommitCriterion(task) }) : null;
@@ -1309,13 +1349,9 @@ export async function retireDeadAgent({ agent, task, success, exitCode, duration
   if (recoveryUpdate?.runtimeRecoveryContext) taskOutcome = recoveryUpdate.metadata.taskOutcome;
 
   if (agent.metadata?.runId) {
-    const bufferedOutput = Array.isArray(agent.output)
-      ? agent.output.map((entry) => typeof entry === 'string' ? entry : entry?.line).filter(Boolean).join('\n')
-      : '';
-    const output = await tryReadFile(join(PATHS.cosAgents, agent.id, 'output.txt')) ?? bufferedOutput;
     await completeAgentRun(
       agent.metadata.runId,
-      isPrivateSecurity ? 'Private security assessment interrupted; inspect its local assessment archive.' : output,
+      await recoveredRunOutput(agent, isPrivateSecurity),
       exitCode,
       duration,
       errorAnalysis,
@@ -1324,21 +1360,9 @@ export async function retireDeadAgent({ agent, task, success, exitCode, duration
     );
   }
 
-  let recoveryOwnershipLost = false;
-  if (recoveryUpdate) {
-    const update = await updateTask(task.id, recoveryUpdate, task.taskType || 'user', {
-      expectedStatus: task.status || null, expectedTask: { description: task.description, priority: task.priority, metadata: task.metadata },
-      recoveryOwner: { id: agent.id, startedAt: agent.startedAt },
-      // Runtime resolution reloads the dispatch; guard its fresh snapshot rather
-      // than the older task initially supplied to this recovered run.
-      ...runtimeRecoveryFence(recoveryUpdate)[0],
-    });
-    if (update?.error) throw new Error(`Could not persist recovered task outcome: ${update.error}`);
-    if (update?.statusChanged && recoveryUpdate.metadata?.blockedCategory === 'runtime-verification') {
-      throw new Error('Could not persist recovered task outcome: task ownership changed');
-    }
-    if (update?.statusChanged) { recoveryUpdate = null; recoveryOwnershipLost = true; }
-  }
+  const persisted = await persistRecoveredTaskUpdate({ task, agent, recoveryUpdate });
+  recoveryUpdate = persisted.recoveryUpdate;
+  const { recoveryOwnershipLost } = persisted;
   await completeAgent(agent.id, {
     success: effectiveSuccess,
     executionSuccess,

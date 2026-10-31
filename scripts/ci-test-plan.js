@@ -844,6 +844,7 @@ export const structuralTestsFor = (changedFiles, trackedSet) => {
     add('client/src/apiWrapperOptionsConventions.test.js');
     add('client/src/asyncEffectDisposalConventions.test.js');
     add('client/src/dashboardWidgetContainerConventions.test.js');
+    add('client/src/dragHandleTouchConventions.test.js');
     add('client/src/globalShadowConventions.test.js');
     add('client/src/headingTruncationConventions.test.js');
     add('client/src/hooks/mountedRefConventions.test.js');
