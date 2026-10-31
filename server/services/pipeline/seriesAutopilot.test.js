@@ -2378,6 +2378,36 @@ describe('autopilot conductor', () => {
     expect(judgeFoundation).toHaveBeenCalledTimes(3);
   });
 
+  it('foundation gate: a retry quotes the rejected re-judge gap, and a kept repair drops that note', async () => {
+    const snapshot = (weightedScore, character, characterGap) => ({
+      seriesId: 'ser-example', status: 'complete', weightedScore,
+      dimensions: {
+        worldbuilding: { score: 8, gap: 'w', fix: 'f' },
+        character: { score: character, gap: characterGap, fix: 'Separate the motives.' },
+        structure: { score: 7.5, gap: 's', fix: 'f' },
+        craft: { score: 8, gap: 'c', fix: 'f' },
+      },
+    });
+    judgeFoundation
+      .mockImplementationOnce(async () => snapshot(7.2, 6, 'The lead motive is blurred.'))
+      // Tied target, unchanged gap, lower aggregate: rejected and rewound.
+      .mockImplementationOnce(async () => snapshot(7.1, 6, 'The lead motive is still blurred.'))
+      // Improved target: the retry is kept while character remains the weakest.
+      .mockImplementationOnce(async () => snapshot(7.4, 6.5, 'The rival motive is thin.'))
+      .mockImplementationOnce(async () => snapshot(9, 9, 'none'));
+
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, { maxFoundationRounds: 4 });
+    await waitFor(runFinished(seriesId));
+
+    const characterRepairs = applyFoundationFix.mock.calls.filter(([, dimension]) => dimension === 'character');
+    expect(characterRepairs).toHaveLength(3);
+    expect(characterRepairs[1][2].finding.retryReason)
+      .toContain('reported: The lead motive is still blurred.');
+    expect(characterRepairs[2][2].finding.retryReason).toBeUndefined();
+    expect(characterRepairs[2][2].finding.gap).toBe('The rival motive is thin.');
+  });
+
   it('foundation gate: keeps a tied character repair that objectively filled blank cast fields', async () => {
     // The 2026-08-11 stall: the character repair authored every blank visual
     // field on the core cast, the judge held character at 5 (its prompt showed
