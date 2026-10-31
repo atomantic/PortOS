@@ -37,7 +37,7 @@ export const reconcileMessageDraft = (id, data, options = {}) => request(`/messa
 });
 export const sendMessageDraft = (id) => request(`/messages/drafts/${id}/send`, { method: 'POST' });
 export const deleteMessageDraft = (id) => request(`/messages/drafts/${id}`, { method: 'DELETE' });
-export const getMessageSelectors = () => request('/messages/selectors');
+export const getMessageSelectors = (options = {}) => request('/messages/selectors', options);
 export const updateMessageSelectors = (provider, selectors) => request(`/messages/selectors/${provider}`, { method: 'PUT', body: JSON.stringify({ selectors }) });
 export const testMessageSelectors = (provider) => request(`/messages/selectors/${provider}/test`, { method: 'POST' });
 export const launchMessageBrowser = (accountId) => request(`/messages/launch/${accountId}`, { method: 'POST' });

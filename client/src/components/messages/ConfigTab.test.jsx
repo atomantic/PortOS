@@ -158,4 +158,22 @@ describe('Messages prompt template settings', () => {
     const messages = await editReplyAndSave();
     expect(messages.forwardTemplate).toBe('');
   });
+
+  it('keeps Save shut after a failed settings read so defaults never overwrite the stored config', async () => {
+    api.getGoogleAuthStatus.mockResolvedValue(noAuth);
+    api.updateSettings = vi.fn().mockResolvedValue({ ok: true });
+    api.getSettings.mockRejectedValueOnce(new Error('Synthetic settings failure'));
+    renderConfig();
+
+    expect(await screen.findByText(/Failed to load saved message settings/)).toBeInTheDocument();
+    expect(screen.queryByLabelText('Reply Template')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Save Config/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Disabled' })).toBeDisabled();
+
+    api.getSettings.mockResolvedValueOnce({ messages: { replyTemplate: 'Stored reply' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByLabelText('Reply Template')).toHaveValue('Stored reply');
+    expect(screen.queryByText(/Failed to load saved message settings/)).not.toBeInTheDocument();
+    expect(api.updateSettings).not.toHaveBeenCalled();
+  });
 });

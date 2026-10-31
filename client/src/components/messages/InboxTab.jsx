@@ -184,6 +184,8 @@ export default function InboxTab({ accounts }) {
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [selectedAccount, setSelectedAccount] = useState('');
   const [loadedMessage, setLoadedMessage] = useState(null);
+  const [detailError, setDetailError] = useState(null);
+  const [detailAttempt, setDetailAttempt] = useState(0);
   const [evaluating, setEvaluating] = useState(false);
   const [syncing, setSyncing] = useState(false);
   // accountId -> ISO timestamp for syncs that succeeded in this session, so the
@@ -257,6 +259,7 @@ export default function InboxTab({ accounts }) {
   useEffect(() => {
     let active = true;
     setLoadedMessage(null);
+    setDetailError(null);
     if (!messageId || !resolvedMessageAccount) return undefined;
 
     api.getMessageDetail(resolvedMessageAccount, messageId, { silent: true })
@@ -265,11 +268,15 @@ export default function InboxTab({ accounts }) {
         if (message) setLoadedMessage(message);
         else closeMessage();
       })
-      .catch(() => {
-        if (active) closeMessage();
+      .catch((err) => {
+        if (!active) return;
+        // Only a link that names no message is stale; a failed read keeps the
+        // selection in the URL and offers Retry instead of silently closing it.
+        if (err?.status === 404 || err?.status === 400) closeMessage();
+        else setDetailError(err instanceof Error ? err : new Error('Request failed'));
       });
     return () => { active = false; };
-  }, [messageId, resolvedMessageAccount, closeMessage]);
+  }, [messageId, resolvedMessageAccount, closeMessage, detailAttempt]);
 
   // A legacy URL may omit its account; wait for the list to resolve it before
   // deciding that selection is stale.
@@ -423,6 +430,25 @@ export default function InboxTab({ accounts }) {
     && (!messageAccountId || String(loadedMessage.accountId) === messageAccountId)
     ? loadedMessage
     : null;
+
+  if (messageId && detailError) {
+    return (
+      <div className="space-y-3">
+        <button
+          type="button"
+          onClick={closeMessage}
+          className="inline-flex items-center gap-1.5 rounded border border-port-border bg-port-card px-3 py-1.5 text-xs text-gray-300 hover:border-port-accent"
+        >
+          Back to inbox
+        </button>
+        <LoadFailedState
+          title="Could not load this message"
+          hint={detailError.message}
+          onRetry={() => setDetailAttempt((n) => n + 1)}
+        />
+      </div>
+    );
+  }
 
   if (messageId && selectedMessage) {
     return (
