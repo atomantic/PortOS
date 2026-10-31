@@ -37,15 +37,19 @@ export default function useMusicVideoPublishing({ project, replaceProject } = {}
   const scope = selection.current;
   const [posting, setPosting] = useState({ ...EMPTY_POSTING, scope });
   const { drafts, busy, errors } = posting.scope === scope ? posting : EMPTY_POSTING;
+  // `null` = not loaded yet or the read failed (`platformsError` says which);
+  // `{}` = loaded with nothing turned on. A failed read must not read as "none on".
   const [platforms, setPlatforms] = useState(null);
+  const [platformsError, setPlatformsError] = useState(null);
   const [history, setHistory] = useState({});
   // The socket handler below outlives renders; it reads the latest callback.
   const replaceProjectRef = useRef(replaceProject);
   replaceProjectRef.current = replaceProject;
 
+  // A failed refresh keeps the last good answer; only a never-loaded list surfaces the error.
   const loadPlatforms = useCallback(() => getMusicVideoPublishPlatforms({ silent: true })
-    .then((res) => { setPlatforms(res?.platforms || {}); setHistory(res?.history || {}); })
-    .catch(() => setPlatforms((prev) => prev || {})), []);
+    .then((res) => { setPlatforms(res?.platforms || {}); setHistory(res?.history || {}); setPlatformsError(null); })
+    .catch((err) => setPlatformsError(err || new Error('Failed'))), []);
   useEffect(() => { loadPlatforms(); }, [loadPlatforms]);
 
   const setFor = (field, target, value) => setPosting((prev) => {
@@ -63,11 +67,17 @@ export default function useMusicVideoPublishing({ project, replaceProject } = {}
   // Rehydrate from the server after a reload, and follow its draft events
   // (a tab filled elsewhere, closed by hand, discarded, or posted from by the
   // director, in which case the server has already recorded the post's link).
+  // `draftsError` is scoped to the project so a failure never shows under another one.
+  const [draftsError, setDraftsError] = useState(null);
+  const [draftsAttempt, setDraftsAttempt] = useState(0);
+  const retryDrafts = useCallback(() => setDraftsAttempt((n) => n + 1), []);
   useEffect(() => {
     if (!projectId) return undefined;
     let cancelled = false;
+    setDraftsError(null);
     const apply = (list) => { if (cancelled) return; for (const d of list) if (d.state !== 'discarded') setFor('drafts', d.target, d); };
-    getMusicVideoPublishDrafts(projectId, { silent: true }).then((res) => apply(res?.drafts || [])).catch(() => {});
+    getMusicVideoPublishDrafts(projectId, { silent: true }).then((res) => apply(res?.drafts || []))
+      .catch((err) => { if (!cancelled) setDraftsError({ scope, error: err || new Error('Failed') }); });
     const onDraft = (e) => {
       if (e?.projectId !== projectId) return;
       if (e.state === 'posted') {
@@ -93,7 +103,7 @@ export default function useMusicVideoPublishing({ project, replaceProject } = {}
     socket.on('music-video:publish-draft', onDraft);
     return () => { cancelled = true; socket.off('music-video:publish-draft', onDraft); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId, scope, loadPlatforms]);
+  }, [projectId, scope, loadPlatforms, draftsAttempt]);
 
   const prepare = (target, options = {}) => {
     setFor('busy', target, 'prepare');
@@ -145,7 +155,8 @@ export default function useMusicVideoPublishing({ project, replaceProject } = {}
   // Fill a posted platform's edit (or a reply under it) with the links it lacks; errors stay with the caller.
   const prepareCrossLinks = (target) => prepareMusicVideoCrossLinkEdit(projectId, target, { silent: true });
 
-  const enabledTargets = Object.entries(platforms || {}).filter(([, p]) => p?.enabled).map(([t]) => t);
+  // null until the saved choice is known, so consumers never treat "unknown" as "none on".
+  const enabledTargets = platforms ? Object.entries(platforms).filter(([, p]) => p?.enabled).map(([t]) => t) : null;
 
-  return { drafts, busy, errors, prepare, preview, discard, platforms, history, enabledTargets, setPlatform, recordPost, removePost, setCrossLinks, prepareCrossLinks };
+  return { drafts, draftsError: draftsError?.scope === scope ? draftsError.error : null, retryDrafts, busy, errors, prepare, preview, discard, platforms, platformsError, retryPlatforms: loadPlatforms, history, enabledTargets, setPlatform, recordPost, removePost, setCrossLinks, prepareCrossLinks };
 }

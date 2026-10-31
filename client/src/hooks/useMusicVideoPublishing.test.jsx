@@ -3,6 +3,7 @@ import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import useMusicVideoPublishing from './useMusicVideoPublishing.js';
 import socket from '../services/socket';
 import PublishPostingPanel from '../components/musicVideo/PublishPostingPanel.jsx';
+import PublishPlatformsPanel from '../components/musicVideo/PublishPlatformsPanel.jsx';
 
 const api = vi.hoisted(() => ({
   getMusicVideoPublishDrafts: vi.fn(async () => ({ drafts: [] })),
@@ -110,5 +111,36 @@ describe('music-video publishing project boundary', () => {
     expect(replaceProject).toHaveBeenCalledWith(posted);
     expect(screen.queryByText('Example A')).not.toBeInTheDocument();
     expect(api.getMusicVideoPublishPlatforms).toHaveBeenCalledTimes(2); // history refreshed
+  });
+});
+
+describe('music-video publish platforms read', () => {
+  function PublishPage({ id }) {
+    const selected = project(id);
+    const publishing = useMusicVideoPublishing({ project: selected });
+    return <><PublishPlatformsPanel projectId={id} publishing={publishing} /><PublishPostingPanel project={selected} publishing={publishing} /></>;
+  }
+
+  it('shows a failed read with Retry instead of "no platforms", then loads on Retry', async () => {
+    api.getMusicVideoPublishPlatforms.mockRejectedValueOnce(new Error('Server unavailable'));
+    render(<PublishPage id="project-a" />);
+    expect(await screen.findByText(/Could not load where you post — Server unavailable/)).toBeInTheDocument();
+    expect(screen.queryByText(/No platforms yet/)).toBeNull();
+    expect(screen.queryByText(/Turn on the platforms you use/)).toBeNull();
+
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Retry' })); });
+    expect(screen.queryByText(/Could not load where you post/)).toBeNull();
+    expect(screen.getByRole('checkbox', { name: 'YouTube' })).toBeChecked();
+    expect(screen.getByText(rowLabel('YouTube'))).toBeInTheDocument();
+  });
+
+  it('shows a failed draft rehydrate with Retry, then restores the filled draft', async () => {
+    api.getMusicVideoPublishDrafts.mockRejectedValueOnce(new Error('Server unavailable'))
+      .mockResolvedValueOnce({ drafts: [{ draftId: 'draft-a', target: 'youtube', state: 'open', summary: { title: 'Example A' } }] });
+    render(<Posting id="project-a" />);
+    expect(await screen.findByText(/Could not load the drafts already filled — Server unavailable/)).toBeInTheDocument();
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Retry' })); });
+    expect(screen.queryByText(/Could not load the drafts already filled/)).toBeNull();
+    expect(await screen.findByText('Example A')).toBeInTheDocument();
   });
 });
