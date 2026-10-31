@@ -248,6 +248,65 @@ describe('prepareManagedAppImprovementTask composes the extracted pre-step layer
     ]) }));
   });
 
+  it('holds a conflicted delivery for review only when conflict resolution is disabled', async () => {
+    getTaskInterval.mockResolvedValue({ type: 'on-demand', taskMetadata: { resolveConflicts: false } });
+    const branch = 'fix/conflicted';
+    const path = '/example/checkouts/conflicted';
+    reconcileMock.mockResolvedValue(scan({ inFlight: [{ branch, worktreePath: path, state: 'IN_REVIEW', openPr: { url: 'https://github.com/example/repo/pull/9', isDraft: false } }],
+      worktreeInventory: [{ branch, path, head: 'a'.repeat(40), locked: false, managed: true }] }));
+    inspectOpenDeliveryRepair.mockResolvedValue({ headSha: 'a'.repeat(40), evidence: { head: 'a'.repeat(40), conflicts: true } });
+    expect(await generate()).toBeNull();
+    expect(inspectOrQueueCompletedReview).not.toHaveBeenCalled();
+    expect(recordBranchReconcileOutcome).toHaveBeenLastCalledWith(APP.id, expect.objectContaining({ remaining: expect.arrayContaining([
+      expect.objectContaining({ branch, reason: 'conflict-resolution-disabled' }),
+    ]) }));
+  });
+
+  it('keeps the delivery reason without queueing review when the checkout is locked', async () => {
+    const branch = 'fix/locked-review';
+    const path = '/example/checkouts/locked';
+    reconcileMock.mockResolvedValue(scan({ inFlight: [{ branch, worktreePath: path, state: 'IN_REVIEW', openPr: { url: 'https://github.com/example/repo/pull/9', isDraft: false } }],
+      worktreeInventory: [{ branch, path, head: 'a'.repeat(40), locked: true, managed: true }] }));
+    inspectOpenDeliveryRepair.mockResolvedValue({ headSha: 'a'.repeat(40), reason: 'delivery-ci-or-review-pending' });
+    expect(await generate()).toBeNull();
+    expect(inspectOrQueueCompletedReview).not.toHaveBeenCalled();
+    expect(recordBranchReconcileOutcome).toHaveBeenLastCalledWith(APP.id, expect.objectContaining({ remaining: expect.arrayContaining([
+      expect.objectContaining({ branch, reason: 'delivery-ci-or-review-pending' }),
+    ]) }));
+  });
+
+  it.each(['worktreeDirty', 'worktreeStatusUnavailable'])('does not route a review-held open PR through delivery when %s', async flag => {
+    const branch = 'fix/held-open';
+    const path = '/example/checkouts/held-open';
+    reconcileMock.mockResolvedValue(scan({ inFlight: [], wip: [{ branch, worktreePath: path, rule: 'completion-policy', completionPolicyReason: 'pr-completion-review-required',
+      [flag]: true, openPr: { url: 'https://github.com/example/repo/pull/9', isDraft: false } }],
+      worktreeInventory: [{ branch, path, head: 'a'.repeat(40), locked: false, managed: true }] }));
+    await generate();
+    expect(inspectOpenDeliveryRepair).not.toHaveBeenCalled();
+  });
+
+  it('skips retirement preparation entirely when merged cleanup is disabled', async () => {
+    getTaskInterval.mockResolvedValue({ type: 'on-demand', taskMetadata: { cleanupMerged: false } });
+    const release = { branch: 'claim/issue-1', path: '/example/checkouts/1', head: 'a'.repeat(40), managed: true, locked: false };
+    reconcileMock.mockResolvedValue(scan({ inFlight: [], wip: [{ branch: release.branch, worktreePath: release.path, tip: release.head,
+      rule: 'completion-policy', completionPolicyReason: 'pr-completion-review-required' }], worktreeInventory: [release] }));
+    await generate();
+    expect(mergedPrRead).not.toHaveBeenCalled();
+    expect(prepareRetirement).not.toHaveBeenCalled();
+    expect(recordBranchReconcileOutcome).not.toHaveBeenCalledWith(APP.id, expect.objectContaining({ reason: 'preparing-retirement-reviews' }));
+  });
+
+  it('nudges no receipt with autoMerge off but still hands reconcile the saved pending-merge branches', async () => {
+    getTaskInterval.mockResolvedValue({ type: 'on-demand', taskMetadata: { autoMerge: false } });
+    const app = { ...APP, pendingMergePrs: [{ prNumber: 7, prUrl: 'https://github.com/example/repo/pull/7', prBranch: 'fix/pending' }] };
+    admissionFixture.app = app;
+    await prepareManagedAppImprovementTask('branch-reconcile', app, STATE, { skipPreconditions: true });
+    expect(reconcileMock.mock.calls.at(-1)[1].pendingMergeBranches).toEqual(new Set(['fix/pending']));
+    admissionFixture.app = null;
+    await generate();
+    expect(reconcileMock.mock.calls.at(-1)[1]).not.toHaveProperty('pendingMergeBranches');
+  });
+
   it('routes a genuine missing-review obligation through the pinned review loop without a generic reconcile agent', async () => {
     const branch = 'fix/needs-review';
     const path = '/example/checkouts/review';
@@ -280,6 +339,8 @@ describe('prepareManagedAppImprovementTask composes the extracted pre-step layer
     expect(reserveReview).not.toHaveBeenCalled();
     expect(recordPerpetualDispatch).not.toHaveBeenCalled();
     expect(recordBranchReconcileOutcome.mock.calls.at(-1)[1].remaining).toEqual([]);
+    // The retired checkout is reported as cleaned, not silently dropped.
+    expect(emitLog.mock.calls.findLast(([, message]) => message.includes('branch-reconcile parked'))?.[1]).toContain('(cleaned 1');
   });
 
   it('keeps an unresolved retirement visible after the checkout disappears on a later refill', async () => {
