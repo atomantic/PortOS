@@ -37,8 +37,9 @@
  *
  * Height: the panel is clamped to the *visible* viewport by Modal itself —
  * `max-h-dvh-cap` (index.css) minus a per-align `--dvh-inset`. Call sites must
- * NOT pass their own `max-h-[NNvh]` in `panelClassName`: the overlay is
- * `fixed inset-0` (the small viewport on iOS Safari) and centres with
+ * NOT pass their own `max-h-[NNvh]` in `panelClassName`, nor on a content card
+ * wrapping their children (put the card classes on `panelClassName`): the
+ * overlay is `fixed inset-0` (the small viewport on iOS Safari) and centres with
  * `items-center`, so a panel taller than the overlay has its overflow split
  * top and bottom — the dialog's title AND its Save/Cancel footer end up
  * off-screen, which is unrecoverable on a modal that also opts out of Esc and

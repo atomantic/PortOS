@@ -211,192 +211,190 @@ export default function VisionDescribeModal({
   const multi = images.length > 1;
 
   return (
-    <Modal open={open} onClose={onClose} size="lg" closeOnBackdrop={false} usePortal ariaLabel={`Describe ${noun} from images`}>
-      <div className="bg-port-card border border-port-border rounded-lg shadow-xl flex flex-col max-h-[85vh]">
-        <div className="flex items-center justify-between px-4 py-3 border-b border-port-border">
-          <h3 className="text-sm font-semibold text-white flex items-center gap-2">
-            <Sparkles size={14} className="text-port-accent" />
-            {entryName ? `"${entryName}"` : `This ${noun}`} from image{multi ? 's' : ''}
-          </h3>
-          <button type="button" onClick={onClose} className="text-gray-500 hover:text-white min-h-[44px] min-w-[44px] flex items-center justify-center" aria-label="Close">
-            <X size={16} />
-          </button>
-        </div>
+    <Modal open={open} onClose={onClose} size="lg" closeOnBackdrop={false} usePortal ariaLabel={`Describe ${noun} from images`} panelClassName="bg-port-card border border-port-border rounded-lg shadow-xl flex flex-col [--dvh-cap:85dvh]">
+      <div className="flex items-center justify-between px-4 py-3 border-b border-port-border">
+        <h3 className="text-sm font-semibold text-white flex items-center gap-2">
+          <Sparkles size={14} className="text-port-accent" />
+          {entryName ? `"${entryName}"` : `This ${noun}`} from image{multi ? 's' : ''}
+        </h3>
+        <button type="button" onClick={onClose} className="text-gray-500 hover:text-white min-h-[44px] min-w-[44px] flex items-center justify-center" aria-label="Close">
+          <X size={16} />
+        </button>
+      </div>
 
-        <div className="p-4 space-y-4 overflow-y-auto">
-          <p className="text-xs text-gray-500">
-            Add one image, or several of the same {noun}, from your device or your gallery.
-            {isCharacter
-              ? ' Describe them into the descriptor field, or build their structured details (palette, visual notes, expressions, …) from the reference.'
-              : ' A vision model turns them into image-gen-ready prose.'}
-          </p>
+      <div className="p-4 space-y-4 overflow-y-auto">
+        <p className="text-xs text-gray-500">
+          Add one image, or several of the same {noun}, from your device or your gallery.
+          {isCharacter
+            ? ' Describe them into the descriptor field, or build their structured details (palette, visual notes, expressions, …) from the reference.'
+            : ' A vision model turns them into image-gen-ready prose.'}
+        </p>
 
-          {/* Image picker + thumbnails */}
-          <div>
-            <div className="flex flex-wrap gap-2">
-              {images.map((img) => (
-                <div key={imageKey(img)} className="relative w-20 h-20">
-                  <img
-                    src={img.preview || (img.source === 'upload' ? `/api/screenshots/${encodeURIComponent(img.filename)}` : `/data/images/${encodeURIComponent(img.filename)}`)}
-                    alt="reference"
-                    className="w-full h-full object-cover rounded border border-port-border"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => removeImage(imageKey(img))}
-                    title="Remove image"
-                    aria-label="Remove image"
-                    className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center absolute -top-1.5 -right-1.5 bg-port-bg border border-port-border rounded-full p-0.5 text-gray-400 hover:text-port-error"
-                  >
-                    <X size={11} />
-                  </button>
-                </div>
-              ))}
-              {images.length < MAX_IMAGES ? (
-                <>
-                  <FilePickerButton
-                    accept="image/*"
-                    multiple
-                    onChange={(e) => handleFiles(e.target.files)}
-                    disabled={uploading}
-                    ariaLabel="Upload reference images"
-                    className="w-20 h-20 flex flex-col items-center justify-center gap-1 rounded border border-dashed border-port-border text-gray-500 hover:text-port-accent hover:border-port-accent/50"
-                  >
-                    {uploading ? <Loader2 size={16} className="animate-spin" /> : <ImagePlus size={16} />}
-                    <span className="text-[10px]">Upload</span>
-                  </FilePickerButton>
-                  <button
-                    type="button"
-                    onClick={() => setGalleryOpen(true)}
-                    className="w-20 h-20 flex flex-col items-center justify-center gap-1 rounded border border-dashed border-port-border text-gray-500 hover:text-port-accent hover:border-port-accent/50"
-                  >
-                    <Images size={16} />
-                    <span className="text-[10px]">Gallery</span>
-                  </button>
-                </>
-              ) : null}
-            </div>
-          </div>
-
-          {/* Provider + model picker (API/vision-capable providers only) */}
-          <VisionProviderPicker onChange={setVision} />
-
-          {/* Optional context to disambiguate the subject for the model. */}
-          <div>
-            <label htmlFor="vision-describe-context" className="block text-xs text-gray-500 mb-1">
-              Known context (optional)
-            </label>
-            <input
-              id="vision-describe-context"
-              type="text"
-              value={context}
-              onChange={(e) => setContext(e.target.value)}
-              placeholder={`Anything the images don't make obvious about this ${noun}`}
-              maxLength={2000}
-              className="w-full px-2 py-1.5 text-xs bg-port-bg border border-port-border rounded text-gray-200"
-            />
-          </div>
-
+        {/* Image picker + thumbnails */}
+        <div>
           <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={runDescribe}
-              disabled={!canRun}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-port-accent text-white text-sm disabled:opacity-40 disabled:cursor-not-allowed hover:bg-port-accent/90"
-            >
-              {describing ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
-              {describing ? 'Describing…' : `Describe from image${multi ? 's' : ''}`}
-            </button>
-            {isCharacter ? (
-              <button
-                type="button"
-                onClick={runBuildAttributes}
-                disabled={!canRun}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded border border-port-accent text-port-accent text-sm disabled:opacity-40 disabled:cursor-not-allowed hover:bg-port-accent/10"
-              >
-                {building ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
-                {building ? 'Analyzing…' : 'Build character details'}
-              </button>
+            {images.map((img) => (
+              <div key={imageKey(img)} className="relative w-20 h-20">
+                <img
+                  src={img.preview || (img.source === 'upload' ? `/api/screenshots/${encodeURIComponent(img.filename)}` : `/data/images/${encodeURIComponent(img.filename)}`)}
+                  alt="reference"
+                  className="w-full h-full object-cover rounded border border-port-border"
+                />
+                <button
+                  type="button"
+                  onClick={() => removeImage(imageKey(img))}
+                  title="Remove image"
+                  aria-label="Remove image"
+                  className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center absolute -top-1.5 -right-1.5 bg-port-bg border border-port-border rounded-full p-0.5 text-gray-400 hover:text-port-error"
+                >
+                  <X size={11} />
+                </button>
+              </div>
+            ))}
+            {images.length < MAX_IMAGES ? (
+              <>
+                <FilePickerButton
+                  accept="image/*"
+                  multiple
+                  onChange={(e) => handleFiles(e.target.files)}
+                  disabled={uploading}
+                  ariaLabel="Upload reference images"
+                  className="w-20 h-20 flex flex-col items-center justify-center gap-1 rounded border border-dashed border-port-border text-gray-500 hover:text-port-accent hover:border-port-accent/50"
+                >
+                  {uploading ? <Loader2 size={16} className="animate-spin" /> : <ImagePlus size={16} />}
+                  <span className="text-[10px]">Upload</span>
+                </FilePickerButton>
+                <button
+                  type="button"
+                  onClick={() => setGalleryOpen(true)}
+                  className="w-20 h-20 flex flex-col items-center justify-center gap-1 rounded border border-dashed border-port-border text-gray-500 hover:text-port-accent hover:border-port-accent/50"
+                >
+                  <Images size={16} />
+                  <span className="text-[10px]">Gallery</span>
+                </button>
+              </>
             ) : null}
           </div>
-
-          {/* Prose result — editable before applying */}
-          {result ? (
-            <div className="space-y-2">
-              <label htmlFor="vision-describe-result" className="block text-xs text-gray-500">
-                Generated description (edit before applying if you like)
-              </label>
-              <textarea
-                id="vision-describe-result"
-                value={result}
-                onChange={(e) => setResult(e.target.value)}
-                rows={6}
-                className="w-full px-2 py-1.5 text-xs bg-port-bg border border-port-border rounded text-gray-200 whitespace-pre-wrap"
-              />
-              <button
-                type="button"
-                onClick={applyDescription}
-                disabled={!result.trim()}
-                className="px-3 py-1.5 rounded bg-port-accent text-white text-sm disabled:opacity-40 disabled:cursor-not-allowed hover:bg-port-accent/90"
-              >
-                Apply description
-              </button>
-            </div>
-          ) : null}
-
-          {/* Structured attribute review — characters only */}
-          {proposed && proposed.updatedFields.length > 0 ? (
-            <div className="space-y-2">
-              <p className="text-xs text-gray-500">
-                Proposed details (only blank fields). Uncheck any you don't want; edit text inline. Existing values are never overwritten.
-              </p>
-              <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
-                {proposed.updatedFields.map((f) => {
-                  const value = proposed.fields[f];
-                  const isList = Array.isArray(value);
-                  const checked = selectedFields.has(f);
-                  return (
-                    <div key={f} className="border border-port-border rounded p-2 bg-port-bg">
-                      <label className="flex items-center gap-2 text-xs text-gray-300 mb-1">
-                        <input type="checkbox" checked={checked} onChange={() => toggleField(f)} />
-                        <span className="font-medium">{humanizeField(f)}</span>
-                        {isList ? <span className="text-gray-500">({value.length} item{value.length > 1 ? 's' : ''})</span> : null}
-                      </label>
-                      {isList ? (
-                        <p className="text-[11px] text-gray-400 pl-6">
-                          {value.map((row) => row?.name || row?.label).filter(Boolean).join(', ') || '—'}
-                        </p>
-                      ) : (
-                        <textarea
-                          value={fieldEdits[f] ?? ''}
-                          onChange={(e) => setFieldEdits((prev) => ({ ...prev, [f]: e.target.value }))}
-                          disabled={!checked}
-                          rows={2}
-                          aria-label={humanizeField(f)}
-                          className="w-full px-2 py-1 text-xs bg-port-card border border-port-border rounded text-gray-200 disabled:opacity-50"
-                        />
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-              <button
-                type="button"
-                onClick={applyAttributes}
-                disabled={selectedFields.size === 0}
-                className="px-3 py-1.5 rounded bg-port-accent text-white text-sm disabled:opacity-40 disabled:cursor-not-allowed hover:bg-port-accent/90"
-              >
-                Apply {selectedFields.size} detail{selectedFields.size > 1 ? 's' : ''}
-              </button>
-            </div>
-          ) : null}
         </div>
 
-        <div className="flex items-center justify-end gap-2 px-4 py-3 border-t border-port-border">
-          <button type="button" onClick={onClose} className="px-3 py-1.5 rounded border border-port-border text-gray-300 text-sm hover:text-white">
-            Close
+        {/* Provider + model picker (API/vision-capable providers only) */}
+        <VisionProviderPicker onChange={setVision} />
+
+        {/* Optional context to disambiguate the subject for the model. */}
+        <div>
+          <label htmlFor="vision-describe-context" className="block text-xs text-gray-500 mb-1">
+            Known context (optional)
+          </label>
+          <input
+            id="vision-describe-context"
+            type="text"
+            value={context}
+            onChange={(e) => setContext(e.target.value)}
+            placeholder={`Anything the images don't make obvious about this ${noun}`}
+            maxLength={2000}
+            className="w-full px-2 py-1.5 text-xs bg-port-bg border border-port-border rounded text-gray-200"
+          />
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={runDescribe}
+            disabled={!canRun}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-port-accent text-white text-sm disabled:opacity-40 disabled:cursor-not-allowed hover:bg-port-accent/90"
+          >
+            {describing ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
+            {describing ? 'Describing…' : `Describe from image${multi ? 's' : ''}`}
           </button>
+          {isCharacter ? (
+            <button
+              type="button"
+              onClick={runBuildAttributes}
+              disabled={!canRun}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded border border-port-accent text-port-accent text-sm disabled:opacity-40 disabled:cursor-not-allowed hover:bg-port-accent/10"
+            >
+              {building ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
+              {building ? 'Analyzing…' : 'Build character details'}
+            </button>
+          ) : null}
         </div>
+
+        {/* Prose result — editable before applying */}
+        {result ? (
+          <div className="space-y-2">
+            <label htmlFor="vision-describe-result" className="block text-xs text-gray-500">
+              Generated description (edit before applying if you like)
+            </label>
+            <textarea
+              id="vision-describe-result"
+              value={result}
+              onChange={(e) => setResult(e.target.value)}
+              rows={6}
+              className="w-full px-2 py-1.5 text-xs bg-port-bg border border-port-border rounded text-gray-200 whitespace-pre-wrap"
+            />
+            <button
+              type="button"
+              onClick={applyDescription}
+              disabled={!result.trim()}
+              className="px-3 py-1.5 rounded bg-port-accent text-white text-sm disabled:opacity-40 disabled:cursor-not-allowed hover:bg-port-accent/90"
+            >
+              Apply description
+            </button>
+          </div>
+        ) : null}
+
+        {/* Structured attribute review — characters only */}
+        {proposed && proposed.updatedFields.length > 0 ? (
+          <div className="space-y-2">
+            <p className="text-xs text-gray-500">
+              Proposed details (only blank fields). Uncheck any you don't want; edit text inline. Existing values are never overwritten.
+            </p>
+            <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+              {proposed.updatedFields.map((f) => {
+                const value = proposed.fields[f];
+                const isList = Array.isArray(value);
+                const checked = selectedFields.has(f);
+                return (
+                  <div key={f} className="border border-port-border rounded p-2 bg-port-bg">
+                    <label className="flex items-center gap-2 text-xs text-gray-300 mb-1">
+                      <input type="checkbox" checked={checked} onChange={() => toggleField(f)} />
+                      <span className="font-medium">{humanizeField(f)}</span>
+                      {isList ? <span className="text-gray-500">({value.length} item{value.length > 1 ? 's' : ''})</span> : null}
+                    </label>
+                    {isList ? (
+                      <p className="text-[11px] text-gray-400 pl-6">
+                        {value.map((row) => row?.name || row?.label).filter(Boolean).join(', ') || '—'}
+                      </p>
+                    ) : (
+                      <textarea
+                        value={fieldEdits[f] ?? ''}
+                        onChange={(e) => setFieldEdits((prev) => ({ ...prev, [f]: e.target.value }))}
+                        disabled={!checked}
+                        rows={2}
+                        aria-label={humanizeField(f)}
+                        className="w-full px-2 py-1 text-xs bg-port-card border border-port-border rounded text-gray-200 disabled:opacity-50"
+                      />
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+            <button
+              type="button"
+              onClick={applyAttributes}
+              disabled={selectedFields.size === 0}
+              className="px-3 py-1.5 rounded bg-port-accent text-white text-sm disabled:opacity-40 disabled:cursor-not-allowed hover:bg-port-accent/90"
+            >
+              Apply {selectedFields.size} detail{selectedFields.size > 1 ? 's' : ''}
+            </button>
+          </div>
+        ) : null}
+      </div>
+
+      <div className="flex items-center justify-end gap-2 px-4 py-3 border-t border-port-border">
+        <button type="button" onClick={onClose} className="px-3 py-1.5 rounded border border-port-border text-gray-300 text-sm hover:text-white">
+          Close
+        </button>
       </div>
 
       <GalleryImagePicker
