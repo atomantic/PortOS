@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Plus, X } from 'lucide-react';
 import {
   PRE_MUSIC_DEFAULT_DURATION_SEC, PRE_MUSIC_DURATION_RANGE, PRE_MUSIC_EFFECTS, PRE_MUSIC_LAYER_LIMIT, normalizePreMusic,
@@ -73,18 +73,17 @@ function LayerRow({ fieldId, index, layer, spanSec, tracks, onCommit, onRemove, 
 }
 
 /**
- * Whether a shot plays before the song (the cold open, lib/musicVideoColdOpen.js)
- * and, when it does, its length and sound: silence by default, the clip's own
- * audio at a level, and sound layers (a synthesized effect or a library track)
- * placed in it. The song's timing is untouched either way.
+ * A shot before the song (the cold open, lib/musicVideoColdOpen.js) has a length
+ * and sound of its own; the song's timing is untouched either way. The shot editor
+ * shows PreMusicTiming in its Timing group and PreMusicSound in its Sound group.
+ *
+ * PreMusicTiming: whether the shot plays before the song, and its length when it does.
  */
-export default function ScenePreMusic({ fieldId, scene, onChange, disabled = false }) {
+export function PreMusicTiming({ fieldId, scene, onChange, disabled = false }) {
   const settings = normalizePreMusic(scene.preMusic);
   const on = !!settings;
   const [length, setLength] = useState(settings?.durationSec ?? '');
   useEffect(() => { setLength(settings?.durationSec ?? ''); }, [settings?.durationSec]);
-  const tracks = useListResource(fetchTracks, { enabled: on });
-  const save = useCallback((patch) => onChange({ preMusic: { ...settings, ...patch } }), [onChange, settings]);
 
   const turnOn = () => {
     // A timed shot keeps its length; otherwise it starts at a few seconds to trim.
@@ -95,63 +94,72 @@ export default function ScenePreMusic({ fieldId, scene, onChange, disabled = fal
   const commitLength = () => {
     const next = Number(length);
     if (!Number.isFinite(next) || next === settings.durationSec) { setLength(settings.durationSec); return; }
-    save({ durationSec: round3(Math.min(PRE_MUSIC_DURATION_RANGE.max, Math.max(PRE_MUSIC_DURATION_RANGE.min, next))) });
+    onChange({ preMusic: { ...settings, durationSec: round3(Math.min(PRE_MUSIC_DURATION_RANGE.max, Math.max(PRE_MUSIC_DURATION_RANGE.min, next))) } });
   };
-  const layers = settings?.layers || [];
+
+  return (
+    <div className="flex flex-wrap items-center gap-2 text-xs">
+      <button type="button" role="switch" aria-checked={on} disabled={disabled}
+        onClick={() => (on ? onChange({ preMusic: null }) : turnOn())}
+        className={`inline-flex min-h-[44px] items-center gap-1 rounded border px-2 sm:min-h-[28px] disabled:opacity-50 ${on ? 'border-port-accent text-port-accent' : 'border-port-border text-port-text-muted'}`}>
+        Before the song
+      </button>
+      {on && (
+        <label className="flex items-center gap-1">Length
+          <input id={fieldId('pre-music-length')} type="number" min={PRE_MUSIC_DURATION_RANGE.min} max={PRE_MUSIC_DURATION_RANGE.max} step={STEP_SEC}
+            value={length} disabled={disabled} onChange={(e) => setLength(e.target.value)} onBlur={commitLength}
+            onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+            className={`w-20 ${control}`} />
+          <span className="text-port-text-muted">s</span>
+        </label>
+      )}
+    </div>
+  );
+}
+
+/** A shot before the song's sound: the clip's own audio at a level, and placed sound layers. Nothing while it is in the song. */
+export function PreMusicSound({ fieldId, scene, onChange, disabled = false }) {
+  const settings = normalizePreMusic(scene.preMusic);
+  const on = !!settings;
+  const tracks = useListResource(fetchTracks, { enabled: on });
+  if (!on) return null;
+  const save = (patch) => onChange({ preMusic: { ...settings, ...patch } });
+  const layers = settings.layers || [];
   const saveLayers = (next) => save({ layers: next.map(({ effect, trackId, ...rest }) => ({ ...rest, ...(effect ? { effect } : { trackId }) })) });
   // A new sound lands at the start, the place most cold opens begin.
   const addLayer = () => saveLayers([...layers, { effect: PRE_MUSIC_EFFECTS[0].id, atSec: 0, durationSec: null, volume: 1 }]);
 
   return (
-    <div className="space-y-1 text-xs" data-testid="scene-pre-music">
+    <div className="space-y-1 text-xs">
       <div className="flex flex-wrap items-center gap-2">
-        <button type="button" role="switch" aria-checked={on} disabled={disabled}
-          onClick={() => (on ? onChange({ preMusic: null }) : turnOn())}
-          className={`inline-flex min-h-[44px] items-center gap-1 rounded border px-2 sm:min-h-[28px] disabled:opacity-50 ${on ? 'border-port-accent text-port-accent' : 'border-port-border text-port-text-muted'}`}>
-          Before the song
+        <button type="button" role="switch" aria-checked={settings.clipVolume != null && settings.clipVolume > 0} disabled={disabled}
+          onClick={() => save({ clipVolume: settings.clipVolume > 0 ? null : 1 })}
+          className={`inline-flex min-h-[44px] items-center rounded border px-2 sm:min-h-[28px] disabled:opacity-50 ${settings.clipVolume > 0 ? 'border-port-accent text-port-accent' : 'border-port-border text-port-text-muted'}`}>
+          Clip sound
         </button>
-        {on && (
-          <label className="flex items-center gap-1">Length
-            <input id={fieldId('pre-music-length')} type="number" min={PRE_MUSIC_DURATION_RANGE.min} max={PRE_MUSIC_DURATION_RANGE.max} step={STEP_SEC}
-              value={length} disabled={disabled} onChange={(e) => setLength(e.target.value)} onBlur={commitLength}
-              onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
-              className={`w-20 ${control}`} />
-            <span className="text-port-text-muted">s</span>
-          </label>
+        {settings.clipVolume > 0 && (
+          <LevelSlider id={fieldId('pre-music-clip-volume')} label="level" value={settings.clipVolume} disabled={disabled}
+            onCommit={(clipVolume) => save({ clipVolume: clipVolume > 0 ? clipVolume : null })} />
         )}
+        {layers.length < PRE_MUSIC_LAYER_LIMIT && (
+          <button type="button" onClick={addLayer} disabled={disabled}
+            className="inline-flex min-h-[44px] items-center gap-1 rounded border border-port-border px-2 text-port-text-muted hover:text-port-text sm:min-h-[28px] disabled:opacity-50">
+            <Plus size={12} aria-hidden="true" /> Add sound
+          </button>
+        )}
+        {!(settings.clipVolume > 0) && !layers.length && <span className="text-port-text-muted">Silent</span>}
       </div>
-      {on && (
-        <>
-          <div className="flex flex-wrap items-center gap-2">
-            <button type="button" role="switch" aria-checked={settings.clipVolume != null && settings.clipVolume > 0} disabled={disabled}
-              onClick={() => save({ clipVolume: settings.clipVolume > 0 ? null : 1 })}
-              className={`inline-flex min-h-[44px] items-center rounded border px-2 sm:min-h-[28px] disabled:opacity-50 ${settings.clipVolume > 0 ? 'border-port-accent text-port-accent' : 'border-port-border text-port-text-muted'}`}>
-              Clip sound
-            </button>
-            {settings.clipVolume > 0 && (
-              <LevelSlider id={fieldId('pre-music-clip-volume')} label="level" value={settings.clipVolume} disabled={disabled}
-                onCommit={(clipVolume) => save({ clipVolume: clipVolume > 0 ? clipVolume : null })} />
-            )}
-            {layers.length < PRE_MUSIC_LAYER_LIMIT && (
-              <button type="button" onClick={addLayer} disabled={disabled}
-                className="inline-flex min-h-[44px] items-center gap-1 rounded border border-port-border px-2 text-port-text-muted hover:text-port-text sm:min-h-[28px] disabled:opacity-50">
-                <Plus size={12} aria-hidden="true" /> Add sound
-              </button>
-            )}
-            {!(settings.clipVolume > 0) && !layers.length && <span className="text-port-text-muted">Silent</span>}
-          </div>
-          {tracks.state === 'error' && layers.some((layer) => layer.trackId) && <ListLoadError what="the music library" error={tracks.error} onRetry={tracks.retry} />}
-          {layers.length > 0 && (
-            <ul className="space-y-1">
-              {layers.map((layer, index) => (
-                <LayerRow key={index} fieldId={fieldId} index={index} layer={layer} spanSec={settings.durationSec} tracks={tracks} disabled={disabled}
-                  onCommit={(patch) => saveLayers(layers.map((l, i) => (i === index ? { ...l, ...patch } : l)))}
-                  onRemove={() => saveLayers(layers.filter((_, i) => i !== index))} />
-              ))}
-            </ul>
-          )}
-        </>
+      {tracks.state === 'error' && layers.some((layer) => layer.trackId) && <ListLoadError what="the music library" error={tracks.error} onRetry={tracks.retry} />}
+      {layers.length > 0 && (
+        <ul className="space-y-1">
+          {layers.map((layer, index) => (
+            <LayerRow key={index} fieldId={fieldId} index={index} layer={layer} spanSec={settings.durationSec} tracks={tracks} disabled={disabled}
+              onCommit={(patch) => saveLayers(layers.map((l, i) => (i === index ? { ...l, ...patch } : l)))}
+              onRemove={() => saveLayers(layers.filter((_, i) => i !== index))} />
+          ))}
+        </ul>
       )}
     </div>
   );
 }
+

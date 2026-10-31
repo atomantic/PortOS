@@ -2,7 +2,9 @@ import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 
 vi.mock('../../services/api', () => ({ listTracks: vi.fn(async () => [{ id: 'tape', title: 'Tape room' }]) }));
-const { default: ScenePreMusic } = await import('./ScenePreMusic.jsx');
+const { PreMusicSound, PreMusicTiming } = await import('./ScenePreMusic.jsx');
+// The shot editor shows the two halves in its Timing and Sound groups.
+const ScenePreMusic = (props) => <><PreMusicTiming {...props} /><PreMusicSound {...props} /></>;
 
 const fieldId = (name) => `field-${name}`;
 

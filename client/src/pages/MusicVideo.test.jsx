@@ -480,6 +480,9 @@ beforeEach(() => {
   ytSseStates.clear();
 });
 
+// The shot editor shows the frames or the clip, one at a time.
+const showFrames = async () => fireEvent.click(within(await screen.findByRole('group', { name: 'Show' })).getByRole('button', { name: /^(Still|Frames)$/ }));
+
 describe('MusicVideo project load recovery (#9761)', () => {
   it.each(['/music-video', '/music-video/mv-2/board'])('keeps failures visible and recovers without changing %s', async (path) => {
     let resolveRetry;
@@ -1325,7 +1328,7 @@ describe('MusicVideo project video renderer', () => {
     fireEvent.change(render.getByLabelText('Render on'), { target: { value: 'local' } });
     expect(render.getByLabelText('Model').value).toBe('ltx25_mlx_q8');
     // A 3s shot: the shortest LTX length that covers it (73 frames at 24 fps).
-    const length = render.getByLabelText('Length');
+    const length = render.getByLabelText('Clip length');
     expect(length.value).toBe('73');
     expect(length.selectedOptions[0].textContent).toBe('3s · covers shot');
     fireEvent.change(length, { target: { value: '121' } });
@@ -2457,6 +2460,7 @@ describe('MusicVideo media lightbox (#3718)', () => {
 
   it('opens the lightbox from a reference-frame thumbnail click', async () => {
     await openProject(PROJECT_WITH_CLIP, 'produce');
+    await showFrames();
     fireEvent.click(await screen.findByRole('button', { name: 'View scene 1 reference frame full size' }));
     const dialog = await screen.findByRole('dialog', { name: /Media viewer/i });
     expect(dialog).toBeTruthy();
@@ -2467,6 +2471,7 @@ describe('MusicVideo media lightbox (#3718)', () => {
 
   it('opens the lightbox from an end-frame thumbnail click', async () => {
     await openProject({ ...PROJECT_WITH_CLIP, scenes: [{ ...PROJECT_WITH_CLIP.scenes[0], endImageId: 'end1' }] }, 'produce');
+    await showFrames();
     fireEvent.click(await screen.findByRole('button', { name: 'View scene 1 end frame full size' }));
     const dialog = await screen.findByRole('dialog', { name: /Media viewer/i });
     expect(dialog.querySelector('img')?.getAttribute('src') || dialog.innerHTML).toMatch(/\/data\/images\/end1/);
@@ -2504,6 +2509,7 @@ describe('MusicVideo media lightbox (#3718)', () => {
     // one — and it also carries the `cleanedFrom` lineage the hand-rolled item
     // shape used to drop.
     await openProject(PROJECT_WITH_CLIP, 'produce');
+    await showFrames();
     fireEvent.click(await screen.findByRole('button', { name: 'View scene 1 reference frame full size' }));
     const dialog = await screen.findByRole('dialog', { name: /Media viewer/i });
     await waitFor(() => {
@@ -2608,6 +2614,7 @@ describe('MusicVideo visual spec, takes and handoff (#8965)', () => {
   it('renders a new frame take from the shot\'s own start frame when it is picked as the reference', async () => {
     await openProject({ ...SPEC_PROJECT, scenes: [{ ...SPEC_PROJECT.scenes[0], referenceImageId: 'start.png' }] }, 'produce');
     fireEvent.change(screen.getByLabelText('From', { selector: '#mv-scene-s1-start-from' }), { target: { value: 'start' } });
+    await showFrames();
     fireEvent.click(screen.getByRole('button', { name: /^New frame take$/ }));
     await waitFor(() => expect(generateImage).toHaveBeenCalledWith(expect.objectContaining({
       prompt: 'harbor at dawn',
@@ -2620,6 +2627,7 @@ describe('MusicVideo visual spec, takes and handoff (#8965)', () => {
   it('refines the start frame by a short instruction, sending the references picked on the shot after that frame', async () => {
     await openProject({ ...SPEC_PROJECT, scenes: [{ ...SPEC_PROJECT.scenes[0], referenceImageId: 'start.png' }] }, 'produce');
     // The automatic set shows as chips; swap the flagged Lead for the Pier set.
+    await showFrames();
     const refs = within(screen.getByRole('group', { name: 'References sent with the frames' }));
     expect(refs.getByText('Auto: from the prompt')).toBeTruthy();
     fireEvent.click(refs.getByRole('button', { name: "Don't send Lead" }));
@@ -2644,6 +2652,7 @@ describe('MusicVideo visual spec, takes and handoff (#8965)', () => {
     await openProject({ ...SPEC_PROJECT, visualSpec: { ...SPEC_PROJECT.visualSpec, references },
       scenes: [{ ...SPEC_PROJECT.scenes[0], referenceImageId: 'start.png' }] }, 'produce');
     expect(screen.getByText('Refines and end frames send the frame plus the first 3.')).toBeTruthy();
+    await showFrames();
     fireEvent.click(screen.getByRole('button', { name: 'Refine' }));
     fireEvent.change(screen.getByLabelText('What to change in the start frame'), { target: { value: 'remove the hand' } });
     fireEvent.click(screen.getByRole('button', { name: 'Render refined start frame' }));
@@ -2685,6 +2694,7 @@ describe('MusicVideo visual spec, takes and handoff (#8965)', () => {
     });
     await openProject({ ...PROJECT_NO_CLIP, id: 'mv-takes', name: 'Takes Project', scenes: [scene] }, 'produce');
 
+    await showFrames();
     const strip = screen.getByRole('list', { name: /Frame takes/ });
     // How a take was made is not labeled under it.
     expect(within(strip).queryByText(/imported|generated/)).toBeNull();
@@ -2723,6 +2733,7 @@ describe('MusicVideo visual spec, takes and handoff (#8965)', () => {
     closeSettings();
     // The imported take filled the empty slot on the board.
     await openStage('produce');
+    await showFrames();
     expect(await screen.findByRole('button', { name: 'View scene 1 reference frame full size' })).toBeTruthy();
   });
 
