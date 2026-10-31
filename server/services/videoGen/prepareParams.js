@@ -802,6 +802,181 @@ async function prepareVideoReferences({
 }
 
 /**
+ * Pre-staging IC-LoRA request shape: mode ↔ reference pairing, reference kind,
+ * count and runtime. Throws the 400 the route returns; the caller owns cleanup.
+ */
+function assertIcLoraRequest({ icSpec, body, uploads, effectiveModel, effectiveModelId }) {
+  if (!icSpec) {
+    if (uploads.icReference || body.icReferenceVideoIds?.length || body.icReferenceImageFiles?.length) {
+      throw new ServerError(
+        `IC-LoRA reference inputs are only valid with an IC remix mode (${IC_LORA_MODE_VALUES.join(', ')}); got mode='${body.mode || 'unset'}'.`,
+        { status: 400, code: 'IC_LORA_MODE_MISMATCH' },
+      );
+    }
+    return;
+  }
+  // The grok backend short-circuits below this point (it only reads
+  // prompt/dims/source-image), so an IC request routed there would enqueue a
+  // plain grok render with the reference clip silently dropped. The client's
+  // mode bar snaps grok back to text/image, but reject explicitly so a direct
+  // caller gets an error instead of a wrong-looking clip.
+  if (CLOUD_VIDEO_GEN_MODES.includes(body.backend)) {
+    throw new ServerError(
+      `${icSpec.label} mode runs on the local ltx2 runtime — it isn't available on the ${body.backend} backend.`,
+      { status: 400, code: 'IC_LORA_REQUIRES_LOCAL_BACKEND' },
+    );
+  }
+  // Each weight takes exactly ONE kind of reference. An image-kind weight fed a
+  // clip (or vice versa) doesn't error inside the pipeline — it produces
+  // plausible-looking garbage — so reject the cross-kind fields explicitly
+  // rather than silently dropping them.
+  const wantsImages = icSpec.referenceKind === 'image';
+  const videoShapePresent = !!uploads.icReference || !!body.icReferenceVideoIds?.length;
+  if (wantsImages && videoShapePresent) {
+    throw new ServerError(
+      `${icSpec.label} mode conditions on still images — pass gallery filenames as icReferenceImageFiles, not icReference / icReferenceVideoIds.`,
+      { status: 400, code: 'IC_LORA_REFERENCE_KIND_MISMATCH' },
+    );
+  }
+  if (!wantsImages && body.icReferenceImageFiles?.length) {
+    throw new ServerError(
+      `${icSpec.label} mode conditions on a reference clip — pass icReference / icReferenceVideoIds, not icReferenceImageFiles.`,
+      { status: 400, code: 'IC_LORA_REFERENCE_KIND_MISMATCH' },
+    );
+  }
+  // The upload wins over gallery picks, so a request carrying both would
+  // silently drop the picks. Force one shape per request instead. Checked
+  // BEFORE the count bounds below, which would otherwise report a misleading
+  // "needs exactly 1, got 2" for what is really a mixed-shape request.
+  if (uploads.icReference && body.icReferenceVideoIds?.length) {
+    throw new ServerError(
+      'icReference upload cannot be combined with icReferenceVideoIds — pass one reference shape per request.',
+      { status: 400, code: 'IC_LORA_REFERENCE_CONFLICT' },
+    );
+  }
+  // Reference count is the weight's contract, asserted once here against the
+  // registry that owns the bounds. Checked before staging so a bad request only
+  // unlinks the cheap OS temp file, and resolution can't change the count: an
+  // upload is exactly 1, every history id resolves 1:1 or throws, and every
+  // gallery filename resolves 1:1 or throws.
+  const refCount = wantsImages
+    ? (body.icReferenceImageFiles?.length || 0)
+    : (uploads.icReference ? 1 : 0) + (body.icReferenceVideoIds?.length || 0);
+  if (refCount === 0) {
+    // Special-cased ahead of the bounds assertion purely for actionability —
+    // "needs exactly 1; got 0" doesn't tell the caller HOW to supply one.
+    throw new ServerError(
+      wantsImages
+        ? `${icSpec.label} mode requires ${describeIcReferenceRange(icSpec)} reference images — pick them from your gallery (icReferenceImageFiles).`
+        : `${icSpec.label} mode requires a reference ${icSpec.referenceKind} — upload one (multipart field: icReference) or pick a prior render (icReferenceVideoIds).`,
+      { status: 400, code: 'IC_LORA_REFERENCE_REQUIRED' },
+    );
+  }
+  assertIcReferenceCount(icSpec, refCount, (msg) => new ServerError(msg, {
+    status: 400, code: 'IC_LORA_REFERENCE_COUNT',
+  }));
+  // IC-LoRA remix is an LTX-2 primitive (ICLoraPipeline). Fail before enqueue
+  // so a bad modelId can't pollute the persisted queue with a doomed job.
+  if (effectiveModel && !isLtx2FamilyRuntime(effectiveModel.runtime)) {
+    throw new ServerError(
+      `${icSpec.label} mode requires an ltx2-runtime model. Model "${effectiveModelId}" runs on "${effectiveModel.runtime || 'mlx_video'}".`,
+      { status: 400, code: 'IC_LORA_REQUIRES_LTX2' },
+    );
+  }
+  // Chained renders re-seed each chunk from the previous chunk's last frame;
+  // an IC render is conditioned on a whole reference clip instead, so there's
+  // no defined semantic for chunk 2+ and it would silently ignore the mode.
+  if (body.chunks != null && Number(body.chunks) > 1) {
+    throw new ServerError(
+      `${icSpec.label} mode cannot be combined with chunks > 1 — the reference clip anchors a single render.`,
+      { status: 400, code: 'IC_LORA_CHUNKS_CONFLICT' },
+    );
+  }
+}
+
+/**
+ * IC-LoRA reference channel: gallery stills for an image-kind weight, else the
+ * staged upload or the picked prior render(s). `assertIcLoraRequest` already
+ * rejected the cross-kind and both-present cases and asserted the count, so
+ * exactly one branch contributes and each entry resolves 1:1 or throws.
+ */
+async function resolveIcReferencePaths({
+  icSpec, body, icReferenceUploadPath, getHistory, resolveHistoryVideoPath, cleanupStaged,
+}) {
+  if (icSpec.referenceKind === 'image') {
+    // Gallery-only, exactly like `keyframes` — same path-traversal guard, same
+    // "reject up-front so the queue never accepts a doomed job" contract. The
+    // service materializes each still into a VAE-compatible clip at render
+    // resolution (the IC reference channel is a video encoder end-to-end).
+    const paths = [];
+    for (let i = 0; i < body.icReferenceImageFiles.length; i++) {
+      const file = body.icReferenceImageFiles[i];
+      const path = resolveGalleryImage(file);
+      if (!path) {
+        await cleanupStaged();
+        throw new ServerError(
+          `icReferenceImageFiles[${i}] not found in gallery: ${file}`,
+          { status: 400, code: 'IC_LORA_REFERENCE_GALLERY_MISS' },
+        );
+      }
+      paths.push(path);
+    }
+    return paths;
+  }
+  if (icReferenceUploadPath) return [icReferenceUploadPath];
+  const history = await getHistory();
+  const paths = [];
+  for (const id of body.icReferenceVideoIds || []) {
+    paths.push(await resolveHistoryVideoPath(id, {
+      history,
+      label: 'icReferenceVideoIds entry',
+      notFoundCode: 'IC_LORA_REFERENCE_NOT_FOUND',
+      missingFileCode: 'IC_LORA_REFERENCE_FILE_MISSING',
+    }));
+  }
+  return paths;
+}
+
+// Chain-only request knobs, resolved against the final chunk count.
+function resolveChainSettings({ body, effectiveChunks, effectiveModel }) {
+  // Per-chunk prompt beats (#3695) — only meaningful once the RESOLVED request
+  // really chains, so a single-chunk render (or an a2v/IC one pinned to 1 above)
+  // drops the list entirely rather than persisting a stale array into job params
+  // that a resume would replay into the form.
+  //
+  // Sizing is forgiving in both directions: a stale overlong list (the user
+  // typed beats, then lowered the chunk count) is truncated to the resolved
+  // count, and a short list is left short — generateChainedVideo falls back to
+  // the main prompt for any index the list doesn't cover. Blank entries become
+  // an explicit null (absent beat → main prompt) rather than an empty string the
+  // runner would render as an empty prompt. An all-blank list collapses to
+  // undefined so "the user cleared every beat" and "no beats were sent" persist
+  // identically instead of storing a useless array of nulls.
+  const normalizedChunkPrompts = effectiveChunks > 1 && Array.isArray(body.chunkPrompts)
+    ? body.chunkPrompts.slice(0, effectiveChunks)
+      .map((p) => (typeof p === 'string' && p.trim() !== '' ? p : null))
+    : undefined;
+  const effectiveChunkPrompts = normalizedChunkPrompts?.some(Boolean)
+    ? normalizedChunkPrompts
+    : undefined;
+
+  // Continuation context window — same "only meaningful once the request
+  // really chains" rule as the beats above, so a single-chunk render doesn't
+  // persist a knob that never applied and a resume can't replay it into the
+  // form. Resolved (defaulted + clamped) here rather than at render time so
+  // the persisted job records what the chain will actually do; note `0` is a
+  // real value (last-frame chaining) and must not be dropped as falsy.
+  const effectiveContextFrames = effectiveChunks > 1
+    ? resolveContextFrames(body.contextFrames)
+    : undefined;
+
+  const continuation = effectiveChunks > 1 || body.continuityStrategy != null
+    ? resolveContinuityRequest({ model: effectiveModel, continuityStrategy: body.continuityStrategy, contextFrames: body.contextFrames })
+    : undefined;
+  return { effectiveChunkPrompts, effectiveContextFrames, continuation };
+}
+
+/**
  * The staging + resolution region, split out so `prepareVideoGenParams` can
  * wrap it in a single rollback guard (#3326) without indenting 400 lines.
  * Every explicit throw here still calls `cleanupStaged()` itself so the
@@ -881,100 +1056,11 @@ async function resolvePreparedParams({
   // reference channel is what makes the mode meaningful, and an IC upload
   // outside an IC mode would be silently dropped by the worker.
   const icSpec = icLoraSpecForMode(body.mode);
-  if (icSpec) {
-    // The grok backend short-circuits below this point (it only reads
-    // prompt/dims/source-image), so an IC request routed there would enqueue a
-    // plain grok render with the reference clip silently dropped. The client's
-    // mode bar snaps grok back to text/image, but reject explicitly so a direct
-    // caller gets an error instead of a wrong-looking clip.
-    if (CLOUD_VIDEO_GEN_MODES.includes(body.backend)) {
-      await cleanupStaged();
-      throw new ServerError(
-        `${icSpec.label} mode runs on the local ltx2 runtime — it isn't available on the ${body.backend} backend.`,
-        { status: 400, code: 'IC_LORA_REQUIRES_LOCAL_BACKEND' },
-      );
-    }
-    // Each weight takes exactly ONE kind of reference. An image-kind weight fed a
-    // clip (or vice versa) doesn't error inside the pipeline — it produces
-    // plausible-looking garbage — so reject the cross-kind fields explicitly
-    // rather than silently dropping them.
-    const wantsImages = icSpec.referenceKind === 'image';
-    const videoShapePresent = !!uploads.icReference || !!body.icReferenceVideoIds?.length;
-    if (wantsImages && videoShapePresent) {
-      await cleanupStaged();
-      throw new ServerError(
-        `${icSpec.label} mode conditions on still images — pass gallery filenames as icReferenceImageFiles, not icReference / icReferenceVideoIds.`,
-        { status: 400, code: 'IC_LORA_REFERENCE_KIND_MISMATCH' },
-      );
-    }
-    if (!wantsImages && body.icReferenceImageFiles?.length) {
-      await cleanupStaged();
-      throw new ServerError(
-        `${icSpec.label} mode conditions on a reference clip — pass icReference / icReferenceVideoIds, not icReferenceImageFiles.`,
-        { status: 400, code: 'IC_LORA_REFERENCE_KIND_MISMATCH' },
-      );
-    }
-    // The upload wins over gallery picks, so a request carrying both would
-    // silently drop the picks. Force one shape per request instead. Checked
-    // BEFORE the count bounds below, which would otherwise report a misleading
-    // "needs exactly 1, got 2" for what is really a mixed-shape request.
-    if (uploads.icReference && body.icReferenceVideoIds?.length) {
-      await cleanupStaged();
-      throw new ServerError(
-        'icReference upload cannot be combined with icReferenceVideoIds — pass one reference shape per request.',
-        { status: 400, code: 'IC_LORA_REFERENCE_CONFLICT' },
-      );
-    }
-    // Reference count is the weight's contract, asserted once here against the
-    // registry that owns the bounds. Checked before staging so a bad request only
-    // unlinks the cheap OS temp file, and resolution below can't change the
-    // count: an upload is exactly 1, every history id resolves 1:1 or throws, and
-    // every gallery filename resolves 1:1 or throws.
-    const refCount = wantsImages
-      ? (body.icReferenceImageFiles?.length || 0)
-      : (uploads.icReference ? 1 : 0) + (body.icReferenceVideoIds?.length || 0);
-    if (refCount === 0) {
-      // Special-cased ahead of the bounds assertion purely for actionability —
-      // "needs exactly 1; got 0" doesn't tell the caller HOW to supply one.
-      await cleanupStaged();
-      throw new ServerError(
-        wantsImages
-          ? `${icSpec.label} mode requires ${describeIcReferenceRange(icSpec)} reference images — pick them from your gallery (icReferenceImageFiles).`
-          : `${icSpec.label} mode requires a reference ${icSpec.referenceKind} — upload one (multipart field: icReference) or pick a prior render (icReferenceVideoIds).`,
-        { status: 400, code: 'IC_LORA_REFERENCE_REQUIRED' },
-      );
-    }
-    if (refCount < icSpec.minReferences || refCount > icSpec.maxReferences) {
-      await cleanupStaged();
-      assertIcReferenceCount(icSpec, refCount, (msg) => new ServerError(msg, {
-        status: 400, code: 'IC_LORA_REFERENCE_COUNT',
-      }));
-    }
-    // IC-LoRA remix is an LTX-2 primitive (ICLoraPipeline). Fail before enqueue
-    // so a bad modelId can't pollute the persisted queue with a doomed job.
-    if (effectiveModel && !isLtx2FamilyRuntime(effectiveModel.runtime)) {
-      await cleanupStaged();
-      throw new ServerError(
-        `${icSpec.label} mode requires an ltx2-runtime model. Model "${effectiveModelId}" runs on "${effectiveModel.runtime || 'mlx_video'}".`,
-        { status: 400, code: 'IC_LORA_REQUIRES_LTX2' },
-      );
-    }
-    // Chained renders re-seed each chunk from the previous chunk's last frame;
-    // an IC render is conditioned on a whole reference clip instead, so there's
-    // no defined semantic for chunk 2+ and it would silently ignore the mode.
-    if (body.chunks != null && Number(body.chunks) > 1) {
-      await cleanupStaged();
-      throw new ServerError(
-        `${icSpec.label} mode cannot be combined with chunks > 1 — the reference clip anchors a single render.`,
-        { status: 400, code: 'IC_LORA_CHUNKS_CONFLICT' },
-      );
-    }
-  } else if (uploads.icReference || body.icReferenceVideoIds?.length || body.icReferenceImageFiles?.length) {
+  try {
+    assertIcLoraRequest({ icSpec, body, uploads, effectiveModel, effectiveModelId });
+  } catch (err) {
     await cleanupStaged();
-    throw new ServerError(
-      `IC-LoRA reference inputs are only valid with an IC remix mode (${IC_LORA_MODE_VALUES.join(', ')}); got mode='${body.mode || 'unset'}'.`,
-      { status: 400, code: 'IC_LORA_MODE_MISMATCH' },
-    );
+    throw err;
   }
   // a2v needs a runtime with an audio-conditioning path. The worker also
   // catches this in buildArgs, but checking here keeps the route's "fail fast
@@ -1231,46 +1317,11 @@ async function resolvePreparedParams({
     });
   }
 
-  // IC-LoRA reference channel: gallery stills for an image-kind weight, else the
-  // staged upload or the picked prior render(s). The route already rejected the
-  // cross-kind and both-present cases (and asserted the count against the weight's
-  // bounds) above, so exactly one branch contributes and each entry resolves 1:1
-  // or throws.
-  let icReferencePaths = null;
-  if (icSpec) {
-    if (icSpec.referenceKind === 'image') {
-      // Gallery-only, exactly like `keyframes` — same path-traversal guard, same
-      // "reject up-front so the queue never accepts a doomed job" contract. The
-      // service materializes each still into a VAE-compatible clip at render
-      // resolution (the IC reference channel is a video encoder end-to-end).
-      icReferencePaths = [];
-      for (let i = 0; i < body.icReferenceImageFiles.length; i++) {
-        const file = body.icReferenceImageFiles[i];
-        const path = resolveGalleryImage(file);
-        if (!path) {
-          await cleanupStaged();
-          throw new ServerError(
-            `icReferenceImageFiles[${i}] not found in gallery: ${file}`,
-            { status: 400, code: 'IC_LORA_REFERENCE_GALLERY_MISS' },
-          );
-        }
-        icReferencePaths.push(path);
-      }
-    } else if (icReferenceUploadPath) {
-      icReferencePaths = [icReferenceUploadPath];
-    } else {
-      const history = await getHistory();
-      icReferencePaths = [];
-      for (const id of body.icReferenceVideoIds || []) {
-        icReferencePaths.push(await resolveHistoryVideoPath(id, {
-          history,
-          label: 'icReferenceVideoIds entry',
-          notFoundCode: 'IC_LORA_REFERENCE_NOT_FOUND',
-          missingFileCode: 'IC_LORA_REFERENCE_FILE_MISSING',
-        }));
-      }
-    }
-  }
+  const icReferencePaths = icSpec
+    ? await resolveIcReferencePaths({
+      icSpec, body, icReferenceUploadPath, getHistory, resolveHistoryVideoPath, cleanupStaged,
+    })
+    : null;
 
   const { referenceImagePaths, referenceVideoPaths, referenceAudioPaths } = await prepareVideoReferences({
     body, uploads, effectiveModel, sourceImagePath, getHistory, resolveHistoryVideoPath,
@@ -1319,40 +1370,9 @@ async function resolvePreparedParams({
     extendFromVideoPath, audioFilePath,
   }, settings).catch(async (error) => { await cleanupStaged(); throw error; });
 
-  // Per-chunk prompt beats (#3695) — only meaningful once the RESOLVED request
-  // really chains, so a single-chunk render (or an a2v/IC one pinned to 1 above)
-  // drops the list entirely rather than persisting a stale array into job params
-  // that a resume would replay into the form.
-  //
-  // Sizing is forgiving in both directions: a stale overlong list (the user
-  // typed beats, then lowered the chunk count) is truncated to the resolved
-  // count, and a short list is left short — generateChainedVideo falls back to
-  // the main prompt for any index the list doesn't cover. Blank entries become
-  // an explicit null (absent beat → main prompt) rather than an empty string the
-  // runner would render as an empty prompt. An all-blank list collapses to
-  // undefined so "the user cleared every beat" and "no beats were sent" persist
-  // identically instead of storing a useless array of nulls.
-  const normalizedChunkPrompts = effectiveChunks > 1 && Array.isArray(body.chunkPrompts)
-    ? body.chunkPrompts.slice(0, effectiveChunks)
-      .map((p) => (typeof p === 'string' && p.trim() !== '' ? p : null))
-    : undefined;
-  const effectiveChunkPrompts = normalizedChunkPrompts?.some(Boolean)
-    ? normalizedChunkPrompts
-    : undefined;
-
-  // Continuation context window — same "only meaningful once the request
-  // really chains" rule as the beats above, so a single-chunk render doesn't
-  // persist a knob that never applied and a resume can't replay it into the
-  // form. Resolved (defaulted + clamped) here rather than at render time so
-  // the persisted job records what the chain will actually do; note `0` is a
-  // real value (last-frame chaining) and must not be dropped as falsy.
-  const effectiveContextFrames = effectiveChunks > 1
-    ? resolveContextFrames(body.contextFrames)
-    : undefined;
-
-  const continuation = effectiveChunks > 1 || body.continuityStrategy != null
-    ? resolveContinuityRequest({ model: effectiveModel, continuityStrategy: body.continuityStrategy, contextFrames: body.contextFrames })
-    : undefined;
+  const { effectiveChunkPrompts, effectiveContextFrames, continuation } = resolveChainSettings({
+    body, effectiveChunks, effectiveModel,
+  });
 
   return {
     backend,
