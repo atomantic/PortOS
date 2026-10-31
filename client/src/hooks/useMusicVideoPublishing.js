@@ -69,13 +69,16 @@ export default function useMusicVideoPublishing({ project, replaceProject } = {}
   // director, in which case the server has already recorded the post's link).
   // `draftsError` is scoped to the project so a failure never shows under another one.
   const [draftsError, setDraftsError] = useState(null);
+  // Read in the async success path so a read that never failed issues no extra state update.
+  const draftsErrorRef = useRef(null);
+  draftsErrorRef.current = draftsError;
   const [draftsAttempt, setDraftsAttempt] = useState(0);
   const retryDrafts = useCallback(() => setDraftsAttempt((n) => n + 1), []);
   useEffect(() => {
     if (!projectId) return undefined;
     let cancelled = false;
-    setDraftsError(null);
-    const apply = (list) => { if (cancelled) return; for (const d of list) if (d.state !== 'discarded') setFor('drafts', d.target, d); };
+    // The error clears only on success, so a slow retry never reads as "no drafts".
+    const apply = (list) => { if (cancelled) return; if (draftsErrorRef.current) setDraftsError(null); for (const d of list) if (d.state !== 'discarded') setFor('drafts', d.target, d); };
     getMusicVideoPublishDrafts(projectId, { silent: true }).then((res) => apply(res?.drafts || []))
       .catch((err) => { if (!cancelled) setDraftsError({ scope, error: err || new Error('Failed') }); });
     const onDraft = (e) => {

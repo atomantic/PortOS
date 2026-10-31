@@ -52,9 +52,10 @@ describe('ToolsTab submolt loading', () => {
   });
 
   it('reports a failed submolt read with Retry instead of offering only "general"', async () => {
+    let resolveRetry;
     api.getAgentSubmolts
       .mockRejectedValueOnce(new Error('network unavailable'))
-      .mockResolvedValue({ submolts: [{ name: 'example-community' }] });
+      .mockReturnValueOnce(new Promise((resolve) => { resolveRetry = resolve; }));
 
     render(<ToolsTab agentId="agent-1" agent={{ id: 'agent-1', aiConfig: {} }} />);
 
@@ -62,6 +63,9 @@ describe('ToolsTab submolt loading', () => {
     expect(api.getAgentSubmolts).toHaveBeenLastCalledWith('account-1', { silent: true });
 
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Retry' })); });
+    // Still failed while the retry is in flight, so the picker never reads as "only general".
+    expect(screen.getByText(/Could not load submolts/)).toBeInTheDocument();
+    await act(async () => { resolveRetry({ submolts: [{ name: 'example-community' }] }); });
 
     expect(screen.queryByText(/Could not load submolts/)).not.toBeInTheDocument();
     expect(screen.getByRole('option', { name: 'example-community' })).toBeInTheDocument();

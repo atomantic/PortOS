@@ -36,6 +36,7 @@ function Posting({ id, replaceProject = vi.fn() }) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  window.localStorage.clear();
   api.prepareMusicVideoPublishDraft.mockReset();
 });
 
@@ -123,6 +124,8 @@ describe('music-video publish platforms read', () => {
 
   it('shows a failed read with Retry instead of "no platforms", then loads on Retry', async () => {
     api.getMusicVideoPublishPlatforms.mockRejectedValueOnce(new Error('Server unavailable'));
+    // A fold the director remembered for this card must not hide the failure.
+    window.localStorage.setItem('portos.musicVideo.publishCards', JSON.stringify({ 'project-a': { platforms: false } }));
     render(<PublishPage id="project-a" />);
     expect(await screen.findByText(/Could not load where you post — Server unavailable/)).toBeInTheDocument();
     expect(screen.queryByText(/No platforms yet/)).toBeNull();
@@ -136,11 +139,14 @@ describe('music-video publish platforms read', () => {
   });
 
   it('shows a failed draft rehydrate with Retry, then restores the filled draft', async () => {
-    api.getMusicVideoPublishDrafts.mockRejectedValueOnce(new Error('Server unavailable'))
-      .mockResolvedValueOnce({ drafts: [{ draftId: 'draft-a', target: 'youtube', state: 'open', summary: { title: 'Example A' } }] });
+    const retried = deferred();
+    api.getMusicVideoPublishDrafts.mockRejectedValueOnce(new Error('Server unavailable')).mockReturnValueOnce(retried.promise);
     render(<Posting id="project-a" />);
     expect(await screen.findByText(/Could not load the drafts already filled — Server unavailable/)).toBeInTheDocument();
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Retry' })); });
+    // Still unknown while the retry is in flight, so it never reads as "no drafts".
+    expect(screen.getByText(/Could not load the drafts already filled/)).toBeInTheDocument();
+    await act(async () => { retried.resolve({ drafts: [{ draftId: 'draft-a', target: 'youtube', state: 'open', summary: { title: 'Example A' } }] }); });
     expect(screen.queryByText(/Could not load the drafts already filled/)).toBeNull();
     expect(await screen.findByText('Example A')).toBeInTheDocument();
   });

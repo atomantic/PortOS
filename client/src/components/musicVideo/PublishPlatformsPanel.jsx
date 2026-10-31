@@ -31,11 +31,11 @@ export default function PublishPlatformsPanel({ projectId, publishing }) {
   const { platforms, platformsError, retryPlatforms, history, setPlatform } = publishing;
   if (!platforms) {
     if (!platformsError) return null;
+    // Outside PublishCard: a fold the director remembered for this card must not hide the failure.
     return (
-      // Its own key, so the loaded card mounts fresh and takes its own fold default.
-      <PublishCard key="load-error" projectId={projectId} cardId="platforms" label="Where you post" icon={Globe} summary="Not loaded" defaultOpen>
+      <section aria-label="Where you post" className="rounded-lg border border-port-border bg-port-card p-3 text-xs">
         <ListLoadError what="where you post" error={platformsError} onRetry={retryPlatforms} />
-      </PublishCard>
+      </section>
     );
   }
   const enabledCount = Object.values(platforms).filter((p) => p?.enabled).length;

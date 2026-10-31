@@ -86,9 +86,10 @@ export default function ToolsTab({ agentId, agent }) {
   useEffect(() => {
     if (!selectedAccountId) return undefined;
     let live = true;
-    setSubmoltsError(null);
+    // The error clears only on success, so a slow retry never reads as "only general".
     api.getAgentSubmolts(selectedAccountId, { silent: true }).then(data => {
       if (!live) return;
+      setSubmoltsError(null);
       const list = data.submolts || data || [];
       setSubmolts(Array.isArray(list) ? list : []);
     }).catch(err => { if (live) setSubmoltsError(err); });
