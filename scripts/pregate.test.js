@@ -883,6 +883,42 @@ describe('pregate hidden-content invocation', () => {
     expect(result.stdout).not.toContain('Pregate passed');
   });
 
+  it.skipIf(process.platform === 'win32')('reports a stage that cannot be spawned as failed with exit 1', () => {
+    const preload = join(scratch, 'spawn-error.cjs');
+    writeFileSync(preload, `
+      const cp = require('child_process');
+      const spawn = cp.spawn;
+      cp.spawn = (command, args, options) => spawn('/nonexistent/pregate-fixture-binary', [], options);
+    `);
+    const result = spawnSync(process.execPath, ['--require', preload, 'scripts/pregate.js', '--base', base, '--skip-lint'], {
+      cwd: root, encoding: 'utf8',
+    });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toMatch(/❌ hidden-content scan could not start: spawn \/nonexistent\/pregate-fixture-binary ENOENT/);
+    expect(result.stdout).not.toContain('Pregate passed');
+    const report = JSON.parse(readFileSync(join(root, PREGATE_REPORT_PATH), 'utf8'));
+    expect(report.stages[0]).toMatchObject({ name: 'hidden-content scan', status: 'failed' });
+  });
+
+  it.skipIf(process.platform === 'win32')('reports a stage group that cannot be stopped as failed with exit 1', () => {
+    const preload = join(scratch, 'unsettled-group.cjs');
+    writeFileSync(preload, `
+      const kill = process.kill.bind(process);
+      process.kill = (pid, signal) => {
+        if (pid < 0 && signal === 'SIGKILL') throw Object.assign(new Error('denied'), { code: 'EACCES' });
+        return kill(pid, signal);
+      };
+    `);
+    const result = spawnSync(process.execPath, ['--require', preload, 'scripts/pregate.js', '--base', base, '--skip-lint'], {
+      cwd: root, encoding: 'utf8',
+    });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toMatch(/❌ hidden-content scan left processes in its group that could not be stopped \(group kill failed \(EACCES\); pgid=\d+;/);
+    expect(result.stdout).not.toContain('Pregate passed');
+    const report = JSON.parse(readFileSync(join(root, PREGATE_REPORT_PATH), 'utf8'));
+    expect(report.stages[0]).toMatchObject({ name: 'hidden-content scan', status: 'failed' });
+  });
+
   it('passes clean uncommitted changes even when the plan selects no lint or tests', () => {
     git('config', 'core.autocrlf', 'true');
     write(trackedPath, `${clean}staged\n`);
