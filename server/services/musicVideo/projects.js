@@ -72,6 +72,11 @@ export async function listProjects(options = {}) {
   return (await selectBackend()).listProjects(options);
 }
 
+/** Live `{ id, name }` rows for the sidebar's Music Video sub-nav. */
+export async function listProjectNames() {
+  return (await selectBackend()).listProjectNames();
+}
+
 export async function listProjectPage(options = {}) {
   return (await selectBackend()).listProjectPage(options);
 }

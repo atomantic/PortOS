@@ -107,6 +107,7 @@ describe('projectsFile federation (#1770)', () => {
     const b = await file.createProject({ name: 'B' });
     await file.deleteProject(b.id);
     expect(await file.listProjectIds()).toEqual([a.id]);
+    expect(await file.listProjectNames()).toEqual([{ id: a.id, name: 'A' }]);
     expect((await file.listProjectIds({ includeDeleted: true })).sort()).toEqual([a.id, b.id].sort());
   });
 

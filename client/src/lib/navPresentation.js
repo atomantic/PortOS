@@ -191,7 +191,7 @@ export const NAV_PRESENTATION = {
   '/mood-boards': { icon: Palette },
   '/storyboards': { icon: LayoutPanelLeft },
   '/music': { icon: Mic },
-  '/music-video': { icon: Music },
+  '/music-video': { icon: Music, dynamic: 'musicVideos' },
   '/rounds': { icon: Music },
   '/pipeline': { icon: WorkflowIcon, dynamic: 'pipelineSeries' },
   '/sharing': { icon: Share2 },
