@@ -13,16 +13,18 @@ import { VITEST_CACHE_TAG, VITEST_MODULE_CACHE_ROOTS, moduleCacheName, moduleCac
  * matches it. A lock's age, an absent process or its prose never establish
  * release: a changed lock, HEAD or branch is an ownership change and refuses.
  *
- * A merged, clean checkout is removed in place. Explicit preserved-supersession
+ * A merged checkout is removed in place: clean, or dirty when its PR merged at
+ * the exact observed head (merged ⇒ disposable). Explicit preserved-supersession
  * review also admits a released published or private prototype after durable
- * bounded source and small-evidence preservation. Dirty, otherwise unmerged, protected, and live-owner checkouts stay. Retirement does not copy the
- * checkout, its ignored files, or its commit history.
+ * bounded source and small-evidence preservation. Dirty unmerged, protected and
+ * live-owner checkouts stay. Retirement never copies the checkout, its ignored
+ * files, or its commit history into an archive.
  */
 
 import { findGoneInventoryRows } from './branchReconcileInventoryPrune.js';
 import { realpathSync, constants } from 'node:fs';
 import { pipeline } from 'node:stream/promises';
-import { lstat, stat, realpath, readlink, readdir, opendir, readFile, chmod, open, mkdtemp, unlink, symlink } from 'node:fs/promises';
+import { lstat, stat, realpath, readlink, readdir, opendir, chmod, open, mkdtemp, unlink, symlink } from 'node:fs/promises';
 import { tmpdir, devNull } from 'node:os';
 import { createHash, randomUUID } from 'node:crypto';
 import { basename, dirname, isAbsolute, join, resolve, relative, sep } from 'node:path';
@@ -331,7 +333,7 @@ export async function inspectLegacyReleaseArchive(repoPath, release, archiveDir,
   const { manifest } = await archiveManifest(dir);
   const recheckCurrent = async () => {
     if (!await proof.recheck()) throw new Error('legacy-archive-changed');
-    const [content, administration] = await archiveSnapshots({ path: release.path, branch: `refs/heads/${release.branch}`, head: release.head }, repoPath, null);
+    const [content, administration] = await archiveSnapshots({ path: release.path, branch: `refs/heads/${release.branch}`, head: release.head }, repoPath);
     if (administration.fingerprint !== manifest.administration.fingerprint
       || evidenceHash(content.indexDiff) !== manifest.patchHashes?.index || evidenceHash(content.worktreeDiff) !== manifest.patchHashes?.worktree
       || JSON.stringify(content.files) !== JSON.stringify(manifest.captured.files)
@@ -593,8 +595,8 @@ const git = (args, cwd, raw = false) => execGit(args, cwd, { maxBuffer: GIT_OUTP
 /** Preserve worktree-private Git evidence, never follow its links into the
  * common repository. The lock is archived but matched separately by release.
  */
-async function snapshotAdministration(path, missingRoot = null, work = archiveWork()) {
-  const root = missingRoot || (await git(['rev-parse', '--absolute-git-dir'], path)).trim();
+async function snapshotAdministration(path, work = archiveWork()) {
+  const root = (await git(['rev-parse', '--absolute-git-dir'], path)).trim();
   const files = [];
   const symlinks = [];
   let bytes = 0;
@@ -626,10 +628,8 @@ async function snapshotAdministration(path, missingRoot = null, work = archiveWo
   };
   await visit(root, 'gitdir');
   const pointer = join(path, '.git');
-  if (!missingRoot) {
-    if (!(await lstat(pointer)).isFile()) throw new Error('checkout git indirection is not a file');
-    await visit(pointer, 'git-indirection');
-  }
+  if (!(await lstat(pointer)).isFile()) throw new Error('checkout git indirection is not a file');
+  await visit(pointer, 'git-indirection');
   const fingerprint = createHash('sha256').update(JSON.stringify({
     files: files.filter(file => file.path !== 'gitdir/locked').map(({ source: _source, ...file }) => file), symlinks,
   })).digest('hex');
@@ -837,7 +837,7 @@ async function preservePublishedSourceReview(repoPath, tree, forge, content, adm
   // reconstructed from HEAD. Do not omit that private recovery evidence.
   if ((await git(['ls-files', '--resolve-undo', '-z'], tree.path)).length) throw new Error('retirement-source-index-recovery-unpublished');
   const work = archiveWork(signal);
-  const roots = await recoveryObjectHeads(administration, { repoPath, tree }, work);
+  const roots = await recoveryObjectHeads(administration, tree, work);
   // Saved private refs/reflogs may name work beyond the published tip. Do not
   // discard it merely because its metadata fits in the small evidence budget.
   for (const head of [...roots].sort()) {
@@ -892,7 +892,7 @@ async function preservePublishedSourceReview(repoPath, tree, forge, content, adm
 async function buildCurrentCheckoutReview({ repoPath, release, prUrl, kind }, { tree, forge, policy }, opts, captureContent) {
   const { buildCheckoutRetirementReview } = await import('./heldCheckoutReview.js');
   const work = archiveWork(opts.signal);
-  return archiveSnapshots(tree, repoPath, null, work, true, !kind)
+  return archiveSnapshots(tree, repoPath, work, true, !kind)
     .then(async ([content, administration]) => {
       const preservedSource = kind === 'preserved-supersession'
         ? await preservePublishedSourceReview(repoPath, tree, forge, content, administration, opts.signal, opts.retainMissingSource === true) : null;
@@ -1121,8 +1121,8 @@ async function listedContentEntry(path, listed, work) {
   }
 }
 
-// Exact-delivery review excludes ignored files from its digest; the removal
-// boundary independently checks them before any checkout is deleted.
+// Exact-delivery review excludes ignored files from its digest: a merged
+// delivery's ignored files are disposable. Supersession review binds them.
 async function snapshotContent(path, work = archiveWork(), allowDisposableCache = false, excludeIgnored = false) {
   work.check();
   // These reads are independent and each Git spawn is mostly launch latency, so
@@ -1213,7 +1213,7 @@ async function snapshotContent(path, work = archiveWork(), allowDisposableCache 
 
 /**
  * Write and verify the archive. Throws on anything that would leave it
- * incomplete; the caller then retires nothing.
+ * incomplete. Only the historical-format test hook calls this.
  */
 async function archiveCheckout(input) {
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
@@ -1248,73 +1248,23 @@ async function missingPathIdentity(path) {
   }
 }
 
-// A vanished checkout can still own a staged index and private recovery files.
-// Locate its exact registration without recreating the missing working tree.
-async function missingCheckoutAdministration(repoPath, path) {
-  const present = await lstat(path).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
-  if (present) return null;
-  const common = resolve(repoPath, (await git(['rev-parse', '--git-common-dir'], repoPath)).trim());
-  const roots = [];
-  const target = await missingPathIdentity(join(path, '.git'));
-  const mismatches = [];
-  for (const name of await readdir(join(common, 'worktrees'))) {
-    const root = join(common, 'worktrees', name);
-    if (!(await lstat(root)).isDirectory()) continue;
-    const pointer = await readFile(join(root, 'gitdir'), 'utf8').catch(() => null);
-    if (!pointer?.trim()) continue;
-    const candidate = await missingPathIdentity(resolve(root, pointer.trim()));
-    if (candidate.dev === target.dev && candidate.ino === target.ino && JSON.stringify(candidate.tail) === JSON.stringify(target.tail)) roots.push(root);
-    else if (mismatches.length < 4) mismatches.push({ registration: name, pointer: pointer.trim().slice(0, 1024), identity: candidate });
-  }
-  if (roots.length !== 1) throw new Error(`missing-checkout-administration-unverified: ${JSON.stringify({ target, matches: roots.length, mismatches })}`);
-  return roots[0];
-}
-
-async function archiveSnapshots(tree, repoPath, missingRoot, work = archiveWork(), allowDisposableCache = false, excludeIgnored = false) {
+async function archiveSnapshots(tree, repoPath, work = archiveWork(), allowDisposableCache = false, excludeIgnored = false) {
   if (!allowDisposableCache) work = work.metadataScope();
-  if (!missingRoot) {
-    const snapshots = await Promise.all([snapshotContent(tree.path, work, allowDisposableCache, excludeIgnored), snapshotAdministration(tree.path, null, work)]);
-    work.check();
-    // Capture already charged metadata; apply the reader's layout checks too.
-    for (const snapshot of snapshots) validateArchiveEntries(snapshot, work, false);
-    checkArchiveBudget(...snapshots, allowDisposableCache);
-    return snapshots;
-  }
-  const present = await lstat(tree.path).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
-  if (present) throw new Error('missing-checkout-reappeared');
-  const prefix = ['--git-dir', missingRoot, '--work-tree', tree.path];
-  if ((await git([...prefix, 'ls-files', '-u', '-z'], repoPath)).length) throw new Error('unmerged index entries cannot be archived');
-  const indexDiff = await git([...prefix, 'diff', '--cached', '--binary', '--no-textconv', '--no-ext-diff'], repoPath, true);
-  const content = { indexDiff, worktreeDiff: Buffer.alloc(0), files: [], symlinks: [], gitlinks: [], missingCheckout: true,
-    fingerprint: createHash('sha256').update('missing-checkout\0').update(indexDiff).digest('hex') };
-  const administration = await snapshotAdministration(tree.path, missingRoot, work);
-  validateArchiveEntries(administration, work, false);
-  checkArchiveBudget(content, administration);
-  return [content, administration];
+  const snapshots = await Promise.all([snapshotContent(tree.path, work, allowDisposableCache, excludeIgnored), snapshotAdministration(tree.path, work)]);
+  work.check();
+  // Capture already charged metadata; apply the reader's layout checks too.
+  for (const snapshot of snapshots) validateArchiveEntries(snapshot, work, false);
+  checkArchiveBudget(...snapshots, allowDisposableCache);
+  return snapshots;
 }
 
-/** Preserve ignored content and recovery evidence before a clean merged tree
- * is removed. The caller owns the live ownership fence and merge proof; this
- * guard verifies that every preserved byte still matches immediately at removal.
- */
-export async function preserveMergedCheckout(repoPath, tree, defaultBranch, { cosDir, signal } = {}) {
+/** Test hook: write one archive in the historical held-checkout format so the
+ * compatibility readers above stay covered. Retirement never calls this; no
+ * production path creates checkout archives. */
+export async function _writeHistoricalCheckoutArchive(repoPath, tree, defaultBranch, { cosDir, signal } = {}) {
   if (!tree?.head || (!tree.branch && tree.detached !== true) || tree.locked) throw new Error('checkout-identity-unavailable');
-  const checkoutIdentity = await readRetirementCheckoutIdentity(tree.path);
-  const branch = shortBranch(tree.branch);
-  const missingRoot = await missingCheckoutAdministration(repoPath, tree.path);
-  const archive = await archiveCheckout({ repoPath, tree, branch, defaultBranch, cosDir, missingRoot, work: archiveWork(signal) });
-  return {
-    archiveDir: archive.dir,
-    checkoutIdentity,
-    async verify(holder) {
-      if (!holder || holder.head !== tree.head || holder.branch !== tree.branch || Boolean(holder.detached) !== Boolean(tree.detached)) return 'worktree-holder-changed';
-      // Missing-root recovery archives Git administration without a live pointer.
-      if (checkoutIdentity && await readRetirementCheckoutIdentity(tree.path) !== checkoutIdentity) return 'checkout-identity-changed';
-      const [content, administration] = await archiveSnapshots(tree, repoPath, missingRoot, archiveWork(signal));
-      return content.fingerprint === archive.fingerprint && administration.fingerprint === archive.administrationFingerprint
-        ? null : 'checkout-content-changed';
-    },
-  };
+  const archive = await archiveCheckout({ repoPath, tree, branch: shortBranch(tree.branch), defaultBranch, cosDir, work: archiveWork(signal) });
+  return { archiveDir: archive.dir };
 }
 
 // All administration bytes are preserved separately. Only Git's reference
@@ -1337,7 +1287,7 @@ function recoveryReferenceKind(path) {
   return /^[A-Z][A-Z0-9_]*$/.test(relative) ? 'ref' : null;
 }
 
-async function recoveryObjectHeads(administration, { repoPath, tree, missingRoot }, work) {
+async function recoveryObjectHeads(administration, tree, work) {
   const heads = new Set([tree.head]);
   const oid = new RegExp(`^[a-f0-9]{${tree.head.length}}$`, 'i');
   const invalid = () => { throw new Error('unrecognized private recovery reference'); };
@@ -1363,11 +1313,10 @@ async function recoveryObjectHeads(administration, { repoPath, tree, missingRoot
       if (lines.length !== 1) invalid();
       const symbolic = /^ref: (\S+)$/.exec(lines[0]);
       if (symbolic) {
-        const prefix = missingRoot ? ['--git-dir', missingRoot, '--work-tree', tree.path] : [];
         work.check();
-        await git([...prefix, 'check-ref-format', '--allow-onelevel', symbolic[1]], missingRoot ? repoPath : tree.path);
+        await git(['check-ref-format', '--allow-onelevel', symbolic[1]], tree.path);
         work.check();
-        add((await git([...prefix, 'rev-parse', '--verify', '--end-of-options', symbolic[1]], missingRoot ? repoPath : tree.path)).trim());
+        add((await git(['rev-parse', '--verify', '--end-of-options', symbolic[1]], tree.path)).trim());
       } else add(lines[0]);
       continue;
     }
@@ -1394,74 +1343,10 @@ async function recoveryObjectHeads(administration, { repoPath, tree, missingRoot
   return heads;
 }
 
-/** Shared app-scoped preservation for merged and superseded checkouts.
- * Persist the original generation before archiving, then its exact preservation
- * receipt before the caller can remove anything under the retirement fence.
- */
-export async function preserveSupersededCheckout({ appId, repoPath, tree, defaultBranch, cosDir }) {
-  const [{ getAppById }, outcomes] = await Promise.all([import('./apps.js'), import('./branchReconcileOutcome.js')]);
-  const app = appId && await getAppById(appId);
-  if (!app?.repoPath || resolve(app.repoPath) !== resolve(repoPath)) throw new Error('retirement-receipt-scope-unavailable');
-  if (!tree?.path || !tree.branch || tree.locked) throw new Error('retirement-checkout-unavailable');
-  const release = { path: tree.path, branch: shortBranch(tree.branch), head: tree.head, locked: false, lockReason: null };
-  const { readCompletedCheckoutIdentity } = await import('./completedCheckoutEvidence.js');
-  const target = { repoPath, branch: release.branch, path: release.path, head: release.head };
-  const identity = await readCompletedCheckoutIdentity(target);
-  if (!identity) throw new Error('checkout-incarnation-unavailable');
-  const checkoutIdentity = await readRetirementCheckoutIdentity(tree.path);
-  if (!checkoutIdentity) throw new Error('checkout-incarnation-unavailable');
-  const previous = await outcomes.getBranchReconcileOutcome(appId);
-  if (unresolvedRetirements(previous).some(row => sameRelease(row, release)
-    && JSON.stringify(row.checkoutIncarnation) !== JSON.stringify(identity.incarnation))) {
-    throw new Error('retirement-checkout-generation-unverified');
-  }
-  const identityCurrent = async () => JSON.stringify(await readCompletedCheckoutIdentity(target)) === JSON.stringify(identity);
-  const pending = await outcomes.recordBranchReconcileOutcome(appId, {
-    status: 'incomplete', reason: 'retirement-receipt-unverified',
-    retirementObligations: [{ ...release, checkoutIdentity, checkoutIncarnation: identity.incarnation, reason: 'retirement-review-pending' }],
-    nextAction: 'Require complete preservation and an exact retirement receipt for the checkout.',
-  });
-  const obligation = pending?.retirementObligations?.find(row => sameRelease(row, release));
-  if (!Number.isFinite(Date.parse(obligation?.createdAt))) throw new Error('retirement-obligation-unavailable');
-  if (JSON.stringify(obligation.checkoutIncarnation) !== JSON.stringify(identity.incarnation)) throw new Error('retirement-checkout-generation-unverified');
-  // Invalidate any earlier attempt's prepared receipt without dropping its
-  // obligation. A crash must never let an older snapshot stand in for this one.
-  await outcomes.recordHeldCheckoutPreservation(appId, { ...release, createdAt: obligation.createdAt, archiveDir: null, incarnation: identity.incarnation });
-  const archive = await preserveMergedCheckout(repoPath, tree, defaultBranch, { cosDir });
-  if (!await identityCurrent()) throw new Error('checkout-incarnation-changed');
-  await outcomes.recordHeldCheckoutPreservation(appId, { ...release, createdAt: obligation.createdAt, archiveDir: archive.archiveDir, incarnation: identity.incarnation });
-  const receiptCurrent = async () => {
-    const currentApp = await getAppById(appId);
-    if (!currentApp?.repoPath || resolve(currentApp.repoPath) !== resolve(repoPath)) return false;
-    const current = await outcomes.getBranchReconcileOutcome(appId);
-    return current?.retirementObligations?.some(row => sameRelease(row, release)
-      && row.createdAt === obligation.createdAt && row.preservationReceipt?.status === 'preserved'
-      && row.preservationReceipt.archiveDir === archive.archiveDir
-      && JSON.stringify(row.preservationReceipt.incarnation) === JSON.stringify(identity.incarnation)
-      && JSON.stringify(row.checkoutIncarnation) === JSON.stringify(identity.incarnation)) === true;
-  };
-  if (!await receiptCurrent()) throw new Error('retirement-preservation-receipt-unverified');
-  return {
-    archiveDir: archive.archiveDir,
-    verify: async holder => !await receiptCurrent() ? 'retirement-preservation-receipt-changed'
-      : !await identityCurrent() ? 'checkout-incarnation-changed' : archive.verify(holder),
-    async recordRetirement() {
-      if (!await receiptCurrent()) throw new Error('retirement-preservation-receipt-changed');
-      const ref = await execGit(['rev-parse', '--verify', '--quiet', `refs/heads/${release.branch}`], repoPath, { ignoreExitCode: true });
-      if (ref.exitCode !== 1 || !await historicalCheckoutAbsent(release, await listWorktrees(repoPath))) throw new Error('retirement-checkout-recreated');
-      const outcome = await outcomes.recordHeldCheckoutRetirement(appId, { ...release, checkoutIdentity, branchDeleted: true, archiveDir: archive.archiveDir });
-      if (!outcome?.retired?.some(row => sameRelease(row, release) && row.branchDeleted === true
-        && row.archiveDir === archive.archiveDir && Date.parse(row.retiredAt) >= Date.parse(obligation.createdAt))) {
-        throw new Error('retirement-receipt-unverified');
-      }
-    },
-  };
-}
-
-async function writeArchive(dir, { repoPath, tree, branch, defaultBranch, release, review, missingRoot = null, work = archiveWork() }) {
+async function writeArchive(dir, { repoPath, tree, branch, defaultBranch, work = archiveWork() }) {
   work.check();
-  const [snapshot, administration] = await archiveSnapshots(tree, repoPath, missingRoot, work);
-  const recoveryHeads = await recoveryObjectHeads(administration, { repoPath, tree, missingRoot }, work);
+  const [snapshot, administration] = await archiveSnapshots(tree, repoPath, work);
+  const recoveryHeads = await recoveryObjectHeads(administration, tree, work);
   await ensureDir(dir);
   await chmod(dir, 0o700);
 
@@ -1485,7 +1370,7 @@ async function writeArchive(dir, { repoPath, tree, branch, defaultBranch, releas
       recoveryRefs.push({ ref, head });
     }
     work.check();
-    await git([...(missingRoot ? ['--git-dir', missingRoot, '--work-tree', tree.path] : []), 'bundle', 'create', bundle, 'HEAD', ...recoveryRefs.map(entry => entry.ref)], missingRoot ? repoPath : tree.path);
+    await git(['bundle', 'create', bundle, 'HEAD', ...recoveryRefs.map(entry => entry.ref)], tree.path);
     work.check();
     const [, heads] = await Promise.all([git(['bundle', 'verify', bundle], repoPath), git(['bundle', 'list-heads', bundle], repoPath)]);
     const bundled = new Set(heads.trim().split('\n').map(line => line.split(' ')[0]));
@@ -1516,17 +1401,17 @@ async function writeArchive(dir, { repoPath, tree, branch, defaultBranch, releas
     if (await archiveHash(destination, work) !== file.sha256) throw new Error(`archived copy of ${file.path} does not match`);
   }
   // Re-read after every copy so the check covers the whole archive window.
-  const [after, administrationAfter] = await archiveSnapshots(tree, repoPath, missingRoot, work);
+  const [after, administrationAfter] = await archiveSnapshots(tree, repoPath, work);
   if (administrationAfter.fingerprint !== administration.fingerprint) throw new Error('administration changed while archiving');
   if (after.fingerprint !== snapshot.fingerprint) throw new Error('checkout content changed while archiving');
 
   const manifest = {
     resourceContract: 1,
     repoPath, defaultBranch, path: tree.path, head: tree.head, branch,
-    release, review, administration: { ...administration, files: administration.files.map(({ source: _source, ...file }) => file) }, archivedAt: new Date().toISOString(),
+    administration: { ...administration, files: administration.files.map(({ source: _source, ...file }) => file) }, archivedAt: new Date().toISOString(),
     bundleSha256: await archiveHash(bundle, work, Infinity),
     patchHashes: { index: evidenceHash(snapshot.indexDiff), worktree: evidenceHash(snapshot.worktreeDiff) },
-    captured: { commitBundle: true, recoveryHeads: [...recoveryHeads], ...(snapshot.missingCheckout ? { missingCheckout: true } : {}), gitlinks: snapshot.gitlinks, indexDiff: Boolean(snapshot.indexDiff.length), worktreeDiff: Boolean(snapshot.worktreeDiff.length), files, symlinks },
+    captured: { commitBundle: true, recoveryHeads: [...recoveryHeads], gitlinks: snapshot.gitlinks, indexDiff: Boolean(snapshot.indexDiff.length), worktreeDiff: Boolean(snapshot.worktreeDiff.length), files, symlinks },
     restore: [
       'git -C <repo> fetch commits.bundle HEAD:refs/heads/<restored-branch>',
       'git -C <repo> fetch commits.bundle "+refs/portos/archive/*:refs/portos/recovered/*"',
@@ -1548,7 +1433,7 @@ async function writeArchive(dir, { repoPath, tree, branch, defaultBranch, releas
   work.check();
   await atomicWrite(join(dir, 'manifest.json'), serialized);
   await chmod(join(dir, 'manifest.json'), 0o600);
-  return { dir, fingerprint: snapshot.fingerprint, administrationFingerprint: administration.fingerprint };
+  return { dir };
 }
 
 const isAncestor = (repoPath, sha, ref) => execGit(['merge-base', '--is-ancestor', sha, ref], repoPath, { ignoreExitCode: true })

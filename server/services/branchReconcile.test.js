@@ -17,10 +17,7 @@ vi.mock('./branchCompletionPolicy.js', async () => ({
  *   inFlight / wip correctly).
  */
 
-vi.mock('./heldCheckoutRecovery.js', () => ({
-  preserveSupersededCheckout: vi.fn(async () => ({ archiveDir: '/archive', verify: async () => null, recordRetirement: async () => {} })),
-  preserveMergedCheckout: vi.fn(async () => ({ archiveDir: '/archive', verify: async () => null })),
-}));
+vi.mock('./heldCheckoutRecovery.js', () => ({}));
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { join } from 'node:path';
 
@@ -140,7 +137,6 @@ import {
 } from './branchReconcile.js';
 import * as git from './git.js';
 import * as wt from './worktreeManager.js';
-import { preserveMergedCheckout } from './heldCheckoutRecovery.js';
 import { recordHeldCheckoutRetirement, recordWorkspaceCheckoutRetirement } from './branchReconcileOutcome.js';
 import { withClaimOwnershipLock, checkoutRetirementFenceReason } from './cosClaimOwnership.js';
 import { hasCompletedCheckoutEvidence } from './completedCheckoutEvidence.js';
@@ -166,7 +162,6 @@ beforeEach(() => {
   vi.clearAllMocks();
   isMergedPrHeadMock.mockReset().mockResolvedValue(false);
   hasCompletedCheckoutEvidence.mockReset().mockImplementation(async records => records.some(agent => agent.result?.success === true));
-  preserveMergedCheckout.mockImplementation(async () => ({ archiveDir: '/archive', verify: async () => null }));
   // Ancient by default, so age-indifferent tests keep their pre-window behavior;
   // a test that pins a specific age must not leak it into the next one.
   worktreeMtimeMs = 0;
@@ -2011,17 +2006,6 @@ describe('reconcile — detached-HEAD worktrees (#10825)', () => {
     expect(res.cleaned).toContain(path);
     expect(wt.forceRemoveWorktreeDir).toHaveBeenCalledWith('/repo', path, expect.any(Object));
     expect(res.detachedWorktrees).toEqual([]);
-    expect(preserveMergedCheckout).not.toHaveBeenCalled();
-  });
-
-  it('removes a clean detached tree without copying it', async () => {
-    const path = '/repo/data/cos/worktrees/agent-1234abcd';
-    wt.listWorktrees.mockResolvedValue([MAIN, detachedTree(path)]);
-    stubGit();
-    const result = await reconcile('/repo');
-    expect(result.cleaned).toContain(path);
-    expect(preserveMergedCheckout).not.toHaveBeenCalled();
-    expect(wt.forceRemoveWorktreeDir).toHaveBeenCalled();
   });
 
   it('settles a removed detached tree with a checkout-only receipt that never claims a branch deletion', async () => {

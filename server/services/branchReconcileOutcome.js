@@ -250,22 +250,6 @@ export async function annotateMissingCheckouts(status) {
   return status;
 }
 
-/** A prepared archive does not claim deletion. This exact-generation receipt
- * must exist before superseded cleanup is allowed to remove its originals.
- */
-export async function recordHeldCheckoutPreservation(appId, { path, branch, head, createdAt, archiveDir, incarnation }) {
-  return updateSchedule(async schedule => {
-    const record = ensureExecutionRecord(schedule, 'branch-reconcile', appId);
-    const outcome = record.branchReconcileOutcome;
-    const row = outcome?.retirementObligations?.find(entry => sameRetirementCheckout(entry, { path, branch, head }) && entry.createdAt === createdAt);
-    if (!row || !incarnation?.pointer || !incarnation?.gitdir
-      || JSON.stringify(row.checkoutIncarnation) !== JSON.stringify(incarnation)
-      || (archiveDir !== null && (typeof archiveDir !== 'string' || !archiveDir))) throw new Error('retirement-obligation-changed');
-    row.preservationReceipt = { archiveDir, incarnation: structuredClone(incarnation), status: archiveDir === null ? 'preparing' : 'preserved', preparedAt: new Date().toISOString() };
-    return { result: row.preservationReceipt, changed: true };
-  });
-}
-
 const RETIRED_CHECKOUTS_KEPT = 20;
 
 /** Preserve bounded checkout-only evidence before an explicitly accepted,

@@ -1,9 +1,9 @@
 /**
  * Scoped retirement of held checkouts through real Git (#12002, #13519): a
- * release binds to the exact inventory row. A merged clean checkout is removed
- * in place. Dirty, unmerged, and live-owner checkouts stay, and retirement
- * does not copy the checkout. Historical archives written by preserveMergedCheckout
- * remain readable.
+ * release binds to the exact inventory row. A merged checkout is removed in
+ * place (dirty only when its PR merged at the exact head). Dirty unmerged and
+ * live-owner checkouts stay, and retirement never copies the checkout. Archives
+ * in the historical format remain readable.
  *
  * This file: completed resume lineage, merge-on-green delivery, sibling obligations,
  * reused branches, the review-change matrix and ref-only finalization.
