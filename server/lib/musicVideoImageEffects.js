@@ -50,6 +50,41 @@ export const IMAGE_EFFECT_DEVELOP_SECS = Object.freeze([1, 2, 3, 4, 6, 8]);
 export const DEFAULT_IMAGE_EFFECT_SEC = 3;
 export const IMAGE_EFFECT_SEC_RANGE = Object.freeze({ min: 0.5, max: 30 });
 
+export const PHOTO_SEQUENCE_LIMIT = 16;
+export const PHOTO_SEQUENCE_DEFAULT_FRAMES = 6;
+export const PHOTO_SEQUENCE_RATES = Object.freeze(['frames', 'beat', 'half']);
+
+/** Compile a still's photo changes onto the absolute song-frame grid. */
+export function scenePhotoSequence(scene, { fps = 24, beats = [] } = {}) {
+  const sequence = scene?.photoSequence;
+  if (scene?.visualLayer !== 'still' || !sequence || sequence.enabled === false) return null;
+  const startFrame = Math.round((scene.startSec || 0) * fps);
+  const intervalFrames = sequence.intervalFrames || PHOTO_SEQUENCE_DEFAULT_FRAMES;
+  const rate = PHOTO_SEQUENCE_RATES.includes(sequence.rate) ? sequence.rate : 'frames';
+  const grid = [...new Set((Array.isArray(beats) ? beats : []).filter(Number.isFinite))].sort((a, b) => a - b);
+  const points = rate === 'half' ? grid.flatMap((b, i) => i + 1 < grid.length ? [b, (b + grid[i + 1]) / 2] : [b]) : grid;
+  const switchFrames = rate !== 'frames' && grid.length
+    ? [...new Set(points.map(t => Math.round(t * fps) - startFrame).filter(f => f > 0 && f < Math.round((scene.endSec || 0) * fps) - startFrame))]
+    : null;
+  return { imageIds: sequence.imageIds || [], intervalFrames, rate, startFrame, switchFrames };
+}
+
+/** Pure selection at song time; shared by scrubbing, Canvas and ffmpeg planning. */
+export function photoSequenceIndex(sequence, t, { fps = 24 } = {}) {
+  const frame = Math.max(0, Math.floor(t * fps + 1e-6) - sequence.startFrame);
+  let step = Math.floor(frame / sequence.intervalFrames);
+  if (sequence.switchFrames) {
+    let lo = 0; let hi = sequence.switchFrames.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (sequence.switchFrames[mid] <= frame) lo = mid + 1;
+      else hi = mid;
+    }
+    step = lo;
+  }
+  return step % Math.max(1, sequence.imageIds.length);
+}
+
 // The flash fades from full white to nothing over this long.
 const FLASH_SEC = 0.25;
 // The undeveloped emulsion's colour, and the share of the develop it takes to clear.

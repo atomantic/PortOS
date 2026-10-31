@@ -123,6 +123,75 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
     } finally { await closeFixture(); }
   }, 35000);
 
+  // Catches dropped multi-photo assets, wrong Canvas switching boundaries and
+  // excerpt-relative phase resets by comparing live and encoded frame pixels.
+  it('plays five photos identically in the document preview, export and mid-sequence excerpt', async () => {
+    await mkdir(PATHS.images, { recursive: true });
+    const names = ['sequence-red.png', 'sequence-green.png', 'sequence-blue.png', 'sequence-yellow.png', 'sequence-magenta.png'];
+    const colors = ['#ee2222', '#22ee22', '#2222ee', '#eeee22', '#ee22ee'];
+    const photos = await Promise.all(colors.map(background => sharp({ create: { width: 64, height: 36, channels: 3, background } }).png().toBuffer()));
+    await Promise.all(names.map((name, i) => writeFile(join(PATHS.images, name), photos[i])));
+    const created = await projects.createProject({ name: 'Synthetic five-photo passage' });
+    await projects.mutateProjectRecord(created.id, current => ({ project: { ...current,
+      audioAnalysis: { durationSec: 2, beats: [0, 0.5, 1, 1.5, 2], sections: [] },
+      scenes: [{ sceneId: 'photos', order: 0, startSec: 0, endSec: 2, visualLayer: 'still', stillMove: 'hold',
+        photoSequence: { enabled: true, imageIds: names, intervalFrames: 6, rate: 'half' } }],
+    } }));
+    await importDocumentTemplate(created.id);
+    const project = await projects.getProject(created.id);
+    await mkdir(PATHS.music, { recursive: true });
+    await mkdir(PATHS.videos, { recursive: true });
+    const audio = join(PATHS.music, 'sequence.wav');
+    execFileSync(ffmpeg, ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'sine=frequency=220:duration=2', audio]);
+    const encode = async (name, windowStart, windowEnd) => {
+      const output = join(PATHS.videos, name);
+      await encodeDocumentComposition({ project, plan: await prepareDocumentRender(project), jobId: name.replace('.mp4', ''),
+        audioPath: audio, outputPath: output, windowStart, windowEnd });
+      return execFileSync(ffmpeg, ['-v', 'error', '-i', output, '-vf', 'scale=64:36', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-'], { maxBuffer: 8 * 1024 * 1024 });
+    };
+    const full = await encode('photo-sequence-full.mp4', 0, 2);
+    const excerpt = await encode('photo-sequence-excerpt.mp4', 9 / 24, 33 / 24);
+    const frameBytes = 64 * 36 * 3;
+    expect(full.length).toBe(48 * frameBytes);
+    expect(excerpt.length).toBe(24 * frameBytes);
+    const preview = await buildDocumentPreview(project);
+    const assets = preview.assets.filter(asset => asset.url.startsWith('/data/images/')).map(asset => ({
+      key: asset.key, encoded: photos[names.indexOf(decodeURIComponent(asset.url.split('/').at(-1)))].toString('base64'),
+    }));
+    const page = await browser.newPage();
+    try {
+      await page.setContent(preview.html);
+      await page.evaluate(assets => {
+        addEventListener('message', ({ data }) => {
+          if (data?.type !== 'portos-mv:request') return;
+          const asset = assets.find(asset => asset.key === data.key);
+          if (!asset) return;
+          const blob = new Blob([Uint8Array.from(atob(asset.encoded), c => c.charCodeAt(0))], { type: 'image/png' });
+          window.postMessage({ type: 'portos-mv:asset', key: asset.key, blob }, '*');
+        });
+        window.postMessage({ type: 'portos-mv:manifest', keys: assets.map(asset => asset.key) }, '*');
+      }, assets);
+      await page.waitForFunction(() => globalThis.portosComposition);
+      for (const frame of [0, 5, 6, 11, 12, 18, 24, 29, 30, 35, 36, 6]) {
+        const live = await page.evaluate(async t => {
+          await globalThis.portosComposition.seek(t);
+          const canvas = document.getElementById('stage');
+          return [...canvas.getContext('2d').getImageData(canvas.width / 2, canvas.height / 2, 1, 1).data].slice(0, 3);
+        }, frame / 24);
+        const at = frame * frameBytes + (18 * 64 + 32) * 3;
+        const encoded = [...full.subarray(at, at + 3)];
+        encoded.forEach((v, i) => expect(Math.abs(v - live[i])).toBeLessThan(16));
+        // Verify the expected image independently of the shared selector.
+        const expected = colors[Math.floor(frame / 6) % 5].slice(1).match(/../g).map(hex => parseInt(hex, 16));
+        live.forEach((v, i) => expect(Math.abs(v - expected[i])).toBeLessThan(35));
+        if (frame >= 9 && frame < 33) {
+          const excerptAt = (frame - 9) * frameBytes + (18 * 64 + 32) * 3;
+          [...excerpt.subarray(excerptAt, excerptAt + 3)].forEach((v, i) => expect(Math.abs(v - encoded[i])).toBeLessThan(12));
+        }
+      }
+    } finally { await page.close(); }
+  }, 60000);
+
   // Uniquely catches dropped effect data, missing staged modules and preview/export curve drift.
   it('develops a still from white in the encoded document render and live preview', async () => {
     await mkdir(PATHS.images, { recursive: true });

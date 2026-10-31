@@ -47,6 +47,7 @@ Index of everything under `docs/`. Start with the [root README](../README.md) fo
 | [THREEJS_MODELS.md](./THREEJS_MODELS.md) | Three.js procedural 3D model generation and trust boundary |
 | [features/music-video-autonomous.md](./features/music-video-autonomous.md) | One-prompt autonomous music videos: brief → lyrics → mood board → Suno song → production, optional checkpoints, and the `music-video-autopilot` scheduled task that turns Brain ideas into videos |
 | [features/music-video-frame-capture.md](./features/music-video-frame-capture.md) | Shared paused-video/capture color interpretation, synthetic evidence and browser limits |
+| [features/music-video-photo-sequences.md](./features/music-video-photo-sequences.md) | Ordered existing photos within one still shot, frame/beat cadence, persistence and preview/export timing |
 | [features/music-video-temporal-evidence.md](./features/music-video-temporal-evidence.md) | Performance source provenance, synchronized playback and optional local temporal analyzer protocol |
 | [features/artist-submission-profile.md](./features/artist-submission-profile.md) | Artist-curated bios, credits, statements and links that agents read when filling festival and distributor forms |
 | [features/music-renderer-benchmarks.md](./features/music-renderer-benchmarks.md) | Technical and full-length listening evidence for local music renderer profiles |

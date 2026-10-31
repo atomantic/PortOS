@@ -27,7 +27,7 @@ export function assertMusicVideoMedia(project, kind, purpose = 'asset') {
 export function assertMusicVideoMediaSelections(project) {
   if (project?.visualSpec?.references?.length || project?.visualSpec?.moodBoardId || project?.styleReferences?.some((ref) => ref.imageId)) assertMusicVideoMedia(project, 'image', 'references');
   for (const scene of project?.scenes || []) {
-    if (scene.referenceImageId || scene.endImageId) assertMusicVideoMedia(project, 'image', 'selection');
+    if (scene.referenceImageId || scene.endImageId || scene.photoSequence?.imageIds?.length) assertMusicVideoMedia(project, 'image', 'selection');
     if (scene.videoHistoryId) assertMusicVideoMedia(project, 'video', 'selection');
   }
 }

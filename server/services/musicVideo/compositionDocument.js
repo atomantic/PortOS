@@ -54,8 +54,8 @@ const LYRIC_TYPE_REF = /\blyricType\.(?:js|css)\b/;
 const LYRIC_TYPE_SCAN_MAX = 2 * 1024 * 1024;
 const LAYERED_ENGINE_TAG = '<script src="engine.js"></script>';
 const IMAGE_EFFECT_TAG = `<script type="module">
-import { imageEffectState, IMAGE_EFFECT_FOG_COLOR } from './musicVideoImageEffects.js';
-globalThis.PORTOS_MV_IMAGE_EFFECTS = { imageEffectState, IMAGE_EFFECT_FOG_COLOR };
+import { imageEffectState, IMAGE_EFFECT_FOG_COLOR, photoSequenceIndex } from './musicVideoImageEffects.js';
+globalThis.PORTOS_MV_IMAGE_EFFECTS = { imageEffectState, IMAGE_EFFECT_FOG_COLOR, photoSequenceIndex };
 </script><!-- portos-allow-hidden-content: shared still-image effect curves -->
 `;
 const LYRIC_TYPE_TAGS = '<link rel="stylesheet" href="lyricType.css">\n'
@@ -166,6 +166,10 @@ function storeVersion(projectId, files, source, options = {}) {
  */
 function withLayeredModuleTags(page) {
   if (!page.includes(LAYERED_ENGINE_TAG)) return page;
+  page = page.replace("import { imageEffectState, IMAGE_EFFECT_FOG_COLOR } from './musicVideoImageEffects.js';",
+    "import { imageEffectState, IMAGE_EFFECT_FOG_COLOR, photoSequenceIndex } from './musicVideoImageEffects.js';")
+    .replace('globalThis.PORTOS_MV_IMAGE_EFFECTS = { imageEffectState, IMAGE_EFFECT_FOG_COLOR };',
+      'globalThis.PORTOS_MV_IMAGE_EFFECTS = { imageEffectState, IMAGE_EFFECT_FOG_COLOR, photoSequenceIndex };');
   const tags = (LYRIC_TYPE_REF.test(page) ? '' : LYRIC_TYPE_TAGS)
     + (page.includes('PORTOS_MV_IMAGE_EFFECTS') ? '' : IMAGE_EFFECT_TAG);
   return page.replace(LAYERED_ENGINE_TAG, () => tags + LAYERED_ENGINE_TAG);
@@ -440,6 +444,7 @@ export async function stageGeneratedDocument(projectId, generatedFiles, { verify
 // Known compatible shipped layered engines. Recognition only;
 // customized engines belong to the author and are never silently replaced.
 const UPGRADABLE_LAYERED_ENGINES = new Set([
+  '2844a20f3d6ad57022e97ae79705a9296479ff5a59cdebeaa9e48246d3d7a086',
   // Last shipped engine before document still-image effects (#11319).
   '9581bb2d190e62ea2eb6a709bc989b1f913c501236554cd0301379877dc8a5fc',
   'dc27611ebaa429c28bd467b003495d2a1c7dc0ede73be0cfc28db4b97c964dcf',
@@ -481,7 +486,9 @@ export function upgradeDocumentEngine(projectId, directory) {
       throw refuse('The engine was customized or is not a supported shipped version — preserve it and revise it explicitly', 'COMPOSITION_ENGINE_CUSTOM', 409);
     }
     const loaded = await Promise.all(files.map(async file => ({
-      rel: file.rel, data: file.rel === 'engine.js' ? shipped : await readFile(file.abs),
+      rel: file.rel, data: file.rel === 'engine.js' ? shipped
+        : file.rel === 'musicVideoImageEffects.js' && engineDigest(await readFile(file.abs)) === 'b771bf1da99500e14b751ffe82a95ddee749df2030d1a8be7c21b068a7def1e8'
+          ? await readFile(new URL('../../lib/musicVideoImageEffects.js', import.meta.url)) : await readFile(file.abs),
     })));
     // Add the shared lyric-type and still-effect modules only to a template-shaped
     // page. storeVersionNow supplies missing module files and fonts; authored
@@ -597,6 +604,13 @@ export async function readDocumentFiles(project, { requireLyricVisibility = true
   const dir = await requireDocument(project);
   const { files } = await collectTree(dir);
   await assertDocumentMediaPolicy(project, files);
+  if ((project.scenes || []).some(scene => scene.visualLayer === 'still' && scene.photoSequence && scene.photoSequence.enabled !== false)) {
+    const engine = files.find(file => file.rel === 'engine.js');
+    const supported = engine && /^\/\/ portos-photo-sequence: 1$/m.test(await readFile(engine.abs, 'utf8'));
+    if (!supported) throw new ServerError('Update the composition playback engine to support photo sequences before previewing or rendering.', {
+      status: 422, code: 'DOCUMENT_PHOTO_SEQUENCE_UNSUPPORTED',
+    });
+  }
   // Immutable documents retain their own runtime. Refuse an unsupported lyric
   // pass instead of claiming this project preference changed its output.
   if (requireLyricVisibility && project.lyricOverlayEnabled === false) {

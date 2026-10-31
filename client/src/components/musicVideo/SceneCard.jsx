@@ -21,7 +21,8 @@ import { isPerformanceScene, planPerformanceRepair } from '../../lib/musicVideoS
 import SceneTakeStrip from './SceneTakeStrip.jsx';
 import { sceneEndFramePlanFor } from './SceneEndFrame.jsx';
 import SceneFrames from './SceneFrames.jsx';
-import { CLIP_TIMING_FPS, MUSIC_VIDEO_VISUAL_LAYERS, clipReversed, composedDrawsLyrics, sceneHasAuthoredSpan } from '../../lib/musicVideoLayers.js';
+import { CLIP_TIMING_FPS, MUSIC_VIDEO_VISUAL_LAYERS, clipReversed, composedDrawsLyrics, sceneHasAuthoredSpan, sceneVisualLayer } from '../../lib/musicVideoLayers.js';
+import { useVideoFileSrc } from '../../hooks/useVideoFileSrc.js';
 
 // #8985: what a composed render shows for this scene's span.
 const LAYER_LABELS = { footage: 'Footage', still: 'Still image', card: 'Title card', code: 'Code-drawn' };
@@ -141,6 +142,10 @@ export default function SceneCard({
   const [swapKind, setSwapKind] = useState(null);
   const applyPatch = (patch) => { onEditLocal(scene.sceneId, patch); onSave(scene.sceneId, patch); };
   const layer = MUSIC_VIDEO_VISUAL_LAYERS.includes(scene.visualLayer) ? scene.visualLayer : 'footage';
+  const lead = (project?.scenes || []).filter(s => !isPreMusicShot(s)).slice().sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+    .find(s => s.videoHistoryId && sceneVisualLayer(s, { layered }) === 'footage');
+  const leadFile = useVideoFileSrc(documentComposition ? null : lead?.videoHistoryId, { geometry: true, enabled: layered && layer === 'still' });
+  const photoFps = documentComposition ? 24 : leadFile.fps || 24;
   const fieldId = (name) => `mv-scene-${scene.sceneId}-${name}`;
   // #10297: a code shot is drawn by the composition, so it has no frame or clip to make.
   const codeShot = layered && layer === 'code';
@@ -468,10 +473,10 @@ export default function SceneCard({
           <h4 className="text-xs font-medium">Clip</h4>
           {/* A clip, the still, or the still playing a code-drawn image effect (no model call). */}
           {layered && (layer === 'footage' || layer === 'still') && (
-            <SceneImageEffect fieldId={fieldId} scene={scene} onChange={applyPatch}
+            <SceneImageEffect fieldId={fieldId} scene={scene} onChange={applyPatch} beats={project?.audioAnalysis?.beats} fps={photoFps}
               disabled={shotLock?.clip === 'locked'} disabledReason={shotLock?.clip === 'locked' ? 'Video locked. Unlock the video to change it.' : null} />
           )}
-          {stillPicture ? <ScenePicturePreview scene={scene} /> : (
+          {stillPicture ? <ScenePicturePreview scene={scene} beats={project?.audioAnalysis?.beats} fps={photoFps} /> : (
           <>
           {scene.videoHistoryId && performance && (
             <PerformanceEvidence key={scene.videoHistoryId} clipSrc={clipSrc} instruction={instruction}

@@ -30,6 +30,7 @@ const layerRef = (scene) => ({ role: 'layer', sceneId: scene.sceneId, assetId: s
     .concat(scene.cutEffect && scene.cutEffect.enabled !== false ? [['cutEffect', scene.cutEffect]] : [])
     // An image effect over a still changes the render; a still without one keeps its evidence.
     .concat(scene.imageEffect ? [['imageEffect', scene.imageEffect], ['imageEffectSec', scene.imageEffectSec ?? null]] : [])
+    .concat(scene.photoSequence && scene.photoSequence.enabled !== false ? [['photoSequence', scene.photoSequence]] : [])
     // An effect from the start frame to the end frame renders the end frame too.
     .concat(scene.imageEffect && isEndFrameImageEffect(scene.imageEffect) ? [['endImageId', scene.endImageId ?? null]] : [])
     // Only a music-driven performance joins it, so lip-sync evidence stays current.

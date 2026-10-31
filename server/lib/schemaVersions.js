@@ -830,7 +830,8 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // v36 = the project's handmade production medium (`productionMedium`), which a
   // v35 strict project schema rejects with a 400 and its normalizer drops on
   // save. Optional, no backfill: absent = no medium.
-  musicVideoProjects: 36,
+  // v37 = ordered still-photo sequences and cadence; older scene writers drop them.
+  musicVideoProjects: 37,
   // v1 = Creative Commission FEEDBACK federation (PostgreSQL `commission_feedback`)
   // via the per-record peer-sync push pipeline (record kind `commissionFeedback`,
   // sync category `commissionFeedback`, #2686 — split-record follow-up to #2657).

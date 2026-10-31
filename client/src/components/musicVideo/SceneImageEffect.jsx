@@ -1,4 +1,5 @@
 import { safeReadStorage, safeWriteStorage } from '../../lib/safeStorage.js';
+import ScenePhotoSequence from './ScenePhotoSequence.jsx';
 import {
   DEFAULT_IMAGE_EFFECT_SEC, IMAGE_EFFECT_CHANGE_SECS, IMAGE_EFFECT_DEVELOP_SECS, MUSIC_VIDEO_IMAGE_EFFECTS, MUSIC_VIDEO_IMAGE_EFFECT_LABELS,
   isEndFrameImageEffect,
@@ -20,7 +21,7 @@ const SELECT = 'min-w-0 bg-port-bg border border-port-border rounded px-1 py-1 t
  * it changes, the middle of the shot by default). The effect plays inside the
  * shot's span and adds no time.
  */
-export default function SceneImageEffect({ fieldId, scene, onChange, disabled = false, disabledReason = null }) {
+export default function SceneImageEffect({ fieldId, scene, onChange, disabled = false, disabledReason = null, beats = [], fps = 24 }) {
   const effect = scene.visualLayer === 'still' && MUSIC_VIDEO_IMAGE_EFFECTS.includes(scene.imageEffect) ? scene.imageEffect : null;
   const toEnd = isEndFrameImageEffect(effect);
   const value = effect || (scene.visualLayer === 'still' ? 'still' : 'clip');
@@ -80,6 +81,7 @@ export default function SceneImageEffect({ fieldId, scene, onChange, disabled = 
               : 'No video render: the still plays the effect.'}
         </p>
       )}
+      {scene.visualLayer === 'still' && <ScenePhotoSequence scene={scene} fieldId={fieldId} onChange={onChange} disabled={disabled} beats={beats} fps={fps} />}
     </div>
   );
 }
