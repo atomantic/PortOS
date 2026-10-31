@@ -13,6 +13,7 @@ import {
 import * as api from '../../services/api';
 import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
+import ListLoadError from '../ui/ListLoadError';
 import { writeClipboardSilently } from '../../lib/clipboard';
 import { ENRICHMENT_CATEGORIES } from './constants';
 import ScaleInput from './ScaleInput';
@@ -58,6 +59,9 @@ export default function NextActionBanner({ gaps, status, traits, onRefresh }) {
   const [answer, setAnswer] = useState('');
   const [scaleValue, setScaleValue] = useState(null);
   const [loading, setLoading] = useState(false);
+  // A rejected question read is not "category exhausted" (a null answer is):
+  // keep the gap and offer Retry instead of skipping to the next category.
+  const [questionError, setQuestionError] = useState(null);
   const [submitting, setSubmitting] = useState(false);
   const [skippedIndices, setSkippedIndices] = useState([]);
   const [copied, setCopied] = useState(false);
@@ -78,22 +82,39 @@ export default function NextActionBanner({ gaps, status, traits, onRefresh }) {
   useEffect(() => {
     setCurrentGapIdx(0);
     setQuestion(null);
+    setQuestionError(null);
   }, [gapKey]);
 
   // Guards against an older in-flight request overwriting state after a newer
   // one has already resolved (e.g. activeCategory changes again mid-fetch).
   const requestIdRef = useRef(0);
+  // loadQuestion reads gaps through a ref: the parent re-sets gaps (a new array)
+  // after every answer, and a gaps-keyed callback would re-fire the load effect
+  // on top of handleSubmit's own load — two question requests (and, once the
+  // structured questions run out, two provider calls) per answer.
+  const gapsRef = useRef(gaps);
+  useEffect(() => { gapsRef.current = gaps; }, [gaps]);
 
   const loadQuestion = useCallback(async (category, skipList = []) => {
     const requestId = ++requestIdRef.current;
     setLoading(true);
-    const q = await api.getDigitalTwinEnrichQuestion(category, undefined, undefined, skipList.length ? skipList : undefined).catch(() => null);
+    setQuestionError(null);
+    const result = await api.getDigitalTwinEnrichQuestion(category, undefined, undefined, skipList.length ? skipList : undefined, { silent: true })
+      .then((q) => ({ q, error: null }), (error) => ({ q: null, error }));
     if (requestId !== requestIdRef.current) return; // stale response — a newer request superseded this one
+    if (result.error) {
+      setQuestion(null);
+      setQuestionError({ error: result.error instanceof Error ? result.error : new Error('Request failed'), category, skipList });
+      setLoading(false);
+      return;
+    }
+    const q = result.q;
     if (!q) {
       // Category exhausted — advance to the next gap with available questions
       setCurrentGapIdx(prev => {
-        for (let i = prev + 1; i < (gaps?.length || 0); i++) {
-          if (gaps[i]?.suggestedCategory) return i;
+        const currentGaps = gapsRef.current;
+        for (let i = prev + 1; i < (currentGaps?.length || 0); i++) {
+          if (currentGaps[i]?.suggestedCategory) return i;
         }
         return prev; // No more gaps, stay put (render will show completion)
       });
@@ -105,7 +126,7 @@ export default function NextActionBanner({ gaps, status, traits, onRefresh }) {
     setAnswer('');
     setScaleValue(null);
     setLoading(false);
-  }, [gaps]);
+  }, []);
 
   // Load a question for the active gap's category (only for Q&A categories)
   useEffect(() => {
@@ -330,6 +351,13 @@ export default function NextActionBanner({ gaps, status, traits, onRefresh }) {
             <div className="flex items-center gap-2 text-gray-400 py-4">
               <BrailleSpinner text="Loading question..." />
             </div>
+          ) : questionError ? (
+            <ListLoadError
+              what="the next question"
+              error={questionError.error}
+              onRetry={() => loadQuestion(questionError.category, questionError.skipList)}
+              className="my-2"
+            />
           ) : question ? (
             <>
               <p className="text-sm text-gray-300 mb-3">{question.question}</p>

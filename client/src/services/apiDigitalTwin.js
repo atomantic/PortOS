@@ -56,10 +56,11 @@ export const runMultiTurnTests = (providerId, model, testIds = null, personaId =
   ...options
 });
 export const getMultiTurnTestHistory = (limit = 10, options = {}) => request(`/digital-twin/multi-turn-tests/history?limit=${limit}`, options);
-export const getDigitalTwinEnrichProgress = () => request('/digital-twin/enrich/progress');
-export const getDigitalTwinEnrichQuestion = (category, providerOverride, modelOverride, skipIndices) => request('/digital-twin/enrich/question', {
+export const getDigitalTwinEnrichProgress = (options) => request('/digital-twin/enrich/progress', options);
+export const getDigitalTwinEnrichQuestion = (category, providerOverride, modelOverride, skipIndices, options = {}) => request('/digital-twin/enrich/question', {
   method: 'POST',
-  body: JSON.stringify({ category, providerOverride, modelOverride, ...(skipIndices?.length ? { skipIndices } : {}) })
+  body: JSON.stringify({ category, providerOverride, modelOverride, ...(skipIndices?.length ? { skipIndices } : {}) }),
+  ...options
 });
 const submitDigitalTwinEnrichAnswer = (data, options = {}) => request('/digital-twin/enrich/answer', {
   method: 'POST',
@@ -223,7 +224,7 @@ export const submitBehavioralFeedback = (data, options = {}) => request('/digita
 export const getBehavioralFeedbackStats = () => request('/digital-twin/feedback/stats');
 
 // Digital Twin - Taste Questionnaire
-export const getTasteProfile = () => request('/digital-twin/taste');
+export const getTasteProfile = (options) => request('/digital-twin/taste', options);
 export const getTasteNextQuestion = (section) => request(`/digital-twin/taste/${section}/next`);
 export const submitTasteAnswer = (section, questionId, answer, meta = {}, options = {}) => request('/digital-twin/taste/answer', {
   method: 'POST',

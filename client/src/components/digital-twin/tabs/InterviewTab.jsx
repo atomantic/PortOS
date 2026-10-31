@@ -36,9 +36,14 @@ export default function InterviewTab({ onRefresh }) {
     items: gaps, state: gapsState, error: gapsError, retry: retryGaps, setItems: setGaps
   } = useListResource(fetchGaps);
   const [enrichProgress, setEnrichProgress] = useState(null);
+  // A failed progress read must not render every category at 0%.
+  const [progressError, setProgressError] = useState(null);
 
   const loadProgress = useCallback(async () => {
-    setEnrichProgress(await api.getDigitalTwinEnrichProgress().catch(() => null));
+    const result = await api.getDigitalTwinEnrichProgress({ silent: true })
+      .then((data) => ({ data, error: null }), (error) => ({ data: null, error }));
+    setEnrichProgress(result.data);
+    setProgressError(result.error ? (result.error instanceof Error ? result.error : new Error('Request failed')) : null);
   }, []);
 
   useEffect(() => {
@@ -229,6 +234,9 @@ export default function InterviewTab({ onRefresh }) {
         {/* Category Completion Grid */}
         <div>
           <h3 className="text-sm font-medium text-gray-400 mb-3">Enrichment Categories</h3>
+          {progressError && (
+            <ListLoadError what="enrichment progress" error={progressError} onRetry={loadProgress} className="mb-3" />
+          )}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
             {categoryEntries.map(([key, config]) => {
               const progress = categoryProgress[key];
@@ -248,16 +256,20 @@ export default function InterviewTab({ onRefresh }) {
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center justify-between">
                       <span className="text-sm text-white truncate">{config.label}</span>
-                      <span className={`text-xs ml-2 ${isComplete ? 'text-port-success' : 'text-gray-500'}`}>
-                        {percentage}%
-                      </span>
+                      {!progressError && (
+                        <span className={`text-xs ml-2 ${isComplete ? 'text-port-success' : 'text-gray-500'}`}>
+                          {percentage}%
+                        </span>
+                      )}
                     </div>
-                    <div className="h-1 bg-port-border rounded-full mt-1 overflow-hidden">
-                      <div
-                        className={`h-full rounded-full transition-all ${isComplete ? 'bg-port-success' : 'bg-port-accent'}`}
-                        style={{ width: `${percentage}%` }}
-                      />
-                    </div>
+                    {!progressError && (
+                      <div className="h-1 bg-port-border rounded-full mt-1 overflow-hidden">
+                        <div
+                          className={`h-full rounded-full transition-all ${isComplete ? 'bg-port-success' : 'bg-port-accent'}`}
+                          style={{ width: `${percentage}%` }}
+                        />
+                      </div>
+                    )}
                   </div>
                   <ArrowRight size={14} className="text-gray-600 shrink-0" />
                 </button>

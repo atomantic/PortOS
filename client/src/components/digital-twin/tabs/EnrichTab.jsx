@@ -25,6 +25,8 @@ import { formatCount, formatDateNumeric } from '../../../utils/formatters';
 export default function EnrichTab({ onRefresh }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const [progress, setProgress] = useState(null);
+  // A failed progress read must not render as "0/10 categories complete".
+  const [progressError, setProgressError] = useState(null);
   const [loading, setLoading] = useState(true);
 
   // Active session state
@@ -34,6 +36,11 @@ export default function EnrichTab({ onRefresh }) {
   const [scaleValue, setScaleValue] = useState(null);
   const [submitting, setSubmitting] = useState(false);
   const [loadingQuestion, setLoadingQuestion] = useState(false);
+  // A rejected question read is not "all questions answered" (a null answer is).
+  const [questionError, setQuestionError] = useState(null);
+  // Only the newest question request may apply: a retry or another category
+  // started while one is in flight supersedes it.
+  const questionRequestRef = useRef(0);
   const [skippedIndices, setSkippedIndices] = useState([]);
 
   // Writing sample analysis.
@@ -56,8 +63,10 @@ export default function EnrichTab({ onRefresh }) {
 
   const loadData = useCallback(async () => {
     setLoading(true);
-    const progressData = await api.getDigitalTwinEnrichProgress().catch(() => null);
-    setProgress(progressData);
+    const result = await api.getDigitalTwinEnrichProgress({ silent: true })
+      .then((data) => ({ data, error: null }), (error) => ({ data: null, error }));
+    setProgress(result.data);
+    setProgressError(result.error ? (result.error instanceof Error ? result.error : new Error('Request failed')) : null);
     setLoading(false);
   }, []);
 
@@ -140,18 +149,20 @@ export default function EnrichTab({ onRefresh }) {
   };
 
   const loadQuestion = useCallback(async (categoryId, skipList = []) => {
+    const requestId = ++questionRequestRef.current;
     setLoadingQuestion(true);
-    try {
-      const question = await api.getDigitalTwinEnrichQuestion(categoryId, undefined, undefined, skipList.length ? skipList : undefined);
-      setCurrentQuestion(question);
+    setQuestionError(null);
+    const result = await api.getDigitalTwinEnrichQuestion(categoryId, undefined, undefined, skipList.length ? skipList : undefined, { silent: true })
+      .then((question) => ({ question, error: null }), (error) => ({ question: null, error }));
+    if (requestId !== questionRequestRef.current) return;
+    setCurrentQuestion(result.question);
+    if (result.error) {
+      setQuestionError({ error: result.error instanceof Error ? result.error : new Error('Request failed'), categoryId, skipList });
+    } else {
       setAnswer('');
       setScaleValue(null);
-    } catch (err) {
-      console.warn(`⚠️ Failed to load enrichment question: ${err.message}`);
-      setCurrentQuestion(null);
-    } finally {
-      setLoadingQuestion(false);
     }
+    setLoadingQuestion(false);
   }, []);
 
   const startCategory = useCallback(async (categoryId) => {
@@ -232,8 +243,11 @@ export default function EnrichTab({ onRefresh }) {
   };
 
   const exitCategory = () => {
+    questionRequestRef.current += 1;
+    setLoadingQuestion(false);
     setActiveCategory(null);
     setCurrentQuestion(null);
+    setQuestionError(null);
     setAnswer('');
     setScaleValue(null);
     setSkippedIndices([]);
@@ -267,6 +281,16 @@ export default function EnrichTab({ onRefresh }) {
     );
   }
 
+  // First question (or a retry) still loading: stay in the session rather than
+  // falling back to the category grid, where another click would race this one.
+  if (activeCategory && !currentQuestion && loadingQuestion) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <BrailleSpinner text="Loading question" />
+      </div>
+    );
+  }
+
   // All questions exhausted for this category
   if (activeCategory && !currentQuestion && !loadingQuestion) {
     const categoryConfig = ENRICHMENT_CATEGORIES[activeCategory];
@@ -288,12 +312,20 @@ export default function EnrichTab({ onRefresh }) {
             <h2 className="text-xl font-semibold text-white">{categoryConfig?.label}</h2>
           </div>
         </div>
-        <div className="p-4 bg-port-success/10 border border-port-success/30 rounded-lg">
-          <div className="flex items-center gap-3">
-            <Check className="w-5 h-5 text-port-success" />
-            <span className="text-port-success">All questions for this category have been answered. Great job!</span>
+        {questionError ? (
+          <ListLoadError
+            what="the next question"
+            error={questionError.error}
+            onRetry={() => loadQuestion(questionError.categoryId, questionError.skipList)}
+          />
+        ) : (
+          <div className="p-4 bg-port-success/10 border border-port-success/30 rounded-lg">
+            <div className="flex items-center gap-3">
+              <Check className="w-5 h-5 text-port-success" />
+              <span className="text-port-success">All questions for this category have been answered. Great job!</span>
+            </div>
           </div>
-        </div>
+        )}
       </div>
     );
   }
@@ -330,17 +362,21 @@ export default function EnrichTab({ onRefresh }) {
           <div className="mt-4">
             <div className="flex items-center justify-between text-sm mb-1">
               <span className="text-gray-400">
-                Question {categoryProgress?.answered + 1 || 1}
+                Question {currentQuestion.questionNumber || categoryProgress?.answered + 1 || 1}
                 {currentQuestion.totalQuestions && ` of ${currentQuestion.totalQuestions}`}
               </span>
-              <span className="text-gray-400">{categoryProgress?.percentage || 0}% complete</span>
+              {!progressError && (
+                <span className="text-gray-400">{categoryProgress?.percentage || 0}% complete</span>
+              )}
             </div>
-            <div className="h-2 bg-port-border rounded-full overflow-hidden">
-              <div
-                className="h-full bg-port-accent transition-all"
-                style={{ width: `${categoryProgress?.percentage || 0}%` }}
-              />
-            </div>
+            {!progressError && (
+              <div className="h-2 bg-port-border rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-port-accent transition-all"
+                  style={{ width: `${categoryProgress?.percentage || 0}%` }}
+                />
+              </div>
+            )}
           </div>
         </div>
 
@@ -433,7 +469,12 @@ export default function EnrichTab({ onRefresh }) {
   // Category selection view
   return (
     <div className="space-y-6">
+      {progressError && (
+        <ListLoadError what="enrichment progress" error={progressError} onRetry={loadData} />
+      )}
+
       {/* Overall Progress */}
+      {!progressError && (
       <div className="bg-port-card rounded-lg border border-port-border p-6">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-semibold text-white">Enrichment Progress</h2>
@@ -455,6 +496,7 @@ export default function EnrichTab({ onRefresh }) {
           </p>
         )}
       </div>
+      )}
 
       {/* Category Grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
@@ -485,22 +527,26 @@ export default function EnrichTab({ onRefresh }) {
               <h3 className="font-semibold text-white mb-1">{config.label}</h3>
               <p className="text-sm text-gray-400 mb-3 line-clamp-2">{config.description}</p>
 
-              <div className="flex items-center justify-between text-xs">
-                <span className="text-gray-500">
-                  {catProgress?.answered || 0} {catProgress?.listBased ? 'items added' : 'questions answered'}
-                </span>
-                <span className={isComplete ? 'text-port-success' : 'text-gray-500'}>
-                  {catProgress?.percentage || 0}%
-                </span>
-              </div>
+              {!progressError && (
+                <>
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-gray-500">
+                      {catProgress?.answered || 0} {catProgress?.listBased ? 'items added' : 'questions answered'}
+                    </span>
+                    <span className={isComplete ? 'text-port-success' : 'text-gray-500'}>
+                      {catProgress?.percentage || 0}%
+                    </span>
+                  </div>
 
-              {/* Mini progress bar */}
-              <div className="h-1 bg-port-border rounded-full mt-2 overflow-hidden">
-                <div
-                  className={`h-full transition-all ${isComplete ? 'bg-port-success' : 'bg-port-accent'}`}
-                  style={{ width: `${catProgress?.percentage || 0}%` }}
-                />
-              </div>
+                  {/* Mini progress bar */}
+                  <div className="h-1 bg-port-border rounded-full mt-2 overflow-hidden">
+                    <div
+                      className={`h-full transition-all ${isComplete ? 'bg-port-success' : 'bg-port-accent'}`}
+                      style={{ width: `${catProgress?.percentage || 0}%` }}
+                    />
+                  </div>
+                </>
+              )}
             </button>
           );
         })}

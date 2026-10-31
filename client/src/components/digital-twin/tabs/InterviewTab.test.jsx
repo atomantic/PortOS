@@ -47,3 +47,24 @@ describe('InterviewTab gaps load', () => {
     await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
   });
 });
+
+describe('InterviewTab enrichment progress load', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.getDigitalTwinGaps.mockResolvedValue({ gaps: [] });
+  });
+
+  it('shows an error with Retry instead of every category at 0% when the progress read fails', async () => {
+    api.getDigitalTwinEnrichProgress
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValueOnce({ categories: { core_memories: { percentage: 40 } } });
+    renderTab();
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/Could not load enrichment progress.*offline/);
+    expect(screen.queryByText('0%')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('40%')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+});
