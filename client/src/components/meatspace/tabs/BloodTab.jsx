@@ -67,7 +67,7 @@ export default function BloodTab() {
                   confirming={isConfirming(test.id)}
                   onRequestDelete={() => requestDelete(test.id)}
                   onConfirmDelete={() => confirmDelete(async () => {
-                    const removed = await api.removeBloodTest(test.id, { silent: true }).catch(() => null);
+                    const removed = await api.removeBloodTest(test.id).catch(() => null);
                     if (removed) setRemovingId(test.id);
                   })}
                   onCancelDelete={cancelDelete}

@@ -172,7 +172,7 @@ export default function HealthTab() {
                           confirmIcon={Trash2}
                           ariaLabel={`Confirm delete workout ${workout.date}`}
                           onConfirm={() => confirmDelete(async () => {
-                            const removed = await api.removeWorkout(workout.id, { silent: true }).catch(() => null);
+                            const removed = await api.removeWorkout(workout.id).catch(() => null);
                             if (removed) setRemovingWorkoutId(workout.id);
                           })}
                           onCancel={cancelDelete}
