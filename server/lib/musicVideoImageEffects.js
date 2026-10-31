@@ -88,7 +88,7 @@ export const photoStackLayouts = (count) => Array.from({ length: count }, (_, i)
 const clampTo = (value, { min, max }, fallback) => Number.isFinite(value) ? Math.min(max, Math.max(min, value)) : fallback;
 
 /** A stored layout clamped to its ranges; null keeps the photo full frame. */
-export function normalizePhotoLayout(layout) {
+function normalizePhotoLayout(layout) {
   if (!layout || typeof layout !== 'object') return null;
   return Object.fromEntries(Object.entries(PHOTO_LAYOUT_RANGES).map(([key, range]) => [key, clampTo(layout[key], range, DEFAULT_PHOTO_LAYOUT[key])]));
 }
