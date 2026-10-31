@@ -1168,6 +1168,107 @@ export async function releaseRetryHold({ agentId, task, success, agentMetadata, 
 }
 
 /**
+ * The follow-up's reviewer roster before the forge identity preflight.
+ * Self-review empties it HERE rather than at each caller: "the agent reviews it
+ * itself" and "these reviewers review it" are mutually exclusive, and the
+ * non-obvious half is the usernames — a single `@login` inherited from the Code
+ * Review Defaults keeps the roster non-empty and quietly puts the run back on
+ * the delegated path the caller opted out of.
+ *
+ * An EXPLICITLY empty reviewer list means "no review was requested" and must
+ * stay empty — normalizeReviewers' `[copilot]` default would otherwise resurrect
+ * a reviewer. CLI-based reviewers work on any forge because the agent invokes the
+ * CLI directly; copilot is dropped on a non-GitHub forge. GitHub reviewer
+ * usernames and the non-blocking (`~opt`) marker set are forge-agnostic and are
+ * NOT stripped there — a username reviewer alone can drive the loop.
+ */
+function resolveReviewRoster({ reviewers, usernames, optionalReviewers, selfReview, isNonGithubForge }) {
+  if (selfReview) return { reviewers: [], usernames: [], optionalReviewers: [] };
+  const reviewerList = Array.isArray(reviewers) && reviewers.length === 0 ? [] : normalizeReviewers({ reviewers });
+  return {
+    reviewers: prioritizeToolFreeReviewers(isNonGithubForge ? reviewerList.filter(r => r !== DEFAULT_REVIEWER) : reviewerList),
+    usernames: normalizeReviewUsernames(usernames),
+    optionalReviewers: normalizeOptionalReviewers(optionalReviewers) || [],
+  };
+}
+
+function throwRequiredReviewerFault(entries, summary, code) {
+  const detail = entries.map((e) => `@${e.token}: ${e.reason}`).join('; ');
+  throw new ServerError(`${summary} — ${detail}. Fix it in Settings → Code Reviewers.`, {
+    status: 409, code, context: { reviewers: entries.map((e) => e.token) },
+  });
+}
+
+/**
+ * Target-forge identity preflight (#13115). A handle the forge verifiably does
+ * not have (or the PR's own author) would fail every PR-side request. A REQUIRED
+ * one fails closed — the run must not merge without the review the operator
+ * demanded; an OPTIONAL one is left out of this run's emitted roster and recorded
+ * in `faults`, never reported clean. Lookups that merely fail (auth/transport)
+ * are inconclusive and change nothing. The saved roster is never rewritten.
+ */
+async function preflightReviewerRoster({ usernames, optionalReviewers, isNonGithubForge, parsedPr }) {
+  const unchanged = { usernames, optionalReviewers, faults: [] };
+  if (!usernames.length && !optionalReviewers.length) return unchanged;
+  const { preflightReviewerIdentities, preflightReviewerPrAuthor } = await import('./reviewerIdentity.js');
+  const preflight = await preflightReviewerIdentities({
+    usernames, optionalReviewers, forge: isNonGithubForge ? 'gitlab' : 'github', host: parsedPr?.host,
+  });
+  if (preflight.requiredMissing.length) {
+    throwRequiredReviewerFault(preflight.requiredMissing, 'Required reviewer not found on the target forge', 'REVIEWER_IDENTITY_NOT_FOUND');
+  }
+  const eligibility = isNonGithubForge ? { required: [], optional: [] } : await preflightReviewerPrAuthor({ usernames, optionalReviewers, pr: parsedPr });
+  if (eligibility.required.length) {
+    throwRequiredReviewerFault(eligibility.required, 'Required reviewer configuration fault', 'REVIEWER_IS_PR_AUTHOR');
+  }
+  const optionalFaults = [...preflight.optionalMissing, ...eligibility.optional];
+  if (!optionalFaults.length) return unchanged;
+  const dropped = new Set(optionalFaults.map((e) => e.token.toLowerCase()));
+  const faults = optionalFaults.map(({ token, reason }) => ({ token, reason }));
+  console.log(`🚫 Optional reviewer(s) unavailable for this run: ${faults.map((f) => `@${f.token}`).join(', ')}`);
+  return {
+    usernames: usernames.filter((u) => !dropped.has(u.toLowerCase())),
+    optionalReviewers: optionalReviewers.filter((r) => !dropped.has(r.replace(/^@/, '').toLowerCase())),
+    faults,
+  };
+}
+
+/**
+ * One place that names the follow-up mode, so the title, the log line, and the
+ * warning can't drift apart as the follow-up kinds evolve.
+ */
+function describeFollowUpKind({ mergeOnly, selfReviewMerge, reviewers, usernames }) {
+  if (!mergeOnly) return { title: 'Review Loop', label: 'review-loop', reviewers: [...reviewers, ...usernames.map(u => `@${u}`)].join(', ') };
+  if (selfReviewMerge) return { title: 'Self-Review & Merge', label: 'self-review-merge', reviewers: 'self-review, no delegated reviewer' };
+  return { title: 'Merge', label: 'merge', reviewers: 'merge on green CI, no review' };
+}
+
+/**
+ * The source task's provider/model/effort pins, for a follow-up that runs a
+ * coding harness (it fixes checks, resolves conflicts, drives reviewer CLIs). An
+ * install whose ACTIVE provider is api-only would permanently reject an unpinned
+ * follow-up for lacking a harness — and the PR it was spawned to land would sit
+ * open forever. Only what is actually pinned is copied; an unpinned source task
+ * still resolves through the normal active-provider path.
+ *
+ * The model pin rides ONLY with its provider: a bare `model` would be treated as
+ * explicit against whatever provider resolution later picks, handing e.g. a
+ * Claude model id to Codex. Effort is provider-agnostic, so it travels alone.
+ */
+function inheritProviderPins(sourceMeta) {
+  const pins = {};
+  const provider = sourceMeta.provider || sourceMeta.providerId || null;
+  if (provider) {
+    pins.provider = provider;
+    pins.providerId = provider;
+    if (sourceMeta.model) pins.model = sourceMeta.model;
+  }
+  if (sourceMeta.effort) pins.effort = sourceMeta.effort;
+  if (sourceMeta.executionOptions !== undefined) pins.executionOptions = sourceMeta.executionOptions;
+  return pins;
+}
+
+/**
  * Spawn an internal follow-up task that drives the ordered multi-reviewer
  * review-and-fix loop on the just-created PR until the configured reviewer chain
  * is satisfied, then merges the PR. This is what makes the user-facing "review
@@ -1244,73 +1345,16 @@ export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, p
   }
 
   const parsedPr = git.parsePullRequestUrl(prUrl);
-  // Copilot is GitHub-only; CLI-based reviewers (claude/antigravity/codex/grok) work on any
-  // forge because the agent invokes the CLI directly. On a GitLab forge, drop
-  // copilot from the list. Classify with the shared detector rather than
+  // Copilot is GitHub-only. Classify with the shared detector rather than
   // `host !== 'github.com'` — a GitHub Enterprise host still has Copilot, and
   // misreading it as non-GitHub would strip the only reviewer and silently
   // downgrade the run to merge-only.
   const isNonGithubForge = !!parsedPr?.host && detectForgeCli(parsedPr.host) !== 'gh';
-  // Self-review empties the roster HERE rather than at each caller. "The agent
-  // reviews it itself" and "these reviewers review it" are mutually exclusive, so
-  // whoever holds the flag has to hold the emptying too — and the non-obvious
-  // half is the usernames: a single `@login` inherited from the Code Review
-  // Defaults keeps the roster non-empty and quietly puts the run back on the
-  // delegated path the caller opted out of. One owner, so a second caller adopting
-  // the mode cannot rediscover that the hard way.
-  //
-  // An EXPLICITLY empty list means "no review was requested" and must stay empty —
-  // normalizeReviewers' `[copilot]` default would otherwise resurrect a reviewer.
-  const reviewerList = (selfReview || (Array.isArray(reviewers) && reviewers.length === 0))
-    ? []
-    : normalizeReviewers({ reviewers });
-  const effectiveReviewers = prioritizeToolFreeReviewers(
-    isNonGithubForge ? reviewerList.filter(r => r !== DEFAULT_REVIEWER) : reviewerList
-  );
-  // GitHub reviewer usernames are forge-agnostic requested reviewers, so they are
-  // NOT stripped on a non-GitHub forge — a username reviewer alone can drive the
-  // loop even when copilot was dropped.
-  let effectiveUsernames = selfReview ? [] : normalizeReviewUsernames(usernames);
-  // Non-blocking (`~opt`) marker set — forge-agnostic, threaded verbatim so the
-  // follow-up's `--review-with` marks the same reviewers optional.
-  let effectiveOptionalReviewers = selfReview ? [] : (normalizeOptionalReviewers(optionalReviewers) || []);
-  // Target-forge identity preflight (#13115). A handle the forge verifiably does
-  // not have would fail every PR-side request. A REQUIRED one fails closed (the
-  // run must not merge without the review the operator demanded); an OPTIONAL one
-  // is left out of this run's emitted roster and recorded, never reported clean.
-  // Lookups that merely fail (auth/transport) are inconclusive and change nothing.
-  // The saved roster is never rewritten.
-  let reviewerIdentityFaults = [];
-  if (effectiveUsernames.length || effectiveOptionalReviewers.length) {
-    const { preflightReviewerIdentities, preflightReviewerPrAuthor } = await import('./reviewerIdentity.js');
-    const preflight = await preflightReviewerIdentities({
-      usernames: effectiveUsernames,
-      optionalReviewers: effectiveOptionalReviewers,
-      forge: isNonGithubForge ? 'gitlab' : 'github',
-      host: parsedPr?.host,
-    });
-    if (preflight.requiredMissing.length) {
-      const detail = preflight.requiredMissing.map((e) => `@${e.token}: ${e.reason}`).join('; ');
-      throw new ServerError(`Required reviewer not found on the target forge — ${detail}. Fix it in Settings → Code Reviewers.`, {
-        status: 409, code: 'REVIEWER_IDENTITY_NOT_FOUND', context: { reviewers: preflight.requiredMissing.map((e) => e.token) },
-      });
-    }
-    const eligibility = isNonGithubForge ? { required: [], optional: [] } : await preflightReviewerPrAuthor({ usernames: effectiveUsernames, optionalReviewers: effectiveOptionalReviewers, pr: parsedPr });
-    if (eligibility.required.length) {
-      const detail = eligibility.required.map((e) => `@${e.token}: ${e.reason}`).join('; ');
-      throw new ServerError(`Required reviewer configuration fault — ${detail}. Fix it in Settings → Code Reviewers.`, {
-        status: 409, code: 'REVIEWER_IS_PR_AUTHOR', context: { reviewers: eligibility.required.map((e) => e.token) },
-      });
-    }
-    const optionalFaults = [...preflight.optionalMissing, ...eligibility.optional];
-    if (optionalFaults.length) {
-      const dropped = new Set(optionalFaults.map((e) => e.token.toLowerCase()));
-      reviewerIdentityFaults = optionalFaults.map(({ token, reason }) => ({ token, reason }));
-      effectiveUsernames = effectiveUsernames.filter((u) => !dropped.has(u.toLowerCase()));
-      effectiveOptionalReviewers = effectiveOptionalReviewers.filter((r) => !dropped.has(r.replace(/^@/, '').toLowerCase()));
-      console.log(`🚫 Optional reviewer(s) unavailable for this run: ${reviewerIdentityFaults.map((f) => `@${f.token}`).join(', ')}`);
-    }
-  }
+  const roster = resolveReviewRoster({ reviewers, usernames, optionalReviewers, selfReview, isNonGithubForge });
+  const effectiveReviewers = roster.reviewers;
+  const { usernames: effectiveUsernames, optionalReviewers: effectiveOptionalReviewers, faults: reviewerIdentityFaults } = await preflightReviewerRoster({
+    usernames: roster.usernames, optionalReviewers: roster.optionalReviewers, isNonGithubForge, parsedPr,
+  });
   // Per-reviewer iteration caps (`~max=<n>`) — forge-agnostic, threaded verbatim
   // so the follow-up's `--review-with` carries the same budgets. Entries for
   // reviewers that were stripped are inert (the emitter only marks tokens it
@@ -1359,32 +1403,9 @@ export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, p
 
   // One place that names the mode, so the title, the log line, and the warning
   // can't drift apart as the two follow-up kinds evolve.
-  const kind = mergeOnly
-    ? (selfReviewMerge
-      ? { title: 'Self-Review & Merge', label: 'self-review-merge', reviewers: 'self-review, no delegated reviewer' }
-      : { title: 'Merge', label: 'merge', reviewers: 'merge on green CI, no review' })
-    : { title: 'Review Loop', label: 'review-loop', reviewers: [...effectiveReviewers, ...effectiveUsernames.map(u => `@${u}`)].join(', ') };
+  const kind = describeFollowUpKind({ mergeOnly, selfReviewMerge, reviewers: effectiveReviewers, usernames: effectiveUsernames });
 
-  // Inherit the source task's provider/model/effort pins. A follow-up runs a
-  // coding harness (it fixes checks, resolves conflicts, drives reviewer CLIs),
-  // so an install whose ACTIVE provider is api-only would permanently reject an
-  // unpinned follow-up for lacking a harness — and the PR it was spawned to land
-  // would sit open forever. Only copy what's actually pinned; an unpinned source
-  // task still resolves through the normal active-provider path.
-  //
-  // The model pin rides ONLY with its provider: a bare `model` would be treated as
-  // explicit against whatever provider resolution later picks, handing e.g. a
-  // Claude model id to Codex. Effort is provider-agnostic, so it travels alone.
-  const sourceMeta = originalTask?.metadata || {};
-  const pinnedProvider = sourceMeta.provider || sourceMeta.providerId || null;
-  const providerPins = {};
-  if (pinnedProvider) {
-    providerPins.provider = pinnedProvider;
-    providerPins.providerId = pinnedProvider;
-    if (sourceMeta.model) providerPins.model = sourceMeta.model;
-  }
-  if (sourceMeta.effort) providerPins.effort = sourceMeta.effort;
-  if (sourceMeta.executionOptions !== undefined) providerPins.executionOptions = sourceMeta.executionOptions;
+  const providerPins = inheritProviderPins(originalTask?.metadata || {});
 
   // Routing key, and the one field here that turns a serialization slip into a
   // dead PR: a follow-up whose `app` doesn't resolve is BLOCKED by
