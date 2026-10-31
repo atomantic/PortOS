@@ -543,3 +543,129 @@ describe('configured provider reviewers', () => {
     });
   });
 });
+
+// Pins each outcome of the configured-provider completion path through the
+// public review entry point, so the transport/stream/failure steps can move
+// without changing what a caller sees.
+describe('configured provider completion outcomes', () => {
+  const cli = { ...provider, type: 'tui', command: 'claude' };
+  const review = (extra = {}) => runLocalCodeReview({ backend, diff: 'example diff', ...extra });
+  const stream = (...events) => ({ text: events.map(event => JSON.stringify(event)).join('\n'), partial: false, streamFormat: 'stream-json' });
+
+  it('refuses a reasoning effort the pinned model cannot run before any inference', async () => {
+    const result = await review({ effort: 'synthetic-effort' });
+    expect(result).toMatchObject({ ok: false, error: 'The selected reviewer model does not support this reasoning effort.' });
+    expect(callProviderAISimple).not.toHaveBeenCalled();
+    expect(runCliProviderPrompt).not.toHaveBeenCalled();
+  });
+
+  it('maps API execution rejections to an execution-options fault or a bounded batch failure', async () => {
+    const { executionOptionsError } = await import('../lib/executionOptions.js');
+    callProviderAISimple.mockRejectedValueOnce(executionOptionsError('Synthetic option refused.'));
+    const refused = await review();
+    expect(refused).toMatchObject({ ok: false, error: 'Synthetic option refused.' });
+    callProviderAISimple.mockRejectedValueOnce(new Error('/private/synthetic'));
+    const failed = await review();
+    expect(failed).toMatchObject({ ok: false, error: 'Reviewer preparation or execution failed within its shared budget.' });
+    expect(JSON.stringify(failed)).not.toContain('/private/synthetic');
+  });
+
+  it('maps CLI execution rejections to an execution-options fault or a bounded credential failure', async () => {
+    getProviderById.mockResolvedValue(cli);
+    const { executionOptionsError } = await import('../lib/executionOptions.js');
+    runCliProviderPrompt.mockRejectedValueOnce(executionOptionsError('Synthetic option refused.'));
+    expect(await review()).toMatchObject({ ok: false, error: 'Synthetic option refused.' });
+    runCliProviderPrompt.mockRejectedValueOnce(new Error('/private/synthetic'));
+    const failed = await review();
+    expect(failed).toMatchObject({ ok: false, error: 'Reviewer credential setup or execution failed.' });
+    expect(JSON.stringify(failed)).not.toContain('/private/synthetic');
+  });
+
+  it.each([
+    ['an error field', stream({ type: 'error', error: 'Synthetic overload' }), 'Synthetic overload'],
+    ['a message field', stream({ type: 'assistant', is_error: true, message: 'Synthetic refusal' }), 'Synthetic refusal'],
+    ['no detail', stream({ type: 'error' }), 'Reviewer returned an error event.'],
+    ['an error final result', stream({ type: 'error', error: 'Synthetic overload' }, { type: 'result', is_error: true, error: 'Synthetic final error' }), 'Synthetic final error'],
+    ['a final result without text', stream({ type: 'result', result: 42 }), 'Reviewer returned no successful final result.'],
+    ['no final result', stream({ type: 'assistant', text: 'thinking' }), 'Reviewer returned no successful final result.'],
+  ])('reports a stream ending in %s as a failed review', async (_label, run, error) => {
+    getProviderById.mockResolvedValue(cli);
+    runCliProviderPrompt.mockResolvedValue(run);
+    const result = await review();
+    expect(result).toMatchObject({ ok: false, error });
+    expect(result).not.toHaveProperty('findings');
+  });
+
+  it('accepts a successful final result after a recovered stream error event', async () => {
+    getProviderById.mockResolvedValue(cli);
+    runCliProviderPrompt.mockResolvedValue(stream({ type: 'error', error: 'Synthetic retry' }, { type: 'result', result: 'NO FINDINGS' }));
+    expect(await review()).toMatchObject({ ok: true, findings: 'NO FINDINGS' });
+  });
+
+  it.each([
+    [{ partial: true, stderr: '  Synthetic stderr  ', text: 'half' }, 'Synthetic stderr'],
+    [{ partial: true, text: '  half a review  ' }, 'half a review'],
+    [{ partial: true }, 'Reviewer exited before completing its response.'],
+  ])('reports partial CLI reply %# without a verdict', async (run, error) => {
+    getProviderById.mockResolvedValue(cli);
+    runCliProviderPrompt.mockResolvedValue(run);
+    const result = await review();
+    expect(result).toMatchObject({ ok: false, error });
+    expect(result).not.toHaveProperty('findings');
+  });
+
+  it('passes the reviewer deadline to the API call and keeps a successful CLI reply despite permission prose on stderr', async () => {
+    await review()
+    expect(callProviderAISimple.mock.lastCall[3]).toMatchObject({ deadlineMs: expect.any(Number) })
+    getProviderById.mockResolvedValue(cli);
+    runCliProviderPrompt.mockResolvedValue({ text: 'NO FINDINGS', partial: false,
+      stderr: 'jetski: no output produced — a tool required the "command" permission that headless mode cannot prompt for, so it was auto-denied.' });
+    expect(await review()).toMatchObject({ ok: true, findings: 'NO FINDINGS' });
+  });
+
+  it('keeps a CLI transport error over the events of its stream-json output', async () => {
+    getProviderById.mockResolvedValue(cli);
+    runCliProviderPrompt.mockResolvedValue({ ...stream({ type: 'error', error: 'Synthetic event' }), error: 'Synthetic transport failure' });
+    expect(await review()).toMatchObject({ ok: false, error: 'Synthetic transport failure' });
+  });
+
+  describe('through the claim-comment review, which returns the failure unchanged', () => {
+    const comments = [{ login: 'example-user', type: 'User', body: 'I will work on this' }];
+    const claimReview = () => runLocalClaimCommentReview({ backend, comments, timeoutMs: 4321 });
+
+    it('carries every reply diagnostic and the call budget on a failed API reply', async () => {
+      callProviderAISimple.mockResolvedValue({ error: 'Synthetic failure', stderr: 'Synthetic stderr', text: 'Synthetic text', status: 503,
+        statusCode: 503, stallPhase: 'connect', name: 'AbortError', code: 'SYNTHETIC', ignored: 'not a diagnostic' });
+      expect(await claimReview()).toEqual({ ok: false, timeoutMs: 4321, error: 'Synthetic failure', stderr: 'Synthetic stderr',
+        text: 'Synthetic text', status: 503, statusCode: 503, stallPhase: 'connect', name: 'AbortError', code: 'SYNTHETIC' });
+    });
+
+    it('refuses a provider with no pinned or default model before inference', async () => {
+      getProviderById.mockResolvedValue({ ...provider, defaultModel: null });
+      expect(await claimReview()).toEqual({ ok: false, code: 'NO_MODEL', error: 'Select a model for the reviewer provider.' });
+      expect(callProviderAISimple).not.toHaveBeenCalled();
+    });
+
+    it('returns a partial CLI reply with only its stderr and text', async () => {
+      getProviderById.mockResolvedValue(cli);
+      runCliProviderPrompt.mockResolvedValue({ partial: true, stderr: '  Synthetic stderr  ', text: 'half', status: 1 });
+      expect(await claimReview()).toEqual({ ok: false, error: 'Synthetic stderr', stderr: '  Synthetic stderr  ', text: 'half' });
+    });
+
+    it('classifies a partial capacity refusal before the partial-reply answer', async () => {
+      getProviderById.mockResolvedValue(cli);
+      runCliProviderPrompt.mockResolvedValue({ text: JSON.stringify({ type: 'result', is_error: true, result: 'Prompt is too long /private/example' }), partial: true, streamFormat: 'stream-json' });
+      const result = await claimReview();
+      expect(result).toMatchObject({ ok: false, code: 'REVIEW_CONTEXT_CAPACITY', backend });
+      expect(JSON.stringify(result)).not.toContain('/private/example');
+    });
+  });
+
+  it('reports an empty CLI reply and keeps its vendor detail out of the verdict', async () => {
+    getProviderById.mockResolvedValue(cli);
+    runCliProviderPrompt.mockResolvedValue({ text: '   ', partial: false, stderr: 'Synthetic stderr' });
+    expect(await review()).toMatchObject({ ok: false, error: 'Synthetic stderr' });
+    runCliProviderPrompt.mockResolvedValue({ text: '', partial: false });
+    expect(await review()).toMatchObject({ ok: false, error: 'Reviewer returned no content.' });
+  });
+});
