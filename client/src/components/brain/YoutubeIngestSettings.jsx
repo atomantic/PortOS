@@ -159,7 +159,7 @@ export default function YoutubeIngestSettings() {
       </div>
 
       <div className="flex flex-wrap items-center gap-4">
-        <label htmlFor="ytAutoSync" className="flex items-center gap-2 text-sm text-gray-300">
+        <label htmlFor="ytAutoSync" className="flex items-center gap-2 pointer-coarse:min-h-11 text-sm text-gray-300">
           <input
             id="ytAutoSync"
             type="checkbox"
@@ -187,7 +187,7 @@ export default function YoutubeIngestSettings() {
         <span className="block text-sm font-medium text-gray-300 mb-2">Capture by default</span>
         <div className="flex flex-wrap gap-4">
           {INGEST_OPTIONS.map(({ settingKey, label, hint }) => (
-            <label key={settingKey} htmlFor={`yt-${settingKey}`} title={hint} className="flex items-center gap-2 text-sm text-gray-300">
+            <label key={settingKey} htmlFor={`yt-${settingKey}`} title={hint} className="flex items-center gap-2 pointer-coarse:min-h-11 text-sm text-gray-300">
               <input
                 id={`yt-${settingKey}`}
                 type="checkbox"

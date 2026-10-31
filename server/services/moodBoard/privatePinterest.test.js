@@ -99,6 +99,16 @@ describe('importPrivatePinterestBoard', () => {
     expect(store.appendImportedItems).toHaveBeenCalledWith('mb-example', [{ imageUrl: '/data/images/pinterest-example.jpg', source: firstPin.source }]);
   });
 
+  it('imports the Pin a share link lands on (/pin/<id>/sent/?invite_code=…)', async () => {
+    resolvePublicUrl.mockResolvedValue(`${firstPin.source}sent/?invite_code=example&sender=example&sfo=1`);
+    browser.getHealthStatus.mockResolvedValue({ connected: true });
+    browser.navigateToUrlPinned.mockResolvedValue({ url: firstPin.source, evalResult: { expectedCount: 1, pins: [firstPin] } });
+
+    expect(await importPrivatePinterestBoard('mb-example', { url: 'https://pin.it/example-pin' }))
+      .toMatchObject({ added: 1, found: 1 });
+    expect(browser.navigateToUrlPinned).toHaveBeenCalledWith(firstPin.source, expect.anything());
+  });
+
   it('deduplicates a single Pin before downloading its image', async () => {
     store.getBoard.mockResolvedValue({ id: 'mb-example', items: [{ source: firstPin.source }] });
     browser.getHealthStatus.mockResolvedValue({ connected: true });

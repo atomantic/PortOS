@@ -1,6 +1,6 @@
 import { prepareProductionReview, attachProductionPilotProof } from './productionReviewService.js';
 import { productionReadiness, productionProofNeedsRender } from './productionReview.js';
-import { currentPlateEvidence, plateRequirementBasis, selectedPlatePasses } from '../../lib/musicVideoPlateEvidence.js';
+import { currentAdjacency, currentPlateEvidence, footagePlateScenes, plateAdjacencyFailed, plateRequirementBasis, selectedPlateTake, selectedPlatePasses } from '../../lib/musicVideoPlateEvidence.js';
 import { ensureSceneTakes, selectSceneTake } from './takes.js';
 /**
  * Music Video — server-owned production run (#9066): the orchestrator over the
@@ -108,6 +108,7 @@ const defaults = {
   loadEnv: loadPoolEnv,
   resolvePlateReviewer: async (reviewer) => (await import('./plateReview.js')).resolvePlateReviewer(reviewer),
   reviewPlate: async (args) => (await import('./plateReview.js')).reviewPlate(args),
+  reviewPlateStrip: async (args) => (await import('./plateReview.js')).reviewPlateStrip(args),
   chooseRoute: chooseProductionRoute,
   dispatch: async (args) => (await import('./productionDispatch.js')).dispatchProductionStep(args),
   queue: async () => import('../mediaJobQueue/index.js'),
@@ -249,7 +250,7 @@ async function preflightPlate(projectId, runId, sceneId) {
       if (saved.error) return { halt: { status: 'blocked', reason: `Plate review needed: ${saved.error.message}` } };
     }
     if (evidence.verdict === 'unverified') return { halt: { status: 'blocked', reason: 'Plate review needed: inconclusive evidence. Select or repair a plate, then resume.' } };
-    if (evidence.verdict === 'pass') {
+    if (evidence.verdict === 'pass' && !plateAdjacencyFailed(evidence, runId)) {
       const selected = await mutateProjectRecord(projectId, (current) => {
         assertProductionActive(current, runId, PROCESS_ID);
         const scene = current.scenes.find((entry) => entry.sceneId === sceneId);
@@ -267,6 +268,72 @@ async function preflightPlate(projectId, runId, sceneId) {
   return { repair: true, basis };
 }
 
+/**
+ * One strip call over every footage plate once each passes alone, before any video
+ * step is reserved. Returns `{ failed }` (scene ids that disagree with their
+ * predecessor) or `{ stop }`, the dispatch result that must be returned instead.
+ */
+async function checkPlateAdjacency(projectId, runId) {
+  let project = await requireProject(projectId);
+  let run = assertProductionActive(project, runId, PROCESS_ID);
+  for (const { sceneId } of footagePlateScenes(project)) {
+    const scene = project.scenes.find((entry) => entry.sceneId === sceneId);
+    if (!scene.referenceImageId) {
+      if (run.steps.some((step) => step.sceneId === sceneId && step.kind === 'frame' && ['reserved', 'queued'].includes(step.status))) return { stop: { ok: false } };
+      continue;
+    }
+    if (selectedPlatePasses(scene, runId) || plateAdjacencyFailed(selectedPlateTake(scene)?.plateEvidence, runId)) continue;
+    const admission = await preflightPlate(projectId, runId, sceneId);
+    if (admission.repair) return { stop: await dispatchSlot(projectId, runId, { stepKind: 'frame', sceneId, plateRepairBasis: admission.basis }) };
+    if (!admission.ok) return { stop: admission };
+  }
+  project = await requireProject(projectId);
+  run = assertProductionActive(project, runId, PROCESS_ID);
+  const strip = footagePlateScenes(project).filter((scene) => scene.referenceImageId);
+  if (strip.length < 2) return { failed: [] };
+  const assetIds = strip.map((scene) => scene.referenceImageId).join();
+  const verdicts = () => strip.slice(1).map((scene, i) => ({ scene, adjacency: currentAdjacency(strip, i + 1, runId, run.resumedAt) }));
+  const blocked = (reason) => ({ stop: { halt: { status: 'blocked', reason: `Plate review needed: ${reason}` } } });
+  if (verdicts().some(({ adjacency }) => !adjacency)) {
+    const prepared = await deps.resolvePlateReviewer(run.reviewer).catch((error) => ({ error }));
+    if (prepared.error) return blocked(prepared.error.message);
+    const unchanged = (current) => footagePlateScenes(current).filter((scene) => scene.referenceImageId).map((scene) => scene.referenceImageId).join() === assetIds;
+    const reserved = await mutateProjectRecord(projectId, (current) => {
+      if (!unchanged(current)) throw new ServerError('Plate selection changed during adjacency review', { code: 'PRODUCTION_PLATE_CHANGED' });
+      return reserveProductionStep(current, runId, { kind: 'plate', sceneId: strip[1].sceneId, route: { kind: 'plate', mode: prepared.provider.id, model: prepared.model }, costUsd: prepared.costUsd, processId: PROCESS_ID });
+    }).catch((error) => ({ error }));
+    if (reserved.error) return { stop: { halt: { status: LIMIT_CODES.has(reserved.error.code) ? 'limit-reached' : 'blocked', reason: `Plate review needed: ${reserved.error.message}` } } };
+    const verifyCurrent = async (execution) => {
+      if (execution?.provider && (execution.provider.id !== prepared.provider.id || (prepared.model && execution.model !== prepared.model))) throw new ServerError('The selected plate reviewer changed before execution', { code: 'PRODUCTION_ROUTE_NOT_ALLOWED' });
+      const current = await requireProject(projectId);
+      assertProductionStepOpen(current, runId, reserved.step.key, { sceneId: strip[1].sceneId, kind: 'plate', processId: PROCESS_ID });
+      if (!unchanged(current)) throw new ServerError('Plate selection changed during adjacency review', { code: 'PRODUCTION_PLATE_CHANGED' });
+    };
+    const result = await deps.reviewPlateStrip({ strip, runId, reviewer: prepared, beforeExecute: verifyCurrent }).catch((error) => ({ error }));
+    await mutateProjectRecord(projectId, (current) => settleProductionStep(current, runId, reserved.step.key, { status: result.error ? 'failed' : 'completed', error: result.error?.message }));
+    if (result.error) return blocked(result.error.message);
+    const reviewedAt = new Date().toISOString();
+    const saved = await mutateProjectRecord(projectId, (current) => {
+      assertProductionActive(current, runId, PROCESS_ID);
+      if (!unchanged(current)) throw new ServerError('Plate selection changed during adjacency review', { code: 'PRODUCTION_PLATE_CHANGED' });
+      const adjacencies = new Map(result.findings.map((finding) => {
+        const index = strip.findIndex((scene) => scene.sceneId === finding.sceneId);
+        return [finding.sceneId, { runId, key: `${strip[index - 1].referenceImageId}>${strip[index].referenceImageId}`, verdict: finding.verdict, note: finding.note,
+          providerId: result.providerId, model: result.model, providerRunId: result.providerRunId, reviewedAt }];
+      }));
+      return { project: { ...current, scenes: current.scenes.map((scene) => !adjacencies.has(scene.sceneId) ? scene
+        : { ...scene, takes: scene.takes.map((take) => take === selectedPlateTake(scene) ? { ...take, plateEvidence: { ...take.plateEvidence, adjacency: adjacencies.get(scene.sceneId) } } : take) }) } };
+    }).catch((error) => ({ error }));
+    if (saved.error) return blocked(saved.error.message);
+    project = await requireProject(projectId);
+    strip.splice(0, strip.length, ...footagePlateScenes(project).filter((scene) => scene.referenceImageId));
+  }
+  const settled = verdicts();
+  const inconclusive = settled.find(({ adjacency }) => adjacency?.verdict === 'unverified');
+  if (inconclusive || settled.some(({ adjacency }) => !adjacency)) return blocked('inconclusive adjacent-plate evidence. Select or repair a plate, then resume.');
+  return { failed: settled.filter(({ adjacency }) => adjacency.verdict === 'fail').map(({ scene }) => scene.sceneId) };
+}
+
 // ---- dispatching one generation ----------------------------------------------
 
 /**
@@ -281,12 +348,19 @@ async function dispatchSlot(projectId, runId, { stepKind, sceneId, revisionId = 
   let scene = (project.scenes || []).find((s) => s.sceneId === sceneId);
   if (!scene) return { ok: false };
   if (stepKind === 'clip' && scene.direction?.actionContract) {
-    const admission = await preflightPlate(projectId, runId, sceneId);
-    if (admission.repair) return dispatchSlot(projectId, runId, { stepKind: 'frame', sceneId, plateRepairBasis: admission.basis });
-    if (!admission.ok) {
-      const current = await requireProject(projectId);
-      if (findProductionRun(current, runId).status !== 'running') return { ok: false };
-      return admission;
+    // A plate that fails against its neighbor gets the same single repair as one that fails alone.
+    for (let pass = 0; ; pass++) {
+      const admission = await preflightPlate(projectId, runId, sceneId);
+      if (admission.repair) return dispatchSlot(projectId, runId, { stepKind: 'frame', sceneId, plateRepairBasis: admission.basis });
+      if (!admission.ok) {
+        const current = await requireProject(projectId);
+        if (findProductionRun(current, runId).status !== 'running') return { ok: false };
+        return admission;
+      }
+      const adjacency = await checkPlateAdjacency(projectId, runId);
+      if (adjacency.stop) return adjacency.stop;
+      if (!adjacency.failed.includes(sceneId)) break;
+      if (pass) return { halt: { status: 'blocked', reason: `"${scene.label || sceneId}" still disagrees with the previous shot after one repair. Review candidates and resume after a manual correction.` } };
     }
     project = await requireProject(projectId);
     run = findProductionRun(project, runId);

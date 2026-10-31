@@ -272,6 +272,24 @@ describe('sync-category route validation', () => {
   });
 });
 
+describe('POST /api/instances/peers — local address refusal', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    instances.addPeer.mockImplementation(async (data) => ({ id: 'peer-new', ...data }));
+  });
+
+  it.each(['0.0.0.0', '127.0.0.1', '169.254.1.1'])('rejects %s', async (address) => {
+    const res = await request(buildApp()).post('/api/instances/peers').send({ address });
+    expect(res.status).toBe(400);
+    expect(instances.addPeer).not.toHaveBeenCalled();
+  });
+
+  it('accepts a LAN address', async () => {
+    const res = await request(buildApp()).post('/api/instances/peers').send({ address: '192.0.2.10' });
+    expect(res.status).toBe(201);
+  });
+});
+
 describe('PUT /api/instances/peers/:id — media provider selection', () => {
   beforeEach(() => {
     vi.clearAllMocks();

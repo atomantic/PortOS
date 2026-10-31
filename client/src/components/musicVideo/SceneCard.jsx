@@ -8,7 +8,7 @@ import SceneRejectUnused from './SceneRejectUnused.jsx';
 import ShotFinalRender from './ShotFinalRender.jsx';
 import ShotStoryboardPanel from './ShotStoryboardPanel.jsx';
 import { MUSIC_VIDEO_MEDIUM_LABELS } from '../../../../server/lib/musicVideoMediumPlan.js';
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import { Trash2, Activity, ArrowUp, ArrowDown, ChevronLeft, ChevronRight, Video, AlertTriangle, Clapperboard, Shuffle } from 'lucide-react';
 import OverflowMenu from '../ui/OverflowMenu.jsx';
 import SceneTakePicker from './SceneTakePicker.jsx';
@@ -21,7 +21,8 @@ import { isPerformanceScene, planPerformanceRepair } from '../../lib/musicVideoS
 import SceneTakeStrip from './SceneTakeStrip.jsx';
 import { sceneEndFramePlanFor } from './SceneEndFrame.jsx';
 import SceneFrames from './SceneFrames.jsx';
-import { CLIP_TIMING_FPS, MUSIC_VIDEO_VISUAL_LAYERS, clipReversed, composedDrawsLyrics, sceneHasAuthoredSpan } from '../../lib/musicVideoLayers.js';
+import { CLIP_TIMING_FPS, MUSIC_VIDEO_VISUAL_LAYERS, clipReversed, composedDrawsLyrics, sceneHasAuthoredSpan, sceneVisualLayer } from '../../lib/musicVideoLayers.js';
+import { useVideoFileSrc } from '../../hooks/useVideoFileSrc.js';
 
 // #8985: what a composed render shows for this scene's span.
 const LAYER_LABELS = { footage: 'Footage', still: 'Still image', card: 'Title card', code: 'Code-drawn' };
@@ -42,6 +43,8 @@ import SceneFrameFit from './SceneFrameFit.jsx';
 import SceneCutEffect from './SceneCutEffect.jsx';
 import { plannedTransitions } from '../../lib/musicVideoCutEffects.js';
 import SceneGlitches from './SceneGlitches.jsx';
+import ScenePreMusic from './ScenePreMusic.jsx';
+import { isPreMusicShot, normalizePreMusic, preMusicSoundSummary } from '../../../../server/lib/musicVideoColdOpen.js';
 import SceneLyricType from './SceneLyricType.jsx';
 import SceneTransitions from './SceneTransitions.jsx';
 import SceneImageEffect from './SceneImageEffect.jsx';
@@ -130,12 +133,6 @@ export default function SceneCard({
 }) {
   const detailsRef = useRef(null);
 
-  useEffect(() => {
-    if (expanded && detailsRef.current) {
-      detailsRef.current.scrollIntoView?.({ behavior: 'smooth', block: 'center' });
-    }
-  }, [expanded]);
-
   // Keep playback mounted even when this shot shows a still or performance evidence.
   const clipPlayback = useSceneClipPlayback(scene);
   const { clipSrc, clipSec, clipSize, loops, playedSec } = clipPlayback;
@@ -145,6 +142,10 @@ export default function SceneCard({
   const [swapKind, setSwapKind] = useState(null);
   const applyPatch = (patch) => { onEditLocal(scene.sceneId, patch); onSave(scene.sceneId, patch); };
   const layer = MUSIC_VIDEO_VISUAL_LAYERS.includes(scene.visualLayer) ? scene.visualLayer : 'footage';
+  const lead = (project?.scenes || []).filter(s => !isPreMusicShot(s)).slice().sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+    .find(s => s.videoHistoryId && sceneVisualLayer(s, { layered }) === 'footage');
+  const leadFile = useVideoFileSrc(documentComposition ? null : lead?.videoHistoryId, { geometry: true, enabled: layered && layer === 'still' });
+  const photoFps = documentComposition ? 24 : leadFile.fps || 24;
   const fieldId = (name) => `mv-scene-${scene.sceneId}-${name}`;
   // #10297: a code shot is drawn by the composition, so it has no frame or clip to make.
   const codeShot = layered && layer === 'code';
@@ -215,9 +216,12 @@ export default function SceneCard({
   const endFrames = Boolean(onGenerateEndFrame) && (layer === 'footage' || (stillPicture && isEndFrameImageEffect(scene.imageEffect)));
   const shotModeValue = performance ? (scene.performanceStyle === 'music' ? 'music' : 'performance') : 'cutaway';
   // The collapsed Shot settings row says what is set, so it rarely needs opening.
+  // A shot before the song has a length of its own instead of a span of the song.
+  const preMusic = isPreMusicShot(scene);
   const settingsSummary = [
     layer === 'footage' ? SHOT_MODE_LABELS[shotModeValue] : LAYER_LABELS[layer],
-    typeof scene.startSec === 'number' && typeof scene.endSec === 'number' ? `${scene.startSec.toFixed(2)}–${scene.endSec.toFixed(2)}s (${frameSpan(scene)})` : null,
+    preMusic ? `before the song · ${normalizePreMusic(scene.preMusic).durationSec.toFixed(2)}s · ${preMusicSoundSummary(scene.preMusic).toLowerCase()}` : null,
+    !preMusic && typeof scene.startSec === 'number' && typeof scene.endSec === 'number' ? `${scene.startSec.toFixed(2)}–${scene.endSec.toFixed(2)}s (${frameSpan(scene)})` : null,
     scene.beatAligned ? 'beat-aligned' : null,
     layer === 'footage' && loops && !performance ? 'loops' : null,
     layer !== 'footage' && scene.camera?.move ? `camera ${scene.camera.move}` : null,
@@ -234,14 +238,16 @@ export default function SceneCard({
   );
   const shotSettings = (
     <>
+        {/* Whether the shot plays before the song (the cold open), with its own length and sound. */}
+        <ScenePreMusic fieldId={fieldId} scene={scene} onChange={applyPatch} />
         {/* Move the cut before this shot a frame at a time; the shot before ends where this one starts. */}
-        {onMoveStart && sceneHasAuthoredSpan(scene) && (
+        {!preMusic && onMoveStart && sceneHasAuthoredSpan(scene) && (
           <SceneStartFrame id={fieldId('start-frame')} scene={scene} joinsPrevious={(scene.order ?? index) > 0} onMove={onMoveStart}
             disabled={shotLock?.clip === 'locked'} disabledReason={shotLock?.clip === 'locked' ? 'Video locked. Unlock the video to retime it.' : null} />
         )}
         {/* What this shot's render covers and costs, and what blocks it, stays in view. */}
-        <SceneTimingPlan timing={timing} sceneId={scene.sceneId} lipSyncBackend={renderLane} onSplit={onSplit} onMergeNext={onMergeNext} onMergePrevious={onMergePrevious}
-          span={sceneHasAuthoredSpan(scene) ? { startSec: scene.startSec, endSec: scene.endSec } : null} />
+        {!preMusic && <SceneTimingPlan timing={timing} sceneId={scene.sceneId} lipSyncBackend={renderLane} onSplit={onSplit} onMergeNext={onMergeNext} onMergePrevious={onMergePrevious}
+          span={sceneHasAuthoredSpan(scene) ? { startSec: scene.startSec, endSec: scene.endSec } : null} />}
         {/* A VHS glitch riding on the cut into or out of this shot; never moves the cut. */}
         <SceneTransitions fieldId={fieldId} scene={scene} onChange={applyPatch} />
         {/* How this shot hands over to the next: a cut, beat toggle, dissolve or fade, as its storyboard row plans until one is picked. */}
@@ -250,7 +256,7 @@ export default function SceneCard({
         {/* Glitches at moments inside the shot, set and moved on a slider; they add no time. */}
         <SceneGlitches fieldId={fieldId} scene={scene} onChange={applyPatch} />
         {/* Where the lyrics over this shot sit, their style and size, whenever the render draws lyrics (a card draws its own text). */}
-        {(documentComposition || (layer !== 'card' && composedDrawsLyrics(project))) && <SceneLyricType fieldId={fieldId} scene={scene} onChange={applyPatch} />}
+        {!preMusic && (documentComposition || (layer !== 'card' && composedDrawsLyrics(project))) && <SceneLyricType fieldId={fieldId} scene={scene} onChange={applyPatch} />}
         {/* Everything set once and rarely revisited: timing, shot mode, layer, and a non-footage shot's camera. */}
         <details className="group/settings rounded border border-port-border">
           <summary className="flex min-h-[44px] cursor-pointer items-center gap-2 px-2 text-xs marker:content-none sm:min-h-[32px] [&::-webkit-details-marker]:hidden">
@@ -260,7 +266,7 @@ export default function SceneCard({
           </summary>
           <div className="space-y-2 p-2 pt-0">
         <div className="flex flex-wrap gap-2 items-center text-xs">
-          {SCENE_TIME_FIELDS.map(([labelText, key]) => {
+          {!preMusic && SCENE_TIME_FIELDS.map(([labelText, key]) => {
             const toValue = (v) => (v === '' ? null : Number(v));
             return (
               <label key={key} className="flex items-center gap-1">{labelText}
@@ -461,16 +467,16 @@ export default function SceneCard({
           onOpenPreview={onOpenPreview} takeBusy={takeBusy} onSelectTake={onSelectTake} onReviewTake={onReviewTake}
           onSwap={onPlacePoolItem ? setSwapKind : null} onSwapFrames={onSwapFrames ? () => onSwapFrames(scene) : null} onImportTake={onImportTake}
           onContinueFromPrevious={layer === 'footage' && index > 0 ? onContinueFromPrevious : null} previousHasClip={previousHasClip}
-          clipLocked={shotLock?.clip === 'locked'} assetMarks={project?.assetMarks} onMarkTake={onMarkTake} />
+          clipLocked={shotLock?.clip === 'locked'} stillLocked={shotLock?.still === 'locked'} assetMarks={project?.assetMarks} onMarkTake={onMarkTake} />
         {/* Clip: the motion prompt, where this shot renders and what it costs, then its clip (Phase 1). */}
         <section aria-label="Render" className="min-w-0 space-y-2">
           <h4 className="text-xs font-medium">Clip</h4>
           {/* A clip, the still, or the still playing a code-drawn image effect (no model call). */}
           {layered && (layer === 'footage' || layer === 'still') && (
-            <SceneImageEffect fieldId={fieldId} scene={scene} onChange={applyPatch}
+            <SceneImageEffect fieldId={fieldId} scene={scene} onChange={applyPatch} beats={project?.audioAnalysis?.beats} fps={photoFps}
               disabled={shotLock?.clip === 'locked'} disabledReason={shotLock?.clip === 'locked' ? 'Video locked. Unlock the video to change it.' : null} />
           )}
-          {stillPicture ? <ScenePicturePreview scene={scene} /> : (
+          {stillPicture ? <ScenePicturePreview scene={scene} beats={project?.audioAnalysis?.beats} fps={photoFps} /> : (
           <>
           {scene.videoHistoryId && performance && (
             <PerformanceEvidence key={scene.videoHistoryId} clipSrc={clipSrc} instruction={instruction}

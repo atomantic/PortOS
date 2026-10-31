@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdir, mkdtemp, rm, writeFile } from 'fs/promises';
+import { access, mkdir, mkdtemp, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
@@ -7,9 +7,20 @@ import { mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
 const { makeProxy, cleanup } = mockPathsDataRoot({ prefix: 'portos-interactive-usage-' });
 vi.mock('../lib/fileUtils.js', async () => makeProxy(await vi.importActual('../lib/fileUtils.js')));
 const applied = [];
+// Stand-in for usage.json's `interactiveScan`: a commit lands only when the mocked save succeeds.
+const ledger = vi.hoisted(() => ({ scan: null, failStateSave: false }));
 vi.mock('./usage.js', () => ({
-  applyHistoricalUsageCorrections: vi.fn(async (corrections) => { applied.push(...corrections); return { corrected: corrections.length, correctedRunIds: [] }; }),
-  forgetSiblingReconciledUsageRuns: vi.fn(async () => {})
+  applyHistoricalUsageCorrections: vi.fn(async (corrections, { interactiveScan = null } = {}) => {
+    applied.push(...corrections);
+    if (interactiveScan) ledger.scan = structuredClone(interactiveScan);
+    return { corrected: corrections.length, correctedRunIds: [] };
+  }),
+  forgetSiblingReconciledUsageRuns: vi.fn(async () => {}),
+  getInteractiveScanState: vi.fn(async () => (ledger.scan ? structuredClone(ledger.scan) : null)),
+  setInteractiveScanState: vi.fn(async (state) => {
+    if (ledger.failStateSave) throw new Error('simulated usage.json write failure');
+    ledger.scan = structuredClone(state);
+  })
 }));
 afterAll(cleanup);
 
@@ -48,6 +59,8 @@ describe('refreshInteractiveUsage', () => {
   let runsDir;
   beforeEach(async () => {
     applied.length = 0;
+    ledger.scan = null;
+    ledger.failStateSave = false;
     home = await mkdtemp(join(tmpdir(), 'interactive-home-'));
     runsDir = await mkdtemp(join(tmpdir(), 'interactive-runs-'));
     await rm(INTERACTIVE_SCAN_FILE, { force: true });
@@ -199,5 +212,60 @@ describe('refreshInteractiveUsage', () => {
     expect(first.sidechainRepair.tokensOut).toBe(300);
     const second = await refreshInteractiveUsage({ home, runsDir, providers: [CLAUDE], now: NOW + 10 * 60_000 });
     expect(second.sidechainRepair).toBeUndefined();
+  });
+
+  const billedOut = () => applied.reduce((sum, c) => sum + c.siblings.reduce((n, r) => n + r.tokensOut, 0), 0);
+
+  it('does not re-bill a committed family when a later family fails mid-scan', async () => {
+    ledger.failStateSave = true;
+    await expect(refreshInteractiveUsage({ home, runsDir, providers: [GROK, AGY], now: NOW })).rejects.toThrow(/simulated/);
+    expect(billedOut()).toBe(700);
+
+    // Restart: the same fixtures, the grok watermark already committed with its counts.
+    ledger.failStateSave = false;
+    applied.length = 0;
+    await refreshInteractiveUsage({ home, runsDir, providers: [GROK, AGY], now: NOW + 60_000 });
+    expect(applied.filter((c) => c.providerId === 'grok-cli')).toEqual([]);
+  });
+
+  it('keeps the watermark in the ledger and never writes the legacy scan file', async () => {
+    await refreshInteractiveUsage({ home, runsDir, providers: [GROK], now: NOW });
+    expect(ledger.scan.watermarks.grok).toBe(NOW - 5 * 60_000);
+    await expect(access(INTERACTIVE_SCAN_FILE)).rejects.toThrow();
+  });
+
+  it('does not repeat the sidechain repair after its commit, even with a later process start', async () => {
+    const dir = join(home, '.claude', 'projects', '-example-workspace', 'sess-1', 'subagents');
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, 'agent-1.jsonl'), JSON.stringify({
+      type: 'assistant', timestamp: new Date(NOW - 10 * HOUR).toISOString(), cwd: CWD, requestId: 'req-old',
+      message: { id: 'old', model: 'example-claude-model', usage: { input_tokens: 10, output_tokens: 300, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } }
+    }));
+    await mkdir(join(runsDir, 'settled'), { recursive: true });
+    await writeFile(join(runsDir, 'settled', 'metadata.json'), JSON.stringify({
+      workspacePath: CWD, startTime: new Date(NOW - 10 * HOUR - 60_000).toISOString(), endTime: new Date(NOW - 10 * HOUR + 60_000).toISOString(),
+      usageReconciled: true, usageReconciledAt: new Date(NOW - 9 * HOUR).toISOString()
+    }));
+    const first = await refreshInteractiveUsage({ home, runsDir, providers: [CLAUDE], now: NOW });
+    expect(first.sidechainRepair.tokensOut).toBe(300);
+
+    // Restarted process: the cutoff moves to the new boot, which would re-settle the run.
+    const uptime = vi.spyOn(process, 'uptime').mockReturnValue(1);
+    try {
+      const second = await refreshInteractiveUsage({ home, runsDir, providers: [CLAUDE], now: NOW + 10 * 60_000 });
+      expect(second.sidechainRepair).toBeUndefined();
+    } finally {
+      uptime.mockRestore();
+    }
+  });
+
+  it('adopts the legacy scan file once, and fails the scan when it is damaged', async () => {
+    await writeFile(INTERACTIVE_SCAN_FILE, JSON.stringify({ watermarks: { grok: NOW - 5 * 60_000 }, sidechainRepairedAt: 'x' }));
+    await refreshInteractiveUsage({ home, runsDir, providers: [GROK], now: NOW });
+    expect(applied).toEqual([]);
+
+    ledger.scan = null;
+    await writeFile(INTERACTIVE_SCAN_FILE, '{not-json');
+    await expect(refreshInteractiveUsage({ home, runsDir, providers: [GROK], now: NOW })).rejects.toThrow();
   });
 });

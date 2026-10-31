@@ -32,19 +32,19 @@ export default function MortalLoomBanner({ section = 'this data' }) {
         <p className="text-xs text-gray-400 mt-0.5">
           Manage your longevity data natively on iPhone, iPad, and Mac — synced privately via iCloud.
         </p>
-        <div className="flex items-center gap-3 mt-2">
+        <div className="flex flex-wrap items-center gap-3 mt-2">
           <a
             href={APP_STORE_URL}
             target="_blank"
             rel="noopener noreferrer"
-            className="inline-flex items-center gap-1 text-xs px-3 py-1 bg-port-accent text-white rounded-lg hover:bg-port-accent/80 transition-colors"
+            className="inline-flex items-center gap-1 pointer-coarse:min-h-11 text-xs px-3 py-1 bg-port-accent text-white rounded-lg hover:bg-port-accent/80 transition-colors"
           >
             Install on App Store
             <ExternalLink size={10} />
           </a>
           <Link
             to="/settings/mortalloom"
-            className="text-xs text-gray-400 hover:text-white transition-colors"
+            className="inline-flex items-center pointer-coarse:min-h-11 text-xs text-gray-400 hover:text-white transition-colors"
           >
             Configure iCloud sync →
           </Link>
@@ -52,7 +52,7 @@ export default function MortalLoomBanner({ section = 'this data' }) {
       </div>
       <button
         onClick={handleDismiss}
-        className="shrink-0 text-gray-500 hover:text-white transition-colors"
+        className="shrink-0 -mt-3 -mr-3 min-h-[44px] min-w-[44px] inline-flex items-center justify-center rounded-lg text-gray-500 hover:text-white transition-colors"
         aria-label="Dismiss"
       >
         <X size={16} />

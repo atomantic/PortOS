@@ -4,11 +4,15 @@ import * as api from '../../../services/api';
 import BrailleSpinner from '../../BrailleSpinner';
 import BloodTestCard from '../BloodTestCard';
 import LoadFailureNotice from '../LoadFailureNotice';
+import CollapsibleListItem from '../../ui/CollapsibleListItem';
+import useConfirmDelete from '../../../hooks/useConfirmDelete';
 
 export default function BloodTab() {
   const [bloodData, setBloodData] = useState(null);
   const [failed, setFailed] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [removingId, setRemovingId] = useState(null);
+  const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
 
   const fetchData = useCallback(async () => {
     const blood = await api.getBloodTests({ silent: true }).catch(() => null);
@@ -47,9 +51,28 @@ export default function BloodTab() {
             <p className="text-gray-500 text-sm">No blood test data. Import your health spreadsheet or add tests manually.</p>
           </div>
         ) : (
-          <div className="space-y-4">
-            {[...bloodTests].reverse().map((test, i) => (
-              <BloodTestCard key={i} test={test} />
+          <div>
+            {[...bloodTests].reverse().map((test) => (
+              <CollapsibleListItem
+                key={test.id || test.date}
+                spacing="1rem"
+                removing={removingId === test.id}
+                onExited={() => {
+                  setBloodData(prev => ({ ...prev, tests: (prev?.tests || []).filter(row => row.id !== test.id) }));
+                  setRemovingId(null);
+                }}
+              >
+                <BloodTestCard
+                  test={test}
+                  confirming={isConfirming(test.id)}
+                  onRequestDelete={() => requestDelete(test.id)}
+                  onConfirmDelete={() => confirmDelete(async () => {
+                    const removed = await api.removeBloodTest(test.id).catch(() => null);
+                    if (removed) setRemovingId(test.id);
+                  })}
+                  onCancelDelete={cancelDelete}
+                />
+              </CollapsibleListItem>
             ))}
           </div>
         )}

@@ -1186,3 +1186,24 @@ it('atomically guards dated event edits and deletes after a date move while pres
   expect(await store.mlRemoveById('alcoholDrinks', 'target')).toMatchObject({ id: 'target', name: 'Updated' });
   expect(persisted.alcoholDrinks).toEqual([]);
 });
+
+it('clears blood-pressure fields the date upsert would skip when passed null', async () => {
+  let persisted = {
+    healthMetrics: [
+      { id: 'M1', date: '2026-04-02', bloodPressureSystolic: 118, bloodPressureDiastolic: 76, heartRate: 60 },
+      { id: 'M2', date: '2026-04-03', bloodPressureSystolic: 120, bloodPressureDiastolic: 80 },
+    ],
+  };
+  readFileMock.mockImplementation(async () => JSON.stringify(persisted));
+  writeFileMock.mockImplementation(async (_path, content) => { persisted = JSON.parse(content); });
+  await store.mlUpsertHealthMetricByDate('2026-04-02', { bloodPressureSystolic: null, bloodPressureDiastolic: null });
+  expect(persisted.healthMetrics.find(row => row.date === '2026-04-02')).toMatchObject({
+    bloodPressureSystolic: 118, bloodPressureDiastolic: 76, heartRate: 60,
+  });
+  expect(await store.mlClearHealthMetricFields('2026-04-02', ['bloodPressureSystolic', 'bloodPressureDiastolic']))
+    .toMatchObject({ date: '2026-04-02', bloodPressureSystolic: 118, bloodPressureDiastolic: 76 });
+  expect(persisted.healthMetrics.find(row => row.date === '2026-04-02')).toEqual({ id: 'M1', date: '2026-04-02', heartRate: 60 });
+  await store.mlClearHealthMetricFields('2026-04-03', ['bloodPressureSystolic', 'bloodPressureDiastolic']);
+  expect(persisted.healthMetrics.find(row => row.date === '2026-04-03')).toBeUndefined();
+  expect(await store.mlClearHealthMetricFields('2026-04-09', ['bloodPressureSystolic', 'bloodPressureDiastolic'])).toBeNull();
+});

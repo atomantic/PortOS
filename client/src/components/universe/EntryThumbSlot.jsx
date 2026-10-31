@@ -24,6 +24,7 @@
 import { useCallback, useState, useEffect } from 'react';
 import { Sparkles, Star } from 'lucide-react';
 import MediaJobThumb from '../pipeline/MediaJobThumb';
+import { galleryTileSources } from '../../lib/imageThumbnailSrc';
 
 const THUMB_DIMENSIONS = {
   sm: 'w-12 h-20',
@@ -216,11 +217,12 @@ function WalkBackThumb({
       }
     }
   }
+  const sources = galleryTileSources(candidates);
   const candidateKey = candidates.join('|');
   const [idx, setIdx] = useState(0);
   useEffect(() => { setIdx(0); }, [candidateKey]);
   const box = thumbFrameProps(size, aspectRatio, { fluid });
-  if (!candidates.length || idx >= candidates.length) {
+  if (!sources.length || idx >= sources.length) {
     // All candidates failed to load — collapse to empty (no render button
     // here; the user can re-render from the action column).
     return (
@@ -230,11 +232,11 @@ function WalkBackThumb({
       />
     );
   }
-  const currentFilename = candidates[idx];
+  const { name: currentFilename, src: currentSrc } = sources[idx];
   const contain = isPositiveEdge(aspectRatio?.width) && isPositiveEdge(aspectRatio?.height);
   const img = (
     <img
-      src={`/data/images/${currentFilename}`}
+      src={currentSrc}
       alt={alt || currentFilename}
       className={`w-full h-full ${contain ? 'object-contain' : 'object-cover'}`}
       loading="lazy"

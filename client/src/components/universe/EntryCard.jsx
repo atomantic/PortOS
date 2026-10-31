@@ -33,6 +33,7 @@
  */
 import { useId, useState, useEffect, isValidElement } from 'react';
 import { Star } from 'lucide-react';
+import { galleryTileSources } from '../../lib/imageThumbnailSrc';
 
 export default function EntryCard({
   locked = false,
@@ -116,12 +117,13 @@ function EntryCardThumbnail({ filename, alt, onClick, isPrimary = false, fallbac
   // Walked past the end → all files are missing on disk. Collapse rather than
   // render a broken `<img>`; matches the contract that no avatar shows when
   // there are no resolvable renders.
-  if (!candidates.length || idx >= candidates.length) return null;
-  const currentFilename = candidates[idx];
+  const sources = galleryTileSources(candidates);
+  if (!sources.length || idx >= sources.length) return null;
+  const { name: currentFilename, src: currentSrc } = sources[idx];
 
   const img = (
     <img
-      src={`/data/images/${currentFilename}`}
+      src={currentSrc}
       alt={alt || currentFilename}
       className="w-full h-full object-cover"
       loading="lazy"

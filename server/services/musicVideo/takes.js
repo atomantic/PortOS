@@ -11,7 +11,8 @@ import { assertMusicVideoMedia } from '../../lib/musicVideoMediaPolicy.js';
  *
  *   - a completed/imported asset is APPENDED as a candidate and only fills the
  *     slot while the slot is empty (initial generation) — it never replaces a
- *     selection;
+ *     selection, unless the submit asked to (`replaceSelection`, a one-tap
+ *     re-render of a still);
  *   - selecting a take is an explicit action (`selectSceneTake`);
  *   - rejecting the selected take clears the slot, so the next completion (or
  *     "Generate missing") fills it — selective regeneration.
@@ -22,6 +23,7 @@ import { assertMusicVideoMedia } from '../../lib/musicVideoMediaPolicy.js';
  * take the first time a take operation touches the scene (no record rewrite).
  */
 
+import { musicVideoCastInputsRecord } from '../../lib/musicVideoCastLook.js';
 import { captureTakeDependencies, musicVideoTakeChanges, retainMusicVideoDependencies } from '../../lib/musicVideoDependencies.js';
 import { randomUUID } from 'crypto';
 import { ServerError } from '../../lib/errorHandler.js';
@@ -52,7 +54,8 @@ const clip = (v, max) => (isNonBlankStr(v) ? trimTo(v, max) : null);
 // A basename only — an imported file's name is provenance, never a path.
 const takeOriginalName = (name) => (isNonBlankStr(name) ? clip(name.split(/[\\/]/).pop(), 200) : null);
 
-function buildTake({ kind, assetId, source, provider = null, jobId = null, prompt = null, sourceImageId = null, originalName = null, shotInstruction = null, use = 'final', dependencies = null, inputAssets = null, costUsd = null, spendKind = null, costModelId = null, now }) {
+function buildTake({ kind, assetId, source, provider = null, jobId = null, prompt = null, sourceImageId = null, originalName = null, shotInstruction = null, use = 'final', dependencies = null, inputAssets = null, castInputs = null, costUsd = null, spendKind = null, costModelId = null, now }) {
+  const recordedCastInputs = kind === 'image' || kind === 'endImage' ? musicVideoCastInputsRecord(castInputs) : null;
   return {
     takeId: `mvt-${randomUUID()}`,
     kind,
@@ -65,6 +68,7 @@ function buildTake({ kind, assetId, source, provider = null, jobId = null, promp
     originalName: takeOriginalName(originalName),
     status: 'candidate',
     ...(dependencies ? { dependencies: structuredClone(dependencies) } : {}),
+    ...(recordedCastInputs ? { castInputs: recordedCastInputs } : {}),
     ...(inputAssets?.length ? { inputAssets: structuredClone(inputAssets) } : {}),
     // #8980 — 'motion-reference' scaffolding never fills the slot on its own.
     use: use === 'motion-reference' ? 'motion-reference' : 'final',
@@ -134,8 +138,9 @@ function replaceScene(project, idx, scene) {
  * Append candidate takes to one scene. Idempotent per asset: an asset already
  * present as a take of that kind is not duplicated (a replayed job completion
  * or a re-import is a no-op for the list). A slot is filled only while it is
- * empty, by the first appended take of that kind; an existing selection is
- * never replaced, and a motion-reference take (#8980) never fills a slot — it
+ * empty, by the first appended take of that kind. An existing selection is
+ * replaced only when that input sets `replaceSelection` on an image or end
+ * frame. A motion-reference take (#8980) never fills a slot — it
  * becomes final picture only by an explicit select. A take already stale
  * against the whole PROJECT (its plate, timing, or for a supplied-audio take
  * the song master/lyrics) does not fill either; the check needs the real
@@ -154,7 +159,9 @@ function appendToScene(project, scene, inputs, now) {
     if (!existing) takes = [...takes, take];
     appended.push(take);
     const field = TAKE_SLOT[input.kind];
-    if (!isNonBlankStr(next[field]) && take.status !== 'rejected' && take.use !== 'motion-reference' && !musicVideoTakeChanges(project, scene, take).length) next[field] = take.assetId;
+    const selectable = take.status !== 'rejected' && take.use !== 'motion-reference' && !musicVideoTakeChanges(project, scene, take).length;
+    const replaceFrame = input.replaceSelection === true && (input.kind === 'image' || input.kind === 'endImage');
+    if (selectable && (!isNonBlankStr(next[field]) || replaceFrame)) next[field] = take.assetId;
   }
   next.takes = pruneTakes(takes, next);
   // A take landing for the lane a failure was recorded against is the retry

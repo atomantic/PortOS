@@ -21,6 +21,7 @@ vi.mock('../lib/db.js', () => {
       .map((ref) => ({ ...ref, resolved: !!state.universes[ref.refId] })) };
     if (sql.includes('SELECT id FROM universes')) return { rows: state.universes[params[0]] ? [{ id: params[0] }] : [] };
     if (sql.includes('SELECT id, name AS name FROM universes')) return { rows: params[0].filter((id) => state.universes[id]).map((id) => ({ id, name: state.universes[id] })) };
+    if (sql.includes('SELECT type FROM catalog_ingredients')) return { rows: state.ingredients[params[0]] ? [{ type: state.ingredients[params[0]].type }] : [] };
     if (sql.includes('SELECT id FROM catalog_ingredients')) return { rows: state.ingredients[params[0]] ? [{ id: params[0] }] : [] };
     if (sql.includes('UPDATE catalog_ingredient_refs')) {
       state.refs = state.refs.map((ref) => ref.ingredientId === params[0] && ref.role === params[1] && ref.refId !== params[2] ? { ...ref, deleted: true } : ref);
@@ -30,10 +31,12 @@ vi.mock('../lib/db.js', () => {
       state.relations.push({ fromId: params[0], toId: params[1], kind: 'forked-from' });
       return { rows: [] };
     }
+    if (sql.includes('FROM catalog_identity_read_media')) return { rows: state.media
+      .filter((media) => media.ingredientId === params[0] && !media.deleted && ['portrait', 'reference'].includes(media.kind))
+      .map((media) => ({ media_key: media.mediaKey, kind: media.kind, caption: media.caption ?? null, metadata: {}, library: structuredClone(media.library || {}) })) };
     if (sql.includes('INSERT INTO catalog_ingredient_media')) {
       if (db.failMedia) throw new Error('Attachment write failed');
-      state.media.push(...state.media.filter((media) => media.ingredientId === params[1] && ['portrait', 'reference'].includes(media.kind))
-        .map((media) => ({ ...structuredClone(media), ingredientId: params[0], role: 'fork-reference', library: {} })));
+      state.media.push({ ingredientId: params[0], mediaKey: params[1], kind: params[2], role: 'fork-reference', caption: params[3], library: JSON.parse(params[5]) });
       return { rows: [] };
     }
     throw new Error(`Unexpected test query: ${sql.slice(0, 80)}`);
@@ -67,9 +70,23 @@ vi.mock('../services/catalogDB/refs.js', () => ({
   unlinkIngredientFromRef: async () => {},
 }));
 vi.mock('../services/catalogPrimitiveUsage.js', () => ({ listPrimitiveUsages: async () => [] }));
+vi.mock('../services/universeBuilder.js', () => ({
+  updateUniverse: async (id, mutator, { afterWrite }) => {
+    const { withTransaction } = await import('../lib/db.js');
+    if (!db.state.canon[id]) throw Object.assign(new Error(`Universe not found: ${id}`), { code: 'NOT_FOUND' });
+    return withTransaction(async (client) => {
+      const current = db.state.canon[id];
+      const patch = await mutator(structuredClone(current), { client });
+      if (patch) Object.assign(current, patch);
+      await afterWrite(current, { client });
+      return current;
+    });
+  },
+}));
 
 import router from './catalogPrimitives.js';
 import { createOwnedPrimitive } from '../services/catalogPrimitives.js';
+import { BIBLE_LIMITS } from '../lib/storyBible.js';
 
 const app = express();
 app.use(express.json());
@@ -81,7 +98,8 @@ const operationKey = 'd48e7a1a-3f88-42a7-93ab-a2650562a290';
 beforeEach(() => {
   db.failMedia = false;
   db.access = null;
-  db.state = { universes: { first: 'First universe', second: 'Second universe' }, receipts: {}, relations: [], revisions: [],
+  db.state = { universes: { first: 'First universe', second: 'Second universe' }, canon: { first: { characters: [] }, second: { characters: [] } },
+    receipts: {}, relations: [], revisions: [],
     refs: [{ ingredientId: 'cat-chr-source', refKind: 'universe', refId: 'first', role: 'owner' }],
     ingredients: { 'cat-chr-source': { id: 'cat-chr-source', type: 'character', name: 'Example courier', tags: [], syncSequence: '72',
       payload: { physicalDescription: 'A blue coat.', locked: true, voiceId: 'local-voice', voiceCanon: { description: 'Quiet', approved: true },
@@ -135,12 +153,16 @@ describe('creative primitive ownership and forks', () => {
     expect(db.state.relations).toEqual([{ fromId: fork.id, toId: before.id, kind: 'forked-from' }]);
     expect(db.state.revisions[0].actor).toBe('fork:cat-chr-source@72');
     expect(db.state.media.filter((media) => media.ingredientId === fork.id)).toEqual([
-      expect.objectContaining({ mediaKey: 'coat.png', kind: 'portrait', library: {} }),
+      expect.objectContaining({ mediaKey: 'coat.png', kind: 'portrait', library: { guide: true } }),
     ]);
+    // The fork is a canon member of its universe, so its record page has a writable canon binding.
+    expect(db.state.canon.second.characters).toEqual([expect.objectContaining({ ingredientId: fork.id, name: fork.name, locked: false })]);
+    expect(db.state.refs).toContainEqual({ ingredientId: fork.id, refKind: 'universe', refId: 'second', role: 'canon-character' });
     db.state.ingredients[before.id].payload.physicalDescription = 'Later source edit';
     const replay = await request(app).post(`${path}/fork`).send(input);
     expect(replay.body).toEqual(fork);
     expect(Object.keys(db.state.ingredients)).toHaveLength(2);
+    expect(db.state.canon.second.characters).toHaveLength(1);
     const mismatch = await request(app).post(`${path}/fork`).send({ ...input, name: 'Different submission' });
     expect(mismatch.status).toBe(409);
   });
@@ -187,6 +209,48 @@ describe('creative primitive ownership and forks', () => {
     expect(db.state.ingredients[before.id]).toEqual(before);
     expect(db.state.refs).toContainEqual({ ingredientId: response.body.id, refKind: 'universe', refId: 'first', role: 'owner' });
     expect(db.state.relations).toContainEqual({ fromId: response.body.id, toId: before.id, kind: 'forked-from' });
+  });
+
+  it('seeds a redesign fork with only the picked images, their ages re-keyed, and the redesigned fields', async () => {
+    const source = db.state.ingredients['cat-chr-source'];
+    source.payload.imageRefs = ['coat.png', 'young.png', 'canon-only.png'];
+    db.state.media.push(
+      { ingredientId: 'cat-chr-source', mediaKey: 'young.png', kind: 'reference', role: 'upload', caption: 'At seven',
+        library: { variant: { formId: 'older', age: 7, wardrobeId: 'outfit' }, likeness: false, review: { status: 'good' }, tags: ['rink'] } },
+      { ingredientId: 'cat-chr-source', mediaKey: 'teen.png', kind: 'reference', role: 'upload', library: { variant: { age: 17 } } },
+    );
+    const before = structuredClone(db.state.ingredients['cat-chr-source']);
+    const response = await request(app).post(`${path}/fork`).send({ universeId: 'first', name: 'Courier v2', seedImages: ['young.png', 'canon-only.png'],
+      fields: { physicalDescription: 'A red coat.' }, operationKey });
+    expect(response.status).toBe(201);
+    const fork = response.body;
+    expect(fork.payload.physicalDescription).toBe('A red coat.');
+    expect(fork.payload.imageRefs).toEqual(['young.png', 'canon-only.png']);
+    expect(fork.payload.primaryImageRef).toBe('young.png');
+    expect(fork.payload.identityPack?.assets ?? []).toEqual([]);
+    expect(db.state.media.filter((media) => media.ingredientId === fork.id)).toEqual([{ ingredientId: fork.id, mediaKey: 'young.png', kind: 'reference',
+      role: 'fork-reference', caption: 'At seven', library: { variant: { formId: fork.payload.forms[0].id, age: 7, wardrobeId: fork.payload.wardrobes[0].id },
+        tags: ['rink'], likeness: false, guide: false } }]);
+    expect(db.state.ingredients[before.id]).toEqual(before);
+  });
+
+  it('refuses a fork whose picked image left the source or whose field is not a redesign field, writing nothing', async () => {
+    const before = structuredClone(db.state);
+    const missing = await request(app).post(`${path}/fork`).send({ universeId: 'first', seedImages: ['gone.png'], operationKey });
+    expect(missing.status).toBe(409);
+    expect(missing.body.code).toBe('CATALOG_FORK_SEED_MISSING');
+    const field = await request(app).post(`${path}/fork`).send({ universeId: 'first', fields: { voiceId: 'x' }, operationKey: 'b0d52efa-a06a-47b8-81aa-393ea39c83f4' });
+    expect(field.status).toBe(400);
+    expect(db.state).toEqual(before);
+  });
+
+  it('refuses a fork into a full canon bucket, writing nothing', async () => {
+    db.state.canon.first.characters = Array.from({ length: BIBLE_LIMITS.ENTRIES_PER_BIBLE_MAX }, (_, index) => ({ id: `character-${index}`, name: `Extra ${index}` }));
+    const before = structuredClone(db.state);
+    const response = await request(app).post(`${path}/fork`).send({ universeId: 'first', operationKey });
+    expect(response.status).toBe(409);
+    expect(response.body.code).toBe('UNIVERSE_CANON_FULL');
+    expect(db.state).toEqual(before);
   });
 
   it('validates the public request before any write and requires a real destination', async () => {

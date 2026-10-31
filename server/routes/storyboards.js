@@ -9,8 +9,9 @@ import { asyncHandler } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
 import {
   storyboardBeatCreateSchema, storyboardBeatUpdateSchema, storyboardCreateSchema, storyboardMoveSchema,
-  storyboardPanelCreateSchema, storyboardPanelMoveSchema, storyboardPanelNodeUpdateSchema, storyboardPanelUpdateSchema,
+  storyboardMakeEmptySchema, storyboardPanelCorrectSchema, storyboardPanelCreateSchema, storyboardPanelMoveSchema, storyboardPanelNodeUpdateSchema, storyboardPanelUpdateSchema,
   storyboardBeatsAddSchema, storyboardFitSchema, storyboardFromFableLoomSchema, storyboardPipelineUpdateSchema, storyboardVideoStartSchema, storyboardPlotExtractSchema, storyboardRecipeSchema, storyboardSavedRecipeSchema, storyboardTakeCreateSchema, storyboardUpdateSchema,
+  storyboardShotSyncAutoSchema, storyboardShotSyncSchema,
 } from '../lib/storyboardValidation.js';
 import {
   addBeat, addPanel, addPanelTake, createStoryboard, deleteBeat, deletePanel, deleteStoryboard, getStoryboard,
@@ -18,9 +19,10 @@ import {
   updateStoryboard,
 } from '../services/storyboards/index.js';
 import {
-  getMakeEmptyPlan, getPanelMake, runPanelNode, startMakeEmpty, updatePanelNode, updateRecipe,
+  correctPanel, drawPanel, getMakeEmptyPlan, getPanelMake, runPanelNode, startMakeEmpty, updatePanelNode, updateRecipe,
 } from '../services/storyboards/make.js';
-import { fitMusicVideoToStoryboard, updateShotFromPanel, sendShotStillToPanel } from '../services/storyboards/fitMusicVideo.js';
+import { fitMusicVideoToStoryboard, groupStoryboardBySong, updateShotFromPanel, sendShotStillToPanel } from '../services/storyboards/fitMusicVideo.js';
+import { setMusicVideoShotSync, syncMusicVideoShots } from '../services/storyboards/syncMusicVideo.js';
 import { makeStoryboardFromMusicVideo } from '../services/storyboards/fromMusicVideo.js';
 import { makeStoryboardFromFableLoom } from '../services/storyboards/fromFableLoom.js';
 import { openStoryboardForPipelineIssue, pipelineStoryboardChanges, updatePipelineShotsFromBoard } from '../services/storyboards/fromPipeline.js';
@@ -67,6 +69,19 @@ router.post('/pipeline/:issueId/update-from-board', asyncHandler(async (req, res
 // Fit to song: write the video's shots from its linked board, as previewed.
 router.post('/fit-music-video/:projectId', asyncHandler(async (req, res) => {
   res.json(await fitMusicVideoToStoryboard(req.params.projectId, validateRequest(storyboardFitSchema, req.body || {})));
+}));
+
+// Sync shots: one shot per panel at the panel's own time, kept 1:1 after each board edit.
+router.post('/sync-music-video/:projectId', asyncHandler(async (req, res) => {
+  res.json(await syncMusicVideoShots(req.params.projectId, validateRequest(storyboardShotSyncSchema, req.body || {})));
+}));
+router.put('/sync-music-video/:projectId/auto', asyncHandler(async (req, res) => {
+  res.json(await setMusicVideoShotSync(req.params.projectId, validateRequest(storyboardShotSyncAutoSchema, req.body || {}).on));
+}));
+
+// Group the linked board's beats by the song's sections (panels unchanged).
+router.post('/group-by-song/:projectId', asyncHandler(async (req, res) => {
+  res.json(await groupStoryboardBySong(req.params.projectId));
 }));
 
 // A fitted shot and its panel: Update takes the edited panel's action; panel art sends the still back.
@@ -177,6 +192,18 @@ router.post('/:id/panels/:panelId/make/:nodeId/run', asyncHandler(async (req, re
   res.json(await runPanelNode(req.params.id, req.params.panelId, req.params.nodeId));
 }));
 
+// Draw a panel: the writer rewrites its prompt, then one frame is queued and
+// becomes the panel's art (answers once it's queued).
+router.post('/:id/panels/:panelId/draw', asyncHandler(async (req, res) => {
+  res.json(await drawPanel(req.params.id, req.params.panelId));
+}));
+
+// Correct a frame: the writer redoes its prompt with the note, then the image
+// node queues new frames from the marked-up frame (answers once they're queued).
+router.post('/:id/panels/:panelId/correct', asyncHandler(async (req, res) => {
+  res.json(await correctPanel(req.params.id, req.params.panelId, validateRequest(storyboardPanelCorrectSchema, req.body ?? {})));
+}));
+
 // Beats from a plot summary: extract answers with a preview (the board only
 // keeps the plot and LLM pick); add appends the beats the user keeps.
 router.post('/:id/beats/extract', asyncHandler(async (req, res) => {
@@ -194,7 +221,7 @@ router.get('/:id/make-empty', asyncHandler(async (req, res) => {
 }));
 
 router.post('/:id/make-empty', asyncHandler(async (req, res) => {
-  res.status(202).json(await startMakeEmpty(req.params.id));
+  res.status(202).json(await startMakeEmpty(req.params.id, validateRequest(storyboardMakeEmptySchema, req.body ?? {})));
 }));
 
 export default router;

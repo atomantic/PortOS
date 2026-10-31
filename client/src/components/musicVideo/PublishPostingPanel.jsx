@@ -3,6 +3,7 @@ import ConfirmButtonPair from '../ui/ConfirmButtonPair.jsx';
 import { safeReadJsonStorage, safeRemoveStorage } from '../../lib/safeStorage.js';
 import { ExternalLink, X as XIcon, LogIn, Link as LinkIcon, Check, ChevronDown, ChevronRight, ImageOff, Undo2 } from 'lucide-react';
 import PublishCard from './PublishCard.jsx';
+import ListLoadError from '../ui/ListLoadError.jsx';
 import { DISTROKID_GENRES, DISTROKID_REMEMBERED_OPTIONS, suggestDistrokidGenres } from '../../../../server/lib/distrokidGenres.js';
 import { publishRowAnchor } from '../../lib/musicVideoStages.js';
 
@@ -597,7 +598,8 @@ export default function PublishPostingPanel({ project, publishing, excerpts = nu
     <PublishCard projectId={project.id} cardId="posting" label="Publish manually" icon={ExternalLink}
       summary={targets.length ? `${done} of ${targets.length} done` : ''} defaultOpen={!targets.length || done < targets.length}>
       <p className="text-port-text-muted">Each platform shows what gets posted. Fill draft opens a tab in the PortOS Browser on the computer running PortOS (sign in there first), fills the post and shows a screenshot here. You press Post there. Then paste the post&apos;s link and press Record, or press Mark done when there is no link yet.</p>
-      {!targets.length && <p className="text-port-text-muted">Turn on the platforms you use under Where you post to prepare drafts. Final publication happens on each platform.</p>}
+      {publishing.draftsError && <ListLoadError what="the drafts already filled" error={publishing.draftsError} onRetry={publishing.retryDrafts} />}
+      {!targets.length && publishing.enabledTargets && <p className="text-port-text-muted">Turn on the platforms you use under Where you post to prepare drafts. Final publication happens on each platform.</p>}
       <ul className="space-y-2">
         {targets.map((entry) => <TargetRow key={`${project.id}-${entry.target}`} project={project} kit={kit} entry={entry} publishing={publishing} excerpts={excerpts} />)}
       </ul>

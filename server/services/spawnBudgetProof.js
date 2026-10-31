@@ -1,5 +1,10 @@
 import { randomUUID } from 'node:crypto';
 
+// Per-run dispatch accounting. A new task carrying any of these is not a fresh
+// episode, so addTask grants it no spawn-budget proof and dispatch holds it.
+export const SPAWN_HISTORY_METADATA_KEYS = Object.freeze(['totalSpawnCount', 'lastSpawnedAt', 'claimedBy', 'claimedAt',
+  'failureCount', 'orphanRetryCount', 'lastAgentId', 'failedAgentId', 'deliveryDecisionAgentId']);
+
 // Only a newly created task or a budget reset can start a known episode.
 export const newSpawnBudgetEpisode = (baseline = 0) => ({ version: 1, epoch: randomUUID(), baseline, dispatch: null, history: [] });
 

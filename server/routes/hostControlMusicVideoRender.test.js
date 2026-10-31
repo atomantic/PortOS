@@ -16,6 +16,7 @@ const sink = vi.hoisted(() => ({
   renderMusicVideo: vi.fn(async () => ({ jobId: 'render-example' })),
   startShotRender: vi.fn(async () => ({ jobId: 'shot-example' })),
   buildRenderPreview: vi.fn(async () => ({ path: 'preview-example.mp4' })),
+  coldOpenPreviewAudio: vi.fn(async () => '/tmp/cold-open-example.wav'),
   startExcerptRender: vi.fn(async () => ({ jobId: 'excerpt-example' })),
   startPublishKitBuild: vi.fn(async () => ({ jobId: 'kit-example' })),
 }));
@@ -40,6 +41,11 @@ vi.mock('../services/musicVideo/shotSegments.js', async (importOriginal) => ({
   startShotRender: sink.startShotRender,
   buildRenderPreview: sink.buildRenderPreview,
 }));
+vi.mock('../services/musicVideo/coldOpen.js', async (importOriginal) => ({
+  ...await importOriginal(),
+  coldOpenPreviewAudio: sink.coldOpenPreviewAudio,
+}));
+vi.mock('../services/musicVideo/requireProject.js', () => ({ requireProject: vi.fn(async (id) => ({ id, scenes: [] })) }));
 vi.mock('../services/musicVideo/excerptRender.js', async (importOriginal) => ({
   ...await importOriginal(),
   startExcerptRender: sink.startExcerptRender,
@@ -58,6 +64,7 @@ const operations = [
   [`${PROJECT}/render`, {}, sink.renderMusicVideo],
   [`${PROJECT}/shots/example-scene/render`, {}, sink.startShotRender],
   [`${PROJECT}/shot-renders/preview`, {}, sink.buildRenderPreview],
+  [`${PROJECT}/cold-open/audio`, {}, sink.coldOpenPreviewAudio],
   [`${PROJECT}/excerpt`, { startSec: 0, endSec: 5 }, sink.startExcerptRender],
   [`${PROJECT}/publish-kit/build`, {}, sink.startPublishKitBuild],
 ];

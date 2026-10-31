@@ -89,7 +89,7 @@ This banner OVERRIDES any later instruction to stop after one fix, forbid deferr
 4. **Verify** with the project's tests (or a focused new test when the path is untested and a silent break would cost data, money, or quota).
 5. **Commit** following the repo's conventions. Do not bundle unrelated cleanup.
 
-Every accepted finding requires resolution regardless of severity; warnings and nits are not exemptions. Severity determines sequencing only. Previously accepted rules are revisable. Prefer investing effort in high-quality fixes. Reassess value and feasibility before retiring a rule that is no longer useful or has no current solution worth pursuing; remove it from linting or quality scanning with concise rationale. Difficulty alone is not an exemption, and reassessment is not permission to hide a known important defect merely to pass checks. Reject irrelevant rules or false positives with evidence, rather than demoting useful checks to tolerated warnings. Never hide findings, weaken tests, or disable useful checks to get green. Genuine hardware, permission, or user-decision blockers remain unresolved with a tracked owner and next step.
+Every accepted finding requires resolution regardless of severity; warnings and nits are not exemptions. Severity determines sequencing only. Theoretical multi-writer, crash-recovery, or state-preservation findings on ephemeral/regenerable state (git worktrees, caches, agent runs, in-memory locks) are NOT accepted findings and must be rejected as \`not-applicable\` rather than turned into defensive journals/locks or filed as tracker issues. Previously accepted rules are revisable. Prefer investing effort in high-quality fixes. Reassess value and feasibility before retiring a rule that is no longer useful or has no current solution worth pursuing; remove it from linting or quality scanning with concise rationale. Difficulty alone is not an exemption, and reassessment is not permission to hide a known important defect merely to pass checks. Reject irrelevant rules or false positives with evidence, rather than demoting useful checks to tolerated warnings. Never hide findings, weaken tests, or disable useful checks to get green. Genuine hardware, permission, or user-decision blockers remain unresolved with a tracked owner and next step.
 
 Every actionable finding must end as a verified fix or a linked existing/new tracker issue. Search current code, open/closed issues, PRs and active owners before filing; never duplicate another worker's issue. Preserve existing ownership and labels. For a new issue include evidence, impact, chosen fix and acceptance criteria; use the repository's issue-label contract. Redact before you publish — a filed item is world-readable the moment it lands. ${AUDIT_REDACTION_RULE} A summary-only deferral is incomplete delivery. If filing or verification fails, retain the finding and report the blocker; never invent a link or mark it resolved. Unconfirmed candidates stay explicitly unconfirmed with confidence and the next verification step. If no verified finding remains, report that evidence without a drive-by refactor.
 
@@ -818,6 +818,20 @@ export function getAuditFilingPreset(taskType) {
   return AUDIT_DEFINITIONS[normalizeAuditTaskType(taskType)]?.filing || null;
 }
 
+// Owner labels as `task-type=labels`: the lane metric label is what lane
+// health attributes on, so an out-of-lane item carries the owner's full set.
+const OWNER_LABELS = Object.entries(AUDIT_DEFINITIONS)
+  .map(([type, { filing }]) => `${type}=${[filing.issueLabel, ...filing.extraLabels].join('+')}`)
+  .join(', ');
+
+/**
+ * Both banners carry it: a verified finding outside the audit's category or
+ * reviewed slice is still tracked, under its owning lane, never left as a note.
+ */
+export const OUT_OF_SCOPE_FINDINGS_RULE = `## Findings outside this audit's category or slice
+
+Track every verified defect you encounter outside this audit's category or reviewed slice as its own item, using the tracker instructions above — never only in the summary, a recommendations list or a closing note. Mission advice that a problem belongs to a sibling audit means do not score, fix or deep-investigate it here; it does not mean leave it untracked. Cite path:line and a concrete impact, de-duplicate as usual, name the owning audit task type, and label it with the owner's labels (task-type=labels: ${OWNER_LABELS}) instead of this category's. Report an unverified suspicion as unconfirmed with its next verification step. List every such item filed or matched in the final report.`;
+
 /**
  * Return the appropriate mode banner contract string for the given execution mode.
  *
@@ -825,7 +839,7 @@ export function getAuditFilingPreset(taskType) {
  * @returns {string} The contract text defining the operating constraints for the agent
  */
 export function modeContractFor(fileIssues) {
-  return fileIssues ? FILE_ISSUES_MODE_CONTRACT : DO_WORK_MODE_CONTRACT;
+  return `${fileIssues ? FILE_ISSUES_MODE_CONTRACT : DO_WORK_MODE_CONTRACT}\n\n${OUT_OF_SCOPE_FINDINGS_RULE}`;
 }
 
 /**

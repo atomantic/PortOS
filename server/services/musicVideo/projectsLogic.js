@@ -39,6 +39,7 @@ import { ensureSceneTakes, keepCodeClipWithItsClip, TAKE_SLOT } from './takes.js
 import { normalizeComposition, invalidateCompositionTiming, withStoredCompositionDocument } from './composition.js';
 import { normalizeSoundBed } from './soundBed.js';
 import { normalizeFilmLook } from '../../lib/filmLook.js';
+import { normalizeProductionMedium } from '../../lib/musicVideoProductionMedium.js';
 import { stillMoveForCamera } from '../../lib/cameraMovements.js';
 import { normalizeTitleCard } from '../../lib/musicVideoTitleCard.js';
 import { normalizeStatsOutro } from '../../lib/musicVideoStatsOutro.js';
@@ -47,6 +48,7 @@ import { remapTreatmentForClone, scenesFingerprint } from './treatment.js';
 import { anchorShotsToSungLyrics, carryStoryboardApproval, dropStaleStoryboardRows } from './productionReview.js';
 import { cuesSungWithin, sungLyricTextWithin } from '../../lib/musicVideoLyricAnchors.js';
 import { normalizeMusicVideoAutomation } from '../../lib/musicVideoAutomation.js';
+import { coldOpenScenes, isPreMusicShot, normalizePreMusic, songScenes } from '../../lib/musicVideoColdOpen.js';
 
 export { sanitizeProjectForSync } from '../../lib/projectStoreKit.js';
 
@@ -181,6 +183,8 @@ export function buildProjectRecord(input, { id, now }) {
     soundBed: input.soundBed ? normalizeSoundBed(input.soundBed) : null,
     // The finishing film look every preview, render and baked still is viewed through; null = none.
     filmLook: input.filmLook ? normalizeFilmLook(input.filmLook) : null,
+    // The handmade medium (stepped holds, compositor-only lettering); null = none.
+    ...(normalizeProductionMedium(input.productionMedium) ? { productionMedium: normalizeProductionMedium(input.productionMedium) } : {}),
     // The opening title card (song, artist, year over the opener); null = none.
     titleCard: normalizeTitleCard(input.titleCard),
     // The cutting room floor outro after the song; null = off.
@@ -235,6 +239,7 @@ export function cloneProjectRecord(source, {
     referenceImageId: includeGeneratedMedia ? (scene.referenceImageId ?? null) : null,
     videoHistoryId: includeGeneratedMedia ? (scene.videoHistoryId ?? null) : null,
     endImageId: includeGeneratedMedia ? (scene.endImageId ?? null) : null,
+    ...(scene.photoSequence ? { photoSequence: includeGeneratedMedia ? scene.photoSequence : { ...scene.photoSequence, enabled: false, imageIds: [], ...(scene.photoSequence.layouts ? { layouts: [] } : {}) } } : {}),
     // Takes are immutable pointers to shared media, so a media-keeping clone
     // carries the whole candidate history; a clean clone starts empty.
     takes: includeGeneratedMedia ? ensureSceneTakes(scene, now) : [],
@@ -396,6 +401,7 @@ export function applyProjectPatch(project, patch) {
     ...('soundBed' in patch ? { soundBed: normalizeSoundBed(patch.soundBed) } : {}),
     // The film look is replaced whole (one bounded record); null clears it.
     ...('filmLook' in patch ? { filmLook: normalizeFilmLook(patch.filmLook) } : {}),
+    ...('productionMedium' in patch ? { productionMedium: normalizeProductionMedium(patch.productionMedium) } : {}),
     // The title card is replaced whole (one bounded record); null clears it.
     ...('titleCard' in patch ? { titleCard: normalizeTitleCard(patch.titleCard) } : {}),
     // The outro after the song is replaced whole; null turns it off.
@@ -551,10 +557,12 @@ function buildScene(input, { order }) {
     ...(input.cutEffect ? { cutEffect: input.cutEffect } : {}),
     ...(input.imageEffect ? { imageEffect: input.imageEffect } : {}),
     ...(input.imageEffectSec ? { imageEffectSec: input.imageEffectSec } : {}),
+    ...(input.photoSequence ? { photoSequence: input.photoSequence } : {}),
     cardColor: input.cardColor ?? null,
     ...(input.textZone ? { textZone: input.textZone } : {}),
     ...(input.lyricRole ? { lyricRole: input.lyricRole } : {}),
     ...(input.lyricSize ? { lyricSize: input.lyricSize } : {}),
+    ...(input.preMusic ? { preMusic: normalizePreMusic(input.preMusic) } : {}),
     // #8977: cutaway (any image-to-video lane) unless the director asks for a
     // lip-synced performance shot, which only a source-audio provider renders.
     shotMode: input.shotMode ?? 'cutaway',
@@ -610,51 +618,122 @@ export function addScenes(project, sceneInputs) {
   return { project: next, scenes: ids.map((id) => scenes.find((s) => s.sceneId === id)) };
 }
 
+// What a shot replaced by a new plan keeps from the one it takes the place of: its id, picked media and finish.
+function carryOver(prior, fresh) {
+  return {
+    ...fresh,
+    sceneId: prior.sceneId,
+    referenceImageId: prior.referenceImageId ?? null,
+    videoHistoryId: prior.videoHistoryId ?? null,
+    ...(prior.setReference ? { setReference: prior.setReference } : {}),
+    ...(prior.endImageId ? { endImageId: prior.endImageId } : {}),
+    ...(prior.endFramePrompt ? { endFramePrompt: prior.endFramePrompt } : {}),
+    ...(prior.frameFit ? { frameFit: prior.frameFit } : {}),
+    ...(prior.speedFps ? { speedFps: prior.speedFps } : {}),
+    ...(prior.offsetFrames ? { offsetFrames: prior.offsetFrames } : {}),
+    ...(prior.reverse ? { reverse: true } : {}),
+    ...(prior.holdLastFrame ? { holdLastFrame: true } : {}),
+    ...(prior.filmLook ? { filmLook: prior.filmLook } : {}),
+    ...(prior.transitionIn ? { transitionIn: prior.transitionIn } : {}),
+    ...(prior.transitionOut ? { transitionOut: prior.transitionOut } : {}),
+    ...(prior.glitches?.length ? { glitches: prior.glitches } : {}),
+    ...(prior.cutEffect ? { cutEffect: prior.cutEffect } : {}),
+    // A still playing an image effect stays one: the effect is the shot's picture.
+    ...(prior.imageEffect && prior.visualLayer === 'still' ? { visualLayer: 'still', imageEffect: prior.imageEffect,
+      ...(prior.imageEffectSec ? { imageEffectSec: prior.imageEffectSec } : {}) } : {}),
+    ...(prior.photoSequence ? { photoSequence: prior.photoSequence, ...(prior.visualLayer === 'still' ? { visualLayer: 'still' } : {}) } : {}),
+    takes: prior.takes || [],
+    ...(prior.direction ? { direction: prior.direction } : {}),
+  };
+}
+
 /**
  * Replace the whole board with freshly planned scenes (AI Plan "Replace").
  * A new shot whose time span matches an old scene (within 10 ms) inherits that
  * scene's id, direction, reference frame, selected clip and takes, so the
  * generated work and treatment direction keyed to the id survive the re-plan.
- * Returns `{ project, scenes, replaced }` (`replaced` = the old scene count).
+ * Shots before the song (`preMusic`) match an old one by panel, else by place.
+ * Returns `{ project, scenes, replaced }` (`replaced` = the old shots it replaced).
  */
 export function replaceScenes(project, sceneInputs) {
   const list = Array.isArray(sceneInputs) ? sceneInputs : [];
-  const existing = project.scenes || [];
+  // A plan covers the song. Shots before it come in front: from the plan when
+  // it has some (a storyboard's opening beats), else the cold open stays,
+  // minus any shot whose panel the plan now puts on the song.
+  const parsed = list.map((input) => buildScene(parseSceneOrThrow(musicVideoSceneCreateSchema, input), { order: 0 }));
+  const coldInputs = parsed.filter(isPreMusicShot);
+  const songInputs = parsed.filter((scene) => !isPreMusicShot(scene));
+  const priorCold = coldOpenScenes(project);
+  const existing = songScenes(project);
+  const songPanels = new Set(songInputs.map((scene) => scene.panelId).filter(Boolean));
+  let coldOpen = priorCold.filter((scene) => !scene.panelId || !songPanels.has(scene.panelId));
+  if (coldInputs.length) {
+    const claimedCold = new Set();
+    coldOpen = coldInputs.map((fresh, index) => {
+      const prior = priorCold.find((old) => !claimedCold.has(old.sceneId) && old.panelId && old.panelId === fresh.panelId)
+        || (!fresh.panelId && priorCold[index] && !claimedCold.has(priorCold[index].sceneId) ? priorCold[index] : null);
+      if (!prior) return fresh;
+      claimedCold.add(prior.sceneId);
+      // The length is the plan's; the sound picked for the shot stays.
+      return { ...carryOver(prior, fresh), preMusic: normalizePreMusic({ ...prior.preMusic, durationSec: fresh.preMusic.durationSec }) };
+    });
+  }
   const claimed = new Set();
   const sameSpan = (a, b) => typeof a === 'number' && typeof b === 'number' && Math.abs(a - b) < 0.01;
-  const scenes = list.map((input, order) => {
-    const fresh = buildScene(parseSceneOrThrow(musicVideoSceneCreateSchema, input), { order });
+  const scenes = songInputs.map((fresh) => {
     const prior = existing.find((old) => !claimed.has(old.sceneId)
       && sameSpan(old.startSec, fresh.startSec) && sameSpan(old.endSec, fresh.endSec));
     if (!prior) return fresh;
     claimed.add(prior.sceneId);
-    return {
-      ...fresh,
-      sceneId: prior.sceneId,
-      referenceImageId: prior.referenceImageId ?? null,
-      videoHistoryId: prior.videoHistoryId ?? null,
-      ...(prior.setReference ? { setReference: prior.setReference } : {}),
-      ...(prior.endImageId ? { endImageId: prior.endImageId } : {}),
-      ...(prior.endFramePrompt ? { endFramePrompt: prior.endFramePrompt } : {}),
-      ...(prior.frameFit ? { frameFit: prior.frameFit } : {}),
-      ...(prior.speedFps ? { speedFps: prior.speedFps } : {}),
-      ...(prior.offsetFrames ? { offsetFrames: prior.offsetFrames } : {}),
-      ...(prior.reverse ? { reverse: true } : {}),
-      ...(prior.holdLastFrame ? { holdLastFrame: true } : {}),
-      ...(prior.filmLook ? { filmLook: prior.filmLook } : {}),
-      ...(prior.transitionIn ? { transitionIn: prior.transitionIn } : {}),
-      ...(prior.transitionOut ? { transitionOut: prior.transitionOut } : {}),
-      ...(prior.glitches?.length ? { glitches: prior.glitches } : {}),
-      ...(prior.cutEffect ? { cutEffect: prior.cutEffect } : {}),
-      // A still playing an image effect stays one: the effect is the shot's picture.
-      ...(prior.imageEffect && prior.visualLayer === 'still' ? { visualLayer: 'still', imageEffect: prior.imageEffect,
-        ...(prior.imageEffectSec ? { imageEffectSec: prior.imageEffectSec } : {}) } : {}),
-      takes: prior.takes || [],
-      ...(prior.direction ? { direction: prior.direction } : {}),
-    };
+    return carryOver(prior, fresh);
   });
   // Rows bound to shots the new plan dropped go with them.
-  return { project: dropStaleStoryboardRows(touch(project, { scenes })), scenes, replaced: existing.length };
+  const board = [...coldOpen, ...scenes].map((scene, order) => (scene.order === order ? scene : { ...scene, order }));
+  return {
+    project: dropStaleStoryboardRows(touch(project, { scenes: board })),
+    scenes: coldInputs.length ? board : board.slice(coldOpen.length),
+    replaced: existing.length + (coldInputs.length ? priorCold.length : priorCold.length - coldOpen.length),
+  };
+}
+
+/**
+ * Apply a storyboard sync plan (lib/storyboardShotSync.js): each panel's shot
+ * in board order, an existing one patched in place (so everything the shot
+ * owns stays) and a new one built from the panel, then the shots the plan
+ * removes dropped. A shot the plan could not remove stays where its time puts
+ * it. The draft rows follow their shots' new spans and sung lines. Returns
+ * `{ project, scenes, added, removed }`.
+ */
+export function applyStoryboardShotSync(project, plan) {
+  const byId = new Map((project.scenes || []).map((scene) => [scene.sceneId, scene]));
+  const added = [];
+  const synced = plan.shots.map((shot) => {
+    if (!shot.sceneId) {
+      const fresh = buildScene(parseSceneOrThrow(musicVideoSceneCreateSchema, shot.input), { order: 0 });
+      added.push(fresh.sceneId);
+      return fresh;
+    }
+    const prior = byId.get(shot.sceneId);
+    if (!prior) throw new ServerError('A shot changed since the sync was planned. Check it again.', { status: 409, code: 'SHOTS_CHANGED' });
+    const patch = 'preMusic' in shot.patch ? { ...shot.patch, preMusic: normalizePreMusic(shot.patch.preMusic) } : shot.patch;
+    return { ...prior, ...patch };
+  });
+  const removing = new Set(plan.removed.filter((shot) => !shot.blocked).map((shot) => shot.sceneId));
+  const kept = plan.removed.filter((shot) => shot.blocked).map((shot) => byId.get(shot.sceneId)).filter(Boolean);
+  const cold = [...synced.filter(isPreMusicShot), ...kept.filter(isPreMusicShot)];
+  const song = [...synced.filter((scene) => !isPreMusicShot(scene)), ...kept.filter((scene) => !isPreMusicShot(scene))]
+    .map((scene, index) => ({ scene, index }))
+    .sort((a, b) => (a.scene.startSec ?? Infinity) - (b.scene.startSec ?? Infinity) || a.index - b.index)
+    .map(({ scene }) => scene);
+  const scenes = [...cold, ...song].map((scene, order) => (scene.order === order ? scene : { ...scene, order }));
+  const retimed = plan.shots.filter((shot) => shot.sceneId && shot.retimed).map((shot) => shot.sceneId);
+  const next = dropStaleStoryboardRows(touch(project, { scenes }));
+  return {
+    project: retimed.length ? anchorShotsToSungLyrics(next, retimed) : next,
+    scenes,
+    added,
+    removed: [...removing],
+  };
 }
 
 // Scene fields a director edits within an approved shot (its span, wording, selected
@@ -662,7 +741,7 @@ export function replaceScenes(project, sceneInputs) {
 // adding a shot or lyric the storyboard approval did not cover.
 const SCENE_SHOT_EDIT_FIELDS = ['startSec', 'endSec', 'beatAligned', 'label', 'prompt', 'framePrompt', 'visualIntent',
   'referenceImageId', 'videoHistoryId', 'endImageId', 'codeClip', 'frameFit', 'speedFps', 'offsetFrames', 'reverse', 'holdLastFrame', 'filmLook', 'transitionIn', 'transitionOut', 'glitches', 'cutEffect',
-  'visualLayer', 'stillMove', 'imageEffect', 'imageEffectSec', 'frameReferenceIds', 'setReference', 'characterVariant', 'panelId', 'panelRev', 'panelArt'];
+  'visualLayer', 'stillMove', 'imageEffect', 'imageEffectSec', 'photoSequence', 'frameReferenceIds', 'setReference', 'characterVariant', 'panelId', 'panelRev', 'panelArt', 'preMusic'];
 
 /**
  * Apply a patch to a single scene. Returns `{ project, updated }`. Throws if the
@@ -671,7 +750,8 @@ const SCENE_SHOT_EDIT_FIELDS = ['startSec', 'endSec', 'beatAligned', 'label', 'p
 export function applySceneUpdate(project, sceneId, patch) {
   const parsed = parseSceneOrThrow(musicVideoSceneUpdateSchema, patch);
   // A shot's own look is stored complete; null returns it to the video's look.
-  const data = 'filmLook' in parsed ? { ...parsed, filmLook: parsed.filmLook ? normalizeFilmLook(parsed.filmLook) : null } : parsed;
+  const looked = 'filmLook' in parsed ? { ...parsed, filmLook: parsed.filmLook ? normalizeFilmLook(parsed.filmLook) : null } : parsed;
+  const data = 'preMusic' in looked ? { ...looked, preMusic: normalizePreMusic(looked.preMusic) } : looked;
   const scenes = project.scenes || [];
   const idx = scenes.findIndex((s) => s.sceneId === sceneId);
   if (idx < 0) throw new ServerError('Scene not found', { status: 404, code: 'NOT_FOUND' });
@@ -802,6 +882,9 @@ export function splitScene(project, sceneId, { backend = null, atSec = null } = 
   const idx = scenes.findIndex((s) => s.sceneId === sceneId);
   if (idx < 0) throw new ServerError('Scene not found', { status: 404, code: 'NOT_FOUND' });
   const scene = scenes[idx];
+  if (isPreMusicShot(scene)) {
+    throw new ServerError('A shot before the song has no song time to split at. Set its length instead.', { status: 400, code: 'MUSIC_VIDEO_SPLIT_PRE_MUSIC' });
+  }
   const plan = atSec != null ? splitAtTime(scene, atSec) : planShotSplit({
     startSec: scene.startSec,
     endSec: scene.endSec,
@@ -846,6 +929,7 @@ export function splitScene(project, sceneId, { backend = null, atSec = null } = 
         visualIntent: scene.visualIntent ?? null,
         visualLayer: scene.visualLayer ?? 'footage',
         ...(scene.stillMove ? { stillMove: scene.stillMove } : {}),
+        ...(scene.photoSequence ? { photoSequence: scene.photoSequence } : {}),
         shotMode: scene.shotMode ?? 'cutaway',
         performanceSpeaker: scene.performanceSpeaker ?? null,
         performanceStyle: scene.performanceStyle ?? null,
@@ -1030,6 +1114,37 @@ function joinScenes(project, idx, { keep, backend }) {
  * Tombstone-aware purely via `updatedAt`: deleteProject stamps a fresh
  * `updatedAt`, so a tombstone beats an older live copy and can't be resurrected.
  */
+/**
+ * An older peer rebuilds takes from an explicit field list and drops
+ * `castInputs`. Copy it back onto a take that peer still sends, before newest
+ * `updatedAt` wins, so the loss is not written back. A take the peer omitted
+ * entirely stays omitted. A body that includes the field keeps its own value.
+ */
+function preserveOmittedTakeCastInputs(local, remote) {
+  const kept = new Map();
+  for (const scene of local?.scenes || []) {
+    if (!scene?.sceneId || !Array.isArray(scene.takes)) continue;
+    for (const take of scene.takes) {
+      if (take?.takeId && Object.hasOwn(take, 'castInputs')) kept.set(`${scene.sceneId}\0${take.takeId}`, take.castInputs);
+    }
+  }
+  if (!kept.size || !Array.isArray(remote.scenes)) return remote;
+  let scenesChanged = false;
+  const scenes = remote.scenes.map((scene) => {
+    if (!scene?.sceneId || !Array.isArray(scene.takes)) return scene;
+    let takesChanged = false;
+    const takes = scene.takes.map((take) => {
+      if (!take?.takeId || Object.hasOwn(take, 'castInputs') || !kept.has(`${scene.sceneId}\0${take.takeId}`)) return take;
+      takesChanged = true;
+      return { ...take, castInputs: structuredClone(kept.get(`${scene.sceneId}\0${take.takeId}`)) };
+    });
+    if (!takesChanged) return scene;
+    scenesChanged = true;
+    return { ...scene, takes };
+  });
+  return scenesChanged ? { ...remote, scenes } : remote;
+}
+
 export function mergeProjectRecord(local, remoteRaw) {
   let remote = sanitizeProjectForSync(remoteRaw);
   if (!remote) return { next: null, inserted: false, remoteWins: false, changed: false };
@@ -1073,6 +1188,7 @@ export function mergeProjectRecord(local, remoteRaw) {
       ...(local.composition.documentDraft ? { documentDraft: local.composition.documentDraft } : {}),
     };
   }
+  remote = preserveOmittedTakeCastInputs(local, remote);
   if (local.videoSettings && typeof local.videoSettings === 'object'
     && !Array.isArray(local.videoSettings) && ['backend', 'renderPool'].some((key) => Object.hasOwn(local.videoSettings, key))) {
     const remoteVideoSettings = remote.videoSettings && typeof remote.videoSettings === 'object'

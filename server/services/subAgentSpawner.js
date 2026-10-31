@@ -1,5 +1,6 @@
 import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 import { maintenance, isMaintenanceHold } from '../lib/maintenanceAdmission.js';
+import { isHostShuttingDown } from '../lib/hostShutdown.js';
 /**
  * Sub-Agent Spawner Service — the agent cluster's EVENT WIRING.
  *
@@ -68,6 +69,8 @@ let reconnectDequeueTimer = null;
 // tasks resume against a settled `runnerAgents` map — the ordering the boot
 // path gets for free by awaiting recovery before it wires anything.
 let runnerRecovery = Promise.resolve();
+
+const HOST_SHUTDOWN_HOLD = 'PortOS is shutting down';
 
 /**
  * Decline a `task:ready` dispatch WITHOUT failing the task.
@@ -175,6 +178,10 @@ async function handleTaskReady(task) {
   //    flag reads synchronously, so nothing can slip between the check and the
   //    spawn; the task runs on the other side of the restart.
   if (maintenance.held()) return holdTask(task, 'maintenance is holding new work');
+  // Host shutdown (#14170). An agent registered after the shutdown marker was
+  // snapshotted is charged as a genuine orphan on the next boot. Rechecked
+  // just before the spawn, since the awaits below can straddle the signal.
+  if (isHostShuttingDown()) return holdTask(task, HOST_SHUTDOWN_HOLD);
   if (isUpdateInProgress()) {
     return holdTask(task, 'a PortOS self-update is in progress');
   }
@@ -219,6 +226,7 @@ async function handleTaskReady(task) {
   try {
     const localSlot = await acquireLocalEndpointSpawnSlot(task, capacityState.agents);
     if (!localSlot.ok) return holdTask(task, localSlot.reason);
+    if (isHostShuttingDown()) return holdTask(task, HOST_SHUTDOWN_HOLD);
     try {
       await spawnAgentForTask(task);
     } catch (err) {

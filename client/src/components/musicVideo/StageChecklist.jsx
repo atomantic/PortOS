@@ -11,6 +11,7 @@ import StaleApprovalActions from './StaleApprovalActions.jsx';
  * approval offers a Revert per changed input whose approved value was kept
  * (folded behind "See N changes" when there are several).
  * An `optional` item is listed but never counted toward the step being done.
+ * A finished step shows nothing: the step tab already says it is done.
  * An item's `notes` (open change requests) each get a Mark resolved button,
  * which calls `onAction({ run: 'resolve-feedback', feedbackId })`. An item's `shots`
  * each get a button that calls `onAction({ editShot: sceneId })`.
@@ -19,25 +20,13 @@ export default function StageChecklist({ items, onAction, onRevert, headerAnchor
   if (!items?.length) return null;
   const required = items.filter((item) => !item.optional);
   const done = required.filter((item) => item.done).length;
-  const allDone = done === required.length;
+  if (done === required.length) return null;
   return (
     <section aria-label="What this step needs" className="min-w-0 rounded-lg border border-port-border bg-port-card p-3">
       <div className="flex items-center gap-2">
         <h4 className="text-sm font-medium">What this step needs</h4>
-        <span className={`text-xs ${allDone ? 'text-port-success' : 'text-port-text-muted'}`}>
-          {allDone ? 'All done' : `${done} of ${required.length} done`}
-        </span>
+        <span className="text-xs text-port-text-muted">{`${done} of ${required.length} done`}</span>
       </div>
-      {/* A finished step needs no rows: one wrapped line names what was done, each with its check, so the step's own work comes up sooner. */}
-      {allDone ? (
-        <ul aria-label="Done" className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-port-text-muted">
-          {items.filter((item) => item.done).map((item) => (
-            <li key={item.id} className="flex min-w-0 items-start gap-1 break-words">
-              <CheckCircle2 size={12} className="mt-0.5 shrink-0 text-port-success" aria-hidden="true" />{item.label}
-            </li>
-          ))}
-        </ul>
-      ) : (
       <ul className="mt-2 space-y-1.5">
         {items.map((item) => (
           // The action wraps under the text on a phone instead of squeezing it into a narrow column.
@@ -114,7 +103,6 @@ export default function StageChecklist({ items, onAction, onRevert, headerAnchor
           </li>
         ))}
       </ul>
-      )}
     </section>
   );
 }

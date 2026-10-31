@@ -7,9 +7,12 @@ import * as api from '../../services/api';
 import ProviderModelSelector from '../ProviderModelSelector';
 import useProviderModels from '../../hooks/useProviderModels';
 import InlineConfirmRow from '../ui/InlineConfirmRow';
+import SettingsLoadError from '../ui/SettingsLoadError';
+import ListLoadError from '../ui/ListLoadError';
 import { FormField } from '../ui/FormField';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 import { useGoogleAutoConfigProgress } from '../../hooks/useGoogleAutoConfigProgress';
+import { useGoogleAuthStatus } from '../../hooks/useGoogleAuthStatus';
 
 const TYPE_ICONS = { gmail: Mail, outlook: Globe, teams: MessageSquare };
 const TYPE_LABELS = { gmail: 'Gmail (API)', outlook: 'Outlook (Playwright)', teams: 'Teams (Playwright)' };
@@ -36,8 +39,6 @@ export default function ConfigTab({ accounts, setAccounts }) {
   const [confirmClear, setConfirmClear] = useState(null);
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
 
-  // Google OAuth status for Gmail accounts
-  const [googleAuth, setGoogleAuth] = useState(null);
   const [oauthForm, setOauthForm] = useState({ clientId: '', clientSecret: '' });
   const [savingOAuth, setSavingOAuth] = useState(false);
   const [reauthorizing, setReauthorizing] = useState(false);
@@ -48,6 +49,8 @@ export default function ConfigTab({ accounts, setAccounts }) {
   const [config, setConfig] = useState(null);
   const [configLoading, setConfigLoading] = useState(true);
   const [configDirty, setConfigDirty] = useState(false);
+  // Defaults shown after a failed read are not the saved config; Save stays shut.
+  const [configLoadError, setConfigLoadError] = useState(false);
 
   // Separate provider/model selectors for triage and reply
   const triage = useProviderModels();
@@ -66,8 +69,15 @@ export default function ConfigTab({ accounts, setAccounts }) {
   } = reply;
 
   const loadConfig = useCallback(async () => {
-    const settings = await api.getSettings().catch(() => ({}));
-    const msgConfig = settings?.messages || {};
+    setConfigLoading(true);
+    const settings = await api.getSettings({ silent: true }).catch(() => null);
+    if (!settings || typeof settings !== 'object') {
+      setConfigLoadError(true);
+      setConfigLoading(false);
+      return;
+    }
+    setConfigLoadError(false);
+    const msgConfig = settings.messages || {};
     const triageConfig = msgConfig.triage || {};
     const replyConfig = msgConfig.reply || {};
     setConfig({
@@ -90,18 +100,11 @@ export default function ConfigTab({ accounts, setAccounts }) {
 
   useEffect(() => { loadConfig(); }, [loadConfig]);
 
-  // Check Google OAuth status when Gmail accounts exist
+  // Google OAuth status, read only once a Gmail account exists
   const hasGmailAccount = accounts.some(a => a.type === 'gmail');
+  const { status: googleAuth, state: googleAuthState, error: googleAuthError, reload: fetchGoogleAuth, retry: retryGoogleAuth } = useGoogleAuthStatus({ enabled: hasGmailAccount });
+  const googleAuthReady = googleAuthState === 'ready';
   const gmailAuthorized = Boolean(googleAuth?.hasTokens && !googleAuth?.needsScopeUpgrade);
-  const fetchGoogleAuth = useCallback(() => {
-    api.getGoogleAuthStatus()
-      .then(setGoogleAuth)
-      .catch(err => console.warn(`⚠️ Failed to load Google auth status: ${err.message}`));
-  }, []);
-
-  useEffect(() => {
-    if (hasGmailAccount) fetchGoogleAuth();
-  }, [fetchGoogleAuth, hasGmailAccount]);
 
   // Google redirects back to the surface that started authorization. Surface a
   // callback failure once, then remove it so reloads do not repeat the toast.
@@ -170,6 +173,7 @@ export default function ConfigTab({ accounts, setAccounts }) {
   };
 
   const handleSaveConfig = async () => {
+    if (!config || configLoadError) return;
     const patch = {
       messages: {
         triage: {
@@ -294,37 +298,45 @@ export default function ConfigTab({ accounts, setAccounts }) {
           <div className="p-4 mb-4 bg-port-card border border-port-border rounded-lg space-y-3">
             <h3 className="text-sm font-medium text-white">Gmail Setup</h3>
             <div className="space-y-2">
-              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                <div className="flex items-center gap-2 text-sm">
-                  <span className={`w-2 h-2 rounded-full ${gmailAuthorized ? 'bg-port-success' : 'bg-port-warning'}`} />
-                  <span className="text-gray-300">
-                    {gmailAuthorized
-                      ? 'Google OAuth authorized'
-                      : googleAuth?.hasTokens
-                        ? 'Google OAuth needs Gmail permission'
-                        : googleAuth?.hasCredentials
-                          ? 'Google OAuth authorization pending'
-                          : 'Google OAuth setup required'}
-                  </span>
+              {googleAuthState === 'error' && (
+                <ListLoadError what="Google OAuth status" error={googleAuthError} onRetry={retryGoogleAuth} />
+              )}
+              {googleAuthState === 'loading' && (
+                <p className="text-xs text-gray-500">Checking Google authorization…</p>
+              )}
+              {googleAuthReady && (
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex items-center gap-2 text-sm">
+                    <span className={`w-2 h-2 rounded-full ${gmailAuthorized ? 'bg-port-success' : 'bg-port-warning'}`} />
+                    <span className="text-gray-300">
+                      {gmailAuthorized
+                        ? 'Google OAuth authorized'
+                        : googleAuth?.hasTokens
+                          ? 'Google OAuth needs Gmail permission'
+                          : googleAuth?.hasCredentials
+                            ? 'Google OAuth authorization pending'
+                            : 'Google OAuth setup required'}
+                    </span>
+                  </div>
+                  {googleAuth?.hasCredentials && (
+                    <button
+                      onClick={handleReauthorize}
+                      disabled={reauthorizing}
+                      className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg transition-colors disabled:opacity-50 shrink-0 self-start sm:self-auto ${
+                        gmailAuthorized
+                          ? 'text-gray-400 hover:text-white'
+                          : 'bg-port-warning/20 text-port-warning hover:bg-port-warning/30'
+                      }`}
+                      title={gmailAuthorized ? 'Re-authorize to update permissions' : 'Authorize Gmail with Google'}
+                    >
+                      {gmailAuthorized ? <RefreshCw size={12} /> : <ExternalLink size={14} />}
+                      {gmailAuthorized ? 'Re-authorize' : 'Authorize'}
+                    </button>
+                  )}
                 </div>
-                {googleAuth?.hasCredentials && (
-                  <button
-                    onClick={handleReauthorize}
-                    disabled={reauthorizing}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg transition-colors disabled:opacity-50 shrink-0 self-start sm:self-auto ${
-                      gmailAuthorized
-                        ? 'text-gray-400 hover:text-white'
-                        : 'bg-port-warning/20 text-port-warning hover:bg-port-warning/30'
-                    }`}
-                    title={gmailAuthorized ? 'Re-authorize to update permissions' : 'Authorize Gmail with Google'}
-                  >
-                    {gmailAuthorized ? <RefreshCw size={12} /> : <ExternalLink size={14} />}
-                    {gmailAuthorized ? 'Re-authorize' : 'Authorize'}
-                  </button>
-                )}
-              </div>
+              )}
 
-              {!googleAuth?.hasCredentials && (
+              {googleAuthReady && !googleAuth?.hasCredentials && (
                 <div className="space-y-3 rounded-lg border border-port-border bg-port-bg/50 p-3">
                   <p className="text-xs text-gray-500">
                     PortOS needs a Google Cloud OAuth client before it can ask for access to Gmail.
@@ -495,7 +507,7 @@ export default function ConfigTab({ accounts, setAccounts }) {
         <div className="space-y-2">
           {accounts.map((account) => {
             const Icon = TYPE_ICONS[account.type] || Mail;
-            const isPendingAuthorization = account.type === 'gmail' && account.enabled && !gmailAuthorized;
+            const isPendingAuthorization = googleAuthReady && account.type === 'gmail' && account.enabled && !gmailAuthorized;
             return (
               <div
                 key={account.id}
@@ -594,6 +606,11 @@ export default function ConfigTab({ accounts, setAccounts }) {
           Email analysis requires a local text API provider. Configure screening and dedicated source overrides in <a href="/models/llms/abuse" className="text-port-accent underline">Abuse Guard</a>; those overrides take priority over the selections below.
         </p>
         <div className="space-y-3">
+          {configLoadError && (
+            <SettingsLoadError onRetry={loadConfig}>
+              Failed to load saved message settings. The provider, tone and template shown are not your saved configuration, so saving is disabled.
+            </SettingsLoadError>
+          )}
           {renderProviderSection(
             'Triage',
             'Classifies emails as reply/archive/delete/review with priority. A fast, cheap model works well here.',
@@ -621,8 +638,10 @@ export default function ConfigTab({ accounts, setAccounts }) {
               </div>
             </div>
             <button
-              onClick={() => { setConfig(prev => ({ ...prev, voiceMode: !prev.voiceMode })); setConfigDirty(true); }}
-              className={`px-3 py-1.5 rounded text-xs font-medium transition-colors shrink-0 self-start sm:self-auto ${
+              type="button"
+              disabled={!config}
+              onClick={() => { setConfig(prev => (prev ? { ...prev, voiceMode: !prev.voiceMode } : prev)); setConfigDirty(true); }}
+              className={`px-3 py-1.5 rounded text-xs font-medium transition-colors shrink-0 self-start sm:self-auto disabled:opacity-50 ${
                 config?.voiceMode
                   ? 'bg-port-accent-2/20 text-port-accent-2'
                   : 'bg-gray-700 text-gray-400'
@@ -643,6 +662,8 @@ export default function ConfigTab({ accounts, setAccounts }) {
         </p>
         {configLoading ? (
           <RefreshCw size={16} className="text-port-accent animate-spin" />
+        ) : configLoadError || !config ? (
+          <p className="text-sm text-gray-500">Saved templates are unavailable until settings load.</p>
         ) : (
           <div className="space-y-4">
             <FormField

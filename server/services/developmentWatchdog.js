@@ -9,6 +9,7 @@ import { safeJSONParse } from '../lib/jsonIo.js';
 import { isUpstreamOwner, UPSTREAM_OWNER } from '../lib/gitRemote.js';
 
 let scanTail = Promise.resolve();
+const ACTIVE_AGENT_STATUSES = new Set(['running', 'queued', 'finalizing', 'paused']);
 const tasksFrom = data => [...data.user.tasks, ...data.cos.tasks];
 const ownershipTask = (app, pr) => ({ metadata: { app: app.id, reviewLoopPRUrl: pr.url } });
 const parseGithubJson = value => safeJSONParse(value, null, { allowArray: false });
@@ -186,12 +187,11 @@ async function inspectApp(app, tasks, localReviewTasks = [], activeAgentTaskIds 
 async function retireTerminalReviewFollowUps(app, row) {
   if (!row.terminalReviewFollowUps?.length) return;
   const { updateTask } = await import('./cosTaskStore.js');
-  const activeAgentStatuses = new Set(['running', 'queued', 'finalizing', 'paused']);
   for (const followUp of row.terminalReviewFollowUps) {
     const current = await loadState();
     if (!mayCreateTasksForApp(current, app.id)) return;
     const hasAgent = Object.values(current.agents || {}).some(agent => agent.taskId === followUp.taskId
-      && activeAgentStatuses.has(agent.status));
+      && ACTIVE_AGENT_STATUSES.has(agent.status));
     if (hasAgent) continue;
     const reason = followUp.prState === 'MERGED' ? 'pull-request-merged-before-follow-up' : 'pull-request-closed-before-follow-up';
     const result = await updateTask(followUp.taskId, {
@@ -220,7 +220,7 @@ async function dispatch(app, decision) {
   const peers = await participatingPeerTasks();
   if (peers.blockers.length) return { reason: 'peer-ownership-unknown' };
   const liveTasks = [...tasksFrom(await getAllTasks()), ...peers.tasks];
-  const agents = Object.values(current.agents || {}).filter(a => ['running', 'queued', 'finalizing', 'paused'].includes(a.status));
+  const agents = Object.values(current.agents || {}).filter(a => ACTIVE_AGENT_STATUSES.has(a.status));
   const queued = liveTasks.filter(t => t.status === 'pending');
   const project = a => (a.metadata?.app || a.metadata?.taskApp) === app.id;
   if (agents.length + queued.length >= (current.config.maxConcurrentAgents || 1)
@@ -288,99 +288,147 @@ async function dispatch(app, decision) {
   return task ? { taskId: task.id, duplicate: !!task.duplicate } : { reason: 'queue-unavailable' };
 }
 
-async function scan({ dryRun = false, force = false, source = 'scheduled' } = {}) {
-  const state = await loadState();
-  const role = normalizePersistentMindMaintainer(state.config?.persistentMindMaintainer);
+/** The previous receipt while it is still within the cadence of an unchanged policy. */
+function freshCachedReceipt(state, policyKey, role, { dryRun, force }) {
   const prior = state.developmentWatchdog?.latest;
-  const policyKey = JSON.stringify([role, normalizePersistentMindCapabilities(state.config?.persistentMindCapabilities), state.paused, getDomainMode(state.config, 'cos')]);
-  if (!dryRun && !force && state.developmentWatchdog?.policyKey === policyKey && prior && Date.now() - Date.parse(prior.checkedAt) < role.intervalMinutes * 60000) return prior;
-  const receipt = { schemaVersion: 1, id: randomUUID(), checkedAt: new Date().toISOString(), source, dryRun,
-    complete: true, availableSlots: 0, blockers: [], apps: [], decisions: [], recovery: [] };
-  if (!role.enabled) receipt.blockers.push('maintainer-disabled');
-  else if (!role.appIds.some(id => mayReadApp(state, id))) {
-    receipt.complete = false;
-    receipt.blockers.push('no-readable-maintainer-scope');
-    receipt.apps = role.appIds.map(appId => ({ appId, complete: false, blockers: ['app-unavailable-or-not-granted'], pullRequests: [], issues: [] }));
-  } else {
-    const { getActiveApps } = await import('./apps.js');
-    const { getAllTasks } = await import('./cosTaskStore.js');
-    const taskSources = await getAllTasks();
-    const tasks = tasksFrom(taskSources);
-    const localReviewTasks = taskSources.cos?.tasks || [];
-    const peers = await participatingPeerTasks();
-    const allTasks = [...tasks, ...peers.tasks];
-    const agents = Object.values(state.agents || {});
-    // Include finalization and queued ownership, not only live subprocesses.
-    const activeAgents = agents.filter(agent => ['running', 'queued', 'finalizing', 'paused'].includes(agent.status));
-    const activeAgentTaskIds = new Set([
-      ...activeAgents.map(agent => agent.taskId),
-      ...allTasks.filter(task => ['queued', 'running', 'in_progress', 'finalizing', 'paused'].includes(task.status)).map(task => task.id),
-    ].filter(Boolean));
-    for (const agent of activeAgents) {
-      const task = tasks.find(t => t.id === agent.taskId);
-      if (task) allTasks.push({ ...task, status: 'running' });
-      else if (agent.metadata) allTasks.push({ ...agent, status: 'running' });
-    }
-    const queued = tasks.filter(task => ['pending', 'in_progress'].includes(task.status));
-    receipt.availableSlots = Math.max(0, (state.config.maxConcurrentAgents || 1) - activeAgents.length - queued.filter(t => t.status === 'pending').length);
-    receipt.recovery = tasks.filter(task => mayReadApp(state, task.metadata?.app || task.metadata?.taskApp) && (task.metadata?.sourceAgentId || task.metadata?.isInvestigation || task.metadata?.diagnostics))
-      .slice(-30).map(task => ({ taskId: task.id, status: task.status, sourceAgentId: task.metadata.sourceAgentId || null,
-        sourceTaskId: task.metadata.sourceTaskId || null, kind: task.metadata.reviewLoopFollowUp ? 'review-follow-up' : task.metadata.isInvestigation ? 'investigation' : 'recovery',
-        blockedReason: task.metadata.blockedCategory || null }));
-    receipt.blockers.push(...peers.blockers);
-    const apps = await getActiveApps();
-    for (const id of role.appIds) {
-      const app = apps.find(item => item.id === id);
-      if (!app || !mayReadApp(state, id)) { receipt.apps.push({ appId: id, complete: false, blockers: ['app-unavailable-or-not-granted'], pullRequests: [], issues: [] }); continue; }
-      let row;
-      try { row = await inspectApp(app, allTasks, localReviewTasks, activeAgentTaskIds); }
-      catch (err) {
-        const { redactCliDetail } = await import('./perpetualWork.js');
-        const detail = redactCliDetail(String(err?.message || '').split('\n')[0]);
-        console.error(`❌ Development watchdog could not inspect app ${id}: ${detail ?? 'no error message'}`);
-        row = { appId: id, complete: false, blockers: ['source-unavailable'], detail, pullRequests: [], issues: [] };
-      }
-      if (row.complete && !dryRun && !peers.blockers.length && mayCreateTasksForApp(state, id)) {
-        await retireTerminalReviewFollowUps(app, row).catch(err => {
-          console.error(`❌ Development watchdog could not retire a completed PR follow-up: ${err.message}`);
-        });
-      }
-      for (const pr of row.pullRequests) {
-        const previous = state.developmentWatchdog?.dispatches?.[`${id}:pr:${pr.number}`];
-        if (pr.disposition === 'eligible' && previous?.fingerprint === pr.fingerprint) {
-          pr.disposition = 'blocked'; pr.reason = 'unchanged-after-dispatch'; pr.taskId = previous.taskId;
-        }
-      }
-      receipt.apps.push(row);
-      if (!row.complete || peers.blockers.length) continue;
-      const projectCount = activeAgents.filter(a => (a.metadata?.app || a.metadata?.taskApp) === id).length + queued.filter(t => t.metadata?.app === id && t.status === 'pending').length;
-      let capacity = Math.min(receipt.availableSlots, Math.max(0, (state.config.maxConcurrentAgentsPerProject || state.config.maxConcurrentAgents || 1) - projectCount));
-      // Issue selection belongs to the scheduled claim coordinator: one
-      // unpinned batch per repository, with its configured swarm/model routing.
-      const issueBatch = row.issues.some(issue => issue.disposition === 'eligible')
-        ? [{ kind: 'issue', number: null, disposition: 'eligible' }] : [];
-      for (const item of [...row.pullRequests.map(p => ({ ...p, kind: 'pr' })), ...issueBatch]) {
-        if (item.disposition !== 'eligible') continue;
-        const decision = { appId: id, kind: item.kind, number: item.number, headSha: item.headSha || null, fingerprint: item.fingerprint || null,
-          outcome: capacity <= 0 ? 'capacity-full' : dryRun ? 'would-queue' : 'pending' };
-        if (capacity > 0 && !dryRun) {
-          let outcome;
-          try { outcome = await dispatch(app, item); } catch (err) { console.error(`❌ Development watchdog dispatch failed: ${err.message}`); outcome = { reason: 'dispatch-source-unavailable' }; }
-          Object.assign(decision, outcome, { outcome: outcome.taskId ? outcome.duplicate ? 'already-owned' : 'queued' : 'deferred' });
-        }
-        receipt.decisions.push(decision);
-        if (decision.taskId && item.kind === 'pr') {
-          const record = row.pullRequests.find(record => record.number === item.number);
-          record.disposition = 'queued-for-resolution'; record.taskId = decision.taskId;
-        }
-        if (capacity > 0 && (dryRun || decision.outcome === 'queued')) { capacity--; receipt.availableSlots--; }
-      }
-    }
-    receipt.complete = !peers.blockers.length && receipt.apps.every(app => app.complete);
+  if (dryRun || force || !prior || state.developmentWatchdog?.policyKey !== policyKey) return null;
+  return Date.now() - Date.parse(prior.checkedAt) < role.intervalMinutes * 60000 ? prior : null;
+}
+
+/** Local, participating-peer and live-agent ownership that capacity and dispositions are measured against. */
+async function collectActiveWork(state) {
+  const { getAllTasks } = await import('./cosTaskStore.js');
+  const taskSources = await getAllTasks();
+  const tasks = tasksFrom(taskSources);
+  const peers = await participatingPeerTasks();
+  const allTasks = [...tasks, ...peers.tasks];
+  // Include finalization and queued ownership, not only live subprocesses.
+  const activeAgents = Object.values(state.agents || {}).filter(agent => ACTIVE_AGENT_STATUSES.has(agent.status));
+  const activeAgentTaskIds = new Set([
+    ...activeAgents.map(agent => agent.taskId),
+    ...allTasks.filter(task => ['queued', 'running', 'in_progress', 'finalizing', 'paused'].includes(task.status)).map(task => task.id),
+  ].filter(Boolean));
+  // A live agent owns its work even when its task record is gone or already terminal.
+  for (const agent of activeAgents) {
+    const task = tasks.find(t => t.id === agent.taskId);
+    if (task) allTasks.push({ ...task, status: 'running' });
+    else if (agent.metadata) allTasks.push({ ...agent, status: 'running' });
   }
+  return {
+    tasks, allTasks, peers, activeAgents, activeAgentTaskIds,
+    localReviewTasks: taskSources.cos?.tasks || [],
+    queued: tasks.filter(task => ['pending', 'in_progress'].includes(task.status)),
+  };
+}
+
+const isRecoveryTask = task => task.metadata?.sourceAgentId || task.metadata?.isInvestigation || task.metadata?.diagnostics;
+const recoveryKind = metadata => metadata.reviewLoopFollowUp ? 'review-follow-up' : metadata.isInvestigation ? 'investigation' : 'recovery';
+
+function recoveryRows(state, tasks) {
+  return tasks.filter(task => mayReadApp(state, task.metadata?.app || task.metadata?.taskApp) && isRecoveryTask(task))
+    .slice(-30).map(task => ({ taskId: task.id, status: task.status, sourceAgentId: task.metadata.sourceAgentId || null,
+      sourceTaskId: task.metadata.sourceTaskId || null, kind: recoveryKind(task.metadata),
+      blockedReason: task.metadata.blockedCategory || null }));
+}
+
+const unavailableAppRow = appId => ({ appId, complete: false, blockers: ['app-unavailable-or-not-granted'], pullRequests: [], issues: [] });
+
+async function inspectAppOrRecordFailure(app, work) {
+  try { return await inspectApp(app, work.allTasks, work.localReviewTasks, work.activeAgentTaskIds); }
+  catch (err) {
+    const { redactCliDetail } = await import('./perpetualWork.js');
+    const detail = redactCliDetail(String(err?.message || '').split('\n')[0]);
+    console.error(`❌ Development watchdog could not inspect app ${app.id}: ${detail ?? 'no error message'}`);
+    return { appId: app.id, complete: false, blockers: ['source-unavailable'], detail, pullRequests: [], issues: [] };
+  }
+}
+
+/** A PR already dispatched for this exact evidence waits for the evidence to change. */
+function withholdUnchangedDispatches(dispatches, appId, row) {
+  for (const pr of row.pullRequests) {
+    const previous = dispatches?.[`${appId}:pr:${pr.number}`];
+    if (pr.disposition === 'eligible' && previous?.fingerprint === pr.fingerprint) {
+      pr.disposition = 'blocked'; pr.reason = 'unchanged-after-dispatch'; pr.taskId = previous.taskId;
+    }
+  }
+}
+
+function projectCapacity(state, appId, work, availableSlots) {
+  const projectCount = work.activeAgents.filter(a => (a.metadata?.app || a.metadata?.taskApp) === appId).length
+    + work.queued.filter(t => t.metadata?.app === appId && t.status === 'pending').length;
+  return Math.min(availableSlots, Math.max(0, (state.config.maxConcurrentAgentsPerProject || state.config.maxConcurrentAgents || 1) - projectCount));
+}
+
+/**
+ * Eligible PRs plus at most one unpinned issue batch: issue selection belongs
+ * to the scheduled claim coordinator, one batch per repository with its
+ * configured swarm/model routing.
+ */
+function dispatchCandidates(row) {
+  const prs = row.pullRequests.filter(pr => pr.disposition === 'eligible').map(pr => ({ ...pr, kind: 'pr' }));
+  const issueBatch = row.issues.some(issue => issue.disposition === 'eligible')
+    ? [{ kind: 'issue', number: null, disposition: 'eligible' }] : [];
+  return [...prs, ...issueBatch];
+}
+
+const dispatchOutcome = outcome => !outcome.taskId ? 'deferred' : outcome.duplicate ? 'already-owned' : 'queued';
+
+async function decideDispatch(app, item, capacity, dryRun) {
+  const decision = { appId: app.id, kind: item.kind, number: item.number, headSha: item.headSha || null, fingerprint: item.fingerprint || null,
+    outcome: capacity <= 0 ? 'capacity-full' : dryRun ? 'would-queue' : 'pending' };
+  if (capacity <= 0 || dryRun) return decision;
+  let outcome;
+  try { outcome = await dispatch(app, item); } catch (err) { console.error(`❌ Development watchdog dispatch failed: ${err.message}`); outcome = { reason: 'dispatch-source-unavailable' }; }
+  return Object.assign(decision, outcome, { outcome: dispatchOutcome(outcome) });
+}
+
+async function dispatchEligibleItems({ app, row, capacity, dryRun, receipt }) {
+  for (const item of dispatchCandidates(row)) {
+    const decision = await decideDispatch(app, item, capacity, dryRun);
+    receipt.decisions.push(decision);
+    if (decision.taskId && item.kind === 'pr') {
+      const record = row.pullRequests.find(record => record.number === item.number);
+      record.disposition = 'queued-for-resolution'; record.taskId = decision.taskId;
+    }
+    if (capacity > 0 && (dryRun || decision.outcome === 'queued')) { capacity--; receipt.availableSlots--; }
+  }
+}
+
+async function scanApp({ state, appId, apps, work, receipt, dryRun }) {
+  const app = apps.find(item => item.id === appId);
+  if (!app || !mayReadApp(state, appId)) { receipt.apps.push(unavailableAppRow(appId)); return; }
+  const row = await inspectAppOrRecordFailure(app, work);
+  const peerOwnershipKnown = !work.peers.blockers.length;
+  if (row.complete && !dryRun && peerOwnershipKnown && mayCreateTasksForApp(state, appId)) {
+    await retireTerminalReviewFollowUps(app, row).catch(err => {
+      console.error(`❌ Development watchdog could not retire a completed PR follow-up: ${err.message}`);
+    });
+  }
+  withholdUnchangedDispatches(state.developmentWatchdog?.dispatches, appId, row);
+  receipt.apps.push(row);
+  if (!row.complete || !peerOwnershipKnown) return;
+  await dispatchEligibleItems({ app, row, capacity: projectCapacity(state, appId, work, receipt.availableSlots), dryRun, receipt });
+}
+
+async function scanMaintainedApps({ state, role, receipt, dryRun }) {
+  const work = await collectActiveWork(state);
+  const pending = work.queued.filter(t => t.status === 'pending').length;
+  receipt.availableSlots = Math.max(0, (state.config.maxConcurrentAgents || 1) - work.activeAgents.length - pending);
+  receipt.recovery = recoveryRows(state, work.tasks);
+  receipt.blockers.push(...work.peers.blockers);
+  const { getActiveApps } = await import('./apps.js');
+  const apps = await getActiveApps();
+  for (const appId of role.appIds) await scanApp({ state, appId, apps, work, receipt, dryRun });
+  receipt.complete = !work.peers.blockers.length && receipt.apps.every(app => app.complete);
+}
+
+function stampFirstObserved(receipt, prior) {
   const firstSeen = new Map((prior?.apps || []).flatMap(app => (app.pullRequests || []).map(pr => [`${app.appId}:${pr.number}`, pr.firstObservedAt || prior.checkedAt])));
   for (const app of receipt.apps) for (const pr of app.pullRequests) pr.firstObservedAt = firstSeen.get(`${app.appId}:${pr.number}`) || receipt.checkedAt;
-  receipt.counts = {
+}
+
+function receiptCounts(receipt) {
+  return {
     dispatched: receipt.decisions.filter(d => d.outcome === 'queued').length,
     ownedSkips: receipt.apps.reduce((n, app) => n + [...app.pullRequests, ...app.issues].filter(item => ['actively-owned', 'external-claim'].includes(item.disposition)).length, 0),
     duplicateAdmissionsPrevented: receipt.decisions.filter(d => d.duplicate).length,
@@ -388,7 +436,10 @@ async function scan({ dryRun = false, force = false, source = 'scheduled' } = {}
     deterministicActions: 0,
     modelCalls: 0,
   };
-  if (!dryRun && (role.enabled || prior)) await withStateLock(async () => {
+}
+
+function persistReceipt(receipt, policyKey) {
+  return withStateLock(async () => {
     const current = await loadState();
     const dispatches = { ...current.developmentWatchdog?.dispatches };
     for (const decision of receipt.decisions) if (decision.kind === 'pr' && decision.outcome === 'queued') {
@@ -403,6 +454,26 @@ async function scan({ dryRun = false, force = false, source = 'scheduled' } = {}
     current.developmentWatchdog = { policyKey, dispatches: Object.fromEntries(Object.entries(dispatches).slice(-1000)), latest: receipt, history: [...(current.developmentWatchdog?.history || []), receipt].slice(-24) };
     await saveState(current);
   });
+}
+
+async function scan({ dryRun = false, force = false, source = 'scheduled' } = {}) {
+  const state = await loadState();
+  const role = normalizePersistentMindMaintainer(state.config?.persistentMindMaintainer);
+  const prior = state.developmentWatchdog?.latest;
+  const policyKey = JSON.stringify([role, normalizePersistentMindCapabilities(state.config?.persistentMindCapabilities), state.paused, getDomainMode(state.config, 'cos')]);
+  const cached = freshCachedReceipt(state, policyKey, role, { dryRun, force });
+  if (cached) return cached;
+  const receipt = { schemaVersion: 1, id: randomUUID(), checkedAt: new Date().toISOString(), source, dryRun,
+    complete: true, availableSlots: 0, blockers: [], apps: [], decisions: [], recovery: [] };
+  if (!role.enabled) receipt.blockers.push('maintainer-disabled');
+  else if (!role.appIds.some(id => mayReadApp(state, id))) {
+    receipt.complete = false;
+    receipt.blockers.push('no-readable-maintainer-scope');
+    receipt.apps = role.appIds.map(unavailableAppRow);
+  } else await scanMaintainedApps({ state, role, receipt, dryRun });
+  stampFirstObserved(receipt, prior);
+  receipt.counts = receiptCounts(receipt);
+  if (!dryRun && (role.enabled || prior)) await persistReceipt(receipt, policyKey);
   return receipt;
 }
 

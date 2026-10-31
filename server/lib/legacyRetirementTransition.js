@@ -23,7 +23,8 @@ export function applyLegacyRetirementResolutions(outcome, resolutions, now) {
   if (transition?.version !== 1) return outcome;
   const current = new Set([...(outcome.retirementObligations || []), ...(outcome.remaining || [])].map(legacyRetirementKey));
   const accepted = resolutions.filter(row => current.has(row.key) && (transition.observations.includes(row.key)
-    || (row.disposition === 'local-cleanup-not-required' && row.observation.reason === 'retirement-provenance-unverified')));
+    || (row.disposition === 'local-cleanup-not-required' && row.observation.reason === 'retirement-provenance-unverified')
+    || (row.disposition === 'absent-head-preserved' && ['retirement-receipt-unverified', 'retirement-provenance-unverified'].includes(row.observation.reason))));
   if (!accepted.length) return outcome;
   const keys = new Set(accepted.map(row => row.key));
   const history = [...transition.resolutions];

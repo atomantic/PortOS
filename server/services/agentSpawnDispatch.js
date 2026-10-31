@@ -39,6 +39,7 @@ import { prepareAgentWorkspace } from './agentWorkspacePrep.js';
 import { buildClaim } from './cosTaskClaim.js';
 import { cosEvents, emitLog } from './cosEvents.js';
 import { currentTaskTypeName } from '../lib/taskTypeRenames.js';
+import { isHostShuttingDown } from '../lib/hostShutdown.js';
 
 const ROOT_DIR = PATHS.root;
 const AGENTS_DIR = PATHS.cosAgents;
@@ -257,6 +258,13 @@ async function runAgentDispatch(context, { spawnViaRunner } = {}) {
     const injectedMemories = promptTrace.injectedMemories || [];
     let systemPromptFile = null;
     const agentDir = join(AGENTS_DIR, agentId);
+    // A preparation that straddled SIGTERM must not write a durable owner the
+    // shutdown marker never saw: the next boot would charge it as a genuine
+    // orphan (#14170). The task stays pending; cleanup releases claim and tree.
+    if (isHostShuttingDown()) {
+      await context.cleanupOnError('PortOS is shutting down');
+      return null;
+    }
     const { runId, registeredAgent } = await withBackupAssetPublication(async () => {
       if (!existsSync(agentDir)) {
         await ensureDir(agentDir);

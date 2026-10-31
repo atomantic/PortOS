@@ -186,7 +186,7 @@ export default function CollapsibleText({
         <button
           type="button"
           onClick={() => (expanded ? setExpanded(false) : open())}
-          className="flex items-center gap-0.5 mt-0.5 text-xs text-port-accent hover:text-port-accent/80 transition-colors"
+          className="flex items-center gap-0.5 mt-0.5 pointer-coarse:min-h-11 text-xs text-port-accent hover:text-port-accent/80 transition-colors"
           aria-expanded={expanded}
           aria-controls={id}
         >

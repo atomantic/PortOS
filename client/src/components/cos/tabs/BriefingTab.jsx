@@ -18,6 +18,8 @@ import { RapidReaderTrigger } from '../../RapidReader';
 import BrailleSpinner from '../../BrailleSpinner';
 import { formatWeekdayDate } from '../../../utils/formatters';
 import EmptyState from '../../EmptyState';
+import LoadFailedState from '../../ui/LoadFailedState';
+import ListLoadError from '../../ui/ListLoadError';
 import { useAsyncAction } from '../../../hooks/useAsyncAction';
 import { useSocketResource } from '../../../hooks/useSocketResource';
 
@@ -184,10 +186,10 @@ export default function BriefingTab() {
     generateBriefing();
   };
 
-  const { data, loading, refetch } = useSocketResource(async () => {
+  const { data, loading, error, refetch } = useSocketResource(async () => {
     const [listResult, briefing] = await Promise.all([
-      api.getCosBriefings(),
-      selectedDate ? api.getCosBriefing(selectedDate) : api.getCosLatestBriefing(),
+      api.getCosBriefings({ silent: true }),
+      selectedDate ? api.getCosBriefing(selectedDate, { silent: true }) : api.getCosLatestBriefing({ silent: true }),
     ]);
     return { briefings: listResult.briefings || [], briefing };
   }, {
@@ -261,7 +263,15 @@ export default function BriefingTab() {
         </div>
       </div>
 
-      {!parsed ? (
+      {!parsed && error ? (
+        // Never the "No briefing yet" state: its Generate action spends a
+        // provider run on a briefing that may already exist.
+        <LoadFailedState
+          title="Could not load the daily briefing."
+          hint={error.message || 'Retry.'}
+          onRetry={() => refetch()}
+        />
+      ) : !parsed ? (
         <div className="flex flex-col items-center">
           <EmptyState
             icon={Newspaper}
@@ -284,6 +294,10 @@ export default function BriefingTab() {
         </div>
       ) : (
         <>
+          {/* A failed refresh keeps the shown briefing; say it may be stale. */}
+          {error && (
+            <ListLoadError what="the latest briefing" error={error} onRetry={() => refetch()} />
+          )}
           {/* Briefing Title */}
           {parsed.title && (
             <div className="bg-gradient-to-r from-port-accent/10 to-transparent border border-port-accent/20 rounded-lg p-4">

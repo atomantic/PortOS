@@ -148,7 +148,7 @@ export default function BucketCard({
             ref={setBucketActivatorRef}
             {...bucketDragAttrs}
             {...bucketDragListeners}
-            className="shrink-0 flex items-center justify-center text-gray-500 cursor-grab active:cursor-grabbing"
+            className="shrink-0 flex items-center justify-center touch-none text-gray-500 cursor-grab active:cursor-grabbing"
             aria-label={`Reorder bucket ${bucket.name}`}
             title="Drag to reorder buckets"
           >

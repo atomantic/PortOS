@@ -109,11 +109,21 @@ function completionDecision({ repoPath, branch, prUrl, tip, agents }) {
     // before finalization can capture a PR. Ownership release is not merge consent.
     const bound = bindings.flatMap(value => Array.isArray(value) ? value : []);
     const scopes = [meta.worktreeBranch, meta.jiraBranch, ...(bound.length ? bound : [meta.claimBranch])];
+    // A review run is bound to the one PR it was assigned. Without that scope a
+    // reused branch (the quality-snapshot publisher) inherits every past run's
+    // obligation on every later PR, and none of them can ever be released.
+    const target = meta.reviewLoopMergeTarget?.branch === branch ? meta.reviewLoopMergeTarget.url : undefined;
     const policy = receipt?.branch === branch ? receipt : {
       branch: scopes.includes(branch) ? branch : null,
       completion,
+      ...(target && { prUrl: target }),
     };
     if (policy.branch !== branch || (prUrl && policy.prUrl && policy.prUrl !== prUrl)) continue;
+    // A review-then-merge run whose assigned PR the forge verified MERGED has
+    // nothing left to review or merge. A human handoff is never discharged.
+    if (policy.completion === PR_COMPLETIONS.REVIEW_THEN_MERGE && agent.status === 'completed'
+      && meta.mergedReviewFollowUp?.status === 'verified' && target
+      && meta.mergedReviewFollowUp.prUrl === target && (policy.prUrl ?? target) === target) continue;
     policies.push({ ...policy, agent, time: Date.parse(agent.startedAt) || 0 });
   }
   policies.sort((a, b) => b.time - a.time);
@@ -676,6 +686,14 @@ export function mergedReceiptRetirementPolicy(input) {
 }
 
 export async function readBranchCompletionHold(input, deps = {}) {
+  return (await readBranchCompletionHoldDetail(input, deps)).reason;
+}
+
+/** `readBranchCompletionHold` plus `unshipped`: a review-then-merge obligation
+ * whose run ended before any PR was recorded for it (no open PR either). The
+ * obligation gates the eventual merge, not the work: branch-reconcile may hand
+ * such a branch to a coordinator to open its PR through the review workflow. */
+export async function readBranchCompletionHoldDetail(input, deps = {}) {
   const readPolicies = deps.readPolicies || readBranchCompletionPolicies;
   const agents = input.agents ?? await readPolicies().catch(() => null);
   const { execGit } = await import('../lib/execGit.js');
@@ -686,11 +704,16 @@ export async function readBranchCompletionHold(input, deps = {}) {
   // fetched. Only a potential explicit release needs a fresh forge read; offline
   // cleanup preserves the handoff when that read cannot establish the same head.
   if (input.retirement === true && decision.obligation?.prUrl
-    && await verifiedPolicyTip(input.repoPath, input.branch, decision.obligation.prUrl, { requireMerged: true, expectedTip: input.tip }).catch(() => null) === tip) return null;
-  if (decision.release && await verifiedPolicyTip(input.repoPath, input.branch, decision.release.prUrl).catch(() => null) === tip) return null;
-  if (input.retirement === true && await isVacuousReviewObligation(input, decision, tip)) return null;
-  return decision.reason;
+    && await verifiedPolicyTip(input.repoPath, input.branch, decision.obligation.prUrl, { requireMerged: true, expectedTip: input.tip }).catch(() => null) === tip) return { reason: null };
+  if (decision.release && await verifiedPolicyTip(input.repoPath, input.branch, decision.release.prUrl).catch(() => null) === tip) return { reason: null };
+  if (input.retirement === true && await isVacuousReviewObligation(input, decision, tip)) return { reason: null };
+  return { reason: decision.reason ?? null, unshipped: isUnshippedReviewObligation(input, decision) };
 }
+
+// No PR was ever opened for this review-then-merge obligation: nothing to
+// review yet, and no leave-open handoff a human must answer.
+const isUnshippedReviewObligation = (input, decision) => decision.reason === 'pr-completion-review-required' && !input.prUrl
+  && !decision.policies.some(policy => policy.completion === PR_COMPLETIONS.LEAVE_OPEN || retirementPr(policy));
 
 /** A review-then-merge run that never opened a PR and left no commit the default
  * branch lacks has nothing to review or merge, and no later receipt can name a
@@ -700,9 +723,7 @@ export async function readBranchCompletionHold(input, deps = {}) {
  * a recorded PR, unmerged commits, an unresolvable default branch) is kept.
  */
 async function isVacuousReviewObligation(input, decision, tip) {
-  if (decision.reason !== 'pr-completion-review-required' || input.prUrl
-    || !/^[a-f0-9]{40,64}$/i.test(tip || '')
-    || decision.policies.some(policy => policy.completion === PR_COMPLETIONS.LEAVE_OPEN || retirementPr(policy))) return false;
+  if (!isUnshippedReviewObligation(input, decision) || !/^[a-f0-9]{40,64}$/i.test(tip || '')) return false;
   const { getDefaultBranch } = await import('./git.js');
   const base = await getDefaultBranch(input.repoPath, { strict: true }).catch(() => null);
   if (!base) return false;

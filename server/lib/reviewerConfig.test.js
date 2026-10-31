@@ -789,6 +789,19 @@ describe('claim reviewer round-trip (prompt CSV ↔ persisted metadata)', () => 
       .toEqual(['claude']);
   });
 
+  it('keeps an inherited default reviewer optional when the task optional set predates it', () => {
+    // A schedule override saved against an older defaults list must not turn a
+    // reviewer later added to the defaults as `~opt` into a merge-blocking one.
+    const defaults = { reviewers: ['grok'], optionalReviewers: ['codex', 'grok'] };
+    const stale = { optionalReviewers: ['codex', 'mtplx'] };
+    const config = resolveClaimReviewerConfig(stale, defaults, defaults.reviewers);
+    expect(config.csv).toBe('grok~opt');
+    // Round-trips through the persisted claim metadata.
+    expect(resolveClaimReviewerConfig(reviewerConfigMetadata(config), defaults, defaults.reviewers).csv).toBe('grok~opt');
+    // A reviewer the task pins itself still follows the task's own set.
+    expect(resolveClaimReviewerConfig({ reviewers: ['grok'], optionalReviewers: [] }, defaults, defaults.reviewers).csv).toBe('grok');
+  });
+
   it('resolveClaimReviewerConfig returns empty reviewers and empty CSV when prCompletion is merge-on-green', () => {
     const config = resolveClaimReviewerConfig({ prCompletion: 'merge-on-green', reviewers: ['codex'] }, defaults, defaults.reviewers);
     expect(config.reviewers).toEqual([]);

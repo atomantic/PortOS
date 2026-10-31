@@ -2,14 +2,19 @@ import { useEffect, useRef } from 'react';
 import { Pencil, SkipBack, SkipForward } from 'lucide-react';
 import { shouldIgnoreGlobalKey } from '../../lib/a11yKeyboard.js';
 import { ShotLockButton } from './ShotLock.jsx';
+import { isPreMusicShot } from '../../../../server/lib/musicVideoColdOpen.js';
 
 // Back within this far into a shot goes to the shot before it; further in, to its own start.
 const RESTART_SEC = 1;
 // A seek lands a hair off the start it aimed at; this much counts as being on it.
 const ON_START_SEC = 0.05;
 
+// A shot before the song (the cold open) keeps no place on the song's clock.
+const onSongClock = (scene) => Number.isFinite(scene?.startSec) && !isPreMusicShot(scene);
+
 const startsIn = (scenes, range) => (scenes || [])
-  .map((scene) => scene?.startSec)
+  .filter(onSongClock)
+  .map((scene) => scene.startSec)
   .filter((start) => Number.isFinite(start)
     && (!range || (start >= range.startSec - ON_START_SEC && (range.endSec == null || start < range.endSec))))
   .sort((a, b) => a - b);
@@ -33,10 +38,10 @@ export function shotSteps(scenes, t, range = null) {
 
 /**
  * Each shot's number as the player counts it ("Shot n / N"): its place in song
- * order. A shot with no start time has no number.
+ * order. A shot with no start time, or one before the song, has no number.
  */
 export function shotNumbers(scenes) {
-  const timed = (scenes || []).filter((scene) => Number.isFinite(scene?.startSec));
+  const timed = (scenes || []).filter(onSongClock);
   return new Map([...timed].sort((a, b) => a.startSec - b.startSec).map((scene, i) => [scene.sceneId, i + 1]));
 }
 
@@ -44,7 +49,7 @@ export function shotNumbers(scenes) {
 function shotOnScreen(scenes, t) {
   let current = null;
   for (const scene of scenes || []) {
-    if (Number.isFinite(scene?.startSec) && scene.startSec <= t + ON_START_SEC && (!current || scene.startSec >= current.startSec)) current = scene;
+    if (onSongClock(scene) && scene.startSec <= t + ON_START_SEC && (!current || scene.startSec >= current.startSec)) current = scene;
   }
   return current;
 }

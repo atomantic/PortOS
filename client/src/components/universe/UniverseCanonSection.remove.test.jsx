@@ -113,7 +113,7 @@ describe('UniverseCanonSection — remove entry', () => {
     setCatalogIngredientLock.mockResolvedValue({ id: ALEX.ingredientId, type: 'character', name: ALEX.name, payload: { ...ALEX, locked: false } });
     await renderSection({ universe: { characters: [ALEX] } });
     expect(screen.queryByLabelText('Pronouns')).not.toBeInTheDocument();
-    expect(screen.getByRole('img', { name: 'Alex' })).toHaveAttribute('src', '/data/images/chosen-cover.png');
+    expect(screen.getByRole('img', { name: 'Alex' })).toHaveAttribute('src', '/data/image-thumbnails/chosen-cover.webp');
     const href = screen.getByRole('link', { name: 'Open Alex' }).getAttribute('href');
     expect(href).toMatch(/^\/casting\/ing-alex\?returnTo=/);
     expect(screen.getByRole('button', { name: 'Render reference for Alex' })).toBeEnabled();

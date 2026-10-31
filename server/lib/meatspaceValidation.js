@@ -215,4 +215,10 @@ export const eyeExamUpdateSchema = z.object({
   leftAxis: z.number().nullable().optional()
 });
 
-// =============================================================================
+export const healthRowParamSchema = z.object({
+  id: z.string().min(1).max(200)
+});
+
+export const healthDayParamSchema = z.object({
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
+});

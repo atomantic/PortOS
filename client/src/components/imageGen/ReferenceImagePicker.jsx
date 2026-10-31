@@ -63,7 +63,7 @@ export default function ReferenceImagePicker({
                       type="button"
                       onClick={() => onClear(i)}
                       disabled={disabled}
-                      className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-port-card border border-port-border text-gray-300 hover:text-white hover:bg-port-error/40 flex items-center justify-center disabled:opacity-50"
+                      className="absolute -top-1.5 -right-1.5 w-5 h-5 max-sm:w-8 max-sm:h-8 max-sm:-top-2.5 max-sm:-right-2.5 rounded-full bg-port-card border border-port-border text-gray-300 hover:text-white hover:bg-port-error/40 flex items-center justify-center disabled:opacity-50"
                       aria-label={`Remove reference ${i + 1}`}
                       title={`Remove reference ${i + 1}`}
                     >
@@ -87,7 +87,7 @@ export default function ReferenceImagePicker({
                   )}
                 </>
               ) : (
-                <div className="flex flex-col gap-1">
+                <div className="flex flex-col gap-2 sm:gap-1">
                   <FilePickerButton
                     id={slotId}
                     accept={IMAGE_ACCEPT}
@@ -104,7 +104,7 @@ export default function ReferenceImagePicker({
                       type="button"
                       onClick={() => onBrowse(i)}
                       disabled={disabled}
-                      className="flex items-center justify-center gap-1 h-[20px] border border-port-border rounded text-[10px] text-gray-500 hover:text-white hover:border-port-accent transition-colors disabled:opacity-50"
+                      className="flex items-center justify-center gap-1 min-h-[44px] sm:min-h-0 sm:h-[20px] border border-port-border rounded text-xs sm:text-[10px] text-gray-500 hover:text-white hover:border-port-accent transition-colors disabled:opacity-50"
                       title="Pick a reference image from your gallery"
                     >
                       <Images className="w-3 h-3" /> Gallery

@@ -829,6 +829,149 @@ export async function runFoundationGate(seriesId, record) {
   return outcome?.pause ? { ...outcome, foundationDiscarded: bank.byKey() } : outcome;
 }
 
+// Judges whether the repair awaiting this round's verdict earned its keep,
+// against the re-judge `snap` (weighted `score`) of the content it produced.
+async function measureFoundationRepair(seriesId, pendingRepair, snap, score) {
+  const dimension = pendingRepair.dimension;
+  const beforeDimension = pendingRepair.judge.dimensions?.[dimension] || {};
+  const afterDimension = snap.dimensions?.[dimension] || {};
+  const beforeTargetScore = Number(beforeDimension.score) || 0;
+  const afterTargetScore = Number(afterDimension.score) || 0;
+  const beforeWeighted = Number(pendingRepair.judge.weightedScore) || 0;
+  const targetImproved = afterTargetScore > beforeTargetScore;
+  const targetTied = afterTargetScore === beforeTargetScore;
+  const gapChanged = !sameFinding(
+    { location: dimension, problem: beforeDimension.gap || '' },
+    { location: dimension, problem: afterDimension.gap || '' },
+  );
+  // A character repair's work is objectively measurable without asking an
+  // LLM. A judge that renders or reads the cast wrongly can report a tied
+  // score over a foundation it can no longer see — that cost a complete
+  // five-sheet character design pass on 2026-08-11, discarded because the
+  // judge prompt showed each authored field as the bare word `ready`.
+  //
+  // Two independent facts on disk outrank that tie, and EITHER one earns
+  // the repair, because neither covers the other's ground: blank named
+  // fields (framework/profile/visual) miss the psychology profile entirely,
+  // and cast-integrity gaps (#6415) miss the visual sheets. A repair that
+  // authored a lead's theory of control and its six drives moved only the
+  // second; the 2026-08-11 design pass moved only the first.
+  const progressAfter = pendingRepair.characterProgressBefore === null
+    ? null
+    : await readFoundationCharacterProgress(seriesId).catch(() => null);
+  const progressBefore = pendingRepair.characterProgressBefore;
+  const objectivelyFilled = progressAfter !== null
+    && (progressAfter.blanks < progressBefore.blanks
+      || progressAfter.integrityFindings < progressBefore.integrityFindings);
+  // A tie can represent a deeper newly exposed layer, but only when the
+  // aggregate did not regress. A strictly improved target is accepted even
+  // if it makes another latent dimension judgeable.
+  const earned = targetImproved
+    || (targetTied && objectivelyFilled)
+    || (targetTied && gapChanged && score >= beforeWeighted);
+  return {
+    dimension, earned, afterGap: afterDimension.gap,
+    beforeTargetScore, afterTargetScore, beforeWeighted,
+  };
+}
+
+// Accepts or rewinds the pending repair. Returns `{ pause }` when the rewind
+// could not be verified, `{ restoredJudge }` when the checkpoint is back in
+// place (the round continues on that verdict), and `{}` for a kept repair.
+async function settleFoundationRepair(seriesId, pendingRepair, {
+  snap, score, round, bank, rejectionByDimension,
+}) {
+  const {
+    dimension, earned, afterGap, beforeTargetScore, afterTargetScore, beforeWeighted,
+  } = await measureFoundationRepair(seriesId, pendingRepair, snap, score);
+  await Promise.all((pendingRepair.runIds || []).map((runId) => recordModelOutcome(runId, {
+    role: 'creative', stage: 'foundationGate', outcome: earned ? 'accepted' : 'rejected', target: dimension,
+    scoreBefore: beforeTargetScore, scoreAfter: afterTargetScore,
+    weightedBefore: beforeWeighted, weightedAfter: score,
+  }).catch(() => {})));
+  if (earned) {
+    // A kept repair clears the dimension's last-rejection NOTE: the next
+    // attempt is working from different content, so a stale "this failed,
+    // try another angle" strategy line would misdirect it. The banked
+    // evidence survives — those candidates were still rejected.
+    rejectionByDimension.delete(dimension);
+    return {};
+  }
+  const rejectedJudge = pendingRepair.judge;
+  const copy = foundationRepairMissed({
+    dimension,
+    targetBefore: beforeTargetScore, targetAfter: afterTargetScore,
+    weightedBefore: beforeWeighted, weightedAfter: score,
+  });
+  // Hand back the verdict that scored this checkpoint: the rewind puts its
+  // content back, and re-pinning its judgment keeps a resume (or the next
+  // read) from re-buying a score the gate is holding.
+  const rollback = await restoreFoundationState(seriesId, pendingRepair.snapshot, { judge: rejectedJudge });
+  const discarded = discardedSet(residualFindings(snap.dimensions));
+  // Bank it the moment it is thrown away, not when the next repair reads
+  // it — an unverified restore returns below without ever reaching a
+  // retry, and its evidence still belongs to the resume.
+  bank.record(discarded, dimension);
+  broadcast(seriesId, {
+    type: 'foundation:rollback', round, dimension,
+    targetBefore: beforeTargetScore, targetAfter: afterTargetScore,
+    weightedBefore: beforeWeighted, weightedAfter: score,
+    // A verified rewind is also a retryable one; an unverified one stops
+    // the gate below, so this single flag says both.
+    reverted: rollback.restored,
+  });
+  // An unverified restore is the one unrecoverable case: the foundation is
+  // no longer known to match ANY judged state, so another repair would be
+  // built on corruption. Everything else keeps going.
+  if (!rollback.restored) {
+    return {
+      pause: {
+        pause: true,
+        pauseKind: 'regression',
+        reason: copy.unverified(rollback.reason),
+        residual: residualFindings(rejectedJudge.dimensions),
+        discarded,
+      },
+    };
+  }
+  // The checkpoint is verified back in place, so the foundation is once
+  // again exactly what `rejectedJudge` scored: adopt that verdict for the
+  // rest of this round (no second judge call, nothing billed) and let the
+  // round's stall guard count the rejection before another attempt runs.
+  rejectionByDimension.set(dimension, {
+    discarded,
+    rewind: copy.rewind,
+    note: copy.retryNote(afterGap),
+  });
+  console.log(`↩️ foundation ${dimension} repair reverted — series=${seriesId.slice(0, 12)} round=${round}: ${copy.missed}`);
+  return { restoredJudge: rejectedJudge };
+}
+
+// Advances `weak.dimension`'s stall history by this round's verdict.
+function advanceDimensionConvergence(convergenceByDimension, weak, snap) {
+  const priorConvergence = convergenceByDimension.get(weak.dimension)
+    || { best: null, sinceBest: 0, finding: null };
+  const currentFinding = {
+    location: weak.dimension,
+    problem: snap.dimensions?.[weak.dimension]?.gap || '',
+  };
+  let targetConvergence = trackConvergence(priorConvergence, 10 - weak.score);
+  // A harsh critic can hold a dimension at the same score after the repair
+  // closed its broad gap, then expose a genuinely different layer beneath it.
+  // That is progress even though the coarse 0–10 number tied. Give the new
+  // gap its own patience window; fuzzy-match paraphrases of the SAME gap so a
+  // judge cannot evade the bounded stall guard merely by rewording itself.
+  const changedGap = priorConvergence.finding?.problem
+    && currentFinding.problem
+    && !sameFinding(priorConvergence.finding, currentFinding);
+  if (targetConvergence.sinceBest > 0 && changedGap) {
+    targetConvergence = { best: targetConvergence.best, sinceBest: 0 };
+  }
+  targetConvergence.finding = currentFinding;
+  convergenceByDimension.set(weak.dimension, targetConvergence);
+  return targetConvergence;
+}
+
 async function runFoundationRounds(seriesId, record, { bank }) {
   const maxRounds = Number.isInteger(record.options.maxFoundationRounds)
     ? record.options.maxFoundationRounds
@@ -895,8 +1038,8 @@ async function runFoundationRounds(seriesId, record, { bank }) {
     const judgeHooks = providerOverrideOpts(record, 'judge');
     // `let` because a rejected repair rewinds the foundation to its checkpoint:
     // the restored content is exactly what the PRE-repair judge scored, so the
-    // rest of the round re-reads that verdict rather than re-judging (see the
-    // rollback branch below). Looping back to this call instead would also
+    // rest of the round re-reads that verdict rather than re-judging (see
+    // settleFoundationRepair). Looping back to this call instead would also
     // re-derive it — the hash cache absorbs the LLM cost — but it would spend a
     // whole round of the run's repair budget re-learning what the gate is
     // already holding, which is the budget the retry exists to use.
@@ -925,104 +1068,14 @@ async function runFoundationRounds(seriesId, record, { bank }) {
       weakest: weak?.dimension || null,
     });
     if (pendingRepair) {
-      const dimension = pendingRepair.dimension;
-      const beforeDimension = pendingRepair.judge.dimensions?.[dimension] || {};
-      const afterDimension = snap.dimensions?.[dimension] || {};
-      const beforeTargetScore = Number(beforeDimension.score) || 0;
-      const afterTargetScore = Number(afterDimension.score) || 0;
-      const beforeWeighted = Number(pendingRepair.judge.weightedScore) || 0;
-      const targetImproved = afterTargetScore > beforeTargetScore;
-      const targetTied = afterTargetScore === beforeTargetScore;
-      const gapChanged = !sameFinding(
-        { location: dimension, problem: beforeDimension.gap || '' },
-        { location: dimension, problem: afterDimension.gap || '' },
-      );
-      // A character repair's work is objectively measurable without asking an
-      // LLM. A judge that renders or reads the cast wrongly can report a tied
-      // score over a foundation it can no longer see — that cost a complete
-      // five-sheet character design pass on 2026-08-11, discarded because the
-      // judge prompt showed each authored field as the bare word `ready`.
-      //
-      // Two independent facts on disk outrank that tie, and EITHER one earns
-      // the repair, because neither covers the other's ground: blank named
-      // fields (framework/profile/visual) miss the psychology profile entirely,
-      // and cast-integrity gaps (#6415) miss the visual sheets. A repair that
-      // authored a lead's theory of control and its six drives moved only the
-      // second; the 2026-08-11 design pass moved only the first.
-      const progressAfter = pendingRepair.characterProgressBefore === null
-        ? null
-        : await readFoundationCharacterProgress(seriesId).catch(() => null);
-      const progressBefore = pendingRepair.characterProgressBefore;
-      const objectivelyFilled = progressAfter !== null
-        && (progressAfter.blanks < progressBefore.blanks
-          || progressAfter.integrityFindings < progressBefore.integrityFindings);
-      // A tie can represent a deeper newly exposed layer, but only when the
-      // aggregate did not regress. A strictly improved target is accepted even
-      // if it makes another latent dimension judgeable.
-      const earned = targetImproved
-        || (targetTied && objectivelyFilled)
-        || (targetTied && gapChanged && score >= beforeWeighted);
-      await Promise.all((pendingRepair.runIds || []).map((runId) => recordModelOutcome(runId, {
-        role: 'creative', stage: 'foundationGate', outcome: earned ? 'accepted' : 'rejected', target: dimension,
-        scoreBefore: beforeTargetScore, scoreAfter: afterTargetScore,
-        weightedBefore: beforeWeighted, weightedAfter: score,
-      }).catch(() => {})));
-      const rejectedJudge = pendingRepair.judge;
-      const rejectedSnapshot = pendingRepair.snapshot;
+      const settled = await settleFoundationRepair(seriesId, pendingRepair, {
+        snap, score, round, bank, rejectionByDimension,
+      });
       pendingRepair = null;
-      if (!earned) {
-        const copy = foundationRepairMissed({
-          dimension,
-          targetBefore: beforeTargetScore, targetAfter: afterTargetScore,
-          weightedBefore: beforeWeighted, weightedAfter: score,
-        });
-        // Hand back the verdict that scored this checkpoint: the rewind puts its
-        // content back, and re-pinning its judgment keeps a resume (or the next
-        // read) from re-buying a score the gate is holding.
-        const rollback = await restoreFoundationState(seriesId, rejectedSnapshot, { judge: rejectedJudge });
-        const discarded = discardedSet(residualFindings(snap.dimensions));
-        // Bank it the moment it is thrown away, not when the next repair reads
-        // it — an unverified restore returns below without ever reaching a
-        // retry, and its evidence still belongs to the resume.
-        bank.record(discarded, dimension);
-        broadcast(seriesId, {
-          type: 'foundation:rollback', round, dimension,
-          targetBefore: beforeTargetScore, targetAfter: afterTargetScore,
-          weightedBefore: beforeWeighted, weightedAfter: score,
-          // A verified rewind is also a retryable one; an unverified one stops
-          // the gate below, so this single flag says both.
-          reverted: rollback.restored,
-        });
-        // An unverified restore is the one unrecoverable case: the foundation is
-        // no longer known to match ANY judged state, so another repair would be
-        // built on corruption. Everything else keeps going.
-        if (!rollback.restored) {
-          return {
-            pause: true,
-            pauseKind: 'regression',
-            reason: copy.unverified(rollback.reason),
-            residual: residualFindings(rejectedJudge.dimensions),
-            discarded,
-          };
-        }
-        // The checkpoint is verified back in place, so the foundation is once
-        // again exactly what `rejectedJudge` scored: adopt that verdict for the
-        // rest of this round (no second judge call, nothing billed) and let the
-        // stall guard below count the rejection before another attempt runs.
-        rejectionByDimension.set(dimension, {
-          discarded,
-          rewind: copy.rewind,
-          note: copy.retryNote(afterDimension.gap),
-        });
-        snap = rejectedJudge;
+      if (settled.pause) return settled.pause;
+      if (settled.restoredJudge) {
+        snap = settled.restoredJudge;
         ({ score, gate, weak } = readFoundationVerdict(snap, threshold));
-        console.log(`↩️ foundation ${dimension} repair reverted — series=${seriesId.slice(0, 12)} round=${round}: ${copy.missed}`);
-      } else {
-        // A kept repair clears the dimension's last-rejection NOTE: the next
-        // attempt is working from different content, so a stale "this failed,
-        // try another angle" strategy line would misdirect it. The banked
-        // evidence survives — those candidates were still rejected.
-        rejectionByDimension.delete(dimension);
       }
     }
     if (gate.passes) {
@@ -1061,26 +1114,7 @@ async function runFoundationRounds(seriesId, record, { bank }) {
     // THEIR OWN target. A global weighted high-water mark is not comparable
     // across different targets: improving character can make a previously
     // latent structure or craft gap judgeable and lower the aggregate score.
-    const priorConvergence = convergenceByDimension.get(weak.dimension)
-      || { best: null, sinceBest: 0, finding: null };
-    const currentFinding = {
-      location: weak.dimension,
-      problem: snap.dimensions?.[weak.dimension]?.gap || '',
-    };
-    let targetConvergence = trackConvergence(priorConvergence, 10 - weak.score);
-    // A harsh critic can hold a dimension at the same score after the repair
-    // closed its broad gap, then expose a genuinely different layer beneath it.
-    // That is progress even though the coarse 0–10 number tied. Give the new
-    // gap its own patience window; fuzzy-match paraphrases of the SAME gap so a
-    // judge cannot evade the bounded stall guard merely by rewording itself.
-    const changedGap = priorConvergence.finding?.problem
-      && currentFinding.problem
-      && !sameFinding(priorConvergence.finding, currentFinding);
-    if (targetConvergence.sinceBest > 0 && changedGap) {
-      targetConvergence = { best: targetConvergence.best, sinceBest: 0 };
-    }
-    targetConvergence.finding = currentFinding;
-    convergenceByDimension.set(weak.dimension, targetConvergence);
+    const targetConvergence = advanceDimensionConvergence(convergenceByDimension, weak, snap);
     if (targetConvergence.sinceBest >= DIVERGENCE_PATIENCE) {
       const floorReason = gate.failingDimensions.length > 0
         ? `Foundation quality stopped improving with ${gate.failingDimensions.join(', ')} below the ${gate.dimensionFloor} dimension floor. Review those foundations and resume.`

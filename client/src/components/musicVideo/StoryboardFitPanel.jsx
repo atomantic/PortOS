@@ -15,6 +15,8 @@ const MARK_KINDS = { section: 'Section', lyric: 'Line' };
  * place (where each beat starts, its section and how its length changes) with
  * a start picker per beat, then written as one shot per panel. The preview
  * and the write run the same fit, so the shots written are the ones shown.
+ * Beats marked before the song are listed first with their length; they
+ * become the shots before the song and stay off its time.
  */
 export default function StoryboardFitPanel({ project, board, disabled, onFitted, onBoardStale }) {
   const [open, setOpen] = useState(false);
@@ -25,6 +27,8 @@ export default function StoryboardFitPanel({ project, board, disabled, onFitted,
   const song = useMemo(() => storyboardFitSong(project), [project]);
   const fit = useMemo(() => (open ? fitStoryboardToSong(board, song, { starts }) : null), [open, board, song, starts]);
   const existing = (project.scenes || []).length;
+  const preludeBeats = fit ? fit.beats.filter((beat) => beat.beforeSong).length : 0;
+  const preludeSec = fit ? fit.beats.reduce((sum, beat) => sum + (beat.beforeSong ? beat.durationSec : 0), 0) : 0;
 
   if (!song) return <p className="text-xs text-gray-400">Analyze the song on the Song step to fit this board to it.</p>;
   if (!open) {
@@ -62,18 +66,24 @@ export default function StoryboardFitPanel({ project, board, disabled, onFitted,
   return (
     <section aria-label="Fit to song" className="space-y-2 rounded-lg border border-port-border p-2">
       <p className="text-xs text-gray-400">
-        {plural(fit.beats.length, 'beat')} become {plural(fit.shots.length, 'shot')} over <span className="tabular-nums">{formatTimecode(song.durationSec)}</span>, one per panel. Pick where a beat starts to move it.
+        {plural(fit.beats.length, 'beat')} become {plural(fit.shots.length, 'shot')} over <span className="tabular-nums">{formatTimecode(song.durationSec)}</span>, one per panel{preludeBeats > 0 && <>, after <span className="tabular-nums">{formatTimecode(preludeSec)}</span> before the song</>}. Pick where a beat starts to move it.
       </p>
       <ol className="space-y-1.5" aria-label="Beats on the song">
         {fit.beats.map((beat, index) => (
           <li key={beat.beatId} className="space-y-1 rounded border border-port-border/60 p-1.5 text-xs text-gray-400">
             <div className="flex flex-wrap items-baseline gap-x-2">
               <span className="text-sm text-white">{index + 1}. {beat.title}</span>
-              <span className="tabular-nums">{formatTimecode(beat.startSec)}–{formatTimecode(beat.endSec)}</span>
-              {beat.sectionLabel && <span>{beat.sectionLabel}</span>}
-              <span className="tabular-nums">board {formatTimecode(beat.boardSec)} → song {formatTimecode(beat.songSec)}</span>
+              {beat.beforeSong ? (
+                <span className="tabular-nums">Before the song · {formatTimecode(beat.durationSec)}</span>
+              ) : (
+                <>
+                  <span className="tabular-nums">{formatTimecode(beat.startSec)}–{formatTimecode(beat.endSec)}</span>
+                  {beat.sectionLabel && <span>{beat.sectionLabel}</span>}
+                  <span className="tabular-nums">board {formatTimecode(beat.boardSec)} → song {formatTimecode(beat.songSec)}</span>
+                </>
+              )}
             </div>
-            {index > 0 && (
+            {index > preludeBeats && (
               <div className="flex items-center gap-2">
                 <label htmlFor={`fit-start-${beat.beatId}`} className="shrink-0">Starts</label>
                 <select id={`fit-start-${beat.beatId}`} value={starts[beat.beatId] ?? ''} onChange={(e) => pick(beat.beatId, e.target.value)}

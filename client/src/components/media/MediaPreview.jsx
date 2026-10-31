@@ -151,6 +151,7 @@ export default function MediaPreview({
       variantGroup={variantGroup}
       onSelectVariant={onSelectVariant}
       onPromptAnalysis={handlePromptAnalysis}
+      quickEditReferenceChoices={items}
       {...handlers}
       {...navProps}
     />

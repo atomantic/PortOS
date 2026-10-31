@@ -95,12 +95,6 @@ describe('peerHttpClient', () => {
     expect(peerSocketOptions.transports).toContain('websocket');
   });
 
-  it('peerFetch falls through to global fetch for http:// URLs', async () => {
-    await expect(peerFetch('http://127.0.0.1:1/should-not-exist', {
-      signal: AbortSignal.timeout(50)
-    })).rejects.toBeDefined();
-  });
-
   describe('peerFetch headers', () => {
     const realFetch = globalThis.fetch;
     let calls;

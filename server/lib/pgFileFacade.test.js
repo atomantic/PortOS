@@ -247,14 +247,18 @@ describe('createRecordStoreBackendSelector', () => {
     expect(getBackendName()).toBe(null);
   });
 
-  it('falls back to a labeled default requirement message', async () => {
+  it('falls back to a labeled default requirement message naming the .env setting the launcher honors', async () => {
     process.env.NODE_ENV = 'production';
     delete process.env.MEMORY_BACKEND;
     delete process.env.VITEST;
     checkHealth.mockResolvedValue({ connected: false });
     const { loadFileBackend, loadDbBackend } = loaders();
     const { selectBackend } = createRecordStoreBackendSelector({ label: 'Demo', loadFileBackend, loadDbBackend });
-    await expect(selectBackend()).rejects.toThrow(/^Demo requires PostgreSQL/);
+    const error = await selectBackend().catch((err) => err);
+    expect(error.message).toMatch(/^Demo requires PostgreSQL/);
+    // `.env` has no loader; only PGMODE=file there becomes MEMORY_BACKEND=file.
+    expect(error.message).toContain('set PGMODE=file in .env');
+    expect(error.message).not.toMatch(/set MEMORY_BACKEND=file/);
   });
 
   it('retries selection after a failed Postgres bring-up instead of caching the failure', async () => {

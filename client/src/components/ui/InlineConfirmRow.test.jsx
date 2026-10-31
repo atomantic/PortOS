@@ -76,6 +76,15 @@ describe('InlineConfirmRow', () => {
     expect(screen.getByRole('button', { name: 'Cancel' }).className).toContain('min-h-9');
   });
 
+  it('stays stacked at every width when a narrow host opts in with stacked', () => {
+    render(<InlineConfirmRow question="Remove this item?" stacked />);
+    const wrapper = screen.getByText('Remove this item?').closest('div');
+    const actions = screen.getByRole('button', { name: 'Delete' }).parentElement;
+
+    expect(wrapper.className).not.toContain('sm:flex-row');
+    expect(actions.className).not.toContain('sm:flex');
+  });
+
   it('forwards passthrough props (data-*/aria-*) to the root like sibling primitives', () => {
     render(<InlineConfirmRow question="x" data-testid="confirm-row" aria-label="Confirm deletion" />);
     const wrapper = screen.getByTestId('confirm-row');

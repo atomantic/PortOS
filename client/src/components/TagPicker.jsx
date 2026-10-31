@@ -128,7 +128,7 @@ export default function TagPicker({
             <button
               type="button"
               onClick={() => removeTag(label)}
-              className="hover:text-white"
+              className="inline-flex items-center justify-center pointer-coarse:min-w-11 pointer-coarse:min-h-11 hover:text-white"
               aria-label={`Remove tag ${label}`}
             >
               <X size={12} />

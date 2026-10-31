@@ -1,6 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter } from 'react-router';
 import MediaLightbox from './MediaLightbox';
+
+const usageIndex = vi.hoisted(() => ({ value: {} }));
+vi.mock('../../hooks/useMediaUsages', () => ({ useMediaUsages: () => usageIndex.value, refreshMediaUsages: () => Promise.resolve() }));
 
 // The footer's AddToCollectionMenu and prompt modals pull the whole API surface
 // (and useProviderModels) into the import graph. Keep the mocks inert except
@@ -43,6 +47,22 @@ const imageItem = {
 // The overlay portals to <body>, so it is outside render()'s container —
 // query the whole document for the media element.
 const videoEl = () => document.body.querySelector('video');
+
+describe('MediaLightbox used in', () => {
+  afterEach(() => { usageIndex.value = {}; });
+
+  it('lists where the file is used, and a tap goes there and closes the viewer', () => {
+    usageIndex.value = { 'image:frame.png': [
+      { source: 'storyboard', label: 'Storyboard', id: 'sb-1', title: 'Example Board', role: 'Panel 3', href: '/storyboards/sb-1/panel/p-3' },
+    ] };
+    const onClose = vi.fn();
+    render(<MemoryRouter><MediaLightbox item={imageItem} onClose={onClose} /></MemoryRouter>);
+    const link = screen.getByRole('link', { name: 'Storyboard · Example Board · Panel 3' });
+    expect(link).toHaveAttribute('href', '/storyboards/sb-1/panel/p-3');
+    fireEvent.click(link);
+    expect(onClose).toHaveBeenCalled();
+  });
+});
 
 describe('MediaLightbox video element (mobile playback)', () => {
   // jsdom doesn't implement HTMLMediaElement.play; stub it per-test so we can

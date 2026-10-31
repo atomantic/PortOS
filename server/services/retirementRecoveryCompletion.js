@@ -62,7 +62,7 @@ async function verifyCurrentRetirement(input) {
     const { getAppById } = await import('./apps.js');
     const app = await getAppById(appId);
     if (!repoPath || !app?.repoPath || await realpath(repoPath) !== await realpath(app.repoPath)) return unverified('retirement-repository-unverified', target);
-    const { getBranchReconcileOutcome } = await import('./taskSchedule.js');
+    const { getBranchReconcileOutcome } = await import('./branchReconcileOutcome.js');
     const outcome = await getBranchReconcileOutcome(appId);
     const receipts = matchingRetirementReceipts(outcome, release).filter(row => row.archiveDir === null
       && row.checkoutIdentity === release.checkoutIdentity && Date.parse(row.retiredAt) >= Date.parse(createdAt)
@@ -98,7 +98,7 @@ export async function recordRetirementRecoveryCompletion(agent, verdict) {
   const { release, appId, createdAt } = verdict.target || {};
   await recordCleanupOutcome(agent.id, { ...release, status: verdict.status === 'verified' ? 'verified' : 'blocked', reason: verdict.reason });
   if (verdict.status !== 'verified' && appId && release?.branch && release.path && release.head) {
-    const { recordBranchReconcileOutcome } = await import('./taskSchedule.js');
+    const { recordBranchReconcileOutcome } = await import('./branchReconcileOutcome.js');
     await recordBranchReconcileOutcome(appId, {
       status: 'incomplete', reason: verdict.reason,
       retirementObligations: [{ ...release, createdAt, reason: 'retirement-receipt-unverified' }],

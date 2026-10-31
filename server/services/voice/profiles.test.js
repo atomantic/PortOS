@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, access } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -18,6 +18,7 @@ const {
   promotePresetProfile,
   createVoiceDesignCandidate,
   createClonedVoiceCandidate,
+  deleteVoiceProfile,
   promoteFineTunedProfile,
   resolveCharacterVoice,
   getProfileForSynthesis,
@@ -180,6 +181,39 @@ describe('voice profile contract', () => {
       }],
     });
     expect(candidate.sourceAssets[0].sha256).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it('deletes a cloned profile row and its source directory, and refuses a missing id', async () => {
+    queryMock.mockResolvedValueOnce({ rows: [] });
+    const candidate = await createClonedVoiceCandidate({
+      universeId: 'universe-1',
+      characterId: 'character-1',
+      characterName: 'Example Character',
+      audioBuffer: Buffer.from('RIFFmockwavheaderdata'),
+      filename: 'sample.wav',
+      transcript: 'Fake transcript.',
+      performerConsentConfirmed: true,
+    });
+    const dir = profileArtifactDirectory(candidate.id);
+    await access(dir);
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    queryMock.mockResolvedValueOnce({ rows: [{ id: candidate.id }] });
+    await expect(deleteVoiceProfile(candidate.id)).resolves.toEqual({ id: candidate.id });
+    expect(queryMock).toHaveBeenLastCalledWith(expect.stringMatching(/DELETE FROM voice_profiles/), [candidate.id]);
+    await expect(access(dir)).rejects.toThrow();
+    const logged = logSpy.mock.calls.flat().join(' ');
+    expect(logged).toContain(candidate.id);
+    expect(logged).not.toMatch(/Fake transcript|sample\.wav/);
+    logSpy.mockRestore();
+
+    // Missing row: 404, and a sibling's directory is untouched.
+    const sibling = profileArtifactDirectory('voice-profile-sibling');
+    await mkdir(sibling, { recursive: true });
+    queryMock.mockResolvedValueOnce({ rows: [] });
+    await expect(deleteVoiceProfile('voice-profile-other')).rejects.toMatchObject({ status: 404 });
+    await expect(deleteVoiceProfile('../etc')).rejects.toMatchObject({ status: 404 });
+    await access(sibling);
   });
 
   it('promotes fine-tuned checkpoint into an approved profile', async () => {

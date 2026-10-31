@@ -877,7 +877,7 @@ describe('completeAgent idempotence (#3384)', () => {
     mockCosState.state.agents[agentId] = { id: agentId, status: 'running', metadata: { claimPicksOwnBranch: true }, output: [] };
     captureCompletedCheckouts.mockRejectedValueOnce(new Error('checkout unreadable'));
     const result = await completeAgent(agentId, { success: true });
-    expect(result).toMatchObject({ status: 'completed', result: { success: false, executionSuccess: true, cleanupPending: true },
+    expect(result).toMatchObject({ status: 'completed', result: { success: true, executionSuccess: true },
       metadata: { claimPicksOwnBranch: true, completedCheckouts: [], checkoutCapture: { status: 'pending', unknown: true } } });
     await completeAgent(agentId, { success: false, exitCode: 143 });
     expect(mockCosState.state.agents[agentId].result.executionSuccess).toBe(true);
@@ -971,6 +971,96 @@ describe('completeAgent idempotence (#3384)', () => {
     } finally { await rm(scratch, { recursive: true, force: true }); }
   });
 
+  // Each delivery arm must refuse when only its own branch or workspace binding
+  // diverges from the seed, and recover again once the binding is restored.
+  const deliveryArms = {
+    inline: {
+      metadata: ({ checkout }) => ({ prOpenedBy: 'agent-inline', configOpenPR: true,
+        prDeliveryTarget: { branch: 'feature/arm', workspacePath: checkout } }),
+      branch: metadata => ({ ...metadata, prDeliveryTarget: { ...metadata.prDeliveryTarget, branch: 'feature/other' } }),
+      workspace: (metadata, { other }) => ({ ...metadata, prDeliveryTarget: { ...metadata.prDeliveryTarget, workspacePath: other } }),
+    },
+    claim: {
+      metadata: ({ repo }) => ({ isWorktree: false, configClaimFlow: true, claimBranches: ['feature/arm'], workspacePath: repo }),
+      branch: metadata => ({ ...metadata, claimBranches: ['feature/other'] }),
+      workspace: (metadata, { other }) => ({ ...metadata, sourceWorkspace: other }),
+    },
+    'review-then-merge': {
+      metadata: ({ prUrl }) => ({ prCompletionPolicy: 'review-then-merge', reviewLoopMergeTarget: { url: prUrl, branch: 'feature/arm' } }),
+      branch: metadata => ({ ...metadata, reviewLoopMergeTarget: { ...metadata.reviewLoopMergeTarget, branch: 'feature/other' } }),
+      workspace: (metadata, { other }) => ({ ...metadata, workspacePath: other }),
+    },
+  };
+  const armCases = Object.keys(deliveryArms).flatMap(arm => ['branch', 'workspace'].map(divergence => [arm, divergence]));
+
+  /** Complete an agent whose terminal capture is unknown, then drop it from live state so only the archive remains. */
+  async function archivedUnknownCapture({ scratch, arm, extraMetadata = {} }) {
+    const repo = join(scratch, 'repo'), checkout = join(scratch, 'checkout'), other = join(scratch, 'other');
+    await mkdir(other, { recursive: true });
+    await materializeGitRepo(repo);
+    await execGit(['worktree', 'add', '-b', 'feature/arm', checkout, 'main'], repo);
+    const actual = await vi.importActual('./completedCheckoutEvidence.js');
+    captureCheckoutSeeds.mockImplementationOnce(actual.captureCheckoutSeeds);
+    captureCompletedCheckouts.mockImplementationOnce(actual.captureCompletedCheckouts);
+    const agentId = 'arm-unknown', prUrl = 'https://github.com/example/repo/pull/9';
+    const context = { repo, checkout, other, prUrl };
+    await registerAgent(agentId, 'arm-task', { isWorktree: true, sourceWorkspace: repo, workspacePath: checkout,
+      worktreeBranch: 'feature/arm', ...deliveryArms[arm].metadata(context), ...extraMetadata });
+    if (arm === 'claim') {
+      const bound = await getAgent(agentId);
+      await updateAgent(agentId, { metadata: { ...bound.metadata, checkoutSeeds: await actual.captureCheckoutSeeds(bound) } });
+    }
+    const head = (await execGit(['rev-parse', 'HEAD'], checkout)).stdout.trim();
+    const unavailable = vi.spyOn(await import('./worktreeManager.js'), 'listWorktrees')
+      .mockRejectedValueOnce(new Error('completion inventory unavailable'))
+      .mockRejectedValueOnce(new Error('preterminal fallback unavailable'));
+    const completed = await completeAgent(agentId, { success: true });
+    unavailable.mockRestore();
+    expect(completed.metadata.checkoutCapture).toMatchObject({ status: 'pending', unknown: true, targets: [] });
+    const archive = join(mockCosState.agentsDir, completed.completedAt.slice(0, 10), agentId, 'metadata.json');
+    const original = JSON.parse(await readFile(archive, 'utf8'));
+    delete mockCosState.state.agents[agentId];
+    return { agentId, repo, checkout, other, prUrl, head, original,
+      patchMetadata: async metadata => writeFile(archive, JSON.stringify({ ...original, metadata })) };
+  }
+
+  for (const [arm, divergence] of armCases) seedBodies.it(`refuses unknown-capture recovery when only the ${arm} arm's ${divergence} binding diverges`, async () => {
+    const scratch = await mkdtemp(join(tmpdir(), 'portos-delivery-arm-'));
+    const merged = vi.spyOn(await import('./completedCheckoutEvidence.js'), 'readMergedClaimEvidence').mockResolvedValue(null);
+    try {
+      const { agentId, other, prUrl, original, patchMetadata } = await archivedUnknownCapture({ scratch, arm });
+      merged.mockResolvedValue({ prUrl, mergedAt: new Date().toISOString() });
+      await patchMetadata(deliveryArms[arm][divergence](original.metadata, { other }));
+      expect(await retryCompletionCheckoutCapture(agentId)).toBe(false);
+      expect((await getAgent(agentId)).metadata.checkoutCapture).toMatchObject({ status: 'pending', unknown: true });
+      await patchMetadata(original.metadata);
+      expect(await retryCompletionCheckoutCapture(agentId)).toBe(true);
+      expect((await getAgent(agentId)).metadata.checkoutCapture.status).toBe('captured');
+    } finally {
+      merged.mockRestore();
+      await rm(scratch, { recursive: true, force: true });
+    }
+  });
+
+  for (const [label, historical, expected] of [
+    ['a later-generation', { startedAt: '2999-01-01T00:00:00Z' }, false],
+    ['an unparseable-generation', { startedAt: 'not-a-date' }, false],
+    ['an earlier-generation', { startedAt: '2000-01-01T00:00:00Z' }, true],
+  ]) seedBodies.it(`${expected ? 'recovers despite' : 'refuses'} ${label} historical agent that released the same branch`, async () => {
+    const scratch = await mkdtemp(join(tmpdir(), 'portos-delivery-arm-'));
+    const merged = vi.spyOn(await import('./completedCheckoutEvidence.js'), 'readMergedClaimEvidence').mockResolvedValue(null);
+    try {
+      const { agentId, repo, prUrl } = await archivedUnknownCapture({ scratch, arm: 'review-then-merge' });
+      merged.mockResolvedValue({ prUrl, mergedAt: new Date().toISOString() });
+      mockCosState.state.agents['released-owner'] = { id: 'released-owner', status: 'completed', ...historical,
+        metadata: { sourceWorkspace: repo, claimReleasedBranches: ['feature/arm'] } };
+      expect(await retryCompletionCheckoutCapture(agentId)).toBe(expected);
+    } finally {
+      merged.mockRestore();
+      await rm(scratch, { recursive: true, force: true });
+    }
+  });
+
   for (const scenario of ['unchanged', 'physical-generation', 'new-owner', 'later-head', 'orphan-empty', 'orphan-physical-generation', 'orphan-new-owner', 'orphan-later-head']) {
     seedBodies.it(`recovers only the original completion physical seed after restart, scenario=${scenario}`, async () => {
       const orphan = scenario.startsWith('orphan-');
@@ -999,7 +1089,7 @@ describe('completeAgent idempotence (#3384)', () => {
         const completed = await completeAgent(agentId, orphan ? { success: false, executionSuccess: false, orphaned: true } : { success: true });
         if (orphan) expect(completed).toMatchObject({ result: { success: false, executionSuccess: false, orphaned: true },
           metadata: { completedCheckouts: [], checkoutCapture: { status: 'captured' } } });
-        else expect(completed).toMatchObject({ status: 'completed', result: { cleanupPending: true, executionSuccess: true },
+        else expect(completed).toMatchObject({ status: 'completed', result: { success: true, executionSuccess: true },
           metadata: { checkoutCapture: { status: 'pending', unknown: false, targets: [expect.objectContaining({ head })] } } });
         expect(cosEvents.listenerCount('agent:completed')).toBeGreaterThan(0);
         delete mockCosState.state.agents[agentId]; // Restart: only the real archived metadata remains.

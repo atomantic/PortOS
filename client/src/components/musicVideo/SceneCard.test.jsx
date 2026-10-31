@@ -719,6 +719,47 @@ describe('In-shot glitches', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Remove effect 1' }));
     expect(onSave).toHaveBeenLastCalledWith('s1', { glitches: null });
   });
+
+  // Uniquely catches strength, repeats or a leak's color/edge saving a default
+  // as a stored value (an old effect would then read as changed) or not at all.
+  it('sets strength, repeats and a leak\'s color and edge, storing defaults as absent fields', () => {
+    const onSave = vi.fn();
+    function Harness() {
+      const [scene, setScene] = useState({ sceneId: 's1', startSec: 0, endSec: 12, takes: [], glitches: [{ atSec: 1, style: 'gate-jump' }] });
+      return <SceneCard scene={scene} index={0} onEditLocal={(_id, patch) => setScene((current) => ({ ...current, ...patch }))} onSave={onSave} />;
+    }
+    render(<Harness />);
+    const strength = screen.getByLabelText(/Effect 1 strength/);
+    fireEvent.change(strength, { target: { value: '0.5' } });
+    fireEvent.pointerUp(strength);
+    expect(onSave).toHaveBeenLastCalledWith('s1', { glitches: [{ atSec: 1, style: 'gate-jump', strength: 0.5 }] });
+    fireEvent.change(screen.getByLabelText('Effect 1 repeats'), { target: { value: '8' } });
+    expect(onSave).toHaveBeenLastCalledWith('s1', { glitches: [{ atSec: 1, style: 'gate-jump', strength: 0.5, count: 8, everySec: 1 }] });
+    fireEvent.change(screen.getByLabelText('Effect 1 repeats every'), { target: { value: '0.5' } });
+    fireEvent.change(screen.getByLabelText('Effect 1 repeats'), { target: { value: '' } });
+    fireEvent.change(strength, { target: { value: '1' } });
+    fireEvent.pointerUp(strength);
+    expect(onSave).toHaveBeenLastCalledWith('s1', { glitches: [{ atSec: 1, style: 'gate-jump' }] });
+    // Only a light leak offers a color and an edge.
+    expect(screen.queryByLabelText('Effect 1 leak edge')).toBeNull();
+    fireEvent.change(screen.getByLabelText('Effect 1 style'), { target: { value: 'light-leak' } });
+    fireEvent.change(screen.getByLabelText('Effect 1 leak edge'), { target: { value: 'bottom' } });
+    const color = screen.getByLabelText('Effect 1 leak color');
+    fireEvent.change(color, { target: { value: '#00ff00' } });
+    fireEvent.blur(color);
+    expect(onSave).toHaveBeenLastCalledWith('s1', { glitches: [{ atSec: 1, style: 'light-leak', edge: 'bottom', color: '#00ff00' }] });
+  });
+
+  it('adds the home-movie events: a half-strength gate jump through the shot and one soft leak, no shutter', () => {
+    const onSave = vi.fn();
+    render(<SceneCard scene={{ sceneId: 's1', startSec: 0, endSec: 12, takes: [] }} index={0} onEditLocal={() => {}} onSave={onSave} />);
+    fireEvent.click(screen.getByRole('button', { name: /Home-movie events/ }));
+    const { glitches } = onSave.mock.lastCall[1];
+    expect(glitches).toEqual([
+      { atSec: 0.5, style: 'gate-jump', strength: 0.5, count: 4, everySec: 3 },
+      { atSec: 7.208, style: 'light-leak', strength: 0.6, color: '#ffb36b', edge: 'right' },
+    ]);
+  });
 });
 
 // Uniquely catches the picture picker saving the wrong layer or effect fields, or offering the effect where the render ignores it.

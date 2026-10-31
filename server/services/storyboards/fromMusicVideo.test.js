@@ -51,6 +51,7 @@ describe('make storyboard from a music video', () => {
     const { board } = made.body;
     expect(made.body.project.storyboardId).toBe(board.id);
     expect(board.name).toBe('Example Song');
+    expect(board.artStyle).toBe('production-sketch');
     expect(board.beats.map((beat) => [beat.title, beat.panels.length])).toEqual([['Section 1', 2], ['Section 2', 1]]);
     expect(board.beats[0].panels[0]).toMatchObject({ action: 'She opens the gym doors', camera: 'push-in', seconds: 4, takes: [expect.objectContaining({ source: 'gallery', image: 'frame-a.png' })] });
     expect(board.beats[0].panels[1]).toMatchObject({ action: 'Wide of the empty floor', castIds: ['cat-example-1'], takes: [] });

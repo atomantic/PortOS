@@ -29,6 +29,7 @@ import { EFFORT_LEVELS } from './providerModels.js';
 
 import { isTruthyMeta } from './metadataFlags.js';
 import { STORY_DRAFT_LIMITS } from './catalogStoryDraft.js';
+import { BLEND_MAX_STRENGTH_TAKES, DESIGN_FEATURES, DESIGN_FRAMINGS, DEFAULT_DESIGN_FRAMING, DESIGN_LINE_MAX, DESIGN_MAX_BLEND_REFS, DESIGN_MAX_TAKES, DESIGN_NOTE_MAX } from './catalogDesign.js';
 // Derived from the shared type registry (`catalogTypes.js`) — adding a SYSTEM
 // type there flows through to consumers automatically. Kept as a frozen
 // re-export so existing `import { INGREDIENT_TYPES }` callers are unaffected.
@@ -336,6 +337,11 @@ export const catalogPrimitiveOwnerSchema = z.object({
 export const catalogPrimitiveForkSchema = catalogPrimitiveOwnerSchema.extend({
   name: z.string().trim().min(1).max(BIBLE_LIMITS.NAME_MAX).optional(),
   copyImages: z.boolean().default(false),
+  // Seed images picked from the source's portraits/references (media keys). Set
+  // = only these are reused, keeping their age/look tags; overrides copyImages.
+  seedImages: z.array(z.string().trim().min(1).max(512)).max(200).optional(),
+  // Redesign assistant proposal saved onto the fork (keys checked per type).
+  fields: z.record(z.string().min(1).max(64), z.string().max(20_000)).optional(),
   operationKey: z.string().uuid(),
 }).strict();
 
@@ -979,3 +985,42 @@ export const catalogRefinementSchema = z.object({
   model: z.string().max(200).optional(),
   effort: z.enum(EFFORT_LEVELS).optional(),
 }).strict();
+
+// Casting > Design rounds. Image files are gallery/record filenames resolved
+// server-side through resolveImageInputPath.
+const designText = (max) => z.string().trim().min(1).max(max)
+  .refine(value => !value.includes('\0'), 'Text cannot contain NUL characters');
+const designImageFile = z.string().trim().min(1).max(512);
+const designFormId = z.string().trim().regex(FORM_ID_PATTERN).optional();
+export const catalogDesignSpreadSchema = z.object({
+  idea: designText(DESIGN_NOTE_MAX),
+  count: z.number().int().min(2).max(DESIGN_MAX_TAKES),
+  formId: designFormId,
+  providerId: z.string().min(1).max(200),
+  model: z.string().max(200).optional(),
+  effort: z.enum(EFFORT_LEVELS).optional(),
+}).strict();
+export const catalogDesignRenderSchema = z.discriminatedUnion('mode', [
+  z.object({ mode: z.literal('open'), note: designText(DESIGN_NOTE_MAX).optional(),
+    lines: z.array(z.string().trim().max(DESIGN_LINE_MAX)).min(1).max(DESIGN_MAX_TAKES),
+    seedImageFiles: z.array(designImageFile).max(3).optional(),
+    framing: z.enum(Object.keys(DESIGN_FRAMINGS)).default(DEFAULT_DESIGN_FRAMING), formId: designFormId }).strict()
+    .refine(v => v.note || v.lines.every(Boolean), 'Write an idea or a variation for every take'),
+  z.object({ mode: z.literal('refine'), note: designText(DESIGN_NOTE_MAX), baseImageFile: designImageFile,
+    count: z.number().int().min(1).max(DESIGN_MAX_TAKES).default(4), formId: designFormId }).strict(),
+  z.object({ mode: z.literal('feature'), note: designText(DESIGN_NOTE_MAX).optional(), baseImageFile: designImageFile,
+    feature: z.enum(Object.keys(DESIGN_FEATURES)), formId: designFormId }).strict(),
+  // `blendImageFile` (a single face) is the older shape a cached
+  // client may still send; the service folds it into `blendImageFiles`. `count`
+  // applies only with a `strength`; without one the round spreads over BLEND_STEPS.
+  z.object({ mode: z.literal('blend'), note: designText(DESIGN_NOTE_MAX).optional(), baseImageFile: designImageFile,
+    blendImageFile: designImageFile.optional(), blendImageFiles: z.array(designImageFile).min(1).max(DESIGN_MAX_BLEND_REFS).optional(),
+    features: z.array(z.enum(Object.keys(DESIGN_FEATURES))).max(10).default([]),
+    strength: z.number().int().min(5).max(100).optional(),
+    count: z.number().int().min(1).max(BLEND_MAX_STRENGTH_TAKES).default(2),
+    formId: designFormId }).strict()
+    .refine(v => !(v.blendImageFile && v.blendImageFiles), 'Send blendImageFiles only')
+    .refine(v => v.blendImageFile || v.blendImageFiles, 'Pick a face to blend toward'),
+  z.object({ mode: z.literal('age'), note: designText(DESIGN_NOTE_MAX).optional(), baseImageFile: designImageFile,
+    count: z.number().int().min(1).max(DESIGN_MAX_TAKES).default(4), formId: z.string().trim().regex(FORM_ID_PATTERN) }).strict(),
+]);

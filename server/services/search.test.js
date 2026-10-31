@@ -59,6 +59,21 @@ describe('search service', () => {
       expect(results).toEqual([])
     })
 
+    it('logs query length and counts, never the query text', async () => {
+      setBrainRecords('inbox', [{ id: 'i1', capturedText: 'alice example note' }])
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+      try {
+        const results = await fanOutSearch('alice example')
+        expect(results.length).toBeGreaterThan(0)
+        const lines = logSpy.mock.calls.map((args) => args.join(' '))
+        expect(lines.some((l) => l.includes('alice example'))).toBe(false)
+        expect(lines.some((l) => l.includes('13 chars'))).toBe(true)
+        expect(lines.some((l) => /: \d+ results across \d+ sources/.test(l))).toBe(true)
+      } finally {
+        logSpy.mockRestore()
+      }
+    })
+
     it('should search across brain inbox entries', async () => {
       setBrainRecords('inbox', [
         { id: 'i1', capturedText: 'Hello world from inbox' },

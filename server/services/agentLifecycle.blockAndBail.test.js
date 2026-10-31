@@ -34,7 +34,7 @@ vi.mock('./reviewInfrastructureFailure.js', () => ({ reportReviewInfrastructureF
  * stubbed so the real orchestrator runs.
  */
 
-import { afterAll, describe, it, expect, vi, beforeEach } from 'vitest';
+import { afterAll, afterEach, describe, it, expect, vi, beforeEach } from 'vitest';
 import { rmSync } from 'fs';
 import { join } from 'path';
 import { makePathsProxy } from '../lib/mockPathsDataRoot.js';
@@ -168,6 +168,7 @@ import { releaseAppReviewMarker } from './appActivity.js';
 import { acquire, release } from './executionLanes.js';
 import { spawningTasks, runnerAgents, setUseRunner } from './agentState.js';
 import { MAX_TOTAL_SPAWNS } from '../lib/cosValidation.js';
+import { markHostShuttingDown, resetHostShutdownFlagForTests } from '../lib/hostShutdown.js';
 import { PROVIDER_CONFIG_BLOCKED_CATEGORY } from '../lib/taskBlockCategories.js';
 import {
   PUBLIC_REVIEW_ACTIONS_EXECUTION_PROFILE,
@@ -693,5 +694,36 @@ describe('runAgentSpawn gates — spawn setup failure', () => {
     await spawnAgentForTask({ id: 'task-job', metadata: { app: APP, jobId: 'job-7' } });
 
     expect(vi.mocked(cosEvents.emit).mock.calls).toContainEqual(['job:spawn-failed', { jobId: 'job-7', reason: 'failed' }]);
+  });
+});
+
+describe('host shutdown (#14170)', () => {
+  // An owner registered after the shutdown marker snapshot is charged as a
+  // genuine orphan on the next boot, so no spawn may reach registration.
+  afterEach(() => resetHostShutdownFlagForTests());
+
+  it('refuses before preparation reads or claims the task', async () => {
+    markHostShuttingDown();
+    expect(await runSpawnAgentForTask({ id: 'task-shutdown-early', metadata: { app: APP } })).toBeNull();
+    expect(getTaskById).not.toHaveBeenCalled();
+    expect(updateTask).not.toHaveBeenCalled();
+    expect(acquire).not.toHaveBeenCalled();
+  });
+
+  it('releases a preparation that straddled the signal without registering or marking it in_progress', async () => {
+    reachPostPrepGates();
+    vi.mocked(prepareAgentWorkspace).mockImplementation(async ({ onPrepared }) => {
+      markHostShuttingDown();
+      return onPrepared({ outcome: 'ready', workspacePath: join(TEMP_ROOT, 'workspace'), resolvedAppName: APP, worktreeInfo: null });
+    });
+
+    expect(await spawnAgentForTask({ id: 'task-shutdown-late', taskType: 'user', metadata: { app: APP } })).toBeNull();
+
+    expect(registerAgent).not.toHaveBeenCalled();
+    expect(createAgentRun).not.toHaveBeenCalled();
+    expect(vi.mocked(updateTask).mock.calls.filter(([, patch]) => patch?.status)).toEqual([]);
+    expect(agentErrors()).toEqual([]);
+    expect(markerReleasedFor(APP)).toBe(true);
+    expect(release).toHaveBeenCalled();
   });
 });

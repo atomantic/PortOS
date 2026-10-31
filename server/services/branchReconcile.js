@@ -156,6 +156,10 @@ const PR_LIST_LIMIT = 200;
  *   completion-policy  WIP            policy hold. Sits BEFORE merged so a merged pointer is not
  *                                     deleted by cleanupMerged without the review proof that
  *                                     prepareReconcileRetirements requires (it scans these rows).
+ *                                     Except an UNSHIPPED review obligation (no PR ever recorded,
+ *                                     none open, commits not on the default branch): the run died
+ *                                     before delivery, so the hold falls through to the rules below
+ *                                     and normally lands NEEDS_PR. Review still gates the merge.
  *   abandoned-wip      ABANDONED_WIP  dirty tree of an INACTIVE run, no live owner → agent finishes it.
  *                                     Before merged: a dead agent that never committed leaves its
  *                                     pointer on an old default-branch commit, which reads as MERGED
@@ -181,7 +185,8 @@ const PR_LIST_LIMIT = 200;
  */
 const CLASSIFY_RULES = [
   { id: 'draft', state: 'WIP', when: ({ openPr }) => Boolean(openPr?.isDraft) },
-  { id: 'completion-policy', state: 'WIP', when: ({ completionPolicyReason }) => Boolean(completionPolicyReason) },
+  { id: 'completion-policy', state: 'WIP', when: ({ completionPolicyReason, completionReviewUnshipped, isMerged, openPr }) => Boolean(completionPolicyReason)
+    && !(completionReviewUnshipped && !isMerged && !openPr) },
   { id: 'abandoned-wip', state: 'ABANDONED_WIP', when: ({ worktreeDirty, liveOwnerReason, abandonedAgentWorktree, abandonedClaimWorktree }) => Boolean(worktreeDirty && !liveOwnerReason && (abandonedAgentWorktree || abandonedClaimWorktree)) },
   { id: 'merged', state: 'MERGED', when: ({ isMerged }) => Boolean(isMerged) },
   { id: 'live-owner', state: 'WIP', when: ({ liveOwnerReason }) => Boolean(liveOwnerReason) },
@@ -205,7 +210,7 @@ const CLASSIFY_RULES = [
  *                dirty tree, unreadable forge, or bare pointer. It is NOT "never touch":
  *                completion-policy rows are still scanned for review-gated retirement.
  *
- * @param {{ hasUpstream:boolean, ahead?:number|null, hasOrigin?:boolean, isMerged:boolean, worktreeDirty:boolean, abandonedAgentWorktree?:boolean, abandonedClaimWorktree?:boolean, liveOwnerReason?:string|null, completionPolicyReason?:string|null, openPr:({mergeable?:string, isDraft?:boolean}|null), prStateUnavailable?:boolean }} input
+ * @param {{ hasUpstream:boolean, ahead?:number|null, hasOrigin?:boolean, isMerged:boolean, worktreeDirty:boolean, abandonedAgentWorktree?:boolean, abandonedClaimWorktree?:boolean, liveOwnerReason?:string|null, completionPolicyReason?:string|null, completionReviewUnshipped?:boolean, openPr:({mergeable?:string, isDraft?:boolean}|null), prStateUnavailable?:boolean }} input
  *   `ahead` is the branch's own commit count over the default branch (null =
  *   unreadable), and `hasOrigin` says the repo has a remote to push that work to.
  *   `hasOrigin` defaults to FALSE (fail-closed): a caller that cannot vouch for a
@@ -956,7 +961,7 @@ export async function gatherBranchState(repoPath, { defaultBranch, activeAgentId
     (b) => !b.isDefault && !b.current && !protectedSet.has(b.name)
   );
 
-  const { readBranchCompletionPolicies, readBranchCompletionHold } = await import('./branchCompletionPolicy.js');
+  const { readBranchCompletionPolicies, readBranchCompletionHoldDetail } = await import('./branchCompletionPolicy.js');
   const completionPolicies = candidates.length ? await readBranchCompletionPolicies().catch(() => null) : [];
 
   const inputs = [];
@@ -987,11 +992,13 @@ export async function gatherBranchState(repoPath, { defaultBranch, activeAgentId
     // -circuit when the cheap check already proved it merged.
     const hasMergeEvidence = b.merged || await hasBranchMergeEvidence(repoPath, b.name, defaultBranch);
     const claimOwnerReason = resolveClaimOwnerReason({ branch: b.name, path: worktreePath, claimOwners, sourceWorkspace: repoPath });
-    const completionPolicyReason = await readBranchCompletionHold({ repoPath, branch: b.name, prUrl: prsByHead.get(b.name)?.url, tip, agents: completionPolicies, retirement: hasMergeEvidence });
+    const completionHold = await readBranchCompletionHoldDetail({ repoPath, branch: b.name, prUrl: prsByHead.get(b.name)?.url, tip, agents: completionPolicies, retirement: hasMergeEvidence });
+    const completionPolicyReason = completionHold.reason;
     inputs.push({
       branch: b.name,
       tip,
       completionPolicyReason,
+      completionReviewUnshipped: completionHold.unshipped === true,
       ...(completionPolicyReason ? { completionPolicyWorkflow: completionPolicyReason === 'pr-completion-review-required'
         ? 'Resume the configured review workflow; delivery success does not prove review passed.'
         : completionPolicyReason === 'pr-completion-human-handoff'
@@ -1348,6 +1355,16 @@ async function retireBranch(repoPath, b, opts) {
   // under the lock binding takes: a bind lands before this check or after the
   // removal, never between them.
   if (b.claimOwnerReason) return { ok: false, reason: b.claimOwnerReason };
+  // A merged PR at the branch's exact head makes uncommitted and untracked files
+  // disposable. Asked here, outside the ownership lock (a forge call); admission
+  // and removal re-bind the answer to the head they observe.
+  if (opts.mergedRetirement && opts.requireCleanWorktree !== false && b.worktreePath) {
+    const head = (await execGit(['rev-parse', '--verify', `refs/heads/${b.branch}`], repoPath).catch(() => null))?.stdout?.trim();
+    if (head && await isWorktreeDirty(b.worktreePath) !== false) {
+      const { isMergedPrHead } = await import('./prProbe.js');
+      if (await isMergedPrHead(repoPath, b.branch, head)) opts = { ...opts, disposableHead: head };
+    }
+  }
   // A merged checkout's archive runs between two ownership critical sections
   // (#12682) so it cannot starve the shared queue; removal re-proves everything.
   return retireWithUnlockedArchive({
@@ -1384,7 +1401,7 @@ async function retireBranch(repoPath, b, opts) {
 }
 
 /** Every gate before the archive. Returns `{ result }` to stop, else the context removal needs. */
-async function admitBranchRetirement(repoPath, b, { activeAgentIds, staleClaimIdleMs = STALE_CLAIM_IDLE_MS, allowLiveClaim = false, label, requireCleanWorktree = true, unmanagedIdleMs, prepare, claimOwners, mergedRetirement = false, mergeTarget, forgeAccount = null, appId = null }) {
+async function admitBranchRetirement(repoPath, b, { activeAgentIds, staleClaimIdleMs = STALE_CLAIM_IDLE_MS, allowLiveClaim = false, label, requireCleanWorktree = true, unmanagedIdleMs, prepare, claimOwners, mergedRetirement = false, mergeTarget, forgeAccount = null, appId = null, disposableHead = null }) {
   const stop = result => ({ result });
   if (PROTECTED_BRANCHES.includes(b.branch)) return stop({ ok: false, reason: 'protected-branch' });
   const defaultBranch = await getDefaultBranch(repoPath, { strict: true }).catch(() => null);
@@ -1441,7 +1458,7 @@ async function admitBranchRetirement(repoPath, b, { activeAgentIds, staleClaimId
     }
     const dirty = await isWorktreeDirty(b.worktreePath);
     if (dirty === null) return stop({ ok: false, reason: 'worktree-status-unavailable' });
-    if (requireCleanWorktree && dirty) return stop({ ok: false, reason: 'worktree-dirty' });
+    if (requireCleanWorktree && dirty && disposableHead !== expectedHead) return stop({ ok: false, reason: 'worktree-dirty' });
   }
   if (mergedRetirement && b.worktreePath) {
     if (isHumanClaimWorktree(worktreeAgentId(b.worktreePath))) {
@@ -1467,7 +1484,7 @@ async function admitBranchRetirement(repoPath, b, { activeAgentIds, staleClaimId
     if (!tree || tree.head !== expectedHead) return stop({ ok: false, reason: 'worktree-holder-changed' });
     archiveTree = tree;
   }
-  return { b, expectedHead, readPolicyHold, archiveTree, mergeTarget, label, requireCleanWorktree, prepare, claimOwners, mergedRetirement, claimCompletion, appId };
+  return { b, expectedHead, readPolicyHold, archiveTree, mergeTarget, label, requireCleanWorktree: requireCleanWorktree && disposableHead !== expectedHead, prepare, claimOwners, mergedRetirement, claimCompletion, appId };
 }
 
 /**
@@ -1579,7 +1596,7 @@ async function finishBranchRetirement(repoPath, { b, expectedHead, readPolicyHol
     onRetired: async () => {
       if (!appId) return;
       try {
-        const { recordHeldCheckoutRetirement } = await import('./taskSchedule.js');
+        const { recordHeldCheckoutRetirement } = await import('./branchReconcileOutcome.js');
         const absent = await execGit(['show-ref', '--verify', '--quiet', `refs/heads/${b.branch}`], repoPath, { ignoreExitCode: true });
         if (absent.exitCode !== 1) throw new Error('retirement-branch-recreated');
         const outcome = await recordHeldCheckoutRetirement(appId, {
@@ -1676,9 +1693,9 @@ const isStillDetachedOnMerged = async (repoPath, treePath, defaultBranch) => {
  */
 async function recordDetachedRetirement(repoPath, appId, { path, head, checkoutIdentity }) {
   const receipt = { path, head, branchDeleted: false, checkoutOnly: true, ...(checkoutIdentity && { checkoutIdentity }) };
-  const taskSchedule = await import('./taskSchedule.js');
-  if (!appId) return taskSchedule.recordWorkspaceCheckoutRetirement(repoPath, receipt).then(() => true, () => false);
-  return taskSchedule.recordHeldCheckoutRetirement(appId, receipt).then(outcome => outcome?.retired?.some(row => row.path === path
+  const outcomes = await import('./branchReconcileOutcome.js');
+  if (!appId) return outcomes.recordWorkspaceCheckoutRetirement(repoPath, receipt).then(() => true, () => false);
+  return outcomes.recordHeldCheckoutRetirement(appId, receipt).then(outcome => outcome?.retired?.some(row => row.path === path
     && !row.branch && row.head === head && row.checkoutOnly === true && row.branchDeleted === false && row.archiveDir == null
     && (!checkoutIdentity || row.checkoutIdentity === checkoutIdentity)) === true, () => false);
 }

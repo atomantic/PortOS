@@ -3,7 +3,6 @@ import express from 'express';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 
-const claimMergeAdmission = vi.hoisted(() => vi.fn(async ({ outcome }) => ({ admitted: false, released: true, outcome })));
 const handoffPendingMerge = vi.hoisted(() => vi.fn(async () => ({ queued: false, reason: 'handoff-owner-unverified', retryable: false })));
 vi.mock('../services/cosMergeHandoff.js', () => ({ handoffPendingMerge }));
 vi.mock('../services/cosAgentArchive.js', () => ({}));
@@ -12,33 +11,18 @@ vi.mock('../services/cosAgentIndex.js', () => ({}));
 vi.mock('../services/cosAgentLifecycle.js', () => ({}));
 vi.mock('../services/cosHealthMonitor.js', () => ({}));
 vi.mock('../services/agentOrchestrator.js', () => ({}));
-vi.mock('../services/cosMergeAdmission.js', async (importOriginal) => ({
-  MERGE_ADMISSION_OUTCOMES: (await importOriginal()).MERGE_ADMISSION_OUTCOMES,
-  claimMergeAdmission,
-}));
 
 import routes from './cosAgentRoutes.js';
-import { MERGE_ADMISSION_OUTCOMES } from '../services/cosMergeAdmission.js';
 
 const app = express();
 app.use(express.json());
 app.use('/api/cos', routes);
 app.use(errorMiddleware);
-const token = '00000000-0000-4000-8000-000000000000';
-const releaseWith = (outcome) => request(app).post('/api/cos/merge-admission')
-  .send({ agentId: 'parent-example', action: 'release', token, outcome });
 
-describe('POST /api/cos/merge-admission outcomes', () => {
-  it('accepts every service outcome, including resync, and rejects any other', async () => {
-    expect(MERGE_ADMISSION_OUTCOMES).toEqual(['merged', 'leave-open', 'resync']);
-    for (const outcome of MERGE_ADMISSION_OUTCOMES) {
-      const res = await releaseWith(outcome);
-      expect(res.status).toBe(200);
-      expect(res.body).toMatchObject({ released: true, outcome });
-    }
-    claimMergeAdmission.mockClear();
-    expect((await releaseWith('abandoned')).status).toBe(400);
-    expect(claimMergeAdmission).not.toHaveBeenCalled();
+describe('POST /api/cos/merge-admission/external', () => {
+  it('is gone: outside agents merge on the forge, with no PortOS lease', async () => {
+    const res = await request(app).post('/api/cos/merge-admission/external').send({ action: 'acquire' });
+    expect(res.status).toBe(404);
   });
 });
 

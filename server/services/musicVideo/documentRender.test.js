@@ -16,7 +16,7 @@ import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../li
 vi.mock('../htmlComposition/encode.js', async (importOriginal) => ({ ...(await importOriginal()), encodeComposition: vi.fn(async () => { throw new Error('stop at encoder'); }) }));
 const { encodeComposition } = await import('../htmlComposition/encode.js');
 
-const { browser } = vi.hoisted(() => ({ browser: { seen: null, contract: null, visibility: null, sampleTimes: [], send: null, closed: [], frameCallbacks: true, capabilityProbes: 0, version: 'Chrome/155.0.8059.41', versionCalls: [], authoredContext: null, authoredInspections: 0 } }));
+const { browser } = vi.hoisted(() => ({ browser: { seen: null, contract: null, visibility: null, lyricUnfit: [], sampleTimes: [], send: null, closed: [], frameCallbacks: true, capabilityProbes: 0, version: 'Chrome/155.0.8059.41', versionCalls: [], authoredContext: null, authoredInspections: 0 } }));
 vi.mock('../../lib/paths.js', async (importOriginal) => makePathsProxy(await importOriginal(), {
   dataRoot: () => lazyTempDataRoot('portos-mv-document-stage-'),
 }));
@@ -57,6 +57,7 @@ vi.mock('../htmlComposition/browser.js', () => ({
           return new Function('HTMLVideoElement', `return (${expression});`)({ prototype });
         }
         if (expression.includes('reviewFootage')) { browser.sampleTimes.push(Number(/c.seek\(([^,]+)/.exec(expression)[1])); return browser.visibility; }
+        if (expression.includes('lyricFit')) return browser.lyricUnfit;
         if (expression.includes('canPlayType')) return 'probably';
         if (browser.contract) return browser.contract;
         throw new Error('stop after staging');
@@ -80,7 +81,7 @@ const { PATHS } = await import('../../lib/paths.js');
 const { encodeDocumentComposition, documentRenderClock, openIsolatedDocumentPreview, resolveSceneMedia } = await import('./documentRender.js');
 
 afterAll(() => cleanupTempDataRoots());
-beforeEach(() => { runFfmpegProcess.mockClear(); probeVideoGeometry.mockReset(); probeVideoGeometry.mockResolvedValue(null); browser.seen = null; browser.contract = null; browser.visibility = null; browser.sampleTimes = []; browser.send = null; browser.closed = []; browser.frameCallbacks = true; browser.capabilityProbes = 0; browser.version = 'Chrome/155.0.8059.41'; browser.versionCalls = []; browser.authoredContext = null; browser.authoredInspections = 0; });
+beforeEach(() => { runFfmpegProcess.mockClear(); probeVideoGeometry.mockReset(); probeVideoGeometry.mockResolvedValue(null); browser.seen = null; browser.contract = null; browser.visibility = null; browser.lyricUnfit = []; browser.sampleTimes = []; browser.send = null; browser.closed = []; browser.frameCallbacks = true; browser.capabilityProbes = 0; browser.version = 'Chrome/155.0.8059.41'; browser.versionCalls = []; browser.authoredContext = null; browser.authoredInspections = 0; });
 
 const performanceTake = (assetId) => ({ takeId: 'mvt-p', kind: 'video', assetId, status: 'candidate', shotInstruction: { shotMode: 'performance', edit: { inSec: 0.5, outSec: 3.5 } } });
 
@@ -456,4 +457,27 @@ it('installs the opening title card in the render page only while it is on and h
   await expect(encode({ ...titled, titleCard: { ...titled.titleCard, enabled: false } }, plan, 'job-title-off')).rejects.toThrow('stop after staging');
   expect(browser.seen.initScripts).toEqual([]);
   expect(await scratchEntries()).toEqual([]);
+});
+
+// Uniquely prevents a vertical cut from silently rendering lyrics under the platform controls.
+it('refuses a render whose lyric line cannot fit the social-safe band, naming its time, before any encode', async () => {
+  const { project, plan } = await fixture();
+  browser.contract = { durationSec: 30, fps: 24, width: 1920, height: 1080, layout: false };
+  browser.lyricUnfit = [{ startSec: 12.3456, endSec: 14, text: 'a line far too long for the band' }];
+  encodeComposition.mockClear();
+  await expect(encode(project, plan, 'job-social-overflow')).rejects.toMatchObject({
+    code: 'LYRIC_SOCIAL_SAFE_OVERFLOW', status: 422,
+    message: expect.stringContaining('12.346s "a line far too long for the band"'),
+  });
+  expect(encodeComposition).not.toHaveBeenCalled();
+  expect(await scratchEntries()).toEqual([]);
+});
+
+it('carries the lyric layout to the document: social by default, cinematic from the brief', async () => {
+  const { project, plan } = await fixture();
+  await expect(encode(project, plan, 'job-layout-default')).rejects.toThrow();
+  expect(browser.seen.data.project.lyricLayout).toBe('social');
+  const cinematic = { ...project, treatment: { brief: { lyricLayout: 'cinematic' } } };
+  await expect(encode(cinematic, plan, 'job-layout-cinematic')).rejects.toThrow();
+  expect(browser.seen.data.project.lyricLayout).toBe('cinematic');
 });

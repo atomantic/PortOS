@@ -538,7 +538,7 @@ export function appendPinterestPins(board, imported, { syncedAt = nowIso(), expe
 export function appendImportedItems(board, imported) {
   const items = Array.isArray(board.items) ? board.items : [];
   const fresh = buildFreshItems(items, imported, (imp) => normalizeItem(
-    { type: imp.type, imageUrl: imp.imageUrl ?? null, mediaKey: imp.mediaKey ?? null, caption: imp.caption ?? null, source: imp.source ?? null },
+    { type: imp.type ?? 'image', imageUrl: imp.imageUrl ?? null, mediaKey: imp.mediaKey ?? null, caption: imp.caption ?? null, source: imp.source ?? null },
     { id: `mbi-${randomUUID()}` },
   ));
   const next = { ...board, items: [...items, ...fresh], updatedAt: nowIso() };

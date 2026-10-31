@@ -19,9 +19,16 @@ import { createTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js'
 const tempRoot = createTempDataRoot('portos-dt-tombstone-');
 const twinDir = join(tempRoot, 'digital-twin');
 
+// Lets a test pause a write after its bytes land (see the snapshot pairing test).
+let afterAtomicWrite = null;
 vi.mock('../lib/fileUtils.js', async () => {
   const actual = await vi.importActual('../lib/fileUtils.js');
-  return makePathsProxy(actual, { dataRoot: tempRoot });
+  const atomicWrite = async (path, ...rest) => {
+    const result = await actual.atomicWrite(path, ...rest);
+    if (afterAtomicWrite) await afterAtomicWrite(path);
+    return result;
+  };
+  return makePathsProxy(actual, { dataRoot: tempRoot, overrides: { atomicWrite } });
 });
 
 const { createDocument, updateDocument, deleteDocument } = await import('./digital-twin-documents.js');
@@ -42,6 +49,7 @@ const peerSnapshotWithDoc = (meta) => ({
 });
 
 beforeEach(async () => {
+  afterAtomicWrite = null;
   rmSync(twinDir, { recursive: true, force: true });
   cache.meta.data = null;
   cache.meta.timestamp = 0;
@@ -218,5 +226,88 @@ describe('digital twin document create failure paths (#11681)', () => {
   it('still rejects a filename that is already in meta', async () => {
     await newDoc();
     await expect(newDoc()).rejects.toThrow(/already exists/);
+  });
+});
+
+describe('newer peer document text replaces an existing file (#14160)', () => {
+  const EDITED = '# Custom Routine\n\nEdited on the peer.\n';
+  const at = (base, offsetMs) => new Date(Date.parse(base) + offsetMs).toISOString();
+  const localEntry = async () => (await loadMeta()).documents.find((d) => d.filename === FILENAME);
+  const peerEdit = (stamp, body = EDITED) => ({
+    meta: { documents: [{ id: 'peer-1', filename: FILENAME, title: 'Custom Routine', category: 'lifestyle', updatedAt: stamp }], deletedDocuments: [] },
+    documents: { [FILENAME]: body },
+  });
+
+  it('writes the peer body and adopts its stamp when the peer edit is newer', async () => {
+    const created = await newDoc();
+    const stamp = at(created.createdAt, 60_000);
+    await applyDigitalTwinRemote(peerEdit(stamp));
+    expect(readFileSync(docPath, 'utf-8')).toBe(EDITED);
+    expect((await localEntry()).updatedAt).toBe(stamp);
+  });
+
+  it.each([
+    { name: 'older', offsetMs: -60_000 },
+    { name: 'equal', offsetMs: 0 },
+  ])('keeps the local body when the peer stamp is $name', async ({ offsetMs }) => {
+    const created = await newDoc();
+    await updateDocument(created.id, { content: CONTENT });
+    const { updatedAt } = await localEntry();
+    await applyDigitalTwinRemote(peerEdit(at(updatedAt, offsetMs)));
+    expect(readFileSync(docPath, 'utf-8')).toBe(CONTENT);
+    expect((await localEntry()).updatedAt).toBe(updatedAt);
+  });
+
+  it('never blanks a local file from a newer stamp with no body', async () => {
+    const created = await newDoc();
+    const stamp = at(created.createdAt, 60_000);
+    await applyDigitalTwinRemote({ meta: peerEdit(stamp).meta });
+    await applyDigitalTwinRemote(peerEdit(stamp, ''));
+    expect(readFileSync(docPath, 'utf-8')).toBe(CONTENT);
+  });
+
+  it('puts the previous body back when the metadata write fails', async () => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now());
+    const metaPath = join(twinDir, 'meta.json');
+    try {
+      const created = await newDoc();
+      rmSync(metaPath, { force: true });
+      mkdirSync(metaPath);
+      await expect(applyDigitalTwinRemote(peerEdit(at(created.createdAt, 60_000)))).rejects.toThrow();
+      expect(readFileSync(docPath, 'utf-8')).toBe(CONTENT);
+    } finally {
+      rmSync(metaPath, { recursive: true, force: true });
+      clock.mockRestore();
+    }
+  });
+
+  it('snapshots a document mid-edit with a matching stamp and body', async () => {
+    const created = await newDoc();
+    let bodyWritten;
+    const bodyLanded = new Promise((resolve) => { bodyWritten = resolve; });
+    let release;
+    const held = new Promise((resolve) => { release = resolve; });
+    afterAtomicWrite = async (path) => {
+      if (path !== docPath) return;
+      afterAtomicWrite = null;
+      bodyWritten();
+      await held;
+    };
+    const update = updateDocument(created.id, { content: EDITED });
+    await bodyLanded;
+    const snapshot = getDigitalTwinSnapshot();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    release();
+    await update;
+    const { data } = await snapshot;
+    const entry = data.meta.documents.find((d) => d.filename === FILENAME);
+    expect(data.documents[FILENAME]).toBe(EDITED);
+    expect(entry.updatedAt).toBe((await localEntry()).updatedAt);
+  });
+
+  it('stamps an enrichment rewrite of an existing document so an older peer edit cannot replace it', () => {
+    const meta = { documents: [{ id: 'x', filename: 'MEMORIES.md', title: 'Memories', createdAt: '2026-01-01T00:00:00.000Z' }], deletedDocuments: [] };
+    ensureDocumentInMeta(meta, 'MEMORIES.md', 'Memories', 'enrichment');
+    expect(Date.parse(meta.documents[0].updatedAt)).toBeGreaterThan(Date.parse('2026-01-01T00:00:00.000Z'));
   });
 });

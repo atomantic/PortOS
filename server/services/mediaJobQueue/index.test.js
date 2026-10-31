@@ -329,6 +329,23 @@ describe('mediaJobQueue', () => {
     await waitFor(() => mediaJobQueue.getJob(job.jobId).status === 'failed');
   });
 
+  it('snapshots only the edited image and keeps further references in order', async () => {
+    const source = join(tempDataDir, 'images', 'reviewed.png');
+    const extra = join(tempDataDir, 'images', 'place.png');
+    mkdirSync(join(tempDataDir, 'images'), { recursive: true });
+    writeFileSync(source, 'reviewed bytes');
+    writeFileSync(extra, 'place bytes');
+    const digest = createHash('sha256').update('reviewed bytes').digest('hex');
+    stubs.generateImage.mockResolvedValue({});
+    const job = await mediaJobQueue.enqueueJob({ kind: 'image', params: { prompt: 'edit', referenceImagePaths: [source, extra], reviewedReferenceDigest: digest } });
+    await waitFor(() => stubs.generateImage.mock.calls.length === 1);
+    const request = stubs.generateImage.mock.calls[0][0];
+    expect(readFileSync(request.referenceImagePaths[0], 'utf8')).toBe('reviewed bytes');
+    expect(request.referenceImagePaths.slice(1)).toEqual([extra]);
+    imageGenEvents.emit('failed', { generationId: job.jobId, error: 'synthetic failure', inputProcessSettled: true });
+    await waitFor(() => mediaJobQueue.getJob(job.jobId).status === 'failed');
+  });
+
   it('replays a durably queued reviewed snapshot after restart', async () => {
     const source = join(tempDataDir, 'images', 'reviewed.png');
     mkdirSync(join(tempDataDir, 'images'), { recursive: true });
@@ -448,6 +465,33 @@ describe('mediaJobQueue', () => {
     await waitFor(() => mediaJobQueue.getJob(job.jobId).status === 'failed');
     expect(stubs.generateImage).not.toHaveBeenCalled();
     expect(readFileSync(snapshot, 'utf8')).toBe('reviewed bytes');
+  });
+
+  it.each([
+    ['local', 'a missing snapshot', /ownership is missing/, async (params) => { delete params.reviewedReferenceSnapshot; }],
+    ['remote', 'a remote input that is not the snapshot', /ownership does not match/, async (params) => { params.remoteMedia.inputAssets[0].role = 'sourceImage'; }],
+    ['local', 'an already-invoked snapshot', /not available for dispatch/, async (params) => {
+      const { markSnapshotState } = await import('../imageGen/reviewedReference.js');
+      await markSnapshotState(params.reviewedReferenceSnapshot, 'invoked');
+    }],
+  ])('refuses %s replay of %s without invoking the provider', async (route, _label, error, corrupt) => {
+    const source = join(tempDataDir, 'images', 'reviewed.png');
+    mkdirSync(join(tempDataDir, 'images'), { recursive: true });
+    writeFileSync(source, 'reviewed bytes');
+    const digest = createHash('sha256').update('reviewed bytes').digest('hex');
+    mediaJobQueue.quiesceMediaJobQueue();
+    const remoteMedia = route === 'remote' ? { remoteMedia: { ...remoteImageMediaParams(), inputAssets: [{ role: 'referenceImages', path: source }] } } : {};
+    const job = await mediaJobQueue.enqueueJob({ kind: 'image', params: { prompt: 'edit', referenceImagePaths: [source], reviewedReferenceDigest: digest, ...remoteMedia } });
+    const jobsPath = join(tempDataDir, 'media-jobs.json');
+    const store = JSON.parse(readFileSync(jobsPath, 'utf8'));
+    await corrupt(store.jobs.find(row => row.id === job.jobId).params);
+    writeFileSync(jobsPath, JSON.stringify(store));
+    await importFresh();
+    await mediaJobQueue.initMediaJobQueue();
+    await waitFor(() => mediaJobQueue.getJob(job.jobId).status === 'failed');
+    expect(mediaJobQueue.getJob(job.jobId).error).toMatch(error);
+    expect(stubs.generateImage).not.toHaveBeenCalled();
+    expect(stubs.generateImageRemote).not.toHaveBeenCalled();
   });
 
   it('blocks guide generation and rechecks media policy before delayed provider dispatch', async () => {
@@ -871,9 +915,10 @@ describe('mediaJobQueue', () => {
       expect(mediaJobQueue.laneConcurrencyFor({
         kind: 'image', params: { mode: IMAGE_GEN_MODE.CODEX },
       })).toBe(lanes.cloud.limit);
+      // A peer runs one job at a time; the remote total bounds all peers.
       expect(mediaJobQueue.laneConcurrencyFor({
         kind: 'audio', params: { remoteMedia: remoteMediaParams() },
-      })).toBe(mediaJobQueue.REMOTE_MEDIA_PARALLEL_LIMIT);
+      })).toBe(1);
     });
 
     it('tracks the cloud lane limit as configured rather than a snapshot of it', () => {
@@ -2967,6 +3012,28 @@ describe('Codex lane', () => {
 
     imageGenEvents.emit('failed', { generationId: codex1.jobId, error: 'cleanup' });
     imageGenEvents.emit('failed', { generationId: codex2.jobId, error: 'cleanup' });
+    await flush();
+  });
+
+  it('gives each cloud provider its own swim lane so a Codex backlog never holds Grok', async () => {
+    mediaJobQueue.setCodexParallelLimit(1);
+    stubs.generateImageCodex.mockImplementation(() => new Promise(() => {}));
+    stubs.generateVideoGrok.mockImplementation(() => new Promise(() => {}));
+
+    const codex1 = await mediaJobQueue.enqueueJob({ kind: 'image', params: { prompt: 'codex first', mode: 'codex' } });
+    await waitFor(() => stubs.generateImageCodex.mock.calls.length === 1);
+    const codex2 = await mediaJobQueue.enqueueJob({ kind: 'image', params: { prompt: 'codex second', mode: 'codex' } });
+    expect(mediaJobQueue.getJob(codex2.jobId)).toMatchObject({ status: 'queued', position: 2 });
+
+    const grok = await mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'grok', mode: IMAGE_GEN_MODE.GROK } });
+    expect(grok.position).toBe(1);
+    await waitFor(() => stubs.generateVideoGrok.mock.calls.length === 1);
+    expect(mediaJobQueue.getJob(grok.jobId).status).toBe('running');
+    expect(mediaJobQueue.getJob(codex2.jobId)).toMatchObject({ status: 'queued', position: 2 });
+
+    imageGenEvents.emit('failed', { generationId: codex1.jobId, error: 'cleanup' });
+    imageGenEvents.emit('failed', { generationId: codex2.jobId, error: 'cleanup' });
+    videoGenEvents.emit('failed', { generationId: grok.jobId, error: 'cleanup' });
     await flush();
   });
 

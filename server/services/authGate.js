@@ -2,7 +2,7 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 import { isAuthEnabled, verifyPassword, verifyRequestSession } from './auth.js';
 // Shared with sidecar processes (lib/sidecarAuthGate.js) so the Autofixer UI
 // on :5560 applies byte-identical credential extraction and CSRF rules.
-import { browserRequestRefusal, isLocalConnection, extractBasicPassword } from '../../lib/portosAuthCore.js';
+import { browserRequestRefusal, isLocalConnection, isOriginlessCrossSiteBrowserRequest, extractBasicPassword } from '../../lib/portosAuthCore.js';
 import { getSettings, settingsEvents } from './settings.js';
 import { getVoiceConfig } from './voice/config.js';
 import { isRegistryPublic } from '../lib/apiRegistry.js';
@@ -139,6 +139,24 @@ const isPublicPath = (path) => {
   return true;
 };
 
+// Read-only status probes a same-host monitor (cron, watchdog) may poll
+// without a session. Exact paths, GET/HEAD only, and only from a direct
+// loopback socket: a request that carries any forwarding header, or that the
+// Tailcat ingress marked remote (it arrives from loopback too), never qualifies.
+const LOOPBACK_STATUS_PATHS = new Set([
+  '/api/cos/mind',
+  '/api/cos/mind/runtime',
+  '/api/cos/mind/visibility',
+  '/api/eidoverse/world/status',
+]);
+const FORWARDING_HEADERS = ['forwarded', 'x-forwarded-for', 'x-forwarded-host', 'x-forwarded-proto', 'x-real-ip', 'via', 'tailscale-user-login'];
+
+export const isLoopbackStatusRequest = (req, path) => (req.method === 'GET' || req.method === 'HEAD')
+  && LOOPBACK_STATUS_PATHS.has(path.replace(/\/+$/, ''))
+  && !FORWARDING_HEADERS.some((h) => req.headers?.[h] !== undefined)
+  && !isRemoteRequest(req)
+  && isLocalConnection(req.socket?.remoteAddress, req.headers);
+
 // Express middleware. The browser-relay guard (cross-origin + DNS-rebinding
 // Host check) runs in both modes. With auth off everything else passes; with
 // it on, allows the small public set above and gates the rest behind a valid
@@ -186,6 +204,7 @@ export const authGate = async (req, res, next) => {
   // request URL: downstream record IDs and asset filenames may be case-sensitive.
   const path = req.path.toLowerCase();
   if (isPublicPath(path)) return next();
+  if (isLoopbackStatusRequest(req, path)) return next();
   // Per-API public exemptions. When the user has marked an API exposed +
   // passwordless in Settings (`apiAccess.<id>`), re-open ONLY its declared
   // public prefix (e.g. /api/voice/public/, /sdapi/). `isRegistryPublic`
@@ -260,7 +279,10 @@ const requestIsLocalConnection = (req) => !isRemoteRequest(req)
   && isLocalConnection(req.socket?.remoteAddress, req.headers);
 
 // Server-derived HTTP authority; never read caller-provided body fields.
-export const requestHasHostControl = (req) => hasHostControl(req.portosAuthContext, requestIsLocalConnection(req));
+// A cross-site no-Origin browser request (an <img> load or navigation another
+// page started) is never the operator, even over a loopback socket or a Lax cookie.
+export const requestHasHostControl = (req) => !isOriginlessCrossSiteBrowserRequest(req)
+  && hasHostControl(req.portosAuthContext, requestIsLocalConnection(req));
 
 // Re-check at tool dispatch, after any STT/LLM wait. A handshake/session that
 // was valid when a turn started is not a durable grant to execute later.

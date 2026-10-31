@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { MemoryRouter, Route, Routes, useLocation, useParams } from 'react-router';
 import StoryboardDetail from './StoryboardDetail';
+import StoryboardEditor from '../components/storyboards/StoryboardEditor';
 import { updateStoryboardBeat } from '../services/api';
 
 const api = vi.hoisted(() => ({
@@ -13,7 +14,11 @@ const api = vi.hoisted(() => ({
   updateStoryboardPanel: vi.fn(),
   addStoryboardPanelTake: vi.fn(),
   createBlankSketch: vi.fn(),
+  getMediaSketch: vi.fn(),
+  saveMediaSketch: vi.fn(),
   runStoryboardPanelNode: vi.fn(),
+  correctStoryboardPanel: vi.fn(),
+  drawStoryboardPanel: vi.fn(),
   updateStoryboardRecipe: vi.fn(),
   getStoryboardMakeEmpty: vi.fn(),
   startStoryboardMakeEmpty: vi.fn(),
@@ -76,6 +81,99 @@ beforeEach(() => {
 });
 
 describe('StoryboardDetail', () => {
+  // Uniquely catches the embedded editor losing its board-first view, the side panel's previous / next panel,
+  // or the music video's panel growing back timing, dialogue or camera fields its shots own.
+  it('opens a music video\'s board as the panel grid and steps between panels in the side panel', async () => {
+    api.getStoryboard.mockResolvedValue(board({ beats: [
+      { id: 'beat-1', title: 'Intro', what: '', why: '', emotion: '', musicalRole: 'intro', sectionHint: '', panels: [panel('panel-1')] },
+      { id: 'beat-2', title: 'Chorus', what: '', why: '', emotion: '', musicalRole: 'chorus', sectionHint: '', panels: [panel('panel-2')] },
+    ] }));
+    function Embedded() {
+      const { panelId } = useParams();
+      return <StoryboardEditor embedded boardId="sb-1" panelId={panelId} boardPath="/music-video/mv-1/board" />;
+    }
+    render(
+      <MemoryRouter initialEntries={['/music-video/mv-1/board/panel/panel-1']}>
+        <Routes>
+          <Route path="/music-video/:projectId/board" element={<Embedded />} />
+          <Route path="/music-video/:projectId/board/panel/:panelId" element={<Embedded />} />
+        </Routes>
+        <LocationProbe />
+      </MemoryRouter>,
+    );
+    const panelDialog = await screen.findByRole('dialog', { name: 'Panel 1' });
+    expect(screen.getByRole('tab', { name: /Board/ })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.queryByLabelText('Logline')).toBeNull();
+    expect(within(panelDialog).queryByLabelText('Camera move')).toBeNull();
+    expect(within(panelDialog).queryByLabelText('Seconds (estimate)')).toBeNull();
+    expect(within(panelDialog).queryByLabelText('Dialogue or lyric')).toBeNull();
+    expect(within(panelDialog).getByRole('button', { name: 'Previous panel' })).toBeDisabled();
+    fireEvent.click(within(panelDialog).getByRole('button', { name: 'Next panel' }));
+    await waitFor(() => expect(screen.getByTestId('location').textContent).toBe('/music-video/mv-1/board/panel/panel-2'));
+    expect(await screen.findByRole('dialog', { name: 'Panel 2' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Next panel' })).toBeDisabled();
+  });
+
+  it('edits a music video\'s board in place: panels open under the step and keep its query', async () => {
+    api.getStoryboard.mockResolvedValue(board());
+    function Embedded() {
+      const { panelId } = useParams();
+      return <StoryboardEditor embedded boardId="sb-1" panelId={panelId} boardPath="/music-video/mv-1/board" />;
+    }
+    render(
+      <MemoryRouter initialEntries={['/music-video/mv-1/board?mvPanel=render&view=board']}>
+        <Routes>
+          <Route path="/music-video/:projectId/board" element={<Embedded />} />
+          <Route path="/music-video/:projectId/board/panel/:panelId" element={<Embedded />} />
+        </Routes>
+        <LocationProbe />
+      </MemoryRouter>,
+    );
+    fireEvent.click(await screen.findByRole('button', { name: /^Open panel 1/ }));
+    await waitFor(() => expect(screen.getByTestId('location').textContent).toBe('/music-video/mv-1/board/panel/panel-1?mvPanel=render&view=board'));
+    expect(screen.getByRole('link', { name: 'Open in Storyboards' }).getAttribute('href')).toBe('/storyboards/sb-1');
+    expect(screen.queryByRole('button', { name: /Song brief/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Make video/ })).toBeNull();
+  });
+
+  // Uniquely catches drawing on a frame leaving the panel (or starting a blank sketch), or the marks not
+  // being saved as the frame's markup before the correction runs.
+  it('draws on the selected frame in place, then saves the marks and redraws with the note', async () => {
+    const framed = board({ beats: [{ ...board().beats[0], panels: [panel('panel-1', {
+      takes: [{ id: 'take-1', source: 'generated', image: 'frame-a.png' }], selectedTakeId: 'take-1',
+    })] }] });
+    api.getStoryboard.mockResolvedValue(framed);
+    api.getMediaSketch.mockResolvedValue({ sketch: null });
+    api.saveMediaSketch.mockResolvedValue({ sketch: {} });
+    api.correctStoryboardPanel.mockResolvedValue({ ...framed, updatedAt: '2026-10-22T00:00:02.000Z' });
+    renderAt('/storyboards/sb-1/panel/panel-1');
+
+    expect(screen.queryByRole('button', { name: 'Sketch' })).toBeNull();
+    fireEvent.click(await screen.findByRole('button', { name: 'Draw on frame' }));
+    await waitFor(() => expect(screen.getByTestId('location').textContent).toBe('/storyboards/sb-1/panel/panel-1?correct=open'));
+    expect(api.createBlankSketch).not.toHaveBeenCalled();
+    expect(api.getMediaSketch).toHaveBeenCalledWith('image:frame-a.png', { silent: true });
+    fireEvent.load(screen.getByAltText('Media being annotated'));
+    expect(screen.getByRole('toolbar', { name: 'Drawing tools' })).toBeInTheDocument();
+    const redraw = screen.getByRole('button', { name: 'Redraw' });
+    expect(redraw).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('What to change'), { target: { value: 'Move her to the left third' } });
+    fireEvent.click(redraw);
+    await waitFor(() => expect(api.correctStoryboardPanel).toHaveBeenCalledWith('sb-1', 'panel-1', { takeId: 'take-1', note: 'Move her to the left third' }));
+    expect(api.saveMediaSketch).toHaveBeenCalledWith('image:frame-a.png', expect.objectContaining({ strokes: [] }));
+    expect(api.saveMediaSketch.mock.invocationCallOrder[0]).toBeLessThan(api.correctStoryboardPanel.mock.invocationCallOrder[0]);
+    await waitFor(() => expect(screen.getByTestId('location').textContent).toBe('/storyboards/sb-1/panel/panel-1'));
+  });
+
+  it('changes the board\'s art style', async () => {
+    api.getStoryboard.mockResolvedValue(board());
+    api.updateStoryboard.mockResolvedValue(board({ artStyle: 'production-sketch', updatedAt: '2026-10-22T00:00:02.000Z' }));
+    renderAt('/storyboards/sb-1');
+    fireEvent.change(await screen.findByLabelText('Art style'), { target: { value: 'production-sketch' } });
+    await waitFor(() => expect(api.updateStoryboard).toHaveBeenCalledWith('sb-1', { artStyle: 'production-sketch' }));
+    expect(screen.getByLabelText('Art style').value).toBe('production-sketch');
+  });
+
   it('keeps the newest board when an earlier save answers last', async () => {
     api.getStoryboard.mockResolvedValue(board());
     let resolveOlder;
@@ -93,6 +191,22 @@ describe('StoryboardDetail', () => {
 
     await act(async () => { resolveOlder(board({ name: 'First', updatedAt: '2026-10-22T00:00:02.000Z' })); });
     expect(name.value).toBe('Second');
+  });
+
+  // Uniquely catches the side panel losing insert before/after (at the right index) or its labeled delete.
+  it('inserts a panel beside the open one and opens it, and deletes from the side panel', async () => {
+    api.getStoryboard.mockResolvedValue(board({ beats: [{ ...board().beats[0], panels: [panel('panel-1'), panel('panel-2')] }] }));
+    api.addStoryboardPanel.mockResolvedValue({
+      board: board({ updatedAt: '2026-10-22T00:00:02.000Z', beats: [{ ...board().beats[0], panels: [panel('panel-1'), panel('panel-new'), panel('panel-2')] }] }),
+      panelId: 'panel-new',
+    });
+    renderAt('/storyboards/sb-1/panel/panel-1');
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Insert after' }));
+    await waitFor(() => expect(api.addStoryboardPanel).toHaveBeenCalledWith('sb-1', 'beat-1', { index: 1 }));
+    await waitFor(() => expect(screen.getByTestId('location').textContent).toBe('/storyboards/sb-1/panel/panel-new'));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete panel' }));
+    expect(screen.getByText('Delete panel 2 from beat 1?')).toBeInTheDocument();
   });
 
   it('opens a new panel at its deep link and saves its action on blur', async () => {
@@ -153,9 +267,19 @@ describe('StoryboardDetail', () => {
     expect(await screen.findByText('This panel is no longer on the storyboard.')).toBeTruthy();
   });
 
-  it('runs a recipe node from the Make tab and duplicates a node from its right-click menu', async () => {
-    api.getStoryboard.mockResolvedValue(board({ beats: [{ ...board().beats[0], panels: [panel('panel-1', { action: 'Doors swing open' })] }] }));
+  it('runs a recipe node from the Prompts tab and duplicates a node from its right-click menu', async () => {
+    // A board that wired the optional prompt enhancer between the shot and the image.
+    const wired = {
+      nodes: [
+        { id: 'node-text', type: 'text', title: 'Shot description', settings: { source: 'panel' }, x: 0, y: 0 },
+        { id: 'node-writer', type: 'llm', title: 'Prompt writer', settings: {}, x: 260, y: 0 },
+        { id: 'node-image', type: 'image', title: 'Image', settings: { count: 1 }, x: 520, y: 0 },
+      ],
+      edges: [{ from: 'node-text', to: 'node-writer', toPort: 'prompt' }, { from: 'node-writer', to: 'node-image', toPort: 'prompt' }],
+    };
+    api.getStoryboard.mockResolvedValue(board({ recipe: wired, beats: [{ ...board().beats[0], panels: [panel('panel-1', { action: 'Doors swing open' })] }] }));
     api.runStoryboardPanelNode.mockResolvedValue(board({
+      recipe: wired,
       updatedAt: '2026-10-22T00:00:02.000Z',
       beats: [{ ...board().beats[0], panels: [panel('panel-1', {
         action: 'Doors swing open',
@@ -177,20 +301,20 @@ describe('StoryboardDetail', () => {
     await waitFor(() => expect(api.updateStoryboardRecipe).toHaveBeenCalled());
     const [, recipe] = api.updateStoryboardRecipe.mock.calls[0];
     const copy = recipe.nodes.find((n) => n.title === 'Image copy');
-    expect(copy).toMatchObject({ type: 'image', settings: { count: 4 } });
+    expect(copy).toMatchObject({ type: 'image', settings: { count: 1 } });
     // The copy keeps the original's inputs.
-    expect(recipe.edges.filter((e) => e.to === copy.id).map((e) => e.toPort).sort()).toEqual(['images', 'prompt']);
+    expect(recipe.edges.filter((e) => e.to === copy.id).map((e) => e.toPort)).toEqual(['prompt']);
   });
 
   it('opens the recipe canvas at its deep link and selects a node into the URL', async () => {
     api.getStoryboard.mockResolvedValue(board());
     renderAt('/storyboards/sb-1/panel/panel-1?panelTab=make&makeView=canvas&node=node-image');
     expect(await screen.findByRole('region', { name: 'Image node' })).toBeInTheDocument();
-    expect(screen.queryByRole('region', { name: 'Prompt writer node' })).toBeNull();
+    expect(screen.queryByRole('region', { name: 'Storyboard style node' })).toBeNull();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Prompt writer (llm)' }));
-    await waitFor(() => expect(screen.getByTestId('location').textContent).toContain('node=node-writer'));
-    expect(await screen.findByRole('region', { name: 'Prompt writer node' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Storyboard style (system)' }));
+    await waitFor(() => expect(screen.getByTestId('location').textContent).toContain('node=node-system'));
+    expect(await screen.findByRole('region', { name: 'Storyboard style node' })).toBeInTheDocument();
   });
 
   it('refuses a canvas wire that would close a cycle, keeping the input wired', async () => {
@@ -251,7 +375,7 @@ describe('StoryboardDetail', () => {
     expect(api.startStoryboardMakeEmpty).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole('button', { name: 'Make' }));
-    await waitFor(() => expect(api.startStoryboardMakeEmpty).toHaveBeenCalledWith('sb-1'));
+    await waitFor(() => expect(api.startStoryboardMakeEmpty).toHaveBeenCalledWith('sb-1', {}));
     expect(await screen.findByText('0 of 2')).toBeInTheDocument();
 
     const onBatch = socketMock.on.mock.calls.findLast(([event]) => event === 'storyboard:make-batch')[1];
@@ -259,6 +383,120 @@ describe('StoryboardDetail', () => {
     expect(screen.getByText('1 of 2')).toBeInTheDocument();
     act(() => onBatch({ storyboardId: 'sb-1', status: 'done', total: 2, done: 2, failed: 0 }));
     expect(await screen.findByRole('button', { name: 'Make empty panels' })).toBeInTheDocument();
+  });
+
+  // Uniquely catches the progress bar outliving its batch: a `done` missed while the
+  // socket was down, or a server restart that dropped the batch, until a reload.
+  it('re-reads the empty-panel batch on reconnect and drops a finished one', async () => {
+    api.getStoryboard.mockResolvedValue(board());
+    api.getStoryboardMakeEmpty.mockResolvedValue({ batch: { storyboardId: 'sb-1', status: 'running', total: 3, done: 1, failed: 0 }, panelCount: 0, steps: [] });
+    renderAt('/storyboards/sb-1');
+    expect(await screen.findByText('1 of 3')).toBeInTheDocument();
+
+    api.getStoryboardMakeEmpty.mockResolvedValue({ batch: null, panelCount: 0, steps: [] });
+    const onConnect = socketMock.on.mock.calls.filter(([event]) => event === 'connect').map(([, fn]) => fn);
+    await act(async () => { for (const fn of onConnect) fn(); });
+    expect(await screen.findByRole('button', { name: 'Make empty panels' })).toBeInTheDocument();
+    expect(screen.queryByText('1 of 3')).toBeNull();
+  });
+
+  // Uniquely catches the opening read restoring a batch a newer socket event already finished.
+  it('keeps a finished batch finished when the opening read answers after the done event', async () => {
+    api.getStoryboard.mockResolvedValue(board());
+    let answer;
+    api.getStoryboardMakeEmpty.mockReturnValue(new Promise((resolve) => { answer = resolve; }));
+    renderAt('/storyboards/sb-1');
+    expect(await screen.findByRole('button', { name: 'Make empty panels' })).toBeInTheDocument();
+    const onBatch = socketMock.on.mock.calls.findLast(([event]) => event === 'storyboard:make-batch')[1];
+    act(() => onBatch({ storyboardId: 'sb-1', status: 'done', total: 2, done: 2, failed: 0 }));
+    await act(async () => { answer({ batch: { storyboardId: 'sb-1', status: 'running', total: 2, done: 1, failed: 0 }, panelCount: 0, steps: [] }); });
+    expect(screen.queryByText('1 of 2')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Make empty panels' })).toBeInTheDocument();
+  });
+
+  // Uniquely catches the opening read, answering after a reconnect read, restoring a batch the newer read cleared.
+  it('lets the newest batch read win when an older one answers last', async () => {
+    api.getStoryboard.mockResolvedValue(board());
+    const answers = [];
+    api.getStoryboardMakeEmpty.mockImplementation(() => new Promise((resolve) => { answers.push(resolve); }));
+    renderAt('/storyboards/sb-1');
+    expect(await screen.findByRole('button', { name: 'Make empty panels' })).toBeInTheDocument();
+    const onConnect = socketMock.on.mock.calls.filter(([event]) => event === 'connect').map(([, fn]) => fn);
+    act(() => { for (const fn of onConnect) fn(); });
+    const [opening, reconnect] = answers;
+    await act(async () => { reconnect({ batch: null, panelCount: 0, steps: [] }); });
+    await act(async () => { opening({ batch: { storyboardId: 'sb-1', status: 'running', total: 2, done: 1, failed: 0 }, panelCount: 0, steps: [] }); });
+    expect(screen.queryByText('1 of 2')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Make empty panels' })).toBeInTheDocument();
+  });
+
+  // Uniquely catches a failed read being reported as a deleted board with no way to retry.
+  it('offers a retry when the board read fails, and says a 404 board is gone', async () => {
+    api.getStoryboard.mockRejectedValueOnce(Object.assign(new Error('HTTP 503'), { status: 503 }));
+    api.getStoryboard.mockResolvedValue(board());
+    const { unmount } = renderAt('/storyboards/sb-1');
+    expect(await screen.findByText('Could not load this storyboard')).toBeInTheDocument();
+    expect(screen.queryByText(/doesn't exist or was deleted/)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByLabelText('Storyboard name')).toBeInTheDocument();
+    unmount();
+
+    api.getStoryboard.mockRejectedValueOnce(Object.assign(new Error('Storyboard not found'), { status: 404 }));
+    renderAt('/storyboards/sb-1');
+    expect(await screen.findByText(/doesn't exist or was deleted/)).toBeInTheDocument();
+  });
+
+  // Uniquely catches a failed mood board list read relabeling the linked mood board as missing.
+  it('shows a retryable error, not "Missing mood board", when the mood board list fails', async () => {
+    api.getStoryboard.mockResolvedValue(board({ moodBoardId: 'mb-1' }));
+    api.listMoodBoardNames.mockRejectedValueOnce(new Error('HTTP 500'));
+    api.listMoodBoardNames.mockResolvedValue([{ id: 'mb-1', name: 'Neon Rain' }]);
+    renderAt('/storyboards/sb-1');
+    const picker = await screen.findByLabelText('Mood board');
+    expect(await screen.findByText(/Could not load mood boards/)).toBeInTheDocument();
+    expect(within(picker).queryByRole('option', { name: 'Missing mood board' })).toBeNull();
+    expect(picker).toHaveValue('mb-1');
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await within(picker).findByRole('option', { name: 'Neon Rain' })).toBeInTheDocument();
+    expect(screen.queryByText(/Could not load mood boards/)).toBeNull();
+  });
+
+  // Uniquely catches a panel losing its one-tap Draw, or the button not showing the panel is drawing.
+  it('draws one panel from its side panel and shows it drawing until the frame lands', async () => {
+    api.getStoryboard.mockResolvedValue(board());
+    api.drawStoryboardPanel.mockResolvedValue(board({ updatedAt: '2026-10-22T00:00:02.000Z', beats: [{ ...board().beats[0],
+      panels: [panel('panel-1', { make: { nodes: { 'node-image': { status: 'queued' } } } })] }] }));
+    renderAt('/storyboards/sb-1/panel/panel-1');
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Draw panel' }));
+    await waitFor(() => expect(api.drawStoryboardPanel).toHaveBeenCalledWith('sb-1', 'panel-1'));
+    expect(await screen.findByRole('button', { name: /Drawing/ })).toBeDisabled();
+  });
+
+  // Uniquely catches Redraw all losing its own count, its one-frame redraw, or the "Select the new drawings" choice.
+  it('redraws every panel with one frame each, selecting the new drawings unless unticked', async () => {
+    api.getStoryboard.mockResolvedValue(board());
+    api.getStoryboardMakeEmpty.mockResolvedValue({
+      batch: null,
+      panelCount: 0,
+      allCount: 3,
+      steps: [
+        { nodeId: 'node-writer', title: 'Prompt writer', type: 'llm', model: 'Example · example-model', frames: 0 },
+        { nodeId: 'node-image', title: 'Image', type: 'image', model: 'Default image model', frames: 4 },
+      ],
+    });
+    api.startStoryboardMakeEmpty.mockResolvedValue({ batch: { storyboardId: 'sb-1', status: 'running', redraw: true, total: 3, done: 0, failed: 0 } });
+    renderAt('/storyboards/sb-1');
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Redraw all' }));
+    const confirm = await screen.findByLabelText('Redraw all panels');
+    expect(confirm.textContent).toContain('Redraw all 3 panels? Prompt writer rewrites each prompt on Example · example-model; Image makes 1 frame each with Default image model.');
+    const select = screen.getByLabelText('Select the new drawings');
+    expect(select).toBeChecked();
+    fireEvent.click(select);
+    fireEvent.click(screen.getByRole('button', { name: 'Redraw' }));
+    await waitFor(() => expect(api.startStoryboardMakeEmpty).toHaveBeenCalledWith('sb-1', { redraw: true, selectNew: false }));
+    expect(await screen.findByLabelText('Redrawing panels')).toBeInTheDocument();
   });
 
   it('saves the recipe to the library and loads a saved one onto the board as a copy', async () => {
@@ -275,7 +513,7 @@ describe('StoryboardDetail', () => {
     await waitFor(() => expect(api.saveStoryboardRecipe).toHaveBeenCalled());
     const [name, sent] = api.saveStoryboardRecipe.mock.calls[0];
     expect(name).toBe('Pencil frames');
-    expect(sent.nodes.map((n) => n.id)).toEqual(['node-text', 'node-system', 'node-writer', 'node-refs', 'node-image', 'node-panel']);
+    expect(sent.nodes.map((n) => n.id)).toEqual(['node-text', 'node-system', 'node-refs', 'node-image', 'node-panel']);
 
     fireEvent.click(screen.getByRole('button', { name: 'Load…' }));
     expect(await screen.findByLabelText('Saved recipe')).toHaveValue('sbr-2');

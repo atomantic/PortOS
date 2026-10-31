@@ -6,9 +6,7 @@
  *
  * macOS (APFS) and Windows (NTFS) resolve `./Foo.js` to a tracked `foo.js`;
  * Linux does not. A pregate run on macOS therefore cannot see this one class
- * of Linux-only failure, and the pregate attestation lets such a run stand in
- * for the Linux test jobs — so the impact job, which always runs, checks it
- * here instead (docs/GITHUB_ACTIONS.md "Pregate attestation").
+ * of Linux-only failure, so the impact job, which always runs, checks it here.
  *
  * For every changed JavaScript module (or every tracked one, when no base is
  * known), each relative specifier — static `import`/`export … from`, a literal

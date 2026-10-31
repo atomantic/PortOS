@@ -30,10 +30,13 @@ const layerRef = (scene) => ({ role: 'layer', sceneId: scene.sceneId, assetId: s
     .concat(scene.cutEffect && scene.cutEffect.enabled !== false ? [['cutEffect', scene.cutEffect]] : [])
     // An image effect over a still changes the render; a still without one keeps its evidence.
     .concat(scene.imageEffect ? [['imageEffect', scene.imageEffect], ['imageEffectSec', scene.imageEffectSec ?? null]] : [])
+    .concat(scene.photoSequence && scene.photoSequence.enabled !== false ? [['photoSequence', scene.photoSequence]] : [])
     // An effect from the start frame to the end frame renders the end frame too.
     .concat(scene.imageEffect && isEndFrameImageEffect(scene.imageEffect) ? [['endImageId', scene.endImageId ?? null]] : [])
     // Only a music-driven performance joins it, so lip-sync evidence stays current.
-    .concat(scene.performanceStyle === 'music' ? [['performanceStyle', 'music']] : []))) });
+    .concat(scene.performanceStyle === 'music' ? [['performanceStyle', 'music']] : [])
+    // A shot moved before the song (its length and sound) changes the render; a song shot keeps its evidence.
+    .concat(scene.preMusic ? [['preMusic', scene.preMusic]] : []))) });
 const snapshot = (references) => ({ version: MUSIC_VIDEO_DEPENDENCY_VERSION, references });
 
 /** Capture the actual submitted plate (and end frame), including optional crop/mask provenance. */
@@ -51,7 +54,8 @@ const compositionRef = (project, startSec, endSec) => {
   const value = composition ? { ...composition,
     cues: (composition.cues || []).filter((cue) => intersects(cue, startSec, endSec)),
   } : null;
-  return { role: 'composition', assetId: 'composition', revision: checksum({ mediaMode: project.mediaMode || null, composition: value }), startSec, endSec };
+  return { role: 'composition', assetId: 'composition', // A chosen production medium changes the render; a project without one keeps its evidence.
+  revision: checksum({ mediaMode: project.mediaMode || null, composition: value, ...(project.productionMedium ? { productionMedium: project.productionMedium } : {}) }), startSec, endSec };
 };
 
 const songRef = (project) => ({ role: 'song', assetId: 'master', revision: checksum({

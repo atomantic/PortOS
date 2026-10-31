@@ -25,6 +25,143 @@ import { inputAssetRejection } from './inputAssets.js';
 // The full schema still guards the submitted body — see remote.js.
 const partialVideoJobSubmissionSchema = federatedMediaVideoJobSubmissionBaseSchema.partial();
 
+const unsupportedInput = (message) => new ServerError(message, { status: 400, code: 'MEDIA_PROVIDER_INPUT_UNSUPPORTED' });
+
+const hasOptions = (options) => Array.isArray(options) && options.length > 0;
+
+// First option wins a tie (the discrete frame options arrive sorted, so the shorter one).
+const nearestOption = (options, target, valueOf = Number) => options.reduce((closest, opt) =>
+  Math.abs(valueOf(opt) - target) < Math.abs(valueOf(closest) - target) ? opt : closest,
+options[0]);
+
+const isBoundedResolution = (opt) => Number.isInteger(Number(opt?.w)) && Number.isInteger(Number(opt?.h))
+  && Number(opt.w) >= 64 && Number(opt.w) <= 2048 && Number(opt.h) >= 64 && Number(opt.h) <= 2048;
+
+// Clip duration is what the user chose; the frame count follows the fps.
+function rescaleFrameCount(numFrames, fromFps, toFps, capability) {
+  const maxNumFrames = capability.maxNumFrames != null
+    ? Number(capability.maxNumFrames)
+    : FEDERATED_MEDIA_MAX_VIDEO_FRAMES;
+  const maxAllowed = Math.min(
+    FEDERATED_MEDIA_MAX_VIDEO_FRAMES,
+    maxNumFrames > 0 ? maxNumFrames : FEDERATED_MEDIA_MAX_VIDEO_FRAMES,
+  );
+  return Math.min(maxAllowed, Math.max(1, Math.round((Number(numFrames) / fromFps) * toFps)));
+}
+
+// Runs before frame negotiation so a rescaled count is then snapped to the
+// provider's frame grid.
+function negotiateFps(request, capability, label) {
+  if (!hasOptions(capability.fpsOptions) || request.fps === undefined) return request;
+  const requestedFps = Number(request.fps);
+  const validFps = capability.fpsOptions.map(Number).filter((f) => Number.isInteger(f) && f >= 1 && f <= 60);
+  if (validFps.length === 0 || !Number.isFinite(requestedFps)) return request;
+  const bestFps = nearestOption(validFps, requestedFps);
+  if (bestFps === requestedFps) return request;
+  console.log(`🌐 Federated render: adjusted fps from ${requestedFps} to ${bestFps} for ${label}`);
+  let negotiated = request;
+  if (request.numFrames !== undefined && Number.isFinite(Number(request.numFrames)) && requestedFps > 0) {
+    negotiated = { ...negotiated, numFrames: rescaleFrameCount(request.numFrames, requestedFps, bestFps, capability) };
+  }
+  return { ...negotiated, fps: bestFps };
+}
+
+// Discrete frameOptions models snap to the nearest option (local reconciler parity).
+function snapToFrameOptions(requestedFrames, capability, label) {
+  const maxNumFrames = capability.maxNumFrames != null ? Number(capability.maxNumFrames) : null;
+  const validOptions = capability.frameOptions
+    .map(Number)
+    .filter((opt) => Number.isInteger(opt)
+      && opt >= 1
+      && opt <= FEDERATED_MEDIA_MAX_VIDEO_FRAMES
+      && (maxNumFrames === null || opt <= maxNumFrames))
+    .sort((a, b) => a - b);
+  if (validOptions.length === 0) {
+    throw unsupportedInput(`Requested frame count (${requestedFrames}) cannot be satisfied by ${label}`);
+  }
+  return nearestOption(validOptions, requestedFrames);
+}
+
+// Stride models take n*stride + 1 frames, floored, and never exceed maxNumFrames.
+function snapToFrameGrid(requestedFrames, capability, label) {
+  const frameStride = capability.frameStride != null ? Number(capability.frameStride) : null;
+  const maxNumFrames = capability.maxNumFrames != null ? Number(capability.maxNumFrames) : null;
+  const hasStride = frameStride !== null && Number.isInteger(frameStride) && frameStride > 0;
+  const hasMax = maxNumFrames !== null && Number.isInteger(maxNumFrames) && maxNumFrames > 0;
+  if (!hasStride && !hasMax) return requestedFrames;
+
+  const minLegal = hasStride ? frameStride + 1 : 1;
+  let legalFrames = requestedFrames;
+  if (hasStride) {
+    legalFrames = legalFrames < minLegal
+      ? minLegal
+      : Math.floor((legalFrames - 1) / frameStride) * frameStride + 1;
+  }
+  if (hasMax && legalFrames > maxNumFrames) {
+    legalFrames = hasStride
+      ? Math.floor((maxNumFrames - 1) / frameStride) * frameStride + 1
+      : maxNumFrames;
+  }
+  if (legalFrames < minLegal) {
+    throw unsupportedInput(`Requested frame count (${requestedFrames}) cannot be satisfied by ${label} (minimum ${minLegal})`);
+  }
+  return legalFrames;
+}
+
+// Frame constraint negotiation (issue #4681)
+function negotiateFrameCount(request, capability, label) {
+  if (request.numFrames === undefined) return request;
+  const requestedFrames = Number(request.numFrames);
+  if (!Number.isFinite(requestedFrames) || requestedFrames < 1) {
+    throw unsupportedInput(`Requested frame count (${requestedFrames}) is invalid for ${label}`);
+  }
+  const legalFrames = hasOptions(capability.frameOptions)
+    ? snapToFrameOptions(requestedFrames, capability, label)
+    : snapToFrameGrid(requestedFrames, capability, label);
+  if (legalFrames === requestedFrames) return request;
+  console.log(`🌐 Federated render: adjusted numFrames from ${requestedFrames} to ${legalFrames} for ${label}`);
+  return { ...request, numFrames: legalFrames };
+}
+
+// Closest aspect ratio; within 0.001 of a tie, the closest area wins.
+function closestAspectThenArea(options, width, height) {
+  const requestedAspect = width / height;
+  const requestedArea = width * height;
+  return options.reduce((best, option) => {
+    const aspectDiff = Math.abs((Number(option.w) / Number(option.h)) - requestedAspect);
+    const areaDiff = Math.abs((Number(option.w) * Number(option.h)) - requestedArea);
+    if (!best) return { option, aspectDiff, areaDiff };
+    if (aspectDiff < best.aspectDiff - 0.001) return { option, aspectDiff, areaDiff };
+    if (Math.abs(aspectDiff - best.aspectDiff) <= 0.001 && areaDiff < best.areaDiff) {
+      return { option, aspectDiff, areaDiff };
+    }
+    return best;
+  }, null).option;
+}
+
+function closestResolution(options, request) {
+  if (request.width !== undefined && request.height !== undefined) {
+    return closestAspectThenArea(options, Number(request.width), Number(request.height));
+  }
+  if (request.width !== undefined) return nearestOption(options, Number(request.width), (opt) => Number(opt.w));
+  return nearestOption(options, Number(request.height), (opt) => Number(opt.h));
+}
+
+// Canvas constraint negotiation (issue #4681)
+function negotiateCanvas(request, capability, label) {
+  if (!hasOptions(capability.resolutionOptions) || (request.width === undefined && request.height === undefined)) {
+    return request;
+  }
+  const validOptions = capability.resolutionOptions.filter(isBoundedResolution);
+  if (validOptions.length === 0) return request;
+  const best = closestResolution(validOptions, request);
+  const width = Number(best.w);
+  const height = Number(best.h);
+  if (request.width === width && request.height === height) return request;
+  console.log(`🌐 Federated render: adjusted resolution from ${request.width ?? '?'}x${request.height ?? '?'} to ${best.w}x${best.h} for ${label}`);
+  return { ...request, width, height };
+}
+
 /**
  * Negotiate frame and canvas constraints against the provider capability.
  * Snaps fps to supported fpsOptions (rescaling frame count to preserve duration),
@@ -33,154 +170,19 @@ const partialVideoJobSubmissionSchema = federatedMediaVideoJobSubmissionBaseSche
  */
 export function negotiateVideoConstraints(request, capability) {
   if (!request || !capability) return request;
-  let negotiated = request;
-
-  // FPS constraint negotiation (negotiated first so frame count can rescale to preserve duration)
-  if (Array.isArray(capability.fpsOptions) && capability.fpsOptions.length > 0 && negotiated.fps !== undefined) {
-    const requestedFps = Number(negotiated.fps);
-    const validFps = capability.fpsOptions.map(Number).filter((f) => Number.isInteger(f) && f >= 1 && f <= 60);
-    if (validFps.length > 0 && Number.isFinite(requestedFps)) {
-      const bestFps = validFps.reduce((closest, opt) =>
-        Math.abs(opt - requestedFps) < Math.abs(closest - requestedFps) ? opt : closest,
-      validFps[0]);
-      if (bestFps !== requestedFps) {
-        console.log(`🌐 Federated render: adjusted fps from ${requestedFps} to ${bestFps} for ${capability.modelName || capability.modelId}`);
-        // Rescale frame count to preserve clip duration (matches local reconciler)
-        if (negotiated.numFrames !== undefined && Number.isFinite(Number(negotiated.numFrames)) && requestedFps > 0) {
-          const maxNumFrames = capability.maxNumFrames != null
-            ? Number(capability.maxNumFrames)
-            : FEDERATED_MEDIA_MAX_VIDEO_FRAMES;
-          const maxAllowed = Math.min(
-            FEDERATED_MEDIA_MAX_VIDEO_FRAMES,
-            maxNumFrames > 0 ? maxNumFrames : FEDERATED_MEDIA_MAX_VIDEO_FRAMES,
-          );
-          const rescaledFrames = Math.min(maxAllowed, Math.max(1, Math.round((Number(negotiated.numFrames) / requestedFps) * bestFps)));
-          negotiated = { ...negotiated, numFrames: rescaledFrames };
-        }
-        negotiated = { ...negotiated, fps: bestFps };
-      }
-    }
-  }
-
-  // Frame constraint negotiation (issue #4681)
-  if (negotiated.numFrames !== undefined) {
-    const requestedFrames = Number(negotiated.numFrames);
-    if (!Number.isFinite(requestedFrames) || requestedFrames < 1) {
-      throw new ServerError(
-        `Requested frame count (${requestedFrames}) is invalid for ${capability.modelName || capability.modelId}`,
-        { status: 400, code: 'MEDIA_PROVIDER_INPUT_UNSUPPORTED' },
-      );
-    }
-
-    if (Array.isArray(capability.frameOptions) && capability.frameOptions.length > 0) {
-      const maxNumFrames = capability.maxNumFrames != null ? Number(capability.maxNumFrames) : null;
-      const validOptions = capability.frameOptions
-        .map(Number)
-        .filter((opt) => Number.isInteger(opt)
-          && opt >= 1
-          && opt <= FEDERATED_MEDIA_MAX_VIDEO_FRAMES
-          && (maxNumFrames === null || opt <= maxNumFrames))
-        .sort((a, b) => a - b);
-      if (validOptions.length === 0) {
-        throw new ServerError(
-          `Requested frame count (${requestedFrames}) cannot be satisfied by ${capability.modelName || capability.modelId}`,
-          { status: 400, code: 'MEDIA_PROVIDER_INPUT_UNSUPPORTED' },
-        );
-      }
-      // Discrete frameOptions models snap to nearestOption (consistent with local reconciler)
-      const best = validOptions.reduce((closest, opt) =>
-        Math.abs(opt - requestedFrames) < Math.abs(closest - requestedFrames) ? opt : closest,
-      validOptions[0]);
-      if (best !== requestedFrames) {
-        console.log(`🌐 Federated render: adjusted numFrames from ${requestedFrames} to ${best} for ${capability.modelName || capability.modelId}`);
-        negotiated = { ...negotiated, numFrames: best };
-      }
-    } else {
-      const frameStride = capability.frameStride != null ? Number(capability.frameStride) : null;
-      const maxNumFrames = capability.maxNumFrames != null ? Number(capability.maxNumFrames) : null;
-      const hasStride = frameStride !== null && Number.isInteger(frameStride) && frameStride > 0;
-      const hasMax = maxNumFrames !== null && Number.isInteger(maxNumFrames) && maxNumFrames > 0;
-
-      if (hasStride || hasMax) {
-        let legalFrames = requestedFrames;
-        const minLegal = hasStride ? frameStride + 1 : 1;
-        if (hasStride) {
-          if (legalFrames < minLegal) {
-            legalFrames = minLegal;
-          } else {
-            legalFrames = Math.floor((legalFrames - 1) / frameStride) * frameStride + 1;
-          }
-        }
-        if (hasMax && legalFrames > maxNumFrames) {
-          legalFrames = hasStride
-            ? Math.floor((maxNumFrames - 1) / frameStride) * frameStride + 1
-            : maxNumFrames;
-        }
-        if (legalFrames < minLegal || legalFrames < 1) {
-          throw new ServerError(
-            `Requested frame count (${requestedFrames}) cannot be satisfied by ${capability.modelName || capability.modelId} (minimum ${minLegal})`,
-            { status: 400, code: 'MEDIA_PROVIDER_INPUT_UNSUPPORTED' },
-          );
-        }
-        if (legalFrames !== requestedFrames) {
-          console.log(`🌐 Federated render: adjusted numFrames from ${requestedFrames} to ${legalFrames} for ${capability.modelName || capability.modelId}`);
-          negotiated = { ...negotiated, numFrames: legalFrames };
-        }
-      }
-    }
-  }
-
-  // Canvas constraint negotiation (issue #4681)
-  if (Array.isArray(capability.resolutionOptions) && capability.resolutionOptions.length > 0
-      && (negotiated.width !== undefined || negotiated.height !== undefined)) {
-    const validOptions = capability.resolutionOptions.filter(
-      (opt) => Number.isInteger(Number(opt?.w)) && Number.isInteger(Number(opt?.h))
-        && Number(opt.w) >= 64 && Number(opt.w) <= 2048 && Number(opt.h) >= 64 && Number(opt.h) <= 2048,
-    );
-    if (validOptions.length > 0) {
-      let bestOption = null;
-      if (negotiated.width !== undefined && negotiated.height !== undefined) {
-        const requestedAspect = Number(negotiated.width) / Number(negotiated.height);
-        const requestedArea = Number(negotiated.width) * Number(negotiated.height);
-        bestOption = validOptions.reduce((best, option) => {
-          const aspectDiff = Math.abs((Number(option.w) / Number(option.h)) - requestedAspect);
-          const areaDiff = Math.abs((Number(option.w) * Number(option.h)) - requestedArea);
-          if (!best) return { option, aspectDiff, areaDiff };
-          if (aspectDiff < best.aspectDiff - 0.001) return { option, aspectDiff, areaDiff };
-          if (Math.abs(aspectDiff - best.aspectDiff) <= 0.001 && areaDiff < best.areaDiff) {
-            return { option, aspectDiff, areaDiff };
-          }
-          return best;
-        }, null)?.option;
-      } else if (negotiated.width !== undefined) {
-        const reqW = Number(negotiated.width);
-        bestOption = validOptions.reduce((closest, opt) =>
-          Math.abs(Number(opt.w) - reqW) < Math.abs(Number(closest.w) - reqW) ? opt : closest,
-        validOptions[0]);
-      } else {
-        const reqH = Number(negotiated.height);
-        bestOption = validOptions.reduce((closest, opt) =>
-          Math.abs(Number(opt.h) - reqH) < Math.abs(Number(closest.h) - reqH) ? opt : closest,
-        validOptions[0]);
-      }
-
-      if (bestOption && (negotiated.width !== Number(bestOption.w) || negotiated.height !== Number(bestOption.h))) {
-        console.log(`🌐 Federated render: adjusted resolution from ${negotiated.width ?? '?'}x${negotiated.height ?? '?'} to ${bestOption.w}x${bestOption.h} for ${capability.modelName || capability.modelId}`);
-        negotiated = { ...negotiated, width: Number(bestOption.w), height: Number(bestOption.h) };
-      }
-    }
-  }
+  const label = capability.modelName || capability.modelId;
+  const negotiated = negotiateCanvas(
+    negotiateFrameCount(negotiateFps(request, capability, label), capability, label),
+    capability,
+    label,
+  );
 
   // Defensive validation against the wire schema bounds before persisting/returning
   const validationResult = partialVideoJobSubmissionSchema.safeParse(negotiated);
   if (!validationResult.success) {
     const issueMessages = validationResult.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join(', ');
-    throw new ServerError(
-      `Negotiated video parameters violate schema: ${issueMessages}`,
-      { status: 400, code: 'MEDIA_PROVIDER_INPUT_UNSUPPORTED' },
-    );
+    throw unsupportedInput(`Negotiated video parameters violate schema: ${issueMessages}`);
   }
-
   return negotiated;
 }
 
@@ -222,13 +224,13 @@ export async function prepareRemoteMediaJob({ peerId, kind, request, inputAssets
   // a message on the Generate button naming the input to clear.
   const rejection = inputAssetRejection(capability, inputAssets, status);
   if (rejection) {
-    throw new ServerError(rejection, { status: 400, code: 'MEDIA_PROVIDER_INPUT_UNSUPPORTED' });
+    throw unsupportedInput(rejection);
   }
   const effectiveRequest = kind === 'video'
     ? negotiateVideoConstraints(request, capability)
     : request;
   if (request.audioConditioning && (effectiveRequest.fps !== request.fps || effectiveRequest.numFrames !== request.numFrames)) {
-    throw new ServerError('Peer frame constraints would change the supplied audio window', { status: 400, code: 'MEDIA_PROVIDER_INPUT_UNSUPPORTED' });
+    throw unsupportedInput('Peer frame constraints would change the supplied audio window');
   }
   return {
     peer,

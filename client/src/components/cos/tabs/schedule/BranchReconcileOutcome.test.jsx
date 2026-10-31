@@ -121,9 +121,9 @@ describe('BranchReconcileOutcome checkout retirement', () => {
 
 it('separates missing historical checkouts from current work without offering retirement or claiming completion', () => {
   render(<BranchReconcileOutcome outcomes={{ 'app-1': { status: 'incomplete', remaining: [{ ...held, checkoutMissing: true, reason: 'retirement-receipt-unverified' }] } }} apps={[{ id: 'app-1', name: 'Example App' }]} />);
-  expect(screen.getByText(/Example App · Incomplete · 0 remaining · 1 unresolved archive records/)).toBeTruthy();
-  expect(screen.getByText('Archive history · 1 unresolved')).toBeTruthy();
-  expect(screen.getByText(/historical archive evidence is unresolved/)).toBeTruthy();
+  expect(screen.getByText(/Example App · Incomplete · 0 remaining · 1 unresolved missing checkouts/)).toBeTruthy();
+  expect(screen.getByText('Missing checkouts · 1 unresolved')).toBeTruthy();
+  expect(screen.getByText(/until retirement evidence explains it/)).toBeTruthy();
   expect(screen.queryByRole('button', { name: 'Retire checkout…' })).toBeNull();
 });
 

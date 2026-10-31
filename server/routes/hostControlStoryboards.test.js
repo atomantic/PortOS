@@ -14,7 +14,7 @@ afterAll(cleanupTempDataRoots);
 // Storyboards agent runs (#12952). Real router behind the real auth and
 // host-control gates. Beat extraction runs for real up to the provider sink,
 // so a synthetic CLI provider proves the gate stands before
-// `runPromptThroughProvider`; the panel maker's run and make-empty services are
+// `runPromptThroughProvider`; the panel maker's run, correction and make-empty services are
 // doubled, so neither a provider call nor an image job can start.
 const auth = vi.hoisted(() => ({ enabled: false }));
 const cliProvider = vi.hoisted(() => ({
@@ -46,20 +46,24 @@ vi.mock('../services/mediaJobQueue/index.js', async (importOriginal) => ({
 vi.mock('../services/storyboards/make.js', async (importOriginal) => ({
   ...await importOriginal(),
   runPanelNode: vi.fn(async () => ({ ok: true })),
+  correctPanel: vi.fn(async () => ({ ok: true })),
+  drawPanel: vi.fn(async () => ({ ok: true })),
   startMakeEmpty: vi.fn(async () => ({ status: 'running' })),
 }));
 
 const { authGate, hostControlRouteGate } = await import('../services/authGate.js');
 const { createSession } = await import('../services/auth.js');
-const { runPanelNode, startMakeEmpty } = await import('../services/storyboards/make.js');
+const { correctPanel, drawPanel, runPanelNode, startMakeEmpty } = await import('../services/storyboards/make.js');
 const { default: storyboardRoutes } = await import('./storyboards.js');
 
 const GATED = [
   'POST /api/storyboards/:id/beats/extract',
   'POST /api/storyboards/:id/make-empty',
+  'POST /api/storyboards/:id/panels/:panelId/correct',
+  'POST /api/storyboards/:id/panels/:panelId/draw',
   'POST /api/storyboards/:id/panels/:panelId/make/:nodeId/run',
 ];
-const effects = [sink.runPromptThroughProvider, sink.enqueueJob, runPanelNode, startMakeEmpty];
+const effects = [sink.runPromptThroughProvider, sink.enqueueJob, runPanelNode, correctPanel, drawPanel, startMakeEmpty];
 
 const appFor = (address = '192.0.2.10') => {
   const app = express();
@@ -87,6 +91,8 @@ const newBoard = async () => {
 const operations = (id) => [
   [`/api/storyboards/${id}/beats/extract`, { plot: 'Example plot', providerId: cliProvider.id }, 200],
   [`/api/storyboards/${id}/panels/panel-example/make/node-example/run`, {}, 200],
+  [`/api/storyboards/${id}/panels/panel-example/correct`, { takeId: 'take-example', note: 'Wider' }, 200],
+  [`/api/storyboards/${id}/panels/panel-example/draw`, {}, 200],
   [`/api/storyboards/${id}/make-empty`, {}, 202],
 ];
 const expectNoEffects = () => {
@@ -99,7 +105,7 @@ beforeEach(() => {
 });
 
 describe('Storyboards agent runs require operator authority (#12952)', () => {
-  it('gates exactly the three runs; every other Storyboards mutation stores records and stays open', () => {
+  it('gates exactly the five runs; every other Storyboards mutation stores records and stays open', () => {
     const mutations = scanRouteGraph().routes
       .filter((route) => route.mountPath === '/api/storyboards' && route.method !== 'GET')
       .map(({ method, path }) => `${method} ${path}`);
@@ -128,11 +134,14 @@ describe('Storyboards agent runs require operator authority (#12952)', () => {
       'POST /api/storyboards/from-fableloom/:loomId/:episodeId',
       'POST /api/storyboards/from-music-video/:projectId',
       'POST /api/storyboards/from-pipeline/:issueId',
+      'POST /api/storyboards/group-by-song/:projectId',
       'POST /api/storyboards/music-video/:projectId/shots/:sceneId/panel-art',
       'POST /api/storyboards/music-video/:projectId/shots/:sceneId/update-from-panel',
       'POST /api/storyboards/pipeline/:issueId/update-from-board',
       'POST /api/storyboards/recipes',
+      'POST /api/storyboards/sync-music-video/:projectId',
       'PUT /api/storyboards/:id/recipe',
+      'PUT /api/storyboards/sync-music-video/:projectId/auto',
     ]);
   });
 
@@ -172,6 +181,8 @@ describe('Storyboards agent runs require operator authority (#12952)', () => {
       provider: cliProvider, source: 'storyboard-plot-beats',
     }));
     expect(runPanelNode).toHaveBeenCalledTimes(3);
+    expect(correctPanel).toHaveBeenCalledTimes(3);
+    expect(drawPanel).toHaveBeenCalledTimes(3);
     expect(startMakeEmpty).toHaveBeenCalledTimes(3);
   });
 });

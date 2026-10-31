@@ -94,6 +94,10 @@ export async function prepareReconcileRetirements(app, result, deps = {}) {
       held.push({ ...release, reason });
     }
   }
+  // A release candidate's own lock is released once its release PR is merged.
+  const releaseCandidates = await (deps.retireReleaseCandidates || (await import('./branchReconcileReleaseCandidates.js')).retireMergedReleaseCandidates)(app, result, deps);
+  retired.push(...releaseCandidates.retired);
+  held.push(...releaseCandidates.held);
   return { candidates, held, retired };
 }
 

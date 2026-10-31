@@ -295,3 +295,108 @@ describe('applyRemote meatspace write queues', () => {
     expect(rows.filter((r) => r.date === '2026-04-01')).toHaveLength(1);
   });
 });
+
+describe('health erasure survives a peer that still holds the row (#14155)', () => {
+  const day = (body, extra = {}) => ({ date: '2026-04-02', ...extra, ...(body ? { body } : {}) });
+
+  it('keeps a legacy blood panel deleted after a peer resends the id-less row', async () => {
+    const row = { date: '2026-04-02', homocysteine: 7 };
+    await persist('blood-tests.json', { tests: [row], referenceRanges: { homocysteine: { min: 5, max: 15 } } });
+    const id = (await health.getBloodTests()).tests[0].id;
+    expect(id).toMatch(/^legacy-/);
+    expect(await health.removeBloodTest(id)).toMatchObject({ date: '2026-04-02', id });
+    expect((await health.getBloodTests()).tests).toEqual([]);
+    expect((await apply('blood-tests.json', { tests: [row] })).applied).toBe(false);
+    const doc = await readDoc('blood-tests.json');
+    expect(doc.tests).toEqual([]);
+    expect(doc.rowTombstones.map(t => t.id)).toContain(id);
+    expect(doc.referenceRanges.homocysteine).toEqual({ min: 5, max: 15 });
+  });
+
+  it('keeps a minted blood panel and an epigenetic result deleted', async () => {
+    const blood = await health.addBloodTest({ date: '2026-05-01', glucose: 90 });
+    expect(blood.createdAt).toEqual(expect.any(String));
+    await health.removeBloodTest(blood.id);
+    expect((await apply('blood-tests.json', { tests: [blood] })).applied).toBe(false);
+    expect((await readDoc('blood-tests.json')).tests).toEqual([]);
+
+    const epi = await health.addEpigeneticTest({ date: '2026-05-01', biologicalAge: 40 });
+    expect(epi.createdAt).toEqual(expect.any(String));
+    await health.removeEpigeneticTest(epi.id);
+    expect((await apply('epigenetic-tests.json', { tests: [epi] })).applied).toBe(false);
+    expect((await readDoc('epigenetic-tests.json')).tests).toEqual([]);
+  });
+
+  it('does not refill a deleted body from an older or unstamped peer copy', async () => {
+    await persist('daily-log.json', {
+      entries: [day({ weightLbs: 180, updatedAt: '2026-04-02T10:00:00.000Z' })],
+    });
+    await health.removeBodyEntry('2026-04-02');
+    const deletedAt = (await readDoc('daily-log.json')).entries[0].bodyDeletedAt;
+    expect((await readDoc('daily-log.json')).entries[0].body).toBeUndefined();
+
+    expect((await apply('daily-log.json', {
+      entries: [day({ weightLbs: 180, updatedAt: '2026-04-02T10:00:00.000Z' })],
+    })).applied).toBe(false);
+    expect((await readDoc('daily-log.json')).entries[0].body).toBeUndefined();
+
+    await persist('daily-log.json', { entries: [day({ weightLbs: 180 })] });
+    expect((await apply('daily-log.json', {
+      entries: [{ date: '2026-04-02', bodyDeletedAt: deletedAt }],
+    })).applied).toBe(true);
+    expect((await readDoc('daily-log.json')).entries[0].body).toBeUndefined();
+    expect((await readDoc('daily-log.json')).entries[0].bodyDeletedAt).toBe(deletedAt);
+  });
+
+  it('lets a re-log replace the deletion and still fills an empty body that was not deleted', async () => {
+    await health.addBodyEntry({ date: '2026-04-02', weightLbs: 180 });
+    await health.removeBodyEntry('2026-04-02');
+    const deletedAt = (await readDoc('daily-log.json')).entries[0].bodyDeletedAt;
+    const again = await health.addBodyEntry({ date: '2026-04-02', weightLbs: 170 });
+    expect(Date.parse(again.updatedAt)).toBeGreaterThan(Date.parse(deletedAt));
+    expect((await readDoc('daily-log.json')).entries[0].bodyDeletedAt).toBeUndefined();
+
+    expect((await apply('daily-log.json', {
+      entries: [day({ weightLbs: 180, updatedAt: '2026-04-02T10:00:00.000Z' }, { bodyDeletedAt: deletedAt })],
+    })).applied).toBe(false);
+    const relogged = (await readDoc('daily-log.json')).entries[0];
+    expect(relogged.body.weightLbs).toBe(170);
+    expect(relogged.bodyDeletedAt).toBeUndefined();
+
+    await persist('daily-log.json', { entries: [{ date: '2026-04-03', body: {} }] });
+    expect((await apply('daily-log.json', {
+      entries: [{ date: '2026-04-03', body: { weightLbs: 180 } }],
+    })).applied).toBe(true);
+    expect((await readDoc('daily-log.json')).entries.find(e => e.date === '2026-04-03').body).toEqual({ weightLbs: 180 });
+  });
+
+  it('deletes a blood panel created by a clinical import, and a peer copy stays gone', async () => {
+    const { importClinicalRecords } = await import('./appleHealthClinical.js');
+    const fhir = JSON.stringify({
+      resourceType: 'Observation',
+      status: 'final',
+      category: [{ coding: [{ system: 'http://terminology.hl7.org/CodeSystem/observation-category', code: 'laboratory' }] }],
+      code: { coding: [{ system: 'http://loinc.org', code: '2345-7', display: 'Glucose' }], text: 'Glucose' },
+      effectiveDateTime: '2026-05-01T10:30:00Z',
+      valueQuantity: { value: 95, unit: 'mg/dL' },
+    });
+    await persist('blood-tests.json', {
+      tests: [{ date: '2026-04-02', homocysteine: 7 }],
+      referenceRanges: {},
+      rowTombstones: [{ id: 'already-gone', deletedAt: '2026-01-01T00:00:00.000Z' }],
+    });
+    const summary = await importClinicalRecords([fhir]);
+    expect(summary.newDates).toBe(1);
+    const doc = await readDoc('blood-tests.json');
+    expect(doc.rowTombstones.map(t => t.id)).toContain('already-gone');
+    const imported = doc.tests.find(row => row.date === '2026-05-01');
+    expect(imported.glucose).toBe(95);
+    expect(imported.createdAt).toEqual(expect.any(String));
+    const legacy = doc.tests.find(row => row.date === '2026-04-02');
+    expect(legacy.id).toMatch(/^legacy-/);
+    expect(legacy.createdAt).toBeUndefined();
+    await health.removeBloodTest(imported.id);
+    expect((await apply('blood-tests.json', { tests: [imported] })).applied).toBe(false);
+    expect((await readDoc('blood-tests.json')).tests.map(row => row.date)).toEqual(['2026-04-02']);
+  });
+});

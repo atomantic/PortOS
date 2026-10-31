@@ -11,7 +11,7 @@ import { createDbPhaseDiagnostics } from '../../test/dbPhaseDiagnostics.js';
 const { it, drain } = ownTestBodies(vitestIt);
 
 const state = vi.hoisted(() => ({ file: false, images: [], videos: [], collections: [], annotations: {}, query: vi.fn() }));
-vi.mock('../../lib/runtimeEnv.js', () => ({ isTestRunner: () => state.file }));
+vi.mock('../../lib/pgFileFacade.js', () => ({ isFileBackend: () => state.file }));
 vi.mock('../../lib/db.js', () => ({ query: (...args) => state.query(...args) }));
 vi.mock('../videoGen/history.js', async () => {
   const { compactSource } = await import('./logic.js');

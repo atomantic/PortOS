@@ -25,6 +25,7 @@ import { ServerError } from '../lib/errorHandler.js';
 import { query, withTransaction, arrayToPgvector, pgvectorToArray } from '../lib/db.js';
 import { PERSISTENT_MIND_ID } from '../lib/persistentMindTrajectory.js';
 import { PERSISTENT_MIND_CHOSEN_NAME_TAG } from '../lib/persistentMindChosenName.js';
+import { BRAIN_BRIDGE_SOURCE_AGENT_ID } from '../lib/brainBridgeSource.js';
 import { dedupeByKey } from '../lib/arrayUtils.js';
 
 /**
@@ -51,10 +52,11 @@ export async function getChangesSince(sinceSequence = '0', limit = 100, schemaVe
      WHERE f.stream = 'memories'
        AND f.position > $1
        AND m.source_agent_id IS DISTINCT FROM $3
+       AND m.source_agent_id IS DISTINCT FROM $5
        AND NOT ($4 = ANY(COALESCE(m.tags, '{}'::text[])))
      ORDER BY f.position ASC
      LIMIT $2`,
-    [sinceSequence, limit + 1, PERSISTENT_MIND_ID, PERSISTENT_MIND_CHOSEN_NAME_TAG]
+    [sinceSequence, limit + 1, PERSISTENT_MIND_ID, PERSISTENT_MIND_CHOSEN_NAME_TAG, BRAIN_BRIDGE_SOURCE_AGENT_ID]
   );
 
   const hasMore = result.rows.length > limit;
@@ -137,6 +139,7 @@ export async function applyRemoteChanges(incomingMemories, schemaVersion = 0) {
   };
   const deduped = dedupeByKey(
     incomingMemories.filter((mem) => mem.sourceAgentId !== PERSISTENT_MIND_ID
+      && mem.sourceAgentId !== BRAIN_BRIDGE_SOURCE_AGENT_ID
       && !mem.tags?.includes(PERSISTENT_MIND_CHOSEN_NAME_TAG)),
     (mem) => mem.id,
     (held, next) => (lwwClock(held) >= lwwClock(next) ? held : next),

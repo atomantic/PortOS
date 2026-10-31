@@ -96,7 +96,13 @@ export default function BrainGraph() {
   const [syncing, setSyncing] = useState(false);
   const [confirmingRefresh, setConfirmingRefresh] = useState(false);
   const [searchIndex, setSearchIndex] = useState([]);
+  const [searchError, setSearchError] = useState(false);
+  const searchRequest = useRef(0);
+  // Generation for every writer of graphData after the overview: a newer view load invalidates older ones.
+  const viewRequest = useRef(0);
   const [searchValue, setSearchValue] = useState('');
+  const [embeddingError, setEmbeddingError] = useState(false);
+  const embeddingRequest = useRef(0);
   const [focusTrail, setFocusTrail] = useState([]);
   const [embeddingStatus, setEmbeddingStatus] = useState(null);
   // Mobile-only: the legend is always shown from `sm` up (CSS, not this flag).
@@ -139,23 +145,47 @@ export default function BrainGraph() {
     };
   }, [loadOverview]);
 
-  // Optional reads must not delay or replace the overview.
-  useEffect(() => {
-    let cancelled = false;
-    api.getBrainGraphSearchIndex({ silent: true }).catch(() => null).then(index => {
-      if (!cancelled) setSearchIndex(index?.nodes || []);
-    });
-    api.getEmbeddingsStatus({ silent: true }).catch(() => null).then(status => {
-      if (!cancelled) setEmbeddingStatus(status);
-    });
-    return () => { cancelled = true; };
+  // Optional reads must not delay or replace the overview. A failed read keeps
+  // its own error flag: an empty index would read as "no matches", and a null
+  // status would hide the missing-embeddings action as if the count were zero.
+  const loadSearchIndex = useCallback(async () => {
+    const request = ++searchRequest.current;
+    setSearchError(false);
+    try {
+      const index = await api.getBrainGraphSearchIndex({ silent: true });
+      if (request === searchRequest.current) setSearchIndex(index?.nodes || []);
+    } catch {
+      if (request === searchRequest.current) setSearchError(true);
+    }
   }, []);
+
+  const loadEmbeddingStatus = useCallback(async () => {
+    const request = ++embeddingRequest.current;
+    setEmbeddingError(false);
+    try {
+      const status = await api.getEmbeddingsStatus({ silent: true });
+      if (request === embeddingRequest.current) setEmbeddingStatus(status);
+    } catch {
+      if (request === embeddingRequest.current) setEmbeddingError(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadSearchIndex();
+    loadEmbeddingStatus();
+    return () => {
+      searchRequest.current += 1;
+      embeddingRequest.current += 1;
+    };
+  }, [loadSearchIndex, loadEmbeddingStatus]);
 
   // Load a bounded view (overview when focusId is null, else that node's
   // neighborhood) and reconcile the breadcrumb trail.
   const loadView = useCallback(async (targetFocusId, { trail } = {}) => {
+    const request = ++viewRequest.current;
     setSubLoading(true);
     const data = await api.getBrainGraph(targetFocusId ? { focus: targetFocusId } : {}, { silent: true }).catch(() => null);
+    if (request !== viewRequest.current) return false;
     setSubLoading(false);
     if (!data || data.notFound) {
       toast.error('Could not load those connections');
@@ -271,6 +301,8 @@ export default function BrainGraph() {
   const handleSync = async ({ refresh = false, onlyMissing = false } = {}) => {
     setSyncing(true);
     setConfirmingRefresh(false);
+    const viewAtStart = viewRequest.current;
+    const focusAtStart = focusId;
     // The server has no progress stream for this, so a persistent loading toast
     // is the only honest signal that work is in flight. A fixed id lets the
     // success/error call swap the same toast in place.
@@ -294,9 +326,9 @@ export default function BrainGraph() {
       toast.success(`Synced ${pluralize(stats.synced, 'record')} (${stats.skipped} skipped${archivedNote})`, { id: toastId });
       // Refresh the missing-embeddings count and reload the current view to pick
       // up the new edges.
-      api.getEmbeddingsStatus().then(setEmbeddingStatus).catch(() => {});
-      const fresh = await api.getBrainGraph(focusId ? { focus: focusId } : {}).catch(() => null);
-      if (fresh) setGraphData(fresh);
+      loadEmbeddingStatus();
+      const fresh = await api.getBrainGraph(focusAtStart ? { focus: focusAtStart } : {}).catch(() => null);
+      if (fresh && viewAtStart === viewRequest.current) setGraphData(fresh);
     }
   };
 
@@ -332,7 +364,8 @@ export default function BrainGraph() {
     );
   }
 
-  const missingCount = embeddingStatus?.missing || 0;
+  // Only a successful status read supplies a count; a failed read shows Retry instead.
+  const missingCount = embeddingError ? 0 : (embeddingStatus?.missing || 0);
 
   return (
     // Full-bleed tab: own the scroll (the Brain wrapper is overflow-hidden) and
@@ -372,7 +405,17 @@ export default function BrainGraph() {
           // beside the "N missing" button on a ~320px screen instead of
           // overflowing the row.
           className="flex-1 min-w-0"
+          emptyNoItems={searchError ? 'Search unavailable' : undefined}
         />
+        {embeddingError && (
+          <button
+            type="button"
+            onClick={loadEmbeddingStatus}
+            className="shrink-0 px-3 py-2 min-h-[36px] text-xs whitespace-nowrap bg-port-card text-gray-300 border border-port-border rounded-lg hover:text-white transition-colors"
+          >
+            Retry status
+          </button>
+        )}
         {missingCount > 0 && (
           <button
             onClick={() => handleSync({ onlyMissing: true })}
@@ -385,6 +428,19 @@ export default function BrainGraph() {
           </button>
         )}
       </div>
+
+      {searchError && (
+        <div role="alert" className="flex flex-wrap items-center gap-2 text-xs text-port-error">
+          <span>Search is unavailable, so memories outside this view cannot be found.</span>
+          <button
+            type="button"
+            onClick={loadSearchIndex}
+            className="min-h-[36px] px-3 py-1.5 rounded-lg bg-port-card text-gray-300 border border-port-border hover:text-white transition-colors"
+          >
+            Retry search
+          </button>
+        </div>
+      )}
 
       {/* Breadcrumb trail + controls bar. Below `sm` this stacks into three
           rows (trail / filters / stats+actions) — as one flex row the seven

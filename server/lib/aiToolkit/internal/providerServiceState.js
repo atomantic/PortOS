@@ -25,6 +25,7 @@ const PRIOR_CODEX_MODEL_CATALOGS = [
 ];
 const ANTIGRAVITY_MODEL_KEYS = ['defaultModel', 'lightModel', 'mediumModel', 'heavyModel'];
 const ANTIGRAVITY_MODELS = [
+  'gemini-4-argon-medium', 'gemini-4-argon-high', 'gemini-4-argon-low',
   'gemini-3.8-flash-high', 'gemini-3.8-flash-medium', 'gemini-3.8-flash-low',
   'claude-opus-5-5-low', 'claude-opus-5-5-medium', 'claude-opus-5-5-high',
   'claude-sonnet-5-5-low', 'claude-sonnet-5-5-medium', 'claude-sonnet-5-5-high',
@@ -32,6 +33,13 @@ const ANTIGRAVITY_MODELS = [
 ];
 const ANTIGRAVITY_MODEL_CATALOG = [ANTIGRAVITY_CONFIGURED_DEFAULT, ...ANTIGRAVITY_MODELS];
 const PRIOR_ANTIGRAVITY_MODEL_CATALOGS = [
+  [
+    ANTIGRAVITY_CONFIGURED_DEFAULT,
+    'gemini-3.8-flash-high', 'gemini-3.8-flash-medium', 'gemini-3.8-flash-low',
+    'claude-opus-5-5-low', 'claude-opus-5-5-medium', 'claude-opus-5-5-high',
+    'claude-sonnet-5-5-low', 'claude-sonnet-5-5-medium', 'claude-sonnet-5-5-high',
+    'gpt-oss-120b-medium',
+  ],
   [
     ANTIGRAVITY_CONFIGURED_DEFAULT,
     'gemini-3.8-flash-high', 'gemini-3.8-flash-medium', 'gemini-3.8-flash-low',

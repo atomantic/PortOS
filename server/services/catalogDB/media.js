@@ -168,7 +168,8 @@ export async function getIngredientMediaCover(ingredientId) {
   const { rows } = await query(`SELECT DISTINCT ON (kind) kind, media_key
     FROM catalog_identity_read_media
     WHERE ingredient_id = ANY(catalog_identity_member_ids($1)) AND deleted = false
-      AND (kind = 'portrait' OR (kind = 'reference' AND (role IS NULL OR role NOT LIKE 'archive:%')))
+      AND (kind = 'portrait' OR (kind = 'reference' AND (role IS NULL OR NOT (role LIKE 'archive:%'
+        OR (role LIKE 'design:%' AND COALESCE(library->>'guide', '') <> 'true')))))
     ORDER BY kind, ingredient_id, created_at DESC`, [ingredientId]);
   return { portraitKey: rows.find((row) => row.kind === 'portrait')?.media_key || null,
     referenceKey: rows.find((row) => row.kind === 'reference')?.media_key || null };

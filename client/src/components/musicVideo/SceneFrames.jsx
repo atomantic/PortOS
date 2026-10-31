@@ -1,3 +1,4 @@
+import { castLookForTake } from '../../../../server/lib/musicVideoCastLook.js';
 import { musicVideoGreyboxReference } from '../../../../server/lib/musicVideoGreybox.js';
 import SceneFramePromptPreview from './SceneFramePromptPreview.jsx';
 import SceneGreyboxReference from './SceneGreyboxReference.jsx';
@@ -69,7 +70,7 @@ const REFERENCE_LABELS = { '': 'Prompt only', start: 'Start frame', end: 'End fr
 export default function SceneFrames({
   project = null, castMedia = null, greyboxPlaces = {}, greyboxSaving = false, onGreyboxSaving, scene, index, endFrames, generatingFrame = false, generatingEndFrame = false, onGenerateFrame, onGenerateEndFrame,
   onEditLocal, onSave, onOpenPreview, takeBusy = false, onSelectTake, onReviewTake, onSwap = null, onImportTake = null,
-  onContinueFromPrevious = null, previousHasClip = false, clipLocked = false, onSwapFrames = null, assetMarks = null, onMarkTake = null,
+  onContinueFromPrevious = null, previousHasClip = false, clipLocked = false, stillLocked = false, onSwapFrames = null, assetMarks = null, onMarkTake = null,
 }) {
   const greybox = musicVideoGreyboxReference(project, scene, greyboxPlaces);
   const [referenceSaving, setReferenceSaving] = useState(false);
@@ -95,6 +96,14 @@ export default function SceneFrames({
     const refChoices = ['', ...['start', 'end'].filter((key) => frames[key])];
     const needsPrompt = !start && !scene.endFramePrompt?.trim();
     const render = () => (start ? onGenerateFrame : onGenerateEndFrame)?.(scene, { referenceImageId: ref ? frames[ref] : null });
+    const kind = start ? 'image' : 'endImage';
+    const selected = imageId ? (scene.takes || []).find((take) => take?.kind === kind && take.assetId === imageId) : null;
+    const olderLook = selected ? castLookForTake(project, scene, selected, castMedia).status === 'older' : false;
+    const frameLocked = clipLocked || stillLocked;
+    const rerender = () => {
+      if (frameLocked || greyboxBlocked || generating || needsPrompt) return;
+      (start ? onGenerateFrame : onGenerateEndFrame)?.(scene, { referenceImageId: ref ? frames[ref] : null, replaceSelection: true });
+    };
     const refineLocked = greyboxBlocked || !!generating || (!start && clipLocked);
     const refine = (e) => {
       e.preventDefault();
@@ -118,6 +127,13 @@ export default function SceneFrames({
             {generating ? <Activity size={14} className="animate-spin" /> : start ? <ImageIcon size={14} /> : <Wand2 size={14} />}
             {generating ? 'Generating…' : start ? (imageId ? 'New frame take' : 'Generate frame') : (imageId ? 'New end frame take' : 'Generate end frame')}
           </button>
+          {olderLook && (
+            <button type="button" onClick={rerender} disabled={greyboxBlocked || !!generating || needsPrompt || frameLocked} className={SECONDARY_BUTTON}
+              aria-label={`Re-render ${start ? 'start' : 'end'} frame`}
+              title={clipLocked ? lockedTitle : stillLocked ? 'Still locked. Unlock the still to re-render it.' : 'Render this frame again from the current Casting look and use it'}>
+              Re-render
+            </button>
+          )}
           {refChoices.length > 1 && (
             <span className="flex min-w-0 items-center gap-1">
               <label htmlFor={id(`${which}-from`)} className="text-xs text-port-text-muted">From</label>
@@ -141,6 +157,9 @@ export default function SceneFrames({
             </button>
           )}
         </div>
+        {olderLook && (
+          <p className="text-xs text-port-text-muted">Older look: Casting changed since this was rendered. Re-render to use the new look.</p>
+        )}
         {refining === which && imageId && (
           <form onSubmit={refine} className="flex min-w-0 gap-2">
             <label htmlFor={id(`${which}-refine`)} className="sr-only">{`What to change in the ${start ? 'start' : 'end'} frame`}</label>

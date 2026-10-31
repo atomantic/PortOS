@@ -2,10 +2,13 @@ import { useState, useEffect, useCallback } from 'react';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, ReferenceLine
 } from 'recharts';
-import { HeartPulse, Plus, X, Check, TrendingUp, TrendingDown } from 'lucide-react';
+import { HeartPulse, Plus, X, Check, TrendingUp, TrendingDown, Trash2 } from 'lucide-react';
 import * as api from '../../services/api';
 import BrailleSpinner from '../BrailleSpinner';
 import LoadFailureNotice from './LoadFailureNotice';
+import ConfirmButtonPair from '../ui/ConfirmButtonPair';
+import CollapsibleListItem from '../ui/CollapsibleListItem';
+import useConfirmDelete from '../../hooks/useConfirmDelete';
 import useChartColors from '../../hooks/useChartColors.js';
 import { formatMonthDay, localDateKey } from '../../utils/formatters.js';
 import { classifyBP, bpLongevityImpact, BP_CATEGORIES } from './bpClassification';
@@ -32,6 +35,8 @@ export default function BloodPressureCard() {
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
+  const [removingDate, setRemovingDate] = useState(null);
+  const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
 
   const fetchData = useCallback(async () => {
     const data = await api.getBloodPressure({ silent: true }).catch(() => null);
@@ -213,6 +218,49 @@ export default function BloodPressureCard() {
                   {impact >= 0 ? '+' : ''}{impact.toFixed(1)} years estimated life expectancy impact
                 </span>
               </div>
+            </div>
+          )}
+          {readings.length > 0 && (
+            <div className="mt-4">
+              {[...readings].reverse().map(reading => (
+                <CollapsibleListItem
+                  key={reading.date}
+                  spacing="0.25rem"
+                  removing={removingDate === reading.date}
+                  onExited={() => {
+                    setReadings(prev => prev.filter(row => row.date !== reading.date));
+                    setRemovingDate(null);
+                  }}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-sm font-mono text-gray-400">{reading.date}</span>
+                    <span className="text-sm font-mono text-gray-300">
+                      {Math.round(reading.systolic)}/{Math.round(reading.diastolic)}
+                    </span>
+                    {isConfirming(reading.date) ? (
+                      <ConfirmButtonPair
+                        prompt="Delete?"
+                        confirmIcon={Trash2}
+                        ariaLabel={`Confirm delete blood pressure ${reading.date}`}
+                        onConfirm={() => confirmDelete(async () => {
+                          const removed = await api.removeBloodPressure(reading.date).catch(() => null);
+                          if (removed) setRemovingDate(reading.date);
+                        })}
+                        onCancel={cancelDelete}
+                      />
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => requestDelete(reading.date)}
+                        className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-600 hover:text-port-error transition-colors"
+                        aria-label={`Delete blood pressure ${reading.date}`}
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    )}
+                  </div>
+                </CollapsibleListItem>
+              ))}
             </div>
           )}
         </>

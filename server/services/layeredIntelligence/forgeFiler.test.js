@@ -6,7 +6,7 @@ vi.mock('../appIssues.js', () => ({
   ensureForgeIssueLabels: vi.fn()
 }));
 
-import { fileProposalToForge } from './forgeFiler.js';
+import { fileProposalToForge, listForgeIssues, listBlockingIssues } from './forgeFiler.js';
 import { validateReasonerResponse } from './proposal.js';
 
 describe('fileProposalToForge', () => {
@@ -68,5 +68,38 @@ describe('fileProposalToForge', () => {
       cli: 'gh', hostname: 'api.github.example', exec
     }));
     expect(exec).not.toHaveBeenCalled();
+  });
+});
+
+describe('forge issue listing completeness', () => {
+  const rows = (n, start = 0) => Array.from({ length: n }, (_, i) => ({ number: start + i + 1, iid: start + i + 1, title: 't', state: 'OPEN' }));
+  const out = (r) => ({ code: 0, stdout: JSON.stringify(r), stderr: '' });
+
+  it('reads up to 500 gh rows and refuses a ceiling-sized page as incomplete', async () => {
+    const ok = vi.fn().mockResolvedValue(out(rows(499)));
+    await expect(listForgeIssues({ cli: 'gh', cwd: '/r', exec: ok })).resolves.toMatchObject({ ok: true });
+    expect(ok.mock.calls[0][1]).toEqual(expect.arrayContaining(['--limit', '500']));
+    const full = vi.fn().mockResolvedValue(out(rows(500)));
+    await expect(listForgeIssues({ cli: 'gh', cwd: '/r', exec: full })).resolves.toEqual({ ok: false, issues: [] });
+    await expect(listBlockingIssues({ cli: 'gh', cwd: '/r', exec: full })).resolves.toEqual({ ok: false, issues: [] });
+  });
+
+  it('walks glab pages until a short page, so a later-page issue is seen', async () => {
+    const exec = vi.fn()
+      .mockResolvedValueOnce(out(rows(100)))
+      .mockResolvedValueOnce(out(rows(5, 100)));
+    const res = await listForgeIssues({ cli: 'glab', cwd: '/r', exec });
+    expect(res.ok).toBe(true);
+    expect(res.issues).toHaveLength(105);
+    expect(exec.mock.calls[1][1]).toEqual(expect.arrayContaining(['--page', '2']));
+  });
+
+  it('treats glab still full at the ceiling as incomplete, and keeps empty/failed distinct', async () => {
+    const full = vi.fn().mockResolvedValue(out(rows(100)));
+    await expect(listForgeIssues({ cli: 'glab', cwd: '/r', exec: full })).resolves.toEqual({ ok: false, issues: [] });
+    const empty = vi.fn().mockResolvedValue({ code: 0, stdout: '', stderr: '' });
+    await expect(listForgeIssues({ cli: 'gh', cwd: '/r', exec: empty })).resolves.toEqual({ ok: true, issues: [] });
+    const fail = vi.fn().mockResolvedValue({ code: 1, stdout: '', stderr: 'x' });
+    await expect(listForgeIssues({ cli: 'gh', cwd: '/r', exec: fail })).resolves.toEqual({ ok: false, issues: [] });
   });
 });

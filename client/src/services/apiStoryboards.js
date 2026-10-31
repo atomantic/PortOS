@@ -54,12 +54,22 @@ export const updateStoryboardPanelNode = (id, panelId, nodeId, patch, options) =
   request(`/storyboards/${enc(id)}/panels/${enc(panelId)}/make/${enc(nodeId)}`, { ...json('PATCH', patch), ...options });
 export const runStoryboardPanelNode = (id, panelId, nodeId, options) =>
   request(`/storyboards/${enc(id)}/panels/${enc(panelId)}/make/${enc(nodeId)}/run`, { method: 'POST', ...options });
+// body: `{ takeId, note }` → the board once the corrected frames are queued.
+// Draw a panel: the recipe rewrites its prompt and queues one frame, which becomes its art.
+export const drawStoryboardPanel = (id, panelId, options) =>
+  request(`/storyboards/${enc(id)}/panels/${enc(panelId)}/draw`, { ...json('POST', {}), ...options });
+export const correctStoryboardPanel = (id, panelId, body, options) =>
+  request(`/storyboards/${enc(id)}/panels/${enc(panelId)}/correct`, { ...json('POST', body), ...options });
 
 // Make empty panels. GET → { batch, panelCount, steps: [{ nodeId, title, type, model, frames }] }.
 export const getStoryboardMakeEmpty = (id, options) => request(`/storyboards/${enc(id)}/make-empty`, options);
-// → { batch } at once; `storyboard:make-batch` reports progress.
-export const startStoryboardMakeEmpty = (id, options) =>
-  request(`/storyboards/${enc(id)}/make-empty`, { method: 'POST', ...options });
+// → { batch } at once; `storyboard:make-batch` reports progress. `body`:
+// { redraw, selectNew } redraws every panel instead of only the empty ones.
+export const startStoryboardMakeEmpty = (id, body = {}, options) =>
+  request(`/storyboards/${enc(id)}/make-empty`, { ...json('POST', body), ...options });
+// Regroup a music video's linked board into one beat per song section.
+export const groupStoryboardBySong = (projectId, options) =>
+  request(`/storyboards/group-by-song/${enc(projectId)}`, { ...json('POST', {}), ...options });
 
 // The saved recipe library, shared by every board. A load copies the graph onto a board.
 export const listStoryboardRecipes = (options) => request('/storyboards/recipes', options);
@@ -83,6 +93,14 @@ export const makeStoryboardFromMusicVideo = (projectId, options) =>
 // → { project, shots, replaced }. 409 when the board changed since the preview or a shot is locked.
 export const fitMusicVideoToStoryboard = (projectId, input, options) =>
   request(`/storyboards/fit-music-video/${enc(projectId)}`, { ...json('POST', input), ...options });
+
+// Sync shots: one shot per panel at the panel's own time (lib/storyboardShotSync.js), then kept
+// in sync after each board edit → { project, counts }. 409 when the board or shots changed since the preview.
+export const syncMusicVideoShots = (projectId, input, options) =>
+  request(`/storyboards/sync-music-video/${enc(projectId)}`, { ...json('POST', input), ...options });
+// Keep the shots in sync after each board edit (on syncs once), or stop → { project, counts? }.
+export const setMusicVideoShotSync = (projectId, on, options) =>
+  request(`/storyboards/sync-music-video/${enc(projectId)}/auto`, { ...json('PUT', { on }), ...options });
 
 // A fitted shot and its panel: Update → { scene } (the panel's action as the shot's intent);
 // panel art → { board } (the shot's still as the panel's selected take).

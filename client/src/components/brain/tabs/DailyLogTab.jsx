@@ -901,11 +901,14 @@ export default function DailyLogTab() {
               </button>
             )}
           </div>
-          {/* `sm:flex-1` so on sm+ the date label absorbs the slack and the
-              action buttons stay right-aligned, as the flat toolbar rendered
-              them; under sm this cluster is simply the second stacked row. */}
-          <div className="flex items-center gap-1.5 sm:gap-2 sm:flex-1 min-w-0">
-            <div className="flex-1 min-w-0">
+          {/* `sm:flex-auto` (not flex-1) so this cluster wraps below the date
+              nav when both don't fit, and `flex-wrap` lets the buttons wrap
+              under the label: beside the history column the toolbar is ~512px
+              from 768px to 1024px, narrower than the six actions, and a zero
+              basis pushed Save and Delete off-screen. The label still absorbs
+              the slack, keeping the actions right-aligned. */}
+          <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 sm:flex-auto min-w-0">
+            <div className="flex-1 min-w-32">
               <div className="text-white font-medium truncate text-sm md:text-base">{dateLabel}</div>
               <div className="text-xs text-gray-500 truncate">
                 {segmentCount} segment{segmentCount === 1 ? '' : 's'}

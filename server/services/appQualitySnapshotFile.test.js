@@ -55,9 +55,6 @@ const testDeps = (overrides = {}) => ({
   addWorktree: vi.fn(async () => true),
   queuePendingMerge: vi.fn(async () => true),
   checkSnapshotPublicationOwnership: vi.fn(async () => ({ admitted: true })),
-  // Admission itself is pinned in appQualitySnapshotAdmission.test.js.
-  getOriginInfo: vi.fn(async () => ({ host: 'github.com', fullName: 'example/app' })),
-  withMergeAdmission: vi.fn(async (_origin, work) => ({ admitted: true, result: await work() })),
   probePrForBranch: vi.fn(async () => ({ prState: null, prUrl: null, prNumber: null, readable: true })),
   ...overrides,
 });
@@ -891,19 +888,19 @@ it('applies the same ownership protection to explicit snapshot migrations', asyn
   expect(await migrateAppQualitySnapshot(app, deps)).toMatchObject({ published: true });
 });
 
-const guardedPublication = (reused = false) => {
+// PortOS advertises `pregate:merged`; that script no longer gates the snapshot
+// merge (#14184). Both temporary-checkout owners (new and reused PRs) merge
+// pinned to the head they published or inspected, with no guard run.
+const advertisedGuardPublication = (reused = false) => {
   const head = 'a'.repeat(40);
-  const base = 'b'.repeat(40);
-  const live = { head, base, state: 'OPEN', manifest: { scripts: { 'pregate:merged': 'node scripts/pregate.js --guards-only' } } };
-  const events = [];
-  const trees = [];
-  const evidence = new Map();
   const deps = testDeps({
     git: gitDouble({
       execGit: vi.fn(async args => {
         if (args[0] === 'ls-tree') return { exitCode: 0, stdout: 'package.json\n' };
         if (args[0] === 'show') {
-          if (args[1].endsWith(':package.json')) return { exitCode: 0, stdout: JSON.stringify(live.manifest) };
+          if (args[1].endsWith(':package.json')) {
+            return { exitCode: 0, stdout: JSON.stringify({ scripts: { 'pregate:merged': 'node scripts/pregate.js --guards-only' } }) };
+          }
           return reused && args[1] === `origin/${QUALITY_SNAPSHOT_BRANCH}:.quality.json`
             ? { exitCode: 0, stdout: canonical() } : missingShow;
         }
@@ -911,157 +908,37 @@ const guardedPublication = (reused = false) => {
           if (args[3] === `refs/remotes/origin/${QUALITY_SNAPSHOT_BRANCH}`) {
             return reused ? { exitCode: 0, stdout: head } : missingShow;
           }
-          return { exitCode: 0, stdout: args[2] === 'origin/main^{commit}' ? base : head };
+          return { exitCode: 0, stdout: head };
         }
         if (args[0] === 'diff') return { exitCode: 0, stdout: '.quality.json\0' };
-        if (args[0] === 'ls-remote') return { exitCode: 0, stdout: `${live.base}\trefs/heads/main\n` };
         return { exitCode: 0, stdout: '' };
       }),
       commit: vi.fn(async () => ({ hash: head })),
-      mergePR: vi.fn(async () => { events.push('merge'); return { success: true }; }),
     }),
     probePrForBranch: vi.fn(async () => reused
       ? { readable: true, prState: 'OPEN', prUrl, prNumber: 42, cli: 'gh' }
       : { readable: true, prState: null }),
-    resolveForgeForRepo: vi.fn(async () => ({ cli: 'gh', env: { EXAMPLE_FORGE_ACCOUNT: 'selected' } })),
-    execGh: vi.fn(async () => JSON.stringify({
-      state: live.state, isDraft: false, isCrossRepository: false, headRefOid: live.head,
-      headRefName: QUALITY_SNAPSHOT_BRANCH, baseRefName: 'main',
-    })),
-    addWorktree: vi.fn(async () => { trees.push({ path: worktreePath, head, detached: true }); }),
-    linkWorktreeDependencies: vi.fn(async () => {}),
-    writeMergeEvidence: vi.fn(async (path, record) => { evidence.set(path, structuredClone(record)); }),
-    readMergeEvidence: vi.fn(async path => {
-      if (!evidence.has(path)) throw Object.assign(new Error('absent'), { code: 'ENOENT' });
-      return JSON.stringify(evidence.get(path));
-    }),
-    listSnapshotMergeWorktrees: vi.fn(async () => [...trees]),
-    retireSnapshotMergeCheckouts: vi.fn(async () => { trees.length = 0; evidence.clear(); return []; }),
-    execSnapshotMergeGuards: vi.fn(async () => { events.push('guards'); return { stdout: 'guards passed', stderr: '' }; }),
-    withMergeAdmission: vi.fn(async (_origin, work) => {
-      events.push('admission');
-      return { admitted: true, result: await work() };
-    }),
   });
-  return { deps, live, events, head, base, evidence, trees };
+  return { deps, head };
 };
+const spawnedGuard = deps => deps.git.execGit.mock.calls.some(([args]) => args.some(arg => String(arg).includes('pregate')));
 
-// These publisher-boundary regressions uniquely cover exact input validation
-// and recovery across both temporary-checkout owners (new and reused PRs).
-it.each([false, true])('validates the snapshot before admission and pins the head (reused: %s)', async reused => {
-  const { deps, events, head, base } = guardedPublication(reused);
+it.each([false, true])('merges an advertised-guard snapshot pinned to its head without running guards (reused: %s)', async reused => {
+  const { deps, head } = advertisedGuardPublication(reused);
   expect(await publishAppQualitySnapshot(app, deps)).toMatchObject({ published: true, merged: true, queuedMerge: false });
-  expect(events).toEqual(['guards', 'admission', 'merge']);
-  expect(deps.execSnapshotMergeGuards).toHaveBeenCalledWith(process.execPath,
-    [join(worktreePath, 'scripts', 'pregate.js'), '--guards-only', '--merged-with', base],
-    expect.objectContaining({ cwd: worktreePath, env: expect.objectContaining({ PORTOS_TEST_MEMO: 'off' }) }));
   expect(deps.git.mergePR).toHaveBeenCalledWith(app.repoPath, 42, { forgeAccount: null, expectedHeadSha: head });
-  expect(deps.resolveForgeForRepo).toHaveBeenCalledWith(app.repoPath, { forgeAccount: null });
-  expect(deps.execGh).toHaveBeenCalledWith(expect.any(Array), undefined,
-    { cwd: app.repoPath, env: { EXAMPLE_FORGE_ACCOUNT: 'selected' } });
   expect(deps.queuePendingMerge).not.toHaveBeenCalled();
-  expect(deps.retireSnapshotMergeCheckouts).toHaveBeenCalledTimes(1);
-  expect(deps.addWorktree).toHaveBeenCalledTimes(1);
-  expect(deps.addWorktree.mock.calls[0][0]).toEqual(
-    ['worktree', 'add', '--detach', worktreePath, reused ? head : 'origin/main']);
-  expect(deps.writeMergeEvidence).toHaveBeenLastCalledWith(expect.any(String), expect.objectContaining({
-    headSha: head, baseSha: base, status: 'passed', stdout: 'guards passed',
-  }));
+  expect(spawnedGuard(deps)).toBe(false);
+  // The reused PR needs no checkout; a new publication removes its temporary one.
+  expect(deps.addWorktree).toHaveBeenCalledTimes(reused ? 0 : 1);
+  expect(deps.rm).toHaveBeenCalledTimes(reused ? 0 : 1);
 });
 
-it.each([false, true])('retains failed guard evidence without admission or a queue bypass (reused: %s)', async reused => {
-  const { deps, head, base } = guardedPublication(reused);
-  deps.execSnapshotMergeGuards.mockRejectedValue(Object.assign(new Error('guards failed'), { stdout: 'hostControlRoutes.test.js failed' }));
-  expect(await publishAppQualitySnapshot(app, deps)).toMatchObject({
-    published: true, merged: false, queuedMerge: false, deferredMerge: true,
-    mergeGuard: { headSha: head, baseSha: base, worktreePath, reason: 'snapshot-merge-guards-failed' },
-  });
-  expect(deps.withMergeAdmission).not.toHaveBeenCalled();
-  expect(deps.git.mergePR).not.toHaveBeenCalled();
-  expect(deps.queuePendingMerge).not.toHaveBeenCalled();
-  expect(deps.rm).not.toHaveBeenCalled();
-  expect(deps.git.execGit.mock.calls.some(([args]) => args[0] === 'worktree' && args[1] === 'remove')).toBe(false);
-  expect(deps.writeMergeEvidence).toHaveBeenLastCalledWith(expect.any(String), expect.objectContaining({
-    status: 'deferred', stdout: 'hostControlRoutes.test.js failed',
-  }));
-});
-
-it.each(['head', 'base', 'unreadable'])('refuses a %s race inside admission and retains the validated checkout', async race => {
-  const { deps, live } = guardedPublication(true);
-  deps.execSnapshotMergeGuards.mockImplementation(async () => {
-    if (race === 'unreadable') deps.execGh.mockResolvedValueOnce('not-json');
-    else live[race] = 'c'.repeat(40);
-    return { stdout: 'guards passed', stderr: '' };
-  });
-  expect(await publishAppQualitySnapshot(app, deps)).toMatchObject({ merged: false, deferredMerge: true, mergeGuard: { worktreePath } });
-  expect(deps.withMergeAdmission).toHaveBeenCalledTimes(1);
-  expect(deps.git.mergePR).not.toHaveBeenCalled();
-  expect(deps.queuePendingMerge).not.toHaveBeenCalled();
-  expect(deps.rm).not.toHaveBeenCalled();
-});
-
-it('refuses a PR that moved away from the new publication before validation', async () => {
-  const { deps, live } = guardedPublication();
-  live.head = 'c'.repeat(40);
-  expect(await publishAppQualitySnapshot(app, deps)).toMatchObject({
-    published: true, merged: false, deferredMerge: true, mergeGuard: { reason: 'snapshot-merge-head-changed' },
-  });
-  expect(deps.execSnapshotMergeGuards).not.toHaveBeenCalled();
-  expect(deps.withMergeAdmission).not.toHaveBeenCalled();
-  expect(deps.rm).not.toHaveBeenCalled();
-});
-
-it.each(['admission', 'merge'])('keeps guarded %s refusals retryable without queuing an unvalidated later merge', async refused => {
-  const { deps } = guardedPublication(true);
-  if (refused === 'admission') deps.withMergeAdmission.mockResolvedValue({ admitted: false, reason: 'active-owner' });
-  else deps.git.mergePR.mockResolvedValue({ success: false, error: 'required checks pending' });
-  expect(await publishAppQualitySnapshot(app, deps)).toMatchObject({ merged: false, deferredMerge: true, queuedMerge: false });
-  expect(deps.queuePendingMerge).not.toHaveBeenCalled();
-  expect(deps.rm).not.toHaveBeenCalled();
-  deps.withMergeAdmission.mockImplementation(async (_origin, work) => ({ admitted: true, result: await work() }));
-  deps.git.mergePR.mockResolvedValue({ success: true });
-  __resetQualitySnapshotPublishState();
-  expect(await publishAppQualitySnapshot(app, deps)).toMatchObject({ merged: true });
-  expect(deps.addWorktree).toHaveBeenCalledTimes(1);
-});
-
-it('preserves a retained checkout that acquired a lock before retry', async () => {
-  const { deps, trees } = guardedPublication(true);
-  deps.execSnapshotMergeGuards.mockRejectedValue(new Error('guard refused'));
-  expect(await publishAppQualitySnapshot(app, deps)).toMatchObject({ deferredMerge: true });
-  trees[0].locked = true;
-  __resetQualitySnapshotPublishState();
-  expect(await publishAppQualitySnapshot(app, deps)).toMatchObject({
-    merged: false, deferredMerge: true, mergeGuard: { reason: 'retained-snapshot-checkout-changed' },
-  });
-  expect(deps.addWorktree).toHaveBeenCalledTimes(1);
-  expect(deps.retireSnapshotMergeCheckouts).not.toHaveBeenCalled();
-  expect(deps.git.mergePR).not.toHaveBeenCalled();
-});
-
-it('leaves a guard-capable GitLab MR open instead of falling through to an unpinned merge', async () => {
-  const { deps } = guardedPublication(true);
-  deps.probePrForBranch.mockResolvedValue({ readable: true, prState: 'OPEN', prUrl, prNumber: 42, cli: 'glab' });
-  deps.execGlab = vi.fn();
-  expect(await publishAppQualitySnapshot(app, deps)).toMatchObject({
-    merged: false, deferredMerge: true, queuedMerge: false, mergeGuard: { reason: 'unsupported-merge-guard-forge' },
-  });
-  expect(deps.execGlab).not.toHaveBeenCalled();
-  expect(deps.withMergeAdmission).not.toHaveBeenCalled();
-});
-
-it('keeps generic manifest behavior but refuses an unreadable or unsupported guard contract', async () => {
-  const { deps, live } = guardedPublication(true);
-  live.manifest = { scripts: { pregate: 'a generic app command' } };
-  expect(await publishAppQualitySnapshot(app, deps)).toMatchObject({ merged: true });
-  expect(deps.execSnapshotMergeGuards).not.toHaveBeenCalled();
-  __resetQualitySnapshotPublishState();
-  live.manifest = { scripts: { 'pregate:merged': 'another command' } };
-  deps.git.mergePR.mockClear();
-  expect(await publishAppQualitySnapshot(app, deps)).toMatchObject({ merged: false, deferredMerge: true });
-  expect(deps.git.mergePR).not.toHaveBeenCalled();
-  live.manifest = null;
-  expect(await publishAppQualitySnapshot(app, deps)).toMatchObject({
-    merged: false, deferredMerge: true, mergeGuard: { reason: 'merge-guard-manifest-unreadable' },
-  });
+it('falls back to merge-on-green when the forge refuses the immediate merge and retains no checkout', async () => {
+  const { deps } = advertisedGuardPublication();
+  deps.git.mergePR.mockResolvedValue({ success: false, error: 'required checks pending' });
+  expect(await publishAppQualitySnapshot(app, deps)).toMatchObject({ published: true, merged: false, queuedMerge: true });
+  expect(deps.queuePendingMerge).toHaveBeenCalledWith(app.id, expect.objectContaining({ prUrl, prBranch: QUALITY_SNAPSHOT_BRANCH }));
+  expect(spawnedGuard(deps)).toBe(false);
+  expect(deps.rm).toHaveBeenCalledWith(worktreePath, { recursive: true, force: true });
 });

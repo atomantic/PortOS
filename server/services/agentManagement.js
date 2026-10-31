@@ -43,7 +43,7 @@ import { RETRY_HOLD_KEY, RETRY_HOLD_SINCE_KEY, isRetryHeld, clearedRetryHoldMeta
 import { CLAIM_METADATA_KEYS } from './cosTaskClaim.js';
 import { REQUEUED_AT_KEY, LAST_SPAWNED_AT_KEY } from '../lib/taskRequeue.js';
 import { resolveTaskTargetBranch } from '../lib/taskTargetBranch.js';
-import { syncRunnerAgents } from './agentRunnerSync.js';
+import { readRunnerCompletionReceipt, syncRunnerAgents } from './agentRunnerSync.js';
 import { flushRunnerOutputBatcher } from './agentRunnerOutputBatchers.js';
 import { appendRunEvent } from './agentRunEventLog.js';
 import { committedDuringRun, toEpochMs } from '../lib/gitCommitProbe.js';
@@ -1346,6 +1346,22 @@ async function runCleanupOrphanedAgents() {
 
       // Recheck after the awaited pid probes: completion owns its terminal write.
       if (completingAgents.has(agent.id)) continue;
+
+      // An exit while no server was connected (the restart window) loses only
+      // the runner's `agent:completed` broadcast; its verdict is on disk. Finish
+      // it through the same path that event takes instead of charging an orphan
+      // retry and rerunning finished work (#14261). The runner is known to be
+      // available here — an unavailable one skipped runner-owned records above.
+      // Deferred import: agentLifecycle statically imports this module.
+      if (runnerOwned) {
+        const receipt = await readRunnerCompletionReceipt(agent.id, { taskId: agent.taskId, startedAt: agent.startedAt });
+        if (receipt) {
+          console.log(`📬 Finalizing runner agent ${agent.id} from its completion receipt (exit ${receipt.exitCode})`);
+          const { handleAgentCompletion } = await import('./agentLifecycle.js');
+          await handleAgentCompletion(agent.id, receipt.exitCode, receipt.success, receipt.duration);
+          continue;
+        }
+      }
 
       const interrupted = interruptedByRestart.has(agent.id);
       const errorMessage = interrupted

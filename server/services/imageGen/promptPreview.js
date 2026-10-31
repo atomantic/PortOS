@@ -55,14 +55,14 @@ export async function previewImagePrompt({ uploadedInitImage = false, uploadedRe
   await prepareFableLoomImageParams({ params, mode, settings });
   const showsReferenceStrengths = params.fableLoom && mode === IMAGE_GEN_MODE.LOCAL && !params.mediaProviderPeerId
     && selectLocalImageModelFromSettings(settings, params.modelId)?.runner === 'flux2';
-  if (reviewReference && (params.initImagePath || params.referenceImagePaths?.length !== 1 || uploadedInitImage || uploadedReferenceCount || (!params.mediaProviderPeerId && mode === IMAGE_GEN_MODE.EXTERNAL))) {
-    throw new ServerError('Review requires exactly one named reference image', { status: 400, code: 'REVIEWED_REFERENCE_UNSUPPORTED' });
+  if (reviewReference && (params.initImagePath || !params.referenceImagePaths?.length || (!params.quickEdit && params.referenceImagePaths.length !== 1) || uploadedInitImage || uploadedReferenceCount || (!params.mediaProviderPeerId && mode === IMAGE_GEN_MODE.EXTERNAL))) {
+    throw new ServerError('Review requires named reference images, the edited image first', { status: 400, code: 'REVIEWED_REFERENCE_UNSUPPORTED' });
   }
   const envelope = {
     mode,
     ...(params.quickEdit ? {
-      reviewedPromptDigest: quickEditCompositionDigest({ params, mode, settings }),
-      referenceImages: (params.referenceImagePaths || []).map((path, index) => ({ filename: basename(path), status: 'included', source: `Input image ${index + 1} · Reference for this edit` })),
+      reviewedPromptDigest: await quickEditCompositionDigest({ params, mode, settings }),
+      referenceImages: (params.referenceImagePaths || []).map((path, index) => ({ filename: basename(path), status: 'included', source: `Input image ${index + 1} · ${index ? 'Visual reference' : 'Image to edit'}` })),
     } : {}),
     ...(reviewReference ? await reviewedReferencePreview(params.referenceImagePaths[0]) : {}),
     ...(params.fableLoom ? {

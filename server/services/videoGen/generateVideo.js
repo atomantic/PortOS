@@ -359,6 +359,206 @@ async function resolveRequestedDraftDecoder({ model, draftDecode, jobId }) {
   return draftDecoder;
 }
 
+// Negotiates the user-facing speed profile (#4875) and the opt-in T2V two-stage
+// override. A profile that cannot apply degrades to the default sampler (logged);
+// MiniMax H3 refuses instead, since it has no meaningful default schedule.
+async function resolveLocalSpeedProfile({
+  model, jobId, speedProfileId, mode, keyframes, sourceImagePath, extendFromVideoPath, audioFilePath, lastImagePath,
+  w, h, steps, guidanceScale, resolvedLoras, uploadedTempPath, uploadedTempPaths,
+}) {
+  // Resolved against the mode the runner will actually INFER, not the raw
+  // (possibly absent) request field: buildLtx2Args derives fflf from keyframes
+  // and image from a source frame, so gating on a bare `mode` would hand a
+  // two-stage schedule to a KeyframeInterpolation render for any direct caller
+  // that omits it (Writers Room batch dispatch, scripts).
+  const speedProfileMode = inferEffectiveVideoMode({
+    mode, keyframes, sourceImagePath, extendFromVideoPath, audioFilePath,
+  });
+  let speedProfile = resolveVideoSpeedProfile({ model, profileId: speedProfileId, mode: speedProfileMode });
+  if (isMiniMaxH3SpeedProfileRequest(speedProfileId)) {
+    const { prepareMiniMaxH3SpeedProfile } = await import('./ensureWeights.js');
+    speedProfile = await prepareMiniMaxH3SpeedProfile({
+      model, profileId: speedProfileId, mode: speedProfileMode,
+      width: w, height: h, steps, guidanceScale,
+      keyframes, lastImagePath, extendFromVideoPath, audioFilePath,
+    }, await getSettings());
+  }
+  if (['minimax_h3', 'minimax_h3_cuda'].includes(model.runtime) && resolvedLoras.length) {
+    const { validateMiniMaxH3CudaLoras, validateMiniMaxH3MlxLoras } = await import('./ensureWeights.js');
+    const validate = model.runtime === 'minimax_h3' ? validateMiniMaxH3MlxLoras : validateMiniMaxH3CudaLoras;
+    await validate(resolvedLoras, speedProfile);
+  }
+  const speedProfileDeclined = speedProfile ? null : speedProfileDeclineReason({ model, profileId: speedProfileId, mode: speedProfileMode });
+  if (speedProfileDeclined && ['minimax_h3', 'minimax_h3_cuda'].includes(model.runtime)) {
+    throw new ServerError(speedProfileDeclined.message, { status: 400, code: speedProfileDeclined.code });
+  }
+  if (speedProfileDeclined) {
+    console.log(`⚠️ Speed profile declined [${jobId.slice(0, 8)}] ${speedProfileDeclined.code}: ${speedProfileDeclined.message}`);
+  }
+  // Skipped once a speed profile applied: the profile IS the user-chosen
+  // schedule, and the env experiment must not overwrite it.
+  const t2vTwoStage = speedProfile ? null : resolveT2vTwoStageOverride({
+    runtime: model.runtime, mode, guidanceScale, steps,
+    sourceImagePath, uploadedTempPath, uploadedTempPaths,
+    keyframes, extendFromVideoPath, audioFilePath,
+  });
+  return { speedProfile, speedProfileDeclined, t2vTwoStage };
+}
+
+function logSpeedProfileSchedule({ speedProfile, jobId, steps, guidance, stage2Steps }) {
+  if (!speedProfile) return;
+  const schedule = speedProfile.denoisingSteps != null
+    ? `${speedProfile.denoisingSteps} updates (${steps} sigma points)` : `${steps}+${stage2Steps} steps`;
+  console.log(`⚡ Speed profile "${speedProfile.id}" [${jobId.slice(0, 8)}]: ${schedule}, cfg ${guidance}${speedProfile.teacache ? ', teacache' : ''}`);
+}
+
+// Projects already-resolved render values into the persisted job record. Key
+// order is part of the contract: the record is stored in history and replayed
+// on resume and Remix, so conditional spreads stay exactly where they are.
+function buildLocalVideoJobRecord({
+  jobId, batch, batchSize, prompt, negativePrompt, modelId, model, actualSeed, w, h, parsedNumFrames,
+  parsedFps, actualSteps, actualGuidance, actualStage2Steps, tiling, disableAudio, sourceAudioProvenance,
+  resolvedTextEncoder, filename, createdAt, mode, hasMultiKeyframes, sourceImagePath,
+  effectiveReferenceMode, actualImageStrength, resolvedContinuation, resolvedSourceImage, resolvedLastImage,
+  resolvedKeyframes, extendFromVideoPath, audioFilePath, resolvedIcReferencePaths, visualConditioning,
+  t2vTwoStage, speedProfile, draftDecoder, a2vLoraStageStrengths, resolvedLoras, streamingMode,
+  actualIcStrength, actualIcAttentionStrength, icSkipStage2, icReferencePaths, referenceImagePaths,
+  referenceVideoPaths, referenceAudioPaths, loraLicenses, addedTriggerWords, renderPrompt, sentRecord,
+  hidden,
+}) {
+  return {
+    id: jobId,
+    ...(batch ? { batchId: jobId, batchSize, batchIndex: 0 } : {}),
+    prompt,
+    negativePrompt,
+    modelId,
+    seed: actualSeed,
+    width: w,
+    height: h,
+    numFrames: parsedNumFrames,
+    fps: parsedFps,
+    // Persist the effective render settings so the lightbox Remix flow can
+    // round-trip them back into the form. Without these, Remix would only
+    // recover prompt/model/dims/frames/fps/seed and silently revert the
+    // other dials to defaults.
+    steps: actualSteps,
+    guidanceScale: actualGuidance,
+    tiling,
+    disableAudio,
+    ...(sourceAudioProvenance ? { audioConditioning: sourceAudioProvenance } : {}),
+    // Which prompt conditioner read this prompt. Only recorded when it wasn't
+    // the stock one, so pre-feature history and every unswapped render stay
+    // byte-identical — and so a Remix of a stock render can't resurrect an
+    // override the user has since deselected.
+    ...(resolvedTextEncoder ? { textEncoderId: resolvedTextEncoder.id } : {}),
+    filename,
+    createdAt,
+    // History mode reflects the EFFECTIVE mode — buildLtx2Args infers fflf
+    // from `keyframes` even when caller omitted `mode`, so without this the
+    // history entry would say 'text' for a multi-keyframe render.
+    mode: mode || (hasMultiKeyframes ? 'fflf' : sourceImagePath ? 'image' : 'text'),
+    // What the conditioning image promised, and the strength that delivered it
+    // (#4874). Both are recorded only when they actually applied, so every text
+    // render and every pre-feature row stays byte-identical — and a Remix of an
+    // anchored render can't resurrect a mode the user never chose. The mode is the
+    // EFFECTIVE one, so a record never claims a promise the render did not make.
+    ...(isDefaultI2vReferenceMode(effectiveReferenceMode) ? {} : { i2vReferenceMode: effectiveReferenceMode }),
+    ...(actualImageStrength != null ? { imageStrength: actualImageStrength } : {}),
+    // Durable re-render provenance (#3696). `seed` above is ALWAYS the resolved
+    // seed (a caller-omitted seed was rolled into `actualSeed` before the child
+    // ever ran), so a random-seed render records the seed it actually used and
+    // a Finish re-render reproduces the same composition rather than re-rolling.
+    // `conditioning` inventories what else steered this render — empty means
+    // prompt + seed + dials are the whole input. `renderInputsVersion` is the
+    // marker that both are trustworthy; records without it are legacy and must
+    // not be assumed unconditioned. Neither field carries a staging path.
+    ...(resolvedContinuation ? { continuation: sanitizeContinuation(resolvedContinuation) } : {}),
+    renderInputsVersion: RENDER_INPUTS_VERSION,
+    conditioning: describeRenderConditioning({
+      sourceImagePath: resolvedSourceImage,
+      lastImagePath: resolvedLastImage,
+      keyframes: resolvedKeyframes,
+      extendFromVideoPath,
+      audioFilePath,
+      icReferencePaths: resolvedIcReferencePaths,
+    }),
+    ...(visualConditioning ? { visualConditioning } : {}),
+    // Stamp the experimental fast-path so A/B analysis can tell a two-stage
+    // render apart from a user who happened to pick 8 steps — comparing it
+    // against the default Standard render is the whole point of the knob.
+    ...(t2vTwoStage ? { twoStageT2v: true, stage2Steps: actualStage2Steps } : {}),
+    // Speed profile (#4875). Recorded as the REQUESTED id so a Remix
+    // round-trips the schedule the user picked, and — critically — so the ETA
+    // estimator can keep fast and quality samples in separate cost buckets
+    // (see timedRenderSamples in ./eta.js): a profile roughly halves render
+    // time, which is a different cost curve, not sample noise. Absent on a
+    // quality render, so every pre-feature history row stays byte-identical.
+    // What the runner ACTUALLY managed to apply is stamped separately by
+    // finalizeGeneratedVideo from the child's SPEEDPROFILE: report.
+    ...(speedProfile ? { speedProfileId: speedProfile.id, stage2Steps: actualStage2Steps } : {}),
+    // Preview-fidelity decode (#5423). Recorded as the REQUESTED id, so a Remix
+    // round-trips the decode the user picked, and so the lightbox can say which
+    // decoder produced the pixels being judged. Absent on a full decode, which
+    // keeps every pre-feature history row byte-identical — and, because a
+    // declined request never sets it, a record can never claim a draft decode
+    // the render did not perform.
+    ...(draftDecoder ? { draftDecode: draftDecoder.id } : {}),
+    // Block-streaming request (#6499). Recorded as the REQUESTED mode, same
+    // convention as speedProfileId/draftDecode above — 'auto' and absence are
+    // the same request, so a quality-default render's history row stays
+    // byte-identical to one from before this setting existed. What the
+    // bridge ACTUALLY did (active/reason/peakMb) is stamped separately by
+    // finalizeGeneratedVideo from the child's STREAMPOLICY: report.
+    ...(mode === 'a2v' && resolvedLoras.length ? { a2vLoraStageStrengths: a2vLoraStageStrengths ?? [1, 1] } : {}),
+    ...(isDefaultVideoStreamingMode(streamingMode) ? {} : { streamingMode }),
+    // IC-LoRA remix settings, stamped so the lightbox Remix flow can round-trip
+    // them. The reference clip is recorded by BASENAME (not the absolute
+    // staging path) — history is user-facing and a durable upload path is both
+    // noise and machine-specific.
+    ...(isIcLoraMode(mode) ? {
+      icStrength: actualIcStrength,
+      ...(actualIcAttentionStrength != null ? { icAttentionStrength: actualIcAttentionStrength } : {}),
+      ...(icSkipStage2 ? { icSkipStage2: true } : {}),
+      ...(Array.isArray(icReferencePaths) && icReferencePaths.length
+        ? { icReferenceNames: icReferencePaths.map((p) => basename(p)) }
+        : {}),
+    } : {}),
+    ...referenceNames({ referenceImageNames: referenceImagePaths, referenceVideoNames: referenceVideoPaths, referenceAudioNames: referenceAudioPaths }),
+    // Stamp applied LoRAs using the SAME parallel-array contract image renders
+    // use (`loraFilenames` + `loraScales`) so the existing history consumers —
+    // normalizeVideo / getRenderConfigForItem (client/src/components/media/
+    // normalize.js) and the Remix handler — surface and round-trip them with no
+    // per-shape special-casing. A bespoke `loras` field would be invisible to
+    // those readers.
+    ...(resolvedLoras.length ? {
+      loraFilenames: resolvedLoras.map((l) => l.filename),
+      loraScales: resolvedLoras.map((l) => l.strength),
+    } : {}),
+    provenance: provenanceForRender({
+      model: {
+        id: modelId,
+        name: model?.name || modelId,
+        license: model?.license,
+        repo: model?.repo,
+        disclosure: model?.disclosure,
+      },
+      loras: resolvedLoras.map((l) => ({
+        filename: l.filename,
+        ...(loraLicenses[l.filename] || {}),
+      })),
+      capturedAt: createdAt,
+    }),
+    // Provenance for the trigger weave (#4665). `prompt` above stays the user's
+    // own text, so Remix re-derives triggers from whatever LoRAs are selected
+    // then instead of compounding this render's clause; these two record what
+    // was actually rendered. Present only when something was woven, so every
+    // other history row stays byte-identical to pre-feature renders.
+    ...(addedTriggerWords.length ? { renderPrompt, addedTriggerWords } : {}),
+    ...sentRecord,
+    ...(hidden ? { hidden: true } : {}),
+  };
+}
+
 async function renderLocalVideo(preparation, { pythonPath, prompt, negativePrompt = '', modelId, width = null, height = null, numFrames = null, fps = 24, steps, guidanceScale, seed, batchSize = 1, tiling = 'auto', disableAudio = false, sourceImagePath = null, uploadedTempPath = null, uploadedTempPaths = [], lastImagePath = null, keyframes = null, extendFromVideoPath = null, audioFilePath = null, audioStartSec = null, audioConditioning = null, mode = null, imageStrength = null, i2vReferenceMode = null, a2vLoraStageStrengths, loras = null, icReferencePaths = null, referenceImagePaths = null, referenceVideoPaths = null, referenceAudioPaths = null, icStrength = null, icAttentionStrength = null, icSkipStage2 = false, textEncoderId = null, speedProfileId = null, draftDecode = null, streamingMode = null, visualConditioning = null, hidden = false, keepExtendSource = false, displaySleep = null, jobId: providedJobId = null, promptAdditions = [], continuityStrategy, contextFrames, continuation = null, historyContext = null, executionParent = null }) {
   const sourceAudioProvenance = audioConditioning == null ? null : federatedSourceAudioSchema.parse(audioConditioning);
   uploadedTempPaths = Array.isArray(uploadedTempPaths) ? uploadedTempPaths : [];
@@ -530,58 +730,23 @@ async function renderLocalVideo(preparation, { pythonPath, prompt, negativePromp
   // id), in which case the render proceeds at its own default sampler and the
   // reason is logged rather than 400'd: a knob that only ever makes a render
   // faster must degrade, not reject.
-  //
-  // Resolved against the mode the runner will actually INFER, not the raw
-  // (possibly absent) request field: buildLtx2Args derives fflf from keyframes
-  // and image from a source frame, so gating on a bare `mode` would hand a
-  // two-stage schedule to a KeyframeInterpolation render for any direct caller
-  // that omits it (Writers Room batch dispatch, scripts).
-  const speedProfileMode = inferEffectiveVideoMode({
-    mode, keyframes, sourceImagePath, extendFromVideoPath, audioFilePath,
+  const { speedProfile, t2vTwoStage } = await resolveLocalSpeedProfile({
+    model, jobId, speedProfileId, mode, keyframes, sourceImagePath, extendFromVideoPath, audioFilePath, lastImagePath,
+    w, h, steps, guidanceScale, resolvedLoras, uploadedTempPath, uploadedTempPaths,
   });
-  let speedProfile = resolveVideoSpeedProfile({ model, profileId: speedProfileId, mode: speedProfileMode });
-  if (isMiniMaxH3SpeedProfileRequest(speedProfileId)) {
-    const { prepareMiniMaxH3SpeedProfile } = await import('./ensureWeights.js');
-    speedProfile = await prepareMiniMaxH3SpeedProfile({
-      model, profileId: speedProfileId, mode: speedProfileMode,
-      width: w, height: h, steps, guidanceScale,
-      keyframes, lastImagePath, extendFromVideoPath, audioFilePath,
-    }, await getSettings());
-  }
-  if (['minimax_h3', 'minimax_h3_cuda'].includes(model.runtime) && resolvedLoras.length) {
-    const { validateMiniMaxH3CudaLoras, validateMiniMaxH3MlxLoras } = await import('./ensureWeights.js');
-    const validate = model.runtime === 'minimax_h3' ? validateMiniMaxH3MlxLoras : validateMiniMaxH3CudaLoras;
-    await validate(resolvedLoras, speedProfile);
-  }
-  const speedProfileDeclined = speedProfile ? null : speedProfileDeclineReason({ model, profileId: speedProfileId, mode: speedProfileMode });
-  if (speedProfileDeclined && ['minimax_h3', 'minimax_h3_cuda'].includes(model.runtime)) {
-    throw new ServerError(speedProfileDeclined.message, { status: 400, code: speedProfileDeclined.code });
-  }
-  if (speedProfileDeclined) {
-    console.log(`⚠️ Speed profile declined [${jobId.slice(0, 8)}] ${speedProfileDeclined.code}: ${speedProfileDeclined.message}`);
-  }
   const draftDecoder = await resolveRequestedDraftDecoder({ model, draftDecode, jobId });
 
   const sampler = resolveVideoSampler({ model, steps, guidanceScale, speedProfile });
   let actualSteps = sampler.steps;
   let actualGuidance = sampler.guidance;
   let actualStage2Steps = sampler.stage2Steps;
-  if (speedProfile) {
-    const schedule = speedProfile.denoisingSteps != null
-      ? `${speedProfile.denoisingSteps} updates (${actualSteps} sigma points)` : `${actualSteps}+${actualStage2Steps} steps`;
-    console.log(`⚡ Speed profile "${speedProfile.id}" [${jobId.slice(0, 8)}]: ${schedule}, cfg ${actualGuidance}${speedProfile.teacache ? ', teacache' : ''}`);
-  }
+  logSpeedProfileSchedule({ speedProfile, jobId, steps: actualSteps, guidance: actualGuidance, stage2Steps: actualStage2Steps });
   // Opt-in T2V Standard two-stage perf experiment — overrides steps/guidance
   // (and adds an explicit stage-2 step count) only for a plain default text
   // render when PORTOS_T2V_TWO_STAGE is on. No-op otherwise. Skipped entirely
   // once a speed profile applied: the profile IS the user-chosen schedule, and
   // letting the env experiment overwrite it would silently render something
   // other than what the picker promised.
-  const t2vTwoStage = speedProfile ? null : resolveT2vTwoStageOverride({
-    runtime: model.runtime, mode, guidanceScale, steps,
-    sourceImagePath, uploadedTempPath, uploadedTempPaths,
-    keyframes, extendFromVideoPath, audioFilePath,
-  });
   if (t2vTwoStage) {
     actualGuidance = t2vTwoStage.guidance;
     actualSteps = t2vTwoStage.steps;
@@ -615,137 +780,17 @@ async function renderLocalVideo(preparation, { pythonPath, prompt, negativePromp
   });
 
   const createdAt = new Date().toISOString();
-  const meta = {
-    id: jobId,
-    ...(batch ? { batchId: jobId, batchSize, batchIndex: 0 } : {}),
-    prompt,
-    negativePrompt,
-    modelId,
-    seed: actualSeed,
-    width: w,
-    height: h,
-    numFrames: parsedNumFrames,
-    fps: parsedFps,
-    // Persist the effective render settings so the lightbox Remix flow can
-    // round-trip them back into the form. Without these, Remix would only
-    // recover prompt/model/dims/frames/fps/seed and silently revert the
-    // other dials to defaults.
-    steps: actualSteps,
-    guidanceScale: actualGuidance,
-    tiling,
-    disableAudio,
-    ...(sourceAudioProvenance ? { audioConditioning: sourceAudioProvenance } : {}),
-    // Which prompt conditioner read this prompt. Only recorded when it wasn't
-    // the stock one, so pre-feature history and every unswapped render stay
-    // byte-identical — and so a Remix of a stock render can't resurrect an
-    // override the user has since deselected.
-    ...(resolvedTextEncoder ? { textEncoderId: resolvedTextEncoder.id } : {}),
-    filename,
-    createdAt,
-    // History mode reflects the EFFECTIVE mode — buildLtx2Args infers fflf
-    // from `keyframes` even when caller omitted `mode`, so without this the
-    // history entry would say 'text' for a multi-keyframe render.
-    mode: mode || (hasMultiKeyframes ? 'fflf' : sourceImagePath ? 'image' : 'text'),
-    // What the conditioning image promised, and the strength that delivered it
-    // (#4874). Both are recorded only when they actually applied, so every text
-    // render and every pre-feature row stays byte-identical — and a Remix of an
-    // anchored render can't resurrect a mode the user never chose. The mode is the
-    // EFFECTIVE one, so a record never claims a promise the render did not make.
-    ...(isDefaultI2vReferenceMode(effectiveReferenceMode) ? {} : { i2vReferenceMode: effectiveReferenceMode }),
-    ...(actualImageStrength != null ? { imageStrength: actualImageStrength } : {}),
-    // Durable re-render provenance (#3696). `seed` above is ALWAYS the resolved
-    // seed (a caller-omitted seed was rolled into `actualSeed` before the child
-    // ever ran), so a random-seed render records the seed it actually used and
-    // a Finish re-render reproduces the same composition rather than re-rolling.
-    // `conditioning` inventories what else steered this render — empty means
-    // prompt + seed + dials are the whole input. `renderInputsVersion` is the
-    // marker that both are trustworthy; records without it are legacy and must
-    // not be assumed unconditioned. Neither field carries a staging path.
-    ...(resolvedContinuation ? { continuation: sanitizeContinuation(resolvedContinuation) } : {}),
-    renderInputsVersion: RENDER_INPUTS_VERSION,
-    conditioning: describeRenderConditioning({
-      sourceImagePath: resolvedSourceImage,
-      lastImagePath: resolvedLastImage,
-      keyframes: resolvedKeyframes,
-      extendFromVideoPath,
-      audioFilePath,
-      icReferencePaths: resolvedIcReferencePaths,
-    }),
-    ...(visualConditioning ? { visualConditioning } : {}),
-    // Stamp the experimental fast-path so A/B analysis can tell a two-stage
-    // render apart from a user who happened to pick 8 steps — comparing it
-    // against the default Standard render is the whole point of the knob.
-    ...(t2vTwoStage ? { twoStageT2v: true, stage2Steps: actualStage2Steps } : {}),
-    // Speed profile (#4875). Recorded as the REQUESTED id so a Remix
-    // round-trips the schedule the user picked, and — critically — so the ETA
-    // estimator can keep fast and quality samples in separate cost buckets
-    // (see timedRenderSamples in ./eta.js): a profile roughly halves render
-    // time, which is a different cost curve, not sample noise. Absent on a
-    // quality render, so every pre-feature history row stays byte-identical.
-    // What the runner ACTUALLY managed to apply is stamped separately by
-    // finalizeGeneratedVideo from the child's SPEEDPROFILE: report.
-    ...(speedProfile ? { speedProfileId: speedProfile.id, stage2Steps: actualStage2Steps } : {}),
-    // Preview-fidelity decode (#5423). Recorded as the REQUESTED id, so a Remix
-    // round-trips the decode the user picked, and so the lightbox can say which
-    // decoder produced the pixels being judged. Absent on a full decode, which
-    // keeps every pre-feature history row byte-identical — and, because a
-    // declined request never sets it, a record can never claim a draft decode
-    // the render did not perform.
-    ...(draftDecoder ? { draftDecode: draftDecoder.id } : {}),
-    // Block-streaming request (#6499). Recorded as the REQUESTED mode, same
-    // convention as speedProfileId/draftDecode above — 'auto' and absence are
-    // the same request, so a quality-default render's history row stays
-    // byte-identical to one from before this setting existed. What the
-    // bridge ACTUALLY did (active/reason/peakMb) is stamped separately by
-    // finalizeGeneratedVideo from the child's STREAMPOLICY: report.
-    ...(mode === 'a2v' && resolvedLoras.length ? { a2vLoraStageStrengths: a2vLoraStageStrengths ?? [1, 1] } : {}),
-    ...(isDefaultVideoStreamingMode(streamingMode) ? {} : { streamingMode }),
-    // IC-LoRA remix settings, stamped so the lightbox Remix flow can round-trip
-    // them. The reference clip is recorded by BASENAME (not the absolute
-    // staging path) — history is user-facing and a durable upload path is both
-    // noise and machine-specific.
-    ...(isIcLoraMode(mode) ? {
-      icStrength: actualIcStrength,
-      ...(actualIcAttentionStrength != null ? { icAttentionStrength: actualIcAttentionStrength } : {}),
-      ...(icSkipStage2 ? { icSkipStage2: true } : {}),
-      ...(Array.isArray(icReferencePaths) && icReferencePaths.length
-        ? { icReferenceNames: icReferencePaths.map((p) => basename(p)) }
-        : {}),
-    } : {}),
-    ...referenceNames({ referenceImageNames: referenceImagePaths, referenceVideoNames: referenceVideoPaths, referenceAudioNames: referenceAudioPaths }),
-    // Stamp applied LoRAs using the SAME parallel-array contract image renders
-    // use (`loraFilenames` + `loraScales`) so the existing history consumers —
-    // normalizeVideo / getRenderConfigForItem (client/src/components/media/
-    // normalize.js) and the Remix handler — surface and round-trip them with no
-    // per-shape special-casing. A bespoke `loras` field would be invisible to
-    // those readers.
-    ...(resolvedLoras.length ? {
-      loraFilenames: resolvedLoras.map((l) => l.filename),
-      loraScales: resolvedLoras.map((l) => l.strength),
-    } : {}),
-    provenance: provenanceForRender({
-      model: {
-        id: modelId,
-        name: model?.name || modelId,
-        license: model?.license,
-        repo: model?.repo,
-        disclosure: model?.disclosure,
-      },
-      loras: resolvedLoras.map((l) => ({
-        filename: l.filename,
-        ...(loraLicenses[l.filename] || {}),
-      })),
-      capturedAt: createdAt,
-    }),
-    // Provenance for the trigger weave (#4665). `prompt` above stays the user's
-    // own text, so Remix re-derives triggers from whatever LoRAs are selected
-    // then instead of compounding this render's clause; these two record what
-    // was actually rendered. Present only when something was woven, so every
-    // other history row stays byte-identical to pre-feature renders.
-    ...(addedTriggerWords.length ? { renderPrompt, addedTriggerWords } : {}),
-    ...sentRecord,
-    ...(hidden ? { hidden: true } : {}),
-  };
+  const meta = buildLocalVideoJobRecord({
+    jobId, batch, batchSize, prompt, negativePrompt, modelId, model, actualSeed, w, h, parsedNumFrames,
+    parsedFps, actualSteps, actualGuidance, actualStage2Steps, tiling, disableAudio, sourceAudioProvenance,
+    resolvedTextEncoder, filename, createdAt, mode, hasMultiKeyframes, sourceImagePath,
+    effectiveReferenceMode, actualImageStrength, resolvedContinuation, resolvedSourceImage, resolvedLastImage,
+    resolvedKeyframes, extendFromVideoPath, audioFilePath, resolvedIcReferencePaths, visualConditioning,
+    t2vTwoStage, speedProfile, draftDecoder, a2vLoraStageStrengths, resolvedLoras, streamingMode,
+    actualIcStrength, actualIcAttentionStrength, icSkipStage2, icReferencePaths, referenceImagePaths,
+    referenceVideoPaths, referenceAudioPaths, loraLicenses, addedTriggerWords, renderPrompt, sentRecord,
+    hidden,
+  });
   await startPreparedLocalVideo({
     preparation,
     jobId,

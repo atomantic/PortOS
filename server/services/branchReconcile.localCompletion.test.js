@@ -20,6 +20,7 @@ vi.mock('./supersededLedger.js', async importOriginal => ({ ...await importOrigi
 import { PATHS } from '../lib/paths.js';
 import { resolveBranchReconcileBlock } from './cosTaskPreStepBlocks.js';
 import * as schedule from './taskSchedule.js';
+import * as outcomes from './branchReconcileOutcome.js';
 
 describe.skipIf(SKIP_HEAVY_INTEGRATION)('machine-local reconciliation completion (two real clones)', () => {
   let scratch;
@@ -57,14 +58,14 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('machine-local reconciliation completion
     const remoteBefore = (await execGit(['ls-remote', '--heads', 'origin'], local)).stdout;
     const peerBefore = (await execGit(['rev-parse', 'HEAD'], peer)).stdout;
     // Upgrade the prior reporting format only after a fresh local/remote scan.
-    await schedule.recordBranchReconcileOutcome(app.id, { status: 'incomplete',
+    await outcomes.recordBranchReconcileOutcome(app.id, { status: 'incomplete',
       remaining: [{ branch: 'feature/peer-only', reason: 'remote-branch-held' }] });
     expect(await run()).toEqual({ skip: true });
     expect(await outcome()).toMatchObject({
       status: 'drained', remaining: [], nextAction: null,
       remoteInventory: { reported: [{ branch: 'feature/peer-only', reason: 'unmerged-remote-only' }], reaped: [] },
     });
-    expect(await schedule.getBranchReconcileOutcome(app.id)).toMatchObject(await outcome());
+    expect(await outcomes.getBranchReconcileOutcome(app.id)).toMatchObject(await outcome());
     expect(await run()).toEqual({ skip: true });
     expect(await outcome()).toMatchObject({ status: 'drained', remaining: [],
       remoteInventory: { reported: [{ branch: 'feature/peer-only', reason: 'unmerged-remote-only' }] } });

@@ -465,8 +465,9 @@ const executeTurnToolCall = async ({ tc, cfg, emit, state, signal, hasHostContro
   };
   try {
     args = tc.function.arguments ? JSON.parse(tc.function.arguments) : {};
-    const argSummary = Object.keys(args).length ? Object.entries(args).map(([k, v]) => `${k}=${JSON.stringify(v).slice(0, 40)}`).join(' ') : '—';
-    tlog(`tool.start ${tc.function.name} ${argSummary}`);
+    // Argument names only: values can carry dictated journal text, captured thoughts or body-weight entries.
+    const argNames = Object.keys(args).join(',') || '—';
+    tlog(`tool.start ${tc.function.name} args=${argNames}`);
     result = await dispatchTool(tc.function.name, args, ctx);
     const ms = Date.now() - t0;
     toolRuns.push({ name: tc.function.name, ok: true, ms });
@@ -529,6 +530,90 @@ const executeTurnToolCall = async ({ tc, cfg, emit, state, signal, hasHostContro
   return result;
 };
 
+// Confirmation replays go out with only the label: the client may have
+// re-indexed the DOM since the stash, so a stale `target.ref` could point at a
+// different element (uiInteract.resolve() prefers ref when present). Whichever
+// tool stashed the record is the one replayed; click is the default.
+const CONFIRM_REPLAY = {
+  ui_fill: ['voice:ui:fill', (args) => ({ value: args.value })],
+  ui_check: ['voice:ui:check', (args) => ({ checked: args.checked })],
+};
+
+// Destructive-action confirmation gate. A previous turn stashed a pending
+// click on the session; this turn's utterance either confirms it (re-issue
+// the side effect) or cancels (drop pending and continue normally). Stale
+// pending records are GC'd so a forgotten "yes" minutes later can't fire a
+// destructive action. Returns the early turn result, or null to continue.
+const resolvePendingConfirmation = async ({ state, userText, turnId, emit, tlog, speakSyntheticReply }) => {
+  const pending = state?.pendingDestructive;
+  if (!pending) return null;
+  state.pendingDestructive = null; // consume up-front; every branch clears it
+  if (isExpired(pending)) {
+    console.log(`🛑 [${turnId}] dropping expired pending destructive (${pending.tool})`);
+    return null;
+  }
+  const decision = resolvePending(pending, userText);
+  if (decision.action === 'execute') {
+    const { target, tool, args } = pending;
+    tlog(`confirm.execute ${tool}`);
+    const [event, extra] = CONFIRM_REPLAY[tool] || ['voice:ui:click', () => ({})];
+    emit(event, { target: { label: target.label }, ...extra(args) });
+    const reply = `Confirmed — ${target.label}.`;
+    await speakSyntheticReply(reply);
+    return { transcript: userText, reply };
+  }
+  if (decision.action === 'cancel') {
+    tlog(`confirm.cancel ${pending.tool}`);
+    const reply = 'Cancelled.';
+    await speakSyntheticReply(reply);
+    return { transcript: userText, reply };
+  }
+  tlog(`confirm.passthrough — discarding pending ${pending.tool}`);
+  return null;
+};
+
+// Code-agent delegation is a separate opt-in. When it's off, never offer the
+// tool to the LLM even if the utterance matched the `code` intent group —
+// otherwise the model could try to dispatch an agent the user hasn't enabled.
+const filterToolSpecs = (specs, cfg) =>
+  specs && !cfg.llm.codeAgent?.enabled ? specs.filter((s) => s.function?.name !== 'dispatch_code_agent') : specs;
+
+const buildTurnMessages = async ({ cfg, systemContext, userText, intent, state, history, tlog }) => {
+  const messages = [
+    { role: 'system', content: buildSystemPrompt(cfg) },
+  ];
+  // Sits after the persona so it adds context without displacing the spoken-
+  // reply rules; absent/blank leaves the turn exactly as it was.
+  if (typeof systemContext === 'string' && systemContext.trim()) {
+    messages.push({ role: 'system', content: systemContext.trim().slice(0, MAX_SYSTEM_CONTEXT_CHARS) });
+  }
+  if (shouldIncludeUi(userText, intent.activeGroups)) {
+    const uiSummary = summarizeUi(state?.ui);
+    if (uiSummary) {
+      messages.push({
+        role: 'system',
+        content: `Current UI state — use ui_click / ui_fill / ui_select / ui_check to drive these. Names shown are the exact labels; pass them as the "label" argument. ${uiSummary}`,
+      });
+    }
+  }
+  // Explicit long-term memory routing: only for retrieval-shaped turns (the
+  // user asking about their own past / preferences / prior decisions). For
+  // everything else we skip the search entirely so normal turns stay cheap.
+  if (isRetrievalShaped(userText)) {
+    const tMem = Date.now();
+    const memoryBlock = await buildMemoryContext(userText);
+    if (memoryBlock) {
+      const count = (memoryBlock.match(/^- /gm) || []).length;
+      tlog(`memory.inject ${count} memories +${Date.now() - tMem}ms`);
+      messages.push({ role: 'system', content: memoryBlock });
+    } else {
+      tlog(`memory.none +${Date.now() - tMem}ms`);
+    }
+  }
+  messages.push(...history, { role: 'user', content: userText });
+  return messages;
+};
+
 export const runTurn = async ({ audio, text, mimeType, source, history = [], emit, signal, state, systemContext = null, hasHostControl }) => {
   const cfg = await getVoiceConfig();
   if (signal?.aborted) return { transcript: '', reply: '' };
@@ -547,7 +632,7 @@ export const runTurn = async ({ audio, text, mimeType, source, history = [], emi
     const stt = await transcribe(audio, { mimeType, signal });
     sttLatencyMs = stt.latencyMs;
     userText = isNonSpeechMarker(stt.text) ? '' : stt.text;
-    tlog(`stt.done ${sttLatencyMs}ms chars=${userText.length} text="${userText.slice(0, 80)}${userText.length > 80 ? '…' : ''}"`);
+    tlog(`stt.done ${sttLatencyMs}ms chars=${userText.length}`);
     emit('voice:transcript', { text: userText, latencyMs: stt.latencyMs });
   } else {
     // VoiceWidget treats transcripts with source !== 'text' as server-STT
@@ -556,7 +641,7 @@ export const runTurn = async ({ audio, text, mimeType, source, history = [], emi
     // 'voice' would duplicate the message. Keep `source` stable and expose
     // the caller's routing hint separately so dictation/Origin-aware code
     // can still distinguish typed vs spoken without breaking chat history.
-    tlog(`input.text chars=${userText.length} source=${source || 'text'} text="${userText.slice(0, 80)}${userText.length > 80 ? '…' : ''}"`);
+    tlog(`input.text chars=${userText.length} source=${source || 'text'}`);
     emit('voice:transcript', {
       text: userText,
       latencyMs: 0,
@@ -582,7 +667,7 @@ export const runTurn = async ({ audio, text, mimeType, source, history = [], emi
   // and "stop" still interrupt even if those words appear in TTS.
   if (state?.recentTts?.length && (!text || source === 'voice')) {
     if (isEchoOfRecentTts(userText, state.recentTts)) {
-      console.warn(`🔇 [${turnId}] dropping TTS echo "${userText.slice(0, 80)}"`);
+      console.log(`🔇 [${turnId}] dropping TTS echo (${userText.length} chars)`);
       emit('voice:idle', { reason: 'echo-suppressed' });
       return { transcript: userText, reply: '' };
     }
@@ -620,92 +705,13 @@ export const runTurn = async ({ audio, text, mimeType, source, history = [], emi
     emit('voice:idle', { reason: 'turn-complete' });
   };
 
-  // Destructive-action confirmation gate. A previous turn stashed a pending
-  // click on the session; this turn's utterance either confirms it (re-issue
-  // the side effect) or cancels (drop pending and continue normally). Stale
-  // pending records are GC'd so a forgotten "yes" minutes later can't fire
-  // a destructive action.
-  if (state?.pendingDestructive) {
-    const pending = state.pendingDestructive;
-    state.pendingDestructive = null; // consume up-front; every branch clears it
-    if (isExpired(pending)) {
-      console.log(`🛑 [${turnId}] dropping expired pending destructive (${pending.tool})`);
-    } else {
-      const decision = resolvePending(pending, userText);
-      if (decision.action === 'execute') {
-        const { target, tool, args } = pending;
-        tlog(`confirm.execute ${tool} target="${target.label}"`);
-        // Confirmation happens on the user's NEXT spoken turn, by which time
-        // the client may have re-indexed the DOM and reassigned refs — the
-        // stale `target.ref` could now point at a different element. Emit
-        // only the `label` so the client falls through to label-based
-        // resolution (uiInteract.resolve() prefers ref when present).
-        // Replays whichever tool actually stashed the pending record — a
-        // stashed ui_check or ui_fill must not be replayed as a click.
-        if (tool === 'ui_fill') {
-          emit('voice:ui:fill', { target: { label: target.label }, value: args.value });
-        } else if (tool === 'ui_check') {
-          emit('voice:ui:check', { target: { label: target.label }, checked: args.checked });
-        } else {
-          emit('voice:ui:click', { target: { label: target.label } });
-        }
-        const reply = `Confirmed — ${target.label}.`;
-        await speakSyntheticReply(reply);
-        return { transcript: userText, reply };
-      }
-      if (decision.action === 'cancel') {
-        tlog(`confirm.cancel ${pending.tool}`);
-        const reply = 'Cancelled.';
-        await speakSyntheticReply(reply);
-        return { transcript: userText, reply };
-      }
-      tlog(`confirm.passthrough — discarding pending ${pending.tool}`);
-    }
-  }
+  const confirmed = await resolvePendingConfirmation({ state, userText, turnId, emit, tlog, speakSyntheticReply });
+  if (confirmed) return confirmed;
 
   const toolsEnabled = !!cfg.llm.tools?.enabled;
   const intent = toolsEnabled ? getToolSpecsForIntent(userText) : { specs: undefined, activeGroups: classifyIntent(userText) };
-  let toolSpecs = intent.specs;
-  // Code-agent delegation is a separate opt-in. When it's off, never offer the
-  // tool to the LLM even if the utterance matched the `code` intent group —
-  // otherwise the model could try to dispatch an agent the user hasn't enabled.
-  if (toolSpecs && !cfg.llm.codeAgent?.enabled) {
-    toolSpecs = toolSpecs.filter((s) => s.function?.name !== 'dispatch_code_agent');
-  }
-
-  const messages = [
-    { role: 'system', content: buildSystemPrompt(cfg) },
-  ];
-  // Sits after the persona so it adds context without displacing the spoken-
-  // reply rules; absent/blank leaves the turn exactly as it was.
-  if (typeof systemContext === 'string' && systemContext.trim()) {
-    messages.push({ role: 'system', content: systemContext.trim().slice(0, MAX_SYSTEM_CONTEXT_CHARS) });
-  }
-  if (shouldIncludeUi(userText, intent.activeGroups)) {
-    const uiSummary = summarizeUi(state?.ui);
-    if (uiSummary) {
-      messages.push({
-        role: 'system',
-        content: `Current UI state — use ui_click / ui_fill / ui_select / ui_check to drive these. Names shown are the exact labels; pass them as the "label" argument. ${uiSummary}`,
-      });
-    }
-  }
-  // Explicit long-term memory routing: only for retrieval-shaped turns (the
-  // user asking about their own past / preferences / prior decisions). For
-  // everything else we skip the search entirely so normal turns stay cheap.
-  // Injects nothing when there are no relevant memories.
-  if (isRetrievalShaped(userText)) {
-    const tMem = Date.now();
-    const memoryBlock = await buildMemoryContext(userText);
-    if (memoryBlock) {
-      const count = (memoryBlock.match(/^- /gm) || []).length;
-      tlog(`memory.inject ${count} memories +${Date.now() - tMem}ms`);
-      messages.push({ role: 'system', content: memoryBlock });
-    } else {
-      tlog(`memory.none +${Date.now() - tMem}ms`);
-    }
-  }
-  messages.push(...history, { role: 'user', content: userText });
+  const toolSpecs = filterToolSpecs(intent.specs, cfg);
+  const messages = await buildTurnMessages({ cfg, systemContext, userText, intent, state, history, tlog });
   const maxIterations = Math.max(1, cfg.llm.tools?.maxIterations ?? 3);
 
   let pending = '';
@@ -851,7 +857,7 @@ export const runTurn = async ({ audio, text, mimeType, source, history = [], emi
   if (confirmationPrompt && !signal?.aborted) {
     if (pending.trim()) synthQueue = synthQueue.then(() => speak(pending.trim()));
     await synthQueue;
-    tlog(`confirm.prompt "${confirmationPrompt.slice(0, 80)}"`);
+    tlog(`confirm.prompt chars=${confirmationPrompt.length}`);
     await speakSyntheticReply(confirmationPrompt);
     return { transcript: userText, reply: confirmationPrompt };
   }
@@ -888,7 +894,7 @@ export const runTurn = async ({ audio, text, mimeType, source, history = [], emi
     // Narrate-instead-of-call: the model claimed to do something but never
     // invoked a tool. User already heard the narration via TTS; surface a
     // toast so they know the action didn't actually happen and can rephrase.
-    console.warn(`🎙️ [${turnId}] narrate-without-call user="${userText.slice(0, 80)}" reply="${finalText.slice(0, 120)}"`);
+    console.log(`🎙️ [${turnId}] narrate-without-call user_chars=${userText.length} reply_chars=${finalText.length}`);
     emit('voice:error', {
       stage: 'llm',
       message: "I said I'd do that but didn't actually call the tool. Try rephrasing — e.g. \"open my daily log\" or \"go to tasks\".",

@@ -2,6 +2,7 @@ import { festivalPacketSchema } from './musicVideoFestivalPacket.js';
 import { MUSIC_VIDEO_MEDIA_MODES } from './musicVideoMediaPolicy.js';
 import { MUSIC_VIDEO_GRADE_PRESETS, MUSIC_VIDEO_GRADE_MAX_GRAIN } from './musicVideoGrade.js';
 import { filmLookSchema } from './filmLookValidation.js';
+import { PRODUCTION_MEDIUMS } from './musicVideoProductionMedium.js';
 import { TITLE_CARD_FONTS, TITLE_CARD_LIMITS, TITLE_CARD_POSITIONS, TITLE_CARD_STYLES } from './musicVideoTitleCard.js';
 import { STATS_OUTRO_LIMITS, STATS_OUTRO_LINES } from './musicVideoStatsOutro.js';
 import { CREDITS_OUTRO_LAYOUTS, CREDITS_OUTRO_LIMITS } from './musicVideoCreditsOutro.js';
@@ -56,9 +57,12 @@ import { shotActionContractProblem } from './musicVideoActionContract.js';
 import { NARRATIVE_EVENT_KINDS } from './musicVideoNarrativeEvents.js';
 import { MUSIC_VIDEO_MEDIA } from './musicVideoMediumPlan.js';
 import { CLIP_OFFSET_FRAMES_RANGE, CLIP_SPEED_FPS_RANGE, MUSIC_VIDEO_FRAME_FITS, MUSIC_VIDEO_LYRIC_ROLES, MUSIC_VIDEO_LYRIC_SIZES, MUSIC_VIDEO_STILL_MOVES, MUSIC_VIDEO_TEXT_ZONES, MUSIC_VIDEO_VISUAL_LAYERS } from './musicVideoLayers.js';
-import { MUSIC_VIDEO_SHOT_GLITCH_LIMIT, MUSIC_VIDEO_TRANSITIONS } from './musicVideoTransitions.js';
+import {
+  MUSIC_VIDEO_GLITCH_EDGES, MUSIC_VIDEO_GLITCH_REPEAT_LIMIT, MUSIC_VIDEO_GLITCH_REPEAT_SEC, MUSIC_VIDEO_SHOT_GLITCH_LIMIT, MUSIC_VIDEO_TRANSITIONS,
+} from './musicVideoTransitions.js';
 import { BEAT_TOGGLE_OVERLAP, BEAT_TOGGLE_RATES, MUSIC_VIDEO_CUT_EFFECTS } from './musicVideoCutEffects.js';
-import { IMAGE_EFFECT_SEC_RANGE, MUSIC_VIDEO_IMAGE_EFFECTS } from './musicVideoImageEffects.js';
+import { IMAGE_EFFECT_SEC_RANGE, MUSIC_VIDEO_IMAGE_EFFECTS, PHOTO_LAYOUT_RANGES, PHOTO_SEQUENCE_LIMIT, PHOTO_SEQUENCE_OVERLAP_MAX_FRAMES, PHOTO_SEQUENCE_RATES } from './musicVideoImageEffects.js';
+import { PRE_MUSIC_DURATION_RANGE, PRE_MUSIC_EFFECT_IDS, PRE_MUSIC_LAYER_LIMIT, PRE_MUSIC_VOLUME_RANGE } from './musicVideoColdOpen.js';
 import { CAMERA_FRAMINGS, CAMERA_MOVEMENT_VALUES, CAMERA_SPEEDS } from './cameraMovements.js';
 import { CAST_ERAS } from './catalogMediaLibrary.js';
 import { STORYBOARD_ID_PATTERN } from './storyboardVocabulary.js';
@@ -103,6 +107,8 @@ export const musicVideoRenderCleanupSchema = z.object({ unusedLooks: z.boolean()
 
 // The rendered-so-far player: `light` asks for the lighter phone copy.
 export const musicVideoRenderPreviewSchema = z.object({ light: z.boolean().optional() }).strict();
+// Mix the cold open's sound for the animatic; nothing to choose.
+export const musicVideoColdOpenAudioSchema = z.object({}).strict();
 export const musicVideoSongStyleSunoSchema = z.object({ url: z.string().trim().min(1).max(2000) });
 
 // Optional global visual direction for the whole video.
@@ -338,6 +344,14 @@ const providerSlug = z.string().min(1).max(40).regex(/^[a-z0-9][a-z0-9._-]*$/i, 
 // external-tool import, or a synchronous-lane render the client already holds.
 // `assetId` is validated against its kind (gallery basename / history id) and
 // then existence-checked by the route before it can reach the record.
+// Guides and Cast & Sets sheets a still was conditioned on (#14154). Optional:
+// a take that omits it is an older frame and reads as unknown, not stale.
+export const musicVideoCastInputsSchema = z.object({
+  ingredientId: z.string().min(1).max(200).nullable(),
+  guides: z.array(galleryImageName).max(8),
+  sheets: z.array(z.object({ id: z.string().min(1).max(80), imageId: galleryImageName }).strict()).max(8),
+}).strict();
+
 export const musicVideoTakeInputSchema = z.object({
   kind: z.enum(MUSIC_VIDEO_TAKE_KINDS),
   assetId: z.string().min(1).max(256),
@@ -348,6 +362,11 @@ export const musicVideoTakeInputSchema = z.object({
   sourceImageId: galleryImageName.optional(),
   inputAssets: z.array(z.object({ role: z.enum(['crop', 'mask']), assetId: galleryImageName, revision: z.number().int().min(1).max(1000000) }).strict()).max(4).optional(),
   use: z.enum(MUSIC_VIDEO_TAKE_USES).optional(),
+  castInputs: musicVideoCastInputsSchema.optional(),
+  // One-tap re-render of a filled still. The new image becomes the selection
+  // unless the take is already stale. A locked still is reverted by the
+  // generation-completion lock, which keeps the new take as a candidate.
+  replaceSelection: z.boolean().optional(),
 }).strict().superRefine((take, ctx) => {
   const check = take.kind === 'video' ? videoHistoryIdSchema : galleryImageName;
   const parsed = check.safeParse(take.assetId);
@@ -664,6 +683,20 @@ export const musicVideoSceneSetReferenceSchema = z.object({
   greyboxShotId: z.string().min(1).max(51).regex(/^[A-Za-z][A-Za-z0-9_-]*$/).optional(),
 }).strict();
 
+const musicVideoPreMusicLayerSchema = z.object({
+  effect: z.enum(PRE_MUSIC_EFFECT_IDS).optional(),
+  trackId: z.string().trim().min(1).max(128).optional(),
+  atSec: z.number().min(0).max(PRE_MUSIC_DURATION_RANGE.max).optional(),
+  durationSec: z.number().positive().max(PRE_MUSIC_DURATION_RANGE.max).nullable().optional(),
+  volume: z.number().min(PRE_MUSIC_VOLUME_RANGE.min).max(PRE_MUSIC_VOLUME_RANGE.max).optional(),
+}).strict().refine((layer) => !!layer.effect !== !!layer.trackId, 'a sound layer is one effect or one library track');
+
+export const musicVideoPreMusicSchema = z.object({
+  durationSec: z.number().min(PRE_MUSIC_DURATION_RANGE.min).max(PRE_MUSIC_DURATION_RANGE.max),
+  clipVolume: z.number().min(PRE_MUSIC_VOLUME_RANGE.min).max(PRE_MUSIC_VOLUME_RANGE.max).nullable().optional(),
+  layers: z.array(musicVideoPreMusicLayerSchema).max(PRE_MUSIC_LAYER_LIMIT).optional(),
+}).strict();
+
 // Per-scene visual layer (#8985) — footage, a moved still, or a title card;
 // see musicVideoLayers.js. Only a composed render honors a non-footage layer.
 const sceneLayerFields = {
@@ -688,11 +721,17 @@ const sceneLayerFields = {
   // A VHS glitch over the cut into / out of this shot (musicVideoTransitions.js); null clears it.
   transitionIn: z.enum(MUSIC_VIDEO_TRANSITIONS).nullable().optional(),
   transitionOut: z.enum(MUSIC_VIDEO_TRANSITIONS).nullable().optional(),
-  // Glitches at moments inside the shot: `atSec` from the shot's start, `lengthSec` stretching the style; null clears them.
+  // Glitches at moments inside the shot: `atSec` from the shot's start, `lengthSec` stretching the style,
+  // `strength` (0 = off), `count` repeats `everySec` apart, and a light leak's `color`/`edge`; null clears them.
   glitches: z.array(z.object({
     atSec: z.number().min(0).max(3600),
     style: z.enum(MUSIC_VIDEO_TRANSITIONS),
     lengthSec: z.number().positive().max(4).nullable().optional(),
+    strength: z.number().min(0).max(1).nullable().optional(),
+    count: z.number().int().min(1).max(MUSIC_VIDEO_GLITCH_REPEAT_LIMIT).nullable().optional(),
+    everySec: z.number().min(MUSIC_VIDEO_GLITCH_REPEAT_SEC.min).max(MUSIC_VIDEO_GLITCH_REPEAT_SEC.max).nullable().optional(),
+    color: z.string().regex(/^#[0-9a-f]{6}$/i, 'color is #rrggbb').nullable().optional(),
+    edge: z.enum(MUSIC_VIDEO_GLITCH_EDGES).nullable().optional(),
   })).max(MUSIC_VIDEO_SHOT_GLITCH_LIMIT).nullable().optional(),
   // An effect across the cut out of this shot (musicVideoCutEffects.js), kept with its settings while switched off; null clears it.
   cutEffect: z.object({
@@ -705,12 +744,26 @@ const sceneLayerFields = {
   // it takes to finish; null clears it.
   imageEffect: z.enum(MUSIC_VIDEO_IMAGE_EFFECTS).nullable().optional(),
   imageEffectSec: z.number().min(IMAGE_EFFECT_SEC_RANGE.min).max(IMAGE_EFFECT_SEC_RANGE.max).nullable().optional(),
+  photoSequence: z.object({
+    enabled: z.boolean().optional(),
+    imageIds: z.array(z.string().min(1).max(256).regex(/^[^/\\\\]+$/)).max(PHOTO_SEQUENCE_LIMIT),
+    intervalFrames: z.number().int().min(1).max(720),
+    rate: z.enum(PHOTO_SEQUENCE_RATES).optional(),
+    // #14277: how long an outgoing photo stays beneath the next, and per-photo
+    // layouts parallel to imageIds (null = full frame).
+    overlapFrames: z.number().int().min(0).max(PHOTO_SEQUENCE_OVERLAP_MAX_FRAMES).optional(),
+    layouts: z.array(z.object(Object.fromEntries(Object.entries(PHOTO_LAYOUT_RANGES)
+      .map(([key, range]) => [key, z.number().min(range.min).max(range.max)]))).strict().nullable()).max(PHOTO_SEQUENCE_LIMIT).optional(),
+  }).strict().refine(s => !s.layouts || s.layouts.length <= s.imageIds.length, { message: 'A photo layout needs its photo', path: ['layouts'] }).nullable().optional(),
   cardText: z.string().max(500).nullable().optional(),
   // #10302: footage that the composition also draws code over; still counts as footage.
   codeOverlay: z.boolean().optional(),
   // Footage whose clip was rendered from code (an uploaded code render): the board labels it Code.
   codeClip: z.boolean().optional(),
   cardColor: z.string().regex(/^#[0-9a-f]{6}$/i, 'card color is #rrggbb').nullable().optional(),
+  // The shot plays before the song, in the cold open (lib/musicVideoColdOpen.js), with
+  // its own length and sound: the clip's audio and/or sound layers. null returns it to the song.
+  preMusic: musicVideoPreMusicSchema.nullable().optional(),
   // #10583: where a composition document's lyric type may sit in this shot, and the role of its lines.
   textZone: z.enum(MUSIC_VIDEO_TEXT_ZONES).nullable().optional(),
   lyricRole: z.enum(MUSIC_VIDEO_LYRIC_ROLES).nullable().optional(),
@@ -725,6 +778,7 @@ const sceneLayerFields = {
 // routes edit it (never the generic project PATCH) so every write carries the
 // revision it was based on. See services/musicVideo/treatment.js.
 export const MUSIC_VIDEO_ASPECT_RATIOS = ['16:9', '9:16', '1:1', '4:5', '2.39:1'];
+export const MUSIC_VIDEO_LYRIC_LAYOUTS = ['social', 'cinematic'];
 export const MUSIC_VIDEO_BEAT_ROLES = ['opening', 'build', 'contrast', 'payoff', 'release'];
 // Treatment shot categories (the arc's balance axis). Distinct from the scene's
 // render-facing `shotMode` (#8977: cutaway | performance) — Apply maps a
@@ -750,6 +804,7 @@ export const musicVideoTreatmentBriefSchema = z.object({
   audience: z.string().max(500).optional(),
   destination: z.string().max(200).optional(),
   aspectRatio: z.enum(MUSIC_VIDEO_ASPECT_RATIOS).nullable().optional(),
+  lyricLayout: z.enum(MUSIC_VIDEO_LYRIC_LAYOUTS).nullable().optional(),
   emotion: z.string().max(500).optional(),
   premise: z.string().max(2000).optional(),
   hookObjective: z.string().max(1000).optional(),
@@ -1527,6 +1582,8 @@ export const musicVideoProjectCreateSchema = z.object({
   soundBed: musicVideoSoundBedSchema.nullable().optional(),
   // The finishing film look (lib/filmLook.js); null = none.
   filmLook: filmLookSchema.nullable().optional(),
+  // The handmade production medium (lib/musicVideoProductionMedium.js); null = none.
+  productionMedium: z.enum(PRODUCTION_MEDIUMS).nullable().optional(),
   // The opening title card (lib/musicVideoTitleCard.js); null = none.
   titleCard: musicVideoTitleCardSchema.nullable().optional(),
   // The cutting room floor outro after the song (lib/musicVideoStatsOutro.js); null = off.
@@ -1562,6 +1619,8 @@ export const musicVideoProjectUpdateSchema = z.object({
   soundBed: musicVideoSoundBedSchema.nullable().optional(),
   // The finishing film look (lib/filmLook.js); null = none.
   filmLook: filmLookSchema.nullable().optional(),
+  // The handmade production medium (lib/musicVideoProductionMedium.js); null = none.
+  productionMedium: z.enum(PRODUCTION_MEDIUMS).nullable().optional(),
   // The opening title card (lib/musicVideoTitleCard.js); null = none.
   titleCard: musicVideoTitleCardSchema.nullable().optional(),
   // The cutting room floor outro after the song (lib/musicVideoStatsOutro.js); null = off.
@@ -1570,6 +1629,10 @@ export const musicVideoProjectUpdateSchema = z.object({
   creditsOutro: musicVideoCreditsOutroSchema.nullable().optional(),
   // The Create › Storyboards board this video is planned from; null unlinks.
   storyboardId: z.string().regex(STORYBOARD_ID_PATTERN, 'storyboardId must be a storyboard id').nullable().optional(),
+  // When the storyboard was reopened for rework (the step reads not done); null = approved again.
+  storyboardReopenedAt: z.string().datetime().nullable().optional(),
+  // Keep the shots 1:1 with the linked storyboard's panels after each board edit (lib/storyboardShotSync.js).
+  storyboardSync: z.boolean().optional(),
 }).strict();
 
 // Mark a project finished outside PortOS (or clear the marker). The server
@@ -1860,6 +1923,13 @@ export const musicVideoAudioAnalysisSchema = z.object({
     startSec: z.number().min(0),
     endSec: z.number().min(0),
   }).nullable().optional(),
+  // Beat-grid trust (#14240). `gridDecision: 'ignore'` stops the automatic grid
+  // from snapping cuts; `gridReason` is shown beside the manual BPM control.
+  beatContrast: z.number().min(0).nullable().optional(),
+  beatSpread: z.number().min(0).nullable().optional(),
+  phaseCancellation: z.boolean().optional(),
+  gridDecision: z.enum(['use', 'ignore']).nullable().optional(),
+  gridReason: z.string().max(200).nullable().optional(),
 }).strict();
 
 export const musicVideoPerformanceRepairSchema = z.object({

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Plus, RefreshCw } from 'lucide-react';
 import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
@@ -76,12 +76,22 @@ export default function JobsTab() {
 
   useEffect(() => { fetchJobs(); }, [fetchJobs]);
 
-  useEffect(() => {
-    api.getProviders({ silent: true }).then(data => {
+  // A failed read would otherwise hide every provider picker, leaving new and
+  // edited agent jobs on the default provider with no sign anything went wrong.
+  const [providersError, setProvidersError] = useState(null);
+  // Retry stays clickable during a read; only the newest one may write.
+  const providersRequestRef = useRef(0);
+  const loadProviders = useCallback(() => {
+    const request = ++providersRequestRef.current;
+    const current = () => request === providersRequestRef.current;
+    return api.getProviders({ silent: true }).then(data => {
+      if (!current()) return;
       setRawProviders(data?.providers || []);
       setActiveProviderId(data?.activeProvider || '');
-    }).catch(() => {});
+      setProvidersError(null);
+    }).catch(err => { if (current()) setProvidersError(err); });
   }, []);
+  useEffect(() => { loadProviders(); }, [loadProviders]);
 
   const providers = useMemo(
     () => filterRunnableProviders(rawProviders, jobs.map(job => job.providerId)),
@@ -225,6 +235,9 @@ export default function JobsTab() {
 
       {appsState === 'error' && (
         <ListLoadError what="apps for the job scope pickers" error={appsError} onRetry={retryApps} />
+      )}
+      {providersError && (
+        <ListLoadError what="AI providers for the job provider pickers" error={providersError} onRetry={loadProviders} />
       )}
 
       {showCreate && (

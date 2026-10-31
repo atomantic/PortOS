@@ -85,18 +85,22 @@ existing prerequisite after its update preserves the original request and budget
 
 ## Repository merge admission
 
-Every CoS run that lands its own pull request, plus the deterministic
-pending-merge sweep, shares one repository-scoped merge-instant lease
-(`server/services/cosMergeAdmission.js`). The host-control-gated
-`POST /api/cos/merge-admission` accepts the registered parent agent ID and
-`acquire`, `check`, or `release`; check/release require the returned token, and
-release records one of `merged`, `leave-open` or `resync` in the parent's
-`lastMergeAdmission`. Repository identity comes from that parent's registered
-source checkout and normalized origin host/repository, not its child worktree
-path, and never from the request.
+PortOS holds no merge lease of its own. A spawned CoS run lands its pull request
+through the hosting provider, and the deterministic pending-merge sweep and the
+quality-snapshot publisher merge directly, pinned to the recorded head
+(`gh pr merge --match-head-commit`, GitLab `glab mr merge --sha`). GitHub
+serializes merges and refuses a stale or conflicting head, so a local lease would
+add nothing. Main moving while the PR stays `CLEAN` forces no resync or fresh CI
+run; the remaining exposure is a semantic conflict between two individually
+green PRs, which post-merge default-branch CI catches, the same exposure manual
+and cross-install merges already carry.
 
-Acquire and check admit only a live (`running`) registered agent that is one of
-these participants; anything else is refused with `claim-owner-unverified`:
+No lease remains. The legacy outside-agent lease API (`POST /api/cos/merge-admission/external`) was retired (#14320): it answers 404, and an outside client merges directly on the forge, pinned to the verified head.
+
+Which registered run may hand a pending merge to the server
+(`server/services/mergeHandoffOwner.js`, used by the merge handoff below) is
+proven against its live registration. Anything else is refused with
+`handoff-owner-unverified`:
 
 - **Claim parent** — its registered claim binding (`claimBranch` or
   `claimPicksOwnBranch`; see [Claim branch ownership](#claim-branch-ownership)).
@@ -104,42 +108,13 @@ these participants; anything else is refused with `claim-owner-unverified`:
   registered `reviewLoopMergeTarget` still matches its live task's PR URL,
   number and branch, and whose worktree is on that branch of this repository.
 - **Generic PR delivery** (#11435) — an operator-configured task whose prompt
-  told it to open and merge its own PR from the worktree PortOS provisioned
-  (`/do:pr` plus the CI merge gate, or the inline `git`/forge lifecycle). The
-  spawner stamps `prDeliveryTarget` — that worktree path and head branch — from
-  the same decision that put the admission section in the prompt. Admission
-  then requires the agent record to still name that worktree and branch with
-  agent-owned PR delivery, the live task to still be unfinished with `openPR`
-  on and a completion policy that merges (not leave-open, a JIRA handoff, a
-  review follow-up or a fork head), and the worktree's origin and checked-out
-  branch to match. The PR target is the one whose head is that registered
-  branch in this repository. A generic run never gains claim authority, and its
-  `/do:pr` runs with `--no-merge` so no saved slashdo default merges outside
-  the lease.
-
-Release needs only the owned token, so a lease cannot strand after the merge
-deletes or switches the checkout.
-
-The lease spans only the final verify-and-merge (#10803). Base sync, pregate,
-push and the required-CI wait run concurrently across participating runs and
-across every PR in a swarm, without admission. Once required CI is green on the
-exact pushed head, the parent acquires, re-reads the PR, and:
-
-- merges pinned to that CI-verified head (`gh pr merge --match-head-commit`,
-  GitLab `glab mr merge --sha`) when the forge reports it mergeable (`CLEAN`),
-  then releases with `merged`;
-- releases with `resync` when the head changed or the PR is no longer mergeable
-  (`DIRTY`, `BEHIND` under an up-to-date-branch rule, `BLOCKED`), then syncs,
-  reruns pregate and waits for CI again outside the lease before re-acquiring.
-
-A base that moved while the PR stays `CLEAN` does not force a resync or a fresh
-CI run: the forge's merge check is authoritative, as it is for manual merges.
-The remaining exposure is a semantic conflict between two individually green
-PRs, which post-merge default-branch CI catches — the same exposure manual and
-cross-install merges already carry. A refused acquire retries every 5 seconds
-and reports progress every minute; after 10 minutes the reviewed PR (and any
-claim) is left open — a refusal is never permission to merge without admission. Sweep deferrals preserve their retry budget; the sweep already
-holds the lease only around its own read → assess → pinned merge.
+  told it to open and merge its own PR from the worktree PortOS provisioned.
+  The spawner stamps `prDeliveryTarget` — that worktree path and head branch.
+  The agent record must still name that worktree and branch with agent-owned PR
+  delivery, the live task must still be unfinished with `openPR` on and a
+  completion policy that merges (not leave-open, a JIRA handoff, a review
+  follow-up or a fork head), and the worktree's origin and checked-out branch
+  must match. A generic run never gains claim authority.
 
 ### Hosting-provider merge authority
 
@@ -264,7 +239,7 @@ entry, an unbound duplicate queue write never replaces it, and the response
 carries a receipt.
 
 The pr-watcher pending-merge sweep then merges only the recorded head, under
-its own admission lease, once the PR is `CLEAN` with every reported check
+no lease, once the PR is `CLEAN` with every reported check
 green; GitHub auto-merge is never enabled. A head that moved invalidates the
 binding and dispatches recovery with the recorded review roster; a failed
 check or conflict does the same. Once a review task exists, recovery resumes
@@ -280,18 +255,18 @@ discards custody. A closed, unmerged PR is retained for explicit disposition,
 even when its old checks failed. Failure recovery waits for an active source
 task to finish before transferring ownership to a persisted recovery task.
 
-Immediately before merging under admission, the coordinator re-reads its owning
+Immediately before merging, the coordinator re-reads its owning
 task. A new manual hold or changed completion policy blocks the old receipt;
 an unreadable owner or queued recovery defers without consuming a worker slot.
 
-The merge-admission prompt section describes this optional handoff before the
+The hosting-provider merge-authority prompt section describes this optional handoff before the
 normal in-session CI wait. When a local review round returns clean, the run records
 `REVIEW_HEAD=$(git rev-parse HEAD)` beside `REVIEW_STATUS` (one line, replacing
 any earlier one); a later commit means that head was not reviewed. On
 `queued: true` with a receipt for its head, the run stops: it does not wait for
 CI, merge, enable auto-merge, close the issue or remove its branch or worktree,
 and it reports the PR as handed off and not yet merged. Any other answer keeps
-the run on the in-session CI wait and admission-gated merge.
+the run on the in-session CI wait and its own pinned merge.
 
 A receipt is a pending end state. `probePrForBranch` reports
 `mergeHandoffQueued` only when the queue holds a binding for that PR, branch and
@@ -305,7 +280,7 @@ that lands during a pass which already read the queue gets one follow-up pass
 after it settles.
 
 When that immediate pass leaves the receipt's entry queued (CI still running,
-admission deferred, the forge briefly unreadable), the receipt arms a bounded
+the forge briefly unreadable), the receipt arms a bounded
 follow-up poll for the app so a head whose CI turns green a minute later does
 not wait out the rest of the 30-minute timer. It re-runs the receipt sweep
 every 60 seconds for the first five polls, then every 120 seconds
@@ -322,11 +297,11 @@ poller, and a receipt accepted while the daemon is stopped arms none.
 New managed-app PR tasks default to **PortOS auto-merge after review**. The app's
 PR completion setting can select automatic merge after checks, leave-open or
 draft instead; an explicit per-run choice wins. This does not enable GitHub's
-native auto-merge, which cannot acquire PortOS's local merge admission. Existing
+native auto-merge. Existing
 explicit app and task policies remain unchanged.
 
 New receipts also retain the verified checkout path. After a confirmed merge,
-and after releasing merge admission, the coordinator removes that exact merged
+the coordinator removes that exact merged
 clean checkout and local branch without copying either one. A cleanup refusal
 remains on the receipt as `cleanup.status` and `reason`; transient failures
 retry every 30 minutes, at most 12 times.
@@ -334,41 +309,6 @@ Locks, initialized submodules, changed checkout identity and supersession need
 explicit recovery and remain held. No worker waits for this cleanup, no lock is
 silently released, and no initialized submodule is discarded. Older receipts
 without a checkout binding retain the existing branch-reconciliation fallback.
-
-Leases extend the existing machine-local CoS runtime ownership in
-`data/cos/state.json` (the agent records they bind are `cos_agents` rows),
-under its existing write queue; there is no new store,
-seed, migration, or federation payload. Admission waits at most 15 seconds to
-start its state-queue callback; an expired waiter returns `admitted: false`,
-`reason: state-queue-timeout`, and `retryAfterMs: 5000`. Its fenced callback
-cannot later grant or release a lease. A refused check grants no merge authority;
-retry and require a fresh successful check. Once a transaction starts, it retains
-the queue until its actual result settles, including persistence failures.
-The deadline then logs the pending phase rather than reporting an incomplete
-write as a refusal or successful release. Diagnostics contain fixed operation
-and phase names plus numeric timings for queue wait, trusted-state read, cached
-state load, origin lookup, owner recovery, and persistence; no owner, token,
-repository, or path is logged. Missing lease fields are compatible
-with older state. Unreadable, mismatched or stale ownership refuses admission.
-An agent lease is recoverable from a matching finalized parent record
-(including its archive), or by any participant once its 5-minute hold deadline
-(`AGENT_LEASE_MAX_HOLD_MS`, measured from `acquiredAt`) has passed even while
-its owner is still running. An expired holder's `check` is refused with
-`lease-expired`, and because every merge is pinned to the CI-verified head, a
-reclaimed holder cannot land an unverified head — the worst case is one
-redundant resync. The lease is not a forge-side fence: a holder whose merge
-request was already in flight when its deadline passed can still complete it
-while the next holder merges. Both merges are pinned and forge-checked, so this
-is the same semantic-conflict exposure as two consecutive `CLEAN` merges. Completed children and absent cwd processes never release a
-lease early. A crashed deterministic sweep is recoverable only after its server
-process is proven absent. Failed reads and ambiguous/reused process identities
-hold admission conservatively.
-
-This coordinates participating runs on **one install**. Manual merges, older
-prompts and other installs can still move the base; the forge's merge state
-reflects that at the merge instant. Admission does not grant permission to
-adopt another owner's branch or checkout, does not replace reviews/CI, and
-does not make queued auto-merge a completed merge.
 
 ## Claim branch ownership
 

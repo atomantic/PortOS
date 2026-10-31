@@ -37,6 +37,8 @@ import { unlink, rm } from 'fs/promises';
 import { emitLog } from './cosEvents.js';
 import { updateAgent } from './cosAgentLifecycle.js';
 import { updateTask, addTask, reviveBlockedTask } from './cosTaskStore.js';
+import { SPAWN_HISTORY_METADATA_KEYS } from './spawnBudgetProof.js';
+import { CLAIM_METADATA_KEYS } from './cosTaskClaim.js';
 import { checkStagePrecondition } from './cosTaskGenerator.js';
 import { PIPELINE_STAGE_BEHAVIOR_FLAGS, normalizeReviewers } from '../lib/validation.js';
 import { PATHS, tryReadFile } from '../lib/fileUtils.js';
@@ -190,6 +192,11 @@ export async function handlePipelineProgression(task, agentId, success) {
   // none is set — an inherited one made every stage after the first run on the
   // stage before it's instructions.
   delete nextTask.metadata.prompt;
+  // Each stage is a new task with its own spawn budget. The prior stage's
+  // dispatch accounting and claim lease would make addTask withhold the fresh
+  // budget proof, so dispatch held every later stage, and the inherited live
+  // lease refused the explicit budget reset too.
+  for (const key of [...SPAWN_HISTORY_METADATA_KEYS, ...CLAIM_METADATA_KEYS, 'lastOrphanedAt', 'worktreeBusyAttempts']) delete nextTask.metadata[key];
   if (nextStage.model) nextTask.metadata.model = nextStage.model;
   if (nextStage.providerId) {
     nextTask.metadata.provider = nextStage.providerId;

@@ -1,17 +1,19 @@
-// Real git: snapshot checkouts stay when ignored or untracked local content
-// cannot be proved disposable, even after their PR merges.
+// Real git: a merged snapshot checkout is retired even with ignored output, but
+// untracked (non-ignored) work holds it only while its PR is not merged.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { existsSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { destroyGitSandbox, makeGitSandbox, SKIP_HEAVY_INTEGRATION } from '../lib/gitTestRepo.js';
 import { execGit } from '../lib/execGit.js';
-import { retireSnapshotMergeCheckouts, sweepSettledSnapshotCheckouts } from './appQualitySnapshotMerge.js';
+import { sweepSettledSnapshotCheckouts } from './appQualitySnapshotMerge.js';
 
 const pr = { url: 'https://github.com/example/repo/pull/7' };
 const admitted = { checkSnapshotPublicationOwnership: async () => ({ admitted: true }) };
+const mergedForge = { ...admitted, resolveForgeForRepo: async () => ({ cli: 'gh', env: {} }),
+  execGh: async () => JSON.stringify({ state: 'MERGED' }) };
 
-describe.skipIf(SKIP_HEAVY_INTEGRATION)('retireSnapshotMergeCheckouts', () => {
+describe.skipIf(SKIP_HEAVY_INTEGRATION)('sweepSettledSnapshotCheckouts', () => {
   let sandbox;
   beforeEach(async () => { sandbox = await makeGitSandbox({ prefix: 'portos-quality-merge-' }); });
   afterEach(async () => { await destroyGitSandbox(sandbox.scratch); });
@@ -29,25 +31,31 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('retireSnapshotMergeCheckouts', () => {
 
   it('retires a clean merged snapshot checkout holding only its receipt and validation report', async () => {
     const path = await snapshotCheckout('clean');
-    const held = await retireSnapshotMergeCheckouts({ id: 'app', repoPath: sandbox.repo }, pr, admitted);
-    expect(held).toEqual([]);
+    const swept = await sweepSettledSnapshotCheckouts({ id: 'app', repoPath: sandbox.repo }, {}, mergedForge);
+    expect(swept).toHaveLength(1);
     expect(existsSync(path)).toBe(false);
   });
 
-  it('retains unverified ignored output in a merged snapshot checkout', async () => {
+  it('retires a merged snapshot checkout holding other ignored output', async () => {
     const path = await snapshotCheckout('ignored');
     await writeFile(join(path, '.cache', 'unique-output.bin'), 'only copy');
-    const held = await retireSnapshotMergeCheckouts({ id: 'app', repoPath: sandbox.repo }, pr, admitted);
-    expect(held).toHaveLength(1);
-    expect(existsSync(join(path, '.cache', 'unique-output.bin'))).toBe(true);
+    const swept = await sweepSettledSnapshotCheckouts({ id: 'app', repoPath: sandbox.repo }, {}, mergedForge);
+    expect(swept).toHaveLength(1);
+    expect(existsSync(path)).toBe(false);
   });
 
-  it('keeps a snapshot checkout with untracked work', async () => {
+  it('retires a merged snapshot checkout holding untracked work', async () => {
     const path = await snapshotCheckout('dirty');
     await writeFile(join(path, 'wanted.txt'), 'local work');
-    const held = await retireSnapshotMergeCheckouts({ id: 'app', repoPath: sandbox.repo }, pr, admitted);
-    expect(held).toHaveLength(1);
-    expect(existsSync(path)).toBe(true);
+    expect(await sweepSettledSnapshotCheckouts({ id: 'app', repoPath: sandbox.repo }, {}, mergedForge)).toHaveLength(1);
+    expect(existsSync(path)).toBe(false);
+  });
+
+  it('keeps a closed-unmerged snapshot checkout with untracked work', async () => {
+    const path = await snapshotCheckout('closed-dirty');
+    await writeFile(join(path, 'wanted.txt'), 'local work');
+    const closedForge = { ...mergedForge, execGh: async () => JSON.stringify({ state: 'CLOSED' }) };
+    expect(await sweepSettledSnapshotCheckouts({ id: 'app', repoPath: sandbox.repo }, {}, closedForge)).toEqual([]);
     expect(existsSync(join(path, 'wanted.txt'))).toBe(true);
   });
 

@@ -9,7 +9,7 @@ vi.mock('./branchCompletionPolicy.js', () => ({
 }));
 vi.mock('./cosTaskStore.js', () => ({ getTaskById: async id => f.tasks[id], getTaskView: async () => ({ user: { tasks: [] }, cos: { tasks: f.queue } }) }));
 vi.mock('./cosClaimOwnership.js', () => ({ readClaimOwnershipAgents: async () => f.live }));
-vi.mock('./cosMergeAdmission.js', () => ({ repositoryKey: origin => origin ? `${origin.host}/${origin.fullName}`.toLowerCase() : null }));
+vi.mock('./mergeHandoffOwner.js', () => ({ repositoryKey: origin => origin ? `${origin.host}/${origin.fullName}`.toLowerCase() : null }));
 vi.mock('../lib/gitRemote.js', () => ({ getOriginInfo: async () => ({ host: 'github.com', fullName: 'example/repo' }) }));
 vi.mock('../lib/execGit.js', () => ({ execGit: async (args, cwd) => ({ stdout: args.includes('--git-path') ? join(cwd, 'review-status')
   : args[0] === 'symbolic-ref' ? 'feature' : args[0] === 'status' ? f.dirty : f.head }) }));

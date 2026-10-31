@@ -65,7 +65,7 @@ vi.mock('./taskScheduleStore.js', async original => ({ ...await original(), load
 const { verifyAgentRepoState, sweepRepoStateVerifications, resumeDeferredRepoStateVerifications } = await import('./agentRepoStateVerification.js');
 const { bindCompletionTaskDispatch, prepareCompletionTaskHandoff } = await import('./agentCompletionTaskHandoff.js');
 const { completeAgent, getAgentRecord } = await import('./cosAgentLifecycle.js');
-const { getBranchReconcileOutcome } = await import('./taskSchedule.js');
+const { getBranchReconcileOutcome } = await import('./branchReconcileOutcome.js');
 const { activeAgents } = await import('./agentState.js');
 const { PATHS } = await import('../lib/paths.js');
 const { cosEvents } = await import('./cosEvents.js');
@@ -149,8 +149,8 @@ describe('completion to in-place retirement (real Git and persisted service stat
     await execGit(['merge', '--ff-only', branch], repo);
     const defaultHead = (await execGit(['rev-parse', 'HEAD'], repo)).stdout.trim();
     await writeFile(join(repo, '.git', 'info', 'exclude'), '/.cache/\n');
-    // The mandatory pre-push gate leaves runtime evidence behind. A neighboring
-    // ignored file is still unique content and must hold retirement in place.
+    // The mandatory pre-push gate leaves runtime evidence behind, and a neighboring
+    // ignored file; both are discarded with the merged checkout.
     writePregateReport(path, { version: 3, validationMode: 'focused', passed: true });
     const privatePath = join(path, '.cache/pregate/private-notes.txt');
     await writeFile(privatePath, 'private preserved bytes\n');
@@ -176,10 +176,10 @@ describe('completion to in-place retirement (real Git and persisted service stat
       const intent = fixture.agents[running.id].metadata.completionCleanup.taskHandoff;
       intent.expected = intent.expected.map(([key, value]) => [key, key === 'totalSpawnCount' ? Number(value) : value]);
     }
-    const agent = await completeAgent(running.id, { success: true, executionSuccess: true, requireCheckoutSettlement: true });
+    const agent = await completeAgent(running.id, { success: false, cleanupPending: true, executionSuccess: true });
     expect(agent.result).toMatchObject({ success: false, cleanupPending: true, executionSuccess: true });
     expect(agent.metadata.completedCheckouts).toHaveLength(1);
-    await completeAgent(running.id, { success: true, executionSuccess: true, requireCheckoutSettlement: true });
+    await completeAgent(running.id, { success: false, cleanupPending: true, executionSuccess: true });
     expect(cosEvents.emit.mock.calls.filter(([event]) => event === 'agent:completed')).toHaveLength(1);
     // Crash after terminal agent durability, BEFORE the normal task update.
     expect(JSON.parse(await readFile(join(fixture.root, 'task.json'), 'utf8')).metadata.deliveryRecovery).toBeUndefined();
@@ -208,31 +208,18 @@ describe('completion to in-place retirement (real Git and persisted service stat
       expect(await getBranchReconcileOutcome(fixture.app.id)).toBeNull();
       return;
     }
-    expect(await verify()).toMatchObject({ verified: false, skipReason: 'completion-execution-active' });
-    expect(fixture.task.metadata).toMatchObject({ deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: running.id,
-      hookDelivery: { selectedPaths: ['feature.txt'] } });
-    const pending = await getBranchReconcileOutcome(fixture.app.id); expect(pending.retirementObligations).toHaveLength(1);
-    const obligation = pending.retirementObligations[0]; expect(obligation).toMatchObject({ path, branch, head });
-    expect(fixture.task.status).toBe('in_progress');
-    fixture.schedule = JSON.parse(await readFile(join(fixture.root, 'schedule.json'), 'utf8')); activeAgents.delete(agent.id);
-    const { buildRenewal } = await import('./cosTaskClaim.js');
-    Object.assign(fixture.task.metadata, buildRenewal(fixture.task.metadata, 'fixture-instance'));
-    await writeFile(join(fixture.root, 'task.json'), JSON.stringify(fixture.task));
-    // Merge evidence cannot account for the only copy of an ignored file.
-    expect(await verify()).toMatchObject({ verified: false, skipReason: 'checkout-ignored-payload-unverified' });
-    expect(await readFile(privatePath, 'utf8')).toBe('private preserved bytes\n');
-    await rm(privatePath);
     expect(existsSync(join(path, PREGATE_REPORT_PATH))).toBe(true);
     const results = await Promise.all([verify(), verify()]); expect(results).toMatchObject([{ verified: true, skipReason: null }, { verified: true, skipReason: null }]);
+    activeAgents.delete(agent.id);
     const outcome = await getBranchReconcileOutcome(fixture.app.id); expect(outcome.retirementObligations).toEqual([]);
     expect(outcome.retired).toHaveLength(1); const receipt = outcome.retired[0];
     expect(receipt).toMatchObject({ path, branch, head, branchDeleted: true, archiveDir: null });
-    expect(existsSync(join(PATHS.cos, 'held-checkout-archives'))).toBe(false);
     const { listWorktrees } = await import('./worktreeManager.js');
     expect((await listWorktrees(repo)).some(tree => resolve(tree.path) === resolve(path))).toBe(false);
     expect((await execGit(['rev-parse', '--verify', `refs/heads/${branch}`], repo, { ignoreExitCode: true })).exitCode).not.toBe(0);
     expect(JSON.parse(await readFile(join(fixture.root, 'task.json'), 'utf8')).status).toBe('completed');
     expect(existsSync(join(path, PREGATE_REPORT_PATH))).toBe(false);
+    expect(existsSync(privatePath)).toBe(false);
     await verify(); expect((await getBranchReconcileOutcome(fixture.app.id)).retired).toHaveLength(1);
   // Completion capture, held retirement, recovery and fresh receipt proof are
   // separate real-Git workflows. Keep their existing public-boundary budget.

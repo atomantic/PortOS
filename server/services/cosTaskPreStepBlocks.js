@@ -292,7 +292,7 @@ ${DISPATCH_HINT_FANOUT_GUIDANCE}
 **Verify the ${pr} body's issue trailer after create AND after every edit.** The ${pr}-body flow is create-then-edit — the file is written once, then re-read minutes later during the review loop — which is a wide window for a stale or foreign body to land. Belt to the namespacing's braces: immediately after \`create\` and after each body \`edit\`, re-read the published body with \`${bodyCmd}\` — **note it takes no number: both CLIs resolve the ${pr} from your checked-out \`claim/issue-<num>\` branch, and passing an ISSUE number where a ${pr} number belongs is how you end up reading (and then "correcting") someone else's ${pr}** — and confirm the body carries this agent's own trailer. A full-scope ship MUST carry \`Closes #<num>\` for this issue; \`Refs #<num>\` is permitted ONLY for a deliberate partial ship that also records the required \`Done ✓ / Remaining ▢\` reconciliation comment. If it does not, rewrite the body from this agent's own scratch file and re-verify. **Cap this at 2 rewrites:** if the trailer still doesn't match, the scratch file itself is suspect — re-derive the body from your own branch's commits/diff for one final attempt, and if that also fails, STOP, leave the ${pr} open, and say so in the result you hand back. Never loop on it: Phase C waits for every agent to finish, so one agent stuck re-publishing blocks the whole batch's merges. And never assume a zero exit code means the right body was published.
 
 ## Phase C — Serialize only the merge instant (orchestrator, after all agents finish)
-Bring every ready ${pr} to a CI-verified head CONCURRENTLY, without merge admission: re-sync each onto the latest default branch, run pregate, push, run \`node scripts/pregate-attest.js\` when the repository ships it (on GitHub it posts the pregate receipt as a commit status so CI skips the attested stages; a refusal is reported in the summary, never retried), and gate on **required** CI on that exact head (one re-run on a flaky required check, then proceed; a real failure or an irreconcilable conflict leaves that ${pr} OPEN and recorded — move to the next). Then merge them ONE AT A TIME: for each green ${pr}, the parent orchestrator acquires the repository merge admission described in the Claim Workflow Handoff, re-reads the ${pr}, merges with \`${mergeCmd} ${mergePin}\` when the forge still reports it mergeable, and releases its own lease immediately (outcome merged). A ${pr} the forge no longer reports mergeable releases with outcome resync and goes back through the concurrent sync/pregate/CI step outside the lease; a base that moved while the ${pr} stays mergeable needs no resync. After all merges, run Phase 7 cleanup once per merged worktree.
+Bring every ready ${pr} to a CI-verified head CONCURRENTLY, without merge admission: re-sync each onto the latest default branch, run pregate, push, and gate on **required** CI on that exact head (one re-run on a flaky required check, then proceed; a real failure or an irreconcilable conflict leaves that ${pr} OPEN and recorded — move to the next). Then merge them ONE AT A TIME: for each green ${pr}, the parent orchestrator acquires the repository merge admission described in the Claim Workflow Handoff, re-reads the ${pr}, merges with \`${mergeCmd} ${mergePin}\` when the forge still reports it mergeable, and releases its own lease immediately (outcome merged). A ${pr} the forge no longer reports mergeable releases with outcome resync and goes back through the concurrent sync/pregate/CI step outside the lease; a base that moved while the ${pr} stays mergeable needs no resync. After all merges, run Phase 7 cleanup once per merged worktree.
 
 ${forgeKey === 'gh' ? MANAGED_WORKTREE_CLEANUP_CONTRACT : ''}
 
@@ -417,6 +417,135 @@ export async function resolveReconcileDrainGate(taskSchedule, taskType, app, { s
   return true;
 }
 
+const isCompletionReviewRequired = (branch) =>
+  branch.rule === 'completion-policy' && branch.completionPolicyReason === 'pr-completion-review-required';
+
+// A ready (non-draft) PR held only by completion review, with a clean, unowned
+// checkout: the deterministic delivery path can finish it without a coordinator.
+const isReviewHeldOpen = (branch) => Boolean(branch.openPr) && !branch.openPr.isDraft
+  && isCompletionReviewRequired(branch) && !branch.liveOwnerReason
+  && !branch.worktreeDirty && !branch.worktreeStatusUnavailable;
+
+const absentRetirementObligations = (outcome, result) => unresolvedRetirements(outcome)
+  .filter(release => !result.worktreeInventory?.some(tree => sameRetirementCheckout(tree, release)));
+
+/**
+ * A saved receipt already owns its PR. Wake that exact local successor before
+ * reading owners again; conflict recovery may have persisted a new owner.
+ * @returns {Promise<Set<string>|null|undefined>} undefined when the app holds no
+ *   receipt (reconcile gets no hint), null when the app record is unreadable
+ */
+async function readPendingMergeBranches(app, metadata) {
+  if (!app.pendingMergePrs?.length) return undefined;
+  const { nudgeLocalPendingMergePrs, readPendingMergePrs } = await import('./prWatcher.js');
+  const nudged = metadata.autoMerge !== false
+    ? await nudgeLocalPendingMergePrs(app.id).catch(() => ({ ok: false, reason: 'pending-merge-nudge-unavailable' }))
+    : { ok: true };
+  const { getAppById } = await import('./apps.js');
+  const current = await getAppById(app.id).catch(() => null);
+  if (!nudged?.ok) emitLog('warn', `branch-reconcile pending merge held for ${app.name}: ${nudged?.reason || 'unavailable'}`, { appId: app.id });
+  return current ? new Set(readPendingMergePrs(current).map(entry => entry.prBranch)) : null;
+}
+
+/**
+ * Prepare digest-bound retirement reviews when cleanup is enabled and the scan
+ * found completed local work (a completion-review hold, a retained merged claim,
+ * or a release-candidate tree). Returns the reviews plus the retirement
+ * obligations still absent from the inventory after preparation re-read them.
+ */
+async function prepareRetirementReviews(app, result, { cleanupMerged, heldLive, previousOutcome, absentObligations }) {
+  const { prepareReconcileRetirements, retainedMergedClaims } = await import('./branchReconcileRetirement.js');
+  const { releaseCandidateTrees } = await import('./branchReconcileReleaseCandidates.js');
+  const none = { retirementReviews: { candidates: [], held: [] }, latestAbsentObligations: absentObligations };
+  if (cleanupMerged === false) return none;
+  if (!result.wip?.some(isCompletionReviewRequired) && !retainedMergedClaims(result).length && !releaseCandidateTrees(result).length) return none;
+  const { describeIdleReconcilePark } = await import('./branchReconcile.js');
+  const { recordBranchReconcileOutcome, getBranchReconcileOutcome } = await import('./branchReconcileOutcome.js');
+  const inventory = describeIdleReconcilePark(result.skipped || [], heldLive, {
+    wip: result.wip, worktreeInventory: result.worktreeInventory,
+    detachedWorktrees: result.detachedWorktrees, superseded: result.superseded,
+  });
+  const prepOutcome = await recordBranchReconcileOutcome(app.id, {
+    status: 'running', reason: 'preparing-retirement-reviews', remaining: [...inventory.remaining, ...absentObligations],
+    nextAction: 'Review completed local work before verified archival retirement.',
+  });
+  const retirementReviews = await prepareReconcileRetirements(app, result);
+  const latestOutcome = (await getBranchReconcileOutcome(app.id)) || prepOutcome || previousOutcome;
+  return { retirementReviews, latestAbsentObligations: absentRetirementObligations(latestOutcome, result) };
+}
+
+// Fold branches the retirement pass already retired out of every scan list and
+// into `cleaned`, so the rest of the pre-step sees them as done.
+function dropRetiredBranches(result, retirementReviews) {
+  const retiredNames = new Set((retirementReviews.retired || []).map(row => row.branch));
+  if (!retiredNames.size) return;
+  const live = row => !retiredNames.has(row.branch);
+  result.wip = result.wip.filter(live);
+  result.merged = result.merged?.filter(live);
+  result.skipped = result.skipped.filter(live);
+  result.worktreeInventory = result.worktreeInventory.filter(live);
+  result.cleaned.push(...retiredNames);
+}
+
+/**
+ * Why an open PR on the delivery path is held rather than dispatched. The
+ * existing review-loop can merge; a resolve-only schedule cannot grant that
+ * authority by entering this earlier deterministic dispatch path.
+ */
+async function resolveDeliveryHoldReason(app, result, branch, actions) {
+  if (actions.autoMerge === false) return 'auto-merge-disabled';
+  const { inspectOpenDeliveryRepair } = await import('./repoCleanupObservation.js');
+  const delivery = await inspectOpenDeliveryRepair(app.repoPath, branch.branch, branch.openPr?.url, { forgeAccount: app.forgeAccount ?? null })
+    .catch(() => ({ reason: 'delivery-evidence-unavailable' }));
+  if (delivery.evidence?.conflicts && actions.resolveConflicts === false) return 'conflict-resolution-disabled';
+  const tree = result.worktreeInventory?.find(row => row.branch === branch.branch && row.path === branch.worktreePath);
+  if (!delivery.headSha || tree?.locked !== false) return delivery.reason || 'completed-review-target-unverified';
+  const { inspectOrQueueCompletedReview } = await import('./repoCleanupRecovery.js');
+  const review = await inspectOrQueueCompletedReview({ repoPath: app.repoPath,
+    branch: branch.branch, prUrl: branch.openPr.url, headSha: delivery.headSha, worktreePath: tree.path, forgeAccount: app.forgeAccount ?? null, repairEvidence: delivery.evidence })
+    .catch(() => ({ reason: 'completed-review-inspection-unavailable' }));
+  return review?.reason || delivery.reason || 'completed-review-target-unverified';
+}
+
+/**
+ * CI waiting and an open PR alone do not require a provider. Existing local
+ * receipts were nudged earlier; only current exact-head code repair is
+ * cognitive. Splits the in-flight set (plus review-held open PRs) into branches
+ * a coordinator must drive and routine delivery holds.
+ */
+async function classifyInFlightDelivery(app, result, actions) {
+  const routineDeliveryHolds = [];
+  const cognitiveInFlight = [];
+  const reviewHeldOpen = (result.wip || []).filter(isReviewHeldOpen);
+  for (const branch of [...result.inFlight, ...reviewHeldOpen]) {
+    if (branch.state !== 'IN_REVIEW' && !reviewHeldOpen.includes(branch)) { cognitiveInFlight.push(branch); continue; }
+    routineDeliveryHolds.push({ branch: branch.branch, reason: await resolveDeliveryHoldReason(app, result, branch, actions) });
+  }
+  return { cognitiveInFlight, routineDeliveryHolds };
+}
+
+// Every actionable branch was attempted at its current revision: park the full
+// set as no-progress so the sweep ends instead of re-dispatching it.
+async function parkUnchangedAttempts(taskSchedule, taskType, app, allActionable, idlePark) {
+  await taskSchedule.parkPerpetual(taskType, app.id, {
+    reason: 'no-progress', actionableCount: allActionable.length, signature: null, branchAttempts: null,
+    counts: { ...idlePark.counts, unchangedBranches: allActionable.length },
+    skipCauses: { ...idlePark.skipCauses, 'unchanged-after-attempt': allActionable.length },
+    notLaterThan: idlePark.notLaterThan
+  });
+}
+
+const MERGEABLE_RECONCILE_STATES = new Set(['NEEDS_PR', 'IN_REVIEW', 'CONFLICTED', 'ABANDONED_WIP']);
+
+// Only this deterministic scan writes the assignment. Schedule/run overrides
+// cannot supply it; registration snapshots it before any coordinator executes.
+const buildReconcileAssignment = (app, origin, actionable, actions) => (origin ? {
+  appId: app.id, repoPath: app.repoPath,
+  origin: { host: origin.host, fullName: origin.fullName },
+  targets: actionable.map(branch => ({ branch: branch.branch, workspacePath: branch.worktreePath || null,
+    merge: actions.autoMerge !== false && !branch.retirement && MERGEABLE_RECONCILE_STATES.has(branch.state) })),
+} : null);
+
 /**
  * branch-reconcile deterministic pre-step: run the peer-safe reconcile on the
  * app's repo (remove fully-merged orphaned local branches + worktrees, classify
@@ -430,21 +559,10 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
   if (taskType !== 'branch-reconcile') return { skip: false, block: '' };
   const { reconcile, filterActionable, limitBranchesForAgent, formatInFlightForPrompt, actionableSignature, describeIdleReconcilePark, buildActiveOwnerIds } = await import('./branchReconcile.js');
   const { formatSupersededForPrompt } = await import('./supersededLedger.js');
+  const { recordBranchReconcileOutcome, getBranchReconcileOutcome } = await import('./branchReconcileOutcome.js');
   const { getActiveAgentIds } = await import('./agentState.js');
   const { readClaimOwnershipAgents } = await import('./cosClaimOwnership.js');
-  // A saved receipt already owns its PR. Wake that exact local successor before
-  // reading owners again; conflict recovery may have persisted a new owner.
-  let pendingMergeBranches;
-  if (app.pendingMergePrs?.length) {
-    const { nudgeLocalPendingMergePrs, readPendingMergePrs } = await import('./prWatcher.js');
-    const nudged = metadata.autoMerge !== false
-      ? await nudgeLocalPendingMergePrs(app.id).catch(() => ({ ok: false, reason: 'pending-merge-nudge-unavailable' }))
-      : { ok: true };
-    const { getAppById } = await import('./apps.js');
-    const current = await getAppById(app.id).catch(() => null);
-    pendingMergeBranches = current ? new Set(readPendingMergePrs(current).map(entry => entry.prBranch)) : null;
-    if (!nudged?.ok) emitLog('warn', `branch-reconcile pending merge held for ${app.name}: ${nudged?.reason || 'unavailable'}`, { appId: app.id });
-  }
+  const pendingMergeBranches = await readPendingMergeBranches(app, metadata);
   const liveAgents = await readClaimOwnershipAgents().catch((err) => {
     emitLog('warn', `branch-reconcile skipped for ${app.name}: active agent state unreadable (${err.message})`, { appId: app.id, analysisType: taskType });
     return null;
@@ -486,14 +604,14 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
   // A failed scan is treated as transient (git/gh blip) — skip WITHOUT parking
   // so the next tick retries instead of waiting out a full recheck cadence.
   if (!result) {
-    await taskSchedule.recordBranchReconcileOutcome(app.id, { status: 'incomplete', reason: 'scan-unavailable', nextAction: 'Restore repository access and run branch reconciliation again.' });
+    await recordBranchReconcileOutcome(app.id, { status: 'incomplete', reason: 'scan-unavailable', nextAction: 'Restore repository access and run branch reconciliation again.' });
     return { skip: true };
   }
   // Same treatment for a cycle the reconciler skipped because `gh` was unreadable
   // (#3358): its empty in-flight set is "we could not ask", not "nothing to do",
   // so parking on it would sit out a full recheck cadence over a network blip.
   if (result.forgeUnavailable) {
-    await taskSchedule.recordBranchReconcileOutcome(app.id, { status: 'incomplete', reason: 'forge-unavailable', nextAction: 'Restore forge access and run branch reconciliation again.' });
+    await recordBranchReconcileOutcome(app.id, { status: 'incomplete', reason: 'forge-unavailable', nextAction: 'Restore forge access and run branch reconciliation again.' });
     emitLog('info', `🔀 branch-reconcile skipped for ${app.name}: forge unreachable (gh ${result.forgeStatus || 'error'})`, { appId: app.id, analysisType: taskType });
     return { skip: true };
   }
@@ -503,7 +621,7 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
   // rather than parking. Merged branches were still cleaned (git truth), so log
   // that before bailing.
   if (result.prStateUnavailable) {
-    await taskSchedule.recordBranchReconcileOutcome(app.id, { status: 'incomplete', reason: 'pr-state-unavailable', nextAction: 'Restore pull request access and run branch reconciliation again.' });
+    await recordBranchReconcileOutcome(app.id, { status: 'incomplete', reason: 'pr-state-unavailable', nextAction: 'Restore pull request access and run branch reconciliation again.' });
     emitLog('info', `🔀 branch-reconcile deferred for ${app.name}: PR state unreadable this cycle (cleaned ${result.cleaned.length} merged branch(es))`, { appId: app.id, analysisType: taskType });
     return { skip: true };
   }
@@ -531,81 +649,31 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
   const detachedSuffix = countSuffix(result.detachedWorktrees, 'detached worktree(s) held back', (d) => d.reason);
   // Publish the exact release rows before preparing the live preview. Proof
   // objects may be fetched, but only a reviewed digest authorizes retirement.
-  const observedOutcome = await taskSchedule.getBranchReconcileOutcome(app.id);
+  const observedOutcome = await getBranchReconcileOutcome(app.id);
   const { reconcileLegacyRetirementRecords } = await import('./legacyRetirementReconciliation.js');
   const previousOutcome = await reconcileLegacyRetirementRecords(app.id, observedOutcome).catch(() => observedOutcome);
-  const unresolved = unresolvedRetirements(previousOutcome);
-  const absentObligations = unresolved.filter(release => !result.worktreeInventory?.some(tree => sameRetirementCheckout(tree, release)));
-  let retirementReviews = { candidates: [], held: [] };
-  const { prepareReconcileRetirements, retainedMergedClaims } = await import('./branchReconcileRetirement.js');
-  let latestAbsentObligations = absentObligations;
-  if (actions.cleanupMerged !== false && (result.wip?.some(branch => branch.rule === 'completion-policy' && branch.completionPolicyReason === 'pr-completion-review-required')
-    || retainedMergedClaims(result).length)) {
-    const inventory = describeIdleReconcilePark(result.skipped || [], heldLive, {
-      wip: result.wip, worktreeInventory: result.worktreeInventory,
-      detachedWorktrees: result.detachedWorktrees, superseded: result.superseded,
-    });
-    const prepOutcome = await taskSchedule.recordBranchReconcileOutcome(app.id, {
-      status: 'running', reason: 'preparing-retirement-reviews', remaining: [...inventory.remaining, ...absentObligations],
-      nextAction: 'Review completed local work before verified archival retirement.',
-    });
-    retirementReviews = await prepareReconcileRetirements(app, result);
-    const latestOutcome = (await taskSchedule.getBranchReconcileOutcome(app.id)) || prepOutcome || previousOutcome;
-    latestAbsentObligations = unresolvedRetirements(latestOutcome)
-      .filter(release => !result.worktreeInventory?.some(tree => sameRetirementCheckout(tree, release)));
-  }
-  const retiredNames = new Set((retirementReviews.retired || []).map(row => row.branch));
-  if (retiredNames.size) {
-    result.wip = result.wip.filter(row => !retiredNames.has(row.branch));
-    result.merged = result.merged?.filter(row => !retiredNames.has(row.branch));
-    result.skipped = result.skipped.filter(row => !retiredNames.has(row.branch));
-    result.worktreeInventory = result.worktreeInventory.filter(row => !retiredNames.has(row.branch));
-    result.cleaned.push(...retiredNames);
-  }
-  // CI waiting and an open PR alone do not require a provider. Existing local
-  // receipts were nudged above; only current exact-head code repair is cognitive.
-  const routineDeliveryHolds = [];
-  const cognitiveInFlight = [];
-  const { inspectOpenDeliveryRepair } = await import('./repoCleanupObservation.js');
-  const { inspectOrQueueCompletedReview } = await import('./repoCleanupRecovery.js');
-  const reviewHeldOpen = (result.wip || []).filter(branch => branch.openPr && !branch.openPr.isDraft
-    && branch.rule === 'completion-policy' && branch.completionPolicyReason === 'pr-completion-review-required' && !branch.liveOwnerReason
-    && !branch.worktreeDirty && !branch.worktreeStatusUnavailable);
-  for (const branch of [...result.inFlight, ...reviewHeldOpen]) {
-    if (branch.state !== 'IN_REVIEW' && !reviewHeldOpen.includes(branch)) { cognitiveInFlight.push(branch); continue; }
-    // The existing review-loop can merge. A resolve-only schedule cannot grant
-    // that authority by entering this earlier deterministic dispatch path.
-    if (actions.autoMerge === false) {
-      routineDeliveryHolds.push({ branch: branch.branch, reason: 'auto-merge-disabled' });
-      continue;
-    }
-    const delivery = await inspectOpenDeliveryRepair(app.repoPath, branch.branch, branch.openPr?.url, { forgeAccount: app.forgeAccount ?? null })
-      .catch(() => ({ reason: 'delivery-evidence-unavailable' }));
-    if (delivery.evidence?.conflicts && actions.resolveConflicts === false) {
-      routineDeliveryHolds.push({ branch: branch.branch, reason: 'conflict-resolution-disabled' });
-      continue;
-    }
-    const tree = result.worktreeInventory?.find(row => row.branch === branch.branch && row.path === branch.worktreePath);
-    const review = delivery.headSha && tree?.locked === false ? await inspectOrQueueCompletedReview({ repoPath: app.repoPath,
-      branch: branch.branch, prUrl: branch.openPr.url, headSha: delivery.headSha, worktreePath: tree.path, forgeAccount: app.forgeAccount ?? null, repairEvidence: delivery.evidence })
-      .catch(() => ({ reason: 'completed-review-inspection-unavailable' })) : null;
-    routineDeliveryHolds.push({ branch: branch.branch, reason: review?.reason || delivery.reason || 'completed-review-target-unverified' });
-  }
+  const { retirementReviews, latestAbsentObligations } = await prepareRetirementReviews(app, result, {
+    cleanupMerged: actions.cleanupMerged, heldLive, previousOutcome,
+    absentObligations: absentRetirementObligations(previousOutcome, result),
+  });
+  dropRetiredBranches(result, retirementReviews);
+  const { cognitiveInFlight, routineDeliveryHolds } = await classifyInFlightDelivery(app, result, actions);
   const allActionable = filterActionable([...cognitiveInFlight, ...retirementReviews.candidates], actions);
   const actionableNames = new Set(allActionable.map(branch => branch.branch));
-  const filteredSkipped = (result.skipped || []).filter(row =>
-    !actionableNames.has(row.branch)
-    && !retirementReviews.held.some(held => held.branch === row.branch)
-    && !routineDeliveryHolds.some(held => held.branch === row.branch));
-  const idlePark = describeIdleReconcilePark([...filteredSkipped, ...retirementReviews.held, ...latestAbsentObligations, ...routineDeliveryHolds], heldLive, {
-    wip: result.wip?.filter(branch => !actionableNames.has(branch.branch) && !retirementReviews.held.some(held => held.branch === branch.branch) && !routineDeliveryHolds.some(held => held.branch === branch.branch)), detachedWorktrees: result.detachedWorktrees, superseded: result.superseded,
+  // A row already accounted for as actionable, a held retirement, or a routine
+  // delivery hold is reported there, so the idle inventory must not repeat it.
+  const accountedNames = new Set([...actionableNames,
+    ...retirementReviews.held.map(held => held.branch), ...routineDeliveryHolds.map(held => held.branch)]);
+  const unaccounted = row => !accountedNames.has(row.branch);
+  const idlePark = describeIdleReconcilePark([...(result.skipped || []).filter(unaccounted), ...retirementReviews.held, ...latestAbsentObligations, ...routineDeliveryHolds], heldLive, {
+    wip: result.wip?.filter(unaccounted), detachedWorktrees: result.detachedWorktrees, superseded: result.superseded,
     claimMarkersHeld: result.claimMarkersHeld,
     worktreeInventory: result.worktreeInventory?.filter(tree => !actionableNames.has(tree.branch)) ?? result.worktreeInventory,
     gated: cognitiveInFlight.filter(branch => !allActionable.includes(branch))
   });
   // This is a scan outcome, not the coordinator's success flag or a claim that
   // the repository contains only its default branch. Keep known holds visible.
-  const dispatchedOutcome = await taskSchedule.recordBranchReconcileOutcome(app.id, {
+  const dispatchedOutcome = await recordBranchReconcileOutcome(app.id, {
     status: 'running', reason: 'batch-pending',
     // Shared-origin branches without a local ref/checkout may belong to another
     // install. Keep their report visible without making local completion wait
@@ -653,12 +721,7 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
     allActionable.filter(b => !Object.hasOwn(branchAttempts, b.branch)), metadata.branchesPerAgent
   );
   if (!actionable.length) {
-    await taskSchedule.parkPerpetual(taskType, app.id, {
-      reason: 'no-progress', actionableCount: allActionable.length, signature: null, branchAttempts: null,
-      counts: { ...idlePark.counts, unchangedBranches: allActionable.length },
-      skipCauses: { ...idlePark.skipCauses, 'unchanged-after-attempt': allActionable.length },
-      notLaterThan: idlePark.notLaterThan,
-    });
+    await parkUnchangedAttempts(taskSchedule, taskType, app, allActionable, idlePark);
     return { skip: true };
   }
   for (const branch of actionable) branchAttempts[branch.branch] = actionableSignature([branch]);
@@ -680,26 +743,13 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
   }
   actionable = admitted;
   if (!actionable.length) {
-    await taskSchedule.parkPerpetual(taskType, app.id, {
-      reason: 'no-progress', actionableCount: allActionable.length, signature: null, branchAttempts: null,
-      counts: { ...idlePark.counts, unchangedBranches: allActionable.length },
-      skipCauses: { ...idlePark.skipCauses, 'unchanged-after-attempt': allActionable.length },
-      notLaterThan: idlePark.notLaterThan
-    });
+    await parkUnchangedAttempts(taskSchedule, taskType, app, allActionable, idlePark);
     emitLog('info', `🔀 branch-reconcile parked for ${app.name}: all ${allActionable.length} branch(es) were attempted without further progress`, { appId: app.id });
     return { skip: true };
   }
-  // Only this deterministic scan writes the assignment. Schedule/run overrides
-  // cannot supply it; registration snapshots it before any coordinator executes.
   const { getOriginInfo } = await import('../lib/gitRemote.js');
   const origin = await getOriginInfo(app.repoPath).catch(() => null);
-  metadata.reconcileAssignment = origin ? {
-    appId: app.id, repoPath: app.repoPath,
-    origin: { host: origin.host, fullName: origin.fullName },
-    targets: actionable.map(branch => ({ branch: branch.branch, workspacePath: branch.worktreePath || null,
-      merge: actions.autoMerge !== false && !branch.retirement
-        && ['NEEDS_PR', 'IN_REVIEW', 'CONFLICTED', 'ABANDONED_WIP'].includes(branch.state) })),
-  } : null;
+  metadata.reconcileAssignment = buildReconcileAssignment(app, origin, actionable, actions);
   metadata.perpetual = true;
   metadata.reconcileRetirements = actionable.filter(branch => branch.retirement).map(branch => ({
     ...branch.retirement,

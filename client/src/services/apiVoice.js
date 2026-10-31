@@ -21,6 +21,9 @@ export const listVoiceEngines = (options) => api.get('/voice/engines', options);
 export const promoteVoicePreset = (payload, options) => api.post('/voice/profiles/preset', payload, options);
 export const createVoiceDesignCandidate = (payload, options) => api.post('/voice/profiles/design', payload, options);
 export const createClonedVoiceCandidate = (payload, options) => api.post('/voice/profiles/clone', payload, options);
+export const deleteVoiceProfile = (profileId, options) => api.delete(
+  `/voice/profiles/${encodeURIComponent(profileId)}`, options,
+);
 export const promoteVoiceProfile = (profileId, payload = {}, options) => api.post(
   `/voice/profiles/${encodeURIComponent(profileId)}/promote`, payload, options,
 );

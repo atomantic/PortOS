@@ -2,6 +2,7 @@ import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
 import { errorMiddleware } from '../../lib/errorHandler.js';
 import { request } from '../../lib/testHelper.js';
+import { defaultStoryboardSystemPrompt, effectiveRecipe } from '../../lib/storyboardRecipe.js';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 
 vi.mock('../../lib/fileUtils.js', async (importOriginal) =>
@@ -44,16 +45,63 @@ beforeEach(() => {
   });
 });
 
-async function boardWithPanel(panel = { action: 'She pushes open the gym doors', framing: 'wide' }) {
+// The optional prompt enhancer wired between the shot and the image, as a
+// board that adds one has it (the default recipe sends the shot as written).
+const writerRecipe = (board) => {
+  const recipe = effectiveRecipe(board);
+  return {
+    nodes: [
+      ...recipe.nodes.map((node) => (node.id === 'node-system' ? { ...node, text: defaultStoryboardSystemPrompt(board.artStyle) } : node)),
+      { id: 'node-writer', type: 'llm', title: 'Prompt writer', x: 360, y: 120, text: '', settings: { providerId: '', model: '', effort: '' } },
+    ],
+    edges: [
+      { from: 'node-text', to: 'node-writer', toPort: 'prompt' },
+      { from: 'node-system', to: 'node-writer', toPort: 'system' },
+      { from: 'node-writer', to: 'node-image', toPort: 'prompt' },
+      ...recipe.edges.filter((edge) => edge.from !== 'node-text' && edge.from !== 'node-system'),
+    ],
+  };
+};
+
+async function boardWithPanel(panel = { action: 'She pushes open the gym doors', framing: 'wide' }, { writer = true } = {}) {
   const { body: board } = await api('post', '/', { name: 'Example Story', aspectRatio: '9:16' });
   const beatId = (await api('post', `/${board.id}/beats`, { title: 'Arrival', what: 'She arrives' })).body.beatId;
   const { panelId } = (await api('post', `/${board.id}/beats/${beatId}/panels`, panel)).body;
+  if (writer) await api('put', `/${board.id}/recipe`, { recipe: writerRecipe(board) });
   return { id: board.id, panelId };
 }
 
 const nodeState = (board, nodeId) => board.beats[0].panels[0].make?.nodes?.[nodeId];
 
 describe('storyboard panel maker', () => {
+  // Uniquely catches the default recipe calling an LLM, the style reaching the model unlisted or out of order,
+  // or a stored camera move fighting the picked framing and angle.
+  it('draws from the shot as written with the style after it, listed, and no LLM call', async () => {
+    const { id, panelId } = await boardWithPanel({ action: 'She pushes open the gym doors', framing: 'over-the-shoulder', angle: 'low', facing: 'back', composition: 'cut-left', lens: 'telephoto', focus: 'shallow-focus', eyeline: 'into-lens', move: 'push-in', camera: 'slow push in', dialogue: 'Example lyric' }, { writer: false });
+    const drawn = await api('post', `/${id}/panels/${panelId}/draw`);
+    expect(drawn.status).toBe(200);
+    expect(runPrompt).not.toHaveBeenCalled();
+    const { prompt } = enqueue.mock.calls[0][0].params;
+    const state = nodeState(drawn.body, 'node-image');
+    const [style] = state.promptAdditions;
+    expect(style).toMatchObject({ id: 'style', label: 'Style (Storyboard style)' });
+    expect(prompt).toBe(`She pushes open the gym doors\nFraming: over-the-shoulder shot.\nAngle: low angle looking up.\nSubject: rear view from directly behind, the subject faces away from the camera, only their back and the back of the head visible, no face.\nComposition: the subject at the left edge of the frame, partly cut off by the edge, the rest of the frame open.\nLens: telephoto lens, compressed background, shallow depth of field, the background blurred.\nEyes: looking straight into the lens, eye contact with the viewer.\n\n${style.text}`);
+    expect(prompt).not.toContain('Example lyric');
+    expect(prompt).not.toContain('slow push in');
+    expect(prompt).not.toMatch(/pushes in/);
+    expect(state.sentPrompt).toBe(prompt);
+
+    // A correction goes to the image model as written too, beside the frame it starts from.
+    await attachPanelFrame({ ...enqueue.mock.calls[0][0].params.storyboardPanelRender, jobId: 'job-1', filename: 'drawn.png' });
+    const take = (await api('get', `/${id}`)).body.beats[0].panels[0].takes[0];
+    const corrected = await api('post', `/${id}/panels/${panelId}/correct`, { takeId: take.id, note: 'Lower angle' });
+    expect(corrected.status).toBe(200);
+    expect(runPrompt).not.toHaveBeenCalled();
+    const sent = enqueue.mock.calls[1][0].params;
+    expect(sent.prompt).toContain('Redraw the first reference frame with this change: Lower angle');
+    expect(nodeState(corrected.body, 'node-image').promptAdditions.map((a) => a.id)).toEqual(['correction', 'style']);
+  });
+
   it('writes a prompt from the panel words and the visible system prompt, recording exactly what was sent', async () => {
     const { id, panelId } = await boardWithPanel();
     const res = await api('post', `/${id}/panels/${panelId}/make/node-writer/run`);
@@ -61,7 +109,7 @@ describe('storyboard panel maker', () => {
 
     const sent = runPrompt.mock.calls[0][0].prompt;
     expect(sent).toContain('You write one prompt for an image model.');
-    expect(sent).toContain('She pushes open the gym doors\nFraming: wide');
+    expect(sent).toContain('She pushes open the gym doors\nFraming: wide establishing shot.');
     const state = nodeState(res.body, 'node-writer');
     expect(state).toMatchObject({ status: 'done', text: 'A wide pencil frame of gym doors', providerId: 'example-api', model: 'example-model', sentPrompt: sent });
     expect(state.promptAdditions.map((a) => a.id)).toEqual(['creative-latitude', 'system-prompt']);
@@ -83,6 +131,10 @@ describe('storyboard panel maker', () => {
     const { id, panelId } = await boardWithPanel({ action: 'Doors', castIds: ['cat-example-1'] });
     await api('post', `/${id}/panels/${panelId}/takes`, { source: 'upload', image: 'chosen.png' });
     await api('patch', `/${id}/panels/${panelId}/make/node-writer`, { text: 'A wide frame' });
+    // The recipe draws one frame by default; this board asks for four.
+    const { recipe } = (await api('get', `/${id}`)).body;
+    recipe.nodes.find((node) => node.id === 'node-image').settings.count = 4;
+    await api('put', `/${id}/recipe`, { recipe });
 
     const run = await api('post', `/${id}/panels/${panelId}/make/node-image/run`);
     expect(run.status).toBe(200);
@@ -102,6 +154,57 @@ describe('storyboard panel maker', () => {
     expect(panel.takes.map((t) => t.image)).toEqual(['chosen.png', 'job-1.png', 'job-2.png', 'job-3.png']);
     expect(panel.selectedTakeId).toBe(panel.takes[0].id);
     expect(nodeState(board, 'node-image')).toMatchObject({ status: 'done', takeIds: panel.takes.slice(1).map((t) => t.id), failedJobIds: ['job-4'] });
+  });
+
+  it('corrects a frame: the writer redoes its prompt with the note, then new frames start from the marked-up frame', async () => {
+    const { mkdir, writeFile } = await import('node:fs/promises');
+    const { join } = await import('node:path');
+    const { PATHS } = await import('../../lib/fileUtils.js');
+    await mkdir(join(PATHS.data, 'media-sketches'), { recursive: true });
+    const markup = join(PATHS.data, 'media-sketches', 'composite.png');
+    await writeFile(markup, Buffer.from('89504e470d0a1a0a', 'hex'));
+    __setDepsForTests({ markupPath: async (key) => (key === 'image:frame-a.png' ? markup : null) });
+
+    const { id, panelId } = await boardWithPanel({ action: 'Doors' });
+    const marked = (await api('post', `/${id}/panels/${panelId}/takes`, { source: 'upload', image: 'frame-a.png' })).body.takeId;
+    const plain = (await api('post', `/${id}/panels/${panelId}/takes`, { source: 'upload', image: 'frame-b.png' })).body.takeId;
+    await api('patch', `/${id}/panels/${panelId}/make/node-writer`, { text: 'A wide frame of the doors' });
+
+    const res = await api('post', `/${id}/panels/${panelId}/correct`, { takeId: marked, note: 'Move her to the left third' });
+    expect(res.status).toBe(200);
+    const sent = runPrompt.mock.calls[0][0].prompt;
+    expect(sent).toContain('A wide frame of the doors');
+    expect(sent).toContain('asks for this change: "Move her to the left third"');
+    const writer = nodeState(res.body, 'node-writer');
+    expect(writer.promptAdditions.map((a) => a.id)).toEqual(['creative-latitude', 'system-prompt', 'correction']);
+    expect(writer.text).toBe('A wide pencil frame of gym doors');
+
+    const image = nodeState(res.body, 'node-image');
+    expect(image.sentPrompt).toBe('A wide pencil frame of gym doors');
+    expect(image.sentRefs[0]).toEqual({ image: expect.stringMatching(/^ref-[0-9a-f-]+\.png$/), label: 'Marked-up frame' });
+    expect(enqueue.mock.calls[0][0].params.referenceImagePaths[0]).toMatch(/image-refs\/ref-[0-9a-f-]+\.png$/);
+    // The selection is not moved by a correction.
+    expect(res.body.beats[0].panels[0].selectedTakeId).toBe(plain);
+
+    // A writer that fails stops the correction before any frame is queued.
+    runPrompt.mockRejectedValueOnce(new Error('Provider offline'));
+    const calls = enqueue.mock.calls.length;
+    const failed = await api('post', `/${id}/panels/${panelId}/correct`, { takeId: plain, note: 'Darker' });
+    expect(failed.status).toBe(502);
+    expect(failed.body.error).toContain('Provider offline');
+    expect(enqueue.mock.calls.length).toBe(calls);
+
+    // A frame with no markup starts from the frame itself.
+    const again = await api('post', `/${id}/panels/${panelId}/correct`, { takeId: plain, note: 'Darker' });
+    expect(nodeState(again.body, 'node-image').sentRefs[0]).toEqual({ image: 'frame-b.png', label: 'Current frame' });
+  });
+
+  it('refuses to correct a sketch take', async () => {
+    const { id, panelId } = await boardWithPanel({ action: 'Doors' });
+    const sketch = (await api('post', `/${id}/panels/${panelId}/takes`, { source: 'sketch', sketchKey: 'sketch:abc-123' })).body.takeId;
+    expect((await api('post', `/${id}/panels/${panelId}/correct`, { takeId: sketch, note: 'Wider' })).status).toBe(400);
+    expect(runPrompt).not.toHaveBeenCalled();
+    expect(enqueue).not.toHaveBeenCalled();
   });
 
   it('refuses an over-limit image prompt with its count rather than cutting it', async () => {
@@ -174,7 +277,7 @@ describe('storyboard panel maker', () => {
     const plan = await api('get', `/${id}/make-empty`);
     expect(plan.body).toMatchObject({ batch: null, panelCount: 2 });
     expect(plan.body.steps.map((step) => [step.nodeId, step.model, step.frames])).toEqual([
-      ['node-writer', 'Example · example-model', 0], ['node-image', 'Default image model', 4],
+      ['node-writer', 'Example · example-model', 0], ['node-image', 'Default image model', 1],
     ]);
 
     // Signals from the mocks themselves, so the test never polls against a wall-clock budget on a slow runner.
@@ -197,9 +300,54 @@ describe('storyboard panel maker', () => {
     expect(runPrompt).toHaveBeenCalledTimes(1);
     expect(runPrompt.mock.calls[0][0].prompt).toContain('Gym floor');
     expect(enqueue.mock.calls.map((call) => [call[0].params.prompt, call[0].params.storyboardPanelRender.panelId])).toEqual([
-      ...Array(4).fill(['My hallway prompt', written]), ...Array(4).fill(['A gym floor frame', blank]),
+      ['My hallway prompt', written], ['A gym floor frame', blank],
     ]);
     expect((await api('get', `/${id}/make-empty`)).body.batch).toBeNull();
+  });
+
+  it('redraws every panel: rewrites each prompt, draws one frame, and selects it when asked', async () => {
+    const { id, panelId: framed } = await boardWithPanel({ action: 'Doors' });
+    const beatId = (await api('get', `/${id}`)).body.beats[0].id;
+    await api('post', `/${id}/panels/${framed}/takes`, { source: 'upload', image: 'still.png' });
+    await api('patch', `/${id}/panels/${framed}/make/node-writer`, { text: 'An old photographic prompt' });
+    const blank = (await api('post', `/${id}/beats/${beatId}/panels`, { action: 'Gym floor' })).body.panelId;
+    expect((await api('get', `/${id}/make-empty`)).body).toMatchObject({ panelCount: 1, allCount: 2 });
+
+    const finished = new Promise((resolve) => { onBatchEvent = (event) => { if (event.status === 'done') resolve(event); }; });
+    const start = await api('post', `/${id}/make-empty`, { redraw: true, selectNew: true });
+    expect(start.status).toBe(202);
+    expect(start.body.batch).toMatchObject({ redraw: true, total: 2 });
+    expect(await finished).toMatchObject({ done: 2, failed: 0 });
+    // Both prompts were rewritten, and each panel got one frame.
+    expect(runPrompt).toHaveBeenCalledTimes(2);
+    expect(enqueue.mock.calls.map((call) => call[0].params.storyboardPanelRender.panelId)).toEqual([framed, blank]);
+
+    const tag = (n) => enqueue.mock.calls[n][0].params.storyboardPanelRender;
+    await attachPanelFrame({ ...tag(0), jobId: 'job-1', filename: 'drawn-a.png' });
+    await attachPanelFrame({ ...tag(1), jobId: 'job-2', filename: 'drawn-b.png' });
+    const { body: board } = await api('get', `/${id}`);
+    const [a, b] = board.beats[0].panels;
+    // The new drawing is the art; the old still stays as a take.
+    expect(a.takes.map((t) => t.image)).toEqual(['still.png', 'drawn-a.png']);
+    expect(a.selectedTakeId).toBe(a.takes[1].id);
+    expect(b.takes.find((t) => t.id === b.selectedTakeId).image).toBe('drawn-b.png');
+  });
+
+  // Uniquely catches Draw panel skipping the prompt rewrite, drawing more than one frame, not selecting it, or stacking runs.
+  it('draws one panel: rewrites its prompt, queues one frame that becomes its art, and refuses while it is drawing', async () => {
+    const { id, panelId } = await boardWithPanel({ action: 'Doors' });
+    await api('post', `/${id}/panels/${panelId}/takes`, { source: 'upload', image: 'still.png' });
+    await api('patch', `/${id}/panels/${panelId}/make/node-writer`, { text: 'An old photographic prompt' });
+
+    const drawn = await api('post', `/${id}/panels/${panelId}/draw`);
+    expect(drawn.status).toBe(200);
+    expect(runPrompt).toHaveBeenCalledTimes(1);
+    expect(enqueue).toHaveBeenCalledTimes(1);
+    expect((await api('post', `/${id}/panels/${panelId}/draw`)).status).toBe(409);
+
+    await attachPanelFrame({ ...enqueue.mock.calls[0][0].params.storyboardPanelRender, jobId: 'job-1', filename: 'drawn.png' });
+    const [panel] = (await api('get', `/${id}`)).body.beats[0].panels;
+    expect(panel.takes.find((t) => t.id === panel.selectedTakeId).image).toBe('drawn.png');
   });
 
   it('keeps a library of named recipes any board can load as a copy', async () => {

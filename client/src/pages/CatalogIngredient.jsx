@@ -10,10 +10,9 @@
 import CatalogReferenceLibrary from '../components/catalog/CatalogReferenceLibrary.jsx';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams, useLocation, Link } from 'react-router';
-import { Save, Trash2, ArrowLeft, Loader2, Plus, X, History, RotateCcw, Image as ImageIcon, ChevronDown, Upload, Mic, Square, UserRound, LayoutGrid, Images, Clapperboard, Shirt, Box } from 'lucide-react';
+import { Save, Trash2, ArrowLeft, Loader2, Plus, X, History, RotateCcw, Image as ImageIcon, ChevronDown, Upload, Mic, Square, UserRound, LayoutGrid, Images, Clapperboard, Shirt, Box, Wand2 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import FilePickerButton from '../components/ui/FilePickerButton';
-import Modal from '../components/ui/Modal.jsx';
 import ConfirmButtonPair from '../components/ui/ConfirmButtonPair.jsx';
 import UnsavedChangesConfirm from '../components/ui/UnsavedChangesConfirm.jsx';
 import PageSkeleton from '../components/ui/PageSkeleton';
@@ -22,6 +21,7 @@ import {
   getCatalogIngredientDetails,
   updateCatalogIngredient,
   deleteCatalogIngredient,
+  linkCatalogIngredient,
   linkCatalogIngredientRelation,
   unlinkCatalogIngredientRelation,
   listCatalogIngredientRevisions,
@@ -37,14 +37,13 @@ import {
 } from '../services/apiCatalog';
 import { arrayBufferToBase64 } from '../lib/audioRecorder';
 import useMemoRecorder from '../hooks/useMemoRecorder';
-import { useGalleryPage } from '../hooks/useGalleryPage';
 import socket from '../services/socket';
 import AddToThreadButton from '../components/threads/AddToThreadButton';
 import { getCanonCatalogContext } from '../services/canonCatalogContext';
 import { getUniverse } from '../services/apiUniverseBuilder';
 import useMounted from '../hooks/useMounted';
 import IngredientPicker from '../components/IngredientPicker';
-import MediaImage from '../components/MediaImage';
+import GalleryImagePicker from '../components/imageGen/GalleryImagePicker';
 import GenerateImageControl from '../components/catalog/GenerateImageControl';
 import MediaJobThumb from '../components/pipeline/MediaJobThumb';
 import { buildGenerationPromptSeed } from '../lib/catalogImagePrompt';
@@ -57,6 +56,7 @@ import CatalogUnlockNotice from '../components/catalog/CatalogUnlockNotice';
 import CatalogPlatesPanel from '../components/catalog/CatalogPlatesPanel';
 import GreyboxPanel from '../components/catalog/GreyboxPanel';
 import CatalogLooksPanel from '../components/catalog/CatalogLooksPanel';
+import CatalogDesignPanel from '../components/catalog/CatalogDesignPanel';
 import CharacterDetailEditor from '../components/universe/CharacterDetailEditor';
 import { RevealTimingField } from '../components/pipeline/CanonCard';
 import CanonReferenceRemoval from '../components/catalog/CanonReferenceRemoval';
@@ -77,7 +77,7 @@ import useUnsavedChangesGuard from '../hooks/useUnsavedChangesGuard';
 import { getCatalogType, CATALOG_BADGE_BY_ID, RELATION_KINDS, getRelationKind, isFamilyRelationKind } from '../lib/catalogTypes';
 import {
   libraryForPathname, ingredientPath, ingredientCoverUrl, resolveDetailTab, detailTabPath,
-  isSheetMedia, isPlateMedia, isReferenceTabMedia, lookIdOf,
+  isSheetMedia, isPlateMedia, isDesignMedia, isReferenceTabMedia, lookIdOf,
 } from '../lib/creativeLibraries';
 import { useCatalogTypes } from '../hooks/useCatalogTypes.jsx';
 import { timeAgo, formatDateTime } from '../utils/formatters';
@@ -95,6 +95,7 @@ import { safeReadJsonSession, safeWriteJsonSession, safeRemoveSession } from '..
 // order; that is not an edit the user needs to save.
 const DETAIL_TAB_ICONS = {
   profile: UserRound,
+  design: Wand2,
   sheets: LayoutGrid,
   looks: Shirt,
   plates: Clapperboard,
@@ -149,7 +150,9 @@ function IngredientEditor() {
   const library = libraryForPathname(pathname);
   const detailView = library ? 'profile' : undefined;
   const requestedBack = new URLSearchParams(search).get('returnTo') || '';
-  const backPath = /^\/(?:casting(?:\?|$)|universes\/[^/?#]+(?:\?|$))/.test(requestedBack) ? requestedBack : library?.path || '/catalog';
+  // A music video's Cast & Sets links here to revise a look and comes back to its stage.
+  const backToVideo = /^\/music-video\/[^/?#]+(?:\/[^/?#]+)?(?:\?|#|$)/.test(requestedBack);
+  const backPath = backToVideo || /^\/(?:casting(?:\?|$)|universes\/[^/?#]+(?:\?|$))/.test(requestedBack) ? requestedBack : library?.path || '/catalog';
   const profileActive = !library || resolveDetailTab(library, tabParam) === 'profile';
   const [profileVisited, setProfileVisited] = useState(profileActive);
   useEffect(() => { if (profileActive) setProfileVisited(true); }, [profileActive]);
@@ -191,6 +194,8 @@ function IngredientEditor() {
   const [mediaReady, setMediaReady] = useState(false);
   const [mediaLoading, setMediaLoading] = useState(false);
   const [mediaError, setMediaError] = useState(null);
+  // A redesign-assistant proposal waiting to be saved onto a new fork.
+  const [redesignFork, setRedesignFork] = useState(null);
   const mediaSequence = useRef(0);
   const sheetPointerSequence = useRef(0);
   const mediaReadyRef = useRef(false);
@@ -200,22 +205,34 @@ function IngredientEditor() {
   const [ownerEntryId, setOwnerEntryId] = useState(null);
   const [ownerUniverse, setOwnerUniverse] = useState(null);
   const [ownerContextError, setOwnerContextError] = useState(null);
+  // Owned by a universe but not in its cast: re-reading the context cannot help,
+  // so the page offers to add the record to that cast instead of a retry.
+  const [ownerCanonMissing, setOwnerCanonMissing] = useState(false);
+  const [joiningCanon, setJoiningCanon] = useState(false);
   const [contextVersion, setContextVersion] = useState(0);
   const [contextRequested, setContextRequested] = useState(false);
   const onCharacterPageChange = useCallback(page => { if (page === 'story' || page === 'voice') setContextRequested(true); }, []);
   const ownerUniverseId = record?.universeContext?.owner?.refId || null;
   useEffect(() => {
     let active = true;
-    setOwnerUniverse(null); setOwnerEntryId(null); setOwnerContextError(null);
+    setOwnerUniverse(null); setOwnerEntryId(null); setOwnerContextError(null); setOwnerCanonMissing(false);
     if (!ownerUniverseId || !contextRequested && record?.type !== 'object') return;
     const load = record.type === 'character'
       ? getCanonCatalogContext(ownerUniverseId, record.id, record.type, { silent: true })
       : getUniverse(ownerUniverseId, { silent: true }).then(universe => ({ universe }));
     load.then(({ universe, entry }) => { if (active) { setOwnerUniverse(universe); setOwnerEntryId(entry?.id || null);
-      if (record.type === 'character' && !entry) setOwnerContextError('No writable canon binding is available for this character in its owning universe.'); } })
+      if (record.type === 'character' && !entry) setOwnerCanonMissing(true); } })
       .catch(error => { if (active) setOwnerContextError(error.message || 'Could not load the owning universe’s character context.'); });
     return () => { active = false; };
   }, [ownerUniverseId, contextRequested, contextVersion, record?.type, record?.id]);
+  const joinOwnerCanon = useCallback(() => {
+    if (!record?.id || !ownerUniverseId) return;
+    setJoiningCanon(true);
+    linkCatalogIngredient(record.id, { refKind: 'universe', refId: ownerUniverseId, role: `canon-${record.type}` })
+      .then(() => setContextVersion(previous => previous + 1))
+      .catch(() => {})
+      .finally(() => setJoiningCanon(false));
+  }, [record?.id, record?.type, ownerUniverseId]);
   const applyUniverseContext = useCallback((context) => {
     setRecord((current) => current ? { ...current, universeContext: context, refs: context.refs } : current);
   }, []);
@@ -814,11 +831,16 @@ function IngredientEditor() {
   const referenceKeys = new Set(media.filter((m) => m.kind === 'reference').map((m) => m.mediaKey));
   const lookCandidates = media.filter((m) => (m.kind === 'reference' && isReferenceTabRow(m))
     || (m.kind === 'portrait' && !referenceKeys.has(m.mediaKey)));
+  const savedPayload = ingredientPayload(record.payload);
+  const forkSeed = { candidates: [...media.filter((m) => !m.deleted && (m.kind === 'portrait' || (m.kind === 'reference' && isReferenceTabRow(m)))),
+    ...[savedPayload.primaryImageRef, ...(Array.isArray(savedPayload.imageRefs) ? savedPayload.imageRefs : [])]
+      .filter((ref) => typeof ref === 'string' && ref.trim()).map((mediaKey) => ({ mediaKey, kind: 'reference' }))],
+    forms: Array.isArray(savedPayload.forms) ? savedPayload.forms : [], ready: mediaReady, error: mediaError, load: refreshMedia };
   const coverUrl = ingredientCoverUrl({
     ...record,
     thumbnailKey: media.find((m) => m.kind === 'portrait')?.mediaKey || (!mediaReady && record.coverMedia?.portraitKey) || record.thumbnailKey,
     payload,
-  }) || ingredientCoverUrl({ thumbnailKey: media.find((m) => m.kind === 'reference' && !m.role?.startsWith('archive:'))?.mediaKey || (!mediaReady && record.coverMedia?.referenceKey) });
+  }) || ingredientCoverUrl({ thumbnailKey: media.find((m) => m.kind === 'reference' && !m.role?.startsWith('archive:') && (!isDesignMedia(m) || m.library?.guide === true))?.mediaKey || (!mediaReady && record.coverMedia?.referenceKey) });
   const renderBlockedReason = (subject) => identityReason || (record.payload?.locked === true
     ? 'Unlock this record above before rendering.'
     : saving || lookSaving || characterActionBusy || unlocking
@@ -845,7 +867,7 @@ function IngredientEditor() {
       <header className="shrink-0 px-3 py-2 sm:px-4 sm:py-3 border-b border-port-border">
         <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
           <div className="flex items-center gap-2 sm:gap-3 min-w-0">
-            <Link to={backPath} aria-label={`Back to ${library?.label || 'Catalog'}`} title="Back"
+            <Link to={backPath} aria-label={`Back to ${backToVideo ? 'music video' : library?.label || 'Catalog'}`} title="Back"
               className="shrink-0 inline-flex items-center justify-center min-w-[40px] min-h-[40px] -ml-2 rounded-lg text-gray-400 hover:text-white">
               <ArrowLeft size={18} aria-hidden="true" />
             </Link>
@@ -923,10 +945,11 @@ function IngredientEditor() {
             className="ml-2 text-port-accent hover:underline">Discard local edits and load latest</button>
         </div>}
         <CatalogUniversePanel key={`universe-${record.id}`} ingredient={record} context={record.universeContext}
-          onContextChange={applyUniverseContext} readOnly={identityReadOnly} forkBlocked={record.sharedIdentity?.reason === 'CATALOG_IDENTITY_FENCED'} unsaved={isDirty || saving || lookSaving} />
+          onContextChange={applyUniverseContext} readOnly={identityReadOnly} forkBlocked={record.sharedIdentity?.reason === 'CATALOG_IDENTITY_FENCED'} unsaved={isDirty || saving || lookSaving}
+          seed={forkSeed} redesign={redesignFork ? { fields: redesignFork, clear: () => setRedesignFork(null) } : null} />
 
         <CatalogRedesign ingredient={record} payload={payload} disabled={identityReadOnly || payload.locked === true || saving || lookSaving || !!externalDetails}
-          onApply={patch => setPayload(previous => ({ ...previous, ...patch }))} />
+          onApply={patch => setPayload(previous => ({ ...previous, ...patch }))} onFork={setRedesignFork} />
 
         {profileVisited && (
           <div hidden={activeTab !== 'profile'} className="space-y-4">
@@ -1003,6 +1026,10 @@ function IngredientEditor() {
                   <fieldset disabled={identityReadOnly || characterActionBusy}><TagPicker id="ingredient-tags" value={tags} onChange={setTags} /></fieldset></div>
                 {ownerUniverseId && !contextRequested && <button type="button" onClick={() => setContextRequested(true)}
                   className="min-h-11 text-xs text-port-accent">Load universe creative tools</button>}
+                {ownerCanonMissing && <p role="alert" className="text-xs text-port-warning">
+                  {name || 'This character'} isn’t in {ownerUniverse?.name || 'its universe'}’s cast, so its story, voice and sheet tools are off.
+                  {!identityReadOnly && <button type="button" disabled={joiningCanon} onClick={joinOwnerCanon}
+                    className="ml-1 min-h-11 underline disabled:opacity-50">{joiningCanon ? 'Adding…' : 'Add to cast'}</button>}</p>}
                 {ownerContextError && <p role="alert" className="text-xs text-port-warning">{ownerContextError}
                   <button type="button" onClick={() => setContextVersion(previous => previous + 1)} className="ml-1 underline">Retry context</button></p>}
                 {ownerCharacter && <CharacterCanonActions key={ownerCharacter.id} universe={ownerUniverse} entry={ownerCharacter}
@@ -1054,7 +1081,7 @@ function IngredientEditor() {
           </div>
         )}
 
-        <div hidden={activeTab !== 'sheets' && activeTab !== 'looks'}>
+        <div hidden={activeTab !== 'sheets' && activeTab !== 'looks' && activeTab !== 'design'}>
           <CatalogUnlockNotice key={record.id} record={record} disabled={saving || lookSaving || unlocking || characterActionBusy || identityReadOnly} onPendingChange={setUnlocking}
             onUnlocked={applyLock} />
         </div>
@@ -1077,6 +1104,19 @@ function IngredientEditor() {
             onRemovePointerSheet={identityReadOnly ? undefined : handleRemovePointerSheet}
             removingPointerSheet={removingPointerSheet}
             onMediaChanged={identityReadOnly ? undefined : refreshMedia}
+          />
+        )}
+
+        {activeTab === 'design' && mediaReady && (
+          <CatalogDesignPanel
+            key={record.id}
+            ingredientId={record.id}
+            name={name}
+            forms={formsOf(record.payload)}
+            media={media.map(protectMedia)}
+            blockedReason={renderBlockedReason('design round')}
+            onChanged={refreshMedia}
+            onSetPortrait={handleSetPortrait}
           />
         )}
 
@@ -1733,69 +1773,9 @@ function MediaPanel({ canonRemoval = null, readOnly = false, referenceLibrary = 
         <p className="text-xs text-gray-500">No media yet. Attach a generated portrait, a mood/reference image, an uploaded file, or a recorded voice memo.</p>
       )}
 
-      {pickerOpen && (
-        <GalleryPickerModal
-          onClose={() => setPickerOpen(false)}
-          onPick={(filename, asPortrait) => {
-            if (asPortrait) onSetPortrait(filename);
-            else onAttach(filename, 'reference');
-            setPickerOpen(false);
-          }}
-        />
-      )}
+      <GalleryImagePicker open={pickerOpen} allowUpload onClose={() => setPickerOpen(false)}
+        onSelect={(item) => { if (item?.filename) onAttach(item.filename, 'reference'); }} />
     </section>
-  );
-}
-
-// Modal that lists the existing media gallery (history) so the user can attach
-// or set-portrait from already-generated assets — the "scoped to existing media
-// history" requirement. Never uploads; it only references library keys.
-export function GalleryPickerModal({ onClose, onPick }) {
-  const [query, setQuery] = useState('');
-  const page = useGalleryPage({ q: query });
-  const items = page.loading && page.items.length === 0 ? null : page.items;
-
-  return (
-    <Modal open onClose={onClose} size="lg" ariaLabelledBy="gallery-picker-title"
-      panelClassName="bg-port-card border border-port-border rounded-lg overflow-hidden flex flex-col">
-      {/* Header + scroll area must be DIRECT flex children of the panel (a
-          fragment, not a wrapping <div>) so the panel's clamped flex
-          column constrains the scroll region's height — an intervening
-          content-sized <div> would leave `overflow-y-auto` unbounded and clip
-          long galleries. */}
-      <>
-        <div className="flex items-center justify-between p-3 border-b border-port-border shrink-0">
-          <h3 id="gallery-picker-title" className="text-sm font-semibold text-white">Pick from media gallery</h3>
-          <button type="button" onClick={onClose} className="text-gray-400 hover:text-white min-h-[44px] min-w-[44px] flex items-center justify-center" aria-label="Close">
-            <X size={16} />
-          </button>
-        </div>
-        <div className="p-3 overflow-y-auto flex-1 min-h-0">
-          <label htmlFor="catalog-gallery-search" className="sr-only">Search gallery</label>
-          <input id="catalog-gallery-search" value={query} onChange={event => setQuery(event.target.value)} placeholder="Search gallery…" className="w-full mb-3 p-2 bg-port-bg border border-port-border rounded" />
-          {page.error && <p role="alert">{page.error} <button type="button" onClick={page.retry}>Retry</button></p>}
-          {page.hasMore && <button type="button" disabled={page.loading} onClick={page.loadMore} className="min-h-[44px] text-port-accent">Show more ({page.total - page.items.length} remaining)</button>}
-          {items === null && <p className="text-xs text-gray-500">Loading gallery…</p>}
-          {items?.length === 0 && <p className="text-xs text-gray-500">No images in the gallery yet. Generate one in Image Gen first.</p>}
-          {items && items.length > 0 && (
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
-              {items.map((it) => (
-                <div key={it.filename} className="relative group rounded border border-port-border overflow-hidden">
-                  <MediaImage src={it.path || `/data/images/${it.filename}`} alt={it.filename}
-                    className="w-full aspect-square object-cover" />
-                  <div className="absolute inset-x-0 bottom-0 flex opacity-100 sm:opacity-0 sm:group-hover:opacity-100 focus-within:opacity-100 [@media(hover:none)]:opacity-100 transition-opacity">
-                    <button type="button" onClick={() => onPick(it.filename, false)}
-                      className="flex-1 min-w-0 min-h-[44px] text-[10px] bg-black/70 text-gray-200 hover:text-white">Attach</button>
-                    <button type="button" onClick={() => onPick(it.filename, true)}
-                      className="flex-1 min-w-0 min-h-[44px] text-[10px] bg-black/70 text-gray-200 hover:text-port-warning">Portrait</button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      </>
-    </Modal>
   );
 }
 

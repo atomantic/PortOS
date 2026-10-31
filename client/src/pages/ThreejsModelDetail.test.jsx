@@ -588,6 +588,46 @@ describe('ThreejsModelDetail subject family', () => {
       { silent: true },
     ));
   });
+  it('shows neither the picker nor an error while the taxonomy read is in flight', async () => {
+    listThreejsModelFamilies.mockReturnValue(new Promise(() => {}));
+    getThreejsModel.mockResolvedValue(baseRecord);
+    renderDetail();
+    await screen.findByText('Example Beacon');
+    expect(screen.queryByLabelText('Subject family')).not.toBeInTheDocument();
+    expect(screen.queryByText(/failed to load/i)).not.toBeInTheDocument();
+  });
+
+  it('shows a failure with Retry instead of an empty picker, and Retry restores it', async () => {
+    listThreejsModelFamilies
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValueOnce(FAMILY_OPTIONS);
+    getThreejsModel.mockResolvedValue({ ...baseRecord, family: 'vehicle' });
+    renderDetail();
+
+    expect(await screen.findByText(/Subject families failed to load/)).toBeInTheDocument();
+    expect(screen.queryByLabelText('Subject family')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+
+    const picker = await screen.findByLabelText('Subject family');
+    await waitFor(() => expect(picker).toHaveValue('vehicle'));
+    expect(listThreejsModelFamilies).toHaveBeenCalledTimes(2);
+  });
+
+  it('still refines a model with the general family when the taxonomy read failed', async () => {
+    listThreejsModelFamilies.mockRejectedValue(new Error('offline'));
+    getThreejsModel.mockResolvedValue(baseRecord);
+    generateThreejsModel.mockResolvedValue({ ...baseRecord, status: 'generating' });
+    renderDetail();
+
+    expect(await screen.findByText(/Subject families failed to load/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Refine model/ }));
+    await waitFor(() => expect(generateThreejsModel).toHaveBeenCalledWith(
+      'threejs-example',
+      expect.objectContaining({ family: 'general' }),
+      { silent: true },
+    ));
+  });
 });
 
 describe('ThreejsModelDetail rig readiness', () => {

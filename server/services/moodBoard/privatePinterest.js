@@ -28,26 +28,55 @@ const DOWNLOAD_CONCURRENCY = 3;
 function pinSnapshotExpression(pinUrl) {
   return `(() => new Promise(async (resolve) => {
     const source = ${JSON.stringify(pinUrl)};
+    const isPinImage = (raw) => {
+      try {
+        const url = new URL(raw, location.href);
+        return url.protocol === 'https:' && url.hostname === 'i.pinimg.com' && !url.username && !url.password && !url.port;
+      } catch { return false; }
+    };
+    const fromSrcset = (img) => (img?.getAttribute('srcset') || '').split(',')
+      .map((entry) => entry.trim().split(/\\s+/)[0]).filter(Boolean).reverse();
+    // Pinterest renames its closeup test ids; fall back from the known ids to
+    // page metadata, then the largest content image outside the related-pin grid.
+    const findCloseupImages = () => {
+      const inRelated = (node) => Boolean(node.closest(
+        '[data-test-id="masonry-container"], [data-test-id="carousel-pin"], [data-test-id="pin"], [data-test-id="related-pins-grid"]',
+      ));
+      const named = [
+        '[data-test-id="pin-closeup-image"]',
+        '[data-test-id="closeup-image"]',
+        '[data-test-id="visual-content-container"]',
+        '[data-test-id="closeup-body"]',
+        '[data-test-id="closeup-container"]',
+      ].flatMap((selector) => [...document.querySelectorAll(selector)])
+        .flatMap((node) => (node.matches('img') ? [node] : [...node.querySelectorAll('img')]))
+        .filter((node) => !inRelated(node));
+      const outsideGrid = [...document.querySelectorAll('img')].filter((node) => !inRelated(node) && !node.closest('header, nav'));
+      const area = (node) => (node.naturalWidth || node.width || 0) * (node.naturalHeight || node.height || 0);
+      return { named, loose: outsideGrid.sort((a, b) => area(b) - area(a)) };
+    };
     const read = () => {
       const loginRequired = /^\\/(?:login|session\\/login)(?:\\/|$)/i.test(location.pathname)
         || Boolean(document.querySelector('input[type="password"]'));
-      const closeup = document.querySelector('[data-test-id="pin-closeup-image"]');
-      const img = closeup?.matches('img') ? closeup : closeup?.querySelector('img');
+      const { named, loose } = findCloseupImages();
+      const metaImages = ['meta[property="og:image"]', 'meta[name="twitter:image"]', 'meta[name="twitter:image:src"]', 'link[rel="image_src"]']
+        .map((selector) => document.querySelector(selector))
+        .map((node) => node?.content || node?.getAttribute('href'));
       const candidates = [
-        ...(img?.getAttribute('srcset') || '').split(',').map((entry) => entry.trim().split(/\\s+/)[0]).reverse(),
-        img?.currentSrc, img?.src,
-        document.querySelector('meta[property="og:image"]')?.content,
+        ...named.flatMap((img) => [...fromSrcset(img), img.currentSrc, img.src]),
+        ...metaImages,
+        // Last resort: unlabeled page images, after trustworthy metadata.
+        ...loose.flatMap((img) => [...fromSrcset(img), img.currentSrc, img.src]),
       ];
-      const imageUrl = candidates.find((raw) => {
-        try {
-          const url = new URL(raw);
-          return url.protocol === 'https:' && url.hostname === 'i.pinimg.com' && !url.username && !url.password && !url.port;
-        } catch { return false; }
-      });
+      const imageUrl = candidates
+        .filter((raw) => raw && isPinImage(raw))
+        .map((raw) => new URL(raw, location.href).href)
+        // Avatars and favicons are tiny fixed-size crops, never the pin itself.
+        .find((href) => !/\\/(?:\\d{1,3}x\\d{1,3}(?:_RS)?|avatars?)\\//.test(href));
       return { loginRequired, expectedCount: 1, pins: imageUrl ? [{ source, imageUrl }] : [] };
     };
     let snapshot = read();
-    for (let i = 0; i < 32 && !snapshot.loginRequired && !snapshot.pins.length; i++) {
+    for (let i = 0; i < 60 && !snapshot.loginRequired && !snapshot.pins.length; i++) {
       await new Promise((done) => setTimeout(done, 250));
       snapshot = read();
     }

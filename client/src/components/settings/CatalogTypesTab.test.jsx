@@ -116,4 +116,35 @@ describe('CatalogTypesTab', () => {
     expect(screen.queryByText(/keeps those ingredients/i)).toBeNull();
     expect(deleteCatalogType).toHaveBeenCalledTimes(1);
   });
+
+  it('shows an error and Retry instead of "No custom types yet." when the registry fails to load', async () => {
+    listCatalogTypes.mockRejectedValueOnce(new Error('offline'));
+    renderTab();
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toMatch(/Couldn't load your custom types/);
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy();
+    expect(screen.queryByText('No custom types yet.')).toBeNull();
+    // The built-in list is still published so the tab does not blank.
+    expect(screen.getByText('Character')).toBeTruthy();
+  });
+
+  it('Retry that returns a user type shows it and hides the error', async () => {
+    listCatalogTypes.mockRejectedValueOnce(new Error('offline'));
+    listCatalogTypes.mockResolvedValueOnce({
+      types: [{ id: 'faction', label: 'Faction', system: false, primaryContentKey: 'creed', fields: [] }],
+    });
+    renderTab();
+    await screen.findByRole('alert');
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Retry' })); });
+    await waitFor(() => expect(screen.getByText('Faction')).toBeTruthy());
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
+  });
+
+  it('a successful registry with no user types still says "No custom types yet."', async () => {
+    renderTab();
+    await waitFor(() => expect(screen.getByText('No custom types yet.')).toBeTruthy());
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
 });

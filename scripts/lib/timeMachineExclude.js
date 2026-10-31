@@ -1,7 +1,7 @@
 /** Fixed paths survive deletion/recreation; never derive these from Spotlight's archive exclusions. */
 import { spawnSync } from 'node:child_process';
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, writeFileSync, writeSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { dirname, relative, resolve } from 'node:path';
 
 // Separate from rsync's glob policy: tmutil cannot exclude regenerable files
 // inside a creative directory without also losing its irreplaceable contents.
@@ -47,21 +47,39 @@ export const TIME_MACHINE_EXCLUDED_DIRS = [
 
 const PREFERENCE_FILE = 'data/time-machine-exclusions.json';
 
-/** Machine-local answer to "exclude these from Time Machine?": 'accepted' | 'declined' | null (never asked). */
+/**
+ * Machine-local answer to "exclude these from Time Machine?": 'accepted' | 'declined' | null (never asked),
+ * plus the fixed paths already added. `tmutil isexcluded` reports [UNKNOWN] for a path that no longer
+ * exists even though its fixed-path exclusion persists, so without this record a directory that is
+ * deleted between runs would re-trigger the sudo prompt on every update.
+ */
 export function createFilePreference(installRoot) {
   const file = resolve(installRoot, PREFERENCE_FILE);
+  const read = () => {
+    try {
+      return JSON.parse(readFileSync(file, 'utf8')) ?? {};
+    } catch {
+      return {};
+    }
+  };
+  const write = (state) => {
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, `${JSON.stringify(state, null, 2)}\n`);
+  };
   return {
     get() {
-      try {
-        const { decision } = JSON.parse(readFileSync(file, 'utf8'));
-        return decision === 'accepted' || decision === 'declined' ? decision : null;
-      } catch {
-        return null;
-      }
+      const { decision } = read();
+      return decision === 'accepted' || decision === 'declined' ? decision : null;
     },
     set(decision) {
-      mkdirSync(dirname(file), { recursive: true });
-      writeFileSync(file, `${JSON.stringify({ decision, decidedAt: new Date().toISOString() }, null, 2)}\n`);
+      write({ ...read(), decision, decidedAt: new Date().toISOString() });
+    },
+    added() {
+      const { added } = read();
+      return new Set(Array.isArray(added) ? added : []);
+    },
+    markAdded(relativePaths) {
+      write({ ...read(), added: [...new Set([...this.added(), ...relativePaths])].sort() });
     },
   };
 }
@@ -103,9 +121,14 @@ export function excludeFromTimeMachine(installRoot, {
   const result = { status: 'present', added: 0, excluded: 0, created: 0, failures: [] };
   const options = { encoding: 'utf8', stdio: ['inherit', 'pipe', 'pipe'], timeout: 30_000 };
   const pending = [];
+  const recorded = preference.added?.() ?? new Set();
   for (const relativePath of TIME_MACHINE_EXCLUDED_DIRS) {
     const path = resolve(installRoot, relativePath);
     try {
+      if (!exists(path) && recorded.has(relativePath)) {
+        result.excluded++;
+        continue;
+      }
       if (exists(path)) {
         const check = run('tmutil', ['isexcluded', path], options);
         if (check.status === 0 && check.stdout?.includes('[Excluded]')) {
@@ -133,6 +156,7 @@ export function excludeFromTimeMachine(installRoot, {
   }
   if (decision === 'declined') return { ...result, status: 'declined', pending: pending.length };
 
+  const addedRelative = [];
   let authenticated = false;
   let authenticationError = null;
   for (const path of pending) {
@@ -159,12 +183,16 @@ export function excludeFromTimeMachine(installRoot, {
       const add = run('sudo', ['--', 'tmutil', 'addexclusion', '-p', path], options);
       if (add.status === 0) {
         result.added++;
+        addedRelative.push(relative(installRoot, path));
       } else {
         result.failures.push({ path, error: add.error?.message || add.stderr?.trim() || `sudo exited with status ${add.status}` });
       }
     } catch (error) {
       result.failures.push({ path, error: error.message });
     }
+  }
+  if (addedRelative.length) {
+    try { preference.markAdded?.(addedRelative); } catch (error) { result.failures.push({ path: PREFERENCE_FILE, error: error.message }); }
   }
   result.status = result.failures.length ? 'partial' : result.added ? 'updated' : 'present';
   return result;

@@ -15,6 +15,8 @@ import {
   epigeneticTestSchema,
   eyeExamSchema,
   eyeExamUpdateSchema,
+  healthRowParamSchema,
+  healthDayParamSchema,
 } from '../lib/meatspaceValidation.js';
 import * as healthService from '../services/meatspaceHealth.js';
 
@@ -43,6 +45,13 @@ router.post('/blood', asyncHandler(async (req, res) => {
   res.status(201).json(test);
 }));
 
+router.delete('/blood/:id', asyncHandler(async (req, res) => {
+  const { id } = validateRequest(healthRowParamSchema, req.params);
+  const removed = await healthService.removeBloodTest(id);
+  if (!removed) throw new ServerError('Blood test not found', { status: 404, code: 'NOT_FOUND' });
+  res.json(removed);
+}));
+
 /**
  * GET /api/meatspace/body
  * Body composition history
@@ -60,6 +69,13 @@ router.post('/body', asyncHandler(async (req, res) => {
   const data = validateRequest(bodyEntrySchema, req.body);
   const entry = await healthService.addBodyEntry(data);
   res.status(201).json(entry);
+}));
+
+router.delete('/body/:id', asyncHandler(async (req, res) => {
+  const { id } = validateRequest(healthRowParamSchema, req.params);
+  const removed = await healthService.removeBodyEntry(id);
+  if (!removed) throw new ServerError('Body entry not found', { status: 404, code: 'NOT_FOUND' });
+  res.json(removed);
 }));
 
 /**
@@ -81,6 +97,13 @@ router.post('/blood-pressure', asyncHandler(async (req, res) => {
   res.status(201).json(reading);
 }));
 
+router.delete('/blood-pressure/:date', asyncHandler(async (req, res) => {
+  const { date } = validateRequest(healthDayParamSchema, req.params);
+  const removed = await healthService.removeBloodPressureReading(date);
+  if (!removed) throw new ServerError('Blood pressure reading not found', { status: 404, code: 'NOT_FOUND' });
+  res.json(removed);
+}));
+
 /**
  * GET /api/meatspace/workouts
  * Workout entries logged via voice, palette, or API
@@ -100,6 +123,13 @@ router.post('/workouts', asyncHandler(async (req, res) => {
   res.status(201).json(workout);
 }));
 
+router.delete('/workouts/:id', asyncHandler(async (req, res) => {
+  const { id } = validateRequest(healthRowParamSchema, req.params);
+  const removed = await healthService.removeWorkout(id);
+  if (!removed) throw new ServerError('Workout not found', { status: 404, code: 'NOT_FOUND' });
+  res.json(removed);
+}));
+
 /**
  * GET /api/meatspace/epigenetic
  * Elysium results
@@ -117,6 +147,13 @@ router.post('/epigenetic', asyncHandler(async (req, res) => {
   const data = validateRequest(epigeneticTestSchema, req.body);
   const test = await healthService.addEpigeneticTest(data);
   res.status(201).json(test);
+}));
+
+router.delete('/epigenetic/:id', asyncHandler(async (req, res) => {
+  const { id } = validateRequest(healthRowParamSchema, req.params);
+  const removed = await healthService.removeEpigeneticTest(id);
+  if (!removed) throw new ServerError('Epigenetic test not found', { status: 404, code: 'NOT_FOUND' });
+  res.json(removed);
 }));
 
 /**

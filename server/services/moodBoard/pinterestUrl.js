@@ -37,7 +37,8 @@ export async function resolvePinterestImportUrl(input) {
     || !isPinterestHost(url.hostname)) {
     throw new ServerError('Use a Pinterest Pin or board URL', { status: 400, code: 'INVALID_PINTEREST_URL' });
   }
-  const pinId = url.pathname.match(/^\/pin\/(\d+)\/?$/)?.[1];
+  // Share links land on /pin/<id>/sent/?invite_code=…, so tolerate one trailing segment.
+  const pinId = url.pathname.match(/^\/pin\/(\d+)(?:\/[^/]*)?\/?$/)?.[1];
   if (pinId) return { pinUrl: `https://www.pinterest.com/pin/${pinId}/` };
   return normalizePinterestFeedUrl(url.href);
 }

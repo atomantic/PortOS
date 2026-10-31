@@ -12,6 +12,8 @@ describe('runner native-client boundary', () => {
     [{}, null],
     [{ host: '127.0.0.1:5558' }, null],
     [{ host: '[::1]:5558' }, null],
+    [{ host: '127.0.0.2:5558' }, null],
+    [{ host: '127.999.1.1:5558' }, 'HOST_NOT_ALLOWED'],
     [{ host: '::1' }, null],
     [{ 'sec-fetch-mode': 'cors' }, null],
     [{ origin: 'https://attacker.example' }, 'BROWSER_REQUEST_REJECTED'],

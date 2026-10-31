@@ -17,6 +17,13 @@ describe('shotCardRenderRequest', () => {
     expect(request.songAudio).toEqual({ state: 'unavailable', note: 'This model hears no audio' });
   });
 
+  it('lists provider prompt expansion as disabled on an H3 fal take only', () => {
+    const h3 = shotCardRenderRequest({ scene: scene(), settings: { backend: 'fal', falModelId: 'minimax/h3-max/image-to-video' } });
+    expect(h3.promptAdditions).toContainEqual(expect.objectContaining({ id: 'prompt-expansion', text: expect.stringContaining('disabled') }));
+    const hailuo = shotCardRenderRequest({ scene: scene(), settings: { backend: 'fal' } });
+    expect(hailuo.promptAdditions.some((a) => a.id === 'prompt-expansion')).toBe(false);
+  });
+
   it('offers song audio for a cutaway on an LTX-2 model, off unless toggled, and drops the end frame with it', () => {
     const base = { scene: scene({ endImageId: 'end.png' }), settings: { backend: 'local', modelId: 'ltx25_example' }, models, endFramePlan: { used: true } };
     expect(shotCardRenderRequest(base)).toMatchObject({ songAudio: { state: 'off', note: 'Song 1:04.2–1:09.8' }, endFrame: { state: 'on' } });

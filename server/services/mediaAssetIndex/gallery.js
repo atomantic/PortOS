@@ -1,10 +1,9 @@
 import { withMediaFileSizes } from '../../lib/mediaFileInfo.js';
 import { mapWithConcurrency } from '../../lib/mapWithConcurrency.js';
-import { isTestRunner } from '../../lib/runtimeEnv.js';
+import { isFileBackend } from '../../lib/pgFileFacade.js';
 import { listAssets, countAssets, galleryFacets, listMixedGalleryPage, collectionCovers, visibleImageCollections } from './db.js';
 import { compactGalleryRecord } from './logic.js';
 
-const escapeHatch = () => process.env.MEMORY_BACKEND === 'file' || isTestRunner();
 const keyFor = ({ kind, data }) => `${kind}:${kind === 'image' ? data.filename : data.id}`;
 const keyForRef = item => `${item.kind}:${item.ref}`;
 const time = value => Number.isFinite(Date.parse(value)) ? Date.parse(value) : 0;
@@ -51,7 +50,7 @@ export async function listGalleryPage({
   let total;
   let hiddenTotal;
   let counts;
-  if (escapeHatch()) {
+  if (isFileBackend()) {
     const images = kind === 'video' && !summary ? [] : await readImages(diskReader);
     const tokens = q.trim().toLowerCase().split(/\s+/).filter(Boolean);
     const candidates = [...images.map(data => ({ kind: 'image', data })), ...(videos || []).map(data => ({ kind: 'video', data }))];
@@ -103,7 +102,7 @@ export async function listGalleryPage({
 
 /** Global options contain descriptors and ids, never image metadata payloads. */
 export async function listGalleryFacets(diskReader) {
-  const rows = escapeHatch() ? (await readImages(diskReader)).filter(item => !item.hidden) : await galleryFacets();
+  const rows = isFileBackend() ? (await readImages(diskReader)).filter(item => !item.hidden) : await galleryFacets();
   const universes = new Map();
   const categories = new Set();
   const kinds = new Set();
@@ -113,7 +112,7 @@ export async function listGalleryFacets(diskReader) {
     if (text(row.entryKind)) kinds.add(row.entryKind);
   }
   const collections = await (await import('../mediaCollections.js')).listCollections();
-  const populated = !escapeHatch() ? await visibleImageCollections(collections) : await mapWithConcurrency(collections, 4, async collection => {
+  const populated = !isFileBackend() ? await visibleImageCollections(collections) : await mapWithConcurrency(collections, 4, async collection => {
     const page = await listGalleryPage({ collectionId: collection.id, collectionSnapshot: collections, hidden: false, limit: 1 }, diskReader);
     return page.total ? { id: collection.id, name: collection.name } : null;
   });
@@ -160,7 +159,7 @@ export async function listGalleryCollectionSummaries(diskReader) {
 
 async function collectionSummaryRows(diskReader, videoSnapshot) {
   const collections = await (await import('../mediaCollections.js')).listCollections();
-  if (!escapeHatch()) {
+  if (!isFileBackend()) {
     const rows = await collectionCovers(collections.map(collection => ({
       id: collection.id, coverKey: collection.coverKey,
       keys: [...(collection.items || [])].sort((a, b) => time(b.addedAt) - time(a.addedAt)).map(keyForRef),
@@ -215,7 +214,7 @@ export async function listImageVariants(filename, diskReader) {
   const rootOf = image => text(image.cleanedFrom) || image.filename;
   const isRoot = image => image && !text(image.cleanedFrom);
 
-  if (escapeHatch()) {
+  if (isFileBackend()) {
     // One snapshot for all three lookups: each read is a directory scan plus a
     // sidecar read per image, so re-reading per lookup would cost 3N file reads
     // to answer one toggle.

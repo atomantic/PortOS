@@ -424,8 +424,29 @@ if (Test-Path "scripts/checkNodeVersion.js") {
     $nodeGateOutput = (node scripts/checkNodeVersion.js 2>&1 | Out-String).Trim()
     if ($LASTEXITCODE -ne 0) {
         Write-SafeHost $nodeGateOutput
-        Write-SafeHost "❌ Update stopped before changing running apps: upgrade Node.js, then re-run the update. The checkout is already on the pulled revision." -ForegroundColor Red
-        Step "runtime-preflight" "failed" "Unsupported Node.js runtime; PortOS apps were left running"
+        # Roll the checkout back (see update.sh): the apps keep running on the old
+        # tree, so a tree left on the rejected revision crash-loops the next restart.
+        # Untracked files are the user's, so nothing is cleaned.
+        $rolledBack = $false
+        if ($prePullSha) {
+            git cat-file -e "$prePullSha^{commit}" 2>$null
+            if ($LASTEXITCODE -eq 0) {
+                Invoke-Logged git reset --hard $prePullSha
+                if ($LASTEXITCODE -eq 0) { Invoke-Logged git submodule sync --recursive }
+                if ($LASTEXITCODE -eq 0) { Invoke-Logged git submodule update --init --recursive }
+                $rolledBack = ($LASTEXITCODE -eq 0)
+                if (-not $rolledBack) {
+                    Write-SafeHost "❌ Rolling the checkout back to $prePullSha failed — run 'git reset --hard $prePullSha; git submodule update --init --recursive' before restarting PortOS." -ForegroundColor Red
+                }
+            }
+        }
+        if ($rolledBack) {
+            Write-SafeHost "❌ Update stopped before changing running apps: upgrade Node.js, then re-run the update. The checkout was rolled back to the revision PortOS was already running." -ForegroundColor Red
+            Step "runtime-preflight" "failed" "Unsupported Node.js runtime; checkout rolled back and PortOS apps were left running"
+        } else {
+            Write-SafeHost "❌ Update stopped before changing running apps: upgrade Node.js, then re-run the update. The checkout may still be on the pulled revision." -ForegroundColor Red
+            Step "runtime-preflight" "failed" "Unsupported Node.js runtime; PortOS apps were left running"
+        }
         Stop-UpdateScript 1
     }
 }

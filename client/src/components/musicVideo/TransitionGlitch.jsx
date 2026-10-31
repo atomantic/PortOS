@@ -53,6 +53,28 @@ function drawFitted(ctx, el, width, height) {
   ctx.drawImage(el, (width - dw) / 2, (height - dh) / 2, dw, dh);
 }
 
+// #14277: a stacked photo sequence, composed as the renders compose it — each
+// visible layer oldest first; a laid-out one (data-layout "x,y,scale,rotation,opacity")
+// fitted whole about its centre, otherwise cover-fitted.
+function drawPhotoStack(ctx, stack, width, height) {
+  let drawn = false;
+  for (const img of stack.querySelectorAll('img')) {
+    if (img.style.display === 'none' || !img.complete || !img.naturalWidth) continue;
+    const [x, y, scale, rotation, opacity] = (img.dataset.layout || '').split(',').map(Number);
+    if (!img.dataset.layout) { drawFitted(ctx, img, width, height); drawn = true; continue; }
+    const fit = Math.min(width / img.naturalWidth, height / img.naturalHeight) * scale;
+    const dw = img.naturalWidth * fit; const dh = img.naturalHeight * fit;
+    ctx.save();
+    ctx.globalAlpha = opacity;
+    ctx.translate(width / 2 + x * width, height / 2 + y * height);
+    if (rotation) ctx.rotate(rotation * Math.PI / 180);
+    ctx.drawImage(img, -dw / 2, -dh / 2, dw, dh);
+    ctx.restore();
+    drawn = true;
+  }
+  return drawn;
+}
+
 // The render's slip (one ffmpeg swaprect): band [y, y+h) moves `a` px over and the
 // edge it uncovers shows the strip beside it.
 function slip(ctx, src, a, y, h, width) {
@@ -124,13 +146,18 @@ function paintGlitch(canvas, figure, params, frame) {
   const base = cur.getContext('2d');
   base.fillStyle = '#000';
   base.fillRect(0, 0, width, height);
-  const still = figure?.querySelector('img[data-shown="true"]') || figure?.querySelector('img');
+  // The current shot's photo stack renders first; an incoming shot preloaded later is not it.
+  // Its own end frame (an end-frame image effect, a sibling of the stack) replaces it once shown.
+  const firstStack = figure?.querySelector('[data-photo-stack]');
+  const endFrame = firstStack ? [...firstStack.parentElement.children].find(el => el.tagName === 'IMG' && el.dataset.shown === 'true') : null;
+  const stack = endFrame ? null : firstStack;
+  const still = stack ? null : endFrame || figure?.querySelector('img[data-shown="true"]') || figure?.querySelector('img');
   const clip = figure?.querySelector('video[data-ready="true"]:not([aria-hidden="true"])');
-  const stillReady = !!still?.complete && still.naturalWidth > 0;
+  const stillReady = stack ? drawPhotoStack(base, stack, width, height) : !!still?.complete && still.naturalWidth > 0;
   const clipReady = !!clip && clip.readyState >= 2;
   // Nothing decoded yet: leave the picture clean rather than glitch a black frame.
   if (!stillReady && !clipReady) return false;
-  if (stillReady) drawFitted(base, still, width, height);
+  if (stillReady && still) drawFitted(base, still, width, height);
   if (clipReady) drawFitted(base, clip, width, height);
 
   // Slips in the render's order: the whole frame, then each torn band, ping-ponging two scratch canvases.

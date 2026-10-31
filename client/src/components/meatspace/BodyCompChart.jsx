@@ -2,29 +2,28 @@ import { useState, useEffect, useCallback } from 'react';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend
 } from 'recharts';
+import { Trash2 } from 'lucide-react';
 import * as api from '../../services/api';
 import BrailleSpinner from '../BrailleSpinner';
 import LoadFailureNotice from './LoadFailureNotice';
+import ConfirmButtonPair from '../ui/ConfirmButtonPair';
+import CollapsibleListItem from '../ui/CollapsibleListItem';
+import useConfirmDelete from '../../hooks/useConfirmDelete';
 import useChartColors from '../../hooks/useChartColors.js';
 import { formatMonthDay, formatPercent, formatWeight } from '../../utils/formatters.js';
 
 export default function BodyCompChart() {
   const chartColors = useChartColors();
-  const [data, setData] = useState([]);
+  const [entries, setEntries] = useState([]);
   const [failed, setFailed] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [removingId, setRemovingId] = useState(null);
+  const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
 
   const fetchData = useCallback(async () => {
     const history = await api.getBodyHistory({ silent: true }).catch(() => null);
     setFailed(history === null);
-    const chartData = (history || []).map(entry => ({
-      date: entry.date,
-      label: formatMonthDay(entry.date),
-      weight: entry.weightLbs || null,
-      fatPct: entry.fatPct || null,
-      musclePct: entry.musclePct || null
-    })).filter(d => d.weight !== null);
-    setData(chartData);
+    setEntries(Array.isArray(history) ? history : []);
     setLoading(false);
   }, []);
 
@@ -46,7 +45,15 @@ export default function BodyCompChart() {
     return <LoadFailureNotice message="Could not load body composition. Retry." onRetry={fetchData} />;
   }
 
-  if (data.length === 0) {
+  const data = entries.map(entry => ({
+    date: entry.date,
+    label: formatMonthDay(entry.date),
+    weight: entry.weightLbs || null,
+    fatPct: entry.fatPct || null,
+    musclePct: entry.musclePct || null
+  })).filter(d => d.weight !== null);
+
+  if (entries.length === 0) {
     return (
       <div className="bg-port-card border border-port-border rounded-xl p-6">
         <h3 className="text-sm font-medium text-gray-400 uppercase tracking-wider mb-2">Body Composition</h3>
@@ -77,7 +84,7 @@ export default function BodyCompChart() {
       <h3 className="text-sm font-medium text-gray-400 uppercase tracking-wider mb-4">
         Body Composition Over Time
       </h3>
-      <ResponsiveContainer width="100%" height={300}>
+      {data.length > 0 && <ResponsiveContainer width="100%" height={300}>
         <LineChart data={data} margin={{ top: 5, right: 5, bottom: 5, left: 0 }}>
           <CartesianGrid strokeDasharray="3 3" stroke={chartColors.grid} />
           <XAxis
@@ -123,7 +130,50 @@ export default function BodyCompChart() {
             />
           )}
         </LineChart>
-      </ResponsiveContainer>
+      </ResponsiveContainer>}
+      <div className="mt-4">
+        {[...entries].reverse().map(entry => {
+          const id = entry.id || entry.date;
+          const weightLabel = entry.weightLbs ? formatWeight(entry.weightLbs) : (entry.weightKg ? `${entry.weightKg} kg` : 'Logged');
+          return (
+            <CollapsibleListItem
+              key={id}
+              spacing="0.25rem"
+              removing={removingId === id}
+              onExited={() => {
+                setEntries(prev => prev.filter(row => (row.id || row.date) !== id));
+                setRemovingId(null);
+              }}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-sm font-mono text-gray-400">{entry.date}</span>
+                <span className="text-sm text-gray-300">{weightLabel}</span>
+                {isConfirming(id) ? (
+                  <ConfirmButtonPair
+                    prompt="Delete?"
+                    confirmIcon={Trash2}
+                    ariaLabel={`Confirm delete body entry ${entry.date}`}
+                    onConfirm={() => confirmDelete(async () => {
+                      const removed = await api.removeBodyEntry(id).catch(() => null);
+                      if (removed) setRemovingId(id);
+                    })}
+                    onCancel={cancelDelete}
+                  />
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => requestDelete(id)}
+                    className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-600 hover:text-port-error transition-colors"
+                    aria-label={`Delete body entry ${entry.date}`}
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                )}
+              </div>
+            </CollapsibleListItem>
+          );
+        })}
+      </div>
     </div>
   );
 }

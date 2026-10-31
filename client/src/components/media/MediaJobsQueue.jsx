@@ -56,11 +56,12 @@ const KIND_ICON = { video: Film, image: ImageIcon, training: Cpu };
 // implementation names such as "gpu" and "cloud". The lane a row belongs to is
 // the server's own scheduling decision, read via `mediaJobLane` — the queue
 // must never keep a second list of cloud backends, which is exactly how fal.ai
-// and Reactor renders ended up filed under Local machine. The three cloud
-// providers share one scheduler lane, so they share one section.
+// and Reactor renders ended up filed under Local machine. Cloud providers share
+// one section; each provider is its own server swim lane, so a row's position
+// counts only work from the same provider.
 const VIDEO_QUEUE_LANES = Object.freeze([
   { id: 'gpu', label: 'Local machine', description: 'Local GPU renders run one at a time.' },
-  { id: 'cloud', label: 'Cloud renders', description: 'Cloud provider renders share a lane that runs in parallel with local work.' },
+  { id: 'cloud', label: 'Cloud renders', description: 'Each cloud provider has its own lane, running in parallel with local work and other providers.' },
   { id: 'remote', label: 'Remote machines', description: 'Each selected peer owns the queue for work it receives.' },
 ]);
 

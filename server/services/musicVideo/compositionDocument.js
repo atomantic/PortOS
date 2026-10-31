@@ -37,6 +37,7 @@ import { MUSIC_VIDEO_DOCUMENT_DIRECTORY, MUSIC_VIDEO_DOCUMENT_TEMPLATES } from '
 import { listProjects, mutateProjectRecord } from './projects.js';
 import { requireProject } from './requireProject.js';
 import { normalizeComposition } from './composition.js';
+import { scenePhotoSequence } from '../../lib/musicVideoImageEffects.js';
 
 // The composition browser snapshots at most 256 MiB / 4096 files per render,
 // and a render adds the staged scene media beside the document.
@@ -54,8 +55,8 @@ const LYRIC_TYPE_REF = /\blyricType\.(?:js|css)\b/;
 const LYRIC_TYPE_SCAN_MAX = 2 * 1024 * 1024;
 const LAYERED_ENGINE_TAG = '<script src="engine.js"></script>';
 const IMAGE_EFFECT_TAG = `<script type="module">
-import { imageEffectState, IMAGE_EFFECT_FOG_COLOR } from './musicVideoImageEffects.js';
-globalThis.PORTOS_MV_IMAGE_EFFECTS = { imageEffectState, IMAGE_EFFECT_FOG_COLOR };
+import { imageEffectState, IMAGE_EFFECT_FOG_COLOR, photoSequenceIndex, photoSequenceLayers } from './musicVideoImageEffects.js';
+globalThis.PORTOS_MV_IMAGE_EFFECTS = { imageEffectState, IMAGE_EFFECT_FOG_COLOR, photoSequenceIndex, photoSequenceLayers };
 </script><!-- portos-allow-hidden-content: shared still-image effect curves -->
 `;
 const LYRIC_TYPE_TAGS = '<link rel="stylesheet" href="lyricType.css">\n'
@@ -166,6 +167,11 @@ function storeVersion(projectId, files, source, options = {}) {
  */
 function withLayeredModuleTags(page) {
   if (!page.includes(LAYERED_ENGINE_TAG)) return page;
+  // Earlier shipped pages import fewer still-effect exports; widen them to the current set.
+  page = page.replace(/import \{ imageEffectState, IMAGE_EFFECT_FOG_COLOR(?:, photoSequenceIndex)? \} from '\.\/musicVideoImageEffects\.js';/,
+    "import { imageEffectState, IMAGE_EFFECT_FOG_COLOR, photoSequenceIndex, photoSequenceLayers } from './musicVideoImageEffects.js';")
+    .replace(/globalThis\.PORTOS_MV_IMAGE_EFFECTS = \{ imageEffectState, IMAGE_EFFECT_FOG_COLOR(?:, photoSequenceIndex)? \};/,
+      'globalThis.PORTOS_MV_IMAGE_EFFECTS = { imageEffectState, IMAGE_EFFECT_FOG_COLOR, photoSequenceIndex, photoSequenceLayers };');
   const tags = (LYRIC_TYPE_REF.test(page) ? '' : LYRIC_TYPE_TAGS)
     + (page.includes('PORTOS_MV_IMAGE_EFFECTS') ? '' : IMAGE_EFFECT_TAG);
   return page.replace(LAYERED_ENGINE_TAG, () => tags + LAYERED_ENGINE_TAG);
@@ -440,6 +446,9 @@ export async function stageGeneratedDocument(projectId, generatedFiles, { verify
 // Known compatible shipped layered engines. Recognition only;
 // customized engines belong to the author and are never silently replaced.
 const UPGRADABLE_LAYERED_ENGINES = new Set([
+  // #14276's engine: one photo at a time, before overlapping photo stacks (#14277).
+  '934ee8ca6b42f642bec05019c208e54369d063f06b521384d20d54b0b8e0900a',
+  '2844a20f3d6ad57022e97ae79705a9296479ff5a59cdebeaa9e48246d3d7a086',
   // Last shipped engine before document still-image effects (#11319).
   '9581bb2d190e62ea2eb6a709bc989b1f913c501236554cd0301379877dc8a5fc',
   'dc27611ebaa429c28bd467b003495d2a1c7dc0ede73be0cfc28db4b97c964dcf',
@@ -450,6 +459,12 @@ const UPGRADABLE_LAYERED_ENGINES = new Set([
   // #10583's engine (shared lyricType.js), before cameraRig.js (#10589); an upgraded
   // copy without the rig script keeps a slow push.
   '02ca75c17c58eec1bb37463fdd187a133d8c10499bb2b6556c793af8d63b93e8',
+]);
+// Shipped still-effect modules a document may carry; adoption replaces them with the current one.
+const UPGRADABLE_IMAGE_EFFECT_MODULES = new Set([
+  'b771bf1da99500e14b751ffe82a95ddee749df2030d1a8be7c21b068a7def1e8',
+  // #14276: photo sequences, before stacked layers (#14277).
+  '6289528435cb4b9cd535679a6492a6ecd22258213fc5361db13ae301dfda3cde',
 ]);
 const engineDigest = bytes => createHash('sha256').update(bytes.toString('utf8').replace(/\r\n?/g, '\n')).digest('hex');
 
@@ -481,7 +496,9 @@ export function upgradeDocumentEngine(projectId, directory) {
       throw refuse('The engine was customized or is not a supported shipped version — preserve it and revise it explicitly', 'COMPOSITION_ENGINE_CUSTOM', 409);
     }
     const loaded = await Promise.all(files.map(async file => ({
-      rel: file.rel, data: file.rel === 'engine.js' ? shipped : await readFile(file.abs),
+      rel: file.rel, data: file.rel === 'engine.js' ? shipped
+        : file.rel === 'musicVideoImageEffects.js' && UPGRADABLE_IMAGE_EFFECT_MODULES.has(engineDigest(await readFile(file.abs)))
+          ? await readFile(new URL('../../lib/musicVideoImageEffects.js', import.meta.url)) : await readFile(file.abs),
     })));
     // Add the shared lyric-type and still-effect modules only to a template-shaped
     // page. storeVersionNow supplies missing module files and fonts; authored
@@ -597,6 +614,18 @@ export async function readDocumentFiles(project, { requireLyricVisibility = true
   const dir = await requireDocument(project);
   const { files } = await collectTree(dir);
   await assertDocumentMediaPolicy(project, files);
+  const sequences = (project.scenes || []).map(scene => scenePhotoSequence(scene)).filter(Boolean);
+  if (sequences.length) {
+    const engine = files.find(file => file.rel === 'engine.js');
+    // Engine marker 1 plays one photo at a time; 2 also composes overlapping, laid-out photos (#14277).
+    const level = engine ? Number(/^\/\/ portos-photo-sequence: (\d+)$/m.exec(await readFile(engine.abs, 'utf8'))?.[1] || 0) : 0;
+    const needed = sequences.some(sequence => sequence.stacked) ? 2 : 1;
+    if (level < needed) throw new ServerError(needed > 1
+      ? 'Update the composition playback engine to support overlapping photo layers before previewing or rendering.'
+      : 'Update the composition playback engine to support photo sequences before previewing or rendering.', {
+      status: 422, code: 'DOCUMENT_PHOTO_SEQUENCE_UNSUPPORTED',
+    });
+  }
   // Immutable documents retain their own runtime. Refuse an unsupported lyric
   // pass instead of claiming this project preference changed its output.
   if (requireLyricVisibility && project.lyricOverlayEnabled === false) {

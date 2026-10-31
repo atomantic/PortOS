@@ -21,8 +21,9 @@ import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
  *                            enrichment, fill-missing settings, and the analyzed
  *                            personality-trait confidence (max per dimension —
  *                            see mergeConfidence)
- *   - *.md documents       — content shipped by filename, ADD-ONLY on the
- *                            receiver (a local doc is never overwritten) MINUS
+ *   - *.md documents       — content shipped by filename; a missing file is
+ *                            added, an existing body is replaced only when the
+ *                            peer's live stamp is strictly newer (#14160) MINUS
  *                            anything either side tombstoned (see below)
  *   - autobiography/        — stories union by id (LWW) MINUS anything either
  *                            side tombstoned (see below); config (the prompt
@@ -826,7 +827,11 @@ export async function getDigitalTwinSnapshot() {
   // the snapshot — it is machine-local scheduling state, and a fresh peer must
   // not inherit another machine's cadence, wake-up time, or have prompts
   // enabled without local opt-in. Only the stories sync.
-  const [identity, chronotype, longevity, feedback, taste, tasteObserved, chronotypeObserved, meta, documents, stories, socialAccounts] =
+  // meta.json and the markdown bodies are read as one pair under the meta lock:
+  // document writes hold it from the body write through the stamp, so a peer
+  // never receives a new updatedAt with the old body or the reverse (#14160).
+  const { withMetaLock } = await import('./digital-twin-meta.js');
+  const [identity, chronotype, longevity, feedback, taste, tasteObserved, chronotypeObserved, [meta, documents], stories, socialAccounts] =
     await Promise.all([
       readJSONFile(IDENTITY_FILE, null, { strict: true }),
       readJSONFile(CHRONOTYPE_FILE, null, { strict: true }),
@@ -835,8 +840,7 @@ export async function getDigitalTwinSnapshot() {
       readJSONFile(TASTE_FILE, null, { strict: true }),
       readJSONFile(TASTE_OBSERVED_FILE, null, { strict: true }),
       readJSONFile(CHRONOTYPE_OBSERVED_FILE, null, { strict: true }),
-      readJSONFile(META_FILE, null, { strict: true }),
-      readMarkdownDocuments(),
+      withMetaLock(() => Promise.all([readJSONFile(META_FILE, null, { strict: true }), readMarkdownDocuments()])),
       readJSONFile(AUTOBIO_STORIES_FILE, null, { strict: true }),
       readJSONFile(SOCIAL_ACCOUNTS_FILE, null, { strict: true }),
     ]);
@@ -896,25 +900,56 @@ async function reapTombstonedDocuments(suppressed) {
   return count;
 }
 
-// Documents are written ADD-ONLY: a local .md is never overwritten by a peer's
-// copy (we have no per-document timestamp to order edits). New documents the
-// receiver is missing are written verbatim — unless the filename is tombstoned,
-// in which case the user deleted it and the peer is simply behind. The meta.json
-// merge separately brings over each document's metadata entry so the UI lists them.
-async function applyDocuments(documents, suppressed) {
-  if (!isPlainObject(documents)) return 0;
-  let count = 0;
+/** The newest live stamp per document filename in a meta object. */
+function documentStamps(meta) {
+  const stamps = new Map();
+  const docs = isPlainObject(meta) && Array.isArray(meta.documents) ? meta.documents : [];
+  for (const doc of docs) {
+    if (!isPlainObject(doc) || !safeMdName(doc.filename)) continue;
+    stamps.set(doc.filename, newerStamp(documentLiveStamp(doc), stamps.get(doc.filename)));
+  }
+  return stamps;
+}
+
+// A document the receiver is missing is written verbatim; an existing body is
+// replaced only when the peer's live stamp (the same one the tombstone merge
+// uses) is strictly newer than the local one — last writer wins on the text,
+// while title/priority/weight stay add-only in mergeDocumentsWithTombstones.
+// Equal or older stamps keep the local file. A tombstoned filename is skipped:
+// the user deleted it and the peer is simply behind. An empty remote body never
+// replaces a file: no document write produces one, so it is not an edit.
+// Returns the replaced files' previous bodies so a failed meta write can put
+// them back instead of leaving new bytes under the old stamp.
+async function applyDocuments(documents, { suppressed, localStamps, remoteStamps }) {
+  const result = { count: 0, replaced: [] };
+  if (!isPlainObject(documents)) return result;
   for (const [rawName, content] of Object.entries(documents)) {
     const name = safeMdName(rawName);
     if (!name || typeof content !== 'string') continue;
     if (suppressed.has(name)) continue;
     const filePath = join(DIR, name);
-    if (existsSync(filePath)) continue;
-    await ensureDir(DIR);
-    await atomicWrite(filePath, content);
-    count++;
+    if (existsSync(filePath)) {
+      if (!content || !compareNewerWins(remoteStamps.get(name), localStamps.get(name))) continue;
+      const previous = await readFile(filePath, 'utf-8');
+      if (previous === content) continue;
+      await atomicWrite(filePath, content);
+      result.replaced.push({ name, filePath, previous });
+      console.log(`🧬 Digital twin sync: updated document ${name} from a newer peer edit`);
+    } else {
+      await ensureDir(DIR);
+      await atomicWrite(filePath, content);
+    }
+    result.count++;
   }
-  return count;
+  return result;
+}
+
+async function restoreReplacedDocuments(replaced) {
+  for (const { name, filePath, previous } of replaced) {
+    await atomicWrite(filePath, previous).catch((err) => {
+      console.error(`❌ Digital twin sync: could not restore document ${name}: ${err.message}`);
+    });
+  }
 }
 
 // taste-questionnaire and digital-twin-meta keep their own in-memory caches (the
@@ -980,21 +1015,34 @@ export async function applyDigitalTwinRemote(remoteData) {
   // derivedAt; taste also preserves the newest user-triggered AI interpretation.
   count += await applyMerge(TASTE_OBSERVED_FILE, remoteData.tasteObserved, mergeTasteObserved);
   count += await applyMerge(CHRONOTYPE_OBSERVED_FILE, remoteData.chronotypeObserved, mergeChronotypeObserved);
-  count += await withBackupAssetPublication(async () => {
+  const { loadMeta, withMetaLock } = await import('./digital-twin-meta.js');
+  // The meta lock (inside the backup lease, the order document writes use) keeps
+  // a local edit from landing between the stamp comparison and the body write,
+  // where the peer's older body would replace it under the local newer stamp.
+  count += await withBackupAssetPublication(() => withMetaLock(async () => {
     // Load before copying: a missing meta file is rebuilt from local markdown,
     // and must not manufacture defaults for the peer's not-yet-published files.
-    const { loadMeta } = await import('./digital-twin-meta.js');
     const local = await loadMeta();
     const prepared = isPlainObject(remoteData.meta) ? mergeMeta(local, remoteData.meta).merged : local;
-    // A failed file write must leave the durable metadata unchanged. Re-merge
-    // after the I/O so concurrent local metadata updates are retained. Persist
-    // tombstones before removing their bytes, so failure cannot strand a live
-    // document reference pointing at an already-reaped file.
-    let documentCount = await applyDocuments(remoteData.documents, suppressedDocuments(prepared));
-    documentCount += await applyMeta(remoteData.meta);
+    // A failed file write must leave the durable metadata unchanged, and a
+    // failed meta write puts replaced bodies back. Persist tombstones before
+    // removing their bytes, so failure cannot strand a live document reference
+    // pointing at an already-reaped file.
+    const { count: written, replaced } = await applyDocuments(remoteData.documents, {
+      suppressed: suppressedDocuments(prepared),
+      localStamps: documentStamps(local),
+      remoteStamps: documentStamps(remoteData.meta),
+    });
+    let documentCount = written;
+    try {
+      documentCount += await applyMeta(remoteData.meta);
+    } catch (err) {
+      await restoreReplacedDocuments(replaced);
+      throw err;
+    }
     documentCount += await reapTombstonedDocuments(suppressedDocuments(await loadMeta()));
     return documentCount;
-  });
+  }));
 
   if (isPlainObject(remoteData.autobiography)) {
     // stories only — config (prompt schedule) is intentionally machine-local.

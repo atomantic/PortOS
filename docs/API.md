@@ -761,6 +761,7 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Dom
 | `/api/dashboard/daily-actions` | Dashboard daily action tracking |
 | `/api/media/collections`, `/api/media/annotations`, `/api/media/sketches` | Media library collections/annotations/sketches |
 | `/api/media/holders` | Which machines hold each media file (`GET`) and Make primary (`POST /primary` `{ kind, filename, instanceId }`): keep that holder's copy and release the others |
+| `/api/media/usages` | Where each media file is used (`GET`): `{ items: { '<kind>:<ref>': [{ source, label, id, title, role, href }] } }`. `DELETE /api/image-gen/:filename` and `DELETE /api/video-gen/history/:id` refuse a used file with `409 MEDIA_IN_USE` (usages in `context.usages`) unless `?force=1` |
 | `/api/client-errors` | Client-side error reporting |
 | `/api/backup` | Backup snapshots + restore |
 | `/api/legacy-export` | Legacy data export |
@@ -785,6 +786,7 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Dom
 | `/api/api-docs` | Generated HTTP/event catalogs, OpenAPI 3.0.3 documents, AsyncAPI 3 document, and the minimized semantic tool resource |
 | `/api/data` | Data manager/sync |
 | `/api/datadog`, `/api/jira`, `/api/github`, `/api/telegram` | External integrations |
+| `/api/apple-health` | Delete one imported Apple Health day (`DELETE /days/:date`); metrics, ingest, and XML import stay on `/api/health` |
 | `/api/health` | Apple Health metrics, ingest, and XML import |
 | `/api/human-actions` | Scheduled steps only the human can take, as Brain threads with reminders ([Human Actions](#human-actions)) |
 | `/api/insights` | Cross-domain insights |
@@ -1131,12 +1133,33 @@ for atomic owned creation and retry-safe identity. Legacy callers can still
 create records staged for ownership review.
 
 `POST /api/catalog/ingredients/:id/fork` accepts `{ universeId, operationKey,
-name?, copyImages? }`. The UUID operation key is required. Replays return the
+name?, seedImages?, fields?, copyImages? }`. The UUID operation key is required. Replays return the
 original new primitive; changed input with the same key returns 409. A fork has
 fresh identity, initial revision and `forked-from` lineage. Image reuse defaults
-off. When enabled, attachment rows are independent and reuse immutable managed
-image files; voice media, execution/session bindings, approvals and export
-consent are excluded. Production uses and inter-character links are not copied.
+off. `seedImages` lists the source portrait/reference media keys to reuse (a key
+no longer on the source refuses the fork with `CATALOG_FORK_SEED_MISSING`);
+`copyImages: true` reuses all of them. Reused attachment rows are independent,
+point at the same immutable managed image files, and keep their age/look tags
+re-keyed to the fork's new forms and wardrobes (review ratings stay with the
+source). `fields` saves a redesign-assistant proposal onto the fork; only that
+type's redesign fields are accepted. Voice media, execution/session bindings,
+approvals and export consent are excluded. Production uses and inter-character
+links are not copied.
+
+Casting > Design rounds (characters only; refused on a locked record):
+`POST /api/catalog/ingredients/:id/design/spread` accepts `{ idea, count,
+formId?, providerId, model?, effort? }` and returns `{ lines }`, one face
+design per take written by the chosen provider. `POST
+/api/catalog/ingredients/:id/design/render` queues one round and returns
+`{ roundId, jobs: [{ jobId, line }] }`. `mode` is `open` (`lines`, `note?`,
+`framing`, `seedImageFiles?`; text only), `refine` (`baseImageFile`, `note`,
+`count`), `feature` (`baseImageFile`, `feature`: 8 takes of one feature),
+`blend` (`baseImageFile`, `blendImageFiles`: 1–3 reference faces, `note?`,
+`features?`; 4 steps toward them, or `strength` (5–100%) with `count` 1–4
+takes at that strength; the older single `blendImageFile` is still accepted) or `age` (`baseImageFile`, `formId`, `count`). Rounds never send
+the record's other references as guides. Each take lands as a reference with
+role `design:<roundId>:<n>`, left out of likeness until it is made an anchor.
+Both routes have a `/compose` preview that queues nothing.
 
 The existing `/ingredients/:id/link` API manages membership. Universe canon
 roles populate/remove compatibility projections through serialized mutations;

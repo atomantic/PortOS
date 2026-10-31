@@ -1,6 +1,7 @@
 import { useContext, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
 import { Plus, Image as ImageIcon, Film, Code2, Type, FlagTriangleRight, Lock, LockOpen, X } from 'lucide-react';
+import Drawer from '../../Drawer';
 import ContactSheetButton from '../ContactSheetButton.jsx';
 import LockAllShots from '../LockAllShots.jsx';
 import SceneCard from '../SceneCard.jsx';
@@ -11,6 +12,7 @@ import ShotEffectsCard, { SceneEffectBadges } from '../ShotEffectsCard.jsx';
 import { ShotLockContext, SHOT_LOCK_LABELS, overallShotLock, shotUnlocked } from '../ShotLock.jsx';
 import { shotNumbers } from '../ShotStepper.jsx';
 import { previousShot, shotHandoffSource } from '../../../../../server/lib/musicVideoHandoffFrame.js';
+import { coldOpenScenes } from '../../../../../server/lib/musicVideoColdOpen.js';
 import { isLayeredComposition } from '../../../lib/musicVideoLayers.js';
 import { musicVideoAspect } from '../../../lib/musicVideoAspect.js';
 import { plannedTransitions } from '../../../lib/musicVideoCutEffects.js';
@@ -70,11 +72,11 @@ function SceneLockBadge({ sceneId, state }) {
 }
 
 /**
- * The scene board on Shots: a thumbnail per shot with its lock and media marks,
- * and the open shot's card, where its still and clip are made and locked —
- * one column on a phone, two and three as the column widens (a container
- * query, so the docked preview narrowing the column is accounted for). Cards
- * are collapsed to a thumbnail, lyric and status until tapped.
+ * The scene board on Shots: a thumbnail per shot with its lock and media marks
+ * — two columns on a phone, three and four as the column widens (a container
+ * query, so the docked preview narrowing the column is accounted for). A tapped
+ * shot (or the ending after the song) opens its card in the side panel, where
+ * its still and clip are made and locked, so the board stays where it was.
  */
 export default function BoardStage({ board }) {
   const { project, locked, sceneMedia, videoSettings, takes, activeSceneId, onToggleSceneExpand } = board;
@@ -121,7 +123,9 @@ export default function BoardStage({ board }) {
   const codesById = new Map(scenes.map((scene) => [scene.sceneId, sceneAttention(scene, { ...attentionCtx,
     locked: shotLocks[scene.sceneId] === 'locked', unlocked: shotUnlocked(lockValue, scene.sceneId) })]));
   const numbers = shotNumbers(scenes);
-  const shotName = (scene) => [numbers.has(scene.sceneId) ? `Shot ${numbers.get(scene.sceneId)}` : null,
+  const coldNumbers = new Map(coldOpenScenes(project).map((scene, i) => [scene.sceneId, i + 1]));
+  const shotName = (scene) => [coldNumbers.has(scene.sceneId) ? `Cold open ${coldNumbers.get(scene.sceneId)}`
+    : numbers.has(scene.sceneId) ? `Shot ${numbers.get(scene.sceneId)}` : null,
     scene.sectionLabel || scene.label].filter(Boolean).join(' · ') || `Scene ${scene.order + 1}`;
   const counts = { all: scenes.length, attention: 0, missing: 0 };
   for (const codes of codesById.values()) {
@@ -155,13 +159,17 @@ export default function BoardStage({ board }) {
       : inspectorRef.current?.querySelector('summary');
     if (target) { target.focus({ preventScroll: true }); focusAfterNavigation.current = null; }
   }, [activeSceneId]);
-  // The open card's Previous / Next shot buttons walk every shot in song order, filter or not.
-  const songOrder = [...scenes].sort((a, b) => (numbers.get(a.sceneId) ?? Infinity) - (numbers.get(b.sceneId) ?? Infinity));
+  // The open card's Previous / Next shot buttons walk every shot in play order (the cold open
+  // first, then the song), filter or not.
+  const playOrder = (scene) => (coldNumbers.has(scene.sceneId) ? coldNumbers.get(scene.sceneId) - coldNumbers.size
+    : numbers.get(scene.sceneId) ?? Infinity);
+  const songOrder = [...scenes].sort((a, b) => playOrder(a) - playOrder(b));
   const openShot = (scene) => scene && (() => {
     focusAfterNavigation.current = { target: 'inspector' };
     board.seekToScene?.(scene);
     onToggleSceneExpand?.(scene.sceneId, true);
   });
+  const activeScene = scenes.find((scene) => scene.sceneId === activeSceneId) || null;
   const activeAt = songOrder.findIndex((scene) => scene.sceneId === activeSceneId);
   const stepShot = activeAt === -1 ? null : { prev: openShot(songOrder[activeAt - 1]), next: openShot(songOrder[activeAt + 1]) };
   // j / k step through the listed scenes (opening one, which also routes to it).
@@ -262,7 +270,14 @@ export default function BoardStage({ board }) {
             <CreditsThumbnail project={project} open={creditsOpen} onOpen={creditsOpen ? closeEnding : () => openEnding('credits')} />
           )}
         </div>
-        <div ref={inspectorRef} className="mt-3">
+      </div>
+      {/* Portaled out of the fieldset above, so it carries its own lock. */}
+      <Drawer open={!!activeScene || endingOpen || creditsOpen} size="xl"
+        onClose={activeScene ? () => toggleInspector(activeScene.sceneId, false) : closeEnding}
+        title={activeScene ? shotName(activeScene) : creditsOpen ? 'Credits' : 'Cutting room floor'}
+        subtitle={activeScene?.lyricText ? `♪ ${activeScene.lyricText}` : undefined}
+        closeLabel={activeScene ? 'Close shot' : 'Close ending'}>
+        <fieldset ref={inspectorRef} disabled={locked} className="min-w-0">
           {endingOpen && (
             <EndingCard project={project} onEditLocal={board.editProjectLocal} onSave={board.saveProjectFields} onClose={closeEnding} />
           )}
@@ -341,8 +356,8 @@ export default function BoardStage({ board }) {
               documentComposition={project.composition?.mode === 'document'}
             />
           ))}
-        </div>
-      </div>
+        </fieldset>
+      </Drawer>
     </fieldset>
   );
 }

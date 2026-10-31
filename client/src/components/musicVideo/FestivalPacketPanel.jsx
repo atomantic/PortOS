@@ -84,7 +84,7 @@ function PacketEditor({ project }) {
               <label htmlFor={fieldId(field.id)}>{field.label}</label>
               <textarea id={fieldId(field.id)} rows={2} maxLength={12000} value={packet.fields[field.id] || ''} placeholder="Unknown — not provided" className={inputClass}
                 onChange={event => edit({ ...packet, fields: { ...packet.fields, [field.id]: event.target.value } })} />
-              <label htmlFor={fieldId(`include-${field.id}`)} className="flex items-center gap-2">
+              <label htmlFor={fieldId(`include-${field.id}`)} className="flex items-center gap-2 pointer-coarse:min-h-11">
                 <input id={fieldId(`include-${field.id}`)} type="checkbox" checked={selected(field.id)} onChange={() => toggle(field.id)} /> Include {field.label}
               </label>
             </div>)}
@@ -95,7 +95,7 @@ function PacketEditor({ project }) {
           <select id={fieldId(id)} value={packet[id]} onChange={event => edit({ ...packet, [id]: event.target.value })} className={inputClass}>
             <option value="unknown">Unknown</option><option value="confirmed">Confirmed by me</option><option value="not-cleared">Not cleared</option>
           </select>
-          <label htmlFor={fieldId(`include-${id}`)} className="flex gap-2 items-center"><input id={fieldId(`include-${id}`)} type="checkbox" checked={selected(id)} onChange={() => toggle(id)} /> Include {label}</label>
+          <label htmlFor={fieldId(`include-${id}`)} className="flex gap-2 items-center pointer-coarse:min-h-11"><input id={fieldId(`include-${id}`)} type="checkbox" checked={selected(id)} onChange={() => toggle(id)} /> Include {label}</label>
         </div>)}</div>
         <details><summary>Festival-specific notes ({formatCount(packet.festivals.length)})</summary>
           <p>Organizational notes only. Check each festival&apos;s current rules independently.</p>

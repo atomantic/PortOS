@@ -20,7 +20,7 @@ import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.j
 import { createVideoHistoryItemRead, historyRecordIdSchema } from './videoHistoryRead.js';
 import { uploadFields, optionalUpload } from '../lib/multipart.js';
 import {
-  validateRequest, modelDownloadQuerySchema, modelDownloadParamsSchema,
+  validateRequest, mediaDeleteQuerySchema, modelDownloadQuerySchema, modelDownloadParamsSchema,
   icLoraDownloadParamsSchema, textEncoderDownloadParamsSchema, videoCancelBodySchema, videoModelTermsSchema,
 } from '../lib/validation.js';
 import { grokVideoDurationSchema } from '../lib/sharedSchemas.js';
@@ -102,6 +102,7 @@ import { detectSystemCapabilities, withHardwareCompatibility } from '../lib/syst
 import { isDisplaySleepEnabled } from '../services/videoGen/displayPower.js';
 import { promptAdditionsSchema } from '../lib/modelInput.js';
 import { deleteMediaAnywhere, cancelPendingDelete } from '../services/mediaRemoteDelete.js';
+import { assertMediaDeletable } from '../services/mediaUsage.js';
 import { VIDEO_TILING_MODES } from '../lib/videoTiling.js';
 import { RUNWAY_SPECIAL_VIDEO_MODES, RUNWAY_ACT_TWO_RATIOS, RUNWAY_ALEPH_ASPECTS } from '../lib/runwaySpecialVideoModels.js';
 
@@ -1310,6 +1311,8 @@ router.post('/upload', optionalUpload('file'), asyncHandler(async (req, res) => 
 router.delete('/history/:id', asyncHandler(async (req, res) => {
   const parsed = historyRecordIdSchema.safeParse(req.params.id);
   if (!parsed.success) failValidation(parsed);
+  const { force } = validateRequest(mediaDeleteQuerySchema, req.query ?? {});
+  await assertMediaDeletable(`video:${parsed.data}`, { force: force === '1' });
   res.json({ ok: true, ...(await deleteMediaAnywhere('video', parsed.data)) });
 }));
 

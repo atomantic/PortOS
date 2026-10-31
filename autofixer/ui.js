@@ -7,6 +7,7 @@ import { fileURLToPath } from 'url';
 import { createTailscaleServers, watchCertReload } from '../lib/tailscale-https.js';
 import { certPaths } from '../lib/certPaths.js';
 import { createSidecarAuthGate } from '../lib/sidecarAuthGate.js';
+import { isPm2ProcessName } from '../lib/pm2ProcessName.js';
 import { createStagedFixStore } from './stagedFixes.js';
 import { PM2_BIN, execPm2, listProcessesStrict, DATA_DIR, AUTOFIXER_DIR, INDEX_FILE, loadApps } from './shared.js';
 
@@ -150,6 +151,9 @@ app.get('/', (req, res) => {
 // Server-Sent Events endpoint for streaming logs
 app.get('/logs', async (req, res) => {
   const processName = req.query.process || 'portos-autofixer';
+  if (!isPm2ProcessName(processName)) {
+    return res.status(400).json({ error: 'Invalid process name', code: 'INVALID_PROCESS_NAME' });
+  }
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');

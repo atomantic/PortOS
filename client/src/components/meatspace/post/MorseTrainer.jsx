@@ -665,7 +665,7 @@ function SettingsPanel({ prefs, updatePrefs, onResetProgress, trainingStats, pro
         </span>
         <button
           onClick={onResetProgress}
-          className="flex items-center gap-1 text-gray-400 hover:text-port-error transition-colors"
+          className="flex items-center gap-1 pointer-coarse:min-h-11 text-gray-400 hover:text-port-error transition-colors"
         >
           <RefreshCw size={12} /> Reset progress
         </button>

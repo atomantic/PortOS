@@ -1,9 +1,12 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Dna, Calendar, Pencil, Check, X } from 'lucide-react';
+import { Dna, Calendar, Pencil, Check, X, Trash2 } from 'lucide-react';
 import * as api from '../../../services/api';
 import BrailleSpinner from '../../BrailleSpinner';
 import ProvenanceChip from '../../ui/ProvenanceChip';
 import LoadFailureNotice from '../LoadFailureNotice';
+import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
+import CollapsibleListItem from '../../ui/CollapsibleListItem';
+import useConfirmDelete from '../../../hooks/useConfirmDelete';
 
 function BirthDateSection({ birthDate, onUpdate }) {
   const [editing, setEditing] = useState(false);
@@ -112,6 +115,8 @@ export default function AgeTab() {
   const [birthFailed, setBirthFailed] = useState(false);
   const [epigeneticFailed, setEpigeneticFailed] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [removingId, setRemovingId] = useState(null);
+  const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
 
   const fetchData = useCallback(async () => {
     const [birthResult, epigenetic] = await Promise.all([
@@ -210,16 +215,50 @@ export default function AgeTab() {
             </div>
           )}
 
-          {epigeneticTests.length > 1 && (
+          {epigeneticTests.length > 0 && (
             <div className="mt-4 pt-4 border-t border-port-border">
               <p className="text-xs text-gray-500 uppercase mb-2">History</p>
-              <div className="space-y-1">
-                {epigeneticTests.map((test, i) => (
-                  <div key={i} className="flex items-center gap-4 text-sm">
-                    <span className="text-gray-500 font-mono w-24">{test.date}</span>
-                    <span className="text-gray-400">Bio: {test.biologicalAge}</span>
-                    <span className="text-gray-400">Pace: {test.paceOfAging}</span>
-                  </div>
+              <div>
+                {epigeneticTests.map((test) => (
+                  <CollapsibleListItem
+                    key={test.id || test.date}
+                    spacing="0.25rem"
+                    removing={removingId === test.id}
+                    onExited={() => {
+                      setEpigeneticData(prev => ({
+                        ...prev,
+                        tests: (prev?.tests || []).filter(row => row.id !== test.id),
+                      }));
+                      setRemovingId(null);
+                    }}
+                  >
+                    <div className="flex items-center gap-4 text-sm">
+                      <span className="text-gray-500 font-mono w-24">{test.date}</span>
+                      <span className="text-gray-400">Bio: {test.biologicalAge}</span>
+                      <span className="text-gray-400">Pace: {test.paceOfAging}</span>
+                      {test.id && (isConfirming(test.id) ? (
+                        <ConfirmButtonPair
+                          prompt="Delete?"
+                          confirmIcon={Trash2}
+                          ariaLabel={`Confirm delete epigenetic test ${test.date}`}
+                          onConfirm={() => confirmDelete(async () => {
+                            const removed = await api.removeEpigeneticTest(test.id).catch(() => null);
+                            if (removed) setRemovingId(test.id);
+                          })}
+                          onCancel={cancelDelete}
+                        />
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => requestDelete(test.id)}
+                          className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-600 hover:text-port-error transition-colors"
+                          aria-label={`Delete epigenetic test ${test.date}`}
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      ))}
+                    </div>
+                  </CollapsibleListItem>
                 ))}
               </div>
             </div>

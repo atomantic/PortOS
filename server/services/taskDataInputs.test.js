@@ -383,7 +383,7 @@ describe('taskDataInputs', () => {
     const exec = vi.fn().mockResolvedValue({ code: 0, stdout: '[]', stderr: '' });
     await expect(listForgePullRequests({
       cli: 'gh', cwd: '/repo', state: 'closed-unmerged', exec
-    })).resolves.toEqual({ ok: true, items: [] });
+    })).resolves.toEqual({ ok: true, items: [], truncated: false });
     expect(exec).toHaveBeenCalledWith('gh', expect.arrayContaining([
       '--state', 'closed', '--search', 'is:unmerged'
     ]), expect.objectContaining({ cwd: '/repo' }));
@@ -392,7 +392,7 @@ describe('taskDataInputs', () => {
   it('uses GitLab\'s default open merge-request state without the deprecated flag', async () => {
     const exec = vi.fn().mockResolvedValue({ code: 0, stdout: '[]', stderr: '' });
     await expect(listForgePullRequests({ cli: 'glab', cwd: '/repo', exec }))
-      .resolves.toEqual({ ok: true, items: [] });
+      .resolves.toEqual({ ok: true, items: [], truncated: false });
     expect(exec).toHaveBeenCalledWith('glab', ['mr', 'list', '-P', '100'], expect.objectContaining({ cwd: '/repo' }));
   });
 
@@ -402,5 +402,21 @@ describe('taskDataInputs', () => {
       .resolves.toMatchObject({ ok: false, issues: [] });
     await expect(listForgePullRequests({ cli: 'gh', cwd: '/repo', exec }))
       .resolves.toMatchObject({ ok: false, items: [] });
+  });
+
+  it('flags a full forge page as truncated and requests 500 rows from GitHub', async () => {
+    const rows = Array.from({ length: 500 }, (_, i) => ({ number: i + 1, title: `t${i}`, state: 'OPEN', labels: [] }));
+    const exec = vi.fn().mockResolvedValue({ code: 0, stdout: JSON.stringify(rows), stderr: '' });
+    await expect(listForgeOpenIssues({ cli: 'gh', cwd: '/repo', exec })).resolves.toMatchObject({ ok: true, truncated: true });
+    expect(exec.mock.calls[0][1]).toEqual(expect.arrayContaining(['--limit', '500']));
+    await expect(listForgePullRequests({ cli: 'gh', cwd: '/repo', exec })).resolves.toMatchObject({ ok: true, truncated: true });
+    const short = vi.fn().mockResolvedValue({ code: 0, stdout: JSON.stringify(rows.slice(0, 3)), stderr: '' });
+    await expect(listForgeOpenIssues({ cli: 'gh', cwd: '/repo', exec: short })).resolves.toMatchObject({ ok: true, truncated: false });
+  });
+
+  it('flags a full GitLab page (max 100) as truncated', async () => {
+    const rows = Array.from({ length: 100 }, (_, i) => ({ iid: i + 1, title: 't', state: 'opened' }));
+    const exec = vi.fn().mockResolvedValue({ code: 0, stdout: JSON.stringify(rows), stderr: '' });
+    await expect(listForgeOpenIssues({ cli: 'glab', cwd: '/repo', exec })).resolves.toMatchObject({ ok: true, truncated: true });
   });
 });

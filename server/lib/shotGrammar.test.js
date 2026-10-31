@@ -27,8 +27,13 @@ describe('normalizeShotType', () => {
     expect(normalizeShotType('close-up')).toBe('close');
     expect(normalizeShotType('establishing')).toBe('wide');
     expect(normalizeShotType('OTS')).toBe('over-the-shoulder');
-    expect(normalizeShotType('insert')).toBe('extreme-close');
+    expect(normalizeShotType('insert')).toBe('insert');
+    expect(normalizeShotType('detail')).toBe('insert');
+    expect(normalizeShotType('MCU')).toBe('medium-close');
+    expect(normalizeShotType('cowboy')).toBe('medium-wide');
+    expect(normalizeShotType('full shot')).toBe('full');
     expect(normalizeShotType('point of view')).toBe('pov');
+    expect(normalizeShotType('ensemble')).toBe('group');
   });
 
   it('returns null for unknown / non-string / empty', () => {

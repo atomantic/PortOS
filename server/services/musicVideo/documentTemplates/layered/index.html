@@ -24,8 +24,8 @@ html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
 <script src="cameraRig.js"></script><!-- portos-allow-hidden-content: the reviewed camera-move paths the engine reads -->
 <script type="module" src="lyricType.js"></script><!-- portos-allow-hidden-content: the shared PortOS lyric-type module -->
 <!-- portos-allow-hidden-content: shared still-image effect curves --><script type="module">
-import { imageEffectState, IMAGE_EFFECT_FOG_COLOR } from './musicVideoImageEffects.js';
-globalThis.PORTOS_MV_IMAGE_EFFECTS = { imageEffectState, IMAGE_EFFECT_FOG_COLOR };
+import { imageEffectState, IMAGE_EFFECT_FOG_COLOR, photoSequenceIndex, photoSequenceLayers } from './musicVideoImageEffects.js';
+globalThis.PORTOS_MV_IMAGE_EFFECTS = { imageEffectState, IMAGE_EFFECT_FOG_COLOR, photoSequenceIndex, photoSequenceLayers };
 </script>
 <script src="engine.js"></script><!-- portos-allow-hidden-content: the reviewed template engine beside this page -->
 </body>

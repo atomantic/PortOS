@@ -29,6 +29,7 @@ import { mediaDeleteOutcome } from '../lib/mediaDeleteOutcome';
 import socket from '../services/socket';
 import useMounted from '../hooks/useMounted';
 import usePendingDeletePeerNames from '../hooks/usePendingDeletePeerNames';
+import { refreshMediaUsages } from '../hooks/useMediaUsages';
 import { getMediaJob } from '../services/apiMediaJobs';
 import {
   deleteVideoHistoryItem, cancelVideoPendingDelete, cancelImagePendingDelete, stitchVideos, deleteImage,
@@ -145,11 +146,12 @@ export default function MediaHistory() {
     return { ...x, pendingDelete, raw: pendingDelete ? { ...raw, pendingDelete } : raw };
   })), [setItems]);
 
-  const handleDelete = useCallback(async (item) => {
+  const handleDelete = useCallback(async (item, { force = false } = {}) => {
     try {
       const result = await (item.kind === 'image'
-        ? deleteImage(item.filename, { silent: true })
-        : deleteVideoHistoryItem(item.id, { silent: true }));
+        ? deleteImage(item.filename, { silent: true, force })
+        : deleteVideoHistoryItem(item.id, { silent: true, force }));
+      void refreshMediaUsages();
       const outcome = mediaDeleteOutcome(result, item.kind);
       // A delete that waits on, or did not reach, this machine's copy keeps the row.
       if (!outcome.remove) {
@@ -164,6 +166,8 @@ export default function MediaHistory() {
       refresh();
       if (outcome.tone === 'info') toast(outcome.notice);
     } catch (err) {
+      // Used since this page loaded: refresh so the card lists where.
+      if (err.code === 'MEDIA_IN_USE') void refreshMediaUsages();
       toast.error(err.message || 'Delete failed');
     }
   }, [setItems, withPendingDelete, rememberPeerName, page.setTotal, refresh]);
@@ -241,13 +245,13 @@ export default function MediaHistory() {
             )}
           </div>
         </div>
-        <div className="flex items-center gap-1 text-xs">
+        <div className="flex items-center gap-1 flex-wrap text-xs">
           {FILTERS.map((f) => (
             <button
               key={f.id}
               type="button"
               onClick={() => setFilter(f.id)}
-              className={`px-2.5 py-1 rounded-full border ${
+              className={`min-h-[44px] sm:min-h-0 px-2.5 py-1 rounded-full border ${
                 filter === f.id
                   ? 'bg-port-accent/20 border-port-accent text-port-accent'
                   : 'border-port-border text-gray-400 hover:text-white hover:bg-port-border/50'

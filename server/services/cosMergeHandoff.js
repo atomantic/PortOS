@@ -80,7 +80,7 @@ export async function validateCleanupReviewTarget({ target, workspacePath, requi
   if (!isPlainObject(target) || target.version !== 1 || !SHA_PATTERN.test(target.headSha || '')
     || !target.branch || !target.repoPath || !target.repository) return 'review-target-invalid';
   const pr = parsePullRequestUrl(target.prUrl);
-  const { repositoryKey } = await import('./cosMergeAdmission.js');
+  const { repositoryKey } = await import('./mergeHandoffOwner.js');
   if (!pr || repositoryKey({ host: pr.host, fullName: `${pr.owner}/${pr.repo}` }) !== target.repository
     || repositoryKey(await getOriginInfo(workspacePath).catch(() => null)) !== target.repository) return 'review-repository-changed';
   const local = await execGit(['rev-parse', '--verify', `refs/heads/${target.branch}^{commit}`], workspacePath).catch(() => null);
@@ -181,7 +181,7 @@ export async function inspectCompletedOwnerReview({ agentId = null, repoPath, br
     || isTruthyMeta(task.metadata?.readOnly) || isTruthyMeta(task.metadata?.reviewLoopLeaveOpen)) return held('review-policy-held');
   const policyHold = await readBranchCompletionHold({ repoPath, branch, prUrl, tip: headSha, agents });
   if (policyHold !== (policy === PR_COMPLETIONS.REVIEW_THEN_MERGE ? 'pr-completion-review-required' : null)) return held('review-policy-unproven');
-  const { repositoryKey } = await import('./cosMergeAdmission.js');
+  const { repositoryKey } = await import('./mergeHandoffOwner.js');
   const repository = repositoryKey(await getOriginInfo(repoPath).catch(() => null));
   const app = await resolveHandoffApp(task, agent, repository, repositoryKey);
   if (!app) return held('review-app-unresolved');
@@ -249,7 +249,7 @@ export async function handoffPendingMerge({ agentId, prUrl, headSha, worktreePat
   const pr = parsePullRequestUrl(prUrl);
   if (!pr || !SHA_PATTERN.test(head)) return refuse('handoff-target-invalid');
 
-  const { resolveMergeHandoffOwner, repositoryKey } = await import('./cosMergeAdmission.js');
+  const { resolveMergeHandoffOwner, repositoryKey } = await import('./mergeHandoffOwner.js');
   const owner = await resolveMergeHandoffOwner(agentId);
   if (owner.refused) return refuse(owner.refused);
   const { agent, task, repository } = owner;
@@ -321,12 +321,6 @@ export async function handoffPendingMerge({ agentId, prUrl, headSha, worktreePat
     id: randomUUID(), appId: app.id, prUrl, prNumber: pr.number, headSha: head, repository,
     queuedAt: new Date().toISOString(),
   };
-  // The post-merge gate audit (#12549) must not flag the coordinator's own merge
-  // of this head, and the queue entry is gone once it merges. Record the receipt
-  // on the run first: a stale receipt for a head never queued is harmless.
-  const { recordMergeHandoffReceipt } = await import('./cosMergeAdmission.js');
-  const recorded = await recordMergeHandoffReceipt({ agentId, receipt: { receiptId: receipt.id, prUrl, headSha: head, acceptedAt: receipt.queuedAt } });
-  if (!recorded.recorded) return refuse('queue-write-failed');
   const { queuePendingMerge, followUpHandoffReceipt } = await import('./prWatcher.js');
   const queued = await queuePendingMerge(app.id, {
     prUrl, prNumber: pr.number, prBranch: view.headRefName, sourceAgentId: agentId,

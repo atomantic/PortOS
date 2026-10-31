@@ -18,6 +18,8 @@ import { CATALOG_TYPES, mergeCatalogTypes } from '../lib/catalogTypes';
  *   getType — (id) => type | undefined
  *   ids     — ordered id list
  *   loading — true until the first fetch resolves (fallback is live meanwhile)
+ *   error   — the last fetch failure (null when the registry is current); `types`
+ *             still carries the static fallback so pickers never blank
  *   refresh — re-fetch (call after a Settings → Catalog mutation)
  */
 
@@ -35,6 +37,7 @@ const buildRegistry = (userTypesRaw) => mergeCatalogTypes(CATALOG_TYPES, userTyp
 function useRegistryFetcher(enabled = true) {
   const [registry, setRegistry] = useState(() => buildRegistry([]));
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
   const mountedRef = useMounted();
 
   const refresh = useCallback(() => listCatalogTypes({ silent: true })
@@ -42,10 +45,12 @@ function useRegistryFetcher(enabled = true) {
       if (!mountedRef.current) return;
       const serverTypes = Array.isArray(data?.types) ? data.types : [];
       setRegistry(buildRegistry(serverTypes.filter((t) => t && t.system === false)));
+      setError(null);
       setLoading(false);
     })
-    // Network/route failure → keep the static fallback; stop the spinner.
-    .catch(() => { if (mountedRef.current) setLoading(false); }), []);
+    // Network/route failure → keep the static fallback, surface the error so
+    // Settings can offer a retry instead of reading as "no custom types".
+    .catch((err) => { if (mountedRef.current) { setError(err || new Error('Failed to load catalog types')); setLoading(false); } }), []);
 
   useEffect(() => { if (enabled) refresh(); }, [enabled, refresh]);
 
@@ -54,8 +59,9 @@ function useRegistryFetcher(enabled = true) {
     getType: (id) => registry.byId[id],
     ids: registry.list.map((t) => t.id),
     loading,
+    error,
     refresh,
-  }), [registry, loading, refresh]);
+  }), [registry, loading, error, refresh]);
 }
 
 export function CatalogTypesProvider({ children }) {

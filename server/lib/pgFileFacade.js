@@ -24,8 +24,18 @@ import { checkHealth, ensureSchema } from './db.js';
 import { isTestRunner } from './runtimeEnv.js';
 
 /**
+ * Setup advice appended to every store's "requires PostgreSQL" error. PortOS has
+ * no dotenv loader: a `MEMORY_BACKEND` line in `.env` reaches no process, and
+ * the launcher (`ecosystem.config.cjs`) sets `MEMORY_BACKEND=file` only from
+ * `PGMODE=file`, so that is the `.env` setting to name.
+ */
+export const POSTGRES_SETUP_HINT = 'run `npm run setup:db` (dev/test only: set PGMODE=file in .env; the launcher maps it to MEMORY_BACKEND=file for the unsupported file backend)';
+
+/**
  * True when the file/escape-hatch backend should be used instead of PostgreSQL.
- * Dev/test only — see the Storage backend policy in AGENTS.md.
+ * Dev/test only — see the Storage backend policy in AGENTS.md. Call this rather
+ * than re-spelling the check: a suite then forces a backend by stubbing this one
+ * predicate instead of mocking `isTestRunner()`, which db.js's guards key on.
  */
 export function isFileBackend() {
   return process.env.MEMORY_BACKEND === 'file' || isTestRunner();
@@ -133,7 +143,7 @@ export function createRecordStoreBackendSelector({
   }
 
   const requirement = requireDbMessage
-    || `${label || 'This store'} requires PostgreSQL — run \`npm run setup:db\` (dev/test only: set MEMORY_BACKEND=file in .env)`;
+    || `${label || 'This store'} requires PostgreSQL — ${POSTGRES_SETUP_HINT}`;
 
   let backendName = null;
   const facade = createPgFileFacade({

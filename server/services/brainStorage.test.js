@@ -286,11 +286,20 @@ describe('brainStorage tombstones', () => {
 
     const cutoff = Date.parse(ISO('2021-01-01'));
     const changed = vi.fn();
+    const prunedEvt = vi.fn();
     brainStorage.brainEvents.on('record:changed', changed);
+    brainStorage.brainEvents.on('tombstone:pruned', prunedEvt);
+    expect(await brainStorage.hasStoredRecord('memories', 'old')).toBe(true);
     const pruned = await brainStorage.pruneTombstones('memories', cutoff);
     brainStorage.brainEvents.off('record:changed', changed);
+    brainStorage.brainEvents.off('tombstone:pruned', prunedEvt);
     expect(pruned).toBe(1); // only the 2020 tombstone
     expect(changed).toHaveBeenCalledWith({ type: 'memories', id: 'old' });
+    expect(prunedEvt).toHaveBeenCalledTimes(1);
+    expect(prunedEvt).toHaveBeenCalledWith({ type: 'memories', id: 'old' });
+    expect(await brainStorage.hasStoredRecord('memories', 'old')).toBe(false);
+    expect(await brainStorage.hasStoredRecord('memories', freshCreated.id)).toBe(true);
+    expect(await brainStorage.hasStoredRecord('memories', live.id)).toBe(true);
 
     expect(await rawRecord('memories', 'old')).toBeUndefined();
     expect((await rawRecord('memories', freshCreated.id))._deleted).toBe(true);

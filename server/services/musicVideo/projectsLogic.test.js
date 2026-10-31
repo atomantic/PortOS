@@ -13,6 +13,7 @@ import {
   mergeNextScene,
   mergePreviousScene,
   splitScene,
+  replaceScenes,
   mirrorStatus,
   sanitizeProjectForSync,
   mergeProjectRecord,
@@ -22,6 +23,19 @@ import { productionReviewBasis } from './productionReview.js';
 import { musicVideoProjectCreateSchema, musicVideoProjectUpdateSchema, musicVideoSceneCreateSchema } from '../../lib/musicVideoValidation.js';
 
 const baseProject = () => buildProjectRecord({ name: 'Test MV' }, { id: 'mv-1', now: '2026-01-01T00:00:00.000Z' });
+
+// Uniquely catches an unvalidated medium reaching the record, or a new project gaining the key (#14244).
+describe('productionMedium', () => {
+  it('is validated, stored on patch, cleared by null, and absent from a new project', () => {
+    expect(baseProject()).not.toHaveProperty('productionMedium');
+    expect(musicVideoProjectUpdateSchema.safeParse({ productionMedium: 'claymation' }).success).toBe(false);
+    expect(musicVideoProjectCreateSchema.safeParse({ name: 'A', productionMedium: 'stepped' }).success).toBe(true);
+    const stepped = applyProjectPatch(baseProject(), { productionMedium: 'stepped' });
+    expect(stepped.productionMedium).toBe('stepped');
+    expect(applyProjectPatch(stepped, { productionMedium: null }).productionMedium).toBeNull();
+    expect(buildProjectRecord({ name: 'B', productionMedium: 'beat-graphic' }, { id: 'mv-2', now: 'n' }).productionMedium).toBe('beat-graphic');
+  });
+});
 
 describe('buildProjectRecord', () => {
   // Uniquely catches a footage project created in document mode with no document, which no render can use.
@@ -962,6 +976,39 @@ describe('mergeProjectRecord (#1770 LWW)', () => {
     expect(r.next.deleted).toBe(true);
   });
 
+  // Uniquely catches an older peer's newer body dropping castInputs from a take it still sends, or resurrecting a take it dropped.
+  it('keeps cast inputs an older peer omitted, and a newer peer\'s own snapshot', () => {
+    const castInputs = { ingredientId: 'cat-example', guides: ['child.png'], sheets: [{ id: 'mvr-cs-character', imageId: 'sheet.png' }] };
+    const local = {
+      id: 'mv-1', updatedAt: '2026-01-01T00:00:00Z',
+      scenes: [{ sceneId: 's1', takes: [
+        { takeId: 'mvt-1', kind: 'image', assetId: 'frame.png', castInputs },
+        { takeId: 'mvt-dropped', kind: 'image', assetId: 'gone.png', castInputs },
+      ] }],
+    };
+    const remote = {
+      id: 'mv-1', updatedAt: '2026-01-05T00:00:00Z', name: 'remote edit',
+      scenes: [{ sceneId: 's1', prompt: 'newer prompt', takes: [
+        { takeId: 'mvt-1', kind: 'image', assetId: 'frame.png', prompt: 'newer' },
+        { takeId: 'mvt-2', kind: 'image', assetId: 'other.png' },
+      ] }],
+    };
+    const { next, remoteWins } = mergeProjectRecord(local, remote);
+    expect(remoteWins).toBe(true);
+    expect(next.name).toBe('remote edit');
+    expect(next.scenes[0].prompt).toBe('newer prompt');
+    expect(next.scenes[0].takes[0]).toMatchObject({ prompt: 'newer', castInputs });
+    expect(next.scenes[0].takes[1]).not.toHaveProperty('castInputs');
+    expect(next.scenes[0].takes.some((take) => take.takeId === 'mvt-dropped')).toBe(false);
+
+    const newer = { ingredientId: null, guides: ['face-new.png'], sheets: [] };
+    const kept = mergeProjectRecord(
+      { id: 'mv-1', updatedAt: '2026-01-01T00:00:00Z', scenes: [{ sceneId: 's1', takes: [{ takeId: 'mvt-1', castInputs }] }] },
+      { id: 'mv-1', updatedAt: '2026-01-05T00:00:00Z', scenes: [{ sceneId: 's1', takes: [{ takeId: 'mvt-1', castInputs: newer }] }] },
+    );
+    expect(kept.next.scenes[0].takes[0].castInputs).toEqual(newer);
+  });
+
   it('a same-updatedAt re-push is a no-op (changed=false, no churn)', () => {
     const local = { id: 'mv-1', updatedAt: '2026-01-05T00:00:00Z', name: 'same', deleted: false, deletedAt: null };
     const remote = { id: 'mv-1', updatedAt: '2026-01-05T00:00:00Z', name: 'same' };
@@ -1096,6 +1143,7 @@ describe('create-schema parity', () => {
     cutEffect: { style: 'dissolve' },
     imageEffect: 'end-fade',
     imageEffectSec: 2,
+    photoSequence: { enabled: true, imageIds: ['photo-example.png'], intervalFrames: 6, rate: 'frames' },
     cardText: 'Card',
     codeOverlay: true,
     codeClip: true,
@@ -1110,6 +1158,7 @@ describe('create-schema parity', () => {
     panelRev: 'abc123',
     panelArt: 'panel-art.png',
     setReference: { subjectId: 'set-example', greyboxShotId: 'wide' },
+    preMusic: { durationSec: 3.5, clipVolume: 0.8, layers: [{ effect: 'play-button', atSec: 3, durationSec: null, volume: 1 }] },
   };
 
   it('stores every accepted video setting key on the project record', () => {
@@ -1147,4 +1196,19 @@ it('round-trips lyric overlay visibility without choosing a renderer or changing
   expect(mergeProjectRecord(null, sanitizeProjectForSync(project)).next.lyricOverlayEnabled).toBe(false);
   expect(baseProject()).not.toHaveProperty('lyricOverlayEnabled');
   expect(() => musicVideoProjectUpdateSchema.parse({ lyricOverlayEnabled: 'false' })).toThrow();
+});
+
+describe('shots before the song', () => {
+  // Uniquely catches AI Plan "Replace" wiping a cold open it never plans, or a split cutting one on song time.
+  it('keeps the cold open in front through a re-plan, and will not split it on song time', () => {
+    const { project: added, scene } = addScene(baseProject(), { startSec: 0, endSec: 4, prompt: 'Booth operator presses play' });
+    const { project: marked, updated } = applySceneUpdate(added, scene.sceneId, { preMusic: { durationSec: 3, layers: [{ effect: 'play-button', atSec: 2.6 }] } });
+    expect(updated.preMusic).toEqual({ durationSec: 3, clipVolume: null, layers: [{ effect: 'play-button', atSec: 2.6, durationSec: null, volume: 1 }] });
+    const { project: replanned, scenes } = replaceScenes(marked, [{ startSec: 0, endSec: 6, prompt: 'Rink lights' }]);
+    expect(replanned.scenes.map((s) => [s.sceneId === scene.sceneId, s.order, !!s.preMusic])).toEqual([[true, 0, true], [false, 1, false]]);
+    expect(scenes.map((s) => s.prompt)).toEqual(['Rink lights']);
+    expect(() => splitScene(replanned, scene.sceneId, { atSec: 1 })).toThrow(/no song time to split/);
+    const { updated: back } = applySceneUpdate(replanned, scene.sceneId, { preMusic: null });
+    expect(back.preMusic).toBeNull();
+  });
 });

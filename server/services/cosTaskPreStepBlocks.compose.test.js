@@ -52,11 +52,14 @@ vi.mock('./taskSchedule.js', () => ({
   getTaskInterval: vi.fn(async () => ({ type: 'perpetual', taskMetadata: {} })),
   stripManagedAgentOptionsFromOverride: vi.fn((_type, meta) => meta),
   recordExecution: vi.fn(async () => {}),
-  recordBranchReconcileOutcome: vi.fn(async () => {}),
-  getBranchReconcileOutcome: vi.fn(async () => null),
   parkPerpetual: (...a) => parkPerpetual(...a),
   getPerpetualDrainState: (...a) => getPerpetualDrainState(...a),
   recordPerpetualDispatch: (...a) => recordPerpetualDispatch(...a),
+}));
+
+vi.mock('./branchReconcileOutcome.js', () => ({
+  recordBranchReconcileOutcome: vi.fn(async () => {}),
+  getBranchReconcileOutcome: vi.fn(async () => null),
 }));
 
 vi.mock('./appActivity.js', async (importActual) => ({
@@ -132,14 +135,15 @@ vi.mock('./branchCompletionPolicy.js', async original => ({ ...await original(),
 vi.mock('../lib/checkoutRetirementAdmission.js', () => ({ withCheckoutPublication: (_repo, work) => work() }));
 
 import { registerAgent } from './cosAgentLifecycle.js';
-import { claimMergeAdmission, resolveMergeHandoffOwner } from './cosMergeAdmission.js';
+import { resolveMergeHandoffOwner } from './mergeHandoffOwner.js';
 import { checkReconcileOwnership } from './cosClaimOwnership.js';
 
 import { emitLog } from './cosEvents.js';
 import { inspectOpenDeliveryRepair } from './repoCleanupObservation.js';
 import { inspectOrQueueCompletedReview } from './repoCleanupRecovery.js';
 import { prepareManagedAppImprovementTask, recordDeferredPerpetualDispatch } from './cosTaskGenerator.js';
-import { getTaskInterval, getBranchReconcileOutcome, recordBranchReconcileOutcome } from './taskSchedule.js';
+import { getTaskInterval } from './taskSchedule.js';
+import { getBranchReconcileOutcome, recordBranchReconcileOutcome } from './branchReconcileOutcome.js';
 import { applyPerpetualDrainCap } from './cosTaskPreStepBlocks.js';
 import { readAgentsStateForSafetyCheck } from './cosState.js';
 
@@ -244,6 +248,65 @@ describe('prepareManagedAppImprovementTask composes the extracted pre-step layer
     ]) }));
   });
 
+  it('holds a conflicted delivery for review only when conflict resolution is disabled', async () => {
+    getTaskInterval.mockResolvedValue({ type: 'on-demand', taskMetadata: { resolveConflicts: false } });
+    const branch = 'fix/conflicted';
+    const path = '/example/checkouts/conflicted';
+    reconcileMock.mockResolvedValue(scan({ inFlight: [{ branch, worktreePath: path, state: 'IN_REVIEW', openPr: { url: 'https://github.com/example/repo/pull/9', isDraft: false } }],
+      worktreeInventory: [{ branch, path, head: 'a'.repeat(40), locked: false, managed: true }] }));
+    inspectOpenDeliveryRepair.mockResolvedValue({ headSha: 'a'.repeat(40), evidence: { head: 'a'.repeat(40), conflicts: true } });
+    expect(await generate()).toBeNull();
+    expect(inspectOrQueueCompletedReview).not.toHaveBeenCalled();
+    expect(recordBranchReconcileOutcome).toHaveBeenLastCalledWith(APP.id, expect.objectContaining({ remaining: expect.arrayContaining([
+      expect.objectContaining({ branch, reason: 'conflict-resolution-disabled' }),
+    ]) }));
+  });
+
+  it('keeps the delivery reason without queueing review when the checkout is locked', async () => {
+    const branch = 'fix/locked-review';
+    const path = '/example/checkouts/locked';
+    reconcileMock.mockResolvedValue(scan({ inFlight: [{ branch, worktreePath: path, state: 'IN_REVIEW', openPr: { url: 'https://github.com/example/repo/pull/9', isDraft: false } }],
+      worktreeInventory: [{ branch, path, head: 'a'.repeat(40), locked: true, managed: true }] }));
+    inspectOpenDeliveryRepair.mockResolvedValue({ headSha: 'a'.repeat(40), reason: 'delivery-ci-or-review-pending' });
+    expect(await generate()).toBeNull();
+    expect(inspectOrQueueCompletedReview).not.toHaveBeenCalled();
+    expect(recordBranchReconcileOutcome).toHaveBeenLastCalledWith(APP.id, expect.objectContaining({ remaining: expect.arrayContaining([
+      expect.objectContaining({ branch, reason: 'delivery-ci-or-review-pending' }),
+    ]) }));
+  });
+
+  it.each(['worktreeDirty', 'worktreeStatusUnavailable'])('does not route a review-held open PR through delivery when %s', async flag => {
+    const branch = 'fix/held-open';
+    const path = '/example/checkouts/held-open';
+    reconcileMock.mockResolvedValue(scan({ inFlight: [], wip: [{ branch, worktreePath: path, rule: 'completion-policy', completionPolicyReason: 'pr-completion-review-required',
+      [flag]: true, openPr: { url: 'https://github.com/example/repo/pull/9', isDraft: false } }],
+      worktreeInventory: [{ branch, path, head: 'a'.repeat(40), locked: false, managed: true }] }));
+    await generate();
+    expect(inspectOpenDeliveryRepair).not.toHaveBeenCalled();
+  });
+
+  it('skips retirement preparation entirely when merged cleanup is disabled', async () => {
+    getTaskInterval.mockResolvedValue({ type: 'on-demand', taskMetadata: { cleanupMerged: false } });
+    const release = { branch: 'claim/issue-1', path: '/example/checkouts/1', head: 'a'.repeat(40), managed: true, locked: false };
+    reconcileMock.mockResolvedValue(scan({ inFlight: [], wip: [{ branch: release.branch, worktreePath: release.path, tip: release.head,
+      rule: 'completion-policy', completionPolicyReason: 'pr-completion-review-required' }], worktreeInventory: [release] }));
+    await generate();
+    expect(mergedPrRead).not.toHaveBeenCalled();
+    expect(prepareRetirement).not.toHaveBeenCalled();
+    expect(recordBranchReconcileOutcome).not.toHaveBeenCalledWith(APP.id, expect.objectContaining({ reason: 'preparing-retirement-reviews' }));
+  });
+
+  it('nudges no receipt with autoMerge off but still hands reconcile the saved pending-merge branches', async () => {
+    getTaskInterval.mockResolvedValue({ type: 'on-demand', taskMetadata: { autoMerge: false } });
+    const app = { ...APP, pendingMergePrs: [{ prNumber: 7, prUrl: 'https://github.com/example/repo/pull/7', prBranch: 'fix/pending' }] };
+    admissionFixture.app = app;
+    await prepareManagedAppImprovementTask('branch-reconcile', app, STATE, { skipPreconditions: true });
+    expect(reconcileMock.mock.calls.at(-1)[1].pendingMergeBranches).toEqual(new Set(['fix/pending']));
+    admissionFixture.app = null;
+    await generate();
+    expect(reconcileMock.mock.calls.at(-1)[1]).not.toHaveProperty('pendingMergeBranches');
+  });
+
   it('routes a genuine missing-review obligation through the pinned review loop without a generic reconcile agent', async () => {
     const branch = 'fix/needs-review';
     const path = '/example/checkouts/review';
@@ -276,6 +339,8 @@ describe('prepareManagedAppImprovementTask composes the extracted pre-step layer
     expect(reserveReview).not.toHaveBeenCalled();
     expect(recordPerpetualDispatch).not.toHaveBeenCalled();
     expect(recordBranchReconcileOutcome.mock.calls.at(-1)[1].remaining).toEqual([]);
+    // The retired checkout is reported as cleaned, not silently dropped.
+    expect(emitLog.mock.calls.findLast(([, message]) => message.includes('branch-reconcile parked'))?.[1]).toContain('(cleaned 1');
   });
 
   it('keeps an unresolved retirement visible after the checkout disappears on a later refill', async () => {
@@ -448,12 +513,16 @@ describe('prepareManagedAppImprovementTask composes the extracted pre-step layer
 
 // Regression: prompt-only branch assignments formerly reserved claimBranches
 // successfully but never survived registration as a merge participant.
-describe('scheduled reconciliation registration through merge admission', () => {
+describe('scheduled reconciliation registration through handoff ownership', () => {
   const workspacePath = '/tmp/example-checkout';
   const branch = 'claim/issue-42';
   const ownership = (over = {}) => checkReconcileOwnership({ agentId: 'agent-reconcile', appId: APP.id,
     branch, worktreePath: workspacePath, ...over });
-  const acquire = () => claimMergeAdmission({ agentId: 'agent-reconcile', action: 'acquire' });
+  // The resolved handoff owner, or null when the registered run is refused.
+  const handoffOwner = async () => {
+    const resolved = await resolveMergeHandoffOwner('agent-reconcile');
+    return resolved.owns ? resolved : null;
+  };
   const owner = () => admissionFixture.state.agents['agent-reconcile'];
   const register = async task => {
     admissionFixture.task = { ...parseTasksMarkdown(generateTasksMarkdown([{ ...task, description: task.description.split('\n')[0],
@@ -464,7 +533,7 @@ describe('scheduled reconciliation registration through merge admission', () => 
   };
   beforeEach(async () => {
     vi.clearAllMocks();
-    Object.assign(admissionFixture, { state: { agents: {}, mergeAdmissions: {}, stats: { agentsSpawned: 0 } }, task: null, app: APP,
+    Object.assign(admissionFixture, { state: { agents: {}, stats: { agentsSpawned: 0 } }, task: null, app: APP,
       trees: [{ path: workspacePath, branch: `refs/heads/${branch}`, locked: false }], hold: null, branch,
       origin: { host: 'github.com', fullName: 'example/repo' } });
     readAgentsStateForSafetyCheck.mockImplementation(async () => ({ trusted: true, agents: structuredClone(admissionFixture.state.agents) }));
@@ -478,24 +547,15 @@ describe('scheduled reconciliation registration through merge admission', () => 
     await register(await generate());
   });
 
-  it('persists only the selected assignment, reserves it, and acquires/checks/releases the shared lease', async () => {
+  it('persists only the selected assignment, reserves it, and resolves as the handoff owner', async () => {
     expect(owner().metadata.reconcileAssignment.targets).toEqual([{ branch, workspacePath, merge: true }]);
     expect(owner().metadata).toMatchObject({ configClaimFlow: false, isWorktree: false, configOpenPR: false, prOpenedBy: 'portos' });
-    expect((await acquire()).admitted).toBe(false);
+    expect(await handoffOwner()).toBeNull();
     expect(await ownership()).toEqual({ admitted: true });
-    const lease = await acquire();
-    expect(lease.admitted).toBe(true);
-    expect(await claimMergeAdmission({ agentId: owner().id, action: 'check', token: lease.token })).toMatchObject({ admitted: true });
-    const handoff = await resolveMergeHandoffOwner(owner().id);
+    const handoff = await handoffOwner();
     expect(handoff.workspacePath).toBe(workspacePath);
     expect(handoff.owns(branch)).toBe(true);
     expect(handoff.owns('claim/issue-99')).toBe(false);
-    // Successful merge may remove the checkout and complete the task before release.
-    admissionFixture.trees = [];
-    admissionFixture.task.status = 'completed';
-    expect(await claimMergeAdmission({ agentId: owner().id, action: 'release', token: lease.token, outcome: 'merged' }))
-      .toMatchObject({ released: true });
-    expect(admissionFixture.state.mergeAdmissions).toEqual({});
   });
 
   it('refuses an unassigned branch even when caller paths and copied prose describe it', async () => {
@@ -506,8 +566,7 @@ describe('scheduled reconciliation registration through merge admission', () => 
     delete admissionFixture.task.metadata.reconcileAssignment;
     expect(await ownership()).toMatchObject({ admitted: true });
     expect(owner().metadata.claimBranches).toEqual([branch]);
-    expect(await claimMergeAdmission({ agentId: owner().id, action: 'acquire', branch, worktreePath: workspacePath }))
-      .toMatchObject({ admitted: false, reason: 'claim-owner-unverified' });
+    expect(await resolveMergeHandoffOwner(owner().id)).toEqual({ refused: 'handoff-owner-unverified' });
   });
 
   it.each(['task-completed', 'task-missing', 'owner-completed', 'owner-missing', 'assignment-changed', 'checkout-changed',
@@ -515,8 +574,7 @@ describe('scheduled reconciliation registration through merge admission', () => 
     'policy-hold', 'policy-review', 'policy-unreadable', 'live-owner', 'locked-checkout', 'ownership-unreadable'])
   ('refuses %s after a successful reservation', async mode => {
     expect((await ownership()).admitted).toBe(true);
-    const lease = await acquire();
-    expect(lease.admitted).toBe(true);
+    expect(await handoffOwner()).not.toBeNull();
     if (mode === 'task-missing') admissionFixture.task = null;
     if (mode === 'task-completed') admissionFixture.task.status = 'completed';
     if (mode === 'owner-completed') owner().status = 'completed';
@@ -539,8 +597,7 @@ describe('scheduled reconciliation registration through merge admission', () => 
       metadata: { sourceWorkspace: APP.repoPath, claimBranches: [branch] } };
     if (mode === 'locked-checkout') admissionFixture.trees[0].locked = true;
     if (mode === 'ownership-unreadable') admissionFixture.trees = null;
-    expect((await acquire()).admitted).toBe(false);
-    expect((await claimMergeAdmission({ agentId: 'agent-reconcile', action: 'check', token: lease.token })).admitted).toBe(false);
+    expect(await handoffOwner()).toBeNull();
   });
 
   it('rejects forged structured assignments through public task intake and registration', async () => {
@@ -555,7 +612,7 @@ describe('scheduled reconciliation registration through merge admission', () => 
     expect(owner().metadata.reconcileAssignment).toBeNull();
     expect((await ownership()).admitted).toBe(true);
     expect(owner().metadata.claimBranches).toEqual([branch]);
-    expect((await acquire()).admitted).toBe(false);
+    expect(await handoffOwner()).toBeNull();
   });
 
   it('binds a checkout-less assignment only to its first repository-observed holder', async () => {
@@ -565,17 +622,17 @@ describe('scheduled reconciliation registration through merge admission', () => 
     expect(owner().metadata.reconcileAssignment.targets[0].workspacePath).toBeNull();
     expect((await ownership({ worktreePath: undefined })).admitted).toBe(true);
     expect(owner().metadata.reconcileReservations).toEqual([{ branch, workspacePath: null }]);
-    expect((await acquire()).admitted).toBe(false);
+    expect(await handoffOwner()).toBeNull();
     // A caller's invented path cannot create the missing holder.
     expect(await ownership({ worktreePath: '/tmp/forged' })).toMatchObject({ admitted: false, reason: 'holder-changed' });
     admissionFixture.trees = [{ path: workspacePath, branch: `refs/heads/${branch}`, locked: false }];
     expect((await ownership({ worktreePath: undefined })).admitted).toBe(true);
     expect(owner().metadata.reconcileReservations).toEqual([{ branch, workspacePath }]);
-    expect((await acquire()).admitted).toBe(true);
+    expect(await handoffOwner()).not.toBeNull();
     // Even an updated caller path cannot move that trusted first binding.
     admissionFixture.trees[0].path = '/tmp/changed';
     expect(await ownership({ worktreePath: '/tmp/changed' })).toMatchObject({ admitted: false, reason: 'reconcile-target-unverified' });
-    expect((await acquire()).admitted).toBe(false);
+    expect(await handoffOwner()).toBeNull();
   });
 
   it('retains every ordinary branch reservation when selecting another merge target', async () => {
@@ -611,23 +668,7 @@ describe('scheduled reconciliation registration through merge admission', () => 
     expect(owner().metadata.reconcileAssignment.targets[0].merge).toBe(false);
     expect((await ownership()).admitted).toBe(true);
     expect(owner().metadata.reconcileMergeReservation).toBeNull();
-    expect((await acquire()).admitted).toBe(false);
-  });
-
-  it('does not retarget an acquired lease when another assigned branch is reserved', async () => {
-    getTaskInterval.mockResolvedValue({ type: 'on-demand', taskMetadata: { branchesPerAgent: 2 } });
-    await register(await generate());
-    expect((await ownership()).admitted).toBe(true);
-    const lease = await acquire();
-    admissionFixture.trees.push({ path: '/tmp/other-checkout', branch: 'refs/heads/claim/issue-99' });
-    expect((await ownership({ branch: 'claim/issue-99', worktreePath: '/tmp/other-checkout' })).admitted).toBe(true);
-    admissionFixture.branch = 'claim/issue-99';
-    expect(await acquire()).toMatchObject({ admitted: false, reason: 'lease-target-changed' });
-    expect(await claimMergeAdmission({ agentId: owner().id, action: 'check', token: lease.token }))
-      .toMatchObject({ admitted: false, reason: 'lease-target-changed' });
-    expect(await claimMergeAdmission({ agentId: owner().id, action: 'release', token: lease.token, outcome: 'resync' }))
-      .toMatchObject({ released: true });
-    expect((await acquire()).admitted).toBe(true);
+    expect(await handoffOwner()).toBeNull();
   });
 
   it('reserves and releases a non-claim branch without granting other coordinators its checkout', async () => {
@@ -637,20 +678,11 @@ describe('scheduled reconciliation registration through merge admission', () => 
     admissionFixture.branch = ordinaryBranch;
     admissionFixture.trees[0].branch = `refs/heads/${ordinaryBranch}`;
     expect((await ownership({ branch: ordinaryBranch })).admitted).toBe(true);
-    expect((await acquire()).admitted).toBe(true);
+    expect(await handoffOwner()).not.toBeNull();
     expect(await checkReconcileOwnership({ appId: APP.id, branch: ordinaryBranch, worktreePath: workspacePath }))
       .toMatchObject({ admitted: false, reason: 'claim-owner-active' });
     const { updateClaimOwnership } = await import('./cosClaimOwnership.js');
     expect(await updateClaimOwnership({ agentId: owner().id, action: 'release', branch: ordinaryBranch })).toMatchObject({ released: true });
-    expect((await acquire()).admitted).toBe(false);
-  });
-
-  it('preserves repository lease exclusion for a different live participant', async () => {
-    expect((await ownership()).admitted).toBe(true);
-    admissionFixture.state.agents['agent-other'] = { id: 'agent-other', status: 'running', taskId: 'other-task',
-      startedAt: '2026-01-01T00:00:00Z', metadata: { sourceWorkspace: APP.repoPath, claimPicksOwnBranch: true, claimBranches: ['claim/issue-100'] } };
-    const other = await claimMergeAdmission({ agentId: 'agent-other', action: 'acquire' });
-    expect(other.admitted).toBe(true);
-    expect(await acquire()).toMatchObject({ admitted: false, reason: 'owner-active-or-unverified' });
+    expect(await handoffOwner()).toBeNull();
   });
 });

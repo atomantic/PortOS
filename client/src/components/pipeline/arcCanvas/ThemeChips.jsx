@@ -125,7 +125,7 @@ export default function ThemeChips({ series, arc, onSeriesUpdate }) {
             disabled={saving}
             aria-label={`Remove theme ${t}`}
             title={`Remove "${t}"`}
-            className="pr-1.5 -ml-0.5 text-gray-500 hover:text-port-error opacity-40 sm:opacity-0 sm:group-hover:opacity-100 focus:opacity-100 disabled:opacity-0"
+            className="inline-flex items-center justify-center pr-1.5 -ml-0.5 pointer-coarse:min-w-11 pointer-coarse:min-h-11 pointer-coarse:px-0 pointer-coarse:ml-0 text-gray-500 hover:text-port-error opacity-40 [@media(hover:hover)]:sm:opacity-0 sm:group-hover:opacity-100 focus:opacity-100 disabled:opacity-0"
           >
             <X size={10} />
           </button>

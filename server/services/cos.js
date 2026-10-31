@@ -1,4 +1,5 @@
 import { maintenance } from '../lib/maintenanceAdmission.js';
+import { isHostShuttingDown } from '../lib/hostShutdown.js';
 import { mergePersistentMindMaintainer } from '../lib/persistentMindMaintainer.js';
 /**
  * Chief of Staff (CoS) Service
@@ -65,7 +66,7 @@ import { runHealthCheck } from './cosHealthMonitor.js';
 // dequeueNextTask so the spawn-side logic stays here, not in the store.
 import { getPendingTaskIds as readPendingTaskIds, getUserTasks, getCosTasks, getAllTasks, getTaskById, addTask, updateTask, sweepResolvedFailureTasks } from './cosTaskStore.js';
 import { ensureInstanceId } from './instanceIdentity.js';
-import { isHeldByOther, buildRenewal, buildClaim, getClaimOwner } from './cosTaskClaim.js';
+import { isHeldByOther, buildRenewal, buildClaim, getClaimOwner, isLeaseLive } from './cosTaskClaim.js';
 import { retryTasksResolvedByInvestigation } from './investigationRetry.js';
 import { spawnBudgetHoldReason } from './spawnBudgetProof.js';
 import { handBackBlockedPrRemediation } from './blockedPrRemediation.js';
@@ -534,17 +535,6 @@ async function bootDaemon(state) {
     },
     metadata: { description: 'Resume runtime verification after a verified boot' },
   });
-  const { INITIALIZED_RECOVERY_INTERVAL_MS, sweepInitializedCheckoutRecoveries } = await import('./initializedCheckoutRecoverySweep.js');
-  scheduleEvent({
-    id: 'cos-initialized-retirement-recovery',
-    type: 'interval',
-    intervalMs: INITIALIZED_RECOVERY_INTERVAL_MS,
-    handler: async () => {
-      await sweepInitializedCheckoutRecoveries(pendingMergeSweepBlocked)
-        .catch(error => console.warn(`⚠️ Initialized retirement recovery deferred: ${error.message}`));
-    },
-    metadata: { description: 'Resume verified initialized retirement journals' },
-  });
   const { PENDING_MERGE_SWEEP_INTERVAL_MS, setHandoffFollowUpGate } = await import('./prWatcher.js');
   setHandoffFollowUpGate(pendingMergeSweepBlocked);
   scheduleEvent({
@@ -738,6 +728,9 @@ export async function isPaused() {
  */
 export async function forceSpawnTask(taskId, { resetSpawnBudget = false } = {}) {
   maintenance.assertOpen();
+  // Before the budget-reset write and the `task:ready` emit: an owner registered
+  // after the shutdown marker snapshot is charged as an orphan next boot (#14170).
+  if (isHostShuttingDown()) return { error: 'PortOS is shutting down — run the task again after it restarts' };
   let task = await getTaskById(taskId);
   if (!task) return { error: 'Task not found' };
   if (task.metadata?.preflight?.requestId) return { error: 'Preflight progress cards cannot be spawned' };
@@ -830,6 +823,9 @@ export async function forceSpawnTask(taskId, { resetSpawnBudget = false } = {}) 
   if (budgetHold && !resetSpawnBudget) return { error: `${budgetHold}. Inspect dispatch history or explicitly reset the spawn budget before running.` };
   if (resetSpawnBudget) {
     if (!budgetHold) return { error: 'Spawn budget is already verified; no reset is needed' };
+    // The store refuses a reset under a live claim lease; say so instead of the
+    // generic "changed" refusal, and when the lease frees up.
+    if (isLeaseLive(task.metadata)) return { error: `A claim lease on this task is live until ${task.metadata.leaseExpiresAt}; reset after it expires` };
     const orphan = resetStopped ? await import('./explicitSpawnBudgetReset.js')
       .then(({ prepareExplicitOrphanBudgetReset }) => prepareExplicitOrphanBudgetReset(task)) : null;
     if (orphan?.error) return { error: orphan.error };
@@ -1059,6 +1055,7 @@ async function isRunnerHolding() {
  * This bypasses the evaluation interval for user-submitted tasks so they start instantly.
  */
 async function tryImmediateSpawn(task) {
+  if (isHostShuttingDown()) return;
   if (!isDaemonRunning()) return;
 
   const paused = await isPaused();
@@ -1275,6 +1272,10 @@ const scheduleDequeue = (options = {}) => setImmediate(() => {
 export async function dequeueNextTask({ ignoreTaskId = null } = {}) {
   if (maintenance.held()) return;
   if (!isDaemonRunning()) return;
+  // Same reason as the runner gate below: the tiers' side effects cannot be
+  // taken back, and an agent registered after the shutdown marker snapshot is
+  // charged as a genuine orphan on the next boot (#14170).
+  if (isHostShuttingDown()) return;
 
   // In runner mode the cos-runner app owns every agent process, so a cycle run
   // while it is down can only produce holds. Bail before the tiers rather than
@@ -1485,7 +1486,7 @@ async function refillPerpetualForCompletedAgent(agent) {
   const branchSweep = agentScheduledType(agent) === 'branch-reconcile';
   const interrupted = async (reason) => {
     if (!branchSweep) return;
-    const { recordBranchReconcileOutcome } = await import('./taskSchedule.js');
+    const { recordBranchReconcileOutcome } = await import('./branchReconcileOutcome.js');
     await recordBranchReconcileOutcome(agent?.metadata?.taskApp || null, {
       status: 'incomplete', reason, nextAction: 'Resolve the interruption, then run branch reconciliation again.',
     });
@@ -1596,7 +1597,9 @@ export async function init() {
           await recoverBlockedSystemTask(agent.taskId);
         })
         .catch(err => console.error(`❌ Blocked-system investigation recovery failed: ${err.message}`))
-        .then(() => refillPerpetualForCompletedAgent(agent))
+        // A run that finished as the server exits still finalizes, but admits
+        // nothing next (#14170). The hourly improvement check resumes the drain.
+        .then(() => (isHostShuttingDown() ? null : refillPerpetualForCompletedAgent(agent)))
         .catch(err => console.error(`❌ Perpetual refill after ${agent?.id} failed: ${err.message}`))
         // Same window as the refill above: this runs before the completing
         // task's `updateTask` settles it, so the idle tier's generator must

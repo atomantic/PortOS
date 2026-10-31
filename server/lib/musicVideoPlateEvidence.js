@@ -39,12 +39,44 @@ export function currentPlateEvidence(scene, take) {
   return evidence.verdict === verdict ? evidence : null;
 }
 
+/** A plate that passed alone but disagrees with its neighbor stays out of this run's video steps. */
+export function plateAdjacencyFailed(evidence, runId) {
+  return evidence?.adjacency?.runId === runId && evidence.adjacency.verdict === 'fail';
+}
+
+/** Footage shots with a reviewable plate, in cut order; code, card and still shots never join the strip. */
+export function footagePlateScenes(project) {
+  const medium = (scene) => project.treatment?.shotDirections?.find((entry) => entry.sceneId === scene.sceneId)?.medium;
+  return (project.scenes || []).filter((scene) => scene.direction?.actionContract && (medium(scene) ?? 'generated-footage') === 'generated-footage')
+    .sort((a, b) => a.startSec - b.startSec);
+}
+
+export const selectedPlateTake = (scene) => scene.takes?.find((entry) => entry.kind === 'image' && entry.assetId === scene.referenceImageId && entry.status !== 'rejected');
+
+/** Adjacency evidence for strip[index], valid only for the same neighbor pair within one run. */
+export function currentAdjacency(strip, index, runId, resumedAt = '') {
+  const adjacency = selectedPlateTake(strip[index])?.plateEvidence?.adjacency;
+  if (adjacency?.runId !== runId || adjacency.key !== `${strip[index - 1].referenceImageId}>${strip[index].referenceImageId}`) return null;
+  return adjacency.verdict === 'unverified' && adjacency.reviewedAt < resumedAt ? null : adjacency;
+}
+
+/** Invalid or incomplete strip responses fail closed as unverified for every compared scene. */
+export function plateStripFindings(strip, text) {
+  const { value } = extractJson(String(text || ''), { shapePredicate: (candidate) => candidate && Array.isArray(candidate.scenes) });
+  return strip.slice(1).map((scene) => {
+    const matches = Array.isArray(value?.scenes) ? value.scenes.filter((entry) => entry?.sceneId === scene.sceneId) : [];
+    const result = matches.length === 1 ? matches[0] : null;
+    const usable = ['pass', 'fail', 'unverified'].includes(result?.status) && typeof result.note === 'string' && result.note.trim();
+    return { sceneId: scene.sceneId, verdict: usable ? result.status : 'unverified', note: usable ? result.note.trim().slice(0, 1000) : 'The reviewer supplied no usable adjacency evidence' };
+  });
+}
+
 export function selectedPlatePasses(scene, runId) {
   if (!scene.direction?.actionContract) return true;
   const take = scene.takes?.find((entry) => entry.kind === 'image' && entry.assetId === scene.referenceImageId && entry.status !== 'rejected');
   const evidence = currentPlateEvidence(scene, take);
   const requirements = plateRequirements(scene);
-  return evidence?.runId === runId && evidence.verdict === 'pass' && requirements.every(({ id }) => evidence.checks?.some((check) => check.id === id && check.status === 'pass'));
+  return evidence?.runId === runId && evidence.verdict === 'pass' && !plateAdjacencyFailed(evidence, runId) && requirements.every(({ id }) => evidence.checks?.some((check) => check.id === id && check.status === 'pass'));
 }
 
 /** Invalid, absent or incomplete responses fail closed with concrete unverified checks. */

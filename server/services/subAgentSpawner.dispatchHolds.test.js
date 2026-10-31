@@ -93,6 +93,7 @@ import { isUpdateInProgress } from './updateChecker.js';
 import { setUseRunner } from './agentState.js';
 import { acquireLocalEndpointSpawnSlot } from './cosLocalEndpointSlots.js';
 import { forgeSpawnHoldReason } from './cosForgeSpawnGate.js';
+import { markHostShuttingDown, resetHostShutdownFlagForTests } from '../lib/hostShutdown.js';
 
 const dispatch = (task) => taskHandlers.get('task:ready')(task);
 
@@ -244,6 +245,43 @@ describe('subAgentSpawner — self-update hold (#4124)', () => {
     await dispatch({ id: 'cos-u5', metadata: {} });
 
     expect(spawnAgentForTask).not.toHaveBeenCalled();
+  });
+});
+
+describe('subAgentSpawner — host-shutdown hold (#14170)', () => {
+  // An agent registered after the shutdown marker snapshot is charged as a
+  // genuine orphan on the next boot; the hold keeps the task pending instead.
+  beforeEach(async () => {
+    await initSpawner();
+    vi.clearAllMocks();
+    vi.useRealTimers();
+    setUseRunner(true);
+    isRunnerReachable.mockResolvedValue(true);
+    isUpdateInProgress.mockReturnValue(false);
+    resetHostShutdownFlagForTests();
+  });
+
+  it('holds before any probe and releases what the emitter bound', async () => {
+    markHostShuttingDown();
+    try {
+      await dispatch({ id: 'cos-s1', metadata: { app: 'some-app', jobId: 'job-s1' } });
+    } finally { resetHostShutdownFlagForTests(); }
+
+    expect(isRunnerReachable).not.toHaveBeenCalled();
+    expect(spawnAgentForTask).not.toHaveBeenCalled();
+    expect(releaseAppReviewMarker).toHaveBeenCalledWith('some-app');
+    expect(cosEvents.emit).toHaveBeenCalledWith('job:spawn-failed', { jobId: 'job-s1', reason: 'held' });
+    expect(cosEvents.emit).toHaveBeenCalledWith('task:held', { taskId: 'cos-s1', reason: 'PortOS is shutting down' });
+  });
+
+  it('rechecks the latch after the awaited admission checks, just before the spawn', async () => {
+    forgeSpawnHoldReason.mockImplementationOnce(async () => { markHostShuttingDown(); return null; });
+    try {
+      await dispatch({ id: 'cos-s2', metadata: { app: 'some-app' } });
+    } finally { resetHostShutdownFlagForTests(); }
+
+    expect(spawnAgentForTask).not.toHaveBeenCalled();
+    expect(releaseAppReviewMarker).toHaveBeenCalledWith('some-app');
   });
 });
 

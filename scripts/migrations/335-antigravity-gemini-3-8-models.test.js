@@ -2,7 +2,7 @@
  * Test for migration 335 — update Antigravity CLI and TUI model catalog to include Gemini 3.8.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync } from 'fs';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, existsSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -150,11 +150,13 @@ describe('migration 335 — Antigravity Gemini 3.8 model catalog', () => {
 
   it('is a no-op when data/providers.json does not exist (fresh install)', async () => {
     rmSync(providersPath, { force: true });
-    await expect(migration.up({ rootDir })).resolves.not.toThrow();
+    await migration.up({ rootDir });
+    expect(existsSync(providersPath)).toBe(false);
   });
 
   it('skips gracefully when providers.json is invalid JSON', async () => {
     writeFileSync(providersPath, 'not-json');
-    await expect(migration.up({ rootDir })).resolves.not.toThrow();
+    await migration.up({ rootDir });
+    expect(readFileSync(providersPath, 'utf-8')).toBe('not-json');
   });
 });

@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router';
 import { Bot, Pencil, Play, Undo2, X } from 'lucide-react';
 import Pill from '../ui/Pill';
+import ListLoadError from '../ui/ListLoadError';
 import LoadFailedState from '../ui/LoadFailedState';
 import PageSkeleton from '../ui/PageSkeleton';
 import { timeAgo } from '../../utils/formatters';
@@ -230,24 +231,36 @@ export default function GitHubAutomationsTab() {
 
   const [actions, setActions] = useState([]);
   const [rules, setRules] = useState([]);
+  // Which list read failed on the latest load. A failed read keeps the
+  // last good list on screen beside a Retry row instead of the "nothing yet"
+  // copy, which would hide every Undo for actions Assist took on GitHub.
+  const [failed, setFailed] = useState({ activity: false, rules: false });
+  const loadRequestRef = useRef(0);
   const [savingModeId, setSavingModeId] = useState(null);
   const [savingRulesId, setSavingRulesId] = useState(null);
   const [undoingId, setUndoingId] = useState(null);
 
+  // Every github:notifications:changed event reloads, and one check emits once
+  // per account, so only the newest request may write.
   const load = useCallback(async () => {
+    const request = ++loadRequestRef.current;
     const [result, activity, learned] = await Promise.all([
       getGitHubAutomations({ silent: true }).catch(() => null),
       getGitHubAutomationActivity({ silent: true }).catch(() => null),
       getGitHubLearnedRules({ silent: true }).catch(() => null),
     ]);
+    if (request !== loadRequestRef.current) return;
+    const activityOk = Array.isArray(activity?.actions);
+    const rulesOk = Array.isArray(learned?.rules);
+    setFailed({ activity: !activityOk, rules: !rulesOk });
+    if (activityOk) setActions(activity.actions);
+    if (rulesOk) setRules(learned.rules);
     if (!result) {
       setLoadFailed(true);
       return;
     }
     setLoadFailed(false);
     setOverview(result);
-    if (activity) setActions(activity.actions);
-    if (learned) setRules(learned.rules);
   }, []);
 
   useEffect(() => { load(); }, [load]);
@@ -318,6 +331,7 @@ export default function GitHubAutomationsTab() {
 
   return (
     <div className="min-w-0 space-y-4">
+      {loadFailed && <ListLoadError what="the latest GitHub automation status" onRetry={load} />}
       <section className="space-y-2 rounded-lg border border-port-border bg-port-card p-4" aria-label="Notification check schedule">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="min-w-0">
@@ -367,12 +381,14 @@ export default function GitHubAutomationsTab() {
 
       <section className="space-y-2 rounded-lg border border-port-border bg-port-card p-4" aria-label="Recent Assist actions">
         <h2 className="font-semibold text-white">Recent actions</h2>
-        <ActivityList actions={actions} onUndo={undo} undoingId={undoingId} />
+        {failed.activity && <ListLoadError what="recent actions" onRetry={load} />}
+        {(!failed.activity || actions.length > 0) && <ActivityList actions={actions} onUndo={undo} undoingId={undoingId} />}
       </section>
 
       <section className="space-y-2 rounded-lg border border-port-border bg-port-card p-4" aria-label="Learned rules">
         <h2 className="font-semibold text-white">Learned rules</h2>
-        <RuleList rules={rules} onDelete={forgetRule} />
+        {failed.rules && <ListLoadError what="learned rules" onRetry={load} />}
+        {(!failed.rules || rules.length > 0) && <RuleList rules={rules} onDelete={forgetRule} />}
       </section>
     </div>
   );

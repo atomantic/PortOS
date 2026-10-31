@@ -158,6 +158,23 @@ describe('Time Machine setup backup boundary', () => {
     });
   });
 
+  it('does not re-prompt for sudo for an already-excluded path whose directory was since deleted', () => {
+    const added = new Set();
+    const preference = { ...memoryPreference(), added: () => new Set(added), markAdded: vi.fn(paths => paths.forEach(p => added.add(p))) };
+    const present = new Set();
+    const run = vi.fn((command, args) => command === 'tmutil'
+      ? { status: 0, stdout: present.has(args[1]) ? '[Excluded]' : '[UNKNOWN]' }
+      : { status: 0 });
+    const mkdir = vi.fn(path => present.add(path));
+    const exists = path => present.has(path);
+    expect(setup({ run, preference, mkdir, exists }).status).toBe('updated');
+    present.clear(); // directories deleted between runs; fixed-path exclusions persist
+    run.mockClear();
+    const second = setup({ run, preference, mkdir, exists });
+    expect(second.status).toBe('present');
+    expect(run.mock.calls.some(([command]) => command === 'sudo')).toBe(false);
+  });
+
   it('retains missing-path and process errors as retryable setup warnings', () => {
     const run = vi.fn((command) => command === 'tmutil'
       ? { status: 1, stdout: '[Excluded]', stderr: 'No such file or directory' }

@@ -156,8 +156,8 @@ describe('Universes page — row thumbnail', () => {
     const img = container.querySelector('img');
     expect(img).toBeTruthy();
     expect(screen.getAllByText('7').length).toBeGreaterThan(0);
-    expect(img.getAttribute('src')).toContain('base-style.png');
-    expect(img.getAttribute('src')).not.toContain('contact-sheet.png');
+    expect(img.getAttribute('src')).toContain('base-style.webp');
+    expect(img.getAttribute('src')).not.toContain('contact-sheet.webp');
   });
 
   it('falls back to the media image when the summary has no style image', async () => {
@@ -169,7 +169,7 @@ describe('Universes page — row thumbnail', () => {
     ]);
     const { container } = await renderPage();
     await waitFor(() => expect(screen.getAllByText('Void').length).toBeGreaterThan(0));
-    expect(container.querySelector('img').getAttribute('src')).toContain('media.png');
+    expect(container.querySelector('img').getAttribute('src')).toContain('media.webp');
   });
 
   it('falls back to the latest media-collection image when no base style image exists', async () => {
@@ -182,7 +182,7 @@ describe('Universes page — row thumbnail', () => {
     const { container } = await renderPage();
     await waitFor(() => expect(screen.getAllByText('Reality').length).toBeGreaterThan(0));
     const img = container.querySelector('img');
-    expect(img.getAttribute('src')).toContain('fallback.png');
+    expect(img.getAttribute('src')).toContain('fallback.webp');
   });
 });
 

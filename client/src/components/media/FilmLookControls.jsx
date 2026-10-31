@@ -9,7 +9,7 @@ const groupControls = (groupId) => FILM_LOOK_CONTROLS.filter((control) => contro
 // Modifiers and tints ride under the effect they shape: they show once that effect is on.
 const dependsOn = {
   halationColor: 'halation', halationSpread: 'halation', castColor: 'cast', shadowColor: 'splitTone', highlightColor: 'splitTone',
-  grainSize: 'grain', grainColor: 'grain', leakColor: 'leak',
+  grainSize: 'grain', grainColor: 'grain', leakColor: 'leak', weaveRate: 'weave', flickerRate: 'flicker',
 };
 const shown = (control, look) => !dependsOn[control.id] || Math.abs(look[dependsOn[control.id]]) > 0;
 const percent = (control, value) => (control.min < 0 ? `${value > 0 ? '+' : ''}${Math.round(value * 100)}` : `${Math.round(value * 100)}%`);
@@ -90,7 +90,7 @@ function SavedLooks({ look, saved, matched, onApply }) {
 
 /**
  * The film look's controls: preset chips, then every slider, color and toggle
- * grouped the way a colorist thinks (focus & glow, color, texture, frame).
+ * grouped the way a colorist thinks (focus & glow, color, texture, frame, continuous motion).
  * Each row names the effect in photography terms, and the "In a prompt" box
  * rewrites the current settings as the words that ask an image or video model
  * for the same qualities, so tuning a look also teaches the vocabulary.
@@ -176,6 +176,7 @@ export default function FilmLookControls({ look: given, onChange, onCommit, comp
               <span className="font-medium text-port-text">{group.label}</span>
               <span className="text-port-text-muted">{active ? `${active} on` : 'off'} {open ? '▴' : '▾'}</span>
             </button>
+            {open && group.hint && <p className="px-2 pb-1 text-port-text-muted">{group.hint}</p>}
             {open && (
               <div className="grid grid-cols-1 gap-x-4 gap-y-2 px-2 pb-2 sm:grid-cols-2">
                 {controls.map((control) => {

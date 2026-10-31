@@ -44,6 +44,10 @@ describe('networkExposure.isLoopbackHost', () => {
     ['localhost', true],
     ['LOCALHOST', true],
     ['127.0.0.1', true],
+    ['127.0.0.2', true],
+    ['127.255.255.254', true],
+    ['127.999.1.1', false],
+    ['::', false],
     ['::1', true],
     ['0.0.0.0', false],
     ['100.64.0.50', false],
@@ -178,6 +182,12 @@ describe('networkExposure.getNetworkExposureStatus', () => {
 
     process.env.HOST = '127.0.0.1';
     expect(getNetworkExposureStatus().bind.audience).toBe('loopback-only');
+
+    process.env.HOST = '127.0.0.2';
+    expect(getNetworkExposureStatus().bind.audience).toBe('loopback-only');
+
+    process.env.HOST = '::';
+    expect(getNetworkExposureStatus().bind.audience).toBe('all-interfaces');
 
     process.env.HOST = '100.64.0.50';
     expect(getNetworkExposureStatus().bind.audience).toBe('specific-interface');

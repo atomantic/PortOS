@@ -14,9 +14,12 @@ vi.mock('../components/IngredientPicker', () => ({
     </div>
   ) : null),
 }));
-vi.mock('../components/MediaImage', () => ({
-  default: ({ src, alt, ...rest }) => <img src={src} alt={alt} {...rest} />,
-}));
+vi.mock('../components/MediaImage', async () => {
+  const { imageThumbnailSrc } = await import('../lib/imageThumbnailSrc');
+  return {
+    default: ({ src, thumbnail, alt, ...rest }) => <img src={(thumbnail && imageThumbnailSrc(src)) || src} alt={alt} {...rest} />,
+  };
+});
 
 import CreativeCastImport from './CreativeCastImport';
 import { previewMusicVideoCastImport, commitMusicVideoCastImport } from '../services/apiCatalog';

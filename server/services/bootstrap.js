@@ -26,7 +26,7 @@ import { noteReadinessChanged } from './readinessSignal.js';
  * queue an AI provider call. Boot only loads on-disk state and ARMS schedulers;
  * every scheduler here is off by default or user-configured.
  */
-import { isTestRunner, isSmokeBoot } from '../lib/runtimeEnv.js';
+import { isSmokeBoot } from '../lib/runtimeEnv.js';
 import { readPortosEnvValue } from '../lib/portosEnv.js';
 import { join } from 'path';
 import { resolveInstallRoot } from '../lib/dataRoot.js';
@@ -153,7 +153,7 @@ import { initSharing, quiesceSharingForExit, drainPeerSyncOperations } from './s
 import { initMortalLoomStore } from './mortalLoomStore.js';
 import { initUniverseBuilderCollectionHook } from './universeBuilderCollectionHook.js';
 import { initCatalogImageAttachHook } from './catalogImageAttachHook.js';
-import { initCatalogUniverseFiling } from './catalogUniverseFiling.js';
+import { initCatalogUniverseFiling, flushCatalogUniverseFiling } from './catalogUniverseFiling.js';
 import { initWritersRoomSceneImageHook } from './writersRoomSceneImageHook.js';
 import { startHostedSessionSweep, stopHostedSessionSweep } from './fableLoom/hostedSession.js';
 import { initFableLoomSceneImageHook } from './fableLoomSceneImageHook.js';
@@ -804,10 +804,11 @@ const initMediaJobDependentHooks = () => {
 const runDatabaseBootPhase = () => runDatabasePhase({
   gate: async () => {
     const { checkHealth, ensureSchema } = await import('../lib/db.js');
+    const { isFileBackend } = await import('../lib/pgFileFacade.js');
     const { dbReady } = await gateOnDatabase({
       checkHealth,
       ensureSchema,
-      escapeHatch: process.env.MEMORY_BACKEND === 'file' || isTestRunner()
+      escapeHatch: isFileBackend()
     });
     // ensureSchema is threaded through to the migrations below so the phase
     // resolves the db.js module exactly once.
@@ -1335,6 +1336,13 @@ export const registerShutdownHandlers = ({ io, httpServer, localHttpServer }) =>
       flushIdeaLoomAutoSync().then(() => finish('✅ IdeaLoom auto-sync flushed'), (err) => finishWithError('⚠️ IdeaLoom auto-sync flush failed', err)));
     ideaLoomFlushed.then(recordSettled('ideaLoom'));
 
+    // A debounced catalog universe filing (a render finished in the last second)
+    // would otherwise be dropped, and a pass still running races the DB pool
+    // close. Started here, awaited before the pool closes (it reads and writes
+    // through the DB); the grace bounds it either way.
+    const catalogFilingFlushed = withGrace('Catalog universe filing flush', 2500, ({ finish, finishWithError }) =>
+      flushCatalogUniverseFiling().then(() => finish('✅ Catalog universe filing flushed'), (err) => finishWithError('⚠️ Catalog universe filing flush failed', err)));
+
     // Flush the media-job queue now that no request can admit another job
     // (#8325): terminal transitions and the latest progress reach the snapshot a
     // restart restores from. Not earlier: quiescing stops dispatch, not enqueue.
@@ -1360,6 +1368,7 @@ export const registerShutdownHandlers = ({ io, httpServer, localHttpServer }) =>
       ));
 
     await scheduledEventsDrained;
+    await catalogFilingFlushed;
     timing.mark('dbPool');
     const { close } = await import('../lib/db.js');
     if (typeof close === 'function') {

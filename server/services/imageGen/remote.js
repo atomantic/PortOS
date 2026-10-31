@@ -66,7 +66,7 @@ const executor = createRemoteMediaExecutor({
     const snapshot = marker.wireVersion === 2 ? marker.reviewedReferenceSnapshot : null;
     if (marker.wireVersion === 2 && !snapshot) throw new Error('Reviewed reference ownership is missing');
     const bytes = await assertSnapshotForAdapter(snapshot, ctx.jobId, null, assets.map(asset => asset.path));
-    if (snapshot && (assets.length !== 1 || assets[0].role !== 'referenceImages')) throw new Error('Reviewed reference does not match remote inputs');
+    if (snapshot && assets.some(asset => asset.role !== 'referenceImages')) throw new Error('Reviewed reference does not match remote inputs');
     return applyRemoteInputAssets(marker.request, assets, { ...ctx, reviewedReference: snapshot ? { path: assets[0].path, digest: snapshot.digest, bytes } : null }, federatedMediaImageJobSubmissionSchema);
   },
   // PATHS is read per job (not captured at module load) so a test that swaps

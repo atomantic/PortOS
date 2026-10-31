@@ -101,6 +101,7 @@ export function sceneRenderReady(scene, { layered = false } = {}) {
   const layer = sceneVisualLayer(scene, { layered });
   if (layer === 'footage') return Boolean(scene?.videoHistoryId);
   if (!sceneHasAuthoredSpan(scene)) return false;
+  if (layer === 'still' && scene.photoSequence && scene.photoSequence.enabled !== false) return !!scene.photoSequence.imageIds?.length;
   return isSelfDrawnLayer(layer) || Boolean(scene.referenceImageId);
 }
 

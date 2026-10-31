@@ -100,7 +100,7 @@ function TaskTemplates({ form }) {
               {!template.isBuiltin && (
                 <button
                   onClick={(event) => deleteTemplate(template.id, event)}
-                  className="flex md:hidden md:group-hover:flex absolute -top-3 -right-3 w-11 h-11 items-center justify-center"
+                  className="flex [@media(hover:hover)]:md:opacity-0 [@media(hover:hover)]:md:pointer-events-none md:group-hover:opacity-100 md:group-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto transition-opacity absolute -top-3 -right-3 w-11 h-11 items-center justify-center"
                   aria-label="Delete template"
                 >
                   <span className="flex w-4 h-4 bg-port-error rounded-full items-center justify-center">
@@ -159,10 +159,10 @@ function TaskUploadPreviews({ form }) {
               <button
                 type="button"
                 onClick={() => removeScreenshot(screenshot.id)}
-                className="absolute -top-2 -right-2 w-5 h-5 bg-port-error rounded-full flex items-center justify-center md:opacity-0 md:group-hover:opacity-100 focus-visible:opacity-100 md:focus-visible:opacity-100 transition-opacity"
+                className="absolute -top-2 -right-2 w-5 h-5 pointer-coarse:-top-3 pointer-coarse:-right-3 pointer-coarse:w-11 pointer-coarse:h-11 flex items-center justify-center [@media(hover:hover)]:md:opacity-0 md:group-hover:opacity-100 focus-visible:opacity-100 md:focus-visible:opacity-100 transition-opacity"
                 aria-label={`Remove screenshot ${screenshot.filename}`}
               >
-                <X size={12} aria-hidden="true" />
+                <span className="flex w-5 h-5 bg-port-error rounded-full items-center justify-center"><X size={12} aria-hidden="true" /></span>
               </button>
             </div>
           ))}
@@ -212,6 +212,9 @@ function TaskTypeFields({ form, compact, queueFirst }) {
     providerModelNote,
     isFederated,
     assignableInstances,
+    instancesError,
+    instancesLoading,
+    refreshInstances,
     handleAppChange,
     handleProviderChange,
     handleSelectOrchestrationProfile,
@@ -393,6 +396,19 @@ function TaskTypeFields({ form, compact, queueFirst }) {
           onChange={(value) => setField('targetInstanceId', value)}
           instances={assignableInstances}
         />
+      )}
+      {!isFederated && instancesError && (
+        <div role="alert" className="flex flex-wrap items-center gap-2 py-1 text-sm text-port-warning">
+          <span>Could not load the instance list, so “Run on” is unavailable. This task will run on any instance.</span>
+          <button
+            type="button"
+            onClick={refreshInstances}
+            disabled={instancesLoading}
+            className="rounded border border-port-border px-2 py-1 text-gray-200 hover:border-port-accent focus:outline-hidden focus:border-port-accent disabled:opacity-60"
+          >
+            {instancesLoading ? 'Retrying…' : 'Retry'}
+          </button>
+        </div>
       )}
     </>
   );
@@ -667,7 +683,7 @@ export default function TaskAddFormView({ form, compact = false, queueFirst = fa
           {' · '}{state.planOnly ? 'Read-only planning' : state.useWorktree ? 'Worktree' : 'Direct checkout'}
           {' · '}{completion}
           {!state.planOnly && state.openPR && state.prCompletion === 'review-then-merge' && ` · Review: ${[...reviewers, ...usernames.map((name) => '@' + name)].join(', ') || 'None'}`}
-          {isFederated && ` · Instance: ${assignableInstances.find((instance) => instance.id === state.targetInstanceId)?.name || state.targetInstanceId || 'Any'}`}
+          {isFederated && ` · Instance: ${assignableInstances.find((instance) => instance.instanceId === state.targetInstanceId)?.name || state.targetInstanceId || 'Any'}`}
           {state.planOnly && ` · Issue: ${state.issueTarget}`}
           {state.createJiraTicket && !state.planOnly && ' · JIRA ticket'}
           {state.enhancePrompt && ' · Enhance prompt'}

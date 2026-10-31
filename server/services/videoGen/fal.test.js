@@ -190,6 +190,30 @@ describe('videoGen/fal — generateVideo', () => {
     }
   });
 
+  it.each([[true, 'disabled'], [false, 'balanced']])('H3 body for a music-video shot (%s) sends prompt_expansion_mode %s', async (musicVideo, mode) => {
+    await mkdir(TEST_ROOT, { recursive: true });
+    const framePath = join(TEST_ROOT, 'frame.png');
+    await writeFile(framePath, Buffer.from('89504e470d0a1a0a', 'hex'));
+    const posted = [];
+    vi.stubGlobal('fetch', vi.fn(async (url, opts) => {
+      if (opts?.method === 'POST') {
+        posted.push(JSON.parse(opts.body));
+        return jsonResponse({ request_id: 'rk', status_url: 'https://queue.fal.run/s', response_url: 'https://queue.fal.run/r' });
+      }
+      if (url === 'https://queue.fal.run/s') return jsonResponse({ status: 'COMPLETED' });
+      if (url === 'https://queue.fal.run/r') return jsonResponse({ video: { url: 'https://cdn.example.com/out.mp4' } });
+      return { ok: true, status: 200, arrayBuffer: async () => Uint8Array.from(Buffer.from('mp4')).buffer };
+    }));
+    const job = await fal.generateVideo({
+      apiKey: 'test-key', modelId: 'minimax/h3-max/image-to-video', prompt: 'waves roll in', duration: 5, sourceImagePath: framePath,
+      ...(musicVideo ? { musicVideo: { projectId: 'p', sceneId: 's' } } : {}),
+    });
+    await waitForTerminal(job.jobId);
+    expect(posted[0].prompt_expansion_mode).toBe(mode);
+    const [entry] = await loadHistory();
+    expect(entry.promptAdditions?.some((a) => a.id === 'prompt-expansion') ?? false).toBe(musicVideo);
+  });
+
   it('refuses a start-frame-only model without a frame before submitting anything', async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);

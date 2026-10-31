@@ -63,7 +63,7 @@ describe('MoodBoards index', () => {
     // Cover image check
     const cover = screen.getByAltText('Retro Sci-Fi');
     expect(cover).toBeInTheDocument();
-    expect(cover.getAttribute('src')).toBe('/data/images/cover.png');
+    expect(cover.getAttribute('src')).toBe('/data/image-thumbnails/cover.webp');
 
     // Sub-thumbnails check (it-2, it-3, it-5, it-6)
     expect(screen.getByAltText('Neon sign')).toBeInTheDocument();
@@ -92,7 +92,7 @@ describe('MoodBoards index', () => {
       },
     ]);
     await renderPage();
-    expect((await screen.findByAltText('Ink')).getAttribute('src')).toBe('/data/images/board%20poster.png');
+    expect((await screen.findByAltText('Ink')).getAttribute('src')).toBe('/data/image-thumbnails/board%20poster.webp');
     expect(screen.getByAltText('First pin')).toBeInTheDocument();
   });
 

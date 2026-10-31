@@ -44,10 +44,11 @@ vi.mock('../lib/paths.js', async importOriginal => makePathsProxy(await importOr
 afterAll(cleanupTempDataRoots);
 import { PATHS } from '../lib/paths.js';
 import { PATHS as FILE_PATHS } from '../lib/fileUtils.js';
-import { preserveBranchRetirement } from '../lib/branchRetirementArchive.js';
 import { hasBranchMergeEvidence, getStatus, getStatusPorcelain } from './git.js';
 import { reapMergedWorktrees, cleanupOrphanedWorktrees, deleteCompletedLocalBranch, readWorktreeStatus } from './worktreeManager.js';
 vi.mock('./branchCompletionPolicy.js', () => ({ readBranchCompletionHold: async () => null }));
+const mergedPrHeads = new Set();
+vi.mock('./prProbe.js', () => ({ isMergedPrHead: async (_repo, branch, head) => mergedPrHeads.has(`${branch}@${head}`) }));
 vi.mock('./cosState.js', () => ({ readAgentsStateForSafetyCheck: async () => ({ trusted: true, agents: {} }) }));
 
 /**
@@ -312,38 +313,6 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('local completed ref retirement', () => 
     expect(await deleteCompletedLocalBranch(dir, 'done', head)).toBe(true);
     expect(await refGone(dir, 'done')).toBe(true);
     expect(await archiveIds()).toEqual(before);
-  });
-
-  it('refuses a changed shared reflog even when the branch tip is unchanged', async () => {
-    await execGit(['branch', 'done'], dir);
-    const head = (await execGit(['rev-parse', 'done'], dir)).stdout.trim();
-    const common = (await execGit(['rev-parse', '--path-format=absolute', '--git-common-dir'], dir)).stdout.trim();
-    const preserved = await preserveBranchRetirement(dir, common, 'done', head);
-    expect(await preserved.verify()).toBe(true);
-    const log = join(common, 'logs', 'refs', 'heads', 'done');
-    await writeFile(log, `${await readFile(log, 'utf8')}${head} ${head} Test <test@example.com> 1 +0000\tnew recovery evidence\n`);
-    expect(await preserved.verify()).toBe(false);
-    expect((await execGit(['rev-parse', 'done'], dir)).stdout.trim()).toBe(head);
-  });
-
-  it.each(['reflog', 'commits.bundle', 'manifest.json', 'config', 'config.retired'])('refuses an archive whose %s changes before retirement', async name => {
-    await execGit(['branch', 'done'], dir);
-    const head = (await execGit(['rev-parse', 'done'], dir)).stdout.trim();
-    const common = (await execGit(['rev-parse', '--path-format=absolute', '--git-common-dir'], dir)).stdout.trim();
-    const preserved = await preserveBranchRetirement(dir, common, 'done', head);
-    await writeFile(join(preserved.archiveDir, name), 'changed after archival');
-    expect(await preserved.verify()).toBe(false);
-    expect((await execGit(['rev-parse', 'done'], dir)).stdout.trim()).toBe(head);
-  });
-
-  it('holds the branch on archive storage failure', async () => {
-    await execGit(['branch', 'done'], dir);
-    const head = (await execGit(['rev-parse', 'done'], dir)).stdout.trim();
-    const common = (await execGit(['rev-parse', '--path-format=absolute', '--git-common-dir'], dir)).stdout.trim();
-    const blocked = join(dir, 'not-a-directory');
-    await writeFile(blocked, 'keep');
-    await expect(preserveBranchRetirement(dir, common, 'done', head, { cosDir: blocked })).rejects.toThrow();
-    expect((await execGit(['rev-parse', 'done'], dir)).stdout.trim()).toBe(head);
   });
 
   it('preserves the repository receiver deletion policy', async () => {
@@ -613,21 +582,11 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('reapMergedWorktrees', () => {
     expect(branches).toContain('pending-br');
   });
 
-  it('keeps ignored user data in a merged checkout but removes a recognized test cache', async () => {
+  it('reaps a merged checkout together with its ignored files', async () => {
     const mergedPath = await addWorktree(dir, 'ignored-output', 'ignored-output-br');
     await execGit(['merge', '--no-ff', 'ignored-output-br', '--no-edit'], dir);
-    await writeFile(join(dir, '.git', 'info', 'exclude'), '*.png\nserver/.cache/\n');
-    const image = join(mergedPath, 'reference.png');
-    await writeFile(image, 'sole user image');
-    const cache = join(mergedPath, 'server', '.cache', 'vitest', 'modules');
-    await mkdir(cache, { recursive: true });
-    await writeFile(join(cache, 'CACHEDIR.TAG'), 'Signature: 8a477f597d28d172789f06886806bc55\n# This file is a cache directory tag created by Vitest.\n');
-    await writeFile(join(cache, '_metadata.json'), JSON.stringify({ lockfileHash: 'abcdef12' }));
-    await writeFile(join(cache, 'a'.repeat(40)), 'compiled test module');
-    const retained = await reapMergedWorktrees(dir, { includeClaudeTrees: true });
-    expect(skipReason(retained, mergedPath)).toBe('checkout-ignored-payload-unverified');
-    expect(await readFile(image, 'utf8')).toBe('sole user image');
-    await rm(image);
+    await writeFile(join(dir, '.git', 'info', 'exclude'), '*.png\n');
+    await writeFile(join(mergedPath, 'reference.png'), 'generated image');
     const reaped = await reapMergedWorktrees(dir, { includeClaudeTrees: true });
     expect(reaped.reaped.map(r => r.branch), JSON.stringify(reaped.skipped)).toContain('ignored-output-br');
     expect(existsSync(mergedPath)).toBe(false);
@@ -644,6 +603,26 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('reapMergedWorktrees', () => {
     expect(result.reaped.map(r => r.branch)).not.toContain('dirty-br');
     expect(skipReason(result, path)).toBe('uncommitted');
     expect(existsSync(path)).toBe(true);
+  });
+
+  it('reaps a dirty worktree whose PR merged at its exact head, and holds one whose head moved', async () => {
+    const path = await addWorktree(dir, 'disposable', 'disposable-br');
+    await execGit(['merge', '--no-ff', 'disposable-br', '--no-edit'], dir);
+    const moved = await addWorktree(dir, 'moved', 'moved-br');
+    await execGit(['merge', '--no-ff', 'moved-br', '--no-edit'], dir);
+    await writeFile(join(path, 'scratch.txt'), 'unsaved\n');
+    await writeFile(join(moved, 'scratch.txt'), 'unsaved\n');
+    const head = async p => (await execGit(['rev-parse', 'HEAD'], p)).stdout.trim();
+    mergedPrHeads.add(`disposable-br@${await head(path)}`);
+    mergedPrHeads.add(`moved-br@${'0'.repeat(40)}`);
+
+    const result = await reapMergedWorktrees(dir, { includeClaudeTrees: true });
+    mergedPrHeads.clear();
+
+    expect(result.reaped.map(r => r.branch), JSON.stringify(result.skipped)).toContain('disposable-br');
+    expect(existsSync(path)).toBe(false);
+    expect(skipReason(result, moved)).toBe('uncommitted');
+    expect(existsSync(moved)).toBe(true);
   });
 
   it('preserves a fresh-from-main worktree with uncommitted changes', async () => {

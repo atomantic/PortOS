@@ -263,7 +263,7 @@ export default function PracticePlan({ config, onSaved, onBack }) {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <button aria-label="Back" onClick={onBack} className="text-gray-400 hover:text-white transition-colors">
+          <button aria-label="Back" onClick={onBack} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center rounded-lg text-gray-400 hover:text-white hover:bg-port-card transition-colors">
             <ArrowLeft size={20} />
           </button>
           <div>

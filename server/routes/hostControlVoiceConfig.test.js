@@ -53,6 +53,7 @@ vi.mock('../services/voice/profiles.js', () => ({
   createVoiceDesignCandidate: vi.fn(),
   createClonedVoiceCandidate: vi.fn(),
   promoteVoiceProfile: vi.fn(),
+  deleteVoiceProfile: vi.fn(),
 }));
 vi.mock('../services/voice/profileBenchmarks.js', () => ({
   renderProfileBenchmark: vi.fn(),

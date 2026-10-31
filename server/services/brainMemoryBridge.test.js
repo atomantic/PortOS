@@ -17,6 +17,8 @@ const purgeMemory = vi.fn(async () => ({ success: true }));
 const generateMemoryEmbedding = vi.fn(async () => [0.1, 0.2, 0.3]);
 const getMemoryIdsMissingEmbedding = vi.fn(async () => new Set());
 const getById = vi.fn();
+// Default: a tombstone/archived file still exists (soft-archive path).
+const hasStoredRecord = vi.fn(async () => true);
 const getAll = vi.fn(async () => []);
 const listLiveIds = vi.fn(async () => []);
 const getDigests = vi.fn(async () => []);
@@ -62,7 +64,7 @@ vi.mock('./memoryBackend.js', () => ({
 vi.mock('./memoryEmbeddings.js', () => ({ generateMemoryEmbedding }));
 vi.mock('./brainStorage.js', () => {
   const { EventEmitter } = require('events');
-  return { brainEvents: new EventEmitter(), getById, getAll, listLiveIds, getDigests, getReviews };
+  return { brainEvents: new EventEmitter(), getById, hasStoredRecord, getAll, listLiveIds, getDigests, getReviews };
 });
 vi.mock('./brainJournal.js', () => ({ listJournals, getJournal, iterateJournals: async function* () { const { records } = await listJournals(); yield* records; } }));
 
@@ -74,6 +76,7 @@ async function loadBridge() {
 
 beforeEach(async () => {
   vi.clearAllMocks();
+  hasStoredRecord.mockResolvedValue(true);
   bridgeFileContents = null;
   pendingFileContents = null;
   // The mocked brainEvents emitter is created by the vi.mock factory, which
@@ -206,6 +209,49 @@ describe('brainMemoryBridge — resyncBrainRecord (issue #1080)', () => {
 
     expect(updateMemory).toHaveBeenCalledWith('mem-resurrect', expect.objectContaining({ status: 'active' }));
     expect(createMemory).not.toHaveBeenCalled();
+  });
+});
+
+describe('brainMemoryBridge — tombstone:pruned purge', () => {
+  it('hard-deletes the archived mapped memory when its tombstone is pruned', async () => {
+    const bridge = await loadBridge();
+    const { brainEvents } = await import('./brainStorage.js');
+    bridgeFileContents = JSON.stringify({ [bridge.bridgeKey('people', 'p1')]: 'mem-old' });
+    bridge.initBridge();
+
+    brainEvents.emit('tombstone:pruned', { type: 'people', id: 'p1' });
+    await vi.waitFor(() => expect(purgeMemory).toHaveBeenCalledWith('mem-old'));
+    expect(JSON.parse(bridgeFileContents)).not.toHaveProperty(bridge.bridgeKey('people', 'p1'));
+  });
+
+  it('ignores unbridged types and unmapped ids', async () => {
+    const bridge = await loadBridge();
+    const { brainEvents } = await import('./brainStorage.js');
+    bridgeFileContents = JSON.stringify({
+      [bridge.bridgeKey('links', 'l1')]: 'mem-link',
+      [bridge.bridgeKey('people', 'p1')]: 'mem-sentinel',
+    });
+    bridge.initBridge();
+
+    brainEvents.emit('tombstone:pruned', { type: 'links', id: 'l1' });
+    brainEvents.emit('tombstone:pruned', { type: 'people', id: 'unmapped' });
+    brainEvents.emit('tombstone:pruned', { type: 'people', id: 'p1' });
+    await vi.waitFor(() => expect(purgeMemory).toHaveBeenCalledWith('mem-sentinel'));
+    expect(purgeMemory).toHaveBeenCalledTimes(1);
+  });
+
+  it('an archived (not deleted) record never triggers a purge via sync:applied', async () => {
+    const bridge = await loadBridge();
+    const { brainEvents } = await import('./brainStorage.js');
+    bridgeFileContents = JSON.stringify({ [bridge.bridgeKey('projects', 'pr1')]: 'mem-proj' });
+    bridge.initBridge();
+    getById.mockResolvedValue({ id: 'pr1', name: 'X', archived: true });
+
+    brainEvents.emit('sync:applied', { records: [{ type: 'projects', id: 'pr1' }] });
+    await bridge.flushPendingResync();
+
+    expect(purgeMemory).not.toHaveBeenCalled();
+    expect(updateMemory).toHaveBeenCalledWith('mem-proj', { status: 'archived' });
   });
 });
 
@@ -592,6 +638,21 @@ describe('brainMemoryBridge — syncAllBrainData refresh mode (issue #1080 recov
     const refreshed = await bridge.syncAllBrainData({ refresh: true });
     expect(updateMemory).toHaveBeenCalledWith('mem-orphan', { status: 'archived' });
     expect(refreshed.archived).toBe(1);
+  });
+
+  it('refresh reconcile hard-deletes a mapped entry with no stored record at all (tombstone pruned)', async () => {
+    const bridge = await loadBridge();
+    getAll.mockResolvedValue([]);
+    getById.mockResolvedValue(null);
+    hasStoredRecord.mockResolvedValue(false);
+    bridgeFileContents = JSON.stringify({ [bridge.bridgeKey('people', 'p-gone')]: 'mem-orphan' });
+
+    const refreshed = await bridge.syncAllBrainData({ refresh: true });
+
+    expect(purgeMemory).toHaveBeenCalledWith('mem-orphan');
+    expect(updateMemory).not.toHaveBeenCalledWith('mem-orphan', { status: 'archived' });
+    expect(refreshed.archived).toBe(0);
+    expect(JSON.parse(bridgeFileContents)).not.toHaveProperty(bridge.bridgeKey('people', 'p-gone'));
   });
 
   it('refresh reconcile leaves live mapped records alone (no spurious archive)', async () => {

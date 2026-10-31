@@ -99,10 +99,7 @@ export const AGENT_RUN_EVENT_KINDS = Object.freeze([
   // `endTime` that no exit ever produced, and nothing would say where it came
   // from. Adding this kind is not an envelope shape change — older builds fold
   // unknown kinds as no-ops — so AGENT_RUN_EVENT_SCHEMA_VERSION stays at 1.
-  'run.reconciled',
-  // A completed claim run merged a PR without the merge-admission lease or
-  // before its head's checks were green (#12549). Unknown kinds fold as no-ops.
-  'run.merge-gate-violation'
+  'run.reconciled'
 ]);
 
 /** All writeable kinds in the shared machine-local ledger. */

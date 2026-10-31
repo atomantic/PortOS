@@ -142,17 +142,46 @@ export async function reconcileRecordedReceiptObservations(appId, outcome) {
     retirementReceiptEvidence: Object.fromEntries(Object.entries(outcome.retirementReceiptEvidence || {}).map(([key, receipt]) => [key, annotate(receipt)])) };
 }
 
+const UNVERIFIED_REASONS = ['retirement-receipt-unverified', 'retirement-provenance-unverified'];
+// Refs PortOS itself writes to keep a checkout's commits reachable after the checkout is gone.
+const PRESERVING_REF_NAMESPACES = ['refs/portos/retained-checkout-source', 'refs/portos/completed'];
+
 function reconciliationCandidates(outcome) {
   const transition = outcome?.legacyRetirementTransition;
   if (transition?.version !== 1) return [];
   return [...new Map([...(outcome.retirementObligations || []), ...(outcome.remaining || [])]
-    .filter(row => transition.observations.includes(legacyRetirementKey(row))
-      || row.reason === 'retirement-provenance-unverified')
+    .filter(row => UNVERIFIED_REASONS.includes(row.reason))
     .map(row => [legacyRetirementKey(row), row])).values()];
 }
 
-async function localCleanupAbsent(repoPath, observation, outcome, trees, agents, identities = new Map()) {
-  if (observation.locked === true || !await absent(repoPath, observation, trees, agents, identities)) return false;
+async function defaultBranchRefs(repoPath) {
+  const head = await git(repoPath, ['symbolic-ref', '-q', 'refs/remotes/origin/HEAD']).then(r => r.stdout.trim(), () => '');
+  return [head || 'refs/remotes/origin/main', 'refs/heads/main'];
+}
+
+/** The head is reachable from the default branch or a PortOS-written retained ref. */
+async function headPreserved(repoPath, head) {
+  if (!oid(head)) return false;
+  const refs = [...await defaultBranchRefs(repoPath), ...PRESERVING_REF_NAMESPACES];
+  const found = await git(repoPath, ['for-each-ref', '--count=1', '--format=%(refname)', '--contains', head, ...refs])
+    .then(r => r.stdout.trim(), () => '');
+  return found.length > 0;
+}
+
+const remoteBranchPresent = (repoPath, branch) => git(repoPath, ['for-each-ref', '--count=1', '--format=%(refname)', `refs/remotes/*/${branch}`])
+  .then(r => r.stdout.trim().length > 0, () => true);
+
+/** Absence of checkout, local ref and remote ref plus a preserved head settles the row
+ * even when the vanished checkout was locked: a lock on nothing blocks nothing. */
+async function absentHeadPreserved(repoPath, observation, outcome, trees, agents, identities) {
+  if (!UNVERIFIED_REASONS.includes(observation.reason) || !oid(observation.head)
+    || !await localCleanupAbsent(repoPath, observation, outcome, trees, agents, identities, true)
+    || (observation.branch && await remoteBranchPresent(repoPath, observation.branch))) return false;
+  return headPreserved(repoPath, observation.head);
+}
+
+async function localCleanupAbsent(repoPath, observation, outcome, trees, agents, identities = new Map(), allowLocked = false) {
+  if ((observation.locked === true && !allowLocked) || !await absent(repoPath, observation, trees, agents, identities)) return false;
   // A branch-only placeholder can still refer to a surviving recorded path.
   const recordedPaths = [...(outcome.retired || []), ...Object.values(outcome.retirementReceiptEvidence || {})]
     .filter(row => row.branch === observation.branch && typeof row.path === 'string');
@@ -163,10 +192,21 @@ export async function _planLegacyRetirementReconciliation({ repoPath, outcome, a
   if (!Array.isArray(agents) || !Array.isArray(trees)) return [];
   const resolutions = [];
   const identities = new Map();
+  const transition = outcome?.legacyRetirementTransition;
   for (const observation of reconciliationCandidates(outcome)) {
     // This settles local cleanup only; retained history makes no delivery or
     // preservation claim and requires no second remote merge certificate.
-    if (!await localCleanupAbsent(repoPath, observation, outcome, trees, agents, identities)) continue;
+    // Absence alone settles only frozen upgrade-era rows; any other unverified row needs a preserved head.
+    const legacy = transition.observations.includes(legacyRetirementKey(observation))
+      || observation.reason === 'retirement-provenance-unverified';
+    if (!legacy || !await localCleanupAbsent(repoPath, observation, outcome, trees, agents, identities)) {
+      if (await absentHeadPreserved(repoPath, observation, outcome, trees, agents, identities)) {
+        resolutions.push({ key: legacyRetirementKey(observation), observation, target: observation,
+          evidence: { kind: 'absent-head-preserved', deliveryVerified: false, preservationVerified: true },
+          disposition: 'absent-head-preserved', removalVerified: false });
+      }
+      continue;
+    }
     resolutions.push({ key: legacyRetirementKey(observation), observation,
       target: observation, evidence: { kind: 'current-local-absence', deliveryVerified: false, preservationVerified: false },
       disposition: 'local-cleanup-not-required', removalVerified: false });
@@ -178,7 +218,7 @@ export async function reconcileLegacyRetirementRecords(appId, outcome) {
   if (!reconciliationCandidates(outcome).length) return outcome;
   const [{ getAppById }, { readClaimOwnershipAgents, withClaimOwnershipLock }, { listWorktrees },
     store] = await Promise.all([
-    import('./apps.js'), import('./cosClaimOwnership.js'), import('./worktreeManager.js'), import('./taskSchedule.js'),
+    import('./apps.js'), import('./cosClaimOwnership.js'), import('./worktreeManager.js'), import('./branchReconcileOutcome.js'),
   ]);
   const app = await getAppById(appId);
   if (!app?.repoPath) return outcome;
@@ -190,6 +230,8 @@ export async function reconcileLegacyRetirementRecords(appId, outcome) {
     const [currentAgents, currentTrees] = await Promise.all([readClaimOwnershipAgents(), listWorktrees(repoPath)]);
     if (!Array.isArray(currentAgents)) return outcome;
     return store.recordLegacyRetirementResolutions(appId, outcome, resolutions,
-      async () => (await Promise.all(resolutions.map(row => localCleanupAbsent(repoPath, row.target, outcome, currentTrees, currentAgents)))).every(Boolean));
+      async () => (await Promise.all(resolutions.map(row => row.disposition === 'absent-head-preserved'
+        ? absentHeadPreserved(repoPath, row.target, outcome, currentTrees, currentAgents, new Map())
+        : localCleanupAbsent(repoPath, row.target, outcome, currentTrees, currentAgents)))).every(Boolean));
   });
 }

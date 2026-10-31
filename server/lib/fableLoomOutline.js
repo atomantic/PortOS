@@ -174,6 +174,124 @@ const outlineIssue = (issues, code, severity, message, extra = {}) => {
   issues.push({ code, severity, message, ...extra });
 };
 
+/** Breadth-first reachability from the opening beat, with each beat's shortest beat count. */
+function computeBeatDepths(byKey, startKey) {
+  const reachable = new Set();
+  const depthByKey = new Map();
+  if (!byKey.has(startKey)) return { reachable, depthByKey };
+  const queue = [startKey];
+  depthByKey.set(startKey, 0);
+  let cursor = 0;
+  while (cursor < queue.length) {
+    const key = queue[cursor];
+    cursor += 1;
+    if (reachable.has(key)) continue;
+    reachable.add(key);
+    for (const transition of asArray(byKey.get(key)?.transitions)) {
+      if (byKey.has(transition.targetKey) && !depthByKey.has(transition.targetKey)) {
+        depthByKey.set(transition.targetKey, depthByKey.get(key) + 1);
+        queue.push(transition.targetKey);
+      }
+    }
+  }
+  return { reachable, depthByKey };
+}
+
+/**
+ * Depth measured in dramatic scenes: a 0-1 BFS where extra camera cuts inside
+ * one dramatic scene cost nothing. Previously discovered beats are relaxed so a
+ * later same-scene shortcut can lower their dramatic depth.
+ */
+function computeDramaticDepths(byKey, startKey, groupByKey) {
+  const dramaticDepthByKey = new Map();
+  if (!byKey.has(startKey)) return dramaticDepthByKey;
+  dramaticDepthByKey.set(startKey, 0);
+  const deque = [startKey];
+  while (deque.length) {
+    const key = deque.shift();
+    const base = dramaticDepthByKey.get(key);
+    for (const transition of asArray(byKey.get(key)?.transitions)) {
+      const target = transition.targetKey;
+      if (!byKey.has(target)) continue;
+      const sameScene = groupByKey.has(key) && groupByKey.get(key) === groupByKey.get(target);
+      const cost = sameScene ? 0 : 1;
+      if (!dramaticDepthByKey.has(target) || base + cost < dramaticDepthByKey.get(target)) {
+        dramaticDepthByKey.set(target, base + cost);
+        if (cost === 0) deque.unshift(target); else deque.push(target);
+      }
+    }
+  }
+  return dramaticDepthByKey;
+}
+
+function pathExists(byKey, fromScenes, toScenes) {
+  const targets = new Set(toScenes.map((scene) => scene.key));
+  const queue = fromScenes.map((scene) => scene.key);
+  const seen = new Set();
+  while (queue.length) {
+    const key = queue.shift();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (targets.has(key)) return true;
+    for (const transition of asArray(byKey.get(key)?.transitions)) {
+      if (byKey.has(transition.targetKey) && !seen.has(transition.targetKey)) {
+        queue.push(transition.targetKey);
+      }
+    }
+  }
+  return false;
+}
+
+const CHALLENGE_REQUIRED_PATHS = Object.freeze([
+  ['setup', 'decision'],
+  ['decision', 'success'],
+  ['decision', 'failure'],
+  ['success', 'recovery'],
+  ['failure', 'recovery'],
+]);
+
+/** Push every readiness issue for one playable challenge; true when it has none. */
+function analyzeChallengeReadiness(challenge, scenes, byKey, push) {
+  const label = challenge.title || challenge.id || 'Untitled challenge';
+  const mapped = scenes.filter((scene) => scene.plotPointId === challenge.id);
+  const byPhase = Object.fromEntries(FABLELOOM_CHALLENGE_PHASES.map((phase) => [
+    phase, mapped.filter((scene) => scene.challengePhase === phase),
+  ]));
+  let challengeReady = true;
+  for (const phase of FABLELOOM_CHALLENGE_PHASES) {
+    if (byPhase[phase].length) continue;
+    challengeReady = false;
+    push(
+      OUTLINE_ISSUE_CODES.CHALLENGE_PHASE_MISSING,
+      'error',
+      `Playable challenge "${label}" needs a mapped ${phase} beat.`,
+    );
+  }
+  const invalidDecision = byPhase.decision.find((scene) => scene.playbackMode !== 'decision'
+    || asArray(scene.transitions).length < 2);
+  if (invalidDecision) {
+    challengeReady = false;
+    push(
+      OUTLINE_ISSUE_CODES.CHALLENGE_DECISION_INVALID,
+      'error',
+      `Playable challenge "${label}" needs a decision-loop beat with at least two viewer paths.`,
+      { sceneKey: invalidDecision.key },
+    );
+  }
+  for (const [fromPhase, toPhase] of CHALLENGE_REQUIRED_PATHS) {
+    if (!byPhase[fromPhase].length || !byPhase[toPhase].length
+      || pathExists(byKey, byPhase[fromPhase], byPhase[toPhase])) continue;
+    challengeReady = false;
+    push(
+      OUTLINE_ISSUE_CODES.CHALLENGE_PATH_MISSING,
+      'error',
+      `Playable challenge "${label}" has no path from its ${fromPhase} beat to its ${toPhase} beat.`,
+      { sceneKey: byPhase[fromPhase][0]?.key },
+    );
+  }
+  return challengeReady;
+}
+
 /** Deterministic validation for the log-line graph, independent of an LLM. */
 export function analyzeStoryOutline(outline, {
   participationMode = 'protagonist', requireAudienceIntroduction = false, challenges = [], plotPoints = [], episodeId = null, nodes = [],
@@ -193,48 +311,9 @@ export function analyzeStoryOutline(outline, {
     push(OUTLINE_ISSUE_CODES.START_NOT_FOUND, 'error', 'The opening beat points at a key that does not exist.');
   }
 
-  const reachable = new Set();
-  const depthByKey = new Map();
-  const dramaticDepthByKey = new Map();
+  const { reachable, depthByKey } = computeBeatDepths(byKey, startKey);
   const groupByKey = new Map(asArray(nodes).map((node) => [node.id, node.shot?.dramaticSceneId || node.id]));
-  if (byKey.has(startKey)) {
-    const queue = [startKey];
-    depthByKey.set(startKey, 0);
-    let cursor = 0;
-    while (cursor < queue.length) {
-      const key = queue[cursor];
-      cursor += 1;
-      if (reachable.has(key)) continue;
-      reachable.add(key);
-      for (const transition of asArray(byKey.get(key)?.transitions)) {
-        if (byKey.has(transition.targetKey) && !depthByKey.has(transition.targetKey)) {
-          depthByKey.set(transition.targetKey, depthByKey.get(key) + 1);
-          queue.push(transition.targetKey);
-        }
-      }
-    }
-  }
-
-  // 0-1 BFS: extra camera cuts cost nothing; relax previously discovered
-  // beats so a later same-scene shortcut can lower their dramatic depth.
-  if (byKey.has(startKey)) {
-    dramaticDepthByKey.set(startKey, 0);
-    const deque = [startKey];
-    while (deque.length) {
-      const key = deque.shift();
-      const base = dramaticDepthByKey.get(key);
-      for (const transition of asArray(byKey.get(key)?.transitions)) {
-        const target = transition.targetKey;
-        if (!byKey.has(target)) continue;
-        const sameScene = groupByKey.has(key) && groupByKey.get(key) === groupByKey.get(target);
-        const cost = sameScene ? 0 : 1;
-        if (!dramaticDepthByKey.has(target) || base + cost < dramaticDepthByKey.get(target)) {
-          dramaticDepthByKey.set(target, base + cost);
-          if (cost === 0) deque.unshift(target); else deque.push(target);
-        }
-      }
-    }
-  }
+  const dramaticDepthByKey = computeDramaticDepths(byKey, startKey, groupByKey);
 
   const endings = scenes.filter((scene) => scene.isEnding);
   if (scenes.length && !endings.length) {
@@ -350,70 +429,9 @@ export function analyzeStoryOutline(outline, {
     });
   }
 
-  const pathExists = (fromScenes, toScenes) => {
-    const targets = new Set(toScenes.map((scene) => scene.key));
-    const queue = fromScenes.map((scene) => scene.key);
-    const seen = new Set();
-    while (queue.length) {
-      const key = queue.shift();
-      if (seen.has(key)) continue;
-      seen.add(key);
-      if (targets.has(key)) return true;
-      for (const transition of asArray(byKey.get(key)?.transitions)) {
-        if (byKey.has(transition.targetKey) && !seen.has(transition.targetKey)) {
-          queue.push(transition.targetKey);
-        }
-      }
-    }
-    return false;
-  };
   let readyChallengeCount = 0;
   for (const challenge of asArray(challenges)) {
-    const label = challenge.title || challenge.id || 'Untitled challenge';
-    const mapped = scenes.filter((scene) => scene.plotPointId === challenge.id);
-    const byPhase = Object.fromEntries(FABLELOOM_CHALLENGE_PHASES.map((phase) => [
-      phase, mapped.filter((scene) => scene.challengePhase === phase),
-    ]));
-    let challengeReady = true;
-    for (const phase of FABLELOOM_CHALLENGE_PHASES) {
-      if (byPhase[phase].length) continue;
-      challengeReady = false;
-      push(
-        OUTLINE_ISSUE_CODES.CHALLENGE_PHASE_MISSING,
-        'error',
-        `Playable challenge "${label}" needs a mapped ${phase} beat.`,
-      );
-    }
-    const invalidDecision = byPhase.decision.find((scene) => scene.playbackMode !== 'decision'
-      || asArray(scene.transitions).length < 2);
-    if (invalidDecision) {
-      challengeReady = false;
-      push(
-        OUTLINE_ISSUE_CODES.CHALLENGE_DECISION_INVALID,
-        'error',
-        `Playable challenge "${label}" needs a decision-loop beat with at least two viewer paths.`,
-        { sceneKey: invalidDecision.key },
-      );
-    }
-    const requiredPaths = [
-      ['setup', 'decision'],
-      ['decision', 'success'],
-      ['decision', 'failure'],
-      ['success', 'recovery'],
-      ['failure', 'recovery'],
-    ];
-    for (const [fromPhase, toPhase] of requiredPaths) {
-      if (!byPhase[fromPhase].length || !byPhase[toPhase].length
-        || pathExists(byPhase[fromPhase], byPhase[toPhase])) continue;
-      challengeReady = false;
-      push(
-        OUTLINE_ISSUE_CODES.CHALLENGE_PATH_MISSING,
-        'error',
-        `Playable challenge "${label}" has no path from its ${fromPhase} beat to its ${toPhase} beat.`,
-        { sceneKey: byPhase[fromPhase][0]?.key },
-      );
-    }
-    if (challengeReady) readyChallengeCount += 1;
+    if (analyzeChallengeReadiness(challenge, scenes, byKey, push)) readyChallengeCount += 1;
   }
 
   const stats = {

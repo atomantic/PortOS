@@ -52,7 +52,7 @@ export async function syncOutlookCalendarApi(account, _cache, io, options = {}) 
   const tokenResult = await getToken('outlook');
 
   if (tokenResult.error) {
-    console.log(`📅 Calendar API sync unavailable for ${account.email}: ${tokenResult.message}`);
+    console.log(`📅 Calendar API sync unavailable for account ${account.id}: ${tokenResult.message}`);
     return null;
   }
 
@@ -65,7 +65,7 @@ export async function syncOutlookCalendarApi(account, _cache, io, options = {}) 
   const startDateTime = startRange.toISOString();
   const endDateTime = endRange.toISOString();
 
-  console.log(`📅 Calendar API sync for ${account.email} (${startDateTime} to ${endDateTime})`);
+  console.log(`📅 Calendar API sync for account ${account.id} (${startDateTime} to ${endDateTime})`);
 
   const select = '$select=Subject,Start,End,Location,Organizer,Attendees,IsAllDay,Importance,Categories,IsCancelled,Recurrence,ResponseStatus,Body,ShowAs';
   const orderBy = '$orderby=Start/DateTime asc';
@@ -85,8 +85,7 @@ export async function syncOutlookCalendarApi(account, _cache, io, options = {}) 
     }, GRAPH_API_TIMEOUT_MS);
 
     if (!response.ok) {
-      const text = await response.text().catch(() => '');
-      console.log(`📅 Calendar API sync failed (${response.status}): ${text.slice(0, 200)}`);
+      console.log(`📅 Calendar API sync failed for account ${account.id} (status=${response.status})`);
       if (response.status === 401) {
         clearTokenCache('outlook');
         return null;

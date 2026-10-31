@@ -17,12 +17,7 @@ vi.mock('./branchCompletionPolicy.js', async () => ({
  *   inFlight / wip correctly).
  */
 
-vi.mock('./heldCheckoutRecovery.js', () => ({
-  assertNoUniqueIgnoredCheckoutPayload: async () => {},
-  preserveSupersededCheckout: vi.fn(async () => ({ archiveDir: '/archive', verify: async () => null, recordRetirement: async () => {} })),
-  preserveMergedCheckout: vi.fn(async () => ({ archiveDir: '/archive', verify: async () => null })),
-  releaseCheckoutWithoutArchive: vi.fn(async (_context, prepare) => prepare()),
-}));
+vi.mock('./heldCheckoutRecovery.js', () => ({}));
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { join } from 'node:path';
 
@@ -30,6 +25,7 @@ vi.mock('./git.js', () => ({
   getBranches: vi.fn(),
   deleteMergedRemoteBranches: vi.fn(async (_repo, names) => ({ deleted: names, skipped: [] })),
   getDefaultBranch: vi.fn(async () => 'main'),
+  resolveForgeForRepo: vi.fn(async () => null),
   hasBranchMergeEvidence: vi.fn(),
   deleteBranch: vi.fn(async () => ({ branch: 'x', results: { local: 'deleted' } }))
 }));
@@ -120,7 +116,10 @@ vi.mock('../lib/fileUtils.js', async () => {
   };
 });
 
-vi.mock('./taskSchedule.js', () => ({
+const isMergedPrHeadMock = vi.fn(async () => false);
+vi.mock('./prProbe.js', () => ({ isMergedPrHead: (...args) => isMergedPrHeadMock(...args) }));
+
+vi.mock('./branchReconcileOutcome.js', () => ({
   recordWorkspaceCheckoutRetirement: vi.fn(async () => null),
   recordHeldCheckoutRetirement: vi.fn(async (_appId, receipt) => ({ retired: [{ ...receipt, archiveDir: null }] })),
 }));
@@ -138,8 +137,7 @@ import {
 } from './branchReconcile.js';
 import * as git from './git.js';
 import * as wt from './worktreeManager.js';
-import { preserveMergedCheckout, releaseCheckoutWithoutArchive } from './heldCheckoutRecovery.js';
-import { recordHeldCheckoutRetirement, recordWorkspaceCheckoutRetirement } from './taskSchedule.js';
+import { recordHeldCheckoutRetirement, recordWorkspaceCheckoutRetirement } from './branchReconcileOutcome.js';
 import { withClaimOwnershipLock, checkoutRetirementFenceReason } from './cosClaimOwnership.js';
 import { hasCompletedCheckoutEvidence } from './completedCheckoutEvidence.js';
 import { execGit } from '../lib/execGit.js';
@@ -162,9 +160,8 @@ async function cleanupMerged(repo, target, branches, options) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  isMergedPrHeadMock.mockReset().mockResolvedValue(false);
   hasCompletedCheckoutEvidence.mockReset().mockImplementation(async records => records.some(agent => agent.result?.success === true));
-  preserveMergedCheckout.mockImplementation(async () => ({ archiveDir: '/archive', verify: async () => null }));
-  releaseCheckoutWithoutArchive.mockImplementation(async (_context, prepare) => prepare());
   // Ancient by default, so age-indifferent tests keep their pre-window behavior;
   // a test that pins a specific age must not leak it into the next one.
   worktreeMtimeMs = 0;
@@ -326,6 +323,13 @@ describe('classifyBranches rule ids and wipParkCause', () => {
     const rule = (over) => { const { state, rule: id } = classifyBranches([{ ...base, ...over }])[0]; return [state, id]; };
     expect(rule({ openPr: { isDraft: true }, completionPolicyReason: 'pr-completion-review-required' })).toEqual(['WIP', 'draft']);
     expect(rule({ completionPolicyReason: 'pr-completion-review-required', isMerged: true })).toEqual(['WIP', 'completion-policy']);
+    // An unshipped review obligation falls through to the ordinary rules, but a
+    // merged pointer, an open PR and a live owner keep their holds.
+    const unshipped = { completionPolicyReason: 'pr-completion-review-required', completionReviewUnshipped: true, hasUpstream: false, hasOrigin: true, ahead: 2 };
+    expect(rule(unshipped)).toEqual(['NEEDS_PR', 'needs-pr']);
+    expect(rule({ ...unshipped, isMerged: true })).toEqual(['WIP', 'completion-policy']);
+    expect(rule({ ...unshipped, openPr: { mergeable: 'MERGEABLE' } })).toEqual(['WIP', 'completion-policy']);
+    expect(rule({ ...unshipped, liveOwnerReason: 'active-agent' })).toEqual(['WIP', 'live-owner']);
     expect(rule({ prStateUnavailable: true, hasUpstream: false })).toEqual(['WIP', 'pr-state-unavailable']);
     expect(rule({ hasUpstream: false })).toEqual(['WIP', 'bare-pointer']);
     expect(rule({ isMerged: true })).toEqual(['MERGED', 'merged']);
@@ -480,12 +484,23 @@ describe('cleanupMerged', () => {
     expect(git.deleteBranch).not.toHaveBeenCalled();
   });
 
+  it('retires a dirty checkout whose PR merged at the observed head', async () => {
+    git.hasBranchMergeEvidence.mockResolvedValue(true);
+    isMergedPrHeadMock.mockResolvedValue(true);
+    execGit.mockImplementation(gitFixtureResult(' M server/index.js\n?? scratch.txt\n', 0));
+    const res = await cleanupMerged('/repo', 'main', [{ branch: 'next/issue-2196', worktreePath: '/repo/.claude/worktrees/next-2196' }]);
+    expect(isMergedPrHeadMock).toHaveBeenCalledWith('/repo', 'next/issue-2196', RETIRE_HEAD);
+    expect(res.cleaned).toEqual(['next/issue-2196']);
+    expect(wt.forceRemoveWorktreeDir).toHaveBeenCalled();
+    const { verifyRemoval } = wt.forceRemoveWorktreeDir.mock.calls[0][2];
+    expect(await verifyRemoval({ branch: 'refs/heads/next/issue-2196', head: 'b'.repeat(40) })).toBe('worktree-holder-changed');
+  });
+
   it('uses the guarded removal path for a merged checkout', async () => {
     git.hasBranchMergeEvidence.mockResolvedValue(true);
     const worktreePath = '/repo/.claude/worktrees/next-2190';
     const res = await cleanupMerged('/repo', 'main', [{ branch: 'next/issue-2190', worktreePath }]);
     expect(res.cleaned).toEqual(['next/issue-2190']);
-    expect(releaseCheckoutWithoutArchive).not.toHaveBeenCalled();
   });
 
   it('deletes a merged branch with no worktree', async () => {
@@ -1998,18 +2013,6 @@ describe('reconcile — detached-HEAD worktrees (#10825)', () => {
     expect(res.cleaned).toContain(path);
     expect(wt.forceRemoveWorktreeDir).toHaveBeenCalledWith('/repo', path, expect.any(Object));
     expect(res.detachedWorktrees).toEqual([]);
-    expect(preserveMergedCheckout).not.toHaveBeenCalled();
-    expect(releaseCheckoutWithoutArchive).not.toHaveBeenCalled();
-  });
-
-  it('removes a clean detached tree without copying it', async () => {
-    const path = '/repo/data/cos/worktrees/agent-1234abcd';
-    wt.listWorktrees.mockResolvedValue([MAIN, detachedTree(path)]);
-    stubGit();
-    const result = await reconcile('/repo');
-    expect(result.cleaned).toContain(path);
-    expect(preserveMergedCheckout).not.toHaveBeenCalled();
-    expect(wt.forceRemoveWorktreeDir).toHaveBeenCalled();
   });
 
   it('settles a removed detached tree with a checkout-only receipt that never claims a branch deletion', async () => {
@@ -2338,25 +2341,15 @@ describe('desiredEndState', () => {
 
   // branch-reconcile runs against ANY managed app; a repo that disallows merge
   // commits would strand the branch on a hardcoded `--merge`.
-  it('pins every method fallback and preserves the worktree through archive checks', () => {
+  it('pins every method fallback and uses the simplified cleanup contract', () => {
     const instruction = desiredEndState('IN_REVIEW', {});
     expect(instruction).toContain('--squash --match-head-commit <verified-head>');
     expect(instruction).toContain('--rebase --match-head-commit <verified-head>');
     expect(instruction).not.toContain('--delete-branch');
-    // Cleanup must cross the fresh preview/review/retirement service boundary;
-    // descriptive preservation prose cannot authorize shell teardown.
-    const cleanupSteps = [
-      'hosting provider reports the exact PR as MERGED',
-      '/checkouts/review',
-      'Inspect the returned local identity',
-      '/checkouts/retire',
-      'Require ok:true and branchDeleted:true',
-    ].map(step => instruction.indexOf(step));
-    expect(cleanupSteps.every(position => position >= 0)).toBe(true);
-    expect(cleanupSteps).toEqual([...cleanupSteps].sort((a, b) => a - b));
-    expect(instruction).toContain('never a shell fallback');
-    expect(instruction).not.toContain('git worktree remove');
-    expect(instruction).not.toContain('git branch -d');
+    expect(instruction).toContain('hosting provider reports the exact PR as MERGED');
+    expect(instruction).toContain('PortOS cleans up the managed worktree and branch automatically after completion');
+    expect(instruction).not.toContain('/checkouts/review');
+    expect(instruction).not.toContain('/checkouts/retire');
   });
 
   it('names the real PR number when the branch already has one', () => {

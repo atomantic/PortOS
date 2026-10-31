@@ -11,12 +11,13 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { withSpawnCwdEnv } from '../../lib/spawnCwd.js';
 import { PATHS } from '../../lib/paths.js';
 import { chunkRawText } from '../../lib/catalogChunking.js';
+import { isAppleSilicon } from '../../lib/platform.js';
 
 const run = promisify(execFile);
 const AUK_REVISION = '6943a1e967409e8c73139a7a345f2a611cfb3dd6';
 const root = join(homedir(), '.portos', 'auk');
 const python = join(root, '.venv', 'bin', 'python');
-const supported = () => process.platform === 'darwin' && process.arch === 'arm64';
+const supported = () => isAppleSilicon();
 let setup = { state: 'idle', stage: null, error: null };
 let worker = null;
 let pending = null;

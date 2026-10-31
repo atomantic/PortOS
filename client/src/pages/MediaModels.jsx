@@ -371,9 +371,9 @@ export default function MediaModels() {
           </div>
         ) : (
           <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-            <div className="flex-1 min-w-0">
-              <div className="text-sm text-white truncate flex items-center gap-2">
-                {m.name}
+            <div className="flex-1 min-w-0 basis-[min(100%,18rem)]">
+              <div className="text-sm text-white flex flex-wrap items-center gap-x-2 gap-y-1">
+                <span className="min-w-0 break-words">{m.name}</span>
                 {m.builtIn && <Lock className="w-3 h-3 text-gray-500 shrink-0" title="Built-in catalog entry (name/steps are read-only)" />}
                 {m.deprecated && <span className="text-[10px] px-1 rounded bg-port-warning/20 text-port-warning">legacy</span>}
                 {cached && (
@@ -445,9 +445,9 @@ export default function MediaModels() {
     return (
       <div key={encoder.id} className="bg-port-bg border border-port-border rounded-lg p-3">
         <div className="flex flex-wrap items-start gap-x-3 gap-y-2">
-          <div className="flex-1 min-w-0">
-            <div className="text-sm text-white flex items-center gap-2">
-              <span className="truncate">{encoder.label}</span>
+          <div className="flex-1 min-w-0 basis-[min(100%,18rem)]">
+            <div className="text-sm text-white flex flex-wrap items-center gap-x-2 gap-y-1">
+              <span className="min-w-0 break-words">{encoder.label}</span>
               {encoder.builtIn && <Lock className="w-3 h-3 text-gray-500 shrink-0" title="Included with the MiniMax H3 model weights" />}
               {cached && (
                 <span className="text-[10px] px-1 rounded bg-port-success/20 text-port-success shrink-0 flex items-center gap-1">

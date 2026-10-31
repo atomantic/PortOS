@@ -380,7 +380,7 @@ describe('authGate middleware', () => {
     const auth = await import('./auth.js');
     const { token } = await auth.setPassword({ newPassword: 'correct-horse' });
     const { authGate } = await import('./authGate.js');
-    for (const origin of ['http://localhost:3000', 'http://127.0.0.1:8080', 'http://[::1]:4173']) {
+    for (const origin of ['http://localhost:3000', 'http://127.0.0.1:8080', 'http://[::1]:4173', 'http://127.0.0.2:8080', 'http://127.999.1.1:5554']) {
       const result = await runGate(authGate, {
         path: '/api/cos',
         headers: { host: 'localhost:5555', origin, cookie: `portos_auth=${token}` },
@@ -398,6 +398,7 @@ describe('authGate middleware', () => {
       ['127.0.0.1:5555', 'http://localhost:5555'],
       ['localhost:5560', 'http://localhost:5555'],
       ['localhost:5555', 'http://localhost:5553'],
+      ['127.0.0.1:5555', 'http://127.0.0.2:5554'],
     ]) {
       const result = await runGate(authGate, { path: '/api/cos', headers: { host, origin, cookie: `portos_auth=${token}` } });
       expect(result.called, `${origin} -> ${host}`).toBe(true);
@@ -1604,5 +1605,125 @@ describe('socketAuthGate middleware', () => {
     });
     expect(err).toBeInstanceOf(Error);
     expect(err.data).toEqual({ code: 'CROSS_ORIGIN_BLOCKED' });
+  });
+});
+
+describe('authGate loopback status bypass', () => {
+  const enable = async () => {
+    const auth = await import('./auth.js');
+    await auth.setPassword({ newPassword: 'correct-horse' });
+  };
+  const probe = (overrides = {}) => ({
+    method: 'GET', path: '/api/cos/mind/runtime', headers: {},
+    socket: { remoteAddress: '127.0.0.1' }, ...overrides,
+  });
+
+  it('lets a direct loopback GET read each allowlisted status endpoint', async () => {
+    await enable();
+    const { authGate } = await import('./authGate.js');
+    for (const path of ['/api/cos/mind', '/api/cos/mind/runtime', '/api/cos/mind/visibility', '/api/eidoverse/world/status']) {
+      for (const remoteAddress of ['127.0.0.1', '::1', '::ffff:127.0.0.1']) {
+        const result = await runGate(authGate, probe({ path, socket: { remoteAddress } }));
+        expect(result.called, `${path} from ${remoteAddress}`).toBe(true);
+      }
+    }
+  });
+
+  it.each([
+    ['a non-loopback socket', probe({ socket: { remoteAddress: '100.64.0.5' } })],
+    ['X-Forwarded-For', probe({ headers: { 'x-forwarded-for': '127.0.0.1' } })],
+    ['Forwarded', probe({ headers: { forwarded: 'for=127.0.0.1' } })],
+    ['X-Real-IP', probe({ headers: { 'x-real-ip': '127.0.0.1' } })],
+    ['a non-GET method', probe({ method: 'POST' })],
+    ['a path outside the allowlist', probe({ path: '/api/cos/mind/journal' })],
+    ['a sub-path of an allowlisted path', probe({ path: '/api/cos/mind/runtime/x' })],
+  ])('still requires auth for %s', async (_label, req) => {
+    await enable();
+    const { authGate } = await import('./authGate.js');
+    const result = await runGate(authGate, req);
+    expect(result.called).toBe(false);
+    expect(result.res.statusCode).toBe(401);
+  });
+
+  it('refuses a loopback request the Tailcat ingress marked remote', async () => {
+    await enable();
+    const { authGate } = await import('./authGate.js');
+    const { remoteRequestHandler } = await import('../lib/requestOrigin.js');
+    const req = probe();
+    remoteRequestHandler(() => {})(req, {});
+    const result = await runGate(authGate, req);
+    expect(result.called).toBe(false);
+    expect(result.res.statusCode).toBe(401);
+  });
+
+  it('refuses a request relayed through the dev proxy for a remote client', async () => {
+    await enable();
+    const { authGate } = await import('./authGate.js');
+    const result = await runGate(authGate, probe({ headers: { [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '100.64.0.5' } }));
+    expect(result.called).toBe(false);
+  });
+});
+
+describe('host-control refuses originless cross-site browser requests (#14268)', () => {
+  const buildApp = async () => {
+    const { authGate, hostControlRouteGate, requestHasHostControl } = await import('./authGate.js');
+    const checkSetup = vi.fn();
+    const decode = vi.fn();
+    const app = express();
+    app.use((req, _res, next) => {
+      Object.defineProperty(req.socket, 'remoteAddress', { value: '127.0.0.1', configurable: true });
+      next();
+    });
+    app.use(authGate);
+    app.use(hostControlRouteGate);
+    app.get('/api/youtube/setup-check', (_req, res) => { checkSetup(); res.json({ ok: true }); });
+    // In-handler read, like the Music Video song-master decode.
+    app.get('/api/example/in-handler', (req, res) => {
+      if (!requestHasHostControl(req)) return res.status(403).json({ code: 'HOST_CONTROL_FORBIDDEN' });
+      decode();
+      return res.json({ ok: true });
+    });
+    app.get('/data/images/example.png', (_req, res) => res.send('png'));
+    return { app, checkSetup, decode };
+  };
+  const base = { host: 'localhost:5555' };
+  const send = (app, path, headers) => Object.entries(headers).reduce((r, [k, v]) => r.set(k, v), request(app).get(path));
+
+  it.each([false, true])('refuses cross-site and same-site no-Origin GETs, keeps the rest (auth enabled: %s)', async (enabled) => {
+    const cookie = enabled
+      ? { cookie: `portos_auth=${(await (await import('./auth.js')).setPassword({ newPassword: 'correct-horse' })).token}` }
+      : {};
+    const { app, checkSetup, decode } = await buildApp();
+    const get = (path, headers = {}) => send(app, path, { ...base, ...cookie, ...headers });
+
+    for (const site of ['cross-site', 'same-site']) {
+      const res = await get('/api/youtube/setup-check', { 'sec-fetch-site': site });
+      expect(res.status).toBe(403);
+      expect(res.body.code).toBe('HOST_CONTROL_FORBIDDEN');
+      expect((await get('/api/example/in-handler', { 'sec-fetch-site': site })).status).toBe(403);
+    }
+    expect(checkSetup).not.toHaveBeenCalled();
+    expect(decode).not.toHaveBeenCalled();
+
+    for (const headers of [{ 'sec-fetch-site': 'same-origin' }, { 'sec-fetch-site': 'none' }, {}]) {
+      expect((await get('/api/youtube/setup-check', headers)).status).toBe(200);
+      expect((await get('/api/example/in-handler', headers)).status).toBe(200);
+    }
+    // Origin-carrying requests keep the isCrossOrigin decision (dev proxy pairing).
+    const proxied = await get('/api/youtube/setup-check', { origin: 'http://localhost:5554', 'sec-fetch-site': 'same-site' });
+    expect(proxied.status).toBe(200);
+    // Peer-hosted media previews are not host-control routes.
+    const media = await get('/data/images/example.png', { 'sec-fetch-site': 'cross-site' });
+    expect(media.status).toBe(200);
+  });
+
+  it('keeps an agent bearer session working without fetch metadata', async () => {
+    const auth = await import('./auth.js');
+    await auth.setPassword({ newPassword: 'correct-horse' });
+    const { token } = await auth.createSession();
+    const { app, checkSetup } = await buildApp();
+    const res = await send(app, '/api/youtube/setup-check', { ...base, authorization: `Bearer ${token}` });
+    expect(res.status).toBe(200);
+    expect(checkSetup).toHaveBeenCalledTimes(1);
   });
 });

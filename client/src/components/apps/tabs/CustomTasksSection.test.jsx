@@ -359,4 +359,27 @@ describe('CustomTasksSection trigger outcomes', () => {
     await waitFor(() => expect(api.triggerCosJob).toHaveBeenCalledWith('job-1', {}));
     expect(api.toggleCosJob).not.toHaveBeenCalled();
   });
+  it('shows a failed task read as an error with Retry, not as an app with no custom tasks', async () => {
+    api.getCosJobs.mockRejectedValueOnce(new Error('Server unavailable'));
+    render(<CustomTasksSection appId="app-1" appName="Example App" />);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load custom tasks — Server unavailable');
+    expect(screen.queryByText(/No custom tasks yet/)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('Example Task')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('keeps the listed tasks when the refresh after an action fails', async () => {
+    api.triggerCosJob.mockResolvedValue({ success: true, status: 'queued', started: true });
+    render(<CustomTasksSection appId="app-1" appName="Example App" />);
+    await screen.findByText('Example Task');
+    api.getCosJobs.mockRejectedValueOnce(new Error('Server unavailable'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Run now' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load custom tasks');
+    expect(screen.getByText('Example Task')).toBeInTheDocument();
+  });
 });

@@ -24,7 +24,8 @@ const world = {
   improvementEnabled: true,
 };
 
-vi.mock('./taskScheduleStore.js', () => ({
+vi.mock('./taskScheduleStore.js', async importOriginal => ({
+  ...(await importOriginal()),
   loadSchedule: vi.fn(async () => world.schedule),
   updateSchedule: vi.fn(async (mutate) => (await mutate(world.schedule)).result),
 }));

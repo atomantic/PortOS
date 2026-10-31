@@ -3,6 +3,8 @@ import { Trash2, Download, Film, Image as ImageIcon, Sparkles, Eye, EyeOff, Maxi
 import MediaImage from '../MediaImage';
 import AddToCollectionMenu from './AddToCollectionMenu';
 import MediaHostsChip from './MediaHostsChip';
+import MediaUsageChip from './MediaUsageChip';
+import MediaUsageList from './MediaUsageList';
 import PinToMoodBoardMenu from './PinToMoodBoardMenu';
 import InlineConfirmRow from '../ui/InlineConfirmRow';
 import { loraDisplayName } from './normalize';
@@ -100,6 +102,10 @@ function MediaCard({
   // Holders entry from useMediaAnnotations' getCardProps (useMediaHolders):
   // where the render lives when another machine holds it too.
   hosts = null,
+  // Records using this file (useMediaUsages via getCardProps). A used file's
+  // delete lists them and asks for Delete anyway, which calls
+  // `onDelete(item, { force: true })`.
+  usages = null,
 }) {
   const { kind, prompt, modelId, previewUrl, thumbnailUrl, downloadUrl } = item;
   const isVideo = kind === 'video';
@@ -108,6 +114,7 @@ function MediaCard({
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const pendingDelete = Boolean(item.pendingDelete);
   const canDelete = Boolean(onDelete) && !pendingDelete;
+  const inUse = Array.isArray(usages) && usages.length > 0;
   // Send actions come before Draw so the image-gen card (no annotate handler)
   // stays a 2×2: Remix, i2i, Video, 3D. Draw wraps under that set when present.
   const createActions = [
@@ -259,6 +266,7 @@ function MediaCard({
             </span>
           )}
           <MediaHostsChip entry={hosts} disabled={hideActions} />
+          <MediaUsageChip usages={usages} />
         </div>
         {Array.isArray(item.loraNames) && item.loraNames.length > 0 && (
           <div className="flex flex-wrap items-center gap-1 text-[9px]" title={item.loraNames.map(loraDisplayName).join(', ')}>
@@ -289,7 +297,20 @@ function MediaCard({
             )}
           </div>
         )}
-        {!hideActions && confirmingDelete && canDelete && (
+        {!hideActions && confirmingDelete && canDelete && (inUse ? (
+          <div role="group" aria-label="Delete a file in use" className="space-y-1 text-[11px]">
+            <p className="text-port-warning">Used in {usages.length} {usages.length === 1 ? 'place' : 'places'}. Swap it out there first:</p>
+            <MediaUsageList usages={usages} />
+            <InlineConfirmRow
+              question="Or delete it anyway; those places lose it."
+              confirmText="Delete anyway"
+              confirmTitle="Delete even though records use it, moving files to Trash on the PortOS host"
+              onConfirm={() => { setConfirmingDelete(false); onDelete(item, { force: true }); }}
+              onCancel={() => setConfirmingDelete(false)}
+              stacked
+            />
+          </div>
+        ) : (
           <InlineConfirmRow
             question={`Delete this ${isVideo ? 'video' : 'image'}?`}
             confirmText="Delete"
@@ -297,7 +318,7 @@ function MediaCard({
             onConfirm={() => { setConfirmingDelete(false); onDelete(item); }}
             onCancel={() => setConfirmingDelete(false)}
           />
-        )}
+        ))}
         {!hideActions && !confirmingDelete && (
           <div className="@container space-y-1.5">
             {createActions.length > 0 && (

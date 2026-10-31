@@ -11,6 +11,7 @@ import toast from '../ui/Toast';
 import InlineDiff from '../ui/InlineDiff';
 import { listConflicts, getConflict, resolveConflict, deleteConflict } from '../../services/api';
 import LoadFailedState from '../ui/LoadFailedState';
+import { formatDateTime } from '../../utils/formatters';
 
 const asText = (v) => {
   if (v === null || v === undefined) return '';
@@ -121,23 +122,23 @@ function ConflictEntry({ entry, onResolved }) {
 
   return (
     <div className="border border-port-border rounded-lg bg-port-card">
-      <div className="flex items-center justify-between gap-3 p-3">
-        <button type="button" onClick={toggleExpanded} className="flex items-center gap-2 min-w-0 text-left">
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 p-3">
+        <button type="button" onClick={toggleExpanded} className="flex flex-wrap items-center gap-x-2 gap-y-0.5 min-w-0 flex-1 min-h-[44px] sm:min-h-0 text-left">
           {expanded ? <ChevronDown size={14} className="text-gray-500 shrink-0" /> : <ChevronRight size={14} className="text-gray-500 shrink-0" />}
           <span className="text-sm text-white truncate">
             {entry.recordKind} <span className="font-mono text-[11px] text-gray-500">{entry.recordId?.slice(0, 14)}</span>
           </span>
-          <span className="text-[11px] text-gray-500 shrink-0">
-            {fields.length} field(s) · via {entry.source?.via || 'sync'}{entry.source?.peerId ? ` (${entry.source.peerId.slice(0, 8)})` : ''} · {entry.detectedAt?.slice(0, 16).replace('T', ' ')}
+          <span className="text-[11px] text-gray-500 min-w-0">
+            {fields.length} field(s) · via {entry.source?.via || 'sync'}{entry.source?.peerId ? ` (${entry.source.peerId.slice(0, 8)})` : ''} · {formatDateTime(entry.detectedAt, '')}
           </span>
         </button>
         <div className="flex items-center gap-1.5 shrink-0">
           <button type="button" onClick={() => resolve('restore-all')} disabled={busy}
-            className="inline-flex items-center gap-1 px-2 py-1 rounded bg-port-accent hover:bg-port-accent/90 text-white text-[11px]" title="Restore your overwritten version">
+            className="inline-flex items-center gap-1 min-h-[44px] sm:min-h-0 px-2 py-1 rounded bg-port-accent hover:bg-port-accent/90 text-white text-[11px]" title="Restore your overwritten version">
             <RotateCcw size={12} /> Restore mine
           </button>
           <button type="button" onClick={() => resolve('discard')} disabled={busy}
-            className="px-2 py-1 rounded border border-port-border text-gray-400 hover:text-white text-[11px]">
+            className="min-h-[44px] sm:min-h-0 px-2 py-1 rounded border border-port-border text-gray-400 hover:text-white text-[11px]">
             Discard
           </button>
           <button type="button" onClick={remove} disabled={busy} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-port-error" title="Remove entry" aria-label="Remove entry">

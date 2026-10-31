@@ -111,4 +111,13 @@ describe('buildFormData', () => {
     expect(fd.getAll('promptAdditions')).toEqual([JSON.stringify(additions)]);
     expect(fd.getAll('loraScales')).toEqual(['0.8', '1']);
   });
+
+  // The route's visualProfileOverride schema parses one JSON field; String() would
+  // have sent "[object Object]" and failed validation.
+  it('sends a plain record as one JSON field', async () => {
+    const { buildFormData } = await import('./apiImageVideo.js');
+    const profile = { version: 1, generation: { enabled: true } };
+    const fd = buildFormData({ visualProfileOverride: profile });
+    expect(fd.getAll('visualProfileOverride')).toEqual([JSON.stringify(profile)]);
+  });
 });

@@ -191,6 +191,7 @@ export * from './useSpritePendingRenders.js';
 export { default as useSpriteRecordCrud } from './useSpriteRecordCrud.js';
 export * from './useMediaCompletionRefresh.js';
 export * from './useMediaHolders.js';
+export * from './useMediaUsages.js';
 export * from './useOpenClawAttachments.js';
 
 // === Settings-derived shared state ===
@@ -299,6 +300,7 @@ export * from './useCalendarWindowEvents.js';
 export * from './useMusicVideoReviewDraft.js';
 
 export * from './useGoogleAutoConfigProgress.js';
+export * from './useGoogleAuthStatus.js';
 
 export * from './useRunwayCatalog.js';
 

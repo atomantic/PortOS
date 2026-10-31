@@ -5,7 +5,8 @@ import useProviderModels from '../../hooks/useProviderModels';
 import useMounted from '../../hooks/useMounted';
 
 // The host owns persistence and decides which draft fields may be proposed.
-export default function CreativeRefinement({ initialDraft, fieldLimits = {}, converse, onApply, disabled = false }) {
+// `onFork(fields)` (optional) saves the proposal onto a new fork instead of the editor.
+export default function CreativeRefinement({ initialDraft, fieldLimits = {}, converse, onApply, onFork, disabled = false }) {
   const id = useId();
   const mounted = useMounted();
   const flight = useRef(false);
@@ -47,7 +48,8 @@ export default function CreativeRefinement({ initialDraft, fieldLimits = {}, con
   };
   return <section aria-label="Creative redesign conversation" className="rounded border border-port-border p-3 space-y-3 min-w-0">
     <p className="text-sm font-semibold">Experiment with a redesign</p>
-    <p className="text-xs text-gray-400">Fork into this universe first to preserve the original. Suggestions stay here until applied to your editor; Save commits your changes.</p>
+    <p className="text-xs text-gray-400">{onFork ? 'Suggestions stay here until applied to your editor or saved as a fork, which leaves the original as it is.'
+      : 'Fork into this universe first to preserve the original. Suggestions stay here until applied to your editor; Save commits your changes.'}</p>
     <ProviderModelSelector providers={selection.providers} selectedProviderId={selection.selectedProviderId}
       selectedModel={selection.selectedModel} availableModels={selection.availableModels}
       onProviderChange={selection.setSelectedProviderId} onModelChange={selection.setSelectedModel}
@@ -83,6 +85,8 @@ export default function CreativeRefinement({ initialDraft, fieldLimits = {}, con
         const patch = Object.fromEntries(patchEntries.filter(([key, value]) => resolutionFor(key, value) !== 'editor'));
         onApply(patch); setHasProposal(false); setResolutions({});
       }} className="min-h-11 rounded border border-port-accent px-3 py-2 text-sm text-port-accent hover:bg-port-accent/10 disabled:opacity-40">Apply proposal to editor</button>
+      {onFork && <button type="button" disabled={busy || !patchEntries.length} onClick={() => onFork(Object.fromEntries(patchEntries))}
+        className="ml-2 min-h-11 rounded bg-port-accent px-3 py-2 text-sm text-white disabled:opacity-40">Save as fork…</button>}
     </div>}
   </section>;
 }

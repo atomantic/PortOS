@@ -29,6 +29,26 @@ const openAuth = async () => {
   return screen.getByRole('button', { name: 'Clear' });
 };
 
+describe('Google API status read', () => {
+  // A failed read must not fall through to the credential form and automated
+  // setup, where saving would replace a working OAuth client.
+  it('shows a failed status read with Retry instead of the setup flow', async () => {
+    api.getGoogleAuthStatus
+      .mockRejectedValueOnce(new Error('Synthetic status failure'))
+      .mockResolvedValueOnce({ hasCredentials: true, hasTokens: true });
+    render(<MemoryRouter><ConfigTab accounts={[account]} setAccounts={vi.fn()} /></MemoryRouter>);
+    fireEvent.click(screen.getByRole('button', { name: 'Expand calendars for Example Calendar' }));
+
+    expect(await screen.findByText(/Could not load Google API authorization status/)).toBeTruthy();
+    expect(screen.queryByText(/Connect directly to Google Calendar API/)).toBeNull();
+    expect(api.getGoogleAuthStatus).toHaveBeenCalledWith({ silent: true });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await screen.findByText('Google API authenticated');
+    expect(screen.queryByText(/Could not load Google API authorization status/)).toBeNull();
+  });
+});
+
 describe('Google credential clearing', () => {
   it('blocks duplicate clears and confirms a bodyless success before refreshing auth', async () => {
     let resolve;

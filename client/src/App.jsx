@@ -581,6 +581,8 @@ export default function App() {
           {/* Stage tab (setup | cast-sets | board | produce | compose | review); an unknown stage opens the project's default. */}
           <Route path="music-video/:projectId/:stage" element={<MusicVideo />} />
           <Route path="music-video/:projectId/:stage/scene/:sceneId" element={<MusicVideo />} />
+          {/* The Storyboard step's open panel. */}
+          <Route path="music-video/:projectId/:stage/panel/:panelId" element={<MusicVideo />} />
           <Route path="music-video/:projectId/scene/:sceneId" element={<MusicVideo />} />
           <Route path="music-video/:projectId/dev/:artifactId" element={<MusicVideo />} />
           <Route path="music-video/:projectId/:stage/dev/:artifactId" element={<MusicVideo />} />

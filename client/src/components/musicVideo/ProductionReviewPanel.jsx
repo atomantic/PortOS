@@ -90,7 +90,7 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
     // The Plan checklist lists each open item with its button, so the card names them (planItems) and links there.
     if (stage === 'storyboard' && problems.length) {
       const open = planItems().length || problems.length + (requests.length ? 1 : 0);
-      return open > 1 ? `Finish these ${open} items on the Plan step first:` : 'Finish this on the Plan step first:';
+      return open > 1 ? `Finish these ${open} items on the Storyboard step first:` : 'Finish this on the Storyboard step first:';
     }
     if (requests.length) return changeRequestBlocker(requests);
     // With no current proof, the Render button already says what to do; repeating it as a warning reads as required.
@@ -151,8 +151,8 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
         </div>
         {approvalHelp(key) && <p id={fieldId(`${key}-approval-help`)} role="status" className="mt-1 text-sm text-port-warning">{approvalHelp(key)}</p>}
         {key === 'storyboard' && !ready?.storyboard.approved && !!ready?.storyboard.problems.length && planItems().length > 0 && <div className="mt-1 text-sm">
-          <ul aria-label="Open Plan items" className="list-disc pl-5 text-port-text-muted">{planItems().map(item => <li key={item.id}>{item.text}</li>)}</ul>
-          {onNavigate && <button type="button" onClick={() => onNavigate('board')} className="mt-1 min-h-[44px] rounded border border-port-border px-2 py-1 text-port-accent sm:min-h-0">Open the Plan step</button>}
+          <ul aria-label="Open Storyboard items" className="list-disc pl-5 text-port-text-muted">{planItems().map(item => <li key={item.id}>{item.text}</li>)}</ul>
+          {onNavigate && <button type="button" onClick={() => onNavigate('board')} className="mt-1 min-h-[44px] rounded border border-port-border px-2 py-1 text-port-accent sm:min-h-0">Open the Storyboard step</button>}
         </div>}
         {listedProblems(key).length > 0 && <ul className="mt-1 list-disc pl-5 text-xs text-port-text-muted">{listedProblems(key).map(problem => <li key={problem}>{problem}</li>)}</ul>}
         {/* Camera variety (#10589) is advice, never a blocker on approval. */}

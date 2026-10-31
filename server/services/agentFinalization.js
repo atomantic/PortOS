@@ -1212,6 +1212,52 @@ async function completionClaimOutcome(agentId, reportedOutcome, claimDisposition
 }
 
 /**
+ * Validation verdict for a recovered run: the retirement / programmatic-I/O /
+ * saved verdict first, then a merged-review or claim disposition. A disposition
+ * never erases a recorded failed delivery gate, but a saved pass cannot replace a
+ * fresh selected-issue proof on no-op recovery.
+ */
+function resolveRecoveredValidation({ task, agent, effectiveSuccess, recoveredHook, retirementCompletion, mergedReviewFollowUp, claimDisposition }) {
+  let recovered;
+  if (retirementCompletion) recovered = retirementCompletion.status === 'verified';
+  else if (isProgrammaticIoTaskType(resolveTaskHookType(task))) {
+    recovered = resolveProgrammaticIoVerdict({ success: effectiveSuccess, hookResult: recoveredHook });
+  } else recovered = agent.result?.validationPassed ?? null;
+  if (recovered === false || !(mergedReviewFollowUp || claimDisposition)) return recovered;
+  return mergedReviewFollowUp || claimDisposition.status === 'verified' ? true : null;
+}
+
+/** Run-record output for a recovered agent: its transcript, else buffered lines; redacted for private security. */
+async function recoveredRunOutput(agent, isPrivateSecurity) {
+  if (isPrivateSecurity) return 'Private security assessment interrupted; inspect its local assessment archive.';
+  const bufferedOutput = Array.isArray(agent.output)
+    ? agent.output.map((entry) => typeof entry === 'string' ? entry : entry?.line).filter(Boolean).join('\n')
+    : '';
+  return await tryReadFile(join(PATHS.cosAgents, agent.id, 'output.txt')) ?? bufferedOutput;
+}
+
+/**
+ * Fenced write of a recovery task update. Returns the update still owned by this
+ * agent (null once another owner changed the task's status) and whether ownership was lost.
+ */
+async function persistRecoveredTaskUpdate({ task, agent, recoveryUpdate }) {
+  if (!recoveryUpdate) return { recoveryUpdate, recoveryOwnershipLost: false };
+  const update = await updateTask(task.id, recoveryUpdate, task.taskType || 'user', {
+    expectedStatus: task.status || null, expectedTask: { description: task.description, priority: task.priority, metadata: task.metadata },
+    recoveryOwner: { id: agent.id, startedAt: agent.startedAt },
+    // Runtime resolution reloads the dispatch; guard its fresh snapshot rather
+    // than the older task initially supplied to this recovered run.
+    ...runtimeRecoveryFence(recoveryUpdate)[0],
+  });
+  if (update?.error) throw new Error(`Could not persist recovered task outcome: ${update.error}`);
+  if (update?.statusChanged && recoveryUpdate.metadata?.blockedCategory === 'runtime-verification') {
+    throw new Error('Could not persist recovered task outcome: task ownership changed');
+  }
+  if (update?.statusChanged) return { recoveryUpdate: null, recoveryOwnershipLost: true };
+  return { recoveryUpdate, recoveryOwnershipLost: false };
+}
+
+/**
  * Retire an agent whose process is gone — the one step list both recovery
  * paths now share (issue #8440). Before this, the orphan sweep
  * (`runCleanupOrphanedAgents`) and the post-restart recovery
@@ -1260,12 +1306,13 @@ export async function retireDeadAgent({ agent, task, success, exitCode, duration
   let reportedOutcome = !isPrivateSecurity && !refused
     ? await persistCompletionSummary(agent.id, { workspacePath: agent.metadata?.workspacePath, existingRecord: agent }) : null;
   const executionSuccess = success && exitCode === 0;
+  const recoveryEligible = executionSuccess && !isPrivateSecurity && !interruption;
   const mergedReviewFollowUp = await completionReviewFollowUp({ task, agentId: agent.id,
     workspacePath: agent.metadata?.workspacePath, reportedOutcome,
-    eligible: executionSuccess && !isPrivateSecurity && !interruption });
+    eligible: recoveryEligible });
   if (mergedReviewFollowUp) reportedOutcome = mergedReviewFollowUp.taskOutcome;
   const claimDisposition = await completionClaimDisposition({ task, agent, reportedOutcome,
-    success: executionSuccess && !isPrivateSecurity && !interruption && agent.result?.validationPassed !== false });
+    success: recoveryEligible && agent.result?.validationPassed !== false });
   reportedOutcome = await completionClaimOutcome(agent.id, reportedOutcome, claimDisposition);
   // Only an explicit hold suppresses orphan recovery; a failed delivery check
   // must retain the caller's normal failure/retry handling.
@@ -1286,15 +1333,8 @@ export async function retireDeadAgent({ agent, task, success, exitCode, duration
 
   if (Number(task?.metadata?.auditDispositionVersion) === 1 && recoveredHook?.auditDisposition?.status !== 'complete') effectiveSuccess = false;
   const retirementCompletion = isRetirementOnlyRecovery(task) ? await verifyRetirementRecoveryCompletion(task) : null;
-  const recoveredValidation = retirementCompletion ? retirementCompletion.status === 'verified'
-    : isProgrammaticIoTaskType(resolveTaskHookType(task))
-    ? resolveProgrammaticIoVerdict({ success: effectiveSuccess, hookResult: recoveredHook })
-    : agent.result?.validationPassed ?? null;
-  // A disposition never erases a recorded failed delivery gate. A saved pass,
-  // however, cannot replace a fresh selected-issue proof on no-op recovery.
-  const validationPassed = recoveredValidation !== false && (mergedReviewFollowUp || claimDisposition)
-    ? mergedReviewFollowUp || claimDisposition.status === 'verified' ? true : null
-    : recoveredValidation;
+  const validationPassed = resolveRecoveredValidation({ task, agent, effectiveSuccess, recoveredHook,
+    retirementCompletion, mergedReviewFollowUp, claimDisposition });
   let taskOutcome = reportedOutcome || retirementCompletion ? resolveTaskOutcome({ reported: retirementCompletion?.status === 'unverified'
     ? { status: 'incomplete', reason: retirementCompletion.reason } : reportedOutcome,
     success: effectiveSuccess, validationPassed, noCommitDeclared: declaresNoCommitCriterion(task) }) : null;
@@ -1309,13 +1349,9 @@ export async function retireDeadAgent({ agent, task, success, exitCode, duration
   if (recoveryUpdate?.runtimeRecoveryContext) taskOutcome = recoveryUpdate.metadata.taskOutcome;
 
   if (agent.metadata?.runId) {
-    const bufferedOutput = Array.isArray(agent.output)
-      ? agent.output.map((entry) => typeof entry === 'string' ? entry : entry?.line).filter(Boolean).join('\n')
-      : '';
-    const output = await tryReadFile(join(PATHS.cosAgents, agent.id, 'output.txt')) ?? bufferedOutput;
     await completeAgentRun(
       agent.metadata.runId,
-      isPrivateSecurity ? 'Private security assessment interrupted; inspect its local assessment archive.' : output,
+      await recoveredRunOutput(agent, isPrivateSecurity),
       exitCode,
       duration,
       errorAnalysis,
@@ -1324,21 +1360,9 @@ export async function retireDeadAgent({ agent, task, success, exitCode, duration
     );
   }
 
-  let recoveryOwnershipLost = false;
-  if (recoveryUpdate) {
-    const update = await updateTask(task.id, recoveryUpdate, task.taskType || 'user', {
-      expectedStatus: task.status || null, expectedTask: { description: task.description, priority: task.priority, metadata: task.metadata },
-      recoveryOwner: { id: agent.id, startedAt: agent.startedAt },
-      // Runtime resolution reloads the dispatch; guard its fresh snapshot rather
-      // than the older task initially supplied to this recovered run.
-      ...runtimeRecoveryFence(recoveryUpdate)[0],
-    });
-    if (update?.error) throw new Error(`Could not persist recovered task outcome: ${update.error}`);
-    if (update?.statusChanged && recoveryUpdate.metadata?.blockedCategory === 'runtime-verification') {
-      throw new Error('Could not persist recovered task outcome: task ownership changed');
-    }
-    if (update?.statusChanged) { recoveryUpdate = null; recoveryOwnershipLost = true; }
-  }
+  const persisted = await persistRecoveredTaskUpdate({ task, agent, recoveryUpdate });
+  recoveryUpdate = persisted.recoveryUpdate;
+  const { recoveryOwnershipLost } = persisted;
   await completeAgent(agent.id, {
     success: effectiveSuccess,
     executionSuccess,
@@ -1738,6 +1762,130 @@ function completionRecord({ task, verdict, hookResult, fidelity, executionInterr
   };
 }
 
+const PREREQUISITE_BLOCKED_CATEGORIES = ['runtime-verification', 'internal-dependency', 'internal-dependency-unverified'];
+const DELIVERY_RECOVERY_BLOCKED_CATEGORIES = ['task-approval', 'task-recovery-exhausted', ...PREREQUISITE_BLOCKED_CATEGORIES];
+
+// Folds an explicit task hold and any scanner/provider safety refusal into the
+// reported execution state the verdict ladder reads. A cleanup-only hold keeps
+// the reported success; a refusal is persisted as the run's interruption.
+async function settleReportedExecution({ agentId, task, reportedTaskOutcome, deliveryHeld, ...reported }) {
+  let { reportedSuccess, error, reportedErrorAnalysis, executionInterruption } = reported;
+  if (deliveryHeld && reportedTaskOutcome.recovery?.mode !== 'cleanup'
+    && !reportedErrorAnalysis?.actionable && !reportedErrorAnalysis?.permanent) {
+    reportedSuccess = false;
+    error = reportedTaskOutcome.reason;
+    reportedErrorAnalysis = { category: `task-${reportedTaskOutcome.status}`, message: error,
+      permanent: true, actionable: false, requiresFallback: false };
+  }
+  if (resolveTaskHookType(task) === 'security') {
+    const { settleAgentSecurityScan } = await import('./agentSecurityScan.js');
+    const scanner = await settleAgentSecurityScan(agentId);
+    if (scanner?.status === 'refused') {
+      reportedSuccess = false;
+      reportedErrorAnalysis = { category: 'content-refusal', origin: 'provider', permanent: true, actionable: false,
+        requiresFallback: false, message: 'Security scanner safety refusal; automatic continuation, retries and provider fallback are disabled.' };
+      executionInterruption = { category: 'content-refusal', source: 'security-scanner' };
+    }
+  }
+  if (['content-refusal', 'content-filtered'].includes(reportedErrorAnalysis?.category)) {
+    executionInterruption ||= { category: reportedErrorAnalysis.category, source: reportedErrorAnalysis.origin || 'provider' };
+    reportedSuccess = false;
+  }
+  if (executionInterruption) {
+    await updateAgent(agentId, { metadata: { executionInterruption } })
+      .catch(err => emitLog('warn', `Could not persist execution interruption for ${agentId}: ${err.message}`, { agentId }));
+  }
+  return { reportedSuccess, error, reportedErrorAnalysis, executionInterruption };
+}
+
+// #5994: the run shipped — but did it ship what was asked? Runs only on a run
+// that would otherwise be recorded a success, for the same reason the drift
+// downgrade does: on a run that already failed, the original analysis is the
+// better diagnosis, and re-judging it against the objective would replace a
+// real cause with a symptom. Bounded by the reviewer's own request timeout and
+// the diff probe's git timeouts — it holds the agent's CoS concurrency slot for
+// its duration, which is why it is skipped entirely unless the user configured
+// a local backend for it.
+// A verified stand-down is judged from tracker state. A partial landed diff
+// cannot prove the still-open issue's root cause and must not launch follow-ups.
+async function reviewGoalFidelity({ agentId, task, workspacePath, startedAt, deliveredVerdict, claimDisposition, retirementCompletion }) {
+  const fidelity = deliveredVerdict.success && !isPrivateSecurityTask(task) && claimDisposition?.status !== 'verified'
+    && retirementCompletion?.status !== 'verified'
+    ? await evaluateGoalFidelity({ task, workspacePath, startedAt })
+      .catch(err => {
+        emitLog('warn', `Goal-fidelity review failed for ${agentId}: ${err.message}`, { agentId });
+        return { verdict: null, review: null, error: err.message };
+      })
+    : { verdict: null, review: null, error: null };
+  const fidelityDowngrade = goalFidelityHoldsRun(fidelity.review);
+  if (fidelity.review) {
+    emitLog(fidelityDowngrade ? 'warn' : 'info', `${goalFidelityLogMarker(fidelity.review)} ${formatGoalFidelitySummary(fidelity.review)} for ${agentId}`, {
+      agentId, taskId: task?.id, verdict: fidelity.verdict
+    });
+  } else if (fidelity.skipped) {
+    emitLog('info', `⏭️ Goal-fidelity review skipped for ${agentId}: ${fidelity.error}`, { agentId, taskId: task?.id });
+  } else if (fidelity.error) {
+    emitLog('warn', `Goal-fidelity review returned no verdict for ${agentId}: ${fidelity.error}`, { agentId, taskId: task?.id });
+  }
+  return { fidelity, fidelityDowngrade };
+}
+
+// A held delivery that nothing terminal explains goes to delivery recovery;
+// every other run takes the normal final task update. A clean, validated run's
+// cleanup-only outcome was already normalized to `completed`, so one still
+// asking for cleanup here did not earn it and recovers as ordinary work.
+async function resolveCompletionTaskUpdate({
+  task, preHookTask, hookMetadata, hookResult, verdict, taskOutcome, reportedTaskOutcome, deliveryHeld, deliverySuccess,
+  executionInterruption, terminatedByUser, agentId,
+}) {
+  const terminalFailure = !verdict.success && (verdict.errorAnalysis?.actionable || verdict.errorAnalysis?.permanent)
+    && !(verdict.source === 'reported' && verdict.errorAnalysis?.category === `task-${reportedTaskOutcome?.status}`);
+  const deliveryRecovers = !deliverySuccess && (deliveryHeld || verdict.success) && !terminatedByUser
+    && !terminalFailure && !executionInterruption && !isPrivateSecurityTask(task) && hookResult?.outcome?.accepted !== false;
+  if (!deliveryRecovers) return resolveFinalTaskUpdate({ task, preHookTask, hookMetadata, verdict, terminatedByUser, agentId });
+  return resolveDeliveryRecoveryUpdate(preHookTask, taskOutcome.recovery?.mode === 'cleanup'
+    ? { ...taskOutcome, recovery: undefined } : taskOutcome, agentId);
+}
+
+async function settleLegacyDeepAudit({ task, agentId, hookResult, taskUpdate, taskOutcome, validationPassed, deliverable, outcomeHeld }) {
+  hookResult.deepAudit = await (await import('./deepAudit.js')).settleDeepAuditDelivery({
+    task, agentId, success: deliverable, validationPassed,
+  }).catch(err => ({ ...hookResult.deepAudit, complete: false, deliveryComplete: false, reason: `Delivery persistence failed: ${err.message}` }));
+  await updateAgent(agentId, { metadata: { deepAudit: hookResult.deepAudit } });
+  if (hookResult.deepAudit.complete && deliverable && !outcomeHeld) {
+    taskUpdate.status = 'completed';
+    taskUpdate.metadata = { ...task.metadata, taskOutcome };
+  }
+}
+
+async function recordCompletionCleanupIntent({ agentId, cleanupOwner, task, deliverySuccess, outputBuffer, prEvidence }) {
+  const priorCleanup = cleanupOwner?.metadata?.completionCleanup;
+  const settledCleanup = ['completed', 'failed', 'abandoned'].includes(priorCleanup?.status);
+  const replay = priorCleanup?.replay || (!settledCleanup && cleanupOwner?.startedAt ? await storeCompletionData(cleanupOwner, 'replay', completionReplayInput({ task,
+    effectiveSuccess: deliverySuccess, outputBuffer,
+    prClaimVerified: prClaimWasVerified(prEvidence.cleanupEvidence), branchProvenEmpty: prEvidence.branchProvenEmpty })) : undefined);
+  await updateAgent(agentId, { metadata: { completionCleanup: { ...priorCleanup,
+    version: 1, status: priorCleanup?.status || 'pending', stages: priorCleanup?.stages || {}, replay, context: undefined } } });
+}
+
+function completionRecoveryOwnership(metadata, agentId) {
+  const recoveryAgent = metadata?.deliveryRecoveryAgentId === agentId;
+  return {
+    ...(DELIVERY_RECOVERY_BLOCKED_CATEGORIES.includes(metadata?.blockedCategory)
+      || metadata?.retryPendingCleanup === agentId || recoveryAgent ? { deliveryRecoveryOwned: true } : {}),
+    ...(recoveryAgent ? { cleanupPending: true } : {}),
+  };
+}
+
+// Private assessment transcripts stay in the local report; run history only
+// points at it.
+function completionRunOutput(task, success, outputBuffer) {
+  if (!isPrivateSecurityTask(task)) return outputBuffer;
+  return success
+    ? 'Private security assessment: see the local Review Hub report.'
+    : 'Private security assessment report was not verified; inspect the local assessment archive.';
+}
+
 /**
  * Shared end-of-run state writes for all three spawn paths
  * (`handleAgentCompletion` runner-mode, TUI `finish`, direct-CLI `close`).
@@ -1773,42 +1921,23 @@ async function finalizeAgentInCompletionContext({
   const executionSuccess = reportedSuccess && (typeof exitCode !== 'number' || exitCode === 0);
   let reportedTaskOutcome = !terminatedByUser && !isPrivateSecurityTask(task)
     ? await persistCompletionSummary(agentId, { workspacePath, finalSummary }) : null;
+  // Only a clean, uninterrupted, non-private run whose own analysis raised no
+  // terminal error may have its reported hold re-judged against the forge.
+  const forgeVerifiable = executionSuccess && !terminatedByUser && !executionInterruption
+    && !isPrivateSecurityTask(task) && !reportedErrorAnalysis?.actionable && !reportedErrorAnalysis?.permanent;
   // A successful process may report a hold after discovering its PR merged.
   // Verify that exact target before the hold can schedule another run.
   const mergedReviewFollowUp = await completionReviewFollowUp({ task, agentId, workspacePath, reportedOutcome: reportedTaskOutcome,
-    eligible: executionSuccess && !terminatedByUser && !executionInterruption
-      && !isPrivateSecurityTask(task) && !reportedErrorAnalysis?.actionable && !reportedErrorAnalysis?.permanent });
+    eligible: forgeVerifiable });
   if (mergedReviewFollowUp) reportedTaskOutcome = mergedReviewFollowUp.taskOutcome;
   const claimDisposition = await completionClaimDisposition({ task, agentId, reportedOutcome: reportedTaskOutcome,
-    success: executionSuccess && !terminatedByUser && !executionInterruption && !isPrivateSecurityTask(task)
-      && !reportedErrorAnalysis?.actionable && !reportedErrorAnalysis?.permanent });
+    success: forgeVerifiable });
   reportedTaskOutcome = await completionClaimOutcome(agentId, reportedTaskOutcome, claimDisposition);
   const deliveryHeld = ['blocked', 'incomplete'].includes(reportedTaskOutcome?.status);
-  if (deliveryHeld && reportedTaskOutcome.recovery?.mode !== 'cleanup'
-    && !reportedErrorAnalysis?.actionable && !reportedErrorAnalysis?.permanent) {
-    reportedSuccess = false;
-    error = reportedTaskOutcome.reason;
-    reportedErrorAnalysis = { category: `task-${reportedTaskOutcome.status}`, message: error,
-      permanent: true, actionable: false, requiresFallback: false };
-  }
-  if (resolveTaskHookType(task) === 'security') {
-    const { settleAgentSecurityScan } = await import('./agentSecurityScan.js');
-    const scanner = await settleAgentSecurityScan(agentId);
-    if (scanner?.status === 'refused') {
-      reportedSuccess = false;
-      reportedErrorAnalysis = { category: 'content-refusal', origin: 'provider', permanent: true, actionable: false,
-        requiresFallback: false, message: 'Security scanner safety refusal; automatic continuation, retries and provider fallback are disabled.' };
-      executionInterruption = { category: 'content-refusal', source: 'security-scanner' };
-    }
-  }
-  if (['content-refusal', 'content-filtered'].includes(reportedErrorAnalysis?.category)) {
-    executionInterruption ||= { category: reportedErrorAnalysis.category, source: reportedErrorAnalysis.origin || 'provider' };
-    reportedSuccess = false;
-  }
-  if (executionInterruption) {
-    await updateAgent(agentId, { metadata: { executionInterruption } })
-      .catch(err => emitLog('warn', `Could not persist execution interruption for ${agentId}: ${err.message}`, { agentId }));
-  }
+  ({ reportedSuccess, error, reportedErrorAnalysis, executionInterruption } = await settleReportedExecution({
+    agentId, task, reportedTaskOutcome, deliveryHeld,
+    reportedSuccess, error, reportedErrorAnalysis, executionInterruption,
+  }));
   // The run window the commit criterion is evaluated against (#3637). Callers
   // that don't track their own start timestamp still know how long the run took,
   // and `duration` is measured from the same instant, so derive it — a missing
@@ -1915,35 +2044,10 @@ async function finalizeAgentInCompletionContext({
   const deliveredVerdict = resolveAgentFinalVerdict(verdictEvidence);
   logPrCompletionVerdict({ agentId, task, prEvidence, primaryPrObservation });
 
-  // #5994: the run shipped — but did it ship what was asked? Runs only on a run
-  // that would otherwise be recorded a success, for the same reason the drift
-  // downgrade does: on a run that already failed, the original analysis is the
-  // better diagnosis, and re-judging it against the objective would replace a
-  // real cause with a symptom. Bounded by the reviewer's own request timeout and
-  // the diff probe's git timeouts — it holds the agent's CoS concurrency slot for
-  // its duration, which is why it is skipped entirely unless the user configured
-  // a local backend for it.
-  // A verified stand-down is judged from tracker state. A partial landed diff
-  // cannot prove the still-open issue's root cause and must not launch follow-ups.
   const retirementCompletion = isRetirementOnlyRecovery(task) ? await verifyRetirementRecoveryCompletion(task) : null;
-  const fidelity = deliveredVerdict.success && !isPrivateSecurityTask(task) && claimDisposition?.status !== 'verified'
-    && retirementCompletion?.status !== 'verified'
-    ? await evaluateGoalFidelity({ task, workspacePath, startedAt: runStartedAt })
-      .catch(err => {
-        emitLog('warn', `Goal-fidelity review failed for ${agentId}: ${err.message}`, { agentId });
-        return { verdict: null, review: null, error: err.message };
-      })
-    : { verdict: null, review: null, error: null };
-  const fidelityDowngrade = goalFidelityHoldsRun(fidelity.review);
-  if (fidelity.review) {
-    emitLog(fidelityDowngrade ? 'warn' : 'info', `${goalFidelityLogMarker(fidelity.review)} ${formatGoalFidelitySummary(fidelity.review)} for ${agentId}`, {
-      agentId, taskId: task?.id, verdict: fidelity.verdict
-    });
-  } else if (fidelity.skipped) {
-    emitLog('info', `⏭️ Goal-fidelity review skipped for ${agentId}: ${fidelity.error}`, { agentId, taskId: task?.id });
-  } else if (fidelity.error) {
-    emitLog('warn', `Goal-fidelity review returned no verdict for ${agentId}: ${fidelity.error}`, { agentId, taskId: task?.id });
-  }
+  const { fidelity, fidelityDowngrade } = await reviewGoalFidelity({
+    agentId, task, workspacePath, startedAt: runStartedAt, deliveredVerdict, claimDisposition, retirementCompletion,
+  });
   const judgedVerdict = resolveAgentFinalVerdict({ ...verdictEvidence, fidelityReview: fidelity.review });
   await followUpAgentGoalFidelity({ agentId, task, fidelity, fidelityDowngrade });
 
@@ -2029,6 +2133,9 @@ async function finalizeAgentInCompletionContext({
     ? { status: 'incomplete', reason: retirementCompletion.reason } : reportedTaskOutcome, success: verdict.success,
     validationPassed, branchProvenEmpty, noChangeAllowed: permitsNoChangeCompletion(task),
     noCommitDeclared: declaresNoCommitCriterion(task) });
+  if (verdict.success && executionSuccess && validationPassed !== false && taskOutcome?.recovery?.mode === 'cleanup') {
+    taskOutcome = { status: 'completed', ...(taskOutcome.reason ? { reason: taskOutcome.reason } : {}) };
+  }
   const outcomeHeld = ['blocked', 'incomplete'].includes(taskOutcome?.status);
   const deliverySuccess = verdict.success && !outcomeHeld;
   const deliveryVerdict = !deliverySuccess && verdict.success ? { ...verdict, success: false,
@@ -2038,25 +2145,16 @@ async function finalizeAgentInCompletionContext({
   } : verdict;
   const cleanupOwner = await getAgentRecord(agentId);
   const cleanupEligible = cleanupOwner?.metadata?.isWorktree === true || hasClaimCheckoutBindings(cleanupOwner?.metadata);
-  const terminalFailure = !verdict.success && (verdict.errorAnalysis?.actionable || verdict.errorAnalysis?.permanent)
-    && !(verdict.source === 'reported' && verdict.errorAnalysis?.category === `task-${reportedTaskOutcome?.status}`);
-  const taskUpdate = (deliveryHeld || (verdict.success && outcomeHeld)) && !terminatedByUser
-    && !terminalFailure && !executionInterruption && !isPrivateSecurityTask(task) && hookResult?.outcome?.accepted !== false
-    ? await resolveDeliveryRecoveryUpdate(preHookTask, (!executionSuccess || !verdict.success || validationPassed === false || !cleanupEligible) && taskOutcome.recovery?.mode === 'cleanup'
-      ? { ...taskOutcome, recovery: undefined } : taskOutcome, agentId)
-    : await resolveFinalTaskUpdate({ task, preHookTask, hookMetadata, verdict, terminatedByUser, agentId });
+  const taskUpdate = await resolveCompletionTaskUpdate({
+    task, preHookTask, hookMetadata, hookResult, verdict, taskOutcome, reportedTaskOutcome, deliveryHeld, deliverySuccess,
+    executionInterruption, terminatedByUser, agentId,
+  });
   if (taskUpdate.runtimeRecoveryContext) taskOutcome = taskUpdate.metadata.taskOutcome;
   taskUpdate.metadata = { ...(taskUpdate.metadata || task.metadata), taskOutcome };
 
   if (isLegacyDeepAudit(task.metadata) && hookResult?.deepAudit) {
-    hookResult.deepAudit = await (await import('./deepAudit.js')).settleDeepAuditDelivery({
-      task, agentId, success: verdict.success && !terminatedByUser, validationPassed,
-    }).catch(err => ({ ...hookResult.deepAudit, complete: false, deliveryComplete: false, reason: `Delivery persistence failed: ${err.message}` }));
-    await updateAgent(agentId, { metadata: { deepAudit: hookResult.deepAudit } });
-    if (hookResult.deepAudit.complete && verdict.success && !terminatedByUser && !outcomeHeld) {
-      taskUpdate.status = 'completed';
-      taskUpdate.metadata = { ...task.metadata, taskOutcome };
-    }
+    await settleLegacyDeepAudit({ task, agentId, hookResult, taskUpdate, taskOutcome, validationPassed,
+      deliverable: verdict.success && !terminatedByUser, outcomeHeld });
   }
 
   // Each write shares the cosState mutex, but separate records are not atomic.
@@ -2066,32 +2164,22 @@ async function finalizeAgentInCompletionContext({
   // so its place in the chain is purely about progress reporting on partial
   // failure.
   await stampLiExecutionVerdict(taskUpdate, task, { success: deliverySuccess, validationPassed, errorAnalysis: deliveryVerdict.errorAnalysis });
-  const priorCleanup = cleanupOwner?.metadata?.completionCleanup;
-  const settledCleanup = ['completed', 'failed', 'abandoned'].includes(priorCleanup?.status);
-  const replay = priorCleanup?.replay || (!settledCleanup && cleanupOwner?.startedAt ? await storeCompletionData(cleanupOwner, 'replay', completionReplayInput({ task,
-    effectiveSuccess: deliverySuccess, outputBuffer,
-    prClaimVerified: prClaimWasVerified(prEvidence.cleanupEvidence), branchProvenEmpty: prEvidence.branchProvenEmpty })) : undefined);
-  await updateAgent(agentId, { metadata: { completionCleanup: { ...cleanupOwner?.metadata?.completionCleanup,
-    version: 1, status: priorCleanup?.status || 'pending', stages: priorCleanup?.stages || {}, replay, context: undefined } } });
+  await recordCompletionCleanupIntent({ agentId, cleanupOwner, task, deliverySuccess, outputBuffer, prEvidence });
   if (cleanupEligible) await prepareCompletionTaskHandoff(await getAgentRecord(agentId),
     Object.fromEntries(Object.entries(taskUpdate.metadata || {}).filter(([key, value]) =>
       key !== 'privateSecurityScope' && JSON.stringify(value) !== JSON.stringify(preHookTask.metadata?.[key]))));
   // Persist the prerequisite BEFORE retiring execution. A crash between the
   // agent and task writes must never expose this dispatch to generic retry.
-  const prerequisiteTaskResult = ['runtime-verification', 'internal-dependency', 'internal-dependency-unverified'].includes(taskUpdate.metadata?.blockedCategory)
+  const prerequisiteTaskResult = PREREQUISITE_BLOCKED_CATEGORIES.includes(taskUpdate.metadata?.blockedCategory)
     ? await updateTask(task.id, taskUpdate, taskType, ...completionBudgetFence(taskUpdate, agentId, cleanupOwner)) : null;
   if (prerequisiteTaskResult?.error || prerequisiteTaskResult?.statusChanged) throw new Error('Delivery prerequisite task ownership changed before completion');
   const completedAgent = await completeAgent(agentId, { ...completionRecord({
     task, verdict: deliveryVerdict, hookResult, fidelity, executionInterruption, exitCode, duration, outputBuffer, validationPassed,
   }), executionSuccess, taskOutcome,
-    requireCheckoutSettlement: deliverySuccess && taskUpdate.status === 'completed' && cleanupEligible
-      && resolvePrCompletion(task.metadata) === PR_COMPLETIONS.REVIEW_THEN_MERGE,
+    requireCheckoutSettlement: false,
     ...(claimDisposition ? { claimDisposition } : {}),
     ...(retirementCompletion ? { retirementCompletion } : {}),
-    ...(['task-approval', 'task-recovery-exhausted', 'runtime-verification', 'internal-dependency', 'internal-dependency-unverified'].includes(taskUpdate.metadata?.blockedCategory)
-      || taskUpdate.metadata?.retryPendingCleanup === agentId || taskUpdate.metadata?.deliveryRecoveryAgentId === agentId
-      ? { deliveryRecoveryOwned: true } : {}),
-    ...(taskUpdate.metadata?.deliveryRecoveryAgentId === agentId ? { cleanupPending: true } : {}) });
+    ...completionRecoveryOwnership(taskUpdate.metadata, agentId) });
   const capturePending = completedAgent?.result?.cleanupPending === true;
   if (capturePending) {
     taskUpdate.status = 'in_progress';
@@ -2102,12 +2190,7 @@ async function finalizeAgentInCompletionContext({
   if (runId) {
     // Every failed verdict overrides exit-code/commit rescue in run tracking,
     // so the history cannot contradict the task or the cleanup decision (#3358).
-    const runOutput = isPrivateSecurityTask(task)
-      ? verdict.success
-        ? 'Private security assessment: see the local Review Hub report.'
-        : 'Private security assessment report was not verified; inspect the local assessment archive.'
-      : outputBuffer;
-    await completeAgentRun(runId, runOutput, exitCode, duration, deliveryVerdict.errorAnalysis, deliverySuccess ? null : false, { executionSuccess, taskOutcome });
+    await completeAgentRun(runId, completionRunOutput(task, verdict.success, outputBuffer), exitCode, duration, deliveryVerdict.errorAnalysis, deliverySuccess ? null : false, { executionSuccess, taskOutcome });
   }
 
 

@@ -229,7 +229,8 @@ describe('lyricType text zones', () => {
           const first = row[0];
           const last = row[row.length - 1];
           const right = last.x + last.w - measure(' ', `${Math.round(placed.px)}px`);
-          expect((first.x + right) / 2).toBeCloseTo(width / 2, 6);
+          // A portrait frame centres in the social-safe band (6% left, 18% right), not on the frame.
+          expect((first.x + right) / 2).toBeCloseTo(width > height ? width / 2 : width * 0.44, 6);
         }
         for (const word of placed.words) {
           if (zone === 'upper') expect(word.y).toBeLessThan(height / 2);
@@ -302,10 +303,58 @@ describe('lyricType text zones', () => {
     expect(hook.lines[0].zone).toBe('upper');
   });
 
-  it('reframes zones for a portrait frame', () => {
-    const rect = zoneRect('lower-left', 1080, 1920);
-    expect(rect.x + rect.w).toBeCloseTo(1080 - rect.x, 6);
-    expect(rect.y + rect.h).toBeLessThan(1920);
+  it('keeps every portrait zone inside the social-safe band, with the picture untouched', () => {
+    for (const zone of TEXT_ZONES.filter((z) => z !== 'none')) {
+      const rect = zoneRect(zone, 1080, 1920);
+      expect(rect.x, zone).toBeGreaterThanOrEqual(0.06 * 1080 - 1e-6);
+      expect(rect.x + rect.w, zone).toBeLessThanOrEqual(0.82 * 1080 + 1e-6);
+      expect(rect.y, zone).toBeGreaterThanOrEqual(0.15 * 1920 - 1e-6);
+      expect(rect.y + rect.h, zone).toBeLessThanOrEqual(0.65 * 1920 + 1e-6);
+    }
+    const lower = zoneRect('lower', 1080, 1920);
+    expect([lower.x, lower.x + lower.w, lower.y, lower.y + lower.h].map(Math.round)).toEqual([65, 886, 672, 1248]);
+    expect(zoneRect('none', 1080, 1920)).toBeNull();
+  });
+
+  it('keeps the framed insets on 16:9 and 1:1 frames, and on a cinematic portrait frame', () => {
+    expect(zoneRect('lower', 1920, 1080)).toMatchObject({ h: 324, w: expect.closeTo(1920 - 230.4, 6), x: expect.closeTo(115.2, 6), y: expect.closeTo(1080 - 75.6 - 324, 6) });
+    expect(zoneRect('lower', 1080, 1080).y + zoneRect('lower', 1080, 1080).h).toBeCloseTo(1080 - 75.6, 6);
+    const cinematic = zoneRect('lower', 1080, 1920, { layout: 'cinematic' });
+    expect(cinematic).toMatchObject({ x: 72, w: 936, h: 576 });
+    expect(cinematic.y + cinematic.h).toBeCloseTo(1920 - 134.4, 6);
+    expect(cinematic.social).toBeUndefined();
+  });
+
+  it('reads the layout from the project and lays a portrait line out in the band or the film frame', () => {
+    const lines = [{ text: 'we light the signal', role: 'line', zone: 'lower', startSec: 0, words: words('we light the signal', 0) }];
+    const social = createLyricType({ project: { lyricLayout: 'social' } }, { lines });
+    const cinematic = createLyricType({ project: { lyricLayout: 'cinematic' } }, { lines });
+    const bottomOf = (type) => Math.max(...type.layout(type.lines[0], 1080, 1920, measure).words.map((w) => w.y));
+    expect(bottomOf(social)).toBeLessThanOrEqual(1248);
+    expect(bottomOf(cinematic)).toBeGreaterThan(1248);
+  });
+
+  describe('unfit', () => {
+    const ctx = { canvas: { width: 1080, height: 1920 }, font: '', measureText(str) { return { width: measure(str, this.font) }; } };
+    const long = 'every frame we never used is stacked against the wall tonight and the next one too';
+    const typeFor = (layout, text) => createLyricType({ project: { lyricLayout: layout } }, {
+      lines: [{ text: 'short line', role: 'line', zone: 'lower', startSec: 1, words: words('short line', 1) },
+        { text, role: 'hook', zone: 'lower', startSec: 8, words: words(text, 8) }],
+    });
+
+    it('names a portrait line that cannot fit the band, scoped to the window', () => {
+      const text = `${'supercalifragilisticexpialidocious '.repeat(3)}`.trim();
+      const type = typeFor('social', text);
+      expect(type.unfit(ctx).map((l) => [l.startSec, l.text])).toEqual([[8, text]]);
+      expect(type.unfit(ctx, { startSec: 0, endSec: 5 })).toEqual([]);
+      expect(typeFor('social', long).unfit(ctx)).toEqual([]);
+    });
+
+    it('never reports on a cinematic or landscape frame', () => {
+      const text = `${'supercalifragilisticexpialidocious '.repeat(3)}`.trim();
+      expect(typeFor('cinematic', text).unfit(ctx)).toEqual([]);
+      expect(typeFor('social', text).unfit({ ...ctx, canvas: { width: 1920, height: 1080 } })).toEqual([]);
+    });
   });
 });
 

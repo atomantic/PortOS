@@ -26,13 +26,8 @@ function buildReleaseSynchronizationPayload(entry) {
     headSha: syncHead,
     blocker: synchronization?.blocker || null,
     ...(reset && { operatorReset: reset, nextAction: 'The operator retired this checkpoint; its historical synchronization remains unverified.' }),
-    ...(synchronization?.status === 'blocked' && entry.legacyRecovery && !reset && {
-      nextAction: entry.legacyRecovery.evidence?.mode === 'present'
-        ? 'Inspect the blocker and retained evidence. After other obligations are verified, use the exact checkout retirement review; keep the checkout if any check refuses.'
-        : 'Inspect the blocker and retained recovery evidence, then retry synchronization verification after resolving it.',
-    }),
     ...(synchronization?.status === 'blocked' && synchronization.blocker === 'publisher-candidate-checkout-unverified' && !reset && {
-      nextAction: 'Keep the candidate checkout and private review evidence in place. Inspect the original publisher run, promotion PR, and checkout inventory; use the legacy recovery review when the original generation and preservation evidence survive.',
+      nextAction: 'No server-captured seed identifies the publisher checkout, so this synchronization cannot be verified. Confirm the release reached development, then retire this checkpoint with the operator reset.',
     }),
     verifiedAt: synchronization?.verifiedAt || null,
     checkedAt: synchronization?.checkedAt || null,

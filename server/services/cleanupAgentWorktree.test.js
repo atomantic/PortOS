@@ -1,6 +1,4 @@
 const recoveryCheck = vi.hoisted(() => vi.fn(async () => null));
-const mergeRecoveryCheck = vi.hoisted(() => vi.fn(async () => null));
-vi.mock('./pendingMergeRecovery.js', () => ({ validatePendingMergeRecovery: (...args) => mergeRecoveryCheck(...args) }));
 vi.mock('./cosMergeHandoff.js', () => ({ validateCleanupReviewTarget: (...args) => recoveryCheck(...args) }));
 vi.mock('./branchCompletionPolicy.js', () => ({ recordBranchCompletionPolicy: vi.fn() }));
 vi.mock('./cosClaimOwnership.js', () => ({ readClaimOwnershipAgents: vi.fn() }));
@@ -2078,24 +2076,6 @@ describe('spawnReviewLoopFollowUp', () => {
     addTask.mockResolvedValue({ id: 'sys-rl-x' });
     forceSpawnTask.mockResolvedValue({ success: true });
     readClaimOwnershipAgents.mockResolvedValue([]);
-    mergeRecoveryCheck.mockReset().mockResolvedValue(null);
-  });
-
-  it('transfers unbound merge custody only to a persisted task carrying the exact initial head', async () => {
-    const originalTask = { id: 'source-task', metadata: { app: 'example' } };
-    const target = { sourceAgentId: 'owner', sourceTaskId: originalTask.id, prUrl: 'https://github.com/o/r/pull/7', branch: 'feature', headSha: 'a'.repeat(40) };
-    const request = { originalAgentId: 'owner', originalTask, prUrl: target.prUrl, prBranch: target.branch,
-      sourceWorkspace: '/repo', prCompletion: 'merge-on-green', reviewers: [], mergeGuardTarget: target };
-    getTaskById.mockResolvedValue({ id: 'sys-rl-x', status: 'pending', metadata: { pendingMergeGuardTarget: target } });
-    expect((await spawnReviewLoopFollowUp(request)).metadata.pendingMergeGuardTarget).toEqual(target);
-    // Auto-dequeue may already have consumed the verified initial pin.
-    getTaskById.mockResolvedValue({ id: 'sys-rl-x', status: 'in_progress', metadata: { pendingMergeGuardLaunchEvidence: target } });
-    expect((await spawnReviewLoopFollowUp(request)).metadata.pendingMergeGuardTarget).toEqual(target);
-    addTask.mockResolvedValue({ id: 'existing', duplicate: true });
-    getTaskById.mockResolvedValue({ id: 'existing', status: 'pending', metadata: {} });
-    expect(await spawnReviewLoopFollowUp(request)).toEqual({ deferred: true });
-    mergeRecoveryCheck.mockResolvedValue('recovery-head-moved');
-    expect(await spawnReviewLoopFollowUp(request)).toEqual({ blocked: 'recovery-head-moved' });
   });
 
   it('pins a missing-review followup to its inspected owner and head without resetting the task budget', async () => {
@@ -2253,6 +2233,33 @@ describe('spawnReviewLoopFollowUp', () => {
 
     expect(result.metadata.reviewLoopMergeOnly).toBe(true);
     expect(result.metadata.reviewLoopSelfReview).toBe(false);
+  });
+
+  // The title prefix is how the queue and recovery tooling tell the three
+  // follow-up modes apart (migration 262 matches `[Review Loop]`).
+  it.each([
+    [{ reviewers: ['codex'], usernames: ['octocat'] }, '[Review Loop] Build widget'],
+    [{ reviewers: [], selfReview: true }, '[Self-Review & Merge] Build widget'],
+    [{ prCompletion: 'merge-on-green' }, '[Merge] Build widget'],
+  ])('titles the follow-up by its mode (%o)', async (options, prefix) => {
+    const result = await spawnReviewLoopFollowUp({
+      originalAgentId: 'agent-1', originalTask: { id: 'task-1', description: 'Build widget\nDetails' },
+      prUrl: 'https://github.com/o/r/pull/9', prBranch: 'cos/task-1/agent-1', sourceWorkspace: '/ws',
+      ...options,
+    });
+    expect(result.description).toBe(`${prefix} (https://github.com/o/r/pull/9)`);
+  });
+
+  it('inherits execution options and effort alone without inventing a provider pin', async () => {
+    const result = await spawnReviewLoopFollowUp({
+      originalAgentId: 'agent-1',
+      originalTask: { id: 'task-1', description: 'X', metadata: { model: 'orphan-model', effort: 'max', executionOptions: { serviceTier: 'fast' } } },
+      prUrl: 'https://github.com/o/r/pull/9', prBranch: 'cos/task-1/agent-1', sourceWorkspace: '/ws',
+    });
+    expect(result.metadata.executionOptions).toEqual({ serviceTier: 'fast' });
+    expect(result.metadata.effort).toBe('max');
+    expect(result.metadata).not.toHaveProperty('provider');
+    expect(result.metadata).not.toHaveProperty('model');
   });
 
   it('should default priority to MEDIUM when originalTask omits it', async () => {

@@ -388,6 +388,21 @@ describe('human-reviewed Music Video workflow', () => {
     expect(bound.body.readiness.readyForProduction).toBe(false);
   });
 
+  it('binds a location-only staging with the shot action and named cast in framePrompt', async () => {
+    const source = JSON.stringify({ cast: [{ id: 'Mia', age: 9, description: 'red scarf' }], storyboard: [
+      { id: 'rink', startSec: 0, endSec: 5, action: 'Mia skates a slow circle', staging: 'Rink floor.', camera: 'Wide', transition: 'Cut' },
+      { id: 'full', startSec: 5, endSec: 9, action: 'Mia waves', staging: 'Mia waves from the rink floor at dusk', camera: 'Wide', transition: 'Cut' }] });
+    await request(app).post(`${base}/production-review/import`).send({ source });
+    const bound = await request(app).post(`${base}/production-review/shots/rink/bind`).send({});
+    expect(bound.status).toBe(200);
+    const scene = id => bound.body.project.scenes.find(s => s.sceneId === id);
+    const [rink] = bound.body.project.productionReview.draft.storyboard;
+    expect(scene(rink.sceneId).framePrompt).toBe('Mia skates a slow circle Rink floor. In frame: Mia (age 9, red scarf)');
+    const full = await request(app).post(`${base}/production-review/shots/full/bind`).send({});
+    const fs = full.body.project.productionReview.draft.storyboard[1];
+    expect(full.body.project.scenes.find(s => s.sceneId === fs.sceneId).framePrompt).toBe('Mia waves from the rink floor at dusk In frame: Mia (age 9, red scarf)');
+  });
+
   it('retains targeted feedback across revisions and imports without granting production approval', async () => {
     const comment = async (stage, decision, text) => {
       const status = await read();

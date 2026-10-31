@@ -10,16 +10,9 @@ import { dirname, join } from 'path';
 // this is where a test pauses or perturbs the window between the two critical sections.
 const observeIdentityMock = vi.fn(async () => null);
 vi.mock('../lib/retirementCheckoutObservation.js', () => ({ readRetirementCheckoutIdentity: (...args) => observeIdentityMock(...args) }));
-const preserveCheckoutMock = vi.fn(async () => ({ archiveDir: '/archive', verify: async () => null }));
-const preservedBranch = () => ({ archiveDir: '/branch-archive', verify: async () => true, retire: work => work() });
-const preserveBranchMock = vi.fn(async () => preservedBranch());
-vi.mock('../lib/branchRetirementArchive.js', () => ({ preserveBranchRetirement: (...args) => preserveBranchMock(...args) }));
-vi.mock('./heldCheckoutRecovery.js', () => ({
-  assertNoUniqueIgnoredCheckoutPayload: async () => {},
-  preserveMergedCheckout: (...args) => preserveCheckoutMock(...args),
-}));
+vi.mock('./heldCheckoutRecovery.js', () => ({}));
 const retirementReceiptMock = vi.hoisted(() => vi.fn(async () => null));
-vi.mock('./taskSchedule.js', () => ({ recordWorkspaceCheckoutRetirement: retirementReceiptMock }));
+vi.mock('./branchReconcileOutcome.js', () => ({ recordWorkspaceCheckoutRetirement: retirementReceiptMock }));
 const completionOwnersMock = vi.fn(async () => []);
 vi.mock('./cosClaimOwnershipState.js', async importOriginal => ({ ...await importOriginal(), readClaimOwnershipAgents: (...args) => completionOwnersMock(...args) }));
 const completionHoldMock = vi.fn(async () => null);
@@ -59,6 +52,8 @@ vi.mock('./git.js', () => ({
   getDefaultBranch: (...args) => getDefaultBranchMock(...args),
   hasBranchMergeEvidence: (...args) => hasBranchMergeEvidenceMock(...args),
 }));
+const readMergedPrTipMock = vi.fn().mockResolvedValue(null);
+vi.mock('./prProbe.js', () => ({ readMergedPrTip: (...args) => readMergedPrTipMock(...args) }));
 
 const {
   shouldRefuseDefaultBranchMerge,
@@ -95,10 +90,6 @@ describe('completed branch archival boundary', () => {
       stdout: args.includes('--git-common-dir') ? '/repo/.git' : '', exitCode: 0,
     }));
     getDefaultBranchMock.mockResolvedValue('main');
-    preserveBranchMock.mockReset().mockResolvedValue(preservedBranch());
-  });
-  afterEach(() => {
-    preserveBranchMock.mockReset().mockResolvedValue(preservedBranch());
   });
   it('runs the trusted receiver guard before deletion and preserves its refusal reason without pushing', async () => {
     execGitMock.mockImplementation(async args => {
@@ -109,7 +100,6 @@ describe('completed branch archival boundary', () => {
     const beforeMutation = vi.fn(async () => { throw new Error('daemon-paused'); });
     await expect(deleteCompletedLocalBranch('/repo', 'done', head, { beforeMutation })).rejects.toThrow('daemon-paused');
     expect(beforeMutation).toHaveBeenCalledOnce();
-    expect(preserveBranchMock).not.toHaveBeenCalled();
     expect(execGitMock.mock.calls.some(([args]) => args[0] === 'push')).toBe(false);
   });
   it('checks automatic permission after final registration refresh before checkout removal', async () => {
@@ -171,7 +161,6 @@ describe('completed branch archival boundary', () => {
       return { stdout: '', exitCode: 0 };
     });
     expect(await deleteCompletedLocalBranch('/repo', 'done', head)).toBe(true);
-    expect(preserveBranchMock).not.toHaveBeenCalled();
     expect(execGitMock.mock.calls.some(([args]) => args[0] === 'push')).toBe(true);
     expect(execGitMock.mock.calls.some(([args]) => args[0] === 'config' && args.includes('--remove-section'))).toBe(true);
   });
@@ -878,7 +867,6 @@ describe('removeWorktree identity, dirt and branch preservation', () => {
 
   beforeEach(() => {
     observeIdentityMock.mockReset().mockResolvedValue(null);
-    preserveCheckoutMock.mockReset().mockResolvedValue({ archiveDir: '/archive', checkoutIdentity: 'original', verify: async () => null });
     retirementReceiptMock.mockClear();
     completionHoldMock.mockReset().mockResolvedValue(null);
     completionOwnersMock.mockReset().mockResolvedValue([]);
@@ -1212,7 +1200,6 @@ describe('removeWorktree identity, dirt and branch preservation', () => {
       scriptGit({ porcelain });
 
       const result = await removeWorktree('agent-x', '/repo', 'cos/task-1/agent-x');
-
       expect(result.removed).toBe(false);
       expect(rm).not.toHaveBeenCalled();
       expect(execGitMock.mock.calls.some(([args]) => ['checkout', 'worktree', 'branch'].includes(args[0]))).toBe(false);
@@ -1229,7 +1216,6 @@ describe('removeWorktree identity, dirt and branch preservation', () => {
     const result = await removeWorktree('agent-x', '/repo', branch, { merge: true });
     expect(result.removed).toBe(false);
     expect(result.warnings.join(' ')).toContain(reason);
-    expect(preserveCheckoutMock).not.toHaveBeenCalled();
     expect(execGitMock.mock.calls.some(([args]) => ['merge', 'push', 'checkout'].includes(args[0])
       || (args[0] === 'worktree' && ['remove', 'prune'].includes(args[1])))).toBe(false);
   });
@@ -1533,6 +1519,41 @@ describe('removeWorktree identity, dirt and branch preservation', () => {
 
     expect(result.removed).toBe(true);
     expect(result.warnings).toEqual([]);
+  });
+
+  it('removes a worktree whose PR merged at its tip, discarding uncommitted and untracked files', async () => {
+    hasBranchMergeEvidenceMock.mockResolvedValue(true);
+    readMergedPrTipMock.mockResolvedValueOnce('a'.repeat(40));
+    scriptGit({ porcelain: ' M src/index.js\n?? notes.md' });
+
+    const result = await removeWorktree('agent-x', '/repo', 'cos/task-1/agent-x', { merge: false });
+
+    expect(readMergedPrTipMock).toHaveBeenCalledWith('/repo', 'cos/task-1/agent-x');
+    expect(result.removed).toBe(true);
+    expect(result.warnings).toEqual([]);
+  });
+
+  // Delivery is bound to the merged commit: a checkout observed at another head keeps its edits.
+  it('keeps uncommitted work when the observed head is not the merged PR tip', async () => {
+    hasBranchMergeEvidenceMock.mockResolvedValue(true);
+    readMergedPrTipMock.mockResolvedValueOnce('b'.repeat(40));
+    scriptGit({ porcelain: ' M src/index.js' });
+
+    const result = await removeWorktree('agent-x', '/repo', 'cos/task-1/agent-x', { merge: false });
+
+    expect(result.removed).toBe(false);
+    expect(result.warnings.join(' ')).toContain('worktree-dirty');
+  });
+
+  // An empty branch "contains" its base, so local merge evidence alone is not delivery.
+  it('keeps uncommitted work on a locally merged branch with no merged PR', async () => {
+    hasBranchMergeEvidenceMock.mockResolvedValue(true);
+    scriptGit({ porcelain: ' M src/index.js' });
+
+    const result = await removeWorktree('agent-x', '/repo', 'cos/task-1/agent-x', { merge: false });
+
+    expect(result.removed).toBe(false);
+    expect(result.warnings.join(' ')).toContain('src/index.js');
   });
 
   it('preserves real work while excluding the completion sentinel from the warning', async () => {

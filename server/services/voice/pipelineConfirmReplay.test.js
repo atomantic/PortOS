@@ -132,4 +132,22 @@ describe('runTurn — confirmation-gate replay dispatches by pending.tool (#5907
     expect(events.some((e) => e.event?.startsWith('voice:ui:'))).toBe(false);
     expect(result.reply).toBe('Cancelled.');
   });
+
+  it('drops an expired pending without replaying it and continues to the LLM', async () => {
+    streamChatMock.mockReset();
+    streamChatMock.mockResolvedValueOnce({ text: 'ok', toolCalls: [], model: 'test-model', ttfbMs: 1, totalMs: 2 });
+    const pending = {
+      ...buildPending({
+        tool: 'ui_click',
+        args: { label: 'Send', kind: 'button' },
+        target: { ref: 1, label: 'Send', kind: 'button' },
+      }),
+      createdAt: Date.now() - 60 * 60 * 1000,
+    };
+    const { events, state } = await runWithPending(pending);
+
+    expect(events.some((e) => e.event?.startsWith('voice:ui:'))).toBe(false);
+    expect(state.pendingDestructive).toBeNull();
+    expect(streamChatMock).toHaveBeenCalledTimes(1);
+  });
 });

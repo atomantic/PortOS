@@ -10,11 +10,15 @@ import ThreadRefChip from '../brain/ThreadRefChip';
 import toast from '../ui/Toast';
 import { uuidv4 } from '../../lib/uuid';
 import useMounted from '../../hooks/useMounted';
+import CatalogForkSeedPicker from './CatalogForkSeedPicker';
 
 const roleLabel = (role = '') => ({ owner: 'Owning universe', 'canon-character': 'Character canon', 'canon-place': 'Environment canon',
   'canon-object': 'Object canon', cast: 'Cast', set: 'Set', prop: 'Prop', reference: 'Reference', mentioned: 'Mentioned' }[role] || role.replaceAll('-', ' '));
 
-export default function CatalogUniversePanel({ ingredient, context, onContextChange, readOnly = false, forkBlocked = false, unsaved = false }) {
+// `seed` = { candidates, forms, ready, error, load } — the source's
+// reference images a fork can start from. `redesign` = { fields, clear } — a
+// redesign-assistant proposal to save onto the fork instead of the source.
+export default function CatalogUniversePanel({ ingredient, context, onContextChange, readOnly = false, forkBlocked = false, unsaved = false, seed = null, redesign = null }) {
   const fieldId = useId();
   const navigate = useNavigate();
   const mounted = useMounted();
@@ -28,7 +32,8 @@ export default function CatalogUniversePanel({ ingredient, context, onContextCha
   const [loadError, setLoadError] = useState(false);
   const [target, setTarget] = useState('');
   const [forkName, setForkName] = useState(ingredient.name);
-  const [copyImages, setCopyImages] = useState(false);
+  const [seeds, setSeeds] = useState(() => new Set());
+  const panelRef = useRef(null);
   const [busy, setBusy] = useState(false);
   const operation = useRef(null);
   useEffect(() => {
@@ -40,6 +45,15 @@ export default function CatalogUniversePanel({ ingredient, context, onContextCha
     }).catch(() => { if (active) setLoadError(true); });
     return () => { active = false; };
   }, [open]);
+  const redesignFields = redesign?.fields || null;
+  useEffect(() => {
+    if (!redesignFields) return;
+    setOpen(true);
+    panelRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
+  }, [redesignFields]);
+  const seedLoad = seed?.load;
+  const seedReady = seed?.ready;
+  useEffect(() => { if (open && seedLoad && !seedReady) seedLoad(); }, [open, seedLoad, seedReady]);
   useEffect(() => {
     let active = true;
     const refresh = (event) => {
@@ -68,14 +82,16 @@ export default function CatalogUniversePanel({ ingredient, context, onContextCha
   };
   const fork = async () => {
     if (forkBlocked || busy || unsaved || !target || !forkName.trim()) return;
-    const submission = JSON.stringify({ universeId: target, name: forkName.trim(), copyImages });
+    const body = { universeId: target, name: forkName.trim(),
+      ...(seeds.size ? { seedImages: [...seeds].sort() } : {}), ...(redesignFields ? { fields: redesignFields } : {}) };
+    const submission = JSON.stringify(body);
     if (operation.current?.submission !== submission) operation.current = { submission, key: uuidv4() };
     setBusy(true);
-    const result = await forkCatalogIngredient(ingredient.id, { universeId: target, name: forkName.trim(), copyImages, operationKey: operation.current.key }, { silent: true })
+    const result = await forkCatalogIngredient(ingredient.id, { ...body, operationKey: operation.current.key }, { silent: true })
       .catch((err) => { toast.error(err.message || 'Could not create fork'); return null; });
     if (!mounted.current) return;
     setBusy(false);
-    if (result) navigate(ingredientPath(result));
+    if (result) { redesign?.clear?.(); navigate(ingredientPath(result)); }
   };
   const addToCanon = async () => {
     if (!owner || busy || unsaved) return;
@@ -102,7 +118,7 @@ export default function CatalogUniversePanel({ ingredient, context, onContextCha
   };
   const refs = (context?.refs || []).filter((ref) => ref.role !== 'owner');
   return (
-    <section aria-label="Universe ownership and usage" className="rounded-lg border border-port-border bg-port-card p-3 space-y-3 min-w-0">
+    <section ref={panelRef} aria-label="Universe ownership and usage" className="rounded-lg border border-port-border bg-port-card p-3 space-y-3 min-w-0">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="min-w-0 text-sm">
           <span className="inline-flex items-center gap-1.5 font-semibold text-white"><Globe size={15} /> Owning universe &amp; style</span>
@@ -139,10 +155,12 @@ export default function CatalogUniversePanel({ ingredient, context, onContextCha
               <input id={`${fieldId}-name`} value={forkName} maxLength={200} onChange={(event) => setForkName(event.target.value)} disabled={busy}
                 className="w-full rounded border border-port-border bg-port-bg px-2 py-2 text-sm text-white" /></div>
           </div>
-          <label htmlFor={`${fieldId}-images`} className="flex items-center gap-2 text-xs text-gray-300">
-            <input id={`${fieldId}-images`} type="checkbox" checked={copyImages} onChange={(event) => setCopyImages(event.target.checked)} disabled={busy} />
-            Reuse image files as independent references on the fork
-          </label>
+          {redesignFields && <div className="flex flex-wrap items-center gap-2 rounded border border-port-accent/40 bg-port-accent/10 px-2 py-1.5 text-xs text-gray-300">
+            <span>The fork gets the redesigned {Object.keys(redesignFields).map((key) => key.replace(/([A-Z])/g, ' $1').toLowerCase()).join(', ')}. {ingredient.name} keeps its own.</span>
+            <button type="button" onClick={() => redesign?.clear?.()} disabled={busy} className="min-h-9 px-2 text-port-accent hover:underline">Leave out</button>
+          </div>}
+          {seed && <CatalogForkSeedPicker candidates={seed.candidates} forms={seed.forms} selected={seeds} onChange={setSeeds} disabled={busy}
+            loading={!seed.ready && !seed.error} error={seed.error || ''} onRetry={seed.load} />}
           <p className="text-xs text-gray-500">A fork gets a new identity and provenance. Production uses, character links, voice bindings and approvals stay with the original. Image files stay in the library when a reference is removed.</p>
           <div className="flex flex-wrap gap-2">
             {!owner && !readOnly && <button type="button" disabled={busy || unsaved || !target} onClick={own} className="px-3 py-2 text-xs rounded border border-port-accent text-port-accent disabled:opacity-40">Set owning universe</button>}

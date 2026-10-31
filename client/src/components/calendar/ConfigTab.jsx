@@ -6,9 +6,12 @@ import * as api from '../../services/api';
 import { formatDateTime, formatDateNumeric } from '../../utils/formatters';
 import FeatureProviderPicker from '../FeatureProviderPicker';
 import InlineConfirmRow from '../ui/InlineConfirmRow';
+import ListLoadError from '../ui/ListLoadError';
+import BrailleSpinner from '../BrailleSpinner';
 import { FormField } from '../ui/FormField';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 import { useGoogleAutoConfigProgress } from '../../hooks/useGoogleAutoConfigProgress';
+import { useGoogleAuthStatus } from '../../hooks/useGoogleAuthStatus';
 import { DEFAULT_AVATAR_COLOR } from '../../themes/portosThemes';
 
 const TYPE_ICONS = { 'outlook-calendar': Globe, 'google-calendar': Calendar };
@@ -27,19 +30,12 @@ export default function ConfigTab({ accounts, setAccounts }) {
   const [expandedAccounts, setExpandedAccounts] = useState({});
   const [savingSubcals, setSavingSubcals] = useState(null);
   const [discovering, setDiscovering] = useState(null);
-  const [googleAuth, setGoogleAuth] = useState(null);
+  const { status: googleAuth, state: googleAuthState, error: googleAuthError, reload: fetchGoogleAuth, retry: retryGoogleAuth } = useGoogleAuthStatus();
   const [clearingGoogleAuth, setClearingGoogleAuth] = useState(false);
   const [oauthForm, setOauthForm] = useState({ clientId: '', clientSecret: '' });
   const [savingOAuth, setSavingOAuth] = useState(false);
   const { progress: autoConfigProgress, run: runAutoConfig, mounted: autoConfigMounted } = useGoogleAutoConfigProgress();
   const [autoConfigStep, setAutoConfigStep] = useState(null); // null | 'launching' | 'login' | 'project' | 'api' | 'consent' | 'credentials' | 'capturing' | 'done'
-
-  const fetchGoogleAuth = async () => {
-    const status = await api.getGoogleAuthStatus().catch(() => null);
-    setGoogleAuth(status);
-  };
-
-  useEffect(() => { fetchGoogleAuth(); }, []);
 
   // The Google OAuth callback is a browser redirect (not an SPA fetch) — a
   // failure lands back here as ?oauthError=… . Toast it once and strip the
@@ -397,7 +393,11 @@ export default function ConfigTab({ accounts, setAccounts }) {
 
                       {account.syncMethod === 'google-api' && (
                         <div className="space-y-2">
-                          {googleAuth?.hasCredentials && googleAuth?.hasTokens ? (
+                          {googleAuthState === 'error' ? (
+                            <ListLoadError what="Google API authorization status" error={googleAuthError} onRetry={retryGoogleAuth} />
+                          ) : googleAuthState === 'loading' ? (
+                            <BrailleSpinner text="Checking Google authorization" />
+                          ) : googleAuth?.hasCredentials && googleAuth?.hasTokens ? (
                             <div className="flex items-center justify-between px-2 py-1.5 bg-port-success/5 rounded">
                               <div className="flex items-center gap-1.5 text-xs text-port-success">
                                 <Key size={12} />

@@ -1,5 +1,5 @@
 import { assertMusicVideoMediaSelections, musicVideoMediaMode } from '../../lib/musicVideoMediaPolicy.js';
-import { isEndFrameImageEffect, sceneImageEffect } from '../../lib/musicVideoImageEffects.js';
+import { isEndFrameImageEffect, sceneImageEffect, scenePhotoSequence } from '../../lib/musicVideoImageEffects.js';
 import { musicVideoGradeFilter } from '../../lib/musicVideoGrade.js';
 import { filmLookRuntimeSource, isFilmLookNeutral } from '../../lib/filmLook.js';
 import { titleCardVisible, titleCardWindows } from '../../lib/musicVideoTitleCard.js';
@@ -39,7 +39,7 @@ import { PATHS } from '../../lib/fileUtils.js';
 import { htmlCompositionContractSchemaFor } from '../../lib/validation.js';
 import { selectedPerformanceInstruction } from '../../lib/musicVideoShotTiming.js';
 import { clipSpeedRate, clipOffsetSec, documentSceneVisualLayer, MUSIC_VIDEO_LYRIC_ROLES, MUSIC_VIDEO_LYRIC_SIZES, MUSIC_VIDEO_TEXT_ZONES } from '../../lib/musicVideoLayers.js';
-import { musicVideoAspect } from '../../lib/musicVideoAspect.js';
+import { musicVideoAspect, musicVideoLyricLayout } from '../../lib/musicVideoAspect.js';
 import { documentDirectoryForRender } from './compositionDocument.js';
 import { musicVideoSongDocument } from './compositionRender.js';
 import { buildSongDocument } from './codeTimeline.js';
@@ -137,6 +137,18 @@ export async function resolveSceneMedia(project, { history = [], probe = async (
     const layer = documentSceneVisualLayer(project, scene, { generated: strictLayers });
     // A code shot (#10297) is drawn by the document itself; it is handed no media.
     if (layer === 'code' || (strictLayers && layer === 'card')) continue;
+    const sequence = scenePhotoSequence(scene);
+    if (sequence) {
+      const photos = sequence.imageIds.map(id => ({ path: safeUnder(PATHS.images, id), ext: (/\.([a-z0-9]{2,5})$/i.exec(id)?.[1] || 'png').toLowerCase() }));
+      if (!photos.length || photos.some(photo => !photo.path || !existsSync(photo.path))) {
+        throw new ServerError('A selected sequence photo is missing. Pick the missing photos before rendering.', {
+          status: 404, code: 'MISSING_SEQUENCE_PHOTOS', context: { sceneId: scene.sceneId,
+            imageIds: sequence.imageIds.filter((id, i) => !photos[i].path || !existsSync(photos[i].path)) },
+        });
+      }
+      out.set(scene.sceneId, { kind: 'image', ...photos[0], photos, inSec: null, outSec: null, fps: null, width: null, height: null });
+      continue;
+    }
     const entry = scene.videoHistoryId ? byId.get(scene.videoHistoryId) : null;
     const videoPath = entry?.filename ? safeUnder(PATHS.videos, entry.filename) : null;
     if ((!strictLayers || layer === 'footage') && videoPath && existsSync(videoPath)) {
@@ -225,6 +237,7 @@ export function buildDocumentData(project, { media = new Map(), frame, clock, so
         visualLayer: documentSceneVisualLayer(project, scene, { generated }),
         // A document has no end-frame media yet, so a start-to-end effect plays its still.
         imageEffect: documentImageEffect(scene),
+        ...(m?.photos ? { photoSequence: scenePhotoSequence(scene, { fps: clock.fps, beats: analysis.beats || [] }) } : {}),
         stillMove: typeof scene.stillMove === 'string' ? scene.stillMove : null,
         // #10589: the planned camera move the template's camera rig follows (only when planned).
         ...(typeof scene.camera?.move === 'string' ? { camera: structuredClone(scene.camera) } : {}),
@@ -238,6 +251,7 @@ export function buildDocumentData(project, { media = new Map(), frame, clock, so
         direction: sceneDirection(project, scene.sceneId),
         media: m ? {
           kind: m.kind, src: mediaSrc(scene.sceneId, m),
+          ...(m.photos ? { photos: m.photos.map((photo, i) => ({ src: mediaSrc(`${scene.sceneId}-photo-${i}`, photo) })) } : {}),
           inSec: m.inSec, outSec: m.outSec, fps: m.fps, width: m.width, height: m.height,
           // Raw-asset previews only: seek source time = startSec + max(0, local - leadSec) * rate.
           ...(m.timing ? { timing: m.timing } : {}),
@@ -254,7 +268,7 @@ export function buildDocumentData(project, { media = new Map(), frame, clock, so
   const composition = project?.composition || {};
   return {
     version: 1,
-    project: { id: project?.id ?? null, name: project?.name ?? '', aspect: documentAspect(project) },
+    project: { id: project?.id ?? null, name: project?.name ?? '', aspect: documentAspect(project), lyricLayout: musicVideoLyricLayout(project) },
     render: { width: frame.width, height: frame.height, fps: clock.fps, frames: clock.frames, durationSec: clock.durationSec },
     song: {
       durationSec: songDurationSec,
@@ -308,6 +322,10 @@ async function stageDocumentData(compositionDir, data, media, signal) {
   for (const scene of data.scenes) {
     const m = scene.media && media.get(scene.sceneId);
     if (!m) continue;
+    for (const [i, photo] of (m.photos || []).entries()) {
+      signal?.throwIfAborted();
+      await copyFile(photo.path, join(compositionDir, scene.media.photos[i].src), fsConstants.COPYFILE_EXCL | fsConstants.COPYFILE_FICLONE);
+    }
     const target = join(compositionDir, scene.media.src);
     signal?.throwIfAborted();
     if (m.kind === 'video' && m.rate != null) {
@@ -481,6 +499,23 @@ function documentMuxArgs(videoPath, audioPath, outputPath, { startSec, durationS
 }
 
 /**
+ * Refuse a render whose lyric lines cannot fit the social-safe band of a portrait frame, naming each
+ * cue's time, rather than drawing them over the platform controls. Documents whose engine has no
+ * `lyricFit` hook keep rendering as before.
+ */
+async function assertLyricsFitSocialBand(page, { startSec, durationSec }) {
+  const unfit = await page.evaluate(`(async () => {
+    const c = globalThis.portosComposition;
+    return typeof c.lyricFit === 'function' ? c.lyricFit({ startSec: ${startSec}, endSec: ${startSec + durationSec} }) : [];
+  })()`);
+  if (!Array.isArray(unfit) || !unfit.length) return;
+  const cues = unfit.slice(0, 5).map((line) => `${round3(line.startSec)}s "${String(line.text).slice(0, 40)}"`).join('; ');
+  throw new ServerError(`Lyrics do not fit the social-safe area of the vertical frame (clear of the Shorts, Reels and TikTok controls) at ${cues}${unfit.length > 5 ? ` and ${unfit.length - 5} more` : ''}. Shorten the line, or set the treatment brief's lyricLayout to cinematic for a vertical film.`, {
+    status: 422, code: 'LYRIC_SOCIAL_SAFE_OVERFLOW', context: { cues: unfit.slice(0, 20).map((line) => ({ startSec: round3(line.startSec), text: String(line.text).slice(0, 80) })) },
+  });
+}
+
+/**
  * Stage, open, capture and mux one document render (full song or a window).
  * Resolves `{ width, height, fps, durationSec, startSec, boundaryTimes }`.
  */
@@ -547,6 +582,7 @@ export async function encodeDocumentComposition({
     if (target.width !== parsed.data.width || target.height !== parsed.data.height) {
       await page.evaluate(`globalThis.portosComposition.layout({ width: ${target.width}, height: ${target.height} })`);
     }
+    await assertLyricsFitSocialBand(page, window);
     const footageVisibility = [];
     for (const scene of data.scenes.filter(s => collectFootageVisibility && s.visualLayer === 'footage' && s.startSec < window.startSec + window.durationSec && s.endSec > window.startSec)) {
       const start = Math.max(scene.startSec, window.startSec);

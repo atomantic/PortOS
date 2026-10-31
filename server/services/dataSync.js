@@ -275,10 +275,59 @@ function mergeMeatspaceDailyLogEntry(local, remote) {
       nicotineMilligramsFor,
     );
   }
-  if (isPlainObject(localEntry.body) || isPlainObject(remoteEntry.body)) {
-    merged.body = mergeNonEmptyObject(localEntry.body, remoteEntry.body);
+  // A cleared weigh-in is `bodyDeletedAt` on the date, not an empty `body`:
+  // mergeNonEmptyObject would refill the gap from the peer. The marker wins
+  // against a body with no updatedAt (the copy an older peer still holds) and
+  // against any body clock it is strictly newer than. A later re-log stamps
+  // updatedAt past the marker and drops it. This stays on meatspace schema 2 —
+  // a version bump would make older peers refuse the whole snapshot.
+  const localDeletedAt = typeof localEntry.bodyDeletedAt === 'string' && parseTsMs(localEntry.bodyDeletedAt) !== null
+    ? localEntry.bodyDeletedAt : null;
+  const remoteDeletedAt = typeof remoteEntry.bodyDeletedAt === 'string' && parseTsMs(remoteEntry.bodyDeletedAt) !== null
+    ? remoteEntry.bodyDeletedAt : null;
+  if (!localDeletedAt && !remoteDeletedAt) {
+    if (isPlainObject(localEntry.body) || isPlainObject(remoteEntry.body)) {
+      merged.body = mergeNonEmptyObject(localEntry.body, remoteEntry.body);
+    }
+    return merged;
   }
+  const deletedAt = !localDeletedAt ? remoteDeletedAt
+    : !remoteDeletedAt ? localDeletedAt
+      : (parseTsMs(remoteDeletedAt) > parseTsMs(localDeletedAt) ? remoteDeletedAt : localDeletedAt);
+  const localBody = meaningfulBody(localEntry.body);
+  const remoteBody = meaningfulBody(remoteEntry.body);
+  let body = null;
+  if (localBody && remoteBody) {
+    const localMs = parseTsMs(localBody.updatedAt);
+    const remoteMs = parseTsMs(remoteBody.updatedAt);
+    if (localMs === null && remoteMs === null) body = mergeNonEmptyObject(localBody, remoteBody);
+    else if (remoteMs !== null && (localMs === null || remoteMs > localMs)) body = mergeNonEmptyObject(remoteBody, localBody);
+    else body = mergeNonEmptyObject(localBody, remoteBody);
+  } else {
+    body = localBody || remoteBody;
+  }
+  const updatedMs = parseTsMs(body?.updatedAt);
+  const deletedMs = parseTsMs(deletedAt);
+  if (!body || updatedMs === null || deletedMs > updatedMs) {
+    delete merged.body;
+    merged.bodyDeletedAt = deletedAt;
+    return merged;
+  }
+  if (updatedMs > deletedMs) {
+    merged.body = body;
+    delete merged.bodyDeletedAt;
+    return merged;
+  }
+  merged.body = body;
+  merged.bodyDeletedAt = deletedAt;
   return merged;
+}
+
+// An empty object is a gap, not a recorded weigh-in. Only a body that still
+// carries a value can outlive `bodyDeletedAt`.
+function meaningfulBody(body) {
+  if (!isPlainObject(body)) return null;
+  return Object.values(body).some(value => !isEmptyScalar(value)) ? body : null;
 }
 
 const DAILY_LOG_EVENT_LISTS = [

@@ -11,7 +11,7 @@
  */
 
 import { Link } from 'react-router';
-import { useEffect, useRef, useState } from 'react';
+import { Fragment, useEffect, useRef, useState } from 'react';
 import {
   Plus, Trash2, WandSparkles, Loader2,
   Palette, Hand, Smile, Package, BookOpen, Eye, Activity, Users, Swords,
@@ -47,11 +47,13 @@ import {
   createVoiceDesignCandidate,
   createClonedVoiceCandidate,
   promoteVoiceProfile,
+  deleteVoiceProfile,
 } from '../../services/apiVoice';
 import { prepareProfilePlayback } from '../../services/voiceProfileBenchmark';
 import VoicePicker from '../voice/VoicePicker';
 import VoiceFineTuningPanel from '../voice/VoiceFineTuningPanel';
 import TabPills from '../ui/TabPills';
+import InlineConfirmRow from '../ui/InlineConfirmRow';
 import CollapsibleSection from '../ui/CollapsibleSection';
 import useDrawerTab from '../../hooks/useDrawerTab';
 import { DraftCommitMode, useDraftCommitMode } from '../../hooks/useDraftCommitMode';
@@ -944,6 +946,15 @@ function VoiceProfileSection({ universeId, entry, disabled }) {
     return result;
   }, { errorMessage: 'Could not promote candidate profile' });
 
+  const [confirmDeleteId, setConfirmDeleteId] = useState(null);
+  const [removeProfile, removingProfile] = useAsyncAction(async (targetProfileId) => {
+    loadGeneration.current += 1;
+    await deleteVoiceProfile(targetProfileId, { silent: true });
+    setConfirmDeleteId(null);
+    if (profile?.id === targetProfileId) setProfile(null);
+    await refreshProfiles();
+  }, { errorMessage: 'Could not delete voice profile' });
+
   if (!universeId) return null;
   const approved = profile?.approval?.status === 'approved';
   const _benchmarkCount = profile?.benchmark?.lines?.length || 0;
@@ -1023,11 +1034,12 @@ function VoiceProfileSection({ universeId, entry, disabled }) {
           ) : null}
 
           {/* Candidate & Historical Profiles */}
-          {profiles.length > 1 && (
+          {(profiles.length > 1 || profiles.some((p) => p.kind === 'cloned')) && (
             <div className="space-y-1 pt-2 border-t border-port-border/40">
               <p className="text-[10px] text-gray-500 font-medium">Candidate & Previous Profiles</p>
               {profiles.map((p) => (
-                <div key={p.id} className="flex items-center justify-between gap-2 p-1 text-[10px] border border-port-border/30 rounded">
+                <Fragment key={p.id}>
+                <div className="flex items-center justify-between gap-2 p-1 text-[10px] border border-port-border/30 rounded">
                   <div className="min-w-0 truncate">
                     <span className="font-semibold text-gray-300">{p.voiceId}</span> ({p.kind}, v{p.version}, {p.approval?.status})
                   </div>
@@ -1043,7 +1055,28 @@ function VoiceProfileSection({ universeId, entry, disabled }) {
                   ) : (
                     <span className="text-port-success font-medium">Active</span>
                   )}
+                  {p.kind === 'cloned' && confirmDeleteId !== p.id ? (
+                    <button
+                      type="button"
+                      onClick={() => setConfirmDeleteId(p.id)}
+                      disabled={disabled || removingProfile}
+                      className="px-1.5 py-0.5 rounded border border-port-border text-gray-400 hover:text-port-error hover:border-port-error"
+                    >
+                      Delete recording
+                    </button>
+                  ) : null}
                 </div>
+                {p.kind === 'cloned' && confirmDeleteId === p.id ? (
+                  <InlineConfirmRow
+                    question="Delete this cloned voice, its recording and transcript? Rendered dialogue is kept."
+                    confirmText="Delete"
+                    onConfirm={() => removeProfile(p.id)}
+                    onCancel={() => setConfirmDeleteId(null)}
+                    autoFocus
+                    aria-label="Confirm deleting cloned voice recording"
+                  />
+                ) : null}
+                </Fragment>
               ))}
             </div>
           )}

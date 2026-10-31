@@ -16,6 +16,7 @@
  * (title cards, diagrams, outros) in CARDS below and key them from scene labels.
  */
 // portos-lyric-overlay-visibility: 1
+// portos-photo-sequence: 2
 (() => {
   'use strict';
   const MV = window.PORTOS_MV;
@@ -229,7 +230,37 @@
       if (!timing) return seekVideo(v, media, (media.inSec || 0) + local);
       return seekVideo(v, { ...media, inSec: timing.startSec }, timing.startSec + Math.max(0, local - timing.leadSec) * timing.rate);
     }
-    return loadImage(media.src);
+    if (scene.photoSequence?.stacked && media.photos) return composePhotoStack(scene.photoSequence, media.photos, t);
+    const photo = scene.photoSequence && media.photos?.[imageEffects.photoSequenceIndex(scene.photoSequence, t, { fps: FPS })];
+    return loadImage(photo?.src || media.src);
+  }
+
+  // #14277: every photo visible at t, oldest first, onto one black frame, so the
+  // shot's camera, image effect and film look treat the stack as a single still.
+  // A laid-out photo is fitted whole, scaled, turned and faded about its centre.
+  let stackCanvas = null;
+  async function composePhotoStack(sequence, photos, t) {
+    const layers = imageEffects.photoSequenceLayers(sequence, t, { fps: FPS });
+    const drawn = await Promise.all(layers.map(layer => loadImage(photos[layer.index].src)));
+    stackCanvas ||= document.createElement('canvas');
+    if (stackCanvas.width !== W || stackCanvas.height !== H) { stackCanvas.width = W; stackCanvas.height = H; }
+    const g = stackCanvas.getContext('2d');
+    g.setTransform(1, 0, 0, 1, 0, 0); g.globalAlpha = 1;
+    g.fillStyle = '#000'; g.fillRect(0, 0, W, H);
+    layers.forEach((layer, i) => {
+      const im = drawn[i]; const sw = im.naturalWidth || im.width; const sh = im.naturalHeight || im.height;
+      if (!sw || !sh) return;
+      const layout = layer.layout;
+      const fit = layout ? Math.min(W / sw, H / sh) * layout.scale : Math.max(W / sw, H / sh);
+      const dw = sw * fit; const dh = sh * fit;
+      g.save();
+      g.globalAlpha = layout ? layout.opacity : 1;
+      g.translate(W / 2 + (layout ? layout.x * W : 0), H / 2 + (layout ? layout.y * H : 0));
+      if (layout?.rotation) g.rotate(layout.rotation * Math.PI / 180);
+      g.drawImage(im, -dw / 2, -dh / 2, dw, dh);
+      g.restore();
+    });
+    return stackCanvas;
   }
 
   // ---------- drawing helpers ----------
@@ -323,6 +354,7 @@
         if (hooks.linesAt(t).length) hooks.draw(target, t, size);
         else sung.draw(target, t, size);
       },
+      unfit: (target, window) => [...hooks.unfit(target, window), ...sung.unfit(target, window)],
     };
   }
 
@@ -557,7 +589,7 @@
     if (window.PORTOS_MV_ASSETS) assetUrls = await window.PORTOS_MV_ASSETS;
     await Promise.all([F.stencil(40), F.mono(20), F.mono(20, 600), F.cond(20), F.cond(20, 700)].map((font) => document.fonts.load(font)));
     await buildLyricType();
-    if (SCENES.some(scene => scene.imageEffect && scene.visualLayer === 'still')) {
+    if (SCENES.some(scene => (scene.imageEffect || scene.photoSequence) && scene.visualLayer === 'still')) {
       imageEffects = await documentModule('PORTOS_MV_IMAGE_EFFECTS', 'musicVideoImageEffects.js');
     }
     buildGrain();
@@ -571,6 +603,11 @@
     formats: ['1920x1080', '1080x1920', '1080x1080'],
     layout({ width, height }) { resize(width, height); },
     get footageVisibility() { return footageVisibility; },
+    // Lyric lines that overflow the social-safe band (portrait frames) inside [startSec, endSec).
+    async lyricFit({ startSec, endSec } = {}) {
+      await ready;
+      return lyricType.unfit(ctx, { width: W, height: H, startSec, endSec });
+    },
     async seek(t, { reviewFootage = false } = {}) {
       await ready;
       const state = eventState(t);

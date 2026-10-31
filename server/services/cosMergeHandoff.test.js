@@ -50,13 +50,6 @@ vi.mock('./untrustedContent.js', () => ({ screenUntrustedContent: async () => ({
 vi.mock('./codeReview.js', () => ({
   resolveReviewLoopOptions: async () => ({ reviewers: f.reviewers, usernames: [], optionalReviewers: f.optionalReviewers, reviewerMaxRounds: {} }),
 }));
-// This synthetic managed app has no merged-tree capability. Keep its fake-time
-// poll tests independent of real filesystem scheduling; pendingMergeGuard.test
-// exercises the actual capability probe and checkout/command boundary.
-vi.mock('./pendingMergeGuard.js', async importOriginal => ({
-  ...await importOriginal(),
-  preparePendingMergeGuard: async () => ({ ok: true, evidence: null }),
-}));
 const mergePrMock = vi.fn();
 vi.mock('./git.js', () => ({ mergePR: (...args) => mergePrMock(...args) }));
 const notifyMock = vi.fn(async () => ({ id: 'notification-1' }));
@@ -72,7 +65,6 @@ vi.mock('./heldCheckoutRecovery.js', () => ({ retirePendingMergeCheckout: (...ar
 
 import { handoffPendingMerge, hasQueuedMergeHandoff } from './cosMergeHandoff.js';
 import { processPendingMergePrs, readPendingMergePrs, nudgeLocalPendingMergePrs } from './prWatcher.js';
-import { claimMergeAdmission } from './cosMergeAdmission.js';
 import { addTask } from './cosTaskStore.js';
 
 const HEAD = 'a'.repeat(40);
@@ -101,7 +93,7 @@ beforeEach(async () => {
   (await import('./prWatcher.js')).cancelHandoffFollowUps();
   (await import('./prWatcher.js')).setHandoffFollowUpGate(async () => null);
   cleanupMock.mockReset().mockResolvedValue({ ok: true, branchDeleted: true, archiveDir: '/archives/example' });
-  f.state = { agents: { 'agent-1': claimAgent('agent-1', 'claim/issue-1'), 'agent-2': claimAgent('agent-2', 'claim/issue-2') }, mergeAdmissions: {} };
+  f.state = { agents: { 'agent-1': claimAgent('agent-1', 'claim/issue-1'), 'agent-2': claimAgent('agent-2', 'claim/issue-2') } };
   f.tasks = Object.fromEntries(['agent-1', 'agent-2'].map((id) => [`task-${id}`, {
     id: `task-${id}`, status: 'in_progress', taskType: 'user', priority: 'MEDIUM', description: 'Example change',
     metadata: { app: 'app1', prCompletion: 'review-then-merge' },
@@ -295,10 +287,7 @@ describe('pending-merge handoff', () => {
   it('persists the verified binding and merges only that head once a concurrent lease releases, across a restart', async () => {
     const result = await handedOff();
     expect(result).toMatchObject({ queued: true, receipt: { appId: 'app1', prNumber: 7, headSha: HEAD, repository: 'github.com/example/repo' } });
-    // The merge-gate audit (#12549) exempts exactly this head from the run's own record.
-    expect(f.state.agents['agent-1'].metadata.mergeHandoffReceipts).toEqual([
-      expect.objectContaining({ receiptId: result.receipt.id, prUrl: PR_URL, headSha: HEAD }),
-    ]);
+    expect(f.state.agents['agent-1'].metadata.mergeHandoffReceipts).toBeUndefined();
     // The receipt's immediate sweep found CI pending and spent no tick budget.
     expect(mergePrMock).not.toHaveBeenCalled();
     expect(pending()).toEqual([expect.objectContaining({
@@ -306,15 +295,7 @@ describe('pending-merge handoff', () => {
       handoff: expect.objectContaining({ receiptId: result.receipt.id, headSha: HEAD, prCompletion: 'review-then-merge', reviewStatus: 'clean' }),
     })]);
 
-    // Another run holds repository admission: the coordinator waits without
-    // spending its budget and never merges around the lease.
     greenChecks();
-    const lease = await claimMergeAdmission({ agentId: 'agent-2', action: 'acquire' });
-    expect(lease.admitted).toBe(true);
-    expect(await processPendingMergePrs(f.apps.get('app1'))).toMatchObject({ waiting: 1, merged: 0 });
-    expect(mergePrMock).not.toHaveBeenCalled();
-    expect(pending()[0].ticks).toBe(0);
-    await claimMergeAdmission({ agentId: 'agent-2', action: 'release', token: lease.token, outcome: 'merged' });
 
     // A fresh server process drives the persisted queue entry to a pinned merge.
     vi.resetModules();
@@ -322,15 +303,6 @@ describe('pending-merge handoff', () => {
     expect(await restarted.processPendingMergePrs(f.apps.get('app1'))).toMatchObject({ merged: 1 });
     expect(mergePrMock).toHaveBeenCalledWith('/repos/source', 7, { forgeAccount: null, expectedHeadSha: HEAD });
     expect(pending()).toEqual([]);
-    expect(f.state.agents['agent-1'].metadata.mergeHandoffReceipts[0].coordinatorMergedAt).toEqual(expect.any(String));
-  });
-
-  it('marks a receipt coordinator-merged only for its own merge, never for a PR that turned up merged', async () => {
-    await handedOff();
-    f.pr.state = 'MERGED';
-    await processPendingMergePrs(f.apps.get('app1'));
-    expect(mergePrMock).not.toHaveBeenCalled();
-    expect(f.state.agents['agent-1'].metadata.mergeHandoffReceipts[0].coordinatorMergedAt).toBeUndefined();
   });
 
   it.each([
@@ -469,11 +441,8 @@ describe('pending-merge handoff', () => {
     expect(notifyMock).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps merged cleanup owned and bounded after an archival refusal, without holding merge admission', async () => {
-    cleanupMock.mockImplementation(async () => {
-      expect(Object.keys(f.state.mergeAdmissions)).toHaveLength(0);
-      return { ok: false, reason: 'retirement-forge-unreadable' };
-    });
+  it('keeps merged cleanup owned and bounded after an archival refusal', async () => {
+    cleanupMock.mockResolvedValue({ ok: false, reason: 'retirement-forge-unreadable' });
     await handedOff();
     greenChecks();
     await processPendingMergePrs(f.apps.get('app1'));
@@ -597,7 +566,7 @@ describe('handoff follow-up poll', () => {
 
   // The coordinator's lazy imports load from disk, which a setImmediate drain
   // does not wait for; warm them so a fresh worker settles like a warm one.
-  beforeAll(() => Promise.all(['./prReviewerSecurity.js', './pendingMergeGuard.js', '../lib/validation.js'].map((m) => import(m))));
+  beforeAll(() => Promise.all(['./prReviewerSecurity.js', '../lib/validation.js'].map((m) => import(m))));
 
   beforeEach(async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });

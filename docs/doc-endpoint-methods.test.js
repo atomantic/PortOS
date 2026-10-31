@@ -43,6 +43,7 @@ const DOC_FILES = [
 /** Records that name an endpoint which does not (or does not yet) exist, on purpose. */
 const DELIBERATE_NON_ROUTES = [
   { file: 'docs/features/eidoverse.md', method: 'GET', path: '/api/eidoverse/world/contributions', reason: 'recorded as a removed endpoint' },
+  { file: 'docs/features/chief-of-staff.md', method: 'POST', path: '/api/cos/merge-admission/external', reason: 'recorded as a removed endpoint (#14320)' },
   { file: 'docs/features/openclaw-operator-chat.md', method: 'POST', path: '/api/openclaw/sessions', reason: 'proposed but not built' },
   { file: 'docs/features/openclaw-operator-chat.md', method: 'GET', path: '/api/openclaw/jobs', reason: 'proposed but not built' },
   { file: 'docs/features/openclaw-operator-chat.md', method: 'GET', path: '/api/openclaw/subagents', reason: 'proposed but not built' },

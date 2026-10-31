@@ -6,12 +6,6 @@ import {
 } from './hostControlRoutes.js';
 import { LLM_DRILL_TYPES } from './postDrillTypes.js';
 
-it('gates legacy release recovery review and acceptance as host control', () => {
-  for (const action of ['review', 'accept']) {
-    expect(isHostControlRoute('POST', `/api/cos/schedule/release-synchronization/legacy/${action}`)).toBe(true);
-  }
-});
-
 it('requires host control to retire a release checkpoint', () => {
   expect(hostControlRouteFor('POST', '/api/cos/schedule/release-synchronization/operator-reset'))
     .toBe('POST /api/cos/schedule/release-synchronization/operator-reset');
@@ -641,6 +635,7 @@ describe('Music Video agent workflow policy (#9869)', () => {
       'POST /api/music-video/:id/render',
       'POST /api/music-video/:id/shots/:sceneId/render',
       'POST /api/music-video/:id/shot-renders/preview',
+      'POST /api/music-video/:id/cold-open/audio',
       'POST /api/music-video/:id/excerpt',
       'POST /api/music-video/:id/publish-kit/build',
     ];

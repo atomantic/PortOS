@@ -95,7 +95,10 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // profile's finishing look; an older normalizer drops the controls.
   // v18 = canon `forms[]` entries may carry a `height` (a character's height at
   // that age). A <=v17 sanitizer strips it and would LWW the loss back.
-  universes: 18,
+  // v19 = film look weave and flicker speed (`weaveRate`/`flickerRate`). An older
+  // strict film-look schema refuses the profile's finishing look; an older
+  // normalizer drops the rates. Optional, no backfill: absent = original speed.
+  universes: 19,
   // v1 = post-split. Migrations 035/036 introduced the pipeline collection
   // layout for issues and series.
   // v2 = `stages.audio.audioMode` + `stages.audio.cues[]` added (whole-episode
@@ -112,7 +115,10 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // older sanitizer's omission LWW-strip or overwrite it.
   // v4 = text-stage generation identity for owner-scoped restart recovery.
   // Older sanitizers strip it; gate transfers to keep execution ownership intact.
-  pipelineIssues: 4,
+  // v5 = shot framings `full`, `medium-wide`, `medium-close`, `insert`; a v4
+  // sanitizer would null a shot's shotType and LWW that back.
+  // v6 = shot framing `group`, for the same reason.
+  pipelineIssues: 6,
   // v2 = `series.arc.readerMap` added (Unified Story Builder). Additive +
   // gracefully-degrading, but version-gated so a not-yet-upgraded peer can't
   // round-trip a series through its readerMap-unaware sanitizer and LWW-strip
@@ -290,7 +296,18 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // panel's `sourceShotId`; a v5 peer would drop both.
   // v7 = a panel's `sourceRev` (what its pipeline shot last took from it, so
   // only a panel edited since reads as changed); a v6 peer would drop it.
-  storyboards: 7,
+  // v8 = the `production-sketch` art style; a v7 peer would read it as
+  // `pencil` and write that back.
+  // v9 = an image node's `style` input (the style text sent after the shot,
+  // with no prompt writer in between); a v8 peer would drop the edge.
+  // v10 = panel framings `full`, `medium-wide`, `medium-close`, `insert`, and a
+  // panel's camera `angle`; a v9 peer would null or drop them.
+  // v11 = a panel's `facing` (subject to camera); a v10 peer would drop it.
+  // v12 = a beat's `beforeSong` (plays before the song starts); a v11 peer would drop it.
+  // v13 = a panel's `composition` (where the subject sits); a v12 peer would drop it.
+  // v14 = a panel's `move`, `lens`, `focus` and `eyeline`, and the framing `group`,
+  // angle `ground-level` and two compositions; a v13 peer would drop them.
+  storyboards: 14,
   // v1 = author personas (PostgreSQL `authors` table) federated via the
   // per-record peer-sync push pipeline (record kind `author`, sync category
   // `authors`). A brand-NEW synced record type like `storyBuilder` below, so it
@@ -809,7 +826,24 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // No backfill. New receivers preserve a packet omitted by an older sender.
   // v33 = the film credits ending (`creditsOutro`), which a v32 strict project
   // schema rejects and its normalizer drops on save. Optional, no backfill.
-  musicVideoProjects: 33,
+  // v34 = a shot moved before the song (`scene.preMusic`: its cold-open length
+  // and sound), which a v33 strict scene schema rejects with a 400 and a v33
+  // re-plan drops. Optional, no backfill: a shot without it plays on the song.
+  // v35 = the cast guides and Cast & Sets sheets a still was conditioned on
+  // (`take.castInputs`). An older peer that rebuilds a take from an explicit
+  // field list drops the field and a newer `updatedAt` would LWW that loss
+  // back. Optional, no backfill: a take without it reads as unknown, not stale.
+  // v36 = the project's handmade production medium (`productionMedium`), which a
+  // v35 strict project schema rejects with a 400 and its normalizer drops on
+  // save. Optional, no backfill: absent = no medium.
+  // v37 = ordered still-photo sequences and cadence; older scene writers drop them.
+  // v38 = film look weave/flicker speed (`weaveRate`/`flickerRate`, which a v37
+  // strict film-look schema rejects) and in-shot effect strength, repeats and
+  // light-leak color/edge (`glitches[].strength`/`count`/`everySec`/`color`/`edge`,
+  // which a v37 scene schema strips on save). Optional, no backfill: absent plays as before.
+  // v39 = overlapping photo-sequence layers (`photoSequence.overlapFrames`/`layouts`),
+  // which a v38 strict photo-sequence schema rejects. Optional, no backfill: absent is a plain sequence.
+  musicVideoProjects: 39,
   // v1 = Creative Commission FEEDBACK federation (PostgreSQL `commission_feedback`)
   // via the per-record peer-sync push pipeline (record kind `commissionFeedback`,
   // sync category `commissionFeedback`, #2686 — split-record follow-up to #2657).

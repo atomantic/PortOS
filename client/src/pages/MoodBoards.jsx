@@ -16,6 +16,7 @@ import PageSkeleton from '../components/ui/PageSkeleton';
 import toast from '../components/ui/Toast';
 import InlineConfirmRow from '../components/ui/InlineConfirmRow';
 import EmptyState from '../components/EmptyState';
+import MediaImage from '../components/MediaImage';
 import { timeAgo } from '../utils/formatters';
 import { listMoodBoards, createMoodBoard, deleteMoodBoard } from '../services/api';
 import { moodBoardItemSrc, moodBoardPosterSrc } from '../lib/moodBoardItemSrc';
@@ -77,7 +78,8 @@ function MoodBoardCard({ board, onDelete, isConfirming, onConfirmDelete, onCance
       >
         <div className="aspect-[16/10] w-full overflow-hidden relative bg-port-bg flex items-center justify-center">
           {coverSrc ? (
-            <img
+            <MediaImage
+              thumbnail
               src={coverSrc}
               alt={board.name}
               loading="lazy"
@@ -102,7 +104,8 @@ function MoodBoardCard({ board, onDelete, isConfirming, onConfirmDelete, onCance
                   key={thumb.id}
                   className="relative aspect-square rounded-md overflow-hidden bg-port-bg border border-port-border/50"
                 >
-                  <img
+                  <MediaImage
+                    thumbnail
                     src={thumb.src}
                     alt={thumb.caption || `Item ${idx + 2}`}
                     loading="lazy"

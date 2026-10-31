@@ -1,12 +1,16 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { RefreshCw, CheckCircle, AlertCircle, TrendingUp, Brain, Zap, Database, Clock, Trophy, Activity } from 'lucide-react';
 import * as api from '../../../services/api';
 import { formatDateTime } from '../../../utils/formatters';
 import ProviderStatusCard from './ProviderStatusCard';
+import ListLoadError from '../../ui/ListLoadError';
 
 export default function HealthTab({ health, healthLoading = false, healthError = null, onCheck }) {
   const [learning, setLearning] = useState(null);
   const [loadingLearning, setLoadingLearning] = useState(true);
+  const [learningError, setLearningError] = useState(null);
+  // Refresh stays clickable during a read; only the newest one may write.
+  const learningRequestRef = useRef(0);
   const [backfilling, setBackfilling] = useState(false);
   const [todayActivity, setTodayActivity] = useState(null);
   const [loadingActivity, setLoadingActivity] = useState(true);
@@ -24,8 +28,15 @@ export default function HealthTab({ health, healthLoading = false, healthError =
   };
 
   const loadLearning = async () => {
+    const request = ++learningRequestRef.current;
     setLoadingLearning(true);
-    const data = await api.getCosLearning().catch(() => null);
+    let failure = null;
+    const data = await api.getCosLearning({ silent: true }).catch(err => {
+      failure = err;
+      return null;
+    });
+    if (request !== learningRequestRef.current) return;
+    setLearningError(failure);
     setLearning(data);
     setLoadingLearning(false);
   };
@@ -256,6 +267,8 @@ export default function HealthTab({ health, healthLoading = false, healthError =
 
         {loadingLearning ? (
           <div className="text-center py-6 text-gray-500">Loading learning data...</div>
+        ) : learningError ? (
+          <ListLoadError what="learning data" error={learningError} onRetry={loadLearning} />
         ) : !learning ? (
           <div className="text-center py-6 text-gray-500">No learning data available yet</div>
         ) : (

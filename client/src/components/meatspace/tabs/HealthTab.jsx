@@ -1,10 +1,14 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useSearchParams } from 'react-router';
+import { Trash2 } from 'lucide-react';
 import * as api from '../../../services/api';
 import { METRIC_CATEGORIES } from '../healthMetrics';
 import HealthCategorySection from '../HealthCategorySection';
 import ActivityBloodCorrelation from '../ActivityBloodCorrelation';
 import LoadFailureNotice from '../LoadFailureNotice';
+import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
+import CollapsibleListItem from '../../ui/CollapsibleListItem';
+import useConfirmDelete from '../../../hooks/useConfirmDelete';
 
 const RANGES = [
   { id: '7d', label: '7d', days: 7 },
@@ -29,7 +33,9 @@ export default function HealthTab() {
   const [correlationData, setCorrelationData] = useState(null);
   const [workouts, setWorkouts] = useState([]);
   const [workoutsFailed, setWorkoutsFailed] = useState(false);
+  const [removingWorkoutId, setRemovingWorkoutId] = useState(null);
   const [initialized, setInitialized] = useState(false);
+  const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
   const sectionRefs = useRef({});
 
   // Fetch which metrics have data (once on mount)
@@ -134,22 +140,58 @@ export default function HealthTab() {
         ) : workouts.length === 0 ? (
           <p className="px-4 py-3 text-sm text-gray-500">No workouts logged yet.</p>
         ) : (
-          <div className="divide-y divide-port-border/70">
-            {workouts.slice(0, 8).map((workout, index) => (
-              <div key={`${workout.date}-${workout.type}-${index}`} className="px-4 py-3 flex items-center justify-between gap-4">
-                <div className="min-w-0">
-                  <p className="text-sm text-white truncate">{workout.type}</p>
-                  {workout.notes && <p className="text-xs text-gray-500 truncate">{workout.notes}</p>}
-                </div>
-                <div className="shrink-0 text-right text-xs text-gray-400">
-                  <div>{workout.date}</div>
-                  <div>
-                    {workout.durationMinutes != null ? `${workout.durationMinutes} min` : 'Duration n/a'}
-                    {workout.intensity ? ` · ${workout.intensity}` : ''}
+          <div>
+            {workouts.slice(0, 8).map((workout, index) => {
+              const id = workout.id || `${workout.date}-${index}`;
+              return (
+                <CollapsibleListItem
+                  key={id}
+                  spacing="0"
+                  removing={removingWorkoutId === id}
+                  onExited={() => {
+                    setWorkouts(prev => prev.filter(row => row.id !== workout.id));
+                    setRemovingWorkoutId(null);
+                  }}
+                >
+                  <div className="px-4 py-3 flex items-center justify-between gap-4 border-b border-port-border/70">
+                    <div className="min-w-0">
+                      <p className="text-sm text-white truncate">{workout.type}</p>
+                      {workout.notes && <p className="text-xs text-gray-500 truncate">{workout.notes}</p>}
+                    </div>
+                    <div className="shrink-0 flex items-center gap-2">
+                      <div className="text-right text-xs text-gray-400">
+                        <div>{workout.date}</div>
+                        <div>
+                          {workout.durationMinutes != null ? `${workout.durationMinutes} min` : 'Duration n/a'}
+                          {workout.intensity ? ` · ${workout.intensity}` : ''}
+                        </div>
+                      </div>
+                      {workout.id && (isConfirming(workout.id) ? (
+                        <ConfirmButtonPair
+                          prompt="Delete?"
+                          confirmIcon={Trash2}
+                          ariaLabel={`Confirm delete workout ${workout.date}`}
+                          onConfirm={() => confirmDelete(async () => {
+                            const removed = await api.removeWorkout(workout.id).catch(() => null);
+                            if (removed) setRemovingWorkoutId(workout.id);
+                          })}
+                          onCancel={cancelDelete}
+                        />
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => requestDelete(workout.id)}
+                          className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-600 hover:text-port-error transition-colors"
+                          aria-label={`Delete workout ${workout.date}`}
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      ))}
+                    </div>
                   </div>
-                </div>
-              </div>
-            ))}
+                </CollapsibleListItem>
+              );
+            })}
           </div>
         )}
       </section>

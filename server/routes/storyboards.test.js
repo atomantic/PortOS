@@ -50,6 +50,34 @@ describe('storyboards routes', () => {
     expect(list.body).toEqual([expect.objectContaining({ id, beatCount: 2, panelCount: 1, runtimeSec: 3.46, cover: { image: 'example.png', sketchKey: null } })]);
   });
 
+  it('restyles a saved recipe on an art style change, keeping an edited style prompt', async () => {
+    const { defaultStoryboardStyle, defaultStoryboardSystemPrompt } = await import('../lib/storyboardRecipe.js');
+    const { body: board } = await api('post', '/', { name: 'Styles', artStyle: 'production-sketch' });
+    const recipe = (nodes) => ({ nodes, edges: [] });
+    const style = (id, text) => ({ id, type: 'system', title: 'Style', x: 0, y: 0, text, settings: {} });
+    await api('put', `/${board.id}/recipe`, { recipe: recipe([
+      style('node-system', defaultStoryboardSystemPrompt('production-sketch')),
+      style('node-style', defaultStoryboardStyle('production-sketch')),
+      style('node-mine', 'My own style'),
+    ]) });
+    const changed = await api('patch', `/${board.id}`, { artStyle: 'clean-line' });
+    expect(changed.body.artStyle).toBe('clean-line');
+    expect(changed.body.recipe.nodes.map((node) => node.text)).toEqual([
+      defaultStoryboardSystemPrompt('clean-line'), defaultStoryboardStyle('clean-line'), 'My own style',
+    ]);
+  });
+
+  // Uniquely catches a board saved with an earlier shipped style default keeping the old look after an update.
+  it('reads an untouched earlier default style as the current one, keeping an edited style', async () => {
+    const { RETIRED_STORYBOARD_STYLES, defaultStoryboardStyle, effectiveRecipe } = await import('../lib/storyboardRecipe.js');
+    const { body: board } = await api('post', '/', { name: 'Old style', artStyle: 'production-sketch' });
+    const style = (id, text) => ({ id, type: 'system', title: 'Style', x: 0, y: 0, text, settings: {} });
+    const saved = await api('put', `/${board.id}/recipe`, { recipe: { nodes: [
+      style('node-old', RETIRED_STORYBOARD_STYLES['production-sketch'][0]), style('node-mine', 'My own style'),
+    ], edges: [] } });
+    expect(effectiveRecipe(saved.body).nodes.map((node) => node.text)).toEqual([defaultStoryboardStyle('production-sketch'), 'My own style']);
+  });
+
   it('moves a panel to another beat and keeps the order', async () => {
     const { body: board } = await api('post', '/', { name: 'Moves' });
     const a = (await api('post', `/${board.id}/beats`, { title: 'A' })).body.beatId;

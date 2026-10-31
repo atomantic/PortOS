@@ -58,7 +58,10 @@ export const cancelImageGen = (opts = {}, options = {}) => request('/image-gen/c
   ...options,
 });
 // Resolves `{ ok, status }` like deleteVideoHistoryItem (see mediaDeleteOutcome).
-export const deleteImage = (filename, options = {}) => request(`/image-gen/${encodeURIComponent(filename)}`, { method: 'DELETE', ...options });
+// A file records still use is refused with 409 MEDIA_IN_USE (`err.context.usages`)
+// unless `force` (the user's Delete anyway).
+const forceQuery = (force) => (force ? '?force=1' : '');
+export const deleteImage = (filename, { force = false, ...options } = {}) => request(`/image-gen/${encodeURIComponent(filename)}${forceQuery(force)}`, { method: 'DELETE', ...options });
 export const cancelImagePendingDelete = (filename, options = {}) => request(`/image-gen/${encodeURIComponent(filename)}/cancel-delete`, { method: 'POST', ...options });
 export const setImageHidden = (filename, hidden, options = {}) => request(`/image-gen/${encodeURIComponent(filename)}/visibility`, {
   method: 'POST',
@@ -302,7 +305,7 @@ export const uploadGalleryVideo = (base64Data, filename, options = {}) => reques
 // the owning peer, with `pendingDelete` and `peerName`; `deletedOn` and
 // `removedHere` when another holder already deleted), `owner-unknown` (hidden
 // here only) or `cancelled`; lib/mediaDeleteOutcome.js maps it for a list.
-export const deleteVideoHistoryItem = (id, options = {}) => request(`/video-gen/history/${encodeURIComponent(id)}`, { method: 'DELETE', ...options });
+export const deleteVideoHistoryItem = (id, { force = false, ...options } = {}) => request(`/video-gen/history/${encodeURIComponent(id)}${forceQuery(force)}`, { method: 'DELETE', ...options });
 export const cancelVideoPendingDelete = (id, options = {}) => request(`/video-gen/history/${encodeURIComponent(id)}/cancel-delete`, { method: 'POST', ...options });
 export const setVideoHidden = (id, hidden, options = {}) => request(`/video-gen/history/${encodeURIComponent(id)}/visibility`, {
   method: 'POST',
@@ -370,6 +373,8 @@ export function buildFormData(fields) {
     // A list of records (promptAdditions) travels as one JSON field the route parses.
     else if (Array.isArray(v) && v.some((item) => item !== null && typeof item === 'object')) fd.append(k, JSON.stringify(v));
     else if (Array.isArray(v)) v.forEach((item) => fd.append(k, String(item)));
+    // A plain record (visualProfileOverride) travels as one JSON field the route parses.
+    else if (typeof v === 'object') fd.append(k, JSON.stringify(v));
     else fd.append(k, String(v));
   }
   return fd;

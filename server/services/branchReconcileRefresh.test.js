@@ -17,10 +17,9 @@ vi.mock('./cosClaimOwnership.js', () => ({ readClaimOwnershipAgents: owners }));
 vi.mock('./agentState.js', () => ({ getActiveAgentIds: () => new Set() }));
 vi.mock('./userTimezone.js', () => ({ getUserTimezone: async () => 'UTC' }));
 vi.mock('./supersededLedger.js', async importOriginal => ({ ...await importOriginal(), readVerdictLedger: async () => [] }));
-vi.mock('./heldCheckoutRecovery.js', () => ({ recoverMissingCheckoutPreservations: async ({ outcome }) => outcome }));
 
 import { PATHS } from '../lib/paths.js';
-import { getBranchReconcileOutcome, recordBranchReconcileOutcome } from './taskSchedule.js';
+import { getBranchReconcileOutcome, recordBranchReconcileOutcome } from './branchReconcileOutcome.js';
 import { refreshBranchReconcileInventory } from './branchReconcileRefresh.js';
 
 describe.skipIf(SKIP_HEAVY_INTEGRATION)('branch reconciliation inventory refresh (real Git)', () => {
@@ -71,18 +70,10 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('branch reconciliation inventory refresh
     await expect(refreshBranchReconcileInventory('missing')).rejects.toMatchObject({ status: 404 });
   });
 
-  it('retains merged missing-source obligations and every archive until preservation is verified', async () => {
+  it('retains a merged missing-source obligation until its retirement is verified', async () => {
     getApp.mockImplementation(async id => ['example', 'settled-app'].includes(id) ? { id, repoPath } : null);
     await execGit(['branch', '-D', 'fix/current'], repoPath).catch(() => null);
     const head = (await execGit(['rev-parse', 'HEAD'], repoPath)).stdout.trim();
-    const settledArchiveDir = join(PATHS.cos, 'held-checkout-archives', 'test-settled-archive');
-    await mkdir(settledArchiveDir, { recursive: true });
-    await writeFile(join(settledArchiveDir, 'manifest.json'), JSON.stringify({ repoPath, branch: 'claim/issue-settled', head }));
-    await writeFile(join(settledArchiveDir, 'ignored.txt'), 'only preserved copy');
-    const unrelatedArchiveDir = join(PATHS.cos, 'held-checkout-archives', 'unrelated-archive');
-    await mkdir(unrelatedArchiveDir, { recursive: true });
-    await writeFile(join(unrelatedArchiveDir, 'manifest.json'), JSON.stringify({ repoPath, branch: 'claim/other', head }));
-    await writeFile(join(unrelatedArchiveDir, 'ignored.txt'), 'unrelated preserved copy');
 
     const integrated = { branch: 'claim/issue-settled', path: join(scratch, 'integrated'), head, locked: false, lockReason: null, reason: 'checkout-retained' };
     await recordBranchReconcileOutcome('settled-app', { status: 'incomplete', remaining: [integrated] });
@@ -93,7 +84,5 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('branch reconciliation inventory refresh
       remaining: [{ ...integrated, reason: 'retirement-provenance-unverified' }],
     });
     expect(result.outcome.retired || []).toEqual([]);
-    expect(await readFile(join(settledArchiveDir, 'ignored.txt'), 'utf8')).toBe('only preserved copy');
-    expect(await readFile(join(unrelatedArchiveDir, 'ignored.txt'), 'utf8')).toBe('unrelated preserved copy');
   });
 });

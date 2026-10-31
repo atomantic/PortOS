@@ -13,7 +13,6 @@ import { isLegacyDeepAudit } from '../lib/auditWorkflow.js';
  */
 
 import { existsSync } from 'fs';
-import { isDeepStrictEqual } from 'node:util';
 import { PORTOS_APP_ID } from '../lib/appIdentity.js';
 import { join } from 'path';
 import { emitLog } from './cosEvents.js';
@@ -184,14 +183,26 @@ async function worktreeCleanupContext(agentId, options) {
   const { getAgent } = await import('./cosAgentLifecycle.js');
   const agentState = await getAgent(agentId).catch(() => null);
   const metadata = agentState?.metadata;
-  if (!metadata?.isWorktree || metadata.isPersistentWorktree) return { isWorktree: false };
+  const claimBranches = [...new Set([
+    ...(Array.isArray(metadata?.claimBranches) ? metadata.claimBranches : []),
+    metadata?.claimBranch,
+  ].filter(b => typeof b === 'string' && b.trim()))];
+  if (!metadata?.isWorktree || metadata.isPersistentWorktree) {
+    return {
+      isWorktree: false,
+      claimBranches,
+      sourceWorkspace: metadata?.sourceWorkspace || metadata?.workspacePath || null,
+    };
+  }
   const { sourceWorkspace, worktreeBranch } = metadata;
-  if (!sourceWorkspace || !worktreeBranch) return { isWorktree: false };
+  if (!sourceWorkspace || !worktreeBranch) {
+    return { isWorktree: false, claimBranches, sourceWorkspace: sourceWorkspace || metadata?.workspacePath || null };
+  }
   const normalized = cleanupOptions(options);
   return {
     ...normalized,
     ...(normalized.originalTask?.metadata?.prCompletion === PR_COMPLETIONS.DRAFT ? { prCompletion: PR_COMPLETIONS.LEAVE_OPEN, skipMerge: true } : {}),
-    isWorktree: true, agentId, sourceWorkspace, worktreeBranch,
+    isWorktree: true, agentId, sourceWorkspace, worktreeBranch, claimBranches,
     discardWorktree: isTruthyMeta(normalized.originalTask?.metadata?.discardWorktree),
     worktreePath: metadata.workspacePath || join(PATHS.worktrees, agentId),
     publicationValidation: publicationHolds.get(agentId) || metadata.publicationValidation,
@@ -203,6 +214,43 @@ async function worktreeCleanupContext(agentId, options) {
     securityScanControl: metadata.securityScanControl,
     warnings: [],
   };
+}
+
+async function cleanupClaimBranchWorktrees(agentId, { sourceWorkspace, claimBranches }) {
+  if (!sourceWorkspace || !Array.isArray(claimBranches) || !claimBranches.length) return [];
+  const worktrees = await listWorktrees(sourceWorkspace).catch(() => []);
+  const defaultBranch = await git.getDefaultBranch(sourceWorkspace).catch(() => 'main');
+  const { probePrForBranch } = await import('./prProbe.js');
+  for (const branch of claimBranches) {
+    const holder = worktrees.find(wt => (wt.branch || '').replace(/^refs\/heads\//, '') === branch && wt.path !== sourceWorkspace) || null;
+    const probe = await probePrForBranch(sourceWorkspace, branch).catch(() => null);
+    const prMerged = probe?.prState === 'MERGED';
+    let cleanEmptyBranch = false;
+    if (!prMerged) {
+      const commitsAhead = await git.getCommitsAhead(sourceWorkspace, defaultBranch, branch).catch(() => null);
+      if (commitsAhead === 0) {
+        if (holder?.path && existsSync(holder.path)) {
+          const status = await execGit(['status', '--porcelain'], holder.path, { ignoreExitCode: true }).catch(() => null);
+          cleanEmptyBranch = status?.exitCode === 0 && !status.stdout.trim();
+        } else {
+          cleanEmptyBranch = true;
+        }
+      }
+    }
+    if (!prMerged && !cleanEmptyBranch) continue;
+    if (holder?.path) {
+      await execGit(['worktree', 'unlock', holder.path], sourceWorkspace, { ignoreExitCode: true }).catch(() => null);
+      await removeWorktree(sourceWorkspace, holder.path, { deleteBranch: true, force: true }).catch(() => null);
+    }
+    await execGit(['branch', '-D', branch], sourceWorkspace, { ignoreExitCode: true }).catch(() => null);
+    if (prMerged) {
+      await execGit(['push', 'origin', '--delete', branch], sourceWorkspace, { ignoreExitCode: true }).catch(() => null);
+    }
+    emitLog('info', `🌳 Cleaned up claim branch ${branch} for ${agentId} (${prMerged ? 'PR merged' : 'empty clean branch'})`, {
+      agentId, branchName: branch,
+    });
+  }
+  return [];
 }
 
 async function probeWorktreePr(context, success) {
@@ -262,7 +310,7 @@ async function runCleanupAgentWorktree(agentId, success, options = {}) {
   reportWorktreeDisposition(context, disposition, verdict);
   switch (disposition.disposition) {
     case 'not-a-worktree':
-      return [];
+      return cleanupClaimBranchWorktrees(agentId, context);
     case 'discard':
       return discardAgentWorktree(context);
     case 'open-pr':
@@ -1120,6 +1168,107 @@ export async function releaseRetryHold({ agentId, task, success, agentMetadata, 
 }
 
 /**
+ * The follow-up's reviewer roster before the forge identity preflight.
+ * Self-review empties it HERE rather than at each caller: "the agent reviews it
+ * itself" and "these reviewers review it" are mutually exclusive, and the
+ * non-obvious half is the usernames — a single `@login` inherited from the Code
+ * Review Defaults keeps the roster non-empty and quietly puts the run back on
+ * the delegated path the caller opted out of.
+ *
+ * An EXPLICITLY empty reviewer list means "no review was requested" and must
+ * stay empty — normalizeReviewers' `[copilot]` default would otherwise resurrect
+ * a reviewer. CLI-based reviewers work on any forge because the agent invokes the
+ * CLI directly; copilot is dropped on a non-GitHub forge. GitHub reviewer
+ * usernames and the non-blocking (`~opt`) marker set are forge-agnostic and are
+ * NOT stripped there — a username reviewer alone can drive the loop.
+ */
+function resolveReviewRoster({ reviewers, usernames, optionalReviewers, selfReview, isNonGithubForge }) {
+  if (selfReview) return { reviewers: [], usernames: [], optionalReviewers: [] };
+  const reviewerList = Array.isArray(reviewers) && reviewers.length === 0 ? [] : normalizeReviewers({ reviewers });
+  return {
+    reviewers: prioritizeToolFreeReviewers(isNonGithubForge ? reviewerList.filter(r => r !== DEFAULT_REVIEWER) : reviewerList),
+    usernames: normalizeReviewUsernames(usernames),
+    optionalReviewers: normalizeOptionalReviewers(optionalReviewers) || [],
+  };
+}
+
+function throwRequiredReviewerFault(entries, summary, code) {
+  const detail = entries.map((e) => `@${e.token}: ${e.reason}`).join('; ');
+  throw new ServerError(`${summary} — ${detail}. Fix it in Settings → Code Reviewers.`, {
+    status: 409, code, context: { reviewers: entries.map((e) => e.token) },
+  });
+}
+
+/**
+ * Target-forge identity preflight (#13115). A handle the forge verifiably does
+ * not have (or the PR's own author) would fail every PR-side request. A REQUIRED
+ * one fails closed — the run must not merge without the review the operator
+ * demanded; an OPTIONAL one is left out of this run's emitted roster and recorded
+ * in `faults`, never reported clean. Lookups that merely fail (auth/transport)
+ * are inconclusive and change nothing. The saved roster is never rewritten.
+ */
+async function preflightReviewerRoster({ usernames, optionalReviewers, isNonGithubForge, parsedPr }) {
+  const unchanged = { usernames, optionalReviewers, faults: [] };
+  if (!usernames.length && !optionalReviewers.length) return unchanged;
+  const { preflightReviewerIdentities, preflightReviewerPrAuthor } = await import('./reviewerIdentity.js');
+  const preflight = await preflightReviewerIdentities({
+    usernames, optionalReviewers, forge: isNonGithubForge ? 'gitlab' : 'github', host: parsedPr?.host,
+  });
+  if (preflight.requiredMissing.length) {
+    throwRequiredReviewerFault(preflight.requiredMissing, 'Required reviewer not found on the target forge', 'REVIEWER_IDENTITY_NOT_FOUND');
+  }
+  const eligibility = isNonGithubForge ? { required: [], optional: [] } : await preflightReviewerPrAuthor({ usernames, optionalReviewers, pr: parsedPr });
+  if (eligibility.required.length) {
+    throwRequiredReviewerFault(eligibility.required, 'Required reviewer configuration fault', 'REVIEWER_IS_PR_AUTHOR');
+  }
+  const optionalFaults = [...preflight.optionalMissing, ...eligibility.optional];
+  if (!optionalFaults.length) return unchanged;
+  const dropped = new Set(optionalFaults.map((e) => e.token.toLowerCase()));
+  const faults = optionalFaults.map(({ token, reason }) => ({ token, reason }));
+  console.log(`🚫 Optional reviewer(s) unavailable for this run: ${faults.map((f) => `@${f.token}`).join(', ')}`);
+  return {
+    usernames: usernames.filter((u) => !dropped.has(u.toLowerCase())),
+    optionalReviewers: optionalReviewers.filter((r) => !dropped.has(r.replace(/^@/, '').toLowerCase())),
+    faults,
+  };
+}
+
+/**
+ * One place that names the follow-up mode, so the title, the log line, and the
+ * warning can't drift apart as the follow-up kinds evolve.
+ */
+function describeFollowUpKind({ mergeOnly, selfReviewMerge, reviewers, usernames }) {
+  if (!mergeOnly) return { title: 'Review Loop', label: 'review-loop', reviewers: [...reviewers, ...usernames.map(u => `@${u}`)].join(', ') };
+  if (selfReviewMerge) return { title: 'Self-Review & Merge', label: 'self-review-merge', reviewers: 'self-review, no delegated reviewer' };
+  return { title: 'Merge', label: 'merge', reviewers: 'merge on green CI, no review' };
+}
+
+/**
+ * The source task's provider/model/effort pins, for a follow-up that runs a
+ * coding harness (it fixes checks, resolves conflicts, drives reviewer CLIs). An
+ * install whose ACTIVE provider is api-only would permanently reject an unpinned
+ * follow-up for lacking a harness — and the PR it was spawned to land would sit
+ * open forever. Only what is actually pinned is copied; an unpinned source task
+ * still resolves through the normal active-provider path.
+ *
+ * The model pin rides ONLY with its provider: a bare `model` would be treated as
+ * explicit against whatever provider resolution later picks, handing e.g. a
+ * Claude model id to Codex. Effort is provider-agnostic, so it travels alone.
+ */
+function inheritProviderPins(sourceMeta) {
+  const pins = {};
+  const provider = sourceMeta.provider || sourceMeta.providerId || null;
+  if (provider) {
+    pins.provider = provider;
+    pins.providerId = provider;
+    if (sourceMeta.model) pins.model = sourceMeta.model;
+  }
+  if (sourceMeta.effort) pins.effort = sourceMeta.effort;
+  if (sourceMeta.executionOptions !== undefined) pins.executionOptions = sourceMeta.executionOptions;
+  return pins;
+}
+
+/**
  * Spawn an internal follow-up task that drives the ordered multi-reviewer
  * review-and-fix loop on the just-created PR until the configured reviewer chain
  * is satisfied, then merges the PR. This is what makes the user-facing "review
@@ -1176,17 +1325,9 @@ export async function releaseRetryHold({ agentId, task, success, agentMetadata, 
  * whether an agent actually started or the task is still waiting (no slots,
  * daemon stopped, …) rather than guessing.
  */
-export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, prUrl, prBranch, forkHead = null, sourceWorkspace, prCompletion = PR_COMPLETIONS.REVIEW_THEN_MERGE, reviewers = DEFAULT_REVIEWERS, usernames = [], optionalReviewers = [], reviewerMaxRounds = {}, reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false, reviewerModels = null, reviewerEfforts = null, leaveOpen = false, selfReview = false, dispatch = 'queue', reviewTarget = null, mergeGuardTarget = null }) {
+export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, prUrl, prBranch, forkHead = null, sourceWorkspace, prCompletion = PR_COMPLETIONS.REVIEW_THEN_MERGE, reviewers = DEFAULT_REVIEWERS, usernames = [], optionalReviewers = [], reviewerMaxRounds = {}, reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false, reviewerModels = null, reviewerEfforts = null, leaveOpen = false, selfReview = false, dispatch = 'queue', reviewTarget = null }) {
   if (!prUrl || !prBranch) return null;
   if (prCompletion === PR_COMPLETIONS.LEAVE_OPEN) return null;
-
-  if (mergeGuardTarget) {
-    const { validatePendingMergeRecovery } = await import('./pendingMergeRecovery.js');
-    if (mergeGuardTarget.prUrl !== prUrl || mergeGuardTarget.branch !== prBranch
-      || mergeGuardTarget.sourceTaskId !== originalTask?.id || mergeGuardTarget.sourceAgentId !== originalAgentId) return { blocked: 'Merge recovery identity changed' };
-    const refused = await validatePendingMergeRecovery({ target: mergeGuardTarget, workspacePath: sourceWorkspace });
-    if (refused) return { blocked: refused };
-  }
 
   if (reviewTarget) {
     const { validateCleanupReviewTarget } = await import('./cosMergeHandoff.js');
@@ -1200,77 +1341,20 @@ export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, p
   // spawn budget on every CI/conflict handoff and recursively nests its title.
   // The id hint also recovers receipts written before the marker was retained.
   if (isTruthyMeta(originalTask?.metadata?.reviewLoopFollowUp) || originalTask?.id?.startsWith('sys-rl-')) {
-    return resumeReviewLoopCoordinator(originalTask.id, prUrl, prBranch, reviewTarget, mergeGuardTarget);
+    return resumeReviewLoopCoordinator(originalTask.id, prUrl, prBranch, reviewTarget);
   }
 
   const parsedPr = git.parsePullRequestUrl(prUrl);
-  // Copilot is GitHub-only; CLI-based reviewers (claude/antigravity/codex/grok) work on any
-  // forge because the agent invokes the CLI directly. On a GitLab forge, drop
-  // copilot from the list. Classify with the shared detector rather than
+  // Copilot is GitHub-only. Classify with the shared detector rather than
   // `host !== 'github.com'` — a GitHub Enterprise host still has Copilot, and
   // misreading it as non-GitHub would strip the only reviewer and silently
   // downgrade the run to merge-only.
   const isNonGithubForge = !!parsedPr?.host && detectForgeCli(parsedPr.host) !== 'gh';
-  // Self-review empties the roster HERE rather than at each caller. "The agent
-  // reviews it itself" and "these reviewers review it" are mutually exclusive, so
-  // whoever holds the flag has to hold the emptying too — and the non-obvious
-  // half is the usernames: a single `@login` inherited from the Code Review
-  // Defaults keeps the roster non-empty and quietly puts the run back on the
-  // delegated path the caller opted out of. One owner, so a second caller adopting
-  // the mode cannot rediscover that the hard way.
-  //
-  // An EXPLICITLY empty list means "no review was requested" and must stay empty —
-  // normalizeReviewers' `[copilot]` default would otherwise resurrect a reviewer.
-  const reviewerList = (selfReview || (Array.isArray(reviewers) && reviewers.length === 0))
-    ? []
-    : normalizeReviewers({ reviewers });
-  const effectiveReviewers = prioritizeToolFreeReviewers(
-    isNonGithubForge ? reviewerList.filter(r => r !== DEFAULT_REVIEWER) : reviewerList
-  );
-  // GitHub reviewer usernames are forge-agnostic requested reviewers, so they are
-  // NOT stripped on a non-GitHub forge — a username reviewer alone can drive the
-  // loop even when copilot was dropped.
-  let effectiveUsernames = selfReview ? [] : normalizeReviewUsernames(usernames);
-  // Non-blocking (`~opt`) marker set — forge-agnostic, threaded verbatim so the
-  // follow-up's `--review-with` marks the same reviewers optional.
-  let effectiveOptionalReviewers = selfReview ? [] : (normalizeOptionalReviewers(optionalReviewers) || []);
-  // Target-forge identity preflight (#13115). A handle the forge verifiably does
-  // not have would fail every PR-side request. A REQUIRED one fails closed (the
-  // run must not merge without the review the operator demanded); an OPTIONAL one
-  // is left out of this run's emitted roster and recorded, never reported clean.
-  // Lookups that merely fail (auth/transport) are inconclusive and change nothing.
-  // The saved roster is never rewritten.
-  let reviewerIdentityFaults = [];
-  if (effectiveUsernames.length || effectiveOptionalReviewers.length) {
-    const { preflightReviewerIdentities, preflightReviewerPrAuthor } = await import('./reviewerIdentity.js');
-    const preflight = await preflightReviewerIdentities({
-      usernames: effectiveUsernames,
-      optionalReviewers: effectiveOptionalReviewers,
-      forge: isNonGithubForge ? 'gitlab' : 'github',
-      host: parsedPr?.host,
-    });
-    if (preflight.requiredMissing.length) {
-      const detail = preflight.requiredMissing.map((e) => `@${e.token}: ${e.reason}`).join('; ');
-      throw new ServerError(`Required reviewer not found on the target forge — ${detail}. Fix it in Settings → Code Reviewers.`, {
-        status: 409, code: 'REVIEWER_IDENTITY_NOT_FOUND', context: { reviewers: preflight.requiredMissing.map((e) => e.token) },
-      });
-    }
-    const eligibility = isNonGithubForge ? { required: [], optional: [] } : await preflightReviewerPrAuthor({ usernames: effectiveUsernames, optionalReviewers: effectiveOptionalReviewers, pr: parsedPr });
-    if (eligibility.required.length) {
-      const detail = eligibility.required.map((e) => `@${e.token}: ${e.reason}`).join('; ');
-      throw new ServerError(`Required reviewer configuration fault — ${detail}. Fix it in Settings → Code Reviewers.`, {
-        status: 409, code: 'REVIEWER_IS_PR_AUTHOR', context: { reviewers: eligibility.required.map((e) => e.token) },
-      });
-    }
-    const optionalFaults = [...preflight.optionalMissing, ...eligibility.optional];
-    if (optionalFaults.length) {
-      const dropped = new Set(optionalFaults.map((e) => e.token.toLowerCase()));
-      reviewerIdentityFaults = optionalFaults.map(({ token, reason }) => ({ token, reason }));
-      effectiveUsernames = effectiveUsernames.filter((u) => !dropped.has(u.toLowerCase()));
-      effectiveOptionalReviewers = effectiveOptionalReviewers.filter((r) => !dropped.has(r.replace(/^@/, '').toLowerCase()));
-      console.log(`🚫 Optional reviewer(s) unavailable for this run: ${reviewerIdentityFaults.map((f) => `@${f.token}`).join(', ')}`);
-    }
-  }
+  const roster = resolveReviewRoster({ reviewers, usernames, optionalReviewers, selfReview, isNonGithubForge });
+  const effectiveReviewers = roster.reviewers;
+  const { usernames: effectiveUsernames, optionalReviewers: effectiveOptionalReviewers, faults: reviewerIdentityFaults } = await preflightReviewerRoster({
+    usernames: roster.usernames, optionalReviewers: roster.optionalReviewers, isNonGithubForge, parsedPr,
+  });
   // Per-reviewer iteration caps (`~max=<n>`) — forge-agnostic, threaded verbatim
   // so the follow-up's `--review-with` carries the same budgets. Entries for
   // reviewers that were stripped are inert (the emitter only marks tokens it
@@ -1319,32 +1403,9 @@ export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, p
 
   // One place that names the mode, so the title, the log line, and the warning
   // can't drift apart as the two follow-up kinds evolve.
-  const kind = mergeOnly
-    ? (selfReviewMerge
-      ? { title: 'Self-Review & Merge', label: 'self-review-merge', reviewers: 'self-review, no delegated reviewer' }
-      : { title: 'Merge', label: 'merge', reviewers: 'merge on green CI, no review' })
-    : { title: 'Review Loop', label: 'review-loop', reviewers: [...effectiveReviewers, ...effectiveUsernames.map(u => `@${u}`)].join(', ') };
+  const kind = describeFollowUpKind({ mergeOnly, selfReviewMerge, reviewers: effectiveReviewers, usernames: effectiveUsernames });
 
-  // Inherit the source task's provider/model/effort pins. A follow-up runs a
-  // coding harness (it fixes checks, resolves conflicts, drives reviewer CLIs),
-  // so an install whose ACTIVE provider is api-only would permanently reject an
-  // unpinned follow-up for lacking a harness — and the PR it was spawned to land
-  // would sit open forever. Only copy what's actually pinned; an unpinned source
-  // task still resolves through the normal active-provider path.
-  //
-  // The model pin rides ONLY with its provider: a bare `model` would be treated as
-  // explicit against whatever provider resolution later picks, handing e.g. a
-  // Claude model id to Codex. Effort is provider-agnostic, so it travels alone.
-  const sourceMeta = originalTask?.metadata || {};
-  const pinnedProvider = sourceMeta.provider || sourceMeta.providerId || null;
-  const providerPins = {};
-  if (pinnedProvider) {
-    providerPins.provider = pinnedProvider;
-    providerPins.providerId = pinnedProvider;
-    if (sourceMeta.model) providerPins.model = sourceMeta.model;
-  }
-  if (sourceMeta.effort) providerPins.effort = sourceMeta.effort;
-  if (sourceMeta.executionOptions !== undefined) providerPins.executionOptions = sourceMeta.executionOptions;
+  const providerPins = inheritProviderPins(originalTask?.metadata || {});
 
   // Routing key, and the one field here that turns a serialization slip into a
   // dead PR: a follow-up whose `app` doesn't resolve is BLOCKED by
@@ -1381,7 +1442,6 @@ export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, p
       simplify: false,
       // Marker flags consumed by the agent prompt + completion handler
       reviewLoopFollowUp: true,
-      ...(mergeGuardTarget ? { pendingMergeGuardTarget: mergeGuardTarget } : {}),
       ...(reviewTarget ? { cleanupReviewTarget: reviewTarget, resumeWorktreePath: reviewTarget.worktreePath } : {}),
       prCompletion,
       // Merge-only run: no reviewers, the prompt is a CI-gate-and-merge procedure.
@@ -1443,13 +1503,6 @@ export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, p
   const immediate = dispatch === 'immediate';
   const persisted = await addTask(followUpTask, 'internal', { raw: true, suppressDequeue: immediate });
 
-  if (mergeGuardTarget) {
-    const { getTaskById } = await import('./cosTaskStore.js');
-    const saved = persisted?.id && await getTaskById(persisted.id).catch(() => null);
-    if (!saved || !['pending', 'in_progress'].includes(saved.status)
-      || !isDeepStrictEqual(saved.metadata?.pendingMergeGuardTarget ?? saved.metadata?.pendingMergeGuardLaunchEvidence, mergeGuardTarget)) return { deferred: true };
-  }
-
   // A duplicate rejection persisted NOTHING under `followUpTaskId` — an equivalent
   // follow-up is already queued under a different id. Return THAT record so a
   // caller reports (and force-spawns) the task that actually exists instead of the
@@ -1483,7 +1536,7 @@ export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, p
   return { ...followUpTask, dispatch: { started: true, reason: null } };
 }
 
-async function resumeReviewLoopCoordinator(taskId, prUrl, prBranch, reviewTarget = null, mergeGuardTarget = null) {
+async function resumeReviewLoopCoordinator(taskId, prUrl, prBranch, reviewTarget = null) {
   const { getTaskById } = await import('./cosTaskStore.js');
   const task = await getTaskById(taskId);
   if (!task || task.taskType !== 'internal' || !isTruthyMeta(task.metadata?.reviewLoopFollowUp)
@@ -1514,7 +1567,6 @@ async function resumeReviewLoopCoordinator(taskId, prUrl, prBranch, reviewTarget
   const result = await updateTask(taskId, {
     status: 'pending',
     metadata: { reviewLoopRecoveryReason: 'The handed-off PR needs fresh validation, review or conflict resolution',
-      ...(mergeGuardTarget ? { pendingMergeGuardTarget: mergeGuardTarget } : {}),
       ...(reviewTarget ? { cleanupReviewTarget: reviewTarget, resumeWorktreePath: reviewTarget.worktreePath } : {}) },
   }, 'internal', {
     expectedStatus: 'completed',

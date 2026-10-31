@@ -73,10 +73,23 @@ const KIND_STEPS = {
     `Read the pull request, its diff and its discussion: \`gh pr view ${link} --comments\`, \`gh pr diff ${link}\`.`,
     `Review it, then submit the review: \`gh pr review ${link} --approve\` when it is ready, otherwise \`--request-changes\` with a body naming each problem.`,
   ],
-  ci: ({ repoArg }) => [
-    `Find the failed workflow run this is about: \`gh run list --repo ${repoArg} --status failure --limit 10\`, and the default branch with \`gh repo view ${repoArg} --json defaultBranchRef\`. Read the failed logs with \`gh run view <run-id> --repo ${repoArg} --log-failed\`.`,
-    `If the run failed on the default branch, diagnose it. When it is flaky (a timeout, a runner or network fault), rerun it with \`gh run rerun <run-id> --repo ${repoArg} --failed\`; otherwise fix it on a new branch and open a pull request into the default branch. If it failed on another branch, report which run failed and why, and stop.`,
-  ],
+  // `--user` filters on the run's actor, the user who triggered the initial
+  // run (a re-run or fork approval keeps it). Another actor's run, such as an
+  // outside fork PR, has logs that actor wrote, which never reach this
+  // unscreened lane.
+  // `instant` is the forge's update time for the notification (gh_updated_at).
+  // Without it no run can be tied to the thread, so the agent stops rather
+  // than guessing among the operator's failed runs.
+  ci: ({ repoArg, actorArg, instant }) => {
+    if (!instant) {
+      return ['No run can be tied to this notification, because its update time is unknown. Do not choose a run from any list, read any run\'s logs, or rerun anything. Report that no run can be identified for this notification, and stop.'];
+    }
+    return [
+      `Find the failed workflow run this notification is about among the runs you triggered. The notification was last updated at ${instant}. List the candidates with \`gh run list --repo ${repoArg} --user ${actorArg} --status failure --limit 10 --json databaseId,updatedAt,headBranch,conclusion\`. Use a listed run only if its \`updatedAt\` is no later than ${instant} and no earlier than three hours before it. If no listed run meets both bounds, report that no run matches this notification, and stop.`,
+      `Read the default branch with \`gh repo view ${repoArg} --json defaultBranchRef\`, and the failed logs of the selected run with \`gh run view <run-id> --repo ${repoArg} --log-failed\`. Never read the logs of a run someone else triggered.`,
+      `If the run failed on the default branch, diagnose it. When it is flaky (a timeout, a runner or network fault), rerun it with \`gh run rerun <run-id> --repo ${repoArg} --failed\`; otherwise fix it on a new branch and open a pull request into the default branch. If it failed on another branch, report which run failed and why, and stop.`,
+    ];
+  },
   issue: ({ link }) => [
     `Read the issue and its comments: \`gh issue view ${link} --comments\`.`,
     'Work out what is being asked. When it needs a code change, make it on a new branch and open a pull request that references the issue; when it needs an answer, reply on the issue.',
@@ -93,8 +106,12 @@ function buildResolvePrompt({ host, login, repo, threadId, row, link, apiPath })
   const reason = REASON_WORDS[row.reason] || 'other activity';
   const repoArg = cloneTargetFor(host, repo);
   const as = login ? ` gh is signed in as ${login} on ${host}.` : '';
+  const actorArg = login || `"$(gh api --hostname ${host} user --jq .login)"`;
+  // new Date(null) is the epoch, so a missing value must be refused before parsing.
+  const updated = row.gh_updated_at ? new Date(row.gh_updated_at) : null;
+  const instant = updated && !Number.isNaN(updated.getTime()) ? updated.toISOString() : null;
   const steps = [
-    ...KIND_STEPS[kind]({ link, repoArg }),
+    ...KIND_STEPS[kind]({ link, repoArg, actorArg, instant }),
     `Make every change in a scratch clone outside the PortOS checkout you start in: \`dir=$(mktemp -d) && gh repo clone ${repoArg} "$dir/repo"\`. Never edit, commit or push anything in the PortOS checkout. Delete the scratch directory when you are done.`,
   ];
   return [

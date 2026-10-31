@@ -8,7 +8,7 @@ import { buildPrompt } from './promptService.js';
 import { extractJson } from '../lib/jsonExtract.js';
 import { ENRICHMENT_CATEGORIES, SCALE_QUESTIONS, SCALE_WEIGHT, CONFIDENCE_BOOST } from './digital-twin-constants.js';
 import { DIGITAL_TWIN_DIR, generateId, now, ensureSoulDir, callProviderAI, ensureDocumentInMeta } from './digital-twin-helpers.js';
-import { loadMeta, saveMeta, digitalTwinEvents } from './digital-twin-meta.js';
+import { loadMeta, saveMeta, withMetaLock, digitalTwinEvents } from './digital-twin-meta.js';
 import { getDigitalTwinForPrompt } from './digital-twin-context.js';
 import { generateGapRecommendations } from './digital-twin-analysis.js';
 
@@ -142,7 +142,20 @@ export async function generateEnrichmentQuestion(category, providerOverride, mod
   };
 }
 
-const processScaleAnswer = data => withBackupAssetPublication(() => processScaleAnswerLeased(data));
+// File append + meta update share withMetaLock so overlapping answers cannot
+// each read the same markdown and drop one another's block.
+const processScaleAnswer = data =>
+  withBackupAssetPublication(() => withMetaLock(() => processScaleAnswerLeased(data)));
+
+// Reads the target doc (or its header) and reports whether this exact block was already appended.
+async function readTargetForAppend(config, formattedContent) {
+  await ensureSoulDir();
+  const targetPath = join(DIGITAL_TWIN_DIR, config.targetDoc);
+  const existingContent = existsSync(targetPath)
+    ? await readFile(targetPath, 'utf-8')
+    : `# ${config.label}\n\n`;
+  return { targetPath, existingContent, duplicate: existingContent.includes(formattedContent) };
+}
 
 async function processScaleAnswerLeased(data) {
   const { category, question, scaleValue, scaleQuestionId } = data;
@@ -156,7 +169,22 @@ async function processScaleAnswerLeased(data) {
   const rawScore = (scaleValue - 1) / 4;
   const adjustedScore = scaleDef.direction === 1 ? rawScore : (1 - rawScore);
 
+  const labelText = scaleDef.labels[scaleValue - 1] || String(scaleValue);
+  const formattedContent = `### ${question}\n\nResponse: ${labelText} (${scaleValue}/5)\n\n`;
+  const { targetPath, existingContent, duplicate } = await readTargetForAppend(config, formattedContent);
+
   const meta = await loadMeta();
+  if (duplicate) {
+    // Same answer already applied: leave the cached meta untouched.
+    return {
+      category,
+      targetDoc: config.targetDoc,
+      contentAdded: '',
+      traitsUpdated: false,
+      dimension: scaleDef.dimension,
+      newConfidence: meta.confidence?.dimensions?.[scaleDef.dimension]
+    };
+  }
   if (!meta.traits) meta.traits = {};
 
   // Update trait score via weighted moving average
@@ -200,17 +228,6 @@ async function processScaleAnswerLeased(data) {
   meta.confidence.lastCalculated = now();
 
   // Store readable line in target document
-  const labelText = scaleDef.labels[scaleValue - 1] || String(scaleValue);
-  const formattedContent = `### ${question}\n\nResponse: ${labelText} (${scaleValue}/5)\n\n`;
-
-  await ensureSoulDir();
-  const targetPath = join(DIGITAL_TWIN_DIR, config.targetDoc);
-  let existingContent = '';
-  if (existsSync(targetPath)) {
-    existingContent = await readFile(targetPath, 'utf-8');
-  } else {
-    existingContent = `# ${config.label}\n\n`;
-  }
   await atomicWrite(targetPath, existingContent + '\n' + formattedContent);
 
   // Record scale answer
@@ -281,19 +298,14 @@ export async function processEnrichmentAnswer(data) {
   }
 
   // Provider work finishes before admission; only the durable publication drains.
-  return withBackupAssetPublication(() => persistEnrichmentAnswer(category, config, formattedContent));
+  return withBackupAssetPublication(() => withMetaLock(() => persistEnrichmentAnswer(category, config, formattedContent)));
 }
 
 async function persistEnrichmentAnswer(category, config, formattedContent) {
-  await ensureSoulDir();
-  // Append to target document
-  const targetPath = join(DIGITAL_TWIN_DIR, config.targetDoc);
-  let existingContent = '';
-
-  if (existsSync(targetPath)) {
-    existingContent = await readFile(targetPath, 'utf-8');
-  } else {
-    existingContent = `# ${config.label}\n\n`;
+  const { targetPath, existingContent, duplicate } = await readTargetForAppend(config, formattedContent);
+  if (duplicate) {
+    // Same answer already applied: no second block, no counter bump.
+    return { category, targetDoc: config.targetDoc, contentAdded: '' };
   }
 
   await atomicWrite(targetPath, existingContent + '\n' + formattedContent);
@@ -507,7 +519,7 @@ Respond in JSON format:
  * Save analyzed list content to document
  */
 export const saveEnrichmentListDocument = (category, content, items) =>
-  withBackupAssetPublication(() => saveEnrichmentListDocumentLeased(category, content, items));
+  withBackupAssetPublication(() => withMetaLock(() => saveEnrichmentListDocumentLeased(category, content, items)));
 
 async function saveEnrichmentListDocumentLeased(category, content, items) {
   const config = ENRICHMENT_CATEGORIES[category];

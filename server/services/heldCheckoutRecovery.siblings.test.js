@@ -1,9 +1,9 @@
 /**
  * Scoped retirement of held checkouts through real Git (#12002, #13519): a
- * release binds to the exact inventory row. A merged clean checkout is removed
- * in place. Dirty, unmerged, and live-owner checkouts stay, and retirement
- * does not copy the checkout. Historical archives written by preserveMergedCheckout
- * remain readable.
+ * release binds to the exact inventory row. A merged checkout is removed in
+ * place (dirty only when its PR merged at the exact head). Dirty unmerged and
+ * live-owner checkouts stay, and retirement never copies the checkout. Archives
+ * in the historical format remain readable.
  *
  * This file: completed resume lineage, merge-on-green delivery, sibling obligations,
  * reused branches, the review-change matrix and ref-only finalization.
@@ -31,9 +31,9 @@ vi.mock('./branchCompletionPolicy.js', async importOriginal => mockBranchComplet
 vi.mock('./taskScheduleStore.js', async importOriginal => mockTaskScheduleStore(await importOriginal()));
 vi.mock('./apps.js', () => ({ getAppById: async (id) => (injected.app?.id === id ? injected.app : null) }));
 
-import { describeHeldCheckoutRecovery, setExternal, it, beforeEach, scratch, repo, external, noOwners, registered, lockText, retire, archives, addProofOrigin, reviewedCheckout } from './_heldCheckoutRecoveryFixture.js';
+import { describeHeldCheckoutRecovery, setExternal, it, beforeEach, scratch, repo, external, noOwners, registered, lockText, retire, addProofOrigin, reviewedCheckout } from './_heldCheckoutRecoveryFixture.js';
 const { retireInventoriedCheckout, prepareInventoriedCheckoutRetirement } = await import('./heldCheckoutRecovery.js');
-const { recordBranchReconcileOutcome, getBranchReconcileOutcome, recordHeldCheckoutRetirement } = await import('./taskSchedule.js');
+const { recordBranchReconcileOutcome, getBranchReconcileOutcome, recordHeldCheckoutRetirement } = await import('./branchReconcileOutcome.js');
 
 describeHeldCheckoutRecovery(() => {
   // Each contract keeps a fresh physical registration and the five-second
@@ -140,7 +140,6 @@ describeHeldCheckoutRecovery(() => {
     expect(retired, JSON.stringify(retired)).toMatchObject({ ok: true, branchDeleted: true });
     expect(existsSync(c.path)).toBe(false);
     expect(retired.archiveDir ?? null).toBeNull();
-    expect(await archives()).toEqual([]);
     expect(injected.policies).toEqual(unchanged);
     expect((await getBranchReconcileOutcome('app-1')).retired).toContainEqual(expect.objectContaining({
       branch: c.release.branch, head: c.release.head, branchDeleted: true, archiveDir: null,
@@ -200,7 +199,6 @@ describeHeldCheckoutRecovery(() => {
     const retired = await c.confirm(prepared.review);
     expect(retired, JSON.stringify(retired)).toMatchObject({ ok: true, branchDeleted: true });
     expect(existsSync(c.path)).toBe(false);
-    expect(await archives()).toEqual([]);
     expect(injected.policies).toEqual(original);
     expect((await getBranchReconcileOutcome('app-1')).retired).toContainEqual(expect.objectContaining({
       branch: c.release.branch, path: c.path, head: c.release.head, branchDeleted: true, archiveDir: null,
@@ -245,7 +243,6 @@ describeHeldCheckoutRecovery(() => {
         expect(await registered(c.path)).toBe(false);
       }
       expect(agent).toEqual(original);
-      expect(await archives()).toEqual([]);
     });
 
   it.each([false, true])('retires legacy pinned cleanup with lagging main and missing remote proof=%s', async missingProof => {
@@ -280,7 +277,6 @@ describeHeldCheckoutRecovery(() => {
     expect(result.archiveDir).toBeUndefined();
     expect(await registered(c.path)).toBe(false);
     expect((await execGit(['rev-parse', 'main'], repo)).stdout.trim()).toBe(localMain);
-    expect(await archives()).toEqual([]);
     expect((await getBranchReconcileOutcome('app-1')).retired).toContainEqual(expect.objectContaining({
       branch: c.release.branch, head: c.release.head, archiveDir: null, branchDeleted: true,
     }));
@@ -340,7 +336,6 @@ describeHeldCheckoutRecovery(() => {
     expect(await registered(c.path)).toBe(false);
     const receipt = outcome.retired.find(row => row.branch === release.branch);
     expect(receipt).toMatchObject({ head: release.head, branchDeleted: true, archiveDir: null, checkoutIdentity: release.checkoutIdentity });
-    expect(await archives()).toEqual([]);
   });
 
   it('settles a review obligation for unattended retirement only once every commit is on the default branch', async () => {
@@ -362,7 +357,6 @@ describeHeldCheckoutRecovery(() => {
     expect(result).toMatchObject({ ok: true, branchDeleted: true });
     expect(result.archiveDir).toBeUndefined();
     expect(await registered(release.path)).toBe(false);
-    expect(await archives()).toEqual([]);
     expect((await execGit(['cat-file', '-t', release.head], repo)).stdout.trim()).toBe('commit');
   });
 
@@ -405,7 +399,6 @@ describeHeldCheckoutRecovery(() => {
     expect(result).toMatchObject({ ok: true, branchDeleted: true });
     expect(result.archiveDir).toBeUndefined();
     expect(existsSync(c.path)).toBe(false);
-    expect(await archives()).toEqual([]);
     expect((await getBranchReconcileOutcome('app-1')).retired).toContainEqual(expect.objectContaining({
       path: c.release.path, branch: c.release.branch, head: c.release.head, archiveDir: null, branchDeleted: true,
     }));
@@ -443,7 +436,6 @@ describeHeldCheckoutRecovery(() => {
         archiveDir: null, branchDeleted: true }),
     ]));
     expect(injected.policies).toEqual(policiesBefore);
-    expect(await archives()).toEqual([]);
     expect(await readFile(join(shared, 'untouched'), 'utf8')).toBe('shared installation\n');
   });
 
@@ -467,7 +459,6 @@ describeHeldCheckoutRecovery(() => {
       expect(await lockText(c.release.path)).toBe(c.release.lockReason);
       expect((await execGit(['rev-parse', `refs/heads/${c.release.branch}`], repo)).stdout.trim()).toBe(c.release.head);
       expect(await readFile(join(c.path, 'ignored.txt'), 'utf8')).toBe('ignored work\n');
-      expect(await archives()).toEqual([]);
     });
 
   it('preserves the checkout and inventory when private administration is recreated behind an unchanged Git pointer', async () => {
@@ -503,7 +494,6 @@ describeHeldCheckoutRecovery(() => {
     expect(await lockText(c.path)).toBe(c.release.lockReason);
     expect((await execGit(['rev-parse', `refs/heads/${c.release.branch}`], repo)).stdout.trim()).toBe(c.release.head);
     expect(await registered(c.path)).toBe(true);
-    expect(await archives()).toEqual([]);
     const after = await getBranchReconcileOutcome('app-1');
     expect(after.remaining).toEqual(before.remaining);
     expect(after.retired).toEqual(before.retired);
@@ -539,7 +529,6 @@ describeHeldCheckoutRecovery(() => {
       expect(result.ok).toBe(false);
       expect(await registered(c.release.path)).toBe(true);
       expect(await lockText(c.release.path)).toBe(c.release.lockReason);
-      expect(await archives()).toEqual([]);
     });
   });
 
@@ -564,7 +553,6 @@ describeHeldCheckoutRecovery(() => {
     const prepared = await prepare();
     if (['human-handoff', 'active-owner'].includes(scenario)) {
       expect(prepared.ok).toBe(false);
-      expect(await archives()).toEqual([]);
       expect(await registered(c.path)).toBe(true);
       return;
     }
@@ -583,13 +571,11 @@ describeHeldCheckoutRecovery(() => {
     if (scenario !== 'confirmed') {
       expect(result).toMatchObject({ ok: false, reason: scenario === 'unconfirmed' ? 'retirement-supersession-not-accepted' : 'retirement-review-changed' });
       expect(await registered(c.path)).toBe(true);
-      expect(await archives()).toEqual([]);
       return;
     }
     expect(result).toMatchObject({ ok: true, branchDeleted: true });
     expect(result.archiveDir).toBeUndefined();
     expect(await registered(c.path)).toBe(false);
-    expect(await archives()).toEqual([]);
     expect((await getBranchReconcileOutcome('app-1')).retired).toEqual(expect.arrayContaining([expect.objectContaining({ head: c.release.head, archiveDir: null })]));
     expect((await execGit(['show', `${c.release.head}:feature.txt`], repo)).stdout).toBe('original feature\n');
   });
@@ -608,7 +594,6 @@ describeHeldCheckoutRecovery(() => {
     if (scenario !== 'confirmed') {
       expect(prepared.ok).toBe(false);
       expect(await registered(c.path)).toBe(true);
-      expect(await archives()).toEqual([]);
       return;
     }
     expect(prepared.ok).toBe(true);
@@ -617,7 +602,6 @@ describeHeldCheckoutRecovery(() => {
     expect(result.archiveDir).toBeUndefined();
     expect(await registered(c.path)).toBe(false);
     expect((await execGit(['rev-parse', publishedBranch], repo)).stdout.trim()).toBe(c.release.head);
-    expect(await archives()).toEqual([]);
   });
 
   it.each(['confirmed', 'owner-alias', 'missing-receipt', 'same-incarnation', 'human-handoff', 'active-owner', 'normal-completed', 'normal-invalid-time', 'normal-resumed-lineage', 'separate-incomplete', 'separate-retained-work', 'separate-same-incarnation', 'separate-replaced-pointer', 'separate-malformed-capture', 'separate-missing-receipt', 'separate-wrong-pr'])('keeps an original sibling obligation separate from a detached copy: %s', async scenario => {
@@ -762,7 +746,7 @@ describeHeldCheckoutRecovery(() => {
       const reason = scenario === 'human-handoff' ? 'pr-completion-human-handoff'
         : 'retirement-policy-not-legacy-completed';
       expect(prepared).toMatchObject({ ok: false, reason });
-      expect(await registered(path)).toBe(true); expect(await archives()).toEqual([]);
+      expect(await registered(path)).toBe(true);
       return;
     }
     expect(prepared.reason).toBeUndefined();
@@ -806,7 +790,6 @@ describeHeldCheckoutRecovery(() => {
       expect(copyReceipt.branch ?? null).toBeNull();
       expect(outcome.retired.some(row => row.path === namedPath)).toBe(false);
     }
-    expect(await archives()).toEqual([]);
   });
 
   it('preserves archive and checkout when fresh forge evidence changes after archiving', async () => {
@@ -817,7 +800,6 @@ describeHeldCheckoutRecovery(() => {
     expect(result).toMatchObject({ ok: false, reason: 'retirement-review-changed' });
     expect(result.archiveDir).toBeUndefined();
     expect(await readFile(join(c.path, 'feature.txt'), 'utf8')).toBe('original feature\n');
-    expect(await archives()).toEqual([]);
     expect(await registered(c.release.path)).toBe(true);
     expect(await lockText(c.release.path)).toBe(c.release.lockReason);
   });

@@ -15,6 +15,7 @@ import { musicVideoCreativeContext, musicVideoDirectorLook } from './musicVideoC
 import { shotCameraPrompt } from './cameraMovements.js';
 import { shotActionPrompt } from './musicVideoActionContract.js';
 import { approximateMotionCues } from './musicVideoShotTiming.js';
+import { productionMediumAddition } from './musicVideoProductionMedium.js';
 import { falHearsAudioReference, getFalVideoModel } from './falVideoModels.js';
 
 /**
@@ -73,6 +74,7 @@ function composeShotModelInput(project, scene, {
   const direction = asTyped ? [] : [
     addition('shot-direction', 'Shot direction', scene?.direction?.motionClause),
     addition('lighting-continuity', 'Lighting continuity', MOTION_CONTINUITY_CLAUSE),
+    productionMediumAddition(project),
   ];
   // A take that hears no audio cannot land a move on the downbeat; the shot card's camera stays as shown.
   const cameraSpec = !hears && !asTyped && scene?.camera?.onBeat ? { ...scene.camera, onBeat: false } : scene?.camera;
@@ -135,6 +137,7 @@ function composeFrameModelInput(project, scene, {
     addition('creative-context', 'Production bible', musicVideoCreativeContext(project?.concept, { look: musicVideoDirectorLook(project) })),
     addition('visual-direction', 'Palette and camera rules', visualDirection(project?.visualSpec)),
     ...(slot === 'end' ? [] : [addition('frame-direction', 'Frame direction', scene?.direction?.frameClause)]),
+    productionMediumAddition(project),
   ].filter(Boolean);
   const firstLine = [text, ...look.map((item) => item.text)].filter(Boolean).join(', ');
   if (slot === 'end') return { prompt: firstLine, promptAdditions: look };

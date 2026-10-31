@@ -402,7 +402,8 @@ export async function markMediaPoolAssets(id, keys, mark) {
 
 // ---- scene takes (#8965) ----
 // Append candidate takes to one scene: `{ scene, appended }`. A take fills its
-// slot only while the slot is empty — never replaces a selection (takes.js).
+// slot only while the slot is empty, unless `replaceSelection` names a still
+// re-render (takes.js). A locked still keeps its previous selection.
 export async function appendSceneTakes(id, sceneId, inputs) {
   const { appendSceneTakes: append } = await import('./takes.js');
   const outcome = await mutateProjectRecord(id, current => append(current, sceneId, inputs), {

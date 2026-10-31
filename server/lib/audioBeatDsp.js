@@ -146,8 +146,9 @@ export function fftInPlace(real, imaginary, plan) {
  * leading window only.
  *
  * @param {string} audioPath absolute path to the source audio
- * @param {{ signal?: AbortSignal, maxDurationSec?: number }} [opts]
- *   `maxDurationSec` overrides MAX_ANALYSIS_SEC — a test-only seam so the
+ * @param {{ signal?: AbortSignal, maxDurationSec?: number, channels?: 1|2 }} [opts]
+ *   `channels: 2` returns interleaved L/R samples (the beat-grid trust probe,
+ *   `stereoPhaseCancellation`); the default mixes to mono. `maxDurationSec` overrides MAX_ANALYSIS_SEC — a test-only seam so the
  *   truncation path can be exercised against a short fixture rather than a
  *   real multi-minute file; real callers should not pass it. Clamped to
  *   MAX_ANALYSIS_SEC — it can only shrink the decode window, never grow it,
@@ -156,7 +157,7 @@ export function fftInPlace(real, imaginary, plan) {
  *   result is `null`.
  * @returns {Promise<{ samples: Float32Array, sampleRate: number } | null>}
  */
-export async function decodeAudioToPcm(audioPath, { signal, maxDurationSec = MAX_ANALYSIS_SEC, timeoutMs = AUDIO_DECODE_TIMEOUT_MS } = {}) {
+export async function decodeAudioToPcm(audioPath, { signal, maxDurationSec = MAX_ANALYSIS_SEC, timeoutMs = AUDIO_DECODE_TIMEOUT_MS, channels = 1 } = {}) {
   if (typeof audioPath !== 'string' || !audioPath) return null;
   // A listener added to an already-aborted signal never fires, so without this
   // guard a pre-cancelled request (plausible off the request lifecycle, under a
@@ -177,7 +178,7 @@ export async function decodeAudioToPcm(audioPath, { signal, maxDurationSec = MAX
       '-v', 'error',
       '-i', audioPath,
       '-t', String(boundedDurationSec),
-      '-ac', '1',
+      '-ac', String(channels === 2 ? 2 : 1),
       '-ar', String(ANALYSIS_SAMPLE_RATE),
       '-f', 'f32le',
       '-acodec', 'pcm_f32le',
@@ -454,3 +455,132 @@ export function pickDownbeats(beats, onset, fps) {
   return downbeats;
 }
 
+
+// --- Beat-grid trust (#14240) -------------------------------------------------
+//
+// `fitBeats` lays an exactly even pulse train over the track, so a grid always
+// "exists" once a tempo is chosen. These measure whether that grid describes the
+// song: do onsets actually land on it, are they steady, and did the mono mix
+// itself cancel. The thresholds ARE the decision; manual tempo skips the gate.
+
+export const GRID_MIN_TEMPO_CONFIDENCE = 0.45;
+export const GRID_MIN_BEAT_CONTRAST = 1.2;
+export const GRID_MAX_BEAT_SPREAD = 0.15;
+export const PHASE_CANCELLATION_DB = 10;
+// Stereo probe length: enough to hear a cancelling mix, cheap to decode.
+export const PHASE_PROBE_SEC = 30;
+const BEAT_CONTRAST_CAP = 100;
+// A beat's own onset is searched within this fraction of a period either side.
+const BEAT_PEAK_WINDOW = 0.25;
+// A beat is evidence of steadiness only if its onset reaches this fraction of the strong beats'.
+const BEAT_SUPPORT_FRACTION = 0.25;
+
+const onsetAround = (onset, frame, radius) => {
+  let best = 0;
+  for (let k = Math.round(frame) - radius; k <= Math.round(frame) + radius; k++) {
+    if (k >= 0 && k < onset.length && onset[k] > best) best = onset[k];
+  }
+  return best;
+};
+
+/**
+ * Measure how well an even beat grid sits on the onset envelope.
+ * `beatContrast`: mean onset strength at beat frames over the mean halfway
+ * between them (low = the grid is not on accents). `beatSpread`: std/mean of
+ * the gaps between each beat's strongest nearby onset (high = not steady).
+ * Both are `null` when there are too few beats to measure.
+ *
+ * @param {Float32Array|number[]} onset onset envelope
+ * @param {number} fps envelope frames per second
+ * @param {number[]} beats beat times in seconds (already limited to the rhythmic window)
+ * @returns {{ beatContrast: number|null, beatSpread: number|null }}
+ */
+export function measureBeatGrid(onset, fps, beats) {
+  if (!onset?.length || !Array.isArray(beats) || beats.length < 4) return { beatContrast: null, beatSpread: null };
+  const periodFrames = ((beats[beats.length - 1] - beats[0]) / (beats.length - 1)) * fps;
+  if (!(periodFrames >= 2)) return { beatContrast: null, beatSpread: null };
+  let onBeat = 0;
+  let offBeat = 0;
+  let mids = 0;
+  const peaks = [];
+  const reach = Math.max(1, Math.floor(periodFrames * BEAT_PEAK_WINDOW));
+  for (let i = 0; i < beats.length; i++) {
+    const frame = beats[i] * fps;
+    onBeat += onsetAround(onset, frame, 1);
+    if (i + 1 < beats.length) {
+      offBeat += onsetAround(onset, (frame + beats[i + 1] * fps) / 2, 1);
+      mids += 1;
+    }
+    // Strongest onset near the beat; ties resolve toward the beat itself.
+    let peak = Math.round(frame);
+    let peakValue = -1;
+    for (let k = Math.round(frame) - reach; k <= Math.round(frame) + reach; k++) {
+      const value = onset[k] ?? 0;
+      if (value > peakValue + 1e-9 || (Math.abs(value - peakValue) <= 1e-9 && Math.abs(k - frame) < Math.abs(peak - frame))) {
+        peakValue = value;
+        peak = k;
+      }
+    }
+    peaks.push({ index: i, frame: peak, value: peakValue });
+  }
+  const onMean = onBeat / beats.length;
+  const offMean = mids ? offBeat / mids : 0;
+  const beatContrast = onMean <= 0 ? 0 : Math.min(BEAT_CONTRAST_CAP, onMean / Math.max(offMean, onMean / BEAT_CONTRAST_CAP));
+  // Only beats with a real onset nearby speak to steadiness: a beatless
+  // stretch (ambient intro) would otherwise contribute noise-peak jitter. Gaps
+  // across skipped beats are divided back down to one beat.
+  const floor = [...peaks].map((p) => p.value).sort((a, b) => a - b)[Math.floor(peaks.length * 0.9)] * BEAT_SUPPORT_FRACTION;
+  const supported = peaks.filter((p) => p.value >= floor && p.value > 0);
+  if (supported.length < 4) return { beatContrast: Number(beatContrast.toFixed(3)), beatSpread: null };
+  const gaps = supported.slice(1).map((p, i) => (p.frame - supported[i].frame) / (p.index - supported[i].index));
+  const meanGap = gaps.reduce((a, b) => a + b, 0) / gaps.length;
+  const variance = gaps.reduce((a, g) => a + (g - meanGap) ** 2, 0) / gaps.length;
+  const beatSpread = meanGap > 0 ? Math.sqrt(variance) / meanGap : null;
+  return {
+    beatContrast: Number(beatContrast.toFixed(3)),
+    beatSpread: beatSpread == null ? null : Number(beatSpread.toFixed(3)),
+  };
+}
+
+/**
+ * True when the mono mix `(L+R)/2` of interleaved stereo is more than
+ * `PHASE_CANCELLATION_DB` below the louder channel (out-of-phase content that
+ * the mono decode would silently cancel). Silence is never cancellation.
+ *
+ * @param {Float32Array} interleaved L,R,L,R… samples
+ */
+export function stereoPhaseCancellation(interleaved) {
+  if (!interleaved || interleaved.length < 2) return false;
+  let left = 0;
+  let right = 0;
+  let mono = 0;
+  const frames = Math.floor(interleaved.length / 2);
+  for (let i = 0; i < frames; i++) {
+    const l = interleaved[i * 2];
+    const r = interleaved[i * 2 + 1];
+    left += l * l;
+    right += r * r;
+    mono += ((l + r) / 2) ** 2;
+  }
+  const loudest = Math.max(left, right);
+  if (loudest / frames < 1e-10) return false;
+  return 10 * Math.log10(Math.max(mono, 1e-20) / loudest) < -PHASE_CANCELLATION_DB;
+}
+
+/**
+ * Decide whether the automatic grid may drive cut snapping. A manual tempo is
+ * the director's override and always wins. Returns `null` decision when there
+ * is no grid to judge.
+ *
+ * @returns {{ gridDecision: 'use'|'ignore'|null, gridReason: string|null }}
+ */
+export function decideBeatGrid({ tempoSource, hasBeats, tempoConfidence, beatContrast, beatSpread, phaseCancellation }) {
+  if (tempoSource === 'manual') return { gridDecision: 'use', gridReason: null };
+  if (!hasBeats) return { gridDecision: null, gridReason: null };
+  let reason = null;
+  if (phaseCancellation) reason = 'The stereo channels cancel in the mono mix';
+  else if (tempoConfidence != null && tempoConfidence < GRID_MIN_TEMPO_CONFIDENCE) reason = `Tempo confidence ${tempoConfidence} is low`;
+  else if (beatContrast != null && beatContrast < GRID_MIN_BEAT_CONTRAST) reason = `Beats do not land on accents (contrast ${beatContrast})`;
+  else if (beatSpread != null && beatSpread > GRID_MAX_BEAT_SPREAD) reason = `Tempo is not steady (beat spread ${beatSpread})`;
+  return reason ? { gridDecision: 'ignore', gridReason: reason } : { gridDecision: 'use', gridReason: null };
+}

@@ -159,8 +159,10 @@ export * from './scenePrompt.js';
 export * from './proseExportSettings.js';
 export * from './shotGrammar.js';
 export * from './storyboardScenes.js';
+export * from './previousShotNote.js';
 export * from './storyboardBeatExtract.js';
 export * from './storyboardFit.js';
+export * from './storyboardShotSync.js';
 export * from './storyboardRecipe.js';
 export * from './storyboardRecord.js';
 export * from './storyboardSongBrief.js';
@@ -222,6 +224,7 @@ export * from './agentApiToken.js';
 export * from './localReviewAttribution.js';
 export * from './localReviewBridge.js';
 export * from './localReviewLifecycle.js';
+export * from './lyricSectionSpans.js';
 export * from './agentCompletionMode.js';
 export * from './localEndpoint.js';
 export * from './localLlmConcurrency.js';
@@ -908,8 +911,10 @@ export * from './loopInterval.js';
 export * from './defaultRequestBody.js';
 
 export * from './musicVideoConditioning.js';
+export * from './musicVideoCastLook.js';
 export * from './musicVideoAspect.js';
 export * from './musicVideoMotion.js';
+export * from './musicVideoProductionMedium.js';
 export * from './musicVideoShotPrompt.js';
 
 export * from './musicVideoMediumPlan.js';
@@ -928,6 +933,7 @@ export * from './musicVideoCreditsOutro.js';
 export * from './musicVideoEnding.js';
 export * from './musicVideoTitleCard.js';
 export * from './musicVideoDependencies.js';
+export * from './musicVideoColdOpen.js';
 export * from './musicVideoEndFrame.js';
 export * from './musicVideoLocalModels.js';
 export * from './musicVideoHandoffFrame.js';
@@ -979,8 +985,8 @@ export * from './persistentMindAttachmentOwnership.js';
 
 export * from './credentialEnvVars.js';
 export * from './brainLinkLocalFields.js';
+export * from './brainBridgeSource.js';
 
-export * from './branchRetirementArchive.js';
 export * from './reconcileRetirementEvidence.js';
 export * from './legacyRetirementTransition.js';
 export * from './retirementCheckoutObservation.js';
@@ -1008,11 +1014,11 @@ export * from './executionOptions.js';
 export * from './providerExecutionOptions.js';
 export * from './catalogUniverseContext.js';
 
-export * from './npmRetirementPayload.js';
 export * from './videoLoraStageValidation.js';
 
 export * from './musicVideoGreybox.js';
 export * from './catalogRedesign.js';
+export * from './catalogDesign.js';
 
 export * from './testCacheRetirementProof.js';
 export * from './realityStarterV2.js';

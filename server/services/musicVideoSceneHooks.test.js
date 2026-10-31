@@ -68,7 +68,7 @@ describe('music-video scene completion hooks → takes', () => {
     // hook tests on that boundary, including direct selection of source plates.
     mkdirSync(join(TEST_DATA_ROOT, 'images'), { recursive: true });
     for (const name of ['newer', 'older', 'first', 'second', 'third', 'one', 'two', 'three',
-      'frame-a', 'frame-b', 'start', 'sketch', 'late', 'kept', 'frame']) {
+      'frame-a', 'frame-b', 'start', 'sketch', 'late', 'kept', 'frame', 'recast']) {
       writeFileSync(join(TEST_DATA_ROOT, 'images', `${name}.png`), 'synthetic image');
     }
     mkdirSync(join(TEST_DATA_ROOT, 'videos'), { recursive: true });
@@ -141,6 +141,22 @@ describe('music-video scene completion hooks → takes', () => {
     const stored = await sceneOf(project.id, scene.sceneId);
     expect(stored.referenceImageId).toBe('second.png');
     expect(stored.takes.map((t) => t.assetId)).toEqual(['first.png', 'second.png', 'third.png']);
+  });
+
+  // Uniquely catches a completion re-reading Casting, or a one-tap re-render leaving the old still selected.
+  it('records the cast inputs stamped at submit and replaces the selected frame only when asked', async () => {
+    const castInputs = { ingredientId: 'cat-example', guides: ['child.png'], sheets: [{ id: 'mvr-cs-character', imageId: 'sheet.png' }] };
+    mediaJobEvents.emit('completed', imageJob(project.id, scene.sceneId, 'first.png'));
+    await waitFor(() => emitted.length === 1);
+    const job = imageJob(project.id, scene.sceneId, 'recast.png');
+    job.params.musicVideo.castInputs = castInputs;
+    job.params.musicVideo.replaceSelection = true;
+    mediaJobEvents.emit('completed', job);
+    await waitFor(() => emitted.length === 2);
+    const stored = await sceneOf(project.id, scene.sceneId);
+    expect(stored.referenceImageId).toBe('recast.png');
+    expect(stored.takes.find((take) => take.assetId === 'recast.png').castInputs).toEqual(castInputs);
+    expect(stored.takes.find((take) => take.assetId === 'first.png')).not.toHaveProperty('castInputs');
   });
 
   it('a completion racing a director selection loses neither (one write tail on the file store)', async () => {

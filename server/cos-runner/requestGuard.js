@@ -1,6 +1,5 @@
-import { isBrowserRequest } from '../../lib/portosAuthCore.js';
+import { isBrowserRequest, isLoopbackHostname } from '../../lib/portosAuthCore.js';
 
-const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
 const WILDCARD_HOSTS = new Set(['0.0.0.0', '::', '*']);
 
 // Parse an authority, not a URL: userinfo, paths and malformed ports must not
@@ -16,7 +15,7 @@ export const runnerRequestRefusal = (req, { host = process.env.HOST } = {}) => {
   if (isBrowserRequest(req)) return 'BROWSER_REQUEST_REJECTED';
   const requestedHost = hostname(req.headers?.host);
   const configuredHost = hostname(host);
-  if (requestedHost && (LOOPBACK_HOSTS.has(requestedHost)
+  if (requestedHost && (isLoopbackHostname(requestedHost)
     || (configuredHost && !WILDCARD_HOSTS.has(configuredHost) && requestedHost === configuredHost))) return null;
   return 'HOST_NOT_ALLOWED';
 };

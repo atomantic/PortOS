@@ -5,7 +5,7 @@
  * and directly owned tests. Hosted CI keeps its broad impact plan.
  * `--full` opts into that CI plan locally, including selected resource suites.
  * `--guards-only [--merged-with <ref>]` retains current-base merge safety.
- * Receipts describe the exact tree and coverage; focused results never attest
+ * Receipts describe the exact tree and coverage; focused results are local evidence only and never replace
  * CI suites. Cancellation still settles every owned stage process group.
  */
 
@@ -454,7 +454,7 @@ async function withMergedPregateTree(repoRoot, mergedWith, run) {
 export const USAGE = `Usage: node scripts/pregate.js [--base <ref>] [--full] [--skip-lint] [--plan-only]
                               [--skip-db] [--skip-browser] [--skip-build] [--skip-smoke]
 
-  --guards-only  run only always-run and diff-selected structural guards (no attestation receipt)
+  --guards-only  run only always-run and diff-selected structural guards
   --merged-with <ref>  validate HEAD merged with this fetched ref in an isolated temporary repository
   --base <ref>    compare against <ref> instead of the remote default branch
   --full          opt into CI-selected broad suites locally
@@ -701,6 +701,123 @@ async function probeResourceSuites(plan, { options, downgraded }) {
   return { prerequisites, databaseEnv };
 }
 
+/**
+ * Map a runStage outcome onto the stage record: marks `result` failed (with its
+ * signal or exit code) and returns the failure line and process exit code, or
+ * null when the stage passed. Exit codes are 128 + signal for cancellation and
+ * child signals, otherwise the stage status (1 when unavailable).
+ */
+function stageOutcomeVerdict(result, outcome) {
+  if (outcome.interrupted) {
+    result.status = 'failed';
+    result.signal = outcome.interrupted;
+    return {
+      failure: outcome.settled
+        ? `❌ Pregate incomplete: stage="${result.name}" cancelled by ${outcome.interrupted}; its process group has exited.`
+        : `❌ Pregate incomplete: stage="${result.name}" cancelled by ${outcome.interrupted}; owned process group settlement unverified (${outcome.reason}).`,
+      exitCode: 128 + constants.signals[outcome.interrupted],
+    };
+  }
+  if (outcome.unsettled) {
+    result.status = 'failed';
+    return { failure: `❌ ${result.name} left processes in its group that could not be stopped (${outcome.unsettled}).`, exitCode: 1 };
+  }
+  if (outcome.error) {
+    result.status = 'failed';
+    return { failure: `❌ ${result.name} could not start: ${outcome.error.message}`, exitCode: 1 };
+  }
+  if (outcome.signal) {
+    result.status = 'failed';
+    result.signal = outcome.signal;
+    return {
+      failure: `❌ Pregate incomplete: stage="${result.name}" owner_pid=${process.pid} child_pid=${outcome.pid} child_signal=${outcome.signal}.`,
+      exitCode: constants.signals[outcome.signal] ? 128 + constants.signals[outcome.signal] : 1,
+    };
+  }
+  if (outcome.status !== 0) {
+    result.status = 'failed';
+    result.exitCode = outcome.status;
+    return {
+      failure: `❌ ${result.name} failed after ${formatDuration(result.durationMs)} — fix it before pushing (CI would fail the same way).`,
+      exitCode: outcome.status ?? 1,
+    };
+  }
+  return null;
+}
+
+/** Print each dependency-consistency problem with the re-link or reconcile hint that fits its checkout. */
+function reportDependencyProblems(problems) {
+  let primaryCheckout = null;
+  try {
+    const gitCommonDir = git(['rev-parse', '--git-common-dir']);
+    const gitDir = git(['rev-parse', '--git-dir']);
+    if (resolve(REPO_ROOT, gitCommonDir) !== resolve(REPO_ROOT, gitDir)) {
+      primaryCheckout = resolve(REPO_ROOT, gitCommonDir, '..');
+    }
+  } catch {
+    // ignore git error
+  }
+
+  console.error('❌ Dependency consistency preflight failed; lint/tests have not run.');
+  for (const { label, linked, owner, directoryAvailable, issues } of problems) {
+    console.error(`  ${label} (${linked ? 'linked' : 'owned'} node_modules):\n${issues.map(issue => `    ${issue}`).join('\n')}`);
+    if (primaryCheckout && (!linked || !directoryAvailable)) {
+      console.error(`    Worktree dependency dir is missing or unlinked for ${label}. Re-link with: node scripts/link-worktree-deps.js ${primaryCheckout} ${REPO_ROOT}`);
+    } else {
+      const home = homedir();
+      const displayOwner = owner === home ? '~' : owner.startsWith(`${home}${sep}`) ? `~${owner.slice(home.length)}` : owner;
+      console.error(linked
+        ? `    Reconcile dependencies in the owning source checkout (${JSON.stringify(displayOwner)}), with a full development install (npm ci --include=dev), or validate in a separate clone with its own locked installs. Never run npm install/ci through worktree links.`
+        : `    Reconcile this checkout's dependencies from its committed lockfiles (npm ci --include=dev in the owning workspace), then rerun pregate.`);
+    }
+  }
+}
+
+/** Run the CI planner against the changed files and return its raw step outputs; exits 2 when it fails. */
+function runCiTestPlan(baseSha, changedFiles) {
+  const planned = spawnSync(process.execPath, [join(REPO_ROOT, 'scripts', 'ci-test-plan.js')], {
+    cwd: REPO_ROOT,
+    encoding: 'utf8',
+    // The planner writes step outputs when Actions' env is present; stripping
+    // it keeps a local run from appending to a stale $GITHUB_OUTPUT file.
+    env: {
+      ...process.env,
+      CI_BASE_SHA: baseSha,
+      CI_CHANGED_FILES: JSON.stringify(changedFiles),
+      CI_FORCE_FULL: 'false',
+      CI_BASE_REF: '',
+      GITHUB_OUTPUT: '',
+      GITHUB_STEP_SUMMARY: '',
+    },
+  });
+  if (planned.status !== 0) {
+    console.error(`❌ ci-test-plan.js failed: ${planned.stderr || planned.error?.message || 'unknown error'}`);
+    process.exit(2);
+  }
+  return JSON.parse(planned.stdout);
+}
+
+/** Decode the planner's step outputs (JSON-encoded lists) into the plan shape the stages consume. */
+function pregatePlanFromRaw(raw) {
+  return {
+    full: raw.full,
+    reason: raw.reason,
+    server: { mode: raw.server_mode, files: JSON.parse(raw.server_files), sources: JSON.parse(raw.server_sources) },
+    client: { mode: raw.client_mode, files: JSON.parse(raw.client_files), sources: JSON.parse(raw.client_sources) },
+    lint: { mode: raw.lint_mode, files: JSON.parse(raw.lint_files) },
+    browser: { files: JSON.parse(raw.browser_files ?? '[]') },
+    db: raw.db,
+    windows: raw.windows,
+    build: raw.build,
+    smoke: raw.smoke,
+    promptHistory: raw.prompt_history,
+    linuxContainment: raw.linux_containment,
+    supercolliderLive: raw.supercollider_live,
+    dockerContainmentLive: raw.docker_containment_live,
+    suiteReasons: JSON.parse(raw.suite_reasons ?? '{}'),
+  };
+}
+
 async function main() {
   let options;
   try {
@@ -762,44 +879,8 @@ async function main() {
     console.log(`📝 Included ${workingTreeFiles.length} uncommitted changed file(s) in this plan.`);
   }
 
-  const planned = spawnSync(process.execPath, [join(REPO_ROOT, 'scripts', 'ci-test-plan.js')], {
-    cwd: REPO_ROOT,
-    encoding: 'utf8',
-    // The planner writes step outputs when Actions' env is present; stripping
-    // it keeps a local run from appending to a stale $GITHUB_OUTPUT file.
-    env: {
-      ...process.env,
-      CI_BASE_SHA: baseSha,
-      CI_CHANGED_FILES: JSON.stringify(changedFiles),
-      CI_FORCE_FULL: 'false',
-      CI_BASE_REF: '',
-      GITHUB_OUTPUT: '',
-      GITHUB_STEP_SUMMARY: '',
-    },
-  });
-  if (planned.status !== 0) {
-    console.error(`❌ ci-test-plan.js failed: ${planned.stderr || planned.error?.message || 'unknown error'}`);
-    process.exit(2);
-  }
-
-  const raw = JSON.parse(planned.stdout);
-  let plan = {
-    full: raw.full,
-    reason: raw.reason,
-    server: { mode: raw.server_mode, files: JSON.parse(raw.server_files), sources: JSON.parse(raw.server_sources) },
-    client: { mode: raw.client_mode, files: JSON.parse(raw.client_files), sources: JSON.parse(raw.client_sources) },
-    lint: { mode: raw.lint_mode, files: JSON.parse(raw.lint_files) },
-    browser: { files: JSON.parse(raw.browser_files ?? '[]') },
-    db: raw.db,
-    windows: raw.windows,
-    build: raw.build,
-    smoke: raw.smoke,
-    promptHistory: raw.prompt_history,
-    linuxContainment: raw.linux_containment,
-    supercolliderLive: raw.supercollider_live,
-    dockerContainmentLive: raw.docker_containment_live,
-    suiteReasons: JSON.parse(raw.suite_reasons ?? '{}'),
-  };
+  const raw = runCiTestPlan(baseSha, changedFiles);
+  let plan = pregatePlanFromRaw(raw);
   console.log(`📋 ${raw.changed_files.length} changed file(s) — ${plan.reason}.`);
 
   const downgraded = !options.full && !options.guardsOnly;
@@ -839,30 +920,7 @@ async function main() {
 
   const dependencyProblems = dependencyConsistencyProblems(REPO_ROOT);
   if (dependencyProblems.length > 0) {
-    let primaryCheckout = null;
-    try {
-      const gitCommonDir = git(['rev-parse', '--git-common-dir']);
-      const gitDir = git(['rev-parse', '--git-dir']);
-      if (resolve(REPO_ROOT, gitCommonDir) !== resolve(REPO_ROOT, gitDir)) {
-        primaryCheckout = resolve(REPO_ROOT, gitCommonDir, '..');
-      }
-    } catch {
-      // ignore git error
-    }
-
-    console.error('❌ Dependency consistency preflight failed; lint/tests have not run.');
-    for (const { label, linked, owner, directoryAvailable, issues } of dependencyProblems) {
-      console.error(`  ${label} (${linked ? 'linked' : 'owned'} node_modules):\n${issues.map(issue => `    ${issue}`).join('\n')}`);
-      if (primaryCheckout && (!linked || !directoryAvailable)) {
-        console.error(`    Worktree dependency dir is missing or unlinked for ${label}. Re-link with: node scripts/link-worktree-deps.js ${primaryCheckout} ${REPO_ROOT}`);
-      } else {
-        const home = homedir();
-        const displayOwner = owner === home ? '~' : owner.startsWith(`${home}${sep}`) ? `~${owner.slice(home.length)}` : owner;
-        console.error(linked
-          ? `    Reconcile dependencies in the owning source checkout (${JSON.stringify(displayOwner)}), with a full development install (npm ci --include=dev), or validate in a separate clone with its own locked installs. Never run npm install/ci through worktree links.`
-          : `    Reconcile this checkout's dependencies from its committed lockfiles (npm ci --include=dev in the owning workspace), then rerun pregate.`);
-      }
-    }
+    reportDependencyProblems(dependencyProblems);
     process.exit(1);
   }
   console.log('✅ Dependency consistency preflight passed (installed package versions match workspace locks).');
@@ -922,31 +980,9 @@ async function main() {
     const started = Date.now();
     const outcome = await runStage(result, owner);
     result.durationMs = Date.now() - started;
-    if (outcome.interrupted) {
-      result.status = 'failed';
-      result.signal = outcome.interrupted;
-      failure = outcome.settled
-        ? `❌ Pregate incomplete: stage="${result.name}" cancelled by ${outcome.interrupted}; its process group has exited.`
-        : `❌ Pregate incomplete: stage="${result.name}" cancelled by ${outcome.interrupted}; owned process group settlement unverified (${outcome.reason}).`;
-      exitCode = 128 + constants.signals[outcome.interrupted];
-    } else if (outcome.unsettled) {
-      result.status = 'failed';
-      failure = `❌ ${result.name} left processes in its group that could not be stopped (${outcome.unsettled}).`;
-      exitCode = 1;
-    } else if (outcome.error) {
-      result.status = 'failed';
-      failure = `❌ ${result.name} could not start: ${outcome.error.message}`;
-      exitCode = 1;
-    } else if (outcome.signal) {
-      result.status = 'failed';
-      result.signal = outcome.signal;
-      failure = `❌ Pregate incomplete: stage="${result.name}" owner_pid=${process.pid} child_pid=${outcome.pid} child_signal=${outcome.signal}.`;
-      exitCode = constants.signals[outcome.signal] ? 128 + constants.signals[outcome.signal] : 1;
-    } else if (outcome.status !== 0) {
-      result.status = 'failed';
-      result.exitCode = outcome.status;
-      failure = `❌ ${result.name} failed after ${formatDuration(result.durationMs)} — fix it before pushing (CI would fail the same way).`;
-      exitCode = outcome.status ?? 1;
+    const verdict = stageOutcomeVerdict(result, outcome);
+    if (verdict) {
+      ({ failure, exitCode } = verdict);
     } else {
       result.status = 'passed';
       result.exitCode = 0;

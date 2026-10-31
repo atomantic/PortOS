@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import ThreejsModels from './ThreejsModels';
@@ -118,7 +118,40 @@ describe('ThreejsModels', () => {
     expect(await screen.findByRole('button', { name: 'Pick alternate beacon' })).toBeInTheDocument();
   });
 
-  it('hides the family picker rather than showing an empty select when the fetch fails', async () => {
+  it('shows neither the select nor an error while the taxonomy read is in flight', async () => {
+    listThreejsModelFamilies.mockReturnValue(new Promise(() => {}));
+    render(
+      <MemoryRouter initialEntries={['/media/threejs?image=example-robot.png']}>
+        <ThreejsModels />
+      </MemoryRouter>,
+    );
+    // Let the model-list read settle inside act so its state update is not orphaned.
+    await act(async () => {});
+    expect(screen.queryByLabelText(/Subject family/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/failed to load/i)).not.toBeInTheDocument();
+  });
+
+  it('shows a failure with Retry instead of an empty select, and Retry restores the select', async () => {
+    listThreejsModelFamilies
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValueOnce(FAMILY_OPTIONS);
+    render(
+      <MemoryRouter initialEntries={['/media/threejs?image=example-robot.png']}>
+        <ThreejsModels />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText(/Subject families failed to load/)).toBeInTheDocument();
+    expect(screen.queryByLabelText(/Subject family/)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+
+    expect(await screen.findByLabelText(/Subject family/)).toBeInTheDocument();
+    expect(screen.queryByText(/failed to load/)).not.toBeInTheDocument();
+    expect(listThreejsModelFamilies).toHaveBeenCalledTimes(2);
+  });
+
+  it('still creates the model with the general family when the taxonomy read failed', async () => {
     // Creation must still work — it simply gets the general-purpose prompt.
     listThreejsModelFamilies.mockRejectedValue(new Error('offline'));
     createThreejsModel.mockResolvedValue({ id: 'threejs-example', status: 'generating' });
@@ -131,8 +164,7 @@ describe('ThreejsModels', () => {
       </MemoryRouter>,
     );
 
-    await waitFor(() => expect(listThreejsModelFamilies).toHaveBeenCalled());
-    expect(screen.queryByLabelText(/Subject family/)).not.toBeInTheDocument();
+    expect(await screen.findByText(/Subject families failed to load/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Generate model' }));
     await waitFor(() => expect(createThreejsModel).toHaveBeenCalledWith(
       expect.objectContaining({ family: 'general' }),

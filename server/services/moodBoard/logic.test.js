@@ -486,6 +486,13 @@ describe('appendImportedItems', () => {
     expect(next.items[1]).toMatchObject({ type: 'video', mediaKey: 'video:x-abc.mp4', imageUrl: '/data/images/poster.jpg' });
   });
 
+  it('defaults an untyped import to an image so its picture renders', () => {
+    const { board: next } = appendImportedItems(board(), [
+      { imageUrl: '/data/images/pinterest-a.jpg', source: 'https://www.pinterest.com/pin/1/' },
+    ]);
+    expect(next.items[0]).toMatchObject({ type: 'image', imageUrl: '/data/images/pinterest-a.jpg' });
+  });
+
   it('dedupes against existing item sources', () => {
     const existing = { ...board(), items: [{ id: 'mbi-x', type: 'image', source: 'https://x.com/i/status/1#0' }] };
     const { added, board: next } = appendImportedItems(existing, [

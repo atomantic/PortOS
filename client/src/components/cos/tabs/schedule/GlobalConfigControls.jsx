@@ -14,6 +14,7 @@ import { TASK_READINESS_REASON } from '../../../../../../server/lib/taskReadines
 import { useCodeReviewDefaults } from '../../../../hooks/useCodeReviewDefaults';
 import useReviewerModelOptions from '../../../../hooks/useReviewerModelOptions';
 import { reviewerModelsFromDefaults, reviewerEffortsFromDefaults } from '../../../../lib/reviewerModels';
+import { resolveTaskOptionalReviewers } from '../../../../lib/reviewerPins';
 import ToggleSwitch from '../../../ToggleSwitch';
 import useTaskModelPins from '../../../../hooks/useTaskModelPins';
 import { effectiveModelFor, selectableProviders } from '../../../../utils/providers';
@@ -911,7 +912,7 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
             <ReviewerPicker
               reviewers={config.taskMetadata?.reviewers ?? (config.taskMetadata?.reviewer ? [config.taskMetadata.reviewer] : reviewDefaults.reviewers)}
               usernames={config.taskMetadata?.usernames ?? reviewDefaults.usernames}
-              optionalReviewers={config.taskMetadata?.optionalReviewers ?? reviewDefaults.optionalReviewers}
+              optionalReviewers={resolveTaskOptionalReviewers(config.taskMetadata, reviewDefaults.optionalReviewers)}
               reviewerMaxRounds={config.taskMetadata?.reviewerMaxRounds ?? reviewDefaults.reviewerMaxRounds}
               // The task type's own pins when it has them, else the install's Code
               // Review Defaults (persisted as `<reviewer>Model` scalars).

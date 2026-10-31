@@ -34,6 +34,39 @@ describe('MediaImage', () => {
     expect(img.getAttribute('src')).toBe('/data/images/foo.png');
   });
 
+  it('shows the WebP derivative first and falls back to the original with `thumbnail`', () => {
+    render(<MediaImage thumbnail src="/data/images/tile.png" alt="tile" />);
+    expect(screen.getByAltText('tile').getAttribute('src')).toBe('/data/image-thumbnails/tile.webp');
+    fireEvent.error(screen.getByAltText('tile'));
+    expect(screen.getByAltText('tile').getAttribute('src')).toBe('/data/images/tile.png');
+    fireEvent.error(screen.getByAltText('tile'));
+    expect(screen.queryByAltText('tile')).toBeNull();
+  });
+
+  it('leaves a failed external URL as an image instead of the Syncing placeholder', () => {
+    render(<MediaImage src="https://example.com/pin.jpg" alt="pin" />);
+    fireEvent.error(screen.getByAltText('pin'));
+    expect(screen.getByAltText('pin').getAttribute('src')).toBe('https://example.com/pin.jpg');
+    expect(screen.queryByText(/Syncing/i)).toBeNull();
+    act(() => { emitAssetArrived({ filename: 'pin.jpg' }); });
+    expect(screen.getByAltText('pin').getAttribute('src')).toBe('https://example.com/pin.jpg');
+  });
+
+  it('swaps in a percent-encoded asset when peer sync reports its decoded filename', () => {
+    render(<MediaImage src="/data/images/board%20poster.png" alt="poster" />);
+    fireEvent.error(screen.getByAltText('poster'));
+    expect(screen.getByText(/Syncing/i)).toBeTruthy();
+    act(() => { emitAssetArrived({ filename: 'board poster.png' }); });
+    expect(screen.queryByText(/Syncing/i)).toBeNull();
+    expect(screen.getByAltText('poster').getAttribute('src')).toMatch(/^\/data\/images\/board%20poster\.png\?_t=/);
+  });
+
+  it('still shows Syncing for a peer-hosted /data/ asset on another origin', () => {
+    render(<MediaImage src="https://peer.example.com:5555/data/images/far.png" alt="far" />);
+    fireEvent.error(screen.getByAltText('far'));
+    expect(screen.getByText(/Syncing/i)).toBeTruthy();
+  });
+
   // Catches a thumbnail miss stranding a sheet that lives only under image-refs.
   it('walks a fallback chain in order before showing the placeholder', () => {
     render(<MediaImage src="/data/image-thumbnails/s.webp" fallbackSrc={['/data/images/s.png', '/data/image-refs/s.png']} alt="sheet" />);

@@ -1,64 +1,49 @@
 /**
- * Regression coverage for the #5605 structural guard: a suite that exercises
- * a route wired to `recordUserAction` without redirecting PATHS.data to a
- * temp root must fail loudly instead of writing user-action-events.json into
- * the repo's real data/ tree (the bug class #5594 patched per-suite for
- * cos.test.js / cosTaskRoutes.test.js / cosAgentFeedback.test.js).
+ * A test that reaches the operator-action ledger must not read or write the
+ * install's live data tree. In a CoS worktree the checkout's own data/ is
+ * intentionally disposable, so point PATHS.data at the protected install root
+ * rather than assuming the checkout and install roots are the same.
  *
- * Deliberately does NOT mock `../lib/fileUtils.js` — this is the one test in
- * the suite that is SUPPOSED to run with PATHS.data unredirected, so it can
- * prove the guard rejects that exact condition. If the guard regresses, this
- * would otherwise be the test that writes a real file into the repo's data/
- * tree, so it also asserts that never happens.
+ * Stub the file I/O as a backstop: if the guard regresses, these tests must
+ * fail without reading or changing the user's ledger.
  */
-import { describe, it, expect, afterEach } from 'vitest';
-import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { PATHS } from '../lib/fileUtils.js';
-import { listUserActions, recordUserAction } from './userActions.js';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
-const REAL_EVENTS_FILE = join(PATHS.data, 'user-action-events.json');
-
-// Snapshot ONCE, before any case runs. An install using the documented
-// MEMORY_BACKEND=file escape hatch may legitimately already have this file as
-// its real ledger, so every case must prove the guard leaves it untouched
-// rather than assert it is absent — and `afterEach` must put back exactly what
-// it found, including when a regression mutated the bytes.
-const EXISTED_BEFORE = existsSync(REAL_EVENTS_FILE);
-const CONTENT_BEFORE = EXISTED_BEFORE ? readFileSync(REAL_EVENTS_FILE, 'utf8') : null;
-
-/** The real tree must come back exactly as this file found it — present and byte-identical, or still absent. */
-function expectRealTreeUntouched() {
-  expect(existsSync(REAL_EVENTS_FILE)).toBe(EXISTED_BEFORE);
-  if (EXISTED_BEFORE) expect(readFileSync(REAL_EVENTS_FILE, 'utf8')).toBe(CONTENT_BEFORE);
-}
-
-afterEach(() => {
-  // Repair anything a GUARD REGRESSION did, never anything the developer had:
-  // delete only a file this run leaked, and restore only bytes this run changed.
-  if (!EXISTED_BEFORE) {
-    if (existsSync(REAL_EVENTS_FILE)) rmSync(REAL_EVENTS_FILE, { force: true });
-    return;
-  }
-  if (readFileSync(REAL_EVENTS_FILE, 'utf8') !== CONTENT_BEFORE) {
-    writeFileSync(REAL_EVENTS_FILE, CONTENT_BEFORE);
-  }
+vi.mock('../lib/fileUtils.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  const { join } = await import('node:path');
+  const { resolveCodeRootForModule } = await import('../lib/dataRoot.js');
+  const { _resolveGuardRoots } = await import('../lib/testDataIsolation.js');
+  const protectedRoot = _resolveGuardRoots(resolveCodeRootForModule(import.meta.url)).root;
+  const unexpectedIo = () => { throw new Error('Unexpected ledger file I/O'); };
+  return {
+    ...actual,
+    PATHS: { ...actual.PATHS, data: join(protectedRoot, 'guard-test') },
+    readJSONFile: vi.fn(unexpectedIo),
+    ensureDir: vi.fn(unexpectedIo),
+    atomicWrite: vi.fn(unexpectedIo),
+  };
 });
 
+import { atomicWrite, ensureDir, readJSONFile } from '../lib/fileUtils.js';
+import { listUserActions, recordUserAction } from './userActions.js';
+
+afterEach(() => vi.clearAllMocks());
+
 describe('user-action ledger — data-root guard (#5605)', () => {
-  it('recordUserAction throws instead of writing into the real data/ tree', async () => {
+  it('rejects a write to the protected data tree before touching the ledger', async () => {
     await expect(recordUserAction({
       type: 'cos.task.create',
       summary: 'Guard regression probe',
-      dedupeKey: `guard-probe-${Math.random().toString(36).slice(2)}`,
+      dedupeKey: 'guard-probe',
     })).rejects.toThrow(/real data\/ tree/);
-    expectRealTreeUntouched();
+    expect(readJSONFile).not.toHaveBeenCalled();
+    expect(ensureDir).not.toHaveBeenCalled();
+    expect(atomicWrite).not.toHaveBeenCalled();
   });
 
-  it('listUserActions throws instead of reading the real ledger', async () => {
-    // The read path matters too: those rows are machine-local operator records
-    // (privacy ADR), so an untethered suite must not pull them into the process.
+  it('rejects a read from the protected data tree before touching the ledger', async () => {
     await expect(listUserActions()).rejects.toThrow(/real data\/ tree/);
-    expectRealTreeUntouched();
+    expect(readJSONFile).not.toHaveBeenCalled();
   });
 });

@@ -81,7 +81,7 @@ export const TimelineBlock = memo(function TimelineBlock({
     <div
       ref={setNodeRef}
       style={style}
-      className={`relative shrink-0 h-20 rounded-md border-2 cursor-pointer transition-colors group ${
+      className={`relative shrink-0 h-20 rounded-md border-2 cursor-pointer select-none transition-colors group ${
         isMissing
           ? 'bg-port-error/20 border-port-error'
           : isSelected
@@ -110,8 +110,11 @@ export const TimelineBlock = memo(function TimelineBlock({
       <button
         type="button"
         onClick={(e) => { e.stopPropagation(); onRemove(clip._key); }}
-        onPointerDown={(e) => e.stopPropagation()}
-        className="absolute top-0 right-0 inline-flex min-w-[44px] min-h-[44px] items-start justify-end p-1 rounded opacity-40 lg:opacity-0 lg:group-hover:opacity-100 focus-visible:opacity-100 transition-opacity text-white group/remove"
+        // The editor's Mouse/Touch sensors activate on these, so a slow press
+        // on Remove must not start a reorder instead.
+        onMouseDown={(e) => e.stopPropagation()}
+        onTouchStart={(e) => e.stopPropagation()}
+        className="absolute top-0 right-0 inline-flex min-w-[44px] min-h-[44px] items-start justify-end p-1 rounded opacity-40 [@media(hover:hover)]:lg:opacity-0 lg:group-hover:opacity-100 focus-visible:opacity-100 transition-opacity text-white group/remove"
         title="Remove from timeline"
         aria-label={`Remove ${removeLabel} from timeline`}
       >

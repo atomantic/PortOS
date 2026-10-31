@@ -58,6 +58,7 @@ const catalogDB = await import('../services/catalogDB.js');
 const { createUniverse, getUniverse, updateUniverse } = await import('../services/universeBuilder.js');
 const { getUniverseMutationEpoch } = await import('../services/universeBuilder/store.js');
 const { setPrimitiveOwner } = await import('../services/catalogPrimitives.js');
+const { default: forkCanonMigration } = await import('../../scripts/migrations/452-fork-canon-membership.js');
 const catalogRouter = (await import('./catalog.js')).default;
 const sheetRouter = (await import('./catalogSheets.js')).default;
 
@@ -351,5 +352,53 @@ describe.skipIf(!runDb)('POST /api/catalog/scraps/:id/commit universe canon', ()
     expect(response.status).toBe(201);
     for (const ingredient of response.body.ingredients) ingredientIds.add(ingredient.id);
     expect((await getUniverse(universe.id)).characters).toEqual([]);
+  });
+});
+
+describe.skipIf(!runDb)('POST /api/catalog/ingredients/:id/fork canon membership', () => {
+  const fork = async (sourceId, body) => {
+    receiptKeys.add(body.operationKey);
+    const res = await request(app).post(`/api/catalog/ingredients/${sourceId}/fork`).send(body);
+    expect(res.status).toBe(201);
+    ingredientIds.add(res.body.id);
+    return res.body;
+  };
+
+  it('adds a forked character to its universe canon once, across a replay', async () => {
+    const universe = await makeUniverse();
+    const source = await createInUniverse(universe.id, { type: 'character', name: 'Ada Source', payload: { physicalDescription: 'Brass goggles.' } });
+    const body = { universeId: universe.id, name: 'Ada v2', operationKey: randomUUID() };
+    const created = await fork(source.id, body);
+    expect(await liveUniverseRefs(created.id)).toEqual(['canon-character', 'owner']);
+    const entries = () => getUniverse(universe.id).then((saved) => saved.characters.filter((entry) => entry.ingredientId === created.id));
+    expect(await entries()).toMatchObject([{ name: 'Ada v2', locked: false, physicalDescription: 'Brass goggles.' }]);
+    expect((await fork(source.id, body)).id).toBe(created.id);
+    expect(await entries()).toHaveLength(1);
+  });
+
+  it('migration 452 adds legacy owner-only forks to canon and leaves a removed membership removed', async () => {
+    const universe = await makeUniverse();
+    const source = await createInUniverse(universe.id, { type: 'character', name: 'Ada Legacy Source', payload: {} });
+    const legacy = async (name) => {
+      const record = await catalogDB.createIngredient({ type: 'character', name, payload: { locked: false }, tags: [] });
+      ingredientIds.add(record.id);
+      await setPrimitiveOwner(record.id, universe.id);
+      await query(`INSERT INTO catalog_ingredient_relations (from_id, to_id, kind) VALUES ($1, $2, 'forked-from')`, [record.id, source.id]);
+      return record;
+    };
+    const ownerOnly = await legacy('Ada Legacy Fork');
+    const removed = await legacy('Ada Removed Fork');
+    await request(app).post(`/api/catalog/ingredients/${removed.id}/link`).send({ refKind: 'universe', refId: universe.id, role: 'canon-character' });
+    await request(app).delete(`/api/catalog/ingredients/${removed.id}/link`).send({ refKind: 'universe', refId: universe.id, role: 'canon-character' });
+
+    const result = await forkCanonMigration.up();
+    expect(result.repaired).toBeGreaterThanOrEqual(1);
+    const saved = await getUniverse(universe.id);
+    expect(saved.characters.filter((entry) => entry.ingredientId === ownerOnly.id)).toMatchObject([{ name: 'Ada Legacy Fork', locked: false }]);
+    expect(saved.characters.filter((entry) => entry.ingredientId === removed.id)).toHaveLength(0);
+    expect(await liveUniverseRefs(ownerOnly.id)).toEqual(['canon-character', 'owner']);
+    expect(await liveUniverseRefs(removed.id)).toEqual(['owner']);
+    await forkCanonMigration.up();
+    expect((await getUniverse(universe.id)).characters.filter((entry) => entry.ingredientId === ownerOnly.id)).toHaveLength(1);
   });
 });

@@ -3,6 +3,8 @@ import { Link } from 'react-router';
 import { RefreshCw, AlertTriangle, Check } from 'lucide-react';
 import BrailleSpinner from '../BrailleSpinner';
 import toast from '../ui/Toast';
+import ListLoadError from '../ui/ListLoadError';
+import LoadFailedState from '../ui/LoadFailedState';
 import { getSettings, updateSettings } from '../../services/apiSystem';
 import { getLocalLlmStatus } from '../../services/apiLocalLlm';
 
@@ -34,28 +36,62 @@ export default function EmbeddingsTab() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [modelsLoading, setModelsLoading] = useState(false);
+  // Failed reads stay distinct from "disabled" settings and "no installed
+  // models": the settings failure blocks the form (no Save over unseen values),
+  // the model failure keeps the last list beside a retryable error.
+  const [settingsFailed, setSettingsFailed] = useState(false);
+  const [modelsError, setModelsError] = useState(null);
+  // A reachable status endpoint still reports a backend whose model list failed
+  // as `modelsError` beside an empty `models` array.
+  const [backendListErrors, setBackendListErrors] = useState({});
 
   const refreshModels = async () => {
     setModelsLoading(true);
-    const status = await getLocalLlmStatus({ silent: true }).catch(() => null);
-    setModels({
-      ollama: (status?.ollama?.models || []).map((m) => m.id || m.name),
-      lmstudio: (status?.lmstudio?.models || []).map((m) => m.id || m.name),
+    const status = await getLocalLlmStatus({ silent: true }).catch((error) => {
+      setModelsError(error instanceof Error ? error : new Error('Request failed'));
+      return null;
     });
+    if (status) {
+      setModelsError(null);
+      // A stopped backend (`available: false`) lists nothing without setting
+      // `modelsError`; both are "couldn't list", not "none installed".
+      const listErrors = {
+        ollama: status.ollama?.modelsError || (status.ollama?.available === false ? 'Ollama is not running' : null),
+        lmstudio: status.lmstudio?.modelsError || (status.lmstudio?.available === false ? 'LM Studio is not running' : null),
+      };
+      setBackendListErrors(listErrors);
+      const listed = (backend) => (status[backend]?.models || []).map((m) => m.id || m.name).filter(Boolean);
+      setModels((prev) => {
+        const next = { ...prev };
+        for (const backend of ['ollama', 'lmstudio']) {
+          const fresh = listed(backend);
+          // Keep the last list only when a failure came back empty; a partial
+          // (fallback) list is still the newest answer.
+          if (fresh.length > 0 || !listErrors[backend]) next[backend] = fresh;
+        }
+        return next;
+      });
+    }
     setModelsLoading(false);
   };
 
-  useEffect(() => {
-    (async () => {
-      const settings = await getSettings({ silent: true }).catch(() => null);
-      const cfg = settings?.embeddings || {};
-      setProvider(cfg.provider || 'none');
-      setModel(cfg.model || '');
-      setSaved({ provider: cfg.provider || 'none', model: cfg.model || '' });
-      setLoading(false);
-      refreshModels();
-    })();
-  }, []);
+  const loadSettings = async () => {
+    setLoading(true);
+    const settings = await getSettings({ silent: true }).catch(() => null);
+    setLoading(false);
+    if (!settings) {
+      setSettingsFailed(true);
+      return;
+    }
+    setSettingsFailed(false);
+    const cfg = settings.embeddings || {};
+    setProvider(cfg.provider || 'none');
+    setModel(cfg.model || '');
+    setSaved({ provider: cfg.provider || 'none', model: cfg.model || '' });
+    refreshModels();
+  };
+
+  useEffect(() => { loadSettings(); }, []);
 
   const candidateModels = useMemo(() => {
     if (provider === 'none') return [];
@@ -70,6 +106,9 @@ export default function EmbeddingsTab() {
     }
     return out;
   }, [provider, models]);
+
+  const modelsLoadError = modelsError
+    || (backendListErrors[provider] ? new Error(String(backendListErrors[provider])) : null);
 
   const dirty = provider !== saved.provider || (model || '') !== (saved.model || '');
 
@@ -87,6 +126,15 @@ export default function EmbeddingsTab() {
   };
 
   if (loading) return <BrailleSpinner text="Loading embeddings settings" />;
+  if (settingsFailed) {
+    return (
+      <LoadFailedState
+        title="Could not load embeddings settings"
+        hint="The saved provider and model are unknown, so they can't be edited until they load."
+        onRetry={loadSettings}
+      />
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -152,7 +200,10 @@ export default function EmbeddingsTab() {
               <option key={m} value={m} />
             ))}
           </datalist>
-          {candidateModels.length === 0 && !modelsLoading && (
+          {modelsLoadError && (
+            <ListLoadError what="installed models" error={modelsLoadError} onRetry={refreshModels} retrying={modelsLoading} />
+          )}
+          {candidateModels.length === 0 && !modelsLoading && !modelsLoadError && (
             <div className="flex items-start gap-2 text-xs text-amber-400">
               <AlertTriangle size={14} className="mt-0.5 flex-shrink-0" />
               <span>

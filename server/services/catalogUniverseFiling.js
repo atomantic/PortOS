@@ -154,6 +154,15 @@ const schedule = (event) => {
   if (!timer) timer = setTimeout(flush, FILING_DELAY_MS);
 };
 
+// Shutdown drain (the restart window): runs a debounced batch now instead of
+// letting its timer die with the process, then resolves once the pass settles.
+// Idle when nothing is pending or running.
+export async function flushCatalogUniverseFiling() {
+  if (timer) { clearTimeout(timer); timer = null; }
+  if (pending.size) flush();
+  await running;
+}
+
 export function initCatalogUniverseFiling() {
   if (initialized) return;
   initialized = true;
@@ -171,8 +180,5 @@ export const __testing = {
     timer = null;
     pending.clear();
   },
-  async flushNow() {
-    if (timer) { clearTimeout(timer); flush(); }
-    await running;
-  },
+  flushNow: flushCatalogUniverseFiling,
 };

@@ -31,6 +31,8 @@ import { cueWordOnsets, hookKey, hookLines } from './hookTypography.js';
 const EPS = 1e-6;
 const MIN_PIECE_SEC = 0.4;
 const WORD_SNAP_SEC = 0.08;
+// Pacing period when the analysis grid is ignored and no tempo is trusted.
+const IGNORED_GRID_PERIOD_SEC = 0.5;
 // Energy rank (0 = quietest section, 1 = loudest) → shot length in beats.
 const TIERS = Object.freeze([[0.75, 2], [0.4, 3], [0.15, 4], [0, 8]]);
 
@@ -186,7 +188,7 @@ function insertGraphicCards(clips, ranked, period, lyricCues, accentColor, locke
 function sliceClip(clip, offset, length) {
   const duration = round3(length);
   // A still's image effect picks up where the piece before it left off.
-  if (clip.layer === 'still') return { ...clip, inSec: 0, outSec: duration, duration, sourceSec: duration, ...(clip.effect ? { effectAtSec: round3((clip.effectAtSec || 0) + offset) } : {}) };
+  if (clip.layer === 'still') return { ...clip, inSec: 0, outSec: duration, duration, sourceSec: duration, ...(clip.effect || clip.photoSequence ? { effectAtSec: round3((clip.effectAtSec || 0) + offset) } : {}) };
   const inSec = round3(clip.inSec + offset);
   return { ...clip, inSec, outSec: round3(inSec + duration), duration,
     ...(clip.loop === false ? { sourceSec: round3(clip.inSec + (clip.sourceSec ?? clip.duration) - inSec) } : {}) };
@@ -197,15 +199,19 @@ function sliceClip(clip, offset, length) {
  * order). `scenes` supply each clip's shot mode; `sections` (with `energy`),
  * `beats`/`bpm` and sung `words` (`[{ startSec }]`) drive the pacing.
  * Returns a new clip list; the input is returned as-is when there is no beat
- * grid to cut on.
+ * grid to cut on. `gridDecision: 'ignore'` (#14240) drops an untrustworthy
+ * beat grid: pacing still follows section energy and sung words at the
+ * analysis tempo (else a 120 BPM default), but no cut is placed on a beat.
  */
-export function intercutClips(clips, { scenes = [], sections = [], beats = [], bpm = null, words = [], lyricCues = [], graphicCards = false, accentColor = null, lockedSceneIds = [] } = {}) {
+export function intercutClips(clips, { scenes = [], sections = [], beats = [], bpm = null, gridDecision = null, words = [], lyricCues = [], graphicCards = false, accentColor = null, lockedSceneIds = [], loudTierEverywhere = false } = {}) {
   const locked = new Set(lockedSceneIds);
   const list = Array.isArray(clips) ? clips : [];
-  const grid = (Array.isArray(beats) ? beats : []).filter(finite).sort((a, b) => a - b);
-  const period = beatPeriod(bpm, grid);
-  const ranked = sectionRanks(Array.isArray(sections) ? sections : []);
-  if (!period || !grid.length || !ranked.length || !list.length) return list;
+  const gridIgnored = gridDecision === 'ignore';
+  const grid = gridIgnored ? [] : (Array.isArray(beats) ? beats : []).filter(finite).sort((a, b) => a - b);
+  const period = gridIgnored ? (finite(bpm) && bpm > 0 ? 60 / bpm : IGNORED_GRID_PERIOD_SEC) : beatPeriod(bpm, grid);
+  // The beat-graphic medium (#14244) cuts every section on the loud tier.
+  const ranked = sectionRanks(Array.isArray(sections) ? sections : []).map((s) => (loudTierEverywhere ? { ...s, rank: 1 } : s));
+  if (!period || (!grid.length && !gridIgnored) || !ranked.length || !list.length) return list;
   const halfGrid = [];
   for (let i = 0; i < grid.length; i += 1) {
     halfGrid.push(grid[i]);
@@ -263,7 +269,7 @@ export function intercutClips(clips, { scenes = [], sections = [], beats = [], b
       const len = round3(bounds[k + 1] - a);
       const partner = k % 2 === 1 ? takePartner(host, len, bounds[k + 1]) : null;
       if (partner) { out.push(partner); continue; }
-      if (still) { out.push({ ...clip, inSec: 0, outSec: len, duration: len, sourceSec: len, ...(clip.effect ? { effectAtSec: round3(a - t0) } : {}) }); continue; }
+      if (still) { out.push({ ...clip, inSec: 0, outSec: len, duration: len, sourceSec: len, ...(clip.effect || clip.photoSequence ? { effectAtSec: round3(a - t0) } : {}) }); continue; }
       // The host keeps its own continuous time (a performance stays in sync).
       const inSec = round3(clip.inSec + (a - t0));
       out.push({ ...clip, inSec, outSec: round3(inSec + len), duration: len, ...(clip.loop === false ? { sourceSec: round3(clip.inSec + (clip.sourceSec ?? clip.duration) - inSec) } : {}) });

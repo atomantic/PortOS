@@ -50,6 +50,134 @@ export const IMAGE_EFFECT_DEVELOP_SECS = Object.freeze([1, 2, 3, 4, 6, 8]);
 export const DEFAULT_IMAGE_EFFECT_SEC = 3;
 export const IMAGE_EFFECT_SEC_RANGE = Object.freeze({ min: 0.5, max: 30 });
 
+export const PHOTO_SEQUENCE_LIMIT = 16;
+export const PHOTO_SEQUENCE_DEFAULT_FRAMES = 6;
+export const PHOTO_SEQUENCE_RATES = Object.freeze(['frames', 'beat', 'half']);
+/** How long (frames) an outgoing photo stays beneath the photos after it; 0 is a plain sequence. */
+export const PHOTO_SEQUENCE_OVERLAP_MAX_FRAMES = 240;
+/**
+ * A laid-out photo is drawn whole (fitted inside the frame) at `scale`, its centre
+ * offset by `x`/`y` frame widths/heights, turned `rotation` degrees clockwise, at
+ * `opacity`. A photo without a layout fills the frame as an ordinary still does.
+ */
+export const PHOTO_LAYOUT_RANGES = Object.freeze({
+  x: Object.freeze({ min: -0.5, max: 0.5 }),
+  y: Object.freeze({ min: -0.5, max: 0.5 }),
+  scale: Object.freeze({ min: 0.2, max: 1.5 }),
+  rotation: Object.freeze({ min: -45, max: 45 }),
+  opacity: Object.freeze({ min: 0.05, max: 1 }),
+});
+export const DEFAULT_PHOTO_LAYOUT = Object.freeze({ x: 0, y: 0, scale: 1, rotation: 0, opacity: 1 });
+
+// A restrained pile of prints: slightly smaller than the frame, a few degrees off
+// square, offset no further than an eighth of the frame.
+const PHOTO_STACK = [
+  { x: -0.1, y: -0.06, scale: 0.62, rotation: -4 },
+  { x: 0.09, y: -0.04, scale: 0.6, rotation: 3 },
+  { x: -0.05, y: 0.07, scale: 0.62, rotation: 2 },
+  { x: 0.11, y: 0.06, scale: 0.58, rotation: -3 },
+  { x: 0, y: 0, scale: 0.64, rotation: -1 },
+  { x: -0.12, y: 0.02, scale: 0.6, rotation: 5 },
+  { x: 0.06, y: -0.08, scale: 0.6, rotation: -2 },
+  { x: 0.02, y: 0.08, scale: 0.6, rotation: 4 },
+];
+
+/** The photo-stack starting layout for `count` photos. */
+export const photoStackLayouts = (count) => Array.from({ length: count }, (_, i) => ({ ...PHOTO_STACK[i % PHOTO_STACK.length], opacity: 1 }));
+
+const clampTo = (value, { min, max }, fallback) => Number.isFinite(value) ? Math.min(max, Math.max(min, value)) : fallback;
+
+/** A stored layout clamped to its ranges; null keeps the photo full frame. */
+function normalizePhotoLayout(layout) {
+  if (!layout || typeof layout !== 'object') return null;
+  return Object.fromEntries(Object.entries(PHOTO_LAYOUT_RANGES).map(([key, range]) => [key, clampTo(layout[key], range, DEFAULT_PHOTO_LAYOUT[key])]));
+}
+
+/** Compile a still's photo changes onto the absolute song-frame grid. */
+export function scenePhotoSequence(scene, { fps = 24, beats = [] } = {}) {
+  const sequence = scene?.photoSequence;
+  if (scene?.visualLayer !== 'still' || !sequence || sequence.enabled === false) return null;
+  const startFrame = Math.round((scene.startSec || 0) * fps);
+  const intervalFrames = sequence.intervalFrames || PHOTO_SEQUENCE_DEFAULT_FRAMES;
+  const rate = PHOTO_SEQUENCE_RATES.includes(sequence.rate) ? sequence.rate : 'frames';
+  const grid = [...new Set((Array.isArray(beats) ? beats : []).filter(Number.isFinite))].sort((a, b) => a - b);
+  const points = rate === 'half' ? grid.flatMap((b, i) => i + 1 < grid.length ? [b, (b + grid[i + 1]) / 2] : [b]) : grid;
+  const switchFrames = rate !== 'frames' && grid.length
+    ? [...new Set(points.map(t => Math.round(t * fps) - startFrame).filter(f => f > 0 && f < Math.round((scene.endSec || 0) * fps) - startFrame))]
+    : null;
+  const imageIds = sequence.imageIds || [];
+  const overlapFrames = clampTo(Math.round(sequence.overlapFrames), { min: 0, max: PHOTO_SEQUENCE_OVERLAP_MAX_FRAMES }, 0);
+  const layouts = imageIds.map((_, i) => normalizePhotoLayout(sequence.layouts?.[i]));
+  return { imageIds, intervalFrames, rate, startFrame, switchFrames, overlapFrames, layouts,
+    // A stacked sequence composes several photos per frame; a plain one shows one at a time.
+    stacked: overlapFrames > 0 || layouts.some(Boolean) };
+}
+
+const sequenceFrame = (sequence, t, fps) => Math.max(0, Math.floor(t * fps + 1e-6) - sequence.startFrame);
+
+function photoSequenceStep(sequence, frame) {
+  if (!sequence.switchFrames) return Math.floor(frame / sequence.intervalFrames);
+  let lo = 0; let hi = sequence.switchFrames.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (sequence.switchFrames[mid] <= frame) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
+/** The shot-relative frame a step's photo arrives on (Infinity past the last beat). */
+function photoStepStart(sequence, step) {
+  if (step <= 0) return 0;
+  if (!sequence.switchFrames) return step * sequence.intervalFrames;
+  return sequence.switchFrames[step - 1] ?? Infinity;
+}
+
+/** Pure selection at song time; shared by scrubbing, Canvas and ffmpeg planning. */
+export function photoSequenceIndex(sequence, t, { fps = 24 } = {}) {
+  return photoSequenceStep(sequence, sequenceFrame(sequence, t, fps)) % Math.max(1, sequence.imageIds.length);
+}
+
+/**
+ * The photos visible at song time, bottom to top: the current one plus every
+ * earlier one still inside its overlap. Sequence order decides the stacking, so
+ * a newer photo always lies over an older one (a repeated photo appears once per
+ * arrival).
+ */
+export function photoSequenceLayers(sequence, t, { fps = 24 } = {}) {
+  const frame = sequenceFrame(sequence, t, fps);
+  const count = Math.max(1, sequence.imageIds.length);
+  const current = photoSequenceStep(sequence, frame);
+  const layer = (step) => ({ step, index: step % count, layout: sequence.layouts?.[step % count] || null });
+  const layers = [layer(current)];
+  for (let step = current - 1; step >= 0 && frame < photoStepStart(sequence, step + 1) + (sequence.overlapFrames || 0); step--) layers.unshift(layer(step));
+  return layers;
+}
+
+/** The most photos a sequence ever shows at once (a client sizes its layer pool by it). */
+export function photoSequenceMaxLayers(sequence) {
+  const gaps = sequence.switchFrames?.length
+    ? sequence.switchFrames.map((f, i) => f - (i ? sequence.switchFrames[i - 1] : 0))
+    : [sequence.intervalFrames];
+  return 1 + Math.ceil((sequence.overlapFrames || 0) / Math.max(1, Math.min(...gaps)));
+}
+
+/**
+ * Every arrival whose photo is visible within shot-relative frames [from, to):
+ * the frames it shows ([start, end), end exclusive), in stacking order. ffmpeg
+ * overlays one layer per arrival.
+ */
+export function photoSequenceArrivals(sequence, from, to) {
+  const count = Math.max(1, sequence.imageIds.length);
+  const out = [];
+  for (let step = 0; photoStepStart(sequence, step) < to; step++) {
+    const start = photoStepStart(sequence, step);
+    const end = photoStepStart(sequence, step + 1) + (sequence.overlapFrames || 0);
+    if (end > from) out.push({ step, index: step % count, start, end });
+  }
+  return out;
+}
+
 // The flash fades from full white to nothing over this long.
 const FLASH_SEC = 0.25;
 // The undeveloped emulsion's colour, and the share of the develop it takes to clear.

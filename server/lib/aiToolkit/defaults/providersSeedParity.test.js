@@ -96,6 +96,9 @@ describe('provider seed parity — data.reference ↔ aiToolkit sample', () => {
           expect(provider.models, `${seedName}.${id} lost GPT-6.1 Terra`).toContain('gpt-6.1-terra');
           expect(provider.models).not.toContain('gpt-5.3-codex-spark');
         }
+        if (id === 'antigravity-cli' || id === 'antigravity-tui') {
+          expect(provider.models, `${seedName}.${id} lost Gemini 4 Argon`).toContain('gemini-4-argon-medium');
+        }
       }
     }
   });

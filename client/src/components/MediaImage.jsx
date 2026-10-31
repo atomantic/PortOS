@@ -13,6 +13,7 @@
  *
  * Props:
  *   src: string                  — same as <img>; expected to be `/data/...`
+ *   thumbnail?: boolean          — show a gallery PNG's 512px WebP derivative first, `src` as its fallback
  *   fallbackSrc?: string|string[] — originals to try in order if `src` fails (e.g. a thumbnail)
  *   fallbackVideoSrc?: string    — video to preview if its poster is unavailable
  *   assetSrc?: string            — original URL whose filename peer sync reports
@@ -29,12 +30,15 @@
 import { useEffect, useRef, useState } from 'react';
 import { Cloud } from 'lucide-react';
 import socket from '../services/socket';
+import { imageThumbnailSrc } from '../lib/imageThumbnailSrc';
 
+// Peer sync reports the decoded on-disk name, so decode an encoded URL segment.
 function basenameOf(src) {
   if (typeof src !== 'string') return null;
   const last = src.split('/').pop();
-  if (!last) return null;
-  return last.split('?')[0] || null;
+  const bare = last ? last.split(/[?#]/)[0] : '';
+  if (!bare) return null;
+  try { return decodeURIComponent(bare); } catch { return bare; }
 }
 
 function cacheBust(src, nonce) {
@@ -45,6 +49,7 @@ function cacheBust(src, nonce) {
 
 export default function MediaImage({
   src,
+  thumbnail = false,
   fallbackSrc,
   fallbackVideoSrc,
   assetSrc = src,
@@ -57,12 +62,17 @@ export default function MediaImage({
   const [showVideo, setShowVideo] = useState(false);
   // -1 = `src`; otherwise the index into `fallbacks` currently shown.
   const [fallbackIndex, setFallbackIndex] = useState(-1);
-  const fallbacks = [fallbackSrc].flat().filter((f) => typeof f === 'string' && f && f !== src);
+  const thumbSrc = thumbnail ? imageThumbnailSrc(src) : null;
+  const firstSrc = thumbSrc || src;
+  const fallbacks = [thumbSrc ? src : null, fallbackSrc].flat().filter((f) => typeof f === 'string' && f && f !== firstSrc);
   // Bumping `nonce` forces the <img> to re-fetch (cache-busted) when the
   // socket says our asset arrived — without it the browser would serve the
   // cached 404 forever.
   const [nonce, setNonce] = useState(0);
-  const filename = basenameOf(assetSrc);
+  // Only a served `/data/` asset (local or on a peer's origin) can arrive from a
+  // peer; an external or inline URL that fails keeps the browser's broken image.
+  const tracksPeerAsset = typeof assetSrc === 'string' && /^(?:https?:\/\/[^/]+)?\/data\//i.test(assetSrc);
+  const filename = tracksPeerAsset ? basenameOf(assetSrc) : null;
   const filenameRef = useRef(filename);
   filenameRef.current = filename;
 
@@ -123,7 +133,7 @@ export default function MediaImage({
   // The cache-buster appears only after the first arrival event; the very
   // first load (before any 404) uses the bare src so HTTP caching still
   // works the way the rest of the UI expects.
-  const displaySrc = fallbacks[fallbackIndex] ?? src;
+  const displaySrc = fallbacks[fallbackIndex] ?? firstSrc;
   const cacheBustedSrc = cacheBust(displaySrc, nonce);
   // Spread `rest` FIRST so the explicit `onError` below wins over a caller-
   // provided one — we still forward the event by capturing the caller's
@@ -142,7 +152,7 @@ export default function MediaImage({
         // still allowing the original image or video to be streamed.
         if (fallbackIndex + 1 < fallbacks.length) setFallbackIndex(fallbackIndex + 1);
         else if (fallbackVideoSrc) setShowVideo(true);
-        else setErrored(true);
+        else if (tracksPeerAsset) setErrored(true);
         callerOnError?.(e);
       }}
     />

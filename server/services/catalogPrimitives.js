@@ -6,6 +6,8 @@ import { toPgJson } from '../lib/pgJson.js';
 import { CATALOG_OWNER_ROLE, catalogUniverseContext } from '../lib/catalogUniverseContext.js';
 import { ingredientIdPrefix } from '../lib/catalogTypes.js';
 import { BIBLE_LIMITS } from '../lib/storyBible.js';
+import { CATALOG_REDESIGN_FIELDS } from '../lib/catalogRedesign.js';
+import { normalizeLibrary } from '../lib/catalogMediaLibrary.js';
 import { createIngredient, getIngredient, getIngredientIdentityIds } from './catalogDB/ingredients.js';
 import { assertCatalogIdentityWritable, assertCatalogAssociationRemovable, getCatalogIdentityAccess } from './catalogDB/identityAccess.js';
 import { linkIngredientToRef, unlinkIngredientFromRef } from './catalogDB/refs.js';
@@ -214,59 +216,143 @@ export async function removePrimitiveFromUniverse(id, universeId, role) {
 }
 
 // Keep creative values, not identity, story bindings, runtime state or approval.
-function forkPayload(type, source, copyImages) {
+// `keepImage(filename)` decides which image pointers survive: none, all, or the
+// seed images picked for the fork. Returns the old→new ids of re-keyed lists so
+// copied media tags can follow their age/look onto the fork.
+function forkPayload(type, source, keepImage) {
   const payload = structuredClone(source || {});
   for (const key of ['id', 'ingredientId', 'createdAt', 'updatedAt', 'sourceSeriesId', 'firstAppearance', 'evolution',
     'relationshipLinks', 'attachments', 'voiceId', 'referenceSheetImageRef', 'referenceSheets', 'referenceSheetRequests']) delete payload[key];
   for (const key of Object.keys(payload)) if (/request|session|provider|execution|consent|export/i.test(key)) delete payload[key];
+  const idMap = {};
   for (const key of ['wardrobes', 'forms', 'stats', 'colorPalette', 'props', 'expressions', 'handGestures']) {
-    if (Array.isArray(payload[key])) payload[key] = payload[key].map((item) => ({ ...item, id: `fork-${randomUUID().slice(0, 16)}` }));
+    if (!Array.isArray(payload[key])) continue;
+    idMap[key] = new Map();
+    payload[key] = payload[key].map((item) => {
+      const id = `fork-${randomUUID().slice(0, 16)}`;
+      if (item?.id) idMap[key].set(item.id, id);
+      return { ...item, id };
+    });
   }
   if (type === 'character' && payload.voiceCanon) payload.voiceCanon = { ...payload.voiceCanon, approved: false };
   if (payload.identityPack) payload.identityPack = { ...payload.identityPack,
-    assets: copyImages && Array.isArray(payload.identityPack.assets) ? payload.identityPack.assets.map((asset) => ({ ...asset, approved: false })) : [] };
-  if (!copyImages) {
-    payload.imageRefs = []; payload.primaryImageRef = null;
-    if (Array.isArray(payload.props)) for (const prop of payload.props) delete prop.imageRef;
-  }
+    assets: Array.isArray(payload.identityPack.assets)
+      ? payload.identityPack.assets.filter((asset) => keepImage(asset?.imageRef)).map((asset) => ({ ...asset, approved: false })) : [] };
+  payload.imageRefs = Array.isArray(payload.imageRefs) ? payload.imageRefs.filter(keepImage) : [];
+  if (!keepImage(payload.primaryImageRef)) payload.primaryImageRef = payload.imageRefs[0] || null;
+  if (Array.isArray(payload.props)) for (const prop of payload.props) if (!keepImage(prop.imageRef)) delete prop.imageRef;
   payload.locked = false;
-  return payload;
+  return { payload, idMap };
 }
 
-export async function forkPrimitive(sourceId, { universeId, name, copyImages = false, operationKey }) {
-  const fingerprint = createHash('sha256').update(canonicalStringify({ action: 'fork-primitive', sourceId, universeId, name, copyImages })).digest('hex');
-  const fork = await withTransaction(async (client) => {
-    const claim = await client.query(`INSERT INTO catalog_commit_receipts (operation_key, fingerprint)
-      VALUES ($1, $2) ON CONFLICT (operation_key) DO NOTHING RETURNING operation_key`, [operationKey, fingerprint]);
-    if (!claim.rowCount) {
-      const { rows: [receipt] } = await client.query('SELECT fingerprint, ingredients FROM catalog_commit_receipts WHERE operation_key = $1', [operationKey]);
-      if (receipt.fingerprint !== fingerprint) fail('Operation key was already used for a different request', 'CATALOG_FORK_REPLAY_CONFLICT');
-      return receipt.ingredients[0];
-    }
-    await requireUniverse(client, universeId);
-    await client.query('SELECT id FROM catalog_ingredients WHERE id = catalog_canonical_ingredient_id($1) AND deleted = false FOR SHARE', [sourceId]);
-    const access = await getCatalogIdentityAccess(sourceId, { client });
-    if (access?.reason === 'CATALOG_IDENTITY_FENCED') fail('Wait for the shared identity transition to complete before creating a fork', 'CATALOG_IDENTITY_FENCED');
-    const source = await getIngredient(sourceId, { client });
-    if (!source) fail('Source ingredient not found', 'CATALOG_NOT_FOUND', 404);
-    const fork = await createIngredient({ id: `cat-${ingredientIdPrefix(source.type)}-${randomUUID()}`,
-      type: source.type, name: name || source.name, tags: source.tags,
-      payload: forkPayload(source.type, source.payload, copyImages) },
-    { client, source: 'user', actor: `fork:${source.id}@${source.syncSequence}`.slice(0, 120) });
-    await linkIngredientToRef(fork.id, 'universe', universeId, CATALOG_OWNER_ROLE, { client });
-    await client.query(`INSERT INTO catalog_ingredient_relations (from_id, to_id, kind) VALUES ($1, $2, 'forked-from')`, [fork.id, source.id]);
-    if (copyImages) {
-      // New association rows share immutable managed-image bytes only. Runtime,
-      // voice media, approvals and source form/wardrobe role bindings stay out.
-      await client.query(`INSERT INTO catalog_ingredient_media (ingredient_id, media_key, kind, role, caption, metadata, library)
-        SELECT $1, media_key, kind, 'fork-reference', caption, metadata, '{}'::jsonb
-        FROM catalog_identity_read_media WHERE ingredient_id = ANY(catalog_identity_member_ids($2))
-          AND deleted = false AND kind IN ('portrait', 'reference')
-        ON CONFLICT (ingredient_id, media_key, kind) DO NOTHING`, [fork.id, source.id]);
-    }
-    await client.query('UPDATE catalog_commit_receipts SET ingredients = $2::jsonb WHERE operation_key = $1', [operationKey, toPgJson([fork])]);
+// A redesign saved as a fork lands on the fork, never the source. Only the
+// fields the redesign assistant may propose are accepted.
+function applyRedesignFields(type, payload, fields) {
+  const allowed = CATALOG_REDESIGN_FIELDS[type] || {};
+  for (const [key, value] of Object.entries(fields || {})) {
+    if (!allowed[key]) fail(`${key} is not a redesign field`, 'CATALOG_FORK_FIELD_INVALID', 400);
+    if (value.length > allowed[key]) fail(`${key} is ${value.length} characters; the limit is ${allowed[key]}`, 'CATALOG_FORK_FIELD_INVALID', 400);
+    payload[key] = value;
+  }
+}
+
+// Carry an image's age/look tags onto the fork's re-keyed forms and wardrobes.
+// Review ratings and derivation links describe the source record and stay there.
+function forkLibrary(library, idMap) {
+  const { review, derivedFrom, ...rest } = normalizeLibrary(library);
+  const variant = rest.variant ? { ...rest.variant } : null;
+  if (variant?.formId) variant.formId = idMap.forms?.get(variant.formId);
+  if (variant?.wardrobeId) variant.wardrobeId = idMap.wardrobes?.get(variant.wardrobeId);
+  if (variant) for (const key of Object.keys(variant)) if (variant[key] === undefined) delete variant[key];
+  const out = { ...rest };
+  if (variant && Object.keys(variant).length) out.variant = variant; else delete out.variant;
+  return out;
+}
+
+// A character, place or object fork joins its universe's canon in the same
+// transaction that creates it, as createOwnedPrimitive does; ownership alone
+// leaves it without the canon entry its story, voice and sheet actions edit.
+export async function forkPrimitive(sourceId, request) {
+  const { rows: [sourceRow] } = await query('SELECT type FROM catalog_ingredients WHERE id = catalog_canonical_ingredient_id($1)', [sourceId]);
+  const field = CANON_FIELD[sourceRow?.type];
+  if (!field) {
+    const { fork } = await withTransaction((client) => forkRecord(client, sourceId, request));
+    catalogEvents.emit('primitive-changed', { ingredientId: fork.id });
     return fork;
+  }
+  const { universeId } = request;
+  const role = `canon-${sourceRow.type}`;
+  const { updateUniverse } = await import('./universeBuilder.js');
+  let result;
+  await updateUniverse(universeId, async (current, { client }) => {
+    result = await forkRecord(client, sourceId, request);
+    if (result.replayed) return null;
+    const list = current[field] || [];
+    if (list.length >= BIBLE_LIMITS.ENTRIES_PER_BIBLE_MAX) fail('This universe’s canon bucket is full. Remove a membership before adding another.', 'UNIVERSE_CANON_FULL');
+    return { [field]: [...list, canonEntryFor(result.fork)] };
+  }, { transactional: true, afterWrite: (_universe, { client }) => result?.replayed
+    ? Promise.resolve() : linkIngredientToRef(result.fork.id, 'universe', universeId, role, { client }) }).catch((error) => {
+    if (error.code === 'NOT_FOUND') fail('Destination universe not found', 'UNIVERSE_NOT_FOUND', 404);
+    throw error;
   });
-  catalogEvents.emit('primitive-changed', { ingredientId: fork.id });
-  return fork;
+  catalogEvents.emit('primitive-changed', { ingredientId: result.fork.id });
+  if (result.replayed) return result.fork;
+  const refreshed = await getIngredient(result.fork.id).catch((error) => {
+    console.warn(`⚠️ catalog fork refresh failed: ${error.message}`);
+    return null;
+  });
+  return refreshed || result.fork;
+}
+
+async function forkRecord(client, sourceId, { universeId, name, copyImages = false, seedImages, fields, operationKey }) {
+  const seeds = seedImages?.length ? [...new Set(seedImages)].sort() : null;
+  const fingerprint = createHash('sha256').update(canonicalStringify({ action: 'fork-primitive', sourceId, universeId, name, copyImages,
+    ...(seeds ? { seedImages: seeds } : {}), ...(fields && Object.keys(fields).length ? { fields } : {}) })).digest('hex');
+  const claim = await client.query(`INSERT INTO catalog_commit_receipts (operation_key, fingerprint)
+    VALUES ($1, $2) ON CONFLICT (operation_key) DO NOTHING RETURNING operation_key`, [operationKey, fingerprint]);
+  if (!claim.rowCount) {
+    const { rows: [receipt] } = await client.query('SELECT fingerprint, ingredients FROM catalog_commit_receipts WHERE operation_key = $1', [operationKey]);
+    if (receipt.fingerprint !== fingerprint) fail('Operation key was already used for a different request', 'CATALOG_FORK_REPLAY_CONFLICT');
+    return { fork: receipt.ingredients[0], replayed: true };
+  }
+  await requireUniverse(client, universeId);
+  await client.query('SELECT id FROM catalog_ingredients WHERE id = catalog_canonical_ingredient_id($1) AND deleted = false FOR SHARE', [sourceId]);
+  const access = await getCatalogIdentityAccess(sourceId, { client });
+  if (access?.reason === 'CATALOG_IDENTITY_FENCED') fail('Wait for the shared identity transition to complete before creating a fork', 'CATALOG_IDENTITY_FENCED');
+  const source = await getIngredient(sourceId, { client });
+  if (!source) fail('Source ingredient not found', 'CATALOG_NOT_FOUND', 404);
+  const seedSet = seeds ? new Set(seeds) : null;
+  const keepImage = (filename) => typeof filename === 'string' && !!filename && (seedSet ? seedSet.has(filename) : copyImages);
+  const { payload, idMap } = forkPayload(source.type, source.payload, keepImage);
+  applyRedesignFields(source.type, payload, fields);
+  // Images come from live source rows, read before the fork exists so a
+  // picked image that is no longer on the source refuses the whole fork.
+  let images = [];
+  if (seedSet || copyImages) {
+    const { rows } = await client.query(`SELECT media_key, kind, caption, metadata, library
+      FROM catalog_identity_read_media WHERE ingredient_id = ANY(catalog_identity_member_ids($1))
+        AND deleted = false AND kind IN ('portrait', 'reference')`, [source.id]);
+    images = seedSet ? rows.filter((row) => seedSet.has(row.media_key)) : rows;
+    // Canon pointers (e.g. a Universe Builder "set as reference") can exist
+    // without a media row; they seed through the kept payload imageRefs.
+    const canonRefs = new Set([source.payload?.primaryImageRef, ...(Array.isArray(source.payload?.imageRefs) ? source.payload.imageRefs : [])]);
+    const missing = seeds?.filter((key) => !canonRefs.has(key) && !images.some((row) => row.media_key === key)) || [];
+    if (missing.length) fail(`${missing.length} picked image${missing.length === 1 ? ' is' : 's are'} no longer on ${source.name}`, 'CATALOG_FORK_SEED_MISSING');
+  }
+  const fork = await createIngredient({ id: `cat-${ingredientIdPrefix(source.type)}-${randomUUID()}`,
+    type: source.type, name: name || source.name, tags: source.tags, payload },
+  { client, source: 'user', actor: `fork:${source.id}@${source.syncSequence}`.slice(0, 120) });
+  await linkIngredientToRef(fork.id, 'universe', universeId, CATALOG_OWNER_ROLE, { client });
+  await client.query(`INSERT INTO catalog_ingredient_relations (from_id, to_id, kind) VALUES ($1, $2, 'forked-from')`, [fork.id, source.id]);
+  // New association rows share immutable managed-image bytes only. Runtime,
+  // voice media, approvals and sheet/plate/look role bindings stay out; an
+  // image's age and look tags follow the re-keyed forms and wardrobes.
+  for (const row of images) {
+    await client.query(`INSERT INTO catalog_ingredient_media (ingredient_id, media_key, kind, role, caption, metadata, library)
+      VALUES ($1, $2, $3, 'fork-reference', $4, $5::jsonb, $6::jsonb)
+      ON CONFLICT (ingredient_id, media_key, kind) DO NOTHING`,
+    [fork.id, row.media_key, row.kind, row.caption, toPgJson(row.metadata || {}), toPgJson(forkLibrary(row.library, idMap))]);
+  }
+  await client.query('UPDATE catalog_commit_receipts SET ingredients = $2::jsonb WHERE operation_key = $1', [operationKey, toPgJson([fork])]);
+  return { fork, replayed: false };
 }

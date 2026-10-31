@@ -8,6 +8,10 @@ export const peerAdminActionSchema = z.enum(PEER_ADMIN_ACTIONS);
 const uuid = z.string().uuid();
 const peerId = z.string().min(1).max(100).regex(/^[a-zA-Z0-9_-]+$/);
 export const peerAdminPeerSchema = z.object({ peerId }).strict();
+// Shipped catalog keys carry version dots (`qwen2.5-7b-instruct`). A key is only
+// ever an exact lookup into LOCAL_LLM_CATALOG, never a path segment.
+export const PEER_CATALOG_KEY_RE = /^[a-z0-9][a-z0-9.-]*$/;
+export const peerCatalogKeySchema = z.string().min(1).max(100).regex(PEER_CATALOG_KEY_RE);
 export const peerAdminGrantSchema = z.object({
   peerId,
   action: peerAdminActionSchema,
@@ -23,7 +27,7 @@ export const peerAdminIntentSchema = z.discriminatedUnion('action', [
   z.object({
     action: z.literal('catalog.install'),
     backend: z.enum(['ollama', 'lmstudio']),
-    catalogKey: z.string().min(1).max(100).regex(/^[a-z0-9][a-z0-9-]*$/),
+    catalogKey: peerCatalogKeySchema,
   }).strict(),
 ]);
 export const peerAdminPreflightSchema = z.object({

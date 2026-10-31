@@ -8,7 +8,7 @@
  */
 
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { query } from '../../lib/db.js';
@@ -227,6 +227,28 @@ export async function getVoiceProfileRequired(id) {
     throw new ServerError('Voice profile not found', { status: 404, code: 'VOICE_PROFILE_NOT_FOUND' });
   }
   return profile;
+}
+
+/**
+ * Withdraw a profile: drop the row (and its stored transcript) and remove the
+ * profile directory with the source recording. Rendered dialogue audio already
+ * shipped in projects lives elsewhere and is untouched. Row and files go under
+ * one backup lease so a snapshot never sees one without the other.
+ */
+export async function deleteVoiceProfile(id) {
+  const profileId = trimTo(id, 80);
+  if (!PROFILE_ID_RE.test(profileId)) {
+    throw new ServerError('Voice profile not found', { status: 404, code: 'VOICE_PROFILE_NOT_FOUND' });
+  }
+  return withBackupAssetPublication(async () => {
+    const { rows } = await query('DELETE FROM voice_profiles WHERE id = $1 RETURNING id', [profileId]);
+    if (!rows.length) {
+      throw new ServerError('Voice profile not found', { status: 404, code: 'VOICE_PROFILE_NOT_FOUND' });
+    }
+    await rm(profileDirectory(profileId), { recursive: true, force: true });
+    console.log(`🗑️ voice profile deleted: ${profileId}`);
+    return { id: profileId };
+  });
 }
 
 export async function listVoiceProfiles({ universeId, characterId } = {}) {

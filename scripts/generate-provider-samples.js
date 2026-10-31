@@ -541,7 +541,7 @@ const TUPLES = [
     id: 'antigravity-tui', harnessId: 'antigravity', method: 'tui', service: 'antigravity',
     overrides: {
       name: 'Antigravity TUI',
-      models: ['antigravity-configured-default', 'gemini-3.8-flash-high', 'gemini-3.8-flash-medium', 'gemini-3.8-flash-low', 'claude-opus-5-5-low', 'claude-opus-5-5-medium', 'claude-opus-5-5-high', 'claude-sonnet-5-5-low', 'claude-sonnet-5-5-medium', 'claude-sonnet-5-5-high', 'gpt-oss-120b-medium'],
+      models: ['antigravity-configured-default', 'gemini-4-argon-medium', 'gemini-4-argon-high', 'gemini-4-argon-low', 'gemini-3.8-flash-high', 'gemini-3.8-flash-medium', 'gemini-3.8-flash-low', 'claude-opus-5-5-low', 'claude-opus-5-5-medium', 'claude-opus-5-5-high', 'claude-sonnet-5-5-low', 'claude-sonnet-5-5-medium', 'claude-sonnet-5-5-high', 'gpt-oss-120b-medium'],
       defaultModel: 'antigravity-configured-default', lightModel: 'antigravity-configured-default', mediumModel: 'antigravity-configured-default', heavyModel: 'antigravity-configured-default',
       contextWindow: 1048576, enabled: false,
     },
@@ -550,7 +550,7 @@ const TUPLES = [
     id: 'antigravity-cli', harnessId: 'antigravity', method: 'cli', service: 'antigravity',
     overrides: {
       name: 'Antigravity CLI',
-      models: ['antigravity-configured-default', 'gemini-3.8-flash-high', 'gemini-3.8-flash-medium', 'gemini-3.8-flash-low', 'claude-opus-5-5-low', 'claude-opus-5-5-medium', 'claude-opus-5-5-high', 'claude-sonnet-5-5-low', 'claude-sonnet-5-5-medium', 'claude-sonnet-5-5-high', 'gpt-oss-120b-medium'],
+      models: ['antigravity-configured-default', 'gemini-4-argon-medium', 'gemini-4-argon-high', 'gemini-4-argon-low', 'gemini-3.8-flash-high', 'gemini-3.8-flash-medium', 'gemini-3.8-flash-low', 'claude-opus-5-5-low', 'claude-opus-5-5-medium', 'claude-opus-5-5-high', 'claude-sonnet-5-5-low', 'claude-sonnet-5-5-medium', 'claude-sonnet-5-5-high', 'gpt-oss-120b-medium'],
       defaultModel: 'antigravity-configured-default', lightModel: 'antigravity-configured-default', mediumModel: 'antigravity-configured-default', heavyModel: 'antigravity-configured-default',
       contextWindow: 1048576, timeout: 300000, enabled: true,
       headlessArgs: OMIT,

@@ -57,6 +57,25 @@ beforeEach(() => {
 });
 
 describe('Messages Gmail OAuth setup', () => {
+  // A failed status read must not offer the credential form or automated setup
+  // (saving there replaces a working OAuth client) nor badge the account pending.
+  it('shows a failed OAuth status read with Retry instead of the setup flow', async () => {
+    api.getGoogleAuthStatus
+      .mockRejectedValueOnce(new Error('Synthetic status failure'))
+      .mockResolvedValueOnce({ hasCredentials: true, hasTokens: true, needsScopeUpgrade: false });
+    renderConfig();
+
+    expect(await screen.findByText(/Could not load Google OAuth status/)).toBeInTheDocument();
+    expect(screen.queryByText('Google OAuth setup required')).not.toBeInTheDocument();
+    expect(screen.queryByText('Set up with PortOS Browser')).not.toBeInTheDocument();
+    expect(screen.queryByText('Pending authorization')).not.toBeInTheDocument();
+    expect(api.getGoogleAuthStatus).toHaveBeenCalledWith({ silent: true });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('Google OAuth authorized')).toBeInTheDocument();
+    expect(screen.queryByText(/Could not load Google OAuth status/)).not.toBeInTheDocument();
+  });
+
   it('accepts OAuth credentials in Messages and starts authorization there', async () => {
     api.getGoogleAuthStatus.mockResolvedValue({
       hasCredentials: false,
@@ -157,5 +176,23 @@ describe('Messages prompt template settings', () => {
     api.getSettings.mockResolvedValue({ messages: { forwardTemplate: '' } });
     const messages = await editReplyAndSave();
     expect(messages.forwardTemplate).toBe('');
+  });
+
+  it('keeps Save shut after a failed settings read so defaults never overwrite the stored config', async () => {
+    api.getGoogleAuthStatus.mockResolvedValue(noAuth);
+    api.updateSettings = vi.fn().mockResolvedValue({ ok: true });
+    api.getSettings.mockRejectedValueOnce(new Error('Synthetic settings failure'));
+    renderConfig();
+
+    expect(await screen.findByText(/Failed to load saved message settings/)).toBeInTheDocument();
+    expect(screen.queryByLabelText('Reply Template')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Save Config/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Disabled' })).toBeDisabled();
+
+    api.getSettings.mockResolvedValueOnce({ messages: { replyTemplate: 'Stored reply' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByLabelText('Reply Template')).toHaveValue('Stored reply');
+    expect(screen.queryByText(/Failed to load saved message settings/)).not.toBeInTheDocument();
+    expect(api.updateSettings).not.toHaveBeenCalled();
   });
 });

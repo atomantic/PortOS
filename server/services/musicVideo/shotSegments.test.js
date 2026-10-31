@@ -13,14 +13,14 @@ import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../li
 const ROOT = () => lazyTempDataRoot('mv-shot-segments-test-');
 vi.mock('../../lib/paths.js', async (importOriginal) => makePathsProxy(await importOriginal(), { dataRoot: ROOT }));
 
-const fixture = { clips: [], audioPath: null };
+const fixture = { clips: [], audioPath: null, coldOpen: null };
 vi.mock('./render.js', async (importOriginal) => {
   const actual = await importOriginal();
   return {
     ...actual,
     planMusicVideoRender: vi.fn(async () => ({
       ffmpeg: 'ffmpeg', audioPath: fixture.audioPath, composed: true, clips: fixture.clips.map((c) => ({ ...c })),
-      audioDurationSec: 3, soundBed: null, aspect: null,
+      audioDurationSec: 3, soundBed: null, aspect: null, coldOpen: fixture.coldOpen,
     })),
   };
 });
@@ -370,6 +370,59 @@ describe.skipIf(!hasFfmpeg)('shot segments', () => {
     expect(existsSync(pinned.segments[2].basePath)).toBe(true);
     expect(existsSync(planB.segments[0].path)).toBe(true);
     expect(existsSync(planA.segments[0].path)).toBe(false);
+  }, 60000);
+});
+
+describe.skipIf(!hasFfmpeg)('cold open before the song', () => {
+  afterEach(() => { fixture.coldOpen = null; });
+  // The clip's own sound (a 3 kHz tone) under the cold open, then the 440 Hz song.
+  const level = (path, start, duration, extra = '') => {
+    const report = spawnSync('ffmpeg', ['-hide_banner', '-ss', String(start), '-t', String(duration), '-i', path,
+      '-af', `${extra}volumedetect`, '-f', 'null', '-'], { encoding: 'utf8' });
+    return Number(/mean_volume: (-?[0-9.]+) dB/.exec(report.stderr)?.[1] ?? -200);
+  };
+
+  it('leads the cut with its own shots and sound, then plays the song from its first note', async () => {
+    const booth = join(media, 'booth.mp4');
+    run(['-f', 'lavfi', '-i', 'testsrc=s=320x180:r=24', '-f', 'lavfi', '-i', 'sine=frequency=3000',
+      '-t', '2', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest', '-y', booth]);
+    fixture.coldOpen = { clips: [footage('booth', booth, { outSec: 1.5, duration: 1.5 })] };
+    const cold = project({ id: 'mv-cold-open-test', scenes: [
+      { sceneId: 'booth', order: 0, preMusic: { durationSec: 1.5, clipVolume: 1, layers: [{ effect: 'play-button', atSec: 1.2 }] } },
+      { sceneId: 'a', order: 1 }, { sceneId: 'b', order: 2 }, { sceneId: 'c', order: 3 }] });
+    const plan = await planShotSegments(cold);
+    expect(plan.segments.map((s) => [s.sceneId, s.frames, !!s.coldOpen])).toEqual([['booth', 36, true], ['a', 24, false], ['b', 24, false], ['c', 24, false]]);
+    // Song time is unchanged; the cold open sits before 0.
+    expect([plan.segments[0].startSec, plan.segments[1].startSec, plan.songSec]).toEqual([-1.5, 0, 3]);
+    await renderMissingSegments(plan, { concurrency: 2 });
+    const out = join(ROOT(), 'cold-open.mp4');
+    expect(await stitchSegments(plan, out)).toMatchObject({ durationSec: 4.5, songSec: 3, leadSec: 1.5 });
+    expect(probe(out, 'stream=nb_read_frames')).toContain('108');
+    // The clip's tone plays under the cold open, the song's after it.
+    const high = 'highpass=f=1500,highpass=f=1500,highpass=f=1500,';
+    const low = 'lowpass=f=900,lowpass=f=900,lowpass=f=900,';
+    expect(level(out, 0.2, 0.8, high)).toBeGreaterThan(level(out, 0.2, 0.8, low) + 20);
+    expect(level(out, 2, 2, low)).toBeGreaterThan(level(out, 2, 2, high) + 20);
+
+    // A sound-only cold-open edit renames no segment but must remix the preview.
+    fixture.project = cold;
+    const before = await buildRenderPreview(cold.id);
+    fixture.project = { ...cold, scenes: cold.scenes.map((sc) => (sc.preMusic ? { ...sc, preMusic: { ...sc.preMusic, clipVolume: 0.4 } } : sc)) };
+    const quieter = await planShotSegments(fixture.project);
+    expect(quieter.segments.map((sg) => sg.path)).toEqual(plan.segments.map((sg) => sg.path));
+    expect((await buildRenderPreview(cold.id)).name).not.toBe(before.name);
+  }, 60000);
+
+  it('is silent when a shot has no sound chosen', async () => {
+    fixture.coldOpen = { clips: [footage('c', join(media, 'c.mp4'))] };
+    const cold = project({ id: 'mv-cold-open-silent', scenes: [
+      { sceneId: 'c', order: 0, preMusic: { durationSec: 1 } }, { sceneId: 'a', order: 1 }, { sceneId: 'b', order: 2 }] });
+    const plan = await planShotSegments(cold);
+    await renderMissingSegments(plan, { concurrency: 2 });
+    const out = join(ROOT(), 'cold-open-silent.mp4');
+    await stitchSegments(plan, out);
+    expect(level(out, 0, 0.9)).toBeLessThan(-80);
+    expect(level(out, 1.2, 1)).toBeGreaterThan(-40);
   }, 60000);
 });
 

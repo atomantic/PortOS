@@ -10,7 +10,6 @@ import { isDirectlyInvoked } from './lib/directInvocation.js';
 import { writeStepOutput } from './lib/githubOutput.js';
 import { resolveDbTestFiles } from './lib/dbTestFiles.js';
 import { BROWSER_SUITES } from './lib/browserSuites.js';
-import { ATTESTABLE_STAGES, selectAttestation } from './lib/pregateAttestation.js';
 import { formatReachSummary, measureRepoImportReach } from './lib/importReach.js';
 import { declaresPromptHashes, isNumberedMigrationFile } from './migrations/shippedPromptHistory.js';
 
@@ -459,6 +458,12 @@ export const ALWAYS_RUN_TESTS = [
   'server/services/orphanedPartialGc.test.js',
   'server/services/providers.shape.test.js',
   'server/services/taskPromptDefaults.test.js',
+  // Whole-tree scanners over server/services import edges (#14327): a PR that
+  // closes a static cycle never imports these guards, so they must run on every PR.
+  'server/services/agentImportCycles.test.js',
+  'server/services/meatspacePostImportCycles.test.js',
+  'server/services/serviceImportCycles.test.js',
+  'server/services/twinImportCycles.test.js',
   // Base-relative retired history guard: JSON edits have no import edge here.
   // Pregate and CI forward the planner's exact CI_BASE_SHA.
   'server/services/taskPromptDefaults/integritySnapshot.guard.test.js',
@@ -839,9 +844,11 @@ export const structuralTestsFor = (changedFiles, trackedSet) => {
     add('client/src/apiWrapperOptionsConventions.test.js');
     add('client/src/asyncEffectDisposalConventions.test.js');
     add('client/src/dashboardWidgetContainerConventions.test.js');
+    add('client/src/dragHandleTouchConventions.test.js');
     add('client/src/globalShadowConventions.test.js');
     add('client/src/headingTruncationConventions.test.js');
     add('client/src/hooks/mountedRefConventions.test.js');
+    add('client/src/hoverRevealConventions.test.js');
     add('client/src/listFetchConventions.test.js');
     add('client/src/moduleContractConventions.test.js');
     add('client/src/numberFormattingConventions.test.js');
@@ -1414,10 +1421,6 @@ export function emitGitHubPlan(plan) {
     client_shards: JSON.stringify(plan.shards.client),
     windows_shards: JSON.stringify(plan.shards.windows),
     suite_reasons: JSON.stringify(plan.suiteReasons),
-    // The pregate attestation this plan honored (see applyAttestation), or
-    // why none was: `{"attested": false, "reason": …}` is still a decision.
-    attestation: JSON.stringify(plan.attestation ?? { attested: false, reason: 'no attestation resolved' }),
-    attested_stages: JSON.stringify(plan.attestedStages ?? []),
   };
 
   Object.entries(outputs).forEach(([name, value]) => {
@@ -1675,228 +1678,6 @@ export function collectPlanInputs({ baseSha, forceFull = false, changedFiles, cw
     dockerContainmentLiveInputs, serverReach };
 }
 
-// ---------------------------------------------------------------------------
-// Pregate attestation (docs/GITHUB_ACTIONS.md "Pregate attestation")
-//
-// A local `npm run pregate` that ran a stage to green, followed by
-// `node scripts/pregate-attest.js` after the push, leaves a `pregate` commit
-// status on the head whose description names the validated TREE, the platform
-// and Node major it ran on, and the stages that passed
-// (scripts/lib/pregateAttestation.js). This section reads that status back
-// and lets the plan skip those stages — never Windows, the Linux containment
-// job, or the Node-minimum check, which have no local run.
-//
-// Fail closed at every step: anything other than a same-repository pull
-// request into a non-release base, with a head commit the owner attested
-// whose tree is exactly the head commit's tree, leaves the plan untouched and
-// the reason in the outputs. The planner never has to be right about a fork
-// or a bot for this to be safe — a fork's token cannot create a status here
-// and a bot's login is not the owner's — but it refuses them explicitly so
-// the summary says why.
-//
-// What the receipt vouches for is the HEAD COMMIT's tree; what CI tests is
-// the merge ref, that tree plus whatever the base branch gained since the
-// branch forked. `attestationDrift` closes that gap per stage: a base-side
-// change that could reach a stage's runner refuses the attestation for that
-// stage, and docs-only or other-runner movement keeps it.
-// ---------------------------------------------------------------------------
-
-/** Stages a receipt may attest to, mapped to the plan fields they clear. */
-const ATTESTATION_SKIPS = Object.freeze({
-  lint: (plan) => ({ lint: { ...plan.lint, mode: 'skip' } }),
-  client: (plan) => ({ client: { ...plan.client, mode: 'skip' } }),
-  build: () => ({ build: false }),
-  smoke: () => ({ smoke: false }),
-  browser: () => ({ browserFiles: [] }),
-  db: () => ({ db: false }),
-  'prompt-history': () => ({ promptHistory: false }),
-});
-
-/**
- * Whether this run may honor an attestation at all, and the head it would
- * read it from. Reads only the `CI_*` inputs ci.yml passes to the plan step.
- *
- * @param {NodeJS.ProcessEnv} env
- * @returns {{eligible: boolean, reason: string, headSha?: string, repository?: string, owner?: string}}
- */
-export function attestationEligibility(env) {
-  const trim = (value) => (typeof value === 'string' ? value.trim() : '');
-  const eventName = trim(env.CI_EVENT_NAME);
-  const repository = trim(env.CI_REPOSITORY);
-  const owner = trim(env.CI_REPOSITORY_OWNER);
-  const headRepo = trim(env.CI_PR_HEAD_REPO);
-  const headSha = trim(env.CI_PR_HEAD_SHA);
-  const author = trim(env.CI_PR_AUTHOR);
-  if (eventName !== 'pull_request') return { eligible: false, reason: `event ${eventName || '(none)'} is not a pull request` };
-  if (env.CI_FORCE_FULL === 'true') return { eligible: false, reason: 'full CI requested' };
-  if (trim(env.CI_BASE_REF) === 'release') return { eligible: false, reason: 'release gate: pull request into release' };
-  if (!repository || !owner) return { eligible: false, reason: 'repository or owner unknown' };
-  if (headRepo.toLowerCase() !== repository.toLowerCase()) return { eligible: false, reason: `head repository ${headRepo || '(unknown)'} is not ${repository}` };
-  if (!author || /\[bot\]$/i.test(author)) return { eligible: false, reason: `pull request author ${author || '(unknown)'} is a bot or unknown` };
-  if (!/^[0-9a-f]{40}$/.test(headSha)) return { eligible: false, reason: 'head sha unknown' };
-  return { eligible: true, reason: 'same-repository pull request', headSha, repository, owner };
-}
-
-const isRunnerConfig = (path) => FULL_TRIGGER_RULES.some((rule) => rule.re.test(path)) || WORKSPACE_CACHE_COMMON_INPUTS.has(path);
-const isSourceUnder = (path, prefixes) => isExecutable(path) && !isTestFile(path) && !isDocumentationOnly(path)
-  && prefixes.some((prefix) => path.startsWith(prefix));
-
-// A full-mode runner selects every test it owns, so `files` is empty there and
-// the membership check alone would let a base-side test change slip through.
-const selectsTest = (selection, runner, path) => selection.files.includes(path) || (selection.mode === 'full' && runnerForTest(path) === runner);
-
-/**
- * Per stage, whether a base-side path could change that stage's outcome:
- * (a) a test file the plan selected for the runner, (b) a non-test source
- * under the runner's roots, or (c) a runner config or setup file. Each entry
- * is the first offending path, for the refusal reason.
- */
-const STAGE_DRIFT_RULES = Object.freeze({
-  server: (plan, path) => selectsTest(plan.server, 'server', path) || isSourceUnder(path, RUNNER_ROOTS.server) || WORKSPACE_CACHE_SERVER_INPUTS.has(path),
-  client: (plan, path) => selectsTest(plan.client, 'client', path) || isSourceUnder(path, RUNNER_ROOTS.client) || WORKSPACE_CACHE_CLIENT_INPUTS.has(path),
-  lint: (plan, path) => isLintSurface(path),
-  build: (plan, path) => isSourceUnder(path, ['client/']) || WORKSPACE_CACHE_CLIENT_INPUTS.has(path),
-  smoke: (plan, path) => isSourceUnder(path, ['server/']) || path === 'scripts/smoke-boot.js' || WORKSPACE_CACHE_SERVER_INPUTS.has(path),
-  browser: (plan, path) => plan.browserFiles.includes(path) || BROWSER_SUITES.includes(path)
-    || isSourceUnder(path, ['server/', 'client/src/']) || WORKSPACE_CACHE_SERVER_INPUTS.has(path) || WORKSPACE_CACHE_CLIENT_INPUTS.has(path),
-  db: (plan, path) => resolveDbTestFiles([path]).length > 0 || isSourceUnder(path, ['server/']) || WORKSPACE_CACHE_SERVER_INPUTS.has(path),
-  'prompt-history': (plan, path) => PROMPT_HISTORY_PATH_RE.test(path),
-});
-
-/**
- * The stages a base-side diff refuses, each with the path that refuses it.
- *
- * `driftPaths` is `git diff --name-only HEAD^2 HEAD` on the merge ref: exactly
- * what the base branch added since the branch forked. A runner config or
- * workflow change refuses every stage; otherwise each stage answers for its
- * own runner. Null (the diff could not be read) refuses everything.
- *
- * @param {object} plan - the finished plan
- * @param {string[]|null} driftPaths
- * @returns {Record<string, string>} stage → reason
- */
-export function attestationDrift(plan, driftPaths) {
-  const refused = {};
-  if (!Array.isArray(driftPaths)) {
-    for (const stage of Object.keys(STAGE_DRIFT_RULES)) refused[stage] = 'base movement could not be read';
-    return refused;
-  }
-  const paths = uniqueSorted(driftPaths.filter((path) => typeof path === 'string' && path.length > 0));
-  const config = paths.find(isRunnerConfig);
-  for (const [stage, touches] of Object.entries(STAGE_DRIFT_RULES)) {
-    const hit = config ?? paths.find((path) => touches(plan, path));
-    if (hit) refused[stage] = `base branch moved: ${hit}`;
-  }
-  return refused;
-}
-
-/**
- * The attestation on the pull request's head, or null and why.
- *
- * The checkout is the merge ref at depth 2, which carries the head commit as
- * `HEAD^2`: that is what makes `<head>^{tree}` resolvable without a wider
- * fetch, and the first check — the event's head must BE that second parent,
- * or the attested tree would be compared with some other commit's. It is NOT
- * the tree under test: the merge ref also carries the base branch's movement,
- * which `attestationDrift` weighs per stage in applyAttestation from the
- * `baseDrift` returned here.
- *
- * Focused local validation intentionally posts no attestation. Read once; a
- * missing or late receipt leaves broad hosted checks enabled immediately.
- *
- * `log` defaults to stderr: the planner's stdout is the JSON plan pregate
- * and the tests parse, so every human-readable line here stays off it.
- *
- * @param {{env?: NodeJS.ProcessEnv, exec?: typeof execFileSync, cwd?: string, log?: (line: string) => void}} [options]
- * @returns {{attested: boolean, reason: string, sha?: string, tree?: string, os?: string, node?: number, stages?: string[], creator?: string, createdAt?: string, baseDrift?: string[]|null, waitedMs?: number}}
- */
-export function resolveCiAttestation({ env = process.env, exec = execFileSync, cwd = process.cwd(), log = console.warn } = {}) {
-  const none = (reason) => {
-    log(`⏭️ Pregate attestation not honored: ${reason}.`);
-    return { attested: false, reason };
-  };
-  const eligibility = attestationEligibility(env);
-  if (!eligibility.eligible) return none(eligibility.reason);
-  const { headSha, repository, owner } = eligibility;
-  const capture = (command, args) => {
-    try {
-      return exec(command, args, { cwd, encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'pipe'] }).trim();
-    } catch (error) {
-      return { error: error?.stderr?.toString().trim() || error?.message || 'command failed' };
-    }
-  };
-  const mergeHead = capture('git', ['rev-parse', '--verify', '--quiet', 'HEAD^2']);
-  if (typeof mergeHead !== 'string' || mergeHead !== headSha) {
-    return none(`checkout is not the merge ref of head ${headSha.slice(0, 9)}`);
-  }
-  const headTree = capture('git', ['rev-parse', '--verify', '--quiet', `${headSha}^{tree}`]);
-  if (typeof headTree !== 'string') return none(`cannot resolve the tree of head ${headSha.slice(0, 9)}`);
-  const readStatuses = () => {
-    const body = capture('gh', ['api', `repos/${repository}/commits/${headSha}/statuses?per_page=100`]);
-    if (typeof body !== 'string') return { error: `statuses API failed: ${body.error}` };
-    try {
-      return { statuses: JSON.parse(body) };
-    } catch {
-      return { error: 'statuses API returned unreadable JSON' };
-    }
-  };
-  const read = readStatuses();
-  if (read.error) return none(read.error);
-  const selected = selectAttestation(read.statuses, { owner, headTree });
-  if (!selected.attestation) return none(selected.reason);
-  const drift = capture('git', ['diff', '--name-only', 'HEAD^2', 'HEAD']);
-  const baseDrift = typeof drift === 'string' ? drift.split('\n').filter(Boolean) : null;
-  const { attestation, reason } = selected;
-  log(`✅ Pregate attestation on ${headSha.slice(0, 9)} (tree ${attestation.tree.slice(0, 12)}): ${attestation.stages.join(', ')} — ${reason}; base moved by ${baseDrift ? `${baseDrift.length} file(s)` : 'an unreadable diff'}.`);
-  return { attested: true, reason, sha: headSha, ...attestation, baseDrift, waitedMs: 0 };
-}
-
-/**
- * The plan with every attested stage skipped and the decision recorded.
- *
- * Stages the base-side drift refuses (`attestationDrift`) stay as planned and
- * say why. The server job owns the boot smoke (`smoke == 'true' &&
- * matrix.shard == 1` on a job gated by `server_mode != 'skip'`), so `server`
- * is skipped only when the smoke is attested too or was never selected;
- * otherwise skipping the job would drop an unattested smoke on the floor.
- * `full` is forced false so the `Full CI Gate` is never published for a run
- * that skipped anything on the strength of a local receipt. Windows, Linux
- * containment, the Node-minimum check and the shard matrices are left as the
- * plan computed them.
- *
- * @param {object} plan - a finished plan (buildCiTestPlan)
- * @param {{attested: boolean, reason: string, stages?: string[], sha?: string, tree?: string, os?: string, node?: number, creator?: string, createdAt?: string, baseDrift?: string[]|null}} attestation
- */
-export function applyAttestation(plan, attestation) {
-  const base = { ...plan, attestation, attestedStages: [] };
-  if (!attestation?.attested) {
-    return { ...base, suiteReasons: { ...plan.suiteReasons, attestation: `not honored: ${attestation?.reason ?? 'unknown'}` } };
-  }
-  const refused = attestationDrift(plan, attestation.baseDrift ?? null);
-  const attested = new Set((attestation.stages ?? []).filter((stage) => !refused[stage]));
-  const smokeCovered = attested.has('smoke') || !plan.smoke;
-  const skips = { ...ATTESTATION_SKIPS, server: smokeCovered ? (current) => ({ server: { ...current.server, mode: 'skip' } }) : null };
-  let next = base;
-  const skipped = [];
-  for (const stage of ATTESTABLE_STAGES) {
-    if (!attested.has(stage) || !skips[stage]) continue;
-    next = { ...next, ...skips[stage](next) };
-    skipped.push(stage);
-  }
-  const label = `attested by pregate on ${String(attestation.sha ?? '').slice(0, 9)} (tree ${String(attestation.tree ?? '').slice(0, 12)}, ${attestation.os ?? '?'}/node ${attestation.node ?? '?'})`;
-  const driftRefused = Object.fromEntries((attestation.stages ?? []).filter((stage) => refused[stage]).map((stage) => [stage, refused[stage]]));
-  const suiteReasons = { ...plan.suiteReasons, attestation: `${label}: skipping ${skipped.join(', ') || 'nothing'}` };
-  const reasonKey = (stage) => (stage === 'prompt-history' ? 'promptHistory' : stage);
-  for (const stage of skipped) suiteReasons[reasonKey(stage)] = `skipped: ${label}`;
-  for (const [stage, reason] of Object.entries(driftRefused)) {
-    if (stage !== 'scan') suiteReasons[reasonKey(stage)] = `${plan.suiteReasons[reasonKey(stage)] ?? 'planned'}; attestation refused: ${reason}`;
-  }
-  if (attested.has('server') && !smokeCovered) {
-    suiteReasons.server = `${plan.suiteReasons.server}; server job kept: the boot smoke was not attested`;
-  }
-  return { ...next, full: false, attestedStages: skipped, attestation: { ...attestation, driftRefused }, suiteReasons };
-}
-
 function main() {
   const forceFullReason = forceFullReasonFor({
     forceFull: process.env.CI_FORCE_FULL === 'true',
@@ -1943,8 +1724,7 @@ function main() {
     dockerContainmentLiveInputs,
     serverReach,
   });
-  // Last, over the finished plan: the attestation only ever removes work.
-  emitGitHubPlan(applyAttestation(plan, resolveCiAttestation()));
+  emitGitHubPlan(plan);
 }
 
 if (isDirectlyInvoked(import.meta.url)) main();

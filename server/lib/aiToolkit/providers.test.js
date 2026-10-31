@@ -1114,6 +1114,7 @@ describe('Provider Service', () => {
       const antigravity = await providerService.getProviderById('antigravity-cli');
       expect(antigravity.models.length).toBeGreaterThan(1);
       expect(antigravity.models[0]).toBe('antigravity-configured-default');
+      expect(antigravity.models).toContain('gemini-4-argon-medium');
       expect(antigravity.models).toContain('gemini-3.8-flash-high');
       expect(antigravity.models).toContain('claude-sonnet-5-5-high');
       // The *Model keys are untouched: an install that never picks a model keeps
@@ -1217,10 +1218,30 @@ describe('Provider Service', () => {
         },
       });
       const provider = await providerService.getProviderById(id);
-      expect(provider.models).toEqual(['antigravity-configured-default', 'gemini-3.8-flash-high', 'gemini-3.8-flash-medium', 'gemini-3.8-flash-low', 'claude-opus-5-5-low', 'claude-opus-5-5-medium', 'claude-opus-5-5-high', 'claude-sonnet-5-5-low', 'claude-sonnet-5-5-medium', 'claude-sonnet-5-5-high', 'gpt-oss-120b-medium']);
+      expect(provider.models).toEqual(['antigravity-configured-default', 'gemini-4-argon-medium', 'gemini-4-argon-high', 'gemini-4-argon-low', 'gemini-3.8-flash-high', 'gemini-3.8-flash-medium', 'gemini-3.8-flash-low', 'claude-opus-5-5-low', 'claude-opus-5-5-medium', 'claude-opus-5-5-high', 'claude-sonnet-5-5-low', 'claude-sonnet-5-5-medium', 'claude-sonnet-5-5-high', 'gpt-oss-120b-medium']);
       expect(provider.defaultModel).toBe('claude-opus-4-6-thinking');
       expect(provider.lightModel).toBe('gemini-3.8-flash-low');
       // Reading again keeps the migrated list stable.
+      expect((await providerService.getProviderById(id)).models).toEqual(provider.models);
+    });
+
+    it.each(['cli', 'tui'])('upgrades the Gemini 3.8 / Claude 5.5 seeded Antigravity %s catalog to include Gemini 4 Argon', async (type) => {
+      const id = `antigravity-${type}`;
+      await writeProvidersFile({
+        activeProvider: id,
+        providers: {
+          [id]: {
+            id, name: 'Antigravity', type, command: 'agy', contextWindow: 1048576,
+            models: ['antigravity-configured-default', 'gemini-3.8-flash-high', 'gemini-3.8-flash-medium', 'gemini-3.8-flash-low', 'claude-opus-5-5-low', 'claude-opus-5-5-medium', 'claude-opus-5-5-high', 'claude-sonnet-5-5-low', 'claude-sonnet-5-5-medium', 'claude-sonnet-5-5-high', 'gpt-oss-120b-medium'],
+            defaultModel: 'claude-opus-5-5-medium',
+            lightModel: 'gemini-3.8-flash-low',
+          },
+        },
+      });
+      const provider = await providerService.getProviderById(id);
+      expect(provider.models).toEqual(['antigravity-configured-default', 'gemini-4-argon-medium', 'gemini-4-argon-high', 'gemini-4-argon-low', 'gemini-3.8-flash-high', 'gemini-3.8-flash-medium', 'gemini-3.8-flash-low', 'claude-opus-5-5-low', 'claude-opus-5-5-medium', 'claude-opus-5-5-high', 'claude-sonnet-5-5-low', 'claude-sonnet-5-5-medium', 'claude-sonnet-5-5-high', 'gpt-oss-120b-medium']);
+      expect(provider.defaultModel).toBe('claude-opus-5-5-medium');
+      expect(provider.lightModel).toBe('gemini-3.8-flash-low');
       expect((await providerService.getProviderById(id)).models).toEqual(provider.models);
     });
 

@@ -545,6 +545,52 @@ describe('partial-board production pilot rendering (#9351)', () => {
   });
 });
 
+describe('cold open before the song', () => {
+  const take = (id, numFrames) => ({ id, filename: `${id}.mp4`, numFrames, fps: 24, width: 768, height: 512 });
+  const project = (preMusic) => ({ id: 'mv-cold', uploadedAudioFilename: 'example.wav', audioAnalysis: { durationSec: 8, beats: [0.5, 1, 1.5] },
+    scenes: [
+      { sceneId: 'song', order: 0, startSec: 0, endSec: 4, beatAligned: true, videoHistoryId: 'song-take', loop: false },
+      { sceneId: 'booth', order: 1, startSec: 4, endSec: 8, videoHistoryId: 'booth-take', loop: false, preMusic },
+    ] });
+
+  // Uniquely catches a cold-open shot leaking onto the song's clock, or its length coming from song time.
+  it('cuts the marked shots on their own length and leaves the song timeline to the rest', async () => {
+    loadHistory.mockResolvedValue([take('song-take', 96), take('booth-take', 72)]);
+    const plan = await planMusicVideoRender(project({ durationSec: 2.5 }));
+    expect(plan.clips.map((c) => [c.sceneId, c.outSec - c.inSec])).toEqual([['song', 4]]);
+    expect(plan.coldOpen.clips.map((c) => [c.sceneId, c.outSec - c.inSec])).toEqual([['booth', 2.5]]);
+  });
+
+  it('refuses a cold-open shot longer than its clip, naming it as a cold-open shot', async () => {
+    loadHistory.mockResolvedValue([take('song-take', 96), take('booth-take', 24)]);
+    await expect(planMusicVideoRender(project({ durationSec: 3 }))).rejects.toMatchObject({
+      code: 'INSUFFICIENT_CLIP_COVERAGE', message: expect.stringMatching(/^Cold open shot 1 \(2s short\): longer than its clip/) });
+  });
+});
+
+describe('beat-graphic medium cutting (#14244)', () => {
+  const beats = Array.from({ length: 40 }, (_, i) => i * 0.5);
+  const project = (extra) => ({ id: 'mv-bg', uploadedAudioFilename: 'example.wav',
+    audioAnalysis: { durationSec: 20, bpm: 120, beats, sections: [{ startSec: 0, endSec: 10, energy: 0.1 }, { startSec: 10, endSec: 20, energy: 0.9 }] },
+    scenes: [
+      { sceneId: 'quiet', order: 0, startSec: 0, endSec: 10, beatAligned: true, videoHistoryId: 'quiet-take', loop: false },
+      { sceneId: 'loud', order: 1, startSec: 10, endSec: 20, beatAligned: true, videoHistoryId: 'loud-take', loop: false },
+    ], ...extra });
+  const take = (id) => ({ id, filename: `${id}.mp4`, numFrames: 480, fps: 24, width: 768, height: 512 });
+  const quietPieces = (plan) => plan.clips.filter((c, i) => plan.clips.slice(0, i).reduce((sum, p) => sum + p.outSec - p.inSec, 0) < 10 - 1e-6).length;
+
+  // Uniquely catches the medium failing to reach the render's cut, or a project with no medium changing its cut.
+  it('cuts the quietest section at two beats, and leaves a project without a medium as it was', async () => {
+    loadHistory.mockResolvedValue([take('quiet-take'), take('loud-take')]);
+    const plain = await planMusicVideoRender(project({ composition: { mode: 'concat', cutting: 'intercut' } }));
+    const graphic = await planMusicVideoRender(project({ productionMedium: 'beat-graphic', composition: { mode: 'concat', cutting: 'intercut' } }));
+    const scene = await planMusicVideoRender(project({ productionMedium: 'beat-graphic', composition: { mode: 'concat', cutting: 'scene' } }));
+    expect(quietPieces(plain)).toBeLessThanOrEqual(3);
+    expect(quietPieces(graphic)).toBeGreaterThanOrEqual(8);
+    expect(scene.clips).toHaveLength(2);
+  });
+});
+
 describe('clips made from frames that changed since', () => {
   // Uniquely catches a locked clip still blocking the render, or the refusal not naming its shots.
   it('names the shots in song order, and lets a locked clip render as it is', () => {

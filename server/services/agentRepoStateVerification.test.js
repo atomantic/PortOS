@@ -41,12 +41,14 @@ vi.mock('./forgeExecOptions.js', () => ({ resolveForgeExecOptions: vi.fn(async (
 vi.mock('./heldCheckoutReview.js', () => ({ readRetirementForgeEvidence: vi.fn(async () => ({ prHead: '1'.repeat(40), mergeCommit: '3'.repeat(40), defaultHead: '2'.repeat(40) })) }));
 vi.mock('./completedCheckoutEvidence.js', async original => ({ ...await original(), readCompletedCheckoutIdentity: vi.fn() }));
 vi.mock('./cos.js', () => ({}));
+vi.mock('./cosState.js', () => ({ getConfig: vi.fn(async () => ({ autoApproveInvestigations: true })) }));
 vi.mock('./agentCompletionData.js', () => ({ readCompletionData: vi.fn() }));
 vi.mock('./agentCompletionCleanup.js', () => ({ replayAgentCompletionCleanup: vi.fn(async () => {}) }));
-vi.mock('./cosAgentLifecycle.js', async original => ({ recordHistoricalCleanupReconciliation: vi.fn(async () => true), recordInheritedCheckoutRetirement: vi.fn(async () => true), recordSeededCheckoutRetirement: vi.fn(async () => true), isSettleableCompletionReceipt: (await original()).isSettleableCompletionReceipt, recordSuccessorCheckoutRetirement: vi.fn(async () => true), settleAbsentTaskCompletion: vi.fn(async () => true), retryCompletionCheckoutCapture: vi.fn(async () => false), reserveRepoCleanupRecovery: vi.fn(async () => ({ admitted: true, attempt: 1 })), recordRepoCleanupRecovery: vi.fn(async () => true), recordCleanupOutcome: vi.fn(async () => true), recordSwarmCleanupDelivery: vi.fn(async () => true), updateAgent: vi.fn().mockResolvedValue({}), recordRepoStateRecovery: vi.fn().mockResolvedValue(true), recordRepoStateVerification: vi.fn().mockResolvedValue(true), getAgentRecord: vi.fn(async () => null), recordCompletionCleanup: vi.fn(async () => true) }));
+vi.mock('./cosAgentLifecycle.js', async original => ({ recordHistoricalCleanupReconciliation: vi.fn(async () => true), recordInheritedCheckoutRetirement: vi.fn(async () => true), recordSeededCheckoutRetirement: vi.fn(async () => true), isSettleableCompletionReceipt: (await original()).isSettleableCompletionReceipt, recordSuccessorCheckoutRetirement: vi.fn(async () => true), settleAbsentTaskCompletion: vi.fn(async () => true), retryCompletionCheckoutCapture: vi.fn(async () => false), reserveRepoCleanupRecovery: vi.fn(async () => ({ admitted: true, attempt: 1 })), recordRepoCleanupRecovery: vi.fn(async () => true), recordCleanupOutcome: vi.fn(async () => true), recordSwarmCleanupDelivery: vi.fn(async () => true), recordSwarmCleanupContinuationAttempt: vi.fn(async () => true), updateAgent: vi.fn().mockResolvedValue({}), recordRepoStateRecovery: vi.fn().mockResolvedValue(true), recordRepoStateVerification: vi.fn().mockResolvedValue(true), getAgentRecord: vi.fn(async () => null), recordCompletionCleanup: vi.fn(async () => true) }));
 vi.mock('./cosClaimOwnership.js', () => ({ readClaimOwnershipAgents: vi.fn().mockResolvedValue([]), withClaimOwnershipLock: fn => fn() }));
-vi.mock('./taskSchedule.js', () => ({ recordBranchReconcileOutcome: vi.fn().mockResolvedValue({}) }));
+vi.mock('./branchReconcileOutcome.js', () => ({ recordBranchReconcileOutcome: vi.fn().mockResolvedValue({}) }));
 vi.mock('./taskScheduleStore.js', () => ({ loadSchedule: vi.fn(async () => ({})) }));
+vi.mock('./taskSchedule.js', () => ({ acknowledgeSwarmCleanupRefill: vi.fn(async () => true) }));
 vi.mock('node:fs/promises', async original => { const actual = await original(); return { ...actual, lstat: vi.fn(actual.lstat) }; });
 vi.mock('./heldCheckoutRecovery.js', () => ({
   findMissingCheckoutPreservation: vi.fn(async () => null),
@@ -91,13 +93,20 @@ vi.mock('./notifications.js', () => ({
 vi.mock('./brainTaskThreads.js', () => ({ ensureTaskThread: vi.fn().mockResolvedValue({}), reconcileCleanupThreads: vi.fn(async () => ({ candidates: 0, archived: 0 })) }));
 vi.mock('../lib/execGit.js', () => ({ execGit: vi.fn() }));
 vi.mock('fs', () => ({ existsSync: vi.fn().mockReturnValue(false) }));
+vi.mock('./cosState.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    loadState: vi.fn(async () => ({ config: { autoApproveInvestigations: true } })),
+  };
+});
 
 import { inspectOrQueueCompletedReview } from './repoCleanupRecovery.js';
 import { readLocalBranchPresence, readCheckoutPathPresence } from './repoCleanupObservation.js';
 import { readRetirementForgeEvidence } from './heldCheckoutReview.js';
 import { readCompletedCheckoutIdentity } from './completedCheckoutEvidence.js';
 import { readClaimOwnershipAgents } from './cosClaimOwnership.js';
-import { recordHistoricalCleanupReconciliation, retryCompletionCheckoutCapture, getAgentRecord, recordCleanupOutcome, recordSwarmCleanupDelivery, reserveRepoCleanupRecovery, recordRepoStateRecovery, recordRepoStateVerification } from './cosAgentLifecycle.js';
+import { recordSwarmCleanupContinuationAttempt, recordHistoricalCleanupReconciliation, retryCompletionCheckoutCapture, getAgentRecord, recordCleanupOutcome, recordSwarmCleanupDelivery, reserveRepoCleanupRecovery, recordRepoStateRecovery, recordRepoStateVerification } from './cosAgentLifecycle.js';
 import { readCompletionData } from './agentCompletionData.js';
 import { recordCompletionCleanup, recordInheritedCheckoutRetirement, recordSeededCheckoutRetirement, recordSuccessorCheckoutRetirement, settleAbsentTaskCompletion } from './cosAgentLifecycle.js';
 import { replayAgentCompletionCleanup } from './agentCompletionCleanup.js';
@@ -107,8 +116,9 @@ import { assertAutomaticRetirementAllowed } from './branchReconcileRetirement.js
 import { releaseRetryHold } from './agentWorktreeCleanup.js';
 import { verifyCleanupClaimDisposition } from './claimDisposition.js';
 import { getTaskById, updateTask } from './cosTaskStore.js';
-import { recordBranchReconcileOutcome } from './taskSchedule.js';
+import { recordBranchReconcileOutcome } from './branchReconcileOutcome.js';
 import { loadSchedule } from './taskScheduleStore.js';
+import { acknowledgeSwarmCleanupRefill } from './taskSchedule.js';
 import { lstat } from 'node:fs/promises';
 import { findMissingCheckoutPreservation, prepareInventoriedCheckoutRetirement, retireInventoriedCheckout } from './heldCheckoutRecovery.js';
 import { addTask, getAllTasks } from './cosTaskStore.js';
@@ -263,7 +273,7 @@ it.each(['all-merged', 'all-retired', 'one-open', 'manual-merged'])('wakes a cle
   listWorktrees.mockResolvedValue(branches.map((branch, index) => ({ branch: `refs/heads/${branch}`, path: `/tree/${index}`, head: heads[index] })));
   readCompletedCheckoutIdentity.mockImplementation(async ({ branch }) => agent.metadata.completedCheckouts.find(row => row.branch === branch));
   readCheckoutPathPresence.mockResolvedValue(true);
-  prepareInventoriedCheckoutRetirement.mockResolvedValue({ ok: false, reason: 'checkout-ignored-payload-unverified' });
+  prepareInventoriedCheckoutRetirement.mockResolvedValue({ ok: false, reason: 'worktree-dirty' });
   findPullRequestForBranch.mockImplementation(async branch => {
     const index = branches.indexOf(branch);
     return { status: 'found', number: index + 1, url: urls[index],
@@ -1595,7 +1605,7 @@ describe('verifyAgentRepoState — divergent runs', () => {
         return release.branch === branches[0]
           ? { ok: true, review: { digest: 'a'.repeat(64), forge: { prHead: HEAD },
             comparison: { disposition: 'integrated', localPatch: '', difference: '' } } }
-          : { ok: false, reason: 'checkout-ignored-payload-unverified' };
+          : { ok: false, reason: 'worktree-dirty' };
       });
       retireInventoriedCheckout.mockImplementation(async ({ release }, options) => {
         await options.beforeMutation();
@@ -1610,7 +1620,7 @@ describe('verifyAgentRepoState — divergent runs', () => {
       expect(getAgentRecord).toHaveBeenCalledWith('unrelated-owner');
       releasePreview();
       const result = await checking;
-      expect(result).toMatchObject({ ok: true, verified: false, reasons: ['checkout-ignored-payload-unverified'] });
+      expect(result).toMatchObject({ ok: true, verified: false, reasons: ['worktree-dirty'] });
       expect(seenCapture).toHaveBeenCalled();
       expect(seenRetirement).toHaveBeenCalledOnce();
       expect(replayAgentCompletionCleanup).not.toHaveBeenCalled();
@@ -2539,6 +2549,119 @@ describe('durable completion replay', () => {
     expect(recordRepoStateVerification).toHaveBeenCalledWith('agent-1', expect.objectContaining({ status: 'pending', reasons: ['task-unavailable'], checkedAt: expect.any(String) }));
     expect(addTask).not.toHaveBeenCalled();
   });
+  it('replays only unissued swarm-cleanup continuations after restart', async () => {
+    const swarm = (id, continuationIssued) => ({ id, taskId: `task-${id}`, status: 'completed', result: { success: true },
+      metadata: { swarmCleanupDelivery: { version: 1, continuationIssued } } });
+    const rows = [swarm('swarm-due', false), swarm('swarm-issued', true)];
+    readBranchCompletionPolicies.mockResolvedValue(rows);
+    getAgentRecord.mockImplementation(async id => rows.find(row => row.id === id) || null);
+    const contract = await import('./swarmCleanupDelivery.js');
+    const matches = vi.spyOn(contract, 'cleanupRefillSourceMatches').mockReturnValue(true);
+    const emitted = vi.spyOn(cosEvents, 'emit');
+    try {
+      expect(await sweepRepoStateVerifications()).toMatchObject({ checked: 0 });
+      expect(recordSwarmCleanupContinuationAttempt.mock.calls).toEqual([['swarm-due']]);
+      expect(emitted).toHaveBeenCalledWith('swarm:cleanup-delivery-verified', { agentId: 'swarm-due' });
+      expect(emitted).not.toHaveBeenCalledWith('swarm:cleanup-delivery-verified', { agentId: 'swarm-issued' });
+    } finally { emitted.mockRestore(); matches.mockRestore(); }
+  });
+
+  it('acknowledges refill fences only for issued continuations whose admission settled', async () => {
+    const issued = id => ({ id, status: 'completed', result: { success: true },
+      metadata: { swarmCleanupDelivery: { version: 1, continuationIssued: true } } });
+    readBranchCompletionPolicies.mockResolvedValue([issued('unmarked'), issued('preparing'), issued('admitted'), issued('unknown-handoff'),
+      { id: 'not-issued', status: 'completed', result: { success: true }, metadata: {} }]);
+    loadSchedule.mockResolvedValue({
+      swarmCleanupRefillPending: { unmarked: { id: 'h1', sourceMarked: false }, preparing: { id: 'h2', sourceMarked: true },
+        admitted: { id: 'h3', sourceMarked: true }, 'unknown-handoff': { id: 'h4', sourceMarked: true },
+        'not-issued': { id: 'h5', sourceMarked: false } },
+      onDemandHandoffs: { h2: { status: 'preparing' }, h3: { status: 'admitted' } },
+    });
+    await sweepRepoStateVerifications();
+    expect(acknowledgeSwarmCleanupRefill.mock.calls).toEqual([['unmarked'], ['admitted']]);
+  });
+
+  it('bounds deferred delivery settlements to one recovery batch per sweep', async () => {
+    const receipt = id => ({ id, status: 'completed', result: { success: false, executionSuccess: true,
+      cleanupPending: true, deliveryRecoveryOwned: true,
+      taskOutcome: { status: 'incomplete', recovery: { mode: 'cleanup' } } },
+    metadata: { checkoutCapture: { status: 'captured' }, repoStateVerification: { status: 'completed' },
+      cleanupOutcome: { status: 'verified', unresolved: 0, committedIntegrationVerified: true },
+      completionCleanup: { version: 1, status: 'completed', stages: Object.fromEntries(
+        ['sentinel', 'jira', 'notification', 'pipeline', 'creative', 'report', 'worktree'].map(key => [key, { status: 'done' }])) } } });
+    readBranchCompletionPolicies.mockResolvedValue(Array.from({ length: 12 }, (_, index) => receipt(`receipt-${index}`)));
+    await sweepRepoStateVerifications();
+    expect(recordRepoStateVerification).toHaveBeenCalledTimes(10);
+  });
+
+  it('skips a backed-off audit on recheck unless a claim owner holds it', async () => {
+    const prior = archived();
+    prior.metadata.repoStateVerification.reasons = ['task-unavailable'];
+    prior.metadata.completionCleanup = { replayAttempts: 5, retryAt: new Date(Date.now() + 60_000).toISOString() };
+    readBranchCompletionPolicies.mockResolvedValue([prior]);
+    expect(await resumeDeferredRepoStateVerifications(async () => null)).toMatchObject({ checked: 0, pendingAtStart: 0 });
+    expect(recordCompletionCleanup).not.toHaveBeenCalled();
+  });
+
+  it('records a physically verified retirement and does not count or replay the settled run', async () => {
+    const fresh = archived();
+    fresh.metadata.completionCleanup = { status: 'completed' };
+    fresh.metadata.checkoutCapture = { status: 'retired' };
+    fresh.metadata.repoStateVerification = { status: 'pending', physicalRetirementVerified: true };
+    readBranchCompletionPolicies.mockResolvedValue([archived()]);
+    getAgentRecord.mockResolvedValue(fresh);
+    recordRepoStateVerification.mockImplementation(async (_id, verification) => {
+      fresh.metadata.repoStateVerification = { ...verification, status: 'completed' };
+      return true;
+    });
+    expect(await sweepRepoStateVerifications()).toMatchObject({ checked: 0, pendingAtStart: 1 });
+    expect(recordRepoStateVerification).toHaveBeenCalledWith('agent-1', { status: 'pending', physicalRetirementVerified: true });
+    expect(recordCompletionCleanup).not.toHaveBeenCalled();
+    expect(replayAgentCompletionCleanup).not.toHaveBeenCalled();
+  });
+
+  it.each([[undefined, 60_000], [9, 30 * 60_000]])('backs off replay attempt after %s prior attempts by %i ms', async (replayAttempts, delay) => {
+    const prior = archived();
+    if (replayAttempts !== undefined) prior.metadata.completionCleanup = { replayAttempts };
+    readBranchCompletionPolicies.mockResolvedValue([prior]);
+    getTaskById.mockResolvedValue(task());
+    await sweepRepoStateVerifications();
+    const [, , attempt] = recordCompletionCleanup.mock.calls.find(([, , patch]) => patch.retryAt);
+    const waited = Date.parse(attempt.retryAt) - Date.parse(attempt.lastAttemptAt);
+    expect(waited).toBeGreaterThanOrEqual(delay);
+    expect(waited).toBeLessThan(delay + 1_000);
+  });
+
+  it('replays completion cleanup before and after re-verifying a pending audit', async () => {
+    const fresh = archived();
+    readBranchCompletionPolicies.mockResolvedValue([archived()]);
+    getAgentRecord.mockResolvedValue(fresh);
+    getTaskById.mockResolvedValue(task());
+    findPullRequestForBranch.mockResolvedValue({ status: 'found', detail: 'MERGED', url: 'https://github.com/example/repo/pull/7' });
+    expect(await sweepRepoStateVerifications()).toMatchObject({ checked: 1 });
+    expect(replayAgentCompletionCleanup).toHaveBeenCalledTimes(2);
+    const verified = recordRepoStateVerification.mock.invocationCallOrder.at(-1);
+    expect(replayAgentCompletionCleanup.mock.invocationCallOrder[0]).toBeLessThan(verified);
+    expect(replayAgentCompletionCleanup.mock.invocationCallOrder[1]).toBeGreaterThan(verified);
+  });
+
+  // An unreadable task store is not proof the task is gone, so only a definite
+  // absence may replay the released-completion retirement and keep its reason.
+  it.each([['unreadable', 'task-unavailable'], ['absent', 'original-result-preserved']])('records why a taskless pending audit stays pending: %s task', async (scenario, expected) => {
+    const prior = archived();
+    prior.result = { ...prior.result, cleanupPending: true };
+    prior.metadata.repoStateVerification = { status: 'completed' };
+    prior.metadata.completionCleanup = { status: 'pending' };
+    readBranchCompletionPolicies.mockResolvedValue([prior]);
+    getAgentRecord.mockResolvedValue(prior);
+    getTaskById.mockResolvedValue(null);
+    // Only the sweep's own read fails; a later read must not rescue the audit.
+    if (scenario === 'unreadable') getTaskById.mockRejectedValueOnce(new Error('fixture task store unreadable'));
+    expect(await sweepRepoStateVerifications()).toMatchObject({ checked: 1 });
+    const pending = recordRepoStateVerification.mock.calls.find(([id, verification]) => id === 'agent-1' && verification.status === 'pending');
+    expect(pending?.[1].reasons).toEqual([expected]);
+  });
+
   it('uses the exact successor result without creating an unrelated generic recovery task', async () => {
     localBranch(true);
     execGh.mockResolvedValue(openView({ number: 7, mergeable: 'CONFLICTING' }));

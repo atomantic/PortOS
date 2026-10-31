@@ -56,25 +56,30 @@ persisted inventory and a fresh Git read still matches it — a changed lock,
 HEAD or branch is an ownership change. It then requires merge evidence on the
 default branch and no live owner, claim binding or manual completion handoff.
 
-A merged, clean checkout is removed at its original path only when its ignored
-content is also safe to discard. Merge evidence says the committed work is on
-the default branch; it says nothing about ignored files. For merged and
-superseded checkouts, `checkout-ignored-payload-unverified` retains the checkout
-and branch until wanted files have been recovered or their disposal resolved.
-Recognized disposable Vitest caches, private npm copies and links whose target
-bytes remain outside the checkout retain their existing removal policy.
-Dirty, unmerged, protected, and live-owner checkouts stay where they are. Retirement does not
+A merged checkout is removed at its original path. **Merged ⇒ disposable:** a
+checkout whose branch PR the forge reports MERGED at the observed head loses its
+uncommitted, untracked and git-ignored files with it (build output, caches,
+dependency links, seeded data, scratch edits). They are never the delivered
+work, which the merged PR already places on the default branch. The skip is bound
+to that exact SHA and re-checked against the head observed at the removal
+boundary, so a later local commit keeps the hold. Every retirement path applies
+the same predicate: the branch-reconcile merged retirement, the merged-worktree
+reaper (including external-repo checkouts), held-checkout and legacy-release
+retirement, and quality-snapshot checkouts (merged PR). A dirty checkout with no
+merged PR at its head, an unmerged, protected, or live-owner checkout stays
+where it is; an empty branch trivially "contains" main, so local ancestry alone
+never makes a dirty checkout disposable. Retirement does not
 copy the checkout, its ignored files, or its commit history. The lock is
 released only after a second fresh match, and ownership, HEAD and cleanliness
 are rechecked immediately before removal; if that recheck refuses, the original
 lock is restored. A retired row leaves the inventory and appears under
-*Recently retired*; only the next sweep can report convergence. Older copies
-under `data/cos/held-checkout-archives/`,
+*Recently retired*; only the next sweep can report convergence. No retirement
+path writes a checkout archive. Setup migrations 442 and 454 remove the
+historical `data/cos/held-checkout-archives/`,
 `data/cos/branch-retirement-archives/`, and
-`data/cos/initialized-checkout-retirements/` are not written anymore. Setup
-migration 442 preserves those directories: they may contain the only unpublished
-files or originals held by unfinished recovery transactions. Existing restore
-and verification workflows remain available after setup.
+`data/cos/initialized-checkout-retirements/` directories (a symlinked directory
+is left alone), and nothing reads them. A merged checkout is disposable; a
+missing original generation is never recovered from an archive.
 
 ### Explicit delivery reviews
 
@@ -152,74 +157,39 @@ and recovery evidence; old Git registration pointers/locks must never be copied
 into a recreated checkout as if it were the previous incarnation. The published
 source branch is retained; local retirement does not delete it remotely.
 
-### Held archive work budgets
+### Review work budgets
 
-Review fingerprints still apply these byte budgets and can refuse with
-`retirement-archive-limit-exceeded`. That refusal keeps the checkout and does
-not write an archive directory. Historical archives that already exist are
-checked with the same budgets.
+Review fingerprints apply byte budgets and can refuse with
+`retirement-archive-limit-exceeded`. That refusal keeps the checkout; review
+never writes an archive directory.
 
-Patch capture preserves original Git output bytes, including non-UTF-8 content. Metadata names and symlink targets must round-trip losslessly through UTF-8; unsupported encodings refuse preservation before removal.
+Patch capture preserves original Git output bytes, including non-UTF-8 content. Metadata names and symlink targets must round-trip losslessly through UTF-8; unsupported encodings refuse before removal.
 
-Held archives use resource contract `1`, recorded as `resourceContract` in the
-manifest. File count is not admission policy: every ignored/untracked content
-file and worktree-private Git file remains included. Hashing and copying use
-64 KiB chunks, with one copy at a time and at most two concurrent snapshot
-file streams. Git snapshot queries keep their existing finite fan-out: seven
-content queries plus the private Git directory lookup. A source growing during a copy aborts rather than expanding disk use.
+File count is not admission policy; the byte and metadata budgets below bound
+each snapshot, and independently recognized disposable test caches do not count
+against them. Hashing uses 64 KiB chunks with at most two concurrent
+snapshot file streams. Git snapshot queries keep a finite fan-out: seven content
+queries plus the private Git directory lookup.
 
-The existing limits remain 25 MiB per raw file, 250 MiB combined content and
-private administration, 16 MiB serialized manifest, and the existing Git output
-buffer of `64 * 1024 * 1024` JavaScript code units. Git output overflow and command timeout retain measured usage and recovery guidance, without changing either existing limit. Patch verification bounds its
-raw byte representation at three bytes per decoded code unit (192 MiB), preserving older multibyte
-patch admission. Metadata is charged incrementally against the same 16 MiB ceiling,
-including file entries, symlink targets and gitlinks; this also bounds
-zero-byte-file trees. Transient sorted directory names have a separate 16 MiB
-scan budget, so directory traversal cannot allocate unbounded name lists. These
-byte ceilings retain the prior safety envelope instead of estimating work from a count. A snapshot, archive write (both source
-passes included), or independent verification has a ten-minute elapsed work
-budget. This is a conservative ceiling of twenty existing 30-second Git command
-timeouts; it allows ordinary many-small-file archives while bounding repeated
-filesystem work. Checks run between filesystem operations and 64 KiB chunks;
-a running Git command retains its existing 30-second timeout. Kernel I/O may
-finish before cancellation is observed. No new global setting is written.
+The limits are 25 MiB per raw file, 250 MiB combined content and private
+administration, and the Git output buffer of `64 * 1024 * 1024` JavaScript code
+units. Git output overflow and command timeout report measured usage and recovery
+guidance. Metadata is charged incrementally against a 16 MiB ceiling, including
+file entries, symlink targets and gitlinks; this also bounds zero-byte-file trees.
+Transient sorted directory names have a separate 16 MiB scan budget, so directory
+traversal cannot allocate unbounded name lists. A snapshot has a ten-minute
+elapsed work budget, a conservative ceiling of twenty 30-second Git command
+timeouts. Checks run between filesystem operations and 64 KiB chunks; a running
+Git command retains its 30-second timeout. Kernel I/O may finish before
+cancellation is observed. No global setting is written.
 
 Internal callers may pass an `AbortSignal` as `opts.signal`. Cancellation or a
-resource refusal keeps the original checkout, ref and outstanding obligations;
-partial archives and temporary bundle refs are cleaned up. A new attempt starts
-from fresh snapshots rather than treating partial work as preservation evidence.
-After a process crash, an archive without a complete manifest cannot prove
-preservation; an existing completed archive still needs the full independent
-hash and isolated Git object proof. No historical receipt is synthesized.
-
-Capacity responses include measured bytes, Git output code units, or elapsed
-milliseconds. Recover by
-freeing resources or preserving large outputs separately, then retrying the exact
-checkout with fresh evidence; do not remove it or raise global limits to clear a
-refusal. Existing unversioned archives follow an explicit compatibility path
-through the same bounded verification and complete content/private-Git proof.
-Unknown contract versions fail closed. The real-Git benchmark at `d200ec77d2`
-measured 16.9–20.9 seconds for cancellation/cleanup/retry and 20.2 seconds for
-the 1,100-plus-file restore. Integration fixture construction, retirement or
-confirmation, and independent proof retain separate existing 30-second phase
-budgets; cumulative case duration includes its hooks. Existing tests retain their
-default timeout. This does not change initialized-checkout archives or their
-separate operational budgets.
-
-Historical held-checkout archives must also prove that their staged patch
-reconstructs the preserved private index. Verification imports the bundle into
-a fresh, isolated Git repository, starts from the recorded HEAD, applies
-`index.diff` to a new index, and compares every path, mode, stage and object ID
-with the archived index. Split-index support uses only validated archived index
-files; archived Git configuration, pointers and object stores are never execution
-targets. Matching patch hashes alone cannot establish this proof: an older writer
-could have hashed bytes already damaged during decoding.
-
-A missing, unsupported or mismatched index retains the historical preservation
-obligation with `archive-index-reconstruction-failed`. Locate a complete archive
-for that exact checkout generation or recover the original data from backup, then
-retry reconciliation. Failure never fabricates a retirement receipt or authorizes
-deletion of a checkout, branch or archive.
+resource refusal keeps the original checkout, ref and outstanding obligations. A
+new attempt starts from fresh snapshots rather than treating partial work as
+evidence. Capacity responses include measured bytes, Git output code units, or
+elapsed milliseconds. Recover by freeing resources or preserving large outputs
+separately, then retrying the exact checkout with fresh evidence; do not remove it
+or raise global limits to clear a refusal.
 
 ## Completing a merged job
 
@@ -237,321 +207,6 @@ includes resolving the affected work within original authority and budgets,
 repairing demonstrated root code defects with regression coverage and normal PR
 delivery, and reusing active fixes. External permission and transient causes are
 recorded accurately rather than turned into invented code defects.
-
-## Explicit initialized-checkout retirement
-
-Automatic cleanup continues to retain initialized submodules. The separate
-`/api/cos/schedule/branch-reconcile/initialized-checkouts` capability supports
-operator-reviewed private-module checkouts on macOS. Other platforms and unknown
-Git layouts fail closed. It does not deinitialize a module.
-
-1. `POST /review` accepts the exact inventory tuple (`appId`, `path`, `head`,
-   `branch`, `locked`, `lockReason`) and `prUrl`. The response binds the merged PR,
-   current default head, ownership, completion policy, parent/module content and
-   Git administration to a review digest. A repair branch alias is accepted only
-   when its exact tip equals the merged PR head. Superseded work needs an explicit
-   `acceptSuperseded` decision after reviewing the full comparison.
-2. `POST /retire` accepts that tuple plus `review: {prUrl, digest,
-   acceptSuperseded}`. It repeats the review. When the disposition is `integrated`
-   and `git status --porcelain` is empty, it checks ignored files in the parent
-   checkout and each initialized module before requesting `git worktree remove
-   --force`. Unverified ignored content keeps the checkout. The merged PR is
-   recorded as the receipt's `validationEvidence`;
-   a Git refusal preserves the directory and branch with `checkout-not-removed`.
-   After successful removal it deletes the local branch with the same exact-head
-   lease as other completed branches.
-   An exact merged PR head is integrated once freshly verified default history
-   contains the actual merge commit, even when later commits changed shared files.
-   This is deterministic delivery evidence and needs no manual supersession
-   acceptance or update of the primary checkout. It never covers a newer local
-   tip, replacement delivery or missing merge evidence. Other dispositions
-   return `not-merged-on-recheck` and leave the checkout. No transaction directory
-   is created.
-
-Journals already stored under `data/cos/initialized-checkout-retirements/` keep
-the historical quarantine restore path below. Setup migration 442 leaves the
-journals, quarantined originals and archives intact. An incomplete journal is a
-recovery obligation, never proof that its originals are disposable. The
-historical steps are:
-
-3. The successful phase is **quarantined**, not fully retired. The branch remains
-   with reason `quarantined-checkout-rollback-ref`. `POST /review-branch` accepts
-   `appId`, `transactionId` and the fresh status `journalDigest`; it verifies the
-   quarantined originals and archive, exact current branch, fresh merge/default
-   head, ownership and full supersession comparison. `POST /retire-branch` accepts
-   those identifiers plus the newly accepted `review`. It uses exact-head native
-   deletion with holder protection and preserves the branch reflog archive,
-   then records the original checkout retirement receipt. No UI merged flag
-   authorizes either operation.
-4. `GET /status?appId=…&transactionId=…` returns the journal phase, placements and
-   current `journalDigest`. `POST /restore` requires those two identifiers plus
-   that digest. It restores original inodes only to vacant original locations,
-   with unchanged ownership, branch and required object proof. Unrelated shared
-   refs may advance; shared config, dependency changes, missing indexed objects,
-   a new holder or a changed/deleted branch hold in-place rollback.
-5. `POST /verify-archive` accepts the same identifiers and journal digest. It
-   independently verifies the archive and prebuilt standalone checkout, returning
-   `standaloneCheckoutPath`. This recovery remains usable after the original
-   branch is deleted or the live parent/module object stores are unavailable.
-   Parent and module staged blobs and private recovery refs are explicitly
-   checked; `git fsck` alone does not prove every staged blob exists.
-6. If branch deletion was conclusively journaled as `branch-retired`, but writing
-   its receipt failed, or `retired` was journaled before reservation release,
-   repeat `POST /retire-branch` with the latest `journalDigest`. This verifies
-   archive integrity, quarantined originals, ownership, no new holder and the
-   still-absent ref; it only finishes the receipt and reservation release. It
-   never deletes or recreates a ref on replay. A `branch-retirement-intent`
-   without a recorded receiver result remains an explicit uncertainty hold,
-   even when the ref is absent. Status reports that evidence; standalone recovery
-   stays available, but no automatic retry clears the uncertain reservation.
-
-The native backend preserves file bytes, permissions, ownership, timestamps,
-ACLs, xattrs, supported flags, empty directories, hard links and symlink targets
-without following symlink dependencies. It retains original identity evidence;
-only the standalone copy's Git pointers are rewritten to its isolated stores.
-OS-added `com.apple.provenance` on a copy is retained with its exact hash. When
-the OS replaces an existing provenance value, version 3 also preserves the exact
-original bytes in the bound manifest as canonical base64 and checks their hash
-against the captured source. Archive and restore copies record separate values
-when the OS replaces it twice. These retained original bytes are recovery
-evidence; the backend never installs them onto the copy. Missing attributes,
-changes to any other attribute, and unrecorded additions still refuse preservation.
-No provenance or quarantine attribute is removed or rewritten by this backend.
-Ownership is checked during preview and again before copying. New copies retain
-permitted UID/GID values without changing source metadata or caller credentials.
-On Darwin, a uniform directory tree may retain a nonmember group through a
-private empty directory created in a same-volume temporary parent with that
-inherited group, then exclusively moved into the archive before copying.
-Mixed unsupported ownership fails with `ownership-preservation-unavailable`
-before creating an archive; use an executor already authorized to represent the
-original ownership, never normalize the source to make verification pass.
-Normal retirement and rollback require exact original and quarantined metadata. Every later
-archive verification or move is bound to the exact manifest hash journaled after
-preservation. If that journal write is interrupted before any move, status
-exposes an unverified-archive hold and a digest for source-verified cancellation;
-it does not infer a preservation proof from the retained manifest.
-Shared/external/nested module stores, alternates, promisor dependencies, active
-Git operations, insufficient space and unsupported metadata hold the operation.
-A full parent store copy and a second standalone restore require bounded free
-space; there is no cache deletion fallback.
-
-### Reviewed recovery after a move changes metadata
-
-On Darwin, an exclusive directory rename can remove residual
-`com.apple.decmpfs` attributes even when `UF_COMPRESSED` was unset. The normal
-transaction refuses further moves when this changes its captured original
-manifest. A source content change is never treated as that metadata transition.
-
-While the interrupted transaction still owns its exact repository reservation:
-
-1. `POST /review-metadata-restore` accepts `appId`, `transactionId` and the current
-   `journalDigest`. It holds the native executor lock and existing reservation,
-   checks current ownership and the unchanged branch, verifies the standalone
-   archive, and creates immutable private evidence for the full observed delta.
-2. Independently inspect that evidence before accepting the returned review
-   digest. Only removed residual compression attributes on regular files whose
-   compressed flag was unset, and a provenance addition on an original root
-   directory, are eligible. Original raw compression bytes must still match the
-   captured hashes in the verified archive. All content, inode identities,
-   timestamps, permissions, ownership, ACLs, flags, other attributes and paths
-   remain exact. Nothing rewrites the original manifest or installs attributes.
-3. `POST /restore-metadata` takes the same identifiers and `review: {digest}`.
-   It repeats the review under both locks, journals the accepted evidence, and
-   restores original inodes with exclusive renames. Post-move observations are
-   retained. A changed review, unknown metadata transition, new holder, changed
-   branch or uncertain reservation refuses further work.
-4. Success is `restored-with-metadata-transitions`, with archives and the
-   metadata evidence retained. The exact reservation is released only after
-   final proof. This restores a checkout; it never deletes or recreates a ref,
-   proves a PR merged, or authorizes another retirement. Obtain a fresh
-   retirement review after restoration.
-
-If the installed server predates this recovery capability, run the supported
-`scripts/recover-initialized-checkout.js` from an independently reviewed checkout
-of this version. It uses the same service, native lock and existing reservation;
-it does not patch the running server or clear a reservation manually:
-
-```sh
-node scripts/recover-initialized-checkout.js review /absolute/request.json \
-  --install-root /absolute/PortOS --output /absolute/new-review.jsonl
-node scripts/recover-initialized-checkout.js restore /absolute/approved-request.json \
-  --install-root /absolute/PortOS --output /absolute/new-restore.jsonl
-```
-
-The request file contains only the API fields above. Each output must be new;
-it records a durable pending intent before execution and then a response. A
-pending-only record means inspect the transaction before any retry. The CLI
-requires an existing self-install registry and trusted owner state, and refuses
-an absent or uncertain reservation. It never initializes a different data tree.
-Journal rows are fully written and synced to private staging files before
-exclusive hardlink publication to their numbered names. Staging files remain
-as evidence, including partial writes; recovery reads only committed numbered
-rows. Existing malformed numbered rows are never silently ignored or replaced.
-After an interrupted recovery, read status again and obtain a new review for
-the new journal digest rather than replaying an old approval.
-
-### Finalizing originals that have already been restored
-
-Metadata can change after the post-move proof succeeds. In an observed case,
-directory modification times changed and some residual compression attributes
-returned with exactly their archived original bytes. The writer was not
-established. The restore's final verification correctly retained its reservation.
-
-When both original directories are already back at their exact original inode
-identities, a separate completion path can record this narrow delta without
-moving or repairing anything:
-
-1. `POST /review-restored-finalization` accepts the transaction identifiers and
-   fresh journal digest. It binds the previous accepted restore review and its
-   immutable post-move observations, verifies the archive, and captures a new
-   immutable full source snapshot under the existing reservation and executor.
-2. Independently review the new digest and complete evidence. Only directory
-   modification-time changes and reappearance of original residual
-   `com.apple.decmpfs` bytes are eligible. Reappeared attributes must match both
-   their prior raw preimages and the verified archive; the file must remain
-   uncompressed. Administration, file contents and modification times, paths,
-   identities, permissions, ownership, ACLs, flags, and all other attributes
-   remain exact. Unknown drift stays held.
-3. `POST /finalize-restored` accepts that separately reviewed digest. It repeats
-   the review, verifies the exact snapshot again, and rechecks the branch,
-   ownership, policy and reservation before recording completion and releasing
-   the exact reservation. It performs no directory moves, metadata writes,
-   branch changes or cleanup. Original manifests, raw values, observations,
-   archives and journal evidence remain retained.
-
-The bootstrap CLI exposes the same separate operations:
-
-```sh
-node scripts/recover-initialized-checkout.js review-finalization /absolute/request.json \
-  --install-root /absolute/PortOS --output /absolute/new-finalization-review.jsonl
-node scripts/recover-initialized-checkout.js finalize /absolute/approved-request.json \
-  --install-root /absolute/PortOS --output /absolute/new-finalization.jsonl
-```
-
-These operations do not relax normal retirement or restore-move checks, and
-finalization does not authorize branch deletion. Any subsequent retirement
-requires a fresh review and preservation proof for the current checkout.
-A move-based restore retry refuses when both originals are already restored and
-its working-move proof is present, preserving that evidence for this separate
-finalization path instead of replacing it with no-op observations.
-
-### Automatic continuation of initialized retirement journals
-
-CoS discovers existing private initialized-retirement journals at startup evaluation
-and every 30 minutes, independently of branch-reconcile scheduling or free agent
-slots. It acts only while the daemon is running, unpaused, and CoS autonomy is
-`execute`. Discovery never starts a retirement or grants authority from a journal
-phase alone. The bounded drain handles at most two transactions per pass, rotates
-past held work, and refreshes evidence on subsequent passes. It creates no agent,
-worktree, or additional persistent queue.
-
-Automatic continuation requires a valid original transaction, a bound preservation
-manifest, the original exact reservation, and fresh service/native proofs. The
-local tip must equal the merged PR head; the complete scoped comparison must be
-`integrated` with no differences. The native classifier permits only the archived
-residual-compression removal and root-provenance addition described below. Every
-other source field must still match the preserved baseline. A successful review
-is passed to the same purpose-specific operation with its exact digest; the
-operation recomputes the proof before moving anything. After its internal scan,
-the native helper waits for an exact, fresh server acknowledgement before rename;
-pause, a lost executor, invalid replies, and parent exit grant nothing. The branch
-receiver guard runs after preservation and fsyncs deletion intent before invoking
-Git. Before lengthy branch verification, `branch-retirement-prepared` durably
-binds the new exact reservation without granting deletion. Restart obtains a fresh
-branch review under that same cut. The daemon never accepts
-supersession. Branch retirement requires its own subsequent fresh review.
-
-A plain `quarantined` journal whose reservation release was interrupted can finish
-through this same proof without moving either original again. Durably confirmed
-branch deletion can replay its receipt without another Git deletion; it still
-requires archive, placement, absent-ref, ownership, and reservation checks. A
-completed receipt or completed restore with an already released reservation needs
-no further action and consumes no replay slot. A missing owner file inside an
-existing cut is uncertainty, not a released reservation.
-
-Unknown metadata, changed sources, superseded work, active owners, manual policy
-holds, unsupported pre-move/restoration phases, and uncertain deletion results
-remain held for explicit review. CoS does not restore originals automatically,
-transfer a cut, infer ownership from age/PIDs, or turn ref absence into a deletion
-receipt. Existing schedule status exposes `reconcileOutcomes[appId].initializedRetirements`
-with each transaction, branch, observed journal digest, phase, and reason. These
-observations are diagnostics, never cached approval. Invalid unbound journals are
-reported in the global reconcile outcome. The journals and archives remain the
-recovery evidence after restart. A crash between cut creation and publication of
-its preparation record remains an explicit reservation-mismatch hold; the daemon
-never adopts an unrecorded owner. A pause or interruption after deletion intent
-was fsynced remains uncertain even when no receiver result was observed.
-
-The narrow machine-verified continuation above does not require another runtime
-agent or human approval. The explicit operations below remain available for
-independent inspection, supersession decisions, and unsupported recovery cases.
-
-### Completing an interrupted quarantine
-
-When the working directory has already moved into quarantine, restoring it
-solely to retry retirement can trigger further metadata changes. A separate
-reviewed operation can instead finish quarantining its administration while
-preserving the working directory at its existing quarantine location.
-
-1. `POST /review-quarantine-resumption` accepts `appId`, `transactionId` and
-   the current `journalDigest`. Under the native executor and exact existing
-   reservation, it verifies the archive, full current sources, original inode
-   placements, current ownership and branch, and fresh forge/integration
-   evidence for the PR recorded in the original transaction.
-2. Independently inspect the returned `resume-initialized-quarantine` review.
-   Its distinct native proof preserves full current manifests and raw metadata
-   deltas. Only removal of residual compression attributes from uncompressed
-   regular files and addition of provenance on an original root directory are
-   eligible. Every other source field, including directory timestamps, stays
-   exact. Restore and already-restored finalization approvals cannot authorize
-   this operation.
-3. `POST /resume-quarantine` takes the same identifiers and
-   `review: {digest, acceptSuperseded?}`. Explicit supersession acceptance is
-   required when the fresh comparison calls for it. The service recomputes the
-   review and moves only administration, if it is still original, using an
-   exclusive rename. A separately recorded post-move observation and full
-   verification must prove both original inodes are quarantined before the
-   exact reservation is released. Unexpected drift retains all evidence and
-   requires a new review. If the rename completed but publication of its
-   post-move observation was interrupted, a fresh review may prove both
-   original inodes already quarantined; it neither repeats the rename nor
-   fabricates a missing historical observation.
-4. Quarantine completion retains the branch. The existing branch-review and
-   branch-retirement operations require a second fresh approval, now also
-   bound to the recorded quarantine metadata proof. They verify the complete
-   quarantined originals, archive and object closure, current branch tip,
-   ownership, holders and forge state before exact-head branch retirement.
-   Receipt recovery after a durably confirmed deletion verifies the preserved
-   sources again and requires the ref to remain absent.
-
-The bootstrap CLI provides `review-quarantine` and `resume-quarantine` with
-the same request fields, explicit `--install-root`, and a new private `--output`
-record for each invocation. It cannot accept a caller-supplied native proof or
-reuse a restore/finalization approval as quarantine authorization.
-
-Neither resumption nor receipt recovery deletes original directories or
-rewrites their metadata. A lost branch-deletion result remains an uncertainty
-hold; an absent ref alone does not establish that the intended deletion
-completed. An occupied or malformed loose-ref path, unsafe ref parent, or
-unreadable packed refs cannot establish absence for receipt recovery. Archive
-copies, original quarantines, raw preimages, post-move observations, journal
-staging and released reservation evidence remain retained.
-
-Managed checkout creation/adoption/removal, claim binding, the full workspace
-preparation through agent registration/spawn, and supported Git API writers
-share admission under the canonical common Git directory. Synthetic read-only
-merge proofs use a private temporary object store. Concurrent Git writes conservatively invalidate
-an exact archive snapshot rather than authorize removing changed evidence. A pending
-reservation survives restart. Normal writers release their permits only after
-settlement; timeout, overflow or signal termination retain an uncertain permit
-because direct-child exit cannot establish that every helper stopped. No PID,
-age, timer or automatic retry clears this evidence. Reservation release atomically
-moves the intact owner into a durable private release record, preserving evidence
-across a crash without leaving an ownerless cut. Receipt replay keeps the original
-archive identity and timestamp so a newer checkout obligation cannot be satisfied
-by replaying an older retirement. Interrupted transactions outside the machine-verified continuation above
-require explicit status and recovery; ambiguous identities remain held. The
-private journal and all copies remain available after success or recovery.
 
 ## Later deliveries on a captured checkout
 
@@ -589,38 +244,3 @@ The original observation and proof remain in `legacyRetirementTransition`
 audit history. Delivery-only settlement explicitly does not claim a verified
 deletion and creates no retirement receipt. Agent results, retry budgets and
 current worktrees are unchanged. A new sweep still establishes convergence.
-
-## Whole-checkout preservation
-
-For a reviewed checkout that exceeds the ordinary archive byte bounds, the
-explicit `POST /api/cos/schedule/branch-reconcile/whole-checkouts/review` and
-`whole-checkouts/retire` endpoints use the initialized-checkout transaction
-backend without requiring an initialized submodule. They accept the same exact
-inventory tuple, PR URL and review confirmation as the initialized endpoints.
-Their reviews are distinct: a digest from another preservation mode is refused.
-
-This path retains the backend's source-byte and writable-capacity bounds,
-ownership checks, complete metadata capture, standalone object proof, quarantine
-and branch-retirement receipt. Uninitialized gitlink paths may be absent or
-contain ordinary files; all present files are preserved. Actual embedded Git
-stores and external object dependencies retain their existing refusal rules.
-The ordinary archive limits and initialized-only endpoint remain unchanged.
-
-An initialized module may borrow objects through one absolute alternate naming
-its exact corresponding store under this repository's registered module
-administration. Preservation copies the entire dependency store, binds its
-identity and every byte, and rewrites the alternate only in the isolated restore
-copy. The raw archive retains the original pointer. Other roots, relative or
-chained alternates, symlinks and promisor dependencies remain held. Rollback
-additionally checks that the original live stores can still resolve the private
-refs and index; an independent archive never substitutes for that proof.
-
-Transactions with copied dependencies use version 4 manifests. Existing
-immutable version 1–3 archives are read in place, with their original hashes and
-verification rules; they are not rewritten or converted.
-
-Status, rollback, independent archive verification and later branch retirement
-use the existing `initialized-checkouts` transaction endpoints with the returned
-transaction ID and a fresh journal digest. A failed preservation attempt is
-unverified and retains its originals and partial evidence; it is not successful
-cleanup. No archive deletion or retention policy is added by these endpoints.

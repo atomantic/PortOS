@@ -328,7 +328,8 @@ async function runFal(job, jobId, {
   let wroteOutput = false;
   try {
     const encoded = [];
-    for (const path of inputPaths) encoded.push(await encodeInputImage(path, reviewedReferenceBytes));
+    // A reviewed edit's snapshot leads (no init image); later inputs are read from disk.
+    for (const [index, path] of inputPaths.entries()) encoded.push(await encodeInputImage(path, index === 0 ? reviewedReferenceBytes : null));
     const request = buildFalImageRequest({
       modelId: family.textEndpoint,
       prompt: fullPrompt,

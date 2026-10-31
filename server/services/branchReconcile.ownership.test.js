@@ -406,7 +406,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('branch-reconcile worktree ownership (re
       expect(await branches()).not.toContain(shipped.branch);
       // #13519 replaced archival with archive-free merged cleanup. The exact
       // completed ref still protects recovery inside the original repository.
-      for (const directory of ['held-checkout-archives', 'branch-retirement-archives', 'initialized-checkout-retirements']) {
+      for (const directory of ['branch-retirement-archives', 'initialized-checkout-retirements']) {
         expect(existsSync(join(PATHS.cos, directory))).toBe(false);
       }
       expect((await execGit(['rev-parse', `refs/portos/completed/${shipped.head}`], repo)).stdout.trim()).toBe(shipped.head);
@@ -690,42 +690,42 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('branch-reconcile worktree ownership (re
   describe('detached checkout receipts (#13405)', () => {
     /** A clean managed detached checkout that a previous scan already inventoried. */
     async function inventoriedDetached() {
-      const taskSchedule = await import('./taskSchedule.js');
+      const outcomes = await import('./branchReconcileOutcome.js');
       const path = join(repo, '.claude', 'worktrees', 'clean-detached');
       await execGit(['worktree', 'add', '--detach', path, 'main'], repo);
       const gitPath = await gitCheckoutPath(path);
       const head = (await execGit(['rev-parse', 'HEAD'], path)).stdout.trim();
       const release = { path: gitPath, head, detached: true, managed: true, checkoutIdentity: await readRetirementCheckoutIdentity(path) };
       const unrelated = { branch: 'feature/unexplained', head, reason: 'branch-held' };
-      await taskSchedule.recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [{ ...release, reason: 'checkout-retained' }, unrelated] });
-      return { taskSchedule, path, release, unrelated };
+      await outcomes.recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [{ ...release, reason: 'checkout-retained' }, unrelated] });
+      return { outcomes, path, release, unrelated };
     }
     const sweep = (options = {}) => reconcile(repo, { activeAgentIds: new Set(), claimOwners: { agents: [], readAgents: async () => [] }, ...options });
 
     it('settles a retired detached checkout before the next inventory without claiming a branch deletion', async () => {
-      const { taskSchedule, path, release, unrelated } = await inventoriedDetached();
+      const { outcomes, path, release, unrelated } = await inventoriedDetached();
       const result = await sweep({ appId: 'app-1' });
       expect(result.cleaned).toContain(release.path);
       expect(existsSync(path)).toBe(false);
-      const first = await taskSchedule.getBranchReconcileOutcome('app-1');
+      const first = await outcomes.getBranchReconcileOutcome('app-1');
       expect(first.retired).toEqual([expect.objectContaining({ path: release.path, head: release.head, checkoutIdentity: release.checkoutIdentity,
         branchDeleted: false, checkoutOnly: true, archiveDir: null })]);
       expect(first.retired[0]).not.toHaveProperty('branch');
-      const next = await taskSchedule.recordBranchReconcileOutcome('app-1', { status: 'complete', remaining: [] });
+      const next = await outcomes.recordBranchReconcileOutcome('app-1', { status: 'complete', remaining: [] });
       expect(next.retired).toEqual(first.retired);
       expect(next.retirementObligations).toEqual([expect.objectContaining({ branch: unrelated.branch })]);
     });
 
     it('leaves a removed detached checkout a missing-source obligation when its receipt cannot be stored', async () => {
-      const { taskSchedule, path, release, unrelated } = await inventoriedDetached();
+      const { outcomes, path, release, unrelated } = await inventoriedDetached();
       injected.failScheduleWrite = true;
       const result = await sweep({ appId: 'app-1' });
       expect(existsSync(path)).toBe(false);
       expect(result.cleaned).not.toContain(release.path);
       expect(result.detachedWorktrees).toContainEqual(expect.objectContaining({ path: release.path, reason: 'retirement-receipt-unverified' }));
       injected.failScheduleWrite = false;
-      expect((await taskSchedule.getBranchReconcileOutcome('app-1')).retired || []).toEqual([]);
-      const next = await taskSchedule.recordBranchReconcileOutcome('app-1', { status: 'complete', remaining: [] });
+      expect((await outcomes.getBranchReconcileOutcome('app-1')).retired || []).toEqual([]);
+      const next = await outcomes.recordBranchReconcileOutcome('app-1', { status: 'complete', remaining: [] });
       expect(next.retirementObligations).toEqual(expect.arrayContaining([
         expect.objectContaining({ path: release.path, reason: 'retirement-provenance-unverified' }),
         expect.objectContaining({ branch: unrelated.branch }),
@@ -733,14 +733,14 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('branch-reconcile worktree ownership (re
     });
 
     it('does not let a recreated same-path detached checkout borrow the old checkout-only receipt', async () => {
-      const { taskSchedule, path, release, unrelated } = await inventoriedDetached();
+      const { outcomes, path, release, unrelated } = await inventoriedDetached();
       await sweep({ appId: 'app-1' });
-      const retired = (await taskSchedule.getBranchReconcileOutcome('app-1')).retired;
+      const retired = (await outcomes.getBranchReconcileOutcome('app-1')).retired;
       await execGit(['worktree', 'add', '--detach', path, 'main'], repo);
       const recreated = { ...release, checkoutIdentity: await readRetirementCheckoutIdentity(path), reason: 'retirement-receipt-unverified' };
       expect(recreated.checkoutIdentity).not.toBe(release.checkoutIdentity);
-      await taskSchedule.recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [recreated, unrelated] });
-      const next = await taskSchedule.recordBranchReconcileOutcome('app-1', { status: 'complete', remaining: [] });
+      await outcomes.recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [recreated, unrelated] });
+      const next = await outcomes.recordBranchReconcileOutcome('app-1', { status: 'complete', remaining: [] });
       expect(next.retired).toEqual(retired);
       expect(next.retirementObligations).toContainEqual(expect.objectContaining({ path: recreated.path, checkoutIdentity: recreated.checkoutIdentity }));
       expect(existsSync(path)).toBe(true);

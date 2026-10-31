@@ -52,22 +52,24 @@ describe('deriveStages / deriveNextAction', () => {
     expect(deriveNextAction(autoFailed)).toMatchObject({ id: 'retry-autonomous', kind: 'run', label: 'Retry autonomous run' });
   });
 
-  it('a project waiting on Cast & Sets approval offers the approval, a stopped check-in offers to resume, and no check-in offers to start', () => {
+  it('an unplanned autopilot project waiting on Cast & Sets approval offers the approval, a stopped check-in offers to resume, and no check-in offers to start', () => {
     const waiting = { id: 'p', trackId: 't1', audioAnalysis: ANALYSIS, ...LYRICS, automation: {}, castAndSets: { status: 'review' }, scenes: [] };
-    expect(deriveStages(waiting).current).toBe('cast-sets');
-    expect(stateOf(waiting)).toMatchObject({ setup: 'done', 'cast-sets': 'active', board: 'todo' });
+    // Plan comes before Look: the step is Plan, while the run's own check-in still owns the header.
+    expect(deriveStages(waiting).current).toBe('board');
+    expect(stateOf(waiting)).toMatchObject({ setup: 'done', board: 'active', 'cast-sets': 'todo' });
     expect(deriveNextAction(waiting)).toMatchObject({ id: 'approve-cast-sets', kind: 'run' });
 
     const notStarted = { ...waiting, castAndSets: null };
     expect(deriveNextAction(notStarted)).toMatchObject({ id: 'kickoff' });
-    expect(deriveNextAction({ ...notStarted, automation: undefined })).toMatchObject({ id: 'start-cast-sets', kind: 'run', disabled: false });
+    // A hands-on project plans its shots first.
+    expect(deriveNextAction({ ...notStarted, automation: undefined })).toMatchObject({ id: 'plan', kind: 'run', disabled: false });
 
     const unplanned = { ...waiting, castAndSets: { status: 'approved' }, productionReadiness: { art: { approved: true }, storyboard: { approved: false }, proof: { approved: false }, readyForProduction: false } };
     expect(deriveNextAction(unplanned)).toMatchObject({ id: 'plan' });
     expect(deriveNextAction({ ...unplanned, scenes: [{ id: 's1' }] })).toMatchObject({ id: 'review-production', stage: 'produce', label: 'Lock the stills' });
 
     const interrupted = { ...waiting, castAndSets: { status: 'imaging', interrupted: true } };
-    expect(stateOf(interrupted)['cast-sets']).toBe('blocked');
+    expect(stateOf({ ...interrupted, scenes: [scene()], productionReadiness: { art: { approved: false }, storyboard: { approved: false, problems: [] } } })['cast-sets']).toBe('blocked');
     expect(deriveNextAction(interrupted)).toMatchObject({ id: 'resume-cast-sets' });
 
     const working = { ...waiting, castAndSets: { status: 'imaging' } };
@@ -203,14 +205,29 @@ describe('deriveStages / deriveNextAction', () => {
     expect(deriveStages({ ...doc, composition: { mode: 'document', document: { directory: 'd' } } }).current).toBe('review');
   });
 
-  it('requires art review for hands-on projects too', () => {
-    expect(stateOf({ id: 'p', trackId: 't1', audioAnalysis: ANALYSIS, ...LYRICS, scenes: [] })['cast-sets']).toBe('active');
+  // Uniquely catches a reopened storyboard still reading as done, or losing its Approve storyboard row.
+  it('holds a reopened storyboard open until it is approved again', () => {
+    const planned = { id: 'p', trackId: 't1', audioAnalysis: ANALYSIS, ...LYRICS, scenes: [scene()],
+      productionReadiness: { art: { approved: false }, storyboard: { approved: false, problems: [] } } };
+    const reopened = { ...planned, storyboardReopenedAt: '2026-10-30T00:00:00.000Z' };
+    expect(stateOf(reopened).board).not.toBe('done');
+    expect(stageChecklist('board', reopened).map((i) => [i.id, i.done])).toEqual([['shots', true], ['storyboard-approved', false]]);
+    expect(stageChecklist('board', reopened)[1].action).toEqual({ label: 'Approve storyboard', anchor: 'mv-board-approve' });
+    expect(stateOf({ ...reopened, storyboardReopenedAt: null }).board).toBe('done');
+  });
+
+  it('requires art review for hands-on projects too, once the shots are planned', () => {
+    const planned = { id: 'p', trackId: 't1', audioAnalysis: ANALYSIS, ...LYRICS, scenes: [scene()] };
+    expect(stateOf({ ...planned, productionReadiness: { art: { approved: false }, storyboard: { approved: false, problems: [] } } })).toMatchObject({ board: 'done', 'cast-sets': 'active' });
   });
 });
 
 it('never promotes placeholder scenes or imported schematic documents to final production', () => {
-  const project = { id: 'example', trackId: 'song', audioAnalysis: ANALYSIS, ...LYRICS, scenes: [scene()], composition: { mode: 'document', document: { directory: 'draft' } } };
-  expect(stateOf(project)).toMatchObject({ 'cast-sets': 'active', board: 'todo', produce: 'todo' });
+  const project = {
+    id: 'example', trackId: 'song', audioAnalysis: ANALYSIS, ...LYRICS, scenes: [scene()], composition: { mode: 'document', document: { directory: 'draft' } },
+    productionReadiness: { art: { approved: false, problems: [] }, storyboard: { approved: false, problems: [] }, proof: { approved: false }, readyForProduction: false },
+  };
+  expect(stateOf(project)).toMatchObject({ board: 'done', 'cast-sets': 'active', produce: 'todo' });
   // Planned shots with no art direction written: build the cast & sets that writes it, rather than "review" nothing.
   expect(deriveNextAction(project)).toMatchObject({ id: 'start-cast-sets', kind: 'run' });
   // A skipped sheet leaves the direction to the director, so the header opens its editor.
@@ -351,12 +368,13 @@ describe('stage route param', () => {
     expect(resolveStageParam(undefined)).toBeNull();
   });
 
-  it('keeps old stage links and places optional Story between Song and Look', () => {
+  it('keeps old stage links and places optional Story between Song and Plan, with Plan before Look', () => {
     expect(resolveStageParam('compose')).toBe('produce');
     expect(resolveStageParam('shots')).toBe('produce');
     expect(resolveStageParam('plan')).toBe('board');
-    expect(MUSIC_VIDEO_STAGES.map((stage) => stage.label)).toEqual(['Song', 'Story', 'Look', 'Plan', 'Shots', 'Final render', 'Publish']);
-    expect(deriveStages({ trackId: 't1', audioAnalysis: ANALYSIS, ...LYRICS }).current).toBe('cast-sets');
+    expect(resolveStageParam('storyboard')).toBe('board');
+    expect(MUSIC_VIDEO_STAGES.map((stage) => stage.label)).toEqual(['Song', 'Story', 'Storyboard', 'Look', 'Shots', 'Final render', 'Publish']);
+    expect(deriveStages({ trackId: 't1', audioAnalysis: ANALYSIS, ...LYRICS }).current).toBe('board');
     for (const stage of MUSIC_VIDEO_STAGES) expect(stage.doneWhen).toMatch(/^Done when /);
   });
 
@@ -396,7 +414,7 @@ describe('describeProjectStatus', () => {
   it('names the step and flags the one waiting on the director', () => {
     const status = describeProjectStatus({ excerpts: [] },
       { progress: stages('cast-sets', { setup: 'done' }), nextAction: { id: 'review-production', stage: 'cast-sets' } });
-    expect(status).toEqual({ headline: 'Step 3 of 7: Look needs you', tone: 'warn', needsYouStage: 'cast-sets' });
+    expect(status).toEqual({ headline: 'Step 4 of 7: Look needs you', tone: 'warn', needsYouStage: 'cast-sets' });
     // A blocked step needs the director even with no approval to give.
     expect(describeProjectStatus({}, { progress: stages('produce', { produce: 'blocked' }) }))
       .toMatchObject({ headline: 'Step 5 of 7: Shots needs you', needsYouStage: 'produce' });
@@ -405,7 +423,7 @@ describe('describeProjectStatus', () => {
   it('names the step an approval sits on, even when an earlier step is still open', () => {
     // Song is not done yet, but the header asks for the art approval on Look.
     const status = describeProjectStatus({}, { progress: stages('setup'), nextAction: { id: 'review-production', stage: 'cast-sets' } });
-    expect(status).toMatchObject({ headline: 'Step 3 of 7: Look needs you', needsYouStage: 'cast-sets' });
+    expect(status).toMatchObject({ headline: 'Step 4 of 7: Look needs you', needsYouStage: 'cast-sets' });
     expect(describeProjectStatus({}, { progress: stages('setup'), nextAction: { id: 'approve-cast-sets', kind: 'run' } }).needsYouStage).toBe('cast-sets');
   });
 
@@ -460,7 +478,7 @@ describe('stageChecklist', () => {
     expect(items[2].detail).toMatch(/Approving a sheet file does not approve the art direction/);
     expect(items[2].action).toEqual({ label: 'Review art direction', anchor: 'mv-review-art', stage: 'cast-sets' });
     // Its done answer matches the tab's own state, so the checklist and the "needs you" mark agree.
-    expect(deriveStages(castProject(), NOT_APPROVED).current).toBe('cast-sets');
+    expect(deriveStages(castProject(), NOT_APPROVED).stages.find((s) => s.id === 'cast-sets').state).not.toBe('done');
     const approved = stageChecklist('cast-sets', castProject(), APPROVED);
     expect(approved.every((i) => i.done)).toBe(true);
     expect(deriveStages(castProject(), APPROVED).stages.find((s) => s.id === 'cast-sets').state).toBe('done');
@@ -500,16 +518,13 @@ describe('stageChecklist', () => {
     expect(stageChecklist('setup', { id: 'p', autonomousRun: { status: 'running', interrupted: true } })[0]).toMatchObject({ action: null, detail: 'The autonomous run is paused. Resume it to make the song.' });
     expect(stageChecklist('setup', { id: 'p', autonomousRun: { status: 'stopped' } })[0].detail).toBe('The autonomous run is paused. Resume it to make the song.');
     expect(stageChecklist('setup', { id: 'p', autonomousRun: { status: 'awaiting-approval' } })[0].detail).toBe('The autonomous run is waiting for your approval.');
+    // Plan comes before Look: the storyboard gate's art approval is Look's row, not Plan's.
     expect(stageChecklist('board', castProject({ scenes: [scene()] }), NOT_APPROVED).map((i) => [i.id, i.done]))
-      .toEqual([['shots', true], ['board-art', false]]);
-    // The Plan step's art row goes to the Look step, where the art approval is, and says what changed.
-    const artRow = (readiness) => stageChecklist('board', castProject({ scenes: [scene()] }), readiness).find((i) => i.id === 'board-art');
-    expect(artRow(NOT_APPROVED)).toMatchObject({ details: ['Review and approve the current art direction first.'],
-      action: { label: 'Review art direction', stage: 'cast-sets', anchor: 'mv-review-art' } });
-    expect(artRow({ ...NOT_APPROVED, art: { approved: false, problems: [], stale: { changedFields: ['visual spec'] } } }).details)
-      .toEqual(['Approved earlier — changed since: visual spec. Approve it again on the Look step.']);
+      .toEqual([['shots', true]]);
     expect(stageChecklist('produce', castProject({ scenes: [scene()] }), NOT_APPROVED).find((i) => i.id === 'approve-storyboard'))
-      .toMatchObject({ done: false, detail: 'Finish the plan first.', action: { stage: 'board' } });
+      .toMatchObject({ done: false, detail: 'Approve the Look first.', action: { stage: 'cast-sets', anchor: 'mv-review-art' } });
+    expect(stageChecklist('produce', castProject({ scenes: [scene()] }), { ...NOT_APPROVED, storyboard: { approved: false, problems: ['Storyboard shots must cover the master without unintended gaps or overlaps.'] } })
+      .find((i) => i.id === 'approve-storyboard')).toMatchObject({ detail: 'Finish the storyboard first.', action: { stage: 'board' } });
     expect(stageChecklist('produce', castProject({ scenes: [scene(), scene({ sceneId: 's2', videoHistoryId: null })] }), APPROVED)[0])
       .toMatchObject({ id: 'footage', label: 'Footage for every shot (1 of 2)', done: false,
         action: { label: 'Make the footage', anchor: 'mv-generation' } });
@@ -537,7 +552,7 @@ describe('stageChecklist', () => {
     expect(items.some((i) => i.id === 'board-timing')).toBe(false);
     // Shots' approval row sends an unfinished plan back to Plan instead of repeating its first problem.
     const shots = stageChecklist('produce', castProject({ scenes: [scene()] }), readiness);
-    expect(shots.find((i) => i.id === 'approve-storyboard')).toMatchObject({ detail: 'Finish the plan first.' });
+    expect(shots.find((i) => i.id === 'approve-storyboard')).toMatchObject({ detail: 'Finish the storyboard first.' });
     // A stale approval keeps naming what changed, even with an art problem listed on Plan.
     const stale = { ...readiness, storyboard: { approved: false, problems: ['Review and approve the current art direction first.'], stale: { changedFields: ['art direction', 'cast'] } } };
     expect(stageChecklist('produce', castProject({ scenes: [scene()] }), stale).find((i) => i.id === 'approve-storyboard').detail).toMatch(/changed since: art direction, cast/);
@@ -740,7 +755,8 @@ describe('finished outside PortOS', () => {
 
   it('without the marker, a published external project reads as stuck on Song', () => {
     expect(deriveStages(external, unapproved).current).toBe('setup');
-    expect(deriveNextAction(external, { readiness: unapproved })).toMatchObject({ id: 'review-production' });
+    // Its plan has open problems, and Plan comes before the art approval.
+    expect(deriveNextAction(external, { readiness: unapproved })).toMatchObject({ id: 'finish-plan' });
   });
 
   it('counts Song through Make as done, and reads Published once the render and posts are real', () => {
@@ -765,7 +781,7 @@ describe('finished outside PortOS', () => {
     const unrendered = { ...marked, renderHistoryId: null, publishKit: {} };
     expect(deriveStages(unrendered, unapproved).current).toBe('setup');
     expect(summarizeMusicVideoProject(unrendered, unapproved).stage).toBe('setup');
-    expect(deriveNextAction(unrendered, { readiness: unapproved })).toMatchObject({ id: 'review-production' });
+    expect(deriveNextAction(unrendered, { readiness: unapproved })).toMatchObject({ id: 'finish-plan' });
     expect(stageChecklist('board', unrendered, unapproved)[0].id).not.toBe('finished-outside');
   });
 

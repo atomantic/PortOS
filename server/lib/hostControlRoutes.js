@@ -472,8 +472,6 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
 
   // CoS: queue, release or steer an agent that runs shell commands in a
   // worktree, or a job that runs a shell command directly.
-  'POST /api/cos/merge-admission',
-  'POST /api/cos/merge-admission/external',
   'POST /api/cos/merge-handoff',
   'POST /api/cos/claim-ownership',
   'POST /api/cos/start',
@@ -505,27 +503,10 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'PUT /api/cos/schedule/task/:taskType',
   'POST /api/cos/schedule/trigger',
   'POST /api/cos/schedule/branch-reconcile/refresh',
-  'POST /api/cos/schedule/release-synchronization/legacy/review',
-  'POST /api/cos/schedule/release-synchronization/legacy/accept',
   'POST /api/cos/schedule/release-synchronization/operator-reset',
-  // Archives and removes a checkout and its merged branch under a scoped release.
+  // Removes a checkout and its merged branch under a scoped release.
   'POST /api/cos/schedule/branch-reconcile/checkouts/retire',
   'POST /api/cos/schedule/branch-reconcile/checkouts/review',
-  'POST /api/cos/schedule/branch-reconcile/initialized-checkouts/review',
-  'POST /api/cos/schedule/branch-reconcile/initialized-checkouts/retire',
-  'POST /api/cos/schedule/branch-reconcile/whole-checkouts/review',
-  'POST /api/cos/schedule/branch-reconcile/whole-checkouts/retire',
-  'GET /api/cos/schedule/branch-reconcile/initialized-checkouts/status',
-  'POST /api/cos/schedule/branch-reconcile/initialized-checkouts/restore',
-  'POST /api/cos/schedule/branch-reconcile/initialized-checkouts/review-metadata-restore',
-  'POST /api/cos/schedule/branch-reconcile/initialized-checkouts/restore-metadata',
-  'POST /api/cos/schedule/branch-reconcile/initialized-checkouts/review-restored-finalization',
-  'POST /api/cos/schedule/branch-reconcile/initialized-checkouts/finalize-restored',
-  'POST /api/cos/schedule/branch-reconcile/initialized-checkouts/review-quarantine-resumption',
-  'POST /api/cos/schedule/branch-reconcile/initialized-checkouts/resume-quarantine',
-  'POST /api/cos/schedule/branch-reconcile/initialized-checkouts/verify-archive',
-  'POST /api/cos/schedule/branch-reconcile/initialized-checkouts/review-branch',
-  'POST /api/cos/schedule/branch-reconcile/initialized-checkouts/retire-branch',
   'POST /api/cos/schedule/maintenance-runs',
   // Editing a pending stage changes the provider used by deferred host work.
   'PATCH /api/cos/schedule/maintenance-runs/:id/steps/:stepId',
@@ -759,10 +740,12 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   // Timeline render spawns ffmpeg/ffprobe on the host for segments and audio (#11432).
   'POST /api/video-timeline/projects/:id/render',
   // Music Video ffmpeg renders: final render, per-shot segments, shot preview
-  // concat with the song, excerpt encode, and platform encodes/thumbnails (#12514).
+  // concat with the song, the cold open's sound mix, excerpt encode, and
+  // platform encodes/thumbnails (#12514).
   'POST /api/music-video/:id/render',
   'POST /api/music-video/:id/shots/:sceneId/render',
   'POST /api/music-video/:id/shot-renders/preview',
+  'POST /api/music-video/:id/cold-open/audio',
   'POST /api/music-video/:id/excerpt',
   'POST /api/music-video/:id/publish-kit/build',
   'POST /api/music-video/:id/dcp/readiness',
@@ -994,10 +977,12 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   // including local Python (#13055), like generate above.
   'POST /api/mood-boards/:id/items/:itemId/render',
   // Storyboards (#12952): the plot and saved node prompts reach a
-  // caller-chosen, non-tool-free provider; node runs and make-empty also
-  // queue image renders.
+  // caller-chosen, non-tool-free provider; node runs, frame corrections, panel
+  // draws and make-empty also queue image renders.
   'POST /api/storyboards/:id/beats/extract',
   'POST /api/storyboards/:id/panels/:panelId/make/:nodeId/run',
+  'POST /api/storyboards/:id/panels/:panelId/correct',
+  'POST /api/storyboards/:id/panels/:panelId/draw',
   'POST /api/storyboards/:id/make-empty',
   'POST /api/cos/tasks/enhance',
   // Music Video cover design/generation and promotion planning, and POST LLM
@@ -1098,6 +1083,10 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/catalog/stories/draft',
   'POST /api/catalog/ingredients/:id/refine',
   'POST /api/catalog/ingredients/:id/media/refine',
+  // Design rounds: a caller-chosen provider writes face lines; renders queue
+  // the same image backend as refinement.
+  'POST /api/catalog/ingredients/:id/design/spread',
+  'POST /api/catalog/ingredients/:id/design/render',
 
   // Importer, Brain and analytics AI (#11036): caller text, stored reference
   // data and a caller-chosen provider reach a non-tool-free runner. Authorize

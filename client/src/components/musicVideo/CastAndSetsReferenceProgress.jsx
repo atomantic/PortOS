@@ -1,4 +1,7 @@
+import { Link, useLocation } from 'react-router';
+import { Wand2 } from 'lucide-react';
 import useMediaJobProgress from '../../hooks/useMediaJobProgress';
+import { detailTabPath, libraryById } from '../../lib/creativeLibraries';
 import { formatCount } from '../../utils/formatters';
 import { normalizeImage } from '../media/normalize.js';
 import CastAndSetsItemActions from './CastAndSetsItemActions.jsx';
@@ -42,7 +45,26 @@ export function castAndSetsPreviewItems(stage) {
   return items;
 }
 
-function ReferenceCard({ item, stage, onOpenPreview, actions }) {
+// The Casting record a character card was built from, matched the way the
+// server's plan matches subjects: by form subject, protagonist or cast name.
+function castingIdFor(item, stage, subjects) {
+  const characters = subjects.filter((s) => s?.kind === 'character' && s.ingredientId);
+  const subject = item.kind === 'form' ? characters.find((s) => s.id === item.subjectId)
+    : item.kind === 'cast' ? characters.find((s) => s.name === item.label)
+    : item.kind === 'character' ? characters.find((s) => s.role === 'protagonist')
+      || characters.find((s) => s.name === stage.direction?.protagonist?.name)
+    : null;
+  return subject?.ingredientId || null;
+}
+
+function ReviseLookLink({ ingredientId }) {
+  const { pathname, search } = useLocation();
+  const to = `${detailTabPath(libraryById('casting'), ingredientId, 'design')}?${new URLSearchParams({ returnTo: `${pathname}${search}` })}`;
+  return <Link to={to} className="inline-flex min-h-11 items-center gap-1 text-xs text-port-accent">
+    <Wand2 size={12} aria-hidden="true" /> Revise look</Link>;
+}
+
+function ReferenceCard({ item, stage, onOpenPreview, actions, subjects, olderLook }) {
   const image = stage.images?.[item.key] || {};
   // Old images remain visible during regeneration, but only a persisted done
   // record can bypass the new job's subscription.
@@ -70,6 +92,7 @@ function ReferenceCard({ item, stage, onOpenPreview, actions }) {
 
   const submitted = typeof image.submittedPrompt === 'string';
   const references = cardReferences(item, stage);
+  const castingId = castingIdFor(item, stage, subjects);
   const src = filename ? imageSource({ kind: 'image', filename }) : null;
   return (
     <article className="min-w-0 rounded border border-port-border bg-port-bg p-2 space-y-2" aria-label={item.label || item.key}>
@@ -91,6 +114,7 @@ function ReferenceCard({ item, stage, onOpenPreview, actions }) {
           {(previous || retained) && <figcaption className="text-[11px] text-port-text-muted">{previous ? 'Previous revision — replacement pending' : `Retained from revision ${formatCount(image.submittedRevision)}`}</figcaption>}
         </figure>
       )}
+      {olderLook && <p className="text-[11px] text-port-warning">Older look: Casting changed since this was rendered. Regenerate to use the new look.</p>}
       {error && <p role="alert" className="text-xs text-port-error break-words [overflow-wrap:anywhere]">{error}</p>}
       {live.status === 'running' && <progress aria-label={`${item.label || item.key} rendering progress`} className="w-full" max={1} value={Math.max(0, Math.min(1, live.progress || 0))} />}
       {live.status === 'running' && live.statusMsg && <p className="text-[11px] text-port-text-muted break-words">{live.statusMsg}</p>}
@@ -114,6 +138,7 @@ function ReferenceCard({ item, stage, onOpenPreview, actions }) {
           </div>
         )}
       </details>
+      {castingId && <ReviseLookLink ingredientId={castingId} />}
       {actions && <CastAndSetsItemActions key={actions.projectId} item={item} direction={stage.direction} revision={stage.revision} {...actions} />}
     </article>
   );
@@ -123,12 +148,13 @@ function ReferenceCard({ item, stage, onOpenPreview, actions }) {
  * `actions` ({ busy, onRegenerate, onEdit }) adds each card's Regenerate / Edit /
  * Remove; the check-in passes it only while the stage is idle.
  */
-export default function CastAndSetsReferenceProgress({ stage, onOpenPreview, actions = null }) {
+export default function CastAndSetsReferenceProgress({ stage, onOpenPreview, actions = null, subjects = [], olderLookKeys = [] }) {
   const items = Object.values(stage.plan || {});
   if (!items.length) return null;
   return (
     <div className="grid min-w-0 grid-cols-[repeat(auto-fit,minmax(min(100%,15rem),1fr))] gap-2" aria-label="Cast and set references">
-      {items.map((item) => <ReferenceCard key={item.key} item={item} stage={stage} onOpenPreview={onOpenPreview} actions={actions} />)}
+      {items.map((item) => <ReferenceCard key={item.key} item={item} stage={stage} onOpenPreview={onOpenPreview} actions={actions}
+        subjects={subjects} olderLook={olderLookKeys.includes(item.key)} />)}
     </div>
   );
 }

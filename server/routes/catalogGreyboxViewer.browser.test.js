@@ -149,6 +149,7 @@ async function openEnvironment(fixture, { warmup = false } = {}) {
     if (url.pathname === '/api/providers') return route.fulfill({ json: [] });
     if (url.pathname === '/api/media/annotations') return route.fulfill({ json: { annotations: {} } });
     if (url.pathname === '/api/media/holders') return route.fulfill({ json: { self: 'example-instance', items: {} } });
+    if (url.pathname === '/api/media/usages') return route.fulfill({ json: { items: {} } });
     if (url.pathname === '/api/catalog/ingredients/example-place/details') return route.fulfill({ json: { ingredient, media, relations: { outbound: [], inbound: [] }, refs: [], sources: [], missingMedia: [] } });
     if (url.pathname === '/api/catalog/ingredients/example-place/greybox' && route.request().method() === 'PUT') {
       mark('save-request');

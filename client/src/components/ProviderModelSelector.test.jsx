@@ -252,6 +252,20 @@ describe('ProviderModelSelector', () => {
     expect(modelSelect.value).toBe('gpt-6.1-sol');
   });
 
+  it('renders every current Antigravity fallback choice, including Gemini 4 Argon', () => {
+    const agyModels = SHIPPED_PROVIDERS.providers['antigravity-cli'].models;
+    expect(agyModels).toContain('gemini-4-argon-medium');
+    renderSelector({
+      providers: [{ id: 'antigravity-cli', name: 'Antigravity CLI', type: 'cli', models: agyModels }],
+      selectedProviderId: 'antigravity-cli',
+      selectedModel: 'gemini-4-argon-medium',
+      availableModels: agyModels,
+    });
+    const modelSelect = screen.getAllByRole('combobox')[1];
+    expect([...modelSelect.querySelectorAll('option')].map((option) => option.value)).toEqual([...agyModels].sort((a, b) => a.localeCompare(b, 'en', { sensitivity: 'base' })));
+    expect(modelSelect.value).toBe('gemini-4-argon-medium');
+  });
+
   it('prepends empty options with value "" when emptyProviderOption/emptyModelOption are set', () => {
     renderSelector({ emptyProviderOption: 'Use default', emptyModelOption: 'Default model' });
     const providerSelect = screen.getAllByRole('combobox')[0];

@@ -4,10 +4,14 @@ const enc = encodeURIComponent;
 
 export const selectedTake = (panel) => panel?.takes?.find((take) => take.id === panel.selectedTakeId) || null;
 
+// Staged render inputs (a correction's marked-up frame) live in image-refs.
+const STAGED_REF = /^ref-[0-9a-f-]{36}\.png$/;
+
 // A sketch's flattened PNG is served by the media sketch service; `nonce`
 // busts the browser cache after a save (bumped on `media:sketch:updated`).
 export function takeSrc(take, nonce = 0) {
   if (take?.sketchKey) return `/api/media/sketches/${enc(take.sketchKey)}/png?v=${nonce}`;
+  if (take?.image && STAGED_REF.test(take.image)) return `/data/image-refs/${enc(take.image)}`;
   if (take?.image) return `/data/images/${enc(take.image)}`;
   return null;
 }

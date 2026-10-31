@@ -58,7 +58,7 @@ export default function LocalLlmInstalledModels({
         return (
           <div key={model.id} className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 bg-port-bg border border-port-border rounded-lg p-3">
             <div className="flex items-start gap-3 min-w-0 flex-1">
-              <label className="shrink-0 flex items-center pt-0.5" title={`Include ${model.name || model.id} in a comparison`}>
+              <label className="shrink-0 flex items-center justify-center pt-0.5 pointer-coarse:pt-0 pointer-coarse:min-h-11 pointer-coarse:min-w-11" title={`Include ${model.name || model.id} in a comparison`}>
                 <input
                   type="checkbox"
                   checked={compareTargetKeys.has(localLlmTargetKey({ backend, modelId: model.id }))}

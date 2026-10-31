@@ -13,14 +13,11 @@
  * (`publishQualitySnapshot`), commits only this one path on a dedicated branch,
  * and merges its pull request immediately so the live checkout never
  * diverges from origin and repos that block pushes to the default branch still
- * receive the file. Repositories advertising `pregate:merged` first validate
- * the combined tree and pin the immediate merge to that exact head and base.
- * A guarded refusal retains its checkout and evidence for a later publish cycle;
- * generic repositories retain their existing merge-on-green fallback.
- * The immediate merge is the one step that advances the default branch, so it
- * runs under this install's repository merge admission (`cosMergeAdmission.js`)
- * like every other final merge. A busy lease leaves the PR recoverable for
- * a later admitted attempt. Reads never write. A v1 file or historical
+ * receive the file. The immediate merge is pinned to the head this invocation
+ * published or inspected; the forge's rules decide whether it may land, with a
+ * merge-on-green fallback when they refuse an immediate merge. No local
+ * merged-tree guard runs (#14184): CI skips every guard for a `.quality.json`-
+ * only change because none reads that file. Reads never write. A v1 file or historical
  * `quality-snapshot.json` is explicit legacy input. Before publication, live
  * review ownership and non-snapshot branch changes defer replacement; the push
  * lease pins only the exact head this invocation inspected.
@@ -338,7 +335,7 @@ async function landOrReuse(app, git, defaultBranch, deps, next, count, options =
   if (!next) return skipped(app, 'invalid-evidence');
   if (sameSnapshot(onBranch, next) && legacyOnBranch.status === 'absent') {
     const reused = await reuseOpenSnapshotPr(app, git, defaultBranch, deps, guard.remoteSha);
-    if (reused.published) rememberPublished(app, next, reused);
+    if (reused.published) lastPublishedBody.set(app.repoPath, next);
     return reused;
   }
   let result;
@@ -373,17 +370,8 @@ async function landOrReuse(app, git, defaultBranch, deps, next, count, options =
       ...options, leaseRetry: true,
     });
   }
-  rememberPublished(app, next, result);
+  if (result.published === true) lastPublishedBody.set(app.repoPath, next);
   return result;
-}
-
-// A merge deferred by admission with nothing queued to land it (GitLab) must
-// stay retryable: remembering the body would turn the next unchanged cycle
-// into a 'no-changes' skip and strand the open PR.
-function rememberPublished(app, body, result) {
-  if (result.published !== true) return;
-  if (result.deferredMerge === true && result.queuedMerge !== true) return;
-  lastPublishedBody.set(app.repoPath, body);
 }
 
 async function reuseOpenSnapshotPr(app, git, defaultBranch, deps, expectedHeadSha) {
@@ -394,7 +382,7 @@ async function reuseOpenSnapshotPr(app, git, defaultBranch, deps, expectedHeadSh
   if (found?.prUrl && found?.prNumber && prState === 'OPEN') {
     const outcome = await mergeSnapshotPr(app, {
       url: found.prUrl, number: found.prNumber, cli: found.cli,
-    }, deps, git, defaultBranch, { expectedHeadSha });
+    }, deps, git, expectedHeadSha);
     console.log(`📊 Quality snapshot PR already open for app ${app.id}: ${found.prUrl}`);
     return {
       published: true, hash: null, path: APP_QUALITY_SNAPSHOT_FILENAME,
@@ -410,7 +398,7 @@ async function landExistingBranchPr(app, git, defaultBranch, deps, expectedHeadS
   if (!created?.url) {
     return skipped(app, 'pr-failed');
   }
-  const outcome = await mergeSnapshotPr(app, created, deps, git, defaultBranch, { expectedHeadSha });
+  const outcome = await mergeSnapshotPr(app, created, deps, git, expectedHeadSha);
   console.log(`📊 Quality snapshot PR opened for app ${app.id}: ${created.url}`);
   return {
     published: true, hash: null, path: APP_QUALITY_SNAPSHOT_FILENAME,
@@ -422,7 +410,6 @@ async function landExistingBranchPr(app, git, defaultBranch, deps, expectedHeadS
 async function landSnapshotPr(app, { body, count, defaultBranch, git, deps, message, removeLegacy = false, remoteSha }) {
   const makeTemp = deps.mkdtemp || mkdtemp;
   let worktreePath;
-  let retainWorktree = false;
   const removeTemp = deps.rm || rm;
   const commitPaths = removeLegacy
     ? [APP_QUALITY_SNAPSHOT_FILENAME, APP_QUALITY_LEGACY_SNAPSHOT_FILENAME]
@@ -457,10 +444,7 @@ async function landSnapshotPr(app, { body, count, defaultBranch, git, deps, mess
     if (!pr?.url) {
       throw new Error(pr?.error || 'quality snapshot pull request was not created');
     }
-    // If validation is interrupted, preserve the published checkout by default.
-    retainWorktree = true;
-    const queued = await mergeSnapshotPr(app, pr, deps, git, defaultBranch, { worktreePath, expectedHeadSha: hash });
-    retainWorktree = queued.guardManaged === true;
+    const queued = await mergeSnapshotPr(app, pr, deps, git, hash);
     console.log(`📊 Published quality snapshot for app ${app.id}: ${count} measurements → ${hash} (${pr.url})`);
     return {
       published: true, hash, path: APP_QUALITY_SNAPSHOT_FILENAME,
@@ -475,7 +459,7 @@ async function landSnapshotPr(app, { body, count, defaultBranch, git, deps, mess
       .then(swept => { if (swept.length) console.log(`🧹 Retired ${swept.length} settled quality snapshot checkout(s) for app ${app.id}`); })
       .catch(err => console.log(`⏭️ Quality snapshot checkout sweep skipped for app ${app.id}: ${err.message}`));
     worktreePath = await makeTemp(join(tmpdir(), 'portos-quality-'));
-    return run().finally(() => retainWorktree ? undefined : cleanupSnapshotWorktree(app, git, worktreePath, removeTemp));
+    return run().finally(() => cleanupSnapshotWorktree(app, git, worktreePath, removeTemp));
   });
 }
 
@@ -559,103 +543,21 @@ function decoratePr(git, created) {
 const mergeOutcomeFields = outcome => ({
   merged: outcome.merged === true,
   queuedMerge: outcome.queued === true,
-  ...(outcome.deferred === true ? { deferredMerge: true } : {}),
-  ...(outcome.guard ? { mergeGuard: outcome.guard } : {}),
-  ...(outcome.retainedCheckouts?.length ? { retainedMergeCheckouts: outcome.retainedCheckouts } : {}),
 });
 
 /**
- * Guard-capable repositories validate outside admission and recheck both inputs
- * inside it. They never fall through to an unguarded merge or pending queue.
- * Other repositories keep their existing immediate/merge-on-green behavior.
+ * Merge immediately, pinned to the published head; when the forge refuses,
+ * fall back to merge-on-green (the local pending-merge queue on GitHub).
  *
- * The immediate attempt needs this install's repository merge admission. When
- * another owner holds it (or ownership cannot be verified) the merge is
- * deferred. Only generic GitHub repositories use the local pending-merge
- * queue. Guard-capable PRs and GitLab admission refusals stay open for retry.
- *
- * @returns {{merged: boolean, queued: boolean, deferred?: boolean}} — merged
- *   and queued are never both true.
+ * @returns {{merged: boolean, queued: boolean}} — merged and queued are never
+ *   both true.
  */
-async function mergeSnapshotPr(app, pr, deps, git, defaultBranch, checkout = {}) {
+async function mergeSnapshotPr(app, pr, deps, git, expectedHeadSha) {
   if (!pr?.url || !pr?.number) return { merged: false, queued: false };
-  const guards = await import('./appQualitySnapshotMerge.js');
-  const evidence = await guards.readSnapshotMergeInputs(app, pr, defaultBranch, git, deps);
-  if (evidence.required) {
-    if (checkout.expectedHeadSha !== evidence.headSha) evidence.reason ||= 'snapshot-merge-published-head-changed';
-    return guardedSnapshotMerge(app, pr, deps, git, guards, evidence, checkout.worktreePath);
-  }
-  const attempt = await withSnapshotMergeAdmission(app, deps, () => tryImmediateMerge(app, pr, deps, git));
-  if (attempt.deferred) {
-    const queued = pr.cli === 'glab' ? false : await queueMergeWhenGreenFallback(app, pr, deps);
-    return { merged: false, queued: queued === true, deferred: true };
-  }
-  if (attempt.result) return { merged: true, queued: false };
+  const pinned = /^[a-f0-9]{40}$/i.test(expectedHeadSha || '') ? expectedHeadSha : undefined;
+  if (await tryImmediateMerge(app, pr, deps, git, pinned)) return { merged: true, queued: false };
   const queued = await queueMergeWhenGreenFallback(app, pr, deps);
   return { merged: false, queued: queued === true };
-}
-
-async function guardedSnapshotMerge(app, pr, deps, git, guards, evidence, existingPath) {
-  const deferred = () => ({ merged: false, queued: false, deferred: true, guard: evidence, guardManaged: true });
-  const run = async path => {
-    evidence.worktreePath = path;
-    try {
-      const current = await git.execGit(['rev-parse', '--verify', 'HEAD^{commit}'], path);
-      if (current.exitCode !== 0 || !/^[a-f0-9]{40}$/i.test(current.stdout?.trim() || '')) {
-        throw new Error('snapshot-checkout-head-unreadable');
-      }
-      evidence.checkoutHead = current.stdout.trim();
-      await guards.recordSnapshotMergeEvidence(pr, evidence, deps, { status: 'preparing' });
-      if (evidence.reason) throw new Error(evidence.reason);
-      await guards.validateSnapshotMerge(app, pr, evidence, git, deps);
-      const attempt = await withSnapshotMergeAdmission(app, deps, async () => {
-        await guards.verifySnapshotMergeInputs(app, pr, evidence, git, deps);
-        return tryImmediateMerge(app, pr, deps, git, evidence.headSha);
-      });
-      if (attempt.result) {
-        const retire = deps.retireSnapshotMergeCheckouts || guards.retireSnapshotMergeCheckouts;
-        const retainedCheckouts = await retire(app, pr, deps).catch(() => [path]);
-        return { merged: true, queued: false, guardManaged: true, retainedCheckouts };
-      }
-      evidence.reason = attempt.reason || 'snapshot-merge-deferred';
-    } catch (error) {
-      evidence.reason = error.stdout !== undefined || error.stderr !== undefined ? 'snapshot-merge-guards-failed' : error.message;
-      console.log(`⏳ Quality snapshot merge retained for app ${app.id}: ${evidence.reason}`);
-      await guards.recordSnapshotMergeEvidence(pr, evidence, deps, {
-        status: 'deferred', error: error.message, stdout: error.stdout, stderr: error.stderr,
-      });
-      return deferred();
-    }
-    await guards.recordSnapshotMergeEvidence(pr, evidence, deps, { status: 'deferred' });
-    return deferred();
-  };
-  if (existingPath) return run(existingPath);
-  if (evidence.reason) return deferred();
-  const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
-  return withCheckoutPublication(app.repoPath, async () => {
-    const retained = await guards.retainedSnapshotMergeCheckouts(app, pr, deps);
-    const matching = retained.find(tree => tree.head === evidence.headSha);
-    const path = matching?.path || await (deps.mkdtemp || mkdtemp)(join(tmpdir(), 'portos-quality-'));
-    if (!matching) await addSnapshotWorktree(app, deps, path, evidence.headSha);
-    return run(path);
-  }).catch(error => {
-    evidence.reason = error.message;
-    return deferred();
-  });
-}
-
-async function withSnapshotMergeAdmission(app, deps, work) {
-  const readOrigin = deps.getOriginInfo || (await import('../lib/gitRemote.js')).getOriginInfo;
-  const withAdmission = deps.withMergeAdmission
-    || (await import('./cosMergeAdmission.js')).withPendingMergeAdmission;
-  const origin = await readOrigin(app.repoPath).catch(() => null);
-  const admitted = await withAdmission(origin, work)
-    .catch(err => ({ admitted: false, reason: err?.message || 'admission-error' }));
-  if (admitted.admitted !== true) {
-    console.log(`⏳ Quality snapshot merge deferred for app ${app.id}: ${admitted.reason || 'admission refused'}`);
-    return { deferred: true, reason: admitted.reason || 'admission-refused' };
-  }
-  return { deferred: false, result: admitted.result === true };
 }
 
 async function tryImmediateMerge(app, pr, deps, git, expectedHeadSha) {

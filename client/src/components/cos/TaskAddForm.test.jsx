@@ -784,6 +784,54 @@ describe('TaskAddForm federated instance picker (#4520)', () => {
     await waitFor(() => expect(api.addCosTask).toHaveBeenCalledTimes(2));
     expect(api.addCosTask.mock.calls[1][0].targetInstanceId).toBe(PEER);
   });
+
+  it('names the picked instance in the execution summary, not its raw id', async () => {
+    const user = userEvent.setup();
+    apiSystem.getAssignableInstances.mockResolvedValue({
+      instances: [
+        { instanceId: 'self-instance-id', name: 'workstation', isSelf: true },
+        { instanceId: PEER, name: 'render-box', isSelf: false },
+      ],
+    });
+    render(<TaskAddForm queueFirst providers={[]} apps={[]} onTaskAdded={vi.fn()} />);
+    await user.click(screen.getByRole('button', { name: 'Task configuration' }));
+    await user.selectOptions(await screen.findByLabelText('Run on'), PEER);
+    expect(screen.getByLabelText('Task execution summary')).toHaveTextContent('Instance: render-box');
+    expect(screen.getByLabelText('Task execution summary')).not.toHaveTextContent(PEER);
+  });
+
+  it('says so when the instance list fails to load, and Retry restores the picker', async () => {
+    const user = userEvent.setup();
+    apiSystem.getAssignableInstances.mockRejectedValueOnce(new Error('offline'));
+    render(<TaskAddForm providers={[]} apps={[]} onTaskAdded={vi.fn()} />);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/Could not load the instance list/);
+    expect(screen.queryByLabelText('Run on')).toBeNull();
+    expect(toast.error).not.toHaveBeenCalled();
+
+    apiSystem.getAssignableInstances.mockResolvedValueOnce({
+      instances: [
+        { instanceId: 'self-instance-id', name: 'workstation', isSelf: true },
+        { instanceId: PEER, name: 'render-box', isSelf: false },
+      ],
+    });
+    await user.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByLabelText('Run on')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('shows no error after a Retry that finds a single instance', async () => {
+    const user = userEvent.setup();
+    apiSystem.getAssignableInstances.mockRejectedValueOnce(new Error('offline'));
+    render(<TaskAddForm providers={[]} apps={[]} onTaskAdded={vi.fn()} />);
+    const retry = await screen.findByRole('button', { name: 'Retry' });
+    apiSystem.getAssignableInstances.mockResolvedValueOnce({
+      instances: [{ instanceId: 'self-instance-id', name: 'workstation', isSelf: true }],
+    });
+    await user.click(retry);
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+    expect(screen.queryByLabelText('Run on')).toBeNull();
+  });
 });
 
 // Worktree + Open PR ride ON by default so a queued task lands on a

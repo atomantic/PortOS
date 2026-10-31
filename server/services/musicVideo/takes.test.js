@@ -91,6 +91,41 @@ describe('reject unused takes', () => {
   });
 });
 
+describe('cast inputs on a new still (#14154)', () => {
+  const castInputs = { ingredientId: 'cat-lead', guides: ['child.png'], sheets: [{ id: 'mvr-cs-character', imageId: 'sheet.png' }] };
+  const sceneWithFrame = () => ({ id: 'mv-1', scenes: [{ sceneId: 's1', referenceImageId: 'start.png', takes: [
+    { takeId: 'mvt-old', kind: 'image', assetId: 'start.png', status: 'candidate' },
+  ] }] });
+
+  // Uniquely catches a new still dropping the guides it was sent, or a clip take storing them.
+  it('records the snapshot on image and end-frame takes, including an empty one, and not on a clip', () => {
+    const empty = { ingredientId: null, guides: [], sheets: [] };
+    const { appended } = appendSceneTakes(project(), 's1', [
+      { kind: 'image', assetId: 'frame.png', source: 'generated', castInputs },
+      { kind: 'endImage', assetId: 'end.png', source: 'generated', castInputs: empty },
+      { kind: 'video', assetId: 'clip-1', source: 'generated', castInputs },
+    ]);
+    expect(appended[0].castInputs).toEqual(castInputs);
+    expect(appended[0]).not.toHaveProperty('dependencies');
+    expect(appended[1].castInputs).toEqual(empty);
+    expect(appended[2]).not.toHaveProperty('castInputs');
+  });
+
+  // Uniquely catches a one-tap re-render leaving the previous still selected, or a normal completion replacing it.
+  it('selects the new still only when the submit asked to replace the selection', () => {
+    const project = sceneWithFrame();
+    const kept = appendSceneTakes(project, 's1', [{ kind: 'image', assetId: 'other.png', source: 'generated', castInputs }]);
+    expect(kept.scene.referenceImageId).toBe('start.png');
+    const replaced = appendSceneTakes(project, 's1', [{ kind: 'image', assetId: 'other.png', source: 'generated', castInputs, replaceSelection: true }]);
+    expect(replaced.scene.referenceImageId).toBe('other.png');
+    expect(replaced.scene.takes.find((take) => take.assetId === 'other.png')).not.toHaveProperty('replaceSelection');
+    const end = appendSceneTakes({ id: 'mv-1', scenes: [{ sceneId: 's1', endImageId: 'end-old.png' }] }, 's1', [
+      { kind: 'endImage', assetId: 'end-new.png', source: 'generated', castInputs, replaceSelection: true },
+    ]);
+    expect(end.scene.endImageId).toBe('end-new.png');
+  });
+});
+
 describe('swap start and end frames', () => {
   // Uniquely catches the swap losing a prompt, duplicating a take it could reuse, or leaving a frame's take rejected while selected.
   it('trades the selected frames and their prompts, reusing and restoring takes', () => {

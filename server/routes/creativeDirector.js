@@ -439,6 +439,10 @@ router.post('/:id/start', asyncHandler(async (req, res) => {
     await updateProject(project.id, { status: project.treatment ? 'rendering' : 'planning' });
   } else if (project.status === 'draft') {
     await updateProject(project.id, { status: 'planning' });
+  } else if (project.peerReplica) {
+    // Starting a peer's in-flight project here takes it over; the status write
+    // releases the sender's running work (applyProjectPatch).
+    await updateProject(project.id, { status: project.status });
   }
   // Fire-and-forget — the orchestrator runs server-side and may spawn an
   // agent (treatment / evaluate) or kick off a render directly. The route

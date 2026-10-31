@@ -22,8 +22,10 @@ function isLyricAlignStale(project) {
 }
 
 
-// The six steps (Song, Look, Storyboard, Make, Final render, Publish); Make (`produce`) absorbed Compose.
-const STAGE_IDS = ['setup', 'cast-sets', 'board', 'produce', 'review', 'publish'];
+// The required steps in order (Song, Plan, Look, Shots, Final render, Publish); the optional Story is never "current".
+const STAGE_IDS = ['setup', 'board', 'cast-sets', 'produce', 'review', 'publish'];
+// Plan comes before Look, so the storyboard gate's art prerequisite does not hold Plan open (mirrors the client's deriveStages).
+const ART_APPROVAL_PROBLEM = /^Review and approve the current art direction/;
 const RESUMABLE_RUN_STATUSES = new Set(['running', 'stopped', 'limit-reached', 'blocked', 'needs-replan']);
 const FOOTAGE_OPTIONAL_MODES = new Set(['code', 'document', 'eidoverse']);
 
@@ -84,7 +86,7 @@ function currentStage(project, readiness, run) {
   const done = {
     setup: Boolean(project.trackId || project.uploadedAudioFilename) && Boolean(project.audioAnalysis) && lyricsReady(project, readiness),
     'cast-sets': Boolean(readiness?.art?.approved),
-    board: planned,
+    board: !project.storyboardReopenedAt && (planned || (scenes.length > 0 && Boolean(readiness) && !(readiness.storyboard?.problems || []).some((text) => !ART_APPROVAL_PROBLEM.test(text)))),
     // Make needs footage and the composition over it; the animated proof is optional (mirrors the client's deriveStages).
     produce: planned && footageReady && composeDone(project, mode),
     // A render made before later scene edits no longer counts as the final video — mirrors the client's isFinalRenderStale.

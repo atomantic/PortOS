@@ -12,6 +12,7 @@
 
 import { ServerError } from '../../lib/errorHandler.js';
 import { sanitizeStoryboard, sanitizeTake, summarizeStoryboard } from '../../lib/storyboardRecord.js';
+import { defaultStoryboardStyle, defaultStoryboardSystemPrompt, isDefaultStoryboardStyle } from '../../lib/storyboardRecipe.js';
 import {
   isValidStoryboardId, newStoryboardEntityId, newStoryboardId, STORYBOARD_LIMITS,
 } from '../../lib/storyboardVocabulary.js';
@@ -25,8 +26,8 @@ const notFound = (what = 'Storyboard') => new ServerError(`${what} not found`, {
 const tooMany = (message) => new ServerError(message, { status: 409, code: 'STORYBOARD_LIMIT' });
 
 const BOARD_FIELDS = ['name', 'logline', 'aspectRatio', 'artStyle', 'universeId', 'moodBoardId', 'plot', 'tempTrack'];
-const BEAT_FIELDS = ['title', 'what', 'why', 'emotion', 'musicalRole', 'sectionHint', 'pin'];
-const PANEL_FIELDS = ['action', 'dialogue', 'framing', 'camera', 'seconds', 'castIds', 'environmentIds', 'objectIds', 'notes'];
+const BEAT_FIELDS = ['title', 'what', 'why', 'emotion', 'musicalRole', 'sectionHint', 'pin', 'beforeSong'];
+const PANEL_FIELDS = ['action', 'dialogue', 'framing', 'angle', 'facing', 'composition', 'move', 'lens', 'focus', 'eyeline', 'camera', 'seconds', 'castIds', 'environmentIds', 'objectIds', 'notes'];
 
 const pickFields = (patch, fields) => Object.fromEntries(
   fields.filter((key) => Object.hasOwn(patch || {}, key)).map((key) => [key, patch[key]]),
@@ -87,11 +88,28 @@ export async function mutateStoryboard(id, mutate) {
     return { board: next, result };
   });
   (outcome.board.deleted ? emitRecordDeleted : emitRecordUpdated)(STORYBOARD_KIND, id);
+  // A video keeping its shots in sync with this board takes the edit before the write answers.
+  const { syncShotsAfterBoardEdit } = await import('./syncMusicVideo.js');
+  await syncShotsAfterBoardEdit(outcome.board).catch((err) => console.error(`❌ Storyboard ${id} shot sync: ${err.message}`));
   return outcome;
 }
 
+// A new art style restyles a saved recipe's style nodes that still hold the
+// old style's default; a style prompt the user edited is theirs and stays.
+function restyleRecipe(draft, artStyle) {
+  if (!artStyle || artStyle === draft.artStyle || !Array.isArray(draft.recipe?.nodes)) return;
+  for (const node of draft.recipe.nodes) {
+    if (node?.type !== 'system') continue;
+    if (isDefaultStoryboardStyle(node.text, draft.artStyle)) node.text = defaultStoryboardStyle(artStyle);
+    else if (node.text === defaultStoryboardSystemPrompt(draft.artStyle)) node.text = defaultStoryboardSystemPrompt(artStyle);
+  }
+}
+
 export async function updateStoryboard(id, patch) {
-  const { board } = await mutateStoryboard(id, (draft) => { Object.assign(draft, pickFields(patch, BOARD_FIELDS)); });
+  const { board } = await mutateStoryboard(id, (draft) => {
+    restyleRecipe(draft, patch?.artStyle);
+    Object.assign(draft, pickFields(patch, BOARD_FIELDS));
+  });
   return board;
 }
 

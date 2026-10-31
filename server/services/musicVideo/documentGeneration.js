@@ -284,31 +284,85 @@ async function priorManifest(project) {
   return { pointer, manifest };
 }
 
-async function runAuthoring(projectId, { providerId, model, effort, sectionId = null, eventRevision = false, expectedDraft = null, feedback = '', beforeSubmit = null, verifyCurrent = () => {}, promptBudgetChars = LOCAL_PROMPT_BUDGET_CHARS } = {}) {
-  const project = await requireProject(projectId);
-  assertProductionApproval(project, 'storyboard');
-  const context = await authoringContext(project);
-  let prior = null;
-  if (sectionId || eventRevision) {
-    prior = await priorManifest(project);
-    if (eventRevision ? (prior.manifest.structuralBasis || prior.manifest.basis) !== context.structuralBasis : !matchesBasis(project, prior.manifest)) throw fail('The treatment or selected media changed — generate a fresh document', 'COMPOSITION_DRAFT_STALE', 409);
-    if (project.composition?.documentDraft
-      && (project.composition?.document?.directory || null) !== (prior.manifest.baseDocumentDirectory || null)) {
-      throw fail('The selected document changed — generate a fresh candidate', 'COMPOSITION_DRAFT_STALE', 409);
-    }
-    if (sectionId && !prior.manifest.sections.some((section) => section.id === sectionId)) throw fail('Section not found in the generated document', 'SECTION_NOT_FOUND', 404);
-    if (expectedDraft !== prior.pointer.directory) throw fail('The candidate changed — review it again', 'COMPOSITION_DRAFT_STALE', 409);
+// A section regenerate or event revision edits the current generated candidate; refuse
+// before any provider work once the plan, the active document or the candidate moved.
+async function loadRevisionBase(project, context, { sectionId, eventRevision, expectedDraft }) {
+  if (!sectionId && !eventRevision) return null;
+  const prior = await priorManifest(project);
+  if (eventRevision ? (prior.manifest.structuralBasis || prior.manifest.basis) !== context.structuralBasis : !matchesBasis(project, prior.manifest)) throw fail('The treatment or selected media changed — generate a fresh document', 'COMPOSITION_DRAFT_STALE', 409);
+  if (project.composition?.documentDraft
+    && (project.composition?.document?.directory || null) !== (prior.manifest.baseDocumentDirectory || null)) {
+    throw fail('The selected document changed — generate a fresh candidate', 'COMPOSITION_DRAFT_STALE', 409);
   }
-  const ids = eventRevision ? affectedEventSections(prior.manifest.song, context.song)
-    : sectionId ? [sectionId] : context.song.sections.map((section) => section.id);
-  if (!ids.length) throw fail('No narrative event or section gain changes to revise', 'NO_EVENT_CHANGES', 409);
-  const sharedStyle = prior?.manifest.sharedStyle || {
+  if (sectionId && !prior.manifest.sections.some((section) => section.id === sectionId)) throw fail('Section not found in the generated document', 'SECTION_NOT_FOUND', 404);
+  if (expectedDraft !== prior.pointer.directory) throw fail('The candidate changed — review it again', 'COMPOSITION_DRAFT_STALE', 409);
+  return prior;
+}
+
+function requestedSectionIds(context, prior, { sectionId, eventRevision }) {
+  if (eventRevision) return affectedEventSections(prior.manifest.song, context.song);
+  return sectionId ? [sectionId] : context.song.sections.map((section) => section.id);
+}
+
+// Revisions keep the candidate's style contract so a regenerated section matches its neighbors.
+async function sharedStyleFor(project, context, prior) {
+  if (prior?.manifest.sharedStyle) return prior.manifest.sharedStyle;
+  const { treatment } = project;
+  return {
     palette: context.palette,
-    treatment: { brief: project.treatment?.brief || null, motifs: project.treatment?.arc?.motifs || [], arc: project.treatment?.arc?.beats || [], styleLook: project.treatment?.styleLook || null },
+    treatment: { brief: treatment?.brief || null, motifs: treatment?.arc?.motifs || [], arc: treatment?.arc?.beats || [], styleLook: treatment?.styleLook || null },
     visualSpec: project.visualSpec || null,
     styleLines: [...await styleLinesFor(project), ...styleGrammarLines(project)],
     ...(project.composition?.styleGrammarId ? { styleGrammarId: project.composition.styleGrammarId } : {}),
   };
+}
+
+// Sections a failed batched local attempt accepted for this exact basis; another basis restores nothing.
+async function readAuthoringCheckpoint(stagingPath, stagingBasis, ids) {
+  const checkpoint = await readJSONFileStrict(stagingPath, null, { logError: false });
+  if (!checkpoint.ok) throw fail('The saved authoring checkpoint could not be read', 'COMPOSITION_CHECKPOINT_INVALID', 409);
+  const staged = checkpoint.value;
+  if (staged && staged.version !== 1) throw fail('The saved authoring checkpoint has an unsupported version', 'COMPOSITION_CHECKPOINT_INVALID', 409);
+  if (staged?.basis !== stagingBasis) return { sections: [], run: undefined };
+  if (!Array.isArray(staged.sections) || (staged.sections.length && !staged.run?.providerId)) {
+    throw fail('The saved authoring checkpoint is invalid', 'COMPOSITION_CHECKPOINT_INVALID', 409);
+  }
+  return {
+    sections: staged.sections.filter(({ id }) => ids.includes(id)).map(({ id, source }) => [id, checkedFunction(source)]),
+    run: staged.run,
+  };
+}
+
+// Revising an unaccepted candidate keeps comparing against the song its first revision started from.
+function revisionHistory(prior, revisingDraft) {
+  if (!prior) return { changedSectionIds: [], beforeSong: null };
+  if (!revisingDraft) return { changedSectionIds: [], beforeSong: prior.manifest.song };
+  return { changedSectionIds: prior.manifest.changedSectionIds || [], beforeSong: prior.manifest.beforeSong || prior.manifest.song };
+}
+
+function buildGeneratedManifest(project, context, prior, { ids, sharedStyle, updated, run }) {
+  const merged = new Map((prior?.manifest.sections || []).map((section) => [section.id, section.source]));
+  for (const [id, source] of updated) merged.set(id, source);
+  const history = revisionHistory(prior, project.composition?.documentDraft);
+  return {
+    version: 1, renderer: musicVideoDocumentRenderer(project), mediaMode: musicVideoMediaMode(project), basis: context.basis, structuralBasis: context.structuralBasis, baseDocumentDirectory: project.composition?.document?.directory || null,
+    changedSectionIds: [...new Set([...history.changedSectionIds, ...ids])],
+    beforeSong: history.beforeSong,
+    sharedStyle, song: context.song, palette: context.palette,
+    scenes: context.scenes,
+    sections: context.song.sections.map(({ id }) => ({ id, source: merged.get(id) })),
+    providerId: run.providerId, model: run.model,
+  };
+}
+
+async function runAuthoring(projectId, { providerId, model, effort, sectionId = null, eventRevision = false, expectedDraft = null, feedback = '', beforeSubmit = null, verifyCurrent = () => {}, promptBudgetChars = LOCAL_PROMPT_BUDGET_CHARS } = {}) {
+  const project = await requireProject(projectId);
+  assertProductionApproval(project, 'storyboard');
+  const context = await authoringContext(project);
+  const prior = await loadRevisionBase(project, context, { sectionId, eventRevision, expectedDraft });
+  const ids = requestedSectionIds(context, prior, { sectionId, eventRevision });
+  if (!ids.length) throw fail('No narrative event or section gain changes to revise', 'NO_EVENT_CHANGES', 409);
+  const sharedStyle = await sharedStyleFor(project, context, prior);
   const promptFor = (batchIds) => {
     const sections = context.song.sections.filter((section) => batchIds.includes(section.id));
     // Section regenerates and partial batches need only their overlapping scenes and shots.
@@ -385,17 +439,9 @@ async function runAuthoring(projectId, { providerId, model, effort, sectionId = 
     }
   };
   if (batches) {
-    const checkpoint = await readJSONFileStrict(stagingPath, null, { logError: false });
-    if (!checkpoint.ok) throw fail('The saved authoring checkpoint could not be read', 'COMPOSITION_CHECKPOINT_INVALID', 409);
-    const staged = checkpoint.value;
-    if (staged && staged.version !== 1) throw fail('The saved authoring checkpoint has an unsupported version', 'COMPOSITION_CHECKPOINT_INVALID', 409);
-    if (staged?.basis === stagingBasis) {
-      if (!Array.isArray(staged.sections) || (staged.sections.length && !staged.run?.providerId)) {
-        throw fail('The saved authoring checkpoint is invalid', 'COMPOSITION_CHECKPOINT_INVALID', 409);
-      }
-      for (const { id, source } of staged.sections) if (ids.includes(id)) updated.set(id, checkedFunction(source));
-      run = staged.run;
-    }
+    const restored = await readAuthoringCheckpoint(stagingPath, stagingBasis, ids);
+    for (const [id, source] of restored.sections) updated.set(id, source);
+    run = restored.run;
     const saveProgress = () => atomicWrite(stagingPath, {
       version: 1, basis: stagingBasis,
       sections: [...updated].map(([id, source]) => ({ id, source })),
@@ -420,17 +466,7 @@ async function runAuthoring(projectId, { providerId, model, effort, sectionId = 
     run = await runBatch(fullPrompt);
     await takeAnswer(ids);
   }
-  const merged = new Map((prior?.manifest.sections || []).map((section) => [section.id, section.source]));
-  for (const [id, source] of updated) merged.set(id, source);
-  const manifest = {
-    version: 1, renderer: musicVideoDocumentRenderer(project), mediaMode: musicVideoMediaMode(project), basis: context.basis, structuralBasis: context.structuralBasis, baseDocumentDirectory: project.composition?.document?.directory || null,
-    changedSectionIds: [...new Set([...((prior && project.composition?.documentDraft) ? prior.manifest.changedSectionIds || [] : []), ...ids])],
-    beforeSong: prior ? (project.composition?.documentDraft ? prior.manifest.beforeSong || prior.manifest.song : prior.manifest.song) : null,
-    sharedStyle, song: context.song, palette: context.palette,
-    scenes: context.scenes,
-    sections: context.song.sections.map(({ id }) => ({ id, source: merged.get(id) })),
-    providerId: run.providerId, model: run.model,
-  };
+  const manifest = buildGeneratedManifest(project, context, prior, { ids, sharedStyle, updated, run });
   const active = project.composition?.document?.directory || null;
   const draft = project.composition?.documentDraft?.directory || null;
   const result = await stageGeneratedDocument(projectId, generatedFiles(manifest), {

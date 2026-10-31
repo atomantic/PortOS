@@ -340,3 +340,31 @@ it('uses a same-scene shortcut discovered after a multi-scene detour for audienc
   expect(result.stats.maxDepth).toBe(ungrouped.stats.maxDepth);
   expect(result.stats.reachableCount).toBe(ungrouped.stats.reachableCount);
 });
+
+it('lowers a beat reached first across scenes when a same-scene cut reaches it later', () => {
+  // `door` is discovered at dramatic depth 2 via `aside` before `hall` relaxes it to 1
+  // through a free same-scene cut; the invitation then lands at depth 3, not 4.
+  const edges = {
+    opening: ['aside', 'stay'],
+    aside: ['door'],
+    stay: ['hall'],
+    hall: ['door'],
+    door: ['stairs'],
+    stairs: ['invitation'],
+    invitation: [],
+  };
+  const groups = { opening: 'opening', stay: 'opening', aside: 'aside', hall: 'hall', door: 'hall', stairs: 'stairs', invitation: 'invitation' };
+  const scenes = Object.entries(edges).map(([key, targets]) => ({
+    key,
+    title: key,
+    summary: 'The signal travels through the opening sequence.',
+    playbackMode: 'cut',
+    audienceConnection: key === 'invitation' ? 'connected' : 'disconnected',
+    isEnding: key === 'invitation',
+    transitions: targets.map((targetKey) => ({ targetKey, intent: `Follow ${targetKey}` })),
+  }));
+  const options = { participationMode: 'helper', requireAudienceIntroduction: true };
+  const nodes = scenes.map(({ key }) => ({ id: key, shot: { dramaticSceneId: groups[key] } }));
+  const result = analyzeStoryOutline({ startKey: 'opening', scenes }, { ...options, nodes });
+  expect(result.issues).not.toContainEqual(expect.objectContaining({ code: 'LATE_AUDIENCE_CONNECTION' }));
+});

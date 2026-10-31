@@ -1,7 +1,9 @@
+import { Trash2 } from 'lucide-react';
 import { REFERENCE_RANGES, getBloodValueStatus, STATUS_COLORS } from './constants';
 import { getCategoryForKey } from '../../lib/clinicianReport';
+import ConfirmButtonPair from '../ui/ConfirmButtonPair';
 
-export default function BloodTestCard({ test }) {
+export default function BloodTestCard({ test, confirming = false, onRequestDelete, onConfirmDelete, onCancelDelete }) {
   if (!test) return null;
 
   const { date, ...values } = test;
@@ -26,7 +28,29 @@ export default function BloodTestCard({ test }) {
 
   return (
     <div className="bg-port-card border border-port-border rounded-xl p-4">
-      <h4 className="text-sm font-medium text-gray-300 mb-3">{date}</h4>
+      <div className="flex items-center justify-between gap-2 mb-3">
+        <h4 className="text-sm font-medium text-gray-300">{date}</h4>
+        {test.id && onRequestDelete && (
+          confirming ? (
+            <ConfirmButtonPair
+              prompt="Delete?"
+              confirmIcon={Trash2}
+              ariaLabel={`Confirm delete blood test ${date}`}
+              onConfirm={onConfirmDelete}
+              onCancel={onCancelDelete}
+            />
+          ) : (
+            <button
+              type="button"
+              onClick={onRequestDelete}
+              className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-600 hover:text-port-error transition-colors"
+              aria-label={`Delete blood test ${date}`}
+            >
+              <Trash2 size={14} />
+            </button>
+          )
+        )}
+      </div>
       <div className="space-y-3">
         {Object.entries(categories).map(([category, items]) => (
           <div key={category}>

@@ -4,18 +4,35 @@ import { ExternalLink, LayoutPanelLeft, Loader2, Unlink } from 'lucide-react';
 import { createStoryboard, getStoryboard, listStoryboards, makeStoryboardFromMusicVideo } from '../../services/api';
 import { formatCount, formatTimecode } from '../../utils/formatters';
 import { selectedTake, takeSrc } from '../storyboards/storyboardArt';
-import StoryboardFitPanel from './StoryboardFitPanel';
 
 const actionButton = 'min-h-[44px] inline-flex items-center justify-center gap-1.5 rounded-lg border border-port-border px-3 text-sm text-gray-200 hover:border-port-accent/60 hover:text-white disabled:opacity-40';
 const plural = (n, word) => `${formatCount(n)} ${word}${n === 1 ? '' : 's'}`;
 const STRIP_PANELS = 8;
 
 /**
- * The Plan step's link to a Create › Storyboards board: pick one, or make one
- * from this video's shots, then see it at a glance, open it, and fit it to
- * the song. Linking changes no shot; only Fit to song writes them.
+ * Links (or unlinks) the video's storyboard through the step's board object;
+ * `saved` means the server already linked it (Make storyboard from this video).
  */
-export default function StoryboardLinkPanel({ project, onLink, fitDisabled, onFitted, mode = 'all', onStory, refreshKey = 0 }) {
+export function useStoryboardLink(board) {
+  const [linkError, setLinkError] = useState('');
+  const linkStoryboard = (storyboardId, { saved = false } = {}) => {
+    setLinkError('');
+    if (saved) { board.editProjectLocal({ storyboardId }); return Promise.resolve(true); }
+    return board.saveStoryLink(storyboardId).then(() => true).catch((err) => {
+      setLinkError(err?.message || 'Could not link the storyboard.'); return false;
+    });
+  };
+  return { linkStoryboard, linkError };
+}
+
+/**
+ * A music video's link to a Create › Storyboards board: pick one, make one from
+ * this video's shots, or start an empty one in the production sketch style,
+ * then see it at a glance and open it (`openPath`, the video's Storyboard step
+ * by default). Linking changes no shot; only Fit to song on the Storyboard
+ * step writes them.
+ */
+export default function StoryboardLinkPanel({ project, onLink, openPath, refreshKey = 0 }) {
   const linkedId = project.storyboardId || null;
   // undefined = loading, null = missing on this machine.
   const [board, setBoard] = useState(undefined);
@@ -24,7 +41,6 @@ export default function StoryboardLinkPanel({ project, onLink, fitDisabled, onFi
   const [listError, setListError] = useState(false);
   const [making, setMaking] = useState(false);
   const [makeError, setMakeError] = useState('');
-  const [reads, setReads] = useState(0);
 
   useEffect(() => {
     if (!linkedId) return undefined;
@@ -35,7 +51,7 @@ export default function StoryboardLinkPanel({ project, onLink, fitDisabled, onFi
       .then((next) => { if (active) setBoard(next); })
       .catch(() => { if (active) setBoard(null); });
     return () => { active = false; };
-  }, [linkedId, reads, refreshKey]);
+  }, [linkedId, refreshKey]);
 
   // The board list is read when the picker is first touched, not on every Plan visit.
   const loadBoards = () => {
@@ -61,7 +77,7 @@ export default function StoryboardLinkPanel({ project, onLink, fitDisabled, onFi
   const makeEmpty = async () => {
     setMaking(true);
     setMakeError('');
-    const next = await createStoryboard({ name: (project.name || 'Storyboard').slice(0, 120) }, { silent: true }).catch((err) => { setMakeError(err?.message || 'Could not create the storyboard.'); return null; });
+    const next = await createStoryboard({ name: (project.name || 'Storyboard').slice(0, 120), artStyle: 'production-sketch' }, { silent: true }).catch((err) => { setMakeError(err?.message || 'Could not create the storyboard.'); return null; });
     if (next?.id) {
       setBoard(next);
       if (!(await onLink(next.id))) setMakeError('The storyboard was created but could not be linked. Find it in Create › Storyboards.');
@@ -75,7 +91,7 @@ export default function StoryboardLinkPanel({ project, onLink, fitDisabled, onFi
       return (
         <div className="flex flex-wrap items-center gap-2">
           <p role="status" className="flex-1 text-xs text-port-warning">The linked storyboard isn't on this machine, or was deleted.</p>
-          {mode !== 'fit' && <button type="button" onClick={() => onLink(null)} className={actionButton}><Unlink size={16} aria-hidden="true" /> Unlink</button>}
+          <button type="button" onClick={() => onLink(null)} className={actionButton}><Unlink size={16} aria-hidden="true" /> Unlink</button>
         </div>
       );
     }
@@ -89,8 +105,8 @@ export default function StoryboardLinkPanel({ project, onLink, fitDisabled, onFi
             <p className="truncate text-sm text-white">{board.name}</p>
             <p className="text-[11px] text-gray-400 tabular-nums">{plural(board.beats.length, 'beat')} · {plural(panels.length, 'panel')} · {formatTimecode(runtime)}</p>
           </div>
-          <Link to={`/storyboards/${board.id}`} className={actionButton}><ExternalLink size={16} aria-hidden="true" /> Open</Link>
-          {mode !== 'fit' && <button type="button" onClick={() => onLink(null)} className={actionButton}><Unlink size={16} aria-hidden="true" /> Unlink</button>}
+          <Link to={openPath || `/storyboards/${board.id}`} className={actionButton}><ExternalLink size={16} aria-hidden="true" /> Open</Link>
+          <button type="button" onClick={() => onLink(null)} className={actionButton}><Unlink size={16} aria-hidden="true" /> Unlink</button>
         </div>
         {panels.length > 0 && (
           <ol className="flex gap-1 overflow-x-auto" aria-label="Storyboard panels">
@@ -106,12 +122,10 @@ export default function StoryboardLinkPanel({ project, onLink, fitDisabled, onFi
             {panels.length > STRIP_PANELS && <li className="flex h-12 shrink-0 items-center px-1 text-[11px] text-gray-500">+{formatCount(panels.length - STRIP_PANELS)}</li>}
           </ol>
         )}
-        {mode !== 'story' && <StoryboardFitPanel project={project} board={board} disabled={fitDisabled} onFitted={onFitted} onBoardStale={() => setReads((n) => n + 1)} />}
       </div>
     );
   }
 
-  if (mode === 'fit') return <p className="text-xs text-gray-400">Choose a storyboard on the <button type="button" className="text-port-accent underline" onClick={onStory}>Story step</button> to fit its panels to the song.</p>;
   return (
     <div className="space-y-2">
       <p className="text-xs text-gray-400">Plan the story on a storyboard: beats and panels you can sketch and play before the song is final.</p>

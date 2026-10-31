@@ -3,12 +3,15 @@ import { resolveFamilyId } from '../../hooks/useThreejsModelFamilies';
 /**
  * Subject-family picker, shared by the create form and the workspace so the two
  * cannot drift on labelling or on what an empty taxonomy does. Renders nothing
- * when the taxonomy could not be fetched — an empty select would look broken,
- * and generation is perfectly usable without a family.
+ * while the taxonomy is loading or when it served no families. A failed read
+ * shows a one-line notice with Retry, so the missing control is explained
+ * rather than silently absent; generation still works without a family.
  */
 export default function SubjectFamilySelect({
   id,
   families,
+  status,
+  onRetry,
   value: requestedValue,
   onChange,
   disabled = false,
@@ -16,10 +19,26 @@ export default function SubjectFamilySelect({
   showDescription = false,
   className = '',
 }) {
+  if (status === 'error') {
+    return (
+      <div className={`flex items-center gap-2 text-xs text-gray-400 ${className}`} role="alert">
+        <span>Subject families failed to load.</span>
+        {onRetry && (
+          <button
+            type="button"
+            onClick={onRetry}
+            className="rounded border border-port-border px-2 py-0.5 text-gray-200 hover:border-port-accent hover:text-white focus:border-port-accent focus:outline-none"
+          >
+            Retry
+          </button>
+        )}
+      </div>
+    );
+  }
   // Returning null (rather than an empty wrapper) is why the spacing lives on
   // this element: a caller's own margin div would leave a visible gap where the
   // picker isn't.
-  if (families.length === 0) return null;
+  if (status !== 'ready' || families.length === 0) return null;
   // Never hand the select a value it has no option for — see resolveFamilyId.
   const value = resolveFamilyId(families, requestedValue);
   const description = families.find((option) => option.id === value)?.description;

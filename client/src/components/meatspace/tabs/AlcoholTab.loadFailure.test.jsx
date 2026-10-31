@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 
 vi.mock('../../../services/api', () => ({
   getAlcoholSummary: vi.fn(),
@@ -8,6 +8,7 @@ vi.mock('../../../services/api', () => ({
   getAppleHealthCorrelation: vi.fn(),
   updateAlcoholDrink: vi.fn().mockResolvedValue({}),
   removeAlcoholDrink: vi.fn().mockResolvedValue({}),
+  removeCustomDrink: vi.fn().mockResolvedValue({}),
 }));
 vi.mock('../AlcoholChart', () => ({ default: () => null }));
 vi.mock('../AlcoholHrvCorrelation', () => ({ default: () => null }));
@@ -18,7 +19,7 @@ import AlcoholTab from './AlcoholTab';
 
 beforeEach(() => {
   api.getAlcoholSummary.mockResolvedValue(null);
-  api.getCustomDrinks.mockResolvedValue(null);
+  api.getCustomDrinks.mockResolvedValue([]);
   api.getAppleHealthCorrelation.mockResolvedValue(null);
 });
 afterEach(cleanup);
@@ -47,4 +48,39 @@ it('sends the rendered event identity when editing and deleting a history row', 
   fireEvent.click(await screen.findByRole('button', { name: 'Remove drink', exact: true }));
   fireEvent.click(screen.getByRole('button', { name: 'Remove', exact: true }));
   await waitFor(() => expect(api.removeAlcoholDrink).toHaveBeenCalledWith('2024-06-01', 0, 'event-id'));
+});
+
+it('hides quick-add buttons and Manage when the button read fails, so a positional edit cannot hit a different stored button', async () => {
+  api.getDailyAlcohol.mockResolvedValue([]);
+  api.getCustomDrinks.mockRejectedValueOnce(new Error('boom'));
+  render(<AlcoholTab />);
+  expect(await screen.findByRole('alert')).toHaveTextContent('Could not load your quick-add drink buttons');
+  expect(screen.queryByRole('button', { name: /Manage/ })).toBeNull();
+  expect(screen.queryByRole('button', { name: /Modelo/ })).toBeNull();
+  expect(api.getCustomDrinks).toHaveBeenLastCalledWith({ silent: true });
+
+  api.getCustomDrinks.mockResolvedValueOnce([{ name: 'Example Stout', oz: 12, abv: 5 }]);
+  fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+  expect(await screen.findByRole('button', { name: /Example Stout/ })).toBeTruthy();
+  expect(screen.getByRole('button', { name: /Manage/ })).toBeTruthy();
+  expect(screen.queryByRole('alert')).toBeNull();
+});
+
+it('drops the edit draft with a failed button reload, so the Add form never reopens prefilled with the edited drink', async () => {
+  api.getDailyAlcohol.mockResolvedValue([]);
+  api.getCustomDrinks.mockResolvedValueOnce([{ name: 'Example Stout', oz: 12, abv: 5 }, { name: 'Example Lager', oz: 12, abv: 4 }]);
+  render(<AlcoholTab />);
+  fireEvent.click(await screen.findByRole('button', { name: /Manage/ }));
+  fireEvent.click(screen.getAllByRole('button', { name: 'Edit' })[0]);
+  expect(screen.getByLabelText('Drink button name')).toHaveValue('Example Stout');
+
+  api.getCustomDrinks.mockRejectedValueOnce(new Error('boom'));
+  fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+  const confirm = screen.getByRole('group', { name: 'Confirm remove quick-add button Example Lager' });
+  fireEvent.click(within(confirm).getByRole('button', { name: /Remove/ }));
+  expect(await screen.findByRole('alert')).toHaveTextContent('Could not load your quick-add drink buttons');
+
+  api.getCustomDrinks.mockResolvedValueOnce([{ name: 'Example Stout', oz: 12, abv: 5 }]);
+  fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+  expect(await screen.findByLabelText('New drink button name')).toHaveValue('');
 });

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, act, within } from '@testing-library/react';
+import { MemoryRouter } from 'react-router';
 import MediaCard from './MediaCard';
 import { normalizeImage, normalizeVideo } from './normalize';
 
@@ -139,6 +140,24 @@ describe('MediaCard', () => {
     // Confirming fires the delete with the item.
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
     expect(onDelete).toHaveBeenCalledWith(imageItem);
+  });
+
+  it('lists where a used file is used and deletes it only through Delete anyway', () => {
+    const onDelete = vi.fn();
+    const usages = [
+      { source: 'music-video', label: 'Music video', id: 'mv-1', title: 'Example Song', role: 'Shot 4', href: '/music-video/mv-1/scene/s-4' },
+      { source: 'catalog', label: 'Casting', id: 'cat-chr-1', title: 'Alice', role: 'Sheet', href: '/casting/cat-chr-1/sheets' },
+    ];
+    render(<MemoryRouter><MediaCard item={imageItem} onDelete={onDelete} usages={usages} showCollectionMenu={false} showMoodBoardMenu={false} /></MemoryRouter>);
+
+    fireEvent.click(screen.getByRole('button', { name: /Used ×2/ }));
+    expect(screen.getByRole('link', { name: 'Music video · Example Song · Shot 4' })).toHaveAttribute('href', '/music-video/mv-1/scene/s-4');
+
+    fireEvent.click(screen.getByTitle('Delete'));
+    expect(screen.getByText(/Used in 2 places/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Delete' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Delete anyway' }));
+    expect(onDelete).toHaveBeenCalledWith(imageItem, { force: true });
   });
 
   it('lets the user cancel the delete confirmation without deleting', () => {

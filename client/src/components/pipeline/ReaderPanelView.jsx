@@ -12,6 +12,7 @@ import { Link } from 'react-router';
 import { Loader2, Sparkles, Users, AlertTriangle, Scale, Split, ArrowRight } from 'lucide-react';
 import { PANEL_PERSONA_IDS, PANEL_QUESTIONS, personaLabel } from '../../../../server/lib/editorial/panelDisagreement.js';
 import { useReaderPanel } from '../../hooks/useReaderPanel';
+import ListLoadError from '../ui/ListLoadError';
 
 const PERSONA_ORDER = PANEL_PERSONA_IDS;
 const IssueTags = ({ issues }) => (
@@ -137,7 +138,7 @@ function DisagreementList({ disagreements }) {
 }
 
 export default function ReaderPanelView({ seriesId, hasContent }) {
-  const { panel, loading, running, starting, convene, cancel, progressText } = useReaderPanel(seriesId);
+  const { panel, loading, loadError, reload, running, starting, convene, cancel, progressText } = useReaderPanel(seriesId);
   const hasPanel = panel && panel.status === 'complete' && Array.isArray(panel.personas) && panel.personas.length;
   const orderedPersonas = hasPanel
     ? [...panel.personas].sort((a, b) => PERSONA_ORDER.indexOf(a.persona) - PERSONA_ORDER.indexOf(b.persona))
@@ -175,9 +176,11 @@ export default function ReaderPanelView({ seriesId, hasContent }) {
         </p>
       ) : null}
 
+      {loadError ? <ListLoadError what="the reader panel" error={loadError} onRetry={reload} /> : null}
+
       {loading ? (
         <div className="text-xs text-gray-500 flex items-center gap-1.5"><Loader2 size={12} className="animate-spin" /> Loading panel…</div>
-      ) : !hasPanel ? (
+      ) : !hasPanel && loadError ? null : !hasPanel ? (
         <div className="border border-dashed border-port-border rounded-lg p-6 text-center">
           <Users size={20} className="text-gray-600 mx-auto mb-2" />
           <p className="text-sm text-gray-400">The reader panel hasn’t met yet.</p>

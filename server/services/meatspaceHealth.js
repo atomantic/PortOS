@@ -10,6 +10,8 @@ import { invalidateMeatspace } from './meatspaceEvents.js';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { atomicWrite, PATHS, ensureDir, readJSONFile, getDateString } from '../lib/fileUtils.js';
+import { isPlainObject } from '../lib/objects.js';
+import { parseTsMs } from '../lib/lwwTimestamp.js';
 import { readLocalDailyLog, mutateDailyLog } from './meatspaceDailyLog.js';
 import { queueHealthWrite } from './meatspaceWriteQueues.js';
 import {
@@ -19,14 +21,17 @@ import {
   rowIdentityKeys,
   ROW_TOMBSTONES_KEY,
 } from '../lib/meatspaceRowIdentity.js';
-import { recordTombstone } from '../lib/tombstones.js';
+import { recordTombstone, supersedingTimestamp } from '../lib/tombstones.js';
 import {
   isMortalLoomEnabled,
   mlArrayIfEnabled,
   mlPush,
   mlPatchById,
   mlRemoveById,
-  mlUpsertHealthMetricByDate
+  mlRemoveWhere,
+  mlUpsertHealthMetricByDate,
+  mlClearHealthMetricFields,
+  mlMergeClinicalBloodTests,
 } from './mortalLoomStore.js';
 
 const MEATSPACE_DIR = PATHS.meatspace;
@@ -49,35 +54,115 @@ async function writeLocal(file, data) {
   if (resource) invalidateMeatspace([resource]);
 }
 
+// Deletion markers are sync metadata, not part of the lists callers read.
+const withoutTombstones = ({ [ROW_TOMBSTONES_KEY]: _tombstones, ...rest }) => rest;
+
+// Id-less rows take the content key every peer already computes, and no
+// `createdAt` — a random id plus a clock would no longer match that copy.
+// A non-array payload is left untouched (a malformed file must not be rewritten).
+async function loadLocalRowUnionQueued(file, arrayKey) {
+  // Strict: a present-but-unreadable file must throw, not become the empty
+  // default that writeLocal would persist. An absent file still returns the default.
+  const data = await readJSONFile(file, { [arrayKey]: [] }, { strict: true });
+  if (!Array.isArray(data?.[arrayKey])) return data;
+  const normalized = normalizeLegacyRows(data[arrayKey]);
+  if (!normalized.changed) return data;
+  normalized.rows.sort(byDate);
+  const next = { ...data, [arrayKey]: normalized.rows };
+  await writeLocal(file, next);
+  return next;
+}
+
+async function readNormalizedRowUnion(file, arrayKey) {
+  const data = await readJSONFile(file, { [arrayKey]: [] }, { strict: true });
+  if (!Array.isArray(data?.[arrayKey])) return data;
+  if (normalizeLegacyRows(data[arrayKey]).changed) {
+    return withoutTombstones(await queueHealthWrite(() => loadLocalRowUnionQueued(file, arrayKey)));
+  }
+  return withoutTombstones(data);
+}
+
+const stampNewRow = (row) => ({
+  ...row,
+  id: row.id || randomUUID(),
+  createdAt: row.createdAt || new Date().toISOString(),
+});
+
+const flattenBloodRow = ({ id, markers, ...rest }) => ({
+  ...rest,
+  ...(markers || {}),
+  ...(id ? { id } : {}),
+});
+
+async function removeLocalRow(file, arrayKey, id) {
+  return queueHealthWrite(async () => {
+    const data = await loadLocalRowUnionQueued(file, arrayKey);
+    if (!Array.isArray(data?.[arrayKey])) return null;
+    const found = data[arrayKey].find(row => rowAnswersTo(row, id));
+    if (!found) return null;
+    data[arrayKey] = data[arrayKey].filter(row => row !== found);
+    const deletedAt = new Date().toISOString();
+    for (const key of rowIdentityKeys(found)) {
+      data[ROW_TOMBSTONES_KEY] = recordTombstone(data[ROW_TOMBSTONES_KEY], key, { keyField: 'id', deletedAt });
+    }
+    await writeLocal(file, data);
+    return found;
+  });
+}
+
 // === Blood Tests ===
 // Shape reconciliation: MortalLoom nests markers under `markers`; PortOS's
 // BloodTestCard iterates top-level numeric fields, so we flatten on read
-// and re-nest on write.
+// and re-nest on write. The id stays on the read model so a delete can address
+// the iCloud row.
 
 export async function getBloodTests() {
-  const local = await readJSONFile(BLOOD_TESTS_FILE, { tests: [], referenceRanges: {} });
   const ml = await mlArrayIfEnabled('bloodTests');
-  if (!ml) return local;
-  const tests = ml
-    .map(({ id, markers, ...rest }) => ({ ...rest, ...(markers || {}) }))
-    .sort(byDate);
-  return { tests, referenceRanges: local.referenceRanges || {} };
+  if (ml) {
+    const local = await readJSONFile(BLOOD_TESTS_FILE, { tests: [], referenceRanges: {} });
+    return {
+      tests: ml.map(flattenBloodRow).sort(byDate),
+      referenceRanges: local.referenceRanges || {},
+    };
+  }
+  return readNormalizedRowUnion(BLOOD_TESTS_FILE, 'tests');
 }
 
 export async function addBloodTest(test) {
   if (await isMortalLoomEnabled()) {
-    const { date, id, markers, ...flat } = test;
-    const stored = await mlPush('bloodTests', { date, markers: { ...(markers || {}), ...flat } });
-    return { date: stored.date, ...(stored.markers || {}) };
+    const { date, id, markers, createdAt, updatedAt: _updatedAt, aliasIds: _aliasIds, ...flat } = test;
+    const stored = await mlPush('bloodTests', {
+      ...(id ? { id } : {}),
+      createdAt: createdAt || new Date().toISOString(),
+      date,
+      markers: { ...(isPlainObject(markers) ? markers : {}), ...flat },
+    });
+    console.log(`🩸 Blood test added for ${stored.date}`);
+    return flattenBloodRow(stored);
   }
+  const stored = stampNewRow(test);
   await queueHealthWrite(async () => {
-    const data = await getBloodTests();
-    data.tests.push(test);
+    const data = await loadLocalRowUnionQueued(BLOOD_TESTS_FILE, 'tests');
+    if (!Array.isArray(data.tests)) throw new Error('Blood tests malformed');
+    data.tests.push(stored);
     data.tests.sort(byDate);
     await writeLocal(BLOOD_TESTS_FILE, data);
   });
-  console.log(`🩸 Blood test added for ${test.date}`);
-  return test;
+  console.log(`🩸 Blood test added for ${stored.date}`);
+  return stored;
+}
+
+export async function removeBloodTest(id) {
+  if (await isMortalLoomEnabled()) {
+    const target = (await getBloodTests()).tests.find(row => row.id === id);
+    if (!target) return null;
+    const removed = await mlRemoveById('bloodTests', target.id);
+    if (removed) console.log(`🩸 Blood test removed: ${removed.date} ${removed.id}`);
+    return removed ? flattenBloodRow(removed) : null;
+  }
+  const target = await removeLocalRow(BLOOD_TESTS_FILE, 'tests', id);
+  if (target) console.log(`🩸 Blood test removed: ${target.date} ${target.id}`);
+  return target;
 }
 
 // === Body Composition ===
@@ -94,28 +179,44 @@ export async function getBodyHistory({ strict = false } = {}) {
   // the composed view would turn "MortalLoom is on but has no bodyEntries key" into
   // a non-null empty log and stop the fall-through to the local file entirely.
   const ml = await mlArrayIfEnabled('bodyEntries', { strict });
-  if (ml) return ml.map(({ id, ...rest }) => rest).sort(byDate);
+  if (ml) return [...ml].sort(byDate);
   const log = await readLocalDailyLog({ strict, label: 'Health' });
   return (log.entries || [])
-    .filter(e => e.body && Object.keys(e.body).length > 0)
+    .filter(bodyIsLive)
     .map(e => ({ date: e.date, ...e.body }))
     .sort(byDate);
+}
+
+// A deletion newer than the weigh-in (or a weigh-in with no clock) stays hidden
+// even if a peer merge has not dropped the object yet.
+function bodyIsLive(entry) {
+  if (!entry?.body || Object.keys(entry.body).length === 0) return false;
+  const deletedMs = parseTsMs(entry.bodyDeletedAt);
+  if (deletedMs === null) return true;
+  const updatedMs = parseTsMs(entry.body.updatedAt);
+  return updatedMs !== null && deletedMs <= updatedMs;
 }
 
 export async function addBodyEntry({ date, ...body }) {
   const targetDate = date || getDateString(); // local calendar day (matches alcohol/nicotine + dashboard streak)
 
   if (await isMortalLoomEnabled()) {
-    const stored = await mlPush('bodyEntries', { date: targetDate, ...body });
+    const stored = await mlPush('bodyEntries', {
+      date: targetDate,
+      ...body,
+      updatedAt: new Date().toISOString(),
+    });
     console.log(`⚖️ Body entry added for ${targetDate} (MortalLoom)`);
-    const { id, ...rest } = stored;
-    return rest;
+    return stored;
   }
 
   const result = await mutateDailyLog((log) => {
     let entry = log.entries.find(e => e.date === targetDate);
     if (!entry) { entry = { date: targetDate }; log.entries.push(entry); }
-    entry.body = { ...(entry.body || {}), ...body };
+    // updatedAt has to beat bodyDeletedAt even when both land in the same
+    // millisecond, or the next sync would treat the re-log as the deleted copy.
+    entry.body = { ...(entry.body || {}), ...body, updatedAt: supersedingTimestamp(entry.bodyDeletedAt) };
+    delete entry.bodyDeletedAt;
     return { date: targetDate, ...entry.body };
   }, { label: 'Health' });
 
@@ -123,28 +224,66 @@ export async function addBodyEntry({ date, ...body }) {
   return result;
 }
 
+export async function removeBodyEntry(ref) {
+  if (await isMortalLoomEnabled()) {
+    const removed = await mlRemoveWhere('bodyEntries', row => row?.id === ref || row?.date === ref);
+    if (removed.length === 0) return null;
+    console.log(`⚖️ Body entry removed: ${removed.map(row => `${row.date} ${row.id}`).join(', ')}`);
+    return removed[0];
+  }
+
+  const target = await mutateDailyLog((log) => {
+    const entry = (log.entries || []).find(e => e.date === ref || e.body?.id === ref);
+    if (!entry?.body || Object.keys(entry.body).length === 0) return null;
+    const removed = { date: entry.date, ...entry.body };
+    delete entry.body;
+    entry.bodyDeletedAt = new Date().toISOString();
+    return removed;
+  }, { label: 'Health' });
+  if (target) console.log(`⚖️ Body entry removed: ${target.date}`);
+  return target;
+}
+
 // === Epigenetic Tests ===
 
 export async function getEpigeneticTests() {
   const ml = await mlArrayIfEnabled('epigeneticTests');
   if (ml) return { tests: [...ml].sort(byDate) };
-  return readJSONFile(EPIGENETIC_TESTS_FILE, { tests: [] });
+  return readNormalizedRowUnion(EPIGENETIC_TESTS_FILE, 'tests');
 }
 
 export async function addEpigeneticTest(test) {
   if (await isMortalLoomEnabled()) {
-    const stored = await mlPush('epigeneticTests', test);
+    const stored = await mlPush('epigeneticTests', {
+      ...test,
+      createdAt: test.createdAt || new Date().toISOString(),
+    });
     console.log(`🧬 Epigenetic test added for ${stored.date} (MortalLoom)`);
     return stored;
   }
+  const stored = stampNewRow(test);
   await queueHealthWrite(async () => {
-    const data = await getEpigeneticTests();
-    data.tests.push(test);
+    const data = await loadLocalRowUnionQueued(EPIGENETIC_TESTS_FILE, 'tests');
+    if (!Array.isArray(data.tests)) throw new Error('Epigenetic tests malformed');
+    data.tests.push(stored);
     data.tests.sort(byDate);
     await writeLocal(EPIGENETIC_TESTS_FILE, data);
   });
-  console.log(`🧬 Epigenetic test added for ${test.date}`);
-  return test;
+  console.log(`🧬 Epigenetic test added for ${stored.date}`);
+  return stored;
+}
+
+export async function removeEpigeneticTest(id) {
+  if (await isMortalLoomEnabled()) {
+    const target = (await getEpigeneticTests()).tests.find(row => row.id === id);
+    if (!target) return null;
+    const removed = await mlRemoveById('epigeneticTests', target.id);
+    if (removed) console.log(`🧬 Epigenetic test removed: ${removed.date} ${removed.id}`);
+    return removed;
+  }
+  const target = await removeLocalRow(EPIGENETIC_TESTS_FILE, 'tests', id);
+  if (target) console.log(`🧬 Epigenetic test removed: ${target.date} ${target.id}`);
+  return target;
 }
 
 // === Eyes ===
@@ -169,9 +308,6 @@ async function loadLocalEyeExamsQueued() {
   await writeLocal(EYES_FILE, next);
   return next;
 }
-
-// Deletion markers are sync metadata, not part of the exam list callers read.
-const withoutTombstones = ({ [ROW_TOMBSTONES_KEY]: _tombstones, ...rest }) => rest;
 
 export async function getEyeExams() {
   const ml = await mlArrayIfEnabled('eyeExams');
@@ -275,12 +411,36 @@ export async function removeEyeExam(id) {
  * @param {{ strict?: boolean }} [options] - `strict: true` throws when workouts.json
  *   is present-but-unreadable/corrupt rather than reporting zero workouts (#2726).
  */
+async function loadWorkoutsQueued() {
+  const data = await readJSONFile(WORKOUTS_FILE, { workouts: [] }, { strict: true });
+  if (!Array.isArray(data?.workouts)) throw new Error('Workouts malformed');
+  let changed = false;
+  const workouts = data.workouts.map(row => {
+    if (row && typeof row === 'object' && !row.id) {
+      changed = true;
+      return { ...row, id: randomUUID() };
+    }
+    return row;
+  });
+  if (!changed) return data;
+  workouts.sort(byDate);
+  const next = { ...data, workouts };
+  await writeLocal(WORKOUTS_FILE, next);
+  return next;
+}
+
 export async function getWorkouts({ strict = false } = {}) {
   const data = await readJSONFile(WORKOUTS_FILE, { workouts: [] }, { strict });
   if (strict && !Array.isArray(data?.workouts)) {
     throw new Error(`Workouts malformed: ${WORKOUTS_FILE}`);
   }
-  return (data.workouts || []).slice().sort(byDate);
+  const workouts = Array.isArray(data?.workouts) ? data.workouts : [];
+  // Not federated, so a random id is enough for a row logged before ids existed.
+  if (workouts.some(row => row && typeof row === 'object' && !row.id)) {
+    const loaded = await queueHealthWrite(loadWorkoutsQueued);
+    return loaded.workouts.slice().sort(byDate);
+  }
+  return workouts.slice().sort(byDate);
 }
 
 export async function addWorkout({ date, type, durationMinutes, intensity, notes } = {}) {
@@ -288,6 +448,7 @@ export async function addWorkout({ date, type, durationMinutes, intensity, notes
   const trimmedType = typeof type === 'string' ? type.trim() : '';
   if (!trimmedType) throw new Error('workout type is required');
   const entry = {
+    id: randomUUID(),
     date: targetDate,
     type: trimmedType,
     durationMinutes: Number.isFinite(durationMinutes) ? durationMinutes : null,
@@ -295,14 +456,26 @@ export async function addWorkout({ date, type, durationMinutes, intensity, notes
     notes: typeof notes === 'string' && notes.trim() ? notes.trim() : null,
   };
   await queueHealthWrite(async () => {
-    const data = await readJSONFile(WORKOUTS_FILE, { workouts: [] }, { strict: true });
-    if (!Array.isArray(data.workouts)) throw new Error('Workouts malformed');
+    const data = await loadWorkoutsQueued();
     data.workouts.push(entry);
     data.workouts.sort(byDate);
     await writeLocal(WORKOUTS_FILE, data);
   });
-  console.log(`🏋️ Workout logged: ${trimmedType}${entry.durationMinutes ? ` (${entry.durationMinutes}min)` : ''} for ${targetDate}`);
+  console.log(`🏋️ Workout logged for ${targetDate}`);
   return entry;
+}
+
+export async function removeWorkout(id) {
+  const target = await queueHealthWrite(async () => {
+    const data = await loadWorkoutsQueued();
+    const found = data.workouts.find(row => row?.id === id);
+    if (!found) return null;
+    data.workouts = data.workouts.filter(row => row !== found);
+    await writeLocal(WORKOUTS_FILE, data);
+    return found;
+  });
+  if (target) console.log(`🏋️ Workout removed: ${target.date} ${target.id}`);
+  return target;
 }
 
 // === Blood Pressure ===
@@ -337,7 +510,7 @@ export async function addBloodPressureReading({ date, systolic, diastolic }) {
 
   if (await isMortalLoomEnabled()) {
     await mlUpsertHealthMetricByDate(targetDate, patch);
-    console.log(`🩺 Blood pressure ${systolic}/${diastolic} logged for ${targetDate} (MortalLoom)`);
+    console.log(`🩺 Blood pressure reading logged for ${targetDate} (MortalLoom)`);
     return { date: targetDate, systolic, diastolic };
   }
 
@@ -350,6 +523,94 @@ export async function addBloodPressureReading({ date, systolic, diastolic }) {
     log.entries.sort(byDate);
     await writeLocal(HEALTH_METRICS_FILE, log);
   });
-  console.log(`🩺 Blood pressure ${systolic}/${diastolic} logged for ${targetDate}`);
+  console.log(`🩺 Blood pressure reading logged for ${targetDate}`);
   return { date: targetDate, systolic, diastolic };
+}
+
+const BLOOD_PRESSURE_FIELDS = ['bloodPressureSystolic', 'bloodPressureDiastolic'];
+
+export async function removeBloodPressureReading(date) {
+  if (await isMortalLoomEnabled()) {
+    const removed = await mlClearHealthMetricFields(date, BLOOD_PRESSURE_FIELDS);
+    if (!removed) return null;
+    console.log(`🩺 Blood pressure reading removed for ${date} (MortalLoom)`);
+    return {
+      date,
+      systolic: removed.bloodPressureSystolic,
+      diastolic: removed.bloodPressureDiastolic,
+    };
+  }
+
+  const target = await queueHealthWrite(async () => {
+    const log = await readJSONFile(HEALTH_METRICS_FILE, { entries: [] }, { strict: true });
+    if (!Array.isArray(log.entries)) throw new Error('Health metrics malformed');
+    const entry = log.entries.find(e => e.date === date);
+    if (!entry || (entry.bloodPressureSystolic == null && entry.bloodPressureDiastolic == null)) return null;
+    const removed = { date, systolic: entry.bloodPressureSystolic, diastolic: entry.bloodPressureDiastolic };
+    delete entry.bloodPressureSystolic;
+    delete entry.bloodPressureDiastolic;
+    const leftover = Object.keys(entry).filter(key => key !== 'date' && key !== 'id');
+    if (leftover.length === 0) log.entries = log.entries.filter(e => e !== entry);
+    await writeLocal(HEALTH_METRICS_FILE, log);
+    return removed;
+  });
+  if (target) console.log(`🩺 Blood pressure reading removed for ${date}`);
+  return target;
+}
+
+function stampImportedBloodRow(row, snapshots, now) {
+  if (!row?.id) return { ...row, id: randomUUID(), createdAt: now };
+  const prior = snapshots.get(row.id);
+  // An analyte added to a legacy row changes its content key. Keep the old
+  // key as an alias so a peer that still holds the pre-import copy matches.
+  return prior ? retainContentKey(prior, row) : row;
+}
+
+async function mergeLocalReferenceRanges(fhirRanges) {
+  const data = await readJSONFile(BLOOD_TESTS_FILE, { tests: [], referenceRanges: {} });
+  const existing = isPlainObject(data?.referenceRanges) ? data.referenceRanges : {};
+  const referenceRanges = { ...existing };
+  let changed = false;
+  for (const [key, range] of Object.entries(fhirRanges)) {
+    if (!referenceRanges[key]) {
+      referenceRanges[key] = range;
+      changed = true;
+    }
+  }
+  if (changed) await writeLocal(BLOOD_TESTS_FILE, { ...data, referenceRanges });
+  return referenceRanges;
+}
+
+/**
+ * Merge FHIR labs into the blood store inside the health write queue.
+ * `mergeBloodTests` stays in the clinical module (this file must not import
+ * it — that module already imports here). Rows that already have an id keep
+ * it and do not gain `createdAt`; only a brand-new date is minted. Tombstones
+ * already on the file are preserved. MortalLoom, when on, is updated in place
+ * and is never written back over the local file.
+ */
+export async function commitClinicalBloodImport(fhirData, mergeBloodTests) {
+  const fhirTests = Array.isArray(fhirData?.tests) ? fhirData.tests : [];
+  const fhirRanges = isPlainObject(fhirData?.referenceRanges) ? fhirData.referenceRanges : {};
+  if (await isMortalLoomEnabled()) {
+    const merged = await mlMergeClinicalBloodTests(fhirTests);
+    const referenceRanges = await queueHealthWrite(() => mergeLocalReferenceRanges(fhirRanges));
+    return { tests: merged.tests, referenceRanges, newDates: merged.newDates };
+  }
+  return queueHealthWrite(async () => {
+    const data = await loadLocalRowUnionQueued(BLOOD_TESTS_FILE, 'tests');
+    if (!Array.isArray(data.tests)) throw new Error('Blood tests malformed');
+    const existingDates = new Set(data.tests.map(row => row?.date));
+    const snapshots = new Map(data.tests.filter(row => row?.id).map(row => [row.id, { ...row }]));
+    const merged = mergeBloodTests(data, { tests: fhirTests, referenceRanges: fhirRanges });
+    const now = new Date().toISOString();
+    const tests = merged.tests.map(row => stampImportedBloodRow(row, snapshots, now));
+    const next = { ...data, tests, referenceRanges: merged.referenceRanges };
+    await writeLocal(BLOOD_TESTS_FILE, next);
+    return {
+      tests,
+      referenceRanges: next.referenceRanges,
+      newDates: tests.filter(row => !existingDates.has(row.date)).length,
+    };
+  });
 }

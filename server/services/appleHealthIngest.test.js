@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, writeFile } from 'fs/promises';
+import { access, mkdtemp, readdir, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { PATHS } from '../lib/fileUtils.js';
@@ -30,7 +30,7 @@ afterEach(async () => {
   tempDirs.length = 0;
 });
 
-const { extractDateStr, upsertPoints, mergeIntoDay, ingestHealthData } = await import('./appleHealthIngest.js');
+const { extractDateStr, upsertPoints, mergeIntoDay, ingestHealthData, deleteHealthDay } = await import('./appleHealthIngest.js');
 
 describe('extractDateStr', () => {
   it('extracts YYYY-MM-DD from an Apple Health timestamp', () => {
@@ -457,5 +457,35 @@ describe('ingestHealthData', () => {
 
     expect(result.recordsIngested).toBe(2);
     expect(result.recordsSkipped).toBe(1); // invalid-date
+  });
+});
+
+describe('deleteHealthDay', () => {
+  it('removes a day file dated today and does not write an archive tar', async () => {
+    const today = new Date().toISOString().slice(0, 10);
+    await writeFile(join(PATHS.health, `${today}.json`), JSON.stringify({
+      date: today,
+      metrics: { heart_rate: [{ qty: 60 }] },
+    }));
+    const backupRoot = join(PATHS.health, 'not-the-install');
+    const previous = PATHS.data;
+    Object.defineProperty(PATHS, 'data', { value: backupRoot, configurable: true });
+    try {
+      expect(await deleteHealthDay(today)).toEqual({ date: today });
+      await expect(access(join(PATHS.health, `${today}.json`))).rejects.toMatchObject({ code: 'ENOENT' });
+      let names = [];
+      try {
+        names = await readdir(join(backupRoot, 'backup'));
+      } catch (err) {
+        if (err.code !== 'ENOENT') throw err;
+      }
+      expect(names.filter(name => name.endsWith('.tar'))).toEqual([]);
+    } finally {
+      Object.defineProperty(PATHS, 'data', { value: previous, configurable: true });
+    }
+  });
+
+  it('returns null when the day file is already absent', async () => {
+    expect(await deleteHealthDay('2026-04-02')).toBeNull();
   });
 });

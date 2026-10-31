@@ -1,5 +1,5 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdir, readFile, writeFile } from 'fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
 
@@ -328,5 +328,77 @@ describe('summary generation vs concurrent writers', () => {
     await expect(taste.submitAnswer('food', 'food-core-1', 'Example Cuisine'))
       .rejects.toMatchObject({ code: 'UNREADABLE_STORE' });
     expect(await readFile(profilePath(), 'utf-8')).toBe('{ not json');
+  });
+});
+
+// Peer sync replaces a document body whose peer stamp is strictly newer, so each
+// AESTHETICS.md writer must stamp its meta entry (#14224).
+describe('AESTHETICS.md stamping vs newer-peer document sync', () => {
+  const OLD = '2020-01-01T00:00:00.000Z';
+  const twinDir = () => join(tempRoot, 'digital-twin');
+  const metaPath = () => join(twinDir(), 'meta.json');
+  const PROVIDER = { id: 'provider-1', name: 'Example Provider', defaultModel: 'model-1' };
+
+  beforeEach(() => rm(twinDir(), { recursive: true, force: true }));
+
+  // Local meta carrying an old AESTHETICS.md stamp, as after a prior editor save.
+  const seedStaleMeta = async () => {
+    await mkdir(twinDir(), { recursive: true });
+    await writeFile(metaPath(), JSON.stringify({
+      version: '1.0.0',
+      documents: [{ id: 'aesthetics-doc', filename: 'AESTHETICS.md', title: 'Aesthetic Preferences', category: 'creative', enabled: true, priority: 30, createdAt: OLD, updatedAt: OLD }],
+      deletedDocuments: [],
+    }));
+  };
+  const stampOf = async () => {
+    const meta = JSON.parse(await readFile(metaPath(), 'utf-8'));
+    return meta.documents.find(d => d.filename === 'AESTHETICS.md').updatedAt;
+  };
+  // A peer whose AESTHETICS.md edit is stamped between OLD and the local write.
+  const peerSnapshot = (stamp) => ({
+    meta: {
+      version: '1.0.0',
+      documents: [{ id: 'aesthetics-doc', filename: 'AESTHETICS.md', title: 'Aesthetic Preferences', category: 'creative', enabled: true, priority: 30, createdAt: OLD, updatedAt: stamp }],
+      deletedDocuments: [],
+    },
+    documents: { 'AESTHETICS.md': '# Aesthetic Preferences\n\nPeer body.\n' },
+  });
+
+  it('submitAnswer stamps the entry so an older peer stamp cannot replace the answer', async () => {
+    await seedStaleMeta();
+    const taste = await import('./taste-questionnaire.js');
+    const sync = await import('./digital-twin-sync.js');
+    await taste.submitAnswer('movies', 'movies-core-1', 'Example Film One');
+
+    expect(await stampOf() > OLD).toBe(true);
+    await sync.applyDigitalTwinRemote(peerSnapshot('2020-06-01T00:00:00.000Z'));
+    const body = await readFile(join(twinDir(), 'AESTHETICS.md'), 'utf-8');
+    expect(body).toContain('Example Film One');
+    expect(body).not.toContain('Peer body');
+  });
+
+  it('generateOverallSummary stamps the entry', async () => {
+    await seedStaleMeta();
+    await writeFile(join(twinDir(), 'taste-profile.json'), JSON.stringify({
+      version: '1.0.0', createdAt: OLD, updatedAt: OLD, profileSummary: null, lastSessionAt: OLD,
+      sections: { movies: { status: 'completed', summary: 'Example summary', responses: [{ questionId: 'movies-core-1', answer: 'Example Film One', answeredAt: OLD }] } },
+    }));
+    const { resolveTextProvider, callProviderAISimple } = await import('./aiProvider.js');
+    resolveTextProvider.mockResolvedValue(PROVIDER);
+    callProviderAISimple.mockResolvedValue({ text: 'Overall example profile' });
+    const taste = await import('./taste-questionnaire.js');
+    await taste.generateOverallSummary();
+    expect(await stampOf() > OLD).toBe(true);
+  });
+
+  it('a concurrent submitAnswer and applyDigitalTwinRemote both complete', async () => {
+    await seedStaleMeta();
+    const taste = await import('./taste-questionnaire.js');
+    const sync = await import('./digital-twin-sync.js');
+    await Promise.all([
+      taste.submitAnswer('movies', 'movies-core-1', 'Example Film One'),
+      sync.applyDigitalTwinRemote(peerSnapshot('2020-06-01T00:00:00.000Z')),
+    ]);
+    expect(await stampOf() > OLD).toBe(true);
   });
 });

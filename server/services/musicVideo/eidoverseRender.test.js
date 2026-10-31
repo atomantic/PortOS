@@ -1,14 +1,13 @@
 import { beforeEach, expect, it, vi } from 'vitest';
 import { writeFile, symlink, access } from 'node:fs/promises';
 import { join } from 'node:path';
-vi.mock('../../lib/processEnv.js', async load => ({ ...await load(), whichFirst: vi.fn(async () => '/usr/bin/docker') }));
-vi.mock('../../lib/bufferedSpawn.js', () => ({ bufferedSpawn: vi.fn(async () => ({ success: true, stdout: `sha256:${'a'.repeat(64)}` })) }));
+vi.mock('../dockerEngine.js', () => ({ resolveDockerEngine: vi.fn() }));
 vi.mock('../../lib/streamingSpawn.js', () => ({ runStreamingCommand: vi.fn() }));
 vi.mock('../../lib/ffmpeg.js', () => ({
   findFfmpeg: vi.fn(async () => '/usr/bin/ffmpeg'), runFfmpegProcess: vi.fn(async () => ({ ok: true })),
   probeVideoDuration: vi.fn(async () => 10), probeVideoGeometry: vi.fn(async () => ({ width: 1280, height: 720, fps: 24 })), edgeFadeFilter: () => ',afade=t=in:d=0.1',
 }));
-const { bufferedSpawn } = await import('../../lib/bufferedSpawn.js');
+const { resolveDockerEngine } = await import('../dockerEngine.js');
 const { runStreamingCommand } = await import('../../lib/streamingSpawn.js');
 const { runFfmpegProcess, probeVideoDuration } = await import('../../lib/ffmpeg.js');
 const { normalizeComposition } = await import('./composition.js');
@@ -16,10 +15,15 @@ const { musicVideoCompositionSchema } = await import('../../lib/musicVideoValida
 const { prepareEidoverseRender, encodeEidoverseComposition } = await import('./eidoverseRender.js');
 const project = { id: 'example', audioAnalysis: { durationSec: 10 }, scenes: [{ startSec: 2, endSec: 6 }],
   composition: { mode: 'eidoverse', eidoverseScene: { inlineScript: 'globalThis.setup = async () => {};', assets: { prop: 'eidoverse/assets/models/example.glb' } } } };
+const GLOBAL_ARGS = ['--context', 'desktop-linux'];
+const capture = vi.fn();
+const readyEngine = () => ({ state: 'ready', ready: true, message: 'ready', engine: { label: 'Docker Desktop', context: 'desktop-linux' },
+  cli: { bin: '/usr/bin/docker', globalArgs: GLOBAL_ARGS, env: { PINNED: '1' }, capture } });
 const outputRoot = args => args.find(arg => arg.startsWith('type=bind,src=') && arg.endsWith('dst=/output')).split(',')[1].slice(4);
 beforeEach(() => {
   vi.clearAllMocks();
-  bufferedSpawn.mockResolvedValue({ success: true, stdout: `sha256:${'a'.repeat(64)}` });
+  capture.mockResolvedValue({ success: true, stdout: `sha256:${'a'.repeat(64)}` });
+  resolveDockerEngine.mockResolvedValue(readyEngine());
   probeVideoDuration.mockResolvedValue(10);
   runStreamingCommand.mockImplementation(async (bin, args) => { await writeFile(join(outputRoot(args), 'scene.mp4'), 'synthetic fixture'); return { success: true }; });
 });
@@ -41,14 +45,27 @@ it('renders in the isolated image, checks output and muxes only the matching mas
   expect(args).toEqual(expect.arrayContaining(['--network=none', '--read-only', '--cap-drop=ALL', '--pull=never', '--user=1000:1000', '--cached-only', plan.imageId]));
   expect(args.some(arg => arg.includes('/example/song.wav'))).toBe(false);
   expect(args.some(arg => arg.includes('docker.sock'))).toBe(false);
-  expect(bufferedSpawn.mock.calls.at(-1)[1]).toEqual(['rm', '--force', expect.stringMatching(/^portos-mv-eido-/)]);
+  expect(runStreamingCommand.mock.calls[0][0]).toBe('/usr/bin/docker');
+  expect(args.slice(0, 2)).toEqual(GLOBAL_ARGS);
+  expect(runStreamingCommand.mock.calls[0][3].env).toEqual({ PINNED: '1' });
+  expect(capture.mock.calls.at(-1)[0]).toEqual(['rm', '--force', expect.stringMatching(/^portos-mv-eido-/)]);
   expect(runFfmpegProcess.mock.calls[0][0].args).toEqual(expect.arrayContaining(['-ss', '2', '-t', '4', '-map', '1:a:0', '/example/song.wav']));
   expect(result).toMatchObject({ durationSec: 4, boundaryTimes: [0] });
   await expect(access(outputRoot(args))).rejects.toThrow();
 });
-it('refuses a missing runtime during preparation, before rendering anything', async () => {
-  bufferedSpawn.mockResolvedValue({ success: false, stdout: '' });
-  await expect(prepareEidoverseRender(project)).rejects.toMatchObject({ code: 'EIDOVERSE_RUNTIME_MISSING' });
+it('reports the resolver verdict, not the build-image text, when no engine is ready', async () => {
+  for (const [state, message] of [['docker-stopped', 'Docker is installed but no local engine answered.'], ['docker-remote-refused', 'The Docker endpoint (remote) is not local.']]) {
+    resolveDockerEngine.mockResolvedValue({ state, ready: false, message, engine: null, cli: null });
+    const failure = await prepareEidoverseRender(project).catch(error => error);
+    expect(failure).toMatchObject({ code: 'EIDOVERSE_RUNTIME_MISSING', message, context: { state } });
+    expect(failure.message).not.toContain('Build the optional');
+  }
+  expect(capture).not.toHaveBeenCalled();
+  expect(runStreamingCommand).not.toHaveBeenCalled();
+});
+it('asks for the image build only when a ready engine lacks it, naming the engine', async () => {
+  capture.mockResolvedValue({ success: false, stdout: '' });
+  await expect(prepareEidoverseRender(project)).rejects.toMatchObject({ code: 'EIDOVERSE_RUNTIME_MISSING', message: expect.stringMatching(/Build the optional.*Docker Desktop, context desktop-linux/) });
   expect(runStreamingCommand).not.toHaveBeenCalled();
 });
 it('stops and cleans the actual container on cancel without muxing a partial result', async () => {
@@ -60,7 +77,7 @@ it('stops and cleans the actual container on cancel without muxing a partial res
     return { success: false, error: 'cancelled' };
   });
   await expect(encodeEidoverseComposition({ plan, project, audioPath: '/example/song.wav', outputPath: '/example/final.mp4', signal: controller.signal })).rejects.toThrow();
-  expect(bufferedSpawn.mock.calls.at(-1)[1][0]).toBe('rm');
+  expect(capture.mock.calls.at(-1)[0][0]).toBe('rm');
   expect(runFfmpegProcess).not.toHaveBeenCalled();
 });
 it('rejects symlink or short output instead of marking an unusable film complete', async () => {

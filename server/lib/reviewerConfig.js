@@ -455,11 +455,36 @@ export function normalizeOptionalReviewers(list) {
  * a task-level list (even explicitly empty) overrides the Code Review Defaults;
  * only fall back to the defaults when the task didn't pin its own. Mirrors
  * `resolveReviewUsernames`.
+ *
+ * `taskReviewers` (the reviewer tokens the task itself pins, see
+ * `taskPinnedReviewerTokens`) scopes that override: the task's set decides
+ * only the reviewers the task names. A reviewer the run inherits from the
+ * defaults keeps the defaults' `~opt` mark, otherwise a task override saved
+ * against an older defaults list silently turns a reviewer the user later added
+ * as optional into a required one that blocks every merge. Omitted → the whole
+ * task set wins (legacy two-argument behavior).
  */
-export function resolveOptionalReviewers(metadataOptional, defaultOptional) {
-  return Array.isArray(metadataOptional)
-    ? (normalizeOptionalReviewers(metadataOptional) || [])
-    : (normalizeOptionalReviewers(defaultOptional) || []);
+export function resolveOptionalReviewers(metadataOptional, defaultOptional, { taskReviewers } = {}) {
+  const defaults = normalizeOptionalReviewers(defaultOptional) || [];
+  if (!Array.isArray(metadataOptional)) return defaults;
+  const own = normalizeOptionalReviewers(metadataOptional) || [];
+  if (!Array.isArray(taskReviewers)) return own;
+  const pinned = optionalReviewerSet(taskReviewers);
+  const ownSet = new Set(own.map(token => token.toLowerCase()));
+  return [...own, ...defaults.filter(token => !pinned.has(token.toLowerCase()) && !ownSet.has(token.toLowerCase()))];
+}
+
+/**
+ * The reviewer tokens a task's own metadata pins — its `reviewers` list (or
+ * legacy `reviewer`) plus `@<login>` for an explicit `usernames` list. Everything
+ * else in the resolved roster was inherited from the Code Review Defaults.
+ */
+export function taskPinnedReviewerTokens(metadata) {
+  const raw = isPlainObject(metadata) ? metadata : {};
+  const reviewers = Array.isArray(raw.reviewers) ? raw.reviewers
+    : (typeof raw.reviewer === 'string' && raw.reviewer ? [raw.reviewer] : []);
+  const usernames = Array.isArray(raw.usernames) ? normalizeReviewUsernames(raw.usernames).map(user => `@${user}`) : [];
+  return [...reviewers, ...usernames];
 }
 
 /**
@@ -850,7 +875,7 @@ export function resolveReviewerConfig(metadata, codeReviewDefaults, defaultRevie
   return {
     reviewers: resolveReviewerGroup(metadata, codeReviewDefaults, defaultReviewers),
     usernames: resolveReviewUsernames(metadata?.usernames, codeReviewDefaults?.usernames),
-    optionalReviewers: resolveOptionalReviewers(metadata?.optionalReviewers, codeReviewDefaults?.optionalReviewers),
+    optionalReviewers: resolveOptionalReviewers(metadata?.optionalReviewers, codeReviewDefaults?.optionalReviewers, { taskReviewers: taskPinnedReviewerTokens(metadata) }),
     reviewerMaxRounds: resolveReviewerMaxRounds(metadata?.reviewerMaxRounds, codeReviewDefaults?.reviewerMaxRounds),
     ...resolveReviewerPins(metadata, codeReviewDefaults)
   };

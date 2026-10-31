@@ -15,7 +15,7 @@
 
 import { join } from 'node:path';
 import { atomicWrite, PATHS, readJSONFileStrict } from '../lib/fileUtils.js';
-import { createPgFileFacade, resolvePgBackend } from '../lib/pgFileFacade.js';
+import { createPgFileFacade, resolvePgBackend, POSTGRES_SETUP_HINT } from '../lib/pgFileFacade.js';
 import { isTestRunner } from '../lib/runtimeEnv.js';
 import {
   WORKING_SET_COMPLETED_WINDOW_MS, WORKING_SET_KEEP_COMPLETED, completionStamp, rowColumns, selectWorkingSet,
@@ -220,7 +220,7 @@ async function makeMemoryBackend({ persist }) {
 const backendFacade = createPgFileFacade({
   makeFile: () => makeMemoryBackend({ persist: !isTestRunner() }),
   makePg: () => resolvePgBackend({
-    requirement: 'The CoS task queues require PostgreSQL — run `npm run setup:db` (dev/test only: set MEMORY_BACKEND=file for the file escape hatch)',
+    requirement: `The CoS task queues require PostgreSQL — ${POSTGRES_SETUP_HINT}`,
     loadDb: () => import('../lib/db.js'),
     makePg: makePgBackend,
   }),

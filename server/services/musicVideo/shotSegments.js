@@ -39,13 +39,15 @@ import { lyricOverlayDocumentData } from './lyricPlaythrough.js';
 import { applyFilmLookFinish } from './filmLookFinish.js';
 import { getMusicVideoOutroStats, renderStatsOutroClip } from './statsOutro.js';
 import { nameShots } from './productionReview.js';
+import { coldOpenAudioShots, ensureColdOpenAudio } from './coldOpen.js';
+import { SHOT_SEGMENT_DIR, shotSegmentDir } from './shotSegmentPaths.js';
 import { requireProject } from './requireProject.js';
 import { assertRenderCleanupIdle, withRenderCleanupReservation } from './renderCleanupActivity.js';
 import { musicVideoEvents } from './events.js';
 import { maintenance } from '../../lib/maintenanceAdmission.js';
 import { trackedRenderMap } from '../renderActivity.js';
 
-export const SHOT_SEGMENT_DIR = 'music-video-segments';
+export { SHOT_SEGMENT_DIR, shotSegmentDir };
 // Bump when a segment's encode changes in a way its key cannot see.
 export const SHOT_SEGMENT_VERSION = 1;
 const segmentOwnerWrites = createKeyCachedQueue();
@@ -72,11 +74,6 @@ const hash = (value) => createHash('sha256').update(JSON.stringify(value)).diges
 // and the (normalized) look, so any look's files can be found again from the plan.
 const segmentLookKey = ({ baseKey, startSec }, look, fps) => hash({ v: SHOT_SEGMENT_VERSION, baseKey, look, startSec, fps });
 const segmentLookPath = (plan, segment, look) => join(plan.dir, `${segment.outro ? 'outro-' : ''}${segment.baseKey}-${segmentLookKey(segment, look, plan.fps)}.mp4`);
-const safeProjectId = (projectId) => {
-  if (typeof projectId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(projectId)) throw new ServerError('Invalid project id', { status: 400, code: 'VALIDATION_ERROR' });
-  return projectId;
-};
-export const shotSegmentDir = (projectId) => join(PATHS.data, SHOT_SEGMENT_DIR, safeProjectId(projectId));
 
 const hasOwnLook = (scene) => !!(scene?.filmLook && typeof scene.filmLook === 'object');
 
@@ -124,7 +121,7 @@ export async function planShotSegments(project, options) {
   if (project?.composition?.mode !== 'composed') {
     throw new ServerError('Shot renders need the composed render style', { status: 409, code: 'SHOT_RENDER_NEEDS_COMPOSED' });
   }
-  const { ffmpeg, audioPath, clips, audioDurationSec, soundBed, aspect } = await planMusicVideoRender(project, options);
+  const { ffmpeg, audioPath, clips, coldOpen, audioDurationSec, soundBed, aspect } = await planMusicVideoRender(project, options);
   const grade = project.composition?.grade;
   const beats = project.audioAnalysis?.beats;
   const common = { audioDurationSec, frameGrid: true, grade, beats, aspect };
@@ -170,10 +167,48 @@ export async function planShotSegments(project, options) {
   const songFrames = segments.reduce((sum, s) => sum + s.frames, 0);
   const songSec = songFrames / fps;
   const outro = await planOutroSegment(project, { dir, width, height, fps, offsetSec: songSec });
+  const opening = coldOpen ? await planColdOpenSegments(project, coldOpen, { dir, width, height, fps, grade, aspect, tagFilter }) : null;
   return {
     project, ffmpeg, audioPath, soundBed, clips, common, cues, style, lyricWindows,
-    width, height, fps, totalDuration, songSec, segments, outro, dir,
+    width, height, fps, totalDuration, songSec, outro, dir,
+    // The song's shot spans (sceneId = the clip's own shot, partners included), for the stepped hold.
+    sections,
+    // The cold open's shots lead the cut, on song time before 0.
+    segments: opening ? [...opening.segments, ...segments] : segments,
+    coldOpen: opening,
   };
+}
+
+/**
+ * The cold open's sections (shots marked before the song) as segments of the
+ * song's frame, ahead of the first note: each on song time before 0, so a
+ * look's grain runs on into the song, with no typography over it. `audio` is
+ * what each shot sounds like (coldOpen.js), mixed when the cut is stitched.
+ */
+async function planColdOpenSegments(project, coldOpen, { dir, width, height, fps, grade, aspect, tagFilter }) {
+  const common = { frameGrid: true, grade, aspect, canvas: { width, height, fps } };
+  const full = buildMusicVideoFfmpegArgs(coldOpen.clips, null, join(tmpdir(), 'portos-cold-open-plan.mp4'), common);
+  const leadSec = full.sections.reduce((end, section) => Math.max(end, section.endSec), 0);
+  const scenes = new Map((project.scenes || []).map((scene) => [scene.sceneId, scene]));
+  const segments = [];
+  for (const [index] of full.sections.entries()) {
+    const segment = { index, tagFilter };
+    const built = buildMusicVideoFfmpegArgs(coldOpen.clips, null, '@out', { ...common, segment });
+    const baseKey = hash({ v: SHOT_SEGMENT_VERSION, coldOpen: true, args: await fingerprintArgs(built.args), width, height, fps });
+    const scene = scenes.get(built.shotId);
+    const look = shotFilmLook(project, scene);
+    const startSec = built.startSec - leadSec;
+    const lookKey = look ? segmentLookKey({ baseKey, startSec }, look, fps) : null;
+    segments.push({
+      index, coldOpen: true, sceneId: built.shotId, layer: built.layer, startSec, endSec: built.endSec - leadSec,
+      startFrame: Math.round(startSec * fps), frames: built.frames, segment, look, baseKey, lookKey, ownLook: hasOwnLook(scene),
+      basePath: join(dir, `${baseKey}.mp4`),
+      path: join(dir, lookKey ? `${baseKey}-${lookKey}.mp4` : `${baseKey}.mp4`),
+    });
+  }
+  const audio = await coldOpenAudioShots(project, segments.map((segment) => ({ sceneId: segment.sceneId,
+    clip: coldOpen.clips.find((clip) => clip.sceneId === segment.sceneId) || null, durationSec: segment.frames / fps })));
+  return { clips: coldOpen.clips, common, segments, audio, durationSec: segments.reduce((sum, segment) => sum + segment.frames, 0) / fps };
 }
 
 async function planOutroSegment(project, { dir, width, height, fps, offsetSec }) {
@@ -297,6 +332,7 @@ async function renderSegmentFiles(plan, segment, { signal, onProgress }) {
 }
 
 async function renderShotBase(plan, segment, outputPath, { jobId, signal, onProgress }) {
+  if (segment.coldOpen) return renderColdOpenBase(plan, segment, outputPath, { jobId, signal, onProgress });
   const needsOverlay = typographyOverlayWindows({ cues: plan.cues, lyricWindows: plan.lyricWindows, fps: plan.fps, durationSec: plan.totalDuration, window: segment.window }).length > 0;
   const graphPath = join(tmpdir(), `portos-music-video-segment-${jobId}.filtergraph`);
   try {
@@ -315,6 +351,21 @@ async function renderShotBase(plan, segment, outputPath, { jobId, signal, onProg
   } finally {
     await rm(graphPath, { force: true }).catch(() => {});
     await removeCompositionScratch(jobId).catch(() => {});
+  }
+}
+
+// A cold-open section: its shot on the song's frame, nothing drawn over it.
+async function renderColdOpenBase(plan, segment, outputPath, { jobId, signal, onProgress }) {
+  const graphPath = join(tmpdir(), `portos-music-video-segment-${jobId}.filtergraph`);
+  try {
+    const built = buildMusicVideoFfmpegArgs(plan.coldOpen.clips, null, outputPath, { ...plan.coldOpen.common, segment: segment.segment });
+    const encode = await filterGraphViaFile(plan.ffmpeg, ['-hide_banner', '-loglevel', 'error', ...built.args], graphPath);
+    const result = await runFfmpegProcess({ bin: plan.ffmpeg, args: encode.args, signal });
+    signal?.throwIfAborted();
+    if (!result.ok) throw new Error(`ffmpeg failed: ${result.reason}`);
+    onProgress?.(1);
+  } finally {
+    await rm(graphPath, { force: true }).catch(() => {});
   }
 }
 
@@ -397,8 +448,10 @@ export async function stitchSegments(plan, outputPath, { signal, segments = [...
   if (missing.length) throw new ServerError('A shot segment went missing before stitching — render again', { status: 409, code: 'SHOT_SEGMENT_MISSING' });
   const listPath = `${outputPath}.segments.txt`;
   const silent = `${outputPath}.silent.mp4`;
-  const songSec = segments.filter((s) => !s.outro).reduce((sum, s) => sum + s.frames, 0) / plan.fps;
-  const durationSec = songSec + segments.filter((s) => s.outro).reduce((sum, s) => sum + s.frames, 0) / plan.fps;
+  const seconds = (list) => list.reduce((sum, s) => sum + s.frames, 0) / plan.fps;
+  const leadSec = seconds(segments.filter((s) => s.coldOpen));
+  const songSec = seconds(segments.filter((s) => !s.outro && !s.coldOpen));
+  const durationSec = leadSec + songSec + seconds(segments.filter((s) => s.outro));
   try {
     await writeFile(listPath, parts.map((p) => `file '${p.replaceAll("'", "'\\''")}'`).join('\n'));
     const joined = await runFfmpegProcess({ bin: plan.ffmpeg, signal, args: ['-hide_banner', '-loglevel', 'error', '-f', 'concat', '-safe', '0', '-i', listPath,
@@ -418,13 +471,22 @@ export async function stitchSegments(plan, outputPath, { signal, segments = [...
       filters.push(...bed.filters);
       master = '[mixa]';
     }
-    filters.push(`${master}atrim=end=${songSec},asetpts=PTS-STARTPTS,aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,apad=whole_dur=${durationSec}[a]`);
+    const songAudio = `${master}atrim=end=${songSec},asetpts=PTS-STARTPTS,aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo`;
+    if (leadSec > 0) {
+      // The cold open's own sound plays first, then the song from its first note.
+      const coldIdx = inputs.filter((arg) => arg === '-i').length;
+      inputs.push('-i', await ensureColdOpenAudio(plan.coldOpen.audio, plan.dir, { ffmpeg: plan.ffmpeg, signal }));
+      filters.push(`[${coldIdx}:a]atrim=end=${leadSec},asetpts=PTS-STARTPTS,aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,apad=whole_dur=${leadSec}[cold]`);
+      filters.push(`${songAudio}[song]`, `[cold][song]concat=n=2:v=0:a=1,apad=whole_dur=${durationSec}[a]`);
+    } else {
+      filters.push(`${songAudio},apad=whole_dur=${durationSec}[a]`);
+    }
     const muxed = await runFfmpegProcess({ bin: plan.ffmpeg, signal, args: ['-hide_banner', '-loglevel', 'error', ...inputs,
       '-filter_complex', filters.join(';'), '-map', '0:v', '-map', '[a]', '-c:v', 'copy', ...AAC_ENCODE_ARGS,
       '-t', String(durationSec), '-movflags', '+faststart', '-y', outputPath] });
     signal?.throwIfAborted();
     if (!muxed.ok) throw new ServerError(`Laying the song under the shots failed: ${muxed.reason}`, { status: 500, code: 'SHOT_SEGMENT_MUX' });
-    return { durationSec, songSec };
+    return { durationSec, songSec, leadSec };
   } finally {
     await rm(listPath, { force: true }).catch(() => {});
     await rm(silent, { force: true }).catch(() => {});
@@ -810,7 +872,8 @@ export async function buildRenderPreview(projectId, { light = false } = {}) {
   }
   if (lead.length === plan.segments.length && plan.outro && segmentRendered(plan.outro)) lead.push(plan.outro);
   if (!lead.length) throw new ServerError('No shot is rendered yet: the first shot plays here once it is done', { status: 409, code: 'NO_SHOTS_RENDERED' });
-  const key = hash({ parts: lead.map((s) => s.path), audio: plan.audioPath, bed: plan.soundBed || null });
+  // The cold open's mix is part of the sound: a volume or layer edit alone changes no segment path.
+  const key = hash({ parts: lead.map((s) => s.path), audio: plan.audioPath, bed: plan.soundBed || null, coldOpen: plan.coldOpen?.audio || null });
   const name = `preview-${key}${light ? '-light' : ''}.mp4`;
   const path = join(plan.dir, name);
   const shots = new Set(lead.filter((s) => !s.outro).map((s) => s.sceneId)).size;

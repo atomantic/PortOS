@@ -39,6 +39,7 @@ import {
   normalizeOptionalReviewers,
   resolveReviewUsernames,
   resolveOptionalReviewers,
+  taskPinnedReviewerTokens,
   normalizeReviewerMaxRounds,
   resolveReviewerMaxRounds,
   reviewerEffortsFromDefaults,
@@ -495,8 +496,9 @@ export async function resolveReviewLoopOptions(metadata, { normalize = normalize
   // global default; only fall back to the Code Review Defaults when the task
   // didn't pin its own. Mirrors the reviewers precedence.
   const usernames = resolveReviewUsernames(metadata?.usernames, defaults?.usernames)
-  // Optional (non-blocking, `~opt`) reviewers: same task-over-default precedence.
-  const optionalReviewers = resolveOptionalReviewers(metadata?.optionalReviewers, defaults?.optionalReviewers)
+  // Optional (non-blocking, `~opt`) reviewers: task-over-default precedence for
+  // the reviewers the task pins; inherited reviewers keep the defaults' marks.
+  const optionalReviewers = resolveOptionalReviewers(metadata?.optionalReviewers, defaults?.optionalReviewers, { taskReviewers: taskPinnedReviewerTokens(metadata) })
   // Per-reviewer iteration caps (`~max=<n>`): same task-over-default precedence.
   const reviewerMaxRounds = resolveReviewerMaxRounds(metadata?.reviewerMaxRounds, defaults?.reviewerMaxRounds)
   const reviewStopMode = metadata?.reviewStopMode || defaults?.stopMode || DEFAULT_REVIEW_STOP_MODE
@@ -984,13 +986,119 @@ async function loadReviewProvider(backend) {
     })
 }
 
+// A rejected reviewer call never reaches the verdict parser. An execution-options
+// refusal keeps its own message; any other rejection is replaced with `message`
+// so vendor/setup detail (paths, credentials) cannot leak into the review.
+function reviewerCallRejection(error, message, reviewBudget) {
+  if (error.code === EXECUTION_OPTIONS_ERROR) return { error: error.message, code: error.code }
+  return { error: message, code: reviewBudget && Date.now() >= reviewBudget.deadline ? 'REVIEW_BUDGET_EXHAUSTED' : 'REVIEW_BATCH_FAILED' }
+}
+
+const REVIEW_FAILURE_DETAIL_FIELDS = ['stderr', 'text', 'status', 'statusCode', 'stallPhase', 'name', 'code']
+
+function pickReviewFailureDetail(result, fields = REVIEW_FAILURE_DETAIL_FIELDS) {
+  const detail = {}
+  for (const field of fields) if (result[field]) detail[field] = result[field]
+  return detail
+}
+
+// Each transport step resolves to `{ outcome }` (a final answer for the caller)
+// or `{ result, budgetMs }` (a raw reply plus the budget the call actually had).
+async function runApiReviewCall({ provider, model, prompt, budgetMs, reviewBudget }) {
+  if (!model) return { outcome: { ok: false, code: 'NO_MODEL', error: 'Select a model for the reviewer provider.' } }
+  const { callProviderAISimple } = await import('./aiProvider.js')
+  const callMs = takeCodeReviewCallBudget(reviewBudget, budgetMs)
+  if (callMs === null) return { outcome: { ok: false, code: 'REVIEW_BUDGET_EXHAUSTED', error: 'The configured review budget is exhausted.' } }
+  const result = await withAbortTimeout(callMs, signal => awaitWithAbort(callProviderAISimple({ ...provider, apiKey: provider.apiKey, timeout: callMs, fallbackProvider: null }, model,
+    prompt, { max_tokens: 8192, allowModelRecovery: false, signal, deadlineMs: reviewBudget?.deadline }), signal))
+    .catch(error => reviewerCallRejection(error, 'Reviewer preparation or execution failed within its shared budget.', reviewBudget))
+  return { result, budgetMs: callMs }
+}
+
+async function runCliReviewCall({ provider, model, prompt, transport, workspace, reviewCwd, budgetMs, reviewBudget }) {
+  if (!transport.transport) return { outcome: { ok: false, code: transport.code, error: transport.error } }
+  const { runCliProviderPrompt } = await import('../lib/cliProviderRun.js')
+  const { PUBLIC_REVIEW_GATE_EXECUTION_PROFILE } = await import('../lib/agentExecutionProfiles.js')
+  const { mkdtemp, rm } = await import('node:fs/promises')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  // Every CLI review keeps the no-tool environment allowlist. A no-tool or
+  // read-only tier runs the vendor's enforced reviewer argv; the `unconfined`
+  // tier runs its ordinary argv (see `resolveProviderReviewTransport`), so it
+  // never gets the caller's checkout: it runs in a scratch directory with the
+  // diff inlined. Otherwise `isolateFromCheckout` controls cwd isolation — public content
+  // stays off the real checkout, while an ordinary review may still read it.
+  const safetyProfile = PUBLIC_REVIEW_GATE_EXECUTION_PROFILE
+  const isolatedCwd = workspace.cwd === 'scratch' ? await mkdtemp(join(tmpdir(), 'portos-review-')) : null
+  const cwd = isolatedCwd || reviewCwd
+  const result = await Promise.resolve().then(async () => {
+    const { resolveBootstrapEnv } = await import('../lib/credentialBootstrap.js')
+    const preparationMs = reviewBudget ? reviewBudget.deadline - Date.now() : budgetMs
+    if (preparationMs <= 0) return { error: 'The configured review budget is exhausted.', code: 'REVIEW_BUDGET_EXHAUSTED' }
+    const bootstrapEnv = await withAbortTimeout(preparationMs, signal => awaitWithAbort(resolveBootstrapEnv(provider, { safetyProfile, signal, timeoutMs: preparationMs }), signal))
+    const remainingMs = takeCodeReviewCallBudget(reviewBudget, budgetMs)
+    if (remainingMs === null) return { error: 'The configured review budget is exhausted.', code: 'REVIEW_BUDGET_EXHAUSTED' }
+    return runCliProviderPrompt({ provider, model, prompt, cwd, timeoutMs: remainingMs, bootstrapEnv, exactPins: true,
+      safetyProfile, codeReview: true })
+  }).catch(error => reviewerCallRejection(error, 'Reviewer credential setup or execution failed.', reviewBudget))
+    .finally(() => isolatedCwd && rm(isolatedCwd, { recursive: true, force: true }))
+  const refusal = headlessCommandPermissionRefusal(result)
+  if (refusal) return { outcome: refusal }
+  // A capacity refusal outranks the partial-reply answer; the caller classifies it.
+  if (isReviewContextCapacityFailure(result)) return { result, budgetMs }
+  if (result.partial) return { outcome: partialCliReplyFailure(result) }
+  return { result: await settleStreamJsonReply(result), budgetMs }
+}
+
+// A failed headless command request is a configuration fault, not a verdict.
+// Replace vendor prose with a bounded remedy before health or bridge output.
+function headlessCommandPermissionRefusal(result) {
+  if (isTimeoutFailure(result.error)) return null
+  if (!result.error && !result.partial && result.text?.trim()) return null
+  // The CLI runner truncates error to a stderr prefix; the full stderr can
+  // carry the explicit refusal after that prefix. A timeout stays transient.
+  const code = reviewerCommandPermissionFailureCode(result.error) || reviewerCommandPermissionFailureCode(result.stderr)
+  if (!code) return null
+  return {
+    ok: false,
+    code,
+    error: 'The headless reviewer required command permission. Use a compatible non-interactive review transport or supported tool-free vendor configuration.',
+  }
+}
+
+function partialCliReplyFailure(result) {
+  const errorMsg = result.stderr?.trim() || result.text?.trim() || 'Reviewer exited before completing its response.'
+  return { ok: false, error: errorMsg, ...pickReviewFailureDetail(result, ['stderr', 'text']) }
+}
+
+// A stream-json reply succeeds only through its last `result` event; any error
+// event fails the reply unless that result event exists and succeeded.
+async function settleStreamJsonReply(result) {
+  if (result.error || result.streamFormat !== 'stream-json') return result
+  const { safeJSONLParse } = await import('../lib/jsonIo.js')
+  const events = safeJSONLParse(result.text)
+  const errorEvent = events.findLast(event => event.type === 'error' || event.is_error)
+  const final = events.findLast(event => event.type === 'result')
+  if (errorEvent && (!final || final.is_error)) {
+    return { ...result, error: errorEvent.error || errorEvent.message || 'Reviewer returned an error event.', stderr: result.stderr, text: result.text }
+  }
+  // A final event carrying `is_error` is itself the matched error event above.
+  return typeof final?.result !== 'string'
+    ? { ...result, error: 'Reviewer returned no successful final result.', stderr: result.stderr, text: result.text }
+    : { ...result, text: final.result }
+}
+
+function reviewReplyFailure(result, timeoutMs) {
+  return { ok: false, timeoutMs, error: result.error || result.stderr || result.text || 'Reviewer returned no content.', ...pickReviewFailureDetail(result) }
+}
+
 // Resolve the exact record the user selected. Never fall back to the active
 // provider, another account, or a replacement model for a pinned reviewer.
 async function runConfiguredProviderCompletion({ backend, model: pinnedModel, messages, userMessage, systemPromptFor, effort, timeoutMs, timeoutExplicit = true, cwd: reviewCwd, isolateFromCheckout = false, allowUnconfined = false, providerSnapshot = null, reviewBudget = null }) {
   let provider = providerSnapshot || await loadReviewProvider(backend)
   const transport = await resolveProviderReviewTransport(provider, { allowUnconfined })
   // A missing/disabled record is refused here, but an unsupported HARNESS is
-  // refused at the branch below instead — a pinned effort the provider's model
+  // refused in the CLI step instead — a pinned effort the provider's model
   // cannot do is the more specific complaint, and it was already the answer this
   // path gave before the resolver was extracted.
   if (transport.code === 'REVIEWER_UNAVAILABLE') return { ok: false, code: transport.code, error: transport.error }
@@ -1001,96 +1109,17 @@ async function runConfiguredProviderCompletion({ backend, model: pinnedModel, me
   if (effort) provider = { ...provider, apiKey: provider.apiKey, effort }
   const workspace = resolveReviewWorkspace({ transport, isolateFromCheckout, cwd: reviewCwd })
   const prompt = reviewMessages({ messages, userMessage, systemPromptFor }, workspace).map(message => message.content).join('\n\n')
-  let result
-  let budgetMs = timeoutMs
-  if (transport.transport === 'api') {
-    if (!timeoutExplicit) budgetMs = getRemoteCodeReviewTimeoutMs(provider)
-    if (!model) return { ok: false, code: 'NO_MODEL', error: 'Select a model for the reviewer provider.' }
-    const { callProviderAISimple } = await import('./aiProvider.js')
-    budgetMs = takeCodeReviewCallBudget(reviewBudget, budgetMs)
-    if (budgetMs === null) return { ok: false, code: 'REVIEW_BUDGET_EXHAUSTED', error: 'The configured review budget is exhausted.' }
-    result = await withAbortTimeout(budgetMs, signal => awaitWithAbort(callProviderAISimple({ ...provider, apiKey: provider.apiKey, timeout: budgetMs, fallbackProvider: null }, model,
-      prompt, { max_tokens: 8192, allowModelRecovery: false, signal, deadlineMs: reviewBudget?.deadline }), signal))
-      .catch((error) => error.code === EXECUTION_OPTIONS_ERROR ? { error: error.message, code: error.code } : ({ error: 'Reviewer preparation or execution failed within its shared budget.', code: reviewBudget && Date.now() >= reviewBudget.deadline ? 'REVIEW_BUDGET_EXHAUSTED' : 'REVIEW_BATCH_FAILED' }))
-  } else {
-    if (!transport.transport) return { ok: false, code: transport.code, error: transport.error }
-    const { runCliProviderPrompt } = await import('../lib/cliProviderRun.js')
-    const { PUBLIC_REVIEW_GATE_EXECUTION_PROFILE } = await import('../lib/agentExecutionProfiles.js')
-    const { mkdtemp, rm } = await import('node:fs/promises')
-    const { tmpdir } = await import('node:os')
-    const { join } = await import('node:path')
-    // Every CLI review keeps the no-tool environment allowlist. A no-tool or
-    // read-only tier runs the vendor's enforced reviewer argv; the `unconfined`
-    // tier runs its ordinary argv (see `resolveProviderReviewTransport`), so it
-    // never gets the caller's checkout: it runs in a scratch directory with the
-    // diff inlined. Otherwise `isolateFromCheckout` controls cwd isolation — public content
-    // stays off the real checkout, while an ordinary review may still read it.
-    const safetyProfile = PUBLIC_REVIEW_GATE_EXECUTION_PROFILE
-    const isolatedCwd = workspace.cwd === 'scratch' ? await mkdtemp(join(tmpdir(), 'portos-review-')) : null
-    const cwd = isolatedCwd || reviewCwd
-    result = await Promise.resolve().then(async () => {
-      const { resolveBootstrapEnv } = await import('../lib/credentialBootstrap.js')
-      const preparationMs = reviewBudget ? reviewBudget.deadline - Date.now() : timeoutMs
-      if (preparationMs <= 0) return { error: 'The configured review budget is exhausted.', code: 'REVIEW_BUDGET_EXHAUSTED' }
-      const bootstrapEnv = await withAbortTimeout(preparationMs, signal => awaitWithAbort(resolveBootstrapEnv(provider, { safetyProfile, signal, timeoutMs: preparationMs }), signal))
-      const remainingMs = takeCodeReviewCallBudget(reviewBudget, timeoutMs)
-      if (remainingMs === null) return { error: 'The configured review budget is exhausted.', code: 'REVIEW_BUDGET_EXHAUSTED' }
-      return runCliProviderPrompt({ provider, model, prompt, cwd, timeoutMs: remainingMs, bootstrapEnv, exactPins: true,
-        safetyProfile, codeReview: true })
-    }).catch((error) => error.code === EXECUTION_OPTIONS_ERROR ? { error: error.message, code: error.code } : ({ error: 'Reviewer credential setup or execution failed.', code: reviewBudget && Date.now() >= reviewBudget.deadline ? 'REVIEW_BUDGET_EXHAUSTED' : 'REVIEW_BATCH_FAILED' }))
-      .finally(() => isolatedCwd && rm(isolatedCwd, { recursive: true, force: true }))
-    // A failed headless command request is a configuration fault, not a verdict.
-    // Replace vendor prose with a bounded remedy before health or bridge output.
-    if (!isTimeoutFailure(result.error) && (result.error || result.partial || !result.text?.trim())) {
-      // The CLI runner truncates error to a stderr prefix; the full stderr can
-      // carry the explicit refusal after that prefix. A timeout stays transient.
-      const code = reviewerCommandPermissionFailureCode(result.error) || reviewerCommandPermissionFailureCode(result.stderr)
-      if (code) return {
-        ok: false,
-        code,
-        error: 'The headless reviewer required command permission. Use a compatible non-interactive review transport or supported tool-free vendor configuration.',
-      }
-    }
-    if (isReviewContextCapacityFailure(result)) return { ...reviewContextCapacityFailure(), backend, model, effort }
-    if (result.partial) {
-      const errorMsg = result.stderr?.trim() || result.text?.trim() || 'Reviewer exited before completing its response.'
-      return {
-        ok: false,
-        error: errorMsg,
-        ...(result.stderr ? { stderr: result.stderr } : {}),
-        ...(result.text ? { text: result.text } : {}),
-      }
-    }
-    if (!result.error && result.streamFormat === 'stream-json') {
-      const { safeJSONLParse } = await import('../lib/jsonIo.js')
-      const events = safeJSONLParse(result.text)
-      const errorEvent = events.findLast(event => event.type === 'error' || event.is_error)
-      const final = events.findLast(event => event.type === 'result')
-      if (errorEvent && (!final || final.is_error)) {
-        result = { ...result, error: errorEvent.error || errorEvent.message || 'Reviewer returned an error event.', stderr: result.stderr, text: result.text }
-      } else {
-        result = final?.is_error || typeof final?.result !== 'string'
-          ? { ...result, error: 'Reviewer returned no successful final result.', stderr: result.stderr, text: result.text }
-          : { ...result, text: final.result }
-      }
-    }
-  }
+  // API and CLI reviewers front remote reasoning models; the diff-size formula only suits local backends.
+  const isRemoteTransport = transport.transport === 'api' || transport.transport === 'cli'
+  const budgetMs = !timeoutExplicit && isRemoteTransport ? getRemoteCodeReviewTimeoutMs(provider) : timeoutMs
+  const call = { provider, model, prompt, budgetMs, reviewBudget }
+  const run = transport.transport === 'api'
+    ? await runApiReviewCall(call)
+    : await runCliReviewCall({ ...call, transport, workspace, reviewCwd })
+  if (run.outcome) return run.outcome
+  const { result } = run
   if (isReviewContextCapacityFailure(result)) return { ...reviewContextCapacityFailure(), backend, model, effort }
-  if (result.error || !result.text?.trim()) {
-    const errorText = result.error || result.stderr || result.text || 'Reviewer returned no content.'
-    return {
-      ok: false,
-      timeoutMs: budgetMs,
-      error: errorText,
-      ...(result.stderr ? { stderr: result.stderr } : {}),
-      ...(result.text ? { text: result.text } : {}),
-      ...(result.status ? { status: result.status } : {}),
-      ...(result.statusCode ? { statusCode: result.statusCode } : {}),
-      ...(result.stallPhase ? { stallPhase: result.stallPhase } : {}),
-      ...(result.name ? { name: result.name } : {}),
-      ...(result.code ? { code: result.code } : {}),
-    }
-  }
+  if (result.error || !result.text?.trim()) return reviewReplyFailure(result, run.budgetMs)
   return { ok: true, backend, model, ...(result.executionOptions ? { executionOptions: result.executionOptions } : {}), effort: effort || provider.effort || null, content: result.text.trim(), finishReason: normalizeReviewFinishReason(result.finishReason), responseLengthChars: result.text.length }
 }
 
@@ -1252,7 +1281,7 @@ export async function runLocalCodeReview(options = {}) {
   let selectedModel = model || providerSnapshot?.defaultModel
   const selectedEffort = effort ?? providerSnapshot?.effort ?? null
   const budgetMs = Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs
-    : providerSnapshot && (await resolveProviderReviewTransport(providerSnapshot, { allowUnconfined: true })).transport === 'api' ? getRemoteCodeReviewTimeoutMs(providerSnapshot) : getLocalCodeReviewTimeoutMs(diff)
+    : providerSnapshot && ['api', 'cli'].includes((await resolveProviderReviewTransport(providerSnapshot, { allowUnconfined: true })).transport) ? getRemoteCodeReviewTimeoutMs(providerSnapshot) : getLocalCodeReviewTimeoutMs(diff)
   const result = await runCodeReviewBatches({ diff, headSha, budgetMs, maxBatchBytes, maxBatches, startedAt,
     runBatch: async (batch, remainingMs, reviewBudget) => {
       const result = await runSingleCodeReview({ ...options, model: selectedModel, effort: selectedEffort, diff: batch,

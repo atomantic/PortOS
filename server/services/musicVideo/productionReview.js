@@ -12,6 +12,7 @@ import { musicVideoAspect } from '../../lib/musicVideoAspect.js';
 import { lyricCueSpan } from './timedText.js';
 import { cuesSungWithin } from '../../lib/musicVideoLyricAnchors.js';
 import { isLayeredComposition, sceneVisualLayer } from '../../lib/musicVideoLayers.js';
+import { coldOpenScenes, songScenes } from '../../lib/musicVideoColdOpen.js';
 const artifact = (project, id) => (project.devArtifacts || []).find(a => a.id === id && !a.deleted);
 const artifactBasis = a => a ? { id: a.id, version: a.version, file: a.file } : null;
 const source = p => {
@@ -44,8 +45,9 @@ export const overlayTextBasis = project => hash({
   ...(project.lyricOverlayEnabled === false ? { lyricOverlayEnabled: false } : {}),
   document: project.composition?.document?.directory || null, aspect: musicVideoAspect(project), source: source(project),
   textCues: project.composition?.textCues ?? null, overlay: project.composition?.overlay ?? null, style: project.composition?.style ?? null,
-  scenes: (project.scenes || []).map(({ sceneId, startSec, endSec, textZone, lyricRole, lyricSize, lyricText, cardText, referenceImageId, videoHistoryId, performanceEdit, visualLayer }) =>
-    ({ sceneId, startSec, endSec, textZone, lyricRole, lyricSize, lyricText, cardText, referenceImageId, videoHistoryId, performanceEdit, visualLayer })),
+  scenes: (project.scenes || []).map(({ sceneId, startSec, endSec, textZone, lyricRole, lyricSize, lyricText, cardText, referenceImageId, videoHistoryId, performanceEdit, visualLayer, photoSequence }) =>
+    ({ sceneId, startSec, endSec, textZone, lyricRole, lyricSize, lyricText, cardText, referenceImageId, videoHistoryId, performanceEdit, visualLayer,
+      ...(photoSequence && photoSequence.enabled !== false ? { photoSequence } : {}) })),
 });
 
 // Share the evidence contract between new decisions and persisted approvals:
@@ -210,7 +212,8 @@ export const clipLocked = (project, sceneId) => project.productionReview?.clipAp
 
 /** Each timed scene's shot number as the board shows it: song order, from 1. */
 export function shotNumbers(project) {
-  const order = (project.scenes || []).filter(scene => Number.isFinite(scene?.startSec)).sort((a, b) => a.startSec - b.startSec);
+  // Cold-open shots play before the song and are numbered on their own (nameShots).
+  const order = songScenes(project).filter(scene => Number.isFinite(scene?.startSec)).sort((a, b) => a.startSec - b.startSec);
   return new Map(order.map((scene, i) => [scene.sceneId, i + 1]));
 }
 
@@ -218,20 +221,28 @@ export function shotNumbers(project) {
  * Names shots for an error message in song order: "Shot 4", "Shots 2, 9", or
  * with notes "Shots 2 (re-timed), 9 (not lip-synced)". `entries` are sceneIds
  * or `{ sceneId, note }`. Untimed scenes have no number, so a list that holds
- * one falls back to a count ("3 shots").
+ * one falls back to a count ("3 shots"). Shots before the song are named in
+ * cold-open order: "Cold open shot 1".
  */
 export function nameShots(project, entries) {
   const numbers = shotNumbers(project);
-  const items = entries.map(entry => (typeof entry === 'string' ? { sceneId: entry } : entry))
-    .map(({ sceneId, note }) => ({ n: numbers.get(sceneId), note }));
-  if (items.some(({ n }) => !n)) return `${items.length} ${items.length === 1 ? 'shot' : 'shots'}`;
-  const list = items.sort((a, b) => a.n - b.n).map(({ n, note }) => (note ? `${n} (${note})` : `${n}`)).join(', ');
-  return `${items.length === 1 ? 'Shot' : 'Shots'} ${list}`;
+  const cold = new Map(coldOpenScenes(project).map((scene, i) => [scene.sceneId, i + 1]));
+  const items = entries.map(entry => (typeof entry === 'string' ? { sceneId: entry } : entry));
+  const name = (list, number, singular, plural) => {
+    if (!list.length) return null;
+    const numbered = list.map(({ sceneId, note }) => ({ n: number.get(sceneId), note }));
+    if (numbered.some(({ n }) => !n)) return `${numbered.length} ${numbered.length === 1 ? 'shot' : 'shots'}`;
+    const text = numbered.sort((a, b) => a.n - b.n).map(({ n, note }) => (note ? `${n} (${note})` : `${n}`)).join(', ');
+    return `${numbered.length === 1 ? singular : plural} ${text}`;
+  };
+  const before = name(items.filter(({ sceneId }) => cold.has(sceneId)), cold, 'Cold open shot', 'Cold open shots');
+  const song = name(items.filter(({ sceneId }) => !cold.has(sceneId)), numbers, 'Shot', 'Shots');
+  return [before, song].filter(Boolean).join(' and ') || '0 shots';
 }
 
 /** What a locked clip freezes: the inputs it was rendered from, and the selected clip itself. */
 const CLIP_LOCKED_FIELDS = ['prompt', 'framePrompt', 'visualIntent', 'camera', 'direction', 'startSec', 'endSec', 'lyricText',
-  'referenceImageId', 'endImageId', 'shotMode', 'performanceSpeaker', 'performanceStyle', 'visualLayer', 'loop', 'videoHistoryId', 'codeClip', 'speedFps', 'offsetFrames', 'reverse'];
+  'referenceImageId', 'endImageId', 'photoSequence', 'shotMode', 'performanceSpeaker', 'performanceStyle', 'visualLayer', 'loop', 'videoHistoryId', 'codeClip', 'speedFps', 'offsetFrames', 'reverse'];
 
 /**
  * Refuse a change to a shot whose video is locked: `patch` is a scene patch
@@ -497,8 +508,9 @@ export function productionReviewBasis(project) {
     ...(project.lyricOverlayEnabled === false ? { lyricOverlayEnabled: false } : {}),
     window: window && { startSec: window.startSec, endSec: window.endSec },
     scenes: (project.scenes || []).filter(s => !window || s.startSec < window.endSec && s.endSec > window.startSec)
-      .map(({ sceneId, referenceImageId, videoHistoryId, performanceEdit, direction, visualLayer }) =>
-        ({ sceneId, referenceImageId, videoHistoryId, performanceEdit, direction, visualLayer })),
+      .map(({ sceneId, referenceImageId, videoHistoryId, performanceEdit, direction, visualLayer, preMusic, photoSequence }) =>
+        ({ sceneId, referenceImageId, videoHistoryId, performanceEdit, direction, visualLayer, ...(preMusic ? { preMusic } : {}),
+          ...(photoSequence && photoSequence.enabled !== false ? { photoSequence } : {}) })),
     soundBed: project.soundBed, videoSettings: project.videoSettings });
   return { art, storyboard, storyboardShots, proof };
 }
@@ -528,8 +540,9 @@ function productionApprovalInputs(project) {
   const window = project.productionReview?.proof;
   const proof = { ...storyboard, composition: h(project.composition), 'proof window': h(window && [window.startSec, window.endSec]),
     ...(project.lyricOverlayEnabled === false ? { 'automatic lyric overlays': h(false) } : {}),
-    takes: h((project.scenes || []).map(({ sceneId, referenceImageId, videoHistoryId, performanceEdit, direction, visualLayer }) =>
-      ({ sceneId, referenceImageId, videoHistoryId, performanceEdit, direction, visualLayer }))),
+    takes: h((project.scenes || []).map(({ sceneId, referenceImageId, videoHistoryId, performanceEdit, direction, visualLayer, photoSequence }) =>
+      ({ sceneId, referenceImageId, videoHistoryId, performanceEdit, direction, visualLayer,
+        ...(photoSequence && photoSequence.enabled !== false ? { photoSequence } : {}) }))),
     'sound bed': h(project.soundBed), 'video settings': h(project.videoSettings) };
   return { art, storyboard, proof };
 }
@@ -870,7 +883,8 @@ export function productionReadiness(project) {
   // Each row left from a deleted shot, by its span and action, so the checklist can name it and remove them all.
   const staleRows = documentShots ? [] : staleStoryboardRows(project)
     .map(shot => ({ id: shot.id || null, sceneId: shot.sceneId, startSec: shot.startSec ?? null, endSec: shot.endSec ?? null, action: shot.action || '' }));
-  const scenes = documentShots ? (draft.storyboard || []).map(shot => ({ ...shot, sceneId: shot.id, label: shot.id })) : project.scenes || [];
+  // Shots before the song (the cold open) have no song time to cover or anchor lyrics to.
+  const scenes = documentShots ? (draft.storyboard || []).map(shot => ({ ...shot, sceneId: shot.id, label: shot.id })) : songScenes(project);
   boardProblems.push(...shotSourceProblems(project, review, draft, scenes, documentShots, staleRows));
   if (!scenes.length) boardProblems.push('Create a timed shot storyboard.');
   const timedScenes = scenes.filter(s => Number.isFinite(s.startSec) && s.endSec > s.startSec).sort((a, b) => a.startSec - b.startSec);

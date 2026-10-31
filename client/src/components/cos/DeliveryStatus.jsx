@@ -61,7 +61,8 @@ export default function DeliveryStatus({ agent, ownerId, taskId, onRefresh }) {
           });
           setChecking(false);
           if (result) {
-            const message = result.verified ? 'Cleanup verified.' : `Cleanup still needs attention${result.reasons?.length ? `: ${result.reasons.map(reason => HOLD_REASONS[reason] || reason.replaceAll('-', ' ')).join(' ')}` : '.'}`;
+            const reasons = result.reasons?.length ? result.reasons : (result.reason ? [result.reason] : []);
+            const message = result.verified ? 'Cleanup verified.' : `Cleanup still needs attention${reasons.length ? `: ${reasons.map(reason => HOLD_REASONS[reason] || reason.replaceAll('-', ' ')).join(' ')}` : '.'}`;
             setCheckResult(message);
             // Activity moves the row between sections, which can unmount it
             // before this request completes. A toast preserves the result.

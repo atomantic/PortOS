@@ -6,6 +6,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import http from 'node:http';
+import { Dispatcher1Wrapper } from 'undici';
 
 const lookupMock = vi.fn();
 vi.mock('dns/promises', () => ({
@@ -177,7 +178,7 @@ describe('connect-time IP pinning (DNS-rebinding TOCTOU, #1859)', () => {
     lookupMock.mockResolvedValue({ address: '93.184.216.34', family: 4 });
     fetchMock.mockResolvedValue(res({ text: 'ok' }));
     await fetchPublicText('https://rebind.example.com/x');
-    expect(fetchMock.mock.calls[0][1].dispatcher).toBeDefined();
+    expect(fetchMock.mock.calls[0][1].dispatcher).toBeInstanceOf(Dispatcher1Wrapper);
   });
 
   it('fails closed when the validation lookup fails (no unpinned connect-time re-resolve)', async () => {
@@ -298,7 +299,7 @@ describe('resolvePublicUrl', () => {
     expect(lookupMock.mock.calls.map(([host]) => host)).toEqual(['pin.it', 'api.pinterest.com', 'www.pinterest.com']);
     expect(fetchMock).toHaveBeenCalledTimes(3);
     for (const [, options, timeout] of fetchMock.mock.calls) {
-      expect(options).toMatchObject({ redirect: 'manual', dispatcher: expect.anything() });
+      expect(options).toMatchObject({ redirect: 'manual', dispatcher: expect.any(Dispatcher1Wrapper) });
       expect(timeout).toBeLessThanOrEqual(8000);
     }
     expect(cancel).toHaveBeenCalledTimes(3);

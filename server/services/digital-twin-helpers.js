@@ -74,10 +74,15 @@ export function resolveTestPersona(personas, personaId) {
  * tombstone and stamps a superseding `createdAt`, so peer sync treats the
  * regenerated document as new rather than reaping it against the old tombstone
  * (#3530) — enrichment regenerates its target docs on every session.
+ *
+ * The caller has just written the document body, so an existing entry gets an
+ * `updatedAt` stamp: peer sync replaces a body whose stamp is older than the
+ * peer's (#14160), and an unstamped write would lose to an earlier peer edit.
  */
 export function ensureDocumentInMeta(meta, filename, title, category, { enabled = true, priority = 30 } = {}) {
   const deletedAt = tombstoneTimestamp(meta.deletedDocuments, filename, 'filename');
   const existing = meta.documents.find(d => d.filename === filename);
+  if (existing) existing.updatedAt = now();
   if (existing && deletedAt === null) return;
   // An entry that already exists but is still covered by a tombstone would be
   // reaped on the next sync even though the caller just wrote the file — so

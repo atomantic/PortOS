@@ -328,7 +328,7 @@ export const writersRoomCdBridgeSuggestSchema = z.object({
 // project. Caps align with creativeDirectorTreatmentSchema / creativeDirectorSceneSchema
 // so a gate-passing proposal always validates again at setTreatment time. The
 // scene shape here is the PROPOSAL subset (intent/prompt/duration); the service
-// assigns sceneId/order/useContinuationFromPrior before calling setTreatment.
+// assigns sceneId/order before calling setTreatment.
 export const writersRoomCdBridgeSendSchema = z.object({
   proposal: z.object({
     logline: z.string().trim().min(1).max(500),
@@ -338,6 +338,8 @@ export const writersRoomCdBridgeSendSchema = z.object({
       intent: z.string().trim().min(1).max(1000),
       prompt: z.string().trim().min(1).max(8000),
       durationSeconds: z.number().int().min(1).max(10),
+      // Opt-in: continue from the prior scene's last frame (one continuous camera).
+      continueFromPrior: z.boolean().optional(),
     }).strict()).min(1).max(120),
   }).strict(),
 }).strict();

@@ -140,66 +140,64 @@ export default function ManuscriptImpactPreview({ open, onClose, seriesId, secti
   };
 
   return (
-    <Modal open={open} onClose={onClose} size="3xl" align="top" ariaLabel="Manuscript impact preview">
-      <div className="bg-port-card border border-port-border rounded-lg max-h-[85vh] flex flex-col">
-        <div className="flex items-center justify-between gap-2 px-4 py-3 border-b border-port-border">
-          <div>
-            <h2 className="text-base font-semibold text-white">Impact preview</h2>
-            <p className="text-[11px] text-gray-500">
-              {totalEdits === 0
-                ? 'No selected edits to preview yet — generate a fix and keep its edits checked.'
-                : `${totalEdits} edit${totalEdits === 1 ? '' : 's'} across ${changed.length} issue${changed.length === 1 ? '' : 's'} — accept them all here, or one note at a time from the cards`}
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            {totalEdits > 0 ? (
-              <button
-                type="button"
-                onClick={acceptAll}
-                disabled={!!acceptState}
-                title="Apply every previewed edit to the manuscript (each section keeps a version-history snapshot, so this is revertible per section)"
-                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded text-xs font-medium bg-port-success/20 text-port-success border border-port-success/40 hover:bg-port-success/30 disabled:opacity-40 whitespace-nowrap"
-              >
-                {acceptState ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}
-                {acceptState
-                  ? `Accepting note ${Math.min(acceptState.done + 1, acceptState.total)} of ${acceptState.total}…`
-                  : `Accept all ${totalEdits} edit${totalEdits === 1 ? '' : 's'}`}
-              </button>
-            ) : null}
-            <button type="button" onClick={onClose} className="text-gray-400 hover:text-white min-h-[44px] min-w-[44px] flex items-center justify-center" aria-label="Close preview" title="Close (Esc)">
-              <X size={18} />
+    <Modal open={open} onClose={onClose} size="3xl" align="top" ariaLabel="Manuscript impact preview" panelClassName="bg-port-card border border-port-border rounded-lg flex flex-col [--dvh-cap:85dvh]">
+      <div className="flex items-center justify-between gap-2 px-4 py-3 border-b border-port-border">
+        <div>
+          <h2 className="text-base font-semibold text-white">Impact preview</h2>
+          <p className="text-[11px] text-gray-500">
+            {totalEdits === 0
+              ? 'No selected edits to preview yet — generate a fix and keep its edits checked.'
+              : `${totalEdits} edit${totalEdits === 1 ? '' : 's'} across ${changed.length} issue${changed.length === 1 ? '' : 's'} — accept them all here, or one note at a time from the cards`}
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          {totalEdits > 0 ? (
+            <button
+              type="button"
+              onClick={acceptAll}
+              disabled={!!acceptState}
+              title="Apply every previewed edit to the manuscript (each section keeps a version-history snapshot, so this is revertible per section)"
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded text-xs font-medium bg-port-success/20 text-port-success border border-port-success/40 hover:bg-port-success/30 disabled:opacity-40 whitespace-nowrap"
+            >
+              {acceptState ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}
+              {acceptState
+                ? `Accepting note ${Math.min(acceptState.done + 1, acceptState.total)} of ${acceptState.total}…`
+                : `Accept all ${totalEdits} edit${totalEdits === 1 ? '' : 's'}`}
             </button>
-          </div>
+          ) : null}
+          <button type="button" onClick={onClose} className="text-gray-400 hover:text-white min-h-[44px] min-w-[44px] flex items-center justify-center" aria-label="Close preview" title="Close (Esc)">
+            <X size={18} />
+          </button>
         </div>
+      </div>
 
-        <div className="flex-1 overflow-y-auto p-4 space-y-4">
-          {changed.length === 0 ? (
-            <p className="text-sm text-gray-500 italic">
-              Nothing to preview. Generate fixes on the open editorial notes (and leave the edits you want checked); they'll show here as before/after diffs.
-            </p>
-          ) : (
-            changed.map(({ section, before, after, count, overlapping, notFound }) => (
-              <div key={`${section.issueId}:${section.stageId}`} className="border border-port-border rounded-lg overflow-hidden">
-                <div className="px-3 py-2 bg-port-bg/60 border-b border-port-border text-sm text-gray-200">
-                  Issue {section.number}{section.title ? ` — ${section.title}` : ''}
-                  <span className="ml-2 text-[10px] uppercase tracking-wider text-gray-500">{STAGE_LABEL[section.stageId] || section.stageId}</span>
-                  <span className="ml-2 text-[10px] text-port-accent">{count} edit{count === 1 ? '' : 's'}</span>
-                </div>
-                {notFound ? (
-                  <p className="px-3 py-1.5 text-[11px] text-port-warning border-b border-port-border bg-port-warning/10">
-                    {notFound} edit{notFound === 1 ? '' : 's'} couldn’t be located in the current draft — accepting will be rejected; regenerate the fix. Preview below shows only the edits that matched.
-                  </p>
-                ) : null}
-                {overlapping ? (
-                  <p className="px-3 py-1.5 text-[11px] text-port-warning border-b border-port-border bg-port-warning/10">
-                    {overlapping} of these edits overlap — accepting will be rejected; regenerate the fix. Preview below shows the non-overlapping subset.
-                  </p>
-                ) : null}
-                <HunkDiff oldText={before} newText={after} oldLabel="Current" newLabel="With edits" />
+      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        {changed.length === 0 ? (
+          <p className="text-sm text-gray-500 italic">
+            Nothing to preview. Generate fixes on the open editorial notes (and leave the edits you want checked); they'll show here as before/after diffs.
+          </p>
+        ) : (
+          changed.map(({ section, before, after, count, overlapping, notFound }) => (
+            <div key={`${section.issueId}:${section.stageId}`} className="border border-port-border rounded-lg overflow-hidden">
+              <div className="px-3 py-2 bg-port-bg/60 border-b border-port-border text-sm text-gray-200">
+                Issue {section.number}{section.title ? ` — ${section.title}` : ''}
+                <span className="ml-2 text-[10px] uppercase tracking-wider text-gray-500">{STAGE_LABEL[section.stageId] || section.stageId}</span>
+                <span className="ml-2 text-[10px] text-port-accent">{count} edit{count === 1 ? '' : 's'}</span>
               </div>
-            ))
-          )}
-        </div>
+              {notFound ? (
+                <p className="px-3 py-1.5 text-[11px] text-port-warning border-b border-port-border bg-port-warning/10">
+                  {notFound} edit{notFound === 1 ? '' : 's'} couldn’t be located in the current draft — accepting will be rejected; regenerate the fix. Preview below shows only the edits that matched.
+                </p>
+              ) : null}
+              {overlapping ? (
+                <p className="px-3 py-1.5 text-[11px] text-port-warning border-b border-port-border bg-port-warning/10">
+                  {overlapping} of these edits overlap — accepting will be rejected; regenerate the fix. Preview below shows the non-overlapping subset.
+                </p>
+              ) : null}
+              <HunkDiff oldText={before} newText={after} oldLabel="Current" newLabel="With edits" />
+            </div>
+          ))
+        )}
       </div>
     </Modal>
   );

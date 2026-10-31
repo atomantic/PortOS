@@ -29,6 +29,9 @@ const MAX_TOTAL_CHARS = 40_000;
 const FORGE_TIMEOUT_MS = 30_000;
 const TOKEN_TIMEOUT_MS = 10_000;
 const SEARCH_MAX_DEPTH = 4;
+// GitHub limit matches the claim detector (perpetualWork.js); GitLab's per-page max is 100.
+const GH_LIST_LIMIT = 500;
+const GLAB_PAGE_LIMIT = 100;
 const TRUNCATION_NOTICE = '\n\n[Preload truncated. Read this source directly if the omitted detail is needed.]';
 const SKIP_DIRECTORIES = new Set([
   '.git', '.idea', '.next', '.turbo', '.venv', '.vscode',
@@ -169,14 +172,16 @@ function failedRead(cli, result) {
 export async function listForgeOpenIssues({ cli, cwd, env, exec = runForgeCli } = {}) {
   if (!cwd || (cli !== 'gh' && cli !== 'glab')) return { ok: false, issues: [] };
   const args = cli === 'glab'
-    ? ['issue', 'list', '-P', '100']
-    : ['issue', 'list', '--state', 'open', '--limit', '100', '--json', 'number,title,state,url,labels'];
+    ? ['issue', 'list', '-P', String(GLAB_PAGE_LIMIT)]
+    : ['issue', 'list', '--state', 'open', '--limit', String(GH_LIST_LIMIT), '--json', 'number,title,state,url,labels'];
   const result = await exec(cli, args, { cwd, env });
   if (result.code !== 0 || !result.stdout.trim()) return { ok: false, issues: [], error: failedRead(cli, result) };
   const parsed = safeJSONParse(result.stdout, null, { logError: false });
   if (!Array.isArray(parsed)) return { ok: false, issues: [], error: failedRead(cli, result) };
   return {
     ok: true,
+    // A full page may hide older rows; surface it so the preload says so.
+    truncated: parsed.length >= (cli === 'glab' ? GLAB_PAGE_LIMIT : GH_LIST_LIMIT),
     issues: parsed
       .filter((item) => !item.state || ['open', 'opened'].includes(String(item.state).toLowerCase()))
       .map((item) => ({
@@ -192,12 +197,13 @@ export async function listForgeOpenIssues({ cli, cwd, env, exec = runForgeCli } 
 export async function listForgePullRequests({ cli, cwd, env, state = 'open', exec = runForgeCli } = {}) {
   if (!cwd || (cli !== 'gh' && cli !== 'glab')) return { ok: false, items: [] };
   const closed = state === 'closed-unmerged';
+  const closedLimit = closed ? 20 : (cli === 'glab' ? GLAB_PAGE_LIMIT : GH_LIST_LIMIT);
   const args = cli === 'glab'
-    ? ['mr', 'list', ...(closed ? ['--closed'] : []), '-P', closed ? '20' : '100']
+    ? ['mr', 'list', ...(closed ? ['--closed'] : []), '-P', String(closedLimit)]
     : [
         'pr', 'list', '--state', closed ? 'closed' : 'open',
         ...(closed ? ['--search', 'is:unmerged'] : []),
-        '--limit', closed ? '20' : '100',
+        '--limit', String(closedLimit),
         '--json', 'number,title,author,url,isDraft,headRefName,baseRefName,labels,closedAt'
       ];
   const result = await exec(cli, args, { cwd, env });
@@ -209,7 +215,7 @@ export async function listForgePullRequests({ cli, cwd, env, state = 'open', exe
   const items = closed
     ? parsed.filter((item) => !item.merged_at && String(item.state || '').toLowerCase() !== 'merged')
     : parsed;
-  return { ok: true, items };
+  return { ok: true, items, truncated: !closed && parsed.length >= closedLimit };
 }
 
 function unavailableMessage(label, reason = 'source read failed') {
@@ -313,7 +319,7 @@ const INPUT_LOADERS = {
     if (!forge) return unavailableMessage('Open pull requests', 'repository forge is unavailable');
     const result = await deps.listPullRequests({ cli: forge.cli, cwd: app.repoPath, env: forge.env, state: 'open' });
     return result.ok
-      ? renderForgeItems(result.items, { emptyMessage: 'No open pull requests.' })
+      ? renderForgeItems(result.items, { emptyMessage: 'No open pull requests.' }) + (result.truncated ? TRUNCATION_NOTICE : '')
       : forgeUnavailable('Open pull requests', forge, result);
   },
   // The slice rotation record (#12090): what this lane deep-reviewed lately,

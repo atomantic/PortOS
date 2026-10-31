@@ -253,7 +253,7 @@ describe('serialized daily-log writes (#8032)', () => {
       items: [expect.objectContaining({ product: 'Example Pouch', mgPerUnit: 3, count: 2 })],
       totalMg: 6
     });
-    expect(day.body).toEqual({ weightLbs: 175 });
+    expect(day.body).toEqual({ weightLbs: 175, updatedAt: expect.any(String) });
     expect(store.lastEntryDate).toBe('2024-06-01');
   });
 

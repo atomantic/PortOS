@@ -63,4 +63,25 @@ describe('storyboard song brief', () => {
     ];
     expect(storyboardTimeline({ ...board, tempTrack: track, beats }).panels.map((p) => p.start)).toEqual([20, 25]);
   });
+
+  it('plays the beats before the song first and starts the song, and its pins, after them', () => {
+    const track = { filename: '0a1b2c3d-demo.mp3', name: 'demo.mp3', sections: [{ id: 'sec-chorus', label: 'Chorus 1', at: 30 }], lines: [] };
+    const opened = {
+      ...board,
+      tempTrack: track,
+      beats: [
+        { id: 'beat-0', title: 'Booth', what: 'He presses play', emotion: '', musicalRole: null, sectionHint: '', beforeSong: true, panels: [panel({ seconds: 2 }), panel({ seconds: 1.5 })] },
+        board.beats[0],
+        { ...board.beats[1], pin: 'sec-chorus' },
+      ],
+    };
+    const { panels, songStartSec } = storyboardTimeline(opened);
+    expect(songStartSec).toBe(3.5);
+    expect(panels.map((p) => [p.start, p.end, !!p.beforeSong])).toEqual([
+      [0, 2, true], [2, 3.5, true], [3.5, 21.5, false], [21.5, 33.5, false], [33.5, 41.5, false],
+    ]);
+    // The song map is the song's alone, on its own clock.
+    const sections = storyboardSongSections(opened);
+    expect(sections.map((s) => [s.label, s.start])).toEqual([['Intro', 0], ['Chorus', 30]]);
+  });
 });

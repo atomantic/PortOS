@@ -9,7 +9,7 @@ vi.mock('./cosClaimOwnershipState.js', () => ({ readClaimOwnershipAgents: async 
 vi.mock('./forgeExecOptions.js', () => ({ resolveForgeExecOptions: async () => ({ env: { GH_TOKEN: 'fixture-account' } }) }));
 vi.mock('./github.js', () => ({ execGh: (...args) => forge(...args) }));
 vi.mock('../lib/gitRemote.js', () => ({ getOriginInfo: async () => ({ host: 'github.com', fullName: 'owner/repo' }) }));
-vi.mock('./pendingMergeGuard.js', () => ({ verifyPendingMergeCheckout: (...args) => checkout(...args) }));
+vi.mock('./pendingMergeCheckout.js', () => ({ verifyPendingMergeCheckout: (...args) => checkout(...args) }));
 import { preparePendingMergeRecovery, validatePendingMergeRecovery } from './pendingMergeRecovery.js';
 
 const headSha = 'a'.repeat(40);

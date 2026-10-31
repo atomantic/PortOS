@@ -1,4 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { join } from 'path';
 
 // classifyBP is pure and lives in the client bundle (client/src/components/meatspace/
 // bpClassification.js) — "ported from MortalLoom's CardioFitnessEngine so PortOS and
@@ -47,7 +48,10 @@ vi.mock('./mortalLoomStore.js', () => ({
   mlPush: vi.fn(),
   mlPatchById: vi.fn(),
   mlRemoveById: vi.fn(),
-  mlUpsertHealthMetricByDate: vi.fn()
+  mlRemoveWhere: vi.fn(),
+  mlUpsertHealthMetricByDate: vi.fn(),
+  mlClearHealthMetricFields: vi.fn(),
+  mlMergeClinicalBloodTests: vi.fn()
 }));
 
 import { writeFile } from 'fs/promises';
@@ -55,14 +59,23 @@ import { readJSONFile, getDateString } from '../lib/fileUtils.js';
 import {
   getBodyHistory,
   addBodyEntry,
+  removeBodyEntry,
   getBloodPressureHistory,
   addBloodPressureReading,
+  removeBloodPressureReading,
+  addWorkout,
+  removeWorkout,
+  getWorkouts,
+  addBloodTest,
+  getBloodTests,
+  removeBloodTest,
   addEyeExam,
   getEyeExams,
   updateEyeExam,
   removeEyeExam,
   resolveEyeExamId
 } from './meatspaceHealth.js';
+import { isMortalLoomEnabled, mlArrayIfEnabled, mlRemoveById, mlClearHealthMetricFields } from './mortalLoomStore.js';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -137,7 +150,7 @@ describe('addBodyEntry', () => {
   it('creates a body entry from scratch when the date is unseen', async () => {
     readJSONFile.mockResolvedValue({ entries: [], lastEntryDate: null });
     const result = await addBodyEntry({ date: '2024-01-01', weightLbs: 160 });
-    expect(result).toEqual({ date: '2024-01-01', weightLbs: 160 });
+    expect(result).toEqual({ date: '2024-01-01', weightLbs: 160, updatedAt: expect.any(String) });
     expect(writeFile).toHaveBeenCalledTimes(1);
   });
 
@@ -147,7 +160,7 @@ describe('addBodyEntry', () => {
       lastEntryDate: '2024-01-01'
     });
     const result = await addBodyEntry({ date: '2024-01-01', fatPct: 15 });
-    expect(result).toEqual({ date: '2024-01-01', weightLbs: 160, fatPct: 15 });
+    expect(result).toEqual({ date: '2024-01-01', weightLbs: 160, fatPct: 15, updatedAt: expect.any(String) });
   });
 
   it('overwrites an existing field on a repeat entry for the same date', async () => {
@@ -156,7 +169,7 @@ describe('addBodyEntry', () => {
       lastEntryDate: '2024-01-01'
     });
     const result = await addBodyEntry({ date: '2024-01-01', weightLbs: 158 });
-    expect(result).toEqual({ date: '2024-01-01', weightLbs: 158, fatPct: 15 });
+    expect(result).toEqual({ date: '2024-01-01', weightLbs: 158, fatPct: 15, updatedAt: expect.any(String) });
   });
 
   it('defaults to the local calendar day when no date is given', async () => {
@@ -321,5 +334,134 @@ describe('eye exams by id', () => {
     expect((await getEyeExams()).exams[0].id).toBe(exam.id);
     const updated = await updateEyeExam(exam.id, { leftSphere: -2 });
     expect(updated.updatedAt).toEqual(expect.any(String));
+  });
+});
+
+// =============================================================================
+// LOG PRIVACY (#14157): the log stream is forwarded to every logs:line subscriber
+// and outlives the record, so health values must never be interpolated into it.
+// =============================================================================
+
+describe('health write logging', () => {
+  const captureConsole = () => {
+    const lines = [];
+    const sink = (...args) => { lines.push(args.join(' ')); };
+    vi.spyOn(console, 'log').mockImplementation(sink);
+    vi.spyOn(console, 'error').mockImplementation(sink);
+    vi.spyOn(console, 'warn').mockImplementation(sink);
+    return lines;
+  };
+
+  it('keeps blood-pressure numbers out of the log on save', async () => {
+    const lines = captureConsole();
+    readJSONFile.mockResolvedValue({ entries: [] });
+    await addBloodPressureReading({ date: '2024-02-01', systolic: 173, diastolic: 107 });
+    const out = lines.join('\n');
+    expect(out).toContain('Blood pressure reading logged for 2024-02-01');
+    expect(out).not.toMatch(/173|107/);
+    vi.restoreAllMocks();
+  });
+
+  it('keeps the workout type text out of the log on save', async () => {
+    const lines = captureConsole();
+    readJSONFile.mockResolvedValue({ workouts: [] });
+    await addWorkout({ date: '2024-02-01', type: 'zz-synthetic-workout-marker', durationMinutes: 30 });
+    const out = lines.join('\n');
+    expect(out).toContain('Workout logged for 2024-02-01');
+    expect(out).not.toContain('zz-synthetic-workout-marker');
+    vi.restoreAllMocks();
+  });
+
+  it('keeps blood-pressure numbers out of the log on delete', async () => {
+    const lines = captureConsole();
+    readJSONFile.mockResolvedValue({
+      entries: [{ date: '2024-02-01', bloodPressureSystolic: 173, bloodPressureDiastolic: 107, heartRate: 60 }]
+    });
+    await removeBloodPressureReading('2024-02-01');
+    const out = lines.join('\n');
+    expect(out).toContain('Blood pressure reading removed for 2024-02-01');
+    expect(out).not.toMatch(/173|107/);
+    const written = JSON.parse(writeFile.mock.calls[0][1]);
+    expect(written.entries[0]).toEqual({ date: '2024-02-01', heartRate: 60 });
+    vi.restoreAllMocks();
+  });
+});
+
+describe('health record erasure', () => {
+  let files;
+  const bloodFile = join('/mock/data/meatspace', 'blood-tests.json');
+  const logFile = join('/mock/data/meatspace', 'daily-log.json');
+  const workoutFile = join('/mock/data/meatspace', 'workouts.json');
+  beforeEach(() => {
+    files = {};
+    readJSONFile.mockImplementation(async (file, fallback) => structuredClone(files[file] ?? fallback));
+    writeFile.mockImplementation(async (file, payload) => { files[file] = JSON.parse(payload); });
+  });
+  afterEach(() => {
+    isMortalLoomEnabled.mockResolvedValue(false);
+    mlArrayIfEnabled.mockResolvedValue(null);
+  });
+
+  it('stamps a blood panel and tombstones the legacy content key', async () => {
+    files[bloodFile] = { tests: [{ date: '2026-04-02', homocysteine: 7 }], referenceRanges: {} };
+    const listed = await getBloodTests();
+    expect(listed.tests[0].id).toMatch(/^legacy-/);
+    expect(listed).not.toHaveProperty('rowTombstones');
+    const removed = await removeBloodTest(listed.tests[0].id);
+    expect(removed.date).toBe('2026-04-02');
+    expect(files[bloodFile].tests).toEqual([]);
+    expect(files[bloodFile].rowTombstones.map(t => t.id)).toContain(listed.tests[0].id);
+    expect((await getBloodTests()).tests).toEqual([]);
+  });
+
+  it('removes a MortalLoom blood test by the id the read model keeps', async () => {
+    isMortalLoomEnabled.mockResolvedValue(true);
+    mlArrayIfEnabled.mockImplementation(async (key) => (
+      key === 'bloodTests' ? [{ id: 'BLOOD1', date: '2026-04-02', markers: { homocysteine: 7 } }] : null
+    ));
+    readJSONFile.mockResolvedValue({ tests: [], referenceRanges: {} });
+    mlRemoveById.mockResolvedValue({ id: 'BLOOD1', date: '2026-04-02', markers: { homocysteine: 7 } });
+    const removed = await removeBloodTest('BLOOD1');
+    expect(mlRemoveById).toHaveBeenCalledWith('bloodTests', 'BLOOD1');
+    expect(removed).toMatchObject({ id: 'BLOOD1', date: '2026-04-02', homocysteine: 7 });
+    expect(writeFile).not.toHaveBeenCalled();
+  });
+
+  it('clears a MortalLoom blood-pressure reading through the field clear, not a null upsert', async () => {
+    isMortalLoomEnabled.mockResolvedValue(true);
+    mlClearHealthMetricFields.mockResolvedValue({
+      date: '2026-04-02', bloodPressureSystolic: 118, bloodPressureDiastolic: 76
+    });
+    const removed = await removeBloodPressureReading('2026-04-02');
+    expect(mlClearHealthMetricFields).toHaveBeenCalledWith(
+      '2026-04-02',
+      ['bloodPressureSystolic', 'bloodPressureDiastolic']
+    );
+    expect(removed).toEqual({ date: '2026-04-02', systolic: 118, diastolic: 76 });
+  });
+
+  it('hides a body entry whose deletion is newer than its clock and clears that marker on re-log', async () => {
+    files[logFile] = {
+      entries: [{ date: '2026-04-02', body: { weightLbs: 180 }, bodyDeletedAt: '2026-05-01T00:00:00.000Z' }],
+      lastEntryDate: '2026-04-02'
+    };
+    expect(await getBodyHistory()).toEqual([]);
+    const again = await addBodyEntry({ date: '2026-04-02', weightLbs: 170 });
+    expect(again.weightLbs).toBe(170);
+    expect(files[logFile].entries[0].bodyDeletedAt).toBeUndefined();
+    expect(files[logFile].entries[0].body.weightLbs).toBe(170);
+    expect(Date.parse(files[logFile].entries[0].body.updatedAt)).toBeGreaterThan(Date.parse('2026-05-01T00:00:00.000Z'));
+  });
+
+  it('removes a workout by id and leaves the type out of the log', async () => {
+    const lines = [];
+    vi.spyOn(console, 'log').mockImplementation((...args) => { lines.push(args.join(' ')); });
+    files[workoutFile] = { workouts: [] };
+    const entry = await addWorkout({ date: '2026-04-02', type: 'Example walk', durationMinutes: 20 });
+    await removeWorkout(entry.id);
+    expect(await getWorkouts()).toEqual([]);
+    expect(lines.join('\n')).not.toContain('Example walk');
+    expect(lines.join('\n')).toContain(entry.id);
+    vi.restoreAllMocks();
   });
 });

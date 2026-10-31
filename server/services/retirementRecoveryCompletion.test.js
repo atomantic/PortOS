@@ -14,7 +14,8 @@ vi.mock('../lib/paths.js', async original => makePathsProxy(await original(), { 
 afterAll(cleanupTempDataRoots);
 const store = vi.hoisted(() => ({ task: null, parent: null, agent: null, schedule: null, app: null, owners: [], unreadable: false }));
 vi.mock('./apps.js', () => ({ getAppById: vi.fn(async id => id === store.app.id ? store.app : null) }));
-vi.mock('./taskScheduleStore.js', () => ({
+vi.mock('./taskScheduleStore.js', async importOriginal => ({
+  ...(await importOriginal()),
   loadSchedule: async () => { if (store.unreadable) throw new Error('synthetic unreadable receipt'); return store.schedule; },
   updateSchedule: async mutate => (await mutate(store.schedule)).result,
 }));
@@ -52,7 +53,7 @@ vi.mock('./cosEvents.js', () => ({ emitLog: vi.fn(), cosEvents: { emit: vi.fn(),
 import { PATHS } from '../lib/paths.js';
 import { getTaskById, updateTask } from './cosTaskStore.js';
 import { completeAgent } from './cosAgentLifecycle.js';
-import { getBranchReconcileOutcome, recordBranchReconcileOutcome } from './taskSchedule.js';
+import { getBranchReconcileOutcome, recordBranchReconcileOutcome } from './branchReconcileOutcome.js';
 import { retireInventoriedCheckout } from './heldCheckoutRecovery.js';
 import { evaluateSuccessCriteria, finalizeAgent, retireDeadAgent } from './agentFinalization.js';
 import { prepareAgentSpawn } from './agentSpawnPreparation.js';
@@ -130,7 +131,6 @@ async function retire() {
   }), error => ({ registrationError: error.code || error.name }));
   expect(result, JSON.stringify({ result, diagnostics })).toMatchObject({ ok: true, branchDeleted: true });
   expect(existsSync(release.path)).toBe(false);
-  expect(existsSync(join(scratch, 'cos', 'held-checkout-archives'))).toBe(false);
 }
 
 async function finish(report, mode = 'direct') {

@@ -50,6 +50,7 @@ import { hardwareUnavailableReason, isHardwareCompatible } from '../../lib/syste
 import { usesDiffusersRunner } from '../../lib/runners.js';
 import { promptAddition } from '../../lib/modelInput.js';
 import { IMAGE_REFERENCE_REQUEST_LIMIT } from '../../lib/imageGenCapabilities.js';
+import { reviewedReferenceDigest } from './reviewedReference.js';
 
 // The job tags that name the record owning a render, each mapped to the record
 // loader and the render target whose `renderDefaults` pin backs it. A generate
@@ -124,6 +125,98 @@ export function selectLocalImageModelFromSettings(settings, modelId, allModels =
   return selectLocalImageModel(modelId, allModels, [recordModelId, settings?.imageGen?.local?.modelId].flat().filter(Boolean));
 }
 
+// A compose-time preview (#11317) names uploads it never stages: each stands in
+// as this label, so the preview shows where the image goes without copying it.
+export const previewUploadLabel = (index) => `(uploaded image ${index + 1})`;
+
+const QWEN_IMAGE_21_PIPELINE = 'QwenImage21Pipeline';
+
+// An uploaded or named reference without a parallel strength entry gets full influence.
+const referenceStrengthOrFull = (strength) => (typeof strength === 'number' ? strength : 1.0);
+
+// A quick edit wraps the authored change in an edit instruction; each added
+// clause is listed as its own prompt addition beside the authored text.
+function withQuickEditInstruction(data) {
+  const authoredPrompt = data.prompt;
+  // Named references after the first are pictures to draw from (a place, a
+  // prop, a face), never images to edit.
+  const extraReferences = Math.max(0, (data.referenceImageFiles?.length || 0) - 1);
+  const prefix = extraReferences ? 'Edit the first reference image: ' : 'Edit the reference image: ';
+  const referencesLine = extraReferences ? '. Use the other reference images only as visual references for this change' : '';
+  const preservation = '. Keep everything else exactly as it is: composition, framing, subject, lighting, color and film look.';
+  return { ...data, authoredPrompt, prompt: `${prefix}${authoredPrompt}${referencesLine}${preservation}`,
+    promptAdditions: [...(data.promptAdditions || []),
+      { id: 'quick-edit-prefix', label: 'Reference edit instruction', text: prefix },
+      ...(referencesLine ? [{ id: 'quick-edit-references', label: 'Other references', text: referencesLine }] : []),
+      { id: 'quick-edit-preservation', label: 'Preserve the rest', text: preservation }],
+  };
+}
+
+// The live greybox capture leads the named references. A render that edits a
+// picked frame keeps that frame first and puts the capture right after it; an
+// older capture of the shot (`cachedCapture`) is dropped unless it is that frame.
+function placeGreyboxReference(namedReferenceFiles, imageId, { cachedCapture, fromFrame }) {
+  if (cachedCapture && cachedCapture !== imageId) {
+    for (let i = namedReferenceFiles.length - 1; i >= 0; i--) {
+      if (namedReferenceFiles[i] === cachedCapture && !(fromFrame && i === 0)) namedReferenceFiles.splice(i, 1);
+    }
+  }
+  const existing = namedReferenceFiles.indexOf(imageId);
+  if (fromFrame && existing === 0) return;
+  if (existing >= 0) namedReferenceFiles.splice(existing, 1);
+  namedReferenceFiles.splice(fromFrame ? Math.min(1, namedReferenceFiles.length) : 0, 0, imageId);
+}
+
+// A music-video scene render adds its greybox capture, its composed shot prompt
+// and its mood-board style images. Mutates `data` and `namedReferenceFiles`.
+async function applyMusicVideoSceneInputs(data, { project, mode, localModel, namedReferenceFiles, referenceUploads, initInputCount }) {
+  const tag = data.musicVideo;
+  const scene = project?.scenes?.find((entry) => entry.sceneId === tag.sceneId);
+  const { loadMusicVideoGreybox } = await import('../musicVideo/greyboxReferences.js');
+  const greybox = await loadMusicVideoGreybox(project, scene);
+  if (greybox) {
+    placeGreyboxReference(namedReferenceFiles, greybox.reference.imageId, { cachedCapture: tag.greyboxImageId, fromFrame: tag.fromFrame || tag.refine });
+  }
+  if (tag.compose) {
+    // The director's text plus each labeled block PortOS adds (#11317), from the
+    // composer the server's production run uses for the same still.
+    const composed = musicVideoFrameModelInput(project, scene, {
+      slot: tag.slot === 'end' ? 'end' : 'start', authored: data.prompt || '', greybox,
+      fromFrame: tag.fromFrame === true, refine: tag.refine === true,
+      // The picked frame comes first; any reference after it is the shot's character or set reference.
+      otherReferences: Math.max(0, namedReferenceFiles.length + referenceUploads.length - 1),
+    });
+    data.prompt = composed.prompt;
+    if (composed.promptAdditions.length) data.promptAdditions = [...(data.promptAdditions || []), ...composed.promptAdditions];
+  } else if (greybox) {
+    data.prompt = [data.prompt, ...greybox.promptAdditions.map((a) => a.text)].filter(Boolean).join('\n');
+    data.promptAdditions = [...(data.promptAdditions || []), ...greybox.promptAdditions];
+  }
+  const reservedSlots = referenceUploads.length + initInputCount;
+  const capacity = Math.max(0, musicVideoStyleReferenceCapacity(mode, localModel) - reservedSlots);
+  const styles = musicVideoStyleImages(project, namedReferenceFiles, capacity);
+  // Named inputs precede uploads. Keep the latter's packed strength positions intact.
+  if (!referenceUploads.length) namedReferenceFiles.push(...styles);
+  const look = musicVideoStylePrompt(project, referenceUploads.length ? 0 : styles.length);
+  if (look) {
+    data.prompt = [data.prompt, look].filter(Boolean).join('. ');
+    data.promptAdditions = [...(data.promptAdditions || []), promptAddition('mood-board-style', 'Mood board style', look)];
+  }
+}
+
+// Reference images one request may carry. A peer-routed render is bounded by the
+// request limit alone; a FableLoom cloud render takes its provider's own limit
+// within that bound; everything else not named here takes 4.
+function referenceImageCap({ peerRouted, mode, isQwen21, fableLoom, cloudModel }) {
+  if (peerRouted) return IMAGE_REFERENCE_REQUEST_LIMIT;
+  if (mode === IMAGE_GEN_MODE.RUNWAY) return maxInputImages(mode, cloudModel);
+  if (isQwen21) return 10;
+  if (fableLoom && CLOUD_IMAGE_GEN_MODES.includes(mode)) {
+    return Math.min(maxInputImages(mode, cloudModel) ?? IMAGE_REFERENCE_REQUEST_LIMIT, IMAGE_REFERENCE_REQUEST_LIMIT);
+  }
+  return 4;
+}
+
 /**
  * @param {object} opts
  * @param {object} opts.data    - validated + coerced body from Zod (mutated in place)
@@ -131,21 +224,8 @@ export function selectLocalImageModelFromSettings(settings, modelId, allModels =
  * @param {string[]} opts.referenceImageFields - field names for multi-ref slots
  * @returns {Promise<{ data, mode, settings, uploadedTempPaths }>}
  */
-// A compose-time preview (#11317) names uploads it never stages: each stands in
-// as this label, so the preview shows where the image goes without copying it.
-export const previewUploadLabel = (index) => `(uploaded image ${index + 1})`;
-
 export async function prepareGenerateParams({ data, files, referenceImageFields, preview = false }) {
-  if (data.quickEdit) {
-    const authoredPrompt = data.prompt;
-    const prefix = 'Edit the reference image: ';
-    const preservation = '. Keep everything else exactly as it is: composition, framing, subject, lighting, color and film look.';
-    data = { ...data, authoredPrompt, prompt: `${prefix}${authoredPrompt}${preservation}`,
-      promptAdditions: [...(data.promptAdditions || []),
-        { id: 'quick-edit-prefix', label: 'Reference edit instruction', text: prefix },
-        { id: 'quick-edit-preservation', label: 'Preserve the rest', text: preservation }],
-    };
-  }
+  if (data.quickEdit) data = withQuickEditInstruction(data);
   let profile = data.visualProfileOverride;
   if (profile === undefined && !data.musicVideo && data.universeRun?.universeId) {
     const { getUniverseVisualProfile } = await import('../universeBuilder/crud.js');
@@ -255,63 +335,20 @@ export async function prepareGenerateParams({ data, files, referenceImageFields,
   // below keys off these two, rather than respelling "carries input images"
   // per gate and having to keep the spellings in sync.
   const localModel = !data.mediaProviderPeerId && mode === IMAGE_GEN_MODE.LOCAL ? selectLocalImageModelFromSettings(settings, data.modelId, getImageModels(), localModelCandidates) : null;
+  const initInputCount = initUpload || data.initImageFile ? 1 : 0;
   if (data.musicVideo?.sceneId) {
-    if (!musicVideoProjectLoaded) musicVideoProject = await getMusicVideoProject(data.musicVideo.projectId).catch(() => null);
-    const scene = musicVideoProject?.scenes?.find((entry) => entry.sceneId === data.musicVideo.sceneId);
-    const { loadMusicVideoGreybox } = await import('../musicVideo/greyboxReferences.js');
-    const greybox = await loadMusicVideoGreybox(musicVideoProject, scene);
-    if (greybox) {
-      const fromFrame = data.musicVideo.fromFrame || data.musicVideo.refine;
-      const cachedCapture = data.musicVideo.greyboxImageId;
-      if (cachedCapture && cachedCapture !== greybox.reference.imageId) {
-        for (let i = namedReferenceFiles.length - 1; i >= 0; i--) {
-          if (namedReferenceFiles[i] === cachedCapture && !(fromFrame && i === 0)) namedReferenceFiles.splice(i, 1);
-        }
-      }
-      const existing = namedReferenceFiles.indexOf(greybox.reference.imageId);
-      if (!(fromFrame && existing === 0)) {
-        if (existing >= 0) namedReferenceFiles.splice(existing, 1);
-        namedReferenceFiles.splice(fromFrame ? Math.min(1, namedReferenceFiles.length) : 0, 0, greybox.reference.imageId);
-      }
-    }
-    if (data.musicVideo.compose) {
-      // The director's text plus each labeled block PortOS adds (#11317), from the
-      // composer the server's production run uses for the same still.
-      const composed = musicVideoFrameModelInput(musicVideoProject, scene, {
-        slot: data.musicVideo.slot === 'end' ? 'end' : 'start', authored: data.prompt || '', greybox,
-        fromFrame: data.musicVideo.fromFrame === true, refine: data.musicVideo.refine === true,
-        // The picked frame comes first; any reference after it is the shot's character or set reference.
-        otherReferences: Math.max(0, namedReferenceFiles.length + referenceUploads.length - 1),
-      });
-      data.prompt = composed.prompt;
-      if (composed.promptAdditions.length) data.promptAdditions = [...(data.promptAdditions || []), ...composed.promptAdditions];
-    }
-    if (greybox && !data.musicVideo.compose) {
-      data.prompt = [data.prompt, ...greybox.promptAdditions.map((a) => a.text)].filter(Boolean).join('\n');
-      data.promptAdditions = [...(data.promptAdditions || []), ...greybox.promptAdditions];
-    }
-    const reservedSlots = referenceUploads.length + (initUpload || data.initImageFile ? 1 : 0);
-    const capacity = Math.max(0, musicVideoStyleReferenceCapacity(mode, localModel) - reservedSlots);
-    const styles = musicVideoStyleImages(musicVideoProject, namedReferenceFiles, capacity);
-    // Named inputs precede uploads. Keep the latter's packed strength positions intact.
-    if (!referenceUploads.length) namedReferenceFiles.push(...styles);
-    const look = musicVideoStylePrompt(musicVideoProject, referenceUploads.length ? 0 : styles.length);
-    if (look) {
-      data.prompt = [data.prompt, look].filter(Boolean).join('. ');
-      data.promptAdditions = [...(data.promptAdditions || []), promptAddition('mood-board-style', 'Mood board style', look)];
-    }
+    const project = musicVideoProjectLoaded ? musicVideoProject : await getMusicVideoProject(data.musicVideo.projectId).catch(() => null);
+    await applyMusicVideoSceneInputs(data, { project, mode, localModel, namedReferenceFiles, referenceUploads, initInputCount });
   }
   const referenceImageCount = namedReferenceFiles.length + referenceUploads.length;
-  const inputImageCount = (initUpload || data.initImageFile ? 1 : 0) + referenceImageCount;
+  const inputImageCount = initInputCount + referenceImageCount;
   // Freeze the selected preference before capability checks. Explicit ids stay
   // untouched so the existing unknown/hardware rejection still applies.
   if (!data.modelId && localModel?.id) data.modelId = localModel.id;
   const selectedCloudModel = [IMAGE_GEN_MODE.RUNWAY, IMAGE_GEN_MODE.FAL].includes(mode)
     ? data.cloudModel || resolveCloudProviderConfig(settings, mode)?.modelId : null;
-  const referenceCap = data.mediaProviderPeerId ? IMAGE_REFERENCE_REQUEST_LIMIT : mode === IMAGE_GEN_MODE.RUNWAY ? maxInputImages(mode, selectedCloudModel)
-    : localModel?.pipelineClass === 'QwenImage21Pipeline' ? 10
-      : data.fableLoom && CLOUD_IMAGE_GEN_MODES.includes(mode)
-        ? Math.min(maxInputImages(mode, selectedCloudModel) ?? IMAGE_REFERENCE_REQUEST_LIMIT, IMAGE_REFERENCE_REQUEST_LIMIT) : 4;
+  const isQwen21 = localModel?.pipelineClass === QWEN_IMAGE_21_PIPELINE;
+  const referenceCap = referenceImageCap({ peerRouted: Boolean(data.mediaProviderPeerId), mode, isQwen21, fableLoom: data.fableLoom, cloudModel: selectedCloudModel });
   if (referenceImageCount > referenceCap) {
     cleanupReqFilesTemp();
     throw new ServerError(
@@ -367,8 +404,7 @@ export async function prepareGenerateParams({ data, files, referenceImageFields,
   // downstream — that would orphan files on disk and produce metadata sidecars
   // that lie about how the render was conditioned.
   if (!data.mediaProviderPeerId && referenceImageCount && mode === IMAGE_GEN_MODE.LOCAL) {
-    const candidate = localModel;
-    if (!isFlux2(candidate) && candidate?.pipelineClass !== 'QwenImage21Pipeline') {
+    if (!isFlux2(localModel) && !isQwen21) {
       cleanupReqFilesTemp();
       throw new ServerError(
         'Reference images are only supported for FLUX.2 and Qwen Image 2.1 models on the local backend',
@@ -385,7 +421,7 @@ export async function prepareGenerateParams({ data, files, referenceImageFields,
   // so this only fires for direct API callers — but a silent drop is exactly
   // the failure the sidecar-honesty rule exists to prevent. `resolveInputImages`
   // keeps its own cap as the backstop for in-process callers that skip the route.
-  const inputImageCap = data.mediaProviderPeerId ? null : localModel?.pipelineClass === 'QwenImage21Pipeline' ? 10 : maxInputImages(mode, selectedCloudModel);
+  const inputImageCap = data.mediaProviderPeerId ? null : isQwen21 ? 10 : maxInputImages(mode, selectedCloudModel);
   if (inputImageCap != null && inputImageCount > inputImageCap) {
     cleanupReqFilesTemp();
     throw new ServerError(
@@ -394,25 +430,27 @@ export async function prepareGenerateParams({ data, files, referenceImageFields,
     );
   }
 
-  let uploadIndex = 0;
-  if (!preview && (initUpload || referenceUploads.length)) await ensureDir(PATHS.imageRefs);
-  if (initUpload && preview) {
-    initImagePath = previewUploadLabel(uploadIndex++);
-  } else if (initUpload) {
+  // Stage into PATHS.imageRefs (sibling of the gallery), NOT PATHS.images —
+  // listGallery() enumerates every .png in PATHS.images, so an init upload
+  // landing there surfaces as a duplicate "(no prompt)" card in the gallery
+  // on every i2i/edit render. The runner re-anchors init paths through
+  // resolveImageInputPath, which accepts the refs dir.
+  const stageUpload = async (upload, prefix) => {
     // Trust the validated mimetype from the fileFilter — picking the ext
     // off the original filename can mismatch the bytes (e.g. HEIC saved
     // as .jpg). MIME_TO_EXT only contains formats the fileFilter accepts.
-    const ext = MIME_TO_EXT[(initUpload.mimetype || '').toLowerCase()] || '.png';
-    const initFilename = `init-${randomUUID()}${ext}`;
-    // Stage into PATHS.imageRefs (sibling of the gallery), NOT PATHS.images —
-    // listGallery() enumerates every .png in PATHS.images, so an init upload
-    // landing there surfaces as a duplicate "(no prompt)" card in the gallery
-    // on every i2i/edit render. The runner re-anchors init paths through
-    // resolveImageInputPath, which accepts the refs dir.
-    initImagePath = join(PATHS.imageRefs, initFilename);
-    await copyFileGuarded(initUpload.path, initImagePath);
-    stagedRefPaths.push(initImagePath);
-    uploadedTempPaths.push(initUpload.path);
+    const ext = MIME_TO_EXT[(upload.mimetype || '').toLowerCase()] || '.png';
+    const stagedPath = join(PATHS.imageRefs, `${prefix}-${randomUUID()}${ext}`);
+    await copyFileGuarded(upload.path, stagedPath);
+    stagedRefPaths.push(stagedPath);
+    uploadedTempPaths.push(upload.path);
+    return stagedPath;
+  };
+
+  let uploadIndex = 0;
+  if (!preview && (initUpload || referenceUploads.length)) await ensureDir(PATHS.imageRefs);
+  if (initUpload) {
+    initImagePath = preview ? previewUploadLabel(uploadIndex++) : await stageUpload(initUpload, 'init');
   } else if (data.initImageFile) {
     const resolved = resolveGalleryImage(data.initImageFile) || resolveImageInputPath(data.initImageFile);
     if (!resolved) {
@@ -436,8 +474,7 @@ export async function prepareGenerateParams({ data, files, referenceImageFields,
       );
     }
     referenceImagePaths.push(resolved);
-    const strength = data.referenceStrengths?.[index];
-    referenceImageStrengths.push(typeof strength === 'number' ? strength : 1.0);
+    referenceImageStrengths.push(referenceStrengthOrFull(data.referenceStrengths?.[index]));
   }
 
   // Multi-reference editing (FLUX.2). Walk packed slot entries in submit
@@ -445,21 +482,8 @@ export async function prepareGenerateParams({ data, files, referenceImageFields,
   // are filtered out above so the runner sees `referenceImagePaths: [p1, ...]`
   // and aligns strengths by index.
   for (const { upload, strength } of referenceUploads) {
-    if (preview) {
-      referenceImagePaths.push(previewUploadLabel(uploadIndex++));
-      referenceImageStrengths.push(typeof strength === 'number' ? strength : 1.0);
-      continue;
-    }
-    const ext = MIME_TO_EXT[(upload.mimetype || '').toLowerCase()] || '.png';
-    const refFilename = `ref-${randomUUID()}${ext}`;
-    const refPath = join(PATHS.imageRefs, refFilename);
-    await copyFileGuarded(upload.path, refPath);
-    stagedRefPaths.push(refPath);
-    uploadedTempPaths.push(upload.path);
-    referenceImagePaths.push(refPath);
-    // Default to 1.0 when the client didn't send a parallel strength entry,
-    // matching the "full influence" intent of an uploaded reference.
-    referenceImageStrengths.push(typeof strength === 'number' ? strength : 1.0);
+    referenceImagePaths.push(preview ? previewUploadLabel(uploadIndex++) : await stageUpload(upload, 'ref'));
+    referenceImageStrengths.push(referenceStrengthOrFull(strength));
   }
 
   // Strip the route-only fields — providers expect normalized `…Path(s)`.
@@ -560,11 +584,17 @@ export function resolveLocalImageModel(settings, params) {
   return { pythonPath, selectedModel };
 }
 
-/** Bind the reviewed composition and provider defaults, independently of reference bytes. */
-export function quickEditCompositionDigest({ params, mode, settings }) {
+/**
+ * Bind the reviewed composition and provider defaults. The edited image's bytes
+ * are pinned separately (the reviewed snapshot); the bytes of any further
+ * references are bound here, so a reference replaced after review is refused.
+ */
+export async function quickEditCompositionDigest({ params, mode, settings }) {
   const keys = ['prompt', 'negativePrompt', 'promptAdditions', 'width', 'height', 'modelId', 'cloudModel', 'effort', 'initImagePath', 'referenceImagePaths', 'referenceImageStrengths', 'mediaProviderPeerId', 'visualProfileRevision'];
+  const extraReferenceDigests = await Promise.all((params.referenceImagePaths || []).slice(1).map(reviewedReferenceDigest));
   return createHash('sha256').update(JSON.stringify({
     mode, imageGen: settings.imageGen,
     input: Object.fromEntries(keys.map(key => [key, params[key]])),
+    ...(extraReferenceDigests.length ? { extraReferenceDigests } : {}),
   })).digest('hex');
 }

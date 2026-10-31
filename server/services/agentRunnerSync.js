@@ -19,6 +19,8 @@ import { isAgentOwnedLocally, runnerAgents, spawningTasks } from './agentState.j
 import { AGENT_RECORD_UNREADABLE, isLiveAgentRecord, readAgentRecordOrUnreadable } from './cosAgentLifecycle.js';
 import { appendRunEvent } from './agentRunEventLog.js';
 import * as shellService from './shell.js';
+import { join } from 'path';
+import { PATHS, safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
 
 // Recovery cannot replay a paste safely: it may already be sitting unsent in
 // the composer. Stop only a PTY whose runner positively knows no task submit
@@ -217,4 +219,29 @@ export async function syncRunnerAgents() {
   }
 
   return syncedCount;
+}
+
+const toEpoch = (value) => (typeof value === 'number' ? value : Date.parse(value));
+
+/**
+ * The runner persists an exited agent's verdict to the flat
+ * `PATHS.cosAgents/<agentId>/metadata.json` BEFORE its fire-and-forget
+ * `agent:completed` broadcast, then forgets the agent. An exit while no server
+ * is connected (the restart window) loses only the broadcast, so the orphan
+ * sweep reads this receipt instead of inventing an orphan failure (#14261).
+ *
+ * Accepted only when it is a completion of THIS run: a numeric exit code, the
+ * record's task, and a completion no earlier than the record's start. A
+ * missing, unreadable or paused receipt (pause persists no verdict) is `null`.
+ */
+export async function readRunnerCompletionReceipt(agentId, { taskId, startedAt } = {}) {
+  const content = await tryReadFile(join(PATHS.cosAgents, agentId, 'metadata.json'));
+  const receipt = safeJSONParse(content, null, { allowArray: false });
+  if (!receipt || typeof receipt !== 'object' || !Number.isFinite(receipt.exitCode)) return null;
+  if (!taskId || receipt.taskId !== taskId) return null;
+  const completedAtMs = toEpoch(receipt.completedAt);
+  const startedAtMs = toEpoch(startedAt);
+  if (!Number.isFinite(completedAtMs) || !Number.isFinite(startedAtMs) || completedAtMs < startedAtMs) return null;
+  const duration = Number.isFinite(receipt.duration) ? receipt.duration : Math.max(0, completedAtMs - startedAtMs);
+  return { exitCode: receipt.exitCode, success: receipt.success === true, duration };
 }

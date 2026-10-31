@@ -195,7 +195,7 @@ export async function pushSyncEvents(accountId, calendarId, calendarName, rawEve
     status
   });
 
-  console.log(`📅 Google push sync for ${calendarName}: ${newCount} new, ${updatedCount} updated, ${pruned} pruned${shouldPrune ? '' : ' (prune skipped — partial payload)'}`);
+  console.log(`📅 Google push sync for account ${accountId}: ${newCount} new, ${updatedCount} updated, ${pruned} pruned${shouldPrune ? '' : ' (prune skipped — partial payload)'}`);
   return { newEvents: newCount, updated: updatedCount, pruned, total, status };
 }
 
@@ -243,7 +243,7 @@ async function runMcpSyncAccount(accountId, io) {
   if (enabledCalendars.length === 0) throw new ServerError('No enabled subcalendars', { status: 400 });
 
   io?.emit('calendar:sync:started', { accountId, method: 'mcp' });
-  console.log(`📅 Starting MCP sync for ${account.name} (${enabledCalendars.length} calendars)`);
+  console.log(`📅 Starting MCP sync for account ${accountId} (${enabledCalendars.length} calendars)`);
 
   const { pastDate, futureDate } = getSyncDateRange();
   const timeMin = pastDate.toISOString();
@@ -341,9 +341,9 @@ Include the full events arrays as returned by gcal_list_events, with every field
       ...(partial ? { reason } : {}),
     });
     if (partial) {
-      console.warn(`⚠️ MCP sync PARTIAL for ${account.name}: ${reason} — ${totalNew} new, ${totalUpdated} updated, ${totalPruned} pruned across ${results.length} calendars`);
+      console.warn(`⚠️ MCP sync PARTIAL for account ${accountId} — ${totalNew} new, ${totalUpdated} updated, ${totalPruned} pruned across ${results.length} calendars`);
     } else {
-      console.log(`📅 MCP sync complete for ${account.name}: ${totalNew} new, ${totalUpdated} updated, ${totalPruned} pruned across ${results.length} calendars`);
+      console.log(`📅 MCP sync complete for account ${accountId}: ${totalNew} new, ${totalUpdated} updated, ${totalPruned} pruned across ${results.length} calendars`);
     }
 
     return {
@@ -357,7 +357,7 @@ Include the full events arrays as returned by gcal_list_events, with every field
   };
 
   return runSync().catch(async (error) => {
-    console.error(`❌ MCP sync failed for ${account.name}: ${error.message}`);
+    console.error(`❌ MCP sync failed for account ${accountId}${error.code ? ` code=${error.code}` : ''}`);
     io?.emit('calendar:sync:failed', { accountId, error: error.message, method: 'mcp' });
     await updateSyncStatus(accountId, 'error').catch(() => {});
     throw error instanceof ServerError ? error : new ServerError(error.message, { status: 502 });
@@ -409,7 +409,7 @@ export async function mcpDiscoverCalendars(accountId, io) {
   if (!account) throw new ServerError('Account not found', { status: 404 });
   if (account.type !== 'google-calendar') throw new ServerError('Not a Google Calendar account', { status: 400 });
 
-  console.log(`📅 Discovering Google calendars for ${account.name} via MCP`);
+  console.log(`📅 Discovering Google calendars for account ${accountId} via MCP`);
   io?.emit('calendar:sync:progress', { accountId, message: 'Discovering calendars via Claude...' });
 
   const prompt = `You have access to Google Calendar MCP tools. Call gcal_list_calendars to list all available calendars. If there are more pages (nextPageToken), fetch all pages.
@@ -448,7 +448,7 @@ Output NOTHING else — just the JSON array.`;
 
   await updateSubcalendars(accountId, merged);
 
-  console.log(`📅 Discovered ${calendars.length} calendars for ${account.name}`);
+  console.log(`📅 Discovered ${calendars.length} calendars for account ${accountId}`);
   return { calendars: merged, status: 'success' };
 }
 

@@ -10,16 +10,26 @@ import GalleryImagePicker from '../imageGen/GalleryImagePicker';
 import IngredientPicker from '../IngredientPicker';
 import useDrawerTab from '../../hooks/useDrawerTab';
 import { listCatalogIngredientsByIds } from '../../services/api';
-import { SHOT_TYPES, SHOT_TYPE_LABELS } from '../../lib/shotGrammar';
 import { STORYBOARD_LIMITS } from '../../../../server/lib/storyboardVocabulary.js';
+import {
+  SHOT_ANGLES, SHOT_ANGLE_HINTS, SHOT_ANGLE_LABELS, SHOT_COMPOSITIONS, SHOT_COMPOSITION_HINTS, SHOT_COMPOSITION_LABELS,
+  SHOT_EYELINES, SHOT_EYELINE_HINTS, SHOT_EYELINE_LABELS, SHOT_FACINGS, SHOT_FACING_HINTS, SHOT_FACING_LABELS,
+  SHOT_FOCUSES, SHOT_FOCUS_HINTS, SHOT_FOCUS_LABELS, SHOT_LENSES, SHOT_LENS_HINTS, SHOT_LENS_LABELS,
+  SHOT_MOVES, SHOT_MOVE_HINTS, SHOT_MOVE_LABELS,
+  SHOT_TYPES, SHOT_TYPE_HINTS, SHOT_TYPE_LABELS,
+} from '../../lib/shotGrammar';
 import CommitField from './CommitField';
+import ShotDiagramPicker from './ShotDiagramPicker';
 import MoodBoardPinPicker from './MoodBoardPinPicker';
+import DrawPanelButton from './DrawPanelButton';
+import PanelCorrection from './PanelCorrection';
 import PanelMakeTab from './PanelMakeTab';
+import PanelSongTiming from './PanelSongTiming';
 import { aspectClass, selectedTake, takeSrc } from './storyboardArt';
 
 const TABS = [
   { id: 'shot', label: 'Shot', icon: Clapperboard },
-  { id: 'make', label: 'Make', icon: Wand2 },
+  { id: 'make', label: 'Prompts', icon: Wand2 },
   { id: 'cast', label: 'Cast & sets', icon: Users },
   { id: 'notes', label: 'Notes', icon: StickyNote },
 ];
@@ -35,23 +45,37 @@ const actionButton = 'min-h-[44px] inline-flex items-center justify-center gap-1
 const iconButton = 'min-h-[44px] min-w-[44px] inline-flex items-center justify-center rounded text-gray-400 hover:text-white hover:bg-port-border/50 disabled:opacity-30 disabled:pointer-events-none';
 const labelClass = 'block text-[11px] text-gray-500 mb-0.5';
 
-function ArtSection({ panel, aspectRatio, sketchNonce, moodBoardId, busy, onAddTake, onSelectTake, onRemoveTake, onSketch, onSendToScene, sendLabel }) {
+function ArtSection({ panel, aspectRatio, sketchNonce, moodBoardId, busy, onAddTake, onSelectTake, onRemoveTake, onSketch, onSendToScene, sendLabel, onCorrect }) {
   const [galleryOpen, setGalleryOpen] = useState(false);
+  // `?correct=open` keeps the open correction across a reload or deep link.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const correcting = searchParams.get('correct') === 'open';
+  const setCorrecting = (on) => setSearchParams((prev) => {
+    const next = new URLSearchParams(prev);
+    if (on) next.set('correct', 'open');
+    else next.delete('correct');
+    return next;
+  }, { replace: true });
   const [sending, setSending] = useState(false);
   const [pinsOpen, setPinsOpen] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
   const take = selectedTake(panel);
   const src = takeSrc(take, sketchNonce(take?.sketchKey));
+  const canCorrect = !!(onCorrect && take?.image);
 
   return (
     <div className="space-y-2">
-      <div className={`${aspectClass(aspectRatio)} w-full rounded-lg border border-port-border bg-port-bg overflow-hidden flex items-center justify-center`}>
-        {src ? (
-          <img src={src} alt="Selected panel art" className="w-full h-full object-contain" />
-        ) : (
-          <p className="text-xs text-gray-500">No art yet</p>
-        )}
-      </div>
+      {canCorrect && correcting ? (
+        <PanelCorrection key={take.id} take={take} onCorrect={onCorrect} onClose={() => setCorrecting(false)} />
+      ) : (
+        <div className={`${aspectClass(aspectRatio)} w-full rounded-lg border border-port-border bg-port-bg overflow-hidden flex items-center justify-center`}>
+          {src ? (
+            <img src={src} alt="Selected panel art" className="w-full h-full object-contain" />
+          ) : (
+            <p className="text-xs text-gray-500">No art yet</p>
+          )}
+        </div>
+      )}
       {panel.takes.length > 1 ? (
         <ul className="flex gap-1.5 overflow-x-auto pb-1" aria-label="Takes">
           {panel.takes.map((item, index) => (
@@ -78,9 +102,15 @@ function ArtSection({ panel, aspectRatio, sketchNonce, moodBoardId, busy, onAddT
         <button type="button" className={actionButton} onClick={() => setGalleryOpen(true)} disabled={busy}>
           <ImagePlus size={16} aria-hidden="true" /> Pick or upload
         </button>
-        <button type="button" className={actionButton} onClick={onSketch} disabled={busy}>
-          {busy ? <Loader2 size={16} className="animate-spin" aria-hidden="true" /> : <PenLine size={16} aria-hidden="true" />} Sketch
-        </button>
+        {canCorrect ? (
+          <button type="button" className={actionButton} onClick={() => setCorrecting(true)} disabled={busy || correcting}>
+            <PenLine size={16} aria-hidden="true" /> Draw on frame
+          </button>
+        ) : (
+          <button type="button" className={actionButton} onClick={onSketch} disabled={busy}>
+            {busy ? <Loader2 size={16} className="animate-spin" aria-hidden="true" /> : <PenLine size={16} aria-hidden="true" />} Sketch
+          </button>
+        )}
         {moodBoardId ? (
           <button type="button" className={actionButton} onClick={() => setPinsOpen(true)} disabled={busy}>
             <Palette size={16} aria-hidden="true" /> Mood board
@@ -114,7 +144,7 @@ function ArtSection({ panel, aspectRatio, sketchNonce, moodBoardId, busy, onAddT
   );
 }
 
-function ShotTab({ board, found, panelNumber, sketchNonce, busy, handlers }) {
+function ShotTab({ board, found, panelNumber, sketchNonce, busy, handlers, timing, songTiming }) {
   const { panel, beat, beatIndex, index } = found;
   const [confirmDelete, setConfirmDelete] = useState(false);
   // A panel made from a production's scene or shot can send its art back there.
@@ -146,6 +176,7 @@ function ShotTab({ board, found, panelNumber, sketchNonce, busy, handlers }) {
         onSelectTake={handlers.onSelectTake}
         onRemoveTake={handlers.onRemoveTake}
         onSketch={handlers.onSketch}
+        onCorrect={handlers.onCorrect}
         onSendToScene={sendLabel ? handlers.onSendToScene : null}
         sendLabel={sendLabel}
       />
@@ -154,34 +185,66 @@ function ShotTab({ board, found, panelNumber, sketchNonce, busy, handlers }) {
         <CommitField id={fieldId('action')} multiline value={panel.action} maxLength={STORYBOARD_LIMITS.panelText}
           placeholder="What we see" onCommit={(action) => handlers.onPatch({ action })} />
       </div>
-      <div>
-        <label htmlFor={fieldId('dialogue')} className={labelClass}>Dialogue or lyric</label>
-        <CommitField id={fieldId('dialogue')} multiline value={panel.dialogue} maxLength={STORYBOARD_LIMITS.panelText}
-          onCommit={(dialogue) => handlers.onPatch({ dialogue })} />
-      </div>
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+      {songTiming?.span ? (
+        <PanelSongTiming panel={panel} span={songTiming.span} lyricCues={songTiming.lyricCues} onPatch={handlers.onPatch} />
+      ) : null}
+      {timing ? (
         <div>
-          <label htmlFor={fieldId('framing')} className={labelClass}>Framing</label>
-          <select id={fieldId('framing')} value={panel.framing || ''}
-            onChange={(event) => handlers.onPatch({ framing: event.target.value || null })}
-            className="w-full min-h-[44px] bg-port-bg border border-port-border rounded px-2 text-sm text-white">
-            <option value="">Not set</option>
-            {SHOT_TYPES.map((type) => <option key={type} value={type}>{SHOT_TYPE_LABELS[type] || type}</option>)}
-          </select>
+          <label htmlFor={fieldId('dialogue')} className={labelClass}>Dialogue or lyric</label>
+          <CommitField id={fieldId('dialogue')} multiline value={panel.dialogue} maxLength={STORYBOARD_LIMITS.panelText}
+            onCommit={(dialogue) => handlers.onPatch({ dialogue })} />
         </div>
+      ) : null}
+      <div>
+        <span id={fieldId('framing')} className={labelClass}>Framing</span>
+        <ShotDiagramPicker options={SHOT_TYPES} labels={SHOT_TYPE_LABELS} hints={SHOT_TYPE_HINTS}
+          value={panel.framing} labelId={fieldId('framing')} onChange={(framing) => handlers.onPatch({ framing })} />
+      </div>
+      <div>
+        <span id={fieldId('angle')} className={labelClass}>Angle</span>
+        <ShotDiagramPicker options={SHOT_ANGLES} labels={SHOT_ANGLE_LABELS} hints={SHOT_ANGLE_HINTS}
+          value={panel.angle} labelId={fieldId('angle')} onChange={(angle) => handlers.onPatch({ angle })} />
+      </div>
+      <div>
+        <span id={fieldId('facing')} className={labelClass}>Subject to camera</span>
+        <ShotDiagramPicker options={SHOT_FACINGS} labels={SHOT_FACING_LABELS} hints={SHOT_FACING_HINTS}
+          value={panel.facing} labelId={fieldId('facing')} onChange={(facing) => handlers.onPatch({ facing })} />
+      </div>
+      <div>
+        <span id={fieldId('eyeline')} className={labelClass}>Eyeline</span>
+        <ShotDiagramPicker options={SHOT_EYELINES} labels={SHOT_EYELINE_LABELS} hints={SHOT_EYELINE_HINTS}
+          value={panel.eyeline} labelId={fieldId('eyeline')} onChange={(eyeline) => handlers.onPatch({ eyeline })} />
+      </div>
+      <div>
+        <span id={fieldId('composition')} className={labelClass}>Composition</span>
+        <ShotDiagramPicker options={SHOT_COMPOSITIONS} labels={SHOT_COMPOSITION_LABELS} hints={SHOT_COMPOSITION_HINTS}
+          value={panel.composition} labelId={fieldId('composition')} onChange={(composition) => handlers.onPatch({ composition })} />
+      </div>
+      <div>
+        <span id={fieldId('lens')} className={labelClass}>Lens</span>
+        <ShotDiagramPicker options={SHOT_LENSES} labels={SHOT_LENS_LABELS} hints={SHOT_LENS_HINTS}
+          value={panel.lens} labelId={fieldId('lens')} onChange={(lens) => handlers.onPatch({ lens })} />
+      </div>
+      <div>
+        <span id={fieldId('focus')} className={labelClass}>Focus</span>
+        <ShotDiagramPicker options={SHOT_FOCUSES} labels={SHOT_FOCUS_LABELS} hints={SHOT_FOCUS_HINTS}
+          value={panel.focus} labelId={fieldId('focus')} onChange={(focus) => handlers.onPatch({ focus })} />
+      </div>
+      <div>
+        <span id={fieldId('move')} className={labelClass}>Camera move (video)</span>
+        <ShotDiagramPicker options={SHOT_MOVES} labels={SHOT_MOVE_LABELS} hints={SHOT_MOVE_HINTS}
+          value={panel.move} labelId={fieldId('move')} onChange={(move) => handlers.onPatch({ move })} />
+      </div>
+      {timing ? (
         <div>
           <label htmlFor={fieldId('seconds')} className={labelClass}>Seconds (estimate)</label>
           <input id={fieldId('seconds')} type="number" inputMode="decimal" min="0.01" step="0.01" max={STORYBOARD_LIMITS.panelSecondsMax}
             value={secondsDraft} onChange={(event) => setSecondsDraft(event.target.value)} onBlur={commitSeconds}
             onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); }}
-            className="w-full min-h-[44px] bg-port-bg border border-port-border rounded px-2 text-sm text-white tabular-nums" />
+            className="w-full max-w-[10rem] min-h-[44px] bg-port-bg border border-port-border rounded px-2 text-sm text-white tabular-nums" />
         </div>
-        <div className="col-span-2 sm:col-span-1">
-          <label htmlFor={fieldId('camera')} className={labelClass}>Camera</label>
-          <CommitField id={fieldId('camera')} value={panel.camera} maxLength={STORYBOARD_LIMITS.camera}
-            placeholder="e.g. slow push in" onCommit={(camera) => handlers.onPatch({ camera })} />
-        </div>
-      </div>
+      ) : null}
+      <DrawPanelButton panel={panel} onDraw={handlers.onDraw} disabled={busy} />
       <div className="flex flex-wrap items-center gap-2 border-t border-port-border pt-3">
         <button type="button" className={iconButton} onClick={() => handlers.onMove({ index: index - 1 })} disabled={index === 0} aria-label="Move panel earlier">
           <ChevronLeft size={18} />
@@ -200,8 +263,16 @@ function ShotTab({ board, found, panelNumber, sketchNonce, busy, handlers }) {
             </select>
           </>
         ) : null}
-        <button type="button" className={`${iconButton} ml-auto hover:text-port-error`} onClick={() => setConfirmDelete(true)} aria-label="Delete panel">
-          <Trash2 size={18} />
+      </div>
+      <div className="flex flex-wrap gap-2">
+        <button type="button" className={actionButton} onClick={() => handlers.onInsert(index)} disabled={busy}>
+          <Plus size={16} aria-hidden="true" /> Insert before
+        </button>
+        <button type="button" className={actionButton} onClick={() => handlers.onInsert(index + 1)} disabled={busy}>
+          <Plus size={16} aria-hidden="true" /> Insert after
+        </button>
+        <button type="button" className={`${actionButton} ml-auto hover:text-port-error`} onClick={() => setConfirmDelete(true)}>
+          <Trash2 size={16} aria-hidden="true" /> Delete panel
         </button>
       </div>
       {confirmDelete ? (
@@ -290,15 +361,15 @@ function CastTab({ panel, onPatch }) {
 }
 
 /**
- * The open panel, deep-linked at `/storyboards/:id/panel/:panelId` with the
- * tab in `?panelTab=`. Every field saves on its own; the parent applies the
- * board each write returns.
+ * The open panel in the side panel, deep-linked at `<boardPath>/panel/:panelId`
+ * with the tab in `?panelTab=`; `onStep(delta)` opens the previous or next
+ * panel in story order (`onStep(delta, true)` only asks whether there is one).
+ * Every field saves on its own; the parent applies the board each write returns.
+ * On a music video's board `songTiming` (`{ span, lyricCues }`) shows the
+ * panel's time on the song and the line sung over it, and sets its length.
  */
-export default function PanelDrawer({ open, board, found, panelNumber, sketchNonce, busy, onClose, handlers }) {
+export default function PanelDrawer({ open, board, found, panelNumber, sketchNonce, busy, onClose, onStep, handlers, timing = true, songTiming = null }) {
   const [activeTab, setActiveTab] = useDrawerTab('panelTab', 'shot', TAB_IDS);
-  const [searchParams] = useSearchParams();
-  // The recipe canvas (desktop) needs the room; every other tab stays a column.
-  const wide = activeTab === 'make' && searchParams.get('makeView') === 'canvas';
 
   return (
     <Drawer
@@ -306,11 +377,21 @@ export default function PanelDrawer({ open, board, found, panelNumber, sketchNon
       onClose={onClose}
       title={found ? `Panel ${panelNumber}` : 'Panel'}
       subtitle={found ? (found.beat.title || `Beat ${found.beatIndex + 1}`) : undefined}
-      size={wide ? 'xl' : 'md'}
+      size="xl"
       tabs={found ? TABS : null}
       activeTab={activeTab}
       onTabChange={setActiveTab}
       closeLabel="Close panel"
+      headerActions={onStep ? (
+        <>
+          <button type="button" className={iconButton} aria-label="Previous panel" disabled={!onStep(-1, true)} onClick={() => onStep(-1)}>
+            <ChevronLeft size={18} aria-hidden="true" />
+          </button>
+          <button type="button" className={iconButton} aria-label="Next panel" disabled={!onStep(1, true)} onClick={() => onStep(1)}>
+            <ChevronRight size={18} aria-hidden="true" />
+          </button>
+        </>
+      ) : null}
     >
       {!found ? (
         <p className="text-sm text-gray-400">This panel is no longer on the storyboard.</p>
@@ -325,7 +406,7 @@ export default function PanelDrawer({ open, board, found, panelNumber, sketchNon
             maxLength={STORYBOARD_LIMITS.notes} onCommit={(notes) => handlers.onPatch({ notes })} />
         </div>
       ) : (
-        <ShotTab board={board} found={found} panelNumber={panelNumber} sketchNonce={sketchNonce} busy={busy} handlers={handlers} />
+        <ShotTab board={board} found={found} panelNumber={panelNumber} sketchNonce={sketchNonce} busy={busy} handlers={handlers} timing={timing} songTiming={songTiming} />
       )}
     </Drawer>
   );

@@ -61,7 +61,7 @@ import {
 import { familyForProvider } from '../lib/providerFamilies.js';
 import { commandBasename } from '../lib/providerModels.js';
 import { summarizeOpenCodeEvents } from '../lib/opencodeStream.js';
-import { markUsageRunReconciled, recordRunUsage } from './usage.js';
+import { recordRunUsage } from './usage.js';
 import { grokTurnRepairId } from './grokUsageRepair.js';
 
 // Widen the correlation window past the recorded run bounds: the CLI writes its
@@ -1000,10 +1000,9 @@ async function recordCompletedRunUsageUnguarded(metadata, output, { home = homed
   // One catch for the whole chain: whatever fails — reading a transcript or
   // persisting the record — usage accounting must not surface as a run failure.
   await reconcileRunUsage(metadata, estimate, { home, providers: resolved, estimateSource })
-    .then(recordRunUsage)
+    .then((records) => recordRunUsage(records, { reconciledRunId: metadata?.id ?? null, siblings: siblingsScanned }))
     .then(async () => {
       if (!metadata?.id) return;
-      await markUsageRunReconciled(metadata.id, { siblings: siblingsScanned });
       const metadataPath = join(PATHS.runs, metadata.id, 'metadata.json');
       // Non-strict exception: missing/unreadable metadata skips the marker
       // write; the usage ledger remains authoritative for the accounting.

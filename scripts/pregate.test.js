@@ -245,7 +245,7 @@ describe('pregate hidden-content invocation', () => {
       'lib/gitMergeTree.js', 'scripts/pregate.js', 'scripts/checkNodeVersion.js', 'scripts/scan-diff-hidden-content.js',
       'scripts/ci-test-plan.js', 'scripts/ci-base-sha.js', 'server/lib/staticImportGraph.js',
       'scripts/lib/directInvocation.js', 'scripts/lib/importReach.js', 'scripts/lib/workspaceTests.js', 'scripts/lib/browserFidelity.js', 'scripts/lib/browserTestProfiles.js', 'scripts/lib/githubOutput.js', 'scripts/lib/dbTestFiles.js',
-      'scripts/lib/browserSuites.js', 'scripts/lib/sourceTokens.js', 'scripts/lib/workspaceDependencies.js', 'scripts/lib/pregateReport.js', 'scripts/lib/cosWorkerBudget.js', 'scripts/lib/pregateAttestation.js',
+      'scripts/lib/browserSuites.js', 'scripts/lib/sourceTokens.js', 'scripts/lib/workspaceDependencies.js', 'scripts/lib/pregateReport.js', 'scripts/lib/cosWorkerBudget.js',
       'scripts/migrations/shippedPromptHistory.js', 'server/lib/aiToolkit/internal/windowsSafeSpawn.js',
       'server/lib/diffHiddenContentScan.js', 'server/lib/modelAbuseGuard.js',
       'server/lib/textUtils.js',
@@ -883,6 +883,42 @@ describe('pregate hidden-content invocation', () => {
     expect(result.stdout).not.toContain('Pregate passed');
   });
 
+  it.skipIf(process.platform === 'win32')('reports a stage that cannot be spawned as failed with exit 1', () => {
+    const preload = join(scratch, 'spawn-error.cjs');
+    writeFileSync(preload, `
+      const cp = require('child_process');
+      const spawn = cp.spawn;
+      cp.spawn = (command, args, options) => spawn('/nonexistent/pregate-fixture-binary', [], options);
+    `);
+    const result = spawnSync(process.execPath, ['--require', preload, 'scripts/pregate.js', '--base', base, '--skip-lint'], {
+      cwd: root, encoding: 'utf8',
+    });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toMatch(/❌ hidden-content scan could not start: spawn \/nonexistent\/pregate-fixture-binary ENOENT/);
+    expect(result.stdout).not.toContain('Pregate passed');
+    const report = JSON.parse(readFileSync(join(root, PREGATE_REPORT_PATH), 'utf8'));
+    expect(report.stages[0]).toMatchObject({ name: 'hidden-content scan', status: 'failed' });
+  });
+
+  it.skipIf(process.platform === 'win32')('reports a stage group that cannot be stopped as failed with exit 1', () => {
+    const preload = join(scratch, 'unsettled-group.cjs');
+    writeFileSync(preload, `
+      const kill = process.kill.bind(process);
+      process.kill = (pid, signal) => {
+        if (pid < 0 && signal === 'SIGKILL') throw Object.assign(new Error('denied'), { code: 'EACCES' });
+        return kill(pid, signal);
+      };
+    `);
+    const result = spawnSync(process.execPath, ['--require', preload, 'scripts/pregate.js', '--base', base, '--skip-lint'], {
+      cwd: root, encoding: 'utf8',
+    });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toMatch(/❌ hidden-content scan left processes in its group that could not be stopped \(group kill failed \(EACCES\); pgid=\d+;/);
+    expect(result.stdout).not.toContain('Pregate passed');
+    const report = JSON.parse(readFileSync(join(root, PREGATE_REPORT_PATH), 'utf8'));
+    expect(report.stages[0]).toMatchObject({ name: 'hidden-content scan', status: 'failed' });
+  });
+
   it('passes clean uncommitted changes even when the plan selects no lint or tests', () => {
     git('config', 'core.autocrlf', 'true');
     write(trackedPath, `${clean}staged\n`);
@@ -1244,7 +1280,7 @@ describe('the gate end to end', () => {
         'lib/gitMergeTree.js', 'scripts/pregate.js', 'scripts/checkNodeVersion.js', 'scripts/scan-diff-hidden-content.js',
         'scripts/ci-test-plan.js', 'scripts/ci-base-sha.js', 'server/lib/staticImportGraph.js',
         'scripts/lib/directInvocation.js', 'scripts/lib/importReach.js', 'scripts/lib/workspaceTests.js', 'scripts/lib/browserFidelity.js', 'scripts/lib/browserTestProfiles.js', 'scripts/lib/githubOutput.js', 'scripts/lib/dbTestFiles.js',
-        'scripts/lib/browserSuites.js', 'scripts/lib/sourceTokens.js', 'scripts/lib/workspaceDependencies.js', 'scripts/lib/pregateReport.js', 'scripts/lib/cosWorkerBudget.js', 'scripts/lib/pregateAttestation.js',
+        'scripts/lib/browserSuites.js', 'scripts/lib/sourceTokens.js', 'scripts/lib/workspaceDependencies.js', 'scripts/lib/pregateReport.js', 'scripts/lib/cosWorkerBudget.js',
         'scripts/migrations/shippedPromptHistory.js', 'server/lib/aiToolkit/internal/windowsSafeSpawn.js',
         'server/lib/diffHiddenContentScan.js', 'server/lib/modelAbuseGuard.js',
         'server/lib/textUtils.js', 'server/lib/workspaceTestCacheRoots.js',

@@ -24,7 +24,7 @@ const slugify = (s) => String(s || '').toLowerCase().trim().replace(/[^a-z0-9]+/
 const emptyDraft = () => ({ id: '', label: '', primaryContentKey: '', fields: [] });
 
 export function CatalogTypesTab() {
-  const { types, refresh, loading } = useCatalogTypes();
+  const { types, refresh, loading, error } = useCatalogTypes();
   const systemTypes = types.filter((t) => t.system !== false);
   const userTypes = types.filter((t) => t.system === false);
 
@@ -140,7 +140,16 @@ export function CatalogTypesTab() {
         {/* User types */}
         <div>
           <h4 className="text-xs uppercase tracking-wider text-gray-500 mb-2">Your types</h4>
-          {userTypes.length === 0 && editing !== 'new' && (
+          {error && (
+            <div role="alert" className="flex flex-wrap items-center justify-between gap-3 p-3 mb-2 bg-port-bg border border-port-error/40 rounded">
+              <p className="text-sm text-port-error">Couldn't load your custom types. Retry before adding or editing one.</p>
+              <button type="button" onClick={refresh} disabled={loading}
+                className="px-3 py-1.5 rounded border border-port-border text-gray-300 hover:text-white text-sm disabled:opacity-40">
+                Retry
+              </button>
+            </div>
+          )}
+          {!error && userTypes.length === 0 && editing !== 'new' && (
             <p className="text-sm text-gray-500">No custom types yet.</p>
           )}
           <div className="space-y-2">

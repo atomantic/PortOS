@@ -743,14 +743,14 @@ export default function GitTab({ appId, appName, repoPath }) {
                       {file.staged ? (
                         <button
                           onClick={() => handleUnstage(file.path)}
-                          className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 focus-visible:opacity-100 text-xs text-gray-400 hover:text-white"
+                          className="opacity-100 [@media(hover:hover)]:sm:opacity-0 sm:group-hover:opacity-100 focus-visible:opacity-100 text-xs text-gray-400 hover:text-white"
                         >
                           Unstage
                         </button>
                       ) : (
                         <button
                           onClick={() => handleStage(file.path)}
-                          className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 focus-visible:opacity-100 text-xs text-gray-400 hover:text-white"
+                          className="opacity-100 [@media(hover:hover)]:sm:opacity-0 sm:group-hover:opacity-100 focus-visible:opacity-100 text-xs text-gray-400 hover:text-white"
                         >
                           Stage
                         </button>

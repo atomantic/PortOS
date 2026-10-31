@@ -7,7 +7,8 @@
 import { z } from 'zod';
 import {
   STORYBOARD_ART_STYLES, STORYBOARD_ASPECT_RATIOS, STORYBOARD_LIMITS as L, STORYBOARD_MUSICAL_ROLES,
-  STORYBOARD_PANEL_FRAMINGS, STORYBOARD_TAKE_SOURCES,
+  STORYBOARD_PANEL_ANGLES, STORYBOARD_PANEL_COMPOSITIONS, STORYBOARD_PANEL_EYELINES, STORYBOARD_PANEL_FACINGS, STORYBOARD_PANEL_FOCUSES,
+  STORYBOARD_PANEL_FRAMINGS, STORYBOARD_PANEL_LENSES, STORYBOARD_PANEL_MOVES, STORYBOARD_TAKE_SOURCES,
 } from './storyboardVocabulary.js';
 import { RECIPE_LIMITS as R, RECIPE_NODE_TYPES, RECIPE_PORT_LABELS } from './storyboardRecipe.js';
 import { BEAT_EXTRACT_LIMITS } from './storyboardBeatExtract.js';
@@ -49,6 +50,7 @@ const beatFields = {
   musicalRole: z.enum(STORYBOARD_MUSICAL_ROLES).nullable().optional(),
   sectionHint: text(L.sectionHint).optional(),
   pin: entityId.nullable().optional(),
+  beforeSong: z.boolean().optional(),
 };
 
 export const storyboardBeatCreateSchema = z.object({ ...beatFields, index: position.optional() }).strict();
@@ -59,6 +61,13 @@ const panelFields = {
   action: text(L.panelText).optional(),
   dialogue: text(L.panelText).optional(),
   framing: z.enum(STORYBOARD_PANEL_FRAMINGS).nullable().optional(),
+  angle: z.enum(STORYBOARD_PANEL_ANGLES).nullable().optional(),
+  facing: z.enum(STORYBOARD_PANEL_FACINGS).nullable().optional(),
+  composition: z.enum(STORYBOARD_PANEL_COMPOSITIONS).nullable().optional(),
+  move: z.enum(STORYBOARD_PANEL_MOVES).nullable().optional(),
+  lens: z.enum(STORYBOARD_PANEL_LENSES).nullable().optional(),
+  focus: z.enum(STORYBOARD_PANEL_FOCUSES).nullable().optional(),
+  eyeline: z.enum(STORYBOARD_PANEL_EYELINES).nullable().optional(),
   camera: text(L.camera).optional(),
   seconds: z.number().positive().max(L.panelSecondsMax).nullable().optional(),
   castIds: refs.optional(),
@@ -120,6 +129,18 @@ export const storyboardPanelNodeUpdateSchema = z.object({
   extraRefs: z.array(recipeImage).max(R.images).optional(),
 }).strict();
 
+// Make empty panels, or Redraw all (every panel, one new frame each).
+export const storyboardMakeEmptySchema = z.object({
+  redraw: z.boolean().optional(),
+  selectNew: z.boolean().optional(),
+}).strict();
+
+// A frame correction: the take it starts from and the director's note.
+export const storyboardPanelCorrectSchema = z.object({
+  takeId: entityId,
+  note: z.string().trim().min(1).max(L.panelText),
+}).strict();
+
 // Beats from a plot summary: the plot and the LLM pick (blank = the active provider).
 const llmField = z.string().trim().max(256).optional();
 export const storyboardPlotExtractSchema = z.object({
@@ -154,6 +175,17 @@ export const storyboardFitSchema = z.object({
   starts: z.record(entityId, z.number().min(0).max(36000))
     .refine((starts) => Object.keys(starts).length <= L.beats, { message: `At most ${L.beats} picked starts` }).optional(),
 }).strict();
+
+// Sync shots: the board and shot revisions the preview was built from, and
+// whether locked shots no panel keeps go too.
+export const storyboardShotSyncSchema = z.object({
+  boardUpdatedAt: z.string().min(1).max(64),
+  projectUpdatedAt: z.string().min(1).max(64).optional(),
+  removeLocked: z.boolean().optional(),
+}).strict();
+
+// Keep a video's shots in sync with its board after each edit (on), or stop (off).
+export const storyboardShotSyncAutoSchema = z.object({ on: z.boolean() }).strict();
 
 // Update a pipeline issue's shots from its board: every edited panel, or one shot's.
 export const storyboardPipelineUpdateSchema = z.object({

@@ -126,7 +126,7 @@ describe('pipeline episodeVideo helper', () => {
     })).toThrow(/no scenes/i);
   });
 
-  it('buildTreatmentFromStoryboards expands shots[] into per-shot CD scenes with within-scene chaining', () => {
+  it('buildTreatmentFromStoryboards expands shots[] into per-shot CD scenes; only explicit continuity chains', () => {
     const treatment = svc.buildTreatmentFromStoryboards({
       series: { logline: 'L', styleNotes: 's' },
       issue: {
@@ -162,9 +162,11 @@ describe('pipeline episodeVideo helper', () => {
     expect(treatment.scenes).toHaveLength(5);
     // First scene's first shot → fresh angle.
     expect(treatment.scenes[0].useContinuationFromPrior).toBe(false);
-    // Within-scene shots chain (i2v continuation).
+    // Only the shot with continuityFromShotId chains; a plain later shot is a new angle.
     expect(treatment.scenes[1].useContinuationFromPrior).toBe(true);
-    expect(treatment.scenes[2].useContinuationFromPrior).toBe(true);
+    expect(treatment.scenes[1].prompt).not.toContain('Previous shot ended with');
+    expect(treatment.scenes[2].useContinuationFromPrior).toBe(false);
+    expect(treatment.scenes[2].prompt).toContain('Previous shot ended with: push in on the kettle.');
     // First shot of the SECOND storyboard scene resets the chain (deliberate cut).
     expect(treatment.scenes[3].useContinuationFromPrior).toBe(false);
     expect(treatment.scenes[4].useContinuationFromPrior).toBe(true);
@@ -176,6 +178,26 @@ describe('pipeline episodeVideo helper', () => {
     // CD scene id encodes both storyboard scene and shot index.
     expect(treatment.scenes[0].sceneId).toMatch(/-s1-sh1$/);
     expect(treatment.scenes[3].sceneId).toMatch(/-s2-sh1$/);
+  });
+
+  it('buildTreatmentFromStoryboards starts every shot fresh when no continuity is set, and honors handoff: continue', () => {
+    const build = (shots) => svc.buildTreatmentFromStoryboards({
+      series: { logline: 'L', styleNotes: 's' },
+      issue: { id: 'iss-cccccccc', title: 'P', stages: { storyboards: { scenes: [{ slugline: 'INT.', description: 'd', shots }] } } },
+    }).scenes;
+    const fresh = build([
+      { id: 'a', description: 'wide room. A door opens.' },
+      { id: 'b', description: 'tracking shot' },
+      { id: 'c', description: 'close on hands' },
+    ]);
+    expect(fresh.map((s) => s.useContinuationFromPrior)).toEqual([false, false, false]);
+    expect(fresh[1].prompt).toContain('Previous shot ended with: A door opens.');
+    const handoff = build([
+      { id: 'a', description: 'wide room' },
+      { id: 'b', description: 'same take, closer', handoff: 'continue' },
+    ]);
+    expect(handoff.map((s) => s.useContinuationFromPrior)).toEqual([false, true]);
+    expect(handoff[1].prompt).not.toContain('Previous shot ended with');
   });
 
   it('buildTreatmentFromStoryboards falls back to one CD scene per storyboard scene when shots[] is empty', () => {

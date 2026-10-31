@@ -18,7 +18,7 @@ import { fableLoomMultipartUnsupported, prepareFableLoomImageParams } from '../s
 import { finishVisualProfileImage } from '../services/imageGen/finishVisualProfile.js';
 import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.js';
 import {
-  validateRequest, modelDownloadQuerySchema, modelDownloadParamsSchema, imageCancelBodySchema, imageVisibilityBodySchema, imageEdgeSchema, refineImagePixelCap, PIXEL_CAP_MESSAGE,
+  validateRequest, mediaDeleteQuerySchema, modelDownloadQuerySchema, modelDownloadParamsSchema, imageCancelBodySchema, imageVisibilityBodySchema, imageEdgeSchema, refineImagePixelCap, PIXEL_CAP_MESSAGE,
 } from '../lib/validation.js';
 import { optionalUploadFields, optionalUpload } from '../lib/multipart.js';
 import * as imageGen from '../services/imageGen/index.js';
@@ -37,6 +37,7 @@ import { prepareGenerateParams, quickEditCompositionDigest, resolveLocalImageMod
 import { IMAGE_REFERENCE_REQUEST_LIMIT } from '../lib/imageGenCapabilities.js';
 import { applyImageClean, applyWatermarkRemoval, applyLightRegenVariant } from '../services/imageGen/variants.js';
 import { applyFilmLookBake, readFilmLookSource } from '../services/imageGen/filmLookBake.js';
+import { musicVideoCastInputsSchema } from '../lib/musicVideoValidation.js';
 import { universeVisualProfileSchema } from '../lib/universeVisualProfileValidation.js';
 import { previewImagePrompt, previewQuickImageEdit } from '../services/imageGen/promptPreview.js';
 import { assertReviewedReference } from '../services/imageGen/reviewedReference.js';
@@ -51,6 +52,7 @@ import {
 import { getSketchPngPath, isValidKey as isValidSketchKey } from '../services/mediaSketches.js';
 import { itemKey } from '../lib/mediaItemKey.js';
 import { deleteMediaAnywhere, cancelPendingDelete } from '../services/mediaRemoteDelete.js';
+import { assertMediaDeletable } from '../services/mediaUsage.js';
 import * as characterService from '../services/character.js';
 import { randomUUID } from 'crypto';
 import { buildUniverseRunTag } from '../services/universeRunTag.js';
@@ -130,7 +132,11 @@ const generateSchema = z.object({
   // prompt arrives as `undefined`; default it to '' rather than rejecting.
   prompt: noNulPrompt.optional().default(''),
   negativePrompt: noNulPrompt.optional(),
-  visualProfileOverride: universeVisualProfileSchema.nullable().optional(),
+  // A multipart form sends the profile as one JSON string field.
+  visualProfileOverride: z.preprocess((value) => {
+    if (typeof value !== 'string') return value;
+    try { return JSON.parse(value); } catch { return value; }
+  }, universeVisualProfileSchema.nullable().optional()),
   // Per-request backend override. If omitted, the dispatcher uses
   // `imageGen.mode` from settings.json.
   mode: z.enum(IMAGE_GEN_MODES).optional(),
@@ -267,6 +273,10 @@ const generateSchema = z.object({
     fromFrame: z.boolean().optional(),
     refine: z.boolean().optional(),
     greyboxImageId: galleryImageFilenameSchema('greybox capture').optional(),
+    // The guides and sheets this submit actually sent (#14154). The completion
+    // hook copies them onto the take; it does not look them up again.
+    castInputs: musicVideoCastInputsSchema.optional(),
+    replaceSelection: z.boolean().optional(),
   }).optional(),
   // File the render into this music video's media collection even when no shot
   // keeps it (sheets, tests, alternates): musicVideoCollectionHook for the
@@ -515,7 +525,7 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
 
   await prepareFableLoomImageParams({ params, mode, settings });
 
-  if (data.quickEdit && (!data.reviewedReferenceDigest || data.reviewedPromptDigest !== quickEditCompositionDigest({ params, mode, settings }))) {
+  if (data.quickEdit && (!data.reviewedReferenceDigest || data.reviewedPromptDigest !== await quickEditCompositionDigest({ params, mode, settings }))) {
     throw new ServerError('Image settings or prompt changed. Review the refreshed full prompt before editing.', { status: 409, code: 'REVIEWED_PROMPT_CHANGED' });
   }
 
@@ -525,8 +535,8 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
   }
 
   if (data.reviewedReferenceDigest) {
-    if (params.initImagePath || params.referenceImagePaths?.length !== 1 || (!params.mediaProviderPeerId && mode === IMAGE_GEN_MODE.EXTERNAL)) {
-      throw new ServerError('Reviewed quick edits require one reference on a supported image backend', { status: 400, code: 'REVIEWED_REFERENCE_UNSUPPORTED' });
+    if (params.initImagePath || !params.referenceImagePaths?.length || (!data.quickEdit && params.referenceImagePaths.length !== 1) || (!params.mediaProviderPeerId && mode === IMAGE_GEN_MODE.EXTERNAL)) {
+      throw new ServerError('Reviewed quick edits require the edited image as the first reference on a supported image backend', { status: 400, code: 'REVIEWED_REFERENCE_UNSUPPORTED' });
     }
     await assertReviewedReference(params.referenceImagePaths[0], data.reviewedReferenceDigest);
     params.reviewedReferenceDigest = data.reviewedReferenceDigest;
@@ -960,6 +970,8 @@ router.post('/cancel', asyncHandler(async (req, res) => {
 // and style references) inside the same backup admission as the file removal.
 router.delete('/:filename', asyncHandler(async (req, res) => {
   local.assertGalleryFilename(req.params.filename);
+  const { force } = validateRequest(mediaDeleteQuerySchema, req.query ?? {});
+  await assertMediaDeletable(`image:${req.params.filename}`, { force: force === '1' });
   res.json({ ok: true, ...(await deleteMediaAnywhere('image', req.params.filename)) });
 }));
 

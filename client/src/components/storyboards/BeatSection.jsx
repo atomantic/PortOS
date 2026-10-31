@@ -10,22 +10,30 @@ import { beatSeconds, MUSICAL_ROLE_LABELS } from './storyboardArt';
 const iconButton = 'min-h-[44px] min-w-[44px] inline-flex items-center justify-center rounded text-gray-400 hover:text-white hover:bg-port-border/50 disabled:opacity-30 disabled:pointer-events-none';
 
 /**
- * One story beat: its title and musical role, a horizontal strip of panels,
- * and (behind the sliders toggle) what happens, why it matters, and the
- * emotion — the brief the song gets written from.
+ * One story beat: its title and musical role, its panels (a horizontal strip,
+ * or with `grid` a storyboard sheet that wraps), and (behind the sliders
+ * toggle) what happens, why it matters, and the emotion — the brief the song
+ * gets written from. An opening beat can play before the song starts (a
+ * music video's cold open, `canPlayBeforeSong`): then it has no song marker.
+ * On a music video's board (`spanOf`, each panel's place on the song) the
+ * beat shows where it starts and each panel when it plays and what is sung.
  */
 export default function BeatSection({
   beat, beatIndex, beatCount, firstPanelNumber, aspectRatio, selectedPanelId, sketchNonce,
-  onUpdate, onMove, onDelete, onAddPanel, onOpenPanel, addingPanel = false, pinOptions = [],
+  onUpdate, onMove, onDelete, onAddPanel, onOpenPanel, addingPanel = false, pinOptions = [], grid = false,
+  canPlayBeforeSong = false, spanOf = null,
 }) {
   const [showDetails, setShowDetails] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const seconds = beatSeconds(beat);
+  const firstSpan = spanOf && beat.panels.length ? spanOf(beat.panels[0].id) : null;
   const fieldId = (name) => `beat-${beat.id}-${name}`;
-  const pin = beat.pin ? pinOptions.find((option) => option.id === beat.pin) : null;
+  const itemClass = grid ? 'min-w-0' : 'snap-start shrink-0 w-36 sm:w-44';
+  const beforeSong = beat.beforeSong === true;
+  const pin = beat.pin && !beforeSong ? pinOptions.find((option) => option.id === beat.pin) : null;
 
   return (
-    <section className="rounded-xl border border-port-border bg-port-card/60" aria-label={beat.title || `Beat ${beatIndex + 1}`}>
+    <section className={`${grid ? '@container ' : ''}rounded-xl border border-port-border bg-port-card/60`} aria-label={beat.title || `Beat ${beatIndex + 1}`}>
       {confirmDelete ? (
         <InlineConfirmRow
           variant="separator"
@@ -58,7 +66,19 @@ export default function BeatSection({
           <option value="">No section</option>
           {STORYBOARD_MUSICAL_ROLES.map((role) => <option key={role} value={role}>{MUSICAL_ROLE_LABELS[role] || role}</option>)}
         </select>
-        <span className="text-xs text-gray-500 tabular-nums" title="Estimated length of this beat">{formatTimecode(seconds)}</span>
+        {firstSpan && !firstSpan.beforeSong ? (
+          <span className="text-xs text-gray-500 tabular-nums" title="Where this beat starts on the song, and its length">
+            {formatTimecode(firstSpan.startSec)} · {formatTimecode(seconds)}
+          </span>
+        ) : (
+          <span className="text-xs text-gray-500 tabular-nums" title="Estimated length of this beat">{formatTimecode(seconds)}</span>
+        )}
+        {(beforeSong || canPlayBeforeSong) && (
+          <button type="button" role="switch" aria-checked={beforeSong} onClick={() => onUpdate({ beforeSong: !beforeSong })}
+            className={`min-h-[44px] inline-flex items-center rounded border px-2 text-xs sm:min-h-[28px] ${beforeSong ? 'border-port-accent text-port-accent' : 'border-port-border text-gray-400 hover:text-white'}`}>
+            Before the song
+          </button>
+        )}
         {pin && (
           <span className="inline-flex max-w-[12rem] items-center gap-1 text-[11px] text-port-accent" title={`Starts at ${pin.label}`}>
             <Pin size={12} aria-hidden="true" /><span className="truncate">{pin.label}</span>
@@ -99,7 +119,7 @@ export default function BeatSection({
             <label htmlFor={fieldId('section')} className="block text-[11px] text-gray-500 mb-0.5">Song section note</label>
             <CommitField id={fieldId('section')} value={beat.sectionHint} maxLength={STORYBOARD_LIMITS.sectionHint} placeholder="e.g. first chorus, half-time" onCommit={(sectionHint) => onUpdate({ sectionHint })} />
           </div>
-          {pinOptions.length > 0 && (
+          {pinOptions.length > 0 && !beforeSong && (
             <div className="sm:col-span-2">
               <label htmlFor={fieldId('pin')} className="block text-[11px] text-gray-500 mb-0.5">Starts at (temp track)</label>
               <select id={fieldId('pin')} value={beat.pin || ''} onChange={(event) => onUpdate({ pin: event.target.value || null })}
@@ -112,9 +132,9 @@ export default function BeatSection({
         </div>
       ) : null}
 
-      <ol className="flex gap-2 overflow-x-auto overscroll-x-contain snap-x p-2" aria-label="Panels">
+      <ol className={grid ? 'grid grid-cols-2 items-start gap-2 p-2 @2xl:grid-cols-3 @5xl:grid-cols-4' : 'flex gap-2 overflow-x-auto overscroll-x-contain snap-x p-2'} aria-label="Panels">
         {beat.panels.map((panel, index) => (
-          <li key={panel.id} className="snap-start shrink-0 w-36 sm:w-44">
+          <li key={panel.id} className={itemClass}>
             <PanelCard
               panel={panel}
               number={firstPanelNumber + index}
@@ -122,15 +142,16 @@ export default function BeatSection({
               selected={panel.id === selectedPanelId}
               sketchNonce={sketchNonce}
               onOpen={() => onOpenPanel(panel.id)}
+              span={spanOf?.(panel.id) || null}
             />
           </li>
         ))}
-        <li className="snap-start shrink-0 w-36 sm:w-44">
+        <li className={itemClass}>
           <button
             type="button"
             onClick={onAddPanel}
             disabled={addingPanel}
-            className="w-full h-full min-h-[5rem] rounded-lg border border-dashed border-port-border text-gray-400 hover:text-white hover:border-port-accent/60 inline-flex flex-col items-center justify-center gap-1 text-xs disabled:opacity-50"
+            className={`w-full h-full min-h-[5rem] rounded-lg border border-dashed border-port-border text-gray-400 hover:text-white hover:border-port-accent/60 inline-flex flex-col items-center justify-center gap-1 text-xs disabled:opacity-50`}
           >
             <Plus size={18} aria-hidden="true" />
             Panel

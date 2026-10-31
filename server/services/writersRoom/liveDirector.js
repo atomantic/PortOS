@@ -23,6 +23,7 @@ import { createProject, setTreatment, deleteProject, updateProject } from '../cr
 import { deleteCollection } from '../mediaCollections.js';
 import { defaultVideoModelId } from '../videoGen/local.js';
 import { badRequest } from './_shared.js';
+import { appendPreviousShotNote } from '../../lib/previousShotNote.js';
 
 const STAGE = 'writers-room-continue';
 // Exported so other conductors that mint a CD project from prose — the
@@ -160,7 +161,9 @@ function shapeBridgeScene(raw) {
   const durationSeconds = Number.isFinite(rawDur)
     ? Math.min(10, Math.max(1, Math.round(rawDur)))
     : 5;
-  return { intent: intent.slice(0, 1000), prompt: prompt.slice(0, 8000), durationSeconds };
+  const scene = { intent: intent.slice(0, 1000), prompt: prompt.slice(0, 8000), durationSeconds };
+  if (raw.continueFromPrior === true) scene.continueFromPrior = true;
+  return scene;
 }
 
 // Shape a raw LLM response into a CD treatment proposal. Trims the text fields
@@ -231,19 +234,27 @@ export async function suggestCdBridge(workId, { before = '', after = '', selecti
 /**
  * Assign the CD scene runtime fields the treatment schema requires but a raw
  * CD-bridge LLM proposal doesn't carry: a stable sceneId, render order, and the
- * continuation flag (every scene after the first continues from its prior).
+ * continuation flag. A scene is a new angle by default and starts from its own
+ * plate; only `continueFromPrior: true` chains from the prior last frame. A
+ * fresh later scene names how the previous one ended in its prompt instead.
  * Exported so the pipeline→CD bridge (CDO Phase 3, #2185) maps proposal scenes
  * into a treatment identically to the writers-room send path.
  */
 export function bridgeScenesToTreatmentScenes(scenes) {
-  return (Array.isArray(scenes) ? scenes : []).map((s, i) => ({
-    sceneId: `sc-${i + 1}`,
-    order: i,
-    intent: s.intent,
-    prompt: s.prompt,
-    durationSeconds: s.durationSeconds,
-    useContinuationFromPrior: i > 0,
-  }));
+  const list = Array.isArray(scenes) ? scenes : [];
+  return list.map((s, i) => {
+    const chains = i > 0 && s.continueFromPrior === true;
+    return {
+      sceneId: `sc-${i + 1}`,
+      order: i,
+      intent: s.intent,
+      prompt: i > 0 && !chains
+        ? appendPreviousShotNote(s.prompt, list[i - 1].prompt, { maxLength: 8000 })
+        : s.prompt,
+      durationSeconds: s.durationSeconds,
+      useContinuationFromPrior: chains,
+    };
+  });
 }
 
 /**

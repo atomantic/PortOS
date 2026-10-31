@@ -26,17 +26,21 @@
 import { execGh, ensureForgeReachable } from './github.js';
 import { createGithubActorTrust } from './forgeActorTrust.js';
 import { execGlab, execGlabJson } from './gitlab.js';
+import { withGlabJson } from '../lib/glabArgs.js';
 import { resolveAppForgeTarget, resolveRepoForgeTarget } from '../lib/workTracker.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
 import { normalizeIssueState } from '../lib/forgeIssueState.js';
 
 export const BLOCKED_LABEL = 'blocked';
 
-// Bound the forge queries — single-user repos never realistically truncate at
-// this size (mirrors issueReconcile.js's GH_LIST_LIMIT / GL_PER_PAGE).
-const GH_LIST_LIMIT = 100;
-// Concurrent `gh api` blocker lookups per batch — bounds spawned processes.
-const GH_LOOKUP_BATCH = 8;
+// GitHub lists at most this many open `blocked` issues — the same GH_LIST_LIMIT
+// as issueReconcile.js. `gh issue list --limit` pages internally; a result that
+// fills the cap is still not proof the list ended.
+const GH_LIST_LIMIT = 200;
+// Concurrent blocker lookups per batch — bounds spawned processes on either forge.
+const LOOKUP_BATCH = 8;
+// glab's practical max page. The blocked-issue walk continues until a short
+// page and refuses a still-full page once GH_LIST_LIMIT rows are in hand.
 const GL_PER_PAGE = 100;
 
 /**
@@ -89,8 +93,9 @@ async function resolveGithubBlockerState({ repoSpec, apiHost, fullName }, number
  * Fetch GitHub's open `blocked` issues plus a `number → state` map covering
  * each distinct blocker they name, looked up individually so PR blockers and
  * blockers of any age resolve. Returns null on a gh failure listing the blocked
- * issues — the caller treats null as "skip this cycle", never as "no blocked
- * issues". A failed per-blocker lookup is left out of the map (reads as open).
+ * issues, or when that list fills the cap — the caller treats null as "skip
+ * this cycle", never as "no blocked issues". A failed per-blocker lookup is
+ * left out of the map (reads as open).
  * @returns {Promise<{ blocked: object[], stateByNumber: Map<number,string> }|null>}
  */
 async function getGithubBlockedState(repoSpec, apiHost, fullName) {
@@ -106,7 +111,12 @@ async function getGithubBlockedState(repoSpec, apiHost, fullName) {
 
   const blocked = safeJSONParse(blockedRaw, null);
   if (!Array.isArray(blocked)) return null;
-  // An empty list parsed fine: "no candidates", not "gh failed".
+  // An empty list parsed fine: "no candidates", not "gh failed". A full page
+  // is not the set — unblocking from it would miss a still-blocked issue.
+  if (blocked.length >= GH_LIST_LIMIT) {
+    console.warn(`⚠️ blocked-issue-reconcile: GitHub blocked-issue list is incomplete at the ${GH_LIST_LIMIT} cap — skipping this cycle`);
+    return null;
+  }
 
   const trust = await createGithubActorTrust({ runGh: execGh, host: apiHost, repoFullName: fullName });
   const trustedBlocked = [];
@@ -116,8 +126,8 @@ async function getGithubBlockedState(repoSpec, apiHost, fullName) {
   const blockerNumbers = new Set(trustedBlocked.flatMap((i) => parseBlockingIssueNumbers(i.body)));
   const stateByNumber = new Map();
   const numbers = [...blockerNumbers];
-  for (let i = 0; i < numbers.length; i += GH_LOOKUP_BATCH) {
-    await Promise.all(numbers.slice(i, i + GH_LOOKUP_BATCH).map(async (n) => {
+  for (let i = 0; i < numbers.length; i += LOOKUP_BATCH) {
+    await Promise.all(numbers.slice(i, i + LOOKUP_BATCH).map(async (n) => {
       const state = await resolveGithubBlockerState({ repoSpec, apiHost, fullName }, n);
       if (state) stateByNumber.set(n, state);
     }));
@@ -129,25 +139,66 @@ async function getGithubBlockedState(repoSpec, apiHost, fullName) {
 }
 
 /**
- * GitLab mirror of `getGithubBlockedState`. `glab issue list --all` returns
- * every issue's `iid` + `state` in one call, avoiding a per-blocker view call.
+ * Open `blocked` issues, walked page by page. `--per-page` caps a page; a
+ * short page is the end of the list. A still-full page at GH_LIST_LIMIT is
+ * not the set, so the cycle skips instead of unblocking from a truncated page.
+ * @returns {Promise<object[]|null>}
+ */
+async function listGitlabBlockedIssues(repoPath) {
+  const blocked = [];
+  const maxPages = Math.ceil(GH_LIST_LIMIT / GL_PER_PAGE);
+  for (let page = 1; page <= maxPages; page += 1) {
+    const { rows, reason } = await execGlabJson(
+      ['issue', 'list', '--label', BLOCKED_LABEL, '--per-page', String(GL_PER_PAGE), '--page', String(page)],
+      repoPath,
+    );
+    if (!Array.isArray(rows)) {
+      console.error(`❌ blocked-issue-reconcile: glab issue list unavailable (${reason}) — skipping this cycle`);
+      return null;
+    }
+    blocked.push(...rows);
+    if (rows.length < GL_PER_PAGE) return blocked;
+    if (blocked.length >= GH_LIST_LIMIT) break;
+  }
+  console.warn(`⚠️ blocked-issue-reconcile: GitLab blocked-issue list is incomplete at the ${GH_LIST_LIMIT} cap — skipping this cycle`);
+  return null;
+}
+
+/**
+ * One GitLab blocker, via `glab issue view`. `#N` is an issue, not a merge
+ * request. A failed or unreadable view stays out of the map and reads as open.
+ * @returns {Promise<'open'|'closed'|null>}
+ */
+async function resolveGitlabBlockerState(repoPath, number) {
+  const raw = await execGlab(withGlabJson(['issue', 'view', String(number)]), repoPath);
+  const issue = safeJSONParse(raw, null);
+  if (!issue || typeof issue !== 'object' || Array.isArray(issue)
+    || !Number.isInteger(issue.iid) || issue.iid !== number) {
+    console.error(`❌ blocked-issue-reconcile: GitLab blocker view #${number} unavailable — leaving it blocked`);
+    return null;
+  }
+  return normalizeIssueState(issue.state);
+}
+
+/**
+ * GitLab mirror of `getGithubBlockedState`. Blocker state comes from one view
+ * per named issue — one `issue list` page is not the tracker's whole backlog.
  * @returns {Promise<{ blocked: object[], stateByNumber: Map<number,string> }|null>}
  */
 async function getGitlabBlockedState(repoPath) {
-  const [blocked, all] = await Promise.all([
-    execGlabJson(['issue', 'list', '--label', BLOCKED_LABEL, '--per-page', String(GL_PER_PAGE)], repoPath),
-    execGlabJson(['issue', 'list', '--all', '--per-page', String(GL_PER_PAGE)], repoPath),
-  ]);
-  if (!blocked.rows || !all.rows) {
-    console.error(`❌ blocked-issue-reconcile: glab issue list unavailable (${blocked.reason}/${all.reason}) — skipping this cycle`);
-    return null;
-  }
+  const blocked = await listGitlabBlockedIssues(repoPath);
+  if (!blocked) return null;
+
+  const blockerNumbers = [...new Set(blocked.flatMap((issue) => parseBlockingIssueNumbers(issue?.description)))];
   const stateByNumber = new Map();
-  for (const issue of all.rows) {
-    if (Number.isInteger(issue?.iid)) stateByNumber.set(issue.iid, normalizeIssueState(issue.state));
+  for (let i = 0; i < blockerNumbers.length; i += LOOKUP_BATCH) {
+    await Promise.all(blockerNumbers.slice(i, i + LOOKUP_BATCH).map(async (number) => {
+      const state = await resolveGitlabBlockerState(repoPath, number);
+      if (state) stateByNumber.set(number, state);
+    }));
   }
   return {
-    blocked: blocked.rows.map((i) => ({
+    blocked: blocked.map((i) => ({
       number: i.iid, title: i.title || '', url: i.web_url || '', body: i.description || '',
     })),
     stateByNumber,

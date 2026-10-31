@@ -15,6 +15,7 @@ import { PATHS } from './fileUtils.js';
 import { getHttpsEnabledAtBoot } from './httpsState.js';
 import { getSelfHost } from './peerSelfHost.js';
 import { getTailscaleStatus } from './tailscale.js';
+import { isLoopbackHostname } from '../../lib/portosAuthCore.js';
 import { certPaths } from '../../lib/certPaths.js';
 import { getTailscaleCertHostname, readCertMeta } from '../../lib/certMeta.js';
 import { hasTailscaleCert } from '../../lib/tailscale-https.js';
@@ -33,10 +34,9 @@ const PORTS_DOCS_URL = 'https://github.com/atomantic/PortOS/blob/main/docs/PORTS
 // "potentially trustworthy" (Secure Contexts spec), so getUserMedia and other
 // powerful APIs work over plain HTTP. Any other host (Tailscale IP, LAN IP,
 // 0.0.0.0 → resolves to the actual interface) requires HTTPS.
-const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
 export function isLoopbackHost(host) {
   if (typeof host !== 'string' || !host) return false;
-  return LOOPBACK_HOSTS.has(host.toLowerCase());
+  return isLoopbackHostname(host);
 }
 
 export function getNetworkExposureStatus() {

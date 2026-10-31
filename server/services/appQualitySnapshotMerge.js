@@ -1,98 +1,8 @@
 import { basename, join } from 'node:path';
 import { readFile } from 'node:fs/promises';
-import { atomicWrite, execFileAsync } from '../lib/fileCore.js';
 
-const GUARD_COMMAND = 'node scripts/pregate.js --guards-only';
-const validSha = value => typeof value === 'string' && /^[a-f0-9]{40}$/i.test(value);
-
-async function gitText(git, repoPath, args) {
-  const result = await git.execGit(args, repoPath);
-  if (result?.exitCode !== 0 || typeof result.stdout !== 'string') throw new Error('merge-input-unreadable');
-  return result.stdout.trim();
-}
-
-/** Only this fixed command opts a repository in; never execute arbitrary manifest text. */
-async function advertisesGuards(git, repoPath, ref) {
-  const path = await gitText(git, repoPath, ['ls-tree', '--name-only', ref, '--', 'package.json']);
-  if (!path) return false;
-  const manifest = JSON.parse(await gitText(git, repoPath, ['show', `${ref}:package.json`]));
-  if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) throw new Error('merge-guard-manifest-unreadable');
-  const command = manifest?.scripts?.['pregate:merged'];
-  if (command === undefined) return false;
-  if (command !== GUARD_COMMAND) throw new Error('unsupported-merge-guard-command');
-  return true;
-}
-
-async function readPr(app, pr, git, deps) {
-  const resolveForge = deps.resolveForgeForRepo || git.resolveForgeForRepo;
-  const { cli, env } = await resolveForge(app.repoPath, { forgeAccount: app.forgeAccount || null });
-  if (cli !== 'gh') throw new Error('unsupported-merge-guard-forge');
-  const execGh = deps.execGh || (await import('./github.js')).execGh;
-  const raw = await execGh(['pr', 'view', String(pr.number), '--json',
-    'state,isDraft,headRefOid,headRefName,baseRefName,isCrossRepository'], undefined, { cwd: app.repoPath, env });
-  const state = JSON.parse(raw);
-  if (state?.state !== 'OPEN' || state.isDraft !== false || state.isCrossRepository !== false
-    || !validSha(state.headRefOid) || state.headRefName !== 'portos/quality-snapshot') {
-    throw new Error('snapshot-merge-pr-unverified');
-  }
-  return state;
-}
-
-/** Resolve both full SHAs outside admission, including the already-open PR path. */
-export async function readSnapshotMergeInputs(app, pr, defaultBranch, git, deps) {
-  const evidence = { required: true, defaultBranch };
-  try {
-    if (!await advertisesGuards(git, app.repoPath, `origin/${defaultBranch}`)) return { required: false };
-    if (pr.cli !== 'gh') throw new Error('unsupported-merge-guard-forge');
-    await git.fetchOrigin(app.repoPath, { prune: true });
-    evidence.baseSha = await gitText(git, app.repoPath, ['rev-parse', '--verify', `origin/${defaultBranch}^{commit}`]);
-    if (!validSha(evidence.baseSha)) throw new Error('snapshot-merge-base-unverified');
-    // A fetch can change the advertised contract too. Refuse rather than downgrade.
-    if (!await advertisesGuards(git, app.repoPath, evidence.baseSha)) throw new Error('merge-guard-capability-changed');
-    const state = await readPr(app, pr, git, deps);
-    evidence.headSha = state.headRefOid;
-    if (state.baseRefName !== defaultBranch) throw new Error('snapshot-merge-base-changed');
-    const fetchedHead = await gitText(git, app.repoPath,
-      ['rev-parse', '--verify', 'origin/portos/quality-snapshot^{commit}']);
-    if (fetchedHead !== evidence.headSha) throw new Error('snapshot-merge-head-changed');
-    return evidence;
-  } catch (error) {
-    return { ...evidence, reason: error.message };
-  }
-}
-
-/** Retained beside the checkout on any refusal; never put guard output on the forge. */
-export async function recordSnapshotMergeEvidence(pr, evidence, deps, details) {
-  if (!evidence.worktreePath) return;
-  evidence.evidencePath = join(evidence.worktreePath, '.cache', 'quality-snapshot-merge.json');
-  const write = deps.writeMergeEvidence || atomicWrite;
-  await write(evidence.evidencePath, { prUrl: pr.url, ...evidence, ...details });
-}
-
-export async function validateSnapshotMerge(app, pr, evidence, git, deps) {
-  const cwd = evidence.worktreePath;
-  const head = await gitText(git, cwd, ['rev-parse', '--verify', 'HEAD^{commit}']);
-  if (head !== evidence.headSha) throw new Error('snapshot-merge-checkout-head-changed');
-  if (await gitText(git, cwd, ['status', '--porcelain=v1', '--untracked-files=all'])) {
-    throw new Error('snapshot-merge-checkout-dirty');
-  }
-  const link = deps.linkWorktreeDependencies || (await import('./worktreeManager.js')).linkWorktreeDependencies;
-  await link(app.repoPath, cwd);
-  await recordSnapshotMergeEvidence(pr, evidence, deps, { status: 'validating' });
-  const exec = deps.execSnapshotMergeGuards || execFileAsync;
-  const output = await exec(process.execPath,
-    [join(cwd, 'scripts', 'pregate.js'), '--guards-only', '--merged-with', evidence.baseSha],
-    { cwd, env: { ...process.env, PORTOS_TEST_MEMO: 'off' }, timeout: 600000, maxBuffer: 16 * 1024 * 1024 });
-  if (await gitText(git, cwd, ['rev-parse', '--verify', 'HEAD^{commit}']) !== evidence.headSha
-    || await gitText(git, cwd, ['status', '--porcelain=v1', '--untracked-files=all'])) {
-    throw new Error('snapshot-merge-checkout-changed-during-validation');
-  }
-  await recordSnapshotMergeEvidence(pr, evidence, deps,
-    { status: 'passed', stdout: output.stdout, stderr: output.stderr });
-}
-
-/** Git's durable checkout inventory plus our evidence survives publisher restarts. */
-async function listSnapshotCheckouts(app, deps, wantedPrUrl = null) {
+/** Retained checkouts, found through Git's durable worktree inventory and their evidence file. */
+async function listSnapshotCheckouts(app, deps) {
   const list = deps.listSnapshotMergeWorktrees || (await import('./worktreeManager.js')).listWorktrees;
   const read = deps.readMergeEvidence || readFile;
   const retained = [];
@@ -102,23 +12,14 @@ async function listSnapshotCheckouts(app, deps, wantedPrUrl = null) {
       .catch(error => { if (error.code === 'ENOENT') return null; throw error; });
     if (body === null) continue;
     const record = JSON.parse(body);
-    if (wantedPrUrl && record.prUrl !== wantedPrUrl) continue;
-    if (record.checkoutHead !== tree.head || !tree.detached || tree.branch || tree.locked) {
-      // The repo-wide sweep must not let one drifted tree strand the settled ones.
-      if (!wantedPrUrl) continue;
-      throw new Error('retained-snapshot-checkout-changed');
-    }
+    // One drifted tree must not strand the settled ones; it stays in place.
+    if (record.checkoutHead !== tree.head || !tree.detached || tree.branch || tree.locked) continue;
     retained.push({ ...tree, prUrl: record.prUrl });
   }
   return retained;
 }
 
-export const retainedSnapshotMergeCheckouts = (app, pr, deps) => listSnapshotCheckouts(app, deps, pr.url);
-
 /** Remove verified snapshot checkouts in place. Nothing is copied into an archive. */
-export const retireSnapshotMergeCheckouts = async (app, pr, deps) =>
-  retireSnapshotTrees(app, deps, await retainedSnapshotMergeCheckouts(app, pr, deps));
-
 async function retireSnapshotTrees(app, deps, trees) {
   const { forceRemoveWorktreeDir, classifyWorktreeDirt } = await import('./worktreeManager.js');
   const { execGit } = await import('../lib/execGit.js');
@@ -133,12 +34,12 @@ async function retireSnapshotTrees(app, deps, trees) {
       admit: async () => await ownership()
         ? { fence: { repoPath: app.repoPath, path: tree.path, branch: null } }
         : { result: { removed: false } },
-      // The removal boundary also checks ignored local content.
+      // The receipt binds this detached tree to `tree.head`; a MERGED PR (`mergedHead`) makes uncommitted files disposable.
       archive: async () => ({ archive: {
         verify: async holder => {
           if (!holder || holder.head !== tree.head || holder.branch || holder.detached !== true) return 'snapshot-checkout-changed';
           const status = await execGit(['status', '--porcelain'], tree.path).then(r => r.stdout, () => null);
-          return status !== null && classifyWorktreeDirt(status).clean ? null : 'worktree-dirty';
+          return status !== null && (classifyWorktreeDirt(status).clean || tree.mergedHead === holder.head) ? null : 'worktree-dirty';
         },
       } }),
       finish: async (_admitted, archive) => forceRemoveWorktreeDir(app.repoPath, tree.path, {
@@ -151,10 +52,10 @@ async function retireSnapshotTrees(app, deps, trees) {
 }
 
 /**
- * A deferred guarded merge keeps its checkout, and every retry cuts a fresh one;
- * only a successful merge by the SAME run retires them. A PR that lands another
- * way (auto-merge, manual, a later run) therefore strands its checkouts. Retire
- * the ones whose PR is MERGED or CLOSED; an unreadable state keeps the tree.
+ * Before #14184 a deferred merged-tree-guarded snapshot merge kept its detached
+ * checkout and `.cache/quality-snapshot-merge.json` evidence; nothing writes
+ * either now. Retire those left behind once their PR is MERGED or CLOSED; an
+ * unreadable state, drifted tree, or unverified local content keeps the tree.
  */
 export async function sweepSettledSnapshotCheckouts(app, git, deps) {
   const trees = await listSnapshotCheckouts(app, deps);
@@ -167,26 +68,18 @@ export async function sweepSettledSnapshotCheckouts(app, git, deps) {
   const isSettled = async prUrl => {
     if (!settled.has(prUrl)) {
       settled.set(prUrl, execGh(['pr', 'view', prUrl, '--json', 'state'], undefined, { cwd: app.repoPath, env })
-        .then(raw => ['MERGED', 'CLOSED'].includes(JSON.parse(raw)?.state), () => false));
+        .then(raw => {
+          const state = JSON.parse(raw)?.state;
+          return ['MERGED', 'CLOSED'].includes(state) ? { merged: state === 'MERGED' } : null;
+        }, () => null));
     }
     return settled.get(prUrl);
   };
   const done = [];
-  for (const tree of trees) if (await isSettled(tree.prUrl)) done.push(tree);
+  for (const tree of trees) {
+    const state = await isSettled(tree.prUrl);
+    if (state) done.push({ ...tree, mergedHead: state.merged ? tree.head : null });
+  }
   const held = new Set(await retireSnapshotTrees(app, deps, done));
   return done.map(tree => tree.path).filter(path => !held.has(path));
-}
-
-/** Called only inside admission. A moving base needs new guards, not a rebase. */
-export async function verifySnapshotMergeInputs(app, pr, evidence, git, deps) {
-  const state = await readPr(app, pr, git, deps);
-  if (state.headRefOid !== evidence.headSha || state.baseRefName !== evidence.defaultBranch) {
-    throw new Error('snapshot-merge-head-or-target-changed');
-  }
-  const remote = await gitText(git, app.repoPath,
-    ['ls-remote', '--exit-code', 'origin', `refs/heads/${evidence.defaultBranch}`]);
-  const [sha, ref, ...extra] = remote.split(/\s+/);
-  if (extra.length || sha !== evidence.baseSha || ref !== `refs/heads/${evidence.defaultBranch}`) {
-    throw new Error('snapshot-merge-base-changed');
-  }
 }

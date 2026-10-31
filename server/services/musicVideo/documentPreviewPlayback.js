@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { installLayeredPreviewPlayback } from './previewPlaybackRuntime.js';
 
 const ROOT = fileURLToPath(new URL('./documentTemplates/', import.meta.url));
-const ENGINE_SHA256 = '20fff73949a37d069f1de4cf2dab4d185049f799fe4bb129747cc3bf678d9e4f';
+const ENGINE_SHA256 = '0cc9d52c4bbf82cec93b418e41e7cfe49a89f6feb0602c02ecdee6f00f9cf307';
 const digest = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const read = (directory, name) => readFile(join(directory, name));
 
@@ -57,6 +57,9 @@ export async function adaptStagedDocumentPreview(directory, { scenes = [] } = {}
     [original, index, template] = await Promise.all([read(directory, 'engine.js'), read(directory, 'index.html'), read(join(ROOT, 'layered'), 'index.html')]);
   } catch { return declined('unrecognized-entrypoint'); }
   if (digest(original) !== ENGINE_SHA256) return declined('unrecognized-engine');
+  // Photo selection changes within a scene; retain exact seek until the
+  // cooperative image owner supports changing sources at those boundaries.
+  if (scenes.some(scene => scene.photoSequence)) return declined('photo-sequence-exact-seek');
   const marker = '<script src="engine.js"></script>';
   const generatedIndex = template.toString().replace(marker, '<script src="generated.js"></script>\n' + marker);
   if (!index.equals(template) && index.toString() !== generatedIndex) return declined('custom-entrypoint');

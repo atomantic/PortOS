@@ -20,6 +20,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { hasTailscaleCert } from '../lib/tailscale-https.js';
 import { certPaths } from '../lib/certPaths.js';
+import { isLoopbackHostname } from '../lib/portosAuthCore.js';
 import { getCliSetupGuide } from './setup-guide.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
 import { resolveHttpMirrorPortForRoot } from './lib/envFile.js';
@@ -146,7 +147,7 @@ export function isPortOsPage(page, {
   if (!isPortosPort) return false;
 
   const hostname = pageUrl.hostname.toLowerCase();
-  const isLoopbackHost = hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1' || hostname === '[::1]';
+  const isLoopbackHost = isLoopbackHostname(hostname);
   const isTailscaleHost = hostname.endsWith('.ts.net');
 
   if (isLoopbackHost || isTailscaleHost) {

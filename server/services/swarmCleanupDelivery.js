@@ -24,7 +24,7 @@ function cleanupOnlySwarmCaptures(task, agent, instanceId) {
     || (meta.taskOnDemand && (task.metadata.onDemandOrigin || 'user') !== (meta.taskOnDemandOrigin || 'user'))
     || !isTruthyMeta(task.metadata.claimFlow) || task.metadata.claimTarget
     || !['claim-issue', 'claim-issue-gitlab', 'claim-work'].includes(task.metadata.analysisType)
-    || !Number.isSafeInteger(swarmCount) || swarmCount < 2 || swarmCount > 50 || meta.isWorktree !== false
+    || !Number.isSafeInteger(swarmCount) || swarmCount < 1 || swarmCount > 50 || meta.isWorktree !== false
     || result?.executionSuccess !== true || result.validationPassed === false
     || result.cleanupPending !== true || result.deliveryRecoveryOwned !== true
     || result.taskOutcome?.status !== 'incomplete' || result.taskOutcome.recovery?.mode !== 'cleanup'
@@ -70,7 +70,11 @@ export function cleanupRefillSourceMatches(task, agent, instanceId) {
     || agent.result.deferredDeliveryOutcome?.recovery?.mode !== 'cleanup'
     || agent.metadata?.repoStateVerification?.status !== 'completed'
     || agent.metadata?.cleanupOutcome?.status !== 'verified' || agent.metadata.cleanupOutcome.unresolved !== 0) return false;
-  return cleanupDeliveryProofMatches({ ...task, status: 'in_progress', metadata: { ...task.metadata,
+  // Settling the task clears its claim fields; restore them from the agent's own dispatch binding
+  // (the other binding keys must still match the live task) or a settled source never refills.
+  const claim = Object.fromEntries((agent.metadata?.completionTaskDispatch?.expected || [])
+    .filter(row => Array.isArray(row) && (row[0] === 'claimedBy' || row[0] === 'claimedAt') && task.metadata?.[row[0]] == null));
+  return cleanupDeliveryProofMatches({ ...task, status: 'in_progress', metadata: { ...task.metadata, ...claim,
     deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: agent.id, taskOutcome: agent.result.deferredDeliveryOutcome } }, { ...agent, result: { ...agent.result,
     cleanupPending: true, taskOutcome: agent.result.deferredDeliveryOutcome } }, instanceId);
 }

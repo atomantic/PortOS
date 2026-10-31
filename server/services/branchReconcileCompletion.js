@@ -16,7 +16,7 @@ export async function settleBranchReconcileRun(agent) {
   const app = agent.metadata.taskApp ? await getAppById(agent.metadata.taskApp) : null;
   if (!app?.repoPath) {
     // A missing target is an explained refusal, not a defect: record it and stop.
-    const { recordBranchReconcileOutcome } = await import('./taskSchedule.js');
+    const { recordBranchReconcileOutcome } = await import('./branchReconcileOutcome.js');
     await recordBranchReconcileOutcome(agent.metadata.taskApp || null, {
       status: 'incomplete', reason: 'no-managed-app-target',
       nextAction: 'Run branch reconciliation against a managed app.',
@@ -38,7 +38,7 @@ export async function settleBranchReconcileRun(agent) {
     claimOwners: { agents, readAgents: readClaimOwnershipAgents },
     forgeAccount: app.forgeAccount || null
   });
-  const { getBranchReconcileOutcome, recordBranchReconcileOutcome } = await import('./taskSchedule.js');
+  const { getBranchReconcileOutcome, recordBranchReconcileOutcome } = await import('./branchReconcileOutcome.js');
   const outcome = await getBranchReconcileOutcome(app.id);
   const { recordRepoCleanupRecovery, recordCleanupOutcome } = await import('./cosAgentLifecycle.js');
   for (const target of task.metadata.reconcileRetirements || []) {

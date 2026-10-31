@@ -90,11 +90,13 @@ function CastingChangesNotice({ changes, plan, busy, rebuildOffered, onUpdate, o
  * useMusicVideoCastingChanges) are named too: new reference images offer
  * Update to re-render those images and their dependents, a newly linked
  * character with no sheet offers to add them through a direction note.
+ * A failed Casting read says so with a Retry (`castingChangesError`) and keeps
+ * the last notice rather than reading as "nothing changed".
  * Each image card carries its own Regenerate / Edit / Remove while the stage
  * is idle, and Start over clears a check-in that has not been approved.
  * A sheet in review (or approved) takes plain-text feedback below the actions.
  */
-export default function CastAndSetsCheckin({ id, project, stale = null, storyStale = null, castingChanges = null, busy, onOpenSheet, onOpenPreview, onApprove, onRegenerate, onRegenerateImages, onEditDirection, onRefresh, onApplyFeedback, onRemoveFeedback, onRegenerateWithNotes, onResume, onRebuild, onReconfirm, onRevert, onSkip, onDiscard, onRebuildFromStory }) {
+export default function CastAndSetsCheckin({ id, project, stale = null, storyStale = null, castingChanges = null, castingChangesError = false, onRetryCastingChanges, busy, onOpenSheet, onOpenPreview, onApprove, onRegenerate, onRegenerateImages, onEditDirection, onRefresh, onApplyFeedback, onRemoveFeedback, onRegenerateWithNotes, onResume, onRebuild, onReconfirm, onRevert, onSkip, onDiscard, onRebuildFromStory }) {
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const greyboxPlaces = useMusicVideoGreyboxPlaces(project);
   const stage = project.castAndSets;
@@ -137,6 +139,14 @@ export default function CastAndSetsCheckin({ id, project, stale = null, storySta
         <CastingChangesNotice changes={castingChanges} plan={stage.plan} busy={busy} rebuildOffered={!!storyStale}
           onUpdate={onRegenerateImages} onAddCast={onRegenerateWithNotes} />
       )}
+      {castingChangesError && !working && (
+        <div className="flex flex-wrap items-center gap-2 rounded border border-port-border p-2" role="status">
+          <p className="min-w-0 flex-1 text-xs text-port-text-muted">Couldn&apos;t check Casting for changes since this sheet was built.</p>
+          <button type="button" onClick={onRetryCastingChanges} className={`${buttonClass} border border-port-border`}>
+            <RotateCcw size={14} aria-hidden="true" /> Retry
+          </button>
+        </div>
+      )}
       {['review', 'approved'].includes(stage.status) && onEditDirection && (stage.direction?.sets || []).map((set) => (
         <div key={set.id} className="space-y-1">
           <p className="text-xs font-medium">Set plate · {set.name}</p>
@@ -146,6 +156,7 @@ export default function CastAndSetsCheckin({ id, project, stale = null, storySta
       ))}
       {stage.greyboxPending && <p role="status" className="text-xs text-port-warning">Greybox selection saved. Regenerate to render the set plates with it.</p>}
       <CastAndSetsReferenceProgress stage={stage} onOpenPreview={onOpenPreview}
+        subjects={project.concept?.subjects || []} olderLookKeys={(castingChanges?.images || []).map((i) => i.key)}
         actions={!working && stage.direction && stage.status !== 'skipped' && onRegenerateImages && onEditDirection
           ? { projectId: project.id, busy, formSubjects, onRegenerate: onRegenerateImages, onEdit: onEditDirection, onRefresh } : null} />
       <div className="flex flex-wrap gap-2">

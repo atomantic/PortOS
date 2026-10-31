@@ -98,6 +98,7 @@ const pushRetryWalkSaw = new Map();
 let pushRetryScheduler = null;
 
 const flattenLogText = (value) => String(value ?? '').replace(/\s+/g, ' ').trim().slice(0, 200);
+const peerLabel = (peer) => peer.name || peer.instanceId;
 
 function isRetryablePushReason(reason) {
   if (reason === 'network') return true;
@@ -178,7 +179,7 @@ function reportPushFailure(sub, peer, reason, detail) {
   if (isRetryablePushReason(reason)) markPushRetryDue(sub.peerId);
   if (loggedPushFailures.get(sub.peerId) === reason) return;
   loggedPushFailures.set(sub.peerId, reason);
-  const target = `${sub.recordKind}/${sub.recordId} (sub ${sub.id}) to ${flattenLogText(peer.name || peer.instanceId)}`;
+  const target = `${sub.recordKind}/${sub.recordId} (sub ${sub.id}) to ${flattenLogText(peerLabel(peer))}`;
   const suffix = `${detail ? `: ${flattenLogText(detail)}` : ''} — record not delivered; repeat ${reason} failures for this peer are logged once until a push lands`;
   // An unreachable peer is routine (asleep, off the tailnet). Retryable
   // failures schedule the bounded walk; a peer the probe has marked offline
@@ -191,7 +192,7 @@ function reportPushRecovered(sub, peer) {
   const prior = loggedPushFailures.get(sub.peerId);
   if (!prior) return;
   loggedPushFailures.delete(sub.peerId);
-  console.log(`✅ peerSync: pushes to ${flattenLogText(peer.name || peer.instanceId)} landing again after ${prior}`);
+  console.log(`✅ peerSync: pushes to ${flattenLogText(peerLabel(peer))} landing again after ${prior}`);
 }
 
 export function __resetPushFailureLogForTests() {
@@ -205,29 +206,139 @@ async function isSubscriptionRecordTombstone(sub) {
   return record?.deleted === true;
 }
 
-export async function pushRecordToPeer(sub, options = {}) {
-  if (
-    !isPlainObject(sub)
-    || !isNonBlankStr(sub.peerId)
-    || !isNonBlankStr(sub.recordKind)
-    || !isNonBlankStr(sub.recordId)
-  ) {
-    return { pushed: false, reason: 'invalid-subscription' };
+function isPushableSubscription(sub) {
+  return isPlainObject(sub)
+    && isNonBlankStr(sub.peerId)
+    && isNonBlankStr(sub.recordKind)
+    && isNonBlankStr(sub.recordId);
+}
+
+// SCHEMA-BLOCK COOLDOWN — if the peer rejected our last push for being
+// schema-ahead, hold off re-probing on every local edit. Re-probes happen on
+// the next `peer:online` (where `retryPendingPushesForPeer` passes
+// `bypassSchemaCooldown: true`) or after the cooldown elapses. A tombstone
+// push is never held back.
+async function isSchemaBlockCooling(sub, options) {
+  if (!sub.blockedBySchema || options.bypassSchemaCooldown) return false;
+  if (await isSubscriptionRecordTombstone(sub)) return false;
+  const detectedAtMs = Date.parse(sub.blockedBySchema.detectedAt || '');
+  return Number.isFinite(detectedAtMs)
+    && (Date.now() - detectedAtMs) < SCHEMA_BLOCK_RETRY_COOLDOWN_MS;
+}
+
+// 409 with `code: SCHEMA_VERSION_AHEAD` means the receiver is on an OLDER
+// PortOS and can't parse our newer storage layout. Persist the gap on the
+// subscription so the Instances UI can surface "Peer X needs to update PortOS
+// to receive your updates" — and short-circuit retries to that peer for the
+// affected record kind. We don't tear down the subscription; when the peer
+// upgrades and reconnects, `peer:online` will re-fire pushRecordToPeer and the
+// next response either clears the block (success) or refreshes the gap info
+// (still behind). Returns the push result for a schema refusal, else null; a
+// 409 carrying any other code falls through to the caller's http-409 report.
+async function recordSchemaVersionRefusal(res, sub, peer) {
+  if (res?.status !== 409) return null;
+  const body = await res.json().catch(() => null);
+  if (body?.code !== ERR_SCHEMA_VERSION_AHEAD) return null;
+  // The global error handler nests our `err.details` under `context.details`
+  // (see server/routes/peerSync.js `mapAndRethrow`), so reach in two levels
+  // to get the original payload from the peerSync service.
+  const details = isPlainObject(body.context?.details) ? body.context.details : {};
+  const ahead = Array.isArray(details.ahead) ? details.ahead : [];
+  const behind = Array.isArray(details.behind) ? details.behind : [];
+  // `peerPortosVersion` describes the REJECTING peer's PortOS version (what we
+  // want to show in the SchemaGapBadge), so read `receiverPortosVersion` from
+  // the receiver-supplied details — NOT `senderPortosVersion`, which is our
+  // own version round-tripped from the payload we sent.
+  await persistSchemaVersionBlock(sub.id, {
+    ahead,
+    behind,
+    peerPortosVersion: typeof details.receiverPortosVersion === 'string' ? details.receiverPortosVersion : null,
+    peerSchemaVersions: isPlainObject(details.receiverSchemaVersions) ? details.receiverSchemaVersions : null,
+  });
+  console.log(
+    `⏸️ peerSync: ${peerLabel(peer)} rejected push — peer is on an older PortOS schema. ` +
+    `Re-tries will pause until they upgrade. ${formatVersionGap({ ahead, behind })}`,
+  );
+  return { pushed: false, reason: 'peer-schema-behind', blockedBySchema: true };
+}
+
+// Count BOTH generic assets and Writers Room draft bodies as "stranded" — a
+// body the receiver still has to pull keeps the push un-confirmed for the same
+// reason an asset does (a once-failed pull would otherwise be masked by the
+// next `unchanged` short-circuit and the prose body stranded).
+function countStrandedTransfers(body) {
+  const count = (list) => (Array.isArray(list) ? list.length : 0);
+  return count(body?.missingAssets) + count(body?.missingDraftBodies);
+}
+
+// #1922: a musicVideoProject subscription is also a delivery vehicle for its
+// bundled `linkedTrack` (#1858) — the receiver has no independent `track`
+// subscription to ack through, so tombstoneGc's `track` cutoff reads a
+// SEPARATE floor (`lastConfirmedTrackBundleAtMs`) off musicVideoProject rows.
+// It is distinct from `lastConfirmedPushedAt` because the latter advances even
+// when the bundled track merge failed or was stripped for a legacy peer
+// (`trackSyncPending`) — using it would let GC treat an unconfirmed bundled
+// tombstone as delivered.
+//
+// A pending flag alone isn't enough: `buildPushPayload` can OMIT
+// `linkedTrack` even though the project still has a `trackId` (the sender's
+// `getTrack()` lookup returned null or threw — transient or the track was
+// hard-deleted out from under it) — the receiver never sees a `linkedTrack`
+// key at all in that case, so it can't report `trackSyncPending` either.
+// `payload.record` keeps `trackId` for both live AND tombstoned
+// musicVideoProject pushes (whole-record LWW, no tombstone field-stripping —
+// see `sanitizeRecordForWire`'s `musicVideoProject` case), so the obligation
+// holds when no track is owed at all (`trackId` absent), OR a `linkedTrack`
+// was actually included in this push.
+function isLinkedTrackObligationSatisfied(sub, payload, pending) {
+  if (sub.recordKind !== 'musicVideoProject') return false;
+  if (pending.has(ENVELOPE_PENDING_KEYS.linkedTrack)) return false;
+  return !isStr(payload.record?.trackId) || Boolean(payload.linkedTrack);
+}
+
+// Conflict-journal base hash: this record's content now lives on the peer too
+// (the record always lands even when assets are still pulling), so stamp the
+// shared-state base for conflict-journal-aware kinds. This is the symmetric
+// convergence point to the receiver advancing its base in mergeXxxFromSync —
+// it keeps a peer's echo (reverse-subscription push-back) from later looking
+// like a divergence. Best-effort; never block the push result on a slow DISK
+// — only the filesystem flush runs fire-and-forget. The in-memory stamps ARE
+// awaited: `setSyncBaseHash` just mutates the cached map (no disk I/O), so
+// awaiting it costs nothing once the map is loaded, and it guarantees
+// `_baseDirty` is set before this push returns. That matters under
+// `withBaseHashFlushBatch` — the batch's terminal flush only writes when a
+// stamp landed, so a stamp still pending when the batch closed would be lost
+// until the next flush. The `.catch()` keeps a rejection from escaping.
+async function stampPushedBaseHashes(sub, payload) {
+  if (!PEER_SUBSCRIBABLE_KINDS.includes(sub.recordKind) || !payload.record) return;
+  // For mediaCollection, contentHashForRecord hashes only the scalar subset
+  // (items are union-merged on the receiver, so the post-push collections are
+  // NOT byte-identical — but their scalars converge, which is what the base
+  // hash tracks). For universe/series it's the full wire record. Same call
+  // either way; the narrowing lives in contentHashForRecord.
+  const stamps = [setSyncBaseHash(sub.recordKind, sub.recordId, contentHashForRecord(sub.recordKind, payload.record))];
+  // A series push bundles its child issues (`payload.issues`, already in
+  // wire form). The receiver seeds each issue's base hash on insert in
+  // mergeIssuesFromSync; stamp the SAME base here so the SENDER side also
+  // detects the first issue divergence on a later push-back. Issues never
+  // carry their own subscription — they ride the series push — so this is
+  // the only place the origin can seed an `issue`-keyed base hash. Without
+  // it, issue conflict journaling would be one-sided (receiver-only).
+  const bundledIssues = sub.recordKind === 'series' && Array.isArray(payload.issues) ? payload.issues : [];
+  for (const issue of bundledIssues) {
+    if (issue?.id) stamps.push(setSyncBaseHash('issue', issue.id, contentHashForRecord('issue', issue)));
   }
-  // SCHEMA-BLOCK COOLDOWN — if the peer rejected our last push for being
-  // schema-ahead, hold off re-probing on every local edit. Re-probes happen
-  // on the next `peer:online` (where `retryPendingPushesForPeer` passes
-  // `bypassSchemaCooldown: true`) or after the cooldown elapses.
-  if (sub.blockedBySchema && !options.bypassSchemaCooldown) {
-    const tombstonePush = await isSubscriptionRecordTombstone(sub);
-    if (!tombstonePush) {
-      const detectedAtMs = Date.parse(sub.blockedBySchema.detectedAt || '');
-      const stillCooling = Number.isFinite(detectedAtMs)
-        && (Date.now() - detectedAtMs) < SCHEMA_BLOCK_RETRY_COOLDOWN_MS;
-      if (stillCooling) {
-        return { pushed: false, reason: 'peer-schema-behind-cooldown', blockedBySchema: true };
-      }
-    }
+  await Promise.all(stamps).catch((err) => console.log(`⚠️ peerSync: base-hash stamp after push failed: ${err?.message || err}`));
+  // Non-blocking disk write. Inside a flush batch this is a no-op (the batch's
+  // terminal flush coalesces every record's stamps into one rewrite); outside
+  // a batch it fires async exactly as before.
+  flushBaseHashes().catch((err) => console.log(`⚠️ peerSync: base-hash flush after push failed: ${err?.message || err}`));
+}
+
+export async function pushRecordToPeer(sub, options = {}) {
+  if (!isPushableSubscription(sub)) return { pushed: false, reason: 'invalid-subscription' };
+  if (await isSchemaBlockCooling(sub, options)) {
+    return { pushed: false, reason: 'peer-schema-behind-cooldown', blockedBySchema: true };
   }
   const peer = await findPeerById(sub.peerId);
   if (!peer) return { pushed: false, reason: 'peer-not-found' };
@@ -307,7 +418,7 @@ export async function pushRecordToPeer(sub, options = {}) {
     const legacyPayload = { ...payload };
     for (const { key } of stripped) delete legacyPayload[key];
     console.log(
-      `ℹ️ peerSync: ${peer.name || peer.instanceId} rejected newer envelope key(s) ${stripped.map((e) => e.key).join(', ')} — retrying push without them`,
+      `ℹ️ peerSync: ${peerLabel(peer)} rejected newer envelope key(s) ${stripped.map((e) => e.key).join(', ')} — retrying push without them`,
     );
     res = await postPayload(legacyPayload);
   } else if (unknownKind) {
@@ -320,44 +431,13 @@ export async function pushRecordToPeer(sub, options = {}) {
     await persistSchemaVersionBlock(sub.id, { reason: 'peer-pre-feature' });
     // Same class as a schema-version refusal: the peer is behind, the block is persisted, and re-tries pause.
     console.log(
-      `⏸️ peerSync: ${peer.name || peer.instanceId} rejected push — its PortOS doesn't recognize the ` +
+      `⏸️ peerSync: ${peerLabel(peer)} rejected push — its PortOS doesn't recognize the ` +
       `'${sub.recordKind}' record kind yet. Re-tries pause until they upgrade.`,
     );
     return { pushed: false, reason: 'peer-schema-behind', blockedBySchema: true };
   }
-  // 409 with `code: SCHEMA_VERSION_AHEAD` means the receiver is on an OLDER
-  // PortOS and can't parse our newer storage layout. Persist the gap on the
-  // subscription so the Instances UI can surface "Peer X needs to update
-  // PortOS to receive your updates" — and short-circuit retries to that
-  // peer for the affected record kind. We don't tear down the subscription;
-  // when the peer upgrades and reconnects, `peer:online` will re-fire
-  // pushRecordToPeer and the next response either clears the block (success)
-  // or refreshes the gap info (still behind).
-  if (res && res.status === 409) {
-    const body = await res.json().catch(() => null);
-    if (body?.code === ERR_SCHEMA_VERSION_AHEAD) {
-      // The global error handler nests our `err.details` under `context.details`
-      // (see server/routes/peerSync.js `mapAndRethrow`), so reach in two levels
-      // to get the original payload from the peerSync service.
-      const details = isPlainObject(body.context?.details) ? body.context.details : {};
-      // `peerPortosVersion` describes the REJECTING peer's PortOS version
-      // (what we want to show in the SchemaGapBadge), so read
-      // `receiverPortosVersion` from the receiver-supplied details — NOT
-      // `senderPortosVersion`, which is our own version round-tripped from
-      // the payload we sent.
-      await persistSchemaVersionBlock(sub.id, {
-        ahead: Array.isArray(details.ahead) ? details.ahead : [],
-        behind: Array.isArray(details.behind) ? details.behind : [],
-        peerPortosVersion: typeof details.receiverPortosVersion === 'string' ? details.receiverPortosVersion : null,
-        peerSchemaVersions: isPlainObject(details.receiverSchemaVersions) ? details.receiverSchemaVersions : null,
-      });
-      console.log(
-        `⏸️ peerSync: ${peer.name || peer.instanceId} rejected push — peer is on an older PortOS schema. ` +
-        `Re-tries will pause until they upgrade. ${formatVersionGap({ ahead: details.ahead || [], behind: details.behind || [] })}`,
-      );
-      return { pushed: false, reason: 'peer-schema-behind', blockedBySchema: true };
-    }
-  }
+  const schemaRefusal = await recordSchemaVersionRefusal(res, sub, peer);
+  if (schemaRefusal) return schemaRefusal;
   if (!res) {
     reportPushFailure(sub, peer, 'network', networkError?.message);
     return { pushed: false, reason: 'network' };
@@ -403,12 +483,7 @@ export async function pushRecordToPeer(sub, options = {}) {
   // complete (manifest hash-equal pushes are no-ops on the receiver's
   // merge LWW path; only cost is one redundant POST per push cycle
   // until the receiver finishes pulling).
-  // Count BOTH generic assets and Writers Room draft bodies as "stranded" — a
-  // body the receiver still has to pull keeps the push un-confirmed for the same
-  // reason an asset does (a once-failed pull would otherwise be masked by the
-  // next `unchanged` short-circuit and the prose body stranded).
-  const missingCount = (Array.isArray(body?.missingAssets) ? body.missingAssets.length : 0)
-    + (Array.isArray(body?.missingDraftBodies) ? body.missingDraftBodies.length : 0);
+  const missingCount = countStrandedTransfers(body);
   // SIDECAR-STRANDED GUARD: a bundled doc the receiver doesn't hold yet —
   // reported pending by it, or stripped above for a legacy peer — withholds
   // lastPushedHash exactly like the missing-assets case.
@@ -422,35 +497,11 @@ export async function pushRecordToPeer(sub, options = {}) {
   // the tombstone's deletedAt once it lands. The `missingAssets` case still
   // counts as confirmed delivery of the RECORD (merge ran on the receiver);
   // only the asset-stranded hash is withheld, not the confirmation mark.
-  //
-  // #1922: a musicVideoProject subscription is also a delivery vehicle for
-  // its bundled `linkedTrack` (#1858) — the receiver has no independent
-  // `track` subscription to ack through. Stamp a SEPARATE floor
-  // (`lastConfirmedTrackBundleAtMs`) tombstoneGc's `track` cutoff reads off
-  // musicVideoProject rows, distinct from `lastConfirmedPushedAt` because the
-  // latter advances even when the bundled track merge failed or was stripped
-  // for a legacy peer (`trackSyncPending`) — using it here would let GC treat
-  // an unconfirmed bundled tombstone as delivered.
-  //
-  // `!trackSyncPending` alone isn't enough: `buildPushPayload` can OMIT
-  // `linkedTrack` even though the project still has a `trackId` (the sender's
-  // `getTrack()` lookup returned null or threw — transient or the track was
-  // hard-deleted out from under it) — the receiver never sees a `linkedTrack`
-  // key at all in that case, so it can't report `trackSyncPending` either.
-  // `payload.record` keeps `trackId` for both live AND tombstoned
-  // musicVideoProject pushes (whole-record LWW, no tombstone field-stripping —
-  // see `sanitizeRecordForWire`'s `musicVideoProject` case), so gate on: no
-  // track is owed at all (`trackId` absent), OR a `linkedTrack` was actually
-  // included in this push.
-  const trackOwed = isStr(payload.record?.trackId);
-  const trackSyncPending = pending.has(ENVELOPE_PENDING_KEYS.linkedTrack);
-  const linkedTrackObligationSatisfied = sub.recordKind === 'musicVideoProject'
-    && !trackSyncPending
-    && (!trackOwed || Boolean(payload.linkedTrack));
+  // musicVideoProject rows also stamp the bundled-track floor (#1922).
   const recordPushAcceptedAtMs = payloadSnapshotAtMs;
   const deliveryEvidence = {
     recordPushAcceptedAtMs,
-    linkedTrackObligationSatisfiedAtMs: linkedTrackObligationSatisfied ? recordPushAcceptedAtMs : null,
+    linkedTrackObligationSatisfiedAtMs: isLinkedTrackObligationSatisfied(sub, payload, pending) ? recordPushAcceptedAtMs : null,
     retrySuppression: {
       fullPayloadHash: pushedHash,
       legacyStrippedPayloadHash: legacyStrippedHash,
@@ -462,44 +513,7 @@ export async function pushRecordToPeer(sub, options = {}) {
       console.warn(`⚠️ peerSync: tombstone cursor ack for ${sub.peerId} after push of ${sub.recordKind}/${sub.recordId} failed (retried on the next push): ${err?.message || err}`);
     });
   }
-  // Conflict-journal base hash: this record's content now lives on the peer too
-  // (the record always lands even when assets are still pulling), so stamp the
-  // shared-state base for conflict-journal-aware kinds. This is the symmetric
-  // convergence point to the receiver advancing its base in mergeXxxFromSync —
-  // it keeps a peer's echo (reverse-subscription push-back) from later looking
-  // like a divergence. Best-effort; never block the push result on a slow DISK
-  // — only the filesystem flush runs fire-and-forget. The in-memory stamps ARE
-  // awaited: `setSyncBaseHash` just mutates the cached map (no disk I/O), so
-  // awaiting it costs nothing once the map is loaded, and it guarantees
-  // `_baseDirty` is set before this push returns. That matters under
-  // `withBaseHashFlushBatch` — the batch's terminal flush only writes when a
-  // stamp landed, so a stamp still pending when the batch closed would be lost
-  // until the next flush. The `.catch()` keeps a rejection from escaping.
-  if (PEER_SUBSCRIBABLE_KINDS.includes(sub.recordKind) && payload.record) {
-    // For mediaCollection, contentHashForRecord hashes only the scalar subset
-    // (items are union-merged on the receiver, so the post-push collections are
-    // NOT byte-identical — but their scalars converge, which is what the base
-    // hash tracks). For universe/series it's the full wire record. Same call
-    // either way; the narrowing lives in contentHashForRecord.
-    const stamps = [setSyncBaseHash(sub.recordKind, sub.recordId, contentHashForRecord(sub.recordKind, payload.record))];
-    // A series push bundles its child issues (`payload.issues`, already in
-    // wire form). The receiver seeds each issue's base hash on insert in
-    // mergeIssuesFromSync; stamp the SAME base here so the SENDER side also
-    // detects the first issue divergence on a later push-back. Issues never
-    // carry their own subscription — they ride the series push — so this is
-    // the only place the origin can seed an `issue`-keyed base hash. Without
-    // it, issue conflict journaling would be one-sided (receiver-only).
-    if (sub.recordKind === 'series' && Array.isArray(payload.issues)) {
-      for (const issue of payload.issues) {
-        if (issue?.id) stamps.push(setSyncBaseHash('issue', issue.id, contentHashForRecord('issue', issue)));
-      }
-    }
-    await Promise.all(stamps).catch((err) => console.log(`⚠️ peerSync: base-hash stamp after push failed: ${err?.message || err}`));
-    // Non-blocking disk write. Inside a flush batch this is a no-op (the batch's
-    // terminal flush coalesces every record's stamps into one rewrite); outside
-    // a batch it fires async exactly as before.
-    flushBaseHashes().catch((err) => console.log(`⚠️ peerSync: base-hash flush after push failed: ${err?.message || err}`));
-  }
+  await stampPushedBaseHashes(sub, payload);
   // HTTP 2xx is not "settled" when lastPushedHash was withheld: assets, draft
   // bodies, or a receiver-pending sidecar are still owed, and `peer:online`
   // will not run again while the probe still says online. A legacy strip is

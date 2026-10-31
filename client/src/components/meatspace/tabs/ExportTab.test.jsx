@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 
 vi.mock('../../../services/api', () => ({
   getBloodTests: vi.fn(),
-  getMeatspaceConfig: vi.fn(async () => null)
+  getMeatspaceConfig: vi.fn(async () => ({}))
 }));
 vi.mock('../../../lib/clipboard', () => ({ copyToClipboard: vi.fn() }));
 import ExportTab from './ExportTab';
@@ -23,6 +23,15 @@ describe('ExportTab load failure vs empty', () => {
     api.getBloodTests.mockResolvedValueOnce({ tests: [] });
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     expect(await screen.findByRole('button', { name: /Print/ })).toBeInTheDocument();
+  });
+
+  it('offers no Print/Copy when the profile read rejects, so a blank lifestyle section is never printed', async () => {
+    api.getBloodTests.mockResolvedValueOnce({ tests: [] });
+    api.getMeatspaceConfig.mockRejectedValueOnce(new Error('boom'));
+    render(<ExportTab />);
+    expect(await screen.findByText(/Could not build the clinician summary\. Retry\./)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Print/ })).not.toBeInTheDocument();
+    expect(api.getMeatspaceConfig).toHaveBeenLastCalledWith({ silent: true });
   });
 
   it('keeps the report and its empty sentence for a successful empty payload', async () => {
