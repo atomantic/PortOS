@@ -411,7 +411,7 @@ function resolveRouteEndpoint(binding, instance, definition) {
   const protocol = binding.protocol || null;
   const baseUrl = protocol ? instance.transports[protocol]?.baseUrl ?? null : null;
   if (protocol && !baseUrl) {
-    return { error: { code: 'SERVICE_ENDPOINT_REQUIRED', message: `${definition.label} declares no ${protocol} endpoint; set its base URL first.` } };
+    return { error: serviceError('SERVICE_ENDPOINT_REQUIRED', `${definition.label} declares no ${protocol} endpoint; set its base URL first.`) };
   }
   const env = {};
   const args = [];
@@ -489,18 +489,18 @@ export function materializeRouteOutcome({
 
   const recipe = harness.recipe;
   const apiKey = typeof instance.credentials.apiKey === 'string' ? instance.credentials.apiKey : '';
-  const endpoint = resolveRouteEndpoint(binding, instance, definition);
-  if (endpoint.error) return refuse(endpoint.error.code, endpoint.error.message);
+  const { error: endpointError, env: endpointEnv, args: endpointArgs, endpoint } = resolveRouteEndpoint(binding, instance, definition);
+  if (endpointError) return { record: null, error: endpointError };
   const credential = resolveRouteCredential(binding, instance, definition);
   if (credential.required && apiKey === '') {
     return refuse('SERVICE_CREDENTIAL_REQUIRED',
       `${harness.label} will not start without a ${credential.envName || 'key'} for ${definition.label}. Set one first — any non-empty value works for a local daemon that ignores it.`);
   }
 
-  const envVars = { ...endpoint.env };
+  const envVars = { ...endpointEnv };
   const secretEnvVars = [];
-  const fields = endpoint.endpoint ? { endpoint: endpoint.endpoint } : {};
-  const args = [...(recipe?.modes?.[method]?.args || []), ...endpoint.args];
+  const fields = endpoint ? { endpoint } : {};
+  const args = [...(recipe?.modes?.[method]?.args || []), ...endpointArgs];
   if (credential.via === 'field') fields.apiKey = apiKey;
   // A required key is already refused above when empty, so a set key is the only export case.
   if (credential.envName && apiKey !== '') {

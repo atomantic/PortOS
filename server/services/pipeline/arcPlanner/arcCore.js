@@ -781,13 +781,13 @@ function mergeResolvedArc(storedArc, arcEdit, { exactTextMode }) {
     // The resolve prompt doesn't author the reader map — preserve any existing
     // one so auto-resolve never silently wipes a reader map the user already
     // built on the next step. Mirrors `generateArcOverview` above.
-    seriesDesign: storedArc?.seriesDesign,
-    readerMap: storedArc?.readerMap ?? null,
+    seriesDesign: storedArc.seriesDesign,
+    readerMap: storedArc.readerMap ?? null,
     // A sparse repair can move existing countdown beats without replacing them.
-    tickingClock: mergeTickingClockPatch(storedArc?.tickingClock, arcEdit?.tickingClock).value ?? null,
+    tickingClock: mergeTickingClockPatch(storedArc.tickingClock, arcEdit?.tickingClock).value ?? null,
     // The resolve prompt doesn't author the foreshadowing ledger — take it if
     // present, else preserve any existing one so auto-resolve never wipes it.
-    foreshadowing: arcEdit?.foreshadowing ?? storedArc?.foreshadowing ?? null,
+    foreshadowing: arcEdit?.foreshadowing ?? storedArc.foreshadowing ?? null,
     status: 'draft',
   });
   return { arc, rejected: arcSummary.rejected + protagonistArc.rejected };
@@ -925,8 +925,9 @@ export async function resolveVerifyIssues(seriesId, options = {}) {
   }
 
 
-  const { arc, rejected: arcRejected } = mergeResolvedArc(series.arc, edits.arc, { exactTextMode });
-  let rejectedExactEdits = arcRejected;
+  const merged = mergeResolvedArc(series.arc, edits.arc, { exactTextMode });
+  const { arc } = merged;
+  let rejectedExactEdits = merged.rejected;
 
   // Round-trip the LLM's seasons through `buildSeason` if they include a
   // brand-new entry (no `id`), otherwise preserve the existing `id` so child
