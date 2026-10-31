@@ -306,7 +306,7 @@ export default function BrowserPage() {
             <button
               onClick={fetchLogs}
               aria-label="Refresh logs"
-              className="text-xs text-gray-400 hover:text-white transition-colors"
+              className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 text-xs text-gray-400 hover:text-white transition-colors"
             >
               <RefreshCw size={14} />
             </button>

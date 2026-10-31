@@ -3577,6 +3577,41 @@ describe('a11y conventions', () => {
     expect(offenders, `Icon-only <button> under the 44px touch-target minimum — add min-h-[44px] min-w-[44px] inline-flex items-center justify-center and leave the icon size alone:\n${offenders.join("\n")}`).toEqual([]);
   });
 
+  it('gives every icon-only button a touch-size hit area (#14416)', () => {
+    // The rule above polices the tight-padding shape; this one covers every
+    // icon-only button, whose tap target is otherwise its 12-20px glyph. A
+    // dense desktop row stays compact with `pointer-coarse:min-h-11
+    // pointer-coarse:min-w-11`; bare <summary> rows get their touch height from
+    // the base rule in src/index.css.
+    const SIZED = /(?:^|\s)(?:[a-z0-9-]+:)*(?:min-[hw]-|size-|[hw]-(?:[89]|\d\d|\[|full|screen)|p-(?:[2-9]|\d\d|\[))/;
+    const literalClass = (tag) => {
+      const quoted = /\bclassName=(["'])([^"']*)\1/.exec(tag);
+      if (quoted) return quoted[2];
+      const template = /\bclassName=\{`([^`]*)`\}/.exec(tag);
+      // A template with no static classes is dynamic, reviewed by hand like the rules above.
+      const statics = template ? template[1].replace(/\$\{[^}]*\}/g, ' ') : '';
+      return statics.trim() ? statics : null;
+    };
+    const offendersIn = (file, src) => {
+      const out = [];
+      for (const node of forEachOpeningTag(src, 'button')) {
+        if (!isIconOnlyButton(src, node)) continue;
+        const cls = literalClass(node.tag);
+        if (cls == null || SIZED.test(` ${cls} `)) continue;
+        out.push(`${file}:${lineOf(src, node.index)}`);
+      }
+      return out;
+    };
+    const probe = (markup) => offendersIn('probe.jsx', markup).length;
+    expect(probe('<button aria-label="Remove" className="text-gray-500"><X size={14} /></button>')).toBe(1);
+    expect(probe('<button aria-label="Toggle" className={`p-1 ${on ? "a" : "b"}`}>{on ? <ChevronUp size={14} /> : <ChevronDown size={14} />}</button>')).toBe(1);
+    expect(probe('<button aria-label="Remove" className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-1"><X size={14} /></button>')).toBe(0);
+    expect(probe('<button aria-label="Remove" className="p-2"><X size={14} /></button>')).toBe(0);
+
+    const offenders = trackedJsxFiles().flatMap((file) => offendersIn(file, rawSourceOf(file)));
+    expect(offenders, `Icon-only <button> with a glyph-sized tap target — add pointer-coarse:min-h-11 pointer-coarse:min-w-11 (or min-h-[44px] min-w-[44px]):\n${offenders.join('\n')}`).toEqual([]);
+  });
+
   it('never autofocuses a button on a surface that submits with a key', () => {
     // The Enter that submits an answer is still down when the control it
     // reveals mounts and takes focus, so the browser activates that control off

@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { musicVideoGreyboxReference } from '../../../../server/lib/musicVideoGreybox.js';
+import MediaImage from '../MediaImage';
 
 /** An explicit set/camera choice. Loading and missing captures remain visible. */
 export default function SceneGreyboxReference({ project, scene, places = {}, onChange, onSaving, disabled = false }) {
@@ -49,7 +50,7 @@ export default function SceneGreyboxReference({ project, scene, places = {}, onC
       {context?.error && <p role="alert" className="text-xs text-port-error">{context.error}</p>}
       {context?.reference?.imageId === missingCapture && <p role="alert" className="text-xs text-port-error">The greybox capture file could not be loaded. Capture this camera again before rendering.</p>}
       {context?.reference && <figure className="flex items-center gap-2 text-xs">
-        <img src={`/data/images/${encodeURIComponent(context.reference.imageId)}`} alt={context.reference.label} onError={() => setMissingCapture(context.reference.imageId)} onLoad={() => setMissingCapture((missing) => missing === context.reference.imageId ? null : missing)} className="h-20 w-32 rounded object-contain" />
+        <MediaImage thumbnail src={`/data/images/${encodeURIComponent(context.reference.imageId)}`} alt={context.reference.label} onError={() => setMissingCapture(context.reference.imageId)} onLoad={() => setMissingCapture((missing) => missing === context.reference.imageId ? null : missing)} className="h-20 w-32 rounded object-contain" />
         <figcaption>{context.reference.label} · sent as a set reference</figcaption>
       </figure>}
     </fieldset>

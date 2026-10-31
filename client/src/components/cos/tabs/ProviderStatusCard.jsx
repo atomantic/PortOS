@@ -113,7 +113,7 @@ export default function ProviderStatusCard() {
             <button
               onClick={loadData}
               aria-label="Retry loading status"
-              className="ml-2 text-gray-500 hover:text-white transition-colors"
+              className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 ml-2 text-gray-500 hover:text-white transition-colors"
             >
               <RefreshCw size={12} />
             </button>
@@ -138,7 +138,7 @@ export default function ProviderStatusCard() {
             <button
               onClick={loadData}
               aria-label="Refresh"
-              className="ml-2 text-gray-500 hover:text-white transition-colors"
+              className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 ml-2 text-gray-500 hover:text-white transition-colors"
             >
               <RefreshCw size={12} />
             </button>
@@ -161,7 +161,7 @@ export default function ProviderStatusCard() {
         <button
           onClick={loadData}
           aria-label="Refresh"
-          className="text-gray-500 hover:text-white transition-colors"
+          className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 text-gray-500 hover:text-white transition-colors"
         >
           <RefreshCw size={14} />
         </button>

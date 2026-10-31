@@ -304,7 +304,7 @@ export function RunFeedback({ runId, current, onRate, tasteAware = false }) {
         aria-label="Like this result"
         aria-pressed={isUp}
         title="Like — steer future runs toward this"
-        className={`p-1 rounded disabled:opacity-50 ${isUp ? 'text-port-success' : 'text-gray-500 hover:text-gray-300'}`}
+        className={`pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-1 rounded disabled:opacity-50 ${isUp ? 'text-port-success' : 'text-gray-500 hover:text-gray-300'}`}
       >
         <ThumbsUp className="w-3.5 h-3.5" />
       </button>
@@ -315,7 +315,7 @@ export function RunFeedback({ runId, current, onRate, tasteAware = false }) {
         aria-label="Dislike this result"
         aria-pressed={isDown}
         title="Dislike — steer future runs away from this"
-        className={`p-1 rounded disabled:opacity-50 ${isDown ? 'text-port-error' : 'text-gray-500 hover:text-gray-300'}`}
+        className={`pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-1 rounded disabled:opacity-50 ${isDown ? 'text-port-error' : 'text-gray-500 hover:text-gray-300'}`}
       >
         <ThumbsDown className="w-3.5 h-3.5" />
       </button>

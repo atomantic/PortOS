@@ -22,6 +22,7 @@ import {
   roundVec,
   greyboxEditErrors,
 } from '../../lib/greybox';
+import MediaImage from '../MediaImage';
 
 // three.js stays out of the main chunk: the viewer loads when the tab opens.
 const GreyboxViewer = lazy(() => import('./GreyboxViewer'));
@@ -388,7 +389,7 @@ export default function GreyboxPanel({ record, media, readOnly = false, disabled
                     <button type="button" aria-pressed={s.id === shotId} onClick={() => selectShot(s.id)}
                       className={`w-full min-h-[44px] flex items-center gap-2 rounded-lg border px-2 text-left text-sm ${s.id === shotId ? 'border-port-accent text-white bg-port-accent/10' : 'border-port-border text-gray-300 hover:text-white'}`}>
                       {capture
-                        ? <img src={`/data/images/${encodeURIComponent(capture.mediaKey)}`} alt="" loading="lazy" decoding="async" className="h-8 w-12 object-cover rounded" />
+                        ? <MediaImage thumbnail src={`/data/images/${encodeURIComponent(capture.mediaKey)}`} alt="" loading="lazy" decoding="async" className="h-8 w-12 object-cover rounded" />
                         : <span className="h-8 w-12 rounded bg-port-bg border border-port-border flex items-center justify-center text-gray-500"><Camera size={14} aria-hidden="true" /></span>}
                       <span className="min-w-0 flex-1 truncate">{s.label}</span>
                       <span className="text-[11px] text-gray-500">{s.focalLengthMm}mm · {s.aspect}</span>

@@ -85,7 +85,7 @@ export default function BeatSection({
           </span>
         )}
         <div className="flex items-center ml-auto">
-          <button type="button" className={`${iconButton} ${showDetails ? 'text-port-accent' : ''}`} onClick={() => setShowDetails((v) => !v)}
+          <button type="button" className={`pointer-coarse:min-h-11 pointer-coarse:min-w-11 ${iconButton} ${showDetails ? 'text-port-accent' : ''}`} onClick={() => setShowDetails((v) => !v)}
             aria-expanded={showDetails} aria-controls={fieldId('details')} aria-label="Beat details">
             <SlidersHorizontal size={16} />
           </button>
@@ -95,7 +95,7 @@ export default function BeatSection({
           <button type="button" className={iconButton} onClick={() => onMove(beatIndex + 1)} disabled={beatIndex >= beatCount - 1} aria-label="Move beat down">
             <ChevronDown size={16} />
           </button>
-          <button type="button" className={`${iconButton} hover:text-port-error`} onClick={() => setConfirmDelete(true)} aria-label="Delete beat">
+          <button type="button" className={`pointer-coarse:min-h-11 pointer-coarse:min-w-11 ${iconButton} hover:text-port-error`} onClick={() => setConfirmDelete(true)} aria-label="Delete beat">
             <Trash2 size={16} />
           </button>
         </div>

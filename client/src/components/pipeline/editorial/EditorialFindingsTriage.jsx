@@ -413,7 +413,7 @@ function CheckGroup({ seriesId, group, onCommentChange, selectedIds, onToggleSel
             aria-expanded={showInfo}
             aria-label={`${showInfo ? 'Hide' : 'Show'} description for ${group.label}`}
             title="Show what this check looks for"
-            className={`inline-flex shrink-0 items-center rounded border px-1.5 py-0.5 text-[10px] ${
+            className={`pointer-coarse:min-h-11 pointer-coarse:min-w-11 inline-flex shrink-0 items-center rounded border px-1.5 py-0.5 text-[10px] ${
               showInfo
                 ? 'border-port-accent/50 text-port-accent'
                 : 'border-port-border text-gray-500 hover:border-port-accent/40 hover:text-gray-200'

@@ -150,8 +150,9 @@ export default function MediaImage({
       onError={(e) => {
         // A peer running an older release may reject poster requests while
         // still allowing the original image or video to be streamed.
-        if (fallbackIndex + 1 < fallbacks.length) setFallbackIndex(fallbackIndex + 1);
-        else if (fallbackVideoSrc) setShowVideo(true);
+        // The caller hears only the final failure, not a thumbnail that falls back to its original.
+        if (fallbackIndex + 1 < fallbacks.length) { setFallbackIndex(fallbackIndex + 1); return; }
+        if (fallbackVideoSrc) setShowVideo(true);
         else if (tracksPeerAsset) setErrored(true);
         callerOnError?.(e);
       }}

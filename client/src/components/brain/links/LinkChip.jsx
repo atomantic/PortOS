@@ -22,7 +22,7 @@ export default function LinkChip({ link, onRemove, dragHandleProps }) {
           ref={dragHandleProps.setActivatorNodeRef}
           {...dragHandleProps.attributes}
           {...dragHandleProps.listeners}
-          className="shrink-0 flex items-center justify-center touch-none text-gray-600 hover:text-gray-300 cursor-grab active:cursor-grabbing"
+          className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 shrink-0 flex items-center justify-center touch-none text-gray-600 hover:text-gray-300 cursor-grab active:cursor-grabbing"
           aria-label={`Drag ${link.title}`}
           title="Drag to reorder or move to another bucket"
         >

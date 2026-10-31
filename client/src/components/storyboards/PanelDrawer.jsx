@@ -320,7 +320,7 @@ function CastTab({ panel, onPatch }) {
           <div className="flex items-center gap-2 mb-1">
             <Icon size={14} className="text-gray-500" aria-hidden="true" />
             <h3 className="text-xs font-medium text-gray-300">{label}</h3>
-            <button type="button" className={`${iconButton} ml-auto`} onClick={() => setPicking(field)} aria-label={`Add ${label.toLowerCase()}`}>
+            <button type="button" className={`pointer-coarse:min-h-11 pointer-coarse:min-w-11 ${iconButton} ml-auto`} onClick={() => setPicking(field)} aria-label={`Add ${label.toLowerCase()}`}>
               <Plus size={16} />
             </button>
           </div>

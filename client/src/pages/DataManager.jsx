@@ -366,7 +366,7 @@ function CategoryRow({ onMaintenanceComplete, cat, maxSize, onExpand, expanded, 
                                 <button
                                   onClick={() => requestDelete(item.name)}
                                   disabled={busy || !!deletingItem || !!purging || !!archiving || confirmingPurge}
-                                  className="text-gray-500 hover:text-port-error transition-colors disabled:opacity-50"
+                                  className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 text-gray-500 hover:text-port-error transition-colors disabled:opacity-50"
                                   title={`Delete ${item.name}`}
                                   aria-label={`Delete ${item.name} from ${cat.label}`}
                                 >
@@ -444,7 +444,7 @@ function BackupsSection({ backups, loading, onDelete }) {
                   ) : (
                     <button
                       onClick={() => requestDelete(b.name)}
-                      className="text-gray-500 hover:text-port-error transition-colors"
+                      className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 text-gray-500 hover:text-port-error transition-colors"
                       title="Delete backup" aria-label="Delete backup"
                     >
                       <Trash2 size={12} />

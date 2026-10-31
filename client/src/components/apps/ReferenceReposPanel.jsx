@@ -331,14 +331,14 @@ function RefRow({ reference, snapshot, checking, editingNotes, onCheck, onMarkRe
           )}
           <button
             onClick={onEditNotes}
-            className="px-2 py-1 text-gray-400 hover:text-white rounded"
+            className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 px-2 py-1 text-gray-400 hover:text-white rounded"
             title="Edit notes" aria-label="Edit notes"
           >
             <Edit3 size={12} />
           </button>
           <button
             onClick={onDelete}
-            className="px-2 py-1 text-gray-400 hover:text-port-error rounded"
+            className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 px-2 py-1 text-gray-400 hover:text-port-error rounded"
             title="Remove this reference" aria-label="Remove this reference"
           >
             <Trash2 size={12} />

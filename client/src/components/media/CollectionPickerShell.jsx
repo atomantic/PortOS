@@ -281,7 +281,7 @@ export default function CollectionPickerShell({
         <button
           type="submit"
           disabled={creating || busy || !newName.trim()}
-          className="px-2 py-1 bg-port-accent/20 hover:bg-port-accent/40 text-port-accent text-[11px] rounded disabled:opacity-40 flex items-center gap-1"
+          className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 px-2 py-1 bg-port-accent/20 hover:bg-port-accent/40 text-port-accent text-[11px] rounded disabled:opacity-40 flex items-center gap-1"
           title={createTitle} aria-label={createTitle}
         >
           <Plus className="w-3 h-3" />

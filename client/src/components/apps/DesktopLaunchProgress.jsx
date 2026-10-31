@@ -55,7 +55,7 @@ export default function DesktopLaunchProgress({ appId, processName, online, rela
         <button
           onClick={onDismiss}
           aria-label="Hide launch output"
-          className="text-gray-400 hover:text-white transition-colors shrink-0"
+          className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 text-gray-400 hover:text-white transition-colors shrink-0"
         >
           <X size={16} />
         </button>

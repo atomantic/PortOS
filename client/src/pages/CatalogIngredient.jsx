@@ -1360,7 +1360,7 @@ function AliasListEditor({ field, value, onChange }) {
                 <input id={inputId} type="text" value={v} maxLength={itemMax}
                   onChange={(e) => update(i, e.target.value)} className={`${listInput} w-40`} />
                 <button type="button" onClick={() => remove(i)} aria-label={`Remove ${label} ${i + 1}`}
-                  className="text-gray-500 hover:text-port-error"><X size={12} aria-hidden="true" /></button>
+                  className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 text-gray-500 hover:text-port-error"><X size={12} aria-hidden="true" /></button>
               </span>
             );
           })}
@@ -1405,7 +1405,7 @@ function ColorPaletteEditor({ field, value, onChange }) {
                 aria-label={`${label} ${i + 1} role`}
                 onChange={(e) => update(i, 'role', e.target.value)} className={`${listInput} w-32`} />
               <button type="button" onClick={() => remove(i)} aria-label={`Remove ${label} ${i + 1}`}
-                className="text-gray-500 hover:text-port-error"><X size={12} aria-hidden="true" /></button>
+                className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 text-gray-500 hover:text-port-error"><X size={12} aria-hidden="true" /></button>
             </li>
           ))}
         </ul>
@@ -1441,7 +1441,7 @@ function StatListEditor({ field, value, onChange }) {
               <input id={`${field.key}-value-${i}`} type="text" placeholder="value" value={s.value || ''} maxLength={itemMax}
                 onChange={(e) => update(i, 'value', e.target.value)} className={`${listInput} w-40`} />
               <button type="button" onClick={() => remove(i)} aria-label={`Remove ${label} ${i + 1}`}
-                className="text-gray-500 hover:text-port-error"><X size={12} aria-hidden="true" /></button>
+                className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 text-gray-500 hover:text-port-error"><X size={12} aria-hidden="true" /></button>
             </li>
           ))}
         </ul>
@@ -1540,7 +1540,7 @@ function RelationsPanel({ record, relations, evidence, onAdd, onRemove, readOnly
                         ) : (
                           <button type="button" onClick={() => setArmedRelation(relationKey)}
                             aria-label={`Remove relation to ${relationName}`}
-                            className="text-gray-500 hover:text-port-error">
+                            className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 text-gray-500 hover:text-port-error">
                             <X size={12} aria-hidden="true" />
                           </button>
                         ))}

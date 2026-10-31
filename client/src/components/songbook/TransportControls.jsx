@@ -39,7 +39,7 @@ export const PlayStopButton = ({ playing, onToggle, hasMusic = true, hint = '', 
       type="button"
       onClick={onToggle}
       disabled={!hasMusic}
-      className={`${ctrlBtnClass} disabled:opacity-40 disabled:hover:bg-transparent ${playing ? activeCtrlClass : ''}`}
+      className={`pointer-coarse:min-h-11 pointer-coarse:min-w-11 ${ctrlBtnClass} disabled:opacity-40 disabled:hover:bg-transparent ${playing ? activeCtrlClass : ''}`}
       aria-label={playing ? 'Stop play-along' : 'Play along'}
       title={hasMusic ? [action, hint].filter(Boolean).join(' ') : emptyHint}
     >

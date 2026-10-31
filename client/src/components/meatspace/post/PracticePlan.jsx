@@ -191,7 +191,7 @@ export default function PracticePlan({ config, onSaved, onBack }) {
               aria-label={`${isOpen ? 'Collapse' : 'Expand'} ${topic.label}`}
               aria-expanded={isOpen}
               onClick={() => setExpanded(prev => ({ ...prev, [topic.id]: !prev[topic.id] }))}
-              className="text-gray-500 hover:text-white transition-colors"
+              className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 text-gray-500 hover:text-white transition-colors"
             >
               {isOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
             </button>

@@ -254,7 +254,7 @@ function ListRow({ row, idx, columns, swatchHex, onChange, onDelete, disabled })
         onClick={() => onDelete(idx)}
         disabled={disabled}
         title="Remove row" aria-label="Remove row"
-        className="shrink-0 text-gray-500 hover:text-port-error disabled:opacity-30"
+        className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 shrink-0 text-gray-500 hover:text-port-error disabled:opacity-30"
       >
         <Trash2 size={12} />
       </button>
@@ -461,7 +461,7 @@ function RelationshipRow({ link, idx, others, onUpdate, onRemove, disabled }) {
         <button
           type="button" onClick={onRemove} disabled={disabled}
           title="Remove relationship" aria-label={`remove relationship ${idx + 1}`}
-          className="shrink-0 text-gray-500 hover:text-port-error disabled:opacity-30"
+          className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 shrink-0 text-gray-500 hover:text-port-error disabled:opacity-30"
         >
           <Trash2 size={12} />
         </button>
@@ -609,7 +609,7 @@ function ArcFrameworkControls({ entry, onPatch, disabled, idPrefix }) {
                     onClick={() => patchSlider(axis, null)}
                     disabled={disabled}
                     title={`Clear ${axis}`} aria-label={`Clear ${axis}`}
-                    className="text-gray-500 hover:text-port-error disabled:opacity-30"
+                    className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 text-gray-500 hover:text-port-error disabled:opacity-30"
                   >
                     <Trash2 size={11} />
                   </button>
@@ -661,7 +661,7 @@ function VoiceCanonPronunciationRow({ row, idx, onChange, onRemove, disabled }) 
       <button
         type="button" onClick={onRemove} disabled={disabled}
         title="Remove pronunciation" aria-label={`remove pronunciation ${idx + 1}`}
-        className="shrink-0 text-gray-500 hover:text-port-error disabled:opacity-30"
+        className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 shrink-0 text-gray-500 hover:text-port-error disabled:opacity-30"
       >
         <Trash2 size={12} />
       </button>
@@ -1379,7 +1379,7 @@ function IdentityPackSection({ entry, onPatch, disabled }) {
               <button
                 type="button" disabled={disabled} onClick={() => commit({ assets: assets.filter((_, i) => i !== idx) })}
                 title="Remove identity asset" aria-label={`remove identity asset ${idx + 1}`}
-                className="shrink-0 text-gray-500 hover:text-port-error disabled:opacity-30"
+                className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 shrink-0 text-gray-500 hover:text-port-error disabled:opacity-30"
               >
                 <Trash2 size={12} />
               </button>

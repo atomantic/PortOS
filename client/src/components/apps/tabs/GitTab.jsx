@@ -968,7 +968,7 @@ export default function GitTab({ appId, appName, repoPath }) {
                           ) : (
                             <button
                               onClick={() => setMergeConfirm(branch.name)}
-                              className={`${iconBtnCls} text-gray-400 hover:text-port-accent hover:bg-port-bg rounded`}
+                              className={`pointer-coarse:min-h-11 pointer-coarse:min-w-11 ${iconBtnCls} text-gray-400 hover:text-port-accent hover:bg-port-bg rounded`}
                               title={`Merge ${branch.name} into current branch`} aria-label={`Merge ${branch.name} into current branch`}
                             >
                               <GitMerge size={14} />
@@ -1085,7 +1085,7 @@ export default function GitTab({ appId, appName, repoPath }) {
                         {!rb.isDefault && deleteConfirm !== rb.name && (
                           <button
                             onClick={() => setDeleteConfirm(rb.name)}
-                            className={`${iconBtnCls} text-gray-500 hover:text-port-error hover:bg-port-bg rounded`}
+                            className={`pointer-coarse:min-h-11 pointer-coarse:min-w-11 ${iconBtnCls} text-gray-500 hover:text-port-error hover:bg-port-bg rounded`}
                             title="Delete branch" aria-label="Delete branch"
                           >
                             <Trash2 size={14} />

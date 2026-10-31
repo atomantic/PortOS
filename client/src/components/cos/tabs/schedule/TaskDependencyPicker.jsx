@@ -53,7 +53,7 @@ export default function TaskDependencyPicker({ label, hint, taskType, options = 
                 onClick={() => commit(selected.filter(entry => entry !== dep))}
                 disabled={disabled}
                 aria-label={`Remove ${dep}`}
-                className="text-port-accent/70 hover:text-white disabled:opacity-50"
+                className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 text-port-accent/70 hover:text-white disabled:opacity-50"
               >
                 <X size={12} />
               </button>

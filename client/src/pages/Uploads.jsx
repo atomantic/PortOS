@@ -137,7 +137,7 @@ export default function Uploads() {
         actions={<>
           <button
             onClick={fetchUploads}
-            className="flex items-center gap-2 px-3 py-2 bg-port-card border border-port-border rounded-lg text-gray-400 hover:text-white hover:border-port-accent/50 transition-colors"
+            className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 flex items-center gap-2 px-3 py-2 bg-port-card border border-port-border rounded-lg text-gray-400 hover:text-white hover:border-port-accent/50 transition-colors"
             title="Refresh" aria-label="Refresh"
           >
             <RefreshCw size={16} />

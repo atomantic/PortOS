@@ -212,7 +212,7 @@ function Rail({
         </button>
       ))}
       <button type="button" title="Save current scope" aria-label="Add scope" disabled={!scopesReady} onClick={onAddScope}
-        className={`${item} text-gray-500 hover:text-white`}><Plus size={19} /></button>
+        className={`pointer-coarse:min-h-11 pointer-coarse:min-w-11 ${item} text-gray-500 hover:text-white`}><Plus size={19} /></button>
 
       <div className="mx-1 h-7 w-px shrink-0 bg-port-border sm:mx-0 sm:my-1.5 sm:h-px sm:w-7" />
 
@@ -247,7 +247,7 @@ function Rail({
         onClick={onOpenSettings}
         title="Beeper settings and connection status"
         aria-label="Beeper settings"
-        className={`${item} ml-auto text-gray-500 hover:text-white sm:ml-0 sm:mt-auto`}
+        className={`pointer-coarse:min-h-11 pointer-coarse:min-w-11 ${item} ml-auto text-gray-500 hover:text-white sm:ml-0 sm:mt-auto`}
       >
         <Settings size={18} />
       </button>
@@ -1091,7 +1091,7 @@ export default function BeeperChatSurface({
                 type="button"
                 onClick={() => setParam('q', savedScope ? '' : null)}
                 aria-label="Clear search"
-                className="absolute right-4 top-1/2 -translate-y-1/2 -mt-1 text-gray-500 hover:text-white"
+                className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 absolute right-4 top-1/2 -translate-y-1/2 -mt-1 text-gray-500 hover:text-white"
               >
                 <X size={12} />
               </button>

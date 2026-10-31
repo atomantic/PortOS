@@ -149,6 +149,27 @@ export function normalizeLyricMarkers(markers, cueCount = Infinity) {
   return out;
 }
 
+/**
+ * Keep each marker on the cue it heads when the cue list is edited without a
+ * new marker list (#14380): a marker follows its cue by id, and a marker whose
+ * cue was removed moves to the next surviving cue. A marker after the last
+ * line stays after the last line.
+ */
+export function remapLyricMarkers(markers, oldCues, newCues) {
+  if (!Array.isArray(markers) || !markers.length) return markers;
+  const before = oldCues || [];
+  if (before.some((cue) => !cue?.id)) return markers;
+  const indexById = new Map((newCues || []).map((cue, i) => [cue?.id, i]));
+  return markers.map((marker) => {
+    for (let i = marker.line; i < before.length; i++) {
+      const next = indexById.get(before[i]?.id);
+      if (next !== undefined) return next === marker.line ? marker : { ...marker, line: next };
+    }
+    const end = indexById.size;
+    return marker.line === end ? marker : { ...marker, line: end };
+  });
+}
+
 /** Shift every marker's line by `offset` (appending an imported sheet after existing lines). */
 export const offsetLyricMarkers = (markers, offset) => (markers || []).map((m) => ({ ...m, line: m.line + offset }));
 

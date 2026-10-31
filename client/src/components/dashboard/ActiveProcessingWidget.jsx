@@ -67,7 +67,7 @@ function JobRow({ job, onCancel }) {
         <span className="min-w-0 flex-1 truncate text-gray-200" title={label}>{label}</span>
         <span className="shrink-0 font-mono text-[10px] text-gray-500">{job.status === 'queued' ? `#${job.position || '—'}` : elapsed(job.startedAt)}{eta(job.etaMs) ? ` · ${eta(job.etaMs)}` : ''}</span>
         <Link to={target} title={`Open ${kind} activity`} aria-label={`Open ${kind} activity`} className="text-gray-500 opacity-70 transition-opacity hover:text-port-accent group-hover:opacity-100"><ExternalLink size={13} /></Link>
-        <button type="button" onClick={() => onCancel(job.id)} title="Cancel render" aria-label={`Cancel ${label}`} className="text-gray-500 hover:text-port-warning"><X size={13} /></button>
+        <button type="button" onClick={() => onCancel(job.id)} title="Cancel render" aria-label={`Cancel ${label}`} className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 text-gray-500 hover:text-port-warning"><X size={13} /></button>
       </div>
       {job.status === 'running' ? <div className="ml-8 mt-1.5 flex items-center gap-2"><div className="h-1 flex-1 overflow-hidden rounded-full bg-port-border"><div className="h-full rounded-full bg-port-accent transition-all" style={{ width: `${progress ?? 8}%` }} /></div><span className="w-8 text-right font-mono text-[10px] text-gray-500">{progress == null ? '…' : `${progress}%`}</span></div> : null}
     </div>

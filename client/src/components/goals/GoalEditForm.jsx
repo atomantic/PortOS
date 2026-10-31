@@ -182,7 +182,7 @@ export default function GoalEditForm({
           {form.tags.map(tag => (
             <Pill key={tag} tone="bare" bordered={false} className="bg-port-accent/20 text-port-accent">
               {tag}
-              <button onClick={() => removeTag(tag)} aria-label={`Remove tag ${tag}`} className="hover:text-white">
+              <button onClick={() => removeTag(tag)} aria-label={`Remove tag ${tag}`} className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 hover:text-white">
                 <X className="w-3 h-3" />
               </button>
             </Pill>

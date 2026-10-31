@@ -617,7 +617,7 @@ function BeeperIdentityChip({ identity, onUnlink }) {
         onClick={onUnlink}
         title="Unlink"
         aria-label={`Unlink ${label}`}
-        className="text-gray-500 hover:text-rose-300"
+        className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 text-gray-500 hover:text-rose-300"
       >
         <X size={12} aria-hidden="true" />
       </button>

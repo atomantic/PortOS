@@ -34,7 +34,7 @@ import { persistedRenderPinFields } from '../../lib/renderTargets.js';
 import { sanitizeProjectForSync } from '../../lib/projectStoreKit.js';
 import { isPerformanceScene, planShotSplit, shotSplitLimit } from '../../lib/musicVideoShotTiming.js';
 import { normalizeLyricCues, normalizePhrases, invalidateTimedText } from './timedText.js';
-import { normalizeLyricMarkers } from './lyricMarkers.js';
+import { normalizeLyricMarkers, remapLyricMarkers } from './lyricMarkers.js';
 import { ensureSceneTakes, keepCodeClipWithItsClip, TAKE_SLOT } from './takes.js';
 import { normalizeComposition, invalidateCompositionTiming, withStoredCompositionDocument } from './composition.js';
 import { normalizeSoundBed } from './soundBed.js';
@@ -368,6 +368,16 @@ export function applyProjectPatch(project, patch) {
   // Edited cue/phrase lists replace the stored list whole, normalized so every
   // entry persists a stable id and a forward time range (timedText.js). A
   // `visualSpec` patch merges per sub-field the same way (#8965).
+  const previousCues = Array.isArray(patch.lyricCues) ? new Map((project.lyricCues || []).map((cue) => [cue.id, cue])) : null;
+  const nextLyricCues = previousCues ? normalizeLyricCues(patch.lyricCues).map((cue) => {
+    const previous = previousCues.get(cue.id);
+    if (previous && previous.text !== cue.text) {
+      delete cue.matched;
+      delete cue.suspect;
+      delete cue.silentWords;
+    }
+    return cue;
+  }) : null;
   const timedPatch = {
     ...patch,
     ...('festivalPacket' in patch ? { festivalPacket: patch.festivalPacket === null ? null : festivalPacketSchema.parse(patch.festivalPacket) } : {}),
@@ -377,16 +387,9 @@ export function applyProjectPatch(project, patch) {
     ...('automation' in patch ? {
       automation: patch.automation ? normalizeMusicVideoAutomation(patch.automation, project.automation) : null,
     } : {}),
-    ...(Array.isArray(patch.lyricCues) ? { lyricCues: normalizeLyricCues(patch.lyricCues).map((cue) => {
-      const previous = project.lyricCues?.find((entry) => entry.id === cue.id);
-      if (previous && previous.text !== cue.text) {
-        delete cue.matched;
-        delete cue.suspect;
-        delete cue.silentWords;
-      }
-      return cue;
-    }) } : {}),
-    ...(Array.isArray(patch.lyricMarkers) ? { lyricMarkers: normalizeLyricMarkers(patch.lyricMarkers) } : {}),
+    ...(nextLyricCues ? { lyricCues: nextLyricCues } : {}),
+    ...(Array.isArray(patch.lyricMarkers) ? { lyricMarkers: normalizeLyricMarkers(patch.lyricMarkers) }
+      : nextLyricCues && project.lyricMarkers?.length ? { lyricMarkers: remapLyricMarkers(project.lyricMarkers, project.lyricCues, nextLyricCues) } : {}),
     ...(Array.isArray(patch.phrases) ? { phrases: normalizePhrases(patch.phrases) } : {}),
     // #8984 — a manifest carrying its `mode` replaces the stored one whole
     // (the editors send the full manifest, so an omitted key clears it); null

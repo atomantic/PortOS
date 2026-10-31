@@ -47,7 +47,7 @@ export default function SearchTab({ vaultId }) {
         />
         <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-2">
           {query && (
-            <button onClick={() => { setQuery(''); setResults(null); }} aria-label="Clear search" className="text-gray-500 hover:text-white">
+            <button onClick={() => { setQuery(''); setResults(null); }} aria-label="Clear search" className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 text-gray-500 hover:text-white">
               <X size={16} />
             </button>
           )}
