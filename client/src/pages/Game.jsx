@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, Boxes, Gamepad2, Images, MessageSquare, Plus } from 'lucide-react';
 import { Link, useNavigate, useParams } from 'react-router';
 import PageHeader from '../components/PageHeader';
 import PageSkeleton from '../components/ui/PageSkeleton';
+import LoadFailedState from '../components/ui/LoadFailedState';
 import toast from '../components/ui/Toast';
 import AppContextPicker from '../components/AppContextPicker.jsx';
 import GameBindings from '../components/games/GameBindings.jsx';
@@ -63,12 +64,16 @@ export default function Game() {
   // Integrity is keyed by the game it describes, never stored bare. `/game/A` →
   // `/game/B` reuses the same route, so the component does NOT remount: unkeyed
   // state would render B's panel with A's verdict — enabling "Start game" for a
-  // game with no verified bundle — and an in-flight fetch for A that resolves
-  // after B's would overwrite B's result permanently, with nothing to clear it.
+  // game with no verified bundle. The key alone does not stop an older read
+  // (it hashes every bound asset, so it can be slow) from landing last and
+  // replacing the newer one, which left B stuck on "Checking…"; only the newest
+  // request may write, via `integrityRequest`.
   const [integrityFor, setIntegrityFor] = useState(null);
   const [integrityFetching, setIntegrityFetching] = useState(false);
+  const integrityRequest = useRef(0);
   const [compileError, setCompileError] = useState('');
   const [loading, setLoading] = useState(true);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [busy, setBusy] = useState('');
   const [name, setName] = useState('');
   const [appId, setAppId] = useState('');
@@ -84,9 +89,9 @@ export default function Game() {
       listSpriteRecords(silent),
       listTracks(silent),
     ]).catch(() => null);
-    if (!result) {
-      toast.error('Failed to load the Game studio');
-    } else {
+    // A failed read is not "no games" and not "this game was deleted".
+    setLoadFailed(!result);
+    if (result) {
       const [gameRows, appRows, spriteRows, trackRows] = result;
       setGames(Array.isArray(gameRows) ? gameRows : []);
       setApps((Array.isArray(appRows) ? appRows : []).filter((app) => !app.archived));
@@ -99,12 +104,15 @@ export default function Game() {
   useEffect(() => { load(); }, [load]);
 
   const refreshIntegrity = useCallback(async () => {
+    const request = ++integrityRequest.current;
     if (!id) {
       setIntegrityFor(null);
+      setIntegrityFetching(false);
       return;
     }
     setIntegrityFetching(true);
     const data = await getGameIntegrity(id, silent).catch(() => null);
+    if (request !== integrityRequest.current) return;
     setIntegrityFor({ gameId: id, data });
     setIntegrityFetching(false);
   }, [id]);
@@ -305,6 +313,25 @@ export default function Game() {
         cards={3}
         sidebar={false}
       />
+    );
+  }
+
+  if (loadFailed) {
+    return (
+      <div className="flex h-full min-h-0 flex-col">
+        <PageHeader
+          icon={Gamepad2}
+          title="Game"
+          subtitle="Bind reusable art and music to a managed app."
+        />
+        <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto p-4">
+          <LoadFailedState
+            title="Could not load the Game studio."
+            hint="Your Game workspaces were not changed."
+            onRetry={load}
+          />
+        </div>
+      </div>
     );
   }
 

@@ -201,6 +201,45 @@ describe('Game page', () => {
     expect(screen.getByRole('button', { name: 'Start game' })).toBeDisabled();
   });
 
+  it('keeps the current game verdict when an older game read finishes last', async () => {
+    // Integrity hashes every bound asset, so leaving a game before its read
+    // settles is ordinary. The older answer must not replace the newer one —
+    // that left the panel on "Checking…" with Build and Start disabled.
+    let release;
+    const pending = new Promise((resolve) => { release = resolve; });
+    const { getGameIntegrity } = await import('../services/api.js');
+    getGameIntegrity.mockImplementationOnce(async () => {
+      await pending;
+      return api.integrityByGame['verified-game'];
+    });
+
+    renderAt('/game/verified-game');
+    fireEvent.click(await screen.findByRole('link', { name: 'All Games' }));
+    fireEvent.click(await screen.findByRole('link', { name: /Unbuilt Game/ }));
+    expect(await screen.findByText('Not built')).toBeInTheDocument();
+
+    release();
+    await pending;
+    await waitFor(() => expect(api.integrityCalls).toEqual(['unbuilt-game']));
+    await new Promise((resolve) => { setTimeout(resolve, 0); });
+    expect(screen.getByText('Not built')).toBeInTheDocument();
+    expect(screen.queryByText('Checking…')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Build & verify/ })).toBeEnabled();
+  });
+
+  it('shows a failed studio read with Retry, not an empty studio or a deleted game', async () => {
+    const { listGames } = await import('../services/api.js');
+    listGames.mockRejectedValueOnce(new Error('Games unavailable'));
+
+    renderAt('/game/verified-game');
+    expect(await screen.findByText('Could not load the Game studio.')).toBeInTheDocument();
+    expect(screen.queryByText(/may have been deleted/)).not.toBeInTheDocument();
+    expect(screen.queryByText('No Game workspaces yet.')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('Verified')).toBeInTheDocument();
+  });
+
   it('renders ListLoadError with retry when gallery images fail to load', async () => {
     const { getGalleryImages } = await import('../services/api.js');
     getGalleryImages.mockReset();
