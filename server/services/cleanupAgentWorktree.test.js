@@ -2235,6 +2235,33 @@ describe('spawnReviewLoopFollowUp', () => {
     expect(result.metadata.reviewLoopSelfReview).toBe(false);
   });
 
+  // The title prefix is how the queue and recovery tooling tell the three
+  // follow-up modes apart (migration 262 matches `[Review Loop]`).
+  it.each([
+    [{ reviewers: ['codex'], usernames: ['octocat'] }, '[Review Loop] Build widget'],
+    [{ reviewers: [], selfReview: true }, '[Self-Review & Merge] Build widget'],
+    [{ prCompletion: 'merge-on-green' }, '[Merge] Build widget'],
+  ])('titles the follow-up by its mode (%o)', async (options, prefix) => {
+    const result = await spawnReviewLoopFollowUp({
+      originalAgentId: 'agent-1', originalTask: { id: 'task-1', description: 'Build widget\nDetails' },
+      prUrl: 'https://github.com/o/r/pull/9', prBranch: 'cos/task-1/agent-1', sourceWorkspace: '/ws',
+      ...options,
+    });
+    expect(result.description).toBe(`${prefix} (https://github.com/o/r/pull/9)`);
+  });
+
+  it('inherits execution options and effort alone without inventing a provider pin', async () => {
+    const result = await spawnReviewLoopFollowUp({
+      originalAgentId: 'agent-1',
+      originalTask: { id: 'task-1', description: 'X', metadata: { model: 'orphan-model', effort: 'max', executionOptions: { serviceTier: 'fast' } } },
+      prUrl: 'https://github.com/o/r/pull/9', prBranch: 'cos/task-1/agent-1', sourceWorkspace: '/ws',
+    });
+    expect(result.metadata.executionOptions).toEqual({ serviceTier: 'fast' });
+    expect(result.metadata.effort).toBe('max');
+    expect(result.metadata).not.toHaveProperty('provider');
+    expect(result.metadata).not.toHaveProperty('model');
+  });
+
   it('should default priority to MEDIUM when originalTask omits it', async () => {
     await spawnReviewLoopFollowUp({
       originalAgentId: 'agent-1',
