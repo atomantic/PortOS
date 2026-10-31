@@ -446,6 +446,39 @@ describe('usage.js — summary', () => {
       expect(report.totals.estimatedCost).toBeCloseTo(35);
     });
 
+    it('carries every counter field onto model rows, provider rows and totals', () => {
+      const fields = [
+        'sessions', 'messages', 'tokensIn', 'tokensOut', 'cacheReadTokens', 'cacheWriteTokens',
+        'longTokensIn', 'longTokensOut', 'longCacheReadTokens', 'longCacheWriteTokens',
+        'images', 'videoSeconds', 'inputImages',
+      ];
+      // Distinct value per field and per model so a dropped or swapped field cannot read the same.
+      const counters = (seed) => Object.fromEntries(fields.map((f, i) => [f, seed * (i + 1)]));
+      const sum = (...rows) => Object.fromEntries(fields.map((f) => [f, rows.reduce((s, r) => s + r[f], 0)]));
+      const a1 = counters(3);
+      const a2 = counters(5);
+      const b1 = counters(7);
+      const bucket = {
+        byProvider: {
+          alpha: { name: 'Alpha', ...sum(a1, a2), source: 'measured', byModel: { 'alpha-1': { ...a1, source: 'measured' }, 'alpha-2': { ...a2, source: 'measured' } } },
+          beta: { name: 'Beta', ...b1, source: 'measured', byModel: { 'beta-1': { ...b1, source: 'measured' } } },
+        },
+      };
+      // The same bucket on two days must accumulate, not overwrite.
+      const report = buildUsageReport({ [daysAgo(1)]: bucket, [daysAgo(0)]: bucket }, {});
+      const pick = (row) => Object.fromEntries(fields.map((f) => [f, row[f]]));
+      const double = (c) => Object.fromEntries(fields.map((f) => [f, c[f] * 2]));
+
+      const alpha = report.providers.find((p) => p.id === 'alpha');
+      const beta = report.providers.find((p) => p.id === 'beta');
+      expect(pick(alpha)).toEqual(double(sum(a1, a2)));
+      expect(pick(beta)).toEqual(double(b1));
+      expect(pick(alpha.models.find((m) => m.model === 'alpha-1'))).toEqual(double(a1));
+      expect(pick(alpha.models.find((m) => m.model === 'alpha-2'))).toEqual(double(a2));
+      expect(pick(beta.models[0])).toEqual(double(b1));
+      expect(pick(report.totals)).toEqual(double(sum(a1, a2, b1)));
+    });
+
     it('filters by from/to (inclusive)', () => {
       const daily = {
         '2025-06-01': nestedDay('codex', 'Codex', 'gpt-5.3-codex', { tokensOut: 100 }),
