@@ -148,4 +148,14 @@ describe('intercutClips (#9290)', () => {
     expect(spanOf(out)).toBeCloseTo(20, 3);
     expect(out.filter((clip) => clip.layer === 'card').map((clip) => clip.cardText)).toEqual(['TITLE', '3']);
   });
+  // Uniquely catches the beat-graphic medium (#14244) leaving the quietest section on its slow tier.
+  it('cuts every section on the two-beat tier for the beat-graphic medium and leaves the default alone', () => {
+    const quiet = (out) => out.filter((c, i) => { const t = spanOf(out.slice(0, i)); return t >= -1e-6 && t < 10 - 1e-6; });
+    const standard = intercutClips(clips, { scenes, sections, beats, bpm });
+    const graphic = intercutClips(clips, { scenes, sections, beats, bpm, loudTierEverywhere: true });
+    expect(intercutClips(clips, { scenes, sections, beats, bpm, loudTierEverywhere: false })).toEqual(standard);
+    expect(quiet(standard).length).toBeLessThanOrEqual(3);
+    expect(quiet(graphic).length).toBeGreaterThanOrEqual(8); // ~1 s (two beats) pieces over 10 s
+    expect(spanOf(graphic)).toBeCloseTo(spanOf(clips), 2);
+  });
 });

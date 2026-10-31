@@ -199,12 +199,13 @@ function sliceClip(clip, offset, length) {
  * Returns a new clip list; the input is returned as-is when there is no beat
  * grid to cut on.
  */
-export function intercutClips(clips, { scenes = [], sections = [], beats = [], bpm = null, words = [], lyricCues = [], graphicCards = false, accentColor = null, lockedSceneIds = [] } = {}) {
+export function intercutClips(clips, { scenes = [], sections = [], beats = [], bpm = null, words = [], lyricCues = [], graphicCards = false, accentColor = null, lockedSceneIds = [], loudTierEverywhere = false } = {}) {
   const locked = new Set(lockedSceneIds);
   const list = Array.isArray(clips) ? clips : [];
   const grid = (Array.isArray(beats) ? beats : []).filter(finite).sort((a, b) => a - b);
   const period = beatPeriod(bpm, grid);
-  const ranked = sectionRanks(Array.isArray(sections) ? sections : []);
+  // The beat-graphic medium (#14244) cuts every section on the loud tier.
+  const ranked = sectionRanks(Array.isArray(sections) ? sections : []).map((s) => (loudTierEverywhere ? { ...s, rank: 1 } : s));
   if (!period || !grid.length || !ranked.length || !list.length) return list;
   const halfGrid = [];
   for (let i = 0; i < grid.length; i += 1) {

@@ -61,6 +61,8 @@ import { AUDIO_NORM, buildAudioBedMix } from '../videoTimeline/audioBedMix.js';
 import { musicVideoEvents } from './events.js';
 import { projectSoundBed } from './soundBed.js';
 import { intercutClips } from './intercut.js';
+import { applyFrameHold, projectFrameHold } from './frameHold.js';
+import { rendersIntercut, usesLoudTierEverywhere } from '../../lib/musicVideoProductionMedium.js';
 import { cutEffectCuts, plannedTransitions, sceneCutEffect } from '../../lib/musicVideoCutEffects.js';
 import { imageEffectGlitchFrames, mergeGlitchFrames, musicVideoTransitionFilter, sceneTransitions, shotGlitchFrames, transitionGlitchFrames } from '../../lib/musicVideoTransitions.js';
 import { stillMoveForCamera } from '../../lib/cameraMovements.js';
@@ -868,7 +870,7 @@ export async function planMusicVideoRender(project, { draft = false, decode = tr
   assertClipCoverage(project, [...(coldOpen?.clips || []), ...snapped]);
   // #9290: an intercut project re-cuts the covered shots on the song's energy
   // and sung words, reusing cutaway footage — no extra generation.
-  const clips = project.composition?.cutting === 'intercut'
+  const clips = rendersIntercut(project)
     ? intercutClips(snapped, {
       scenes: song.scenes,
       sections: project.audioAnalysis?.sections,
@@ -879,6 +881,7 @@ export async function planMusicVideoRender(project, { draft = false, decode = tr
       graphicCards: composed,
       accentColor: project.composition?.style?.accentColor,
       lockedSceneIds: lockedShotIds(project),
+      loudTierEverywhere: usesLoudTierEverywhere(project),
     })
     : snapped;
   const soundBed = await resolveSoundBedPath(project);
@@ -1108,7 +1111,10 @@ async function renderFromShotSegments(projectId, project, handOff, options) {
     // Shots take 95% of the bar; joining and laying the song under them the rest.
     await renderMissingSegments(plan, { signal, onProgress: (fraction) => broadcastSse(job, { type: 'progress', progress: 0.95 * fraction }) });
     await assertCurrentRenderApproval(projectId, project, options);
-    const { durationSec } = await stitchSegments(plan, outputPath, { signal });
+    const { durationSec, leadSec } = await stitchSegments(plan, outputPath, { signal });
+    // The stepped medium (#14244) holds the stitched cut; shot looks are already in it.
+    const hold = projectFrameHold(project);
+    if (hold) await applyFrameHold({ path: outputPath, sections: plan.sections, leadSec, signal, ffmpeg: plan.ffmpeg, ...hold });
     broadcastSse(job, { type: 'progress', progress: 1 });
     return durationSec;
   }).then(async (durationSec) => {
@@ -1212,7 +1218,7 @@ async function renderAdmittedMusicVideo(projectId, options, permit) {
     const jobId = randomUUID();
     const filename = `music-video-${projectId.slice(0, 8)}-${Date.now()}.mp4`;
     const outputPath = join(PATHS.videos, filename);
-    const { args, totalDuration, canonW, canonH, fps } = buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioDurationSec, frameGrid: composed, soundBed, grade: composed ? project.composition?.grade : null, beats: project.audioAnalysis?.beats, aspect });
+    const { args, totalDuration, canonW, canonH, fps, sections } = buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioDurationSec, frameGrid: composed, soundBed, grade: composed ? project.composition?.grade : null, beats: project.audioAnalysis?.beats, aspect });
 
     await assertCurrentRenderApproval(projectId, project, options);
     // A long filter graph goes to ffmpeg in this file, removed once ffmpeg exits.
@@ -1360,6 +1366,20 @@ async function renderAdmittedMusicVideo(projectId, options, permit) {
               await appendStatsOutro({ project, path: outputPath, jobId, signal: outroSignal });
             } catch (err) {
               await settleFailure(outroSignal.aborted, outroSignal.aborted ? 'Render cancelled' : `Outro scene failed: ${err.message}`);
+              return;
+            }
+            job.overlayAbort = null;
+          }
+          // The stepped medium (#14244) holds every other frame of the cut,
+          // before the film look so the grain and weave still move each frame.
+          const hold = projectFrameHold(project);
+          if (hold) {
+            job.overlayAbort = new AbortController();
+            const { signal: holdSignal } = job.overlayAbort;
+            try {
+              await applyFrameHold({ path: outputPath, sections, leadSec, signal: holdSignal, ffmpeg, ...hold });
+            } catch (err) {
+              await settleFailure(holdSignal.aborted, holdSignal.aborted ? 'Render cancelled' : `Frame hold failed: ${err.message}`);
               return;
             }
             job.overlayAbort = null;
