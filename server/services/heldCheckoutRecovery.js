@@ -34,6 +34,8 @@ import { listWorktrees, forceRemoveWorktreeDir, deleteCompletedLocalBranch, clas
 import { getDefaultBranch, getStatusPorcelain, hasBranchMergeEvidence } from './git.js';
 import { withClaimOwnershipLock, readClaimOwnershipAgents, retireWithUnlockedArchive } from './cosClaimOwnership.js';
 
+const FULL_OBJECT_ID = /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/;
+
 const evidenceHash = value => createHash('sha256').update(value).digest('hex');
 const MAX_MANIFEST_BYTES = 16 * 1024 * 1024;
 
@@ -179,7 +181,7 @@ async function completedServiceRetirement(repoPath, release) {
  */
 export async function findMissingCheckoutPreservation({ repoPath, release }) {
   if (!Number.isFinite(Date.parse(release?.createdAt)) || Date.parse(release.createdAt) > Date.now()
-    || !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(release?.head || '')) return null;
+    || !FULL_OBJECT_ID.test(release?.head || '')) return null;
   const absent = async () => {
     const trees = await listWorktrees(repoPath);
     const ref = await execGit(['rev-parse', '--verify', '--quiet', `refs/heads/${release.branch}`], repoPath, { ignoreExitCode: true });
@@ -279,101 +281,129 @@ async function snapshotAdministration(path, work = archiveWork()) {
   return { files, symlinks, fingerprint };
 }
 
+// Valid completed-checkout receipts captured on `branch`, paired with their agent.
+const completedBranchCaptures = (policies, branch, receiptValid) => (Array.isArray(policies) ? policies : [])
+  .flatMap(agent => agent.status === 'completed' && Array.isArray(agent.metadata?.completedCheckouts)
+    ? agent.metadata.completedCheckouts.filter(row => row?.branch === branch && receiptValid(agent, row)).map(row => ({ agent, row }))
+    : []);
+
+const siblingCapture = (agent, row, binding) => ({ agentId: agent.id, capturedHead: row.head, capturedAt: row.capturedAt,
+  path: row.path, incarnation: row.incarnation, ...binding });
+
+// The forge proved this detached copy represents the exact head delivered by this PR.
+const representsDetachedDelivery = identity => {
+  const forge = identity.retirementForge;
+  return Boolean(identity.detachedCheckoutIdentity) && forge?.prUrl === identity.prUrl
+    && forge.scopeProof === 'represented-detached-head' && forge.detachedRepresentation?.sourceHead === identity.tip
+    && forge.detachedRepresentation.deliveredHead === forge.prHead;
+};
+
+// A detached copy does not inherit another physical checkout's unfinished
+// obligation. Bind that distinction to captured generations and fresh delivery,
+// without changing those owners' outcomes or retiring their originals.
+async function collectDetachedSiblingCaptures(repoPath, branch, policies, identity) {
+  const { completedCheckoutReceiptValid } = await import('./completedCheckoutEvidence.js');
+  const candidates = completedBranchCaptures(policies, branch, completedCheckoutReceiptValid);
+  const siblings = [];
+  const repository = await realpath(repoPath).catch(() => null);
+  const canonical = path => process.platform === 'win32' ? path?.toLowerCase() : path;
+  if (candidates.length > 25) return siblings;
+  for (const { agent, row } of candidates) {
+    const capturedRepository = await realpath(row.repoPath).catch(() => null);
+    if (!repository || !capturedRepository || canonical(repository) !== canonical(capturedRepository)) continue;
+    // Delivery is established for the released detached head, not this
+    // other generation. Its rewritten or unfinished work remains untouched.
+    // The policy below still requires the exact valid capture and a distinct
+    // physical generation, and never grants deletion of its named branch.
+    siblings.push(siblingCapture(agent, row, { detachedCheckoutIdentity: identity.detachedCheckoutIdentity }));
+  }
+  return siblings;
+}
+
+const branchScopes = meta => [meta.worktreeBranch, meta.jiraBranch, meta.claimBranch, meta.branchCompletionPolicy?.branch,
+  ...(Array.isArray(meta.claimBranches) ? meta.claimBranches : []),
+  ...(Array.isArray(meta.claimReleasedBranches) ? meta.claimReleasedBranches : [])];
+
+// Every checkout path an agent scoped to `branch` recorded, plus the current checkout and primary.
+function branchCheckoutPaths(repoPath, branch, policies, checkoutPath) {
+  const paths = new Set([checkoutPath, repoPath]);
+  for (const agent of policies) {
+    const meta = agent?.metadata || {};
+    if (!branchScopes(meta).includes(branch)) continue;
+    if (isAbsolute(meta.workspacePath || '')) paths.add(meta.workspacePath);
+    // Receipt capture canonicalizes filesystem names. Windows short names
+    // and other existing aliases need the same server-observed identity
+    // comparison as the current checkout, never textual guessing.
+    for (const row of Array.isArray(meta.completedCheckouts) ? meta.completedCheckouts : []) {
+      if (row?.version !== 2 || row.branch !== branch) continue;
+      for (const path of [row.repoPath, row.path]) if (isAbsolute(path || '')) paths.add(path);
+    }
+  }
+  return paths;
+}
+
+// A failed identity read or excessive history cannot prove distinctness.
+// Missing paths resolve through their existing canonical ancestor, the same
+// identity rule used to locate missing checkout administration below.
+async function readCheckoutIdentities(paths) {
+  const checkoutIdentities = {};
+  if (paths.size > 1000) return checkoutIdentities;
+  const entries = [...paths];
+  for (let offset = 0; offset < entries.length; offset += 25) {
+    await Promise.all(entries.slice(offset, offset + 25).map(async path => {
+      const facts = await missingPathIdentity(path).catch(() => null);
+      if (facts) checkoutIdentities[path] = JSON.stringify({ dev: facts.dev, ino: facts.ino, tail: facts.tail });
+    }));
+  }
+  return checkoutIdentities;
+}
+
+// The explicitly released named copy may predate a separate review checkout.
+// Retain that original's obligation; prove its captured commits are contained
+// in this exact merged source instead of treating its old verdict as this copy's owner.
+async function collectNamedSiblingCaptures(repoPath, branch, policies, identity) {
+  const { completedCheckoutReceiptValid } = await import('./completedCheckoutEvidence.js');
+  const siblings = completedBranchCaptures(policies, branch, completedCheckoutReceiptValid)
+    .filter(({ row }) => FULL_OBJECT_ID.test(row.head || ''));
+  const repository = await realpath(repoPath).catch(() => null);
+  const captures = [];
+  if (!repository || siblings.length > 25) return captures;
+  for (const { agent, row } of siblings) {
+    if (await realpath(row.repoPath).catch(() => null) !== repository) continue;
+    const included = await execGit(['--no-replace-objects', '-c', 'core.commitGraph=false', 'merge-base', '--is-ancestor', row.head, identity.tip], repoPath,
+      { ignoreExitCode: true, env: { ...process.env, GIT_NO_REPLACE_OBJECTS: '1', GIT_NO_LAZY_FETCH: '1', GIT_GRAFT_FILE: devNull } });
+    if (included.exitCode === 0) captures.push(siblingCapture(agent, row, { checkoutIncarnation: identity.checkoutIncarnation }));
+  }
+  return captures;
+}
+
+// The caller has already checked the released lock and registration. This
+// fact-read grants no unlock authority; ordinary matching policies avoid it.
+async function withCheckoutIncarnation(repoPath, branch, identity) {
+  if (identity.checkoutIncarnation) return identity;
+  const { readCompletedCheckoutIdentity } = await import('./completedCheckoutEvidence.js');
+  const generation = await readCompletedCheckoutIdentity({ repoPath, branch, path: identity.checkoutPath,
+    head: identity.tip, allowLocked: true }).catch(() => null);
+  return generation ? { ...identity, checkoutIncarnation: generation.incarnation } : null;
+}
+
 async function retirementPolicy(repoPath, branch, opts, reviewIdentity = {}) {
   const { readBranchCompletionPolicies, reviewedRetirementPolicy, mergedReceiptRetirementPolicy } = await import('./branchCompletionPolicy.js');
   const policies = await (opts.readPolicies || (() => readBranchCompletionPolicies({ repairIndex: false })))().catch(() => null);
   if (opts.mergedReceipt) return mergedReceiptRetirementPolicy({ repoPath, branch, agents: policies,
     tip: opts.mergedReceipt.expectedHeadSha });
-  // A detached copy does not inherit another physical checkout's unfinished
-  // obligation. Bind that distinction to captured generations and fresh delivery,
-  // without changing those owners' outcomes or retiring their originals.
-  const forge = reviewIdentity.retirementForge;
-  if (reviewIdentity.detachedCheckoutIdentity && forge?.prUrl === reviewIdentity.prUrl
-    && forge.scopeProof === 'represented-detached-head' && forge.detachedRepresentation?.sourceHead === reviewIdentity.tip
-    && forge.detachedRepresentation.deliveredHead === forge.prHead
-    && Array.isArray(policies)) {
-    const { completedCheckoutReceiptValid } = await import('./completedCheckoutEvidence.js');
-    const candidates = policies.flatMap(agent => (agent.status === 'completed' && Array.isArray(agent.metadata?.completedCheckouts) ? agent.metadata.completedCheckouts : [])
-      .filter(row => row?.branch === branch && completedCheckoutReceiptValid(agent, row))
-      .map(row => ({ agent, row })));
-    const siblings = [];
-    const repository = await realpath(repoPath).catch(() => null);
-    const canonical = path => process.platform === 'win32' ? path?.toLowerCase() : path;
-    if (candidates.length <= 25) for (const { agent, row } of candidates) {
-      const capturedRepository = await realpath(row.repoPath).catch(() => null);
-      if (!repository || !capturedRepository || canonical(repository) !== canonical(capturedRepository)) continue;
-      // Delivery is established for the released detached head, not this
-      // other generation. Its rewritten or unfinished work remains untouched.
-      // The policy below still requires the exact valid capture and a distinct
-      // physical generation, and never grants deletion of its named branch.
-      siblings.push({ agentId: agent.id, capturedHead: row.head, capturedAt: row.capturedAt,
-        path: row.path, incarnation: row.incarnation, detachedCheckoutIdentity: reviewIdentity.detachedCheckoutIdentity });
-    }
-    reviewIdentity = { ...reviewIdentity, detachedSiblingCaptures: siblings };
+  if (representsDetachedDelivery(reviewIdentity) && Array.isArray(policies)) {
+    reviewIdentity = { ...reviewIdentity,
+      detachedSiblingCaptures: await collectDetachedSiblingCaptures(repoPath, branch, policies, reviewIdentity) };
   }
-  const checkoutIdentities = {};
-  if (reviewIdentity.verifiedPrHead === reviewIdentity.tip && reviewIdentity.tip && Array.isArray(policies)) {
-    const paths = new Set([reviewIdentity.checkoutPath, repoPath]);
-    for (const agent of policies) {
-      const meta = agent?.metadata || {};
-      const scopes = [meta.worktreeBranch, meta.jiraBranch, meta.claimBranch, meta.branchCompletionPolicy?.branch,
-        ...(Array.isArray(meta.claimBranches) ? meta.claimBranches : []),
-        ...(Array.isArray(meta.claimReleasedBranches) ? meta.claimReleasedBranches : [])];
-      if (scopes.includes(branch)) {
-        if (isAbsolute(meta.workspacePath || '')) paths.add(meta.workspacePath);
-        // Receipt capture canonicalizes filesystem names. Windows short names
-        // and other existing aliases need the same server-observed identity
-        // comparison as the current checkout, never textual guessing.
-        for (const row of Array.isArray(meta.completedCheckouts) ? meta.completedCheckouts : []) {
-          if (row?.version !== 2 || row.branch !== branch) continue;
-          for (const path of [row.repoPath, row.path]) if (isAbsolute(path || '')) paths.add(path);
-        }
-      }
-    }
-    // A failed identity read or excessive history cannot prove distinctness.
-    // Missing paths resolve through their existing canonical ancestor, the same
-    // identity rule used to locate missing checkout administration below.
-    if (paths.size <= 1000) {
-      const entries = [...paths];
-      for (let offset = 0; offset < entries.length; offset += 25) {
-        await Promise.all(entries.slice(offset, offset + 25).map(async path => {
-          const facts = await missingPathIdentity(path).catch(() => null);
-          if (facts) checkoutIdentities[path] = JSON.stringify({ dev: facts.dev, ino: facts.ino, tail: facts.tail });
-        }));
-      }
-    }
-  }
+  const checkoutIdentities = reviewIdentity.verifiedPrHead === reviewIdentity.tip && reviewIdentity.tip && Array.isArray(policies)
+    ? await readCheckoutIdentities(branchCheckoutPaths(repoPath, branch, policies, reviewIdentity.checkoutPath)) : {};
   const initial = reviewedRetirementPolicy({ repoPath, branch, agents: policies, ...reviewIdentity, checkoutIdentities });
   if (initial.reason !== 'retirement-policy-not-legacy-completed' || !reviewIdentity.retirementForge) return initial;
-  let identity = reviewIdentity;
-  if (!identity.checkoutIncarnation) {
-    const { readCompletedCheckoutIdentity } = await import('./completedCheckoutEvidence.js');
-    // The caller has already checked the released lock and registration. This
-    // fact-read grants no unlock authority; ordinary matching policies avoid it.
-    const generation = await readCompletedCheckoutIdentity({ repoPath, branch, path: identity.checkoutPath,
-      head: identity.tip, allowLocked: true }).catch(() => null);
-    if (!generation) return initial;
-    identity = { ...identity, checkoutIncarnation: generation.incarnation };
-  }
-  // The explicitly released named copy may predate a separate review checkout.
-  // Retain that original's obligation; prove its captured commits are contained
-  // in this exact merged source instead of treating its old verdict as this copy's owner.
+  let identity = await withCheckoutIncarnation(repoPath, branch, reviewIdentity);
+  if (!identity) return initial;
   if (!identity.detachedCheckoutIdentity && identity.retirementForge?.scopeProof === 'exact-delivered-head') {
-    const { completedCheckoutReceiptValid } = await import('./completedCheckoutEvidence.js');
-    const siblings = Array.isArray(policies) ? policies.flatMap(agent => agent.status === 'completed' && Array.isArray(agent.metadata?.completedCheckouts)
-      ? agent.metadata.completedCheckouts.filter(row => completedCheckoutReceiptValid(agent, row)
-        && row.branch === branch && /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(row.head || ''))
-        .map(row => ({ agent, row })) : []) : [];
-    const repository = await realpath(repoPath).catch(() => null);
-    const namedSiblingCaptures = [];
-    if (repository && siblings.length <= 25) for (const { agent, row } of siblings) {
-      if (await realpath(row.repoPath).catch(() => null) !== repository) continue;
-      const included = await execGit(['--no-replace-objects', '-c', 'core.commitGraph=false', 'merge-base', '--is-ancestor', row.head, identity.tip], repoPath,
-        { ignoreExitCode: true, env: { ...process.env, GIT_NO_REPLACE_OBJECTS: '1', GIT_NO_LAZY_FETCH: '1', GIT_GRAFT_FILE: devNull } });
-      if (included.exitCode === 0) namedSiblingCaptures.push({ agentId: agent.id, capturedHead: row.head, capturedAt: row.capturedAt,
-        path: row.path, incarnation: row.incarnation, checkoutIncarnation: identity.checkoutIncarnation });
-    }
-    identity = { ...identity, namedSiblingCaptures };
+    identity = { ...identity, namedSiblingCaptures: await collectNamedSiblingCaptures(repoPath, branch, policies, identity) };
   }
   const resumed = reviewedRetirementPolicy({ repoPath, branch, agents: policies, ...identity, checkoutIdentities });
   if (!resumed.reason) return resumed;
@@ -1302,7 +1332,7 @@ export async function fetchRetirementProofObjects(repoPath, release, prUrl, expe
   const heads = [...new Set([forge.prHead, forge.mergeCommit, forge.targetHead ?? forge.defaultHead,
     ...(exactDelivery || representedDetached ? [forge.defaultHead] : [forge.changeBase, forge.firstCommit]),
     ...(representedDetached ? [forge.detachedRepresentation.sourceHead, forge.detachedRepresentation.base] : [])])];
-  if (heads.some(head => typeof head !== 'string' || !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(head))) {
+  if (heads.some(head => typeof head !== 'string' || !FULL_OBJECT_ID.test(head))) {
     return { ok: false, reason: 'retirement-forge-unreadable' };
   }
   const missing = [];
@@ -1328,7 +1358,7 @@ export async function fetchRetirementProofObjects(repoPath, release, prUrl, expe
 export async function retirePendingMergeCheckout({ repoPath, release, prUrl, expectedHeadSha }, opts = {}) {
   if (!release || release.locked !== false || release.lockReason !== null) return { ok: false, reason: 'receipt-checkout-locked' };
   if (!release.path || !release.branch || typeof expectedHeadSha !== 'string'
-    || !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(expectedHeadSha) || release.head !== expectedHeadSha) {
+    || !FULL_OBJECT_ID.test(expectedHeadSha) || release.head !== expectedHeadSha) {
     return { ok: false, reason: 'receipt-checkout-head-unverified' };
   }
   const receiptOptions = { ...opts, mergedReceipt: { expectedHeadSha } };
