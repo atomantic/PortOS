@@ -244,7 +244,7 @@ export default function SceneRenderTarget({
             {localChoices.map((model) => <option key={model.id} value={model.id}>{model.name || model.id}</option>)}
           </OptionSelect>
           {localModel && !performance && (
-            <OptionSelect id={`${id}-length`} label="Length" value={overrides.numFrames || ''} disabled={disabled}
+            <OptionSelect id={`${id}-length`} label="Clip length" value={overrides.numFrames || ''} disabled={disabled}
               onChange={(frames) => set({ numFrames: Number(frames) || null })}>
               {frameOptionsForModel(localModel).map((frames) => (
                 <option key={frames} value={frames}>
@@ -256,7 +256,7 @@ export default function SceneRenderTarget({
         </>
       )}
       {value === 'grok' && (
-        <OptionSelect id={`${id}-length`} label="Length" value={overrides.grokDuration || ''} disabled={disabled}
+        <OptionSelect id={`${id}-length`} label="Clip length" value={overrides.grokDuration || ''} disabled={disabled}
           onChange={(sec) => set({ grokDuration: Number(sec) || null })}>
           {overrides.grokDuration == null && <option value="">Default</option>}
           {GROK_VIDEO_DURATIONS.map((sec) => (
@@ -267,7 +267,7 @@ export default function SceneRenderTarget({
       {falModel && !performance && (
         <>
           {falLengths(falModel).length > 0 && (
-            <OptionSelect id={`${id}-length`} label="Length" value={options.falDuration || ''} disabled={disabled}
+            <OptionSelect id={`${id}-length`} label="Clip length" value={options.falDuration || ''} disabled={disabled}
               onChange={(sec) => set({ falDuration: Number(sec) || null })}>
               <option value="">{coversLabel(coerceFalVideoSeconds(falModel, spanSec))}</option>
               {falLengths(falModel).map((sec) => <option key={sec} value={sec}>{formatSec(sec)}</option>)}
@@ -287,7 +287,7 @@ export default function SceneRenderTarget({
       {runwayModel && !performance && (
         <>
           {runwayVideoLengths(runwayModel).length > 0 && (
-            <OptionSelect id={`${id}-length`} label="Length" value={options.runwayDuration || ''} disabled={disabled}
+            <OptionSelect id={`${id}-length`} label="Clip length" value={options.runwayDuration || ''} disabled={disabled}
               onChange={(sec) => set({ runwayDuration: Number(sec) || null })}>
               <option value="">{coversLabel(coerceRunwayVideoSeconds(runwayModel, spanSec))}</option>
               {runwayVideoLengths(runwayModel).map((sec) => <option key={sec} value={sec}>{formatSec(sec)}</option>)}
