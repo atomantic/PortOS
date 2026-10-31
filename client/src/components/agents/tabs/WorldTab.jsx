@@ -4,6 +4,7 @@ import { FormField } from '../../ui/FormField';
 import ConnectionStatusDot from '../../ui/ConnectionStatusDot';
 import * as api from '../../../services/api';
 import BrailleSpinner from '../../BrailleSpinner';
+import ListLoadError from '../../ui/ListLoadError';
 import socket from '../../../services/socket';
 import useMoltworldWs from '../../../hooks/useMoltworldWs';
 import { useCooldownTick } from '../../../hooks/useCooldownTick';
@@ -129,6 +130,11 @@ export default function WorldTab({ agentId }) {
   // Load More) is dropped so a quick filter change never shows or appends
   // another filter's rows under the selected one.
   const historyGenerationRef = useRef(0);
+  // Filter the rows on screen were loaded for (null when none). Load More pages
+  // only those rows; a failed first page for a different filter clears them
+  // rather than leaving another filter's rows under the selected one.
+  const historyShownFilterRef = useRef(null);
+  const [historyLoadFailed, setHistoryLoadFailed] = useState(false);
 
   // Action Queue state
   const [queue, setQueue] = useState([]);
@@ -179,20 +185,34 @@ export default function WorldTab({ agentId }) {
 
   // Fetch activity history
   const fetchHistory = useCallback(async (append = false, before = null) => {
+    if (append && historyShownFilterRef.current !== historyFilter) return;
     const generation = append ? historyGenerationRef.current : ++historyGenerationRef.current;
     setHistoryLoading(true);
     const mwActions = historyFilter || MW_HISTORY_ACTIONS;
-    const data = await api.getAgentActivityTimeline(HISTORY_PAGE_SIZE, [agentId], before, mwActions).catch(() => null);
+    // A first page owns its failure UI (ListLoadError below); Load More keeps the helper's toast.
+    const data = await (append
+      ? api.getAgentActivityTimeline(HISTORY_PAGE_SIZE, [agentId], before, mwActions)
+      : api.getAgentActivityTimeline(HISTORY_PAGE_SIZE, [agentId], before, mwActions, { silent: true })
+    ).catch(() => null);
     if (generation !== historyGenerationRef.current) return;
     if (data) {
       const items = Array.isArray(data) ? data : [];
       if (append) {
         setHistory(prev => [...prev, ...items]);
       } else {
+        historyShownFilterRef.current = historyFilter;
+        setHistoryLoadFailed(false);
         setHistory(items);
       }
       // The server already applied the filter, so a full page means more may exist.
       setHistoryHasMore(items.length >= HISTORY_PAGE_SIZE);
+    } else if (!append) {
+      setHistoryLoadFailed(true);
+      if (historyShownFilterRef.current !== historyFilter) {
+        historyShownFilterRef.current = null;
+        setHistory([]);
+        setHistoryHasMore(false);
+      }
     }
     setHistoryLoading(false);
   }, [agentId, historyFilter]);
@@ -678,10 +698,15 @@ export default function WorldTab({ agentId }) {
                 </button>
               </div>
             </div>
+            {historyLoadFailed && !historyLoading && (
+              <ListLoadError what="activity history" onRetry={() => fetchHistory()} className="mb-2" />
+            )}
             {history.length === 0 ? (
-              <p className="text-sm text-gray-500 text-center py-4">
-                {historyLoading ? <BrailleSpinner text="Loading" /> : 'No activity history yet'}
-              </p>
+              !(historyLoadFailed && !historyLoading) && (
+                <p className="text-sm text-gray-500 text-center py-4">
+                  {historyLoading ? <BrailleSpinner text="Loading" /> : 'No activity history yet'}
+                </p>
+              )
             ) : (
               <div className="space-y-1.5 max-h-[400px] overflow-y-auto">
                 {history.map((entry) => (
