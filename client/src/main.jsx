@@ -10,6 +10,7 @@ import { ThemeProvider } from './components/ThemeContext';
 import { isStaleChunkError, reloadOnceForStaleChunk } from './utils/staleChunkReload';
 import { reportClientError } from './lib/clientErrorReporter';
 import { registerServiceWorker } from './lib/registerServiceWorker';
+import { suppressIosFocusZoom } from './lib/iosFocusZoom';
 import { installActionFeedback } from './services/actionFeedback';
 import DownloadManager from './components/DownloadManager';
 import App from './App';
@@ -18,6 +19,9 @@ import './index.css';
 // Offline app-shell + low-bandwidth asset caching (production, secure-context
 // only — no-op in dev and over plain-HTTP Tailnet). See lib/registerServiceWorker.
 registerServiceWorker();
+
+// Focusing a sub-16px field must not zoom the iPhone layout off-screen.
+suppressIosFocusZoom();
 
 // Tapped buttons show a busy state while the request they started is in flight.
 installActionFeedback();
