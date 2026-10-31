@@ -195,15 +195,12 @@ function normalizeFinding(finding, anchors) {
   const path = trimTo(finding.path, 500);
   const side = String(finding.side || '').toUpperCase();
   const line = Number(finding.line);
-  // Legacy blocking:false is a severity hint, never permission to merge a finding.
-  const blocking = true;
-  const rendered = renderFinding(finding, { blocking });
+  const rendered = renderFinding(finding);
   if (!path || side !== 'RIGHT' || !Number.isInteger(line) || line < 1 || !rendered) return null;
   if (!anchors.has(`${path}\u0000${side}\u0000${line}`)) return null;
   return {
     comment: { path, side, line, body: rendered.body },
     label: rendered.label,
-    blocking,
   };
 }
 
@@ -1392,19 +1389,17 @@ function ledgerAfterLanding(approvals, number, outcome) {
 function reviewPlanFor(decision, diff, target) {
   const anchors = parseAddedDiffLines(diff);
   const normalizedFindings = decision.findings.map((finding) => normalizeFinding(finding, anchors)).filter(Boolean);
-  const blockingFindings = normalizedFindings.filter(({ blocking }) => blocking);
   const hasInvalidFinding = normalizedFindings.length !== decision.findings.length;
   const diffInsufficient = target.diffTruncated || diff.length > MAX_DIFF_CHARS;
   return {
     normalizedFindings,
     findings: normalizedFindings.map(({ comment }) => comment),
-    blockingFindings,
     hasInvalidFinding,
-    // An approval cannot override an accepted finding, whatever its severity.
+    // Every finding blocks, valid or not: a legacy blocking:false is a severity
+    // hint, never permission to approve past a finding.
     canApprove: decision.verdict === 'approve'
-      && !hasInvalidFinding
       && !diffInsufficient
-      && blockingFindings.length === 0,
+      && decision.findings.length === 0,
   };
 }
 
@@ -1413,17 +1408,14 @@ function reviewPlanFor(decision, diff, target) {
  * to whoever can act on it. `{ reviewed, handedBack }` report what happened.
  */
 async function postNonApprovingReview({ app, ctx, pr, raw, decision, review, target, handbacks, drops, recheck }) {
-  const { normalizedFindings, findings, blockingFindings, hasInvalidFinding } = review;
+  const { normalizedFindings, findings, hasInvalidFinding } = review;
   if (!await recheck()) return { reviewed: false, handedBack: false };
   const downgraded = hasInvalidFinding && decision.verdict !== 'request_changes';
-  const shouldRequestChanges = decision.verdict === 'request_changes'
-    || hasInvalidFinding
-    || blockingFindings.length > 0;
+  const shouldRequestChanges = decision.verdict === 'request_changes' || decision.findings.length > 0;
   const summary = renderReviewBody({
     report: raw,
     verdict: shouldRequestChanges ? 'request_changes' : 'defer',
-    blockingFindings,
-    nonBlockingFindings: normalizedFindings.filter((entry) => !entry.blocking),
+    findings: normalizedFindings,
     downgraded,
   });
   const posted = shouldRequestChanges
