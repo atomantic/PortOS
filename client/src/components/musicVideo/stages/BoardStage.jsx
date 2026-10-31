@@ -272,7 +272,7 @@ export default function BoardStage({ board }) {
         </div>
       </div>
       {/* Portaled out of the fieldset above, so it carries its own lock. */}
-      <Drawer open={!!activeScene || endingOpen || creditsOpen} size="lg"
+      <Drawer open={!!activeScene || endingOpen || creditsOpen} size="xl"
         onClose={activeScene ? () => toggleInspector(activeScene.sceneId, false) : closeEnding}
         title={activeScene ? shotName(activeScene) : creditsOpen ? 'Credits' : 'Cutting room floor'}
         subtitle={activeScene?.lyricText ? `♪ ${activeScene.lyricText}` : undefined}

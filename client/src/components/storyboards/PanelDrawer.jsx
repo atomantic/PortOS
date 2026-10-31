@@ -342,9 +342,6 @@ function CastTab({ panel, onPatch }) {
  */
 export default function PanelDrawer({ open, board, found, panelNumber, sketchNonce, busy, onClose, onStep, handlers, timing = true }) {
   const [activeTab, setActiveTab] = useDrawerTab('panelTab', 'shot', TAB_IDS);
-  const [searchParams] = useSearchParams();
-  // The recipe canvas (desktop) needs the room; every other tab stays a column.
-  const wide = activeTab === 'make' && searchParams.get('makeView') === 'canvas';
 
   return (
     <Drawer
@@ -352,7 +349,7 @@ export default function PanelDrawer({ open, board, found, panelNumber, sketchNon
       onClose={onClose}
       title={found ? `Panel ${panelNumber}` : 'Panel'}
       subtitle={found ? (found.beat.title || `Beat ${found.beatIndex + 1}`) : undefined}
-      size={wide ? 'xl' : 'md'}
+      size="xl"
       tabs={found ? TABS : null}
       activeTab={activeTab}
       onTabChange={setActiveTab}
