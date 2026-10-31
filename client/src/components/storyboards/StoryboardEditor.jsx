@@ -22,6 +22,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import { ArrowLeft, BookOpen, Clapperboard, ExternalLink, LayoutGrid, LayoutPanelLeft, ListMusic, Loader2, Play, Plus, Rows3, ScrollText, SlidersHorizontal } from 'lucide-react';
 import TabPills from '../ui/TabPills';
+import ListLoadError from '../ui/ListLoadError';
+import LoadFailedState from '../ui/LoadFailedState';
 import toast from '../ui/Toast';
 import socket from '../../services/socket';
 import {
@@ -31,6 +33,7 @@ import {
   updateStoryboardPanel, updateStoryboardPanelNode, updateStoryboardRecipe,
 } from '../../services/api';
 import { formatTimecode } from '../../utils/formatters';
+import useListResource from '../../hooks/useListResource';
 import { storyboardPanelSpans } from '../../../../server/lib/storyboardShotSync.js';
 import { STORYBOARD_ART_STYLE_LABELS, STORYBOARD_ART_STYLES, STORYBOARD_ASPECT_RATIOS, STORYBOARD_LIMITS } from '../../../../server/lib/storyboardVocabulary.js';
 import BeatSection from './BeatSection';
@@ -55,6 +58,7 @@ const EDITOR_PARAMS = ['panelTab', 'makeView', 'node', 'plot', 'brief', 'video',
 
 const selectClass = 'min-h-[44px] bg-port-bg border border-port-border rounded px-2 text-sm text-white';
 const headerButton = 'min-h-[44px] inline-flex items-center gap-1.5 rounded border border-port-border px-3 text-sm text-gray-200 hover:border-port-accent/60 hover:text-white';
+const readMoodBoardNames = () => listMoodBoardNames({ silent: true });
 
 export default function StoryboardEditor({ boardId: id, panelId, boardPath, embedded = false, onBoard, refreshKey = 0, actions = null, song = null, timingSong = null }) {
   const navigate = useNavigate();
@@ -79,29 +83,30 @@ export default function StoryboardEditor({ boardId: id, panelId, boardPath, embe
     const search = next.toString();
     return search ? `?${search}` : '';
   };
-  // undefined = loading, null = missing.
+  // undefined = loading (or a failed read, with `loadError`), null = missing.
   const [board, setBoard] = useState(undefined);
+  const [loadError, setLoadError] = useState(null);
+  const [loadAttempt, setLoadAttempt] = useState(0);
   const [pending, setPending] = useState(null);
-  const [moodBoards, setMoodBoards] = useState([]);
+  const moodBoardList = useListResource(readMoodBoardNames);
+  const moodBoards = moodBoardList.items;
   const [sketchNonces, setSketchNonces] = useState({});
   const mountNonceRef = useRef(Date.now());
 
   useEffect(() => {
     let active = true;
     setBoard(undefined);
+    setLoadError(null);
     getStoryboard(id, { silent: true })
       .then((next) => { if (active) setBoard(next); })
-      .catch(() => { if (active) setBoard(null); });
+      // Only a 404 means the board is gone; any other failure is a read to retry.
+      .catch((err) => {
+        if (!active) return;
+        if (err?.status === 404) setBoard(null);
+        else setLoadError(err || new Error('Request failed'));
+      });
     return () => { active = false; };
-  }, [id]);
-
-  useEffect(() => {
-    let active = true;
-    listMoodBoardNames({ silent: true })
-      .then((rows) => { if (active) setMoodBoards(Array.isArray(rows) ? rows : []); })
-      .catch(() => {});
-    return () => { active = false; };
-  }, []);
+  }, [id, loadAttempt]);
 
   useEffect(() => {
     const onSketchUpdated = ({ key } = {}) => {
@@ -279,6 +284,13 @@ export default function StoryboardEditor({ boardId: id, panelId, boardPath, embe
     },
   };
 
+  if (board === undefined && loadError) {
+    return (
+      <LoadFailedState title="Could not load this storyboard" hint={loadError.message}
+        onRetry={() => setLoadAttempt((n) => n + 1)} />
+    );
+  }
+
   if (board === undefined) {
     return (
       <div className={`flex items-center justify-center text-gray-500 ${embedded ? 'py-10' : 'h-full'}`}>
@@ -297,7 +309,10 @@ export default function StoryboardEditor({ boardId: id, panelId, boardPath, embe
   }
 
   const runtime = board.beats.reduce((sum, beat) => sum + beatSeconds(beat), 0);
-  const missingMoodBoard = board.moodBoardId && !moodBoards.some((m) => m.id === board.moodBoardId);
+  // Missing only once the list has loaded; after a failed read the link is unverified, not gone.
+  const listedMoodBoard = moodBoards.some((m) => m.id === board.moodBoardId);
+  const missingMoodBoard = board.moodBoardId && moodBoardList.state === 'ready' && !listedMoodBoard;
+  const unlistedMoodBoard = board.moodBoardId && moodBoardList.state !== 'ready' && !listedMoodBoard;
   let firstPanelNumber = 1;
 
   return (
@@ -354,8 +369,12 @@ export default function StoryboardEditor({ boardId: id, panelId, boardPath, embe
               onChange={(event) => write(() => updateStoryboard(id, { moodBoardId: event.target.value || null }))}>
               <option value="">No mood board</option>
               {missingMoodBoard ? <option value={board.moodBoardId}>Missing mood board</option> : null}
+              {unlistedMoodBoard ? <option value={board.moodBoardId}>Linked mood board</option> : null}
               {moodBoards.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
             </select>
+            {moodBoardList.state === 'error' && (
+              <ListLoadError what="mood boards" error={moodBoardList.error} onRetry={moodBoardList.retry} className="w-full" />
+            )}
           </div>
         )}
         <div className="flex flex-wrap items-start gap-2">

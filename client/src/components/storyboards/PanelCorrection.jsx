@@ -20,6 +20,9 @@ export default function PanelCorrection({ take, onCorrect, onClose }) {
   const markupKey = `image:${take.image}`;
   const canvasRef = useRef(null);
   const [strokes, setStrokes] = useState([]);
+  // Any draw, undo or clear: the earlier markup must not land over it, even an emptied canvas.
+  const edited = useRef(false);
+  const editStrokes = (next) => { edited.current = true; setStrokes(next); };
   const [dims, setDims] = useState(null);
   const [color, setColor] = useState(SWATCHES[0]);
   const [mode, setMode] = useState('draw');
@@ -28,11 +31,14 @@ export default function PanelCorrection({ take, onCorrect, onClose }) {
   const tool = useMemo(() => ({ color, size: DEFAULT_SIZE, mode }), [color, mode]);
   const fieldId = `panel-correction-${take.id}`;
 
-  // Earlier marks on this frame come back, so a correction can be refined.
+  // Earlier marks on this frame come back, so a correction can be refined;
+  // a read that lands after the user started editing keeps their canvas.
   useEffect(() => {
     let active = true;
     getMediaSketch(markupKey, { silent: true })
-      .then((res) => { if (active && Array.isArray(res?.sketch?.strokes)) setStrokes(res.sketch.strokes); })
+      .then((res) => {
+        if (active && !edited.current && Array.isArray(res?.sketch?.strokes)) setStrokes(res.sketch.strokes);
+      })
       .catch(() => {});
     return () => { active = false; };
   }, [markupKey]);
@@ -56,7 +62,7 @@ export default function PanelCorrection({ take, onCorrect, onClose }) {
           imageSrc={`/data/images/${encodeURIComponent(take.image)}`}
           strokes={strokes}
           tool={tool}
-          onStrokesChange={setStrokes}
+          onStrokesChange={editStrokes}
           onImageLoad={setDims}
         />
       </div>
@@ -74,10 +80,10 @@ export default function PanelCorrection({ take, onCorrect, onClose }) {
         <button type="button" className={`${toolButton} ${mode === 'erase' ? 'border-port-accent text-white' : ''}`} aria-label="Eraser" aria-pressed={mode === 'erase'} onClick={() => setMode('erase')}>
           <Eraser size={16} aria-hidden="true" />
         </button>
-        <button type="button" className={toolButton} aria-label="Undo" onClick={() => setStrokes((prev) => undoStrokes(prev))} disabled={!strokes.length}>
+        <button type="button" className={toolButton} aria-label="Undo" onClick={() => editStrokes((prev) => undoStrokes(prev))} disabled={!strokes.length}>
           <Undo2 size={16} aria-hidden="true" />
         </button>
-        <button type="button" className={toolButton} aria-label="Clear drawing" onClick={() => setStrokes([])} disabled={!strokes.length}>
+        <button type="button" className={toolButton} aria-label="Clear drawing" onClick={() => editStrokes([])} disabled={!strokes.length}>
           <Trash2 size={16} aria-hidden="true" />
         </button>
       </div>
