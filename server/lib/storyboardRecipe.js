@@ -344,8 +344,16 @@ export function textNodeValue(node, { beat, panel } = {}) {
   // image would letter it. The camera move stays off too: a still can't show
   // it, and imported boards carry free text there ("a loose wide shot") that
   // fought the framing and angle the user picked.
+  return [panel?.action, storyboardPanelShotText(panel)].filter((v) => v && v.trim()).join('\n');
+}
+
+/**
+ * A panel's shot picks (framing, angle, facing, composition, lens, focus,
+ * eyeline) as labeled lines; '' when none is picked. The camera move's free
+ * text stays out (see textNodeValue).
+ */
+export function storyboardPanelShotText(panel) {
   return [
-    panel?.action,
     panel?.framing ? `Framing: ${FRAMING_WORDS[panel.framing] || panel.framing}.` : '',
     panel?.angle ? `Angle: ${ANGLE_WORDS[panel.angle] || panel.angle}.` : '',
     panel?.facing ? `Subject: ${FACING_WORDS[panel.facing] || panel.facing}.` : '',

@@ -172,8 +172,12 @@ function placeGreyboxReference(namedReferenceFiles, imageId, { cachedCapture, fr
 async function applyMusicVideoSceneInputs(data, { project, mode, localModel, namedReferenceFiles, referenceUploads, initInputCount }) {
   const tag = data.musicVideo;
   const scene = project?.scenes?.find((entry) => entry.sceneId === tag.sceneId);
-  const { loadMusicVideoGreybox } = await import('../musicVideo/greyboxReferences.js');
-  const greybox = await loadMusicVideoGreybox(project, scene);
+  const [{ loadMusicVideoGreybox }, { loadLinkedStoryboardPanel }] = await Promise.all([
+    import('../musicVideo/greyboxReferences.js'), import('../musicVideo/linkedPanel.js'),
+  ]);
+  const [greybox, panel] = await Promise.all([
+    loadMusicVideoGreybox(project, scene), tag.compose ? loadLinkedStoryboardPanel(project, scene) : null,
+  ]);
   if (greybox) {
     placeGreyboxReference(namedReferenceFiles, greybox.reference.imageId, { cachedCapture: tag.greyboxImageId, fromFrame: tag.fromFrame || tag.refine });
   }
@@ -185,6 +189,7 @@ async function applyMusicVideoSceneInputs(data, { project, mode, localModel, nam
       fromFrame: tag.fromFrame === true, refine: tag.refine === true,
       // The picked frame comes first; any reference after it is the shot's character or set reference.
       otherReferences: Math.max(0, namedReferenceFiles.length + referenceUploads.length - 1),
+      panel, panelReference: scene?.panelArt ? namedReferenceFiles.indexOf(scene.panelArt) + 1 : 0,
     });
     data.prompt = composed.prompt;
     if (composed.promptAdditions.length) data.promptAdditions = [...(data.promptAdditions || []), ...composed.promptAdditions];

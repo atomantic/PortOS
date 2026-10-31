@@ -56,8 +56,6 @@ async function dispatchFrame({ project, scene, route, tag, settings }) {
   const fixes = typeof scene.stillFixes?.text === 'string' ? scene.stillFixes.text : '';
   const { loadMusicVideoGreybox } = await import('./greyboxReferences.js');
   const greybox = await loadMusicVideoGreybox(project, scene);
-  const { prompt, promptAdditions } = musicVideoFrameModelInput(project, scene, { repairs: unmet, fixes, greybox });
-  if (!prompt) throw unprompted(scene, 'frame');
   // A Casting guide may live in any image-input root (catalog.js validates it with resolveImageInputPath).
   const chosen = conditioningReferences(project, scene, await loadSceneCastMedia(scene), greybox);
   const sent = [];
@@ -68,6 +66,11 @@ async function dispatchFrame({ project, scene, route, tag, settings }) {
     referenceImagePaths.push(path);
     sent.push(ref);
   }
+  const { loadLinkedStoryboardPanel } = await import('./linkedPanel.js');
+  const panel = await loadLinkedStoryboardPanel(project, scene);
+  const panelReference = scene.panelArt ? sent.findIndex((ref) => ref.imageId === scene.panelArt) + 1 : 0;
+  const { prompt, promptAdditions } = musicVideoFrameModelInput(project, scene, { repairs: unmet, fixes, greybox, panel, panelReference });
+  if (!prompt) throw unprompted(scene, 'frame');
   const [{ resolveRenderTargetConfig }, { resolveImageCleaners }, { enqueueJob }] = await Promise.all([
     import('../imageGen/cloudProviderConfig.js'),
     import('../../lib/imageCleanDefaults.js'),

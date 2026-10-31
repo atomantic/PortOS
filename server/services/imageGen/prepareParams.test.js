@@ -33,6 +33,9 @@ const getUniverseRenderPin = vi.fn(async () => null);
 const getUniverseVisualProfile = vi.fn(async () => null);
 vi.mock('../universeBuilder/crud.js', () => ({ getUniverseRenderPin: (...a) => getUniverseRenderPin(...a), getUniverseVisualProfile: (...a) => getUniverseVisualProfile(...a) }));
 
+const getStoryboard = vi.fn(async () => null);
+vi.mock('../storyboards/index.js', () => ({ getStoryboard: (...a) => getStoryboard(...a) }));
+
 const { prepareGenerateParams, selectLocalImageModel, selectLocalImageModelFromSettings } = await import('./prepareParams.js');
 const { AGY_IMAGEGEN_DEFAULT_MODEL } = await import('./modes.js');
 
@@ -304,6 +307,21 @@ it('composes a board still from the director\'s text and lists what it adds', as
   const { data } = await run({ prompt: 'harbor at dawn', musicVideo: { projectId: 'mv-1', sceneId: 's1', compose: true, fromFrame: true } });
   expect(data.prompt).toMatch(/^harbor at dawn, grainy 16mm\nStart from the first reference image.*\. Moodboard style only/s);
   expect(data.promptAdditions.map((item) => item.id)).toEqual(['project-style', 'rework-frame', 'mood-board-style']);
+});
+
+// Uniquely catches a panel-linked still sent without its live panel's picks, or naming the wrong reference as the sketch.
+it('directs a panel-linked still by its live storyboard panel and names the sketch\'s reference slot', async () => {
+  const { PATHS } = await import('../../lib/paths.js');
+  mkdirSync(PATHS.images, { recursive: true });
+  for (const file of ['sheet.png', 'sketch.png']) writeFileSync(join(PATHS.images, file), 'fixture');
+  getSettings.mockResolvedValue({ imageGen: { mode: 'codex', ...CODEX_ON } });
+  getProject.mockResolvedValue({ storyboardId: 'sb-1', scenes: [{ sceneId: 's1', panelId: 'panel-1', panelArt: 'sketch.png' }] });
+  getStoryboard.mockResolvedValue({ id: 'sb-1', beats: [{ panels: [{ id: 'panel-1', action: 'She laces her skates alone', framing: 'wide', facing: 'front' }] }] });
+  const { data } = await run({ prompt: '', referenceImageFiles: ['sheet.png', 'sketch.png'], musicVideo: { projectId: 'mv-1', sceneId: 's1', compose: true } });
+  expect(getStoryboard).toHaveBeenCalledWith('sb-1');
+  expect(data.prompt).toContain('She laces her skates alone\nFraming: wide establishing shot.');
+  expect(data.prompt).toContain('Reference image 2 is the storyboard sketch');
+  expect(data.promptAdditions.map((item) => item.id).slice(0, 3)).toEqual(['storyboard-action', 'storyboard-shot', 'storyboard-sketch']);
 });
 
 // Pins cleaner precedence where requests are prepared, without loading a backend.
