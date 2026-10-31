@@ -365,6 +365,71 @@ describe('local making-of compilation', () => {
     expect(result.manifest.publication).toBe('not-published');
   });
 
+  it('records embedded graphics, planning-import source rows, sheet links and missing-planning rows per project', async () => {
+    const png = await sharp({ create: { width: 2, height: 2, channels: 3, background: 'blue' } }).png().toBuffer();
+    const project = records.get('mv-example');
+    const sheet = artifact('graphic-example');
+    sheet.versions[0].file = 'music-video/mv-example/dev/graphic-example/v1.html';
+    const story = { ...artifact('story-example'), kind: 'storyboard' };
+    const imported = { ...artifact('import-example', 'html', 'planning-import'), kind: 'other' };
+    const bare = { ...artifact('bare-import-example', 'html', 'planning-import'), kind: 'other' };
+    project.devArtifacts = [sheet, story, imported, bare];
+    project.castAndSets = { plan: { 'set:harbor': { label: 'Harbor' } }, images: { 'set:harbor': { imageId: 'owned-plate.png', jobId: 'plate-job', submittedPrompt: 'Harbor at dawn', submittedRevision: 3 } } };
+    jobs.set('plate-job', { kind: 'image', params: { musicVideo: { projectId: project.id, castAndSets: { key: 'set:harbor' } } }, result: { filename: 'owned-plate.png' } });
+    await file('images/owned-plate.png', png);
+    await file(sheet.versions[0].file, '<h1>Cast sheet</h1><svg viewBox="0 0 16 9"><rect width="16" height="9" fill="#ffffff"/></svg><svg viewBox="0 0 16 9"><image href="file:///private-source"/></svg>');
+    await file(story.versions[0].file, '<h1>Story sheet</h1>');
+    const encode = value => `<pre>${JSON.stringify(value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')}</pre>`;
+    await file(imported.versions[0].file, encode({ assets: [{ label: 'Unnamed panel' }, { id: 'panel-a', label: 'Panel A' }, { id: 'panel-b' }], storyboard: [{ id: 'one', note: { nested: true } }, { id: 'two', extra: 'x' }] }));
+    await file(bare.versions[0].file, encode({ assets: 'not-a-list', storyboard: [] }));
+    const selection = await select(['artifact:graphic-example:v1', 'artifact:story-example:v1', 'artifact:import-example:v1', 'artifact:bare-import-example:v1', 'cast:set:harbor']);
+    selection.projects[0].assets[0] = { id: 'artifact:graphic-example:v1', rights: 'owned', attribution: 'Example Studio', ownershipConfirmed: true };
+    const result = await preview(selection);
+    const rows = result.manifest.inventory;
+    const visuals = rows.filter(item => item.id.startsWith('artifact:graphic-example:v1:visual:'));
+    expect(visuals).toHaveLength(2);
+    expect(visuals[0]).toMatchObject({ status: 'included', delivery: 'file', rights: 'owned', attribution: 'Example Studio',
+      provenance: { source: 'embedded-sheet-graphic', sourceArtifactId: 'graphic-example', sourceVersion: 1, ownership: 'operator-declared', sourceSha256: expect.stringMatching(/^[0-9a-f]{64}$/) } });
+    expect(visuals[0].sha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(visuals[1]).toMatchObject({ status: 'excluded', delivery: 'unavailable', path: null, bytes: 0, sha256: null, rights: 'owned' });
+    const sources = rows.filter(item => item.kind === 'source-reference');
+    expect(sources.map(item => item.id)).toEqual([
+      expect.stringMatching(/^source:artifact:import-example:v1:[0-9a-f]{16}$/), 'source:artifact:import-example:v1:panel-a', 'source:artifact:import-example:v1:panel-b']);
+    expect(sources.map(item => item.label)).toEqual(['Unnamed panel', 'Panel A', 'panel-b']);
+    expect(sources[0].sourceAssetId).toBe(sources[0].id.split(':').pop());
+    expect(rows.find(item => item.id === 'artifact:story-example:v1')).toMatchObject({ kind: 'storyboard', status: 'included', selected: true });
+    expect(rows.find(item => item.id === 'cast:set:harbor')).toMatchObject({ status: 'included', provenance: { ownership: 'project-generated', prompt: 'Harbor at dawn', revision: 3 } });
+    expect(rows.find(item => item.id === 'frame:scene-example').provenance).toMatchObject({ prompt: 'A room' });
+    const out = await compileMakingOf({ ...selection, previewDigest: result.previewDigest }, { download: true });
+    const files = members(out.zip);
+    const csvRows = files.get('projects/mv-example/artifacts/import-example/v1-storyboard.csv').toString().trim().split('\n');
+    expect(csvRows).toEqual(['"extra","id","note"', '"","one","{""nested"":true}"', '"x","two",""']);
+    expect(files.get('projects/mv-example/artifacts/import-example/v1-storyboard.md').toString()).toMatch(/^# Original planning storyboard — unverified\n\n {4}\{/);
+    expect([...files.keys()].filter(name => name.includes('bare-import-example') && name.includes('storyboard'))).toEqual([]);
+    const castSheet = files.get('projects/mv-example/cast-set-sheet.md').toString();
+    expect(castSheet).toContain('[artifact:graphic-example:v1](artifacts/graphic-example/v1.md)');
+    expect(castSheet).toMatch(/!\[artifact:graphic-example:v1:visual:1\]\(artifacts\/graphic-example\/v1-visuals\/[^)]+\.png\)/);
+    expect(castSheet).toMatch(/!\[cast:set:harbor\]\(images\/[^)]+\.png\)/);
+    const storySheet = files.get('projects/mv-example/storyboard.md').toString();
+    expect(storySheet).toContain('[artifact:story-example:v1](artifacts/story-example/v1.md)');
+    expect(storySheet).not.toContain('![');
+  });
+
+  it('emits a missing row only for the planning artifact and cast direction each project lacks', async () => {
+    const story = { ...artifact('only-story-example'), kind: 'storyboard' };
+    await file(story.versions[0].file, '<h1>Story</h1>');
+    const castOnly = fixture({ id: 'mv-cast-only', scenes: [], productionReview: { draft: { cast: 'A keeper', storyboard: [] } }, devArtifacts: [story] });
+    const directed = fixture({ id: 'mv-directed', scenes: [], productionReview: {}, castAndSets: { direction: { medium: 'procedural', sets: [] } } });
+    const nothing = fixture({ id: 'mv-none', scenes: [], productionReview: {} });
+    const envOnly = fixture({ id: 'mv-env-only', scenes: [], productionReview: { draft: { environments: 'Harbor', storyboard: [] } } });
+    records.set(castOnly.id, castOnly); records.set(envOnly.id, envOnly); records.set(nothing.id, nothing); records.set(directed.id, directed);
+    const projects = [];
+    for (const id of ['mv-cast-only', 'mv-directed', 'mv-env-only', 'mv-none']) projects.push({ projectId: id, snapshot: (await request(app).get(`/api/music-video/${id}/making-of/catalog`)).body.snapshot, assets: [] });
+    const missing = (await preview({ projects })).manifest.inventory.filter(item => item.status === 'missing').map(item => `${item.projectId}:${item.id}`);
+    expect(missing).toEqual(['mv-cast-only:missing:cast-sets', 'mv-cast-only:missing:shots', 'mv-directed:missing:cast-sets', 'mv-directed:missing:storyboard', 'mv-directed:missing:shots', 'mv-env-only:missing:cast-sets', 'mv-env-only:missing:storyboard', 'mv-env-only:missing:shots',
+      'mv-none:missing:cast-sets', 'mv-none:missing:storyboard', 'mv-none:missing:cast-planning', 'mv-none:missing:shots']);
+  });
+
   it('refuses stale previews and invalid selections before downloading', async () => {
     const selection = await select();
     const result = await preview(selection);
