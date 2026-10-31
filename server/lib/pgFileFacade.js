@@ -33,7 +33,9 @@ export const POSTGRES_SETUP_HINT = 'run `npm run setup:db` (dev/test only: set P
 
 /**
  * True when the file/escape-hatch backend should be used instead of PostgreSQL.
- * Dev/test only — see the Storage backend policy in AGENTS.md.
+ * Dev/test only — see the Storage backend policy in AGENTS.md. Call this rather
+ * than re-spelling the check: a suite then forces a backend by stubbing this one
+ * predicate instead of mocking `isTestRunner()`, which db.js's guards key on.
  */
 export function isFileBackend() {
   return process.env.MEMORY_BACKEND === 'file' || isTestRunner();

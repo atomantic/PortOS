@@ -20,7 +20,7 @@
  * disk. init() no-ops in that case (mirrors how catalog features disable).
  */
 
-import { isTestRunner } from '../../lib/runtimeEnv.js';
+import { isFileBackend } from '../../lib/pgFileFacade.js';
 import { checkHealth, ensureSchema } from '../../lib/db.js';
 import { imageGenEvents } from '../imageGenEvents.js';
 import { videoGenEvents } from '../videoGen/events.js';
@@ -31,14 +31,10 @@ export { reconcileMediaAssets } from './db.js';
 
 let subscribed = false;
 
-function isEscapeHatch() {
-  return process.env.MEMORY_BACKEND === 'file' || isTestRunner();
-}
-
 // Index a single just-generated image. The 'completed' event carries the
 // filename; the full metadata is in the sidecar the generator just wrote.
 export async function indexImage({ filename, temp } = {}) {
-  if (isEscapeHatch()) return;
+  if (isFileBackend()) return;
   if (typeof filename !== 'string' || !filename) return;
   // A non-gallery temp render (issue #2264, Image Cleaner GPU pass) has no
   // gallery file or sidecar — skip indexing it. It lives in imageCleanTmp and
@@ -82,7 +78,7 @@ async function onVideoCompleted({ generationId, videos } = {}) {
 // retaining its history row and bytes can use strict removal to fail closed.
 // Test/file backends have no derived Postgres index to maintain.
 async function unindexKey(mediaKey, kind, { strict = false } = {}) {
-  if (!mediaKey || isEscapeHatch()) return;
+  if (!mediaKey || isFileBackend()) return;
   const removal = queueMediaIndexRefresh(() => removeAsset(mediaKey));
   if (strict) return removal;
   await removal.catch((err) => console.error(`❌ Media index ${kind} remove failed: ${err.message}`));
@@ -112,7 +108,7 @@ export async function unindexVideo(id, options = {}) {
  * gate already fail-fasts a required-but-missing DB; this just stays quiet).
  */
 export async function initMediaAssetIndex() {
-  if (isEscapeHatch()) {
+  if (isFileBackend()) {
     console.log('🗂️  Media asset index disabled (escape hatch / test) — serving from disk only');
     return { ok: false, reason: 'escape-hatch' };
   }

@@ -48,7 +48,7 @@ import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { isPlainObject } from '../lib/objects.js';
 import { isSecretKey } from '../lib/secretKeys.js';
 import { createPgFileFacade, resolvePgBackend, POSTGRES_SETUP_HINT } from '../lib/pgFileFacade.js';
-import { isTestRunner, isVitestRunner } from '../lib/runtimeEnv.js';
+import { isVitestRunner } from '../lib/runtimeEnv.js';
 import { isUserActionActor, isUserActionType } from '../lib/userActionTypes.js';
 import { insertUserActionEvent, listUserActionEvents, pruneUserActionEvents } from './userActionsDb.js';
 
@@ -351,9 +351,6 @@ function makePgBackend(db) {
 }
 
 const facade = createPgFileFacade({
-  // Vitest's VITEST marker is the resilient test signal when a wrapper drops
-  // NODE_ENV; never let a focused route suite fall through to the live Postgres.
-  isFile: () => process.env.MEMORY_BACKEND === 'file' || isTestRunner(),
   makeFile: makeFileBackend,
   makePg: () => resolvePgBackend({
     requirement: `The operator-action ledger requires PostgreSQL — ${POSTGRES_SETUP_HINT}`,
