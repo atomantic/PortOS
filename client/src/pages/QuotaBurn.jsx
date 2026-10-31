@@ -512,7 +512,7 @@ function QuotaBurnContent() {
             checked={config.enabled}
             onChange={(event) => save({ enabled: event.target.checked })}
           />
-          <label htmlFor="quota-burn-enabled" className="text-sm text-white">
+          <label htmlFor="quota-burn-enabled" className="inline-flex items-center pointer-coarse:min-h-11 text-sm text-white">
             Run the quota-burn loop automatically
           </label>
           {/* NumberField, not a bare input — an emptied box must not commit
