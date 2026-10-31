@@ -1,3 +1,5 @@
+import { useId } from 'react';
+
 // One stick figure in "figure units": 100 tall, centered on x=0, head top at y=0,
 // waist at y=55, feet at y=100. Each framing places it with a scale and offset so
 // every framing draws the same person at a different distance.
@@ -67,6 +69,48 @@ const Placed = ({ x, top = 12 }) => (
   </>
 );
 
+// An accent arrow along `d`, its head at (x, y) pointing `deg` degrees (0 = right).
+const Arrow = ({ d, x, y, deg }) => (
+  <g className="stroke-port-accent" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" fill="none">
+    <path d={d} />
+    <path transform={`translate(${x} ${y}) rotate(${deg})`} d="M-5 -4L0 0L-5 4" />
+  </g>
+);
+
+// Top view for the lens diagrams: the camera's field of view as a wedge
+// `half` degrees either side of straight up.
+const FieldOfView = ({ half }) => {
+  const rad = (half * Math.PI) / 180;
+  const dx = Math.tan(rad) * 70;
+  return (
+    <>
+      <path className="fill-port-accent/10 stroke-port-accent" strokeWidth="1" strokeLinejoin="round" d={`M80 78L${80 - dx} 8L${80 + dx} 8Z`} />
+      <Camera x={80} y={84} aimX={80} aimY={60} />
+      <circle cx="80" cy="34" r="5" className="fill-port-card stroke-current" strokeWidth="1.5" />
+    </>
+  );
+};
+
+// Close face for the eyeline diagrams, its pupils shifted by (dx, dy).
+const Eyes = ({ dx = 0, dy = 0 }) => (
+  <g className="fill-port-card stroke-current" strokeWidth="1.5" strokeLinecap="round">
+    <circle cx="80" cy="50" r="36" />
+    <ellipse cx="66" cy="44" rx="8" ry="5.5" />
+    <ellipse cx="94" cy="44" rx="8" ry="5.5" />
+    <circle cx={66 + dx} cy={44 + dy} r="3" className="fill-current" stroke="none" />
+    <circle cx={94 + dx} cy={44 + dy} r="3" className="fill-current" stroke="none" />
+    <path fill="none" d="M70 68Q80 72 90 68" />
+  </g>
+);
+
+// Background for the focus diagrams: a tree line behind the subject, blurred by `filter`.
+const Backdrop = ({ filter }) => (
+  <g filter={filter} className="fill-gray-600 stroke-gray-500" strokeWidth="1">
+    <path d="M12 74L26 30L40 74ZM118 74L134 22L150 74Z" />
+    <Figure x={100} top={46} scale={0.28} />
+  </g>
+);
+
 const SCENES = {
   'extreme-wide': () => (
     <>
@@ -120,6 +164,14 @@ const SCENES = {
       <Figure x={108} top={16} scale={1.32} />
     </>
   ),
+  group: () => (
+    <>
+      <Figure x={24} top={22} scale={0.95} />
+      <Figure x={62} top={18} scale={0.95} />
+      <Figure x={100} top={20} scale={0.95} />
+      <Figure x={138} top={16} scale={0.95} />
+    </>
+  ),
   pov: () => (
     <>
       <Horizon y={62} />
@@ -137,6 +189,7 @@ const SCENES = {
   low: () => (<><StandingSubject /><Camera x={36} y={74} aimX={112} aimY={40} /></>),
   'birds-eye': () => (<><StandingSubject /><Camera x={112} y={11} aimX={112} aimY={40} /></>),
   'worms-eye': () => (<><StandingSubject /><Camera x={70} y={78} aimX={112} aimY={30} /></>),
+  'ground-level': () => (<><StandingSubject /><Camera x={36} y={79} aimX={112} aimY={79} /></>),
   // Compositions: where the subject sits in the frame.
   center: () => <Placed x={80} />,
   'left-third': () => <Placed x={53.3} />,
@@ -144,6 +197,102 @@ const SCENES = {
   'cut-left': () => <Placed x={6} />,
   'cut-right': () => <Placed x={154} />,
   'low-in-frame': () => <Placed x={80} top={50} />,
+  'frame-within-frame': () => (
+    <>
+      <path className="fill-gray-700 stroke-gray-500" strokeWidth="1" fillRule="evenodd" d="M0 0H160V90H0ZM58 12H102V90H58Z" />
+      <Figure x={80} top={36} scale={0.54} />
+    </>
+  ),
+  'foreground-object': () => (
+    <>
+      <Figure x={104} top={12} scale={1.4} />
+      <ellipse cx="26" cy="66" rx="34" ry="40" className="fill-gray-600" opacity="0.85" />
+    </>
+  ),
+  // Camera moves: what the camera does over the clip.
+  static: () => (
+    <>
+      <StandingSubject />
+      <path className="stroke-gray-500" strokeWidth="1.5" strokeLinecap="round" fill="none" d="M30 34L20 84M30 34L30 84M30 34L40 84" />
+      <Camera x={32} y={29} aimX={112} aimY={29} />
+    </>
+  ),
+  'push-in': () => (<><StandingSubject /><Camera x={30} y={40} aimX={112} aimY={40} /><Arrow d="M44 56H82" x={82} y={56} deg={0} /></>),
+  'pull-out': () => (<><StandingSubject /><Camera x={56} y={40} aimX={112} aimY={40} /><Arrow d="M70 56H22" x={22} y={56} deg={180} /></>),
+  pan: () => (
+    <>
+      <Figure x={80} top={8} scale={0.42} />
+      <Camera x={80} y={80} aimX={80} aimY={60} />
+      <Arrow d="M50 64Q80 40 110 64" x={110} y={64} deg={40} />
+      <Arrow d="M110 64Q80 40 50 64" x={50} y={64} deg={140} />
+    </>
+  ),
+  tilt: () => (
+    <>
+      <StandingSubject />
+      <Camera x={40} y={50} aimX={112} aimY={50} />
+      <Arrow d="M62 24Q76 50 62 76" x={62} y={76} deg={115} />
+      <Arrow d="M62 76Q76 50 62 24" x={62} y={24} deg={245} />
+    </>
+  ),
+  tracking: () => (
+    <>
+      <Horizon y={84} />
+      <Figure x={80} top={24} scale={0.6} />
+      <Arrow d="M96 52H126" x={126} y={52} deg={0} />
+      <Camera x={60} y={74} aimX={80} aimY={64} />
+      <Arrow d="M74 82H126" x={126} y={82} deg={0} />
+    </>
+  ),
+  handheld: () => (
+    <>
+      <StandingSubject />
+      <g transform="rotate(-8 32 40)"><Camera x={32} y={40} aimX={112} aimY={40} /></g>
+      <path className="stroke-port-accent" strokeWidth="1.2" strokeLinecap="round" fill="none" d="M14 24Q18 20 22 24M36 22Q40 18 44 22M14 58Q18 62 22 58M36 60Q40 64 44 60" />
+    </>
+  ),
+  crane: () => (
+    <>
+      <StandingSubject />
+      <path className="stroke-gray-500" strokeWidth="2" strokeLinecap="round" fill="none" d="M14 84L20 70L46 22" />
+      <Camera x={46} y={18} aimX={112} aimY={46} />
+      <Arrow d="M30 70L52 36" x={52} y={36} deg={-57} />
+    </>
+  ),
+  orbit: () => (
+    <>
+      <ellipse cx="80" cy="44" rx="56" ry="28" className="stroke-gray-500" strokeWidth="1" strokeDasharray="3 3" fill="none" />
+      <circle cx="80" cy="44" r="8" className="fill-port-card stroke-current" strokeWidth="1.5" />
+      <Camera x={80} y={78} aimX={80} aimY={52} />
+      <Arrow d="M112 69Q130 62 135 48" x={135} y={48} deg={-70} />
+    </>
+  ),
+  // Lenses: the field of view, seen from above.
+  'wide-angle': () => <FieldOfView half={40} />,
+  normal: () => <FieldOfView half={22} />,
+  telephoto: () => <FieldOfView half={8} />,
+  // Focus: is the background sharp?
+  'shallow-focus': ({ blurId }) => (
+    <>
+      <filter id={blurId}><feGaussianBlur stdDeviation="2.5" /></filter>
+      <Horizon y={74} />
+      <Backdrop filter={`url(#${blurId})`} />
+      <Figure x={56} top={14} scale={1.15} />
+    </>
+  ),
+  'deep-focus': () => (
+    <>
+      <Horizon y={74} />
+      <Backdrop />
+      <Figure x={56} top={14} scale={1.15} />
+    </>
+  ),
+  // Eyelines: where the subject looks.
+  'into-lens': () => <Eyes />,
+  'off-left': () => <Eyes dx={-4.5} />,
+  'off-right': () => <Eyes dx={4.5} />,
+  'looking-down': () => <Eyes dy={2.5} />,
+  'looking-up': () => <Eyes dy={-2.5} />,
   // Facings: which way the subject turns, seen from above.
   front: () => <TopDownSubject deg={0} />,
   'three-quarter': () => <TopDownSubject deg={45} />,
@@ -159,19 +308,20 @@ const SCENES = {
 };
 
 /**
- * Code-drawn concept sketch of a storyboard framing (a `SHOT_TYPES` value: what
- * the camera sees at that distance) or angle (a `SHOT_ANGLES` value: where the
- * camera sits, seen from the side) or facing (a `SHOT_FACINGS` value: which
- * way the subject turns, seen from above) or composition (a `SHOT_COMPOSITIONS`
- * value: where the subject sits in the frame). An unknown kind draws an empty frame.
+ * Code-drawn concept sketch of one storyboard shot-grammar value: a framing,
+ * angle, facing, composition, camera move, lens, focus or eyeline from
+ * `shotGrammar.js`. The vocabularies share no value, so `kind` alone picks the
+ * scene. An unknown kind draws an empty frame.
  */
 export default function ShotDiagram({ kind, className = '' }) {
   const Scene = SCENES[kind];
+  // Several diagrams render on one page, so a filter id must be unique.
+  const blurId = useId();
   // The svg viewport clips the oversized close-up figures.
   return (
     <svg viewBox="0 0 160 90" className={className} aria-hidden="true" focusable="false">
       <rect width="160" height="90" rx="4" className="fill-port-bg" />
-      {Scene ? <Scene /> : null}
+      {Scene ? <Scene blurId={blurId} /> : null}
       <rect x="1" y="1" width="158" height="88" rx="3.5" fill="none" strokeWidth="2"
         className={Scene ? 'stroke-gray-500' : 'stroke-gray-600'} strokeDasharray={Scene ? undefined : '6 5'} />
     </svg>

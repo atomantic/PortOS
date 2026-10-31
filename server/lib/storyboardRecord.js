@@ -25,7 +25,8 @@ import { UPLOAD_AUDIO_EXTENSIONS } from './mimeTypes.js';
 import { sanitizeSoftDeleteFields } from './syncWire.js';
 import {
   isValidStoryboardId, isValidStoryboardRecipeId, newStoryboardEntityId, STORYBOARD_ART_STYLES, STORYBOARD_ASPECT_RATIOS, STORYBOARD_LIMITS,
-  STORYBOARD_MUSICAL_ROLES, STORYBOARD_PANEL_ANGLES, STORYBOARD_PANEL_COMPOSITIONS, STORYBOARD_PANEL_FACINGS, STORYBOARD_PANEL_FRAMINGS, STORYBOARD_TAKE_SOURCES,
+  STORYBOARD_MUSICAL_ROLES, STORYBOARD_PANEL_ANGLES, STORYBOARD_PANEL_COMPOSITIONS, STORYBOARD_PANEL_EYELINES, STORYBOARD_PANEL_FACINGS,
+  STORYBOARD_PANEL_FOCUSES, STORYBOARD_PANEL_FRAMINGS, STORYBOARD_PANEL_LENSES, STORYBOARD_PANEL_MOVES, STORYBOARD_TAKE_SOURCES,
 } from './storyboardVocabulary.js';
 import { RECIPE_LIMITS, sanitizePanelMake, sanitizeRecipe } from './storyboardRecipe.js';
 import { BEAT_EXTRACT_LIMITS } from './storyboardBeatExtract.js';
@@ -40,6 +41,10 @@ const FRAMING_SET = new Set(STORYBOARD_PANEL_FRAMINGS);
 const ANGLE_SET = new Set(STORYBOARD_PANEL_ANGLES);
 const FACING_SET = new Set(STORYBOARD_PANEL_FACINGS);
 const COMPOSITION_SET = new Set(STORYBOARD_PANEL_COMPOSITIONS);
+const MOVE_SET = new Set(STORYBOARD_PANEL_MOVES);
+const LENS_SET = new Set(STORYBOARD_PANEL_LENSES);
+const FOCUS_SET = new Set(STORYBOARD_PANEL_FOCUSES);
+const EYELINE_SET = new Set(STORYBOARD_PANEL_EYELINES);
 const SOURCE_SET = new Set(STORYBOARD_TAKE_SOURCES);
 
 // A temp track is an audio file in the uploads bucket, named as POST
@@ -132,6 +137,10 @@ function sanitizePanel(raw) {
     angle: pick(raw.angle, ANGLE_SET),
     facing: pick(raw.facing, FACING_SET),
     composition: pick(raw.composition, COMPOSITION_SET),
+    move: pick(raw.move, MOVE_SET),
+    lens: pick(raw.lens, LENS_SET),
+    focus: pick(raw.focus, FOCUS_SET),
+    eyeline: pick(raw.eyeline, EYELINE_SET),
     camera: trimTo(raw.camera, STORYBOARD_LIMITS.camera),
     seconds: sanitizePanelSeconds(raw.seconds),
     castIds: refList(raw.castIds),

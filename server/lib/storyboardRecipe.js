@@ -267,11 +267,11 @@ export function recipeRunOrder(recipe) {
 const FRAMING_WORDS = Object.freeze({
   'extreme-wide': 'extreme wide shot', wide: 'wide establishing shot', full: 'full shot, head to toe',
   'medium-wide': 'medium wide shot, knees up', medium: 'medium shot', 'medium-close': 'medium close-up, chest up', close: 'close-up',
-  'extreme-close': 'extreme close-up', insert: 'insert shot of a detail', 'over-the-shoulder': 'over-the-shoulder shot', 'two-shot': 'two-shot', pov: 'point-of-view shot',
+  'extreme-close': 'extreme close-up', insert: 'insert shot of a detail', 'over-the-shoulder': 'over-the-shoulder shot', 'two-shot': 'two-shot', group: 'group shot, three or more people sharing the frame', pov: 'point-of-view shot',
 });
 const ANGLE_WORDS = Object.freeze({
   'eye-level': 'eye-level angle', high: 'high angle looking down', low: 'low angle looking up',
-  'birds-eye': "bird's-eye view straight down", 'worms-eye': "worm's-eye view from the ground", dutch: 'Dutch angle, tilted horizon',
+  'birds-eye': "bird's-eye view straight down", 'worms-eye': "worm's-eye view from the ground", 'ground-level': 'ground-level camera, the lens just above the floor', dutch: 'Dutch angle, tilted horizon',
 });
 // Image models drift to a 3/4 view, so each facing names the view and what
 // the camera does and doesn't see.
@@ -290,6 +290,19 @@ const COMPOSITION_WORDS = Object.freeze({
   'cut-left': 'the subject at the left edge of the frame, partly cut off by the edge, the rest of the frame open',
   'cut-right': 'the subject at the right edge of the frame, partly cut off by the edge, the rest of the frame open',
   'low-in-frame': 'the subject low in the frame, a large empty space above them',
+  'frame-within-frame': 'the subject seen through a doorway or window that frames them',
+  'foreground-object': 'an object close to the camera in the foreground, out of focus, the subject behind it',
+});
+
+const LENS_WORDS = Object.freeze({
+  'wide-angle': 'wide-angle lens, exaggerated depth', normal: 'normal 50mm lens, natural perspective', telephoto: 'telephoto lens, compressed background',
+});
+const FOCUS_WORDS = Object.freeze({
+  'shallow-focus': 'shallow depth of field, the background blurred', 'deep-focus': 'deep focus, foreground and background both sharp',
+});
+const EYELINE_WORDS = Object.freeze({
+  'into-lens': 'looking straight into the lens, eye contact with the viewer', 'off-left': 'looking off to the left of the frame, not at the camera',
+  'off-right': 'looking off to the right of the frame, not at the camera', 'looking-down': 'eyes cast down', 'looking-up': 'looking up',
 });
 
 /**
@@ -301,15 +314,17 @@ export function textNodeValue(node, { beat, panel } = {}) {
   if (source === 'custom') return node.text || '';
   if (source === 'beat') return [beat?.what, beat?.why].filter((v) => v && v.trim()).join('\n');
   // Words a picture can show: the dialogue or lyric stays off, since the
-  // image would letter it. The stored camera move stays off too: imported
-  // boards carry free text there ("a loose wide shot") that fought the
-  // framing and angle the user picked.
+  // image would letter it. The camera move stays off too: a still can't show
+  // it, and imported boards carry free text there ("a loose wide shot") that
+  // fought the framing and angle the user picked.
   return [
     panel?.action,
     panel?.framing ? `Framing: ${FRAMING_WORDS[panel.framing] || panel.framing}.` : '',
     panel?.angle ? `Angle: ${ANGLE_WORDS[panel.angle] || panel.angle}.` : '',
     panel?.facing ? `Subject: ${FACING_WORDS[panel.facing] || panel.facing}.` : '',
     panel?.composition ? `Composition: ${COMPOSITION_WORDS[panel.composition] || panel.composition}.` : '',
+    panel?.lens || panel?.focus ? `Lens: ${[LENS_WORDS[panel.lens], FOCUS_WORDS[panel.focus]].filter(Boolean).join(', ')}.` : '',
+    panel?.eyeline ? `Eyes: ${EYELINE_WORDS[panel.eyeline] || panel.eyeline}.` : '',
   ].filter((v) => v && v.trim()).join('\n');
 }
 
