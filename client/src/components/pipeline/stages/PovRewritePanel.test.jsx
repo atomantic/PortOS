@@ -13,6 +13,7 @@ vi.mock('../../ui/Toast', () => ({
 }));
 
 import PovRewritePanel from './PovRewritePanel';
+import toast from '../../ui/Toast';
 import {
   getPipelinePerspectiveRewrites,
   createPipelinePerspectiveRewrite,
@@ -169,9 +170,33 @@ describe('PovRewritePanel', () => {
     await waitFor(() => expect(getPipelinePerspectiveRewrites).toHaveBeenLastCalledWith('iss-2', { silent: true }));
     await act(async () => { resolveCreate({ status: 'complete', rewrite: REWRITE }); });
 
-    await waitFor(() => expect(getPipelinePerspectiveRewrites).toHaveBeenLastCalledWith('iss-1', { silent: true }));
-    await act(async () => {});
+    expect(toast.success).toHaveBeenCalledWith("Rewrote issue #3 in Ada's POV");
+    expect(getPipelinePerspectiveRewrites).toHaveBeenLastCalledWith('iss-2', { silent: true });
     expect(screen.queryByText('(protagonist)')).toBeNull();
     expect(screen.getByText(/No alternate-POV rewrites yet/i)).toBeInTheDocument();
+  });
+  it('keeps a just-generated rewrite when an older read lands after the post-generate refetch', async () => {
+    const cast = [{ id: 'char-ada', name: 'Ada', role: 'protagonist' }];
+    let resolveCreate;
+    let resolveSourceRead;
+    createPipelinePerspectiveRewrite.mockImplementationOnce(() => new Promise((resolve) => { resolveCreate = resolve; }));
+    getPipelinePerspectiveRewrites
+      .mockResolvedValueOnce({ cast, rewrites: [], hasContent: true })
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveSourceRead = resolve; }))
+      .mockResolvedValue({ cast, rewrites: [REWRITE], hasContent: true });
+
+    const { rerender } = render(<PovRewritePanel issue={ISSUE} series={{}} />);
+    await waitFor(() => expect(screen.getByRole('button', { name: /Rewrite in another POV/i })).toBeEnabled());
+    await userEvent.click(screen.getByRole('button', { name: /Rewrite in another POV/i }));
+    await waitFor(() => expect(createPipelinePerspectiveRewrite).toHaveBeenCalled());
+
+    // A source edit during the generate starts a read that resolves last.
+    rerender(<PovRewritePanel issue={{ ...ISSUE, stages: { prose: { output: 'Edited prose.', status: 'ready' } } }} series={{}} />);
+    await waitFor(() => expect(getPipelinePerspectiveRewrites).toHaveBeenCalledTimes(2));
+    await act(async () => { resolveCreate({ status: 'complete', rewrite: REWRITE }); });
+    await waitFor(() => expect(screen.getByText('(protagonist)')).toBeInTheDocument());
+
+    await act(async () => { resolveSourceRead({ cast, rewrites: [], hasContent: true }); });
+    expect(screen.getByText('(protagonist)')).toBeInTheDocument();
   });
 });

@@ -159,6 +159,10 @@ export default function PovRewritePanel({ issue, series }) {
   const [povId, setPovId] = useState('');
   const issueIdRef = useRef(issue.id);
   issueIdRef.current = issue.id;
+  // Bumped by every read and by the post-generate refetch, so a read that
+  // started before a generate landed cannot put the pre-generate list back.
+  const readSeqRef = useRef(0);
+  const [generatingFor, setGeneratingFor] = useState(null);
 
   // The rewritable source — refetch whenever any of these change so `hasContent`
   // (can-generate gate) and each rewrite's `stale` flag track edits to the live
@@ -178,12 +182,14 @@ export default function PovRewritePanel({ issue, series }) {
   useEffect(() => {
     let alive = true;
     const forIssue = issue.id;
+    const seq = ++readSeqRef.current;
+    const isLatest = () => alive && seq === readSeqRef.current;
     getPipelinePerspectiveRewrites(forIssue, { silent: true })
-      .then((res) => { if (alive) setRead({ issueId: forIssue, data: res, error: null }); })
+      .then((res) => { if (isLatest()) setRead({ issueId: forIssue, data: res, error: null }); })
       // A failed read is not "no draft, no cast, no rewrites": keep what this
       // issue already showed and say the refresh failed, with a retry.
       .catch((error) => {
-        if (alive) setRead((prev) => ({ issueId: forIssue, data: prev.issueId === forIssue ? prev.data : null, error }));
+        if (isLatest()) setRead((prev) => ({ issueId: forIssue, data: prev.issueId === forIssue ? prev.data : null, error }));
       });
     return () => { alive = false; };
   }, [issue.id, proseOut, comicOut, teleOut, readAttempt]);
@@ -211,17 +217,25 @@ export default function PovRewritePanel({ issue, series }) {
   );
 
   const handleGenerate = async () => {
+    const forIssue = issue.id;
+    const forIssueNumber = issue.number;
+    setGeneratingFor(forIssue);
     const result = await runGenerate();
     if (!result?.rewrite) return;
-    toast.success(`Rewrote in ${result.rewrite.povCharacterName}'s POV`);
+    const switched = issueIdRef.current !== forIssue;
+    const where = switched && forIssueNumber != null ? `issue #${forIssueNumber} ` : '';
+    toast.success(`Rewrote ${where}in ${result.rewrite.povCharacterName}'s POV`);
+    if (switched) return;
     // Refetch rather than optimistically prepend — the server caps stored
     // rewrites per issue, so a blind prepend could show a row the server just
     // pruned (which would then refuse to delete). The refetch also carries the
     // authoritative stale flags. Generate doesn't touch issue.stages, so the
     // source-change effect won't fire on its own.
-    const forIssue = issue.id;
     const res = await getPipelinePerspectiveRewrites(forIssue, { silent: true }).catch(() => null);
-    if (res && issueIdRef.current === forIssue) setRead({ issueId: forIssue, data: res, error: null });
+    if (res && issueIdRef.current === forIssue) {
+      readSeqRef.current++;
+      setRead({ issueId: forIssue, data: res, error: null });
+    }
   };
 
   const handleDelete = (rewriteId) =>
@@ -273,7 +287,7 @@ export default function PovRewritePanel({ issue, series }) {
               title={disabledReason || undefined}
               className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-port-accent text-white text-sm font-medium disabled:opacity-50"
             >
-              {generating ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
+              {generating && generatingFor === issue.id ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
               Rewrite in another POV
             </button>
           </div>

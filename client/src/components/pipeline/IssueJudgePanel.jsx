@@ -71,15 +71,21 @@ export default function IssueJudgePanel({ issue, stageId }) {
   const issueId = issue?.id;
   const issueIdRef = useRef(issueId);
   issueIdRef.current = issueId;
+  // Bumped by every stored-score read and by a landed judge verdict, so a read
+  // that started before the verdict (e.g. on returning to the issue mid-judge)
+  // cannot put the pre-judge snapshot back.
+  const readSeqRef = useRef(0);
 
   const judgeStageId = resolveJudgeStage(issue, stageId);
 
   useEffect(() => {
     if (!issueId) return undefined;
     let canceled = false;
+    const seq = ++readSeqRef.current;
+    const isLatest = () => !canceled && seq === readSeqRef.current;
     getIssueJudge(issueId, { silent: true })
-      .then((res) => { if (!canceled) setRead({ issueId, status: 'ready', judge: res && res.status !== 'none' ? res : null, error: null }); })
-      .catch((error) => { if (!canceled) setRead({ issueId, status: 'error', judge: null, error }); });
+      .then((res) => { if (isLatest()) setRead({ issueId, status: 'ready', judge: res && res.status !== 'none' ? res : null, error: null }); })
+      .catch((error) => { if (isLatest()) setRead({ issueId, status: 'error', judge: null, error }); });
     return () => { canceled = true; };
   }, [issueId, readAttempt]);
 
@@ -89,6 +95,7 @@ export default function IssueJudgePanel({ issue, stageId }) {
     const res = await judgeIssue(forIssue, judgeStageId ? { stageId: judgeStageId, force: true } : { force: true }, { silent: true });
     // A judge run outlives an issue switch; its verdict belongs to the issue it scored.
     if (issueIdRef.current === forIssue && res && res.status !== 'no-content') {
+      readSeqRef.current++;
       setRead({ issueId: forIssue, status: 'ready', judge: res, error: null });
       setOpen(true);
     }

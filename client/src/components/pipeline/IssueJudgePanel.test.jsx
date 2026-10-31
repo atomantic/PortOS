@@ -104,4 +104,24 @@ describe('IssueJudgePanel', () => {
     expect(screen.queryByText('5.5')).toBeNull();
     expect(screen.getByText('not judged yet')).toBeInTheDocument();
   });
+  it('keeps a fresh verdict when a stored-score read started before it lands afterwards', async () => {
+    const pending = [];
+    getIssueJudge.mockImplementation(() => new Promise((resolve) => { pending.push(resolve); }));
+    let resolveJudge;
+    judgeIssue.mockImplementationOnce(() => new Promise((resolve) => { resolveJudge = resolve; }));
+    const { rerender } = render(<IssueJudgePanel issue={proseIssue()} stageId="prose" />);
+    await act(async () => { pending.shift()(null); });
+    fireEvent.click(screen.getByText(/Judge quality/));
+    await waitFor(() => expect(judgeIssue).toHaveBeenCalled());
+
+    // Away and back while the judge runs: a new stored-score read for iss-1 starts.
+    rerender(<IssueJudgePanel issue={{ ...proseIssue(), id: 'iss-2' }} stageId="prose" />);
+    rerender(<IssueJudgePanel issue={proseIssue()} stageId="prose" />);
+    await act(async () => { resolveJudge(completeJudge()); });
+    expect(screen.getByText('5.5')).toBeInTheDocument();
+
+    // The pre-judge snapshot lands late and must not replace the verdict.
+    await act(async () => { pending.forEach((resolve) => resolve(null)); });
+    expect(screen.getByText('5.5')).toBeInTheDocument();
+  });
 });
