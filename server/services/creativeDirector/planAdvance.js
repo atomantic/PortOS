@@ -322,9 +322,6 @@ export async function advanceAfterPlanStepSettled(projectId) {
   if (project.status === 'paused' || project.status === 'failed') return;
   // Legacy video project — the scene loop owns it; never plan-advance it.
   if (!project.directive) return;
-  // Advancing here runs the project on this machine; adopt a peer replica's
-  // run state so a later restart resumes it (recovery skips replicas).
-  if (project.peerReplica) await updateProject(projectId, { status: project.status });
 
   // No plan yet → enqueue the planner (mirrors the no-treatment branch).
   if (!Array.isArray(project.plan?.steps)) {

@@ -384,7 +384,10 @@ export function mergeProjectRecord(local, remoteRaw) {
 // A peer-won record's status, directive, plan and runs are the sender's
 // execution state, and the planner it resumes is a writable CoS agent. Both
 // replica markers are machine-local (syncWire strips them), so boot recovery
-// leaves the record alone until this machine advances it or changes its status.
+// leaves the record alone until a local status change (applyProjectPatch).
+// Adoption is deliberately not a write in the advance loops: a status re-write
+// there can undo a concurrent pause, and its newer updatedAt would mark the
+// sender's live copy as a replica.
 function asPeerReplica(remote) {
   return remote.workspace === 'video'
     ? { ...remote, videoReplica: true, videoExecution: null }

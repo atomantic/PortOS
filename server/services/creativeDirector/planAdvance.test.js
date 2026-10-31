@@ -335,15 +335,6 @@ describe('advanceAfterPlanStepSettled — executor', () => {
     expect(mockEnqueuePlanTask).not.toHaveBeenCalled();
   });
 
-  it('adopts a peer replica it advances, so a later restart resumes this machine\'s run', async () => {
-    // A status write is what clears peerReplica (applyProjectPatch); without it
-    // recovery would skip a run this machine started from the plan-step route.
-    makeStore(planProject([step('a', { toolName: 'pipeline_createSeries' })], { peerReplica: true }));
-    mockDispatch.mockResolvedValue({ ok: true, seriesId: 's1' });
-    await advanceAfterPlanStepSettled('cd-1');
-    expect(mockUpdateProject.mock.calls[0]).toEqual(['cd-1', { status: 'rendering' }]);
-  });
-
   it('enqueues the planner when a directive project has no plan yet', async () => {
     makeStore({ id: 'cd-1', status: 'draft', directive: { goal: 'g', deliverables: [], constraints: {} }, plan: null, runs: [] });
     await advanceAfterPlanStepSettled('cd-1');
