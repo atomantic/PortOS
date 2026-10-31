@@ -8,7 +8,7 @@ const MAX_ENDING_CHARS = 240;
  * Last sentence of the previous shot's description, as the "ending state".
  * Returns '' when there is nothing usable.
  */
-export function previousShotEnding(description) {
+function previousShotEnding(description) {
   const text = typeof description === 'string' ? description.replace(/\s+/g, ' ').trim() : '';
   if (!text) return '';
   const sentences = text.match(/[^.!?]+[.!?]*/g) || [text];
