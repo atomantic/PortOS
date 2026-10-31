@@ -63,7 +63,7 @@ beforeAll(async () => {
     )
   `);
   for (const tableName of TABLE_NAMES) {
-    // eslint-disable-next-line no-await-in-loop -- each fixture needs its own trigger.
+    // each fixture needs its own trigger.
     await query(
       `CREATE TRIGGER trg_${tableName}_audit
        AFTER UPDATE OR DELETE ON ${tableName}
@@ -75,7 +75,7 @@ beforeAll(async () => {
 afterAll(async () => {
   if (!dbReady) return;
   for (const tableName of TABLE_NAMES) {
-    // eslint-disable-next-line no-await-in-loop -- cleanup is ordered and isolated per fixture.
+    // cleanup is ordered and isolated per fixture.
     await query(`DROP TABLE IF EXISTS ${tableName}`).catch(() => {});
   }
   await query('DELETE FROM record_audit WHERE table_name = ANY($1::text[])', [TABLE_NAMES]).catch(() => {});

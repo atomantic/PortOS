@@ -23,7 +23,7 @@ import { makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
 // Allocated lazily on the first PATHS read: brainStorage's module graph reads
 // PATHS.brain at import time, before any top-level assignment would run.
-var tempRoot; // eslint-disable-line no-var
+var tempRoot;
 function getTempRoot() {
   if (!tempRoot) tempRoot = mkdtempSync(join(tmpdir(), 'idealoom-boundary-test-'));
   return tempRoot;

@@ -176,7 +176,7 @@ export default function CatalogReferenceLibrary({
         },
       };
     },
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+  // Dependency list is intentionally partial.
   }), [sequenceKeys.join('|'), media, busyKey, readOnly, onSetPortrait, onDetach]);
   useCatalogPreviewSequence(sequence);
 

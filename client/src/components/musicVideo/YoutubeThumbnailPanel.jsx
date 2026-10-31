@@ -71,7 +71,7 @@ export default function YoutubeThumbnailPanel({ project, publishKit }) {
     setFocusX(Number.isFinite(thumb.focusX) ? thumb.focusX : 0.5);
     setFocusY(Number.isFinite(thumb.focusY) ? thumb.focusY : 0.5);
     setPicked(null);
-  }, [thumb.filename]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [thumb.filename]); // Dependency list is intentionally partial.
   // Which way the picked image overflows 16:9, so the one crop slider moves it the way it can go.
   const [wide, setWide] = useState(true);
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -100,7 +100,7 @@ export default function YoutubeThumbnailPanel({ project, publishKit }) {
     const design = normalizeCoverDesign(art.design, { fonts });
     const widths = canvasCoverWidths(design, { title, tag: '', size: YOUTUBE_THUMBNAIL_SIZE, frame: 'thumbnail' }, fonts);
     return coverOverlaySvg({ title, design, size: YOUTUBE_THUMBNAIL_SIZE, frame: 'thumbnail', widths, fonts });
-  }, [JSON.stringify(art.design ?? null), title, lettering, letterAssets.fonts, fontTick]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [JSON.stringify(art.design ?? null), title, lettering, letterAssets.fonts, fontTick]); // Dependency list is intentionally partial.
 
   const tests = Array.isArray(kit.youtubeThumbnailTests) ? kit.youtubeThumbnailTests.filter((t) => t?.filename) : [];
   const inTest = Boolean(thumb.filename) && tests.some((t) => t.filename === thumb.filename);

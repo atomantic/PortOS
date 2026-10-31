@@ -553,7 +553,7 @@ export default function useGeneratedPreview({ active, request, controls = null }
       }
     };
     // `request` is read for the payload; requestKey is its identity.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // Dependency list is intentionally partial.
   }, [requestKey, mounted, seek, cancelPlayback, commitFrame, failPresentation, promoteFrame, retireUrls, watchPresentation]);
 
   // Reconcile against what this session actually received. Controls can change

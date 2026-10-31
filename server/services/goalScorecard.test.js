@@ -8,7 +8,7 @@ import { makePathsProxy } from '../lib/mockPathsDataRoot.js';
 // this file's static imports, so a `const` initialized here would still be in
 // its TDZ when goalScorecard.js resolves its file paths at module load. `var` +
 // a function declaration both hoist without a TDZ, so the factory can call it.
-var tempRoot; // eslint-disable-line no-var
+var tempRoot;
 function getTempRoot() {
   if (!tempRoot) tempRoot = mkdtempSync(join(tmpdir(), 'goal-scorecard-test-'));
   return tempRoot;

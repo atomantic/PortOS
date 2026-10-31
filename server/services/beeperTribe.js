@@ -336,7 +336,7 @@ async function clearDisplacedParticipantCaches(displacedPersonId, scope) {
       && rowScope.handle === scope.handle;
   });
   for (const row of stale) {
-    // eslint-disable-next-line no-await-in-loop -- one displaced person's own rows carrying one handle; a handful at most
+    // one displaced person's own rows carrying one handle; a handful at most
     await query(
       `UPDATE beeper_participants SET tribe_person_id = NULL, updated_at = NOW()
        WHERE conversation_id = $1 AND source_user_id = $2 AND tribe_person_id = $3`,
@@ -587,7 +587,7 @@ export async function logSenderTouchpoints(candidates = [], { personIndex = null
     if (!c?.conversationId || !c?.senderId || !c?.sentAt) continue;
     const cacheKey = `${c.conversationId} ${c.senderId}`;
     if (!personCache.has(cacheKey)) {
-      // eslint-disable-next-line no-await-in-loop -- resolving one sender at a time; batch sizes here are one sync sweep, not a bulk import
+      // resolving one sender at a time; batch sizes here are one sync sweep, not a bulk import
       personCache.set(cacheKey, await resolveParticipantPerson(
         { conversationId: c.conversationId, sourceUserId: c.senderId },
         index,
@@ -608,7 +608,7 @@ export async function logSenderTouchpoints(candidates = [], { personIndex = null
     const dedupeKey = `beeper:${day}`;
     const touchpointKey = JSON.stringify([personId, dedupeKey]);
     if (completedTouchpoints.has(touchpointKey)) continue;
-    // eslint-disable-next-line no-await-in-loop -- same reason as above
+    // same reason as above
     const touchpoint = await tribe.autoCreateTouchpoint(personId, {
       happenedAt: c.sentAt,
       channel: c.channel || (c.network ? `Beeper (${c.network})` : 'Beeper'),
@@ -711,7 +711,7 @@ export async function listPersonIdentitiesWithConversations(personId) {
   if (identities.length === 0) return [];
   const results = [];
   for (const identity of identities) {
-    // eslint-disable-next-line no-await-in-loop -- one person's own identities, a handful at most
+    // one person's own identities, a handful at most
     const conversations = await conversationsForIdentity(personId, identity);
     results.push({ ...identity, conversations });
   }

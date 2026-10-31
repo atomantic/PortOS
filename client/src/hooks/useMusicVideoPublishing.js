@@ -105,7 +105,7 @@ export default function useMusicVideoPublishing({ project, replaceProject } = {}
     };
     socket.on('music-video:publish-draft', onDraft);
     return () => { cancelled = true; socket.off('music-video:publish-draft', onDraft); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // Dependency list is intentionally partial.
   }, [projectId, scope, loadPlatforms, draftsAttempt]);
 
   const prepare = (target, options = {}) => {

@@ -30,6 +30,6 @@ export default function useClickOutside(ref, active, onOutside) {
     };
     window.addEventListener('mousedown', onDown);
     return () => window.removeEventListener('mousedown', onDown);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // Dependency list is intentionally partial.
   }, [active, ...refsKey]);
 }

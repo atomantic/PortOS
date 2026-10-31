@@ -183,7 +183,7 @@ async function makeCandidateRun(recordId, direction) {
 
 const approveDirections = async (id, directions) => {
   for (const direction of directions) {
-    // eslint-disable-next-line no-await-in-loop -- each approval rewrites the shared selection file
+    // each approval rewrites the shared selection file
     await approveWalkDirection(id, { direction, runId: await makeCandidateRun(id, direction) });
   }
 };

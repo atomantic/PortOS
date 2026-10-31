@@ -88,7 +88,6 @@ export function toLiteralPathspec(path) {
 export function isSafeGitRef(ref) {
   if (typeof ref !== 'string' || ref.length < 1 || ref.length > 255) return false;
   if (ref.startsWith('-') || ref.startsWith('/')) return false;
-  // eslint-disable-next-line no-control-regex
   if (/[\s\x00-\x1f\x7f~^:?*[\\]/.test(ref)) return false;
   if (ref.includes('..') || ref.includes('@{')) return false;
   return !(ref.endsWith('/') || ref.endsWith('.lock') || ref.endsWith('.'));

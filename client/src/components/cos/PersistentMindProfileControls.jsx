@@ -84,7 +84,7 @@ export default function PersistentMindProfileControls({
   // test mocks may return fresh functions every render. This effect describes
   // persisted profile changes only; depending on setter identity would turn
   // its setDraft call into an unconditional render loop in those hosts.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+  // Dependency list is intentionally partial.
   useEffect(() => {
     // A socket/manual history refresh can return the pre-PUT profile while an
     // optimistic save is still in flight. Keep the draft authoritative until

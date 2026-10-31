@@ -21,7 +21,7 @@ import { makePathsProxy } from '../lib/mockPathsDataRoot.js';
 // `const` here would still be in its TDZ when goalCheckIn.js resolves
 // GOALS_FILE at module load. `var` + a function declaration both hoist without
 // a TDZ, so the factory can call it.
-var tempRoot; // eslint-disable-line no-var
+var tempRoot;
 function getTempRoot() {
   if (!tempRoot) tempRoot = mkdtempSync(join(tmpdir(), 'goal-checkin-test-'));
   return tempRoot;

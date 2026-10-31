@@ -416,7 +416,7 @@ export function sanitizeSessionForWire(raw) {
   if (s.ephemeral === true && s.deleted !== true) return null;
   // Strip the local-only marker so the wire form is byte-stable against peers
   // that predate the flag (sanitizeSession only adds it when raw.ephemeral).
-  const { ephemeral: _ephemeral, ...rest } = s; // eslint-disable-line no-unused-vars
+  const { ephemeral: _ephemeral, ...rest } = s;
   return rest;
 }
 

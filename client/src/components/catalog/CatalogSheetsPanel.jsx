@@ -322,7 +322,7 @@ export default function CatalogSheetsPanel({
       return <SheetPreviewActions key={key} bad={ratedBad(entry.ratingKey)} busy={!!removingPointerSheet}
         onRemove={async () => { goTo(nextKey ?? prevKey); await remove(); }} />;
     },
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+  // Dependency list is intentionally partial.
   }), [sequenceKeys, ingredientId, annotations, removingPointerSheet, onDetach, onRemovePointerSheet, removePointer]);
   useCatalogPreviewSequence(sequence);
 

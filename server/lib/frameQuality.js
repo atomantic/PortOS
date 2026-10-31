@@ -190,7 +190,6 @@ export async function pickBestFrame(paths, { sharpImpl = sharp } = {}) {
   // the render resolution for no wall-clock that matters next to a GPU render.
   for (let i = 0; i < list.length; i++) {
     if (typeof list[i] !== 'string' || !list[i]) continue;
-    // eslint-disable-next-line no-await-in-loop
     const frame = await decodeGreyscaleFrame(list[i], { sharpImpl });
     if (!frame) continue;
     const recency = list.length === 1 ? 1 : i / (list.length - 1);

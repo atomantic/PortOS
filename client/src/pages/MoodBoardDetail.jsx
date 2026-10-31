@@ -923,7 +923,7 @@ function MoodBoardEditor({ id }) {
                     <div className="relative w-full aspect-square bg-port-bg">
                       {item.type === 'video' && videoSrc ? (
                         playingItemId === item.id ? (
-                          // eslint-disable-next-line jsx-a11y/media-has-caption -- reference clips have no caption track
+                          // reference clips have no caption track
                           <video
                             src={videoSrc}
                             poster={src || undefined}

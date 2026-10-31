@@ -152,7 +152,6 @@ async function reconcileSettledSpriteJobs() {
   for (const { job, permit } of pending) {
     // Serialized on purpose: these share the per-record write tail anyway, and a
     // boot sweep has no reason to contend with the requests now arriving.
-    // eslint-disable-next-line no-await-in-loop
     await permit.run(() => settleSpriteAnimationJob(job)).then(() => { settled += 1; }).catch((err) => {
       permit.markUnsettled();
       console.error(`❌ sprite local render boot reconcile failed for job ${job.id.slice(0, 8)}: ${err?.message || err}`);

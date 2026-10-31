@@ -188,7 +188,7 @@ export default function VideoGen() {
     }).catch(() => {});
     return () => { active = false; };
     // Only re-run when a fresh loom/episode is targeted, not on every render.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // Dependency list is intentionally partial.
   }, [episodeOpen, episodeLoomId, episodeEpisodeId]);
 
   // `/status` owns connectivity ONLY. It shells out to python on every call
@@ -473,7 +473,7 @@ export default function VideoGen() {
   const { peerNames: pendingPeerNames, rememberPeerName } = usePendingDeletePeerNames(history);
   const withPendingDelete = useCallback((id, pendingDelete) => setHistory((h) => h.map((v) => {
     if (v.id !== id) return v;
-    const { pendingDelete: _previous, ...rest } = v; // eslint-disable-line no-unused-vars
+    const { pendingDelete: _previous, ...rest } = v;
     return pendingDelete ? { ...rest, pendingDelete } : rest;
   })), []);
   const handleDeleteHistory = useCallback(async (item, { force = false } = {}) => {

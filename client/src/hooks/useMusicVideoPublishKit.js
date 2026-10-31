@@ -103,7 +103,7 @@ export default function useMusicVideoPublishKit({ project, replaceProject } = {}
     const onCover = (e) => { if (e?.projectId === projectId && e.project) replaceProject(e.project); };
     socket.on('music-video:cover-art', onCover);
     return () => { socket.off('music-video:cover-art', onCover); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // Dependency list is intentionally partial.
   }, [projectId]);
 
   const apply = (res) => { if (res?.project) replaceProject(res.project); return res?.project || null; };

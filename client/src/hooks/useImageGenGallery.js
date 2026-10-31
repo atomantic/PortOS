@@ -76,7 +76,7 @@ export function useImageGenGallery({ previewParam }) {
 
   const withPendingDelete = useCallback((filename, pendingDelete) => setGallery((current) => current.map((image) => {
     if (image.filename !== filename) return image;
-    const { pendingDelete: _previous, ...rest } = image; // eslint-disable-line no-unused-vars
+    const { pendingDelete: _previous, ...rest } = image;
     return pendingDelete ? { ...rest, pendingDelete } : rest;
   })), [setGallery]);
 

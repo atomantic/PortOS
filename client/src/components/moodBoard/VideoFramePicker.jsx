@@ -113,7 +113,7 @@ export default function VideoFramePicker({ src, poster, busy = false, onAdd, onC
         </button>
       </div>
 
-      {/* eslint-disable-next-line jsx-a11y/media-has-caption -- reference clips have no caption track */}
+      {/* reference clips have no caption track */}
       <video
         ref={videoRef}
         src={src}

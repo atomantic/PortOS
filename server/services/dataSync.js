@@ -977,7 +977,7 @@ async function getVideoHistorySnapshot() {
   // Mirrors getMediaCollectionsSnapshot's sort-by-id rationale.
   const data = {
     videos: rows
-      .map(({ hidden, suppliedByInstanceId, pendingDelete, ...rest }) => rest) // eslint-disable-line no-unused-vars
+      .map(({ hidden, suppliedByInstanceId, pendingDelete, ...rest }) => rest)
       .sort((a, b) => a.id.localeCompare(b.id)),
   };
   // Deliberate deletes ride the snapshot so a peer still holding the row can't
@@ -1061,7 +1061,7 @@ export async function mergeVideoRows(incomingRows, source) {
   // row from its owner's later delete.
   const fromOwner = (r) => typeof source?.peerId === 'string' && r?.originInstanceId === source.peerId;
   const admitted = (Array.isArray(incomingRows) ? incomingRows : [])
-    .map((r) => (r && typeof r === 'object' && 'restoredAt' in r && !fromOwner(r) ? (({ restoredAt, ...rest }) => rest)(r) : r)); // eslint-disable-line no-unused-vars
+    .map((r) => (r && typeof r === 'object' && 'restoredAt' in r && !fromOwner(r) ? (({ restoredAt, ...rest }) => rest)(r) : r));
 
   // The whole read/merge/write runs inside the shared history mutation queue so
   // a local completion (videoDownload) or another peer's snapshot can't be
@@ -1101,7 +1101,7 @@ export async function mergeVideoRows(incomingRows, source) {
     const { merged: lwwMerged, changed: rowsChanged } = mergeArraysByKey(
       keyed,
       // suppliedByInstanceId and pendingDelete are local-only: never trust a sender's value.
-      incoming.filter(hasId).map(({ suppliedByInstanceId, pendingDelete, ...rest }) => rest), // eslint-disable-line no-unused-vars
+      incoming.filter(hasId).map(({ suppliedByInstanceId, pendingDelete, ...rest }) => rest),
       'id',
       'createdAt',
     );

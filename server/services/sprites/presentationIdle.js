@@ -53,9 +53,9 @@ export async function composePresentationIdleStrip(frameBytes, chromaKey) {
   const split = keyChannelSplit(chromaKey);
   const tiles = [];
   for (let index = 0; index < frameBytes.length; index++) {
-    // eslint-disable-next-line no-await-in-loop -- frame order is the animation order
+    // frame order is the animation order
     const frame = await decodeTransparentSpriteSource(frameBytes[index], split, chromaKey);
-    // eslint-disable-next-line no-await-in-loop -- each normalized tile feeds the ordered strip
+    // each normalized tile feeds the ordered strip
     const input = await sharp(frame.data, {
       raw: { width: frame.width, height: frame.height, channels: 4 },
     })

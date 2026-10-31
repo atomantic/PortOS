@@ -130,7 +130,6 @@ vi.mock('../lib/hostShutdown.js', async (importOriginal) => ({
 // proxy forwards every other method to the test journal, so the reconcile must
 // stay stubbed or a test would stamp publication residue.
 const { maintenanceTestDir } = vi.hoisted(() => {
-  // eslint-disable-next-line no-restricted-syntax
   const { mkdtempSync } = require('node:fs');
   const { tmpdir } = require('node:os');
   const { join } = require('node:path');

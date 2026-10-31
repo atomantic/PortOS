@@ -9,7 +9,7 @@ import { makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 // this file's static imports, so a `const` initialized here would still be in
 // its TDZ when store.js resolves LEARNING_FILE at module load. `var` + a
 // function declaration both hoist without a TDZ, so the factory can call it.
-var tempRoot; // eslint-disable-line no-var
+var tempRoot;
 function getTempRoot() {
   if (!tempRoot) tempRoot = mkdtempSync(join(tmpdir(), 'task-learning-test-'));
   return tempRoot;

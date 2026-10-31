@@ -185,7 +185,7 @@ async function rootHoldsQwenWeights(root, entries) {
   if (entries.some((name) => QWEN_CACHE_ENTRY.test(name))) return true;
   for (const name of entries.filter((entry) => QWEN_LOCAL_ENTRY.test(entry))) {
     for (const marker of LOCAL_WEIGHT_MARKERS) {
-      // eslint-disable-next-line no-await-in-loop -- two stats on a short, ordered candidate list
+      // two stats on a short, ordered candidate list
       if (await isFile(join(root, name, marker))) return true;
     }
   }
@@ -207,7 +207,7 @@ export async function inspectSglangQwenProject(env = process.env, envPath = PORT
   let composeFile = null;
   if (hasProject) {
     for (const name of COMPOSE_FILENAMES) {
-      // eslint-disable-next-line no-await-in-loop -- four stats on one directory
+      // four stats on one directory
       if (await isFile(join(dir, name))) { composeFile = name; break; }
     }
   }
@@ -215,11 +215,11 @@ export async function inspectSglangQwenProject(env = process.env, envPath = PORT
   let readAnyRoot = false;
   let weightsRoot = null;
   for (const root of weightsCandidateRoots(dir, env)) {
-    // eslint-disable-next-line no-await-in-loop -- short, ordered, first-match-wins
+    // short, ordered, first-match-wins
     const entries = await readdir(root).catch(() => null);
     if (entries === null) continue; // absent or unreadable — says nothing either way
     readAnyRoot = true;
-    // eslint-disable-next-line no-await-in-loop -- short, ordered, first-match-wins
+    // short, ordered, first-match-wins
     if (await rootHoldsQwenWeights(root, entries)) { weightsRoot = root; break; }
   }
 

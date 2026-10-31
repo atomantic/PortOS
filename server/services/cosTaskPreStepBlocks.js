@@ -992,7 +992,6 @@ export async function resolveReferenceWatchBlock(app, taskType) {
   let anySuccessWithCommits = false;
   for (const ref of refs) {
     try {
-      // eslint-disable-next-line no-await-in-loop
       const snapshot = await referenceRepos.checkReferenceRepo(app.id, ref.id);
       if (snapshot.commitCount > 0) {
         blocks.push(referenceRepos.formatReferenceForPrompt(ref, snapshot));

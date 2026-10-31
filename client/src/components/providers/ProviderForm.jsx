@@ -188,7 +188,7 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
   // cannot re-scope the whole catalog in the policy editor's preview.
   const modelAccessKeeps = useMemo(
     () => configuredModelsOf(formData),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // Dependency list is intentionally partial.
     [formData.defaultModel, formData.lightModel, formData.mediumModel,
       formData.heavyModel, formData.ultraModel, formData.fallbackModel],
   );

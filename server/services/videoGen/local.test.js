@@ -65,7 +65,6 @@ async function waitForStitch() {
   const { atomicWrite } = await import('../../lib/fileUtils.js');
   const deadline = Date.now() + 5000;
   while (!stitchedHistoryEntry(vi.mocked(atomicWrite)) && Date.now() < deadline) {
-    // eslint-disable-next-line no-await-in-loop
     await new Promise((r) => setTimeout(r, 10));
   }
 }
@@ -1104,7 +1103,6 @@ async function _runChainAndCaptureArgs(chainParams, totalChunks) {
   // Drive the chain forward: wait for each chunk to emit 'started', then
   // immediately emit 'completed' for it so the orchestrator advances.
   for (let i = 0; i < totalChunks; i++) {
-    // eslint-disable-next-line no-await-in-loop
     await new Promise((resolve) => {
       const check = () => {
         if (innerJobIds.length > i) { resolve(); return; }
@@ -1269,7 +1267,6 @@ describe('generateChainedVideo — continuation strategy (context window vs last
     });
 
     for (let i = 0; i < totalChunks; i++) {
-      // eslint-disable-next-line no-await-in-loop
       await new Promise((resolve) => {
         const check = () => {
           if (innerJobIds.length > i) { resolve(); return; }
@@ -1666,7 +1663,6 @@ describe('generateChainedVideo — the chunk phase on the outer frames (#5872)',
 
     const deadline = Date.now() + 5000;
     while (outerProgress.length === 0 && Date.now() < deadline) {
-      // eslint-disable-next-line no-await-in-loop
       await new Promise((r) => setTimeout(r, 10));
     }
 
@@ -1728,7 +1724,6 @@ describe('generateChainedVideo — per-chunk prompt beats (#3695)', () => {
     });
 
     for (let i = 0; i < totalChunks; i++) {
-      // eslint-disable-next-line no-await-in-loop
       await new Promise((resolve) => {
         const check = () => {
           if (innerJobIds.length > i) { resolve(); return; }
@@ -4266,7 +4261,6 @@ describe('generateVideo — signal-death diagnosis (#3101)', () => {
 
   it('SIGBUS and SIGSEGV name a native MLX/Metal crash', async () => {
     for (const [i, sig] of ['SIGBUS', 'SIGSEGV'].entries()) {
-      // eslint-disable-next-line no-await-in-loop
       const evt = await failWithSignal(`signal-native-${i}`, sig);
       expect(evt.error).toMatch(new RegExp(sig));
       expect(evt.error).toMatch(/MLX\/Metal/);

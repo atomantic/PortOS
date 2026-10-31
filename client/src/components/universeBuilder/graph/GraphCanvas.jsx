@@ -272,7 +272,7 @@ export default function GraphCanvas({
     fitPendingRef.current = true;
     settledRef.current = true;
     markDirty();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // Dependency list is intentionally partial.
   }, [index, layout]);
 
   // A filter / focus change re-heats the simulation gently and refits — but not

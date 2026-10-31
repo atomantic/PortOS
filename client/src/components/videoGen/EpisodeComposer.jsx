@@ -262,7 +262,7 @@ export default function EpisodeComposer({ initialScenes, onQueued }) {
     return invalidate;
     // Re-runs on any scene/bible/framing edit; `preview` itself is excluded to
     // avoid retriggering off its own write.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // Dependency list is intentionally partial.
   }, [sanitizedScenes, bible, framings, queuedJobId]);
 
   useEffect(() => {
