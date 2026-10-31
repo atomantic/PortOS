@@ -9,7 +9,7 @@
 
 import { createHash, randomUUID } from 'crypto';
 import { existsSync } from 'fs';
-import { mkdir, readdir, rename, rm } from 'fs/promises';
+import { mkdir, readdir, rename, rm, stat } from 'fs/promises';
 import { join } from 'path';
 import { PATHS } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
@@ -158,7 +158,8 @@ const shotsKey = (shots) => createHash('sha256').update(JSON.stringify(shots)).d
 
 /**
  * Mix the cold open's sound into `dir` (cached by everything that reaches it)
- * and resolve its path. Older mixes in `dir` are dropped.
+ * and resolve its path. Mixes written before this one started are dropped;
+ * a newer mix that an overlapping request finished first is kept.
  */
 export async function ensureColdOpenAudio(shots, dir, { ffmpeg = null, signal } = {}) {
   const bin = ffmpeg || await findFfmpeg();
@@ -167,6 +168,7 @@ export async function ensureColdOpenAudio(shots, dir, { ffmpeg = null, signal } 
   const path = join(dir, name);
   if (existsSync(path)) return path;
   await mkdir(dir, { recursive: true });
+  const startedAt = Date.now();
   const partial = `${path}.${randomUUID()}.partial.wav`;
   try {
     const result = await runFfmpegProcess({ bin, signal, args: buildColdOpenAudioArgs(shots, partial) });
@@ -177,7 +179,9 @@ export async function ensureColdOpenAudio(shots, dir, { ffmpeg = null, signal } 
     await rm(partial, { force: true }).catch(() => {});
   }
   for (const old of await readdir(dir).catch(() => [])) {
-    if (old !== name && /^cold-open-[0-9a-f]{32}\.wav$/.test(old)) await rm(join(dir, old), { force: true }).catch(() => {});
+    if (old === name || !/^cold-open-[0-9a-f]{32}\.wav$/.test(old)) continue;
+    const written = await stat(join(dir, old)).then((s) => s.mtimeMs, () => Infinity);
+    if (written < startedAt) await rm(join(dir, old), { force: true }).catch(() => {});
   }
   return path;
 }
