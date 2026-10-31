@@ -179,6 +179,19 @@ describe.skipIf(!runDb)('memorySync.applyRemoteChanges', () => {
     expect(await contentOf(ID_B)).toBeNull();
   });
 
+  it('keeps Brain-bridge rows out of the stream in both directions', async () => {
+    // Each install derives its own bridged rows from the synced Brain record; a
+    // replicated copy outlives the record's deletion on the origin (#14260).
+    await memorySync.applyRemoteChanges([remoteMemory(ID_A, '2026-01-02T00:00:00.000Z')]);
+    await query(`UPDATE memories SET source_agent_id = 'brain-bridge' WHERE id = $1`, [ID_A]);
+    expect((await memorySync.getChangesSince()).memories).toEqual([]);
+    const result = await memorySync.applyRemoteChanges([
+      remoteMemory(ID_B, '2026-01-03T00:00:00.000Z', { sourceAgentId: 'brain-bridge' }),
+    ]);
+    expect(result).toEqual({ inserted: 0, updated: 0, skipped: 1 });
+    expect(await contentOf(ID_B)).toBeNull();
+  });
+
   it('applies a duplicated id instead of aborting the whole transaction', async () => {
     // Regression: a peer payload repeating one id made the batched multi-row
     // upsert throw "ON CONFLICT DO UPDATE command cannot affect row a second
