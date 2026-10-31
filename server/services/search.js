@@ -324,7 +324,8 @@ const ADAPTERS = ['brain', 'memory', 'apps', 'history', 'health', 'musicVideo'];
  * Returns an array of non-empty source result objects.
  */
 export async function fanOutSearch(query) {
-  console.log(`🔍 Search fan-out for "${query}" across ${ADAPTERS.length} sources`);
+  // Log query length only: queries are typed text (people, conditions, journal topics) and must not reach PM2 logs.
+  console.log(`🔍 Search fan-out for ${query.length} chars across ${ADAPTERS.length} sources`);
 
   const [brainResult, memoryResult, appsResult, historyResult, healthResult, musicVideoResult] =
     await Promise.allSettled([
@@ -350,7 +351,7 @@ export async function fanOutSearch(query) {
   const nonEmpty = sources.filter(s => s.results.length > 0);
 
   const totalResults = nonEmpty.reduce((sum, s) => sum + s.results.length, 0);
-  console.log(`✅ Search complete for "${query}": ${totalResults} results across ${nonEmpty.length} sources`);
+  console.log(`✅ Search complete for ${query.length} chars: ${totalResults} results across ${nonEmpty.length} sources`);
 
   return nonEmpty;
 }

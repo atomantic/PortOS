@@ -465,8 +465,9 @@ const executeTurnToolCall = async ({ tc, cfg, emit, state, signal, hasHostContro
   };
   try {
     args = tc.function.arguments ? JSON.parse(tc.function.arguments) : {};
-    const argSummary = Object.keys(args).length ? Object.entries(args).map(([k, v]) => `${k}=${JSON.stringify(v).slice(0, 40)}`).join(' ') : '—';
-    tlog(`tool.start ${tc.function.name} ${argSummary}`);
+    // Argument names only: values can carry dictated journal text, captured thoughts or body-weight entries.
+    const argNames = Object.keys(args).join(',') || '—';
+    tlog(`tool.start ${tc.function.name} args=${argNames}`);
     result = await dispatchTool(tc.function.name, args, ctx);
     const ms = Date.now() - t0;
     toolRuns.push({ name: tc.function.name, ok: true, ms });
@@ -547,7 +548,7 @@ export const runTurn = async ({ audio, text, mimeType, source, history = [], emi
     const stt = await transcribe(audio, { mimeType, signal });
     sttLatencyMs = stt.latencyMs;
     userText = isNonSpeechMarker(stt.text) ? '' : stt.text;
-    tlog(`stt.done ${sttLatencyMs}ms chars=${userText.length} text="${userText.slice(0, 80)}${userText.length > 80 ? '…' : ''}"`);
+    tlog(`stt.done ${sttLatencyMs}ms chars=${userText.length}`);
     emit('voice:transcript', { text: userText, latencyMs: stt.latencyMs });
   } else {
     // VoiceWidget treats transcripts with source !== 'text' as server-STT
@@ -556,7 +557,7 @@ export const runTurn = async ({ audio, text, mimeType, source, history = [], emi
     // 'voice' would duplicate the message. Keep `source` stable and expose
     // the caller's routing hint separately so dictation/Origin-aware code
     // can still distinguish typed vs spoken without breaking chat history.
-    tlog(`input.text chars=${userText.length} source=${source || 'text'} text="${userText.slice(0, 80)}${userText.length > 80 ? '…' : ''}"`);
+    tlog(`input.text chars=${userText.length} source=${source || 'text'}`);
     emit('voice:transcript', {
       text: userText,
       latencyMs: 0,
@@ -582,7 +583,7 @@ export const runTurn = async ({ audio, text, mimeType, source, history = [], emi
   // and "stop" still interrupt even if those words appear in TTS.
   if (state?.recentTts?.length && (!text || source === 'voice')) {
     if (isEchoOfRecentTts(userText, state.recentTts)) {
-      console.warn(`🔇 [${turnId}] dropping TTS echo "${userText.slice(0, 80)}"`);
+      console.log(`🔇 [${turnId}] dropping TTS echo (${userText.length} chars)`);
       emit('voice:idle', { reason: 'echo-suppressed' });
       return { transcript: userText, reply: '' };
     }
@@ -634,7 +635,7 @@ export const runTurn = async ({ audio, text, mimeType, source, history = [], emi
       const decision = resolvePending(pending, userText);
       if (decision.action === 'execute') {
         const { target, tool, args } = pending;
-        tlog(`confirm.execute ${tool} target="${target.label}"`);
+        tlog(`confirm.execute ${tool}`);
         // Confirmation happens on the user's NEXT spoken turn, by which time
         // the client may have re-indexed the DOM and reassigned refs — the
         // stale `target.ref` could now point at a different element. Emit
@@ -851,7 +852,7 @@ export const runTurn = async ({ audio, text, mimeType, source, history = [], emi
   if (confirmationPrompt && !signal?.aborted) {
     if (pending.trim()) synthQueue = synthQueue.then(() => speak(pending.trim()));
     await synthQueue;
-    tlog(`confirm.prompt "${confirmationPrompt.slice(0, 80)}"`);
+    tlog(`confirm.prompt chars=${confirmationPrompt.length}`);
     await speakSyntheticReply(confirmationPrompt);
     return { transcript: userText, reply: confirmationPrompt };
   }
@@ -888,7 +889,7 @@ export const runTurn = async ({ audio, text, mimeType, source, history = [], emi
     // Narrate-instead-of-call: the model claimed to do something but never
     // invoked a tool. User already heard the narration via TTS; surface a
     // toast so they know the action didn't actually happen and can rephrase.
-    console.warn(`🎙️ [${turnId}] narrate-without-call user="${userText.slice(0, 80)}" reply="${finalText.slice(0, 120)}"`);
+    console.log(`🎙️ [${turnId}] narrate-without-call user_chars=${userText.length} reply_chars=${finalText.length}`);
     emit('voice:error', {
       stage: 'llm',
       message: "I said I'd do that but didn't actually call the tool. Try rephrasing — e.g. \"open my daily log\" or \"go to tasks\".",
