@@ -34,6 +34,7 @@ import {
 import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
 import BrailleSpinner from '../../BrailleSpinner';
+import useLatestRequest from '../../../hooks/useLatestRequest';
 import ListLoadError from '../../ui/ListLoadError';
 import LoadFailedState from '../../ui/LoadFailedState';
 import { formatDurationMin, formatDateTime, formatDateNumeric } from '../../../utils/formatters';
@@ -141,7 +142,12 @@ export default function LearningTab() {
     standing: true
   });
 
+  // Refresh, Retry and the post-mutation reloads can overlap; only the newest
+  // batch may write, or an older failure replaces a newer successful read.
+  const beginLoad = useLatestRequest();
+
   const loadData = useCallback(async () => {
+    const isCurrent = beginLoad();
     setLoading(true);
     const failures = [];
     const read = (label, fetcher) => fetcher({ silent: true }).catch(() => {
@@ -158,6 +164,7 @@ export default function LearningTab() {
       read('feedback', api.getCosFeedbackStats),
       read('dismissed recommendations', api.getDismissedCosRecommendations)
     ]);
+    if (!isCurrent()) return;
     setLoadFailures(failures);
     setLearning(learningData);
     setPerformance(performanceData);
@@ -168,7 +175,7 @@ export default function LearningTab() {
     setFeedback(feedbackData);
     setDismissed(dismissedData?.dismissed || []);
     setLoading(false);
-  }, []);
+  }, [beginLoad]);
 
   const handleDismissRec = useCallback(async (rec) => {
     // Optimistic update — remove from active recommendations immediately

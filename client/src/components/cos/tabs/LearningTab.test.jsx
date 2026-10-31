@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { StrictMode } from 'react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import LearningTab from './LearningTab';
 
@@ -59,5 +60,20 @@ describe('LearningTab failed reads', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     expect(await screen.findByText('Tasks Analyzed')).toBeInTheDocument();
     expect(screen.queryByText(/Could not load some learning sections/)).not.toBeInTheDocument();
+  });
+
+  // StrictMode mounts twice, so two batches overlap; the older one failing after
+  // the newer one succeeded must not replace the loaded view with an error.
+  it('ignores an older batch that fails after a newer one loaded', async () => {
+    let failFirst;
+    api.getCosLearning
+      .mockImplementationOnce(() => new Promise((_, reject) => { failFirst = reject; }))
+      .mockResolvedValueOnce({ totals: { completed: 12, succeeded: 10, failed: 2, successRate: 83 }, recommendations: [] });
+    render(<StrictMode><MemoryRouter><LearningTab /></MemoryRouter></StrictMode>);
+
+    expect(await screen.findByText('Tasks Analyzed')).toBeInTheDocument();
+    await act(async () => failFirst(new Error('Synthetic stale failure')));
+    expect(screen.getByText('Tasks Analyzed')).toBeInTheDocument();
+    expect(screen.queryByText('Could not load learning analytics')).not.toBeInTheDocument();
   });
 });
