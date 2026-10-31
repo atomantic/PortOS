@@ -12,6 +12,7 @@ import { catalogImageBackend, enqueueCatalogImage, readEditSourceDimensions, res
 import { assertMediaQueueRoom } from './mediaJobQueue/index.js';
 import { partialBatchAdmissionError } from './mediaJobQueue/admission.js';
 import { runCreativeRefinement } from './creativeRefinement.js';
+import { CREATIVE_LATITUDE_ADDITION, withCreativeLatitude } from '../lib/creativeLatitude.js';
 import { previewImagePrompt } from './imageGen/promptPreview.js';
 
 // Casting > Design. Unlike reference refinement, a design round never sends the
@@ -56,8 +57,10 @@ function spreadAdditions(target, count) {
 /** Ask the chosen provider for `count` different face lines from the user's idea. */
 export async function spreadCatalogDesign(id, input, { preview = false } = {}) {
   const target = await loadDesignTarget(id, input.formId);
-  const additions = spreadAdditions(target, input.count);
-  const sentPrompt = [`Idea:\n${input.idea}`, ...additions.map((a) => `${a.label}:\n${a.text}`)].join('\n\n');
+  const spread = spreadAdditions(target, input.count);
+  // Stamped here, not only by the transport, so the shown prompt is the one sent.
+  const sentPrompt = withCreativeLatitude([`Idea:\n${input.idea}`, ...spread.map((a) => `${a.label}:\n${a.text}`)].join('\n\n'));
+  const additions = [...spread, CREATIVE_LATITUDE_ADDITION];
   if (preview) return { sentPrompt, promptAdditions: additions };
   const { resolveProviderAndModel, assertProvider } = await import('./promptRunner.js');
   const { provider, selectedModel } = await resolveProviderAndModel({ providerId: input.providerId, model: input.model });
