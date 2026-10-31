@@ -326,7 +326,8 @@ export const sectionMusicalRole = (label) => ROLE_PATTERNS.find(([, pattern]) =>
  * panel before it (the first section when it leads). Each new beat is named
  * after its section and keeps the story fields (and, the first time, the id)
  * of the old beat most of its panels came from. Panels keep their ids and
- * order. Null without sections.
+ * order. Leading cold-open (before-song) beats stay as they are. Null without
+ * sections.
  */
 export function songSectionBeats(board, project) {
   const song = storyboardFitSong(project);
@@ -340,16 +341,17 @@ export function songSectionBeats(board, project) {
   }
   const startOf = new Map((project.scenes || []).filter((scene) => scene.panelId && Number.isFinite(scene.startSec))
     .map((scene) => [scene.panelId, scene.startSec]));
+  const prelude = board.beats.slice(0, storyboardPreludeCount(board));
   const groups = sections.map(() => []);
   let current = 0;
-  for (const beat of board.beats) {
+  for (const beat of board.beats.slice(prelude.length)) {
     for (const panel of beat.panels) {
       if (startOf.has(panel.id)) current = sectionAt(sections, startOf.get(panel.id)) ?? 0;
       groups[current].push({ panel, beat });
     }
   }
-  const usedIds = new Set();
-  return groups.flatMap((group, index) => {
+  const usedIds = new Set(prelude.map((beat) => beat.id));
+  return [...prelude, ...groups.flatMap((group, index) => {
     if (!group.length) return [];
     const counts = new Map();
     for (const { beat } of group) counts.set(beat, (counts.get(beat) || 0) + 1);
@@ -366,5 +368,5 @@ export function songSectionBeats(board, project) {
       pin: null,
       panels: group.map(({ panel }) => panel),
     }];
-  });
+  })];
 }
