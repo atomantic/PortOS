@@ -1071,8 +1071,8 @@ function partialCliReplyFailure(result) {
   return { ok: false, error: errorMsg, ...pickReviewFailureDetail(result, ['stderr', 'text']) }
 }
 
-// A stream-json reply succeeds only through its final `result` event; an error
-// event counts unless a later successful final result supersedes it.
+// A stream-json reply succeeds only through its last `result` event; any error
+// event fails the reply unless that result event exists and succeeded.
 async function settleStreamJsonReply(result) {
   if (result.error || result.streamFormat !== 'stream-json') return result
   const { safeJSONLParse } = await import('../lib/jsonIo.js')

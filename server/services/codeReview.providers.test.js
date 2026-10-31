@@ -606,7 +606,7 @@ describe('configured provider completion outcomes', () => {
     [{ partial: true, stderr: '  Synthetic stderr  ', text: 'half' }, 'Synthetic stderr'],
     [{ partial: true, text: '  half a review  ' }, 'half a review'],
     [{ partial: true }, 'Reviewer exited before completing its response.'],
-  ])('reports a partial CLI reply without a verdict', async (run, error) => {
+  ])('reports partial CLI reply %# without a verdict', async (run, error) => {
     getProviderById.mockResolvedValue(cli);
     runCliProviderPrompt.mockResolvedValue(run);
     const result = await review();
