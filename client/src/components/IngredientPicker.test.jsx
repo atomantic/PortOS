@@ -100,10 +100,17 @@ describe('IngredientPicker', () => {
     expect(screen.getByRole('link', { name: /Create new in Catalog/i })).toBeTruthy();
   });
 
-  it('falls back to an empty list when the fetch rejects', async () => {
-    listCatalogIngredients.mockRejectedValue(new Error('boom'));
+  it('shows a load error with Retry instead of the empty-catalog copy when the fetch rejects', async () => {
+    listCatalogIngredients.mockRejectedValueOnce(new Error('catalog 500'));
     renderPicker();
-    await waitFor(() => expect(screen.getByText(/No matching ingredients/i)).toBeTruthy());
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load ingredients — catalog 500');
+    expect(screen.queryByText(/No matching ingredients/i)).toBeNull();
+    expect(screen.queryByRole('link', { name: /Create new in Catalog/i })).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(screen.getByText('Ada Lovelace')).toBeTruthy());
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 
   it('disables Add Selected until at least one row is checked', async () => {

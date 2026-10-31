@@ -82,6 +82,7 @@ export function VoiceTab() {
   // CLI/TUI providers can't deliver.
   const [apiProviders, setApiProviders] = useState([]);
   const [codeProviders, setCodeProviders] = useState([]);
+  const [providersError, setProvidersError] = useState(null);
   const [refreshingModels, setRefreshingModels] = useState(false);
   // On-device (Gemini Nano) availability for the fast-resolution tier-2 pill.
   const [nanoStatus, setNanoStatus] = useState(null);
@@ -120,23 +121,36 @@ export function VoiceTab() {
       .catch(() => setStatus(null));
   }, [retryVoices]);
 
-  useEffect(() => {
-    Promise.all([getVoiceConfig({ silent: true }), getVoiceStatus({ silent: true })])
-      .then(([config, s]) => { setCfg(config); setStatus(s); })
-      .catch(() => toast.error('Failed to load voice settings'))
-      .finally(() => setLoading(false));
-    // Load the provider registry once. The conversational brain can only
-    // stream through `api`-type providers (filtered here); the code-agent
-    // picker draws from `cli`/`tui` providers (Claude Code, Codex, Antigravity) —
-    // those are the ones that can actually edit code. Silent: the empty-list
-    // fallback is the error UI, so don't also pop a toast.
-    getProviders({ silent: true })
+  // Load the provider registry. The conversational brain can only stream
+  // through `api`-type providers (filtered here); the code-agent picker draws
+  // from `cli`/`tui` providers (Claude Code, Codex, Antigravity) — those are the
+  // ones that can actually edit code. Silent: the ListLoadError row is the
+  // failure UI, so don't also pop a toast. A failure is kept distinct from an
+  // empty registry so the pickers offer Retry rather than reading as "none".
+  const loadProviders = useCallback(() => {
+    setProvidersError(null);
+    return getProviders({ silent: true })
       .then((data) => {
         const all = data?.providers || [];
         setApiProviders(all.filter((p) => p.type === 'api'));
         setCodeProviders(all.filter((p) => p.type === 'cli' || p.type === 'tui'));
       })
-      .catch(() => { setApiProviders([]); setCodeProviders([]); });
+      .catch((err) => {
+        setApiProviders([]);
+        setCodeProviders([]);
+        setProvidersError(err instanceof Error ? err : new Error('Request failed'));
+      });
+  }, []);
+
+  useEffect(() => {
+    loadProviders();
+  }, [loadProviders]);
+
+  useEffect(() => {
+    Promise.all([getVoiceConfig({ silent: true }), getVoiceStatus({ silent: true })])
+      .then(([config, s]) => { setCfg(config); setStatus(s); })
+      .catch(() => toast.error('Failed to load voice settings'))
+      .finally(() => setLoading(false));
     listVoiceEngines({ silent: true })
       .then((data) => {
         const engines = Array.isArray(data?.engines) ? data.engines : [];
@@ -616,6 +630,9 @@ export function VoiceTab() {
           </>
         )}
 
+        {providersError && (
+          <ListLoadError what="the provider registry (LLM and coding-agent pickers)" error={providersError} onRetry={loadProviders} className="md:col-span-2" />
+        )}
         <FormField label="LLM provider" hint="Voice streams tokens, so only API providers (LM Studio, Ollama, OpenAI-compatible) are listed. Configure providers under Settings → Providers.">
           {/* Streaming needs a direct API route, so a composed combination is
               restricted to the `api` method. The model/vision selects below
