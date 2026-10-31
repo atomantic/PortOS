@@ -109,11 +109,21 @@ function completionDecision({ repoPath, branch, prUrl, tip, agents }) {
     // before finalization can capture a PR. Ownership release is not merge consent.
     const bound = bindings.flatMap(value => Array.isArray(value) ? value : []);
     const scopes = [meta.worktreeBranch, meta.jiraBranch, ...(bound.length ? bound : [meta.claimBranch])];
+    // A review run is bound to the one PR it was assigned. Without that scope a
+    // reused branch (the quality-snapshot publisher) inherits every past run's
+    // obligation on every later PR, and none of them can ever be released.
+    const target = meta.reviewLoopMergeTarget?.branch === branch ? meta.reviewLoopMergeTarget.url : undefined;
     const policy = receipt?.branch === branch ? receipt : {
       branch: scopes.includes(branch) ? branch : null,
       completion,
+      ...(target && { prUrl: target }),
     };
     if (policy.branch !== branch || (prUrl && policy.prUrl && policy.prUrl !== prUrl)) continue;
+    // A review-then-merge run whose assigned PR the forge verified MERGED has
+    // nothing left to review or merge. A human handoff is never discharged.
+    if (policy.completion === PR_COMPLETIONS.REVIEW_THEN_MERGE && agent.status === 'completed'
+      && meta.mergedReviewFollowUp?.status === 'verified' && target
+      && meta.mergedReviewFollowUp.prUrl === target && (policy.prUrl ?? target) === target) continue;
     policies.push({ ...policy, agent, time: Date.parse(agent.startedAt) || 0 });
   }
   policies.sort((a, b) => b.time - a.time);
