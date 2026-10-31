@@ -32,7 +32,8 @@ export default function PublishPlatformsPanel({ projectId, publishing }) {
   if (!platforms) {
     if (!platformsError) return null;
     return (
-      <PublishCard projectId={projectId} cardId="platforms" label="Where you post" icon={Globe} summary="Not loaded" defaultOpen>
+      // Its own key, so the loaded card mounts fresh and takes its own fold default.
+      <PublishCard key="load-error" projectId={projectId} cardId="platforms" label="Where you post" icon={Globe} summary="Not loaded" defaultOpen>
         <ListLoadError what="where you post" error={platformsError} onRetry={retryPlatforms} />
       </PublishCard>
     );
