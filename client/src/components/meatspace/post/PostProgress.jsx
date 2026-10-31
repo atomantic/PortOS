@@ -169,7 +169,7 @@ export default function PostProgress({ subtab, onBack }) {
       {/* Header */}
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-3">
-          <button onClick={onBack} className="text-gray-400 hover:text-white transition-colors" aria-label="Back">
+          <button onClick={onBack} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center rounded-lg text-gray-400 hover:text-white hover:bg-port-card transition-colors" aria-label="Back">
             <ArrowLeft size={20} />
           </button>
           <h2 className="text-xl font-bold text-white">Progress</h2>
@@ -179,7 +179,7 @@ export default function PostProgress({ subtab, onBack }) {
             <button
               key={r.label}
               onClick={() => setRange(r.days)}
-              className={`px-3 py-1 text-xs rounded-lg transition-colors ${
+              className={`px-3 py-1 pointer-coarse:min-h-11 pointer-coarse:min-w-11 text-xs rounded-lg transition-colors ${
                 range === r.days ? 'bg-port-accent/20 text-port-accent' : 'text-gray-500 hover:text-white'
               }`}
             >
@@ -227,7 +227,7 @@ export default function PostProgress({ subtab, onBack }) {
             <span className="text-xs text-gray-500 flex items-center gap-1"><Gauge size={12} /> Trend focus:</span>
             <button
               onClick={() => setDomain('all')}
-              className={`px-3 py-1 text-xs rounded-lg transition-colors ${
+              className={`px-3 py-1 pointer-coarse:min-h-11 pointer-coarse:min-w-11 text-xs rounded-lg transition-colors ${
                 domain === 'all' ? 'bg-port-accent/20 text-port-accent' : 'text-gray-500 hover:text-white'
               }`}
             >
@@ -237,7 +237,7 @@ export default function PostProgress({ subtab, onBack }) {
               <button
                 key={key}
                 onClick={() => setDomain(key)}
-                className={`px-3 py-1 text-xs rounded-lg transition-colors flex items-center gap-1.5 ${
+                className={`px-3 py-1 pointer-coarse:min-h-11 pointer-coarse:min-w-11 text-xs rounded-lg transition-colors flex items-center gap-1.5 ${
                   domain === key ? 'bg-port-accent/20 text-port-accent' : 'text-gray-500 hover:text-white'
                 }`}
               >

@@ -55,7 +55,7 @@ export default function PostSessionDetail({ id, onBack }) {
   return (
     <div className="max-w-4xl mx-auto space-y-6">
       <div className="flex items-center gap-3">
-        <button onClick={onBack} className="text-gray-400 hover:text-white transition-colors" aria-label="Back">
+        <button onClick={onBack} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center rounded-lg text-gray-400 hover:text-white hover:bg-port-card transition-colors" aria-label="Back">
           <ArrowLeft size={20} />
         </button>
         <h2 className="text-xl font-bold text-white">Session</h2>

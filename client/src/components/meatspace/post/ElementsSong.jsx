@@ -244,7 +244,7 @@ function ElementsSongMain({ item, mastery, onSelectMode, onBack, onAttestMastery
   return (
     <div className="space-y-6">
       <div className="flex items-center gap-3">
-        <button aria-label="Back" onClick={onBack} className="text-gray-400 hover:text-white transition-colors shrink-0"><ChevronLeft size={20} /></button>
+        <button aria-label="Back" onClick={onBack} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center rounded-lg text-gray-400 hover:text-white hover:bg-port-card transition-colors shrink-0"><ChevronLeft size={20} /></button>
         <h2 className="text-lg sm:text-xl font-bold text-white leading-tight">The Elements Song</h2>
         <span className="text-gray-500 text-xs sm:text-sm ml-auto shrink-0">Tom Lehrer</span>
       </div>
@@ -642,7 +642,7 @@ function LearnMode({ item, onBack, onComplete }) {
   return (
     <div className="space-y-6 max-w-2xl">
       <div className="flex items-center gap-3">
-        <button aria-label="Back" onClick={onBack} className="text-gray-400 hover:text-white transition-colors">
+        <button aria-label="Back" onClick={onBack} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center rounded-lg text-gray-400 hover:text-white hover:bg-port-card transition-colors">
           <ChevronLeft size={20} />
         </button>
         <h2 className="text-lg font-bold text-white">Learn — {chunk?.label || 'Elements Song'}</h2>
@@ -749,7 +749,7 @@ function ElementStudyMode({ item, mastery, onBack, onComplete }) {
     return (
       <div className="space-y-6 max-w-2xl">
         <div className="flex items-center gap-3">
-          <button aria-label="Back" onClick={onBack} className="text-gray-400 hover:text-white transition-colors">
+          <button aria-label="Back" onClick={onBack} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center rounded-lg text-gray-400 hover:text-white hover:bg-port-card transition-colors">
             <ChevronLeft size={20} />
           </button>
           <h2 className="text-lg font-bold text-white">Flash Cards</h2>
@@ -769,7 +769,7 @@ function ElementStudyMode({ item, mastery, onBack, onComplete }) {
     return (
       <div className="space-y-6 max-w-2xl">
         <div className="flex items-center gap-3">
-          <button aria-label="Back" onClick={onBack} className="text-gray-400 hover:text-white transition-colors">
+          <button aria-label="Back" onClick={onBack} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center rounded-lg text-gray-400 hover:text-white hover:bg-port-card transition-colors">
             <ChevronLeft size={20} />
           </button>
           <h2 className="text-xl font-bold text-white">Flash Cards Complete</h2>
@@ -810,7 +810,7 @@ function ElementStudyMode({ item, mastery, onBack, onComplete }) {
   return (
     <div className="space-y-6 max-w-2xl">
       <div className="flex items-center gap-3">
-        <button aria-label="Back" onClick={onBack} className="text-gray-400 hover:text-white transition-colors">
+        <button aria-label="Back" onClick={onBack} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center rounded-lg text-gray-400 hover:text-white hover:bg-port-card transition-colors">
           <ChevronLeft size={20} />
         </button>
         <h2 className="text-lg font-bold text-white">Flash Cards</h2>
@@ -945,7 +945,7 @@ function ElementFlashMode({ item, mastery, onBack, onComplete }) {
     return (
       <div className="space-y-6 max-w-2xl">
         <div className="flex items-center gap-3">
-          <button aria-label="Back" onClick={onBack} className="text-gray-400 hover:text-white transition-colors">
+          <button aria-label="Back" onClick={onBack} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center rounded-lg text-gray-400 hover:text-white hover:bg-port-card transition-colors">
             <ChevronLeft size={20} />
           </button>
           <h2 className="text-xl font-bold text-white">Element Flash Complete</h2>
@@ -1002,7 +1002,7 @@ function ElementFlashMode({ item, mastery, onBack, onComplete }) {
   return (
     <div className="space-y-6 max-w-2xl">
       <div className="flex items-center gap-3">
-        <button aria-label="Back" onClick={onBack} className="text-gray-400 hover:text-white transition-colors">
+        <button aria-label="Back" onClick={onBack} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center rounded-lg text-gray-400 hover:text-white hover:bg-port-card transition-colors">
           <ChevronLeft size={20} />
         </button>
         <h2 className="text-lg font-bold text-white">Element Flash</h2>
@@ -1096,7 +1096,7 @@ function FillBlankMode({ item, onBack, onComplete }) {
     return (
       <div className="space-y-6 max-w-2xl">
         <div className="flex items-center gap-3">
-          <button aria-label="Back" onClick={onBack} className="text-gray-400 hover:text-white transition-colors">
+          <button aria-label="Back" onClick={onBack} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center rounded-lg text-gray-400 hover:text-white hover:bg-port-card transition-colors">
             <ChevronLeft size={20} />
           </button>
           <h2 className="text-xl font-bold text-white">Fill the Lyrics Complete</h2>
@@ -1148,7 +1148,7 @@ function FillBlankMode({ item, onBack, onComplete }) {
   return (
     <div className="space-y-6 max-w-2xl">
       <div className="flex items-center gap-3">
-        <button aria-label="Back" onClick={onBack} className="text-gray-400 hover:text-white transition-colors">
+        <button aria-label="Back" onClick={onBack} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center rounded-lg text-gray-400 hover:text-white hover:bg-port-card transition-colors">
           <ChevronLeft size={20} />
         </button>
         <h2 className="text-lg font-bold text-white">Fill the Lyrics</h2>

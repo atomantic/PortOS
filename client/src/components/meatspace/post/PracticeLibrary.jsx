@@ -62,7 +62,7 @@ export default function PracticeLibrary({ config, onBack }) {
     <div className="space-y-6 max-w-6xl mx-auto">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="flex items-start gap-3">
-          <button aria-label="Back" onClick={onBack} className="mt-1 text-gray-400 hover:text-white transition-colors">
+          <button aria-label="Back" onClick={onBack} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center rounded-lg text-gray-400 hover:text-white hover:bg-port-card transition-colors shrink-0">
             <ArrowLeft size={20} />
           </button>
           <div>

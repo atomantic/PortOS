@@ -155,7 +155,7 @@ export default function MorseProgressPanel({ refreshKey = 0 }) {
 
   return (
     <div className="bg-port-card border border-port-border rounded-lg p-4 space-y-4">
-      <div className="flex items-center justify-between gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <TrendingUp size={16} className="text-port-accent" />
           <h3 className="text-sm font-semibold text-white">Morse Progress</h3>
@@ -165,7 +165,7 @@ export default function MorseProgressPanel({ refreshKey = 0 }) {
             <button
               key={w.id}
               onClick={() => setDays(w.id)}
-              className={`px-2 py-0.5 text-[11px] rounded transition-colors ${
+              className={`px-2 py-0.5 pointer-coarse:min-h-11 pointer-coarse:min-w-11 text-[11px] rounded transition-colors ${
                 days === w.id ? 'bg-port-accent text-white' : 'text-gray-400 hover:text-white bg-port-bg border border-port-border'
               }`}
             >
