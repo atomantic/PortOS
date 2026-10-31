@@ -176,6 +176,12 @@ const SKIPPED_AUTOMATION = Object.freeze({ sorted: 0, acted: 0, handedOff: 0, ag
 // task schedule, which itself registers this module's scheduled check.
 async function runAutomation(account, env, automate) {
   if (!automate) return SKIPPED_AUTOMATION;
+  // Observe still clears threads with nothing left to do, so a closed or
+  // merged thread never waits on the operator; Assist does the same below.
+  if (account.mode === 'observe') {
+    const { cleared } = await markThreadsDone(account, FINISHED_OPEN_SQL, { actor: 'automation', limit: MAX_AUTO_DONE_PER_RUN });
+    return { sorted: 0, acted: cleared, handedOff: 0, agentRuns: 0 };
+  }
   const autopilot = account.mode === 'autopilot'
     ? await (await import('./githubNotificationAutopilot.js')).autopilotAccountNotifications(account, env)
     : { handedOff: 0, agentRuns: 0 };
@@ -302,7 +308,10 @@ export async function syncAllNotifications(options = {}) {
 // The inbox holds unread open threads, whatever their decision. The operator
 // can clear finished or read threads in one tap without teaching a rule.
 const FINISHED_SQL = `decision IN (${FINISHED_DECISIONS.map((decision) => `'${decision}'`).join(', ')})`;
+const FINISHED_OPEN_SQL = `state = 'open' AND NOT suspect AND ${FINISHED_SQL}`;
 const CLEARABLE_SQL = `state = 'open' AND NOT suspect AND (${FINISHED_SQL} OR NOT unread)`;
+// Each mark-done is one gh call; the rest wait for the next sync.
+const MAX_AUTO_DONE_PER_RUN = 50;
 const OPEN_UNREAD_SQL = "state = 'open' AND unread AND read_on_github_at IS NULL";
 const VIEW_FILTERS = {
   'needs-you': `${OPEN_UNREAD_SQL} AND NOT suspect`,
@@ -389,6 +398,7 @@ export async function listActionableNotifications({ limit = 100 } = {}) {
   const accountsById = new Map(accounts.map((account) => [account.id, account]));
   const { rows } = await query(
     `SELECT * FROM github_notifications WHERE account_id = ANY($1::text[]) AND ${OPEN_UNREAD_SQL}
+       AND NOT COALESCE(${FINISHED_SQL}, FALSE)
      ORDER BY gh_updated_at DESC, account_id, thread_id LIMIT $2`,
     [accounts.map((account) => account.id), limit],
   );
@@ -493,38 +503,51 @@ export async function applyNotificationAction(accountId, threadId, action, { act
 const ACCOUNT_FAILURES = new Set(['GITHUB_ACCOUNT_DISABLED', 'GITHUB_ACCOUNT_UNAVAILABLE']);
 
 /**
+ * Mark one account's open threads matching `whereSql` done on GitHub, newest
+ * first, without teaching learned rules. One failed thread is counted, never
+ * stops the rest; an account gh cannot act as fails them all the same way.
+ */
+async function markThreadsDone(account, whereSql, { actor = 'operator', limit = null } = {}) {
+  const { rows } = await query(
+    `SELECT thread_id, decision, evidence->>'rule' AS rule FROM github_notifications WHERE account_id = $1 AND ${whereSql}
+     ORDER BY gh_updated_at DESC${limit ? ` LIMIT ${limit}` : ''}`,
+    [account.id],
+  );
+  let cleared = 0;
+  let failed = 0;
+  for (const [index, row] of rows.entries()) {
+    const detail = actor === 'automation' ? { decision: row.decision, rule: row.rule } : { decision: row.decision, bulk: 'finished' };
+    const error = await applyNotificationAction(account.id, row.thread_id, 'done', { actor, learn: false, emit: false, detail })
+      .then(() => null, (failure) => failure);
+    if (!error) {
+      cleared += 1;
+      continue;
+    }
+    if (ACCOUNT_FAILURES.has(error.code)) {
+      console.error(`❌ Could not mark finished GitHub notifications done for ${account.host}: ${error.message}`);
+      failed += rows.length - index;
+      break;
+    }
+    console.error(`❌ Could not mark GitHub notification ${row.thread_id} done for ${account.host}: ${error.message}`);
+    failed += 1;
+  }
+  return { cleared, failed, matched: rows.length };
+}
+
+/**
  * Mark every open non-suspect finished or read thread done on GitHub (one
  * account, or all), as the operator but without teaching learned rules:
  * reading a thread does not decide how future threads should be handled.
- * One failed thread is counted, never stops the rest.
  */
 export async function clearFinishedNotifications({ accountId = null } = {}) {
   const accounts = (await listAccounts()).filter(isActive).filter((account) => !accountId || account.id === accountId);
   let cleared = 0;
   let failed = 0;
   for (const account of accounts) {
-    const { rows } = await query(
-      `SELECT thread_id, decision FROM github_notifications WHERE account_id = $1 AND ${CLEARABLE_SQL}
-       ORDER BY gh_updated_at DESC`,
-      [account.id],
-    );
-    for (const [index, row] of rows.entries()) {
-      const error = await applyNotificationAction(account.id, row.thread_id, 'done', { learn: false, emit: false, detail: { decision: row.decision, bulk: 'finished' } })
-        .then(() => null, (failure) => failure);
-      if (!error) {
-        cleared += 1;
-        continue;
-      }
-      // An account gh cannot act as fails every thread the same way.
-      if (ACCOUNT_FAILURES.has(error.code)) {
-        console.error(`❌ Could not mark finished or read GitHub notifications done for ${account.host}: ${error.message}`);
-        failed += rows.length - index;
-        break;
-      }
-      console.error(`❌ Could not mark GitHub notification ${row.thread_id} done for ${account.host}: ${error.message}`);
-      failed += 1;
-    }
-    if (rows.length) githubNotificationEvents.emit('changed', { accountId: account.id });
+    const result = await markThreadsDone(account, CLEARABLE_SQL);
+    cleared += result.cleared;
+    failed += result.failed;
+    if (result.matched) githubNotificationEvents.emit('changed', { accountId: account.id });
   }
   console.log(`🧹 Marked ${cleared} finished or read GitHub notification(s) done${failed ? `, ${failed} failed` : ''}`);
   return { cleared, failed };

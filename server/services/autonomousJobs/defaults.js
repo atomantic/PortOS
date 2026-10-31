@@ -237,7 +237,7 @@ Phase 4 — Report:
     // GITHUB_NOTIFICATION_CADENCES['weekdays-15m'] (lib/validation.js).
     id: 'job-github-notifications',
     name: 'GitHub Notifications Check',
-    description: 'Check each GitHub account on Dev Tools › GitHub for new notifications and apply its triage rules. Observe accounts only record decisions; Assist and Autopilot accounts also act. Never polls faster than GitHub allows.',
+    description: 'Check each GitHub account on Dev Tools › GitHub for new notifications and apply its triage rules. Observe accounts record decisions and mark closed or merged threads done; Assist and Autopilot accounts also act. Never polls faster than GitHub allows.',
     category: 'github-notifications',
     interval: 'custom',
     intervalMs: 15 * 60 * 1000,

@@ -163,9 +163,13 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
   it('projects unread open alerts across accounts, including suspect items, and removes handled or disabled sources', async () => {
     const second = await createAccount({ host: 'github.com', login: `other${accountIds.length}`, label: 'Other example' });
     accountIds.push(second.id);
-    mockGh(args => githubListing(args, [thread('9001'), thread('9002'), thread('9003'), thread('9004')]));
+    mockGh(args => githubListing(args, [thread('9001'), thread('9002'), thread('9003'), thread('9004'), thread('9005')]), {
+      'repos/octocat/hello/pulls/9005': { author: 'octocat', state: 'closed', merged: true },
+    });
     await syncAccountNotifications(account.id, { automate: false });
     await syncAccountNotifications(second.id, { automate: false });
+    // A merged thread left open (no automation ran) still never alerts the hub.
+    expect(await getNotification(account.id, '9005')).toMatchObject({ decision: 'suggest-mark-read', state: 'open', unread: true });
     await query("UPDATE github_notifications SET suspect = TRUE WHERE account_id = $1 AND thread_id = '9002'", [account.id]);
     await query("UPDATE github_notifications SET unread = FALSE WHERE account_id = $1 AND thread_id = '9003'", [account.id]);
     await query("UPDATE github_notifications SET read_on_github_at = NOW() WHERE account_id = $1 AND thread_id = '9004'", [account.id]);
@@ -536,14 +540,14 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
     await syncAccountNotifications(account.id);
     const rows = (await listNotifications({ accountId: account.id, view: 'all' })).notifications;
     expect(rows.map((row) => [row.threadId, row.decision])).toEqual([['702', 'surface'], ['701', 'duplicate']]);
-    // The inbox mirrors GitHub's: the folded notice stays in it, still unread
-    // there, until it is marked done, which one tap does for every finished thread.
-    const inbox = await listNotifications({ accountId: account.id });
-    expect(inbox.notifications.map((row) => row.threadId)).toEqual(['702', '701']);
-    expect(inbox.counts).toMatchObject({ 'needs-you': 2, finished: 1, clearable: 1 });
-    expect(await clearFinishedNotifications({ accountId: account.id })).toEqual({ cleared: 1, failed: 0 });
+    // Even in Observe, a folded notice has nothing left to do, so the sync
+    // marks it done on GitHub as an undoable automation action.
     expect(actions).toEqual([['DELETE', 'notifications/threads/701']]);
-    expect((await listNotifications({ accountId: account.id })).notifications.map((row) => row.threadId)).toEqual(['702']);
+    const inbox = await listNotifications({ accountId: account.id });
+    expect(inbox.notifications.map((row) => row.threadId)).toEqual(['702']);
+    expect(inbox.counts).toMatchObject({ 'needs-you': 1, finished: 0, clearable: 0 });
+    expect((await listAutomationActivity()).find((entry) => entry.threadId === '701' && entry.accountId === account.id))
+      .toMatchObject({ action: 'done', decision: 'duplicate', undoable: true });
   });
 
   it('clears read threads from either source in one tap without learning or clearing suspect threads', async () => {
@@ -642,13 +646,14 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
     const login = account.login;
     const pr = (author, state = 'open', merged = false) => ({ author, association: 'NONE', state, merged });
     const comment = (id) => `https://api.github.com/repos/${login}/hello/issues/comments/${id}`;
-    const actions = mockGh(() => listing([
+    const threads = [
       thread('901', { owner: login }),
       thread('902', { owner: login }),
       thread('903', { owner: login, reason: 'mention', commentUrl: comment(1) }),
       thread('904', { owner: login, reason: 'mention', commentUrl: comment(2) }),
       thread('905', { owner: login, reason: 'mention', commentUrl: comment(3) }),
-    ]), {
+    ];
+    const actions = mockGh((args) => githubListing(args, threads), {
       [`repos/${login}/hello/pulls/901`]: pr(login, 'closed', true),
       [`repos/${login}/hello/pulls/902`]: pr('mallory', 'closed'),
       [`repos/${login}/hello/pulls/903`]: pr('alice'),
@@ -670,20 +675,20 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
       return { ok: true, value: { verdict: 'done' } };
     });
 
+    // Observe calls no model, but closed or merged threads are done, even an
+    // outside one: the forge reports that state, so no content can fake it.
+    // Same activity time on every thread, so compare without order.
     await syncAccountNotifications(account.id);
     expect(runUntrustedContentAnalysis).not.toHaveBeenCalled();
-    expect(actions).toEqual([]);
+    expect([...actions].sort()).toEqual([['DELETE', 'notifications/threads/901'], ['DELETE', 'notifications/threads/902']]);
+    actions.length = 0;
+    for (const done of threads.slice(0, 2)) done.unread = false;
 
     await updateAccount(account.id, { mode: 'assist' });
     const result = await syncAccountNotifications(account.id);
-    expect(result.assist).toEqual({ sorted: 2, acted: 3, handedOff: 0, agentRuns: 0 });
+    expect(result.assist).toEqual({ sorted: 2, acted: 1, handedOff: 0, agentRuns: 0 });
     expect(runUntrustedContentAnalysis).toHaveBeenCalledTimes(3);
-    // Same activity time on every thread, so compare without order.
-    // Closed or merged threads are done, even an outside one: the forge reports
-    // that state, so no content can fake it.
-    expect([...actions].sort()).toEqual([
-      ['DELETE', 'notifications/threads/901'], ['DELETE', 'notifications/threads/902'], ['DELETE', 'notifications/threads/903'],
-    ]);
+    expect(actions).toEqual([['DELETE', 'notifications/threads/903']]);
 
     const byId = Object.fromEntries((await listNotifications({ accountId: account.id, view: 'all' })).notifications.map((row) => [row.threadId, row]));
     expect(byId['902']).toMatchObject({ decision: 'suggest-mark-read', trust: 'outside', state: 'done' });

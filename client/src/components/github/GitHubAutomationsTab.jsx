@@ -27,7 +27,7 @@ const MODE_LABELS = { disabled: 'Disabled', observe: 'Observe', assist: 'Assist'
 
 function modeHint(account) {
   if (account.mode === 'disabled') return 'This PortOS instance does not fetch or process this account\'s notifications.';
-  if (account.mode === 'observe') return 'Records a decision for each notification; changes nothing on GitHub.';
+  if (account.mode === 'observe') return 'Records a decision for each notification and marks closed, merged or folded threads done; changes nothing else on GitHub.';
   const where = account.trust === 'private'
     ? 'Text goes only to local AI providers unless you allow others in Accounts.'
     : 'Text goes to the GitHub notifications provider in Models › LLMs › Abuse Guard.';
