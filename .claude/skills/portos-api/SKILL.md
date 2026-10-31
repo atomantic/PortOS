@@ -27,7 +27,7 @@ node scripts/portos-api.js get /api/api-docs/catalog.json   # discover endpoints
 
 Details: [docs/AGENT_API_KEY.md](../../../docs/AGENT_API_KEY.md).
 
-For an outside terminal agent, use the assigned GitHub/GitLab repository and your authorized forge identity. The hosting provider enforces merge eligibility; pin the PR head and confirm its merged state. Do not require a PortOS admission lease, local attestation, preparation turn or additional configuration as merge certification. The [legacy external coordination API](../../../docs/AGENT_API_KEY.md#outside-agent-merge-admission) remains available for compatible clients that explicitly use it, with its existing caller/target checks; never invent or borrow a CoS `agentId`. Local cleanup still uses authenticated PortOS APIs and verifies the exact target, active ownership and unique content.
+For an outside terminal agent, use the assigned GitHub/GitLab repository and your authorized forge identity. The hosting provider enforces merge eligibility; pin the PR head and confirm its merged state. Do not require a PortOS admission lease, local attestation, preparation turn or additional configuration as merge certification. Never invent or borrow a CoS `agentId`. Local cleanup still uses authenticated PortOS APIs and verifies the exact target, active ownership and unique content.
 
 For FableLoom static package handoff, use `fableloom-export preflight|start LOOM`
 with `--episodes EP1,EP2`, `--player true`, `--characters true`, `--voice true`,

@@ -19,9 +19,9 @@ app.use(express.json());
 app.use('/api/cos', routes);
 app.use(errorMiddleware);
 
-describe('POST /api/cos/merge-admission', () => {
-  it('is gone: PortOS agents take no merge lease', async () => {
-    const res = await request(app).post('/api/cos/merge-admission').send({ agentId: 'parent-example', action: 'acquire' });
+describe('POST /api/cos/merge-admission/external', () => {
+  it('is gone: outside agents merge on the forge, with no PortOS lease', async () => {
+    const res = await request(app).post('/api/cos/merge-admission/external').send({ action: 'acquire' });
     expect(res.status).toBe(404);
   });
 });
