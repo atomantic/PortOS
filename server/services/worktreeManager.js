@@ -1592,6 +1592,9 @@ async function removeWorktreeNow(agentId, sourceWorkspace, branchName, options, 
     return contained?.exitCode === 0 && contained.stdout.trim() ? null : 'detached-head-unpublished';
   };
   const ignoredPaths = [DONE_SENTINEL_NAME, ...doneSentinelCandidateNames(agentId)];
+  // Set once the forge reports the branch's PR merged at this commit: removal
+  // skips the dirt check only while the observed head is still that commit.
+  let deliveredHead = null;
   // Observe the checkout under the fence and return the gate removal re-runs.
   const admitRemoval = async () => {
     const tree = (await listWorktrees(sourceWorkspace)).find(wt => canonicalPath(wt.path) === canonicalPath(worktreePath));
@@ -1655,14 +1658,6 @@ async function removeWorktreeNow(agentId, sourceWorkspace, branchName, options, 
     const base = await getDefaultBranch(sourceWorkspace, { strict: true }).catch(() => null);
     if (base) mergeTarget = await resolveMergeTarget(sourceWorkspace, base);
   }
-  // Once the branch's PR merged at this exact tip, its checkout is disposable:
-  // uncommitted and untracked files go with it. Asked before the lock (a forge
-  // call), so removal skips the dirt check only while the observed head is still
-  // that commit. A detached follow-up never inherits its primary branch's delivery.
-  const { readMergedPrTip } = await import('./prProbe.js');
-  const mergedTip = existsSync(worktreePath) ? await readMergedPrTip(sourceWorkspace, branchName).catch(() => null) : null;
-  const deliveredHead = mergedTip && !await detachedCheckout() ? mergedTip : null;
-
   const inspected = await withClaimOwnershipLock(async () => {
     const { getDefaultBranch } = await import('./git.js');
     const defaultBranch = await getDefaultBranch(sourceWorkspace, { strict: true }).catch(() => null);
@@ -1698,10 +1693,6 @@ async function removeWorktreeNow(agentId, sourceWorkspace, branchName, options, 
       console.warn(`⚠️ Worktree ${agentId} has a broken checkout identity; preserving its directory and branch`);
       return { result: { merged: false, removed: false, cleanupIncomplete: true, uncommittedSaved: false, warnings } };
     }
-
-    // A merged delivery's uncommitted and ignored files are discarded with its
-    // checkout; only an unmerged checkout is held for them.
-    if (deliveredHead) return {};
 
     // Safety check: abort removal when uncommitted changes are detected.
     // Also fail closed if git status itself fails — treat unknown state as dirty.
@@ -1741,14 +1732,25 @@ async function removeWorktreeNow(agentId, sourceWorkspace, branchName, options, 
       // `agentWorktreeCleanup.js` undiagnosable from the card alone.
       const shown = dirt.realChangePaths.slice(0, DIRT_PATHS_IN_WARNING);
       const more = dirt.realChangePaths.length - shown.length;
-      const detail = `${shown.join(', ')}${more > 0 ? ` (+${more} more)` : ''}`;
-      console.log(`⚠️ Preserving worktree for ${agentId} — uncommitted changes detected (${detail}), aborting cleanup to avoid data loss`);
-      warnings.push(`Worktree preserved — uncommitted changes detected in ${worktreePath}: ${detail}`);
-      return { result: { merged: false, removed: false, uncommittedSaved: false, warnings } };
+      return { dirty: `${shown.join(', ')}${more > 0 ? ` (+${more} more)` : ''}` };
     }
     return {};
   });
   if (inspected.result) return inspected.result;
+
+  if (inspected.dirty) {
+    // A merged PR at this exact tip makes the checkout disposable: its uncommitted
+    // and untracked files go with it. Asked outside the lock (a forge call), and
+    // never for a detached follow-up, which does not own its primary's branch.
+    const { readMergedPrTip } = await import('./prProbe.js');
+    const mergedTip = await readMergedPrTip(sourceWorkspace, branchName).catch(() => null);
+    deliveredHead = mergedTip && !await detachedCheckout() ? mergedTip : null;
+    if (!deliveredHead) {
+      console.log(`⚠️ Preserving worktree for ${agentId} — uncommitted changes detected (${inspected.dirty}), aborting cleanup to avoid data loss`);
+      warnings.push(`Worktree preserved — uncommitted changes detected in ${worktreePath}: ${inspected.dirty}`);
+      return { merged: false, removed: false, uncommittedSaved: false, warnings };
+    }
+  }
 
   if (inspected.missing) {
     return retire({

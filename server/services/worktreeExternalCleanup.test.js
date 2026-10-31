@@ -138,16 +138,11 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('external orphan cleanup recovery policy
     expect(await branchExists('agent-merged')).toBe(false);
   });
 
-  it('preserves ignored user data in a merged external checkout', async () => {
+  it('discards ignored files with a merged external checkout', async () => {
     const path = await addTree('agent-ignored-output', { committed: true });
     await execGit(['merge', '--no-ff', 'agent-ignored-output', '--no-edit'], external);
     await writeFile(join(external, '.git', 'info', 'exclude'), '*.png\n');
-    const image = join(path, 'reference.png');
-    await writeFile(image, 'sole user image');
-    expect(await cleanupOrphanedWorktrees(primary, new Set(), NO_OWNERS)).toBe(0);
-    expect(await readFile(image, 'utf8')).toBe('sole user image');
-    expect(await branchExists('agent-ignored-output')).toBe(true);
-    await rm(image);
+    await writeFile(join(path, 'reference.png'), 'generated image');
     expect(await cleanupOrphanedWorktrees(primary, new Set(), NO_OWNERS)).toBe(1);
     expect(existsSync(path)).toBe(false);
     expect(await branchExists('agent-ignored-output')).toBe(false);

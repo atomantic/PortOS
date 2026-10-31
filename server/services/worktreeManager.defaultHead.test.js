@@ -4,7 +4,7 @@
 // it, so the follow-up attaches DETACHED at the reviewed commit instead.
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { existsSync } from 'fs';
-import { writeFile, mkdir, readFile, readdir, rm } from 'fs/promises';
+import { writeFile, mkdir, readFile, readdir } from 'fs/promises';
 import { join } from 'path';
 import { mockPathsDataRoot, mockTestIdentity } from '../lib/mockPathsDataRoot.js';
 import { destroyGitSandbox, makeGitSandbox, SKIP_HEAVY_INTEGRATION } from '../lib/gitTestRepo.js';
@@ -90,7 +90,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('createWorktree for a PR whose head bran
     expect(await git(['rev-parse', 'HEAD'], info.worktreePath)).toBe(head);
   });
 
-  it('retains unverified ignored output from an integrated no-PR job', async () => {
+  it('discards ignored output with an integrated no-PR job', async () => {
     await execGit(['push', 'origin', 'main'], sandbox.repo);
     const info = await createWorktree('agent-no-change', sandbox.repo, 'task-no-change');
     await writeFile(join(sandbox.repo, '.git/info/exclude'), '.cache/\n');
@@ -98,10 +98,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('createWorktree for a PR whose head bran
     await writeFile(join(info.worktreePath, '.cache/pregate/report.json'), JSON.stringify({ validationMode: 'focused' }));
     await writeFile(join(info.worktreePath, '.cache/pregate/unique.json'), '{"scratch":true}');
     const result = await removeWorktree('agent-no-change', sandbox.repo, info.branchName, { merge: false });
-    expect(result, JSON.stringify(result)).toMatchObject({ removed: false });
-    expect(await readFile(join(info.worktreePath, '.cache/pregate/unique.json'), 'utf8')).toBe('{"scratch":true}');
-    await rm(join(info.worktreePath, '.cache'), { recursive: true });
-    expect(await removeWorktree('agent-no-change', sandbox.repo, info.branchName, { merge: false })).toMatchObject({ removed: true });
+    expect(result, JSON.stringify(result)).toMatchObject({ removed: true });
     expect(existsSync(info.worktreePath)).toBe(false);
     expect((await execGit(['show-ref', '--verify', `refs/heads/${info.branchName}`], sandbox.repo, { ignoreExitCode: true })).exitCode).not.toBe(0);
   });

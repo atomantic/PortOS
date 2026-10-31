@@ -187,7 +187,7 @@ export default function BranchReconcileOutcome({ outcomes, apps }) {
                 </ul>
               </details>}
               {(remaining || []).some(isInventoriedCheckout) && (
-                <p>Retiring a checkout is a scoped release of the exact row shown. It needs merged work, a clean checkout, no live owner or manual handoff, and no unique unverified ignored payload. No checkout archive is created. Lock age, an absent process, and lock text never release a checkout on their own.</p>
+                <p>Retiring a checkout is a scoped release of the exact row shown. It needs merged work, a clean checkout, and no live owner or manual handoff; git-ignored files are discarded with it. No checkout archive is created. Lock age, an absent process, and lock text never release a checkout on their own.</p>
               )}
               {Array.isArray(outcome.retired) && outcome.retired.length > 0 && (
                 <div>

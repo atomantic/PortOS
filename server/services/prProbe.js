@@ -98,7 +98,11 @@ export async function readMergedPrTip(sourceWorkspace, branchName) {
   const local = await execGit(['rev-parse', '--verify', `refs/heads/${branchName}`], sourceWorkspace, { ignoreExitCode: true })
     .then(result => result.exitCode === 0 ? result.stdout.trim().toLowerCase() : null).catch(() => null);
   if (!local) return null;
-  const probe = await probePrForBranch(sourceWorkspace, branchName).catch(() => null);
+  // Awaited without `resolveForge`'s abandon-on-timeout race: removal follows this
+  // answer, so no forge lookup may still be running git in the checkout afterwards.
+  const forge = await git.resolveForgeForRepo(sourceWorkspace).catch(() => null);
+  if (!forge?.cli) return null;
+  const probe = await probePrForBranch(sourceWorkspace, branchName, forge).catch(() => null);
   return probe?.readable === true && probe.prState === 'MERGED' && probe.prHead === local ? local : null;
 }
 
