@@ -1,3 +1,4 @@
+import { Check } from 'lucide-react';
 import ShotDiagram from './ShotDiagram';
 
 /**
@@ -14,9 +15,18 @@ export default function ShotDiagramPicker({ options, labels, hints, value, onCha
           return (
             <button key={type} type="button" aria-pressed={checked}
               onClick={() => onChange(checked ? null : type)}
-              className={`min-w-0 rounded border p-0.5 text-left transition-colors ${checked ? 'border-port-accent ring-1 ring-port-accent text-white' : 'border-port-border text-gray-300 hover:border-port-accent/50'}`}>
-              <ShotDiagram kind={type} className="block w-full h-auto" />
-              <span className="mt-0.5 block text-[10px] leading-tight">{labels[type] || type}</span>
+              className={`relative min-w-0 rounded border p-0.5 text-left transition-colors ${checked
+                ? 'border-port-accent bg-port-accent text-white ring-2 ring-port-accent'
+                : 'border-port-border text-gray-300 hover:border-port-accent/50'}`}>
+              {/* The drawing keeps its own backdrop and ink so it stays readable on the inverted tile. */}
+              <span className="block rounded-sm bg-port-bg text-gray-300">
+                <ShotDiagram kind={type} className="block w-full h-auto" />
+              </span>
+              <span className={`mt-0.5 block px-0.5 text-[10px] leading-tight ${checked ? 'font-semibold' : ''}`}>{labels[type] || type}</span>
+              {checked && (
+                <Check size={14} strokeWidth={3} aria-hidden="true"
+                  className="absolute right-1 top-1 rounded-full bg-port-accent p-0.5 text-white" />
+              )}
             </button>
           );
         })}
