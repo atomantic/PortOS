@@ -1094,6 +1094,27 @@ Forgets the budget and recommends lodging that exceeds it.
       const result = await generateEnrichmentQuestion('core_memories', null, null, [0]);
       expect(result.questionIndex).toBe(1);
     });
+
+    // Uniquely catches an automatic load (the Overview banner) reaching a provider (#14445).
+    it('answers exhausted without building a prompt or picking a provider when structuredOnly', async () => {
+      const category = 'core_memories';
+      const scaleIds = SCALE_QUESTIONS.filter(q => q.category === category).map(q => q.id);
+      await setupMetaFile(makeMeta({
+        enrichment: {
+          completedCategories: [],
+          lastSession: null,
+          questionsAnswered: { [category]: ENRICHMENT_CATEGORIES[category].questions.length },
+          scaleQuestionsAnswered: Object.fromEntries(scaleIds.map(id => [id, 3]))
+        }
+      }));
+      buildPrompt.mockClear();
+      getActiveProvider.mockClear();
+
+      const result = await generateEnrichmentQuestion(category, null, null, [], { structuredOnly: true });
+      expect(result).toEqual({ category, exhausted: true });
+      expect(buildPrompt).not.toHaveBeenCalled();
+      expect(getActiveProvider).not.toHaveBeenCalled();
+    });
   });
 
   describe('processEnrichmentAnswer', () => {

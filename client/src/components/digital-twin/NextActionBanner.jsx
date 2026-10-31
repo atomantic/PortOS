@@ -62,6 +62,10 @@ export default function NextActionBanner({ gaps, status, traits, onRefresh }) {
   // A rejected question read is not "category exhausted" (a null answer is):
   // keep the gap and offer Retry instead of skipping to the next category.
   const [questionError, setQuestionError] = useState(null);
+  // The category whose structured questions ran out on an automatic load: a
+  // generated question needs the user's click (no silent provider call, #14445).
+  const [exhaustedCategory, setExhaustedCategory] = useState(null);
+  const [providerName, setProviderName] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [skippedIndices, setSkippedIndices] = useState([]);
   const [copied, setCopied] = useState(false);
@@ -83,6 +87,7 @@ export default function NextActionBanner({ gaps, status, traits, onRefresh }) {
     setCurrentGapIdx(0);
     setQuestion(null);
     setQuestionError(null);
+    setExhaustedCategory(null);
   }, [gapKey]);
 
   // Guards against an older in-flight request overwriting state after a newer
@@ -95,20 +100,28 @@ export default function NextActionBanner({ gaps, status, traits, onRefresh }) {
   const gapsRef = useRef(gaps);
   useEffect(() => { gapsRef.current = gaps; }, [gaps]);
 
-  const loadQuestion = useCallback(async (category, skipList = []) => {
+  const loadQuestion = useCallback(async (category, skipList = [], { generate = false } = {}) => {
     const requestId = ++requestIdRef.current;
     setLoading(true);
     setQuestionError(null);
-    const result = await api.getDigitalTwinEnrichQuestion(category, undefined, undefined, skipList.length ? skipList : undefined, { silent: true })
+    setExhaustedCategory(null);
+    const result = await api.getDigitalTwinEnrichQuestion(category, undefined, undefined, skipList.length ? skipList : undefined, { silent: true, structuredOnly: !generate })
       .then((q) => ({ q, error: null }), (error) => ({ q: null, error }));
     if (requestId !== requestIdRef.current) return; // stale response — a newer request superseded this one
     if (result.error) {
       setQuestion(null);
-      setQuestionError({ error: result.error instanceof Error ? result.error : new Error('Request failed'), category, skipList });
+      setQuestionError({ error: result.error instanceof Error ? result.error : new Error('Request failed'), category, skipList, generate });
       setLoading(false);
       return;
     }
     const q = result.q;
+    if (q?.exhausted) {
+      setQuestion(null);
+      setExhaustedCategory(category);
+      setLoading(false);
+      api.getActiveProvider({ silent: true }).then((provider) => setProviderName(provider?.name || ''), () => setProviderName(''));
+      return;
+    }
     if (!q) {
       // Category exhausted — advance to the next gap with available questions
       setCurrentGapIdx(prev => {
@@ -355,9 +368,27 @@ export default function NextActionBanner({ gaps, status, traits, onRefresh }) {
             <ListLoadError
               what="the next question"
               error={questionError.error}
-              onRetry={() => loadQuestion(questionError.category, questionError.skipList)}
+              onRetry={() => loadQuestion(questionError.category, questionError.skipList, { generate: questionError.generate })}
               className="my-2"
             />
+          ) : exhaustedCategory === activeCategory ? (
+            <div className="flex flex-wrap items-center justify-between gap-2 py-2">
+              <button
+                type="button"
+                onClick={() => loadQuestion(activeCategory, [], { generate: true })}
+                className="min-h-[44px] px-3 py-1.5 bg-port-accent text-white rounded-lg text-sm hover:bg-port-accent/80 flex items-center gap-1.5"
+              >
+                <Sparkles size={14} />
+                Generate a follow-up question{providerName ? ` with ${providerName}` : ''}
+              </button>
+              <button
+                type="button"
+                onClick={() => navigate(`/digital-twin/enrich?category=${activeCategory}`)}
+                className="text-xs text-port-accent hover:text-white"
+              >
+                Full enrichment →
+              </button>
+            </div>
           ) : question ? (
             <>
               <p className="text-sm text-gray-300 mb-3">{question.question}</p>
