@@ -226,6 +226,8 @@ describe('music-video craft and measured choreography', () => {
     expect(prompt).toContain('step through render(ctx, env)');
     expect(prompt).not.toContain('step through renderFrame');
     expect(prompt.indexOf('SELF-REVIEW')).toBeLessThan(prompt.indexOf('OUTPUT:'));
+    // Authoring runs tool-free; a model that "builds" in files returns tool markup, not JSON.
+    expect(prompt.slice(prompt.indexOf('OUTPUT:'))).toContain('Answer in this reply alone: do not write, save, run or test files and do not emit tool calls');
     expect(prompt).toContain('Follow the reviewed energy target and give each section a time-based action plan');
     expect(prompt).toContain('Repeated choruses');
     expect(prompt).toContain('does not require rapid cuts or constant motion');
