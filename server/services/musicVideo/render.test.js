@@ -28,7 +28,7 @@ import {
   renderMusicVideo,
   assertCurrentClipDependencies,
 } from './render.js';
-import { setShotLocks } from './productionReview.js';
+import { productionReviewBasis } from './productionReview.js';
 import { findFfmpeg, probeVideoGeometry } from '../../lib/ffmpeg.js';
 import { loadHistory } from '../videoGen/local.js';
 import { getTrack } from '../tracks/index.js';
@@ -592,16 +592,18 @@ describe('beat-graphic medium cutting (#14244)', () => {
 });
 
 describe('clips made from frames that changed since', () => {
+  // Legacy approval a project saved before lock removal still carries: the
+  // whole board approved plus a `clipApprovals` entry per clip the director locked.
+  const withLegacyClipLocks = (project, sceneIds) => ({ ...project, productionReview: { approvals: { storyboard: { basis: productionReviewBasis(project).storyboard } },
+    clipApprovals: Object.fromEntries(sceneIds.map((id) => [id, { videoHistoryId: `${id}-clip` }])) } });
   // Uniquely catches a locked clip still blocking the render, or the refusal not naming its shots.
-  it('names the shots in song order, and lets a locked clip render as it is', () => {
+  it('names the shots in song order, and lets a legacy locked clip render as it is', () => {
     const shot = (sceneId, startSec) => ({ sceneId, startSec, endSec: startSec + 2, prompt: 'a lighthouse', referenceImageId: `${sceneId}-new.png`, videoHistoryId: `${sceneId}-clip`,
       takes: [{ takeId: `${sceneId}-t`, kind: 'video', assetId: `${sceneId}-clip`, sourceImageId: `${sceneId}-old.png`, status: 'selected' }] });
     const project = { id: 'mv-1', scenes: [shot('late', 6), shot('early', 0), shot('fine', 3)] };
     project.scenes[2].takes[0].sourceImageId = 'fine-new.png';
     expect(() => assertCurrentClipDependencies(project)).toThrow('Shots 1, 3: the clip was made from frames that have since changed. Render a new one');
 
-    const stillLocked = setShotLocks(project, { sceneIds: ['late'], locked: true });
-    const clipLocked = setShotLocks(stillLocked, { sceneIds: ['late'], locked: true, stage: 'video' });
-    expect(() => assertCurrentClipDependencies(clipLocked)).toThrow(/^Shot 1: /);
+    expect(() => assertCurrentClipDependencies(withLegacyClipLocks(project, ['late']))).toThrow(/^Shot 1: /);
   });
 });

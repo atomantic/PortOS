@@ -4,7 +4,7 @@ import { mutateProjectRecord } from './projects.js';
 import { requireProject } from './requireProject.js';
 import { musicVideoEvents } from './events.js';
 import { shotCameraLabel } from '../../lib/cameraMovements.js';
-import { productionReadiness, boardStoryboard, seedArtDraft, productionReviewBasis, productionAlignmentBasis, documentStoryboardBasis, approveProductionStage, assertProductionApproval, setShotLocks, recordProductionFeedback, resolveProductionFeedback, revertApprovedInput, anchorShotsToSungLyrics, dropStaleStoryboardRows, carryStoryboardApproval } from './productionReview.js';
+import { productionReadiness, boardStoryboard, seedArtDraft, productionReviewBasis, productionAlignmentBasis, documentStoryboardBasis, approveProductionStage, assertProductionApproval, recordProductionFeedback, resolveProductionFeedback, revertApprovedInput, anchorShotsToSungLyrics, dropStaleStoryboardRows, carryStoryboardApproval } from './productionReview.js';
 import { sungLyricTextWithin } from '../../lib/musicVideoLyricAnchors.js';
 
 const reviewProcessId = randomUUID();
@@ -170,18 +170,6 @@ export async function reverifyProductionAlignment(id, { basis, notes, reviewer }
 export async function revertProductionInput(id, input) {
   await requireProject(id);
   const { project } = await mutateProjectRecord(id, current => ({ project: revertApprovedInput(current, input) }));
-  return changed(project);
-}
-
-/** Lock or unlock Board shots for an authenticated reviewer, under the project write lock. */
-// Locking a shot's video finalizes it: its other frame and clip takes are rejected, as Reject unused does.
-export async function lockProductionShots(id, input) {
-  const { rejectUnusedTakes } = await import('./takes.js');
-  const { project } = await mutateProjectRecord(id, current => {
-    const locked = setShotLocks(current, input);
-    if (input.stage !== 'video' || !input.locked) return { project: locked };
-    return { project: input.sceneIds.reduce((next, sceneId) => rejectUnusedTakes(next, sceneId).project, locked) };
-  });
   return changed(project);
 }
 

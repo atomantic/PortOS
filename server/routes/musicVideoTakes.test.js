@@ -54,6 +54,12 @@ vi.mock('../services/settings.js', () => ({ getSettings: vi.fn(async () => ({}))
 
 const { default: musicVideoRoutes } = await import('./musicVideo.js');
 const projects = await import('../services/musicVideo/projects.js');
+const { productionReviewBasis } = await import('../services/musicVideo/productionReview.js');
+
+// The approvals a project saved before lock removal still carries (a covering board approval and a
+// clip approval); nothing writes them now.
+const withLegacyLocks = (current, sceneId, videoHistoryId) => ({ ...current, productionReview: { ...current.productionReview,
+  approvals: { storyboard: { basis: productionReviewBasis(current).storyboard } }, clipApprovals: { [sceneId]: { videoHistoryId } } } });
 
 const app = express();
 app.use(express.json());
@@ -311,33 +317,10 @@ describe('swapping a shot from unused takes', () => {
     expect((await request(app).post(`${base()}/scenes/${sceneA.sceneId}/takes/use`).send({ kind: 'endImage', assetId: 'a-1.png', withAssetId: 'clip-a1' })).status).toBe(400);
 
     // Legacy video locks do not prevent changing the reference or discard its clip.
-    const { setShotLocks } = await import('../services/musicVideo/productionReview.js');
-    await projects.mutateProjectRecord(project.id, (current) => ({ project: setShotLocks(
-      setShotLocks(current, { sceneIds: [sceneA.sceneId], locked: true, stage: 'still' }),
-      { sceneIds: [sceneA.sceneId], locked: true, stage: 'video' },
-    ) }));
+    await projects.mutateProjectRecord(project.id, (current) => ({ project: withLegacyLocks(current, sceneA.sceneId, 'clip-b2') }));
     const changed = await request(app).post(`${base()}/scenes/${sceneA.sceneId}/takes/use`).send({ kind: 'image', assetId: 'a-1.png' });
     expect(changed.status).toBe(200);
     expect((await reload()).scenes.find((scene) => scene.sceneId === sceneA.sceneId)).toMatchObject({ referenceImageId: 'a-1.png', videoHistoryId: 'clip-b2' });
-  });
-});
-
-describe('locking a shot\'s video', () => {
-  // Uniquely catches a video lock leaving the shot's other takes as open candidates, or rejecting the ones it uses.
-  it('rejects the shot\'s unused frame and clip takes', async () => {
-    for (const name of ['lock-a.png', 'lock-b.png']) seedImage(name);
-    seedVideoHistory([{ id: 'lock-clip', filename: 'lock-clip.mp4' }, { id: 'lock-other', filename: 'lock-other.mp4' }]);
-    for (const [kind, assetId] of [['image', 'lock-a.png'], ['image', 'lock-b.png'], ['video', 'lock-clip'], ['video', 'lock-other']]) {
-      await addTake(sceneA.sceneId, { kind, assetId, source: 'generated' });
-    }
-    const { setShotLocks } = await import('../services/musicVideo/productionReview.js');
-    const { lockProductionShots } = await import('../services/musicVideo/productionReviewService.js');
-    await projects.mutateProjectRecord(project.id, (current) => ({ project: setShotLocks(current, { sceneIds: [sceneA.sceneId], locked: true, stage: 'still' }) }));
-    await lockProductionShots(project.id, { sceneIds: [sceneA.sceneId], locked: true, stage: 'video' });
-    const scene = (await reload()).scenes.find((s) => s.sceneId === sceneA.sceneId);
-    expect(Object.fromEntries(scene.takes.map((take) => [take.assetId, take.status])))
-      .toEqual({ 'lock-a.png': 'candidate', 'lock-b.png': 'rejected', 'lock-clip': 'candidate', 'lock-other': 'rejected' });
-    expect(scene).toMatchObject({ referenceImageId: 'lock-a.png', videoHistoryId: 'lock-clip' });
   });
 });
 
@@ -381,9 +364,7 @@ describe('a director can change legacy locked shots', () => {
     await addTake(sceneA.sceneId, { kind: 'video', assetId: 'clip-a1', source: 'generated', sourceImageId: 'a-1.png' });
     await addTake(sceneB.sceneId, { kind: 'image', assetId: 'floor.png', source: 'generated' });
     await request(app).delete(`${base()}/scenes/${sceneB.sceneId}`);
-    const { setShotLocks } = await import('../services/musicVideo/productionReview.js');
-    const lockA = async (stage) => projects.mutateProjectRecord(project.id, (current) => ({ project: setShotLocks(current, { sceneIds: [sceneA.sceneId], locked: true, stage }) }));
-    await lockA('still');
+    await projects.mutateProjectRecord(project.id, (current) => ({ project: withLegacyLocks(current, sceneA.sceneId, 'clip-a1') }));
     expect((await request(app).post(`${base()}/scenes/${sceneA.sceneId}/takes/use`).send({ kind: 'image', assetId: 'floor.png' })).status).toBe(200);
     expect((await request(app).post(`${base()}/scenes/${sceneA.sceneId}/takes/${second.body.take.takeId}/select`)).status).toBe(200);
     expect((await request(app).patch(`${base()}/scenes/${sceneA.sceneId}`).send({ prompt: 'Slow push toward the reel' })).status).toBe(200);
