@@ -127,7 +127,11 @@ loading weights. Its capability probe executes six updates for both modality
 grids without loading a model. It does not install Phosphene's runner fork.
 Pika's base revision `42ed227ee7df40d41602854ae760620d6eb651fe` and the existing
 auxiliary checkpoint revision `6818f6c32d12b210915e44ad56a4228c2608f160` have
-identical LFS SHA-256s for all 13 FL2VA transformer shards.
+identical LFS SHA-256s for all 13 FL2VA transformer shards. The auxiliary file
+manifest matches the shipped MLX row exactly: text encoder shards 12/13 contain
+only decoder layers 53–63, beyond the pinned encoder's 50-layer truncation, and
+are intentionally omitted. Shard 14 remains required for the final norm and
+vision tower. Adding the unused shards would change the pinned model contract.
 
 Download explicitly to cache Pika's original 2.77 GB F32 adapter, pinned release
 manifest, LICENSE and NOTICE from its original repository. Admission and the

@@ -6,6 +6,7 @@ import {
   miniMaxH3SpeedProfileContract,
   miniMaxH3SpeedProfileDeclineReason,
 } from './minimaxH3SpeedProfiles.js';
+import { getShippedMediaRegistry } from './mediaModels.js';
 import { applyVideoSpeedProfiles, resolveVideoSpeedProfile, validateSpeedProfileTable } from './videoSpeedProfiles.js';
 
 const model = (profile) => ({ ...profile.model, ...(profile.checkpoint ? { requiredWeights: [profile.checkpoint] } : {}), samplerLocked: true, steps: 9, guidance: 0, speedProfiles: [structuredClone(profile)] });
@@ -72,6 +73,11 @@ describe('separate H3 MLX and CUDA profile contracts', () => {
 
 
 describe('Pika H3 Flex pinned multi-canvas contract', () => {
+  it('matches the actual shipped auxiliary manifest, including intentional truncated-encoder shard omissions', () => {
+    const shipped = getShippedMediaRegistry().video.mlx.find((entry) => entry.id === flex.model.id);
+    expect(shipped.requiredWeights).toEqual([flex.checkpoint]);
+    expect(applyVideoSpeedProfiles([shipped])[0].speedProfiles.map((profile) => profile.id)).toContain(flex.id);
+  });
   it('offers the opt-in six-update schedule only on the pinned MLX model', () => {
     const supported = model(flex);
     for (const [width, height] of flex.canvases) {
