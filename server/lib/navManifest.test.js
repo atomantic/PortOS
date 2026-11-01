@@ -378,6 +378,20 @@ describe('resolveNavCommand — fuzzy matching', () => {
     expect(resolveNavCommand('create music video')?.path).toBe('/music-video?new=project');
   });
 
+  it('resolves section-alias + page phrases (e.g. "digital twin goals") to that page', () => {
+    expect(resolveNavCommand('digital twin goals')?.path).toBe('/digital-twin/goals');
+    expect(resolveNavCommand('digital twin personas')?.path).toBe('/digital-twin/personas');
+    expect(resolveNavCommand('digital twin time capsule')?.path).toBe('/digital-twin/time-capsule');
+
+    const dtCommands = NAV_COMMANDS.filter((c) => c.path.startsWith('/digital-twin/'));
+    expect(dtCommands.length).toBeGreaterThan(0);
+    for (const cmd of dtCommands) {
+      const segment = cmd.path.replace('/digital-twin/', '');
+      const phrase = `digital twin ${segment.replace(/-/g, ' ')}`;
+      expect(resolveNavCommand(phrase)?.path, phrase).toBe(cmd.path);
+    }
+  });
+
   it('resolves exact alias', () => {
     expect(resolveNavCommand('dashboard')?.path).toBe('/');
     expect(resolveNavCommand('tasks')?.path).toBe('/cos/tasks');

@@ -660,6 +660,11 @@ for (const cmd of NAV_COMMANDS) {
   if (!normalizedAliases.has(key) && !sectionLabelCommands.has(key)) sectionLabelCommands.set(key, cmd);
 }
 
+const commandsByPath = new Map();
+for (const cmd of NAV_COMMANDS) {
+  if (!commandsByPath.has(cmd.path)) commandsByPath.set(cmd.path, cmd);
+}
+
 export const resolveNavCommand = (input) => {
   if (!input || typeof input !== 'string') return null;
   const norm = normalizeNavAlias(input);
@@ -667,6 +672,33 @@ export const resolveNavCommand = (input) => {
   const sectionLabelHit = sectionLabelCommands.get(norm);
   if (sectionLabelHit) {
     return { path: sectionLabelHit.path, matched: `${sectionLabelHit.section} ${sectionLabelHit.label}`, command: sectionLabelHit };
+  }
+
+  // Exact declared alias match keeps precedence.
+  const exactAlias = normalizedAliases.get(norm);
+  if (exactAlias) {
+    const path = aliasToPath[exactAlias];
+    const command = NAV_COMMANDS.find((c) => c.path === path && (c.aliases || []).includes(exactAlias))
+      || NAV_COMMANDS.find((c) => c.path === path);
+    return { path, matched: exactAlias, command };
+  }
+
+  // Section-alias + subpath ("digital twin goals" -> /digital-twin/goals).
+  // Runs before the prefix tier so the section alias doesn't hijack the page.
+  for (const a of ALIAS_KEYS) {
+    if (norm.startsWith(`${a}-`)) {
+      const rest = norm.slice(a.length + 1);
+      const origAlias = normalizedAliases.get(a);
+      const targetPath = aliasToPath[origAlias];
+      const base = targetPath?.split('?')[0].split('/').filter(Boolean)[0];
+      if (base) {
+        const candidatePath = `/${base}/${rest}`;
+        const command = commandsByPath.get(candidatePath);
+        if (command) {
+          return { path: candidatePath, matched: command.aliases?.[0] || origAlias, command };
+        }
+      }
+    }
   }
 
   const tail = norm.split('-').filter(Boolean).pop();
