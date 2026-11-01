@@ -256,7 +256,7 @@ export default function LookReferencesPanel({ project, onSave, onSaveSpec, onAdd
       </ul>
       {flagged > 0 && (
         <p className="text-[11px] text-port-text-muted">
-          Conditioning needs an image backend that accepts reference images (local FLUX.2 or Qwen Image 2.1, or a cloud image CLI); others refuse the render and say so. At most {MAX_CONDITIONING_REFERENCES} per frame.
+          Conditioning needs an image backend that accepts reference images (local FLUX.2 or Qwen Image 2.1, or a cloud image CLI); others refuse the render and say so. At most {MAX_CONDITIONING_REFERENCES} can be flagged for every frame; each shot sends as many references as its image renderer takes (Codex 5, Qwen Image 2.1 10, FLUX.2 4).
         </p>
       )}
       <fieldset disabled={busy} className="space-y-2">

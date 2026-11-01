@@ -1256,9 +1256,12 @@ it('keeps a catalog-conditioned sheet for every fixed supporting character throu
   const context = musicVideoDirectionContext(done.castAndSets.direction);
   for (const name of FIXED_SUPPORTING) expect(context).toContain(`Cast ${name}`);
   const { musicVideoConditioningReferences, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES } = await import('../../lib/musicVideoConditioning.js');
-  const shot = musicVideoConditioningReferences(done, { sectionIndex: 0, prompt: 'Anika, Boris, Cyrus, Delia and Elio on the quay' });
+  const shot = musicVideoConditioningReferences(done, { sectionIndex: 0, prompt: 'Anika, Boris, Cyrus, Delia and Elio on the quay' }, null, null, { limit: MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES });
   expect(shot).toHaveLength(MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES);
   expect(shot[2].id).toBe('mvr-cs-cast-anika');
+  // Uncapped, every named cast sheet is listed in order for a renderer that takes more.
+  const all = musicVideoConditioningReferences(done, { sectionIndex: 0, prompt: 'Anika, Boris, Cyrus, Delia and Elio on the quay' });
+  expect(all.filter((ref) => ref.id.startsWith('mvr-cs-cast-')).map((ref) => ref.id).slice(0, 5)).toEqual(['mvr-cs-cast-anika', 'mvr-cs-cast-boris', 'mvr-cs-cast-cyrus', 'mvr-cs-cast-delia', 'mvr-cs-cast-elio']);
 });
 
 it('holds reference room for fixed cast sheets and refuses an approval that cannot fit them (#14069)', async () => {

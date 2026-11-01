@@ -120,18 +120,19 @@ describe('production scene dispatch (#9066)', () => {
       return enqueueJob.mock.calls.at(-1)[0].params.referenceImagePaths.map((path) => basename(path));
     };
     expect(await paths('The drummer counts in while Lou tunes')).toEqual(['character.png', 'harbor.png', 'rico.png', 'bassist.png']);
-    expect(await paths('Rico, Mara and Lou crowd the booth')).toEqual(['character.png', 'harbor.png', 'rico.png', 'mara.png']);
+    // Codex takes five references, so all three named sheets fit after the lead and the set.
+    expect(await paths('Rico, Mara and Lou crowd the booth')).toEqual(['character.png', 'harbor.png', 'rico.png', 'mara.png', 'bassist.png']);
     expect(await paths('She watches the harbor alone')).toEqual(['character.png', 'harbor.png']);
   });
 
-  it('appends capped style images after identities and carries a text look', async () => {
+  it('appends style images after identities up to the renderer limit (Codex: five) and carries a text look', async () => {
     await dispatchProductionStep({ stepKind: 'frame', project: { ...project,
       styleReferences: Array.from({ length: 8 }, (_, i) => ({ imageId: `style-${i}.png`, caption: 'teal shadows, fine grain' })),
     }, scene, route: { kind: 'image', mode: 'codex', model: null }, tag, settings });
     const params = enqueueJob.mock.calls[0][0].params;
-    expect(params.referenceImagePaths.map((p) => basename(p))).toEqual(['ref-example.png', 'style-0.png', 'style-1.png', 'style-2.png']);
+    expect(params.referenceImagePaths.map((p) => basename(p))).toEqual(['ref-example.png', 'style-0.png', 'style-1.png', 'style-2.png', 'style-3.png']);
     expect(params.prompt).toContain('teal shadows, fine grain');
-    expect(params.referenceImageStrengths).toEqual([1, 1, 1, 1]);
+    expect(params.referenceImageStrengths).toEqual([1, 1, 1, 1, 1]);
   });
 
   it('refuses a disabled backend instead of rendering on another one', async () => {

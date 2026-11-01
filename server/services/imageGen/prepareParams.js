@@ -29,7 +29,7 @@
 
 import { createHash, randomUUID } from 'crypto';
 import { applyImageVisualProfile } from './visualProfile.js';
-import { musicVideoCastGuideReferences, musicVideoPanelArtReferences, musicVideoStyleImages, musicVideoStylePrompt, musicVideoStyleReferenceCapacity } from '../../lib/musicVideoConditioning.js';
+import { musicVideoCastGuideReferences, musicVideoPanelArtReferences, musicVideoStyleImages, musicVideoReferenceCapacity, musicVideoStylePrompt, musicVideoStyleReferenceCapacity } from '../../lib/musicVideoConditioning.js';
 import { musicVideoFrameModelInput } from '../../lib/musicVideoShotPrompt.js';
 import { join } from 'node:path';
 import { assertFlux2InputsCompatible } from '../../lib/flux2Inputs.js';
@@ -185,6 +185,11 @@ async function applyMusicVideoSceneInputs(data, { project, mode, localModel, nam
   if (greybox) {
     placeGreyboxReference(namedReferenceFiles, greybox.reference.imageId, { cachedCapture: tag.greyboxImageId, fromFrame: tag.fromFrame || tag.refine });
   }
+  // The board sends its priority-ordered references; this renderer takes as many as it can (a peer decides its own).
+  if (!data.mediaProviderPeerId) {
+    const room = Math.max(0, musicVideoReferenceCapacity(mode, { modelId: data.cloudModel || null, localModel }) - initInputCount - referenceUploads.length);
+    if (namedReferenceFiles.length > room) namedReferenceFiles.splice(room);
+  }
   if (tag.compose) {
     // A peer chooses its runner; local incompatible inputs are rejected below.
     const positionsUnknown = Boolean(data.mediaProviderPeerId && initInputCount);
@@ -211,7 +216,7 @@ async function applyMusicVideoSceneInputs(data, { project, mode, localModel, nam
     data.promptAdditions = [...(data.promptAdditions || []), ...greybox.promptAdditions];
   }
   const reservedSlots = referenceUploads.length + initInputCount;
-  const capacity = Math.max(0, musicVideoStyleReferenceCapacity(mode, localModel) - reservedSlots);
+  const capacity = Math.max(0, musicVideoStyleReferenceCapacity(mode, localModel, data.cloudModel || null) - reservedSlots);
   const styles = musicVideoStyleImages(project, namedReferenceFiles, capacity);
   // Named inputs precede uploads. Keep the latter's packed strength positions intact.
   if (!referenceUploads.length) namedReferenceFiles.push(...styles);
@@ -229,8 +234,11 @@ function referenceImageCap({ peerRouted, mode, isQwen21, isFlux3, fableLoom, clo
   if (peerRouted) return IMAGE_REFERENCE_REQUEST_LIMIT;
   if (mode === IMAGE_GEN_MODE.RUNWAY) return maxInputImages(mode, cloudModel);
   if (isQwen21 || isFlux3) return 10;
-  if (fableLoom && CLOUD_IMAGE_GEN_MODES.includes(mode)) {
-    return Math.min(maxInputImages(mode, cloudModel) ?? IMAGE_REFERENCE_REQUEST_LIMIT, IMAGE_REFERENCE_REQUEST_LIMIT);
+  // A cloud image CLI takes its own provider's (or model's) limit, not a fixed 4.
+  if (CLOUD_IMAGE_GEN_MODES.includes(mode)) {
+    if (fableLoom) return Math.min(maxInputImages(mode, cloudModel) ?? IMAGE_REFERENCE_REQUEST_LIMIT, IMAGE_REFERENCE_REQUEST_LIMIT);
+    // A provider that takes fewer is refused below with its own input-image count.
+    return Math.min(Math.max(4, maxInputImages(mode, cloudModel) ?? 4), IMAGE_REFERENCE_REQUEST_LIMIT);
   }
   return 4;
 }

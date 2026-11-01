@@ -701,7 +701,8 @@ export const musicVideoPreMusicSchema = z.object({
 // see musicVideoLayers.js. Only a composed render honors a non-footage layer.
 const sceneLayerFields = {
   // The references (visual spec ids) sent with this shot's frame renders; absent or null = the automatic set.
-  frameReferenceIds: z.array(z.string().min(1).max(128)).max(MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES).nullable().optional(),
+  // Priority-ordered; each render sends as many as its renderer takes (musicVideoReferenceCapacity).
+  frameReferenceIds: z.array(z.string().min(1).max(128)).max(16).nullable().optional(),
   setReference: musicVideoSceneSetReferenceSchema.nullable().optional(),
   characterVariant: musicVideoSceneCharacterVariantSchema.nullable().optional(),
   camera: musicVideoSceneCameraSchema.nullable().optional(),

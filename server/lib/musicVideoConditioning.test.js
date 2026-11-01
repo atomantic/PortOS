@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { musicVideoConditioningReferences, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES } from './musicVideoConditioning.js';
+import { musicVideoConditioningReferences, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES , musicVideoReferenceCapacity } from './musicVideoConditioning.js';
 
 const CAST_ID = 'cat-chr-example';
 const guide = (mediaKey, age, extra = {}) => ({ mediaKey, kind: 'reference', createdAt: '2026-01-01T00:00:00.000Z', library: { variant: { age }, guide: true }, ...extra });
@@ -31,8 +31,10 @@ describe('musicVideoConditioningReferences with Casting guides', () => {
     const refs = musicVideoConditioningReferences(project(authored), { characterVariant: { ingredientId: CAST_ID, age: 7 } }, many);
     expect(ids(refs)).toEqual(['a.png', 'lead.png', 'set.png']);
     const five = { [CAST_ID]: [1, 2, 3, 4, 5].map((n) => guide(`g${n}.png`, 7, { library: { variant: { age: 7 } } }))};
-    expect(musicVideoConditioningReferences(project(authored), { characterVariant: { ingredientId: CAST_ID } }, five))
-      .toHaveLength(MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES);
+    // A renderer's capacity caps the list; without one it keeps every pick in priority order.
+    expect(musicVideoConditioningReferences(project(authored), { characterVariant: { ingredientId: CAST_ID } }, five, null, { limit: 4 }))
+      .toHaveLength(4);
+    expect(musicVideoConditioningReferences(project(authored), { characterVariant: { ingredientId: CAST_ID } }, five).length).toBeGreaterThan(4);
   });
 
   // Uniquely catches a guide the image route would reject (400) taking a slot a sendable guide should fill.
@@ -137,9 +139,18 @@ describe('musicVideoConditioningReferences with an approved Cast & Sets check-in
   // Uniquely catches a shot whose song section was cleared (a replaced song) dropping the
   // cast sheets it names for the capped authored set, so a co-lead is drawn from text alone.
   it('keeps the named cast when the shot has no song section, filling spare slots with the authored set', () => {
-    expect(ids(musicVideoConditioningReferences(checkedIn, scene({ sectionIndex: null }))))
+    expect(ids(musicVideoConditioningReferences(checkedIn, scene({ sectionIndex: null }), null, null, { limit: 4 })))
       .toEqual(['lead-sheet.png', 'kevin-sheet.png', 'street.png', 'mall.png']);
-    expect(ids(musicVideoConditioningReferences(checkedIn, { framePrompt: 'An empty street at dawn' })))
+    expect(ids(musicVideoConditioningReferences(checkedIn, { framePrompt: 'An empty street at dawn' }, null, null, { limit: 4 })))
       .toEqual(['lead-sheet.png', 'street.png', 'mall.png', 'lot.png']);
+  });
+});
+
+describe('musicVideoReferenceCapacity', () => {
+  it('follows the image renderer, not a fixed four', () => {
+    expect(musicVideoReferenceCapacity('codex')).toBe(5);
+    expect(musicVideoReferenceCapacity('local', { localModel: { pipelineClass: 'QwenImage21Pipeline' } })).toBe(10);
+    expect(musicVideoReferenceCapacity('local', { localModel: { runner: 'flux2' } })).toBe(4);
+    expect(musicVideoReferenceCapacity('local', { localModel: { runner: 'mflux' } })).toBe(0);
   });
 });

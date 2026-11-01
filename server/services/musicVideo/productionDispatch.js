@@ -36,6 +36,7 @@ import { preMusicClipSound } from '../../lib/musicVideoColdOpen.js';
 import { conditioningReferences, falRouteVideoSettings, runwayRouteVideoSettings } from './productionPool.js';
 import { loadSceneCastMedia } from './castGuideMedia.js';
 import { castInputsFromReferences } from '../../lib/musicVideoCastLook.js';
+import { musicVideoReferenceCapacity } from '../../lib/musicVideoConditioning.js';
 import { musicVideoFrameGenSize } from '../../lib/musicVideoAspect.js';
 
 const unprompted = (scene, what) => new ServerError(
@@ -59,9 +60,13 @@ async function dispatchFrame({ project, scene, route, tag, settings }) {
   const greybox = await loadMusicVideoGreybox(project, scene);
   // A Casting guide may live in any image-input root (catalog.js validates it with resolveImageInputPath).
   const chosen = conditioningReferences(project, scene, await loadSceneCastMedia(scene), greybox);
+  // As many references, in priority order, as this route's image renderer takes.
+  const localModel = route.mode === 'local' ? (await import('../../lib/mediaModels.js')).getImageModels().find((m) => m.id === route.model) || null : null;
+  const capacity = musicVideoReferenceCapacity(route.mode, { modelId: route.model, localModel });
   const sent = [];
   const referenceImagePaths = [];
   for (const ref of chosen) {
+    if (sent.length >= capacity) break;
     const path = ref.greybox ? greybox.path : ref.castGuide ? resolveImageInputPath(ref.imageId) : resolveGalleryImage(ref.imageId, { mustExist: false });
     if (!path) continue;
     referenceImagePaths.push(path);

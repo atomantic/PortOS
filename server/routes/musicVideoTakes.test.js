@@ -536,7 +536,7 @@ describe('a shot\'s frame references', () => {
     expect(saved.status).toBe(200);
     // Outside inspiration is never sent as an image, even when named.
     expect(musicVideoConditioningReferences(await reload(), await sceneOf()).map((ref) => ref.id)).toEqual(['tattooist']);
-    expect((await request(app).patch(`${base()}/scenes/${sceneA.sceneId}`).send({ frameReferenceIds: ['a', 'b', 'c', 'd', 'e'] })).status).toBe(400);
+    expect((await request(app).patch(`${base()}/scenes/${sceneA.sceneId}`).send({ frameReferenceIds: Array.from({ length: 17 }, (_, i) => `ref-${i}`) })).status).toBe(400);
     // Back to auto.
     await request(app).patch(`${base()}/scenes/${sceneA.sceneId}`).send({ frameReferenceIds: null });
     expect(musicVideoConditioningReferences(await reload(), await sceneOf()).map((ref) => ref.id)).toEqual(['lead']);
