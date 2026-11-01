@@ -379,7 +379,10 @@ describe('resolveNavCommand — fuzzy matching', () => {
   });
 
   it('resolves section-alias + page phrases (e.g. "digital twin goals") to that page', () => {
-    expect(resolveNavCommand('digital twin goals')?.path).toBe('/digital-twin/goals');
+    expect(resolveNavCommand('digital twin goals')).toMatchObject({
+      path: '/digital-twin/goals',
+      matched: 'digital twin goals',
+    });
     expect(resolveNavCommand('digital twin personas')?.path).toBe('/digital-twin/personas');
     expect(resolveNavCommand('digital twin time capsule')?.path).toBe('/digital-twin/time-capsule');
 
@@ -390,6 +393,9 @@ describe('resolveNavCommand — fuzzy matching', () => {
       const phrase = `digital twin ${segment.replace(/-/g, ' ')}`;
       expect(resolveNavCommand(phrase)?.path, phrase).toBe(cmd.path);
     }
+
+    // Leaf aliases on nested paths (e.g. "tasks" -> /cos/tasks) are not rewritten as section roots.
+    expect(resolveNavCommand('tasks agents')?.path).not.toBe('/cos/agents');
   });
 
   it('resolves exact alias', () => {

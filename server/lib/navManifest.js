@@ -685,20 +685,31 @@ export const resolveNavCommand = (input) => {
 
   // Section-alias + subpath ("digital twin goals" -> /digital-twin/goals).
   // Runs before the prefix tier so the section alias doesn't hijack the page.
+  // Applies only to section-root aliases whose segment matches the alias, keeping
+  // the longest matching prefix when multiple section aliases qualify.
+  let subpathHit = null;
   for (const a of ALIAS_KEYS) {
     if (norm.startsWith(`${a}-`)) {
       const rest = norm.slice(a.length + 1);
       const origAlias = normalizedAliases.get(a);
       const targetPath = aliasToPath[origAlias];
       const base = targetPath?.split('?')[0].split('/').filter(Boolean)[0];
-      if (base) {
+      if (base && base === a) {
         const candidatePath = `/${base}/${rest}`;
         const command = commandsByPath.get(candidatePath);
-        if (command) {
-          return { path: candidatePath, matched: command.aliases?.[0] || origAlias, command };
+        if (command && (!subpathHit || a.length > subpathHit.alias.length)) {
+          subpathHit = {
+            path: candidatePath,
+            matched: `${origAlias.replace(/-/g, ' ')} ${rest.replace(/-/g, ' ')}`,
+            command,
+            alias: a,
+          };
         }
       }
     }
+  }
+  if (subpathHit) {
+    return { path: subpathHit.path, matched: subpathHit.matched, command: subpathHit.command };
   }
 
   const tail = norm.split('-').filter(Boolean).pop();
