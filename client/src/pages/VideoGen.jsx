@@ -109,7 +109,7 @@ import LoraPicker from '../components/imageGen/LoraPicker';
 import { VIDEO_RESOLUTIONS, resolutionOptionsForModel } from '../lib/videoGenResolutions';
 import { GROK_VIDEO_DURATIONS } from '../lib/grokVideoClip.js';
 import {
-  FAL_DEFAULT_IMAGE_VIDEO_MODEL, FAL_DEFAULT_TEXT_VIDEO_MODEL, getFalVideoModel, falVideoResolutions,
+  getFalVideoModel, falVideoResolutions,
 } from '../lib/falVideoModels.js';
 import { REACTOR_MAX_PROMPT_LENGTH } from '../lib/reactorVideoClip.js';
 import {
