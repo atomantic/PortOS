@@ -417,6 +417,12 @@ function setupRecordEventForwarding() {
       ioInstance?.emit('commission:changed', { id: recordId });
     } else if (recordKind === 'storyboard') {
       ioInstance?.emit('storyboard:changed', { id: recordId });
+    } else if (recordKind === 'series') {
+      ioInstance?.emit('pipeline-series:changed', { id: recordId });
+    } else if (recordKind === 'universe') {
+      ioInstance?.emit('universe:changed', { id: recordId });
+    } else if (recordKind === 'musicVideoProject') {
+      ioInstance?.emit('music-video:project:changed', { id: recordId });
     }
   };
   recordEvents.on('updated', forward);

@@ -2,6 +2,19 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act, waitFor } from '@testing-library/react';
 import { useFocusRefreshedList } from './useFocusRefreshedList.js';
 
+const socket = vi.hoisted(() => {
+  const handlers = new Map();
+  return {
+    on: vi.fn((event, handler) => handlers.set(event, [...(handlers.get(event) || []), handler])),
+    off: vi.fn((event, handler) => handlers.set(event, (handlers.get(event) || []).filter((h) => h !== handler))),
+    emit: (event, data) => (handlers.get(event) || []).forEach((h) => h(data)),
+    count: (event) => (handlers.get(event) || []).length,
+  };
+});
+vi.mock('../services/socket', () => ({ default: socket }));
+
+const RECORD_EVENTS = ['example:record:changed'];
+
 const fireFocus = () => act(() => { window.dispatchEvent(new Event('focus')); });
 
 describe('useFocusRefreshedList', () => {
@@ -90,5 +103,56 @@ describe('useFocusRefreshedList', () => {
     unmount();
     expect(removeSpy).toHaveBeenCalledWith('focus', expect.any(Function));
     removeSpy.mockRestore();
+  });
+
+  it('reloads once per burst of record change events so an in-app create, rename or delete reaches the list', async () => {
+    const fetchFn = vi.fn()
+      .mockResolvedValueOnce([{ id: '1', name: 'A' }])
+      .mockResolvedValue([{ id: '1', name: 'A' }, { id: '2', name: 'B' }]);
+    const { result } = renderHook(() => useFocusRefreshedList(fetchFn, 'records', RECORD_EVENTS));
+    await waitFor(() => expect(result.current.length).toBe(1));
+
+    act(() => {
+      socket.emit('example:record:changed', { id: '2' });
+      socket.emit('example:record:changed', { id: '2' });
+      socket.emit('example:record:changed', { id: '1' });
+    });
+    await waitFor(() => expect(result.current.map((i) => i.id)).toEqual(['1', '2']), { timeout: 3000 });
+    expect(fetchFn).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps the newest list when an older read resolves after it', async () => {
+    let resolveFirst;
+    const fetchFn = vi.fn()
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveFirst = resolve; }))
+      .mockResolvedValue([{ id: '2', name: 'B' }]);
+    const { result } = renderHook(() => useFocusRefreshedList(fetchFn, 'records', RECORD_EVENTS));
+    act(() => { socket.emit('connect'); });
+    await waitFor(() => expect(result.current.map((i) => i.id)).toEqual(['2']));
+    await act(async () => { resolveFirst([{ id: '1', name: 'A deleted since' }]); });
+    expect(result.current.map((i) => i.id)).toEqual(['2']);
+  });
+
+  it('still applies an older read when the newer overlapping read fails', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    let resolveFirst;
+    const fetchFn = vi.fn()
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveFirst = resolve; }))
+      .mockRejectedValueOnce(new Error('offline'));
+    const { result } = renderHook(() => useFocusRefreshedList(fetchFn, 'records', RECORD_EVENTS));
+    act(() => { socket.emit('connect'); });
+    await waitFor(() => expect(fetchFn).toHaveBeenCalledTimes(2));
+    await act(async () => { resolveFirst([{ id: '1', name: 'A' }]); });
+    expect(result.current.map((i) => i.id)).toEqual(['1']);
+  });
+
+  it('detaches record and reconnect listeners on unmount', async () => {
+    const fetchFn = vi.fn().mockResolvedValue([]);
+    const { unmount } = renderHook(() => useFocusRefreshedList(fetchFn, 'records', RECORD_EVENTS));
+    await waitFor(() => expect(fetchFn).toHaveBeenCalledTimes(1));
+    expect(socket.count('example:record:changed')).toBe(1);
+    unmount();
+    expect(socket.count('example:record:changed')).toBe(0);
+    expect(socket.count('connect')).toBe(0);
   });
 });

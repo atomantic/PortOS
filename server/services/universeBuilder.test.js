@@ -246,6 +246,21 @@ describe("universeBuilder service", () => {
     });
   });
 
+  it("announces a created or inserted universe to open sidebars without a federation push", async () => {
+    const invalidated = [];
+    const updated = [];
+    const onInvalidated = ({ recordKind, recordId }) => invalidated.push(`${recordKind}:${recordId}`);
+    const onUpdated = ({ recordKind }) => updated.push(recordKind);
+    recordEvents.on("invalidated", onInvalidated);
+    recordEvents.on("updated", onUpdated);
+    const created = await svc.createUniverse({ name: "Fresh Universe" });
+    const inserted = await svc.insertUniverseWithId({ id: "ub-00000000-0000-4000-8000-000000000001", name: "Imported Universe" });
+    recordEvents.off("invalidated", onInvalidated);
+    recordEvents.off("updated", onUpdated);
+    expect(invalidated).toEqual([`universe:${created.id}`, `universe:${inserted.id}`]);
+    expect(updated.filter((kind) => kind === "universe")).toEqual([]);
+  });
+
   it("createUniverse persists with sanitized categories + kind tags", async () => {
     const w = await seedWorld();
     expect(w.id).toBe(mockUuid(1));
