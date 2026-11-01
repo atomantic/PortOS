@@ -9,7 +9,7 @@ const { decode } = vi.hoisted(() => ({ decode: vi.fn(async () => ({ stdout: 'out
 vi.mock('../../lib/childProcess.js', () => ({ execFile: Object.assign(() => {}, { [Symbol.for('nodejs.util.promisify.custom')]: decode }) }));
 
 vi.mock('../../lib/ffmpeg.js', () => ({ findFfmpeg: vi.fn(async () => 'ffmpeg') }));
-import { __testing, generateSunoSong } from './autonomousSuno.js';
+import { __testing, generateSunoSong, submitSunoSongOnly } from './autonomousSuno.js';
 
 const { submitSunoSong } = __testing;
 
@@ -32,6 +32,8 @@ function fakePage({ url = 'https://suno.com/create', hasForm = true, modern = tr
     if (selector === 'textarea') return hasForm ? 1 : 0;
     if (selector === '[role="textbox"][aria-label="Lyrics editor"]') return modern ? 1 : 0;
     if (selector === 'input[placeholder="Exclude styles"]:visible') return options?.expanded ? 1 : 0;
+    // The current page's More Options toggle carries aria-expanded; older builds have none.
+    if (selector === '[aria-expanded]') return options?.toggle ? 1 : 0;
     if (selector === 'input[placeholder="Exclude styles"]' || selector === 'button[aria-haspopup="menu"]') return options ? 1 : 0;
     return 1;
   };
@@ -42,24 +44,32 @@ function fakePage({ url = 'https://suno.com/create', hasForm = true, modern = tr
       const present = options && (label === 'Vocal Gender' ? options.gender !== undefined : label === 'Max Mode' ? options.maxMode !== undefined : false);
       const rowHandle = {
         count: async () => (present ? 1 : 0),
-        getByRole: (_role, { name }) => {
+        locator: () => ({ filter: ({ hasText: name }) => {
           const choice = ['male', 'female', 'on', 'off'].find((c) => name.test(c));
           const selected = () => (label === 'Vocal Gender' ? options.gender : options.maxMode) === choice;
           const btn = {
-            getAttribute: async () => (selected() ? 'hxc-btn-base hxc-btn-variant-standard-legacy' : 'hxc-btn-base hxc-btn-variant-tertiary-legacy'),
+            // The current page marks the choice with data-selected; older builds with the button variant class.
+            getAttribute: async (attr) => (options.attrUi
+              ? (attr === 'data-selected' ? String(selected()) : attr === 'class' ? 'hxc-btn-base hxc-btn-variant-tertiary-legacy' : null)
+              : attr === 'class' ? (selected() ? 'hxc-btn-base hxc-btn-variant-standard-legacy' : 'hxc-btn-base hxc-btn-variant-tertiary-legacy') : null),
             click: async () => { if (label === 'Vocal Gender') options.gender = choice; else options.maxMode = choice; actions.push(`${label === 'Vocal Gender' ? 'gender' : 'max'}:${choice}`); },
           };
           return { count: async () => 1, first: () => btn };
-        },
+        } }),
       };
-      return { ...rowHandle, last: () => rowHandle };
+      // Only the visible copy of a row is used; the page also renders a hidden one.
+      return { filter: ({ visible }) => (visible ? { last: () => rowHandle } : { last: () => ({ count: async () => 0 }) }) };
     }
     const handle = {
       count: async () => count(selector),
       waitFor: async () => {},
       fill: async (v) => { fills[selector] = v; },
-      click: async () => { if (selector === 'button[aria-haspopup="menu"]') actions.push('open-version-menu'); },
+      click: async () => {
+        if (selector === 'button[aria-haspopup="menu"]') actions.push('open-version-menu');
+        if (selector === '[aria-expanded]') { options.expanded = true; actions.push('more-options'); }
+      },
       innerText: async () => `  ${options?.version}  `,
+      getAttribute: async (attr) => (attr === 'aria-expanded' ? String(!!options?.expanded) : null),
     };
     return { ...handle, first: () => handle, filter: () => ({ ...handle, first: () => handle }) };
   };
@@ -185,6 +195,17 @@ describe('submitSunoSong', () => {
     expect(chosen.actions).toEqual(['open-version-menu', 'key:Escape', 'create']);
   });
 
+  it('reads the current page\'s data-selected marking, picking only unselected choices', async () => {
+    // The collapsed section's fields still count as visible, so only the toggle's aria-expanded says it is shut.
+    const page = fakePage({ options: { version: 'v6', menuItems: ['v6 Pro'], expanded: false, toggle: true, gender: null, maxMode: 'off', attrUi: true } });
+    await submitSunoSong(page, { ...fields, vocalGender: 'male', maxMode: true }, { sleep: noSleep });
+    expect(page.actions).toEqual(['more-options', 'gender:male', 'max:on', 'create']);
+
+    const chosen = fakePage({ options: { version: 'v6', menuItems: ['v6 Pro'], expanded: true, toggle: true, gender: 'male', maxMode: 'on', attrUi: true } });
+    await submitSunoSong(chosen, { ...fields, vocalGender: 'male', maxMode: true }, { sleep: noSleep });
+    expect(chosen.actions).toEqual(['create']);
+  });
+
   it('touches none of the options when the brief sets none, and clears exclusions only when asked', async () => {
     const page = fakePage({ options: { version: 'v5', menuItems: ['v5 Pro', 'v6 Pro'], expanded: false, gender: null, maxMode: 'off' } });
     await submitSunoSong(page, { ...fields, excludeStyles: null, vocalGender: null, model: null, maxMode: null }, { sleep: noSleep });
@@ -302,6 +323,22 @@ describe('generateSunoSong M4A export', () => {
     expect(w.page.close).toHaveBeenCalled();
     expect(w.browser.close).toHaveBeenCalled();
     await expect(stat(w.savedPath())).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('submits without exporting for the song checkpoint, then exports only the render the director picked', async () => {
+    const w = workflow();
+    const onSubmitted = vi.fn();
+    expect(await submitSunoSongOnly(fields, { ...w, onSubmitted, sleep: noSleep })).toEqual([NEW_A, NEW_B]);
+    expect(onSubmitted).toHaveBeenCalledWith([NEW_A, NEW_B]);
+    expect(w.actions).not.toContain('export');
+    expect(w.importAudio).not.toHaveBeenCalled();
+    expect(w.page.close).toHaveBeenCalled();
+
+    const picked = workflow();
+    const out = await generateSunoSong(fields, { ...picked, songIds: [NEW_A, NEW_B], exportSongId: NEW_A });
+    expect(out).toMatchObject({ songId: NEW_A });
+    expect(picked.page.goto).toHaveBeenCalledExactlyOnceWith(`https://suno.com/song/${NEW_A}`, expect.any(Object));
+    expect(picked.actions.filter(x => x === 'export')).toHaveLength(1);
   });
 
   it('reports each sub-step in order, skips generating on a resume, and survives a throwing reporter', async () => {

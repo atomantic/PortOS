@@ -94,15 +94,20 @@ const skipped = (control) => console.log(`⏭️ ${LABEL}: ${control} not found 
  * the page has no such control; none of them blocks the song.
  */
 // Suno's option rows ("Vocal Gender", "Max Mode", "Duration") are a label span
-// beside a few plain buttons; the chosen one carries the `standard` button
-// variant, the rest the `tertiary` one. Clicking the chosen button again may
-// toggle it off, so only click when it is not already selected.
-const optionRow = (page, label) => page.locator(`div:has(> div > span:text-is("${label}"))`).last();
-const isSelected = async (button) => /hxc-btn-variant-standard/.test((await button.getAttribute('class')) || '');
+// beside a few plain buttons. The page also renders a hidden copy of each row,
+// so only a visible row counts. The chosen button reports `data-selected` or
+// `aria-pressed` (older builds: the `standard` button variant). Clicking the
+// chosen button again may toggle it off, so only click when it is not selected.
+const optionRow = (page, label) => page.locator(`div:has(> div > span:text-is("${label}"))`).filter({ visible: true }).last();
+const isSelected = async (button) => {
+  const [selected, pressed, cls] = await Promise.all(['data-selected', 'aria-pressed', 'class'].map((name) => button.getAttribute(name)));
+  return selected === 'true' || pressed === 'true' || /hxc-btn-variant-standard/.test(cls || '');
+};
 async function chooseInRow(page, label, name) {
   const row = optionRow(page, label);
   if (!await row.count()) return skipped(`the ${label} row`);
-  const button = row.getByRole('button', { name });
+  // The buttons' accessible names do not resolve on the current page, so match their text.
+  const button = row.locator('button').filter({ hasText: name });
   if (!await button.count()) return skipped(`the ${label} buttons`);
   if (await isSelected(button.first())) return;
   await button.first().click({ timeout: T });
@@ -133,6 +138,13 @@ async function setSunoOptions(page, fields) {
   // Exclude styles, vocal gender and Max Mode sit in the collapsible "More Options" section.
   if (fields.excludeStyles != null || fields.vocalGender || fields.maxMode != null) {
     await step(LABEL, 'open More Options', async () => {
+      // A collapsed section stays in the DOM, clipped (so Playwright still calls its
+      // fields visible) and covered by the form's scroller: trust the toggle's own state.
+      const toggle = page.locator('[aria-expanded]').filter({ hasText: /^\s*more options\s*$/i });
+      if (await toggle.count()) {
+        if (await toggle.first().getAttribute('aria-expanded') !== 'true') await toggle.first().click({ timeout: T });
+        return;
+      }
       if (await page.locator('input[placeholder="Exclude styles"]:visible').count()) return;
       const more = page.getByText(/^more options$/i);
       if (!await more.count()) return skipped('the More Options section');
@@ -415,12 +427,37 @@ async function closeSunoBrowser(page, browser) {
 // Suno returns two renders per request; the second is usually the better one.
 // A single-id resume (or a one-render result) falls back to the only id.
 const pickRender = (ids) => ids[1] ?? ids[0];
+// The render the director picked at the song checkpoint, when it is one of this request's.
+const chosenRender = (ids, picked) => (picked && ids.includes(picked) ? picked : pickRender(ids));
+
+/**
+ * Submit a song to Suno and stop: no export, so no download credit is spent.
+ * The song checkpoint parks on these ids until the director picks a render,
+ * then `generateSunoSong` exports only that one (`songIds` + `exportSongId`).
+ */
+export async function submitSunoSongOnly(fields, deps = {}) {
+  const connect = deps.connect || connectPortosBrowser;
+  return serialize(async () => {
+    deps.signal?.throwIfAborted();
+    const { browser, context } = await connect();
+    let page;
+    try {
+      page = await context.newPage();
+      const ids = await submitSunoSong(page, fields, deps);
+      await deps.onSubmitted?.(ids);
+      return ids;
+    } finally {
+      await closeSunoBrowser(page, browser);
+    }
+  });
+}
 
 /**
  * Generate (or resume) a song and import its completed, validated M4A.
  * `deps.onProgress(step)` reports the long stage's sub-steps — `opening`,
  * `generating`, `exporting`, `validating`, `importing` — so the run can show
  * where a ten-minute stage is; a throwing reporter never fails the song.
+ * `deps.exportSongId` exports that render of `deps.songIds` instead of the default.
  */
 export async function generateSunoSong(fields, deps = {}) {
   const report = (name) => { try { deps.onProgress?.(name); } catch { /* progress is advisory */ } };
@@ -444,7 +481,7 @@ export async function generateSunoSong(fields, deps = {}) {
         const ids = deps.songIds?.length ? deps.songIds : await submitSunoSong(page, fields, deps);
         if (!deps.songIds?.length) await deps.onSubmitted?.(ids);
         report('exporting');
-        await downloadSunoAudio(page, pickRender(ids), path, exportDeps);
+        await downloadSunoAudio(page, chosenRender(ids, deps.exportSongId), path, exportDeps);
         return ids;
       } finally {
         await closeSunoBrowser(page, browser); // disconnect; keep the shared browser running
@@ -453,7 +490,7 @@ export async function generateSunoSong(fields, deps = {}) {
     deps.signal?.throwIfAborted();
     report('importing');
     const { filename, sizeBytes } = await importAudio(path, 'song.m4a');
-    return { songId: pickRender(songIds), songIds, filename, sizeBytes };
+    return { songId: chosenRender(songIds, deps.exportSongId), songIds, filename, sizeBytes };
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

@@ -84,6 +84,10 @@ const stageDoubles = () => ({
     await opts.onSubmitted(['song-a']);
     return { songId: 'song-a', songIds: ['song-a'], filename: 'music-song-a.mp3' };
   },
+  submitSunoSong: async (_fields, opts) => {
+    await opts.onSubmitted(['song-a']);
+    return ['song-a'];
+  },
   createTrack: async () => ({ id: 'track-1' }),
   attachAudio: async () => ({}),
   probeDuration: async () => 120,
@@ -215,9 +219,12 @@ describe('POST /api/music-video/autonomous', () => {
     expect((await resume({ retakeSong: true, suno: { vocalGender: 'male' } })).status).toBe(200);
     await settle();
     expect(await get(id)).toMatchObject({
-      status: 'awaiting-approval', awaiting: 'song', stages: { song: { status: 'done' } },
+      // Parked on the fresh renders, before any download.
+      status: 'awaiting-approval', awaiting: 'song', stage: 'song', stages: { song: { status: 'pending', step: 'pick-take' } },
       brief: { suno: { excludeStyles: 'metal', vocalGender: 'male', model: 'v6' } },
     });
+    // Only a render of this request can be picked for the download.
+    expect((await resume({ sunoSongId: 'not-a-suno-id' })).status).toBe(400);
   });
 
   it('requires a session for approval grants and audits an agent grant without storing legacy passwords', async () => {

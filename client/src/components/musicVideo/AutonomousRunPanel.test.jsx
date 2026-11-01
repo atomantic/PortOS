@@ -149,6 +149,18 @@ describe('AutonomousRunPanel', () => {
     await waitFor(() => expect(api.resumeAutonomousMusicVideo).toHaveBeenCalledWith('mv-1', { retakeSong: true }, { silent: true }));
   });
 
+  it('parked on Suno renders before their download: links each one and approves only the picked render', async () => {
+    api.resumeAutonomousMusicVideo.mockResolvedValue({ project: { id: 'mv-1', autonomousRun: baseRun() }, run: baseRun() });
+    const ids = ['11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222'];
+    render(<Harness initial={baseRun({ status: 'awaiting-approval', awaiting: 'song', stage: 'song', output: { sunoSongIds: ids } })} />);
+    expect(screen.getAllByRole('link', { name: /listen/i }).map((a) => a.getAttribute('href'))).toEqual(ids.map((id) => `https://suno.com/song/${id}`));
+    // The second render is the default pick, as before.
+    expect(screen.getAllByRole('radio')[1]).toBeChecked();
+    fireEvent.click(screen.getAllByRole('radio')[0]);
+    fireEvent.click(screen.getByRole('button', { name: /approve & download this render/i }));
+    await waitFor(() => expect(api.resumeAutonomousMusicVideo).toHaveBeenCalledWith('mv-1', { sunoSongId: ids[0] }, { silent: true }));
+  });
+
   it('offers Resume, not Cancel, for a run canceled while it waited on production', async () => {
     api.resumeAutonomousMusicVideo.mockResolvedValue({ project: { id: 'mv-1', autonomousRun: baseRun() }, run: baseRun() });
     render(<Harness initial={baseRun({ status: 'canceled', stage: 'produce', error: 'Production was canceled' })} />);
