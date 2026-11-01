@@ -21,7 +21,7 @@
     "test:db:ci": "node ../scripts/run-vitest-ci.js run --config vitest.config.db.js --reporter=default --reporter=github-actions --configLoader runner"
   },
   "dependencies": {
-    "@babel/parser": "8.0.7",
+    "@babel/parser": "8.0.8",
     "@cantoo/pdf-lib": "2.11.1",
     "@googleapis/calendar": "20.1.0",
     "@novnc/novnc": "1.7.0",
