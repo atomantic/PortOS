@@ -127,6 +127,40 @@ describe('persisted audit disposition workflow', () => {
     expect(forge.execGh).not.toHaveBeenCalled();
   });
 
+  it('accepts a fix merged to the fetched default branch after the audit branch was cut', async () => {
+    const commitAll = async message => {
+      await execGit(['add', '-A'], dir);
+      await execGit(['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-m', message], dir);
+      return (await execGit(['rev-parse', 'HEAD'], dir)).stdout.trim();
+    };
+    await execGit(['init', '-b', 'main'], dir);
+    await writeFile(join(dir, 'dispatch.js'), 'export const authorized = false;\n');
+    const base = await commitAll('Base');
+    await writeFile(join(dir, 'dispatch.js'), 'export const authorized = true;\n');
+    const merged = await commitAll('Fix through another PR');
+    await execGit(['checkout', '-b', 'audit', base], dir);
+    const fixed = finding({ disposition: { kind: 'fixed', commit: merged, validation: 'Sibling PR regression passed.' } });
+    await deliver('agent-one', [fixed]);
+    // Unfetched, the commit is reachable from no published ref: still unverified.
+    expect(await settle()).toMatchObject({ status: 'incomplete', unresolved: 1 });
+    await execGit(['update-ref', 'refs/remotes/origin/main', merged], dir);
+    await execGit(['symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main'], dir);
+    expect(await settle()).toMatchObject({ status: 'complete', unresolved: 0 });
+  });
+
+  it('persists a replayed receipt through the archive once the run left live state', async () => {
+    await deliver('agent-one', [finding()]);
+    expect(await settle()).toMatchObject({ status: 'complete' });
+    const archived = await readRecord('agent-one');
+    deps.updateAgent = vi.fn(async () => null);
+    await expect(settle()).rejects.toThrow('Audit run record unavailable');
+    await writeFile(recordPath('agent-one'), JSON.stringify({ ...archived, startedAt: '2026-01-01T00:00:00Z' }));
+    deps.recordAuditFindingsReceipt = vi.fn(async () => true);
+    expect(await settle()).toMatchObject({ status: 'complete' });
+    expect(deps.recordAuditFindingsReceipt).toHaveBeenLastCalledWith('agent-one', '2026-01-01T00:00:00Z',
+      expect.objectContaining({ status: 'complete' }));
+  });
+
   it('keeps candidate confidence separate and refuses a persistence failure', async () => {
     await deliver('agent-one', [finding({ classification: 'candidate', confidence: 'low',
       disposition: { kind: 'unresolved', reason: 'Trace the deferred consumer before claiming impact.' } })]);

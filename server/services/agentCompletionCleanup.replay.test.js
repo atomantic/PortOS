@@ -37,6 +37,7 @@ vi.mock('./codeReview.js', () => ({ resolveReviewLoopOptions: async () => ({}) }
 vi.mock('./agentWorktreeCleanup.js', () => ({ cleanupAgentWorktree: vi.fn(async () => []), releaseRetryHold: vi.fn(async () => ({})), spawnMergeRecoveryTask: vi.fn(async () => ({ id: 'existing-recovery' })) }));
 vi.mock('./creativeDirector/completionHook.js', () => ({ handleCreativeDirectorCompletion: vi.fn() }));
 vi.mock('./brainTaskThreads.js', () => ({ ensureTaskThread: vi.fn() }));
+vi.mock('./auditFindings.js', () => ({ settleAuditFindings: vi.fn() }));
 
 import { runAgentCompletionCleanup, replayAgentCompletionCleanup } from './agentCompletionCleanup.js';
 import { storeCompletionData, readCompletionData } from './agentCompletionData.js';
@@ -44,6 +45,7 @@ import { readCompletionSentinel } from './agentCompletionSentinel.js';
 import { cleanupAgentWorktree } from './agentWorktreeCleanup.js';
 import { handleCreativeDirectorCompletion } from './creativeDirector/completionHook.js';
 import { updateTask, addTask } from './cosTaskStore.js';
+import { settleAuditFindings } from './auditFindings.js';
 
 describe('durable post-ingestion cleanup replay', () => {
   let root;
@@ -157,6 +159,25 @@ describe('durable post-ingestion cleanup replay', () => {
     expect(settled.metadata.completionCleanup.status).toBe('completed');
     expect(settled.metadata.repoStateVerification).toEqual({ status: 'pending' });
     expect(addTask).not.toHaveBeenCalled();
+  });
+
+  it('re-verifies a received audit register on replay and releases preserved evidence only once it is complete', async () => {
+    const auditTask = { ...task, metadata: { auditDispositionVersion: '1' } };
+    const record = await saved();
+    record.metadata.auditFindings = { version: 1, status: 'incomplete', finalReportReceived: true };
+    await writeFile(fixture.recordPath, JSON.stringify(record));
+    settleAuditFindings.mockResolvedValue({ status: 'incomplete' });
+    await finish(auditTask);
+    expect(settleAuditFindings).not.toHaveBeenCalled(); // The output hook already settled this pass.
+    expect(cleanupAgentWorktree).not.toHaveBeenCalled();
+    await replayAgentCompletionCleanup(await saved());
+    expect(settleAuditFindings).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'agent-one', workspacePath: workspace }));
+    expect(cleanupAgentWorktree).not.toHaveBeenCalled();
+    expect((await saved()).metadata.completionCleanup.status).toBe('pending');
+    settleAuditFindings.mockResolvedValue({ status: 'complete' });
+    await replayAgentCompletionCleanup(await saved());
+    expect(cleanupAgentWorktree).toHaveBeenCalledTimes(1);
+    expect((await saved()).metadata.completionCleanup.status).toBe('completed');
   });
 
   it('persists an asynchronous chain failure without suppressing acknowledged cleanup or blindly publishing again', async () => {

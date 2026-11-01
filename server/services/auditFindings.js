@@ -4,13 +4,24 @@ import { doneSentinelPath, parseSentinelPayload } from '../lib/agentSentinel.js'
 import { safeJSONParse, tryReadFile } from '../lib/jsonIo.js';
 import { execGit } from '../lib/execGit.js';
 
-async function verifyFinding(finding, { workspacePath, task }, deps) {
+async function verifyFinding(finding, { workspacePath, repoPath, task }, deps) {
   if (finding.classification === 'dismissed') return finding.disposition.kind === 'not-actionable';
   if (finding.classification === 'candidate') return finding.disposition.kind === 'unresolved';
   if (finding.disposition.kind === 'fixed') {
     const git = deps.execGit || execGit;
-    await git(['merge-base', '--is-ancestor', finding.disposition.commit, 'HEAD'], workspacePath);
-    const changed = await git(['diff-tree', '--no-commit-id', '--root', '-m', '--name-only', '-z', '-r', finding.disposition.commit, '--', finding.path], workspacePath);
+    // Replace refs could make an unrelated commit look reachable or path-changing.
+    const options = { env: { ...process.env, GIT_NO_REPLACE_OBJECTS: '1' } };
+    const reachableFrom = (ref, cwd) => git(['merge-base', '--is-ancestor', finding.disposition.commit, ref], cwd, options)
+      .then(() => true, () => false);
+    // A fix merged through a separate PR is on the default branch, not this
+    // audit branch, which was cut before it landed. The source checkout shares
+    // refs and objects and outlives a retired worktree.
+    if (!await reachableFrom('HEAD', workspacePath)) {
+      const { getDefaultBranch } = await import('./git.js');
+      const branch = await getDefaultBranch(repoPath, { allowRemote: false, strict: true }).catch(() => null);
+      if (!branch || !await reachableFrom(`refs/remotes/origin/${branch}`, repoPath)) return false;
+    }
+    const changed = await git(['diff-tree', '--no-commit-id', '--root', '-m', '--name-only', '-z', '-r', finding.disposition.commit, '--', finding.path], repoPath, options);
     // Validation is an explicit agent attestation, not a command to execute.
     // Normal independent review / PR delivery gates remain authoritative.
     return changed.stdout.split('\0').includes(finding.path);
@@ -59,8 +70,8 @@ export async function buildAuditFindingsPrompt(task, agentId) {
 
 /** Read checkpoints even on interruption; never file issues or dispatch providers here. */
 export async function settleAuditFindings({ task, agentId, workspacePath }, deps = {}) {
-  const { getAgentRecord, updateAgent } = deps.getAgentRecord && deps.updateAgent
-    ? deps : await import('./cosAgentLifecycle.js');
+  const lifecycle = deps.getAgentRecord && deps.updateAgent ? deps : await import('./cosAgentLifecycle.js');
+  const { getAgentRecord, updateAgent } = lifecycle;
   const existing = await getAgentRecord(agentId);
   const saved = existing?.metadata?.auditFindings;
   const predecessor = task.metadata?.resumedFromAgentId
@@ -88,7 +99,10 @@ export async function settleAuditFindings({ task, agentId, workspacePath }, deps
     reason: predecessorUnavailable ? 'Previous run findings register unavailable'
       : hasFinal ? 'Disposition verification pending' : 'Final findings register missing or invalid', results: [] };
   const persist = async value => {
-    if (!await updateAgent(agentId, { metadata: { auditFindings: value } })) throw new Error('Audit run record unavailable');
+    if (await updateAgent(agentId, { metadata: { auditFindings: value } })) return;
+    // A completion replay can run after the record left live state for its archive.
+    if (typeof existing?.startedAt !== 'string' || !lifecycle.recordAuditFindingsReceipt
+      || !await lifecycle.recordAuditFindingsReceipt(agentId, existing.startedAt, value)) throw new Error('Audit run record unavailable');
   };
   // Save the rows before any forge/git checks, including on failed runs.
   await persist(receipt);
@@ -100,7 +114,7 @@ export async function settleAuditFindings({ task, agentId, workspacePath }, deps
     const remaining = deadline - Date.now();
     let timer;
     const checked = remaining <= 0 ? null : await Promise.race([
-      verifyFinding(finding, { workspacePath, task }, deps).catch(() => false),
+      verifyFinding(finding, { workspacePath, repoPath: existing?.metadata?.sourceWorkspace || workspacePath, task }, deps).catch(() => false),
       new Promise(resolve => { timer = setTimeout(() => resolve(null), remaining); }),
     ]).finally(() => clearTimeout(timer));
     const verified = checked === true;
