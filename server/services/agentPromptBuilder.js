@@ -920,7 +920,6 @@ ${digitalTwinSection ? `\n${digitalTwinSection}\n` : ''}
 ${task.metadata?.prCompletion === PR_COMPLETIONS.DRAFT ? DRAFT_PR_RULE : ''}
 ${taskBlock.description}
 ${contextBlock ? (contextBlock.includes('\n') ? `\n### Task Context\n\n${contextBlock.trimEnd()}\n` : `\n### Task Context\n\n${contextBlock}\n`) : ''}
-${taskBlock.targetApp}
 ${taskBlock.screenshots}
 ${taskBlock.attachments}
 ${worktreeSection}
@@ -1109,11 +1108,8 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, { isTui = t
   const contractSections = [];
 
   // --- Task block --------------------------------------------------------
-  // cwd is set by the spawner and the agent knows its own id from the
-  // runner, so the prompt skips that metadata. Target app is kept only for
-  // MANAGED apps because it scopes cross-repo work; the PortOS default app is
-  // suppressed in buildTaskBlock since cwd already reveals it. Shared with the
-  // full path via buildTaskBlock.
+  // The spawner scopes execution to the project directory; internal app IDs
+  // belong in routing metadata rather than the agent's task text.
   const taskBlock = buildTaskBlock(task, { screenshotsAsList: true });
   // Ahead of the stored claim prompt, which still says to exit when the issue
   // is already in progress. That sentence is right for a fresh claim and wrong
@@ -1121,7 +1117,6 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, { isTui = t
   const claimResume = claimResumeContext(task, worktreeInfo);
   if (claimResume) taskSections.push(buildClaimResumeOverride(claimResume));
   taskSections.push(taskBlock.description);
-  if (taskBlock.targetApp) taskSections.push(taskBlock.targetApp);
 
   // The task's prompt payload + human note as one block (#4153), so the split is
   // invisible here and a legacy `metadata.context`-as-prompt still renders.
