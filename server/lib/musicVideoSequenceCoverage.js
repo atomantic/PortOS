@@ -60,7 +60,7 @@ const sameIdentity = (a, b) => { const x = idOf(a); const y = idOf(b); return x 
  * field; the set is the shot's picked `setReference.subjectId` or else its
  * section's set in the cast-and-sets song map, the lead its `characterVariant`.
  */
-export function sequenceShotIdentity(project, scene) {
+function sequenceShotIdentity(project, scene) {
   const songMap = project?.castAndSets?.direction?.songMap;
   const mapped = Number.isInteger(scene?.sectionIndex) && Array.isArray(songMap)
     ? songMap.find((entry) => entry?.section === scene.sectionIndex)?.setId : null;
