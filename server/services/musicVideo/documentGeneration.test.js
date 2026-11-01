@@ -529,7 +529,7 @@ describe('treatment-driven mixed-media document authoring', () => {
     h.onSubmit = async () => { h.response = 'I cannot help with that.'; };
     await expect(generateMixedMediaDocument(id, { providerId: 'stub-provider' })).rejects.toMatchObject({ code: 'MISSING_SECTION_SOURCE' });
     expect(h.calls).toBe(2);
-    expect(h.prompt).toContain('contained no usable section functions');
+    expect(h.prompt).toContain('contained no usable section functions. Files and tool calls are not read');
   });
 
   it('resumes a failed later local batch from durable sections after a module restart (#10528)', async () => {

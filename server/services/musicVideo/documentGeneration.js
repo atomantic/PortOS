@@ -417,11 +417,12 @@ async function runAuthoring(projectId, { providerId, model, effort, sectionId = 
   const takeAnswer = async (askedIds) => {
     const rejected = new Map();
     let returned = returnedSections(run.text, askedIds, { lenient: true, rejected });
-    // An answer with no usable section at all (a refusal, a truncated stream, prose) gets one
+    // An answer with no usable section at all (a refusal, a truncated stream, prose, tool-call
+    // markup from a model that tried to build the answer in files) gets one
     // retry of the same request, not one call per section.
     if (!returned.size && !rejected.size && askedIds.length > 1) {
       console.log(`🎬 Music-video document: no usable section in the answer for ${askedIds.join(', ')}; asking once more`);
-      run = await runBatch(`${withFeedback(promptFor(askedIds))}\n\nYour previous answer contained no usable section functions. Return every requested section as the JSON described above.`);
+      run = await runBatch(`${withFeedback(promptFor(askedIds))}\n\nYour previous answer contained no usable section functions. Files and tool calls are not read: return every requested section in this reply as the JSON described above.`);
       returned = returnedSections(run.text, askedIds, { lenient: true, rejected });
       // Still nothing: fail now rather than fan out a call per section.
       if (!returned.size) acceptedSections(run.text, askedIds);
