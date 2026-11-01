@@ -306,6 +306,25 @@ Legacy receipts are not enrolled at startup. Only an explicit publication
 verification request can enroll one, retaining its original verification time;
 an upgrade never silently generates new synchronization work from old releases.
 
+At registration the outbox freezes the effective PR disposition with the reviewer
+roster. Explicit task dispositions and leave-open holds take precedence; otherwise
+normal managed-app defaults apply, including the legacy review toggle when the
+app has no configured disposition. Later settings changes do not alter the payload.
+
+An older continuation with neither a stored disposition nor a legacy review toggle
+has an ambiguous policy. Automatic registration and dispatch hold it with
+`RELEASE_SYNC_REVIEW_POLICY_UNVERIFIED` / `review-policy-unverified`; they do not
+infer intent from its roster or today's app settings. Recover using the original
+run's saved prompt, pinned delivery policy and exact PR/head review receipts.
+Resume the same branch/PR through ordinary delivery recovery only when that
+historical evidence establishes the obligations, retaining reviewer order,
+optionality, models and spent round/spawn budgets. Do not rewrite the immutable
+outbox/task, mint another continuation or invent missing review evidence. A
+provider-confirmed merge can still be observed by the existing synchronization
+verifier; this dispatch hold does not invalidate completed delivery evidence.
+If the historical policy cannot be established, keep the checkpoint held and use
+the existing operator reset below only after an explicit decision to abandon it.
+
 The outbox keeps the original reviewer policy, publication ancestry and retained
 physical checkout seeds. It never transfers checkout authority. The continuation
 uses the procedure below and ordinary delivery, admission and retirement recovery.

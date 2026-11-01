@@ -562,6 +562,7 @@ async function isDisabledAnalysisType(task, taskSchedule) {
     const { releaseTaskDispatchDisposition } = await import('./releaseSynchronization.js');
     const disposition = await releaseTaskDispatchDisposition(task);
     if (disposition === 'registered-continuation') return false;
+    if (disposition === 'review-policy-unverified') return 'release synchronization review policy was not captured; recover from historical delivery evidence';
     if (disposition === 'retired-continuation') return 'the previous release synchronization was retired by an operator';
     if (disposition === 'wait-for-synchronization') return 'previous release is published; development synchronization and cleanup are unfinished';
   }

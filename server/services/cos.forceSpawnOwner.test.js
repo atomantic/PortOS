@@ -104,6 +104,13 @@ describe('forceSpawnTask — stale running holder (#14039)', () => {
     expect(taskReadyEmits(emit)).toEqual([]);
   });
 
+  it('holds an ambiguous historical release policy before spawning', async () => {
+    vi.mocked(getTaskById).mockResolvedValueOnce({ id: TASK_ID, status: 'pending', taskType: 'internal', metadata: { analysisType: 'release-sync' } });
+    releaseDisposition.mockResolvedValueOnce('review-policy-unverified');
+    expect(await forceSpawnTask(TASK_ID)).toMatchObject({ error: expect.stringContaining('review policy was not captured') });
+    expect(taskReadyEmits(emit)).toEqual([]);
+  });
+
   it('retries a holder the zombie sweep settled as dead', async () => {
     sweep.provesDead = true;
 

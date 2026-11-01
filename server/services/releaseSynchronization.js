@@ -15,6 +15,7 @@ import { RELEASE_SYNC_POLICY_KEYS, RELEASE_SYNC_FROZEN_METADATA_KEYS, RELEASE_SY
   effectiveReleaseSynchronization, publisherCandidateSeed, publisherCandidateTarget,
   releaseSynchronizationReset, releaseSynchronizationResetSchema, resetReleasesCheckout } from '../lib/releaseSynchronization.js';
 import { currentTaskTypeName } from '../lib/taskTypeRenames.js';
+import { explicitPrCompletion, resolveAppPrCompletion } from '../lib/prDisposition.js';
 import { storedForm } from '../lib/cosTaskRows.js';
 import { cosEvents } from './cosEvents.js';
 
@@ -40,6 +41,10 @@ const entrySchema = z.object({
   blocker: z.string().nullable(), retryAt: z.string().datetime().nullable(),
 }).strict();
 const outboxSchema = z.object({ version: z.literal(1), publications: z.record(identitySchema, entrySchema) }).strict();
+// Historical outboxes without either field never captured their app default.
+// A roster alone cannot tell us whether review or an intentional merge-only run was authorized.
+const hasFrozenPrDisposition = metadata => explicitPrCompletion({ metadata }) !== null
+  || [true, false, 'true', 'false'].includes(metadata?.reviewLoop);
 const refuse = message => { throw new ServerError(message, { status: 409, code: 'RELEASE_SYNC_HANDOFF_UNVERIFIED' }); };
 
 async function readOutbox() {
@@ -67,6 +72,7 @@ export async function releaseTaskDispatchDisposition(task) {
   const entry = outbox.publications[task.metadata?.releaseSynchronization?.identity];
   if (!entry || task.id !== entry.task.id) return null;
   if (releaseSynchronizationReset(entry)) return 'retired-continuation';
+  if (!hasFrozenPrDisposition(entry.task.metadata)) return 'review-policy-unverified';
   if (!entry.registeredAt) return null;
   const expected = { ...entry.task.metadata,
     idempotencyKey: createHash('sha256').update(JSON.stringify([entry.identity, entry.owner])).digest('hex') };
@@ -189,10 +195,17 @@ async function newEntry(agent, publication) {
   const { getTaskById } = await import('./cosTaskStore.js');
   const { getInstanceId, UNKNOWN_INSTANCE_ID } = await import('./instanceIdentity.js');
   const { getCodeReviewDefaults, resolveReviewLoopOptions } = await import('./codeReview.js');
+  const { getAppById } = await import('./apps.js');
   const [source, instanceId] = await Promise.all([getTaskById(agent.taskId), getInstanceId()]);
   if (!source || !instanceId || instanceId === UNKNOWN_INSTANCE_ID) refuse('Release synchronization requires its original task and local instance');
   const policy = Object.fromEntries(RELEASE_SYNC_POLICY_KEYS.filter(key => source.metadata?.[key] !== undefined).map(key => [key, source.metadata[key]]));
   if (!policy.app) refuse('Release synchronization requires the original target app');
+  policy.prCompletion = explicitPrCompletion(source);
+  if (policy.prCompletion === null) {
+    const app = await getAppById(policy.app);
+    if (!app) refuse('Release synchronization requires its managed app policy');
+    policy.prCompletion = resolveAppPrCompletion(app, source.metadata);
+  }
   // Resolve standing settings now; a later settings edit cannot silently shed
   // the reviewers this publication's synchronization was required to satisfy.
   await getCodeReviewDefaults();
@@ -222,6 +235,10 @@ async function newEntry(agent, publication) {
 
 async function registerEntry(entry) {
   const { addTask, getTaskById } = await import('./cosTaskStore.js');
+  if (!hasFrozenPrDisposition(entry.task.metadata)) {
+    throw new ServerError('Release synchronization review policy was not captured; retain the original task and recover from historical delivery evidence (docs/VERSIONING.md)',
+      { status: 409, code: 'RELEASE_SYNC_REVIEW_POLICY_UNVERIFIED' });
+  }
   const key = createHash('sha256').update(JSON.stringify([entry.identity, entry.owner])).digest('hex');
   entry.attempts++;
   entry.lastAttemptAt = new Date().toISOString();

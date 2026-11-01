@@ -2223,9 +2223,9 @@ describe('admitAutoApprovedSystemTasks dry-run/execute parity', () => {
     vi.restoreAllMocks();
   });
 
-  it('does not dispatch a retired continuation even if its schedule is enabled', async () => {
+  it.each(['retired-continuation', 'review-policy-unverified'])('does not dispatch a %s even if its schedule is enabled', async disposition => {
     vi.spyOn(appActivity, 'isAppOnCooldown').mockResolvedValue(false);
-    vi.mocked(releaseTaskDispatchDisposition).mockResolvedValue('retired-continuation');
+    vi.mocked(releaseTaskDispatchDisposition).mockResolvedValue(disposition);
     for (const mode of ['dry-run', 'execute']) {
       const ctx = ctxFor(mode, [task('old-sync', { analysisType: 'release-sync' })]);
       ctx.taskSchedule.tasks['release-sync'] = { enabled: true };

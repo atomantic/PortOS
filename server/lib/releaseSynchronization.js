@@ -31,12 +31,12 @@ export const RELEASE_SYNC_OBLIGATIONS = ['candidateFixes', 'releaseAncestry', 's
   'hostedReview', 'requiredCi', 'mergeAdmission', 'qualitySnapshot', 'processSettlement', 'retirement'];
 
 export const RELEASE_SYNC_POLICY_KEYS = ['app', 'provider', 'model', 'effort', 'reviewers', 'usernames', 'optionalReviewers',
-  'reviewerModels', 'reviewerEfforts', 'reviewerMaxRounds', 'reviewStopMode', 'prCompletion'];
+  'reviewerModels', 'reviewerEfforts', 'reviewerMaxRounds', 'reviewStopMode', 'prCompletion', 'reviewLoop', 'reviewLoopLeaveOpen'];
 
 export const RELEASE_SYNC_FROZEN_METADATA_KEYS = [...RELEASE_SYNC_POLICY_KEYS,
   'releaseSynchronization', 'idempotencyKey', 'targetInstanceId', 'prompt', 'analysisType',
   'useWorktree', 'openPR', 'worktreeChangesExpected', 'readOnly', 'discardWorktree',
-  'forkHead', 'reviewLoop', 'reviewLoopLeaveOpen', 'reviewerApplies', 'noCodeOutput',
+  'forkHead', 'reviewerApplies', 'noCodeOutput',
   'noChangeSuccess', 'slashdoCommand'];
 
 // A branch name alone is not ownership. Only a server-captured physical seed
