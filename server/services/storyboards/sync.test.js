@@ -12,7 +12,7 @@ vi.mock('../sharing/recordEvents.js', () => ({
 const { flushBaseHashes, __resetBaseHashCacheForTests } = await import('../../lib/conflictJournal.js');
 const { sanitizeRecordForWire } = await import('../../lib/syncWire.js');
 const { buildStoryboardAssetManifest } = await import('../sharing/peerSyncAssets.js');
-const { PORTOS_SCHEMA_VERSIONS } = await import('../../lib/schemaVersions.js');
+const { PORTOS_SCHEMA_VERSIONS, RECORD_KIND_SCHEMA_CATEGORIES, compareSchemaVersions, scopeVersionDiff } = await import('../../lib/schemaVersions.js');
 const events = await import('../sharing/recordEvents.js');
 const svc = await import('./index.js');
 
@@ -36,7 +36,13 @@ async function boardWithArt() {
 
 describe('storyboard federation', () => {
   it('declares its own version-gated sync category', () => {
-    expect(PORTOS_SCHEMA_VERSIONS.storyboards).toBe(14);
+    expect(PORTOS_SCHEMA_VERSIONS.storyboards).toBe(15);
+    const older = { ...PORTOS_SCHEMA_VERSIONS, storyboards: 14 };
+    expect(scopeVersionDiff(compareSchemaVersions(PORTOS_SCHEMA_VERSIONS, older), RECORD_KIND_SCHEMA_CATEGORIES.storyboard)).toEqual({
+      compatible: false,
+      ahead: [{ category: 'storyboards', senderV: 15, receiverV: 14 }],
+      behind: [],
+    });
   });
 
   it('emits a record event on create, edit and delete so subscribed peers get each revision', async () => {

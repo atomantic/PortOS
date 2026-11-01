@@ -108,6 +108,7 @@ export default function PanelMakeTab({ board, found, sketchNonce, handlers }) {
   const canvas = searchParams.get('makeView') === 'canvas';
   const selectedNode = recipe.nodes.find((n) => n.id === searchParams.get('node')) || null;
   const linkKey = [...panel.castIds, ...panel.environmentIds, ...panel.objectIds].join(',');
+  const pickKey = Object.entries(panel.linkMedia || {}).map(([id, image]) => `${id}=${image}`).sort().join('|');
 
   useEffect(() => {
     let active = true;
@@ -121,7 +122,7 @@ export default function PanelMakeTab({ board, found, sketchNonce, handlers }) {
       // A failed read says so; it must not look like a panel with no cast images.
       .catch(() => { if (active) setLinkedError(true); });
     return () => { active = false; };
-  }, [board.id, panel.id, linkKey]);
+  }, [board.id, panel.id, linkKey, pickKey]);
 
   const context = { beat, panel, linkedRefs };
   const saveRecipe = (next) => handlers.onRecipe(next);

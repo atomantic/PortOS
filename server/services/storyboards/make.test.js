@@ -171,6 +171,57 @@ describe('storyboard panel maker', () => {
       .toEqual(['set-example-1.png', 'cat-example-1.png', 'cat-example-2.png', 'cat-example-3.png', 'cat-example-4.png']);
   });
 
+  // Uniquely catches a panel always sending the newest portrait after it named another image of that cast member or place.
+  it('sends a linked record\'s chosen image, and the newest portrait when nothing is chosen', async () => {
+    __setDepsForTests({
+      linkedMedia: async (ids) => new Map(ids.map((id) => [id, [
+        { kind: 'portrait', mediaKey: `${id}-newest.png` },
+        { kind: 'portrait', mediaKey: `${id}-older.png` },
+        { kind: 'reference', mediaKey: `${id}-look.png` },
+        { kind: 'audio', mediaKey: `${id}-voice.wav` },
+      ]])),
+    });
+    const { id, panelId } = await boardWithPanel({ action: 'Doors', castIds: ['cat-example-1'], environmentIds: ['set-example-1'] });
+    await api('patch', `/${id}/panels/${panelId}/make/node-writer`, { text: 'A wide frame' });
+
+    const fallback = await api('post', `/${id}/panels/${panelId}/make/node-image/run`);
+    expect(fallback.status).toBe(200);
+    expect(nodeState(fallback.body, 'node-image').sentRefs.map((ref) => ref.image))
+      .toEqual(['set-example-1-newest.png', 'cat-example-1-newest.png']);
+
+    const picked = await api('patch', `/${id}/panels/${panelId}`, {
+      linkMedia: {
+        'set-example-1': 'set-example-1-older.png',
+        'cat-example-1': '/data/images/cat-example-1-look.png',
+        'cat-other': 'other.png',
+      },
+    });
+    expect(picked.status).toBe(200);
+    expect(picked.body.beats[0].panels[0].linkMedia).toEqual({
+      'set-example-1': 'set-example-1-older.png',
+      'cat-example-1': 'cat-example-1-look.png',
+    });
+    const chosen = await api('post', `/${id}/panels/${panelId}/make/node-image/run`);
+    expect(nodeState(chosen.body, 'node-image').sentRefs.map((ref) => ref.image))
+      .toEqual(['set-example-1-older.png', 'cat-example-1-look.png']);
+
+    const missing = await api('patch', `/${id}/panels/${panelId}`, { linkMedia: { 'cat-example-1': 'missing.png' } });
+    expect(missing.body.beats[0].panels[0].linkMedia).toEqual({ 'cat-example-1': 'missing.png' });
+    const fellBack = await api('post', `/${id}/panels/${panelId}/make/node-image/run`);
+    expect(nodeState(fellBack.body, 'node-image').sentRefs.map((ref) => ref.image))
+      .toEqual(['set-example-1-newest.png', 'cat-example-1-newest.png']);
+
+    expect((await api('patch', `/${id}/panels/${panelId}`, { linkMedia: { 'cat-example-1': 'https://example.com/a.png' } })).status).toBe(400);
+    expect((await api('get', `/${id}`)).body.beats[0].panels[0].linkMedia).toEqual({ 'cat-example-1': 'missing.png' });
+
+    const cleared = await api('patch', `/${id}/panels/${panelId}`, { linkMedia: null });
+    expect(cleared.status).toBe(200);
+    expect(cleared.body.beats[0].panels[0].linkMedia).toBeUndefined();
+    const again = await api('post', `/${id}/panels/${panelId}/make/node-image/run`);
+    expect(nodeState(again.body, 'node-image').sentRefs.map((ref) => ref.image))
+      .toEqual(['set-example-1-newest.png', 'cat-example-1-newest.png']);
+  });
+
   it('corrects a frame: the writer redoes its prompt with the note, then new frames start from the marked-up frame', async () => {
     const { mkdir, writeFile } = await import('node:fs/promises');
     const { join } = await import('node:path');

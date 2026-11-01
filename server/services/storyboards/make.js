@@ -83,10 +83,17 @@ function announce(storyboardId, panelId, nodeId, status, error = '') {
   deps.emit({ storyboardId, panelId, nodeId, status, ...(error ? { error } : {}) });
 }
 
+const LINKED_IMAGE = /\.(png|jpe?g|webp)$/i;
+const isLinkedImage = (row) => !!row
+  && (row.kind === 'portrait' || row.kind === 'reference')
+  && LINKED_IMAGE.test(row.mediaKey || '');
+
 /**
  * The panel's linked catalog cast, environments and objects as reference
- * images: each record's newest portrait, else its newest reference image.
- * A catalog that can't be read yields none (the run still has its own refs).
+ * images. A `linkMedia` pick names one gallery image of that record; anything
+ * else (no pick, a missing file, a non-image) keeps the newest portrait, else
+ * the newest reference. A catalog that can't be read yields none (the run
+ * still has its own refs).
  */
 async function resolveLinkedRefs(panel) {
   // Places and objects lead: a backend cap keeps the first refs, and the set is
@@ -97,9 +104,13 @@ async function resolveLinkedRefs(panel) {
     console.warn(`⚠️ Storyboard references unavailable: ${err.message}`);
     return new Map();
   });
-  const firsts = ids
-    .map((id) => ({ id, row: (media.get(id) || []).find((m) => (m.kind === 'portrait' || m.kind === 'reference') && /\.(png|jpe?g|webp)$/i.test(m.mediaKey || '')) }))
-    .filter(({ row }) => row);
+  const picks = panel.linkMedia && typeof panel.linkMedia === 'object' && !Array.isArray(panel.linkMedia) ? panel.linkMedia : {};
+  const firsts = ids.map((id) => {
+    const rows = media.get(id) || [];
+    const wanted = typeof picks[id] === 'string' ? picks[id] : '';
+    const row = (wanted && rows.find((item) => item.mediaKey === wanted && isLinkedImage(item))) || rows.find(isLinkedImage);
+    return row ? { id, row } : null;
+  }).filter(Boolean);
   return Promise.all(firsts.map(async ({ id, row }) => {
     const record = await deps.ingredient(id).catch(() => null);
     return { refId: id, image: row.mediaKey, label: record?.name || '' };
