@@ -47,7 +47,7 @@ import {
   WALK_PHASES, WALK_FPS,
   pyRound, pyRoundTo, median, premultipliedResize, decodeTransparentSpriteSource,
   despillKeyFrame,
-  alphaBbox, robustBottomRow, rootX, rootBandForManifest, ROBUST_BASELINE_MIN_PIXELS, compositeOnto, sha256Buffer,
+  alphaBbox, robustBottomRow, rootX, rootBandForManifest, ROOT_BAND_STANCE, ROBUST_BASELINE_MIN_PIXELS, compositeOnto, sha256Buffer,
 } from './walkPostprocess.js';
 import { ATLAS_IDLE_COLUMN } from './walkBounds.js';
 import {
@@ -457,7 +457,7 @@ async function validateForCompileWithTracks(recordId, animationTracks) {
   };
 }
 
-async function prepareTrackCells(track, direction, validated, geometry, split) {
+async function measureTrackSources(track, direction, validated, split) {
   const run = track.runs[direction];
   const sources = [];
   for (const bytes of run.frameBytes) {
@@ -470,10 +470,21 @@ async function prepareTrackCells(track, direction, validated, geometry, split) {
     `${direction}-${run.manifest.frames[index].phase}`,
     true,
   ));
-  const scale = Math.min(
-    geometry.targetMaxHeight / Math.max(...dims.map((dim) => dim.height)),
-    geometry.targetMaxWidth / Math.max(...dims.map((dim) => dim.width)),
-  );
+  const fixedScale = Number(run.manifest.alignment?.fixedScale);
+  return { track, run, sources, dims, packingScale: Number.isFinite(fixedScale) && fixedScale > 0 ? fixedScale : 1 };
+}
+
+const fitTrackScale = (dims, geometry) => Math.min(
+  geometry.targetMaxHeight / Math.max(...dims.map((dim) => dim.height)),
+  geometry.targetMaxWidth / Math.max(...dims.map((dim) => dim.width)),
+);
+
+const stanceRootX = ({ scaled, bounds, baseline }) => rootX(
+  scaled, { ...bounds, bottom: baseline }, ROOT_BAND_STANCE,
+);
+
+async function prepareTrackCells(measured, direction, geometry, scale, sharedStance) {
+  const { track, run, sources, dims } = measured;
   const pivotX = Number(run.manifest.alignment?.targetPivot?.[0]);
   const sourcePivotX = Number.isFinite(pivotX)
     ? pivotX
@@ -487,8 +498,11 @@ async function prepareTrackCells(track, direction, validated, geometry, split) {
       `${direction}-${run.manifest.frames[index].phase}`,
     ));
   }
+  const scaledPivotX = sharedStance
+    ? median(scaled.map(stanceRootX))
+    : sourcePivotX * scale;
   const pasteX = sharedRowPasteX(
-    pyRound(geometry.pivot[0] - sourcePivotX * scale),
+    pyRound(geometry.pivot[0] - scaledPivotX),
     scaled.map((item) => item.bounds),
     geometry,
   );
@@ -517,13 +531,13 @@ async function prepareTrackCells(track, direction, validated, geometry, split) {
 
 async function compileTrackRow(direction, validated, geometry) {
   const split = keyChannelSplit(validated.chromaKey);
-  const prepared = [];
+  const measured = [];
   for (const track of Object.values(validated.tracks)) {
     if (!track.runs[direction]) continue;
     // preserve registry and cell order
-    prepared.push(await prepareTrackCells(track, direction, validated, geometry, split));
+    measured.push(await measureTrackSources(track, direction, validated, split));
   }
-  const primary = prepared.find((item) => item.track.id === validated.primaryTrackId) || prepared[0];
+  const primary = measured.find((item) => item.track.id === validated.primaryTrackId) || measured[0];
   if (!primary) throw compileError(`No animation track occupies atlas row ${direction}`);
 
   const source = validated.anchors[direction] || validated.mainReference;
@@ -533,17 +547,40 @@ async function compileTrackRow(direction, validated, geometry) {
   const idleLabel = `${direction}-idle`;
   const idleSource = await decodeTransparentSpriteSource(source.bytes, split, validated.chromaKey);
   const idleDims = occupiedDimensions(idleSource, SILHOUETTE_ALPHA_THRESHOLD, idleLabel);
-  const desiredIdleHeight = median(primary.dims.map((dim) => dim.height)) * primary.scale;
+  const sharedStance = measured.length > 1;
+  const primaryHeight = median(primary.dims.map((dim) => dim.height));
+  let primaryScale = fitTrackScale(primary.dims, geometry);
+  if (sharedStance) {
+    // Calibrate the locked idle to the primary standing track's source density.
+    // Every action uses that same density, undoing only its recorded packing
+    // resize. A crouch must never earn its own fit-to-cell enlargement.
+    const referenceHeight = primaryHeight / primary.packingScale;
+    const referenceScale = Math.min(geometry.targetMaxHeight / idleDims.height, geometry.targetMaxWidth / idleDims.width);
+    const sourceScale = Math.min(
+      referenceScale * idleDims.height / referenceHeight,
+      ...measured.map(item => fitTrackScale(item.dims, geometry) * item.packingScale),
+    );
+    primaryScale = sourceScale / primary.packingScale;
+  }
+  const prepared = [];
+  for (const item of measured) {
+    const scale = sharedStance ? primaryScale * primary.packingScale / item.packingScale : primaryScale;
+    prepared.push(await prepareTrackCells(item, direction, geometry, scale, sharedStance));
+  }
+  const desiredIdleHeight = primaryHeight * primaryScale;
   const idleScale = Math.min(desiredIdleHeight / idleDims.height, geometry.targetMaxWidth / idleDims.width);
   const idleScaled = await scaleForCell(idleSource, idleScale, idleLabel);
-  const idlePasteX = validated.anchors[direction]
+  const idleRootX = sharedStance
+    ? stanceRootX(idleScaled)
+    : rootX(
+      idleScaled.scaled,
+      alphaBbox(idleScaled.scaled, SILHOUETTE_ALPHA_THRESHOLD) || idleScaled.bounds,
+      rootBandForManifest(primary.run.manifest),
+    );
+  const idlePasteX = sharedStance || validated.anchors[direction]
     ? pyRound(
       geometry.pivot[0]
-      - rootX(
-        idleScaled.scaled,
-        alphaBbox(idleScaled.scaled, SILHOUETTE_ALPHA_THRESHOLD) || idleScaled.bounds,
-        rootBandForManifest(primary.run.manifest),
-      ),
+      - idleRootX,
     )
     : pyRound((geometry.cellSize - idleScaled.scaled.width) / 2);
   const idle = placeCell(
@@ -685,6 +722,10 @@ export async function compileAtlasInTail(recordId, {
   await requireAnimatable(recordId);
   const geometry = mergeGeometry(geometryOverride);
   const validated = await validateForCompile(recordId, animationTracks);
+  // Old multi-track pixels remain readable, but an explicit compile must not
+  // return their cached per-track normalization as if it used this policy.
+  const compilePolicy = Object.keys(validated.tracks).length > 1 ? 'reference-stance-v1' : null;
+  const policyUpToDate = persisted => !compilePolicy || persisted?.compilePolicy === compilePolicy;
   const frameCountFields = trackFrameCountFields(validated, animationTracks);
   const dir = spriteDir(recordId);
 
@@ -719,6 +760,7 @@ export async function compileAtlasInTail(recordId, {
   if (
     current
     && currentAtlasOnDisk
+    && policyUpToDate(current)
     && trackSetsUpToDate(current, validated)
     && compiledGridUpToDate(current.geometry, { ...geometry, columns, tracks })
     && trackFrameCountsUpToDate(current.geometry, frameCountFields)
@@ -775,7 +817,7 @@ export async function compileAtlasInTail(recordId, {
     .toBuffer();
   const atlasSha256 = sha256Buffer(atlasBuffer);
 
-  if (current && currentAtlasOnDisk && trackSetsUpToDate(current, validated)
+  if (current && currentAtlasOnDisk && policyUpToDate(current) && trackSetsUpToDate(current, validated)
     && current.atlasSha256 === atlasSha256
     && trackFrameCountsUpToDate(current.geometry, frameCountFields)) {
     return { ...current, created: false };
@@ -793,6 +835,7 @@ export async function compileAtlasInTail(recordId, {
     const survivor = await readJSONFile(join(runtimeAbs, `v${version}`, `${stem}-v${version}-manifest.json`), null, { strict: true });
     if (!survivor || (
       survivor.atlasSha256 === atlasSha256
+      && policyUpToDate(survivor)
       && trackFrameCountsUpToDate(survivor.geometry, frameCountFields)
     )) break;
     version += 1;
@@ -811,12 +854,14 @@ export async function compileAtlasInTail(recordId, {
   const survivingManifest = await readJSONFile(manifestAbs, null, { strict: true });
   if (
     survivingManifest?.atlasSha256 === atlasSha256
+    && policyUpToDate(survivingManifest)
     && trackFrameCountsUpToDate(survivingManifest.geometry, frameCountFields)
   ) {
     const survivingBuffer = await readFile(manifestAbs);
     const pointer = {
       schemaVersion: 1,
       kind: 'runtime-atlas-selection',
+      ...(compilePolicy ? { compilePolicy } : {}),
       characterId: recordId,
       version,
       atlasPath: atlasRel,
@@ -855,6 +900,7 @@ export async function compileAtlasInTail(recordId, {
     createdAt: new Date().toISOString(),
     chromaKey: validated.chromaKey,
     compilerPath: 'server/services/sprites/atlas.js',
+    ...(compilePolicy ? { compilePolicy } : {}),
     ...(validated.walkSet ? {
       walkSetPath: validated.walkSetPath,
       walkSetSha256: validated.walkSetSha256,
@@ -928,6 +974,7 @@ export async function compileAtlasInTail(recordId, {
   const pointer = {
     schemaVersion: 1,
     kind: 'runtime-atlas-selection',
+    ...(compilePolicy ? { compilePolicy } : {}),
     characterId: recordId,
     version,
     atlasPath: atlasRel,
