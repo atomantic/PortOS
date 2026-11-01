@@ -427,13 +427,15 @@ async function closeSunoBrowser(page, browser) {
 // Suno returns two renders per request; the second is usually the better one.
 // A single-id resume (or a one-render result) falls back to the only id.
 const pickRender = (ids) => ids[1] ?? ids[0];
-// The render the director picked at the song checkpoint, when it is one of this request's.
-const chosenRender = (ids, picked) => (picked && ids.includes(picked) ? picked : pickRender(ids));
+// The song the director approved at the song checkpoint: one of this request's renders, or a
+// version they made or revised in Suno themselves (any song of the signed-in account).
+const chosenRender = (ids, picked) => picked || pickRender(ids);
 
 /**
  * Submit a song to Suno and stop: no export, so no download credit is spent.
  * The song checkpoint parks on these ids until the director picks a render,
- * then `generateSunoSong` exports only that one (`songIds` + `exportSongId`).
+ * (or revise it in Suno), then `generateSunoSong` exports only the approved song
+ * (`songIds` + `exportSongId`).
  */
 export async function submitSunoSongOnly(fields, deps = {}) {
   const connect = deps.connect || connectPortosBrowser;
@@ -457,7 +459,7 @@ export async function submitSunoSongOnly(fields, deps = {}) {
  * `deps.onProgress(step)` reports the long stage's sub-steps — `opening`,
  * `generating`, `exporting`, `validating`, `importing` — so the run can show
  * where a ten-minute stage is; a throwing reporter never fails the song.
- * `deps.exportSongId` exports that render of `deps.songIds` instead of the default.
+ * `deps.exportSongId` exports that song instead of the default render of `deps.songIds`.
  */
 export async function generateSunoSong(fields, deps = {}) {
   const report = (name) => { try { deps.onProgress?.(name); } catch { /* progress is advisory */ } };

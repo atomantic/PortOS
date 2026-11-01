@@ -1735,10 +1735,11 @@ export async function resumeAutonomousVideo(projectId, edits = {}, { autoApprove
   const retake = edits.retakeSong === true;
   if (retake && run.brief.songFrom) throw runError(409, 'SONG_REUSED', 'This run reuses an existing song, so it has no song to retake');
   if (retake) assertAtSongCheckpoint(run);
-  // Parked on fresh Suno renders before any download: approving downloads one of them.
+  // Parked on fresh Suno renders before any download: approving downloads one of them, or a
+  // version the director made or revised in Suno meanwhile (`sunoSongId`).
   const pickingSong = (r) => r.status === 'awaiting-approval' && r.awaiting === 'song' && r.stage === 'song';
-  if (edits.sunoSongId && !(pickingSong(run) && !retake && (run.output.sunoSongIds || []).includes(edits.sunoSongId))) {
-    throw runError(400, 'VALIDATION_ERROR', 'Pick one of this run\'s Suno renders while it waits for approval of its song');
+  if (edits.sunoSongId && (retake || !pickingSong(run))) {
+    throw runError(409, 'NOT_AT_SONG_CHECKPOINT', 'A Suno song can only be picked while the run waits for approval of its song, before the download');
   }
   // A changed prompt or guidance reaches production's shot planner on this resume.
   const directionPatch = Object.fromEntries(['prompt', 'guidance'].filter((key) => typeof edits[key] === 'string' && edits[key] !== (run.brief[key] ?? '')).map((key) => [key, edits[key]]));

@@ -1299,7 +1299,8 @@ export const musicVideoAutonomousResumeSchema = z.object({
   localMusic: musicVideoLocalMusicOptionsSchema.nullable().optional(),
   // At the song checkpoint: discard the song and generate a new one.
   retakeSong: z.boolean().optional(),
-  // At the song checkpoint before the download: which Suno render to download (default: the second).
+  // At the song checkpoint before the download: the Suno song to download, one of the run's
+  // renders or one the director made or revised in Suno (default: the run's second render).
   sunoSongId: z.string().trim().regex(/^[0-9a-f-]{36}$/i, 'A Suno song id').optional(),
   // Swap a tool's model (null clears the pin) and raise or lower the run's limits. A changed
   // model at the produce stage starts a new production run with the new pool.

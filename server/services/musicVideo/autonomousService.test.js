@@ -1092,21 +1092,24 @@ describe('retaking the song at the song checkpoint', () => {
     }), expect.any(Object));
     expect(doubles.generateSunoSong).not.toHaveBeenCalled();
 
-    // Only a render of this request can be picked.
-    await expect(service.resumeAutonomousVideo('mv-auto', { sunoSongId: 'song-a' })).rejects.toMatchObject({ status: 400 });
-    expect(runOf()).toMatchObject({ status: 'awaiting-approval', awaiting: 'song' });
+    // A pick cannot ride a retake: the retake throws these renders away.
+    await expect(service.resumeAutonomousVideo('mv-auto', { retakeSong: true, sunoSongId: 'song-c' })).rejects.toMatchObject({ status: 409 });
+    expect(runOf()).toMatchObject({ status: 'awaiting-approval', awaiting: 'song', output: { sunoSongIds: ['song-c', 'song-d'] } });
 
-    // Approving downloads the picked render once, links it, and does not stop on the song again.
+    // Approving downloads the picked song once (here a version the director revised in Suno),
+    // links it, and does not stop on the song again.
     doubles.createTrack.mockResolvedValueOnce({ id: 'track-2' });
     doubles.generateSunoSong.mockImplementationOnce(async (_fields, opts) => {
-      expect(opts).toMatchObject({ songIds: ['song-c', 'song-d'], exportSongId: 'song-c' });
-      return { songId: 'song-c', songIds: ['song-c', 'song-d'], filename: 'music-song-c.m4a' };
+      expect(opts).toMatchObject({ songIds: ['song-c', 'song-d'], exportSongId: 'song-revised' });
+      return { songId: 'song-revised', songIds: ['song-c', 'song-d'], filename: 'music-song-revised.m4a' };
     });
-    await service.resumeAutonomousVideo('mv-auto', { sunoSongId: 'song-c' });
+    await service.resumeAutonomousVideo('mv-auto', { sunoSongId: 'song-revised' });
     await vi.waitFor(() => expect(calls).toContain('production'));
     expect(doubles.generateSunoSong).toHaveBeenCalledTimes(1);
     expect(store.get('mv-auto').trackId).toBe('track-2');
-    expect(runOf().output).toMatchObject({ trackId: 'track-2', songTakeApproved: true, sunoSongPick: 'song-c' });
+    expect(runOf().output).toMatchObject({ trackId: 'track-2', songTakeApproved: true, sunoSongPick: 'song-revised' });
+    // Once past the checkpoint, a pick is refused.
+    await expect(service.resumeAutonomousVideo('mv-auto', { sunoSongId: 'song-c' })).rejects.toMatchObject({ status: 409 });
   });
 
   it('refuses a retake anywhere but the song checkpoint, leaving the run untouched', async () => {
