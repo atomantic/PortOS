@@ -202,6 +202,10 @@ export default function VideoGen() {
     getLoom(episodeLoomId, { silent: true }).then((loom) => {
       if (!active) return;
       const episode = loom?.episodes?.find((e) => e.id === episodeEpisodeId);
+      if (!episode) {
+        setEpisodeImportError(new Error('it is no longer in this loom; reopen the composer from FableLoom'));
+        return;
+      }
       setEpisodeImport({ key: episodeImportKey, scenes: loomEpisodeToDraftScenes(episode, { format: loom?.format }) });
       setEpisodeImportError(null);
     }).catch((error) => {

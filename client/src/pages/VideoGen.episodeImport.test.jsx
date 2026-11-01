@@ -37,9 +37,17 @@ describe('VideoGen Episode Composer FableLoom import', () => {
     expect(await screen.findByRole('button', { name: 'Retrying…' })).toBeDisabled();
     expect(importError()).toBeInTheDocument();
 
-    await act(async () => { resolveRetry({ episodes: [] }); });
+    await act(async () => { resolveRetry({ episodes: [{ id: 'ep-1', nodes: [] }] }); });
     await waitFor(() => expect(importError()).toBeNull());
     expect(screen.getByTestId('episode-composer')).toBeInTheDocument();
+  });
+
+  it('reports an episode missing from the loaded loom instead of opening it as empty', async () => {
+    state.getLoom.mockResolvedValueOnce({ episodes: [{ id: 'ep-other', nodes: [] }] });
+    await renderVideoGenPage(IMPORT_ENTRY);
+
+    expect(await screen.findByText(/Could not load the FableLoom episode — it is no longer in this loom/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
   });
 
   it('does not keep the previous episode\'s scenes after switching to an episode with none', async () => {
