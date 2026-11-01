@@ -138,9 +138,10 @@ export default function VoiceWidget() {
     // Events can overtake the bootstrap read. Only hydrate fields that have
     // not already received a newer value; bootstrap-only personality still loads.
     const updatedFields = new Set();
+    let active = true;
     getVoiceConfig()
       .then((cfg) => {
-        if (disposedRef.current) return;
+        if (!active || disposedRef.current) return;
         if (!updatedFields.has('enabled')) setEnabled(!!cfg?.enabled);
         if (!updatedFields.has('hotkey')) setHotkey(cfg?.hotkey || 'Space');
         if (!updatedFields.has('sttEngine') && cfg?.stt?.engine) setSttEngine(cfg.stt.engine);
@@ -167,7 +168,7 @@ export default function VoiceWidget() {
         ttsRef.current = { engine: cfg.ttsEngine, voice: cfg.ttsVoice, rate: cfg.ttsRate };
       }
     });
-    return off;
+    return () => { active = false; off(); };
   }, []);
 
   // Keep the cascade refs pointed at the latest config so the routeFinal closure

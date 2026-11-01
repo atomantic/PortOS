@@ -1,3 +1,4 @@
+import { StrictMode } from 'react';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 
@@ -113,10 +114,10 @@ describe('VoiceWidget owner lifecycle', () => {
     });
   });
 
-  it('keeps a disable event authoritative when the initial enabled snapshot arrives later', async () => {
+  it.each([false, true])('keeps a disable event authoritative after delayed hydration (StrictMode: %s)', async (strict) => {
     let resolveConfig;
-    mocks.getVoiceConfig.mockReturnValueOnce(new Promise((resolve) => { resolveConfig = resolve; }));
-    const { unmount } = render(<VoiceWidget />);
+    mocks.getVoiceConfig.mockReturnValue(new Promise((resolve) => { resolveConfig = resolve; }));
+    const { unmount } = render(strict ? <StrictMode><VoiceWidget /></StrictMode> : <VoiceWidget />);
 
     act(() => mocks.events.get('voice:config:changed')({ enabled: false }));
     await act(async () => resolveConfig({ enabled: true }));
