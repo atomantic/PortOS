@@ -78,7 +78,10 @@ import * as googleOAuthAutoConfig from '../services/googleOAuthAutoConfig.js';
 
 const ACCOUNT_ID = '11111111-1111-1111-1111-111111111111';
 const observeError = vi.fn();
-afterEach(() => errorEvents.off('error', observeError));
+afterEach(() => {
+  vi.useRealTimers();
+  errorEvents.off('error', observeError);
+});
 
 describe('Calendar Routes — normalized error handling', () => {
   let app;
@@ -271,7 +274,13 @@ describe('Calendar Routes — normalized error handling', () => {
       expect(calendarSync.getEvents).not.toHaveBeenCalled();
     });
 
-    it('returns today\'s window in the user timezone with trimmed event fields', async () => {
+    it.each([
+      ['2026-09-01T12:00:00Z', '2026-09-01', '2026-09-01T07:00:00.000Z', '2026-09-02T06:59:59.999Z'],
+      ['2026-03-08T12:00:00Z', '2026-03-08', '2026-03-08T08:00:00.000Z', '2026-03-09T06:59:59.999Z'],
+      ['2026-11-01T12:00:00Z', '2026-11-01', '2026-11-01T07:00:00.000Z', '2026-11-02T07:59:59.999Z'],
+    ])('returns the local day and trimmed events at %s', async (now, date, start, end) => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date(now));
       calendarAccounts.listAccounts.mockResolvedValue([
         { id: ACCOUNT_ID, enabled: true },
         { id: '22222222-2222-2222-2222-222222222222', enabled: false }
@@ -308,18 +317,12 @@ describe('Calendar Routes — normalized error handling', () => {
         }
       ]);
 
-      // The bounds are the user's LOCAL day expressed in UTC: startDate is
-      // local midnight in the configured timezone and the window spans 24h.
+      // The local day can span 23, 24, or 25 hours across DST transitions.
       const [{ startDate, endDate, limit }] = calendarSync.getEvents.mock.calls[0];
       expect(limit).toBe(8);
-      const localStart = new Date(startDate).toLocaleTimeString('en-US', {
-        timeZone: 'America/Los_Angeles', hour12: false, hour: '2-digit', minute: '2-digit'
-      });
-      expect(localStart).toBe('00:00');
-      expect(new Date(endDate).getTime() - new Date(startDate).getTime()).toBe(86399999);
-      expect(response.body.date).toBe(
-        new Date(startDate).toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' })
-      );
+      expect(startDate).toBe(start);
+      expect(endDate).toBe(end);
+      expect(response.body.date).toBe(date);
     });
   });
 
