@@ -1467,6 +1467,13 @@ export const musicVideoCastAndSetsDirectionEditSchema = z.object({
     chapters: castSetsText(300).optional(),
     originalName: castSetsText(120).optional(),
   }).strict()).min(1).max(4).optional(),
+  // The whole prop list (castAndSetsDirection CAST_SETS_LIMITS.props).
+  props: z.array(z.object({
+    id: z.string().max(64).optional(),
+    name: castSetsText(120).min(1),
+    owner: castSetsText(120).optional(),
+    description: castSetsText(1000).min(1),
+  }).strict()).max(6).optional(),
   // Every catalog-linked supporting character (the 24-subject cap) plus 4 invented ones.
   cast: z.array(z.object({
     id: z.string().min(1).max(64),

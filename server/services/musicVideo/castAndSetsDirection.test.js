@@ -321,3 +321,36 @@ describe('fixed supporting cast in the merge (#14069)', () => {
     expect(direction.protagonist.forms[0].subjectId).toBe('mvc-young');
   });
 });
+
+describe('Cast & Sets props', () => {
+  const PROPS = [
+    { name: "Renee's camera", owner: 'Renee', description: 'matte black plastic 35mm snapshot camera on a wrist strap' },
+    { id: 'Bike!', name: "Kevin's ten-speed", owner: 'Kevin', description: 'faded maroon ten-speed with drop bars' },
+    { name: 'placeholder only' },
+  ];
+
+  it('asks for every recurring object and keeps the described props', () => {
+    expect(buildCastAndSetsPrompt(project)).toMatch(/props: EVERY object a character carries, holds, uses or rides/);
+    const { direction } = mergeCastAndSetsDirection(null, parseCastAndSetsResponse(JSON.stringify({ ...ANSWER, props: PROPS })), { sections });
+    expect(direction.props).toEqual([
+      { id: 'renee-s-camera', name: "Renee's camera", owner: 'Renee', description: 'matte black plastic 35mm snapshot camera on a wrist strap' },
+      { id: 'bike', name: "Kevin's ten-speed", owner: 'Kevin', description: 'faded maroon ten-speed with drop bars' },
+    ]);
+  });
+
+  it('adds a catalog object the director linked when the answer left it out, and lists it in the prompt', () => {
+    const linked = { ...project, concept: { ...project.concept, subjects: [{ id: 'obj-1', kind: 'object', name: 'VHS-C camcorder', description: 'charcoal camcorder, red REC light', ingredientId: 'cat-obj-1' }] } };
+    expect(buildCastAndSetsPrompt(linked)).toContain('FIXED PROPS (catalog objects the director chose');
+    const { direction } = mergeCastAndSetsDirection(null, parseCastAndSetsResponse(JSON.stringify({ ...ANSWER, props: PROPS.slice(0, 1) })),
+      { sections, fixedProps: [{ id: 'obj-1', name: 'VHS-C camcorder', description: 'charcoal camcorder, red REC light' }] });
+    expect(direction.props.map((item) => item.name)).toEqual(['VHS-C camcorder', "Renee's camera"]);
+  });
+
+  it('keeps a direction saved before props existed in its old shape, and lets the director replace the list', () => {
+    const { direction } = mergeCastAndSetsDirection(null, parseCastAndSetsResponse(JSON.stringify(ANSWER)), { sections });
+    expect(direction).not.toHaveProperty('props');
+    const edited = applyCastAndSetsDirectionEdits(direction, { props: [{ name: 'Snapshot camera', description: 'black 35mm compact' }] }, { sections });
+    expect(edited.direction.props).toEqual([{ id: 'snapshot-camera', name: 'Snapshot camera', owner: '', description: 'black 35mm compact' }]);
+    expect(edited.changed).toContain('props');
+  });
+});

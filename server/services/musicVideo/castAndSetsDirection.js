@@ -73,6 +73,8 @@ export const CAST_SETS_LIMITS = Object.freeze({
   // director cast (fixedSupportingCast) never count against it: each one keeps
   // its sheet, bounded only by the project's own subject cap.
   cast: 4,
+  // Recurring objects (cameras, instruments, vehicles, signature items) on one prop sheet.
+  props: 6,
   fixedCast: 24,
   forms: 3,
 });
@@ -236,6 +238,26 @@ export function fixedSupportingCast(project) {
     .slice(0, CAST_SETS_LIMITS.fixedCast);
 }
 
+/**
+ * The catalog objects the director linked (subjects of kind 'object'): the
+ * direction keeps each as a prop under its own name and description.
+ */
+export function fixedProps(project) {
+  return (project?.concept?.subjects || [])
+    .filter((s) => s?.kind === 'object' && s.name && !String(s.id || '').startsWith(CAST_SETS_SUBJECT_PREFIX))
+    .map((s) => ({ id: s.id, name: s.name.trim(), description: s.description || '' }))
+    .slice(0, CAST_SETS_LIMITS.props);
+}
+
+function fixedPropsBlock(project) {
+  const fixed = fixedProps(project);
+  if (!fixed.length) return '';
+  return [
+    'FIXED PROPS (catalog objects the director chose; keep each in "props" under its own name and description):',
+    ...fixed.map((p) => `- ${trimTo(p.name, 120)}${p.description ? ` — ${trimTo(p.description, 500)}` : ''}`),
+  ].join('\n');
+}
+
 function fixedCastingBlock(project) {
   const fixed = fixedCasting(project);
   if (!fixed.length) return '';
@@ -264,6 +286,7 @@ const OUTPUT_SHAPE = `{
   },
   "looks": [{ "name": "<SHORT NAME>", "description": "<the complete outfit>", "chapters": "<which parts of the song>" }],
   "cast": [{ "id": "<short-slug>", "name": "<a name>", "role": "<what they are in the video: drummer, shopkeeper, ...>", "description": "<who they are: age, vibe, attitude>", "height": "<their height, e.g. 5 ft 10 in (178 cm)>", "face": "<face: skin, eyes, brows, distinguishing features>", "hair": "<hair>", "wardrobe": "<their one outfit>" }],
+  "props": [{ "id": "<short-slug>", "name": "<what it is and whose, e.g. Renee's camera>", "owner": "<who carries, uses or rides it, or empty>", "description": "<exactly how it looks: type, era, shape, size, colors, materials and distinguishing marks; no brand names or text>" }],
   "sets": [{ "id": "<short-slug>", "name": "<set name>", "description": "<the empty location, concrete and visual, with nobody in it>", "lighting": "<its one dominant light>", "era": "<the year or period it is seen in when that is not the present story, or empty>", "look": "<the film stock, format and color of that era when it differs from the main look, or empty>", "sections": ["<section label it serves>"] }],
   "songMap": [{ "section": 0, "setId": "<short-slug>" }],
   "tests": [{ "setId": "<short-slug>", "look": "<SHORT NAME>", "action": "<what the protagonist does in this frame>", "caption": "<the lyric or beat it serves>", "formId": "<the protagonist.forms id when this frame shows them at that other age, or empty>" }],
@@ -423,6 +446,7 @@ export function buildCastAndSetsPrompt(project, { moodImages = [], board = null,
     `- cast: the RECURRING supporting characters besides the protagonist that the song, concept or guidance calls for (band members, someone who returns across scenes)${fixedSupportingCast(project).length
     ? `: every character FIXED CASTING lists that is not the protagonist or one of their other ages, each as its own entry under its own name, plus at most ${CAST_SETS_LIMITS.cast} more`
     : `, at most ${CAST_SETS_LIMITS.cast}; [] when the protagonist is alone`}. Each gets their own photographic character sheet. Shots that name a cast member by name or role are conditioned on that sheet, so give each a distinct name and a plain role word.`,
+    `- props: EVERY object a character carries, holds, uses or rides in more than one shot (cameras, phones, instruments, bikes, cars, a signature item), at most ${CAST_SETS_LIMITS.props}. Leave none out: a prop the concept, lyrics or guidance mentions must be here. Describe each exactly enough to draw the same object every time (type, era, shape, colors, materials, wear, distinguishing marks), with no brand names or text. Two characters with the same kind of object get one entry each when theirs differ, or one entry naming both owners when they are identical. They render on one prop sheet that every shot showing a prop is conditioned on; [] only when nobody uses one.`,
     '- Wet or revealing looks use opaque fabric so the video stays safe to post.',
     '- questions: up to three things you need the director to decide.',
   ].join('\n');
@@ -450,6 +474,7 @@ export function buildCastAndSetsPrompt(project, { moodImages = [], board = null,
     facts,
     characterStyle,
     fixedCastingBlock(project),
+    procedural ? '' : fixedPropsBlock(project),
     storyBlock(project, guides),
     songStyle,
     `Lyrics (section headers and delivery directions in brackets):\n${lyrics || '(instrumental — no lyrics)'}`,
@@ -561,6 +586,12 @@ const castSchema = z.preprocess(withoutNulls, z.object({
   hair: prose(TEXT).optional(),
   wardrobe: prose(TEXT).optional(),
 }).passthrough());
+const propSchema = z.preprocess(withoutNulls, z.object({
+  id: z.string().optional(),
+  name: prose(SHORT),
+  owner: prose(SHORT).optional(),
+  description: prose(TEXT),
+}).passthrough());
 const testSchema = z.object({ setId: z.string(), look: text(SHORT).optional(), action: text(TEXT), caption: text(300).optional(), formId: text(64).optional() }).passthrough();
 const overlaySchema = z.union([
   text(TEXT).transform((summary) => ({ summary, elements: [] })),
@@ -581,6 +612,7 @@ const FIELD_PARSERS = {
   definitions: definitionsSchema,
   looks: z.array(lookSchema),
   cast: z.array(castSchema),
+  props: z.array(propSchema),
   sets: z.array(setSchema),
   songMap: z.array(songMapSchema),
   tests: z.array(testSchema),
@@ -704,6 +736,21 @@ function normalizeCast(cast, protagonist, { fixed = [], forms = [] } = {}) {
   });
 }
 
+// Recurring objects: described, unique slug ids, capped; the director's catalog
+// objects (`fixed`) are added by name when the answer left one out.
+function normalizeProps(props, { fixed = [] } = {}) {
+  const seen = new Set();
+  const kept = (Array.isArray(props) ? props : []).filter((p) => p && p.name && p.description);
+  const named = new Set(kept.map((p) => String(p.name).trim().toLowerCase()));
+  const added = fixed.filter((p) => p.description && !named.has(p.name.toLowerCase())).map((p) => ({ name: p.name, description: p.description }));
+  return [...added, ...kept].slice(0, CAST_SETS_LIMITS.props).map((p, i) => {
+    let id = slug(p.id) || slug(p.name) || `prop-${i + 1}`;
+    while (seen.has(id)) id = `${id}-${i + 1}`;
+    seen.add(id);
+    return { id, name: p.name, owner: p.owner || '', description: p.description };
+  });
+}
+
 // Other ages of the protagonist: a described form, unique slug ids, capped.
 // `subjectId` (optional) binds the form to a fixed-casting subject's reference;
 // a form listed without the key keeps the binding `previous` had for its id.
@@ -756,7 +803,7 @@ function testsWithMissingForm(tests, forms) {
  * `{ direction, missing }` — `missing` lists the required parts still absent,
  * so a first pass with an unusable answer can be refused.
  */
-export function mergeCastAndSetsDirection(previous, parsed, { sections = [], medium = null, minSets = CAST_SETS_LIMITS.sets.min, fixedCast = [] } = {}) {
+export function mergeCastAndSetsDirection(previous, parsed, { sections = [], medium = null, minSets = CAST_SETS_LIMITS.sets.min, fixedCast = [], fixedProps: fixedPropList = [] } = {}) {
   const base = previous || {};
   const procedural = (medium || base.medium) === 'procedural';
   const pick = (key, fallback) => (hasOwn(parsed, key) ? parsed[key] : (hasOwn(base, key) ? base[key] : fallback));
@@ -817,6 +864,9 @@ export function mergeCastAndSetsDirection(previous, parsed, { sections = [], med
     looks,
     // Photographic only: a procedural cast lives in `definitions`.
     ...(procedural ? {} : { cast: normalizeCast(pick('cast', []), protagonist, { fixed: fixedCast, forms }) }),
+    // Photographic only; a direction saved before props existed keeps its shape.
+    ...(!procedural && (hasOwn(parsed, 'props') || base.props || fixedPropList.length)
+      ? { props: normalizeProps(pick('props', []), { fixed: fixedPropList }) } : {}),
     sets,
     songMap,
     tests,
@@ -879,6 +929,7 @@ function patchItems(list, patches, { what, keyOf, fields, extra = () => ({}) }) 
  *   world?:       procedural world rules;
  *   looks?:       the whole wardrobe list;
  *   cast?:        `[{ id, remove?, name?, role?, description?, height?, face?, hair?, wardrobe? }]`;
+ *   props?:       the whole prop list (`[{ id?, name, owner?, description }]`, photographic);
  *   sets?:        `[{ id, remove?, name?, description?, lighting?, era?, look?, imageRole? }]`, or
  *                 greybox selections only (`[{ id, setReference }]`, saved apart);
  *   tests?:       `[{ index (1-based), remove?, action?, caption?, look? }]` — an
@@ -924,6 +975,9 @@ export function applyCastAndSetsDirectionEdits(previous, edits, { sections = [],
     currentLookNames = new Set(parsed.looks.map((look) => look.name.toLowerCase()));
     currentLookNamesExact = new Set(parsed.looks.map((look) => look.name));
     parsed.tests = (previous.tests || []).map((test) => ({ ...test, look: renames.get(test.look) || test.look }));
+  }
+  if (!procedural && Array.isArray(edits?.props)) {
+    parsed.props = edits.props.map((p) => pickText(p, { id: 64, name: SHORT, owner: SHORT, description: TEXT }));
   }
   if (!procedural && Array.isArray(edits?.cast) && edits.cast.length) {
     const fixedNames = new Set(fixedCast.map((f) => castKey(f.name)));
@@ -998,6 +1052,7 @@ function describeEdits(previous, direction) {
     ...['expressions', 'forms'].filter((key) => differs(p0[key] || [], p1[key] || [])),
     ...Object.keys(CAST_SETS_EDITABLE_WORLD).filter((key) => differs(previous.world?.[key], direction.world?.[key])).map((key) => `world ${key}`),
     ...(differs(previous.looks || [], direction.looks || []) ? ['looks'] : []),
+    ...(differs(previous.props || [], direction.props || []) ? ['props'] : []),
     ...listChanges('cast', previous.cast, direction.cast, (c) => c.id, (c) => c.name),
     ...(direction.medium === 'procedural'
       ? direction.sets.filter((set) => differs(previous.sets.find((s) => s.id === set.id)?.imageRole, set.imageRole)).map((set) => `${set.name} image role`)
@@ -1032,6 +1087,7 @@ export function describeDirectionChanges(previous, next) {
   if (protagonistFields.length) out.push(`Protagonist: ${nameList(protagonistFields)}`);
   if (!same(previous.looks, next.looks)) out.push('Wardrobe looks revised');
   if (!same(previous.cast || [], next.cast || [])) out.push('Supporting cast revised');
+  if (!same(previous.props || [], next.props || [])) out.push('Props revised');
   if (!same(previous.world?.lighting, next.world?.lighting)) out.push('World lighting revised');
   const before = new Map((previous.sets || []).map((s) => [s.id, s]));
   const lit = [];

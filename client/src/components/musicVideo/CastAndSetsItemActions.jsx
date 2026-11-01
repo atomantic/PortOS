@@ -15,6 +15,13 @@ const SET_FIELDS = [['name', 'Name'], ['description', 'The empty place'], ['ligh
 const TEST_FIELDS = [['action', 'What happens in the frame'], ['caption', 'Caption']];
 const LONG = new Set(['description', 'action', 'face', 'wardrobe']);
 
+// A prop line is "name: description"; a line without both halves is dropped.
+const propLine = (line) => {
+  const at = line.indexOf(':');
+  const name = line.slice(0, at).trim();
+  const description = line.slice(at + 1).trim();
+  return at > 0 && name && description ? { name, description } : null;
+};
 const lines = (text) => String(text || '').split('\n').map((line) => line.trim()).filter(Boolean);
 const cardIdentity = (projectId, revision, item) => JSON.stringify([projectId, revision, item?.key, item?.kind,
   item?.testIndex, item?.setId, item?.label, item?.prompt, item?.deps, item?.refKeys]);
@@ -45,6 +52,14 @@ function editorFor(item, direction, adding = false, subjects = []) {
   if (item.kind === 'expressions') {
     return { list: 'One mood per line: what the face, eyes and head do', values: { text: (p.expressions || []).join('\n') },
       toEdits: (v) => ({ protagonist: { expressions: lines(v.text) } }) };
+  }
+  if (item.kind === 'props') {
+    const props = direction?.props || [];
+    return { list: 'One prop per line: name: exactly how it looks', values: { text: props.map((prop) => `${prop.name}: ${prop.description}`).join('\n') },
+      toEdits: (v) => ({ props: lines(v.text).map(propLine).filter(Boolean).map((prop) => {
+        const prior = props.find((old) => old.name.toLowerCase() === prop.name.toLowerCase());
+        return prior ? { ...prop, id: prior.id, owner: prior.owner || '' } : prop;
+      }) }) };
   }
   if (item.kind === 'looks') {
     return { looks: true, values: { looks: (direction?.looks || []).map((look) => ({ ...look, originalName: look.name })) },
