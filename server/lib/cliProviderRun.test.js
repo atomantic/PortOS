@@ -172,6 +172,7 @@ describe('runCliProviderPrompt', () => {
     }).finally(() => rm(dir, { recursive: true, force: true }));
     expect(result.error).toBeUndefined();
     expect(result.text).toBe('{"verdict":"clean","findings":[]}');
+    expect(result.finishReason).toBe('stop');
     expect(result.streamFormat).toBeUndefined();
     // A tool call in a no-tool run is drift the probe must name (#14476).
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('grep'));

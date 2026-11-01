@@ -306,6 +306,10 @@ describe('public-review provider postures', () => {
     expect(review.streamFormat).toBe('grok-streaming-json');
     expect(review.args.filter((arg) => arg === '--output-format')).toHaveLength(1);
     expect(review.args[review.args.indexOf('--output-format') + 1]).toBe('streaming-json');
+    expect(review.args.filter((arg) => arg === '--json-schema')).toHaveLength(1);
+    const schema = JSON.parse(review.args[review.args.indexOf('--json-schema') + 1]);
+    expect(schema).toMatchObject({ required: ['verdict', 'findings'], additionalProperties: false });
+    expect(schema.properties.verdict.enum).toEqual(['clean', 'findings']);
     expect(review.args).toEqual(expect.arrayContaining([...GROK_NO_TOOL_ARGS, '--prompt-file', '/dev/stdin']));
 
     const stage = buildVendorSpawnConfig(grok, ctx);

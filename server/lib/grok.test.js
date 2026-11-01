@@ -15,6 +15,9 @@ import {
   ensureGrokTuiArgs,
   prepareGrokPromptFile,
   extractGrokFinalMessage,
+  grokReviewFinishReason,
+  GROK_CODE_REVIEW_JSON_SCHEMA,
+  withGrokCodeReviewOutput,
   withGrokStreamingJsonOutput,
   grokSpeedTarget,
   grokServiceTierModel,
@@ -210,11 +213,54 @@ describe('grok — streaming-json final message', () => {
     expect(extractGrokFinalMessage(undefined)).toBe('');
   });
 
+  // #14523: a no-tool review told to inspect the checkout emitted this shape —
+  // `text` deltas, a short `thought`, no `tool_call`. The concatenation was
+  // prose (no brace, fence, or verdict) and the parser must keep rejecting it.
+  // The same event types carrying an exact envelope are the verdict.
+  it('keeps a prose-only transcript out of the verdict and returns an exact envelope', () => {
+    const prose = [
+      line({ type: 'available_commands', tools: [] }),
+      line({ type: 'thought', data: 'note' }),
+      ...text('The diff changes a counter. ', 'I would inspect the callers next.'),
+      line({ type: 'usage', usage: {} }),
+      line({ type: 'end', stopReason: 'end_turn' }),
+    ].join('\n');
+    const extracted = extractGrokFinalMessage(prose);
+    expect(extracted).toBe('The diff changes a counter. I would inspect the callers next.');
+    expect(extracted).not.toMatch(/[{`]/);
+    expect(extracted).not.toContain('verdict');
+    expect(grokReviewFinishReason(prose)).toBe('stop');
+
+    const envelope = '{"verdict":"clean","findings":[]}';
+    const verdict = [
+      line({ type: 'available_commands', tools: [] }),
+      line({ type: 'thought', data: 'note' }),
+      ...text(envelope.slice(0, 12), envelope.slice(12)),
+      line({ type: 'end', stopReason: 'end_turn' }),
+    ].join('\n');
+    expect(extractGrokFinalMessage(verdict)).toBe(envelope);
+    expect(grokReviewFinishReason(verdict)).toBe('stop');
+    expect(grokReviewFinishReason(line({ type: 'end', stopReason: 'max_tokens' }))).toBe('length');
+    expect(grokReviewFinishReason(line({ type: 'end', stopReason: 'vendor-specific' }))).toBe('unknown');
+    expect(grokReviewFinishReason(undefined)).toBe('unknown');
+  });
+
   it('replaces any pinned output format with streaming-json', () => {
     for (const pinned of [['--output-format', 'plain'], ['-o', 'json'], ['--output-format=json']]) {
       expect(withGrokStreamingJsonOutput(['--model', 'm', ...pinned, '--prompt-file', '/dev/stdin']))
         .toEqual(['--model', 'm', '--prompt-file', '/dev/stdin', '--output-format', 'streaming-json']);
     }
+  });
+
+  it('constrains a code review to streaming-json and the verdict schema', () => {
+    const args = withGrokCodeReviewOutput([
+      '--model', 'm', '--output-format', 'plain', '--json-schema', '{"type":"string"}', '--prompt-file', '/dev/stdin',
+    ]);
+    expect(args).toEqual([
+      '--model', 'm', '--prompt-file', '/dev/stdin', '--output-format', 'streaming-json',
+      '--json-schema', JSON.stringify(GROK_CODE_REVIEW_JSON_SCHEMA),
+    ]);
+    expect(JSON.parse(args.at(-1)).properties.verdict.enum).toEqual(['clean', 'findings']);
   });
 });
 

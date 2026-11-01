@@ -969,7 +969,11 @@ function resolveReviewWorkspace({ transport, isolateFromCheckout = false, cwd })
   if (isolateFromCheckout || transport.tier === 'unconfined' || !cwd) {
     return { cwd: 'scratch', repositoryAccess: false }
   }
-  return { cwd: 'checkout', repositoryAccess: true }
+  // `no-tool` (grok, claude `--tools ''`) cannot open the checkout. Inviting
+  // it to inspect source makes it narrate a prose review, which the verdict
+  // parser correctly rejects as invalid_json (#14523). Only a read-only tier
+  // can look at surrounding code.
+  return { cwd: 'checkout', repositoryAccess: transport.tier === 'read-only' }
 }
 
 function reviewMessages({ messages, userMessage, systemPromptFor }, workspace) {
