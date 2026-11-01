@@ -742,6 +742,7 @@ export async function forceSpawnTask(taskId, { resetSpawnBudget = false } = {}) 
   if (analysis === 'do-release' || analysis === 'release-sync') {
     const { releaseTaskDispatchDisposition } = await import('./releaseSynchronization.js');
     const disposition = await releaseTaskDispatchDisposition(task);
+    if (disposition === 'review-policy-unverified') return { error: 'Release synchronization review policy was not captured; recover from historical delivery evidence (docs/VERSIONING.md).' };
     if (disposition === 'retired-continuation') return { error: 'This release synchronization was retired by an operator.' };
     if (disposition === 'wait-for-synchronization') return { error: 'The previous release synchronization is unfinished.' };
   }
