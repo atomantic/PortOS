@@ -61,6 +61,7 @@
  * Pure module: no I/O or imports out to services.
  */
 
+import { isDeepStrictEqual } from 'node:util';
 import { LTX2_FAMILY_RUNTIMES } from './runners.js';
 import {
   MINIMAX_H3_LIGHTX2V_PROFILE, MINIMAX_H3_LIGHTX2V_MLX_PROFILE, MINIMAX_H3_FLEX_MLX_PROFILE, isMiniMaxH3SpeedProfile, isMiniMaxH3SpeedProfileRequest,
@@ -161,7 +162,8 @@ const isEntry = (entry) => !!entry && typeof entry === 'object' && typeof entry.
  *
  * Preservation contract (mirrors migration 295, and the two sibling
  * decorators):
- *   - `'speedProfiles' in entry` → user/existing value wins (including `null`
+ *   - The exact previous shipped MLX list upgrades to include Flex on the pinned model.
+ *   - Other `'speedProfiles' in entry` values win (including `null`
  *     or `[]`, the explicit "no speed profiles on this model" override)
  *   - entry id not shipped → custom model, left as-is
  *   - `repo` or `revision` differs from the pin → left as-is (see the pin
@@ -171,7 +173,15 @@ export const applyVideoSpeedProfiles = (list) => {
   if (!Array.isArray(list)) return list;
   return list.map((entry) => {
     if (!isEntry(entry)) return entry;
-    if ('speedProfiles' in entry) return entry;
+    if ('speedProfiles' in entry) {
+      // Registries persist shipped defaults. Upgrade only the complete prior
+      // contract; explicit opt-outs and customized lists retain their meaning.
+      if (isDeepStrictEqual(entry.speedProfiles, [MINIMAX_H3_LIGHTX2V_MLX_PROFILE])
+        && isPinnedMiniMaxH3SpeedProfile(entry, MINIMAX_H3_LIGHTX2V_MLX_PROFILE)) {
+        return { ...entry, speedProfiles: [{ ...MINIMAX_H3_LIGHTX2V_MLX_PROFILE }, { ...MINIMAX_H3_FLEX_MLX_PROFILE }] };
+      }
+      return entry;
+    }
     const spec = VIDEO_SPEED_PROFILES[entry.id];
     if (!spec) return entry;
     if (spec.shippedRepo !== null && entry.repo !== spec.shippedRepo) return entry;

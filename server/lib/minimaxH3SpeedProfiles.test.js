@@ -78,6 +78,18 @@ describe('Pika H3 Flex pinned multi-canvas contract', () => {
     expect(shipped.requiredWeights).toEqual([flex.checkpoint]);
     expect(applyVideoSpeedProfiles([shipped])[0].speedProfiles.map((profile) => profile.id)).toContain(flex.id);
   });
+  it('upgrades the exact prior shipped list while preserving explicit opt-outs and custom contracts', () => {
+    const prior = { ...mlx.model, requiredWeights: [mlx.checkpoint], speedProfiles: [structuredClone(mlx)] };
+    expect(applyVideoSpeedProfiles([prior])[0].speedProfiles).toEqual([mlx, flex]);
+    expect(prior.speedProfiles).toEqual([mlx]);
+    const custom = [{ ...prior, speedProfiles: [] }, { ...prior, speedProfiles: null },
+      { ...prior, revision: 'custom' }, { ...prior, requiredWeights: [] },
+      { ...prior, speedProfiles: [{ ...mlx, name: 'Custom profile' }] }];
+    expect(applyVideoSpeedProfiles(custom)).toEqual(custom);
+    const upgraded = applyVideoSpeedProfiles([prior]);
+    expect(applyVideoSpeedProfiles(upgraded)).toEqual(upgraded);
+  });
+
   it('offers the opt-in six-update schedule only on the pinned MLX model', () => {
     const supported = model(flex);
     for (const [width, height] of flex.canvases) {
