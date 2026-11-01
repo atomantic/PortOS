@@ -125,3 +125,38 @@ describe('authoredShotPrompt', () => {
     expect(authoredShotPrompt({ visualIntent: 'planner intent', framePrompt: 'rental booth' })).toBe('rental booth');
   });
 });
+
+// A composed still must identify each sent image without changing the director's notes
+// or assuming the supplied references contain everyone in the shot.
+describe('reference map', () => {
+  const references = [
+    { id: 'mvr-cs-character', imageId: 'lead.png', role: 'character', label: 'Example lead', note: 'short hair; blue coat' },
+    null,
+    { id: 'mvr-cs-cast-other', imageId: 'other.png', role: 'character', label: 'Example guest', note: 'long hair' },
+    { id: 'mvr-cs-set-street', imageId: 'street.png', role: 'set', label: 'Example street' },
+    { id: 'mvr-cs-props', imageId: 'props.png', role: 'prop', label: 'Props' },
+  ];
+
+  it('names each reference image by its send position, with the face text in full', () => {
+    const input = musicVideoFrameModelInput(project, scene, { references });
+    const text = input.promptAdditions.find((item) => item.id === 'reference-map').text;
+    expect(text).toContain('Reference image 1 is Example lead: this exact person. Match their face, hair, skin, build and age exactly (short hair; blue coat)');
+    expect(text).toContain('Reference image 3 is Example guest: this exact person.');
+    expect(text).toContain('Reference image 4 is the set reference "Example street"');
+    expect(text).toContain('Reference image 5 is the prop sheet');
+    expect(text).not.toContain('Reference image 2');
+    expect(text).not.toContain('add nobody else');
+    expect(input.prompt).toContain(text);
+    expect(ids(musicVideoFrameModelInput(project, scene, { references: [null, { role: 'mood', imageId: 'x.png' }] }))).not.toContain('reference-map');
+  });
+
+  it('preserves a long, multiline reference note in the listed and sent prompt', () => {
+    const note = `${'An invented detail. '.repeat(35)}\nKeep  the spacing.`;
+    const input = musicVideoFrameModelInput(project, scene, { references: [{ ...references[0], note }] });
+    expect(ids(input)[0]).toBe('reference-map');
+    const text = input.promptAdditions[0].text;
+    expect(text).toContain(note);
+    expect(input.prompt).toContain(text);
+    expect(ids(musicVideoFrameModelInput(project, scene))).not.toContain('reference-map');
+  });
+});
