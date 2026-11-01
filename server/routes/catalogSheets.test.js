@@ -446,7 +446,7 @@ describe('catalog sheet routes', () => {
       characters: [{ id: 'char-entry-1', name: 'Ada', ingredientId: 'cat-chr-1' }],
     });
     const listed = await request(app).get('/api/catalog/ingredients/cat-chr-1/sheets/variants');
-    expect(listed.body.variants.map((v) => v.id)).toEqual(['photographic', 'standard', 'blueprint']);
+    expect(listed.body.variants.map((v) => v.id)).toEqual(['photographic', 'standard', 'face', 'blueprint']);
     const preview = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets/preview').send({});
     expect(preview.body.preview.sentPrompt).toContain('PHOTOGRAPHIC CHARACTER REFERENCE SHEET');
     expect(preview.body.preview.sentPrompt).toContain('Soft window light');
@@ -457,7 +457,7 @@ describe('catalog sheet routes', () => {
 
     mocks.getUniverse.mockResolvedValue({ id: 'universe-1', name: 'Example Universe', characters: [] });
     const plain = await request(app).get('/api/catalog/ingredients/cat-chr-1/sheets/variants');
-    expect(plain.body.variants.map((v) => v.id)).toEqual(['standard', 'photographic', 'blueprint']);
+    expect(plain.body.variants.map((v) => v.id)).toEqual(['standard', 'photographic', 'face', 'blueprint']);
   });
 
   describe('look renders', () => {
