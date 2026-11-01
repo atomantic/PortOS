@@ -41,6 +41,10 @@ const DEFAULT_UNIVERSE_STYLE = {
 export const state = {
   /** `GET /api/instances` peers — a media-provider peer makes the target picker appear. */
   peers: [],
+  /** `getLoom` for the Episode Composer's FableLoom import. */
+  getLoom: vi.fn(),
+  /** Render an open Drawer's children (off by default: drawers stay inert). */
+  renderDrawerContent: false,
   /** `getVideoGenStatus`; a spy so a suite can defer it, count calls or vary the payload. */
   getVideoGenStatus: vi.fn(),
   /**
@@ -103,6 +107,8 @@ const SPIES = ['getVideoGenStatus', 'getVideoGenModelContext', 'generateVideo', 
 /** Restore every documented default, including fresh spies. Call it first in `beforeEach`. */
 export function resetVideoGenMockState() {
   state.peers = [];
+  state.getLoom = vi.fn(async () => ({ episodes: [] }));
+  state.renderDrawerContent = false;
   state.settings = null;
   state.activeJob = null;
   state.modelStatuses = {};
@@ -211,6 +217,8 @@ vi.mock('../services/api', () => ({
   // effect — the tests still pass, but the unhandled rejection fails the run.
   getProviders: vi.fn(async () => ({ providers: [] })),
   getVisionModels: vi.fn(async () => ({ models: [] })),
+  // The Episode Composer's FableLoom import (`?episode=1&loomId=…`).
+  getLoom: (...args) => state.getLoom(...args),
 }));
 
 vi.mock('../hooks/useModelDownloadStatus', async (importOriginal) => ({
@@ -284,7 +292,13 @@ vi.mock('../components/install/RuntimeInstallModal', () => ({
 // Keep the policy-bearing controls real; replace unrelated, heavyweight page
 // surfaces so these stay focused orchestration tests rather than a gallery/SSE
 // integration suite.
-vi.mock('../components/Drawer', () => ({ default: () => null }));
+// `state.renderDrawerContent` opts one suite into an open drawer's children.
+vi.mock('../components/Drawer', () => ({
+  default: ({ open, children }) => (open && state.renderDrawerContent ? <div>{children}</div> : null),
+}));
+vi.mock('../components/videoGen/EpisodeComposer', () => ({
+  default: ({ initialScenes }) => <div data-testid="episode-composer">{initialScenes?.length ?? 0} imported scenes</div>,
+}));
 vi.mock('../components/settings/ImageGenTab', () => ({ ImageGenTab: () => null }));
 vi.mock('../components/settings/LocalSetupPanel', () => ({ default: () => null }));
 vi.mock('../components/videoGen/FramePanel', () => ({ default: () => null }));

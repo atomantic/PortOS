@@ -175,21 +175,29 @@ export default function VideoGen() {
     // The composer unmounts on close (conditional render below) — clear the
     // import so a later open with no loomId/episodeId doesn't inherit it.
     setEpisodeImportScenes(null);
+    setEpisodeImportError(null);
   };
   const [episodeImportScenes, setEpisodeImportScenes] = useState(null);
+  // A failed FableLoom read must not open as a blank composer the user takes
+  // for an episode with no scenes.
+  const [episodeImportError, setEpisodeImportError] = useState(null);
+  const [episodeImportAttempt, setEpisodeImportAttempt] = useState(0);
   useEffect(() => {
     if (!episodeOpen || !episodeLoomId || !episodeEpisodeId) return undefined;
     let active = true;
+    setEpisodeImportError(null);
     getLoom(episodeLoomId, { silent: true }).then((loom) => {
       if (!active) return;
       const episode = loom?.episodes?.find((e) => e.id === episodeEpisodeId);
       const draftScenes = loomEpisodeToDraftScenes(episode, { format: loom?.format });
       if (draftScenes.length) setEpisodeImportScenes(draftScenes);
-    }).catch(() => {});
+    }).catch((error) => {
+      if (active) setEpisodeImportError(error);
+    });
     return () => { active = false; };
     // Only re-run when a fresh loom/episode is targeted, not on every render.
     // Dependency list is intentionally partial.
-  }, [episodeOpen, episodeLoomId, episodeEpisodeId]);
+  }, [episodeOpen, episodeLoomId, episodeEpisodeId, episodeImportAttempt]);
 
   // `/status` owns connectivity ONLY. It shells out to python on every call
   // (~1-2s), so nothing the form needs to render may wait on it.
@@ -2158,6 +2166,14 @@ export default function VideoGen() {
       </Drawer>
 
       <Drawer open={episodeOpen} onClose={closeEpisodeComposer} title="Episode Composer" size="xl" closeOnBackdrop={false}>
+        {episodeOpen && episodeImportError && (
+          <ListLoadError
+            what="the FableLoom episode"
+            error={episodeImportError}
+            onRetry={() => setEpisodeImportAttempt((n) => n + 1)}
+            className="mb-3"
+          />
+        )}
         {episodeOpen && <EpisodeComposer initialScenes={episodeImportScenes} onQueued={refreshHistory} />}
       </Drawer>
 
