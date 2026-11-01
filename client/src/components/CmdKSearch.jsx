@@ -20,10 +20,16 @@ import { onActivateKeyDown } from '../lib/a11yKeyboard.js';
 
 const ICON_MAP = { Brain, Cpu, Package, History, HeartPulse, Video };
 
+// Manifest aliases are hyphenated slugs (`brain-ideas`, `settings-backup`), so
+// separators are folded to single spaces on both sides: a typed "brain ideas"
+// must reach the alias the voice resolver already matches.
+const normalizeSearchText = (s) => (s || '').toLowerCase().replace(/[\s_-]+/g, ' ').trim();
+
 // Subsequence-based fuzzy scorer. Tiered: exact label > label-prefix > alias
-// exact > label-contains > alias-contains > keyword-contains > section-contains
-// > subsequence. Reads precomputed lowercased fields to keep each comparison
-// allocation-free on the per-keystroke hot path.
+// exact > label-contains > alias-contains > keyword-contains > every query word
+// in some field (label + section, e.g. "ideas brain") > section-contains >
+// subsequence. Reads precomputed normalized fields so single-word comparisons
+// stay allocation-free on the per-keystroke hot path; `q` is already normalized.
 const scoreCommand = (c, q) => {
   if (!q) return 0;
   const { _label, _aliases, _keywords, _section } = c;
@@ -33,6 +39,10 @@ const scoreCommand = (c, q) => {
   if (_label.includes(q)) return 500;
   for (const a of _aliases) if (a.includes(q)) return 400;
   for (const k of _keywords) if (k.includes(q)) return 300;
+  if (q.includes(' ')) {
+    const fields = [_label, _section, ..._aliases, ..._keywords];
+    if (q.split(' ').every((word) => fields.some((f) => f.includes(word)))) return 200;
+  }
   if (_section.includes(q)) return 150;
   let i = 0;
   for (const ch of _label) if (ch === q[i]) i += 1;
@@ -41,10 +51,10 @@ const scoreCommand = (c, q) => {
 
 const precompute = (cmd) => ({
   ...cmd,
-  _label: (cmd.label || '').toLowerCase(),
-  _aliases: (cmd.aliases || []).map((a) => a.toLowerCase()),
-  _keywords: (cmd.keywords || []).map((k) => k.toLowerCase()),
-  _section: (cmd.section || '').toLowerCase(),
+  _label: normalizeSearchText(cmd.label),
+  _aliases: (cmd.aliases || []).map(normalizeSearchText),
+  _keywords: (cmd.keywords || []).map(normalizeSearchText),
+  _section: normalizeSearchText(cmd.section),
 });
 
 function Highlight({ text, query }) {
@@ -259,8 +269,9 @@ export default function CmdKSearch() {
       const actions = manifest.actions.filter((a) => DEFAULT_ACTION_IDS.has(a.id)).map((a) => ({ ...a, kind: 'action' }));
       return { recentNav, nav, actions, layouts: [], commandCount: recentNav.length + nav.length + actions.length };
     }
+    const scoreQuery = normalizeSearchText(q);
     const rank = (items, max) => items
-      .map((c) => ({ cmd: c, score: scoreCommand(c, q) }))
+      .map((c) => ({ cmd: c, score: scoreCommand(c, scoreQuery) }))
       .filter((x) => x.score > 0)
       .sort((a, b) => b.score - a.score)
       .slice(0, max)
