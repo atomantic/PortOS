@@ -162,7 +162,7 @@ describe('universeCharacterSheet — variant catalog + prototype-pollution guard
   it('listSheetVariants exposes the registered variants', () => {
     const variants = listSheetVariants();
     const ids = variants.map((v) => v.id);
-    expect(ids).toEqual(['standard', 'photographic', 'blueprint']);
+    expect(ids).toEqual(['standard', 'photographic', 'face', 'blueprint']);
     for (const v of variants) {
       expect(v).toHaveProperty('label');
       expect(v).toHaveProperty('description');

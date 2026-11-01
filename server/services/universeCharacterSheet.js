@@ -97,7 +97,7 @@ export const DEFAULT_PHOTOGRAPHIC_SHEET_STYLE = 'Style: natural studio photograp
 // sentences. Pure — caller decides which fields to weave into its prompt.
 // Exported for reuse by the LoRA training dataset prompt builder
 // (server/lib/loraDataset.js), which needs the same canon field extraction.
-export function extractCharacterPromptCommon(character) {
+export function extractCharacterPromptCommon(character, { maxExpressions = 7 } = {}) {
   return {
     name: trim(character.name) || 'Unnamed',
     aliases: Array.isArray(character.aliases) ? character.aliases.filter(Boolean).join(', ') : '',
@@ -118,7 +118,7 @@ export function extractCharacterPromptCommon(character) {
     paletteLine: flattenPalette(character.colorPalette),
     wardrobeLine: flattenWardrobes(character.wardrobes),
     propsLine: flattenProps(character.props),
-    expressionsLine: flattenNamedList(character.expressions, DEFAULT_EXPRESSIONS),
+    expressionsLine: flattenNamedList(character.expressions, DEFAULT_EXPRESSIONS, { maxEntries: maxExpressions }),
     gesturesLine: flattenNamedList(character.handGestures, DEFAULT_HAND_GESTURES),
   };
 }
@@ -351,6 +351,43 @@ function buildCharacterPhotographicSheetPrompt(universe, character) {
   };
 }
 
+/**
+ * Photographic face sheet: a row of five head angles (front, both 3/4s, both
+ * profiles) over a row of five expressions, all of the same face. It is the
+ * close-up reference a shot uses when a head turns, which a full-body sheet's
+ * one small face cannot give. Directions are spelled out against the image's
+ * edges ("turned toward the LEFT edge of the image"), since "3/4 left" alone
+ * reads either way and image models then repeat one side. Hands stay empty:
+ * carried props belong on their own object sheets.
+ */
+function buildCharacterFaceSheetPrompt(universe, character) {
+  if (!universe || !character) {
+    throw new ServerError('buildCharacterFaceSheetPrompt: universe and character are required', {
+      status: 400, code: 'VALIDATION_ERROR',
+    });
+  }
+  const styleBits = universeAestheticLine(universe);
+  const { name, age, physical, special, visualIdentity, expressionsLine } = extractCharacterPromptCommon(character, { maxExpressions: null });
+  const promptParts = [
+    `PHOTOGRAPHIC FACE REFERENCE SHEET — ten head-and-shoulders photographs of ONE real person, ${name}, against a plain seamless dark grey studio backdrop, in two rows of five with thin dark gutters and a small plain caption under each frame.`,
+    styleBits || DEFAULT_PHOTOGRAPHIC_SHEET_STYLE,
+    age ? `Age: ${age}, and they look exactly that age in every frame.` : '',
+    physical ? `Physical description: ${physical}` : '',
+    visualIdentity ? `Facial identity: ${visualIdentity}` : '',
+    special ? `Distinctive traits: ${special}` : '',
+    'Top row, neutral expression, the same camera height and distance: FRONT (facing the camera); 3/4 LEFT (head turned toward the LEFT edge of the image, nose pointing image-left); PROFILE LEFT (full side view looking at the LEFT edge); 3/4 RIGHT (turned toward the RIGHT edge); PROFILE RIGHT (full side view looking at the RIGHT edge). The left-facing and right-facing frames are mirror opposites, never repeats of one side.',
+    `Bottom row, front or near-front: exactly five distinct expressions of the same face. Draw on these character expressions, adding others if needed: ${expressionsLine}.`,
+    'The same person, hair, skin, age, lighting and exposure in all ten frames. Ordinary relaxed mouth and natural teeth. Hands empty or out of frame: no props, cameras, phones or held objects. Plain everyday top, identical in every frame.',
+  ].filter(Boolean);
+  return {
+    prompt: promptParts.join('\n\n'),
+    negativePrompt: '',
+    width: DEFAULT_WIDTH,
+    height: DEFAULT_HEIGHT,
+    modelId: null,
+  };
+}
+
 // Per-generation filename so re-renders don't trample prior versions; the
 // "live" sheet pointer on the character always names the newest, but older
 // files stay on disk for rollback. The variant token in the middle keeps
@@ -379,6 +416,15 @@ const SHEET_VARIANTS = Object.freeze({
     label: 'Photographic turnaround',
     description: 'Studio photographs of a real person on a plain backdrop — front/3/4/side/back full-body views and a row of expression portraits. No default negatives. For photoreal universes.',
     collectionCategory: 'character-photo-sheet',
+    defaultStyle: DEFAULT_PHOTOGRAPHIC_SHEET_STYLE,
+  }),
+  face: Object.freeze({
+    id: 'face',
+    build: buildCharacterFaceSheetPrompt,
+    filenameToken: 'face',
+    label: 'Face sheet',
+    description: 'Ten head-and-shoulders photographs of the same face: front, both 3/4 turns and both profiles, then five expressions. The close-up reference that keeps a face the same when a shot turns the head.',
+    collectionCategory: 'character-face-sheet',
     defaultStyle: DEFAULT_PHOTOGRAPHIC_SHEET_STYLE,
   }),
   blueprint: Object.freeze({
