@@ -184,6 +184,7 @@ describe('durable post-ingestion cleanup replay', () => {
     ['settles the blocked audit task its run still owns', {}, true],
     ['leaves a task re-dispatched since finalization alone', { lastSpawnedAt: '2026-01-02T00:00:00Z' }, false],
     ['leaves a task blocked for another reason alone', { blockedCategory: 'user-terminated' }, false],
+    ['leaves a same-id task in another queue alone', { taskType: 'internal' }, false],
   ])('once a replay verifies the register, %s', async (_label, drift, settles) => {
     const auditTask = { ...task, metadata: { auditDispositionVersion: '1' } };
     const record = await saved();
@@ -193,8 +194,9 @@ describe('durable post-ingestion cleanup replay', () => {
     await writeFile(fixture.recordPath, JSON.stringify(record));
     settleAuditFindings.mockResolvedValue({ status: 'incomplete' });
     await finish(auditTask);
-    const blocked = { ...task, status: 'blocked', metadata: { blockedCategory: 'audit-disposition-incomplete',
-      lastSpawnedAt: '2026-01-01T00:00:00Z', totalSpawnCount: '1', updatedAt: '2026-01-01T01:00:00Z', ...drift } };
+    const { taskType = 'user', ...metadataDrift } = drift;
+    const blocked = { ...task, taskType, status: 'blocked', metadata: { blockedCategory: 'audit-disposition-incomplete',
+      lastSpawnedAt: '2026-01-01T00:00:00Z', totalSpawnCount: '1', updatedAt: '2026-01-01T01:00:00Z', ...metadataDrift } };
     getTaskById.mockResolvedValue(blocked);
     settleAuditFindings.mockResolvedValue({ status: 'complete' });
     const resultBefore = (await saved()).result;
@@ -206,6 +208,34 @@ describe('durable post-ingestion cleanup replay', () => {
           updatedAt: '2026-01-01T01:00:00Z', lastSpawnedAt: '2026-01-01T00:00:00Z', totalSpawnCount: '1' } }]]);
     } else expect(completions).toEqual([]);
     expect((await saved()).result).toEqual(resultBefore);
+  });
+
+  it('keeps cleanup pending and retries the settlement when the guarded task write misses', async () => {
+    const auditTask = { ...task, metadata: { auditDispositionVersion: '1' } };
+    const record = await saved();
+    record.metadata.auditFindings = { version: 1, status: 'incomplete', finalReportReceived: true };
+    record.metadata.completionTaskDispatch = { taskId: task.id, taskType: 'user', expected: [['claimedBy', 'me'],
+      ['claimedAt', '2026-01-01T00:00:00Z'], ['lastSpawnedAt', '2026-01-01T00:00:00Z'], ['totalSpawnCount', 1]] };
+    await writeFile(fixture.recordPath, JSON.stringify(record));
+    settleAuditFindings.mockResolvedValue({ status: 'incomplete' });
+    await finish(auditTask);
+    getTaskById.mockResolvedValue({ ...task, status: 'blocked', metadata: { blockedCategory: 'audit-disposition-incomplete',
+      lastSpawnedAt: '2026-01-01T00:00:00Z', totalSpawnCount: 1, updatedAt: '2026-01-01T01:00:00Z' } });
+    // The register verifies and is persisted, but a concurrent write wins the task CAS.
+    settleAuditFindings.mockImplementation(async () => {
+      const current = await saved();
+      current.metadata.auditFindings.status = 'complete';
+      await writeFile(fixture.recordPath, JSON.stringify(current));
+      return { status: 'complete' };
+    });
+    updateTask.mockImplementation(async (_id, updates) => updates?.status === 'completed' ? { statusChanged: true } : {});
+    await replayAgentCompletionCleanup(await saved());
+    expect((await saved()).metadata.completionCleanup.status).toBe('pending');
+    updateTask.mockImplementation(async () => ({}));
+    await replayAgentCompletionCleanup(await saved());
+    expect(settleAuditFindings).toHaveBeenCalledTimes(1); // An already complete register is not re-verified.
+    expect(updateTask.mock.calls.filter(([, updates]) => updates?.status === 'completed')).toHaveLength(2);
+    expect((await saved()).metadata.completionCleanup.status).toBe('completed');
   });
 
   it('persists an asynchronous chain failure without suppressing acknowledged cleanup or blindly publishing again', async () => {

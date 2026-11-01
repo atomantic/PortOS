@@ -372,26 +372,28 @@ async function runCompletionCleanupInOwnContext(context, { onStepError }) {
 // the register, settle the task this run still owns. An unblock, edit or new
 // dispatch since finalization changes these fields and leaves the task alone.
 // The run's own result and execution verdict are never rewritten here.
+// Returns true while an owned task is still unsettled, so cleanup stays pending
+// and a later replay retries the write.
 const AUDIT_TASK_BINDING_KEYS = ['lastSpawnedAt', 'totalSpawnCount'];
 async function settleAuditBlockedTask(agent) {
   const task = await getTaskById(agent.taskId);
   const binding = agent.metadata?.completionTaskDispatch;
   const owned = task?.status === 'blocked' && task.metadata?.blockedCategory === 'audit-disposition-incomplete'
-    && binding?.taskId === task.id && Array.isArray(binding.expected)
+    && binding?.taskId === task.id && binding.taskType === task.taskType && Array.isArray(binding.expected)
     && AUDIT_TASK_BINDING_KEYS.every(key => {
       const rows = binding.expected.filter(row => Array.isArray(row) && row[0] === key);
       return rows.length === 1 && rows[0][1] != null && task.metadata[key] != null
         && String(rows[0][1]) === String(task.metadata[key]);
     });
-  if (!owned) return;
+  if (!owned) return false;
   const expectedMetadata = Object.fromEntries(['blockedCategory', 'updatedAt', ...AUDIT_TASK_BINDING_KEYS]
     .map(key => [key, task.metadata[key]]));
   const saved = await updateTask(task.id, { status: 'completed', metadata: { taskOutcome: { status: 'completed',
-    reason: 'Audit findings verified on a completion replay.' } } }, task.taskType || 'user',
+    reason: 'Audit findings verified on a completion replay.' } } }, task.taskType,
   { expectedStatus: 'blocked', expectedMetadata });
-  if (saved && !saved.error && !saved.statusChanged) {
-    emitLog('info', `✅ Audit task ${task.id} completed: findings verified on replay of ${agent.id}`, { agentId: agent.id, taskId: task.id });
-  }
+  if (!saved || saved.error || saved.statusChanged) return true;
+  emitLog('info', `✅ Audit task ${task.id} completed: findings verified on replay of ${agent.id}`, { agentId: agent.id, taskId: task.id });
+  return false;
 }
 
 async function performCompletionCleanupSteps(context, onStepError) {
@@ -413,15 +415,24 @@ async function performCompletionCleanupSteps(context, onStepError) {
   await persist({ version: 1, status: 'pending', startedAt: state?.startedAt, replay, context: undefined });
   // A received register held only by unverified rows re-verifies on replay, so
   // a since-merged fix or a recovered forge does not preserve evidence forever.
-  if (priorReplay && state.metadata?.auditFindings?.finalReportReceived === true && auditEvidencePending(context)) {
-    const { settleAuditFindings } = await import('./auditFindings.js');
-    const settled = await settleAuditFindings({ task: context.task, agentId: context.agentId,
-      workspacePath: state.metadata.workspacePath }).catch(() => null);
-    if (settled?.status === 'complete') {
-      context = { ...context, agentState: { ...state, metadata: { ...state.metadata,
-        auditFindings: { ...state.metadata.auditFindings, status: 'complete' } } } };
-      await settleAuditBlockedTask(state).catch(err => emitLog('warn',
-        `Audit task settlement failed for ${context.agentId}: ${err.message}`, { agentId: context.agentId, taskId: state.taskId }));
+  let auditTaskUnsettled = false;
+  if (priorReplay && state.metadata?.auditFindings?.finalReportReceived === true) {
+    let findingsComplete = state.metadata.auditFindings.status === 'complete';
+    if (!findingsComplete && auditEvidencePending(context)) {
+      const { settleAuditFindings } = await import('./auditFindings.js');
+      const settled = await settleAuditFindings({ task: context.task, agentId: context.agentId,
+        workspacePath: state.metadata.workspacePath }).catch(() => null);
+      findingsComplete = settled?.status === 'complete';
+      if (findingsComplete) {
+        context = { ...context, agentState: { ...state, metadata: { ...state.metadata,
+          auditFindings: { ...state.metadata.auditFindings, status: 'complete' } } } };
+      }
+    }
+    if (findingsComplete) {
+      auditTaskUnsettled = await settleAuditBlockedTask(state).catch(err => {
+        emitLog('warn', `Audit task settlement failed for ${context.agentId}: ${err.message}`, { agentId: context.agentId, taskId: state.taskId });
+        return true;
+      });
     }
   }
   let firstError;
@@ -501,7 +512,7 @@ async function performCompletionCleanupSteps(context, onStepError) {
   if (['done', 'held'].includes(stages.worktree?.status)) {
     await runStep('report', 'Cleanup warning reporting', () => reportWorktreeCleanupWarnings({ ...context, cleanupWarnings }));
   }
-  const unfinished = preserveAuditEvidence || Object.values(stages).some(stage => stage.status === 'held'
+  const unfinished = auditTaskUnsettled || preserveAuditEvidence || Object.values(stages).some(stage => stage.status === 'held'
     || (stage.status === 'failed' && stage.retryable) || stage.status === 'running');
   const failed = Object.values(stages).some(stage => ['failed', 'abandoned'].includes(stage.status));
   await persist({ status: unfinished ? 'pending' : failed ? 'failed' : 'completed' });
