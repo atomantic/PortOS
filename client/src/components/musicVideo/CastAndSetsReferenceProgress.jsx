@@ -1,3 +1,4 @@
+import { castSetsInspectionInputs, currentCastSetsInspection, castSetsImageAccepted } from '../../../../server/lib/musicVideoCastSetsInspection.js';
 import { Link, useLocation } from 'react-router';
 import { Wand2 } from 'lucide-react';
 import useMediaJobProgress from '../../hooks/useMediaJobProgress';
@@ -64,7 +65,7 @@ function ReviseLookLink({ ingredientId }) {
     <Wand2 size={12} aria-hidden="true" /> Revise look</Link>;
 }
 
-function ReferenceCard({ item, stage, onOpenPreview, actions, subjects, olderLook }) {
+function ReferenceCard({ item, stage, onOpenPreview, actions, subjects, olderLook, onAcknowledgeImage, busy }) {
   const image = stage.images?.[item.key] || {};
   // Old images remain visible during regeneration, but only a persisted done
   // record can bypass the new job's subscription.
@@ -90,6 +91,8 @@ function ReferenceCard({ item, stage, onOpenPreview, actions, subjects, olderLoo
   else if (error) status = 'Waiting to retry';
   else if (waiting.length) status = `Waiting for ${waiting.join(', ')}`;
 
+  const inspection = currentCastSetsInspection(stage, item.key);
+  const accepted = castSetsImageAccepted(stage, item.key);
   const submitted = typeof image.submittedPrompt === 'string';
   const references = cardReferences(item, stage);
   const castingId = castingIdFor(item, stage, subjects);
@@ -113,6 +116,21 @@ function ReferenceCard({ item, stage, onOpenPreview, actions, subjects, olderLoo
           </button>
           {(previous || retained) && <figcaption className="text-[11px] text-port-text-muted">{previous ? 'Previous revision — replacement pending' : `Retained from revision ${formatCount(image.submittedRevision)}`}</figcaption>}
         </figure>
+      )}
+      {image.status === 'done' && (
+        <div className="rounded border border-port-border p-2 text-xs space-y-1" role="status">
+          <p className={inspection?.verdict === 'pass' ? 'text-port-success' : 'text-port-warning'}>
+            {inspection?.verdict === 'pass' ? 'Vision: matches saved prompt' : inspection?.verdict === 'mismatch' ? 'Vision: prompt mismatch' : inspection?.verdict === 'pending' ? 'Vision: inspecting image…' : 'Vision: unreviewed'}
+          </p>
+          {inspection?.discrepancy && <p className="break-words">{inspection.discrepancy}</p>}
+          {accepted && inspection?.verdict !== 'pass' && <p>Explicitly acknowledged for this image.</p>}
+          {!accepted && stage.status === 'review' && onAcknowledgeImage && (
+            <button type="button" disabled={busy} className="min-h-[44px] rounded border border-port-border px-2 text-port-accent"
+              onClick={() => onAcknowledgeImage({ inputs: castSetsInspectionInputs(stage, item.key), inspectionId: inspection?.id || null })}>
+              Acknowledge {inspection?.verdict === 'mismatch' ? 'mismatch' : 'unreviewed image'}
+            </button>
+          )}
+        </div>
       )}
       {olderLook && <p className="text-[11px] text-port-warning">Older look: Casting changed since this was rendered. Regenerate to use the new look.</p>}
       {error && <p role="alert" className="text-xs text-port-error break-words [overflow-wrap:anywhere]">{error}</p>}
@@ -148,13 +166,13 @@ function ReferenceCard({ item, stage, onOpenPreview, actions, subjects, olderLoo
  * `actions` ({ busy, onRegenerate, onEdit }) adds each card's Regenerate / Edit /
  * Remove; the check-in passes it only while the stage is idle.
  */
-export default function CastAndSetsReferenceProgress({ stage, onOpenPreview, actions = null, subjects = [], olderLookKeys = [] }) {
+export default function CastAndSetsReferenceProgress({ stage, onOpenPreview, actions = null, subjects = [], olderLookKeys = [], onAcknowledgeImage, busy }) {
   const items = Object.values(stage.plan || {});
   if (!items.length) return null;
   return (
     <div className="grid min-w-0 grid-cols-[repeat(auto-fit,minmax(min(100%,15rem),1fr))] gap-2" aria-label="Cast and set references">
       {items.map((item) => <ReferenceCard key={item.key} item={item} stage={stage} onOpenPreview={onOpenPreview} actions={actions}
-        subjects={subjects} olderLook={olderLookKeys.includes(item.key)} />)}
+        subjects={subjects} olderLook={olderLookKeys.includes(item.key)} onAcknowledgeImage={onAcknowledgeImage} busy={busy} />)}
     </div>
   );
 }

@@ -948,6 +948,8 @@ export * from './musicVideoCrossLinks.js';
 export * from './musicVideoExcerptRange.js';
 
 export * from './musicVideoPlateEvidence.js';
+export * from './musicVideoCastSetsInspection.js';
+export * from './musicVideoCastSetsInspectionValidation.js';
 export * from './codeAnimationProjects.js';
 export * from './musicVideoNarrativeEvents.js';
 

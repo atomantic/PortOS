@@ -229,6 +229,7 @@ import {
   regenerateCastAndSets,
   resumeCastAndSets,
   approveCastAndSets,
+  acknowledgeCastAndSetsImage,
   reconfirmCastAndSets,
   skipCastAndSets,
   discardCastAndSets,
@@ -1655,6 +1656,15 @@ router.delete('/:id/cast-and-sets', asyncHandler(async (req, res) => {
 router.post('/:id/cast-and-sets/resume', asyncHandler(async (req, res) => {
   const input = validateRequest(musicVideoCastAndSetsStartSchema, req.body || {});
   res.status(202).json(await resumeCastAndSets(req.params.id, input));
+}));
+
+router.post('/:id/cast-and-sets/acknowledge-image', asyncHandler(async (req, res) => {
+  const { musicVideoCastSetsAcknowledgeSchema } = await import('../lib/musicVideoCastSetsInspectionValidation.js');
+  const input = validateRequest(musicVideoCastSetsAcknowledgeSchema, req.body || {});
+  const { assertHostControl } = await import('../services/authGate.js');
+  assertHostControl(req);
+  const reviewer = req.portosAuthContext.enabled ? await requireProductionReviewer(req) : { kind: 'local', label: 'Local operator' };
+  res.json(await acknowledgeCastAndSetsImage(req.params.id, input, reviewer));
 }));
 
 router.post('/:id/cast-and-sets/approve', asyncHandler(async (req, res) => {

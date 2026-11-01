@@ -989,6 +989,8 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `musicVideoExcerptRange.js` | `excerptRangeFits(startSec, endSec, totalSec, fps)`: whether a code/document excerpt window fits a frame-quantized render, allowing the end up to one frame past it (scene ends follow the analysed song length; the caller clamps). The start must fall inside the render; an unknown fps allows no slack. |
 
 | `musicVideoPlateEvidence.js` | Asset-bound authored-shot plate requirements, current evidence and selected-image admission. |
+| `musicVideoCastSetsInspection.js` | Exact saved Cast & Sets image inputs, current vision evidence and acknowledged approval admission. |
+| `musicVideoCastSetsInspectionValidation.js` | Exact-input Cast & Sets inspection acknowledgement request schema. |
 | `codeAnimationProjects.js` | Machine-local Production project, patch and independent budget schemas; package imports grant no execution authority. |
 | `musicVideoNarrativeEvents.js` | Named narrative event kinds, absolute onset/word/frame resolution and deterministic silence/reactive state for composition documents. |
 
