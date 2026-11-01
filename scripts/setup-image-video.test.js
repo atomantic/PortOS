@@ -340,6 +340,27 @@ printf '%s\\n' '0'
     expect(run('arm64', 'x86_64 arm64', 'x86_64')).toBe(true);
     expect(run('arm64', 'arm64')).toBe(true);
     expect(run('x86_64', 'x86_64 arm64')).toBe(true);
+    const runNamed = (name, recreateArches) => {
+      const venv = join(dir, 'venv');
+      rmSync(venv, { recursive: true, force: true });
+      mkdirSync(join(venv, 'bin'), { recursive: true });
+      writeFileSync(join(venv, 'bin', 'python3'), 'PY');
+      execFileSync('bash', ['-c', `${apple}\n${reset}\nreset_universal_venv "$1" "$2"`, 'bash', venv, name], {
+        env: {
+          ...process.env,
+          PATH: `${dir}:${process.env.PATH}`,
+          ARCHES: 'x86_64 arm64',
+          RECREATE_ARCHES: recreateArches,
+          MACHINE: 'arm64',
+        },
+      });
+      return existsSync(venv);
+    };
+    // PYTHON_BIN defaults to the command name python3. [[ -x python3 ]] does
+    // not search PATH, so a bare name must still reach the arm64 check.
+    expect(runNamed('recreate', 'arm64')).toBe(false);
+    expect(runNamed('recreate', 'x86_64')).toBe(true);
+    expect(runNamed('missing-python', 'arm64')).toBe(true);
   });
 
   it.skipIf(process.platform === 'win32')('points a thinned framework interpreter at its original library', () => {

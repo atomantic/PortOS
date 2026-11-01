@@ -69,6 +69,33 @@ describe('MMS_FA process contract', () => {
     expect(h.run.mock.calls.some(([, args]) => args[0] === '-c' && args[1] === lyricAlignRuntimePlan().versionProbe)).toBe(true);
   });
 
+  it('repairs an existing hardware-compatible venv when discovery only found the Intel plan', async () => {
+    const h = await harness((words) => words, { ownInterpreter: false });
+    const bin = join(h.root, 'venv', process.platform === 'win32' ? 'Scripts' : 'bin');
+    await mkdir(bin, { recursive: true });
+    await writeFile(join(bin, process.platform === 'win32' ? 'python.exe' : 'python'), '');
+    const hardware = lyricAlignRuntimePlan();
+    const fallback = lyricAlignRuntimePlan({ platform: 'darwin', appleSilicon: false });
+    h.resolveRuntime.mockResolvedValue({ plan: fallback, python: null });
+    const implementation = h.run.getMockImplementation();
+    let installed = false;
+    h.run.mockImplementation(async (...args) => {
+      const probe = args[1][0] === '-c' ? args[1][1] : '';
+      if (probe === hardware.probe) return { success: installed };
+      if (probe === hardware.versionProbe) return { success: true };
+      if (probe) return { success: false };
+      if (args[1][1] === 'pip') {
+        installed = true;
+        return { success: true };
+      }
+      return implementation(...args);
+    });
+    await h.align();
+    expect(h.resolveRuntime).toHaveBeenCalledTimes(1);
+    expect(h.run.mock.calls.some(([, args]) => args[1] === 'venv')).toBe(false);
+    expect(h.run.mock.calls.find(([, args]) => args[1] === 'pip')[1]).toEqual(['-m', 'pip', 'install', ...hardware.packages]);
+  });
+
   it('does not discover a base interpreter when the venv already matches the pin', async () => {
     const h = await harness((words) => words, { ownInterpreter: false });
     const bin = join(h.root, 'venv', process.platform === 'win32' ? 'Scripts' : 'bin');

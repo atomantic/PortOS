@@ -90,13 +90,24 @@ async function ensureRuntime({ run, onProgress, dir, resolveRuntime }) {
   if (!provisioning) {
     provisioning = (async () => {
       const selected = await resolveRuntime();
-      const plan = selected.plan;
+      let plan = selected.plan;
+      const exists = existsSync(python);
+      // Discovery can miss the venv's own base and fall back to the Intel
+      // plan. An interpreter that already matches the hardware pin is repaired
+      // in place; the Intel ceiling would reject it and refuse to install.
+      let compatible = false;
+      if (exists && plan.versionProbe !== quick.versionProbe
+          && (await run(python, ['-c', quick.versionProbe], null, { timeoutMs: 120_000 })).success) {
+        plan = quick;
+        compatible = true;
+      }
       // No arm64 interpreter: keep an existing venv that already has the
       // Intel pin instead of rebuilding it for a wheel this Mac cannot install.
-      if (existsSync(python) && plan.probe !== quick.probe
+      if (exists && plan.probe !== quick.probe
           && (await run(python, ['-c', plan.probe], null, { timeoutMs: 120_000 })).success) return;
-      const exists = existsSync(python);
-      const compatible = exists && (await run(python, ['-c', plan.versionProbe], null, { timeoutMs: 120_000 })).success;
+      if (!compatible) {
+        compatible = exists && (await run(python, ['-c', plan.versionProbe], null, { timeoutMs: 120_000 })).success;
+      }
       if (!compatible) {
         const base = selected.python;
         if (!base) throw failure(`MMS_FA lyric alignment needs ${plan.pythonRange}.`, 'LYRIC_ALIGN_CTC_PYTHON_MISSING');

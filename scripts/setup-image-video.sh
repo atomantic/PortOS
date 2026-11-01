@@ -159,18 +159,26 @@ pin_venv_arm64() {
 }
 
 # Delete a venv whose interpreter is still universal, before the create check.
-# $2 is the interpreter the caller will rebuild with. An Intel-only binary
-# still runs under this arm64 shell and cannot install arm64-only wheels, so
-# a working venv is left in place. An arm64-only interpreter is not universal
-# and is also left alone. No-op until uname -m is arm64.
+# $2 is the interpreter the caller will rebuild with. The default is the
+# command name python3; [[ -x python3 ]] looks in the current directory, so
+# resolve a bare name on PATH or the reset never runs and pin later leaves
+# x86_64 wheels under an arm64 launcher. An Intel-only binary still runs
+# under this arm64 shell and cannot install arm64-only wheels, so a working
+# venv is left in place. An arm64-only interpreter is not universal and is
+# also left alone. No-op until uname -m is arm64.
 reset_universal_venv() {
   is_apple_silicon || return 0
   case "$(uname -m)" in
     arm64|aarch64) ;;
     *) return 0 ;;
   esac
-  [[ -n "${1:-}" && -n "${2:-}" && -x "$2" ]] || return 0
-  local py="$1/bin/python3" arches base_arches
+  [[ -n "${1:-}" && -n "${2:-}" ]] || return 0
+  local py="$1/bin/python3" arches base_arches base="$2"
+  case "$base" in
+    */*) ;;
+    *) base="$(command -v "$base" 2>/dev/null || true)" ;;
+  esac
+  [[ -n "$base" && -x "$base" ]] || return 0
   [[ -e "$py" && ! -d "$py" ]] || return 0
   arches="$(lipo -archs "$py" 2>/dev/null || true)"
   case " $arches " in
@@ -181,11 +189,11 @@ reset_universal_venv() {
     *" x86_64 "*|*" i386 "*) ;;
     *) return 0 ;;
   esac
-  base_arches="$(lipo -archs "$2" 2>/dev/null || true)"
+  base_arches="$(lipo -archs "$base" 2>/dev/null || true)"
   case " $base_arches " in
     *" arm64 "*|*" aarch64 "*) ;;
     *)
-      "$2" -c 'import platform,sys; sys.exit(0 if platform.machine() in ("arm64","aarch64") else 1)' >/dev/null 2>&1 || return 0
+      "$base" -c 'import platform,sys; sys.exit(0 if platform.machine() in ("arm64","aarch64") else 1)' >/dev/null 2>&1 || return 0
       ;;
   esac
   echo "♻️  Recreating ${1} so native wheels replace the universal interpreter's x86_64 packages."
