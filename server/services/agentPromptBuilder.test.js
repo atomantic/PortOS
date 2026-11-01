@@ -1009,11 +1009,12 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).not.toMatch(/\*\*Working Directory\*\*:/);
     });
 
-    it('shows Target App for a managed app', () => {
+    it('omits the internal app ID for a managed app (cwd scopes it)', () => {
       const prompt = buildLightContextPrompt(
-        makeTask({ metadata: { app: 'comics' } }),
+        makeTask({ metadata: { app: 'app-synthetic-123' } }),
         '/r', null);
-      expect(prompt).toMatch(/\*\*Target App\*\*: comics/);
+      expect(prompt).not.toContain('**Target App**');
+      expect(prompt).not.toContain('app-synthetic-123');
     });
 
     it('omits Target App for the PortOS default app (cwd already scopes it)', () => {
@@ -2924,10 +2925,12 @@ describe('buildAgentPrompt — provider type routing', () => {
     expect(prompt).toMatch(/^## Completion$/m);
   });
 
-  it('names a managed app in the api-path briefing and omits the heading for the PortOS default app', async () => {
+  it('omits internal app IDs from the api-path briefing for managed and default apps', async () => {
     const managed = await buildAgentPrompt(
-      makeTask({ metadata: { app: 'comics' } }), {}, '/r', null, { providerType: 'api' });
-    expect(managed).toContain('**Target App**: comics');
+      makeTask({ metadata: { app: 'app-synthetic-123' } }), {}, '/example/project', null, { providerType: 'api' });
+    expect(managed).not.toContain('**Target App**');
+    expect(managed).not.toContain('app-synthetic-123');
+    expect(managed).toContain('You are working in the target app directory: `/example/project`');
     const portos = await buildAgentPrompt(
       makeTask({ metadata: { app: 'portos-default' } }), {}, '/r', null, { providerType: 'api' });
     expect(portos).not.toContain('**Target App**');
