@@ -135,7 +135,7 @@ async function dispatchClip({ project, scene, route, tag }) {
   const byBackend = {
     // A supplied-audio route animates the frame from its shot's own song window.
     local: route.audio === 'supplied' ? { modelId: route.model, mode: 'a2v', _suppliedAudio: true } : { modelId: route.model, disableAudio: !preMusicClipSound(scene) },
-    grok: { grokDuration: spanSec != null ? grokCoverage(spanSec).requestSec : (project.videoSettings?.grokDuration || 10), disableAudio: true },
+    grok: { grokDuration: spanSec != null ? grokCoverage(spanSec).requestSec : (project.videoSettings?.grokDuration || 10), disableAudio: !preMusicClipSound(scene) },
     fal: falClipParams(project, scene, route),
     reactor: { disableAudio: true },
     runway: runwayTakeRequestFields(runwaySceneTake({ scene, videoSettings: runwayRouteVideoSettings(project, route) })),
