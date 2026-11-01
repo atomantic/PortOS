@@ -12,7 +12,7 @@ vi.mock('./cosAgentIndex.js', () => ({
 }));
 vi.mock('./cos.js', () => ({}));
 vi.mock('./cosEvents.js', async original => ({ ...await original(), emitLog: vi.fn() }));
-vi.mock('./cosTaskStore.js', () => ({ updateTask: vi.fn(async () => ({})), addTask: vi.fn(), reviveBlockedTask: vi.fn() }));
+vi.mock('./cosTaskStore.js', () => ({ updateTask: vi.fn(async () => ({})), addTask: vi.fn(), reviveBlockedTask: vi.fn(), getTaskById: vi.fn(async () => null) }));
 vi.mock('./cosTaskGenerator.js', () => ({ checkStagePrecondition: () => ({ passed: true }) }));
 vi.mock('./cosAgentLifecycle.js', () => ({
   getAgent: async () => JSON.parse(await readFile(fixture.recordPath, 'utf8')),
@@ -44,7 +44,8 @@ import { storeCompletionData, readCompletionData } from './agentCompletionData.j
 import { readCompletionSentinel } from './agentCompletionSentinel.js';
 import { cleanupAgentWorktree } from './agentWorktreeCleanup.js';
 import { handleCreativeDirectorCompletion } from './creativeDirector/completionHook.js';
-import { updateTask, addTask } from './cosTaskStore.js';
+import { updateTask, addTask, getTaskById } from './cosTaskStore.js';
+import { updateAgent } from './cosAgentLifecycle.js';
 import { settleAuditFindings } from './auditFindings.js';
 
 describe('durable post-ingestion cleanup replay', () => {
@@ -74,6 +75,7 @@ describe('durable post-ingestion cleanup replay', () => {
         completionCleanup: { version: 1, status: 'pending', stages: {} } } }));
     cleanupAgentWorktree.mockReset().mockResolvedValue([]);
     updateTask.mockReset().mockResolvedValue({});
+    getTaskById.mockReset().mockResolvedValue(null);
     handleCreativeDirectorCompletion.mockReset().mockResolvedValue({});
   });
   afterEach(async () => { await rm(root, { recursive: true, force: true, maxRetries: 3 }); });
@@ -178,6 +180,106 @@ describe('durable post-ingestion cleanup replay', () => {
     await replayAgentCompletionCleanup(await saved());
     expect(cleanupAgentWorktree).toHaveBeenCalledTimes(1);
     expect((await saved()).metadata.completionCleanup.status).toBe('completed');
+  });
+
+  it('settles a blocked audit task when replay verifies its findings, and leaves a moved task alone', async () => {
+    const claim = {
+      claimedBy: 'fixture-owner', claimedAt: '2026-01-01T00:00:00.000Z', lastSpawnedAt: '2026-01-01T00:00:00.000Z',
+    };
+    const blocked = () => ({
+      id: 'task-one', taskType: 'user', status: 'blocked',
+      metadata: {
+        ...claim, totalSpawnCount: '2', auditDispositionVersion: '1',
+        blockedCategory: 'audit-disposition-incomplete',
+        blockedReason: 'Audit findings are not fully disposed: 1 finding disposition(s) could not be verified',
+        blockedAt: '2026-01-01T00:05:00.000Z', failureCount: 1, lastErrorCategory: 'audit-disposition-incomplete',
+        taskOutcome: { status: 'incomplete', reason: 'Delivery checks did not pass.' },
+      },
+    });
+    const handoff = {
+      version: 1, taskId: 'task-one', taskType: 'user', startedAt: '2026-01-01T00:00:00Z',
+      expected: [['claimedBy', claim.claimedBy], ['claimedAt', claim.claimedAt], ['lastSpawnedAt', claim.lastSpawnedAt],
+        ['totalSpawnCount', 2], ['updatedAt', '2026-01-01T00:00:01.000Z'], ['deliveryRecovery', null], ['deliveryRecoveryAgentId', null]],
+    };
+    const verdict = { success: false, executionSuccess: true, completionReason: 'audit-disposition-incomplete' };
+    const blockKeys = ['blocker', 'blockedReason', 'blockedCategory', 'blockedAt', 'deliveryDecisionAgentId', 'failureCount', 'lastErrorCategory', 'lastFailureAt'];
+    let live = blocked();
+    let present = true;
+    const sentinelText = await readFile(marker, 'utf8');
+    const initialRecord = await readFile(fixture.recordPath, 'utf8');
+    getTaskById.mockImplementation(async id => present && id === live.id ? live : null);
+    updateTask.mockImplementation(async (id, updates, _taskType, options) => {
+      if (!present || id !== live.id) return { error: 'Task not found' };
+      if (options?.expectedStatus && live.status !== options.expectedStatus) return { statusChanged: true, task: live };
+      if (options?.expectedMetadata && Object.entries(options.expectedMetadata).some(([key, value]) => live.metadata?.[key] !== value)) {
+        return { statusChanged: true, task: live };
+      }
+      const metadata = { ...live.metadata, ...updates.metadata };
+      if (live.status === 'blocked' && updates.status && updates.status !== 'blocked') {
+        for (const key of blockKeys) delete metadata[key];
+      }
+      live = { ...live, ...updates, metadata };
+      return live;
+    });
+    const replayVerified = async () => {
+      await writeFile(marker, sentinelText);
+      const record = JSON.parse(initialRecord);
+      record.result = verdict;
+      record.metadata.auditFindings = { version: 1, status: 'incomplete', finalReportReceived: true };
+      record.metadata.completionCleanup.taskHandoff = handoff;
+      await writeFile(fixture.recordPath, JSON.stringify(record));
+      settleAuditFindings.mockResolvedValue({ status: 'complete' });
+      updateAgent.mockClear();
+      updateTask.mockClear();
+      await finish({ id: 'task-one', taskType: 'user', metadata: { auditDispositionVersion: '1' } });
+      const before = await saved();
+      await replayAgentCompletionCleanup(before);
+      return { before, after: await saved() };
+    };
+
+    const settled = await replayVerified();
+    expect(live).toMatchObject({
+      status: 'completed',
+      metadata: { taskOutcome: { status: 'completed', reason: 'Audit findings were verified by completion replay.' } },
+    });
+    expect(live.metadata.blockedCategory).toBeUndefined();
+    expect(live.metadata.blockedReason).toBeUndefined();
+    expect(live.metadata.blockedAt).toBeUndefined();
+    expect(live.metadata.failureCount).toBeUndefined();
+    expect(updateTask).toHaveBeenCalledWith('task-one', {
+      status: 'completed',
+      metadata: { taskOutcome: { status: 'completed', reason: 'Audit findings were verified by completion replay.' } },
+    }, 'user', {
+      expectedStatus: 'blocked',
+      expectedMetadata: {
+        blockedCategory: 'audit-disposition-incomplete',
+        claimedBy: claim.claimedBy,
+        claimedAt: claim.claimedAt,
+        lastSpawnedAt: claim.lastSpawnedAt,
+        totalSpawnCount: '2',
+      },
+    });
+    expect(settled.after.result).toEqual(verdict);
+    expect(settled.after.result).toEqual(settled.before.result);
+    expect(updateAgent).not.toHaveBeenCalled();
+
+    for (const mode of ['unblocked', 'edited', 'reclaimed', 'deleted']) {
+      live = blocked();
+      present = mode !== 'deleted';
+      if (mode === 'unblocked') live.status = 'pending';
+      if (mode === 'edited') live.metadata = { ...live.metadata, blockedCategory: 'operator-note' };
+      if (mode === 'reclaimed') live.metadata = { ...live.metadata, claimedBy: 'another-owner' };
+      const snapshot = JSON.parse(JSON.stringify(live));
+      const moved = await replayVerified();
+      expect(live).toEqual(mode === 'deleted' ? blocked() : snapshot);
+      expect(updateTask).toHaveBeenCalledWith('task-one', expect.objectContaining({ status: 'completed' }), 'user', expect.objectContaining({
+        expectedStatus: 'blocked',
+        expectedMetadata: expect.objectContaining({ blockedCategory: 'audit-disposition-incomplete', claimedBy: claim.claimedBy }),
+      }));
+      expect(updateTask.mock.calls.filter(call => !call[3]?.expectedStatus)).toEqual([]);
+      expect(moved.after.result).toEqual(verdict);
+      expect(updateAgent).not.toHaveBeenCalled();
+    }
   });
 
   it('persists an asynchronous chain failure without suppressing acknowledged cleanup or blindly publishing again', async () => {

@@ -36,7 +36,7 @@ import { join, relative, resolve, sep } from 'path';
 import { unlink, rm } from 'fs/promises';
 import { emitLog } from './cosEvents.js';
 import { updateAgent } from './cosAgentLifecycle.js';
-import { updateTask, addTask, reviveBlockedTask } from './cosTaskStore.js';
+import { updateTask, addTask, reviveBlockedTask, getTaskById } from './cosTaskStore.js';
 import { SPAWN_HISTORY_METADATA_KEYS } from './spawnBudgetProof.js';
 import { CLAIM_METADATA_KEYS } from './cosTaskClaim.js';
 import { checkStagePrecondition } from './cosTaskGenerator.js';
@@ -367,6 +367,23 @@ async function runCompletionCleanupInOwnContext(context, { onStepError }) {
   try { return await run; } finally { cleanupRuns.delete(context.agentId); }
 }
 
+/** Complete the task whose audit block this run still owns. The output hook
+ * already ran at finalization; a refused guard is the operator's later edit
+ * and is not retried. A store failure stays pending for the next replay.
+ */
+async function settleVerifiedAuditTask(agentState) {
+  const task = await getTaskById(agentState?.taskId);
+  const { verifiedAuditTaskFence } = await import('./agentCompletionTaskHandoff.js');
+  const fence = verifiedAuditTaskFence(agentState, task);
+  if (!fence) return;
+  const saved = await updateTask(fence.taskId, {
+    status: 'completed',
+    metadata: { taskOutcome: { status: 'completed', reason: 'Audit findings were verified by completion replay.' } },
+  }, fence.taskType, { expectedStatus: fence.expectedStatus, expectedMetadata: fence.expectedMetadata });
+  if (saved?.statusChanged || saved?.error === 'Task not found') return;
+  if (saved?.error || saved?.status !== 'completed') throw new Error('verified-audit-task-settlement-unverified');
+}
+
 async function performCompletionCleanupSteps(context, onStepError) {
   const state = context.agentState;
   const durable = state?.status === 'completed' && typeof state.startedAt === 'string';
@@ -395,6 +412,12 @@ async function performCompletionCleanupSteps(context, onStepError) {
         auditFindings: { ...state.metadata.auditFindings, status: 'complete' } } } };
     }
   }
+  // Findings may already be complete from an earlier replay whose task write
+  // did not land. The original pass has no replay yet, so finalization's own
+  // verdict is left alone.
+  const findings = context.agentState?.metadata?.auditFindings;
+  const verifiedAudit = priorReplay && findings?.finalReportReceived === true && findings.status === 'complete'
+    && Number(context.task?.metadata?.auditDispositionVersion ?? context.agentState?.metadata?.auditDispositionVersion) === 1;
   let firstError;
   const runStep = async (key, name, step, retryable = false) => {
     const prior = stages[key];
@@ -425,6 +448,9 @@ async function performCompletionCleanupSteps(context, onStepError) {
         { agentId: context.agentId, taskId: context.task?.id });
     }
   };
+  if (verifiedAudit) {
+    await runStep('auditTask', 'Verified audit task settlement', () => settleVerifiedAuditTask(context.agentState), true);
+  }
   // Durable ingestion and its continuation are sufficient to acknowledge this
   // exact signal. An unrelated hand-off failure must not leave it as Git dirt.
   if (['completed', 'failed'].includes(state?.status)) {
