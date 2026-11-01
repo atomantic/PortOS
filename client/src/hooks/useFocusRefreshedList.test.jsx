@@ -133,6 +133,19 @@ describe('useFocusRefreshedList', () => {
     expect(result.current.map((i) => i.id)).toEqual(['2']);
   });
 
+  it('still applies an older read when the newer overlapping read fails', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    let resolveFirst;
+    const fetchFn = vi.fn()
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveFirst = resolve; }))
+      .mockRejectedValueOnce(new Error('offline'));
+    const { result } = renderHook(() => useFocusRefreshedList(fetchFn, 'records', RECORD_EVENTS));
+    act(() => { socket.emit('connect'); });
+    await waitFor(() => expect(fetchFn).toHaveBeenCalledTimes(2));
+    await act(async () => { resolveFirst([{ id: '1', name: 'A' }]); });
+    expect(result.current.map((i) => i.id)).toEqual(['1']);
+  });
+
   it('detaches record and reconnect listeners on unmount', async () => {
     const fetchFn = vi.fn().mockResolvedValue([]);
     const { unmount } = renderHook(() => useFocusRefreshedList(fetchFn, 'records', RECORD_EVENTS));

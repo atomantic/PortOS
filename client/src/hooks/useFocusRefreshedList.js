@@ -27,14 +27,17 @@ export function useFocusRefreshedList(fetchFn, label = 'list', events = NO_EVENT
     let lastSuccessAt = 0;
     let cancelled = false;
     let coalesceTimer = null;
-    // Mount, focus, reconnect and record-event reads can overlap; only the
-    // newest may write, so a slow older list never restores a deleted row.
-    let latestRead = 0;
+    // Mount, focus, reconnect and record-event reads can overlap. A response
+    // older than one already applied is dropped, so a slow stale list never
+    // restores a deleted row, while a newer read that FAILED doesn't discard it.
+    let issuedRead = 0;
+    let appliedRead = 0;
     const load = () => {
-      const read = ++latestRead;
+      const read = ++issuedRead;
       fetchFn({ silent: true })
         .then((result) => {
-          if (cancelled || read !== latestRead) return;
+          if (cancelled || read < appliedRead) return;
+          appliedRead = read;
           lastSuccessAt = Date.now();
           const next = (Array.isArray(result) ? result : []).slice().sort(byName);
           setItems((prev) => (sigOf(prev) === sigOf(next) ? prev : next));
