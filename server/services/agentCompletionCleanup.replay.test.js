@@ -12,7 +12,7 @@ vi.mock('./cosAgentIndex.js', () => ({
 }));
 vi.mock('./cos.js', () => ({}));
 vi.mock('./cosEvents.js', async original => ({ ...await original(), emitLog: vi.fn() }));
-vi.mock('./cosTaskStore.js', () => ({ updateTask: vi.fn(async () => ({})), addTask: vi.fn(), reviveBlockedTask: vi.fn() }));
+vi.mock('./cosTaskStore.js', () => ({ updateTask: vi.fn(async () => ({})), addTask: vi.fn(), reviveBlockedTask: vi.fn(), getTaskById: vi.fn(async () => null) }));
 vi.mock('./cosTaskGenerator.js', () => ({ checkStagePrecondition: () => ({ passed: true }) }));
 vi.mock('./cosAgentLifecycle.js', () => ({
   getAgent: async () => JSON.parse(await readFile(fixture.recordPath, 'utf8')),
@@ -44,7 +44,7 @@ import { storeCompletionData, readCompletionData } from './agentCompletionData.j
 import { readCompletionSentinel } from './agentCompletionSentinel.js';
 import { cleanupAgentWorktree } from './agentWorktreeCleanup.js';
 import { handleCreativeDirectorCompletion } from './creativeDirector/completionHook.js';
-import { updateTask, addTask } from './cosTaskStore.js';
+import { updateTask, addTask, getTaskById } from './cosTaskStore.js';
 import { settleAuditFindings } from './auditFindings.js';
 
 describe('durable post-ingestion cleanup replay', () => {
@@ -178,6 +178,34 @@ describe('durable post-ingestion cleanup replay', () => {
     await replayAgentCompletionCleanup(await saved());
     expect(cleanupAgentWorktree).toHaveBeenCalledTimes(1);
     expect((await saved()).metadata.completionCleanup.status).toBe('completed');
+  });
+
+  it.each([
+    ['settles the blocked audit task its run still owns', {}, true],
+    ['leaves a task re-dispatched since finalization alone', { lastSpawnedAt: '2026-01-02T00:00:00Z' }, false],
+    ['leaves a task blocked for another reason alone', { blockedCategory: 'user-terminated' }, false],
+  ])('once a replay verifies the register, %s', async (_label, drift, settles) => {
+    const auditTask = { ...task, metadata: { auditDispositionVersion: '1' } };
+    const record = await saved();
+    record.metadata.auditFindings = { version: 1, status: 'incomplete', finalReportReceived: true };
+    record.metadata.completionTaskDispatch = { taskId: task.id, taskType: 'user', expected: [['claimedBy', 'me'],
+      ['claimedAt', '2026-01-01T00:00:00Z'], ['lastSpawnedAt', '2026-01-01T00:00:00Z'], ['totalSpawnCount', 1]] };
+    await writeFile(fixture.recordPath, JSON.stringify(record));
+    settleAuditFindings.mockResolvedValue({ status: 'incomplete' });
+    await finish(auditTask);
+    const blocked = { ...task, status: 'blocked', metadata: { blockedCategory: 'audit-disposition-incomplete',
+      lastSpawnedAt: '2026-01-01T00:00:00Z', totalSpawnCount: '1', updatedAt: '2026-01-01T01:00:00Z', ...drift } };
+    getTaskById.mockResolvedValue(blocked);
+    settleAuditFindings.mockResolvedValue({ status: 'complete' });
+    const resultBefore = (await saved()).result;
+    await replayAgentCompletionCleanup(await saved());
+    const completions = updateTask.mock.calls.filter(([, updates]) => updates?.status === 'completed');
+    if (settles) {
+      expect(completions).toEqual([[task.id, expect.objectContaining({ status: 'completed' }), 'user',
+        { expectedStatus: 'blocked', expectedMetadata: { blockedCategory: 'audit-disposition-incomplete',
+          updatedAt: '2026-01-01T01:00:00Z', lastSpawnedAt: '2026-01-01T00:00:00Z', totalSpawnCount: '1' } }]]);
+    } else expect(completions).toEqual([]);
+    expect((await saved()).result).toEqual(resultBefore);
   });
 
   it('persists an asynchronous chain failure without suppressing acknowledged cleanup or blindly publishing again', async () => {

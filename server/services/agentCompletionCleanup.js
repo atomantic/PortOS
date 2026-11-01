@@ -36,7 +36,7 @@ import { join, relative, resolve, sep } from 'path';
 import { unlink, rm } from 'fs/promises';
 import { emitLog } from './cosEvents.js';
 import { updateAgent } from './cosAgentLifecycle.js';
-import { updateTask, addTask, reviveBlockedTask } from './cosTaskStore.js';
+import { updateTask, addTask, reviveBlockedTask, getTaskById } from './cosTaskStore.js';
 import { SPAWN_HISTORY_METADATA_KEYS } from './spawnBudgetProof.js';
 import { CLAIM_METADATA_KEYS } from './cosTaskClaim.js';
 import { checkStagePrecondition } from './cosTaskGenerator.js';
@@ -367,6 +367,33 @@ async function runCompletionCleanupInOwnContext(context, { onStepError }) {
   try { return await run; } finally { cleanupRuns.delete(context.agentId); }
 }
 
+// Finalization blocked this task only because a disposition could not be
+// verified then (e.g. its fix was still in a sibling PR). Once a replay verifies
+// the register, settle the task this run still owns. An unblock, edit or new
+// dispatch since finalization changes these fields and leaves the task alone.
+// The run's own result and execution verdict are never rewritten here.
+const AUDIT_TASK_BINDING_KEYS = ['lastSpawnedAt', 'totalSpawnCount'];
+async function settleAuditBlockedTask(agent) {
+  const task = await getTaskById(agent.taskId);
+  const binding = agent.metadata?.completionTaskDispatch;
+  const owned = task?.status === 'blocked' && task.metadata?.blockedCategory === 'audit-disposition-incomplete'
+    && binding?.taskId === task.id && Array.isArray(binding.expected)
+    && AUDIT_TASK_BINDING_KEYS.every(key => {
+      const rows = binding.expected.filter(row => Array.isArray(row) && row[0] === key);
+      return rows.length === 1 && rows[0][1] != null && task.metadata[key] != null
+        && String(rows[0][1]) === String(task.metadata[key]);
+    });
+  if (!owned) return;
+  const expectedMetadata = Object.fromEntries(['blockedCategory', 'updatedAt', ...AUDIT_TASK_BINDING_KEYS]
+    .map(key => [key, task.metadata[key]]));
+  const saved = await updateTask(task.id, { status: 'completed', metadata: { taskOutcome: { status: 'completed',
+    reason: 'Audit findings verified on a completion replay.' } } }, task.taskType || 'user',
+  { expectedStatus: 'blocked', expectedMetadata });
+  if (saved && !saved.error && !saved.statusChanged) {
+    emitLog('info', `✅ Audit task ${task.id} completed: findings verified on replay of ${agent.id}`, { agentId: agent.id, taskId: task.id });
+  }
+}
+
 async function performCompletionCleanupSteps(context, onStepError) {
   const state = context.agentState;
   const durable = state?.status === 'completed' && typeof state.startedAt === 'string';
@@ -393,6 +420,8 @@ async function performCompletionCleanupSteps(context, onStepError) {
     if (settled?.status === 'complete') {
       context = { ...context, agentState: { ...state, metadata: { ...state.metadata,
         auditFindings: { ...state.metadata.auditFindings, status: 'complete' } } } };
+      await settleAuditBlockedTask(state).catch(err => emitLog('warn',
+        `Audit task settlement failed for ${context.agentId}: ${err.message}`, { agentId: context.agentId, taskId: state.taskId }));
     }
   }
   let firstError;
