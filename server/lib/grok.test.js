@@ -18,7 +18,7 @@ import {
   grokReviewFinishReason,
   GROK_CODE_REVIEW_JSON_SCHEMA,
   withGrokCodeReviewOutput,
-  withGrokStreamingJsonOutput,
+  _withGrokStreamingJsonOutput,
   grokSpeedTarget,
   grokServiceTierModel,
 } from './grok.js';
@@ -247,7 +247,7 @@ describe('grok — streaming-json final message', () => {
 
   it('replaces any pinned output format with streaming-json', () => {
     for (const pinned of [['--output-format', 'plain'], ['-o', 'json'], ['--output-format=json']]) {
-      expect(withGrokStreamingJsonOutput(['--model', 'm', ...pinned, '--prompt-file', '/dev/stdin']))
+      expect(_withGrokStreamingJsonOutput(['--model', 'm', ...pinned, '--prompt-file', '/dev/stdin']))
         .toEqual(['--model', 'm', '--prompt-file', '/dev/stdin', '--output-format', 'streaming-json']);
     }
   });

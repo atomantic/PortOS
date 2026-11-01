@@ -50,13 +50,18 @@ function readNodeEvidence(node, releases) {
   };
 }
 
-/** An unverified index keeps the last known row unless it brings security evidence that row does not already carry. */
-function holdsPreviousNodeRow(previous, { security, securityRevision }) {
+/**
+ * An unverified index keeps the last known row unless it brings unsupported or
+ * security evidence that row does not already carry: an older, milder row must
+ * not hide either.
+ */
+function holdsPreviousNodeRow(previous, { security, unsupported, securityRevision }) {
   if (!previous) return false;
+  if (unsupported && previous.severity !== 'high') return false;
   if (!security) return true;
-  if (previous.severity !== 'high') return false;
   const previousSecurity = previous.revision?.startsWith('security:') ? previous.revision.slice('security:'.length) : null;
-  return !securityRevision || Boolean(previousSecurity && compareVersions(securityRevision, previousSecurity) <= 0);
+  if (!previousSecurity) return false;
+  return !securityRevision || compareVersions(securityRevision, previousSecurity) <= 0;
 }
 
 function nodeUpdateRow(node, { latest, outdated, security, unsupported, securityRevision }) {

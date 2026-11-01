@@ -14,7 +14,8 @@ const appendTakesAcrossScenes = vi.fn(async (_id, items) => ({
   appended: items.map((item) => ({ sceneId: item.sceneId, take: { takeId: `t-${item.sceneId}` } })),
 }));
 const recordSceneFailure = vi.fn(async (_id, sceneId, failure) => ({ sceneId, lastFailure: failure }));
-vi.mock('./musicVideo/projects.js', () => ({ appendTakesAcrossScenes, recordSceneFailure }));
+const getProject = vi.fn(async () => ({ scenes: [{ sceneId: 'a', takes: [] }, { sceneId: 'b', takes: [] }, { sceneId: 'c', takes: [] }] }));
+vi.mock('./musicVideo/projects.js', () => ({ appendTakesAcrossScenes, getProject, recordSceneFailure }));
 
 const hasFfmpeg = (() => {
   try {
@@ -91,5 +92,15 @@ describe.skipIf(!hasFfmpeg)('sequence-video hook (real ffmpeg)', () => {
     expect(recordSceneFailure.mock.calls.map((c) => c[1])).toEqual(['a', 'b', 'c']);
     expect(recordSceneFailure.mock.calls[0][2].error).toMatch(/clip is 3s but its shots need 5s/);
     expect((await loadHistory()).map((row) => row.id)).toEqual([CLIP_ID]);
+  });
+
+  // Uniquely catches a failed attach leaving cut pieces in the video history with no failure on the scenes.
+  it('removes the cut pieces and records the failure when the takes cannot be attached', async () => {
+    appendTakesAcrossScenes.mockRejectedValueOnce(new Error('Scene not found'));
+    await complete(spans);
+    expect(appendTakesAcrossScenes).toHaveBeenCalledTimes(1);
+    expect((await loadHistory()).map((row) => row.id)).toEqual([CLIP_ID]);
+    expect(recordSceneFailure.mock.calls.map((c) => c[1])).toEqual(['a', 'b', 'c']);
+    expect(recordSceneFailure.mock.calls[0][2].error).toMatch(/could not be split onto its shots/);
   });
 });

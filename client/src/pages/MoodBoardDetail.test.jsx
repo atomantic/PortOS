@@ -333,8 +333,17 @@ describe('MoodBoardDetail render event during the first load', () => {
     await act(async () => { socketHandlers.get('mood-board:item-render')({ boardId: 'a', itemId: 'i1', status: 'failed', error: 'GPU busy' }); });
     expect(mockGetMoodBoard).toHaveBeenCalledTimes(1);
     expect(mockToastError).toHaveBeenCalledWith('Render failed: GPU busy');
+    // The pending read captured the board before the event; the refresh after
+    // it settles carries the rendered item.
+    mockGetMoodBoard.mockResolvedValueOnce({
+      id: 'a', name: 'Board A',
+      items: [{ id: 'i1', type: 'image', mediaKey: 'image:job-1.png' }],
+    });
     await act(async () => { first.resolve({ id: 'a', name: 'Board A', items: [] }); });
     await waitFor(() => expect(boardNameValue()).toBe('Board A'));
+    expect(await screen.findByRole('button', { name: 'Preview image' })).toBeInTheDocument();
+    expect(mockGetMoodBoard).toHaveBeenCalledTimes(2);
+    expect(mockToastError).toHaveBeenCalledOnce();
   });
 });
 
