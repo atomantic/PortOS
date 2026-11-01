@@ -179,6 +179,7 @@ describe('MessageDetail refresh ordering', () => {
     await waitFor(() => expect(api.getMessageThread).toHaveBeenCalledTimes(1));
     await userEvent.click(screen.getByRole('button', { name: 'Refresh' }));
     await waitFor(() => expect(api.getMessageThread).toHaveBeenCalledTimes(2));
+    expect(screen.getByText('Fresh second')).toBeInTheDocument();
     await act(async () => reconciliation.resolve({ messages: fresh }));
     expect(screen.getByText('Fresh second')).toBeInTheDocument();
     await act(async () => initial.resolve({ messages: [{ ...threaded, bodyText: 'Stale body' }] }));
@@ -186,7 +187,7 @@ describe('MessageDetail refresh ordering', () => {
     expect(screen.queryByText('Stale body')).not.toBeInTheDocument();
   });
 
-  it('keeps reconciliation failure visible with retry and the refreshed message fallback', async () => {
+  it('keeps confirmed thread content visible with retry after reconciliation failure', async () => {
     const initial = deferred();
     api.getMessageThread.mockReturnValueOnce(initial.promise)
       .mockRejectedValueOnce(new Error('Reconciliation unavailable'))
@@ -196,7 +197,8 @@ describe('MessageDetail refresh ordering', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Refresh' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('Reconciliation unavailable');
     expect(screen.getByText('Fresh first')).toBeInTheDocument();
-    expect(screen.queryByText('2 messages')).not.toBeInTheDocument();
+    expect(screen.getByText('Fresh second')).toBeInTheDocument();
+    expect(screen.getByText('2 messages')).toBeInTheDocument();
     await act(async () => initial.resolve({ messages: [] }));
     expect(screen.getByRole('alert')).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: 'Retry' }));

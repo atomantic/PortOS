@@ -121,6 +121,7 @@ export default function MessageDetail({ message, accounts, onBack }) {
   const [generating, setGenerating] = useState(false);
   const [generatedDraftId, setGeneratedDraftId] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [refreshedThread, setRefreshedThread] = useState([]);
   const [displayedMessage, setDisplayedMessage] = useState(message);
   const [actioning, setActioning] = useState(null);
   const [useVoice, setUseVoice] = useState(false);
@@ -151,12 +152,14 @@ export default function MessageDetail({ message, accounts, onBack }) {
   const {
     items: threadMessages, state: threadState, error: threadError, retry: retryThread, setItems: setThreadMessages,
   } = useListResource(fetchThread, { enabled: hasThreadRef });
-  const threadLoading = hasThreadRef && threadState === 'loading';
+  const visibleThread = threadState === 'ready' ? threadMessages : refreshedThread;
+  const threadLoading = hasThreadRef && threadState === 'loading' && visibleThread.length === 0;
   const threadStateRef = useRef(threadState);
   useEffect(() => { threadStateRef.current = threadState; }, [threadState]);
   const refreshGeneration = useRef(0);
   useEffect(() => {
     setRefreshing(false);
+    setRefreshedThread([]);
     return () => { refreshGeneration.current += 1; };
   }, [message.id, accountId, threadId]);
 
@@ -174,6 +177,7 @@ export default function MessageDetail({ message, accounts, onBack }) {
       if (hasThreadRef && threadStateRef.current !== 'ready') {
         // Supersede an outstanding read (or retry a failed one), so it cannot
         // replace confirmed refreshed content with its older snapshot.
+        setRefreshedThread(result);
         retryThread();
       } else if (result.length > 1) {
         setThreadMessages(result);
@@ -235,8 +239,8 @@ export default function MessageDetail({ message, accounts, onBack }) {
   };
 
   // Show thread or single message
-  const hasThread = threadMessages.length > 1;
-  const displayMessages = hasThread ? threadMessages : [displayedMessage];
+  const hasThread = visibleThread.length > 1;
+  const displayMessages = hasThread ? visibleThread : [displayedMessage];
 
   return (
     <div className="space-y-4">
@@ -248,7 +252,7 @@ export default function MessageDetail({ message, accounts, onBack }) {
         <div className="flex-1 min-w-0">
           <h2 className="text-sm font-medium text-white truncate">{displayedMessage.subject || '(no subject)'}</h2>
           {hasThread && (
-            <span className="text-xs text-gray-500">{formatCount(threadMessages.length)} {threadMessages.length === 1 ? 'message' : 'messages'}</span>
+            <span className="text-xs text-gray-500">{formatCount(visibleThread.length)} {visibleThread.length === 1 ? 'message' : 'messages'}</span>
           )}
         </div>
         <div className="flex flex-wrap items-center justify-end gap-1">
