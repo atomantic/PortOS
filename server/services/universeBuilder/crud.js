@@ -23,7 +23,7 @@ import {
   STYLE_REFERENCES_MAX, STYLE_NOTES_MAX,
 } from './sanitize.js';
 import {
-  emitRecordUpdated, emitRecordDeleted,
+  emitRecordUpdated, emitRecordDeleted, emitRecordInvalidated,
   autoSubscribeRecordToAllPeers, unsubscribeAllForRecord,
 } from '../sharing/recordEvents.js';
 import { renameCollectionForUniverse, unlinkCollectionsForUniverse } from '../mediaCollections.js';
@@ -324,6 +324,8 @@ export async function createUniverse(input = {}) {
     });
   }
   promoteNewCanonEntries(created);
+  // UI-only: a brand-new record has no peer subscription to re-export into yet.
+  emitRecordInvalidated('universe', created.id);
   return created;
 }
 
@@ -361,6 +363,7 @@ export async function insertUniverseWithId(input = {}) {
   });
   // Mirror createUniverse's federation side-effects on tombstone-overwrite:
   // peers that still have the deleted record need the resurrection propagated.
+  emitRecordInvalidated('universe', next.id);
   if (wasResurrection && !next.ephemeral) {
     emitRecordUpdated('universe', next.id);
     autoSubscribeRecordToAllPeers('universe', next.id).catch((err) => {
