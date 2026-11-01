@@ -277,8 +277,9 @@ export async function isRepo(dir, { unknownOnError = false } = {}) {
   if (!result || result.terminated || result.signal) return undefined;
   const inside = result.stdout.trim();
   if (result.exitCode === 0 && (inside === 'true' || inside === 'false')) return inside === 'true';
-  // Recognize only ordinary discovery failure. Unrecognized/localized errors
-  // remain unknown rather than misclassifying a valid but inaccessible repo.
+  // Recognize only ordinary discovery failure (execGit keeps it in English).
+  // Unrecognized errors remain unknown rather than misclassifying a valid but
+  // inaccessible repo.
   // Git distinguishes reaching its search ceiling from reaching a mount point.
   const diagnostic = result.stderr.trim();
   const discoveryFailed = diagnostic === 'fatal: not a git repository (or any of the parent directories): .git'

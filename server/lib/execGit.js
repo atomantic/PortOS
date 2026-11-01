@@ -40,7 +40,8 @@ globalThis.__portosAssertGitWorkSettled = assertGitWorkSettled;
  * @param {boolean} [options.bufferOutput] - Return original output bytes; the same decoded code-unit limit applies
  * @param {number} [options.timeout] - Timeout in ms (default 30s)
  * @param {boolean} [options.ignoreExitCode] - Resolve instead of reject on non-zero exit
- * @param {object} [options.env] - Explicit child environment; omitted inherits normally
+ * @param {object} [options.env] - Explicit child environment; omitted inherits
+ *   process.env. Either way LANGUAGE is pinned so git reports in English.
  * @returns {Promise<{stdout: string|Buffer, stderr: string|Buffer, exitCode: number|null, signal?: string, terminated?: boolean}>}
  */
 export function execGit(args, cwd, options = {}) {
@@ -70,7 +71,12 @@ export function execGit(args, cwd, options = {}) {
     try { startup = startGit(args, {
       cwd,
       shell: false,
-      ...(options.env ? { env: options.env } : {})
+      // Callers classify failures by git's English wording (`not a git
+      // repository`, `branch … already exists`, `is already used by worktree`),
+      // and git translates it under a non-English locale: a pre-existing branch
+      // then reads as an orphan that worktree cleanup force-deletes. LANGUAGE
+      // outranks LC_ALL/LC_MESSAGES/LANG for messages and leaves LC_CTYPE alone.
+      env: { ...(options.env ?? process.env), LANGUAGE: 'en' },
     }, child => {
       wired = true;
 

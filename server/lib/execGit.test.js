@@ -31,6 +31,7 @@ describe('execGit', () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    vi.unstubAllEnvs();
   });
 
   it('passes args, cwd, and shell:false to spawn', async () => {
@@ -41,8 +42,25 @@ describe('execGit', () => {
     await promise;
     expect(spawn).toHaveBeenCalledWith('git', ['status'], {
       cwd: '/repo',
-      shell: false
+      shell: false,
+      env: { ...process.env, LANGUAGE: 'en' },
     });
+  });
+
+  it('keeps git diagnostics in English when the server runs under a translated locale', async () => {
+    // Callers match git's English wording; a translated `branch already exists`
+    // would make worktree cleanup delete a branch it did not create.
+    vi.stubEnv('LANGUAGE', 'de:en');
+    vi.stubEnv('LC_ALL', 'de_DE.UTF-8');
+    const child = makeChild();
+    spawn.mockReturnValue(child);
+    const promise = execGit(['worktree', 'add', '-b', 'topic', '/wt'], '/repo');
+    child.emit('close', 0);
+    await promise;
+    const { env } = spawn.mock.calls[0][2];
+    expect(env.LANGUAGE).toBe('en');
+    expect(env.LC_ALL).toBe('de_DE.UTF-8');
+    expect(process.env.LANGUAGE).toBe('de:en');
   });
 
   it('rejects embedded NUL before a native command line could truncate an argument', async () => {
@@ -57,8 +75,8 @@ describe('execGit', () => {
     const promise = execGit(['push'], '/repo', { env });
     child.emit('close', 0);
     await promise;
-    expect(spawn).toHaveBeenCalledWith('git', ['push'], { cwd: '/repo', shell: false, env });
-    expect(spawn.mock.calls[0][2].env).toBe(env);
+    expect(spawn).toHaveBeenCalledWith('git', ['push'], { cwd: '/repo', shell: false, env: { ...env, LANGUAGE: 'en' } });
+    expect(env).toEqual({ GH_TOKEN: 'selected-fixture-token', GIT_TERMINAL_PROMPT: '0' });
   });
 
   it('resolves with stdout/stderr/exitCode on successful exit', async () => {
