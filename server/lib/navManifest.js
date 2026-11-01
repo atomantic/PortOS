@@ -649,10 +649,25 @@ for (const alias of Object.keys(aliasToPath)) {
 }
 const ALIAS_KEYS = [...normalizedAliases.keys()];
 
+// "<section> <label>" as shown in the sidebar and ⌘K ("chief of staff agents",
+// "brain daily log"). Without this, the prefix tier below matches the section's
+// own short alias (`chief-of-staff`, `brain`) and lands on that section's first
+// page. Declared aliases keep precedence; first-declared phrase wins.
+const sectionLabelCommands = new Map();
+for (const cmd of NAV_COMMANDS) {
+  if (!cmd.section || !cmd.label) continue;
+  const key = normalizeNavAlias(`${cmd.section} ${cmd.label}`);
+  if (!normalizedAliases.has(key) && !sectionLabelCommands.has(key)) sectionLabelCommands.set(key, cmd);
+}
+
 export const resolveNavCommand = (input) => {
   if (!input || typeof input !== 'string') return null;
   const norm = normalizeNavAlias(input);
   if (!norm) return null;
+  const sectionLabelHit = sectionLabelCommands.get(norm);
+  if (sectionLabelHit) {
+    return { path: sectionLabelHit.path, matched: `${sectionLabelHit.section} ${sectionLabelHit.label}`, command: sectionLabelHit };
+  }
 
   const tail = norm.split('-').filter(Boolean).pop();
   // Each tier is { test, longest? }. `longest:true` picks the longest matching

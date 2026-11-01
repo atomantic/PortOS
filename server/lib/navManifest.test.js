@@ -370,6 +370,14 @@ describe('resolveNavCommand — fuzzy matching', () => {
     }
   });
 
+  it('resolves a spoken "<section> <label>" to that page, not the section default', () => {
+    expect(resolveNavCommand('Chief of Staff Agents')).toMatchObject({ path: '/cos/agents', matched: 'Chief of Staff Agents' });
+    expect(resolveNavCommand('brain daily log')?.path).toBe('/brain/daily-log');
+    expect(resolveNavCommand('chief of staff tasks')?.path).toBe('/cos/tasks');
+    // A declared alias spelled the same way keeps precedence.
+    expect(resolveNavCommand('create music video')?.path).toBe('/music-video?new=project');
+  });
+
   it('resolves exact alias', () => {
     expect(resolveNavCommand('dashboard')?.path).toBe('/');
     expect(resolveNavCommand('tasks')?.path).toBe('/cos/tasks');
