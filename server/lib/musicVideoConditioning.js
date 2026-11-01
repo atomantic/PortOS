@@ -185,7 +185,8 @@ export function musicVideoStyleImages(project, identityImages, capacity) {
 export function musicVideoConditioningReferences(project, scene, castMedia = null, greybox = null) {
   const references = baseConditioningReferences(project, scene, castMedia);
   if (!greybox?.reference) return references;
-  return [greybox.reference, ...references.filter((r) => r.imageId !== greybox.reference.imageId)]
+  // The chosen camera replaces the section's generic set plate, which shows the place from another side.
+  return [greybox.reference, ...references.filter((r) => r.imageId !== greybox.reference.imageId && !r.id?.startsWith('mvr-cs-set-'))]
     .slice(0, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES);
 }
 

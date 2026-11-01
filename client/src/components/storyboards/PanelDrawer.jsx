@@ -274,14 +274,46 @@ function ShotTab({ board, found, panelNumber, sketchNonce, busy, handlers, timin
   );
 }
 
+/** Which saved camera of a linked place the panel is seen from; its shot sends that camera's photo of the set. */
+function SetCameraPicker({ panel, names, cameras, onPatch }) {
+  const places = panel.environmentIds.filter((id) => cameras[id]?.length);
+  const chosen = panel.setShot;
+  const value = chosen ? `${chosen.environmentId}|${chosen.shotId}` : '';
+  const known = chosen && cameras[chosen.environmentId]?.some((shot) => shot.id === chosen.shotId);
+  if (!places.length && !chosen) return null;
+  return (
+    <section aria-label="Seen from">
+      <label htmlFor={`set-camera-${panel.id}`} className="block text-xs font-medium text-gray-300 mb-1">Seen from (set camera)</label>
+      <select id={`set-camera-${panel.id}`} value={value}
+        onChange={(e) => {
+          const [environmentId, shotId] = e.target.value.split('|');
+          onPatch({ setShot: shotId ? { environmentId, shotId } : null });
+        }}
+        className="w-full min-h-[44px] rounded-lg border border-port-border bg-port-bg px-2 text-sm text-gray-200">
+        <option value="">No set camera</option>
+        {chosen && !known && <option value={value}>Missing camera</option>}
+        {places.map((id) => (
+          <optgroup key={id} label={names[id] || 'Set'}>
+            {cameras[id].map((shot) => <option key={shot.id} value={`${id}|${shot.id}`}>{shot.label}</option>)}
+          </optgroup>
+        ))}
+      </select>
+      <p className="mt-1 text-xs text-gray-500">The shot uses this view of the set in place of the generic set image.</p>
+    </section>
+  );
+}
+
 function CastTab({ panel, onPatch }) {
   const [names, setNames] = useState({});
+  // Saved greybox cameras of the linked places, by place id.
+  const [cameras, setCameras] = useState({});
   const [picking, setPicking] = useState(null);
   const allIds = useMemo(() => REF_GROUPS.flatMap(({ field }) => panel[field]), [panel]);
   const idsKey = allIds.join('|');
 
   useEffect(() => {
-    const missing = idsKey ? idsKey.split('|').filter((id) => !(id in names)) : [];
+    // A place picked in this drawer already has its name but not its cameras yet.
+    const missing = idsKey ? idsKey.split('|').filter((id) => !(id in names) || (panel.environmentIds.includes(id) && !(id in cameras))) : [];
     if (!missing.length) return undefined;
     let active = true;
     listCatalogIngredientsByIds(missing, { silent: true })
@@ -293,10 +325,12 @@ function CastTab({ panel, onPatch }) {
           for (const item of items) next[item.id] = item.name || null;
           return next;
         });
+        setCameras((prev) => ({ ...prev, ...Object.fromEntries(items.filter((item) => item.type === 'place')
+          .map((item) => [item.id, (item.payload?.greybox?.shots || []).map(({ id, label }) => ({ id, label }))])) }));
       })
       .catch(() => {});
     return () => { active = false; };
-  }, [idsKey]); // `names` is the cache this effect fills, so it is not a dependency
+  }, [idsKey]); // `names` and `cameras` are the caches this effect fills, so they are not dependencies
 
   const group = REF_GROUPS.find((g) => g.field === picking);
 
@@ -316,7 +350,10 @@ function CastTab({ panel, onPatch }) {
               {panel[field].map((id) => (
                 <li key={id} className="inline-flex items-center gap-1 rounded-full border border-port-border bg-port-bg pl-3 text-sm text-gray-200">
                   <span className="truncate max-w-[12rem]">{names[id] || (id in names ? 'Missing record' : '…')}</span>
-                  <button type="button" onClick={() => onPatch({ [field]: panel[field].filter((x) => x !== id) })}
+                  <button type="button" onClick={() => onPatch({
+                    [field]: panel[field].filter((x) => x !== id),
+                    ...(field === 'environmentIds' && panel.setShot?.environmentId === id ? { setShot: null } : {}),
+                  })}
                     className="min-h-[36px] min-w-[36px] inline-flex items-center justify-center rounded-full text-gray-500 hover:text-port-error"
                     aria-label={`Remove ${names[id] || 'record'}`}>
                     <X size={14} />
@@ -329,6 +366,7 @@ function CastTab({ panel, onPatch }) {
           )}
         </section>
       ))}
+      <SetCameraPicker panel={panel} names={names} cameras={cameras} onPatch={onPatch} />
       <IngredientPicker
         open={!!group}
         type={group?.type}

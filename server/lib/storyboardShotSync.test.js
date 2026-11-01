@@ -38,6 +38,18 @@ describe('storyboardPanelSpans', () => {
 });
 
 describe('storyboardShotSyncPlan', () => {
+  it('points a shot at the set camera its panel names, through the linked place of the video', () => {
+    const seen = panel('a', 6, 'Nora skates past', { setShot: { environmentId: 'cat-rink', shotId: 'wall-east' } });
+    const unlinked = panel('b', 6, 'Elsewhere', { setShot: { environmentId: 'cat-other', shotId: 'wide' } });
+    const project = { scenes: [shot('b', 6, 12, { setReference: { subjectId: 'rink', greyboxShotId: 'wall-west' } })], concept: { subjects: [{ id: 'rink', kind: 'place', ingredientId: 'cat-rink' }] } };
+    const plan = storyboardShotSyncPlan(board([seen, unlinked, panel('c', 7.6)]), project, { song });
+    const byPanel = Object.fromEntries(plan.shots.map((x) => [x.panelId, x]));
+    expect(byPanel['panel-a'].input.setReference).toEqual({ subjectId: 'rink', greyboxShotId: 'wall-east' });
+    // A place the video does not use leaves the shot choice alone.
+    expect(byPanel['panel-b'].patch).not.toHaveProperty('setReference');
+    expect(byPanel['panel-c'].input).not.toHaveProperty('setReference');
+  });
+
   it('makes a shot per panel when there are none', () => {
     const plan = storyboardShotSyncPlan(board(), { scenes: [] }, { song });
     expect(plan.counts).toMatchObject({ added: 4, linked: 0, removed: 0 });

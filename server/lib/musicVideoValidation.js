@@ -92,6 +92,7 @@ import {
 import { MUSCRIPTOR_MODELS } from './muscriptorModels.js';
 import { MUSIC_VIDEO_CHARACTER_STYLE_IDS } from './musicVideoCharacterStyles.js';
 import { IMAGE_GEN_MODES, VIDEO_GEN_MODES } from './generationModes.js';
+import { GREYBOX_SHOT_ID_MAX, GREYBOX_SHOT_ID_PATTERN } from './greyboxVocabulary.js';
 
 // A project is authored hands-on (director) or seeded by the AI planner
 // (autonomous); both share the same record + scene board.
@@ -680,7 +681,7 @@ export const musicVideoSceneCharacterVariantSchema = z.object({
 
 export const musicVideoSceneSetReferenceSchema = z.object({
   subjectId: z.string().min(1).max(128),
-  greyboxShotId: z.string().min(1).max(51).regex(/^[A-Za-z][A-Za-z0-9_-]*$/).optional(),
+  greyboxShotId: z.string().min(1).max(GREYBOX_SHOT_ID_MAX).regex(GREYBOX_SHOT_ID_PATTERN).optional(),
 }).strict();
 
 const musicVideoPreMusicLayerSchema = z.object({

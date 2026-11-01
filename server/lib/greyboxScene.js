@@ -14,7 +14,7 @@
  */
 
 import { z } from 'zod';
-import { GREYBOX_ASPECTS, GREYBOX_SHOT_ROLE_PREFIX } from './greyboxVocabulary.js';
+import { GREYBOX_ASPECTS, GREYBOX_SHOT_ID_MAX } from './greyboxVocabulary.js';
 
 export const GREYBOX_SCHEMA_VERSION = 1;
 
@@ -96,7 +96,7 @@ const shotFigureSchema = z.object({
 
 // A shot's capture carries `greybox-shot:<id>` as its media role (VARCHAR(64)),
 // so the id has to leave room for the prefix.
-const shotIdSchema = idSchema.max(64 - GREYBOX_SHOT_ROLE_PREFIX.length);
+const shotIdSchema = idSchema.max(GREYBOX_SHOT_ID_MAX);
 
 const shotSchema = z.object({
   id: shotIdSchema,
@@ -108,6 +108,9 @@ const shotSchema = z.object({
   aspect: z.enum(GREYBOX_ASPECTS).default('16:9'),
   figures: z.array(shotFigureSchema).max(GREYBOX_LIMITS.SHOT_FIGURES).default([]),
   note: z.string().trim().max(300).optional(),
+  // A finished photo of the place from this camera (one of its reference
+  // images); shots that pick this camera send it instead of the flat capture.
+  plate: z.string().trim().max(200).regex(/^[^/\\]+\.(png|jpe?g|webp)$/i).optional(),
 });
 
 const duplicateIds = (items) => {

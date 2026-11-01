@@ -17,11 +17,11 @@
  * frames and clips as they are. A panel with no shot gets a new one, and a
  * shot whose panel is gone (or that no panel took) is removed.
  *
- * What a sync changes on a linked shot: its span, place, label, section and
- * sung lyric always; its words and frame reference (the panel's action and
- * art) only when the panel changed since the shot last took them, and only on
- * a shot whose still is not locked (a locked one waits for Update, as after
- * Fit to song). Everything the shot owns (prompts, takes, transitions,
+ * What a sync changes on a linked shot: its span, place, label, section,
+ * sung lyric and (when the panel names one) its set camera always; its words
+ * and frame reference (the panel's action and art) only when the panel
+ * changed since the shot last took them, and only on a shot whose still is
+ * not locked (a locked one waits for Update, as after Fit to song). Everything the shot owns (prompts, takes, transitions,
  * effects, film look, mode) is kept. A shot whose video is locked never
  * moves, and a locked shot is removed only when asked (`removeLocked`).
  *
@@ -45,6 +45,12 @@ const TEXT_MAX = 2000;
 const round = (t) => Math.round(t * 100) / 100;
 const clip = (text, max) => String(text || '').trim().slice(0, max);
 const holdSeconds = (panel) => (panel?.seconds > 0 ? panel.seconds : STORYBOARD_DEFAULT_HOLD_SEC);
+// A panel seen from a saved camera of one of the video's places points its shot at that camera.
+const panelSetReference = (project, panel) => {
+  const subject = panel?.setShot && (project?.concept?.subjects || [])
+    .find((s) => s.kind === 'place' && s.ingredientId === panel.setShot.environmentId);
+  return subject ? { subjectId: subject.id, greyboxShotId: panel.setShot.shotId } : null;
+};
 const same = (a, b) => typeof a === 'number' && typeof b === 'number' && Math.abs(a - b) < SAME_SEC;
 
 /** Which song section a time falls in (the last one starting at or before it). */
@@ -176,7 +182,8 @@ export function storyboardShotSyncPlan(board, project, { song = null, locks = nu
     const timing = span.beforeSong
       ? { preMusic: { durationSec: span.durationSec } }
       : { startSec: span.startSec, endSec: span.endSec, lyricText: span.lyricText };
-    const placing = { label: span.label, sectionIndex: span.sectionIndex, sectionLabel: span.sectionLabel, ...timing };
+    const setReference = panelSetReference(project, panel);
+    const placing = { label: span.label, sectionIndex: span.sectionIndex, sectionLabel: span.sectionLabel, ...timing, ...(setReference ? { setReference } : {}) };
     const found = linkedTo.has(span.panelId) ? { scene: linkedTo.get(span.panelId), link: 'panel' } : takeUnlinked(span);
     if (!found) {
       counts.added += 1;

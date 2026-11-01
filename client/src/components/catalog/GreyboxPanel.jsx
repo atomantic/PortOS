@@ -22,6 +22,7 @@ import {
   roundVec,
   greyboxEditErrors,
 } from '../../lib/greybox';
+import { GREYBOX_SHOT_ROLE_PREFIX } from '../../../../server/lib/greyboxVocabulary.js';
 import MediaImage from '../MediaImage';
 
 // three.js stays out of the main chunk: the viewer loads when the tab opens.
@@ -279,6 +280,14 @@ export default function GreyboxPanel({ record, media, readOnly = false, disabled
   });
 
   const selectedCapture = shot ? captureForShot(media, shot.id) : null;
+  // A finished photo of the place from this camera: music video shots that pick the camera send it.
+  const plateChoices = (media || []).filter((m) => !m.deleted && m.kind === 'reference' && !m.role?.startsWith(GREYBOX_SHOT_ROLE_PREFIX)
+    && /^[^/\\]+\.(png|jpe?g|webp)$/i.test(m.mediaKey));
+  const setPlate = (plate) => run('shot', async () => {
+    if (!shot || !saved) return;
+    const { plate: _previous, ...rest } = saved.shots.find((s) => s.id === shot.id) || shot;
+    await persist(withShot(saved, plate ? { ...rest, plate } : rest));
+  });
   const counts = scene ? [[scene.parts, 'part'], [scene.anchors, 'anchor'], [scene.shots, 'shot']]
     .map(([list, word]) => `${list.length} ${word}${list.length === 1 ? '' : 's'}`).join(' · ') : '';
 
@@ -432,6 +441,25 @@ export default function GreyboxPanel({ record, media, readOnly = false, disabled
                   </div>
                 )}
                 {shot && <p className="text-[11px] text-gray-500">Captures attach to this environment as a reference image tagged for this shot, ready to pick as an input to shot image generation.</p>}
+                {shot && plateChoices.length > 0 && (
+                  <fieldset className="space-y-1" disabled={blocked || !!manual}>
+                    <legend className="text-xs text-gray-400">Photo plate for “{shot.label}”: music video shots that pick this camera send it in place of the flat capture.</legend>
+                    <ul className="flex gap-1.5 overflow-x-auto pb-1" aria-label="Photo plate choices">
+                      <li className="shrink-0">
+                        <button type="button" aria-pressed={!shot.plate} onClick={() => setPlate(null)}
+                          className={`h-12 px-2 rounded border text-[11px] ${!shot.plate ? 'border-port-accent text-white' : 'border-port-border text-gray-400'}`}>None</button>
+                      </li>
+                      {plateChoices.map((m) => (
+                        <li key={m.mediaKey} className="shrink-0">
+                          <button type="button" aria-pressed={shot.plate === m.mediaKey} aria-label={m.caption || m.mediaKey} onClick={() => setPlate(m.mediaKey)}
+                            className={`block h-12 w-20 rounded overflow-hidden border ${shot.plate === m.mediaKey ? 'border-port-accent ring-1 ring-port-accent' : 'border-port-border'}`}>
+                            <MediaImage thumbnail src={`/data/images/${encodeURIComponent(m.mediaKey)}`} alt="" loading="lazy" decoding="async" className="h-full w-full object-cover" />
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  </fieldset>
+                )}
               </div>
             )}
 
