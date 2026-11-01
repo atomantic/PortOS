@@ -174,7 +174,7 @@ export const GROK_STREAMING_JSON_FORMAT = 'grok-streaming-json';
  * @param {string[]} args
  * @returns {string[]}
  */
-export function withGrokStreamingJsonOutput(args = []) {
+export function _withGrokStreamingJsonOutput(args = []) {
   const out = [];
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--output-format' || args[i] === '-o') i++;
@@ -216,7 +216,7 @@ export const GROK_CODE_REVIEW_JSON_SCHEMA = {
  * @returns {string[]}
  */
 export function withGrokCodeReviewOutput(args = []) {
-  const formatted = withGrokStreamingJsonOutput(args);
+  const formatted = _withGrokStreamingJsonOutput(args);
   const out = [];
   for (let i = 0; i < formatted.length; i++) {
     if (formatted[i] === '--json-schema') i++;
