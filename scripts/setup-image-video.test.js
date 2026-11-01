@@ -428,6 +428,23 @@ printf '%s\\n' '0'
       },
     });
     expect(existsSync(namedRoot)).toBe(true);
+    const versioned = join(dir, 'versioned-venv');
+    rmSync(versioned, { recursive: true, force: true });
+    mkdirSync(join(versioned, 'bin'), { recursive: true });
+    writeFileSync(join(versioned, 'bin', 'python3.11'), '#!/bin/bash\nexit 0\n');
+    chmodSync(join(versioned, 'bin', 'python3.11'), 0o755);
+    writeFileSync(join(later, 'python3.13'), '#!/bin/bash\nexit 0\n');
+    chmodSync(join(later, 'python3.13'), 0o755);
+    execFileSync('bash', ['-c', `${apple}\n${reset}\nreset_universal_venv "$1" python3.11`, 'bash', versioned], {
+      env: {
+        ...process.env,
+        PATH: `${join(versioned, 'bin')}:${later}:${dir}:/bin`,
+        ARCHES: 'x86_64 arm64',
+        RECREATE_ARCHES: 'arm64',
+        MACHINE: 'arm64',
+      },
+    });
+    expect(existsSync(versioned)).toBe(true);
   });
 
   it.skipIf(process.platform === 'win32')('does not choose a python inside the venv it may delete', () => {

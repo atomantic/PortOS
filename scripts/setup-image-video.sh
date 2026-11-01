@@ -190,7 +190,7 @@ reset_universal_venv() {
     *) return 0 ;;
   esac
   [[ -n "${1:-}" && -n "${2:-}" ]] || return 0
-  local py="$1/bin/python3" arches base_arches base="$2" original="$2" outside="" dir candidate
+  local py="$1/bin/python3" arches base_arches base="$2" original="$2" outside="" dir path_rest
   case "$base" in
     */*) ;;
     *) base="$(command -v "$base" 2>/dev/null || true)" ;;
@@ -198,13 +198,14 @@ reset_universal_venv() {
   [[ -n "$base" && -x "$base" ]] || return 0
   # An activated venv is the first python on PATH. A caller that stored that
   # absolute path cannot recreate the venv after it is deleted. A bare command
-  # name is resolved again, so delete when the next python on PATH is arm64.
+  # name is resolved again. Delete only when that same command exists later
+  # on PATH; a different version would make the caller's venv command fail.
   case "$base" in
     "$1"/*)
       case "$original" in
         */*) return 0 ;;
       esac
-      local path_rest="$PATH"
+      path_rest="$PATH"
       while [[ -n "$path_rest" ]]; do
         dir="${path_rest%%:*}"
         if [[ "$path_rest" == *:* ]]; then path_rest="${path_rest#*:}"; else path_rest=""; fi
@@ -212,12 +213,10 @@ reset_universal_venv() {
         case "$dir" in
           "$1"|"$1"/*) continue ;;
         esac
-        for candidate in python3 python3.13 python3.12 python3.11 python3.10 python; do
-          if [[ -x "$dir/$candidate" && ! -d "$dir/$candidate" ]]; then
-            outside="$dir/$candidate"
-            break 2
-          fi
-        done
+        if [[ -x "$dir/$original" && ! -d "$dir/$original" ]]; then
+          outside="$dir/$original"
+          break
+        fi
       done
       [[ -n "$outside" ]] || return 0
       base="$outside"
