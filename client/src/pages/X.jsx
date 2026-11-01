@@ -203,6 +203,8 @@ export default function XPage() {
 
   const sync = () => selected && finish('sync', api.syncXAccount(selected.id, { silent: true }), (result) => {
     setAccounts((previous) => previous.map((candidate) => candidate.id === result.account.id ? result.account : candidate));
+    if (currentAccountIdRef.current !== selected.id) return;
+    ++selectedLoadRef.current.posts;
     setPosts(result.posts || []);
     setResourcesAccountId(selected.id);
     setPostRead({ status: 'ready', error: '' });

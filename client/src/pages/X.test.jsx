@@ -228,4 +228,20 @@ describe('X page', () => {
     expect(screen.getByText('Current account draft')).toBeInTheDocument();
   });
 
+  it('keeps a completed diagnostic authoritative over an older pending posts retry', async () => {
+    const user = userEvent.setup();
+    let rejectRetry;
+    api.getXPosts.mockRejectedValueOnce(new Error('Posts unavailable'))
+      .mockImplementationOnce(() => new Promise((resolve, reject) => { rejectRetry = reject; }));
+    api.syncXAccount.mockResolvedValue({ account, posts: [{ id: 'new-post', body: 'New diagnostic post' }], ingested: 1 });
+    renderPage(`/x/${account.id}/posts`);
+    await screen.findByText('Posts unavailable');
+    await user.click(screen.getByRole('button', { name: 'Retry posts' }));
+    await user.click(screen.getByRole('button', { name: 'Refresh' }));
+    expect(await screen.findByText('New diagnostic post')).toBeInTheDocument();
+    await act(async () => { rejectRetry(new Error('Older read failed')); });
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.getByText('New diagnostic post')).toBeInTheDocument();
+  });
+
 });
