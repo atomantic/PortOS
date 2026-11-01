@@ -459,29 +459,40 @@ function sunoRenderPhase(snapshot) {
 
 // Leaf clocks and short status labels for one song. The workspace scope is the
 // largest ancestor that still contains only this song's link, so a neighbour's
-// duration cannot satisfy the wait. On the song page, clocks inside a link to
-// a different song are ignored for the same reason. Runs in the page: no
-// closed-over module state.
+// duration cannot satisfy the wait. On the song page, each other song's row (the
+// largest ancestor below <body> whose song links all name that song and which
+// holds at most one clock) is ignored for the same reason, so a related song's
+// duration beside its link does not count. The clock bound stops that row
+// before it takes in this song's own player when the page has no link to it. Runs in the page: no closed-over module state.
 function collectSunoRenderSnapshot(request) {
   const wanted = String(request.songId || '').toLowerCase();
   const hrefOf = (anchor) => String(anchor.getAttribute('href') || '').toLowerCase();
   const isThisSong = (anchor) => hrefOf(anchor).includes(`/song/${wanted}`);
-  const link = [...document.querySelectorAll('a[href*="/song/"]')].find(isThisSong) || null;
+  const songIdOf = (anchor) => {
+    const match = /\/song\/([0-9a-f-]{36})/i.exec(hrefOf(anchor));
+    return match ? match[1] : hrefOf(anchor);
+  };
+  const singleSong = (node) => new Set([...node.querySelectorAll('a[href*="/song/"]')].map(songIdOf)).size <= 1;
+  const clockCount = (node) => [...node.querySelectorAll('span,div,time,p')]
+    .filter((el) => el.childElementCount === 0 && /^\d+:\d{2}$/.test(el.textContent.trim())).length;
+  const songLinks = [...document.querySelectorAll('a[href*="/song/"]')];
+  const link = songLinks.find(isThisSong) || null;
   const onSongPage = location.pathname.toLowerCase().includes(`/song/${wanted}`);
   const visible = (el) => el.getClientRects().length > 0 && getComputedStyle(el).visibility !== 'hidden';
+  const foreignRows = onSongPage ? songLinks.filter((anchor) => !isThisSong(anchor)).map((anchor) => {
+    let row = anchor;
+    for (let node = anchor.parentElement, depth = 0; node && node !== document.body && depth < 12 && singleSong(node) && clockCount(node) <= 1; node = node.parentElement, depth += 1) row = node;
+    return row;
+  }) : [];
   const foreign = (el) => {
     const owner = el.closest('a[href*="/song/"]');
-    return Boolean(owner && !isThisSong(owner));
+    return Boolean(owner && !isThisSong(owner)) || foreignRows.some((row) => row.contains(el));
   };
   let scope = onSongPage ? document.body : link;
   if (link && !onSongPage) {
     let node = link;
     for (let depth = 0; node && depth < 12; depth += 1) {
-      const ids = new Set([...node.querySelectorAll('a[href*="/song/"]')].map((anchor) => {
-        const match = /\/song\/([0-9a-f-]{36})/i.exec(hrefOf(anchor));
-        return match ? match[1] : hrefOf(anchor);
-      }));
-      if (ids.size > 1) break;
+      if (!singleSong(node)) break;
       scope = node;
       node = node.parentElement;
     }

@@ -134,4 +134,13 @@ describe('MediaImage', () => {
     fireEvent.error(screen.getByAltText('x'));
     expect(onError).toHaveBeenCalledTimes(1);
   });
+
+  it('tells the caller nothing when the poster fails but its fallback video is still loading', () => {
+    const onError = vi.fn();
+    render(<MediaImage src="/data/images/x.png" fallbackVideoSrc="/data/videos/x.mp4" alt="x" onError={onError} />);
+    fireEvent.error(screen.getByAltText('x'));
+    expect(onError).not.toHaveBeenCalled();
+    fireEvent.error(screen.getByLabelText('x'));
+    expect(onError).toHaveBeenCalledTimes(1);
+  });
 });

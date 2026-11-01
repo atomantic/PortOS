@@ -280,9 +280,15 @@ export function runCliProviderPrompt(args = {}) {
       // stream formats stay raw for the caller to settle.
       if (streamFormat === GROK_STREAMING_JSON_FORMAT) {
         // Drift probe: a tool grok shipped after GROK_BUILTIN_TOOLS was written
-        // is still offered to this no-tool run (#14476).
-        const escaped = grokToolsEscapingNoToolPosture(text);
+        // is still offered to this no-tool run (#14476). An offer alone moved no
+        // data; a call may have read host content into a verdict that gets
+        // published, so that run's answer is refused.
+        const { offered, called } = grokToolsEscapingNoToolPosture(text);
+        const escaped = [...new Set([...offered, ...called])];
         if (escaped.length) console.warn(`⚠️ grok no-tool run still offered or called tools: ${escaped.join(', ')} — add them to GROK_BUILTIN_TOOLS`);
+        if (called.length) {
+          return done({ error: `grok called tools in a no-tool run: ${called.join(', ')}`, exitCode: code, stderr, stderrTail });
+        }
         return done({
           text: extractGrokFinalMessage(text),
           finishReason: grokReviewFinishReason(text),

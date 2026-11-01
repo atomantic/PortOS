@@ -379,6 +379,22 @@ describe('music video production run (#9066)', () => {
     expect(theRun().steps.at(-1)).toMatchObject({ status: 'refused', errorCode: 'PRODUCTION_PLATE_CHANGED' });
   });
 
+  // Uniquely catches a paid frame generation reserved after the director picked a frame mid-dispatch.
+  it('does not reserve a new frame once the director selects one during dispatch', async () => {
+    seedProject({ scenes: [{ sceneId: 'mvs-a', label: 'A', framePrompt: 'a lighthouse', prompt: 'waves roll', startSec: 0, endSec: 8, takes: [] }] });
+    const chooseRoute = vi.fn(async () => {
+      store.get('mv-example').scenes[0].referenceImageId = 'director-choice.png';
+      return { route: POOL[0], rationale: 'model pick' };
+    });
+    service.__setProductionDepsForTests({ loadEnv: async () => env, dispatch, queue: async () => queue, planProject, autoReview: async () => autoReview, chooseRoute });
+    await start({ pool: POOL.filter((route) => route.kind === 'image'), stopBefore: 'clips' });
+    await settle();
+    expect(chooseRoute).toHaveBeenCalled();
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(theRun().usage.generations).toBe(0);
+    expect(current().scenes[0].referenceImageId).toBe('director-choice.png');
+  });
+
   // Uniquely catches a resumed run keeping its pending clip pilot, which would filter stills to the pilot scenes and park early.
   it('drops a pending clip pilot when a normal run is resumed as stills-only', async () => {
     seedProject();

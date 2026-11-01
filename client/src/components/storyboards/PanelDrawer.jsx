@@ -311,6 +311,7 @@ function LinkedImagePicker({ panel, names, onPatch }) {
     const all = [...panel.environmentIds, ...panel.objectIds, ...panel.castIds];
     return all.filter((id, index) => all.indexOf(id) === index);
   }, [panel.environmentIds, panel.objectIds, panel.castIds]);
+  // id -> its media rows once loaded, or null when the request failed (Retry clears it to load again).
   const [media, setMedia] = useState({});
 
   useEffect(() => {
@@ -335,6 +336,11 @@ function LinkedImagePicker({ panel, names, onPatch }) {
     else delete next[id];
     onPatch({ linkMedia: Object.keys(next).length ? next : null });
   };
+  const retry = (id) => setMedia((prev) => {
+    const next = { ...prev };
+    delete next[id];
+    return next;
+  });
 
   return (
     <section aria-label="Images sent" className="space-y-3">
@@ -371,10 +377,16 @@ function LinkedImagePicker({ panel, names, onPatch }) {
                 onChange={(e) => choose(id, e.target.value)}
                 className="w-full min-h-[44px] rounded-lg border border-port-border bg-port-bg px-2 text-sm text-gray-200"
               >
-                <option value="">{loaded ? automatic : 'Loading images…'}</option>
+                <option value="">{!loaded ? 'Loading images…' : failed ? 'Newest portrait' : automatic}</option>
                 {picked && !known && <option value={picked}>{loaded && !failed ? 'Saved image missing' : 'Saved image'}</option>}
                 {choices.map((row, index) => <option key={row.mediaKey} value={row.mediaKey}>{labels[index]}</option>)}
               </select>
+              {failed && (
+                <p role="alert" className="mt-1 flex flex-wrap items-center gap-2 text-xs text-port-error">
+                  Could not load the images for {name}.
+                  <button type="button" onClick={() => retry(id)} className="min-h-[44px] underline sm:min-h-0">Retry</button>
+                </p>
+              )}
             </div>
           </div>
         );

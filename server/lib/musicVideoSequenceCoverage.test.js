@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  planSequenceCoverage, planProjectSequenceCoverage, composeSequencePrompt, sequenceClipSpans, SEQUENCE_PROMPT_EXPANSION,
+  planSequenceCoverage, planProjectSequenceCoverage, _composeSequencePrompt, _sequenceClipSpans, SEQUENCE_PROMPT_EXPANSION,
 } from './musicVideoSequenceCoverage.js';
 import { buildFalVideoRequest } from './falVideoModels.js';
 
@@ -18,7 +18,7 @@ describe('planSequenceCoverage', () => {
     expect(perShot).toEqual([]);
     expect(groups).toHaveLength(1);
     expect(groups[0]).toMatchObject({ sceneIds: ['a', 'b', 'c'], startSec: 10, endSec: 22, durationSec: 12 });
-    const split = sequenceClipSpans(groups[0], scenes, { clipDurationSec: 12 });
+    const split = _sequenceClipSpans(groups[0], scenes, { clipDurationSec: 12 });
     expect(split.spans).toEqual([
       { sceneId: 'a', clipStartSec: 0, clipEndSec: 4 },
       { sceneId: 'b', clipStartSec: 4, clipEndSec: 8 },
@@ -66,9 +66,9 @@ describe('sequence request', () => {
       { prompt: 'Mara climbs the stairs', startSec: 10, endSec: 14, imageIndex: 1 },
       { prompt: 'Close on her hand', startSec: 14, endSec: 18, imageIndex: 2 },
     ];
-    const prompt = composeSequencePrompt({ modelId: H3, shots });
+    const prompt = _composeSequencePrompt({ modelId: H3, shots });
     expect(prompt).toBe('0-4s: Image 1. Mara climbs the stairs\n4-8s: Image 2. Close on her hand');
-    expect(composeSequencePrompt({ modelId: SEEDANCE, shots })).toContain('4-8s: @Image2. Close on her hand');
+    expect(_composeSequencePrompt({ modelId: SEEDANCE, shots })).toContain('4-8s: @Image2. Close on her hand');
     const req = buildFalVideoRequest({
       modelId: H3, prompt, seconds: 8, referenceImageUrls: ['https://example.com/1.png', 'https://example.com/2.png'],
       promptExpansion: SEQUENCE_PROMPT_EXPANSION,
@@ -81,7 +81,7 @@ describe('sequence request', () => {
   it('refuses a split when the returned clip is shorter than the sequence', () => {
     const scenes = [shot('a', 0, 5), shot('b', 5, 10)];
     const [group] = planSequenceCoverage(scenes, { modelId: H3 }).groups;
-    expect(sequenceClipSpans(group, scenes, { clipDurationSec: 7 }).ok).toBe(false);
+    expect(_sequenceClipSpans(group, scenes, { clipDurationSec: 7 }).ok).toBe(false);
   });
 });
 

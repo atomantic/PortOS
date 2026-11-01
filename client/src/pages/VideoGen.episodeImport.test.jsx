@@ -37,9 +37,32 @@ describe('VideoGen Episode Composer FableLoom import', () => {
     expect(await screen.findByRole('button', { name: 'Retrying…' })).toBeDisabled();
     expect(importError()).toBeInTheDocument();
 
-    await act(async () => { resolveRetry({ episodes: [] }); });
+    await act(async () => { resolveRetry({ episodes: [{ id: 'ep-1', nodes: [] }] }); });
     await waitFor(() => expect(importError()).toBeNull());
     expect(screen.getByTestId('episode-composer')).toBeInTheDocument();
+  });
+
+  it('reports an episode missing from the loaded loom instead of opening it as empty', async () => {
+    state.getLoom.mockResolvedValueOnce({ episodes: [{ id: 'ep-other', nodes: [] }] });
+    await renderVideoGenPage(IMPORT_ENTRY);
+
+    expect(await screen.findByText(/Could not load the FableLoom episode — it is no longer in this loom/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+  });
+
+  it('does not keep the previous episode\'s scenes after switching to an episode with none', async () => {
+    state.getLoom.mockResolvedValue({
+      episodes: [
+        { id: 'ep-1', nodes: [{ id: 'n1', title: 'Dock', prose: 'Rain on the pier.' }] },
+        { id: 'ep-2', nodes: [] },
+      ],
+    });
+    await renderVideoGenPage(IMPORT_ENTRY);
+    expect(await screen.findByText('1 imported scenes')).toBeInTheDocument();
+
+    await act(async () => { state.navigate('/media/video?episode=1&loomId=loom-1&episodeId=ep-2'); });
+    await waitFor(() => expect(state.getLoom).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText('0 imported scenes')).toBeInTheDocument();
   });
 
   it('does not carry a failed import into a plain composer opened after Back', async () => {

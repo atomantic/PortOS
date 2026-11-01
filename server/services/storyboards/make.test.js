@@ -40,6 +40,7 @@ beforeEach(() => {
     enqueue,
     linkedMedia: async (ids) => new Map(ids.map((id) => [id, [{ kind: 'portrait', mediaKey: `${id}.png` }]])),
     ingredient: async (id) => ({ id, name: `Name of ${id}` }),
+    resolveImage: (image) => `/gallery/${image}`,
     emit: (payload) => { emitted.push(payload); },
     emitBatch: (payload) => { batchEvents.push(payload); onBatchEvent?.(payload); },
   });
@@ -169,6 +170,23 @@ describe('storyboard panel maker', () => {
     expect(run.status).toBe(200);
     expect(nodeState(run.body, 'node-image').sentRefs.map((ref) => ref.image))
       .toEqual(['set-example-1.png', 'cat-example-1.png', 'cat-example-2.png', 'cat-example-3.png', 'cat-example-4.png']);
+  });
+
+  // Uniquely catches a reference whose file is gone holding a capped slot, or being recorded as sent.
+  it('caps only the references that resolve, and records exactly the ones sent', async () => {
+    __setDepsForTests({ resolveImage: (image) => (image === 'set-example-1.png' ? null : `/gallery/${image}`) });
+    const castIds = Array.from({ length: 6 }, (_, i) => `cat-example-${i + 1}`);
+    const { id, panelId } = await boardWithPanel({ action: 'Doors', castIds, environmentIds: ['set-example-1'] });
+    const { recipe } = (await api('get', `/${id}`)).body;
+    recipe.nodes.find((node) => node.id === 'node-image').settings.imageMode = 'codex';
+    await api('put', `/${id}/recipe`, { recipe });
+    await api('patch', `/${id}/panels/${panelId}/make/node-writer`, { text: 'A wide frame' });
+
+    const run = await api('post', `/${id}/panels/${panelId}/make/node-image/run`);
+    expect(run.status).toBe(200);
+    const sent = castIds.slice(0, 5).map((castId) => `${castId}.png`);
+    expect(nodeState(run.body, 'node-image').sentRefs.map((ref) => ref.image)).toEqual(sent);
+    expect(enqueue.mock.calls[0][0].params.referenceImagePaths).toEqual(sent.map((image) => `/gallery/${image}`));
   });
 
   // Uniquely catches a panel always sending the newest portrait after it named another image of that cast member or place.
