@@ -177,6 +177,22 @@ describe('AutonomousRunPanel', () => {
     await waitFor(() => expect(api.resumeAutonomousMusicVideo).toHaveBeenCalledWith('mv-1', { sunoSongId: revised }, { silent: true }));
   });
 
+  // Uniquely catches a link pasted before a retake still winning over the retake's new renders.
+  it('clears a pasted link when a retake brings new renders', async () => {
+    api.resumeAutonomousMusicVideo.mockResolvedValue({ project: { id: 'mv-1', autonomousRun: baseRun() }, run: baseRun() });
+    const parked = (ids) => baseRun({ status: 'awaiting-approval', awaiting: 'song', stage: 'song', output: { sunoSongIds: ids } });
+    render(<Harness initial={parked(['11111111-1111-4111-8111-111111111111'])} />);
+    const field = screen.getByLabelText(/version you made or revised in suno/i);
+    fireEvent.change(field, { target: { value: 'https://suno.com/song/33333333-3333-4333-8333-333333333333' } });
+    const retaken = parked(['55555555-5555-4555-8555-555555555555', '66666666-6666-4666-8666-666666666666']);
+    act(() => {
+      listeners.get('music-video:autonomous')({ projectId: 'mv-1', run: retaken, project: { id: 'mv-1', autonomousRun: retaken } });
+    });
+    expect(screen.getByLabelText(/version you made or revised in suno/i).value).toBe('');
+    fireEvent.click(screen.getByRole('button', { name: /approve & download this render/i }));
+    await waitFor(() => expect(api.resumeAutonomousMusicVideo).toHaveBeenCalledWith('mv-1', { sunoSongId: '66666666-6666-4666-8666-666666666666' }, { silent: true }));
+  });
+
   it('offers Resume, not Cancel, for a run canceled while it waited on production', async () => {
     api.resumeAutonomousMusicVideo.mockResolvedValue({ project: { id: 'mv-1', autonomousRun: baseRun() }, run: baseRun() });
     render(<Harness initial={baseRun({ status: 'canceled', stage: 'produce', error: 'Production was canceled' })} />);

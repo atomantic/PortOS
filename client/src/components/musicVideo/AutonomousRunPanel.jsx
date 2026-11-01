@@ -82,9 +82,10 @@ export default function AutonomousRunPanel({ project, auto, readiness, selectedS
   const [videoSwapEdit, setVideoSwapEdit] = useState(null);
   // Video tools the director adds while approving the stills: { runId, value: ['video:<mode>'] }.
   const [addToolsEdit, setAddToolsEdit] = useState(null);
-  // The Suno render the director picks to download at the song checkpoint: { runId, value }.
+  // The Suno render the director picks to download at the song checkpoint, or a song they made
+  // or revised in Suno themselves, pasted as a link: { for, value }, where `for` names the run
+  // and its renders, so a retake's new renders start from a fresh pick with the link cleared.
   const [songPick, setSongPick] = useState(null);
-  // Or a song they made or revised in Suno themselves, pasted as a link: { runId, value }.
   const [songLink, setSongLink] = useState(null);
   if (!run) return null;
   const guidance = productionReviewStopGuidance(run, readiness);
@@ -118,10 +119,11 @@ export default function AutonomousRunPanel({ project, auto, readiness, selectedS
   // Parked on fresh Suno renders before their download (a download spends one of the account's
   // monthly downloads): the director listens on Suno and approves the one to download.
   const songRenders = awaiting === 'song' && run.stage === 'song' && !run.output?.trackId && sunoCount ? run.output.sunoSongIds : [];
-  const linkText = songLink && songLink.runId === run.id ? songLink.value : '';
+  const songsFor = `${run.id}:${songRenders.join(',')}`;
+  const linkText = songLink && songLink.for === songsFor ? songLink.value : '';
   const linkedSong = pastedSunoSongId(linkText);
   const pickedRender = !songRenders.length ? null
-    : linkedSong || (songPick && songPick.runId === run.id && songRenders.includes(songPick.value) ? songPick.value : songRenders[songRenders.length > 1 ? 1 : 0]);
+    : linkedSong || (songPick && songPick.for === songsFor && songRenders.includes(songPick.value) ? songPick.value : songRenders[songRenders.length > 1 ? 1 : 0]);
   // A failed run that only has the final render left retries just that.
   const retryLabel = run.status === 'failed' && run.stage === 'produce' && (run.output?.renderJobId || run.output?.productionDone) ? 'Retry render' : run.status === 'failed' ? 'Retry' : 'Resume';
   // A stale or hand-edited `?run-stage=` that names no finished, viewable stage opens nothing.
@@ -237,7 +239,7 @@ export default function AutonomousRunPanel({ project, auto, readiness, selectedS
               <div className="flex flex-col gap-1">
                 {songRenders.map((id, i) => (
                   <label key={id} className="flex items-center gap-2 text-sm min-w-0">
-                    <input type="radio" name="mv-run-song-pick" checked={pickedRender === id} onChange={() => { setSongPick({ runId: run.id, value: id }); setSongLink(null); }} />
+                    <input type="radio" name="mv-run-song-pick" checked={pickedRender === id} onChange={() => { setSongPick({ for: songsFor, value: id }); setSongLink(null); }} />
                     <span>Render {i + 1}</span>
                     <a href={`https://suno.com/song/${id}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-port-accent text-xs">
                       Listen <ExternalLink size={12} aria-hidden="true" />
@@ -250,7 +252,7 @@ export default function AutonomousRunPanel({ project, auto, readiness, selectedS
                 id="mv-run-song-link"
                 type="text"
                 value={linkText}
-                onChange={(e) => setSongLink({ runId: run.id, value: e.target.value })}
+                onChange={(e) => setSongLink({ for: songsFor, value: e.target.value })}
                 placeholder="https://suno.com/song/…"
                 className={`${inputClass} text-xs`}
               />
