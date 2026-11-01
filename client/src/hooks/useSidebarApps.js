@@ -4,8 +4,6 @@ import socket from '../services/socket';
 
 // Sidebar apps list: load on mount and refresh whenever the server emits
 // `apps:changed`. Archived apps are filtered out and the rest sorted by name.
-// Unlike the series/universes lists this is socket-driven (not focus-debounced)
-// because app create/rename/archive events are pushed live.
 // The default is the cheap navigation projection. A detail-oriented consumer
 // can opt into the frozen full list with includeDetails without changing the
 // hook's socket refresh behavior.

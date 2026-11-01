@@ -187,12 +187,12 @@ grep -i "what you want to do" client/src/hooks/README.md
 
 | Hook | Purpose | Use when |
 |---|---|---|
-| `useFocusRefreshedList` | Load-once-then-refresh-on-focus list fetcher: debounces focus refreshes to 30s, sorts by name, and skips re-render when an `id\|name` signature is unchanged. Owns its own warn-on-error. | Any sidebar/nav list that should refresh when the user returns to the tab without hammering the API. Pass a stable `api.*` fetch fn. |
+| `useFocusRefreshedList` | Load-once list fetcher that reloads on the given socket record events (a burst coalesces into one read) and reconnect, plus a 30s-debounced window-focus refresh; sorts by name and skips re-render when an `id\|name` signature is unchanged. Owns its own warn-on-error. | Any sidebar/nav list of records whose create/rename/delete must show without a reload. Pass a stable `api.*` fetch fn and a module-level events array. |
 | `useInstanceFeatures` | Shared read of Settings > Features with a module-level cache, so the sidebar, ⌘K, and the Features tab collapse to one fetch. Returns `isFeatureEnabled(id)`; `publishInstanceFeatures` announces a toggle on the existing `INSTANCE_FEATURES_CHANGED` window event (the channel the reminder toast and the dashboard widgets already use). Fails open on a fetch error so navigation is never blanked. | Gating a sidebar row, page, palette entry, or widget on an optional instance feature (`post`, `datadog`, `jira`, `gsd`). Pair with `lib/navFeatures.js` for manifest entries. |
 | `useSidebarApps` | Apps list for sidebar nav: socket-driven (`apps:changed`), archived filtered out, name-sorted. | The sidebar apps section. |
-| `useSidebarMusicVideos` | Music video projects for the Create > Music Video grandchildren (built on `useFocusRefreshedList`). | The sidebar music-video projects section. |
-| `useSidebarSeries` | Pipeline series for the Create > Pipeline grandchildren (built on `useFocusRefreshedList`). | The sidebar pipeline-series section. |
-| `useSidebarUniverses` | Universes for the Create > Universes grandchildren (built on `useFocusRefreshedList`). | The sidebar universes section. |
+| `useSidebarMusicVideos` | Music video projects for the Create > Music Video grandchildren (built on `useFocusRefreshedList`, reloads on `music-video:project:changed`). | The sidebar music-video projects section. |
+| `useSidebarSeries` | Pipeline series for the Create > Pipeline grandchildren (built on `useFocusRefreshedList`, reloads on `pipeline-series:changed`). | The sidebar pipeline-series section. |
+| `useSidebarUniverses` | Universes for the Create > Universes grandchildren (built on `useFocusRefreshedList`, reloads on `universe:changed`). | The sidebar universes section. |
 
 ## Apps / Sessions / Domain
 

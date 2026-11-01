@@ -2,6 +2,19 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act, waitFor } from '@testing-library/react';
 import { useFocusRefreshedList } from './useFocusRefreshedList.js';
 
+const socket = vi.hoisted(() => {
+  const handlers = new Map();
+  return {
+    on: vi.fn((event, handler) => handlers.set(event, [...(handlers.get(event) || []), handler])),
+    off: vi.fn((event, handler) => handlers.set(event, (handlers.get(event) || []).filter((h) => h !== handler))),
+    emit: (event, data) => (handlers.get(event) || []).forEach((h) => h(data)),
+    count: (event) => (handlers.get(event) || []).length,
+  };
+});
+vi.mock('../services/socket', () => ({ default: socket }));
+
+const RECORD_EVENTS = ['example:record:changed'];
+
 const fireFocus = () => act(() => { window.dispatchEvent(new Event('focus')); });
 
 describe('useFocusRefreshedList', () => {
@@ -90,5 +103,31 @@ describe('useFocusRefreshedList', () => {
     unmount();
     expect(removeSpy).toHaveBeenCalledWith('focus', expect.any(Function));
     removeSpy.mockRestore();
+  });
+
+  it('reloads once per burst of record change events so an in-app create, rename or delete reaches the list', async () => {
+    const fetchFn = vi.fn()
+      .mockResolvedValueOnce([{ id: '1', name: 'A' }])
+      .mockResolvedValue([{ id: '1', name: 'A' }, { id: '2', name: 'B' }]);
+    const { result } = renderHook(() => useFocusRefreshedList(fetchFn, 'records', RECORD_EVENTS));
+    await waitFor(() => expect(result.current.length).toBe(1));
+
+    act(() => {
+      socket.emit('example:record:changed', { id: '2' });
+      socket.emit('example:record:changed', { id: '2' });
+      socket.emit('example:record:changed', { id: '1' });
+    });
+    await waitFor(() => expect(result.current.map((i) => i.id)).toEqual(['1', '2']), { timeout: 3000 });
+    expect(fetchFn).toHaveBeenCalledTimes(2);
+  });
+
+  it('detaches record and reconnect listeners on unmount', async () => {
+    const fetchFn = vi.fn().mockResolvedValue([]);
+    const { unmount } = renderHook(() => useFocusRefreshedList(fetchFn, 'records', RECORD_EVENTS));
+    await waitFor(() => expect(fetchFn).toHaveBeenCalledTimes(1));
+    expect(socket.count('example:record:changed')).toBe(1);
+    unmount();
+    expect(socket.count('example:record:changed')).toBe(0);
+    expect(socket.count('connect')).toBe(0);
   });
 });

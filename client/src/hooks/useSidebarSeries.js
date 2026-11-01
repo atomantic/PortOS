@@ -1,9 +1,11 @@
 import * as api from '../services/api';
 import { useFocusRefreshedList } from './useFocusRefreshedList.js';
 
-// All pipeline series for the Create > Pipeline grandchildren. Loads on mount
-// and refreshes on window focus (debounced 30s) so freshly-created or renamed
-// series surface without a reload.
+const SERIES_EVENTS = ['pipeline-series:changed'];
+
+// All pipeline series for the Create > Pipeline grandchildren. Loads on mount,
+// reloads when a series is created, renamed or deleted, and refreshes on window
+// focus (debounced 30s).
 export function useSidebarSeries() {
-  return useFocusRefreshedList(api.listPipelineSeriesNames, 'pipeline-series');
+  return useFocusRefreshedList(api.listPipelineSeriesNames, 'pipeline-series', SERIES_EVENTS);
 }
