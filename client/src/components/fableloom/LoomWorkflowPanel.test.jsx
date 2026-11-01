@@ -1,10 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import * as api from '../../services/api';
+import socket from '../../services/socket';
 import LoomWorkflowPanel from './LoomWorkflowPanel';
 
 vi.mock('../../services/api');
+vi.mock('../../services/socket', () => ({
+  default: { on: vi.fn(), off: vi.fn(), emit: vi.fn() },
+}));
+
+const editorialEvent = (payload) => socket.on.mock.calls
+  .filter(([name]) => name === 'fableloom:editorial:run').at(-1)[1](payload);
 
 const episode = {
   id: 'ep-1', number: 1, storyOutline: { validation: { status: 'valid' } },
@@ -23,7 +30,10 @@ const loom = {
 beforeEach(() => {
   vi.clearAllMocks();
   api.getLoomEditorialAutopilotStatus.mockResolvedValue({
-    run: { status: 'failed', round: 1, maxRounds: 3, stepIndex: 1, stepCount: 6 },
+    run: {
+      id: 'run-1', loomId: 'loom-1', createdAt: '2026-08-30T12:00:00.000Z',
+      status: 'failed', round: 1, maxRounds: 3, stepIndex: 1, stepCount: 6,
+    },
   });
   api.updateLoom.mockResolvedValue({
     ...loom,
@@ -76,5 +86,30 @@ describe('LoomWorkflowPanel', () => {
       }),
     }, { silent: true });
     expect(onLoomUpdate).toHaveBeenCalledWith(expect.objectContaining({ id: 'loom-1' }));
+  });
+
+  it('follows the editorial run from socket pushes instead of re-reading on a timer', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      render(
+        <LoomWorkflowPanel
+          loom={loom}
+          episode={episode}
+          structural={{ stats: { errorCount: 0 } }}
+        />,
+      );
+      expect(await screen.findByText(/Latest autopilot: failed · step 1\/6/i)).toBeInTheDocument();
+
+      await act(async () => { vi.advanceTimersByTime(30_000); });
+      expect(api.getLoomEditorialAutopilotStatus).toHaveBeenCalledTimes(1);
+
+      act(() => editorialEvent({
+        id: 'run-2', loomId: 'loom-1', createdAt: '2026-08-30T12:05:00.000Z',
+        status: 'running', round: 2, maxRounds: 3, stepIndex: 3, stepCount: 6,
+      }));
+      expect(screen.getByText(/Latest autopilot: running · step 3\/6/i)).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
