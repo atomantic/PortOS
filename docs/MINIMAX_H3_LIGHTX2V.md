@@ -102,3 +102,45 @@ inspection notes for both text and first-image pairs, exact fingerprints,
 cold-load and inference timings, peak memory, and any fidelity regressions.
 Deterministic fixtures alone establish neither a performance gain nor visual
 or soundtrack quality. No measured MLX speed or quality claim is made here.
+
+
+## Pika H3 Flex on MLX
+
+The same pinned INT8 row also offers `pika-h3-flex-mlx-6step`, an experimental,
+explicit Pika Labs profile for **640×384, 1024×576 and 1344×768**, in text or
+first-image mode. Powered by MiniMax H3. Quality remains the default. PortOS has
+not benchmarked this profile or inspected paired full renders, so no measured
+speed or quality claim is made. The paired-render protocol above applies
+independently to each supported canvas and mode.
+
+The contract in `server/lib/minimaxH3FlexMlx.json` follows the
+[Pika FL2VA manifest](https://huggingface.co/Pika-Labs/Pika-H3-Flex/blob/0ddf55ad7067ca1e76812253bd7b4600df87f759/fl2va/manifest.json):
+knots `[1000, 750, 500, 250, 100, 40, 0]`, independent video/audio shifts 12/3,
+and six re-noise updates. The terminal zero is the seventh sigma point, so the
+runner receives seven points. Each update predicts `x0 = x_t + sigma * v`, then
+mixes `x0` with fresh noise at the next sigma; the terminal update uses `x0`
+directly. It does not use the old sample's Euler blend.
+
+PortOS owns this small scheduler adapter; it keeps the existing upstream runtime
+pin and verifies the scheduler, pipeline and configuration source seams before
+loading weights. Its capability probe executes six updates for both modality
+grids without loading a model. It does not install Phosphene's runner fork.
+Pika's base revision `42ed227ee7df40d41602854ae760620d6eb651fe` and the existing
+auxiliary checkpoint revision `6818f6c32d12b210915e44ad56a4228c2608f160` have
+identical LFS SHA-256s for all 13 FL2VA transformer shards.
+
+Download explicitly to cache Pika's original 2.77 GB F32 adapter, pinned release
+manifest, LICENSE and NOTICE from its original repository. Admission and the
+Python helper verify their digests; rendering never downloads them. The adapter
+is a MiniMax H3 Model Derivative by Mellis, Inc., under the MiniMax H3 Community
+License and its existing territory restrictions. The original file is not
+repacked or redistributed by PortOS. Runtime residuals use the manifest's
+alpha=rank=128 and BF16 precision, leaving quantized base weights intact.
+The existing LoRA applicator handles split Q/K/V and SwiGLU row layout, and
+character/style adapters retain their own precision and scaling.
+
+FFLF, continuation, reference/audio conditioning, chains, custom model pins and
+conflicting sampler overrides are refused. A renamed Flex adapter cannot be
+used as a user LoRA under Quality or another speed profile. History records the
+applied profile, original adapter identity, effective sigma grids, knots, sampler,
+timing and pipeline peak memory without implying a performance guarantee.

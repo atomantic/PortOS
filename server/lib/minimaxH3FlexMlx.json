@@ -1,0 +1,118 @@
+{
+  "id": "pika-h3-flex-mlx-6step",
+  "type": "minimax-h3-mlx-flex",
+  "name": "Pika H3 Flex MLX \u00b7 6 updates (experimental)",
+  "description": "Opt-in Pika Labs six-update re-noise adapter on the pinned MLX INT8 model, for text or first-image clips at 640\u00d7384, 1024\u00d7576 or 1344\u00d7768. Powered by MiniMax H3. PortOS speed and quality have not been benchmarked. Download the adapter separately before rendering.",
+  "speedupLabel": null,
+  "steps": 7,
+  "denoisingSteps": 6,
+  "guidance": 0,
+  "videoShift": 12,
+  "audioShift": 3,
+  "sigmaPoints": [
+    1,
+    0.75,
+    0.5,
+    0.25,
+    0.1,
+    0.04,
+    0
+  ],
+  "modes": [
+    "text",
+    "image"
+  ],
+  "canvases": [
+    [
+      640,
+      384
+    ],
+    [
+      1024,
+      576
+    ],
+    [
+      1344,
+      768
+    ]
+  ],
+  "model": {
+    "id": "minimax_h3_8bit",
+    "runtime": "minimax_h3",
+    "repo": "pipenetwork/MiniMax-H3-MLX-8bit",
+    "revision": "3ac52081470b0488921c3ec3ba84a39097bf2361"
+  },
+  "geometry": {
+    "layers": 50,
+    "refinerLayers": 2,
+    "hiddenSize": 5376,
+    "attentionSize": 7168,
+    "ffnSize": 14336
+  },
+  "adapter": {
+    "repo": "Pika-Labs/Pika-H3-Flex",
+    "revision": "0ddf55ad7067ca1e76812253bd7b4600df87f759",
+    "file": "fl2va/adapter.safetensors",
+    "sha256": "8ed6115d647ab11c1b38d04e63c4c6e1594128ae312f7b5635cd50563b7b9327",
+    "sizeBytes": 2767274120,
+    "alpha": 128,
+    "rank": 128,
+    "scale": 1,
+    "dtype": "bfloat16",
+    "supportFiles": {
+      "fl2va/manifest.json": "7d06377f04a3e822f5f21ad72501312da25101976218bde37b12a2171746a8a5",
+      "LICENSE": "59b99642b95ea21630e311198ddbfffbfe05aadba0c2f5d884cbdf4efcc90f44",
+      "NOTICE": "8fc52805a4f8d034f853b5ed494574e37f292def5cdd326d22547afa2658527b"
+    }
+  },
+  "runtimeRevision": "fcd9e9b79a1d6018d91ac477c0968de1fa067e49",
+  "checkpoint": {
+    "repo": "MiniMaxAI/MiniMax-H3",
+    "revision": "6818f6c32d12b210915e44ad56a4228c2608f160",
+    "files": [
+      "LICENSE",
+      "FL2VA/model_index.json",
+      "FL2VA/audio_vae/config.json",
+      "FL2VA/audio_vae/metadata.json",
+      "FL2VA/audio_vae/model.safetensors",
+      "FL2VA/text_encoder/config.json",
+      "FL2VA/text_encoder/model-00001-of-00014.safetensors",
+      "FL2VA/text_encoder/model-00002-of-00014.safetensors",
+      "FL2VA/text_encoder/model-00003-of-00014.safetensors",
+      "FL2VA/text_encoder/model-00004-of-00014.safetensors",
+      "FL2VA/text_encoder/model-00005-of-00014.safetensors",
+      "FL2VA/text_encoder/model-00006-of-00014.safetensors",
+      "FL2VA/text_encoder/model-00007-of-00014.safetensors",
+      "FL2VA/text_encoder/model-00008-of-00014.safetensors",
+      "FL2VA/text_encoder/model-00009-of-00014.safetensors",
+      "FL2VA/text_encoder/model-00010-of-00014.safetensors",
+      "FL2VA/text_encoder/model-00011-of-00014.safetensors",
+      "FL2VA/text_encoder/model-00014-of-00014.safetensors",
+      "FL2VA/text_encoder/model.safetensors.index.json",
+      "FL2VA/processor/chat_template.json",
+      "FL2VA/processor/merges.txt",
+      "FL2VA/processor/preprocessor_config.json",
+      "FL2VA/processor/tokenizer.json",
+      "FL2VA/processor/tokenizer_config.json",
+      "FL2VA/processor/video_preprocessor_config.json",
+      "FL2VA/processor/vocab.json",
+      "FL2VA/tokenizer/merges.txt",
+      "FL2VA/tokenizer/tokenizer.json",
+      "FL2VA/tokenizer/tokenizer_config.json",
+      "FL2VA/tokenizer/vocab.json",
+      "FL2VA/video_vae/config.json",
+      "FL2VA/video_vae/source/config.json",
+      "FL2VA/video_vae/source/model.safetensors"
+    ]
+  },
+  "sigmaKnots": [
+    1000,
+    750,
+    500,
+    250,
+    100,
+    40,
+    0
+  ],
+  "sampler": "renoise"
+}

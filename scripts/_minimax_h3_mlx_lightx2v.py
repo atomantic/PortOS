@@ -33,35 +33,43 @@ def verify_runtime_source(runtime_dir, revision):
             raise ValueError(f"MLX LightX2V pinned {name} seam differs; use Repair in Video Gen.")
 
 
-def validate_profile_args(args):
+def validate_profile_args(args, contract=None):
     """Validate direct helper calls as well as the server admission boundary."""
+    contract = contract or CONTRACT
     profile = getattr(args, "speed_profile", None)
     adapter = getattr(args, "speed_adapter", None)
     if not profile:
         if adapter:
             raise ValueError("A speed adapter requires its explicit MLX speed profile.")
         return
-    if (profile != CONTRACT["id"] or args.model_repo != CONTRACT["model"]["repo"]
-            or args.model_revision != CONTRACT["model"]["revision"]
-            or args.steps != CONTRACT["steps"] or [args.width, args.height] not in CONTRACT["canvases"]
+    if (profile != contract["id"] or args.model_repo != contract["model"]["repo"]
+            or args.model_revision != contract["model"]["revision"]
+            or args.steps != contract["steps"] or [args.width, args.height] not in contract["canvases"]
             or len(args.image) > 1 or (args.image and args.anchor != ["first"])
             or getattr(args, "source_video", None)):
-        raise ValueError("MLX LightX2V requires the pinned INT8 model, five sigma points, 1344x768 and text/first-image input only.")
-    checkpoint = CONTRACT["checkpoint"]
+        raise ValueError("MLX speed profile requires its pinned INT8 model, schedule, supported canvas and text/first-image input only.")
+    checkpoint = contract["checkpoint"]
     if (args.checkpoint_repo != checkpoint["repo"]
             or args.checkpoint_revision != checkpoint["revision"]
             or len(args.checkpoint_file) != len(checkpoint["files"])
             or set(args.checkpoint_file) != set(checkpoint["files"])):
         raise ValueError("MLX LightX2V requires the complete pinned auxiliary checkpoint manifest.")
     verify_runtime_source(args.runtime_dir, args.runtime_revision)
-    if not adapter or file_digest(adapter) != CONTRACT["adapter"]["sha256"]:
+    if not adapter or file_digest(adapter) != contract["adapter"]["sha256"]:
         raise ValueError("MLX LightX2V requires its original SHA-256-verified cached adapter.")
-    digests = [CONTRACT["adapter"]["sha256"]]
+    for name, expected in contract["adapter"].get("supportFiles", {}).items():
+        if file_digest(Path(adapter).parent.parent / name) != expected:
+            raise ValueError("MLX speed profile manifest, license or notice differs.")
+    digests = [contract["adapter"]["sha256"]]
     for path in args.lora:
         digest = file_digest(path)
         if digest in digests:
             raise ValueError("MLX LightX2V refuses duplicate adapters, including a speed adapter supplied as a user LoRA.")
         digests.append(digest)
+
+
+def adapter_spec(path):
+    return {"path": path, "scale": 1.0}
 
 
 def configure_pipeline(pipe):
@@ -74,14 +82,15 @@ def configure_pipeline(pipe):
     return {"videoSigmas": video.sigmas.tolist(), "audioSigmas": audio.sigmas.tolist()}
 
 
-def emit_report(args, schedules, result, elapsed, peak_bytes, cold_load_seconds):
+def emit_report(args, schedules, result, elapsed, peak_bytes, cold_load_seconds, contract=None):
+    contract = contract or CONTRACT
     report = {
-        "id": CONTRACT["id"], "type": CONTRACT["type"], "applied": True,
-        "degraded": [], "fallback": False, "adapter": CONTRACT["adapter"],
-        "sigmaPoints": CONTRACT["sigmaPoints"], "denoisingSteps": CONTRACT["denoisingSteps"],
-        "videoShift": CONTRACT["videoShift"], "audioShift": CONTRACT["audioShift"],
+        "id": contract["id"], "type": contract["type"], "applied": True,
+        "degraded": [], "fallback": False, "adapter": contract["adapter"],
+        "sigmaPoints": contract["sigmaPoints"], "denoisingSteps": contract["denoisingSteps"],
+        "videoShift": contract["videoShift"], "audioShift": contract["audioShift"],
         "runtimeRevision": args.runtime_revision,
-        "inferenceSeconds": result.seconds_per_step * CONTRACT["denoisingSteps"],
+        "inferenceSeconds": result.seconds_per_step * contract["denoisingSteps"],
         "pipelineSeconds": elapsed, "coldLoadSeconds": cold_load_seconds,
         "peakMemoryScope": "pipeline call including conditioning, denoising and decode",
         "peakAllocatedMb": peak_bytes / 1e6, **schedules,

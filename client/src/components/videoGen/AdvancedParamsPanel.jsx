@@ -141,7 +141,8 @@ export default function AdvancedParamsPanel({
   const activeSpeedProfile = showSpeedProfiles
     ? speedProfiles.find((p) => p.id === speedProfileId) || null
     : null;
-  const incompatibleH3Profile = currentModel?.speedProfiles?.some((p) => p.id === speedProfileId && isMiniMaxH3SpeedProfile(p)) && !activeSpeedProfile;
+  const selectedH3Profile = h3Profiles.find((p) => p.id === speedProfileId);
+  const incompatibleH3Profile = selectedH3Profile && !activeSpeedProfile;
   // A profile drives steps AND CFG together, exactly as a samplerLocked model
   // does — leaving either editable would let the user half-override a
   // validated schedule and get neither its speed nor its quality.
@@ -155,7 +156,7 @@ export default function AdvancedParamsPanel({
   return (
     <div className="border-t border-port-border pt-3 space-y-3">
       <h2 className="text-xs font-medium text-gray-400 uppercase tracking-wide">Advanced</h2>
-      {incompatibleH3Profile && <p role="alert" className="text-xs text-port-warning">The selected LightX2V profile requires a single text/image clip at 1344×768. Change the mode/canvas or select Quality before rendering.</p>}
+      {incompatibleH3Profile && <p role="alert" className="text-xs text-port-warning">The selected speed profile requires a single text/image clip at {selectedH3Profile.canvases.map(([w, h]) => `${w}×${h}`).join(', ')}. Change the mode/canvas or select Quality before rendering.</p>}
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
           {showFrames && <FormField label="Frames" labelClassName="block text-xs font-medium text-gray-400 mb-1">
             <select

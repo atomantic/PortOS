@@ -68,9 +68,17 @@ MAX_FRAMES = 362  # first 17n+5 grid point at or above 15 seconds
 STEP_RE = re.compile(r"\bstep\s+(\d+)/(\d+)\b", re.IGNORECASE)
 
 
+def speed_helper(args):
+    if getattr(args, "speed_profile", None) == "pika-h3-flex-mlx-6step":
+        import _minimax_h3_mlx_flex as helper
+    else:
+        import _minimax_h3_mlx_lightx2v as helper
+    return helper
+
+
 def parse_args() -> argparse.Namespace:
     parser = add_h3_common_args(argparse.ArgumentParser(description=__doc__), steps_default=9)
-    parser.add_argument("--speed-profile", choices=["lightx2v-mlx-v1.3-4step"])
+    parser.add_argument("--speed-profile", choices=["lightx2v-mlx-v1.3-4step", "pika-h3-flex-mlx-6step"])
     parser.add_argument("--speed-adapter")
     parser.add_argument("--runtime-dir", required=True)
     parser.add_argument("--runtime-revision", required=True)
@@ -1014,8 +1022,7 @@ def validate_args(args: argparse.Namespace) -> None:
     for path in args.lora:
         if not Path(path).is_file():
             raise SystemExit(f"LoRA file is missing: {path}")
-    from _minimax_h3_mlx_lightx2v import validate_profile_args
-    validate_profile_args(args)
+    speed_helper(args).validate_profile_args(args)
     # The substitution is all-or-nothing: without the id there is nowhere to
     # build the shim, and without the shim root there is nowhere to put it.
     # Accepting a partial set would silently fall back to the stock conditioner
@@ -1119,7 +1126,7 @@ def render_outputs(pipe, args, images, save_mp4, batch_seeds=None, history=None)
                     )
             progress.flush()
             if getattr(args, "speed_profile", None):
-                from _minimax_h3_mlx_lightx2v import emit_report
+                emit_report = speed_helper(args).emit_report
                 mx.synchronize()
                 emit_report(args, pipe._portos_speed_schedules, result,
                             time.perf_counter() - inference_start, mx.get_peak_memory(),
@@ -1334,12 +1341,12 @@ def main() -> int:
 
         apply_loras(
             pipe.dit,
-            ([{"path": args.speed_adapter, "scale": 1.0}] if args.speed_profile else [])
+            ([speed_helper(args).adapter_spec(args.speed_adapter)] if args.speed_profile else [])
             + [{"path": p, "scale": s} for p, s in zip(args.lora, args.lora_scale)],
         )
 
     if args.speed_profile:
-        from _minimax_h3_mlx_lightx2v import configure_pipeline
+        configure_pipeline = speed_helper(args).configure_pipeline
         pipe._portos_speed_schedules = configure_pipeline(pipe)
 
     report_memory("loaded")

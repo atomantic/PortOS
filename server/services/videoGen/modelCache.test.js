@@ -28,7 +28,15 @@ vi.mock('../../lib/icLoraWeights.js', () => ({
 
 vi.mock('./local.js', () => ({ listVideoModels: vi.fn() }));
 
-import { modelDownloadTargets, targetKey, reposToVerify } from './modelCache.js';
+vi.mock('../../lib/hfCache.js', async (original) => ({ ...(await original()),
+  verifyCachedRepoFiles: vi.fn(async () => ({ status: 'ok', sizeBytes: 100 })),
+  verifyModelCache: vi.fn(async () => ({ status: 'ok', sizeBytes: 200 })),
+  summarizeVerify: vi.fn((value) => ({ status: value.status })),
+  aggregateVerifies: vi.fn(() => ({ status: 'ok' })),
+}));
+
+import { MINIMAX_H3_FLEX_MLX_PROFILE as flex, MINIMAX_H3_LIGHTX2V_MLX_PROFILE as light } from '../../lib/minimaxH3SpeedProfiles.js';
+import { modelDownloadTargets, modelCacheStatus, targetKey, reposToVerify } from './modelCache.js';
 import { listVideoModels } from './local.js';
 
 const REV_A = 'a'.repeat(40);
@@ -69,4 +77,14 @@ describe('videoGen model cache targets', () => {
     expect(reposToVerify('wan_lightning').map((t) => t.repo)).toEqual(['org/wan-base']);
     expect(reposToVerify('nope')).toEqual([]);
   });
+});
+
+
+it('reports each pinned MLX profile independently so the second profile receives its own download badge', async () => {
+  const model = { ...flex.model, requiredWeights: [flex.checkpoint], speedProfiles: [light, flex] };
+  const status = await modelCacheStatus(model);
+  expect(status.speedProfiles).toEqual([
+    { id: light.id, repo: light.adapter.repo, cached: true, sizeBytes: 100, integrity: { status: 'ok' } },
+    { id: flex.id, repo: flex.adapter.repo, cached: true, sizeBytes: 100, integrity: { status: 'ok' } },
+  ]);
 });

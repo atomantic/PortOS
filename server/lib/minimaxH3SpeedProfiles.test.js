@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   MINIMAX_H3_LIGHTX2V_PROFILE as cuda,
   MINIMAX_H3_LIGHTX2V_MLX_PROFILE as mlx,
+  MINIMAX_H3_FLEX_MLX_PROFILE as flex,
   miniMaxH3SpeedProfileContract,
   miniMaxH3SpeedProfileDeclineReason,
 } from './minimaxH3SpeedProfiles.js';
@@ -17,7 +18,7 @@ describe('separate H3 MLX and CUDA profile contracts', () => {
       { ...shipped, requiredWeights: [] },
       { ...shipped, requiredWeights: [{ ...mlx.checkpoint, revision: 'custom' }] }];
     const [upgraded, ...untouched] = applyVideoSpeedProfiles([shipped, ...custom]);
-    expect(upgraded).toEqual({ ...shipped, speedProfiles: [mlx] });
+    expect(upgraded).toEqual({ ...shipped, speedProfiles: [mlx, flex] });
     expect(untouched).toEqual(custom);
     expect(resolveVideoSpeedProfile({ model: upgraded, profileId: 'quality', mode: 'text' })).toBeNull();
     expect(resolveVideoSpeedProfile({ model: upgraded, profileId: mlx.id, mode: 'image' })).toEqual(mlx);
@@ -66,5 +67,24 @@ describe('separate H3 MLX and CUDA profile contracts', () => {
     expect(mlx.sigmaPoints).toEqual([1, .75, .5, .25, 0]);
     expect([mlx.videoShift, mlx.audioShift]).toEqual([6, 3]);
     expect(mlx.speedupLabel).toBeNull();
+  });
+});
+
+
+describe('Pika H3 Flex pinned multi-canvas contract', () => {
+  it('offers the opt-in six-update schedule only on the pinned MLX model', () => {
+    const supported = model(flex);
+    for (const [width, height] of flex.canvases) {
+      expect(miniMaxH3SpeedProfileDeclineReason({ model: supported, profileId: flex.id, width, height, mode: 'image' })).toBeNull();
+    }
+    expect(flex.sigmaKnots).toEqual([1000, 750, 500, 250, 100, 40, 0]);
+    expect(flex.steps).toBe(7);
+    expect(flex.denoisingSteps).toBe(6);
+    expect(flex.speedupLabel).toBeNull();
+    for (const overrides of [{ width: 960, height: 544 }, { steps: 6 }, { guidanceScale: 1 }, { chunks: 2 }, { mode: 'fflf' }]) {
+      expect(miniMaxH3SpeedProfileDeclineReason({ model: supported, profileId: flex.id, ...overrides })).not.toBeNull();
+    }
+    expect(miniMaxH3SpeedProfileDeclineReason({ model: model(cuda), profileId: flex.id }).code).toBe('MINIMAX_H3_SPEED_MODEL_UNSUPPORTED');
+    expect(validateSpeedProfileTable([supported])).toEqual([]);
   });
 });

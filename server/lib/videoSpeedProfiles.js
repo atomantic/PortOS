@@ -63,7 +63,7 @@
 
 import { LTX2_FAMILY_RUNTIMES } from './runners.js';
 import {
-  MINIMAX_H3_LIGHTX2V_PROFILE, MINIMAX_H3_LIGHTX2V_MLX_PROFILE, isMiniMaxH3SpeedProfile, isMiniMaxH3SpeedProfileRequest,
+  MINIMAX_H3_LIGHTX2V_PROFILE, MINIMAX_H3_LIGHTX2V_MLX_PROFILE, MINIMAX_H3_FLEX_MLX_PROFILE, isMiniMaxH3SpeedProfile, isMiniMaxH3SpeedProfileRequest,
   isPinnedMiniMaxH3SpeedProfile, miniMaxH3SpeedProfileDeclineReason,
 } from './minimaxH3SpeedProfiles.js';
 
@@ -105,7 +105,7 @@ export const VIDEO_SPEED_PROFILES = Object.freeze({
   minimax_h3_8bit: Object.freeze({
     shippedRepo: MINIMAX_H3_LIGHTX2V_MLX_PROFILE.model.repo,
     shippedRevision: MINIMAX_H3_LIGHTX2V_MLX_PROFILE.model.revision,
-    profiles: Object.freeze([MINIMAX_H3_LIGHTX2V_MLX_PROFILE]),
+    profiles: Object.freeze([MINIMAX_H3_LIGHTX2V_MLX_PROFILE, MINIMAX_H3_FLEX_MLX_PROFILE]),
   }),
   minimax_h3_cuda: Object.freeze({
     shippedRepo: MINIMAX_H3_LIGHTX2V_PROFILE.model.repo,

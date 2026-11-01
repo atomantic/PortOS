@@ -923,9 +923,9 @@ export default function VideoGen() {
       name: currentModel?.name || modelId, repairLabel: 'Repair model',
     },
     {
-      key: 'speed-profile', id: speedProfileAssetId, label: 'LightX2V adapter',
+      key: 'speed-profile', id: speedProfileAssetId, label: 'speed profile adapter',
       applies: !!speedProfileAssetId, status: speedProfileStatus, keyPrefix: speedProfileAssetId,
-      name: 'The LightX2V v1.3 adapter', repairLabel: 'Download adapter again',
+      name: selectedH3SpeedProfile?.name || 'The selected speed adapter', repairLabel: 'Download adapter again',
     },
     {
       key: 'shared-encoder', id: TEXT_ENCODER_DOWNLOAD_ID, label: 'shared text encoder',
