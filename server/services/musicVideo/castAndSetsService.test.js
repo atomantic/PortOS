@@ -1098,7 +1098,8 @@ describe('Cast & Sets per-item actions', () => {
     expect(saved.castAndSets.direction.tests).toHaveLength(1);
     expect(saved.castAndSets.plan['set:roof']).toBeUndefined();
     expect(saved.castAndSets.plan['test:2']).toBeUndefined();
-    expect(jobs.slice(edited).map(keyOf)).toEqual(['cast:dad']);
+    // The face sheet is drawn on the cast sheet, so it re-renders with it.
+    expect(jobs.slice(edited).map(keyOf)).toEqual(['cast:dad', 'face:dad']);
     expect(saved.castAndSets.notesApplied[0].text).toMatch(/cast Dad, Cliff removed, tests/);
 
     // Start over throws the sheet away; the next build starts fresh.
@@ -1277,8 +1278,18 @@ it('holds reference room for fixed cast sheets and refuses an approval that cann
   // Exactly that much room: the character and the fixed cast sheets take it, ahead of plates and invented cast.
   await withOwn(12);
   expect((await request(app).post(`/api/music-video/${project.id}/cast-and-sets/approve`).send({})).status).toBe(200);
-  const ours = (await current(project.id)).visualSpec.references.filter((r) => r.id.startsWith('mvr-cs-')).map((r) => r.id);
+  const approved = await current(project.id);
+  const ours = approved.visualSpec.references.filter((r) => r.id.startsWith('mvr-cs-')).map((r) => r.id);
   expect(ours).toEqual(['mvr-cs-character', ...FIXED_SUPPORTING.map((name) => `mvr-cs-cast-${name.toLowerCase()}`)]);
+  // A full list must not make the face images already rendered at approval unusable on a close-up.
+  const { musicVideoConditioningReferences } = await import('../../lib/musicVideoConditioning.js');
+  const scene = { prompt: 'Close up of Anika' };
+  expect(musicVideoConditioningReferences(approved, scene).map((ref) => ref.id))
+    .toEqual(['mvr-cs-character', 'mvr-cs-expressions', 'mvr-cs-cast-anika', 'mvr-cs-face-anika']);
+  expect(musicVideoConditioningReferences(approved, { ...scene, frameReferenceIds: ['mvr-cs-face-anika'] }).map((ref) => ref.id))
+    .toEqual(['mvr-cs-face-anika']);
+  expect(musicVideoConditioningReferences({ ...approved, mediaMode: 'code-only' }, { ...scene, frameReferenceIds: ['mvr-cs-face-anika'] }))
+    .toEqual([]);
 });
 
 it('refuses a budget that cannot cover the fixed cast sheets before queueing anything, naming them (#14069)', async () => {

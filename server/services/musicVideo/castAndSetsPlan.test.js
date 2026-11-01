@@ -33,3 +33,37 @@ describe('Cast & Sets prop sheet', () => {
     expect(objects.map((s) => s.name)).toEqual(["Renee's camera", 'BMX']);
   });
 });
+
+describe('Cast & Sets face sheets', () => {
+  const WITH_CAST = { ...DIRECTION, cast: [{ id: 'kevin', name: 'Kevin', role: 'boyfriend', face: 'long narrow face, ears that stick out', hair: 'shaggy middle part' }] };
+
+  it('opens every face sheet with the head angles and gives each cast member one built on their cast sheet', () => {
+    const plan = buildCastAndSetsImagePlan({ scenes: [] }, WITH_CAST);
+    expect(plan.expressions.label).toBe('Face sheet');
+    expect(plan.expressions.prompt).toContain('FRONT, 3/4 LEFT, PROFILE LEFT, 3/4 RIGHT, PROFILE RIGHT');
+    expect(plan['face:kevin']).toMatchObject({ kind: 'face', deps: ['cast:kevin'], refKeys: ['cast:kevin'], label: 'Kevin face sheet' });
+    expect(plan['face:kevin'].prompt).toContain('FRONT, 3/4 LEFT, PROFILE LEFT');
+    expect(plan['face:kevin'].prompt).toContain('nothing held in the hands');
+    expect(noteImageKeys('kevin face sheet', plan)).toEqual(['face:kevin']);
+  });
+
+  it('publishes each face sheet as an unconditioned reference with the face and hair note', () => {
+    const stage = { direction: { ...WITH_CAST, protagonist: { ...DIRECTION.protagonist, face: 'sunburned' } }, images: { character: { imageId: 'lead.png' }, expressions: { imageId: 'lead-face.png' }, 'cast:kevin': { imageId: 'kevin.png' }, 'face:kevin': { imageId: 'kevin-face.png' } } };
+    const refs = castAndSetsReferences({ visualSpec: { references: [] } }, stage);
+    expect(refs.find((ref) => ref.id === 'mvr-cs-face-kevin')).toMatchObject({ imageId: 'kevin-face.png', role: 'character', label: 'Kevin — face sheet', condition: false, note: 'long narrow face, ears that stick out; shaggy middle part' });
+    expect(refs.find((ref) => ref.id === 'mvr-cs-expressions')).toMatchObject({ label: 'Renee — face sheet', note: 'sunburned; frizzy perm' });
+  });
+
+  // A full reference list must not lose existing prop, wardrobe or protagonist sheets to the new cast faces.
+  it('preserves existing reference types when cast face sheets exceed the list capacity', () => {
+    const authored = Array.from({ length: 19 }, (_, i) => ({ id: `authored-${i}`, imageId: `authored-${i}.png`, condition: false }));
+    const stage = { direction: WITH_CAST, images: {
+      character: { imageId: 'lead.png' }, 'cast:kevin': { imageId: 'kevin.png' }, 'face:kevin': { imageId: 'kevin-face.png' },
+      props: { imageId: 'props.png' }, looks: { imageId: 'looks.png' }, expressions: { imageId: 'lead-face.png' },
+    } };
+    const refs = castAndSetsReferences({ visualSpec: { references: authored } }, stage);
+    expect(refs).toHaveLength(24);
+    expect(refs.map((ref) => ref.id)).toEqual(expect.arrayContaining(['mvr-cs-props', 'mvr-cs-looks', 'mvr-cs-expressions']));
+    expect(refs.map((ref) => ref.id)).not.toContain('mvr-cs-face-kevin');
+  });
+});

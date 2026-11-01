@@ -46,6 +46,17 @@ describe('a shot\'s References row', () => {
     fireEvent.click(screen.getByRole('button', { name: /Don't send Lead/ }));
     expect(screen.queryByRole('figure')).toBeNull();
   });
+
+  it('shows an approved overflow face sheet and lets the director remove it from the shot', () => {
+    const onSave = vi.fn();
+    const full = {
+      visualSpec: { references: [{ id: 'mvr-cs-character', imageId: 'lead.png', role: 'character', label: 'Lead' }] },
+      castAndSets: { status: 'approved', direction: { cast: [] }, overflowFaceReferences: [{ id: 'mvr-cs-expressions', imageId: 'face.png', role: 'character', label: 'Lead face sheet' }] },
+    };
+    render(<SceneFrameReferences project={full} scene={{ sceneId: 's1', framePrompt: 'Close up of Lead' }} onEditLocal={vi.fn()} onSave={onSave} />);
+    fireEvent.click(screen.getByRole('button', { name: "Don't send Lead face sheet" }));
+    expect(onSave).toHaveBeenCalledWith('s1', { frameReferenceIds: ['mvr-cs-character'] });
+  });
 });
 
 describe('a shot that names a Casting cast member', () => {

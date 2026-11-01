@@ -1,5 +1,6 @@
 import { pickGuideMedia, rejectedReferenceKeys, matchesReferenceVariant } from './catalogMediaLibrary.js';
 import { isEditCapableMode, maxInputImages } from './imageGenCapabilities.js';
+import { musicVideoAllowsMedia } from './musicVideoMediaPolicy.js';
 import { RUNNER_FAMILIES } from './runners.js';
 import { escapeRegExp } from './textUtils.js';
 
@@ -24,6 +25,14 @@ function featuredCast(direction, scene) {
   const text = [scene?.framePrompt, scene?.prompt].filter(Boolean).join(' ');
   if (!text) return [];
   return (direction?.cast || []).filter((c) => namesIn(text, c.name) || namesIn(text, c.role));
+}
+
+// A close framing: the face fills the frame, so the set barely shows and the face sheets matter most.
+const CLOSE_FRAMING = /\b(extreme close|close[- ]?up|close on|tight on|selfie|arm['’]?s[- ]length|face fills)/i;
+
+/** Whether a scene's frame or shot prompt frames a face close. */
+function isCloseFraming(scene) {
+  return CLOSE_FRAMING.test([scene?.framePrompt, scene?.prompt].filter(Boolean).join(' '));
 }
 
 /**
@@ -52,8 +61,17 @@ function featuredAuthoredCharacters(references, scene) {
     && !isOutsideMusicVideoReference(ref) && namesIn(text, String(ref.label || '').split(/\s[—-]\s|[:(]/)[0]));
 }
 
+// Only sheets that did not fit at approval are virtual choices. A published
+// sheet removed later by the director must not silently reappear here.
+function overflowFaceReferences(project) {
+  const stage = project?.castAndSets;
+  if (stage?.status !== 'approved' || !musicVideoAllowsMedia(project, 'image') || !Array.isArray(stage.overflowFaceReferences)) return [];
+  const published = new Set((project?.visualSpec?.references || []).map((ref) => ref.id));
+  return stage.overflowFaceReferences.filter((ref) => ref?.id && ref.imageId && !published.has(ref.id));
+}
+
 /** The references a director can send with a shot's frames: every one with an image except outside inspiration. */
-export const musicVideoReferenceChoices = (project) => (project?.visualSpec?.references || [])
+export const musicVideoReferenceChoices = (project) => [...(project?.visualSpec?.references || []), ...overflowFaceReferences(project)]
   .filter((ref) => ref?.id && ref.imageId && !isOutsideMusicVideoReference(ref));
 
 /** The cast member and variant a scene asks its frames to show, or null when it names none. */
@@ -139,7 +157,7 @@ export function musicVideoPanelArtReferences(scene) {
 }
 
 function automaticConditioningReferences(project, scene) {
-  const references = project?.visualSpec?.references || [];
+  const references = [...(project?.visualSpec?.references || []), ...overflowFaceReferences(project)];
   const stage = project?.castAndSets;
   // Legacy projects and incomplete check-ins retain the authored reference set.
   const authored = references.filter((ref) => ref?.condition && ref.imageId && !isOutsideMusicVideoReference(ref));
@@ -153,7 +171,8 @@ function automaticConditioningReferences(project, scene) {
     // not scene relevance. A supporting cast member's sheet joins the shots
     // that name them, and so does a director's own character reference whose
     // label names someone the shot names.
-    const cast = featuredCast(stage.direction, scene)
+    const featured = featuredCast(stage.direction, scene);
+    const cast = featured
       .map((c) => references.find((ref) => ref?.id === `mvr-cs-cast-${c.id}`.slice(0, 64) && ref.imageId))
       .filter(Boolean);
     // A shot with no song section (a replaced song clears them) cannot name its
@@ -161,6 +180,16 @@ function automaticConditioningReferences(project, scene) {
     // set fills the spare slots rather than displacing a featured cast sheet.
     // The prop sheet joins the shots that show a prop, after the identities and the set.
     const props = showsProp(stage.direction, scene) && references.find((ref) => ref?.id === 'mvr-cs-props' && ref.imageId);
+    // A close-up trades the set plate for each person's face sheet (head angles and moods),
+    // after their full sheet; a prop and then the set fill what is left.
+    if (isCloseFraming(scene)) {
+      const faceOf = (id) => references.find((ref) => ref?.id === id && ref.imageId);
+      const people = [[character, faceOf('mvr-cs-expressions')], ...featured.map((person) => [
+        faceOf(`mvr-cs-cast-${person.id}`.slice(0, 64)), faceOf(`mvr-cs-face-${person.id}`.slice(0, 64)),
+      ])];
+      const close = [...people.flat().filter(Boolean), ...featuredAuthoredCharacters(references, scene), ...(props ? [props] : []), ...(plate ? [plate] : authored)];
+      return close.filter((ref, i) => close.findIndex((r) => r.imageId === ref.imageId) === i).slice(0, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES);
+    }
     const chosen = plate
       ? [character, plate, ...cast, ...featuredAuthoredCharacters(references, scene), ...(props ? [props] : [])]
       : [character, ...cast, ...featuredAuthoredCharacters(references, scene), ...(props ? [props] : []), ...authored];

@@ -80,6 +80,7 @@ import {
   CAST_SETS_REF_PREFIX,
   affectedImageKeys,
   buildCastAndSetsImagePlan,
+  castAndSetsOverflowFaceReferences,
   castAndSetsReferences,
   castAndSetsSubjects,
   fixedCastSheetsWithoutReference,
@@ -729,7 +730,10 @@ function applyApproval(project, now) {
   }
   // Record what the approval rests on, so a later concept/style/subject/song
   // edit can be named as "changed since" (#10141).
-  return setCastAndSetsStatus(next, 'approved', { extra: { approvedInputs: castAndSetsApprovalInputs(next), approvedValues: castAndSetsApprovalValues(next) } }, now);
+  return setCastAndSetsStatus(next, 'approved', { extra: {
+    approvedInputs: castAndSetsApprovalInputs(next), approvedValues: castAndSetsApprovalValues(next),
+    overflowFaceReferences: castAndSetsOverflowFaceReferences(stage, references),
+  } }, now);
 }
 
 // Settle the stage and re-base a production run waiting on it, in ONE write,
