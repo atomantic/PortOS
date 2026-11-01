@@ -83,7 +83,7 @@ const hook = createMediaJobImageHook({
     console.log(`🎞️ music-video scene image take ${projectId.slice(0, 8)}/${sceneId} ← ${filename}`);
     const thenClip = job?.params?.musicVideo?.thenClip;
     // Detached: the clip submission writes the project, which this hook's per-project queue must not wait on.
-    if (thenClip && scene.referenceImageId === filename) void animateStoryboardStill({ projectId, sceneId, ...thenClip });
+    if (thenClip && scene.referenceImageId === filename) void animateStoryboardStill({ ...thenClip, projectId, sceneId, still: filename });
   },
   // A render that FAILED (a cancel is not a failure) is recorded on the scene
   // so the board can say which scene failed and why, including after a reload.
@@ -97,13 +97,14 @@ const hook = createMediaJobImageHook({
  * so animate it. A refusal (no prompt, a lane that is off) is recorded on the
  * shot's video lane, where its Retry is.
  */
-async function animateStoryboardStill({ projectId, sceneId, backend = null, model = null }) {
+async function animateStoryboardStill({ projectId, sceneId, still, backend = null, model = null }) {
   try {
     const { requireProject } = await import('./musicVideo/requireProject.js');
     const { dispatchStoryboardStillClip } = await import('./musicVideo/productionDispatch.js');
     const project = await requireProject(projectId);
     const scene = project.scenes?.find((s) => s.sceneId === sceneId);
-    if (!scene?.referenceImageId) return;
+    // Only the still this render made: a selection that changed meanwhile is the director's call.
+    if (!scene?.referenceImageId || scene.referenceImageId !== still) return;
     const { jobId } = await dispatchStoryboardStillClip({ project, scene, backend, model });
     console.log(`🎬 music-video storyboard clip queued ${projectId.slice(0, 8)}/${sceneId} → ${jobId}`);
   } catch (err) {
