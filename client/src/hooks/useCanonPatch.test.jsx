@@ -95,6 +95,50 @@ describe('useCanonPatch write ownership', () => {
     expect(result.current.universe.characters[0].name).toBe('Current visit');
   });
 
+  it('restores the confirmed field after a sibling operation replaces the optimistic snapshot', async () => {
+    const first = deferred();
+    patchUniverseCanonEntry.mockReturnValue(first.promise);
+    const { result } = setup();
+    let pending;
+    act(() => { pending = result.current.patchEntry(KIND, 'c1', { physicalDescription: 'Revised' }); });
+    // A lock/render operation started before the edit returns a whole snapshot.
+    act(() => result.current.apply({ ...BASE, characters: BASE.characters.map(entry => ({ ...entry, locked: true })) }));
+    await act(async () => { first.resolve({ entry: { id: 'c1', physicalDescription: 'Revised' } }); await pending; });
+    expect(result.current.universe.characters[0]).toMatchObject({ physicalDescription: 'Revised', locked: true });
+  });
+
+  it.each([false, true])('rolls back to the confirmed field without removing a pending edit (earlier save succeeds: %s)', async (earlierSaved) => {
+    const first = deferred();
+    const second = deferred();
+    patchUniverseCanonEntry.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+    const { result } = setup();
+    let a;
+    let b;
+    act(() => { a = result.current.patchEntry(KIND, 'c1', { name: 'Earlier' }); b = result.current.patchEntry(KIND, 'c1', { name: 'Newest' }); });
+    await act(async () => {
+      if (earlierSaved) first.resolve({ entry: { id: 'c1', name: 'Earlier' } });
+      else first.reject(new Error('offline'));
+      await a;
+    });
+    expect(result.current.universe.characters[0].name).toBe('Newest');
+    await act(async () => { second.reject(new Error('offline')); await b; });
+    expect(result.current.universe.characters[0].name).toBe(earlierSaved ? 'Earlier' : 'Alice');
+  });
+
+  it('keeps a newer confirmed snapshot when an older field acknowledgement arrives', async () => {
+    const first = deferred();
+    patchUniverseCanonEntry.mockReturnValue(first.promise);
+    const { result } = setup();
+    let pending;
+    act(() => { pending = result.current.patchEntry(KIND, 'c1', { physicalDescription: 'Earlier' }); });
+    act(() => result.current.apply({ ...BASE, updatedAt: '2026-01-01T00:00:02.000Z', characters: [{ id: 'c1', physicalDescription: 'New server revision' }] }));
+    await act(async () => {
+      first.resolve({ universe: { updatedAt: '2026-01-01T00:00:01.000Z' }, entry: { id: 'c1', physicalDescription: 'Earlier' } });
+      await pending;
+    });
+    expect(result.current.universe.characters[0].physicalDescription).toBe('New server revision');
+  });
+
   it('finishes accepted writes after unmount without publishing their results', async () => {
     const first = deferred();
     const apply = vi.fn();
@@ -121,5 +165,6 @@ describe('useCanonPatch write ownership', () => {
     expect(toastError).toHaveBeenCalledWith('Save failed: offline');
     expect(patchUniverseCanonEntry).toHaveBeenLastCalledWith('u1', 'character', 'c2', { name: 'Robert' }, { silent: true });
     expect(result.current.universe.characters[1].name).toBe('Robert');
+    expect(result.current.universe.characters[0].name).toBe('Alice');
   });
 });
