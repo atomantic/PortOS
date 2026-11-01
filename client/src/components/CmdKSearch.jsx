@@ -27,7 +27,7 @@ const normalizeSearchText = (s) => (s || '').toLowerCase().replace(/[\s_-]+/g, '
 
 // Subsequence-based fuzzy scorer. Tiered: exact label > label-prefix > alias
 // exact > label-contains > alias-contains > keyword-contains > every query word
-// in some field (label + section, e.g. "ideas brain") > section-contains >
+// starts a word of some field (label + section, e.g. "ideas brain") > section-contains >
 // subsequence. Reads precomputed normalized fields so single-word comparisons
 // stay allocation-free on the per-keystroke hot path; `q` is already normalized.
 const scoreCommand = (c, q) => {
@@ -40,8 +40,11 @@ const scoreCommand = (c, q) => {
   for (const a of _aliases) if (a.includes(q)) return 400;
   for (const k of _keywords) if (k.includes(q)) return 300;
   if (q.includes(' ')) {
-    const fields = [_label, _section, ..._aliases, ..._keywords];
-    if (q.split(' ').every((word) => fields.some((f) => f.includes(word)))) return 200;
+    // Whole-word prefixes, so "ai" doesn't match inside "brain"; words found in
+    // the label rank a page above its section siblings.
+    const words = q.split(' ');
+    const hit = (tokens) => (word) => tokens.some((token) => token.startsWith(word));
+    if (words.every(hit(c._words))) return 200 + words.filter(hit(c._labelWords)).length;
   }
   if (_section.includes(q)) return 150;
   let i = 0;
@@ -49,13 +52,18 @@ const scoreCommand = (c, q) => {
   return i === q.length ? 100 + i : 0;
 };
 
-const precompute = (cmd) => ({
-  ...cmd,
-  _label: normalizeSearchText(cmd.label),
-  _aliases: (cmd.aliases || []).map(normalizeSearchText),
-  _keywords: (cmd.keywords || []).map(normalizeSearchText),
-  _section: normalizeSearchText(cmd.section),
-});
+const precompute = (cmd) => {
+  const _label = normalizeSearchText(cmd.label);
+  const _aliases = (cmd.aliases || []).map(normalizeSearchText);
+  const _keywords = (cmd.keywords || []).map(normalizeSearchText);
+  const _section = normalizeSearchText(cmd.section);
+  const words = (fields) => fields.join(' ').split(' ').filter(Boolean);
+  return {
+    ...cmd, _label, _aliases, _keywords, _section,
+    _labelWords: words([_label]),
+    _words: words([_label, _section, ..._aliases, ..._keywords]),
+  };
+};
 
 function Highlight({ text, query }) {
   if (!query || !text) return <span>{text}</span>;

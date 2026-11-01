@@ -641,6 +641,12 @@ describe('CmdKSearch multi-word page matching', () => {
     await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent('/brain/ideas'));
   });
 
+  it('matches query words only at word starts, not inside another word', async () => {
+    await openAndSearch('ai brain');
+    expect(screen.queryByRole('option', { name: /Ideas/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: /Brain Inbox/ })).not.toBeInTheDocument();
+  });
+
   it('matches a page when the query words span its label and section', async () => {
     await openAndSearch('backup settings');
     expect(screen.getByRole('option', { name: /Backup/ })).toBeInTheDocument();
