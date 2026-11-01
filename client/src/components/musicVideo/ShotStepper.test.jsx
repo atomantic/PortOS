@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import ShotStepper, { shotNumbers, shotSteps } from './ShotStepper.jsx';
-import { ShotLockContext } from './ShotLock.jsx';
 
 const scenes = [{ startSec: 4 }, { startSec: 0 }, { startSec: 8.5 }, { startSec: null }];
 
@@ -37,20 +36,5 @@ describe('ShotStepper', () => {
     onSeek.mockClear();
     fireEvent.keyDown(screen.getByLabelText('Scrub'), { key: 'ArrowRight' });
     expect(onSeek).not.toHaveBeenCalled();
-  });
-});
-
-describe('ShotStepper with legacy locks', () => {
-  const shots = [{ sceneId: 'a', startSec: 0 }, { sceneId: 'b', startSec: 4 }];
-  it('keeps navigation available without offering a lock action', () => {
-    const toggle = vi.fn();
-    const onSeek = vi.fn();
-    render(<ShotLockContext.Provider value={{ locks: { a: 'locked', b: 'changed' }, toggle, busy: false }}>
-      <ShotStepper scenes={shots} time={1} onSeek={onSeek} />
-    </ShotLockContext.Provider>);
-    expect(screen.queryByRole('button', { name: /lock/i })).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'Next shot' }));
-    expect(onSeek).toHaveBeenCalledWith(4);
-    expect(toggle).not.toHaveBeenCalled();
   });
 });

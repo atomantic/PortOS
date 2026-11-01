@@ -244,19 +244,19 @@ describe('refreshSongStyleFromSuno', () => {
 });
 
 
+// The clip approval a project saved before lock removal still carries; nothing writes one now.
+const withLegacyClipLock = (project, sceneId, videoHistoryId) => ({ ...project,
+  productionReview: { ...project.productionReview, clipApprovals: { ...project.productionReview?.clipApprovals, [sceneId]: { videoHistoryId } } } });
+
 describe('legacy shot approvals', () => {
   it('allows automation and the director to edit and select a different clip without losing existing takes', async () => {
     const { applySceneUpdate } = await import('./projectsLogic.js');
-    const { setShotLocks } = await import('./productionReview.js');
     const p = await projects.createProject({ name: 'Legacy approvals' });
     const scene = await projects.addProjectScene(p.id, { startSec: 0, endSec: 2, prompt: 'Original' });
     const { appended } = await projects.appendSceneTakes(p.id, scene.sceneId, [
       { kind: 'video', assetId: 'approved-clip' }, { kind: 'video', assetId: 'alternate-clip' },
     ]);
-    await projects.mutateProjectRecord(p.id, current => ({ project: setShotLocks(
-      setShotLocks(current, { sceneIds: [scene.sceneId], locked: true, stage: 'still' }),
-      { sceneIds: [scene.sceneId], locked: true, stage: 'video' },
-    ) }));
+    await projects.mutateProjectRecord(p.id, current => ({ project: withLegacyClipLock(current, scene.sceneId, 'approved-clip') }));
     const automated = await projects.mutateProjectRecord(p.id, current => applySceneUpdate(current, scene.sceneId, { prompt: 'Automation edit' }), { source: 'orchestrator' });
     expect(automated.project.scenes[0]).toMatchObject({ prompt: 'Automation edit', videoHistoryId: 'approved-clip' });
     await projects.updateScene(p.id, scene.sceneId, { prompt: 'Director edit' });
@@ -328,7 +328,6 @@ describe('scene mutation transactions', () => {
 describe('moving the cut before a shot', () => {
   // Uniquely catches a start move that leaves a gap or overlap with the shot before.
   it('starts the shot at the new time and ends the shot before it there, even with legacy video locks', async () => {
-    const { setShotLocks } = await import('./productionReview.js');
     const p = await projects.createProject({ name: 'Move a cut' });
     const { scenes: [a, b] } = await projects.addProjectScenes(p.id, [
       { startSec: 0, endSec: 2, prompt: 'First' },
@@ -341,8 +340,7 @@ describe('moving the cut before a shot', () => {
     await expect(projects.moveProjectSceneStart(p.id, b.sceneId, { startSec: 4 })).rejects.toMatchObject({ code: 'VALIDATION_ERROR' });
     await expect(projects.moveProjectSceneStart(p.id, b.sceneId, { startSec: 0 })).rejects.toMatchObject({ code: 'VALIDATION_ERROR' });
     await projects.updateScene(p.id, a.sceneId, { videoHistoryId: 'clip-a' });
-    await projects.mutateProjectRecord(p.id, (current) => ({ project: setShotLocks(setShotLocks(current, { sceneIds: [a.sceneId], locked: true, stage: 'still' }),
-      { sceneIds: [a.sceneId], locked: true, stage: 'video' }) }));
+    await projects.mutateProjectRecord(p.id, (current) => ({ project: withLegacyClipLock(current, a.sceneId, 'clip-a') }));
     await projects.moveProjectSceneStart(p.id, b.sceneId, { startSec: 1.5 });
     expect((await projects.getProject(p.id)).scenes.map((scene) => [scene.startSec, scene.endSec])).toEqual([[0, 1.5], [1.5, 4]]);
   });
@@ -351,7 +349,7 @@ describe('moving the cut before a shot', () => {
 describe('anchoring shots to the sung lyrics', () => {
   // Both shots follow the sung lyric even if an old video lock exists.
   it('re-anchors the named shots and refreshes their lyrics despite legacy locks', async () => {
-    const [{ setShotLocks }, { syncLyricAnchors }] = await Promise.all([import('./productionReview.js'), import('./productionReviewService.js')]);
+    const { syncLyricAnchors } = await import('./productionReviewService.js');
     const p = await projects.createProject({ name: 'Anchor lyrics' });
     const { scenes: [a, b] } = await projects.addProjectScenes(p.id, [
       { startSec: 0, endSec: 2, prompt: 'First', lyricText: 'old line' },
@@ -361,8 +359,7 @@ describe('anchoring shots to the sung lyrics', () => {
       lyricCues: [{ id: 'c1', text: 'sung over both', startSec: 0, endSec: 4 }],
       productionReview: { draft: { storyboard: [a, b].map((s) => ({ sceneId: s.sceneId, lyricCueIds: [] })) } } } }));
     await projects.updateScene(p.id, b.sceneId, { videoHistoryId: 'clip-b' });
-    await projects.mutateProjectRecord(p.id, (current) => ({ project: setShotLocks(setShotLocks(current, { sceneIds: [b.sceneId], locked: true, stage: 'still' }),
-      { sceneIds: [b.sceneId], locked: true, stage: 'video' }) }));
+    await projects.mutateProjectRecord(p.id, (current) => ({ project: withLegacyClipLock(current, b.sceneId, 'clip-b') }));
     const { project } = await syncLyricAnchors(p.id, { sceneIds: [a.sceneId, b.sceneId] });
     expect(project.productionReview.draft.storyboard.map((row) => row.lyricCueIds)).toEqual([['c1'], ['c1']]);
     expect(project.scenes.map((scene) => scene.lyricText)).toEqual(['sung over both', 'sung over both']);

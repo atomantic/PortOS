@@ -384,27 +384,14 @@ describe('scene timing and provider presentation (#11046)', () => {
   });
 });
 
-describe('Render ignores legacy shot locks', () => {
-  it('renders directly for an unlocked still and a previously locked video', async () => {
-    const { ShotLockContext } = await import('./ShotLock.jsx');
+describe('Render', () => {
+  it('renders directly and offers no lock action', () => {
     const scene = { sceneId: 's1', prompt: 'She spins the reel', referenceImageId: 'still.png', videoHistoryId: 'clip-1', startSec: 0, endSec: 4, takes: [] };
     const onGenerateVideo = vi.fn();
     const onGenerateFrame = vi.fn();
-    const toggle = vi.fn();
-    const card = (still, clip) => (
-      <ShotLockContext.Provider value={{ locks: { s1: still }, clips: { s1: clip }, toggle, busy: false }}>
-        <SceneCard scene={scene} index={0} expanded onEditLocal={() => {}} onSave={() => {}} onGenerateVideo={onGenerateVideo}
-          onGenerateFrame={onGenerateFrame} onPlacePoolItem={vi.fn()} falVideoSettings={{ backend: 'local' }} />
-      </ShotLockContext.Provider>
-    );
-    const { rerender } = render(card('open', 'open'));
+    render(<SceneCard scene={scene} index={0} expanded onEditLocal={() => {}} onSave={() => {}} onGenerateVideo={onGenerateVideo}
+      onGenerateFrame={onGenerateFrame} onPlacePoolItem={vi.fn()} falVideoSettings={{ backend: 'local' }} />);
     expect(screen.queryByTestId('render-refusal')).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'Render again' }));
-    expect(onGenerateVideo).toHaveBeenCalledWith(scene, { card: expect.objectContaining({ prompt: scene.prompt }) });
-    expect(toggle).not.toHaveBeenCalled();
-    onGenerateVideo.mockClear();
-    rerender(card('locked', 'locked'));
-    expect(screen.getByRole('button', { name: 'Render again' }).disabled).toBe(false);
     expect(screen.queryByRole('button', { name: /unlock|lock video/i })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Render again' }));
     expect(onGenerateVideo).toHaveBeenCalledWith(scene, { card: expect.objectContaining({ prompt: scene.prompt }) });
@@ -418,14 +405,11 @@ describe('Render ignores legacy shot locks', () => {
 describe('motion prompt from the storyboard panel', () => {
   // Uniquely catches a panel-linked shot asking for a typed prompt, or a typed prompt never handing back to the panel.
   it('renders from the panel direction until the director types their own, and links back in one tap', async () => {
-    const { ShotLockContext } = await import('./ShotLock.jsx');
     const scene = { sceneId: 's1', panelId: 'p1', visualIntent: 'She laces her skates', referenceImageId: 'still.png', videoHistoryId: 'clip-1', startSec: 0, endSec: 4, takes: [] };
     const onGenerateVideo = vi.fn();
     const onSave = vi.fn();
     const card = (shot) => (
-      <ShotLockContext.Provider value={{ locks: { s1: 'locked' }, clips: { s1: 'open' }, toggle: () => {}, busy: false }}>
         <SceneCard scene={shot} index={0} expanded project={{ id: 'mv-example', scenes: [shot] }} onEditLocal={() => {}} onSave={onSave} onGenerateVideo={onGenerateVideo} falVideoSettings={{ backend: 'local' }} />
-      </ShotLockContext.Provider>
     );
     const { rerender } = render(card(scene));
     const box = screen.getAllByLabelText('Shot prompt').find((el) => el.value);
@@ -445,15 +429,12 @@ describe('motion prompt from the storyboard panel', () => {
 describe('clip from the storyboard panel', () => {
   // Uniquely catches the tap animating the sketch instead of rendering the shot's real still first.
   it('renders the still first with the card lane to animate it, and keeps Still only one tap away', async () => {
-    const { ShotLockContext } = await import('./ShotLock.jsx');
     const scene = { sceneId: 's1', prompt: 'She laces her skates', panelId: 'p1', panelArt: 'panel.png', startSec: 0, endSec: 4, takes: [] };
     const onGenerateVideo = vi.fn();
     const onGenerateFrame = vi.fn();
     render(
-      <ShotLockContext.Provider value={{ locks: { s1: 'open' }, clips: { s1: 'open' }, toggle: () => {}, busy: false }}>
         <SceneCard scene={scene} index={0} expanded project={{ id: 'mv-example', scenes: [scene] }} onEditLocal={() => {}} onSave={() => {}} onGenerateVideo={onGenerateVideo} onGenerateFrame={onGenerateFrame}
           lipSyncBackend="grok" falVideoSettings={{ backend: 'grok' }} />
-      </ShotLockContext.Provider>,
     );
     expect(screen.queryByRole('button', { name: 'Render' })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Clip from storyboard' }));
@@ -698,7 +679,6 @@ describe('clip playback and coverage', () => {
   // Catches source trim losing its scene argument or becoming enabled during
   // take/render work after the preview moves out of SceneCard.
   it('trims the source at the chosen frame and preserves every busy gate', async () => {
-    const { ShotLockContext } = await import('./ShotLock.jsx');
     const onTrimClip = vi.fn();
     const props = { scene, index: 0, expanded: true, onEditLocal: vi.fn(), onSave: vi.fn(), onTrimClip };
     const { container, rerender } = render(<SceneCard {...props} />);
@@ -713,9 +693,7 @@ describe('clip playback and coverage', () => {
     expect(screen.getByRole('button', { name: 'Next frame' })).toBeDisabled();
     rerender(<SceneCard {...props} generatingVideo />);
     expect(screen.getByRole('button', { name: 'Next frame' })).toBeDisabled();
-    rerender(<ShotLockContext.Provider value={{ locks: { s1: 'locked' }, clips: { s1: 'locked' }, toggle: () => {}, busy: false }}>
-      <SceneCard {...props} />
-    </ShotLockContext.Provider>);
+    rerender(<SceneCard {...props} />);
     expect(screen.getByRole('button', { name: 'Next frame' })).toBeEnabled();
   });
 });
@@ -924,11 +902,8 @@ describe('clip speed and offset by hand', () => {
   });
 
   it('remains editable for a video with a legacy lock', async () => {
-    const { ShotLockContext } = await import('./ShotLock.jsx');
     render(
-      <ShotLockContext.Provider value={{ locks: { s1: 'locked' }, clips: { s1: 'locked' }, toggle: () => {}, busy: false }}>
         <SceneCard scene={{ sceneId: 's1', videoHistoryId: 'clip-1', startSec: 0, endSec: 4, speedFps: 2, takes: [] }} index={0} expanded onEditLocal={() => {}} onSave={() => {}} />
-      </ShotLockContext.Provider>,
     );
     expect(screen.getByRole('button', { name: 'Play the clip one fps faster' }).disabled).toBe(false);
     expect(screen.getByLabelText('Speed').value).toBe('2');
