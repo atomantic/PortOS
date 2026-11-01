@@ -418,6 +418,33 @@ describe('Render follows the shot locks', () => {
   });
 });
 
+describe('motion prompt from the storyboard panel', () => {
+  // Uniquely catches a panel-linked shot asking for a typed prompt, or a typed prompt never handing back to the panel.
+  it('renders from the panel direction until the director types their own, and links back in one tap', async () => {
+    const { ShotLockContext } = await import('./ShotLock.jsx');
+    const scene = { sceneId: 's1', panelId: 'p1', visualIntent: 'She laces her skates', referenceImageId: 'still.png', videoHistoryId: 'clip-1', startSec: 0, endSec: 4, takes: [] };
+    const onGenerateVideo = vi.fn();
+    const onSave = vi.fn();
+    const card = (shot) => (
+      <ShotLockContext.Provider value={{ locks: { s1: 'locked' }, clips: { s1: 'open' }, toggle: () => {}, busy: false }}>
+        <SceneCard scene={shot} index={0} expanded project={{ id: 'mv-example', scenes: [shot] }} onEditLocal={() => {}} onSave={onSave} onGenerateVideo={onGenerateVideo} falVideoSettings={{ backend: 'local' }} />
+      </ShotLockContext.Provider>
+    );
+    const { rerender } = render(card(scene));
+    const box = screen.getAllByLabelText('Shot prompt').find((el) => el.value);
+    expect(box.value).toBe('She laces her skates');
+    expect(screen.getByTestId('prompt-from-storyboard')).toBeTruthy();
+    // Blurring the panel's words keeps the shot linked rather than copying them.
+    fireEvent.blur(box);
+    expect(onSave).toHaveBeenLastCalledWith('s1', { prompt: '' });
+    fireEvent.click(screen.getByRole('button', { name: 'Render again' }));
+    expect(onGenerateVideo).toHaveBeenCalledWith(scene, { card: expect.objectContaining({ prompt: 'She laces her skates' }) });
+    rerender(card({ ...scene, prompt: 'She stands up' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Use storyboard direction' }));
+    expect(onSave).toHaveBeenLastCalledWith('s1', { prompt: '' });
+  });
+});
+
 describe('clip from the storyboard panel', () => {
   // Uniquely catches the tap animating the sketch instead of rendering the shot's real still first.
   it('renders the still first with the card lane to animate it, and keeps Still only one tap away', async () => {

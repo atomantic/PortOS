@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { musicVideoFrameModelInput, musicVideoShotModelInput } from './musicVideoShotPrompt.js';
+import { authoredShotPrompt, musicVideoFrameModelInput, musicVideoShotModelInput } from './musicVideoShotPrompt.js';
 
 const project = {
   concept: {
@@ -112,5 +112,16 @@ describe('production medium chip', () => {
     expect(musicVideoShotModelInput(project, shot).promptAdditions.map((item) => item.id)).not.toContain('production-medium');
     expect(musicVideoFrameModelInput(project, scene).promptAdditions.map((item) => item.id)).not.toContain('production-medium');
     expect(musicVideoShotModelInput(stepped, shot, { asTyped: true }).promptAdditions.map((item) => item.id)).not.toContain('production-medium');
+  });
+});
+
+// Uniquely catches the server's clip dispatch refusing a panel-linked shot with no typed prompt, or a planner's
+// intent on an unlinked shot standing in for the director's text.
+describe('authoredShotPrompt', () => {
+  it('takes the shot\'s own prompt, then its storyboard panel\'s direction, then its frame prompt', () => {
+    const linked = { panelId: 'p1', visualIntent: 'She laces her skates', framePrompt: 'rental booth' };
+    expect(authoredShotPrompt({ ...linked, prompt: 'She stands up' })).toBe('She stands up');
+    expect(authoredShotPrompt(linked)).toBe('She laces her skates');
+    expect(authoredShotPrompt({ visualIntent: 'planner intent', framePrompt: 'rental booth' })).toBe('rental booth');
   });
 });
