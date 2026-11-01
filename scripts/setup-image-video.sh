@@ -72,6 +72,8 @@ is_apple_silicon() {
 # A Rosetta-translated shell runs universal python3/uv as x86_64, and the
 # venvs they build cannot install arm64-only mlx wheels. Re-exec natively
 # once. PORTOS_SETUP_NATIVE stops a loop when arch cannot change uname.
+# The venv interpreter can still be a universal binary; pin_venv_arm64
+# drops its x86_64 slice so a Rosetta server cannot select it later.
 if is_apple_silicon && [[ -z "${PORTOS_SETUP_NATIVE:-}" ]]; then
   case "$(uname -m)" in
     arm64|aarch64) ;;
@@ -82,9 +84,46 @@ fi
 # in-app installer through git-bash on Windows, so match all three.
 is_windows() { case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) return 0;; *) return 1;; esac; }
 
+# A universal venv interpreter follows its parent's slice. After this script
+# installs arm64 wheels, drop the x86_64 slice so a Rosetta Node process
+# cannot launch that interpreter as x86_64 and fail the import. The copy is
+# written beside the symlink; lipo never rewrites the interpreter it points at.
+pin_venv_arm64() {
+  is_apple_silicon || return 0
+  case "$(uname -m)" in
+    arm64|aarch64) ;;
+    *) return 0 ;;
+  esac
+  local root="$1/bin" py base arches tmp
+  [[ -d "$root" ]] || return 0
+  for py in "$root"/python "$root"/python3 "$root"/python3.[0-9] "$root"/python3.[0-9][0-9]; do
+    [[ -e "$py" && ! -d "$py" ]] || continue
+    base="${py##*/}"
+    [[ "$base" =~ ^python(3(\.[0-9]+)?)?$ ]] || continue
+    arches="$(lipo -archs "$py" 2>/dev/null || true)"
+    case " $arches " in
+      *" arm64 "*|*" aarch64 "*) ;;
+      *) continue ;;
+    esac
+    case " $arches " in
+      *" x86_64 "*|*" i386 "*) ;;
+      *) continue ;;
+    esac
+    tmp="$(mktemp)"
+    lipo -thin arm64 "$py" -output "$tmp"
+    rm -f "$py"
+    mv "$tmp" "$py"
+    chmod +x "$py"
+  done
+}
+
 # Resolve a venv interpreter from the layout its creating Python used. Git Bash
 # keeps its POSIX shell paths on Windows, but Python still creates Scripts/.
 venv_python() {
+  # Absent when a test extracts this function alone. The full script defines it.
+  if declare -F pin_venv_arm64 >/dev/null 2>&1; then
+    pin_venv_arm64 "$1"
+  fi
   if [[ -x "$1/bin/python3" ]]; then
     printf '%s\n' "$1/bin/python3"
   else
@@ -263,6 +302,7 @@ if [[ "$INSTALL_MFLUX" == "1" ]]; then
     fi
     echo "📦 Installing ${MFLUX_PIN} · ${MLX_PIN} · ${MLX_METAL_PIN} into ${MFLUX_VENV}..."
     uv pip install --python "$MFLUX_VENV_PY" "$MFLUX_PIN" "$MLX_PIN" "$MLX_METAL_PIN"
+    pin_venv_arm64 "$MFLUX_VENV"
     probe_or_fail \
       "mflux venv built but 'import mflux' failed." \
       "Check that mflux and its MLX dependencies installed cleanly in ${MFLUX_VENV}." \
@@ -359,6 +399,7 @@ if [[ "$INSTALL_LTX2" == "1" ]]; then
   # have no use for.
   echo "📦 Syncing ltx-2-mlx packages (uv sync, no extras)..."
   (cd "${LTX2_DIR}" && uv sync)
+  pin_venv_arm64 "${LTX2_DIR}/.venv"
   probe_or_fail \
     "ltx-2-mlx synced but 'import ltx_pipelines_mlx' failed." \
     "Re-run with: rm -rf ${LTX2_DIR}/.venv && bash $0" \
@@ -410,6 +451,7 @@ if [[ "$INSTALL_LTX25" == "1" ]]; then
   fi
   echo "📦 Syncing ltx-2.5-mlx packages (uv sync, no extras)..."
   (cd "${LTX25_DIR}" && uv sync)
+  pin_venv_arm64 "${LTX25_DIR}/.venv"
   probe_or_fail \
     "ltx-2.5-mlx synced but 'import ltx_pipelines_mlx' failed." \
     "Re-run with: rm -rf ${LTX25_DIR}/.venv && bash $0" \
@@ -462,6 +504,7 @@ if [[ "$INSTALL_FASTVIDEO" == "1" ]]; then
   # The import probe below then failed with a message that pointed nowhere.
   echo "📦 Installing FastVideo MLX packages into ${FASTVIDEO_DIR}/.venv..."
   (cd "${FASTVIDEO_DIR}" && "$FASTVIDEO_UV" pip install --python "${FASTVIDEO_PY}" -e '.[mlx]')
+  pin_venv_arm64 "${FASTVIDEO_DIR}/.venv"
   probe_or_fail \
     "FastVideo synced but the runtime import failed in ${FASTVIDEO_PY}." \
     "Delete ${FASTVIDEO_DIR}/.venv and use Repair / Upgrade from the Video Gen runtime panel to retry." \
@@ -530,6 +573,7 @@ if [[ "$INSTALL_WAN22" == "1" ]]; then
   fi
   echo "📦 Syncing pinned MLX-Gen packages..."
   (cd "${WAN22_DIR}" && "$WAN22_UV" sync --locked)
+  pin_venv_arm64 "${WAN22_DIR}/.venv"
   probe_or_fail \
     "MLX-Gen synced but the Wan runtime import failed." \
     "Use Repair / Upgrade from the Video Gen runtime panel to retry." \
@@ -587,6 +631,7 @@ if [[ "$INSTALL_MINIMAX_H3" == "1" ]]; then
   fi
   echo "📦 Syncing pinned MiniMax H3 MLX packages..."
   "$MINIMAX_H3_UV" pip sync --python "$MINIMAX_H3_PY" "$MINIMAX_H3_LOCK"
+  pin_venv_arm64 "${MINIMAX_H3_DIR}/.venv"
   # --verify-seams is Install/Repair-only strictness: it also asserts the encoder
   # seams generate_minimax_h3.py patches, which the readiness probe deliberately
   # skips (a moved seam must not mark a text-only-capable runtime unready). That
@@ -817,6 +862,7 @@ if [[ "$INSTALL_MUSICGEN" == "1" ]]; then
       sentencepiece \
       "huggingface_hub[hf_xet]" \
       scipy
+    pin_venv_arm64 "$MUSICGEN_VENV"
     # Verify BOTH that the class imports AND that torch loaded — the import alone
     # passed even when torch was missing, so install used to report ready and
     # then fail on the first generation.

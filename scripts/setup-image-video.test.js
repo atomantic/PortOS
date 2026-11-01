@@ -183,6 +183,9 @@ describe('setup-image-video venv layout handling (issue #4200)', () => {
     expect(source).not.toMatch(/uname -m"\) != "arm64"/);
     expect(source).not.toMatch(/uname -m"\) == "arm64"/);
     expect(source).toMatch(/PORTOS_SETUP_NATIVE=1 exec \/usr\/bin\/arch -arm64 \/bin\/bash "\$0" "\$@"/);
+    for (const root of ['$MFLUX_VENV', '${LTX2_DIR}/.venv', '${LTX25_DIR}/.venv', '${FASTVIDEO_DIR}/.venv', '${WAN22_DIR}/.venv', '${MINIMAX_H3_DIR}/.venv', '$MUSICGEN_VENV']) {
+      expect(source).toContain(`pin_venv_arm64 "${root}"`);
+    }
 
     const probe = ({ system, machine, arm64Bit }) => {
       const dir = mkdtempSync(join(tmpdir(), 'portos-hwprobe-'));
@@ -215,6 +218,63 @@ exit 1
     expect(probe({ system: 'Darwin', machine: 'x86_64', arm64Bit: '1' })).toBe('yes');
     expect(probe({ system: 'Darwin', machine: 'x86_64', arm64Bit: '0' })).toBe('no');
     expect(probe({ system: 'Linux', machine: 'x86_64', arm64Bit: '1' })).toBe('no');
+  });
+
+  it.skipIf(process.platform === 'win32')('replaces a universal venv interpreter with an arm64 copy and leaves its target alone', () => {
+    const pin = source.match(/^pin_venv_arm64\(\) \{\n(?:.*\n)*?^\}\n/m)?.[0];
+    const apple = source.match(/^is_apple_silicon\(\) \{\n(?:.*\n)*?^\}\n/m)?.[0];
+    expect(pin).toBeTruthy();
+    const dir = mkdtempSync(join(tmpdir(), 'portos-lipo-'));
+    tempVenvs.push(dir);
+    const uname = join(dir, 'uname');
+    const lipo = join(dir, 'lipo');
+    const venv = join(dir, 'venv');
+    const outside = join(dir, 'outside-python');
+    mkdirSync(join(venv, 'bin'), { recursive: true });
+    writeFileSync(outside, 'ORIGINAL');
+    writeFileSync(uname, `#!/bin/bash
+case "$1" in
+  -s) printf '%s\\n' 'Darwin' ;;
+  -m) printf '%s\\n' "$MACHINE" ;;
+  *) exit 1 ;;
+esac
+`);
+    writeFileSync(lipo, `#!/bin/bash
+if [[ "$1" == "-archs" ]]; then
+  printf '%s\\n' "$ARCHES"
+  exit 0
+fi
+if [[ "$1" == "-thin" && "$2" == "arm64" && "$4" == "-output" ]]; then
+  printf '%s\\n' 'THIN' > "$5"
+  printf '%s\\n' thin >> "$LOG"
+  exit 0
+fi
+exit 1
+`);
+    chmodSync(uname, 0o755);
+    chmodSync(lipo, 0o755);
+    const run = (machine, arches) => {
+      const link = join(venv, 'bin', 'python3');
+      rmSync(link, { force: true });
+      writeFileSync(outside, 'ORIGINAL');
+      execFileSync('ln', ['-s', outside, link]);
+      const log = join(dir, `lipo-${machine}.log`);
+      writeFileSync(log, '');
+      execFileSync('bash', ['-c', `${apple}\n${pin}\npin_venv_arm64 "$1"`, 'bash', venv], {
+        env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, ARCHES: arches, LOG: log, MACHINE: machine },
+      });
+      return { body: readFileSync(link, 'utf8'), target: readFileSync(outside, 'utf8'), log: readFileSync(log, 'utf8') };
+    };
+    const universal = run('arm64', 'x86_64 arm64');
+    expect(universal.body).toBe('THIN\n');
+    expect(universal.target).toBe('ORIGINAL');
+    expect(universal.log).toContain('thin');
+    const already = run('arm64', 'arm64');
+    expect(already.body).toBe('ORIGINAL');
+    expect(already.log).toBe('');
+    const translated = run('x86_64', 'x86_64 arm64');
+    expect(translated.body).toBe('ORIGINAL');
+    expect(translated.log).toBe('');
   });
 
   it('captures diagnostics for every aborting install probe', () => {
