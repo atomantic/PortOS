@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const { request } = vi.hoisted(() => ({ request: vi.fn() }));
 vi.mock('./apiCore.js', () => ({ request }));
 
-import { updateUniverse, waitForUniverseWrites } from './apiUniverseBuilder.js';
+import { patchUniverseCanonEntry, updateUniverse, waitForUniverseWrites } from './apiUniverseBuilder.js';
 
 const deferred = () => {
   let resolve;
@@ -54,6 +54,28 @@ describe('Universe Builder write tracking', () => {
 
   it('resolves immediately when no universe id is supplied', async () => {
     await expect(waitForUniverseWrites()).resolves.toBe(true);
+  });
+
+  it('orders canon edits across callers and keeps queued edits in the export wait after a failed write', async () => {
+    const first = deferred();
+    const second = deferred();
+    request.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+    const a = patchUniverseCanonEntry('u-1', 'place', 'p-1', { timeOfDay: 'DAY' });
+    const b = patchUniverseCanonEntry('u-1', 'place', 'p-1', { timeOfDay: 'NIGHT' });
+    let ready = false;
+    const wait = waitForUniverseWrites('u-1').then(value => { ready = value; });
+    // Queue the rejection assertion before rejecting, so it owns the failure.
+    const rejected = expect(a).rejects.toThrow('offline');
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+    first.reject(new Error('offline'));
+    await rejected;
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    expect(ready).toBe(false);
+    expect(JSON.parse(request.mock.calls[1][1].body)).toEqual({ timeOfDay: 'NIGHT' });
+    second.resolve({ entry: { id: 'p-1', timeOfDay: 'NIGHT' } });
+    await b;
+    await wait;
+    expect(ready).toBe(true);
   });
 
   it('gives up when a tracked write outlives the wait bound', async () => {

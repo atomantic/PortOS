@@ -91,6 +91,21 @@ export const updateUniverse = (id, patch, options = {}) => trackUniverseWrite(id
   ...options,
 }));
 
+const canonWriteTails = new Map();
+export const patchUniverseCanonEntry = (universeId, kind, entryId, patch, options = {}) => {
+  // Preserve click order even for two edits of the same field. Track queued
+  // writes immediately so Export also waits for work that has not hit the wire.
+  const previous = canonWriteTails.get(universeId) || Promise.resolve();
+  const write = previous.catch(() => {}).then(() => request(
+    `/universe-builder/${encodeURIComponent(universeId)}/canon/${encodeURIComponent(kind)}/${encodeURIComponent(entryId)}`,
+    { method: 'PATCH', body: JSON.stringify(patch), ...options },
+  ));
+  canonWriteTails.set(universeId, write);
+  const clear = () => { if (canonWriteTails.get(universeId) === write) canonWriteTails.delete(universeId); };
+  write.then(clear, clear);
+  return trackUniverseWrite(universeId, write);
+};
+
 // `options` lets callers that own their own error toast (a custom `.catch`)
 // pass `{ silent: true }` so the request() helper doesn't also toast — see
 // AGENTS.md "Custom catch ⇒ silent: true". Mirrors updateUniverse's signature.
