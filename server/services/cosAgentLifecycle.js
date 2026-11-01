@@ -29,14 +29,28 @@ import { isAgentHandoff } from '../lib/agentOutcome.js';
 import { collectProtectedCleanupOwners } from '../lib/taskRetryHold.js';
 import { reconcileStaleAgentReservations, releaseAgentReservation } from './agentMaintenanceReservations.js';
 import { initialCandidateLifecycle } from './releaseCandidateLifecycle.js';
+import { PORTOS_APP_ID } from '../lib/appIdentity.js';
+import { isHistoricalReleaseReceipt } from '../lib/releasePublication.js';
 
 function hasPendingRepoStateVerification(agent) {
   return agent?.status === 'completed' && agent?.metadata?.repoStateVerification?.status === 'pending';
 }
 
-async function assertInlineReleaseDelivery(agent) {
-  const { verifyInlineReleaseDelivery } = await import('./releaseSynchronization.js');
-  const delivery = await verifyInlineReleaseDelivery(agent);
+const needsReleaseDeliveryCheck = metadata => metadata?.releasePublication?.synchronizationHandoffVersion === 2
+  || (!isHistoricalReleaseReceipt(metadata?.releasePublication) && (hasReleaseCandidateBinding(metadata)
+    || (metadata?.taskAnalysisType === 'do-release' && metadata.taskApp === PORTOS_APP_ID
+      && metadata.releaseCandidateLifecycle?.version === 1)));
+const releaseDeliveryIdentity = agent => ({ taskId: agent?.taskId, startedAt: agent?.startedAt,
+  sourceWorkspace: agent?.sourceWorkspace, workspacePath: agent?.workspacePath,
+  metadata: { sourceWorkspace: agent?.metadata?.sourceWorkspace, workspacePath: agent?.metadata?.workspacePath,
+    taskAnalysisType: agent?.metadata?.taskAnalysisType, taskApp: agent?.metadata?.taskApp, isWorktree: agent?.metadata?.isWorktree,
+    releasePublication: agent?.metadata?.releasePublication, releaseCandidate: agent?.metadata?.releaseCandidate,
+    releaseCandidateRecovery: agent?.metadata?.releaseCandidateRecovery, releaseCandidateLifecycle: agent?.metadata?.releaseCandidateLifecycle,
+    checkoutSeeds: agent?.metadata?.checkoutSeeds } });
+
+async function assertManagedReleaseDelivery(agent, outcome) {
+  const { verifyReleaseDelivery } = await import('./releaseDeliveryGate.js');
+  const delivery = await verifyReleaseDelivery(agent, outcome);
   if (!delivery?.verified) throw new ServerError(`Release synchronization is unfinished: ${delivery?.reason || 'evidence unavailable'}`,
     { status: 409, code: 'RELEASE_SYNC_DELIVERY_UNVERIFIED' });
 }
@@ -167,8 +181,7 @@ export async function updateAgent(agentId, updates) {
       await ensureReleaseSynchronization(existing);
       completionOwner = { taskId: existing.taskId, startedAt: existing.startedAt, identity: existing.metadata.releasePublication.identity };
     }
-    if (existing?.status !== 'completed' && existing?.metadata?.releasePublication?.synchronizationHandoffVersion === 2
-      && updates.result?.success === true) {
+    if (existing?.status !== 'completed' && needsReleaseDeliveryCheck(existing?.metadata) && updates.result?.success === true) {
       // Generic metadata updates are reachable from read-only routes. A
       // successful release must use completeAgent's fresh delivery check.
       throw new ServerError('Inline release success requires verified agent completion',
@@ -183,6 +196,11 @@ export async function updateAgent(agentId, updates) {
     }
 
     const current = state.agents[agentId];
+    if (updates.status === 'completed' && current.status !== 'completed' && updates.result?.success === true
+      && needsReleaseDeliveryCheck(current.metadata)) {
+      throw new ServerError('Managed release success requires verified agent completion',
+        { status: 409, code: 'RELEASE_SYNC_DELIVERY_UNVERIFIED' });
+    }
     if (updates.status === 'completed' && current.status !== 'completed' && [1, 2].includes(current.metadata?.releasePublication?.synchronizationHandoffVersion)
       && (current.taskId !== completionOwner?.taskId || current.startedAt !== completionOwner?.startedAt
         || current.metadata.releasePublication.identity !== completionOwner?.identity)) {
@@ -807,6 +825,7 @@ export async function retryCompletionCheckoutCapture(agentId, { retirement } = {
 export async function completeAgent(agentId, result = {}) {
   const existing = await getAgentRecord(agentId);
   const publicationIdentity = existing?.metadata?.releasePublication?.identity;
+  let deliveryOwner = null;
   let publicationHandoffConfirmed = false;
   if (existing?.status !== 'completed' && [1, 2].includes(existing?.metadata?.releasePublication?.synchronizationHandoffVersion)) {
     const { ensureReleaseSynchronization } = await import('./releaseSynchronization.js');
@@ -815,8 +834,9 @@ export async function completeAgent(agentId, result = {}) {
     await ensureReleaseSynchronization(existing);
     publicationHandoffConfirmed = true;
   }
-  if (result.success === true && existing?.metadata?.releasePublication?.synchronizationHandoffVersion === 2) {
-    await assertInlineReleaseDelivery(existing);
+  if (existing?.status !== 'completed' && result.success === true && needsReleaseDeliveryCheck(existing?.metadata)) {
+    await assertManagedReleaseDelivery(existing, result.taskOutcome);
+    deliveryOwner = structuredClone(releaseDeliveryIdentity(existing));
   }
   if (existing?.metadata?.taskAnalysisType === 'security' && existing.metadata.useRunner) {
     const { settleAgentSecurityScan } = await import('./agentSecurityScan.js');
@@ -858,6 +878,10 @@ export async function completeAgent(agentId, result = {}) {
     // Capture while the state lock still protects this run's active bindings.
     // A later audit must never turn an old branch name into checkout authority.
     const agent = state.agents[agentId];
+    if (result.success === true && needsReleaseDeliveryCheck(agent.metadata)
+      && !isDeepStrictEqual(deliveryOwner, releaseDeliveryIdentity(agent))) {
+      throw new ServerError('Release delivery ownership changed before completion', { status: 409, code: 'RELEASE_SYNC_DELIVERY_UNVERIFIED' });
+    }
     if ([1, 2].includes(agent.metadata?.releasePublication?.synchronizationHandoffVersion) && (!publicationHandoffConfirmed || agent.metadata.releasePublication.identity !== publicationIdentity
       || agent.startedAt !== existing?.startedAt || agent.taskId !== existing?.taskId)) {
       throw new ServerError('Release synchronization handoff ownership changed before completion', { status: 409 });

@@ -7,6 +7,7 @@ import { reconcileStaleAgentReservations, releaseAgentReservation } from './agen
 import { reconcileDeadOwnerReservations } from './deadOwnerReservations.js';
 import { MAX_ORPHAN_RETRIES, ORPHAN_GUARDS, buildOrphanOutcome, classifyOrphanGuard, decideOrphanRetry } from './agentOrphanRecovery.js';
 import { matchesSpawnBudgetProof, spawnBudgetCount } from './spawnBudgetProof.js';
+import { currentTaskTypeName } from '../lib/taskTypeRenames.js';
 /**
  * Agent Management
  *
@@ -1567,7 +1568,11 @@ export async function handleOrphanedTask(taskId, agentId, getTaskByIdFn, { agent
   if (isPrivateSecurityTask({ metadata: agentMetadata })) await removePrivateSecurityScratch(agentId);
 
   if (guard) return ORPHAN_GUARD_HANDLERS[guard](ctx);
-  if (await completeIfCommitted(ctx)) return;
+  // A release coordinator runs in a shared checkout and a commit alone cannot
+  // prove publication and synchronization. Preserve its same-task recovery.
+  const releaseTask = agentMetadata?.taskAnalysisType === 'do-release'
+    || currentTaskTypeName(task.metadata?.analysisType || task.metadata?.selfImprovementType) === 'do-release';
+  if (!releaseTask && await completeIfCommitted(ctx)) return;
 
   const decision = decideOrphanRetry({ task, wasInterrupted, now: Date.now() });
   await applyOrphanDecision(ctx, decision);

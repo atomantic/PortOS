@@ -1338,10 +1338,11 @@ export async function retireDeadAgent({ agent, task, success, exitCode, duration
   let taskOutcome = reportedOutcome || retirementCompletion ? resolveTaskOutcome({ reported: retirementCompletion?.status === 'unverified'
     ? { status: 'incomplete', reason: retirementCompletion.reason } : reportedOutcome,
     success: effectiveSuccess, validationPassed, noCommitDeclared: declaresNoCommitCriterion(task) }) : null;
-  if (effectiveSuccess && agent.metadata?.releasePublication?.synchronizationHandoffVersion === 2) {
-    const { verifyInlineReleaseDelivery } = await import('./releaseSynchronization.js');
-    const delivery = await verifyInlineReleaseDelivery(agent);
-    if (!delivery?.verified) {
+  if (effectiveSuccess && (agent.metadata?.taskAnalysisType === 'do-release'
+    || agent.metadata?.releasePublication?.synchronizationHandoffVersion === 2)) {
+    const { verifyReleaseDelivery } = await import('./releaseDeliveryGate.js');
+    const delivery = await verifyReleaseDelivery(agent, taskOutcome);
+    if (delivery && !delivery.verified) {
       taskOutcome = { status: 'incomplete', reason: `Release synchronization is unfinished: ${delivery?.reason || 'evidence unavailable'}` };
       deliveryHeld = true;
     }
@@ -2143,10 +2144,10 @@ async function finalizeAgentInCompletionContext({
     noCommitDeclared: declaresNoCommitCriterion(task) });
   if (verdict.success) {
     const owner = await getAgentRecord(agentId);
-    if (owner?.metadata?.releasePublication?.synchronizationHandoffVersion === 2) {
-      const { verifyInlineReleaseDelivery } = await import('./releaseSynchronization.js');
-      const delivery = await verifyInlineReleaseDelivery(owner);
-      if (!delivery?.verified) taskOutcome = { status: 'incomplete',
+    if (owner?.metadata?.taskAnalysisType === 'do-release' || owner?.metadata?.releasePublication?.synchronizationHandoffVersion === 2) {
+      const { verifyReleaseDelivery } = await import('./releaseDeliveryGate.js');
+      const delivery = await verifyReleaseDelivery(owner, taskOutcome);
+      if (delivery && !delivery.verified) taskOutcome = { status: 'incomplete',
         reason: `Release synchronization is unfinished: ${delivery?.reason || 'evidence unavailable'}` };
     }
   }

@@ -164,6 +164,14 @@ Missing/changed evidence yields a held `releaseCandidateRecovery` projection on
 the successor with a reason and safe next step. Preserve uncommitted work and
 the original checkout while resolving it.
 
+A managed candidate cannot report a completed release without its verified
+publication receipt. When the readiness check finds nothing to release, report a
+structured `no-action-needed` outcome with the evidence. The server checks the
+captured candidate and its promotion PR history before accepting that result;
+an existing PR or unreadable history remains held for reconciliation. Keep the
+candidate checkout through this verification. A no-release run has no published
+release outbox, so its candidate is retained for separately verified cleanup.
+
 Newly registered coordinators also record the reservation and checkout capture
 milestones in their service-owned lifecycle. A `registered` milestone says only
 that the service observed no reservation; it does not prove a candidate was not
@@ -437,6 +445,10 @@ git -C "$SYNC_WORKTREE" merge --no-ff "$PROMOTION_MERGE_SHA"
 Use a new, unused `SYNC_WORKTREE` path. A refused reservation or capture is a
 hold, not authority to adopt another checkout. On recovery, reuse the returned
 checkout and branch; do not create a second synchronization branch.
+If interruption leaves a synchronization reservation without a captured
+checkout generation, recovery holds with `candidate-synchronization-checkout-unverified`.
+An absent branch does not prove an unknown checkout was never created or
+detached; preserve any work and resolve that lineage before continuing.
 
 Keep synchronization failures tracked with the exact PR, owner and next step;
 they do not invalidate an already verified publication or require revalidating it.

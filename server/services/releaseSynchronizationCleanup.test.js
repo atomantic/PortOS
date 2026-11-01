@@ -1,4 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdir, mkdtemp, realpath, rm, symlink } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { publisherCandidateTarget, RELEASE_SYNC_OBLIGATIONS } from '../lib/releaseSynchronization.js';
 
 // Keep the test at the service boundary: all filesystem, policy and retirement
@@ -30,6 +33,7 @@ beforeEach(() => {
   entry.obligations.retirement = { status: 'pending', evidence: { checkouts: [candidate, sync] } };
   deps = {
     getApp: vi.fn(async () => ({ id: 'app', repoPath: '/repo' })),
+    resolveRepoPath: vi.fn(async path => path),
     listWorktrees: vi.fn(async () => [{ path: '/repo', branch: 'refs/heads/main' },
       { path: candidate.path, branch: `refs/heads/${candidate.branch}`, head, locked: true, lockReason: `Active release candidate ${candidate.branch}` },
       { path: sync.path, branch: `refs/heads/${sync.branch}`, head: syncHead, locked: false, lockReason: null }]),
@@ -70,6 +74,27 @@ describe('inline release cleanup', () => {
     entry.version = 1;
     expect(await settleInlineReleaseCheckouts(entry, deps)).toEqual({ attempted: false });
     expect(deps.record).not.toHaveBeenCalled();
+  });
+
+  it('resolves an app repository symlink while retaining the captured repository identity', async () => {
+    const scratch = await realpath(await mkdtemp(join(tmpdir(), 'release-sync-repo-')));
+    try {
+      const repo = join(scratch, 'repo'), alias = join(scratch, 'alias');
+      await mkdir(repo);
+      await symlink(repo, alias, 'junction');
+      entry.checkouts[0].repoPath = candidate.repoPath = sync.repoPath = repo;
+      deps.getApp.mockResolvedValue({ id: 'app', repoPath: alias });
+      deps.resolveRepoPath = realpath;
+      expect(await settleInlineReleaseCheckouts(entry, deps)).toEqual({ attempted: true, retired: [candidate.branch, sync.branch], held: [] });
+      expect(deps.listWorktrees).toHaveBeenCalledWith(repo);
+      expect(deps.validateLocked).toHaveBeenCalledWith(expect.objectContaining({ repoPath: repo }));
+      deps.getApp.mockResolvedValue({ id: 'app', repoPath: scratch });
+      deps.retire.mockClear();
+      expect(await settleInlineReleaseCheckouts(entry, deps)).toEqual({ attempted: false });
+      expect(deps.retire).not.toHaveBeenCalled();
+    } finally {
+      await rm(scratch, { recursive: true, force: true });
+    }
   });
 
   it('does not reuse old delivery receipts when the fresh PR inspection failed', async () => {

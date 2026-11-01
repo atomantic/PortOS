@@ -3851,6 +3851,7 @@ describe('buildAgentPrompt — slashdo-backed tasks', () => {
   it.each([
     ['tui', 'codex-tui', 'codex'],
     ['cli', 'codex', 'codex'],
+    ['cli', 'cursor', 'cursor-agent'],
     ['tui', 'claude-code-tui', 'claude'],
     ['api', 'test-api', null],
   ])('keeps scheduled release attachment and completion aligned on %s/%s', async (providerType, providerId, providerCommand) => {
@@ -3868,7 +3869,8 @@ describe('buildAgentPrompt — slashdo-backed tasks', () => {
     expect(prompt).toContain('first unverified checkpoint');
     expect(prompt).not.toMatch(/Do NOT push|do NOT push|Commit only|commit only|PortOS will (?:push|merge)/);
     expect(prompt).not.toContain('## Completion Workflow');
-    if (providerType === 'tui') expect(prompt).toContain('.agent-done-release-test');
+    if (providerType === 'tui' || providerType === 'cli') expect(prompt).toContain('.agent-done-release-test');
+    if (providerType === 'cli') expect(prompt).toContain('"taskOutcome":{"status":"<completed|no-action-needed|blocked|incomplete>"');
   });
 
   // Regression: overview Better runs previously received commit-only handoffs,

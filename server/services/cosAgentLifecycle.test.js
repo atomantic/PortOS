@@ -30,6 +30,8 @@ vi.mock('./cosState.js', () => ({
 vi.mock('./branchCompletionPolicy.js', () => ({ readBranchCompletionPolicies: vi.fn(async () => Object.values(mockCosState.state?.agents || {})) }));
 const recoveryTasks = vi.hoisted(() => new Map());
 const releaseHandoff = vi.hoisted(() => ({ ensure: vi.fn(async () => ({ taskId: 'task-release-sync-example' })) }));
+const releaseDelivery = vi.hoisted(() => vi.fn(async () => ({ verified: false, reason: 'missing publication receipt' })));
+vi.mock('./releaseDeliveryGate.js', () => ({ verifyReleaseDelivery: releaseDelivery }));
 vi.mock('./releaseSynchronization.js', () => ({ ensureReleaseSynchronization: releaseHandoff.ensure,
   readReleaseSynchronizationRetention: vi.fn(async () => []) }));
 vi.mock('./instanceIdentity.js', () => ({ getInstanceId: vi.fn(async () => 'fixture-local'), UNKNOWN_INSTANCE_ID: 'unknown' }));
@@ -625,6 +627,16 @@ describe('completeAgent budget-ledger ordering (#1683)', () => {
     expect(completed.status).toBe('completed');
     expect(completed.metadata.releasePublication).toEqual(publication);
     expect(releaseHandoff.ensure).toHaveBeenCalledWith(expect.objectContaining({ id: agent.id, taskId: agent.taskId }));
+  });
+
+  it('refuses direct successful completion of a managed release without verified delivery', async () => {
+    const agent = { id: 'agent-unrecorded-release', taskId: 'task-release', status: 'running', startedAt: '2026-01-01T00:00:00Z',
+      metadata: { taskAnalysisType: 'do-release', isWorktree: false, releaseCandidate: { version: 1, branch: 'codex/release-example' } } };
+    mockCosState.state.agents[agent.id] = agent;
+    await expect(completeAgent(agent.id, { success: true })).rejects.toMatchObject({ code: 'RELEASE_SYNC_DELIVERY_UNVERIFIED' });
+    await expect(updateAgent(agent.id, { status: 'completed', result: { success: true } }))
+      .rejects.toMatchObject({ code: 'RELEASE_SYNC_DELIVERY_UNVERIFIED' });
+    expect(mockCosState.state.agents[agent.id].status).toBe('running');
   });
 
   it('refuses enrollment racing a completion that only observed the legacy receipt', async () => {

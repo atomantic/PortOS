@@ -194,6 +194,14 @@ export async function inspectReleaseSynchronization(entry, agents) {
   if (!sameTarget) for (const key of RELEASE_SYNC_OBLIGATIONS) {
     if (key !== 'localReview' || !sameDelivery) obligations[key] = { status: 'pending' };
   }
+  // These obligations also inspect the current development tree. A successful
+  // read at an earlier development head cannot survive a transport failure at
+  // a newer one, even when the synchronization PR head is unchanged.
+  if (sameTarget && entry.obligations.synchronizationPr.evidence?.developmentHead !== target.developmentHead) {
+    for (const key of ['synchronizationPr', 'candidateFixes', 'releaseAncestry', 'qualitySnapshot']) {
+      obligations[key] = { status: 'pending' };
+    }
+  }
   const binding = { prUrl: target.prUrl, headSha: target.headSha };
   const check = async (name, inspect) => {
     try {

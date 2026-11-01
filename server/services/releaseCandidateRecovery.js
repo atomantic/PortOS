@@ -149,10 +149,20 @@ export async function recoverReleaseCandidate(successorAgentId, predecessorAgent
       const resumed = source?.result?.resumed === true && source.result.resumedTaskId === successor.taskId;
       const retriedInline = source?.metadata?.releasePublication?.synchronizationHandoffVersion === 2
         && source.result?.deliveryRecoveryOwned === true && ['blocked', 'incomplete'].includes(source.result?.taskOutcome?.status);
+      // Orphan recovery requeues the same task after retiring a killed run. It
+      // has no delivery-recovery marker, but records failed execution and the
+      // server-observed orphan disposition. A claimed success sentinel becomes
+      // the standard incomplete outcome when the killed run is retired.
+      const orphanOutcome = source?.result?.taskOutcome;
+      const unclaimedOrphanOutcome = orphanOutcome == null
+        || equal(orphanOutcome, { status: 'incomplete', reason: 'Delivery checks did not pass.' });
+      const orphanedInline = source?.metadata?.releasePublication?.synchronizationHandoffVersion === 2
+        && source.result?.orphaned === true && source.result?.success === false && source.result?.executionSuccess === false
+        && unclaimedOrphanOutcome && !source.result?.executionInterruption && !source.metadata?.executionInterruption;
       if (!releaseRun(source) || source.status !== 'completed'
         || !(Date.parse(source.completedAt) >= Date.parse(source.startedAt)) || Date.parse(source.completedAt) > Date.now()
         || !(Date.parse(successor.startedAt) >= Date.parse(source.completedAt)) || !source.taskId
-        || source.taskId !== successor.taskId || (!resumed && !retriedInline)
+        || source.taskId !== successor.taskId || (!resumed && !retriedInline && !orphanedInline)
         || successor.metadata.resumedFromAgentId !== source.id || !source.metadata.instanceId
         || source.metadata.instanceId === 'unknown' || source.metadata.instanceId !== successor.metadata.instanceId) refuse('candidate-successor-lineage-unverified');
       const { getTaskById } = await import('./cosTaskStore.js');

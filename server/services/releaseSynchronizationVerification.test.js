@@ -9,7 +9,7 @@ const f = vi.hoisted(() => ({ agents: [], pr: null, review: null, reviews: [], c
   present: true, busy: false, unavailable: false, ancestor: true, quality: null, qualityFile: null, failSave: false,
   missingSyncAncestry: false, retirementUnavailable: false, liveAgents: null, liveTrusted: true,
   forgeCalls: 0, checkoutHead: null, developmentVersion: null, lockVersion: null, lockRootVersion: null,
-  hasLock: true, versionUnavailable: false, versionReads: [] }));
+  hasLock: true, versionUnavailable: false, versionReads: [], developmentHead: null, compareUnavailable: false }));
 const inlineCleanup = vi.hoisted(() => vi.fn(async () => ({ attempted: true, retired: [], held: [] })));
 vi.mock('./releaseSynchronizationCleanup.js', () => ({ settleInlineReleaseCheckouts: inlineCleanup }));
 vi.mock('../lib/fileUtils.js', async original => {
@@ -67,12 +67,15 @@ vi.mock('./github.js', () => ({ execGh: async args => {
   const path = args.at(-1).replace(/^repos\/example\/repo\/?/, '');
   let result;
   if (path === '') result = { full_name: 'example/repo', default_branch: 'main', owner: { login: 'example' } };
-  else if (path === 'git/ref/heads/main') result = { object: { type: 'commit', sha: 'e'.repeat(40) } };
+  else if (path === 'git/ref/heads/main') result = { object: { type: 'commit', sha: f.developmentHead } };
   else if (path.startsWith('pulls?')) result = [[f.pr]];
   else if (path === 'pulls/42') result = f.pr;
   else if (path === 'pulls/42/reviews?per_page=100') result = [f.reviews];
-  else if (path.startsWith('compare/')) result = { status: f.ancestor
-    && !(f.missingSyncAncestry && path === `compare/${f.pr.head.sha}...${'e'.repeat(40)}`) ? 'ahead' : 'diverged', merge_base_commit: { sha: path.slice(8, 48) } };
+  else if (path.startsWith('compare/')) {
+    if (f.compareUnavailable) throw new Error('synthetic compare transport failure');
+    result = { status: f.ancestor
+      && !(f.missingSyncAncestry && path === `compare/${f.pr.head.sha}...${f.developmentHead}`) ? 'ahead' : 'diverged', merge_base_commit: { sha: path.slice(8, 48) } };
+  }
   else if (path.startsWith('git/trees/')) result = { truncated: false, tree: f.hasLock
     ? [{ path: 'package-lock.json', type: 'blob', sha: '1'.repeat(40) }] : [] };
   else if (path.startsWith('contents/package.json?ref=')) {
@@ -114,6 +117,8 @@ beforeEach(async () => {
   f.hasLock = true;
   f.versionUnavailable = false;
   f.versionReads = [];
+  f.developmentHead = 'e'.repeat(40);
+  f.compareUnavailable = false;
   f.liveAgents = null;
   f.liveTrusted = true;
   // POSIX settlement is the default contract; the native Windows test overrides it.
@@ -197,6 +202,20 @@ it('verifies an inline owner against its exact synchronization head and settles 
   expect(await verifyInlineReleaseDelivery(publisher)).toEqual({ verified: true });
   expect(f.versionReads).toContain(`contents/package.json?ref=${'e'.repeat(40)}`);
   expect(f.versionReads).toContain(`contents/package-lock.json?ref=${'e'.repeat(40)}`);
+  // A previous success cannot prove the newly observed development tree when
+  // the ancestry comparison fails before the version files are read.
+  f.developmentHead = '4'.repeat(40);
+  f.compareUnavailable = true;
+  f.developmentVersion = '2.108.0';
+  expect(await verifyInlineReleaseDelivery(publisher)).toMatchObject({ verified: false });
+  entry = await getReleaseSynchronization(inlinePublication.identity);
+  expect(entry.obligations.synchronizationPr).toMatchObject({ status: 'blocked', blocker: 'evidence-unavailable' });
+  expect(f.versionReads).not.toContain(`contents/package.json?ref=${f.developmentHead}`);
+  f.compareUnavailable = false;
+  expect(await verifyInlineReleaseDelivery(publisher)).toMatchObject({ verified: false,
+    reason: 'synchronizationPr:development-version-behind-publication' });
+  f.developmentVersion = '2.109.0';
+  expect(await verifyInlineReleaseDelivery(publisher)).toEqual({ verified: true });
   f.developmentVersion = '2.108.0';
   expect(await verifyInlineReleaseDelivery(publisher)).toMatchObject({ verified: false,
     reason: 'synchronizationPr:development-version-behind-publication' });
