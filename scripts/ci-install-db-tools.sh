@@ -46,7 +46,8 @@ download_by() {
 # Use PostgreSQL's signed repository for the service's major.
 keyring="${ROOT}/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc"
 sudo install -d "$(dirname "$keyring")"
-sudo curl --fail --silent --show-error --max-time 60 -o "$keyring" https://www.postgresql.org/media/keys/ACCC4CF8.asc
+# Retry connection stalls; --retry-max-time caps the total so the apt budgets below still hold.
+sudo curl --fail --silent --show-error --connect-timeout 15 --max-time 30 --retry 4 --retry-all-errors --retry-delay 3 --retry-max-time 100 -o "$keyring" https://www.postgresql.org/media/keys/ACCC4CF8.asc
 # shellcheck source=/dev/null
 . "${ROOT}/etc/os-release"
 echo "deb [signed-by=${keyring#"$ROOT"}] https://apt.postgresql.org/pub/repos/apt ${VERSION_CODENAME}-pgdg main" |
