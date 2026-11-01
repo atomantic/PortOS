@@ -6,7 +6,9 @@ import { promisify } from 'node:util';
 import { describe, it, expect, vi } from 'vitest';
 import { execFile } from '../../lib/childProcess.js';
 import { findFfmpeg } from '../../lib/ffmpeg.js';
-import { generateSunoSong } from './autonomousSuno.js';
+import { generateSunoSong, __testing } from './autonomousSuno.js';
+
+const { SUNO_RENDER_PROBE } = __testing;
 
 const ffmpeg = await findFfmpeg();
 const execFileAsync = promisify(execFile);
@@ -20,6 +22,11 @@ function completedExport(bytes) {
   page.goto = async () => {};
   page.url = () => `https://suno.com/song/${SONG}`;
   page.close = async () => {};
+  // The song page already shows a finished render, so the readiness wait
+  // returns at once and the export under test starts.
+  page.evaluate = async (_fn, arg) => (arg?.probe === SUNO_RENDER_PROBE
+    ? { onSongPage: true, hasSongLink: true, clocks: ['0:02'], busyLabels: [], status: 'complete' }
+    : undefined);
   const download = {
     saveAs: async (target) => { path = target; await writeFile(target, bytes); },
     failure: async () => null, cancel: async () => {}, delete: async () => {},
