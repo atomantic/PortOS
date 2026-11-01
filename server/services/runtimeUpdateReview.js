@@ -25,69 +25,117 @@ function unknown(previous, fallback) {
   return { ...(previous || fallback), unverified: true, unverifiedPrevious: Boolean(previous && (!previous.unverified || previous.unverifiedPrevious)) };
 }
 
-function reconcileRuntime(rows, status) {
-  const setUnknown = (id, fallback) => rows.set(id, unknown(rows.get(id), fallback));
-  if (!status?.node?.version || !status.pm2) {
-    const prior = [...rows.keys()].filter((id) => !id.startsWith('harness:'));
-    if (prior.length) prior.forEach((id) => rows.set(id, unknown(rows.get(id))));
-    else setUnknown('runtime-check', row('runtime-check', 'Runtime update check unavailable', 'Node.js and pm2 updates could not be checked.', UPDATE_LINK, 'unverified'));
-    return;
-  }
-  rows.delete('runtime-check');
-  const { node, releases, pm2, startup } = status;
+const setUnknown = (rows, id, fallback) => rows.set(id, unknown(rows.get(id), fallback));
+
+/** The newest security target in evidence: the indexed security release, or the floor a non-compliant runtime is below. */
+function securityTarget(releases, baseline, minimum) {
+  return [releases?.latestSecurity?.version, baseline.compliant === false ? minimum : null]
+    .filter(Boolean).sort((a, b) => compareVersions(b, a))[0] || null;
+}
+
+function readNodeEvidence(node, releases) {
   const baseline = node.securityBaseline || {};
   const latest = releases?.latestInLine?.version;
   const minimum = baseline.minimum ? `v${baseline.minimum}` : null;
-  const indexVerified = Boolean(latest && releases.securityVerified !== false
-    && !(baseline.compliant === false && minimum && compareVersions(latest, minimum) < 0));
-  const outdated = latest && compareVersions(latest, node.version) > 0;
-  const security = baseline.compliant === false || releases?.securityUpdate === true;
-  const previousNode = rows.get('node');
-  const securityRevision = [releases?.latestSecurity?.version, baseline.compliant === false ? minimum : null]
-    .filter(Boolean).sort((a, b) => compareVersions(b, a))[0] || null;
-  const previousSecurity = previousNode?.revision?.startsWith('security:') ? previousNode.revision.slice('security:'.length) : null;
-  const newerSecurity = securityRevision && (!previousSecurity || compareVersions(securityRevision, previousSecurity) > 0);
-  if (!indexVerified && previousNode && !(security && (previousNode.severity !== 'high' || newerSecurity))) {
-    rows.set('node', unknown(previousNode));
-  } else if (security || node.inSupportedRange === false || outdated) {
-    const target = outdated && (!securityRevision || compareVersions(latest, securityRevision) >= 0) ? latest : securityRevision;
-    const reason = security ? 'Security update' : node.inSupportedRange === false ? 'Unsupported runtime' : 'Update available';
-    const description = `${reason}: PortOS runs ${node.version}${target ? `; target ${target}` : ''}. Updating Node requires a PortOS restart.`;
-    const entry = row('node', security ? 'Node.js security update needed' : 'Node.js update available', description, UPDATE_LINK,
-      security ? `security:${securityRevision || target}` : `update:${target || node.version}`, security || node.inSupportedRange === false ? 'high' : 'normal');
-    rows.set('node', indexVerified ? entry : unknown(entry));
-  } else if (!indexVerified || baseline.compliant === null) {
-    setUnknown('node', row('node', 'Node.js update status unverified', `PortOS runs ${node.version}; the security and release status could not be verified.`, UPDATE_LINK, 'unverified'));
-  } else rows.delete('node');
+  return {
+    latest,
+    // An index whose newest release is below the known security floor is stale.
+    indexVerified: Boolean(latest && releases.securityVerified !== false
+      && !(baseline.compliant === false && minimum && compareVersions(latest, minimum) < 0)),
+    outdated: latest && compareVersions(latest, node.version) > 0,
+    security: baseline.compliant === false || releases?.securityUpdate === true,
+    unsupported: node.inSupportedRange === false,
+    complianceUnknown: baseline.compliant === null,
+    securityRevision: securityTarget(releases, baseline, minimum),
+  };
+}
 
+/** An unverified index keeps the last known row unless it brings security evidence that row does not already carry. */
+function holdsPreviousNodeRow(previous, { security, securityRevision }) {
+  if (!previous) return false;
+  if (!security) return true;
+  if (previous.severity !== 'high') return false;
+  const previousSecurity = previous.revision?.startsWith('security:') ? previous.revision.slice('security:'.length) : null;
+  return !securityRevision || Boolean(previousSecurity && compareVersions(securityRevision, previousSecurity) <= 0);
+}
+
+function nodeUpdateRow(node, { latest, outdated, security, unsupported, securityRevision }) {
+  const target = outdated && (!securityRevision || compareVersions(latest, securityRevision) >= 0) ? latest : securityRevision;
+  const reason = security ? 'Security update' : unsupported ? 'Unsupported runtime' : 'Update available';
+  const description = `${reason}: PortOS runs ${node.version}${target ? `; target ${target}` : ''}. Updating Node requires a PortOS restart.`;
+  return row('node', security ? 'Node.js security update needed' : 'Node.js update available', description, UPDATE_LINK,
+    security ? `security:${securityRevision || target}` : `update:${target || node.version}`, security || unsupported ? 'high' : 'normal');
+}
+
+function reconcileNodeRow(rows, node, releases) {
+  const evidence = readNodeEvidence(node, releases);
+  const previous = rows.get('node');
+  if (!evidence.indexVerified && holdsPreviousNodeRow(previous, evidence)) {
+    rows.set('node', unknown(previous));
+  } else if (evidence.security || evidence.unsupported || evidence.outdated) {
+    const entry = nodeUpdateRow(node, evidence);
+    rows.set('node', evidence.indexVerified ? entry : unknown(entry));
+  } else if (!evidence.indexVerified || evidence.complianceUnknown) {
+    setUnknown(rows, 'node', row('node', 'Node.js update status unverified', `PortOS runs ${node.version}; the security and release status could not be verified.`, UPDATE_LINK, 'unverified'));
+  } else rows.delete('node');
+}
+
+function pm2AlignmentRow(pm2, nodeVersion, nodeMismatch) {
   const daemonNode = pm2.daemon?.nodeVersion;
-  const daemonComparison = compareHarnessVersions(typeof daemonNode === 'string' ? daemonNode.replace(/^v/, '') : null, node.version.replace(/^v/, ''));
+  const action = pm2.daemonStale ? 'Synchronizing the daemon requires a restart.'
+    : nodeMismatch ? 'Review the differing Node versions; the pm2 sync action cannot fix this mismatch on its own.'
+      : 'The terminal CLI can be synchronized without a restart.';
+  const summary = `PortOS bundles pm2 ${pm2.shipped}; terminal ${pm2.cli || 'not installed'}, daemon ${pm2.daemon?.pm2Version || 'unknown'} on Node ${daemonNode || 'unknown'}; PortOS runs ${nodeVersion}. ${action}`;
+  return row('pm2-sync', 'Review pm2 runtime alignment', summary, UPDATE_LINK,
+    `${pm2.shipped}:${pm2.cli || ''}:${pm2.daemon?.pm2Version || ''}:${daemonNode || ''}:${nodeVersion}`);
+}
+
+function reconcilePm2SyncRow(rows, pm2, nodeVersion) {
+  const daemonNode = pm2.daemon?.nodeVersion;
+  const daemonComparison = compareHarnessVersions(typeof daemonNode === 'string' ? daemonNode.replace(/^v/, '') : null, nodeVersion.replace(/^v/, ''));
+  const daemonUnreadable = !pm2.daemon?.pm2Version || daemonComparison === null;
   const nodeMismatch = daemonComparison !== null && daemonComparison !== 0;
   if (pm2.shipped && (pm2.cliBehind || pm2.daemonStale || nodeMismatch)) {
-    const action = pm2.daemonStale ? 'Synchronizing the daemon requires a restart.'
-      : nodeMismatch ? 'Review the differing Node versions; the pm2 sync action cannot fix this mismatch on its own.'
-        : 'The terminal CLI can be synchronized without a restart.';
-    const summary = `PortOS bundles pm2 ${pm2.shipped}; terminal ${pm2.cli || 'not installed'}, daemon ${pm2.daemon?.pm2Version || 'unknown'} on Node ${daemonNode || 'unknown'}; PortOS runs ${node.version}. ${action}`;
-    const entry = row('pm2-sync', 'Review pm2 runtime alignment', summary, UPDATE_LINK,
-      `${pm2.shipped}:${pm2.cli || ''}:${pm2.daemon?.pm2Version || ''}:${daemonNode || ''}:${node.version}`);
-    rows.set('pm2-sync', !pm2.daemon?.pm2Version || daemonComparison === null ? unknown(entry) : entry);
-  } else if (!pm2.shipped || !pm2.daemon?.pm2Version || daemonComparison === null || ['unverified', 'unsupported'].includes(pm2.cliState)) {
+    const entry = pm2AlignmentRow(pm2, nodeVersion, nodeMismatch);
+    rows.set('pm2-sync', daemonUnreadable ? unknown(entry) : entry);
+  } else if (!pm2.shipped || daemonUnreadable || ['unverified', 'unsupported'].includes(pm2.cliState)) {
     const entry = unknown(rows.get('pm2-sync'), row('pm2-sync', 'pm2 runtime status unverified', `PortOS bundles pm2 ${pm2.shipped || 'unknown'}; its daemon or terminal CLI could not be verified.`, UPDATE_LINK, 'unverified'));
-    rows.set('pm2-sync', { ...entry, retrySoon: pm2.cliState !== 'unsupported' || !pm2.daemon?.pm2Version || daemonComparison === null });
+    rows.set('pm2-sync', { ...entry, retrySoon: pm2.cliState !== 'unsupported' || daemonUnreadable });
   } else rows.delete('pm2-sync');
+}
 
+function reconcilePm2UpstreamRow(rows, pm2) {
   if (!pm2.shipped || !pm2.latest) {
-    setUnknown('pm2-upstream', row('pm2-upstream', 'pm2 release status unverified', `PortOS bundles pm2 ${pm2.shipped || 'unknown'}; the npm release could not be checked.`, UPDATE_LINK, 'unverified'));
-  } else if (compareHarnessVersions(pm2.shipped, pm2.latest) === -1) {
+    setUnknown(rows, 'pm2-upstream', row('pm2-upstream', 'pm2 release status unverified', `PortOS bundles pm2 ${pm2.shipped || 'unknown'}; the npm release could not be checked.`, UPDATE_LINK, 'unverified'));
+    return;
+  }
+  const comparison = compareHarnessVersions(pm2.shipped, pm2.latest);
+  if (comparison === -1) {
     rows.set('pm2-upstream', row('pm2-upstream', 'A newer pm2 release is available', `PortOS bundles pm2 ${pm2.shipped}; npm has ${pm2.latest}. The pm2 sync action installs the bundled version, so a newer bundle requires a PortOS dependency update.`, UPDATE_LINK, `${pm2.shipped}:${pm2.latest}`));
-  } else if (compareHarnessVersions(pm2.shipped, pm2.latest) === null) {
-    setUnknown('pm2-upstream', row('pm2-upstream', 'pm2 release status unverified', 'The bundled and published pm2 versions could not be compared.', UPDATE_LINK, 'unverified'));
+  } else if (comparison === null) {
+    setUnknown(rows, 'pm2-upstream', row('pm2-upstream', 'pm2 release status unverified', 'The bundled and published pm2 versions could not be compared.', UPDATE_LINK, 'unverified'));
   } else rows.delete('pm2-upstream');
+}
 
+function reconcilePm2StartupRow(rows, startup, nodeVersion) {
   if (startup?.configured && startup.current === false) {
-    rows.set('pm2-startup', row('pm2-startup', 'pm2 start-on-boot uses another Node', `PortOS runs ${node.version}; review the startup configuration so the correct Node is used after boot.`, UPDATE_LINK, node.version));
+    rows.set('pm2-startup', row('pm2-startup', 'pm2 start-on-boot uses another Node', `PortOS runs ${nodeVersion}; review the startup configuration so the correct Node is used after boot.`, UPDATE_LINK, nodeVersion));
   } else if (startup?.current !== true && rows.has('pm2-startup')) rows.set('pm2-startup', unknown(rows.get('pm2-startup')));
   else rows.delete('pm2-startup');
+}
+
+function reconcileRuntime(rows, status) {
+  if (!status?.node?.version || !status.pm2) {
+    const prior = [...rows.keys()].filter((id) => !id.startsWith('harness:'));
+    if (prior.length) prior.forEach((id) => rows.set(id, unknown(rows.get(id))));
+    else setUnknown(rows, 'runtime-check', row('runtime-check', 'Runtime update check unavailable', 'Node.js and pm2 updates could not be checked.', UPDATE_LINK, 'unverified'));
+    return;
+  }
+  rows.delete('runtime-check');
+  reconcileNodeRow(rows, status.node, status.releases);
+  reconcilePm2SyncRow(rows, status.pm2, status.node.version);
+  reconcilePm2UpstreamRow(rows, status.pm2);
+  reconcilePm2StartupRow(rows, status.startup, status.node.version);
 }
 
 function reconcileHarnesses(rows, harnesses, removedHarnesses, removalsBeforeRead) {
