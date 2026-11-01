@@ -514,6 +514,14 @@ esac
     expect(runAlias(join(aliases, 'python3'), [dir, tools])).toBe(true);
     expect(runAlias('python3', [join(namedRoot, 'bin'), aliases, dir, tools])).toBe(true);
     expect(runAlias('python3', [join(namedRoot, 'bin'), aliases, later, dir, tools])).toBe(false);
+    // A path that walks through a directory link inside the venv still depends
+    // on the venv, even though that link resolves out of it.
+    prepareNamed();
+    symlinkSync(later, join(namedRoot, 'bin', 'alias'));
+    execFileSync('bash', ['-c', `${apple}\n${atLeast}\n${reset}\nreset_universal_venv "$1" "$2"`, 'bash', namedRoot, join(namedRoot, 'bin', 'alias', 'python3')], {
+      env: { ...process.env, PATH: [dir, tools].join(':'), ARCHES: 'x86_64 arm64', RECREATE_ARCHES: 'arm64', MACHINE: 'arm64' },
+    });
+    expect(existsSync(namedRoot)).toBe(true);
   });
 
   it.skipIf(process.platform === 'win32')('does not choose a python inside the venv it may delete', () => {
