@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 const api = vi.hoisted(() => ({
@@ -148,5 +148,89 @@ describe('MessageDetail thread load', () => {
     expect(await screen.findByText('Second')).toBeTruthy();
     expect(screen.getByText('2 messages')).toBeTruthy();
     expect(screen.queryByRole('alert')).toBeNull();
+  });
+});
+
+
+describe('MessageDetail refresh ordering', () => {
+  const threaded = { ...baseMessage, threadId: 'thr-1', bodyText: 'Original message' };
+  const fresh = [
+    { ...threaded, bodyText: 'Fresh first' },
+    { ...threaded, id: 'msg-2', bodyText: 'Fresh second' },
+  ];
+  const deferred = () => {
+    let resolve;
+    let reject;
+    const promise = new Promise((res, rej) => { resolve = res; reject = rej; });
+    return { promise, resolve, reject };
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.getMessageThread.mockResolvedValue({ messages: [] });
+    api.refreshMessage.mockResolvedValue(fresh);
+  });
+
+  it('supersedes an outstanding thread read after refresh and ignores its late snapshot', async () => {
+    const initial = deferred();
+    const reconciliation = deferred();
+    api.getMessageThread.mockReturnValueOnce(initial.promise).mockReturnValueOnce(reconciliation.promise);
+    renderMessage(threaded);
+    await waitFor(() => expect(api.getMessageThread).toHaveBeenCalledTimes(1));
+    await userEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    await waitFor(() => expect(api.getMessageThread).toHaveBeenCalledTimes(2));
+    await act(async () => reconciliation.resolve({ messages: fresh }));
+    expect(screen.getByText('Fresh second')).toBeInTheDocument();
+    await act(async () => initial.resolve({ messages: [{ ...threaded, bodyText: 'Stale body' }] }));
+    expect(screen.getByText('Fresh second')).toBeInTheDocument();
+    expect(screen.queryByText('Stale body')).not.toBeInTheDocument();
+  });
+
+  it('keeps reconciliation failure visible with retry and the refreshed message fallback', async () => {
+    const initial = deferred();
+    api.getMessageThread.mockReturnValueOnce(initial.promise)
+      .mockRejectedValueOnce(new Error('Reconciliation unavailable'))
+      .mockResolvedValueOnce({ messages: fresh });
+    renderMessage(threaded);
+    await waitFor(() => expect(api.getMessageThread).toHaveBeenCalledTimes(1));
+    await userEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Reconciliation unavailable');
+    expect(screen.getByText('Fresh first')).toBeInTheDocument();
+    expect(screen.queryByText('2 messages')).not.toBeInTheDocument();
+    await act(async () => initial.resolve({ messages: [] }));
+    expect(screen.getByRole('alert')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('Fresh second')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it.each([
+    { accountId: 'acct-2', threadId: 'thr-1' },
+    { accountId: 'acct-1', threadId: 'thr-2' },
+  ])('drops refresh completion after switching to $accountId/$threadId', async (identity) => {
+    const refresh = deferred();
+    api.refreshMessage.mockReturnValueOnce(refresh.promise);
+    const { rerender } = renderMessage(threaded);
+    expect(await screen.findByText('Original message')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    const next = { ...threaded, ...identity, bodyText: 'Selected thread' };
+    rerender(<MessageDetail message={next} accounts={[{ id: next.accountId }]} onBack={() => {}} />);
+    expect(await screen.findByText('Selected thread')).toBeInTheDocument();
+    await act(async () => refresh.resolve(fresh));
+    expect(screen.getByText('Selected thread')).toBeInTheDocument();
+    expect(screen.queryByText('Fresh first')).not.toBeInTheDocument();
+    expect(screen.queryByText('Fresh second')).not.toBeInTheDocument();
+    expect(api.getMessageThread).toHaveBeenCalledTimes(2);
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Refresh' })).toBeEnabled();
+  });
+
+  it('updates a ready thread immediately without another list read', async () => {
+    api.getMessageThread.mockResolvedValueOnce({ messages: [threaded] });
+    renderMessage(threaded);
+    expect(await screen.findByText('Original message')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    expect(await screen.findByText('Fresh second')).toBeInTheDocument();
+    expect(api.getMessageThread).toHaveBeenCalledTimes(1);
   });
 });

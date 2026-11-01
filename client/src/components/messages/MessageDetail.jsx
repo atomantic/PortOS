@@ -152,17 +152,32 @@ export default function MessageDetail({ message, accounts, onBack }) {
     items: threadMessages, state: threadState, error: threadError, retry: retryThread, setItems: setThreadMessages,
   } = useListResource(fetchThread, { enabled: hasThreadRef });
   const threadLoading = hasThreadRef && threadState === 'loading';
+  const threadStateRef = useRef(threadState);
+  useEffect(() => { threadStateRef.current = threadState; }, [threadState]);
+  const refreshGeneration = useRef(0);
+  useEffect(() => {
+    setRefreshing(false);
+    return () => { refreshGeneration.current += 1; };
+  }, [message.id, accountId, threadId]);
 
   const handleRefresh = async () => {
+    const generation = ++refreshGeneration.current;
     setRefreshing(true);
     const result = await api.refreshMessage(message.accountId, message.id).catch(() => null);
+    if (generation !== refreshGeneration.current) return;
     setRefreshing(false);
     if (!result) return;
     if (result.error) return toast.error(result.error);
     if (Array.isArray(result)) {
       const updated = result.find(m => m.id === message.id) || result[0];
       if (updated) setDisplayedMessage(prev => ({ ...prev, ...updated }));
-      if (result.length > 1) setThreadMessages(result);
+      if (hasThreadRef && threadStateRef.current !== 'ready') {
+        // Supersede an outstanding read (or retry a failed one), so it cannot
+        // replace confirmed refreshed content with its older snapshot.
+        retryThread();
+      } else if (result.length > 1) {
+        setThreadMessages(result);
+      }
     }
     toast.success('Message content refreshed');
   };
