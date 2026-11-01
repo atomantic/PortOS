@@ -133,12 +133,6 @@ function panelSubjects(subjects, panel) {
   return subjects.filter((subject) => !kindsNamed.has(subject?.kind) || named(subject));
 }
 
-const REFERENCE_NOTE_MAX = 400;
-const clipped = (value) => {
-  const t = String(value || '').trim().replace(/\s+/g, ' ');
-  return t.length > REFERENCE_NOTE_MAX ? `${t.slice(0, REFERENCE_NOTE_MAX - 1)}…` : t;
-};
-
 /**
  * Which reference image is whom, in send order. A still conditioned on
  * two people's sheets, a set plate and a prop sheet is otherwise left to guess
@@ -147,25 +141,23 @@ const clipped = (value) => {
  * `references` are visual-spec references in the order the render sends them;
  * a null entry (a picked frame, an upload) keeps its position but says nothing.
  * The storyboard panel has its own note. Returns '' when no character, set or
- * prop reference is sent.
+ * prop or wardrobe reference is sent.
  */
-export function musicVideoReferenceMapText(references = []) {
+function musicVideoReferenceMapText(references = []) {
   const lines = (Array.isArray(references) ? references : []).flatMap((ref, i) => {
     const n = i + 1;
     if (!ref || ref.panelArt) return [];
-    const label = clipped(ref.label) || 'a reference';
-    const note = clipped(ref.note);
+    const label = typeof ref.label === 'string' && ref.label.trim() ? ref.label : 'a reference';
+    const note = typeof ref.note === 'string' ? ref.note : '';
     if (ref.role === 'character') {
       return [`Reference image ${n} is ${label}: this exact person. Match their face, hair, skin, build and age exactly${note ? ` (${note})` : ''}; never blend their face with anyone else's.`];
     }
-    if (ref.role === 'set') return [`Reference image ${n} is the empty set "${label}": take only the place, period and light from it; it shows no people.`];
+    if (ref.role === 'set') return [`Reference image ${n} is the set reference "${label}": use its place, period and light.`];
     if (ref.role === 'prop') return [`Reference image ${n} is the prop sheet: every object from it that appears in the shot looks exactly as shown there${note ? ` (${note})` : ''}. Never show the sheet itself, its captions or its backdrop.`];
     if (ref.role === 'wardrobe') return [`Reference image ${n} is the wardrobe sheet "${label}": dress the people exactly as shown there.`];
     return [];
   });
-  if (!lines.length) return '';
-  const people = (references || []).filter((ref) => ref?.role === 'character').length;
-  return [...lines, people ? 'Every person in the shot is one of the people in these references, with their own face; add nobody else.' : ''].filter(Boolean).join(' ');
+  return lines.join(' ');
 }
 
 const storyboardSketchNote = (position) => `Reference image ${position} is the storyboard sketch for this shot: copy its camera angle, framing and where each person is, and add no one it does not show. Take only its layout, not its sketch style.`;

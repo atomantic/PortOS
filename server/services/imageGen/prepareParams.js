@@ -29,7 +29,7 @@
 
 import { createHash, randomUUID } from 'crypto';
 import { applyImageVisualProfile } from './visualProfile.js';
-import { musicVideoStyleImages, musicVideoStylePrompt, musicVideoStyleReferenceCapacity } from '../../lib/musicVideoConditioning.js';
+import { musicVideoCastGuideReferences, musicVideoPanelArtReferences, musicVideoStyleImages, musicVideoStylePrompt, musicVideoStyleReferenceCapacity } from '../../lib/musicVideoConditioning.js';
 import { musicVideoFrameModelInput } from '../../lib/musicVideoShotPrompt.js';
 import { join } from 'node:path';
 import { ServerError } from '../../lib/errorHandler.js';
@@ -172,26 +172,43 @@ function placeGreyboxReference(namedReferenceFiles, imageId, { cachedCapture, fr
 async function applyMusicVideoSceneInputs(data, { project, mode, localModel, namedReferenceFiles, referenceUploads, initInputCount }) {
   const tag = data.musicVideo;
   const scene = project?.scenes?.find((entry) => entry.sceneId === tag.sceneId);
-  const [{ loadMusicVideoGreybox }, { loadLinkedStoryboardPanel }] = await Promise.all([
+  const [{ loadMusicVideoGreybox }, { loadLinkedStoryboardPanel }, castGuideMedia] = await Promise.all([
     import('../musicVideo/greyboxReferences.js'), import('../musicVideo/linkedPanel.js'),
+    tag.compose ? import('../musicVideo/castGuideMedia.js') : null,
   ]);
-  const [greybox, panel] = await Promise.all([
+  const [greybox, panel, castMedia] = await Promise.all([
     loadMusicVideoGreybox(project, scene), tag.compose ? loadLinkedStoryboardPanel(project, scene) : null,
+    castGuideMedia?.loadSceneCastMedia(scene),
   ]);
   if (greybox) {
     placeGreyboxReference(namedReferenceFiles, greybox.reference.imageId, { cachedCapture: tag.greyboxImageId, fromFrame: tag.fromFrame || tag.refine });
   }
   if (tag.compose) {
+    // FLUX.2's KV runner ignores init images when references are present; its
+    // LoRA route can instead drop the references. Match what reaches the model.
+    const flux2 = !data.mediaProviderPeerId && mode === IMAGE_GEN_MODE.LOCAL && isFlux2(localModel);
+    // An invalid LoRA can be discarded later, so do not assert a reference map
+    // when a requested LoRA makes its eventual input list uncertain.
+    const refsDropped = Boolean(flux2 && (data.loraPaths?.length || data.loraFilenames?.length) && localModel?.quantization !== 'none');
+    // A peer selects its own runner. With an init image its reference positions
+    // cannot be known here (a FLUX.2 peer may ignore that init image).
+    const positionsUnknown = Boolean(data.mediaProviderPeerId && initInputCount);
+    const sentFiles = refsDropped || positionsUnknown ? [] : namedReferenceFiles;
+    const usesOnlyReferences = flux2 && !refsDropped && (namedReferenceFiles.length + referenceUploads.length > 0);
+    const sentInitCount = usesOnlyReferences ? 0 : initInputCount;
+    const known = [greybox?.reference, ...musicVideoPanelArtReferences(scene), ...musicVideoCastGuideReferences(project, scene, castMedia), ...(project?.visualSpec?.references || [])];
+    const panelIndex = scene?.panelArt ? sentFiles.indexOf(scene.panelArt) : -1;
     // The director's text plus each labeled block PortOS adds (#11317), from the
     // composer the server's production run uses for the same still.
     const composed = musicVideoFrameModelInput(project, scene, {
       slot: tag.slot === 'end' ? 'end' : 'start', authored: data.prompt || '', greybox,
       fromFrame: tag.fromFrame === true, refine: tag.refine === true,
       // The picked frame comes first; any reference after it is the shot's character or set reference.
-      otherReferences: Math.max(0, namedReferenceFiles.length + referenceUploads.length - 1),
-      panel, panelReference: scene?.panelArt ? namedReferenceFiles.indexOf(scene.panelArt) + 1 : 0,
-      // Which named file is whom; a picked frame or other file outside the project's references stays unnamed.
-      references: namedReferenceFiles.map((file) => (project?.visualSpec?.references || []).find((ref) => ref?.imageId === file) || null),
+      otherReferences: Math.max(0, sentInitCount + sentFiles.length + (refsDropped ? 0 : referenceUploads.length) - 1),
+      panel, panelReference: panelIndex >= 0 ? sentInitCount + panelIndex + 1 : 0,
+      // An init image or picked frame occupies a slot without being a character sheet.
+      references: [...Array(sentInitCount).fill(null), ...sentFiles.map((file, index) =>
+        !sentInitCount && index === 0 && (tag.fromFrame || tag.refine) ? null : known.find((ref) => ref?.imageId === file) || null)],
     });
     data.prompt = composed.prompt;
     if (composed.promptAdditions.length) data.promptAdditions = [...(data.promptAdditions || []), ...composed.promptAdditions];

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { authoredShotPrompt, musicVideoFrameModelInput, musicVideoReferenceMapText, musicVideoShotModelInput } from './musicVideoShotPrompt.js';
+import { authoredShotPrompt, musicVideoFrameModelInput, musicVideoShotModelInput } from './musicVideoShotPrompt.js';
 
 const project = {
   concept: {
@@ -126,32 +126,37 @@ describe('authoredShotPrompt', () => {
   });
 });
 
-// Uniquely catches a still conditioned on two people's sheets with nothing saying which face is
-// whose, so the model swaps or blends the faces (Hold Still, 2026-11-01).
+// A composed still must identify each sent image without changing the director's notes
+// or assuming the supplied references contain everyone in the shot.
 describe('reference map', () => {
   const references = [
-    { id: 'mvr-cs-character', imageId: 'renee.png', role: 'character', label: 'Renee — character sheet', note: 'sunburned nose, crooked front tooth; frizzy dirty-blond perm' },
+    { id: 'mvr-cs-character', imageId: 'lead.png', role: 'character', label: 'Example lead', note: 'short hair; blue coat' },
     null,
-    { id: 'mvr-cs-cast-kevin', imageId: 'kevin.png', role: 'character', label: 'Kevin — cast sheet', note: 'long narrow face, ears that stick out; shaggy middle-parted brown hair' },
-    { id: 'mvr-cs-set-street', imageId: 'street.png', role: 'set', label: 'Cul-de-sac at dusk' },
+    { id: 'mvr-cs-cast-other', imageId: 'other.png', role: 'character', label: 'Example guest', note: 'long hair' },
+    { id: 'mvr-cs-set-street', imageId: 'street.png', role: 'set', label: 'Example street' },
     { id: 'mvr-cs-props', imageId: 'props.png', role: 'prop', label: 'Props' },
   ];
 
   it('names each reference image by its send position, with the face text in full', () => {
-    const text = musicVideoReferenceMapText(references);
-    expect(text).toContain('Reference image 1 is Renee — character sheet: this exact person. Match their face, hair, skin, build and age exactly (sunburned nose, crooked front tooth; frizzy dirty-blond perm)');
-    expect(text).toContain('Reference image 3 is Kevin — cast sheet: this exact person.');
-    expect(text).toContain('Reference image 4 is the empty set "Cul-de-sac at dusk": take only the place');
+    const input = musicVideoFrameModelInput(project, scene, { references });
+    const text = input.promptAdditions.find((item) => item.id === 'reference-map').text;
+    expect(text).toContain('Reference image 1 is Example lead: this exact person. Match their face, hair, skin, build and age exactly (short hair; blue coat)');
+    expect(text).toContain('Reference image 3 is Example guest: this exact person.');
+    expect(text).toContain('Reference image 4 is the set reference "Example street"');
     expect(text).toContain('Reference image 5 is the prop sheet');
     expect(text).not.toContain('Reference image 2');
-    expect(text).toMatch(/Every person in the shot is one of the people in these references/);
-    expect(musicVideoReferenceMapText([null, { role: 'mood', imageId: 'x.png' }])).toBe('');
+    expect(text).not.toContain('add nobody else');
+    expect(input.prompt).toContain(text);
+    expect(ids(musicVideoFrameModelInput(project, scene, { references: [null, { role: 'mood', imageId: 'x.png' }] }))).not.toContain('reference-map');
   });
 
-  it('leads the still\'s look blocks when references are sent, and is absent otherwise', () => {
-    const input = musicVideoFrameModelInput(project, scene, { references });
+  it('preserves a long, multiline reference note in the listed and sent prompt', () => {
+    const note = `${'An invented detail. '.repeat(35)}\nKeep  the spacing.`;
+    const input = musicVideoFrameModelInput(project, scene, { references: [{ ...references[0], note }] });
     expect(ids(input)[0]).toBe('reference-map');
-    expect(input.prompt).toContain('Reference image 1 is Renee — character sheet');
+    const text = input.promptAdditions[0].text;
+    expect(text).toContain(note);
+    expect(input.prompt).toContain(text);
     expect(ids(musicVideoFrameModelInput(project, scene))).not.toContain('reference-map');
   });
 });
