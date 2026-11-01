@@ -1,5 +1,5 @@
 import { execFileSync } from 'child_process';
-import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
@@ -337,6 +337,13 @@ printf '%s\\n' '0'
     chmodSync(uname, 0o755);
     chmodSync(lipo, 0o755);
     chmodSync(sysctl, 0o755);
+    // Linux CI's /bin is /usr/bin and contains python3. The lipo stub reports
+    // ARCHES for every binary except "recreate", so that interpreter looks like
+    // a universal replacement and the reset deletes the venv under test.
+    const tools = join(dir, 'tools');
+    mkdirSync(tools);
+    symlinkSync('/bin/bash', join(tools, 'bash'));
+    symlinkSync('/bin/rm', join(tools, 'rm'));
     const recreate = join(dir, 'recreate');
     writeFileSync(recreate, `#!/bin/bash
 case "$*" in
@@ -430,7 +437,7 @@ esac
     execFileSync('bash', ['-c', `${apple}\n${atLeast}\n${reset}\nreset_universal_venv "$1" python3`, 'bash', namedRoot], {
       env: {
         ...process.env,
-        PATH: `${join(namedRoot, 'bin')}:${dir}:/bin`,
+        PATH: `${join(namedRoot, 'bin')}:${dir}:${tools}`,
         ARCHES: 'x86_64 arm64',
         RECREATE_ARCHES: 'arm64',
         MACHINE: 'arm64',
