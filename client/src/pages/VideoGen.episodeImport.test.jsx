@@ -42,6 +42,21 @@ describe('VideoGen Episode Composer FableLoom import', () => {
     expect(screen.getByTestId('episode-composer')).toBeInTheDocument();
   });
 
+  it('does not keep the previous episode\'s scenes after switching to an episode with none', async () => {
+    state.getLoom.mockResolvedValue({
+      episodes: [
+        { id: 'ep-1', nodes: [{ id: 'n1', title: 'Dock', prose: 'Rain on the pier.' }] },
+        { id: 'ep-2', nodes: [] },
+      ],
+    });
+    await renderVideoGenPage(IMPORT_ENTRY);
+    expect(await screen.findByText('1 imported scenes')).toBeInTheDocument();
+
+    await act(async () => { state.navigate('/media/video?episode=1&loomId=loom-1&episodeId=ep-2'); });
+    await waitFor(() => expect(state.getLoom).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText('0 imported scenes')).toBeInTheDocument();
+  });
+
   it('does not carry a failed import into a plain composer opened after Back', async () => {
     state.getLoom.mockRejectedValueOnce(new Error('loom unavailable'));
     await renderVideoGenPage(IMPORT_ENTRY);
