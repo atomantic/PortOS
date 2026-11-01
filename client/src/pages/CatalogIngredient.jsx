@@ -1055,7 +1055,7 @@ function IngredientEditor() {
                     }).catch(error => toast.error(error.message || 'Could not refresh the character.'));
                   }} />}
               </div>}
-              primaryActions={<div className="space-y-3"><div className="flex flex-wrap items-start gap-2">
+              primaryActions={<div className="grid grid-cols-1 gap-3 md:grid-cols-2 items-start"><div className="flex flex-wrap items-start gap-2">
                 <GenerateImageControl key={record.id} ingredientId={record.id} name={name} description={genDescription}
                   universeId={universeRef?.refId || null} onComplete={handleGeneratedImage}
                   disabled={identityReadOnly || payload.locked === true || characterActionBusy || saving || unlocking || lookSaving || !!externalDetails} />

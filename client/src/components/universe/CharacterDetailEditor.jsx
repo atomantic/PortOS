@@ -1441,9 +1441,8 @@ function CharacterDetailForm({ entry, universeId = null, onPatch, onExpand, expa
     entry={entry} onPatchList={patchField} disabled={disabled} />;
 
   return (
-    <div className="mt-3 space-y-3">
-      <div className="flex flex-wrap items-center justify-between gap-2 border-t border-port-border pt-3">
-        <span />
+    <div className="space-y-3">
+      {(universeId || onExpand) && <div className="flex flex-wrap items-center justify-end gap-2">
         {universeId && (<Link
         to={`/voices?${new URLSearchParams({ universeId, characterId: entry.id })}`}
         className="inline-flex items-center gap-1 text-xs text-port-accent hover:underline"
@@ -1458,17 +1457,17 @@ function CharacterDetailForm({ entry, universeId = null, onPatch, onExpand, expa
             AI: expand character
           </button>
         ) : null}
-      </div>
-      <div className="rounded-lg border border-port-border bg-port-card p-3 space-y-3">
-        {renderFields([SECTIONS.find(section => section.key === 'visualIdentity').fields[0]])}
-        {primaryActions}
-      </div>
-      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[240px_minmax(0,1fr)] items-start">
-        <aside className="min-w-0 space-y-3" aria-label={`${entry.name} identity`}>
-          <div className={`rounded-lg border border-port-accent/30 bg-port-accent/5 p-3 xl:p-4 grid gap-3 ${portrait ? 'grid-cols-[80px_minmax(0,1fr)] xl:grid-cols-1' : 'grid-cols-1'}`}>
+      </div>}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_240px] items-start">
+        <div className="min-w-0 rounded-lg border border-port-border bg-port-card p-3 space-y-3 lg:col-start-1 lg:row-start-1">
+          {renderFields([SECTIONS.find(section => section.key === 'visualIdentity').fields[0]])}
+          {primaryActions}
+        </div>
+        <aside className="min-w-0 space-y-3 lg:col-start-2 lg:row-start-1 lg:row-span-2" aria-label={`${entry.name} identity`}>
+          <div className={`rounded-lg border border-port-accent/30 bg-port-accent/5 p-3 lg:p-4 grid gap-3 ${portrait ? 'grid-cols-[80px_minmax(0,1fr)] lg:grid-cols-1' : 'grid-cols-1'}`}>
             {portrait ? <div className="flex justify-center">{portrait}</div> : null}
             <div className="space-y-3">
-              <div className="xl:text-center">
+              <div className="lg:text-center">
                 {(disabled || saveHint) && <p className="text-xs text-gray-500">{disabled ? 'Read-only character' : saveHint}</p>}
               </div>
               {identityControls}
@@ -1477,7 +1476,7 @@ function CharacterDetailForm({ entry, universeId = null, onPatch, onExpand, expa
           </div>
           {listSection('stats')}
         </aside>
-        <div className="min-w-0 space-y-3">
+        <div className="min-w-0 space-y-3 lg:col-start-1 lg:row-start-2">
           <TabPills tabs={SHEET_PAGES} activeTab={activePage} onChange={setActivePage}
             variant="pills" size="sm" mobileCompact ariaLabel={`${entry.name} sheet page`} />
           {SHEET_PAGES.map((page) => (
