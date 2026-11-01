@@ -4,6 +4,7 @@ import { arch, homedir, platform } from 'node:os';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 import { PATHS } from './fileUtils.js';
+import { isAppleSilicon } from './platform.js';
 import { safeChildProcessOptions, whichFirst, whichFirstSync } from './processEnv.js';
 import { createLineReader } from './streamLines.js';
 import { getCudaCapability } from './cudaCapability.js';
@@ -11,10 +12,15 @@ import { getCudaCapability } from './cudaCapability.js';
 const execFileAsync = promisify(execFile);
 const IS_WIN = platform() === 'win32';
 const IS_DARWIN = platform() === 'darwin';
-// Node's os.arch() reports 'arm64' on Apple Silicon, 'x64' on Intel — the
-// platform.machine() probe below reports 'arm64' / 'x86_64'. Normalize both
-// onto the python convention so callers compare apples to apples.
+// Node's os.arch() is 'arm64' or 'x64'. Python's platform.machine() is
+// 'arm64' / 'x86_64'. HOST_ARCH is the Node process in Python's spelling,
+// for interpreter-vs-process compares (isArchMismatch). It is x86_64 when
+// Node itself is under Rosetta. "Can this Mac run MLX?" is hostIsAppleSilicon().
 export const HOST_ARCH = ({ arm64: 'arm64', x64: 'x86_64' })[arch()] || arch();
+
+export function hostIsAppleSilicon() {
+  return isAppleSilicon({ platform: platform(), arch: arch() });
+}
 
 export const REQUIRED_PACKAGES = IS_DARWIN
   ? ['mflux', 'mlx', 'mlx_vlm', 'mlx_video', 'transformers', 'safetensors', 'huggingface_hub', 'numpy', 'cv2', 'tqdm']
@@ -295,11 +301,12 @@ export async function classifyVenvBases() {
 }
 
 export async function detectPython() {
-  // mlx ships arm64-only wheels; prefer an arm64 interpreter on Apple Silicon
-  // so /opt/anaconda3 (often x86_64) doesn't beat /opt/homebrew/bin/python3.
+  // mlx ships arm64-only wheels. On Apple Silicon — including Node under
+  // Rosetta, where HOST_ARCH is x86_64 — prefer an arm64 interpreter so
+  // /opt/anaconda3 (often x86_64, listed first) doesn't beat Homebrew.
   const present = PYTHON_CANDIDATES.filter((p) => existsSync(p));
-  if (IS_DARWIN && HOST_ARCH === 'arm64' && present.length > 1) {
-    const match = await firstArchMatch(present, (a) => a === HOST_ARCH);
+  if (IS_DARWIN && hostIsAppleSilicon() && present.length > 1) {
+    const match = await firstArchMatch(present, (a) => a === 'arm64');
     if (match) return match;
   }
   if (present.length) return present[0];
@@ -307,7 +314,7 @@ export async function detectPython() {
 }
 
 export async function detectArm64Python() {
-  if (!IS_DARWIN || HOST_ARCH !== 'arm64') return null;
+  if (!IS_DARWIN || !hostIsAppleSilicon()) return null;
   const present = PYTHON_CANDIDATES.filter((p) => existsSync(p));
   return firstArchMatch(present, (a) => a === 'arm64');
 }

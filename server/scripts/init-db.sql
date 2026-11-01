@@ -1315,7 +1315,7 @@ CREATE INDEX IF NOT EXISTS idx_universe_runs_universe ON universe_runs (universe
 -- peer-sync push pipeline (record kind `author`, sync category `authors`); a
 -- federated series also keeps its denormalized `author` byline so a peer that
 -- hasn't synced the persona still renders the cover correctly. Mirrors the
--- authors block in db.js ensureSchema().
+-- authors block in server/lib/db/schema/library.js.
 CREATE TABLE IF NOT EXISTS authors (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
@@ -1332,9 +1332,9 @@ CREATE INDEX IF NOT EXISTS idx_authors_live ON authors (deleted) WHERE deleted =
 -- row per artist, the full sanitized record (name, genre, bio, musicalStyle,
 -- physicalDescription, portraitStyle, portraitImageUrl) in `data` JSONB. `name`
 -- mirrors a column for the live-list sort; the LWW/tombstone trio is populated
--- FROM the record body. Artists are db-primary and federation-ready (LWW merge
--- mirrors authors), but the artist record kind is not yet registered in peerSync
--- — local-only for now (see issue #1502). Mirrors the artists block in db.js.
+-- FROM the record body. Artists are db-primary and registered in peerSync
+-- (record kind `artist`, sync category `artists`). Mirrors the artists block
+-- in server/lib/db/schema/library.js.
 CREATE TABLE IF NOT EXISTS artists (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
@@ -1350,9 +1350,9 @@ CREATE INDEX IF NOT EXISTS idx_artists_live ON artists (deleted) WHERE deleted =
 -- Music albums (the Music studio). One row per album, the full sanitized record
 -- (title, artistId + denormalized artist, description, genre, releaseYear,
 -- coverImageUrl, ordered trackIds) in `data` JSONB. `title` mirrors a column for
--- the live-list sort. db-primary + federation-ready (LWW merge mirrors artists),
--- not yet registered in peerSync — local-only for now (see issue #1502). Mirrors
--- the albums block in db.js.
+-- the live-list sort. db-primary and registered in peerSync (record kind
+-- `album`, sync category `albums`). Mirrors the albums block in
+-- server/lib/db/schema/library.js.
 CREATE TABLE IF NOT EXISTS albums (
   id TEXT PRIMARY KEY,
   title TEXT NOT NULL,
@@ -1368,8 +1368,8 @@ CREATE INDEX IF NOT EXISTS idx_albums_live ON albums (deleted) WHERE deleted = F
 -- (title, albumId/artistId FKs + denormalized artist, lyrics, prompt, engine/
 -- modelId/durationSec gen metadata, audioFilename pointing into the shared music
 -- library at data/music/) in `data` JSONB. `title` mirrors a column for queries.
--- db-primary + federation-ready, not yet registered in peerSync — local-only for
--- now (see issue #1502). Mirrors the tracks block in db.js.
+-- db-primary and registered in peerSync (record kind `track`, sync category
+-- `tracks`). Mirrors the tracks block in server/lib/db/schema/library.js.
 CREATE TABLE IF NOT EXISTS tracks (
   id TEXT PRIMARY KEY,
   title TEXT NOT NULL,

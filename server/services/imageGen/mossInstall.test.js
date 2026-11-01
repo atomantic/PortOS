@@ -16,7 +16,7 @@ vi.mock('../../lib/streamingSpawn.js', () => ({ runStreamingCommand: vi.fn() }))
 vi.mock('./mossRuntime.js', async original => ({ ...await original(), mossHostProblem: () => null, probeMossBinary: vi.fn() }));
 import { runStreamingCommand } from '../../lib/streamingSpawn.js';
 import { MOSS_MANIFEST, mossRuntimeDirectory, probeMossBinary } from './mossRuntime.js';
-import { installMossRuntime } from './mossInstall.js';
+import { installMossRuntime, _mossSwiftCommand } from './mossInstall.js';
 
 beforeEach(async () => {
   fixture.data = await mkdtemp(join(tmpdir(), 'portos-moss-install-'));
@@ -29,15 +29,17 @@ beforeEach(async () => {
     return { metal: true };
   });
   runStreamingCommand.mockImplementation(async (bin, args, line, { cwd } = {}) => {
+    const swiftArgs = bin === 'swift' ? args
+      : (bin === '/usr/bin/arch' && args[0] === '-arm64' && args[1] === 'swift' ? args.slice(2) : null);
     if (bin === 'git' && args[0] === 'init') {
       await mkdir(join(args[1], 'Sources', 'MossImageGate'), { recursive: true });
       await writeFile(join(args[1], 'LICENSE'), 'fixture-source-license');
     }
     if (args.includes('rev-parse')) line(MOSS_MANIFEST.sourceRevision);
-    if (bin === 'swift' && args.includes('--version')) line('Swift version 6.4');
-    if (bin === 'swift' && args[0] === 'build') {
+    if (swiftArgs?.includes('--version')) line('Swift version 6.4');
+    if (swiftArgs?.[0] === 'build') {
       const products = join(cwd, '.build', 'release');
-      if (args.includes('--show-bin-path')) line(products);
+      if (swiftArgs.includes('--show-bin-path')) line(products);
       else {
         fixture.buildEntered?.();
         await fixture.holdBuild;
@@ -59,6 +61,19 @@ beforeEach(async () => {
 });
 afterEach(async () => { await rm(fixture.data, { recursive: true, force: true }); });
 
+describe('MOSS Swift target', () => {
+  it('builds arm64 when Node is translated on Apple Silicon', () => {
+    expect(_mossSwiftCommand(['build', '--show-bin-path'], { platform: 'darwin', arch: 'x64', appleSilicon: true }))
+      .toEqual(['/usr/bin/arch', ['-arm64', 'swift', 'build', '--show-bin-path']]);
+  });
+
+  it('keeps the swift binary on native arm64 and on Intel', () => {
+    expect(_mossSwiftCommand(['build'], { platform: 'darwin', arch: 'arm64', appleSilicon: true })).toEqual(['swift', ['build']]);
+    expect(_mossSwiftCommand(['build'], { platform: 'darwin', arch: 'x64', appleSilicon: false })).toEqual(['swift', ['build']]);
+    expect(_mossSwiftCommand(['build'], { platform: 'linux', arch: 'x64', appleSilicon: false })).toEqual(['swift', ['build']]);
+  });
+});
+
 describe('MOSS runtime installation publication', () => {
   it('publishes only the pinned build with relocated Metal resources and dependency notices', async () => {
     const events = [];
@@ -67,7 +82,11 @@ describe('MOSS runtime installation publication', () => {
     expect(await readFile(join(directory, 'moss-image'), 'utf8')).toBe('fixture-executable');
     expect(await readFile(join(directory, 'licenses', 'dependency', 'LICENSE'), 'utf8')).toBe('fixture-dependency-license');
     expect(runStreamingCommand).toHaveBeenCalledWith('git', expect.arrayContaining(['fetch', MOSS_MANIFEST.sourceUrl, MOSS_MANIFEST.sourceRevision]), expect.any(Function), expect.any(Object));
-    expect(runStreamingCommand).toHaveBeenCalledWith('swift', expect.arrayContaining(['--force-resolved-versions']), expect.any(Function), expect.any(Object));
+    const buildArgs = ['build', '-c', 'release', '--product', 'MossImageGate', '--jobs', '4', '--force-resolved-versions'];
+    const [swiftBin, swiftArgs] = _mossSwiftCommand(buildArgs);
+    expect(runStreamingCommand).toHaveBeenCalledWith(swiftBin, swiftArgs, expect.any(Function), expect.any(Object));
+    const [pathBin, pathArgs] = _mossSwiftCommand([...buildArgs, '--show-bin-path']);
+    expect(runStreamingCommand).toHaveBeenCalledWith(pathBin, pathArgs, expect.any(Function), expect.any(Object));
     expect(await readFile(join(directory, 'licenses', 'mlx-swift', 'Source', 'Cmlx', 'json', 'LICENSE.MIT'), 'utf8')).toBe('fixture-vendored-license');
     expect(probeMossBinary).toHaveBeenCalledTimes(1);
     expect(events.at(-1).type).toBe('complete');

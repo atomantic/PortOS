@@ -172,11 +172,14 @@ vi.mock('../services/character.js', () => ({
 // with a hoisted mutable holder + getter lets tests flip between arm64 and
 // x86_64 hosts without re-mocking. Default arm64 keeps every existing test
 // behaving as before.
-const hostArchHolder = vi.hoisted(() => ({ value: 'arm64' }));
+const hostArchHolder = vi.hoisted(() => ({ value: 'arm64', appleSilicon: undefined }));
 
 vi.mock('../lib/pythonSetup.js', () => ({
   REQUIRED_PACKAGES: ['mflux', 'mlx'],
   get HOST_ARCH() { return hostArchHolder.value; },
+  // Undefined follows HOST_ARCH so existing arm64/Intel cases stay put.
+  // Rosetta sets appleSilicon while HOST_ARCH stays x86_64.
+  hostIsAppleSilicon: () => hostArchHolder.appleSilicon ?? hostArchHolder.value === 'arm64',
   isAllowedPython: vi.fn(() => true),
   probePythonHealth: vi.fn(async () => ({
     installed: ['mflux', 'mlx'], missing: [], missingPip: [],
@@ -2155,6 +2158,7 @@ describe('Image Gen Routes', () => {
     afterEach(() => {
       restorePlatform();
       hostArchHolder.value = 'arm64';
+      hostArchHolder.appleSilicon = undefined;
     });
 
     it('exposes hostArch + archMismatch + suggestedArm64Python on matched arch', async () => {
@@ -2216,6 +2220,22 @@ describe('Image Gen Routes', () => {
       expect(r.body.archMismatch).toBe(false);
       expect(r.body.suggestedArm64Python).toBeNull();
       expect(detectArm64Python).not.toHaveBeenCalled();
+    });
+
+    it('flags archMismatch when Node is x64 but the Mac is Apple Silicon', async () => {
+      hostArchHolder.value = 'x86_64';
+      hostArchHolder.appleSilicon = true;
+      probePythonHealth.mockResolvedValueOnce({
+        installed: [], missing: [], missingPip: [],
+        externallyManaged: false, interpreterArch: 'x86_64',
+      });
+      detectArm64Python.mockResolvedValueOnce('/opt/homebrew/bin/python3');
+      const r = await request(app).get(`/api/image-gen/setup/check?pythonPath=${encodeURIComponent('/arch-fields-rosetta')}`);
+      expect(r.status).toBe(200);
+      expect(r.body.hostArch).toBe('arm64');
+      expect(r.body.archMismatch).toBe(true);
+      expect(r.body.suggestedArm64Python).toBe('/opt/homebrew/bin/python3');
+      expect(detectArm64Python).toHaveBeenCalled();
     });
   });
 

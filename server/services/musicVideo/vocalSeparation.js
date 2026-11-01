@@ -23,6 +23,7 @@ import { existsSync } from 'fs';
 import { mkdir, mkdtemp, readdir, rm } from 'fs/promises';
 import { homedir, tmpdir } from 'os';
 import { dirname, join } from 'path';
+import { isAppleSilicon } from '../../lib/platform.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { shortId } from '../../lib/fileUtils.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../../lib/sseUtils.js';
@@ -44,9 +45,13 @@ const DEMUCS_PASSES = 4;
 export const demucsVenvDir = () => process.env.PORTOS_DEMUCS_VENV_DIR || join(homedir(), '.portos', 'venvs', 'demucs');
 export const venvPython = (dir) => (IS_WIN ? join(dir, 'Scripts', 'python.exe') : join(dir, 'bin', 'python'));
 
-/** Best demucs device for this host. */
-function pickDemucsDevice({ platform = process.platform, arch = process.arch, cudaAvailable = false } = {}) {
-  if (platform === 'darwin' && arch === 'arm64') return 'mps';
+/** Best demucs device for this host. MPS is Apple Silicon hardware, including Rosetta.
+ * Leading underscore: the device-selection test is the only out-of-file caller. */
+export function _pickDemucsDevice({
+  platform = process.platform, arch = process.arch, cudaAvailable = false, appleSilicon,
+} = {}) {
+  const silicon = appleSilicon ?? isAppleSilicon({ platform, arch });
+  if (platform === 'darwin' && silicon) return 'mps';
   if (cudaAvailable) return 'cuda';
   return 'cpu';
 }
@@ -223,7 +228,7 @@ export async function startVocalSeparation(projectId, { deps = {}, onProgress = 
           isCancelled: () => job.cancelRequested || isCancelled(),
         });
       };
-      const device = pickDemucsDevice({ cudaAvailable: await d.cudaAvailable() });
+      const device = _pickDemucsDevice({ cudaAvailable: await d.cudaAvailable() });
       let result = await separate(device);
       checkCancel();
       if (!result.success && device !== 'cpu') {
