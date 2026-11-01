@@ -30,7 +30,7 @@ function featuredCast(direction, scene) {
 const CLOSE_FRAMING = /\b(extreme close|close-?up|close on|tight on|selfie|arm'?s[- ]length|face fills)/i;
 
 /** Whether a scene's frame or shot prompt frames a face close. */
-export function isCloseFraming(scene) {
+function isCloseFraming(scene) {
   return CLOSE_FRAMING.test([scene?.framePrompt, scene?.prompt].filter(Boolean).join(' '));
 }
 

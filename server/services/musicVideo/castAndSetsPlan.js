@@ -200,7 +200,7 @@ function buildProceduralImagePlan(direction, { revisionNotes = {}, greyboxes = {
  */
 const expressionGrid = (n) => (n === 0 || n > 4 ? '2 rows x 3 columns' : n === 4 ? '2 rows x 2 columns' : `1 row x ${n} columns`);
 // The angle row every face sheet opens with, so a close-up at any angle has a view of the same face.
-export const FACE_SHEET_ANGLES = 'TOP ROW, five tight head-and-shoulders views with a neutral face: FRONT, 3/4 LEFT, PROFILE LEFT, 3/4 RIGHT, PROFILE RIGHT';
+const FACE_SHEET_ANGLES = 'TOP ROW, five tight head-and-shoulders views with a neutral face: FRONT, 3/4 LEFT, PROFILE LEFT, 3/4 RIGHT, PROFILE RIGHT';
 const CAST_FACE_MOODS = '1) open laugh; 2) shy half-smile; 3) startled; 4) concentrating; 5) quiet and thoughtful';
 
 export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = {}, greyboxes = {}, catalogLikeness = {} } = {}) {
@@ -579,15 +579,15 @@ export function castAndSetsReferences(project, stage) {
     if (sheet) held -= 1;
     push({ id: castReferenceId(c), imageId: images[`cast:${c.id}`]?.imageId, role: 'character', label: `${trimTo(c.name, 80)} — cast sheet`, note: trimTo([c.role, c.height && `Height: ${c.height}`, c.face, c.hair, c.wardrobe].filter(Boolean).join('; '), 1000) }, false, { sheet });
   }
-  // Face sheets condition the close-ups of the person they show (musicVideoConditioningReferences).
-  for (const c of direction.cast || []) {
-    push({ id: castFaceReferenceId(c), imageId: images[`face:${c.id}`]?.imageId, role: 'character', label: `${trimTo(c.name, 80)} — face sheet`, note: trimTo([c.face, c.hair].filter(Boolean).join('; '), 1000) }, false);
-  }
   // The prop sheet conditions only the shots that show a prop (musicVideoConditioningReferences).
   const props = direction.props || [];
   push({ id: CAST_SETS_PROPS_REF_ID, imageId: images.props?.imageId, role: 'prop', label: 'Props', note: trimTo(props.map((item) => `${item.name}: ${item.description}`).join(' | '), 1000) }, false);
   push({ id: `${CAST_SETS_REF_PREFIX}looks`, imageId: images.looks?.imageId, role: 'wardrobe', label: 'Looks', note: trimTo((direction.looks || []).map((l) => l.name).join(', '), 1000) }, false);
   push({ id: `${CAST_SETS_REF_PREFIX}expressions`, imageId: images.expressions?.imageId, role: 'character', label: `${trimTo(p.name || 'Protagonist', 80)} — face sheet`, note: trimTo([p.face, p.hair].filter(Boolean).join('; '), 1000) }, false);
+  // Extra cast face sheets use the remaining slots without displacing existing reference types.
+  for (const c of direction.cast || []) {
+    push({ id: castFaceReferenceId(c), imageId: images[`face:${c.id}`]?.imageId, role: 'character', label: `${trimTo(c.name, 80)} — face sheet`, note: trimTo([c.face, c.hair].filter(Boolean).join('; '), 1000) }, false);
+  }
   return [...existing, ...out];
 }
 
