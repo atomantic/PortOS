@@ -76,6 +76,11 @@ export async function setPrimitiveOwner(id, universeId) {
     const list = current[field] || [];
     if (list.some((entry) => identityIds.includes(entry.ingredientId))) return null;
     if (list.length >= BIBLE_LIMITS.ENTRIES_PER_BIBLE_MAX) fail('This universe’s canon bucket is full. Remove a membership before adding another.', 'UNIVERSE_CANON_FULL');
+    // This write only appends a catalog-sourced entry. Do not reverse-project
+    // unchanged canon entries into unrelated catalog records and revisions.
+    for (const canonField of Object.values(CANON_FIELD)) {
+      for (const entry of current[canonField] || []) if (entry.ingredientId) identityIds.push(entry.ingredientId);
+    }
     return { [field]: [...list, canonEntryFor(ingredient)] };
   }, { transactional: true, canonProjectionGuard: id, canonProjectionIdentityIds: identityIds,
     afterWrite: (_universe, { client }) => membershipRole
@@ -89,7 +94,7 @@ export async function setPrimitiveOwner(id, universeId) {
   return getPrimitiveContext(id).catch(() => getPrimitiveContext(id, { includeDerived: false }));
 }
 
-const CANON_FIELD = Object.freeze({ character: 'characters', place: 'places', object: 'objects' });
+const CANON_FIELD = Object.freeze(Object.assign(Object.create(null), { character: 'characters', place: 'places', object: 'objects' }));
 
 /**
  * A record the user creates themselves starts unlocked. The bit is stamped

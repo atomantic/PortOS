@@ -172,9 +172,9 @@ describe('creative primitive ownership and forks', () => {
     expect(db.state.refs.find((ref) => ref.role === `canon-${type}`).deleted).toBe(true);
   });
 
-  it('adds a generic reference for a non-canon item on initial assignment', async () => {
+  it.each(['idea', 'constructor'])('adds a generic reference for non-canon type %s on initial assignment', async (type) => {
     db.state.refs = [];
-    db.state.ingredients['cat-chr-source'].type = 'idea';
+    db.state.ingredients['cat-chr-source'].type = type;
     const response = await request(app).put(`${path}/owner`).send({ universeId: 'first' });
     expect(response.status).toBe(200);
     expect(response.body.refs).toEqual(expect.arrayContaining([
@@ -350,8 +350,8 @@ describe('creative primitive ownership and forks', () => {
     expect(db.state).toEqual(before);
   });
 
-  it('creates non-canon items with a universe reference and preserves a later removal on replay', async () => {
-    const input = { type: 'idea', name: 'Example premise', payload: { summary: 'A small idea.' }, tags: [] };
+  it.each(['idea', 'constructor'])('creates non-canon type %s with a universe reference and preserves a later removal on replay', async (type) => {
+    const input = { type, name: 'Example premise', payload: { summary: 'A small idea.' }, tags: [] };
     const idea = await createOwnedPrimitive(input, 'second', operationKey);
     expect(idea.payload.summary).toBe('A small idea.');
     expect(db.state.refs).toContainEqual({ ingredientId: idea.id, refKind: 'universe', refId: 'second', role: 'owner' });
@@ -362,8 +362,8 @@ describe('creative primitive ownership and forks', () => {
     expect(reference.deleted).toBe(true);
   });
 
-  it('adds a non-canon fork to its universe without restoring a later removal on replay', async () => {
-    db.state.ingredients['cat-chr-source'].type = 'idea';
+  it.each(['idea', 'constructor'])('adds a non-canon %s fork without restoring a later removal on replay', async (type) => {
+    db.state.ingredients['cat-chr-source'].type = type;
     const input = { universeId: 'second', operationKey };
     const response = await request(app).post(`${path}/fork`).send(input);
     expect(response.status).toBe(201);

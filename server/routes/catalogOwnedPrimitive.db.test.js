@@ -82,10 +82,12 @@ const ingredientIds = new Set();
 const universeIds = new Set();
 const receiptKeys = new Set();
 const scrapIds = new Set();
+const mergeIds = new Set();
 
 afterAll(async () => {
   if (ready) {
     if (receiptKeys.size) await query('DELETE FROM catalog_commit_receipts WHERE operation_key = ANY($1::uuid[])', [[...receiptKeys]]);
+    if (mergeIds.size) await query('DELETE FROM catalog_ingredient_merges WHERE id = ANY($1)', [[...mergeIds]]);
     for (const id of scrapIds) await catalogDB.deleteScrap(id, { hard: true });
     for (const id of ingredientIds) await catalogDB.deleteIngredient(id, { hard: true }).catch(() => {});
     if (universeIds.size) await query('DELETE FROM universes WHERE id = ANY($1)', [[...universeIds]]);
@@ -286,6 +288,50 @@ describe.skipIf(!runDb)('POST /api/catalog/ingredients inside a universe', () =>
 
 describe.skipIf(!runDb)('PUT /api/catalog/ingredients/:id/owner', () => {
   const assign = (id, universeId) => request(app).put(`/api/catalog/ingredients/${id}/owner`).send({ universeId });
+
+  it('does not rewrite existing catalog records or their history when other kinds join the same universe', async () => {
+    const universe = await makeUniverse();
+    const snapshots = [];
+    for (const type of ['character', 'place', 'object', 'character']) {
+      const record = await catalogDB.createIngredient({ type, name: `Example ${type}`, payload: {}, tags: [] });
+      ingredientIds.add(record.id);
+      expect((await assign(record.id, universe.id)).status).toBe(200);
+      for (const snapshot of snapshots) {
+        expect(await catalogDB.getIngredient(snapshot.id)).toEqual(snapshot.record);
+        expect(await catalogDB.listIngredientRevisions(snapshot.id)).toEqual(snapshot.revisions);
+      }
+      const saved = await catalogDB.getIngredient(record.id);
+      expect(saved.payload.schemaVersion).toBeDefined();
+      snapshots.push({ id: record.id, record: saved, revisions: await catalogDB.listIngredientRevisions(record.id) });
+    }
+  });
+
+  it('treats a constructor-named custom item as a reference rather than canon', async () => {
+    const universe = await makeUniverse();
+    const record = await catalogDB.createIngredient({ id: `cat-custom-${randomUUID()}`, type: 'constructor', name: 'Example custom item', payload: {}, tags: [] });
+    ingredientIds.add(record.id);
+    const response = await assign(record.id, universe.id);
+    expect(response.status).toBe(200);
+    expect(await liveUniverseRefs(record.id)).toEqual(['owner', 'reference']);
+  });
+
+  it('keeps the canonical catalog clock when assigning through a locally merged alias', async () => {
+    const universe = await makeUniverse();
+    const source = await catalogDB.createIngredient({ type: 'character', name: 'Example original', payload: {}, tags: [] });
+    const survivor = await catalogDB.createIngredient({ type: 'character', name: 'Example survivor', payload: {}, tags: [] });
+    ingredientIds.add(source.id);
+    ingredientIds.add(survivor.id);
+    await query("UPDATE catalog_ingredients SET updated_at = '2020-01-01T00:00:00.000Z' WHERE id = $1", [survivor.id]);
+    const mergeId = randomUUID();
+    mergeIds.add(mergeId);
+    await query(`INSERT INTO catalog_ingredient_merges (id, source_id, survivor_id, before_state, after_fingerprint)
+      VALUES ($1, $2, $3, '{}'::jsonb, 'fixture')`, [mergeId, source.id, survivor.id]);
+    const before = await catalogDB.getIngredient(survivor.id);
+    expect((await assign(source.id, universe.id)).status).toBe(200);
+    const entry = (await getUniverse(universe.id)).characters.find((item) => item.ingredientId === survivor.id);
+    expect(entry.updatedAt).toBe(before.updatedAt);
+    expect(await catalogDB.getIngredient(survivor.id)).toEqual(before);
+  });
 
   it('adds canon once, preserves existing references and history, and leaves a later removal intact on retry', async () => {
     const universe = await makeUniverse();
