@@ -744,6 +744,8 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   // platform encodes/thumbnails (#12514).
   'POST /api/music-video/:id/render',
   'POST /api/music-video/:id/shots/:sceneId/render',
+  // A sequence take (#14241) queues a paid fal render and ffmpeg-cuts it onto its scenes on completion.
+  'POST /api/music-video/:id/sequence-coverage/render',
   'POST /api/music-video/:id/shot-renders/preview',
   'POST /api/music-video/:id/cold-open/audio',
   'POST /api/music-video/:id/excerpt',

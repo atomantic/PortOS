@@ -881,6 +881,11 @@ export const musicVideoTreatmentCompileSchema = z.object({
 // POST /:id/treatment/apply. Manually edited scene prompts are kept unless the
 // director explicitly lists the scene in `overwrite` with the fingerprint of
 // the prompts they reviewed — a prompt edited after the review stays kept.
+// #14241: the planned run to render as one timed request, named by its scenes in timeline order.
+export const musicVideoSequenceRenderSchema = z.object({
+  sceneIds: z.array(z.string().min(1).max(200)).min(2).max(30),
+});
+
 export const musicVideoTreatmentApplySchema = z.object({
   revision: z.number().int().min(0),
   overwrite: z.array(z.object({

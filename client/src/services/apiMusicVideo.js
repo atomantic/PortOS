@@ -140,6 +140,10 @@ export const getMusicVideoActiveJobs = (id, options = {}) =>
 export const addMusicVideoScene = (id, scene, options = {}) => request(`/music-video/${encodeURIComponent(id)}/scenes`, {
   method: 'POST', body: JSON.stringify(scene), ...options,
 });
+// #14241: queue one planned sequence run (its scenes in timeline order) as a single timed fal request.
+export const renderMusicVideoSequence = (id, sceneIds, options = {}) => request(`/music-video/${encodeURIComponent(id)}/sequence-coverage/render`, {
+  method: 'POST', body: JSON.stringify({ sceneIds }), ...options,
+});
 export const updateMusicVideoScene = (id, sceneId, patch, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/scenes/${encodeURIComponent(sceneId)}`, {
     method: 'PATCH', body: JSON.stringify(patch), ...options,

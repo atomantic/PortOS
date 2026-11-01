@@ -43,6 +43,7 @@ import ScenePoster from './ScenePoster.jsx';
 import SceneRenderTarget, { lastRenderTarget, renderTargetOverrides } from './SceneRenderTarget.jsx';
 import SceneRenderInputs, { shotCardRenderRequest, shotCardRequestProblem } from './SceneRenderInputs.jsx';
 import { isLowResVideo } from '../../lib/videoResolution.js';
+import SceneSequenceCoverage from './SceneSequenceCoverage.jsx';
 import SceneFrameFit from './SceneFrameFit.jsx';
 import SceneCutEffect from './SceneCutEffect.jsx';
 import { plannedTransitions } from '../../lib/musicVideoCutEffects.js';
@@ -370,6 +371,19 @@ export default function SceneCard({
                 title="Cutaway: any video lane animates the frame under the song. Lip-sync: a singer's mouth follows the song. Music-driven: the song slice drives the whole frame's motion (a drummer on the beat). Both need a source-audio provider.">
                 {Object.entries(SHOT_MODE_LABELS).map(([value, text]) => <option key={value} value={value}>{text}</option>)}
               </select>
+              {/* #14241: neighbouring cutaways on one set can share one timed generation. */}
+              {shotModeValue === 'cutaway' && (
+                <>
+                  <label htmlFor={fieldId('coverage')}>Coverage</label>
+                  <select id={fieldId('coverage')} value={scene.coverage === 'sequence' ? 'sequence' : 'per-shot'}
+                    onChange={(e) => applyPatch({ coverage: e.target.value })}
+                    className="bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] sm:min-h-0"
+                    title="Per shot: one clip per shot. Sequence: neighbouring cutaways that share a set and protagonist render in one timed request, cut back onto each shot.">
+                    <option value="per-shot">Per shot</option>
+                    <option value="sequence">Sequence</option>
+                  </select>
+                </>
+              )}
             </>
           )}
           {layer === 'still' && (
@@ -634,6 +648,7 @@ export default function SceneCard({
           {layer === 'footage' && (
             <SceneRenderInputs id={fieldId('inputs')} request={cardRequest} onChange={(patch) => setRenderInputs((prev) => ({ ...prev, ...patch }))} />
           )}
+          {layer === 'footage' && scene.coverage === 'sequence' && <SceneSequenceCoverage project={project} scene={scene} />}
           {endFramePlan.endImageId && (
             <p className={`text-[11px] ${endFramePlan.used ? 'text-port-text-muted' : 'text-port-warning'}`} data-testid="end-frame-plan">
               {endFramePlan.used ? 'The clip ends on the end frame.' : `${endFramePlan.reason}.`}

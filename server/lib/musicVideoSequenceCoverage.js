@@ -20,7 +20,10 @@
  */
 
 import { falReferenceImageName } from './storyboardGuidance.js';
-import { getFalVideoModel } from './falVideoModels.js';
+import {
+  FAL_DEFAULT_IMAGE_VIDEO_MODEL, falPromptExpansionAddition, falPromptExpansionMode, getFalVideoModel,
+} from './falVideoModels.js';
+import { authoredShotPrompt } from './musicVideoShotPrompt.js';
 import { isPerformanceScene } from './musicVideoShotTiming.js';
 
 const EPS = 1e-6;
@@ -144,4 +147,33 @@ export function sequenceClipSpans(group, scenes, { clipDurationSec = null } = {}
     return { ok: false, reason: `the generated clip is ${round3(clipDurationSec)}s but the sequence needs ${group.durationSec}s` };
   }
   return { ok: true, spans };
+}
+
+/** The fal model a project's sequence runs render on, or null off the fal backend. */
+export const sequenceModelId = (project) => {
+  const settings = project?.videoSettings || {};
+  return settings.backend === 'fal' ? settings.falModelId || FAL_DEFAULT_IMAGE_VIDEO_MODEL : null;
+};
+
+/**
+ * What one planned run sends: shot n is "Image n" and its frame the nth
+ * reference, the timed prompt, the labeled prompt-expansion value, and each
+ * scene's cut inside the clip. The server submit and the shot card both read
+ * this, so the card shows the request that is sent.
+ */
+export function sequenceGroupInput(project, group) {
+  const scenes = Array.isArray(project?.scenes) ? project.scenes : [];
+  const modelId = sequenceModelId(project);
+  const byId = new Map(scenes.map((s) => [sceneKey(s), s]));
+  const members = group.sceneIds.map((id) => byId.get(id));
+  const prompt = composeSequencePrompt({
+    modelId,
+    shots: members.map((s, i) => ({ prompt: authoredShotPrompt(s), startSec: s.startSec, endSec: s.endSec, imageIndex: i + 1 })),
+  });
+  const expansion = falPromptExpansionMode(getFalVideoModel(modelId), SEQUENCE_PROMPT_EXPANSION);
+  return {
+    modelId, members, prompt, resolution: project?.videoSettings?.falResolution,
+    promptAdditions: [falPromptExpansionAddition(expansion)].filter(Boolean),
+    spans: sequenceClipSpans(group, scenes).spans,
+  };
 }
