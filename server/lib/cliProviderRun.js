@@ -26,7 +26,7 @@ import { filterCallerModeEligible } from './callerModePolicy.js';
 import { buildCodeReviewSpawnConfig, buildVendorSpawnConfig, supportsPublicReviewProvider, toolFreeOneShotArgs } from './providerVendors.js';
 import { isPublicReviewNoToolProfile } from './agentExecutionProfiles.js';
 import { resolveCliModel, stripProviderPinArgs } from './providerModels.js';
-import { GROK_STREAMING_JSON_FORMAT, extractGrokFinalMessage } from './grok.js';
+import { GROK_STREAMING_JSON_FORMAT, extractGrokFinalMessage, grokToolsEscapingNoToolPosture } from './grok.js';
 import { resolveCliSpawn, needsProcessGroup, trackDetachedGroup } from './credentialBootstrap.js';
 
 // How much stderr to hand back to callers. Enough to carry a rate-limit banner
@@ -279,6 +279,10 @@ export function runCliProviderPrompt(args = {}) {
       // grok's transcript is reduced here to its final message; the other
       // stream formats stay raw for the caller to settle.
       if (streamFormat === GROK_STREAMING_JSON_FORMAT) {
+        // Drift probe: a tool grok shipped after GROK_BUILTIN_TOOLS was written
+        // is still offered to this no-tool run (#14476).
+        const escaped = grokToolsEscapingNoToolPosture(text);
+        if (escaped.length) console.warn(`⚠️ grok no-tool run still offered or called tools: ${escaped.join(', ')} — add them to GROK_BUILTIN_TOOLS`);
         return done({ text: extractGrokFinalMessage(text), exitCode: code, stderr, partial: code !== 0, stderrTail });
       }
       done({ text, exitCode: code, stderr, partial: code !== 0, stderrTail,

@@ -165,6 +165,7 @@ describe('runCliProviderPrompt', () => {
       { type: 'end', stopReason: 'end_turn' },
     ];
     await writeFile(command, `#!/usr/bin/env node\nconst format = process.argv[process.argv.indexOf('--output-format') + 1];\nprocess.stdin.resume(); process.stdin.on('end', () => process.stdout.write(format === 'streaming-json' ? ${JSON.stringify(events.map((event) => JSON.stringify(event)).join('\n'))} : 'plain'));`, { mode: 0o755 });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const result = await runCliProviderPrompt({
       provider: { ...cli('grok-cli'), command },
       model: 'grok-4.7', prompt: 'untrusted diff', cwd: dir, safetyProfile: 'public-review-gate', codeReview: true,
@@ -172,6 +173,41 @@ describe('runCliProviderPrompt', () => {
     expect(result.error).toBeUndefined();
     expect(result.text).toBe('{"verdict":"clean","findings":[]}');
     expect(result.streamFormat).toBeUndefined();
+    // A tool call in a no-tool run is drift the probe must name (#14476).
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('grep'));
+    warn.mockRestore();
+  });
+
+  // #14476: `--tools ''` left every grok tool enabled. The reviewer's child must
+  // receive the built-in denylist, and the drift probe must name a tool grok
+  // still offers — but not an MCP server's tool, which the denylist strands.
+  it.skipIf(process.platform === 'win32')('removes every grok built-in tool and reports one that escapes the list', async () => {
+    const { mkdtemp, writeFile, rm } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const dir = await mkdtemp(join(tmpdir(), 'review-grok-tools-test-'));
+    const command = join(dir, 'grok');
+    const script = [
+      '#!/usr/bin/env node',
+      'const args = process.argv.slice(2);',
+      "const events = [{ type: 'available_commands', tools: [] }, { type: 'available_commands', tools: ['example__navigate', 'example_new_tool'] }, { type: 'text', data: JSON.stringify(args) }];",
+      "process.stdin.resume(); process.stdin.on('end', () => process.stdout.write(events.map((e) => JSON.stringify(e)).join('\\n')));",
+    ].join('\n');
+    await writeFile(command, script, { mode: 0o755 });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const result = await runCliProviderPrompt({
+      provider: { ...cli('grok-cli'), command, args: ['--tools', 'run_terminal_command'] },
+      model: 'grok-4.7', prompt: 'untrusted diff', cwd: dir, safetyProfile: 'public-review-gate', codeReview: true,
+    }).finally(() => rm(dir, { recursive: true, force: true }));
+    const childArgs = JSON.parse(result.text);
+    const denied = childArgs[childArgs.indexOf('--disallowed-tools') + 1].split(',');
+    expect(denied).toEqual(expect.arrayContaining(['list_dir', 'read_file', 'grep', 'run_terminal_command', 'search_tool', 'use_tool', 'x_search']));
+    expect(childArgs).toEqual(expect.arrayContaining(['--permission-mode', 'plan', '--no-subagents', '--disable-web-search']));
+    expect(childArgs).not.toContain('--tools');
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][0]).toContain('example_new_tool');
+    expect(warn.mock.calls[0][0]).not.toContain('example__navigate');
+    warn.mockRestore();
   });
 
   it.skipIf(process.platform === 'win32')('enforces the shared no-tool argv and environment on an actual child', async () => {
