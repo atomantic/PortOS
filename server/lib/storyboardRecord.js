@@ -157,6 +157,8 @@ function sanitizePanel(raw) {
   const environmentIds = refList(raw.environmentIds);
   const objectIds = refList(raw.objectIds);
   const linkMedia = sanitizeLinkMedia(raw.linkMedia, [...environmentIds, ...objectIds, ...castIds]);
+  // A set camera belongs to a place the panel still links; unlinking the place drops it.
+  const setShot = sanitizeSetShot(raw.setShot);
   return {
     id: entityId(raw.id, 'panel'),
     action: trimTo(raw.action, STORYBOARD_LIMITS.panelText),
@@ -175,7 +177,7 @@ function sanitizePanel(raw) {
     environmentIds,
     objectIds,
     ...(linkMedia ? { linkMedia } : {}),
-    setShot: sanitizeSetShot(raw.setShot),
+    setShot: setShot && environmentIds.includes(setShot.environmentId) ? setShot : null,
     notes: trimTo(raw.notes, STORYBOARD_LIMITS.notes),
     takes,
     selectedTakeId,

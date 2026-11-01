@@ -102,7 +102,8 @@ describe('storyboards routes', () => {
     expect(mixed.status).toBe(400);
   });
 
-  it('keeps a panel set camera, clears it, and refuses an id no greybox shot can have', async () => {
+  // Uniquely catches a set camera outliving its unlinked place, which a later sync would still send.
+  it('keeps a panel set camera, clears it, drops it with its place, and refuses an id no greybox shot can have', async () => {
     const { body: board } = await api('post', '/', {});
     const beat = (await api('post', `/${board.id}/beats`, {})).body.beatId;
     const panel = (await api('post', `/${board.id}/beats/${beat}/panels`, { environmentIds: ['cat-rink'] })).body.panelId;
@@ -111,6 +112,9 @@ describe('storyboards routes', () => {
     // Longer than a shot id fits in its capture's media role, so the music video shot would refuse it.
     expect((await api('patch', `/${board.id}/panels/${panel}`, { setShot: { ...setShot, shotId: `w${'x'.repeat(51)}` } })).status).toBe(400);
     expect((await api('patch', `/${board.id}/panels/${panel}`, { setShot: null })).body.beats[0].panels[0].setShot).toBeNull();
+    await api('patch', `/${board.id}/panels/${panel}`, { setShot });
+    expect((await api('patch', `/${board.id}/panels/${panel}`, { environmentIds: [] })).body.beats[0].panels[0].setShot).toBeNull();
+    expect((await api('patch', `/${board.id}/panels/${panel}`, { environmentIds: ['cat-other'], setShot })).body.beats[0].panels[0].setShot).toBeNull();
   });
 
   it('attaches a temp track from uploads and takes it off again', async () => {
