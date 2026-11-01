@@ -76,6 +76,18 @@ describe('panel cast image picker', () => {
     expect(onPatch).toHaveBeenCalledWith({ linkMedia: null });
   });
 
+  // Uniquely catches a failed media request reading as a record with no images, with no way to load it again.
+  it('says when a record\'s images failed to load and loads them again on Retry', async () => {
+    listCatalogIngredientMedia.mockRejectedValueOnce(new Error('offline'));
+    renderCast();
+    expect((await screen.findByRole('alert')).textContent).toContain('Could not load the images for Aunt Mae');
+    expect(screen.queryByRole('option', { name: 'Funeral suit' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByRole('option', { name: 'Newest portrait (Funeral suit)' })).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(listCatalogIngredientMedia).toHaveBeenCalledTimes(2);
+  });
+
   it('keeps a saved image that is no longer on the record visible so it can be cleared', async () => {
     renderCast({ linkMedia: { 'cat-example-1': 'gone.png' } });
     const select = await screen.findByLabelText('Image for Aunt Mae');
