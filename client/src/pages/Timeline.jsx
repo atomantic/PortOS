@@ -186,7 +186,7 @@ export default function Timeline() {
           <button
             type="button"
             onClick={() => goto(shiftISODate(date, -1))}
-            className="rounded border border-port-border bg-port-card p-2 hover:border-port-accent"
+            className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 rounded border border-port-border bg-port-card p-2 hover:border-port-accent"
             aria-label="Previous day"
           >
             <ChevronLeft size={16} />
@@ -203,7 +203,7 @@ export default function Timeline() {
             type="button"
             onClick={() => goto(shiftISODate(date, 1))}
             disabled={date >= today}
-            className="rounded border border-port-border bg-port-card p-2 hover:border-port-accent disabled:cursor-not-allowed disabled:opacity-40"
+            className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 rounded border border-port-border bg-port-card p-2 hover:border-port-accent disabled:cursor-not-allowed disabled:opacity-40"
             aria-label="Next day"
           >
             <ChevronRight size={16} />

@@ -249,7 +249,7 @@ function ContactForm({ draft, onChange, onSave, onDelete, onNew, isExisting, sav
             onClick={onNew}
             title="New relationship"
             aria-label="New relationship"
-            className="inline-flex h-9 w-9 items-center justify-center rounded border border-port-border text-gray-300 hover:text-white hover:bg-port-border/40"
+            className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 inline-flex h-9 w-9 items-center justify-center rounded border border-port-border text-gray-300 hover:text-white hover:bg-port-border/40"
           >
             <Plus size={16} aria-hidden="true" />
           </button>
@@ -1410,7 +1410,7 @@ export default function Tribe() {
                       onClick={clearFilters}
                       title="Clear filters"
                       aria-label="Clear filters"
-                      className="inline-flex h-10 w-10 items-center justify-center rounded border border-port-border text-gray-400 hover:bg-port-border/40 hover:text-white"
+                      className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 inline-flex h-10 w-10 items-center justify-center rounded border border-port-border text-gray-400 hover:bg-port-border/40 hover:text-white"
                     >
                       <X size={16} aria-hidden="true" />
                     </button>

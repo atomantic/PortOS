@@ -192,7 +192,7 @@ export default function ShellProviderLauncher({ providers, onLaunch, onOpen, loa
                 </div>
                 <div className="text-[11px] font-mono text-gray-500 truncate">{provider.tuiCommandLine}</div>
               </button>
-              <button type="button" aria-label={`Execution options for ${provider.name || provider.id}`} className="p-3 text-gray-400" onClick={() => selectProvider(provider)}><Settings2 size={14} /></button>
+              <button type="button" aria-label={`Execution options for ${provider.name || provider.id}`} className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-3 text-gray-400" onClick={() => selectProvider(provider)}><Settings2 size={14} /></button>
               </div>
             ))}
           </div>

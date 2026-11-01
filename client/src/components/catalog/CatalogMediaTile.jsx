@@ -73,7 +73,7 @@ export default function CatalogMediaTile({
             }} onCancel={() => onArmDetach(null)} largeTouchTargets />
         ) : (
           <button type="button" onClick={() => onArmDetach(tileKey)} title="Detach" aria-label="Detach"
-            className="port-media-overlay-item p-2 sm:p-1 rounded hover:text-port-error">
+            className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 port-media-overlay-item p-2 sm:p-1 rounded hover:text-port-error">
             <X size={12} aria-hidden="true" />
           </button>
         ))}

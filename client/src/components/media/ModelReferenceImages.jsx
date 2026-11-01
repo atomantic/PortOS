@@ -35,7 +35,7 @@ export default function ModelReferenceImages({ images, editBase, onOpenPreview, 
                     type="button"
                     onClick={() => onOpenPreview(image.url, image)}
                     aria-label={`Open canonical reference ${index + 1}: ${image.filename}`}
-                    className="block w-full rounded focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-port-accent"
+                    className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 block w-full rounded focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-port-accent"
                   >
                     <CatalogImagePreview
                       src={image.url}

@@ -130,7 +130,7 @@ export default function DeckCardGrid({
                           }
                         }}
                         disabled={viewedIndex <= 0}
-                        className="min-h-[28px] min-w-[28px] inline-flex items-center justify-center rounded text-gray-400 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed"
+                        className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 min-h-[28px] min-w-[28px] inline-flex items-center justify-center rounded text-gray-400 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed"
                         title="Previous render version"
                         aria-label={`Previous render version for ${card.name}`}
                       >
@@ -167,7 +167,7 @@ export default function DeckCardGrid({
                           }
                         }}
                         disabled={viewedIndex >= refs.length - 1}
-                        className="min-h-[28px] min-w-[28px] inline-flex items-center justify-center rounded text-gray-400 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed"
+                        className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 min-h-[28px] min-w-[28px] inline-flex items-center justify-center rounded text-gray-400 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed"
                         title="Next render version"
                         aria-label={`Next render version for ${card.name}`}
                       >
@@ -209,7 +209,7 @@ export default function DeckCardGrid({
                         disabled={needsPrompt || !!inFlight || runtimeBlocked}
                         title={reRenderHint}
                         aria-label={reRenderHint}
-                        className="min-h-[32px] min-w-[32px] inline-flex shrink-0 items-center justify-center rounded text-gray-500 hover:text-port-accent hover:bg-port-accent/10 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-gray-500"
+                        className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 min-h-[32px] min-w-[32px] inline-flex shrink-0 items-center justify-center rounded text-gray-500 hover:text-port-accent hover:bg-port-accent/10 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-gray-500"
                       >
                         <RefreshCw size={13} aria-hidden="true" />
                       </button>

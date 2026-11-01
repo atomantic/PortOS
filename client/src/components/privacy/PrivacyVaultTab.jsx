@@ -170,7 +170,7 @@ export default function PrivacyVaultTab({ subjectId }) {
                             onClick={() => handleReveal(rec)}
                             title={revealed[rec.id] ? 'Hide value' : 'Reveal value'}
                             aria-label={revealed[rec.id] ? 'Hide value' : 'Reveal value'}
-                            className="p-2 rounded text-gray-400 hover:text-white hover:bg-port-border/50"
+                            className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-2 rounded text-gray-400 hover:text-white hover:bg-port-border/50"
                           >
                             {revealed[rec.id] ? <EyeOff size={16} /> : <Eye size={16} />}
                           </button>
@@ -178,7 +178,7 @@ export default function PrivacyVaultTab({ subjectId }) {
                             onClick={() => openEdit(rec)}
                             title="Edit record"
                             aria-label="Edit record"
-                            className="p-2 rounded text-gray-400 hover:text-white hover:bg-port-border/50"
+                            className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-2 rounded text-gray-400 hover:text-white hover:bg-port-border/50"
                           >
                             <Pencil size={16} />
                           </button>
@@ -186,7 +186,7 @@ export default function PrivacyVaultTab({ subjectId }) {
                             onClick={() => setConfirmDelete(rec.id)}
                             title="Delete record"
                             aria-label="Delete record"
-                            className="p-2 rounded text-gray-400 hover:text-port-error hover:bg-port-border/50"
+                            className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-2 rounded text-gray-400 hover:text-port-error hover:bg-port-border/50"
                           >
                             <Trash2 size={16} />
                           </button>

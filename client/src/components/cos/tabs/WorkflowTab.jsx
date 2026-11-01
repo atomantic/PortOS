@@ -424,7 +424,7 @@ export default function WorkflowTab({ apps, providers, providersLoaded }) {
                   aria-expanded={expandedIds.has(node.id)}
                   aria-label={`${expandedIds.has(node.id) ? 'Hide' : 'Show'} per-app options for ${node.label}`}
                   title={`${node.enabledAppCount || 0} of ${node.totalAppCount} apps enabled`}
-                  className="flex h-full items-center border-l border-port-border/60 px-1.5 text-gray-500 hover:bg-white/10 hover:text-gray-300"
+                  className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 flex h-full items-center border-l border-port-border/60 px-1.5 text-gray-500 hover:bg-white/10 hover:text-gray-300"
                 >
                   <ChevronRight className={`h-3.5 w-3.5 transition-transform ${expandedIds.has(node.id) ? 'rotate-90' : ''}`} />
                 </button>

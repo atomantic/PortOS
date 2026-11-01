@@ -158,7 +158,7 @@ export default function TreatmentPanel({ project, treatment: api, storyboardAppr
                   <span className="min-w-0 flex-1 break-words">{n.note}{n.url && <span className="text-port-text-muted"> — {n.url}</span>}</span>
                   <button type="button" aria-label="Remove reference note" title="Remove reference note"
                     onClick={() => saveNotes(notes.filter((x) => x.id !== n.id))} disabled={notesSaving}
-                    className="min-h-[32px] min-w-[32px] inline-flex items-center justify-center text-port-error">
+                    className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 min-h-[32px] min-w-[32px] inline-flex items-center justify-center text-port-error">
                     <Trash2 size={12} />
                   </button>
                 </li>

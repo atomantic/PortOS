@@ -207,7 +207,7 @@ export default function LookReferencesPanel({ project, onSave, onSaveSpec, onAdd
                     </div>
                     <button type="button" onClick={() => saveReferences(references.filter((r) => r.id !== ref.id))}
                       aria-label="Remove reference" title="Remove reference"
-                      className="inline-flex min-h-[32px] min-w-[32px] shrink-0 items-center justify-center text-port-error">
+                      className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 inline-flex min-h-[32px] min-w-[32px] shrink-0 items-center justify-center text-port-error">
                       <Trash2 size={12} />
                     </button>
                   </div>

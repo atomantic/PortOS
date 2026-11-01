@@ -485,7 +485,7 @@ export default function MemoryTab({ apps = [] }) {
                   <div className="flex gap-2 sm:gap-1">
                     <button
                       onClick={() => navigate(`/cos/memory/${encodeURIComponent(memory.id)}`)}
-                      className="p-3 min-h-[40px] min-w-[40px] flex items-center justify-center text-gray-500 hover:text-port-accent transition-colors"
+                      className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-3 min-h-[40px] min-w-[40px] flex items-center justify-center text-gray-500 hover:text-port-accent transition-colors"
                       title="Edit memory"
                       aria-label="Edit memory"
                     >
@@ -493,7 +493,7 @@ export default function MemoryTab({ apps = [] }) {
                     </button>
                     <button
                       onClick={() => requestDelete(memory.id)}
-                      className="p-3 min-h-[40px] min-w-[40px] flex items-center justify-center text-gray-500 hover:text-port-error transition-colors"
+                      className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-3 min-h-[40px] min-w-[40px] flex items-center justify-center text-gray-500 hover:text-port-error transition-colors"
                       title="Archive memory"
                       aria-label="Archive memory"
                     >
