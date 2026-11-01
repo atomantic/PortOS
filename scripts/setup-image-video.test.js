@@ -303,7 +303,10 @@ esac
 `);
     writeFileSync(lipo, `#!/bin/bash
 if [[ "$1" == "-archs" ]]; then
-  printf '%s\\n' "$ARCHES"
+  case "$(basename "$2")" in
+    recreate) printf '%s\\n' "$RECREATE_ARCHES" ;;
+    *) printf '%s\\n' "$ARCHES" ;;
+  esac
   exit 0
 fi
 exit 1
@@ -314,19 +317,99 @@ printf '%s\\n' '0'
     chmodSync(uname, 0o755);
     chmodSync(lipo, 0o755);
     chmodSync(sysctl, 0o755);
-    const run = (machine, arches) => {
+    const recreate = join(dir, 'recreate');
+    writeFileSync(recreate, '#!/bin/bash\nexit 1\n');
+    chmodSync(recreate, 0o755);
+    const run = (machine, arches, recreateArches = 'arm64') => {
       const venv = join(dir, 'venv');
       rmSync(venv, { recursive: true, force: true });
       mkdirSync(join(venv, 'bin'), { recursive: true });
       writeFileSync(join(venv, 'bin', 'python3'), 'PY');
-      execFileSync('bash', ['-c', `${apple}\n${reset}\nreset_universal_venv "$1"`, 'bash', venv], {
-        env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, ARCHES: arches, MACHINE: machine },
+      execFileSync('bash', ['-c', `${apple}\n${reset}\nreset_universal_venv "$1" "$2"`, 'bash', venv, recreate], {
+        env: {
+          ...process.env,
+          PATH: `${dir}:${process.env.PATH}`,
+          ARCHES: arches,
+          RECREATE_ARCHES: recreateArches,
+          MACHINE: machine,
+        },
       });
       return existsSync(venv);
     };
     expect(run('arm64', 'x86_64 arm64')).toBe(false);
+    expect(run('arm64', 'x86_64 arm64', 'x86_64')).toBe(true);
     expect(run('arm64', 'arm64')).toBe(true);
     expect(run('x86_64', 'x86_64 arm64')).toBe(true);
+  });
+
+  it.skipIf(process.platform === 'win32')('points a thinned framework interpreter at its original library', () => {
+    const pin = source.match(/^pin_venv_arm64\(\) \{\n(?:.*\n)*?^\}\n/m)?.[0];
+    const apple = source.match(/^is_apple_silicon\(\) \{\n(?:.*\n)*?^\}\n/m)?.[0];
+    expect(pin).toContain('install_name_tool');
+    const dir = mkdtempSync(join(tmpdir(), 'portos-framework-pin-'));
+    tempVenvs.push(dir);
+    const uname = join(dir, 'uname');
+    const lipo = join(dir, 'lipo');
+    const otool = join(dir, 'otool');
+    const installName = join(dir, 'install_name_tool');
+    const codesign = join(dir, 'codesign');
+    writeFileSync(uname, `#!/bin/bash
+case "$1" in
+  -s) printf '%s\\n' 'Darwin' ;;
+  -m) printf '%s\\n' 'arm64' ;;
+  *) exit 1 ;;
+esac
+`);
+    writeFileSync(lipo, `#!/bin/bash
+if [[ "$1" == "-archs" ]]; then
+  printf '%s\\n' 'x86_64 arm64'
+  exit 0
+fi
+if [[ "$1" == "-thin" && "$2" == "arm64" && "$4" == "-output" ]]; then
+  printf '%s\\n' 'THIN' > "$5"
+  exit 0
+fi
+exit 1
+`);
+    writeFileSync(otool, `#!/bin/bash
+printf '%s\\n' "$1:"
+printf '%s\\n' '    @executable_path/../Python3 (compatibility version 3.9.0, current version 3.9.0)'
+`);
+    writeFileSync(installName, `#!/bin/bash
+printf '%s\\n' "$*" >> "$LOG"
+exit 0
+`);
+    writeFileSync(codesign, `#!/bin/bash
+printf '%s\\n' codesign >> "$LOG"
+exit 0
+`);
+    for (const bin of [uname, lipo, otool, installName, codesign]) chmodSync(bin, 0o755);
+    const framework = join(dir, 'framework');
+    const venv = join(dir, 'venv');
+    mkdirSync(join(framework, 'bin'), { recursive: true });
+    mkdirSync(join(venv, 'bin'), { recursive: true });
+    const origin = join(framework, 'bin', 'python3.9');
+    const library = join(framework, 'Python3');
+    writeFileSync(origin, 'FRAMEWORK');
+    writeFileSync(library, 'LIB');
+    const link = join(venv, 'bin', 'python3');
+    execFileSync('ln', ['-s', origin, link]);
+    const log = join(dir, 'tool.log');
+    writeFileSync(log, '');
+    execFileSync('bash', ['-c', `${apple}\n${pin}\npin_venv_arm64 "$1"`, 'bash', venv], {
+      env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, LOG: log },
+    });
+    expect(readFileSync(link, 'utf8')).toBe('THIN\n');
+    expect(readFileSync(origin, 'utf8')).toBe('FRAMEWORK');
+    expect(readFileSync(log, 'utf8')).toContain(`-change @executable_path/../Python3 ${library}`);
+    rmSync(library);
+    execFileSync('ln', ['-sfn', origin, link]);
+    writeFileSync(log, '');
+    execFileSync('bash', ['-c', `${apple}\n${pin}\npin_venv_arm64 "$1"`, 'bash', venv], {
+      env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, LOG: log },
+    });
+    expect(readFileSync(link, 'utf8')).toBe('FRAMEWORK');
+    expect(readFileSync(log, 'utf8')).toBe('');
   });
 
   it('captures diagnostics for every aborting install probe', () => {
