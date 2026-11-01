@@ -135,10 +135,6 @@ export const GROK_NO_TOOL_ARGS = Object.freeze([
   '--disallowed-tools', GROK_BUILTIN_TOOLS.join(','),
 ]);
 
-// An MCP tool is shown as `server__tool`; it is reachable only through the
-// removed meta-tools, so its listing in `available_commands` is not an escape.
-const isMcpToolName = (name) => name.includes('__');
-
 /**
  * Tools a no-tool grok run still offered or called, read from its
  * `streaming-json` transcript: non-MCP names in the last `available_commands`
@@ -153,7 +149,9 @@ export function grokToolsEscapingNoToolPosture(streamText) {
     let event;
     try { event = JSON.parse(line); } catch { continue; }
     if (event?.type === 'available_commands' && Array.isArray(event.tools)) {
-      offered = event.tools.filter((name) => typeof name === 'string' && !isMcpToolName(name));
+      // An MCP tool is shown as `server__tool`; only the removed meta-tools
+      // reach it, so its listing here is not an escape.
+      offered = event.tools.filter((name) => typeof name === 'string' && !name.includes('__'));
     } else if (event?.type === 'tool_call' && typeof event.toolName === 'string') {
       called.push(event.toolName);
     }
