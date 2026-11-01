@@ -172,27 +172,36 @@ export default function VideoGen() {
       n.delete('episode'); n.delete('loomId'); n.delete('episodeId');
       return n;
     });
-    // The composer unmounts on close (conditional render below) — clear the
-    // import so a later open with no loomId/episodeId doesn't inherit it.
-    setEpisodeImportScenes(null);
-    setEpisodeImportError(null);
   };
   const [episodeImportScenes, setEpisodeImportScenes] = useState(null);
   // A failed FableLoom read must not open as a blank composer the user takes
   // for an episode with no scenes.
   const [episodeImportError, setEpisodeImportError] = useState(null);
+  const [episodeImportPending, setEpisodeImportPending] = useState(false);
   const [episodeImportAttempt, setEpisodeImportAttempt] = useState(0);
   useEffect(() => {
-    if (!episodeOpen || !episodeLoomId || !episodeEpisodeId) return undefined;
+    if (!episodeOpen || !episodeLoomId || !episodeEpisodeId) {
+      // Browser Back can drop the import params without closeEpisodeComposer;
+      // a later plain open must not inherit the old import or its failure.
+      setEpisodeImportScenes(null);
+      setEpisodeImportError(null);
+      setEpisodeImportPending(false);
+      return undefined;
+    }
     let active = true;
-    setEpisodeImportError(null);
+    // The failure stays visible until a read succeeds, so Retry never shows
+    // the blank composer as if the episode had no scenes.
+    setEpisodeImportPending(true);
     getLoom(episodeLoomId, { silent: true }).then((loom) => {
       if (!active) return;
       const episode = loom?.episodes?.find((e) => e.id === episodeEpisodeId);
       const draftScenes = loomEpisodeToDraftScenes(episode, { format: loom?.format });
       if (draftScenes.length) setEpisodeImportScenes(draftScenes);
+      setEpisodeImportError(null);
     }).catch((error) => {
       if (active) setEpisodeImportError(error);
+    }).finally(() => {
+      if (active) setEpisodeImportPending(false);
     });
     return () => { active = false; };
     // Only re-run when a fresh loom/episode is targeted, not on every render.
@@ -2171,6 +2180,7 @@ export default function VideoGen() {
             what="the FableLoom episode"
             error={episodeImportError}
             onRetry={() => setEpisodeImportAttempt((n) => n + 1)}
+            retrying={episodeImportPending}
             className="mb-3"
           />
         )}
