@@ -1,6 +1,11 @@
-import { useEffect, useId, useMemo, useState } from 'react';
+import { useId, useMemo } from 'react';
 import { Palette, X } from 'lucide-react';
 import { listImageStylePresets } from '../../services/apiSystem';
+import useListResource from '../../hooks/useListResource';
+import ListLoadError from '../ui/ListLoadError';
+
+// Silent: a failed read renders its own Retry row below the select.
+const fetchStylePresets = () => listImageStylePresets({ silent: true });
 
 export default function StylePresetPicker({
   value,
@@ -9,18 +14,9 @@ export default function StylePresetPicker({
   className = '',
   label = 'Style preset',
 }) {
-  const [presets, setPresets] = useState([]);
+  const { items: presets, state: presetsState, error: presetsError, retry: retryPresets } = useListResource(fetchStylePresets);
   // Unique per instance so multiple pickers on one page each pair label→select.
   const selectId = useId();
-
-  useEffect(() => {
-    let cancelled = false;
-    listImageStylePresets().then((list) => {
-      if (cancelled) return;
-      setPresets(Array.isArray(list) ? list : []);
-    }).catch(() => {});
-    return () => { cancelled = true; };
-  }, []);
 
   const grouped = useMemo(() => {
     const map = new Map();
@@ -80,6 +76,9 @@ export default function StylePresetPicker({
           </optgroup>
         ))}
       </select>
+      {presetsState === 'error' && (
+        <ListLoadError what="style presets" error={presetsError} onRetry={retryPresets} className="mt-1" />
+      )}
       {activePreset?.description && (
         <p className="mt-1 text-[10px] text-gray-500 truncate" title={activePreset.description}>
           {activePreset.description}

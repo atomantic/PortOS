@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 
 vi.mock('../../services/apiSystem', () => ({
   listImageStylePresets: vi.fn(() => Promise.resolve([])),
@@ -38,5 +38,20 @@ describe('StylePresetPicker label association', () => {
     const b = await screen.findByLabelText('Second');
     expect(a.id).toBeTruthy();
     expect(a.id).not.toBe(b.id);
+  });
+});
+
+describe('StylePresetPicker preset read', () => {
+  it('shows a failed preset read with Retry instead of an empty picker', async () => {
+    const { listImageStylePresets } = await import('../../services/apiSystem');
+    listImageStylePresets.mockRejectedValueOnce(new Error('presets unavailable'));
+    render(<StylePresetPicker value={null} onChange={() => {}} />);
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load style presets — presets unavailable');
+
+    listImageStylePresets.mockResolvedValueOnce([{ id: 'ink', label: 'Ink wash', category: 'Painterly' }]);
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByRole('option', { name: 'Ink wash' })).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.getByLabelText('Style preset')).not.toBeDisabled();
   });
 });
