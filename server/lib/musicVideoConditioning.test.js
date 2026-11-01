@@ -95,6 +95,16 @@ describe('musicVideoConditioningReferences with an approved Cast & Sets check-in
     expect(ids(musicVideoConditioningReferences(checkedIn, scene({ sectionIndex: 0 })))).toEqual(['lead-sheet.png', 'hill.png', 'kevin-sheet.png']);
   });
 
+  it('adds the prop sheet to a shot that shows a prop, never to one that only names its owner', () => {
+    const withProps = {
+      visualSpec: { references: [...references, { id: 'mvr-cs-props', imageId: 'props.png', role: 'prop', condition: false }] },
+      castAndSets: { ...checkedIn.castAndSets, direction: { ...checkedIn.castAndSets.direction, props: [{ id: 'camera', name: "Kevin's camera", description: 'black 35mm compact' }] } },
+    };
+    expect(ids(musicVideoConditioningReferences(withProps, scene({ sectionIndex: 0, framePrompt: 'Kevin rides beside her, raising his camera' }))))
+      .toEqual(['lead-sheet.png', 'hill.png', 'kevin-sheet.png', 'props.png']);
+    expect(ids(musicVideoConditioningReferences(withProps, scene({ sectionIndex: 0 })))).toEqual(['lead-sheet.png', 'hill.png', 'kevin-sheet.png']);
+  });
+
   // Uniquely catches a shot whose song section was cleared (a replaced song) dropping the
   // cast sheets it names for the capped authored set, so a co-lead is drawn from text alone.
   it('keeps the named cast when the shot has no song section, filling spare slots with the authored set', () => {

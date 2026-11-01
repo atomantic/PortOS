@@ -27,6 +27,20 @@ function featuredCast(direction, scene) {
 }
 
 /**
+ * Whether a scene's frame or shot prompt shows one of the direction's props: by
+ * its name without the owner ("Renee's camera" is shown by "camera"), so a shot
+ * that only names its owner does not pull the prop sheet in.
+ */
+function showsProp(direction, scene) {
+  const text = [scene?.framePrompt, scene?.prompt].filter(Boolean).join(' ');
+  if (!text) return false;
+  return (direction?.props || []).some((item) => {
+    const words = String(item?.name || '').split(/\s+/).filter((w) => !/['’]s$/i.test(w) && w.length >= 3);
+    return words.length && (namesIn(text, words.join(' ')) || namesIn(text, words.at(-1)));
+  });
+}
+
+/**
  * The director's own character references (an upload or a PortOS render, not
  * Cast & Sets output or outside inspiration) whose label's name, the part
  * before any " — ", " - ", ":" or "(", the scene's prompt names.
@@ -145,9 +159,11 @@ function automaticConditioningReferences(project, scene) {
     // A shot with no song section (a replaced song clears them) cannot name its
     // set, but it still names its cast: identities come first, and the authored
     // set fills the spare slots rather than displacing a featured cast sheet.
+    // The prop sheet joins the shots that show a prop, after the identities and the set.
+    const props = showsProp(stage.direction, scene) && references.find((ref) => ref?.id === 'mvr-cs-props' && ref.imageId);
     const chosen = plate
-      ? [character, plate, ...cast, ...featuredAuthoredCharacters(references, scene)]
-      : [character, ...cast, ...featuredAuthoredCharacters(references, scene), ...authored];
+      ? [character, plate, ...cast, ...featuredAuthoredCharacters(references, scene), ...(props ? [props] : [])]
+      : [character, ...cast, ...featuredAuthoredCharacters(references, scene), ...(props ? [props] : []), ...authored];
     return chosen.filter((ref, i) => chosen.findIndex((r) => r.imageId === ref.imageId) === i)
       .slice(0, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES);
   }

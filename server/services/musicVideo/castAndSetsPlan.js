@@ -18,6 +18,9 @@
  *                     when the form is bound to a fixed-casting subject
  *                     (`form.subjectId`), on that subject's own reference image.
  *   - `looks`       — the wardrobe lookbook, one panel per look.
+ *   - `props`       — one prop sheet of every recurring object the characters
+ *                     carry, use or ride (`direction.props`): cameras, bikes,
+ *                     instruments. Shots that show one are conditioned on it.
  *   - `set:<id>`    — one EMPTY plate per set: any sentence of the description,
  *                     lighting or look that puts a person in it is dropped. Plates do
  *                     not depend on the character, so they render alongside it. A
@@ -292,6 +295,25 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
     ),
   };
 
+  const props = direction.props || [];
+  if (props.length) {
+    plan.props = {
+      key: 'props',
+      kind: 'props',
+      label: 'Props',
+      deps: [],
+      refKeys: [],
+      prompt: join(
+        `Photographic prop reference sheet of ${props.length} object${props.length > 1 ? 's' : ''} on a seamless dark grey paper backdrop, each in its own panel with a small typewriter caption of its name, shown from the angle that reads it best`,
+        ...props.map((item) => `${item.name.toUpperCase()}${item.owner ? ` (${item.owner})` : ''}: ${item.description}`),
+        'Every object exactly as described, real and photographed with honest wear, nobody in frame, no brand names, logos or text on any object',
+        style && `Look: ${style}`,
+        `${PHOTO}, even studio light`,
+        note('props'),
+      ),
+    };
+  }
+
   plan.looks = {
     key: 'looks',
     kind: 'looks',
@@ -475,6 +497,7 @@ export function noteImageKeys(target, plan) {
   if (plan[t]) return [t];
   if (t === 'protagonist' || t === 'cast') return ['character'];
   if (t === 'wardrobe') return ['looks'];
+  if ((t === 'prop' || t === 'object') && plan.props) return ['props'];
   if (t === 'expression') return ['expressions'];
   const byName = Object.values(plan).find((item) => ['plate', 'cast', 'form'].includes(item.kind) && item.label.toLowerCase() === t);
   return byName ? [byName.key] : null;
@@ -529,11 +552,15 @@ export function castAndSetsReferences(project, stage) {
     if (sheet) held -= 1;
     push({ id: castReferenceId(c), imageId: images[`cast:${c.id}`]?.imageId, role: 'character', label: `${trimTo(c.name, 80)} — cast sheet`, note: trimTo([c.role, c.height && `Height: ${c.height}`, c.face, c.hair, c.wardrobe].filter(Boolean).join('; '), 1000) }, false, { sheet });
   }
+  // The prop sheet conditions only the shots that show a prop (musicVideoConditioningReferences).
+  const props = direction.props || [];
+  push({ id: CAST_SETS_PROPS_REF_ID, imageId: images.props?.imageId, role: 'prop', label: 'Props', note: trimTo(props.map((item) => `${item.name}: ${item.description}`).join(' | '), 1000) }, false);
   push({ id: `${CAST_SETS_REF_PREFIX}looks`, imageId: images.looks?.imageId, role: 'wardrobe', label: 'Looks', note: trimTo((direction.looks || []).map((l) => l.name).join(', '), 1000) }, false);
   push({ id: `${CAST_SETS_REF_PREFIX}expressions`, imageId: images.expressions?.imageId, role: 'character', label: 'Expression sheet', note: trimTo(p.gesture, 1000) }, false);
   return [...existing, ...out];
 }
 
+export const CAST_SETS_PROPS_REF_ID = `${CAST_SETS_REF_PREFIX}props`;
 const castReferenceId = (c) => `${CAST_SETS_REF_PREFIX}cast-${c.id}`.slice(0, 64);
 
 /**
@@ -581,6 +608,14 @@ export function castAndSetsSubjects(project, stage) {
       name: trimTo(c.name, 120),
       description: trimTo([c.role, c.description, c.face, c.hair, c.wardrobe].filter(Boolean).join('; '), 1000),
       role: 'supporting',
+    });
+  }
+  for (const item of direction.props || []) {
+    ours.push({
+      id: `${CAST_SETS_SUBJECT_PREFIX}prop-${item.id}`.slice(0, 64),
+      kind: 'object',
+      name: trimTo(item.name, 120),
+      description: trimTo([item.description, item.owner && `Used by ${item.owner}`].filter(Boolean).join('. '), 1000),
     });
   }
   for (const set of direction.sets || []) {
