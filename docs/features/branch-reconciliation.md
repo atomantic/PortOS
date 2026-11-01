@@ -40,9 +40,14 @@ outcome rather than treating the absence of a generated task as successful clean
 - `retirement-receipt-unverified` means preservation is unproven. An exception
   after retirement starts retains this obligation, including the exact checkout
   identity; it is not downgraded to a failed preview or silently retried as one.
-- `worktree-unmanaged-location` requires a scoped release of the inventoried
-  checkout using the action below. Do not add all external checkouts to a trusted
-  root merely because their commits are merged: another tool may still own them.
+- `worktree-unmanaged-location` means the checkout sits outside PortOS's
+  managed roots. A checkout that only looks merged because it was cut from the
+  default branch stays there (#10270): another tool may still own it, and
+  ancestry alone is not delivery. When the forge reports that branch's pull
+  request MERGED at the exact observed head and the checkout has been idle for
+  the shipped hour, reconciliation retires the checkout and the local branch.
+  A lock, a live owner, or an unreadable forge still holds it. Do not add
+  external checkouts to a trusted root to clear this.
 - `delivery-head-unverified` requires comparing the current local branch and
   published PR. Preserve local-only changes and establish the current owner
   before continuing delivery; do not reset the checkout to make the heads match.
