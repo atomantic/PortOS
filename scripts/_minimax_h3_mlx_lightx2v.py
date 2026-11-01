@@ -26,11 +26,11 @@ def file_digest(path):
 def verify_runtime_source(runtime_dir, revision):
     """Refuse changed schedule seams before any multi-GB model load."""
     if revision != CONTRACT["runtimeRevision"]:
-        raise ValueError("MLX LightX2V requires its pinned runtime revision.")
+        raise ValueError("MLX speed profile requires its pinned runtime revision.")
     for name, digest in SOURCE_DIGESTS.items():
         path = Path(runtime_dir) / "minimax_h3_mlx" / name
         if not path.is_file() or file_digest(path) != digest:
-            raise ValueError(f"MLX LightX2V pinned {name} seam differs; use Repair in Video Gen.")
+            raise ValueError(f"MLX speed profile pinned {name} seam differs; use Repair in Video Gen.")
 
 
 def validate_profile_args(args, contract=None):
@@ -53,10 +53,10 @@ def validate_profile_args(args, contract=None):
             or args.checkpoint_revision != checkpoint["revision"]
             or len(args.checkpoint_file) != len(checkpoint["files"])
             or set(args.checkpoint_file) != set(checkpoint["files"])):
-        raise ValueError("MLX LightX2V requires the complete pinned auxiliary checkpoint manifest.")
+        raise ValueError("MLX speed profile requires the complete pinned auxiliary checkpoint manifest.")
     verify_runtime_source(args.runtime_dir, args.runtime_revision)
     if not adapter or file_digest(adapter) != contract["adapter"]["sha256"]:
-        raise ValueError("MLX LightX2V requires its original SHA-256-verified cached adapter.")
+        raise ValueError("MLX speed profile requires its original SHA-256-verified cached adapter.")
     for name, expected in contract["adapter"].get("supportFiles", {}).items():
         if file_digest(Path(adapter).parent.parent / name) != expected:
             raise ValueError("MLX speed profile manifest, license or notice differs.")
@@ -64,7 +64,7 @@ def validate_profile_args(args, contract=None):
     for path in args.lora:
         digest = file_digest(path)
         if digest in digests:
-            raise ValueError("MLX LightX2V refuses duplicate adapters, including a speed adapter supplied as a user LoRA.")
+            raise ValueError("MLX speed profile refuses duplicate adapters, including a speed adapter supplied as a user LoRA.")
         digests.append(digest)
 
 
