@@ -5,6 +5,9 @@ import { existsSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
+import { SERVER_LINT_RE } from './lib/serverLintSurface.js';
+
+export { SERVER_LINT_RE };
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -24,12 +27,6 @@ export function selectClientFiles(repoFiles) {
     .filter((path) => /^client\/src\/.*\.(?:js|jsx)$/i.test(path))
     .map((path) => path.replace(/^client\//, ''));
 }
-
-// Trees linted with the server's two-rule set. server/ uses server/biome.jsonc;
-// scripts/, lib/ (not the slashdo submodule) and autofixer/ use the repo-root
-// biome.jsonc. The planner's SERVER_LINT_RE import is this same value, so a
-// change under any of them selects the lint job.
-export const SERVER_LINT_RE = /^(?:server\/(?!node_modules\/)|scripts\/(?!node_modules\/)|autofixer\/(?!node_modules\/)|lib\/(?!slashdo\/)).*\.(?:m?js)$|^(?:server\/)?biome\.jsonc$/i;
 
 /** True when a changed-file list touches a tree the server rule set lints, or its config. */
 export function touchesServer(repoFiles) {

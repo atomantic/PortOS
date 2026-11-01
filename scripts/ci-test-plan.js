@@ -7,7 +7,7 @@ import { staticImportClosure, toModuleKey } from '../server/lib/staticImportGrap
 import { escapeRegExp } from '../server/lib/textUtils.js';
 import { moduleImports } from './lib/sourceTokens.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
-import { SERVER_LINT_RE } from './run-ci-lint.js';
+import { SERVER_LINT_RE } from './lib/serverLintSurface.js';
 import { writeStepOutput } from './lib/githubOutput.js';
 import { resolveDbTestFiles } from './lib/dbTestFiles.js';
 import { BROWSER_SUITES } from './lib/browserSuites.js';
@@ -24,8 +24,9 @@ const MODULE_SOURCE_RE = /\.[cm]?[jt]sx?$/i;
 // over-matching here costs nothing.
 const TEST_FILE_GLOBS = ['*.test.*', '*.spec.*'];
 // The server rule set lints server/ whole, plus scripts/, lib/ (not the slashdo
-// submodule) and autofixer/ (fast, ~1s). SERVER_LINT_RE lives in run-ci-lint.js
-// so the planner and the runner cannot drift. Any match selects the lint job.
+// submodule) and autofixer/ (fast, ~1s). SERVER_LINT_RE lives in
+// scripts/lib/serverLintSurface.js so the planner and the runner cannot drift,
+// and so a pregate fixture can stub the lint runner without unloading the planner.
 const CLIENT_LINT_RE = /^client\/src\/.*\.(?:js|jsx)$/i;
 const isLintSurface = (path) => CLIENT_LINT_RE.test(path) || SERVER_LINT_RE.test(path);
 const EXECUTABLE_RE = /\.(?:cjs|css|html|js|jsx|json|mjs|sql|ts|tsx|ya?ml)$/i;
