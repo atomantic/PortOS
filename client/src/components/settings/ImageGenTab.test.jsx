@@ -37,7 +37,7 @@ vi.mock('../imageGen/Flux2InstallModal', () => ({ default: () => null }));
 
 import {
   getSettings, getToolsList, patchSettingsSlice, listAgyImageModels, listImageModels, getImageGenStatus,
-  getVideoGenModelContext, generateImage, getCredentialInventory, getProviders, registerTool,
+  getVideoGenModelContext, generateImage, getCredentialInventory, getProviders, registerTool, updateTool,
 } from '../../services/api';
 import { useHfTokenStatus } from '../../hooks/useHfTokenStatus';
 import { ImageGenTab, MEDIA_TABS } from './ImageGenTab';
@@ -70,6 +70,8 @@ beforeEach(() => {
     },
   });
   getToolsList.mockResolvedValue([]);
+  registerTool.mockResolvedValue({});
+  updateTool.mockResolvedValue({});
   getImageGenStatus.mockResolvedValue({ connected: true, mode: 'local', readiness: 'ready', model: 'FLUX.1 Dev', modelId: 'dev' });
   getVideoGenModelContext.mockResolvedValue({
     models: [
@@ -98,6 +100,19 @@ beforeEach(() => {
 });
 
 describe('ImageGenTab grouped tabs', () => {
+  it.each(['settings', 'tools'])('shows a retryable %s load failure before offering editable defaults', async (failedRead) => {
+    const read = failedRead === 'settings' ? getSettings : getToolsList;
+    read.mockRejectedValueOnce(new Error('offline'));
+    render(<MemoryRouter><ImageGenTab /></MemoryRouter>);
+    await waitFor(() => expect(screen.getByRole('button', { name: /Retry/ })).toBeTruthy());
+    expect(screen.queryByRole('tablist')).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Save$/ })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /Retry/ }));
+    await waitFor(() => expect(screen.getByRole('tablist')).toBeTruthy());
+    fireEvent.click(screen.getByRole('tab', { name: /External/i }));
+    expect(screen.getByPlaceholderText('http://localhost:7860').value).toBe('http://localhost:7860');
+  });
+
   // Catches persisting a second key or dropping Runway's enable/model/resolution slice.
   it('configures Runway images with the shared credential and persists its own rendering settings', async () => {
     await renderTab(['/media/image?mediaTab=runway']);
@@ -353,6 +368,28 @@ describe('ImageGenTab grouped tabs', () => {
     });
     expect(patchSettingsSlice.mock.calls.every(([, , options]) => options?.silent === true)).toBe(true);
     await waitFor(() => expect(saveBtn.disabled).toBe(true));
+  });
+
+  it('preserves edits made during a pending save and sends them on the next save', async () => {
+    let finishPatch;
+    patchSettingsSlice.mockImplementationOnce(() => new Promise(resolve => { finishPatch = resolve; }));
+    await renderTab(['/media/image?mediaTab=external']);
+    const input = screen.getByPlaceholderText('http://localhost:7860');
+    const save = screen.getByRole('button', { name: /^Save$/ });
+    fireEvent.change(input, { target: { value: 'http://example.test:9001/' } });
+    fireEvent.click(save);
+    await awaitSave();
+    fireEvent.change(input, { target: { value: 'http://example.test:9002/' } });
+    await act(async () => { finishPatch({}); });
+    await waitFor(() => expect(save.disabled).toBe(false));
+    expect(input.value).toBe('http://example.test:9002/');
+    expect(screen.getByRole('button', { name: /Test Connection/ }).disabled).toBe(true);
+
+    patchSettingsSlice.mockClear();
+    fireEvent.click(save);
+    await waitFor(() => expect(save.disabled).toBe(true));
+    expect(sentSlices()['imageGen.external']).toEqual({ sdapiUrl: 'http://example.test:9002' });
+    expect(input.value).toBe('http://example.test:9002');
   });
 
   it('keeps the form dirty and re-sends the same patches when a slice save fails', async () => {
