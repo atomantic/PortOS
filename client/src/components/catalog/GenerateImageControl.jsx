@@ -75,7 +75,7 @@ export default function GenerateImageControl({ ingredientId, name, description, 
     inFlight.current = true;
     setSourceError(null);
     if (direct) setStarting(true);
-    else { setEditing(true); setPrefilling(true); }
+    else { if (!editing) promptEdited.current = false; setEditing(true); setPrefilling(true); }
     await prepare().then(async ({ seed, world, kin }) => {
       if (!mounted.current) return;
       setUniverse(world);
