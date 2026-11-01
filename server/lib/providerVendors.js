@@ -109,7 +109,7 @@ import {
   ensureGrokTuiArgs,
   ensureGrokHeadlessArgs,
   prepareGrokPromptFile,
-  withGrokStreamingJsonOutput,
+  withGrokCodeReviewOutput,
   GROK_STREAMING_JSON_FORMAT,
   GROK_NO_TOOL_ARGS,
   grokServiceTierModel,
@@ -727,7 +727,7 @@ function grokCliArgs(baseArgs, { model, toolFree, provider }) {
 }
 
 function grokCodeReviewSpawnConfig(config) {
-  return { ...config, args: withGrokStreamingJsonOutput(config.args), streamFormat: GROK_STREAMING_JSON_FORMAT };
+  return { ...config, args: withGrokCodeReviewOutput(config.args), streamFormat: GROK_STREAMING_JSON_FORMAT };
 }
 
 const GROK = {

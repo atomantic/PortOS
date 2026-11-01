@@ -182,6 +182,48 @@ export function withGrokStreamingJsonOutput(args = []) {
   return [...out, '--output-format', 'streaming-json'];
 }
 
+// The verdict parser accepts only this envelope. Constraining grok to it keeps
+// a no-tool review from answering with prose, which is invalid_json (#14523).
+// streaming-json still carries the message so tool calls stay separable.
+export const GROK_CODE_REVIEW_JSON_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['verdict', 'findings'],
+  properties: {
+    verdict: { type: 'string', enum: ['clean', 'findings'] },
+    findings: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['severity', 'location', 'outcome', 'fix'],
+        properties: {
+          severity: { type: 'string', enum: ['blocking', 'recommended'] },
+          location: { type: 'string' },
+          outcome: { type: 'string' },
+          fix: { type: 'string' },
+        },
+      },
+    },
+  },
+};
+
+/**
+ * Code-review argv: streaming-json plus the verdict schema. Replaces any
+ * output format or schema already on the argv.
+ * @param {string[]} args
+ * @returns {string[]}
+ */
+export function withGrokCodeReviewOutput(args = []) {
+  const formatted = withGrokStreamingJsonOutput(args);
+  const out = [];
+  for (let i = 0; i < formatted.length; i++) {
+    if (formatted[i] === '--json-schema') i++;
+    else if (!String(formatted[i]).startsWith('--json-schema=')) out.push(formatted[i]);
+  }
+  return [...out, '--json-schema', JSON.stringify(GROK_CODE_REVIEW_JSON_SCHEMA)];
+}
+
 /**
  * Reduce a grok `streaming-json` transcript to its final message: the `text`
  * chunks after the last tool call. Thought, usage and command-listing events
@@ -198,6 +240,37 @@ export function extractGrokFinalMessage(streamText) {
     else if (event?.type === 'text' && typeof event.data === 'string') message += event.data;
   }
   return message.trim();
+}
+
+// grok's `end.stopReason` is snake_case. The reviewer's diagnostics vocabulary
+// is the closed set in reviewerHealth.js; an unrecognized reason stays unknown.
+const GROK_STOP_REASONS = {
+  end_turn: 'stop',
+  stop: 'stop',
+  max_tokens: 'length',
+  length: 'length',
+  refusal: 'content_filter',
+  content_filter: 'content_filter',
+  tool_use: 'tool_calls',
+  tool_calls: 'tool_calls',
+  error: 'error',
+};
+
+/**
+ * Map the last `end.stopReason` in a grok streaming-json transcript onto the
+ * reviewer's finish-reason vocabulary. Missing or unrecognized reasons are
+ * `unknown` — never the raw vendor string.
+ * @param {string} streamText - raw JSONL stdout
+ * @returns {'stop'|'length'|'content_filter'|'tool_calls'|'error'|'unknown'}
+ */
+export function grokReviewFinishReason(streamText) {
+  let reason = null;
+  for (const line of String(streamText ?? '').split('\n')) {
+    let event;
+    try { event = JSON.parse(line); } catch { continue; }
+    if (event?.type === 'end' && typeof event.stopReason === 'string') reason = event.stopReason;
+  }
+  return GROK_STOP_REASONS[reason] || 'unknown';
 }
 
 /**
