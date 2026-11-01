@@ -217,8 +217,10 @@ describe('re-approving Cast & Sets', () => {
   it('refreshes owned text and sheets while preserving hand-linked records and unrelated media', async () => {
     const { castAndSetsSubjects } = await import('./castAndSetsPlan.js');
     const projects = [videoProject()];
+    projects[0].concept.subjects.push({ id: 'cs-prop-lantern', kind: 'object', name: 'Lantern', description: 'Old metal' });
     const { deps, ingredients, media } = makeDeps({ projects });
     await saveCheckinCastToCatalog('mv-1', deps);
+    const propId = projects[0].concept.subjects.find((s) => s.id === 'cs-prop-lantern').ingredientId;
     const leadId = projects[0].concept.subjects[0].ingredientId;
     const dinerId = projects[0].concept.subjects.find((s) => s.id === 'cs-set-diner').ingredientId;
     const supporting = projects[0].concept.subjects.find((s) => s.id === 'cs-cast-bo');
@@ -227,10 +229,11 @@ describe('re-approving Cast & Sets', () => {
     ingredients.get(leadId).payload.aliases = ['The lead'];
     // A pre-fix legacy plate and a manually attached reference coexist.
     media.find((row) => row.id === dinerId).metadata = undefined;
-    await deps.catalogDB.attachMedia(leadId, 'manual-reference.png', 'reference', { caption: 'Director reference' });
+    await deps.catalogDB.attachMedia(leadId, 'manual-reference.png', 'reference', { caption: 'From Example Video' });
+    await deps.catalogDB.attachMedia(leadId, 'diner-plate.png', 'reference', { caption: 'Director reference to another subject' });
     const stage = {
       ...approvedStage,
-      direction: { protagonist: { name: 'Ada', face: 'Freckles', hair: 'Short hair' }, cast: [{ id: 'bo', name: 'Bo', description: 'New supporting direction' }], sets: [{ id: 'diner', name: 'Night diner', description: 'New blue booths' }] },
+      direction: { protagonist: { name: 'Ada', face: 'Freckles', hair: 'Short hair' }, props: [{ id: 'lantern', name: 'Lantern', description: 'New blue glass' }], cast: [{ id: 'bo', name: 'Bo', description: 'New supporting direction' }], sets: [{ id: 'diner', name: 'Night diner', description: 'New blue booths' }] },
       images: {
         character: { status: 'done', imageId: 'ada-new.png', history: ['ada-sheet.png'] },
         'cast:bo': { status: 'done', imageId: 'bo-new.png' },
@@ -244,7 +247,8 @@ describe('re-approving Cast & Sets', () => {
 
     expect(ingredients.get(leadId).payload).toMatchObject({ physicalDescription: 'Freckles; Short hair', aliases: ['The lead'] });
     expect(ingredients.get(dinerId).payload.description).toBe('New blue booths');
-    expect(media.filter((row) => row.id === leadId).map((row) => row.key)).toEqual(['manual-reference.png', 'ada-new.png']);
+    expect(ingredients.get(propId).payload.description).toBe('New blue glass');
+    expect(media.filter((row) => row.id === leadId).map((row) => row.key)).toEqual(['manual-reference.png', 'diner-plate.png', 'ada-new.png']);
     expect(media.filter((row) => row.id === dinerId).map((row) => row.key)).toEqual(['diner-new.png']);
     expect(ingredients.get('cat-chr-manual').payload.physicalDescription).toBe('Director-owned text');
     expect(media.some((row) => row.id === 'cat-chr-manual')).toBe(false);

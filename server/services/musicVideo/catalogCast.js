@@ -28,15 +28,20 @@ const queueCheckinSave = createKeyCachedQueue();
 
 // The Cast & Sets image behind each check-in subject: the protagonist's
 // character sheet, a supporting cast sheet, or a set plate.
+function checkinImageKeys(stage) {
+  const out = new Map([[`${CAST_SETS_SUBJECT_PREFIX}protagonist`, 'character']]);
+  for (const c of stage.direction?.cast || []) out.set(`${CAST_SETS_SUBJECT_PREFIX}cast-${c.id}`.slice(0, 64), `cast:${c.id}`);
+  for (const set of stage.direction?.sets || []) out.set(`${CAST_SETS_SUBJECT_PREFIX}set-${set.id}`.slice(0, 64), `set:${set.id}`);
+  return out;
+}
+
 function checkinImages(project) {
   const stage = project?.castAndSets;
   if (stage?.status !== 'approved') return new Map();
-  const images = stage.images || {};
-  const done = (key) => (images[key]?.status === 'done' && images[key].imageId) || null;
-  const out = new Map([[`${CAST_SETS_SUBJECT_PREFIX}protagonist`, done('character')]]);
-  for (const c of stage.direction?.cast || []) out.set(`${CAST_SETS_SUBJECT_PREFIX}cast-${c.id}`.slice(0, 64), done(`cast:${c.id}`));
-  for (const set of stage.direction?.sets || []) out.set(`${CAST_SETS_SUBJECT_PREFIX}set-${set.id}`.slice(0, 64), done(`set:${set.id}`));
-  return out;
+  return new Map([...checkinImageKeys(stage)].map(([subjectId, key]) => {
+    const image = stage.images?.[key];
+    return [subjectId, image?.status === 'done' ? image.imageId || null : null];
+  }));
 }
 
 // A director-cast subject's image: the look reference pulled for it by name.
@@ -331,9 +336,9 @@ async function defaultDeps() {
 async function refreshCheckinRecords(project, catalogDB) {
   if (project?.castAndSets?.status !== 'approved') return;
   const sheets = checkinImages(project);
-  const history = new Set(Object.values(project.castAndSets.images || {}).flatMap((image) => image.history || []));
+  const keys = checkinImageKeys(project.castAndSets);
   for (const subject of project.concept?.subjects || []) {
-    if (!sheets.has(subject.id) || subject.localOnly || !TYPE_PREFIX[subject.kind]
+    if (!subject.id?.startsWith(CAST_SETS_SUBJECT_PREFIX) || subject.localOnly || !TYPE_PREFIX[subject.kind]
       || subject.ingredientId !== musicVideoCastIngredientId(project.id, subject)) continue;
     const record = await catalogDB.getIngredient(subject.ingredientId);
     // Consolidated identities and hand-linked records are no longer ours to refresh.
@@ -343,6 +348,7 @@ async function refreshCheckinRecords(project, catalogDB) {
     }), { source: 'sync' });
     const imageId = sheets.get(subject.id);
     if (!imageId) continue;
+    const history = new Set(project.castAndSets.images?.[keys.get(subject.id)]?.history || []);
     const media = await catalogDB.listMediaForIngredient(record.id);
     const current = media.find((image) => image.kind === 'reference' && image.mediaKey === imageId);
     // Attach first: a failed replacement must leave the previous reference available.
@@ -353,10 +359,9 @@ async function refreshCheckinRecords(project, catalogDB) {
     for (const image of media) {
       const origin = image.metadata?.musicVideoCast;
       const ours = origin?.projectId === project.id && origin.subjectId === subject.id;
-      // Older installs attached check-in images with only the caption. History
-      // also recognizes those references after the project has been renamed.
-      const legacy = !origin && (history.has(image.mediaKey)
-        || image.caption === `From ${trimTo(project.name || 'a music video', 100)}`);
+      // Per-subject render history recognizes legacy check-in references; a
+      // matching project caption alone cannot distinguish a manual attachment.
+      const legacy = !origin && history.has(image.mediaKey);
       if (image.kind === 'reference' && image.mediaKey !== imageId && (ours || legacy)) {
         await catalogDB.detachMedia(record.id, image.mediaKey, image.kind);
       }
