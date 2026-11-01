@@ -87,7 +87,7 @@ describe('cover lettering asset lifecycle', () => {
   it('keeps a newly saved style when an earlier refresh completes later', async () => {
     const save = deferred();
     const refresh = deferred();
-    const updated = { ...style, name: 'Updated Artist' };
+    const updated = { ...style, design: { typeface: 'serif' } };
     const other = { key: 'other artist', name: 'Other Artist', design: {} };
     api.saveMusicVideoArtistStyle.mockReturnValue(save.promise);
     api.getMusicVideoArtistStyles.mockResolvedValueOnce({ styles: [style] }).mockReturnValueOnce(refresh.promise)
@@ -100,8 +100,8 @@ describe('cover lettering asset lifecycle', () => {
     await waitFor(() => expect(api.getMusicVideoArtistStyles).toHaveBeenCalledTimes(2));
     await act(async () => { save.resolve({ style: updated }); await save.promise; });
     await act(async () => { refresh.resolve({ styles: [style] }); await refresh.promise; });
-    expect(await screen.findByRole('option', { name: 'Updated Artist' })).toBeInTheDocument();
-    expect(screen.getByRole('option', { name: 'Other Artist' })).toBeInTheDocument();
-    expect(screen.queryByRole('option', { name: 'Example Artist' })).not.toBeInTheDocument();
+    expect(await screen.findByRole('option', { name: 'Other Artist' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Apply artist style' }));
+    expect(saveCoverDesign).toHaveBeenCalledWith(expect.objectContaining({ typeface: 'serif' }));
   });
 });
