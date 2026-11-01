@@ -374,6 +374,21 @@ describe('planProject', () => {
     expect(result.scenesAdded).toBe(scenes.length);
   });
 
+  it('does not replace shots when their selected frame changes during planning', async () => {
+    let current = makeProject({ scenes: [{ sceneId: 'old-1', startSec: 0, endSec: 2, referenceImageId: 'old.png' }] });
+    getProject.mockResolvedValue(structuredClone(current));
+    mutateProjectRecord.mockImplementation(async (_id, transform) => transform(current));
+    resolveProviderAndModel.mockResolvedValue({ provider: { id: 'p1', type: 'api' }, selectedModel: 'gpt' });
+    const reply = Promise.withResolvers();
+    runPromptThroughProvider.mockReturnValue(reply.promise);
+    const planning = planProject('mv-1', { mode: 'replace' });
+    await vi.waitFor(() => expect(runPromptThroughProvider).toHaveBeenCalled());
+    current = { ...current, scenes: [{ ...current.scenes[0], referenceImageId: 'director-choice.png' }] };
+    reply.resolve({ text: JSON.stringify([{ index: 0, framePrompt: 'a new plan' }]) });
+    await expect(planning).rejects.toMatchObject({ status: 409, code: 'SHOT_PLAN_STALE' });
+    expect(current.scenes[0].referenceImageId).toBe('director-choice.png');
+  });
+
   it('skips the LLM call entirely when seedPrompts is false', async () => {
     getProject.mockResolvedValue(makeProject());
     addProjectScenes.mockResolvedValue(freshProjectResult());

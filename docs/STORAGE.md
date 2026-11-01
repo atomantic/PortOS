@@ -233,6 +233,8 @@ does not recover nonempty output or general failed saves; those still require th
 | `asset-file-db-indexed` | Filesystem | PostgreSQL | Large binary payloads whose **metadata** must be queryable/searchable | Generated images/videos/audio + DB asset rows referencing them via `asset_key` / `media_key` |
 | `ephemeral-file` | Filesystem | None (or DB job ref only) | Transient/regenerable runtime state — queues, uploads, caches | `data/uploads/*`, runtime media job queue, browser profile/cache |
 
+`data/cache/runtime-update-review.json` is an `ephemeral-file`: machine-local, regenerable observations of Node, pm2 and harness update actions. It retains the last known action across a restart or failed check, carries no executable paths, and is refreshed by the local update monitor. It is not federated or seeded.
+
 **The one rule that ties them together: the DB points to files; it does not absorb the bytes.** Any file asset referenced from the DB gets a stable `asset_key` / `media_key` row plus integrity metadata. Bytes never go into a column.
 
 ---

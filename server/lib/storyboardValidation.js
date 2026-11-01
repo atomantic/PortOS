@@ -12,8 +12,10 @@ import {
 } from './storyboardVocabulary.js';
 import { RECIPE_LIMITS as R, RECIPE_NODE_TYPES, RECIPE_PORT_LABELS } from './storyboardRecipe.js';
 import { BEAT_EXTRACT_LIMITS } from './storyboardBeatExtract.js';
+import { localImageFilename } from './localImageFilename.js';
 import { isStoryboardTempTrackFilename } from './storyboardRecord.js';
 import { creativeDirectorProjectCreateSchema } from './creativeDirectorValidation.js';
+import { GREYBOX_SHOT_ID_MAX, GREYBOX_SHOT_ID_PATTERN } from './greyboxVocabulary.js';
 
 const text = (max) => z.string().max(max);
 const ref = z.string().trim().min(1).max(L.refId);
@@ -73,6 +75,17 @@ const panelFields = {
   castIds: refs.optional(),
   environmentIds: refs.optional(),
   objectIds: refs.optional(),
+  // Which gallery image of a linked record Make sends. Null clears every pick.
+  // Absent leaves the stored map alone. A value that is not a gallery image is refused.
+  linkMedia: z.record(ref, z.string().trim().min(1).max(300).refine((value) => {
+    const name = localImageFilename(value);
+    return !!name && /\.(png|jpe?g|webp)$/i.test(name);
+  }, { message: 'linkMedia values must be gallery image filenames' })).refine(
+    (value) => Object.keys(value).length <= L.refs * 3,
+    { message: 'linkMedia has too many picks' },
+  ).nullable().optional(),
+  // Which saved greybox camera of one of its environments the panel is seen from.
+  setShot: z.object({ environmentId: ref, shotId: z.string().min(1).max(GREYBOX_SHOT_ID_MAX).regex(GREYBOX_SHOT_ID_PATTERN) }).strict().nullable().optional(),
   notes: text(L.notes).optional(),
 };
 
@@ -182,6 +195,7 @@ export const storyboardShotSyncSchema = z.object({
   boardUpdatedAt: z.string().min(1).max(64),
   projectUpdatedAt: z.string().min(1).max(64).optional(),
   removeLocked: z.boolean().optional(),
+  removeWithMedia: z.boolean().optional(),
 }).strict();
 
 // Keep a video's shots in sync with its board after each edit (on), or stop (off).

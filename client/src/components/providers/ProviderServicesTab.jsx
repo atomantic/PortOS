@@ -71,7 +71,7 @@ function ServiceCard({
     if (draftVersionRef.current.id === service.id && draftVersionRef.current.revision === service.revision) return;
     draftVersionRef.current = { id: service.id, revision: service.revision };
     setDraft(draftFrom(service));
-  }, [service.id, service.revision]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [service.id, service.revision]); // Dependency list is intentionally partial.
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const set = (key) => (e) => setDraft((prev) => ({ ...prev, [key]: e.target.value }));
   const setTransport = (protocol) => (e) => setDraft((prev) => ({ ...prev, transports: { ...prev.transports, [protocol]: e.target.value } }));

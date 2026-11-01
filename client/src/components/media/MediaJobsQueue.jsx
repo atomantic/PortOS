@@ -553,7 +553,7 @@ function JobRow({ job, onCancel, onRetry, onRunNow, onDelete }) {
           {canCancel && !job.cancelRequested && (
             <button
               onClick={() => onCancel(job.id)}
-              className="flex items-center gap-1 px-2 py-1 bg-port-bg border border-port-border rounded text-xs hover:bg-port-error/20 hover:text-port-error"
+              className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 flex items-center gap-1 px-2 py-1 bg-port-bg border border-port-border rounded text-xs hover:bg-port-error/20 hover:text-port-error"
               aria-label="Cancel"
               title="Cancel"
             >
@@ -563,7 +563,7 @@ function JobRow({ job, onCancel, onRetry, onRunNow, onDelete }) {
           {canEdit && (
             <button
               onClick={() => setEditing((s) => !s)}
-              className={`flex items-center gap-1 px-2 py-1 bg-port-bg border rounded text-xs ${editing ? 'border-port-accent/60 text-port-accent' : 'border-port-border text-gray-500 hover:text-gray-300 hover:border-port-border'}`}
+              className={`pointer-coarse:min-h-11 pointer-coarse:min-w-11 flex items-center gap-1 px-2 py-1 bg-port-bg border rounded text-xs ${editing ? 'border-port-accent/60 text-port-accent' : 'border-port-border text-gray-500 hover:text-gray-300 hover:border-port-border'}`}
               title="Edit prompt / config, then retry"
               aria-label="Edit and retry"
             >
@@ -592,7 +592,7 @@ function JobRow({ job, onCancel, onRetry, onRunNow, onDelete }) {
             ) : (
               <button
                 onClick={() => requestDelete(job.id)}
-                className="flex items-center gap-1 px-2 py-1 bg-port-bg border border-port-border rounded text-xs text-gray-500 hover:text-port-error hover:border-port-error/50"
+                className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 flex items-center gap-1 px-2 py-1 bg-port-bg border border-port-border rounded text-xs text-gray-500 hover:text-port-error hover:border-port-error/50"
                 title="Remove this row from the history"
                 aria-label="Delete from history"
               >

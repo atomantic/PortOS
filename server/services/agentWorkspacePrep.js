@@ -45,7 +45,7 @@ import { getAppWorkspace, getAppDataForTask } from './agentAppWorkspace.js';
 import { createJiraTicketForTask } from './promptSections/appContext.js';
 import { INVESTIGATION_TASK_DELIVERY, isInvestigationTask } from '../lib/investigationTasks.js';
 import { isNonCommittingCoordinatorTask, resolveTaskHookType } from './taskTypeHooks.js';
-import { leavesPrForHuman, resolvePrCompletion, PR_COMPLETIONS } from '../lib/prDisposition.js';
+import { prHeldForOperator, resolvePrCompletion } from '../lib/prDisposition.js';
 import { claimBranchAdmission, claimContinuationAdmission, claimContinuationWorkspace } from '../lib/claimContinuation.js';
 
 const ROOT_DIR = PATHS.root;
@@ -574,12 +574,12 @@ export async function prepareAgentWorkspace({ agentId, task, onPrepared = result
  * task, before any checkout is touched.
  * @returns {Promise<object|null>} the blocked outcome, or null to proceed
  */
-async function refuseUnsafeLaunchTarget({ task, workspacePath, isReadOnly }) {
+async function refuseUnsafeLaunchTarget({ task, workspacePath }) {
   const guardTarget = task.metadata?.pendingMergeGuardTarget;
   if (guardTarget) {
     const { validatePendingMergeRecovery } = await import('./pendingMergeRecovery.js');
-    const refused = guardTarget.repoPath !== workspacePath || resolveTaskTargetBranch(task.metadata) !== guardTarget.branch || isReadOnly || leavesPrForHuman(task)
-      || resolvePrCompletion(task.metadata) !== guardTarget.prCompletion || isTruthyMeta(task.metadata?.reviewLoopLeaveOpen)
+    const refused = guardTarget.repoPath !== workspacePath || resolveTaskTargetBranch(task.metadata) !== guardTarget.branch || prHeldForOperator(task)
+      || resolvePrCompletion(task.metadata) !== guardTarget.prCompletion
       ? 'recovery-target-task-changed' : await validatePendingMergeRecovery({ target: guardTarget, workspacePath, launchTaskId: task.id });
     if (refused) {
       await blockTask(task, refused, 'pr-head-moved');
@@ -589,8 +589,7 @@ async function refuseUnsafeLaunchTarget({ task, workspacePath, isReadOnly }) {
   const recoveryTarget = task.metadata?.cleanupReviewTarget;
   if (recoveryTarget) {
     const { validateCleanupReviewTarget } = await import('./cosMergeHandoff.js');
-    const refused = recoveryTarget.repoPath !== workspacePath || resolveTaskTargetBranch(task.metadata) !== recoveryTarget.branch || isReadOnly || leavesPrForHuman(task)
-      || resolvePrCompletion(task.metadata) === PR_COMPLETIONS.LEAVE_OPEN || isTruthyMeta(task.metadata?.reviewLoopLeaveOpen)
+    const refused = recoveryTarget.repoPath !== workspacePath || resolveTaskTargetBranch(task.metadata) !== recoveryTarget.branch || prHeldForOperator(task)
       ? 'review-target-task-changed' : await validateCleanupReviewTarget({ target: recoveryTarget, workspacePath, launchTaskId: task.id });
     if (refused) {
       await blockTask(task, refused, 'pr-head-moved');
@@ -854,7 +853,7 @@ async function provisionConflictWorktree({ agentId, task, workspacePath }) {
  * once, so a later step never has to infer an earlier outcome from a flag.
  */
 async function prepareResolvedWorkspace({ agentId, task, workspacePath: sourceWorkspace, resolvedApp, resolvedAppName, isReadOnly }) {
-  const refusal = await refuseUnsafeLaunchTarget({ task, workspacePath: sourceWorkspace, isReadOnly });
+  const refusal = await refuseUnsafeLaunchTarget({ task, workspacePath: sourceWorkspace });
   if (refusal) return refusal;
 
   const remediationPin = resolveTaskPinnedHead(task.metadata);

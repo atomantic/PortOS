@@ -378,7 +378,7 @@ function DragHandle({ kind, item, onPointerDown, onClick, onKeyDown, onBlur, gra
       aria-pressed={grabbed}
       // The registry label, not the raw id — this is read aloud.
       aria-label={`${label} ${widgetLabel(item)}`}
-      className={`absolute z-20 border rounded ${stateClass} ${className}`}
+      className={`pointer-coarse:min-h-11 pointer-coarse:min-w-11 absolute z-20 border rounded ${stateClass} ${className}`}
       style={{ touchAction: 'none' }}
       {...handleProps}
     >

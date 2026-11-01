@@ -1,15 +1,13 @@
-import { useContext, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
-import { Plus, Image as ImageIcon, Film, Code2, Type, FlagTriangleRight, Lock, LockOpen, X } from 'lucide-react';
+import { Plus, Image as ImageIcon, Film, Code2, Type, FlagTriangleRight, X } from 'lucide-react';
 import Drawer from '../../Drawer';
 import ContactSheetButton from '../ContactSheetButton.jsx';
-import LockAllShots from '../LockAllShots.jsx';
 import SceneCard from '../SceneCard.jsx';
 import EndingCard, { EndingThumbnail } from '../EndingCard.jsx';
 import CreditsEndingCard, { CreditsThumbnail } from '../CreditsEndingCard.jsx';
 import ScenePoster from '../ScenePoster.jsx';
 import ShotEffectsCard, { SceneEffectBadges } from '../ShotEffectsCard.jsx';
-import { ShotLockContext, SHOT_LOCK_LABELS, overallShotLock, shotUnlocked } from '../ShotLock.jsx';
 import { shotNumbers } from '../ShotStepper.jsx';
 import { previousShot, shotHandoffSource } from '../../../../../server/lib/musicVideoHandoffFrame.js';
 import { coldOpenScenes } from '../../../../../server/lib/musicVideoColdOpen.js';
@@ -40,7 +38,6 @@ function SceneMediaBadges({ scene, layered }) {
   );
 }
 
-const LOCK_BADGED = ['locked', 'still', 'changed'];
 const PANEL_NOTICES = { changed: 'Storyboard changed', missing: 'Storyboard panel deleted' };
 
 /** The video's linked storyboard, read when Shots opens (null when none is linked or it is gone). */
@@ -57,26 +54,11 @@ function useLinkedStoryboard(storyboardId) {
 }
 
 /**
- * Top-left mark on a Board thumbnail: locked, a video shot with only its still
- * locked ("Still"), or changed since it was locked (an open shot shows none).
- */
-function SceneLockBadge({ sceneId, state }) {
-  if (!LOCK_BADGED.includes(state)) return null;
-  const Icon = state === 'changed' ? LockOpen : Lock;
-  return (
-    <span id={`scene-lock-${sceneId}`} title={SHOT_LOCK_LABELS[state]}
-      className={`port-media-overlay-strong absolute left-1 top-1 inline-flex items-center gap-0.5 rounded p-0.5 text-[10px] font-medium leading-none ${state === 'changed' ? 'text-port-warning' : 'text-port-success'}`}>
-      <Icon size={12} aria-hidden="true" />{state === 'still' && <span aria-hidden="true">Still</span>}<span className="sr-only">{SHOT_LOCK_LABELS[state]}</span>
-    </span>
-  );
-}
-
-/**
- * The scene board on Shots: a thumbnail per shot with its lock and media marks
+ * The scene board on Shots: a thumbnail per shot with its media marks
  * — two columns on a phone, three and four as the column widens (a container
  * query, so the docked preview narrowing the column is accounted for). A tapped
  * shot (or the ending after the song) opens its card in the side panel, where
- * its still and clip are made and locked, so the board stays where it was.
+ * its still and clip are made, so the board stays where it was.
  */
 export default function BoardStage({ board }) {
   const { project, locked, sceneMedia, videoSettings, takes, activeSceneId, onToggleSceneExpand } = board;
@@ -84,8 +66,6 @@ export default function BoardStage({ board }) {
   const [storyboard, setStoryboard] = useLinkedStoryboard(project.storyboardId);
   // Until the board is read, a fitted shot shows no panel state rather than a false "deleted".
   const panelOf = (scene) => (storyboard ? storyboardShotPanel(storyboard, scene) : null);
-  const lockValue = useContext(ShotLockContext);
-  const shotLocks = Object.fromEntries(Object.entries(lockValue?.locks || {}).map(([id, still]) => [id, overallShotLock(still, lockValue.clips?.[id])]));
   const [searchParams, setSearchParams] = useSearchParams();
   const filter = parseSceneFilter(searchParams.get('scenes'));
   const setFilter = (next) => setSearchParams((prev) => {
@@ -118,10 +98,7 @@ export default function BoardStage({ board }) {
     songReview: project.songRevision?.sceneReview || null,
     videoSettings: videoSettings.settings,
   };
-  // A locked shot is settled: its other takes are no longer something to review. A still or
-  // video the checklist counts as not locked yet needs attention too.
-  const codesById = new Map(scenes.map((scene) => [scene.sceneId, sceneAttention(scene, { ...attentionCtx,
-    locked: shotLocks[scene.sceneId] === 'locked', unlocked: shotUnlocked(lockValue, scene.sceneId) })]));
+  const codesById = new Map(scenes.map((scene) => [scene.sceneId, sceneAttention(scene, attentionCtx)]));
   const numbers = shotNumbers(scenes);
   const coldNumbers = new Map(coldOpenScenes(project).map((scene, i) => [scene.sceneId, i + 1]));
   const shotName = (scene) => [coldNumbers.has(scene.sceneId) ? `Cold open ${coldNumbers.get(scene.sceneId)}`
@@ -206,7 +183,6 @@ export default function BoardStage({ board }) {
       <div id="mv-scene-board" className="flex items-center justify-between">
         <h3 className="text-sm font-medium">Scene board</h3>
         <div className="flex items-center gap-2">
-          <LockAllShots scenes={scenes} layered={layered} />
           <ContactSheetButton onOpen={board.openContactSheet} />
           <button onClick={board.onAddScene} className="flex min-h-[44px] items-center gap-1 rounded bg-port-accent px-2 py-1.5 text-sm text-white sm:min-h-0">
             <Plus size={15} /> Add scene
@@ -244,13 +220,11 @@ export default function BoardStage({ board }) {
             ref={element => { if (element) thumbnailsRef.current.set(scene.sceneId, element); else thumbnailsRef.current.delete(scene.sceneId); }}
             onClick={() => { board.seekToScene?.(scene); onToggleSceneExpand?.(scene.sceneId, true); }}
             aria-label={`Open ${shotName(scene)}`}
-            aria-describedby={[LOCK_BADGED.includes(shotLocks[scene.sceneId]) && `scene-lock-${scene.sceneId}`,
-              (sceneMediaKind(scene, { layered }) || scene.endImageId) && `scene-media-${scene.sceneId}`,
+            aria-describedby={[(sceneMediaKind(scene, { layered }) || scene.endImageId) && `scene-media-${scene.sceneId}`,
               Object.values(effectsById.get(scene.sceneId)).some((list) => list.length) && `scene-effects-${scene.sceneId}`].filter(Boolean).join(' ') || undefined}
             className={`min-w-0 rounded border p-2 text-left ${activeSceneId === scene.sceneId ? 'border-port-accent bg-port-accent/10' : 'border-port-border bg-port-card'}`}>
             <span className="relative block">
               <ScenePoster scene={scene} className="aspect-video w-full rounded" />
-              <SceneLockBadge sceneId={scene.sceneId} state={shotLocks[scene.sceneId]} />
               <SceneMediaBadges scene={scene} layered={layered} />
               <SceneEffectBadges sceneId={scene.sceneId} effects={effectsById.get(scene.sceneId)} />
             </span>

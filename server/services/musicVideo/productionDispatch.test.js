@@ -184,6 +184,15 @@ describe('production scene dispatch (#9066)', () => {
     expect(submitVideoGenJob.mock.calls[0][0].disableAudio).toBeUndefined();
   });
 
+  // Uniquely catches a production run rendering a cold-open shot with Clip sound silent (the shot card keeps its sound).
+  it('keeps a local clip\'s sound only on a cold-open shot playing its clip sound', async () => {
+    const clipTag = { ...tag, productionStepKey: 'clip:mvs-a:base:1' };
+    const route = { kind: 'video', mode: 'local', model: 'example-ltx' };
+    await dispatchProductionStep({ stepKind: 'clip', project, scene: { ...scene, preMusic: { durationSec: 4, clipVolume: 1 } }, route, tag: clipTag, settings });
+    await dispatchProductionStep({ stepKind: 'clip', project, scene, route, tag: clipTag, settings });
+    expect(submitVideoGenJob.mock.calls.map(([body]) => body.disableAudio)).toEqual([false, true]);
+  });
+
   it('submits a fal clip as exactly the take the step was priced for (falSceneTake)', async () => {
     const clipTag = { ...tag, productionStepKey: 'clip:mvs-a:base:1' };
     const falProject = { ...project, videoSettings: { backend: 'fal', falModelId: 'fal-ai/veo3.1/fast/image-to-video', falResolution: '1080p' } };

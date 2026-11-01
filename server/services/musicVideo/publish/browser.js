@@ -31,6 +31,11 @@ export function serializeBrowserOperation(fn) {
 
 /** Connect to the running PortOS Browser (launching it when it is stopped, unless `launch: false`). */
 export async function connectPortosBrowser({ launch = true } = {}) {
+  // The PortOS Browser carries the operator's real sign-ins (Suno, socials): a test
+  // that misses a double must fail, never spend credits or post as the operator.
+  if (process.env.VITEST) {
+    throw new ServerError('Tests must not drive the real PortOS Browser; stub this dependency.', { status: 503, code: 'PORTOS_BROWSER_UNAVAILABLE' });
+  }
   const { getHealthStatus, launchBrowser } = await import('../../browserService.js');
   let health = await getHealthStatus();
   if (!health.connected && launch) health = await launchBrowser();

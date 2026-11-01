@@ -63,20 +63,11 @@ router.post('/tts/preview', asyncHandler(async (req, res) => {
   const body = validateRequest(ttsPreviewSchema, req.body ?? {});
   const { engine, voice } = parseVoiceId(body.voiceId);
   const text = body.text || DEFAULT_PREVIEW_TEXT;
-  // Surface "unknown voice" + transient model-load failures as 400/503 with
-  // a useful message instead of asyncHandler's default 500.
-  let wav; let latencyMs; let usedEngine;
-  try {
-    ({ wav, latencyMs, engine: usedEngine } = await synthesizeVoice(text, {
-      ...(engine ? { engine } : {}),
-      ...(voice ? { voice } : {}),
-    }));
-  } catch (err) {
-    if (err?.message?.startsWith('unknown') || err?.code === 'UNKNOWN_VOICE') {
-      throw new ServerError(err.message, { status: 400, code: 'PIPELINE_AUDIO_UNKNOWN_VOICE' });
-    }
-    throw err;
-  }
+  // An unknown voice already arrives as a 400 UNKNOWN_VOICE ServerError from the TTS façade.
+  const { wav, latencyMs, engine: usedEngine } = await synthesizeVoice(text, {
+    ...(engine ? { engine } : {}),
+    ...(voice ? { voice } : {}),
+  });
   res.setHeader('Content-Type', 'audio/wav');
   res.setHeader('X-TTS-Latency-Ms', String(latencyMs));
   res.setHeader('X-TTS-Engine', usedEngine);

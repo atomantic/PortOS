@@ -275,7 +275,6 @@ export async function assertCurrentPerformanceTakes(project, masterPath, options
   const one = stale.length === 1;
   const them = one ? 'it' : 'them';
   const fixes = [`Regenerate ${them}`,
-    ...(locks ? [`lock ${one ? 'its clip' : 'their clips'} to keep ${them} as ${one ? 'it plays' : 'they play'}`] : []),
     ...(stale.every((entry) => entry.cutaway) ? [`switch ${them} to Cutaway`] : [])];
   const fix = fixes.length > 1 ? `${fixes.slice(0, -1).join(', ')} or ${fixes.at(-1)}` : fixes[0];
   const suppliedAudio = ({ sceneId }) => {

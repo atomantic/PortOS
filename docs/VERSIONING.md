@@ -386,7 +386,11 @@ a substitute for this proof.
 After publication, the durable continuation opens a normal **`release` → `main`** synchronization PR and
 merge it with a merge commit after its own required checks/reviews/admission.
 This carries version metadata, notes and candidate-only fixes back to development
-and preserves the release merge ancestry for the next candidate. Run the
+and preserves the release merge ancestry for the next candidate. The PR's head is a
+temporary branch pushed at the published release commit
+(`git push origin <release-sha>:refs/heads/codex/release-sync-<id>`), never `release`
+itself: the repository deletes merged head branches, so a `--head release` PR
+removes the `release` branch when it merges. Run the
 repository-required quality snapshot after publication as a development update;
 it never changes this release. If conflicts require edits, use a temporary sync branch containing the published release commit
 and the current `main`, resolve them there, and merge that branch into `main`.

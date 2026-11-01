@@ -516,6 +516,17 @@ async function updateCompletionReceipt(agentId, update, { preserveResult = false
   }));
 }
 
+/** An archived completed run's audit receipt; the execution verdict is unchanged. */
+export async function recordAuditFindingsReceipt(agentId, startedAt, auditFindings) {
+  let matched = false;
+  const saved = await updateCompletionReceipt(agentId, (metadata, agent) => {
+    if (agent.startedAt !== startedAt) return metadata;
+    matched = true;
+    return { ...metadata, auditFindings };
+  }, { preserveResult: true });
+  return saved && matched;
+}
+
 /** A terminal run keeps independent post-ingestion obligations in its existing
  * durable record, including after the record moved to its archive bucket.
  */

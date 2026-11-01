@@ -11,7 +11,7 @@ import { getTrack } from '../tracks/index.js';
 import { setProjectAnalysis } from './projects.js';
 import { requireProject } from './requireProject.js';
 import { analyzeAudioFile } from './audioAnalysis.js';
-import { relabelAnalysisSections } from './lyricMarkers.js';
+import { relabelAnalysisSections } from '../../lib/lyricMarkers.js';
 
 /**
  * Resolve a project's source audio to an absolute path under data/music/. The

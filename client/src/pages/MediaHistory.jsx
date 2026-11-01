@@ -142,7 +142,7 @@ export default function MediaHistory() {
 
   const withPendingDelete = useCallback((key, pendingDelete) => setItems((all) => all.map((x) => {
     if (x.key !== key) return x;
-    const { pendingDelete: _previous, ...raw } = x.raw; // eslint-disable-line no-unused-vars
+    const { pendingDelete: _previous, ...raw } = x.raw;
     return { ...x, pendingDelete, raw: pendingDelete ? { ...raw, pendingDelete } : raw };
   })), [setItems]);
 

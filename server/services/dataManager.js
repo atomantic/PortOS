@@ -205,7 +205,10 @@ export const CATEGORIES = {
   'supercollider': { label: 'SuperCollider Runtime', description: 'Machine-local readiness evidence for the managed SuperCollider image, in-flight render scratch and 24-hour render previews — re-created by npm run setup:supercollider, safe to purge', archivable: false, deletable: true, purgeScope: 'category' },
   'telegram': { label: 'Telegram', description: 'Telegram bot data', archivable: true, deletable: true, purgeScope: 'category' },
   'templates': { label: 'Visual Templates', description: 'Shipped layout assets used as render anchors', archivable: false, deletable: false },
-  'tools': { label: 'Tools', description: 'Tool execution data', archivable: true, deletable: true, purgeScope: 'category' },
+  // Not execution logs: one JSON config per onboard tool, spliced into CoS
+  // prompts. Image Gen settings are the only writer, so a purge would drop
+  // "Available Tools" after the next restart and reclaim almost nothing.
+  'tools': { label: 'Tools', description: 'Onboard tool registry listed in CoS agent prompts — rebuilt only when Image Gen settings are saved', archivable: true, deletable: false },
   'training-runs': { label: 'LoRA Training Runs', description: 'Retired training checkpoints and previews; use Settings → Data Maintenance for a fresh preview and confirmed removal. May contain unique adapters.', archivable: false, deletable: false, busyCheck: trainingRunsBusy },
   'universes': { label: 'Universes', description: 'Universe Builder records — bibles, canon, and style references', archivable: true, deletable: false },
   'update-detached': { label: 'Update Control', description: 'Control files for a detached self-update run — safe to purge when no update is running', archivable: false, deletable: true, purgeScope: 'category', busyCheck: updateDetachedBusy },

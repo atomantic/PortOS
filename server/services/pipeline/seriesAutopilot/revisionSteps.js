@@ -104,6 +104,64 @@ async function runAdversarialCuts(sId, record) {
   return { safeComments: filterSafeCutComments(review.comments || []) };
 }
 
+// Elo ranking when a FRESH one exists (#2169), else the judge's weakest-first
+// (lowest qualityScore). A budget-stopped snapshot is deliberately `partial`;
+// never let partial standings become the autopilot's comparative revision evidence.
+async function pickWeakestIssueId(sId, seriesJudge) {
+  const rank = await getComparativeRank(sId).catch(() => null);
+  if (rank?.status === 'complete' && rank.budgetStopped !== true && !rank.stale
+    && Array.isArray(rank.weakest) && rank.weakest[0]) return rank.weakest[0].issueId;
+  return seriesJudge.weakest?.[0]?.issueId || null;
+}
+
+// Force a fresh judge of one stage; bills one cos action only when it completes.
+async function rejudgeAndBill(issueId, stageId, judgeLlm) {
+  const snap = await judgeIssue(issueId, {
+    stageId,
+    force: true,
+    providerDefault: judgeLlm.providerOverride,
+    modelDefault: judgeLlm.modelOverride,
+    effortDefault: judgeLlm.effortOverride,
+  }).catch((err) => {
+    console.log(`⚠️ revision: re-judge failed for issue ${issueId.slice(0, 12)}: ${err.message}`);
+    return null;
+  });
+  if (snap?.status === 'complete') await recordDomainUsage('cos', { actions: 1 });
+  return snap;
+}
+
+// Keep/revert gate: re-judge the revised issue and keep only if the composite
+// qualityScore did not regress, else restore the pre-revision text. Returns
+// { decision, postScore }, or { halt } with the budget pause to return. Nothing
+// applied leaves nothing to judge: the cycle keeps the pre-revision score.
+async function applyKeepRevertGate(record, { weakestId, stageId, preState, preScore, applied }) {
+  if (applied === 0) return { decision: 'keep', postScore: preScore };
+  const postIssue = await getIssue(weakestId).catch(() => null);
+  const appliedOutput = postIssue?.stages?.[stageId]?.output || '';
+  const before = await budgetPause();
+  if (before) return { halt: before };
+  const judgeLlm = roleLlm(record, 'judge');
+  const reJudge = await rejudgeAndBill(weakestId, stageId, judgeLlm);
+  const postScore = reJudge?.status === 'complete' ? reJudge.qualityScore : preScore;
+  const decision = decideKeepRevert(preScore, postScore);
+  if (decision === 'revert') {
+    // Restore through the serialized path, guarded so a concurrent human edit is
+    // never clobbered: revert ONLY when the stage still holds the cut output we
+    // produced. A `revert-` runId marks this as a fresh version event.
+    await updateStageWithLatest(weakestId, stageId, (cur) => {
+      if ((cur?.output || '') !== appliedOutput) return {};
+      return { status: 'edited', input: preState.input, output: preState.output, lastRunId: `revert-${randomUUID()}`, errorMessage: '' };
+    }).catch((err) => {
+      console.log(`⚠️ revision: revert failed for issue ${weakestId.slice(0, 12)}: ${err.message}`);
+    });
+    // Re-judge the restored text so the persisted snapshot matches what's on
+    // disk (else it lingers pinned to the rejected cut version). Skipped when the
+    // budget is spent: the snapshot stays stale and the next cycle re-judges it.
+    if (!await budgetPause()) await rejudgeAndBill(weakestId, stageId, judgeLlm);
+  }
+  return { decision, postScore };
+}
+
 // One iterate-to-quality revision cycle (CWQE Phase 7, #2171). Composes the
 // judge (#2167), adversarial cuts (#2168), and — when a fresh ranking exists —
 // the comparative Elo (#2169) to revise the WEAKEST drafted issue under a
@@ -113,11 +171,12 @@ async function runAdversarialCuts(sId, record) {
 // only runs in execute mode).
 export async function runRevisionCycle(sId, record) {
   if (record.cancelRequested) return { canceled: true };
+  const cyclesRun = record.runState.revisionCyclesRun || 0;
   const issues0 = await listIssues({ seriesId: sId });
   if (eligibleIssues(issues0).length === 0) {
     // Nothing drafted to revise — converge so the resolver moves on.
     record.runState.revisionConverged = true;
-    broadcast(sId, { type: 'revision:converged', reason: 'no-content', cycle: record.runState.revisionCyclesRun || 0 });
+    broadcast(sId, { type: 'revision:converged', reason: 'no-content', cycle: cyclesRun });
     return {};
   }
 
@@ -129,20 +188,11 @@ export async function runRevisionCycle(sId, record) {
   const seriesJudge = await getSeriesJudge(sId, { issues: issues0 });
   const preMean = meanQualityScore(seriesJudge);
 
-  // 2. Pick the weakest issue — Elo ranking when a FRESH one exists (#2169),
-  //    else the judge's weakest-first (lowest qualityScore).
-  let weakestId = null;
-  const rank = await getComparativeRank(sId).catch(() => null);
-  // A budget-stopped snapshot is deliberately `partial`; never let partial
-  // standings become the autopilot's comparative revision evidence.
-  if (rank?.status === 'complete' && rank.budgetStopped !== true && !rank.stale
-    && Array.isArray(rank.weakest) && rank.weakest[0]) {
-    weakestId = rank.weakest[0].issueId;
-  }
-  if (!weakestId) weakestId = seriesJudge.weakest?.[0]?.issueId || null;
+  // 2. Pick the weakest issue.
+  const weakestId = await pickWeakestIssueId(sId, seriesJudge);
   if (!weakestId) {
     record.runState.revisionConverged = true;
-    broadcast(sId, { type: 'revision:converged', reason: 'no-weakest', cycle: record.runState.revisionCyclesRun || 0 });
+    broadcast(sId, { type: 'revision:converged', reason: 'no-weakest', cycle: cyclesRun });
     return {};
   }
 
@@ -174,7 +224,7 @@ export async function runRevisionCycle(sId, record) {
     cutComments: issueSafeCuts,
     currentChars: (preState.output || '').length || null,
   });
-  broadcast(sId, { type: 'revision:brief', issueId: weakestId, cycle: (record.runState.revisionCyclesRun || 0) + 1, cuts: issueSafeCuts.length, brief: brief.slice(0, 2000) });
+  broadcast(sId, { type: 'revision:brief', issueId: weakestId, cycle: cyclesRun + 1, cuts: issueSafeCuts.length, brief: brief.slice(0, 2000) });
 
   // 5. Apply — mechanical safe cuts are the revision (autonovel: "the cuts ARE the
   //    plan"). applyCuts writes through the serialized stage path with a runHistory
@@ -188,60 +238,14 @@ export async function runRevisionCycle(sId, record) {
     applied = cutResult.applied || 0;
   }
 
-  // 6. Keep/revert gate — re-judge the revised issue; keep only if the composite
-  //    qualityScore did not regress, else restore the pre-revision text.
-  let decision = 'keep';
-  let postScore = preScore;
-  if (applied > 0) {
-    const postIssue = await getIssue(weakestId).catch(() => null);
-    const appliedOutput = postIssue?.stages?.[stageId]?.output || '';
-    const before = await budgetPause();
-    if (before) return before;
-    const judgeLlm = roleLlm(record, 'judge');
-    const reJudge = await judgeIssue(weakestId, {
-      stageId,
-      force: true,
-      providerDefault: judgeLlm.providerOverride,
-      modelDefault: judgeLlm.modelOverride,
-      effortDefault: judgeLlm.effortOverride,
-    }).catch((err) => {
-      console.log(`⚠️ revision: re-judge failed for issue ${weakestId.slice(0, 12)}: ${err.message}`);
-      return null;
-    });
-    if (reJudge && reJudge.status === 'complete') await recordDomainUsage('cos', { actions: 1 });
-    postScore = reJudge?.status === 'complete' ? reJudge.qualityScore : preScore;
-    decision = decideKeepRevert(preScore, postScore);
-    if (decision === 'revert') {
-      // Restore through the serialized path, guarded so a concurrent human edit is
-      // never clobbered: revert ONLY when the stage still holds the cut output we
-      // produced. A `revert-` runId marks this as a fresh version event.
-      await updateStageWithLatest(weakestId, stageId, (cur) => {
-        if ((cur?.output || '') !== appliedOutput) return {};
-        return { status: 'edited', input: preState.input, output: preState.output, lastRunId: `revert-${randomUUID()}`, errorMessage: '' };
-      }).catch((err) => {
-        console.log(`⚠️ revision: revert failed for issue ${weakestId.slice(0, 12)}: ${err.message}`);
-      });
-      // Re-judge the restored text so the persisted snapshot matches what's on
-      // disk (else it lingers pinned to the rejected cut version). Budget-gated +
-      // billed like every other judge; skipped (snapshot stays stale — the next
-      // cycle re-judges it) when the budget is spent.
-      const beforeRevertJudge = await budgetPause();
-      if (!beforeRevertJudge) {
-        const rj = await judgeIssue(weakestId, {
-          stageId,
-          force: true,
-          providerDefault: judgeLlm.providerOverride,
-          modelDefault: judgeLlm.modelOverride,
-          effortDefault: judgeLlm.effortOverride,
-        }).catch(() => null);
-        if (rj && rj.status === 'complete') await recordDomainUsage('cos', { actions: 1 });
-      }
-    }
-  }
+  // 6. Keep/revert gate.
+  const gate = await applyKeepRevertGate(record, { weakestId, stageId, preState, preScore, applied });
+  if (gate.halt) return gate.halt;
+  const { decision, postScore } = gate;
 
   // 7. Record the cycle: post-cycle mean drives the plateau detector; the ledger
   //    line is the experiment log (single emoji line per the AGENTS.md convention).
-  record.runState.revisionCyclesRun = (record.runState.revisionCyclesRun || 0) + 1;
+  record.runState.revisionCyclesRun = cyclesRun + 1;
   const postSeriesJudge = await getSeriesJudge(sId, { issues: await listIssues({ seriesId: sId }) });
   const postMean = meanQualityScore(postSeriesJudge);
   if (Number.isFinite(postMean)) record.runState.revisionScoreHistory.push(postMean);

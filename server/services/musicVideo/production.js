@@ -297,6 +297,17 @@ export function assertProductionStepOpen(project, runId, stepKey, { sceneId, kin
     const scene = project.scenes.find((entry) => entry.sceneId === sceneId);
     if (scene.referenceImageId !== step.plateAdmission.assetId || plateRequirementBasis(scene) !== step.plateAdmission.basis || !selectedPlatePasses(scene, runId)) throw productionError(409, 'PRODUCTION_PLATE_CHANGED', 'The selected plate or its requirements changed before animation');
   }
+  if (kind === 'image' && step.stillRepair) {
+    const scene = project.scenes.find((entry) => entry.sceneId === sceneId);
+    const repair = pendingStillRepair(scene);
+    if (!repair || repair.at !== step.stillRepair.at || repair.replaces !== step.stillRepair.replaces) {
+      throw productionError(409, 'PRODUCTION_PLATE_CHANGED', 'The selected frame changed before its repair was submitted');
+    }
+  }
+  if (step.kind === 'frame' && !step.stillRepair && !step.plateRepairBasis && !step.revisionId
+    && isNonBlankStr(project.scenes.find((entry) => entry.sceneId === sceneId)?.referenceImageId)) {
+    throw productionError(409, 'PRODUCTION_PLATE_CHANGED', 'This shot got a frame before its generation was submitted');
+  }
   return step;
 }
 
@@ -317,6 +328,10 @@ export function assertProductionPilotRoute(project, run, sceneId, kind, route) {
 
 const SLOT = Object.freeze({ frame: 'referenceImageId', clip: 'videoHistoryId' });
 const JOB_KIND = Object.freeze({ frame: 'image', clip: 'video', author: 'code', plate: 'plate' });
+
+/** A still repair remains pending only while the reviewed frame is selected. */
+export const pendingStillRepair = (scene) => (scene?.stillFixes?.pending === true
+  && scene.stillFixes.replaces && scene.referenceImageId === scene.stillFixes.replaces ? scene.stillFixes : null);
 
 const productionSceneBasis = (project, sceneId) => canonicalSnapshotChecksum({
   scene: (project.scenes || []).find((scene) => scene.sceneId === sceneId) || null,
@@ -381,7 +396,7 @@ export function productionTargets(project) {
   const layered = isLayeredComposition(project);
   const scenes = Array.isArray(project?.scenes) ? project.scenes : [];
   return {
-    frame: scenes.filter((s) => sceneVisualLayer(s, { layered }) === 'still' || (!isSelfDrawnLayer(sceneVisualLayer(s, { layered })) && !s.videoHistoryId)),
+    frame: scenes.filter((s) => sceneVisualLayer(s, { layered }) === 'still' || (!isSelfDrawnLayer(sceneVisualLayer(s, { layered })) && (!s.videoHistoryId || pendingStillRepair(s)))),
     clip: scenes.filter((s) => sceneVisualLayer(s, { layered }) === 'footage'),
   };
 }
@@ -479,7 +494,7 @@ function nextOpenGeneration(project, run, jobs, { pendingPilots, targets }) {
   for (const stepKind of run.stopBefore === 'clips' ? ['frame'] : ['frame', 'clip']) {
     for (const scene of targets[stepKind]) {
       if (pendingPilots.length && !pendingPilots.some((pilot) => pilot.sceneId === scene.sceneId)) continue;
-      if (scene[SLOT[stepKind]]) continue;
+      if (scene[SLOT[stepKind]] && !(stepKind === 'frame' && pendingStillRepair(scene))) continue;
       // A clip is generated from the scene's frame; wait for it.
       if (stepKind === 'clip' && !scene.referenceImageId) { waiting = true; continue; }
       const steps = slotSteps(run, scene.sceneId, stepKind);
@@ -597,7 +612,7 @@ function castAndSetsGate(project, run) {
  * Returns `{ project, run, step }`.
  */
 export function reserveProductionStep(project, runId, {
-  kind, sceneId, revisionId = null, route, rationale = '', processId, costUsd: stepCostUsd = undefined, costModelId = null, plateRepairBasis = null,
+  kind, sceneId, revisionId = null, route, rationale = '', processId, costUsd: stepCostUsd = undefined, costModelId = null, plateRepairBasis = null, stillRepair = null,
 }, now = new Date().toISOString()) {
   let step = null;
   const out = mutateRun(project, runId, (run) => {
@@ -639,6 +654,13 @@ export function reserveProductionStep(project, runId, {
     }
     if (run.steps.length >= MAX_RUN_STEPS) throw productionError(409, 'PRODUCTION_STEP_LIMIT', 'This run recorded its maximum number of steps');
     const scene = (project.scenes || []).find((entry) => entry.sceneId === sceneId);
+    if (stillRepair && (kind !== 'frame' || pendingStillRepair(scene)?.at !== stillRepair.at || scene.referenceImageId !== stillRepair.replaces)) {
+      throw productionError(409, 'PRODUCTION_PLATE_CHANGED', 'The selected frame changed before its repair was reserved');
+    }
+    // The director can pick a frame after dispatch inspected the scene; a fresh frame is then unpaid-for work.
+    if (kind === 'frame' && !stillRepair && !plateRepairBasis && !revisionId && isNonBlankStr(scene?.referenceImageId)) {
+      throw productionError(409, 'PRODUCTION_PLATE_CHANGED', 'This shot got a frame before its generation was reserved');
+    }
     step = {
       key: `${kind}:${sceneId}:${revisionId || 'base'}:${existing.length + 1}`,
       kind,
@@ -652,6 +674,7 @@ export function reserveProductionStep(project, runId, {
       ...(['frame', 'clip'].includes(kind) ? { providerBasis: productionProviderBasis(project, kind) } : {}),
       ...(kind === 'clip' && scene?.direction?.actionContract ? { plateAdmission: { assetId: scene.referenceImageId, basis: plateRequirementBasis(scene) } } : {}),
       ...(plateRepairBasis ? { plateRepairBasis } : {}),
+      ...(stillRepair ? { stillRepair } : {}),
       ...(run.authoring && !author ? { submissionBasis: productionSceneBasis(project, sceneId) } : {}),
       ...(run.authoring && kind === 'clip' ? { editInterval: (({ startSec, endSec }) => ({ startSec, endSec }))(project.scenes.find((scene) => scene.sceneId === sceneId)) } : {}),
       status: 'reserved',

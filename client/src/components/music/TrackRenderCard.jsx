@@ -131,7 +131,7 @@ export default function TrackRenderCard({
             <button
               type="button"
               onClick={() => setConfirmingDelete(true)}
-              className="shrink-0 px-1.5 py-1 bg-port-error/20 hover:bg-port-error/40 text-port-error text-[10px] rounded flex items-center justify-center"
+              className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 shrink-0 px-1.5 py-1 bg-port-error/20 hover:bg-port-error/40 text-port-error text-[10px] rounded flex items-center justify-center"
               title="Delete render"
               aria-label="Delete render"
             >

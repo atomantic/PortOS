@@ -1210,7 +1210,7 @@ export default function AudioStage({ issue, onStageUpdate }) {
                             type="button"
                             onClick={() => setPendingLibraryDelete(track.filename)}
                             title="Delete from library (issues that point at this file will fail playback)" aria-label="Delete from library (issues that point at this file will fail playback)"
-                            className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs border border-port-border text-gray-400 hover:text-port-error hover:border-port-error/50"
+                            className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 inline-flex items-center gap-1 px-2 py-1 rounded text-xs border border-port-border text-gray-400 hover:text-port-error hover:border-port-error/50"
                           >
                             <Trash2 size={12} />
                           </button>

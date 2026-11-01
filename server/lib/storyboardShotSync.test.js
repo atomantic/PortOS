@@ -38,6 +38,18 @@ describe('storyboardPanelSpans', () => {
 });
 
 describe('storyboardShotSyncPlan', () => {
+  it('points a shot at the set camera its panel names, through the linked place of the video', () => {
+    const seen = panel('a', 6, 'Nora skates past', { setShot: { environmentId: 'cat-rink', shotId: 'wall-east' } });
+    const unlinked = panel('b', 6, 'Elsewhere', { setShot: { environmentId: 'cat-other', shotId: 'wide' } });
+    const project = { scenes: [shot('b', 6, 12, { setReference: { subjectId: 'rink', greyboxShotId: 'wall-west' } })], concept: { subjects: [{ id: 'rink', kind: 'place', ingredientId: 'cat-rink' }] } };
+    const plan = storyboardShotSyncPlan(board([seen, unlinked, panel('c', 7.6)]), project, { song });
+    const byPanel = Object.fromEntries(plan.shots.map((x) => [x.panelId, x]));
+    expect(byPanel['panel-a'].input.setReference).toEqual({ subjectId: 'rink', greyboxShotId: 'wall-east' });
+    // A place the video does not use leaves the shot choice alone.
+    expect(byPanel['panel-b'].patch).not.toHaveProperty('setReference');
+    expect(byPanel['panel-c'].input).not.toHaveProperty('setReference');
+  });
+
   it('makes a shot per panel when there are none', () => {
     const plan = storyboardShotSyncPlan(board(), { scenes: [] }, { song });
     expect(plan.counts).toMatchObject({ added: 4, linked: 0, removed: 0 });
@@ -85,15 +97,13 @@ describe('storyboardShotSyncPlan', () => {
     expect(moved.shots[2].patch).toMatchObject({ startSec: 7 });
     expect(moved.shots[2].patch).not.toHaveProperty('visualIntent');
 
-    // A reworded panel rewords its open shot, but a locked shot waits for Update.
+    // A reworded panel updates its shot even if a legacy lock is present.
     bb.action = 'Reworded';
     const reworded = storyboardShotSyncPlan(b, { scenes }, { song });
     expect(reworded.shots[2]).toMatchObject({ content: true, held: false });
     expect(reworded.shots[2].patch).toMatchObject({ visualIntent: 'Reworded' });
-    const held = storyboardShotSyncPlan(b, { scenes }, { song, locks: { [scenes[2].sceneId]: 'locked' } });
-    expect(held.shots[2]).toMatchObject({ content: false, held: true });
-    expect(held.shots[2].patch).not.toHaveProperty('visualIntent');
-    expect(held.counts.held).toBe(1);
+    const legacy = storyboardShotSyncPlan(b, { scenes }, { song, locks: { [scenes[2].sceneId]: 'locked' } });
+    expect(legacy.shots[2]).toMatchObject({ content: true, held: false, patch: { visualIntent: 'Reworded' } });
   });
 
   it('returns a cold-open shot to the song when its panel moves onto it', () => {
@@ -115,27 +125,26 @@ describe('storyboardShotSyncPlan', () => {
     expect(storyboardShotSyncPlan(b, { scenes: [] }, { song }).problem).toMatch(/past the end of the song/);
   });
 
-  it('refuses to reorder the cold open around a shot whose video is locked', () => {
+  it('reorders the cold open despite a legacy video lock', () => {
     const [x, y] = [panel('x', 2), panel('y', 2)];
     const b = { beats: [beat('pre', 'Cold open', [x, y], { beforeSong: true }), beat('v', 'Verse', [panel('a', 10), panel('b', 10)])] };
     const linked = (p, order) => shot(p.id, null, null, { order, preMusic: { durationSec: 2 }, panelId: p.id, panelRev: storyboardPanelRev(p), panelArt: null });
     const project = { scenes: [linked(x, 0), linked(y, 1)] };
     b.beats[0].panels.reverse();
-    expect(storyboardShotSyncPlan(b, project, { song, clipLocks: { [`mvs-${x.id}`]: 'locked' } }).problem).toMatch(/locked video and would move/);
-    // Unlocked, the swap moves both shots.
-    expect(storyboardShotSyncPlan(b, project, { song }).problem).toBeNull();
+    const plan = storyboardShotSyncPlan(b, project, { song, clipLocks: { [`mvs-${x.id}`]: 'locked' } });
+    expect(plan.problem).toBeNull();
+    expect(plan.shots.slice(0, 2).every(shot => shot.moved)).toBe(true);
   });
 
-    it('never moves a shot whose video is locked, and removes a locked shot only when asked', () => {
-    const scenes = [shot('1', 0, 5.5), shot('2', 6, 12), shot('3', 12, 20), shot('x', 20, 20)];
+  it('retimes legacy locked shots and protects unmatched media until removal is confirmed', () => {
+    const scenes = [shot('1', 0, 5.5), shot('2', 6, 12), shot('3', 12, 20), shot('x', 20, 20, { referenceImageId: 'kept.png' })];
     const clipLocks = { 'mvs-1': 'locked' };
     const locks = { 'mvs-x': 'locked' };
     const plan = storyboardShotSyncPlan(board(), { scenes }, { song, locks, clipLocks });
-    expect(plan.shots[1]).toMatchObject({ sceneId: 'mvs-1', retimed: false });
-    expect(plan.shots[1].blocked).toMatch(/video is locked/);
-    expect(plan.shots[1].patch).not.toHaveProperty('endSec');
-    expect(plan.removed).toEqual([expect.objectContaining({ sceneId: 'mvs-x', locked: true, blocked: expect.stringMatching(/locked/) })]);
-    const forced = storyboardShotSyncPlan(board(), { scenes }, { song, locks, clipLocks, removeLocked: true });
+    expect(plan.shots[1]).toMatchObject({ sceneId: 'mvs-1', retimed: true, blocked: null });
+    expect(plan.shots[1].patch).toHaveProperty('endSec');
+    expect(plan.removed).toEqual([expect.objectContaining({ sceneId: 'mvs-x', hasMedia: true, blocked: expect.stringMatching(/media/) })]);
+    const forced = storyboardShotSyncPlan(board(), { scenes }, { song, locks, clipLocks, removeWithMedia: true });
     expect(forced.removed[0].blocked).toBeNull();
     expect(forced.counts.removed).toBe(1);
   });

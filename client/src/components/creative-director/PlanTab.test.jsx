@@ -22,6 +22,8 @@ import {
   updateCreativeDirectorPlanStep,
 } from '../../services/apiCreativeDirector.js';
 import toast from '../ui/Toast';
+import { listUniverseNames } from '../../services/apiUniverseBuilder.js';
+import { listPipelineSeriesNames } from '../../services/apiPipeline.js';
 
 const CATALOG = {
   tools: [
@@ -189,5 +191,18 @@ describe('approval affordances', () => {
     await waitFor(() => expect(getCreativeToolCatalog).toHaveBeenCalled());
     expect(await screen.findByRole('button', { name: /Approve/i })).toBeTruthy();
     expect(screen.getByText(/Destructive step/i)).toBeTruthy();
+  });
+});
+
+describe('directive composer pickers', () => {
+  it('shows a retryable error when the universe read fails and fills the picker on retry', async () => {
+    listUniverseNames.mockRejectedValueOnce(new Error('universes down')).mockResolvedValueOnce([{ id: 'u1', name: 'Example Universe' }]);
+    render(<MemoryRouter initialEntries={['/?directive=edit']}><PlanTab project={directiveProject()} onProjectUpdate={() => {}} /></MemoryRouter>);
+    expect(await screen.findByText(/Could not load universes — universes down/)).toBeTruthy();
+    const seriesCalls = listPipelineSeriesNames.mock.calls.length;
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByRole('option', { name: 'Example Universe' })).toBeTruthy();
+    expect(screen.queryByText(/Could not load universes/)).toBeNull();
+    expect(listPipelineSeriesNames.mock.calls.length).toBe(seriesCalls);
   });
 });

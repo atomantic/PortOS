@@ -36,11 +36,12 @@ import { join, relative, resolve, sep } from 'path';
 import { unlink, rm } from 'fs/promises';
 import { emitLog } from './cosEvents.js';
 import { updateAgent } from './cosAgentLifecycle.js';
-import { updateTask, addTask, reviveBlockedTask } from './cosTaskStore.js';
+import { updateTask, addTask, reviveBlockedTask, getTaskById } from './cosTaskStore.js';
 import { SPAWN_HISTORY_METADATA_KEYS } from './spawnBudgetProof.js';
 import { CLAIM_METADATA_KEYS } from './cosTaskClaim.js';
 import { checkStagePrecondition } from './cosTaskGenerator.js';
-import { PIPELINE_STAGE_BEHAVIOR_FLAGS, normalizeReviewers } from '../lib/validation.js';
+import { normalizeReviewers } from '../lib/validation.js';
+import { applyStageExecution } from '../lib/pipelineStageExecution.js';
 import { PATHS, tryReadFile } from '../lib/fileUtils.js';
 import { DONE_SENTINEL_NAME, doneSentinelName, doneSentinelPath as resolveDoneSentinelPath } from '../lib/agentSentinel.js';
 import * as jiraService from './jira.js';
@@ -48,7 +49,7 @@ import * as git from './git.js';
 import { isFalsyMeta, isTruthyMeta } from './agentState.js';
 import { resolveReviewLoopOptions } from './codeReview.js';
 import { cleanupAgentWorktree, spawnMergeRecoveryTask, releaseRetryHold } from './agentWorktreeCleanup.js';
-import { PR_COMPLETIONS, PR_CREATION, resolvePrCompletion, resolvePrCreation } from '../lib/prDisposition.js';
+import { PR_CREATION, resolvePrCompletion, resolvePrCreation } from '../lib/prDisposition.js';
 import { resolvePrOpenedBy, PR_OPENED_BY } from '../lib/slashdoInvocation.js';
 import { isPublicReviewRestrictedProfile, publicReviewPostureForProfile } from '../lib/agentExecutionProfiles.js';
 import { acknowledgeCompletionSentinel, completionSentinelPresent } from './agentCompletionSentinel.js';
@@ -173,7 +174,7 @@ export async function handlePipelineProgression(task, agentId, success) {
     },
     autoApproved: true
   };
-  // Provider/model/effort are SET-only (never cleared) on hand-off: a stage
+  // Provider/model/effort are SET-only (never cleared) on hand-off (applyStageExecution): a stage
   // without its own pin inherits the value carried in `...task.metadata` — either
   // the task-level pin (interval config) or the prior stage's. Clearing an unset
   // stage's effort here would wipe a task-level effort from stage 1+.
@@ -197,34 +198,14 @@ export async function handlePipelineProgression(task, agentId, success) {
   // budget proof, so dispatch held every later stage, and the inherited live
   // lease refused the explicit budget reset too.
   for (const key of [...SPAWN_HISTORY_METADATA_KEYS, ...CLAIM_METADATA_KEYS, 'lastOrphanedAt', 'worktreeBusyAttempts']) delete nextTask.metadata[key];
-  if (nextStage.model) nextTask.metadata.model = nextStage.model;
-  if (nextStage.providerId) {
-    nextTask.metadata.provider = nextStage.providerId;
-    nextTask.metadata.providerId = nextStage.providerId;
-  }
-  if (nextStage.providerId) delete nextTask.metadata.executionOptions;
-  if (nextStage.executionOptions !== undefined) nextTask.metadata.executionOptions = nextStage.executionOptions;
-  if (nextStage.effort) nextTask.metadata.effort = nextStage.effort;
-  // The profile, unlike the pins above, is SET-OR-CLEARED (see the guard at the
+  // The profile, unlike the pins applied below, is SET-OR-CLEARED (see the guard at the
   // top of the hand-off): each stage runs under exactly the contract it
   // declares, never the previous stage's.
   nextTask.metadata.executionProfile = nextStage.executionProfile || null;
-  // Apply per-stage overrides for agent behavior flags
-  const stageReadOnly = nextStage.readOnly ?? false;
-  const taskDefaults = pipeline.taskDefaults || {};
-  for (const flag of PIPELINE_STAGE_BEHAVIOR_FLAGS) {
-    // A stage may choose its work posture, but cannot relax a run's draft-only
-    // publication policy. Keep it even while the stage performs no code work.
-    if (flag === 'prCompletion' && taskDefaults.prCompletion === PR_COMPLETIONS.DRAFT) {
-      nextTask.metadata.prCompletion = PR_COMPLETIONS.DRAFT;
-    } else if (flag in nextStage) {
-      nextTask.metadata[flag] = nextStage[flag];
-    } else if (stageReadOnly) {
-      nextTask.metadata[flag] = false;
-    } else if (flag in taskDefaults) {
-      nextTask.metadata[flag] = taskDefaults[flag];
-    }
-  }
+  applyStageExecution(nextTask.metadata, nextStage, {
+    taskDefaults: pipeline.taskDefaults,
+    clearInheritedExecutionOptions: true,
+  });
 
   const persisted = await addTask(nextTask, 'internal', { raw: true });
   if (persisted?.duplicate) {
@@ -386,6 +367,23 @@ async function runCompletionCleanupInOwnContext(context, { onStepError }) {
   try { return await run; } finally { cleanupRuns.delete(context.agentId); }
 }
 
+/** Complete the task whose audit block this run still owns. The output hook
+ * already ran at finalization; a refused guard is the operator's later edit
+ * and is not retried. A store failure stays pending for the next replay.
+ */
+async function settleVerifiedAuditTask(agentState) {
+  const task = await getTaskById(agentState?.taskId);
+  const { verifiedAuditTaskFence } = await import('./agentCompletionTaskHandoff.js');
+  const fence = verifiedAuditTaskFence(agentState, task);
+  if (!fence) return;
+  const saved = await updateTask(fence.taskId, {
+    status: 'completed',
+    metadata: { taskOutcome: { status: 'completed', reason: 'Audit findings were verified by completion replay.' } },
+  }, fence.taskType, { expectedStatus: fence.expectedStatus, expectedMetadata: fence.expectedMetadata });
+  if (saved?.statusChanged || saved?.error === 'Task not found') return;
+  if (saved?.error || saved?.status !== 'completed') throw new Error('verified-audit-task-settlement-unverified');
+}
+
 async function performCompletionCleanupSteps(context, onStepError) {
   const state = context.agentState;
   const durable = state?.status === 'completed' && typeof state.startedAt === 'string';
@@ -403,6 +401,23 @@ async function performCompletionCleanupSteps(context, onStepError) {
   const replay = durable ? priorReplay || await storeCompletionData(state, 'replay', replayInput) : undefined;
   context = { ...context, ...replayInput };
   await persist({ version: 1, status: 'pending', startedAt: state?.startedAt, replay, context: undefined });
+  // A received register held only by unverified rows re-verifies on replay, so
+  // a since-merged fix or a recovered forge does not preserve evidence forever.
+  if (priorReplay && state.metadata?.auditFindings?.finalReportReceived === true && auditEvidencePending(context)) {
+    const { settleAuditFindings } = await import('./auditFindings.js');
+    const settled = await settleAuditFindings({ task: context.task, agentId: context.agentId,
+      workspacePath: state.metadata.workspacePath }).catch(() => null);
+    if (settled?.status === 'complete') {
+      context = { ...context, agentState: { ...state, metadata: { ...state.metadata,
+        auditFindings: { ...state.metadata.auditFindings, status: 'complete' } } } };
+    }
+  }
+  // Findings may already be complete from an earlier replay whose task write
+  // did not land. The original pass has no replay yet, so finalization's own
+  // verdict is left alone.
+  const findings = context.agentState?.metadata?.auditFindings;
+  const verifiedAudit = priorReplay && findings?.finalReportReceived === true && findings.status === 'complete'
+    && Number(context.task?.metadata?.auditDispositionVersion ?? context.agentState?.metadata?.auditDispositionVersion) === 1;
   let firstError;
   const runStep = async (key, name, step, retryable = false) => {
     const prior = stages[key];
@@ -433,6 +448,9 @@ async function performCompletionCleanupSteps(context, onStepError) {
         { agentId: context.agentId, taskId: context.task?.id });
     }
   };
+  if (verifiedAudit) {
+    await runStep('auditTask', 'Verified audit task settlement', () => settleVerifiedAuditTask(context.agentState), true);
+  }
   // Durable ingestion and its continuation are sufficient to acknowledge this
   // exact signal. An unrelated hand-off failure must not leave it as Git dirt.
   if (['completed', 'failed'].includes(state?.status)) {

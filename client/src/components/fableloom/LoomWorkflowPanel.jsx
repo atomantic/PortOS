@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import { Check, Circle, Loader2, LockKeyhole, MoveRight } from 'lucide-react';
 import { fableLoomProductionWorkflow } from '../../lib/fableLoomReadiness';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
+import { useFableLoomRun } from '../../hooks/useFableLoomRun';
 import { getLoomEditorialAutopilotStatus, updateLoom } from '../../services/api';
 
 const ACTIVE_STATUSES = new Set(['running', 'canceling']);
@@ -35,29 +36,14 @@ export default function LoomWorkflowPanel({
   onAction,
   onLoomUpdate,
 }) {
-  const [editorialRun, setEditorialRun] = useState(null);
-
-  useEffect(() => {
-    let canceled = false;
-    let timer;
-    setEditorialRun(null);
-    const load = async () => {
-      let delay = 5000;
-      await getLoomEditorialAutopilotStatus(loom.id, { silent: true })
-        .then(({ run }) => {
-          if (canceled) return;
-          setEditorialRun(run || null);
-          if (ACTIVE_STATUSES.has(run?.status)) delay = 2000;
-        })
-        .catch(() => {});
-      if (!canceled) timer = setTimeout(load, delay);
-    };
-    load();
-    return () => {
-      canceled = true;
-      clearTimeout(timer);
-    };
-  }, [loom.id]);
+  // Push, not poll: the server broadcasts every editorial run change as
+  // `fableloom:editorial:run`; the hook reads once on entry, reconnect and a
+  // return to a visible tab.
+  const { run: editorialRun } = useFableLoomRun({
+    loomId: loom.id,
+    event: 'fableloom:editorial:run',
+    loadRun: () => getLoomEditorialAutopilotStatus(loom.id, { silent: true }).then(({ run }) => run || null),
+  });
 
   const workflow = useMemo(() => fableLoomProductionWorkflow(loom, episode, {
     structural,

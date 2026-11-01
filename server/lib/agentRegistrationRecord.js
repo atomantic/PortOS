@@ -25,7 +25,7 @@ import { processAuditRecoveryOriginSchema } from './persistentMindProcessAudit.j
 import { normalizeReviewers } from './reviewerConfig.js';
 import { quotaBurnAgentMetadata } from './quotaBurnOrigin.js';
 import { claimOwnershipBinding, reconcileAssignmentForTask } from './claimContinuation.js';
-import { explicitPrCompletion } from './prDisposition.js';
+import { explicitPrCompletion, prHeldForOperator } from './prDisposition.js';
 import { repositoryCleanupMergeTarget } from './recoveryMergeTarget.js';
 
 /**
@@ -283,7 +283,7 @@ export function buildAgentRegistration({
     // checks the persisted internal task and checkout; a prompt is never a grant.
     reviewLoopMergeTarget: task.taskType === 'internal'
       && isTruthyMeta(task.metadata?.reviewLoopFollowUp)
-      && !isTruthyMeta(task.metadata?.reviewLoopLeaveOpen)
+      && !prHeldForOperator(task)
       ? { url: task.metadata.reviewLoopPRUrl, branch: task.metadata.reviewLoopPRBranch,
         ...(worktreeInfo?.detached === true && !task.metadata.forkHead ? {
           workspacePath,

@@ -197,7 +197,7 @@ export default function TrackWorkflow({
                         disabled={approving}
                         aria-label={`Approve ${definition.label} ${cardLabel}`}
                         onClick={() => approve(direction, run.id)}
-                        className="rounded bg-port-accent px-2 py-1 text-xs text-white disabled:opacity-50"
+                        className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 rounded bg-port-accent px-2 py-1 text-xs text-white disabled:opacity-50"
                       >
                         <Check className="w-3 h-3" />
                       </button>

@@ -278,8 +278,11 @@ export function formatImportGrowthReport(report) {
     );
   }
   if (report.timings) {
+    const headTiming = report.timings.headCollectMs == null
+      ? 'head collect reused from the caller'
+      : `head collect ${report.timings.headCollectMs}ms`;
     lines.push(
-      `Measurement timings (not a threshold): base collect ${report.timings.baseCollectMs}ms, head collect ${report.timings.headCollectMs}ms, compare ${report.timings.compareMs}ms.`,
+      `Measurement timings (not a threshold): base collect ${report.timings.baseCollectMs}ms, ${headTiming}, compare ${report.timings.compareMs}ms.`,
       'Those timings are the guard reading source. They are not Vitest collection time and not test-execution time.',
     );
   }
@@ -562,19 +565,25 @@ export function measureGitTree(repoRoot, sha) {
  * Measure the working tree and the resolved base with the same analyzer.
  * Throws `ImportGrowthBaseError` when the base cannot be read or either side
  * is too small to be the server suite. A thrown error is not a passing delta.
+ *
+ * `headMeasurement` is a `measureWorkingTree` result for this same `repoRoot`.
+ * The always-run guard already needs that map for a second assertion, and
+ * walking the suite again only repeats the head collect.
  */
 export function evaluateWorkingTreeImportGrowth({
   repoRoot,
   env = process.env,
   limit = EXISTING_SUITE_GROWTH_LIMIT,
   now = () => performance.now(),
+  headMeasurement = null,
+  measureHead = measureWorkingTree,
 } = {}) {
   const skipped = importGrowthSkipReason(env);
   if (skipped) return { ok: true, skipped };
   const baseRef = resolveImportGrowthBase({ repoRoot, env });
   const headStart = now();
-  const head = measureWorkingTree(repoRoot);
-  const headCollectMs = Math.round(now() - headStart);
+  const head = headMeasurement ?? measureHead(repoRoot);
+  const headCollectMs = headMeasurement == null ? Math.round(now() - headStart) : null;
   if (head.testCount < MIN_SERVER_TESTS) {
     throw importGrowthBaseError(
       `Found ${head.testCount} server test files. The import-growth guard does not pass on a walk that cannot see the suite.`,

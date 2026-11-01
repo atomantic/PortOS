@@ -12,6 +12,7 @@ import { formatCount, formatUsd } from '../../utils/formatters.js';
 import AutoApproveFields from './AutoApproveFields.jsx';
 import ToggleChip from '../ui/ToggleChip.jsx';
 import OrchestratorReviewLog from './OrchestratorReviewLog.jsx';
+import { isSunoSongUrl, sunoSongIdFromUrl } from '../../../../server/lib/sunoSong.js';
 
 // The stages that report a sub-step while they run (the server's `stages[id].step`).
 const STEP_LABELS = { lyrics: AUTONOMOUS_LYRICS_STEP_LABELS, produce: AUTONOMOUS_PRODUCE_STEP_LABELS, song: AUTONOMOUS_SONG_STEP_LABELS };
@@ -25,6 +26,13 @@ const STAGE_MARKS = {
   running: { Icon: Loader2, cls: 'text-port-accent animate-spin', label: 'running' },
   failed: { Icon: XCircle, cls: 'text-port-error', label: 'failed' },
   pending: { Icon: Circle, cls: 'text-port-text-muted', label: 'not started' },
+};
+const BARE_SUNO_SONG_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// A bare Suno song id or a Suno song page link; an id inside any other URL or text is not one.
+const pastedSunoSongId = (text) => {
+  const value = text.trim();
+  if (BARE_SUNO_SONG_ID.test(value)) return value.toLowerCase();
+  return isSunoSongUrl(value) ? sunoSongIdFromUrl(value) : null;
 };
 const inputClass = 'w-full min-w-0 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm';
 const buttonClass = 'flex items-center gap-1 rounded border border-port-border bg-port-bg px-3 py-1.5 text-sm min-h-[44px] sm:min-h-0 disabled:opacity-50';
@@ -74,6 +82,11 @@ export default function AutonomousRunPanel({ project, auto, readiness, selectedS
   const [videoSwapEdit, setVideoSwapEdit] = useState(null);
   // Video tools the director adds while approving the stills: { runId, value: ['video:<mode>'] }.
   const [addToolsEdit, setAddToolsEdit] = useState(null);
+  // The Suno render the director picks to download at the song checkpoint, or a song they made
+  // or revised in Suno themselves, pasted as a link: { for, value }, where `for` names the run
+  // and its renders, so a retake's new renders start from a fresh pick with the link cleared.
+  const [songPick, setSongPick] = useState(null);
+  const [songLink, setSongLink] = useState(null);
   if (!run) return null;
   const guidance = productionReviewStopGuidance(run, readiness);
   const rows = autonomousStageRows(run);
@@ -103,6 +116,14 @@ export default function AutonomousRunPanel({ project, auto, readiness, selectedS
   // #10157: what the production run has used against its limits (Suno is counted apart).
   const spendRun = run.output?.productionRunId ? (project.productionRuns || []).find((r) => r.id === run.output.productionRunId) : null;
   const sunoCount = Array.isArray(run.output?.sunoSongIds) ? run.output.sunoSongIds.length : 0;
+  // Parked on fresh Suno renders before their download (a download spends one of the account's
+  // monthly downloads): the director listens on Suno and approves the one to download.
+  const songRenders = awaiting === 'song' && run.stage === 'song' && !run.output?.trackId && sunoCount ? run.output.sunoSongIds : [];
+  const songsFor = `${run.id}:${songRenders.join(',')}`;
+  const linkText = songLink && songLink.for === songsFor ? songLink.value : '';
+  const linkedSong = pastedSunoSongId(linkText);
+  const pickedRender = !songRenders.length ? null
+    : linkedSong || (songPick && songPick.for === songsFor && songRenders.includes(songPick.value) ? songPick.value : songRenders[songRenders.length > 1 ? 1 : 0]);
   // A failed run that only has the final render left retries just that.
   const retryLabel = run.status === 'failed' && run.stage === 'produce' && (run.output?.renderJobId || run.output?.productionDone) ? 'Retry render' : run.status === 'failed' ? 'Retry' : 'Resume';
   // A stale or hand-edited `?run-stage=` that names no finished, viewable stage opens nothing.
@@ -212,6 +233,32 @@ export default function AutonomousRunPanel({ project, auto, readiness, selectedS
               />
             </div>
           )}
+          {songRenders.length > 0 && (
+            <fieldset className="min-w-0" aria-label="Suno render to download">
+              <span className="block text-xs text-port-text-muted mb-1">Listen on Suno, then pick the render to download. Approving downloads only that one (it uses one Suno download).</span>
+              <div className="flex flex-col gap-1">
+                {songRenders.map((id, i) => (
+                  <label key={id} className="flex items-center gap-2 text-sm min-w-0">
+                    <input type="radio" name="mv-run-song-pick" checked={pickedRender === id} onChange={() => { setSongPick({ for: songsFor, value: id }); setSongLink(null); }} />
+                    <span>Render {i + 1}</span>
+                    <a href={`https://suno.com/song/${id}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-port-accent text-xs">
+                      Listen <ExternalLink size={12} aria-hidden="true" />
+                    </a>
+                  </label>
+                ))}
+              </div>
+              <label htmlFor="mv-run-song-link" className="block text-xs text-port-text-muted mt-2 mb-1">Or a version you made or revised in Suno (paste its link)</label>
+              <input
+                id="mv-run-song-link"
+                type="text"
+                value={linkText}
+                onChange={(e) => setSongLink({ for: songsFor, value: e.target.value })}
+                placeholder="https://suno.com/song/…"
+                className={`${inputClass} text-xs`}
+              />
+              {linkText.trim() && !linkedSong && <p className="text-xs text-port-error mt-1">That is not a Suno song link.</p>}
+            </fieldset>
+          )}
           <div className="flex flex-wrap gap-2">
             {missingVideoTools.length > 0 && (
               <fieldset className="w-full min-w-0" aria-label="Video tool for the clips">
@@ -229,8 +276,8 @@ export default function AutonomousRunPanel({ project, auto, readiness, selectedS
                 </div>
               </fieldset>
             )}
-            <button type="button" disabled={auto.busy || (missingVideoTools.length > 0 && !addTools.length)} title={missingVideoTools.length > 0 && !addTools.length ? 'Choose a video tool to make the clips' : undefined} onClick={() => resume({ ...(changed ? { [editable.key]: draft } : {}), ...(addTools.length ? { addTools } : {}) })} className={`${buttonClass} bg-port-accent text-white border-port-accent`}>
-              <Play size={14} aria-hidden="true" /> {changed ? 'Save edit & approve' : 'Approve & continue'}
+            <button type="button" disabled={auto.busy || (missingVideoTools.length > 0 && !addTools.length) || (linkText.trim() !== '' && !linkedSong)} title={missingVideoTools.length > 0 && !addTools.length ? 'Choose a video tool to make the clips' : undefined} onClick={() => resume({ ...(changed ? { [editable.key]: draft } : {}), ...(addTools.length ? { addTools } : {}), ...(pickedRender ? { sunoSongId: pickedRender } : {}) })} className={`${buttonClass} bg-port-accent text-white border-port-accent`}>
+              <Play size={14} aria-hidden="true" /> {changed ? 'Save edit & approve' : pickedRender ? 'Approve & download this render' : 'Approve & continue'}
             </button>
             {awaiting === 'song' && (
               // Discards this song and makes a new one (a new Suno generation spends credits), then pauses here again.

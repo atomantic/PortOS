@@ -293,7 +293,6 @@ export async function generateContinuousVideoEpisode({
       emitProgress(i, clip.cutType === 'continue' ? 'continuing' : 'establishing');
       const wantsContinuation = clip.cutType === 'continue' && previousClip;
       let conditioning = wantsContinuation && continuation?.effectiveStrategy !== 'window'
-        // eslint-disable-next-line no-await-in-loop
         ? await buildConditioning(backend, previousClip)
         : {};
 
@@ -311,7 +310,6 @@ export async function generateContinuousVideoEpisode({
           const contextPath = join(tmpdir(), `episode-context-${outerJobId}-${randomUUID()}.mp4`);
           // Own the destination before ffmpeg writes: partial failures also clean up.
           scratchPaths.push(contextPath);
-          // eslint-disable-next-line no-await-in-loop
           const cut = await trimVideoFromFrame(sourcePath, contextPath, { startFrame, fps: clips[i - 1].fps });
           if (!cut.ok) throw new ServerError(`Failed to prepare temporal episode history: ${cut.reason}`, { status: 400, code: 'VIDEO_CONTINUITY_HISTORY_FAILED' });
           conditioning = { extendFromVideoPath: contextPath };
@@ -319,11 +317,9 @@ export async function generateContinuousVideoEpisode({
         }
       }
 
-      // eslint-disable-next-line no-await-in-loop
       let outcome = await runOneClip(clip, conditioning).catch((err) => ({ error: err.message }));
       if (outcome.error && wantsContinuation && continuation?.effectiveStrategy !== 'window') {
         console.log(`⚠️ Continuous video [${outerJobId.slice(0, 8)}] clip ${i + 1}/${clips.length} continuation failed (${outcome.error}) — re-establishing fresh`);
-        // eslint-disable-next-line no-await-in-loop
         outcome = await runOneClip(clip, {}).catch((err) => ({ error: err.message }));
       }
       if (outcome.error) {
@@ -336,7 +332,6 @@ export async function generateContinuousVideoEpisode({
       }
       clipIds.push(outcome.innerJobId);
       if (continuation?.effectiveStrategy === 'window') {
-        // eslint-disable-next-line no-await-in-loop
         const frames = await probeFrameCount(join(PATHS.videos, `${outcome.innerJobId}.mp4`));
         if (!Number.isInteger(frames) || frames <= 0) {
           throw new ServerError('Cannot measure the temporal episode output.', { status: 400, code: 'VIDEO_CONTINUITY_OUTPUT_UNMEASURABLE' });

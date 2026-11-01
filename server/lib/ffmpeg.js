@@ -1105,6 +1105,46 @@ export const trimVideoFromFrame = async (videoPath, outPath, { startFrame, fps }
   return installEncodedVideo(encodePath, videoPath, 'trimmed');
 };
 
+// Cut `[startSec, endSec)` of a clip into a new file (a music-video sequence
+// take split onto its scenes, #14241). Re-encodes for the same reason as
+// trimVideoFromFrame. Returns `{ ok: true, outPath }` or `{ ok: false, reason }`.
+export const cutVideoSegment = async (videoPath, outPath, { startSec, endSec } = {}) => {
+  if (typeof videoPath !== 'string' || !videoPath) return { ok: false, reason: 'invalid video path' };
+  if (typeof outPath !== 'string' || !outPath || resolvePath(videoPath) === resolvePath(outPath)) return { ok: false, reason: 'invalid output path' };
+  if (!existsSync(videoPath)) return { ok: false, reason: 'video file missing' };
+  const start = Number(startSec);
+  const end = Number(endSec);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end <= start) return { ok: false, reason: `invalid span ${startSec}-${endSec}` };
+  let ffmpeg;
+  try {
+    ffmpeg = await findFfmpeg({ requiredEncoder: 'libx264' });
+  } catch (err) {
+    return { ok: false, reason: err.message };
+  }
+  if (!ffmpeg) return { ok: false, reason: 'ffmpeg not found' };
+  await ensureDir(dirname(outPath));
+  const audio = await hasAudioStream(videoPath);
+  const colorFilter = await bt709TagFilter();
+  const span = `start=${start.toFixed(6)}:end=${end.toFixed(6)}`;
+  const result = await runFfmpegProcess({
+    bin: ffmpeg,
+    args: [
+      '-i', videoPath,
+      '-vf', appendFilter(`trim=${span},setpts=PTS-STARTPTS`, colorFilter),
+      ...(audio ? ['-af', `atrim=${span},asetpts=PTS-STARTPTS`, ...AAC_ENCODE_ARGS] : ['-an']),
+      ...H264_ENCODE_ARGS,
+      ...BT709_CONTAINER_ARGS,
+      '-movflags', '+faststart',
+      '-y', outPath,
+    ],
+  });
+  if (!result.ok) {
+    await unlink(outPath).catch(() => {});
+    return { ok: false, reason: `ffmpeg cut failed: ${result.reason}` };
+  }
+  return { ok: true, outPath };
+};
+
 // Build the ffmpeg argv that concatenates a list of clips where SOME of them
 // must drop a leading run of frames first (`startFrame > 0`).
 //

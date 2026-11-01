@@ -18,6 +18,7 @@ import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { ServerError } from '../../lib/errorHandler.js';
 import { copyFileGuarded, ensureDir, PATHS, resolveImageInputPath } from '../../lib/fileUtils.js';
+import { maxInputImages } from '../../lib/imageGenCapabilities.js';
 import { promptAddition } from '../../lib/modelInput.js';
 import { CREATIVE_LATITUDE_ADDITION, withCreativeLatitude } from '../../lib/creativeLatitude.js';
 import {
@@ -41,6 +42,7 @@ const deps = {
   markupPath: async (key) => (await import('../mediaSketches.js')).getSketchPngPath(key),
   linkedMedia: async (ids) => (await import('../catalogDB/media.js')).listMediaForIngredients(ids),
   ingredient: async (id) => (await import('../catalogDB/ingredients.js')).getIngredient(id),
+  resolveImage: (image) => resolveImageInputPath(image),
   emit: (payload) => import('../socket.js')
     .then(({ getIo }) => getIo()?.emit('storyboard:make', payload))
     .catch((err) => console.error(`❌ storyboard:make emit failed: ${err.message}`)),
@@ -82,21 +84,34 @@ function announce(storyboardId, panelId, nodeId, status, error = '') {
   deps.emit({ storyboardId, panelId, nodeId, status, ...(error ? { error } : {}) });
 }
 
+const LINKED_IMAGE = /\.(png|jpe?g|webp)$/i;
+const isLinkedImage = (row) => !!row
+  && (row.kind === 'portrait' || row.kind === 'reference')
+  && LINKED_IMAGE.test(row.mediaKey || '');
+
 /**
  * The panel's linked catalog cast, environments and objects as reference
- * images: each record's newest portrait, else its newest reference image.
- * A catalog that can't be read yields none (the run still has its own refs).
+ * images. A `linkMedia` pick names one gallery image of that record; anything
+ * else (no pick, a missing file, a non-image) keeps the newest portrait, else
+ * the newest reference. A catalog that can't be read yields none (the run
+ * still has its own refs).
  */
 async function resolveLinkedRefs(panel) {
-  const ids = [...panel.castIds, ...panel.environmentIds, ...panel.objectIds];
+  // Places and objects lead: a backend cap keeps the first refs, and the set is
+  // the one reference no other link can stand in for (#14381).
+  const ids = [...panel.environmentIds, ...panel.objectIds, ...panel.castIds];
   if (!ids.length) return [];
   const media = await deps.linkedMedia(ids).catch((err) => {
     console.warn(`⚠️ Storyboard references unavailable: ${err.message}`);
     return new Map();
   });
-  const firsts = ids
-    .map((id) => ({ id, row: (media.get(id) || []).find((m) => (m.kind === 'portrait' || m.kind === 'reference') && /\.(png|jpe?g|webp)$/i.test(m.mediaKey || '')) }))
-    .filter(({ row }) => row);
+  const picks = panel.linkMedia && typeof panel.linkMedia === 'object' && !Array.isArray(panel.linkMedia) ? panel.linkMedia : {};
+  const firsts = ids.map((id) => {
+    const rows = media.get(id) || [];
+    const wanted = typeof picks[id] === 'string' ? picks[id] : '';
+    const row = (wanted && rows.find((item) => item.mediaKey === wanted && isLinkedImage(item))) || rows.find(isLinkedImage);
+    return row ? { id, row } : null;
+  }).filter(Boolean);
   return Promise.all(firsts.map(async ({ id, row }) => {
     const record = await deps.ingredient(id).catch(() => null);
     return { refId: id, image: row.mediaKey, label: record?.name || '' };
@@ -222,22 +237,30 @@ async function runImageNode(board, panelId, node, { frameRef = null, count: fram
     throw refuse(`This panel keeps at most ${STORYBOARD_LIMITS.takes} takes and has ${panel.takes.length}; remove some before making ${count} more.`, 'STORYBOARD_LIMIT', 409);
   }
   const wired = nodeInputValue(recipe, node.id, 'images', context);
-  const refs = frameRef ? [frameRef, ...wired.filter((ref) => ref.image !== frameRef.image)].slice(0, RECIPE_LIMITS.images) : wired;
-  const referenceImagePaths = refs.map((ref) => (ref === frameRef && frameRef.path) || resolveImageInputPath(ref.image)).filter(Boolean);
+  const pathOf = (ref) => (ref === frameRef && frameRef.path) || deps.resolveImage(ref.image);
+  // A ref whose file no longer resolves is never sent, so it takes no capped slot and is not recorded as sent.
+  const usable = (frameRef ? [frameRef, ...wired.filter((ref) => ref.image !== frameRef.image)] : wired).filter((ref) => pathOf(ref));
+  const refs = frameRef ? usable.slice(0, RECIPE_LIMITS.images) : usable;
   const runId = randomUUID();
   const settings = await deps.getSettings();
   const common = {
     prompt,
     ...STORYBOARD_RENDER_SIZES[board.aspectRatio],
-    ...(referenceImagePaths.length ? { referenceImagePaths, referenceImageStrengths: referenceImagePaths.map(() => 1) } : {}),
+    ...referencePayload(refs, pathOf),
     [STORYBOARD_PANEL_RENDER_TAG]: { storyboardId: board.id, panelId, nodeId: node.id, runId },
   };
-  const params = await deps.imageParams(settings, { mode: node.settings.imageMode, model: node.settings.imageModelId }, common);
+  const resolvedParams = await deps.imageParams(settings, { mode: node.settings.imageMode, model: node.settings.imageModelId }, common);
+  // Keep the leading refs the resolved backend accepts, so the run records what
+  // was sent rather than relying on the queue's silent backstop trim (#14381).
+  const cap = maxInputImages(resolvedParams.mode, resolvedParams.modelId ?? resolvedParams.model ?? null);
+  const sentRefs = cap != null && refs.length > cap ? refs.slice(0, cap) : refs;
+  const { referenceImagePaths: _paths, referenceImageStrengths: _strengths, ...unreferenced } = resolvedParams;
+  const params = sentRefs === refs ? resolvedParams : { ...unreferenced, ...referencePayload(sentRefs, pathOf) };
   // The run id lands before any job is queued, so a frame that finishes or
   // fails at once is already counted against this run.
   await mutateStoryboard(board.id, (draft) => patchNodeState(draft, panelId, node.id, {
     status: 'queued', error: '', runId, frameCount: count, jobIds: [], failedJobIds: [], takeIds: [], sentPrompt: prompt,
-    sentRefs: refs, promptAdditions, providerId: node.settings.imageMode || '', model: node.settings.imageModelId || '',
+    sentRefs, promptAdditions, providerId: node.settings.imageMode || '', model: node.settings.imageModelId || '',
     selectOnLand, runAt: new Date().toISOString(),
   }));
   const jobIds = [];
@@ -259,6 +282,11 @@ async function runImageNode(board, panelId, node, { frameRef = null, count: fram
   announce(board.id, panelId, node.id, 'queued');
   console.log(`🖼️ Storyboard ${board.id.slice(0, 11)} panel ${panelId.slice(0, 12)} → ${jobIds.length} image job(s)`);
   return next;
+}
+
+function referencePayload(refs, pathOf) {
+  const referenceImagePaths = refs.map(pathOf).filter(Boolean);
+  return referenceImagePaths.length ? { referenceImagePaths, referenceImageStrengths: referenceImagePaths.map(() => 1) } : {};
 }
 
 /**

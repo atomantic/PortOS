@@ -574,9 +574,7 @@ function toWinAnsi(text) {
     .replace(/[•·]/g, '-') // bullet / middot → ASCII dash (U+2022 is > 0xFF, would otherwise be stripped)
     .replace(/[✅⚠️⚡]/g, '')  // ✅ ⚠ emoji-variation ⚡
     .replace(/\t/g, ' ')
-    // eslint-disable-next-line no-control-regex
     .replace(/[\x00-\x1F\x7F-\x9F]/g, '')  // control bytes WinAnsi can't encode
-    // eslint-disable-next-line no-control-regex
     .replace(/[^\x00-\xFF]/g, '');         // anything still above the WinAnsi range
 }
 

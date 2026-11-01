@@ -1572,6 +1572,14 @@ async function resolveCheckoutIncarnation({ agentId, metadata, sourceWorkspace, 
   return owner ? { reason: owner.reason, record: { owners: owner.owners } } : null;
 }
 
+async function containedInDefaultBranch(sourceWorkspace, head) {
+  const branch = await git.getDefaultBranch(sourceWorkspace, { allowRemote: false, strict: true }).catch(() => null);
+  if (!branch) return false;
+  const result = await execGit(['merge-base', '--is-ancestor', head, `refs/remotes/origin/${branch}`], sourceWorkspace,
+    { ignoreExitCode: true, env: { ...process.env, GIT_NO_REPLACE_OBJECTS: '1', GIT_OPTIONAL_LOCKS: '0', GIT_NO_LAZY_FETCH: '1' } }).catch(() => null);
+  return result?.exitCode === 0;
+}
+
 /** Already removed checkouts need delivery proof, not a retroactive backup. */
 async function settleAbsentCheckout({ agentId, agentState, metadata, app, sourceWorkspace, branchName, worktreePath, originalPrUrl, observed, record, staysOpen, recheckCleanup }) {
   const { readRetirementForgeEvidence } = await import('./heldCheckoutReview.js');
@@ -1610,7 +1618,13 @@ async function settleAbsentCheckout({ agentId, agentState, metadata, app, source
   }
   const integrated = forge && capturedCovered && (await execGit(['merge-base', '--is-ancestor', forge.mergeCommit, forge.targetHead ?? forge.defaultHead], sourceWorkspace,
     { ignoreExitCode: true, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_NO_LAZY_FETCH: '1' } }).catch(() => null))?.exitCode === 0;
-  if (!staysOpen && integrated) {
+  // A run that never published (a no-change audit) has no PR to prove. When the
+  // forge affirmatively reports none, no remote branch holds other work, and the
+  // captured final head is already in the fetched default branch, the removed
+  // checkout held nothing undelivered.
+  const unpublishedContained = !integrated && capturedHead && !proofUrl && delivery?.readable === true && !delivery.prState
+    && observed.remoteBranchPresent === false && await containedInDefaultBranch(sourceWorkspace, capturedHead);
+  if (!staysOpen && (integrated || unpublishedContained)) {
     const { withClaimOwnershipLock } = await import('./cosClaimOwnership.js');
     const verified = await withClaimOwnershipLock(async () => {
       await recheckCleanup?.();
@@ -1618,7 +1632,9 @@ async function settleAbsentCheckout({ agentId, agentState, metadata, app, source
         || await resolveCheckoutIncarnation({ agentId, metadata, sourceWorkspace, branchName, worktreePath })
         || (worktreePath && await readCheckoutPathPresence(worktreePath) !== false)
         || await readLocalBranchPresence(sourceWorkspace, branchName) !== false) return false;
-      return await record('verified', 'already-absent-merged', { prUrl: proofUrl, committedIntegrationVerified: true }) === true;
+      return await (integrated
+        ? record('verified', 'already-absent-merged', { prUrl: proofUrl, committedIntegrationVerified: true })
+        : record('verified', 'already-absent-integrated', { committedIntegrationVerified: true })) === true;
     }).catch(() => false);
     if (verified) return { verified: true, skipReason: null, issues: [], observed, recoveryTaskId: null };
     const reason = 'absent-checkout-settlement-unverified';

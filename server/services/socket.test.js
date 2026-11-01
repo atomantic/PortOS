@@ -474,7 +474,7 @@ describe('socket.js — initSocket', () => {
     expect(peers[0].auth.password).toBe('synthetic-secret');
   });
 
-  it('forwards bounded project, commission and storyboard invalidations from structural and local-only writes', () => {
+  it('forwards bounded project, commission, storyboard and sidebar-record invalidations from structural and local-only writes', () => {
     emitRecordUpdated('creativeDirectorProject', 'cd-example');
     emitRecordDeleted('creativeDirectorProject', 'cd-example');
     emitRecordInvalidated('creativeDirectorProject', 'cd-example');
@@ -482,7 +482,19 @@ describe('socket.js — initSocket', () => {
     emitRecordUpdated('storyboard', 'sb-example');
     emitRecordDeleted('storyboard', 'sb-example');
     emitRecordInvalidated('storyboard', 'sb-example');
+    emitRecordUpdated('series', 'series-example');
+    emitRecordDeleted('universe', 'universe-example');
+    emitRecordUpdated('musicVideoProject', 'mv-example');
     emitRecordUpdated('unrelated', 'example');
+    expect(io.emitted.filter(([name]) => name === 'pipeline-series:changed')).toEqual([
+      ['pipeline-series:changed', { id: 'series-example' }],
+    ]);
+    expect(io.emitted.filter(([name]) => name === 'universe:changed')).toEqual([
+      ['universe:changed', { id: 'universe-example' }],
+    ]);
+    expect(io.emitted.filter(([name]) => name === 'music-video:project:changed')).toEqual([
+      ['music-video:project:changed', { id: 'mv-example' }],
+    ]);
     expect(io.emitted.filter(([name]) => name === 'creative-director:project:changed')).toEqual(
       Array.from({ length: 3 }, () => ['creative-director:project:changed', { id: 'cd-example' }]),
     );

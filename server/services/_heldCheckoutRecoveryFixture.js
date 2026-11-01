@@ -51,7 +51,7 @@ export function describeHeldCheckoutRecovery(body) {
         ? { entryPoint: resumedLineage ? 'completed resume lineage' : remoteSquash ? 'remote squash receipt' : task.name.endsWith('cleanupMerged') ? 'cleanupMerged' : 'early reaper', started: performance.now(), phases: {} } : null;
       await receiptTiming.run('fixture-setup', async () => {
         Object.assign(retirementFaults, { onRemove: null, onBranchDelete: null, scheduleWrites: 0, failScheduleWrite: null });
-        Object.assign(injected, { policies: [], schedule: { tasks: {}, executions: {} }, app: { id: 'app-1', repoPath: null }, fetchRemote: null, fetches: [], onBundle: null, onArchiveRef: null, onEvidence: null, onProof: null, proofFailures: [], onOtherFiles: null, onUnlockedStatus: null, statusReads: 0, onSnapshot: null, onPreviewEvidence: null });
+        Object.assign(injected, { policies: [], schedule: { tasks: {}, executions: {} }, app: { id: 'app-1', repoPath: null }, fetchRemote: null, fetches: [], onBundle: null, onArchiveRef: null, onEvidence: null, onProof: null, proofFailures: [], onOtherFiles: null, onUnlockedStatus: null, statusReads: 0, onSnapshot: null, onPreviewEvidence: null, policyInputs: [] });
         scratch = realpathSync(await mkdtemp(join(tmpdir(), 'portos-held-checkout-')));
         const safeRepo = join(scratch, 'repo');
         await mkdir(safeRepo);

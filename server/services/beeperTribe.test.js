@@ -601,7 +601,7 @@ describe('upsertParticipant — roster hoisting: personIndex loaded once, not on
     ];
 
     for (const p of participants) {
-      // eslint-disable-next-line no-await-in-loop -- sequential upserts mirroring the sweep's own per-chat loop
+      // sequential upserts mirroring the sweep's own per-chat loop
       const result = await beeperTribe.upsertParticipant({
         conversationId: CONVERSATION,
         sourceUserId: p.sourceUserId,
@@ -923,7 +923,7 @@ describe('touchpoint roster reuse', () => {
       const personIndex = await beeperTribe.loadRosterIndex();
       let created = 0, matched = 0;
       for (const batch of batches) {
-        // eslint-disable-next-line no-await-in-loop -- mirrors sequential sweep batches
+        // mirrors sequential sweep batches
         const result = await beeperTribe.logSenderTouchpoints(batch, reuse ? { personIndex } : {});
         created += result.created;
         matched += result.matched;

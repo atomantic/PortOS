@@ -8,8 +8,10 @@
  * estimated seconds and each beat a musical role, both optional.
  *
  * Panels point at catalog records (cast, environments, objects) by id only;
- * the catalog stays the store for those. Panel art is a list of takes, each a
- * gallery image filename (upload, catalog image, mood board pin, generated
+ * the catalog stays the store for those. `linkMedia` optionally names which
+ * gallery image of a linked record Make sends; with no pick, Make still uses
+ * that record's newest portrait, else its newest reference. Panel art is a
+ * list of takes, each a gallery image filename (upload, catalog image, mood board pin, generated
  * frame) or a blank-canvas sketch key (`sketch:<uuid>`, owned by
  * services/mediaSketches.js); `selectedTakeId` names the one shown.
  *
@@ -30,9 +32,11 @@ import {
 } from './storyboardVocabulary.js';
 import { RECIPE_LIMITS, sanitizePanelMake, sanitizeRecipe } from './storyboardRecipe.js';
 import { BEAT_EXTRACT_LIMITS } from './storyboardBeatExtract.js';
+import { GREYBOX_SHOT_ID_MAX, GREYBOX_SHOT_ID_PATTERN } from './greyboxVocabulary.js';
 
 const SKETCH_KEY_PATTERN = /^sketch:[A-Za-z0-9-]{1,80}$/;
 const ENTITY_ID_PATTERN = /^[a-z]+-[A-Za-z0-9-]{1,80}$/;
+const LINKED_IMAGE = /\.(png|jpe?g|webp)$/i;
 
 const ASPECT_SET = new Set(STORYBOARD_ASPECT_RATIOS);
 const ART_STYLE_SET = new Set(STORYBOARD_ART_STYLES);
@@ -56,6 +60,11 @@ const pick = (value, set, fallback = null) => (set.has(value) ? value : fallback
 const isoOr = (value, fallback) => (isNonBlankStr(value) && Number.isFinite(Date.parse(value)) ? value : fallback);
 const entityId = (value, prefix) => (typeof value === 'string' && ENTITY_ID_PATTERN.test(value) ? value : newStoryboardEntityId(prefix));
 const refOrNull = (value) => trimTo(value, STORYBOARD_LIMITS.refId) || null;
+const sanitizeSetShot = (value) => {
+  const environmentId = refOrNull(value?.environmentId);
+  const shotId = typeof value?.shotId === 'string' ? value.shotId : '';
+  return environmentId && shotId.length <= GREYBOX_SHOT_ID_MAX && GREYBOX_SHOT_ID_PATTERN.test(shotId) ? { environmentId, shotId } : null;
+};
 
 /**
  * The production a board was made from, when one keeps scenes of its own that
@@ -88,6 +97,21 @@ function refList(value) {
     if (out.length >= STORYBOARD_LIMITS.refs) break;
   }
   return out;
+}
+
+// Picks for records this panel still links, in the order Make sends them.
+// Anything else (an unlinked id, a non-image, a path) is dropped; an empty
+// map is omitted so a panel with no pick stays byte-identical.
+function sanitizeLinkMedia(raw, linkedIds) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const out = {};
+  for (const id of linkedIds) {
+    if (Object.hasOwn(out, id)) continue;
+    const image = localImageFilename(raw[id]);
+    if (!image || !LINKED_IMAGE.test(image)) continue;
+    out[id] = image;
+  }
+  return Object.keys(out).length ? out : null;
 }
 
 /** Seconds as a positive number rounded to hundredths, or null when unset. */
@@ -129,6 +153,12 @@ function sanitizePanel(raw) {
     if (takes.length >= STORYBOARD_LIMITS.takes) break;
   }
   const selectedTakeId = takeIds.has(raw.selectedTakeId) ? raw.selectedTakeId : (takes.at(-1)?.id ?? null);
+  const castIds = refList(raw.castIds);
+  const environmentIds = refList(raw.environmentIds);
+  const objectIds = refList(raw.objectIds);
+  const linkMedia = sanitizeLinkMedia(raw.linkMedia, [...environmentIds, ...objectIds, ...castIds]);
+  // A set camera belongs to a place the panel still links; unlinking the place drops it.
+  const setShot = sanitizeSetShot(raw.setShot);
   return {
     id: entityId(raw.id, 'panel'),
     action: trimTo(raw.action, STORYBOARD_LIMITS.panelText),
@@ -143,9 +173,11 @@ function sanitizePanel(raw) {
     eyeline: pick(raw.eyeline, EYELINE_SET),
     camera: trimTo(raw.camera, STORYBOARD_LIMITS.camera),
     seconds: sanitizePanelSeconds(raw.seconds),
-    castIds: refList(raw.castIds),
-    environmentIds: refList(raw.environmentIds),
-    objectIds: refList(raw.objectIds),
+    castIds,
+    environmentIds,
+    objectIds,
+    ...(linkMedia ? { linkMedia } : {}),
+    setShot: setShot && environmentIds.includes(setShot.environmentId) ? setShot : null,
     notes: trimTo(raw.notes, STORYBOARD_LIMITS.notes),
     takes,
     selectedTakeId,

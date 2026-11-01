@@ -48,6 +48,7 @@ import {
   musicVideoTreatmentUpdateSchema,
   musicVideoTreatmentCompileSchema,
   musicVideoTreatmentApplySchema,
+  musicVideoSequenceRenderSchema,
   musicVideoTreatmentProofReviewSchema,
   musicVideoExcerptRequestSchema,
   musicVideoSocialCutsQuerySchema,
@@ -110,6 +111,7 @@ import { isSupportedMusicUpload, MUSIC_UPLOAD_MAX_BYTES } from '../services/pipe
 import { attachVocalStem, detachVocalStem } from '../services/musicVideo/vocalStem.js';
 import {
   listProjects,
+  listProjectNames,
   listProjectPage,
   getProject,
   createProject,
@@ -200,7 +202,7 @@ import {
   startLyricAlign,
 } from '../services/musicVideo/lyricAlignJob.js';
 import { importTrackLyrics, MAX_LYRIC_CUES } from '../services/musicVideo/trackLyrics.js';
-import { offsetLyricMarkers } from '../services/musicVideo/lyricMarkers.js';
+import { offsetLyricMarkers } from '../lib/lyricMarkers.js';
 import {
   updateTreatment,
   compileTreatment,
@@ -291,6 +293,11 @@ router.get('/', asyncHandler(async (req, res) => {
     return res.json({ ...page, items, ...(summary ? { nextCursor: next < page.total ? String(next) : null } : {}) });
   }
   res.json(await Promise.all((await listProjects()).map((project) => presentProjectForRead(project))));
+}));
+
+// Sidebar sub-nav rows; registered before /:id so "names" is not read as an id.
+router.get('/names', asyncHandler(async (_req, res) => {
+  res.json(await listProjectNames());
 }));
 
 // Bounded projection for the Tracks page MIDI read-through (#10203): the newest
@@ -521,6 +528,20 @@ router.post('/:id/treatment/compile', asyncHandler(async (req, res) => {
 // keeps, and whether a stale input blocks it.
 router.get('/:id/treatment/apply-preview', asyncHandler(async (req, res) => {
   res.json(await previewTreatmentApply(req.params.id));
+}));
+
+// Read-only (#14241): which cutaway runs a `coverage: 'sequence'` scene set would
+// generate in one timed request, with the exact prompt and request fields.
+router.get('/:id/sequence-coverage', asyncHandler(async (req, res) => {
+  const { previewSequenceCoverage } = await import('../services/musicVideo/sequenceCoverage.js');
+  res.json(previewSequenceCoverage(await requireProject(req.params.id)));
+}));
+
+// Queue one planned run as a single fal request; the clip is cut onto its scenes on completion.
+router.post('/:id/sequence-coverage/render', asyncHandler(async (req, res) => {
+  const { sceneIds } = validateRequest(musicVideoSequenceRenderSchema, req.body ?? {});
+  const { submitSequenceCoverage } = await import('../services/musicVideo/sequenceCoverage.js');
+  res.status(202).json(await submitSequenceCoverage(req.params.id, { sceneIds }));
 }));
 
 router.post('/:id/treatment/apply', asyncHandler(async (req, res) => {
@@ -1721,7 +1742,7 @@ async function takeAssetExists(kind, assetId) {
 // Add one candidate take to a scene: the synchronous image lane's inline
 // render, or an asset the director imports from the gallery.
 router.post('/:id/scenes/:sceneId/takes', asyncHandler(async (req, res) => {
-  const { kind, assetId, source = 'imported', provider, originalName, use, sourceImageId, inputAssets, castInputs, replaceSelection } = validateRequest(musicVideoTakeInputSchema, req.body);
+  const { kind, assetId, source = 'imported', provider, originalName, use, sourceImageId, inputAssets, castInputs, replaceSelection, expectedSelection } = validateRequest(musicVideoTakeInputSchema, req.body);
   if (!(await takeAssetExists(kind, assetId))) {
     throw new ServerError(`${kind === 'video' ? 'Video' : 'Image'} not found in this install's media library`, { status: 400, code: 'TAKE_ASSET_NOT_FOUND' });
   }
@@ -1729,7 +1750,7 @@ router.post('/:id/scenes/:sceneId/takes', asyncHandler(async (req, res) => {
     if (!(await takeAssetExists('image', imageId))) throw new ServerError('Dependency image not found', { status: 400, code: 'TAKE_ASSET_NOT_FOUND' });
   }
   const { scene, appended } = await appendSceneTakes(req.params.id, req.params.sceneId, [{
-    kind, assetId, source, provider: provider ?? (source === 'generated' ? 'portos' : null), originalName, use, sourceImageId, inputAssets, castInputs, replaceSelection,
+    kind, assetId, source, provider: provider ?? (source === 'generated' ? 'portos' : null), originalName, use, sourceImageId, inputAssets, castInputs, replaceSelection, expectedSelection,
   }]);
   res.status(201).json({ scene, take: appended[0] });
 }));

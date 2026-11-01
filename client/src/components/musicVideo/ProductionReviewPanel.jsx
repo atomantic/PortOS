@@ -17,8 +17,7 @@ const labels = { art: 'Art direction', storyboard: 'Lyric-timed storyboard', pro
 const OPTIONAL = { proof: true };
 // Each approval closes the step that owns its work (#10151); the page passes that step's `stage`.
 const STAGE_TABS = { art: 'cast-sets', storyboard: 'produce', proof: 'produce' };
-// Approving the storyboard locks every shot's still, so its box says so.
-const HEADINGS = { storyboard: { open: 'Lock all stills', approved: 'All stills locked' } };
+const HEADINGS = { storyboard: { open: 'Approve storyboard', approved: 'Storyboard approved' } };
 
 const FOLD_STYLE = { scrollMarginTop: 'calc(var(--mv-header-h, 9rem) + 1rem)' };
 /**

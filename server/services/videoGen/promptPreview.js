@@ -16,6 +16,7 @@ import { HOSTED_VIDEO_SUBMISSIONS } from './hostedSubmission.js';
 import { resolveRequestedVideoBackend } from './prepareParams.js';
 import { VIDEO_GEN_LOCAL_ONLY_FIELD_NAMES, REFERENCE_AUDIO_FIELDS } from './requestFields.js';
 import { grokVideoSentPrompt } from './grok.js';
+import { resolveStoryboardGuidanceInputs, storyboardGuidanceRequestError } from './storyboardGuidance.js';
 import { falVideoSentPrompt } from './fal.js';
 
 export const PREVIEW_UPLOAD_FIELDS = ['sourceImage', 'lastImage', 'audioFile', ...REFERENCE_AUDIO_FIELDS, 'icReference', 'runwayVideo', 'runwayCharacterVideo'];
@@ -50,12 +51,16 @@ export async function previewVideoPrompt({ previewUploads = [], ...body }) {
   const sourceImagePath = uploads.sourceImage ? UPLOADED_SOURCE_IMAGE
     : body.sourceImageFile ? resolveGalleryImage(body.sourceImageFile) : null;
   const promptAdditions = carriedPromptAdditions(body);
+  const guidanceError = storyboardGuidanceRequestError({ body, uploads, backend });
+  if (guidanceError) throw guidanceError;
+  // A storyboard panel and its references, named by gallery path as the render names them.
+  const guidance = resolveStoryboardGuidanceInputs(body, { lenient: true });
 
   if (backend === VIDEO_GEN_MODE.GROK) {
     return { backend, ...grokVideoSentPrompt({
       prompt: body.prompt, negativePrompt: body.negativePrompt,
       aspectRatio: settings.imageGen?.grok?.aspectRatio, width: body.width, height: body.height,
-      duration: body.grokDuration, sourceImagePath, scratchDir: join(tmpdir(), 'portos-grok-video-<job>'), promptAdditions,
+      duration: body.grokDuration, sourceImagePath, scratchDir: join(tmpdir(), 'portos-grok-video-<job>'), promptAdditions, ...guidance,
     }).record };
   }
   if (backend === VIDEO_GEN_MODE.FAL) {
@@ -64,6 +69,7 @@ export async function previewVideoPrompt({ previewUploads = [], ...body }) {
       seconds: body.falDuration, width: body.width, height: body.height, resolution: body.falResolution,
       generateAudio: body.falGenerateAudio === true, promptAdditions,
       hasImage: hasSourceImage, hasEndImage: !!uploads.lastImage || !!body.lastImageFile, hasAudio: !!uploads.audioFile,
+      guidanceReferences: body.guidanceImageFile ? (body.referenceImageFiles || []).length : null,
     }).record };
   }
   if (backend === VIDEO_GEN_MODE.RUNWAY) {

@@ -13,7 +13,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
-var tempRoot; // eslint-disable-line no-var
+var tempRoot;
 function getTempRoot() {
   if (!tempRoot) tempRoot = mkdtempSync(join(tmpdir(), 'goal-calendar-test-'));
   return tempRoot;

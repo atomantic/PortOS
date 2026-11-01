@@ -2,11 +2,12 @@ import { useEffect, useRef, useState } from 'react';
 import { Plus, X } from 'lucide-react';
 import { musicVideoCastGuideReferences, musicVideoConditioningReferences, musicVideoPanelArtReferences, musicVideoReferenceChoices, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES } from '../../../../server/lib/musicVideoConditioning.js';
 import { MUSIC_VIDEO_OTHER_REFERENCES_NOTE } from '../../../../server/lib/musicVideoShotPrompt.js';
+import MediaImage from '../MediaImage';
 
 // No iOS image callout or text selection, so a long-press opens the preview instead.
 const CHIP = 'inline-flex min-h-[44px] max-w-full select-none items-center gap-1 rounded border border-port-border bg-port-bg p-0.5 text-xs [-webkit-touch-callout:none] sm:min-h-[32px]';
 const LONG_PRESS_MS = 450;
-const thumb = (ref) => <img src={`/data/images/${encodeURIComponent(ref.imageId)}`} alt="" className="h-8 w-8 shrink-0 rounded bg-black object-cover" />;
+const thumb = (ref) => <MediaImage thumbnail src={`/data/images/${encodeURIComponent(ref.imageId)}`} alt="" className="h-8 w-8 shrink-0 rounded bg-black object-cover" />;
 const nameOf = (ref) => ref.label || ref.role || 'Reference';
 
 /**

@@ -2,6 +2,7 @@ import { castInputsFromReferences } from '../../../server/lib/musicVideoCastLook
 import { musicVideoGreyboxReference } from '../../../server/lib/musicVideoGreybox.js';
 import { shotActionContractProblem } from '../../../server/lib/musicVideoActionContract.js';
 import { isOutsideMusicVideoReference, musicVideoConditioningReferences, musicVideoFrameReferenceFiles, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES } from '../../../server/lib/musicVideoConditioning.js';
+import { preMusicClipSound } from '../../../server/lib/musicVideoColdOpen.js';
 import { sceneEndFrameRequestFields } from '../../../server/lib/musicVideoEndFrame.js';
 import { authoredFramePromptText, authoredShotPrompt, musicVideoFrameModelInput, visualDirection } from '../../../server/lib/musicVideoShotPrompt.js';
 import { useEffect, useRef, useState } from 'react';
@@ -226,7 +227,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
    * `refine` (with `referenceImageId`) edits that frame by a short instruction
    * instead: the prompt is the instruction, and the frame leads the shot's references.
    */
-  const generateFrame = (scene, { revisionId, onJob, referenceImageId = null, refine = null, replaceSelection = false } = {}) => {
+  const generateFrame = (scene, { revisionId, onJob, referenceImageId = null, refine = null, replaceSelection = false, thenClip = null } = {}) => {
     const refining = Boolean(refine?.trim() && referenceImageId);
     if (castGuidesPending(scene)) return Promise.resolve({ ok: false });
     // The shot's references (the card's References row) ride along on every frame render, a refine included.
@@ -251,7 +252,9 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
       ...(references.length ? { referenceImageFiles: references } : {}),
       musicVideo: {
         projectId, sceneId: scene.sceneId, compose: true, castInputs, ...(revisionId ? { revisionId } : {}),
-        ...(replaceSelection ? { replaceSelection: true } : {}),
+        ...(replaceSelection ? { replaceSelection: true, expectedSelection: scene.referenceImageId || null } : {}),
+        // Clip from storyboard: the server animates this still on this lane once it is the shot's selection.
+        ...(thenClip ? { thenClip } : {}),
         ...(greybox?.reference ? { greyboxImageId: greybox.reference.imageId } : {}),
         ...(refining ? { refine: true } : referenceImageId ? { fromFrame: true } : {}),
       },
@@ -271,12 +274,14 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
         const filename = res?.filename;
         if (filename) {
           addMusicVideoSceneTake(projectId, scene.sceneId, {
-            kind: 'image', assetId: filename, source: 'generated', castInputs, ...(replaceSelection ? { replaceSelection: true } : {}),
+            kind: 'image', assetId: filename, source: 'generated', castInputs, ...(replaceSelection ? { replaceSelection: true, expectedSelection: scene.referenceImageId || null } : {}),
           }, { silent: true })
             .then(({ scene: updated }) => applyScenePatch?.(projectId, scene.sceneId, {
               referenceImageId: updated.referenceImageId, takes: updated.takes,
             }))
             .catch((err) => toast.error(err?.message || 'Failed to attach frame'));
+          // Only queued renders chain into a clip (musicVideoSceneImageHook); this lane answered inline.
+          if (thenClip) toast.info('Still ready. Render its clip from the shot card.');
         }
         frameLane.clearScene(scene.sceneId);
         return { ok: true };
@@ -320,7 +325,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
       ...(references.length ? { referenceImageFiles: references } : {}),
       musicVideo: {
         projectId, sceneId: scene.sceneId, slot: 'end', compose: true, castInputs,
-        ...(replaceSelection ? { replaceSelection: true } : {}),
+        ...(replaceSelection ? { replaceSelection: true, expectedSelection: scene.endImageId || null } : {}),
         ...(greybox?.reference ? { greyboxImageId: greybox.reference.imageId } : {}),
         ...(refining ? { refine: true } : referenceImageId ? { fromFrame: true } : {}),
       },
@@ -334,7 +339,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
         }
         if (res?.filename) {
           addMusicVideoSceneTake(projectId, scene.sceneId, {
-            kind: 'endImage', assetId: res.filename, source: 'generated', castInputs, ...(replaceSelection ? { replaceSelection: true } : {}),
+            kind: 'endImage', assetId: res.filename, source: 'generated', castInputs, ...(replaceSelection ? { replaceSelection: true, expectedSelection: scene.endImageId || null } : {}),
           }, { silent: true })
             .then(({ scene: updated }) => applyScenePatch?.(projectId, scene.sceneId, {
               endImageId: updated.endImageId ?? null, takes: updated.takes,
@@ -415,6 +420,8 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
     const runwayFields = settings.backend === 'runway'
       ? runwayTakeRequestFields(runwaySceneTake({ scene, videoSettings: settings }))
       : null;
+    // Only a cold-open shot playing its clip's own sound renders with sound (fal asks via falSceneTake).
+    const disableAudio = !preMusicClipSound(scene);
     videoLane.startScene(scene.sceneId);
     return generateVideo({
       prompt,
@@ -434,11 +441,11 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
           ? falFields || runwayFields
           : settings.backend === 'local'
             // A scene card's pick names its model and length; else the saved model at the model's default length.
-            ? { modelId: settings.modelId || undefined, ...(target?.numFrames ? { numFrames: target.numFrames } : {}), disableAudio: true }
+            ? { modelId: settings.modelId || undefined, ...(target?.numFrames ? { numFrames: target.numFrames } : {}), disableAudio }
             // A named model is local-only machinery at the server boundary and
             // would force the resolver off a Grok install default. Keep the
             // shared pin saved, but omit it until this peer chooses Local.
-            : { grokDuration: settings.grokDuration, disableAudio: true }),
+            : { grokDuration: settings.grokDuration, disableAudio }),
       mode,
       sourceImageFile: scene.referenceImageId,
       // A style-break end frame (#11173), when this fal or local model takes one

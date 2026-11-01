@@ -38,8 +38,8 @@
  *   - `runwaySceneTake` — the same answer for a cutaway on the Runway lane;
  *     `meteredSceneTake` picks the paid lane's take for a backend.
  *
- * Dependency-free (only grokVideoClip.js, falVideoModels.js and
- * runwayVideoModels.js, themselves dependency-free) so the client
+ * Dependency-free (only grokVideoClip.js, falVideoModels.js,
+ * runwayVideoModels.js and musicVideoColdOpen.js, themselves dependency-free) so the client
  * re-exports it from `client/src/lib/musicVideoShotTiming.js` and the two sides
  * cannot drift.
  */
@@ -64,6 +64,10 @@ import {
   getRunwayVideoModel,
   resolveRunwayVideoResolution,
 } from './runwayVideoModels.js';
+import { preMusicClipSound } from './musicVideoColdOpen.js';
+
+/** How a scene is generated (#14241): `sequence` joins its run of cutaway footage shots into one timed request. */
+export const MUSIC_VIDEO_COVERAGE_MODES = Object.freeze(['per-shot', 'sequence']);
 
 export const MUSIC_VIDEO_SHOT_MODES = Object.freeze(['cutaway', 'performance']);
 
@@ -535,9 +539,13 @@ export function planShotSplit({ startSec, endSec, maxSec, lyricCues, phrases, be
  * `lineCues` prices a performance take that covers the whole sung line
  * (planPerformanceWindow).
  *
- * Returns `{ performance, modelId, seconds, resolution, costUsd }`; `seconds`
- * and `costUsd` are null when unknown (an untimed or unplannable performance,
- * an uncurated model).
+ * A cold-open shot playing its clip's own sound asks a model with an audio
+ * switch for sound (`generateAudio`) and is priced at the audio-on rate; every
+ * other take renders silent.
+ *
+ * Returns `{ performance, modelId, seconds, resolution, costUsd, generateAudio }`;
+ * `seconds` and `costUsd` are null when unknown (an untimed or unplannable
+ * performance, an uncurated model).
  */
 export function falSceneTake({ scene, videoSettings = {}, songDurationSec = null, lineCues = null } = {}) {
   const settings = videoSettings || {};
@@ -571,7 +579,11 @@ export function falSceneTake({ scene, videoSettings = {}, songDurationSec = null
     : null;
   const seconds = coerceFalVideoSeconds(model, settings.falDuration || spanSec);
   const resolution = resolveFalVideoResolution(model, settings.falResolution);
-  return { performance: false, modelId, seconds, resolution, costUsd: estimateFalVideoCostUsd({ modelId, seconds, resolution }) };
+  const generateAudio = Boolean(model.audio) && preMusicClipSound(scene);
+  return {
+    performance: false, modelId, seconds, resolution, generateAudio,
+    costUsd: estimateFalVideoCostUsd({ modelId, seconds, resolution, generateAudio }),
+  };
 }
 
 /**
@@ -587,6 +599,7 @@ export const falTakeRequestFields = (take) => (take.performance
     falModelId: take.modelId,
     ...(take.seconds != null ? { falDuration: take.seconds } : {}),
     ...(take.resolution ? { falResolution: take.resolution } : {}),
+    ...(take.generateAudio ? { falGenerateAudio: true } : {}),
   });
 
 /**

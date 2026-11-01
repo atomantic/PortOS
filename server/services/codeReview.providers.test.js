@@ -3,6 +3,7 @@ import { access } from 'node:fs/promises';
 import { codeReviewSettingsSchema, sanitizeTaskMetadata } from '../lib/cosValidation.js';
 import { resolveReviewerConfig, buildReviewWithArgs, isReviewerConfigFault } from '../lib/reviewerConfig.js';
 import { localReviewBridgeRequest } from '../lib/localReviewBridge.js';
+import { extractGrokFinalMessage, grokReviewFinishReason } from '../lib/grok.js';
 
 vi.mock('./settings.js', () => ({ getSettings: vi.fn(), settingsEvents: { on: vi.fn() } }));
 vi.mock('./providers.js', () => ({ getProviderById: vi.fn(), listProviders: vi.fn() }));
@@ -374,14 +375,68 @@ describe('configured provider reviewers', () => {
     expect(runCliProviderPrompt).not.toHaveBeenCalled();
   });
 
-  it.each(['claude', 'codex'])('keeps checkout access and inspection guidance for enforced %s review mode', async command => {
-    getProviderById.mockResolvedValue({ ...provider, type: 'cli', command });
+  it('keeps checkout access and inspection guidance for a read-only review mode', async () => {
+    getProviderById.mockResolvedValue({ ...provider, type: 'cli', command: 'codex' });
     runCliProviderPrompt.mockResolvedValue({ text: 'NO FINDINGS', partial: false });
     expect(await runLocalCodeReview({ backend, diff: 'example diff', cwd: process.cwd() })).toMatchObject({ ok: true });
     expect(runCliProviderPrompt.mock.lastCall[0]).toMatchObject({
       cwd: process.cwd(), prompt: expect.stringContaining('When repository tools are available'),
     });
     expect(runCliProviderPrompt.mock.lastCall[0].prompt).not.toContain('do not run commands or open files');
+  });
+
+  // #14523: grok (and claude `--tools ''`) keep the checkout as cwd but cannot
+  // open it. The inspection sentence made grok write prose with no verdict.
+  it.each(['claude', 'grok'])('keeps the checkout cwd but does not invite inspection when %s has no tools', async command => {
+    getProviderById.mockResolvedValue({ ...provider, type: 'cli', command });
+    runCliProviderPrompt.mockResolvedValue({ text: 'NO FINDINGS', partial: false });
+    expect(await runLocalCodeReview({ backend, diff: 'example diff', cwd: process.cwd() })).toMatchObject({ ok: true });
+    const args = runCliProviderPrompt.mock.lastCall[0];
+    expect(args.cwd).toBe(process.cwd());
+    expect(args.prompt).toContain('do not run commands or open files');
+    expect(args.prompt).not.toContain('When repository tools are available');
+  });
+
+  // #14523: the failing grok transcript is streaming-json `text` with no brace,
+  // fence, or verdict. That still fail-closes. The same event types carrying
+  // an exact envelope parse to a verdict. Prose is never treated as clean.
+  it('parses a grok verdict envelope and fail-closes the prose-only transcript', async () => {
+    const line = (event) => JSON.stringify(event);
+    const transcript = (chunks, stopReason = 'end_turn') => [
+      line({ type: 'available_commands', tools: [] }),
+      line({ type: 'thought', data: 'note' }),
+      ...chunks.map((data) => line({ type: 'text', data })),
+      line({ type: 'usage', usage: {} }),
+      line({ type: 'end', stopReason }),
+    ].join('\n');
+    const proseTranscript = transcript(['The diff changes a counter. ', 'I would inspect the callers next.']);
+    const prose = extractGrokFinalMessage(proseTranscript);
+    expect(prose).not.toMatch(/[{`]/);
+    expect(prose).not.toContain('verdict');
+
+    const finding = { severity: 'recommended', location: 'example.js:4', outcome: 'The counter never resets.', fix: 'Reset it when the batch ends.' };
+    const envelope = JSON.stringify({ verdict: 'findings', findings: [finding] });
+    const verdictTranscript = transcript([envelope.slice(0, 18), envelope.slice(18)]);
+    expect(extractGrokFinalMessage(verdictTranscript)).toBe(envelope);
+
+    getProviderById.mockResolvedValue({ ...provider, type: 'cli', command: 'grok' });
+    runCliProviderPrompt.mockResolvedValue({ text: envelope, partial: false, finishReason: grokReviewFinishReason(verdictTranscript) });
+    expect(await runLocalCodeReview({ backend, diff: 'example diff', cwd: process.cwd() })).toMatchObject({
+      ok: true,
+      verdict: 'findings',
+      findings: '## Additional findings — resolution required\n\n- example.js:4: The counter never resets. Reset it when the batch ends.',
+    });
+
+    runCliProviderPrompt.mockResolvedValue({ text: prose, partial: false, finishReason: grokReviewFinishReason(proseTranscript) });
+    const failed = await runLocalCodeReview({ backend, diff: 'example diff', cwd: process.cwd() });
+    expect(failed).toMatchObject({
+      ok: false,
+      code: 'MALFORMED_REVIEW',
+      diagnostics: { reason: 'invalid_json', finishReason: 'stop', responseLengthCapped: false },
+    });
+    expect(failed).not.toHaveProperty('verdict');
+    expect(failed).not.toHaveProperty('findings');
+    expect(JSON.stringify(failed)).not.toContain('counter');
   });
 
   it.each([
@@ -447,6 +502,12 @@ describe('configured provider reviewers', () => {
       await runLocalCodeReview({ backend, diff });
       expect(budgetOf()).toBe(REMOTE_CODE_REVIEW_TIMEOUT_DEFAULT_MS);
       expect(budgetOf()).toBeGreaterThan(getLocalCodeReviewTimeoutMs(diff));
+
+      // #14499: every toolkit-created record carries the generic 300000 run
+      // default, which is not a review cap the user chose.
+      getProviderById.mockResolvedValue({ ...cli, timeout: 300_000 });
+      await runLocalCodeReview({ backend, diff });
+      expect(budgetOf()).toBe(REMOTE_CODE_REVIEW_TIMEOUT_DEFAULT_MS);
 
       getProviderById.mockResolvedValue({ ...cli, timeout: 90_000 });
       await runLocalCodeReview({ backend, diff });

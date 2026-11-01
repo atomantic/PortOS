@@ -161,7 +161,14 @@ function appendToScene(project, scene, inputs, now) {
     const field = TAKE_SLOT[input.kind];
     const selectable = take.status !== 'rejected' && take.use !== 'motion-reference' && !musicVideoTakeChanges(project, scene, take).length;
     const replaceFrame = input.replaceSelection === true && (input.kind === 'image' || input.kind === 'endImage');
-    if (selectable && (!isNonBlankStr(next[field]) || replaceFrame)) next[field] = take.assetId;
+    const selectionUnchanged = input.expectedSelection !== undefined && (next[field] || null) === input.expectedSelection;
+    const repairDone = input.kind === 'image' && input.stillRepairAt && next.stillFixes?.pending === true
+      && next.stillFixes.at === input.stillRepairAt;
+    if (selectable && (replaceFrame ? selectionUnchanged && (!input.stillRepairAt || repairDone) : !isNonBlankStr(next[field]))) next[field] = take.assetId;
+    if (repairDone) {
+      const { pending: _pending, replaces: _replaces, ...fixes } = next.stillFixes;
+      next.stillFixes = fixes;
+    }
   }
   next.takes = pruneTakes(takes, next);
   // A take landing for the lane a failure was recorded against is the retry

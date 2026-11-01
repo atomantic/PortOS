@@ -66,6 +66,10 @@ export function createProjectFileStore({ file, kind, idPrefix, logEmoji, logLabe
     return (includeDeleted ? all : all.filter((project) => !project.deleted)).map((project) => project.id);
   }
 
+  async function listProjectNames() {
+    return (await listProjects()).map(({ id, name }) => ({ id, name: name ?? null }));
+  }
+
   async function createProject(input, buildOptions = {}) {
     const id = `${idPrefix}-${randomUUID()}`;
     const extra = typeof buildOptions === 'function'
@@ -132,6 +136,7 @@ export function createProjectFileStore({ file, kind, idPrefix, logEmoji, logLabe
     getProject,
     getProjectsByIds,
     listProjectIds,
+    listProjectNames,
     createProject,
     updateProject,
     deleteProject,

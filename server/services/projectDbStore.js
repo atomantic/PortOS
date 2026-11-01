@@ -97,6 +97,12 @@ export function createProjectDbStore({ table, kind, idPrefix, logEmoji, logLabel
     return result.rows.map((row) => row.id);
   }
 
+  // Live `{ id, name }` rows without loading the JSONB bodies (sidebar nav).
+  async function listProjectNames() {
+    const result = await query(`SELECT id, data->>'name' AS name FROM ${table} WHERE deleted = FALSE ORDER BY created_at ASC`);
+    return result.rows.map(({ id, name }) => ({ id, name: name ?? null }));
+  }
+
   async function createProject(input, buildOptions = {}) {
     const id = `${idPrefix}-${randomUUID()}`;
     const extra = typeof buildOptions === 'function'
@@ -188,6 +194,7 @@ export function createProjectDbStore({ table, kind, idPrefix, logEmoji, logLabel
     getProject,
     getProjectsByIds,
     listProjectIds,
+    listProjectNames,
     createProject,
     withLockedProject,
     updateProject,

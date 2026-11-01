@@ -64,14 +64,14 @@ describe('FeatureAgentDetail load race', () => {
     );
 
     // A's fetch is in flight; the loading skeleton is up.
-    expect(api.getFeatureAgent).toHaveBeenCalledWith('agent-a');
+    expect(api.getFeatureAgent).toHaveBeenCalledWith('agent-a', { silent: true });
     expect(screen.getByRole('status', { name: 'Loading agent' })).toBeInTheDocument();
 
     // Navigate A→B before A resolves.
     await act(async () => {
       screen.getByText('go-b').click();
     });
-    await waitFor(() => expect(api.getFeatureAgent).toHaveBeenCalledWith('agent-b'));
+    await waitFor(() => expect(api.getFeatureAgent).toHaveBeenCalledWith('agent-b', { silent: true }));
 
     // Resolve A LATE — must be ignored (wrong agent must never show).
     await act(async () => {
@@ -104,6 +104,42 @@ describe('FeatureAgentDetail load race', () => {
     // B is still loading — the old agent name must be gone, skeleton up.
     expect(screen.queryByText('Agent Alpha')).not.toBeInTheDocument();
     expect(screen.getByRole('status', { name: 'Loading agent' })).toBeInTheDocument();
+  });
+
+  it('offers Retry for a failed read instead of claiming the agent is gone', async () => {
+    api.getFeatureAgent.mockImplementationOnce(() => Promise.reject(Object.assign(new Error('Server unavailable'), { status: 503 })));
+    render(
+      <MemoryRouter initialEntries={['/feature-agents/agent-a/overview']}>
+        <Harness />
+      </MemoryRouter>,
+    );
+    await waitFor(() => expect(screen.getByText('Couldn’t load this feature agent')).toBeInTheDocument());
+    expect(screen.queryByText('Feature agent not found')).not.toBeInTheDocument();
+
+    await act(async () => { screen.getByRole('button', { name: 'Retry' }).click(); });
+    await act(async () => {
+      deferreds['agent-a'].resolve({ id: 'agent-a', name: 'Agent Alpha', appId: 'app1' });
+    });
+    await waitFor(() => expect(screen.getByText('Agent Alpha')).toBeInTheDocument());
+  });
+
+  it('shows not-found when a refresh finds the shown agent deleted', async () => {
+    const socket = (await import('../services/socket')).default;
+    render(
+      <MemoryRouter initialEntries={['/feature-agents/agent-a/overview']}>
+        <Harness />
+      </MemoryRouter>,
+    );
+    await act(async () => {
+      deferreds['agent-a'].resolve({ id: 'agent-a', name: 'Agent Alpha', appId: 'app1' });
+    });
+    await waitFor(() => expect(screen.getByText('Agent Alpha')).toBeInTheDocument());
+
+    api.getFeatureAgent.mockImplementationOnce(() => Promise.reject(Object.assign(new Error('Feature agent not found'), { status: 404 })));
+    const statusHandler = socket.on.mock.calls.find(([event]) => event === 'cos:feature-agent:status')[1];
+    await act(async () => { statusHandler({ id: 'agent-a' }); });
+    await waitFor(() => expect(screen.getByText('Feature agent not found')).toBeInTheDocument());
+    expect(screen.queryByText('Agent Alpha')).not.toBeInTheDocument();
   });
 
   it('still renders the agent under StrictMode (mount→cleanup→remount must not strand the mounted guard)', async () => {

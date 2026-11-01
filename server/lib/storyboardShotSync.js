@@ -17,13 +17,12 @@
  * frames and clips as they are. A panel with no shot gets a new one, and a
  * shot whose panel is gone (or that no panel took) is removed.
  *
- * What a sync changes on a linked shot: its span, place, label, section and
- * sung lyric always; its words and frame reference (the panel's action and
- * art) only when the panel changed since the shot last took them, and only on
- * a shot whose still is not locked (a locked one waits for Update, as after
- * Fit to song). Everything the shot owns (prompts, takes, transitions,
- * effects, film look, mode) is kept. A shot whose video is locked never
- * moves, and a locked shot is removed only when asked (`removeLocked`).
+ * What a sync changes on a linked shot: its span, place, label, section,
+ * sung lyric and (when the panel names one) its set camera always; its words
+ * and frame reference (the panel's action and art) only when the panel
+ * changed since the shot last took them. Everything the shot owns (prompts,
+ * takes, transitions, effects, film look, mode) is kept. An unmatched shot
+ * with media is removed only after explicit confirmation.
  *
  * Browser-safe: no node-only imports.
  */
@@ -45,6 +44,12 @@ const TEXT_MAX = 2000;
 const round = (t) => Math.round(t * 100) / 100;
 const clip = (text, max) => String(text || '').trim().slice(0, max);
 const holdSeconds = (panel) => (panel?.seconds > 0 ? panel.seconds : STORYBOARD_DEFAULT_HOLD_SEC);
+// A panel seen from a saved camera of one of the video's places points its shot at that camera.
+const panelSetReference = (project, panel) => {
+  const subject = panel?.setShot && (project?.concept?.subjects || [])
+    .find((s) => s.kind === 'place' && s.ingredientId === panel.setShot.environmentId);
+  return subject ? { subjectId: subject.id, greyboxShotId: panel.setShot.shotId } : null;
+};
 const same = (a, b) => typeof a === 'number' && typeof b === 'number' && Math.abs(a - b) < SAME_SEC;
 
 /** Which song section a time falls in (the last one starting at or before it). */
@@ -108,18 +113,14 @@ export function storyboardPanelSpans(board, song = null) {
   return { panels, totalSec, overrunSec, gapSec, songSec: songEnd };
 }
 
-const STILL_HELD = new Set(['locked', 'changed']);
-
 /**
- * The sync: what each panel's shot becomes, and which shots go. `locks` and
- * `clipLocks` are the video's still and clip locks by shot id (productionReview
- * shotLocks / clipLocks). Returns `{ problem, shots, removed, counts, inSync,
+ * The sync: what each panel's shot becomes, and which shots go. Returns `{ problem, shots, removed, counts, inSync,
  * spans }`. Each of `shots` is `{ panelId, sceneId (null for a new shot), link
  * ('panel' | 'span' | 'overlap' | 'new'), retimed, moved, content, held, blocked,
  * patch | input }`: `patch` is what changes on the existing shot, `input` the
- * new shot's fields. `removed` lists `{ sceneId, label, locked, videoLocked, blocked }`.
+ * new shot's fields. `removed` lists `{ sceneId, label, hasMedia, blocked }`.
  */
-export function storyboardShotSyncPlan(board, project, { song = null, locks = null, clipLocks = null, removeLocked = false } = {}) {
+export function storyboardShotSyncPlan(board, project, { song = null, removeWithMedia = false } = {}) {
   const spans = storyboardPanelSpans(board, song);
   const empty = { shots: [], removed: [], counts: { linked: 0, retimed: 0, updated: 0, held: 0, added: 0, removed: 0, blocked: 0 }, inSync: true, spans };
   if (!song) return { ...empty, problem: 'Analyze the song first; the panels are timed on it.' };
@@ -129,8 +130,6 @@ export function storyboardShotSyncPlan(board, project, { song = null, locks = nu
   }
   const scenes = [...(project?.scenes || [])].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
   const panelById = new Map(board.beats.flatMap((beat) => beat.panels.map((panel) => [panel.id, panel])));
-  const stillOf = (scene) => locks?.[scene.sceneId] || 'open';
-  const clipLocked = (scene) => clipLocks?.[scene.sceneId] === 'locked';
 
   const claimed = new Set();
   const linkedTo = new Map();
@@ -168,7 +167,6 @@ export function storyboardShotSyncPlan(board, project, { song = null, locks = nu
     preludeClock += span.durationSec;
   }
   const counts = { ...empty.counts };
-  let lockedColdOpenMoves = false;
   const shots = spans.panels.map((span, order) => {
     const panel = panelById.get(span.panelId);
     const rev = storyboardPanelRev(panel);
@@ -176,7 +174,8 @@ export function storyboardShotSyncPlan(board, project, { song = null, locks = nu
     const timing = span.beforeSong
       ? { preMusic: { durationSec: span.durationSec } }
       : { startSec: span.startSec, endSec: span.endSec, lyricText: span.lyricText };
-    const placing = { label: span.label, sectionIndex: span.sectionIndex, sectionLabel: span.sectionLabel, ...timing };
+    const setReference = panelSetReference(project, panel);
+    const placing = { label: span.label, sectionIndex: span.sectionIndex, sectionLabel: span.sectionLabel, ...timing, ...(setReference ? { setReference } : {}) };
     const found = linkedTo.has(span.panelId) ? { scene: linkedTo.get(span.panelId), link: 'panel' } : takeUnlinked(span);
     if (!found) {
       counts.added += 1;
@@ -191,41 +190,32 @@ export function storyboardShotSyncPlan(board, project, { song = null, locks = nu
     const retimed = span.beforeSong
       ? !same(scene.preMusic?.durationSec, span.durationSec) || !same(coldOpenAt.get(scene.sceneId), preludeAt.get(span.panelId))
       : !same(scene.startSec, span.startSec) || !same(scene.endSec, span.endSec);
-    const blocked = retimed && clipLocked(scene) ? 'Its video is locked; unlock the video to move it.' : null;
-    if (blocked && span.beforeSong && !same(coldOpenAt.get(scene.sceneId), preludeAt.get(span.panelId))) lockedColdOpenMoves = true;
+    const blocked = null;
     // The first link keeps the shot's own words and frames as the panel's.
     const changed = link === 'panel' && (rev !== scene.panelRev || art !== (scene.panelArt ?? null));
-    const held = changed && STILL_HELD.has(stillOf(scene));
-    const content = changed && !held;
+    const held = false;
+    const content = changed;
     const patch = {
-      ...(blocked ? {} : placing),
+      ...placing,
       ...(link !== 'panel' ? { panelId: panel.id, panelRev: rev, panelArt: art } : {}),
       ...(content ? { visualIntent: clip(panel.action, TEXT_MAX) || null, panelRev: rev, panelArt: art } : {}),
     };
-    if (span.beforeSong && !blocked) patch.preMusic = { ...scene.preMusic, durationSec: span.durationSec };
+    if (span.beforeSong) patch.preMusic = { ...scene.preMusic, durationSec: span.durationSec };
     // A cold-open shot whose panel moved onto the song stops being a cold-open shot.
-    else if (!span.beforeSong && !blocked && isPreMusicShot(scene)) patch.preMusic = null;
+    else if (isPreMusicShot(scene)) patch.preMusic = null;
     const delta = Object.fromEntries(Object.entries(patch).filter(([key, value]) => JSON.stringify(scene[key] ?? null) !== JSON.stringify(value ?? null)));
     const moved = (scene.order ?? 0) !== order;
-    if (retimed && !blocked) counts.retimed += 1;
+    if (retimed) counts.retimed += 1;
     if (content) counts.updated += 1;
-    if (held) counts.held += 1;
-    if (blocked) counts.blocked += 1;
-    return { panelId: span.panelId, sceneId: scene.sceneId, link, retimed: retimed && !blocked, moved, content, held, blocked, patch: delta };
+    return { panelId: span.panelId, sceneId: scene.sceneId, link, retimed, moved, content, held, blocked, patch: delta };
   });
 
-  // The cold open plays in shot order, so a locked shot cannot keep its place while others move around it.
-  if (lockedColdOpenMoves) {
-    return { ...empty, problem: 'A shot before the song has a locked video and would move; unlock its video to reorder the cold open.' };
-  }
   const removed = scenes.filter((scene) => !claimed.has(scene.sceneId)).map((scene) => {
-    const videoLocked = clipLocked(scene);
-    const locked = STILL_HELD.has(stillOf(scene)) || videoLocked;
-    const blocked = videoLocked ? 'Its video is locked; unlock the video to remove it.'
-      : locked && !removeLocked ? 'It is locked; unlock it, or remove locked shots too.' : null;
+    const hasMedia = Boolean(scene.referenceImageId || scene.endImageId || scene.videoHistoryId || scene.takes?.length);
+    const blocked = hasMedia && !removeWithMedia ? 'It has media; confirm removal to remove this shot.' : null;
     if (blocked) counts.blocked += 1;
     else counts.removed += 1;
-    return { sceneId: scene.sceneId, label: scene.label || '', locked, videoLocked, blocked };
+    return { sceneId: scene.sceneId, label: scene.label || '', hasMedia, blocked };
   });
   const inSync = !shots.some((shot) => !shot.sceneId || shot.moved || (shot.patch && Object.keys(shot.patch).length))
     && !removed.some((shot) => !shot.blocked);

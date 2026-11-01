@@ -137,8 +137,8 @@ export default function JobRow({
         )}
         <div className="flex items-center">
           <div className="flex items-center gap-1">
-            <button type="button" className={`${actionButtonClass} text-gray-400 hover:text-white disabled:opacity-30`} disabled={index === 0} onClick={() => onMove(index, -1)} aria-label={`Move step ${index + 1} earlier`}><ArrowUp size={14} /></button>
-            <button type="button" className={`${actionButtonClass} text-gray-400 hover:text-white disabled:opacity-30`} disabled={index === total - 1} onClick={() => onMove(index, 1)} aria-label={`Move step ${index + 1} later`}><ArrowDown size={14} /></button>
+            <button type="button" className={`pointer-coarse:min-h-11 pointer-coarse:min-w-11 ${actionButtonClass} text-gray-400 hover:text-white disabled:opacity-30`} disabled={index === 0} onClick={() => onMove(index, -1)} aria-label={`Move step ${index + 1} earlier`}><ArrowUp size={14} /></button>
+            <button type="button" className={`pointer-coarse:min-h-11 pointer-coarse:min-w-11 ${actionButtonClass} text-gray-400 hover:text-white disabled:opacity-30`} disabled={index === total - 1} onClick={() => onMove(index, 1)} aria-label={`Move step ${index + 1} later`}><ArrowDown size={14} /></button>
             {/* An unavailable step has NO run affordance at all — not a disabled
                 one. The server would decline the dispatch, so offering the
                 button (even greyed) invites a click whose only outcome is a
@@ -158,7 +158,7 @@ export default function JobRow({
                 onCancel={() => setRunArmed(false)}
               />
             ) : (
-              <button type="button" className={`${actionButtonClass} text-port-accent hover:text-white disabled:opacity-30`} disabled={actionsBusy} onClick={() => { setArmed(false); setRunArmed(true); }} aria-label={`Run step ${index + 1} now`} title={actionsBusy ? 'Saving your changes…' : 'Run this job now, ignoring the reset window (asks to confirm)'}><Play size={14} /></button>
+              <button type="button" className={`pointer-coarse:min-h-11 pointer-coarse:min-w-11 ${actionButtonClass} text-port-accent hover:text-white disabled:opacity-30`} disabled={actionsBusy} onClick={() => { setArmed(false); setRunArmed(true); }} aria-label={`Run step ${index + 1} now`} title={actionsBusy ? 'Saving your changes…' : 'Run this job now, ignoring the reset window (asks to confirm)'}><Play size={14} /></button>
             )}
           </div>
           <div className="ml-2 border-l border-port-border/50 pl-2">
@@ -174,7 +174,7 @@ export default function JobRow({
                 onCancel={() => setArmed(false)}
               />
             ) : (
-              <button type="button" className={`${actionButtonClass} text-red-400 hover:text-red-300 disabled:opacity-30`} onClick={() => { setRunArmed(false); setArmed(true); }} aria-label={`Remove step ${index + 1}`}><Trash2 size={14} /></button>
+              <button type="button" className={`pointer-coarse:min-h-11 pointer-coarse:min-w-11 ${actionButtonClass} text-red-400 hover:text-red-300 disabled:opacity-30`} onClick={() => { setRunArmed(false); setArmed(true); }} aria-label={`Remove step ${index + 1}`}><Trash2 size={14} /></button>
             )}
           </div>
         </div>

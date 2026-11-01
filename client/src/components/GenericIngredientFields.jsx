@@ -53,7 +53,7 @@ function RefField({ fieldKey, label, value, onChange }) {
             type="button"
             onClick={() => onChange(fieldKey, '')}
             aria-label={`Clear ${label}`}
-            className="inline-flex items-center px-2 py-2 rounded border border-port-border text-gray-400 hover:text-port-error"
+            className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 inline-flex items-center px-2 py-2 rounded border border-port-border text-gray-400 hover:text-port-error"
           >
             <X size={14} aria-hidden="true" />
           </button>

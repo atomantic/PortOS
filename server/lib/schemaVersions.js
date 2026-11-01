@@ -307,7 +307,9 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // v13 = a panel's `composition` (where the subject sits); a v12 peer would drop it.
   // v14 = a panel's `move`, `lens`, `focus` and `eyeline`, and the framing `group`,
   // angle `ground-level` and two compositions; a v13 peer would drop them.
-  storyboards: 14,
+  // v15 = a panel's `linkMedia` (catalog id → gallery image Make sends instead
+  // of the newest portrait); a v14 peer would drop it and LWW the loss back.
+  storyboards: 15,
   // v1 = author personas (PostgreSQL `authors` table) federated via the
   // per-record peer-sync push pipeline (record kind `author`, sync category
   // `authors`). A brand-NEW synced record type like `storyBuilder` below, so it

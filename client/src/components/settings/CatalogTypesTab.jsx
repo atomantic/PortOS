@@ -176,7 +176,7 @@ export function CatalogTypesTab() {
                   ) : (
                     <button type="button" onClick={() => setArmedDeleteId(t.id)} disabled={editing !== null}
                       aria-label={`Delete ${t.label}`}
-                      className="px-2 py-1.5 rounded border border-port-border text-gray-400 hover:text-port-error text-sm disabled:opacity-40">
+                      className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 px-2 py-1.5 rounded border border-port-border text-gray-400 hover:text-port-error text-sm disabled:opacity-40">
                       <Trash2 size={13} />
                     </button>
                   )}
@@ -250,7 +250,7 @@ export function CatalogTypesTab() {
                     </select>
                   </FormField>
                   <button type="button" onClick={() => removeField(i)} aria-label="Remove field"
-                    className="px-2 py-1.5 rounded border border-port-border text-gray-400 hover:text-port-error">
+                    className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 px-2 py-1.5 rounded border border-port-border text-gray-400 hover:text-port-error">
                     <X size={14} />
                   </button>
                 </div>

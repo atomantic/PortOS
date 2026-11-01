@@ -66,7 +66,7 @@ describe('deriveStages / deriveNextAction', () => {
 
     const unplanned = { ...waiting, castAndSets: { status: 'approved' }, productionReadiness: { art: { approved: true }, storyboard: { approved: false }, proof: { approved: false }, readyForProduction: false } };
     expect(deriveNextAction(unplanned)).toMatchObject({ id: 'plan' });
-    expect(deriveNextAction({ ...unplanned, scenes: [{ id: 's1' }] })).toMatchObject({ id: 'review-production', stage: 'produce', label: 'Lock the stills' });
+    expect(deriveNextAction({ ...unplanned, scenes: [{ id: 's1' }] })).toMatchObject({ id: 'review-production', stage: 'produce', label: 'Review storyboard' });
 
     const interrupted = { ...waiting, castAndSets: { status: 'imaging', interrupted: true } };
     expect(stateOf({ ...interrupted, scenes: [scene()], productionReadiness: { art: { approved: false }, storyboard: { approved: false, problems: [] } } })['cast-sets']).toBe('blocked');
@@ -286,7 +286,7 @@ describe('following the tab order', () => {
       .toMatchObject({ board: 'done', produce: 'done', review: 'active' });
     expect(deriveNextAction(edited, { readiness })).toMatchObject({ id: 'render-final' });
     expect(stageChecklist('produce', edited, readiness).map((i) => [i.id, i.done, !!i.optional, i.label]))
-      .toEqual([['footage', true, false, 'Footage for every shot (1 of 1)'], ['approve-storyboard', true, false, 'Every still locked'], ['composition', true, false, 'Timed typography added']]);
+      .toEqual([['footage', true, false, 'Footage for every shot (1 of 1)'], ['approve-storyboard', true, false, 'Timed storyboard approved'], ['composition', true, false, 'Timed typography added']]);
   });
 
   it('counts a composed render\'s own lyrics as its typography, so it asks for no text cues', () => {
@@ -557,20 +557,18 @@ describe('stageChecklist', () => {
     const stale = { ...readiness, storyboard: { approved: false, problems: ['Review and approve the current art direction first.'], stale: { changedFields: ['art direction', 'cast'] } } };
     expect(stageChecklist('produce', castProject({ scenes: [scene()] }), stale).find((i) => i.id === 'approve-storyboard').detail).toMatch(/changed since: art direction, cast/);
   });
-  it('counts the shots left to lock once shots are locked one at a time', () => {
+  it('offers storyboard review without asking for legacy still locks', () => {
     const readiness = { ...NOT_APPROVED, art: { approved: true, problems: [] }, storyboard: { approved: false, problems: [], unlocked: ['s2', 's3'] } };
     const stills = (r) => stageChecklist('produce', castProject({ scenes: [scene()] }), r).find((i) => i.id === 'approve-storyboard');
-    expect(stills(readiness)).toMatchObject({ label: 'Every still locked', detail: '2 shots not locked yet. Lock each on its card, or lock them all below.' });
+    expect(stills(readiness)).toMatchObject({ label: 'Timed storyboard approved', detail: 'Ready for your review below.' });
     const stale = { ...readiness, storyboard: { ...readiness.storyboard, stale: { changedFields: ['scene 2 prompt'] } } };
-    expect(stills(stale).detail).toMatch(/^2 shots not locked yet\. .*changed since: scene 2 prompt/);
+    expect(stills(stale).detail).toMatch(/changed since: scene 2 prompt/);
   });
-  // Uniquely catches the video count losing its one-tap way to the shots it counts.
-  it('counts the videos left to lock and shows them on the board', () => {
+  it('does not ask to lock videos when a legacy project has mixed clip locks', () => {
     const readiness = { ...NOT_APPROVED, art: { approved: true, problems: [] },
       storyboard: { approved: true, problems: [], unlocked: [], clipLocks: { s1: 'locked', s2: 'changed', s3: 'open' }, clipsUnlocked: ['s2', 's3'] } };
     const clips = stageChecklist('produce', castProject({ scenes: [scene()] }), readiness).find((i) => i.id === 'lock-clips');
-    expect(clips).toMatchObject({ done: false, detail: '2 videos not locked yet. Lock each on its card once its clip is right.',
-      action: { label: 'Show these 2', anchor: 'mv-scene-board', params: { scenes: 'attention' } } });
+    expect(clips).toBeUndefined();
   });
   it('counts per-scene changes in a stale approval instead of naming every scene', () => {
     const prompts = Array.from({ length: 26 }, (_, i) => `scene ${i + 1} prompt`);
@@ -699,9 +697,9 @@ describe('stepNotes', () => {
     const project = { id: 'p', scenes: [scene(), scene({ sceneId: 's2' }), scene({ sceneId: 's3' })] };
     const clipLocks = { s1: 'locked', s2: 'changed', s3: 'open' };
     const locked = { ...APPROVED, storyboard: { approved: true, problems: [], unlocked: [], clipLocks, clipsUnlocked: ['s2', 's3'] } };
-    expect(stepNotes(project, locked).produce).toBe('2 videos not locked');
+    expect(stepNotes(project, locked).produce).toBe('3 of 3 shots have their picture');
     const stills = { ...locked, storyboard: { approved: false, problems: [], unlocked: ['s3'], clipLocks, clipsUnlocked: ['s2', 's3'] } };
-    expect(stepNotes(project, stills).produce).toBe('1 still and 2 videos not locked');
+    expect(stepNotes(project, stills).produce).toMatch(/^To do: Timed storyboard/);
     const done = { ...locked, storyboard: { ...locked.storyboard, clipLocks: { s1: 'locked', s2: 'locked', s3: 'locked' }, clipsUnlocked: [] } };
     expect(stepNotes(project, done).produce).toBe('3 of 3 shots have their picture');
   });

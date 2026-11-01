@@ -32,6 +32,7 @@ import { RENDER_TARGET } from '../../lib/renderTargets.js';
 import { falSceneTake, falTakeRequestFields, grokCoverage, runwaySceneTake, runwayTakeRequestFields } from '../../lib/musicVideoShotTiming.js';
 import { authoredShotPrompt, musicVideoFrameModelInput } from '../../lib/musicVideoShotPrompt.js';
 import { sceneEndFrameRequestFields } from '../../lib/musicVideoEndFrame.js';
+import { preMusicClipSound } from '../../lib/musicVideoColdOpen.js';
 import { conditioningReferences, falRouteVideoSettings, runwayRouteVideoSettings } from './productionPool.js';
 import { loadSceneCastMedia } from './castGuideMedia.js';
 import { castInputsFromReferences } from '../../lib/musicVideoCastLook.js';
@@ -56,8 +57,6 @@ async function dispatchFrame({ project, scene, route, tag, settings }) {
   const fixes = typeof scene.stillFixes?.text === 'string' ? scene.stillFixes.text : '';
   const { loadMusicVideoGreybox } = await import('./greyboxReferences.js');
   const greybox = await loadMusicVideoGreybox(project, scene);
-  const { prompt, promptAdditions } = musicVideoFrameModelInput(project, scene, { repairs: unmet, fixes, greybox });
-  if (!prompt) throw unprompted(scene, 'frame');
   // A Casting guide may live in any image-input root (catalog.js validates it with resolveImageInputPath).
   const chosen = conditioningReferences(project, scene, await loadSceneCastMedia(scene), greybox);
   const sent = [];
@@ -68,6 +67,11 @@ async function dispatchFrame({ project, scene, route, tag, settings }) {
     referenceImagePaths.push(path);
     sent.push(ref);
   }
+  const { loadLinkedStoryboardPanel } = await import('./linkedPanel.js');
+  const panel = await loadLinkedStoryboardPanel(project, scene);
+  const panelReference = scene.panelArt ? sent.findIndex((ref) => ref.imageId === scene.panelArt) + 1 : 0;
+  const { prompt, promptAdditions } = musicVideoFrameModelInput(project, scene, { repairs: unmet, fixes, greybox, panel, panelReference });
+  if (!prompt) throw unprompted(scene, 'frame');
   const [{ resolveRenderTargetConfig }, { resolveImageCleaners }, { enqueueJob }] = await Promise.all([
     import('../imageGen/cloudProviderConfig.js'),
     import('../../lib/imageCleanDefaults.js'),
@@ -130,8 +134,8 @@ async function dispatchClip({ project, scene, route, tag }) {
   const fixes = typeof scene.clipFixes?.text === 'string' ? scene.clipFixes.text : '';
   const byBackend = {
     // A supplied-audio route animates the frame from its shot's own song window.
-    local: route.audio === 'supplied' ? { modelId: route.model, mode: 'a2v', _suppliedAudio: true } : { modelId: route.model, disableAudio: true },
-    grok: { grokDuration: spanSec != null ? grokCoverage(spanSec).requestSec : (project.videoSettings?.grokDuration || 10), disableAudio: true },
+    local: route.audio === 'supplied' ? { modelId: route.model, mode: 'a2v', _suppliedAudio: true } : { modelId: route.model, disableAudio: !preMusicClipSound(scene) },
+    grok: { grokDuration: spanSec != null ? grokCoverage(spanSec).requestSec : (project.videoSettings?.grokDuration || 10), disableAudio: !preMusicClipSound(scene) },
     fal: falClipParams(project, scene, route),
     reactor: { disableAudio: true },
     runway: runwayTakeRequestFields(runwaySceneTake({ scene, videoSettings: runwayRouteVideoSettings(project, route) })),
@@ -158,6 +162,20 @@ async function dispatchClip({ project, scene, route, tag }) {
     ...(fixes ? { _clipFixes: fixes } : {}),
   }, {});
   return { jobId };
+}
+
+/**
+ * Clip from storyboard's second half: animate the still the shot's storyboard
+ * render just made on `backend` (the project's lane when absent). The tag names
+ * that still so the review guard can admit the clip on the art approval; a
+ * client cannot send that key (the video route's tag schema strips it).
+ */
+export function dispatchStoryboardStillClip({ project, scene, backend = null, model = null }) {
+  return dispatchClip({
+    project, scene,
+    route: { kind: 'video', mode: backend || project.videoSettings?.backend || undefined, model },
+    tag: { projectId: project.id, sceneId: scene.sceneId, storyboardStill: scene.referenceImageId },
+  });
 }
 
 /**

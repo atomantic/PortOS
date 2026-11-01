@@ -37,9 +37,11 @@ import {
   withNodeBinOnPath,
 } from '../lib/nodeInterpreterPin.js';
 import { readPortosEnvValue, upsertPortosEnvLine } from '../lib/portosEnv.js';
+import { runtimeUpdateEvents } from './runtimeUpdateEvents.js';
 import {
   SUPPORTED_NODE_RANGE,
   compareVersions,
+  nodeSecurityBaseline,
   satisfiesVersionRequirement,
 } from '../../scripts/checkNodeVersion.js';
 
@@ -123,7 +125,10 @@ function summarizeNodeReleases(releases, runningVersion) {
   const latestInLine = supported.find((release) => major(release.version) === runningMajor) || null;
   const latestLts = supported.find((release) => release.lts) || null;
   const latestCurrent = supported[0] || null;
-  const securityUpdate = supported.some((release) => release.security && newer(release) && major(release.version) === runningMajor);
+  const newerInLine = supported.filter((release) => newer(release) && major(release.version) === runningMajor);
+  const latestSecurity = newerInLine.find((release) => release.security === true) || null;
+  const securityUpdate = Boolean(latestSecurity);
+  const securityVerified = newerInLine.every((release) => typeof release.security === 'boolean');
 
   const offers = [];
   const offer = (release, label) => {
@@ -144,7 +149,9 @@ function summarizeNodeReleases(releases, runningVersion) {
     latestInLine: pick(latestInLine),
     latestLts: pick(latestLts),
     latestCurrent: pick(latestCurrent),
+    latestSecurity: pick(latestSecurity),
     securityUpdate,
+    securityVerified,
     offers,
   };
 }
@@ -197,10 +204,17 @@ function nodeGlobalPrefix(nodeBinary) {
   return cellar > 0 ? nodeBinary.slice(0, cellar) : dirname(dirname(nodeBinary));
 }
 
-/** The global pm2 CLI installed for a node binary, or null. */
-function globalPm2Version(nodeBinary) {
-  if (!nodeBinary || IS_WIN) return null;
-  return readPackageVersion(join(nodeGlobalPrefix(nodeBinary), 'lib', 'node_modules', 'pm2', 'package.json'));
+/** Distinguish a missing global CLI from an unreadable or unparseable one. */
+function globalPm2Status(nodeBinary, { readText = readFileSync, isWindows = IS_WIN } = {}) {
+  if (!nodeBinary || isWindows) return { version: null, state: 'unsupported' };
+  try {
+    const version = JSON.parse(readText(join(nodeGlobalPrefix(nodeBinary), 'lib', 'node_modules', 'pm2', 'package.json'), 'utf8')).version;
+    return typeof version === 'string' && /^\d+\.\d+\.\d+(?:[-+][\w.-]+)?$/.test(version)
+      ? { version, state: 'available' }
+      : { version: null, state: 'unverified' };
+  } catch (error) {
+    return { version: null, state: ['ENOENT', 'ENOTDIR'].includes(error.code) ? 'missing' : 'unverified' };
+  }
 }
 
 const NVM_BIN_SEGMENT = /(\/\.nvm\/versions\/node\/)v\d+\.\d+\.\d+(\/bin)/g;
@@ -298,7 +312,8 @@ export async function getNodeRuntimeStatus() {
   const summary = releases ? summarizeNodeReleases(releases, running) : null;
   const shipped = shippedPm2Version();
   const cliNode = pinned || process.execPath;
-  const cli = globalPm2Version(cliNode);
+  const cliStatus = globalPm2Status(cliNode);
+  const cli = cliStatus.version;
 
   const blockedReason = IS_WIN
     ? 'Updating Node from PortOS needs nvm, which is not available on Windows. Update Node with your installer, then update PortOS.'
@@ -321,6 +336,7 @@ export async function getNodeRuntimeStatus() {
       pinned,
       supportedRange: SUPPORTED_NODE_RANGE,
       inSupportedRange: satisfiesVersionRequirement(running, SUPPORTED_NODE_RANGE) === true,
+      securityBaseline: nodeSecurityBaseline(running),
     },
     nvm: nvm ? {
       dir: nvm.dir,
@@ -334,6 +350,7 @@ export async function getNodeRuntimeStatus() {
       latest: latestPm2,
       daemon,
       cli,
+      cliState: cliStatus.state,
       cliBehind: older(cli),
       daemonStale,
     },
@@ -445,7 +462,7 @@ function launchJob(kind, io, work, { restart = true } = {}) {
       console.error(`❌ ${kind} failed: ${error.message}`);
       io?.emit('portos:update:error', { message: error.message, step: kind });
     })
-    .finally(() => { currentJob = null; });
+    .finally(() => { currentJob = null; runtimeUpdateEvents.emit('changed'); });
   // `restart: false` tells the Update tab not to wait for a restart.
   return { started: true, restart };
 }
@@ -509,6 +526,7 @@ export async function startPm2Update({ io }) {
 }
 
 export const __testing = {
+  globalPm2Status,
   getStartupStatus,
   resetNodeRuntimeCaches,
   resolveNvm,

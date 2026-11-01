@@ -172,24 +172,51 @@ export default function VideoGen() {
       n.delete('episode'); n.delete('loomId'); n.delete('episodeId');
       return n;
     });
-    // The composer unmounts on close (conditional render below) — clear the
-    // import so a later open with no loomId/episodeId doesn't inherit it.
-    setEpisodeImportScenes(null);
   };
-  const [episodeImportScenes, setEpisodeImportScenes] = useState(null);
+  // The import is stored with the target it was read for, so a switch to
+  // another episode never shows the previous episode's scenes — even when the
+  // new episode has none.
+  const episodeImportKey = episodeOpen && episodeLoomId && episodeEpisodeId
+    ? JSON.stringify([episodeLoomId, episodeEpisodeId])
+    : null;
+  const [episodeImport, setEpisodeImport] = useState(null);
+  const episodeImportScenes = episodeImport && episodeImport.key === episodeImportKey ? episodeImport.scenes : null;
+  // A failed FableLoom read must not open as a blank composer the user takes
+  // for an episode with no scenes.
+  const [episodeImportError, setEpisodeImportError] = useState(null);
+  const [episodeImportPending, setEpisodeImportPending] = useState(false);
+  const [episodeImportAttempt, setEpisodeImportAttempt] = useState(0);
   useEffect(() => {
-    if (!episodeOpen || !episodeLoomId || !episodeEpisodeId) return undefined;
+    if (!episodeOpen || !episodeLoomId || !episodeEpisodeId) {
+      // Browser Back can drop the import params without closeEpisodeComposer;
+      // a later plain open must not inherit the old import or its failure.
+      setEpisodeImport(null);
+      setEpisodeImportError(null);
+      setEpisodeImportPending(false);
+      return undefined;
+    }
     let active = true;
+    // The failure stays visible until a read succeeds, so Retry never shows
+    // the blank composer as if the episode had no scenes.
+    setEpisodeImportPending(true);
     getLoom(episodeLoomId, { silent: true }).then((loom) => {
       if (!active) return;
       const episode = loom?.episodes?.find((e) => e.id === episodeEpisodeId);
-      const draftScenes = loomEpisodeToDraftScenes(episode, { format: loom?.format });
-      if (draftScenes.length) setEpisodeImportScenes(draftScenes);
-    }).catch(() => {});
+      if (!episode) {
+        setEpisodeImportError(new Error('it is no longer in this loom; reopen the composer from FableLoom'));
+        return;
+      }
+      setEpisodeImport({ key: episodeImportKey, scenes: loomEpisodeToDraftScenes(episode, { format: loom?.format }) });
+      setEpisodeImportError(null);
+    }).catch((error) => {
+      if (active) setEpisodeImportError(error);
+    }).finally(() => {
+      if (active) setEpisodeImportPending(false);
+    });
     return () => { active = false; };
     // Only re-run when a fresh loom/episode is targeted, not on every render.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [episodeOpen, episodeLoomId, episodeEpisodeId]);
+    // Dependency list is intentionally partial.
+  }, [episodeOpen, episodeLoomId, episodeEpisodeId, episodeImportKey, episodeImportAttempt]);
 
   // `/status` owns connectivity ONLY. It shells out to python on every call
   // (~1-2s), so nothing the form needs to render may wait on it.
@@ -473,7 +500,7 @@ export default function VideoGen() {
   const { peerNames: pendingPeerNames, rememberPeerName } = usePendingDeletePeerNames(history);
   const withPendingDelete = useCallback((id, pendingDelete) => setHistory((h) => h.map((v) => {
     if (v.id !== id) return v;
-    const { pendingDelete: _previous, ...rest } = v; // eslint-disable-line no-unused-vars
+    const { pendingDelete: _previous, ...rest } = v;
     return pendingDelete ? { ...rest, pendingDelete } : rest;
   })), []);
   const handleDeleteHistory = useCallback(async (item, { force = false } = {}) => {
@@ -2158,7 +2185,18 @@ export default function VideoGen() {
       </Drawer>
 
       <Drawer open={episodeOpen} onClose={closeEpisodeComposer} title="Episode Composer" size="xl" closeOnBackdrop={false}>
-        {episodeOpen && <EpisodeComposer initialScenes={episodeImportScenes} onQueued={refreshHistory} />}
+        {episodeOpen && episodeImportError && (
+          <ListLoadError
+            what="the FableLoom episode"
+            error={episodeImportError}
+            onRetry={() => setEpisodeImportAttempt((n) => n + 1)}
+            retrying={episodeImportPending}
+            className="mb-3"
+          />
+        )}
+        {/* Keyed by target: the composer applies an import only once, so a new
+            episode needs a fresh composer rather than the last one's scenes. */}
+        {episodeOpen && <EpisodeComposer key={episodeImportKey ?? 'blank'} initialScenes={episodeImportScenes} onQueued={refreshHistory} />}
       </Drawer>
 
       <RuntimeInstallModal

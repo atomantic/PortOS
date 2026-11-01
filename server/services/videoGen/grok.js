@@ -22,12 +22,14 @@
  */
 
 import { createMediaJobPreparation } from '../../lib/mediaJobPreparation.js';
+import { storyboardGuidanceMeta } from './storyboardGuidance.js';
 import { spawn } from '../../lib/childProcess.js';
 import { mkdir, open, stat } from 'fs/promises';
 import { isAbsolute, join, resolve as pathResolve, sep } from 'path';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
-import { ensureDir, PATHS, copyFileGuarded, unlinkGuarded, rmGuarded } from '../../lib/fileUtils.js';
+import { atomicWrite, ensureDir, PATHS, copyFileGuarded, unlinkGuarded, rmGuarded } from '../../lib/fileUtils.js';
+import sharp from 'sharp';
 import { ServerError } from '../../lib/errorHandler.js';
 import { attachSseClient as attachSse, closeJobAfterDelay, createJobFailureFinalizer } from '../../lib/sseUtils.js';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
@@ -37,11 +39,14 @@ import { videoGenEvents } from './events.js';
 import { discardUnpublishedVideo, finalizeGeneratedVideo, emitCloudRenderStatus, CLOUD_RENDER_PHASE } from './generateVideoHelpers.js';
 import { mutateVideoHistory } from './history.js';
 import { noImageReason, deriveAspectRatio, GROK_ASPECT_RATIOS } from '../imageGen/grok.js';
-import { grokVideoBillableUnits, resolveGrokDuration } from '../../lib/grokVideoClip.js';
+import { grokVideoBillableUnits, grokVideoResolution, resolveGrokDuration } from '../../lib/grokVideoClip.js';
+import { isLowResVideo } from '../../lib/videoResolution.js';
 import { withSpawnCwdEnv } from '../../lib/spawnCwd.js';
-import { probeVideoDuration } from '../../lib/ffmpeg.js';
+import { probeVideoDuration, probeVideoStreamInfo } from '../../lib/ffmpeg.js';
 import { maintenance } from '../../lib/maintenanceAdmission.js';
+import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { agentInstructionsAddition, carriedPromptAdditions, sentPromptRecord } from '../../lib/modelInput.js';
+import { storyboardGuidanceAddition, storyboardGuidanceText } from '../../lib/storyboardGuidance.js';
 
 // 30 minutes — an image-first video turn is two sequential tool calls
 // (image_gen then image_to_video render + download), so it runs meaningfully
@@ -115,14 +120,39 @@ const isMp4Header = (buf) =>
 // Build the single-turn agent prompt for the image-first flow. Explicit about
 // the tools, the save path, and staying out of everything else. Scratch cwd
 // organizes output, not host authority; HTTP generation is operator-gated.
-export function buildGrokVideoPrompt({ prompt, negativePrompt, aspectRatio, duration, stagingPath, sourceImagePath, scratchDir }) {
+//
+// A storyboard-guided render (`guidanceImagePath`) never animates the panel:
+// image_edit builds a photographic first frame from the panel (layout only) and
+// the references (the look), saved as first-frame.png, which image_to_video then
+// animates. grok's image_gen takes no image, so the panel routes to image_edit.
+export function buildGrokVideoPrompt({
+  prompt, negativePrompt, aspectRatio, duration, resolution = null, stagingPath, sourceImagePath, scratchDir,
+  guidanceImagePath = null, referenceImagePaths = [],
+}) {
   const avoid = negativePrompt?.trim() ? `\nAvoid: ${negativePrompt.trim()}` : '';
-  const ratio = aspectRatio ? `\nUse aspect_ratio "${aspectRatio}" for the base image.` : '';
-  const steps = sourceImagePath
-    ? `Use your built-in image_to_video tool to animate the source image at ${sourceImagePath} for ${duration} seconds.\nMotion/direction prompt: ${prompt.trim()}${avoid}`
-    : `First, use your built-in image_gen tool to generate one base image for this prompt and save it as ${join(scratchDir, 'base.png')}:\n${prompt.trim()}${avoid}${ratio}\nThen use your built-in image_to_video tool to animate that base image for ${duration} seconds, using the same prompt as the motion description.`;
-  return `${steps}\nSave the resulting video as an MP4 file at exactly this path: ${stagingPath}\nDo not create any other files, do not modify any code, and do not run any other tools beyond what is needed to generate the image/video and write the MP4 to that path. When the file is written, you are done.`;
+  const ratio = aspectRatio ? `\nUse aspect_ratio "${aspectRatio}" for the ${guidanceImagePath ? 'first frame' : 'base image'}.` : '';
+  let steps;
+  if (guidanceImagePath) {
+    const images = [guidanceImagePath, ...referenceImagePaths];
+    steps = [
+      `First, use your built-in image_edit tool to generate one photographic first frame and save it as ${grokFirstFramePath(scratchDir)}.`,
+      `Pass these ${images.length === 1 ? 'image' : `${images.length} images`} to the tool's \`image\` array, in this order: ${images.join(', ')}`,
+      storyboardGuidanceText({ guidance: guidanceImagePath, references: referenceImagePaths }),
+      `Shot prompt: ${prompt.trim()}${avoid}${ratio}`,
+      `Then use your built-in image_to_video tool to animate that first frame (never the storyboard panel) for ${duration} seconds, using the shot prompt as the motion description.`,
+    ].join('\n');
+  } else if (sourceImagePath) {
+    steps = `Use your built-in image_to_video tool to animate the source image at ${sourceImagePath} for ${duration} seconds.\nMotion/direction prompt: ${prompt.trim()}${avoid}`;
+  } else {
+    steps = `First, use your built-in image_gen tool to generate one base image for this prompt and save it as ${join(scratchDir, 'base.png')}:\n${prompt.trim()}${avoid}${ratio}\nThen use your built-in image_to_video tool to animate that base image for ${duration} seconds, using the same prompt as the motion description.`;
+  }
+  // The tool defaults to 480p unless asked, so name the resolution the request needs (#14491).
+  const size = resolution ? `\nCall image_to_video with resolution_name "${resolution}".` : '';
+  return `${steps}${size}\nSave the resulting video as an MP4 file at exactly this path: ${stagingPath}\nDo not create any other files, do not modify any code, and do not run any other tools beyond what is needed to generate the image/video and write the MP4 to that path. When the file is written, you are done.`;
 }
+
+// Where a storyboard-guided render's first frame is directed, so it can be kept beside the clip.
+const grokFirstFramePath = (scratchDir) => join(scratchDir, 'first-frame.png');
 
 /**
  * The agent prompt a grok video render sends and its record (#11317): shared by
@@ -130,19 +160,24 @@ export function buildGrokVideoPrompt({ prompt, negativePrompt, aspectRatio, dura
  */
 export function grokVideoSentPrompt({
   prompt = '', negativePrompt, aspectRatio, width, height, duration, sourceImagePath = null, scratchDir, promptAdditions = [],
+  guidanceImagePath = null, referenceImagePaths = [],
 }) {
   const effectiveDuration = resolveGrokDuration(duration);
   const configured = GROK_ASPECT_RATIOS.includes(aspectRatio) ? aspectRatio : null;
   const effectiveRatio = deriveAspectRatio(width, height) || configured;
+  const resolution = grokVideoResolution(width, height);
   const buildWith = (text) => buildGrokVideoPrompt({
-    prompt: text, negativePrompt, aspectRatio: effectiveRatio, duration: effectiveDuration,
-    stagingPath: join(scratchDir, 'output.mp4'), sourceImagePath, scratchDir,
+    prompt: text, negativePrompt, aspectRatio: effectiveRatio, duration: effectiveDuration, resolution,
+    stagingPath: join(scratchDir, 'output.mp4'), sourceImagePath, scratchDir, guidanceImagePath, referenceImagePaths,
   });
   const fullPrompt = buildWith(prompt);
+  const guidance = guidanceImagePath
+    ? storyboardGuidanceAddition(storyboardGuidanceText({ guidance: guidanceImagePath, references: referenceImagePaths }))
+    : null;
   return {
-    fullPrompt, effectiveRatio, effectiveDuration,
+    fullPrompt, effectiveRatio, effectiveDuration, resolution,
     record: sentPromptRecord({ sentPrompt: fullPrompt, carried: carriedPromptAdditions({ promptAdditions }),
-      added: [agentInstructionsAddition('Grok video tool instructions', buildWith)] }),
+      added: [guidance, agentInstructionsAddition('Grok video tool instructions', buildWith)] }),
   };
 }
 
@@ -154,6 +189,7 @@ async function generateVideoPrepared({
   uploadedTempPath = null,
   jobId: providedJobId = null,
   promptAdditions = [],
+  guidanceImagePath = null, referenceImagePaths = [],
 }) {
   await ensureDir(PATHS.videos);
 
@@ -178,8 +214,9 @@ async function generateVideoPrepared({
   const stagingPath = join(scratchDir, 'output.mp4');
   await mkdir(scratchDir, { recursive: true });
 
-  const { fullPrompt, effectiveRatio, effectiveDuration, record: sentRecord } = grokVideoSentPrompt({
+  const { fullPrompt, effectiveRatio, effectiveDuration, resolution, record: sentRecord } = grokVideoSentPrompt({
     prompt, negativePrompt, aspectRatio, width, height, duration, sourceImagePath, scratchDir, promptAdditions,
+    guidanceImagePath, referenceImagePaths,
   });
 
   const bin = grokPath || DEFAULT_BIN;
@@ -188,7 +225,8 @@ async function generateVideoPrepared({
 
   // History/meta shape mirrors local.js's fields that the Media History
   // consumers (normalize.js, the lightbox) actually read; grok has no
-  // seed/steps/fps knobs so those stay absent. `modelId: 'grok'` tags the
+  // seed/steps knobs, and its size and fps are probed from the delivered
+  // clip after the run. `modelId: 'grok'` tags the
   // record's engine for the grid badge and keeps Remix from offering
   // local-only dials.
   const meta = {
@@ -198,9 +236,11 @@ async function generateVideoPrepared({
     modelId: 'grok',
     duration: effectiveDuration,
     ...(effectiveRatio ? { aspectRatio: effectiveRatio } : {}),
+    ...(resolution ? { resolution } : {}),
     filename,
     createdAt: new Date().toISOString(),
     mode: sourceImagePath ? 'image' : 'text',
+    ...storyboardGuidanceMeta(guidanceImagePath, referenceImagePaths),
     ...sentRecord,
   };
   const job = { ...meta, clients: [], status: 'running', renderStartedAtMs };
@@ -329,14 +369,26 @@ async function runGrokVideo(job, jobId, bin, args, {
         return finalizeJobFailure(job, jobId, proc, `${prefix}${noVideoReason(stdoutTail)}`);
       }
       await copyFileGuarded(stagingPath, outputPath);
-      // grok's agent picks its own image_to_video length (see grokVideoClip.js),
-      // so record what it actually delivered and flag a clip that came back
-      // short: that is how a 15 s request is confirmed through the CLI.
-      const deliveredSec = await probeVideoDuration(outputPath).catch(() => null);
+      // grok's agent picks its own image_to_video arguments (see grokVideoClip.js),
+      // so record what it actually delivered — length, size and frame rate — and
+      // flag a clip that came back short or under the 720p it was asked for.
+      // Each axis is independently nullable, so an unreadable frame rate never
+      // costs the measured length the usage ledger bills.
+      const [stream, deliveredSec] = await Promise.all([
+        probeVideoStreamInfo(outputPath).catch(() => ({})),
+        probeVideoDuration(outputPath).catch(() => null),
+      ]);
       if (Number.isFinite(deliveredSec)) {
         meta.deliveredSec = Math.round(deliveredSec * 100) / 100;
         if (deliveredSec < meta.duration - 1) console.warn(`⚠️ grok delivered ${meta.deliveredSec}s for a ${meta.duration}s request [${jobId.slice(0, 8)}]`);
       }
+      if (stream.width && stream.height) {
+        Object.assign(meta, { width: stream.width, height: stream.height });
+        if (meta.resolution === '720p' && isLowResVideo(stream)) console.warn(`⚠️ grok delivered ${stream.width}x${stream.height} for a 720p request [${jobId.slice(0, 8)}]`);
+      }
+      if (stream.fps) meta.fps = stream.fps;
+      const numFrames = stream.frameCount || (stream.fps && Number.isFinite(deliveredSec) ? Math.round(deliveredSec * stream.fps) : null);
+      if (numFrames) meta.numFrames = numFrames;
       try {
         const units = grokVideoBillableUnits({
           requestedSeconds: meta.duration,
@@ -348,6 +400,7 @@ async function runGrokVideo(job, jobId, bin, args, {
       } catch (usageErr) {
         console.error(`❌ Failed to record Grok video usage [${jobId.slice(0, 8)}]: ${usageErr.message}`);
       }
+      if (meta.storyboardGuidance) await keepFirstFrame(scratchDir, jobId, meta);
       // Removing the scratch directory also removes the harvested staging file.
       await cleanup();
       if (activeProcs.get(jobId) === proc) activeProcs.delete(jobId);
@@ -367,6 +420,40 @@ async function runGrokVideo(job, jobId, bin, args, {
       finalizeJobFailure(job, jobId, proc, `Grok video post-exit handler failed: ${err?.message || err}`, { force: true });
     }
   });
+}
+
+/**
+ * A storyboard-guided clip's first frame is the still it was animated from, so
+ * it joins the gallery beside the clip (`meta.firstFrameFile`). Best-effort: the
+ * clip is still delivered when grok saved no frame.
+ */
+async function keepFirstFrame(scratchDir, jobId, meta) {
+  const source = grokFirstFramePath(scratchDir);
+  if (!(await stat(source).catch(() => null))?.size) {
+    console.log(`⏭️ grok saved no first frame for storyboard clip [${jobId.slice(0, 8)}]`);
+    return;
+  }
+  const filename = `${jobId}-first-frame.png`;
+  try {
+    await ensureDir(PATHS.images);
+    // Grok may save another format under the .png name; the gallery serves PNG only.
+    const png = await sharp(source).png().toBuffer();
+    // Publish the image, its sidecar and its index row together, as gallery uploads do (imageGen/local.js).
+    await withBackupAssetPublication(async () => {
+      await Promise.all([
+        atomicWrite(join(PATHS.images, filename), png),
+        atomicWrite(join(PATHS.images, `${jobId}-first-frame.metadata.json`), {
+          id: `${jobId}-first-frame`, prompt: meta.prompt, modelId: 'grok', mode: 'grok', createdAt: new Date().toISOString(),
+          filename, storyboardGuidance: meta.storyboardGuidance, videoHistoryId: jobId,
+        }),
+      ]);
+      const { refreshImageIndex } = await import('../imageGen/sidecarStore.js');
+      await refreshImageIndex(filename);
+    });
+    meta.firstFrameFile = filename;
+  } catch (err) {
+    console.warn(`⚠️ Could not keep the storyboard clip's first frame [${jobId.slice(0, 8)}]: ${err.message}`);
+  }
 }
 
 // Reuse the image provider's narration-tail formatting but with video wording.

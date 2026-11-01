@@ -2735,7 +2735,7 @@ describe('cos-rehabilitation-check timer — failure observability (#7552)', () 
     const bodyEnd = COS_SRC.indexOf('\n      });', bodyStart);
     const fnBody = COS_SRC.slice(bodyStart, bodyEnd);
     const emitLog = vi.fn();
-    // eslint-disable-next-line no-new-func -- executes the real extracted source, not a rewritten copy
+    // executes the real extracted source, not a rewritten copy
     const catchHandler = new Function('emitLog', `return function(err) {${fnBody}}`)(emitLog);
 
     const err = new Error('learning store unavailable');

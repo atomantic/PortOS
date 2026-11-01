@@ -439,6 +439,19 @@ describeHeldCheckoutRecovery(() => {
     expect(await readFile(join(shared, 'untouched'), 'utf8')).toBe('shared installation\n');
   });
 
+  // #14458: an owner scoped to the branch only through a claim list still has its
+  // separate physical checkout read, so it counts as history instead of a current owner.
+  it.each(['claimReleasedBranches', 'claimBranches'])('treats a separate checkout scoped only by %s as history', async scope => {
+    const c = await reviewedCheckout(`quality-scope-${scope}`);
+    reusedBranchOwners(c);
+    const scoped = injected.policies.find(agent => agent.id === 'prior-owner-1');
+    delete scoped.metadata.worktreeBranch;
+    scoped.metadata[scope] = [c.release.branch];
+    const prepared = await c.prepare();
+    expect(prepared).toMatchObject({ ok: true, review: { policy: { policies: [{ id: 'current-review-owner' }] } } });
+    expect(prepared.review.policy.priorCheckouts).toHaveLength(33);
+  });
+
   it.each(['head-mismatch', 'same-checkout-failed', 'ambiguous-history', 'current-manual', 'current-active', 'checkout-alias', 'primary-alias'])(
     'keeps the full original checkout when reused-branch proof changes: %s', async change => {
       const c = await reviewedCheckout('quality-held', { ignoredPayload: true });
@@ -604,7 +617,7 @@ describeHeldCheckoutRecovery(() => {
     expect((await execGit(['rev-parse', publishedBranch], repo)).stdout.trim()).toBe(c.release.head);
   });
 
-  it.each(['confirmed', 'owner-alias', 'missing-receipt', 'same-incarnation', 'human-handoff', 'active-owner', 'normal-completed', 'normal-invalid-time', 'normal-resumed-lineage', 'separate-incomplete', 'separate-retained-work', 'separate-same-incarnation', 'separate-replaced-pointer', 'separate-malformed-capture', 'separate-missing-receipt', 'separate-wrong-pr'])('keeps an original sibling obligation separate from a detached copy: %s', async scenario => {
+  it.each(['confirmed', 'owner-alias', 'normal-owner-alias', 'missing-receipt', 'same-incarnation', 'human-handoff', 'active-owner', 'normal-completed', 'normal-invalid-time', 'normal-resumed-lineage', 'separate-incomplete', 'separate-retained-work', 'separate-same-incarnation', 'separate-replaced-pointer', 'separate-malformed-capture', 'separate-missing-receipt', 'separate-wrong-pr'])('keeps an original sibling obligation separate from a detached copy: %s', async scenario => {
     const c = await reviewedCheckout(`orphan-sibling-${scenario}`, { normalMerge: scenario.startsWith('separate-') });
     const namedPath = c.path;
     const namedBranch = c.release.branch;
@@ -643,8 +656,10 @@ describeHeldCheckoutRecovery(() => {
       if (scenario === 'separate-wrong-pr') agent.metadata.reviewLoopMergeTarget.url = 'https://github.com/example/repo/pull/43';
     }
     const originalResult = structuredClone(agent.result);
-    if (scenario === 'owner-alias') {
-      const alias = join(external, 'canonical-owner-alias');
+    // A version-2 receipt's path is identity-read, so the alias matches it; a
+    // version-1 receipt's path is not (#14458), so the same alias holds retirement.
+    if (scenario === 'owner-alias' || scenario === 'normal-owner-alias') {
+      const alias = join(external, `canonical-${scenario}`);
       await symlink(namedPath, alias, 'junction');
       agent.metadata.workspacePath = alias;
     }
@@ -750,6 +765,12 @@ describeHeldCheckoutRecovery(() => {
       return;
     }
     expect(prepared.reason).toBeUndefined();
+    // A represented continuation's PR head is not the checkout tip, so no
+    // physical identity is read for its branch-scoped paths (#14458).
+    if (scenario.startsWith('separate-')) {
+      expect(injected.policyInputs.length).toBeGreaterThan(0);
+      for (const input of injected.policyInputs) expect(input.checkoutIdentities).toEqual({});
+    }
     if (scenario === 'separate-incomplete') {
       expect(injected.fetches).toHaveLength(1);
       expect(injected.fetches[0].args).toContain(c.forge.defaultHead);

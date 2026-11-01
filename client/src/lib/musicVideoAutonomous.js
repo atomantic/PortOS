@@ -207,6 +207,7 @@ export const AUTONOMOUS_SONG_STEP_LABELS = Object.freeze({
   exporting: 'Exporting the M4A',
   validating: 'Validating the audio',
   importing: 'Importing into the music library',
+  'pick-take': 'Waiting for you to pick the song to download',
 });
 
 /** What the Produce stage is doing once production is done (the server's `stages.produce.step`). */

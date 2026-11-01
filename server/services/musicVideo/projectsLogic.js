@@ -34,7 +34,7 @@ import { persistedRenderPinFields } from '../../lib/renderTargets.js';
 import { sanitizeProjectForSync } from '../../lib/projectStoreKit.js';
 import { isPerformanceScene, planShotSplit, shotSplitLimit } from '../../lib/musicVideoShotTiming.js';
 import { normalizeLyricCues, normalizePhrases, invalidateTimedText } from './timedText.js';
-import { normalizeLyricMarkers } from './lyricMarkers.js';
+import { normalizeLyricMarkers, remapLyricMarkers } from '../../lib/lyricMarkers.js';
 import { ensureSceneTakes, keepCodeClipWithItsClip, TAKE_SLOT } from './takes.js';
 import { normalizeComposition, invalidateCompositionTiming, withStoredCompositionDocument } from './composition.js';
 import { normalizeSoundBed } from './soundBed.js';
@@ -368,6 +368,16 @@ export function applyProjectPatch(project, patch) {
   // Edited cue/phrase lists replace the stored list whole, normalized so every
   // entry persists a stable id and a forward time range (timedText.js). A
   // `visualSpec` patch merges per sub-field the same way (#8965).
+  const previousCues = Array.isArray(patch.lyricCues) ? new Map((project.lyricCues || []).map((cue) => [cue.id, cue])) : null;
+  const nextLyricCues = previousCues ? normalizeLyricCues(patch.lyricCues).map((cue) => {
+    const previous = previousCues.get(cue.id);
+    if (previous && previous.text !== cue.text) {
+      delete cue.matched;
+      delete cue.suspect;
+      delete cue.silentWords;
+    }
+    return cue;
+  }) : null;
   const timedPatch = {
     ...patch,
     ...('festivalPacket' in patch ? { festivalPacket: patch.festivalPacket === null ? null : festivalPacketSchema.parse(patch.festivalPacket) } : {}),
@@ -377,16 +387,9 @@ export function applyProjectPatch(project, patch) {
     ...('automation' in patch ? {
       automation: patch.automation ? normalizeMusicVideoAutomation(patch.automation, project.automation) : null,
     } : {}),
-    ...(Array.isArray(patch.lyricCues) ? { lyricCues: normalizeLyricCues(patch.lyricCues).map((cue) => {
-      const previous = project.lyricCues?.find((entry) => entry.id === cue.id);
-      if (previous && previous.text !== cue.text) {
-        delete cue.matched;
-        delete cue.suspect;
-        delete cue.silentWords;
-      }
-      return cue;
-    }) } : {}),
-    ...(Array.isArray(patch.lyricMarkers) ? { lyricMarkers: normalizeLyricMarkers(patch.lyricMarkers) } : {}),
+    ...(nextLyricCues ? { lyricCues: nextLyricCues } : {}),
+    ...(Array.isArray(patch.lyricMarkers) ? { lyricMarkers: normalizeLyricMarkers(patch.lyricMarkers) }
+      : nextLyricCues && project.lyricMarkers?.length ? { lyricMarkers: remapLyricMarkers(project.lyricMarkers, project.lyricCues, nextLyricCues) } : {}),
     ...(Array.isArray(patch.phrases) ? { phrases: normalizePhrases(patch.phrases) } : {}),
     // #8984 — a manifest carrying its `mode` replaces the stored one whole
     // (the editors send the full manifest, so an omitted key clears it); null
@@ -568,6 +571,7 @@ function buildScene(input, { order }) {
     shotMode: input.shotMode ?? 'cutaway',
     ...(input.performanceSpeaker ? { performanceSpeaker: input.performanceSpeaker } : {}),
     ...(input.performanceStyle === 'music' ? { performanceStyle: 'music' } : {}),
+    ...(input.coverage === 'sequence' ? { coverage: 'sequence' } : {}),
     ...(input.panelId ? { panelId: input.panelId, panelRev: input.panelRev ?? null, panelArt: input.panelArt ?? null } : {}),
     referenceImageId: null,
     videoHistoryId: null,
@@ -655,7 +659,7 @@ function carryOver(prior, fresh) {
  * Shots before the song (`preMusic`) match an old one by panel, else by place.
  * Returns `{ project, scenes, replaced }` (`replaced` = the old shots it replaced).
  */
-export function replaceScenes(project, sceneInputs) {
+export function replaceScenes(project, sceneInputs, { matchPanel = false } = {}) {
   const list = Array.isArray(sceneInputs) ? sceneInputs : [];
   // A plan covers the song. Shots before it come in front: from the plan when
   // it has some (a storyboard's opening beats), else the cold open stays,
@@ -681,8 +685,9 @@ export function replaceScenes(project, sceneInputs) {
   const claimed = new Set();
   const sameSpan = (a, b) => typeof a === 'number' && typeof b === 'number' && Math.abs(a - b) < 0.01;
   const scenes = songInputs.map((fresh) => {
-    const prior = existing.find((old) => !claimed.has(old.sceneId)
-      && sameSpan(old.startSec, fresh.startSec) && sameSpan(old.endSec, fresh.endSec));
+    const prior = (matchPanel && fresh.panelId && existing.find((old) => !claimed.has(old.sceneId) && old.panelId === fresh.panelId))
+      || existing.find((old) => !claimed.has(old.sceneId) && (!matchPanel || !old.panelId || old.panelId === fresh.panelId)
+        && sameSpan(old.startSec, fresh.startSec) && sameSpan(old.endSec, fresh.endSec));
     if (!prior) return fresh;
     claimed.add(prior.sceneId);
     return carryOver(prior, fresh);
@@ -741,7 +746,7 @@ export function applyStoryboardShotSync(project, plan) {
 // adding a shot or lyric the storyboard approval did not cover.
 const SCENE_SHOT_EDIT_FIELDS = ['startSec', 'endSec', 'beatAligned', 'label', 'prompt', 'framePrompt', 'visualIntent',
   'referenceImageId', 'videoHistoryId', 'endImageId', 'codeClip', 'frameFit', 'speedFps', 'offsetFrames', 'reverse', 'holdLastFrame', 'filmLook', 'transitionIn', 'transitionOut', 'glitches', 'cutEffect',
-  'visualLayer', 'stillMove', 'imageEffect', 'imageEffectSec', 'photoSequence', 'frameReferenceIds', 'setReference', 'characterVariant', 'panelId', 'panelRev', 'panelArt', 'preMusic'];
+  'visualLayer', 'stillMove', 'imageEffect', 'imageEffectSec', 'photoSequence', 'frameReferenceIds', 'setReference', 'characterVariant', 'panelId', 'panelRev', 'panelArt', 'preMusic', 'coverage'];
 
 /**
  * Apply a patch to a single scene. Returns `{ project, updated }`. Throws if the
@@ -933,6 +938,7 @@ export function splitScene(project, sceneId, { backend = null, atSec = null } = 
         shotMode: scene.shotMode ?? 'cutaway',
         performanceSpeaker: scene.performanceSpeaker ?? null,
         performanceStyle: scene.performanceStyle ?? null,
+        ...(scene.coverage === 'sequence' ? { coverage: 'sequence' } : {}),
         ...(scene.setReference ? { setReference: scene.setReference } : {}),
         ...(scene.camera ? { camera: scene.camera } : {}),
         ...(scene.panelId ? { panelId: scene.panelId, panelRev: scene.panelRev ?? null, panelArt: scene.panelArt ?? null } : {}),

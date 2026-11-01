@@ -4,7 +4,7 @@ import { mutateProjectRecord } from './projects.js';
 import { requireProject } from './requireProject.js';
 import { musicVideoEvents } from './events.js';
 import { shotCameraLabel } from '../../lib/cameraMovements.js';
-import { productionReadiness, boardStoryboard, seedArtDraft, productionReviewBasis, productionAlignmentBasis, documentStoryboardBasis, approveProductionStage, assertProductionApproval, assertShotApproval, assertClipUnlocked, setShotLocks, recordProductionFeedback, resolveProductionFeedback, revertApprovedInput, anchorShotsToSungLyrics, clipLocked, dropStaleStoryboardRows, carryStoryboardApproval } from './productionReview.js';
+import { productionReadiness, boardStoryboard, seedArtDraft, productionReviewBasis, productionAlignmentBasis, documentStoryboardBasis, approveProductionStage, assertProductionApproval, setShotLocks, recordProductionFeedback, resolveProductionFeedback, revertApprovedInput, anchorShotsToSungLyrics, dropStaleStoryboardRows, carryStoryboardApproval } from './productionReview.js';
 import { sungLyricTextWithin } from '../../lib/musicVideoLyricAnchors.js';
 
 const reviewProcessId = randomUUID();
@@ -19,21 +19,16 @@ function changed(project) {
 export const getProductionReview = async id => present(await requireProject(id));
 
 /**
- * The approval a scene's media job needs. A still is how the director reviews
- * the storyboard, so a still for a planned shot needs only the art direction;
- * a Board shot's own clip needs that shot locked (or the whole storyboard
- * approved); anything a production run submits waits for the storyboard. A
- * production run's bulk work also waits for the animated proof, except the
+ * A director's shot still or clip needs the approved art direction, not a
+ * separate shot or storyboard lock. Production runs still wait for the
+ * reviewed storyboard. A production run's bulk work also waits for the animated proof, except the
  * stills of a run that stops before clips: the proof is made from clips.
  */
 export async function assertMusicVideoSceneReview(tag, kind = null) {
   if (!tag?.projectId || !tag.sceneId) return;
   const project = await requireProject(tag.projectId);
   const boardShot = !tag.productionRunId && (project.scenes || []).some(scene => scene.sceneId === tag.sceneId);
-  // A locked video is final: no new still or clip for that shot, from the director or a run.
-  assertClipUnlocked(project, tag.sceneId);
-  if (boardShot && kind === 'image') assertProductionApproval(project, 'art');
-  else if (boardShot) assertShotApproval(project, tag.sceneId);
+  if (boardShot) assertProductionApproval(project, 'art');
   else assertProductionApproval(project, 'storyboard');
   if (tag.productionRunId) {
     const run = project.productionRuns?.find(r => r.id === tag.productionRunId);
@@ -337,8 +332,7 @@ export async function addProductionFeedback(id, input) {
 }
 /**
  * Anchor shots to the lyric lines sung over them: the shots named, else every
- * shot the storyboard check flags. Each also shows those lines as its lyric,
- * except a shot whose video is locked: its lyric is a locked render input.
+ * shot the storyboard check flags. Each also shows those lines as its lyric.
  */
 export async function syncLyricAnchors(id, { sceneIds = null } = {}) {
   const { project } = await mutateProjectRecord(id, current => {
@@ -346,7 +340,7 @@ export async function syncLyricAnchors(id, { sceneIds = null } = {}) {
     if (!ids.length) return { project: current };
     const anchored = anchorShotsToSungLyrics(current, ids);
     const scenes = (anchored.scenes || []).map(scene => {
-      if (!ids.includes(scene.sceneId) || clipLocked(current, scene.sceneId)) return scene;
+      if (!ids.includes(scene.sceneId)) return scene;
       return { ...scene, lyricText: sungLyricTextWithin(anchored.lyricCues, scene.startSec, scene.endSec) };
     });
     return { project: { ...anchored, scenes, updatedAt: new Date().toISOString() } };

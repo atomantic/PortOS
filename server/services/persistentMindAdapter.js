@@ -258,6 +258,58 @@ const recordRejectedAction = async ({ requestId, resultRequestId = requestId, na
   return { requestId: resultRequestId, name, state: 'failed', error: message };
 };
 
+// Providers emit either the dotted or the underscored spelling of a tool name.
+const isToolNamed = (call, dottedName) => call?.name === dottedName || call?.name === dottedName.replace('.', '_');
+
+// Persist before semantic tools can erase the history these candidates
+// preserve. State is one bounded, deduplicated set across provider rounds.
+// Returns whether any candidate went unsaved (cap hit or a rejected write).
+async function recordTurnMemoryCandidates(parsed, state) {
+  for (const candidate of parsed.memoryCandidates) {
+    const fingerprint = canonicalStringify(candidate);
+    if (state.fingerprints.has(fingerprint)) continue;
+    if (state.candidates.length >= MAX_MEMORY_CANDIDATES_PER_TURN) {
+      state.unsavedMemory = true;
+      state.actionNotices.add('The memory limit of five per turn was reached; additional memories were not saved.');
+      continue;
+    }
+    const index = state.candidates.length;
+    state.fingerprints.add(fingerprint);
+    state.candidates.push(candidate);
+    const [write] = await Promise.allSettled([createPersistentMindMemoryFromCandidate({
+      ...candidate, candidateId: `${state.turnId}:${index}`, turnId: state.turnId,
+    })]);
+    state.writes.push(write);
+  }
+  return state.unsavedMemory || state.writes.some((write) => write.status === 'rejected');
+}
+
+// Mirrors tools.activate / tools.deactivate receipts into the run-local
+// selection, then drops targets whose own receipt completed.
+function applyToolActivationReceipts(toolResults, activatedFamilies, requestedToolNames) {
+  for (const receipt of toolResults) {
+    if (receipt.state !== 'completed') continue;
+    if (isToolNamed(receipt, 'tools.activate')) {
+      for (const family of receipt.result?.activated || []) activatedFamilies.add(family);
+      for (const name of receipt.result?.requestedToolNames || []) {
+        requestedToolNames.set(name, receipt.result.targetFamilies?.[name]);
+      }
+    }
+    if (isToolNamed(receipt, 'tools.deactivate')) {
+      const deactivated = new Set(receipt.result?.deactivated || []);
+      for (const family of deactivated) activatedFamilies.delete(family);
+      for (const [name, family] of requestedToolNames) {
+        if (deactivated.has(family)) requestedToolNames.delete(name);
+      }
+    }
+  }
+  // Once a targeted action completes its receipt, rather than its schema,
+  // prevents replay; leave room for the next requested action.
+  for (const receipt of toolResults) {
+    if (receipt.state === 'completed') requestedToolNames.delete(receipt.name);
+  }
+}
+
 const rejectMindToolCalls = async ({ calls, turnId, message, recordCapabilityEvent }) => {
   const results = [];
   for (const call of calls) {
@@ -585,7 +637,7 @@ export function createPersistentMindTurnAdapter() {
           : buildPersistentMindToolPrompt(taskAccess, recipeCatalog, { turnId, maxChars }));
         const annotateActivationResults = () => {
           for (const receipt of completedToolResults) {
-            if (receipt.state !== 'completed' || !['tools.activate', 'tools_activate'].includes(receipt.name)
+            if (receipt.state !== 'completed' || !isToolNamed(receipt, 'tools.activate')
               || !Array.isArray(receipt.result?.requestedToolNames)) continue;
             const exposed = receipt.result.requestedToolNames.filter((name) => exposedToolNames.includes(name));
             const omitted = receipt.result.requestedToolNames.filter((name) => !exposedToolNames.includes(name));
@@ -630,10 +682,9 @@ export function createPersistentMindTurnAdapter() {
       const taskBudget = { used: 0 };
       const completedToolResults = [];
       const actionNotices = new Set();
-      const memoryCandidates = [];
-      const memoryWrites = [];
-      const memoryFingerprints = new Set();
-      let unsavedMemory = false;
+      const memoryState = {
+        turnId, actionNotices, candidates: [], writes: [], fingerprints: new Set(), unsavedMemory: false,
+      };
       for (let round = 0; round < MAX_TOOL_PROVIDER_ROUNDS; round += 1) {
         // Round 0 is the turn itself; every later round is a continuation the
         // model earned by asking for tools. Each is admitted on its own.
@@ -657,26 +708,8 @@ export function createPersistentMindTurnAdapter() {
           || parsed.message === 'The conversational reply. Required for a human message; optional for a self-directed wake.') {
           throw new Error('Persistent Mind received response-contract placeholders instead of an assistant response');
         }
-        // Persist before semantic tools can erase the history these candidates
-        // preserve. Keep one bounded, deduplicated set across provider rounds.
-        for (const candidate of parsed.memoryCandidates) {
-          const fingerprint = canonicalStringify(candidate);
-          if (memoryFingerprints.has(fingerprint)) continue;
-          if (memoryCandidates.length >= MAX_MEMORY_CANDIDATES_PER_TURN) {
-            unsavedMemory = true;
-            actionNotices.add('The memory limit of five per turn was reached; additional memories were not saved.');
-            continue;
-          }
-          const index = memoryCandidates.length;
-          memoryFingerprints.add(fingerprint);
-          memoryCandidates.push(candidate);
-          const [write] = await Promise.allSettled([createPersistentMindMemoryFromCandidate({
-            ...candidate, candidateId: `${turnId}:${index}`, turnId,
-          })]);
-          memoryWrites.push(write);
-        }
-        if ((unsavedMemory || memoryWrites.some((write) => write.status === 'rejected'))
-          && parsed.toolCalls.some((call) => ['mind.cleanup', 'mind_cleanup'].includes(call.name))) {
+        const memoryUnsaved = await recordTurnMemoryCandidates(parsed, memoryState);
+        if (memoryUnsaved && parsed.toolCalls.some((call) => isToolNamed(call, 'mind.cleanup'))) {
           throw new Error('Mind cleanup was not run because a memory candidate could not be saved.');
         }
         const finalProviderRound = round === MAX_TOOL_PROVIDER_ROUNDS - 1;
@@ -759,27 +792,8 @@ export function createPersistentMindTurnAdapter() {
           toolBudget,
         });
         completedToolResults.push(...toolResults);
-        for (const receipt of toolResults) {
-          if (receipt.state === 'completed' && ['tools.activate', 'tools_activate'].includes(receipt.name)) {
-            for (const family of receipt.result?.activated || []) activatedFamilies.add(family);
-            for (const name of receipt.result?.requestedToolNames || []) {
-              requestedToolNames.set(name, receipt.result.targetFamilies?.[name]);
-            }
-          }
-          if (receipt.state === 'completed' && ['tools.deactivate', 'tools_deactivate'].includes(receipt.name)) {
-            const deactivated = new Set(receipt.result?.deactivated || []);
-            for (const family of deactivated) activatedFamilies.delete(family);
-            for (const [name, family] of requestedToolNames) {
-              if (deactivated.has(family)) requestedToolNames.delete(name);
-            }
-          }
-        }
+        applyToolActivationReceipts(toolResults, activatedFamilies, requestedToolNames);
         const liveCapabilities = normalizePersistentMindCapabilities((await loadState()).config?.persistentMindCapabilities);
-        // Once a targeted action completes its receipt, rather than its schema,
-        // prevents replay; leave room for the next requested action.
-        for (const receipt of toolResults) {
-          if (receipt.state === 'completed') requestedToolNames.delete(receipt.name);
-        }
         // Same turnId, isUserTurn/trace both omitted (default false): a tool
         // call may have just activated or renewed a family, so re-read the
         // live lease state, but this in-turn rebuild must never age it again
@@ -817,7 +831,7 @@ export function createPersistentMindTurnAdapter() {
         result = { ...result, text: JSON.stringify(parsed) };
       }
       const message = parsed.message || (wake?.kind === 'message' ? parsed.thinkingSummary : '');
-      if (!parsed.thinkingSummary && !message && memoryCandidates.length === 0 && parsed.taskRequests.length === 0 && toolBudget.used === 0 && !callOutcome) {
+      if (!parsed.thinkingSummary && !message && memoryState.candidates.length === 0 && parsed.taskRequests.length === 0 && toolBudget.used === 0 && !callOutcome) {
         throw new Error('Persistent mind returned no visible thought, reply, memory candidate, task request, or tool call');
       }
       const events = [];
@@ -835,8 +849,8 @@ export function createPersistentMindTurnAdapter() {
           data: { displayText: message, replyToMessageId: wake?.message?.id || null },
         });
       }
-      memoryWrites.forEach((result, index) => {
-        const candidate = memoryCandidates[index];
+      memoryState.writes.forEach((result, index) => {
+        const candidate = memoryState.candidates[index];
         if (result.status === 'fulfilled') {
           events.push({
             kind: 'mind.memory.created',

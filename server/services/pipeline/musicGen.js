@@ -38,6 +38,7 @@
 import { existsSync, statSync } from 'fs';
 import { execFile } from '../../lib/childProcess.js';
 import { platform as osPlatform, arch as osArch } from 'os';
+import { isAppleSilicon } from '../../lib/platform.js';
 import { promisify } from 'util';
 import { unlink } from 'fs/promises';
 import { join, dirname } from 'path';
@@ -400,6 +401,9 @@ export function isEnginePlatformSupported(engineId) {
   const { requiresPlatform } = getEngine(engineId);
   if (!requiresPlatform) return true;
   if (requiresPlatform.platform && osPlatform() !== requiresPlatform.platform) return false;
+  // arch 'arm64' means Apple Silicon hardware. Node under Rosetta reports
+  // x64; isAppleSilicon() is the same probe the installer uses.
+  if (requiresPlatform.arch === 'arm64') return isAppleSilicon({ platform: osPlatform(), arch: osArch() });
   if (requiresPlatform.arch && osArch() !== requiresPlatform.arch) return false;
   return true;
 }

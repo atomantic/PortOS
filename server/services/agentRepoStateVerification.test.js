@@ -1121,6 +1121,31 @@ describe('verifyAgentRepoState — clean runs', () => {
       expect(retireInventoriedCheckout).not.toHaveBeenCalled();
     });
 
+  it.each(['contained', 'not-contained', 'lookup-unavailable', 'remote-branch'])('settles an unpublished no-change checkout only when its captured head is in the default branch: %s', async scenario => {
+    const captured = { version: 1, agentId: 'agent-1', startedAt: CREATED_AT, capturedAt: CREATED_AT,
+      repoPath: '/repo', branch: BRANCH, path: WORKTREE, head: HEAD, incarnation: { pointer: { dev: '1', ino: '2', birthtimeNs: '3' } } };
+    const state = { ...agentState({ completedCheckouts: [captured], repoStateVerification: { status: 'pending' } }),
+      id: 'agent-1', taskId: 'task-1', status: 'completed', completedAt: CREATED_AT, result: { success: false, cleanupPending: true } };
+    findPullRequestForBranch.mockResolvedValue(scenario === 'lookup-unavailable' ? { status: 'unavailable' } : { status: 'none', url: null, detail: null });
+    // An unmerged remote branch may hold work beyond the contained local capture.
+    if (scenario === 'remote-branch') listRemoteHeads.mockResolvedValue(new Map([[BRANCH, 'f'.repeat(40)]]));
+    execGit.mockImplementation(async args => ({ exitCode: args[0] === 'merge-base' && args[2] === HEAD
+      && args[3] === 'refs/remotes/origin/main' && scenario !== 'not-contained' ? 0 : 1, stdout: '' }));
+    const result = await run({ success: false, agentState: state });
+    if (scenario === 'contained') {
+      expect(result).toMatchObject({ verified: true, skipReason: null });
+      expect(recordCleanupOutcome).toHaveBeenLastCalledWith('agent-1', expect.objectContaining({
+        status: 'verified', reason: 'already-absent-integrated', committedIntegrationVerified: true }));
+      expect(updateTask).toHaveBeenLastCalledWith('task-1', expect.objectContaining({ status: 'completed' }), 'user', expect.any(Object));
+    } else {
+      expect(result).toMatchObject({ verified: false, skipReason: 'absent-checkout-integration-unverified' });
+      expect(updateTask).not.toHaveBeenCalled();
+    }
+    expect(readRetirementForgeEvidence).not.toHaveBeenCalled();
+    expect(retireInventoriedCheckout).not.toHaveBeenCalled();
+    expect(addTask).not.toHaveBeenCalled();
+  });
+
   it.each(['wrong-head', 'foreign-repository', 'uncaptured', 'ambiguous', 'open', 'unavailable'])('retains an unrequested-PR handoff when captured delivery is %s', async failure => {
     const captured = { version: 1, agentId: 'agent-1', startedAt: CREATED_AT, capturedAt: CREATED_AT,
       repoPath: '/repo', branch: BRANCH, path: WORKTREE, head: HEAD, incarnation: { pointer: { dev: '1', ino: '2', birthtimeNs: '3' } } };
@@ -2711,18 +2736,22 @@ describe('completion after its originating task was removed', () => {
     expect(retireInventoriedCheckout).not.toHaveBeenCalled();
   });
 
-  it.each(['merged', 'open', 'missing', 'unreadable', 'unreadable-integration'])('restores the exact removed task PR expectation without a saved URL: %s', async mode => {
+  it.each(['merged', 'open', 'missing', 'missing-unintegrated', 'unreadable', 'unreadable-integration'])('restores the exact removed task PR expectation without a saved URL: %s', async mode => {
     const { state, original } = fixture();
     delete state.metadata.reviewLoopMergeTarget;
     original.metadata.prCompletion = 'review-then-merge';
     findPullRequestForBranch.mockResolvedValue(mode === 'unreadable' ? { status: 'unavailable' }
-      : mode === 'missing' ? { status: 'none' }
+      : mode.startsWith('missing') ? { status: 'none' }
         : { status: 'found', url: 'https://github.com/example/repo/pull/7', detail: mode === 'open' ? 'OPEN' : 'MERGED' });
     if (mode === 'unreadable-integration') readRetirementForgeEvidence.mockRejectedValue(new Error('forge unavailable'));
+    // A no-change run never opens a PR; its captured head already in the
+    // default branch is the delivery proof. Unique local commits are not.
+    if (mode === 'missing-unintegrated') execGit.mockImplementation(async args => ({ exitCode: args[0] === 'merge-base' ? 1 : 0, stdout: '', stderr: '' }));
     const result = await resumeAgentCompletionRetirement('agent-1');
     expect(findPullRequestForBranch).toHaveBeenCalledWith(BRANCH, expect.objectContaining({ cwd: '/repo' }));
-    expect(result.verified).toBe(mode === 'merged');
-    if (mode === 'merged') expect(settleAbsentTaskCompletion).toHaveBeenCalledWith('agent-1', state);
+    const settles = mode === 'merged' || mode === 'missing';
+    expect(result.verified).toBe(settles);
+    if (settles) expect(settleAbsentTaskCompletion).toHaveBeenCalledWith('agent-1', state);
     else expect(settleAbsentTaskCompletion).not.toHaveBeenCalled();
     expect(updateTask).not.toHaveBeenCalled();
     expect(addTask).not.toHaveBeenCalled();

@@ -185,7 +185,6 @@ describe('canonicalStringify', () => {
   });
 
   it('serializes SPARSE-array holes as null, not invalid JSON (matches JSON.stringify)', () => {
-    // eslint-disable-next-line no-sparse-arrays
     const sparse = [1, , 2];
     expect(canonicalStringify(sparse)).toBe('[1,null,2]');
     expect(canonicalStringify(sparse)).toBe(JSON.stringify(sparse));

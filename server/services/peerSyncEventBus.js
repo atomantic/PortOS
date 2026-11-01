@@ -24,7 +24,7 @@ const RECEIVER_GATE_FOR_EVENT = Object.freeze({
 
 // Per-machine row fields that never cross the wire (see getVideoHistorySnapshot).
 export function stripMachineLocalFields(record) {
-  const { hidden, suppliedByInstanceId, pendingDelete, ...rest } = record; // eslint-disable-line no-unused-vars
+  const { hidden, suppliedByInstanceId, pendingDelete, ...rest } = record;
   return rest;
 }
 

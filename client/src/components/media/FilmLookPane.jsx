@@ -23,7 +23,7 @@ export function useFilmLookDraft(item, open, projectLook = null) {
   const [look, setLook] = useState(start);
   const [source, setSource] = useState(null);
   const [sourceError, setSourceError] = useState('');
-  useEffect(() => { if (open) setLook(start()); }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (open) setLook(start()); }, [open]); // Dependency list is intentionally partial.
   useEffect(() => {
     let active = true;
     setSource(null);

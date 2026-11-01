@@ -14,11 +14,13 @@ export function musicVideoGreyboxReference(project, scene, places = {}) {
   const greybox = place.payload?.greybox;
   const shot = Array.isArray(greybox?.shots) && greybox.shots.find((s) => s.id === selected.greyboxShotId);
   if (!shot) return fail('the saved camera shot was removed');
-  const capture = entry.media?.find((m) => !m.deleted && m.kind === 'reference'
-    && m.role === `${GREYBOX_SHOT_ROLE_PREFIX}${shot.id}` && /^[^/\\]+\.(png|jpe?g|webp)$/i.test(m.mediaKey));
+  const sendable = (m) => !m.deleted && m.kind === 'reference' && /^[^/\\]+\.(png|jpe?g|webp)$/i.test(m.mediaKey);
+  // The camera's finished photo plate wins over its flat capture; a plate no longer attached falls back.
+  const plate = shot.plate && entry.media?.find((m) => sendable(m) && m.mediaKey === shot.plate);
+  const capture = plate || entry.media?.find((m) => sendable(m) && m.role === `${GREYBOX_SHOT_ROLE_PREFIX}${shot.id}`);
   if (!capture) return fail('the saved shot has no capture');
   return {
-    reference: { id: `mvr-greybox-${shot.id}`, imageId: capture.mediaKey, role: 'set', label: `${subject.name} · ${shot.label}`, greybox: true },
+    reference: { id: `mvr-greybox-${shot.id}`, imageId: capture.mediaKey, role: 'set', label: `${subject.name} · ${shot.label}`, greybox: true, ...(plate ? { plate: true } : {}) },
     promptAdditions: greyboxFigurePromptLines(greybox, shot).map((text, i) => ({ id: `greybox-figure-${i}`, label: `Greybox figure ${i + 1}`, text })),
   };
 }

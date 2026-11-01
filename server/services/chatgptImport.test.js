@@ -339,7 +339,6 @@ describe('chatgptImport service', () => {
       // an arbitrary-file read — a future weakening (adding `.` or `/` to the
       // class) must fail this test, not silently traverse.
       for (const evil of ['../../etc/passwd', 'a/b.json', '..%2fx.json', '/etc/passwd', 'x.json.bak', 'x.txt', '']) {
-        // eslint-disable-next-line no-await-in-loop
         expect(await readArchivedConversation(evil)).toBeNull();
       }
     });

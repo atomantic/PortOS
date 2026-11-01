@@ -103,7 +103,7 @@ vi.mock('../lib/paths.js', async (importOriginal) => makePathsProxy(await import
   dataRoot: () => lazyTempDataRoot('portos-cos-lifecycle-'),
 }));
 
-import { getAgent, getAgentPrompt, createAgentOutputBatcher, completeAgent, recordCompletionCleanup, recordInheritedCheckoutRetirement, recordSeededCheckoutRetirement, recordSuccessorCheckoutRetirement, settleAbsentTaskCompletion, retryCompletionCheckoutCapture, recordRepoStateVerification, reserveRepoCleanupRecovery, recordRepoCleanupRecovery, recordCleanupOutcome, recordSwarmCleanupDelivery, updateAgent, registerAgent, cleanupZombieAgents, filterLiveAgentIds, readAgentRecordOrUnreadable, deleteAgent, AGENT_RECORD_UNREADABLE, AGENT_OUTPUT_TAIL_LINES } from './cosAgentLifecycle.js';
+import { getAgent, getAgentPrompt, createAgentOutputBatcher, completeAgent, recordAuditFindingsReceipt, recordCompletionCleanup, recordInheritedCheckoutRetirement, recordSeededCheckoutRetirement, recordSuccessorCheckoutRetirement, settleAbsentTaskCompletion, retryCompletionCheckoutCapture, recordRepoStateVerification, reserveRepoCleanupRecovery, recordRepoCleanupRecovery, recordCleanupOutcome, recordSwarmCleanupDelivery, updateAgent, registerAgent, cleanupZombieAgents, filterLiveAgentIds, readAgentRecordOrUnreadable, deleteAgent, AGENT_RECORD_UNREADABLE, AGENT_OUTPUT_TAIL_LINES } from './cosAgentLifecycle.js';
 import { saveState, loadState, readAgentsStateForSafetyCheck } from './cosState.js';
 import { recordDomainUsage } from './domainUsage.js';
 import { cosEvents } from './cosEvents.js';
@@ -348,6 +348,24 @@ describe('cosAgentLifecycle', () => {
     await writeFile(join(dir, 'prompt.txt'), 'Example café');
     (await loadAgentIndex()).set(id, date);
     await expect(getAgentPrompt(id)).resolves.toEqual({ prompt: 'Example café', bytes: Buffer.byteLength('Example café') });
+  });
+
+  it('writes an evicted run\'s audit receipt to its archive without changing its verdict', async () => {
+    const id = 'agent-archived-audit';
+    const date = '2026-01-01';
+    const startedAt = `${date}T10:00:00Z`;
+    const dir = join(mockCosState.agentsDir, date, id);
+    await mkdir(dir, { recursive: true });
+    const result = { success: false, error: 'Audit findings are not fully disposed' };
+    await writeFile(join(dir, 'metadata.json'), JSON.stringify({ id, status: 'completed', startedAt,
+      completedAt: `${date}T12:00:00Z`, result, metadata: { auditFindings: { status: 'incomplete' } } }));
+    (await loadAgentIndex()).set(id, date);
+    expect(await updateAgent(id, { metadata: { auditFindings: { status: 'complete' } } })).toBeNull();
+    expect(await recordAuditFindingsReceipt(id, 'another-generation', { status: 'complete' })).toBe(false);
+    expect(await recordAuditFindingsReceipt(id, startedAt, { status: 'complete' })).toBe(true);
+    const saved = JSON.parse(await readFile(join(dir, 'metadata.json'), 'utf8'));
+    expect(saved.metadata.auditFindings).toEqual({ status: 'complete' });
+    expect(saved.result).toEqual(result);
   });
 
   it('hydrates paused agents with full preserved output from output.txt', async () => {

@@ -385,7 +385,10 @@ export const enrichmentQuestionInputSchema = z.object({
   category: enrichmentCategoryEnum,
   providerOverride: z.string().optional(),
   modelOverride: z.string().optional(),
-  skipIndices: z.array(z.number().int()).optional()
+  skipIndices: z.array(z.number().int()).optional(),
+  // Serve only predefined/scale questions; answer { exhausted: true } instead
+  // of calling a provider once they run out (an automatic load, #14445).
+  structuredOnly: z.boolean().optional()
 });
 
 // Enrichment answer input

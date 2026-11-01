@@ -95,7 +95,10 @@ export async function readCheckoutDeliveryContinuations(input, agents, opts = {}
     const handoff = { task: task && { id: task.id, status: task.status, metadata: {
       sourceAgentId: task.metadata?.sourceAgentId, sourceTaskId: task.metadata?.sourceTaskId,
       reviewLoopFollowUp: task.metadata?.reviewLoopFollowUp, reviewLoopPRUrl: task.metadata?.reviewLoopPRUrl,
-      reviewLoopPRBranch: task.metadata?.reviewLoopPRBranch, reviewLoopLeaveOpen: task.metadata?.reviewLoopLeaveOpen } },
+      reviewLoopPRBranch: task.metadata?.reviewLoopPRBranch, reviewLoopLeaveOpen: task.metadata?.reviewLoopLeaveOpen,
+      // The fields prHeldForOperator reads, so a held review task is never a delivery handoff.
+      readOnly: task.metadata?.readOnly, prCompletion: task.metadata?.prCompletion,
+      jiraTicketId: task.metadata?.jiraTicketId, analysisType: task.metadata?.analysisType } },
       reviewChain, sourceChain };
     if (!reviewedDeliveryHandoffValid(input, agents, handoff, agent.id)) return null;
     for (const id of [...reviewChain, ...sourceChain]) if (!await ancestor(captured(byId.get(id))?.head, tip)) return null;

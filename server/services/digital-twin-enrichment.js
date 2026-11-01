@@ -27,7 +27,7 @@ export function getEnrichmentCategories() {
   }));
 }
 
-export async function generateEnrichmentQuestion(category, providerOverride, modelOverride, skipIndices = []) {
+export async function generateEnrichmentQuestion(category, providerOverride, modelOverride, skipIndices = [], { structuredOnly = false } = {}) {
   const config = ENRICHMENT_CATEGORIES[category];
   if (!config) {
     throw new Error(`Unknown enrichment category: ${category}`);
@@ -79,6 +79,10 @@ export async function generateEnrichmentQuestion(category, providerOverride, mod
       totalQuestions: config.questions.length + categoryScaleQuestions.length
     };
   }
+
+  // An automatic load stops here: a generated question is a provider call the
+  // user has to ask for (#14445).
+  if (structuredOnly) return { category, exhausted: true };
 
   // Check if fallback was already served (all structured questions exhausted + at least one AI/fallback answered)
   const structuredTotal = config.questions.length + categoryScaleQuestions.length;

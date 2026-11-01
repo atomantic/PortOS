@@ -187,7 +187,7 @@ describe.skipIf(!runDb)('beeper conversation-mirror schema (#27)', () => {
     const conversationId = convRows[0].id;
 
     for (const state of ['draft', 'approved', 'sending', 'awaiting-confirmation', 'sent', 'failed']) {
-      // eslint-disable-next-line no-await-in-loop -- ordered inserts, one per state
+      // ordered inserts, one per state
       await query(
         `INSERT INTO beeper_outbox (conversation_id, chat_id, body, state)
          VALUES ($1, 'chat-outbox', 'placeholder body', $2)`,
@@ -329,7 +329,7 @@ describe.skipIf(!runDb)('beeper conversation-mirror schema (#27)', () => {
       );
       const conversationIds = [];
       for (const chat of ['chat-backfill-dupe-1', 'chat-backfill-dupe-2']) {
-        // eslint-disable-next-line no-await-in-loop -- two ordered fixture inserts
+        // two ordered fixture inserts
         const { rows } = await query(
           `INSERT INTO beeper_conversations (account_id, network, source_chat_id, title, type)
            VALUES ($1, 'Example Network', $2, 'Example Chat', 'single')

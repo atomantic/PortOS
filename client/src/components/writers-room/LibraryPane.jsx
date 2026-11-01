@@ -381,7 +381,7 @@ function WorkRow({ work, isActive, confirming, onSelect, onRequestDelete, onConf
           ref={setNodeRef}
           {...attributes}
           {...listeners}
-          className="shrink-0 px-1 flex items-center cursor-grab active:cursor-grabbing touch-none text-gray-600 hover:text-gray-300"
+          className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 shrink-0 px-1 flex items-center cursor-grab active:cursor-grabbing touch-none text-gray-600 hover:text-gray-300"
           title="Drag to move into a folder"
           aria-label={`Drag ${work.title}`}
         >

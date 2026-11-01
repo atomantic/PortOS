@@ -301,6 +301,78 @@ const csv = shots => {
   return `${keys.join(',')}\n${shots.map(shot => keys.map(key => csvCell(shot[key])).join(',')).join('\n')}\n`;
 };
 
+const sheetRelative = (root, path) => path.slice(root.length + 1);
+
+const candidateProvenance = (item, read) => ({ source: item.source, sourceAssetId: item.sourceAssetId || null, reviewStatus: item.reviewStatus || null,
+  prompt: item.prompt || '', revision: item.revision ?? null, generationSettings: read.generationSettings || null,
+  sourceProjectId: read.sourceProjectId || null, ownership: read.ownership || 'unverified' });
+
+function candidateInventoryEntry(project, item, pick, read) {
+  return { projectId: project.id, id: item.id, kind: item.kind, label: item.label, version: item.version ?? null,
+    path: item.path, selected: !!pick, status: read.status, reason: read.reason || null, bytes: read.data?.length ?? 0,
+    sha256: read.data ? hash(read.data) : null,
+    rights: pick?.rights || 'unknown', attribution: text(pick?.attribution),
+    delivery: read.data ? 'file' : item.kind === 'reference' ? 'metadata-only' : 'unavailable-or-unselected',
+    provenance: candidateProvenance(item, read),
+    transformation: read.transformation || null };
+}
+
+function addEmbeddedVisuals({ project, item, pick, read, add, inventory, imageLinks, root }) {
+  for (const visual of read.visuals || []) {
+    inventory.push({ projectId: project.id, id: visual.id, label: visual.label, kind: item.kind, status: visual.status, reason: visual.reason,
+      path: visual.path, bytes: visual.data?.length || 0, sha256: visual.data ? hash(visual.data) : null,
+      rights: pick.rights || 'unknown', attribution: text(pick.attribution), delivery: visual.data ? 'file' : 'unavailable',
+      provenance: { source: 'embedded-sheet-graphic', sourceArtifactId: item.sourceAssetId, sourceVersion: item.version,
+        sourceSha256: visual.sourceSha256, sourceProjectId: read.sourceProjectId,
+        ownership: declaredOwnership(pick) ? 'operator-declared' : read.ownership } });
+    if (!visual.data) continue;
+    add(visual.path, visual.data);
+    imageLinks[item.kind]?.push(`![${visual.id}](${sheetRelative(root, visual.path)})`);
+  }
+}
+
+// Planning-import artifacts keep their source asset rows as metadata only and
+// gain a CSV/Markdown rendering of the original storyboard.
+function addPlanningImportSources({ project, item, read, add, inventory }) {
+  const original = JSON.parse(read.data.toString());
+  for (const sourceAsset of Array.isArray(original.assets) ? original.assets : []) {
+    const sourceId = text(sourceAsset?.id) || hash(json(sourceAsset)).slice(0, 16);
+    inventory.push({ projectId: project.id, id: `source:${item.id}:${sourceId}`, kind: 'source-reference',
+      label: text(sourceAsset?.label) || sourceId, sourceAssetId: sourceId, path: null,
+      status: 'excluded', reason: 'source-planning-metadata-only', delivery: 'metadata-only', rights: 'unknown', attribution: '' });
+  }
+  if (!Array.isArray(original.storyboard) || !original.storyboard.length) return;
+  const keys = [...new Set(original.storyboard.flatMap(shot => Object.keys(shot || {})))].sort();
+  const base = item.path.replace(/\.json$/, '-storyboard');
+  add(`${base}.csv`, `${keys.map(csvCell).join(',')}\n${original.storyboard.map(shot => keys.map(key => csvCell(typeof shot?.[key] === 'object' ? JSON.stringify(shot[key]) : shot?.[key])).join(',')).join('\n')}\n`);
+  add(`${base}.md`, `# Original planning storyboard — unverified\n\n${original.storyboard.map(shot => jsonBlock(shot)).join('\n\n')}`);
+}
+
+function addCandidateFiles({ project, item, pick, read, add, inventory, imageLinks, artifactLinks, root }) {
+  add(item.path, read.data);
+  if (artifactLinks[item.kind] && /\.md$/.test(item.path)) artifactLinks[item.kind].push(`[${item.id}](${sheetRelative(root, item.path)})`);
+  addEmbeddedVisuals({ project, item, pick, read, add, inventory, imageLinks, root });
+  if (item.source === 'planning-import') addPlanningImportSources({ project, item, read, add, inventory });
+  if (imageLinks[item.kind] && /\.(png|jpe?g|webp)$/.test(item.path)) imageLinks[item.kind].push(`![${item.id}](${sheetRelative(root, item.path)})`);
+}
+
+function missingPlanningEntries(project, items, plan) {
+  const missing = ['cast-sets', 'storyboard'].filter(kind => !items.some(item => item.kind === kind))
+    .map(kind => ({ projectId: project.id, id: `missing:${kind}`, kind,
+      status: 'missing', reason: 'no-artifact-or-image', path: null, rights: 'unknown', attribution: '' }));
+  if (!plan.castAndSets && !plan.review.cast && !plan.review.environments) missing.push({ projectId: project.id, id: 'missing:cast-planning', status: 'missing', reason: 'no-cast-set-planning', path: null });
+  if (!plan.shots.length) missing.push({ projectId: project.id, id: 'missing:shots', status: 'missing', reason: 'no-shot-planning', path: null });
+  return missing;
+}
+
+function addProjectSheets({ root, project, plan, add, artifactLinks, imageLinks }) {
+  add(`${root}/planning.json`, json(plan));
+  add(`${root}/shots.json`, json(plan.shots));
+  add(`${root}/shots.csv`, csv(plan.shots));
+  add(`${root}/cast-set-sheet.md`, `# ${markdown(plan.project.name)} — Cast & Sets\n\nSelected visual sheets: ${artifactLinks['cast-sets'].join(', ') || 'none'}\n\n${plan.castAndSets ? jsonBlock(plan.castAndSets) : 'Cast & Sets direction missing.'}\n\n${markdown(plan.review.cast)}\n\n${markdown(plan.review.environments)}\n\n${imageLinks['cast-sets'].join('\n\n')}\n`);
+  add(`${root}/storyboard.md`, `# ${markdown(plan.project.name)} — Storyboard\n\nSelected visual sheets: ${artifactLinks.storyboard.join(', ') || 'none'}\n\nTiming: ${markdown(project.productionReview?.draft?.timingStatus) || 'provisional'}\n\n${plan.shots.length ? plan.shots.map(shot => `## ${markdown(shot.id)}: ${shot.startSec ?? '?'}–${shot.endSec ?? '?'} seconds\n\n${markdown(shot.visualIntent)}\n\nAction: ${markdown(shot.action)}\n\nStaging: ${markdown(shot.staging)}\n\nCamera: ${markdown(shot.camera)}\n\nTransition: ${markdown(shot.transition)}\n`).join('\n') : 'Shot planning missing.'}\n\n${imageLinks.storyboard.join('\n\n')}\n`);
+}
+
 export async function compileMakingOf(selection, { download = false } = {}) {
   const files = [];
   let total = 0;
@@ -328,60 +400,11 @@ export async function compileMakingOf(selection, { download = false } = {}) {
       const pick = chosen.get(item.id);
       const checked = await readCandidate(project, item, pick, owners);
       const read = pick ? checked : { status: checked.data ? 'not-selected' : checked.status, reason: checked.reason || null };
-      const entry = { projectId: project.id, id: item.id, kind: item.kind, label: item.label, version: item.version ?? null,
-        path: item.path, selected: !!pick, status: read.status, reason: read.reason || null, bytes: read.data?.length ?? 0,
-        sha256: read.data ? hash(read.data) : null,
-        rights: pick?.rights || 'unknown', attribution: text(pick?.attribution),
-        delivery: read.data ? 'file' : item.kind === 'reference' ? 'metadata-only' : 'unavailable-or-unselected',
-        provenance: { source: item.source, sourceAssetId: item.sourceAssetId || null, reviewStatus: item.reviewStatus || null,
-          prompt: item.prompt || '', revision: item.revision ?? null, generationSettings: read.generationSettings || null,
-          sourceProjectId: read.sourceProjectId || null, ownership: read.ownership || 'unverified' },
-        transformation: read.transformation || null };
-      inventory.push(entry);
-      if (read.data) {
-        add(item.path, read.data);
-        if (artifactLinks[item.kind] && /\.md$/.test(item.path)) artifactLinks[item.kind].push(`[${item.id}](${item.path.slice(root.length + 1)})`);
-        for (const visual of read.visuals || []) {
-          inventory.push({ projectId: project.id, id: visual.id, label: visual.label, kind: item.kind, status: visual.status, reason: visual.reason,
-            path: visual.path, bytes: visual.data?.length || 0, sha256: visual.data ? hash(visual.data) : null,
-            rights: pick.rights || 'unknown', attribution: text(pick.attribution), delivery: visual.data ? 'file' : 'unavailable',
-            provenance: { source: 'embedded-sheet-graphic', sourceArtifactId: item.sourceAssetId, sourceVersion: item.version,
-              sourceSha256: visual.sourceSha256, sourceProjectId: read.sourceProjectId,
-              ownership: declaredOwnership(pick) ? 'operator-declared' : read.ownership } });
-          if (visual.data) {
-            add(visual.path, visual.data);
-            if (imageLinks[item.kind]) imageLinks[item.kind].push(`![${visual.id}](${visual.path.slice(root.length + 1)})`);
-          }
-        }
-        if (item.source === 'planning-import') {
-          const original = JSON.parse(read.data.toString());
-          for (const sourceAsset of Array.isArray(original.assets) ? original.assets : []) {
-            const sourceId = text(sourceAsset?.id) || hash(json(sourceAsset)).slice(0, 16);
-            inventory.push({ projectId: project.id, id: `source:${item.id}:${sourceId}`, kind: 'source-reference',
-              label: text(sourceAsset?.label) || sourceId, sourceAssetId: sourceId, path: null,
-              status: 'excluded', reason: 'source-planning-metadata-only', delivery: 'metadata-only', rights: 'unknown', attribution: '' });
-          }
-          if (Array.isArray(original.storyboard) && original.storyboard.length) {
-            const keys = [...new Set(original.storyboard.flatMap(shot => Object.keys(shot || {})))].sort();
-            const base = item.path.replace(/\.json$/, '-storyboard');
-            add(`${base}.csv`, `${keys.map(csvCell).join(',')}\n${original.storyboard.map(shot => keys.map(key => csvCell(typeof shot?.[key] === 'object' ? JSON.stringify(shot[key]) : shot?.[key])).join(',')).join('\n')}\n`);
-            add(`${base}.md`, `# Original planning storyboard — unverified\n\n${original.storyboard.map(shot => jsonBlock(shot)).join('\n\n')}`);
-          }
-        }
-        if (imageLinks[item.kind] && /\.(png|jpe?g|webp)$/.test(item.path)) imageLinks[item.kind].push(`![${item.id}](${item.path.slice(root.length + 1)})`);
-      }
+      inventory.push(candidateInventoryEntry(project, item, pick, read));
+      if (read.data) addCandidateFiles({ project, item, pick, read, add, inventory, imageLinks, artifactLinks, root });
     }
-    for (const kind of ['cast-sets', 'storyboard']) {
-      if (!items.some(item => item.kind === kind)) inventory.push({ projectId: project.id, id: `missing:${kind}`, kind,
-        status: 'missing', reason: 'no-artifact-or-image', path: null, rights: 'unknown', attribution: '' });
-    }
-    if (!plan.castAndSets && !plan.review.cast && !plan.review.environments) inventory.push({ projectId: project.id, id: 'missing:cast-planning', status: 'missing', reason: 'no-cast-set-planning', path: null });
-    if (!plan.shots.length) inventory.push({ projectId: project.id, id: 'missing:shots', status: 'missing', reason: 'no-shot-planning', path: null });
-    add(`${root}/planning.json`, json(plan));
-    add(`${root}/shots.json`, json(plan.shots));
-    add(`${root}/shots.csv`, csv(plan.shots));
-    add(`${root}/cast-set-sheet.md`, `# ${markdown(plan.project.name)} — Cast & Sets\n\nSelected visual sheets: ${artifactLinks['cast-sets'].join(', ') || 'none'}\n\n${plan.castAndSets ? jsonBlock(plan.castAndSets) : 'Cast & Sets direction missing.'}\n\n${markdown(plan.review.cast)}\n\n${markdown(plan.review.environments)}\n\n${imageLinks['cast-sets'].join('\n\n')}\n`);
-    add(`${root}/storyboard.md`, `# ${markdown(plan.project.name)} — Storyboard\n\nSelected visual sheets: ${artifactLinks.storyboard.join(', ') || 'none'}\n\nTiming: ${markdown(project.productionReview?.draft?.timingStatus) || 'provisional'}\n\n${plan.shots.length ? plan.shots.map(shot => `## ${markdown(shot.id)}: ${shot.startSec ?? '?'}–${shot.endSec ?? '?'} seconds\n\n${markdown(shot.visualIntent)}\n\nAction: ${markdown(shot.action)}\n\nStaging: ${markdown(shot.staging)}\n\nCamera: ${markdown(shot.camera)}\n\nTransition: ${markdown(shot.transition)}\n`).join('\n') : 'Shot planning missing.'}\n\n${imageLinks.storyboard.join('\n\n')}\n`);
+    inventory.push(...missingPlanningEntries(project, items, plan));
+    addProjectSheets({ root, project, plan, add, artifactLinks, imageLinks });
   }
   const unresolved = inventory.filter(item => item.status !== 'included' || item.rights === 'unknown' || (item.rights === 'licensed' && !item.attribution));
   add('README.md', `# Music Video Making-of\n\nLocal planning export from PortOS. No repository has been created or published.\n\n${projects.map(project => `- [${linkLabel(project.name)}](projects/${project.id}/storyboard.md) — ${project.mediaMode || 'unspecified medium'}, version ${project.version}`).join('\n')}\n\nEach project contains cast/set and storyboard sheets, shot JSON/CSV, and planning.json with prompts and selected settings. manifest.json records every selected, missing, excluded and unselected candidate, provenance, rights and transformations. Paths are relative; no PortOS server is required.\n\n${unresolved.length} inventory entries need review. Missing files and unresolved rights remain unresolved; export is not proof of completion or publication clearance. Licensed assets require attribution. Review all content before sharing. Unselected or unverified reference bytes, logs, credentials, audio/video and executable composition files are excluded. Selected HTML sheets become Markdown with ordered relative PNG graphics and captions. Validated static SVG geometry is rasterized without executing HTML; embedded raster graphics require an explicit owned declaration. Raster output is re-encoded without metadata. Unsafe or unavailable graphics remain visible omissions. Sheet content is portable; the original HTML layout is not reproduced pixel for pixel. Shared assets require a selected, verified owner or an explicit ownership declaration where offered.\n\nSHA256SUMS covers every package file except itself. No license is inferred. Future GitHub publication requires explicit content, owner, repository name and visibility approval.\n`);

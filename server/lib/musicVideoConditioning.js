@@ -127,27 +127,31 @@ export function musicVideoPanelArtReferences(scene) {
 function automaticConditioningReferences(project, scene) {
   const references = project?.visualSpec?.references || [];
   const stage = project?.castAndSets;
-  if (stage?.status === 'approved' && Number.isInteger(scene?.sectionIndex)) {
-    const setId = stage.direction?.songMap?.find((entry) => entry.section === scene.sectionIndex)?.setId;
-    const character = references.find((ref) => ref?.id === 'mvr-cs-character' && ref.imageId);
+  // Legacy projects and incomplete check-ins retain the authored reference set.
+  const authored = references.filter((ref) => ref?.condition && ref.imageId && !isOutsideMusicVideoReference(ref));
+  const character = stage?.status === 'approved' && references.find((ref) => ref?.id === 'mvr-cs-character' && ref.imageId);
+  if (character) {
+    const setId = Number.isInteger(scene?.sectionIndex)
+      ? stage.direction?.songMap?.find((entry) => entry.section === scene.sectionIndex)?.setId : null;
     const plate = setId && references.find((ref) => ref?.id === `mvr-cs-set-${setId}` && ref.imageId);
     // Check-in plates and cast sheets beyond the project-wide cap are still
     // available for their own scenes. Their condition flag reflects that cap,
     // not scene relevance. A supporting cast member's sheet joins the shots
     // that name them, and so does a director's own character reference whose
     // label names someone the shot names.
-    if (character && plate) {
-      const cast = featuredCast(stage.direction, scene)
-        .map((c) => references.find((ref) => ref?.id === `mvr-cs-cast-${c.id}`.slice(0, 64) && ref.imageId))
-        .filter(Boolean);
-      const chosen = [character, plate, ...cast, ...featuredAuthoredCharacters(references, scene)];
-      return chosen.filter((ref, i) => chosen.findIndex((r) => r.imageId === ref.imageId) === i)
-        .slice(0, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES);
-    }
+    const cast = featuredCast(stage.direction, scene)
+      .map((c) => references.find((ref) => ref?.id === `mvr-cs-cast-${c.id}`.slice(0, 64) && ref.imageId))
+      .filter(Boolean);
+    // A shot with no song section (a replaced song clears them) cannot name its
+    // set, but it still names its cast: identities come first, and the authored
+    // set fills the spare slots rather than displacing a featured cast sheet.
+    const chosen = plate
+      ? [character, plate, ...cast, ...featuredAuthoredCharacters(references, scene)]
+      : [character, ...cast, ...featuredAuthoredCharacters(references, scene), ...authored];
+    return chosen.filter((ref, i) => chosen.findIndex((r) => r.imageId === ref.imageId) === i)
+      .slice(0, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES);
   }
-  // Legacy projects and incomplete check-ins retain the authored reference set.
-  return references.filter((ref) => ref?.condition && ref.imageId && !isOutsideMusicVideoReference(ref))
-    .slice(0, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES);
+  return authored.slice(0, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES);
 }
 
 /** Style images fill spare slots after identities; never displace a character or set. */
@@ -185,7 +189,8 @@ export function musicVideoStyleImages(project, identityImages, capacity) {
 export function musicVideoConditioningReferences(project, scene, castMedia = null, greybox = null) {
   const references = baseConditioningReferences(project, scene, castMedia);
   if (!greybox?.reference) return references;
-  return [greybox.reference, ...references.filter((r) => r.imageId !== greybox.reference.imageId)]
+  // The chosen camera replaces the section's generic set plate, which shows the place from another side.
+  return [greybox.reference, ...references.filter((r) => r.imageId !== greybox.reference.imageId && !r.id?.startsWith('mvr-cs-set-'))]
     .slice(0, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES);
 }
 

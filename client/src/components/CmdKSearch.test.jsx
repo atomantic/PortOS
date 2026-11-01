@@ -615,3 +615,41 @@ describe('CmdKSearch knowledge search failure', () => {
     vi.useRealTimers();
   });
 });
+
+describe('CmdKSearch multi-word page matching', () => {
+  const IDEAS = { id: 'nav.brain.ideas', path: '/brain/ideas', label: 'Ideas', section: 'Brain', aliases: ['brain-ideas', 'ideas'], keywords: [] };
+  const BACKUP = { id: 'nav.settings.backup', path: '/settings/backup', label: 'Backup', section: 'Settings', aliases: ['backup', 'settings-backup'], keywords: [] };
+  const openAndSearch = async (query) => {
+    getPaletteManifest.mockResolvedValue({ nav: [...NAV, IDEAS, BACKUP], actions: [] });
+    render(
+      <MemoryRouter initialEntries={['/current']}>
+        <CmdKSearch />
+        <LocationProbe />
+      </MemoryRouter>,
+    );
+    fireEvent.keyDown(document, { key: 'k', metaKey: true });
+    const input = await screen.findByRole('combobox', { name: 'Command palette' });
+    fireEvent.change(input, { target: { value: query } });
+    await act(async () => {});
+    return input;
+  };
+
+  it('matches a hyphenated alias from a spaced query and runs it on Enter', async () => {
+    const input = await openAndSearch('brain ideas');
+    expect(screen.getByRole('option', { name: /Ideas/ })).toBeInTheDocument();
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent('/brain/ideas'));
+  });
+
+  it('matches query words only at word starts, not inside another word', async () => {
+    await openAndSearch('ai brain');
+    expect(screen.queryByRole('option', { name: /Ideas/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: /Brain Inbox/ })).not.toBeInTheDocument();
+  });
+
+  it('matches a page when the query words span its label and section', async () => {
+    await openAndSearch('backup settings');
+    expect(screen.getByRole('option', { name: /Backup/ })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: /Ideas/ })).not.toBeInTheDocument();
+  });
+});

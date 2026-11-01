@@ -37,6 +37,15 @@ export const MIN_NODE_24 = '24.15.0';
 /** The supported runtime range shared by manifests, setup, and CI. */
 export const SUPPORTED_NODE_RANGE = `^${MIN_NODE} || ^${MIN_NODE_24} || >=26.0.0`;
 
+// Known security fixes, separate from the dependency compatibility contract.
+// Update these when Node publishes another security release for a supported line.
+// https://nodejs.org/en/blog/vulnerability/october-2026-security-releases
+export const NODE_SECURITY_MINIMUMS = Object.freeze({
+  22: '22.23.4',
+  24: '24.22.1',
+  26: '26.12.1',
+});
+
 /** Parse `v22.12.0` / `22.12` / `22` into a [major, minor, patch] tuple. */
 export function parseVersion(version) {
   const parts = String(version)
@@ -127,6 +136,30 @@ export function satisfiesMinNode(version = process.versions.node) {
   return satisfiesVersionRequirement(version, SUPPORTED_NODE_RANGE) === true;
 }
 
+/** A baseline for known lines, or null when this release line has no baseline. */
+export function nodeSecurityBaseline(version = process.versions.node) {
+  if (!/^v?\d+\.\d+\.\d+$/.test(String(version).trim())) return { minimum: null, compliant: null };
+  const [major] = parseVersion(version);
+  const minimum = NODE_SECURITY_MINIMUMS[major] || null;
+  return { minimum, compliant: minimum ? compareVersions(version, minimum) >= 0 : null };
+}
+
+/** Enforce the known security baseline in setup; other entrypoints keep the compatibility gate. */
+export function assertNodeSecurity({
+  version = process.versions.node,
+  onFail = (message) => { console.error(`❌ ${message}`); process.exit(1); },
+  onUnknown = (message) => console.log(`ℹ️ ${message}`),
+} = {}) {
+  const { minimum, compliant } = nodeSecurityBaseline(version);
+  if (compliant === null) {
+    onUnknown(`No Node.js security baseline is recorded for v${String(version).replace(/^v/, '')}; verify this release line with nodejs.org.`);
+    return true;
+  }
+  if (compliant) return true;
+  onFail(`Node.js v${version.replace(/^v/, '')} is below the known security minimum v${minimum} for this release line. Update Node before setup.`);
+  return false;
+}
+
 /** The one-line failure message, shared by the Node and shell gates. */
 export function unsupportedNodeMessage(version = process.versions.node) {
   return `Node.js ${SUPPORTED_NODE_RANGE} required (found v${String(version).trim().replace(/^v/, '')}) — see .nvmrc`;
@@ -152,5 +185,5 @@ export function assertNodeVersion({
 // Runnable directly: `node scripts/checkNodeVersion.js` — see lib/directInvocation.js
 // for why this comparison is not a plain string equality.
 if (isDirectlyInvoked(import.meta.url)) {
-  assertNodeVersion();
+  if (assertNodeVersion() && process.argv.includes('--security')) assertNodeSecurity();
 }

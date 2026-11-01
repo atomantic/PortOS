@@ -445,7 +445,7 @@ export const getCosWorkflow = (hours = 168, options) => request(`/cos/workflow?h
 
 // Feature Agents
 export const getFeatureAgents = () => request('/feature-agents');
-export const getFeatureAgent = (id) => request(`/feature-agents/${id}`);
+export const getFeatureAgent = (id, options) => request(`/feature-agents/${id}`, options);
 export const createFeatureAgent = (data, options = {}) => request('/feature-agents', {
   method: 'POST',
   body: JSON.stringify(data),

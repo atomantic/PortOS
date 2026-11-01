@@ -124,4 +124,23 @@ describe('MediaImage', () => {
     // Placeholder visible regardless.
     expect(screen.getByText(/Syncing/i)).toBeTruthy();
   });
+
+  // Uniquely catches a caller flagging "missing" when only the thumbnail failed (#14428).
+  it('tells the caller only when the last fallback fails, not when a thumbnail falls back', () => {
+    const onError = vi.fn();
+    render(<MediaImage thumbnail src="/data/images/x.png" alt="x" onError={onError} />);
+    fireEvent.error(screen.getByAltText('x'));
+    expect(onError).not.toHaveBeenCalled();
+    fireEvent.error(screen.getByAltText('x'));
+    expect(onError).toHaveBeenCalledTimes(1);
+  });
+
+  it('tells the caller nothing when the poster fails but its fallback video is still loading', () => {
+    const onError = vi.fn();
+    render(<MediaImage src="/data/images/x.png" fallbackVideoSrc="/data/videos/x.mp4" alt="x" onError={onError} />);
+    fireEvent.error(screen.getByAltText('x'));
+    expect(onError).not.toHaveBeenCalled();
+    fireEvent.error(screen.getByLabelText('x'));
+    expect(onError).toHaveBeenCalledTimes(1);
+  });
 });

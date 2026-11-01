@@ -60,7 +60,7 @@ export default function useGallerySidecars(filenames, refreshKey = 0) {
     return () => { cancelled = true; };
     // `lookupKey` stands in for `wanted`, which is rebuilt on every change to
     // the caller's (memoized) list even when its contents are identical.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // Dependency list is intentionally partial.
   }, [lookupKey, refreshKey]);
   const setSidecar = useCallback((record) => {
     if (!record?.filename) return;

@@ -23,8 +23,7 @@ import { createGithubActorTrust } from './forgeActorTrust.js';
 import { createHash } from 'node:crypto';
 import { safeJSONParse } from '../lib/fileUtils.js';
 import { isPlainObject } from '../lib/objects.js';
-import { PR_COMPLETIONS, leavesPrForHuman, resolvePrCompletion } from '../lib/prDisposition.js';
-import { isTruthyMeta } from '../lib/metadataFlags.js';
+import { PR_COMPLETIONS, prHeldForOperator, resolvePrCompletion } from '../lib/prDisposition.js';
 
 // Bound the gh query. The high-water mark (computePrCheck) advances to the max
 // open PR number it saw, so it can only correctly drain a backlog it received
@@ -405,8 +404,7 @@ async function currentHandoffOwnerPolicy(binding, { recovery = false } = {}) {
   const task = binding.taskId && await getTaskById(binding.taskId).catch(() => null);
   if (!task || task.id !== binding.taskId) return { ownerDeferred: true };
   const metadata = task.metadata || {};
-  if (leavesPrForHuman(task) || isTruthyMeta(metadata.readOnly) || isTruthyMeta(metadata.reviewLoopLeaveOpen)
-    || resolvePrCompletion(metadata) !== binding.prCompletion) {
+  if (prHeldForOperator(task) || resolvePrCompletion(metadata) !== binding.prCompletion) {
     return { ownerBlocked: 'The coordinating task completion policy changed; a fresh verified handoff is required' };
   }
   if (task.status === 'pending' || (recovery && task.status === 'in_progress')) return { ownerDeferred: true };

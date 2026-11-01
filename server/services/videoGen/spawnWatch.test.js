@@ -21,6 +21,8 @@ const mocks = vi.hoisted(() => ({
   signature: vi.fn(),
   profiles: null,
   outputs: new Map(),
+  byov: {},
+  invalidateByov: vi.fn(),
 }));
 
 vi.mock('./executionRecorder.js', () => ({ recordVideoExecution: mocks.record, recordVideoExecutionDiagnostics: mocks.diagnostics }));
@@ -57,11 +59,11 @@ vi.mock('../localMemory.js', () => ({
 vi.mock('../hfToken.js', () => ({ hfChildEnv: async () => ({}) }));
 vi.mock('../../lib/processEnv.js', () => ({ safeChildProcessEnv: () => ({}) }));
 vi.mock('./runtimes.js', () => ({
-  BYOV_RUNTIME_INFO: {},
+  BYOV_RUNTIME_INFO: mocks.byov,
   runtimeIsCacheOnly: () => false,
   runtimeNeedsProcessGroupKill: () => false,
   runtimeUsesMlx: () => mocks.mlx,
-  invalidateByovReadyCache: vi.fn(),
+  invalidateByovReadyCache: mocks.invalidateByov,
   pickDeathFingerprint: async () => null,
   currentMetalProfileFingerprint: async () => null,
 }));
@@ -393,6 +395,47 @@ describe('spawnAndWatchVideo claim lifecycle', () => {
     expect(failed).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ generationId: params.jobId, error: 'Exit code 7' }));
     expect(completed).not.toHaveBeenCalled();
     expect(mocks.history).toEqual([]);
+  });
+
+  describe('failure reason for an unforgiven exit', () => {
+    const failedWith = () => failed.mock.calls[0][0];
+
+    it('names a missing Python module in a BYOV runtime and drops its cached ready probe', async () => {
+      mocks.byov['test-runtime'] = { id: 'byov-id', label: 'Example' };
+      await spawnAndWatchVideo(params);
+      child.stderr.emit('data', Buffer.from("ModuleNotFoundError: No module named 'foo'\n"));
+      await closeChild(1);
+
+      expect(mocks.invalidateByov).toHaveBeenCalledExactlyOnceWith('byov-id');
+      expect(failedWith().error).toBe("Python module 'foo' is missing from the Example runtime. Use Install / Repair in Video Gen's model setup panel.");
+      delete mocks.byov['test-runtime'];
+    });
+
+    it('names a missing Python module outside a BYOV runtime without touching the ready cache', async () => {
+      await spawnAndWatchVideo(params);
+      child.stderr.emit('data', Buffer.from("ModuleNotFoundError: No module named 'foo'\n"));
+      await closeChild(1);
+
+      expect(mocks.invalidateByov).not.toHaveBeenCalled();
+      expect(failedWith().error).toBe("Python module 'foo' is missing. Install it into the configured Python environment and retry.");
+    });
+
+    it('reports signal death by cause rather than as an exit code', async () => {
+      await spawnAndWatchVideo(params);
+      child.signalCode = 'SIGTERM';
+      child.emit('close', null, 'SIGTERM');
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(failedWith().error).toBe('Killed by signal SIGTERM');
+    });
+
+    it('appends how many batch videos were saved', async () => {
+      params.batch = [{ id: 'batch-first', index: 0, seed: 42, filename: 'first.mp4' }, { id: 'batch-second', index: 1, seed: 43, filename: 'second.mp4' }];
+      await spawnAndWatchVideo(params);
+      await closeChild(7);
+
+      expect(failedWith().error).toBe('Exit code 7 (0/2 videos saved to history)');
+    });
   });
 
   it.each([0, 7])('preserves exit %s and its published outcome when termination evidence cannot be written', async (exitCode) => {

@@ -174,14 +174,15 @@ export const GROK_ASPECT_RATIOS = Object.freeze(['1:1', '16:9', '9:16', '4:3', '
 export const IMAGE_GEN_PROVIDER_CAPABILITIES = Object.freeze({
   [IMAGE_GEN_MODE.CODEX]: Object.freeze({
     supportsModelOverride: true,
-    // `image_gen.referenced_image_paths` is a string[] with no declared maximum.
-    maxInputImages: null,
+    // `image_gen.referenced_image_paths` declares no maximum, but the tool
+    // refuses more than five attached images per request (#14381).
+    maxInputImages: 5,
     promptRequiredWithInputImage: false,
   }),
   [IMAGE_GEN_MODE.GROK]: Object.freeze({
     // Grok's image tools run on xAI's fixed image backend — no model knob.
     supportsModelOverride: false,
-    // `image_edit.image` is a string[] with no declared maximum — like codex.
+    // `image_edit.image` is a string[] with no declared maximum.
     maxInputImages: null,
     promptRequiredWithInputImage: false,
   }),

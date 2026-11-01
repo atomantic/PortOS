@@ -704,7 +704,6 @@ export function getSessionProcess(sessionId) {
 // Automatic xterm replies to the TUI's own queries/focus tracking: focus
 // in/out, CPR, DA1/DA2, DSR, and OSC color answers. An attached viewer emits
 // these unprompted, so they are not a person typing over a pasted prompt.
-// eslint-disable-next-line no-control-regex
 const TERMINAL_REPLY_RE = /^(?:\x1b\[[IO]|\x1b\[[?>]?[\d;]*[Rcn]|\x1b\][\s\S]*?(?:\x07|\x1b\\))+$/;
 
 /**

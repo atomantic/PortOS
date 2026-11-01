@@ -4,7 +4,7 @@ import { clipReversed } from '../../lib/musicVideoLayers.js';
 import { sceneFrameFit } from './SceneFrameFit.jsx';
 
 /** Native playback and source trim; metadata lifetime belongs to the card's hook. */
-export default function SceneClipPreview({ scene, index, performance, playback, onOpenPreview, onTrimClip, takeBusy, generatingVideo, clipLocked }) {
+export default function SceneClipPreview({ scene, index, performance, playback, onOpenPreview, onTrimClip, takeBusy, generatingVideo }) {
   const { clipPlayerRef, clipSrc, onLoadedMetadata } = playback;
   return (
     <>
@@ -43,7 +43,7 @@ export default function SceneClipPreview({ scene, index, performance, playback, 
       {/* Keep the clip from a later frame as a new take of this shot. */}
       {scene.videoHistoryId && !performance && onTrimClip && (
         <VideoStartTrimControl videoRef={clipPlayerRef} sourceKey={scene.videoHistoryId}
-          disabled={takeBusy || !!generatingVideo || clipLocked}
+          disabled={takeBusy || !!generatingVideo}
           onTrim={(startSec) => onTrimClip(scene, startSec)} />
       )}
     </>

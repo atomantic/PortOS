@@ -9,7 +9,7 @@ import { getOriginInfo } from '../lib/gitRemote.js';
 import { isPlainObject } from '../lib/objects.js';
 import { parsePullRequestUrl } from '../lib/gitForge.js';
 import { isTruthyMeta } from '../lib/metadataFlags.js';
-import { PR_COMPLETIONS, leavesPrForHuman, resolvePrCompletion } from '../lib/prDisposition.js';
+import { PR_COMPLETIONS, agentPrHeldForOperator, prHeldForOperator } from '../lib/prDisposition.js';
 
 export const repositoryKey = (origin) => origin?.host && origin?.fullName
   ? `${origin.host.replace(/^ssh\.github\.com$/i, 'github.com')}/${origin.fullName}`.toLowerCase()
@@ -43,8 +43,7 @@ async function verifiedReviewCoordinator(agent, repository) {
   const task = await liveTask(agent);
   const meta = task?.metadata;
   if (!task || task.taskType !== 'internal'
-    || !isTruthyMeta(meta?.reviewLoopFollowUp) || isTruthyMeta(meta?.reviewLoopLeaveOpen)
-    || resolvePrCompletion(meta) === PR_COMPLETIONS.LEAVE_OPEN || agent.metadata?.prCompletionPolicy === PR_COMPLETIONS.LEAVE_OPEN
+    || !isTruthyMeta(meta?.reviewLoopFollowUp) || agentPrHeldForOperator(agent, task)
     || target.url !== meta?.reviewLoopPRUrl || target.branch !== meta?.reviewLoopPRBranch
     || resolveTaskRemoteBranch(meta) !== target.branch
     || agent.metadata?.worktreeBranch !== resolveTaskTargetBranch(meta) || !agent.metadata?.workspacePath) return false;
@@ -90,9 +89,8 @@ async function verifiedWorktreeDelivery(agent, repository) {
     || !meta.sourceWorkspace || meta.sourceWorkspace === target.workspacePath) return false;
   const task = await liveTask(agent);
   const taskMeta = task?.metadata;
-  if (!task || !isTruthyMeta(taskMeta?.openPR) || resolvePrCompletion(taskMeta) === PR_COMPLETIONS.LEAVE_OPEN
-    || leavesPrForHuman(task) || isTruthyMeta(taskMeta?.reviewLoopFollowUp) || isTruthyMeta(taskMeta?.readOnly)
-    || taskMeta?.forkHead) return false;
+  if (!task || !isTruthyMeta(taskMeta?.openPR) || prHeldForOperator(task)
+    || isTruthyMeta(taskMeta?.reviewLoopFollowUp) || taskMeta?.forkHead) return false;
   return checkoutOnBranch(target.workspacePath, target.branch, repository);
 }
 

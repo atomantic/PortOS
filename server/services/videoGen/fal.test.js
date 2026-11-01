@@ -957,6 +957,71 @@ describe('hosted inputs', () => {
     expect(posted.audio_url).toMatch(/^https:\/\/cdn\.example\.com\/.+-audio\.wav$/);
     expect(JSON.stringify(posted)).not.toContain('data:');
   });
+
+  it('sends a storyboard panel as @Image1 guidance beside its references, never as a start frame', async () => {
+    const [panel, cast] = [join(TEST_ROOT, 'panel.png'), join(TEST_ROOT, 'cast.png')];
+    await writeFile(panel, 'png'); await writeFile(cast, 'png');
+    const model = 'bytedance/seedance-2.5/reference-to-video';
+    let posted = null;
+    vi.stubGlobal('fetch', vi.fn(async (url, opts) => {
+      if (url.startsWith('https://rest.fal.ai/storage/upload/initiate')) {
+        const { file_name: name } = JSON.parse(opts.body);
+        return jsonResponse({ upload_url: `https://upload.example.com/${name}`, file_url: `https://cdn.example.com/${name}` });
+      }
+      if (url.startsWith('https://upload.example.com/')) return { ok: true, status: 200 };
+      if (url === `https://queue.fal.run/${model}`) {
+        posted = JSON.parse(opts.body);
+        return jsonResponse({ request_id: 'req-guided', status_url: 'https://queue.fal.run/s', response_url: 'https://queue.fal.run/r' });
+      }
+      if (url === 'https://queue.fal.run/s') return jsonResponse({ status: 'COMPLETED' });
+      if (url === 'https://queue.fal.run/r') return jsonResponse({ video: { url: 'https://cdn.fal.ai/guided.mp4' } });
+      if (url === 'https://cdn.fal.ai/guided.mp4') return { ok: true, status: 200, arrayBuffer: async () => Uint8Array.from(Buffer.from('mp4')).buffer };
+      throw new Error(`unexpected fetch: ${url}`);
+    }));
+    const job = await fal.generateVideo({ apiKey: 'test-key', modelId: model, prompt: 'she laces her skates', duration: 5,
+      guidanceImagePath: panel, referenceImagePaths: [cast] });
+    expect(await waitForTerminal(job.jobId)).toMatchObject({ type: 'completed' });
+    expect(posted.image_urls).toEqual([expect.stringMatching(/-reference-1\.png$/), expect.stringMatching(/-reference-2\.png$/)]);
+    expect(posted.prompt).toMatch(/^she laces her skates\n@Image1 is a storyboard panel.*It is not the first frame.*\n@Image2 set the look/s);
+    const [entry] = await loadHistory();
+    expect(entry).toMatchObject({ mode: 'text', sentPrompt: posted.prompt, storyboardGuidance: { guidanceImageFile: 'panel.png', referenceImageFiles: ['cast.png'] } });
+    expect(entry.promptAdditions.find((a) => a.id === 'storyboard-guidance').text).toBe(posted.prompt.split('\n').slice(1).join('\n'));
+  });
+
+  // #14241: a music-video sequence sends each shot's frame as Image n with its timed
+  // prompt as written; H3 must not rewrite it, and the clip record says so.
+  it('sends a sequence take\'s shot frames as references with H3 prompt expansion disabled', async () => {
+    const frames = ['a', 'b', 'c'].map((n) => join(TEST_ROOT, `shot-${n}.png`));
+    await Promise.all(frames.map((f) => writeFile(f, 'png')));
+    const model = 'minimax/h3-max/reference-to-video';
+    let posted = null;
+    vi.stubGlobal('fetch', vi.fn(async (url, opts) => {
+      if (url.startsWith('https://rest.fal.ai/storage/upload/initiate')) {
+        const { file_name: name } = JSON.parse(opts.body);
+        return jsonResponse({ upload_url: `https://upload.example.com/${name}`, file_url: `https://cdn.example.com/${name}` });
+      }
+      if (url.startsWith('https://upload.example.com/')) return { ok: true, status: 200 };
+      if (url === `https://queue.fal.run/${model}`) {
+        posted = JSON.parse(opts.body);
+        return jsonResponse({ request_id: 'req-seq', status_url: 'https://queue.fal.run/s', response_url: 'https://queue.fal.run/r' });
+      }
+      if (url === 'https://queue.fal.run/s') return jsonResponse({ status: 'COMPLETED' });
+      if (url === 'https://queue.fal.run/r') return jsonResponse({ video: { url: 'https://cdn.fal.ai/seq.mp4' } });
+      if (url === 'https://cdn.fal.ai/seq.mp4') return { ok: true, status: 200, arrayBuffer: async () => Uint8Array.from(Buffer.from('mp4')).buffer };
+      throw new Error(`unexpected fetch: ${url}`);
+    }));
+    const prompt = '0-4s: Image 1. she climbs\n4-8s: Image 2. her hand\n8-12s: Image 3. the window';
+    const job = await fal.generateVideo({ apiKey: 'test-key', modelId: model, prompt, duration: 12, referenceImagePaths: frames,
+      musicVideo: { projectId: 'p1', sequence: { sceneIds: ['a', 'b', 'c'] } } });
+    expect(await waitForTerminal(job.jobId)).toMatchObject({ type: 'completed' });
+    expect(posted).toMatchObject({ prompt, duration: 12, prompt_expansion_mode: 'disabled' });
+    expect(posted.reference_image_urls).toEqual([1, 2, 3].map((n) => expect.stringMatching(new RegExp(`-reference-${n}\\.png$`))));
+    expect(posted.image_url).toBeUndefined();
+    const [entry] = await loadHistory();
+    expect(entry.sentPrompt).toBe(prompt);
+    expect(entry.promptAdditions.find((a) => a.id === 'prompt-expansion').text).toMatch(/disabled/);
+    expect(entry.storyboardGuidance).toBeUndefined();
+  });
 });
 
 it('cancels during preparation before starting a render', async () => {

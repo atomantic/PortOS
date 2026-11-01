@@ -117,7 +117,11 @@ vi.mock('../lib/fileUtils.js', async () => {
 });
 
 const isMergedPrHeadMock = vi.fn(async () => false);
-vi.mock('./prProbe.js', () => ({ isMergedPrHead: (...args) => isMergedPrHeadMock(...args) }));
+const readMergedPrDeliveryMock = vi.fn(async () => null);
+vi.mock('./prProbe.js', () => ({
+  isMergedPrHead: (...args) => isMergedPrHeadMock(...args),
+  readMergedPrDelivery: (...args) => readMergedPrDeliveryMock(...args),
+}));
 
 vi.mock('./branchReconcileOutcome.js', () => ({
   recordWorkspaceCheckoutRetirement: vi.fn(async () => null),
@@ -161,6 +165,7 @@ async function cleanupMerged(repo, target, branches, options) {
 beforeEach(() => {
   vi.clearAllMocks();
   isMergedPrHeadMock.mockReset().mockResolvedValue(false);
+  readMergedPrDeliveryMock.mockReset().mockResolvedValue(null);
   hasCompletedCheckoutEvidence.mockReset().mockImplementation(async records => records.some(agent => agent.result?.success === true));
   // Ancient by default, so age-indifferent tests keep their pre-window behavior;
   // a test that pins a specific age must not leak it into the next one.
@@ -1841,11 +1846,112 @@ describe('reconcile — cached SUPERSEDED verdicts (#3842)', () => {
     expect(idle.held).toEqual([]);
   });
 
-  it('keeps the unmanaged-location hold for merged cleanup, which has no verdict to lean on', async () => {
+  it('keeps the unmanaged-location hold when ancestry is the only merge evidence', async () => {
     git.hasBranchMergeEvidence.mockResolvedValue(true);
     execGit.mockImplementation(gitFixtureResult('', 0));
     const res = await cleanupMerged('/repo', 'main', [{
       branch: 'next/issue-2190', worktreePath: '/private/tmp/portos-next-2190', worktreeAgeMs: 30 * 24 * 60 * 60 * 1000
+    }]);
+    expect(res.cleaned).toEqual([]);
+    expect(res.skipped).toEqual([{ branch: 'next/issue-2190', path: '/private/tmp/portos-next-2190', reason: 'worktree-unmanaged-location' }]);
+    expect(res.skipped[0].retryAt).toBeUndefined();
+    expect(wt.forceRemoveWorktreeDir).not.toHaveBeenCalled();
+    expect(isMergedPrHeadMock).not.toHaveBeenCalled();
+    expect(readMergedPrDeliveryMock).not.toHaveBeenCalled();
+  });
+
+  it('keeps the unmanaged-location hold when the forge does not report that head merged', async () => {
+    git.hasBranchMergeEvidence.mockResolvedValue(true);
+    readMergedPrDeliveryMock.mockResolvedValue(null);
+    mergedExternalGit();
+    const res = await cleanupMerged('/repo', 'main', [{
+      branch: 'next/issue-2190', worktreePath: '/private/tmp/portos-next-2190', worktreeAgeMs: 30 * 24 * 60 * 60 * 1000,
+    }]);
+    expect(readMergedPrDeliveryMock).toHaveBeenCalledWith('/repo', 'next/issue-2190', RETIRE_HEAD);
+    expect(res.cleaned).toEqual([]);
+    expect(res.skipped).toEqual([{ branch: 'next/issue-2190', path: '/private/tmp/portos-next-2190', reason: 'worktree-unmanaged-location' }]);
+    expect(res.skipped[0].retryAt).toBeUndefined();
+    expect(wt.forceRemoveWorktreeDir).not.toHaveBeenCalled();
+  });
+
+  // A published branch whose pull request the forge merged at this head is
+  // delivered. The directory it was checked out in is not a reason to keep
+  // the branch. The hour runs from the later of the checkout's age and the
+  // forge merge time, so a process still standing in a checkout that just
+  // merged is not removed (#10270 stays the ancestry-only case).
+  const mergedLongAgo = () => ({ mergedAt: new Date(Date.now() - SHIPPED_CLAIM_IDLE_MS).toISOString() });
+  function mergedExternalGit() {
+    execGit.mockImplementation(async (args) => {
+      if (args[0] === 'remote' && args[1] === 'get-url') return { stdout: 'https://github.com/example/repo.git\n', exitCode: 0 };
+      return gitFixtureResult('', 0)(args);
+    });
+  }
+
+  it('retires an idle unmanaged checkout once the forge merged that exact head', async () => {
+    git.hasBranchMergeEvidence.mockResolvedValue(true);
+    readMergedPrDeliveryMock.mockResolvedValue(mergedLongAgo());
+    mergedExternalGit();
+    const path = '/private/tmp/portos-next-2190';
+    const res = await cleanupMerged('/repo', 'main', [{
+      branch: 'next/issue-2190', worktreePath: path, worktreeAgeMs: SHIPPED_CLAIM_IDLE_MS,
+    }]);
+    expect(readMergedPrDeliveryMock).toHaveBeenCalledWith('/repo', 'next/issue-2190', RETIRE_HEAD);
+    expect(res.cleaned).toEqual(['next/issue-2190']);
+    expect(wt.forceRemoveWorktreeDir).toHaveBeenCalledWith('/repo', path, expect.any(Object));
+    expect(wt.deleteCompletedLocalBranch).toHaveBeenCalledWith('/repo', 'next/issue-2190', RETIRE_HEAD, expect.objectContaining({ onRetired: expect.any(Function) }));
+  });
+
+  it('holds a forge-merged unmanaged checkout until it has been idle for an hour', async () => {
+    git.hasBranchMergeEvidence.mockResolvedValue(true);
+    readMergedPrDeliveryMock.mockResolvedValue(mergedLongAgo());
+    mergedExternalGit();
+    const ageMs = 5 * 60 * 1000;
+    const res = await cleanupMerged('/repo', 'main', [{
+      branch: 'next/issue-2190', worktreePath: '/private/tmp/portos-next-2190', worktreeAgeMs: ageMs,
+    }]);
+    expect(res.cleaned).toEqual([]);
+    const hold = res.skipped[0];
+    expect(hold).toMatchObject({ branch: 'next/issue-2190', reason: 'worktree-unmanaged-location' });
+    expect(Date.parse(hold.retryAt)).toBeGreaterThan(Date.now());
+    expect(Date.parse(hold.retryAt)).toBeLessThanOrEqual(Date.now() + SHIPPED_CLAIM_IDLE_MS - ageMs + 1000);
+    expect(wt.forceRemoveWorktreeDir).not.toHaveBeenCalled();
+  });
+
+  it('holds an old unmanaged checkout until an hour after the forge merge', async () => {
+    git.hasBranchMergeEvidence.mockResolvedValue(true);
+    const sinceMerge = 5 * 60 * 1000;
+    readMergedPrDeliveryMock.mockResolvedValue({ mergedAt: new Date(Date.now() - sinceMerge).toISOString() });
+    mergedExternalGit();
+    const res = await cleanupMerged('/repo', 'main', [{
+      branch: 'next/issue-2190', worktreePath: '/private/tmp/portos-next-2190', worktreeAgeMs: 30 * 24 * 60 * 60 * 1000,
+    }]);
+    expect(res.cleaned).toEqual([]);
+    const hold = res.skipped[0];
+    expect(hold).toMatchObject({ branch: 'next/issue-2190', reason: 'worktree-unmanaged-location' });
+    expect(Date.parse(hold.retryAt)).toBeGreaterThan(Date.now());
+    expect(Date.parse(hold.retryAt)).toBeLessThanOrEqual(Date.now() + SHIPPED_CLAIM_IDLE_MS - sinceMerge + 1000);
+    expect(wt.forceRemoveWorktreeDir).not.toHaveBeenCalled();
+  });
+
+  it('still holds a locked unmanaged checkout after the forge merged its head', async () => {
+    git.hasBranchMergeEvidence.mockResolvedValue(true);
+    readMergedPrDeliveryMock.mockResolvedValue(mergedLongAgo());
+    mergedExternalGit();
+    const res = await cleanupMerged('/repo', 'main', [{
+      branch: 'next/issue-2190', worktreePath: '/private/tmp/portos-next-2190',
+      worktreeLocked: true, worktreeAgeMs: SHIPPED_CLAIM_IDLE_MS,
+    }]);
+    expect(res.cleaned).toEqual([]);
+    expect(res.skipped).toEqual([expect.objectContaining({ branch: 'next/issue-2190', reason: 'worktree-locked' })]);
+    expect(wt.forceRemoveWorktreeDir).not.toHaveBeenCalled();
+  });
+
+  it('holds a forge-merged unmanaged checkout whose age cannot be read', async () => {
+    git.hasBranchMergeEvidence.mockResolvedValue(true);
+    readMergedPrDeliveryMock.mockResolvedValue(mergedLongAgo());
+    mergedExternalGit();
+    const res = await cleanupMerged('/repo', 'main', [{
+      branch: 'next/issue-2190', worktreePath: '/private/tmp/portos-next-2190', worktreeAgeMs: null,
     }]);
     expect(res.cleaned).toEqual([]);
     expect(res.skipped).toEqual([{ branch: 'next/issue-2190', path: '/private/tmp/portos-next-2190', reason: 'worktree-unmanaged-location' }]);

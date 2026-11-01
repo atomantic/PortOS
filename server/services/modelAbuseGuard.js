@@ -142,7 +142,8 @@ function normalizePublicReviewInputs(pullRequests) {
  *
  *  - Every provider must carry a maintained vendor recipe for the requested
  *    posture. That argv (codex `--sandbox read-only`, grok
- *    `--permission-mode plan --tools ''`, claude `--restricted --tools ''`, …)
+ *    `--permission-mode plan --disallowed-tools <every built-in>`, claude
+ *    `--restricted --tools ''`, …)
  *    is what actually denies tools to a CLOUD model, which PortOS cannot probe.
  *  - A LOCAL runtime can be probed, so it gets the stricter check it always
  *    had: the model must be installed and its authoritative capability report

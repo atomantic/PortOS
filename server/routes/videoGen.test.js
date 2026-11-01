@@ -265,6 +265,7 @@ const setPendingUpload = (...files) => { pendingUpload.current = files.flat(); }
 
 vi.mock('../lib/multipart.js', () => ({
   optionalUpload: () => (_req, _res, next) => next(),
+  optionalUploadFields: () => (_req, _res, next) => next(),
   // Bypass the streaming parser. If a test set a pending upload via
   // setPendingUpload(), inject it under req.files keyed by fieldname so the
   // route exercises the upload-staging path; otherwise pass through.
@@ -1272,6 +1273,60 @@ describe('videoGen routes', () => {
       const r = await request(app).post('/api/video-gen/prompt-preview').send({ backend: 'grok', prompt: 'a fox' });
       expect(r.status).toBe(400);
       expect(r.body.error).toMatch(/disabled/i);
+    });
+  });
+
+  describe('POST / — clip from a storyboard panel', () => {
+    const settings = {
+      imageGen: { grok: { enabled: true, grokPath: '/example/grok' } },
+      videoGen: { fal: { apiKey: 'example-fal-key' } },
+    };
+    const guided = { prompt: 'she laces her skates', guidanceImageFile: 'panel.png', referenceImageFiles: ['cast.png', 'set.png'] };
+
+    it('sends the panel as guidance and the references as the look on Grok, never as a start frame', async () => {
+      const { getSettings } = await import('../services/settings.js');
+      getSettings.mockResolvedValueOnce(settings);
+      const r = await request(app).post('/api/video-gen/').send({ backend: 'grok', ...guided });
+      expect(r.status).toBe(200);
+      const { params } = mediaJobQueue.enqueueJob.mock.calls[0][0];
+      expect(params).toMatchObject({ mode: 'grok', videoMode: 'text', sourceImagePath: null,
+        guidanceImagePath: expect.stringMatching(/panel\.png$/), referenceImagePaths: [expect.stringMatching(/cast\.png$/), expect.stringMatching(/set\.png$/)] });
+    });
+
+    it('renders a fal guided clip on the Seedance reference model and refuses a start-frame model', async () => {
+      const { getSettings } = await import('../services/settings.js');
+      getSettings.mockResolvedValue(settings);
+      const ok = await request(app).post('/api/video-gen/').send({ backend: 'fal', ...guided });
+      expect(ok.status).toBe(200);
+      expect(mediaJobQueue.enqueueJob.mock.calls[0][0].params).toMatchObject({
+        modelId: 'bytedance/seedance-2.5/reference-to-video', guidanceImagePath: expect.stringMatching(/panel\.png$/) });
+      const refused = await request(app).post('/api/video-gen/').send({ backend: 'fal', falModelId: 'bytedance/seedance-2.5/image-to-video', ...guided });
+      expect(refused.status).toBe(400);
+      expect(refused.body.code).toBe('STORYBOARD_GUIDANCE_UNSUPPORTED');
+      getSettings.mockReset();
+    });
+
+    it.each([
+      ['a local render', { backend: 'local' }, 'STORYBOARD_GUIDANCE_UNSUPPORTED'],
+      ['a start frame beside the panel', { backend: 'grok', sourceImageFile: 'frame.png' }, 'STORYBOARD_GUIDANCE_INVALID'],
+    ])('refuses %s before enqueueing', async (_label, extra, code) => {
+      const { getSettings } = await import('../services/settings.js');
+      getSettings.mockResolvedValueOnce(settings);
+      const r = await request(app).post('/api/video-gen/').send({ ...guided, ...extra });
+      expect(r.status).toBe(400);
+      expect(r.body.code).toBe(code);
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+    });
+
+    it('previews the guidance chip with the prompt Grok receives', async () => {
+      const { getSettings } = await import('../services/settings.js');
+      getSettings.mockResolvedValueOnce(settings);
+      const r = await request(app).post('/api/video-gen/prompt-preview').send({ backend: 'grok', ...guided });
+      expect(r.status).toBe(200);
+      const chip = r.body.promptAdditions.find((a) => a.id === 'storyboard-guidance');
+      expect(chip.text).toMatch(/panel\.png is a storyboard panel.*It is not the first frame/s);
+      expect(r.body.sentPrompt).toContain(chip.text);
+      expect(r.body.sentPrompt).toContain('image_edit');
     });
   });
 

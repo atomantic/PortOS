@@ -26,6 +26,7 @@ import { filterCallerModeEligible } from './callerModePolicy.js';
 import { buildCodeReviewSpawnConfig, buildVendorSpawnConfig, supportsPublicReviewProvider, toolFreeOneShotArgs } from './providerVendors.js';
 import { isPublicReviewNoToolProfile } from './agentExecutionProfiles.js';
 import { resolveCliModel, stripProviderPinArgs } from './providerModels.js';
+import { GROK_STREAMING_JSON_FORMAT, extractGrokFinalMessage, grokReviewFinishReason, grokToolsEscapingNoToolPosture } from './grok.js';
 import { resolveCliSpawn, needsProcessGroup, trackDetachedGroup } from './credentialBootstrap.js';
 
 // How much stderr to hand back to callers. Enough to carry a rate-limit banner
@@ -274,6 +275,25 @@ export function runCliProviderPrompt(args = {}) {
       // caller can refuse to treat a possibly-truncated payload as complete.
       if (code !== 0 && !text) {
         return done({ error: (stderr.trim().slice(0, STDERR_TAIL_LIMIT) || `${provider.command} exited with code ${code}`), exitCode: code, stderr, stderrTail });
+      }
+      // grok's transcript is reduced here to its final message; the other
+      // stream formats stay raw for the caller to settle.
+      if (streamFormat === GROK_STREAMING_JSON_FORMAT) {
+        // Drift probe: a tool grok shipped after GROK_BUILTIN_TOOLS was written
+        // is still offered to this no-tool run (#14476). An offer alone moved no
+        // data; a call may have read host content into a verdict that gets
+        // published, so that run's answer is refused.
+        const { offered, called } = grokToolsEscapingNoToolPosture(text);
+        const escaped = [...new Set([...offered, ...called])];
+        if (escaped.length) console.warn(`⚠️ grok no-tool run still offered or called tools: ${escaped.join(', ')} — add them to GROK_BUILTIN_TOOLS`);
+        if (called.length) {
+          return done({ error: `grok called tools in a no-tool run: ${called.join(', ')}`, exitCode: code, stderr, stderrTail });
+        }
+        return done({
+          text: extractGrokFinalMessage(text),
+          finishReason: grokReviewFinishReason(text),
+          exitCode: code, stderr, partial: code !== 0, stderrTail,
+        });
       }
       done({ text, exitCode: code, stderr, partial: code !== 0, stderrTail,
         ...(streamFormat ? { streamFormat } : {}),

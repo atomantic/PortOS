@@ -1,15 +1,18 @@
 import { useState } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 vi.mock('../../services/apiRunwayCatalog.js', async (importOriginal) => ({ ...await importOriginal(), loadRunwayCatalog: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('../../hooks/useFilmLookPresets.js', () => ({ default: () => ({ presets: [], loaded: true, save: vi.fn(), remove: vi.fn() }) }));
 vi.mock('../../hooks/useVideoFileSrc.js', () => ({ useVideoFileSrc: vi.fn(() => ({})) }));
 vi.mock('../../services/apiMusicVideo.js', async (importOriginal) => ({ ...(await importOriginal()), getMusicVideoMediaPool: vi.fn(async () => ({ items: [] })) }));
+vi.mock('../../services/api', async (importOriginal) => ({ ...(await importOriginal()), listTracks: vi.fn(async () => []) }));
 import SceneCard from './SceneCard.jsx';
 import { GROK_VIDEO_DURATIONS } from '../../lib/grokVideoClip.js';
 import { useVideoFileSrc } from '../../hooks/useVideoFileSrc.js';
 
 const GROK_MAX = GROK_VIDEO_DURATIONS.at(-1);
+// The editor shows the still or the clip, one at a time.
+const show = (name) => fireEvent.click(within(screen.getByRole('group', { name: 'Show' })).getByRole('button', { name }));
 // A card opens on the last Render on pick, so each test starts from the project setting.
 beforeEach(() => {
   localStorage.clear();
@@ -189,8 +192,10 @@ describe('planned camera move (#10589)', () => {
 
   it('puts a footage shot\'s camera beside its motion prompt and shows the text it adds', () => {
     render(<Harness initial={{ sceneId: 's1', visualLayer: 'footage', prompt: 'a hand turns the dial', startSec: 0, endSec: 5, takes: [] }} onSave={vi.fn()} />);
+    // With no still yet the editor opens on the Still; the camera sits with the clip's motion prompt.
+    expect(screen.getByRole('button', { name: 'Still' }).getAttribute('aria-pressed')).toBe('true');
+    show('Clip');
     const camera = screen.getByLabelText('Camera');
-    expect(camera.closest('details').querySelector('summary').textContent).not.toMatch(/Shot settings/);
     expect(screen.queryByTestId('camera-adds')).toBeNull();
     fireEvent.change(camera, { target: { value: 'slow-dolly-in' } });
     const adds = screen.getByTestId('camera-adds').textContent.replace(/^Adds to the prompt: /, '');
@@ -265,6 +270,7 @@ describe('Merge with next (#10810)', () => {
   it('merges into the next scene, and hides when last, in a document composition, or past the backend limit', () => {
     const onMergeNext = vi.fn();
     const { rerender } = render(<SceneCard scene={scene} {...props} onMergeNext={onMergeNext} nextEndSec={8} lipSyncBackend="grok" />);
+    show('Clip');
     fireEvent.click(screen.getByRole('button', { name: /Merge with next/ }));
     expect(onMergeNext).toHaveBeenCalledWith('s1', 'grok');
     rerender(<SceneCard scene={scene} {...props} onMergeNext={onMergeNext} nextEndSec={19} lipSyncBackend="grok" />);
@@ -284,6 +290,7 @@ describe('Merge over previous', () => {
   it('merges this shot over the previous one, and hides when first, in a document composition, or past the backend limit', () => {
     const onMergePrevious = vi.fn();
     const { rerender } = render(<SceneCard scene={scene} {...props} onMergePrevious={onMergePrevious} prevStartSec={0} lipSyncBackend="grok" />);
+    show('Clip');
     fireEvent.click(screen.getByRole('button', { name: 'Merge over previous' }));
     expect(onMergePrevious).toHaveBeenCalledWith('s2', 'grok');
     rerender(<SceneCard scene={{ ...scene, endSec: 19 }} {...props} onMergePrevious={onMergePrevious} prevStartSec={0} lipSyncBackend="grok" />);
@@ -377,31 +384,83 @@ describe('scene timing and provider presentation (#11046)', () => {
   });
 });
 
-describe('Render follows the shot locks', () => {
-  // Uniquely catches Render staying live on a shot whose still is unlocked, or whose video is locked.
-  it('needs the still locked to render, and refuses a locked video until it is unlocked', async () => {
+describe('Render ignores legacy shot locks', () => {
+  it('renders directly for an unlocked still and a previously locked video', async () => {
     const { ShotLockContext } = await import('./ShotLock.jsx');
     const scene = { sceneId: 's1', prompt: 'She spins the reel', referenceImageId: 'still.png', videoHistoryId: 'clip-1', startSec: 0, endSec: 4, takes: [] };
     const onGenerateVideo = vi.fn();
+    const onGenerateFrame = vi.fn();
+    const toggle = vi.fn();
     const card = (still, clip) => (
-      <ShotLockContext.Provider value={{ locks: { s1: still }, clips: { s1: clip }, toggle: () => {}, busy: false }}>
-        <SceneCard scene={scene} index={0} expanded onEditLocal={() => {}} onSave={() => {}} onGenerateVideo={onGenerateVideo} falVideoSettings={{ backend: 'local' }} />
+      <ShotLockContext.Provider value={{ locks: { s1: still }, clips: { s1: clip }, toggle, busy: false }}>
+        <SceneCard scene={scene} index={0} expanded onEditLocal={() => {}} onSave={() => {}} onGenerateVideo={onGenerateVideo}
+          onGenerateFrame={onGenerateFrame} onPlacePoolItem={vi.fn()} falVideoSettings={{ backend: 'local' }} />
       </ShotLockContext.Provider>
     );
     const { rerender } = render(card('open', 'open'));
-    expect(screen.getByRole('button', { name: 'Render again' })).toHaveProperty('title', 'Lock the still first');
-    // On a phone there is no tooltip: the reason and the lock it needs sit under Render.
-    const refusal = screen.getByTestId('render-refusal');
-    expect(refusal.textContent).toContain('Lock the still first');
-    expect(refusal.querySelector('button')).toBeTruthy();
-    rerender(card('locked', 'locked'));
-    expect(screen.getByRole('button', { name: 'Render again' }).disabled).toBe(true);
-    expect(screen.getByRole('button', { name: 'Render again' }).title).toMatch(/^Video locked/);
-    rerender(card('locked', 'open'));
-    // The corner lock shows only its icon on a phone; its label stays the button's name.
-    expect(screen.getByRole('button', { name: 'Lock video' })).toBeTruthy();
+    expect(screen.queryByTestId('render-refusal')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Render again' }));
     expect(onGenerateVideo).toHaveBeenCalledWith(scene, { card: expect.objectContaining({ prompt: scene.prompt }) });
+    expect(toggle).not.toHaveBeenCalled();
+    onGenerateVideo.mockClear();
+    rerender(card('locked', 'locked'));
+    expect(screen.getByRole('button', { name: 'Render again' }).disabled).toBe(false);
+    expect(screen.queryByRole('button', { name: /unlock|lock video/i })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Render again' }));
+    expect(onGenerateVideo).toHaveBeenCalledWith(scene, { card: expect.objectContaining({ prompt: scene.prompt }) });
+    show('Still');
+    expect(screen.getByRole('button', { name: 'Swap start frame from unused' })).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: 'New frame take' }));
+    expect(onGenerateFrame).toHaveBeenCalledWith(scene, { referenceImageId: null });
+  });
+});
+
+describe('motion prompt from the storyboard panel', () => {
+  // Uniquely catches a panel-linked shot asking for a typed prompt, or a typed prompt never handing back to the panel.
+  it('renders from the panel direction until the director types their own, and links back in one tap', async () => {
+    const { ShotLockContext } = await import('./ShotLock.jsx');
+    const scene = { sceneId: 's1', panelId: 'p1', visualIntent: 'She laces her skates', referenceImageId: 'still.png', videoHistoryId: 'clip-1', startSec: 0, endSec: 4, takes: [] };
+    const onGenerateVideo = vi.fn();
+    const onSave = vi.fn();
+    const card = (shot) => (
+      <ShotLockContext.Provider value={{ locks: { s1: 'locked' }, clips: { s1: 'open' }, toggle: () => {}, busy: false }}>
+        <SceneCard scene={shot} index={0} expanded project={{ id: 'mv-example', scenes: [shot] }} onEditLocal={() => {}} onSave={onSave} onGenerateVideo={onGenerateVideo} falVideoSettings={{ backend: 'local' }} />
+      </ShotLockContext.Provider>
+    );
+    const { rerender } = render(card(scene));
+    const box = screen.getAllByLabelText('Shot prompt').find((el) => el.value);
+    expect(box.value).toBe('She laces her skates');
+    expect(screen.getByTestId('prompt-from-storyboard')).toBeTruthy();
+    // Blurring the panel's words keeps the shot linked rather than copying them.
+    fireEvent.blur(box);
+    expect(onSave).toHaveBeenLastCalledWith('s1', { prompt: '' });
+    fireEvent.click(screen.getByRole('button', { name: 'Render again' }));
+    expect(onGenerateVideo).toHaveBeenCalledWith(scene, { card: expect.objectContaining({ prompt: 'She laces her skates' }) });
+    rerender(card({ ...scene, prompt: 'She stands up' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Use storyboard direction' }));
+    expect(onSave).toHaveBeenLastCalledWith('s1', { prompt: '' });
+  });
+});
+
+describe('clip from the storyboard panel', () => {
+  // Uniquely catches the tap animating the sketch instead of rendering the shot's real still first.
+  it('renders the still first with the card lane to animate it, and keeps Still only one tap away', async () => {
+    const { ShotLockContext } = await import('./ShotLock.jsx');
+    const scene = { sceneId: 's1', prompt: 'She laces her skates', panelId: 'p1', panelArt: 'panel.png', startSec: 0, endSec: 4, takes: [] };
+    const onGenerateVideo = vi.fn();
+    const onGenerateFrame = vi.fn();
+    render(
+      <ShotLockContext.Provider value={{ locks: { s1: 'open' }, clips: { s1: 'open' }, toggle: () => {}, busy: false }}>
+        <SceneCard scene={scene} index={0} expanded project={{ id: 'mv-example', scenes: [scene] }} onEditLocal={() => {}} onSave={() => {}} onGenerateVideo={onGenerateVideo} onGenerateFrame={onGenerateFrame}
+          lipSyncBackend="grok" falVideoSettings={{ backend: 'grok' }} />
+      </ShotLockContext.Provider>,
+    );
+    expect(screen.queryByRole('button', { name: 'Render' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Clip from storyboard' }));
+    expect(onGenerateFrame).toHaveBeenLastCalledWith(scene, { thenClip: { backend: 'grok' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Still only' }));
+    expect(onGenerateFrame).toHaveBeenLastCalledWith(scene);
+    expect(onGenerateVideo).not.toHaveBeenCalled();
   });
 });
 
@@ -414,6 +473,7 @@ describe('start and end frames', () => {
     const onGenerateEndFrame = vi.fn();
     render(<SceneCard scene={scene} index={0} expanded onEditLocal={() => {}} onSave={() => {}} onGenerateFrame={onGenerateFrame} onGenerateEndFrame={onGenerateEndFrame}
       onPlacePoolItem={() => {}} falVideoSettings={{ backend: 'local' }} />);
+    show('Frames');
     const pair = screen.getByRole('group', { name: 'Start and end frames' });
     expect(within(pair).getByLabelText('Reference frame prompt')).toBeTruthy();
     expect(within(pair).getByLabelText('End frame prompt').value).toBe('Head thrown back');
@@ -435,6 +495,7 @@ describe('start and end frames', () => {
     expect(within(pair).getByRole('list', { name: /^End frame takes/ })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Clear scene 1 end frame' })).toBeTruthy();
 
+    show('Clip');
     expect(screen.getByTestId('end-frame-plan').textContent).toMatch(/animates from the start frame only/);
     const pick = screen.getByLabelText('Render on');
     expect(within(pick).getByRole('option', { name: /Kling v3 Pro.*ends on end frame/ })).toBeTruthy();
@@ -488,6 +549,26 @@ describe('frame fit for an off-shape clip', () => {
     fireEvent.change(pick, { target: { value: 'vhs' } });
     expect(onSave).toHaveBeenCalledWith('s1', { frameFit: 'vhs' });
     expect(onEditLocal).toHaveBeenCalledWith('s1', { frameFit: 'vhs' });
+  });
+});
+
+describe('low-res clip', () => {
+  // Uniquely catches a grok 480p clip (720x416) reaching the final render with
+  // no sign on the shot that it will be soft at 1080p (#14491).
+  it('flags a clip under 720p and stays quiet for a 720p one', () => {
+    const scene = { sceneId: 's1', prompt: 'Memory footage', referenceImageId: 'still.png', videoHistoryId: 'clip-1', startSec: 0, endSec: 4, takes: [] };
+    const { container } = render(<SceneCard scene={scene} index={0} expanded onEditLocal={vi.fn()} onSave={vi.fn()} />);
+    const video = container.querySelector('video');
+    const load = (width, height) => {
+      Object.defineProperty(video, 'duration', { value: 4, configurable: true });
+      Object.defineProperty(video, 'videoWidth', { value: width, configurable: true });
+      Object.defineProperty(video, 'videoHeight', { value: height, configurable: true });
+      fireEvent.loadedMetadata(video);
+    };
+    load(1280, 720);
+    expect(screen.queryByTestId('clip-low-res')).toBeNull();
+    load(720, 416);
+    expect(screen.getByTestId('clip-low-res').textContent).toContain('720×416, under 720p');
   });
 });
 
@@ -615,7 +696,7 @@ describe('clip playback and coverage', () => {
   });
 
   // Catches source trim losing its scene argument or becoming enabled during
-  // take/render work or a clip lock after the preview moves out of SceneCard.
+  // take/render work after the preview moves out of SceneCard.
   it('trims the source at the chosen frame and preserves every busy gate', async () => {
     const { ShotLockContext } = await import('./ShotLock.jsx');
     const onTrimClip = vi.fn();
@@ -635,7 +716,7 @@ describe('clip playback and coverage', () => {
     rerender(<ShotLockContext.Provider value={{ locks: { s1: 'locked' }, clips: { s1: 'locked' }, toggle: () => {}, busy: false }}>
       <SceneCard {...props} />
     </ShotLockContext.Provider>);
-    expect(screen.getByRole('button', { name: 'Next frame' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Next frame' })).toBeEnabled();
   });
 });
 
@@ -842,14 +923,14 @@ describe('clip speed and offset by hand', () => {
     expect(speed.value).toBe('2');
   });
 
-  it('is off while the video is locked', async () => {
+  it('remains editable for a video with a legacy lock', async () => {
     const { ShotLockContext } = await import('./ShotLock.jsx');
     render(
       <ShotLockContext.Provider value={{ locks: { s1: 'locked' }, clips: { s1: 'locked' }, toggle: () => {}, busy: false }}>
         <SceneCard scene={{ sceneId: 's1', videoHistoryId: 'clip-1', startSec: 0, endSec: 4, speedFps: 2, takes: [] }} index={0} expanded onEditLocal={() => {}} onSave={() => {}} />
       </ShotLockContext.Provider>,
     );
-    expect(screen.getByRole('button', { name: 'Play the clip one fps faster' }).disabled).toBe(true);
+    expect(screen.getByRole('button', { name: 'Play the clip one fps faster' }).disabled).toBe(false);
     expect(screen.getByLabelText('Speed').value).toBe('2');
   });
 });
@@ -947,5 +1028,27 @@ describe('shot timing in frames', () => {
     expect(screen.getByText(/1\.88s · .* · fr 1206–1251/)).toBeTruthy();
     expect(screen.getByText('fr 1206')).toBeTruthy();
     expect(screen.getByText('fr 1251')).toBeTruthy();
+  });
+});
+
+describe('shot editor groups', () => {
+  // Uniquely catches a group header not saying what is set, or the cold open's Sound group showing on a shot in the song.
+  it('names what each group sets and offers Sound only before the song', async () => {
+    // On a phone the groups start closed, each header naming what it sets.
+    vi.spyOn(window, 'matchMedia').mockReturnValue({ matches: false });
+    const props = { index: 0, expanded: true, onEditLocal: () => {}, onSave: () => {} };
+    const header = (testId) => screen.getByTestId(testId).querySelector('button').textContent;
+    const { unmount } = render(<SceneCard {...props} scene={{ sceneId: 's1', preMusic: { durationSec: 3 }, takes: [], transitionOut: 'vhs-tracking' }} />);
+    await act(async () => {});
+    expect(header('shot-group-timing')).toMatch(/before the song · 3\.00s/);
+    expect(header('shot-group-sound')).toMatch(/silen/i);
+    expect(header('shot-group-effects')).not.toMatch(/none/);
+    expect(header('shot-group-type')).toMatch(/Cutaway/);
+    unmount();
+    render(<SceneCard {...props} scene={{ sceneId: 's2', startSec: 1, endSec: 3, takes: [] }} />);
+    expect(header('shot-group-timing')).toMatch(/1\.00–3\.00s/);
+    expect(screen.queryByTestId('shot-group-sound')).toBeNull();
+    expect(header('shot-group-effects')).toMatch(/none/);
+    window.matchMedia.mockRestore();
   });
 });

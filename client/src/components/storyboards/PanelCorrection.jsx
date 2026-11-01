@@ -74,10 +74,10 @@ export default function PanelCorrection({ take, onCorrect, onClose }) {
             <span className="mx-auto block h-5 w-5 rounded-full" style={{ backgroundColor: swatch }} />
           </button>
         ))}
-        <button type="button" className={`${toolButton} ${mode === 'draw' ? 'text-white' : ''}`} aria-label="Pen" aria-pressed={mode === 'draw'} onClick={() => setMode('draw')}>
+        <button type="button" className={`pointer-coarse:min-h-11 pointer-coarse:min-w-11 ${toolButton} ${mode === 'draw' ? 'text-white' : ''}`} aria-label="Pen" aria-pressed={mode === 'draw'} onClick={() => setMode('draw')}>
           <Pencil size={16} aria-hidden="true" />
         </button>
-        <button type="button" className={`${toolButton} ${mode === 'erase' ? 'border-port-accent text-white' : ''}`} aria-label="Eraser" aria-pressed={mode === 'erase'} onClick={() => setMode('erase')}>
+        <button type="button" className={`pointer-coarse:min-h-11 pointer-coarse:min-w-11 ${toolButton} ${mode === 'erase' ? 'border-port-accent text-white' : ''}`} aria-label="Eraser" aria-pressed={mode === 'erase'} onClick={() => setMode('erase')}>
           <Eraser size={16} aria-hidden="true" />
         </button>
         <button type="button" className={toolButton} aria-label="Undo" onClick={() => editStrokes((prev) => undoStrokes(prev))} disabled={!strokes.length}>

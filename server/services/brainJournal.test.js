@@ -443,7 +443,6 @@ describe('brainJournal', () => {
       // three entries and fails on the sequencing it is meant to prove.
       const deadline = Date.now() + 5000;
       while (callOrder.length < 4 && Date.now() < deadline) {
-        // eslint-disable-next-line no-await-in-loop
         await new Promise((r) => setTimeout(r, 5));
       }
 

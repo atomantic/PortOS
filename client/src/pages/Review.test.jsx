@@ -177,6 +177,20 @@ const githubQueue = (notification = GITHUB_NOTIFICATION) => ({
   }], sources: { github: { label: 'GitHub alerts', total: 1 } }, partial: false,
 });
 
+it('opens a software update action in the existing guarded updater', async () => {
+  routerState.actionId = 'updates:node';
+  api.getReviewQueue.mockResolvedValueOnce({ partial: false, sources: {}, items: [{
+    id: 'updates:node', source: 'updates', sourceLabel: 'Software updates', required: true,
+    title: 'Node.js security update needed', summary: 'Running v26.0.0; target v26.13.0. Restart required.',
+    severity: 'high', operations: [], drillTo: '/apps/portos-default/update', drillLabel: 'Open PortOS update',
+    triageOperations: [{ id: 'snooze', label: 'Snooze', available: true }],
+  }] });
+  render(<Review />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Open PortOS update' }));
+  expect(routerState.navigate).toHaveBeenCalledWith('/apps/portos-default/update');
+  expect(api.resolveReviewQueueItem).not.toHaveBeenCalled();
+});
+
 describe('GitHub alerts in central Actions', () => {
   beforeEach(() => api.getReviewQueue.mockReset().mockResolvedValue({ items: [], sources: {}, partial: false }));
   afterEach(() => api.getReviewQueue.mockReset().mockResolvedValue({ items: [], sources: {}, partial: false }));

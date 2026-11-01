@@ -373,6 +373,10 @@ const CODE_VIDEO_RULES = `RUNTIME CONTRACT (the host already supplies this — w
 const MUSIC_VIDEO_DIRECTION = DIRECTION
   .replace("where it gives none, time the beats yourself: establish → develop → climax → resolve", "use the supplied section, beat, downbeat and lyric-word times; choose authored action spans within them without inventing analyzed events")
   .replace("- Endings: the player loops the film — when the brief ends by returning to its opening, match the final frame's framing, lighting, and motion to t=0 so the cut back feels intentional.", "- Endings: resolve the authored action at the supplied song ending; match the opening only when the approved brief requests a loop.");
+// Music-video authoring runs tool-free, so a model that "builds" its answer in files
+// emits tool-call markup instead of the JSON and burns the whole timeout (two
+// back-to-back 13–15 min runs with no usable section).
+const REPLY_ONLY = 'Answer in this reply alone: do not write, save, run or test files and do not emit tool calls; nothing outside this reply is read.';
 const MUSIC_VIDEO_SELF_REVIEW = SELF_REVIEW
   .replace("step through renderFrame at every beat's key frame", 'step through render(ctx, env) on the host timeline at every supplied anchor and action key frame')
   .replace('empty or static stretches', 'unmotivated empty or static stretches');
@@ -438,7 +442,7 @@ export function buildMusicVideoCodePrompt({ title = '', palette, song, styleLine
     `SECTIONS:\n${brief}`,
     scope,
     MUSIC_VIDEO_SELF_REVIEW,
-    'OUTPUT: Return ONLY a ```json fence of the form {"sections":[{"id":"...","source":"function render(ctx, env) { ... }"}]}. No HTML document, no explanation.',
+    'OUTPUT: Return ONLY a ```json fence of the form {"sections":[{"id":"...","source":"function render(ctx, env) { ... }"}]}. No HTML document, no explanation. ' + REPLY_ONLY,
   ].filter(Boolean).join('\n\n');
 }
 
@@ -495,6 +499,6 @@ export function buildMixedMediaDocumentPrompt({ title, song, palette, treatment,
     `SECTIONS TO AUTHOR:\n${JSON.stringify(sections)}`,
     onlySectionId ? `Revise only section ${JSON.stringify(onlySectionId)}. Preserve the shared style contract and other sections.` : 'Return one function for each listed section id. Describe a specific visual action for each scene and a distinct entry/exit transition in its function.',
     MUSIC_VIDEO_SELF_REVIEW,
-    'OUTPUT: Return ONLY a ```json fence of the form {"sections":[{"id":"...","source":"function render(ctx, env) { ... }"}]}. No HTML, no assets, no explanation.',
+    'OUTPUT: Return ONLY a ```json fence of the form {"sections":[{"id":"...","source":"function render(ctx, env) { ... }"}]}. No HTML, no assets, no explanation. ' + REPLY_ONLY,
   ].filter(Boolean).join('\n\n');
 }

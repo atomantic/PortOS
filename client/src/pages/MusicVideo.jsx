@@ -68,7 +68,6 @@ import CreateProjectDrawer from '../components/musicVideo/CreateProjectDrawer.js
 import AutonomousStartDrawer from '../components/musicVideo/AutonomousStartDrawer.jsx';
 import { automationDraftFrom, automationFromDraft } from '../lib/musicVideoAutomation.js';
 import { listUniverseNames } from '../services/apiUniverseBuilder.js';
-import { ShotLockContext } from '../components/musicVideo/ShotLock.jsx';
 import MusicVideoLayout, { MUSIC_VIDEO_PAGE_ID, MUSIC_VIDEO_SCROLL_ID } from '../components/musicVideo/MusicVideoLayout.jsx';
 import ProjectManageActions from '../components/musicVideo/ProjectManageActions.jsx';
 import ProjectSettingsDrawer, { SETTINGS_TAB_IDS } from '../components/musicVideo/ProjectSettingsDrawer.jsx';
@@ -97,7 +96,6 @@ import GalleryVideoPicker from '../components/videoGen/GalleryVideoPicker.jsx';
 import { autoArrangeScenes } from '../lib/beatGrid.js';
 import { isLtx2FamilyRuntime } from '../lib/runnerFamilies';
 import { videoPosterForJob } from '../lib/creativeDirectorPreview.js';
-import { unlockedShots } from '../lib/musicVideoSceneAttention.js';
 import { sceneTakeList } from '../lib/musicVideoTakes.js';
 import { pluralize } from '../lib/textUtils.js';
 import { formatCount, formatTimecode } from '../utils/formatters.js';
@@ -135,8 +133,8 @@ function autopilotBlocker(project) {
 const EMPTY_PRODUCTION_DRAFT = { cast: '', environments: '', visualLanguage: '', motionLanguage: '', guideArtifactId: null,
   lyricsMode: 'vocal', timingStatus: 'provisional', timingNotes: '', storyboard: [] };
 // The step each production approval closes (#10151); it sits at the bottom of that step.
-// Shots closes with Lock all stills (the storyboard approval); once the stills are locked, a
-// production run parked on its pilot shows its optional animated proof there instead.
+// Once the storyboard is approved, a production run parked on its pilot shows
+// its optional animated proof there instead.
 const APPROVAL_STAGE_BY_TAB = { 'cast-sets': 'art', produce: 'storyboard' };
 const approvalStageFor = (tab, project, readiness, proofActive) => (tab === 'produce' && readiness?.storyboard?.approved
   ? (proofReviewInUse(project, readiness, { proofActive }) ? 'proof' : null)
@@ -786,13 +784,6 @@ function ProjectWorkspace({
   const [importingLyrics, setImportingLyrics] = useState(false);
 
   const productionReview = useMusicVideoProductionReview({ project: selected, replaceProject });
-  const shotLocks = productionReview.readiness?.storyboard?.shotLocks;
-  const shotLockValue = shotLocks
-    ? { locks: shotLocks, clips: productionReview.readiness.storyboard.clipLocks || null,
-      unlocked: unlockedShots(productionReview.readiness),
-      toggle: (sceneId, lock, stage) => productionReview.lockShots([sceneId], lock, stage),
-      lockAll: productionReview.lockAll, busy: productionReview.busy }
-    : null;
   // Publish counts every platform the director turned on (#9287), not just any one post.
   const publish = {
     targets: PUBLISH_TARGETS.filter((entry) => publishing.enabledTargets?.includes(entry.target)),
@@ -1067,14 +1058,8 @@ function ProjectWorkspace({
 
   // A render refused for clips made from since-changed frames: render each shot's clip
   // again from its current frames and the video settings, as Render on its card would.
-  // Like the card's Render, a shot whose still isn't locked yet is refused by name.
   const renderClips = (sceneIds) => {
-    const timed = (selected?.scenes || []).filter((scene) => Number.isFinite(scene.startSec)).sort((a, b) => a.startSec - b.startSec);
-    const shotName = (scene) => `Shot ${timed.indexOf(scene) + 1}`;
-    const requested = (selected?.scenes || []).filter((scene) => sceneIds.includes(scene.sceneId));
-    const unlocked = shotLocks ? requested.filter((scene) => shotLocks[scene.sceneId] !== 'locked') : [];
-    if (unlocked.length) toast.error(`${unlocked.map(shotName).join(', ')}: lock the still first, then render the new clip`);
-    const scenes = requested.filter((scene) => !unlocked.includes(scene));
+    const scenes = (selected?.scenes || []).filter((scene) => sceneIds.includes(scene.sceneId));
     if (!scenes.length) return Promise.resolve();
     return Promise.all(scenes.map((scene) => sceneMedia.generateSceneVideo(scene))).then((results) => {
       const started = results.filter((result) => result?.ok).length;
@@ -1134,6 +1119,8 @@ function ProjectWorkspace({
       .then(() => updateMusicVideoProject(projectId, patch, { silent: true }))
       .then((saved) => {
         if (applyComposition) patchProject(projectId, { composition: saved.composition });
+        // The server moves markers with their cues when lines are removed or merged.
+        if (patch.lyricCues) patchProject(projectId, { lyricMarkers: saved.lyricMarkers });
       })
       .catch((err) => toast.error(err?.message || 'Failed to save changes'))
       .finally(() => setCompositionSavePending((count) => count - 1));
@@ -1144,7 +1131,7 @@ function ProjectWorkspace({
     setImportingLyrics(true);
     importMusicVideoLyrics(projectId, body, { silent: true })
       .then(({ project, imported, format }) => {
-        patchProject(projectId, { lyricCues: project.lyricCues, updatedAt: project.updatedAt });
+        patchProject(projectId, { lyricCues: project.lyricCues, lyricMarkers: project.lyricMarkers, updatedAt: project.updatedAt });
         onDone?.();
         toast.success(`Imported ${imported} lyric line${imported === 1 ? '' : 's'} (${format})`);
         prepareSong(projectId);
@@ -1743,7 +1730,6 @@ function ProjectWorkspace({
               />
             )}
           />
-          <ShotLockContext.Provider value={shotLockValue}>
           <MusicVideoLayout
             project={selected}
             trackLabel={trackName(selected.trackId)}
@@ -1821,7 +1807,6 @@ function ProjectWorkspace({
             {storyVisited.current && <div hidden={activeStage !== 'story'}><StoryStage board={board} active={activeStage === 'story'} /></div>}
             {activeStage !== 'story' && <StageView board={board} />}
           </MusicVideoLayout>
-          </ShotLockContext.Provider>
     </>
   );
 }

@@ -347,7 +347,7 @@ export async function extractChatgptZip(zipPath, { assetDir = PATHS.brainImportA
       // change there can't reintroduce a traversal.
       if (!isTopLevelEntryName(fileName)) {
         console.warn(UNSAFE_MEMBER_WARNING);
-        // eslint-disable-next-line no-await-in-loop -- same sequential loop
+        // same sequential loop
         await unlinkGuarded(tempPath).catch(() => {});
         continue;
       }
@@ -357,10 +357,10 @@ export async function extractChatgptZip(zipPath, { assetDir = PATHS.brainImportA
       // successful import — keep it rather than overwriting, and mark
       // `created: false` so a later failure in THIS run's cleanup path never
       // deletes a file THIS run didn't write.
-      // eslint-disable-next-line no-await-in-loop -- same sequential loop
+      // same sequential loop
       const alreadyExists = await lstat(filePath).then(() => true, () => false);
       if (alreadyExists) {
-        // eslint-disable-next-line no-await-in-loop -- same sequential loop
+        // same sequential loop
         await unlinkGuarded(tempPath).catch(() => {});
         assets.set(assetId, {
           url: `/data/brain-imports/${fileName}`,
@@ -371,7 +371,7 @@ export async function extractChatgptZip(zipPath, { assetDir = PATHS.brainImportA
         });
         continue;
       }
-      // eslint-disable-next-line no-await-in-loop -- sequential rename keeps peak
+      // sequential rename keeps peak
       // disk/IO bounded; an export has a few hundred assets, not millions.
       await rename(tempPath, filePath);
       assets.set(assetId, {

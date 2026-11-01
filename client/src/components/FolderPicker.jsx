@@ -99,7 +99,7 @@ export default function FolderPicker({ value, onChange, defaultPath, mode = 'dir
       <button
         type="button"
         onClick={() => setIsOpen(true)}
-        className="px-3 py-3 bg-port-border hover:bg-port-border/80 text-white rounded-lg transition-colors"
+        className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 px-3 py-3 bg-port-border hover:bg-port-border/80 text-white rounded-lg transition-colors"
         title={ariaLabel}
         aria-label={ariaLabel}
       >

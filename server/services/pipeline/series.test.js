@@ -137,6 +137,21 @@ describe('pipeline series service', () => {
     expect(s.objects).toBeUndefined();
   });
 
+  it('announces a created or inserted series to open sidebars without a federation push', async () => {
+    const invalidated = [];
+    const updated = [];
+    const onInvalidated = ({ recordKind, recordId }) => invalidated.push(`${recordKind}:${recordId}`);
+    const onUpdated = ({ recordKind }) => updated.push(recordKind);
+    recordEvents.on('invalidated', onInvalidated);
+    recordEvents.on('updated', onUpdated);
+    const created = await svc.createSeries({ name: 'Fresh Series' });
+    const inserted = await svc.insertSeriesWithId({ id: 'ser-00000000-0000-4000-8000-000000000001', name: 'Imported Series' });
+    recordEvents.off('invalidated', onInvalidated);
+    recordEvents.off('updated', onUpdated);
+    expect(invalidated).toEqual([`series:${created.id}`, `series:${inserted.id}`]);
+    expect(updated).toEqual([]);
+  });
+
   it('createSeries stores an author byline + authorId FK; defaults authorId to null', async () => {
     const s = await svc.createSeries({ name: 'Salt Run', author: 'Jane Doe', authorId: 'auth-1' });
     expect(s.author).toBe('Jane Doe');

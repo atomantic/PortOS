@@ -20,7 +20,7 @@ import {
   pickAlignmentPath,
   findSilentWords,
 } from './lyricAlignCore.js';
-import { relabelAnalysisSections } from './lyricMarkers.js';
+import { relabelAnalysisSections } from '../../lib/lyricMarkers.js';
 
 async function decodeSourceToWav(sourcePath) {
   const ffmpeg = await findFfmpeg();

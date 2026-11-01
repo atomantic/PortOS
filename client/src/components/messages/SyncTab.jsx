@@ -207,7 +207,7 @@ export default function SyncTab({ accounts, onRefresh }) {
                     }}
                     aria-label="Edit selectors"
                     disabled={selectorsState !== 'ready'}
-                    className="text-xs text-gray-400 hover:text-white transition-colors disabled:opacity-50"
+                    className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 text-xs text-gray-400 hover:text-white transition-colors disabled:opacity-50"
                   >
                     <Settings size={14} />
                   </button>

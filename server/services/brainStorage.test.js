@@ -9,7 +9,7 @@ import { makePathsProxy } from '../lib/mockPathsDataRoot.js';
 // test assignment would run, so the dataRoot getter must self-initialize.
 // `var` + a function declaration are both hoisted (no TDZ), so they're safe to
 // reference from the hoisted vi.mock factory / import side-effects.
-var tempRoot; // eslint-disable-line no-var
+var tempRoot;
 function getTempRoot() {
   if (!tempRoot) tempRoot = mkdtempSync(join(tmpdir(), 'brainstorage-test-'));
   return tempRoot;

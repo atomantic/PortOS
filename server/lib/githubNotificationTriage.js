@@ -48,8 +48,8 @@ export const notificationAgentAccountBinding = (account, origin = 'user') => ({
 export const TRIAGE_RULES_VERSION = 9;
 
 // Open threads with nothing left for you: closed or merged, folded into a
-// newer CI notice, or owned by a PR workflow. They stay in the inbox (it
-// mirrors GitHub's) until marked done, which the inbox can do in one tap.
+// newer CI notice, or owned by a PR workflow. Every sync that may act marks
+// them done (Observe included), and the review hub never lists them.
 export const FINISHED_DECISIONS = Object.freeze(['handled-by-pr-workflow', 'duplicate', 'suggest-mark-read']);
 
 const NEW_ACCOUNT_DAYS = 30;

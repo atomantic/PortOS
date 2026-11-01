@@ -19,12 +19,8 @@ import {
 } from './eventScheduler.js';
 import { cosEvents } from './cosEvents.js';
 
-// eventScheduler.js's "UTC" branch (the default, and what every consumer below
-// uses unless it passes an explicit IANA timezone) reads local Date methods
-// (getMonth/getDate/getDay/getHours/getMinutes), not getUTC*. Production always
-// runs under PM2 with TZ=UTC (see ecosystem.config.cjs), which makes that local
-// time UTC. Pin the same env here so cron matches are deterministic regardless
-// of the machine running the tests.
+// Production runs under PM2 with TZ=UTC (ecosystem.config.cjs); pin the same
+// env here. The "UTC cron on a non-UTC host" case below overrides it.
 let originalTZ;
 beforeAll(() => {
   originalTZ = process.env.TZ;
@@ -104,6 +100,17 @@ describe('parseCronToNextRun', () => {
   it('finds the next matching minute later the same day', () => {
     const next = parseCronToNextRun('5 0 * * *', FIXED_NOW);
     expect(next.toISOString()).toBe('2024-01-01T00:05:00.000Z');
+  });
+
+  it('matches a UTC cron against UTC fields when the host runs a non-UTC TZ (#14461)', () => {
+    process.env.TZ = 'America/Los_Angeles';
+    try {
+      expect(parseCronToNextRun('0 9 * * 1', FIXED_NOW, 'UTC').toISOString()).toBe('2024-01-01T09:00:00.000Z');
+      expect(parseCronToPrevRun('0 9 * * 1', new Date('2024-01-01T12:00:00.000Z'), 'UTC').toISOString())
+        .toBe('2024-01-01T09:00:00.000Z');
+    } finally {
+      process.env.TZ = 'UTC';
+    }
   });
 
   it('throws for a malformed field count', () => {

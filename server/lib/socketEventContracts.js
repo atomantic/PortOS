@@ -544,6 +544,21 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
     summary: 'A creative commission changed after persistence.',
     payloadSchema: { type: 'object', required: ['id'], properties: { id: { type: 'string' } }, additionalProperties: false },
   }),
+  'pipeline-series:changed': Object.freeze({
+    direction: 'server-to-client',
+    summary: 'A pipeline series was created, changed or deleted after persistence; refetch the names list or the referenced series.',
+    payloadSchema: { type: 'object', required: ['id'], properties: { id: { type: 'string' } }, additionalProperties: false },
+  }),
+  'universe:changed': Object.freeze({
+    direction: 'server-to-client',
+    summary: 'A universe was created, changed or deleted after persistence; refetch the names list or the referenced universe.',
+    payloadSchema: { type: 'object', required: ['id'], properties: { id: { type: 'string' } }, additionalProperties: false },
+  }),
+  'music-video:project:changed': Object.freeze({
+    direction: 'server-to-client',
+    summary: 'A music video project was created, changed or deleted after persistence; refetch the names list or the referenced project.',
+    payloadSchema: { type: 'object', required: ['id'], properties: { id: { type: 'string' } }, additionalProperties: false },
+  }),
   'fableloom:export:job': Object.freeze({
     direction: 'server-to-client',
     summary: 'Persisted export job snapshot scoped to its loom and job identifier.',

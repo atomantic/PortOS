@@ -109,6 +109,11 @@ import {
   ensureGrokTuiArgs,
   ensureGrokHeadlessArgs,
   prepareGrokPromptFile,
+  withGrokCodeReviewOutput,
+  GROK_STREAMING_JSON_FORMAT,
+  GROK_NO_TOOL_ARGS,
+  grokServiceTierModel,
+  grokSpeedArgsConflict,
 } from './grok.js';
 import { isKimiCommand, ensureKimiTuiArgs, ensureKimiHeadlessArgs, prepareKimiPrompt } from './kimi.js';
 import {
@@ -259,10 +264,10 @@ function claudeToolFreeArgs(args) {
   return [...cleared, ...CLAUDE_TOOL_FREE_ARGS];
 }
 
-// Grok's read-only permission mode plus an empty built-in tool allowlist — the
-// same pair its no-tool public-review recipe enforces.
+// Grok's read-only permission mode with every built-in tool removed — the same
+// posture its no-tool public-review recipe enforces (#14476).
 function grokToolFreeArgs(args) {
-  return [...dropOptions(args, ['--permission-mode', '--tools']), '--permission-mode', 'plan', '--tools', ''];
+  return [...dropOptions(args, ['--permission-mode', '--tools', '--disallowed-tools']), ...GROK_NO_TOOL_ARGS];
 }
 
 // Pi: `--no-builtin-tools` alone leaves extension tools enabled, so extensions
@@ -419,14 +424,15 @@ function antigravityPublicReviewArgs(provider, { effectiveModel, effort } = {}, 
 }
 
 // Grok exposes both halves of the contract as first-class flags:
-// `--permission-mode plan` is its read-only mode, `--tools ''` empties the
-// built-in tool allowlist, and `--sandbox <profile>` applies its own
+// `--permission-mode plan` is its read-only mode, `--disallowed-tools` removes
+// every built-in tool (an empty `--tools ''` removes none, #14476), and
+// `--sandbox <profile>` applies its own
 // filesystem/network sandbox (`workspace` is grok's built-in profile). The
 // safety flags are seeded as the BASE args so `ensureGrokHeadlessArgs` sees a
 // permission posture already pinned and does not append its usual
 // `--permission-mode bypassPermissions`.
 function grokPublicReviewSpawnArgs(provider, ctx) {
-  return grokPublicReviewArgs(provider, ctx, ['--permission-mode', 'plan', '--tools', '']);
+  return grokPublicReviewArgs(provider, ctx, GROK_NO_TOOL_ARGS);
 }
 
 function grokPublicReviewActionsSpawnArgs(provider, ctx) {
@@ -434,12 +440,14 @@ function grokPublicReviewActionsSpawnArgs(provider, ctx) {
 }
 
 function grokPublicReviewArgs(provider, { effectiveModel, effort } = {}, postureArgs) {
-  const args = ensureGrokHeadlessArgs([
+  const base = [
     ...postureArgs,
     '--no-subagents',
     '--disable-web-search',
-  ], effectiveModel);
-  args.push(...buildEffortArgs(effort, provider, args, effectiveModel));
+  ];
+  const tiered = grokExecutionModel(effectiveModel, provider, base);
+  const args = ensureGrokHeadlessArgs(base, tiered);
+  args.push(...buildEffortArgs(effort, provider, args, grokEffortModel(provider, effectiveModel)));
   // `ensureGrokHeadlessArgs` appends the GROK_STDIN_PROMPT_PATH prompt-file
   // sentinel that `prepareGrokPromptFile` rewrites on Windows; keep it present.
   return { command: provider?.command || 'grok', args, stdinMode: 'prompt' };
@@ -692,8 +700,34 @@ const OPENCHAMBER = {
 
 // ─── grok ───────────────────────────────────────────────────────────────────
 
-function grokCliArgs(baseArgs, { model, toolFree }) {
-  return ensureGrokHeadlessArgs(baseArgs, model, { toolFree });
+/**
+ * `--model` value for an explicit Grok speed. Unset speed returns `model`
+ * unchanged, so a flat fast id still launches until the user picks Standard
+ * or Fast. Grok Build CLI 1.0.70 takes the tier as `name[fast=true|false]`,
+ * not a `--fast` flag and not Codex `service_tier`.
+ */
+function grokExecutionModel(model, provider, baseArgs) {
+  const tier = provider?.executionOptions?.serviceTier;
+  if (!tier) return model;
+  if (grokSpeedArgsConflict(baseArgs)) {
+    throw executionOptionsError('Execution speed conflicts with provider args; remove the baked model pin');
+  }
+  const pinned = grokServiceTierModel(model, tier, provider?.executionOptionSupport?.modelBase);
+  if (!pinned) throw executionOptionsError('Choose an explicit model before changing Grok speed');
+  return pinned;
+}
+
+/** Effort ladders stay keyed on the catalog id, not the `[fast=]` argv value. */
+function grokEffortModel(provider, model) {
+  return provider?.executionOptionSupport?.modelBase || model;
+}
+
+function grokCliArgs(baseArgs, { model, toolFree, provider }) {
+  return ensureGrokHeadlessArgs(baseArgs, grokExecutionModel(model, provider, baseArgs), { toolFree });
+}
+
+function grokCodeReviewSpawnConfig(config) {
+  return { ...config, args: withGrokCodeReviewOutput(config.args), streamFormat: GROK_STREAMING_JSON_FORMAT };
 }
 
 const GROK = {
@@ -706,6 +740,10 @@ const GROK = {
   cliArgs: grokCliArgs,
   spawnArgs: defaultSpawnArgs(grokCliArgs, 'grok'),
   toolFreeOneShot: { matchCommand: isGrokCommand, toolFreeArgs: grokToolFreeArgs },
+  // The code reviewer parses a strict JSON envelope from the reply, so it needs
+  // grok's final message alone, not plain output's gluing of pre-tool narration
+  // onto it (#14391). Pipeline public-review stages keep plain text.
+  codeReviewSpawnConfig: grokCodeReviewSpawnConfig,
   publicReview: {
     [PUBLIC_REVIEW_NO_TOOL_POSTURE]: {
       spawnArgs: grokPublicReviewSpawnArgs,
@@ -1402,8 +1440,10 @@ function readOnlyReviewRecipe(provider) {
  * mode and the caller must fall back to its ordinary argv.
  */
 export function buildCodeReviewSpawnConfig(provider, ctx) {
-  if (supportsPublicReviewProvider(provider)) return buildVendorSpawnConfig(provider, ctx);
-  return readOnlyReviewRecipe(provider)?.spawnArgs(provider, ctx) || null;
+  if (!supportsPublicReviewProvider(provider)) return readOnlyReviewRecipe(provider)?.spawnArgs(provider, ctx) || null;
+  const config = buildVendorSpawnConfig(provider, ctx);
+  const reshape = PROVIDER_VENDORS.find((vendor) => vendor.codeReviewSpawnConfig && matchesProvider(vendor, provider))?.codeReviewSpawnConfig;
+  return reshape ? reshape(config) : config;
 }
 
 /** Whether a provider can run the sandboxed final public-review stage. */
@@ -1463,6 +1503,12 @@ export function injectTuiModelAndEffort(command, baseArgs, provider, model, effo
       resolveCliEffort(effort, { id: provider?.id, command })
     );
     return (cursorModel && !hasModelFlag(baseArgs)) ? [...baseArgs, '--model', cursorModel] : baseArgs;
+  }
+  if (isGrokCommand(command)) {
+    const effectiveModel = resolveCliModel(model);
+    const tiered = grokExecutionModel(effectiveModel, provider, baseArgs);
+    const withModel = tiered && !hasModelFlag(baseArgs) ? [...baseArgs, '--model', tiered] : baseArgs;
+    return [...withModel, ...buildEffortArgs(effort, { id: provider?.id, command }, withModel, grokEffortModel(provider, effectiveModel))];
   }
   const effectiveModel = resolveCliModel(model);
   const shouldInject = !!effectiveModel && !hasModelFlag(baseArgs);

@@ -40,8 +40,8 @@ router.get('/enrich/progress', asyncHandler(async (req, res) => {
  * Get next question for a category
  */
 router.post('/enrich/question', asyncHandler(async (req, res) => {
-  const { category, providerOverride, modelOverride, skipIndices } = validateRequest(enrichmentQuestionInputSchema, req.body);
-  const question = await digitalTwinService.generateEnrichmentQuestion(category, providerOverride, modelOverride, skipIndices);
+  const { category, providerOverride, modelOverride, skipIndices, structuredOnly } = validateRequest(enrichmentQuestionInputSchema, req.body);
+  const question = await digitalTwinService.generateEnrichmentQuestion(category, providerOverride, modelOverride, skipIndices, { structuredOnly });
   res.json(question);
 }));
 

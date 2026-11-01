@@ -52,22 +52,12 @@ const store = new Map();
 const storeFault = { failOnList: false, failWrites: false };
 let writeTail = Promise.resolve();
 const clone = (v) => JSON.parse(JSON.stringify(v));
-const mutateMock = (id, transform, options = {}) => {
+const mutateMock = (id, transform) => {
   const run = writeTail.then(async () => {
     if (!store.has(id)) throw Object.assign(new Error('Project not found'), { status: 404 });
     if (storeFault.failWrites) throw new Error('store write failed');
     const current = clone(store.get(id));
     const out = transform(current);
-    if (options?.source) {
-      const { preserveAutomatedShotLocks } = await import('./productionReview.js');
-      const guarded = preserveAutomatedShotLocks(current, out.project, options.source);
-      out.project = guarded.project;
-      if (guarded.rejected) {
-        out.rejected = true;
-        if (out.scenes) out.scenes = guarded.project.scenes;
-        if (out.scene) out.scene = guarded.project.scenes.find(scene => scene.sceneId === out.scene?.sceneId) || null;
-      }
-    }
     store.set(id, clone(out.project));
     return out;
   });
@@ -179,6 +169,8 @@ async function completeJobThroughHook(jobId) {
     kind: job.kind === 'image' ? (job.params?.musicVideo?.slot === 'end' ? 'endImage' : 'image') : 'video',
     assetId: job.kind === 'image' ? `${jobId}.png` : jobId,
     source: 'generated',
+    ...(job.params.musicVideo.replaceSelection ? { replaceSelection: true, expectedSelection: job.params.musicVideo.expectedSelection } : {}),
+    ...(job.params.musicVideo.stillRepairAt ? { stillRepairAt: job.params.musicVideo.stillRepairAt } : {}),
   }]);
   mediaJobEvents.emit('completed', job);
   musicVideoEvents.emit(job.kind === 'image' ? 'scene-image' : 'scene-video', { projectId: 'mv-example', sceneId });
@@ -344,6 +336,63 @@ describe('music video production run (#9066)', () => {
     expect(theRun()).toMatchObject({ status: 'running', stopBefore: null });
     expect(dispatch.mock.calls.slice(2).every(([a]) => a.stepKind === 'clip')).toBe(true);
     expect(dispatch.mock.calls.length).toBeGreaterThan(2);
+  });
+
+  it.each([false, true])('keeps the selected frame while its repair runs (changed during render: %s)', async (changed) => {
+    seedProject({ scenes: [
+      { sceneId: 'mvs-a', label: 'A', framePrompt: 'a lighthouse', prompt: 'waves roll', startSec: 0, endSec: 4, referenceImageId: 'old.png', takes: [{ takeId: 'old-take', kind: 'image', assetId: 'old.png', status: 'candidate' }] },
+      { sceneId: 'mvs-b', label: 'B', framePrompt: 'a harbor', prompt: 'boats sway', startSec: 4, endSec: 8, referenceImageId: 'other.png', takes: [] },
+    ] });
+    await start({ pool: POOL.filter((route) => route.kind === 'image'), stopBefore: 'clips' });
+    expect(theRun().status).toBe('awaiting-video');
+    store.get('mv-example').scenes[0].stillFixes = { text: 'Correct the sky', at: 'repair-1', pending: true, replaces: 'old.png' };
+    await service.resumeProduction('mv-example', theRun().id, { stopBefore: 'clips' });
+    await settle();
+    const job = jobs[0];
+    expect(job.params.musicVideo).toMatchObject({ replaceSelection: true, expectedSelection: 'old.png', stillRepairAt: 'repair-1' });
+    expect(current().scenes[0].referenceImageId).toBe('old.png');
+    if (changed) store.get('mv-example').scenes[0].referenceImageId = 'director-choice.png';
+    await completeJobThroughHook(job.id);
+    await settle();
+    const scene = current().scenes[0];
+    expect(scene.referenceImageId).toBe(changed ? 'director-choice.png' : `${job.id}.png`);
+    expect(scene.takes).toEqual(expect.arrayContaining([expect.objectContaining({ assetId: `${job.id}.png` })]));
+    expect(scene.takes).toEqual(expect.arrayContaining([expect.objectContaining({ assetId: 'old.png' })]));
+    expect(scene.stillFixes).not.toHaveProperty('pending');
+    expect(jobs).toHaveLength(1);
+  });
+
+  it('does not submit a still repair after the selected frame changes', async () => {
+    seedProject({ scenes: [{ sceneId: 'mvs-a', label: 'A', framePrompt: 'a lighthouse', prompt: 'waves roll',
+      startSec: 0, endSec: 8, referenceImageId: 'old.png', takes: [] }] });
+    await start({ pool: POOL.filter((route) => route.kind === 'image'), stopBefore: 'clips' });
+    store.get('mv-example').scenes[0].stillFixes = { text: 'Correct the sky', at: 'repair-1', pending: true, replaces: 'old.png' };
+    dispatch.mockImplementation(async ({ tag }) => {
+      store.get('mv-example').scenes[0].referenceImageId = 'director-choice.png';
+      await service.assertProductionSubmission('mv-example', tag.productionRunId, tag.productionStepKey, { sceneId: tag.sceneId, kind: 'image' });
+      return enqueueing({ stepKind: 'frame', tag });
+    });
+    await service.resumeProduction('mv-example', theRun().id, { stopBefore: 'clips' });
+    await settle();
+    expect(jobs).toHaveLength(0);
+    expect(current().scenes[0].referenceImageId).toBe('director-choice.png');
+    expect(theRun().steps.at(-1)).toMatchObject({ status: 'refused', errorCode: 'PRODUCTION_PLATE_CHANGED' });
+  });
+
+  // Uniquely catches a paid frame generation reserved after the director picked a frame mid-dispatch.
+  it('does not reserve a new frame once the director selects one during dispatch', async () => {
+    seedProject({ scenes: [{ sceneId: 'mvs-a', label: 'A', framePrompt: 'a lighthouse', prompt: 'waves roll', startSec: 0, endSec: 8, takes: [] }] });
+    const chooseRoute = vi.fn(async () => {
+      store.get('mv-example').scenes[0].referenceImageId = 'director-choice.png';
+      return { route: POOL[0], rationale: 'model pick' };
+    });
+    service.__setProductionDepsForTests({ loadEnv: async () => env, dispatch, queue: async () => queue, planProject, autoReview: async () => autoReview, chooseRoute });
+    await start({ pool: POOL.filter((route) => route.kind === 'image'), stopBefore: 'clips' });
+    await settle();
+    expect(chooseRoute).toHaveBeenCalled();
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(theRun().usage.generations).toBe(0);
+    expect(current().scenes[0].referenceImageId).toBe('director-choice.png');
   });
 
   // Uniquely catches a resumed run keeping its pending clip pilot, which would filter stills to the pilot scenes and park early.

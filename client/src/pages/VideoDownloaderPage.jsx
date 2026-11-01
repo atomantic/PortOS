@@ -49,7 +49,7 @@ export default function VideoDownloaderPage() {
 
   const setPendingDelete = (id, pendingDelete) => setDownloads((prev) => prev.map((d) => {
     if (d.id !== id) return d;
-    const { pendingDelete: _previous, ...rest } = d; // eslint-disable-line no-unused-vars
+    const { pendingDelete: _previous, ...rest } = d;
     return pendingDelete ? { ...rest, pendingDelete } : rest;
   }));
 

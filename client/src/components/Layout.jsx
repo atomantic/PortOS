@@ -61,6 +61,7 @@ import { isFullWidthRoute } from '../lib/layoutRoutes.js';
 import { PORTS } from '../lib/ports.js';
 import { getNavCommandForPath, getSectionNavGroups, getSectionNavTabForPath, NAV_COMMANDS } from '../../../server/lib/navManifest.js';
 import { useSidebarApps } from '../hooks/useSidebarApps.js';
+import { useSidebarMusicVideos } from '../hooks/useSidebarMusicVideos.js';
 import { useSidebarSeries } from '../hooks/useSidebarSeries.js';
 import { useSidebarUniverses } from '../hooks/useSidebarUniverses.js';
 import { useThemeContext } from './ThemeContext';
@@ -365,7 +366,8 @@ export default function Layout() {
     clearAll
   } = useNotifications();
 
-  // Sidebar data-fetch loops (apps / pipeline series / universes) live in
+  // Sidebar data-fetch loops (apps / pipeline series / universes / music
+  // videos) live in
   // dedicated hooks so the shared focus-debounce + signature-guard pattern is
   // testable in isolation. See client/src/hooks/useSidebar*.js.
   // Optional features the user turned off in Settings > Features drop out of the
@@ -374,6 +376,7 @@ export default function Layout() {
   const sidebarApps = useSidebarApps();
   const pipelineSeries = useSidebarSeries();
   const universes = useSidebarUniverses();
+  const musicVideos = useSidebarMusicVideos();
 
   // Manifest-only paths (e.g. /wiki/log, /goals/tree) have no sidebar leaf, so
   // they resolve out of the statically imported manifest that already backs
@@ -394,39 +397,32 @@ export default function Layout() {
     safeWriteStorage(SIDEBAR_KEY, String(collapsed));
   }, [collapsed]);
 
-  // Build dynamic nav items with app children + pipeline series.
-  // `decoratePipelineChild` is defined inside the memo so its closure over
-  // `pipelineSeries` doesn't require a lint suppression, and so it isn't
-  // reallocated on every render.
+  // Build dynamic nav items with app children + record-list grandchildren
+  // (Series, Universes, Music Video projects): each dynamic row lists its
+  // records under `${basePath}/${id}`, highlighted while on that record or any
+  // of its sub-pages. Decorators live inside the memo so their closures over the
+  // lists need no lint suppression and aren't reallocated on every render.
   const resolvedNavItems = useMemo(() => {
-    const decoratePipelineChild = (child) => {
-      if (child.dynamic !== 'pipelineSeries') return child;
-      return {
-        ...child,
-        grandChildren: pipelineSeries.map((s) => ({
-          to: `/pipeline/series/${s.id}`,
-          label: s.name || '(untitled series)',
-          title: s.name || '(untitled series)',
-          icon: child.icon,
-          // Active-detection prefix — highlight while on the series page
-          // OR any issue belonging to that series. The issue page itself
-          // doesn't carry seriesId in its URL, so per-issue highlighting
-          // stays handled inside PipelineIssue's own breadcrumb.
-          activePathPrefix: `/pipeline/series/${s.id}`,
-        })),
-      };
+    const dynamicLists = {
+      pipelineSeries: { items: pipelineSeries, basePath: '/pipeline/series', untitled: '(untitled series)' },
+      universes: { items: universes, basePath: '/universes', untitled: '(untitled universe)' },
+      musicVideos: { items: musicVideos, basePath: '/music-video', untitled: '(untitled music video)' },
     };
-    const decorateUniverseChild = (child) => {
-      if (child.dynamic !== 'universes') return child;
+    const decorateDynamicChild = (child) => {
+      const list = dynamicLists[child.dynamic];
+      if (!list) return child;
       return {
         ...child,
-        grandChildren: universes.map((u) => ({
-          to: `/universes/${u.id}`,
-          label: u.name || '(untitled universe)',
-          title: u.name || '(untitled universe)',
-          icon: child.icon,
-          activePathPrefix: `/universes/${u.id}`,
-        })),
+        grandChildren: list.items.map((record) => {
+          const label = record.name || list.untitled;
+          return {
+            to: `${list.basePath}/${record.id}`,
+            label,
+            title: label,
+            icon: child.icon,
+            activePathPrefix: `${list.basePath}/${record.id}`,
+          };
+        }),
       };
     };
     const decorateParentChild = (child) => {
@@ -478,11 +474,11 @@ export default function Layout() {
         };
       }
       if (Array.isArray(item.children)) {
-        return { ...item, children: item.children.map((c) => decorateParentChild(decoratePipelineChild(decorateUniverseChild(c)))) };
+        return { ...item, children: item.children.map((c) => decorateParentChild(decorateDynamicChild(c))) };
       }
       return item;
     });
-  }, [sidebarApps, pipelineSeries, universes, isFeatureEnabled]);
+  }, [sidebarApps, pipelineSeries, universes, musicVideos, isFeatureEnabled]);
 
   // Flat path -> { path, label, icon } lookup over every leaf nav row, so the
   // Pinned/Recent sections render a stored path with its real label + icon.
@@ -715,7 +711,7 @@ export default function Layout() {
               type="button"
               aria-label={expandedSections[item.label] ? `Collapse ${item.label}` : `Expand ${item.label}`}
               onClick={() => toggleSection(item.label)}
-              className="px-2 text-gray-400 hover:text-white hover:bg-port-border/50 rounded-lg"
+              className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 px-2 text-gray-400 hover:text-white hover:bg-port-border/50 rounded-lg"
             >
               {expandedSections[item.label]
                 ? <ChevronDown size={16} />
@@ -788,7 +784,7 @@ export default function Layout() {
                         aria-label={grandChildrenExpanded ? `Collapse ${child.label}` : `Expand ${child.label}`}
                         aria-expanded={grandChildrenExpanded}
                         onClick={() => toggleSubSection(child.to)}
-                        className="px-2 py-2 text-gray-500 hover:text-white hover:bg-port-border/50 rounded-lg"
+                        className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 px-2 py-2 text-gray-500 hover:text-white hover:bg-port-border/50 rounded-lg"
                       >
                         {grandChildrenExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                       </button>
@@ -889,7 +885,7 @@ export default function Layout() {
             <button
               type="button"
               onClick={() => setCollapsed(false)}
-              className="hidden lg:block opacity-95 transition-opacity hover:opacity-80"
+              className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 hidden lg:block opacity-95 transition-opacity hover:opacity-80"
               title="Expand sidebar"
               aria-label="Expand sidebar"
             >

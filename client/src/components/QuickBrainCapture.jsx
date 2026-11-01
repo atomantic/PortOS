@@ -362,7 +362,7 @@ export default function QuickBrainCapture() {
             type="button"
             onClick={ingest.cancel}
             aria-label="Cancel ingest"
-            className="text-gray-500 hover:text-red-400 transition-colors"
+            className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 text-gray-500 hover:text-red-400 transition-colors"
           >
             <X size={14} />
           </button>

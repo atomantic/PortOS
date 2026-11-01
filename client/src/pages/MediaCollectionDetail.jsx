@@ -236,7 +236,7 @@ function MediaCollectionDetailContent() {
       }));
       page.setItems(rows => rows.map((row) => {
         if (!matches(row)) return row;
-        const { pendingDelete: _previous, ...data } = row.data; // eslint-disable-line no-unused-vars
+        const { pendingDelete: _previous, ...data } = row.data;
         return { ...row, data: outcome.pendingDelete ? { ...data, pendingDelete: outcome.pendingDelete } : data };
       }));
       toast(outcome.notice);
@@ -675,7 +675,7 @@ function MediaCollectionDetailContent() {
                   <button
                     type="button"
                     onClick={() => handleSetCover(item)}
-                    className={`absolute top-1.5 right-1.5 w-7 h-7 rounded-full flex items-center justify-center border transition-colors ${
+                    className={`pointer-coarse:min-h-11 pointer-coarse:min-w-11 absolute top-1.5 right-1.5 w-7 h-7 rounded-full flex items-center justify-center border transition-colors ${
                       isCover
                         ? 'bg-port-accent text-white border-port-accent'
                         : 'bg-black/60 text-gray-300 border-port-border hover:text-white'

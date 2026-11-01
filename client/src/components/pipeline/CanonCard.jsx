@@ -256,7 +256,7 @@ function WardrobeRow({ wardrobe, editable, onCommit, onRemove }) {
           type="button"
           onClick={onRemove}
           title={`Remove ${wardrobe.name || 'this outfit'}`} aria-label={`Remove ${wardrobe.name || 'this outfit'}`}
-          className="shrink-0 text-gray-500 hover:text-port-error"
+          className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 shrink-0 text-gray-500 hover:text-port-error"
         >
           <Trash2 size={12} />
         </button>
@@ -742,7 +742,7 @@ export default function CanonCard({
                       : `Pin ${ref} as ${entry.name}'s primary reference`} aria-label={isPrimary
                       ? `Unpin ${ref} as primary reference`
                       : `Pin ${ref} as ${entry.name}'s primary reference`}
-                    className={`absolute top-0.5 right-0.5 p-0.5 rounded ${
+                    className={`pointer-coarse:min-h-11 pointer-coarse:min-w-11 absolute top-0.5 right-0.5 p-0.5 rounded ${
                       isPrimary
                         ? 'bg-port-accent text-white'
                         : 'bg-port-bg/80 text-gray-400 hover:text-port-accent'

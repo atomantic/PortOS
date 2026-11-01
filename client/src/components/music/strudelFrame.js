@@ -407,7 +407,7 @@ const TONE_FRAME_CONTROLLER = `
     disposePrevious();
     resetTransport();
     try {
-      // eslint-disable-next-line no-new-func -- runs the LLM's code against the Tone global only.
+      // runs the LLM's code against the Tone global only.
       new Function('Tone', code)(trackedTone);
       return true;
     } catch (err) {

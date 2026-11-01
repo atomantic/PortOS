@@ -4,6 +4,7 @@ import { musicVideoFrameModelInput, musicVideoShotModelInput } from '../../lib/m
 import { musicVideoSceneCreateSchema } from '../../lib/musicVideoValidation.js';
 import { buildProjectRecord, addScene, replaceScenes, splitScene } from './projectsLogic.js';
 import { buildCastAndSetsImagePlan } from './castAndSetsPlan.js';
+import { musicVideoConditioningReferences } from '../../lib/musicVideoConditioning.js';
 
 const setReference = { subjectId: 'set-rink', greyboxShotId: 'wide' };
 const scene = { sceneId: 's1', prompt: 'The singer waves', framePrompt: 'A wide shot', startSec: 0, endSec: 8, setReference };
@@ -38,6 +39,20 @@ describe('music video greybox selection', () => {
     d.resolveImage.mockReturnValue(null);
     await expect(loadMusicVideoGreybox(project, scene, d)).rejects.toThrow(/file is missing/);
     expect(await loadMusicVideoGreybox(project, { ...scene, setReference: null }, d)).toBeNull();
+  });
+
+  it('sends the camera photo plate in place of the flat capture and the generic section set plate', async () => {
+    const d = deps();
+    d.catalog.getIngredient.mockResolvedValue({ ...ingredient, payload: { greybox: { ...ingredient.payload.greybox, shots: [{ ...ingredient.payload.greybox.shots[0], plate: 'wall-photo.png' }] } } });
+    d.catalog.listMediaForIngredient.mockResolvedValue([...media, { mediaKey: 'wall-photo.png', kind: 'reference', role: null }]);
+    const greybox = await loadMusicVideoGreybox(project, scene, d);
+    expect(greybox.reference).toMatchObject({ imageId: 'wall-photo.png', role: 'set', plate: true });
+    const withPlate = { ...project, scenes: [{ ...scene, frameReferenceIds: ['mvr-cs-set-rink', 'mvr-cast'] }],
+      visualSpec: { references: [{ id: 'mvr-cs-set-rink', imageId: 'generic.png', role: 'set' }, { id: 'mvr-cast', imageId: 'cast.png', role: 'character' }] } };
+    expect(musicVideoConditioningReferences(withPlate, withPlate.scenes[0], null, greybox).map((r) => r.imageId)).toEqual(['wall-photo.png', 'cast.png']);
+    // A plate no longer attached to the place falls back to the capture.
+    d.catalog.listMediaForIngredient.mockResolvedValue(media);
+    expect((await loadMusicVideoGreybox(project, scene, d)).reference).toMatchObject({ imageId: 'layout.png' });
   });
 
   it('persists the optional selection through create, replan and split and rejects invalid camera ids', () => {

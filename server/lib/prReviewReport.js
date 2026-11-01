@@ -98,7 +98,6 @@ Each pull-request decision has this shape:
       "path": "src/file.js",
       "line": 42,
       "side": "RIGHT",
-      "blocking": true,
       "title": "short label, under ~80 characters",
       "body": "the concrete problem, the wrong outcome it produces, and the fix",
       "suggestion": "optional exact replacement text for this one line, no code fence"
@@ -124,8 +123,8 @@ Field rules:
 - \`verified\` holds claims you checked against the code, one per entry, each
   citing the \`path:line\` that proves it. Leave it empty rather than padding.
 - \`concerns\` records missing context; use \`defer\` when it prevents a sound decision.
-  Every accepted defect belongs in \`findings\` with \`"blocking": true\`,
-  including warnings and nits. Severity never exempts a finding from resolution.
+  Every accepted defect belongs in \`findings\`, including warnings and nits,
+  and every finding blocks approval. Severity never exempts a finding from resolution.
 - Previously accepted rules are revisable. Prefer investing effort in high-quality fixes. Reassess value and feasibility before retiring a rule that is no longer useful or has no current solution worth pursuing; remove it from linting or quality scanning with concise rationale. Difficulty alone is not an exemption, and reassessment is not permission to hide a known important defect merely to pass checks.
 - \`title\` and \`suggestion\` are optional. \`suggestion\` must be the literal
   replacement for the single anchored line, with no code fence and no
@@ -209,22 +208,23 @@ export function reviewReportText(raw) {
   ].filter(Boolean);
 }
 
+const BLOCKING_MARKER = '⛔ **Blocking**';
+
 /**
  * Render one finding as an inline review comment, plus the short label the
  * review body's finding index shows for it. Returns null when the finding
  * carries no usable body.
  */
-export function renderFinding(raw, { blocking = true } = {}) {
+export function renderFinding(raw) {
   const { title, body, suggestion } = normalizeFindingPresentation(raw);
   if (!body) return null;
-  const marker = blocking ? '⛔ **Blocking**' : '💡 **Non-blocking**';
   // An odd number of fences in the body leaves one open, which would swallow
   // the suggestion block below and render it as inert text instead of an
   // applyable change. Drop the suggestion rather than emit a dead one.
   const bodyLeavesFenceOpen = ((body.match(/```/g) || []).length % 2) === 1;
   return {
     body: [
-      title ? `${marker} — ${title}` : marker,
+      title ? `${BLOCKING_MARKER} — ${title}` : BLOCKING_MARKER,
       '',
       body,
       ...(suggestion && !bodyLeavesFenceOpen ? ['', '```suggestion', suggestion, '```'] : []),
@@ -238,9 +238,9 @@ function listSection(heading, items, renderItem, tail = null) {
   return [heading, ...items.map(renderItem), ...(tail ? [tail] : [])].join('\n');
 }
 
-function findingsIndex(findings, heading, icon) {
+function findingsIndex(findings) {
   return listSection(
-    `#### ${icon} ${heading} (${findings.length})`,
+    `#### ⛔ Blocking (${findings.length})`,
     findings,
     ({ comment, label }) => `- \`${comment.path}:${comment.line}\` — ${label}`,
   );
@@ -255,8 +255,7 @@ function findingsIndex(findings, heading, icon) {
 export function renderReviewBody({
   report,
   verdict,
-  blockingFindings = [],
-  nonBlockingFindings = [],
+  findings = [],
   downgraded = false,
 } = {}) {
   const normalized = normalizeReviewReport(report);
@@ -264,8 +263,7 @@ export function renderReviewBody({
     VERDICT_BANNER[verdict] || VERDICT_BANNER.defer,
     normalized.summary || VERDICT_DEFAULT_SUMMARY[verdict] || VERDICT_DEFAULT_SUMMARY.defer,
     normalized.scope && `**Scope:** ${normalized.scope}`,
-    findingsIndex(blockingFindings, 'Blocking', '⛔'),
-    findingsIndex(nonBlockingFindings, 'Non-blocking', '💡'),
+    findingsIndex(findings),
     listSection('#### Test evidence', normalized.testEvidence, (item) => {
       const head = item.command ? `\`${item.command}\`` : item.detail;
       const tail = item.command && item.detail ? ` — ${item.detail}` : '';

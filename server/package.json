@@ -21,7 +21,7 @@
     "test:db:ci": "node ../scripts/run-vitest-ci.js run --config vitest.config.db.js --reporter=default --reporter=github-actions --configLoader runner"
   },
   "dependencies": {
-    "@babel/parser": "8.0.7",
+    "@babel/parser": "8.0.8",
     "@cantoo/pdf-lib": "2.11.1",
     "@googleapis/calendar": "20.1.0",
     "@novnc/novnc": "1.7.0",
@@ -29,10 +29,10 @@
     "chokidar": "6.0.0",
     "compression": "1.8.2",
     "express": "5.3.0",
-    "node-pty": "1.2.0-beta.15",
+    "node-pty": "1.2.0-beta.18",
     "pg": "8.23.1",
     "playwright-core": "1.64.1",
-    "pm2": "7.1.0",
+    "pm2": "7.1.1",
     "sharp": "0.35.5",
     "socket.io": "4.8.4",
     "socket.io-client": "4.8.4",
@@ -42,7 +42,7 @@
     "zod": "4.6.7"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.6.2",
+    "@biomejs/biome": "2.6.4",
     "@vitest/coverage-v8": "5.0.5",
     "vitest": "5.0.5"
   },

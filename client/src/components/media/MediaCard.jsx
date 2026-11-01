@@ -10,6 +10,7 @@ import InlineConfirmRow from '../ui/InlineConfirmRow';
 import { loraDisplayName } from './normalize';
 import { formatBytes, formatDurationMs } from '../../utils/formatters';
 import { assetDownloadUrl } from '../../lib/standaloneDownload.js';
+import { isLowResVideo } from '../../lib/videoResolution.js';
 
 // Equal cells. `flex-1` on Remix used to eat the first row, which pushed
 // "Send to 3D" onto the file-action line and left Delete alone under it.
@@ -247,6 +248,9 @@ function MediaCard({
         <div className="flex flex-wrap gap-1 text-[9px]">
           {modelId && <span className="px-1.5 py-0.5 bg-port-accent/20 text-port-accent rounded">{modelId}</span>}
           {item.width && <span className="px-1.5 py-0.5 bg-port-border text-gray-400 rounded">{item.width}×{item.height}</span>}
+          {isVideo && isLowResVideo(item) && (
+            <span title="Under 720p: upscale it before a 1080p render" className="px-1.5 py-0.5 bg-port-warning/20 text-port-warning rounded">low-res</span>
+          )}
           {item.steps && <span className="px-1.5 py-0.5 bg-port-border text-gray-400 rounded">{item.steps}st</span>}
           {item.numFrames && <span className="px-1.5 py-0.5 bg-port-border text-gray-400 rounded">{item.numFrames}f</span>}
           {item.fps && <span className="px-1.5 py-0.5 bg-port-border text-gray-400 rounded">{item.fps}fps</span>}
@@ -352,7 +356,7 @@ function MediaCard({
                 <button
                   type="button"
                   onClick={() => onToggleHidden(item)}
-                  className={`${FILE_BTN} ${TONE.neutral}`}
+                  className={`pointer-coarse:min-h-11 pointer-coarse:min-w-11 ${FILE_BTN} ${TONE.neutral}`}
                   aria-label={item.hidden ? 'Unhide (move out of hidden section)' : 'Hide (move to hidden section)'}
                   title={item.hidden ? 'Unhide (move out of hidden section)' : 'Hide (move to hidden section)'}
                 >
@@ -363,7 +367,7 @@ function MediaCard({
                 <button
                   type="button"
                   onClick={() => setConfirmingDelete(true)}
-                  className={`${FILE_BTN} ${TONE.danger}`}
+                  className={`pointer-coarse:min-h-11 pointer-coarse:min-w-11 ${FILE_BTN} ${TONE.danger}`}
                   aria-label="Delete"
                   title="Delete"
                 >

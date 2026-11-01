@@ -23,6 +23,7 @@ import { createLineReader } from '../lib/streamLines.js';
 import { onClientDisconnect, openSseStream } from '../lib/sseDownload.js';
 import { createInstallLogger } from '../lib/installLogger.js';
 import { ServerError } from '../lib/errorHandler.js';
+import { runtimeUpdateEvents } from './runtimeUpdateEvents.js';
 import {
   buildRuntimeActionCommand,
   describeRuntimeInstall,
@@ -199,6 +200,7 @@ export async function streamHarnessAction(req, res, { runtime: runtimeId, action
   });
   child.on('close', async (code) => {
     if (finished) return;
+    let removedHarness = null;
     try {
       stdoutReader.flush();
       stderrReader.flush();
@@ -213,6 +215,7 @@ export async function streamHarnessAction(req, res, { runtime: runtimeId, action
       // availability seconds ago, and re-reading it would report the state the
       // action just changed.
       const after = await getProviderRuntimeStatus(row.id, { fresh: true });
+      if (action === 'uninstall' && code === 0 && after?.probeState === 'missing') removedHarness = row.id;
       emit(terminalFrame({ action, code, status: after, copy, command: row.command, before: status.version }));
       safeEnd();
     } catch (err) {
@@ -220,6 +223,8 @@ export async function streamHarnessAction(req, res, { runtime: runtimeId, action
       console.error(`❌ ${status.label} ${action} completion check failed: ${err.message}`);
       emit({ type: 'error', message: `${status.label} ${action} completion check failed: ${err.message}` });
       safeEnd();
+    } finally {
+      runtimeUpdateEvents.emit('changed', { removedHarness });
     }
   });
 }

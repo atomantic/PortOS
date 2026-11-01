@@ -419,7 +419,7 @@ export default function JobCard({
       <div className="flex items-start gap-3 p-4">
         <button
           onClick={() => onToggle(job.id)}
-          className={`shrink-0 transition-colors ${job.enabled ? 'text-port-success' : 'text-gray-600'}`}
+          className={`pointer-coarse:min-h-11 pointer-coarse:min-w-11 shrink-0 transition-colors ${job.enabled ? 'text-port-success' : 'text-gray-600'}`}
           title={job.enabled ? 'Disable job' : 'Enable job'}
           aria-label={job.enabled ? 'Disable job' : 'Enable job'}
         >

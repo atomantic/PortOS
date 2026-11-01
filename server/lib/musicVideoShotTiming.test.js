@@ -215,3 +215,22 @@ describe('accepted-prefix repair planning', () => {
     expect(plan({ scene: short }).ok).toBe(false);
   });
 });
+
+// A cold-open shot with Clip sound on is the one take that asks for model
+// sound; a request that drops the flag would hand that shot a silent clip.
+describe('cold-open clip sound', () => {
+  const kling = { falModelId: 'fal-ai/kling-video/v3/pro/image-to-video', falDuration: 5 };
+
+  it('asks for sound and prices it only on a cold-open shot playing its clip sound', () => {
+    const coldOpen = { preMusic: { durationSec: 4, clipVolume: 1 } };
+    const take = falSceneTake({ scene: coldOpen, videoSettings: kling });
+    expect(take).toMatchObject({ generateAudio: true, costUsd: 1.05 });
+    expect(falTakeRequestFields(take)).toMatchObject({ falGenerateAudio: true });
+
+    for (const scene of [{ preMusic: { durationSec: 4 } }, { startSec: 0, endSec: 5 }]) {
+      const silent = falSceneTake({ scene, videoSettings: kling });
+      expect(silent).toMatchObject({ generateAudio: false, costUsd: 0.7 });
+      expect(falTakeRequestFields(silent)).not.toHaveProperty('falGenerateAudio');
+    }
+  });
+});

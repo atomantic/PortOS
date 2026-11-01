@@ -92,7 +92,7 @@ export async function localInstanceId() {
  */
 export async function withLocalImageOrigin(meta) {
   // A source's restore stamp describes that image's delete, not this new one.
-  const { originInstanceId: _source, restoredAt: _restored, ...rest } = stripImageSidecarLocalFields(isPlainObject(meta) ? meta : {}); // eslint-disable-line no-unused-vars
+  const { originInstanceId: _source, restoredAt: _restored, ...rest } = stripImageSidecarLocalFields(isPlainObject(meta) ? meta : {});
   // A durable creation stamp that travels with the sidecar (imageLiveStamp).
   if (typeof rest.createdAt !== 'string' || !Number.isFinite(Date.parse(rest.createdAt))) rest.createdAt = new Date().toISOString();
   const id = await localInstanceId();

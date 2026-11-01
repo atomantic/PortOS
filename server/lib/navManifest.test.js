@@ -370,6 +370,34 @@ describe('resolveNavCommand — fuzzy matching', () => {
     }
   });
 
+  it('resolves a spoken "<section> <label>" to that page, not the section default', () => {
+    expect(resolveNavCommand('Chief of Staff Agents')).toMatchObject({ path: '/cos/agents', matched: 'Chief of Staff Agents' });
+    expect(resolveNavCommand('brain daily log')?.path).toBe('/brain/daily-log');
+    expect(resolveNavCommand('chief of staff tasks')?.path).toBe('/cos/tasks');
+    // A declared alias spelled the same way keeps precedence.
+    expect(resolveNavCommand('create music video')?.path).toBe('/music-video?new=project');
+  });
+
+  it('resolves section-alias + page phrases (e.g. "digital twin goals") to that page', () => {
+    expect(resolveNavCommand('digital twin goals')).toMatchObject({
+      path: '/digital-twin/goals',
+      matched: 'digital twin goals',
+    });
+    expect(resolveNavCommand('digital twin personas')?.path).toBe('/digital-twin/personas');
+    expect(resolveNavCommand('digital twin time capsule')?.path).toBe('/digital-twin/time-capsule');
+
+    const dtCommands = NAV_COMMANDS.filter((c) => c.path.startsWith('/digital-twin/'));
+    expect(dtCommands.length).toBeGreaterThan(0);
+    for (const cmd of dtCommands) {
+      const segment = cmd.path.replace('/digital-twin/', '');
+      const phrase = `digital twin ${segment.replace(/-/g, ' ')}`;
+      expect(resolveNavCommand(phrase)?.path, phrase).toBe(cmd.path);
+    }
+
+    // Leaf aliases on nested paths (e.g. "tasks" -> /cos/tasks) are not rewritten as section roots.
+    expect(resolveNavCommand('tasks agents')?.path).not.toBe('/cos/agents');
+  });
+
   it('resolves exact alias', () => {
     expect(resolveNavCommand('dashboard')?.path).toBe('/');
     expect(resolveNavCommand('tasks')?.path).toBe('/cos/tasks');

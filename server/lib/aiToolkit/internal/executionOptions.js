@@ -6,7 +6,7 @@ export function executionOptionsError(message) {
 }
 export const EXECUTION_OPTION_DEFINITIONS = Object.freeze({
   serviceTier: Object.freeze({
-    key: 'serviceTier', type: 'enum', label: 'Speed', harnesses: ['codex'],
+    key: 'serviceTier', type: 'enum', label: 'Speed', harnesses: ['codex', 'grok'],
     values: ['standard', 'fast'], default: null, inheritance: 'per-key',
     help: 'Fast may consume more subscription usage or credits. Saved schedules use this choice on future runs; it does not enable or reschedule a job. Availability depends on the model and account.',
   }),

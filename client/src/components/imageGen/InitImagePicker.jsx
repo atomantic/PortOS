@@ -51,7 +51,7 @@ export default function InitImagePicker({
               type="button"
               onClick={onClear}
               disabled={disabled}
-              className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-port-card border border-port-border text-gray-300 hover:text-white hover:bg-port-error/40 flex items-center justify-center disabled:opacity-50"
+              className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 absolute -top-2 -right-2 w-5 h-5 rounded-full bg-port-card border border-port-border text-gray-300 hover:text-white hover:bg-port-error/40 flex items-center justify-center disabled:opacity-50"
               aria-label="Remove init image"
               title="Remove init image"
             >

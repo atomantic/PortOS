@@ -288,7 +288,7 @@ describe('MoodBoardDetail stale-response guards', () => {
     currentId = 'missing';
     rerender(<MemoryRouter><MoodBoardDetail /></MemoryRouter>);
     expect(screen.queryByLabelText('Name')).not.toBeInTheDocument();
-    await act(async () => { nextLoad.reject(new Error('Not found')); });
+    await act(async () => { nextLoad.reject(Object.assign(new Error('Not found'), { status: 404 })); });
     expect(screen.getByText('This mood board doesn’t exist.')).toBeInTheDocument();
     expect(screen.queryByLabelText('Name')).not.toBeInTheDocument();
     expect(mockToastError).toHaveBeenCalledExactlyOnceWith('Mood board not found');
@@ -296,6 +296,54 @@ describe('MoodBoardDetail stale-response guards', () => {
     await act(async () => { oldSync.reject(new Error('Sync failed')); });
     expect(mockToastError).toHaveBeenCalledExactlyOnceWith('Mood board not found');
     expect(mockToastSuccess).not.toHaveBeenCalled();
+  });
+});
+
+describe('MoodBoardDetail failed read', () => {
+  it('offers Retry for a failed read instead of saying the board does not exist', async () => {
+    mockGetMoodBoard
+      .mockRejectedValueOnce(Object.assign(new Error('Server unavailable'), { status: 503 }))
+      .mockResolvedValueOnce({ id: 'a', name: 'Board A', items: [] });
+    renderPage();
+    await waitFor(() => expect(screen.getByText('Couldn’t load this mood board')).toBeInTheDocument());
+    expect(screen.queryByText('This mood board doesn’t exist.')).not.toBeInTheDocument();
+    expect(mockToastError).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(boardNameValue()).toBe('Board A'));
+  });
+
+  it('reloads the whole board when a render event arrives after a failed read', async () => {
+    mockGetMoodBoard
+      .mockRejectedValueOnce(Object.assign(new Error('Server unavailable'), { status: 503 }))
+      .mockResolvedValueOnce({ id: 'a', name: 'Board A', items: [] });
+    renderPage();
+    await waitFor(() => expect(screen.getByText('Couldn’t load this mood board')).toBeInTheDocument());
+
+    await act(async () => { socketHandlers.get('connect')(); });
+    await waitFor(() => expect(boardNameValue()).toBe('Board A'));
+  });
+});
+
+describe('MoodBoardDetail render event during the first load', () => {
+  it('lets the pending first read finish instead of restarting it', async () => {
+    const first = deferred();
+    mockGetMoodBoard.mockReturnValueOnce(first.promise);
+    renderPage();
+    await act(async () => { socketHandlers.get('mood-board:item-render')({ boardId: 'a', itemId: 'i1', status: 'failed', error: 'GPU busy' }); });
+    expect(mockGetMoodBoard).toHaveBeenCalledTimes(1);
+    expect(mockToastError).toHaveBeenCalledWith('Render failed: GPU busy');
+    // The pending read captured the board before the event; the refresh after
+    // it settles carries the rendered item.
+    mockGetMoodBoard.mockResolvedValueOnce({
+      id: 'a', name: 'Board A',
+      items: [{ id: 'i1', type: 'image', mediaKey: 'image:job-1.png' }],
+    });
+    await act(async () => { first.resolve({ id: 'a', name: 'Board A', items: [] }); });
+    await waitFor(() => expect(boardNameValue()).toBe('Board A'));
+    expect(await screen.findByRole('button', { name: 'Preview image' })).toBeInTheDocument();
+    expect(mockGetMoodBoard).toHaveBeenCalledTimes(2);
+    expect(mockToastError).toHaveBeenCalledOnce();
   });
 });
 

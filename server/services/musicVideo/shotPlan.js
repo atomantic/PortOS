@@ -26,7 +26,7 @@
 
 import { performanceCapability } from '../../lib/musicVideoShotTiming.js';
 import { normalizeMusicVideoProductionPolicy } from '../../lib/musicVideoMediumPlan.js';
-import { deliveryNotesWithin } from './lyricMarkers.js';
+import { deliveryNotesWithin } from '../../lib/lyricMarkers.js';
 import { snapSectionsToGrid } from './audioAnalysis.js';
 import { GROK_VIDEO_DURATIONS } from '../../lib/grokVideoClip.js';
 

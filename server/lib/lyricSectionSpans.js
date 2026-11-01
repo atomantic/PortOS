@@ -1,7 +1,7 @@
 /**
  * Time spans of a lyric sheet's sections (`[Verse 1]`, `[Chorus]`, …) once
  * its lines are timed. Browser-safe: shared by the music video analysis
- * relabel (services/musicVideo/lyricMarkers.js) and the storyboard fit.
+ * relabel (lyricMarkers.js) and the storyboard fit.
  * Markers are `{ type: 'section', label, kind, line }` with `line` the
  * lyric-cue index the section starts at.
  */

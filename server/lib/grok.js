@@ -18,7 +18,9 @@
  *
  * Dependency-light on purpose: imports only `providerModels.js` helpers and node
  * builtins, mirroring `cliProviderArgs.js` so it stays importable from the
- * standalone autofixer process.
+ * standalone autofixer process. Speed pairing stays in this file; the
+ * `grok models` probe lives in `grokModelCatalog.js` so this module does not
+ * spawn a process.
  */
 
 import { isCliProvider, isTuiProvider } from './providerTypes.js';
@@ -26,7 +28,7 @@ import os from 'os';
 import { writeFileSync, unlinkSync } from 'fs';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
-import { argvHasFlag, hasModelFlag, commandBasename } from './providerModels.js';
+import { argvHasFlag, hasModelFlag, commandBasename, GROK_CONFIGURED_DEFAULT } from './providerModels.js';
 
 const NOOP_CLEANUP = () => {};
 
@@ -80,7 +82,7 @@ const OUTPUT_FORMAT_FLAGS = ['--output-format', '-o'];
  *     approval prompts (grok's analog of `claude --dangerously-skip-permissions`).
  *     With `toolFree` (a one-shot answer over caller text — Ask, AI app
  *     detection, #9008) it is the read-only `plan` mode instead; the caller
- *     then runs `toolFreeOneShotArgs` to empty the tool allowlist too.
+ *     then runs `toolFreeOneShotArgs` to remove the built-in tools too.
  *   - `--model <id>`               — gated on no user-baked model flag.
  *   - `--prompt-file /dev/stdin`   — deliver the prompt over stdin (POSIX); the
  *     spawn helper rewrites this to a temp file on Windows.
@@ -106,6 +108,172 @@ export function ensureGrokHeadlessArgs(baseArgs = [], model, { toolFree = false 
   return out;
 }
 
+// Every tool grok offers the model, by the name it is shown (#14476). grok has
+// no "no tools" switch: an empty `--tools ''` (or `--tools none`) names no tool
+// and leaves the whole set available, so the no-tool posture removes each one
+// with `--disallowed-tools`. Removing `search_tool`/`use_tool` (the MCP
+// meta-tools) also leaves configured MCP servers' tools uncallable; `x_search`
+// is the server-side X search that `--disable-web-search` does not cover.
+// Names below the `write` row are absent from 1.0.70's default list (disabled by
+// `--no-subagents`/`--disable-web-search`, or not shipped yet) but recognized by
+// the flag, so they stay removed if those defaults change. A tool grok ships
+// later escapes this list: `grokToolsEscapingNoToolPosture` reports it from the
+// reviewer's transcript, and the fix is to add its name here.
+export const GROK_BUILTIN_TOOLS = Object.freeze([
+  'run_terminal_command', 'read_file', 'search_replace', 'list_dir', 'grep',
+  'kill_command_or_subagent', 'todo_write', 'get_command_or_subagent_output',
+  'scheduler_create', 'scheduler_delete', 'scheduler_list', 'monitor',
+  'search_tool', 'use_tool', 'workflow', 'enter_plan_mode', 'exit_plan_mode',
+  'ask_user_question', 'send_feedback', 'image_gen', 'image_edit',
+  'image_to_video', 'reference_to_video', 'write',
+  'web_search', 'web_fetch', 'x_search', 'task', 'wait_tasks', 'lsp',
+]);
+
+/** grok's no-tool posture: read-only plan mode with every built-in tool removed. */
+export const GROK_NO_TOOL_ARGS = Object.freeze([
+  '--permission-mode', 'plan',
+  '--disallowed-tools', GROK_BUILTIN_TOOLS.join(','),
+]);
+
+/**
+ * Tools a no-tool grok run still offered or called, read from its
+ * `streaming-json` transcript: `offered` holds non-MCP names in the last
+ * `available_commands` event, `called` every `tool_call`. Both empty when the
+ * posture held.
+ * @param {string} streamText - raw JSONL stdout
+ * @returns {{ offered: string[], called: string[] }}
+ */
+export function grokToolsEscapingNoToolPosture(streamText) {
+  let offered = [];
+  const called = [];
+  for (const line of String(streamText ?? '').split('\n')) {
+    let event;
+    try { event = JSON.parse(line); } catch { continue; }
+    if (event?.type === 'available_commands' && Array.isArray(event.tools)) {
+      // An MCP tool is shown as `server__tool`; only the removed meta-tools
+      // reach it, so its listing here is not an escape.
+      offered = event.tools.filter((name) => typeof name === 'string' && !name.includes('__'));
+    } else if (event?.type === 'tool_call' && typeof event.toolName === 'string') {
+      called.push(event.toolName);
+    }
+  }
+  return { offered, called: [...new Set(called)] };
+}
+
+// `--output-format plain` concatenates every assistant text chunk of the run with
+// no separator, so the "I'll inspect the code first." narration grok writes
+// before a tool call lands glued to the answer (`…first.{"verdict":…}`), and a
+// strict-JSON caller (the code reviewer) can never parse the reply (#14391).
+// `streaming-json` keeps tool calls as their own events, which marks where the
+// final message starts.
+export const GROK_STREAMING_JSON_FORMAT = 'grok-streaming-json';
+
+/**
+ * Point a built grok argv at `--output-format streaming-json`, replacing any
+ * format already present. Pair with `extractGrokFinalMessage`.
+ * @param {string[]} args
+ * @returns {string[]}
+ */
+export function _withGrokStreamingJsonOutput(args = []) {
+  const out = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--output-format' || args[i] === '-o') i++;
+    else if (!args[i].startsWith('--output-format=')) out.push(args[i]);
+  }
+  return [...out, '--output-format', 'streaming-json'];
+}
+
+// The verdict parser accepts only this envelope. Constraining grok to it keeps
+// a no-tool review from answering with prose, which is invalid_json (#14523).
+// streaming-json still carries the message so tool calls stay separable.
+export const GROK_CODE_REVIEW_JSON_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['verdict', 'findings'],
+  properties: {
+    verdict: { type: 'string', enum: ['clean', 'findings'] },
+    findings: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['severity', 'location', 'outcome', 'fix'],
+        properties: {
+          severity: { type: 'string', enum: ['blocking', 'recommended'] },
+          location: { type: 'string' },
+          outcome: { type: 'string' },
+          fix: { type: 'string' },
+        },
+      },
+    },
+  },
+};
+
+/**
+ * Code-review argv: streaming-json plus the verdict schema. Replaces any
+ * output format or schema already on the argv.
+ * @param {string[]} args
+ * @returns {string[]}
+ */
+export function withGrokCodeReviewOutput(args = []) {
+  const formatted = _withGrokStreamingJsonOutput(args);
+  const out = [];
+  for (let i = 0; i < formatted.length; i++) {
+    if (formatted[i] === '--json-schema') i++;
+    else if (!String(formatted[i]).startsWith('--json-schema=')) out.push(formatted[i]);
+  }
+  return [...out, '--json-schema', JSON.stringify(GROK_CODE_REVIEW_JSON_SCHEMA)];
+}
+
+/**
+ * Reduce a grok `streaming-json` transcript to its final message: the `text`
+ * chunks after the last tool call. Thought, usage and command-listing events
+ * and unparseable lines are ignored. Returns '' when the run produced no text.
+ * @param {string} streamText - raw JSONL stdout
+ * @returns {string}
+ */
+export function extractGrokFinalMessage(streamText) {
+  let message = '';
+  for (const line of String(streamText ?? '').split('\n')) {
+    let event;
+    try { event = JSON.parse(line); } catch { continue; }
+    if (event?.type === 'tool_call') message = '';
+    else if (event?.type === 'text' && typeof event.data === 'string') message += event.data;
+  }
+  return message.trim();
+}
+
+// grok's `end.stopReason` is snake_case. The reviewer's diagnostics vocabulary
+// is the closed set in reviewerHealth.js; an unrecognized reason stays unknown.
+const GROK_STOP_REASONS = {
+  end_turn: 'stop',
+  stop: 'stop',
+  max_tokens: 'length',
+  length: 'length',
+  refusal: 'content_filter',
+  content_filter: 'content_filter',
+  tool_use: 'tool_calls',
+  tool_calls: 'tool_calls',
+  error: 'error',
+};
+
+/**
+ * Map the last `end.stopReason` in a grok streaming-json transcript onto the
+ * reviewer's finish-reason vocabulary. Missing or unrecognized reasons are
+ * `unknown` — never the raw vendor string.
+ * @param {string} streamText - raw JSONL stdout
+ * @returns {'stop'|'length'|'content_filter'|'tool_calls'|'error'|'unknown'}
+ */
+export function grokReviewFinishReason(streamText) {
+  let reason = null;
+  for (const line of String(streamText ?? '').split('\n')) {
+    let event;
+    try { event = JSON.parse(line); } catch { continue; }
+    if (event?.type === 'end' && typeof event.stopReason === 'string') reason = event.stopReason;
+  }
+  return GROK_STOP_REASONS[reason] || 'unknown';
+}
+
 /**
  * Ensure the interactive Grok TUI argv auto-approves tool executions so a
  * file-writing agent isn't stranded on an approval prompt (mirrors the codex
@@ -121,6 +289,88 @@ export function ensureGrokTuiArgs(args = []) {
     out.push('--permission-mode', 'bypassPermissions');
   }
   return out;
+}
+
+/** Flat catalog id Grok Build lists beside a base when that base has a fast tier. */
+const GROK_BUILD_FAST_SUFFIX = '-build-fast';
+
+const GROK_FAST_SETTING = /\[fast=(?:true|false)\]$/;
+
+/**
+ * Drop a trailing `[fast=true]` / `[fast=false]` setting. A generic `-fast`
+ * suffix is a different model (`grok-code-fast-1`) and is left intact.
+ * @param {unknown} model
+ * @returns {string}
+ */
+function stripGrokFastSetting(model) {
+  return typeof model === 'string' ? model.replace(GROK_FAST_SETTING, '') : '';
+}
+
+/**
+ * True when saved argv already names a model, including a baked fast setting
+ * or a flat `-build-fast` id. Speed must not append a second `--model`.
+ * @param {unknown} args
+ * @returns {boolean}
+ */
+export function grokSpeedArgsConflict(args) {
+  if (hasModelFlag(args)) return true;
+  if (!Array.isArray(args)) return false;
+  return args.some((arg) => typeof arg === 'string' && (arg.includes('[fast=') || arg.includes(GROK_BUILD_FAST_SUFFIX)));
+}
+
+/**
+ * Pair a selected model with a `grok models` listing. Fast is available only
+ * when that listing contains both the base id and `${base}-build-fast`. A
+ * selected flat fast id maps back to the base only when the base is present.
+ * The configured-default sentinel uses `defaultModelId` from that listing.
+ * @param {string|null|undefined} model
+ * @param {string[]} [catalogIds]
+ * @param {string|null} [defaultModelId]
+ * @returns {{ model: string|null, modelBase: string|null, values: string[], reason: string|null }}
+ */
+export function grokSpeedTarget(model, catalogIds = [], defaultModelId = null) {
+  const ids = Array.isArray(catalogIds) ? catalogIds.filter((id) => typeof id === 'string' && id) : [];
+  const explicit = model && model !== GROK_CONFIGURED_DEFAULT ? stripGrokFastSetting(model) : '';
+  const selected = explicit || stripGrokFastSetting(defaultModelId || '');
+  if (!selected) {
+    return { model: null, modelBase: null, values: [], reason: 'Choose an explicit model before changing speed.' };
+  }
+  const siblingBase = selected.endsWith(GROK_BUILD_FAST_SUFFIX)
+    ? selected.slice(0, -GROK_BUILD_FAST_SUFFIX.length)
+    : '';
+  const modelBase = siblingBase && ids.includes(siblingBase) ? siblingBase : selected;
+  const fastId = `${modelBase}${GROK_BUILD_FAST_SUFFIX}`;
+  if (!ids.includes(modelBase) || !ids.includes(fastId)) {
+    return { model: selected, modelBase: null, values: [], reason: 'This model did not advertise a fast serving tier.' };
+  }
+  return { model: selected, modelBase, values: ['standard', 'fast'], reason: null };
+}
+
+/**
+ * The `--model` value for an explicit speed, or null when the base cannot be
+ * named. Null does not throw: the caller raises `executionOptionsError`.
+ * `modelBase` is the catalog base recorded by capability inspection. Without
+ * it, a flat `-build-fast` id is not guessed back to a base.
+ * @param {string|null|undefined} model
+ * @param {string|null|undefined} tier
+ * @param {string|null|undefined} modelBase
+ * @returns {string|null}
+ */
+export function grokServiceTierModel(model, tier, modelBase) {
+  if (tier !== 'fast' && tier !== 'standard') return model || null;
+  const confirmed = typeof modelBase === 'string' ? stripGrokFastSetting(modelBase) : '';
+  const base = confirmed && confirmed !== GROK_CONFIGURED_DEFAULT
+    ? confirmed
+    : inferUnconfirmedGrokSpeedBase(model);
+  if (!base || base === GROK_CONFIGURED_DEFAULT) return null;
+  return `${base}[fast=${tier === 'fast' ? 'true' : 'false'}]`;
+}
+
+function inferUnconfirmedGrokSpeedBase(model) {
+  const stripped = stripGrokFastSetting(model);
+  if (!stripped || stripped === GROK_CONFIGURED_DEFAULT) return null;
+  if (stripped.endsWith(GROK_BUILD_FAST_SUFFIX)) return null;
+  return stripped;
 }
 
 /**

@@ -241,7 +241,7 @@ const DraggableTicket = memo(function DraggableTicket({ ticket, disabled, appId,
           ref={handleActivatorRef}
           {...listeners}
           {...attributes}
-          className={`flex items-center px-1 touch-none text-gray-600 hover:text-gray-400 shrink-0 ${disabled ? 'cursor-not-allowed opacity-50' : 'cursor-grab active:cursor-grabbing'}`}
+          className={`pointer-coarse:min-h-11 pointer-coarse:min-w-11 flex items-center px-1 touch-none text-gray-600 hover:text-gray-400 shrink-0 ${disabled ? 'cursor-not-allowed opacity-50' : 'cursor-grab active:cursor-grabbing'}`}
           aria-label={`Drag ${ticket.key}`}
           disabled={disabled}
           aria-disabled={disabled}
@@ -262,7 +262,7 @@ const DraggableTicket = memo(function DraggableTicket({ ticket, disabled, appId,
             type="button"
             onClick={handleQueue}
             disabled={queuing}
-            className="flex items-center px-1.5 text-port-success/70 hover:text-port-success shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
+            className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 flex items-center px-1.5 text-port-success/70 hover:text-port-success shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
             aria-label={`Start an agent on ${ticket.key}`}
             title={`Queue a Chief of Staff agent to implement ${ticket.key}`}
           >

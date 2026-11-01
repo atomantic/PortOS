@@ -3,6 +3,7 @@ import { release, totalmem } from 'node:os';
 import { promisify } from 'node:util';
 import { execFile } from '../../lib/childProcess.js';
 import { PATHS } from '../../lib/fileUtils.js';
+import { isAppleSilicon } from '../../lib/platform.js';
 import { safeChildProcessOptions } from '../../lib/processEnv.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { getHfCacheRoot, repoToDirName } from '../../lib/hfCache.js';
@@ -23,8 +24,12 @@ export function mossChildEnv(env = process.env) {
   return clean;
 }
 
-export function mossHostProblem({ platform = process.platform, arch = process.arch, osRelease = release(), memory = totalmem() } = {}) {
-  if (platform !== 'darwin' || arch !== 'arm64') return 'MOSS Swift requires native Apple Silicon macOS.';
+export function mossHostProblem({
+  platform = process.platform, arch = process.arch, osRelease = release(), memory = totalmem(), appleSilicon,
+} = {}) {
+  // Pass appleSilicon to skip the hardware probe. Rosetta reports arch x64.
+  const silicon = appleSilicon ?? isAppleSilicon({ platform, arch });
+  if (platform !== 'darwin' || !silicon) return 'MOSS Swift requires native Apple Silicon macOS.';
   if (Number(osRelease.split('.')[0]) < 25) return 'MOSS Swift requires macOS 26 or later.';
   if (memory < 48 * 1024 ** 3) return 'MOSS SFT bf16 requires at least 48 GB unified memory (about 27 GB measured model footprint plus system headroom).';
   return null;

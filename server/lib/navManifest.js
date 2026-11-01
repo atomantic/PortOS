@@ -649,10 +649,68 @@ for (const alias of Object.keys(aliasToPath)) {
 }
 const ALIAS_KEYS = [...normalizedAliases.keys()];
 
+// "<section> <label>" as shown in the sidebar and ⌘K ("chief of staff agents",
+// "brain daily log"). Without this, the prefix tier below matches the section's
+// own short alias (`chief-of-staff`, `brain`) and lands on that section's first
+// page. Declared aliases keep precedence; first-declared phrase wins.
+const sectionLabelCommands = new Map();
+for (const cmd of NAV_COMMANDS) {
+  if (!cmd.section || !cmd.label) continue;
+  const key = normalizeNavAlias(`${cmd.section} ${cmd.label}`);
+  if (!normalizedAliases.has(key) && !sectionLabelCommands.has(key)) sectionLabelCommands.set(key, cmd);
+}
+
+const commandsByPath = new Map();
+for (const cmd of NAV_COMMANDS) {
+  if (!commandsByPath.has(cmd.path)) commandsByPath.set(cmd.path, cmd);
+}
+
 export const resolveNavCommand = (input) => {
   if (!input || typeof input !== 'string') return null;
   const norm = normalizeNavAlias(input);
   if (!norm) return null;
+  const sectionLabelHit = sectionLabelCommands.get(norm);
+  if (sectionLabelHit) {
+    return { path: sectionLabelHit.path, matched: `${sectionLabelHit.section} ${sectionLabelHit.label}`, command: sectionLabelHit };
+  }
+
+  // Exact declared alias match keeps precedence.
+  const exactAlias = normalizedAliases.get(norm);
+  if (exactAlias) {
+    const path = aliasToPath[exactAlias];
+    const command = NAV_COMMANDS.find((c) => c.path === path && (c.aliases || []).includes(exactAlias))
+      || NAV_COMMANDS.find((c) => c.path === path);
+    return { path, matched: exactAlias, command };
+  }
+
+  // Section-alias + subpath ("digital twin goals" -> /digital-twin/goals).
+  // Runs before the prefix tier so the section alias doesn't hijack the page.
+  // Applies only to section-root aliases whose segment matches the alias, keeping
+  // the longest matching prefix when multiple section aliases qualify.
+  let subpathHit = null;
+  for (const a of ALIAS_KEYS) {
+    if (norm.startsWith(`${a}-`)) {
+      const rest = norm.slice(a.length + 1);
+      const origAlias = normalizedAliases.get(a);
+      const targetPath = aliasToPath[origAlias];
+      const base = targetPath?.split('?')[0].split('/').filter(Boolean)[0];
+      if (base && base === a) {
+        const candidatePath = `/${base}/${rest}`;
+        const command = commandsByPath.get(candidatePath);
+        if (command && (!subpathHit || a.length > subpathHit.alias.length)) {
+          subpathHit = {
+            path: candidatePath,
+            matched: `${origAlias.replace(/-/g, ' ')} ${rest.replace(/-/g, ' ')}`,
+            command,
+            alias: a,
+          };
+        }
+      }
+    }
+  }
+  if (subpathHit) {
+    return { path: subpathHit.path, matched: subpathHit.matched, command: subpathHit.command };
+  }
 
   const tail = norm.split('-').filter(Boolean).pop();
   // Each tier is { test, longest? }. `longest:true` picks the longest matching

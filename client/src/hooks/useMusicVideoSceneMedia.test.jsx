@@ -152,13 +152,42 @@ describe('useMusicVideoSceneMedia Casting guides (#12763)', () => {
     const castInputs = { ingredientId: 'cat-chr-x', guides: ['child.png'], sheets: [] };
     expect(generateImage.mock.calls.at(-1)[0].musicVideo).toMatchObject({ castInputs, replaceSelection: true });
     expect(addMusicVideoSceneTake).toHaveBeenCalledWith('p4', 's1', {
-      kind: 'image', assetId: 'done.png', source: 'generated', castInputs, replaceSelection: true,
+      kind: 'image', assetId: 'done.png', source: 'generated', castInputs, replaceSelection: true, expectedSelection: null,
     }, { silent: true });
     generateImage.mockResolvedValueOnce({ filename: 'end.png' });
     await act(async () => { await result.current.generateEndFrame(cast.scenes[0], { replaceSelection: true }); });
     expect(generateImage.mock.calls.at(-1)[0].musicVideo).toMatchObject({ slot: 'end', castInputs, replaceSelection: true });
     expect(addMusicVideoSceneTake).toHaveBeenLastCalledWith('p4', 's1', {
-      kind: 'endImage', assetId: 'end.png', source: 'generated', castInputs, replaceSelection: true,
+      kind: 'endImage', assetId: 'end.png', source: 'generated', castInputs, replaceSelection: true, expectedSelection: null,
     }, { silent: true });
+  });
+});
+
+describe('useMusicVideoSceneMedia clip from the storyboard panel', () => {
+  afterEach(cleanup);
+
+  // Uniquely catches the still render losing the lane the server animates it on.
+  it('tags the still render with the lane its clip renders on', async () => {
+    const boardProject = { id: 'p5', scenes: [{ sceneId: 's1', order: 0, prompt: 'she laces her skates', panelId: 'pn-1', panelArt: 'panel.png', takes: [], startSec: 0, endSec: 4 }] };
+    const { result } = renderHook(() => useMusicVideoSceneMedia({ project: boardProject, videoSettings: { settings: { backend: 'grok' } }, applyScenePatch: vi.fn() }));
+    await act(async () => { await result.current.generateFrame(boardProject.scenes[0], { thenClip: { backend: 'grok' } }); });
+    expect(generateImage.mock.calls.at(-1)[0].musicVideo).toMatchObject({ projectId: 'p5', sceneId: 's1', thenClip: { backend: 'grok' } });
+  });
+});
+
+describe('useMusicVideoSceneMedia cold-open clip sound', () => {
+  afterEach(cleanup);
+
+  // Uniquely catches a cold-open shot with Clip sound on rendering a silent local clip (or a song shot gaining sound).
+  it('asks a local render for sound only on a cold-open shot playing its clip sound', async () => {
+    const { generateVideo } = await import('../services/apiImageVideo.js');
+    const scene = (sceneId, extra) => ({ sceneId, order: 0, prompt: 'the rink at dawn', referenceImageId: `${sceneId}.png`, takes: [], ...extra });
+    const project = { id: 'p6', scenes: [scene('s1', { preMusic: { durationSec: 4, clipVolume: 1 } }), scene('s2', { startSec: 0, endSec: 4 })] };
+    const { result } = renderHook(() => useMusicVideoSceneMedia({ project, videoSettings: { settings: { backend: 'local' } }, applyScenePatch: vi.fn() }));
+    for (const [index, disableAudio] of [[0, false], [1, true]]) {
+      generateVideo.mockResolvedValueOnce({ jobId: `job-${index}`, status: 'queued' });
+      await act(async () => { await result.current.generateSceneVideo(project.scenes[index]); });
+      expect(generateVideo.mock.calls.at(-1)[0]).toMatchObject({ backend: 'local', disableAudio });
+    }
   });
 });

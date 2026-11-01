@@ -13,7 +13,6 @@
 
 const MAX_VALUE_LENGTH = 120;
 
-// eslint-disable-next-line no-control-regex
 const CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g;
 
 const formatValue = (value) => {

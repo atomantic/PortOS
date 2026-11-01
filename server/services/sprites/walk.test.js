@@ -941,7 +941,7 @@ describe('attachTuiWalkResult (grok-tui completion)', () => {
     const id = await characterWithLockedAnchors(newId(), ANCHOR_DIRECTIONS);
     for (const direction of SPRITE_DIRECTIONS) {
       const { runId } = await makeCandidateRun(id, direction);
-      await approveWalkDirection(id, { direction, runId }); // eslint-disable-line no-await-in-loop
+      await approveWalkDirection(id, { direction, runId });
     }
     const staleRunId = 'walk-east-0badc0de';
     await mkdir(join(TEST_ROOT, 'sprites', id, 'runs', staleRunId, 'generated'), { recursive: true });

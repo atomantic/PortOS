@@ -13,6 +13,7 @@ import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useParams, useNavigate, useSearchParams, useLocation, Link } from 'react-router';
 import { ArrowLeft, ImageIcon, FileText, Trash2, Plus, Save, Link2, Unlink, RefreshCw, Images, Film, Play, ScanEye, Copy, AtSign, Download, Sparkles, Clapperboard, Paintbrush, Wand2, GalleryHorizontal, Palette, LayoutGrid, X } from 'lucide-react';
 import PageSkeleton from '../components/ui/PageSkeleton';
+import LoadFailedState from '../components/ui/LoadFailedState';
 import MediaImage from '../components/MediaImage';
 import toast from '../components/ui/Toast';
 import TabPills from '../components/ui/TabPills';
@@ -93,6 +94,8 @@ function MoodBoardEditor({ id }) {
   const navigate = useNavigate();
   const [board, setBoard] = useState(null);
   const [loading, setLoading] = useState(true);
+  // Only a 404 means the board is gone; any other failed read keeps a Retry.
+  const [loadError, setLoadError] = useState(null);
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [savingMeta, setSavingMeta] = useState(false);
@@ -185,15 +188,22 @@ function MoodBoardEditor({ id }) {
   // after navigation. The load sequence drops StrictMode's duplicate GET.
   const mountedRef = useMounted();
   const loadSeqRef = useRef(0);
+  const boardLoadedRef = useRef(false);
+  const loadInFlightRef = useRef(false);
+  const loadPromiseRef = useRef(null);
 
-  const load = useCallback(async () => {
+  const readBoard = useCallback(async () => {
     const seq = ++loadSeqRef.current;
+    loadInFlightRef.current = true;
     setLoading(true);
-    const data = await getMoodBoard(id, { silent: true }).catch(() => null);
+    let error = null;
+    const data = await getMoodBoard(id, { silent: true }).catch((err) => { error = err; return null; });
     // Drop stale (a newer load started) or unmounted resolutions before any
     // setState / toast so an out-of-order response can't overwrite current state.
     if (!mountedRef.current || seq !== loadSeqRef.current) return;
+    setLoadError(error && error.status !== 404 ? error : null);
     if (data) {
+      boardLoadedRef.current = true;
       setBoard(data);
       setName(data.name || '');
       setDescription(data.description || '');
@@ -212,10 +222,15 @@ function MoodBoardEditor({ id }) {
       }
     } else {
       setBoard(null);
-      toast.error('Mood board not found');
+      if (!error || error.status === 404) toast.error('Mood board not found');
     }
+    loadInFlightRef.current = false;
     setLoading(false);
   }, [id]);
+  const load = useCallback(() => {
+    loadPromiseRef.current = readBoard();
+    return loadPromiseRef.current;
+  }, [readBoard]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -228,11 +243,30 @@ function MoodBoardEditor({ id }) {
     let sequence = 0;
     const onRender = async (evt) => {
       if (evt?.boardId !== id) return;
+      let reported = false;
+      const reportRenderFailure = () => {
+        if (reported) return;
+        reported = true;
+        if (evt.itemId && evt.status === 'failed' && evt.error && renderRequestRef.current !== evt.itemId) toast.error(`Render failed: ${evt.error}`);
+      };
+      // With no board loaded yet (first read failed or still pending) only a
+      // full load also seeds the name/description fields. A pending read may
+      // have captured the board before this event, so let it finish and then
+      // refresh the items it returned.
+      if (!boardLoadedRef.current) {
+        reportRenderFailure();
+        if (!loadInFlightRef.current) {
+          load();
+          return;
+        }
+        await loadPromiseRef.current;
+        if (!active || !boardLoadedRef.current) return;
+      }
       const current = ++sequence;
       const fresh = await getMoodBoard(id, { silent: true }).catch(() => null);
       if (!active || current !== sequence || !mountedRef.current || !fresh) return;
-      setBoard((prev) => (prev ? { ...prev, items: fresh.items, updatedAt: fresh.updatedAt } : fresh));
-      if (evt.itemId && evt.status === 'failed' && evt.error && renderRequestRef.current !== evt.itemId) toast.error(`Render failed: ${evt.error}`);
+      setBoard((prev) => (prev ? { ...prev, items: fresh.items, updatedAt: fresh.updatedAt } : prev));
+      reportRenderFailure();
     };
     socket.on('mood-board:item-render', onRender);
     socket.on('mood-board:generate', onRender);
@@ -244,7 +278,7 @@ function MoodBoardEditor({ id }) {
       socket.off('mood-board:generate', onRender);
       socket.off('connect', onReconnect);
     };
-  }, [id, mountedRef]);
+  }, [id, load, mountedRef]);
 
   const nameDirty = Boolean(board) && name.trim() !== (board.name || '');
   const descriptionDirty = Boolean(board) && description !== (board.description || '');
@@ -545,6 +579,16 @@ function MoodBoardEditor({ id }) {
           cards={8}
           gridColsClass="grid-cols-2 md:grid-cols-3 lg:grid-cols-4"
         />
+      </div>
+    );
+  }
+  if (!board && loadError) {
+    return (
+      <div className="max-w-4xl mx-auto">
+        <LoadFailedState title="Couldn’t load this mood board" hint={loadError.message} onRetry={load} />
+        <div className="text-center">
+          <Link to="/mood-boards" className="text-port-accent hover:underline">Back to boards</Link>
+        </div>
       </div>
     );
   }
@@ -923,7 +967,7 @@ function MoodBoardEditor({ id }) {
                     <div className="relative w-full aspect-square bg-port-bg">
                       {item.type === 'video' && videoSrc ? (
                         playingItemId === item.id ? (
-                          // eslint-disable-next-line jsx-a11y/media-has-caption -- reference clips have no caption track
+                          // reference clips have no caption track
                           <video
                             src={videoSrc}
                             poster={src || undefined}

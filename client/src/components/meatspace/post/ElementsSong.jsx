@@ -472,7 +472,7 @@ function ElementsSongMain({ item, mastery, onSelectMode, onBack, onAttestMastery
                     </span>
                   </button>
                   <button type="button" onClick={() => setRapidRead({ text: lines.map(l => l.text).join(' '), title: chunk.label })}
-                    className="shrink-0 flex items-center justify-center w-7 h-7 rounded-md border border-port-border text-gray-500 hover:text-emerald-400 hover:border-emerald-400/50 transition-colors"
+                    className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 shrink-0 flex items-center justify-center w-7 h-7 rounded-md border border-port-border text-gray-500 hover:text-emerald-400 hover:border-emerald-400/50 transition-colors"
                     title={`Rapid read ${chunk.label}`} aria-label={`Rapid read ${chunk.label}`}>
                     <Gauge size={13} />
                   </button>
@@ -1054,7 +1054,7 @@ function ElementFlashMode({ item, mastery, onBack, onComplete }) {
             <button
               aria-label="Skip"
               onClick={() => check(true)}
-              className="px-4 py-2.5 bg-port-card border border-port-border rounded-lg text-gray-400 hover:text-white transition-colors"
+              className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 px-4 py-2.5 bg-port-card border border-port-border rounded-lg text-gray-400 hover:text-white transition-colors"
             >
               <SkipForward size={16} />
             </button>
@@ -1206,7 +1206,7 @@ function FillBlankMode({ item, onBack, onComplete }) {
             <button
               aria-label="Skip"
               onClick={() => check(true)}
-              className="px-4 py-2.5 bg-port-card border border-port-border rounded-lg text-gray-400 hover:text-white transition-colors"
+              className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 px-4 py-2.5 bg-port-card border border-port-border rounded-lg text-gray-400 hover:text-white transition-colors"
             >
               <SkipForward size={16} />
             </button>

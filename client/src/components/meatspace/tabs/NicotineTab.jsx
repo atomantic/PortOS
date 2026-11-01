@@ -343,7 +343,7 @@ export default function NicotineTab() {
                   aria-label="New product button milligrams per unit"
                   step="0.1"
                 />
-                <button type="submit" aria-label="Add product" className="px-3 py-1.5 bg-port-accent/10 text-port-accent rounded text-xs hover:bg-port-accent/20">
+                <button type="submit" aria-label="Add product" className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 px-3 py-1.5 bg-port-accent/10 text-port-accent rounded text-xs hover:bg-port-accent/20">
                   <Plus size={14} />
                 </button>
               </form>

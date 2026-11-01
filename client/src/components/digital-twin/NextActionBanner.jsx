@@ -62,6 +62,7 @@ export default function NextActionBanner({ gaps, status, traits, onRefresh }) {
   // A rejected question read is not "category exhausted" (a null answer is):
   // keep the gap and offer Retry instead of skipping to the next category.
   const [questionError, setQuestionError] = useState(null);
+  const [providerName, setProviderName] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [skippedIndices, setSkippedIndices] = useState([]);
   const [copied, setCopied] = useState(false);
@@ -93,22 +94,28 @@ export default function NextActionBanner({ gaps, status, traits, onRefresh }) {
   // on top of handleSubmit's own load — two question requests (and, once the
   // structured questions run out, two provider calls) per answer.
   const gapsRef = useRef(gaps);
+  const providerNameRef = useRef('');
   useEffect(() => { gapsRef.current = gaps; }, [gaps]);
 
-  const loadQuestion = useCallback(async (category, skipList = []) => {
+  const loadQuestion = useCallback(async (category, skipList = [], { generate = false } = {}) => {
     const requestId = ++requestIdRef.current;
     setLoading(true);
     setQuestionError(null);
-    const result = await api.getDigitalTwinEnrichQuestion(category, undefined, undefined, skipList.length ? skipList : undefined, { silent: true })
+    const result = await api.getDigitalTwinEnrichQuestion(category, undefined, undefined, skipList.length ? skipList : undefined, { silent: true, structuredOnly: !generate })
       .then((q) => ({ q, error: null }), (error) => ({ q: null, error }));
     if (requestId !== requestIdRef.current) return; // stale response — a newer request superseded this one
     if (result.error) {
       setQuestion(null);
-      setQuestionError({ error: result.error instanceof Error ? result.error : new Error('Request failed'), category, skipList });
+      setQuestionError({ error: result.error instanceof Error ? result.error : new Error('Request failed'), category, skipList, generate });
       setLoading(false);
       return;
     }
     const q = result.q;
+    // Structured questions ran out on an automatic load: a generated question
+    // waits for the user's click (no silent provider call, #14445).
+    if (q?.exhausted && !providerNameRef.current) {
+      api.getActiveProvider({ silent: true }).then((provider) => { providerNameRef.current = provider?.name || ''; setProviderName(providerNameRef.current); }, () => {});
+    }
     if (!q) {
       // Category exhausted — advance to the next gap with available questions
       setCurrentGapIdx(prev => {
@@ -355,9 +362,27 @@ export default function NextActionBanner({ gaps, status, traits, onRefresh }) {
             <ListLoadError
               what="the next question"
               error={questionError.error}
-              onRetry={() => loadQuestion(questionError.category, questionError.skipList)}
+              onRetry={() => loadQuestion(questionError.category, questionError.skipList, { generate: questionError.generate })}
               className="my-2"
             />
+          ) : question?.exhausted ? (
+            <div className="flex flex-wrap items-center justify-between gap-2 py-2">
+              <button
+                type="button"
+                onClick={() => loadQuestion(activeCategory, skippedIndices, { generate: true })}
+                className="min-h-[44px] px-3 py-1.5 bg-port-accent text-white rounded-lg text-sm hover:bg-port-accent/80 flex items-center gap-1.5"
+              >
+                <Sparkles size={14} />
+                Generate a follow-up question{providerName ? ` with ${providerName}` : ''}
+              </button>
+              <button
+                type="button"
+                onClick={() => navigate(`/digital-twin/enrich?category=${activeCategory}`)}
+                className="text-xs text-port-accent hover:text-white"
+              >
+                Full enrichment →
+              </button>
+            </div>
           ) : question ? (
             <>
               <p className="text-sm text-gray-300 mb-3">{question.question}</p>

@@ -494,7 +494,7 @@ function MemoryPracticeRunner({ item, mode, onSelectMode, onExitMode, onBack, on
               <button
                 aria-label="Skip"
                 onClick={() => { setAnswer(''); handleCheckSpacedAnswer(currentLine.text, currentChunk.id, true); }}
-                className="px-4 py-2.5 bg-port-card border border-port-border rounded-lg text-gray-400 hover:text-white transition-colors"
+                className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 px-4 py-2.5 bg-port-card border border-port-border rounded-lg text-gray-400 hover:text-white transition-colors"
               >
                 <SkipForward size={16} />
               </button>
@@ -637,7 +637,7 @@ function MemoryPracticeRunner({ item, mode, onSelectMode, onExitMode, onBack, on
               <button
                 aria-label="Skip"
                 onClick={() => { setAnswer(''); handleCheckSequenceAnswer(expectedLine.text, true); }}
-                className="px-4 py-2.5 bg-port-card border border-port-border rounded-lg text-gray-400 hover:text-white transition-colors"
+                className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 px-4 py-2.5 bg-port-card border border-port-border rounded-lg text-gray-400 hover:text-white transition-colors"
               >
                 <SkipForward size={16} />
               </button>
@@ -715,7 +715,7 @@ function MemoryPracticeRunner({ item, mode, onSelectMode, onExitMode, onBack, on
               <button
                 aria-label="Skip"
                 onClick={() => { setAnswer(''); handleCheckFillBlank(blankWords, true); }}
-                className="px-4 py-2.5 bg-port-card border border-port-border rounded-lg text-gray-400 hover:text-white transition-colors"
+                className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 px-4 py-2.5 bg-port-card border border-port-border rounded-lg text-gray-400 hover:text-white transition-colors"
               >
                 <SkipForward size={16} />
               </button>

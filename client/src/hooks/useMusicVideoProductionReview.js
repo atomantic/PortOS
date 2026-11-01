@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { checkMusicVideoOverlayText, reverifyMusicVideoAlignment, importMusicVideoDocumentShots, getMusicVideoProductionReview, saveMusicVideoProductionDraft, prepareMusicVideoProductionReview,
-  approveMusicVideoProductionReview, lockMusicVideoShots, renderMusicVideoProductionProof, musicVideoExcerptRenderEventsUrl,
+  approveMusicVideoProductionReview, renderMusicVideoProductionProof, musicVideoExcerptRenderEventsUrl,
   cancelMusicVideoExcerptRender, importMusicVideoProductionPlanning, bindMusicVideoProductionShot, addMusicVideoProductionFeedback, resolveMusicVideoProductionFeedback, syncMusicVideoLyricAnchors, removeMusicVideoStaleStoryboardRows, reviseMusicVideoProductionFromFeedback, revertMusicVideoProductionInput } from '../services/apiMusicVideo.js';
 import useSseJobSlot from './useSseJobSlot.js';
 
@@ -79,16 +79,6 @@ export default function useMusicVideoProductionReview({ project, replaceProject 
     prepare: () => call(() => prepareMusicVideoProductionReview(project.id, {}, { silent: true })),
     approve: (stage, proofReview) => call(() => approveMusicVideoProductionReview(project.id,
       { stage, basis: readiness?.basis[stage], ...(stage === 'proof' ? { proofReview } : {}) }, { silent: true })),
-    // Lock (or unlock) single shots: a locked shot's clip can be made before the whole board is approved.
-    // Not silent: the buttons live on scene cards and the player, away from the review panel's error line.
-    lockShots: (sceneIds, locked, stage = 'still') => call(() => lockMusicVideoShots(project.id, { sceneIds, locked, stage })),
-    // Lock all: the stills first, since a video locks only over a locked still.
-    lockAll: (stills, videos) => call(async () => {
-      let result = null;
-      if (stills.length) result = await lockMusicVideoShots(project.id, { sceneIds: stills, locked: true, stage: 'still' });
-      if (videos.length) result = await lockMusicVideoShots(project.id, { sceneIds: videos, locked: true, stage: 'video' });
-      return result;
-    }),
     renderProof: window => proof.start({ id: project.id, window }, project.id),
   };
 }

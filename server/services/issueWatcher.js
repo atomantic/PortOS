@@ -187,20 +187,20 @@ export function classifyChecks(statusCheckRollup) {
   return 'pending';
 }
 
+// One key for a screened issue comment across screening, assignment, coverage and ageing.
+const issueCommentKey = (item) => `${item?.issueNumber}:${item?.commentId}`;
+
 function normalizeFinding(finding, anchors) {
   if (!finding || typeof finding !== 'object') return null;
   const path = trimTo(finding.path, 500);
   const side = String(finding.side || '').toUpperCase();
   const line = Number(finding.line);
-  // Legacy blocking:false is a severity hint, never permission to merge a finding.
-  const blocking = true;
-  const rendered = renderFinding(finding, { blocking });
+  const rendered = renderFinding(finding);
   if (!path || side !== 'RIGHT' || !Number.isInteger(line) || line < 1 || !rendered) return null;
   if (!anchors.has(`${path}\u0000${side}\u0000${line}`)) return null;
   return {
     comment: { path, side, line, body: rendered.body },
     label: rendered.label,
-    blocking,
   };
 }
 
@@ -733,7 +733,7 @@ async function screenModelAbuseInputs({ app, state, issueComments }) {
     if (!result.ok) return { ok: false, code: result.code };
     if (result.safe) {
       safeComments.push(item);
-      safeCommentFingerprints.set(`${item.issueNumber}:${item.commentId}`, result.report.fingerprint);
+      safeCommentFingerprints.set(issueCommentKey(item), result.report.fingerprint);
     }
     else {
       blocked.push(result.report);
@@ -774,7 +774,7 @@ async function assignSafeVolunteers(ctx, comments) {
     const succeeded = await assignVolunteer(ctx, item.issueNumber, item.commentAuthor);
     if (succeeded) {
       assignedIssues.add(item.issueNumber);
-      assignedCommentKeys.add(`${item.issueNumber}:${item.commentId}`);
+      assignedCommentKeys.add(issueCommentKey(item));
       assignments += 1;
     }
   }
@@ -965,7 +965,7 @@ export async function gatherIssueWatcherInput({ app } = {}) {
   const pendingById = new Map();
   for (const item of [...(Array.isArray(state.pendingIssueComments) ? state.pendingIssueComments : []), ...issueResult.comments]) {
     if (item && Number.isInteger(item.issueNumber) && Number.isInteger(item.commentId)) {
-      const key = `${item.issueNumber}:${item.commentId}`;
+      const key = issueCommentKey(item);
       const existing = pendingById.get(key);
       pendingById.set(key, { ...item, ticks: existing?.ticks || item.ticks || 0 });
     }
@@ -1024,9 +1024,9 @@ export async function gatherIssueWatcherInput({ app } = {}) {
     lastScanAt: startedAt,
     blocked: [...blockedByFingerprint.values()].filter(Boolean).slice(-MODEL_ABUSE_REPORT_LIMIT),
   };
-  const withheldKeys = new Set(screened.blocked.map((report) => `${report.issueNumber}:${report.commentId}`));
+  const withheldKeys = new Set(screened.blocked.map(issueCommentKey));
   const pendingAfterAssignments = pendingIssueComments.filter((item) => {
-    const key = `${item.issueNumber}:${item.commentId}`;
+    const key = issueCommentKey(item);
     return !assignmentResult.assignedCommentKeys.has(key) && !withheldKeys.has(key);
   });
   await persistState(app.id, {
@@ -1036,7 +1036,7 @@ export async function gatherIssueWatcherInput({ app } = {}) {
   });
 
   const safeIssueComments = takeIssueCommentsWithinBudget(screened.safeComments.filter((item) => (
-    !assignmentResult.assignedCommentKeys.has(`${item.issueNumber}:${item.commentId}`)
+    !assignmentResult.assignedCommentKeys.has(issueCommentKey(item))
   )));
   if (safeIssueComments.length === 0) {
     return {
@@ -1080,8 +1080,6 @@ export async function buildTaskInput(options = {}) {
   activeIntakeApps.add(appId);
   return runScheduledIssueIntake(options).finally(() => activeIntakeApps.delete(appId));
 }
-
-const issueCommentKey = (item) => `${item.issueNumber}:${item.commentId}`;
 
 /**
  * Comments the local scorer confidently answered `none` for, as finished
@@ -1391,19 +1389,17 @@ function ledgerAfterLanding(approvals, number, outcome) {
 function reviewPlanFor(decision, diff, target) {
   const anchors = parseAddedDiffLines(diff);
   const normalizedFindings = decision.findings.map((finding) => normalizeFinding(finding, anchors)).filter(Boolean);
-  const blockingFindings = normalizedFindings.filter(({ blocking }) => blocking);
   const hasInvalidFinding = normalizedFindings.length !== decision.findings.length;
   const diffInsufficient = target.diffTruncated || diff.length > MAX_DIFF_CHARS;
   return {
     normalizedFindings,
     findings: normalizedFindings.map(({ comment }) => comment),
-    blockingFindings,
     hasInvalidFinding,
-    // An approval cannot override an accepted finding, whatever its severity.
+    // Every finding blocks, valid or not: a legacy blocking:false is a severity
+    // hint, never permission to approve past a finding.
     canApprove: decision.verdict === 'approve'
-      && !hasInvalidFinding
       && !diffInsufficient
-      && blockingFindings.length === 0,
+      && decision.findings.length === 0,
   };
 }
 
@@ -1412,17 +1408,14 @@ function reviewPlanFor(decision, diff, target) {
  * to whoever can act on it. `{ reviewed, handedBack }` report what happened.
  */
 async function postNonApprovingReview({ app, ctx, pr, raw, decision, review, target, handbacks, drops, recheck }) {
-  const { normalizedFindings, findings, blockingFindings, hasInvalidFinding } = review;
+  const { normalizedFindings, findings, hasInvalidFinding } = review;
   if (!await recheck()) return { reviewed: false, handedBack: false };
   const downgraded = hasInvalidFinding && decision.verdict !== 'request_changes';
-  const shouldRequestChanges = decision.verdict === 'request_changes'
-    || hasInvalidFinding
-    || blockingFindings.length > 0;
+  const shouldRequestChanges = decision.verdict === 'request_changes' || decision.findings.length > 0;
   const summary = renderReviewBody({
     report: raw,
     verdict: shouldRequestChanges ? 'request_changes' : 'defer',
-    blockingFindings,
-    nonBlockingFindings: normalizedFindings.filter((entry) => !entry.blocking),
+    findings: normalizedFindings,
     downgraded,
   });
   const posted = shouldRequestChanges
@@ -1519,53 +1512,38 @@ async function verifyScreenedPullRequest(ctx, raw, expectedPullRequests) {
   return { ok: true, decision, target, pr, diff, assessment };
 }
 
-/** Validated reply/review/rebase/merge pass run after cognition. */
-export async function processTaskOutput({ appId, success, payload, task, requireEligibilityFacts = false } = {}) {
-  if (!appId || !success) return { action: 'no-op', reason: !success ? 'agent-failed' : 'missing-app' };
-  if (!isTaskOutputPayload(payload)) return { action: 'no-op', reason: 'unparseable-response' };
-  // A compromised reviewer must not be able to smuggle an instruction through
-  // its own summary/comment text. Validate the complete generated envelope
-  // before reading fresh forge state or performing any mutation; one unsafe
-  // field invalidates the whole batch rather than allowing earlier decisions
-  // to be posted before a later one is inspected.
-  if (hasUnsafeGeneratedOutput(payload)) return { action: 'no-op', reason: 'unsafe-model-output' };
-  const expected = task?.metadata?.issueWatcher;
-  if (!expected || !Array.isArray(expected.issueComments) || !Array.isArray(expected.pullRequests)) {
-    return { action: 'no-op', reason: 'missing-hook-metadata' };
-  }
-  if (expected.strictIssueCoverage === true) {
-    const parsed = issueAnalysisSchema.safeParse(payload);
-    const ids = new Set(expected.issueComments.map((item) => `${item.issueNumber}:${item.commentId}`));
-    const seen = new Set();
-    if (!parsed.success || payload.issueComments.length !== ids.size || payload.issueComments.some((item) => {
-      const key = `${item.issueNumber}:${item.commentId}`;
-      if (!ids.has(key) || seen.has(key)) return true;
-      seen.add(key);
-      return false;
-    })) return { action: 'no-op', reason: 'incomplete-issue-response' };
-  }
-  const strictPullRequestCoverage = expected.strictPullRequestCoverage === true;
-  const expectedPullRequests = new Map(expected.pullRequests.map((item) => [item.number, item]));
-  if (strictPullRequestCoverage) {
-    const seen = new Set();
-    const validEnvelope = payload.issueComments.length === 0
-      && payload.pullRequests.length === expectedPullRequests.size
-      && payload.pullRequests.every((raw) => {
-        const decision = normalizeReviewDecision(raw);
-        if (!decision || seen.has(decision.number)) return false;
-        seen.add(decision.number);
-        const target = expectedPullRequests.get(decision.number);
-        return Boolean(target && decision.headSha === target.headSha && target.contentFingerprint);
-      })
-      && seen.size === expectedPullRequests.size;
-    if (!validEnvelope) return { action: 'no-op', reason: 'incomplete-pull-request-response' };
-  }
-  const app = await getAppById(appId);
-  const ctx = app ? await resolveContext(app) : null;
-  if (!app || !ctx || ctx.repoFullName !== expected.repoFullName) return { action: 'no-op', reason: 'repo-unavailable' };
+/** Strict issue coverage: a schema-valid decision for every handed comment, each exactly once. */
+function coversExpectedIssueComments(payload, expectedIssueComments) {
+  if (!issueAnalysisSchema.safeParse(payload).success) return false;
+  const ids = new Set(expectedIssueComments.map(issueCommentKey));
+  const seen = new Set();
+  return payload.issueComments.length === ids.size && payload.issueComments.every((item) => {
+    const key = issueCommentKey(item);
+    if (!ids.has(key) || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
 
-  const expectedComments = new Map(expected.issueComments.map((item) => [`${item.issueNumber}:${item.commentId}`, item]));
-  const commentDecisions = new Map(payload.issueComments.map((item) => [`${item?.issueNumber}:${item?.commentId}`, item]));
+/**
+ * Strict pull request coverage: no issue comments, and exactly one decision per
+ * handed PR at its screened head, each of which carries a screened fingerprint.
+ */
+function coversExpectedPullRequests(payload, expectedPullRequests) {
+  const seen = new Set();
+  return payload.issueComments.length === 0
+    && payload.pullRequests.length === expectedPullRequests.size
+    && payload.pullRequests.every((raw) => {
+      const decision = normalizeReviewDecision(raw);
+      if (!decision || seen.has(decision.number)) return false;
+      seen.add(decision.number);
+      const target = expectedPullRequests.get(decision.number);
+      return Boolean(target && decision.headSha === target.headSha && target.contentFingerprint);
+    });
+}
+
+/** Post the decided replies to comments whose content still matches what was screened. */
+async function answerIssueComments(ctx, expectedComments, commentDecisions) {
   const handledCommentKeys = new Set();
   let replies = 0;
   for (const [key, item] of expectedComments) {
@@ -1580,6 +1558,125 @@ export async function processTaskOutput({ appId, success, payload, task, require
     }
     handledCommentKeys.add(key);
   }
+  return { replies, handledCommentKeys };
+}
+
+/**
+ * Verify, review and (when approved) land one PR decision. Returns what happened
+ * and the approvals ledger after any eligibility lapse or landing.
+ */
+async function reviewScreenedPullRequest({ app, ctx, raw, expectedPullRequests, drops, handbacks, approvals, requireEligibilityFacts }) {
+  const verified = await verifyScreenedPullRequest(ctx, raw, expectedPullRequests);
+  if (!verified.ok) {
+    drops.record(verified.number, verified.reason);
+    if (verified.notify) {
+      await notifyPendingApproval(app, { number: verified.number, url: verified.pr?.url || null },
+        `The review finished, but ${verified.reason}, so PortOS took no action on it.`);
+    }
+    return { reviewed: false, handedBack: false, landing: null, approvals };
+  }
+  const { decision, target, pr, diff, assessment } = verified;
+  let ledger = approvals;
+  const skipped = () => ({ reviewed: false, handedBack: false, landing: null, approvals: ledger });
+  const eligibilityRequired = requireEligibilityFacts
+    || Object.prototype.hasOwnProperty.call(target, 'eligibilityFacts');
+  const eligibilityStillCurrent = async () => {
+    if (!await assessment.stillCurrent()) {
+      drops.record(decision.number, 'the assessed contribution or CI changed before action');
+      return false;
+    }
+    if (!eligibilityRequired) return true;
+    const current = await eligibilityFactsStillCurrent(ctx, pr, target);
+    if (!current) {
+      ledger = withoutApproval(ledger, pr.number);
+      drops.record(decision.number, 'the linked issue state or author assignment changed since the eligibility gate ran');
+    }
+    return current;
+  };
+  const review = reviewPlanFor(decision, diff, target);
+  if (!review.canApprove) {
+    const outcome = await postNonApprovingReview({
+      app, ctx, pr, raw, decision, review, target, handbacks, drops, recheck: eligibilityStillCurrent,
+    });
+    return { reviewed: outcome.reviewed, handedBack: outcome.handedBack, landing: null, approvals: ledger };
+  }
+  if (!await eligibilityStillCurrent()) return skipped();
+  // Every accepted finding is blocking, so an approvable review never carries inline comments.
+  const approved = await submitReview(ctx, pr.number, pr.headRefOid, {
+    body: renderReviewBody({ report: raw, verdict: 'approve' }),
+    event: 'APPROVE',
+  });
+  if (!approved) {
+    drops.record(decision.number, 'GitHub rejected the approving review, so no CI approval or merge could follow');
+    return skipped();
+  }
+  const landing = await advanceApprovedPullRequest({
+    app, ctx, pr, handbacks, source: 'fresh',
+    approval: approvalRecordFor(pr, target, decision),
+    recheck: eligibilityStillCurrent,
+  });
+  return { reviewed: true, handedBack: false, landing, approvals: ledgerAfterLanding(ledger, pr.number, landing) };
+}
+
+/** Age the still-unanswered handed comments; those past the retry budget time out. */
+function agePendingIssueComments(latestState, handledCommentKeys, expectedComments) {
+  const timedOutComments = [];
+  const pendingIssueComments = (Array.isArray(latestState.pendingIssueComments) ? latestState.pendingIssueComments : [])
+    .flatMap((item) => {
+      const key = issueCommentKey(item);
+      if (handledCommentKeys.has(key)) return [];
+      if (!expectedComments.has(key)) return [item];
+      const next = { ...item, ticks: (item.ticks || 0) + 1 };
+      if (next.ticks < MAX_PENDING_ISSUE_COMMENT_TICKS) return [next];
+      timedOutComments.push(next);
+      return [];
+    });
+  return { pendingIssueComments, timedOutComments };
+}
+
+async function notifyTimedOutIssueComments(appId, timedOutComments) {
+  if (timedOutComments.length === 0) return;
+  await addNotification({
+    type: NOTIFICATION_TYPES.AGENT_WARNING,
+    priority: PRIORITY_LEVELS.HIGH,
+    title: `${timedOutComments.length} Issue Watcher comment${timedOutComments.length === 1 ? '' : 's'} need attention`,
+    description: `PortOS stopped retrying after ${MAX_PENDING_ISSUE_COMMENT_TICKS} incomplete reasoning or reply attempts.`,
+    link: timedOutComments[0].commentUrl,
+    metadata: { appId, issueWatcherCommentCount: timedOutComments.length },
+  }).catch((err) => {
+    console.error(`❌ issue-watcher: failed to notify about timed-out issue comments: ${err.message}`);
+    return null;
+  });
+}
+
+/** Validated reply/review/rebase/merge pass run after cognition. */
+export async function processTaskOutput({ appId, success, payload, task, requireEligibilityFacts = false } = {}) {
+  if (!appId || !success) return { action: 'no-op', reason: !success ? 'agent-failed' : 'missing-app' };
+  if (!isTaskOutputPayload(payload)) return { action: 'no-op', reason: 'unparseable-response' };
+  // A compromised reviewer must not be able to smuggle an instruction through
+  // its own summary/comment text. Validate the complete generated envelope
+  // before reading fresh forge state or performing any mutation; one unsafe
+  // field invalidates the whole batch rather than allowing earlier decisions
+  // to be posted before a later one is inspected.
+  if (hasUnsafeGeneratedOutput(payload)) return { action: 'no-op', reason: 'unsafe-model-output' };
+  const expected = task?.metadata?.issueWatcher;
+  if (!expected || !Array.isArray(expected.issueComments) || !Array.isArray(expected.pullRequests)) {
+    return { action: 'no-op', reason: 'missing-hook-metadata' };
+  }
+  if (expected.strictIssueCoverage === true && !coversExpectedIssueComments(payload, expected.issueComments)) {
+    return { action: 'no-op', reason: 'incomplete-issue-response' };
+  }
+  const expectedPullRequests = new Map(expected.pullRequests.map((item) => [item.number, item]));
+  if (expected.strictPullRequestCoverage === true && !coversExpectedPullRequests(payload, expectedPullRequests)) {
+    return { action: 'no-op', reason: 'incomplete-pull-request-response' };
+  }
+  const app = await getAppById(appId);
+  const ctx = app ? await resolveContext(app) : null;
+  if (!app || !ctx || ctx.repoFullName !== expected.repoFullName) return { action: 'no-op', reason: 'repo-unavailable' };
+
+  const expectedComments = new Map(expected.issueComments.map((item) => [issueCommentKey(item), item]));
+  const commentDecisions = new Map(payload.issueComments.map((item) => [issueCommentKey(item), item]));
+  const { replies, handledCommentKeys } = await answerIssueComments(ctx, expectedComments, commentDecisions);
   const commentsHandled = handledCommentKeys.size === expectedComments.size
     && commentDecisions.size === expectedComments.size;
 
@@ -1591,94 +1688,18 @@ export async function processTaskOutput({ appId, success, payload, task, require
   let reviewed = 0;
   let handedBack = 0;
   for (const raw of payload.pullRequests) {
-    const verified = await verifyScreenedPullRequest(ctx, raw, expectedPullRequests);
-    if (!verified.ok) {
-      drops.record(verified.number, verified.reason);
-      if (verified.notify) {
-        await notifyPendingApproval(app, { number: verified.number, url: verified.pr?.url || null },
-          `The review finished, but ${verified.reason}, so PortOS took no action on it.`);
-      }
-      continue;
-    }
-    const { decision, target, pr, diff, assessment } = verified;
-    const eligibilityRequired = requireEligibilityFacts
-      || Object.prototype.hasOwnProperty.call(target, 'eligibilityFacts');
-    const eligibilityStillCurrent = async () => {
-      if (!await assessment.stillCurrent()) {
-        drops.record(decision.number, 'the assessed contribution or CI changed before action');
-        return false;
-      }
-      if (!eligibilityRequired) return true;
-      const current = await eligibilityFactsStillCurrent(ctx, pr, target);
-      if (!current) {
-        approvals = withoutApproval(approvals, pr.number);
-        drops.record(decision.number, 'the linked issue state or author assignment changed since the eligibility gate ran');
-      }
-      return current;
-    };
-    const review = reviewPlanFor(decision, diff, target);
-    if (!review.canApprove) {
-      const outcome = await postNonApprovingReview({
-        app, ctx, pr, raw, decision, review, target, handbacks, drops, recheck: eligibilityStillCurrent,
-      });
-      if (outcome.reviewed) reviewed += 1;
-      if (outcome.handedBack) handedBack += 1;
-      continue;
-    }
-
-    const approveBody = renderReviewBody({
-      report: raw,
-      verdict: 'approve',
-      nonBlockingFindings: review.normalizedFindings,
+    const step = await reviewScreenedPullRequest({
+      app, ctx, raw, expectedPullRequests, drops, handbacks, approvals, requireEligibilityFacts,
     });
-    if (!await eligibilityStillCurrent()) continue;
-    const approved = await submitReview(ctx, pr.number, pr.headRefOid, {
-      body: approveBody,
-      event: 'APPROVE',
-      comments: review.findings,
-    }) || (review.findings.length > 0 && await submitReview(ctx, pr.number, pr.headRefOid, {
-      body: approveBody,
-      event: 'APPROVE',
-    }));
-    if (!approved) {
-      drops.record(decision.number, 'GitHub rejected the approving review, so no CI approval or merge could follow');
-      continue;
-    }
-    reviewed += 1;
-    const outcome = await advanceApprovedPullRequest({
-      app, ctx, pr, handbacks, source: 'fresh',
-      approval: approvalRecordFor(pr, target, decision),
-      recheck: eligibilityStillCurrent,
-    });
-    approvals = ledgerAfterLanding(approvals, pr.number, outcome);
-    landings.push(outcome);
+    approvals = step.approvals;
+    if (step.reviewed) reviewed += 1;
+    if (step.handedBack) handedBack += 1;
+    if (step.landing) landings.push(step.landing);
   }
 
-  const latestState = readState(await getAppById(appId) || app);
-  const timedOutComments = [];
-  const pendingIssueComments = (Array.isArray(latestState.pendingIssueComments) ? latestState.pendingIssueComments : [])
-    .flatMap((item) => {
-      const key = `${item?.issueNumber}:${item?.commentId}`;
-      if (handledCommentKeys.has(key)) return [];
-      if (!expectedComments.has(key)) return [item];
-      const next = { ...item, ticks: (item.ticks || 0) + 1 };
-      if (next.ticks < MAX_PENDING_ISSUE_COMMENT_TICKS) return [next];
-      timedOutComments.push(next);
-      return [];
-    });
-  if (timedOutComments.length > 0) {
-    await addNotification({
-      type: NOTIFICATION_TYPES.AGENT_WARNING,
-      priority: PRIORITY_LEVELS.HIGH,
-      title: `${timedOutComments.length} Issue Watcher comment${timedOutComments.length === 1 ? '' : 's'} need attention`,
-      description: `PortOS stopped retrying after ${MAX_PENDING_ISSUE_COMMENT_TICKS} incomplete reasoning or reply attempts.`,
-      link: timedOutComments[0].commentUrl,
-      metadata: { appId, issueWatcherCommentCount: timedOutComments.length },
-    }).catch((err) => {
-      console.error(`❌ issue-watcher: failed to notify about timed-out issue comments: ${err.message}`);
-      return null;
-    });
-  }
+  const { pendingIssueComments, timedOutComments } = agePendingIssueComments(
+    readState(await getAppById(appId) || app), handledCommentKeys, expectedComments);
+  await notifyTimedOutIssueComments(appId, timedOutComments);
   const handbackPatch = handbackStatePatch(handbacks);
   await persistState(appId, (state) => ({
     approvedPullRequests: approvals,

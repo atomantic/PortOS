@@ -53,7 +53,7 @@ afterAll(async () => {
     // tribe_identities cascades off tribe_people, but delete people explicitly
     // to also clean up their touchpoints.
     for (const id of createdPersonIds) {
-      // eslint-disable-next-line no-await-in-loop -- small fixed teardown list
+      // small fixed teardown list
       await query('DELETE FROM tribe_people WHERE id = $1', [id]).catch(() => {});
     }
     await close();
@@ -604,13 +604,13 @@ describe.skipIf(!runDb)('beeperTribe (#34)', () => {
     const person = await makePerson('Example Batch Sender');
     const batches = [];
     for (let i = 0; i < 20; i++) {
-      // eslint-disable-next-line no-await-in-loop -- fixture setup before transaction counting
+      // fixture setup before transaction counting
       const conversationId = await makeConversation(`${nonce}-batch-${i}`);
-      // eslint-disable-next-line no-await-in-loop -- fixture setup
+      // fixture setup
       await beeperTribe.upsertParticipant({
         conversationId, sourceUserId: 'batch-sender', handle: '', observedVia: 'message-sender',
       });
-      // eslint-disable-next-line no-await-in-loop -- fixture setup
+      // fixture setup
       await beeperTribe.linkParticipant({ conversationId, sourceUserId: 'batch-sender', personId: person.id });
       batches.push(Array.from({ length: 25 }, () => ({
         conversationId, senderId: 'batch-sender',

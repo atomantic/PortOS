@@ -5,6 +5,7 @@ import PageHeader from '../components/PageHeader.jsx';
 import RecordStatusLine from '../components/ui/RecordStatusLine.jsx';
 import TabPills from '../components/ui/TabPills.jsx';
 import PageSkeleton from '../components/ui/PageSkeleton';
+import LoadFailedState from '../components/ui/LoadFailedState';
 import toast from '../components/ui/Toast';
 import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
 import { useConfirmDelete } from '../hooks/useConfirmDelete';
@@ -64,7 +65,7 @@ function CreativeDirectorProject({ id, basePath }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const editingDraft = searchParams.get('draft') === '1';
   const setEditingDraft = open => setSearchParams(prev => { const next = new URLSearchParams(prev); if (open) next.set('draft', '1'); else next.delete('draft'); return next; }, { replace: true });
-  const { data: project, loading, refetch: fetchProject, updateData: setProject } = useSocketResource(
+  const { data: project, loading, error: loadError, refetch: fetchProject, updateData: setProject } = useSocketResource(
     () => getCreativeDirectorProject(id, { silent: true }),
     { events: PROJECT_EVENTS, resourceKey: id, matchesEvent: event => event?.id === id },
   );
@@ -190,6 +191,14 @@ function CreativeDirectorProject({ id, basePath }) {
         cards={3}
         sidebar={false}
       />
+    );
+  }
+  // Only a 404 means the project is gone; any other failed read keeps a Retry.
+  if (!project && loadError && loadError.status !== 404) {
+    return (
+      <div className="p-6">
+        <LoadFailedState title="Couldn’t load this project" hint={loadError.message} onRetry={fetchProject} />
+      </div>
     );
   }
   if (!project || project.id !== id) return <div className="p-6 text-port-error">Project not found.</div>;

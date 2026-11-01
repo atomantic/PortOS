@@ -60,7 +60,7 @@ export default function AddActivityForm({ onAdd }) {
                 onClick={() => setIcon(ic)}
                 aria-label={`Icon: ${ic}`}
                 aria-pressed={icon === ic}
-                className={`p-1.5 rounded ${icon === ic ? 'bg-port-accent/20 text-port-accent' : 'text-gray-500 hover:text-white'}`}
+                className={`pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-1.5 rounded ${icon === ic ? 'bg-port-accent/20 text-port-accent' : 'text-gray-500 hover:text-white'}`}
               >
                 <IconForName name={ic} size={14} />
               </button>

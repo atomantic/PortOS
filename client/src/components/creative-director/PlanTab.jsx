@@ -10,8 +10,6 @@ import {
   replanCreativeDirectorProject,
   updateCreativeDirectorPlanStep,
 } from '../../services/apiCreativeDirector.js';
-import { listUniverseNames } from '../../services/apiUniverseBuilder.js';
-import { listPipelineSeriesNames } from '../../services/apiPipeline.js';
 import {
   annotatePlanSteps,
   planCostSummary,
@@ -39,8 +37,6 @@ export default function PlanTab({ project, onProjectUpdate }) {
   // Composer state hoisted above the Drawer body (Drawer state-hoisting rule).
   const [draft, setDraft] = useState(EMPTY_DIRECTIVE);
   const [savingDirective, setSavingDirective] = useState(false);
-  const [universes, setUniverses] = useState([]);
-  const [series, setSeries] = useState([]);
 
   // Tool catalog drives cost-class badges + the dry-run banner + approval gating.
   // Fetched once (silent — the board degrades gracefully to no cost badges on
@@ -72,10 +68,7 @@ export default function PlanTab({ project, onProjectUpdate }) {
       ? { ...EMPTY_DIRECTIVE, ...project.directive, constraints: { ...EMPTY_DIRECTIVE.constraints, ...(project.directive.constraints || {}) } }
       : EMPTY_DIRECTIVE);
     setSearchParams((prev) => { const n = new URLSearchParams(prev); n.set('directive', 'edit'); return n; }, { replace: true });
-    // Lazy-load the pickers on open.
-    if (!universes.length) listUniverseNames({ silent: true }).then((u) => setUniverses(Array.isArray(u) ? u : (u?.items || []))).catch(() => {});
-    if (!series.length) listPipelineSeriesNames({ silent: true }).then((s) => setSeries(Array.isArray(s) ? s : (s?.items || []))).catch(() => {});
-  }, [project.directive, setSearchParams, universes.length, series.length]);
+  }, [project.directive, setSearchParams]);
 
   const closeComposer = useCallback(() => {
     setSearchParams((prev) => { const n = new URLSearchParams(prev); n.delete('directive'); return n; }, { replace: true });
@@ -134,8 +127,7 @@ export default function PlanTab({ project, onProjectUpdate }) {
       <DirectiveComposer
         directive={draft}
         onChange={setDraft}
-        universes={universes}
-        series={series}
+        enabled={composerOpen}
         idPrefix="cd-directive"
         disabled={savingDirective}
       />

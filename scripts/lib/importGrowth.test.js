@@ -371,6 +371,14 @@ describe('evaluateWorkingTreeImportGrowth on a repo that is not the suite', () =
         repoRoot: root,
         env: { CI_BASE_SHA: sha },
       })).toThrow(/does not pass/);
+      let walks = 0;
+      expect(() => evaluateWorkingTreeImportGrowth({
+        repoRoot: root,
+        env: { CI_BASE_SHA: sha },
+        headMeasurement: { tests: new Map(), deps: new Map(), testCount: 1, total: 1 },
+        measureHead: () => { walks += 1; throw new Error('walked'); },
+      })).toThrow(/does not pass/);
+      expect(walks).toBe(0);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

@@ -205,7 +205,7 @@ export default function ExercisePanel({ activeWork, onClose, editorDirty = false
               <StopCircle size={12} /> Finish
             </button>
             <button onClick={() => finishSession({ keep: false })}
-              className="flex items-center gap-1 px-2 py-1 text-gray-500 text-xs rounded hover:text-port-error"
+              className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 flex items-center gap-1 px-2 py-1 text-gray-500 text-xs rounded hover:text-port-error"
               title="Discard" aria-label="Discard"
             >
               <X size={12} />

@@ -285,31 +285,10 @@ const requiredStageForEnding = (outcome, stages) => (
 );
 
 /**
- * Deterministic branch coverage for a loom's authored evolution lenses.
- *
- * Returns `null` when the plan has no lens at all — the caller adds nothing to
- * its report, so an install that never opted in is byte-identical.
- *
- * @param {object} loom                       sanitized loom record
- * @param {object} [options]
- * @param {object} [options.playthroughReport] an `analyzeLoomPlaythroughs`
- *   result to reuse. Omit and each episode is enumerated here instead.
+ * One path enumeration per episode, shared by every lens: the walked paths
+ * with each node's first-visit index, and the reconvergences on each path.
  */
-export function analyzeCharacterEvolutionCoverage(loom, { playthroughReport = null } = {}) {
-  const lenses = asArray(loom?.seriesPlan?.characterEvolutions);
-  if (!lenses.length) return null;
-
-  const sceneIndex = buildSceneIndex(loom);
-  const findings = [];
-  // Counted even when the cap drops the finding itself, so a lens whose only
-  // findings fell off the end can never roll up as `verified`.
-  let lensFindingCount = 0;
-  const pushFinding = (finding) => {
-    lensFindingCount += 1;
-    if (findings.length < EVOLUTION_COVERAGE_FINDINGS_MAX) findings.push(finding);
-  };
-
-  // ---- per-episode path context (one enumeration, shared by every lens) ----
+function buildEpisodeContexts(loom, playthroughReport) {
   const episodes = [];
   const contextById = new Map();
   for (const episode of asArray(loom?.episodes)) {
@@ -342,170 +321,219 @@ export function analyzeCharacterEvolutionCoverage(loom, { playthroughReport = nu
       convergenceCount: convergenceNodeIds.size,
     });
   }
-  const anchorView = (context, anchorNodeId) => {
-    if (!context.anchorViews.has(anchorNodeId)) {
-      context.anchorViews.set(anchorNodeId, convergenceViewOfAnchor(
-        anchorNodeId, context.paths, context.convergenceOnPath,
-      ));
-    }
-    return context.anchorViews.get(anchorNodeId);
-  };
+  return { episodes, contextById };
+}
 
-  // ---- per-character coverage ----
+function anchorView(context, anchorNodeId) {
+  if (!context.anchorViews.has(anchorNodeId)) {
+    context.anchorViews.set(anchorNodeId, convergenceViewOfAnchor(
+      anchorNodeId, context.paths, context.convergenceOnPath,
+    ));
+  }
+  return context.anchorViews.get(anchorNodeId);
+}
+
+/**
+ * Place each of a lens's stages on its anchored scene. `unreviewed` is set by
+ * any stage that cannot be reasoned about (unknown id, unresolved anchor, an
+ * episode whose paths were bounded out) and by a lens with no stages at all.
+ */
+function resolveLensStages(lens, sceneIndex, contextById, { who, scope, pushFinding }) {
+  const stages = [];
+  const resolvedByEpisode = new Map();
+  let unreviewed = false;
+  for (const stage of asArray(lens.evolution?.stages)) {
+    // `sanitizeEvolutionStage` rejects an unknown stage id rather than
+    // coercing it, so this only fires on an unsanitized caller — and a beat
+    // that cannot be placed in the sequence cannot be reasoned about, which
+    // is unreviewed, never verified.
+    if (!STAGE_INDEX.has(stage?.stageId)) {
+      unreviewed = true;
+      continue;
+    }
+    const anchor = resolveStageAnchor(stage.evidence, sceneIndex);
+    const context = anchor.nodeId ? contextById.get(anchor.episodeId) : null;
+    const enumerated = Boolean(context?.enumerated);
+    if (anchor.resolution !== 'resolved' || !enumerated) unreviewed = true;
+    if (anchor.resolution === 'stale') {
+      pushFinding({
+        code: EVOLUTION_COVERAGE_CODES.EVIDENCE_STALE,
+        severity: 'error',
+        message: `${who}'s "${stageLabel(stage.stageId)}" stage points at ${anchor.dead}, which no longer exists, so the stage can never be proved on any path.`,
+        remediation: 'Re-anchor the stage to a scene that still exists, or clear the evidence pointer.',
+        ...scope,
+        ...(anchor.episodeId ? { episodeId: anchor.episodeId } : {}),
+        stageId: stage.stageId,
+      });
+    }
+    const record = {
+      stageId: stage.stageId,
+      resolution: anchor.resolution,
+      episodeId: anchor.episodeId,
+      nodeId: anchor.nodeId,
+      // `null` = not computed (unresolved anchor, or an episode whose paths
+      // were bounded out); `0` = computed and proved on no path at all.
+      provenPathCount: null,
+      pathCount: enumerated ? context.paths.length : null,
+    };
+    stages.push(record);
+    if (anchor.resolution === 'resolved' && enumerated) {
+      const bucket = resolvedByEpisode.get(anchor.episodeId) || [];
+      bucket.push(record);
+      resolvedByEpisode.set(anchor.episodeId, bucket);
+    }
+  }
+  // A lens with no stages at all is a declaration with nothing behind it.
+  if (!stages.length) unreviewed = true;
+  return { stages, resolvedByEpisode, unreviewed };
+}
+
+/**
+ * Walk every path of one episode a lens is anchored in: count the paths that
+ * prove each stage (written onto the stage records), and report out-of-order
+ * stages, endings a declared outcome leaves unproven, and reconvergences that
+ * let a viewer inherit a change they never watched being earned.
+ */
+function analyzeAnchoredEpisode(context, episodeId, anchored, { declared, outcome, who, scope, pushFinding }) {
+  anchored.sort((a, b) => STAGE_INDEX.get(a.stageId) - STAGE_INDEX.get(b.stageId));
+  const requiredStageId = requiredStageForEnding(outcome, anchored);
+  const provenCounts = new Map(anchored.map((stage) => [stage.stageId, 0]));
+  const reportedOutOfOrder = new Set();
+  const uncoveredEndings = new Map();
+
+  for (const path of context.paths) {
+    const { proved, outOfOrder } = provedStagesOnPath(anchored, path.firstIndex);
+    for (const stageId of proved) provenCounts.set(stageId, provenCounts.get(stageId) + 1);
+    for (const { stageId, afterStageId } of outOfOrder) {
+      if (reportedOutOfOrder.has(stageId)) continue;
+      reportedOutOfOrder.add(stageId);
+      pushFinding({
+        code: EVOLUTION_COVERAGE_CODES.STAGE_OUT_OF_ORDER,
+        severity: 'warning',
+        message: `${who}'s "${stageLabel(stageId)}" stage is anchored to a scene the viewer reaches before "${stageLabel(afterStageId)}", so this path plays the arc out of sequence.`,
+        remediation: `Re-anchor "${stageLabel(stageId)}" to a scene later than "${stageLabel(afterStageId)}", or re-order the stages to match the story.`,
+        ...scope,
+        episodeId,
+        stageId,
+        pathId: path.id,
+      });
+    }
+    // Only a DECLARED outcome states what an ending owes the viewer. An
+    // undeclared lens is unfinished planning, and charging it for an
+    // outcome the author never made would invent the declaration.
+    if (!declared || path.termination !== 'ending') continue;
+    const covered = requiredStageId ? proved.has(requiredStageId) : proved.size > 0;
+    if (covered) continue;
+    const key = path.endingNodeId || 'unlabeled-ending';
+    const seen = uncoveredEndings.get(key);
+    if (seen) seen.count += 1;
+    else {
+      uncoveredEndings.set(key, {
+        count: 1,
+        pathId: path.id,
+        endingNodeId: path.endingNodeId,
+        endingLabel: path.endingLabel,
+      });
+    }
+  }
+  for (const stage of anchored) stage.provenPathCount = provenCounts.get(stage.stageId);
+
+  for (const ending of uncoveredEndings.values()) {
+    const label = ending.endingLabel
+      || nodeLabel(context.nodeById.get(ending.endingNodeId), ending.endingNodeId);
+    const what = requiredStageId
+      ? `never reaches the "${stageLabel(requiredStageId)}" stage`
+      : 'never puts the tested belief on screen';
+    pushFinding({
+      code: EVOLUTION_COVERAGE_CODES.ENDING_UNPROVEN,
+      severity: 'warning',
+      message: `${ending.count} playthrough(s) reach the ending "${label}" on a branch that ${what} for ${who}, so the declared "${outcome}" outcome is unproven there.`,
+      remediation: `Anchor an evolution stage to a scene on the branches that reach "${label}", or route those branches through the scene that already proves it.`,
+      ...scope,
+      episodeId,
+      ...(ending.endingNodeId ? { nodeId: ending.endingNodeId } : {}),
+      pathId: ending.pathId,
+    });
+  }
+
+  // ---- unearned inheritance at a reconvergence ----
+  for (const stage of anchored) {
+    const view = anchorView(context, stage.nodeId);
+    for (const convergenceNodeId of view.provedBefore) {
+      if (!view.unprovedBefore.has(convergenceNodeId)) continue; // a shared prerequisite
+      const laterAnchored = anchored.some((other) => (
+        STAGE_INDEX.get(other.stageId) > STAGE_INDEX.get(stage.stageId)
+        && anchorView(context, other.nodeId).anchoredAtOrAfter.has(convergenceNodeId)
+      ));
+      const { pathId, viaNodeId } = view.example.get(convergenceNodeId) || {};
+      const where = nodeLabel(context.nodeById.get(convergenceNodeId), convergenceNodeId);
+      const via = viaNodeId
+        ? ` (for example the branch arriving from "${nodeLabel(context.nodeById.get(viaNodeId), viaNodeId)}")`
+        : '';
+      pushFinding({
+        code: EVOLUTION_COVERAGE_CODES.UNEARNED_INHERITANCE,
+        // An arc the author declared CONTINUES past this scene is the case
+        // where the inheritance actually corrupts later content; a
+        // convergence with nothing anchored after it is a gap, not a lie.
+        severity: laterAnchored ? 'error' : 'warning',
+        message: `Branches reconverge at "${where}" with ${who}'s "${stageLabel(stage.stageId)}" stage proved on some incoming branches and not others${via}, so a viewer can arrive having never watched that change be earned.`,
+        remediation: `Prove "${stageLabel(stage.stageId)}" on every branch that reaches "${where}" (or before they split), or write a variant of "${where}" for the branches that have not earned it.`,
+        ...scope,
+        episodeId,
+        nodeId: convergenceNodeId,
+        stageId: stage.stageId,
+        ...(pathId ? { pathId } : {}),
+      });
+    }
+  }
+}
+
+/**
+ * Deterministic branch coverage for a loom's authored evolution lenses.
+ *
+ * Returns `null` when the plan has no lens at all — the caller adds nothing to
+ * its report, so an install that never opted in is byte-identical.
+ *
+ * @param {object} loom                       sanitized loom record
+ * @param {object} [options]
+ * @param {object} [options.playthroughReport] an `analyzeLoomPlaythroughs`
+ *   result to reuse. Omit and each episode is enumerated here instead.
+ */
+export function analyzeCharacterEvolutionCoverage(loom, { playthroughReport = null } = {}) {
+  const lenses = asArray(loom?.seriesPlan?.characterEvolutions);
+  if (!lenses.length) return null;
+
+  const sceneIndex = buildSceneIndex(loom);
+  const findings = [];
+  const { episodes, contextById } = buildEpisodeContexts(loom, playthroughReport);
+
   const characters = [];
   for (const lens of lenses) {
     const { characterId, characterName, evolution } = lens;
-    lensFindingCount = 0;
-    const who = characterName || characterId || 'This character';
+    // Counted per lens even when the cap drops the finding itself, so a lens
+    // whose only findings fell off the end can never roll up as `verified`.
+    let lensFindingCount = 0;
+    const pushFinding = (finding) => {
+      lensFindingCount += 1;
+      if (findings.length < EVOLUTION_COVERAGE_FINDINGS_MAX) findings.push(finding);
+    };
     const declared = isDeclaredEvolution(evolution);
-    const outcome = declared ? evolution.outcome : null;
-    const stages = [];
-    const resolvedByEpisode = new Map();
-    let unreviewed = false;
-
-    for (const stage of asArray(evolution?.stages)) {
-      // `sanitizeEvolutionStage` rejects an unknown stage id rather than
-      // coercing it, so this only fires on an unsanitized caller — and a beat
-      // that cannot be placed in the sequence cannot be reasoned about, which
-      // is unreviewed, never verified.
-      if (!STAGE_INDEX.has(stage?.stageId)) {
-        unreviewed = true;
-        continue;
-      }
-      const anchor = resolveStageAnchor(stage.evidence, sceneIndex);
-      const context = anchor.nodeId ? contextById.get(anchor.episodeId) : null;
-      const enumerated = Boolean(context?.enumerated);
-      if (anchor.resolution !== 'resolved' || !enumerated) unreviewed = true;
-      if (anchor.resolution === 'stale') {
-        pushFinding({
-          code: EVOLUTION_COVERAGE_CODES.EVIDENCE_STALE,
-          severity: 'error',
-          message: `${who}'s "${stageLabel(stage.stageId)}" stage points at ${anchor.dead}, which no longer exists, so the stage can never be proved on any path.`,
-          remediation: 'Re-anchor the stage to a scene that still exists, or clear the evidence pointer.',
-          ...(characterId ? { characterId } : {}),
-          ...(anchor.episodeId ? { episodeId: anchor.episodeId } : {}),
-          stageId: stage.stageId,
-        });
-      }
-      const record = {
-        stageId: stage.stageId,
-        resolution: anchor.resolution,
-        episodeId: anchor.episodeId,
-        nodeId: anchor.nodeId,
-        // `null` = not computed (unresolved anchor, or an episode whose paths
-        // were bounded out); `0` = computed and proved on no path at all.
-        provenPathCount: null,
-        pathCount: enumerated ? context.paths.length : null,
-      };
-      stages.push(record);
-      if (anchor.resolution === 'resolved' && enumerated) {
-        const bucket = resolvedByEpisode.get(anchor.episodeId) || [];
-        bucket.push(record);
-        resolvedByEpisode.set(anchor.episodeId, bucket);
-      }
-    }
-    // A lens with no stages at all is a declaration with nothing behind it.
-    if (!stages.length) unreviewed = true;
-
+    const lensContext = {
+      who: characterName || characterId || 'This character',
+      scope: characterId ? { characterId } : {},
+      declared,
+      outcome: declared ? evolution.outcome : null,
+      pushFinding,
+    };
+    const { stages, resolvedByEpisode, unreviewed } = resolveLensStages(lens, sceneIndex, contextById, lensContext);
     for (const [episodeId, anchored] of resolvedByEpisode) {
-      const context = contextById.get(episodeId);
-      anchored.sort((a, b) => STAGE_INDEX.get(a.stageId) - STAGE_INDEX.get(b.stageId));
-      const requiredStageId = requiredStageForEnding(outcome, anchored);
-      const provenCounts = new Map(anchored.map((stage) => [stage.stageId, 0]));
-      const reportedOutOfOrder = new Set();
-      const uncoveredEndings = new Map();
-
-      for (const path of context.paths) {
-        const { proved, outOfOrder } = provedStagesOnPath(anchored, path.firstIndex);
-        for (const stageId of proved) provenCounts.set(stageId, provenCounts.get(stageId) + 1);
-        for (const { stageId, afterStageId } of outOfOrder) {
-          if (reportedOutOfOrder.has(stageId)) continue;
-          reportedOutOfOrder.add(stageId);
-          pushFinding({
-            code: EVOLUTION_COVERAGE_CODES.STAGE_OUT_OF_ORDER,
-            severity: 'warning',
-            message: `${who}'s "${stageLabel(stageId)}" stage is anchored to a scene the viewer reaches before "${stageLabel(afterStageId)}", so this path plays the arc out of sequence.`,
-            remediation: `Re-anchor "${stageLabel(stageId)}" to a scene later than "${stageLabel(afterStageId)}", or re-order the stages to match the story.`,
-            ...(characterId ? { characterId } : {}),
-            episodeId,
-            stageId,
-            pathId: path.id,
-          });
-        }
-        // Only a DECLARED outcome states what an ending owes the viewer. An
-        // undeclared lens is unfinished planning, and charging it for an
-        // outcome the author never made would invent the declaration.
-        if (!declared || path.termination !== 'ending') continue;
-        const covered = requiredStageId ? proved.has(requiredStageId) : proved.size > 0;
-        if (covered) continue;
-        const key = path.endingNodeId || 'unlabeled-ending';
-        const seen = uncoveredEndings.get(key);
-        if (seen) seen.count += 1;
-        else {
-          uncoveredEndings.set(key, {
-            count: 1,
-            pathId: path.id,
-            endingNodeId: path.endingNodeId,
-            endingLabel: path.endingLabel,
-          });
-        }
-      }
-      for (const stage of anchored) stage.provenPathCount = provenCounts.get(stage.stageId);
-
-      for (const ending of uncoveredEndings.values()) {
-        const label = ending.endingLabel
-          || nodeLabel(context.nodeById.get(ending.endingNodeId), ending.endingNodeId);
-        const what = requiredStageId
-          ? `never reaches the "${stageLabel(requiredStageId)}" stage`
-          : 'never puts the tested belief on screen';
-        pushFinding({
-          code: EVOLUTION_COVERAGE_CODES.ENDING_UNPROVEN,
-          severity: 'warning',
-          message: `${ending.count} playthrough(s) reach the ending "${label}" on a branch that ${what} for ${who}, so the declared "${outcome}" outcome is unproven there.`,
-          remediation: `Anchor an evolution stage to a scene on the branches that reach "${label}", or route those branches through the scene that already proves it.`,
-          ...(characterId ? { characterId } : {}),
-          episodeId,
-          ...(ending.endingNodeId ? { nodeId: ending.endingNodeId } : {}),
-          pathId: ending.pathId,
-        });
-      }
-
-      // ---- unearned inheritance at a reconvergence ----
-      for (const stage of anchored) {
-        const view = anchorView(context, stage.nodeId);
-        for (const convergenceNodeId of view.provedBefore) {
-          if (!view.unprovedBefore.has(convergenceNodeId)) continue; // a shared prerequisite
-          const laterAnchored = anchored.some((other) => (
-            STAGE_INDEX.get(other.stageId) > STAGE_INDEX.get(stage.stageId)
-            && anchorView(context, other.nodeId).anchoredAtOrAfter.has(convergenceNodeId)
-          ));
-          const { pathId, viaNodeId } = view.example.get(convergenceNodeId) || {};
-          const where = nodeLabel(context.nodeById.get(convergenceNodeId), convergenceNodeId);
-          const via = viaNodeId
-            ? ` (for example the branch arriving from "${nodeLabel(context.nodeById.get(viaNodeId), viaNodeId)}")`
-            : '';
-          pushFinding({
-            code: EVOLUTION_COVERAGE_CODES.UNEARNED_INHERITANCE,
-            // An arc the author declared CONTINUES past this scene is the case
-            // where the inheritance actually corrupts later content; a
-            // convergence with nothing anchored after it is a gap, not a lie.
-            severity: laterAnchored ? 'error' : 'warning',
-            message: `Branches reconverge at "${where}" with ${who}'s "${stageLabel(stage.stageId)}" stage proved on some incoming branches and not others${via}, so a viewer can arrive having never watched that change be earned.`,
-            remediation: `Prove "${stageLabel(stage.stageId)}" on every branch that reaches "${where}" (or before they split), or write a variant of "${where}" for the branches that have not earned it.`,
-            ...(characterId ? { characterId } : {}),
-            episodeId,
-            nodeId: convergenceNodeId,
-            stageId: stage.stageId,
-            ...(pathId ? { pathId } : {}),
-          });
-        }
-      }
+      analyzeAnchoredEpisode(contextById.get(episodeId), episodeId, anchored, lensContext);
     }
 
     characters.push({
       characterId: characterId || '',
       characterName: characterName || '',
-      outcome,
+      outcome: lensContext.outcome,
       // `unreviewed` outranks `findings`: a lens with one dead anchor and one
       // real finding has not been fully looked at, and saying `findings` there
       // would present that one finding as the complete answer.
@@ -515,6 +543,8 @@ export function analyzeCharacterEvolutionCoverage(loom, { playthroughReport = nu
   }
 
   const unreviewedCharacterCount = characters.filter((c) => c.status === 'unreviewed').length;
+  const codeCounts = new Map();
+  for (const { code } of findings) codeCounts.set(code, (codeCounts.get(code) || 0) + 1);
   return {
     status: unreviewedCharacterCount
       ? 'unreviewed'
@@ -528,15 +558,9 @@ export function analyzeCharacterEvolutionCoverage(loom, { playthroughReport = nu
       unreviewedLensCount: unreviewedCharacterCount,
       unreviewedEpisodeCount: episodes.filter((e) => !e.enumerated).length,
       findingCount: findings.length,
-      unearnedInheritanceCount: findings.filter((f) => (
-        f.code === EVOLUTION_COVERAGE_CODES.UNEARNED_INHERITANCE
-      )).length,
-      unprovenEndingCount: findings.filter((f) => (
-        f.code === EVOLUTION_COVERAGE_CODES.ENDING_UNPROVEN
-      )).length,
-      staleAnchorCount: findings.filter((f) => (
-        f.code === EVOLUTION_COVERAGE_CODES.EVIDENCE_STALE
-      )).length,
+      unearnedInheritanceCount: codeCounts.get(EVOLUTION_COVERAGE_CODES.UNEARNED_INHERITANCE) || 0,
+      unprovenEndingCount: codeCounts.get(EVOLUTION_COVERAGE_CODES.ENDING_UNPROVEN) || 0,
+      staleAnchorCount: codeCounts.get(EVOLUTION_COVERAGE_CODES.EVIDENCE_STALE) || 0,
     },
   };
 }

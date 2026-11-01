@@ -33,7 +33,7 @@ import {
   deleteSyncBaseHash, withBaseHashFlushBatch,
 } from '../../lib/conflictJournal.js';
 import {
-  emitRecordUpdated, emitRecordDeleted,
+  emitRecordUpdated, emitRecordDeleted, emitRecordInvalidated,
   autoSubscribeRecordToAllPeers, unsubscribeAllForRecord,
 } from '../sharing/recordEvents.js';
 import { renameCollectionForSeries, unlinkCollectionsForSeries } from '../mediaCollections.js';
@@ -788,6 +788,8 @@ export async function createSeries(input = {}) {
     blockingSeverities: input.blockingSeverities,
   });
   await store().saveOne(created.id, created);
+  // UI-only: a brand-new record has no peer subscription to re-export into yet.
+  emitRecordInvalidated('series', created.id);
   // Skip auto-subscribe for ephemeral series — wire-side push would short-
   // circuit via sanitizeRecordForWire anyway, but not creating the sub up
   // front keeps the subscription store clean.
@@ -841,6 +843,7 @@ export async function insertSeriesWithId(input = {}) {
   });
   // Mirror createSeries's federation side-effects on tombstone-overwrite:
   // peers that still have the deleted record need the resurrection propagated.
+  emitRecordInvalidated('series', next.id);
   if (wasResurrection && !next.ephemeral) {
     emitRecordUpdated('series', next.id);
     autoSubscribeRecordToAllPeers('series', next.id).catch((err) => {

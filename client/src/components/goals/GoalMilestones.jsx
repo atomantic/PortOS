@@ -23,7 +23,7 @@ export default function GoalMilestones({
                   onClick={() => !ms.completedAt && handleCompleteMilestone(ms.id)}
                   disabled={ms.completedAt || milestoneActions?.has(`milestone:${ms.id}`)}
                   aria-label={ms.completedAt ? `${ms.title} — completed` : `Mark ${ms.title} complete`}
-                  className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 ${
+                  className={`pointer-coarse:min-h-11 pointer-coarse:min-w-11 w-4 h-4 rounded border flex items-center justify-center shrink-0 ${
                     ms.completedAt
                       ? 'bg-port-success/20 border-port-success text-port-success'
                       : 'border-gray-600 hover:border-port-accent'
@@ -51,7 +51,7 @@ export default function GoalMilestones({
                           onClick={() => handleCompleteMilestoneTask?.(ms.id, task.id)}
                           disabled={milestoneActions?.has(`task:${ms.id}:${task.id}`)}
                           aria-label={done ? `Mark ${task.title} incomplete` : `Mark ${task.title} complete`}
-                          className={`w-3.5 h-3.5 rounded border flex items-center justify-center shrink-0 ${
+                          className={`pointer-coarse:min-h-11 pointer-coarse:min-w-11 w-3.5 h-3.5 rounded border flex items-center justify-center shrink-0 ${
                             done
                               ? 'bg-port-success/20 border-port-success text-port-success'
                               : 'border-gray-600 hover:border-port-accent'

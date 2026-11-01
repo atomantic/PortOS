@@ -66,7 +66,7 @@ import { PRE_MUSIC_DURATION_RANGE, PRE_MUSIC_EFFECT_IDS, PRE_MUSIC_LAYER_LIMIT, 
 import { CAMERA_FRAMINGS, CAMERA_MOVEMENT_VALUES, CAMERA_SPEEDS } from './cameraMovements.js';
 import { CAST_ERAS } from './catalogMediaLibrary.js';
 import { STORYBOARD_ID_PATTERN } from './storyboardVocabulary.js';
-import { MUSIC_VIDEO_PERFORMANCE_STYLES, MUSIC_VIDEO_SHOT_MODES, SOURCE_AUDIO_LIPSYNC } from './musicVideoShotTiming.js';
+import { MUSIC_VIDEO_COVERAGE_MODES, MUSIC_VIDEO_PERFORMANCE_STYLES, MUSIC_VIDEO_SHOT_MODES, SOURCE_AUDIO_LIPSYNC } from './musicVideoShotTiming.js';
 import {
   MUSIC_VIDEO_AUTOMATION_BUDGET_MAX_USD,
   MUSIC_VIDEO_AUTOMATION_GUIDANCE_MAX,
@@ -92,6 +92,7 @@ import {
 import { MUSCRIPTOR_MODELS } from './muscriptorModels.js';
 import { MUSIC_VIDEO_CHARACTER_STYLE_IDS } from './musicVideoCharacterStyles.js';
 import { IMAGE_GEN_MODES, VIDEO_GEN_MODES } from './generationModes.js';
+import { GREYBOX_SHOT_ID_MAX, GREYBOX_SHOT_ID_PATTERN } from './greyboxVocabulary.js';
 
 // A project is authored hands-on (director) or seeded by the AI planner
 // (autonomous); both share the same record + scene board.
@@ -257,7 +258,7 @@ export const musicVideoPacingSchema = z.object({
 // Lyric-sheet structure: a section header (`[Chorus]`) or a stage direction
 // (`[Spoken, close]`) anchored to the index of the lyric line it precedes.
 // `kind` is the normalized section part or delivery (see
-// services/musicVideo/lyricMarkers.js); a free string so a newer peer's
+// lib/lyricMarkers.js); a free string so a newer peer's
 // vocabulary still validates here.
 export const musicVideoLyricMarkerSchema = z.object({
   type: z.enum(['section', 'direction']),
@@ -363,10 +364,9 @@ export const musicVideoTakeInputSchema = z.object({
   inputAssets: z.array(z.object({ role: z.enum(['crop', 'mask']), assetId: galleryImageName, revision: z.number().int().min(1).max(1000000) }).strict()).max(4).optional(),
   use: z.enum(MUSIC_VIDEO_TAKE_USES).optional(),
   castInputs: musicVideoCastInputsSchema.optional(),
-  // One-tap re-render of a filled still. The new image becomes the selection
-  // unless the take is already stale. A locked still is reverted by the
-  // generation-completion lock, which keeps the new take as a candidate.
+  // A re-render may replace only the frame that was selected at submission.
   replaceSelection: z.boolean().optional(),
+  expectedSelection: galleryImageName.nullable().optional(),
 }).strict().superRefine((take, ctx) => {
   const check = take.kind === 'video' ? videoHistoryIdSchema : galleryImageName;
   const parsed = check.safeParse(take.assetId);
@@ -680,7 +680,7 @@ export const musicVideoSceneCharacterVariantSchema = z.object({
 
 export const musicVideoSceneSetReferenceSchema = z.object({
   subjectId: z.string().min(1).max(128),
-  greyboxShotId: z.string().min(1).max(51).regex(/^[A-Za-z][A-Za-z0-9_-]*$/).optional(),
+  greyboxShotId: z.string().min(1).max(GREYBOX_SHOT_ID_MAX).regex(GREYBOX_SHOT_ID_PATTERN).optional(),
 }).strict();
 
 const musicVideoPreMusicLayerSchema = z.object({
@@ -881,6 +881,11 @@ export const musicVideoTreatmentCompileSchema = z.object({
 // POST /:id/treatment/apply. Manually edited scene prompts are kept unless the
 // director explicitly lists the scene in `overwrite` with the fingerprint of
 // the prompts they reviewed — a prompt edited after the review stays kept.
+// #14241: the planned run to render as one timed request, named by its scenes in timeline order.
+export const musicVideoSequenceRenderSchema = z.object({
+  sceneIds: z.array(z.string().min(1).max(200)).min(2).max(30),
+});
+
 export const musicVideoTreatmentApplySchema = z.object({
   revision: z.number().int().min(0),
   overwrite: z.array(z.object({
@@ -1293,6 +1298,9 @@ export const musicVideoAutonomousResumeSchema = z.object({
   localMusic: musicVideoLocalMusicOptionsSchema.nullable().optional(),
   // At the song checkpoint: discard the song and generate a new one.
   retakeSong: z.boolean().optional(),
+  // At the song checkpoint before the download: the Suno song to download, one of the run's
+  // renders or one the director made or revised in Suno (default: the run's second render).
+  sunoSongId: z.string().trim().regex(/^[0-9a-f-]{36}$/i, 'A Suno song id').optional(),
   // Swap a tool's model (null clears the pin) and raise or lower the run's limits. A changed
   // model at the produce stage starts a new production run with the new pool.
   models: z.partialRecord(z.enum(MUSIC_VIDEO_AUTOMATION_TOOL_IDS), z.string().trim().min(1).max(200).nullable()).optional(),
@@ -1748,6 +1756,8 @@ export const musicVideoSceneCreateSchema = z.object({
   // recording (only a verified source-audio provider can render it); absent or
   // `cutaway` = the ordinary image-to-video shot. See lib/musicVideoShotTiming.js.
   shotMode: z.enum(MUSIC_VIDEO_SHOT_MODES).optional(),
+  // #14241: `sequence` generates a run of cutaway footage shots in one timed request.
+  coverage: z.enum(MUSIC_VIDEO_COVERAGE_MODES).optional(),
   performanceSpeaker: z.string().trim().max(120).nullable().optional(),
   // How a performance follows the song: lip-sync (absent/null) or music-driven motion.
   performanceStyle: z.enum(MUSIC_VIDEO_PERFORMANCE_STYLES).nullable().optional(),
@@ -1789,6 +1799,8 @@ export const musicVideoSceneUpdateSchema = z.object({
   // recording (only a verified source-audio provider can render it); absent or
   // `cutaway` = the ordinary image-to-video shot. See lib/musicVideoShotTiming.js.
   shotMode: z.enum(MUSIC_VIDEO_SHOT_MODES).optional(),
+  // #14241: `sequence` generates a run of cutaway footage shots in one timed request.
+  coverage: z.enum(MUSIC_VIDEO_COVERAGE_MODES).optional(),
   performanceSpeaker: z.string().trim().max(120).nullable().optional(),
   // How a performance follows the song: lip-sync (absent/null) or music-driven motion.
   performanceStyle: z.enum(MUSIC_VIDEO_PERFORMANCE_STYLES).nullable().optional(),

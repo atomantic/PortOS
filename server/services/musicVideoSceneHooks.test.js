@@ -16,6 +16,8 @@ const TEST_DATA_ROOT = mkdtempSync(join(tmpdir(), 'mv-scene-hooks-test-'));
 
 vi.mock('../lib/paths.js', async (original) => makePathsProxy(await original(), { dataRoot: () => TEST_DATA_ROOT }));
 vi.mock('./settings.js', () => ({ getSettings: vi.fn(async () => ({})) }));
+const dispatchStoryboardStillClip = vi.fn(async () => ({ jobId: 'clip-job' }));
+vi.mock('./musicVideo/productionDispatch.js', () => ({ dispatchStoryboardStillClip: (...a) => dispatchStoryboardStillClip(...a) }));
 
 const { mediaJobEvents } = await import('./mediaJobQueue/index.js');
 const { musicVideoEvents } = await import('./musicVideo/events.js');
@@ -68,11 +70,11 @@ describe('music-video scene completion hooks → takes', () => {
     // hook tests on that boundary, including direct selection of source plates.
     mkdirSync(join(TEST_DATA_ROOT, 'images'), { recursive: true });
     for (const name of ['newer', 'older', 'first', 'second', 'third', 'one', 'two', 'three',
-      'frame-a', 'frame-b', 'start', 'sketch', 'late', 'kept', 'frame', 'recast']) {
+      'frame-a', 'frame-b', 'start', 'sketch', 'late', 'kept', 'frame', 'recast', 'clip-guided-first-frame']) {
       writeFileSync(join(TEST_DATA_ROOT, 'images', `${name}.png`), 'synthetic image');
     }
     mkdirSync(join(TEST_DATA_ROOT, 'videos'), { recursive: true });
-    const clips = ['clip-1', 'clip-2', 'clip-old', 'late-clip', 'clip-ok'];
+    const clips = ['clip-1', 'clip-2', 'clip-old', 'late-clip', 'clip-ok', 'clip-guided'];
     for (const id of clips) writeFileSync(join(TEST_DATA_ROOT, 'videos', `${id}.mp4`), 'synthetic clip');
     writeFileSync(join(TEST_DATA_ROOT, 'video-history.json'), JSON.stringify(clips.map(id => ({ id, filename: `${id}.mp4` }))));
     imageHook.__testing.reset();
@@ -151,12 +153,71 @@ describe('music-video scene completion hooks → takes', () => {
     const job = imageJob(project.id, scene.sceneId, 'recast.png');
     job.params.musicVideo.castInputs = castInputs;
     job.params.musicVideo.replaceSelection = true;
+    job.params.musicVideo.expectedSelection = 'first.png';
     mediaJobEvents.emit('completed', job);
     await waitFor(() => emitted.length === 2);
     const stored = await sceneOf(project.id, scene.sceneId);
     expect(stored.referenceImageId).toBe('recast.png');
     expect(stored.takes.find((take) => take.assetId === 'recast.png').castInputs).toEqual(castInputs);
     expect(stored.takes.find((take) => take.assetId === 'first.png')).not.toHaveProperty('castInputs');
+  });
+
+  // Uniquely catches Clip from storyboard stopping at the still, animating a still it did not make, or losing a refusal.
+  it('animates a Clip from storyboard still once it is the selection, and records a refused clip on the video lane', async () => {
+    dispatchStoryboardStillClip.mockClear();
+    const job = imageJob(project.id, scene.sceneId, 'first.png');
+    job.params.musicVideo.thenClip = { backend: 'grok' };
+    mediaJobEvents.emit('completed', job);
+    await waitFor(() => dispatchStoryboardStillClip.mock.calls.length === 1);
+    const [{ scene: animated, backend }] = dispatchStoryboardStillClip.mock.calls[0];
+    expect({ still: animated.referenceImageId, backend }).toEqual({ still: 'first.png', backend: 'grok' });
+
+    // A still that lands beside a selection is only a take: nothing animates it.
+    const second = imageJob(project.id, scene.sceneId, 'second.png');
+    second.params.musicVideo.thenClip = {};
+    mediaJobEvents.emit('completed', second);
+    await waitFor(() => emitted.filter((e) => e.event === 'scene-image').length === 2);
+
+    dispatchStoryboardStillClip.mockRejectedValueOnce(new Error('Add a shot prompt first'));
+    const third = imageJob(project.id, scene.sceneId, 'third.png');
+    third.params.musicVideo.thenClip = {};
+    third.params.musicVideo.replaceSelection = true;
+    third.params.musicVideo.expectedSelection = 'first.png';
+    mediaJobEvents.emit('completed', third);
+    await waitFor(() => emitted.some((e) => e.event === 'scene-failure'));
+    expect(dispatchStoryboardStillClip).toHaveBeenCalledTimes(2);
+    expect((await sceneOf(project.id, scene.sceneId)).lastFailure).toMatchObject({ lane: 'video', error: 'Add a shot prompt first' });
+  });
+
+  it('keeps a director\'s newer selection when a replacement render completes late', async () => {
+    mediaJobEvents.emit('completed', imageJob(project.id, scene.sceneId, 'first.png'));
+    mediaJobEvents.emit('completed', imageJob(project.id, scene.sceneId, 'second.png'));
+    await waitFor(() => emitted.length === 2);
+    const second = (await sceneOf(project.id, scene.sceneId)).takes.find((take) => take.assetId === 'second.png');
+    const replacement = imageJob(project.id, scene.sceneId, 'recast.png');
+    replacement.params.musicVideo.replaceSelection = true;
+    replacement.params.musicVideo.expectedSelection = 'first.png';
+    await projects.selectSceneTake(project.id, scene.sceneId, second.takeId);
+    mediaJobEvents.emit('completed', replacement);
+    await waitFor(() => emitted.length === 3);
+    const stored = await sceneOf(project.id, scene.sceneId);
+    expect(stored.referenceImageId).toBe('second.png');
+    expect(stored.takes.map((take) => take.assetId)).toEqual(['first.png', 'second.png', 'recast.png']);
+  });
+
+  it('attaches an automated still repair while retaining the prior selection as a take', async () => {
+    mediaJobEvents.emit('completed', imageJob(project.id, scene.sceneId, 'first.png'));
+    await waitFor(() => emitted.length === 1);
+    await projects.mutateProjectRecord(project.id, current => ({ project: { ...current, scenes: current.scenes.map(item => item.sceneId === scene.sceneId
+      ? { ...item, stillFixes: { text: 'Correct the light', at: 'repair-1', pending: true, replaces: 'first.png' } } : item) } }));
+    const job = imageJob(project.id, scene.sceneId, 'recast.png');
+    Object.assign(job.params.musicVideo, { replaceSelection: true, expectedSelection: 'first.png', stillRepairAt: 'repair-1' });
+    mediaJobEvents.emit('completed', job);
+    await waitFor(() => emitted.length === 2);
+    const stored = await sceneOf(project.id, scene.sceneId);
+    expect(stored.referenceImageId).toBe('recast.png');
+    expect(stored.takes.map(take => take.assetId)).toEqual(['first.png', 'recast.png']);
+    expect(stored.stillFixes).toEqual({ text: 'Correct the light', at: 'repair-1' });
   });
 
   it('a completion racing a director selection loses neither (one write tail on the file store)', async () => {
@@ -189,6 +250,23 @@ describe('music-video scene completion hooks → takes', () => {
       ['video', 'clip-2', 'frame-a.png'],
     ]);
     expect(emitted[1]).toMatchObject({ event: 'scene-video', videoHistoryId: 'clip-1' });
+  });
+
+  it('files a storyboard clip\'s first frame as the still it was animated from, filling the empty still slot', async () => {
+    const job = videoJob(project.id, scene.sceneId, 'clip-guided');
+    delete job.params.sourceImagePath;
+    // As submitted: a guided clip depends on no plate (submissionGuards.captureDependencies).
+    Object.assign(job.params, { guidanceImagePath: '/abs/server/path/images/panel.png', musicVideoDependencies: { version: 1, references: [] } });
+    job.result.firstFrameFile = 'clip-guided-first-frame.png';
+    mediaJobEvents.emit('completed', job);
+    await waitFor(() => emitted.some((e) => e.event === 'scene-video'));
+    const stored = await sceneOf(project.id, scene.sceneId);
+    expect(stored).toMatchObject({ referenceImageId: 'clip-guided-first-frame.png', videoHistoryId: 'clip-guided' });
+    expect(stored.takes.map((t) => [t.kind, t.assetId, t.sourceImageId])).toEqual([
+      ['image', 'clip-guided-first-frame.png', null],
+      ['video', 'clip-guided', 'clip-guided-first-frame.png'],
+    ]);
+    expect(emitted.find((e) => e.event === 'scene-image')).toMatchObject({ referenceImageId: 'clip-guided-first-frame.png' });
   });
 
   it('keeps a late clip as a historical candidate when its source plate was replaced', async () => {

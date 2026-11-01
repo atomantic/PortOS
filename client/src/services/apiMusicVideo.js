@@ -20,6 +20,8 @@ export const listMusicVideoProjectSummaries = ({ cursor, limit } = {}, options =
   if (cursor != null) query.set('cursor', String(cursor));
   return request(`/music-video?${query}`, options);
 };
+// Live `{ id, name }` rows for the sidebar's Music Video sub-nav.
+export const listMusicVideoProjectNames = (options = {}) => request('/music-video/names', options);
 // Built-in character styles a project loads through `concept.characterStyleId`,
 // each with this install's character sheet (`referenceImageId`, or null).
 export const listMusicVideoCharacterStyles = (options = {}) => request('/music-video/character-styles', options);
@@ -137,6 +139,10 @@ export const getMusicVideoActiveJobs = (id, options = {}) =>
 // ---- Director scene board ----
 export const addMusicVideoScene = (id, scene, options = {}) => request(`/music-video/${encodeURIComponent(id)}/scenes`, {
   method: 'POST', body: JSON.stringify(scene), ...options,
+});
+// #14241: queue one planned sequence run (its scenes in timeline order) as a single timed fal request.
+export const renderMusicVideoSequence = (id, sceneIds, options = {}) => request(`/music-video/${encodeURIComponent(id)}/sequence-coverage/render`, {
+  method: 'POST', body: JSON.stringify({ sceneIds }), ...options,
 });
 export const updateMusicVideoScene = (id, sceneId, patch, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/scenes/${encodeURIComponent(sceneId)}`, {
@@ -676,7 +682,6 @@ export const checkMusicVideoOverlayText = (id, options = {}) => request(`/music-
 export const reverifyMusicVideoAlignment = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/production-review/alignment`, { method: 'POST', body: JSON.stringify(body), ...options });
 export const saveMusicVideoProductionDraft = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/production-review`, { method: 'PUT', body: JSON.stringify(body), ...options });
 export const prepareMusicVideoProductionReview = (id, body = {}, options = {}) => request(`/music-video/${encodeURIComponent(id)}/production-review/prepare`, { method: 'POST', body: JSON.stringify(body), ...options });
-export const lockMusicVideoShots = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/production-review/shots`, { method: 'POST', body: JSON.stringify(body), ...options });
 export const approveMusicVideoProductionReview = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/production-review/approve`, { method: 'POST', body: JSON.stringify(body), ...options });
 export const renderMusicVideoProductionProof = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/production-review/proof`, { method: 'POST', body: JSON.stringify(body), ...options });
 export const importMusicVideoProductionPlanning = (id, source, options = {}) => request(`/music-video/${encodeURIComponent(id)}/production-review/import`, { method: 'POST', body: JSON.stringify({ source }), ...options });

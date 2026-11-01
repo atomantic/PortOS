@@ -375,3 +375,21 @@ describe('analyzeCharacterEvolutionCoverage', () => {
     expect(FABLELOOM_PLAYTEST_LIMITS.DEFAULT_MAX_PATHS).toBeLessThan(1024);
   });
 });
+
+// Uniquely catches one lens's findings leaking into the next lens's rollup (#14434).
+describe('analyzeCharacterEvolutionCoverage per-lens status', () => {
+  it('rolls each lens up from its own findings only', () => {
+    const loom = loomWith(
+      [reconvergingEpisode()],
+      [stage('commitment-to-change', 'left'), stage('final-proof', 'finale')],
+    );
+    loom.seriesPlan.characterEvolutions.push({
+      characterId: 'chr-00000000-0000-4000-8000-0000000000bb',
+      characterName: 'Theo',
+      evolution: { outcome: 'full-change', outcomeNote: '', stages: [stage('commitment-to-change', 'opening'), stage('final-proof', 'finale')] },
+    });
+    const report = analyzeCharacterEvolutionCoverage(loom);
+    expect(report.characters.map((c) => [c.characterName, c.status])).toEqual([['Mara', 'findings'], ['Theo', 'verified']]);
+    expect(report.status).toBe('findings');
+  });
+});

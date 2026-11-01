@@ -39,12 +39,11 @@ describe('I2I_CAPABLE_MODES / isI2iCapableMode', () => {
 });
 
 describe('input-image capability helpers', () => {
-  it('caps agy at the 3 images its generate_image tool accepts', () => {
+  it('caps agy at 3 and codex at the 5 images their tools accept', () => {
     expect(maxInputImages(IMAGE_GEN_MODE.AGY)).toBe(3);
-    // The other two declare no maximum, so they report null — the form's own
-    // slot count is their only ceiling. Restating a number here as a
-    // "capability" would make a form change look like a provider limit.
-    expect(maxInputImages(IMAGE_GEN_MODE.CODEX)).toBeNull();
+    expect(maxInputImages(IMAGE_GEN_MODE.CODEX)).toBe(5);
+    // Grok declares no maximum, so it reports null — the form's own slot count
+    // is its only ceiling.
     expect(maxInputImages(IMAGE_GEN_MODE.GROK)).toBeNull();
   });
 

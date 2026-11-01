@@ -112,6 +112,19 @@ appear as inspectable chips; **Show full prompt** includes them without changing
 the text you wrote. Start and end frames and refines share that layout; a refine
 keeps the frame being edited first. Batch renders record the same additions.
 
+A selected shot can also carry a **Photo plate**: one of the Environment's
+finished reference images, taken from that camera (for example a photoreal render
+made from the capture). Pick it under the shot's capture buttons. Board shots that
+select the camera then send the plate in place of the flat capture, and the
+camera's image takes the place of the section's generic Cast & Sets set plate, so
+each shot shows the side of the set it faces. A plate detached from the
+Environment falls back to the capture.
+
+On a storyboard panel, **Cast & sets › Seen from (set camera)** picks a saved
+camera of one of the panel's environments. Storyboard ↔ shots sync copies it to
+the panel's shot as its greybox layout reference, so tag each panel once and its
+shot follows.
+
 Video generation also sends the capture as an extra reference. Choose a local
 reference-to-video model that accepts extra images; other backends refuse rather
 than ignoring the layout. A removed camera, detached capture or missing file

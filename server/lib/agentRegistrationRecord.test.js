@@ -133,3 +133,19 @@ it('preserves the persisted audit disposition contract on the registered run', (
   expect(buildAgentRegistration(args({ auditDispositionVersion: '1' })).auditDispositionVersion).toBe(1);
   expect(buildAgentRegistration(args({})).auditDispositionVersion).toBeUndefined();
 });
+
+describe('buildAgentRegistration — review-loop merge target (#14482)', () => {
+  const followUp = (metadata) => {
+    const input = args({ reviewLoopFollowUp: true, reviewLoopPRUrl: 'https://github.com/example/repo/pull/7', reviewLoopPRBranch: 'feature/fix', ...metadata });
+    return { ...input, task: { ...input.task, taskType: 'internal' } };
+  };
+
+  it('snapshots the assigned PR for a review follow-up that may merge', () => {
+    expect(buildAgentRegistration(followUp({})).reviewLoopMergeTarget)
+      .toMatchObject({ url: 'https://github.com/example/repo/pull/7', branch: 'feature/fix' });
+  });
+
+  it('grants no merge target to a follow-up held for its operator', () => {
+    expect(buildAgentRegistration(followUp({ readOnly: 'true' })).reviewLoopMergeTarget).toBeFalsy();
+  });
+});

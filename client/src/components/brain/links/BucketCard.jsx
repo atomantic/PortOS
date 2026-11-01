@@ -115,7 +115,7 @@ export default function BucketCard({
                   key={key}
                   type="button"
                   onClick={() => setForm({ ...form, color: key })}
-                  className={`w-5 h-5 rounded-full ${BUCKET_COLORS[key].dot} flex items-center justify-center`}
+                  className={`pointer-coarse:min-h-11 pointer-coarse:min-w-11 w-5 h-5 rounded-full ${BUCKET_COLORS[key].dot} flex items-center justify-center`}
                   title={key}
                   aria-label={`Color ${key}`}
                 >
@@ -148,7 +148,7 @@ export default function BucketCard({
             ref={setBucketActivatorRef}
             {...bucketDragAttrs}
             {...bucketDragListeners}
-            className="shrink-0 flex items-center justify-center touch-none text-gray-500 cursor-grab active:cursor-grabbing"
+            className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 shrink-0 flex items-center justify-center touch-none text-gray-500 cursor-grab active:cursor-grabbing"
             aria-label={`Reorder bucket ${bucket.name}`}
             title="Drag to reorder buckets"
           >

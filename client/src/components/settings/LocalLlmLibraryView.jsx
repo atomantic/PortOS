@@ -174,7 +174,7 @@ export default function LocalLlmLibraryView() {
     // closure) exactly when the category matters. On the curated source the
     // closure can hold a stale category, which is harmless because that branch
     // of loadCatalog never reads the argument.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // Dependency list is intentionally partial.
   }, [selected, query, catalogSource, catalogCategoryKey, loadCatalog]);
 
   useEffect(() => {

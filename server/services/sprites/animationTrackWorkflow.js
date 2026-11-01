@@ -586,7 +586,7 @@ export function invalidateTrackForTurnaroundRevision(trackId, recordId) {
   return withAnimationWriteTail(recordId, async () => {
     const invalidated = [];
     for (const direction of trackAuthoringDirections(trackId)) {
-      // eslint-disable-next-line no-await-in-loop -- ordered: each facing's selection write must settle before the next reads it
+      // ordered: each facing's selection write must settle before the next reads it
       if (await invalidateTrackDirectionImpl(trackId, recordId, direction)) invalidated.push(direction);
     }
     return invalidated;

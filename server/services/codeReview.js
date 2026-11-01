@@ -16,6 +16,7 @@ import { EXECUTION_OPTIONS_ERROR } from '../lib/executionOptions.js';
 import { CODE_REVIEW_BATCH_BYTES, CODE_REVIEW_MAX_BATCHES, runCodeReviewBatches, takeCodeReviewCallBudget, isReviewContextCapacityFailure, reviewContextCapacityFailure } from '../lib/codeReviewBatches.js'
 import { withAbortTimeout, awaitWithAbort } from '../lib/abortTimeout.js'
 import { effortLevelsForProvider } from '../lib/providerModels.js'
+import { DEFAULT_TIMEOUT as PROVIDER_DEFAULT_TIMEOUT_MS } from '../lib/aiToolkit/constants.js'
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js'
 import { readResponseJson } from '../lib/readResponseJson.js'
 import { commandExists } from '../lib/commandExists.js'
@@ -298,8 +299,13 @@ export function getLocalCodeReviewTimeoutMs(diff) {
 export const REMOTE_CODE_REVIEW_TIMEOUT_DEFAULT_MS = 600_000
 export const REMOTE_CODE_REVIEW_TIMEOUT_CEILING_MS = 1_800_000
 
+// 300000 is the generic run default that the toolkit's create path, the
+// provider form's pre-fill and the shipped samples all write, so on a stored
+// record it means "never tuned", not a chosen review cap — and no record can
+// tell the two apart after the fact. Honoring it cut grok-cli claim reviews
+// of ordinary ~23 KiB diffs off at 300 s (#14499); every other value still wins.
 export const getRemoteCodeReviewTimeoutMs = (provider) => (
-  Number.isFinite(provider?.timeout) && provider.timeout > 0
+  Number.isFinite(provider?.timeout) && provider.timeout > 0 && provider.timeout !== PROVIDER_DEFAULT_TIMEOUT_MS
     ? Math.min(REMOTE_CODE_REVIEW_TIMEOUT_CEILING_MS, provider.timeout)
     : REMOTE_CODE_REVIEW_TIMEOUT_DEFAULT_MS
 )
@@ -963,7 +969,11 @@ function resolveReviewWorkspace({ transport, isolateFromCheckout = false, cwd })
   if (isolateFromCheckout || transport.tier === 'unconfined' || !cwd) {
     return { cwd: 'scratch', repositoryAccess: false }
   }
-  return { cwd: 'checkout', repositoryAccess: true }
+  // `no-tool` (grok, claude `--tools ''`) cannot open the checkout. Inviting
+  // it to inspect source makes it narrate a prose review, which the verdict
+  // parser correctly rejects as invalid_json (#14523). Only a read-only tier
+  // can look at surrounding code.
+  return { cwd: 'checkout', repositoryAccess: transport.tier === 'read-only' }
 }
 
 function reviewMessages({ messages, userMessage, systemPromptFor }, workspace) {

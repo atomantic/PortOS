@@ -1202,10 +1202,8 @@ export async function reapAndCleanDetachedDirs(parentDir, opts = {}) {
   let reaped = 0;
   for (const name of entries) {
     const dir = join(parentDir, name);
-    // eslint-disable-next-line no-await-in-loop
     const res = await reapDetached(dir, opts).catch(() => ({ reaped: false }));
     if (res.reaped) reaped += 1;
-    // eslint-disable-next-line no-await-in-loop
     await rm(dir, { recursive: true, force: true }).catch(() => {});
   }
   return { reaped, scanned: entries.length };

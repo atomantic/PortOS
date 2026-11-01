@@ -45,7 +45,7 @@ export default function PeerMediaProviderPanel({ peer, onRefresh }) {
   const capabilities = readiness.capabilities;
   const rowsByKind = useMemo(
     () => Object.fromEntries(FEDERATED_MEDIA_KINDS.map(({ kind }) => [kind, modelRows(config.models[kind], capabilities, kind)])),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // Dependency list is intentionally partial.
     [config.raw, capabilities],
   );
   const queueSegments = summarizePeerMediaQueue(readiness.queue);

@@ -59,12 +59,255 @@ probe_or_fail() {
 }
 
 is_macos() { [[ "$(uname -s)" == "Darwin" ]]; }
+# Apple Silicon, including a shell translated by Rosetta. `uname -m` is
+# x86_64 under Rosetta; hw.optional.arm64 is the hardware bit (same probe as
+# isAppleSilicon() in server/lib/platform.js).
+is_apple_silicon() {
+  [[ "$(uname -s)" == "Darwin" ]] || return 1
+  case "$(uname -m)" in
+    arm64|aarch64) return 0 ;;
+  esac
+  [[ "$(sysctl -n hw.optional.arm64 2>/dev/null || true)" == "1" ]]
+}
+# A Rosetta-translated shell runs universal python3/uv as x86_64, and the
+# venvs they build cannot install arm64-only mlx wheels. Re-exec natively
+# once. PORTOS_SETUP_NATIVE stops a loop when arch cannot change uname.
+# An existing universal venv still holds x86_64 wheels. reset_universal_venv
+# deletes it before the create check only when the interpreter that will
+# rebuild it can run as arm64 — an Intel-only python3 still runs under this
+# re-exec and would replace a working venv with wheels mlx cannot install.
+# pin_venv_arm64 then drops the x86_64 slice. Pinning before pip leaves the
+# old wheels installed: pip --upgrade treats them as satisfied.
+if is_apple_silicon && [[ -z "${PORTOS_SETUP_NATIVE:-}" ]]; then
+  case "$(uname -m)" in
+    arm64|aarch64) ;;
+    *) PORTOS_SETUP_NATIVE=1 exec /usr/bin/arch -arm64 /bin/bash "$0" "$@" ;;
+  esac
+fi
 # Git-bash / MSYS / Cygwin all report a prefixed uname; PortOS runs the
 # in-app installer through git-bash on Windows, so match all three.
 is_windows() { case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) return 0;; *) return 1;; esac; }
 
+# A universal venv interpreter follows its parent's slice. After this script
+# installs arm64 wheels, drop the x86_64 slice so a Rosetta Node process
+# cannot launch that interpreter as x86_64. The copy replaces the venv
+# symlink; lipo never rewrites the binary it points at. Framework Pythons
+# load @executable_path/../Python3, which only exists beside that original
+# binary — point the copy at the absolute library, or leave the symlink.
+pin_venv_arm64() {
+  is_apple_silicon || return 0
+  case "$(uname -m)" in
+    arm64|aarch64) ;;
+    *) return 0 ;;
+  esac
+  local root="$1/bin" py base arches tmp target link origin origin_dir dep rel abs failed extensions_checked=0 ext ext_arches
+  [[ -d "$root" ]] || return 0
+  for py in "$root"/python "$root"/python3 "$root"/python3.[0-9] "$root"/python3.[0-9][0-9]; do
+    [[ -e "$py" && ! -d "$py" ]] || continue
+    base="${py##*/}"
+    [[ "$base" =~ ^python(3(\.[0-9]+)?)?$ ]] || continue
+    arches="$(lipo -archs "$py" 2>/dev/null || true)"
+    case " $arches " in
+      *" arm64 "*|*" aarch64 "*) ;;
+      *) continue ;;
+    esac
+    case " $arches " in
+      *" x86_64 "*|*" i386 "*) ;;
+      *) continue ;;
+    esac
+    # A skipped rebuild can leave x86_64 wheels that pip --upgrade treats as
+    # current. Thinning the launcher then makes that venv unimportable.
+    if [[ "$extensions_checked" -eq 0 ]]; then
+      extensions_checked=1
+      if [[ -d "$1/lib" ]]; then
+        while IFS= read -r ext; do
+          ext_arches="$(lipo -archs "$ext" 2>/dev/null || true)"
+          [[ -n "$ext_arches" ]] || continue
+          case " $ext_arches " in
+            *" arm64 "*|*" aarch64 "*) continue ;;
+          esac
+          case " $ext_arches " in
+            *" x86_64 "*|*" i386 "*) return 0 ;;
+          esac
+        done < <(find "$1/lib" -type f \( -name '*.so' -o -name '*.dylib' \) 2>/dev/null)
+      fi
+    fi
+    origin="$py"
+    while [[ -L "$origin" ]]; do
+      link="$(readlink "$origin")" || continue 2
+      case "$link" in
+        /*) origin="$link" ;;
+        *) origin="$(cd "$(dirname "$origin")" && pwd)/$link" ;;
+      esac
+    done
+    [[ -e "$origin" && ! -d "$origin" ]] || continue
+    origin_dir="$(cd "$(dirname "$origin")" && pwd)" || continue
+    tmp="$(mktemp)"
+    if ! lipo -thin arm64 "$py" -output "$tmp"; then
+      rm -f "$tmp"
+      continue
+    fi
+    failed=0
+    while IFS= read -r dep; do
+      case "$dep" in
+        @executable_path/*) rel="${dep#@executable_path/}" ;;
+        @loader_path/*) rel="${dep#@loader_path/}" ;;
+        @rpath/*) failed=1; break ;;
+        *) continue ;;
+      esac
+      if ! abs="$(cd "$origin_dir" && cd "$(dirname "$rel")" && pwd)"; then
+        failed=1
+        break
+      fi
+      abs="$abs/$(basename "$rel")"
+      if [[ ! -e "$abs" ]] || ! install_name_tool -change "$dep" "$abs" "$tmp" >/dev/null 2>&1 || ! codesign -s - -f "$tmp" >/dev/null 2>&1; then
+        failed=1
+        break
+      fi
+    done < <(otool -L "$origin" 2>/dev/null | awk 'NR>1 { print $1 }')
+    if [[ "$failed" -ne 0 ]]; then
+      rm -f "$tmp"
+      continue
+    fi
+    rm -f "$py"
+    mv "$tmp" "$py"
+    chmod +x "$py"
+  done
+}
+
+# Whether path $2, or any symlink it passes through, lies under real directory
+# $1. The venv's own python3 is usually a symlink out to its base interpreter,
+# so the final target alone cannot prove a path does not depend on the venv.
+# Every leading directory is resolved on its own, so venv/bin/alias/python3
+# routes through the venv even when alias links back out of it.
+# An unreadable hop or a link loop answers yes, which keeps the venv.
+path_routes_through() {
+  local root="$1" path="$2" dir link hops=0 abs prefix comp real
+  local -a parts
+  while :; do
+    dir="${path%/*}"
+    [[ "$dir" == "$path" ]] && dir="."
+    [[ -n "$dir" ]] || dir="/"
+    abs="$dir"
+    [[ "$abs" == /* ]] || abs="$PWD/$abs"
+    prefix=""
+    IFS=/ read -ra parts <<< "$abs"
+    for comp in "${parts[@]}"; do
+      [[ -n "$comp" ]] || continue
+      prefix="$prefix/$comp"
+      real="$(cd -P "$prefix" 2>/dev/null && pwd)" || return 0
+      case "$real" in
+        "$root"|"$root"/*) return 0 ;;
+      esac
+    done
+    dir="$(cd -P "$dir" 2>/dev/null && pwd)" || return 0
+    path="${dir%/}/${path##*/}"
+    case "$path" in
+      "$root"/*) return 0 ;;
+    esac
+    [[ -L "$path" ]] || return 1
+    hops=$((hops + 1))
+    [[ "$hops" -le 40 ]] || return 0
+    link="$(readlink "$path")" || return 0
+    case "$link" in
+      /*) path="$link" ;;
+      *) path="$dir/$link" ;;
+    esac
+  done
+}
+
+# Delete a venv whose interpreter is still universal, before the create check.
+# $2 is the interpreter the caller will rebuild with. The default is the
+# command name python3; [[ -x python3 ]] looks in the current directory, so
+# resolve a bare name on PATH or the reset never runs and pin later leaves
+# x86_64 wheels under an arm64 launcher. An Intel-only binary still runs
+# under this arm64 shell and cannot install arm64-only wheels, so a working
+# venv is left in place. Apple's /usr/bin/python3 is 3.9 and still universal;
+# ACE-Step 1.5 and MiniMax Music 3 need 3.10+, so a replacement below that
+# floor is also left alone. An arm64-only interpreter is not universal.
+# No-op until uname -m is arm64.
+reset_universal_venv() {
+  is_apple_silicon || return 0
+  case "$(uname -m)" in
+    arm64|aarch64) ;;
+    *) return 0 ;;
+  esac
+  [[ -n "${1:-}" && -n "${2:-}" ]] || return 0
+  local py="$1/bin/python3" arches base_arches base="$2" original="$2" outside="" dir path_rest root_real real given
+  case "$base" in
+    */*) ;;
+    *) base="$(command -v "$base" 2>/dev/null || true)" ;;
+  esac
+  [[ -n "$base" && -x "$base" ]] || return 0
+  # Containment has to compare real paths. A relative PYTHON_BIN such as
+  # venv-audioldm2/bin/python3 does not match an absolute $1, and a symlink
+  # (the directory or the interpreter itself) would hide the venv the caller
+  # still invokes.
+  root_real="$1"
+  if real="$(cd -P "$1" 2>/dev/null && pwd)"; then root_real="$real"; fi
+  given="$base"
+  real="${base%/*}"
+  [[ "$real" == "$base" ]] && real="."
+  if real="$(cd -P "$real" 2>/dev/null && pwd)"; then
+    base="$real/${base##*/}"
+  fi
+  # An activated venv is the first python on PATH. A caller that stored that
+  # path cannot recreate the venv after it is deleted. A bare command name is
+  # resolved again. Delete only when that same command exists later on PATH;
+  # a different version would make the caller's venv command fail.
+  # Check the path as given: collapsing its directory first would hide a
+  # directory link inside the venv that resolves back out of it.
+  if path_routes_through "$root_real" "$given"; then
+    case "$original" in
+      */*) return 0 ;;
+    esac
+    path_rest="$PATH"
+    while [[ -n "$path_rest" ]]; do
+      dir="${path_rest%%:*}"
+      if [[ "$path_rest" == *:* ]]; then path_rest="${path_rest#*:}"; else path_rest=""; fi
+      [[ -n "$dir" ]] || continue
+      case "$dir" in
+        "$1"|"$1"/*|"$root_real"|"$root_real"/*) continue ;;
+      esac
+      if [[ -x "$dir/$original" && ! -d "$dir/$original" ]] && ! path_routes_through "$root_real" "$dir/$original"; then
+        outside="$dir/$original"
+        break
+      fi
+    done
+    [[ -n "$outside" ]] || return 0
+    base="$outside"
+  fi
+  [[ -e "$py" && ! -d "$py" ]] || return 0
+  arches="$(lipo -archs "$py" 2>/dev/null || true)"
+  case " $arches " in
+    *" arm64 "*|*" aarch64 "*) ;;
+    *) return 0 ;;
+  esac
+  case " $arches " in
+    *" x86_64 "*|*" i386 "*) ;;
+    *) return 0 ;;
+  esac
+  base_arches="$(lipo -archs "$base" 2>/dev/null || true)"
+  case " $base_arches " in
+    *" arm64 "*|*" aarch64 "*) ;;
+    *)
+      "$base" -c 'import platform,sys; sys.exit(0 if platform.machine() in ("arm64","aarch64") else 1)' >/dev/null 2>&1 || return 0
+      ;;
+  esac
+  # The arch check above accepts /usr/bin/python3. Recreating a 3.10+ venv
+  # with that 3.9 interpreter makes the next pip install fail.
+  python_at_least_310 "$base" || return 0
+  echo "♻️  Recreating ${1} so native wheels replace the universal interpreter's x86_64 packages."
+  rm -rf "$1"
+  # An earlier `python3 -m venv` in this script hashed the deleted interpreter.
+  # The next caller would otherwise execute that pathname and exit 127.
+  hash -r
+}
+
 # Resolve a venv interpreter from the layout its creating Python used. Git Bash
 # keeps its POSIX shell paths on Windows, but Python still creates Scripts/.
+# Do not pin here: callers install packages after this returns, and a thinned
+# launcher must not precede that install.
 venv_python() {
   if [[ -x "$1/bin/python3" ]]; then
     printf '%s\n' "$1/bin/python3"
@@ -88,13 +331,23 @@ python_at_least_310() {
   [[ -n "${1:-}" ]] && "$1" -c 'import sys; sys.exit(0 if sys.version_info[:2] >= (3, 10) else 1)' 2>/dev/null
 }
 
-# Echo the first Python 3.10+ on PATH, preferring $PYTHON_BIN. Empty when the
-# machine has none.
+# Echo the first Python 3.10+ on PATH, preferring $PYTHON_BIN. $1, when set,
+# is a venv to skip: its interpreter cannot recreate itself. Empty when the
+# machine has none outside that directory.
 newest_supported_python() {
-  local candidate
-  if python_at_least_310 "$PYTHON_BIN"; then command -v "$PYTHON_BIN"; return 0; fi
+  local candidate found exclude="${1:-}"
+  if python_at_least_310 "$PYTHON_BIN"; then
+    found="$(command -v "$PYTHON_BIN" 2>/dev/null || true)"
+    if [[ -n "$exclude" && "$found" == "$exclude"/* ]]; then found=""; fi
+    if [[ -n "$found" ]]; then printf '%s\n' "$found"; return 0; fi
+  fi
   for candidate in python3.14 python3.13 python3.12 python3.11 python3.10; do
-    if have "$candidate" && python_at_least_310 "$candidate"; then command -v "$candidate"; return 0; fi
+    if have "$candidate" && python_at_least_310 "$candidate"; then
+      found="$(command -v "$candidate")"
+      if [[ -n "$exclude" && "$found" == "$exclude"/* ]]; then continue; fi
+      printf '%s\n' "$found"
+      return 0
+    fi
   done
   return 1
 }
@@ -237,6 +490,8 @@ if [[ "$INSTALL_MFLUX" == "1" ]]; then
     fi
     MFLUX_VENV="${HOME}/.portos/venv-mflux"
     MFLUX_VENV_PY="${MFLUX_VENV}/bin/python3"
+    MFLUX_BASE_PY="$(uv python find 3.11 2>/dev/null || true)"
+    reset_universal_venv "$MFLUX_VENV" "$MFLUX_BASE_PY"
     if [[ ! -x "$MFLUX_VENV_PY" ]]; then
       echo "📦 Creating mflux venv at ${MFLUX_VENV} (Python 3.11)..."
       mkdir -p "${HOME}/.portos"
@@ -244,6 +499,7 @@ if [[ "$INSTALL_MFLUX" == "1" ]]; then
     fi
     echo "📦 Installing ${MFLUX_PIN} · ${MLX_PIN} · ${MLX_METAL_PIN} into ${MFLUX_VENV}..."
     uv pip install --python "$MFLUX_VENV_PY" "$MFLUX_PIN" "$MLX_PIN" "$MLX_METAL_PIN"
+    pin_venv_arm64 "$MFLUX_VENV"
     probe_or_fail \
       "mflux venv built but 'import mflux' failed." \
       "Check that mflux and its MLX dependencies installed cleanly in ${MFLUX_VENV}." \
@@ -328,6 +584,8 @@ if [[ "$INSTALL_LTX2" == "1" ]]; then
   # Force Python 3.11 — ltx-core-mlx pins requires-python>=3.11 and the
   # macOS bundled python3 is sometimes 3.10. uv resolves this for us when
   # the env doesn't already exist.
+  LTX2_BASE_PY="$(uv python find 3.11 2>/dev/null || true)"
+  reset_universal_venv "${LTX2_DIR}/.venv" "$LTX2_BASE_PY"
   if [[ ! -x "${LTX2_PY}" ]]; then
     echo "📦 Creating ltx-2-mlx venv with Python 3.11..."
     (cd "${LTX2_DIR}" && uv venv --python 3.11)
@@ -340,6 +598,7 @@ if [[ "$INSTALL_LTX2" == "1" ]]; then
   # have no use for.
   echo "📦 Syncing ltx-2-mlx packages (uv sync, no extras)..."
   (cd "${LTX2_DIR}" && uv sync)
+  pin_venv_arm64 "${LTX2_DIR}/.venv"
   probe_or_fail \
     "ltx-2-mlx synced but 'import ltx_pipelines_mlx' failed." \
     "Re-run with: rm -rf ${LTX2_DIR}/.venv && bash $0" \
@@ -385,12 +644,15 @@ if [[ "$INSTALL_LTX25" == "1" ]]; then
   fi
   echo "📦 Checking out pinned commit ${LTX25_PIN:0:12}..."
   git_checkout_pin "${LTX25_DIR}" "${LTX25_PIN}"
+  LTX25_BASE_PY="$(uv python find 3.11 2>/dev/null || true)"
+  reset_universal_venv "${LTX25_DIR}/.venv" "$LTX25_BASE_PY"
   if [[ ! -x "${LTX25_PY}" ]]; then
     echo "📦 Creating ltx-2.5-mlx venv with Python 3.11..."
     (cd "${LTX25_DIR}" && uv venv --python 3.11)
   fi
   echo "📦 Syncing ltx-2.5-mlx packages (uv sync, no extras)..."
   (cd "${LTX25_DIR}" && uv sync)
+  pin_venv_arm64 "${LTX25_DIR}/.venv"
   probe_or_fail \
     "ltx-2.5-mlx synced but 'import ltx_pipelines_mlx' failed." \
     "Re-run with: rm -rf ${LTX25_DIR}/.venv && bash $0" \
@@ -402,7 +664,7 @@ INSTALL_FASTVIDEO="${INSTALL_FASTVIDEO:-0}"
 if [[ "$INSTALL_FASTVIDEO" == "1" ]]; then
   # FastVideo provides native Apple Silicon inference for Wan and FastMetal models
   # via MLX/Metal. Reached only when the user chooses Install/Repair in Video Gen.
-  if ! is_macos || [[ "$(uname -m)" != "arm64" ]]; then
+  if ! is_apple_silicon; then
     echo "❌ FastVideo MLX requires an Apple-Silicon Mac." >&2
     exit 1
   fi
@@ -431,6 +693,8 @@ if [[ "$INSTALL_FASTVIDEO" == "1" ]]; then
     (cd "${FASTVIDEO_DIR}" && git fetch --progress origin)
   fi
   git_checkout_pin "${FASTVIDEO_DIR}" "${FASTVIDEO_PIN}"
+  FASTVIDEO_BASE_PY="$("$FASTVIDEO_UV" python find 3.11 2>/dev/null || true)"
+  reset_universal_venv "${FASTVIDEO_DIR}/.venv" "$FASTVIDEO_BASE_PY"
   if [[ ! -x "${FASTVIDEO_PY}" ]]; then
     echo "📦 Creating FastVideo venv with Python 3.11..."
     (cd "${FASTVIDEO_DIR}" && "$FASTVIDEO_UV" venv --python 3.11)
@@ -443,6 +707,7 @@ if [[ "$INSTALL_FASTVIDEO" == "1" ]]; then
   # The import probe below then failed with a message that pointed nowhere.
   echo "📦 Installing FastVideo MLX packages into ${FASTVIDEO_DIR}/.venv..."
   (cd "${FASTVIDEO_DIR}" && "$FASTVIDEO_UV" pip install --python "${FASTVIDEO_PY}" -e '.[mlx]')
+  pin_venv_arm64 "${FASTVIDEO_DIR}/.venv"
   probe_or_fail \
     "FastVideo synced but the runtime import failed in ${FASTVIDEO_PY}." \
     "Delete ${FASTVIDEO_DIR}/.venv and use Repair / Upgrade from the Video Gen runtime panel to retry." \
@@ -505,12 +770,15 @@ if [[ "$INSTALL_WAN22" == "1" ]]; then
     (cd "${WAN22_DIR}" && git fetch --progress origin)
   fi
   git_checkout_pin "${WAN22_DIR}" "${WAN22_PIN}"
+  WAN22_BASE_PY="$("$WAN22_UV" python find 3.11 2>/dev/null || true)"
+  reset_universal_venv "${WAN22_DIR}/.venv" "$WAN22_BASE_PY"
   if [[ ! -x "${WAN22_PY}" ]]; then
     echo "📦 Creating MLX-Gen venv with Python 3.11..."
     (cd "${WAN22_DIR}" && "$WAN22_UV" venv --python 3.11)
   fi
   echo "📦 Syncing pinned MLX-Gen packages..."
   (cd "${WAN22_DIR}" && "$WAN22_UV" sync --locked)
+  pin_venv_arm64 "${WAN22_DIR}/.venv"
   probe_or_fail \
     "MLX-Gen synced but the Wan runtime import failed." \
     "Use Repair / Upgrade from the Video Gen runtime panel to retry." \
@@ -525,7 +793,7 @@ if [[ "$INSTALL_MINIMAX_H3" == "1" ]]; then
   # or transformers drift on a ~100 GB model is expensive to diagnose after a
   # long render. This block is reached only from the explicit runtime Install /
   # Repair action (or the matching terminal opt-in), never from PortOS boot.
-  if ! is_macos || [[ "$(uname -m)" != "arm64" ]]; then
+  if ! is_apple_silicon; then
     echo "❌ MiniMax H3 MLX requires an Apple-Silicon Mac." >&2
     exit 1
   fi
@@ -562,12 +830,15 @@ if [[ "$INSTALL_MINIMAX_H3" == "1" ]]; then
   # (never the whole checkout, where large model/output folders may live).
   git -C "$MINIMAX_H3_DIR" restore --source=HEAD --staged --worktree -- minimax_h3_mlx
   git -C "$MINIMAX_H3_DIR" clean -fd -- minimax_h3_mlx
+  MINIMAX_H3_BASE_PY="$("$MINIMAX_H3_UV" python find 3.11 2>/dev/null || true)"
+  reset_universal_venv "${MINIMAX_H3_DIR}/.venv" "$MINIMAX_H3_BASE_PY"
   if [[ ! -x "$MINIMAX_H3_PY" ]]; then
     echo "📦 Creating MiniMax H3 MLX venv with Python 3.11..."
     "$MINIMAX_H3_UV" venv --python 3.11 "${MINIMAX_H3_DIR}/.venv"
   fi
   echo "📦 Syncing pinned MiniMax H3 MLX packages..."
   "$MINIMAX_H3_UV" pip sync --python "$MINIMAX_H3_PY" "$MINIMAX_H3_LOCK"
+  pin_venv_arm64 "${MINIMAX_H3_DIR}/.venv"
   # --verify-seams is Install/Repair-only strictness: it also asserts the encoder
   # seams generate_minimax_h3.py patches, which the readiness probe deliberately
   # skips (a moved seam must not mark a text-only-capable runtime unready). That
@@ -584,7 +855,7 @@ fi
 
 INSTALL_MERERUN="${INSTALL_MERERUN:-0}"
 if [[ "$INSTALL_MERERUN" == "1" ]]; then
-  if ! is_macos || [[ "$(uname -m)" != "arm64" ]]; then
+  if ! is_apple_silicon; then
     echo "❌ MiniMax H3 Ref2VA through mere.run requires an Apple-Silicon Mac." >&2
     exit 1
   fi
@@ -647,6 +918,7 @@ if [[ "$INSTALL_MINIMAX_H3_CUDA" == "1" ]]; then
   # A Windows venv puts the interpreter under Scripts/, a POSIX one under bin/.
   # Probe for either rather than branching on `uname`, so an MSYS/Cygwin bash on
   # Windows (which is what the in-app installer runs) resolves correctly.
+  reset_universal_venv "$MINIMAX_H3_CUDA_VENV" "$PYTHON_BIN"
   if ! venv_exists "$MINIMAX_H3_CUDA_VENV"; then
     echo "📦 Creating MiniMax H3 CUDA venv..."
     "$PYTHON_BIN" -m venv "$MINIMAX_H3_CUDA_VENV"
@@ -667,6 +939,7 @@ if [[ "$INSTALL_MINIMAX_H3_CUDA" == "1" ]]; then
   fi
   echo "📦 Installing pinned MiniMax H3 CUDA packages..."
   "$MINIMAX_H3_CUDA_PY" -m pip install --upgrade --progress-bar on -r "$MINIMAX_H3_CUDA_REQS"
+  pin_venv_arm64 "$MINIMAX_H3_CUDA_VENV"
 
   # Three separate ways this install can look complete and not be: a CPU-only
   # torch, a diffusers without the H3 integration, or a missing torchao. Check
@@ -695,6 +968,7 @@ if [[ "$INSTALL_LTX25_CUDA" == "1" ]]; then
   LTX25_CUDA_REQS="${SCRIPT_DIR}/requirements-ltx25-cuda.txt"
   LTX25_CUDA_TORCH_INDEX="${PORTOS_LTX25_CUDA_TORCH_INDEX:-https://download.pytorch.org/whl/cu128}"
   mkdir -p "$LTX25_CUDA_DIR"
+  reset_universal_venv "$LTX25_CUDA_VENV" "$PYTHON_BIN"
   if ! venv_exists "$LTX25_CUDA_VENV"; then
     echo "📦 Creating LTX-2.5 CUDA venv..."
     "$PYTHON_BIN" -m venv "$LTX25_CUDA_VENV"
@@ -709,6 +983,7 @@ if [[ "$INSTALL_LTX25_CUDA" == "1" ]]; then
   fi
   echo "📦 Installing official LTX-2.5 CUDA packages..."
   "$LTX25_CUDA_PY" -m pip install --upgrade --progress-bar on -r "$LTX25_CUDA_REQS"
+  pin_venv_arm64 "$LTX25_CUDA_VENV"
   probe_or_fail \
     "LTX-2.5 CUDA installed but its runtime probe failed." \
     "Check the CUDA torch and LTX package errors above, then use Repair in Video Gen." \
@@ -727,6 +1002,7 @@ if [[ "$INSTALL_WAN22_CUDA" == "1" ]]; then
   WAN22_CUDA_VENV="${WAN22_CUDA_DIR}/.venv"
   WAN22_CUDA_REQS="${SCRIPT_DIR}/requirements-wan22-cuda.txt"
   mkdir -p "$WAN22_CUDA_DIR"
+  reset_universal_venv "$WAN22_CUDA_VENV" "$PYTHON_BIN"
   if ! venv_exists "$WAN22_CUDA_VENV"; then
     echo "📦 Creating Wan 2.2 CUDA venv..."
     "$PYTHON_BIN" -m venv "$WAN22_CUDA_VENV"
@@ -739,6 +1015,7 @@ if [[ "$INSTALL_WAN22_CUDA" == "1" ]]; then
     "$WAN22_CUDA_PY" -m pip install --upgrade torch torchvision
   fi
   "$WAN22_CUDA_PY" -m pip install --upgrade --progress-bar on -r "$WAN22_CUDA_REQS"
+  pin_venv_arm64 "$WAN22_CUDA_VENV"
   probe_or_fail \
     "Wan 2.2 CUDA installed but its runtime probe failed." \
     "Check the CUDA torch errors above, then use Repair in Video Gen." \
@@ -755,7 +1032,7 @@ if [[ "$INSTALL_MUSICGEN" == "1" ]]; then
   # a pip package — so we clone the repo and build a sibling venv. The sidecar
   # `scripts/generate_musicgen.py` imports `MusicGen` from the clone;
   # server/lib/pythonSetup.js (resolveMusicgenPython) looks for python3 here.
-  if ! is_macos; then
+  if ! is_apple_silicon; then
     echo "⚠️ INSTALL_MUSICGEN=1 is macOS / Apple-Silicon only (MLX). Skipping." >&2
   else
     if ! have git; then
@@ -778,6 +1055,7 @@ if [[ "$INSTALL_MUSICGEN" == "1" ]]; then
     git -C "${MLX_EXAMPLES_DIR}" fetch --quiet origin
     git_checkout_pin "${MLX_EXAMPLES_DIR}" "${MLX_EXAMPLES_PIN}"
 
+    reset_universal_venv "$MUSICGEN_VENV" "$PYTHON_BIN"
     if [[ ! -x "$MUSICGEN_PY" ]]; then
       echo "📦 Creating MusicGen venv at ${MUSICGEN_VENV}..."
       "$PYTHON_BIN" -m venv "$MUSICGEN_VENV"
@@ -798,6 +1076,7 @@ if [[ "$INSTALL_MUSICGEN" == "1" ]]; then
       sentencepiece \
       "huggingface_hub[hf_xet]" \
       scipy
+    pin_venv_arm64 "$MUSICGEN_VENV"
     # Verify BOTH that the class imports AND that torch loaded — the import alone
     # passed even when torch was missing, so install used to report ready and
     # then fail on the first generation.
@@ -823,6 +1102,7 @@ if [[ "$INSTALL_AUDIOLDM2" == "1" ]]; then
   # installer; venv_python keeps the installer aligned with the JS resolver.
   AUDIOLDM2_VENV="${HOME}/.portos/venv-audioldm2"
   mkdir -p "${HOME}/.portos"
+  reset_universal_venv "$AUDIOLDM2_VENV" "$PYTHON_BIN"
 
   if ! venv_exists "$AUDIOLDM2_VENV"; then
     echo "📦 Creating AudioLDM2 venv at ${AUDIOLDM2_VENV}..."
@@ -844,6 +1124,7 @@ if [[ "$INSTALL_AUDIOLDM2" == "1" ]]; then
     numpy \
     scipy \
     "huggingface_hub[hf_xet]"
+  pin_venv_arm64 "$AUDIOLDM2_VENV"
   # Verify the pipeline class imports — a clean import means generation only
   # needs the one-time weight download, not a broken venv.
   probe_or_fail \
@@ -868,6 +1149,7 @@ if [[ "$INSTALL_ACESTEP" == "1" ]]; then
   # run, so this only builds the venv — no weights are fetched here.
   ACESTEP_VENV="${HOME}/.portos/venv-acestep"
   mkdir -p "${HOME}/.portos"
+  reset_universal_venv "$ACESTEP_VENV" "$PYTHON_BIN"
 
   if ! venv_exists "$ACESTEP_VENV"; then
     echo "📦 Creating ACE-Step venv at ${ACESTEP_VENV}..."
@@ -883,6 +1165,7 @@ if [[ "$INSTALL_ACESTEP" == "1" ]]; then
   "$ACESTEP_PY" -m pip install --upgrade \
     "git+https://github.com/ace-step/ACE-Step.git" \
     "huggingface_hub[hf_xet]"
+  pin_venv_arm64 "$ACESTEP_VENV"
   # Verify the pipeline class imports — a clean import means generation only
   # needs the one-time checkpoint download, not a broken venv.
   probe_or_fail \
@@ -899,6 +1182,7 @@ if [[ "$INSTALL_ACESTEP15" == "1" ]]; then
   # trust_remote_code, so it must never share v1's `acestep` venv.
   ACESTEP15_VENV="${HOME}/.portos/venv-acestep15"
   mkdir -p "${HOME}/.portos"
+  reset_universal_venv "$ACESTEP15_VENV" "$PYTHON_BIN"
 
   if ! venv_exists "$ACESTEP15_VENV"; then
     echo "📦 Creating ACE-Step 1.5 venv at ${ACESTEP15_VENV}..."
@@ -917,6 +1201,7 @@ if [[ "$INSTALL_ACESTEP15" == "1" ]]; then
   "$ACESTEP15_PY" -m pip install --upgrade --extra-index-url "$ACESTEP15_TORCH_INDEX" \
     "git+https://github.com/ace-step/ACE-Step-1.5.git@v0.1.8" \
     "huggingface_hub[hf_xet]"
+  pin_venv_arm64 "$ACESTEP15_VENV"
   probe_or_fail \
     "ACE-Step 1.5 venv built but its Transformers runtime failed to import." \
     "Check that torch, transformers, and ACE-Step 1.5 installed cleanly in ${ACESTEP15_VENV}." \
@@ -948,6 +1233,7 @@ if [[ "$INSTALL_MINIMAX_MUSIC3" == "1" ]]; then
     echo "♻️  Existing MiniMax Music 3 venv was built from a conda base (torch can't load there) — rebuilding from ${PYTHON_BIN}."
     rm -rf "$MINIMAX_MUSIC3_VENV"
   fi
+  reset_universal_venv "$MINIMAX_MUSIC3_VENV" "$PYTHON_BIN"
   if ! venv_exists "$MINIMAX_MUSIC3_VENV"; then
     "$PYTHON_BIN" -m venv "$MINIMAX_MUSIC3_VENV"
   fi
@@ -976,6 +1262,7 @@ if [[ "$INSTALL_MINIMAX_MUSIC3" == "1" ]]; then
   # head SHA fails with "pathspec ... did not match any file(s) known to git".
   "$MINIMAX_MUSIC3_PY" -m pip install --upgrade transformers accelerate huggingface_hub numpy \
     'diffusers @ git+https://github.com/huggingface/diffusers.git@2da7040be1a2e5f2fcbc8b985083342a308f5a86'
+  pin_venv_arm64 "$MINIMAX_MUSIC3_VENV"
   "$MINIMAX_MUSIC3_PY" -c "import torch; from diffusers import ModularPipeline; assert torch.cuda.is_available()"
   echo "✅ MiniMax Music 3 venv ready: $MINIMAX_MUSIC3_PY"
   echo "   Model weights (~29 GB) install separately from Music → Generate."
@@ -988,11 +1275,12 @@ if [[ "$INSTALL_MINIMAX_MUSIC3_MLX" == "1" ]]; then
   # the MLX model loader is Apple-Silicon-only. Model weights stay a separate,
   # explicit Music-studio download so installing a runtime never spends tens of
   # gigabytes without the user's consent.
-  if ! is_macos || [[ "$(uname -m)" != "arm64" ]]; then
+  if ! is_apple_silicon; then
     echo "⚠️ INSTALL_MINIMAX_MUSIC3_MLX=1 is macOS / Apple-Silicon only. Skipping." >&2
   else
     MINIMAX_MUSIC3_MLX_VENV="${HOME}/.portos/venv-minimax-music3-mlx"
     mkdir -p "${HOME}/.portos"
+    reset_universal_venv "$MINIMAX_MUSIC3_MLX_VENV" "$PYTHON_BIN"
     if ! venv_exists "$MINIMAX_MUSIC3_MLX_VENV"; then
       echo "📦 Creating MiniMax Music 3 MLX venv at ${MINIMAX_MUSIC3_MLX_VENV}..."
       "$PYTHON_BIN" -m venv "$MINIMAX_MUSIC3_MLX_VENV"
@@ -1007,6 +1295,7 @@ if [[ "$INSTALL_MINIMAX_MUSIC3_MLX" == "1" ]]; then
     "$MINIMAX_MUSIC3_MLX_PY" -m pip install --upgrade \
       "mlx-audio @ git+https://github.com/Blaizzy/mlx-audio.git@${MLX_AUDIO_PIN}" \
       "huggingface_hub[hf_xet]"
+    pin_venv_arm64 "$MINIMAX_MUSIC3_MLX_VENV"
     probe_or_fail \
       "MiniMax Music 3 MLX venv built but 'import mlx; from mlx_audio.music import load' failed." \
       "Check that mlx-audio installed cleanly in ${MINIMAX_MUSIC3_MLX_VENV}." \
@@ -1030,6 +1319,7 @@ if [[ "$INSTALL_MUSCRIPTOR" == "1" ]]; then
   # CC BY-NC 4.0 (non-commercial).
   MUSCRIPTOR_VENV="${HOME}/.portos/venv-muscriptor"
   mkdir -p "${HOME}/.portos"
+  reset_universal_venv "$MUSCRIPTOR_VENV" "$PYTHON_BIN"
 
   if ! venv_exists "$MUSCRIPTOR_VENV"; then
     echo "📦 Creating MuScriptor venv at ${MUSCRIPTOR_VENV}..."
@@ -1044,6 +1334,7 @@ if [[ "$INSTALL_MUSCRIPTOR" == "1" ]]; then
   "$MUSCRIPTOR_PY" -m pip install --upgrade \
     muscriptor \
     "huggingface_hub[hf_xet]"
+  pin_venv_arm64 "$MUSCRIPTOR_VENV"
   # Verify the model class imports — a clean import means transcription only
   # needs the one-time weight download, not a broken venv.
   probe_or_fail \
@@ -1061,12 +1352,17 @@ if [[ "$INSTALL_FLUX2" == "1" ]]; then
   # fragile, so we use a sibling venv. server/lib/pythonSetup.js looks for
   # this venv's interpreter when the active model has runner=='flux2'.
   FLUX2_VENV="${HOME}/.portos/venv-flux2"
-  if ! FLUX2_BASE_PY="$(newest_supported_python)"; then
+  # Prefer a base outside the venv. An activated universal venv is the first
+  # python3 on PATH; deleting it and then calling that path fails the rebuild.
+  # reset also refuses when the only interpreter lives inside the venv.
+  if ! FLUX2_BASE_PY="$(newest_supported_python "$FLUX2_VENV")" \
+      && ! FLUX2_BASE_PY="$(newest_supported_python)"; then
     echo "❌ FLUX.2 needs Python 3.10+ to build its venv; \`$PYTHON_BIN\` is older and no newer python3.NN is on PATH." >&2
     echo "   Install one (e.g. 'brew install python@3.12' or 'uv python install 3.12'), then re-run with PYTHON_BIN pointing at it." >&2
     exit 1
   fi
   mkdir -p "${HOME}/.portos"
+  reset_universal_venv "$FLUX2_VENV" "$FLUX2_BASE_PY"
   # A venv left behind by an earlier run against a too-old base can never
   # install these packages, and `python -m venv` reuses it silently — so every
   # retry would fail the same way. Rebuild it instead of pip-ing into it.
@@ -1109,6 +1405,7 @@ if [[ "$INSTALL_FLUX2" == "1" ]]; then
     # pipeline code without reinstalling torch or its platform-specific wheel.
     "$FLUX2_PY" -m pip install --force-reinstall --no-deps \
       "diffusers @ git+https://github.com/huggingface/diffusers"
+    pin_venv_arm64 "$FLUX2_VENV"
     probe_or_fail \
       "flux2 venv built but 'from diffusers import Flux2KleinPipeline, QwenImage21Pipeline' failed." \
       "Try: $FLUX2_PY -m pip install --upgrade --force-reinstall 'diffusers @ git+https://github.com/huggingface/diffusers'" \
@@ -1178,10 +1475,10 @@ if [[ "$INSTALL_MERERUN" == "1" ]]; then
   echo "   MiniMax H3 Ref2VA: ${HOME}/.portos/mere-run/mere.run (mere.run v${MERE_RUN_VERSION})"
   echo "                       Weights remain uninstalled until accepted and downloaded in Video Gen."
 fi
-if [[ "$INSTALL_MUSICGEN" == "1" ]] && is_macos; then
+if [[ "$INSTALL_MUSICGEN" == "1" ]] && is_apple_silicon; then
   echo "   MusicGen:  ${HOME}/.portos/venv-musicgen/bin/python3 (separate venv, MLX runtime @ ${HOME}/.portos/mlx-examples/musicgen)"
 fi
-if [[ "$INSTALL_MINIMAX_MUSIC3_MLX" == "1" ]] && is_macos && [[ "$(uname -m)" == "arm64" ]]; then
+if [[ "$INSTALL_MINIMAX_MUSIC3_MLX" == "1" ]] && is_apple_silicon; then
   echo "   MiniMax Music 3 MLX: ${MINIMAX_MUSIC3_MLX_PY} (separate venv, mlx-audio; weights install separately in Music)"
 fi
 if [[ "$INSTALL_AUDIOLDM2" == "1" ]]; then

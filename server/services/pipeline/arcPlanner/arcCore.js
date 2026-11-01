@@ -740,6 +740,59 @@ export function isolatedCandidateRejection(edits, { exactTextMode = false, serie
 }
 
 
+/** Say what `selectFindingKeyedEdits` discarded from a resolve response. */
+function reportDroppedResolveEdits(edits) {
+  // Only worth saying when there is actually something to apply unkeyed — a
+  // response that proposed NO edits reads as legacy too, and warning about a
+  // stale prompt there would be a lie.
+  if (edits.legacy && (edits.arc || edits.characterArcs.length || edits.seasons.length || edits.episodes.length)) {
+    console.log(`⚠️ arc-resolve: response carries no resolves[] — applying it unkeyed (installed pipeline-arc-resolve.md predates #3724)`);
+  }
+  if (edits.arcDropped) {
+    console.log(`⚠️ arc-resolve: dropped the arc-level edit — it named no input finding`);
+  }
+  if (edits.characterArcsDropped || edits.seasonsDropped || edits.episodesDropped) {
+    console.log(`⚠️ arc-resolve: dropped ${edits.characterArcsDropped} character arc + ${edits.seasonsDropped} volume + ${edits.episodesDropped} episode edit(s) naming no input finding`);
+  }
+  if (edits.episodesOutOfScope) {
+    console.log(`⚠️ arc-resolve: discarded ${edits.episodesOutOfScope} episode edit(s) — the arc-spine gate resolves at arc/volume scope only`);
+  }
+}
+
+/**
+ * The arc after a resolve round: the resolver's value for each field it
+ * authored, else the stored one — never wiping a field the resolve prompt
+ * doesn't author. In exact-text mode the summary and protagonist arc take
+ * exact-text edits, and `rejected` counts the ones that did not apply.
+ */
+function mergeResolvedArc(storedArc, arcEdit, { exactTextMode }) {
+  const arcSummary = exactTextMode
+    ? applyExactTextEdits(storedArc.summary || '', arcEdit?.summaryEdits, ARC_LIMITS.SUMMARY_MAX)
+    : { value: arcEdit?.summary || storedArc.summary || '', applied: 0, rejected: 0 };
+  const protagonistArc = exactTextMode
+    ? applyExactTextEdits(storedArc.protagonistArc || '', arcEdit?.protagonistArcEdits, ARC_LIMITS.PROTAGONIST_ARC_MAX)
+    : { value: arcEdit?.protagonistArc ?? storedArc.protagonistArc ?? '', applied: 0, rejected: 0 };
+  const arc = sanitizeArc({
+    logline: arcEdit?.logline || storedArc.logline || '',
+    summary: arcSummary.value,
+    themes: arcEdit?.themes ?? storedArc.themes,
+    protagonistArc: protagonistArc.value,
+    shape: arcEdit?.shape ?? storedArc.shape ?? null,
+    // The resolve prompt doesn't author the reader map — preserve any existing
+    // one so auto-resolve never silently wipes a reader map the user already
+    // built on the next step. Mirrors `generateArcOverview` above.
+    seriesDesign: storedArc.seriesDesign,
+    readerMap: storedArc.readerMap ?? null,
+    // A sparse repair can move existing countdown beats without replacing them.
+    tickingClock: mergeTickingClockPatch(storedArc.tickingClock, arcEdit?.tickingClock).value ?? null,
+    // The resolve prompt doesn't author the foreshadowing ledger — take it if
+    // present, else preserve any existing one so auto-resolve never wipes it.
+    foreshadowing: arcEdit?.foreshadowing ?? storedArc.foreshadowing ?? null,
+    status: 'draft',
+  });
+  return { arc, rejected: arcSummary.rejected + protagonistArc.rejected };
+}
+
 // Character arcs are patched in place by existing IDs; episode (issue) records
 // are never CREATED or DELETED here, and their drafted scripts are never
 // clobbered — a full-arc round may rewrite an episode's planning synopsis or
@@ -827,21 +880,7 @@ export async function resolveVerifyIssues(seriesId, options = {}) {
   // files as a brand-new blocker.
   const edits = selectFindingKeyedEdits(content, findings, { spineOnly });
   const exactTextMode = content?.patchMode === EXACT_TEXT_PATCH_MODE;
-  // Only worth saying when there is actually something to apply unkeyed — a
-  // response that proposed NO edits reads as legacy too, and warning about a
-  // stale prompt there would be a lie.
-  if (edits.legacy && (edits.arc || edits.characterArcs.length || edits.seasons.length || edits.episodes.length)) {
-    console.log(`⚠️ arc-resolve: response carries no resolves[] — applying it unkeyed (installed pipeline-arc-resolve.md predates #3724)`);
-  }
-  if (edits.arcDropped) {
-    console.log(`⚠️ arc-resolve: dropped the arc-level edit — it named no input finding`);
-  }
-  if (edits.characterArcsDropped || edits.seasonsDropped || edits.episodesDropped) {
-    console.log(`⚠️ arc-resolve: dropped ${edits.characterArcsDropped} character arc + ${edits.seasonsDropped} volume + ${edits.episodesDropped} episode edit(s) naming no input finding`);
-  }
-  if (edits.episodesOutOfScope) {
-    console.log(`⚠️ arc-resolve: discarded ${edits.episodesOutOfScope} episode edit(s) — the arc-spine gate resolves at arc/volume scope only`);
-  }
+  reportDroppedResolveEdits(edits);
 
   // What every return below carries regardless of whether the candidate landed.
   const runMeta = {
@@ -886,31 +925,9 @@ export async function resolveVerifyIssues(seriesId, options = {}) {
   }
 
 
-  const arcSummary = exactTextMode
-    ? applyExactTextEdits(series.arc.summary || '', edits.arc?.summaryEdits, ARC_LIMITS.SUMMARY_MAX)
-    : { value: edits.arc?.summary || series.arc.summary || '', applied: 0, rejected: 0 };
-  const protagonistArc = exactTextMode
-    ? applyExactTextEdits(series.arc.protagonistArc || '', edits.arc?.protagonistArcEdits, ARC_LIMITS.PROTAGONIST_ARC_MAX)
-    : { value: edits.arc?.protagonistArc ?? series.arc.protagonistArc ?? '', applied: 0, rejected: 0 };
-  let rejectedExactEdits = arcSummary.rejected + protagonistArc.rejected;
-  const arc = sanitizeArc({
-    logline: edits.arc?.logline || series.arc.logline || '',
-    summary: arcSummary.value,
-    themes: edits.arc?.themes ?? series.arc.themes,
-    protagonistArc: protagonistArc.value,
-    shape: edits.arc?.shape ?? series.arc.shape ?? null,
-    // The resolve prompt doesn't author the reader map — preserve any existing
-    // one so auto-resolve never silently wipes a reader map the user already
-    // built on the next step. Mirrors `generateArcOverview` above.
-    seriesDesign: series.arc?.seriesDesign,
-    readerMap: series.arc?.readerMap ?? null,
-    // A sparse repair can move existing countdown beats without replacing them.
-    tickingClock: mergeTickingClockPatch(series.arc?.tickingClock, edits.arc?.tickingClock).value ?? null,
-    // The resolve prompt doesn't author the foreshadowing ledger — take it if
-    // present, else preserve any existing one so auto-resolve never wipes it.
-    foreshadowing: edits.arc?.foreshadowing ?? series.arc?.foreshadowing ?? null,
-    status: 'draft',
-  });
+  const merged = mergeResolvedArc(series.arc, edits.arc, { exactTextMode });
+  const { arc } = merged;
+  let rejectedExactEdits = merged.rejected;
 
   // Round-trip the LLM's seasons through `buildSeason` if they include a
   // brand-new entry (no `id`), otherwise preserve the existing `id` so child

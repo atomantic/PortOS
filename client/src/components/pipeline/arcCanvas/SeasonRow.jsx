@@ -181,7 +181,7 @@ export default function SeasonRow({ series, season, seasons, issues, onSeriesUpd
         <button
           type="button"
           onClick={() => setCollapsed(!collapsed)}
-          className="aspect-[3/4] rounded overflow-hidden bg-port-bg border border-port-border hover:border-port-accent/50 transition-colors"
+          className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 aspect-[3/4] rounded overflow-hidden bg-port-bg border border-port-border hover:border-port-accent/50 transition-colors"
           aria-label={collapsed ? 'Expand volume / season' : 'Collapse volume / season'}
         >
           <CoverArt

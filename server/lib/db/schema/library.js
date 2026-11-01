@@ -27,8 +27,7 @@ export const libraryDdl = [
     // musicalStyle, physicalDescription, portraitStyle, portraitImageUrl) in
     // `data` JSONB. `name` mirrors a column for the live-list sort; the LWW/
     // tombstone trio is populated FROM the record body. Artists are db-primary
-    // and federation-ready (LWW merge mirrors authors), but the artist record
-    // kind is not yet registered in peerSync — local-only for now (see issue #1502).
+    // and registered in peerSync (record kind `artist`, sync category `artists`).
     // Mirrors the artists block in init-db.sql.
     `CREATE TABLE IF NOT EXISTS artists (
       id TEXT PRIMARY KEY,
@@ -44,9 +43,9 @@ export const libraryDdl = [
     // Music albums (the Music studio). One row per album, the full sanitized
     // record (title, artistId+denormalized artist, description, genre,
     // releaseYear, coverImageUrl, ordered trackIds) in `data` JSONB. `title`
-    // mirrors a column for the live-list sort. db-primary + federation-ready
-    // (LWW merge mirrors artists), not yet registered in peerSync — local-only
-    // for now (see issue #1502). Mirrors the albums block in init-db.sql.
+    // mirrors a column for the live-list sort. db-primary and registered in
+    // peerSync (record kind `album`, sync category `albums`). Mirrors the
+    // albums block in init-db.sql.
     `CREATE TABLE IF NOT EXISTS albums (
       id TEXT PRIMARY KEY,
       title TEXT NOT NULL,
@@ -62,8 +61,8 @@ export const libraryDdl = [
     // record (title, albumId/artistId FKs + denormalized artist, lyrics, prompt,
     // engine/modelId/durationSec gen metadata, audioFilename pointing into the
     // shared music library at data/music/) in `data` JSONB. `title` mirrors a
-    // column for queries. db-primary + federation-ready, not yet registered in
-    // peerSync — local-only for now (see issue #1502). Mirrors init-db.sql.
+    // column for queries. db-primary and registered in peerSync (record kind
+    // `track`, sync category `tracks`). Mirrors init-db.sql.
     `CREATE TABLE IF NOT EXISTS tracks (
       id TEXT PRIMARY KEY,
       title TEXT NOT NULL,

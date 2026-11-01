@@ -11,7 +11,7 @@ export default function SceneFramePromptPreview({ project, scene, castMedia, gre
   const prompt = instruction ?? authoredFramePromptText(scene, slot);
   const preview = useModelInputPreview(previewImagePrompt, {
     prompt, ...musicVideoFrameGenSize(project), referenceImageFiles: references,
-    musicVideo: { projectId: project.id, sceneId: scene.sceneId, compose: true, greyboxImageId: greybox.reference.imageId,
+    musicVideo: { projectId: project.id, sceneId: scene.sceneId, compose: true, greyboxImageId: greybox?.reference?.imageId,
       ...(slot === 'end' ? { slot: 'end' } : {}),
       ...(instruction !== null ? { refine: true } : referenceImageId ? { fromFrame: true } : {}),
     },

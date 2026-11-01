@@ -58,6 +58,7 @@ const QUEUE_SOURCE_CONFIG = {
   drafts: { icon: Mail, color: 'text-port-accent' },
   feedback: { icon: MessageCircle, color: 'text-port-warning' },
   health: { icon: Activity, color: 'text-port-warning' },
+  updates: { icon: AlertTriangle, color: 'text-port-warning' },
   backup: { icon: DatabaseBackup, color: 'text-port-error' },
   threads: { icon: BrainIcon, color: 'text-port-accent-2' },
   todo: { icon: ListTodo, color: 'text-port-success' },

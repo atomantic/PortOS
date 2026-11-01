@@ -95,7 +95,7 @@ export default function QuickImageEdit({ item, onDone, generateParams, reference
             <span className="absolute bottom-0.5 left-0.5 rounded bg-black/70 px-1 text-[10px] text-white">{index + 2}</span>
             <button type="button" onClick={() => removeReference(filename)} disabled={busy}
               aria-label={`Remove reference image ${index + 2}`}
-              className="absolute -top-2 -right-2 w-6 h-6 rounded-full bg-port-card border border-port-border text-gray-300 hover:text-white flex items-center justify-center">
+              className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 absolute -top-2 -right-2 w-6 h-6 rounded-full bg-port-card border border-port-border text-gray-300 hover:text-white flex items-center justify-center">
               <X className="w-3 h-3" />
             </button>
           </div>

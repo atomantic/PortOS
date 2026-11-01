@@ -1,4 +1,13 @@
+import useListResource from '../../hooks/useListResource.js';
+import ListLoadError from '../ui/ListLoadError.jsx';
+import { listUniverseNames } from '../../services/apiUniverseBuilder.js';
+import { listPipelineSeriesNames } from '../../services/apiPipeline.js';
 import { CREATIVE_DIRECTOR_GOAL_MAX, DELIVERABLE_OPTIONS } from '../../lib/creativeDirectorPlan.js';
+
+// Module-level so the fetcher identity is stable for useListResource.
+const rows = (data) => (Array.isArray(data) ? data : data?.items || []);
+const fetchUniverses = () => listUniverseNames({ silent: true }).then(rows);
+const fetchSeries = () => listPipelineSeriesNames({ silent: true }).then(rows);
 
 /**
  * Directive composer fields (CDO Phase 4, #2186) — the studio "brief" a directive
@@ -15,8 +24,7 @@ import { CREATIVE_DIRECTOR_GOAL_MAX, DELIVERABLE_OPTIONS } from '../../lib/creat
  * @param {{
  *   directive: object,
  *   onChange: (next: object) => void,
- *   universes?: Array<{id,name}>,
- *   series?: Array<{id,name,title?}>,
+ *   enabled?: boolean,  // load the universe/series pickers only while the host is open
  *   idPrefix?: string,
  *   disabled?: boolean,
  * }} props
@@ -24,11 +32,14 @@ import { CREATIVE_DIRECTOR_GOAL_MAX, DELIVERABLE_OPTIONS } from '../../lib/creat
 export default function DirectiveComposer({
   directive,
   onChange,
-  universes = [],
-  series = [],
+  enabled = true,
   idPrefix = 'directive',
   disabled = false,
 }) {
+  const universeList = useListResource(fetchUniverses, { enabled });
+  const seriesList = useListResource(fetchSeries, { enabled });
+  const universes = universeList.items;
+  const series = seriesList.items;
   const goal = directive?.goal || '';
   const deliverables = Array.isArray(directive?.deliverables) ? directive.deliverables : [];
   const constraints = directive?.constraints || {};
@@ -107,6 +118,7 @@ export default function DirectiveComposer({
               <option key={u.id} value={u.id}>{u.name || u.id}</option>
             ))}
           </select>
+          {universeList.state === 'error' && <ListLoadError className="mt-1" what="universes" error={universeList.error} onRetry={universeList.retry} />}
         </div>
 
         <div>
@@ -125,6 +137,7 @@ export default function DirectiveComposer({
               <option key={s.id} value={s.id}>{s.title || s.name || s.id}</option>
             ))}
           </select>
+          {seriesList.state === 'error' && <ListLoadError className="mt-1" what="series" error={seriesList.error} onRetry={seriesList.retry} />}
         </div>
       </div>
 

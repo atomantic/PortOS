@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { GROK_BUILTIN_TOOLS, GROK_NO_TOOL_ARGS } from './grok.js';
 import {
   PUBLIC_REVIEW_ACTIONS_EXECUTION_PROFILE,
   PUBLIC_REVIEW_EXECUTION_PROFILE,
@@ -280,9 +281,11 @@ describe('public-review provider postures', () => {
       safetyProfile: PUBLIC_REVIEW_GATE_EXECUTION_PROFILE,
     });
     expect(gate.args).toEqual(expect.arrayContaining([
-      '--permission-mode', 'plan', '--tools', '', '--no-subagents', '--disable-web-search',
-      '--model', 'grok-4',
+      '--permission-mode', 'plan', '--disallowed-tools', GROK_BUILTIN_TOOLS.join(','),
+      '--no-subagents', '--disable-web-search', '--model', 'grok-4',
     ]));
+    // An empty `--tools ''` names no tool, so grok leaves all of them on (#14476).
+    expect(gate.args).not.toContain('--tools');
     // A saved auto-approval posture must not survive into the screened run.
     expect(gate.args).not.toContain('--always-approve');
     expect(gate.args).not.toContain('bypassPermissions');
@@ -293,6 +296,25 @@ describe('public-review provider postures', () => {
       '--sandbox', 'workspace', '--permission-mode', 'acceptEdits',
     ]));
     expect(actions.args).not.toContain('plan');
+  });
+
+  // #14391: plain output glues pre-tool narration onto the verdict JSON, so the
+  // reviewer reads grok's streaming transcript; pipeline stages keep plain text.
+  it('streams grok’s code-review transcript while its pipeline stages stay plain', () => {
+    const ctx = { effectiveModel: 'grok-4', safetyProfile: PUBLIC_REVIEW_GATE_EXECUTION_PROFILE };
+    const review = buildCodeReviewSpawnConfig({ ...grok, args: ['--output-format', 'json'] }, ctx);
+    expect(review.streamFormat).toBe('grok-streaming-json');
+    expect(review.args.filter((arg) => arg === '--output-format')).toHaveLength(1);
+    expect(review.args[review.args.indexOf('--output-format') + 1]).toBe('streaming-json');
+    expect(review.args.filter((arg) => arg === '--json-schema')).toHaveLength(1);
+    const schema = JSON.parse(review.args[review.args.indexOf('--json-schema') + 1]);
+    expect(schema).toMatchObject({ required: ['verdict', 'findings'], additionalProperties: false });
+    expect(schema.properties.verdict.enum).toEqual(['clean', 'findings']);
+    expect(review.args).toEqual(expect.arrayContaining([...GROK_NO_TOOL_ARGS, '--prompt-file', '/dev/stdin']));
+
+    const stage = buildVendorSpawnConfig(grok, ctx);
+    expect(stage.streamFormat).toBeUndefined();
+    expect(stage.args[stage.args.indexOf('--output-format') + 1]).toBe('plain');
   });
 
   it('builds the Claude actions stage inside its OS sandbox, not under skip-permissions', () => {
