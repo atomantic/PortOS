@@ -1,4 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { setAIToolkit } from './providers.js';
 
 // Hoisted mock state so the factory closures below can reach it.
 const h = vi.hoisted(() => ({
@@ -30,14 +31,6 @@ vi.mock('./lmStudioManager.js', () => ({
   unloadModel: (...a) => h.lmUnload(...a),
   getBaseUrl: () => 'http://localhost:1234',
 }));
-vi.mock('./providers.js', () => ({
-  getAllProviders: vi.fn(async () => {
-    // The real one rejects when the AI toolkit was never initialized — the
-    // failure mode this module must survive without blocking a job.
-    if (h.providersThrows) throw new Error('toolkit not initialized');
-    return h.providers;
-  }),
-}));
 vi.mock('../lib/cudaCapability.js', () => ({ getCudaCapability: vi.fn(async () => h.cuda) }));
 vi.mock('../lib/openAiModelsProbe.js', () => ({ probeOpenAiModels: (...a) => h.probe(...a) }));
 
@@ -58,6 +51,12 @@ const serving = { reachable: true, models: ['qwen3.8-27b'], error: null };
 const notServing = { reachable: false, models: null, error: 'ECONNREFUSED' };
 
 beforeEach(() => {
+  // Keep the real provider facade: the toolkit returns an envelope, while
+  // consumers needing records use listProviders().
+  setAIToolkit({ services: { providers: { getAllProviders: async () => {
+    if (h.providersThrows) throw new Error('toolkit not initialized');
+    return { activeProvider: null, providers: h.providers };
+  } } } });
   h.memoryThrows = false;
   h.platform = null;
   h.providers = [];
@@ -72,6 +71,8 @@ beforeEach(() => {
   process.env.VLLM_QWEN_PROJECT_DIR = '/srv/example/qwen-serving';
   process.env.SGLANG_QWEN_PROJECT_DIR = '/srv/example/sglang-qwen38';
 });
+
+afterEach(() => setAIToolkit(null));
 
 describe('detectGpuBlockers', () => {
   it('issues no probe when no vllmBacked provider is enabled', async () => {

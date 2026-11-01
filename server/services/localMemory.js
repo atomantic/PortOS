@@ -5,7 +5,7 @@ import { platform, freemem, totalmem } from 'os';
 import { promisify } from 'util';
 import { getLoadedModels as ollamaLoadedModels, unloadModel as ollamaUnload, getBaseUrl as ollamaBaseUrl } from './ollamaManager.js';
 import { getLoadedModels as lmStudioLoadedModels, unloadModel as lmStudioUnload, getBaseUrl as lmStudioBaseUrl } from './lmStudioManager.js';
-import { getAllProviders } from './providers.js';
+import { listProviders } from './providers.js';
 import { probeOpenAiModels } from '../lib/openAiModelsProbe.js';
 import { getCudaCapability } from '../lib/cudaCapability.js';
 import { localRuntimeForProvider, LOCAL_RUNTIMES } from '../lib/localProviderRuntime.js';
@@ -120,8 +120,8 @@ const GPU_EXCLUSIVE_RUNTIMES = Object.freeze([
  *   endpoint: string, reason: string}>>} empty when nothing is holding the GPU
  */
 export async function detectGpuBlockers({ env = process.env, providers = null, timeoutMs = GPU_BLOCKER_PROBE_TIMEOUT_MS } = {}) {
-  const all = Array.isArray(providers) ? providers : await getAllProviders().catch(() => []);
-  const enabled = (Array.isArray(all) ? all : []).filter((p) => p?.enabled === true);
+  const all = Array.isArray(providers) ? providers : await listProviders();
+  const enabled = all.filter((p) => p?.enabled === true);
   const rows = GPU_EXCLUSIVE_RUNTIMES
     .map((row) => ({ row, candidates: enabled.filter((p) => p?.[row.marker] === true) }))
     .filter(({ candidates }) => candidates.length > 0);
