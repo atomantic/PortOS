@@ -52,6 +52,8 @@ import { imageGenEvents } from '../imageGenEvents.js';
 import { trainingEvents } from '../loraTraining/events.js';
 import { audioGenEvents } from '../audioGen/events.js';
 import { getSettings } from '../settings.js';
+import { assertFlux2InputsCompatible } from '../../lib/flux2Inputs.js';
+import { LOCAL_IMAGEGEN_DEFAULT_MODEL } from '../../lib/imageGenCapabilities.js';
 import { IMAGE_GEN_MODE, CLOUD_IMAGE_GEN_MODES } from '../imageGen/modes.js';
 import { parseQuotaDeferral, formatDeferral } from '../../lib/imageQuotaSignal.js';
 import { VIDEO_GEN_MODE, CLOUD_VIDEO_GEN_MODES, mediaJobExecutionLane, mediaJobSwimlane } from '../../lib/generationModes.js';
@@ -2308,6 +2310,15 @@ async function enqueueJobLocked({ kind, params, owner = null }) {
   }
   if (!JOB_KINDS.includes(kind)) {
     throw new Error(`enqueueJob: invalid kind '${kind}'`);
+  }
+  if (kind === 'image' && !isRemoteMediaJob({ kind, params }) && !CLOUD_IMAGE_GEN_MODES.includes(params?.mode)
+    && params?.referenceImagePaths?.length && (params.initImagePath || params.loraFilenames?.length || params.loraPaths?.length)) {
+    const { getImageModels } = await import('../../lib/mediaModels.js');
+    const model = getImageModels().find(entry => entry.id === (params.modelId ?? LOCAL_IMAGEGEN_DEFAULT_MODEL));
+    assertFlux2InputsCompatible(model, {
+      hasInitImage: Boolean(params.initImagePath), referenceCount: params.referenceImagePaths.length,
+      loraCount: (params.loraFilenames?.length || 0) + (params.loraPaths?.length || 0),
+    });
   }
   assertMediaQueueRoom(1);
   const id = randomUUID();

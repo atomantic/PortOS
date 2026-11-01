@@ -755,6 +755,18 @@ describe('federated media provider — image/video kinds', () => {
     expect(enqueueJob).not.toHaveBeenCalled();
   });
 
+  it('refuses simultaneous FLUX.2 init and reference inputs before accepting a peer job', async () => {
+    state.settings = { federation: { mediaProvider: imageConfig() } };
+    state.imageModels = [{ id: 'flux-dev', runner: 'flux2', repo: 'example/flux2' }];
+    state.cachedRepos = new Set(['example/flux2']);
+    const asset = { assetId: `${'0'.repeat(16)}-${'a'.repeat(64)}` };
+    await expect(submitFederatedMediaJob({ callerId: 'peer-example', config: imageConfig(),
+      input: { ...imageInput(), initImage: asset, initImageStrength: 0.35, referenceImages: [asset] },
+      idempotencyKey: 'commission-incompatible-inputs',
+    })).rejects.toMatchObject({ status: 400, code: 'IMAGE_GEN_FLUX2_INPUTS_INCOMPATIBLE' });
+    expect(enqueueJob).not.toHaveBeenCalled();
+  });
+
   it('refuses a conditioning role the selected model does not advertise', async () => {
     state.settings = {
       federation: { mediaProvider: imageConfig() },

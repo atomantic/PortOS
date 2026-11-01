@@ -990,6 +990,64 @@ describe('Image Gen Routes', () => {
       expect(JSON.stringify(recordUserAction.mock.calls[0][0])).not.toContain('a fox in a forest');
     });
 
+    // Preview and submission must refuse the same input loss before queue admission.
+    it.each([
+      { initImageFile: 'init.png', initImageStrength: 0.35 },
+      { loraFilenames: ['example.safetensors'] },
+      { loraPaths: ['example.safetensors'] },
+    ])('refuses FLUX.2 input loss in preview and submission: %j', async extra => {
+      getSettings.mockResolvedValue({ imageGen: { mode: 'local' } });
+      const body = { prompt: 'a red cube', modelId: 'flux2-klein-9b', referenceImageFiles: ['reference.png'], ...extra };
+      const preview = await request(app).post('/api/image-gen/prompt-preview').send(body);
+      const submit = await request(app).post('/api/image-gen/generate').send(body);
+      expect([preview.status, preview.body.code]).toEqual([400, 'IMAGE_GEN_FLUX2_INPUTS_INCOMPATIBLE']);
+      expect([submit.status, submit.body.code, submit.body.error]).toEqual([preview.status, preview.body.code, preview.body.error]);
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+      expect(mediaJobQueue.assertMediaQueueRoom).not.toHaveBeenCalled();
+    });
+
+    it('refuses an incompatible FLUX.2 reference upload before staging it', async () => {
+      getSettings.mockResolvedValue({ imageGen: { mode: 'local' } });
+      const copy = vi.spyOn(fileUtils, 'copyFileGuarded');
+      const server = await startLoopbackServer(app);
+      try {
+        const form = new FormData();
+        form.set('modelId', 'flux2-klein-9b');
+        form.set('loraFilenames', JSON.stringify(['example.safetensors']));
+        form.set('referenceImage1', new Blob(['synthetic image'], { type: 'image/png' }), 'reference.png');
+        const response = await fetch(`http://127.0.0.1:${server.address().port}/api/image-gen/generate`, { method: 'POST', body: form });
+        expect(response.status).toBe(400);
+        expect((await response.json()).code).toBe('IMAGE_GEN_FLUX2_INPUTS_INCOMPATIBLE');
+        expect(copy).not.toHaveBeenCalled();
+        expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+      } finally {
+        copy.mockRestore();
+        await closeLoopbackServer(server);
+      }
+    });
+
+    it.each([
+      { initImageFile: 'init.png', initImageStrength: 0.35 },
+      { referenceImageFiles: ['reference.png'], referenceStrengths: [0.4] },
+      { loraFilenames: ['example.safetensors'], loraScales: [0.7] },
+      { modelId: 'flux2-klein-9b-bf16', loraFilenames: ['example.safetensors'], referenceImageFiles: ['reference.png'], referenceStrengths: [0.4] },
+    ])('preserves supported FLUX.2 neighbors in preview and queue: %j', async extra => {
+      getSettings.mockResolvedValue({ imageGen: { mode: 'local' } });
+      await fileUtils.ensureDir(fileUtils.PATHS.images);
+      await fileUtils.ensureDir(fileUtils.PATHS.loras);
+      await writeFile(pathJoin(fileUtils.PATHS.images, 'init.png'), 'synthetic init');
+      await writeFile(pathJoin(fileUtils.PATHS.images, 'reference.png'), 'synthetic reference');
+      await writeFile(pathJoin(fileUtils.PATHS.loras, 'example.safetensors'), 'synthetic adapter');
+      const body = { prompt: 'a red cube', modelId: 'flux2-klein-9b', ...extra };
+      const preview = await request(app).post('/api/image-gen/prompt-preview').send(body);
+      const submit = await request(app).post('/api/image-gen/generate').send(body);
+      expect([preview.status, submit.status]).toEqual([200, 200]);
+      const params = mediaJobQueue.enqueueJob.mock.calls[0][0].params;
+      if (extra.initImageFile) expect(params).toMatchObject({ initImagePath: pathJoin(fileUtils.PATHS.images, 'init.png'), initImageStrength: 0.35 });
+      if (extra.referenceImageFiles) expect(params).toMatchObject({ referenceImagePaths: [pathJoin(fileUtils.PATHS.images, 'reference.png')], referenceImageStrengths: [0.4] });
+      if (extra.loraFilenames) expect(params).toMatchObject({ loraFilenames: ['example.safetensors'], ...(extra.loraScales ? { loraScales: extra.loraScales } : {}) });
+    });
+
     // #8326: a full media queue must answer with a retryable refusal before
     // any job id exists — and before the render's inputs are staged.
     it('answers a full media queue with a retryable 429 and no job id', async () => {

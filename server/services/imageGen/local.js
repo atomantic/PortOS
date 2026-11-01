@@ -23,6 +23,7 @@ import { randomUUID } from 'crypto';
 import { trashFiles } from '../../lib/trashFiles.js';
 import { atomicWrite, assertSafeFilename, detectImageFormat, ensureDir, listDirectoryByExtension, PATHS, resolveImageInputPath, rmGuarded, unlinkGuarded } from '../../lib/fileUtils.js';
 import { extractPngGenerationMetadata, extractPngGenerationMetadataFile } from '../../lib/pngMetadata.js';
+import { assertFlux2InputsCompatible } from '../../lib/flux2Inputs.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { autoCleanGeneratedImage } from '../../lib/imageClean.js';
@@ -167,8 +168,8 @@ const flux2LoraRoute = (model, { loraPaths, referenceImagePaths, referenceImageS
   let repo = model.repo;
   let quantization = model.quantization || 'sdnq';
   let { tokenizerRepo, basePipelineRepo, kvRepo } = model;
-  let refImagePaths = referenceImagePaths;
-  let refImageStrengths = referenceImageStrengths;
+  const refImagePaths = referenceImagePaths;
+  const refImageStrengths = referenceImageStrengths;
   // LoRA + quantized base is incompatible: PEFT can't inject an adapter into
   // SDNQ/int8-quantized Linear layers, and the runner swallows the failure
   // into a base render (lora_utils.apply_loras), so the LoRA silently does
@@ -187,17 +188,8 @@ const flux2LoraRoute = (model, { loraPaths, referenceImagePaths, referenceImageS
     quantization = 'none';
     tokenizerRepo = null;
     basePipelineRepo = null;
-    // Multi-reference editing needs the `-kv` sibling repo, which the bf16
-    // LoRA route doesn't load (and the 4B variant has none). Drop the refs so
-    // the LoRA render proceeds as txt2img/i2i instead of the runner hard-
-    // failing on the missing kv pipeline — the LoRA is the primary intent
-    // when one is attached. i2i (single init image) is unaffected.
+    // The rerouted base has no KV sibling; references were refused up front.
     kvRepo = null;
-    if (refImagePaths?.length) {
-      console.log(`⚠️ flux2 LoRA render dropped ${refImagePaths.length} reference image(s) — multi-ref editing isn't supported on the bf16 LoRA route`);
-      refImagePaths = [];
-      refImageStrengths = [];
-    }
   }
   return { repo, quantization, tokenizerRepo, basePipelineRepo, kvRepo, refImagePaths, refImageStrengths };
 };
@@ -205,6 +197,10 @@ const flux2LoraRoute = (model, { loraPaths, referenceImagePaths, referenceImageS
 const flux2RenderArgs = (model, inputs) => {
   const { prompt, negativePrompt, width, height, steps, guidance, seed, outputPath, loraPaths = [], loraScales = [], stepwiseDir, initImagePath, initImageStrength } = inputs;
   const modelId = model?.id;
+  assertFlux2InputsCompatible(model, {
+    hasInitImage: Boolean(initImagePath), referenceCount: inputs.referenceImagePaths?.length || 0,
+    loraCount: loraPaths.length,
+  });
   if (!model.repo) {
     throw new ServerError(
       `FLUX.2 model "${modelId}" is missing the 'repo' field in data/media-models.json`,
@@ -648,6 +644,10 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
       { status: 400, code: 'MODEL_HARDWARE_UNAVAILABLE' },
     );
   }
+  assertFlux2InputsCompatible(model, {
+    hasInitImage: Boolean(initImagePath), referenceCount: referenceImagePaths.length,
+    loraCount: loraFilenames.length + loraPaths.length,
+  });
   // Both flux2 and z-image runners resolve their own Python via the FLUX.2
   // venv — only the legacy mflux/imagine_win path needs the user-configured
   // Settings > Image Gen pythonPath.

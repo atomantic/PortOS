@@ -32,6 +32,7 @@ import { applyImageVisualProfile } from './visualProfile.js';
 import { musicVideoCastGuideReferences, musicVideoPanelArtReferences, musicVideoStyleImages, musicVideoStylePrompt, musicVideoStyleReferenceCapacity } from '../../lib/musicVideoConditioning.js';
 import { musicVideoFrameModelInput } from '../../lib/musicVideoShotPrompt.js';
 import { join } from 'node:path';
+import { assertFlux2InputsCompatible } from '../../lib/flux2Inputs.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { PATHS, ensureDir, resolveGalleryImage, copyFileGuarded, unlinkGuarded } from '../../lib/fileUtils.js';
 import { resolveImageInputPath } from '../../lib/pathSafety.js';
@@ -184,18 +185,10 @@ async function applyMusicVideoSceneInputs(data, { project, mode, localModel, nam
     placeGreyboxReference(namedReferenceFiles, greybox.reference.imageId, { cachedCapture: tag.greyboxImageId, fromFrame: tag.fromFrame || tag.refine });
   }
   if (tag.compose) {
-    // FLUX.2's KV runner ignores init images when references are present; its
-    // LoRA route can instead drop the references. Match what reaches the model.
-    const flux2 = !data.mediaProviderPeerId && mode === IMAGE_GEN_MODE.LOCAL && isFlux2(localModel);
-    // An invalid LoRA can be discarded later, so do not assert a reference map
-    // when a requested LoRA makes its eventual input list uncertain.
-    const refsDropped = Boolean(flux2 && (data.loraPaths?.length || data.loraFilenames?.length) && localModel?.quantization !== 'none');
-    // A peer selects its own runner. With an init image its reference positions
-    // cannot be known here (a FLUX.2 peer may ignore that init image).
+    // A peer chooses its runner; local incompatible inputs are rejected below.
     const positionsUnknown = Boolean(data.mediaProviderPeerId && initInputCount);
-    const sentFiles = refsDropped || positionsUnknown ? [] : namedReferenceFiles;
-    const usesOnlyReferences = flux2 && !refsDropped && (namedReferenceFiles.length + referenceUploads.length > 0);
-    const sentInitCount = usesOnlyReferences ? 0 : initInputCount;
+    const sentFiles = positionsUnknown ? [] : namedReferenceFiles;
+    const sentInitCount = initInputCount;
     const known = [greybox?.reference, ...musicVideoPanelArtReferences(scene), ...musicVideoCastGuideReferences(project, scene, castMedia), ...(project?.visualSpec?.references || [])];
     const panelIndex = scene?.panelArt ? sentFiles.indexOf(scene.panelArt) : -1;
     // The director's text plus each labeled block PortOS adds (#11317), from the
@@ -204,7 +197,7 @@ async function applyMusicVideoSceneInputs(data, { project, mode, localModel, nam
       slot: tag.slot === 'end' ? 'end' : 'start', authored: data.prompt || '', greybox,
       fromFrame: tag.fromFrame === true, refine: tag.refine === true,
       // The picked frame comes first; any reference after it is the shot's character or set reference.
-      otherReferences: Math.max(0, sentInitCount + sentFiles.length + (refsDropped ? 0 : referenceUploads.length) - 1),
+      otherReferences: Math.max(0, sentInitCount + sentFiles.length + referenceUploads.length - 1),
       panel, panelReference: panelIndex >= 0 ? sentInitCount + panelIndex + 1 : 0,
       // An init image or picked frame occupies a slot without being a character sheet.
       references: [...Array(sentInitCount).fill(null), ...sentFiles.map((file, index) =>
@@ -366,6 +359,16 @@ export async function prepareGenerateParams({ data, files, referenceImageFields,
   }
   const referenceImageCount = namedReferenceFiles.length + referenceUploads.length;
   const inputImageCount = initInputCount + referenceImageCount;
+  if (localModel) {
+    // Preserve the existing temporary-upload cleanup on every pre-stage refusal.
+    await Promise.resolve().then(() => assertFlux2InputsCompatible(localModel, {
+      hasInitImage: Boolean(initInputCount), referenceCount: referenceImageCount,
+      loraCount: (data.loraFilenames?.length || 0) + (data.loraPaths?.length || 0),
+    })).catch((error) => {
+      cleanupReqFilesTemp();
+      throw error;
+    });
+  }
   // Freeze the selected preference before capability checks. Explicit ids stay
   // untouched so the existing unknown/hardware rejection still applies.
   if (!data.modelId && localModel?.id) data.modelId = localModel.id;
@@ -588,6 +591,10 @@ export function resolveLocalImageModel(settings, params) {
       { status: 400, code: 'MODEL_HARDWARE_UNAVAILABLE' },
     );
   }
+  assertFlux2InputsCompatible(selectedModel, {
+    hasInitImage: Boolean(params.initImagePath), referenceCount: params.referenceImagePaths?.length || 0,
+    loraCount: (params.loraFilenames?.length || 0) + (params.loraPaths?.length || 0),
+  });
   // Edit-only models (Qwen-Image-Edit) load a pipeline that REQUIRES a
   // source image. Reject a text-only submission up-front rather than
   // enqueueing a job that crashes deep inside diffusers. `params.initImagePath`
