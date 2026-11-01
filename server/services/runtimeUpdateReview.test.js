@@ -269,6 +269,17 @@ describe('runtime row reconciliation', () => {
     expect(escalated.node).toMatchObject({ revision: 'security:v26.13.0', severity: 'high', unverified: true });
   });
 
+  it('holds a high-severity Node.js row when the unverified index repeats or lacks its security target', async () => {
+    const repeated = await observe(
+      status({ node: { version: 'v26.10.0' }, releases: { latestInLine: { version: 'v26.13.0' }, securityUpdate: true } }),
+      status({ node: { version: 'v26.10.0' }, releases: { latestInLine: { version: 'v26.14.0' }, securityUpdate: true, securityVerified: false } }),
+    );
+    expect(repeated.node).toMatchObject({ revision: 'security:v26.12.1', unverified: true, summary: expect.stringContaining('target v26.13.0.') });
+    const unsupported = { node: { version: 'v25.1.0', inSupportedRange: false }, baseline: { minimum: null }, releases: { latestInLine: { version: 'v25.1.0' }, latestSecurity: null } };
+    const unnamed = await observe(status(unsupported), status({ ...unsupported, releases: { ...unsupported.releases, securityUpdate: true, securityVerified: false } }));
+    expect(unnamed.node).toMatchObject({ title: 'Node.js update available', revision: 'update:v25.1.0', unverified: true });
+  });
+
   it.each([
     ['a stale daemon', { pm2: { daemonStale: true } }, 'terminal 7.1.0, daemon 7.1.0 on Node 26.12.1', 'Synchronizing the daemon requires a restart.', '7.1.0:7.1.0:7.1.0:26.12.1:v26.12.1'],
     ['a terminal CLI behind the bundle', { pm2: { cli: '7.0.0', cliBehind: true } }, 'terminal 7.0.0, daemon 7.1.0 on Node 26.12.1',
