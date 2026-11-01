@@ -9,7 +9,8 @@
  * row (the sent prompt and its labeled additions copied from the clip) and files
  * each piece as a take on its scene in one project write. No new cut times are
  * chosen here: a clip shorter than the planned run refuses the split rather than
- * desyncing the song, and every scene records the failure.
+ * desyncing the song, and every scene records the failure. A cut or attach that
+ * fails part-way removes the pieces no take holds and records the failure too.
  *
  * The per-scene hooks ignore the job because its tag names no `sceneId`.
  */
@@ -17,9 +18,10 @@
 import { randomUUID } from 'crypto';
 import { join } from 'path';
 import { createMediaJobImageHook } from './mediaJobImageHook.js';
-import { appendTakesAcrossScenes, recordSceneFailure } from './musicVideo/projects.js';
+import { appendTakesAcrossScenes, getProject, recordSceneFailure } from './musicVideo/projects.js';
 import { musicVideoEvents } from './musicVideo/events.js';
 import { getHistoryItem, mutateVideoHistory } from './videoGen/history.js';
+import { deleteHistoryItem } from './videoGen/historyOps.js';
 import { discardUnpublishedVideo } from './videoGen/generateVideoHelpers.js';
 import { PATHS } from '../lib/fileUtils.js';
 import { cutVideoSegment, generateThumbnail, probeVideoDuration, safeUnder } from '../lib/ffmpeg.js';
@@ -71,6 +73,24 @@ async function registerPiece(item, clipPath, span) {
   }
 }
 
+// A failed split must not leave pieces no take points at. A piece a committed take
+// already holds stays; when the project cannot be read, nothing is removed.
+// Returns whether every span's piece is held by a take (the split did land).
+async function discardOrphanPieces(projectId, spans, pieces) {
+  const project = await getProject(projectId).catch((err) => {
+    console.log(`⚠️ music-video sequence pieces kept on ${projectId.slice(0, 8)}: ${err.message}`);
+    return undefined;
+  });
+  if (project === undefined) return false;
+  const held = new Set((project?.scenes || []).flatMap((scene) => (scene.takes || []).map((take) => take.assetId)));
+  for (const piece of pieces) {
+    if (held.has(piece.id)) continue;
+    await deleteHistoryItem(piece.id, { forgetInMusicVideos: false })
+      .catch((err) => console.log(`⚠️ music-video sequence piece ${piece.id.slice(0, 8)} not removed: ${err.message}`));
+  }
+  return pieces.length === spans.length && pieces.every((piece) => held.has(piece.id));
+}
+
 /** Split the sequence clip onto its scenes. */
 async function splitSequenceTake({ projectId, spans, videoHistoryId, job }) {
   const item = await getHistoryItem(videoHistoryId);
@@ -84,7 +104,19 @@ async function splitSequenceTake({ projectId, spans, videoHistoryId, job }) {
     return null;
   }
   const pieces = [];
-  for (const span of spans) pieces.push(await registerPiece(item, clipPath, { ...span, clipEndSec: Math.min(span.clipEndSec, clipSec) }));
+  try {
+    for (const span of spans) pieces.push(await registerPiece(item, clipPath, { ...span, clipEndSec: Math.min(span.clipEndSec, clipSec) }));
+    return await attachPieces({ projectId, spans, job, pieces });
+  } catch (err) {
+    // The cause (logged by the hook) can carry ffmpeg output and paths; the scene gets a plain reason.
+    if (!await discardOrphanPieces(projectId, spans, pieces)) {
+      await recordSequenceFailure({ projectId, spans }, 'The sequence clip could not be split onto its shots, so no take was filed. Render the sequence again.');
+    }
+    throw err;
+  }
+}
+
+async function attachPieces({ projectId, spans, job, pieces }) {
   const totalSec = spans.reduce((sum, s) => sum + (s.clipEndSec - s.clipStartSec), 0);
   const costUsd = job.params?.musicVideoCostUsd;
   const dependencies = job.params?.musicVideoSequenceDependencies || {};
