@@ -25,7 +25,7 @@ import { createMediaJobPreparation } from '../../lib/mediaJobPreparation.js';
 import { storyboardGuidanceMeta } from './storyboardGuidance.js';
 import { spawn } from '../../lib/childProcess.js';
 import { mkdir, open, stat } from 'fs/promises';
-import { isAbsolute, join, resolve as pathResolve, sep } from 'path';
+import { basename, isAbsolute, join, resolve as pathResolve, sep } from 'path';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
 import { atomicWrite, ensureDir, PATHS, copyFileGuarded, unlinkGuarded, rmGuarded } from '../../lib/fileUtils.js';
@@ -125,9 +125,14 @@ const isMp4Header = (buf) =>
 // image_edit builds a photographic first frame from the panel (layout only) and
 // the references (the look), saved as first-frame.png, which image_to_video then
 // animates. grok's image_gen takes no image, so the panel routes to image_edit.
+//
+// A source frame with `castReferences` (a Music Video shot's character sheets)
+// goes to reference_to_video instead: the frame is pinned as `first_frame` and
+// the sheets ride as `images`, so a face the frame hides or a person who walks
+// in later still matches the cast. image_to_video sees only the frame.
 export function buildGrokVideoPrompt({
   prompt, negativePrompt, aspectRatio, duration, resolution = null, stagingPath, sourceImagePath, scratchDir,
-  guidanceImagePath = null, referenceImagePaths = [],
+  guidanceImagePath = null, referenceImagePaths = [], castReferences = [],
 }) {
   const avoid = negativePrompt?.trim() ? `\nAvoid: ${negativePrompt.trim()}` : '';
   const ratio = aspectRatio ? `\nUse aspect_ratio "${aspectRatio}" for the ${guidanceImagePath ? 'first frame' : 'base image'}.` : '';
@@ -141,15 +146,34 @@ export function buildGrokVideoPrompt({
       `Shot prompt: ${prompt.trim()}${avoid}${ratio}`,
       `Then use your built-in image_to_video tool to animate that first frame (never the storyboard panel) for ${duration} seconds, using the shot prompt as the motion description.`,
     ].join('\n');
+  } else if (sourceImagePath && castReferences.length) {
+    const ratioArg = aspectRatio ? `\nCall it with aspect_ratio "${aspectRatio}".` : '';
+    steps = [
+      `Use your built-in reference_to_video tool (not image_to_video) to animate the source image for ${duration} seconds.`,
+      `Set first_frame to ${sourceImagePath} so the clip opens exactly on that frame.`,
+      `Set images to ${castReferences.length === 1 ? 'this character reference' : `these ${castReferences.length} character references, in this order`}: ${castReferences.map((ref) => ref.path).join(', ')}`,
+      `Start the tool's prompt with this cast note: ${grokCastNote(castReferences)}`,
+      `Then continue the tool's prompt with the motion/direction prompt: ${prompt.trim()}${avoid}${ratioArg}`,
+    ].join('\n');
   } else if (sourceImagePath) {
     steps = `Use your built-in image_to_video tool to animate the source image at ${sourceImagePath} for ${duration} seconds.\nMotion/direction prompt: ${prompt.trim()}${avoid}`;
   } else {
     steps = `First, use your built-in image_gen tool to generate one base image for this prompt and save it as ${join(scratchDir, 'base.png')}:\n${prompt.trim()}${avoid}${ratio}\nThen use your built-in image_to_video tool to animate that base image for ${duration} seconds, using the same prompt as the motion description.`;
   }
   // The tool defaults to 480p unless asked, so name the resolution the request needs (#14491).
-  const size = resolution ? `\nCall image_to_video with resolution_name "${resolution}".` : '';
+  const tool = sourceImagePath && castReferences.length && !guidanceImagePath ? 'reference_to_video' : 'image_to_video';
+  const size = resolution ? `\nCall ${tool} with resolution_name "${resolution}".` : '';
   return `${steps}${size}\nSave the resulting video as an MP4 file at exactly this path: ${stagingPath}\nDo not create any other files, do not modify any code, and do not run any other tools beyond what is needed to generate the image/video and write the MP4 to that path. When the file is written, you are done.`;
 }
+
+// With first_frame set, reference_to_video numbers its `images` from <IMAGE_1>.
+// The name is the label before " — " ("Guest — cast sheet" is Guest).
+const castName = (label) => String(label || '').split(/\s[—-]\s/)[0].trim() || 'this person';
+export const grokCastNote = (castReferences) => [
+  castReferences.map((ref, i) => `<IMAGE_${i + 1}> shows how ${castName(ref.label)} looks`).join('; ') + '.',
+  'Keep each person\'s face, hair, build and clothing matching their reference for the whole clip, including when a face that starts hidden or turned away is revealed.',
+  'The references set identity only: take the place, light, pose and framing from the first frame, and never add a person who is not in the first frame or the shot.',
+].join(' ');
 
 // Where a storyboard-guided render's first frame is directed, so it can be kept beside the clip.
 const grokFirstFramePath = (scratchDir) => join(scratchDir, 'first-frame.png');
@@ -160,7 +184,7 @@ const grokFirstFramePath = (scratchDir) => join(scratchDir, 'first-frame.png');
  */
 export function grokVideoSentPrompt({
   prompt = '', negativePrompt, aspectRatio, width, height, duration, sourceImagePath = null, scratchDir, promptAdditions = [],
-  guidanceImagePath = null, referenceImagePaths = [],
+  guidanceImagePath = null, referenceImagePaths = [], castReferences = [],
 }) {
   const effectiveDuration = resolveGrokDuration(duration);
   const configured = GROK_ASPECT_RATIOS.includes(aspectRatio) ? aspectRatio : null;
@@ -168,7 +192,7 @@ export function grokVideoSentPrompt({
   const resolution = grokVideoResolution(width, height);
   const buildWith = (text) => buildGrokVideoPrompt({
     prompt: text, negativePrompt, aspectRatio: effectiveRatio, duration: effectiveDuration, resolution,
-    stagingPath: join(scratchDir, 'output.mp4'), sourceImagePath, scratchDir, guidanceImagePath, referenceImagePaths,
+    stagingPath: join(scratchDir, 'output.mp4'), sourceImagePath, scratchDir, guidanceImagePath, referenceImagePaths, castReferences,
   });
   const fullPrompt = buildWith(prompt);
   const guidance = guidanceImagePath
@@ -190,6 +214,7 @@ async function generateVideoPrepared({
   jobId: providedJobId = null,
   promptAdditions = [],
   guidanceImagePath = null, referenceImagePaths = [],
+  castReferences = [],
 }) {
   await ensureDir(PATHS.videos);
 
@@ -216,7 +241,7 @@ async function generateVideoPrepared({
 
   const { fullPrompt, effectiveRatio, effectiveDuration, resolution, record: sentRecord } = grokVideoSentPrompt({
     prompt, negativePrompt, aspectRatio, width, height, duration, sourceImagePath, scratchDir, promptAdditions,
-    guidanceImagePath, referenceImagePaths,
+    guidanceImagePath, referenceImagePaths, castReferences: sourceImagePath && !guidanceImagePath ? castReferences : [],
   });
 
   const bin = grokPath || DEFAULT_BIN;
@@ -241,6 +266,8 @@ async function generateVideoPrepared({
     createdAt: new Date().toISOString(),
     mode: sourceImagePath ? 'image' : 'text',
     ...storyboardGuidanceMeta(guidanceImagePath, referenceImagePaths),
+    ...(sourceImagePath && !guidanceImagePath && castReferences.length
+      ? { castReferenceFiles: castReferences.map((ref) => basename(ref.path)) } : {}),
     ...sentRecord,
   };
   const job = { ...meta, clients: [], status: 'running', renderStartedAtMs };
@@ -394,6 +421,7 @@ async function runGrokVideo(job, jobId, bin, args, {
           requestedSeconds: meta.duration,
           deliveredSeconds: Number.isFinite(deliveredSec) ? deliveredSec : null,
           hasSourceImage: meta.mode === 'image',
+          referenceImages: meta.castReferenceFiles?.length || 0,
         });
         const { recordGrokVideoUsage } = await import('../grokMediaUsage.js');
         await recordGrokVideoUsage({ jobId, createdAt: meta.createdAt, ...units });

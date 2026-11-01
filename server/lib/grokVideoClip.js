@@ -88,19 +88,20 @@ export const nearestGrokDuration = (requested) => {
  * Text-to-video has no source image: the agent generates a base still
  * (`images: 1`) and then feeds that still to `image_to_video` (`inputImages: 1`).
  * Image-to-video already has a still, so it bills the delivered seconds plus
- * that one input image and does not bill a second generated image.
+ * that one input image and does not bill a second generated image. A
+ * reference_to_video render also sends its `referenceImages` (cast sheets).
  * Delivered length wins; otherwise the length grok was asked for.
- * @param {{ requestedSeconds?: number|string, deliveredSeconds?: number|null, hasSourceImage?: boolean }} [opts]
+ * @param {{ requestedSeconds?: number|string, deliveredSeconds?: number|null, hasSourceImage?: boolean, referenceImages?: number }} [opts]
  * @returns {{ videoSeconds: number, images: number, inputImages: number }}
  */
-export function grokVideoBillableUnits({ requestedSeconds, deliveredSeconds, hasSourceImage = false } = {}) {
+export function grokVideoBillableUnits({ requestedSeconds, deliveredSeconds, hasSourceImage = false, referenceImages = 0 } = {}) {
   const delivered = typeof deliveredSeconds === 'number' && Number.isFinite(deliveredSeconds) && deliveredSeconds > 0
     ? deliveredSeconds
     : null;
   return {
     videoSeconds: delivered ?? resolveGrokDuration(requestedSeconds),
     images: hasSourceImage ? 0 : 1,
-    inputImages: 1,
+    inputImages: 1 + (Number.isInteger(referenceImages) && referenceImages > 0 ? referenceImages : 0),
   };
 }
 

@@ -30,6 +30,7 @@ const mocks = vi.hoisted(() => ({
   prepareSourceAudioWindow: vi.fn(),
   discardSourceAudioWindow: vi.fn(async () => ({ ok: true })),
   unlink: vi.fn(async () => {}),
+  musicVideoClipCastReferences: vi.fn(async () => []),
 }));
 
 vi.mock('../catalogDB.js', () => ({ getIngredient: mocks.getIngredient, listMediaForIngredient: mocks.listMediaForIngredient }));
@@ -58,6 +59,7 @@ vi.mock('../fableLoom/visualConditioning.js', () => ({
 }));
 vi.mock('../mediaJobQueue/index.js', () => ({ enqueueJob: mocks.enqueueJob }));
 vi.mock('../musicVideo/projects.js', () => ({ getProject: mocks.getMusicVideoProject }));
+vi.mock('../musicVideo/clipCastReferences.js', () => ({ musicVideoClipCastReferences: mocks.musicVideoClipCastReferences }));
 vi.mock('../musicVideo/performanceShot.js', () => ({ preparePerformanceShot: mocks.preparePerformanceShot }));
 vi.mock('../musicVideo/revisionService.js', () => ({ assertRevisionOpen: mocks.assertRevisionOpen }));
 vi.mock('../musicVideo/productionService.js', () => ({ assertProductionSubmission: mocks.assertProductionSubmission }));
@@ -163,6 +165,19 @@ describe('submitVideoGenJob', () => {
       kind: 'video',
       params: expect.objectContaining({ mode: 'grok', videoMode: 'text' }),
     }));
+  });
+
+  it('sends a Music Video shot cast sheets with its Grok still', async () => {
+    const cast = [{ path: '/example/guest.png', label: 'Guest — cast sheet' }];
+    mocks.musicVideoClipCastReferences.mockResolvedValueOnce(cast);
+    mocks.prepareVideoGenParams.mockResolvedValue({
+      backend: 'grok', cleanupStaged: vi.fn(async () => {}), grok: { grokPath: '/example/grok' },
+      sourceImagePath: '/example/still.png', uploadedTempPath: null,
+    });
+    const tag = { projectId: 'mv-1', sceneId: 'shot-example' };
+    await submitVideoGenJob({ prompt: 'a subject steps into view', backend: 'grok', mode: 'image', sourceImageFile: 'still.png', musicVideo: tag }, {});
+    expect(mocks.musicVideoClipCastReferences).toHaveBeenCalledWith(tag);
+    expect(mocks.enqueueJob.mock.calls[0][0].params).toEqual(expect.objectContaining({ castReferences: cast, sourceImagePath: '/example/still.png' }));
   });
 
   it('submits a local job with the effective model response contract', async () => {
