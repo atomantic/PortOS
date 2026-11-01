@@ -175,6 +175,20 @@ describe('dataManager purge scope (#3327)', () => {
     }
   );
 
+  // data/tools is the onboard registry (one JSON config per tool), not
+  // execution logs. Image Gen settings are the only writer, and the in-memory
+  // cache would keep serving a purged list until restart.
+  it('refuses to purge the onboard tools registry (#14508)', async () => {
+    expect(CATEGORIES.tools).toEqual({
+      label: 'Tools',
+      description: 'Onboard tool registry listed in CoS agent prompts — rebuilt only when Image Gen settings are saved',
+      archivable: true,
+      deletable: false,
+    });
+    await expect(purgeCategory('tools')).rejects.toMatchObject({ status: 403, code: 'CATEGORY_NOT_PURGEABLE' });
+    await expect(purgeCategory('tools', { subPath: 'image-gen.json' })).rejects.toMatchObject({ status: 403, code: 'CATEGORY_NOT_PURGEABLE' });
+  });
+
   it('protects durable backup admission authority from archive and both purge forms', async () => {
     expect(CATEGORIES['backup-admission']).toMatchObject({ archivable: false, deletable: false });
     await expect(archiveCategory('backup-admission')).rejects.toThrow(/is not archivable/);
