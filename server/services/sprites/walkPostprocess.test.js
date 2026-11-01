@@ -14,7 +14,7 @@ import {
   pyRound, pyRoundTo, median, sampleBorderKey, validateMeasuredKey,
   isUsableMeasuredKey, longestUsableSpan,
   recoverAlphaFrame, despillKeyFrame, imageDistance, estimateMotionPeriod, isPeriodAgreement,
-  selectCycleIndices, selectAmbientLoopIndices,
+  selectCycleIndices, selectAmbientLoopIndices, selectArclengthIndices,
   alphaBbox, rootX, robustBottomRow, alignFrames, packStrip, validateFrames, buildContrastSheet,
   rootBandForManifest, ROOT_BAND_TORSO, ROOT_BAND_HIP, ALIGN_OP_TORSO_X,
   decodeTransparentSpriteSource, prepareWalkAnchorChromaInput,
@@ -359,6 +359,32 @@ describe('estimateMotionPeriod', () => {
 
     const shortSigs = [constSig(0), constSig(10)];
     expect(estimateMotionPeriod(shortSigs)).toBeNull();
+  });
+});
+
+describe('selectArclengthIndices', () => {
+  const sig = (value) => Buffer.alloc(48 * 48 * 3, value);
+
+  it('captures a brief action extreme between long idle lead-in and tail', () => {
+    const signatures = [...Array(20).fill(0), 50, 100, 150, 100, 50, ...Array(20).fill(0)].map(sig);
+    const { indices, cycle } = selectArclengthIndices(signatures, 5);
+    expect(indices.map((index) => signatures[index][0])).toEqual([0, 100, 150, 50, 0]);
+    expect(indices).toEqual([...indices].sort((a, b) => a - b));
+    expect(new Set(indices).size).toBe(5);
+    expect(cycle.selection).toBe('action-arclength');
+  });
+
+  it('reserves distinct frames around an abrupt transition', () => {
+    const { indices } = selectArclengthIndices([0, 0, 0, 255, 255, 255].map(sig), 5);
+    expect(new Set(indices).size).toBe(5);
+    expect(indices[0]).toBe(0);
+    expect(indices.at(-1)).toBe(5);
+  });
+
+  it('resamples a static clip evenly and rejects insufficient or invalid targets', () => {
+    expect(selectArclengthIndices(Array(9).fill(sig(0)), 3).indices).toEqual([0, 4, 8]);
+    expect(() => selectArclengthIndices([sig(0)], 3)).toThrow(/at least 3/);
+    expect(() => selectArclengthIndices([sig(0)], 1)).toThrow(/at least 2/);
   });
 });
 

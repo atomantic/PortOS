@@ -16,7 +16,7 @@
  * packed geometry + frame count as its imported manifest.
  */
 
-import { describe, it, expect, afterAll } from 'vitest';
+import { describe, it, expect, afterAll, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -27,6 +27,17 @@ import {
   runWalkPostprocess, walkPhaseLabels, WALK_PHASES, WALK_CELL_SIZE,
   WALK_DEFAULT_FRAME_COUNT, WALK_DEFAULT_FPS,
 } from './walkPostprocess.js';
+
+vi.mock('./animationTrackStore.js', async () => {
+  const { ANIMATION_TRACKS } = await import('../../lib/spriteAnimationTracks.js');
+  return {
+    getEffectiveAnimationTracks: () => ({
+      ...ANIMATION_TRACKS,
+      action: { ...ANIMATION_TRACKS.walk, id: 'action', minFrameCount: 2 },
+      ambient: { ...ANIMATION_TRACKS.walk, id: 'ambient', minFrameCount: 2, directional: false },
+    }),
+  };
+});
 
 const TEST_ROOT = mkdtempSync(join(tmpdir(), 'sprite-walk-e2e-'));
 afterAll(() => rmSync(TEST_ROOT, { recursive: true, force: true }));
@@ -164,6 +175,22 @@ describe.skipIf(!ffmpegBin)('runWalkPostprocess e2e (synthetic keyed walk video)
     expect(manifest.alignment.translations).toHaveLength(8);
     const stripMeta = await sharp(join(runAbs, 'generated', 'fixture-hero-walk-east-strip.png')).metadata();
     expect(stripMeta.width).toBe(WALK_CELL_SIZE * 8);
+  }, 120000);
+
+  it('packages custom directional actions by motion while preserving ambient loop selection', async () => {
+    const videoAbs = join(TEST_ROOT, 'action.mp4');
+    const anchorAbs = join(TEST_ROOT, 'action-anchor.png');
+    await synthesizeVideo(videoAbs);
+    await writeAnchor(anchorAbs);
+
+    const action = await runOnce('run-action', videoAbs, anchorAbs, { track: 'action', frameCount: 4 });
+    expect(action.result.manifest.cycleSelection.selection).toBe('action-arclength');
+    expect(action.result.manifest.frames).toHaveLength(4);
+    expect(action.result.manifest.frames[0].sourceFrameIndex).toBe(1);
+    expect(action.result.manifest.frames.at(-1).sourceFrameIndex).toBe(30);
+
+    const ambient = await runOnce('run-ambient', videoAbs, anchorAbs, { track: 'ambient', frameCount: 4 });
+    expect(ambient.result.manifest.cycleSelection.selection).toBe('ambient-even-resample');
   }, 120000);
 });
 
