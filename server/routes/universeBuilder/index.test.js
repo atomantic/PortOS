@@ -28,6 +28,7 @@ tryReadFile: vi.fn().mockResolvedValue(null),
   // from the input (the route 400s when safe !== input).
   sanitizeFilename: vi.fn((f) => String(f).replace(/^.*[\\/]/, '').replace(/\.\./g, '')),
   resolveGalleryImage: (...args) => resolveGalleryImageMock(...args),
+  resolveImageRef: filename => filename ? `/mock/data/image-refs/${filename}` : null,
 }));
 
 // existsSync gates uploaded-screenshot preflight: any name containing "absent"
@@ -1595,6 +1596,52 @@ describe('universe-builder routes', () => {
   });
 
   describe('PATCH /:id/canon/:kind/:entryId', () => {
+    it('rejects invalid identity edits without deleting canon entries and still supports slugline-only places', async () => {
+      const app = buildApp();
+      const created = await request(app).post('/api/universe-builder').send({
+        name: 'Identity fixture',
+        characters: [{ id: 'c1', name: 'Alice', physicalDescription: 'Keep this' }],
+        objects: [{ id: 'o1', name: 'Compass', significance: 'Keep this too' }],
+        places: [{ id: 'p1', slugline: 'EXT. FOREST - DAY' }],
+      });
+      const url = `/api/universe-builder/${created.body.id}`;
+      for (const [kind, entryId, patch] of [
+        ['character', 'c1', { name: '' }],
+        ['object', 'o1', { name: null }],
+        ['place', 'p1', { slugline: '' }],
+      ]) {
+        const reply = await request(app).patch(`${url}/canon/${kind}/${entryId}`).send(patch);
+        expect(reply.status).toBe(400);
+      }
+      const valid = await request(app).patch(`${url}/canon/place/p1`).send({ description: 'A moonlit clearing' });
+      expect(valid.status).toBe(200);
+      const persisted = await request(app).get(url);
+      expect(persisted.body.characters[0]).toMatchObject({ id: 'c1', name: 'Alice', physicalDescription: 'Keep this' });
+      expect(persisted.body.objects[0]).toMatchObject({ id: 'o1', name: 'Compass', significance: 'Keep this too' });
+      expect(persisted.body.places[0]).toMatchObject({ id: 'p1', slugline: 'EXT. FOREST - DAY', description: 'A moonlit clearing' });
+    });
+
+    it('rejects client changes to server-owned sheet fields while preserving completed renders', async () => {
+      const app = buildApp();
+      const pointers = {
+        referenceSheetImageRef: 'sheet.png',
+        referenceSheets: { blueprint: 'blueprint.png' },
+        referenceSheetRequests: { blueprint: '00000000-0000-0000-0000-000000000001' },
+      };
+      const created = await request(app).post('/api/universe-builder').send({
+        name: 'Sheet fixture', characters: [{ id: 'c1', name: 'Alice', ...pointers }],
+      });
+      const url = `/api/universe-builder/${created.body.id}`;
+      for (const field of Object.keys(pointers)) {
+        const reply = await request(app).patch(`${url}/canon/character/c1`).send({ [field]: null });
+        expect(reply.status).toBe(400);
+      }
+      const valid = await request(app).patch(`${url}/canon/character/c1`).send({ physicalDescription: 'Revised' });
+      expect(valid.status).toBe(200);
+      const persisted = await request(app).get(url);
+      expect(persisted.body.characters[0]).toMatchObject({ ...pointers, physicalDescription: 'Revised' });
+    });
+
     it('persists overlapping field edits without replacing sibling entries or rendered references', async () => {
       const app = buildApp();
       const created = await request(app).post('/api/universe-builder').send({

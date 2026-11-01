@@ -9,6 +9,7 @@ import { extractBible } from './bibleExtractor.js';
 import {
   BIBLE_KIND, BIBLE_KINDS, BIBLE_FIELD, BIBLE_KEYS, BIBLE_SOURCE, BIBLE_LIMITS, mergeExtractedBible,
   listSheetPointers, applySheetPointerToCharacter, isSeriesScopedCanonEntry,
+  SANITIZERS, SERVER_OWNED_CHARACTER_FIELDS,
 } from '../lib/storyBible.js';
 import { runStagedLLM } from './stageRunner.js';
 import { runPromptRefine } from './pipeline/refineHelpers.js';
@@ -594,15 +595,27 @@ export async function differentiateUniverseCast(universeId, options = {}) {
 // the existing record write queue so sibling edits and render completions survive.
 export async function patchCanonEntry(universeId, kind, entryId, patch) {
   assertCanonKind(kind);
+  if (SERVER_OWNED_CHARACTER_FIELDS.some(key => Object.hasOwn(patch, key))) {
+    throw new ServerError('Reference sheet fields are managed by render operations', {
+      status: 400, code: 'VALIDATION_ERROR',
+    });
+  }
   const field = BIBLE_FIELD[kind];
   const universe = await updateUniverse(universeId, (current) => {
     const list = current[field] || [];
-    if (!list.some(entry => entry.id === entryId)) {
+    const target = list.find(entry => entry.id === entryId);
+    if (!target) {
       throw new ServerError(`Canon ${kind} ${entryId} not found in universe`, {
         status: 404, code: 'UNIVERSE_CANON_NOT_FOUND',
       });
     }
-    return { [field]: list.map(entry => entry.id === entryId ? { ...entry, ...patch, id: entry.id } : entry) };
+    const edited = SANITIZERS[kind]({ ...target, ...patch, id: target.id });
+    if (!edited) {
+      throw new ServerError('Canon entries must retain a name or a place slugline', {
+        status: 400, code: 'VALIDATION_ERROR',
+      });
+    }
+    return { [field]: list.map(entry => entry.id === entryId ? edited : entry) };
   });
   return { universe, entry: universe[field].find(entry => entry.id === entryId) };
 }

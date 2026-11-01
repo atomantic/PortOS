@@ -47,7 +47,8 @@ export function useCanonPatch({ universe, apply, mountedRef }) {
         scope.fields.delete(path);
         return true;
       });
-      publish({ ...live,
+      publish({
+        ...live,
         updatedAt: updatedAt && (!live.updatedAt || updatedAt > live.updatedAt) ? updatedAt : live.updatedAt,
         [field]: live[field].map(entry => {
           if (entry.id !== entryId) return entry;
@@ -59,7 +60,8 @@ export function useCanonPatch({ universe, apply, mountedRef }) {
             if ((result && !olderSnapshot) || stillOptimistic) next[key] = state.saved;
           }
           return next;
-      }) });
+        }),
+      });
     };
 
     return patchUniverseCanonEntry(
