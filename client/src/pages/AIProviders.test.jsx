@@ -2530,3 +2530,74 @@ describe('AIProviders list resources (#12171)', () => {
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 });
+
+
+describe('provider list ordering', () => {
+  const providers = ['a', 'b'].map(id => ({
+    id, name: `Provider ${id}`, type: 'api', enabled: true,
+    endpoint: 'https://example.test', models: ['example-model'],
+  }));
+  const snapshot = (activeProvider = 'a', disabled = []) => ({
+    activeProvider,
+    providers: providers.map(provider => ({ ...provider, enabled: !disabled.includes(provider.id) })),
+  });
+  const card = id => within(document.getElementById(`provider-card-${id}`));
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    __resetProviderCatalogCache();
+    api.getApps.mockResolvedValue([]);
+    api.getProviderStatuses.mockResolvedValue({ providers: {} });
+    api.getProviderRuntimes.mockResolvedValue({ runtimes: {} });
+    api.getProviderReadiness.mockResolvedValue({ readiness: {} });
+    api.updateProvider.mockResolvedValue({});
+    api.setActiveProvider.mockResolvedValue({});
+    api.getProviders.mockResolvedValue(snapshot());
+  });
+
+  it.each(['success', 'failure'])('keeps Set Default after an older Disable read ends in %s and reconciles', async outcome => {
+    let resolveOld, rejectOld, resolveFresh;
+    api.getProviders.mockResolvedValueOnce(snapshot())
+      .mockImplementationOnce(() => new Promise((resolve, reject) => { resolveOld = resolve; rejectOld = reject; }))
+      .mockImplementationOnce(() => new Promise(resolve => { resolveFresh = resolve; }));
+    await renderPage();
+    fireEvent.click(card('a').getByRole('button', { name: 'Disable' }));
+    await waitFor(() => expect(api.getProviders).toHaveBeenCalledTimes(2));
+    fireEvent.click(card('b').getByRole('button', { name: 'Set Default' }));
+    await waitFor(() => expect(card('b').getByText('DEFAULT')).toBeInTheDocument());
+    await act(async () => {
+      if (outcome === 'success') resolveOld(snapshot('a', ['a']));
+      else rejectOld(new Error('offline'));
+    });
+    expect(card('b').getByText('DEFAULT')).toBeInTheDocument();
+    expect(screen.queryByText('Failed to load AI providers')).not.toBeInTheDocument();
+    expect(api.getProviders).toHaveBeenCalledTimes(3);
+    await act(async () => resolveFresh(snapshot('b', ['a'])));
+    expect(card('b').getByText('DEFAULT')).toBeInTheDocument();
+    expect(card('a').getByRole('button', { name: 'Enable' })).toBeInTheDocument();
+  });
+
+  it('keeps the newer read when two Disable reloads finish out of order', async () => {
+    let resolveOld, resolveNew;
+    api.getProviders.mockResolvedValueOnce(snapshot())
+      .mockImplementationOnce(() => new Promise(resolve => { resolveOld = resolve; }))
+      .mockImplementationOnce(() => new Promise(resolve => { resolveNew = resolve; }));
+    await renderPage();
+    fireEvent.click(card('a').getByRole('button', { name: 'Disable' }));
+    await waitFor(() => expect(api.getProviders).toHaveBeenCalledTimes(2));
+    fireEvent.click(card('b').getByRole('button', { name: 'Disable' }));
+    await waitFor(() => expect(api.getProviders).toHaveBeenCalledTimes(3));
+    await act(async () => resolveNew(snapshot('a', ['a', 'b'])));
+    await act(async () => resolveOld(snapshot('a', ['a'])));
+    expect(card('b').getByRole('button', { name: 'Enable' })).toBeInTheDocument();
+  });
+
+  it('shows a failed reconciliation read and recovers with Retry', async () => {
+    api.getProviders.mockResolvedValueOnce(snapshot()).mockRejectedValueOnce(new Error('offline'));
+    await renderPage();
+    fireEvent.click(card('a').getByRole('button', { name: 'Disable' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Retry' }));
+    expect(await screen.findByRole('heading', { name: 'Provider b' })).toBeInTheDocument();
+    expect(screen.queryByText('Failed to load AI providers')).not.toBeInTheDocument();
+  });
+});
