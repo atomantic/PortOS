@@ -1,5 +1,5 @@
 import { Film } from 'lucide-react';
-import { planSequenceCoverage, sequenceGroupInput, sequenceModelId } from '../../../../server/lib/musicVideoSequenceCoverage.js';
+import { planProjectSequenceCoverage, sequenceGroupInput, sequenceModelId } from '../../../../server/lib/musicVideoSequenceCoverage.js';
 import { renderMusicVideoSequence } from '../../services/apiMusicVideo.js';
 import useAsyncAction from '../../hooks/useAsyncAction.js';
 import toast from '../ui/Toast';
@@ -15,8 +15,7 @@ const BUTTON = 'flex items-center gap-1 bg-port-bg border border-port-border hov
  * The plan and prompt are the server's own (lib/musicVideoSequenceCoverage.js).
  */
 export default function SceneSequenceCoverage({ project, scene }) {
-  const scenes = project?.scenes || [];
-  const { groups, perShot } = planSequenceCoverage(scenes, { modelId: sequenceModelId(project) });
+  const { groups, perShot } = planProjectSequenceCoverage(project, { modelId: sequenceModelId(project) });
   const group = groups.find((g) => g.sceneIds.includes(scene.sceneId));
   const [render, rendering] = useAsyncAction(async () => {
     await renderMusicVideoSequence(project.id, group.sceneIds, { silent: true });

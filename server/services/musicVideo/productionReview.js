@@ -131,7 +131,6 @@ export function directorArtGuides(project) {
 /**
  * What one Board shot renders from: its prompts and direction, its span and
  * lyric, its selected frames and performance setup, and its storyboard row.
- * Automation may not change any of it on a locked shot (preserveAutomatedShotLocks).
  * The selected clip is the shot's output, not an input. A lock saved before
  * still locks ignored timing (no `v`) still binds to this whole basis.
  */
@@ -147,8 +146,7 @@ function shotApprovalBasis(project, scene) {
 /**
  * What a still lock (`productionReview.shotApprovals[sceneId]`, `v: 2`) binds
  * to: the shot's render inputs without its timing. Moving a cut, and the lyric
- * that moves with it, keeps the still approved; a locked clip refuses the move
- * instead (assertClipUnlocked), since its span is part of the clip.
+ * that moves with it, keeps the still approved.
  */
 function stillLockBasis(project, scene) {
   const row = (project.productionReview?.draft?.storyboard || []).find(shot => shot?.sceneId === scene.sceneId);
@@ -191,6 +189,9 @@ const shotHasVideoStage = (project, scene) => !scene.codeClip
   && sceneVisualLayer(scene, { layered: isLayeredComposition(project) }) === 'footage';
 
 /**
+ * Read-only legacy approval compatibility: no route or service sets a clip lock
+ * any more, but projects locked before lock removal keep `clipApprovals`, and
+ * the render gates still exempt their `locked` clips so those projects render.
  * Each video shot's clip lock (`productionReview.clipApprovals[sceneId]`):
  * `locked` while its still stays locked and the clip it locked is still the
  * selected one, `changed` once either moved, `open` before it is locked. Null
@@ -206,9 +207,6 @@ export function clipLocks(project, locks = shotLocks(project)) {
       : locks[scene.sceneId] === 'locked' && approval.videoHistoryId === scene.videoHistoryId ? 'locked' : 'changed'];
   }));
 }
-
-export const clipLocked = (project, sceneId) => project.productionReview?.clipApprovals?.[sceneId]
-  && clipLocks(project)?.[sceneId] === 'locked';
 
 /** Each timed scene's shot number as the board shows it: song order, from 1. */
 export function shotNumbers(project) {
@@ -238,107 +236,6 @@ export function nameShots(project, entries) {
   const before = name(items.filter(({ sceneId }) => cold.has(sceneId)), cold, 'Cold open shot', 'Cold open shots');
   const song = name(items.filter(({ sceneId }) => !cold.has(sceneId)), numbers, 'Shot', 'Shots');
   return [before, song].filter(Boolean).join(' and ') || '0 shots';
-}
-
-/** What a locked clip freezes: the inputs it was rendered from, and the selected clip itself. */
-const CLIP_LOCKED_FIELDS = ['prompt', 'framePrompt', 'visualIntent', 'camera', 'direction', 'startSec', 'endSec', 'lyricText',
-  'referenceImageId', 'endImageId', 'photoSequence', 'shotMode', 'performanceSpeaker', 'performanceStyle', 'visualLayer', 'loop', 'videoHistoryId', 'codeClip', 'speedFps', 'offsetFrames', 'reverse'];
-
-/**
- * Refuse a change to a shot whose video is locked: `patch` is a scene patch
- * (only the fields that would change what it shows count), or null for a
- * change that replaces the shot (delete, split, merge, a new take or job).
- */
-export function assertClipUnlocked(project, sceneId, patch = null) {
-  if (!clipLocked(project, sceneId)) return;
-  const scene = project.scenes.find(s => s.sceneId === sceneId);
-  if (patch && !CLIP_LOCKED_FIELDS.some(key => key in patch && hash(patch[key] ?? null) !== hash(scene[key] ?? null))) return;
-  throw new ServerError('This shot\'s video is locked. Unlock the video to change it.', { status: 409, code: 'MUSIC_VIDEO_SHOT_LOCKED', context: { sceneId } });
-}
-
-/**
- * Apply an automation proposal under the store lock; locked render inputs stay intact.
- * `runId` names the autonomous run writing as `source: 'orchestrator'`: on a shot
- * that run's own approval locked, its repair (clear the still, set
- * `stillFixes`/`clipFixes`) lands and the lock re-binds to the repaired shot.
- */
-export function preserveAutomatedShotLocks(before, after, source, { runId = null } = {}) {
-  const locks = shotLocks(before) || {};
-  const locked = (before.scenes || []).filter(scene => locks[scene.sceneId] === 'locked');
-  if (!locked.length) return { project: after, rejected: false };
-  const textId = v => (typeof v === 'string' && v.trim() ? v.trim() : null);
-  const isAllowedStillFill = (scene, proposed) => {
-    if (source !== 'generation-completion' || !proposed) return false;
-    const refBefore = textId(scene.referenceImageId);
-    const refAfter = textId(proposed.referenceImageId);
-    const endBefore = textId(scene.endImageId);
-    const endAfter = textId(proposed.endImageId);
-    const fillsRef = !refBefore && Boolean(refAfter);
-    const fillsEnd = !endBefore && Boolean(endAfter);
-    if (!fillsRef && !fillsEnd) return false;
-    if (refBefore && refBefore !== refAfter) return false;
-    if (endBefore && endBefore !== endAfter) return false;
-    const synthetic = { ...scene, referenceImageId: proposed.referenceImageId, endImageId: proposed.endImageId };
-    return shotApprovalBasis(before, synthetic) === shotApprovalBasis(after, proposed);
-  };
-  // Repair notes feed generation too, but stay outside the persisted approval
-  // hash so existing shot locks keep their cross-version meaning.
-  const repairBasis = shot => hash({ stillFixes: shot.stillFixes, clipFixes: shot.clipFixes });
-  const lockOf = scene => before.productionReview?.shotApprovals?.[scene.sceneId] || before.productionReview?.approvals?.storyboard;
-  const isAllowedRunRepair = (scene, proposed) => {
-    if (source !== 'orchestrator' || !runId || !proposed || clipLocked(before, scene.sceneId)) return false;
-    if (lockOf(scene)?.reviewer?.runId !== runId) return false;
-    const refBefore = textId(scene.referenceImageId);
-    const refAfter = textId(proposed.referenceImageId);
-    if (refAfter && refAfter !== refBefore) return false;
-    if (refAfter === refBefore && repairBasis(scene) === repairBasis(proposed)) return false;
-    const synthetic = { ...scene, referenceImageId: proposed.referenceImageId };
-    return shotApprovalBasis(before, synthetic) === shotApprovalBasis(after, proposed);
-  };
-  const rejected = locked.filter(scene => {
-    const proposed = after.scenes?.find(next => next.sceneId === scene.sceneId);
-    if (!proposed) return true;
-    if (isAllowedRunRepair(scene, proposed)) return false;
-    if (repairBasis(scene) !== repairBasis(proposed)) return true;
-    if (clipLocked(before, scene.sceneId) && proposed.videoHistoryId !== scene.videoHistoryId) return true;
-    if (shotApprovalBasis(before, scene) === shotApprovalBasis(after, proposed)) return false;
-    return !isAllowedStillFill(scene, proposed);
-  });
-  // Materialize legacy whole-board locks before an open shot's edit can stale
-  // that approval. No new approval is granted: these shots were already locked.
-  // When a generated still fills an empty slot on a locked shot, or the run that
-  // locked it repairs it, re-bind that shot's lock to the new basis so it stays locked.
-  const shotApprovals = { ...after.productionReview?.shotApprovals };
-  for (const scene of locked) {
-    const proposed = after.scenes?.find(next => next.sceneId === scene.sceneId);
-    const priorApproval = before.productionReview?.shotApprovals?.[scene.sceneId]
-      || { ...before.productionReview?.approvals?.storyboard, fromBoardApproval: true };
-    if (!rejected.length && proposed && isAllowedStillFill(scene, proposed)) {
-      shotApprovals[scene.sceneId] = stillLock(after, proposed, priorApproval);
-    } else if (!rejected.length && isAllowedRunRepair(scene, proposed)) {
-      shotApprovals[scene.sceneId] = stillLock(after, proposed, { ...priorApproval, relockedAt: new Date().toISOString() });
-    } else {
-      shotApprovals[scene.sceneId] = before.productionReview?.shotApprovals?.[scene.sceneId]
-        || stillLock(before, scene, priorApproval);
-    }
-  }
-  let next = { ...after, productionReview: { ...after.productionReview, shotApprovals } };
-  if (!rejected.length) return { project: next, rejected: false };
-  // A merge/re-plan may replace IDs or spans. Refuse the whole board mutation
-  // rather than splice an old locked shot into an overlapping new timeline.
-  next = { ...next, composition: before.composition, scenes: before.scenes.map(scene => {
-    const output = after.scenes?.find(candidate => candidate.sceneId === scene.sceneId);
-    return output ? { ...scene, takes: output.takes, videoHistoryId: clipLocked(before, scene.sceneId) ? scene.videoHistoryId : output.videoHistoryId } : scene;
-  }), productionReview: { ...next.productionReview,
-    draft: before.productionReview?.draft } };
-  for (const scene of rejected) {
-    const proposed = after.scenes?.find(next => next.sceneId === scene.sceneId);
-    next = recordProductionFeedback(next, { stage: 'storyboard', basis: productionReviewBasis(next).storyboard,
-      target: scene.sceneId, decision: 'comment',
-      text: `${source} proposed changing locked shot ${scene.sceneId}; unlock it before applying this proposal. ${JSON.stringify({ scene: proposed || null,
-        storyboard: after.productionReview?.draft?.storyboard?.find(row => row.sceneId === scene.sceneId) || null }).slice(0, 6000)}` });
-  }
-  return { project: next, rejected: true };
 }
 
 /**
@@ -372,94 +269,6 @@ export function carryShotLocks(before, after, { from = {} } = {}) {
     carried = true;
   }
   return carried ? { ...after, productionReview: { ...after.productionReview, shotApprovals } } : after;
-}
-
-/**
- * Keep a shot's still lock through the director's own edit to it: picking or
- * swapping its still or end frame, or editing its prompts, re-binds the lock to
- * the shot as it now is, so its clip can be rendered without unlocking and
- * locking again. A lock already stale is re-bound the same way. Automation
- * never reaches this (preserveAutomatedShotLocks refuses its edits), and a
- * locked video refuses the edit before it (assertClipUnlocked). A clip lock
- * that no longer holds is dropped: its clip was made from the old still.
- */
-export function keepDirectorStillLock(before, after, sceneId) {
-  const lock = shotLocks(before)?.[sceneId];
-  const scene = after.scenes?.find(s => s.sceneId === sceneId);
-  if ((lock !== 'locked' && lock !== 'changed') || !scene) return after;
-  // A whole-board approval this edit stales would open every other shot it covered.
-  const next = carryShotLocks(before, after);
-  if (shotLocks(next)?.[sceneId] === 'locked') return next;
-  const held = next.productionReview?.shotApprovals?.[sceneId]
-    || { ...before.productionReview?.approvals?.storyboard, fromBoardApproval: true };
-  const shotApprovals = { ...next.productionReview?.shotApprovals,
-    [sceneId]: stillLock(next, scene, { ...held, relockedAt: new Date().toISOString() }) };
-  const { [sceneId]: _stale, ...clipApprovals } = next.productionReview?.clipApprovals || {};
-  return { ...next, productionReview: { ...next.productionReview, shotApprovals,
-    ...(next.productionReview?.clipApprovals ? { clipApprovals } : {}) } };
-}
-
-/**
- * Lock or unlock Board shots for the director. A lock binds to the shot as it is now.
- * `stage: 'video'` locks or unlocks a video shot's selected clip, which needs its
- * still locked first; unlocking a still unlocks its clip too.
- */
-export function setShotLocks(project, { sceneIds, locked, stage = 'still', reviewer = null, approvedBy = null }) {
-  if (project.productionReview?.draft?.storyboardSource === 'document') {
-    throw new ServerError('Document shots are reviewed in their authored source; approve the storyboard instead.', { status: 409, code: 'DOCUMENT_STORYBOARD' });
-  }
-  const scenes = sceneIds.map(id => (project.scenes || []).find(scene => scene.sceneId === id));
-  if (scenes.some(scene => !scene)) throw new ServerError('Scene not found', { status: 404, code: 'NOT_FOUND' });
-  if (stage === 'video') return setClipLocks(project, scenes, { locked, reviewer, approvedBy });
-  const approvals = { ...project.productionReview?.shotApprovals };
-  // A lock saved before timing left the still basis moves to the new basis while it still holds,
-  // so a later cut move keeps it.
-  for (const scene of project.scenes || []) {
-    const held = approvals[scene.sceneId];
-    if (held && held.v !== STILL_LOCK_VERSION && stillLockHolds(project, scene, held)) approvals[scene.sceneId] = stillLock(project, scene, held);
-  }
-  const clipApprovals = { ...project.productionReview?.clipApprovals };
-  const approvedAt = new Date().toISOString();
-  // A current whole-board approval becomes a lock on every shot it covers first, so withdrawing it
-  // below (or a later edit staling it) never opens the shots the director did not touch.
-  if (boardApprovalCovers(project)) {
-    const carried = project.productionReview.approvals.storyboard;
-    for (const scene of project.scenes || []) {
-      if (!approvals[scene.sceneId]) approvals[scene.sceneId] = stillLock(project, scene, { approvedAt: carried.approvedAt || approvedAt, fromBoardApproval: true,
-        ...(carried.approvedBy ? { approvedBy: carried.approvedBy } : {}), ...(carried.reviewer ? { reviewer: structuredClone(carried.reviewer) } : {}) });
-    }
-  }
-  for (const scene of scenes) {
-    if (!locked) {
-      delete approvals[scene.sceneId];
-      delete clipApprovals[scene.sceneId];
-    } else approvals[scene.sceneId] = stillLock(project, scene, { approvedAt,
-      ...(approvedBy ? { approvedBy } : {}), ...(reviewer ? { reviewer: structuredClone(reviewer) } : {}) });
-  }
-  const review = { ...project.productionReview, shotApprovals: approvals,
-    ...(project.productionReview?.clipApprovals ? { clipApprovals } : {}) };
-  // Unlocking withdraws the whole-board approval too: with every lock gone, readiness would otherwise
-  // fall back to it and read the board approved with no shot locked.
-  if (!locked && review.approvals?.storyboard) {
-    const { storyboard: _withdrawn, ...rest } = review.approvals;
-    review.approvals = rest;
-  }
-  return { ...project, productionReview: review };
-}
-
-function setClipLocks(project, scenes, { locked, reviewer, approvedBy }) {
-  const stills = shotLocks(project);
-  const clipApprovals = { ...project.productionReview?.clipApprovals };
-  const approvedAt = new Date().toISOString();
-  for (const scene of scenes) {
-    if (!locked) { delete clipApprovals[scene.sceneId]; continue; }
-    if (!shotHasVideoStage(project, scene)) throw new ServerError('This shot has no video to lock.', { status: 409, code: 'MUSIC_VIDEO_NO_VIDEO_STAGE' });
-    if (stills[scene.sceneId] !== 'locked') throw new ServerError('Lock this shot\'s still before its video.', { status: 409, code: 'MUSIC_VIDEO_APPROVAL_REQUIRED' });
-    if (!scene.videoHistoryId) throw new ServerError('Make and choose this shot\'s clip before locking its video.', { status: 409, code: 'MUSIC_VIDEO_NO_CLIP' });
-    clipApprovals[scene.sceneId] = { videoHistoryId: scene.videoHistoryId, approvedAt,
-      ...(approvedBy ? { approvedBy } : {}), ...(reviewer ? { reviewer: structuredClone(reviewer) } : {}) };
-  }
-  return { ...project, productionReview: { ...project.productionReview, clipApprovals } };
 }
 
 /**
@@ -987,21 +796,6 @@ export function assertProductionApproval(project, stage = 'proof') {
   if (!readiness[stage].approved) throw new ServerError(
     readiness[stage].problems[0] || `A reviewer must approve the current ${stage === 'art' ? 'art direction' : stage} in Production review.`,
     { status: 409, code: 'MUSIC_VIDEO_APPROVAL_REQUIRED', context: { stage, readiness } });
-}
-
-/**
- * The approval one Board shot's clip needs: the art direction, and that shot
- * locked (or the whole storyboard approved, which a board with no shot locks
- * still uses).
- */
-export function assertShotApproval(project, sceneId) {
-  const readiness = productionReadiness(project);
-  if (!readiness.art.approved) assertProductionApproval(project, 'art');
-  if (readiness.storyboard.approved || readiness.storyboard.shotLocks?.[sceneId] === 'locked') return;
-  throw new ServerError(readiness.storyboard.shotLocks?.[sceneId] === 'changed'
-    ? 'This shot changed since you locked it. Lock it again to make its clip.'
-    : 'Lock this shot\'s still (or approve the storyboard) before making its clip.',
-  { status: 409, code: 'MUSIC_VIDEO_APPROVAL_REQUIRED', context: { stage: 'storyboard', sceneId, readiness } });
 }
 
 /** Evidence is bound to the exact revision and excerpt. Machine review never

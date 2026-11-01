@@ -3,7 +3,6 @@ import { describe, it, expect, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router';
 import BoardStage from './BoardStage.jsx';
-import { ShotLockContext } from '../ShotLock.jsx';
 
 vi.mock('../../../services/apiRunwayCatalog.js', async (importOriginal) => ({ ...await importOriginal(), loadRunwayCatalog: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('../../../hooks/useVideoFileSrc.js', () => ({ useVideoFileSrc: () => ({}) }));
@@ -110,23 +109,10 @@ describe('BoardStage effects', () => {
   });
 });
 
-describe('BoardStage legacy locks', () => {
-  it('does not list legacy unlocked shots as needing attention', () => {
-    const scenes = [scene(1), scene(2), scene(3)];
-    render(<MemoryRouter initialEntries={['/?scenes=attention']}><ShotLockContext.Provider value={{ locks: { s1: 'locked', s2: 'locked', s3: 'open' },
-      clips: { s1: 'locked', s2: 'changed', s3: 'open' }, unlocked: { stills: ['s3'], videos: ['s2'] }, toggle: vi.fn() }}>
-      <BoardStage board={board(scenes)} /></ShotLockContext.Provider></MemoryRouter>);
-    expect(screen.getByRole('button', { name: 'Needs attention (0)' })).toBeTruthy();
-    expect(screen.queryByText('Shot 2 · Part 2')).toBeNull();
-  });
-});
-
 describe('BoardStage thumbnail marks', () => {
-  it('shows media marks without exposing legacy lock states', () => {
+  it('shows media marks and no lock marks', () => {
     const scenes = [scene(1), scene(2), scene(3), scene(4)];
-    render(<MemoryRouter><ShotLockContext.Provider value={{ locks: { s1: 'locked', s2: 'changed', s3: 'open', s4: 'locked' },
-      clips: { s1: 'locked', s2: 'open', s3: 'open', s4: 'open' }, toggle: vi.fn() }}>
-      <BoardStage board={board(scenes)} /></ShotLockContext.Provider></MemoryRouter>);
+    render(<MemoryRouter><BoardStage board={board(scenes)} /></MemoryRouter>);
     const described = (name) => screen.getByRole('button', { name }).getAttribute('aria-describedby').split(' ')
       .map(id => document.getElementById(id).textContent);
     expect(described('Open Shot 1 · Part 1')).toEqual(['Clip']);
@@ -141,9 +127,7 @@ describe('BoardStage scene cards', () => {
     const pending = { takes: [{ takeId: 't1', kind: 'video', assetId: 'v', status: 'selected' }, { takeId: 't2', kind: 'video', assetId: 'v2', status: 'candidate' }] };
     const scenes = [scene(1, { startSec: 3, endSec: 6, sectionLabel: 'Verse', ...pending }), scene(2, { startSec: 0, endSec: 3, sectionLabel: 'Intro' }),
       scene(3, { startSec: 6, endSec: 9, sectionLabel: 'Code', referenceImageId: null, videoHistoryId: 'upload-1', codeClip: true })];
-    const view = (locks) => render(<MemoryRouter><ShotLockContext.Provider value={{ locks, toggle: vi.fn() }}>
-      <BoardStage board={board(scenes, { project: { id: 'p', scenes, composition: { mode: 'composed' } } })} /></ShotLockContext.Provider></MemoryRouter>);
-    const { unmount } = view({ s1: 'open', s2: 'open', s3: 'open' });
+    render(<MemoryRouter><BoardStage board={board(scenes, { project: { id: 'p', scenes, composition: { mode: 'composed' } } })} /></MemoryRouter>);
     expect(screen.getByRole('button', { name: 'Open Shot 1 · Intro' })).toBeTruthy();
     const verse = screen.getByRole('button', { name: 'Open Shot 2 · Verse' });
     expect(verse.textContent).toContain('Takes to review');
@@ -151,9 +135,6 @@ describe('BoardStage scene cards', () => {
     expect(document.getElementById('scene-media-s3').textContent).toBe('Code');
     expect(code.querySelector('img').getAttribute('src')).toBe('/data/video-thumbnails/upload-1.jpg');
     expect(code.textContent).not.toContain('No frame');
-    unmount();
-    view({ s1: 'locked', s2: 'open', s3: 'open' });
-    expect(screen.getByRole('button', { name: 'Open Shot 2 · Verse' }).textContent).toContain('Takes to review');
   });
 });
 
@@ -227,27 +208,3 @@ describe('BoardStage ending', () => {
   });
 });
 
-describe('BoardStage with legacy locks', () => {
-  const scenes = [
-    scene(1),
-    scene(2, { videoHistoryId: null }),
-    scene(3, { referenceImageId: null, videoHistoryId: null }),
-    scene(4),
-  ];
-  const locks = { s1: 'open', s2: 'changed', s3: 'open', s4: 'locked' };
-  const clips = { s1: 'open', s2: 'open', s3: 'open', s4: 'locked' };
-  const renderLockAll = (value) => render(<MemoryRouter><ShotLockContext.Provider value={{ locks, clips, toggle: vi.fn(), ...value }}>
-    <BoardStage board={board(scenes)} /></ShotLockContext.Provider></MemoryRouter>);
-
-  it('does not offer a lock action that could reject unused takes', () => {
-    const lockAll = vi.fn(async () => ({ project: {} }));
-    renderLockAll({ lockAll });
-    expect(screen.queryByRole('button', { name: 'Lock all' })).toBeNull();
-    expect(lockAll).not.toHaveBeenCalled();
-  });
-
-  it('hides when every picked still and clip is locked', () => {
-    renderLockAll({ lockAll: vi.fn(), locks: { ...locks, s1: 'locked', s2: 'locked' }, clips: { ...clips, s1: 'locked' } });
-    expect(screen.queryByRole('button', { name: 'Lock all' })).toBeNull();
-  });
-});

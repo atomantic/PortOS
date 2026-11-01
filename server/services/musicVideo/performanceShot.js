@@ -267,6 +267,7 @@ export async function assertCurrentPerformanceTakes(project, masterPath, options
   const rehashed = reviewed.filter((r) => r.reason === 'audio-rehashed').length;
   // An unchecked window (decode: false) proves nothing, so it logs nothing.
   if (rehashed > 0 && options?.decode !== false) console.log(`🎵 Music Video: ${rehashed} lip-sync take${rehashed === 1 ? '' : 's'} still match${rehashed === 1 ? 'es' : ''} the re-mastered song in ${rehashed === 1 ? 'its' : 'their'} sung window`);
+  // Legacy approval compatibility: clips locked before lock removal stay exempt.
   const locks = clipLocks(project);
   const stale = reviewed.filter((r) => r.stale && locks?.[r.sceneId] !== 'locked')
     .map(({ sceneId, reason }) => ({ sceneId, reason, cutaway: reason === 'not-lip-synced' }));

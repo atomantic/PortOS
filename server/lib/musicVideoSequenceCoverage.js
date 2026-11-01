@@ -8,7 +8,7 @@
  *
  *   - `planSequenceCoverage` picks the runs that may share a request and says
  *     why any other shot stays per-shot (performance shots, a different set or
- *     protagonist, a gap, or a run longer than the model's longest clip);
+ *     lead, a gap, or a run longer than the model's longest clip);
  *   - `_composeSequencePrompt` writes the shots as contiguous time ranges using
  *     the model's own reference naming ("Image 1" on H3, "@Image1" on Seedance);
  *   - `_sequenceClipSpans` maps each scene back to its in/out point inside the
@@ -50,7 +50,31 @@ function sequenceCoverageBlockedReason(modelId) {
 const sequenceMaxSec = (modelId) => (sequenceCoverageBlockedReason(modelId) ? null : getFalVideoModel(modelId).duration.max);
 
 const sceneKey = (scene) => scene.sceneId ?? scene.id;
-const sameId = (a, b) => (a?.id ?? a ?? null) === (b?.id ?? b ?? null);
+const idOf = (v) => v?.id ?? v ?? null;
+// Two shots may share a run unless both name an identity and the names differ:
+// a project that never recorded one keeps the director's explicit opt-in.
+const sameIdentity = (a, b) => { const x = idOf(a); const y = idOf(b); return x == null || y == null || x === y; };
+
+/**
+ * The set and lead a stored scene implies. Scenes carry no `set`/`protagonist`
+ * field; the set is the shot's picked `setReference.subjectId` or else its
+ * section's set in the cast-and-sets song map, the lead its `characterVariant`.
+ */
+function sequenceShotIdentity(project, scene) {
+  const songMap = project?.castAndSets?.direction?.songMap;
+  const mapped = Number.isInteger(scene?.sectionIndex) && Array.isArray(songMap)
+    ? songMap.find((entry) => entry?.section === scene.sectionIndex)?.setId : null;
+  return {
+    set: scene?.setReference?.subjectId || mapped || null,
+    protagonist: scene?.characterVariant?.ingredientId || null,
+  };
+}
+
+/** `planSequenceCoverage` over a project's stored scenes, with each shot's set and lead resolved. */
+export function planProjectSequenceCoverage(project, { modelId } = {}) {
+  const scenes = (Array.isArray(project?.scenes) ? project.scenes : []).map((scene) => ({ ...scene, ...sequenceShotIdentity(project, scene) }));
+  return planSequenceCoverage(scenes, { modelId });
+}
 
 function ineligibleReason(scene) {
   if (isPerformanceScene(scene)) return 'performance shots depend on their own song slice and stay one take';
@@ -88,7 +112,7 @@ export function planSequenceCoverage(scenes, { modelId } = {}) {
         const endSec = run.at(-1).endSec;
         groups.push({ sectionIndex, sceneIds: run.map(sceneKey), startSec: round3(startSec), endSec: round3(endSec), durationSec: round3(endSec - startSec) });
       } else if (run.length === 1) {
-        perShot.push({ sceneId: sceneKey(run[0]), reason: 'no neighbouring shot shares its set and protagonist' });
+        perShot.push({ sceneId: sceneKey(run[0]), reason: 'no adjoining shot in the same set with the same lead' });
       }
       run = [];
     };
@@ -98,8 +122,8 @@ export function planSequenceCoverage(scenes, { modelId } = {}) {
       const prev = run.at(-1);
       const continues = prev
         && Math.abs(scene.startSec - prev.endSec) < EPS
-        && sameId(scene.set, prev.set)
-        && sameId(scene.protagonist, prev.protagonist);
+        && sameIdentity(scene.set, prev.set)
+        && sameIdentity(scene.protagonist, prev.protagonist);
       if (prev && !continues) flush();
       run.push(scene);
     }

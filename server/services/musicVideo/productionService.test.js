@@ -2,10 +2,10 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 vi.mock('../../lib/paths.js', async (load) => makePathsProxy(await load(), { dataRoot: () => lazyTempDataRoot('portos-production-authoring-') }));
-const localAuthor = vi.hoisted(() => ({ submit: null }));
+const localAuthor = vi.hoisted(() => ({ submit: null, reviewerProvider: null }));
 vi.mock('../promptRunner.js', () => ({
   assertProvider: () => {},
-  resolveProviderAndModel: async () => ({ provider: { id: 'local-fixture', type: 'api', endpoint: 'http://localhost:11434' }, selectedModel: 'fixture-model' }),
+  resolveProviderAndModel: async () => ({ provider: localAuthor.reviewerProvider || { id: 'local-fixture', type: 'api', endpoint: 'http://localhost:11434' }, selectedModel: 'fixture-model' }),
   runPromptThroughProvider: async ({ prompt, beforeExecute }) => {
     await beforeExecute?.({ provider: { id: 'local-fixture', type: 'api', endpoint: 'http://localhost:11434' }, model: 'fixture-model' });
     return localAuthor.submit(prompt);
@@ -517,6 +517,16 @@ describe('music video production run (#9066)', () => {
       pool: [{ kind: 'image', mode: 'grok' }, { kind: 'video', mode: 'local', model: 'not-installed' }], limits: LIMITS,
     })).rejects.toMatchObject({ code: 'PRODUCTION_ROUTE_INELIGIBLE', message: expect.stringMatching(/grok.*not enabled.*not-installed.*not installed/s) });
     expect(current().productionRuns).toBeUndefined();
+  });
+
+  it('refuses Start without a reviewer when the active provider is not tool-free (#14549)', async () => {
+    seedProject();
+    localAuthor.reviewerProvider = { id: 'tool-cli', name: 'Tool CLI', type: 'cli', command: 'unknown-agent-cli', args: [] };
+    try {
+      await expect(service.startProduction('mv-example', { pool: POOL, limits: LIMITS }))
+        .rejects.toMatchObject({ code: 'PRODUCTION_REVIEWER_UNAVAILABLE', status: 422, message: expect.stringMatching(/not tool-free/) });
+      expect(current().productionRuns).toBeUndefined();
+    } finally { localAuthor.reviewerProvider = null; }
   });
 
   it('skips a route that cannot condition on the visual-spec references', async () => {

@@ -46,7 +46,12 @@ function songDuration(project) {
   const analysis = project.audioAnalysis || {};
   const ends = [finite(analysis.durationSec)];
   for (const section of analysis.sections || []) ends.push(finite(section?.endSec));
-  for (const beat of project.treatment?.arc?.beats || []) ends.push(finite(beat?.endSec));
+  // The arc is timed to whichever song it was compiled on; once the analysis
+  // gives the real length, a stale arc from a replaced (longer) song must not
+  // stretch it (#14548).
+  if (!(finite(analysis.durationSec) > 0)) {
+    for (const beat of project.treatment?.arc?.beats || []) ends.push(finite(beat?.endSec));
+  }
   for (const scene of project.scenes || []) ends.push(finite(scene?.endSec));
   for (const cue of project.lyricCues || []) ends.push(finite(cue?.endSec), finite(cue?.startSec));
   for (const beat of beatGrid(analysis.beats)) ends.push(beat);

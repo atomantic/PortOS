@@ -94,7 +94,11 @@ if [[ "$TTS_ENGINE" == "piper" ]]; then
   OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
   ARCH="$(uname -m)"
   case "$OS/$ARCH" in
-    darwin/x86_64) OS="macos"; ARCH="x64" ;;
+    darwin/x86_64)
+      # A Rosetta-translated shell reports x86_64 on Apple Silicon; trust the hardware probe (as setup-image-video.sh does).
+      OS="macos"
+      if [[ "$(sysctl -n hw.optional.arm64 2>/dev/null || true)" == "1" ]]; then ARCH="aarch64"; else ARCH="x64"; fi
+      ;;
     darwin/arm64|darwin/aarch64) OS="macos"; ARCH="aarch64" ;;
     linux/x86_64) ARCH="x86_64" ;;
     linux/arm64|linux/aarch64) ARCH="aarch64" ;;

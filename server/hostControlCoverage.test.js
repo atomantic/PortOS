@@ -871,7 +871,6 @@ const REVIEWED_OPEN_MUTATIONS = [
   ['POST /api/music-video/:id/production-review/import', RECORDS],
   ['POST /api/music-video/:id/production-review/lyric-anchors', RECORDS],
   ['POST /api/music-video/:id/production-review/revert', RECORDS],
-  ['POST /api/music-video/:id/production-review/shots', HANDLER_GATED],
   ['POST /api/music-video/:id/production-review/shots/:shotId/bind', RECORDS],
   ['DELETE /api/music-video/:id/production-review/stale-rows', REMOVES_RECORD],
   ['POST /api/music-video/:id/production-runs/:runId/cancel', REDUCES_EXECUTION],

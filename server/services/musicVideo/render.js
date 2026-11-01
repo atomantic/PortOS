@@ -889,8 +889,8 @@ export function excerptBoundaryTimes(sections, cues, startSec, endSec, { fps = 2
 // authored span. Both callers build on the exact same resolved clip list, so
 // an excerpt frame matches what a full render would produce at that song time.
 //
-// A shot whose clip is locked renders as locked: the director approved that
-// clip as it is, so frames changed after it was made no longer block.
+// Legacy approval compatibility: a clip locked before shot locking was removed
+// (read-only `clipApprovals`) stays exempt, so older projects still render.
 // Any other stale clip blocks, naming its shots (numbered in song order) and the fix.
 export function assertCurrentClipDependencies(project) {
   const locks = clipLocks(project);

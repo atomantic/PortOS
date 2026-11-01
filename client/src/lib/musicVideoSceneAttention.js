@@ -25,8 +25,6 @@ export const SCENE_ATTENTION_LABELS = Object.freeze({
   'plate-unverified': 'Plate unverified',
   'no-span': 'No time span',
   'last-failure': 'Last render failed',
-  'still-unlocked': 'Still not locked',
-  'video-unlocked': 'Video not locked',
   'song-changed': 'Lyrics changed',
   'song-new': 'New lyrics',
   'song-cut': 'Lyrics cut',
@@ -51,21 +49,6 @@ function takeKindsInUse(scene, layer) {
   return isEndFrameImageEffect(scene.imageEffect) ? ['image', 'endImage'] : ['image'];
 }
 
-/**
- * The shots the Shots checklist counts as not locked yet, from production
- * readiness: `stills` once the director locks shots one at a time and the board
- * is not approved, `videos` once any clip has been locked. The checklist rows
- * and the board's attention codes both read this, so their counts agree.
- */
-export function unlockedShots(readiness) {
-  const storyboard = readiness?.storyboard;
-  const clips = Object.values(storyboard?.clipLocks || {});
-  return {
-    stills: storyboard?.approved ? [] : storyboard?.unlocked || [],
-    videos: clips.some((state) => state === 'locked' || state === 'changed') ? storyboard.clipsUnlocked || [] : [],
-  };
-}
-
 /** The `?scenes=` value as a filter id; anything unknown is `all`. */
 export const parseSceneFilter = (value) => (SCENE_FILTERS.includes(value) ? value : 'all');
 
@@ -85,11 +68,10 @@ function performanceBlocked(scene, { lipSyncBackend, songDurationSec, videoSetti
  * that failed this session, and `songReview` (the project's revised-song
  * verdicts by sceneId) so a shot the new lyrics changed is flagged until acted on.
  * `locked`: the director locked this shot, so its other takes are not waiting on review.
- * `unlocked`: `'still'` or `'video'` when the Shots checklist counts this shot's still or video as not locked yet (`unlockedShots`).
  */
 export function sceneAttention(scene, ctx = {}) {
   if (!scene) return [];
-  const { layered = false, footageOptional = false, lipSyncBackend = '', songDurationSec = null, clipSec = null, failed = {}, songReview = null, videoSettings = null, locked = false, unlocked = null } = ctx;
+  const { layered = false, footageOptional = false, lipSyncBackend = '', songDurationSec = null, clipSec = null, failed = {}, songReview = null, videoSettings = null, locked = false } = ctx;
   const layer = sceneVisualLayer(scene, { layered });
   const codes = [];
   const songChange = songReview?.[scene.sceneId];
@@ -111,8 +93,6 @@ export function sceneAttention(scene, ctx = {}) {
     if (currentPlateEvidence(scene, selected)?.verdict !== 'pass') codes.push('plate-unverified');
   }
   if (failed.frame?.[scene.sceneId] || failed.video?.[scene.sceneId]) codes.push('last-failure');
-  if (unlocked === 'still') codes.push('still-unlocked');
-  if (unlocked === 'video') codes.push('video-unlocked');
   return codes;
 }
 
