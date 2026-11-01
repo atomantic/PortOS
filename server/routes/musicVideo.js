@@ -201,7 +201,7 @@ import {
   startLyricAlign,
 } from '../services/musicVideo/lyricAlignJob.js';
 import { importTrackLyrics, MAX_LYRIC_CUES } from '../services/musicVideo/trackLyrics.js';
-import { offsetLyricMarkers } from '../services/musicVideo/lyricMarkers.js';
+import { offsetLyricMarkers } from '../lib/lyricMarkers.js';
 import {
   updateTreatment,
   compileTreatment,

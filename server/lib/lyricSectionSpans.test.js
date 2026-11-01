@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { lyricSectionSpans } from './lyricSectionSpans.js';
-import { parseLyricSheet } from '../services/musicVideo/lyricMarkers.js';
+import { parseLyricSheet } from './lyricMarkers.js';
 
 // Uniquely catches a section starting a sung line late when headers stack above the first line (#14380).
 describe('lyricSectionSpans', () => {

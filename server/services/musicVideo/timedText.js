@@ -17,7 +17,7 @@
 
 import { randomUUID } from 'crypto';
 import { trimTo } from '../../lib/textUtils.js';
-import { parseLyricSheet } from './lyricMarkers.js';
+import { parseLyricSheet } from '../../lib/lyricMarkers.js';
 
 const MAX_CUE_TEXT = 500;
 const MAX_SEC = 36000;

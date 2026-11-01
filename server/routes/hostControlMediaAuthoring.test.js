@@ -131,7 +131,6 @@ vi.mock('../services/musicVideo/documentGeneration.js', () => ({
 vi.mock('../services/musicVideo/timedText.js', () => ({}));
 vi.mock('../services/musicVideo/lyricAlign.js', () => ({}));
 vi.mock('../services/musicVideo/trackLyrics.js', () => ({}));
-vi.mock('../services/musicVideo/lyricMarkers.js', () => ({}));
 vi.mock('../services/musicVideo/treatmentService.js', () => ({
   compileTreatment: vi.fn(async () => ({ treatment: {} })),
 }));

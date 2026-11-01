@@ -1134,6 +1134,8 @@ function ProjectWorkspace({
       .then(() => updateMusicVideoProject(projectId, patch, { silent: true }))
       .then((saved) => {
         if (applyComposition) patchProject(projectId, { composition: saved.composition });
+        // The server moves markers with their cues when lines are removed or merged.
+        if (patch.lyricCues) patchProject(projectId, { lyricMarkers: saved.lyricMarkers });
       })
       .catch((err) => toast.error(err?.message || 'Failed to save changes'))
       .finally(() => setCompositionSavePending((count) => count - 1));
@@ -1144,7 +1146,7 @@ function ProjectWorkspace({
     setImportingLyrics(true);
     importMusicVideoLyrics(projectId, body, { silent: true })
       .then(({ project, imported, format }) => {
-        patchProject(projectId, { lyricCues: project.lyricCues, updatedAt: project.updatedAt });
+        patchProject(projectId, { lyricCues: project.lyricCues, lyricMarkers: project.lyricMarkers, updatedAt: project.updatedAt });
         onDone?.();
         toast.success(`Imported ${imported} lyric line${imported === 1 ? '' : 's'} (${format})`);
         prepareSong(projectId);
