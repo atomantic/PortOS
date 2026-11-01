@@ -972,7 +972,8 @@ describe('code-first production execution (#9301)', () => {
 
   it('names every conflicting shot before refusing a performance planned as a still', async () => {
     const scenes = [
-      { sceneId: 'mvs-labeled', label: 'Example close-up', startSec: 0, endSec: 4 },
+      { sceneId: 'mvs-first', label: 'Example close-up', startSec: 0, endSec: 2 },
+      { sceneId: 'mvs-second', label: 'Example close-up', startSec: 2, endSec: 4 },
       { sceneId: 'mvs-unlabeled', startSec: 4, endSec: 8 },
     ];
     seedCodeFirst({ scenes, directions: scenes.map((scene) => ({
@@ -981,7 +982,7 @@ describe('code-first production execution (#9301)', () => {
     const { author } = documentDoubles();
     await expect(start({ pool: [POOL[0]], authoring: AUTHORING })).rejects.toMatchObject({
       code: 'PRODUCTION_MEDIUM_CONFLICT',
-      message: expect.stringMatching(/Example close-up: Visible performance.*mvs-unlabeled: Visible performance/),
+      message: expect.stringMatching(/Example close-up \(mvs-first\): Visible performance.*Example close-up \(mvs-second\): Visible performance.*mvs-unlabeled: Visible performance/),
     });
     expect(dispatch).not.toHaveBeenCalled(); expect(author).not.toHaveBeenCalled();
     expect(current().productionRuns).toBeUndefined();

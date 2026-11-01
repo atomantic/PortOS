@@ -128,7 +128,11 @@ export function codeFirstProductionAssets(project) {
   const lipSync = !!performanceCapability(project?.videoSettings?.backend || null);
   const scenes = new Map((project?.scenes || []).map((scene) => [scene.sceneId, scene]));
   const conflicts = plan.unresolved.filter((item) => item.blocking || item.message.startsWith('Visible performance'))
-    .map((item) => item.sceneId ? `${scenes.get(item.sceneId)?.label || item.sceneId}: ${item.message}` : item.message);
+    .map((item) => {
+      const label = scenes.get(item.sceneId)?.label;
+      const shot = label ? `${label} (${item.sceneId})` : item.sceneId;
+      return shot ? `${shot}: ${item.message}` : item.message;
+    });
   if (!Number.isInteger(project.treatment?.revision) || project.treatment.appliedRevision !== project.treatment.revision) {
     conflicts.push('Apply the current medium plan to approve it before production.');
   }
