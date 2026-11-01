@@ -171,7 +171,8 @@ function automaticConditioningReferences(project, scene) {
     // not scene relevance. A supporting cast member's sheet joins the shots
     // that name them, and so does a director's own character reference whose
     // label names someone the shot names.
-    const cast = featuredCast(stage.direction, scene)
+    const featured = featuredCast(stage.direction, scene);
+    const cast = featured
       .map((c) => references.find((ref) => ref?.id === `mvr-cs-cast-${c.id}`.slice(0, 64) && ref.imageId))
       .filter(Boolean);
     // A shot with no song section (a replaced song clears them) cannot name its
@@ -183,7 +184,9 @@ function automaticConditioningReferences(project, scene) {
     // after their full sheet; a prop and then the set fill what is left.
     if (isCloseFraming(scene)) {
       const faceOf = (id) => references.find((ref) => ref?.id === id && ref.imageId);
-      const people = [[character, faceOf('mvr-cs-expressions')], ...cast.map((sheet) => [sheet, faceOf(sheet.id.replace('mvr-cs-cast-', 'mvr-cs-face-'))])];
+      const people = [[character, faceOf('mvr-cs-expressions')], ...featured.map((person) => [
+        faceOf(`mvr-cs-cast-${person.id}`.slice(0, 64)), faceOf(`mvr-cs-face-${person.id}`.slice(0, 64)),
+      ])];
       const close = [...people.flat().filter(Boolean), ...featuredAuthoredCharacters(references, scene), ...(props ? [props] : []), ...(plate ? [plate] : authored)];
       return close.filter((ref, i) => close.findIndex((r) => r.imageId === ref.imageId) === i).slice(0, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES);
     }

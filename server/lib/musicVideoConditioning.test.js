@@ -129,6 +129,9 @@ describe('musicVideoConditioningReferences with an approved Cast & Sets check-in
     const overflow = { ...approved, castAndSets: { ...approved.castAndSets, overflowFaceReferences: [face] } };
     expect(ids(musicVideoConditioningReferences(overflow, shot))).toContain(face.imageId);
     expect(ids(musicVideoConditioningReferences({ ...overflow, castAndSets: { ...overflow.castAndSets, status: 'review' } }, shot))).not.toContain(face.imageId);
+    // A full list may have omitted the supporting cast sheet as well as its face sheet.
+    const noCastSheet = { ...overflow, visualSpec: { references: references.filter((ref) => ref.id !== 'mvr-cs-cast-kevin') } };
+    expect(ids(musicVideoConditioningReferences(noCastSheet, shot)).slice(0, 2)).toEqual(['lead-sheet.png', 'kevin-face.png']);
   });
 
   // Uniquely catches a shot whose song section was cleared (a replaced song) dropping the
