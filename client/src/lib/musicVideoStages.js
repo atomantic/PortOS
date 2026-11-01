@@ -12,7 +12,6 @@ import { formatCount, formatDurationSec, formatTimecode } from '../utils/formatt
 import { isNonBlankStr } from './textUtils';
 import { modeLabel } from './imageGenModes.js';
 import { meteredModelLabel, meteredSceneTake } from './musicVideoShotTiming.js';
-import { unlockedShots } from './musicVideoSceneAttention.js';
 import { latestMusicVideoReviewDraft } from '../../../server/lib/musicVideoReviewDraft.js';
 import { supersededStillsCheckpoint } from '../../../server/lib/musicVideoAutonomous.js';
 import { FINISHED_OUTSIDE_RERENDER_NOTE, finishedOutside, finishedOutsideCovers } from '../../../server/lib/musicVideoFinishedOutside.js';
@@ -24,7 +23,7 @@ import { coldOpenScenes, normalizePreMusic, songScenes } from '../../../server/l
  * ids are the route's `:stage` values and stay stable across the relabel
  * (#10297 follow-up): Song is `setup`, Look is `cast-sets`, Storyboard (once
  * Plan) is `board`, Shots (once Make) is `produce` — each shot's still,
- * clip and locks, then the composition over them — and Final render is
+ * clip, then the composition over them — and Final render is
  * `review`. `doneWhen` is the one line a step shows under its title.
  */
 export const MUSIC_VIDEO_STAGES = [
@@ -32,7 +31,7 @@ export const MUSIC_VIDEO_STAGES = [
   { id: 'story', label: 'Story', title: 'Story', optional: true, doneWhen: 'Done when the story direction is ready; this step is optional.' },
   { id: 'board', label: 'Storyboard', title: 'Storyboard', doneWhen: 'Done when timed shots cover the whole song, each with its action, staging, camera and lyric.' },
   { id: 'cast-sets', label: 'Look', title: 'Look', doneWhen: 'Done when the art direction is written, a visual guide is chosen, and you approve it.' },
-  { id: 'produce', label: 'Shots', title: 'Shots', doneWhen: 'Done when every shot is locked (a video shot: its still, then its clip) and the composition is ready.' },
+  { id: 'produce', label: 'Shots', title: 'Shots', doneWhen: 'Done when the shots and composition are ready.' },
   { id: 'review', label: 'Final render', title: 'Final render', doneWhen: 'Done when the full video is rendered from the approved plan and is up to date.' },
   { id: 'publish', label: 'Publish', title: 'Publish', doneWhen: 'Done when every platform you turned on has a post.' },
 ];
@@ -394,15 +393,6 @@ const composeDone = (project, mode) => {
 };
 
 /**
- * Clip locks count toward Shots once the director has started using them: a
- * board where no clip was ever locked (an autopilot run, say) is not held open.
- */
-function clipsLockedDone(readiness) {
-  const clips = Object.values(readiness?.storyboard?.clipLocks || {});
-  return !clips.some((state) => state === 'locked' || state === 'changed') || !(readiness.storyboard.clipsUnlocked || []).length;
-}
-
-/**
  * Lyric half of Setup: storyboard approval needs lyrics imported and their word
  * timings verified (or an explicit instrumental exception). `readiness.alignment`
  * is the server's verdict; the draft is the fallback before readiness loads.
@@ -426,8 +416,7 @@ export function lyricSetupState(project, readiness = project?.productionReadines
  * run owns the project, so it pins `current` to Produce.
  *
  * Plan (`board`) is done once timed shots cover the song. Shots (`produce`)
- * is done once every still is locked (the storyboard approval), every clip is
- * locked once the director has started locking clips, the footage is in and the
+ * is done once the storyboard is approved, the footage is in and the
  * composition is ready. Its animated proof is an optional check: neither Shots
  * nor the final render waits on a proof approval.
  */
@@ -440,7 +429,7 @@ export function deriveStages(project, readiness = project?.productionReadiness, 
   const castStopped = castSetsPhase(cast) === 'stopped';
   const castDone = !!readiness?.art.approved;
   // Code and document renders draw the picture themselves; scene footage is optional there.
-  const produceDone = planned && clipsLockedDone(readiness) && footageReady(project);
+  const produceDone = planned && footageReady(project);
 
   const shotsDone = produceDone && composeDone(project || {}, mode);
   // A run parked short of running (stopped, awaiting video) whose shots are all done since is
@@ -489,8 +478,8 @@ function reviewProductionAction({ art, board, artUnwritten }) {
   if (artUnwritten) return { id: 'review-production', kind: 'goto', stage: 'cast-sets', anchor: ART_DIRECTION_ANCHOR, label: 'Write art direction', shortLabel: 'Write art' };
   return { id: 'review-production', kind: 'goto', stage: art ? 'cast-sets' : 'produce',
     anchor: art ? 'mv-review-art' : board ? 'mv-review-storyboard' : 'mv-review-proof',
-    label: art ? 'Review art direction' : board ? 'Lock the stills' : 'Review pilot proof',
-    shortLabel: art ? 'Review art' : board ? 'Lock stills' : 'Review proof' };
+    label: art ? 'Review art direction' : board ? 'Review storyboard' : 'Review pilot proof',
+    shortLabel: art ? 'Review art' : board ? 'Review storyboard' : 'Review proof' };
 }
 
 // A live or parked production run offers Stop while it works, else Resume.
@@ -551,8 +540,8 @@ function workingAction({ kickoffStep, planning }) {
  * built (planned from a treatment, say) builds it first. `pilotParked` sends the
  * director to the optional animated proof only while a production run is parked
  * on its pilot before paid bulk generation. `planUnfinished`: shots planned with
- * gaps (timing, staging, lyric anchors) are finished on Plan before their stills
- * are locked.
+ * gaps (timing, staging, lyric anchors) are finished on Plan before the board
+ * is approved.
  */
 function approvalNeeds(project, readiness, run) {
   const scenes = project.scenes || [];
@@ -603,13 +592,9 @@ const boardNextAction = (args) => (args.project.automation && !(args.project.sce
 // The composition step's name by render mode; concat and the other footage-only modes add typography.
 const COMPOSE_LABELS = { document: ['Attach a composition', 'Attach'], eidoverse: ['Save the Eidoverse scene', 'Save'], code: ['Generate the code video', 'Generate'] };
 
-function produceNextAction({ project, readiness, run }) {
+function produceNextAction({ project, run }) {
   if (run?.status === 'needs-human') return { id: 'goto-review', kind: 'goto', stage: 'review', label: 'Review the draft', shortLabel: 'Review' };
   if (!footageReady(project)) return { id: 'goto-produce', kind: 'goto', stage: 'produce', anchor: 'mv-generation', label: 'Make the footage', shortLabel: 'Make' };
-  if (!clipsLockedDone(readiness)) {
-    const left = readiness.storyboard.clipsUnlocked.length;
-    return { id: 'lock-clips', kind: 'goto', stage: 'produce', anchor: 'mv-scene-board', label: `Lock ${formatCount(left)} video${left === 1 ? '' : 's'}`, shortLabel: 'Lock videos' };
-  }
   const [label, shortLabel] = COMPOSE_LABELS[project.composition?.mode] || ['Add typography', 'Type'];
   return { id: 'goto-compose', kind: 'goto', stage: 'produce', anchor: 'mv-composition', label, shortLabel };
 }
@@ -739,15 +724,6 @@ export function summarizeStoryboardProblems(problems = []) {
     counts.delete(kind); // only the first of its kind carries the count line
     return [line];
   });
-}
-
-// Once any shot is locked one at a time, the board is approved when every shot is: say how many are left.
-function unlockedDetail(readiness, item) {
-  const left = unlockedShots(readiness).stills.length;
-  if (!left) return item;
-  const count = `${formatCount(left)} shot${left === 1 ? '' : 's'} not locked yet.`;
-  // A stale board keeps its "changed since" text (and Keep approved) after the count.
-  return { ...item, detail: item.stale ? `${count} ${item.detail}` : `${count} Lock each on its card, or lock them all below.` };
 }
 
 // The server names each open change request as a readiness problem; the
@@ -1076,17 +1052,6 @@ function footageItem(project, scenes) {
     action: footageDone ? null : { label: 'Make the footage', anchor: 'mv-generation' } };
 }
 
-// Once clip locks are in use, every video shot locks its clip; the board's Needs attention
-// filter lists exactly these shots (and any other open work). Null while no clip is locked.
-function clipLockItem(readiness) {
-  const clips = Object.values(readiness?.storyboard?.clipLocks || {});
-  if (!clips.some((state) => state === 'locked' || state === 'changed')) return null;
-  const left = unlockedShots(readiness).videos.length;
-  return { id: 'lock-clips', label: 'Every video locked', done: !left,
-    detail: left ? `${formatCount(left)} video${left === 1 ? '' : 's'} not locked yet. Lock each on its card once its clip is right.` : null,
-    action: left ? { label: left === 1 ? 'Show it' : `Show these ${formatCount(left)}`, anchor: 'mv-scene-board', params: { scenes: 'attention' } } : null };
-}
-
 // Make's composition row by render mode; concat and the other footage-only modes have none.
 const COMPOSITION_ITEMS = {
   // Timed lyrics with no subtitle cues are drawn by the render itself, as the player shows them.
@@ -1106,24 +1071,16 @@ const COMPOSITION_ITEMS = {
   },
 };
 
-// Make: the footage (unless the render style draws its own picture), every still
-// locked (the storyboard approval), every clip locked once clip locks are in use,
-// the composition over them, then the optional proof while a run needs it.
-function produceChecklist({ project, readiness, scenes, draft, mode }) {
+// Make: the footage, the storyboard review, and the composition over them.
+function produceChecklist({ project, readiness, scenes, mode }) {
   const items = FOOTAGE_OPTIONAL_MODES.has(mode) ? [] : [footageItem(project, scenes)];
-  // A document storyboard is approved whole; Board shots lock their stills one by one or all at once.
-  const documentBoard = draft.storyboardSource === 'document';
-  const reviewed = approvalItem(project, readiness, 'storyboard', 'Timed storyboard', documentBoard ? 'Ready for your review below.' : 'Lock each still on its card, or lock them all below.');
+  const reviewed = approvalItem(project, readiness, 'storyboard', 'Timed storyboard', 'Ready for your review below.');
   const planOpen = (readiness?.storyboard?.problems || []).some(planProblem) && !reviewed.stale;
-  const stills = documentBoard ? reviewed : { ...unlockedDetail(readiness, reviewed), label: 'Every still locked',
-    ...(reviewed.action && !reviewed.action.run ? { action: { ...reviewed.action, label: 'Lock the stills' } } : {}) };
   const lookOpen = !planOpen && !reviewed.stale && (readiness?.storyboard?.problems || []).some((text) => ART_APPROVAL_PROBLEM.test(text));
-  items.push(reviewed.done ? stills
-    : planOpen ? { ...stills, detail: 'Finish the storyboard first.', action: { label: 'Open the storyboard', stage: 'board' } }
-      : lookOpen ? { ...stills, detail: 'Approve the Look first.', action: { label: 'Open Look', stage: 'cast-sets', anchor: APPROVAL_ANCHORS.art } }
-        : stills);
-  const lockClips = clipLockItem(readiness);
-  if (lockClips) items.push(lockClips);
+  items.push(reviewed.done ? reviewed
+    : planOpen ? { ...reviewed, detail: 'Finish the storyboard first.', action: { label: 'Open the storyboard', stage: 'board' } }
+      : lookOpen ? { ...reviewed, detail: 'Approve the Look first.', action: { label: 'Open Look', stage: 'cast-sets', anchor: APPROVAL_ANCHORS.art } }
+        : reviewed);
   const work = COMPOSITION_ITEMS[mode]?.(project.composition || {}, project);
   if (work) items.push(work);
   const proofFeedback = feedbackItem(project, 'proof', readiness, { optional: true });
@@ -1225,10 +1182,7 @@ export function stepNotes(project, readiness = project?.productionReadiness, pub
   // Once the picture is in, an unfinished Shots step names what is left instead.
   if (scenes.length && readiness && deriveStages(project, readiness, publish).stages.find((stage) => stage.id === 'produce')?.state !== 'done') {
     const open = stageChecklist('produce', project, readiness, publish).filter((item) => !item.done && !item.optional);
-    const { stills, videos } = unlockedShots(readiness);
-    const unlocked = [stills.length && `${formatCount(stills.length)} ${stills.length === 1 ? 'still' : 'stills'}`,
-      videos.length && `${formatCount(videos.length)} ${videos.length === 1 ? 'video' : 'videos'}`].filter(Boolean).join(' and ');
-    if (open.length && !open.some((item) => item.id === 'footage')) make = unlocked ? `${unlocked} not locked` : `To do: ${open[0].label}`;
+    if (open.length && !open.some((item) => item.id === 'footage')) make = `To do: ${open[0].label}`;
   }
   // Before a final render, the drafts and proofs to watch are what Final render holds.
   const drafts = (project.excerpts || []).filter((e) => e.status === 'complete' && e.filename).length;

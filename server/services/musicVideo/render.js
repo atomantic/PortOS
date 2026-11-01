@@ -1,7 +1,7 @@
 import { maintenance } from '../../lib/maintenanceAdmission.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { assertMusicVideoMediaSelections } from '../../lib/musicVideoMediaPolicy.js';
-import { assertProductionApproval, clipLocks, nameShots, productionReviewBasis, shotLocks } from './productionReview.js';
+import { assertProductionApproval, clipLocks, nameShots, productionReviewBasis } from './productionReview.js';
 import { musicVideoGradeFilter } from '../../lib/musicVideoGrade.js';
 /**
  * Music Video — render pipeline (#1760, Phase 2).
@@ -899,19 +899,8 @@ export function assertCurrentClipDependencies(project) {
     .filter((scene) => musicVideoTakeChanges(project, scene, (scene.takes || []).find((take) => take.kind === 'video' && take.assetId === scene.videoHistoryId)).length);
   if (!stale.length) return;
   const shots = nameShots(project, stale.map((scene) => scene.sceneId));
-  // A document storyboard has no clip locks, so a new render is its only fix.
-  const fix = locks ? 'Lock the clip to keep it as it is, or render a new one' : 'Render a new one';
-  throw new ServerError(`${shots}: the clip was made from frames that have since changed. ${fix}`,
+  throw new ServerError(`${shots}: the clip was made from frames that have since changed. Render a new one`,
     { status: 422, code: 'STALE_CLIP_DEPENDENCIES', context: { sceneIds: stale.map((scene) => scene.sceneId) } });
-}
-
-// Shots approved as they play: a locked clip, or a locked shot with no clip
-// step (a still). The intercut pass leaves these whole.
-function lockedShotIds(project) {
-  const shots = shotLocks(project);
-  if (!shots) return [];
-  const clips = clipLocks(project, shots) || {};
-  return Object.keys(shots).filter((id) => (clips[id] ?? shots[id]) === 'locked');
 }
 
 // `decode: false` plans for a read-only caller without host control: the
@@ -957,7 +946,6 @@ export async function planMusicVideoRender(project, { draft = false, decode = tr
       lyricCues: project.lyricCues,
       graphicCards: composed,
       accentColor: project.composition?.style?.accentColor,
-      lockedSceneIds: lockedShotIds(project),
       loudTierEverywhere: usesLoudTierEverywhere(project),
     })
     : snapped;

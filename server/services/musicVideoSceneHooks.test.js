@@ -153,6 +153,7 @@ describe('music-video scene completion hooks → takes', () => {
     const job = imageJob(project.id, scene.sceneId, 'recast.png');
     job.params.musicVideo.castInputs = castInputs;
     job.params.musicVideo.replaceSelection = true;
+    job.params.musicVideo.expectedSelection = 'first.png';
     mediaJobEvents.emit('completed', job);
     await waitFor(() => emitted.length === 2);
     const stored = await sceneOf(project.id, scene.sceneId);
@@ -181,10 +182,42 @@ describe('music-video scene completion hooks → takes', () => {
     const third = imageJob(project.id, scene.sceneId, 'third.png');
     third.params.musicVideo.thenClip = {};
     third.params.musicVideo.replaceSelection = true;
+    third.params.musicVideo.expectedSelection = 'first.png';
     mediaJobEvents.emit('completed', third);
     await waitFor(() => emitted.some((e) => e.event === 'scene-failure'));
     expect(dispatchStoryboardStillClip).toHaveBeenCalledTimes(2);
     expect((await sceneOf(project.id, scene.sceneId)).lastFailure).toMatchObject({ lane: 'video', error: 'Add a shot prompt first' });
+  });
+
+  it('keeps a director\'s newer selection when a replacement render completes late', async () => {
+    mediaJobEvents.emit('completed', imageJob(project.id, scene.sceneId, 'first.png'));
+    mediaJobEvents.emit('completed', imageJob(project.id, scene.sceneId, 'second.png'));
+    await waitFor(() => emitted.length === 2);
+    const second = (await sceneOf(project.id, scene.sceneId)).takes.find((take) => take.assetId === 'second.png');
+    const replacement = imageJob(project.id, scene.sceneId, 'recast.png');
+    replacement.params.musicVideo.replaceSelection = true;
+    replacement.params.musicVideo.expectedSelection = 'first.png';
+    await projects.selectSceneTake(project.id, scene.sceneId, second.takeId);
+    mediaJobEvents.emit('completed', replacement);
+    await waitFor(() => emitted.length === 3);
+    const stored = await sceneOf(project.id, scene.sceneId);
+    expect(stored.referenceImageId).toBe('second.png');
+    expect(stored.takes.map((take) => take.assetId)).toEqual(['first.png', 'second.png', 'recast.png']);
+  });
+
+  it('attaches an automated still repair while retaining the prior selection as a take', async () => {
+    mediaJobEvents.emit('completed', imageJob(project.id, scene.sceneId, 'first.png'));
+    await waitFor(() => emitted.length === 1);
+    await projects.mutateProjectRecord(project.id, current => ({ project: { ...current, scenes: current.scenes.map(item => item.sceneId === scene.sceneId
+      ? { ...item, stillFixes: { text: 'Correct the light', at: 'repair-1', pending: true, replaces: 'first.png' } } : item) } }));
+    const job = imageJob(project.id, scene.sceneId, 'recast.png');
+    Object.assign(job.params.musicVideo, { replaceSelection: true, expectedSelection: 'first.png', stillRepairAt: 'repair-1' });
+    mediaJobEvents.emit('completed', job);
+    await waitFor(() => emitted.length === 2);
+    const stored = await sceneOf(project.id, scene.sceneId);
+    expect(stored.referenceImageId).toBe('recast.png');
+    expect(stored.takes.map(take => take.assetId)).toEqual(['first.png', 'recast.png']);
+    expect(stored.stillFixes).toEqual({ text: 'Correct the light', at: 'repair-1' });
   });
 
   it('a completion racing a director selection loses neither (one write tail on the file store)', async () => {

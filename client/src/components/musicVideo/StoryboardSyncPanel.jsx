@@ -1,9 +1,8 @@
-import { useContext, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Link2, Loader2 } from 'lucide-react';
 import InlineConfirmRow from '../ui/InlineConfirmRow';
 import { setMusicVideoShotSync, syncMusicVideoShots } from '../../services/api';
 import { formatCount } from '../../utils/formatters';
-import { ShotLockContext } from './ShotLock.jsx';
 import { storyboardFitSong } from '../../../../server/lib/storyboardFit.js';
 import { storyboardShotSyncPlan } from '../../../../server/lib/storyboardShotSync.js';
 
@@ -23,24 +22,20 @@ function syncSummary(counts) {
 /**
  * Sync shots: one shot per storyboard panel, at the panel's own time on the
  * song (lib/storyboardShotSync.js, the same plan the server writes). The
- * preview says what moves, what is new and what goes, and which locked shots
- * hold. Syncing once keeps the shots in sync after every board edit
+ * preview says what moves, what is new and what goes. Syncing once keeps the shots in sync after every board edit
  * (`project.storyboardSync`), which the switch turns off or on. A shot keeps
  * everything it owns (prompts, takes, transitions, effects).
  */
 export default function StoryboardSyncPanel({ project, board, disabled, onSynced, onBoardStale }) {
-  const lockValue = useContext(ShotLockContext);
-  const [removeLocked, setRemoveLocked] = useState(false);
+  const [removeWithMedia, setRemoveWithMedia] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [writing, setWriting] = useState(false);
   const [error, setError] = useState(null);
   const song = useMemo(() => storyboardFitSong(project), [project]);
-  const plan = useMemo(() => storyboardShotSyncPlan(board, project, {
-    song, locks: lockValue?.locks || null, clipLocks: lockValue?.clips || null, removeLocked,
-  }), [board, project, song, lockValue, removeLocked]);
+  const plan = useMemo(() => storyboardShotSyncPlan(board, project, { song, removeWithMedia }), [board, project, song, removeWithMedia]);
   const on = project.storyboardSync === true;
   const { counts } = plan;
-  const lockedRemovals = plan.removed.filter((shot) => shot.locked && !shot.videoLocked);
+  const mediaRemovals = plan.removed.filter((shot) => shot.hasMedia);
   const blocked = [...plan.shots.filter((shot) => shot.blocked), ...plan.removed.filter((shot) => shot.blocked)];
   const summary = syncSummary(counts);
 
@@ -48,7 +43,7 @@ export default function StoryboardSyncPanel({ project, board, disabled, onSynced
     setConfirming(false);
     setWriting(true);
     setError(null);
-    const res = await syncMusicVideoShots(project.id, { boardUpdatedAt: board.updatedAt, projectUpdatedAt: project.updatedAt, removeLocked }, { silent: true })
+    const res = await syncMusicVideoShots(project.id, { boardUpdatedAt: board.updatedAt, projectUpdatedAt: project.updatedAt, removeWithMedia }, { silent: true })
       .catch((err) => {
         setError(err?.message || 'The shots could not be synced.');
         if (err?.code === 'STORYBOARD_CHANGED') onBoardStale();
@@ -73,7 +68,6 @@ export default function StoryboardSyncPanel({ project, board, disabled, onSynced
         One shot per panel, at the panel&apos;s own time on the song. {plan.inSync
           ? `The ${plural(plan.shots.length, 'shot')} match the storyboard.`
           : `${summary || 'Shots relabel and reorder'}.`}
-        {counts.held > 0 && ` ${plural(counts.held, 'locked shot')} keep${counts.held === 1 ? 's' : ''} its words until you tap Update on Shots.`}
         {plan.spans.gapSec > 0 && ` The panels end ${plan.spans.gapSec.toFixed(2)} s before the song does.`}
       </p>
       {blocked.length > 0 && (
@@ -84,10 +78,10 @@ export default function StoryboardSyncPanel({ project, board, disabled, onSynced
           {blocked.length > 8 && <li>and {formatCount(blocked.length - 8)} more</li>}
         </ul>
       )}
-      {(lockedRemovals.length > 0 || removeLocked) && (
+      {(mediaRemovals.length > 0 || removeWithMedia) && (
         <label className="flex min-h-[44px] items-center gap-2 text-xs text-gray-300">
-          <input type="checkbox" checked={removeLocked} onChange={(e) => setRemoveLocked(e.target.checked)} className="h-4 w-4" />
-          Also remove locked shots no panel keeps
+          <input type="checkbox" checked={removeWithMedia} onChange={(e) => setRemoveWithMedia(e.target.checked)} className="h-4 w-4" />
+          Also remove shots with media that no panel keeps
         </label>
       )}
       {error && <p role="alert" className="text-xs text-port-error">{error}</p>}

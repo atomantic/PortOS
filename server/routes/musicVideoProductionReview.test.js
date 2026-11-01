@@ -217,13 +217,13 @@ describe('human-reviewed Music Video workflow', () => {
     expect((await request(app).post(`${base}/render`).send({})).status).toBe(409);
   });
 
-  it('lets a planned shot take stills once art is approved, keeping clips and production runs behind the storyboard', async () => {
+  it('lets a planned shot render stills and clips after art review without a shot or storyboard lock', async () => {
     const { assertMusicVideoSceneReview } = await import('../services/musicVideo/productionReviewService.js');
     const tag = { projectId: project.id, sceneId: (await store.getProject(project.id)).scenes[0].sceneId };
     await expect(assertMusicVideoSceneReview(tag, 'image')).rejects.toMatchObject({ code: 'MUSIC_VIDEO_APPROVAL_REQUIRED' });
     expect((await approve('art')).status).toBe(200);
     await expect(assertMusicVideoSceneReview(tag, 'image')).resolves.toBeUndefined();
-    await expect(assertMusicVideoSceneReview(tag, 'video')).rejects.toMatchObject({ code: 'MUSIC_VIDEO_APPROVAL_REQUIRED' });
+    await expect(assertMusicVideoSceneReview(tag, 'video')).resolves.toBeUndefined();
     // A clip from the storyboard panel makes its own first frame: it has no still to lock.
     await expect(assertMusicVideoSceneReview(tag, 'video', { storyboardGuided: true })).resolves.toBeUndefined();
     // Clip from storyboard animates the still its own render made, named by the server, and no other.
@@ -233,7 +233,10 @@ describe('human-reviewed Music Video workflow', () => {
     await store.mutateProjectRecord(project.id, current => ({ project: { ...current,
       scenes: current.scenes.map(s => (s.sceneId === tag.sceneId ? { ...s, referenceImageId: 'board-still.png' } : s)) } }));
     await expect(assertMusicVideoSceneReview({ ...tag, storyboardStill: 'board-still.png' }, 'video')).resolves.toBeUndefined();
-    await expect(assertMusicVideoSceneReview({ ...tag, storyboardStill: 'older-still.png' }, 'video')).rejects.toMatchObject({ code: 'MUSIC_VIDEO_APPROVAL_REQUIRED' });
+    await expect(assertMusicVideoSceneReview({ ...tag, storyboardStill: 'older-still.png' }, 'video')).resolves.toBeUndefined();
+    await store.mutateProjectRecord(project.id, current => ({ project: { ...current, productionReview: { ...current.productionReview,
+      shotApprovals: { [tag.sceneId]: { basis: 'legacy' } }, clipApprovals: { [tag.sceneId]: { videoHistoryId: 'old-clip' } } } } }));
+    await expect(assertMusicVideoSceneReview(tag, 'video')).resolves.toBeUndefined();
     await expect(assertMusicVideoSceneReview({ ...tag, productionRunId: 'run-example' }, 'image')).rejects.toMatchObject({ code: 'MUSIC_VIDEO_APPROVAL_REQUIRED' });
     await expect(assertMusicVideoSceneReview({ ...tag, sceneId: 'scene-missing' }, 'image')).rejects.toMatchObject({ code: 'MUSIC_VIDEO_APPROVAL_REQUIRED' });
     expect((await approve('storyboard')).status).toBe(200);
@@ -433,9 +436,8 @@ describe('human-reviewed Music Video workflow', () => {
     expect(revised.body.project.productionReview.reviewedRevisions[entry.basis].draft.storyboard[0].staging).toBe('Figure foreground, doorway behind');
     expect(revised.body.project.productionReview.feedback.at(-1).resolvedAt).toBeUndefined();
     expect(revised.body.readiness.art.approved).toBe(true);
-    // Rewording an approved shot unlocks that shot, and the board until it is locked again.
-    expect(revised.body.readiness.storyboard.approved).toBe(false);
-    expect(revised.body.readiness.storyboard.unlocked).toHaveLength(1);
+    // The approved board stays approved for shot wording edits; the proof must still be reviewed again.
+    expect(revised.body.readiness.storyboard.approved).toBe(true);
     expect(revised.body.readiness.proof.approved).toBe(false);
     const resolution = { feedbackId: entry.id, resolution: 'Reviewed the revised staging.' };
     expect((await request(app).post(`${base}/production-review/feedback/resolve`).set('authorization', 'Bearer expired').send(resolution)).status).toBe(401);

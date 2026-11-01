@@ -115,15 +115,20 @@ describe('fit a music video to its storyboard', () => {
     expect(refit.body.project.scenes).toHaveLength(4);
   });
 
-  it('never replaces locked shots and needs an analyzed song', async () => {
-    const { project, board } = await linkedProject({
-      scenes: [{ sceneId: 'mvs-kept', order: 0, startSec: 0, endSec: 40, prompt: '', takes: [] }],
-      productionReview: { shotApprovals: { 'mvs-kept': { basis: 'example' } } },
-    });
-    const locked = await request(app).post(`/api/storyboards/fit-music-video/${project.id}`).send({ boardUpdatedAt: board.updatedAt });
-    expect(locked.status).toBe(409);
-    expect(locked.body.code).toBe('SHOTS_LOCKED');
-    expect((await projects.getProject(project.id)).scenes.map((s) => s.sceneId)).toEqual(['mvs-kept']);
+  it('refits legacy locked shots while preserving their selected media, and needs an analyzed song', async () => {
+    const { project, board } = await linkedProject();
+    const fit = () => request(app).post(`/api/storyboards/fit-music-video/${project.id}`).send({ boardUpdatedAt: board.updatedAt });
+    const first = (await fit()).body.project.scenes[0];
+    await mkdir(PATHS.images, { recursive: true });
+    await writeFile(`${PATHS.images}/kept.png`, Buffer.from('89504e470d0a1a0a', 'hex'));
+    await projects.updateScene(project.id, first.sceneId, { referenceImageId: 'kept.png' });
+    await projects.mutateProjectRecord(project.id, (record) => ({ project: { ...record,
+      audioAnalysis: { ...analysis, durationSec: 50, sections: [{ label: 'Verse', startSec: 0, endSec: 25 }, { label: 'Chorus', startSec: 25, endSec: 50 }] },
+      productionReview: { ...record.productionReview, shotApprovals: { [first.sceneId]: { basis: 'legacy' } } } } }));
+    const refit = await fit();
+    expect(refit.status).toBe(200);
+    expect(refit.body.project.scenes.find(scene => scene.panelId === first.panelId))
+      .toMatchObject({ sceneId: first.sceneId, referenceImageId: 'kept.png', startSec: 0, endSec: 12.5 });
 
     const bare = await linkedProject({ audioAnalysis: null });
     const unanalyzed = await request(app).post(`/api/storyboards/fit-music-video/${bare.project.id}`).send({ boardUpdatedAt: bare.board.updatedAt });

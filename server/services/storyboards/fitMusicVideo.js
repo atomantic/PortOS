@@ -3,14 +3,13 @@
  * beat placed on the analyzed song and each panel a shot that keeps the
  * panel's id (lib/storyboardFit.js, the same fit the Plan step previews).
  * Beats marked before the song become the shots before it (the cold open).
- * Replaces the shots, so it refuses while any shot is locked; a shot whose
- * span is unchanged keeps its frames and clips (replaceScenes). Runs only on
+ * Replaces the shots; a shot matched by panel or span keeps its frames and clips
+ * (replaceScenes). Runs only on
  * the user's tap; no model call.
  *
  * After the fit, a shot whose panel was edited shows it (storyboardShotPanel)
  * and waits: Update copies the panel's action to the shot's intent and its art
- * to the shot's frame reference, so even a locked shot only changes on that
- * tap. Use as panel art sends the shot's still back to its panel as the
+ * to the shot's frame reference. Use as panel art sends the shot's still back to its panel as the
  * selected take.
  */
 
@@ -21,8 +20,8 @@ import { fitStoryboardToSong, songSectionBeats, storyboardFitSong, storyboardPan
 import { addPanelTake, getStoryboard, mutateStoryboard, selectPanelTake } from './index.js';
 
 export async function fitMusicVideoToStoryboard(projectId, { boardUpdatedAt, starts = {} } = {}) {
-  const [{ getProject, mutateProjectRecord }, { replaceScenes }, { shotLocks }] = await Promise.all([
-    import('../musicVideo/projects.js'), import('../musicVideo/projectsLogic.js'), import('../musicVideo/productionReview.js'),
+  const [{ getProject, mutateProjectRecord }, { replaceScenes }] = await Promise.all([
+    import('../musicVideo/projects.js'), import('../musicVideo/projectsLogic.js'),
   ]);
   const linked = await getProject(projectId);
   if (!linked) throw new ServerError('Music video not found', { status: 404, code: 'NOT_FOUND' });
@@ -39,12 +38,6 @@ export async function fitMusicVideoToStoryboard(projectId, { boardUpdatedAt, sta
     }
     const song = storyboardFitSong(current);
     if (!song) throw new ServerError('Analyze the song first; the fit places beats on its sections.', { status: 409, code: 'SONG_NOT_ANALYZED' });
-    const locked = Object.values(shotLocks(current) || {}).filter((lock) => lock !== 'open').length;
-    if (locked) {
-      // A lock marked changed (edited after locking) still holds until unlocked.
-      throw new ServerError(`${locked} shot${locked === 1 ? ' has a lock' : 's have locks'} on Shots. Fit to song replaces every shot and never moves a locked one; unlock them first.`,
-        { status: 409, code: 'SHOTS_LOCKED' });
-    }
     const fit = fitStoryboardToSong(board, song, { starts });
     const timedLyrics = song.lyricCues.length > 0;
     const inputs = fit.shots.map(({ beatId: _beatId, ...shot }) => ({
@@ -52,7 +45,7 @@ export async function fitMusicVideoToStoryboard(projectId, { boardUpdatedAt, sta
       loop: false,
       lyricText: timedLyrics && !shot.preMusic ? sungLyricTextWithin(current.lyricCues, shot.startSec, shot.endSec) : null,
     }));
-    return { ...replaceScenes(current, inputs), fit };
+    return { ...replaceScenes(current, inputs, { matchPanel: true }), fit };
   });
   console.log(`🎬 Fit storyboard ${board.id} to music video ${projectId}: ${outcome.scenes.length} shot(s), replaced ${outcome.replaced}`);
   return { project: outcome.project, shots: outcome.scenes.length, replaced: outcome.replaced };

@@ -200,9 +200,9 @@ const formatSec = (sec) => `${Math.round(sec * 10) / 10}s`;
 
 function OptionSelect({ id, label, value, onChange, disabled, children }) {
   return (
-    <span className="flex min-w-0 items-center gap-1">
-      <label htmlFor={id} className="text-xs text-port-text-muted">{label}</label>
-      <select id={id} value={value} onChange={(e) => onChange(e.target.value)} disabled={disabled} className={SELECT}>{children}</select>
+    <span className="flex min-w-0 max-w-full items-center gap-1">
+      <label htmlFor={id} className="shrink-0 text-xs text-port-text-muted">{label}</label>
+      <select id={id} value={value} onChange={(e) => onChange(e.target.value)} disabled={disabled} className={`${SELECT} flex-1`}>{children}</select>
     </span>
   );
 }
@@ -225,11 +225,11 @@ export default function SceneRenderTarget({
   const coversLabel = (sec) => (spanSec != null ? `${formatSec(sec)} · covers shot` : `${formatSec(sec)} · default`);
   return (
     <>
-      <span className="flex min-w-0 flex-1 basis-48 items-center gap-1 sm:flex-none">
-        <label htmlFor={id} className="text-xs">Render on</label>
+      <span className="flex min-w-0 max-w-full flex-1 basis-48 items-center gap-1 sm:flex-initial">
+        <label htmlFor={id} className="shrink-0 text-xs">Render on</label>
         <select id={id} value={value} onChange={(e) => { onChange(e.target.value); onOptionsChange?.({}); rememberRenderTarget(e.target.value); }} disabled={disabled}
           title="Where this shot's clip renders. Only this shot; the project setting stays as it is."
-          className={`${SELECT} flex-1 sm:flex-none`}>
+          className={`${SELECT} flex-1`}>
           {value.startsWith('runway:') && !runwayCatalog.videoModels.some((m) => `runway:${m.id}` === value) && <option value={value}>{value} (unavailable)</option>}
           {renderTargetOptions({ performance, saved, endFrame: Boolean(scene?.endImageId), scene, runwayModels: runwayCatalog.videoModels }).map((option) => (
             <option key={option.value} value={option.value} disabled={option.disabled}>{option.label}</option>

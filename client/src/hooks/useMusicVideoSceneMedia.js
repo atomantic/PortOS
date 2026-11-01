@@ -252,7 +252,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
       ...(references.length ? { referenceImageFiles: references } : {}),
       musicVideo: {
         projectId, sceneId: scene.sceneId, compose: true, castInputs, ...(revisionId ? { revisionId } : {}),
-        ...(replaceSelection ? { replaceSelection: true } : {}),
+        ...(replaceSelection ? { replaceSelection: true, expectedSelection: scene.referenceImageId || null } : {}),
         // Clip from storyboard: the server animates this still on this lane once it is the shot's selection.
         ...(thenClip ? { thenClip } : {}),
         ...(greybox?.reference ? { greyboxImageId: greybox.reference.imageId } : {}),
@@ -274,14 +274,14 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
         const filename = res?.filename;
         if (filename) {
           addMusicVideoSceneTake(projectId, scene.sceneId, {
-            kind: 'image', assetId: filename, source: 'generated', castInputs, ...(replaceSelection ? { replaceSelection: true } : {}),
+            kind: 'image', assetId: filename, source: 'generated', castInputs, ...(replaceSelection ? { replaceSelection: true, expectedSelection: scene.referenceImageId || null } : {}),
           }, { silent: true })
             .then(({ scene: updated }) => applyScenePatch?.(projectId, scene.sceneId, {
               referenceImageId: updated.referenceImageId, takes: updated.takes,
             }))
             .catch((err) => toast.error(err?.message || 'Failed to attach frame'));
           // Only queued renders chain into a clip (musicVideoSceneImageHook); this lane answered inline.
-          if (thenClip) toast.info('Still ready. Lock it and render its clip from the shot card.');
+          if (thenClip) toast.info('Still ready. Render its clip from the shot card.');
         }
         frameLane.clearScene(scene.sceneId);
         return { ok: true };
@@ -325,7 +325,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
       ...(references.length ? { referenceImageFiles: references } : {}),
       musicVideo: {
         projectId, sceneId: scene.sceneId, slot: 'end', compose: true, castInputs,
-        ...(replaceSelection ? { replaceSelection: true } : {}),
+        ...(replaceSelection ? { replaceSelection: true, expectedSelection: scene.endImageId || null } : {}),
         ...(greybox?.reference ? { greyboxImageId: greybox.reference.imageId } : {}),
         ...(refining ? { refine: true } : referenceImageId ? { fromFrame: true } : {}),
       },
@@ -339,7 +339,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
         }
         if (res?.filename) {
           addMusicVideoSceneTake(projectId, scene.sceneId, {
-            kind: 'endImage', assetId: res.filename, source: 'generated', castInputs, ...(replaceSelection ? { replaceSelection: true } : {}),
+            kind: 'endImage', assetId: res.filename, source: 'generated', castInputs, ...(replaceSelection ? { replaceSelection: true, expectedSelection: scene.endImageId || null } : {}),
           }, { silent: true })
             .then(({ scene: updated }) => applyScenePatch?.(projectId, scene.sceneId, {
               endImageId: updated.endImageId ?? null, takes: updated.takes,

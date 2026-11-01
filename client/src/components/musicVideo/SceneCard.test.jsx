@@ -384,37 +384,34 @@ describe('scene timing and provider presentation (#11046)', () => {
   });
 });
 
-describe('Render follows the shot locks', () => {
-  // Uniquely catches Render skipping the still's lock, rendering when the lock fails, or staying live on a locked video.
-  it('locks the still and renders in one tap, and refuses a locked video until it is unlocked', async () => {
+describe('Render ignores legacy shot locks', () => {
+  it('renders directly for an unlocked still and a previously locked video', async () => {
     const { ShotLockContext } = await import('./ShotLock.jsx');
     const scene = { sceneId: 's1', prompt: 'She spins the reel', referenceImageId: 'still.png', videoHistoryId: 'clip-1', startSec: 0, endSec: 4, takes: [] };
     const onGenerateVideo = vi.fn();
+    const onGenerateFrame = vi.fn();
     const toggle = vi.fn();
     const card = (still, clip) => (
       <ShotLockContext.Provider value={{ locks: { s1: still }, clips: { s1: clip }, toggle, busy: false }}>
-        <SceneCard scene={scene} index={0} expanded onEditLocal={() => {}} onSave={() => {}} onGenerateVideo={onGenerateVideo} falVideoSettings={{ backend: 'local' }} />
+        <SceneCard scene={scene} index={0} expanded onEditLocal={() => {}} onSave={() => {}} onGenerateVideo={onGenerateVideo}
+          onGenerateFrame={onGenerateFrame} onPlacePoolItem={vi.fn()} falVideoSettings={{ backend: 'local' }} />
       </ShotLockContext.Provider>
     );
     const { rerender } = render(card('open', 'open'));
     expect(screen.queryByTestId('render-refusal')).toBeNull();
-    // A failed lock renders nothing.
-    toggle.mockResolvedValueOnce(null);
-    fireEvent.click(screen.getByRole('button', { name: 'Lock still & render again' }));
-    await waitFor(() => expect(toggle).toHaveBeenCalledWith('s1', true, 'still'));
-    expect(onGenerateVideo).not.toHaveBeenCalled();
-    toggle.mockResolvedValueOnce({ ok: true });
-    fireEvent.click(screen.getByRole('button', { name: 'Lock still & render again' }));
-    await waitFor(() => expect(onGenerateVideo).toHaveBeenCalledWith(scene, { card: expect.objectContaining({ prompt: scene.prompt }) }));
-    onGenerateVideo.mockClear();
-    rerender(card('locked', 'locked'));
-    expect(screen.getByRole('button', { name: 'Render again' }).disabled).toBe(true);
-    expect(screen.getByRole('button', { name: 'Render again' }).title).toMatch(/^Video locked/);
-    rerender(card('locked', 'open'));
-    // The corner lock shows only its icon on a phone; its label stays the button's name.
-    expect(screen.getByRole('button', { name: 'Lock video' })).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Render again' }));
     expect(onGenerateVideo).toHaveBeenCalledWith(scene, { card: expect.objectContaining({ prompt: scene.prompt }) });
+    expect(toggle).not.toHaveBeenCalled();
+    onGenerateVideo.mockClear();
+    rerender(card('locked', 'locked'));
+    expect(screen.getByRole('button', { name: 'Render again' }).disabled).toBe(false);
+    expect(screen.queryByRole('button', { name: /unlock|lock video/i })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Render again' }));
+    expect(onGenerateVideo).toHaveBeenCalledWith(scene, { card: expect.objectContaining({ prompt: scene.prompt }) });
+    show('Still');
+    expect(screen.getByRole('button', { name: 'Swap start frame from unused' })).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: 'New frame take' }));
+    expect(onGenerateFrame).toHaveBeenCalledWith(scene, { referenceImageId: null });
   });
 });
 
@@ -699,7 +696,7 @@ describe('clip playback and coverage', () => {
   });
 
   // Catches source trim losing its scene argument or becoming enabled during
-  // take/render work or a clip lock after the preview moves out of SceneCard.
+  // take/render work after the preview moves out of SceneCard.
   it('trims the source at the chosen frame and preserves every busy gate', async () => {
     const { ShotLockContext } = await import('./ShotLock.jsx');
     const onTrimClip = vi.fn();
@@ -719,7 +716,7 @@ describe('clip playback and coverage', () => {
     rerender(<ShotLockContext.Provider value={{ locks: { s1: 'locked' }, clips: { s1: 'locked' }, toggle: () => {}, busy: false }}>
       <SceneCard {...props} />
     </ShotLockContext.Provider>);
-    expect(screen.getByRole('button', { name: 'Next frame' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Next frame' })).toBeEnabled();
   });
 });
 
@@ -926,14 +923,14 @@ describe('clip speed and offset by hand', () => {
     expect(speed.value).toBe('2');
   });
 
-  it('is off while the video is locked', async () => {
+  it('remains editable for a video with a legacy lock', async () => {
     const { ShotLockContext } = await import('./ShotLock.jsx');
     render(
       <ShotLockContext.Provider value={{ locks: { s1: 'locked' }, clips: { s1: 'locked' }, toggle: () => {}, busy: false }}>
         <SceneCard scene={{ sceneId: 's1', videoHistoryId: 'clip-1', startSec: 0, endSec: 4, speedFps: 2, takes: [] }} index={0} expanded onEditLocal={() => {}} onSave={() => {}} />
       </ShotLockContext.Provider>,
     );
-    expect(screen.getByRole('button', { name: 'Play the clip one fps faster' }).disabled).toBe(true);
+    expect(screen.getByRole('button', { name: 'Play the clip one fps faster' }).disabled).toBe(false);
     expect(screen.getByLabelText('Speed').value).toBe('2');
   });
 });

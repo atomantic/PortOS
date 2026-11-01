@@ -897,8 +897,10 @@ export function productionReadiness(project) {
   const byShot = !!locks && Object.keys(review.shotApprovals || {}).length > 0;
   const unlocked = locks ? Object.keys(locks).filter(id => locks[id] !== 'locked') : [];
   const clips = clipLocks(project, locks);
-  const storyboardApproved = !boardProblems.length && (byShot ? scenes.length > 0 && !unlocked.length
-    : storyboardApprovalCurrent(review.approvals?.storyboard, basis));
+  // A current whole-board approval is independent of old per-shot locks. Keep
+  // previously completed per-shot reviews valid for projects saved before this change.
+  const storyboardApproved = !boardProblems.length && (storyboardApprovalCurrent(review.approvals?.storyboard, basis)
+    || (byShot && scenes.length > 0 && !unlocked.length));
   const camera = storyboardCameraReport(scenes, documentShots ? null : boardStoryboard(project));
   const proof = proofReadiness(project, review, basis, storyboardApproved);
   return { basis, inputs, alignment: { basis: alignmentBasis, status: alignmentStatus(review, draft, alignmentBasis) }, documentShotImport: { documentDirectory: project.composition?.document?.directory || null, audioBasis: alignmentBasis }, art: { approved: artApproved, problems: [...new Set(artProblems)], stale: artApproved ? null : staleApproval(project, 'art', basis.art, inputs) },
@@ -1031,10 +1033,6 @@ export function approveProductionStage(project, { stage, basis, proofReview, app
   const decision = { stage, basis: expected, ...(stage === 'storyboard' ? { shotsBasis: productionReviewBasis(project).storyboardShots } : {}), inputs: productionApprovalInputs(project)[stage], values: productionApprovalValues(project, stage), approvedAt: new Date().toISOString(),
     ...(approvedBy ? { approvedBy } : {}), ...(reviewer ? { reviewer: structuredClone(reviewer) } : {}),
     ...(stage === 'proof' ? { proofReview: structuredClone(proofReview) } : {}) };
-  // Approving the whole board locks every shot on it, so a later edit unlocks only the shot it touches.
-  if (stage === 'storyboard' && project.productionReview?.draft?.storyboardSource !== 'document' && (project.scenes || []).length) {
-    project = setShotLocks(project, { sceneIds: project.scenes.map(scene => scene.sceneId), locked: true, reviewer, approvedBy });
-  }
   return { ...project, productionReview: { ...project.productionReview,
     approvalHistory: [...(project.productionReview?.approvalHistory || []), decision].slice(-MAX_APPROVAL_HISTORY),
     reviewedRevisions: pruneReviewedRevisions({ ...omitKey(project.productionReview?.reviewedRevisions, basis), [basis]: { draft: structuredClone(project.productionReview?.draft || {}), scenes: structuredClone(project.scenes || []), proof: structuredClone(project.productionReview?.proof || null), capturedAt: new Date().toISOString() } }, project.productionReview?.feedback),

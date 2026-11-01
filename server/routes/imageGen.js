@@ -277,6 +277,7 @@ const generateSchema = z.object({
     // hook copies them onto the take; it does not look them up again.
     castInputs: musicVideoCastInputsSchema.optional(),
     replaceSelection: z.boolean().optional(),
+    expectedSelection: galleryImageFilenameSchema('selected frame').nullable().optional(),
     // Clip from storyboard: once this still lands as the shot's selection, the
     // completion hook animates it on this lane (a model the card picked wins).
     thenClip: z.object({

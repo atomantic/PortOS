@@ -18,7 +18,7 @@ export default function ProofReviewContent({ proof, fieldId, jump, saved, review
   return <>
     {!excerpt && <div className="space-y-1 text-sm" aria-label="Proof approval prerequisites">
       {!ready?.art.approved && <p><a href="#mv-review-art" onClick={jump('cast-sets', 'mv-review-art')} className="text-port-accent underline">Approve the art direction</a> first.</p>}
-      {ready?.art.approved && !ready?.storyboard.approved && <p><a href="#mv-review-storyboard" onClick={jump('produce', 'mv-review-storyboard')} className="text-port-accent underline">Lock the stills</a> first.</p>}
+      {ready?.art.approved && !ready?.storyboard.approved && <p><a href="#mv-review-storyboard" onClick={jump('produce', 'mv-review-storyboard')} className="text-port-accent underline">Review the storyboard</a> first.</p>}
     </div>}
     {excerpt && <p className="text-xs text-port-text-muted break-words">{excerpt.filename || excerpt.status} · {project.productionReview?.proof?.basis === ready?.basis.proof ? 'Current source revision' : 'Source changed — render a new proof'}</p>}
     {excerpt?.status === 'error' && excerpt.error && <p role="alert" className="text-sm text-port-error break-words">{excerpt.error}</p>}

@@ -3033,8 +3033,8 @@ describe('MusicVideo stage tabs (#9243)', () => {
     }
   });
 
-  it('leads Shots with the player and Lock all stills, keeps approvals off Plan, closes Look with its approval, keeps the run in Project settings and unsaved planning edits across steps', async () => {
-    // Stills not yet locked, so Shots offers Lock all stills beside the player.
+  it('leads Shots with the player and storyboard approval, keeps approvals off Plan, closes Look with its approval, keeps the run in Project settings and unsaved planning edits across steps', async () => {
+    // The storyboard review sits beside the player.
     listMusicVideoProjects.mockResolvedValue([{ ...PROJECT_WITH_CLIP,
       autonomousRun: { status: 'needs-human', stage: 'video', output: {}, brief: {} },
       productionReadiness: { readyForProduction: false, basis: {}, art: { approved: true, problems: [] }, storyboard: { approved: false, problems: [] }, proof: { approved: true, problems: [] } },
@@ -3056,7 +3056,7 @@ describe('MusicVideo stage tabs (#9243)', () => {
       const title = selectedTab().textContent.split(',')[0];
       expect(within(panel).getByRole('heading', { level: 3, name: title })).toBeInTheDocument();
       expect(panel).toHaveAccessibleName(title);
-      // Plan has no approval: its shots are locked on Shots.
+      // Plan has no approval: the storyboard is reviewed on Shots.
       if (stage === 'board') {
         expect(within(panel).queryByRole('region', { name: 'Production review' })).toBeNull();
         continue;
@@ -3617,7 +3617,7 @@ describe('stage checklist and project options', () => {
     await waitFor(() => expect(feedbackCalls.revise).toHaveBeenCalledWith('storyboard'));
     fireEvent.click(within(requests).getByRole('button', { name: 'Mark resolved: Chorus' }));
     expect(feedbackCalls.resolveFeedback).toHaveBeenCalledWith('fb-a', '');
-    // Lock all stills, on Shots, waits on the same request.
+    // Storyboard approval, on Shots, waits on the same request.
     await openStage('produce', false);
     expect(screen.getByRole('region', { name: 'Approve: Lyric-timed storyboard' })).toHaveTextContent('Resolve the change request on Chorus first.');
   });

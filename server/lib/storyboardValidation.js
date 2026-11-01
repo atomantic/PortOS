@@ -185,6 +185,7 @@ export const storyboardShotSyncSchema = z.object({
   boardUpdatedAt: z.string().min(1).max(64),
   projectUpdatedAt: z.string().min(1).max(64).optional(),
   removeLocked: z.boolean().optional(),
+  removeWithMedia: z.boolean().optional(),
 }).strict();
 
 // Keep a video's shots in sync with its board after each edit (on), or stop (off).

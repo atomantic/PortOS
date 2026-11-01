@@ -659,7 +659,7 @@ function carryOver(prior, fresh) {
  * Shots before the song (`preMusic`) match an old one by panel, else by place.
  * Returns `{ project, scenes, replaced }` (`replaced` = the old shots it replaced).
  */
-export function replaceScenes(project, sceneInputs) {
+export function replaceScenes(project, sceneInputs, { matchPanel = false } = {}) {
   const list = Array.isArray(sceneInputs) ? sceneInputs : [];
   // A plan covers the song. Shots before it come in front: from the plan when
   // it has some (a storyboard's opening beats), else the cold open stays,
@@ -685,8 +685,9 @@ export function replaceScenes(project, sceneInputs) {
   const claimed = new Set();
   const sameSpan = (a, b) => typeof a === 'number' && typeof b === 'number' && Math.abs(a - b) < 0.01;
   const scenes = songInputs.map((fresh) => {
-    const prior = existing.find((old) => !claimed.has(old.sceneId)
-      && sameSpan(old.startSec, fresh.startSec) && sameSpan(old.endSec, fresh.endSec));
+    const prior = (matchPanel && fresh.panelId && existing.find((old) => !claimed.has(old.sceneId) && old.panelId === fresh.panelId))
+      || existing.find((old) => !claimed.has(old.sceneId) && (!matchPanel || !old.panelId || old.panelId === fresh.panelId)
+        && sameSpan(old.startSec, fresh.startSec) && sameSpan(old.endSec, fresh.endSec));
     if (!prior) return fresh;
     claimed.add(prior.sceneId);
     return carryOver(prior, fresh);

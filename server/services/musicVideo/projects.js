@@ -292,33 +292,22 @@ export async function addProjectScenes(id, sceneInputs, { source = null } = {}) 
   }, { source });
 }
 
-/** Edit against the fresh record so a concurrent video lock cannot be bypassed. */
+/** Edit against the fresh record so concurrent changes are not overwritten. */
 export async function updateScene(id, sceneId, patch) {
-  const [{ applySceneUpdate }, { assertClipUnlocked, keepDirectorStillLock }] = await Promise.all([import('./projectsLogic.js'), import('./productionReview.js')]);
-  const { updated } = await mutateProjectRecord(id, (current) => {
-    assertClipUnlocked(current, sceneId, patch);
-    const outcome = applySceneUpdate(current, sceneId, patch);
-    return { ...outcome, project: keepDirectorStillLock(current, outcome.project, sceneId) };
-  });
+  const { applySceneUpdate } = await import('./projectsLogic.js');
+  const { updated } = await mutateProjectRecord(id, (current) => applySceneUpdate(current, sceneId, patch));
   return updated;
 }
 
 export async function deleteScene(id, sceneId) {
-  const [{ removeScene }, { assertClipUnlocked }] = await Promise.all([import('./projectsLogic.js'), import('./productionReview.js')]);
-  const { project } = await mutateProjectRecord(id, (current) => {
-    assertClipUnlocked(current, sceneId);
-    return { project: removeScene(current, sceneId) };
-  });
+  const { removeScene } = await import('./projectsLogic.js');
+  const { project } = await mutateProjectRecord(id, (current) => ({ project: removeScene(current, sceneId) }));
   return project;
 }
 
 export async function reorderProjectScenes(id, orderedIds) {
-  const [{ reorderScenes }, { assertClipUnlocked }] = await Promise.all([import('./projectsLogic.js'), import('./productionReview.js')]);
-  const { project } = await mutateProjectRecord(id, (current) => {
-    const project = reorderScenes(current, orderedIds);
-    for (const scene of project.scenes) assertClipUnlocked(current, scene.sceneId, scene);
-    return { project };
-  });
+  const { reorderScenes } = await import('./projectsLogic.js');
+  const { project } = await mutateProjectRecord(id, (current) => ({ project: reorderScenes(current, orderedIds) }));
   return project;
 }
 
@@ -328,9 +317,8 @@ export async function reorderProjectScenes(id, orderedIds) {
  * two at `options.atSec`. A locked still stays locked on every piece. Returns `{ project, scenes }` — the persisted project and the pieces.
  */
 export async function splitProjectScene(id, sceneId, options = {}) {
-  const [{ splitScene }, { carryShotLocks, assertClipUnlocked }] = await Promise.all([import('./projectsLogic.js'), import('./productionReview.js')]);
+  const [{ splitScene }, { carryShotLocks }] = await Promise.all([import('./projectsLogic.js'), import('./productionReview.js')]);
   return mutateProjectRecord(id, (current) => {
-    assertClipUnlocked(current, sceneId);
     const outcome = splitScene(current, sceneId, options);
     const from = Object.fromEntries(outcome.scenes.slice(1).map((piece) => [piece.sceneId, sceneId]));
     return { ...outcome, project: carryShotLocks(current, outcome.project, { from }) };
@@ -342,14 +330,8 @@ export async function splitProjectScene(id, sceneId, options = {}) {
  * of the split. Returns `{ project, scene }`.
  */
 export async function mergeProjectNextScene(id, sceneId, options = {}) {
-  const [{ mergeNextScene }, { assertClipUnlocked }] = await Promise.all([import('./projectsLogic.js'), import('./productionReview.js')]);
-  return mutateProjectRecord(id, (current) => {
-    const scenes = current.scenes || [];
-    const index = scenes.findIndex(scene => scene.sceneId === sceneId);
-    assertClipUnlocked(current, sceneId);
-    if (index >= 0 && scenes[index + 1]) assertClipUnlocked(current, scenes[index + 1].sceneId);
-    return mergeNextScene(current, sceneId, options);
-  });
+  const { mergeNextScene } = await import('./projectsLogic.js');
+  return mutateProjectRecord(id, (current) => mergeNextScene(current, sceneId, options));
 }
 
 /**
@@ -358,23 +340,16 @@ export async function mergeProjectNextScene(id, sceneId, options = {}) {
  * Returns `{ project, scene }`.
  */
 export async function mergeProjectPreviousScene(id, sceneId, options = {}) {
-  const [{ mergePreviousScene }, { assertClipUnlocked }] = await Promise.all([import('./projectsLogic.js'), import('./productionReview.js')]);
-  return mutateProjectRecord(id, (current) => {
-    const scenes = current.scenes || [];
-    const index = scenes.findIndex(scene => scene.sceneId === sceneId);
-    assertClipUnlocked(current, sceneId);
-    if (index > 0) assertClipUnlocked(current, scenes[index - 1].sceneId);
-    return mergePreviousScene(current, sceneId, options);
-  });
+  const { mergePreviousScene } = await import('./projectsLogic.js');
+  return mutateProjectRecord(id, (current) => mergePreviousScene(current, sceneId, options));
 }
 
 /**
  * Move the cut before a shot: the shot starts at `startSec` and the shot
- * before it ends there, so the two stay joined. Either shot's locked video
- * refuses the move. Returns `{ project, scene, previous }`.
+ * before it ends there, so the two stay joined. Returns `{ project, scene, previous }`.
  */
 export async function moveProjectSceneStart(id, sceneId, { startSec }) {
-  const [{ applySceneUpdate }, { assertClipUnlocked, keepDirectorStillLock }] = await Promise.all([import('./projectsLogic.js'), import('./productionReview.js')]);
+  const { applySceneUpdate } = await import('./projectsLogic.js');
   return mutateProjectRecord(id, (current) => {
     const scenes = current.scenes || [];
     const index = scenes.findIndex((scene) => scene.sceneId === sceneId);
@@ -387,10 +362,8 @@ export async function moveProjectSceneStart(id, sceneId, { startSec }) {
     if (previous && typeof previous.startSec === 'number' && startSec <= previous.startSec) {
       throw new ServerError('The shot before this one would have no length left', { status: 400, code: 'VALIDATION_ERROR' });
     }
-    assertClipUnlocked(current, sceneId, { startSec });
-    if (previous) assertClipUnlocked(current, previous.sceneId, { endSec: startSec });
-    let project = keepDirectorStillLock(current, applySceneUpdate(current, sceneId, { startSec }).project, sceneId);
-    if (previous) project = keepDirectorStillLock(current, applySceneUpdate(project, previous.sceneId, { endSec: startSec }).project, previous.sceneId);
+    let project = applySceneUpdate(current, sceneId, { startSec }).project;
+    if (previous) project = applySceneUpdate(project, previous.sceneId, { endSec: startSec }).project;
     return { project, scene: project.scenes[index], previous: previous ? project.scenes[index - 1] : null };
   });
 }
@@ -408,7 +381,7 @@ export async function markMediaPoolAssets(id, keys, mark) {
 // ---- scene takes (#8965) ----
 // Append candidate takes to one scene: `{ scene, appended }`. A take fills its
 // slot only while the slot is empty, unless `replaceSelection` names a still
-// re-render (takes.js). A locked still keeps its previous selection.
+// re-render (takes.js).
 export async function appendSceneTakes(id, sceneId, inputs) {
   const { appendSceneTakes: append } = await import('./takes.js');
   const outcome = await mutateProjectRecord(id, current => append(current, sceneId, inputs), {
@@ -443,12 +416,8 @@ export async function appendTakesAcrossScenes(id, items) {
 
 /** Explicitly select a take for its scene slot. Returns the updated scene. */
 export async function selectSceneTake(id, sceneId, takeId) {
-  const [{ selectSceneTake: select }, { assertClipUnlocked, keepDirectorStillLock }] = await Promise.all([import('./takes.js'), import('./productionReview.js')]);
-  const { scene } = await mutateProjectRecord(id, (current) => {
-    assertClipUnlocked(current, sceneId);
-    const outcome = select(current, sceneId, takeId);
-    return { ...outcome, project: keepDirectorStillLock(current, outcome.project, sceneId) };
-  });
+  const { selectSceneTake: select } = await import('./takes.js');
+  const { scene } = await mutateProjectRecord(id, (current) => select(current, sceneId, takeId));
   return scene;
 }
 
@@ -459,12 +428,11 @@ export async function selectSceneTake(id, sceneId, takeId) {
  * `kind: 'endImage'` puts a still on the shot's end frame instead.
  * The take keeps the prompt and provider of the take it came from, and the
  * shot's start or end frame prompt becomes the one that still was made from. A shot
- * whose video is locked refuses, as it does any other new selection.
  * Returns the updated scene.
  */
 export async function placeMediaPoolItem(id, sceneId, { kind, assetId, withAssetId = null }) {
-  const [{ appendSceneTakes: append, selectSceneTake: select }, { assertClipUnlocked, keepDirectorStillLock }, { projectTakeAssets }, { authoredFramePrompt }] = await Promise.all([
-    import('./takes.js'), import('./productionReview.js'), import('./mediaPool.js'), import('./handoff.js'),
+  const [{ appendSceneTakes: append, selectSceneTake: select }, { projectTakeAssets }, { authoredFramePrompt }] = await Promise.all([
+    import('./takes.js'), import('./mediaPool.js'), import('./handoff.js'),
   ]);
   // A still off the floor has no take left to name its prompt; its image sidecar still does.
   const placedStill = kind === 'video' ? withAssetId : assetId;
@@ -473,7 +441,6 @@ export async function placeMediaPoolItem(id, sceneId, { kind, assetId, withAsset
       .then(({ metadata }) => (typeof metadata?.prompt === 'string' ? metadata.prompt : null)).catch(() => null)
     : null;
   const { scene } = await mutateProjectRecord(id, (current) => {
-    assertClipUnlocked(current, sceneId);
     const origin = new Map(projectTakeAssets(current).filter(asset => asset.take).map(asset => [`${asset.kind}:${asset.ref}`, asset.take]));
     const still = kind === 'video' ? withAssetId : assetId;
     const clip = kind === 'video' ? assetId : withAssetId;
@@ -496,7 +463,7 @@ export async function placeMediaPoolItem(id, sceneId, { kind, assetId, withAsset
       const scenes = outcome.project.scenes.map((scene) => (scene.sceneId === sceneId ? { ...scene, [field]: framePrompt } : scene));
       outcome = { ...outcome, project: { ...outcome.project, scenes }, scene: scenes.find((scene) => scene.sceneId === sceneId) };
     }
-    return { ...outcome, project: keepDirectorStillLock(current, outcome.project, sceneId) };
+    return outcome;
   });
   return scene;
 }
@@ -508,25 +475,17 @@ export async function rejectUnusedSceneTakes(id, sceneId) {
   return { scene, rejected };
 }
 
-/** Swap a shot's start and end frames (and their prompts). A locked video refuses it. Returns the scene. */
+/** Swap a shot's start and end frames (and their prompts). Returns the scene. */
 export async function swapProjectSceneFrames(id, sceneId) {
-  const [{ swapSceneFrames }, { assertClipUnlocked, keepDirectorStillLock }] = await Promise.all([import('./takes.js'), import('./productionReview.js')]);
-  const { scene } = await mutateProjectRecord(id, (current) => {
-    assertClipUnlocked(current, sceneId);
-    const outcome = swapSceneFrames(current, sceneId);
-    return { ...outcome, project: keepDirectorStillLock(current, outcome.project, sceneId) };
-  });
+  const { swapSceneFrames } = await import('./takes.js');
+  const { scene } = await mutateProjectRecord(id, (current) => swapSceneFrames(current, sceneId));
   return scene;
 }
 
 /** Reject/restore a take and/or set its note. Returns the updated scene. */
 export async function reviewSceneTake(id, sceneId, takeId, review) {
-  const [{ reviewSceneTake: reviewTake }, { assertClipUnlocked }] = await Promise.all([import('./takes.js'), import('./productionReview.js')]);
-  const { scene } = await mutateProjectRecord(id, (current) => {
-    const outcome = reviewTake(current, sceneId, takeId, review);
-    assertClipUnlocked(current, sceneId, outcome.scene);
-    return outcome;
-  });
+  const { reviewSceneTake: reviewTake } = await import('./takes.js');
+  const { scene } = await mutateProjectRecord(id, (current) => reviewTake(current, sceneId, takeId, review));
   return scene;
 }
 
@@ -535,31 +494,17 @@ export async function reviewSceneTake(id, sceneId, takeId, review) {
  * write tail / PG row lock). `transform(project)` returns `{ project, ...result }`;
  * resolves to that outcome with the persisted project. Used by the treatment
  * service (#8980) so its revision checks run against the freshest record.
- * `options.source` marks an automation write for preserveAutomatedShotLocks;
- * `options.runId` names the autonomous run behind an `orchestrator` write.
  */
 export function mutateProjectRecord(id, transform, options = {}) {
   return mutateProjectRecordAdmitted(id, transform, options);
 }
 
-async function mutateProjectRecordAdmitted(id, transform, { source = null, runId = null } = {}, mutate = null) {
-  const { preserveAutomatedShotLocks } = source ? await import('./productionReview.js') : {};
+async function mutateProjectRecordAdmitted(id, transform, _options = {}, mutate = null) {
   let dropped = null;
   const write = mutate || (await selectBackend()).mutateProjectRecord;
   const outcome = await write(id, async (current) => {
     // A transform may be async: the thumbnail heal re-checks job liveness under the lock.
     const outcome = await transform(current);
-    if (source) {
-      const guarded = preserveAutomatedShotLocks(current, outcome.project, source, { runId });
-      outcome.project = guarded.project;
-      if (guarded.rejected) {
-        outcome.rejected = true;
-        if (outcome.scenes) outcome.scenes = guarded.project.scenes;
-        if (outcome.scene) outcome.scene = guarded.project.scenes.find(scene => scene.sceneId === outcome.scene.sceneId) || null;
-        if (outcome.updated) outcome.updated = guarded.project.scenes.find(scene => scene.sceneId === outcome.updated.sceneId) || null;
-        if ('replaced' in outcome) outcome.replaced = 0;
-      }
-    }
     await assertNewMediaSelections(current, outcome.project);
     dropped = { project: current, assets: droppedTakeAssets(current, outcome.project) };
     return { ...outcome, project: retainMusicVideoDependencies(current, outcome.project) };

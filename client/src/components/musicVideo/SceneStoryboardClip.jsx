@@ -17,7 +17,7 @@ export const storyboardClipOffered = ({ scene, layer, performance }) => layer ==
 /**
  * "Clip from storyboard" (still, then its clip) and "Still only" (the still to
  * review before animating it). `refusal` is what holds the clip back (saving,
- * a locked clip, a lane that is off).
+ * a lane that is off).
  */
 export default function SceneStoryboardClip({ refusal = null, generatingFrame = false, onClip, onStill }) {
   return (

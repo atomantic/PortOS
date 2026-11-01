@@ -310,15 +310,15 @@ describe('swapping a shot from unused takes', () => {
     expect((await request(app).post(`${base()}/scenes/${sceneA.sceneId}/takes/use`).send({ kind: 'image', assetId: 'missing.png' })).status).toBe(400);
     expect((await request(app).post(`${base()}/scenes/${sceneA.sceneId}/takes/use`).send({ kind: 'endImage', assetId: 'a-1.png', withAssetId: 'clip-a1' })).status).toBe(400);
 
-    // A shot whose video is locked takes nothing new until it is unlocked.
+    // Legacy video locks do not prevent changing the reference or discard its clip.
     const { setShotLocks } = await import('../services/musicVideo/productionReview.js');
     await projects.mutateProjectRecord(project.id, (current) => ({ project: setShotLocks(
       setShotLocks(current, { sceneIds: [sceneA.sceneId], locked: true, stage: 'still' }),
       { sceneIds: [sceneA.sceneId], locked: true, stage: 'video' },
     ) }));
-    const refused = await request(app).post(`${base()}/scenes/${sceneA.sceneId}/takes/use`).send({ kind: 'image', assetId: 'a-1.png' });
-    expect(refused.status).toBe(409);
-    expect((await reload()).scenes.find((scene) => scene.sceneId === sceneA.sceneId).referenceImageId).toBe('b-2.png');
+    const changed = await request(app).post(`${base()}/scenes/${sceneA.sceneId}/takes/use`).send({ kind: 'image', assetId: 'a-1.png' });
+    expect(changed.status).toBe(200);
+    expect((await reload()).scenes.find((scene) => scene.sceneId === sceneA.sceneId)).toMatchObject({ referenceImageId: 'a-1.png', videoHistoryId: 'clip-b2' });
   });
 });
 
@@ -372,9 +372,8 @@ describe('a swapped still brings its frame prompt', () => {
   });
 });
 
-describe('a director\'s still change keeps the shot locked', () => {
-  // Uniquely catches a swapped still or edited prompt leaving the shot "changed since you locked it", so its clip can't render.
-  it('re-binds the still lock on Use, take select and a prompt edit, and drops a clip lock made from the old still', async () => {
+describe('a director can change legacy locked shots', () => {
+  it('selects a new still and edits its prompt without losing the selected clip or prior takes', async () => {
     for (const name of ['a-1.png', 'a-2.png', 'floor.png']) seedImage(name);
     seedVideoHistory([{ id: 'clip-a1' }]);
     await addTake(sceneA.sceneId, { kind: 'image', assetId: 'a-1.png', source: 'generated' });
@@ -382,26 +381,15 @@ describe('a director\'s still change keeps the shot locked', () => {
     await addTake(sceneA.sceneId, { kind: 'video', assetId: 'clip-a1', source: 'generated', sourceImageId: 'a-1.png' });
     await addTake(sceneB.sceneId, { kind: 'image', assetId: 'floor.png', source: 'generated' });
     await request(app).delete(`${base()}/scenes/${sceneB.sceneId}`);
-    const { setShotLocks, shotLocks, clipLocks } = await import('../services/musicVideo/productionReview.js');
+    const { setShotLocks } = await import('../services/musicVideo/productionReview.js');
     const lockA = async (stage) => projects.mutateProjectRecord(project.id, (current) => ({ project: setShotLocks(current, { sceneIds: [sceneA.sceneId], locked: true, stage }) }));
     await lockA('still');
-    const stillLock = async () => shotLocks(await reload())[sceneA.sceneId];
-
     expect((await request(app).post(`${base()}/scenes/${sceneA.sceneId}/takes/use`).send({ kind: 'image', assetId: 'floor.png' })).status).toBe(200);
-    expect(await stillLock()).toBe('locked');
     expect((await request(app).post(`${base()}/scenes/${sceneA.sceneId}/takes/${second.body.take.takeId}/select`)).status).toBe(200);
-    expect(await stillLock()).toBe('locked');
     expect((await request(app).patch(`${base()}/scenes/${sceneA.sceneId}`).send({ prompt: 'Slow push toward the reel' })).status).toBe(200);
-    expect(await stillLock()).toBe('locked');
-
-    // A clip lock made from the old still goes stale with it; a director edit then re-locks the still and drops the clip lock.
-    await lockA('video');
-    await projects.mutateProjectRecord(project.id, (current) => ({ project: { ...current,
-      scenes: current.scenes.map((scene) => scene.sceneId === sceneA.sceneId ? { ...scene, endImageId: 'a-1.png' } : scene) } }));
-    expect(await stillLock()).toBe('changed');
-    expect((await request(app).patch(`${base()}/scenes/${sceneA.sceneId}`).send({ referenceImageId: 'floor.png' })).status).toBe(200);
-    expect(await stillLock()).toBe('locked');
-    expect(clipLocks(await reload())[sceneA.sceneId]).toBe('open');
+    const updated = (await reload()).scenes.find(scene => scene.sceneId === sceneA.sceneId);
+    expect(updated).toMatchObject({ referenceImageId: 'a-2.png', videoHistoryId: 'clip-a1', prompt: 'Slow push toward the reel' });
+    expect(updated.takes.map(take => take.assetId)).toEqual(expect.arrayContaining(['a-1.png', 'a-2.png', 'floor.png', 'clip-a1']));
   });
 });
 

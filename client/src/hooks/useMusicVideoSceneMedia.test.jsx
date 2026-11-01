@@ -152,13 +152,13 @@ describe('useMusicVideoSceneMedia Casting guides (#12763)', () => {
     const castInputs = { ingredientId: 'cat-chr-x', guides: ['child.png'], sheets: [] };
     expect(generateImage.mock.calls.at(-1)[0].musicVideo).toMatchObject({ castInputs, replaceSelection: true });
     expect(addMusicVideoSceneTake).toHaveBeenCalledWith('p4', 's1', {
-      kind: 'image', assetId: 'done.png', source: 'generated', castInputs, replaceSelection: true,
+      kind: 'image', assetId: 'done.png', source: 'generated', castInputs, replaceSelection: true, expectedSelection: null,
     }, { silent: true });
     generateImage.mockResolvedValueOnce({ filename: 'end.png' });
     await act(async () => { await result.current.generateEndFrame(cast.scenes[0], { replaceSelection: true }); });
     expect(generateImage.mock.calls.at(-1)[0].musicVideo).toMatchObject({ slot: 'end', castInputs, replaceSelection: true });
     expect(addMusicVideoSceneTake).toHaveBeenLastCalledWith('p4', 's1', {
-      kind: 'endImage', assetId: 'end.png', source: 'generated', castInputs, replaceSelection: true,
+      kind: 'endImage', assetId: 'end.png', source: 'generated', castInputs, replaceSelection: true, expectedSelection: null,
     }, { silent: true });
   });
 });

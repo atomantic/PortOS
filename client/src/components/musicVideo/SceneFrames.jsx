@@ -70,7 +70,7 @@ const REFERENCE_LABELS = { '': 'Prompt only', start: 'Start frame', end: 'End fr
 export default function SceneFrames({
   project = null, castMedia = null, greyboxPlaces = {}, greyboxSaving = false, onGreyboxSaving, scene, index, endFrames, generatingFrame = false, generatingEndFrame = false, onGenerateFrame, onGenerateEndFrame,
   onEditLocal, onSave, onOpenPreview, takeBusy = false, onSelectTake, onReviewTake, onSwap = null, onImportTake = null,
-  onContinueFromPrevious = null, previousHasClip = false, clipLocked = false, stillLocked = false, onSwapFrames = null, assetMarks = null, onMarkTake = null,
+  onContinueFromPrevious = null, previousHasClip = false, onSwapFrames = null, assetMarks = null, onMarkTake = null,
 }) {
   const greybox = musicVideoGreyboxReference(project, scene, greyboxPlaces);
   const [referenceSaving, setReferenceSaving] = useState(false);
@@ -83,7 +83,6 @@ export default function SceneFrames({
   const [instruction, setInstruction] = useState('');
   const frames = { start: scene.referenceImageId || null, end: endFrames ? scene.endImageId || null : null };
   const refOf = (which) => (frames[refs[which]] ? refs[which] : '');
-  const lockedTitle = 'Video locked. Unlock the video to change it.';
   const id = (name) => `mv-scene-${scene.sceneId}-${name}`;
 
   const column = (which) => {
@@ -99,12 +98,11 @@ export default function SceneFrames({
     const kind = start ? 'image' : 'endImage';
     const selected = imageId ? (scene.takes || []).find((take) => take?.kind === kind && take.assetId === imageId) : null;
     const olderLook = selected ? castLookForTake(project, scene, selected, castMedia).status === 'older' : false;
-    const frameLocked = clipLocked || stillLocked;
     const rerender = () => {
-      if (frameLocked || greyboxBlocked || generating || needsPrompt) return;
+      if (greyboxBlocked || generating || needsPrompt) return;
       (start ? onGenerateFrame : onGenerateEndFrame)?.(scene, { referenceImageId: ref ? frames[ref] : null, replaceSelection: true });
     };
-    const refineLocked = greyboxBlocked || !!generating || (!start && clipLocked);
+    const refineLocked = greyboxBlocked || !!generating;
     const refine = (e) => {
       e.preventDefault();
       if (!instruction.trim() || refineLocked) return;
@@ -123,15 +121,15 @@ export default function SceneFrames({
         {/* A greybox or a storyboard panel adds to the still's prompt, so its full input shows here. */}
         {(greybox?.reference || scene.panelId) && <SceneFramePromptPreview project={project} scene={scene} castMedia={castMedia} greybox={greybox} slot={which} referenceImageId={ref ? frames[ref] : null} />}
         <div className="flex flex-wrap items-center gap-2">
-          <button type="button" onClick={render} disabled={greyboxBlocked || !!generating || needsPrompt || (!start && clipLocked)} className={PRIMARY_BUTTON}
+          <button type="button" onClick={render} disabled={greyboxBlocked || !!generating || needsPrompt} className={PRIMARY_BUTTON}
             title={needsPrompt ? 'Describe the end frame first' : ref ? `Render from the ${REFERENCE_LABELS[ref].toLowerCase()} with this prompt` : 'Render from this prompt'}>
             {generating ? <Activity size={14} className="animate-spin" /> : start ? <ImageIcon size={14} /> : <Wand2 size={14} />}
             {generating ? 'Generating…' : start ? (imageId ? 'New frame take' : 'Generate frame') : (imageId ? 'New end frame take' : 'Generate end frame')}
           </button>
           {olderLook && (
-            <button type="button" onClick={rerender} disabled={greyboxBlocked || !!generating || needsPrompt || frameLocked} className={SECONDARY_BUTTON}
+            <button type="button" onClick={rerender} disabled={greyboxBlocked || !!generating || needsPrompt} className={SECONDARY_BUTTON}
               aria-label={`Re-render ${start ? 'start' : 'end'} frame`}
-              title={clipLocked ? lockedTitle : stillLocked ? 'Still locked. Unlock the still to re-render it.' : 'Render this frame again from the current Casting look and use it'}>
+              title="Render this frame again from the current Casting look and use it">
               Re-render
             </button>
           )}
@@ -151,9 +149,9 @@ export default function SceneFrames({
             </button>
           )}
           {onSwap && (
-            <button type="button" onClick={() => onSwap(start ? 'image' : 'endImage')} disabled={takeBusy || clipLocked} className={SECONDARY_BUTTON}
+            <button type="button" onClick={() => onSwap(start ? 'image' : 'endImage')} disabled={takeBusy} className={SECONDARY_BUTTON}
               aria-label={`Swap ${start ? 'start' : 'end'} frame from unused`}
-              title={clipLocked ? lockedTitle : `Pick a still made for this video that no shot uses as the ${start ? 'start' : 'end'} frame`}>
+              title={`Pick a still made for this video that no shot uses as the ${start ? 'start' : 'end'} frame`}>
               <Shuffle size={14} /> Swap
             </button>
           )}
@@ -191,7 +189,7 @@ export default function SceneFrames({
             )}
             {!start && scene.endImageId && (
               <button type="button" onClick={() => { onEditLocal(scene.sceneId, { endImageId: null }); onSave(scene.sceneId, { endImageId: null }); }}
-                disabled={clipLocked} className={SECONDARY_BUTTON}
+                className={SECONDARY_BUTTON}
                 aria-label={`Clear scene ${index + 1} end frame`} title="The clip ends where the model takes it; the end frame's takes stay">
                 <X size={14} /> No end frame
               </button>
@@ -227,8 +225,8 @@ export default function SceneFrames({
         </div>
       ) : column('start')}
       {endFrames && onSwapFrames && frames.start && frames.end && (
-        <button type="button" onClick={onSwapFrames} disabled={takeBusy || clipLocked} className={SECONDARY_BUTTON}
-          title={clipLocked ? lockedTitle : 'The start frame becomes the end frame and the end frame the start, each with its prompt'}>
+        <button type="button" onClick={onSwapFrames} disabled={takeBusy} className={SECONDARY_BUTTON}
+          title="The start frame becomes the end frame and the end frame the start, each with its prompt">
           <ArrowLeftRight size={14} /> Swap start and end
         </button>
       )}

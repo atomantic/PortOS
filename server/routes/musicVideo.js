@@ -1742,7 +1742,7 @@ async function takeAssetExists(kind, assetId) {
 // Add one candidate take to a scene: the synchronous image lane's inline
 // render, or an asset the director imports from the gallery.
 router.post('/:id/scenes/:sceneId/takes', asyncHandler(async (req, res) => {
-  const { kind, assetId, source = 'imported', provider, originalName, use, sourceImageId, inputAssets, castInputs, replaceSelection } = validateRequest(musicVideoTakeInputSchema, req.body);
+  const { kind, assetId, source = 'imported', provider, originalName, use, sourceImageId, inputAssets, castInputs, replaceSelection, expectedSelection } = validateRequest(musicVideoTakeInputSchema, req.body);
   if (!(await takeAssetExists(kind, assetId))) {
     throw new ServerError(`${kind === 'video' ? 'Video' : 'Image'} not found in this install's media library`, { status: 400, code: 'TAKE_ASSET_NOT_FOUND' });
   }
@@ -1750,7 +1750,7 @@ router.post('/:id/scenes/:sceneId/takes', asyncHandler(async (req, res) => {
     if (!(await takeAssetExists('image', imageId))) throw new ServerError('Dependency image not found', { status: 400, code: 'TAKE_ASSET_NOT_FOUND' });
   }
   const { scene, appended } = await appendSceneTakes(req.params.id, req.params.sceneId, [{
-    kind, assetId, source, provider: provider ?? (source === 'generated' ? 'portos' : null), originalName, use, sourceImageId, inputAssets, castInputs, replaceSelection,
+    kind, assetId, source, provider: provider ?? (source === 'generated' ? 'portos' : null), originalName, use, sourceImageId, inputAssets, castInputs, replaceSelection, expectedSelection,
   }]);
   res.status(201).json({ scene, take: appended[0] });
 }));
