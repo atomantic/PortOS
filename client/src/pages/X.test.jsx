@@ -232,7 +232,7 @@ describe('X page', () => {
     const user = userEvent.setup();
     let rejectRetry;
     api.getXPosts.mockRejectedValueOnce(new Error('Posts unavailable'))
-      .mockImplementationOnce(() => new Promise((resolve, reject) => { rejectRetry = reject; }));
+      .mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectRetry = reject; }));
     api.syncXAccount.mockResolvedValue({ account, posts: [{ id: 'new-post', body: 'New diagnostic post' }], ingested: 1 });
     renderPage(`/x/${account.id}/posts`);
     await screen.findByText('Posts unavailable');
