@@ -29,7 +29,7 @@
 
 import { createHash, randomUUID } from 'crypto';
 import { applyImageVisualProfile } from './visualProfile.js';
-import { musicVideoCastGuideReferences, musicVideoLimitReferenceFiles, musicVideoPanelArtReferences, musicVideoStyleImages, musicVideoReferenceCapacity, musicVideoStylePrompt, musicVideoStyleReferenceCapacity } from '../../lib/musicVideoConditioning.js';
+import { musicVideoCastGuideReferences, musicVideoLimitReferenceFiles, musicVideoPanelArtReferences, musicVideoReferenceChoices, musicVideoStyleImages, musicVideoReferenceCapacity, musicVideoStylePrompt, musicVideoStyleReferenceCapacity } from '../../lib/musicVideoConditioning.js';
 import { musicVideoFrameModelInput } from '../../lib/musicVideoShotPrompt.js';
 import { musicVideoFrameGenSize } from '../../lib/musicVideoAspect.js';
 import { join } from 'node:path';
@@ -215,7 +215,7 @@ async function applyMusicVideoSceneInputs(data, { project, mode, localModel, clo
     const positionsUnknown = Boolean(data.mediaProviderPeerId && initInputCount);
     const sentFiles = positionsUnknown ? [] : namedReferenceFiles;
     const sentInitCount = initInputCount;
-    const known = [greybox?.reference, ...musicVideoPanelArtReferences(scene), ...musicVideoCastGuideReferences(project, scene, castMedia), ...(project?.visualSpec?.references || [])];
+    const known = [greybox?.reference, ...musicVideoPanelArtReferences(scene), ...musicVideoCastGuideReferences(project, scene, castMedia), ...(project?.visualSpec?.references || []), ...musicVideoReferenceChoices(project)];
     const panelIndex = scene?.panelArt ? sentFiles.indexOf(scene.panelArt) : -1;
     // The director's text plus each labeled block PortOS adds (#11317), from the
     // composer the server's production run uses for the same still.

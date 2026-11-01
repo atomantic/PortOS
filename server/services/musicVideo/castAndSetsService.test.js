@@ -1288,7 +1288,7 @@ it('holds reference room for fixed cast sheets and refuses an approval that cann
   const { musicVideoConditioningReferences } = await import('../../lib/musicVideoConditioning.js');
   const scene = { prompt: 'Close up of Anika' };
   expect(musicVideoConditioningReferences(approved, scene).map((ref) => ref.id))
-    .toEqual(['mvr-cs-character', 'mvr-cs-expressions', 'mvr-cs-cast-anika', 'mvr-cs-face-anika']);
+    .toEqual(['mvr-cs-character', 'mvr-cs-expressions', 'mvr-cs-cast-anika', 'mvr-cs-face-anika', 'mvr-pull-Anika']);
   expect(musicVideoConditioningReferences(approved, { ...scene, frameReferenceIds: ['mvr-cs-face-anika'] }).map((ref) => ref.id))
     .toEqual(['mvr-cs-face-anika']);
   expect(musicVideoConditioningReferences({ ...approved, mediaMode: 'code-only' }, { ...scene, frameReferenceIds: ['mvr-cs-face-anika'] }))

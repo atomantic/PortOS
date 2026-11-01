@@ -117,18 +117,20 @@ describe('musicVideoConditioningReferences with an approved Cast & Sets check-in
     expect(ids(musicVideoConditioningReferences(withProps, scene({ sectionIndex: 0 })))).toEqual(['lead-sheet.png', 'hill.png', 'kevin-sheet.png']);
   });
 
-  it('trades the set plate for each person face sheet on a close-up', () => {
+  it('prioritizes each person and face sheet on a close-up, retaining the set when it fits', () => {
     const withFaces = { ...checkedIn, visualSpec: { references: [...references,
       { id: 'mvr-cs-expressions', imageId: 'lead-face.png', role: 'character' },
       { id: 'mvr-cs-face-kevin', imageId: 'kevin-face.png', role: 'character' }] } };
     expect(ids(musicVideoConditioningReferences(withFaces, scene({ sectionIndex: 0, framePrompt: 'Arm\'s-length selfie: Kevin and her cheek to cheek' }))))
+      .toEqual(['lead-sheet.png', 'lead-face.png', 'kevin-sheet.png', 'kevin-face.png', 'hill.png']);
+    expect(ids(musicVideoConditioningReferences(withFaces, scene({ sectionIndex: 0, framePrompt: 'Close-up of Kevin' }), null, null, { limit: 4 })))
       .toEqual(['lead-sheet.png', 'lead-face.png', 'kevin-sheet.png', 'kevin-face.png']);
     expect(ids(musicVideoConditioningReferences(withFaces, scene({ sectionIndex: 0, framePrompt: 'Close-up of her laughing' }))))
       .toEqual(['lead-sheet.png', 'lead-face.png', 'hill.png']);
     expect(ids(musicVideoConditioningReferences(withFaces, scene({ sectionIndex: 0, framePrompt: 'Close up of her laughing' }))))
       .toEqual(['lead-sheet.png', 'lead-face.png', 'hill.png']);
     expect(ids(musicVideoConditioningReferences(withFaces, scene({ sectionIndex: 0, framePrompt: 'At arm’s length, Kevin and her' }))))
-      .toEqual(['lead-sheet.png', 'lead-face.png', 'kevin-sheet.png', 'kevin-face.png']);
+      .toEqual(['lead-sheet.png', 'lead-face.png', 'kevin-sheet.png', 'kevin-face.png', 'hill.png']);
     expect(ids(musicVideoConditioningReferences(withFaces, scene({ sectionIndex: 0 })))).toEqual(['lead-sheet.png', 'hill.png', 'kevin-sheet.png']);
   });
 

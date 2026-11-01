@@ -324,6 +324,18 @@ it('retains automatic panel art within the renderer cap and records only the sen
   expect(data.musicVideo.castInputs.sheets).toEqual(sheets.slice(0, 3));
 });
 
+it('names a retained overflow face sheet in the composed board prompt', async () => {
+  const { PATHS } = await import('../../lib/paths.js');
+  mkdirSync(PATHS.images, { recursive: true });
+  writeFileSync(join(PATHS.images, 'face.png'), 'fixture');
+  getSettings.mockResolvedValue({ imageGen: { mode: 'codex', ...CODEX_ON } });
+  getProject.mockResolvedValue({ visualSpec: { references: [] }, castAndSets: { status: 'approved', overflowFaceReferences: [
+    { id: 'mvr-cs-face-example', imageId: 'face.png', role: 'character', label: 'Example face sheet' },
+  ] }, scenes: [{ sceneId: 's1' }] });
+  const { data } = await run({ prompt: 'Close-up', referenceImageFiles: ['face.png'], musicVideo: { projectId: 'mv-1', sceneId: 's1', compose: true } });
+  expect(data.prompt).toContain('Reference image 1 is Example face sheet');
+});
+
 it('keeps FLUX.3 music-video references instead of treating the model as text-only', async () => {
   const { PATHS } = await import('../../lib/paths.js');
   mkdirSync(PATHS.images, { recursive: true });

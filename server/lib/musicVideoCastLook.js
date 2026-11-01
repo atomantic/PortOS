@@ -1,4 +1,4 @@
-import { musicVideoCastGuideReferences } from './musicVideoConditioning.js';
+import { musicVideoCastGuideReferences, musicVideoReferenceChoices } from './musicVideoConditioning.js';
 import { IMAGE_REFERENCE_REQUEST_LIMIT } from './imageGenCapabilities.js';
 
 /**
@@ -71,7 +71,7 @@ export function castLookForTake(project, scene, take, castMedia) {
   if (!take || !Object.hasOwn(take, 'castInputs')) return { status: 'unknown' };
   const inputs = musicVideoCastInputsRecord(take.castInputs);
   if (!inputs) return { status: 'unknown' };
-  const references = project?.visualSpec?.references || [];
+  const references = musicVideoReferenceChoices(project);
   const sheetOlder = inputs.sheets.some((sheet) => {
     const current = references.find((ref) => ref?.id === sheet.id);
     return !current || current.imageId !== sheet.imageId;
