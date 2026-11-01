@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { beforeAll, describe, it, expect } from 'vitest';
 import { clampToCharLimit, countWords, escapeRegExp, isNonBlankStr, isStr, trimTo, trimToClause } from './textUtils.js';
 import { collectClientSources, collectServerSources, readClientSource, readServerSource } from './testHelper.js';
 
@@ -163,11 +163,22 @@ const idiomCount = (idioms) => (source) => idioms
 
 const escapeIdiomCount = idiomCount(ESCAPE_IDIOMS);
 
+// The three idiom guards below read the same trees. Walking client/src three
+// times was most of this always-run file (one local read was 654ms / 3694 files).
+let serverCorpus = [];
+let clientCorpus = [];
+beforeAll(() => {
+  serverCorpus = collectServerSources().map((rel) => [rel, readServerSource(rel)]);
+  clientCorpus = collectClientSources().map((rel) => [rel, readClientSource(rel)]);
+});
+const corpusSource = (corpus, rel) => corpus.find(([name]) => name === rel)?.[1] ?? '';
+const corpusOffenders = (corpus, exempt, count) => corpus
+  .filter(([rel, source]) => rel !== exempt && count(source) > 0)
+  .map(([rel]) => rel);
+
 describe('no private escapeRegExp', () => {
   it('leaves lib/textUtils.js as the only RegExp-escape implementation under server/', () => {
-    const offenders = collectServerSources()
-      .filter((rel) => rel !== 'lib/textUtils.js')
-      .filter((rel) => escapeIdiomCount(readServerSource(rel)) > 0);
+    const offenders = corpusOffenders(serverCorpus, 'lib/textUtils.js', escapeIdiomCount);
     expect(
       offenders,
       `these re-inline the RegExp escape — import escapeRegExp from lib/textUtils.js instead: ${offenders.join(', ')}`
@@ -181,8 +192,7 @@ describe('no private escapeRegExp', () => {
   // so by #5790. `collectClientSources` counts `.jsx` and client TESTS too; see its
   // docstring.
   it('leaves no RegExp-escape implementation anywhere under client/src/', () => {
-    const offenders = collectClientSources()
-      .filter((rel) => escapeIdiomCount(readClientSource(rel)) > 0);
+    const offenders = corpusOffenders(clientCorpus, null, escapeIdiomCount);
     expect(
       offenders,
       `these re-inline the RegExp escape — import escapeRegExp from lib/textUtils.js instead: ${offenders.join(', ')}`
@@ -192,11 +202,11 @@ describe('no private escapeRegExp', () => {
   // Both walks feed the same detector, so pin that it actually fires — an empty
   // offender list is equally what a walk returning nothing produces.
   it('detects a re-inlined copy under any of its spellings', () => {
-    expect(escapeIdiomCount(readServerSource('lib/textUtils.js'))).toBeGreaterThan(0);
+    expect(escapeIdiomCount(corpusSource(serverCorpus, 'lib/textUtils.js'))).toBeGreaterThan(0);
     // The client walk has no exempt file left to prove itself against, so pin it
     // on a synthetic copy instead — an empty offender list must mean "nobody
     // spells it", not "the walk read nothing".
-    expect(collectClientSources().length).toBeGreaterThan(100);
+    expect(clientCorpus.length).toBeGreaterThan(100);
     expect(escapeIdiomCount("const escapeRegExp = (s) => s;")).toBeGreaterThan(0);
     expect(escapeIdiomCount('const x = 1;')).toBe(0);
   });
@@ -230,9 +240,7 @@ const wordCountIdiomCount = idiomCount(WORD_COUNT_IDIOMS);
 
 describe('no private countWords', () => {
   it('leaves lib/textUtils.js as the only whitespace word count under server/', () => {
-    const offenders = collectServerSources()
-      .filter((rel) => rel !== 'lib/textUtils.js')
-      .filter((rel) => wordCountIdiomCount(readServerSource(rel)) > 0);
+    const offenders = corpusOffenders(serverCorpus, 'lib/textUtils.js', wordCountIdiomCount);
     expect(
       offenders,
       `these re-spell the word count — import countWords from lib/textUtils.js instead: ${offenders.join(', ')}`
@@ -242,8 +250,7 @@ describe('no private countWords', () => {
   // The client walk allows no exemption either: `client/src/lib/textUtils.js`
   // re-exports this module's count, and the formatters copy is gone.
   it('leaves no whitespace word count anywhere under client/src/', () => {
-    const offenders = collectClientSources()
-      .filter((rel) => wordCountIdiomCount(readClientSource(rel)) > 0);
+    const offenders = corpusOffenders(clientCorpus, null, wordCountIdiomCount);
     expect(
       offenders,
       `these re-spell the word count — import countWords from lib/textUtils.js instead: ${offenders.join(', ')}`
@@ -251,7 +258,7 @@ describe('no private countWords', () => {
   });
 
   it('detects a re-spelled count under any of its idioms, and not a tokenizer', () => {
-    expect(wordCountIdiomCount(readServerSource('lib/textUtils.js'))).toBeGreaterThan(0);
+    expect(wordCountIdiomCount(corpusSource(serverCorpus, 'lib/textUtils.js'))).toBeGreaterThan(0);
     expect(wordCountIdiomCount('const wordCount = (t) => t.split(/\\s+/).filter(Boolean).length;')).toBeGreaterThan(0);
     expect(wordCountIdiomCount('function countWords(text) { return 0; }')).toBeGreaterThan(0);
     expect(wordCountIdiomCount('for (const m of text.matchAll(/\\S+/g)) {}')).toBe(0);
@@ -295,9 +302,7 @@ const stringHelperDeclarationCount = (source) => STRING_HELPER_IDIOMS
 
 describe('no private string predicate or bounder', () => {
   it('leaves lib/textUtils.js as the only string predicate or bounder under server/', () => {
-    const offenders = collectServerSources()
-      .filter((rel) => rel !== 'lib/textUtils.js')
-      .filter((rel) => stringHelperDeclarationCount(readServerSource(rel)) > 0);
+    const offenders = corpusOffenders(serverCorpus, 'lib/textUtils.js', stringHelperDeclarationCount);
     expect(
       offenders,
       `these re-declare a string predicate or a trimTo-shaped bounder — import isStr / isNonBlankStr / trimTo from lib/textUtils.js instead: ${offenders.join(', ')}`
@@ -306,8 +311,7 @@ describe('no private string predicate or bounder', () => {
 
   // The client mirror re-exports the predicates, so nothing over there needs one.
   it('leaves no string predicate or bounder anywhere under client/src/', () => {
-    const offenders = collectClientSources()
-      .filter((rel) => stringHelperDeclarationCount(readClientSource(rel)) > 0);
+    const offenders = corpusOffenders(clientCorpus, null, stringHelperDeclarationCount);
     expect(
       offenders,
       `these re-declare a string predicate or a trimTo-shaped bounder — import isStr / isNonBlankStr / trimTo from lib/textUtils instead: ${offenders.join(', ')}`
@@ -316,8 +320,8 @@ describe('no private string predicate or bounder', () => {
 
   it('detects a re-rolled copy under any of its spellings, and not a domain predicate', () => {
     // Positive control on the owner: isStr, isNonBlankStr, and the two-line trimTo.
-    expect(stringHelperDeclarationCount(readServerSource('lib/textUtils.js'))).toBe(3);
-    expect(collectClientSources().length).toBeGreaterThan(100);
+    expect(stringHelperDeclarationCount(corpusSource(serverCorpus, 'lib/textUtils.js'))).toBe(3);
+    expect(clientCorpus.length).toBeGreaterThan(100);
 
     const fires = [
       "const isStr = (v) => typeof v === 'string';",
