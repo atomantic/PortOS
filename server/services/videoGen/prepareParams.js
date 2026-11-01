@@ -84,6 +84,15 @@ import { audioDurationToFrames } from './audioDuration.js';
 import { RUNWAY_SPECIAL_VIDEO_MODES } from '../../lib/runwaySpecialVideoModels.js';
 import { isMiniMaxH3SpeedProfileRequest } from '../../lib/minimaxH3SpeedProfiles.js';
 
+/** Hosted lanes cannot consume the generic reference inputs used by local models. */
+export function hostedReferenceInputsError({ backend, body, uploads = {} }) {
+  if (backend === VIDEO_GEN_MODE.LOCAL
+    || !((body.referenceImageFiles?.length && !body.guidanceImageFile) || body.referenceVideoIds?.length
+      || REFERENCE_AUDIO_FIELDS.some((field) => uploads[field]))) return null;
+  return new ServerError('Reference images, clips and voice clips are only used by local reference-to-video models.',
+    { status: 400, code: 'VIDEO_REFERENCE_INPUTS_LOCAL_ONLY' });
+}
+
 async function validateMiniMaxH3SpeedParams(model, params, settings) {
   const hasProfile = isMiniMaxH3SpeedProfileRequest(params.speedProfileId);
   if (!hasProfile && ['minimax_h3', 'minimax_h3_cuda'].includes(model?.runtime) && params.speedProfileId && params.speedProfileId !== 'quality') {
@@ -482,14 +491,10 @@ export async function prepareVideoGenParams({ body, uploads, localOnlyParamKeys 
 
   // Reference inputs condition a local reference-to-video model only; a hosted
   // lane would enqueue an ordinary render that silently ignores them.
-  if (backend !== VIDEO_GEN_MODE.LOCAL
-    && ((body.referenceImageFiles?.length && !body.guidanceImageFile) || body.referenceVideoIds?.length
-      || REFERENCE_AUDIO_FIELDS.some((field) => uploads[field]))) {
+  const hostedReferenceError = hostedReferenceInputsError({ backend, body, uploads });
+  if (hostedReferenceError) {
     await cleanupMultipartTemp(uploads);
-    throw new ServerError(
-      'Reference images, clips and voice clips are only used by local reference-to-video models.',
-      { status: 400, code: 'VIDEO_REFERENCE_INPUTS_LOCAL_ONLY' },
-    );
+    throw hostedReferenceError;
   }
 
   // Track every durable file we've already copied into PATHS.uploads so a

@@ -173,6 +173,36 @@ describe('videoGen/grok — generateVideo', () => {
     await closeChild();
   });
 
+  it('pins the still as first_frame and sends the cast sheets to reference_to_video', async () => {
+    const started = vi.fn();
+    videoGenEvents.on('started', started);
+    await grok.generateVideo({
+      prompt: 'a subject steps into view', sourceImagePath: '/abs/frame.png', width: 1280, height: 720,
+      castReferences: [{ path: '/abs/lead.png', label: 'Lead — character sheet' }, { path: '/abs/guest.png', label: 'Guest · alternate look' }],
+    });
+    const prompt = posixPath(promptOf());
+    expect(prompt).toContain('reference_to_video tool (not image_to_video)');
+    expect(prompt).toContain('Set first_frame to /abs/frame.png');
+    expect(prompt).toContain('in this order: /abs/lead.png, /abs/guest.png');
+    // With first_frame set, the first images entry is <IMAGE_1>.
+    expect(prompt).toContain('<IMAGE_1> shows how Lead looks; <IMAGE_2> shows how Guest looks.');
+    expect(prompt).toContain('a subject steps into view');
+    expect(prompt).toContain('Call reference_to_video with resolution_name "720p"');
+    expect(prompt).toContain('aspect_ratio "16:9"');
+    expect(started).toHaveBeenCalledWith(expect.objectContaining({ castReferenceFiles: ['lead.png', 'guest.png'] }));
+    await closeChild();
+  });
+
+  it('keeps image_to_video for a still with no cast, and for a clip with no still', async () => {
+    await grok.generateVideo({ prompt: 'gentle pan', sourceImagePath: '/abs/frame.png', castReferences: [] });
+    expect(promptOf()).not.toContain('reference_to_video');
+    await closeChild();
+    await grok.generateVideo({ prompt: 'a fox', castReferences: [{ path: '/abs/guest.png', label: 'Guest' }] });
+    expect(promptOf(1)).not.toContain('reference_to_video');
+    expect(promptOf(1)).not.toContain('guest.png');
+    await closeChild(1);
+  });
+
   it('falls back to 6s for an unsupported duration', async () => {
     await grok.generateVideo({ prompt: 'a fox', duration: 42 });
     expect(promptOf()).toContain('6 seconds');

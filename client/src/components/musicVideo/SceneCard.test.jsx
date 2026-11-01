@@ -5,10 +5,14 @@ vi.mock('../../services/apiRunwayCatalog.js', async (importOriginal) => ({ ...aw
 vi.mock('../../hooks/useFilmLookPresets.js', () => ({ default: () => ({ presets: [], loaded: true, save: vi.fn(), remove: vi.fn() }) }));
 vi.mock('../../hooks/useVideoFileSrc.js', () => ({ useVideoFileSrc: vi.fn(() => ({})) }));
 vi.mock('../../services/apiMusicVideo.js', async (importOriginal) => ({ ...(await importOriginal()), getMusicVideoMediaPool: vi.fn(async () => ({ items: [] })) }));
+vi.mock('../../services/apiImageVideo.js', async (importOriginal) => ({
+  ...(await importOriginal()), previewVideoPrompt: vi.fn(async () => ({ backend: 'grok', sentPrompt: 'Cast reference preview', promptAdditions: [] })),
+}));
 vi.mock('../../services/api', async (importOriginal) => ({ ...(await importOriginal()), listTracks: vi.fn(async () => []) }));
 import SceneCard from './SceneCard.jsx';
 import { GROK_VIDEO_DURATIONS } from '../../lib/grokVideoClip.js';
 import { useVideoFileSrc } from '../../hooks/useVideoFileSrc.js';
+import { previewVideoPrompt } from '../../services/apiImageVideo.js';
 
 const GROK_MAX = GROK_VIDEO_DURATIONS.at(-1);
 // The editor shows the still or the clip, one at a time.
@@ -17,6 +21,17 @@ const show = (name) => fireEvent.click(within(screen.getByRole('group', { name: 
 beforeEach(() => {
   localStorage.clear();
   useVideoFileSrc.mockReturnValue({});
+  previewVideoPrompt.mockClear();
+});
+
+it('previews the Grok shot with the duration and frame the card will submit', async () => {
+  const scene = { sceneId: 's1', startSec: 0, endSec: 8, prompt: 'A person waves', referenceImageId: 'still.png', takes: [] };
+  render(<SceneCard scene={scene} project={{ id: 'mv-1', scenes: [scene] }} index={0} expanded
+    lipSyncBackend="grok" falVideoSettings={{ backend: 'grok', grokDuration: 6 }} onEditLocal={vi.fn()} onSave={vi.fn()} />);
+  await waitFor(() => expect(previewVideoPrompt).toHaveBeenCalledWith(expect.objectContaining({
+    backend: 'grok', prompt: 'A person waves', sourceImageFile: 'still.png', grokDuration: 10,
+    musicVideo: { projectId: 'mv-1', sceneId: 's1', compose: true, promptAsTyped: true },
+  }), { silent: true }));
 });
 
 describe('code shot (#10297)', () => {

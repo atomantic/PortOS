@@ -241,6 +241,7 @@ vi.mock('../services/apiImageVideo.js', () => ({
   listImageModels: vi.fn(async () => []),
   getVideoGenModelContext: vi.fn(async () => null),
   generateVideo: vi.fn(),
+  previewVideoPrompt: vi.fn(async () => ({ backend: 'local', shotPreviewUnavailable: true })),
   uploadGalleryVideo: vi.fn(),
   trimVideoStart: vi.fn(),
   listLorasFull: vi.fn(async () => [{

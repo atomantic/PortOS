@@ -21,7 +21,7 @@ import useSceneClipPlayback from '../../hooks/useSceneClipPlayback.js';
 import SceneClipPreview from './SceneClipPreview.jsx';
 import SceneClipCoverageNotice from './SceneClipCoverageNotice.jsx';
 import PerformanceEvidence from './PerformanceEvidence.jsx';
-import { isPerformanceScene, planPerformanceRepair } from '../../lib/musicVideoShotTiming.js';
+import { grokSceneRequestDuration, isPerformanceScene, planPerformanceRepair } from '../../lib/musicVideoShotTiming.js';
 import SceneTakeStrip from './SceneTakeStrip.jsx';
 import { sceneEndFramePlanFor } from './SceneEndFrame.jsx';
 import SceneFrames from './SceneFrames.jsx';
@@ -618,7 +618,12 @@ export default function SceneCard({
           </div>
           {timingPlan}
           {layer === 'footage' && (
-            <SceneRenderInputs id={fieldId('inputs')} request={cardRequest} onChange={(patch) => setRenderInputs((prev) => ({ ...prev, ...patch }))} />
+            <SceneRenderInputs id={fieldId('inputs')} request={cardRequest} onChange={(patch) => setRenderInputs((prev) => ({ ...prev, ...patch }))}
+              grokPreview={expanded && (!renderSettings?.backend || renderSettings.backend === 'grok') && project?.id && scene.referenceImageId ? {
+                ...(renderSettings?.backend ? { backend: renderSettings.backend } : {}), prompt: cardRequest.authored, mode: 'image', sourceImageFile: scene.referenceImageId,
+                grokDuration: renderSettings?.backend === 'grok' ? grokSceneRequestDuration(scene, renderSettings, renderOverrides) : renderSettings?.grokDuration,
+                musicVideo: { projectId: project.id, sceneId: scene.sceneId, compose: true, promptAsTyped: true },
+              } : null} previewRevision={JSON.stringify([project?.updatedAt, castMedia])} />
           )}
           {layer === 'footage' && scene.coverage === 'sequence' && <SceneSequenceCoverage project={project} scene={scene} />}
           {endFramePlan.endImageId && (

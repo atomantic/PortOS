@@ -375,6 +375,11 @@ const submitHostedLane = async ({ body, prepared, backend, hosted, performancePa
   const projectAspect = (backend === VIDEO_GEN_MODE.FAL || backend === VIDEO_GEN_MODE.RUNWAY) && body.musicVideo && !body.visualConditioning?.render?.parameters?.aspectRatio
     ? await musicVideoProjectAspect(body.musicVideo.projectId)
     : null;
+  // A Music Video shot animated on Grok carries its cast sheets beside the still,
+  // so people stay recognizable once the clip moves past the opening frame.
+  const castReferences = backend === VIDEO_GEN_MODE.GROK && body.musicVideo && sourceImagePath && !prepared.guidanceImagePath
+    ? await (await import('../musicVideo/clipCastReferences.js')).musicVideoClipCastReferences(body.musicVideo)
+    : [];
   const { jobId, position, status } = await enqueue({
     // Hosted jobs use mode for queue dispatch and videoMode for text/image.
     mode: backend,
@@ -385,6 +390,7 @@ const submitHostedLane = async ({ body, prepared, backend, hosted, performancePa
     uploadedTempPath,
     ...submissionTagParams(body),
     ...hosted.buildParams(body, prepared),
+    ...(castReferences.length ? { castReferences } : {}),
     ...(projectAspect ? { aspectRatio: projectAspect, frameAspect: projectAspect } : {}),
     // standalone fal lip sync: the uploaded voice clip (a Music Video performance shot overrides below)
     ...(prepared.audioFilePath ? { audioFilePath: prepared.audioFilePath, uploadedTempPaths: prepared.uploadedTempPaths, lipSync: { enableTranscription: false } } : {}),

@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import SceneRenderInputs, { shotCardRenderRequest, shotCardRequestProblem } from './SceneRenderInputs.jsx';
+import { previewVideoPrompt } from '../../services/apiImageVideo.js';
+
+vi.mock('../../services/apiImageVideo.js', () => ({ previewVideoPrompt: vi.fn() }));
 
 const models = [
   { id: 'ltx25_example', name: 'LTX-2.5 Example', runtime: 'ltx25', supportedModes: ['text', 'image', 'fflf', 'a2v'] },
@@ -84,5 +87,21 @@ describe('SceneRenderInputs', () => {
     expect(screen.getByLabelText('Still').disabled).toBe(true);
     fireEvent.click(screen.getByLabelText('Song audio'));
     expect(onChange).toHaveBeenCalledWith({ songAudio: true });
+  });
+
+  it('shows the server preview of Grok cast instructions beside the shot prompt', async () => {
+    previewVideoPrompt.mockResolvedValueOnce({
+      backend: 'grok',
+      sentPrompt: 'Animate the still. <IMAGE_1> shows how Person looks. A person waves.',
+      promptAdditions: [{ id: 'agent-instructions', label: 'Grok video tool instructions', text: 'Use the cast reference.' }],
+    });
+    const request = shotCardRenderRequest({ scene: scene({ prompt: 'A person waves' }), settings: { backend: 'grok' } });
+    const grokPreview = { backend: 'grok', prompt: request.authored, sourceImageFile: 'still.png',
+      musicVideo: { projectId: 'mv-1', sceneId: 's1', compose: true, promptAsTyped: true } };
+    render(<SceneRenderInputs id="card" request={request} onChange={vi.fn()} grokPreview={grokPreview} />);
+    expect(await screen.findByRole('button', { name: '+ Grok video tool instructions' })).toBeTruthy();
+    expect(previewVideoPrompt).toHaveBeenCalledWith(grokPreview, { silent: true });
+    fireEvent.click(screen.getByRole('button', { name: 'Show full prompt' }));
+    expect(screen.getByText(/<IMAGE_1> shows how Person looks/)).toBeTruthy();
   });
 });

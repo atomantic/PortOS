@@ -20,7 +20,7 @@ import { isLtx2FamilyRuntime } from '../lib/runnerFamilies';
 import { isLayeredComposition, isSelfDrawnLayer, sceneVisualLayer } from '../lib/musicVideoLayers.js';
 import { musicVideoFrameGenSize } from '../lib/musicVideoAspect.js';
 import {
-  falSceneTake, falTakeRequestFields, grokCoverage, isPerformanceScene, performanceBlockedReason, runwaySceneTake, runwayTakeRequestFields,
+  falSceneTake, falTakeRequestFields, grokSceneRequestDuration, isPerformanceScene, performanceBlockedReason, runwaySceneTake, runwayTakeRequestFields,
 } from '../lib/musicVideoShotTiming.js';
 
 // The image backends accept at most four reference images for most models
@@ -58,11 +58,6 @@ export const conditioningReferences = musicVideoConditioningReferences;
 const frameReferenceFiles = musicVideoFrameReferenceFiles;
 /** A mood board / Pinterest reference: look text only, never a conditioning image. */
 export const isOutsideReference = isOutsideMusicVideoReference;
-
-// A scene's authored span on the song, or null while it is untimed.
-const sceneSpanSec = (scene) => (typeof scene.startSec === 'number' && typeof scene.endSec === 'number' && scene.endSec > scene.startSec
-  ? scene.endSec - scene.startSec
-  : null);
 
 /**
  * Per-scene media generation for a music-video project: the reference-frame
@@ -410,7 +405,6 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
       ? (audioReactiveSelected ? performanceBlockedReason('local') : performanceBlockedReason(settings.backend))
       : null;
     if (performanceBlocked) { toast.error(performanceBlocked); return Promise.resolve({ ok: false }); }
-    const spanSec = sceneSpanSec(scene);
     const songAudio = typeof card?.songAudio === 'boolean' ? card.songAudio : settings.generationMode === 'suppliedAudio';
     const mode = audioReactiveSelected || songAudio ? 'a2v' : 'image';
     const falFields = settings.backend === 'fal'
@@ -430,7 +424,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
         // Request the 6/10s clip that COVERS this shot; the saved pin is only
         // the fallback for a scene not yet timed on the song.
         // A scene card's Length pick wins.
-        ? { grokDuration: target?.grokDuration || (spanSec != null ? grokCoverage(spanSec).requestSec : settings.grokDuration) }
+        ? { grokDuration: grokSceneRequestDuration(scene, settings, target) }
         // fal.ai (#8968) — image-to-video only (see VideoRenderSettings). The
         // request is exactly the take the scene card prices (falSceneTake):
         // a cutaway names its model, the length covering the shot (or the
