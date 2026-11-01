@@ -708,6 +708,10 @@ function SettingsPane({
     if (!onSaveRef.current) return undefined;
     if (noteDraft === (annotation?.note ?? '')) {
       pendingNoteRef.current = null;
+      // Nothing left to save: an edit typed back to the saved text, or the
+      // one render after prev/next where the draft still held the previous
+      // item's note. Either one armed 'pending' with no save to clear it.
+      setSaveStatus((status) => (status === 'pending' ? 'idle' : status));
       return undefined;
     }
     pendingNoteRef.current = noteDraft;

@@ -468,3 +468,28 @@ it('discloses requested and effective user-adapter stages from the saved render 
   expect(screen.getByText('motion ×0, detail ×1')).toBeInTheDocument();
   expect(screen.getByText('example.safetensors: stage-1 = 0; example.safetensors: stage-2 = 0.7')).toBeInTheDocument();
 });
+
+describe('MediaLightbox note save status', () => {
+  const otherImage = { ...imageItem, key: 'image:other.png', filename: 'other.png', previewUrl: '/data/images/other.png', downloadUrl: '/data/images/other.png' };
+
+  it('does not claim to be saving after stepping to an item whose note differs', () => {
+    const onAnnotationChange = vi.fn();
+    const { rerender } = render(<MediaLightbox item={imageItem} onClose={() => {}} annotation={{ note: 'first note' }} onAnnotationChange={onAnnotationChange} />);
+    expect(screen.getByText('Saves automatically')).toBeInTheDocument();
+    rerender(<MediaLightbox item={otherImage} onClose={() => {}} annotation={{ note: 'second note' }} onAnnotationChange={onAnnotationChange} />);
+    expect(screen.getByDisplayValue('second note')).toBeInTheDocument();
+    expect(screen.queryByText('Saving…')).toBeNull();
+    expect(screen.getByText('Saves automatically')).toBeInTheDocument();
+    expect(onAnnotationChange).not.toHaveBeenCalled();
+  });
+
+  it('drops the saving status when an edit is typed back to the saved note', () => {
+    render(<MediaLightbox item={imageItem} onClose={() => {}} annotation={{ note: 'kept' }} onAnnotationChange={vi.fn()} />);
+    const field = screen.getByDisplayValue('kept');
+    fireEvent.change(field, { target: { value: 'kept!' } });
+    expect(screen.getByText('Saving…')).toBeInTheDocument();
+    fireEvent.change(field, { target: { value: 'kept' } });
+    expect(screen.queryByText('Saving…')).toBeNull();
+    expect(screen.getByText('Saves automatically')).toBeInTheDocument();
+  });
+});
