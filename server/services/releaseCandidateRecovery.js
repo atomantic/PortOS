@@ -11,7 +11,8 @@ import { claimCheckoutOwnerReason } from '../lib/claimContinuation.js';
 import { releaseCandidateTransferSchema } from '../lib/releasePublication.js';
 import { localReviewReceiptEvidence } from '../lib/localReviewLifecycle.js';
 import { ownershipTransaction, checkoutRetirementFenceReason } from './cosClaimOwnership.js';
-import { captureCheckoutSeeds, captureSeededCompletionCheckouts, completedCheckoutReceiptValid, readCompletedCheckoutIdentity } from './completedCheckoutEvidence.js';
+import { captureCheckoutSeeds, captureSeededCompletionCheckouts, completedCheckoutReceiptValid, readCompletedCheckoutIdentity,
+  releaseCandidateBranch } from './completedCheckoutEvidence.js';
 import { readReleaseCandidate } from './releaseCandidateEvidence.js';
 import { readReleaseCandidateSettlement } from './releaseCandidateSettlement.js';
 
@@ -25,9 +26,12 @@ const nextStep = 'Preserve the original checkout and private review files; resol
 async function sourceCheckout(source) {
   if (source.metadata.checkoutSeeds?.length) {
     const rows = await captureSeededCompletionCheckouts(source);
-    if (rows?.length !== 1 || source.metadata.checkoutSeeds.length !== 1) refuse('candidate-terminal-receipt-unverified');
-    const { capturedAt: _observedAt, ...receipt } = rows[0];
-    return { kind: 'seeded', receipt, seed: source.metadata.checkoutSeeds[0] };
+    const branch = releaseCandidateBranch(source.metadata);
+    const candidates = rows?.filter(row => row.branch === branch) || [];
+    const seeds = source.metadata.checkoutSeeds.filter(seed => seed.branch === branch);
+    if (candidates.length !== 1 || seeds.length !== 1 || rows.length !== source.metadata.checkoutSeeds.length) refuse('candidate-terminal-receipt-unverified');
+    const { capturedAt: _observedAt, ...receipt } = candidates[0];
+    return { kind: 'seeded', receipt, seed: seeds[0] };
   }
   // This independently captured, preterminal v1 receipt is the only unseeded
   // lineage currently supported. Its private Git pointer and administration
@@ -142,16 +146,22 @@ export async function recoverReleaseCandidate(successorAgentId, predecessorAgent
     };
     let persisting = false;
     try {
+      const resumed = source?.result?.resumed === true && source.result.resumedTaskId === successor.taskId;
+      const retriedInline = source?.metadata?.releasePublication?.synchronizationHandoffVersion === 2
+        && source.result?.deliveryRecoveryOwned === true && ['blocked', 'incomplete'].includes(source.result?.taskOutcome?.status);
       if (!releaseRun(source) || source.status !== 'completed'
         || !(Date.parse(source.completedAt) >= Date.parse(source.startedAt)) || Date.parse(source.completedAt) > Date.now()
         || !(Date.parse(successor.startedAt) >= Date.parse(source.completedAt)) || !source.taskId
-        || source.taskId !== successor.taskId || source.result?.resumed !== true || source.result.resumedTaskId !== successor.taskId
+        || source.taskId !== successor.taskId || (!resumed && !retriedInline)
         || successor.metadata.resumedFromAgentId !== source.id || !source.metadata.instanceId
         || source.metadata.instanceId === 'unknown' || source.metadata.instanceId !== successor.metadata.instanceId) refuse('candidate-successor-lineage-unverified');
       const { getTaskById } = await import('./cosTaskStore.js');
       const task = await getTaskById(successor.taskId);
       if (task?.metadata?.resumedFromAgentId !== source.id) refuse('candidate-task-lineage-unverified');
-      if (source.metadata.releasePublication || successor.metadata.releasePublication) refuse('candidate-already-published');
+      const publication = source.metadata.releasePublication;
+      if ((publication && publication.synchronizationHandoffVersion !== 2)
+        || (successor.metadata.releasePublication && (!publication || previous?.status !== 'transferred'
+          || !equal(successor.metadata.releasePublication, publication)))) refuse('candidate-already-published');
       if (successor.metadata.releaseCandidate || (previous?.status === 'transferred' && previous.predecessorAgentId !== source.id)
         || (source.metadata.releaseCandidateSuccessor && source.metadata.releaseCandidateSuccessor.successor.agentId !== successor.id)) refuse('candidate-successor-conflict');
       const repoPath = await realpath(repository(source));
@@ -159,6 +169,15 @@ export async function recoverReleaseCandidate(successorAgentId, predecessorAgent
       return await withCheckoutPublication(repoPath, async () => {
         const evidence = await inspectCandidate(source);
         const target = evidence.lineage.receipt;
+        if (publication && (publication.status !== 'verified' || publication.candidateHead !== target.head
+          || evidence.publication?.number !== publication.promotionPrNumber || evidence.publication?.merged !== true
+          || evidence.publication?.merge !== publication.promotionMerge)) refuse('candidate-publication-conflict');
+        const sync = source.metadata.releaseSynchronizationCheckout;
+        const sourceSync = sync && source.metadata.checkoutSeeds?.find(seed => seed.branch === sync.branch);
+        if (sync && (!publication || sync.identity !== publication.identity || !sourceSync)) refuse('candidate-synchronization-checkout-unverified');
+        if (sourceSync && checkoutRetirementFenceReason({ repoPath, branch: sourceSync.branch, path: sourceSync.path })) refuse('checkout-retirement-reserved');
+        if (sourceSync && claimCheckoutOwnerReason({ branchName: sourceSync.branch, holderPath: sourceSync.path,
+          sourceWorkspace: repoPath, agents: Object.values(state.agents), ignoreIds: [source.id, successor.id] })) refuse('candidate-owner-ambiguous');
         const fenced = checkoutRetirementFenceReason({ repoPath, branch: target.branch, path: target.path });
         if (fenced) refuse(fenced);
         const other = claimCheckoutOwnerReason({ branchName: target.branch, holderPath: target.path,
@@ -175,7 +194,8 @@ export async function recoverReleaseCandidate(successorAgentId, predecessorAgent
         if ((await getTaskById(successor.taskId))?.metadata?.resumedFromAgentId !== source.id) refuse('candidate-task-lineage-unverified');
         if (previous?.status === 'transferred') {
           if (!equal(previous.transfer, source.metadata.releaseCandidateSuccessor)) refuse('candidate-transfer-receipt-conflict');
-          return { recovered: true, branch: target.branch, path: target.path, transfer: previous.transfer };
+          return { recovered: true, branch: target.branch, path: target.path,
+            ...(sourceSync && { synchronization: { branch: sourceSync.branch, path: sourceSync.path } }), transfer: previous.transfer };
         }
         const transfer = { version: 1, source: run(source), successor: run(successor),
           origin: source.metadata.releaseCandidateRecovery?.transfer?.origin || run(source),
@@ -183,12 +203,16 @@ export async function recoverReleaseCandidate(successorAgentId, predecessorAgent
           ...evidence, settlement };
         if (!releaseCandidateTransferSchema.safeParse(transfer).success) refuse('candidate-transfer-receipt-unavailable');
         const updated = { ...successor, metadata: { ...successor.metadata,
-          releaseCandidateRecovery: { version: 1, status: 'transferred', predecessorAgentId, transfer } } };
+          releaseCandidateRecovery: { version: 1, status: 'transferred', predecessorAgentId, transfer },
+          ...(publication && { releasePublication: publication }),
+          ...(sync && { releaseSynchronizationCheckout: { ...sync, startedAt: successor.startedAt, reservedAt: new Date().toISOString() } }) } };
         // A new, honestly timestamped seed for the current owner. The original
         // seed/receipt and private review files are never rewritten or copied.
         updated.metadata.checkoutSeeds = await captureCheckoutSeeds(updated, { allowUncreated: false });
-        if (updated.metadata.checkoutSeeds.length !== 1
-          || !equal(updated.metadata.checkoutSeeds[0].incarnation, target.incarnation)) refuse('candidate-generation-changed');
+        const candidateSeed = updated.metadata.checkoutSeeds.find(seed => seed.branch === target.branch);
+        const syncSeed = sourceSync && updated.metadata.checkoutSeeds.find(seed => seed.branch === sourceSync.branch);
+        if (!candidateSeed || !equal(candidateSeed.incarnation, target.incarnation)
+          || (sourceSync && (!syncSeed || !equal(syncSeed.incarnation, sourceSync.incarnation)))) refuse('candidate-generation-changed');
         state.agents[source.id] = { ...source, metadata: { ...source.metadata, releaseCandidateSuccessor: transfer } };
         state.agents[successor.id] = updated;
         persisting = true;
@@ -196,7 +220,8 @@ export async function recoverReleaseCandidate(successorAgentId, predecessorAgent
         const { cosEvents } = await import('./cosEvents.js');
         cosEvents.emit('agent:updated', updated);
         cosEvents.emit('agent:updated', state.agents[source.id]);
-        return { recovered: true, branch: target.branch, path: target.path, transfer };
+        return { recovered: true, branch: target.branch, path: target.path,
+          ...(sourceSync && { synchronization: { branch: sourceSync.branch, path: sourceSync.path } }), transfer };
       });
     } catch (error) {
       if (persisting) throw error;

@@ -1,4 +1,5 @@
 import { checkoutSeedSchema } from './checkoutSeed.js';
+import { releaseCandidateTransferSchema } from './releasePublication.js';
 import { retirementCheckoutIdentityFromPointer } from './retirementCheckoutObservation.js';
 import { isAbsolute, resolve } from 'node:path';
 import { z } from 'zod';
@@ -38,6 +39,21 @@ export const RELEASE_SYNC_FROZEN_METADATA_KEYS = [...RELEASE_SYNC_POLICY_KEYS,
   'useWorktree', 'openPR', 'worktreeChangesExpected', 'readOnly', 'discardWorktree',
   'forkHead', 'reviewerApplies', 'noCodeOutput',
   'noChangeSuccess', 'slashdoCommand'];
+
+// Version 1 belongs to a separate historical task. Version 2 keeps the
+// publication and synchronization on the original release task.
+export const isInlineReleaseSynchronization = entry => entry?.version === 2;
+
+export function isInlineReleaseOwner(entry, agent) {
+  if (!isInlineReleaseSynchronization(entry) || agent?.taskId !== entry.owner.taskId) return false;
+  if (agent.id === entry.owner.agentId && agent.startedAt === entry.owner.startedAt) return true;
+  const transfer = agent.metadata?.releaseCandidateRecovery?.status === 'transferred'
+    ? agent.metadata.releaseCandidateRecovery.transfer : null;
+  return releaseCandidateTransferSchema.safeParse(transfer).success
+    && transfer.origin.agentId === entry.owner.agentId && transfer.origin.taskId === entry.owner.taskId
+    && transfer.origin.startedAt === entry.owner.startedAt && transfer.successor.agentId === agent.id
+    && transfer.successor.taskId === agent.taskId && transfer.successor.startedAt === agent.startedAt;
+}
 
 // A branch name alone is not ownership. Only a server-captured physical seed
 // from the publisher's run can identify the checkout that produced the PR.

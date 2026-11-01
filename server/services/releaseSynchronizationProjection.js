@@ -84,7 +84,7 @@ function findMatchingOutboxEntryForAgent(agent, outbox) {
 
 export function projectTaskReleaseMilestones(task, entryOrOutbox) {
   if (!task) return task;
-  const entry = entryOrOutbox?.version === 1 && entryOrOutbox.identity
+  const entry = [1, 2].includes(entryOrOutbox?.version) && entryOrOutbox.identity
     ? entryOrOutbox
     : findMatchingOutboxEntryForTask(task, entryOrOutbox);
   if (!entry) return task;
@@ -102,7 +102,7 @@ export function projectTaskReleaseMilestones(task, entryOrOutbox) {
 
 export function projectAgentReleaseMilestones(agent, entryOrOutbox) {
   if (!agent) return agent;
-  const entry = entryOrOutbox?.version === 1 && entryOrOutbox.identity
+  const entry = [1, 2].includes(entryOrOutbox?.version) && entryOrOutbox.identity
     ? entryOrOutbox
     : findMatchingOutboxEntryForAgent(agent, entryOrOutbox);
   if (!entry) return agent;

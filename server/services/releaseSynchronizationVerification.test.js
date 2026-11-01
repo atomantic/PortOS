@@ -8,7 +8,9 @@ import { lazyTempDataRoot, makePathsProxy, cleanupTempDataRoots } from '../lib/m
 const f = vi.hoisted(() => ({ agents: [], pr: null, review: null, reviews: [], checks: [], receipts: [],
   present: true, busy: false, unavailable: false, ancestor: true, quality: null, qualityFile: null, failSave: false,
   missingSyncAncestry: false, retirementUnavailable: false, liveAgents: null, liveTrusted: true,
-  forgeCalls: 0 }));
+  forgeCalls: 0, checkoutHead: null }));
+const inlineCleanup = vi.hoisted(() => vi.fn(async () => ({ attempted: true, retired: [], held: [] })));
+vi.mock('./releaseSynchronizationCleanup.js', () => ({ settleInlineReleaseCheckouts: inlineCleanup }));
 vi.mock('../lib/fileUtils.js', async original => {
   const actual = await original();
   return makePathsProxy(actual, { dataRoot: lazyTempDataRoot('release-sync-verifier-'), overrides: {
@@ -36,7 +38,9 @@ vi.mock('./branchCompletionPolicy.js', () => ({ readBranchCompletionPolicies: vi
 vi.mock('./apps.js', () => ({ getAppById: async () => ({ id: 'example-app', repoPath: '/example/repo' }) }));
 vi.mock('../lib/gitRemote.js', () => ({ getOriginInfo: async () => ({ host: 'github.com', fullName: 'example/repo' }) }));
 vi.mock('./forgeExecOptions.js', () => ({ resolveForgeExecOptions: async () => ({}) }));
-vi.mock('../lib/execGit.js', () => ({ execGit: async () => ({ stdout: f.pr.head.sha }) }));
+vi.mock('../lib/execGit.js', () => ({ execGit: async (_args, cwd) => ({
+  stdout: cwd === '/example/publisher-checkout' ? 'a'.repeat(40) : f.checkoutHead || f.pr.head.sha,
+}) }));
 vi.mock('./completedCheckoutEvidence.js', async original => ({ ...await original(), readCompletedCheckoutIdentity: async row =>
   f.present ? { ...row, incarnation: f.agents[1].metadata.checkoutSeeds[0].incarnation } : null }));
 vi.mock('../lib/localReviewLifecycle.js', () => ({ localReviewLifecycle: async path => path === '/example/publisher-checkout'
@@ -75,7 +79,7 @@ vi.mock('./github.js', () => ({ execGh: async args => {
 
 import { addTask, getTaskById, updateTask } from './cosTaskStore.js';
 import { readBranchCompletionPolicies } from './branchCompletionPolicy.js';
-import { ensureReleaseSynchronization, verifyReleaseSynchronizationTask, recoverReleaseSynchronizationHandoffs, retainReleaseSynchronizationReview,
+import { ensureReleaseSynchronization, verifyReleaseSynchronizationTask, verifyInlineReleaseDelivery, recoverReleaseSynchronizationHandoffs, retainReleaseSynchronizationReview,
   releaseTaskDispatchDisposition } from './releaseSynchronization.js';
 import { readReleaseSynchronizationOutbox, saveReleaseSynchronization } from './releaseSynchronizationStore.js';
 import { projectTaskReleaseMilestones } from './releaseSynchronizationProjection.js';
@@ -90,8 +94,10 @@ afterAll(cleanupTempDataRoots);
 let identity, taskId, publication;
 const getReleaseSynchronization = async key => (await readReleaseSynchronizationOutbox()).publications[key];
 beforeEach(async () => {
+  inlineCleanup.mockClear();
   await rm(join(PATHS.cos, 'release-synchronization.json'), { force: true });
   f.forgeCalls = 0;
+  f.checkoutHead = null;
   f.liveAgents = null;
   f.liveTrusted = true;
   // POSIX settlement is the default contract; the native Windows test overrides it.
@@ -146,6 +152,60 @@ async function finishExecution({ retain = true } = {}) {
     checkoutIdentity: retirementCheckoutIdentityFromPointer(publisherSeed.incarnation.pointer), retiredAt: '2026-01-01T01:13:00Z' }];
   f.present = false;
 }
+
+it('verifies an inline owner against its exact synchronization head and settles after the owner exits', async () => {
+  const source = await addTask({ description: 'Inline release', app: 'example-app' });
+  const inlinePublication = { ...publication, identity: '8'.repeat(64), synchronizationHandoffVersion: 2 };
+  const publisher = structuredClone(f.agents[0]);
+  publisher.id = 'inline-publisher';
+  publisher.metadata.checkoutSeeds[0].agentId = publisher.id;
+  publisher.taskId = source.id;
+  publisher.status = 'running';
+  delete publisher.completedAt;
+  publisher.metadata.releasePublication = inlinePublication;
+  delete publisher.metadata.completedCheckouts;
+  const { taskId: inlineTask } = await ensureReleaseSynchronization(publisher);
+  expect(inlineTask).toBe(source.id);
+  const syncSeed = { ...structuredClone(f.agents[1].metadata.checkoutSeeds[0]), agentId: publisher.id,
+    startedAt: publisher.startedAt, seededAt: '2026-01-01T00:00:02Z' };
+  publisher.metadata.checkoutSeeds.push(syncSeed);
+  f.agents = [publisher];
+  f.pr.head.ref = syncSeed.branch;
+  f.pr.merged = false;
+  expect((await verifyReleaseSynchronizationTask(inlineTask)).status).toBe('running');
+  let entry = await getReleaseSynchronization(inlinePublication.identity);
+  expect(entry.obligations.synchronizationPr.blocker).toBe('synchronization-pr-not-merged');
+  f.pr.merged = true;
+  expect((await verifyReleaseSynchronizationTask(inlineTask)).status).toBe('running');
+  expect(await verifyInlineReleaseDelivery(publisher)).toEqual({ verified: true });
+  f.checkoutHead = 'c'.repeat(40);
+  f.pr.head.sha = '9'.repeat(40);
+  expect(await verifyInlineReleaseDelivery(publisher)).toMatchObject({ verified: false, reason: 'synchronization-pr-identity-changed' });
+  f.pr.head.sha = 'c'.repeat(40);
+  const candidateSeed = publisher.metadata.checkoutSeeds[0];
+  expect(await retainReleaseSynchronizationReview({ branch: candidateSeed.branch, path: candidateSeed.path,
+    head: inlinePublication.candidateHead, checkoutIdentity: retirementCheckoutIdentityFromPointer(candidateSeed.incarnation.pointer) })).toBe(true);
+  publisher.status = 'completed';
+  publisher.completedAt = '2026-01-01T01:12:00Z';
+  publisher.metadata.completedCheckouts = publisher.metadata.checkoutSeeds.map(seed => ({ ...seed, version: 2,
+    head: seed.branch === candidateSeed.branch ? inlinePublication.candidateHead : 'c'.repeat(40), capturedAt: '2026-01-01T01:11:00Z' }));
+  entry = await getReleaseSynchronization(inlinePublication.identity);
+  entry.synchronization.retryAt = '2026-01-01T00:00:00Z';
+  await saveReleaseSynchronization(entry);
+  await recoverReleaseSynchronizationHandoffs(f.agents);
+  expect(inlineCleanup).toHaveBeenCalledWith(expect.objectContaining({ version: 2, task: expect.objectContaining({ id: inlineTask }),
+    obligations: expect.objectContaining({ processSettlement: expect.objectContaining({ status: 'verified' }) }) }));
+  f.receipts = publisher.metadata.completedCheckouts.map(row => ({ branch: row.branch, path: row.path, head: row.head,
+    branchDeleted: true, archiveDir: null, checkoutIdentity: retirementCheckoutIdentityFromPointer(row.incarnation.pointer),
+    retiredAt: '2026-01-01T01:13:00Z' }));
+  f.present = false;
+  f.pr.head.sha = '9'.repeat(40);
+  expect((await verifyReleaseSynchronizationTask(inlineTask)).status).toBe('blocked');
+  f.pr.head.sha = 'c'.repeat(40);
+  expect((await verifyReleaseSynchronizationTask(inlineTask)).status).toBe('verified');
+  entry = await getReleaseSynchronization(inlinePublication.identity);
+  expect(entry.obligations.retirement.evidence.checkouts).toHaveLength(2);
+});
 
 it('preserves an already-verified synchronization without a publisher seed and allows unrelated checkouts to retire', async () => {
   await finishExecution();

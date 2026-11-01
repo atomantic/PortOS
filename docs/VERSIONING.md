@@ -153,8 +153,9 @@ files under the ownership/retirement fence. It saves a separate transfer receipt
 and an honestly timestamped seed for the successor; it never edits the original
 seed, copies review files, advances a cutoff or changes a tag. A retry retains
 the original transfer. A merged promotion remains merged: verify its existing
-publication instead of opening another PR. Already recorded publication goes
-through the existing synchronization recovery, not candidate transfer.
+publication instead of opening another PR. An inline publication retains the
+same task and transfers both its candidate and synchronization checkout through
+this recovery; a legacy continuation keeps its existing recovery path.
 
 An unseeded candidate requires an independently captured service receipt from
 the original run with the exact Git pointer and administration identities. A
@@ -276,7 +277,8 @@ non-prerelease GitHub Release. A merged PR alone is not completion.
 A running scheduled release coordinator can persist the verified publication before
 starting synchronization. POST `/api/cos/agents/:id/release-publication`
 using the authenticated PortOS API transport, with JSON fields `version` (without
-`v`), `promotionPrNumber`, and `workflowRunId`. The server resolves the repository
+`v`), `promotionPrNumber`, `workflowRunId`, and `synchronizationMode: "inline"`.
+The server resolves the repository
 from the registered workspace, reads the candidate's metadata-only pin and ancestry
 from its local Git objects, and independently verifies the merged promotion,
 published stable release, successful release workflow and peeled tag tree against
@@ -285,26 +287,21 @@ or inconclusive forge responses cannot establish publication. No supplied URL or
 terminal prose is accepted as proof. Repeating the same verified publication
 retains the original receipt and verification timestamp.
 
-The agent card shows the release link and publication time as soon as the receipt
-is saved, even while execution continues. This receipt verifies **publication
-only**: synchronization remains explicitly unverified. After saving the receipt,
-the endpoint persists a publication-keyed outbox and registers exactly one
-`task-release-sync-<publication identity>` continuation on this instance. A
-successful response confirms that durable task ownership; the publishing
-coordinator then stops doing synchronization and may complete without waiting
-for another agent slot. Every terminal agent write repeats the ownership check.
-This is execution/publication completion, not end-to-end release completion.
-The registered continuation is eligible without a separate `release-sync`
-schedule; it remains subject to the normal owner, instance, pause, capacity and
-budget controls. While synchronization or cleanup is unfinished, another
-`do-release` preparation for that app waits on the existing continuation rather
-than selecting a version from a development branch that still has the old version.
-On a registration failure, retain the original receipt, branch/head/PR and
-checkout evidence and retry the same handoff; do not create another task or
-publish again. Interrupted handoffs resume through ordinary delivery recovery.
-Legacy receipts are not enrolled at startup. Only an explicit publication
-verification request can enroll one, retaining its original verification time;
-an upgrade never silently generates new synchronization work from old releases.
+The card shows publication immediately, but that receipt verifies **publication
+only**. With `synchronizationMode: "inline"`, the publication-keyed outbox binds
+synchronization to the same release task and returns its frozen
+`synchronizationPolicy`. The same coordinator follows it through the synchronization
+PR, reviews, CI and merge. The server independently verifies those obligations,
+and after the process exits it verifies settlement and eligible checkout retirement.
+Another release for the app waits until the earlier synchronization is verified;
+an interrupted run resumes the same task, subject to the existing ownership and
+process-settlement checks. Do not create a follow-up task or republish the release.
+
+Requests from older running coordinators that omit `synchronizationMode` retain
+the existing version-1 continuation contract. Existing continuation tasks,
+outboxes, budgets and ambiguous-policy holds keep their original identities.
+Legacy receipts are not enrolled at startup: only an explicit verification
+request can enroll one, retaining the original verification timestamp.
 
 At registration the outbox freezes the effective PR disposition with the reviewer
 roster. Explicit task dispositions and leave-open holds take precedence; otherwise
@@ -326,7 +323,7 @@ If the historical policy cannot be established, keep the checkpoint held and use
 the existing operator reset below only after an explicit decision to abandon it.
 
 The outbox keeps the original reviewer policy, publication ancestry and retained
-physical checkout seeds. It never transfers checkout authority. The continuation
+physical checkout seeds. It never transfers checkout authority. The owner
 uses the procedure below and ordinary delivery, admission and retirement recovery.
 Completed task history still owns its publication identity and cannot be deleted
 through task CRUD. Execution success does **not** mark synchronization verified:
@@ -354,7 +351,10 @@ quality evidence. Runtime, runner, PID and checkout process checks establish
 process settlement separately from task execution success. Every retained physical
 checkout generation requires its exact service retirement receipt plus checkout
 and local/remote ref absence; generic delivery/retirement recovery remains the
-only writer of those receipts. No verifier merges a PR, changes a published tag,
+only writer of those receipts. After an inline owner's process settles, the
+bounded server sweep asks that same retirement service to review and retire only
+the exact delivered candidate and synchronization checkout generations. A hold
+leaves their evidence in place; it does not queue another agent. No verifier merges a PR, changes a published tag,
 steals a checkout, or resets a task retry budget. Status-view integration is
 tracked in #13773 under #13760.
 
@@ -402,12 +402,12 @@ a substitute for this proof.
 
 #### 6. Synchronize back without changing the published release
 
-After publication, the durable continuation opens a normal **`release` → `main`** synchronization PR and
-merge it with a merge commit after its own required checks/reviews/admission.
+After publication, the release coordinator opens a normal **`release` → `main`** synchronization PR and
+merges it with a merge commit after its own required checks and reviews.
 This carries version metadata, notes and candidate-only fixes back to development
 and preserves the release merge ancestry for the next candidate. The PR's head is a
-temporary branch pushed at the published release commit
-(`git push origin <release-sha>:refs/heads/codex/release-sync-<id>`), never `release`
+temporary branch containing the published release commit, pushed as
+`refs/heads/codex/release-sync-<id>`, never `release`
 itself: the repository deletes merged head branches, so a `--head release` PR
 removes the `release` branch when it merges. Run the
 repository-required quality snapshot after publication as a development update;
@@ -415,6 +415,23 @@ it never changes this release. If conflicts require edits, use a temporary sync 
 and the current `main`, resolve them there, and merge that branch into `main`.
 Preserve newer development work. Never retarget the candidate, tag, or `release`
 ref to `main`, and never back-merge development commits into the published tree.
+
+For an inline PortOS release, the coordinator must reserve its separate sync
+checkout before creating it and capture its physical generation before editing:
+
+```bash
+SYNC_BRANCH=$(curl -fsS -H "Authorization: Bearer ${PORTOS_API_TOKEN:-}" -H 'Content-Type: application/json' \
+  -d '{"action":"sync-reserve"}' "http://127.0.0.1:5553/api/cos/agents/$RELEASE_AGENT_ID/release-candidate" | jq -er 'select(.reserved == true) | .branch')
+git fetch origin main
+git worktree add -b "$SYNC_BRANCH" "$SYNC_WORKTREE" FETCH_HEAD
+curl -fsS -H "Authorization: Bearer ${PORTOS_API_TOKEN:-}" -H 'Content-Type: application/json' \
+  -d '{"action":"sync-capture"}' "http://127.0.0.1:5553/api/cos/agents/$RELEASE_AGENT_ID/release-candidate" | jq -e '.captured == true' >/dev/null
+git -C "$SYNC_WORKTREE" merge --no-ff "$PROMOTION_MERGE_SHA"
+```
+
+Use a new, unused `SYNC_WORKTREE` path. A refused reservation or capture is a
+hold, not authority to adopt another checkout. On recovery, reuse the returned
+checkout and branch; do not create a second synchronization branch.
 
 Keep synchronization failures tracked with the exact PR, owner and next step;
 they do not invalidate an already verified publication or require revalidating it.

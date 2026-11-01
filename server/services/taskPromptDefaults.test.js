@@ -968,12 +968,11 @@ describe('taskPromptDefaults integrity snapshot', () => {
     expect(current).toContain('Only trusted work is yours');
     expect(current).toContain('--base <DEV_BRANCH>');
     expect(current).toContain('Merge dependency updates');
-    // v15: a blocker that outlasts the fix loop goes to a sub-agent; filing an
-    // issue and leaving the release PR open is no longer an exit (v14 stopped
-    // at its 10-commit bound with the release PR open).
-    expect(current).toContain('Delegate instead of giving up');
-    // Waiting on a queued task can deadlock on the agent slot this run holds.
-    expect(current).toContain('Do not wait for the queued task');
+    expect(PROMPT_VERSIONS['do-release']).toBeGreaterThanOrEqual(24);
+    expect(current).toContain('Keep ownership of blockers');
+    expect(current).toContain('Do not create a separate PortOS task or agent');
+    expect(current).toContain('synchronizationMode: "inline"');
+    expect(current).not.toContain('Stop doing synchronization in this publishing run');
     expect(current).toContain('Filing an issue and leaving the release PR open is NOT a resolution');
     expect(current).not.toContain('Bound the loop');
     expect(current).toContain('Local-only flake');

@@ -93,6 +93,13 @@ export async function readClaimOwnershipAgents() {
     if (candidate != null && (candidate.version !== 1 || agent.metadata?.taskAnalysisType !== 'do-release'
       || agent.metadata?.isWorktree !== false || candidate.startedAt !== agent.startedAt
       || candidate.branch !== `codex/release-${id}` || !Number.isFinite(Date.parse(candidate.reservedAt)))) return true;
+    const synchronization = agent.metadata?.releaseSynchronizationCheckout;
+    if (synchronization != null && (synchronization.version !== 1 || agent.metadata?.taskAnalysisType !== 'do-release'
+      || agent.metadata?.isWorktree !== false || synchronization.startedAt !== agent.startedAt
+      || !/^[a-f0-9]{64}$/.test(synchronization.identity || '')
+      || synchronization.branch !== `codex/release-sync-${synchronization.identity}`
+      || synchronization.identity !== agent.metadata?.releasePublication?.identity
+      || !Number.isFinite(Date.parse(synchronization.reservedAt)))) return true;
     const recovery = agent.metadata?.releaseCandidateRecovery;
     const transfer = recovery?.status === 'transferred' ? recovery.transfer : agent.metadata?.releaseCandidateSuccessor;
     if (recovery && (recovery.version !== 1 || !['held', 'transferred'].includes(recovery.status)

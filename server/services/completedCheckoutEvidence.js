@@ -21,7 +21,7 @@ export const hasReleaseCandidateBinding = meta => meta?.isWorktree !== true && m
   && ((meta.releaseCandidate?.version === 1 && typeof meta.releaseCandidate.branch === 'string')
     || (meta.releaseCandidateRecovery?.status === 'transferred' && typeof releaseCandidateBranch(meta) === 'string'));
 export const boundCheckoutBranches = meta => hasClaimCheckoutBindings(meta) ? meta.claimBranches
-  : hasReleaseCandidateBinding(meta) ? [releaseCandidateBranch(meta)] : [meta?.worktreeBranch];
+  : hasReleaseCandidateBinding(meta) ? [releaseCandidateBranch(meta), meta.releaseSynchronizationCheckout?.branch].filter(Boolean) : [meta?.worktreeBranch];
 
 const repoCommonByRepo = new Map();
 async function resolveRepoCommon(repository) {

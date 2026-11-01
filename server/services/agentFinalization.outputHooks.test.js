@@ -25,6 +25,8 @@ const appsRegistry = vi.hoisted(() => ({ getAppById: vi.fn(async () => null) }))
 vi.mock('./apps.js', () => appsRegistry);
 const snapshotFile = vi.hoisted(() => ({ publishAppQualitySnapshot: vi.fn(async () => ({ published: true, hash: 'abc1234' })) }));
 vi.mock('./appQualitySnapshotFile.js', () => snapshotFile);
+const inlineReleaseVerification = vi.hoisted(() => vi.fn(async () => ({ verified: false, reason: 'synchronization-pr-not-merged' })));
+vi.mock('./releaseSynchronization.js', () => ({ verifyInlineReleaseDelivery: inlineReleaseVerification }));
 // The goal-fidelity gate (#5994) reaches a local model at completion. Pinned OFF
 // here so these tests exercise the path they are about without depending on the
 // developer's own reviewer settings — and so a machine that HAS a local reviewer
@@ -501,6 +503,22 @@ describe('recovery output-hook dispatch (#3182)', () => {
     expect(updateTask).toHaveBeenCalledWith(task.id, expect.objectContaining({ status: 'completed', metadata: expect.objectContaining({
       liExecution: expect.objectContaining({ appId: 'app-example', slug: 'example-proposal', success: true }),
     }) }), 'internal');
+  });
+
+  it.each(['normal', 'recovered'])('keeps unfinished inline release delivery on the same task after %s completion', async mode => {
+    isProgrammaticIoTaskType.mockReturnValue(false);
+    inlineReleaseVerification.mockResolvedValueOnce({ verified: false, reason: 'synchronization-pr-not-merged' });
+    const task = { ...TASK, status: 'in_progress', metadata: { analysisType: 'do-release', app: 'app-example' } };
+    persistedAgent.taskId = task.id;
+    persistedAgent.metadata.releasePublication = { synchronizationHandoffVersion: 2 };
+    const result = mode === 'normal'
+      ? await finalizeAgent({ agentId: persistedAgent.id, task, success: true, exitCode: 0, outputBuffer: '' })
+      : await retireDeadAgent({ agent: persistedAgent, task, success: true, exitCode: 0 });
+    expect(result).toMatchObject({ success: false, taskOutcome: { status: 'incomplete',
+      reason: expect.stringContaining('synchronization-pr-not-merged') } });
+    expect(completeAgent).toHaveBeenCalledWith(persistedAgent.id, expect.objectContaining({ success: false }));
+    expect(updateTask).not.toHaveBeenCalledWith(task.id, expect.objectContaining({ status: 'completed' }), task.taskType);
+    expect(addTask).not.toHaveBeenCalled();
   });
 
   it.each(['normal', 'recovered'])('durably parks a typed investigation dependency before %s terminal publication without claiming success', async mode => {

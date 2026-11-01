@@ -24,9 +24,10 @@ export const releasePublicationRequestSchema = z.object({
   version: z.string().regex(/^\d+\.\d+\.\d+$/),
   promotionPrNumber: z.number().int().positive().safe(),
   workflowRunId: z.number().int().positive().safe(),
+  synchronizationMode: z.literal('inline').optional(),
 }).strict();
 
 export const releaseCandidateRequestSchema = z.discriminatedUnion('action', [
-  z.object({ action: z.enum(['reserve', 'capture']) }).strict(),
+  z.object({ action: z.enum(['reserve', 'capture', 'sync-reserve', 'sync-capture']) }).strict(),
   z.object({ action: z.literal('recover'), predecessorAgentId: z.string().regex(/^agent-[a-z0-9-]+$/) }).strict(),
 ]);

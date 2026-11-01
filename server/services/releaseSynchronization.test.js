@@ -43,6 +43,48 @@ beforeEach(() => {
 });
 afterAll(cleanupTempDataRoots);
 
+it('keeps a new publication on its release task while freezing its delivery policy', async () => {
+  const source = await addTask({ description: 'Release the example app', app: 'example-inline',
+    metadata: { analysisType: 'do-release' } });
+  const identity = randomBytes(32).toString('hex');
+  const publication = { status: 'verified', synchronizationHandoffVersion: 2, identity,
+    tag: 'v1.2.3', repository: 'example/repo' };
+  const publisher = { id: 'example-publisher', taskId: source.id, startedAt: '2026-01-01T00:00:00Z', status: 'running',
+    metadata: { taskAnalysisType: 'do-release', workspacePath: '/example/repository', releasePublication: publication } };
+  const first = await ensureReleaseSynchronization(publisher);
+  expect(first.taskId).toBe(source.id);
+  expect(first.policy).toMatchObject({ prCompletion: 'review-then-merge', reviewers: ['codex', 'copilot'] });
+  const entry = (await readReleaseSynchronizationOutbox()).publications[identity];
+  expect(entry).toMatchObject({ version: 2, owner: { taskId: source.id }, task: { id: source.id } });
+  expect(await getTaskById(`task-release-sync-${identity}`)).toBeNull();
+  policy.app.defaultPrCompletion = 'merge-on-green';
+  policy.reviews = { reviewers: [] };
+  expect(await ensureReleaseSynchronization(publisher)).toEqual(first);
+  expect(await releaseTaskDispatchDisposition(await getTaskById(source.id))).toBe('registered-release-owner');
+  expect(await releaseTaskDispatchDisposition({ id: 'another-release', metadata: { analysisType: 'do-release', app: 'example-inline' } }))
+    .toBe('wait-for-synchronization');
+});
+
+it.each([
+  [{ reviewers: [], optionalReviewers: [] }, 'merge-on-green'],
+  [{ reviewers: ['codex'], optionalReviewers: ['codex'], reviewerModels: { codex: 'gpt-6.1-terra' } }, 'review-then-merge'],
+  [{ reviewers: ['codex', 'copilot'], optionalReviewers: ['codex'] }, 'leave-open'],
+])('keeps an inline release roster %j with its effective %s disposition', async (roster, disposition) => {
+  policy.app.defaultPrCompletion = disposition;
+  policy.reviews = roster;
+  const identity = randomBytes(32).toString('hex');
+  const source = await addTask({ description: `Inline release roster ${identity}`, app: 'example-roster', metadata: { analysisType: 'do-release' } });
+  const publication = { status: 'verified', synchronizationHandoffVersion: 2, identity, tag: 'v1.2.3', repository: 'example/repo' };
+  const publisher = { id: `publisher-${identity}`, taskId: source.id, startedAt: '2026-01-01T00:00:00Z',
+    metadata: { workspacePath: '/example/repository', releasePublication: publication } };
+  const result = await ensureReleaseSynchronization(publisher);
+  expect(result).toMatchObject({ taskId: source.id, policy: { ...roster, prCompletion: disposition } });
+  policy.app.defaultPrCompletion = 'merge-on-green';
+  policy.reviews = { reviewers: [] };
+  expect(await ensureReleaseSynchronization(publisher)).toEqual(result);
+  expect(await getTaskById(`task-release-sync-${identity}`)).toBeNull();
+});
+
 it('registers and rejoins a real task-store continuation with its frozen review policy and evolving execution evidence', async () => {
   const source = await addTask({ description: 'Release an example app', app: 'example-app' });
   const publication = { status: 'verified', synchronizationHandoffVersion: 1, identity: 'd'.repeat(64), tag: 'v1.2.3', repository: 'example/repo',

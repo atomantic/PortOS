@@ -1316,7 +1316,7 @@ export async function retireDeadAgent({ agent, task, success, exitCode, duration
   reportedOutcome = await completionClaimOutcome(agent.id, reportedOutcome, claimDisposition);
   // Only an explicit hold suppresses orphan recovery; a failed delivery check
   // must retain the caller's normal failure/retry handling.
-  const deliveryHeld = ['blocked', 'incomplete'].includes(reportedOutcome?.status);
+  let deliveryHeld = ['blocked', 'incomplete'].includes(reportedOutcome?.status);
   let effectiveSuccess = isPrivateSecurity || refused || deliveryHeld ? false : success;
   const errorAnalysis = refused ? {
     category: interruption.category, origin: interruption.source || 'provider',
@@ -1338,6 +1338,14 @@ export async function retireDeadAgent({ agent, task, success, exitCode, duration
   let taskOutcome = reportedOutcome || retirementCompletion ? resolveTaskOutcome({ reported: retirementCompletion?.status === 'unverified'
     ? { status: 'incomplete', reason: retirementCompletion.reason } : reportedOutcome,
     success: effectiveSuccess, validationPassed, noCommitDeclared: declaresNoCommitCriterion(task) }) : null;
+  if (effectiveSuccess && agent.metadata?.releasePublication?.synchronizationHandoffVersion === 2) {
+    const { verifyInlineReleaseDelivery } = await import('./releaseSynchronization.js');
+    const delivery = await verifyInlineReleaseDelivery(agent);
+    if (!delivery?.verified) {
+      taskOutcome = { status: 'incomplete', reason: `Release synchronization is unfinished: ${delivery?.reason || 'evidence unavailable'}` };
+      deliveryHeld = true;
+    }
+  }
   if (['blocked', 'incomplete'].includes(taskOutcome?.status)) effectiveSuccess = false;
 
   const savedCleanup = isDeliveryCleanupHeld(task?.metadata) && task.metadata.deliveryRecoveryAgentId === agent.id;
@@ -2133,6 +2141,15 @@ async function finalizeAgentInCompletionContext({
     ? { status: 'incomplete', reason: retirementCompletion.reason } : reportedTaskOutcome, success: verdict.success,
     validationPassed, branchProvenEmpty, noChangeAllowed: permitsNoChangeCompletion(task),
     noCommitDeclared: declaresNoCommitCriterion(task) });
+  if (verdict.success) {
+    const owner = await getAgentRecord(agentId);
+    if (owner?.metadata?.releasePublication?.synchronizationHandoffVersion === 2) {
+      const { verifyInlineReleaseDelivery } = await import('./releaseSynchronization.js');
+      const delivery = await verifyInlineReleaseDelivery(owner);
+      if (!delivery?.verified) taskOutcome = { status: 'incomplete',
+        reason: `Release synchronization is unfinished: ${delivery?.reason || 'evidence unavailable'}` };
+    }
+  }
   if (verdict.success && executionSuccess && validationPassed !== false && taskOutcome?.recovery?.mode === 'cleanup') {
     taskOutcome = { status: 'completed', ...(taskOutcome.reason ? { reason: taskOutcome.reason } : {}) };
   }

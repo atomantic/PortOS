@@ -101,6 +101,15 @@ describe('dispatchAgentRun ownership window', () => {
     expect(spawnDirectly).not.toHaveBeenCalled();
     expect(getActiveAgentIds()).not.toContain('agent-x');
   });
+  it('does not dispatch a continuation whose frozen review policy is unknown', async () => {
+    const context = newContext();
+    context.task = { ...task, metadata: { analysisType: 'release-sync' } };
+    releaseDisposition.mockResolvedValue('review-policy-unverified');
+    expect(await dispatchAgentRun(context)).toBeNull();
+    expect(context.blockAndBail).toHaveBeenCalledWith(expect.objectContaining({ reason: expect.stringContaining('review policy') }));
+    expect(registerAgent).not.toHaveBeenCalled();
+    expect(spawnDirectly).not.toHaveBeenCalled();
+  });
   it.each(['direct', 'tui', 'runner'])('uses the persisted dispatch for %s completion and its spawn limit', async mode => {
     const context = newContext();
     context.task = { ...task, privateSecurityScope: { localOnly: true }, metadata: { totalSpawnCount: '4', failureCount: '0' } };

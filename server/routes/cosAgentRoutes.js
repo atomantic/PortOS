@@ -53,6 +53,10 @@ router.post('/agents/:id/release-candidate', asyncHandler(async (req, res) => {
     const { recoverReleaseCandidate } = await import('../services/releaseCandidateRecovery.js');
     return res.json(await recoverReleaseCandidate(req.params.id, input.predecessorAgentId));
   }
+  if (input.action === 'sync-reserve' || input.action === 'sync-capture') {
+    const { updateReleaseSynchronizationOwnership } = await import('../services/cosClaimOwnership.js');
+    return res.json(await updateReleaseSynchronizationOwnership(req.params.id, input.action));
+  }
   const { updateReleaseCandidateOwnership } = await import('../services/cosClaimOwnership.js');
   res.json(await updateReleaseCandidateOwnership(req.params.id, input.action));
 }));
