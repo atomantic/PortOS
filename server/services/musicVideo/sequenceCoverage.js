@@ -13,13 +13,12 @@ import { basename } from 'path';
 import { ServerError } from '../../lib/errorHandler.js';
 import { buildFalVideoRequest } from '../../lib/falVideoModels.js';
 import {
-  planSequenceCoverage, SEQUENCE_PROMPT_EXPANSION, sequenceGroupInput, sequenceModelId,
+  planProjectSequenceCoverage, SEQUENCE_PROMPT_EXPANSION, sequenceGroupInput, sequenceModelId,
 } from '../../lib/musicVideoSequenceCoverage.js';
 
 export function previewSequenceCoverage(project) {
-  const scenes = Array.isArray(project?.scenes) ? project.scenes : [];
   const modelId = sequenceModelId(project);
-  const { groups, perShot } = planSequenceCoverage(scenes, { modelId });
+  const { groups, perShot } = planProjectSequenceCoverage(project, { modelId });
   return {
     modelId,
     perShot,
@@ -59,11 +58,10 @@ export async function submitSequenceCoverage(projectId, { sceneIds } = {}) {
   if (!musicVideoBriefAllowsVideo(project)) {
     refuse(409, 'MUSIC_VIDEO_NO_VIDEO_TOOL', 'No video tool is selected in this project\'s brief, so generated footage is not dispatched.');
   }
-  const scenes = Array.isArray(project.scenes) ? project.scenes : [];
   const modelId = sequenceModelId(project);
   if (!modelId) refuse(409, 'SEQUENCE_NEEDS_FAL', 'Sequence coverage renders on fal.ai; this project renders clips on another backend.');
   const wanted = (sceneIds || []).join('\u0000');
-  const group = planSequenceCoverage(scenes, { modelId }).groups.find((g) => g.sceneIds.join('\u0000') === wanted);
+  const group = planProjectSequenceCoverage(project, { modelId }).groups.find((g) => g.sceneIds.join('\u0000') === wanted);
   if (!group) refuse(409, 'SEQUENCE_NOT_PLANNED', 'Those shots are not a planned sequence run any more. Reload the sequence preview.');
 
   // fal records the prompt-expansion chip on the clip itself (videoGen/fal.js falVideoSentPrompt).
