@@ -70,7 +70,7 @@ async function dispatchFrame({ project, scene, route, tag, settings }) {
   const { loadLinkedStoryboardPanel } = await import('./linkedPanel.js');
   const panel = await loadLinkedStoryboardPanel(project, scene);
   const panelReference = scene.panelArt ? sent.findIndex((ref) => ref.imageId === scene.panelArt) + 1 : 0;
-  const { prompt, promptAdditions } = musicVideoFrameModelInput(project, scene, { repairs: unmet, fixes, greybox, panel, panelReference });
+  const { prompt, promptAdditions } = musicVideoFrameModelInput(project, scene, { repairs: unmet, fixes, greybox, panel, panelReference, references: sent });
   if (!prompt) throw unprompted(scene, 'frame');
   const [{ resolveRenderTargetConfig }, { resolveImageCleaners }, { enqueueJob }] = await Promise.all([
     import('../imageGen/cloudProviderConfig.js'),

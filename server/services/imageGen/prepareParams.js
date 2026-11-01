@@ -190,6 +190,8 @@ async function applyMusicVideoSceneInputs(data, { project, mode, localModel, nam
       // The picked frame comes first; any reference after it is the shot's character or set reference.
       otherReferences: Math.max(0, namedReferenceFiles.length + referenceUploads.length - 1),
       panel, panelReference: scene?.panelArt ? namedReferenceFiles.indexOf(scene.panelArt) + 1 : 0,
+      // Which named file is whom; a picked frame or other file outside the project's references stays unnamed.
+      references: namedReferenceFiles.map((file) => (project?.visualSpec?.references || []).find((ref) => ref?.imageId === file) || null),
     });
     data.prompt = composed.prompt;
     if (composed.promptAdditions.length) data.promptAdditions = [...(data.promptAdditions || []), ...composed.promptAdditions];

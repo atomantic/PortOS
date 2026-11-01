@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { authoredShotPrompt, musicVideoFrameModelInput, musicVideoShotModelInput } from './musicVideoShotPrompt.js';
+import { authoredShotPrompt, musicVideoFrameModelInput, musicVideoReferenceMapText, musicVideoShotModelInput } from './musicVideoShotPrompt.js';
 
 const project = {
   concept: {
@@ -123,5 +123,35 @@ describe('authoredShotPrompt', () => {
     expect(authoredShotPrompt({ ...linked, prompt: 'She stands up' })).toBe('She stands up');
     expect(authoredShotPrompt(linked)).toBe('She laces her skates');
     expect(authoredShotPrompt({ visualIntent: 'planner intent', framePrompt: 'rental booth' })).toBe('rental booth');
+  });
+});
+
+// Uniquely catches a still conditioned on two people's sheets with nothing saying which face is
+// whose, so the model swaps or blends the faces (Hold Still, 2026-11-01).
+describe('reference map', () => {
+  const references = [
+    { id: 'mvr-cs-character', imageId: 'renee.png', role: 'character', label: 'Renee — character sheet', note: 'sunburned nose, crooked front tooth; frizzy dirty-blond perm' },
+    null,
+    { id: 'mvr-cs-cast-kevin', imageId: 'kevin.png', role: 'character', label: 'Kevin — cast sheet', note: 'long narrow face, ears that stick out; shaggy middle-parted brown hair' },
+    { id: 'mvr-cs-set-street', imageId: 'street.png', role: 'set', label: 'Cul-de-sac at dusk' },
+    { id: 'mvr-cs-props', imageId: 'props.png', role: 'prop', label: 'Props' },
+  ];
+
+  it('names each reference image by its send position, with the face text in full', () => {
+    const text = musicVideoReferenceMapText(references);
+    expect(text).toContain('Reference image 1 is Renee — character sheet: this exact person. Match their face, hair, skin, build and age exactly (sunburned nose, crooked front tooth; frizzy dirty-blond perm)');
+    expect(text).toContain('Reference image 3 is Kevin — cast sheet: this exact person.');
+    expect(text).toContain('Reference image 4 is the empty set "Cul-de-sac at dusk": take only the place');
+    expect(text).toContain('Reference image 5 is the prop sheet');
+    expect(text).not.toContain('Reference image 2');
+    expect(text).toMatch(/Every person in the shot is one of the people in these references/);
+    expect(musicVideoReferenceMapText([null, { role: 'mood', imageId: 'x.png' }])).toBe('');
+  });
+
+  it('leads the still\'s look blocks when references are sent, and is absent otherwise', () => {
+    const input = musicVideoFrameModelInput(project, scene, { references });
+    expect(ids(input)[0]).toBe('reference-map');
+    expect(input.prompt).toContain('Reference image 1 is Renee — character sheet');
+    expect(ids(musicVideoFrameModelInput(project, scene))).not.toContain('reference-map');
   });
 });
