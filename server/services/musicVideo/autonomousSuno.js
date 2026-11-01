@@ -1,7 +1,8 @@
 /**
- * Generate a Suno song in the signed-in PortOS Browser, export only M4A
- * through its Download UI, validate the completed file, and import it directly.
- * Retries reuse submitted song ids so a failed export never repeats Create.
+ * Generate a Suno song in the signed-in PortOS Browser, wait until that render
+ * has finished, export only M4A through its Download UI, validate the completed
+ * file, and import it directly. Retries reuse submitted song ids so a failed
+ * export never repeats Create.
  */
 import { copyFile, mkdtemp, open, rm } from 'fs/promises';
 import { join } from 'path';
@@ -18,8 +19,15 @@ import { PUBLISH_STEP_TIMEOUT_MS as T, connectPortosBrowser, loginRequired, seri
 const LABEL = 'Suno';
 const SUNO_CREATE_URL = 'https://suno.com/create';
 const SUNO_AUDIO_TIMEOUT_MS = 10 * 60 * 1000;
+// Separate from the export deadline. Suno lists the new rows as soon as it
+// accepts Create; the one Unlock & Download click must not start until the
+// chosen render has finished, or the export just waits out its own deadline.
+const SUNO_GENERATION_TIMEOUT_MS = 10 * 60 * 1000;
+const SUNO_RENDER_POLL_MS = 3000;
 // How long an opened version menu may take to list its items.
 const SUNO_MENU_WAIT_MS = 5000;
+// Second argument to the render-readiness probe. Tests key off it; the page never sees it as DOM.
+const SUNO_RENDER_PROBE = 'portos-suno-render';
 
 const songLinks = (page, title = null) => page.evaluate((wantedTitle) => [...document.querySelectorAll('a[href*="/song/"]')]
   // Workspace rows may finish loading after Create. A newly seen href alone
@@ -424,6 +432,133 @@ async function closeSunoBrowser(page, browser) {
   }
 }
 
+const BUSY_RENDER_STATUS = new Set(['submitted', 'queued', 'streaming', 'generating', 'running', 'processing']);
+const FAILED_RENDER_STATUS = new Set(['error', 'failed']);
+
+/**
+ * Whether a workspace row or song page says this render is finished.
+ * `complete` is finished. An in-progress status or a generating/progress label
+ * is not, even when a partial clock is already visible — Suno can show one
+ * before the download dialog will complete, and that click is never repeated.
+ * A positive duration with no in-progress marker counts as finished.
+ * Returns `ready`, `failed`, or `pending`.
+ */
+function sunoRenderPhase(snapshot) {
+  const status = String(snapshot?.status || '').toLowerCase();
+  if (FAILED_RENDER_STATUS.has(status)) return 'failed';
+  if (status === 'complete') return 'ready';
+  if (BUSY_RENDER_STATUS.has(status)) return 'pending';
+  if (Array.isArray(snapshot?.busyLabels) && snapshot.busyLabels.some((label) => String(label || '').trim())) return 'pending';
+  const clocks = Array.isArray(snapshot?.clocks) ? snapshot.clocks : [];
+  const finished = clocks.some((text) => {
+    const match = /^(\d+):(\d{2})$/.exec(String(text).trim());
+    return Boolean(match) && Number(match[1]) * 60 + Number(match[2]) > 0;
+  });
+  return finished ? 'ready' : 'pending';
+}
+
+// Leaf clocks and short status labels for one song. The workspace scope is the
+// largest ancestor that still contains only this song's link, so a neighbour's
+// duration cannot satisfy the wait. On the song page, clocks inside a link to
+// a different song are ignored for the same reason. Runs in the page: no
+// closed-over module state.
+function collectSunoRenderSnapshot(request) {
+  const wanted = String(request.songId || '').toLowerCase();
+  const hrefOf = (anchor) => String(anchor.getAttribute('href') || '').toLowerCase();
+  const isThisSong = (anchor) => hrefOf(anchor).includes(`/song/${wanted}`);
+  const link = [...document.querySelectorAll('a[href*="/song/"]')].find(isThisSong) || null;
+  const onSongPage = location.pathname.toLowerCase().includes(`/song/${wanted}`);
+  const visible = (el) => el.getClientRects().length > 0 && getComputedStyle(el).visibility !== 'hidden';
+  const foreign = (el) => {
+    const owner = el.closest('a[href*="/song/"]');
+    return Boolean(owner && !isThisSong(owner));
+  };
+  let scope = onSongPage ? document.body : link;
+  if (link && !onSongPage) {
+    let node = link;
+    for (let depth = 0; node && depth < 12; depth += 1) {
+      const ids = new Set([...node.querySelectorAll('a[href*="/song/"]')].map((anchor) => {
+        const match = /\/song\/([0-9a-f-]{36})/i.exec(hrefOf(anchor));
+        return match ? match[1] : hrefOf(anchor);
+      }));
+      if (ids.size > 1) break;
+      scope = node;
+      node = node.parentElement;
+    }
+  }
+  const inScope = (el) => Boolean(scope && scope.contains(el) && !foreign(el) && visible(el));
+  const clocks = [];
+  const busyLabels = [];
+  for (const el of scope ? scope.querySelectorAll('span,div,time,p') : []) {
+    if (!inScope(el)) continue;
+    const text = el.textContent.replace(/\s+/g, ' ').trim();
+    if (el.childElementCount === 0 && /^\d+:\d{2}$/.test(text)) clocks.push(text);
+    const pair = /^(\d+:\d{2}) \/ (\d+:\d{2})$/.exec(text);
+    if (pair) clocks.push(pair[2]);
+    if (el.childElementCount === 0 && text.length <= 24 && /^(generating|creating|streaming|queued|in progress|\d{1,3}%)[.…]*$/i.test(text)) {
+      busyLabels.push(text);
+    }
+  }
+  const busyMarked = (el) => el.getAttribute('role') === 'progressbar' || el.getAttribute('aria-busy') === 'true';
+  if (scope && [scope, ...scope.querySelectorAll('[role="progressbar"],[aria-busy="true"]')].some((el) => busyMarked(el) && (el === scope || inScope(el)))) {
+    busyLabels.push('progress');
+  }
+  const statusEl = scope ? [scope, ...scope.querySelectorAll('[data-status]')].find((el) => el.getAttribute('data-status') && (el === scope || inScope(el))) : null;
+  return {
+    onSongPage,
+    hasSongLink: Boolean(link),
+    clocks,
+    busyLabels,
+    status: statusEl ? String(statusEl.getAttribute('data-status') || '') : '',
+  };
+}
+
+async function readSunoRenderSnapshot(page, songId) {
+  return page.evaluate(collectSunoRenderSnapshot, { probe: SUNO_RENDER_PROBE, songId });
+}
+
+function generationError(reason, code, status) {
+  return new ServerError(`Suno: song generation ${reason}`, {
+    status, code, context: { platform: LABEL, stage: 'generating', reason },
+  });
+}
+
+/**
+ * Poll until the chosen render is finished. The export deadline starts only
+ * after this returns: an unfinished song's Download dialog never completes,
+ * and the Unlock & Download click is not repeated.
+ */
+async function waitForSunoRender(page, songId, {
+  sleep = defaultSleep, now = Date.now, signal, onPending,
+  generationTimeoutMs = SUNO_GENERATION_TIMEOUT_MS, renderPollMs = SUNO_RENDER_POLL_MS,
+} = {}) {
+  const deadline = now() + generationTimeoutMs;
+  let openedSongPage = false;
+  let notedPending = false;
+  while (now() < deadline) {
+    signal?.throwIfAborted();
+    const snapshot = await readSunoRenderSnapshot(page, songId).catch(() => null);
+    // A resume opens a blank tab. The create workspace already has the row.
+    if (!openedSongPage && snapshot && !snapshot.onSongPage && !snapshot.hasSongLink) {
+      openedSongPage = true;
+      signal?.throwIfAborted();
+      await step(LABEL, 'open the song while it generates', () => page.goto(sunoSongUrl(songId), { waitUntil: 'domcontentloaded', timeout: T }));
+      const url = typeof page.url === 'function' ? page.url() : '';
+      if (/sign-?in|login|accounts\./i.test(url)) throw loginRequired(LABEL, SUNO_CREATE_URL);
+      continue;
+    }
+    const phase = snapshot ? sunoRenderPhase(snapshot) : 'pending';
+    if (phase === 'ready') return;
+    if (phase === 'failed') throw generationError('failed', 'SUNO_GENERATION_FAILED', 502);
+    if (!notedPending) {
+      notedPending = true;
+      try { onPending?.(); } catch { /* progress is advisory */ }
+    }
+    await sleep(renderPollMs);
+  }
+  throw generationError('deadline-exceeded', 'SUNO_GENERATION_TIMEOUT', 504);
+}
+
 // Suno returns two renders per request; the second is usually the better one.
 // A single-id resume (or a one-render result) falls back to the only id.
 const pickRender = (ids) => ids[1] ?? ids[0];
@@ -458,7 +593,9 @@ export async function submitSunoSongOnly(fields, deps = {}) {
  * Generate (or resume) a song and import its completed, validated M4A.
  * `deps.onProgress(step)` reports the long stage's sub-steps — `opening`,
  * `generating`, `exporting`, `validating`, `importing` — so the run can show
- * where a ten-minute stage is; a throwing reporter never fails the song.
+ * where a long stage is. `generating` covers the render wait, which has its own
+ * deadline; `exporting` starts only after that render is finished. A throwing
+ * reporter never fails the song.
  * `deps.exportSongId` exports that song instead of the default render of `deps.songIds`.
  */
 export async function generateSunoSong(fields, deps = {}) {
@@ -482,8 +619,16 @@ export async function generateSunoSong(fields, deps = {}) {
         if (!deps.songIds?.length) report('generating');
         const ids = deps.songIds?.length ? deps.songIds : await submitSunoSong(page, fields, deps);
         if (!deps.songIds?.length) await deps.onSubmitted?.(ids);
+        const songId = chosenRender(ids, deps.exportSongId);
+        // A fresh submit already reported `generating`. A resume that finds the
+        // render still in progress should say so too; an already-finished song
+        // goes straight to export.
+        await waitForSunoRender(page, songId, {
+          ...deps,
+          onPending: () => { if (deps.songIds?.length) report('generating'); },
+        });
         report('exporting');
-        await downloadSunoAudio(page, chosenRender(ids, deps.exportSongId), path, exportDeps);
+        await downloadSunoAudio(page, songId, path, exportDeps);
         return ids;
       } finally {
         await closeSunoBrowser(page, browser); // disconnect; keep the shared browser running
@@ -520,4 +665,4 @@ export async function readSunoSongPage(songId, deps = {}) {
   });
 }
 
-export const __testing = { submitSunoSong, downloadSunoAudio };
+export const __testing = { submitSunoSong, downloadSunoAudio, sunoRenderPhase, collectSunoRenderSnapshot, SUNO_RENDER_PROBE };
