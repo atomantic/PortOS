@@ -249,7 +249,10 @@ esac
 `);
     writeFileSync(lipo, `#!/bin/bash
 if [[ "$1" == "-archs" ]]; then
-  printf '%s\\n' "$ARCHES"
+  case "$2" in
+    *.so|*.dylib) printf '%s\\n' "\${SO_ARCHES:-arm64}" ;;
+    *) printf '%s\\n' "$ARCHES" ;;
+  esac
   exit 0
 fi
 if [[ "$1" == "-thin" && "$2" == "arm64" && "$4" == "-output" ]]; then
@@ -261,15 +264,27 @@ exit 1
 `);
     chmodSync(uname, 0o755);
     chmodSync(lipo, 0o755);
-    const run = (machine, arches) => {
+    const run = (machine, arches, soArches = '') => {
       const link = join(venv, 'bin', 'python3');
       rmSync(link, { force: true });
+      rmSync(join(venv, 'lib'), { recursive: true, force: true });
       writeFileSync(outside, 'ORIGINAL');
       execFileSync('ln', ['-s', outside, link]);
+      if (soArches) {
+        mkdirSync(join(venv, 'lib'), { recursive: true });
+        writeFileSync(join(venv, 'lib', 'ext.so'), 'SO');
+      }
       const log = join(dir, `lipo-${machine}.log`);
       writeFileSync(log, '');
       execFileSync('bash', ['-c', `${apple}\n${pin}\npin_venv_arm64 "$1"`, 'bash', venv], {
-        env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, ARCHES: arches, LOG: log, MACHINE: machine },
+        env: {
+          ...process.env,
+          PATH: `${dir}:${process.env.PATH}`,
+          ARCHES: arches,
+          SO_ARCHES: soArches,
+          LOG: log,
+          MACHINE: machine,
+        },
       });
       return { body: readFileSync(link, 'utf8'), target: readFileSync(outside, 'utf8'), log: readFileSync(log, 'utf8') };
     };
@@ -277,6 +292,9 @@ exit 1
     expect(universal.body).toBe('THIN\n');
     expect(universal.target).toBe('ORIGINAL');
     expect(universal.log).toContain('thin');
+    const intelWheels = run('arm64', 'x86_64 arm64', 'x86_64');
+    expect(intelWheels.body).toBe('ORIGINAL');
+    expect(intelWheels.log).toBe('');
     const already = run('arm64', 'arm64');
     expect(already.body).toBe('ORIGINAL');
     expect(already.log).toBe('');
@@ -377,6 +395,39 @@ printf '%s\\n' '0'
       },
     });
     expect(existsSync(inside)).toBe(true);
+    const namedRoot = join(dir, 'named-venv');
+    const later = join(dir, 'later-python');
+    const prepareNamed = () => {
+      rmSync(namedRoot, { recursive: true, force: true });
+      mkdirSync(join(namedRoot, 'bin'), { recursive: true });
+      mkdirSync(later, { recursive: true });
+      writeFileSync(join(namedRoot, 'bin', 'python3'), '#!/bin/bash\nexit 0\n');
+      chmodSync(join(namedRoot, 'bin', 'python3'), 0o755);
+      writeFileSync(join(later, 'python3'), '#!/bin/bash\nexit 0\n');
+      chmodSync(join(later, 'python3'), 0o755);
+    };
+    prepareNamed();
+    execFileSync('bash', ['-c', `${apple}\n${reset}\nreset_universal_venv "$1" python3`, 'bash', namedRoot], {
+      env: {
+        ...process.env,
+        PATH: `${join(namedRoot, 'bin')}:${later}:${dir}:${process.env.PATH}`,
+        ARCHES: 'x86_64 arm64',
+        RECREATE_ARCHES: 'arm64',
+        MACHINE: 'arm64',
+      },
+    });
+    expect(existsSync(namedRoot)).toBe(false);
+    prepareNamed();
+    execFileSync('bash', ['-c', `${apple}\n${reset}\nreset_universal_venv "$1" python3`, 'bash', namedRoot], {
+      env: {
+        ...process.env,
+        PATH: `${join(namedRoot, 'bin')}:${dir}:/bin`,
+        ARCHES: 'x86_64 arm64',
+        RECREATE_ARCHES: 'arm64',
+        MACHINE: 'arm64',
+      },
+    });
+    expect(existsSync(namedRoot)).toBe(true);
   });
 
   it.skipIf(process.platform === 'win32')('does not choose a python inside the venv it may delete', () => {

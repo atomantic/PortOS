@@ -100,7 +100,7 @@ pin_venv_arm64() {
     arm64|aarch64) ;;
     *) return 0 ;;
   esac
-  local root="$1/bin" py base arches tmp target link origin origin_dir dep rel abs failed
+  local root="$1/bin" py base arches tmp target link origin origin_dir dep rel abs failed extensions_checked=0 ext ext_arches
   [[ -d "$root" ]] || return 0
   for py in "$root"/python "$root"/python3 "$root"/python3.[0-9] "$root"/python3.[0-9][0-9]; do
     [[ -e "$py" && ! -d "$py" ]] || continue
@@ -115,6 +115,23 @@ pin_venv_arm64() {
       *" x86_64 "*|*" i386 "*) ;;
       *) continue ;;
     esac
+    # A skipped rebuild can leave x86_64 wheels that pip --upgrade treats as
+    # current. Thinning the launcher then makes that venv unimportable.
+    if [[ "$extensions_checked" -eq 0 ]]; then
+      extensions_checked=1
+      if [[ -d "$1/lib" ]]; then
+        while IFS= read -r ext; do
+          ext_arches="$(lipo -archs "$ext" 2>/dev/null || true)"
+          [[ -n "$ext_arches" ]] || continue
+          case " $ext_arches " in
+            *" arm64 "*|*" aarch64 "*) continue ;;
+          esac
+          case " $ext_arches " in
+            *" x86_64 "*|*" i386 "*) return 0 ;;
+          esac
+        done < <(find "$1/lib" -type f \( -name '*.so' -o -name '*.dylib' \) 2>/dev/null)
+      fi
+    fi
     origin="$py"
     while [[ -L "$origin" ]]; do
       link="$(readlink "$origin")" || continue 2
@@ -173,16 +190,38 @@ reset_universal_venv() {
     *) return 0 ;;
   esac
   [[ -n "${1:-}" && -n "${2:-}" ]] || return 0
-  local py="$1/bin/python3" arches base_arches base="$2"
+  local py="$1/bin/python3" arches base_arches base="$2" original="$2" outside="" dir candidate
   case "$base" in
     */*) ;;
     *) base="$(command -v "$base" 2>/dev/null || true)" ;;
   esac
   [[ -n "$base" && -x "$base" ]] || return 0
-  # An activated venv is the first python on PATH. Deleting it would remove
-  # the interpreter the caller uses for `python -m venv`.
+  # An activated venv is the first python on PATH. A caller that stored that
+  # absolute path cannot recreate the venv after it is deleted. A bare command
+  # name is resolved again, so delete when the next python on PATH is arm64.
   case "$base" in
-    "$1"/*) return 0 ;;
+    "$1"/*)
+      case "$original" in
+        */*) return 0 ;;
+      esac
+      local path_rest="$PATH"
+      while [[ -n "$path_rest" ]]; do
+        dir="${path_rest%%:*}"
+        if [[ "$path_rest" == *:* ]]; then path_rest="${path_rest#*:}"; else path_rest=""; fi
+        [[ -n "$dir" ]] || continue
+        case "$dir" in
+          "$1"|"$1"/*) continue ;;
+        esac
+        for candidate in python3 python3.13 python3.12 python3.11 python3.10 python; do
+          if [[ -x "$dir/$candidate" && ! -d "$dir/$candidate" ]]; then
+            outside="$dir/$candidate"
+            break 2
+          fi
+        done
+      done
+      [[ -n "$outside" ]] || return 0
+      base="$outside"
+      ;;
   esac
   [[ -e "$py" && ! -d "$py" ]] || return 0
   arches="$(lipo -archs "$py" 2>/dev/null || true)"
