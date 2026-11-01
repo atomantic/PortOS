@@ -6,6 +6,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { buildCliArgs } from './cliProviderArgs.js';
 import { isAuthoringOneShotProvider, isToolFreeOneShotProvider, toolFreeOneShotArgs, toolFreeOneShotRefusal } from './providerVendors.js';
+import { GROK_BUILTIN_TOOLS } from './grok.js';
 
 const SHIPPED_PROVIDERS = Object.values(
   JSON.parse(readFileSync(new URL('../../data.reference/providers.json', import.meta.url), 'utf8')).providers,
@@ -45,9 +46,9 @@ describe('toolFreeOneShotArgs', () => {
     ]);
   });
 
-  it('pins grok to plan mode with an empty tool list, keeping its stdin prompt file', () => {
-    const { args } = toolFreeOneShotArgs(cli('grok'), ['--output-format', 'plain', '--permission-mode=bypassPermissions', '--prompt-file', '/dev/stdin']);
-    expect(args).toEqual(['--output-format', 'plain', '--prompt-file', '/dev/stdin', '--permission-mode', 'plan', '--tools', '']);
+  it('pins grok to plan mode with every built-in tool removed, keeping its stdin prompt file', () => {
+    const { args } = toolFreeOneShotArgs(cli('grok'), ['--output-format', 'plain', '--permission-mode=bypassPermissions', '--disallowed-tools', 'write', '--prompt-file', '/dev/stdin']);
+    expect(args).toEqual(['--output-format', 'plain', '--prompt-file', '/dev/stdin', '--permission-mode', 'plan', '--disallowed-tools', GROK_BUILTIN_TOOLS.join(',')]);
   });
 
   it.each([

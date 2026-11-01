@@ -111,6 +111,7 @@ import {
   prepareGrokPromptFile,
   withGrokStreamingJsonOutput,
   GROK_STREAMING_JSON_FORMAT,
+  GROK_NO_TOOL_ARGS,
   grokServiceTierModel,
   grokSpeedArgsConflict,
 } from './grok.js';
@@ -263,10 +264,10 @@ function claudeToolFreeArgs(args) {
   return [...cleared, ...CLAUDE_TOOL_FREE_ARGS];
 }
 
-// Grok's read-only permission mode plus an empty built-in tool allowlist — the
-// same pair its no-tool public-review recipe enforces.
+// Grok's read-only permission mode with every built-in tool removed — the same
+// posture its no-tool public-review recipe enforces (#14476).
 function grokToolFreeArgs(args) {
-  return [...dropOptions(args, ['--permission-mode', '--tools']), '--permission-mode', 'plan', '--tools', ''];
+  return [...dropOptions(args, ['--permission-mode', '--tools', '--disallowed-tools']), ...GROK_NO_TOOL_ARGS];
 }
 
 // Pi: `--no-builtin-tools` alone leaves extension tools enabled, so extensions
@@ -423,14 +424,15 @@ function antigravityPublicReviewArgs(provider, { effectiveModel, effort } = {}, 
 }
 
 // Grok exposes both halves of the contract as first-class flags:
-// `--permission-mode plan` is its read-only mode, `--tools ''` empties the
-// built-in tool allowlist, and `--sandbox <profile>` applies its own
+// `--permission-mode plan` is its read-only mode, `--disallowed-tools` removes
+// every built-in tool (an empty `--tools ''` removes none, #14476), and
+// `--sandbox <profile>` applies its own
 // filesystem/network sandbox (`workspace` is grok's built-in profile). The
 // safety flags are seeded as the BASE args so `ensureGrokHeadlessArgs` sees a
 // permission posture already pinned and does not append its usual
 // `--permission-mode bypassPermissions`.
 function grokPublicReviewSpawnArgs(provider, ctx) {
-  return grokPublicReviewArgs(provider, ctx, ['--permission-mode', 'plan', '--tools', '']);
+  return grokPublicReviewArgs(provider, ctx, GROK_NO_TOOL_ARGS);
 }
 
 function grokPublicReviewActionsSpawnArgs(provider, ctx) {

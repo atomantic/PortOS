@@ -82,7 +82,7 @@ const OUTPUT_FORMAT_FLAGS = ['--output-format', '-o'];
  *     approval prompts (grok's analog of `claude --dangerously-skip-permissions`).
  *     With `toolFree` (a one-shot answer over caller text — Ask, AI app
  *     detection, #9008) it is the read-only `plan` mode instead; the caller
- *     then runs `toolFreeOneShotArgs` to empty the tool allowlist too.
+ *     then runs `toolFreeOneShotArgs` to remove the built-in tools too.
  *   - `--model <id>`               — gated on no user-baked model flag.
  *   - `--prompt-file /dev/stdin`   — deliver the prompt over stdin (POSIX); the
  *     spawn helper rewrites this to a temp file on Windows.
@@ -106,6 +106,57 @@ export function ensureGrokHeadlessArgs(baseArgs = [], model, { toolFree = false 
     out.push('--prompt-file', GROK_STDIN_PROMPT_PATH);
   }
   return out;
+}
+
+// Every tool grok offers the model, by the name it is shown (#14476). grok has
+// no "no tools" switch: an empty `--tools ''` (or `--tools none`) names no tool
+// and leaves the whole set available, so the no-tool posture removes each one
+// with `--disallowed-tools`. Removing `search_tool`/`use_tool` (the MCP
+// meta-tools) also leaves configured MCP servers' tools uncallable; `x_search`
+// is the server-side X search that `--disable-web-search` does not cover.
+// Names below the `write` row are absent from 1.0.70's default list (disabled by
+// `--no-subagents`/`--disable-web-search`, or not shipped yet) but recognized by
+// the flag, so they stay removed if those defaults change. A tool grok ships
+// later escapes this list: `grokToolsEscapingNoToolPosture` reports it from the
+// reviewer's transcript, and the fix is to add its name here.
+export const GROK_BUILTIN_TOOLS = Object.freeze([
+  'run_terminal_command', 'read_file', 'search_replace', 'list_dir', 'grep',
+  'kill_command_or_subagent', 'todo_write', 'get_command_or_subagent_output',
+  'scheduler_create', 'scheduler_delete', 'scheduler_list', 'monitor',
+  'search_tool', 'use_tool', 'workflow', 'enter_plan_mode', 'exit_plan_mode',
+  'ask_user_question', 'send_feedback', 'image_gen', 'image_edit',
+  'image_to_video', 'reference_to_video', 'write',
+  'web_search', 'web_fetch', 'x_search', 'task', 'wait_tasks', 'lsp',
+]);
+
+/** grok's no-tool posture: read-only plan mode with every built-in tool removed. */
+export const GROK_NO_TOOL_ARGS = Object.freeze([
+  '--permission-mode', 'plan',
+  '--disallowed-tools', GROK_BUILTIN_TOOLS.join(','),
+]);
+
+/**
+ * Tools a no-tool grok run still offered or called, read from its
+ * `streaming-json` transcript: non-MCP names in the last `available_commands`
+ * event plus every `tool_call`. Empty when the posture held.
+ * @param {string} streamText - raw JSONL stdout
+ * @returns {string[]}
+ */
+export function grokToolsEscapingNoToolPosture(streamText) {
+  let offered = [];
+  const called = [];
+  for (const line of String(streamText ?? '').split('\n')) {
+    let event;
+    try { event = JSON.parse(line); } catch { continue; }
+    if (event?.type === 'available_commands' && Array.isArray(event.tools)) {
+      // An MCP tool is shown as `server__tool`; only the removed meta-tools
+      // reach it, so its listing here is not an escape.
+      offered = event.tools.filter((name) => typeof name === 'string' && !name.includes('__'));
+    } else if (event?.type === 'tool_call' && typeof event.toolName === 'string') {
+      called.push(event.toolName);
+    }
+  }
+  return [...new Set([...offered, ...called])];
 }
 
 // `--output-format plain` concatenates every assistant text chunk of the run with
