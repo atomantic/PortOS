@@ -14,6 +14,7 @@
  * and opened on its own.
  */
 
+import { currentCastSetsInspection } from '../../lib/musicVideoCastSetsInspection.js';
 import { plannedTests } from './castAndSetsPlan.js';
 import { renderDefinitionsSection } from './castAndSetsDefinitions.js';
 
@@ -194,6 +195,10 @@ export function renderCastAndSetsSheet({
   const worldFacts = [['Layout', w.layout], ['Depth', w.depth], ['Lighting', w.lighting], ['Camera', w.camera], ['Transitions', w.transitions]]
     .filter(([, v]) => v).map(([k, v]) => `<dt>${e(k)}</dt><dd>${e(v)}</dd>`).join('');
   const questions = (d.questions && d.questions.length ? d.questions : (procedural ? PROCEDURAL_QUESTIONS : DEFAULT_QUESTIONS)).map((q) => `<li>${e(q)}</li>`).join('');
+  const inspections = Object.values(project?.castAndSets?.plan || {}).map((item) => {
+    const evidence = currentCastSetsInspection(project.castAndSets, item.key);
+    return `<li><b>${e(item.label || item.key)}</b>: ${e(evidence?.verdict === 'pass' ? 'matches saved prompt' : evidence?.verdict === 'mismatch' ? 'prompt mismatch' : 'unreviewed')}${evidence?.discrepancy ? ` — ${e(evidence.discrepancy)}` : ''}</li>`;
+  }).join('');
   const applied = notesApplied.length
     ? `<p class="sub"><b>Revision ${revision}.</b> Notes applied: ${notesApplied.map((n) => `${n.target ? `[${e(n.target)}] ` : ''}${e(n.text)}`).join(' · ')}</p>`
     : '';
@@ -211,6 +216,7 @@ export function renderCastAndSetsSheet({
 <p class="lede">${e(d.logline)}</p>
 ${d.interpretation ? `<p class="sub">${e(d.interpretation)}</p>` : ''}
 ${applied}
+${inspections ? `<section><h2>Vision inspection</h2><ul>${inspections}</ul><p>Flagged and unreviewed images require acknowledgement or regeneration in the Cast &amp; Sets card before approval.</p></section>` : ''}
 <section><h2><small>Protagonist</small>${e(p.name || 'Protagonist')}</h2>
 ${procedural ? `<dl class="facts wide">${facts}</dl></section>
 ${renderDefinitionsSection(d.definitions)}

@@ -16,7 +16,8 @@
  *     direction,            // castAndSetsDirection.js shape (`medium`: absent = photographic)
  *     plan:   { [key]: { key, kind, label, prompt, deps, refKeys, refImages?, setId?, testIndex? } },
  *     images: { [key]: { status, jobId, imageId, history, failures, error, updatedAt,
- *       submittedPrompt?, submittedPromptTruncated?, submittedReferences?, submittedRevision? } },
+ *       submittedPrompt?, submittedPromptTruncated?, submittedReferences?, submittedRevision?,
+ *       inspection?, inspectionAcknowledgement? } },
  *     artifactId, artifactVersion, notesApplied,
  *     feedback,             // [{ id, text, at, revision }]: standing sheet feedback every direction call honors
  *     changeSummary,        // { revision, changes: [string], rerendered, at }: what the last revision changed
@@ -38,6 +39,7 @@
  * syncs as usual.
  */
 
+import { castSetsInspectionBlockers } from '../../lib/musicVideoCastSetsInspection.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { trimTo } from '../../lib/textUtils.js';
 
@@ -247,7 +249,7 @@ export function settleCastAndSetsImage(project, key, { jobId = null, filename = 
     || (jobId && img.jobId && img.jobId !== jobId)) return { project, stage, changed: false };
   if (filename) {
     const history = img.imageId && img.imageId !== filename ? [...(img.history || []), img.imageId].slice(-MAX_HISTORY) : (img.history || []);
-    const next = { ...img, status: 'done', jobId: jobId || img.jobId, imageId: filename, history, failures: 0, error: null, updatedAt: now };
+    const next = { ...img, inspection: null, inspectionAcknowledgement: null, status: 'done', jobId: jobId || img.jobId, imageId: filename, history, failures: 0, error: null, updatedAt: now };
     return { ...write(project, { ...stage, images: { ...stage.images, [key]: next } }, now), changed: true };
   }
   const failures = (img.failures || 0) + 1;
@@ -293,5 +295,6 @@ export function reconfirmCastAndSetsOnProject(project, approvedInputs, approvedV
 export function assertCastAndSetsApprovable(project) {
   const stage = requireStage(project);
   if (stage.status !== 'review') throw stageError(409, 'CAST_SETS_NOT_IN_REVIEW', `The Cast & Sets check-in is ${stage.status}, not waiting for review`);
+  if (castSetsInspectionBlockers(stage).length) throw stageError(409, 'CAST_SETS_INSPECTION_REQUIRED', 'Review the flagged or unreviewed images and explicitly acknowledge them, or regenerate, before approving.');
   return stage;
 }

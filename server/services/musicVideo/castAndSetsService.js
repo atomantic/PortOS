@@ -29,6 +29,7 @@ import { withMusicVideoStyle } from './styleReferences.js';
  */
 
 import { randomUUID } from 'crypto';
+import { castSetsInspectionInputs, currentCastSetsInspection, castSetsInspectionBlockers, sameCastSetsInspectionInputs } from '../../lib/musicVideoCastSetsInspection.js';
 import { readFile } from 'fs/promises';
 import { basename, extname } from 'path';
 import { ServerError } from '../../lib/errorHandler.js';
@@ -98,6 +99,8 @@ const MAX_SUBMITTED_REFERENCES = 16;
 
 // Test seam: provider, queue, settings and mood-board access are swappable.
 const defaults = {
+  resolveReviewer: async (opts) => (await import('./plateReview.js')).resolvePlateReviewer(opts),
+  reviewImage: async (opts) => (await import('./castAndSetsInspection.js')).reviewCastSetsImage(opts),
   resolveProvider: async (opts) => resolveMusicVideoLlm(opts),
   runPrompt: async (opts) => (await import('../promptRunner.js')).runPromptThroughProvider(opts),
   getSettings: async () => (await import('../settings.js')).getSettings(),
@@ -576,6 +579,10 @@ async function advanceOnce(projectId) {
   const stage = project.castAndSets;
   if (!stage || stage.processId !== PROCESS_ID || stage.status !== 'imaging') return;
   if (allCastAndSetsImagesDone(stage)) {
+    const { inspectCastAndSetsImages } = await import('./castAndSetsInspection.js');
+    await inspectCastAndSetsImages(projectId, { processId: PROCESS_ID, resolveReviewer: deps.resolveReviewer, reviewImage: deps.reviewImage, publish });
+    const fresh = await requireProject(projectId);
+    if (fresh.castAndSets?.revision !== stage.revision || fresh.castAndSets.status !== 'imaging' || fresh.castAndSets.processId !== PROCESS_ID) return;
     await assemble(projectId);
     return;
   }
@@ -649,6 +656,7 @@ async function assemble(projectId) {
   const project = marked.project;
   const stage = marked.stage;
   const mode = castAndSetsCheckinMode(project);
+  const autoApprove = mode === 'auto' && !castSetsInspectionBlockers(stage).length;
   const html = renderCastAndSetsSheet({
     title: project.name,
     project,
@@ -660,7 +668,7 @@ async function assemble(projectId) {
     revision: stage.revision,
     notesApplied: stage.notesApplied || [],
     checkinMode: mode,
-    status: mode === 'auto' ? 'approved' : 'review',
+    status: autoApprove ? 'approved' : 'review',
   });
   const { saveGeneratedDevArtifact } = await import('./devArtifactService.js');
   const existing = stage.artifactId && (project.devArtifacts || []).some((a) => a.id === stage.artifactId && !a.deleted) ? stage.artifactId : null;
@@ -674,8 +682,8 @@ async function assemble(projectId) {
   const out = await mutateProjectRecord(projectId, (current) => setCastAndSetsStatus(current, 'review', {
     extra: { artifactId: artifact.id, artifactVersion: artifact.version },
   }));
-  console.log(`🎭 Music Video Cast & Sets ${short(projectId)} sheet v${artifact.version} ready (${mode === 'auto' ? 'auto-approve' : 'waiting for check-in'})`);
-  if (mode === 'auto') return approveCastAndSets(projectId);
+  console.log(`🎭 Music Video Cast & Sets ${short(projectId)} sheet v${artifact.version} ready (${autoApprove ? 'auto-approve' : 'waiting for check-in'})`);
+  if (autoApprove) return approveCastAndSets(projectId);
   publish(projectId, out.project);
   return out;
 }
@@ -730,6 +738,22 @@ const settleAndRebase = (next, now) => {
   const { project } = rebaseProductionAfterCheckin(next.project, now);
   return { project, stage: project.castAndSets };
 };
+
+/** Record an explicit operator decision on this exact image, including unavailable vision. */
+export async function acknowledgeCastAndSetsImage(projectId, input, reviewer) {
+  const out = await mutateProjectRecord(projectId, (current) => {
+    const stage = current.castAndSets;
+    if (stage?.status !== 'review') throw new ServerError('The sheet is not waiting for review', { status: 409, code: 'CAST_SETS_NOT_IN_REVIEW' });
+    const inputs = castSetsInspectionInputs(stage, input.inputs.key);
+    const inspection = currentCastSetsInspection(stage, input.inputs.key);
+    if (!sameCastSetsInspectionInputs(inputs, input.inputs) || input.inspectionId !== (inspection?.id || null)) throw new ServerError('This image or inspection changed. Review it again.', { status: 409, code: 'CAST_SETS_INSPECTION_STALE' });
+    const image = stage.images[input.inputs.key];
+    return { project: { ...current, castAndSets: { ...stage, images: { ...stage.images,
+      [input.inputs.key]: { ...image, inspectionAcknowledgement: { inputs, inspectionId: input.inspectionId, reviewer, at: new Date().toISOString() } } } } } };
+  });
+  publish(projectId, out.project);
+  return { project: out.project };
+}
 
 /** Approve & continue. Returns `{ project, stage }`. */
 export async function approveCastAndSets(projectId) {

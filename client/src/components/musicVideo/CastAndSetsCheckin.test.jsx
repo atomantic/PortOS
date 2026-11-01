@@ -116,7 +116,10 @@ describe('optional greybox references on Look', () => {
     const entry = { ingredient: { type: 'place', payload: { greybox: { shots: [{ id: 'wide', label: 'Wide' }] } } }, media: [{ kind: 'reference', role: 'greybox-shot:wide', mediaKey: 'layout.png' }] };
     greyboxData.places = { 'cat-lab': entry };
     const initial = review({ subjects }, { direction: { sets: [{ ...sets[0], setReference }, { ...sets[1], setReference: { subjectId: 'other-place' } }] },
-      plan: { 'set:lab': { key: 'set:lab', setReference, refImages: ['layout.png'] } }, greyboxPending: true });
+      plan: { 'set:lab': { key: 'set:lab', prompt: 'Empty lamp room', setReference, refImages: ['layout.png'] } }, greyboxPending: true,
+      images: { 'set:lab': { status: 'done', imageId: 'lamp-room.png', submittedRevision: 1, inspection: { verdict: 'pass', inputs: {
+        key: 'set:lab', imageId: 'lamp-room.png', imageRevision: 1, jobId: null, planPrompt: 'Empty lamp room', submittedPrompt: null,
+      } } } } });
     render(<Harness initial={initial} locked={false} />);
     await act(async () => {});
     expect(screen.getByRole('button', { name: 'Approve & continue' })).not.toBeDisabled();

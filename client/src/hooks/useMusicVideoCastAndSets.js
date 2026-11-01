@@ -10,6 +10,7 @@ import {
   applyMusicVideoCastAndSetsFeedback,
   removeMusicVideoCastAndSetsFeedback,
   resumeMusicVideoCastAndSets,
+  acknowledgeMusicVideoCastAndSetsImage,
   approveMusicVideoCastAndSets,
   reconfirmMusicVideoCastAndSets,
   skipMusicVideoCastAndSets,
@@ -140,6 +141,7 @@ export default function useMusicVideoCastAndSets({ project, replaceProject } = {
   const applyFeedback = ({ text, target = null }) => call(() => applyMusicVideoCastAndSetsFeedback(projectId, { text, ...(target ? { target } : {}) }, { silent: true }), 'Applying your feedback');
   const removeFeedback = (feedbackId) => call(() => removeMusicVideoCastAndSetsFeedback(projectId, feedbackId, { silent: true }));
   const resume = () => call(() => resumeMusicVideoCastAndSets(projectId, { silent: true }));
+  const acknowledgeImage = (input) => call(() => acknowledgeMusicVideoCastAndSetsImage(projectId, input, { silent: true }), 'Image review acknowledged');
   const approve = () => call(() => approveMusicVideoCastAndSets(projectId, { silent: true }), 'Cast & Sets approved');
   const reconfirm = () => call(() => reconfirmMusicVideoCastAndSets(projectId, { silent: true }), 'Cast & Sets kept approved');
   const skip = () => call(() => skipMusicVideoCastAndSets(projectId, { silent: true }), 'Cast & Sets check-in skipped');
@@ -177,5 +179,5 @@ export default function useMusicVideoCastAndSets({ project, replaceProject } = {
     w.resolve(null);
   };
 
-  return { busy, refresh, start, regenerate, regenerateImages, editDirection, applyFeedback, removeFeedback, resume, approve, reconfirm, skip, discard, rebuildFromStory, runToCheckpoint, cancelWait };
+  return { busy, refresh, start, acknowledgeImage, regenerate, regenerateImages, editDirection, applyFeedback, removeFeedback, resume, approve, reconfirm, skip, discard, rebuildFromStory, runToCheckpoint, cancelWait };
 }

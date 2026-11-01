@@ -1,3 +1,4 @@
+import { castSetsInspectionBlockers } from '../../../../server/lib/musicVideoCastSetsInspection.js';
 import useMusicVideoGreyboxPlaces from '../../hooks/useMusicVideoGreyboxPlaces.js';
 import { castAndSetsGreyboxPending, musicVideoGreyboxReference } from '../../../../server/lib/musicVideoGreybox.js';
 import SceneGreyboxReference from './SceneGreyboxReference.jsx';
@@ -97,7 +98,7 @@ function CastingChangesNotice({ changes, plan, busy, rebuildOffered, onUpdate, o
  * is idle, and Start over clears a check-in that has not been approved.
  * A sheet in review (or approved) takes plain-text feedback below the actions.
  */
-export default function CastAndSetsCheckin({ id, project, stale = null, storyStale = null, castingChanges = null, castingChangesError = false, onRetryCastingChanges, busy, onOpenSheet, onOpenPreview, onApprove, onRegenerate, onRegenerateImages, onEditDirection, onRefresh, onApplyFeedback, onRemoveFeedback, onRegenerateWithNotes, onResume, onRebuild, onReconfirm, onRevert, onSkip, onDiscard, onRebuildFromStory }) {
+export default function CastAndSetsCheckin({ id, project, stale = null, storyStale = null, castingChanges = null, castingChangesError = false, onRetryCastingChanges, busy, onOpenSheet, onOpenPreview, onApprove, onAcknowledgeImage, onRegenerate, onRegenerateImages, onEditDirection, onRefresh, onApplyFeedback, onRemoveFeedback, onRegenerateWithNotes, onResume, onRebuild, onReconfirm, onRevert, onSkip, onDiscard, onRebuildFromStory }) {
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const [greyboxesOpen, setGreyboxesOpen] = useState(() => (project.castAndSets?.direction?.sets || []).some((set) => set.setReference?.greyboxShotId));
   const greyboxPlaces = useMusicVideoGreyboxPlaces(project);
@@ -111,6 +112,7 @@ export default function CastAndSetsCheckin({ id, project, stale = null, storySta
   const liveCaptures = needsLegacyCaptures
     ? Object.fromEntries(sets.filter((set) => set.setReference?.greyboxShotId).map((set) => [set.id, musicVideoGreyboxReference(project, { setReference: set.setReference }, greyboxPlaces)?.reference?.imageId || null])) : {};
   const greyboxPending = castAndSetsGreyboxPending(stage, liveCaptures);
+  const inspectionPending = castSetsInspectionBlockers(stage).length > 0;
   const hasGreyboxChoices = (project.concept?.subjects || []).some((s) => s.kind === 'place' && s.ingredientId) || sets.some((s) => s.setReference);
   const sheet = stage.artifactId ? (project.devArtifacts || []).find((a) => a.id === stage.artifactId && !a.deleted) : null;
   const openNotes = (sheet?.notes || []).filter((n) => !n.resolvedAt).length;
@@ -171,7 +173,7 @@ export default function CastAndSetsCheckin({ id, project, stale = null, storySta
         </details>
       )}
       {greyboxPending && <p role="status" className="text-xs text-port-warning">Greybox selection saved. Regenerate to render the set plates with it.</p>}
-      <CastAndSetsReferenceProgress stage={stage} onOpenPreview={onOpenPreview}
+      <CastAndSetsReferenceProgress stage={stage} onOpenPreview={onOpenPreview} onAcknowledgeImage={onAcknowledgeImage} busy={busy}
         subjects={project.concept?.subjects || []} olderLookKeys={(castingChanges?.images || []).map((i) => i.key)}
         actions={!working && stage.direction && stage.status !== 'skipped' && onRegenerateImages && onEditDirection
           ? { projectId: project.id, busy, formSubjects, onRegenerate: onRegenerateImages, onEdit: onEditDirection, onRefresh } : null} />
@@ -190,7 +192,7 @@ export default function CastAndSetsCheckin({ id, project, stale = null, storySta
             {onEditDirection && stage.direction?.medium === 'procedural' && (
               <CastAndSetsDirectionEditor key={stage.revision} project={project} direction={stage.direction} busy={busy} onSave={onEditDirection} />
             )}
-            <button type="button" disabled={busy || greyboxPending} onClick={onApprove} className={`${buttonClass} bg-port-accent text-white`}>
+            <button type="button" disabled={busy || greyboxPending || inspectionPending} onClick={onApprove} className={`${buttonClass} bg-port-accent text-white`}>
               <CheckCircle2 size={14} aria-hidden="true" /> Approve &amp; continue
             </button>
           </>

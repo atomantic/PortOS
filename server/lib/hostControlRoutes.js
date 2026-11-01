@@ -1330,6 +1330,7 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   // runner, and the Writers Room handoff, which writes a Creative Director
   // project and treatment.
   'POST /api/agent-context/mcp',
+  'POST /api/music-video/:id/cast-and-sets/acknowledge-image',
   'POST /api/music-video/:id/cast-and-sets/approve',
   'POST /api/music-video/:id/cast-and-sets/skip',
   'POST /api/music-video/:id/production-review/prepare',
