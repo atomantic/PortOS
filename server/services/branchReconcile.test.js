@@ -1854,6 +1854,20 @@ describe('reconcile — cached SUPERSEDED verdicts (#3842)', () => {
     expect(isMergedPrHeadMock).not.toHaveBeenCalled();
   });
 
+  it('keeps the unmanaged-location hold when the forge does not report that head merged', async () => {
+    git.hasBranchMergeEvidence.mockResolvedValue(true);
+    isMergedPrHeadMock.mockResolvedValue(false);
+    mergedExternalGit();
+    const res = await cleanupMerged('/repo', 'main', [{
+      branch: 'next/issue-2190', worktreePath: '/private/tmp/portos-next-2190', worktreeAgeMs: 30 * 24 * 60 * 60 * 1000,
+    }]);
+    expect(isMergedPrHeadMock).toHaveBeenCalledWith('/repo', 'next/issue-2190', RETIRE_HEAD);
+    expect(res.cleaned).toEqual([]);
+    expect(res.skipped).toEqual([{ branch: 'next/issue-2190', path: '/private/tmp/portos-next-2190', reason: 'worktree-unmanaged-location' }]);
+    expect(res.skipped[0].retryAt).toBeUndefined();
+    expect(wt.forceRemoveWorktreeDir).not.toHaveBeenCalled();
+  });
+
   // A published branch whose pull request the forge merged at this head is
   // delivered. The directory it was checked out in is not a reason to keep
   // the branch. The hour is only so a process still standing in a checkout
