@@ -445,6 +445,39 @@ printf '%s\\n' '0'
       },
     });
     expect(existsSync(versioned)).toBe(true);
+    const relativeHome = join(dir, 'home');
+    const relativeVenv = join(relativeHome, 'venv');
+    rmSync(relativeHome, { recursive: true, force: true });
+    mkdirSync(join(relativeVenv, 'bin'), { recursive: true });
+    writeFileSync(join(relativeVenv, 'bin', 'python3'), '#!/bin/bash\nexit 0\n');
+    chmodSync(join(relativeVenv, 'bin', 'python3'), 0o755);
+    execFileSync('bash', ['-c', `cd "$3"\n${apple}\n${reset}\nreset_universal_venv "$1" "$2"`, 'bash', relativeVenv, 'venv/bin/python3', relativeHome], {
+      env: {
+        ...process.env,
+        PATH: `${dir}:${process.env.PATH}`,
+        ARCHES: 'x86_64 arm64',
+        RECREATE_ARCHES: 'arm64',
+        MACHINE: 'arm64',
+      },
+    });
+    expect(existsSync(relativeVenv)).toBe(true);
+    prepareNamed();
+    writeFileSync(join(namedRoot, 'bin', 'python3'), '#!/bin/bash\necho INSIDE\n');
+    chmodSync(join(namedRoot, 'bin', 'python3'), 0o755);
+    writeFileSync(join(later, 'python3'), '#!/bin/bash\necho OUTSIDE\n');
+    chmodSync(join(later, 'python3'), 0o755);
+    const hashed = execFileSync('bash', ['-c', `set -e\n${apple}\n${reset}\npython3 >/dev/null\nreset_universal_venv "$1" python3\npython3`, 'bash', namedRoot], {
+      env: {
+        ...process.env,
+        PATH: `${join(namedRoot, 'bin')}:${later}:${dir}:/bin`,
+        ARCHES: 'x86_64 arm64',
+        RECREATE_ARCHES: 'arm64',
+        MACHINE: 'arm64',
+      },
+      encoding: 'utf8',
+    });
+    expect(hashed).toContain('OUTSIDE');
+    expect(hashed).not.toContain('INSIDE');
   });
 
   it.skipIf(process.platform === 'win32')('does not choose a python inside the venv it may delete', () => {

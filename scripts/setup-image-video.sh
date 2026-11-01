@@ -190,18 +190,28 @@ reset_universal_venv() {
     *) return 0 ;;
   esac
   [[ -n "${1:-}" && -n "${2:-}" ]] || return 0
-  local py="$1/bin/python3" arches base_arches base="$2" original="$2" outside="" dir path_rest
+  local py="$1/bin/python3" arches base_arches base="$2" original="$2" outside="" dir path_rest root_real real
   case "$base" in
     */*) ;;
     *) base="$(command -v "$base" 2>/dev/null || true)" ;;
   esac
   [[ -n "$base" && -x "$base" ]] || return 0
+  # Containment has to compare real paths. A relative PYTHON_BIN such as
+  # venv-audioldm2/bin/python3 does not match an absolute $1, and a symlink
+  # would hide the venv directory the caller still invokes.
+  root_real="$1"
+  if real="$(cd -P "$1" 2>/dev/null && pwd)"; then root_real="$real"; fi
+  real="${base%/*}"
+  [[ "$real" == "$base" ]] && real="."
+  if real="$(cd -P "$real" 2>/dev/null && pwd)"; then
+    base="$real/${base##*/}"
+  fi
   # An activated venv is the first python on PATH. A caller that stored that
-  # absolute path cannot recreate the venv after it is deleted. A bare command
-  # name is resolved again. Delete only when that same command exists later
-  # on PATH; a different version would make the caller's venv command fail.
+  # path cannot recreate the venv after it is deleted. A bare command name is
+  # resolved again. Delete only when that same command exists later on PATH;
+  # a different version would make the caller's venv command fail.
   case "$base" in
-    "$1"/*)
+    "$root_real"/*)
       case "$original" in
         */*) return 0 ;;
       esac
@@ -211,7 +221,7 @@ reset_universal_venv() {
         if [[ "$path_rest" == *:* ]]; then path_rest="${path_rest#*:}"; else path_rest=""; fi
         [[ -n "$dir" ]] || continue
         case "$dir" in
-          "$1"|"$1"/*) continue ;;
+          "$1"|"$1"/*|"$root_real"|"$root_real"/*) continue ;;
         esac
         if [[ -x "$dir/$original" && ! -d "$dir/$original" ]]; then
           outside="$dir/$original"
@@ -241,6 +251,9 @@ reset_universal_venv() {
   esac
   echo "♻️  Recreating ${1} so native wheels replace the universal interpreter's x86_64 packages."
   rm -rf "$1"
+  # An earlier `python3 -m venv` in this script hashed the deleted interpreter.
+  # The next caller would otherwise execute that pathname and exit 127.
+  hash -r
 }
 
 # Resolve a venv interpreter from the layout its creating Python used. Git Bash
