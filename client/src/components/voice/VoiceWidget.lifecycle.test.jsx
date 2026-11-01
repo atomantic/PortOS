@@ -1,11 +1,15 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { render } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 
 const mocks = vi.hoisted(() => {
   const toast = vi.fn();
   toast.error = vi.fn();
   return {
     toast,
+    events: new Map(),
+    startWebSpeechCapture: vi.fn(),
+    resolveTurn: vi.fn(),
+    speakSynthesized: vi.fn().mockResolvedValue(undefined),
     disposeCaptureOwner: vi.fn(),
     stopContinuous: vi.fn().mockResolvedValue(undefined),
     stopCapture: vi.fn().mockResolvedValue(null),
@@ -28,15 +32,18 @@ vi.mock('../../services/voiceClient', () => ({
   interrupt: mocks.interrupt,
   resetConversation: vi.fn(),
   sendText: vi.fn(),
-  onVoiceEvent: vi.fn(() => vi.fn()),
+  onVoiceEvent: vi.fn((name, handler) => {
+    mocks.events.set(name, handler);
+    return () => mocks.events.delete(name);
+  }),
   isCapturing: vi.fn(() => false),
   startContinuous: vi.fn(),
   stopContinuous: mocks.stopContinuous,
   isContinuous: mocks.isContinuous,
   whenPlaybackDrained: vi.fn(() => Promise.resolve(true)),
   getVadLevel: vi.fn(() => 0),
-  webSpeechSupported: false,
-  startWebSpeechCapture: vi.fn(),
+  webSpeechSupported: true,
+  startWebSpeechCapture: mocks.startWebSpeechCapture,
   stopWebSpeechCapture: mocks.stopWebSpeechCapture,
   isWebSpeechCapturing: vi.fn(() => false),
   disposeCaptureOwner: mocks.disposeCaptureOwner,
@@ -47,13 +54,13 @@ vi.mock('../../services/voiceClient', () => ({
   disableVisionCapture: vi.fn(),
   isVisionCaptureEnabled: vi.fn(() => false),
   onVisionCaptureEnded: vi.fn(() => vi.fn()),
-  speakSynthesized: vi.fn(),
+  speakSynthesized: mocks.speakSynthesized,
   onVoiceOutputPrimary: vi.fn((handler) => { handler(false); return vi.fn(); }),
   claimVoiceOutput: vi.fn(),
 }));
 
 vi.mock('../../services/voiceFastPath', () => ({
-  resolveTurn: vi.fn(),
+  resolveTurn: mocks.resolveTurn,
   buildRouterSystemPrompt: vi.fn(),
   TIER: { SERVER: 'server', TRIGGER: 'trigger', NANO: 'nano' },
 }));
@@ -93,6 +100,8 @@ import VoiceWidget from './VoiceWidget';
 describe('VoiceWidget owner lifecycle', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.events.clear();
+    mocks.resolveTurn.mockResolvedValue({ tier: 'nano', reply: 'Example reply' });
     mocks.stopContinuous.mockResolvedValue(undefined);
     mocks.isContinuous.mockReturnValue(false);
     mocks.getVoiceConfig.mockResolvedValue({
@@ -102,6 +111,68 @@ describe('VoiceWidget owner lifecycle', () => {
       llm: { fastPath: null },
       tts: { engine: 'piper', piper: { voice: 'example-voice' }, rate: 1 },
     });
+  });
+
+  it('keeps a disable event authoritative when the initial enabled snapshot arrives later', async () => {
+    let resolveConfig;
+    mocks.getVoiceConfig.mockReturnValueOnce(new Promise((resolve) => { resolveConfig = resolve; }));
+    const { unmount } = render(<VoiceWidget />);
+
+    act(() => mocks.events.get('voice:config:changed')({ enabled: false }));
+    await act(async () => resolveConfig({ enabled: true }));
+
+    expect(screen.queryByRole('button', { name: 'Open voice controls' })).toBeNull();
+    expect(mocks.startWebSpeechCapture).not.toHaveBeenCalled();
+    unmount();
+  });
+
+  it('preserves event hotkey and engines while hydrating untouched language and personality', async () => {
+    let resolveConfig;
+    mocks.getVoiceConfig.mockReturnValueOnce(new Promise((resolve) => { resolveConfig = resolve; }));
+    const { unmount } = render(<VoiceWidget />);
+    const fastPath = { enabled: true, triggers: false, nano: false };
+    act(() => mocks.events.get('voice:config:changed')({
+      enabled: true, hotkey: 'KeyV', sttEngine: 'web-speech', fastPath,
+      ttsEngine: 'kokoro', ttsVoice: 'new-voice', ttsRate: 1.2,
+    }));
+    await act(async () => resolveConfig({
+      enabled: false, hotkey: 'Space', stt: { engine: 'whisper', language: 'fr' },
+      llm: { fastPath: null, personality: { name: 'Example' } },
+      tts: { engine: 'piper', piper: { voice: 'old-voice' }, rate: 1 },
+    }));
+
+    fireEvent.keyDown(window, { code: 'Space' });
+    expect(mocks.startWebSpeechCapture).not.toHaveBeenCalled();
+    fireEvent.keyDown(window, { code: 'KeyV' });
+    expect(mocks.startWebSpeechCapture).toHaveBeenCalledOnce();
+    const capture = mocks.startWebSpeechCapture.mock.calls[0][0];
+    expect(capture.language).toBe('fr');
+    await act(async () => capture.routeFinal('example utterance'));
+    expect(mocks.resolveTurn).toHaveBeenCalledWith('example utterance', expect.objectContaining({
+      fastPath, personality: { name: 'Example' },
+    }));
+    expect(mocks.speakSynthesized).toHaveBeenCalledWith('Example reply', {
+      engine: 'kokoro', voice: 'new-voice', rate: 1.2,
+    });
+    unmount();
+  });
+
+  it('hydrates untouched hotkey and engines after a partial settings event', async () => {
+    let resolveConfig;
+    mocks.getVoiceConfig.mockReturnValueOnce(new Promise((resolve) => { resolveConfig = resolve; }));
+    const { unmount } = render(<VoiceWidget />);
+    act(() => mocks.events.get('voice:config:changed')({ sttLanguage: 'de', fastPath: null }));
+    await act(async () => resolveConfig({
+      enabled: true, hotkey: 'KeyB', stt: { engine: 'web-speech', language: 'en' },
+      llm: { fastPath: { enabled: true } },
+    }));
+    fireEvent.keyDown(window, { code: 'KeyB' });
+    const capture = mocks.startWebSpeechCapture.mock.calls[0][0];
+    expect(capture.language).toBe('de');
+    await act(async () => capture.routeFinal('example utterance'));
+    expect(mocks.resolveTurn).not.toHaveBeenCalled();
+    expect(mocks.getVoiceConfig).toHaveBeenCalledOnce();
+    unmount();
   });
 
   it('invalidates capture before invoking the latest cancel handler on unmount', async () => {

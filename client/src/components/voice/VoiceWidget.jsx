@@ -135,29 +135,37 @@ export default function VoiceWidget() {
   }, [enabled]);
 
   useEffect(() => {
+    // Events can overtake the bootstrap read. Only hydrate fields that have
+    // not already received a newer value; bootstrap-only personality still loads.
+    const updatedFields = new Set();
     getVoiceConfig()
       .then((cfg) => {
         if (disposedRef.current) return;
-        setEnabled(!!cfg?.enabled);
-        setHotkey(cfg?.hotkey || 'Space');
-        if (cfg?.stt?.engine) setSttEngine(cfg.stt.engine);
-        if (cfg?.stt?.language) setSttLanguage(cfg.stt.language);
-        setFastPath(cfg?.llm?.fastPath || null);
+        if (!updatedFields.has('enabled')) setEnabled(!!cfg?.enabled);
+        if (!updatedFields.has('hotkey')) setHotkey(cfg?.hotkey || 'Space');
+        if (!updatedFields.has('sttEngine') && cfg?.stt?.engine) setSttEngine(cfg.stt.engine);
+        if (!updatedFields.has('sttLanguage') && cfg?.stt?.language) setSttLanguage(cfg.stt.language);
+        if (!updatedFields.has('fastPath')) setFastPath(cfg?.llm?.fastPath || null);
         personalityRef.current = cfg?.llm?.personality || null;
         const engine = cfg?.tts?.engine;
-        ttsRef.current = { engine, voice: engine ? cfg?.tts?.[engine]?.voice : undefined, rate: cfg?.tts?.rate };
+        if (!updatedFields.has('tts')) {
+          ttsRef.current = { engine, voice: engine ? cfg?.tts?.[engine]?.voice : undefined, rate: cfg?.tts?.rate };
+        }
       })
       .catch(() => {});
     // Settings → Voice writes via PUT /api/voice/config and the route broadcasts
     // voice:config:changed — keep the widget's enabled/engine/hotkey/fastPath in
     // sync so toggling voice mode mid-session takes effect without a reload.
     const off = onVoiceEvent('voice:config:changed', (cfg) => {
-      if (typeof cfg?.enabled === 'boolean') setEnabled(cfg.enabled);
-      if (cfg?.hotkey) setHotkey(cfg.hotkey);
-      if (cfg?.sttEngine) setSttEngine(cfg.sttEngine);
-      if (cfg?.sttLanguage) setSttLanguage(cfg.sttLanguage);
-      if ('fastPath' in (cfg || {})) setFastPath(cfg.fastPath || null);
-      if (cfg?.ttsEngine) ttsRef.current = { engine: cfg.ttsEngine, voice: cfg.ttsVoice, rate: cfg.ttsRate };
+      if (typeof cfg?.enabled === 'boolean') { updatedFields.add('enabled'); setEnabled(cfg.enabled); }
+      if (cfg?.hotkey) { updatedFields.add('hotkey'); setHotkey(cfg.hotkey); }
+      if (cfg?.sttEngine) { updatedFields.add('sttEngine'); setSttEngine(cfg.sttEngine); }
+      if (cfg?.sttLanguage) { updatedFields.add('sttLanguage'); setSttLanguage(cfg.sttLanguage); }
+      if ('fastPath' in (cfg || {})) { updatedFields.add('fastPath'); setFastPath(cfg.fastPath || null); }
+      if (cfg?.ttsEngine) {
+        updatedFields.add('tts');
+        ttsRef.current = { engine: cfg.ttsEngine, voice: cfg.ttsVoice, rate: cfg.ttsRate };
+      }
     });
     return off;
   }, []);
