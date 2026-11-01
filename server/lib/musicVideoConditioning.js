@@ -26,6 +26,14 @@ function featuredCast(direction, scene) {
   return (direction?.cast || []).filter((c) => namesIn(text, c.name) || namesIn(text, c.role));
 }
 
+// A close framing: the face fills the frame, so the set barely shows and the face sheets matter most.
+const CLOSE_FRAMING = /\b(extreme close|close-?up|close on|tight on|selfie|arm'?s[- ]length|face fills)/i;
+
+/** Whether a scene's frame or shot prompt frames a face close. */
+export function isCloseFraming(scene) {
+  return CLOSE_FRAMING.test([scene?.framePrompt, scene?.prompt].filter(Boolean).join(' '));
+}
+
 /**
  * Whether a scene's frame or shot prompt shows one of the direction's props: by
  * its name without the owner ("Renee's camera" is shown by "camera"), so a shot
@@ -161,6 +169,14 @@ function automaticConditioningReferences(project, scene) {
     // set fills the spare slots rather than displacing a featured cast sheet.
     // The prop sheet joins the shots that show a prop, after the identities and the set.
     const props = showsProp(stage.direction, scene) && references.find((ref) => ref?.id === 'mvr-cs-props' && ref.imageId);
+    // A close-up trades the set plate for each person's face sheet (head angles and moods),
+    // after their full sheet; a prop and then the set fill what is left.
+    if (isCloseFraming(scene)) {
+      const faceOf = (id) => references.find((ref) => ref?.id === id && ref.imageId);
+      const people = [[character, faceOf('mvr-cs-expressions')], ...cast.map((sheet) => [sheet, faceOf(sheet.id.replace('mvr-cs-cast-', 'mvr-cs-face-'))])];
+      const close = [...people.flat().filter(Boolean), ...featuredAuthoredCharacters(references, scene), ...(props ? [props] : []), ...(plate ? [plate] : authored)];
+      return close.filter((ref, i) => close.findIndex((r) => r.imageId === ref.imageId) === i).slice(0, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES);
+    }
     const chosen = plate
       ? [character, plate, ...cast, ...featuredAuthoredCharacters(references, scene), ...(props ? [props] : [])]
       : [character, ...cast, ...featuredAuthoredCharacters(references, scene), ...(props ? [props] : []), ...authored];

@@ -1084,7 +1084,8 @@ describe('Cast & Sets per-item actions', () => {
     expect(saved.castAndSets.direction.tests).toHaveLength(1);
     expect(saved.castAndSets.plan['set:roof']).toBeUndefined();
     expect(saved.castAndSets.plan['test:2']).toBeUndefined();
-    expect(jobs.slice(edited).map(keyOf)).toEqual(['cast:dad']);
+    // The face sheet is drawn on the cast sheet, so it re-renders with it.
+    expect(jobs.slice(edited).map(keyOf)).toEqual(['cast:dad', 'face:dad']);
     expect(saved.castAndSets.notesApplied[0].text).toMatch(/cast Dad, Cliff removed, tests/);
 
     // Start over throws the sheet away; the next build starts fresh.

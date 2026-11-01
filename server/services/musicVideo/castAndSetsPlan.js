@@ -10,7 +10,8 @@
  *                     Its references are the director's own character
  *                     identity images (`refImages`); mood board images are
  *                     outside inspiration and only reach it as text.
- *   - `expressions` — an expression sheet of the moods the direction found in
+ *   - `expressions` — the protagonist's face sheet: a row of head angles (front,
+ *                     both 3/4s, both profiles) over a row of the moods the direction found in
  *                     the story (`protagonist.expressions`); a direction saved
  *                     before those existed keeps the 2×3 performance sheet.
  *   - `form:<id>`   — one more character sheet per other age the story shows
@@ -21,6 +22,9 @@
  *   - `props`       — one prop sheet of every recurring object the characters
  *                     carry, use or ride (`direction.props`): cameras, bikes,
  *                     instruments. Shots that show one are conditioned on it.
+ *   - `face:<id>`   — the same face sheet for each supporting cast member, built
+ *                     on their cast sheet. Close-up shots condition on face sheets
+ *                     (musicVideoConditioning.js).
  *   - `set:<id>`    — one EMPTY plate per set: any sentence of the description,
  *                     lighting or look that puts a person in it is dropped. Plates do
  *                     not depend on the character, so they render alongside it. A
@@ -195,6 +199,9 @@ function buildProceduralImagePlan(direction, { revisionNotes = {}, greyboxes = {
  * revision note for a key is appended to its prompt.
  */
 const expressionGrid = (n) => (n === 0 || n > 4 ? '2 rows x 3 columns' : n === 4 ? '2 rows x 2 columns' : `1 row x ${n} columns`);
+// The angle row every face sheet opens with, so a close-up at any angle has a view of the same face.
+export const FACE_SHEET_ANGLES = 'TOP ROW, five tight head-and-shoulders views with a neutral face: FRONT, 3/4 LEFT, PROFILE LEFT, 3/4 RIGHT, PROFILE RIGHT';
+const CAST_FACE_MOODS = '1) open laugh; 2) shy half-smile; 3) startled; 4) concentrating; 5) quiet and thoughtful';
 
 export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = {}, greyboxes = {}, catalogLikeness = {} } = {}) {
   if (direction.medium === 'procedural') return buildProceduralImagePlan(direction, { revisionNotes, greyboxes });
@@ -275,12 +282,12 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
   plan.expressions = {
     key: 'expressions',
     kind: 'expressions',
-    label: 'Expression sheet',
+    label: 'Face sheet',
     deps: ['character'],
     refKeys: ['character'],
     refImages: identities,
     prompt: join(
-      `Photographic expression sheet, ${expressionGrid(moods.length)} grid of tight close-ups of the SAME person as the character reference`,
+      `Photographic face reference sheet of the SAME person as the character reference, on a seamless dark grey backdrop. ${FACE_SHEET_ANGLES}. BELOW IT, a ${expressionGrid(moods.length)} grid of tight close-ups of the moods`,
       identity(p),
       moods.length
         ? `Panels: ${moods.map((mood, i) => `${i + 1}) ${mood}`).join('; ')}`
@@ -294,6 +301,7 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
       note('expressions'),
     ),
   };
+  const lipSyncs = musicVideoLipSyncs(project);
 
   const props = direction.props || [];
   if (props.length) {
@@ -394,6 +402,25 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
         style && `Look: ${style}`,
         `${PHOTO}, even studio light, lookbook realism`,
         note(key),
+      ),
+    };
+    const faceKey = `face:${c.id}`;
+    plan[faceKey] = {
+      key: faceKey,
+      kind: 'face',
+      label: `${c.name} face sheet`,
+      castId: c.id,
+      deps: [key],
+      refKeys: [key],
+      prompt: join(
+        `Photographic face reference sheet of the SAME person as the cast sheet, ${c.name}, on a seamless dark grey backdrop. ${FACE_SHEET_ANGLES}. BOTTOM ROW, five close-ups of their moods, front or near-front`,
+        identity(c),
+        `Panels: ${CAST_FACE_MOODS}`,
+        !lipSyncs && 'Mouth closed or relaxed in every panel: nobody is singing or speaking',
+        'Consistent identity across all panels, nothing held in the hands',
+        style && `Look: ${style}`,
+        `${PHOTO}, thin black gutters between panels, no text`,
+        note(faceKey),
       ),
     };
   }
@@ -498,8 +525,8 @@ export function noteImageKeys(target, plan) {
   if (t === 'protagonist' || t === 'cast') return ['character'];
   if (t === 'wardrobe') return ['looks'];
   if ((t === 'prop' || t === 'object') && plan.props) return ['props'];
-  if (t === 'expression') return ['expressions'];
-  const byName = Object.values(plan).find((item) => ['plate', 'cast', 'form'].includes(item.kind) && item.label.toLowerCase() === t);
+  if (t === 'expression' || t === 'face') return ['expressions'];
+  const byName = Object.values(plan).find((item) => ['plate', 'cast', 'form', 'face'].includes(item.kind) && item.label.toLowerCase() === t);
   return byName ? [byName.key] : null;
 }
 
@@ -552,15 +579,20 @@ export function castAndSetsReferences(project, stage) {
     if (sheet) held -= 1;
     push({ id: castReferenceId(c), imageId: images[`cast:${c.id}`]?.imageId, role: 'character', label: `${trimTo(c.name, 80)} — cast sheet`, note: trimTo([c.role, c.height && `Height: ${c.height}`, c.face, c.hair, c.wardrobe].filter(Boolean).join('; '), 1000) }, false, { sheet });
   }
+  // Face sheets condition the close-ups of the person they show (musicVideoConditioningReferences).
+  for (const c of direction.cast || []) {
+    push({ id: castFaceReferenceId(c), imageId: images[`face:${c.id}`]?.imageId, role: 'character', label: `${trimTo(c.name, 80)} — face sheet`, note: trimTo([c.face, c.hair].filter(Boolean).join('; '), 1000) }, false);
+  }
   // The prop sheet conditions only the shots that show a prop (musicVideoConditioningReferences).
   const props = direction.props || [];
   push({ id: CAST_SETS_PROPS_REF_ID, imageId: images.props?.imageId, role: 'prop', label: 'Props', note: trimTo(props.map((item) => `${item.name}: ${item.description}`).join(' | '), 1000) }, false);
   push({ id: `${CAST_SETS_REF_PREFIX}looks`, imageId: images.looks?.imageId, role: 'wardrobe', label: 'Looks', note: trimTo((direction.looks || []).map((l) => l.name).join(', '), 1000) }, false);
-  push({ id: `${CAST_SETS_REF_PREFIX}expressions`, imageId: images.expressions?.imageId, role: 'character', label: 'Expression sheet', note: trimTo(p.gesture, 1000) }, false);
+  push({ id: `${CAST_SETS_REF_PREFIX}expressions`, imageId: images.expressions?.imageId, role: 'character', label: `${trimTo(p.name || 'Protagonist', 80)} — face sheet`, note: trimTo([p.face, p.hair].filter(Boolean).join('; '), 1000) }, false);
   return [...existing, ...out];
 }
 
 export const CAST_SETS_PROPS_REF_ID = `${CAST_SETS_REF_PREFIX}props`;
+const castFaceReferenceId = (c) => `${CAST_SETS_REF_PREFIX}face-${c.id}`.slice(0, 64);
 const castReferenceId = (c) => `${CAST_SETS_REF_PREFIX}cast-${c.id}`.slice(0, 64);
 
 /**

@@ -105,6 +105,17 @@ describe('musicVideoConditioningReferences with an approved Cast & Sets check-in
     expect(ids(musicVideoConditioningReferences(withProps, scene({ sectionIndex: 0 })))).toEqual(['lead-sheet.png', 'hill.png', 'kevin-sheet.png']);
   });
 
+  it('trades the set plate for each person face sheet on a close-up', () => {
+    const withFaces = { ...checkedIn, visualSpec: { references: [...references,
+      { id: 'mvr-cs-expressions', imageId: 'lead-face.png', role: 'character' },
+      { id: 'mvr-cs-face-kevin', imageId: 'kevin-face.png', role: 'character' }] } };
+    expect(ids(musicVideoConditioningReferences(withFaces, scene({ sectionIndex: 0, framePrompt: 'Arm\'s-length selfie: Kevin and her cheek to cheek' }))))
+      .toEqual(['lead-sheet.png', 'lead-face.png', 'kevin-sheet.png', 'kevin-face.png']);
+    expect(ids(musicVideoConditioningReferences(withFaces, scene({ sectionIndex: 0, framePrompt: 'Close-up of her laughing' }))))
+      .toEqual(['lead-sheet.png', 'lead-face.png', 'hill.png']);
+    expect(ids(musicVideoConditioningReferences(withFaces, scene({ sectionIndex: 0 })))).toEqual(['lead-sheet.png', 'hill.png', 'kevin-sheet.png']);
+  });
+
   // Uniquely catches a shot whose song section was cleared (a replaced song) dropping the
   // cast sheets it names for the capped authored set, so a co-lead is drawn from text alone.
   it('keeps the named cast when the shot has no song section, filling spare slots with the authored set', () => {
