@@ -103,3 +103,22 @@ export function grokVideoBillableUnits({ requestedSeconds, deliveredSeconds, has
     inputImages: 1,
   };
 }
+
+/**
+ * `resolution_name` values grok's CLI `image_to_video` tool accepts. The tool
+ * defaults to 480p "unless the user specifically requests higher quality", so
+ * a 1280×720 request that never names one arrives at 720×416 (#14491).
+ */
+export const GROK_VIDEO_RESOLUTIONS = Object.freeze(['480p', '720p']);
+
+/**
+ * The `resolution_name` that covers a requested frame: 720p once the short side
+ * is above 480, else 480p. Null when no size was requested, which leaves the
+ * tool's own default in place.
+ */
+export const grokVideoResolution = (width, height) => {
+  const w = Number(width);
+  const h = Number(height);
+  if (!(w > 0) || !(h > 0)) return null;
+  return Math.min(w, h) > 480 ? '720p' : '480p';
+};

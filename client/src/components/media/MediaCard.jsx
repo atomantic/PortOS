@@ -10,6 +10,7 @@ import InlineConfirmRow from '../ui/InlineConfirmRow';
 import { loraDisplayName } from './normalize';
 import { formatBytes, formatDurationMs } from '../../utils/formatters';
 import { assetDownloadUrl } from '../../lib/standaloneDownload.js';
+import { isLowResVideo } from '../../lib/videoResolution.js';
 
 // Equal cells. `flex-1` on Remix used to eat the first row, which pushed
 // "Send to 3D" onto the file-action line and left Delete alone under it.
@@ -247,6 +248,9 @@ function MediaCard({
         <div className="flex flex-wrap gap-1 text-[9px]">
           {modelId && <span className="px-1.5 py-0.5 bg-port-accent/20 text-port-accent rounded">{modelId}</span>}
           {item.width && <span className="px-1.5 py-0.5 bg-port-border text-gray-400 rounded">{item.width}×{item.height}</span>}
+          {isVideo && isLowResVideo(item) && (
+            <span title="Under 720p: upscale it before a 1080p render" className="px-1.5 py-0.5 bg-port-warning/20 text-port-warning rounded">low-res</span>
+          )}
           {item.steps && <span className="px-1.5 py-0.5 bg-port-border text-gray-400 rounded">{item.steps}st</span>}
           {item.numFrames && <span className="px-1.5 py-0.5 bg-port-border text-gray-400 rounded">{item.numFrames}f</span>}
           {item.fps && <span className="px-1.5 py-0.5 bg-port-border text-gray-400 rounded">{item.fps}fps</span>}

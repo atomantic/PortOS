@@ -42,6 +42,7 @@ import { ShotLockButton, useShotLock } from './ShotLock.jsx';
 import ScenePoster from './ScenePoster.jsx';
 import SceneRenderTarget, { lastRenderTarget, renderTargetOverrides } from './SceneRenderTarget.jsx';
 import SceneRenderInputs, { shotCardRenderRequest, shotCardRequestProblem } from './SceneRenderInputs.jsx';
+import { isLowResVideo } from '../../lib/videoResolution.js';
 import SceneFrameFit from './SceneFrameFit.jsx';
 import SceneCutEffect from './SceneCutEffect.jsx';
 import { plannedTransitions } from '../../lib/musicVideoCutEffects.js';
@@ -554,6 +555,12 @@ export default function SceneCard({
           {scene.videoHistoryId && (
             <SceneFrameFit id={fieldId('frame-fit')} scene={scene} clipSize={clipSize} aspect={aspect}
               onChange={(frameFit) => applyPatch({ frameFit })} />
+          )}
+          {/* A clip under 720p (grok's 480p default) goes soft in a 1080p render. */}
+          {scene.videoHistoryId && clipSize && isLowResVideo(clipSize) && (
+            <p className="text-xs text-port-warning" data-testid="clip-low-res">
+              Low-res clip: {clipSize.width}×{clipSize.height}, under 720p. Upscale it in Media History or regenerate it before the final render.
+            </p>
           )}
           {/* Until the clip exists its still stands in, so the player is never an empty box. */}
           {!scene.videoHistoryId && layer === 'footage' && (

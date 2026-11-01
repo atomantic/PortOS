@@ -85,6 +85,7 @@ vi.mock('../../lib/ffmpeg.js', async () => {
     optimizeForStreaming: vi.fn(async () => {}),
     generateThumbnail: vi.fn(async (_p, jobId) => `${jobId}.jpg`),
     probeVideoDuration: vi.fn(async () => null),
+    probeVideoStreamInfo: vi.fn(async () => ({ width: null, height: null, fps: null, frameCount: null })),
   };
 });
 
@@ -97,7 +98,7 @@ const { loadHistory } = await import('./history.js');
 const { createMaintenanceAdmission } = await import('../../lib/maintenanceAdmission.js');
 const { rmGuarded, unlinkGuarded } = await import('../../lib/fileUtils.js');
 const realFiles = await vi.importActual('../../lib/fileUtils.js');
-const { probeVideoDuration } = await import('../../lib/ffmpeg.js');
+const { probeVideoDuration, probeVideoStreamInfo } = await import('../../lib/ffmpeg.js');
 
 const flush = () => new Promise((r) => setImmediate(r));
 const scratchDirFor = (jobId) => join(tmpdir(), `portos-grok-video-${jobId}`);
@@ -182,6 +183,18 @@ describe('videoGen/grok — generateVideo', () => {
     await grok.generateVideo({ prompt: 'a fox', width: 1920, height: 1080 });
     expect(promptOf()).toContain('aspect_ratio "16:9"');
     await closeChild();
+  });
+
+  it('asks image_to_video for 720p when the request is 720p, and names no size when none was requested', async () => {
+    await grok.generateVideo({ prompt: 'gentle pan', sourceImagePath: '/abs/frame.png', width: 1280, height: 720 });
+    expect(promptOf()).toContain('resolution_name "720p"');
+    await closeChild();
+    await grok.generateVideo({ prompt: 'gentle pan', sourceImagePath: '/abs/frame.png', width: 854, height: 480 });
+    expect(promptOf(1)).toContain('resolution_name "480p"');
+    await closeChild(1);
+    await grok.generateVideo({ prompt: 'gentle pan', sourceImagePath: '/abs/frame.png' });
+    expect(promptOf(2)).not.toContain('resolution_name');
+    await closeChild(2);
   });
 
   it('rejects an empty prompt', async () => {
@@ -281,6 +294,31 @@ describe('videoGen/grok — harvest and finalize', () => {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('grok delivered 10.04s for a 15s request'));
     const history = await loadHistory();
     expect(history.find((h) => h.id === job.jobId)).toEqual(expect.objectContaining({ duration: 15, deliveredSec: 10.04 }));
+    warn.mockRestore();
+  });
+
+  it('records the delivered size and frame rate, and warns when a 720p request arrives under 720p', async () => {
+    probeVideoDuration.mockResolvedValueOnce(6.04);
+    probeVideoStreamInfo.mockResolvedValueOnce({ width: 720, height: 416, fps: 24, frameCount: 145 });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const completed = vi.fn();
+    videoGenEvents.on('completed', completed);
+
+    const job = await grok.generateVideo({ prompt: 'gentle pan', sourceImagePath: '/abs/frame.png', width: 1280, height: 720 });
+    await mkdir(scratchDirFor(job.jobId), { recursive: true });
+    await writeFile(stagingPathFor(job.jobId), MP4_BYTES);
+    await closeChild(0, 0);
+
+    const deadline = Date.now() + 5000;
+    while (Date.now() < deadline && completed.mock.calls.length === 0) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    expect(completed).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('grok delivered 720x416 for a 720p request'));
+    const history = await loadHistory();
+    expect(history.find((h) => h.id === job.jobId)).toEqual(expect.objectContaining({
+      resolution: '720p', width: 720, height: 416, fps: 24, numFrames: 145, deliveredSec: 6.04,
+    }));
     warn.mockRestore();
   });
 

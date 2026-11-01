@@ -285,6 +285,7 @@ export * from './minimaxH3SpeedProfiles.js';
 export * from './videoModeProfiles.js';
 export * from './videoDurationProfiles.js';
 export * from './videoReferenceModes.js';
+export * from './videoResolution.js';
 export * from './videoTiling.js';
 export * from './videoStreamingMode.js';
 export * from './videoTextEncoders.js';

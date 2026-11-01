@@ -531,6 +531,26 @@ describe('frame fit for an off-shape clip', () => {
   });
 });
 
+describe('low-res clip', () => {
+  // Uniquely catches a grok 480p clip (720x416) reaching the final render with
+  // no sign on the shot that it will be soft at 1080p (#14491).
+  it('flags a clip under 720p and stays quiet for a 720p one', () => {
+    const scene = { sceneId: 's1', prompt: 'Memory footage', referenceImageId: 'still.png', videoHistoryId: 'clip-1', startSec: 0, endSec: 4, takes: [] };
+    const { container } = render(<SceneCard scene={scene} index={0} expanded onEditLocal={vi.fn()} onSave={vi.fn()} />);
+    const video = container.querySelector('video');
+    const load = (width, height) => {
+      Object.defineProperty(video, 'duration', { value: 4, configurable: true });
+      Object.defineProperty(video, 'videoWidth', { value: width, configurable: true });
+      Object.defineProperty(video, 'videoHeight', { value: height, configurable: true });
+      fireEvent.loadedMetadata(video);
+    };
+    load(1280, 720);
+    expect(screen.queryByTestId('clip-low-res')).toBeNull();
+    load(720, 416);
+    expect(screen.getByTestId('clip-low-res').textContent).toContain('720×416, under 720p');
+  });
+});
+
 describe('clip playback and coverage', () => {
   const scene = { sceneId: 's1', referenceImageId: 'still.png', videoHistoryId: 'clip-1', beatAligned: true,
     startSec: 1.234, endSec: 10, loop: false, takes: [] };
