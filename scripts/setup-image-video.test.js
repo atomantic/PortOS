@@ -182,6 +182,7 @@ describe('setup-image-video venv layout handling (issue #4200)', () => {
     expect(helper).toBeTruthy();
     expect(source).not.toMatch(/uname -m"\) != "arm64"/);
     expect(source).not.toMatch(/uname -m"\) == "arm64"/);
+    expect(source).toMatch(/PORTOS_SETUP_NATIVE=1 exec \/usr\/bin\/arch -arm64 \/bin\/bash "\$0" "\$@"/);
 
     const probe = ({ system, machine, arm64Bit }) => {
       const dir = mkdtempSync(join(tmpdir(), 'portos-hwprobe-'));

@@ -8,10 +8,11 @@ import { encodePcm16Wav, wavDurationSec } from './lyricAlignCore.js';
 const roots = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map((dir) => rm(dir, { recursive: true, force: true }))); });
 
-async function harness(transform = (words) => words) {
+async function harness(transform = (words) => words, { ownInterpreter = true } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'ctc-contract-'));
   roots.push(root);
   let runDir;
+  const resolveRuntime = vi.fn();
   const run = vi.fn(async (_bin, args, onLine, options) => {
     if (args[0] !== '-m' && args[0] !== '-c') {
       runDir = args[args.indexOf('--output') + 1];
@@ -27,9 +28,12 @@ async function harness(transform = (words) => words) {
     }
     return { success: true };
   });
-  return { root, run, runDir: () => runDir, align: (options = {}) => forceAlignLyrics(encodePcm16Wav(16000 * 8),
+  const resolver = ownInterpreter
+    ? { resolveBasePython: async () => 'test-python' }
+    : { resolveRuntime };
+  return { root, run, resolveRuntime, runDir: () => runDir, align: (options = {}) => forceAlignLyrics(encodePcm16Wav(16000 * 8),
     [{ text: 'Hello, café!' }, { text: 'Hello,' }], { startSec: 4, endSec: 6, dir: join(root, 'venv'),
-      resolveBasePython: async () => 'test-python', run, ...options }) };
+      ...resolver, run, ...options }) };
 }
 
 describe('MMS_FA process contract', () => {
@@ -62,6 +66,18 @@ describe('MMS_FA process contract', () => {
     });
     await h.align();
     expect(h.run.mock.calls.some(([, args]) => args.join(' ') === `-m venv --clear ${dir}`)).toBe(true);
+    expect(h.run.mock.calls.some(([, args]) => args[0] === '-c' && args[1] === lyricAlignRuntimePlan().versionProbe)).toBe(true);
+  });
+
+  it('does not discover a base interpreter when the venv already matches the pin', async () => {
+    const h = await harness((words) => words, { ownInterpreter: false });
+    const bin = join(h.root, 'venv', process.platform === 'win32' ? 'Scripts' : 'bin');
+    await mkdir(bin, { recursive: true });
+    await writeFile(join(bin, process.platform === 'win32' ? 'python.exe' : 'python'), '');
+    await h.align();
+    expect(h.resolveRuntime).not.toHaveBeenCalled();
+    expect(h.run.mock.calls.some(([, args]) => args[1] === 'pip')).toBe(false);
+    expect(h.run.mock.calls[0][1][0]).toBe('-c');
   });
 
   it('rejects missing, foreign, overlapping and out-of-window results instead of publishing invented words', async () => {
@@ -86,6 +102,8 @@ describe('lyric alignment wheel pins', () => {
     const plan = lyricAlignRuntimePlan({ platform: 'darwin', appleSilicon: true });
     expect(plan.torch).toBe('2.8.0');
     expect(plan.maxPythonMinor).toBe(13);
+    expect(plan.arch).toBe('arm64');
+    expect(plan.versionProbe).toContain('platform.machine() == "arm64"');
     expect(plan.packages).toEqual(['torch==2.8.0', 'torchaudio==2.8.0']);
   });
 
@@ -93,11 +111,16 @@ describe('lyric alignment wheel pins', () => {
     const plan = lyricAlignRuntimePlan({ platform: 'darwin', appleSilicon: false });
     expect(plan.torch).toBe('2.2.2');
     expect(plan.maxPythonMinor).toBe(12);
+    expect(plan.arch).toBeNull();
+    expect(plan.versionProbe).not.toContain('platform.machine()');
     expect(plan.packages).toContain('numpy<2');
   });
 
   it('uses current wheels off macOS', () => {
-    expect(lyricAlignRuntimePlan({ platform: 'linux', appleSilicon: false }).torch).toBe('2.8.0');
+    const plan = lyricAlignRuntimePlan({ platform: 'linux', appleSilicon: false });
+    expect(plan.torch).toBe('2.8.0');
+    expect(plan.arch).toBeNull();
+    expect(plan.versionProbe).not.toContain('platform.machine()');
   });
 
   it('prefers an arm64 interpreter and current wheels on Apple Silicon', async () => {

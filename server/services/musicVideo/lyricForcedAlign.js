@@ -23,12 +23,22 @@ export function lyricAlignRuntimePlan({ platform = process.platform, appleSilico
   const intelWheels = platform === 'darwin' && !silicon;
   const torch = intelWheels ? '2.2.2' : '2.8.0';
   const maxPythonMinor = intelWheels ? 12 : 13;
+  // Current macOS wheels are arm64-only. An x86_64 venv (Rosetta, or a
+  // previously working Intel pin) must not be reused for them: pip can never
+  // install torch 2.8 there, and the venv would stay broken.
+  const arch = intelWheels || platform !== 'darwin' ? null : 'arm64';
+  const versionBound = `(3, 10) <= sys.version_info[:2] <= (3, ${maxPythonMinor})`;
+  const versionProbe = arch
+    ? `import sys, platform; assert ${versionBound}; assert platform.machine() == ${JSON.stringify(arch)}`
+    : `import sys; assert ${versionBound}`;
   return {
     intelWheels,
     torch,
     maxPythonMinor,
+    arch,
     packages: [`torch==${torch}`, `torchaudio==${torch}`, ...(intelWheels ? ['numpy<2'] : [])],
     probe: `import torch, torchaudio; assert torch.__version__.split("+")[0] == "${torch}"; assert torchaudio.__version__.split("+")[0] == "${torch}"; assert callable(torchaudio.functional.forced_align); assert torchaudio.pipelines.MMS_FA`,
+    versionProbe,
     pythonRange: `Python 3.10–3.${maxPythonMinor}`,
   };
 }
@@ -71,15 +81,24 @@ export async function resolveLyricAlignRuntime({
   return { plan: legacy, python: await findPython(legacy) };
 }
 
-async function ensureRuntime({ run, onProgress, resolveBasePython, dir, plan }) {
+async function ensureRuntime({ run, onProgress, dir, resolveRuntime }) {
   const python = process.platform === 'win32' ? join(dir, 'Scripts', 'python.exe') : join(dir, 'bin', 'python');
-  if (existsSync(python) && (await run(python, ['-c', plan.probe], null, { timeoutMs: 120_000 })).success) return python;
+  const quick = lyricAlignRuntimePlan();
+  // A venv that already matches the hardware pin is ready. Interpreter
+  // discovery (every candidate's version and arch) runs only when it is not.
+  if (existsSync(python) && (await run(python, ['-c', quick.probe], null, { timeoutMs: 120_000 })).success) return python;
   if (!provisioning) {
     provisioning = (async () => {
+      const selected = await resolveRuntime();
+      const plan = selected.plan;
+      // No arm64 interpreter: keep an existing venv that already has the
+      // Intel pin instead of rebuilding it for a wheel this Mac cannot install.
+      if (existsSync(python) && plan.probe !== quick.probe
+          && (await run(python, ['-c', plan.probe], null, { timeoutMs: 120_000 })).success) return;
       const exists = existsSync(python);
-      const compatible = exists && (await run(python, ['-c', `import sys; assert (3, 10) <= sys.version_info[:2] <= (3, ${plan.maxPythonMinor})`], null, { timeoutMs: 120_000 })).success;
+      const compatible = exists && (await run(python, ['-c', plan.versionProbe], null, { timeoutMs: 120_000 })).success;
       if (!compatible) {
-        const base = await resolveBasePython(plan);
+        const base = selected.python;
         if (!base) throw failure(`MMS_FA lyric alignment needs ${plan.pythonRange}.`, 'LYRIC_ALIGN_CTC_PYTHON_MISSING');
         await mkdir(dirname(dir), { recursive: true });
         onProgress({ stage: 'installing', detail: 'Creating the MMS_FA environment (first run only)' });
@@ -100,7 +119,7 @@ async function ensureRuntime({ run, onProgress, resolveBasePython, dir, plan }) 
 /** Returns one word list per supplied cue, preserving occurrence and spelling. */
 export async function forceAlignLyrics(wav, cues, {
   startSec = 0, endSec = wavDurationSec(wav), onProgress = () => {}, isCancelled = () => false,
-  run = runStreamingCommand, resolveBasePython,
+  run = runStreamingCommand, resolveBasePython, resolveRuntime,
   dir = process.env.PORTOS_LYRIC_ALIGN_VENV_DIR || join(homedir(), '.portos', 'venvs', 'lyric-align'),
 } = {}) {
   const checkCancel = () => { if (isCancelled()) throw canceled(); };
@@ -111,14 +130,16 @@ export async function forceAlignLyrics(wav, cues, {
   if (!(to > from)) throw failure('That lyric line has no audio window to align.');
   const lines = cues.map((cue) => lyricTokens(cue.text).map((token) => token.w));
   // A caller-supplied resolver owns the interpreter (tests). Production picks
-  // the interpreter and the wheel pin together so an x86_64-only Mac does not
-  // get asked for a torch 2.8 wheel.
-  const selected = resolveBasePython
-    ? { plan: lyricAlignRuntimePlan() }
-    : await resolveLyricAlignRuntime();
+  // the interpreter and the wheel pin together, and only after the ready-venv
+  // probe misses, so an x86_64-only Mac is not asked for a torch 2.8 wheel.
   const python = await ensureRuntime({
-    run, onProgress, dir, plan: selected.plan,
-    resolveBasePython: resolveBasePython ?? (async () => selected.python),
+    run, onProgress, dir,
+    resolveRuntime: resolveBasePython
+      ? async () => {
+          const plan = lyricAlignRuntimePlan();
+          return { plan, python: await resolveBasePython(plan) };
+        }
+      : (resolveRuntime ?? resolveLyricAlignRuntime),
   });
   checkCancel();
   const scratch = await mkdtemp(join(tmpdir(), 'portos-ctc-align-'));

@@ -69,6 +69,15 @@ is_apple_silicon() {
   esac
   [[ "$(sysctl -n hw.optional.arm64 2>/dev/null || true)" == "1" ]]
 }
+# A Rosetta-translated shell runs universal python3/uv as x86_64, and the
+# venvs they build cannot install arm64-only mlx wheels. Re-exec natively
+# once. PORTOS_SETUP_NATIVE stops a loop when arch cannot change uname.
+if is_apple_silicon && [[ -z "${PORTOS_SETUP_NATIVE:-}" ]]; then
+  case "$(uname -m)" in
+    arm64|aarch64) ;;
+    *) PORTOS_SETUP_NATIVE=1 exec /usr/bin/arch -arm64 /bin/bash "$0" "$@" ;;
+  esac
+fi
 # Git-bash / MSYS / Cygwin all report a prefixed uname; PortOS runs the
 # in-app installer through git-bash on Windows, so match all three.
 is_windows() { case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) return 0;; *) return 1;; esac; }
