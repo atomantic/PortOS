@@ -1,5 +1,5 @@
 import { execFileSync } from 'child_process';
-import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
@@ -183,7 +183,15 @@ describe('setup-image-video venv layout handling (issue #4200)', () => {
     expect(source).not.toMatch(/uname -m"\) != "arm64"/);
     expect(source).not.toMatch(/uname -m"\) == "arm64"/);
     expect(source).toMatch(/PORTOS_SETUP_NATIVE=1 exec \/usr\/bin\/arch -arm64 \/bin\/bash "\$0" "\$@"/);
-    for (const root of ['$MFLUX_VENV', '${LTX2_DIR}/.venv', '${LTX25_DIR}/.venv', '${FASTVIDEO_DIR}/.venv', '${WAN22_DIR}/.venv', '${MINIMAX_H3_DIR}/.venv', '$MUSICGEN_VENV']) {
+    expect(helper).not.toContain('pin_venv_arm64');
+    for (const root of [
+      '$MFLUX_VENV', '${LTX2_DIR}/.venv', '${LTX25_DIR}/.venv', '${FASTVIDEO_DIR}/.venv',
+      '${WAN22_DIR}/.venv', '${MINIMAX_H3_DIR}/.venv', '$MUSICGEN_VENV', '$AUDIOLDM2_VENV',
+      '$ACESTEP_VENV', '$ACESTEP15_VENV', '$MINIMAX_MUSIC3_VENV', '$MINIMAX_MUSIC3_MLX_VENV',
+      '$MUSCRIPTOR_VENV', '$FLUX2_VENV', '$MINIMAX_H3_CUDA_VENV', '$LTX25_CUDA_VENV',
+      '$WAN22_CUDA_VENV',
+    ]) {
+      expect(source).toContain(`reset_universal_venv "${root}"`);
       expect(source).toContain(`pin_venv_arm64 "${root}"`);
     }
 
@@ -275,6 +283,50 @@ exit 1
     const translated = run('x86_64', 'x86_64 arm64');
     expect(translated.body).toBe('ORIGINAL');
     expect(translated.log).toBe('');
+  });
+
+  it.skipIf(process.platform === 'win32')('deletes a universal venv before reinstall and keeps an arm64-only one', () => {
+    const reset = source.match(/^reset_universal_venv\(\) \{\n(?:.*\n)*?^\}\n/m)?.[0];
+    const apple = source.match(/^is_apple_silicon\(\) \{\n(?:.*\n)*?^\}\n/m)?.[0];
+    expect(reset).toBeTruthy();
+    const dir = mkdtempSync(join(tmpdir(), 'portos-reset-venv-'));
+    tempVenvs.push(dir);
+    const uname = join(dir, 'uname');
+    const lipo = join(dir, 'lipo');
+    const sysctl = join(dir, 'sysctl');
+    writeFileSync(uname, `#!/bin/bash
+case "$1" in
+  -s) printf '%s\\n' 'Darwin' ;;
+  -m) printf '%s\\n' "$MACHINE" ;;
+  *) exit 1 ;;
+esac
+`);
+    writeFileSync(lipo, `#!/bin/bash
+if [[ "$1" == "-archs" ]]; then
+  printf '%s\\n' "$ARCHES"
+  exit 0
+fi
+exit 1
+`);
+    writeFileSync(sysctl, `#!/bin/bash
+printf '%s\\n' '0'
+`);
+    chmodSync(uname, 0o755);
+    chmodSync(lipo, 0o755);
+    chmodSync(sysctl, 0o755);
+    const run = (machine, arches) => {
+      const venv = join(dir, 'venv');
+      rmSync(venv, { recursive: true, force: true });
+      mkdirSync(join(venv, 'bin'), { recursive: true });
+      writeFileSync(join(venv, 'bin', 'python3'), 'PY');
+      execFileSync('bash', ['-c', `${apple}\n${reset}\nreset_universal_venv "$1"`, 'bash', venv], {
+        env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, ARCHES: arches, MACHINE: machine },
+      });
+      return existsSync(venv);
+    };
+    expect(run('arm64', 'x86_64 arm64')).toBe(false);
+    expect(run('arm64', 'arm64')).toBe(true);
+    expect(run('x86_64', 'x86_64 arm64')).toBe(true);
   });
 
   it('captures diagnostics for every aborting install probe', () => {
