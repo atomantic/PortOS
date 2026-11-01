@@ -254,6 +254,23 @@ describe('re-approving Cast & Sets', () => {
     expect(media.some((row) => row.id === 'cat-chr-manual')).toBe(false);
   });
 
+  it('does not claim an existing manual attachment when a generated sheet uses the same image', async () => {
+    const projects = [videoProject()];
+    const { deps, media } = makeDeps({ projects });
+    await saveCheckinCastToCatalog('mv-1', deps);
+    const leadId = projects[0].concept.subjects[0].ingredientId;
+    await deps.catalogDB.attachMedia(leadId, 'manual-current.png', 'reference', { caption: 'Director selection', metadata: { prompt: 'Original prompt' } });
+    const changeSheet = (imageId, history) => {
+      projects[0] = { ...projects[0], castAndSets: { ...approvedStage, images: { character: { status: 'done', imageId, history } } } };
+    };
+    changeSheet('manual-current.png', ['ada-sheet.png']);
+    await saveCheckinCastToCatalog('mv-1', deps);
+    changeSheet('new-final.png', ['ada-sheet.png', 'manual-current.png']);
+    await saveCheckinCastToCatalog('mv-1', deps);
+    expect(media.filter((row) => row.id === leadId).map((row) => row.key)).toEqual(['manual-current.png', 'new-final.png']);
+    expect(media.find((row) => row.key === 'manual-current.png')).toMatchObject({ caption: 'Director selection', metadata: { prompt: 'Original prompt', musicVideoCast: { managed: false } } });
+  });
+
   it('keeps the previous reference when replacement attachment fails and skips unapproved stages', async () => {
     const projects = [videoProject()];
     const { deps, media } = makeDeps({ projects });

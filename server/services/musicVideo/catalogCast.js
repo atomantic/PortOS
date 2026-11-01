@@ -253,7 +253,11 @@ async function createRecord(project, item, deps) {
       return Boolean(await catalogDB.getIngredient(item.ingredientId));
     });
   if (created && item.imageId) {
-    await catalogDB.attachMedia(item.ingredientId, item.imageId, 'reference', { caption: `From ${trimTo(project.name || 'a music video', 100)}` });
+    await catalogDB.attachMedia(item.ingredientId, item.imageId, 'reference', {
+      caption: `From ${trimTo(project.name || 'a music video', 100)}`,
+      ...(checkinImages(project).get(item.subjectId) === item.imageId
+        ? { metadata: { musicVideoCast: { projectId: project.id, subjectId: item.subjectId } } } : {}),
+    });
   }
   return created;
 }
@@ -291,7 +295,7 @@ async function commitCatalogCast(projectId, decisions, deps) {
       // A retry may create this exact subject's deterministic row. A missing
       // reviewed target belonging to another subject stays missing.
       if (d.ingredientId !== musicVideoCastIngredientId(projectId, subject)) continue;
-      const item = { kind: subject.kind, name: subject.name, description: subject.description || '', imageId: images.get(subject.id) || null, ingredientId: d.ingredientId };
+      const item = { subjectId: subject.id, kind: subject.kind, name: subject.name, description: subject.description || '', imageId: images.get(subject.id) || null, ingredientId: d.ingredientId };
       if (await createRecord(project, item, deps)) {
         stamps.set(subject.id, { ingredientId: item.ingredientId });
         stats.created++;
@@ -299,7 +303,7 @@ async function commitCatalogCast(projectId, decisions, deps) {
       continue;
     }
     if (d.action !== 'create') continue;
-    const item = { kind: subject.kind, name: subject.name, description: subject.description || '', imageId: images.get(subject.id) || null, ingredientId: musicVideoCastIngredientId(projectId, subject) };
+    const item = { subjectId: subject.id, kind: subject.kind, name: subject.name, description: subject.description || '', imageId: images.get(subject.id) || null, ingredientId: musicVideoCastIngredientId(projectId, subject) };
     if (await createRecord(project, item, deps)) {
       stamps.set(subject.id, { ingredientId: item.ingredientId });
       stats.created++;
@@ -352,13 +356,22 @@ async function refreshCheckinRecords(project, catalogDB) {
     const media = await catalogDB.listMediaForIngredient(record.id);
     const current = media.find((image) => image.kind === 'reference' && image.mediaKey === imageId);
     // Attach first: a failed replacement must leave the previous reference available.
-    await catalogDB.attachMedia(record.id, imageId, 'reference', {
-      caption: `From ${trimTo(project.name || 'a music video', 100)}`,
-      metadata: { ...(current?.metadata || {}), musicVideoCast: { projectId: project.id, subjectId: subject.id } },
-    });
+    if (!current) {
+      await catalogDB.attachMedia(record.id, imageId, 'reference', {
+        caption: `From ${trimTo(project.name || 'a music video', 100)}`,
+        metadata: { musicVideoCast: { projectId: project.id, subjectId: subject.id } },
+      });
+    } else if (!current.metadata?.musicVideoCast) {
+      // A pre-existing manual reference stays unowned, including when this
+      // filename later appears in the subject's generated-image history.
+      await catalogDB.attachMedia(record.id, imageId, 'reference', {
+        caption: current.caption, role: current.role,
+        metadata: { ...current.metadata, musicVideoCast: { projectId: project.id, subjectId: subject.id, managed: false } },
+      });
+    }
     for (const image of media) {
       const origin = image.metadata?.musicVideoCast;
-      const ours = origin?.projectId === project.id && origin.subjectId === subject.id;
+      const ours = origin?.projectId === project.id && origin.subjectId === subject.id && origin.managed !== false;
       // Per-subject render history recognizes legacy check-in references; a
       // matching project caption alone cannot distinguish a manual attachment.
       const legacy = !origin && history.has(image.mediaKey);
