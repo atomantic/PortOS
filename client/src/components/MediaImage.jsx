@@ -115,6 +115,13 @@ export default function MediaImage({
     );
   }
 
+  // Spread `rest` FIRST so the explicit `onError` below wins over a caller-
+  // provided one — we still forward the event by capturing the caller's
+  // handler before composing. Putting {...rest} last would silently override
+  // setErrored and the placeholder would never appear.
+  const callerOnError = rest.onError;
+  const { onError: _ignore, ...passthrough } = rest;
+
   if (fallbackVideoSrc && (showVideo || !src)) {
     const videoSrc = cacheBust(fallbackVideoSrc, nonce);
     return (
@@ -125,7 +132,10 @@ export default function MediaImage({
         preload="metadata"
         muted
         playsInline
-        onError={() => setErrored(true)}
+        onError={(e) => {
+          setErrored(true);
+          callerOnError?.(e);
+        }}
       />
     );
   }
@@ -135,12 +145,6 @@ export default function MediaImage({
   // works the way the rest of the UI expects.
   const displaySrc = fallbacks[fallbackIndex] ?? firstSrc;
   const cacheBustedSrc = cacheBust(displaySrc, nonce);
-  // Spread `rest` FIRST so the explicit `onError` below wins over a caller-
-  // provided one — we still forward the event by capturing the caller's
-  // handler before composing. Putting {...rest} last would silently override
-  // setErrored and the placeholder would never appear.
-  const callerOnError = rest.onError;
-  const { onError: _ignore, ...passthrough } = rest;
   return (
     <img
       {...passthrough}
@@ -152,8 +156,8 @@ export default function MediaImage({
         // still allowing the original image or video to be streamed.
         // The caller hears only the final failure, not a thumbnail that falls back to its original.
         if (fallbackIndex + 1 < fallbacks.length) { setFallbackIndex(fallbackIndex + 1); return; }
-        if (fallbackVideoSrc) setShowVideo(true);
-        else if (tracksPeerAsset) setErrored(true);
+        if (fallbackVideoSrc) { setShowVideo(true); return; }
+        if (tracksPeerAsset) setErrored(true);
         callerOnError?.(e);
       }}
     />

@@ -369,7 +369,7 @@ export default function NextActionBanner({ gaps, status, traits, onRefresh }) {
             <div className="flex flex-wrap items-center justify-between gap-2 py-2">
               <button
                 type="button"
-                onClick={() => loadQuestion(activeCategory, [], { generate: true })}
+                onClick={() => loadQuestion(activeCategory, skippedIndices, { generate: true })}
                 className="min-h-[44px] px-3 py-1.5 bg-port-accent text-white rounded-lg text-sm hover:bg-port-accent/80 flex items-center gap-1.5"
               >
                 <Sparkles size={14} />

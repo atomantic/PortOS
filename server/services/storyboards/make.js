@@ -42,6 +42,7 @@ const deps = {
   markupPath: async (key) => (await import('../mediaSketches.js')).getSketchPngPath(key),
   linkedMedia: async (ids) => (await import('../catalogDB/media.js')).listMediaForIngredients(ids),
   ingredient: async (id) => (await import('../catalogDB/ingredients.js')).getIngredient(id),
+  resolveImage: (image) => resolveImageInputPath(image),
   emit: (payload) => import('../socket.js')
     .then(({ getIo }) => getIo()?.emit('storyboard:make', payload))
     .catch((err) => console.error(`❌ storyboard:make emit failed: ${err.message}`)),
@@ -236,8 +237,10 @@ async function runImageNode(board, panelId, node, { frameRef = null, count: fram
     throw refuse(`This panel keeps at most ${STORYBOARD_LIMITS.takes} takes and has ${panel.takes.length}; remove some before making ${count} more.`, 'STORYBOARD_LIMIT', 409);
   }
   const wired = nodeInputValue(recipe, node.id, 'images', context);
-  const refs = frameRef ? [frameRef, ...wired.filter((ref) => ref.image !== frameRef.image)].slice(0, RECIPE_LIMITS.images) : wired;
-  const pathOf = (ref) => (ref === frameRef && frameRef.path) || resolveImageInputPath(ref.image);
+  const pathOf = (ref) => (ref === frameRef && frameRef.path) || deps.resolveImage(ref.image);
+  // A ref whose file no longer resolves is never sent, so it takes no capped slot and is not recorded as sent.
+  const usable = (frameRef ? [frameRef, ...wired.filter((ref) => ref.image !== frameRef.image)] : wired).filter((ref) => pathOf(ref));
+  const refs = frameRef ? usable.slice(0, RECIPE_LIMITS.images) : usable;
   const runId = randomUUID();
   const settings = await deps.getSettings();
   const common = {

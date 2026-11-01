@@ -190,8 +190,9 @@ function MoodBoardEditor({ id }) {
   const loadSeqRef = useRef(0);
   const boardLoadedRef = useRef(false);
   const loadInFlightRef = useRef(false);
+  const loadPromiseRef = useRef(null);
 
-  const load = useCallback(async () => {
+  const readBoard = useCallback(async () => {
     const seq = ++loadSeqRef.current;
     loadInFlightRef.current = true;
     setLoading(true);
@@ -226,6 +227,10 @@ function MoodBoardEditor({ id }) {
     loadInFlightRef.current = false;
     setLoading(false);
   }, [id]);
+  const load = useCallback(() => {
+    loadPromiseRef.current = readBoard();
+    return loadPromiseRef.current;
+  }, [readBoard]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -238,16 +243,24 @@ function MoodBoardEditor({ id }) {
     let sequence = 0;
     const onRender = async (evt) => {
       if (evt?.boardId !== id) return;
+      let reported = false;
       const reportRenderFailure = () => {
+        if (reported) return;
+        reported = true;
         if (evt.itemId && evt.status === 'failed' && evt.error && renderRequestRef.current !== evt.itemId) toast.error(`Render failed: ${evt.error}`);
       };
       // With no board loaded yet (first read failed or still pending) only a
-      // full load also seeds the name/description fields. A pending read
-      // already returns the current board, so let it finish.
+      // full load also seeds the name/description fields. A pending read may
+      // have captured the board before this event, so let it finish and then
+      // refresh the items it returned.
       if (!boardLoadedRef.current) {
         reportRenderFailure();
-        if (!loadInFlightRef.current) load();
-        return;
+        if (!loadInFlightRef.current) {
+          load();
+          return;
+        }
+        await loadPromiseRef.current;
+        if (!active || !boardLoadedRef.current) return;
       }
       const current = ++sequence;
       const fresh = await getMoodBoard(id, { silent: true }).catch(() => null);

@@ -304,10 +304,12 @@ exit 1
   });
 
   it.skipIf(process.platform === 'win32')('deletes a universal venv before reinstall and keeps an arm64-only one', () => {
-    const reset = source.match(/^reset_universal_venv\(\) \{\n(?:.*\n)*?^\}\n/m)?.[0];
+    const routes = source.match(/^path_routes_through\(\) \{\n(?:.*\n)*?^\}\n/m)?.[0];
+    const reset = `${routes}${source.match(/^reset_universal_venv\(\) \{\n(?:.*\n)*?^\}\n/m)?.[0]}`;
     const apple = source.match(/^is_apple_silicon\(\) \{\n(?:.*\n)*?^\}\n/m)?.[0];
     const atLeast = source.match(/^python_at_least_310\(\) \{\n(?:.*\n)*?^\}\n/m)?.[0];
-    expect(reset).toBeTruthy();
+    expect(routes).toBeTruthy();
+    expect(reset).toContain('reset_universal_venv() {');
     expect(atLeast).toBeTruthy();
     const dir = mkdtempSync(join(tmpdir(), 'portos-reset-venv-'));
     tempVenvs.push(dir);
@@ -344,6 +346,7 @@ printf '%s\\n' '0'
     mkdirSync(tools);
     symlinkSync('/bin/bash', join(tools, 'bash'));
     symlinkSync('/bin/rm', join(tools, 'rm'));
+    symlinkSync('/usr/bin/readlink', join(tools, 'readlink'));
     const recreate = join(dir, 'recreate');
     writeFileSync(recreate, `#!/bin/bash
 case "$*" in
@@ -494,6 +497,31 @@ esac
     });
     expect(hashed).toContain('OUTSIDE');
     expect(hashed).not.toContain('INSIDE');
+    // A replacement outside the venv that is a symlink to the venv's own
+    // interpreter would dangle once the venv is deleted, whether the caller
+    // named it by path or it is the later PATH match for a bare name.
+    const aliases = join(dir, 'aliases');
+    const runAlias = (python, pathDirs) => {
+      prepareNamed();
+      rmSync(aliases, { recursive: true, force: true });
+      mkdirSync(aliases);
+      symlinkSync(join(namedRoot, 'bin', 'python3'), join(aliases, 'python3'));
+      execFileSync('bash', ['-c', `${apple}\n${atLeast}\n${reset}\nreset_universal_venv "$1" "$2"`, 'bash', namedRoot, python], {
+        env: { ...process.env, PATH: pathDirs.join(':'), ARCHES: 'x86_64 arm64', RECREATE_ARCHES: 'arm64', MACHINE: 'arm64' },
+      });
+      return existsSync(namedRoot);
+    };
+    expect(runAlias(join(aliases, 'python3'), [dir, tools])).toBe(true);
+    expect(runAlias('python3', [join(namedRoot, 'bin'), aliases, dir, tools])).toBe(true);
+    expect(runAlias('python3', [join(namedRoot, 'bin'), aliases, later, dir, tools])).toBe(false);
+    // A path that walks through a directory link inside the venv still depends
+    // on the venv, even though that link resolves out of it.
+    prepareNamed();
+    symlinkSync(later, join(namedRoot, 'bin', 'alias'));
+    execFileSync('bash', ['-c', `${apple}\n${atLeast}\n${reset}\nreset_universal_venv "$1" "$2"`, 'bash', namedRoot, join(namedRoot, 'bin', 'alias', 'python3')], {
+      env: { ...process.env, PATH: [dir, tools].join(':'), ARCHES: 'x86_64 arm64', RECREATE_ARCHES: 'arm64', MACHINE: 'arm64' },
+    });
+    expect(existsSync(namedRoot)).toBe(true);
   });
 
   it.skipIf(process.platform === 'win32')('does not choose a python inside the venv it may delete', () => {

@@ -421,6 +421,43 @@ describe('sunoRenderPhase', () => {
       restore();
     }
   });
+
+  // Uniquely catches a related song's duration beside its link marking an unfinished song page ready.
+  it('ignores a related song row whose duration sits beside its link', () => {
+    const body = h('div', {}, [
+      h('div', {}, [h('span', {}, '0:00')]),
+      h('div', {}, [
+        h('div', {}, [h('a', { href: `/song/${NEW_A}` }, [h('span', {}, 'Related take')]), h('span', {}, '2:00')]),
+        h('div', {}, [h('a', { href: `/song/${OLD}` }, [h('span', {}, 'Older take')]), h('span', {}, '1:30')]),
+      ]),
+    ]);
+    const restore = installDom(body, `/song/${NEW_B}`);
+    try {
+      const snap = collectSunoRenderSnapshot({ songId: NEW_B });
+      expect(snap.clocks).toEqual(['0:00']);
+      expect(sunoRenderPhase(snap)).toBe('pending');
+    } finally {
+      restore();
+    }
+  });
+  // Uniquely catches a lone related row growing over this song's own player when the page has no link to this song.
+  it('keeps this song\'s player clock when a lone related row shares its container', () => {
+    const body = h('div', {}, [
+      h('div', {}, [
+        h('div', {}, [h('span', {}, '0:00'), h('span', {}, ' / '), h('span', {}, '3:21')]),
+        h('div', {}, [h('a', { href: `/song/${NEW_A}` }, [h('span', {}, 'Related take')]), h('span', {}, '2:00')]),
+      ]),
+    ]);
+    const restore = installDom(body, `/song/${NEW_B}`);
+    try {
+      const snap = collectSunoRenderSnapshot({ songId: NEW_B });
+      expect(snap.clocks).toContain('3:21');
+      expect(snap.clocks).not.toContain('2:00');
+      expect(sunoRenderPhase(snap)).toBe('ready');
+    } finally {
+      restore();
+    }
+  });
 });
 
 describe('generateSunoSong M4A export', () => {

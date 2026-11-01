@@ -9,9 +9,9 @@
  *   - `planSequenceCoverage` picks the runs that may share a request and says
  *     why any other shot stays per-shot (performance shots, a different set or
  *     lead, a gap, or a run longer than the model's longest clip);
- *   - `composeSequencePrompt` writes the shots as contiguous time ranges using
+ *   - `_composeSequencePrompt` writes the shots as contiguous time ranges using
  *     the model's own reference naming ("Image 1" on H3, "@Image1" on Seedance);
- *   - `sequenceClipSpans` maps each scene back to its in/out point inside the
+ *   - `_sequenceClipSpans` maps each scene back to its in/out point inside the
  *     returned clip — the existing scene cut times, never new ones.
  *
  * Only reference-to-video models are eligible. Kling v3 Pro image-to-video does
@@ -149,7 +149,7 @@ const fmtSec = (n) => `${round3(n)}`;
  * range, offset from the clip's first frame, optionally naming a reference image.
  * `shots` are `[{ prompt, startSec, endSec, imageIndex? }]` in timeline order.
  */
-export function composeSequencePrompt({ modelId, shots }) {
+export function _composeSequencePrompt({ modelId, shots }) {
   if (!Array.isArray(shots) || shots.length === 0) return '';
   const origin = shots[0].startSec;
   return shots.map((shot) => {
@@ -165,7 +165,7 @@ export function composeSequencePrompt({ modelId, shots }) {
  * A clip shorter than the group (the provider returned less) refuses the split
  * rather than desyncing the song.
  */
-export function sequenceClipSpans(group, scenes, { clipDurationSec = null } = {}) {
+export function _sequenceClipSpans(group, scenes, { clipDurationSec = null } = {}) {
   const byId = new Map((scenes || []).map((s) => [sceneKey(s), s]));
   const spans = group.sceneIds.map((sceneId) => {
     const scene = byId.get(sceneId);
@@ -194,7 +194,7 @@ export function sequenceGroupInput(project, group) {
   const modelId = sequenceModelId(project);
   const byId = new Map(scenes.map((s) => [sceneKey(s), s]));
   const members = group.sceneIds.map((id) => byId.get(id));
-  const prompt = composeSequencePrompt({
+  const prompt = _composeSequencePrompt({
     modelId,
     shots: members.map((s, i) => ({ prompt: authoredShotPrompt(s), startSec: s.startSec, endSec: s.endSec, imageIndex: i + 1 })),
   });
@@ -202,6 +202,6 @@ export function sequenceGroupInput(project, group) {
   return {
     modelId, members, prompt, resolution: project?.videoSettings?.falResolution,
     promptAdditions: [falPromptExpansionAddition(expansion)].filter(Boolean),
-    spans: sequenceClipSpans(group, scenes).spans,
+    spans: _sequenceClipSpans(group, scenes).spans,
   };
 }

@@ -173,7 +173,14 @@ export default function VideoGen() {
       return n;
     });
   };
-  const [episodeImportScenes, setEpisodeImportScenes] = useState(null);
+  // The import is stored with the target it was read for, so a switch to
+  // another episode never shows the previous episode's scenes — even when the
+  // new episode has none.
+  const episodeImportKey = episodeOpen && episodeLoomId && episodeEpisodeId
+    ? JSON.stringify([episodeLoomId, episodeEpisodeId])
+    : null;
+  const [episodeImport, setEpisodeImport] = useState(null);
+  const episodeImportScenes = episodeImport && episodeImport.key === episodeImportKey ? episodeImport.scenes : null;
   // A failed FableLoom read must not open as a blank composer the user takes
   // for an episode with no scenes.
   const [episodeImportError, setEpisodeImportError] = useState(null);
@@ -183,7 +190,7 @@ export default function VideoGen() {
     if (!episodeOpen || !episodeLoomId || !episodeEpisodeId) {
       // Browser Back can drop the import params without closeEpisodeComposer;
       // a later plain open must not inherit the old import or its failure.
-      setEpisodeImportScenes(null);
+      setEpisodeImport(null);
       setEpisodeImportError(null);
       setEpisodeImportPending(false);
       return undefined;
@@ -195,8 +202,11 @@ export default function VideoGen() {
     getLoom(episodeLoomId, { silent: true }).then((loom) => {
       if (!active) return;
       const episode = loom?.episodes?.find((e) => e.id === episodeEpisodeId);
-      const draftScenes = loomEpisodeToDraftScenes(episode, { format: loom?.format });
-      if (draftScenes.length) setEpisodeImportScenes(draftScenes);
+      if (!episode) {
+        setEpisodeImportError(new Error('it is no longer in this loom; reopen the composer from FableLoom'));
+        return;
+      }
+      setEpisodeImport({ key: episodeImportKey, scenes: loomEpisodeToDraftScenes(episode, { format: loom?.format }) });
       setEpisodeImportError(null);
     }).catch((error) => {
       if (active) setEpisodeImportError(error);
@@ -206,7 +216,7 @@ export default function VideoGen() {
     return () => { active = false; };
     // Only re-run when a fresh loom/episode is targeted, not on every render.
     // Dependency list is intentionally partial.
-  }, [episodeOpen, episodeLoomId, episodeEpisodeId, episodeImportAttempt]);
+  }, [episodeOpen, episodeLoomId, episodeEpisodeId, episodeImportKey, episodeImportAttempt]);
 
   // `/status` owns connectivity ONLY. It shells out to python on every call
   // (~1-2s), so nothing the form needs to render may wait on it.
@@ -2086,7 +2096,9 @@ export default function VideoGen() {
             className="mb-3"
           />
         )}
-        {episodeOpen && <EpisodeComposer initialScenes={episodeImportScenes} onQueued={refreshHistory} />}
+        {/* Keyed by target: the composer applies an import only once, so a new
+            episode needs a fresh composer rather than the last one's scenes. */}
+        {episodeOpen && <EpisodeComposer key={episodeImportKey ?? 'blank'} initialScenes={episodeImportScenes} onQueued={refreshHistory} />}
       </Drawer>
 
       <RuntimeInstallModal

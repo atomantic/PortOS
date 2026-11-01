@@ -137,10 +137,11 @@ export const GROK_NO_TOOL_ARGS = Object.freeze([
 
 /**
  * Tools a no-tool grok run still offered or called, read from its
- * `streaming-json` transcript: non-MCP names in the last `available_commands`
- * event plus every `tool_call`. Empty when the posture held.
+ * `streaming-json` transcript: `offered` holds non-MCP names in the last
+ * `available_commands` event, `called` every `tool_call`. Both empty when the
+ * posture held.
  * @param {string} streamText - raw JSONL stdout
- * @returns {string[]}
+ * @returns {{ offered: string[], called: string[] }}
  */
 export function grokToolsEscapingNoToolPosture(streamText) {
   let offered = [];
@@ -156,7 +157,7 @@ export function grokToolsEscapingNoToolPosture(streamText) {
       called.push(event.toolName);
     }
   }
-  return [...new Set([...offered, ...called])];
+  return { offered, called: [...new Set(called)] };
 }
 
 // `--output-format plain` concatenates every assistant text chunk of the run with
@@ -173,7 +174,7 @@ export const GROK_STREAMING_JSON_FORMAT = 'grok-streaming-json';
  * @param {string[]} args
  * @returns {string[]}
  */
-export function withGrokStreamingJsonOutput(args = []) {
+export function _withGrokStreamingJsonOutput(args = []) {
   const out = [];
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--output-format' || args[i] === '-o') i++;
@@ -215,7 +216,7 @@ export const GROK_CODE_REVIEW_JSON_SCHEMA = {
  * @returns {string[]}
  */
 export function withGrokCodeReviewOutput(args = []) {
-  const formatted = withGrokStreamingJsonOutput(args);
+  const formatted = _withGrokStreamingJsonOutput(args);
   const out = [];
   for (let i = 0; i < formatted.length; i++) {
     if (formatted[i] === '--json-schema') i++;
