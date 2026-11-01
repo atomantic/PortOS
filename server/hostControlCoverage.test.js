@@ -586,6 +586,7 @@ const REVIEWED_OPEN_MUTATIONS = [
   ['POST /api/image-gen/runway-models/refresh', READ_OVER_POST],
   ['POST /api/image-gen/setup/create-venv', HANDLER_GATED],
   ['POST /api/image-gen/setup/flux2-install', MANAGED_INSTALL],
+  ['POST /api/image-gen/setup/flux3-install', HANDLER_GATED],
   ['DELETE /api/image-gen/setup/hf-token', REMOVES_RECORD],
   ['POST /api/image-gen/setup/hf-token', CONNECTOR_CREDENTIAL],
   ['POST /api/image-gen/setup/install', HANDLER_GATED],
