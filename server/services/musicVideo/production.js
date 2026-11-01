@@ -304,6 +304,10 @@ export function assertProductionStepOpen(project, runId, stepKey, { sceneId, kin
       throw productionError(409, 'PRODUCTION_PLATE_CHANGED', 'The selected frame changed before its repair was submitted');
     }
   }
+  if (step.kind === 'frame' && !step.stillRepair && !step.plateRepairBasis && !step.revisionId
+    && isNonBlankStr(project.scenes.find((entry) => entry.sceneId === sceneId)?.referenceImageId)) {
+    throw productionError(409, 'PRODUCTION_PLATE_CHANGED', 'This shot got a frame before its generation was submitted');
+  }
   return step;
 }
 
@@ -652,6 +656,10 @@ export function reserveProductionStep(project, runId, {
     const scene = (project.scenes || []).find((entry) => entry.sceneId === sceneId);
     if (stillRepair && (kind !== 'frame' || pendingStillRepair(scene)?.at !== stillRepair.at || scene.referenceImageId !== stillRepair.replaces)) {
       throw productionError(409, 'PRODUCTION_PLATE_CHANGED', 'The selected frame changed before its repair was reserved');
+    }
+    // The director can pick a frame after dispatch inspected the scene; a fresh frame is then unpaid-for work.
+    if (kind === 'frame' && !stillRepair && !plateRepairBasis && !revisionId && isNonBlankStr(scene?.referenceImageId)) {
+      throw productionError(409, 'PRODUCTION_PLATE_CHANGED', 'This shot got a frame before its generation was reserved');
     }
     step = {
       key: `${kind}:${sceneId}:${revisionId || 'base'}:${existing.length + 1}`,
