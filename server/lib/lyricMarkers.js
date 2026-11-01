@@ -174,9 +174,12 @@ const lineKey = (text) => String(text || '').toLowerCase().replace(/[^\p{L}\p{N}
 
 /**
  * Pair each sheet line with a cue: longest common subsequence on normalized
- * text, then same-length gaps between anchors pair in order (a line edited in
- * place). Returns the cue index per sheet line (-1 when it has none) and the
- * number of exact-text anchors.
+ * text, then the lines between two anchors pair in order up to the shorter
+ * gap (a line edited in place, or the first lines of a merge or a split).
+ * A longer sheet gap leaves its tail unmapped, so a header on that tail walks
+ * forward to the next anchor instead of landing on the anchor itself.
+ * Returns the cue index per sheet line (-1 when it has none) and the number
+ * of exact-text anchors.
  */
 function alignSheetToCues(sheetKeys, cueKeys) {
   const n = sheetKeys.length;
@@ -200,7 +203,11 @@ function alignSheetToCues(sheetKeys, cueKeys) {
   let prevSheet = -1;
   let prevCue = -1;
   for (const [i, j] of [...anchors, [n, m]]) {
-    if (i - prevSheet === j - prevCue) for (let k = 1; prevSheet + k < i; k++) toCue[prevSheet + k] = prevCue + k;
+    // Interior counts, not the distance that includes the next anchor. An
+    // unequal gap still shares a prefix: the merged or split lines occupy the
+    // first cues, and only the unpaired sheet tail stays unmapped (#14507).
+    const paired = Math.min(i - prevSheet - 1, j - prevCue - 1);
+    for (let k = 1; k <= paired; k++) toCue[prevSheet + k] = prevCue + k;
     if (i < n) toCue[i] = j;
     prevSheet = i;
     prevCue = j;
