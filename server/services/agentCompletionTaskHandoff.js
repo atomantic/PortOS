@@ -15,6 +15,64 @@ const matches = (metadata, expected) => expected.every(([key, value]) => key ===
   ? spawnCount(value) !== null && spawnCount(metadata?.[key]) === spawnCount(value)
   : (metadata?.[key] ?? null) === value);
 
+const AUDIT_DISPOSITION_BLOCK = 'audit-disposition-incomplete';
+
+/** One row per claim field. A duplicate or a missing field is not a run identity. */
+function dispatchClaimRows(expected) {
+  if (!Array.isArray(expected)) return null;
+  const rows = {};
+  for (const key of DISPATCH_KEYS) {
+    const found = expected.filter(row => Array.isArray(row) && row.length === 2 && row[0] === key);
+    if (found.length !== 1) return null;
+    rows[key] = found[0][1];
+  }
+  return rows;
+}
+
+/**
+ * Bind the live claim scalar when it is the same value the finalizer recorded.
+ * Spawn count survives the markdown number/text round-trip; the task store's
+ * expectedMetadata check does not, so a matching count binds the live scalar.
+ * A drifted field binds the receipt, and the guarded write then refuses.
+ */
+function bindDispatchClaim(expected, metadata) {
+  const rows = dispatchClaimRows(expected);
+  if (!rows) return null;
+  const bound = {};
+  for (const key of DISPATCH_KEYS) {
+    const value = rows[key];
+    const live = metadata?.[key];
+    if (key === 'totalSpawnCount') {
+      const count = spawnCount(value);
+      bound[key] = count !== null && spawnCount(live) === count ? live : value;
+    } else {
+      bound[key] = (live ?? null) === value ? live : value;
+    }
+  }
+  return bound;
+}
+
+/**
+ * Fence for completing a task blocked on an unverified audit register once a
+ * completion replay verifies it. The finalizer snapshotted the dispatch claim
+ * before that block, and `updatedAt` moves on the block write, so only the
+ * claim fields identify the run. A task that has since been unblocked, edited,
+ * deleted or re-claimed does not match.
+ */
+export function verifiedAuditTaskFence(agent, task) {
+  const intent = agent?.metadata?.completionCleanup?.taskHandoff;
+  if (intent?.version !== 1 || intent.taskId !== agent?.taskId || intent.startedAt !== agent?.startedAt) return null;
+  if (task && (task.id !== intent.taskId || (task.taskType || 'user') !== (intent.taskType || 'user'))) return null;
+  const claim = bindDispatchClaim(intent.expected, task?.metadata);
+  if (!claim) return null;
+  return {
+    taskId: intent.taskId,
+    taskType: intent.taskType || 'user',
+    expectedStatus: 'blocked',
+    expectedMetadata: { blockedCategory: AUDIT_DISPOSITION_BLOCK, ...claim },
+  };
+}
+
 /** Match the server's dispatch binding, including metadata scalar round-trips. */
 export function matchesCompletionTaskDispatch(agent, task) {
   const binding = agent?.metadata?.completionTaskDispatch;
