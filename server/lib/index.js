@@ -375,6 +375,7 @@ export * from './trashFiles.js';
 export * from './nativeTrash.js';
 export * from './nativeTrashXdg.js';
 export * as fileUtils from './fileUtils.js';
+export * from './flux2Inputs.js';
 export * from './fileWriteQueue.js';
 export * from './forgeIssueCli.js';
 export * from './forgeIssueState.js';

@@ -347,21 +347,19 @@ it('names Casting guides and project references in the order the backend receive
   expect((peer.data.promptAdditions || []).map((item) => item.id)).not.toContain('reference-map');
 });
 
-// The local FLUX.2 runner chooses the KV references over an init image, or
-// drops those references when routing a quantized model's LoRA to bf16.
-it('maps only the images the FLUX.2 runner actually uses', async () => {
+// Composition must not describe the reduced inputs of a degraded render.
+it('refuses incompatible composed FLUX.2 inputs and preserves supported reference positions', async () => {
   const { PATHS } = await import('../../lib/paths.js');
   mkdirSync(PATHS.images, { recursive: true });
-  for (const file of ['init.png', 'lead.png']) writeFileSync(join(PATHS.images, file), 'fixture');
+  writeFileSync(join(PATHS.images, 'lead.png'), 'fixture');
   getSettings.mockResolvedValue({ imageGen: { mode: 'local' } });
   getProject.mockResolvedValue({ visualSpec: { references: [{ imageId: 'lead.png', role: 'character', label: 'Example lead' }] }, scenes: [{ sceneId: 's1' }] });
-  const request = { prompt: 'A crowd gathers', modelId: 'flux2-klein-9b', initImageFile: 'init.png', referenceImageFiles: ['lead.png'], musicVideo: { projectId: 'mv-1', sceneId: 's1', compose: true } };
-  const withReferences = await run({ ...request });
-  expect(withReferences.data.prompt).toContain('Reference image 1 is Example lead');
-  const withLora = await run({ ...request, loraFilenames: ['example.safetensors'] });
-  expect((withLora.data.promptAdditions || []).map((item) => item.id)).not.toContain('reference-map');
-  const withLegacyLoraPath = await run({ ...request, loraPaths: ['example.safetensors'] });
-  expect((withLegacyLoraPath.data.promptAdditions || []).map((item) => item.id)).not.toContain('reference-map');
+  const request = { prompt: 'A crowd gathers', modelId: 'flux2-klein-9b', referenceImageFiles: ['lead.png'], musicVideo: { projectId: 'mv-1', sceneId: 's1', compose: true } };
+  const supported = await run({ ...request });
+  expect(supported.data.prompt).toContain('Reference image 1 is Example lead');
+  for (const extra of [{ initImageFile: 'init.png' }, { loraFilenames: ['example.safetensors'] }, { loraPaths: ['example.safetensors'] }]) {
+    await expect(run({ ...request, ...extra })).rejects.toMatchObject({ status: 400, code: 'IMAGE_GEN_FLUX2_INPUTS_INCOMPATIBLE' });
+  }
 });
 
 // Uniquely catches a panel-linked still sent without its live panel's picks, or naming the wrong reference as the sketch.

@@ -1,3 +1,4 @@
+import { assertFlux2InputsCompatible } from '../lib/flux2Inputs.js';
 /**
  * Provider-side federated media contract (wire v1).
  *
@@ -881,6 +882,11 @@ export async function submitFederatedMediaJob({ callerId, config, input, idempot
       if (!resolveVideoSupportedModes(capability._model).includes(mode)) {
         unavailable('Requested model cannot run this conditioning mode', 'MEDIA_PROVIDER_INPUT_UNSUPPORTED', 400);
       }
+    }
+    if (input.kind === 'image') {
+      assertFlux2InputsCompatible(capability._model, {
+        hasInitImage: Boolean(input.initImage), referenceCount: input.referenceImages?.length || 0,
+      });
     }
     validateFederatedVideoControls(input, capability._model);
     // Lyrics reach a lyric-aware model only. `input.lyrics` is checked for a

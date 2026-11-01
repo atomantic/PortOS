@@ -47,6 +47,10 @@ vi.mock('../../lib/maintenanceAdmission.js', async (importOriginal) => ({
 }));
 
 vi.mock('../../lib/mediaModels.js', () => ({
+  getImageModels: vi.fn(() => [
+    { id: 'flux2-example', runner: 'flux2', quantization: 'sdnq' },
+    { id: 'flux2-example-bf16', runner: 'flux2', quantization: 'none' },
+  ]),
   getVideoModels: vi.fn(() => [
     { id: 'example-mlx', runtime: 'mlx_video' },
     { id: 'example-cuda', runtime: 'cuda_video' },
@@ -680,6 +684,28 @@ describe('mediaJobQueue', () => {
     await waitFor(() => stubs.generateImage.mock.calls.length === 1);
     expect(stubs.generateImage).toHaveBeenCalledWith(expect.objectContaining({ prompt: 'Legacy scene' }));
     imageGenEvents.emit('completed', { generationId: jobId, filename: 'legacy.png' });
+  });
+
+  it.each([
+    { initImagePath: 'init.png', initImageStrength: 0.35 },
+    { loraFilenames: ['example.safetensors'] },
+    { loraPaths: ['example.safetensors'] },
+  ])('refuses incompatible FLUX.2 selections before queue acceptance: %j', async extra => {
+    expect(mediaJobQueue.listJobs()).toEqual([]);
+    await expect(mediaJobQueue.enqueueJob({ kind: 'image', params: {
+      modelId: 'flux2-example', referenceImagePaths: ['reference.png'], ...extra,
+    } })).rejects.toMatchObject({ code: 'IMAGE_GEN_FLUX2_INPUTS_INCOMPATIBLE' });
+    expect(mediaJobQueue.listJobs()).toEqual([]);
+  });
+
+  it('keeps cloud and unquantized image selections outside the incompatible FLUX.2 queue refusal', async () => {
+    const params = { modelId: 'flux2-example-bf16', referenceImagePaths: ['reference.png'], loraFilenames: ['example.safetensors'] };
+    const local = await mediaJobQueue.enqueueJob({ kind: 'image', params });
+    const cloud = await mediaJobQueue.enqueueJob({ kind: 'image', params: {
+      ...params, modelId: 'flux2-example', mode: 'codex', initImagePath: 'init.png',
+    } });
+    expect(mediaJobQueue.getJob(local.jobId)).toMatchObject({ params });
+    expect(mediaJobQueue.getJob(cloud.jobId).params).toMatchObject({ mode: 'codex', initImagePath: 'init.png' });
   });
 
   it('enqueueJob returns jobId + queued status + position', async () => {
