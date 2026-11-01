@@ -135,7 +135,10 @@ describe('dependency override parity across manifests (#2848)', () => {
       'sharp': '0.35.0',
       // GHSA-8r9p-f939-6h3c and GHSA-q3jh-wrc6-jgq8 (credential headers leak across
       // cross-origin redirects); 1.16.0 was itself the fix for the previous advisory.
-      'follow-redirects': '1.16.1'
+      // GHSA-mrwp-f3q8-3g9p also covers 1.16.1 (cross-realm sensitive-header arrays).
+      'follow-redirects': '1.16.2',
+      // GHSA-g3hv-75wg-m249 (globparts amplification at optimizationLevel >= 2).
+      'minimatch': '11.0.1'
     };
 
     const EXACT_VERSION = /^\d+\.\d+\.\d+$/;
