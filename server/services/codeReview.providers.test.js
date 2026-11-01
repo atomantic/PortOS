@@ -448,6 +448,12 @@ describe('configured provider reviewers', () => {
       expect(budgetOf()).toBe(REMOTE_CODE_REVIEW_TIMEOUT_DEFAULT_MS);
       expect(budgetOf()).toBeGreaterThan(getLocalCodeReviewTimeoutMs(diff));
 
+      // #14499: every toolkit-created record carries the generic 300000 run
+      // default, which is not a review cap the user chose.
+      getProviderById.mockResolvedValue({ ...cli, timeout: 300_000 });
+      await runLocalCodeReview({ backend, diff });
+      expect(budgetOf()).toBe(REMOTE_CODE_REVIEW_TIMEOUT_DEFAULT_MS);
+
       getProviderById.mockResolvedValue({ ...cli, timeout: 90_000 });
       await runLocalCodeReview({ backend, diff });
       expect(budgetOf()).toBe(90_000);
