@@ -454,7 +454,7 @@ esac
     execFileSync('bash', ['-c', `${apple}\n${atLeast}\n${reset}\nreset_universal_venv "$1" python3.11`, 'bash', versioned], {
       env: {
         ...process.env,
-        PATH: `${join(versioned, 'bin')}:${later}:${dir}:/bin`,
+        PATH: `${join(versioned, 'bin')}:${later}:${dir}:${tools}`,
         ARCHES: 'x86_64 arm64',
         RECREATE_ARCHES: 'arm64',
         MACHINE: 'arm64',
@@ -485,7 +485,7 @@ esac
     const hashed = execFileSync('bash', ['-c', `set -e\n${apple}\n${atLeast}\n${reset}\npython3 >/dev/null\nreset_universal_venv "$1" python3\npython3`, 'bash', namedRoot], {
       env: {
         ...process.env,
-        PATH: `${join(namedRoot, 'bin')}:${later}:${dir}:/bin`,
+        PATH: `${join(namedRoot, 'bin')}:${later}:${dir}:${tools}`,
         ARCHES: 'x86_64 arm64',
         RECREATE_ARCHES: 'arm64',
         MACHINE: 'arm64',
@@ -507,8 +507,13 @@ esac
     tempVenvs.push(dir);
     const venvBin = join(dir, 'venv', 'bin');
     const outside = join(dir, 'outside');
+    const tools = join(dir, 'tools');
     mkdirSync(venvBin, { recursive: true });
     mkdirSync(outside, { recursive: true });
+    mkdirSync(tools);
+    // Host /bin can contain a newer python3.N than the stub. The search must
+    // see only the interpreters this test creates.
+    symlinkSync('/bin/bash', join(tools, 'bash'));
     const script = '#!/bin/bash\nexit 0\n';
     writeFileSync(join(venvBin, 'python3'), script);
     writeFileSync(join(outside, 'python3.12'), script);
@@ -518,7 +523,7 @@ esac
       'bash',
       ['-c', `${have}\n${atLeast}\n${newest}\nnewest_supported_python "$1"`, 'bash', exclude],
       {
-        env: { ...process.env, PATH: `${venvBin}:${outside}:/bin:/usr/bin`, PYTHON_BIN: 'python3' },
+        env: { ...process.env, PATH: `${venvBin}:${outside}:${tools}`, PYTHON_BIN: 'python3' },
         encoding: 'utf8',
       },
     );
