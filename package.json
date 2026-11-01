@@ -51,6 +51,7 @@
     "test": "npm test --prefix server && npm test --prefix client",
     "pregate": "exec node scripts/pregate.js",
     "pregate:merged": "node scripts/pregate.js --guards-only",
+    "quality:complexity": "node server/scripts/complexity-report.js",
     "quality:snapshot": "node scripts/publish-quality-snapshot.js",
     "scan:hidden-content": "node scripts/scan-diff-hidden-content.js",
     "eidoverse:assay": "node scripts/eidoverse-resilience-assay.js",

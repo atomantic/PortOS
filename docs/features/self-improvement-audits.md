@@ -148,6 +148,15 @@ problem:
   that no metric captures — mixed abstraction levels, flag arguments, names that
   lie. `module-hygiene` owns responsibility boundaries and treats a complexity
   score only as a candidate signal, never as a finding.
+  For PortOS, `npm run quality:complexity` prints ranked JavaScript/JSX source and
+  test shortlists without writing a report file. It uses ESLint's classic
+  cyclomatic complexity: one base path plus decision points, including each
+  non-default switch case, default arguments, logical operators and optional
+  chains. Class field initializers and static blocks are counted separately,
+  as are nested functions. The report excludes generated, vendored, build and
+  migration files; it identifies parsing failures and exits nonzero if its scan
+  is incomplete, but never fails for a high score. Analyze other languages
+  separately and judge each candidate in context.
 - **Layout is split by what is narrow.** `mobile-responsive` owns every layout
   defect at a viewport width ≤1024 (phone and tablet) plus touch mechanics —
   overflow, clipping, breakpoint gaps, tap targets. `ux` checklist item 8 keeps
