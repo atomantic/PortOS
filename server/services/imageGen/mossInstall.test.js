@@ -39,7 +39,7 @@ beforeEach(async () => {
     if (swiftArgs?.includes('--version')) line('Swift version 6.4');
     if (swiftArgs?.[0] === 'build') {
       const products = join(cwd, '.build', 'release');
-      if (args.includes('--show-bin-path')) line(products);
+      if (swiftArgs.includes('--show-bin-path')) line(products);
       else {
         fixture.buildEntered?.();
         await fixture.holdBuild;
@@ -82,9 +82,10 @@ describe('MOSS runtime installation publication', () => {
     expect(await readFile(join(directory, 'moss-image'), 'utf8')).toBe('fixture-executable');
     expect(await readFile(join(directory, 'licenses', 'dependency', 'LICENSE'), 'utf8')).toBe('fixture-dependency-license');
     expect(runStreamingCommand).toHaveBeenCalledWith('git', expect.arrayContaining(['fetch', MOSS_MANIFEST.sourceUrl, MOSS_MANIFEST.sourceRevision]), expect.any(Function), expect.any(Object));
-    const [swiftBin, swiftArgs] = mossSwiftCommand(['build', '-c', 'release', '--product', 'MossImageGate', '--jobs', '4', '--force-resolved-versions']);
+    const buildArgs = ['build', '-c', 'release', '--product', 'MossImageGate', '--jobs', '4', '--force-resolved-versions'];
+    const [swiftBin, swiftArgs] = mossSwiftCommand(buildArgs);
     expect(runStreamingCommand).toHaveBeenCalledWith(swiftBin, swiftArgs, expect.any(Function), expect.any(Object));
-    const [pathBin, pathArgs] = mossSwiftCommand([...swiftArgs, '--show-bin-path']);
+    const [pathBin, pathArgs] = mossSwiftCommand([...buildArgs, '--show-bin-path']);
     expect(runStreamingCommand).toHaveBeenCalledWith(pathBin, pathArgs, expect.any(Function), expect.any(Object));
     expect(await readFile(join(directory, 'licenses', 'mlx-swift', 'Source', 'Cmlx', 'json', 'LICENSE.MIT'), 'utf8')).toBe('fixture-vendored-license');
     expect(probeMossBinary).toHaveBeenCalledTimes(1);
