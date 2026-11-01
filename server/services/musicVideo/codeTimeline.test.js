@@ -115,6 +115,20 @@ describe('buildCodeTimeline (#9076)', () => {
     expect(timeline.beats).toContain(timeline.sections[1].startSec);
   });
 
+  it('ignores a stale treatment arc longer than the analyzed replacement song (#14548)', () => {
+    const swapped = {
+      ...project,
+      scenes: [{ sceneId: 's1', label: 'Shot', startSec: 0, endSec: 4 }],
+      treatment: { arc: { beats: [
+        { id: 'b1', label: 'Open', startSec: 0, endSec: 2 },
+        { id: 'b2', label: 'Payoff', startSec: 2, endSec: 6.5 },
+      ] } },
+    };
+    const timeline = buildCodeTimeline(swapped);
+    expect(timeline.durationSec).toBe(4);
+    expect(timeline.sections.at(-1).endSec).toBe(4);
+  });
+
   it('covers the song within one frame', () => {
     for (const duration of [1 / 24, 2, 2.01, 3.333, 10]) {
       const quantized = quantizeSongDuration(duration, 24);
