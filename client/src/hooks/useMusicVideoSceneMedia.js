@@ -1,7 +1,7 @@
 import { castInputsFromReferences } from '../../../server/lib/musicVideoCastLook.js';
 import { musicVideoGreyboxReference } from '../../../server/lib/musicVideoGreybox.js';
 import { shotActionContractProblem } from '../../../server/lib/musicVideoActionContract.js';
-import { isOutsideMusicVideoReference, musicVideoConditioningReferences, musicVideoFrameReferenceFiles, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES } from '../../../server/lib/musicVideoConditioning.js';
+import { isOutsideMusicVideoReference, musicVideoConditioningReferences, musicVideoFrameReferenceFiles, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES, MUSIC_VIDEO_MAX_REFERENCE_CHOICES } from '../../../server/lib/musicVideoConditioning.js';
 import { preMusicClipSound } from '../../../server/lib/musicVideoColdOpen.js';
 import { sceneEndFrameRequestFields } from '../../../server/lib/musicVideoEndFrame.js';
 import { authoredFramePromptText, authoredShotPrompt, musicVideoFrameModelInput, visualDirection } from '../../../server/lib/musicVideoShotPrompt.js';
@@ -23,9 +23,7 @@ import {
   falSceneTake, falTakeRequestFields, grokSceneRequestDuration, isPerformanceScene, performanceBlockedReason, runwaySceneTake, runwayTakeRequestFields,
 } from '../lib/musicVideoShotTiming.js';
 
-// The image backends accept at most four reference images for most models
-// (server imageGen/prepareParams.js), mirrored by the server's
-// MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES.
+// The project-wide limit on references flagged to condition every frame.
 export const MAX_CONDITIONING_REFERENCES = MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES;
 
 // Refusals the image route returns when the resolved backend can't consume
@@ -49,11 +47,11 @@ const REFERENCE_CAPABILITY_CODES = new Set([
 /** The project-wide palette and camera rules, shared with the server's composers. */
 export { visualDirection };
 
-/** Shared scene-aware frame conditioning, with the legacy capped fallback. */
+/** Shared scene-aware frame conditioning. */
 export const conditioningReferences = musicVideoConditioningReferences;
 /**
  * A render's reference files: the frame it reworks leads, then the shot's references, kept
- * within the backends' reference cap (a leading frame leaves room for the first 3).
+ * within the request limit. The server applies the chosen renderer's limit.
  */
 const frameReferenceFiles = musicVideoFrameReferenceFiles;
 /** A mood board / Pinterest reference: look text only, never a conditioning image. */
@@ -237,7 +235,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
     // A planned shot with no text still renders from its look, frame clause and actions.
     if (!refining && !musicVideoFrameModelInput(project, scene).prompt) { toast.error('Add a frame prompt or shot prompt first'); return Promise.resolve({ ok: false }); }
     // A frame picked on the card (its start or end frame) leads the references, as the image this render reworks.
-    const references = frameReferenceFiles(referenceImageId, conditioning);
+    const references = frameReferenceFiles(referenceImageId, conditioning, MUSIC_VIDEO_MAX_REFERENCE_CHOICES, { reservePanel: !Array.isArray(scene.frameReferenceIds) });
     const castInputs = submittedCastInputs(scene, conditioning, references);
     const projectId = project.id;
     frameLane.startScene(scene.sceneId);
@@ -310,7 +308,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
     const projectId = project.id;
     // The frame it renders from leads, then the shot's references (the card's References row).
     const conditioning = conditioningReferences(project, scene, castMedia, greybox);
-    const references = frameReferenceFiles(referenceImageId, conditioning);
+    const references = frameReferenceFiles(referenceImageId, conditioning, MUSIC_VIDEO_MAX_REFERENCE_CHOICES, { reservePanel: !Array.isArray(scene.frameReferenceIds) });
     const castInputs = submittedCastInputs(scene, conditioning, references);
     endFrameLane.startScene(scene.sceneId);
     return generateImage({

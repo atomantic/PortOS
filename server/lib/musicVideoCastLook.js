@@ -1,4 +1,5 @@
 import { musicVideoCastGuideReferences } from './musicVideoConditioning.js';
+import { IMAGE_REFERENCE_REQUEST_LIMIT } from './imageGenCapabilities.js';
 
 /**
  * Cast inputs recorded on a music-video still (#14154).
@@ -10,7 +11,7 @@ import { musicVideoCastGuideReferences } from './musicVideoConditioning.js';
  * is an older take: unknown, not stale. Nothing here re-renders a shot.
  */
 
-const MAX_CAST_INPUTS = 8;
+const MAX_CAST_INPUTS = IMAGE_REFERENCE_REQUEST_LIMIT;
 
 function uniqueStrings(values, max) {
   const out = [];

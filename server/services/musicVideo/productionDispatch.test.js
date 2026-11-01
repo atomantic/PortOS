@@ -64,6 +64,28 @@ describe('production scene dispatch (#9066)', () => {
     expect(params.referenceImagePaths[0]).toMatch(/ref-example\.png$/);
   });
 
+  // A blank pool pin resolves the install model before applying its reference capacity.
+  it('conditions a frame on the install-default local model', async () => {
+    const localSettings = { imageGen: { mode: 'local', local: { pythonPath: '/opt/example/python', modelId: 'flux2-klein-9b' } } };
+    await dispatchProductionStep({ stepKind: 'frame', project, scene, route: { kind: 'image', mode: 'local', model: null }, tag, settings: localSettings });
+    const params = enqueueJob.mock.calls[0][0].params;
+    expect(params.modelId).toBe('flux2-klein-9b');
+    expect(params.referenceImagePaths.map((path) => basename(path))).toEqual(['ref-example.png']);
+  });
+
+  it('uses a compatible wide frame size for FLUX.3 production', async () => {
+    await dispatchProductionStep({ stepKind: 'frame', project, scene, route: { kind: 'image', mode: 'local', model: 'flux3-klein-q4' }, tag, settings });
+    expect(enqueueJob.mock.calls[0][0].params).toMatchObject({ modelId: 'flux3-klein-q4', width: 1024, height: 576 });
+  });
+
+  it('keeps automatic storyboard art in the limited renderer inputs', async () => {
+    const references = ['a', 'b', 'c', 'd'].map((id) => ({ id, imageId: `${id}.png`, condition: true }));
+    await dispatchProductionStep({ stepKind: 'frame', project: { ...project, visualSpec: { references } },
+      scene: { ...scene, panelArt: 'panel.png' }, route: { kind: 'image', mode: 'agy', model: null }, tag,
+      settings: { imageGen: { agy: { enabled: true } } } });
+    expect(enqueueJob.mock.calls[0][0].params.referenceImagePaths.map((path) => basename(path))).toEqual(['a.png', 'b.png', 'panel.png']);
+  });
+
   it('never conditions a frame on a mood board import or a Pinterest pin, even when flagged', async () => {
     const outside = { ...project, visualSpec: { references: [
       { id: 'mvr-board-1', imageId: 'board-still.png', condition: true },
@@ -142,8 +164,8 @@ describe('production scene dispatch (#9066)', () => {
   });
 
   it('renders a local frame on the pool\'s exact model', async () => {
-    await dispatchProductionStep({ stepKind: 'frame', project, scene, route: { kind: 'image', mode: 'local', model: 'flux2-dev' }, tag, settings });
-    expect(enqueueJob.mock.calls[0][0].params).toMatchObject({ modelId: 'flux2-dev', pythonPath: '/opt/example/python' });
+    await dispatchProductionStep({ stepKind: 'frame', project, scene, route: { kind: 'image', mode: 'local', model: 'flux2-klein-9b' }, tag, settings });
+    expect(enqueueJob.mock.calls[0][0].params).toMatchObject({ modelId: 'flux2-klein-9b', pythonPath: '/opt/example/python' });
     expect(enqueueJob.mock.calls[0][0].params).not.toHaveProperty('mode');
   });
 

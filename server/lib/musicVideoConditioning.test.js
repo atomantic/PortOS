@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { musicVideoConditioningReferences, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES , musicVideoReferenceCapacity } from './musicVideoConditioning.js';
+import { musicVideoConditioningReferences, musicVideoFrameReferenceFiles, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES, musicVideoReferenceCapacity } from './musicVideoConditioning.js';
 
 const CAST_ID = 'cat-chr-example';
 const guide = (mediaKey, age, extra = {}) => ({ mediaKey, kind: 'reference', createdAt: '2026-01-01T00:00:00.000Z', library: { variant: { age }, guide: true }, ...extra });
@@ -76,6 +76,16 @@ describe('musicVideoConditioningReferences with Casting guides', () => {
     expect(ids(musicVideoConditioningReferences(project(authored), { ...scene, frameReferenceIds: ['mvr-panel-panel-1'] }))).toEqual(['panel.png']);
     expect(ids(musicVideoConditioningReferences(project(authored), { panelId: 'panel-1', panelArt: 'sketch.gif' }))).toEqual(['lead.png', 'set.png']);
   });
+
+  it('retains automatic panel art at both the request and renderer limits while preserving explicit order', () => {
+    const references = Array.from({ length: 16 }, (_, i) => ({ id: `r${i}`, imageId: `${i}.png`, condition: true }));
+    const scene = { panelArt: 'panel.png' };
+    const auto = musicVideoConditioningReferences(project(references), scene);
+    expect(musicVideoFrameReferenceFiles('frame.png', auto, 16, { reservePanel: true })).toEqual(['frame.png', ...references.slice(0, 14).map((ref) => ref.imageId), 'panel.png']);
+    expect(ids(musicVideoConditioningReferences(project(references), scene, null, null, { limit: 3 }))).toEqual(['0.png', '1.png', 'panel.png']);
+    expect(ids(musicVideoConditioningReferences(project(references), { ...scene, frameReferenceIds: ['r0', 'r1', 'r2', 'mvr-panel-art'] }, null, null, { limit: 3 }))).toEqual(['0.png', '1.png', '2.png']);
+    expect(musicVideoConditioningReferences(project(references), scene, null, null, { limit: 0 })).toEqual([]);
+  });
 });
 
 describe('musicVideoConditioningReferences with an approved Cast & Sets check-in', () => {
@@ -149,7 +159,9 @@ describe('musicVideoConditioningReferences with an approved Cast & Sets check-in
 describe('musicVideoReferenceCapacity', () => {
   it('follows the image renderer, not a fixed four', () => {
     expect(musicVideoReferenceCapacity('codex')).toBe(5);
+    expect(musicVideoReferenceCapacity('grok')).toBe(16);
     expect(musicVideoReferenceCapacity('local', { localModel: { pipelineClass: 'QwenImage21Pipeline' } })).toBe(10);
+    expect(musicVideoReferenceCapacity('local', { localModel: { runner: 'flux3' } })).toBe(10);
     expect(musicVideoReferenceCapacity('local', { localModel: { runner: 'flux2' } })).toBe(4);
     expect(musicVideoReferenceCapacity('local', { localModel: { runner: 'mflux' } })).toBe(0);
   });

@@ -2678,18 +2678,18 @@ describe('MusicVideo visual spec, takes and handoff (#8965)', () => {
     expect(screen.queryByLabelText('What to change in the start frame')).toBeNull();
   });
 
-  // Uniquely catches a refine sending the frame plus 4 references, over the backends' 4-image cap.
-  it('refines a shot with four references by sending the frame plus the first three', async () => {
+  // The board sends the ordered picks and lets the server apply the actual renderer's capacity.
+  it('refines a shot with four references by sending the frame and all four picks', async () => {
     const references = ['a', 'b', 'c', 'd'].map((key) => ({ id: `r-${key}`, imageId: `${key}.png`, role: 'character', label: key, note: '', condition: true }));
     await openProject({ ...SPEC_PROJECT, visualSpec: { ...SPEC_PROJECT.visualSpec, references },
       scenes: [{ ...SPEC_PROJECT.scenes[0], referenceImageId: 'start.png' }] }, 'produce');
-    expect(screen.getByText('Refines and end frames send the frame plus the first 3.')).toBeTruthy();
+    expect(screen.getByText(/A refine or end frame counts its frame first/)).toBeTruthy();
     await showFrames();
     fireEvent.click(screen.getByRole('button', { name: 'Refine' }));
     fireEvent.change(screen.getByLabelText('What to change in the start frame'), { target: { value: 'remove the hand' } });
     fireEvent.click(screen.getByRole('button', { name: 'Render refined start frame' }));
     await waitFor(() => expect(generateImage).toHaveBeenCalledWith(expect.objectContaining({
-      referenceImageFiles: ['start.png', 'a.png', 'b.png', 'c.png'],
+      referenceImageFiles: ['start.png', 'a.png', 'b.png', 'c.png', 'd.png'],
     }), { silent: true }));
   });
 

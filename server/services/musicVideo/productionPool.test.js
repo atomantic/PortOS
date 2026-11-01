@@ -66,6 +66,15 @@ describe('local image pool eligibility', () => {
     await expect(assertPoolEligible([route], env)).rejects.toThrow(/example-image.*cannot run/);
     await expect(assertPoolEligible([route], imageEnv([]))).rejects.toThrow(/not installed/);
   });
+
+  it('allows a capable route to use its first references when a shot selects more than it can take', async () => {
+    const { chooseProductionRoute } = await import('./productionPool.js');
+    const agy = { kind: 'image', mode: 'agy' };
+    const env = { ...envFor(() => {}), settings: { imageGen: { agy: { enabled: true } } } };
+    await expect(chooseProductionRoute({ pool: [agy] }, { kind: 'image', conditioning: 5 }, env)).resolves.toMatchObject({ route: agy });
+    const flux3 = imageEnv([{ id: 'example-flux3', runner: 'flux3' }], 'example-flux3');
+    await expect(chooseProductionRoute({ pool: [route] }, { kind: 'image', conditioning: 5 }, flux3)).resolves.toMatchObject({ route });
+  });
 });
 
 describe('fal step pricing names the model it priced', () => {

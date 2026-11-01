@@ -27,11 +27,15 @@ export default function SceneFrameReferences({ project, scene, castMedia = null,
   useEffect(() => () => clearTimeout(pressTimer.current), []);
   const choices = [...(greybox?.reference ? [greybox.reference] : []), ...musicVideoCastGuideReferences(project, scene, castMedia), ...musicVideoPanelArtReferences(scene), ...musicVideoReferenceChoices(project)];
   if (!choices.length) return null;
-  const chosen = musicVideoConditioningReferences(project, scene, castMedia, greybox);
-  const ids = chosen.map((ref) => ref.id);
-  const others = choices.filter((ref) => !ids.includes(ref.id));
+  // The selected greybox is added separately and is not one of the saved picks.
+  const chosen = musicVideoConditioningReferences(project, scene, castMedia, greybox, { limit: MUSIC_VIDEO_MAX_REFERENCE_CHOICES + 1 });
+  const chosenIds = chosen.map((ref) => ref.id);
+  const ids = chosen.filter((ref) => !ref.greybox).map((ref) => ref.id);
+  const others = choices.filter((ref) => !chosenIds.includes(ref.id));
   const auto = !Array.isArray(scene.frameReferenceIds);
-  const full = ids.length >= MUSIC_VIDEO_MAX_REFERENCE_CHOICES;
+  // Unresolved saved guides still occupy slots and must survive an edit.
+  const unresolvedGuides = (scene.frameReferenceIds || []).filter((refId) => refId.startsWith('mvr-guide-') && !ids.includes(refId));
+  const full = ids.length + unresolvedGuides.length >= MUSIC_VIDEO_MAX_REFERENCE_CHOICES;
   const previewProps = (ref) => ({
     title: nameOf(ref),
     onPointerEnter: (e) => { if (e.pointerType === 'mouse') setPreview(ref); },
@@ -57,8 +61,6 @@ export default function SceneFrameReferences({ project, scene, castMedia = null,
   // Until the cast member's guides load, an edit would save the row without them.
   const variantId = scene.characterVariant?.ingredientId;
   const locked = disabled || Boolean(castMedia && variantId && castMedia[variantId] === undefined);
-  // A saved guide id that does not resolve now (its media failed to load) is kept, so an edit cannot drop it.
-  const unresolvedGuides = (scene.frameReferenceIds || []).filter((refId) => refId.startsWith('mvr-guide-') && !ids.includes(refId));
   const set = (picked) => {
     const next = picked && [...picked, ...unresolvedGuides].slice(0, MUSIC_VIDEO_MAX_REFERENCE_CHOICES);
     onEditLocal(scene.sceneId, { frameReferenceIds: next });
@@ -94,7 +96,7 @@ export default function SceneFrameReferences({ project, scene, castMedia = null,
           </li>
         )}
       </ul>
-      {chosen.length > 4 && <p className="text-[11px] text-port-text-muted">In this order: each render sends as many as its image renderer takes (Codex 5, Qwen Image 2.1 10, FLUX.2 4); a refine or end frame counts its frame first.</p>}
+      {chosen.length > 0 && <p className="text-[11px] text-port-text-muted">In this order, each render sends as many references as its image renderer takes (Codex 5, Qwen Image 2.1 and FLUX.3 10, FLUX.2 4). A refine or end frame counts its frame first; automatic storyboard art keeps a spare slot.</p>}
       {chosen.length === 0 && <p className="text-[11px] text-port-text-muted">No references: frames render from the prompt alone.</p>}
       {adding && !full && (
         <ul aria-label="References to add" className="grid grid-cols-2 gap-1 sm:grid-cols-3 lg:grid-cols-4">
