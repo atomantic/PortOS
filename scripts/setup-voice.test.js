@@ -50,6 +50,10 @@ case "$1" in
   *) exit 2 ;;
 esac
 `;
+const SYSCTL_STUB = `#!/usr/bin/env bash
+[[ "$*" == "-n hw.optional.arm64" ]] || exit 2
+printf '%s\\n' "\${FAKE_HW_ARM64:-0}"
+`;
 const TAR_STUB = `#!/usr/bin/env bash
 dest=""
 while [[ $# -gt 0 ]]; do
@@ -106,6 +110,8 @@ describe.skipIf(process.platform === 'win32')('setup-voice.sh model provisioning
     chmodSync(join(stubDir, 'uname'), 0o755);
     writeFileSync(join(stubDir, 'tar'), TAR_STUB);
     chmodSync(join(stubDir, 'tar'), 0o755);
+    writeFileSync(join(stubDir, 'sysctl'), SYSCTL_STUB);
+    chmodSync(join(stubDir, 'sysctl'), 0o755);
     log = join(home, 'curl.log');
     // Pretend the Piper binary and its libs are already installed.
     const piper = join(home, '.portos/voice/piper');
@@ -140,6 +146,18 @@ describe.skipIf(process.platform === 'win32')('setup-voice.sh model provisioning
   ])('selects published Piper and phonemize archives for %s/%s', (system, machine, suffix) => {
     rmSync(join(home, '.portos/voice/piper'), { recursive: true, force: true });
     const result = run({ FAKE_UNAME_S: system, FAKE_UNAME_M: machine });
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    const urls = downloads().join('\n');
+    expect(urls).toContain(`piper_${suffix}.tar.gz`);
+    expect(urls).toContain(`piper-phonemize_${suffix}.tar.gz`);
+  });
+
+  it.each([
+    ['1', 'macos_aarch64'],
+    ['0', 'macos_x64'],
+  ])('uses the hardware probe for a Rosetta x86_64 shell (hw.optional.arm64=%s)', (hwArm64, suffix) => {
+    rmSync(join(home, '.portos/voice/piper'), { recursive: true, force: true });
+    const result = run({ FAKE_UNAME_S: 'Darwin', FAKE_UNAME_M: 'x86_64', FAKE_HW_ARM64: hwArm64 });
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
     const urls = downloads().join('\n');
     expect(urls).toContain(`piper_${suffix}.tar.gz`);
