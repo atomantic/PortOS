@@ -15,7 +15,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mockNoPeerSync, mockNoPeers, mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
 
 const { makeProxy, cleanup } = mockPathsDataRoot({ prefix: 'portos-owned-primitive-' });
-const refFault = vi.hoisted(() => ({ failCanonLink: false }));
+const refFault = vi.hoisted(() => ({ failCanonLink: false, failReferenceLink: false }));
 const dbFault = vi.hoisted(() => ({ forbidUniversePoolRead: false }));
 vi.mock('../lib/fileUtils.js', async () => makeProxy(await vi.importActual('../lib/fileUtils.js')));
 vi.mock('../lib/db.js', async (importOriginal) => {
@@ -37,7 +37,9 @@ vi.mock('../services/sharing/peerSync.js', () => mockNoPeerSync());
 vi.mock('../services/catalogDB/refs.js', async (importOriginal) => {
   const actual = await importOriginal();
   return { ...actual, linkIngredientToRef: async (...args) => {
-    if (refFault.failCanonLink && args[3] === 'canon-character') throw new Error('Injected canon link failure');
+    if ((refFault.failCanonLink && args[3] === 'canon-character') || (refFault.failReferenceLink && args[3] === 'reference')) {
+      throw new Error('Injected membership link failure');
+    }
     return actual.linkIngredientToRef(...args);
   } };
 });
@@ -282,6 +284,119 @@ describe.skipIf(!runDb)('POST /api/catalog/ingredients inside a universe', () =>
   });
 });
 
+describe.skipIf(!runDb)('PUT /api/catalog/ingredients/:id/owner', () => {
+  const assign = (id, universeId) => request(app).put(`/api/catalog/ingredients/${id}/owner`).send({ universeId });
+
+  it('adds canon once, preserves existing references and history, and leaves a later removal intact on retry', async () => {
+    const universe = await makeUniverse();
+    const other = await makeUniverse();
+    const record = await catalogDB.createIngredient({ type: 'object', name: 'Example Lantern', payload: { description: 'A brass lantern.' }, tags: [] });
+    ingredientIds.add(record.id);
+    await catalogDB.linkIngredientToRef(record.id, 'universe', other.id, 'reference');
+    const before = await catalogDB.getIngredient(record.id);
+    const revisions = await catalogDB.listIngredientRevisions(record.id);
+    const first = await assign(record.id, universe.id);
+    expect(first.status).toBe(200);
+    expect(first.body.owner.refId).toBe(universe.id);
+    expect(first.body.refs).toEqual(expect.arrayContaining([
+      expect.objectContaining({ refId: universe.id, role: 'canon-object' }),
+      expect.objectContaining({ refId: other.id, role: 'reference' }),
+    ]));
+    const objects = () => getUniverse(universe.id).then((saved) => saved.objects.filter((entry) => entry.ingredientId === record.id));
+    expect(await objects()).toMatchObject([{ name: 'Example Lantern', description: 'A brass lantern.', locked: false }]);
+    expect((await assign(record.id, universe.id)).status).toBe(200);
+    expect(await objects()).toHaveLength(1);
+    expect(await catalogDB.getIngredient(record.id)).toEqual(before);
+    expect(await catalogDB.listIngredientRevisions(record.id)).toEqual(revisions);
+    expect((await assign(record.id, other.id)).status).toBe(409);
+    expect((await assign(record.id, null)).status).toBe(400);
+    expect((await assign(record.id, 'invalid/id')).status).toBe(404);
+    expect((await request(app).delete(`/api/catalog/ingredients/${record.id}/link`)
+      .send({ refKind: 'universe', refId: universe.id, role: 'canon-object' })).status).toBe(204);
+    expect((await assign(record.id, universe.id)).status).toBe(200);
+    expect(await objects()).toEqual([]);
+    expect(await liveUniverseRefs(record.id)).toEqual(['owner', 'reference']);
+  });
+
+  it('serializes competing ownership choices and keeps only the winner in canon', async () => {
+    const first = await makeUniverse();
+    const second = await makeUniverse();
+    const record = await catalogDB.createIngredient({ type: 'character', name: 'Example courier', payload: {}, tags: [] });
+    ingredientIds.add(record.id);
+    const results = await Promise.all([assign(record.id, first.id), assign(record.id, second.id)]);
+    expect(results.map((result) => result.status).sort()).toEqual([200, 409]);
+    const winner = results.find((result) => result.status === 200).body.owner.refId;
+    for (const universe of [first, second]) {
+      const entries = (await getUniverse(universe.id)).characters.filter((entry) => entry.ingredientId === record.id);
+      expect(entries).toHaveLength(universe.id === winner ? 1 : 0);
+    }
+    expect(await liveUniverseRefs(record.id)).toEqual(['canon-character', 'owner']);
+  });
+
+  it('rolls back both owner and canon when the bucket is full or a membership link fails', async () => {
+    const universe = await makeUniverse();
+    const record = await catalogDB.createIngredient({ type: 'character', name: 'Example full bucket', payload: {}, tags: [] });
+    ingredientIds.add(record.id);
+    await updateUniverse(universe.id, { characters: Array.from({ length: BIBLE_LIMITS.ENTRIES_PER_BIBLE_MAX }, (_, i) => ({ id: `full-${i}`, name: `Existing ${i}` })) });
+    const full = await assign(record.id, universe.id);
+    expect(full.status).toBe(409);
+    expect(full.body.code).toBe('UNIVERSE_CANON_FULL');
+    expect(await liveUniverseRefs(record.id)).toEqual([]);
+    await updateUniverse(universe.id, { characters: [] });
+    const beforeEpoch = getUniverseMutationEpoch();
+    refFault.failCanonLink = true;
+    const failed = await Promise.resolve(assign(record.id, universe.id)).finally(() => { refFault.failCanonLink = false; });
+    expect(failed.status).toBe(500);
+    expect(await liveUniverseRefs(record.id)).toEqual([]);
+    expect((await getUniverse(universe.id)).characters).toEqual([]);
+    expect(getUniverseMutationEpoch()).toBe(beforeEpoch);
+  });
+});
+
+describe.skipIf(!runDb)('non-canon items in a universe', () => {
+  it('creates and forks with a reference, without reviving a removed reference on replay', async () => {
+    const universe = await makeUniverse();
+    const input = { type: 'idea', name: 'Example premise', payload: { summary: 'A small idea.' }, operationKey: randomUUID() };
+    const created = await createInUniverse(universe.id, input);
+    expect(await liveUniverseRefs(created.id)).toEqual(['owner', 'reference']);
+    const forkInput = { universeId: universe.id, operationKey: randomUUID() };
+    receiptKeys.add(forkInput.operationKey);
+    const forkPath = `/api/catalog/ingredients/${created.id}/fork`;
+    const fork = await request(app).post(forkPath).send(forkInput);
+    expect(fork.status).toBe(201);
+    ingredientIds.add(fork.body.id);
+    expect(await liveUniverseRefs(fork.body.id)).toEqual(['owner', 'reference']);
+    for (const id of [created.id, fork.body.id]) {
+      expect((await request(app).delete(`/api/catalog/ingredients/${id}/link`)
+        .send({ refKind: 'universe', refId: universe.id, role: 'reference' })).status).toBe(204);
+    }
+    expect((await createInUniverse(universe.id, input)).id).toBe(created.id);
+    expect((await request(app).post(forkPath).send(forkInput)).body.id).toBe(fork.body.id);
+    expect(await liveUniverseRefs(created.id)).toEqual(['owner']);
+    expect(await liveUniverseRefs(fork.body.id)).toEqual(['owner']);
+  });
+
+  it('rolls back non-canon creation and forks when the reference write fails', async () => {
+    const universe = await makeUniverse();
+    const source = await createInUniverse(universe.id, { type: 'idea', name: 'Example source idea', payload: {} });
+    const createName = `Failed idea ${randomUUID()}`;
+    const forkName = `Failed idea fork ${randomUUID()}`;
+    const createKey = randomUUID();
+    const forkKey = randomUUID();
+    receiptKeys.add(createKey);
+    receiptKeys.add(forkKey);
+    refFault.failReferenceLink = true;
+    const responses = await Promise.all([
+      request(app).post('/api/catalog/ingredients').send({ type: 'idea', name: createName, payload: {}, universeId: universe.id, operationKey: createKey }),
+      request(app).post(`/api/catalog/ingredients/${source.id}/fork`).send({ universeId: universe.id, name: forkName, operationKey: forkKey }),
+    ]).finally(() => { refFault.failReferenceLink = false; });
+    expect(responses.map((response) => response.status)).toEqual([500, 500]);
+    expect((await query('SELECT id FROM catalog_ingredients WHERE name = ANY($1)', [[createName, forkName]])).rows).toEqual([]);
+    expect((await query('SELECT operation_key FROM catalog_commit_receipts WHERE operation_key = ANY($1::uuid[])', [[createKey, forkKey]])).rows).toEqual([]);
+    expect(await liveUniverseRefs(source.id)).toEqual(['owner', 'reference']);
+  });
+});
+
 // Regression: scrap refs alone were invisible to universe canon pickers.
 describe.skipIf(!runDb)('POST /api/catalog/scraps/:id/commit universe canon', () => {
   it('projects each bible type once, heals an interrupted projection on replay, and preserves removals', async () => {
@@ -382,7 +497,7 @@ describe.skipIf(!runDb)('POST /api/catalog/ingredients/:id/fork canon membership
     const legacy = async (name) => {
       const record = await catalogDB.createIngredient({ type: 'character', name, payload: { locked: false }, tags: [] });
       ingredientIds.add(record.id);
-      await setPrimitiveOwner(record.id, universe.id);
+      await catalogDB.linkIngredientToRef(record.id, 'universe', universe.id, 'owner');
       await query(`INSERT INTO catalog_ingredient_relations (from_id, to_id, kind) VALUES ($1, $2, 'forked-from')`, [record.id, source.id]);
       return record;
     };
