@@ -257,7 +257,7 @@ export const musicVideoPacingSchema = z.object({
 // Lyric-sheet structure: a section header (`[Chorus]`) or a stage direction
 // (`[Spoken, close]`) anchored to the index of the lyric line it precedes.
 // `kind` is the normalized section part or delivery (see
-// services/musicVideo/lyricMarkers.js); a free string so a newer peer's
+// lib/lyricMarkers.js); a free string so a newer peer's
 // vocabulary still validates here.
 export const musicVideoLyricMarkerSchema = z.object({
   type: z.enum(['section', 'direction']),

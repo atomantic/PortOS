@@ -17,8 +17,8 @@
  * marker applies to; a marker after the last line carries the line count.
  */
 
-import { trimTo } from '../../lib/textUtils.js';
-import { lastTimedCueEnd, lyricSectionSpans } from '../../lib/lyricSectionSpans.js';
+import { trimTo } from './textUtils.js';
+import { lastTimedCueEnd, lyricSectionSpans } from './lyricSectionSpans.js';
 
 const isTime = (value) => typeof value === 'number' && Number.isFinite(value);
 
@@ -168,6 +168,71 @@ export function remapLyricMarkers(markers, oldCues, newCues) {
     const end = indexById.size;
     return marker.line === end ? marker : { ...marker, line: end };
   });
+}
+
+const lineKey = (text) => String(text || '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+
+/**
+ * Pair each sheet line with a cue: longest common subsequence on normalized
+ * text, then same-length gaps between anchors pair in order (a line edited in
+ * place). Returns the cue index per sheet line (-1 when it has none) and the
+ * number of exact-text anchors.
+ */
+function alignSheetToCues(sheetKeys, cueKeys) {
+  const n = sheetKeys.length;
+  const m = cueKeys.length;
+  const width = m + 1;
+  const lcs = new Uint16Array((n + 1) * width);
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      lcs[i * width + j] = sheetKeys[i] && sheetKeys[i] === cueKeys[j]
+        ? lcs[(i + 1) * width + j + 1] + 1
+        : Math.max(lcs[(i + 1) * width + j], lcs[i * width + j + 1]);
+    }
+  }
+  const toCue = new Array(n).fill(-1);
+  const anchors = [];
+  for (let i = 0, j = 0; i < n && j < m;) {
+    if (sheetKeys[i] && sheetKeys[i] === cueKeys[j]) { anchors.push([i, j]); i++; j++; }
+    else if (lcs[(i + 1) * width + j] >= lcs[i * width + j + 1]) i++;
+    else j++;
+  }
+  let prevSheet = -1;
+  let prevCue = -1;
+  for (const [i, j] of [...anchors, [n, m]]) {
+    if (i - prevSheet === j - prevCue) for (let k = 1; prevSheet + k < i; k++) toCue[prevSheet + k] = prevCue + k;
+    if (i < n) toCue[i] = j;
+    prevSheet = i;
+    prevCue = j;
+  }
+  return { toCue, anchors: anchors.length };
+}
+
+/**
+ * Repair markers that drifted before cue edits remapped them (#14380). Markers
+ * whose list matches what `sheetText` parses to — same types, labels and line
+ * numbers — still carry the sheet's own line numbers, so each moves to the cue
+ * its sheet line became (or the next surviving one) in the edited cue list.
+ * Returns the repaired markers, or null when they did not come from this sheet,
+ * the cues no longer resemble it, or nothing moves.
+ */
+export function realignLyricMarkersToSheet(cues, markers, sheetText) {
+  if (!Array.isArray(cues) || !Array.isArray(markers) || markers.length === 0) return null;
+  const sheet = parseLyricSheet(sheetText);
+  const fromSheet = sheet.markers.length === markers.length && sheet.markers.every((m, i) => (
+    markers[i]?.type === m.type && markers[i]?.label === m.label && markers[i]?.line === m.line));
+  if (!fromSheet) return null;
+  const { toCue, anchors } = alignSheetToCues(sheet.cues.map((c) => lineKey(c.text)), cues.map((c) => lineKey(c?.text)));
+  if (anchors === 0 || anchors * 2 < Math.min(sheet.cues.length, cues.length)) return null;
+  let moved = false;
+  const repaired = markers.map((marker) => {
+    let line = cues.length;
+    for (let i = marker.line; i < toCue.length; i++) if (toCue[i] >= 0) { line = toCue[i]; break; }
+    if (line === marker.line) return marker;
+    moved = true;
+    return { ...marker, line };
+  });
+  return moved ? repaired : null;
 }
 
 /** Shift every marker's line by `offset` (appending an imported sheet after existing lines). */
