@@ -121,6 +121,18 @@ describe('useFocusRefreshedList', () => {
     expect(fetchFn).toHaveBeenCalledTimes(2);
   });
 
+  it('keeps the newest list when an older read resolves after it', async () => {
+    let resolveFirst;
+    const fetchFn = vi.fn()
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveFirst = resolve; }))
+      .mockResolvedValue([{ id: '2', name: 'B' }]);
+    const { result } = renderHook(() => useFocusRefreshedList(fetchFn, 'records', RECORD_EVENTS));
+    act(() => { socket.emit('connect'); });
+    await waitFor(() => expect(result.current.map((i) => i.id)).toEqual(['2']));
+    await act(async () => { resolveFirst([{ id: '1', name: 'A deleted since' }]); });
+    expect(result.current.map((i) => i.id)).toEqual(['2']);
+  });
+
   it('detaches record and reconnect listeners on unmount', async () => {
     const fetchFn = vi.fn().mockResolvedValue([]);
     const { unmount } = renderHook(() => useFocusRefreshedList(fetchFn, 'records', RECORD_EVENTS));
