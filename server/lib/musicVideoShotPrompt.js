@@ -32,8 +32,18 @@ export function visualDirection(spec) {
   ].filter(Boolean).join('; ');
 }
 
-/** The director's text for a shot's clip: its shot prompt, else its frame prompt. */
-export const authoredShotPrompt = (scene) => scene?.prompt?.trim() || scene?.framePrompt?.trim() || '';
+/**
+ * A storyboard-linked shot's direction: its panel's action, which the
+ * storyboard sync keeps current on the shot (`visualIntent`). '' off a panel.
+ */
+export const storyboardShotDirection = (scene) => (scene?.panelId ? scene?.visualIntent?.trim() || '' : '');
+
+/**
+ * The director's text for a shot's clip: its own shot prompt, else its
+ * storyboard panel's direction (read live, so it follows panel edits), else
+ * its frame prompt.
+ */
+export const authoredShotPrompt = (scene) => scene?.prompt?.trim() || storyboardShotDirection(scene) || scene?.framePrompt?.trim() || '';
 
 const addition = (id, label, text) => {
   const trimmed = typeof text === 'string' ? text.trim() : '';

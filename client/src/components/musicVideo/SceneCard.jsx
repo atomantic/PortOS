@@ -11,6 +11,7 @@ import ShotEditorGroup from './ShotEditorGroup.jsx';
 import TabPills from '../ui/TabPills.jsx';
 import SceneStoryboardClip, { storyboardClipOffered } from './SceneStoryboardClip.jsx';
 import { MUSIC_VIDEO_MEDIUM_LABELS } from '../../../../server/lib/musicVideoMediumPlan.js';
+import { storyboardShotDirection } from '../../../../server/lib/musicVideoShotPrompt.js';
 import { useRef, useState } from 'react';
 import { Trash2, Activity, ArrowUp, ArrowDown, ChevronLeft, ChevronRight, Video, AlertTriangle, Clapperboard, Shuffle, Lock } from 'lucide-react';
 import OverflowMenu from '../ui/OverflowMenu.jsx';
@@ -32,7 +33,7 @@ const LAYER_LABELS = { footage: 'Footage', still: 'Still image', card: 'Title ca
 const STILL_MOVE_LABELS = [['hold', 'Hold'], ['push', 'Push in'], ['pan', 'Pan']];
 // #10583: the shared lyric type's zone and style for this shot (composition documents).
 const SHOT_MODE_LABELS = { cutaway: 'Cutaway', performance: 'Performance (lip-sync)', music: 'Performance (music-driven)' };
-const PRIMARY_BUTTON = 'flex items-center gap-1 bg-port-border hover:bg-port-border/70 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0 whitespace-nowrap';
+const PRIMARY_BUTTON = 'flex items-center gap-1 bg-port-accent text-white hover:bg-port-accent/80 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0 whitespace-nowrap';
 const SECONDARY_BUTTON = 'flex items-center gap-1 bg-port-bg border border-port-border hover:bg-port-border/40 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0 whitespace-nowrap';
 import { buildSceneTimingPresentation } from '../../lib/musicVideoSceneTiming.js';
 import SceneTimingPlan from './SceneTimingPlan.jsx';
@@ -267,15 +268,29 @@ export default function SceneCard({
   const effectLabels = [...new Set(Object.values(shotEffects(scene, { layered, planned })).flat().map(shotEffectLabel))];
   const effectsSummary = effectLabels.join(', ') || 'none';
   const lyricType = !preMusic && (documentComposition || (layer !== 'card' && composedDrawsLyrics(project)));
+  // A storyboard-linked shot's prompt is its panel's direction, read live so it stays in
+  // sync, until the director types one of their own; typing the panel's words back re-links it.
+  const boardDirection = storyboardShotDirection(scene);
+  const followsBoard = !!boardDirection && !scene.prompt?.trim();
   const promptField = (
-    <textarea
-      aria-label="Shot prompt"
-      value={scene.prompt || ''} rows={2}
-      onChange={(e) => onEditLocal(scene.sceneId, { prompt: e.target.value })}
-      onBlur={(e) => onSave(scene.sceneId, { prompt: e.target.value })}
-      placeholder={layer === 'footage' ? 'Motion prompt: what happens in this shot' : "Shot prompt — what this scene's video should show"}
-      className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm"
-    />
+    <div className="space-y-1">
+      <textarea
+        aria-label="Shot prompt"
+        value={followsBoard ? boardDirection : scene.prompt || ''} rows={2}
+        onChange={(e) => onEditLocal(scene.sceneId, { prompt: e.target.value })}
+        onBlur={(e) => onSave(scene.sceneId, { prompt: boardDirection && e.target.value.trim() === boardDirection ? '' : e.target.value })}
+        placeholder={layer === 'footage' ? 'Motion prompt: what happens in this shot' : "Shot prompt — what this scene's video should show"}
+        className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm"
+      />
+      {boardDirection && (followsBoard ? (
+        <p className="text-[11px] text-port-text-muted" data-testid="prompt-from-storyboard">From the storyboard panel · stays in sync</p>
+      ) : (
+        <div className="flex flex-wrap items-center gap-2 text-[11px] text-port-text-muted" data-testid="prompt-own">
+          <span>This shot's own prompt, not the panel's</span>
+          <button type="button" onClick={() => { onEditLocal(scene.sceneId, { prompt: '' }); onSave(scene.sceneId, { prompt: '' }); }} className="underline min-h-[44px] sm:min-h-0">Use storyboard direction</button>
+        </div>
+      ))}
+    </div>
   );
   // A music-driven shot follows the whole mix, not one voice; a lip-sync needs its singer before it renders.
   const speakerField = performance && scene.performanceStyle !== 'music' && (
@@ -525,7 +540,7 @@ export default function SceneCard({
           onContinueFromPrevious={layer === 'footage' && index > 0 ? onContinueFromPrevious : null} previousHasClip={previousHasClip}
           clipLocked={shotLock?.clip === 'locked'} stillLocked={shotLock?.still === 'locked'} assetMarks={project?.assetMarks} onMarkTake={onMarkTake} />
         </div>
-        {/* Clip: the picture, Render and where it renders, then the motion prompt and its takes. */}
+        {/* Clip: the picture and its takes, Render, the motion prompt and where it renders, then other ways to get a clip. */}
         <div hidden={view !== 'clip'}>
         <section aria-label="Render" className="min-w-0 space-y-2">
           {/* A clip, the still, or the still playing a code-drawn image effect (no model call). */}
@@ -587,28 +602,6 @@ export default function SceneCard({
               {generatingVideo ? <Activity size={14} className="animate-spin" /> : lockThenRender ? <Lock size={14} /> : <Video size={14} />}
               {generatingVideo ? 'Rendering…' : `${lockThenRender ? 'Lock still & render' : 'Render'}${scene.videoHistoryId ? ' again' : ''}`}
             </button>}
-            {onPlacePoolItem && (
-              <button type="button" onClick={() => setSwapKind('video')} disabled={takeBusy || shotLock?.clip === 'locked'} className={SECONDARY_BUTTON}
-                title={shotLock?.clip === 'locked' ? 'Video locked. Unlock the video to change it.' : "Pick a clip made for this video that no shot uses: this shot's other takes, other shots', or the floor"}>
-                <Shuffle size={14} /> Swap from unused
-              </button>
-            )}
-            {scene.videoHistoryId && canContinueShot && (
-              <button
-                onClick={() => onContinueVideo(scene)}
-                disabled={settingsSaving || !!generatingVideo}
-                className={SECONDARY_BUTTON}
-                title="Native-extend this clip from its final latent frames and attach the longer result to this scene"
-              >
-                <Video size={14} /> Continue shot
-              </button>
-            )}
-            {onImportClipTake && (
-              <button type="button" onClick={() => onImportClipTake(scene)} disabled={takeBusy} className={SECONDARY_BUTTON}
-                title="Pick an existing clip from the gallery (e.g. made in an external tool) as a take">
-                <Clapperboard size={14} /> Import clip take
-              </button>
-            )}
           </div>
           {/* Why Render is off, on the card itself: a tooltip never shows on a phone. */}
           {videoRefusal && !lockThenRender && videoRefusal !== performanceBlocked && !generatingVideo && layer === 'footage' && showRender && (
@@ -638,6 +631,33 @@ export default function SceneCard({
             <p className={`text-[11px] ${endFramePlan.used ? 'text-port-text-muted' : 'text-port-warning'}`} data-testid="end-frame-plan">
               {endFramePlan.used ? 'The clip ends on the end frame.' : `${endFramePlan.reason}.`}
             </p>
+          )}
+          {/* Other ways to fill the shot, after Render and its settings so Render stays the one action under the takes. */}
+          {(onPlacePoolItem || onImportClipTake || (scene.videoHistoryId && canContinueShot)) && (
+          <div className="flex flex-wrap items-center gap-2" data-testid="clip-other-sources">
+            {onPlacePoolItem && (
+              <button type="button" onClick={() => setSwapKind('video')} disabled={takeBusy || shotLock?.clip === 'locked'} className={SECONDARY_BUTTON}
+                title={shotLock?.clip === 'locked' ? 'Video locked. Unlock the video to change it.' : "Pick a clip made for this video that no shot uses: this shot's other takes, other shots', or the floor"}>
+                <Shuffle size={14} /> Swap from unused
+              </button>
+            )}
+            {scene.videoHistoryId && canContinueShot && (
+              <button
+                onClick={() => onContinueVideo(scene)}
+                disabled={settingsSaving || !!generatingVideo}
+                className={SECONDARY_BUTTON}
+                title="Native-extend this clip from its final latent frames and attach the longer result to this scene"
+              >
+                <Video size={14} /> Continue shot
+              </button>
+            )}
+            {onImportClipTake && (
+              <button type="button" onClick={() => onImportClipTake(scene)} disabled={takeBusy} className={SECONDARY_BUTTON}
+                title="Pick an existing clip from the gallery (e.g. made in an external tool) as a take">
+                <Clapperboard size={14} /> Import clip take
+              </button>
+            )}
+          </div>
           )}
           </>
           )}
