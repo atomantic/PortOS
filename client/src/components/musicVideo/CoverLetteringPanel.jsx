@@ -9,6 +9,7 @@ import {
   normalizeCoverDesign,
 } from '../../lib/musicVideoCoverOverlay.js';
 import { musicVideoCoverFontUrl } from '../../services/apiMusicVideo.js';
+import ListLoadError from '../ui/ListLoadError';
 
 const FIELDS = [
   ['layout', 'Position'],
@@ -94,6 +95,11 @@ export default function CoverLetteringPanel({ project, art, source, title, tag, 
   return (
     <details open={open} onToggle={(e) => onToggle(e.currentTarget.open)} className="rounded border border-port-border p-2 text-xs">
       <summary className="cursor-pointer text-sm font-medium flex items-center gap-1.5 min-h-[44px] sm:min-h-0"><Type size={14} /> Lettering</summary>
+      {lettering.fontState === 'error' ? (
+        <ListLoadError what="cover fonts" error={lettering.fontError} onRetry={lettering.retryFonts} className="mt-2" />
+      ) : lettering.fontState !== 'ready' ? (
+        <p role="status" className="mt-2 text-port-text-muted">Loading cover fonts…</p>
+      ) : (
       <div className="mt-2 flex flex-col sm:flex-row gap-3">
         <div className="w-full sm:w-56 shrink-0 space-y-1">
           <div className="relative w-full aspect-square overflow-hidden rounded border border-port-border bg-port-bg">
@@ -144,6 +150,11 @@ export default function CoverLetteringPanel({ project, art, source, title, tag, 
 
           <div className="space-y-1 rounded border border-port-border p-2">
             <span className="text-port-text-muted">Artist style: keep one look across a set of singles</span>
+            {lettering.styleState === 'error' ? (
+              <ListLoadError what="artist styles" error={lettering.styleError} onRetry={lettering.retryStyles} />
+            ) : lettering.styleState !== 'ready' ? (
+              <p role="status" className="text-port-text-muted">Loading artist styles…</p>
+            ) : (
             <div className="flex flex-wrap items-end gap-2">
               <button type="button" onClick={() => lettering.saveStyle({ name: artist, design })} disabled={!artist}
                 className={button} title={artist ? `Save this lettering as ${artist}'s style` : 'Give the cover an artist name first'}>
@@ -168,6 +179,7 @@ export default function CoverLetteringPanel({ project, art, source, title, tag, 
                 </>
               )}
             </div>
+            )}
           </div>
 
           <div className="space-y-1 rounded border border-port-border p-2">
@@ -189,6 +201,7 @@ export default function CoverLetteringPanel({ project, art, source, title, tag, 
           </div>
         </div>
       </div>
+      )}
     </details>
   );
 }

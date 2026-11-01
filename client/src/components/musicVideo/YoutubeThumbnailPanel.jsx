@@ -7,6 +7,7 @@ import useMusicVideoCoverLettering from '../../hooks/useMusicVideoCoverLettering
 import { YOUTUBE_THUMBNAIL_SIZE, canvasCoverWidths, coverOverlaySvg, normalizeCoverDesign } from '../../lib/musicVideoCoverOverlay.js';
 import { usePreviewFonts } from './CoverLetteringPanel.jsx';
 import PublishCard from './PublishCard.jsx';
+import ListLoadError from '../ui/ListLoadError';
 
 const MAX_SOURCES = 24;
 // YouTube's Test & Compare runs up to three thumbnails on a published video.
@@ -80,7 +81,8 @@ export default function YoutubeThumbnailPanel({ project, publishKit }) {
   const [paintPreview, setPaintPreview] = useState(null);
   const [paintOpen, setPaintOpen] = useState(false);
   // The uploaded fonts matter only when the cover's design is set in one.
-  const letterAssets = useMusicVideoCoverLettering({ enabled: lettering && String(art.design?.typeface || '').startsWith('font:') });
+  const needsCoverFonts = lettering && String(art.design?.typeface || '').startsWith('font:');
+  const letterAssets = useMusicVideoCoverLettering({ enabled: needsCoverFonts });
   const fonts = letterAssets.fonts || [];
   const fontTick = usePreviewFonts(letterAssets.fonts);
   const busy = Boolean(publishKit.composingThumbnail);
@@ -96,11 +98,11 @@ export default function YoutubeThumbnailPanel({ project, publishKit }) {
   };
 
   const svg = useMemo(() => {
-    if (!lettering || !title.trim()) return '';
+    if (!lettering || !title.trim() || (needsCoverFonts && letterAssets.fontState !== 'ready')) return '';
     const design = normalizeCoverDesign(art.design, { fonts });
     const widths = canvasCoverWidths(design, { title, tag: '', size: YOUTUBE_THUMBNAIL_SIZE, frame: 'thumbnail' }, fonts);
     return coverOverlaySvg({ title, design, size: YOUTUBE_THUMBNAIL_SIZE, frame: 'thumbnail', widths, fonts });
-  }, [JSON.stringify(art.design ?? null), title, lettering, letterAssets.fonts, fontTick]); // Dependency list is intentionally partial.
+  }, [JSON.stringify(art.design ?? null), title, lettering, needsCoverFonts, letterAssets.fonts, letterAssets.fontState, fontTick]); // Dependency list is intentionally partial.
 
   const tests = Array.isArray(kit.youtubeThumbnailTests) ? kit.youtubeThumbnailTests.filter((t) => t?.filename) : [];
   const inTest = Boolean(thumb.filename) && tests.some((t) => t.filename === thumb.filename);
@@ -141,6 +143,8 @@ export default function YoutubeThumbnailPanel({ project, publishKit }) {
               <div className="absolute inset-0 flex items-center justify-center text-port-text-muted p-2 text-center">Build the publishing kit for video frames, or pick an image</div>
             )}
           </div>
+          {needsCoverFonts && letterAssets.fontState === 'error' && <ListLoadError what="cover fonts for the preview" error={letterAssets.fontError} onRetry={letterAssets.retryFonts} />}
+          {needsCoverFonts && letterAssets.fontState === 'loading' && <p role="status" className="text-port-text-muted">Loading cover fonts for the preview…</p>}
           {thumb.filename ? (
             <div className="flex flex-wrap items-center gap-3">
               <a href={`/data/video-thumbnails/${encodeURIComponent(thumb.filename)}`} download className="text-port-accent flex items-center gap-1 min-h-[44px] sm:min-h-0"><Download size={12} /> Download</a>
