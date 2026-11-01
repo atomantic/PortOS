@@ -158,9 +158,13 @@ it('retains an empty reviewer roster and holds ambiguous old entries without cha
     checkouts: old.checkouts, attempts: old.attempts });
   expect(await getTaskById(taskId)).toEqual(taskBefore);
   // Explicit legacy toggles remain usable without consulting current app defaults.
-  old.task.metadata.reviewLoop = 'true';
-  outbox.publications[publication.identity] = old;
-  await atomicWrite(join(PATHS.cos, 'release-synchronization.json'), outbox);
-  expect(await releaseTaskDispatchDisposition({ ...taskBefore, metadata: {
-    ...old.task.metadata, idempotencyKey: taskBefore.metadata.idempotencyKey } })).toBe('registered-continuation');
+  for (const [legacy, section] of [['true', 'review-loop'], ['false', 'merge-gate']]) {
+    old.task.metadata.reviewLoop = legacy;
+    outbox.publications[publication.identity] = old;
+    await atomicWrite(join(PATHS.cos, 'release-synchronization.json'), outbox);
+    const historicalTask = { ...taskBefore, metadata: {
+      ...old.task.metadata, idempotencyKey: taskBefore.metadata.idempotencyKey } };
+    expect(await releaseTaskDispatchDisposition(historicalTask)).toBe('registered-continuation');
+    expect(renderDelivery(historicalTask).section).toBe(section);
+  }
 });
