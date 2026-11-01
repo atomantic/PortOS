@@ -682,7 +682,6 @@ export const checkMusicVideoOverlayText = (id, options = {}) => request(`/music-
 export const reverifyMusicVideoAlignment = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/production-review/alignment`, { method: 'POST', body: JSON.stringify(body), ...options });
 export const saveMusicVideoProductionDraft = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/production-review`, { method: 'PUT', body: JSON.stringify(body), ...options });
 export const prepareMusicVideoProductionReview = (id, body = {}, options = {}) => request(`/music-video/${encodeURIComponent(id)}/production-review/prepare`, { method: 'POST', body: JSON.stringify(body), ...options });
-export const lockMusicVideoShots = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/production-review/shots`, { method: 'POST', body: JSON.stringify(body), ...options });
 export const approveMusicVideoProductionReview = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/production-review/approve`, { method: 'POST', body: JSON.stringify(body), ...options });
 export const renderMusicVideoProductionProof = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/production-review/proof`, { method: 'POST', body: JSON.stringify(body), ...options });
 export const importMusicVideoProductionPlanning = (id, source, options = {}) => request(`/music-video/${encodeURIComponent(id)}/production-review/import`, { method: 'POST', body: JSON.stringify({ source }), ...options });
