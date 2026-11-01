@@ -177,3 +177,155 @@ describe('runtime update review monitor', () => {
     second.monitor.stop();
   });
 });
+
+const clean = {
+  node: { version: 'v26.12.1', inSupportedRange: true },
+  baseline: { minimum: '26.12.1', compliant: true },
+  releases: { latestInLine: { version: 'v26.12.1' }, latestSecurity: { version: 'v26.12.1' }, securityUpdate: false, securityVerified: true },
+  pm2: { shipped: '7.1.0', latest: '7.1.0', cli: '7.1.0', cliState: 'available', cliBehind: false, daemonStale: false },
+  daemon: { pm2Version: '7.1.0', nodeVersion: '26.12.1' },
+  startup: { configured: true, current: true },
+};
+const status = (o = {}) => ({
+  node: { ...clean.node, ...o.node, securityBaseline: { ...clean.baseline, ...o.baseline } },
+  releases: { ...clean.releases, ...o.releases },
+  pm2: { ...clean.pm2, ...o.pm2, daemon: o.daemon === null ? null : { ...clean.daemon, ...o.daemon } },
+  startup: { ...clean.startup, ...o.startup },
+});
+
+async function observe(...statuses) {
+  const { monitor, deps } = fixture({ harnesses: [] });
+  for (const next of statuses) {
+    deps.readRuntime.mockResolvedValue(next);
+    await monitor.refresh();
+  }
+  return Object.fromEntries(monitor.items().map((item) => [item.id, item]));
+}
+
+describe('runtime row reconciliation', () => {
+  it('reports nothing for an aligned, current runtime', async () => {
+    expect(await observe(status())).toEqual({});
+  });
+
+  it('replaces the cold runtime-check row with evidence and later marks only the runtime rows unknown', async () => {
+    const { monitor, deps } = fixture({ node: {} });
+    await monitor.refresh();
+    const byId = () => Object.fromEntries(monitor.items().map((item) => [item.id, item]));
+    expect(byId()['runtime-check']).toMatchObject({ title: 'Runtime update check unavailable', unverified: true });
+    deps.readRuntime.mockResolvedValue(runtime());
+    await monitor.refresh();
+    expect(byId()['runtime-check']).toBeUndefined();
+    expect(byId().node.unverified).toBeUndefined();
+    deps.readRuntime.mockResolvedValue({ pm2: {} });
+    await monitor.refresh();
+    expect(byId()['runtime-check']).toBeUndefined();
+    expect(byId().node).toMatchObject({ revision: 'security:v26.12.1', unverified: true, unverifiedPrevious: true });
+    expect(byId()['pm2-startup']).toMatchObject({ unverified: true, unverifiedPrevious: true });
+    expect(byId()['harness:codex'].unverified).toBeUndefined();
+  });
+
+  it.each([
+    ['an advisory the baseline does not yet require', { node: { version: 'v26.11.0' }, releases: { securityUpdate: true } }, {
+      title: 'Node.js security update needed', severity: 'high', revision: 'security:v26.12.1',
+      summary: 'Security update: PortOS runs v26.11.0; target v26.12.1. Updating Node requires a PortOS restart.',
+    }],
+    ['an advisory naming no security release', { node: { version: 'v26.11.0' }, releases: { securityUpdate: true, latestSecurity: null } }, {
+      title: 'Node.js security update needed', severity: 'high', revision: 'security:v26.12.1',
+    }],
+    ['an unsupported runtime with no newer release', {
+      node: { version: 'v25.1.0', inSupportedRange: false }, baseline: { minimum: null }, releases: { latestInLine: { version: 'v25.1.0' }, latestSecurity: null },
+    }, {
+      title: 'Node.js update available', severity: 'high', revision: 'update:v25.1.0',
+      summary: 'Unsupported runtime: PortOS runs v25.1.0. Updating Node requires a PortOS restart.',
+    }],
+    ['a newer release in the same line', { releases: { latestInLine: { version: 'v26.13.0' } } }, {
+      title: 'Node.js update available', severity: 'normal', revision: 'update:v26.13.0',
+      summary: 'Update available: PortOS runs v26.12.1; target v26.13.0. Updating Node requires a PortOS restart.',
+    }],
+  ])('raises a verified Node.js row for %s', async (_label, overrides, expected) => {
+    const { node } = await observe(status(overrides));
+    expect(node).toMatchObject(expected);
+    expect(node.unverified).toBeUndefined();
+  });
+
+  it.each([
+    ['a security floor above the newest indexed release', {
+      node: { version: 'v26.10.0' }, baseline: { compliant: false }, releases: { latestInLine: { version: 'v26.11.0' }, latestSecurity: { version: 'v26.11.0' } },
+    }, { severity: 'high', revision: 'security:v26.12.1', summary: expect.stringContaining('target v26.12.1.') }],
+    ['an unknown security baseline', { baseline: { compliant: null } }, { title: 'Node.js update status unverified', revision: 'unverified' }],
+    ['an unverified release index', { releases: { securityVerified: false } }, { title: 'Node.js update status unverified', revision: 'unverified' }],
+  ])('marks the Node.js row unverified for %s', async (_label, overrides, expected) => {
+    const { node } = await observe(status(overrides));
+    expect(node).toMatchObject({ ...expected, unverified: true });
+  });
+
+  it('holds the last known Node.js row through an unverified index unless it adds security evidence', async () => {
+    const newer = status({ releases: { latestInLine: { version: 'v26.13.0' } } });
+    const held = await observe(newer, status({ releases: { latestInLine: { version: 'v26.14.0' }, securityVerified: false } }));
+    expect(held.node).toMatchObject({ revision: 'update:v26.13.0', severity: 'normal', unverified: true });
+    const escalated = await observe(newer, status({
+      releases: { latestInLine: { version: 'v26.13.0' }, latestSecurity: null, securityUpdate: true, securityVerified: false },
+    }));
+    expect(escalated.node).toMatchObject({ revision: 'security:v26.13.0', severity: 'high', unverified: true });
+  });
+
+  it.each([
+    ['a stale daemon', { pm2: { daemonStale: true } }, 'terminal 7.1.0, daemon 7.1.0 on Node 26.12.1', 'Synchronizing the daemon requires a restart.', '7.1.0:7.1.0:7.1.0:26.12.1:v26.12.1'],
+    ['a terminal CLI behind the bundle', { pm2: { cli: '7.0.0', cliBehind: true } }, 'terminal 7.0.0, daemon 7.1.0 on Node 26.12.1',
+      'The terminal CLI can be synchronized without a restart.', '7.1.0:7.0.0:7.1.0:26.12.1:v26.12.1'],
+    ['a daemon on another Node', { daemon: { nodeVersion: '26.11.0' } }, 'terminal 7.1.0, daemon 7.1.0 on Node 26.11.0',
+      'Review the differing Node versions; the pm2 sync action cannot fix this mismatch on its own.', '7.1.0:7.1.0:7.1.0:26.11.0:v26.12.1'],
+  ])('raises a verified pm2 alignment row for %s', async (_label, overrides, versions, action, revision) => {
+    const { 'pm2-sync': sync } = await observe(status(overrides));
+    expect(sync).toMatchObject({ title: 'Review pm2 runtime alignment', revision, summary: `PortOS bundles pm2 7.1.0; ${versions}; PortOS runs v26.12.1. ${action}` });
+    expect(sync.unverified).toBeUndefined();
+  });
+
+  it('accepts a v-prefixed daemon Node version as aligned', async () => {
+    expect(await observe(status({ daemon: { nodeVersion: 'v26.12.1' } }))).toEqual({});
+  });
+
+  it.each([
+    ['no terminal CLI or daemon', { pm2: { cli: null, cliBehind: true } , daemon: null }, '7.1.0::::v26.12.1', 'terminal not installed, daemon unknown on Node unknown'],
+    ['an unreadable daemon Node version', { pm2: { cliBehind: true }, daemon: { nodeVersion: 'unknown' } }, '7.1.0:7.1.0:7.1.0:unknown:v26.12.1', 'on Node unknown'],
+    ['a daemon reporting no pm2 version', { pm2: { daemonStale: true }, daemon: { pm2Version: null } }, '7.1.0:7.1.0::26.12.1:v26.12.1', 'daemon unknown on Node 26.12.1'],
+  ])('keeps a drift row unverified for %s', async (_label, overrides, revision, versions) => {
+    const { 'pm2-sync': sync } = await observe(status(overrides));
+    expect(sync).toMatchObject({ title: 'Review pm2 runtime alignment', revision, unverified: true, summary: expect.stringContaining(versions) });
+  });
+
+  it.each([
+    ['no bundled pm2', { pm2: { shipped: null, cliBehind: true } }, true],
+    ['a daemon missing its Node version', { daemon: { nodeVersion: null } }, true],
+    ['a daemon missing its pm2 version', { daemon: { pm2Version: null } }, true],
+    ['an unsupported terminal CLI', { pm2: { cliState: 'unsupported' } }, false],
+    ['an unsupported terminal CLI and unreadable daemon', { pm2: { cliState: 'unsupported' }, daemon: { nodeVersion: null } }, true],
+  ])('reports pm2 alignment unverified for %s', async (_label, overrides, retrySoon) => {
+    const { 'pm2-sync': sync } = await observe(status(overrides));
+    expect(sync).toMatchObject({ title: 'pm2 runtime status unverified', revision: 'unverified', unverified: true, retrySoon });
+  });
+
+  it('keeps the last known pm2 drift when the terminal CLI becomes unverifiable', async () => {
+    const byId = await observe(status({ pm2: { cli: '7.0.0', cliBehind: true } }), status({ pm2: { cli: null, cliState: 'unverified' } }));
+    expect(byId['pm2-sync']).toMatchObject({ revision: '7.1.0:7.0.0:7.1.0:26.12.1:v26.12.1', unverified: true, unverifiedPrevious: true, retrySoon: true });
+  });
+
+  it.each([
+    ['no bundled version', { pm2: { shipped: null } }, 'pm2 release status unverified', 'the npm release could not be checked'],
+    ['an incomparable npm version', { pm2: { latest: 'next' } }, 'pm2 release status unverified', 'could not be compared'],
+  ])('reports the pm2 release row unverified for %s', async (_label, overrides, title, summary) => {
+    const { 'pm2-upstream': upstream } = await observe(status(overrides));
+    expect(upstream).toMatchObject({ title, unverified: true, summary: expect.stringContaining(summary) });
+  });
+
+  it('raises no pm2 release row when the bundle is newer than npm', async () => {
+    expect(await observe(status({ pm2: { latest: '7.0.0' } }))).toEqual({});
+  });
+
+  it.each([
+    ['an unconfigured startup hook', { configured: false, current: false }],
+    ['an unreadable startup hook with no prior row', { configured: true, current: null }],
+  ])('raises no startup row for %s', async (_label, startup) => {
+    expect(await observe(status({ startup }))).toEqual({});
+  });
+});
