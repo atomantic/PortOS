@@ -6,9 +6,9 @@
  * generated clip. This module instead tiles every section with several
  * bounded shots:
  *
- *   - no shot is longer than the pacing ceiling (the renderer's clip
- *     capacity, or a shorter project ceiling), so each shot can be covered by
- *     ONE generated clip;
+ *   - no shot is longer than the pacing ceiling (DEFAULT_MAX_SHOT_SEC or the
+ *     project's own, never above the renderer's clip capacity), so each shot
+ *     can be covered by ONE generated clip;
  *   - no shot is shorter than the pacing floor (a section shorter than the
  *     floor stays a single shot);
  *   - the very first shot is capped at the opening-hook length;
@@ -38,6 +38,10 @@ const OPEN_CUE_MAX_SEC = 8;
 // Grok renders fixed 6/10/15 s clips; a local model's default render is ~5s
 // (121 frames at 24fps). A project pacing ceiling can only shorten either.
 const DEFAULT_LOCAL_CLIP_CAPACITY_SEC = 5;
+// A music video cuts about once a bar. A generated shot held for 6-10 s drifts
+// (faces change, strangers appear) and reads as slow against the beat, so the
+// default ceiling is short; a project ceiling may lengthen it up to one clip.
+export const DEFAULT_MAX_SHOT_SEC = 3;
 const DEFAULT_MIN_SHOT_SEC = 2;
 const DEFAULT_HOOK_SEC = 3;
 
@@ -79,9 +83,9 @@ export function resolveClipCapacitySec(videoSettings) {
  * [floor, ceiling]; the hook is clamped into the same range.
  */
 function resolvePacing(pacing, clipCapacitySec) {
-  // A project ceiling can shorten shots but never exceed one generated clip:
-  // a longer non-looping shot could only ever be refused at render time.
-  const maxShotSec = Math.max(1, Math.min(pacing?.maxShotSec ?? clipCapacitySec, clipCapacitySec));
+  // No ceiling, project or default, may exceed one generated clip: a longer
+  // non-looping shot could only ever be refused at render time.
+  const maxShotSec = Math.max(1, Math.min(pacing?.maxShotSec ?? DEFAULT_MAX_SHOT_SEC, clipCapacitySec));
   const minShotSec = Math.min(pacing?.minShotSec ?? DEFAULT_MIN_SHOT_SEC, maxShotSec / 2);
   const hookSec = Math.min(maxShotSec, Math.max(minShotSec, pacing?.hookSec ?? DEFAULT_HOOK_SEC));
   return { minShotSec, maxShotSec, hookSec };

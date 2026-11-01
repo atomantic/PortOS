@@ -11,6 +11,7 @@
 
 import { randomUUID } from 'crypto';
 import { lyricTokens } from './timedText.js';
+import { DEFAULT_MAX_SHOT_SEC } from './shotPlan.js';
 
 const EPS = 1e-6;
 const round3 = (n) => Math.round(n * 1000) / 1000;
@@ -19,7 +20,6 @@ const isTime = (v) => typeof v === 'number' && Number.isFinite(v);
 const CHANGED_LINE_SIMILARITY = 0.5;
 // A shot shorter than this after an insertion is carved out of it is not worth keeping split.
 const MIN_SHOT_SEC = 0.5;
-const DEFAULT_NEW_SHOT_SEC = 8;
 const LYRIC_TEXT_MAX = 2000;
 
 const lineKey = (text) => lyricTokens(text).map((t) => t.key).join(' ');
@@ -245,7 +245,7 @@ export function remapSongTimeline(project, revision) {
 
   // Inserted lines: a run no shot covers gets its own shots; a run a shot was
   // only stretched across (it lost no lines) is carved out of that shot.
-  const maxSec = project.pacing?.maxShotSec || DEFAULT_NEW_SHOT_SEC;
+  const maxSec = project.pacing?.maxShotSec || DEFAULT_MAX_SHOT_SEC;
   const newScenes = [];
   for (const run of addedRuns(project.lyricCues || [], cueStatus)) {
     const covering = scenes.filter((s) => sceneReview[s.sceneId] && isTime(s.startSec) && s.endSec - run.startSec > EPS && run.endSec - s.startSec > EPS);
