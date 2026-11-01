@@ -29,7 +29,7 @@ async function silentMusicVideoMotionPrompt(prompt, project, scene) {
 }
 
 /** Rewrites `params.prompt` for the shot and returns the labeled additions the composer put around it. */
-async function composeShotPrompt({ body, params, project, scene, prepared, performance, backend, greybox }) {
+export async function composeShotPrompt({ body, params, project, scene, prepared, performance, backend, greybox }) {
   const { musicVideo } = body;
   // A take that hears nothing (no lip-sync or supplied song audio) gets plain physical
   // motion: the model would act out song cues and look words instead of reading them.

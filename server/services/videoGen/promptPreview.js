@@ -13,7 +13,7 @@ import { carriedPromptAdditions, sentPromptRecord } from '../../lib/modelInput.j
 import { getSettings } from '../settings.js';
 import { VIDEO_GEN_MODE } from './modes.js';
 import { HOSTED_VIDEO_SUBMISSIONS } from './hostedSubmission.js';
-import { resolveRequestedVideoBackend } from './prepareParams.js';
+import { hostedReferenceInputsError, resolveRequestedVideoBackend } from './prepareParams.js';
 import { VIDEO_GEN_LOCAL_ONLY_FIELD_NAMES, REFERENCE_AUDIO_FIELDS } from './requestFields.js';
 import { grokVideoSentPrompt } from './grok.js';
 import { resolveStoryboardGuidanceInputs, storyboardGuidanceRequestError } from './storyboardGuidance.js';
@@ -31,14 +31,21 @@ const asWritten = (body, extra = {}) => ({
 });
 
 export async function previewVideoPrompt({ previewUploads = [], ...body }) {
-  // A shot card and a FableLoom scene rebuild the prompt from their project on
-  // submit; their own previews belong to those surfaces, not this form's.
-  if (body.musicVideo || body.fableLoom) {
+  // FableLoom scenes and non-Grok shots rebuild their prompt on their own surfaces.
+  if (body.fableLoom || (body.musicVideo && ((body.backend && body.backend !== VIDEO_GEN_MODE.GROK)
+    || !body.musicVideo.compose || !body.musicVideo.promptAsTyped))) {
     throw new ServerError('Preview a music video shot or FableLoom scene from its own card', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  if (body.musicVideo) {
+    const { applyProjectRenderPool } = await import('../musicVideo/renderPool.js');
+    body = await applyProjectRenderPool(body);
   }
   const uploads = Object.fromEntries(previewUploads.map((field) => [field, {}]));
   const settings = await getSettings();
   const backend = resolveRequestedVideoBackend({ body, uploads, settings, localOnlyParamKeys: VIDEO_GEN_LOCAL_ONLY_FIELD_NAMES });
+  // A project using the install default may resolve to a different renderer.
+  // Its card retains the existing shot-composer preview instead of Grok's wrapper.
+  if (body.musicVideo && backend !== VIDEO_GEN_MODE.GROK) return { backend, shotPreviewUnavailable: true };
   // A federated provider receives the prompt as written; its own backend may add lines there.
   if (body.mediaProviderPeerId) return asWritten(body, { backend: 'remote', remote: true });
 
@@ -50,17 +57,37 @@ export async function previewVideoPrompt({ previewUploads = [], ...body }) {
   const hasSourceImage = !!uploads.sourceImage || !!body.sourceImageFile;
   const sourceImagePath = uploads.sourceImage ? UPLOADED_SOURCE_IMAGE
     : body.sourceImageFile ? resolveGalleryImage(body.sourceImageFile) : null;
-  const promptAdditions = carriedPromptAdditions(body);
+  let prompt = body.prompt;
+  let promptAdditions = carriedPromptAdditions(body);
   const guidanceError = storyboardGuidanceRequestError({ body, uploads, backend });
   if (guidanceError) throw guidanceError;
   // A storyboard panel and its references, named by gallery path as the render names them.
   const guidance = resolveStoryboardGuidanceInputs(body, { lenient: true });
 
   if (backend === VIDEO_GEN_MODE.GROK) {
+    let castReferences = [];
+    if (body.musicVideo) {
+      if (!sourceImagePath) throw new ServerError('Music Video scene render needs a resolvable reference frame.', { status: 400, code: 'MUSIC_VIDEO_SOURCE_REQUIRED' });
+      const [{ getProject }, { loadMusicVideoGreybox }, { composeShotPrompt }, { musicVideoClipCastReferences }] = await Promise.all([
+        import('../musicVideo/projects.js'), import('../musicVideo/greyboxReferences.js'),
+        import('../musicVideo/submissionGuards.js'), import('../musicVideo/clipCastReferences.js'),
+      ]);
+      const project = await getProject(body.musicVideo.projectId);
+      const scene = project?.scenes?.find((entry) => entry.sceneId === body.musicVideo.sceneId);
+      if (!scene) throw new ServerError('The requested music video shot no longer exists.', { status: 404, code: 'MUSIC_VIDEO_SCENE_NOT_FOUND' });
+      const referenceError = hostedReferenceInputsError({ backend, body, uploads });
+      if (referenceError) throw referenceError;
+      const greybox = await loadMusicVideoGreybox(project, scene);
+      const params = { prompt };
+      const additions = await composeShotPrompt({ body, params, project, scene, prepared: {}, performance: null, backend, greybox });
+      prompt = params.prompt;
+      promptAdditions = [...promptAdditions, ...additions];
+      if (!guidance.guidanceImagePath) castReferences = await musicVideoClipCastReferences(body.musicVideo);
+    }
     return { backend, ...grokVideoSentPrompt({
-      prompt: body.prompt, negativePrompt: body.negativePrompt,
+      prompt, negativePrompt: body.negativePrompt,
       aspectRatio: settings.imageGen?.grok?.aspectRatio, width: body.width, height: body.height,
-      duration: body.grokDuration, sourceImagePath, scratchDir: join(tmpdir(), 'portos-grok-video-<job>'), promptAdditions, ...guidance,
+      duration: body.grokDuration, sourceImagePath, scratchDir: join(tmpdir(), 'portos-grok-video-<job>'), promptAdditions, castReferences, ...guidance,
     }).record };
   }
   if (backend === VIDEO_GEN_MODE.FAL) {

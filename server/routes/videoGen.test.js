@@ -110,6 +110,8 @@ vi.mock('../services/settings.js', () => ({
 vi.mock('../services/musicVideo/projects.js', () => ({
   getProject: vi.fn(),
 }));
+const clipCastReferences = vi.hoisted(() => vi.fn(async () => []));
+vi.mock('../services/musicVideo/clipCastReferences.js', () => ({ musicVideoClipCastReferences: clipCastReferences }));
 
 vi.mock('../services/tracks/index.js', () => ({
   getTrack: vi.fn(),
@@ -1248,6 +1250,48 @@ describe('videoGen routes', () => {
       expect(r.body.promptAdditions).toEqual([style, expect.objectContaining({ label: 'Grok video tool instructions' })]);
       expect(r.body.promptAdditions[1].text).toContain('[prompt]');
       expect(r.body.promptAdditions[1].text).not.toContain('a fox running');
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+    });
+
+    it('previews the Grok shot prompt and cast inputs that the queued render sends', async () => {
+      const { getSettings } = await import('../services/settings.js');
+      const { grokVideoSentPrompt } = await import('../services/videoGen/grok.js');
+      const scene = { sceneId: 's1', startSec: 0, endSec: 6, prompt: 'A person waves', camera: { move: 'slow-dolly-in' } };
+      const project = { id: 'mv-1', scenes: [scene] };
+      const refs = [{ path: '/mock/inputs/person.png', label: 'Person · young' }];
+      getSettings.mockResolvedValueOnce(settings).mockResolvedValueOnce(settings);
+      getMusicVideoProject.mockResolvedValueOnce(project).mockResolvedValueOnce(project).mockResolvedValueOnce(project).mockResolvedValueOnce(project).mockResolvedValueOnce(project);
+      clipCastReferences.mockResolvedValueOnce(refs).mockResolvedValueOnce(refs);
+      const body = { backend: 'grok', mode: 'image', prompt: 'A person waves', sourceImageFile: 'still.png', grokDuration: 6,
+        musicVideo: { projectId: 'mv-1', sceneId: 's1', compose: true, promptAsTyped: true } };
+      const preview = await request(app).post('/api/video-gen/prompt-preview').send(body);
+      expect(preview.status).toBe(200);
+      expect(preview.body.sentPrompt).toContain('<IMAGE_1> shows how Person looks');
+      expect(preview.body.sentPrompt).toContain('/mock/inputs/person.png');
+      expect(preview.body.promptAdditions).toContainEqual(expect.objectContaining({ id: 'agent-instructions' }));
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+
+      const submitted = await request(app).post('/api/video-gen/').send(body);
+      expect(submitted.status).toBe(200);
+      const params = mediaJobQueue.enqueueJob.mock.calls[0][0].params;
+      const scratchDir = join((await import('node:os')).tmpdir(), 'portos-grok-video-<job>');
+      expect(preview.body.sentPrompt).toBe(grokVideoSentPrompt({ ...params, scratchDir }).record.sentPrompt);
+      expect(params.castReferences).toEqual(refs);
+    });
+
+    it('resolves the project default and keeps an unconditioned Grok shot on image_to_video', async () => {
+      const { getSettings } = await import('../services/settings.js');
+      const project = { id: 'mv-1', scenes: [{ sceneId: 's1', prompt: 'A person waves' }] };
+      getMusicVideoProject.mockResolvedValueOnce(project).mockResolvedValueOnce(project).mockResolvedValueOnce(project);
+      getSettings.mockResolvedValueOnce({ ...settings, videoGen: { mode: 'grok' } }).mockResolvedValueOnce({ videoGen: { mode: 'local' } });
+      const body = { mode: 'image', prompt: 'A person waves', sourceImageFile: 'still.png',
+        musicVideo: { projectId: 'mv-1', sceneId: 's1', compose: true, promptAsTyped: true } };
+      const grok = await request(app).post('/api/video-gen/prompt-preview').send(body);
+      expect(grok.status).toBe(200);
+      expect(grok.body.sentPrompt).toContain('image_to_video tool');
+      expect(grok.body.sentPrompt).not.toContain('reference_to_video');
+      const local = await request(app).post('/api/video-gen/prompt-preview').send(body);
+      expect(local.body).toEqual({ backend: 'local', shotPreviewUnavailable: true });
       expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
     });
 

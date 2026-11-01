@@ -6,6 +6,9 @@ import { authoredShotPrompt, musicVideoShotModelInput } from '../../../../server
 import { localModelTakesSongAudio } from '../../../../server/lib/musicVideoLocalModels.js';
 import { formatCount } from '../../utils/formatters.js';
 import SentPromptPanel from '../media/SentPromptPanel';
+import ModelInputPreview from '../media/ModelInputPreview';
+import useModelInputPreview from '../../hooks/useModelInputPreview.js';
+import { previewVideoPrompt } from '../../services/apiImageVideo.js';
 
 const clock = (sec) => {
   const whole = Math.max(0, sec || 0);
@@ -107,8 +110,9 @@ function InputToggle({ id, label, input, onChange }) {
 }
 
 /** The card's "Sent to the model" block: the exact prompt and the inputs going with it. */
-export default function SceneRenderInputs({ id, request, onChange }) {
+export default function SceneRenderInputs({ id, request, onChange, grokPreview = null, previewRevision = null }) {
   const { authored, prompt, promptAdditions, promptUsed, maxChars, endFrame, songAudio, wholeLine } = request;
+  const preview = useModelInputPreview(previewVideoPrompt, grokPreview, { enabled: !!grokPreview, revision: previewRevision });
   const over = maxChars != null && prompt.length > maxChars;
   return (
     <div className="min-w-0 space-y-1 rounded border border-port-border p-2 text-xs" data-testid="render-inputs">
@@ -119,7 +123,8 @@ export default function SceneRenderInputs({ id, request, onChange }) {
           ? (
             <>
               <p className="whitespace-pre-wrap break-words">{authored || prompt}</p>
-              {promptAdditions.length > 0 && <SentPromptPanel prompt={authored} sentPrompt={prompt} additions={promptAdditions} />}
+              {grokPreview && !preview.preview?.shotPreviewUnavailable ? <ModelInputPreview prompt={authored} preview={preview} />
+                : promptAdditions.length > 0 && <SentPromptPanel prompt={authored} sentPrompt={prompt} additions={promptAdditions} />}
             </>
           )
           : <p className="text-port-text-muted">No prompt</p>}
