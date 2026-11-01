@@ -23,7 +23,23 @@ function makeDeps({ projects, universes = {}, rows = [], universeLinks = {} }) {
       ingredients.set(input.id, { ...input, deleted: false });
       return input;
     }),
-    attachMedia: vi.fn(async (id, key, kind, opts) => { media.push({ id, key, kind, caption: opts?.caption }); }),
+    attachMedia: vi.fn(async (id, key, kind, opts) => {
+      const prior = media.findIndex((row) => row.id === id && row.key === key && row.kind === kind);
+      const row = { id, key, kind, caption: opts?.caption, ...(opts?.metadata ? { metadata: opts.metadata } : {}) };
+      if (prior < 0) media.push(row);
+      else media[prior] = row;
+    }),
+    listMediaForIngredient: vi.fn(async (id) => media.filter((row) => row.id === id)
+      .map(({ key, ...row }) => ({ ...row, mediaKey: key }))),
+    detachMedia: vi.fn(async (id, key, kind) => {
+      const index = media.findIndex((row) => row.id === id && row.key === key && row.kind === kind);
+      if (index >= 0) media.splice(index, 1);
+    }),
+    updateIngredientPayloadKeys: vi.fn(async (id, update) => {
+      const row = ingredients.get(id);
+      row.payload = { ...row.payload, ...update(row.payload || {}) };
+      return { ingredient: row };
+    }),
     listIngredientsForRef: vi.fn(async (kind, refId) => (universeLinks[refId] || []).map((id) => ({ ingredient: ingredients.get(id), role: 'cast' }))),
     findIngredientsByName: vi.fn(async (type, names, { firstWord = false } = {}) => {
       const keys = names.map((n) => n.trim().toLowerCase());
@@ -120,7 +136,7 @@ describe('saving approved Cast & Sets cast', () => {
     expect(leadId).toMatch(/^cat-chr-mv-[0-9a-f]{32}$/);
     expect(ingredients.get(leadId)).toMatchObject({ type: 'character', name: 'Ada', payload: { physicalDescription: 'Red scarf' }, tags: ['Example Video'] });
     expect(media).toEqual([
-      { id: leadId, key: 'ada-sheet.png', kind: 'reference', caption: 'From Example Video' },
+      expect.objectContaining({ id: leadId, key: 'ada-sheet.png', kind: 'reference', caption: 'From Example Video' }),
       expect.objectContaining({ key: 'diner-plate.png', kind: 'reference' }),
     ]);
     const subjects = projects[0].concept.subjects;
@@ -198,6 +214,78 @@ describe('music video cast import', () => {
 });
 
 describe('re-approving Cast & Sets', () => {
+  it('refreshes owned text and sheets while preserving hand-linked records and unrelated media', async () => {
+    const { castAndSetsSubjects } = await import('./castAndSetsPlan.js');
+    const projects = [videoProject()];
+    projects[0].concept.subjects.push({ id: 'cs-prop-lantern', kind: 'object', name: 'Lantern', description: 'Old metal' });
+    const { deps, ingredients, media } = makeDeps({ projects });
+    await saveCheckinCastToCatalog('mv-1', deps);
+    const propId = projects[0].concept.subjects.find((s) => s.id === 'cs-prop-lantern').ingredientId;
+    const leadId = projects[0].concept.subjects[0].ingredientId;
+    const dinerId = projects[0].concept.subjects.find((s) => s.id === 'cs-set-diner').ingredientId;
+    const supporting = projects[0].concept.subjects.find((s) => s.id === 'cs-cast-bo');
+    supporting.ingredientId = 'cat-chr-manual';
+    ingredients.set('cat-chr-manual', { id: 'cat-chr-manual', type: 'character', payload: { physicalDescription: 'Director-owned text' } });
+    ingredients.get(leadId).payload.aliases = ['The lead'];
+    // A pre-fix legacy plate and a manually attached reference coexist.
+    media.find((row) => row.id === dinerId).metadata = undefined;
+    await deps.catalogDB.attachMedia(leadId, 'manual-reference.png', 'reference', { caption: 'From Example Video' });
+    await deps.catalogDB.attachMedia(leadId, 'diner-plate.png', 'reference', { caption: 'Director reference to another subject' });
+    const stage = {
+      ...approvedStage,
+      direction: { protagonist: { name: 'Ada', face: 'Freckles', hair: 'Short hair' }, props: [{ id: 'lantern', name: 'Lantern', description: 'New blue glass' }], cast: [{ id: 'bo', name: 'Bo', description: 'New supporting direction' }], sets: [{ id: 'diner', name: 'Night diner', description: 'New blue booths' }] },
+      images: {
+        character: { status: 'done', imageId: 'ada-new.png', history: ['ada-sheet.png'] },
+        'cast:bo': { status: 'done', imageId: 'bo-new.png' },
+        'set:diner': { status: 'done', imageId: 'diner-new.png', history: ['diner-plate.png'] },
+      },
+    };
+    projects[0] = { ...projects[0], castAndSets: stage, concept: { ...projects[0].concept, subjects: castAndSetsSubjects(projects[0], stage) } };
+
+    await saveCheckinCastToCatalog('mv-1', deps);
+    await saveCheckinCastToCatalog('mv-1', deps);
+
+    expect(ingredients.get(leadId).payload).toMatchObject({ physicalDescription: 'Freckles; Short hair', aliases: ['The lead'] });
+    expect(ingredients.get(dinerId).payload.description).toBe('New blue booths');
+    expect(ingredients.get(propId).payload.description).toBe('New blue glass');
+    expect(media.filter((row) => row.id === leadId).map((row) => row.key)).toEqual(['manual-reference.png', 'diner-plate.png', 'ada-new.png']);
+    expect(media.filter((row) => row.id === dinerId).map((row) => row.key)).toEqual(['diner-new.png']);
+    expect(ingredients.get('cat-chr-manual').payload.physicalDescription).toBe('Director-owned text');
+    expect(media.some((row) => row.id === 'cat-chr-manual')).toBe(false);
+  });
+
+  it('does not claim an existing manual attachment when a generated sheet uses the same image', async () => {
+    const projects = [videoProject()];
+    const { deps, media } = makeDeps({ projects });
+    await saveCheckinCastToCatalog('mv-1', deps);
+    const leadId = projects[0].concept.subjects[0].ingredientId;
+    await deps.catalogDB.attachMedia(leadId, 'manual-current.png', 'reference', { caption: 'Director selection', metadata: { prompt: 'Original prompt' } });
+    const changeSheet = (imageId, history) => {
+      projects[0] = { ...projects[0], castAndSets: { ...approvedStage, images: { character: { status: 'done', imageId, history } } } };
+    };
+    changeSheet('manual-current.png', ['ada-sheet.png']);
+    await saveCheckinCastToCatalog('mv-1', deps);
+    changeSheet('new-final.png', ['ada-sheet.png', 'manual-current.png']);
+    await saveCheckinCastToCatalog('mv-1', deps);
+    expect(media.filter((row) => row.id === leadId).map((row) => row.key)).toEqual(['manual-current.png', 'new-final.png']);
+    expect(media.find((row) => row.key === 'manual-current.png')).toMatchObject({ caption: 'Director selection', metadata: { prompt: 'Original prompt', musicVideoCast: { managed: false } } });
+  });
+
+  it('keeps the previous reference when replacement attachment fails and skips unapproved stages', async () => {
+    const projects = [videoProject()];
+    const { deps, media } = makeDeps({ projects });
+    await saveCheckinCastToCatalog('mv-1', deps);
+    projects[0] = { ...projects[0], castAndSets: { ...approvedStage, images: { character: { status: 'done', imageId: 'ada-new.png', history: ['ada-sheet.png'] } } } };
+    deps.catalogDB.attachMedia.mockRejectedValueOnce(new Error('Media unavailable'));
+    await expect(saveCheckinCastToCatalog('mv-1', deps)).rejects.toThrow('Media unavailable');
+    expect(media.some((row) => row.key === 'ada-sheet.png')).toBe(true);
+    expect(deps.catalogDB.detachMedia).not.toHaveBeenCalled();
+    projects[0].castAndSets.status = 'review';
+    deps.catalogDB.updateIngredientPayloadKeys.mockClear();
+    expect(await saveCheckinCastToCatalog('mv-1', deps)).toBeNull();
+    expect(deps.catalogDB.updateIngredientPayloadKeys).not.toHaveBeenCalled();
+  });
+
   it('keeps each regenerated subject\'s catalog link and keep-local choice', async () => {
     const { castAndSetsSubjects } = await import('./castAndSetsPlan.js');
     const project = { concept: { subjects: [

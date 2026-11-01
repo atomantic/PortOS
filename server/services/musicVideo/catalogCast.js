@@ -14,6 +14,7 @@ import { randomUUID } from 'crypto';
 import { isFileBackend } from '../../lib/pgFileFacade.js';
 import { trimTo } from '../../lib/textUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
+import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
 import { CAST_SETS_SUBJECT_PREFIX } from './castAndSetsPlan.js';
 import { leadingAge, musicVideoCastIngredientId, subjectNameParts } from './castAndSetsDirection.js';
 
@@ -23,18 +24,24 @@ const UNIVERSE_FIELD = { character: 'characters', place: 'places', object: 'obje
 const REFERENCE_ROLE = { character: 'character', place: 'set', object: 'prop' };
 const MAX_VIDEO_SUBJECTS = 24;
 const SUBJECT_DESCRIPTION_MAX = 1000;
+const queueCheckinSave = createKeyCachedQueue();
 
 // The Cast & Sets image behind each check-in subject: the protagonist's
 // character sheet, a supporting cast sheet, or a set plate.
+function checkinImageKeys(stage) {
+  const out = new Map([[`${CAST_SETS_SUBJECT_PREFIX}protagonist`, 'character']]);
+  for (const c of stage.direction?.cast || []) out.set(`${CAST_SETS_SUBJECT_PREFIX}cast-${c.id}`.slice(0, 64), `cast:${c.id}`);
+  for (const set of stage.direction?.sets || []) out.set(`${CAST_SETS_SUBJECT_PREFIX}set-${set.id}`.slice(0, 64), `set:${set.id}`);
+  return out;
+}
+
 function checkinImages(project) {
   const stage = project?.castAndSets;
   if (stage?.status !== 'approved') return new Map();
-  const images = stage.images || {};
-  const done = (key) => (images[key]?.status === 'done' && images[key].imageId) || null;
-  const out = new Map([[`${CAST_SETS_SUBJECT_PREFIX}protagonist`, done('character')]]);
-  for (const c of stage.direction?.cast || []) out.set(`${CAST_SETS_SUBJECT_PREFIX}cast-${c.id}`.slice(0, 64), done(`cast:${c.id}`));
-  for (const set of stage.direction?.sets || []) out.set(`${CAST_SETS_SUBJECT_PREFIX}set-${set.id}`.slice(0, 64), done(`set:${set.id}`));
-  return out;
+  return new Map([...checkinImageKeys(stage)].map(([subjectId, key]) => {
+    const image = stage.images?.[key];
+    return [subjectId, image?.status === 'done' ? image.imageId || null : null];
+  }));
 }
 
 // A director-cast subject's image: the look reference pulled for it by name.
@@ -246,7 +253,11 @@ async function createRecord(project, item, deps) {
       return Boolean(await catalogDB.getIngredient(item.ingredientId));
     });
   if (created && item.imageId) {
-    await catalogDB.attachMedia(item.ingredientId, item.imageId, 'reference', { caption: `From ${trimTo(project.name || 'a music video', 100)}` });
+    await catalogDB.attachMedia(item.ingredientId, item.imageId, 'reference', {
+      caption: `From ${trimTo(project.name || 'a music video', 100)}`,
+      ...(checkinImages(project).get(item.subjectId) === item.imageId
+        ? { metadata: { musicVideoCast: { projectId: project.id, subjectId: item.subjectId } } } : {}),
+    });
   }
   return created;
 }
@@ -284,7 +295,7 @@ async function commitCatalogCast(projectId, decisions, deps) {
       // A retry may create this exact subject's deterministic row. A missing
       // reviewed target belonging to another subject stays missing.
       if (d.ingredientId !== musicVideoCastIngredientId(projectId, subject)) continue;
-      const item = { kind: subject.kind, name: subject.name, description: subject.description || '', imageId: images.get(subject.id) || null, ingredientId: d.ingredientId };
+      const item = { subjectId: subject.id, kind: subject.kind, name: subject.name, description: subject.description || '', imageId: images.get(subject.id) || null, ingredientId: d.ingredientId };
       if (await createRecord(project, item, deps)) {
         stamps.set(subject.id, { ingredientId: item.ingredientId });
         stats.created++;
@@ -292,7 +303,7 @@ async function commitCatalogCast(projectId, decisions, deps) {
       continue;
     }
     if (d.action !== 'create') continue;
-    const item = { kind: subject.kind, name: subject.name, description: subject.description || '', imageId: images.get(subject.id) || null, ingredientId: musicVideoCastIngredientId(projectId, subject) };
+    const item = { subjectId: subject.id, kind: subject.kind, name: subject.name, description: subject.description || '', imageId: images.get(subject.id) || null, ingredientId: musicVideoCastIngredientId(projectId, subject) };
     if (await createRecord(project, item, deps)) {
       stamps.set(subject.id, { ingredientId: item.ingredientId });
       stats.created++;
@@ -326,6 +337,51 @@ async function defaultDeps() {
   return { catalogDB, getUniverse, createOwnedPrimitive, getProject: projects.getProject, listProjects: projects.listProjects, mutateProjectRecord: projects.mutateProjectRecord, queueProjectCatalogLinkSync };
 }
 
+async function refreshCheckinRecords(project, catalogDB) {
+  if (project?.castAndSets?.status !== 'approved') return;
+  const sheets = checkinImages(project);
+  const keys = checkinImageKeys(project.castAndSets);
+  for (const subject of project.concept?.subjects || []) {
+    if (!subject.id?.startsWith(CAST_SETS_SUBJECT_PREFIX) || subject.localOnly || !TYPE_PREFIX[subject.kind]
+      || subject.ingredientId !== musicVideoCastIngredientId(project.id, subject)) continue;
+    const record = await catalogDB.getIngredient(subject.ingredientId);
+    // Consolidated identities and hand-linked records are no longer ours to refresh.
+    if (!record || record.id !== subject.ingredientId || record.type !== subject.kind) continue;
+    await catalogDB.updateIngredientPayloadKeys(record.id, () => ({
+      [PRIMARY_KEY[subject.kind]]: trimTo(subject.description || '', 4000),
+    }), { source: 'sync' });
+    const imageId = sheets.get(subject.id);
+    if (!imageId) continue;
+    const history = new Set(project.castAndSets.images?.[keys.get(subject.id)]?.history || []);
+    const media = await catalogDB.listMediaForIngredient(record.id);
+    const current = media.find((image) => image.kind === 'reference' && image.mediaKey === imageId);
+    // Attach first: a failed replacement must leave the previous reference available.
+    if (!current) {
+      await catalogDB.attachMedia(record.id, imageId, 'reference', {
+        caption: `From ${trimTo(project.name || 'a music video', 100)}`,
+        metadata: { musicVideoCast: { projectId: project.id, subjectId: subject.id } },
+      });
+    } else if (!current.metadata?.musicVideoCast) {
+      // A pre-existing manual reference stays unowned, including when this
+      // filename later appears in the subject's generated-image history.
+      await catalogDB.attachMedia(record.id, imageId, 'reference', {
+        caption: current.caption, role: current.role,
+        metadata: { ...current.metadata, musicVideoCast: { projectId: project.id, subjectId: subject.id, managed: false } },
+      });
+    }
+    for (const image of media) {
+      const origin = image.metadata?.musicVideoCast;
+      const ours = origin?.projectId === project.id && origin.subjectId === subject.id && origin.managed !== false;
+      // Per-subject render history recognizes legacy check-in references; a
+      // matching project caption alone cannot distinguish a manual attachment.
+      const legacy = !origin && history.has(image.mediaKey);
+      if (image.kind === 'reference' && image.mediaKey !== imageId && (ours || legacy)) {
+        await catalogDB.detachMedia(record.id, image.mediaKey, image.kind);
+      }
+    }
+  }
+}
+
 /**
  * After Cast & Sets is approved: save the check-in's new cast, sets and their
  * sheets to the catalog, reusing exact universe canon pointers. No
@@ -333,12 +389,16 @@ async function defaultDeps() {
  */
 export async function saveCheckinCastToCatalog(projectId, deps = null) {
   if (isFileBackend()) return null;
-  const d = deps || await defaultDeps();
-  const project = await d.getProject(projectId);
-  const candidates = catalogCastCandidates(project, { checkinOnly: true });
-  if (!candidates.length) return null;
-  const plan = await planCatalogCast(project, candidates, d);
-  return commitCatalogCast(projectId, plan.map(({ subjectId, action, ingredientId }) => ({ subjectId, action, ingredientId })), d);
+  return queueCheckinSave(projectId, async () => {
+    const d = deps || await defaultDeps();
+    const project = await d.getProject(projectId);
+    if (!project || project.deleted || project.castAndSets?.status !== 'approved') return null;
+    const candidates = catalogCastCandidates(project, { checkinOnly: true });
+    const plan = candidates.length ? await planCatalogCast(project, candidates, d) : [];
+    const result = await commitCatalogCast(projectId, plan.map(({ subjectId, action, ingredientId }) => ({ subjectId, action, ingredientId })), d);
+    await refreshCheckinRecords(result.project, d.catalogDB);
+    return result;
+  });
 }
 
 /** The importer's dry run: every live video's uncatalogued subjects, decided. */
