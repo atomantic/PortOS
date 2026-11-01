@@ -180,16 +180,3 @@ describe('universeCharacterSheet — variant catalog + prototype-pollution guard
     }
   });
 });
-
-describe('face sheet variant', () => {
-  it('asks for five head angles spelled out against the image edges, five expressions and empty hands', async () => {
-    const { getSheetVariantBuilder } = await import('./universeCharacterSheet.js');
-    const { prompt } = getSheetVariantBuilder('face')({ name: 'Example world' }, { name: 'Example Renee', age: '17', expressions: [{ name: 'laughing' }, { name: 'still' }] });
-    expect(prompt).toContain('3/4 LEFT (head turned toward the LEFT edge of the image');
-    expect(prompt).toContain('PROFILE RIGHT (full side view looking at the RIGHT edge)');
-    expect(prompt).toContain('mirror opposites');
-    expect(prompt).toContain('Age: 17, and they look exactly that age');
-    expect(prompt).toMatch(/laughing/);
-    expect(prompt).toContain('no props, cameras, phones or held objects');
-  });
-});

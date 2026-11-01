@@ -436,6 +436,29 @@ describe('catalog sheet routes', () => {
     expect(params.promptAdditions).toEqual(sent.promptAdditions);
   });
 
+  it('previews and renders a face sheet with five expressions drawn from the full character list', async () => {
+    const expressions = ['neutral', 'curious', 'worried', 'surprised', 'amused', 'determined', 'relaxed', 'laughing'];
+    mocks.getIngredient.mockResolvedValue({ ...character, payload: {
+      ...character.payload, age: '17', expressions: expressions.map((name) => ({ name })),
+    } });
+    const body = { variant: 'face' };
+    const preview = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets/preview').send(body);
+    expect(preview.status).toBe(200);
+    const sent = preview.body.preview.sentPrompt;
+    expect(sent).toContain('3/4 LEFT (head turned toward the LEFT edge of the image');
+    expect(sent).toContain('PROFILE RIGHT (full side view looking at the RIGHT edge)');
+    expect(sent).toContain('mirror opposites');
+    expect(sent).toContain('Age: 17, and they look exactly that age');
+    expect(sent).toContain(`exactly five distinct expressions of the same face. Draw on these character expressions, adding others if needed: ${expressions.join(', ')}`);
+    expect(sent).toContain('no props, cameras, phones or held objects');
+
+    const render = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets').send(body);
+    expect(render.status).toBe(200);
+    expect(render.body).toMatchObject({ variant: 'face', role: 'sheet:face' });
+    expect(queuedParams().prompt).toBe(sent);
+    expect(queuedParams().catalogAttach.role).toBe('sheet:face');
+  });
+
   // Catches a photoreal universe starting its cast on the illustrated sheet.
   it('lists and defaults to the photographic sheet for a character in a photoreal universe', async () => {
     mocks.getIngredient.mockResolvedValue({ ...character, name: 'Ada' });

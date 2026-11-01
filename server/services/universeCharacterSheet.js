@@ -97,7 +97,7 @@ export const DEFAULT_PHOTOGRAPHIC_SHEET_STYLE = 'Style: natural studio photograp
 // sentences. Pure — caller decides which fields to weave into its prompt.
 // Exported for reuse by the LoRA training dataset prompt builder
 // (server/lib/loraDataset.js), which needs the same canon field extraction.
-export function extractCharacterPromptCommon(character) {
+export function extractCharacterPromptCommon(character, { maxExpressions = 7 } = {}) {
   return {
     name: trim(character.name) || 'Unnamed',
     aliases: Array.isArray(character.aliases) ? character.aliases.filter(Boolean).join(', ') : '',
@@ -118,7 +118,7 @@ export function extractCharacterPromptCommon(character) {
     paletteLine: flattenPalette(character.colorPalette),
     wardrobeLine: flattenWardrobes(character.wardrobes),
     propsLine: flattenProps(character.props),
-    expressionsLine: flattenNamedList(character.expressions, DEFAULT_EXPRESSIONS),
+    expressionsLine: flattenNamedList(character.expressions, DEFAULT_EXPRESSIONS, { maxEntries: maxExpressions }),
     gesturesLine: flattenNamedList(character.handGestures, DEFAULT_HAND_GESTURES),
   };
 }
@@ -367,7 +367,7 @@ function buildCharacterFaceSheetPrompt(universe, character) {
     });
   }
   const styleBits = universeAestheticLine(universe);
-  const { name, age, physical, special, visualIdentity, expressionsLine } = extractCharacterPromptCommon(character);
+  const { name, age, physical, special, visualIdentity, expressionsLine } = extractCharacterPromptCommon(character, { maxExpressions: null });
   const promptParts = [
     `PHOTOGRAPHIC FACE REFERENCE SHEET — ten head-and-shoulders photographs of ONE real person, ${name}, against a plain seamless dark grey studio backdrop, in two rows of five with thin dark gutters and a small plain caption under each frame.`,
     styleBits || DEFAULT_PHOTOGRAPHIC_SHEET_STYLE,
@@ -376,7 +376,7 @@ function buildCharacterFaceSheetPrompt(universe, character) {
     visualIdentity ? `Facial identity: ${visualIdentity}` : '',
     special ? `Distinctive traits: ${special}` : '',
     'Top row, neutral expression, the same camera height and distance: FRONT (facing the camera); 3/4 LEFT (head turned toward the LEFT edge of the image, nose pointing image-left); PROFILE LEFT (full side view looking at the LEFT edge); 3/4 RIGHT (turned toward the RIGHT edge); PROFILE RIGHT (full side view looking at the RIGHT edge). The left-facing and right-facing frames are mirror opposites, never repeats of one side.',
-    `Bottom row, front or near-front, five expressions of the same face: ${expressionsLine}.`,
+    `Bottom row, front or near-front: exactly five distinct expressions of the same face. Draw on these character expressions, adding others if needed: ${expressionsLine}.`,
     'The same person, hair, skin, age, lighting and exposure in all ten frames. Ordinary relaxed mouth and natural teeth. Hands empty or out of frame: no props, cameras, phones or held objects. Plain everyday top, identical in every frame.',
   ].filter(Boolean);
   return {
