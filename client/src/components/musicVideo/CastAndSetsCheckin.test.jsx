@@ -6,11 +6,13 @@ import CastSetsStage from './stages/CastSetsStage.jsx';
 import useMusicVideoCastAndSets from '../../hooks/useMusicVideoCastAndSets';
 import { castAndSetsPreviewItems } from './CastAndSetsReferenceProgress.jsx';
 
-const { listeners, api, getMediaJob } = vi.hoisted(() => ({
+const { listeners, api, getMediaJob, greyboxData } = vi.hoisted(() => ({
   listeners: new Map(),
   api: { getMusicVideoProject: vi.fn(), getMusicVideoCastAndSets: vi.fn(), startMusicVideoCastAndSets: vi.fn(), regenerateMusicVideoCastAndSets: vi.fn(), editMusicVideoCastAndSetsDirection: vi.fn(), resumeMusicVideoCastAndSets: vi.fn(), approveMusicVideoCastAndSets: vi.fn(), reconfirmMusicVideoCastAndSets: vi.fn(), revertMusicVideoProductionInput: vi.fn(), skipMusicVideoCastAndSets: vi.fn(), applyMusicVideoCastAndSetsFeedback: vi.fn(), removeMusicVideoCastAndSetsFeedback: vi.fn(), discardMusicVideoCastAndSets: vi.fn(), getMusicVideoCastAndSetsCastingChanges: vi.fn() },
   getMediaJob: vi.fn(),
+  greyboxData: { places: {} },
 }));
+vi.mock('../../hooks/useMusicVideoGreyboxPlaces.js', () => ({ default: () => greyboxData.places }));
 vi.mock('../../services/socket', () => ({ default: {
   on: (event, fn) => { if (!listeners.has(event)) listeners.set(event, new Set()); listeners.get(event).add(fn); },
   off: (event, fn) => listeners.get(event)?.delete(fn),
@@ -56,10 +58,80 @@ beforeEach(() => {
   listeners.clear();
   vi.clearAllMocks();
   getMediaJob.mockResolvedValue({ status: 'queued' });
+  greyboxData.places = {};
   api.getMusicVideoCastAndSetsCastingChanges.mockResolvedValue({ changes: null });
   api.getMusicVideoProject.mockReset();
 });
 afterEach(() => vi.restoreAllMocks());
+
+describe('optional greybox references on Look', () => {
+  const sets = [{ id: 'lab', name: 'Lamp room' }, { id: 'harbor', name: 'Harbor' }];
+  const review = (concept, extra = {}) => ({ id: 'example-project', concept, castAndSets: {
+    revision: 1, status: 'review', direction: { sets }, plan: {}, images: {}, ...extra,
+  } });
+
+  it('leaves approval available and shows no empty set headings when nothing is linked', async () => {
+    render(<Harness initial={review({ subjects: [] })} locked={false} />);
+    await act(async () => {});
+    expect(screen.getByRole('button', { name: 'Approve & continue' })).not.toBeDisabled();
+    expect(screen.queryByText(/Set plate ·/)).toBeNull();
+    expect(screen.queryByText(/Greybox references/)).toBeNull();
+  });
+
+  it('keeps mixed environments optional and gates approval only after choosing a camera', async () => {
+    const subjects = [
+      { id: 'lab-place', kind: 'place', ingredientId: 'cat-lab', name: 'Lamp room' },
+      { id: 'harbor-place', kind: 'place', ingredientId: 'cat-harbor', name: 'Harbor' },
+    ];
+    greyboxData.places = {
+      'cat-lab': { ingredient: { type: 'place', payload: { greybox: { shots: [{ id: 'wide', label: 'Wide' }] } } }, media: [{ kind: 'reference', role: 'greybox-shot:wide', mediaKey: 'layout.png' }] },
+      'cat-harbor': { ingredient: { type: 'place', payload: {} }, media: [] },
+    };
+    let value = review({ subjects }, { direction: { sets: [{ ...sets[0], setReference: { subjectId: 'harbor-place' } }, sets[1]] }, greyboxPending: true });
+    api.editMusicVideoCastAndSetsDirection.mockImplementation(async (_id, { sets: updates }) => {
+      const direction = { ...value.castAndSets.direction, sets: value.castAndSets.direction.sets.map((set) => set.id === updates[0].id ? { ...set, setReference: updates[0].setReference } : set) };
+      const greyboxPending = direction.sets.some((set) => set.setReference?.greyboxShotId);
+      value = { ...value, castAndSets: { ...value.castAndSets, direction, greyboxPending } };
+      return { project: value, stage: value.castAndSets };
+    });
+    render(<Harness initial={value} locked={false} />);
+    expect(screen.getByRole('button', { name: 'Approve & continue' })).not.toBeDisabled();
+    expect(screen.queryByText(/Regenerate to render the set plates/)).toBeNull();
+    const disclosure = screen.getByText('Greybox references (optional)').closest('details');
+    expect(disclosure).not.toHaveAttribute('open');
+    fireEvent.click(screen.getByText('Greybox references (optional)'));
+    const lab = within(screen.getByText('Set plate · Lamp room').parentElement);
+    await act(async () => { fireEvent.change(lab.getByRole('combobox', { name: 'Set' }), { target: { value: 'lab-place' } }); });
+    expect(screen.getByRole('button', { name: 'Approve & continue' })).not.toBeDisabled();
+    await act(async () => { fireEvent.change(lab.getByRole('combobox', { name: 'Camera shot' }), { target: { value: 'wide' } }); });
+    expect(screen.getByRole('button', { name: 'Approve & continue' })).toBeDisabled();
+    expect(screen.getByText(/Regenerate to render the set plates/)).toBeInTheDocument();
+    await act(async () => { fireEvent.change(lab.getByRole('combobox', { name: 'Set' }), { target: { value: '' } }); });
+    expect(screen.getByRole('button', { name: 'Approve & continue' })).not.toBeDisabled();
+  });
+
+  it('resolves an older mixed-environment flag using the camera actually sent to the plate', async () => {
+    const subjects = [{ id: 'lab-place', kind: 'place', ingredientId: 'cat-lab', name: 'Lamp room' }];
+    const setReference = { subjectId: 'lab-place', greyboxShotId: 'wide' };
+    const entry = { ingredient: { type: 'place', payload: { greybox: { shots: [{ id: 'wide', label: 'Wide' }] } } }, media: [{ kind: 'reference', role: 'greybox-shot:wide', mediaKey: 'layout.png' }] };
+    greyboxData.places = { 'cat-lab': entry };
+    const initial = review({ subjects }, { direction: { sets: [{ ...sets[0], setReference }, { ...sets[1], setReference: { subjectId: 'other-place' } }] },
+      plan: { 'set:lab': { key: 'set:lab', setReference, refImages: ['layout.png'] } }, greyboxPending: true });
+    render(<Harness initial={initial} locked={false} />);
+    await act(async () => {});
+    expect(screen.getByRole('button', { name: 'Approve & continue' })).not.toBeDisabled();
+    greyboxData.places = { 'cat-lab': { ...entry, media: [{ ...entry.media[0], mediaKey: 'new-layout.png' }] } };
+    await act(async () => selectProject({ ...initial }));
+    expect(screen.getByRole('button', { name: 'Approve & continue' })).toBeDisabled();
+    greyboxData.places = {};
+    const afterEdit = { ...initial, castAndSets: { ...initial.castAndSets, greyboxPendingSetIds: [], greyboxLegacyPendingSetIds: ['lab'] } };
+    await act(async () => selectProject(afterEdit));
+    expect(screen.getByRole('button', { name: 'Approve & continue' })).toBeDisabled();
+    greyboxData.places = { 'cat-lab': entry };
+    await act(async () => selectProject({ ...afterEdit }));
+    expect(screen.getByRole('button', { name: 'Approve & continue' })).not.toBeDisabled();
+  });
+});
 
 describe('Cast & Sets incremental references', () => {
   it('shows plan, completion, failure and regeneration from sockets while prompts and images remain inspectable', async () => {

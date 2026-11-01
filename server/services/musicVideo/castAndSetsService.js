@@ -36,6 +36,7 @@ import { QUEUEABLE_IMAGE_MODES } from '../../lib/generationModes.js';
 import { resolveGalleryImage, resolveImageRef } from '../../lib/pathSafety.js';
 import { RENDER_TARGET } from '../../lib/renderTargets.js';
 import { trimTo } from '../../lib/textUtils.js';
+import { castAndSetsPendingGreyboxSetIds } from '../../lib/musicVideoGreybox.js';
 import { getProject, mutateProjectRecord } from './projects.js';
 import { requireProject } from './requireProject.js';
 import { musicVideoEvents } from './events.js';
@@ -113,6 +114,25 @@ const defaults = {
 let deps = { ...defaults };
 export function __setCastAndSetsDepsForTests(overrides) { deps = { ...defaults, ...overrides }; }
 export const __castAndSetsProcessId = () => PROCESS_ID;
+
+// Reconcile the old single pending flag against the actual capture sent to the plate.
+async function pendingGreyboxState(project) {
+  const stage = project.castAndSets;
+  if (!stage?.greyboxPending) return { direct: [], legacy: [], unavailable: [] };
+  const direct = Array.isArray(stage.greyboxPendingSetIds) ? stage.greyboxPendingSetIds : [];
+  const legacyIds = Array.isArray(stage.greyboxLegacyPendingSetIds) ? stage.greyboxLegacyPendingSetIds
+    : Array.isArray(stage.greyboxPendingSetIds) ? [] : (stage.direction?.sets || []).map((set) => set.id);
+  const candidates = new Set(legacyIds);
+  const selected = (stage.direction?.sets || []).filter((set) => candidates.has(set.id) && set.setReference?.greyboxShotId);
+  const legacyStage = { ...stage, greyboxPendingSetIds: [], greyboxLegacyPendingSetIds: legacyIds };
+  if (!selected.length) return { direct, legacy: castAndSetsPendingGreyboxSetIds(legacyStage), unavailable: [] };
+  const { loadMusicVideoGreybox } = await import('./greyboxReferences.js');
+  const captures = await Promise.all(selected.map(async (set) => {
+    const greybox = await loadMusicVideoGreybox(project, { sceneId: `set:${set.id}`, setReference: set.setReference }, { catalog: deps.catalog }).catch(() => null);
+    return [set.id, greybox?.reference?.imageId || null];
+  }));
+  return { direct, legacy: castAndSetsPendingGreyboxSetIds(legacyStage, Object.fromEntries(captures)), unavailable: captures.filter(([, imageId]) => !imageId).map(([id]) => id) };
+}
 
 // A legacy card has no test snapshot. Use the same complete plan comparison
 // for read-time hydration and write-time edits; a partial match is ambiguous.
@@ -300,7 +320,7 @@ async function writePlan(projectId, { direction = null, forceKeys = [], changes 
   if (!route && !codeOnly) return fail(projectId, 'No enabled image backend is allowed for the Cast & Sets images — enable Codex (or another image tool in the brief) and resume');
   const out = await mutateProjectRecord(projectId, (current) => {
     const next = setCastAndSetsDirection(current, { direction: nextDirection, plan, route, renderKeys });
-    const stage = { ...next.stage, greyboxPending: false,
+    const stage = { ...next.stage, greyboxPending: false, greyboxPendingSetIds: [], greyboxLegacyPendingSetIds: [],
       ...(directedInputs ? { directedInputs } : {}),
       ...(changes ? { changeSummary: { revision: next.stage.revision, changes, rerendered: renderKeys.length, at: next.stage.updatedAt } } : {}),
     };
@@ -714,10 +734,13 @@ const settleAndRebase = (next, now) => {
 /** Approve & continue. Returns `{ project, stage }`. */
 export async function approveCastAndSets(projectId) {
   const now = new Date().toISOString();
-  const out = await mutateProjectRecord(projectId, (current) => {
+  const out = await mutateProjectRecord(projectId, async (current) => {
     assertCastAndSetsApprovable(current);
-    if (current.castAndSets.greyboxPending) throw new ServerError('Regenerate the set plates with the selected greybox references before approving.', { status: 409, code: 'CAST_SETS_GREYBOX_PENDING' });
-    return settleAndRebase(applyApproval(current, now), now);
+    const pending = await pendingGreyboxState(current);
+    if (pending.unavailable.length) throw new ServerError('The selected greybox capture could not be checked. Restore it or clear the selection, then try again.', { status: 409, code: 'CAST_SETS_GREYBOX_PENDING' });
+    if (pending.direct.length || pending.legacy.length) throw new ServerError('Regenerate the set plates with the selected greybox references before approving.', { status: 409, code: 'CAST_SETS_GREYBOX_PENDING' });
+    const ready = { ...current, castAndSets: { ...current.castAndSets, greyboxPending: false, greyboxPendingSetIds: [], greyboxLegacyPendingSetIds: [] } };
+    return settleAndRebase(applyApproval(ready, now), now);
   });
   console.log(`✅ Music Video Cast & Sets ${short(projectId)} approved (r${out.stage.revision})`);
   publish(projectId, out.project);
@@ -872,10 +895,21 @@ export async function editCastAndSetsDirection(projectId, edits) {
   const sections = songSections(project);
   const referencesOnly = edits?.sets?.length && !edits.protagonist && !edits.world && edits.sets.every((s) => Object.hasOwn(s, 'setReference') && !Object.hasOwn(s, 'imageRole'));
   if (referencesOnly) {
-    const out = await mutateProjectRecord(projectId, (current) => {
+    const out = await mutateProjectRecord(projectId, async (current) => {
       if (!current.castAndSets?.direction || !['review', 'approved'].includes(current.castAndSets.status)) throw new ServerError('The Cast & Sets direction is not ready to edit.', { status: 409, code: 'CAST_SETS_NOT_IN_REVIEW' });
       const edited = applyCastAndSetsDirectionEdits(current.castAndSets.direction, edits, { sections });
-      const stage = { ...current.castAndSets, direction: edited.direction, greyboxPending: true, status: 'review', updatedAt: new Date().toISOString() };
+      const pending = await pendingGreyboxState(current);
+      const pendingSetIds = new Set(pending.direct);
+      const legacySetIds = new Set(pending.legacy);
+      for (const set of edits.sets) {
+        const rendered = current.castAndSets.plan?.[`set:${set.id}`]?.setReference;
+        // A matching camera id can now resolve to a different capture or environment.
+        legacySetIds.delete(set.id);
+        if (set.setReference?.greyboxShotId || rendered?.greyboxShotId) pendingSetIds.add(set.id);
+        else pendingSetIds.delete(set.id);
+      }
+      const greyboxPending = pendingSetIds.size > 0 || legacySetIds.size > 0;
+      const stage = { ...current.castAndSets, direction: edited.direction, greyboxPending, greyboxPendingSetIds: [...pendingSetIds], greyboxLegacyPendingSetIds: [...legacySetIds], status: greyboxPending ? 'review' : current.castAndSets.status, updatedAt: new Date().toISOString() };
       return { project: { ...current, castAndSets: stage }, stage };
     });
     publish(projectId, out.project);
