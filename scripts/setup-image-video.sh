@@ -175,6 +175,32 @@ pin_venv_arm64() {
   done
 }
 
+# Whether path $2, or any symlink it passes through, lies under real directory
+# $1. The venv's own python3 is usually a symlink out to its base interpreter,
+# so the final target alone cannot prove a path does not depend on the venv.
+# An unreadable hop or a link loop answers yes, which keeps the venv.
+path_routes_through() {
+  local root="$1" path="$2" dir link hops=0
+  while :; do
+    dir="${path%/*}"
+    [[ "$dir" == "$path" ]] && dir="."
+    [[ -n "$dir" ]] || dir="/"
+    dir="$(cd -P "$dir" 2>/dev/null && pwd)" || return 0
+    path="${dir%/}/${path##*/}"
+    case "$path" in
+      "$root"/*) return 0 ;;
+    esac
+    [[ -L "$path" ]] || return 1
+    hops=$((hops + 1))
+    [[ "$hops" -le 40 ]] || return 0
+    link="$(readlink "$path")" || return 0
+    case "$link" in
+      /*) path="$link" ;;
+      *) path="$dir/$link" ;;
+    esac
+  done
+}
+
 # Delete a venv whose interpreter is still universal, before the create check.
 # $2 is the interpreter the caller will rebuild with. The default is the
 # command name python3; [[ -x python3 ]] looks in the current directory, so
@@ -200,7 +226,8 @@ reset_universal_venv() {
   [[ -n "$base" && -x "$base" ]] || return 0
   # Containment has to compare real paths. A relative PYTHON_BIN such as
   # venv-audioldm2/bin/python3 does not match an absolute $1, and a symlink
-  # would hide the venv directory the caller still invokes.
+  # (the directory or the interpreter itself) would hide the venv the caller
+  # still invokes.
   root_real="$1"
   if real="$(cd -P "$1" 2>/dev/null && pwd)"; then root_real="$real"; fi
   real="${base%/*}"
@@ -212,28 +239,26 @@ reset_universal_venv() {
   # path cannot recreate the venv after it is deleted. A bare command name is
   # resolved again. Delete only when that same command exists later on PATH;
   # a different version would make the caller's venv command fail.
-  case "$base" in
-    "$root_real"/*)
-      case "$original" in
-        */*) return 0 ;;
+  if path_routes_through "$root_real" "$base"; then
+    case "$original" in
+      */*) return 0 ;;
+    esac
+    path_rest="$PATH"
+    while [[ -n "$path_rest" ]]; do
+      dir="${path_rest%%:*}"
+      if [[ "$path_rest" == *:* ]]; then path_rest="${path_rest#*:}"; else path_rest=""; fi
+      [[ -n "$dir" ]] || continue
+      case "$dir" in
+        "$1"|"$1"/*|"$root_real"|"$root_real"/*) continue ;;
       esac
-      path_rest="$PATH"
-      while [[ -n "$path_rest" ]]; do
-        dir="${path_rest%%:*}"
-        if [[ "$path_rest" == *:* ]]; then path_rest="${path_rest#*:}"; else path_rest=""; fi
-        [[ -n "$dir" ]] || continue
-        case "$dir" in
-          "$1"|"$1"/*|"$root_real"|"$root_real"/*) continue ;;
-        esac
-        if [[ -x "$dir/$original" && ! -d "$dir/$original" ]]; then
-          outside="$dir/$original"
-          break
-        fi
-      done
-      [[ -n "$outside" ]] || return 0
-      base="$outside"
-      ;;
-  esac
+      if [[ -x "$dir/$original" && ! -d "$dir/$original" ]] && ! path_routes_through "$root_real" "$dir/$original"; then
+        outside="$dir/$original"
+        break
+      fi
+    done
+    [[ -n "$outside" ]] || return 0
+    base="$outside"
+  fi
   [[ -e "$py" && ! -d "$py" ]] || return 0
   arches="$(lipo -archs "$py" 2>/dev/null || true)"
   case " $arches " in
