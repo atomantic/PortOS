@@ -9,6 +9,7 @@ import { CREDITS_OUTRO_LAYOUTS, CREDITS_OUTRO_LIMITS } from './musicVideoCredits
 import { COVER_DESIGN_OPTIONS } from './musicVideoCoverOverlay.js';
 import { DISTROKID_REMEMBERED_OPTIONS } from './distrokidGenres.js';
 import { CROSS_LINK_EDIT_TARGETS } from './musicVideoCrossLinks.js';
+import { IMAGE_REFERENCE_REQUEST_LIMIT } from './imageGenCapabilities.js';
 /**
  * Music Video production mode — Zod schemas + shared enums (issue #1760, Phase 1).
  *
@@ -349,8 +350,8 @@ const providerSlug = z.string().min(1).max(40).regex(/^[a-z0-9][a-z0-9._-]*$/i, 
 // a take that omits it is an older frame and reads as unknown, not stale.
 export const musicVideoCastInputsSchema = z.object({
   ingredientId: z.string().min(1).max(200).nullable(),
-  guides: z.array(galleryImageName).max(8),
-  sheets: z.array(z.object({ id: z.string().min(1).max(80), imageId: galleryImageName }).strict()).max(8),
+  guides: z.array(galleryImageName).max(IMAGE_REFERENCE_REQUEST_LIMIT),
+  sheets: z.array(z.object({ id: z.string().min(1).max(80), imageId: galleryImageName }).strict()).max(IMAGE_REFERENCE_REQUEST_LIMIT),
 }).strict();
 
 export const musicVideoTakeInputSchema = z.object({
@@ -701,7 +702,8 @@ export const musicVideoPreMusicSchema = z.object({
 // see musicVideoLayers.js. Only a composed render honors a non-footage layer.
 const sceneLayerFields = {
   // The references (visual spec ids) sent with this shot's frame renders; absent or null = the automatic set.
-  frameReferenceIds: z.array(z.string().min(1).max(128)).max(MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES).nullable().optional(),
+  // Priority-ordered; each render sends as many as its renderer takes (musicVideoReferenceCapacity).
+  frameReferenceIds: z.array(z.string().min(1).max(128)).max(IMAGE_REFERENCE_REQUEST_LIMIT).nullable().optional(),
   setReference: musicVideoSceneSetReferenceSchema.nullable().optional(),
   characterVariant: musicVideoSceneCharacterVariantSchema.nullable().optional(),
   camera: musicVideoSceneCameraSchema.nullable().optional(),

@@ -298,6 +298,82 @@ it('uses moodboard caption text on a backend without image-reference support', a
   expect(data.referenceImagePaths).toBeUndefined();
 });
 
+// The renderer limit must not erase inputs before the existing capability gates see them.
+it('refuses music-video references on renderers that cannot consume them', async () => {
+  getProject.mockResolvedValue({ scenes: [{ sceneId: 's1' }] });
+  const request = { prompt: 'a lighthouse', referenceImageFiles: ['lead.png'], musicVideo: { projectId: 'mv-1', sceneId: 's1', compose: true } };
+  getSettings.mockResolvedValue({ imageGen: { mode: 'external' } });
+  await expect(run({ ...request })).rejects.toMatchObject({ code: 'IMAGE_EDIT_UNSUPPORTED_MODE' });
+  getSettings.mockResolvedValue({ imageGen: { mode: 'local' } });
+  await expect(run({ ...request, modelId: 'schnell' })).rejects.toMatchObject({ code: 'REFERENCE_IMAGES_FLUX2_ONLY' });
+});
+
+// Catches a dropped panel or a take snapshot claiming an identity removed by the renderer cap.
+it('retains automatic panel art within the renderer cap and records only the sent cast inputs', async () => {
+  const { PATHS } = await import('../../lib/paths.js');
+  mkdirSync(PATHS.images, { recursive: true });
+  for (const file of ['start.png', 'a.png', 'b.png', 'c.png', 'd.png', 'panel.png']) writeFileSync(join(PATHS.images, file), 'fixture');
+  const sheets = ['a', 'b', 'c', 'd'].map((id) => ({ id: `mvr-cs-cast-${id}`, imageId: `${id}.png` }));
+  getSettings.mockResolvedValue({ imageGen: { mode: 'codex', ...CODEX_ON } });
+  getProject.mockResolvedValue({ visualSpec: { references: sheets }, scenes: [{ sceneId: 's1', panelArt: 'panel.png' }] });
+  const { data } = await run({ prompt: 'Raise the hand', referenceImageFiles: ['start.png', 'a.png', 'b.png', 'c.png', 'd.png', 'panel.png'],
+    referenceStrengths: [1, 0.8, 0.7, 0.6, 0.5, 0.4],
+    musicVideo: { projectId: 'mv-1', sceneId: 's1', compose: true, refine: true, castInputs: { ingredientId: null, guides: [], sheets } } });
+  expect(data.referenceImagePaths.map((p) => p.split(/[\\/]/).at(-1))).toEqual(['start.png', 'a.png', 'b.png', 'c.png', 'panel.png']);
+  expect(data.referenceImageStrengths).toEqual([1, 0.8, 0.7, 0.6, 0.4]);
+  expect(data.musicVideo.castInputs.sheets).toEqual(sheets.slice(0, 3));
+});
+
+it('keeps separate strengths for repeated named references', async () => {
+  const { PATHS } = await import('../../lib/paths.js');
+  mkdirSync(PATHS.images, { recursive: true });
+  writeFileSync(join(PATHS.images, 'same.png'), 'fixture');
+  getSettings.mockResolvedValue({ imageGen: { mode: 'codex', ...CODEX_ON } });
+  getProject.mockResolvedValue({ scenes: [{ sceneId: 's1' }] });
+  const { data } = await run({ prompt: 'a lighthouse', referenceImageFiles: ['same.png', 'same.png'], referenceStrengths: [0.3, 0.9],
+    musicVideo: { projectId: 'mv-1', sceneId: 's1', compose: true } });
+  expect(data.referenceImageStrengths).toEqual([0.3, 0.9]);
+});
+
+it('names a retained overflow face sheet in the composed board prompt', async () => {
+  const { PATHS } = await import('../../lib/paths.js');
+  mkdirSync(PATHS.images, { recursive: true });
+  writeFileSync(join(PATHS.images, 'face.png'), 'fixture');
+  getSettings.mockResolvedValue({ imageGen: { mode: 'codex', ...CODEX_ON } });
+  getProject.mockResolvedValue({ visualSpec: { references: [] }, castAndSets: { status: 'approved', overflowFaceReferences: [
+    { id: 'mvr-cs-face-example', imageId: 'face.png', role: 'character', label: 'Example face sheet' },
+  ] }, scenes: [{ sceneId: 's1' }] });
+  const { data } = await run({ prompt: 'Close-up', referenceImageFiles: ['face.png'], musicVideo: { projectId: 'mv-1', sceneId: 's1', compose: true } });
+  expect(data.prompt).toContain('Reference image 1 is Example face sheet');
+});
+
+it('keeps FLUX.3 music-video references instead of treating the model as text-only', async () => {
+  const { PATHS } = await import('../../lib/paths.js');
+  mkdirSync(PATHS.images, { recursive: true });
+  const files = Array.from({ length: 6 }, (_, i) => `flux3-${i}.png`);
+  for (const file of files) writeFileSync(join(PATHS.images, file), 'fixture');
+  getSettings.mockResolvedValue({ imageGen: { mode: 'local' } });
+  getProject.mockResolvedValue({ scenes: [{ sceneId: 's1' }] });
+  const { data } = await run({ prompt: 'a lighthouse', modelId: 'flux3-klein-q4', width: 1536, height: 864,
+    referenceImageFiles: files, musicVideo: { projectId: 'mv-1', sceneId: 's1', compose: true } });
+  expect(data.referenceImagePaths.map((p) => p.split(/[\\/]/).at(-1))).toEqual(files);
+  expect(data).toMatchObject({ width: 1024, height: 576 });
+});
+
+it('uses the configured cloud model limit and the request limit when a provider declares no maximum', async () => {
+  const { PATHS } = await import('../../lib/paths.js');
+  mkdirSync(PATHS.images, { recursive: true });
+  const files = Array.from({ length: 11 }, (_, i) => `cloud-${i}.png`);
+  for (const file of files) writeFileSync(join(PATHS.images, file), 'fixture');
+  getProject.mockResolvedValue({ scenes: [{ sceneId: 's1' }] });
+  for (const [mode, config] of [['fal', { enabled: true, model: 'fal-ai/nano-banana-pro' }], ['grok', { enabled: true }]]) {
+    getSettings.mockResolvedValue({ imageGen: { mode, [mode]: config } });
+    const { data } = await run({ prompt: 'a lighthouse', mode, referenceImageFiles: files,
+      musicVideo: { projectId: 'mv-1', sceneId: 's1', compose: true } });
+    expect(data.referenceImagePaths.map((p) => p.split(/[\\/]/).at(-1))).toEqual(files);
+  }
+});
+
 // Uniquely catches a board still sent with the director's text but without the
 // server's composed look, or with the look and no chips for it (#11317).
 it('composes a board still from the director\'s text and lists what it adds', async () => {

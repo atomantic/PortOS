@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { musicVideoConditioningReferences, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES } from './musicVideoConditioning.js';
+import { musicVideoConditioningReferences, musicVideoFrameReferenceFiles, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES, musicVideoReferenceCapacity } from './musicVideoConditioning.js';
 
 const CAST_ID = 'cat-chr-example';
 const guide = (mediaKey, age, extra = {}) => ({ mediaKey, kind: 'reference', createdAt: '2026-01-01T00:00:00.000Z', library: { variant: { age }, guide: true }, ...extra });
@@ -31,8 +31,10 @@ describe('musicVideoConditioningReferences with Casting guides', () => {
     const refs = musicVideoConditioningReferences(project(authored), { characterVariant: { ingredientId: CAST_ID, age: 7 } }, many);
     expect(ids(refs)).toEqual(['a.png', 'lead.png', 'set.png']);
     const five = { [CAST_ID]: [1, 2, 3, 4, 5].map((n) => guide(`g${n}.png`, 7, { library: { variant: { age: 7 } } }))};
-    expect(musicVideoConditioningReferences(project(authored), { characterVariant: { ingredientId: CAST_ID } }, five))
-      .toHaveLength(MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES);
+    // A renderer's capacity caps the list; without one it keeps every pick in priority order.
+    expect(musicVideoConditioningReferences(project(authored), { characterVariant: { ingredientId: CAST_ID } }, five, null, { limit: 4 }))
+      .toHaveLength(4);
+    expect(musicVideoConditioningReferences(project(authored), { characterVariant: { ingredientId: CAST_ID } }, five).length).toBeGreaterThan(4);
   });
 
   // Uniquely catches a guide the image route would reject (400) taking a slot a sendable guide should fill.
@@ -74,6 +76,22 @@ describe('musicVideoConditioningReferences with Casting guides', () => {
     expect(ids(musicVideoConditioningReferences(project(authored), { ...scene, frameReferenceIds: ['mvr-panel-panel-1'] }))).toEqual(['panel.png']);
     expect(ids(musicVideoConditioningReferences(project(authored), { panelId: 'panel-1', panelArt: 'sketch.gif' }))).toEqual(['lead.png', 'set.png']);
   });
+
+  it('retains automatic panel art at both the request and renderer limits while preserving explicit order', () => {
+    const references = Array.from({ length: 16 }, (_, i) => ({ id: `r${i}`, imageId: `${i}.png`, condition: true }));
+    const scene = { panelArt: 'panel.png' };
+    const auto = musicVideoConditioningReferences(project(references), scene);
+    expect(musicVideoFrameReferenceFiles('frame.png', auto, 16, { reservePanel: true })).toEqual(['frame.png', ...references.slice(0, 14).map((ref) => ref.imageId), 'panel.png']);
+    expect(ids(musicVideoConditioningReferences(project(references), scene, null, null, { limit: 3 }))).toEqual(['0.png', '1.png', 'panel.png']);
+    expect(ids(musicVideoConditioningReferences(project(references), { ...scene, frameReferenceIds: ['r0', 'r1', 'r2', 'mvr-panel-art'] }, null, null, { limit: 3 }))).toEqual(['0.png', '1.png', '2.png']);
+    expect(musicVideoConditioningReferences(project(references), scene, null, null, { limit: 0 })).toEqual([]);
+  });
+
+  it('keeps distinct explicit choices that use the same image', () => {
+    const references = [{ id: 'first', imageId: 'same.png' }, { id: 'second', imageId: 'same.png' }];
+    expect(musicVideoConditioningReferences(project(references), { frameReferenceIds: ['first', 'second'] }).map((ref) => ref.id))
+      .toEqual(['first', 'second']);
+  });
 });
 
 describe('musicVideoConditioningReferences with an approved Cast & Sets check-in', () => {
@@ -105,18 +123,20 @@ describe('musicVideoConditioningReferences with an approved Cast & Sets check-in
     expect(ids(musicVideoConditioningReferences(withProps, scene({ sectionIndex: 0 })))).toEqual(['lead-sheet.png', 'hill.png', 'kevin-sheet.png']);
   });
 
-  it('trades the set plate for each person face sheet on a close-up', () => {
+  it('prioritizes each person and face sheet on a close-up, retaining the set when it fits', () => {
     const withFaces = { ...checkedIn, visualSpec: { references: [...references,
       { id: 'mvr-cs-expressions', imageId: 'lead-face.png', role: 'character' },
       { id: 'mvr-cs-face-kevin', imageId: 'kevin-face.png', role: 'character' }] } };
     expect(ids(musicVideoConditioningReferences(withFaces, scene({ sectionIndex: 0, framePrompt: 'Arm\'s-length selfie: Kevin and her cheek to cheek' }))))
+      .toEqual(['lead-sheet.png', 'lead-face.png', 'kevin-sheet.png', 'kevin-face.png', 'hill.png']);
+    expect(ids(musicVideoConditioningReferences(withFaces, scene({ sectionIndex: 0, framePrompt: 'Close-up of Kevin' }), null, null, { limit: 4 })))
       .toEqual(['lead-sheet.png', 'lead-face.png', 'kevin-sheet.png', 'kevin-face.png']);
     expect(ids(musicVideoConditioningReferences(withFaces, scene({ sectionIndex: 0, framePrompt: 'Close-up of her laughing' }))))
       .toEqual(['lead-sheet.png', 'lead-face.png', 'hill.png']);
     expect(ids(musicVideoConditioningReferences(withFaces, scene({ sectionIndex: 0, framePrompt: 'Close up of her laughing' }))))
       .toEqual(['lead-sheet.png', 'lead-face.png', 'hill.png']);
     expect(ids(musicVideoConditioningReferences(withFaces, scene({ sectionIndex: 0, framePrompt: 'At arm’s length, Kevin and her' }))))
-      .toEqual(['lead-sheet.png', 'lead-face.png', 'kevin-sheet.png', 'kevin-face.png']);
+      .toEqual(['lead-sheet.png', 'lead-face.png', 'kevin-sheet.png', 'kevin-face.png', 'hill.png']);
     expect(ids(musicVideoConditioningReferences(withFaces, scene({ sectionIndex: 0 })))).toEqual(['lead-sheet.png', 'hill.png', 'kevin-sheet.png']);
   });
 
@@ -137,9 +157,20 @@ describe('musicVideoConditioningReferences with an approved Cast & Sets check-in
   // Uniquely catches a shot whose song section was cleared (a replaced song) dropping the
   // cast sheets it names for the capped authored set, so a co-lead is drawn from text alone.
   it('keeps the named cast when the shot has no song section, filling spare slots with the authored set', () => {
-    expect(ids(musicVideoConditioningReferences(checkedIn, scene({ sectionIndex: null }))))
+    expect(ids(musicVideoConditioningReferences(checkedIn, scene({ sectionIndex: null }), null, null, { limit: 4 })))
       .toEqual(['lead-sheet.png', 'kevin-sheet.png', 'street.png', 'mall.png']);
-    expect(ids(musicVideoConditioningReferences(checkedIn, { framePrompt: 'An empty street at dawn' })))
+    expect(ids(musicVideoConditioningReferences(checkedIn, { framePrompt: 'An empty street at dawn' }, null, null, { limit: 4 })))
       .toEqual(['lead-sheet.png', 'street.png', 'mall.png', 'lot.png']);
+  });
+});
+
+describe('musicVideoReferenceCapacity', () => {
+  it('follows the image renderer, not a fixed four', () => {
+    expect(musicVideoReferenceCapacity('codex')).toBe(5);
+    expect(musicVideoReferenceCapacity('grok')).toBe(16);
+    expect(musicVideoReferenceCapacity('local', { localModel: { pipelineClass: 'QwenImage21Pipeline' } })).toBe(10);
+    expect(musicVideoReferenceCapacity('local', { localModel: { runner: 'flux3' } })).toBe(10);
+    expect(musicVideoReferenceCapacity('local', { localModel: { runner: 'flux2' } })).toBe(4);
+    expect(musicVideoReferenceCapacity('local', { localModel: { runner: 'mflux' } })).toBe(0);
   });
 });

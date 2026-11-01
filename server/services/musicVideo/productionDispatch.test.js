@@ -7,7 +7,7 @@
  * only the queue and the video submit service are doubled.
  */
 
-import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 
 import { basename, join } from 'node:path';
@@ -49,6 +49,7 @@ const tag = { projectId: 'mv-example', sceneId: 'mvs-a', productionRunId: 'mvpr-
 const settings = { imageGen: { mode: 'local', local: { pythonPath: '/opt/example/python' }, codex: { enabled: true, model: 'codex-image' }, grok: { enabled: false } } };
 
 beforeEach(() => vi.clearAllMocks());
+afterEach(() => vi.restoreAllMocks());
 
 describe('production scene dispatch (#9066)', () => {
   it('enqueues a frame on the chosen cloud route with the step tag and the conditioning references', async () => {
@@ -62,6 +63,41 @@ describe('production scene dispatch (#9066)', () => {
     expect(params.prompt).toMatch(/^a lighthouse, noir/);
     expect(params.referenceImagePaths).toHaveLength(1);
     expect(params.referenceImagePaths[0]).toMatch(/ref-example\.png$/);
+  });
+
+  // A blank pool pin resolves the install model before applying its reference capacity.
+  it('conditions a frame on the install-default local model', async () => {
+    const models = await import('../../lib/mediaModels.js');
+    const pin = { id: 'example-flux2', runner: 'flux2', hardwareCompatibility: { state: 'available' } };
+    const fallback = { id: 'qwen-image-2.1', pipelineClass: 'QwenImage21Pipeline', hardwareCompatibility: { state: 'available' } };
+    const catalog = vi.spyOn(models, 'getImageModels').mockReturnValue([pin, fallback]);
+    const localSettings = { imageGen: { mode: 'local', local: { pythonPath: '/opt/example/python', modelId: pin.id } } };
+    const dispatch = () => dispatchProductionStep({ stepKind: 'frame', project, scene, route: { kind: 'image', mode: 'local', model: null }, tag, settings: localSettings });
+    await dispatch();
+    expect(enqueueJob.mock.calls.at(-1)[0].params).toMatchObject({ modelId: pin.id, referenceImagePaths: [expect.stringMatching(/ref-example\.png$/)] });
+    catalog.mockReturnValue([{ ...pin, hardwareCompatibility: { state: 'unavailable' } }, fallback]);
+    await dispatch();
+    expect(enqueueJob.mock.calls.at(-1)[0].params).toMatchObject({ modelId: fallback.id, referenceImagePaths: [expect.stringMatching(/ref-example\.png$/)] });
+  });
+
+  it('uses a compatible wide frame size for FLUX.3 production', async () => {
+    await dispatchProductionStep({ stepKind: 'frame', project, scene, route: { kind: 'image', mode: 'local', model: 'flux3-klein-q4' }, tag, settings });
+    expect(enqueueJob.mock.calls[0][0].params).toMatchObject({ modelId: 'flux3-klein-q4', width: 1024, height: 576 });
+  });
+
+  it('keeps automatic storyboard art in the limited renderer inputs', async () => {
+    const references = ['a', 'b', 'c', 'd'].map((id) => ({ id, imageId: `${id}.png`, condition: true }));
+    await dispatchProductionStep({ stepKind: 'frame', project: { ...project, visualSpec: { references } },
+      scene: { ...scene, panelArt: 'panel.png' }, route: { kind: 'image', mode: 'agy', model: null }, tag,
+      settings: { imageGen: { agy: { enabled: true } } } });
+    expect(enqueueJob.mock.calls[0][0].params.referenceImagePaths.map((path) => basename(path))).toEqual(['a.png', 'b.png', 'panel.png']);
+  });
+
+  it('records both explicitly selected sheets when they share an image', async () => {
+    const references = [{ id: 'mvr-cs-first', imageId: 'same.png' }, { id: 'mvr-cs-second', imageId: 'same.png' }];
+    await dispatchProductionStep({ stepKind: 'frame', project: { ...project, visualSpec: { references } },
+      scene: { ...scene, frameReferenceIds: references.map((ref) => ref.id) }, route: { kind: 'image', mode: 'codex', model: null }, tag, settings });
+    expect(enqueueJob.mock.calls[0][0].params.musicVideo.castInputs.sheets).toEqual(references);
   });
 
   it('never conditions a frame on a mood board import or a Pinterest pin, even when flagged', async () => {
@@ -120,18 +156,19 @@ describe('production scene dispatch (#9066)', () => {
       return enqueueJob.mock.calls.at(-1)[0].params.referenceImagePaths.map((path) => basename(path));
     };
     expect(await paths('The drummer counts in while Lou tunes')).toEqual(['character.png', 'harbor.png', 'rico.png', 'bassist.png']);
-    expect(await paths('Rico, Mara and Lou crowd the booth')).toEqual(['character.png', 'harbor.png', 'rico.png', 'mara.png']);
+    // Codex takes five references, so all three named sheets fit after the lead and the set.
+    expect(await paths('Rico, Mara and Lou crowd the booth')).toEqual(['character.png', 'harbor.png', 'rico.png', 'mara.png', 'bassist.png']);
     expect(await paths('She watches the harbor alone')).toEqual(['character.png', 'harbor.png']);
   });
 
-  it('appends capped style images after identities and carries a text look', async () => {
+  it('appends style images after identities up to the renderer limit (Codex: five) and carries a text look', async () => {
     await dispatchProductionStep({ stepKind: 'frame', project: { ...project,
       styleReferences: Array.from({ length: 8 }, (_, i) => ({ imageId: `style-${i}.png`, caption: 'teal shadows, fine grain' })),
     }, scene, route: { kind: 'image', mode: 'codex', model: null }, tag, settings });
     const params = enqueueJob.mock.calls[0][0].params;
-    expect(params.referenceImagePaths.map((p) => basename(p))).toEqual(['ref-example.png', 'style-0.png', 'style-1.png', 'style-2.png']);
+    expect(params.referenceImagePaths.map((p) => basename(p))).toEqual(['ref-example.png', 'style-0.png', 'style-1.png', 'style-2.png', 'style-3.png']);
     expect(params.prompt).toContain('teal shadows, fine grain');
-    expect(params.referenceImageStrengths).toEqual([1, 1, 1, 1]);
+    expect(params.referenceImageStrengths).toEqual([1, 1, 1, 1, 1]);
   });
 
   it('refuses a disabled backend instead of rendering on another one', async () => {
@@ -141,8 +178,8 @@ describe('production scene dispatch (#9066)', () => {
   });
 
   it('renders a local frame on the pool\'s exact model', async () => {
-    await dispatchProductionStep({ stepKind: 'frame', project, scene, route: { kind: 'image', mode: 'local', model: 'flux2-dev' }, tag, settings });
-    expect(enqueueJob.mock.calls[0][0].params).toMatchObject({ modelId: 'flux2-dev', pythonPath: '/opt/example/python' });
+    await dispatchProductionStep({ stepKind: 'frame', project, scene, route: { kind: 'image', mode: 'local', model: 'flux2-klein-9b' }, tag, settings });
+    expect(enqueueJob.mock.calls[0][0].params).toMatchObject({ modelId: 'flux2-klein-9b', pythonPath: '/opt/example/python' });
     expect(enqueueJob.mock.calls[0][0].params).not.toHaveProperty('mode');
   });
 

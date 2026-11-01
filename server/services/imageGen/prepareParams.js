@@ -29,8 +29,9 @@
 
 import { createHash, randomUUID } from 'crypto';
 import { applyImageVisualProfile } from './visualProfile.js';
-import { musicVideoCastGuideReferences, musicVideoPanelArtReferences, musicVideoStyleImages, musicVideoStylePrompt, musicVideoStyleReferenceCapacity } from '../../lib/musicVideoConditioning.js';
+import { musicVideoCastGuideReferences, musicVideoLimitReferenceFiles, musicVideoPanelArtReferences, musicVideoReferenceChoices, musicVideoStyleImages, musicVideoReferenceCapacity, musicVideoStylePrompt, musicVideoStyleReferenceCapacity } from '../../lib/musicVideoConditioning.js';
 import { musicVideoFrameModelInput } from '../../lib/musicVideoShotPrompt.js';
+import { musicVideoFrameGenSize } from '../../lib/musicVideoAspect.js';
 import { join } from 'node:path';
 import { assertFlux2InputsCompatible } from '../../lib/flux2Inputs.js';
 import { ServerError } from '../../lib/errorHandler.js';
@@ -171,7 +172,7 @@ function placeGreyboxReference(namedReferenceFiles, imageId, { cachedCapture, fr
 
 // A music-video scene render adds its greybox capture, its composed shot prompt
 // and its mood-board style images. Mutates `data` and `namedReferenceFiles`.
-async function applyMusicVideoSceneInputs(data, { project, mode, localModel, namedReferenceFiles, referenceUploads, initInputCount }) {
+async function applyMusicVideoSceneInputs(data, { project, mode, localModel, cloudModel, namedReferenceFiles, referenceUploads, initInputCount }) {
   const tag = data.musicVideo;
   const scene = project?.scenes?.find((entry) => entry.sceneId === tag.sceneId);
   const [{ loadMusicVideoGreybox }, { loadLinkedStoryboardPanel }, castGuideMedia] = await Promise.all([
@@ -185,12 +186,41 @@ async function applyMusicVideoSceneInputs(data, { project, mode, localModel, nam
   if (greybox) {
     placeGreyboxReference(namedReferenceFiles, greybox.reference.imageId, { cachedCapture: tag.greyboxImageId, fromFrame: tag.fromFrame || tag.refine });
   }
+  // The board sends its priority-ordered references; this renderer takes as many as it can (a peer decides its own).
+  const rendererCapacity = musicVideoReferenceCapacity(mode, { modelId: cloudModel, localModel });
+  if (!data.mediaProviderPeerId && rendererCapacity > 0) {
+    const room = Math.max(0, rendererCapacity - initInputCount - referenceUploads.length);
+    const panelImageId = !Array.isArray(scene?.frameReferenceIds) ? scene?.panelArt : null;
+    const frameCount = (tag.fromFrame || tag.refine) && namedReferenceFiles.length ? 1 : 0;
+    const greyboxIndex = greybox ? namedReferenceFiles.indexOf(greybox.reference.imageId) : -1;
+    const protectedCount = Math.max(frameCount, greyboxIndex + 1);
+    const limited = musicVideoLimitReferenceFiles(namedReferenceFiles, room, { panelImageId, protectedCount });
+    namedReferenceFiles.splice(0, namedReferenceFiles.length, ...limited);
+    // Trimming or retaining a panel can change positions; strengths follow the files.
+    if (data.referenceStrengths) {
+      const originalFiles = data.referenceImageFiles || [];
+      const usedIndices = new Set();
+      data.referenceStrengths = [...namedReferenceFiles.map((file) => {
+        const index = originalFiles.findIndex((original, i) => original === file && !usedIndices.has(i));
+        if (index >= 0) usedIndices.add(index);
+        return referenceStrengthOrFull(data.referenceStrengths[index]);
+      }),
+        ...referenceUploads.map(({ strength }) => referenceStrengthOrFull(strength))];
+    }
+    if (tag.castInputs) {
+      const sent = new Set(namedReferenceFiles);
+      data.musicVideo = { ...tag, castInputs: { ...tag.castInputs,
+        guides: tag.castInputs.guides.filter((file) => sent.has(file)),
+        sheets: tag.castInputs.sheets.filter((sheet) => sent.has(sheet.imageId)),
+      } };
+    }
+  }
   if (tag.compose) {
     // A peer chooses its runner; local incompatible inputs are rejected below.
     const positionsUnknown = Boolean(data.mediaProviderPeerId && initInputCount);
     const sentFiles = positionsUnknown ? [] : namedReferenceFiles;
     const sentInitCount = initInputCount;
-    const known = [greybox?.reference, ...musicVideoPanelArtReferences(scene), ...musicVideoCastGuideReferences(project, scene, castMedia), ...(project?.visualSpec?.references || [])];
+    const known = [greybox?.reference, ...musicVideoPanelArtReferences(scene), ...musicVideoCastGuideReferences(project, scene, castMedia), ...(project?.visualSpec?.references || []), ...musicVideoReferenceChoices(project)];
     const panelIndex = scene?.panelArt ? sentFiles.indexOf(scene.panelArt) : -1;
     // The director's text plus each labeled block PortOS adds (#11317), from the
     // composer the server's production run uses for the same still.
@@ -211,7 +241,7 @@ async function applyMusicVideoSceneInputs(data, { project, mode, localModel, nam
     data.promptAdditions = [...(data.promptAdditions || []), ...greybox.promptAdditions];
   }
   const reservedSlots = referenceUploads.length + initInputCount;
-  const capacity = Math.max(0, musicVideoStyleReferenceCapacity(mode, localModel) - reservedSlots);
+  const capacity = Math.max(0, musicVideoStyleReferenceCapacity(mode, localModel, cloudModel) - reservedSlots);
   const styles = musicVideoStyleImages(project, namedReferenceFiles, capacity);
   // Named inputs precede uploads. Keep the latter's packed strength positions intact.
   if (!referenceUploads.length) namedReferenceFiles.push(...styles);
@@ -229,8 +259,11 @@ function referenceImageCap({ peerRouted, mode, isQwen21, isFlux3, fableLoom, clo
   if (peerRouted) return IMAGE_REFERENCE_REQUEST_LIMIT;
   if (mode === IMAGE_GEN_MODE.RUNWAY) return maxInputImages(mode, cloudModel);
   if (isQwen21 || isFlux3) return 10;
-  if (fableLoom && CLOUD_IMAGE_GEN_MODES.includes(mode)) {
-    return Math.min(maxInputImages(mode, cloudModel) ?? IMAGE_REFERENCE_REQUEST_LIMIT, IMAGE_REFERENCE_REQUEST_LIMIT);
+  // A cloud image CLI takes its own provider's (or model's) limit, not a fixed 4.
+  if (CLOUD_IMAGE_GEN_MODES.includes(mode)) {
+    if (fableLoom) return Math.min(maxInputImages(mode, cloudModel) ?? IMAGE_REFERENCE_REQUEST_LIMIT, IMAGE_REFERENCE_REQUEST_LIMIT);
+    // A provider that takes fewer is refused below with its own input-image count.
+    return Math.min(Math.max(4, maxInputImages(mode, cloudModel) ?? IMAGE_REFERENCE_REQUEST_LIMIT), IMAGE_REFERENCE_REQUEST_LIMIT);
   }
   return 4;
 }
@@ -354,9 +387,15 @@ export async function prepareGenerateParams({ data, files, referenceImageFields,
   // per gate and having to keep the spellings in sync.
   const localModel = !data.mediaProviderPeerId && mode === IMAGE_GEN_MODE.LOCAL ? selectLocalImageModelFromSettings(settings, data.modelId, getImageModels(), localModelCandidates) : null;
   const initInputCount = initUpload || data.initImageFile ? 1 : 0;
+  const selectedCloudModel = [IMAGE_GEN_MODE.RUNWAY, IMAGE_GEN_MODE.FAL].includes(mode)
+    ? data.cloudModel || resolveCloudProviderConfig(settings, mode)?.modelId : data.cloudModel || null;
   if (data.musicVideo?.sceneId) {
     const project = musicVideoProjectLoaded ? musicVideoProject : await getMusicVideoProject(data.musicVideo.projectId).catch(() => null);
-    await applyMusicVideoSceneInputs(data, { project, mode, localModel, namedReferenceFiles, referenceUploads, initInputCount });
+    const standardSize = musicVideoFrameGenSize(project);
+    if (localModel?.runner === 'flux3' && Number(data.width) === standardSize.width && Number(data.height) === standardSize.height) {
+      Object.assign(data, musicVideoFrameGenSize(project, localModel));
+    }
+    await applyMusicVideoSceneInputs(data, { project, mode, localModel, cloudModel: selectedCloudModel, namedReferenceFiles, referenceUploads, initInputCount });
   }
   const referenceImageCount = namedReferenceFiles.length + referenceUploads.length;
   const inputImageCount = initInputCount + referenceImageCount;
@@ -381,8 +420,6 @@ export async function prepareGenerateParams({ data, files, referenceImageFields,
   // Freeze the selected preference before capability checks. Explicit ids stay
   // untouched so the existing unknown/hardware rejection still applies.
   if (!data.modelId && localModel?.id) data.modelId = localModel.id;
-  const selectedCloudModel = [IMAGE_GEN_MODE.RUNWAY, IMAGE_GEN_MODE.FAL].includes(mode)
-    ? data.cloudModel || resolveCloudProviderConfig(settings, mode)?.modelId : null;
   const isQwen21 = localModel?.pipelineClass === QWEN_IMAGE_21_PIPELINE;
   const isFlux3 = localModel?.runner === 'flux3';
   const referenceCap = referenceImageCap({ peerRouted: Boolean(data.mediaProviderPeerId), mode, isQwen21, isFlux3, fableLoom: data.fableLoom, cloudModel: selectedCloudModel });

@@ -28,13 +28,12 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { FAL_IMAGE_FAMILIES, buildFalImageRequest, falImageFamily } from '../../lib/falImageModels.js';
 import { resolveFalApiKey } from '../falQueue.js';
 import { QUEUEABLE_IMAGE_MODES, VIDEO_GEN_MODES } from '../../lib/generationModes.js';
-import { musicVideoConditioningReferences } from '../../lib/musicVideoConditioning.js';
+import { musicVideoConditioningReferences, musicVideoReferenceCapacity } from '../../lib/musicVideoConditioning.js';
 import { MUSIC_VIDEO_AUTOMATION_TOOLS } from '../../lib/musicVideoAutomation.js';
 import { falSceneTake, isPerformanceScene, performanceBlockedReason, runwaySceneTake } from '../../lib/musicVideoShotTiming.js';
-import { maxInputImages, supportsCloudModelOverride } from '../../lib/imageGenCapabilities.js';
+import { supportsCloudModelOverride } from '../../lib/imageGenCapabilities.js';
 import { resolveVideoSupportedModes } from '../../lib/videoModeProfiles.js';
 import { isHardwareCompatible } from '../../lib/systemCapabilities.js';
-import { RUNNER_FAMILIES } from '../../lib/runners.js';
 import { poolHasRoute, routeKey } from './production.js';
 import { supportsSourceAudioWindow } from '../federatedMedia/sourceAudio.js';
 
@@ -127,13 +126,13 @@ export function stepCostModelId({ route, project, scene, stepKind }) {
 /** routeKey → price map for a pool (fal routes priced for `project`). */
 export const poolPricing = (pool, project = null) => Object.fromEntries(pool.map((r) => [routeKey(r), routePriceUsd(r, project)]));
 
-/** Shared scene-aware frame conditioning, with the legacy capped fallback. */
+/** Shared scene-aware frame conditioning. */
 export const conditioningReferences = musicVideoConditioningReferences;
 
 /** What a scene's `kind` generation needs from a route. `castMedia` is loadSceneCastMedia's result for the scene. */
 export function sceneRequirement(project, scene, stepKind, castMedia = null) {
   return stepKind === 'frame'
-    ? { kind: 'image', conditioning: Math.min(4, conditioningReferences(project, scene, castMedia).length + (scene?.setReference?.greyboxShotId ? 1 : 0)) }
+    ? { kind: 'image', conditioning: conditioningReferences(project, scene, castMedia).length + (scene?.setReference?.greyboxShotId ? 1 : 0) }
     : { kind: 'video', performance: isPerformanceScene(scene) };
 }
 
@@ -212,15 +211,9 @@ async function routeEligibility(route, env) {
 async function routeIncapableReason(route, requirement, env) {
   if (route.kind !== requirement.kind) return `${describe(route)} does not generate ${requirement.kind === 'image' ? 'frames' : 'clips'}`;
   if (requirement.kind === 'image' && requirement.conditioning > 0) {
-    const limit = route.mode === 'local' ? null : maxInputImages(route.mode);
-    if (limit != null && requirement.conditioning > limit) {
-      return `${describe(route)} takes at most ${limit} reference image${limit === 1 ? '' : 's'}; the visual spec conditions on ${requirement.conditioning}`;
-    }
-    if (route.mode === 'local') {
-      const model = await localImageModel(route, env);
-      if (model?.runner !== RUNNER_FAMILIES.FLUX2 && model?.pipelineClass !== 'QwenImage21Pipeline') {
-        return `Local model "${model?.id || route.model || '(none)'}" cannot use reference images (FLUX.2 and Qwen Image 2.1 only)`;
-      }
+    const model = route.mode === 'local' ? await localImageModel(route, env) : null;
+    if (!musicVideoReferenceCapacity(route.mode, { modelId: route.model, localModel: model })) {
+      return `${describe(route)}${model?.id ? ` (${model.id})` : ''} cannot use reference images`;
     }
   }
   if (requirement.kind === 'video' && requirement.performance) {
@@ -306,7 +299,7 @@ export async function chooseProductionRoute(run, requirement, env) {
     if (incapable) { reasons.push(incapable); continue; }
     const skipped = reasons.length ? ` (skipped ${reasons.length} earlier route${reasons.length === 1 ? '' : 's'}: ${reasons.join('; ')})` : '';
     const need = requirement.kind === 'image'
-      ? (requirement.conditioning ? `frame conditioned on ${requirement.conditioning} reference image${requirement.conditioning === 1 ? '' : 's'}` : 'unconditioned frame')
+      ? (requirement.conditioning ? `frame with up to ${requirement.conditioning} selected reference image${requirement.conditioning === 1 ? '' : 's'}` : 'unconditioned frame')
       : (requirement.performance ? 'lip-synced performance shot' : 'cutaway clip');
     return { route, rationale: `First eligible ${requirement.kind} route in the allowed pool for ${/^[aeiou]/.test(need) ? 'an' : 'a'} ${need}${skipped}` };
   }

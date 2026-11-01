@@ -36,6 +36,7 @@ import { preMusicClipSound } from '../../lib/musicVideoColdOpen.js';
 import { conditioningReferences, falRouteVideoSettings, runwayRouteVideoSettings } from './productionPool.js';
 import { loadSceneCastMedia } from './castGuideMedia.js';
 import { castInputsFromReferences } from '../../lib/musicVideoCastLook.js';
+import { musicVideoLimitReferenceFiles, musicVideoReferenceCapacity } from '../../lib/musicVideoConditioning.js';
 import { musicVideoFrameGenSize } from '../../lib/musicVideoAspect.js';
 
 const unprompted = (scene, what) => new ServerError(
@@ -57,21 +58,6 @@ async function dispatchFrame({ project, scene, route, tag, settings }) {
   const fixes = typeof scene.stillFixes?.text === 'string' ? scene.stillFixes.text : '';
   const { loadMusicVideoGreybox } = await import('./greyboxReferences.js');
   const greybox = await loadMusicVideoGreybox(project, scene);
-  // A Casting guide may live in any image-input root (catalog.js validates it with resolveImageInputPath).
-  const chosen = conditioningReferences(project, scene, await loadSceneCastMedia(scene), greybox);
-  const sent = [];
-  const referenceImagePaths = [];
-  for (const ref of chosen) {
-    const path = ref.greybox ? greybox.path : ref.castGuide ? resolveImageInputPath(ref.imageId) : resolveGalleryImage(ref.imageId, { mustExist: false });
-    if (!path) continue;
-    referenceImagePaths.push(path);
-    sent.push(ref);
-  }
-  const { loadLinkedStoryboardPanel } = await import('./linkedPanel.js');
-  const panel = await loadLinkedStoryboardPanel(project, scene);
-  const panelReference = scene.panelArt ? sent.findIndex((ref) => ref.imageId === scene.panelArt) + 1 : 0;
-  const { prompt, promptAdditions } = musicVideoFrameModelInput(project, scene, { repairs: unmet, fixes, greybox, panel, panelReference, references: sent });
-  if (!prompt) throw unprompted(scene, 'frame');
   const [{ resolveRenderTargetConfig }, { resolveImageCleaners }, { enqueueJob }] = await Promise.all([
     import('../imageGen/cloudProviderConfig.js'),
     import('../../lib/imageCleanDefaults.js'),
@@ -82,13 +68,48 @@ async function dispatchFrame({ project, scene, route, tag, settings }) {
     throw new ServerError(`The ${route.mode} image backend is not available; the run will not substitute ${resolved.mode}`, { status: 409, code: 'PRODUCTION_ROUTE_INELIGIBLE' });
   }
   if (resolved.cloud && !resolved.cloud.enabled) throw resolved.cloud.disabledError;
+  let localModel = null;
+  if (route.mode === 'local') {
+    const [{ getImageModels }, { selectLocalImageModelFromSettings }] = await Promise.all([
+      import('../../lib/mediaModels.js'), import('../imageGen/prepareParams.js'),
+    ]);
+    const models = getImageModels();
+    localModel = route.model ? models.find((model) => model.id === route.model) : selectLocalImageModelFromSettings(settings, null, models);
+  }
+  // A Casting guide may live in any image-input root (catalog.js validates it with resolveImageInputPath).
+  const castMedia = await loadSceneCastMedia(scene);
+  const allReferences = conditioningReferences(project, scene, castMedia, greybox);
+  // As many references, in priority order, as this route's image renderer takes.
+  const capacity = musicVideoReferenceCapacity(route.mode, { modelId: resolved.cloud?.modelId || route.model, localModel });
+  if (allReferences.length && !capacity) {
+    throw new ServerError('The selected image renderer cannot use the shot’s reference images', { status: 409, code: 'PRODUCTION_ROUTE_INELIGIBLE' });
+  }
+  const available = [];
+  for (const ref of allReferences) {
+    const path = ref.greybox ? greybox.path : ref.castGuide ? resolveImageInputPath(ref.imageId) : resolveGalleryImage(ref.imageId, { mustExist: false });
+    if (!path) continue;
+    available.push({ ref, path });
+  }
+  const files = musicVideoLimitReferenceFiles(available.map(({ ref }) => ref.imageId), capacity, {
+    panelImageId: !Array.isArray(scene.frameReferenceIds) ? scene.panelArt : null,
+    protectedCount: available[0]?.ref.greybox ? 1 : 0,
+  });
+  const remaining = [...available];
+  const selected = files.map((file) => remaining.splice(remaining.findIndex(({ ref }) => ref.imageId === file), 1)[0]);
+  const sent = selected.map(({ ref }) => ref);
+  const referenceImagePaths = selected.map(({ path }) => path);
+  const { loadLinkedStoryboardPanel } = await import('./linkedPanel.js');
+  const panel = await loadLinkedStoryboardPanel(project, scene);
+  const panelReference = scene.panelArt ? sent.findIndex((ref) => ref.imageId === scene.panelArt) + 1 : 0;
+  const { prompt, promptAdditions } = musicVideoFrameModelInput(project, scene, { repairs: unmet, fixes, greybox, panel, panelReference, references: sent });
+  if (!prompt) throw unprompted(scene, 'frame');
   const { cleanC2PA, denoise } = resolveImageCleaners(undefined, settings, route.mode);
   const common = {
     prompt,
     ...(promptAdditions.length ? { promptAdditions } : {}),
     // The project's aspect, never the backend's per-prompt choice (a portrait
     // close-up pillarboxes in a 16:9 render).
-    ...musicVideoFrameGenSize(project),
+    ...musicVideoFrameGenSize(project, localModel),
     cleanC2PA,
     denoise,
     ...(referenceImagePaths.length ? { referenceImagePaths, referenceImageStrengths: referenceImagePaths.map(() => 1) } : {}),
@@ -97,8 +118,8 @@ async function dispatchFrame({ project, scene, route, tag, settings }) {
   };
   const baseParams = resolved.cloud
     ? { ...resolved.cloud.jobParams, ...common }
-    : { pythonPath: settings.imageGen?.local?.pythonPath || null, modelId: route.model, ...common };
-  const params = await withMusicVideoStyle(project, baseParams, route.mode, route.model, settings);
+    : { pythonPath: settings.imageGen?.local?.pythonPath || null, modelId: localModel?.id || route.model, ...common };
+  const params = await withMusicVideoStyle(project, baseParams, route.mode, localModel?.id || resolved.cloud?.modelId || route.model, settings);
   await guardRevision(tag, 'image');
   if (tag.productionRunId) {
     const { assertProductionSubmission } = await import('./productionService.js');

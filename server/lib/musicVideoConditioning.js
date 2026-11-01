@@ -1,11 +1,33 @@
 import { pickGuideMedia, rejectedReferenceKeys, matchesReferenceVariant } from './catalogMediaLibrary.js';
-import { isEditCapableMode, maxInputImages } from './imageGenCapabilities.js';
+import { IMAGE_REFERENCE_REQUEST_LIMIT, isEditCapableMode, maxInputImages } from './imageGenCapabilities.js';
 import { musicVideoAllowsMedia } from './musicVideoMediaPolicy.js';
 import { RUNNER_FAMILIES } from './runners.js';
 import { escapeRegExp } from './textUtils.js';
 
-/** Browser-safe reference selection shared by the board and production lanes. */
+/**
+ * Browser-safe reference selection shared by the board and production lanes.
+ * The lists here are priority-ordered (identities, then set, props, the rest)
+ * and run up to MUSIC_VIDEO_MAX_REFERENCE_CHOICES; a render sends as many of
+ * them, in order, as its image renderer takes (musicVideoReferenceCapacity),
+ * never a fixed count. MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES stays the
+ * project-wide cap on references flagged to condition every frame.
+ */
 export const MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES = 4;
+export const MUSIC_VIDEO_MAX_REFERENCE_CHOICES = IMAGE_REFERENCE_REQUEST_LIMIT;
+
+/**
+ * How many reference images one music video still can send on this renderer:
+ * the cloud provider's (or model's) own input limit, Qwen Image 2.1 and
+ * FLUX.3's 10, a local FLUX.2's 4; 0 for a renderer that takes no reference image.
+ */
+export function musicVideoReferenceCapacity(mode, { modelId = null, localModel = null } = {}) {
+  if (!isEditCapableMode(mode)) return 0;
+  if (mode === 'local') {
+    if (localModel?.pipelineClass === 'QwenImage21Pipeline' || localModel?.runner === 'flux3') return 10;
+    return localModel?.runner === RUNNER_FAMILIES.FLUX2 ? 4 : 0;
+  }
+  return Math.min(maxInputImages(mode, modelId) ?? MUSIC_VIDEO_MAX_REFERENCE_CHOICES, MUSIC_VIDEO_MAX_REFERENCE_CHOICES);
+}
 
 /**
  * A reference pulled in from outside inspiration: imported from a mood board
@@ -123,27 +145,27 @@ export function musicVideoCastGuideReferences(project, scene, castMedia) {
 }
 
 /**
- * The references a scene's frames condition on, capped at
- * MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES. Explicit `frameReferenceIds` win;
+ * The references a scene's frames condition on, in priority order, capped at
+ * `limit` (the renderer's capacity when known). Explicit `frameReferenceIds` win;
  * otherwise the cast guides of the scene's `characterVariant` lead and the
  * automatic set fills the remaining slots. `castMedia` is optional: without it
  * (or without a variant) the result is the automatic set alone.
  */
-function baseConditioningReferences(project, scene, castMedia = null) {
+function baseConditioningReferences(project, scene, castMedia = null, limit = MUSIC_VIDEO_MAX_REFERENCE_CHOICES) {
   const guides = musicVideoCastGuideReferences(project, scene, castMedia);
   const panel = musicVideoPanelArtReferences(scene);
   // The director's own pick for this shot (the shot card's References row) wins over the automatic set.
   if (Array.isArray(scene?.frameReferenceIds)) {
     const choices = [...guides, ...panel, ...musicVideoReferenceChoices(project)];
     return scene.frameReferenceIds.map((id) => choices.find((ref) => ref.id === id)).filter(Boolean)
-      .slice(0, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES);
+      .slice(0, limit);
   }
-  const automatic = automaticConditioningReferences(project, scene);
+  const automatic = automaticConditioningReferences(project, scene, limit);
   const chosen = guides.length ? [...guides, ...automatic] : automatic;
   const unique = chosen.filter((ref, i) => chosen.findIndex((r) => r.imageId === ref.imageId) === i);
-  if (!panel.length) return unique.slice(0, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES);
+  if (!panel.length) return unique.slice(0, limit);
   // The storyboard panel keeps a slot; identities fill the rest.
-  return [...unique.filter((ref) => ref.imageId !== panel[0].imageId).slice(0, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES - 1), ...panel];
+  return [...unique.filter((ref) => ref.imageId !== panel[0].imageId).slice(0, Math.max(0, limit - 1)), ...panel];
 }
 
 /**
@@ -156,7 +178,7 @@ export function musicVideoPanelArtReferences(scene) {
   return [{ id: `mvr-panel-${scene.panelId || 'art'}`.slice(0, 128), imageId: scene.panelArt, role: 'mood', label: 'Storyboard panel', panelArt: true }];
 }
 
-function automaticConditioningReferences(project, scene) {
+function automaticConditioningReferences(project, scene, limit = MUSIC_VIDEO_MAX_REFERENCE_CHOICES) {
   const references = [...(project?.visualSpec?.references || []), ...overflowFaceReferences(project)];
   const stage = project?.castAndSets;
   // Legacy projects and incomplete check-ins retain the authored reference set.
@@ -188,25 +210,20 @@ function automaticConditioningReferences(project, scene) {
         faceOf(`mvr-cs-cast-${person.id}`.slice(0, 64)), faceOf(`mvr-cs-face-${person.id}`.slice(0, 64)),
       ])];
       const close = [...people.flat().filter(Boolean), ...featuredAuthoredCharacters(references, scene), ...(props ? [props] : []), ...(plate ? [plate] : authored)];
-      return close.filter((ref, i) => close.findIndex((r) => r.imageId === ref.imageId) === i).slice(0, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES);
+      return close.filter((ref, i) => close.findIndex((r) => r.imageId === ref.imageId) === i).slice(0, limit);
     }
     const chosen = plate
       ? [character, plate, ...cast, ...featuredAuthoredCharacters(references, scene), ...(props ? [props] : [])]
       : [character, ...cast, ...featuredAuthoredCharacters(references, scene), ...(props ? [props] : []), ...authored];
     return chosen.filter((ref, i) => chosen.findIndex((r) => r.imageId === ref.imageId) === i)
-      .slice(0, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES);
+      .slice(0, limit);
   }
-  return authored.slice(0, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES);
+  return authored.slice(0, limit);
 }
 
 /** Style images fill spare slots after identities; never displace a character or set. */
-export function musicVideoStyleReferenceCapacity(mode, localModel) {
-  if (!isEditCapableMode(mode)) return 0;
-  if (mode === 'local') {
-    if (localModel?.pipelineClass === 'QwenImage21Pipeline') return 10;
-    return localModel?.runner === RUNNER_FAMILIES.FLUX2 ? 4 : 0;
-  }
-  return Math.min(4, maxInputImages(mode) ?? 4);
+export function musicVideoStyleReferenceCapacity(mode, localModel, modelId = null) {
+  return musicVideoReferenceCapacity(mode, { modelId, localModel });
 }
 
 export const musicVideoStyleBasis = (project) => JSON.stringify(project?.styleReferences || []);
@@ -231,16 +248,33 @@ export function musicVideoStyleImages(project, identityImages, capacity) {
 }
 
 /** An explicitly selected greybox keeps a slot ahead of all other set plates. */
-export function musicVideoConditioningReferences(project, scene, castMedia = null, greybox = null) {
+export function musicVideoConditioningReferences(project, scene, castMedia = null, greybox = null, { limit = MUSIC_VIDEO_MAX_REFERENCE_CHOICES } = {}) {
   const references = baseConditioningReferences(project, scene, castMedia);
-  if (!greybox?.reference) return references;
   // The chosen camera replaces the section's generic set plate, which shows the place from another side.
-  return [greybox.reference, ...references.filter((r) => r.imageId !== greybox.reference.imageId && !r.id?.startsWith('mvr-cs-set-'))]
-    .slice(0, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES);
+  const ordered = greybox?.reference
+    ? [greybox.reference, ...references.filter((r) => r.imageId !== greybox.reference.imageId && !r.id?.startsWith('mvr-cs-set-'))]
+    : references;
+  const panel = !Array.isArray(scene?.frameReferenceIds) && ordered.find((ref) => ref.panelArt);
+  const ids = musicVideoLimitReferenceFiles(ordered.map((ref) => ref.imageId), limit, {
+    panelImageId: panel?.imageId, protectedCount: greybox?.reference ? 1 : 0,
+  });
+  const remaining = [...ordered];
+  return ids.map((id) => remaining.splice(remaining.findIndex((ref) => ref.imageId === id), 1)[0]);
+}
+
+/** Keep an automatic storyboard panel in a spare slot after a leading frame or greybox. */
+export function musicVideoLimitReferenceFiles(files, limit, { panelImageId = null, protectedCount = 0 } = {}) {
+  const selected = files.slice(0, limit);
+  if (panelImageId && limit > protectedCount && files.includes(panelImageId) && !selected.includes(panelImageId)) {
+    selected[selected.length - 1] = panelImageId;
+  }
+  return selected;
 }
 
 /** A frame being edited leads; the chosen shot references fill the remaining slots. */
-export function musicVideoFrameReferenceFiles(leadImageId, references) {
-  return [...(leadImageId ? [leadImageId] : []), ...references.map((ref) => ref.imageId).filter((id) => id !== leadImageId)]
-    .slice(0, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES);
+export function musicVideoFrameReferenceFiles(leadImageId, references, limit = MUSIC_VIDEO_MAX_REFERENCE_CHOICES, { reservePanel = false } = {}) {
+  const files = [...(leadImageId ? [leadImageId] : []), ...references.map((ref) => ref.imageId).filter((id) => id !== leadImageId)];
+  const panelImageId = reservePanel ? references.find((ref) => ref.panelArt)?.imageId : null;
+  const protectedCount = (leadImageId ? 1 : 0) + (references.some((ref) => ref.greybox && ref.imageId !== leadImageId) ? 1 : 0);
+  return musicVideoLimitReferenceFiles(files, limit, { panelImageId, protectedCount });
 }
