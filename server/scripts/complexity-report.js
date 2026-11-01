@@ -25,6 +25,8 @@ function gitLines(root, args) {
 function eligible(path) {
   return SOURCE_EXTENSION.test(path)
     && !path.split('/').some(part => EXCLUDED_DIRS.has(part))
+    // This in-tree toolkit is vendored despite its directory name.
+    && !path.startsWith('server/lib/aiToolkit/')
     && !/\.(?:generated|min)\.(?:js|jsx|mjs|cjs)$/i.test(path);
 }
 

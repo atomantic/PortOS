@@ -47,7 +47,7 @@ export function operators(a, b) {
   write('src/many.js', Array.from({ length: 25 }, (_, i) => `export function spare${i}() {}`).join('\n'));
   write('src/widget.test.js', Array.from({ length: 8 }, (_, i) => `function test${i}(v) { if (v) return v; }`).join('\n'));
   write('tests/helpers.js', 'export function helper(x) { if (x) return x; }');
-  for (const path of ['vendor/skip.js', 'dist/skip.js', 'src/generated/skip.js', 'src/code.generated.js', 'scripts/migrations/skip.js', 'ignored/skip.js']) {
+  for (const path of ['vendor/skip.js', 'server/lib/aiToolkit/skip.js', 'dist/skip.js', 'src/generated/skip.js', 'src/code.generated.js', 'scripts/migrations/skip.js', 'ignored/skip.js']) {
     write(path, 'export function mustNotAppear(a) { if (a) return a; }');
   }
   write('.gitignore', 'ignored/\n');
@@ -63,6 +63,7 @@ export function operators(a, b) {
   expect(first.stdout).toContain('classic variant');
   expect(first.stdout).toContain('Other languages are not scanned');
   const [source, tests] = first.stdout.split('Tests and fixtures:');
+  expect(source).toContain('Source: 5/5 files scanned');
   expect(source).toMatch(/8\s+src\/alpha\.js:2:\d+\s+Function 'branching'/);
   expect(source.indexOf('src/alpha.js:2:')).toBeLessThan(source.indexOf('src/zeta.js:2:'));
   expect(source).toMatch(/6\s+src\/alpha\.js:10:\d+\s+Function 'operators'/);
