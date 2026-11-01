@@ -7,7 +7,7 @@
  * only the queue and the video submit service are doubled.
  */
 
-import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 
 import { basename, join } from 'node:path';
@@ -49,6 +49,7 @@ const tag = { projectId: 'mv-example', sceneId: 'mvs-a', productionRunId: 'mvpr-
 const settings = { imageGen: { mode: 'local', local: { pythonPath: '/opt/example/python' }, codex: { enabled: true, model: 'codex-image' }, grok: { enabled: false } } };
 
 beforeEach(() => vi.clearAllMocks());
+afterEach(() => vi.restoreAllMocks());
 
 describe('production scene dispatch (#9066)', () => {
   it('enqueues a frame on the chosen cloud route with the step tag and the conditioning references', async () => {
@@ -66,11 +67,17 @@ describe('production scene dispatch (#9066)', () => {
 
   // A blank pool pin resolves the install model before applying its reference capacity.
   it('conditions a frame on the install-default local model', async () => {
-    const localSettings = { imageGen: { mode: 'local', local: { pythonPath: '/opt/example/python', modelId: 'flux2-klein-9b' } } };
-    await dispatchProductionStep({ stepKind: 'frame', project, scene, route: { kind: 'image', mode: 'local', model: null }, tag, settings: localSettings });
-    const params = enqueueJob.mock.calls[0][0].params;
-    expect(params.modelId).toBe('flux2-klein-9b');
-    expect(params.referenceImagePaths.map((path) => basename(path))).toEqual(['ref-example.png']);
+    const models = await import('../../lib/mediaModels.js');
+    const pin = { id: 'example-flux2', runner: 'flux2', hardwareCompatibility: { state: 'available' } };
+    const fallback = { id: 'qwen-image-2.1', pipelineClass: 'QwenImage21Pipeline', hardwareCompatibility: { state: 'available' } };
+    const catalog = vi.spyOn(models, 'getImageModels').mockReturnValue([pin, fallback]);
+    const localSettings = { imageGen: { mode: 'local', local: { pythonPath: '/opt/example/python', modelId: pin.id } } };
+    const dispatch = () => dispatchProductionStep({ stepKind: 'frame', project, scene, route: { kind: 'image', mode: 'local', model: null }, tag, settings: localSettings });
+    await dispatch();
+    expect(enqueueJob.mock.calls.at(-1)[0].params).toMatchObject({ modelId: pin.id, referenceImagePaths: [expect.stringMatching(/ref-example\.png$/)] });
+    catalog.mockReturnValue([{ ...pin, hardwareCompatibility: { state: 'unavailable' } }, fallback]);
+    await dispatch();
+    expect(enqueueJob.mock.calls.at(-1)[0].params).toMatchObject({ modelId: fallback.id, referenceImagePaths: [expect.stringMatching(/ref-example\.png$/)] });
   });
 
   it('uses a compatible wide frame size for FLUX.3 production', async () => {
