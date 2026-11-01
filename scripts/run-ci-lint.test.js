@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
-import { BIOME_BIN, LINT_MODES, SERVER_LINT_ARGS, buildLintArgs, selectClientFiles, touchesServer } from './run-ci-lint.js';
+import { BIOME_BIN, LINT_MODES, SERVER_LINT_ARGS, SHARED_LINT_ARGS, buildLintArgs, selectClientFiles, touchesServer } from './run-ci-lint.js';
 
 describe('CI client lint runner', () => {
   it('lints the whole client src tree in full mode', () => {
@@ -61,11 +61,30 @@ describe('CI client lint runner', () => {
 
   // The server has no other static check: a removed declaration (the `d is not
   // defined` storyboard crash) only fails when a test happens to run that line.
-  it('lints the server tree and only selects the job for server code or its config', () => {
+  // scripts/, lib/ and autofixer/ share that rule set (#14509). lib/slashdo is
+  // a submodule and stays out, as do dependency trees.
+  it('lints the server rule-set trees and only selects the job for those files or their config', () => {
     expect(SERVER_LINT_ARGS).toContain('--error-on-warnings');
+    expect(SHARED_LINT_ARGS).toContain('--error-on-warnings');
     expect(touchesServer(['server/services/a.js', 'docs/x.md'])).toBe(true);
     expect(touchesServer(['server/biome.jsonc'])).toBe(true);
-    expect(touchesServer(['server/node_modules/x/index.js', 'client/src/a.js', 'server/README.md'])).toBe(false);
+    expect(touchesServer(['biome.jsonc'])).toBe(true);
+    expect(touchesServer(['scripts/ci-test-plan.js'])).toBe(true);
+    expect(touchesServer(['scripts/migrations/091-seed-image-prompt-stages.test.js'])).toBe(true);
+    expect(touchesServer(['lib/portosAuthCore.js'])).toBe(true);
+    expect(touchesServer(['lib/certMeta.test.js'])).toBe(true);
+    expect(touchesServer(['autofixer/server.js'])).toBe(true);
+    expect(touchesServer(['autofixer/shared.test.js'])).toBe(true);
+    expect(touchesServer([
+      'server/node_modules/x/index.js',
+      'client/src/a.js',
+      'server/README.md',
+      'lib/slashdo/lib/example.js',
+      'scripts/node_modules/pkg/index.js',
+      'autofixer/node_modules/pkg/index.js',
+      'client/biome.jsonc',
+      'docs/API.md',
+    ])).toBe(false);
   });
 
   it.skipIf(!existsSync(BIOME_BIN))('fails server lint for unused bindings and inherited warning diagnostics', () => {

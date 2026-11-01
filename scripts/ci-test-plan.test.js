@@ -825,6 +825,7 @@ describe('CI test impact planner', () => {
       // trigger went untested when it pointed at eslint.config.js, so the rename
       // to biome.jsonc could have silently matched nothing.
       'client/biome.jsonc',
+      'biome.jsonc',
       'client/lint-no-random-uuid.grit',
       'client/lint-react-legacy-apis.grit',
       'scripts/run-ci-tests.test.js',
@@ -917,6 +918,29 @@ describe('CI test impact planner', () => {
     expect(plan.full).toBe(false);
     for (const guard of guards) {
       expect(plan[runner].files, guard).toContain(guard);
+    }
+  });
+
+  it('selects lint when scripts, lib, or autofixer changes, and skips slashdo and dependency trees', () => {
+    const extra = [
+      'scripts/lib/directInvocation.js',
+      'scripts/backupDbCaseBoundary.test.js',
+      'lib/portosAuthCore.js',
+      'autofixer/server.js',
+      'lib/slashdo/lib/example.js',
+      'scripts/node_modules/pkg/index.js',
+      'autofixer/node_modules/pkg/index.js',
+    ];
+    const trackedFiles = [...TRACKED, ...extra];
+    for (const path of extra.slice(0, 4)) {
+      const plan = buildCiTestPlan([path], { trackedFiles });
+      expect(plan.lint.mode, path).toBe('files');
+      expect(plan.lint.files, path).toContain(path);
+    }
+    for (const path of extra.slice(4)) {
+      const plan = buildCiTestPlan([path], { trackedFiles });
+      expect(plan.lint.mode, path).toBe('skip');
+      expect(plan.lint.files, path).toEqual([]);
     }
   });
 

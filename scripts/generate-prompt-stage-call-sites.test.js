@@ -165,7 +165,6 @@ describe('prompt stage call-site scanner', () => {
 
   it('resolves earlier literals and template prefixes against keys discovered in a later file', () => {
     const sources = [
-      // biome-ignore lint/suspicious/noTemplateCurlyInString: Parse this interpolation as fixture source, not as the test's own template.
       src('server/services/a.js', "const stages = ['demo-unshipped', `demo-template-one`]; const pick = (id) => `demo-future-${id}`;"),
       src('server/services/z.js', "getStage('demo-unshipped'); buildPrompt('demo-template-one'); buildPrompt('demo-future-one');"),
     ];
