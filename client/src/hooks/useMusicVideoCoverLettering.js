@@ -17,30 +17,42 @@ const loadStyles = () => getMusicVideoArtistStyles({ silent: true }).then((res) 
 function useLetteringList(fetcher, enabled) {
   const [resource, setResource] = useState({ items: null, state: 'loading', error: null });
   const generation = useRef(0);
+  const pending = useRef(false);
   const read = useCallback(() => {
     const current = ++generation.current;
+    pending.current = true;
     setResource((previous) => ({ ...previous, state: 'loading', error: null }));
     return fetcher().then((items) => {
-      if (generation.current === current) setResource({ items, state: 'ready', error: null });
+      if (generation.current === current) {
+        pending.current = false;
+        setResource({ items, state: 'ready', error: null });
+      }
     }).catch((error) => {
-      if (generation.current === current) setResource((previous) => ({ ...previous, state: 'error', error }));
+      if (generation.current === current) {
+        pending.current = false;
+        setResource((previous) => ({ ...previous, state: 'error', error }));
+      }
     });
   }, [fetcher]);
 
   useEffect(() => {
     if (!enabled) return undefined;
     read();
-    return () => { generation.current += 1; };
+    return () => { generation.current += 1; pending.current = false; };
   }, [enabled, read]);
 
   const update = useCallback((updater) => {
+    const reconcile = pending.current;
     generation.current += 1;
+    pending.current = false;
     setResource((previous) => ({
       items: typeof updater === 'function' ? updater(previous.items || []) : updater,
       state: 'ready',
       error: null,
     }));
-  }, []);
+    // A discarded refresh may also contain changes made in another session.
+    if (reconcile) read();
+  }, [read]);
   return { ...resource, read, update };
 }
 
