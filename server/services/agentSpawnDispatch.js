@@ -58,10 +58,11 @@ export async function dispatchAgentRun(context, opts) {
         import('./cosClaimOwnershipState.js'), import('./releaseSynchronization.js'),
       ]);
       const disposition = await withClaimOwnershipLock(() => releaseTaskDispatchDisposition(context.task));
-      if (disposition === 'retired-continuation' || disposition === 'wait-for-synchronization') {
-        return context.blockAndBail({ reason: disposition === 'retired-continuation'
-          ? 'This release synchronization was retired by an operator.'
-          : 'The previous release synchronization is unfinished.', persist: false });
+      if (['retired-continuation', 'wait-for-synchronization', 'review-policy-unverified'].includes(disposition)) {
+        const reason = disposition === 'retired-continuation' ? 'This release synchronization was retired by an operator.'
+          : disposition === 'review-policy-unverified' ? 'Release synchronization review policy was not captured.'
+            : 'The previous release synchronization is unfinished.';
+        return context.blockAndBail({ reason, persist: false });
       }
     }
     return await runAgentDispatch(context, opts);

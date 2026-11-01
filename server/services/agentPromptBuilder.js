@@ -626,7 +626,7 @@ ${buildResumeSection(task, worktreeInfo)}` : '';
     [COMPLETION_MODES.AUDIT_FLOW]: () => buildAuditFlowCompletionSection({ isTui, sentinelPath }),
     [COMPLETION_MODES.RECONCILE_FLOW]: () => buildReconcileFlowCompletionSection({ sentinelPath }),
     [COMPLETION_MODES.CHECKOUT_RECOVERY]: () => buildCheckoutRecoveryCompletionSection({ sentinelPath }),
-    [COMPLETION_MODES.RELEASE_FLOW]: () => buildReleaseFlowCompletionSection({ isTui, sentinelPath }),
+    [COMPLETION_MODES.RELEASE_FLOW]: () => buildReleaseFlowCompletionSection({ isTui, isCli: providerType === PROVIDER_TYPES.CLI, sentinelPath }),
   }[completionMode] || (() => ''))();
   const tuiCompletionSection = [completionSection, buildAuditOutputCompletionSection(task, sentinelPath)]
     .filter(Boolean).join('\n\n');
@@ -1222,7 +1222,7 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, { isTui = t
     [COMPLETION_MODES.AUDIT_FLOW]: () => contractSections.push(buildAuditFlowCompletionSection({ isTui, sentinelPath: lightSentinelPath() })),
     [COMPLETION_MODES.RECONCILE_FLOW]: () => contractSections.push(buildReconcileFlowCompletionSection({ sentinelPath: lightSentinelPath() })),
     [COMPLETION_MODES.CHECKOUT_RECOVERY]: () => contractSections.push(buildCheckoutRecoveryCompletionSection({ sentinelPath: lightSentinelPath() })),
-    [COMPLETION_MODES.RELEASE_FLOW]: () => contractSections.push(buildReleaseFlowCompletionSection({ isTui, sentinelPath: lightSentinelPath() })),
+    [COMPLETION_MODES.RELEASE_FLOW]: () => contractSections.push(buildReleaseFlowCompletionSection({ isTui, isCli: !isTui, sentinelPath: lightSentinelPath() })),
     [COMPLETION_MODES.TUI_SLASHDO_FREE]: pushTuiCompletion,
     [COMPLETION_MODES.TUI]: pushTuiCompletion,
   }[completionMode] || pushCliCompletion)();

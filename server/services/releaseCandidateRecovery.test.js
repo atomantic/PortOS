@@ -49,7 +49,8 @@ vi.mock('./github.js', () => ({ execGh: async args => {
 
 import { updateReleaseCandidateOwnership } from './cosClaimOwnership.js';
 import { recoverReleaseCandidate } from './releaseCandidateRecovery.js';
-import { captureCompletedCheckouts } from './completedCheckoutEvidence.js';
+import { captureCheckoutSeeds, captureCompletedCheckouts } from './completedCheckoutEvidence.js';
+import { isInlineReleaseOwner } from '../lib/releaseSynchronization.js';
 import { readClaimOwnershipAgents, withClaimOwnershipLock, reserveCheckoutRetirementFence } from './cosClaimOwnershipState.js';
 import { claimCheckoutOwnerReason } from '../lib/claimContinuation.js';
 
@@ -188,6 +189,77 @@ test('recovers an already-merged promotion at its original head without republis
   expect(await recover()).toMatchObject({ recovered: true, transfer: { publication: { number: 12, head, merged: true } } });
   expect(JSON.parse(await readFile(reviewPath, 'utf8'))).toEqual(review);
   expect(fixture.state.agents['agent-successor'].metadata.releasePublication).toBeUndefined();
+});
+
+for (const mode of ['resume', 'retry', 'orphan', 'orphan-sentinel']) test(`recovers both checkouts of an interrupted inline release on the same task (${mode})`, async () => {
+  fixture.pr = { number: 12, html_url: 'https://github.com/example/repo/pull/12', state: 'closed', merged: true,
+    merge_commit_sha: 'a'.repeat(40), head: { ref: branch, sha: head, repo: { full_name: 'example/repo' } },
+    base: { ref: 'release', sha: cutoff, repo: { full_name: 'example/repo' } } };
+  fixture.promotion = { tree: { sha: await git(['rev-parse', `${head}^{tree}`]) }, parents: [{ sha: cutoff }, { sha: head }] };
+  const review = JSON.parse(await readFile(reviewPath, 'utf8'));
+  review.prUrl = fixture.pr.html_url;
+  await writeFile(reviewPath, JSON.stringify(review));
+  const source = fixture.state.agents['agent-original'], identity = 'b'.repeat(64);
+  const syncBranch = `codex/release-sync-${identity}`, syncPath = join(scratch, 'synchronization');
+  await git(['worktree', 'add', '-b', syncBranch, syncPath, head]);
+  source.status = 'running';
+  source.metadata.releasePublication = { status: 'verified', synchronizationHandoffVersion: 2, identity,
+    candidateBranch: branch, candidateHead: head, promotionPrNumber: 12, promotionMerge: 'a'.repeat(40) };
+  source.metadata.releaseSynchronizationCheckout = { version: 1, identity, branch: syncBranch,
+    startedAt: source.startedAt, reservedAt: source.startedAt };
+  source.metadata.checkoutSeeds = await captureCheckoutSeeds(source, { allowUncreated: false });
+  const rows = await captureCompletedCheckouts(source, { success: true, strict: true });
+  source.metadata.completedCheckouts = rows;
+  source.metadata.checkoutCapture = { status: 'captured', targets: rows, unknown: false };
+  source.status = 'completed'; source.completedAt = new Date().toISOString();
+  if (mode === 'retry') source.result = { success: false, deliveryRecoveryOwned: true,
+    taskOutcome: { status: 'incomplete', reason: 'Interrupted after publication' } };
+  if (mode === 'orphan') source.result = { success: false, executionSuccess: false, orphaned: true, taskOutcome: null, exitCode: 1 };
+  if (mode === 'orphan-sentinel') source.result = { success: false, executionSuccess: false, orphaned: true,
+    taskOutcome: { status: 'incomplete', reason: 'Delivery checks did not pass.' }, exitCode: 1 };
+  fixture.state.agents['agent-successor'].startedAt = new Date().toISOString();
+  if (mode === 'orphan') {
+    source.result.taskOutcome = { status: 'blocked', recovery: { mode: 'approval' } };
+    expect(await recover()).toMatchObject({ recovered: false, reason: 'candidate-successor-lineage-unverified' });
+    fixture.state.agents['agent-original'].result.taskOutcome = null;
+    fixture.processHold = 'candidate-process-proof-unavailable';
+    expect(await recover()).toMatchObject({ recovered: false, reason: 'candidate-process-proof-unavailable' });
+    fixture.processHold = null;
+  }
+  const result = await recover();
+  expect(result).toMatchObject({ recovered: true, branch, synchronization: { branch: syncBranch, path: syncPath } });
+  const successor = fixture.state.agents['agent-successor'];
+  expect(successor.metadata.checkoutSeeds.map(seed => seed.branch)).toEqual([branch, syncBranch]);
+  expect(successor.metadata.releasePublication).toEqual(source.metadata.releasePublication);
+  expect(isInlineReleaseOwner({ version: 2, owner: { agentId: source.id, taskId: source.taskId, startedAt: source.startedAt } }, successor)).toBe(true);
+  expect(await recover()).toEqual(result);
+});
+
+for (const state of ['uncreated', 'detached']) test(`holds an unseeded synchronization reservation when ${state}`, async () => {
+  fixture.pr = { number: 12, html_url: 'https://github.com/example/repo/pull/12', state: 'closed', merged: true,
+    merge_commit_sha: 'a'.repeat(40), head: { ref: branch, sha: head, repo: { full_name: 'example/repo' } },
+    base: { ref: 'release', sha: cutoff, repo: { full_name: 'example/repo' } } };
+  fixture.promotion = { tree: { sha: await git(['rev-parse', `${head}^{tree}`]) }, parents: [{ sha: cutoff }, { sha: head }] };
+  const review = JSON.parse(await readFile(reviewPath, 'utf8'));
+  review.prUrl = fixture.pr.html_url;
+  await writeFile(reviewPath, JSON.stringify(review));
+  const source = fixture.state.agents['agent-original'], identity = 'b'.repeat(64);
+  const syncBranch = `codex/release-sync-${identity}`, syncPath = join(scratch, 'synchronization');
+  source.metadata.releasePublication = { status: 'verified', synchronizationHandoffVersion: 2, identity,
+    candidateBranch: branch, candidateHead: head, promotionPrNumber: 12, promotionMerge: 'a'.repeat(40) };
+  source.metadata.releaseSynchronizationCheckout = { version: 1, identity, branch: syncBranch,
+    startedAt: source.startedAt, reservedAt: source.startedAt };
+  if (state === 'detached') {
+    await git(['worktree', 'add', '-b', syncBranch, syncPath, head]);
+    await git(['switch', '--detach'], syncPath);
+    await git(['branch', '-D', syncBranch]);
+    await writeFile(join(syncPath, 'uncommitted.txt'), 'Keep this unseeded work.');
+  }
+  fixture.state.agents['agent-successor'].startedAt = new Date().toISOString();
+  expect(await recover()).toMatchObject({ recovered: false, reason: 'candidate-synchronization-checkout-unverified' });
+  expect(fixture.state.agents['agent-successor'].metadata.checkoutSeeds).toBeUndefined();
+  expect(await readFile(join(checkout, 'retained.txt'), 'utf8')).toContain('survives');
+  if (state === 'detached') expect(await readFile(join(syncPath, 'uncommitted.txt'), 'utf8')).toBe('Keep this unseeded work.');
 });
 
 for (const [name, reason, change] of [

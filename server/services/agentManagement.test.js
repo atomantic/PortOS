@@ -2369,6 +2369,26 @@ describe('orphan retries resume what the dead run left behind', () => {
     expect(updateTask).toHaveBeenCalledWith('task-1', { status: 'completed' }, 'user', expect.objectContaining({ expectedStatus: 'in_progress', expectedTask: expect.any(Object) }));
   });
 
+  it('does not treat a shared-checkout commit as proof an orphaned release finished', async () => {
+    const task = { id: 'task-1', taskType: 'internal', status: 'in_progress',
+      metadata: { analysisType: 'do-release', orphanRetryCount: 0, totalSpawnCount: 1 } };
+    committedDuringRun.mockResolvedValue(true);
+    resolveTaskResumePatch.mockResolvedValueOnce({ resumedFromAgentId: 'agent-dead' });
+    try {
+      await handleProvenOrphan(task.id, 'agent-dead', vi.fn().mockResolvedValue(task), {
+        agentMetadata: { taskAnalysisType: 'do-release', workspacePath: '/example-app',
+          releasePublication: { synchronizationHandoffVersion: 2 } },
+        agentStartedAt: '2026-08-09T00:00:00.000Z',
+      });
+      expect(committedDuringRun).not.toHaveBeenCalled();
+      expect(updateTask).toHaveBeenCalledWith(task.id, expect.objectContaining({ status: 'pending',
+        metadata: expect.objectContaining({ resumedFromAgentId: 'agent-dead' }) }), 'internal', expect.any(Object));
+      expect(addTask).not.toHaveBeenCalled();
+    } finally {
+      committedDuringRun.mockResolvedValue(false);
+    }
+  });
+
   // `Date.parse(1754696324000)` stringifies its argument and returns NaN, which
   // would silently skip the probe for any caller holding an epoch-ms start time.
   it('accepts a raw epoch-ms start time, not just the persisted ISO string', async () => {

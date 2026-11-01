@@ -616,7 +616,8 @@ export function resumeAgentCompletionRetirement(agentId, seedContext) {
 }
 
 async function verifyReleasedSynchronization(agent) {
-  if (agent?.status === 'completed' && agent.metadata?.taskAnalysisType === 'release-sync') {
+  if (agent?.status === 'completed' && (agent.metadata?.taskAnalysisType === 'release-sync'
+    || (agent.metadata?.taskAnalysisType === 'do-release' && agent.metadata?.releasePublication?.synchronizationHandoffVersion === 2))) {
     const { verifyReleaseSynchronizationTask } = await import('./releaseSynchronization.js');
     await verifyReleaseSynchronizationTask(agent.taskId);
   }

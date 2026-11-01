@@ -9,7 +9,8 @@ import { claimCheckoutOwner } from '../lib/claimContinuation.js';
 import { hasProcessCwdInside } from '../lib/processCwdProbe.js';
 import { retirementCheckoutIdentityFromPointer } from '../lib/retirementCheckoutObservation.js';
 import { matchingRetirementReceipts } from '../lib/reconcileRetirementEvidence.js';
-import { RELEASE_SYNC_FROZEN_METADATA_KEYS, RELEASE_SYNC_OBLIGATIONS, publisherCandidateTarget } from '../lib/releaseSynchronization.js';
+import { compareSemver } from '../lib/versionUtils.js';
+import { RELEASE_SYNC_FROZEN_METADATA_KEYS, RELEASE_SYNC_OBLIGATIONS, isInlineReleaseSynchronization, publisherCandidateTarget } from '../lib/releaseSynchronization.js';
 import { completedCheckoutReceiptValid } from './completedCheckoutEvidence.js';
 import { execGh } from './github.js';
 import { resolveForgeExecOptions } from './forgeExecOptions.js';
@@ -28,6 +29,42 @@ const digest = value => createHash('sha256').update(JSON.stringify(value)).diges
 const hold = reason => { throw Object.assign(new Error(reason), { code: reason }); };
 const wait = reason => { throw Object.assign(new Error(reason), { code: reason, pending: true }); };
 const ownersOf = (entry, agents) => agents.filter(agent => agent.taskId === entry.task.id);
+const sameCheckout = (left, right) => left && right && ['repoPath', 'path', 'branch', 'head', 'checkoutIdentity']
+  .every(key => left[key] === right[key]);
+const versionPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
+const validVersion = value => typeof value === 'string' && versionPattern.test(value)
+  && value.split(/[.+-]/, 3).every(part => Number.isSafeInteger(Number(part)));
+
+async function developmentVersionEvidence(ctx, publication) {
+  if (!validVersion(publication.version) || !sha(publication.tagTree)) hold('published-version-unverified');
+  const readJson = async (path, reason) => {
+    const file = await ctx.api(`contents/${path}?ref=${ctx.target.developmentHead}`).catch(() => hold(reason));
+    if (file?.encoding !== 'base64' || !sha(file.sha) || typeof file.content !== 'string') hold(reason);
+    try { return { value: JSON.parse(Buffer.from(file.content, 'base64').toString('utf8')), blob: file.sha }; }
+    catch { hold(reason); }
+  };
+  const manifest = await readJson('package.json', 'development-version-unreadable');
+  const current = manifest.value?.version;
+  if (!validVersion(current)) hold('development-version-unreadable');
+  if (compareSemver(current, publication.version) < 0) hold('development-version-behind-publication');
+  // The publication's immutable tree decides whether this project owns an
+  // npm lockfile. A missing or inconsistent delivered lock cannot be hidden
+  // by a correct package.json; a project without one keeps its old contract.
+  const tree = await ctx.api(`git/trees/${publication.tagTree}`).catch(() => hold('published-version-tree-unreadable'));
+  if (!Array.isArray(tree?.tree) || tree.truncated !== false) hold('published-version-tree-unreadable');
+  const locks = tree.tree.filter(row => row.path === 'package-lock.json');
+  if (locks.length > 1 || (locks.length === 1 && (locks[0].type !== 'blob' || !sha(locks[0].sha)))) hold('published-version-tree-unreadable');
+  let lockBlob = null;
+  if (locks.length) {
+    const lock = await readJson('package-lock.json', 'development-lockfile-unreadable');
+    if (!lock.value || typeof lock.value !== 'object' || Array.isArray(lock.value) || lock.value.version !== current
+      || (Object.hasOwn(lock.value, 'packages') && lock.value.packages?.['']?.version !== current)) {
+      hold('development-lockfile-version-conflict');
+    }
+    lockBlob = lock.blob;
+  }
+  return { publishedVersion: publication.version, developmentVersion: current, manifestBlob: manifest.blob, lockBlob };
+}
 
 async function readSynchronizationForge(origin, forgeExec, path, paginate = false) {
   const args = ['api', '--hostname', origin.host, ...(paginate ? ['--paginate', '--slurp'] : []),
@@ -81,7 +118,11 @@ async function context(entry, agents) {
   if (ownersOf(entry, agents).filter(agent => agent.status !== 'completed').length > 1) hold('continuation-conflicting-live-owners');
   const task = await getTaskById(entry.task.id);
   const expected = { ...entry.task.metadata, idempotencyKey: digest([entry.identity, entry.owner]) };
-  if (!task || task.taskType !== 'internal' || RELEASE_SYNC_FROZEN_METADATA_KEYS.some(key => !isDeepStrictEqual(task.metadata?.[key], expected[key]))) hold('continuation-owner-conflict');
+  if (isInlineReleaseSynchronization(entry)) {
+    if (!task || task.id !== entry.owner.taskId || (task.taskType || 'internal') !== entry.task.taskType
+      || task.metadata?.app !== entry.task.metadata.app) hold('release-owner-conflict');
+  } else if (!task || task.taskType !== 'internal'
+    || RELEASE_SYNC_FROZEN_METADATA_KEYS.some(key => !isDeepStrictEqual(task.metadata?.[key], expected[key]))) hold('continuation-owner-conflict');
   const app = await getAppById(task.metadata.app);
   const cwd = app?.repoPath;
   if (!cwd) hold('synchronization-repository-unavailable');
@@ -103,8 +144,9 @@ async function context(entry, agents) {
   const live = await readAgentsStateForSafetyCheck();
   if (!live.trusted || !live.agents || Array.isArray(live.agents)) hold('checkout-ownership-unreadable');
   const checkouts = await checkoutTargets(entry, agents, Object.values(live.agents));
-  if (!checkouts.some(row => isDeepStrictEqual(row, candidateTarget))) hold('publisher-candidate-head-unverified');
-  const syncCheckouts = checkouts.filter(row => ownersOf(entry, agents).some(agent => agent.id === row.agentId));
+  if (!checkouts.some(row => isInlineReleaseSynchronization(entry) ? sameCheckout(row, candidateTarget) : isDeepStrictEqual(row, candidateTarget))) hold('publisher-candidate-head-unverified');
+  const syncCheckouts = checkouts.filter(row => ownersOf(entry, agents).some(agent => agent.id === row.agentId)
+    && (!isInlineReleaseSynchronization(entry) || !sameCheckout(row, candidateTarget)));
   if (!syncCheckouts.length) hold('continuation-checkout-unverified');
   const saved = entry.obligations.synchronizationPr.evidence;
   let number = saved?.number;
@@ -152,6 +194,14 @@ export async function inspectReleaseSynchronization(entry, agents) {
   if (!sameTarget) for (const key of RELEASE_SYNC_OBLIGATIONS) {
     if (key !== 'localReview' || !sameDelivery) obligations[key] = { status: 'pending' };
   }
+  // These obligations also inspect the current development tree. A successful
+  // read at an earlier development head cannot survive a transport failure at
+  // a newer one, even when the synchronization PR head is unchanged.
+  if (sameTarget && entry.obligations.synchronizationPr.evidence?.developmentHead !== target.developmentHead) {
+    for (const key of ['synchronizationPr', 'candidateFixes', 'releaseAncestry', 'qualitySnapshot']) {
+      obligations[key] = { status: 'pending' };
+    }
+  }
   const binding = { prUrl: target.prUrl, headSha: target.headSha };
   const check = async (name, inspect) => {
     try {
@@ -170,7 +220,8 @@ export async function inspectReleaseSynchronization(entry, agents) {
     if (!time(pr.merged_at) || !sha(pr.merge_commit_sha)) hold('synchronization-merge-unreadable');
     if (!await ctx.ancestor(pr.merge_commit_sha, target.developmentHead)) hold('synchronization-merge-not-on-development');
     if (!await ctx.ancestor(target.headSha, target.developmentHead)) hold('synchronization-head-not-on-development');
-    return target;
+    const version = isInlineReleaseSynchronization(entry) ? await developmentVersionEvidence(ctx, entry.publication) : {};
+    return { ...target, ...version };
   });
   await check('candidateFixes', async () => {
     if (!await ctx.ancestor(entry.publication.candidateHead, target.headSha)) hold('candidate-fixes-not-preserved');
@@ -218,7 +269,8 @@ export async function inspectReleaseSynchronization(entry, agents) {
   obligations.retirement.evidence = { ...obligations.retirement.evidence, ...binding, checkouts,
     ...(entry.obligations.retirement.evidence?.publisherReview && { publisherReview: entry.obligations.retirement.evidence.publisherReview }) };
   await check('processSettlement', async () => {
-    const owners = [...ownersOf(entry, agents), ...agents.filter(agent => agent.id === entry.owner.agentId && agent.startedAt === entry.owner.startedAt)];
+    const owners = [...new Map([...ownersOf(entry, agents), ...agents.filter(agent => agent.id === entry.owner.agentId
+      && agent.startedAt === entry.owner.startedAt)].map(agent => [agent.id, agent])).values()];
     if (!owners.length || owners.some(agent => agent.status !== 'completed')) wait('release-owner-still-active');
     if (owners.some(agent => !time(agent.completedAt) || Date.parse(agent.completedAt) < Date.parse(agent.startedAt)
       || Date.parse(agent.completedAt) > Date.now())) hold('release-owner-completion-unverified');
@@ -259,7 +311,7 @@ export async function inspectReleaseSynchronization(entry, agents) {
     const publisherCheckout = publisherCandidateTarget(entry);
     const review = obligations.retirement.evidence?.publisherReview;
     const publisherPrUrl = `https://github.com/${entry.publication.repository}/pull/${entry.publication.promotionPrNumber}`;
-    if (!checkouts.some(row => isDeepStrictEqual(row, publisherCheckout))) hold('publisher-candidate-head-unverified');
+    if (!checkouts.some(row => isInlineReleaseSynchronization(entry) ? sameCheckout(row, publisherCheckout) : isDeepStrictEqual(row, publisherCheckout))) hold('publisher-candidate-head-unverified');
     if (!review || review.branch !== publisherCheckout.branch || review.path !== publisherCheckout.path
       || review.head !== publisherCheckout.head || review.checkoutIdentity !== publisherCheckout.checkoutIdentity
       || review.prUrl !== publisherPrUrl || !Array.isArray(review.models)

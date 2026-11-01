@@ -12,7 +12,7 @@ import { readReleaseSynchronizationOutbox, saveReleaseSynchronization } from './
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { RELEASE_SYNC_POLICY_KEYS, RELEASE_SYNC_FROZEN_METADATA_KEYS, RELEASE_SYNC_OBLIGATIONS,
-  effectiveReleaseSynchronization, publisherCandidateSeed, publisherCandidateTarget,
+  effectiveReleaseSynchronization, isInlineReleaseOwner, isInlineReleaseSynchronization, publisherCandidateSeed, publisherCandidateTarget,
   releaseSynchronizationReset, releaseSynchronizationResetSchema, resetReleasesCheckout } from '../lib/releaseSynchronization.js';
 import { currentTaskTypeName } from '../lib/taskTypeRenames.js';
 import { explicitPrCompletion, resolveAppPrCompletion } from '../lib/prDisposition.js';
@@ -26,7 +26,7 @@ const obligationSchema = z.object({ status: z.enum(['pending', 'blocked', 'verif
   verifiedAt: z.string().datetime().optional(), blocker: z.string().optional(), evidence: z.record(z.string(), z.unknown()).optional() }).strict()
   .refine(value => value.status !== 'verified' || (value.verifiedAt && value.evidence && Object.keys(value.evidence).length > 0));
 const entrySchema = z.object({
-  version: z.literal(1), identity: identitySchema, owner: ownerSchema,
+  version: z.union([z.literal(1), z.literal(2)]), identity: identitySchema, owner: ownerSchema,
   publication: z.object({ identity: identitySchema, status: z.literal('verified') }).passthrough(),
   task: z.object({ id: z.string(), metadata: z.object({ releaseSynchronization: z.object({ identity: identitySchema }).passthrough() }).passthrough() }).passthrough(),
   obligations: z.object(Object.fromEntries(RELEASE_SYNC_OBLIGATIONS.map(key => [key, obligationSchema]))).strict(),
@@ -51,7 +51,9 @@ async function readOutbox() {
   const value = await readReleaseSynchronizationOutbox();
   const parsed = outboxSchema.safeParse(value);
   if (!parsed.success || Object.entries(parsed.data.publications).some(([key, entry]) => key !== entry.identity
-    || entry.publication.identity !== key || entry.task.id !== `task-release-sync-${key}`
+    || entry.publication.identity !== key
+    || entry.task.id !== (isInlineReleaseSynchronization(entry) ? entry.owner.taskId : `task-release-sync-${key}`)
+    || (isInlineReleaseSynchronization(entry) && entry.publication.synchronizationHandoffVersion !== 2)
     || entry.task.metadata.releaseSynchronization.identity !== key
     || (entry.synchronization?.status === 'verified' && RELEASE_SYNC_OBLIGATIONS.some(name => entry.obligations[name].status !== 'verified')))) refuse('Release synchronization outbox is unreadable');
   return parsed.data;
@@ -66,8 +68,10 @@ export async function releaseTaskDispatchDisposition(task) {
   if (!['release-sync', 'do-release'].includes(type)) return null;
   const outbox = await readOutbox();
   if (type === 'do-release') {
-    return Object.values(outbox.publications).some(entry => entry.task.metadata.app === task.metadata?.app
-      && !releaseSynchronizationReset(entry) && effectiveReleaseSynchronization(entry)?.status !== 'verified') ? 'wait-for-synchronization' : null;
+    const pending = Object.values(outbox.publications).filter(entry => entry.task.metadata.app === task.metadata?.app
+      && !releaseSynchronizationReset(entry) && effectiveReleaseSynchronization(entry)?.status !== 'verified');
+    if (pending.some(entry => !isInlineReleaseSynchronization(entry) || entry.owner.taskId !== task.id)) return 'wait-for-synchronization';
+    return pending.length ? 'registered-release-owner' : null;
   }
   const entry = outbox.publications[task.metadata?.releaseSynchronization?.identity];
   if (!entry || task.id !== entry.task.id) return null;
@@ -160,7 +164,7 @@ async function parkRetiredContinuation(entry) {
   if (!task || task.status !== 'pending') return;
   const result = await updateTask(task.id, { status: 'blocked', metadata: {
     blockedReason: 'Release synchronization retired by an operator', blockedCategory: 'release-synchronization-reset',
-  } }, 'internal', { expectedStatus: 'pending', suppressDequeue: true });
+  } }, task.taskType || 'internal', { expectedStatus: 'pending', suppressDequeue: true });
   if (!result || result.error || (result.statusChanged
     ? !['blocked', 'completed'].includes(result.task?.status) : result.status !== 'blocked')) {
     refuse('Retired checkpoint was recorded but its continuation could not be parked');
@@ -174,7 +178,7 @@ async function parkRetiredContinuation(entry) {
 export async function readReleaseSynchronizationRetention() {
   const outbox = await readOutbox();
   return Object.values(outbox.publications).map(entry => ({
-    identity: entry.identity, owner: entry.owner, taskId: entry.task.id,
+    version: entry.version, identity: entry.identity, owner: entry.owner, taskId: entry.task.id,
     verified: effectiveReleaseSynchronization(entry)?.status === 'verified',
   }));
 }
@@ -215,21 +219,24 @@ async function newEntry(agent, publication) {
   // Seeds are physical identities, not authority to adopt a branch by name. The
   // generic completion/retirement owner retains them and captures final heads.
   const checkouts = structuredClone(agent.metadata.checkoutSeeds || []);
-  const id = `task-release-sync-${publication.identity}`;
-  const entry = entrySchema.parse({ version: 1, identity: publication.identity, owner, publication,
+  const inline = publication.synchronizationHandoffVersion === 2;
+  const id = inline ? source.id : `task-release-sync-${publication.identity}`;
+  const sourceType = source.taskType || 'internal';
+  const entry = entrySchema.parse({ version: inline ? 2 : 1, identity: publication.identity, owner, publication,
     checkouts, registeredAt: null, attempts: 0, lastAttemptAt: null, blocker: null, retryAt: null,
     obligations: Object.fromEntries(RELEASE_SYNC_OBLIGATIONS.map(key => [key, { status: 'pending' }])),
-    task: { id, description: `Synchronize verified release ${publication.tag} (${publication.repository})`,
+    task: { id, ...(inline && { taskType: sourceType }), description: `Synchronize verified release ${publication.tag} (${publication.repository})`,
       status: 'pending', priority: source.priority || 'MEDIUM', autoApproved: true, approvalRequired: false,
-      metadata: { ...policy, ...reviews, analysisType: 'release-sync', targetInstanceId: instanceId,
+      metadata: { ...policy, ...reviews, analysisType: inline ? 'do-release' : 'release-sync', targetInstanceId: instanceId,
         useWorktree: true, openPR: true, worktreeChangesExpected: true,
-        releaseSynchronization: { version: 1, identity: publication.identity,
+        releaseSynchronization: { version: inline ? 2 : 1, identity: publication.identity,
           publisherAgentId: owner.agentId, publisherTaskId: owner.taskId, publisherStartedAt: owner.startedAt },
         prompt: synchronizationPrompt(publication) } },
   });
   // Task scalar metadata uses the legacy string representation. Freeze the
   // stored form so readback and retry compare the actual persistence contract.
-  entry.task = storedForm(entry.task, 'internal');
+  entry.task = storedForm(entry.task, inline ? sourceType : 'internal');
+  if (inline) entry.task = { ...entry.task, id: source.id, taskType: sourceType };
   return entry;
 }
 
@@ -243,6 +250,19 @@ async function registerEntry(entry) {
   entry.attempts++;
   entry.lastAttemptAt = new Date().toISOString();
   await saveReleaseSynchronization(entry);
+  if (isInlineReleaseSynchronization(entry)) {
+    const source = await getTaskById(entry.owner.taskId);
+    if (!source || source.id !== entry.task.id || (source.taskType || 'internal') !== entry.task.taskType
+      || source.metadata?.app !== entry.task.metadata.app) refuse('Release synchronization task has a conflicting owner');
+    entry.registeredAt ||= new Date().toISOString();
+    entry.blocker = null;
+    entry.retryAt = null;
+    await saveReleaseSynchronization(entry);
+    const policy = Object.fromEntries(RELEASE_SYNC_POLICY_KEYS.filter(key => entry.task.metadata[key] !== undefined)
+      .map(key => [key, entry.task.metadata[key]]));
+    return { taskId: source.id, registeredAt: entry.registeredAt, policy,
+      synchronizationVerified: effectiveReleaseSynchronization(entry)?.status === 'verified' };
+  }
   // A completed historical task is still the owner. Never regenerate it, even
   // when it has left the task working set or execution reported success.
   const existing = await getTaskById(entry.task.id);
@@ -273,14 +293,15 @@ async function retainFailure(entry, error) {
 export function ensureReleaseSynchronization(agent) {
   return queue(async () => {
     const publication = agent?.metadata?.releasePublication;
-    if (publication?.status !== 'verified' || publication.synchronizationHandoffVersion !== 1) refuse('Release synchronization requires an enrolled verified publication');
+    if (publication?.status !== 'verified' || ![1, 2].includes(publication.synchronizationHandoffVersion)) refuse('Release synchronization requires an enrolled verified publication');
     identitySchema.parse(publication.identity);
     const outbox = await readOutbox();
     let entry = outbox.publications[publication.identity];
     if (entry) {
       const owner = { agentId: agent.id, taskId: agent.taskId, startedAt: agent.startedAt,
         workspace: agent.metadata.sourceWorkspace || agent.metadata.workspacePath };
-      if (!isDeepStrictEqual(entry.owner, owner) || !isDeepStrictEqual(entry.publication, publication)) refuse('Publication synchronization is owned by another coordinator');
+      if (!(isInlineReleaseSynchronization(entry) ? isInlineReleaseOwner(entry, agent) : isDeepStrictEqual(entry.owner, owner))
+        || !isDeepStrictEqual(entry.publication, publication)) refuse('Publication synchronization is owned by another coordinator');
       if (releaseSynchronizationReset(entry)) return { taskId: entry.task.id, registeredAt: entry.registeredAt, synchronizationVerified: false, retired: true };
     } else {
       entry = await newEntry(agent, publication);
@@ -303,7 +324,7 @@ export async function recoverReleaseSynchronizationHandoffs(agents) {
   const initial = await readOutbox();
   const attempted = new Set();
   for (const agent of agents.filter(value => value.metadata?.releasePublication?.status === 'verified'
-    && value.metadata.releasePublication.synchronizationHandoffVersion === 1)) {
+    && [1, 2].includes(value.metadata.releasePublication.synchronizationHandoffVersion))) {
     const identity = agent.metadata.releasePublication.identity;
     const previous = initial.publications[identity];
     if (releaseSynchronizationReset(previous) || previous?.registeredAt || (previous?.retryAt && Date.parse(previous.retryAt) > Date.now()) || attempted.has(identity)) continue;
@@ -329,7 +350,21 @@ export async function recoverReleaseSynchronizationHandoffs(agents) {
       .sort((left, right) => (left.synchronization?.checkedAt || '').localeCompare(right.synchronization?.checkedAt || ''))
       .slice(0, 3).map(entry => entry.task.id);
   });
-  for (const taskId of due) await verifyReleaseSynchronizationTask(taskId, { agents, respectRetryAt: true });
+  for (const taskId of due) {
+    await verifyReleaseSynchronizationTask(taskId, { agents, respectRetryAt: true });
+    // Retirement calls back into this service to preserve the exact review.
+    // Run it outside the outbox queue and let its normal fences recheck every
+    // owner and physical generation at the destructive boundary.
+    const entry = Object.values((await readOutbox()).publications).find(value => value.task.id === taskId);
+    if (isInlineReleaseSynchronization(entry)) {
+      const { settleInlineReleaseCheckouts } = await import('./releaseSynchronizationCleanup.js');
+      const result = await settleInlineReleaseCheckouts(entry).catch(error => {
+        console.log(`🚫 Release checkout retirement retained for ${taskId}: ${error.code || 'retirement-unavailable'}`);
+        return null;
+      });
+      if (result?.retired?.length) await verifyReleaseSynchronizationTask(taskId, { agents });
+    }
+  }
 }
 
 async function verifyEntry(entry, agents) {
@@ -386,6 +421,28 @@ export function verifyReleaseSynchronizationTask(taskId, { agents = null, respec
     const { readBranchCompletionPolicies } = await import('./branchCompletionPolicy.js');
     return verifyEntry(entry, agents || await readBranchCompletionPolicies({ repairIndex: false }));
   });
+}
+
+/** A release may finish execution only after delivery and quality are observed.
+ * Process settlement and checkout retirement necessarily follow process exit.
+ */
+export async function verifyInlineReleaseDelivery(agent) {
+  const publication = agent?.metadata?.releasePublication;
+  if (publication?.synchronizationHandoffVersion !== 2) return null;
+  const inspection = await verifyReleaseSynchronizationTask(agent.taskId).catch(() => null);
+  const entry = (await readOutbox().catch(() => null))?.publications?.[publication.identity];
+  if (!entry || !entry.registeredAt || !isInlineReleaseOwner(entry, agent)) {
+    return { verified: false, reason: 'release synchronization ownership is unavailable' };
+  }
+  // A failed context read can leave earlier per-obligation receipts intact.
+  // They do not prove the current PR still has the reviewed head.
+  if (!inspection || (inspection.blocker && !/^(?:processSettlement|retirement):/.test(inspection.blocker))) {
+    return { verified: false, reason: inspection?.blocker || 'release synchronization evidence is unavailable' };
+  }
+  const required = RELEASE_SYNC_OBLIGATIONS.filter(name => !['processSettlement', 'retirement'].includes(name));
+  const missing = required.find(name => entry.obligations[name]?.status !== 'verified');
+  return missing ? { verified: false, reason: `${missing}: ${entry.obligations[missing]?.blocker || 'not verified'}` }
+    : { verified: true };
 }
 
 const samePath = (a, b) => typeof a === 'string' && typeof b === 'string'
@@ -452,7 +509,9 @@ export async function validateLockedPublisherRetirement(release) {
   const entry = entries[0], target = publisherCandidateTarget(entry);
   const evidence = entry.obligations.retirement.evidence;
   if (entry.obligations.localReview.status !== 'verified' || entry.obligations.processSettlement.status !== 'verified'
-    || !evidence?.checkouts?.some(row => isDeepStrictEqual(row, target))) return false;
+    || !evidence?.checkouts?.some(row => isInlineReleaseSynchronization(entry)
+      ? ['repoPath', 'path', 'branch', 'head', 'checkoutIdentity'].every(key => row[key] === target[key])
+      : isDeepStrictEqual(row, target))) return false;
   const review = evidence.publisherReview;
   if (!review || review.path !== target.path || review.branch !== target.branch
     || review.head !== target.head || review.checkoutIdentity !== target.checkoutIdentity

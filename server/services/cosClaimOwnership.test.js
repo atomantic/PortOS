@@ -2,7 +2,7 @@ import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 // Git/filesystem are synthetic in this suite; real durable admission has its own boundary tests.
 vi.mock('../lib/checkoutRetirementAdmission.js', () => ({ withCheckoutPublication: (_repo, work) => work() }));
 
-const store = { state: null, stateGate: null, readGate: null, saveGate: null, unreadable: false, stale: false };
+const store = { state: null, stateGate: null, readGate: null, saveGate: null, unreadable: false, stale: false, outbox: null };
 const deferred = () => {
   let resolve;
   let reject;
@@ -19,8 +19,10 @@ vi.mock('./cosState.js', () => ({
   saveState: vi.fn(async next => { if (store.saveGate) await store.saveGate; store.state = structuredClone(next); }),
 }));
 vi.mock('./cosEvents.js', () => ({ cosEvents: { emit: vi.fn() } }));
+vi.mock('./releaseSynchronizationStore.js', () => ({ readReleaseSynchronizationOutbox: async () => store.outbox }));
 
-const { updateClaimOwnership, updateReleaseCandidateOwnership, checkReconcileOwnership, CLAIM_OWNERSHIP_QUEUE_TIMEOUT_MS } = await import('./cosClaimOwnership.js');
+const { updateClaimOwnership, updateReleaseCandidateOwnership, updateReleaseSynchronizationOwnership,
+  checkReconcileOwnership, CLAIM_OWNERSHIP_QUEUE_TIMEOUT_MS } = await import('./cosClaimOwnership.js');
 // Hold the same leaf fence cleanup uses while exercising binding through its public service.
 const { withClaimOwnershipLock, reserveCheckoutRetirementFence } = await import('./cosClaimOwnershipState.js');
 const { claimContinuationAdmission, claimBranchAdmission } = await import('../lib/claimContinuation.js');
@@ -34,6 +36,7 @@ const CHILD = '/repos/app-x/data/cos/worktrees/claim-issue-101';
 beforeEach(() => {
   store.stateGate = store.readGate = store.saveGate = null;
   store.unreadable = store.stale = false;
+  store.outbox = null;
   vi.clearAllMocks();
   store.state = {
     agents: {
@@ -43,6 +46,44 @@ beforeEach(() => {
       },
     },
   };
+});
+
+it('binds an inline synchronization checkout to the same release owner and captures its generation', async () => {
+  const { mkdtemp, rm } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { materializeGitRepo } = await import('../lib/gitTestRepo.js');
+  const { execGit } = await import('../lib/execGit.js');
+  const { captureCompletedCheckouts } = await import('./completedCheckoutEvidence.js');
+  const { claimCheckoutOwnerReason } = await import('../lib/claimContinuation.js');
+  const scratch = await mkdtemp(join(tmpdir(), 'portos-inline-sync-'));
+  try {
+    const repo = join(scratch, 'repo'), candidate = join(scratch, 'candidate'), sync = join(scratch, 'sync');
+    await materializeGitRepo(repo);
+    const id = 'agent-epicrun', identity = 'a'.repeat(64), branch = `codex/release-sync-${identity}`;
+    const agent = { id, taskId: 'release-task', status: 'running', startedAt: new Date().toISOString(),
+      metadata: { taskAnalysisType: 'do-release', isWorktree: false, workspacePath: repo } };
+    store.state.agents[id] = agent;
+    expect(await updateReleaseCandidateOwnership(id, 'reserve')).toEqual({ reserved: true, branch: `codex/release-${id}` });
+    await execGit(['worktree', 'add', '-b', `codex/release-${id}`, candidate, 'main'], repo);
+    expect(await updateReleaseCandidateOwnership(id, 'capture')).toEqual({ captured: true, branch: `codex/release-${id}` });
+    store.state.agents[id].metadata.releasePublication = { status: 'verified', synchronizationHandoffVersion: 2,
+      identity, candidateBranch: `codex/release-${id}` };
+    store.outbox = { publications: { [identity]: { version: 2, registeredAt: new Date().toISOString(),
+      owner: { agentId: id, taskId: agent.taskId, startedAt: agent.startedAt } } } };
+    expect(await updateReleaseSynchronizationOwnership(id, 'sync-capture'))
+      .toEqual({ captured: false, reason: 'synchronization-reservation-missing' });
+    expect(await updateReleaseSynchronizationOwnership(id, 'sync-reserve')).toEqual({ reserved: true, branch });
+    expect(claimCheckoutOwnerReason({ branchName: branch, sourceWorkspace: repo, agents: Object.values(store.state.agents) }))
+      .toBe('claim-owner-active');
+    expect(await updateReleaseSynchronizationOwnership(id, 'sync-capture')).toEqual({ captured: false, reason: 'checkout-seed-unavailable' });
+    await execGit(['worktree', 'add', '-b', branch, sync, 'main'], repo);
+    expect(await updateReleaseSynchronizationOwnership(id, 'sync-capture')).toEqual({ captured: true, branch });
+    const seeds = store.state.agents[id].metadata.checkoutSeeds;
+    expect(seeds.map(seed => seed.branch)).toEqual([`codex/release-${id}`, branch]);
+    expect((await captureCompletedCheckouts(store.state.agents[id], { success: true, strict: true })).map(row => row.branch))
+      .toEqual([`codex/release-${id}`, branch]);
+  } finally { await rm(scratch, { recursive: true, force: true, maxRetries: 3 }); }
 });
 
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });

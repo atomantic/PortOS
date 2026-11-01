@@ -35,7 +35,7 @@ const CHECKOUT_RECOVERY_GUIDANCE = 'Follow the app checkout recovery task above 
 
 const EXTERNAL_REPOSITORY_GUIDANCE = 'Deliver only the external repository work explicitly authorized by the task, in a scratch clone outside the PortOS checkout. You may edit code, commit, push and open a PR there only as the task directs; merge only when the task explicitly authorizes it and its required checks pass. Never edit, commit, push or open a PR from the PortOS checkout. PortOS will not publish or merge this work for you. A verified no-action result (such as zero open alerts) needs no commit or PR. The absence of an existing bot PR does not block creating an authorized fix PR. Report checked evidence, PR links and any unresolved work or blocker; do not claim completion while required work remains.';
 
-const RELEASE_FLOW_GUIDANCE = 'Follow the bundled release workflow through its final verification and report. It owns release delivery; do not stop at a prepared commit or hand publication back to PortOS. If it cannot complete, report INCOMPLETE and the first unverified checkpoint instead of claiming a successful release.';
+const RELEASE_FLOW_GUIDANCE = 'Follow the bundled release workflow through its final verification and report. It owns release delivery; do not stop at a prepared commit or hand publication back to PortOS. If it cannot complete, report INCOMPLETE and the first unverified checkpoint instead of claiming a successful release. When no release is needed, retain the captured candidate checkout through server verification; it needs separately verified cleanup.';
 
 /**
  * Why a run told not to touch the repository may still write ONE file — the
@@ -502,11 +502,16 @@ export function buildReconcileFlowCompletionSection({ sentinelPath } = {}) {
 }
 
 /** The release procedure is the deliverable; the sentinel only records its verified outcome. */
-export function buildReleaseFlowCompletionSection({ isTui = false, sentinelPath = null } = {}) {
+export function buildReleaseFlowCompletionSection({ isTui = false, isCli = false, sentinelPath = null } = {}) {
   const lines = ['## Release Workflow Handoff', RELEASE_FLOW_GUIDANCE];
   if (isTui && sentinelPath) {
     lines.push('', 'After the workflow reaches its documented final outcome, write that outcome to the completion sentinel and stop:', '',
       ...buildSentinelWriteSteps(1, sentinelPath, '   ## Release outcome\n   <verified release URL, no-release-needed result, or INCOMPLETE with its first unverified checkpoint>'));
+  } else if (isCli && sentinelPath) {
+    lines.push('', 'After the workflow reaches its final outcome, write a structured completion envelope to this run\'s sentinel and exit. Use `no-action-needed` only when the release check verified no release is needed; use `incomplete` or `blocked` for unfinished work.',
+      SENTINEL_WRITE_PERMISSION_NOTE, '', '```bash', `cat > "${sentinelPath}" <<'EOF'`,
+      '{"summary":"<release outcome and evidence>","taskOutcome":{"status":"<completed|no-action-needed|blocked|incomplete>","reason":"<specific evidence or blocker>"}}',
+      'EOF', '```');
   }
   return lines.join('\n');
 }

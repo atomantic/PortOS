@@ -35,6 +35,7 @@ vi.mock('./cosTaskStore.js', () => ({
 vi.mock('./cosState.js', () => ({
   AGENTS_DIR: '/unused-synthetic-agents',
   loadState: async () => fixture.state,
+  readAgentsStateForSafetyCheck: async () => ({ trusted: true, agents: fixture.state.agents }),
   withStateLock: fn => fixture.queue(fn),
   saveState: async state => {
     if (fixture.saveError) throw new Error('synthetic persistence failure');
@@ -109,6 +110,27 @@ beforeEach(async () => {
     'git/ref/tags/v1.2.3': { ref: 'refs/tags/v1.2.3', object: { type: 'tag', sha: annotated } },
     [`git/tags/${annotated}`]: { object: { type: 'commit', sha: merge } },
   };
+});
+
+test('registers inline synchronization on the publishing task without dispatching another task', async () => {
+  const result = await verifyAgentReleasePublication('publisher', { ...input, synchronizationMode: 'inline' });
+  expect(result).toMatchObject({ synchronizationHandoffVersion: 2,
+    synchronizationPolicy: { app: 'example-app', prCompletion: 'review-then-merge', reviewers: ['codex'] } });
+  expect(fixture.tasks.size).toBe(0);
+  const outbox = JSON.parse(await readFile(join(PATHS.cos, 'release-synchronization.json'), 'utf8'));
+  expect(outbox.publications[result.identity]).toMatchObject({ version: 2, task: { id: 'release-task' },
+    owner: { agentId: 'publisher', taskId: 'release-task' } });
+  expect(await verifyAgentReleasePublication('publisher', { ...input, synchronizationMode: 'inline' })).toEqual(result);
+});
+
+test('does not publish a successful terminal agent record when inline delivery evidence is unavailable', async () => {
+  await verifyAgentReleasePublication('publisher', { ...input, synchronizationMode: 'inline' });
+  await expect(completeAgent('publisher', { success: true })).rejects.toMatchObject({ code: 'RELEASE_SYNC_DELIVERY_UNVERIFIED' });
+  await expect(updateAgent('publisher', { status: 'completed', result: { success: true } }))
+    .rejects.toMatchObject({ code: 'RELEASE_SYNC_DELIVERY_UNVERIFIED' });
+  expect(fixture.state.agents.publisher.status).toBe('running');
+  expect(fixture.state.agents.publisher.result).toBeUndefined();
+  expect(fixture.tasks.size).toBe(0);
 });
 
 test('publishes a durable live milestone once, emits it, and retains it across restart and later execution failure', async () => {

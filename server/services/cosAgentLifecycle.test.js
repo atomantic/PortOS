@@ -30,6 +30,8 @@ vi.mock('./cosState.js', () => ({
 vi.mock('./branchCompletionPolicy.js', () => ({ readBranchCompletionPolicies: vi.fn(async () => Object.values(mockCosState.state?.agents || {})) }));
 const recoveryTasks = vi.hoisted(() => new Map());
 const releaseHandoff = vi.hoisted(() => ({ ensure: vi.fn(async () => ({ taskId: 'task-release-sync-example' })) }));
+const releaseDelivery = vi.hoisted(() => vi.fn(async () => ({ verified: false, reason: 'missing publication receipt' })));
+vi.mock('./releaseDeliveryGate.js', () => ({ verifyReleaseDelivery: releaseDelivery }));
 vi.mock('./releaseSynchronization.js', () => ({ ensureReleaseSynchronization: releaseHandoff.ensure,
   readReleaseSynchronizationRetention: vi.fn(async () => []) }));
 vi.mock('./instanceIdentity.js', () => ({ getInstanceId: vi.fn(async () => 'fixture-local'), UNKNOWN_INSTANCE_ID: 'unknown' }));
@@ -103,7 +105,7 @@ vi.mock('../lib/paths.js', async (importOriginal) => makePathsProxy(await import
   dataRoot: () => lazyTempDataRoot('portos-cos-lifecycle-'),
 }));
 
-import { getAgent, getAgentPrompt, createAgentOutputBatcher, completeAgent, recordAuditFindingsReceipt, recordCompletionCleanup, recordInheritedCheckoutRetirement, recordSeededCheckoutRetirement, recordSuccessorCheckoutRetirement, settleAbsentTaskCompletion, retryCompletionCheckoutCapture, recordRepoStateVerification, reserveRepoCleanupRecovery, recordRepoCleanupRecovery, recordCleanupOutcome, recordSwarmCleanupDelivery, updateAgent, registerAgent, cleanupZombieAgents, filterLiveAgentIds, readAgentRecordOrUnreadable, deleteAgent, AGENT_RECORD_UNREADABLE, AGENT_OUTPUT_TAIL_LINES } from './cosAgentLifecycle.js';
+import { getAgent, getAgentPrompt, createAgentOutputBatcher, completeAgent, readProtectedCleanupOwners, recordAuditFindingsReceipt, recordCompletionCleanup, recordInheritedCheckoutRetirement, recordSeededCheckoutRetirement, recordSuccessorCheckoutRetirement, settleAbsentTaskCompletion, retryCompletionCheckoutCapture, recordRepoStateVerification, reserveRepoCleanupRecovery, recordRepoCleanupRecovery, recordCleanupOutcome, recordSwarmCleanupDelivery, updateAgent, registerAgent, cleanupZombieAgents, filterLiveAgentIds, readAgentRecordOrUnreadable, deleteAgent, AGENT_RECORD_UNREADABLE, AGENT_OUTPUT_TAIL_LINES } from './cosAgentLifecycle.js';
 import { saveState, loadState, readAgentsStateForSafetyCheck } from './cosState.js';
 import { recordDomainUsage } from './domainUsage.js';
 import { cosEvents } from './cosEvents.js';
@@ -200,6 +202,31 @@ describe('deferred delivery receipt result', () => {
       await recordRepoStateVerification(agent.id, { status: 'completed' });
       expect(mockCosState.state.agents[agent.id].result).toEqual(agent.result);
     });
+});
+
+it('retains both inline release owners until synchronization is verified', async () => {
+  const identity = 'b'.repeat(64), sha = 'a'.repeat(40);
+  const origin = { agentId: 'agent-origin', taskId: 'task-release', startedAt: '2026-01-01T00:00:00Z' };
+  const successor = { agentId: 'agent-next', taskId: origin.taskId, startedAt: '2026-01-01T01:00:00Z' };
+  const pointer = { dev: '1', ino: '2', birthtimeNs: '3' };
+  const transfer = { version: 1, source: origin, origin, successor, transferredAt: '2026-01-01T01:01:00Z',
+    branch: 'release-branch', path: '/candidate', lineage: { kind: 'seeded', receipt: { repoPath: '/repo',
+      branch: 'release-branch', path: '/candidate', head: sha, incarnation: { pointer, gitdir: { path: '/repo/.git/worktrees/candidate', ...pointer } } } },
+    candidate: { cutoff: sha, pin: sha, releaseBase: sha, previousCommit: sha, previousTag: 'v1.0.0', version: '1.0.1', tree: sha },
+    review: { legacyPublished: true, files: [] }, publication: null,
+    settlement: { active: 0, settledAt: '2026-01-01T00:30:00Z', owner: origin } };
+  const publication = { status: 'verified', synchronizationHandoffVersion: 2, identity };
+  const state = { agents: {
+    [origin.agentId]: { id: origin.agentId, taskId: origin.taskId, startedAt: origin.startedAt, status: 'completed', metadata: { releasePublication: publication } },
+    [successor.agentId]: { id: successor.agentId, taskId: successor.taskId, startedAt: successor.startedAt, status: 'completed',
+      metadata: { releasePublication: publication, releaseCandidateRecovery: { status: 'transferred', transfer } } },
+  } };
+  const { readReleaseSynchronizationRetention } = await import('./releaseSynchronization.js');
+  const entry = { version: 2, identity, owner: origin, taskId: origin.taskId };
+  vi.mocked(readReleaseSynchronizationRetention).mockResolvedValueOnce([{ ...entry, verified: false }]);
+  expect((await readProtectedCleanupOwners({ state })).ownerIds).toEqual(new Set([origin.agentId, successor.agentId]));
+  vi.mocked(readReleaseSynchronizationRetention).mockResolvedValueOnce([{ ...entry, verified: true }]);
+  expect((await readProtectedCleanupOwners({ state })).ownerIds).not.toContain(successor.agentId);
 });
 
 describe('cosAgentLifecycle', () => {
@@ -600,6 +627,16 @@ describe('completeAgent budget-ledger ordering (#1683)', () => {
     expect(completed.status).toBe('completed');
     expect(completed.metadata.releasePublication).toEqual(publication);
     expect(releaseHandoff.ensure).toHaveBeenCalledWith(expect.objectContaining({ id: agent.id, taskId: agent.taskId }));
+  });
+
+  it('refuses direct successful completion of a managed release without verified delivery', async () => {
+    const agent = { id: 'agent-unrecorded-release', taskId: 'task-release', status: 'running', startedAt: '2026-01-01T00:00:00Z',
+      metadata: { taskAnalysisType: 'do-release', isWorktree: false, releaseCandidate: { version: 1, branch: 'codex/release-example' } } };
+    mockCosState.state.agents[agent.id] = agent;
+    await expect(completeAgent(agent.id, { success: true })).rejects.toMatchObject({ code: 'RELEASE_SYNC_DELIVERY_UNVERIFIED' });
+    await expect(updateAgent(agent.id, { status: 'completed', result: { success: true } }))
+      .rejects.toMatchObject({ code: 'RELEASE_SYNC_DELIVERY_UNVERIFIED' });
+    expect(mockCosState.state.agents[agent.id].status).toBe('running');
   });
 
   it('refuses enrollment racing a completion that only observed the legacy receipt', async () => {
