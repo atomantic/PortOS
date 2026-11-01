@@ -11,7 +11,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync } from 'fs';
-import { mkdir, writeFile, readFile, stat } from 'fs/promises';
+import { mkdir, writeFile, readFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { createHash } from 'crypto';
@@ -22,7 +22,6 @@ const sprites = () => join(ROOT, 'data', 'sprites');
 const sha = (buf) => createHash('sha256').update(buf).digest('hex');
 const shaFile = async (abs) => sha(await readFile(abs));
 const readJson = async (abs) => JSON.parse(await readFile(abs, 'utf8'));
-const exists = (abs) => stat(abs).then(() => true, () => false);
 const writeJson = (abs, obj) => writeFile(abs, JSON.stringify(obj));
 
 const RUN_ID = 'walk-south-east-0ae1f1e496bc';

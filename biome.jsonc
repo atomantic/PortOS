@@ -1,0 +1,34 @@
+{
+  "$schema": "./client/node_modules/@biomejs/biome/configuration_schema.json",
+  "root": true,
+  // Same two rules as server/biome.jsonc. This config covers the trees the
+  // server project root cannot reach: scripts/, lib/ (not the slashdo
+  // submodule) and autofixer/. server/ and client/ keep their own root
+  // configs and are not included here.
+  "files": {
+    "includes": [
+      "scripts/**/*.js",
+      "scripts/**/*.mjs",
+      "lib/**/*.js",
+      "lib/**/*.mjs",
+      "autofixer/**/*.js",
+      "autofixer/**/*.mjs",
+      "!lib/slashdo",
+      "!lib/slashdo/**",
+      "!**/node_modules",
+      "!**/node_modules/**"
+    ]
+  },
+  "formatter": { "enabled": false },
+  "assist": { "enabled": false },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "preset": "none",
+      "correctness": {
+        "noUndeclaredVariables": "error",
+        "noUnusedVariables": "error"
+      }
+    }
+  }
+}

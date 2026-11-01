@@ -56,7 +56,7 @@ describe('migration 091 — seed image-prompt stages', () => {
 
     await expect(migration.up({ rootDir })).resolves.not.toThrow();
 
-    for (const { filename, stageKey, body } of FILES) {
+    for (const { filename, body } of FILES) {
       expect(readFileSync(join(stagesDir, filename), 'utf8')).toBe(body);
     }
     const installed = JSON.parse(readFileSync(installedConfigPath, 'utf8'));

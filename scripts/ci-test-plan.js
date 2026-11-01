@@ -7,6 +7,7 @@ import { staticImportClosure, toModuleKey } from '../server/lib/staticImportGrap
 import { escapeRegExp } from '../server/lib/textUtils.js';
 import { moduleImports } from './lib/sourceTokens.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
+import { SERVER_LINT_RE } from './lib/serverLintSurface.js';
 import { writeStepOutput } from './lib/githubOutput.js';
 import { resolveDbTestFiles } from './lib/dbTestFiles.js';
 import { BROWSER_SUITES } from './lib/browserSuites.js';
@@ -22,10 +23,11 @@ const MODULE_SOURCE_RE = /\.[cm]?[jt]sx?$/i;
 // runnerForTest(isTestFile) filter already narrows a broad hit back down, so
 // over-matching here costs nothing.
 const TEST_FILE_GLOBS = ['*.test.*', '*.spec.*'];
-// The server tree is linted whole (fast, ~1s) by the same Biome the client installs,
-// so any server JavaScript or its lint config selects the lint job.
+// The server rule set lints server/ whole, plus scripts/, lib/ (not the slashdo
+// submodule) and autofixer/ (fast, ~1s). SERVER_LINT_RE lives in
+// scripts/lib/serverLintSurface.js so the planner and the runner cannot drift,
+// and so a pregate fixture can stub the lint runner without unloading the planner.
 const CLIENT_LINT_RE = /^client\/src\/.*\.(?:js|jsx)$/i;
-const SERVER_LINT_RE = /^server\/(?!node_modules\/).*\.(?:m?js)$|^server\/biome\.jsonc$/i;
 const isLintSurface = (path) => CLIENT_LINT_RE.test(path) || SERVER_LINT_RE.test(path);
 const EXECUTABLE_RE = /\.(?:cjs|css|html|js|jsx|json|mjs|sql|ts|tsx|ya?ml)$/i;
 const MAX_CHANGED_CODE_FILES = 30;
@@ -233,11 +235,12 @@ const FULL_TRIGGER_RULES = [
   { re: /^server\/vitest\.setup\.js$/, reason: 'server test setup changed', windowsRelevant: true },
   // Client-only: windows-server never loads the client setup file.
   { re: /^client\/src\/test\/setup\.js$/, reason: 'client test setup changed', windowsRelevant: false },
-  // Biome config + its GritQL plugins (the former client/eslint.config.js). The
-  // .grit files carry real enforced rules — notably the crypto.randomUUID ban —
-  // so a change there is as load-bearing as a change to the config itself. It
-  // is still a client-lint surface, and the Windows job runs no lint.
-  { re: /^client\/(?:biome\.jsonc|[^/]+\.grit)$/, reason: 'lint configuration changed', windowsRelevant: false },
+  // Biome config + the client's GritQL plugins (the former client/eslint.config.js).
+  // The .grit files carry real enforced rules — notably the crypto.randomUUID ban —
+  // so a change there is as load-bearing as a change to the config itself. The
+  // repo-root biome.jsonc is the same kind of gate for scripts/, lib/ and
+  // autofixer/. The Windows job runs no lint.
+  { re: /^(?:client\/(?:biome\.jsonc|[^/]+\.grit)|biome\.jsonc)$/, reason: 'lint configuration changed', windowsRelevant: false },
   // Client-only: the Windows job builds no client bundle.
   { re: /^client\/vite\.config\.js$/, reason: 'client build configuration changed', windowsRelevant: false },
   { re: /^server\/index\.js$/, reason: 'server composition root changed', windowsRelevant: true },

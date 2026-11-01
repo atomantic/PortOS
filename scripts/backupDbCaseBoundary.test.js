@@ -31,7 +31,7 @@ it('keeps a timed-out case between restores from overlapping the next case', asy
     const fixture = join(host, 'fixture');
     const resultsPath = join(fixture, 'results.json');
     const fixtureRun = createVitestTempFixture(host, 'server', '');
-    const { args, options } = fixtureRun;
+    const { options } = fixtureRun;
     writeFileSync(join(fixture, 'boundary.test.js'), `
       import { afterAll, beforeEach, describe, it as vitestIt } from 'vitest';
       import { writeFileSync } from 'node:fs';

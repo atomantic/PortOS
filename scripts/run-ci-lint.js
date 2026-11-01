@@ -5,6 +5,9 @@ import { existsSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
+import { SERVER_LINT_RE } from './lib/serverLintSurface.js';
+
+export { SERVER_LINT_RE };
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -25,13 +28,17 @@ export function selectClientFiles(repoFiles) {
     .map((path) => path.replace(/^client\//, ''));
 }
 
-/** True when a changed-file list touches server code or its Biome config. */
+/** True when a changed-file list touches a tree the server rule set lints, or its config. */
 export function touchesServer(repoFiles) {
-  return repoFiles.some((path) => /^server\/(?!node_modules\/).*\.(?:m?js)$|^server\/biome\.jsonc$/i.test(path));
+  return repoFiles.some((path) => SERVER_LINT_RE.test(path));
 }
 
 // Both trees reject warnings, including diagnostics whose severity comes from tool defaults.
 export const SERVER_LINT_ARGS = ['lint', '--error-on-warnings', '--max-diagnostics=20', '.'];
+// Repo root. Pass the three trees explicitly: `biome lint .` from the repo root
+// errors on the nested server/ and client/ configs, which are their own roots.
+// biome.jsonc's includes still drop lib/slashdo and node_modules.
+export const SHARED_LINT_ARGS = ['lint', '--error-on-warnings', '--max-diagnostics=20', 'scripts', 'lib', 'autofixer'];
 
 /** Build the Biome argv for a lint run. Pure, so the CI matrix is testable. */
 export function buildLintArgs({ mode, clientFiles = [] }) {
@@ -67,7 +74,7 @@ function main() {
   const lintClient = mode === 'full' || clientFiles.length > 0;
   const lintServer = mode === 'full' || touchesServer(repoFiles);
   if (!lintClient && !lintServer) {
-    console.log('No changed client or server JavaScript files require linting.');
+    console.log('No changed client, server, scripts, lib, or autofixer JavaScript files require linting.');
     process.exit(0);
   }
 
@@ -84,6 +91,8 @@ function main() {
   if (lintServer) {
     console.log('Running server lint (whole tree).');
     status = runBiome(SERVER_LINT_ARGS, join(repoRoot, 'server')) || status;
+    console.log('Running scripts, lib, and autofixer lint.');
+    status = runBiome(SHARED_LINT_ARGS, repoRoot) || status;
   }
   process.exit(status);
 }
