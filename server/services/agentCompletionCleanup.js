@@ -384,6 +384,17 @@ async function performCompletionCleanupSteps(context, onStepError) {
   const replay = durable ? priorReplay || await storeCompletionData(state, 'replay', replayInput) : undefined;
   context = { ...context, ...replayInput };
   await persist({ version: 1, status: 'pending', startedAt: state?.startedAt, replay, context: undefined });
+  // A received register held only by unverified rows re-verifies on replay, so
+  // a since-merged fix or a recovered forge does not preserve evidence forever.
+  if (priorReplay && state.metadata?.auditFindings?.finalReportReceived === true && auditEvidencePending(context)) {
+    const { settleAuditFindings } = await import('./auditFindings.js');
+    const settled = await settleAuditFindings({ task: context.task, agentId: context.agentId,
+      workspacePath: state.metadata.workspacePath }).catch(() => null);
+    if (settled?.status === 'complete') {
+      context = { ...context, agentState: { ...state, metadata: { ...state.metadata,
+        auditFindings: { ...state.metadata.auditFindings, status: 'complete' } } } };
+    }
+  }
   let firstError;
   const runStep = async (key, name, step, retryable = false) => {
     const prior = stages[key];
